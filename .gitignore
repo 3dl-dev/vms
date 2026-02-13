@@ -37,3 +37,14 @@ Module.symvers
 
 # macOS
 .DS_Store
+
+# Beads runtime
+.beads/beads.db*
+.beads/*.lock
+
+# Python
+__pycache__/
+*.pyc
+
+# Environment
+.env

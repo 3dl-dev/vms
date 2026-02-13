@@ -1,0 +1,357 @@
+/*
+ * lnm_client.c - Logical Name Client Library
+ *
+ * Provides the public API for logical name operations.
+ * Currently uses in-process tables with a global static manager.
+ * Will be extended to talk to the daemon via Unix domain socket
+ * for system-wide logicals in a future iteration.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <ctype.h>
+
+#include "vms/logical.h"
+#include "ssdef.h"
+
+/* Default number of hash buckets per table */
+#define LNM_DEFAULT_BUCKETS 256
+
+/* Internal table functions from lnm_table.c */
+extern lnm_table_t *lnm_table_create(const char *name, uint32_t num_buckets);
+extern void          lnm_table_destroy(lnm_table_t *table);
+extern uint32_t      lnm_table_insert(lnm_table_t *table, lnm_entry_t *entry);
+extern lnm_entry_t  *lnm_table_lookup(lnm_table_t *table, const char *name);
+extern uint32_t      lnm_table_remove(lnm_table_t *table, const char *name);
+extern uint32_t      lnm_table_enumerate(lnm_table_t *table,
+                                          lnm_enum_callback_t callback, void *ctx);
+
+/* Global static manager instance */
+static lnm_manager_t *g_manager = NULL;
+
+/*
+ * validate_logical_name - Check that a logical name is valid.
+ *
+ * VMS logical names must be 1-255 characters and may not contain
+ * certain control characters.
+ */
+static uint32_t validate_logical_name(const char *name)
+{
+    if (!name)
+        return SS$_IVLOGNAM;
+
+    size_t len = strlen(name);
+    if (len == 0 || len > LNM_MAX_NAME)
+        return SS$_IVLOGNAM;
+
+    /* Check for invalid characters (control chars except $ and _) */
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (c < 0x20 && c != '\t')
+            return SS$_IVLOGNAM;
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * make_entry - Allocate and populate a logical name entry.
+ *
+ * The name is stored in uppercase.
+ */
+static lnm_entry_t *make_entry(const char *name, const char *equiv,
+                                uint32_t attributes, uint8_t acmode)
+{
+    lnm_entry_t *entry = calloc(1, sizeof(lnm_entry_t));
+    if (!entry)
+        return NULL;
+
+    /* Store name in uppercase */
+    size_t i;
+    for (i = 0; i < LNM_MAX_NAME && name[i]; i++)
+        entry->name[i] = (char)toupper((unsigned char)name[i]);
+    entry->name[i] = '\0';
+    entry->name_length = (uint16_t)i;
+
+    entry->attributes = attributes;
+    entry->acmode = acmode;
+    entry->next = NULL;
+
+    if (equiv) {
+        size_t elen = strlen(equiv);
+        if (elen > LNM_MAX_VALUE)
+            elen = LNM_MAX_VALUE;
+        memcpy(entry->translations[0].value, equiv, elen);
+        entry->translations[0].value[elen] = '\0';
+        entry->translations[0].length = (uint16_t)elen;
+        entry->translations[0].index = 0;
+        entry->num_translations = 1;
+    }
+
+    return entry;
+}
+
+/*
+ * lnm_find_table - Find a table by name within a manager.
+ *
+ * Accepts the standard table names:
+ *   LNM$PROCESS_TABLE, LNM$JOB, LNM$GROUP, LNM$SYSTEM
+ *
+ * Also accepts the short forms: PROCESS, JOB, GROUP, SYSTEM
+ * and the alternate form LNM$SYSTEM_TABLE.
+ */
+lnm_table_t *lnm_find_table(lnm_manager_t *mgr, const char *table_name)
+{
+    if (!mgr || !table_name)
+        return NULL;
+
+    if (strcasecmp(table_name, LNM_PROCESS_TABLE) == 0 ||
+        strcasecmp(table_name, "PROCESS") == 0)
+        return mgr->process_table;
+
+    if (strcasecmp(table_name, LNM_JOB_TABLE) == 0 ||
+        strcasecmp(table_name, "JOB") == 0)
+        return mgr->job_table;
+
+    if (strcasecmp(table_name, LNM_GROUP_TABLE) == 0 ||
+        strcasecmp(table_name, "GROUP") == 0)
+        return mgr->group_table;
+
+    if (strcasecmp(table_name, LNM_SYSTEM_TABLE) == 0 ||
+        strcasecmp(table_name, "LNM$SYSTEM_TABLE") == 0 ||
+        strcasecmp(table_name, "SYSTEM") == 0)
+        return mgr->system_table;
+
+    return NULL;
+}
+
+/*
+ * lnm_init - Create a new logical name manager with 4 standard tables.
+ *
+ * The table hierarchy is:
+ *   process -> job -> group -> system (parent chain)
+ *
+ * Returns a new manager, or NULL on failure.
+ */
+lnm_manager_t *lnm_init(void)
+{
+    lnm_manager_t *mgr = calloc(1, sizeof(lnm_manager_t));
+    if (!mgr)
+        return NULL;
+
+    mgr->system_table  = lnm_table_create(LNM_SYSTEM_TABLE,  LNM_DEFAULT_BUCKETS);
+    mgr->group_table   = lnm_table_create(LNM_GROUP_TABLE,   LNM_DEFAULT_BUCKETS);
+    mgr->job_table     = lnm_table_create(LNM_JOB_TABLE,     LNM_DEFAULT_BUCKETS);
+    mgr->process_table = lnm_table_create(LNM_PROCESS_TABLE, LNM_DEFAULT_BUCKETS);
+
+    if (!mgr->system_table || !mgr->group_table ||
+        !mgr->job_table || !mgr->process_table) {
+        lnm_shutdown(mgr);
+        return NULL;
+    }
+
+    /* Set up the parent chain for search ordering */
+    mgr->process_table->parent = mgr->job_table;
+    mgr->job_table->parent     = mgr->group_table;
+    mgr->group_table->parent   = mgr->system_table;
+    mgr->system_table->parent  = NULL;
+
+    return mgr;
+}
+
+/*
+ * lnm_shutdown - Destroy all tables and free the manager.
+ */
+void lnm_shutdown(lnm_manager_t *mgr)
+{
+    if (!mgr)
+        return;
+
+    lnm_table_destroy(mgr->process_table);
+    lnm_table_destroy(mgr->job_table);
+    lnm_table_destroy(mgr->group_table);
+    lnm_table_destroy(mgr->system_table);
+
+    if (g_manager == mgr)
+        g_manager = NULL;
+
+    free(mgr);
+}
+
+/*
+ * lnm_get_manager - Return the global/default manager instance.
+ *
+ * Initializes on first call. Returns NULL if initialization fails.
+ */
+lnm_manager_t *lnm_get_manager(void)
+{
+    if (!g_manager)
+        g_manager = lnm_init();
+    return g_manager;
+}
+
+/*
+ * lnm_create - Create a single-valued logical name.
+ *
+ * @mgr:          Manager instance
+ * @table_name:   Target table
+ * @logical_name: Name to create
+ * @equivalence:  Equivalence string
+ * @attributes:   Logical name attributes (LNM_ATTR_*)
+ * @acmode:       Access mode (LNM_MODE_*)
+ *
+ * Returns SS$_NORMAL on success, SS$_SUPERSEDE if an existing name
+ * was replaced, or an error code.
+ */
+uint32_t lnm_create(lnm_manager_t *mgr, const char *table_name,
+                     const char *logical_name, const char *equivalence,
+                     uint32_t attributes, uint8_t acmode)
+{
+    if (!mgr)
+        return SS$_BADPARAM;
+
+    uint32_t status = validate_logical_name(logical_name);
+    if (!$VMS_STATUS_SUCCESS(status))
+        return status;
+
+    if (!equivalence)
+        return SS$_BADPARAM;
+
+    lnm_table_t *table = lnm_find_table(mgr, table_name);
+    if (!table)
+        return SS$_NOLOGTAB;
+
+    lnm_entry_t *entry = make_entry(logical_name, equivalence, attributes, acmode);
+    if (!entry)
+        return SS$_INSFMEM;
+
+    return lnm_table_insert(table, entry);
+}
+
+/*
+ * lnm_create_multi - Create a multi-valued logical name.
+ *
+ * @mgr:          Manager instance
+ * @table_name:   Target table
+ * @logical_name: Name to create
+ * @equivalences: Array of equivalence strings
+ * @num_equiv:    Number of equivalence strings (1..LNM_MAX_INDEX)
+ * @attributes:   Logical name attributes
+ * @acmode:       Access mode
+ *
+ * Returns SS$_NORMAL or SS$_SUPERSEDE on success, or an error code.
+ */
+uint32_t lnm_create_multi(lnm_manager_t *mgr, const char *table_name,
+                           const char *logical_name,
+                           const char **equivalences, int num_equiv,
+                           uint32_t attributes, uint8_t acmode)
+{
+    if (!mgr)
+        return SS$_BADPARAM;
+
+    uint32_t status = validate_logical_name(logical_name);
+    if (!$VMS_STATUS_SUCCESS(status))
+        return status;
+
+    if (!equivalences || num_equiv <= 0)
+        return SS$_BADPARAM;
+
+    if (num_equiv > LNM_MAX_INDEX)
+        num_equiv = LNM_MAX_INDEX;
+
+    lnm_table_t *table = lnm_find_table(mgr, table_name);
+    if (!table)
+        return SS$_NOLOGTAB;
+
+    /* Allocate the entry (calloc zeroes the translation array) */
+    lnm_entry_t *entry = calloc(1, sizeof(lnm_entry_t));
+    if (!entry)
+        return SS$_INSFMEM;
+
+    /* Store name in uppercase */
+    size_t i;
+    for (i = 0; i < LNM_MAX_NAME && logical_name[i]; i++)
+        entry->name[i] = (char)toupper((unsigned char)logical_name[i]);
+    entry->name[i] = '\0';
+    entry->name_length = (uint16_t)i;
+
+    entry->attributes = attributes;
+    entry->acmode = acmode;
+    entry->next = NULL;
+
+    /* Populate each equivalence string */
+    entry->num_translations = (uint8_t)num_equiv;
+    for (int idx = 0; idx < num_equiv; idx++) {
+        if (!equivalences[idx])
+            continue;
+        size_t elen = strlen(equivalences[idx]);
+        if (elen > LNM_MAX_VALUE)
+            elen = LNM_MAX_VALUE;
+        memcpy(entry->translations[idx].value, equivalences[idx], elen);
+        entry->translations[idx].value[elen] = '\0';
+        entry->translations[idx].length = (uint16_t)elen;
+        entry->translations[idx].index = (uint8_t)idx;
+    }
+
+    return lnm_table_insert(table, entry);
+}
+
+/*
+ * lnm_delete - Delete a logical name from a table.
+ *
+ * @mgr:          Manager instance
+ * @table_name:   Table containing the name
+ * @logical_name: Name to delete
+ * @acmode:       Access mode of the caller (must be >= entry's acmode)
+ *
+ * Returns SS$_NORMAL on success, SS$_NOLOGNAM if not found.
+ */
+uint32_t lnm_delete(lnm_manager_t *mgr, const char *table_name,
+                     const char *logical_name, uint8_t acmode)
+{
+    if (!mgr)
+        return SS$_BADPARAM;
+
+    uint32_t status = validate_logical_name(logical_name);
+    if (!$VMS_STATUS_SUCCESS(status))
+        return status;
+
+    lnm_table_t *table = lnm_find_table(mgr, table_name);
+    if (!table)
+        return SS$_NOLOGTAB;
+
+    /* Check access mode: caller's mode must be <= entry's mode (more privileged) */
+    lnm_entry_t *entry = lnm_table_lookup(table, logical_name);
+    if (!entry)
+        return SS$_NOLOGNAM;
+
+    if (acmode > entry->acmode)
+        return SS$_NOPRIV;
+
+    return lnm_table_remove(table, logical_name);
+}
+
+/*
+ * lnm_enumerate - Walk all entries in a table via callback.
+ *
+ * @mgr:        Manager instance
+ * @table_name: Table to enumerate
+ * @callback:   Function called for each entry
+ * @ctx:        Opaque context passed to callback
+ *
+ * Returns SS$_NORMAL on success, SS$_NOLOGTAB if table not found.
+ */
+uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,
+                        lnm_enum_callback_t callback, void *ctx)
+{
+    if (!mgr || !callback)
+        return SS$_BADPARAM;
+
+    lnm_table_t *table = lnm_find_table(mgr, table_name);
+    if (!table)
+        return SS$_NOLOGTAB;
+
+    return lnm_table_enumerate(table, callback, ctx);
+}

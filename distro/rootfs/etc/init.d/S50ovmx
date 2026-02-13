@@ -1,0 +1,36 @@
+#!/bin/sh
+# OVMX system startup script
+
+case "$1" in
+    start)
+        echo "Starting OVMX services..."
+
+        # Create runtime directories
+        mkdir -p /tmp/ovmx/locks
+        mkdir -p /vms/sys\$system /vms/sys\$library /vms/sys\$manager
+        mkdir -p /vms/sys\$login /vms/sys\$help
+
+        # Start logical name daemon
+        /usr/sbin/lnm_daemon -c /etc/ovmx/sylogicals.conf &
+        echo "Logical name daemon started."
+
+        # Set up system logicals
+        sleep 1
+
+        echo "OVMX services started."
+        ;;
+    stop)
+        echo "Stopping OVMX services..."
+        killall lnm_daemon 2>/dev/null
+        echo "OVMX services stopped."
+        ;;
+    restart)
+        $0 stop
+        $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+exit 0

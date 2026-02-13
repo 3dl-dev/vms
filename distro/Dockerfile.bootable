@@ -1,0 +1,127 @@
+# Dockerfile.bootable - Build and boot a minimal OVMX Linux system
+#
+# Produces a Docker image that boots OVMX in QEMU. All dependencies
+# (compiler, QEMU, kernel, initramfs) are contained — no host tools needed.
+#
+# Usage:
+#   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
+#   docker run --rm -it ovmx-boot
+
+FROM ubuntu:24.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake gcc make musl-tools linux-libc-dev \
+    linux-headers-generic linux-image-generic \
+    kmod busybox-static cpio \
+    && rm -rf /var/lib/apt/lists/*
+
+# Determine kernel version from installed packages
+RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver
+
+# Make kernel UAPI headers available to musl-gcc
+# musl doesn't ship linux/ or asm/ headers — symlink from linux-libc-dev
+RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
+    ARCH_INC=$(echo /usr/include/*-linux-gnu) && \
+    ln -s /usr/include/linux "$MUSL_INC/linux" && \
+    ln -s /usr/include/asm-generic "$MUSL_INC/asm-generic" && \
+    ln -s "$ARCH_INC/asm" "$MUSL_INC/asm"
+
+WORKDIR /src
+COPY . .
+
+# Build kernel modules against the stock Ubuntu kernel
+RUN KVER=$(cat /tmp/kver) && \
+    cd src/kernel && make KDIR=/lib/modules/${KVER}/build 2>&1 && \
+    cd vmsfs && make KDIR=/lib/modules/${KVER}/build 2>&1
+
+# Build OVMX userspace — static musl, install prefix=/
+RUN cmake -B build-static \
+    -DCMAKE_C_COMPILER=musl-gcc \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/ \
+    -DOVMX_STATIC=ON \
+    -DBUILD_TESTS=OFF \
+    -DBUILD_TOOLS=ON \
+    && cmake --build build-static --parallel $(nproc) 2>&1
+
+# Assemble initramfs
+RUN mkdir -p /initramfs/bin /initramfs/sbin /initramfs/etc/ovmx \
+             /initramfs/dev /initramfs/proc /initramfs/sys \
+             /initramfs/tmp /initramfs/mnt /initramfs/root \
+             /initramfs/lib/modules \
+             /initramfs/vms/sys\$system \
+             /initramfs/vms/sys\$library \
+             /initramfs/vms/sys\$manager \
+             /initramfs/vms/sys\$login \
+             /initramfs/vms/sys\$help \
+             /initramfs/home/DEFAULT \
+             /initramfs/home/GUEST \
+             /initramfs/home/USER1 \
+             /initramfs/home/USER2 \
+             /initramfs/home/root \
+             /initramfs/tmp/ovmx/locks && \
+    # Busybox — single binary providing sh, mount, insmod, etc.
+    cp /bin/busybox /initramfs/bin/busybox && \
+    chroot /initramfs /bin/busybox --install -s /bin && \
+    # OVMX binaries
+    cp build-static/bin/ovmx_init /initramfs/sbin/init && \
+    cp build-static/bin/vmsdcl /initramfs/bin/ && \
+    cp build-static/bin/vms_login /initramfs/bin/ && \
+    cp build-static/bin/vms_help /initramfs/bin/ && \
+    cp build-static/bin/vmslnmd /initramfs/sbin/ && \
+    # Kernel modules
+    cp src/kernel/vms.ko /initramfs/lib/modules/ && \
+    cp src/kernel/vmsfs/vmsfs.ko /initramfs/lib/modules/ && \
+    # Configuration
+    cp -r distro/rootfs/etc/ovmx/* /initramfs/etc/ovmx/ && \
+    cp distro/rootfs/vms/sys\$manager/* /initramfs/vms/sys\$manager/ && \
+    # Init wrapper (PID 1 shell bootstrap → execs ovmx_init)
+    cp distro/boot/init-wrapper.sh /initramfs/init && \
+    chmod +x /initramfs/init && \
+    # Pack the initramfs
+    cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
+    echo "Initramfs size: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
+
+# Ensure vmlinuz symlink exists
+RUN KVER=$(cat /tmp/kver) && \
+    if [ ! -e /boot/vmlinuz ]; then \
+        ln -s vmlinuz-${KVER} /boot/vmlinuz; \
+    fi
+
+# Runner stage — minimal image with just QEMU and boot artifacts
+FROM ubuntu:24.04 AS runner
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    qemu-system-x86 qemu-system-arm qemu-efi-aarch64 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /boot/vmlinuz /boot/vmlinuz
+COPY --from=builder /boot/initramfs-ovmx.cpio.gz /boot/initramfs-ovmx.cpio.gz
+
+ENV MEMORY=512M
+
+CMD ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
+        QEMU=qemu-system-aarch64; \
+        MACHINE="-machine virt -cpu cortex-a57"; \
+        CONSOLE="console=ttyAMA0"; \
+    else \
+        QEMU=qemu-system-x86_64; \
+        MACHINE=""; \
+        CONSOLE="console=ttyS0"; \
+    fi && \
+    exec $QEMU $MACHINE \
+        -kernel /boot/vmlinuz \
+        -initrd /boot/initramfs-ovmx.cpio.gz \
+        -nographic \
+        -append "$CONSOLE loglevel=7" \
+        -m $MEMORY \
+        -smp 2 \
+        -nic none \
+        -nodefaults \
+        -serial mon:stdio \
+        -no-reboot

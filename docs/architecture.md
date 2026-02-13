@@ -1,0 +1,151 @@
+# OVMX Architecture
+
+## Component Layers
+
+```
+Layer 7 ─ System Integration
+           Docker compose, SSH, PAM, init scripts
+           [Dockerfile, docker-compose.yml, distro/rootfs/]
+
+Layer 6 ─ Boot & Init
+           Static binaries, initramfs, QEMU boot
+           [ovmx_init, init-wrapper.sh, run-qemu.sh]
+
+Layer 5 ─ Kernel Extensions
+           VMS semantics in kernel space
+           [vms.ko, vmsfs.ko]
+
+Layer 4 ─ User Interface
+           DCL shell, login, help, SSH auth
+           [vmsdcl, vms_login, vms_help, vms_ssh_auth]
+
+Layer 3 ─ File Services
+           Record management, VMS filesystem, logical names
+           [vmsrms, vmsfs, vmslnm + vmslnmd daemon]
+
+Layer 2 ─ VMS Runtime
+           System services and RTL
+           [libvms: syssvc/ + rtl/]
+
+Layer 1 ─ Process Management
+           PCBs, ASTs, event flags, access modes
+           [vmsprocess]
+
+Layer 0 ─ Syscall Abstraction
+           Freestanding, no glibc, direct Linux syscalls
+           [libvmssys + arch/x86_64 + arch/aarch64]
+```
+
+## Dependency Graph
+
+```
+libvmssys (freestanding, static only)
+  │
+  ├── vmsprocess (+ pthread)
+  │     │
+  │     └── libvms (+ pthread, math)
+  │           │
+  │           ├── vmslnm (+ pthread) ──→ vmslnmd daemon
+  │           │     │
+  │           │     └── vmsfs
+  │           │           │
+  │           │           └── vmsrms
+  │           │
+  │           └── vmsdcl (+ vmsfs, vmsprocess, optional readline)
+  │
+  └── ovmx_init (+ vmsprocess, pthread)
+
+tools/
+  ├── vms_login  (+ libvms, standalone SHA-256)
+  ├── vms_help   (+ libvms)
+  └── vms_ssh_auth (+ libvms, standalone SHA-256)
+
+kernel/ (out-of-tree, separate build)
+  ├── vms.ko    (access, ast, eflag, lock)
+  └── vmsfs.ko  (super, inode, file, dir, version)
+```
+
+## Boot Sequence
+
+### Docker Mode
+
+```
+docker compose up --build
+  │
+  ├── Build stage: cmake + gcc → shared libraries + executables
+  ├── Runtime stage: Ubuntu 24.04 minimal
+  │     ├── Install: libreadline, openssh-server
+  │     ├── Copy: binaries → /usr/local/bin, libs → /usr/local/lib
+  │     ├── Copy: distro/rootfs → / (configs, scripts, SYSUAF)
+  │     ├── Generate Linux users from sysuaf.dat
+  │     └── Configure sshd
+  │
+  └── ENTRYPOINT: ovmx_init
+        ├── Start vmslnmd (logical name daemon)
+        ├── Load system logicals from sylogicals.conf
+        ├── Execute STARTUP.COM
+        └── Start sshd → accepts connections on port 22 (mapped to 2222)
+```
+
+### QEMU Mode
+
+```
+docker build -f Dockerfile.bootable -o dist .
+./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
+  │
+  ├── QEMU boots Linux kernel
+  └── Kernel unpacks initramfs, runs /init (init-wrapper.sh)
+        ├── Mount: proc, sysfs, devtmpfs, devpts, tmpfs
+        ├── Load: vms.ko, vmsfs.ko
+        ├── Generate /etc/passwd, /etc/group from sysuaf.dat
+        └── exec /sbin/init (ovmx_init)
+              ├── Start vmslnmd
+              ├── Load system logicals
+              ├── Execute STARTUP.COM
+              └── Launch login shell (vmsdcl)
+```
+
+## Data Flow: User Command Execution
+
+```
+User types command via SSH
+  │
+  ├── sshd authenticates via vms_ssh_auth + PAM
+  ├── Spawns vms_login
+  │     ├── Validates against sysuaf.dat
+  │     ├── Executes SYLOGIN.COM (system-wide)
+  │     └── Executes LOGIN.COM (per-user)
+  │
+  └── Launches vmsdcl (DCL shell)
+        │
+        ├── dcl_lexer.c    → tokenize input
+        ├── dcl_parser.c   → parse to AST
+        ├── dcl_exec.c     → evaluate AST
+        │     │
+        │     ├── Built-in? → dcl_builtin.c (SHOW, SET, DIR, COPY, etc.)
+        │     ├── Symbol?   → dcl_symbol.c → resolve and re-parse
+        │     └── External? → fork/exec with VMS-style status return
+        │
+        ├── File ops route through:
+        │     vmsrms → vmsfs → vmslnm (logical name translation)
+        │
+        └── System calls route through:
+              libvms (syssvc/) → vmsprocess → libvmssys → Linux kernel
+                                                            └── vms.ko / vmsfs.ko
+```
+
+## Key Files by Component
+
+| Component | Key Source | Key Header | Binary |
+|-----------|-----------|------------|--------|
+| libvmssys | `src/libvmssys/vms_runtime_init.c` | `vmssys.h` | libvmssys.a |
+| vmsprocess | `src/vmsprocess/vms_pcb.c` | `include/vms/process.h` | libvmsprocess |
+| libvms | `src/libvms/syssvc/sys_qio.c` | `include/starlet.h` | libvms |
+| vmslnm | `src/vmslnm/lnm_table.c` | `include/vms/logical.h` | libvmslnm, vmslnmd |
+| vmsfs | `src/vmsfs/vmsfs_translate.c` | `include/vmsfs/filespec.h` | libvmsfs |
+| vmsrms | `src/vmsrms/rms_core.c` | `include/rms/rms.h` | librms |
+| vmsdcl | `src/vmsdcl/dcl_main.c` | `include/dcl/context.h` | vmsdcl |
+| kernel | `src/kernel/vms_module.c` | `vms_internal.h` | vms.ko |
+| vmsfs.ko | `src/kernel/vmsfs/vmsfs_super.c` | `vmsfs.h` | vmsfs.ko |
+| ovmx_init | `src/ovmx_init/ovmx_init.c` | — | ovmx_init |
+| vms_login | `tools/vms_login.c` | — | vms_login |

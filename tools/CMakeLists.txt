@@ -1,0 +1,55 @@
+# tools/ - VMS login and help utilities
+
+add_executable(vms_login
+    vms_login.c
+    sha256.c
+)
+
+target_include_directories(vms_login PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${VMS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_PROCESS_INCLUDE_DIR}
+)
+
+target_compile_definitions(vms_login PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+    OVMX_BIN_DIR="${CMAKE_INSTALL_PREFIX}/bin"
+)
+
+target_link_libraries(vms_login PRIVATE vmsprocess pthread)
+
+install(TARGETS vms_login RUNTIME DESTINATION bin)
+
+add_executable(vms_help
+    vms_help.c
+)
+
+target_include_directories(vms_help PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+)
+
+target_compile_definitions(vms_help PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+install(TARGETS vms_help RUNTIME DESTINATION bin)
+
+add_executable(vms_ssh_auth
+    vms_ssh_auth.c
+    sha256.c
+)
+
+target_include_directories(vms_ssh_auth PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_compile_definitions(vms_ssh_auth PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+install(TARGETS vms_ssh_auth RUNTIME DESTINATION bin)

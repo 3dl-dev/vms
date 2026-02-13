@@ -1,0 +1,689 @@
+/*
+ * LIB$ROUTINES.H - VMS Library (LIB$) Routine Prototypes
+ *
+ * OpenVMX compatibility layer - Declares the LIB$ run-time library
+ * routines.  In VMS, these routines provide general-purpose services
+ * including memory management, string formatting, terminal I/O,
+ * date/time operations, process information, and condition handling.
+ *
+ * Calling conventions: All routines follow the VMS calling standard.
+ * Most parameters are passed by reference.  Descriptors are used
+ * for string parameters.  Return values are 32-bit condition codes.
+ *
+ * Reference: OpenVMS RTL Library (LIB$) Manual
+ */
+
+#ifndef __LIB_ROUTINES_H
+#define __LIB_ROUTINES_H
+
+#include <stdint.h>
+#include <stdarg.h>
+#include "descrip.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* ================================================================
+ * Memory Management Routines
+ * ================================================================ */
+
+/**
+ * lib$get_vm - Allocate virtual memory
+ *
+ * @param num_bytes  Pointer to longword containing number of bytes to allocate
+ * @param base_adr   Pointer to receive address of allocated memory
+ * @param ...        Optional: pointer to zone identifier (NULL for default zone)
+ *
+ * @return  SS$_NORMAL on success, SS$_INSFMEM if insufficient memory
+ *
+ * Allocates a block of contiguous virtual memory from the specified
+ * zone (or the default zone if zone_id is NULL or 0).
+ */
+uint32_t lib$get_vm(
+    const uint32_t *num_bytes,
+    void **base_adr,
+    ...  /* optional: const uint32_t *zone_id */
+);
+
+/**
+ * lib$free_vm - Free virtual memory
+ *
+ * @param num_bytes  Pointer to longword containing number of bytes to free
+ * @param base_adr   Pointer to address of memory to free
+ * @param ...        Optional: pointer to zone identifier (NULL for default zone)
+ *
+ * @return  SS$_NORMAL on success
+ *
+ * Returns a block of memory previously allocated by lib$get_vm
+ * to the specified zone.
+ */
+uint32_t lib$free_vm(
+    const uint32_t *num_bytes,
+    void **base_adr,
+    ...  /* optional: const uint32_t *zone_id */
+);
+
+/**
+ * lib$get_vm_page - Allocate virtual memory in page units
+ *
+ * @param num_pages  Pointer to number of pages to allocate
+ * @param base_adr   Pointer to receive address of allocated pages
+ *
+ * @return  SS$_NORMAL on success, SS$_INSFMEM if insufficient memory
+ */
+uint32_t lib$get_vm_page(
+    const uint32_t *num_pages,
+    void **base_adr
+);
+
+/**
+ * lib$free_vm_page - Free virtual memory allocated in page units
+ *
+ * @param num_pages  Pointer to number of pages to free
+ * @param base_adr   Pointer to address of pages to free
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$free_vm_page(
+    const uint32_t *num_pages,
+    void **base_adr
+);
+
+/**
+ * lib$create_vm_zone - Create a virtual memory zone
+ *
+ * @param zone_id    Pointer to receive the zone identifier
+ * @param ...        Optional zone creation parameters
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$create_vm_zone(
+    uint32_t *zone_id,
+    ...
+);
+
+/**
+ * lib$delete_vm_zone - Delete a virtual memory zone
+ *
+ * @param zone_id    Pointer to zone identifier to delete
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$delete_vm_zone(
+    const uint32_t *zone_id
+);
+
+/* ================================================================
+ * Terminal I/O Routines
+ * ================================================================ */
+
+/**
+ * lib$put_output - Write a line to SYS$OUTPUT
+ *
+ * @param message_string  Pointer to descriptor of message to write
+ *
+ * @return  SS$_NORMAL on success
+ *
+ * Writes the string described by message_string to the current
+ * SYS$OUTPUT device, followed by a newline.
+ */
+uint32_t lib$put_output(
+    const struct dsc$descriptor_s *message_string
+);
+
+/**
+ * lib$get_input - Read a line from SYS$INPUT
+ *
+ * @param resultant_string  Pointer to descriptor to receive input
+ * @param prompt_string     Optional pointer to descriptor of prompt
+ * @param resultant_length  Optional pointer to receive actual length read
+ *
+ * @return  SS$_NORMAL on success, SS$_ENDOFFILE on EOF
+ *
+ * Reads a line of input from SYS$INPUT.  If prompt_string is
+ * provided, it is displayed before reading.
+ */
+uint32_t lib$get_input(
+    struct dsc$descriptor_s *resultant_string,
+    const struct dsc$descriptor_s *prompt_string,
+    uint16_t *resultant_length
+);
+
+/**
+ * lib$put_common - Write record to process common area
+ *
+ * @param string  Pointer to descriptor of string to write
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$put_common(
+    const struct dsc$descriptor_s *string
+);
+
+/**
+ * lib$get_common - Read record from process common area
+ *
+ * @param resultant_string  Pointer to descriptor to receive string
+ * @param resultant_length  Optional pointer to receive length
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$get_common(
+    struct dsc$descriptor_s *resultant_string,
+    uint16_t *resultant_length
+);
+
+/* ================================================================
+ * Condition Handling Routines
+ * ================================================================ */
+
+/**
+ * lib$signal - Signal a condition
+ *
+ * @param condition_value  The condition code to signal
+ * @param ...              Optional FAO arguments for the message
+ *
+ * @return  Does not return if condition is severe;
+ *          returns condition value otherwise
+ *
+ * Generates a signal that invokes the condition handler call
+ * chain.  If no handler claims the condition, the default
+ * handler issues the corresponding message.
+ */
+uint32_t lib$signal(
+    uint32_t condition_value,
+    ...
+);
+
+/**
+ * lib$stop - Signal a condition and force image exit
+ *
+ * @param condition_value  The condition code to signal
+ * @param ...              Optional FAO arguments
+ *
+ * @return  Does not return
+ *
+ * Like lib$signal, but forces image exit after handler processing.
+ */
+uint32_t lib$stop(
+    uint32_t condition_value,
+    ...
+);
+
+/**
+ * lib$sig_to_ret - Convert signal to return status
+ *
+ * @param signal_args    Pointer to signal argument vector
+ * @param mechanism_args Pointer to mechanism argument vector
+ *
+ * @return  SS$_RESIGNAL or SS$_CONTINUE
+ *
+ * A condition handler that converts a signaled condition into
+ * a return status.  Typically established as a handler to allow
+ * a routine to return the condition value to its caller.
+ */
+uint32_t lib$sig_to_ret(
+    void *signal_args,
+    void *mechanism_args
+);
+
+/**
+ * lib$establish - Establish a condition handler
+ *
+ * @param handler  Pointer to handler routine
+ *
+ * @return  Address of previously established handler (or NULL)
+ */
+void *lib$establish(
+    void *handler
+);
+
+/**
+ * lib$revert - Revert to previous condition handler
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$revert(void);
+
+/* ================================================================
+ * String Formatting Routines
+ * ================================================================ */
+
+/**
+ * lib$sys_fao - Formatted ASCII output (system)
+ *
+ * @param ctrstr   Pointer to descriptor of control string
+ * @param outlen   Optional pointer to receive output length
+ * @param outbuf   Pointer to descriptor of output buffer
+ * @param ...      FAO directive arguments
+ *
+ * @return  SS$_NORMAL on success, SS$_BUFFEROVF if output truncated
+ *
+ * Formats output according to the FAO control string.
+ * FAO directives include:
+ *   !AS  - ASCII string (descriptor pointer)
+ *   !AD  - ASCII descriptor with length (!AD takes count, address)
+ *   !SL  - Signed longword
+ *   !UL  - Unsigned longword
+ *   !SW  - Signed word
+ *   !UW  - Unsigned word
+ *   !SB  - Signed byte
+ *   !UB  - Unsigned byte
+ *   !XL  - Hexadecimal longword
+ *   !XW  - Hexadecimal word
+ *   !XB  - Hexadecimal byte
+ *   !OL  - Octal longword
+ *   !ZL  - Zero-filled longword
+ *   !/   - Newline
+ *   !_   - Tab
+ *   !!   - Literal exclamation point
+ *   !n*c - Repeat character c, n times
+ *   !n<  - Left justify in field of n
+ *   !n>  - Right justify in field of n
+ */
+uint32_t lib$sys_fao(
+    const struct dsc$descriptor_s *ctrstr,
+    uint16_t *outlen,
+    struct dsc$descriptor_s *outbuf,
+    ...
+);
+
+/**
+ * lib$sys_faol - Formatted ASCII output with argument list
+ *
+ * Like lib$sys_fao but takes an explicit argument list pointer
+ * instead of variable arguments.
+ */
+uint32_t lib$sys_faol(
+    const struct dsc$descriptor_s *ctrstr,
+    uint16_t *outlen,
+    struct dsc$descriptor_s *outbuf,
+    const uint32_t *prmlst
+);
+
+/* ================================================================
+ * Date/Time Routines
+ * ================================================================ */
+
+/**
+ * lib$day - Get day number
+ *
+ * @param days      Pointer to receive day number (days since VMS base date)
+ * @param timadr    Optional pointer to quadword time (NULL = current time)
+ * @param day_time  Optional pointer to receive time within day (10us units)
+ *
+ * @return  SS$_NORMAL on success
+ *
+ * Returns the number of days since the VMS system base date
+ * (November 17, 1858 - the Smithsonian base date).
+ */
+uint32_t lib$day(
+    int32_t *days,
+    const void *timadr,
+    int32_t *day_time
+);
+
+/**
+ * lib$day_of_week - Get day of week
+ *
+ * @param timadr         Optional pointer to quadword time (NULL = current time)
+ * @param day_of_week    Pointer to receive day (1=Monday .. 7=Sunday)
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$day_of_week(
+    const void *timadr,
+    int32_t *day_of_week
+);
+
+/**
+ * lib$date_time - Get current date and time as a string
+ *
+ * @param date_time_string  Pointer to descriptor to receive date/time string
+ *
+ * @return  SS$_NORMAL on success
+ *
+ * Returns the current date and time in the standard VMS format:
+ *   "dd-MMM-yyyy hh:mm:ss.cc"
+ */
+uint32_t lib$date_time(
+    struct dsc$descriptor_s *date_time_string
+);
+
+/**
+ * lib$sub_times - Subtract two quadword times
+ *
+ * @param time1     Pointer to first quadword time
+ * @param time2     Pointer to second quadword time
+ * @param result    Pointer to receive result (time1 - time2)
+ *
+ * @return  SS$_NORMAL on success, LIB$_NEGTIM if result is negative
+ */
+uint32_t lib$sub_times(
+    const void *time1,
+    const void *time2,
+    void *result
+);
+
+/**
+ * lib$add_times - Add two quadword times
+ *
+ * @param time1     Pointer to first quadword time
+ * @param time2     Pointer to second quadword time
+ * @param result    Pointer to receive result
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$add_times(
+    const void *time1,
+    const void *time2,
+    void *result
+);
+
+/**
+ * lib$mult_delta_time - Multiply delta time by scalar
+ *
+ * @param multiplier  Pointer to longword multiplier
+ * @param timadr      Pointer to quadword delta time (modified in place)
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$mult_delta_time(
+    const int32_t *multiplier,
+    void *timadr
+);
+
+/**
+ * lib$cvt_from_internal_time - Convert from internal time format
+ *
+ * @param operation  Pointer to operation code
+ * @param result     Pointer to receive result
+ * @param time       Pointer to quadword time value
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$cvt_from_internal_time(
+    const uint32_t *operation,
+    uint32_t *result,
+    const void *time
+);
+
+/* ================================================================
+ * Conversion Routines
+ * ================================================================ */
+
+/**
+ * lib$cvt_dtb - Convert decimal text to binary
+ *
+ * @param ndigits  Number of digits to convert
+ * @param string   Pointer to ASCII digit string
+ * @param value    Pointer to receive binary value
+ *
+ * @return  SS$_NORMAL on success, LIB$_INVARG on invalid character
+ */
+uint32_t lib$cvt_dtb(
+    int32_t ndigits,
+    const char *string,
+    int32_t *value
+);
+
+/**
+ * lib$cvt_htb - Convert hexadecimal text to binary
+ *
+ * @param ndigits  Number of hex digits to convert
+ * @param string   Pointer to ASCII hex string
+ * @param value    Pointer to receive binary value
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$cvt_htb(
+    int32_t ndigits,
+    const char *string,
+    int32_t *value
+);
+
+/**
+ * lib$cvt_otb - Convert octal text to binary
+ *
+ * @param ndigits  Number of octal digits to convert
+ * @param string   Pointer to ASCII octal string
+ * @param value    Pointer to receive binary value
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$cvt_otb(
+    int32_t ndigits,
+    const char *string,
+    int32_t *value
+);
+
+/* ================================================================
+ * Process and System Information Routines
+ * ================================================================ */
+
+/**
+ * lib$getjpi - Get job/process information
+ *
+ * @param item_code         Pointer to JPI item code
+ * @param pid               Optional pointer to process ID (NULL = current)
+ * @param prcnam            Optional pointer to descriptor of process name
+ * @param resultant_value   Optional pointer to receive longword result
+ * @param resultant_string  Optional pointer to descriptor to receive string
+ * @param resultant_length  Optional pointer to receive string length
+ *
+ * @return  SS$_NORMAL on success, SS$_NONEXPR if process not found
+ *
+ * Retrieves a single item of process information, similar to
+ * SYS$GETJPI but simpler for single-item queries.
+ */
+uint32_t lib$getjpi(
+    const uint32_t *item_code,
+    const uint32_t *pid,
+    const struct dsc$descriptor_s *prcnam,
+    void *resultant_value,
+    struct dsc$descriptor_s *resultant_string,
+    uint16_t *resultant_length
+);
+
+/**
+ * lib$getsyi - Get system information
+ *
+ * @param item_code         Pointer to SYI item code
+ * @param resultant_value   Optional pointer to receive longword result
+ * @param resultant_string  Optional pointer to descriptor to receive string
+ * @param resultant_length  Optional pointer to receive string length
+ * @param cluster_id        Optional pointer to cluster system ID
+ * @param node_name         Optional pointer to descriptor of node name
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$getsyi(
+    const uint32_t *item_code,
+    void *resultant_value,
+    struct dsc$descriptor_s *resultant_string,
+    uint16_t *resultant_length,
+    const uint32_t *cluster_id,
+    const struct dsc$descriptor_s *node_name
+);
+
+/* ================================================================
+ * Symbol and CLI Routines
+ * ================================================================ */
+
+/**
+ * lib$get_symbol - Get value of a CLI symbol
+ *
+ * @param symbol       Pointer to descriptor of symbol name
+ * @param value        Pointer to descriptor to receive value
+ * @param value_len    Optional pointer to receive value length
+ * @param table_type   Optional pointer to receive table type indicator
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$get_symbol(
+    const struct dsc$descriptor_s *symbol,
+    struct dsc$descriptor_s *value,
+    uint16_t *value_len,
+    uint32_t *table_type
+);
+
+/**
+ * lib$set_symbol - Set value of a CLI symbol
+ *
+ * @param symbol       Pointer to descriptor of symbol name
+ * @param value        Pointer to descriptor of new value
+ * @param table_type   Optional pointer to table type indicator
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$set_symbol(
+    const struct dsc$descriptor_s *symbol,
+    const struct dsc$descriptor_s *value,
+    const uint32_t *table_type
+);
+
+/* ================================================================
+ * Subprocess and File Routines
+ * ================================================================ */
+
+/**
+ * lib$spawn - Spawn a subprocess
+ *
+ * @param command_string  Optional pointer to descriptor of command
+ * @param input_file      Optional pointer to descriptor of input file
+ * @param output_file     Optional pointer to descriptor of output file
+ * @param flags           Optional pointer to flags longword
+ * @param process_name    Optional pointer to descriptor of process name
+ * @param process_id      Optional pointer to receive process ID
+ * @param completion_code Optional pointer to receive completion status
+ * @param event_flag      Optional pointer to event flag number
+ * @param ast_routine     Optional AST routine address
+ * @param ast_argument    Optional AST argument
+ * @param prompt_string   Optional pointer to descriptor of prompt
+ * @param cli_name        Optional pointer to descriptor of CLI name
+ * @param table_name      Optional pointer to descriptor of CLI table name
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$spawn(
+    const struct dsc$descriptor_s *command_string,
+    const struct dsc$descriptor_s *input_file,
+    const struct dsc$descriptor_s *output_file,
+    const uint32_t *flags,
+    const struct dsc$descriptor_s *process_name,
+    uint32_t *process_id,
+    uint32_t *completion_code,
+    const uint32_t *event_flag,
+    void *ast_routine,
+    void *ast_argument,
+    const struct dsc$descriptor_s *prompt_string,
+    const struct dsc$descriptor_s *cli_name,
+    const struct dsc$descriptor_s *table_name
+);
+
+/**
+ * lib$find_file - Find file matching wildcard specification
+ *
+ * @param filespec   Pointer to descriptor of file specification (may contain wildcards)
+ * @param resultspec Pointer to descriptor to receive found file specification
+ * @param context    Pointer to context value (must be 0 on first call)
+ *
+ * @return  RMS$_NORMAL on success, RMS$_NMF when no more files
+ */
+uint32_t lib$find_file(
+    const struct dsc$descriptor_s *filespec,
+    struct dsc$descriptor_s *resultspec,
+    uint32_t *context
+);
+
+/**
+ * lib$find_file_end - End find file sequence
+ *
+ * @param context  Pointer to context value from lib$find_file
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$find_file_end(
+    uint32_t *context
+);
+
+/**
+ * lib$rename_file - Rename a file
+ *
+ * @param old_filespec  Pointer to descriptor of existing file specification
+ * @param new_filespec  Pointer to descriptor of new file specification
+ *
+ * @return  RMS$_NORMAL on success
+ */
+uint32_t lib$rename_file(
+    const struct dsc$descriptor_s *old_filespec,
+    const struct dsc$descriptor_s *new_filespec
+);
+
+/**
+ * lib$delete_file - Delete a file
+ *
+ * @param filespec  Pointer to descriptor of file specification
+ *
+ * @return  RMS$_NORMAL on success
+ */
+uint32_t lib$delete_file(
+    const struct dsc$descriptor_s *filespec
+);
+
+/* ================================================================
+ * Table-driven Parser
+ * ================================================================ */
+
+/**
+ * lib$tparse - Table-driven finite-state parser
+ *
+ * @param tparse_block  Pointer to TPARSE argument block
+ * @param state_table   Pointer to state transition table
+ * @param key_table     Pointer to keyword table
+ *
+ * @return  SS$_NORMAL on success, LIB$_SYNTAXERR on parse failure
+ */
+uint32_t lib$tparse(
+    void *tparse_block,
+    const void *state_table,
+    const void *key_table
+);
+
+/* ================================================================
+ * LIB$ condition value definitions
+ *
+ * Conditions specific to LIB$ routines.
+ * ================================================================ */
+
+#define LIB$_NORMAL     0x00801001  /* Normal completion */
+#define LIB$_STRTRU     0x00801004  /* String truncated (warning) */
+#define LIB$_INVARG     0x00800014  /* Invalid argument */
+#define LIB$_INSVIRMEM  0x00800124  /* Insufficient virtual memory */
+#define LIB$_INVSTRDES  0x00800134  /* Invalid string descriptor */
+#define LIB$_NEGTIM     0x00800144  /* Negative time */
+#define LIB$_NOTFOU     0x00800154  /* Not found */
+#define LIB$_FATERRLIB  0x00800164  /* Fatal error in library */
+#define LIB$_INTLOGERR  0x00800174  /* Internal logic error */
+#define LIB$_NOCLI      0x00800184  /* No CLI present */
+#define LIB$_UNECLIERR  0x00800194  /* Unexpected CLI error */
+#define LIB$_AMBKEY     0x008001A4  /* Ambiguous keyword */
+#define LIB$_AMBVAL     0x008001B4  /* Ambiguous value */
+#define LIB$_NOSUCHSYM  0x008001C4  /* No such symbol */
+#define LIB$_INSCLIMEM  0x008001D4  /* Insufficient CLI memory */
+#define LIB$_BADZONE    0x008001E4  /* Bad zone */
+#define LIB$_KEYNOTFOU  0x008001F4  /* Key not found */
+#define LIB$_WRONUMARG  0x00800204  /* Wrong number of arguments */
+#define LIB$_BADSUBSCR  0x00800214  /* Bad subscript */
+#define LIB$_SYNTAXERR  0x00800224  /* Syntax error */
+
+/* Symbol table type codes for lib$get_symbol / lib$set_symbol */
+#define LIB$K_CLI_LOCAL_SYM     1   /* Local symbol */
+#define LIB$K_CLI_GLOBAL_SYM    2   /* Global symbol */
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* __LIB_ROUTINES_H */

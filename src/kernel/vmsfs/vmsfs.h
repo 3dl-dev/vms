@@ -1,0 +1,139 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * vmsfs.h - Internal header for the VMS filesystem kernel module (vmsfs.ko)
+ *
+ * Defines superblock, inode, and dentry structures for a kernel-native
+ * VMS filesystem that overlays a backing directory (typically ext4) with
+ * VMS file versioning, case-insensitive lookup, and SOGW protection.
+ *
+ * OVMX Project - Phase 4b: Kernel-native VMS Filesystem
+ */
+
+#ifndef _VMSFS_H
+#define _VMSFS_H
+
+#include <linux/fs.h>
+#include <linux/types.h>
+#include <linux/dcache.h>
+#include <linux/namei.h>
+#include <linux/slab.h>
+
+#define VMSFS_MAGIC       0x564D5346  /* "VMSF" */
+#define VMSFS_MAX_VERSION 32767
+#define VMSFS_MAX_NAME    39          /* ODS-2 name component limit */
+#define VMSFS_MAX_TYPE    39          /* ODS-2 type component limit */
+
+/* Maximum length of a full versioned filename: name.type;version */
+#define VMSFS_MAX_FILENAME (VMSFS_MAX_NAME + 1 + VMSFS_MAX_TYPE + 1 + 5)
+
+/* Mount options */
+struct vmsfs_mount_opts {
+    char backing_path[PATH_MAX];  /* backing directory on host FS */
+    int  version_limit;           /* max versions per file (default 32767) */
+    int  case_blind;              /* case-insensitive lookup (default 1) */
+};
+
+/* Superblock private data */
+struct vmsfs_sb_info {
+    struct vmsfs_mount_opts opts;
+    struct path backing;          /* backing directory path */
+};
+
+/* Inode private data - embedded VFS inode for container_of */
+struct vmsfs_inode_info {
+    struct inode vfs_inode;       /* must be first for container_of */
+    int version;                  /* file version number (0 for dirs) */
+    uint16_t vms_prot;           /* SOGW protection mask (stub) */
+    char base_name[VMSFS_MAX_NAME + 1];  /* name without version */
+    char extension[VMSFS_MAX_TYPE + 1];  /* extension (after dot) */
+};
+
+static inline struct vmsfs_sb_info *VMSFS_SB(struct super_block *sb)
+{
+    return sb->s_fs_info;
+}
+
+static inline struct vmsfs_inode_info *VMSFS_I(struct inode *inode)
+{
+    return container_of(inode, struct vmsfs_inode_info, vfs_inode);
+}
+
+/* Slab cache for inode allocation (defined in vmsfs_inode.c) */
+extern struct kmem_cache *vmsfs_inode_cachep;
+
+/* ================================================================
+ * Operations tables
+ * ================================================================ */
+
+/* Super operations (vmsfs_super.c / vmsfs_inode.c) */
+extern const struct super_operations vmsfs_sops;
+
+/* Directory inode operations (vmsfs_inode.c) */
+extern const struct inode_operations vmsfs_dir_iops;
+
+/* File inode operations (vmsfs_inode.c) */
+extern const struct inode_operations vmsfs_file_iops;
+
+/* Directory file operations (vmsfs_dir.c) */
+extern const struct file_operations vmsfs_dir_fops;
+
+/* File operations (vmsfs_file.c) */
+extern const struct file_operations vmsfs_file_fops;
+
+/* Dentry operations for case-insensitive matching (vmsfs_inode.c) */
+extern const struct dentry_operations vmsfs_dops;
+
+/* ================================================================
+ * Version operations (vmsfs_version.c)
+ * ================================================================ */
+
+/*
+ * Parse a VMS-style versioned filename into base name and version.
+ *
+ * Examples:
+ *   "FOO.TXT;3"  -> base="FOO.TXT", version=3
+ *   "FOO.TXT;0"  -> base="FOO.TXT", version=0  (means highest)
+ *   "FOO.TXT"    -> base="FOO.TXT", version=0  (means highest)
+ *
+ * Returns 0 on success, negative errno on error.
+ */
+int vmsfs_parse_version(const char *name, char *base, size_t base_size,
+                        int *version);
+
+/*
+ * Scan a backing directory to find the highest version ;N for a given base.
+ * Returns the highest version found, or 0 if none exist.
+ */
+int vmsfs_find_highest_version(struct dentry *backing_dir, const char *base);
+
+/*
+ * Construct a versioned filename "BASE;N" from base name and version.
+ * Returns 0 on success, negative errno on error.
+ */
+int vmsfs_build_versioned_name(const char *base, int version,
+                               char *result, size_t size);
+
+/* ================================================================
+ * Helpers (vmsfs_inode.c)
+ * ================================================================ */
+
+/*
+ * VFS inode allocation callback (sb->s_op->alloc_inode).
+ */
+struct inode *vmsfs_alloc_inode(struct super_block *sb);
+
+/*
+ * VFS inode free callback (sb->s_op->free_inode).
+ */
+void vmsfs_free_inode(struct inode *inode);
+
+/*
+ * Allocate and initialize a new vmsfs inode.
+ */
+struct inode *vmsfs_new_inode(struct super_block *sb, umode_t mode);
+
+/* Module init/exit for inode cache (called from vmsfs_super.c) */
+int vmsfs_inode_cache_init(void);
+void vmsfs_inode_cache_destroy(void);
+
+#endif /* _VMSFS_H */

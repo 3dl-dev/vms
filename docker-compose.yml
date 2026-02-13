@@ -1,0 +1,9 @@
+services:
+  ovmx:
+    build: .
+    image: ovmx:latest
+    ports:
+      - "2222:22"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped

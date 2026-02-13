@@ -41,6 +41,7 @@ Module.symvers
 # Beads runtime
 .beads/beads.db*
 .beads/*.lock
+.beads/*.tmp
 
 # Python
 __pycache__/

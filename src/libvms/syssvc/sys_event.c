@@ -183,6 +183,37 @@ uint32_t sys$readef(uint32_t efn, uint32_t *state) {
     return was_set ? SS$_WASSET : SS$_WASCLR;
 }
 
+/*
+ * sys$synch - Synchronize with async system service completion.
+ *
+ * Waits for the event flag to be set, then checks the IOSB status.
+ * This is the standard VMS pattern for waiting on async services:
+ *   status = sys$qio(..., efn, ..., iosb, ...);
+ *   if (status & 1) status = sys$synch(efn, iosb);
+ *   if (status & 1) status = iosb[0];
+ *
+ * Parameters:
+ *   efn  - Event flag number to wait on
+ *   iosb - Pointer to I/O Status Block (first word is status)
+ *          If NULL, just waits for the event flag.
+ *
+ * Returns:
+ *   The IOSB status word if iosb is provided.
+ *   SS$_NORMAL if iosb is NULL and the wait succeeded.
+ *   Error from sys$waitfr on failure.
+ */
+uint32_t sys$synch(uint32_t efn, void *iosb) {
+    uint32_t status = sys$waitfr(efn);
+    if (!(status & 1)) return status;
+
+    if (iosb) {
+        /* Return the status word from the IOSB (first 16-bit word,
+         * but VMS convention zero-extends to 32 bits) */
+        return (uint32_t)(*(uint16_t *)iosb);
+    }
+    return SS$_NORMAL;
+}
+
 /* --- Common event flag cluster stubs --- */
 
 /*

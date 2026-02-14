@@ -30,6 +30,10 @@
 #include "lnmdef.h"
 #include "prcdef.h"
 #include "rmsdef.h"
+#include "prvdef.h"
+#include "chfdef.h"
+#include "msgdef.h"
+#include "libclidef.h"
 
 /* ================================================================
  * Run-time library routine headers
@@ -212,6 +216,16 @@ uint32_t sys$wflor(uint32_t efn, uint32_t mask);
  * @return  SS$_NORMAL when all specified flags are set
  */
 uint32_t sys$wfland(uint32_t efn, uint32_t mask);
+
+/**
+ * sys$synch - Synchronize with async system service
+ *
+ * @param efn   Event flag number to wait on
+ * @param iosb  Pointer to I/O status block (NULL = just wait for EF)
+ *
+ * @return  IOSB status if iosb provided, SS$_NORMAL otherwise
+ */
+uint32_t sys$synch(uint32_t efn, void *iosb);
 
 /**
  * sys$readef - Read event flag state
@@ -859,6 +873,155 @@ uint32_t sys$find(void *rab);
  * @param rab  Pointer to RAB
  */
 uint32_t sys$rewind(void *rab);
+
+/* ================================================================
+ * Formatted ASCII Output (FAO) Services
+ * ================================================================ */
+
+/**
+ * sys$fao - Formatted ASCII output
+ *
+ * @param ctrstr  Pointer to descriptor of control string
+ * @param outlen  Optional pointer to receive output length
+ * @param outbuf  Pointer to descriptor of output buffer
+ * @param ...     FAO directive arguments
+ *
+ * @return  SS$_NORMAL on success, SS$_BUFFEROVF if truncated
+ */
+uint32_t sys$fao(
+    const struct dsc$descriptor_s *ctrstr,
+    uint16_t *outlen,
+    struct dsc$descriptor_s *outbuf,
+    ...
+);
+
+/**
+ * sys$faol - Formatted ASCII output with argument list
+ *
+ * @param ctrstr  Pointer to descriptor of control string
+ * @param outlen  Optional pointer to receive output length
+ * @param outbuf  Pointer to descriptor of output buffer
+ * @param prmlst  Pointer to argument list (array of uint64_t)
+ *
+ * @return  SS$_NORMAL on success, SS$_BUFFEROVF if truncated
+ */
+uint32_t sys$faol(
+    const struct dsc$descriptor_s *ctrstr,
+    uint16_t *outlen,
+    struct dsc$descriptor_s *outbuf,
+    const uint64_t *prmlst
+);
+
+/* ================================================================
+ * Message Services
+ * ================================================================ */
+
+/**
+ * sys$getmsg - Get message text for condition value
+ *
+ * @param msgid   Condition value (message ID)
+ * @param msglen  Pointer to receive message length
+ * @param bufadr  Pointer to descriptor of output buffer
+ * @param flags   Message component flags (MSG$M_ bits)
+ * @param outadr  Optional pointer to receive 4-byte result vector
+ *
+ * @return  SS$_NORMAL on success, SS$_MSGNOTFND if not found
+ */
+uint32_t sys$getmsg(
+    uint32_t msgid,
+    uint16_t *msglen,
+    struct dsc$descriptor_s *bufadr,
+    uint32_t flags,
+    uint32_t *outadr
+);
+
+/**
+ * sys$putmsg - Output message for condition value
+ *
+ * @param msgvec   Pointer to message vector
+ * @param actrtn   Optional action routine (called for each line)
+ * @param facnam   Optional facility name override descriptor
+ * @param actprm   Optional action routine parameter
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$putmsg(
+    const uint32_t *msgvec,
+    uint32_t (*actrtn)(struct dsc$descriptor_s *, uint32_t),
+    const struct dsc$descriptor_s *facnam,
+    uint32_t actprm
+);
+
+/* ================================================================
+ * Additional Process Management Services
+ * ================================================================ */
+
+/**
+ * sys$forcex - Force image exit on another process
+ *
+ * @param pidadr  Optional pointer to target process ID
+ * @param prcnam  Optional pointer to descriptor of process name
+ * @param code    Exit status code to force
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$forcex(
+    const uint32_t *pidadr,
+    const struct dsc$descriptor_s *prcnam,
+    uint32_t code
+);
+
+/**
+ * sys$suspend - Suspend a process
+ *
+ * @param pidadr  Optional pointer to process ID
+ * @param prcnam  Optional pointer to descriptor of process name
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$suspend(
+    const uint32_t *pidadr,
+    const struct dsc$descriptor_s *prcnam
+);
+
+/**
+ * sys$resume - Resume a suspended process
+ *
+ * @param pidadr  Optional pointer to process ID
+ * @param prcnam  Optional pointer to descriptor of process name
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$resume(
+    const uint32_t *pidadr,
+    const struct dsc$descriptor_s *prcnam
+);
+
+/**
+ * sys$setpri - Set process priority
+ *
+ * @param pidadr  Optional pointer to process ID
+ * @param prcnam  Optional pointer to descriptor of process name
+ * @param pri     New base priority
+ * @param prvpri  Optional pointer to receive previous priority
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$setpri(
+    const uint32_t *pidadr,
+    const struct dsc$descriptor_s *prcnam,
+    uint32_t pri,
+    uint32_t *prvpri
+);
+
+/**
+ * sys$cancel - Cancel I/O on channel
+ *
+ * @param chan  Channel number
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$cancel(uint16_t chan);
 
 #ifdef __cplusplus
 }

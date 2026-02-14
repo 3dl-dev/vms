@@ -6,5 +6,5 @@
 int main(void) {
     $DESCRIPTOR(msg, "Hello from OpenVMS!");
     lib$put_output(&msg);
-    return SS$_NORMAL;
+    return 0;  /* Unix success code */
 }

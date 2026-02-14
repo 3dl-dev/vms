@@ -479,3 +479,219 @@ uint32_t str$append(struct dsc$descriptor_s *dest,
 
     return SS$_NORMAL;
 }
+
+/*
+ * str$match_wild - Match string against wildcard pattern.
+ *
+ * Pattern may contain '*' (match any sequence) and '%' (match any
+ * single character). Returns STR$_MATCH if matches, STR$_NOMATCH if not.
+ *
+ * Parameters:
+ *   candidate - Descriptor of string to test
+ *   pattern   - Descriptor of wildcard pattern
+ */
+uint32_t str$match_wild(const struct dsc$descriptor_s *candidate,
+                        const struct dsc$descriptor_s *pattern) {
+    if (!candidate || !pattern) return STR$_NOMATCH;
+    if (!candidate->dsc$a_pointer || !pattern->dsc$a_pointer)
+        return STR$_NOMATCH;
+
+    const char *c = candidate->dsc$a_pointer;
+    const char *p = pattern->dsc$a_pointer;
+    uint16_t clen = candidate->dsc$w_length;
+    uint16_t plen = pattern->dsc$w_length;
+    uint16_t ci = 0, pi = 0;
+    uint16_t star_ci = 0, star_pi = 0;
+    int has_star = 0;
+
+    while (ci < clen) {
+        if (pi < plen && p[pi] == '*') {
+            /* Remember star position for backtracking */
+            has_star = 1;
+            star_ci = ci;
+            star_pi = pi;
+            pi++;
+        } else if (pi < plen && (p[pi] == '%' || p[pi] == c[ci])) {
+            /* Match single character */
+            ci++;
+            pi++;
+        } else if (has_star) {
+            /* Backtrack to last star and try matching from next position */
+            star_ci++;
+            ci = star_ci;
+            pi = star_pi + 1;
+        } else {
+            /* No match */
+            return STR$_NOMATCH;
+        }
+    }
+
+    /* Consume trailing stars in pattern */
+    while (pi < plen && p[pi] == '*') {
+        pi++;
+    }
+
+    /* Both must be at end for a match */
+    return (pi == plen) ? STR$_MATCH : STR$_NOMATCH;
+}
+
+/*
+ * str$analyze_sdesc - Analyze a string descriptor.
+ *
+ * Extracts the length and data address from any class of descriptor.
+ * Returns SS$_NORMAL on success, STR$_ILLSTRCLA for unsupported class.
+ *
+ * Parameters:
+ *   desc   - Descriptor to analyze
+ *   length - Receives string length
+ *   addr   - Receives string data address
+ */
+uint32_t str$analyze_sdesc(const struct dsc$descriptor_s *desc,
+                           uint16_t *length, char **addr) {
+    if (!desc || !length || !addr) return SS$_BADPARAM;
+
+    switch (desc->dsc$b_class) {
+        case DSC$K_CLASS_S:
+        case DSC$K_CLASS_D:
+        case DSC$K_CLASS_A:
+            *length = desc->dsc$w_length;
+            *addr = desc->dsc$a_pointer;
+            return SS$_NORMAL;
+
+        default:
+            /* Unsupported descriptor class */
+            *length = 0;
+            *addr = NULL;
+            return STR$_ILLSTRCLA;
+    }
+}
+
+/*
+ * str$compare_multi - Compare strings with multinational character support.
+ *
+ * This is a stub that falls back to str$compare. Full implementation
+ * would handle locale-specific collation sequences.
+ *
+ * Parameters:
+ *   str1   - First string descriptor
+ *   str2   - Second string descriptor
+ *   flags  - Comparison flags (ignored)
+ *   locale - Locale descriptor (ignored)
+ */
+int32_t str$compare_multi(const struct dsc$descriptor_s *str1,
+                          const struct dsc$descriptor_s *str2,
+                          const uint32_t *flags,
+                          const struct dsc$descriptor_s *locale) {
+    (void)flags;
+    (void)locale;
+    return str$compare(str1, str2);
+}
+
+/*
+ * str$replace - Replace portion of string.
+ *
+ * Replaces characters from *start_pos through *end_pos in src with rep.
+ * Positions are 1-based.
+ *
+ * Parameters:
+ *   dest      - Destination descriptor
+ *   src       - Source descriptor
+ *   start_pos - Starting position of replacement (1-based)
+ *   end_pos   - Ending position of replacement (1-based)
+ *   rep       - Replacement string descriptor
+ */
+uint32_t str$replace(struct dsc$descriptor_s *dest,
+                     const struct dsc$descriptor_s *src,
+                     const uint32_t *start_pos,
+                     const uint32_t *end_pos,
+                     const struct dsc$descriptor_s *rep) {
+    if (!dest || !src || !start_pos || !end_pos || !rep)
+        return SS$_BADPARAM;
+
+    /* Convert to 0-based indices */
+    int32_t start = (int32_t)(*start_pos - 1);
+    int32_t end = (int32_t)(*end_pos - 1);
+
+    /* Clamp to valid range */
+    if (start < 0) start = 0;
+    if (end < start) end = start - 1;  /* Empty range */
+    if (start > src->dsc$w_length) start = src->dsc$w_length;
+    if (end >= src->dsc$w_length) end = src->dsc$w_length - 1;
+
+    /* Calculate result length */
+    int32_t before_len = start;
+    int32_t after_start = end + 1;
+    int32_t after_len = src->dsc$w_length - after_start;
+    if (after_len < 0) after_len = 0;
+
+    uint16_t result_len = (uint16_t)(before_len + rep->dsc$w_length + after_len);
+
+    /* Allocate or use static dest */
+    if (dest->dsc$b_class == DSC$K_CLASS_D) {
+        struct dsc$descriptor_d *ddest = (struct dsc$descriptor_d *)dest;
+        if (ddest->dsc$a_pointer) free(ddest->dsc$a_pointer);
+        ddest->dsc$a_pointer = (char *)malloc(result_len);
+        if (!ddest->dsc$a_pointer && result_len > 0) {
+            ddest->dsc$w_length = 0;
+            return SS$_INSFMEM;
+        }
+        ddest->dsc$w_length = result_len;
+
+        /* Copy before part */
+        if (before_len > 0) {
+            memcpy(ddest->dsc$a_pointer, src->dsc$a_pointer, before_len);
+        }
+        /* Copy replacement */
+        if (rep->dsc$w_length > 0 && rep->dsc$a_pointer) {
+            memcpy(ddest->dsc$a_pointer + before_len,
+                   rep->dsc$a_pointer, rep->dsc$w_length);
+        }
+        /* Copy after part */
+        if (after_len > 0) {
+            memcpy(ddest->dsc$a_pointer + before_len + rep->dsc$w_length,
+                   src->dsc$a_pointer + after_start, after_len);
+        }
+    } else {
+        /* Static dest - truncate/pad as needed */
+        if (!dest->dsc$a_pointer) return SS$_BADPARAM;
+        uint16_t pos = 0;
+
+        /* Copy before part */
+        if (before_len > 0) {
+            uint16_t copylen = before_len;
+            if (pos + copylen > dest->dsc$w_length) {
+                copylen = dest->dsc$w_length - pos;
+            }
+            memcpy(dest->dsc$a_pointer + pos, src->dsc$a_pointer, copylen);
+            pos += copylen;
+        }
+
+        /* Copy replacement */
+        if (pos < dest->dsc$w_length && rep->dsc$w_length > 0 && rep->dsc$a_pointer) {
+            uint16_t copylen = rep->dsc$w_length;
+            if (pos + copylen > dest->dsc$w_length) {
+                copylen = dest->dsc$w_length - pos;
+            }
+            memcpy(dest->dsc$a_pointer + pos, rep->dsc$a_pointer, copylen);
+            pos += copylen;
+        }
+
+        /* Copy after part */
+        if (pos < dest->dsc$w_length && after_len > 0) {
+            uint16_t copylen = after_len;
+            if (pos + copylen > dest->dsc$w_length) {
+                copylen = dest->dsc$w_length - pos;
+            }
+            memcpy(dest->dsc$a_pointer + pos,
+                   src->dsc$a_pointer + after_start, copylen);
+            pos += copylen;
+        }
+
+        /* Pad with spaces */
+        if (pos < dest->dsc$w_length) {
+            memset(dest->dsc$a_pointer + pos, ' ', dest->dsc$w_length - pos);
+        }
+    }
+
+    return SS$_NORMAL;
+}

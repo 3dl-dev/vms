@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
@@ -333,5 +334,142 @@ uint32_t sys$dclexh(void *desblk) {
     pcb->exit_handlers[pcb->exit_handler_count++] =
         (struct pcb_exit_handler *)desblk;
 
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$forcex - Force image exit on another process.
+ *
+ * Sends SIGUSR1 to the target process to force it to exit.
+ * If both pidadr and prcnam are NULL, force exit on current process
+ * (equivalent to calling sys$exit with the provided code).
+ */
+uint32_t sys$forcex(const uint32_t *pidadr,
+                    const struct dsc$descriptor_s *prcnam,
+                    uint32_t code) {
+    (void)prcnam;
+
+    /* If no target specified, force exit on current process */
+    if (!pidadr && !prcnam) {
+        return sys$exit(code);
+    }
+
+    pid_t pid;
+    if (pidadr) {
+        pid = (pid_t)*pidadr;
+    } else {
+        pid = getpid();
+    }
+
+    /* Send SIGUSR1 to force the target process to exit */
+    if (kill(pid, SIGUSR1) < 0) return SS$_NONEXPR;
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$suspend - Suspend a process.
+ *
+ * Sends SIGSTOP to the target process. If pidadr is NULL,
+ * suspend the current process.
+ */
+uint32_t sys$suspend(const uint32_t *pidadr,
+                     const struct dsc$descriptor_s *prcnam) {
+    (void)prcnam;
+
+    pid_t pid;
+    if (pidadr) {
+        pid = (pid_t)*pidadr;
+    } else {
+        pid = getpid();
+    }
+
+    if (kill(pid, SIGSTOP) < 0) return SS$_NONEXPR;
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$resume - Resume a suspended process.
+ *
+ * Sends SIGCONT to the target process to resume it from suspension.
+ */
+uint32_t sys$resume(const uint32_t *pidadr,
+                    const struct dsc$descriptor_s *prcnam) {
+    (void)prcnam;
+
+    pid_t pid;
+    if (pidadr) {
+        pid = (pid_t)*pidadr;
+    } else {
+        pid = getpid();
+    }
+
+    if (kill(pid, SIGCONT) < 0) return SS$_NONEXPR;
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$setpri - Set process priority.
+ *
+ * Maps VMS priority (0-31) to Linux nice values (-20 to 19).
+ * VMS priority 31 (highest) = Linux nice -20 (highest)
+ * VMS priority 0 (lowest) = Linux nice 19 (lowest)
+ *
+ * Currently only supports changing the priority of the current process.
+ * If pidadr/prcnam specify another process, they are ignored and we
+ * operate on the current process (this simplifies the implementation
+ * while still satisfying most use cases).
+ */
+uint32_t sys$setpri(const uint32_t *pidadr,
+                    const struct dsc$descriptor_s *prcnam,
+                    uint32_t pri,
+                    uint32_t *prvpri) {
+    (void)pidadr;
+    (void)prcnam;
+
+    /* Clamp VMS priority to valid range (0-31) */
+    if (pri > 31) pri = 31;
+
+    /* Get current priority if caller wants it */
+    if (prvpri) {
+        errno = 0;
+        int current_nice = getpriority(PRIO_PROCESS, 0);
+        if (errno != 0) current_nice = 0;
+
+        /* Convert Linux nice (-20 to 19) back to VMS priority (31 to 0) */
+        *prvpri = (uint32_t)(19 - current_nice);
+        if (*prvpri > 31) *prvpri = 31;
+    }
+
+    /* Map VMS priority to Linux nice value:
+     * VMS 31 -> nice -20 (highest priority)
+     * VMS 0  -> nice 19 (lowest priority)
+     */
+    int nice_value = 19 - (int)pri;
+
+    /* Set priority using setpriority (operates on current process) */
+    if (setpriority(PRIO_PROCESS, 0, nice_value) < 0) {
+        return SS$_NOPRIV;  /* Usually fails due to lack of privilege */
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$cancel - Cancel pending I/O on a channel.
+ *
+ * This is a stub that always returns success because our current I/O
+ * model is synchronous. All sys$qio operations complete immediately
+ * before returning, so there are no pending operations to cancel.
+ *
+ * When asynchronous I/O is implemented (via io_uring or AIO), this
+ * service will need to:
+ *   1. Locate any pending I/O request for the specified channel
+ *   2. Cancel the operation (io_uring_prep_cancel or aio_cancel)
+ *   3. Complete the I/O with SS$_CANCEL status
+ */
+uint32_t sys$cancel(uint16_t chan) {
+    (void)chan;
+
+    /* No-op: synchronous I/O model has no pending operations */
     return SS$_NORMAL;
 }

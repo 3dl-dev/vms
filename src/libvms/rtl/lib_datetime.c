@@ -16,6 +16,13 @@
 #include "descrip.h"
 #include "lib$routines.h"
 
+/* Forward declaration for sys$faol from sys_fao.c */
+extern uint32_t sys$faol(
+    const struct dsc$descriptor_s *ctrstr,
+    uint16_t *outlen,
+    struct dsc$descriptor_s *outbuf,
+    const uint64_t *prmlst);
+
 /* VMS epoch offset from Unix epoch in 100ns ticks */
 #define VMS_EPOCH_OFFSET 0x007C95674BEB4000ULL
 
@@ -167,164 +174,44 @@ uint32_t lib$cvt_otb(int32_t ndigits, const char *text, int32_t *value) {
 }
 
 /*
- * lib$sys_fao - Formatted ASCII Output.
+ * lib$sys_fao - Formatted ASCII output (wrapper)
  *
- * Processes VMS FAO format directives in the control string and
- * produces formatted output. Supported directives:
- *
- *   !AS  - ASCII string from descriptor argument
- *   !AD  - ASCII descriptor (same as !AS)
- *   !AC  - ASCII counted string (first byte = length)
- *   !SL  - Signed longword (decimal)
- *   !UL  - Unsigned longword (decimal)
- *   !ZL  - Zero-filled longword (8 digits)
- *   !XL  - Hexadecimal longword (8 hex digits)
- *   !OL  - Octal longword
- *   !/   - Newline
- *   !_   - Tab
- *   !!   - Literal exclamation mark
+ * Thin wrapper around sys$fao for LIB$ compatibility.
+ * See sys$fao in sys_fao.c for full implementation.
  */
 uint32_t lib$sys_fao(const struct dsc$descriptor_s *ctrl_str,
                      uint16_t *outlen,
                      struct dsc$descriptor_s *out_str, ...) {
-    if (!ctrl_str || !out_str) return SS$_BADPARAM;
-    if (!ctrl_str->dsc$a_pointer || !out_str->dsc$a_pointer) return SS$_BADPARAM;
-
     va_list args;
     va_start(args, out_str);
 
-    char ctrl[512];
-    dsc$strncpy(ctrl, ctrl_str, sizeof(ctrl));
+    /* Build argument array from varargs */
+    uint64_t arglist[256];
+    int arg_count = 0;
 
-    char output[4096];
-    char *op = output;
-    char *oend = output + sizeof(output) - 1;
-    const char *cp = ctrl;
-
-    while (*cp && op < oend) {
-        if (*cp == '!') {
-            cp++;
-            if (!*cp) break;
-
-            char directive = (char)toupper((unsigned char)*cp);
-            cp++;
-
-            switch (directive) {
-                case 'A': {
-                    /* !AS = ASCII string descriptor, !AD = same, !AC = counted */
-                    char sub = *cp ? (char)toupper((unsigned char)*cp) : 0;
-                    if (sub == 'S' || sub == 'D') {
-                        cp++;
-                        struct dsc$descriptor_s *arg =
-                            va_arg(args, struct dsc$descriptor_s *);
-                        if (arg && arg->dsc$a_pointer) {
-                            int len = arg->dsc$w_length;
-                            if (op + len > oend) len = (int)(oend - op);
-                            memcpy(op, arg->dsc$a_pointer, len);
-                            op += len;
-                        }
-                    } else if (sub == 'C') {
-                        cp++;
-                        const char *counted = va_arg(args, const char *);
-                        if (counted) {
-                            int len = (unsigned char)counted[0];
-                            if (op + len > oend) len = (int)(oend - op);
-                            memcpy(op, counted + 1, len);
-                            op += len;
-                        }
-                    } else {
-                        /* Treat bare !A as !AS */
-                        struct dsc$descriptor_s *arg =
-                            va_arg(args, struct dsc$descriptor_s *);
-                        if (arg && arg->dsc$a_pointer) {
-                            int len = arg->dsc$w_length;
-                            if (op + len > oend) len = (int)(oend - op);
-                            memcpy(op, arg->dsc$a_pointer, len);
-                            op += len;
-                        }
-                    }
-                    break;
-                }
-
-                case 'U': {
-                    /* !UL = unsigned longword (decimal) */
-                    if (*cp && (toupper((unsigned char)*cp) == 'L')) cp++;
-                    uint32_t val = va_arg(args, uint32_t);
-                    int n = snprintf(op, (size_t)(oend - op), "%u", val);
-                    if (n > 0) op += n;
-                    break;
-                }
-
-                case 'S': {
-                    /* !SL = signed longword (decimal) */
-                    if (*cp && (toupper((unsigned char)*cp) == 'L')) cp++;
-                    int32_t val = va_arg(args, int32_t);
-                    int n = snprintf(op, (size_t)(oend - op), "%d", val);
-                    if (n > 0) op += n;
-                    break;
-                }
-
-                case 'X': {
-                    /* !XL = hexadecimal longword */
-                    if (*cp && (toupper((unsigned char)*cp) == 'L')) cp++;
-                    uint32_t val = va_arg(args, uint32_t);
-                    int n = snprintf(op, (size_t)(oend - op), "%08X", val);
-                    if (n > 0) op += n;
-                    break;
-                }
-
-                case 'Z': {
-                    /* !ZL = zero-filled longword */
-                    if (*cp && (toupper((unsigned char)*cp) == 'L')) cp++;
-                    uint32_t val = va_arg(args, uint32_t);
-                    int n = snprintf(op, (size_t)(oend - op), "%08u", val);
-                    if (n > 0) op += n;
-                    break;
-                }
-
-                case 'O': {
-                    /* !OL = octal longword */
-                    if (*cp && (toupper((unsigned char)*cp) == 'L')) cp++;
-                    uint32_t val = va_arg(args, uint32_t);
-                    int n = snprintf(op, (size_t)(oend - op), "%o", val);
-                    if (n > 0) op += n;
-                    break;
-                }
-
-                case '/':
-                    /* !/ = newline */
-                    *op++ = '\n';
-                    break;
-
-                case '_':
-                    /* !_ = tab */
-                    *op++ = '\t';
-                    break;
-
-                case '!':
-                    /* !! = literal exclamation mark */
-                    *op++ = '!';
-                    break;
-
-                default:
-                    /* Unknown directive - output as-is */
-                    *op++ = '!';
-                    if (op < oend) *op++ = directive;
-                    break;
-            }
-        } else {
-            *op++ = *cp++;
-        }
+    while (arg_count < 256) {
+        arglist[arg_count++] = va_arg(args, uint64_t);
+        if (arg_count >= 64) break;
     }
 
     va_end(args);
 
-    uint16_t len = (uint16_t)(op - output);
-    if (len > out_str->dsc$w_length) len = out_str->dsc$w_length;
-    memcpy(out_str->dsc$a_pointer, output, len);
-    if (outlen) *outlen = len;
+    /* Call sys$faol with the argument array */
+    return sys$faol(ctrl_str, outlen, out_str, arglist);
+}
 
-    return SS$_NORMAL;
+/*
+ * lib$sys_faol - Formatted ASCII output with argument list (wrapper)
+ *
+ * Thin wrapper around sys$faol for LIB$ compatibility.
+ * See sys$faol in sys_fao.c for full implementation.
+ */
+uint32_t lib$sys_faol(const struct dsc$descriptor_s *ctrl_str,
+                      uint16_t *outlen,
+                      struct dsc$descriptor_s *out_str,
+                      const uint32_t *prmlst) {
+    /* Cast prmlst to uint64_t* as sys$faol expects 64-bit arguments on this platform */
+    return sys$faol(ctrl_str, outlen, out_str, (const uint64_t *)prmlst);
 }
 
 /*

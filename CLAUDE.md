@@ -67,6 +67,15 @@ The PM agent coordinates work across specialized agents. Each has a spec in `doc
 | System service implementation, DCL features, test design, spec writing, documentation | **Sonnet** | Structured implementation within well-defined VMS constraints |
 | CMakeLists updates, config file edits, mechanical refactoring, template-driven doc work | **Haiku** | Mechanical work with clear patterns |
 
+## Token Optimization
+
+**Standing order: minimize token utilization.** See `~/.claude/CLAUDE.md` for the full policy. Key points:
+- Default to Haiku for mechanical work
+- Use tools and `--json` parsing over LLM interpretation
+- Concise subagent prompts with file refs, not pasted content
+- One focused task per agent dispatch
+- No verbose outputs — write the deliverable, not a summary of it
+
 ## Design Change Cascade
 
 **Every design/architecture change MUST trigger these downstream beads:**

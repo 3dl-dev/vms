@@ -16,6 +16,14 @@ hostname OVMX
 insmod /lib/modules/vms.ko 2>/dev/null
 insmod /lib/modules/vmsfs.ko 2>/dev/null
 
+# Mount vmsfs over /vms for case-insensitive file access
+# vmsfs needs a backing directory separate from the mount point
+if [ -d /vms ]; then
+    mkdir -p /var/vmsfs
+    cp -a /vms/. /var/vmsfs/
+    mount -t vmsfs -o backing=/var/vmsfs,case_blind=1 none /vms 2>/dev/null
+fi
+
 # Generate /etc/passwd for musl getpwnam()
 cat > /etc/passwd << 'EOF'
 root:x:0:0:SYSTEM:/root:/bin/vmsdcl

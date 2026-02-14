@@ -22,6 +22,10 @@
 /* Forward declaration of logical name translation */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
 
+/* Forward declaration of vmsfs case-insensitive lookup */
+extern int vmsfs_find_case_insensitive(const char *dir_path, const char *name,
+                                        char *result, size_t result_size);
+
 /*
  * Convert a VMS directory spec to a Linux path component.
  * [DIR.SUB]     -> /dir/sub/
@@ -203,14 +207,47 @@ int dcl_resolve_filespec(struct dcl_context *ctx, const char *spec,
 
     /* Combine base_dir + filename */
     if (name_part[0]) {
-        /* Convert name to lowercase for Linux */
-        char lower_name[512];
+        /* VMS is case-insensitive; try uppercase first, then case-insensitive scan */
+        char upper_name[512];
         size_t i;
-        for (i = 0; i < sizeof(lower_name) - 1 && name_part[i]; i++) {
-            lower_name[i] = (char)tolower((unsigned char)name_part[i]);
+        for (i = 0; i < sizeof(upper_name) - 1 && name_part[i]; i++) {
+            upper_name[i] = (char)toupper((unsigned char)name_part[i]);
         }
-        lower_name[i] = '\0';
-        snprintf(linux_path, path_size, "%s%s", base_dir, lower_name);
+        upper_name[i] = '\0';
+
+        /* Try uppercase (VMS canonical) */
+        char try_path[1024];
+        struct stat fst;
+        snprintf(try_path, sizeof(try_path), "%s%s", base_dir, upper_name);
+        if (stat(try_path, &fst) == 0) {
+            strncpy(linux_path, try_path, path_size - 1);
+            linux_path[path_size - 1] = '\0';
+        } else {
+            /* Try original case */
+            snprintf(try_path, sizeof(try_path), "%s%s", base_dir, name_part);
+            if (stat(try_path, &fst) == 0) {
+                strncpy(linux_path, try_path, path_size - 1);
+                linux_path[path_size - 1] = '\0';
+            } else {
+                /* Case-insensitive scan of directory */
+                char found_name[256];
+                /* Strip trailing slash from base_dir for opendir */
+                char scan_dir[1024];
+                strncpy(scan_dir, base_dir, sizeof(scan_dir) - 1);
+                scan_dir[sizeof(scan_dir) - 1] = '\0';
+                size_t sdlen = strlen(scan_dir);
+                if (sdlen > 1 && scan_dir[sdlen - 1] == '/')
+                    scan_dir[sdlen - 1] = '\0';
+
+                if (vmsfs_find_case_insensitive(scan_dir, name_part,
+                                                 found_name, sizeof(found_name)) == 0) {
+                    snprintf(linux_path, path_size, "%s%s", base_dir, found_name);
+                } else {
+                    /* Default to uppercase for new files */
+                    snprintf(linux_path, path_size, "%s%s", base_dir, upper_name);
+                }
+            }
+        }
     } else {
         strncpy(linux_path, base_dir, path_size - 1);
         linux_path[path_size - 1] = '\0';
@@ -409,23 +446,27 @@ int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
     }
 
     /* Plain filename - resolve relative to default directory */
-    /* Convert to lowercase for Linux */
-    char lower[512];
-    size_t i;
-    for (i = 0; i < sizeof(lower) - 1 && spec[i]; i++) {
-        lower[i] = (char)tolower((unsigned char)spec[i]);
-    }
-    lower[i] = '\0';
-
-    /* Remove VMS version number ;N if present */
-    char *semi = strrchr(lower, ';');
+    /* Strip VMS version number ;N if present */
+    char name_buf[512];
+    strncpy(name_buf, spec, sizeof(name_buf) - 1);
+    name_buf[sizeof(name_buf) - 1] = '\0';
+    char *semi = strrchr(name_buf, ';');
     if (semi) *semi = '\0';
 
-    /* Check if the file exists as-is (case-sensitive match) first */
-    char try_path[1024];
-    snprintf(try_path, sizeof(try_path), "%s/%s", ctx->default_linux, lower);
+    /* VMS is case-insensitive; canonical form is UPPERCASE.
+     * Try: uppercase (VMS canonical), original case, then case-insensitive scan. */
+    char upper[512];
+    size_t i;
+    for (i = 0; i < sizeof(upper) - 1 && name_buf[i]; i++) {
+        upper[i] = (char)toupper((unsigned char)name_buf[i]);
+    }
+    upper[i] = '\0';
 
+    char try_path[1024];
     struct stat st;
+
+    /* Try uppercase first (VMS stores filenames in uppercase) */
+    snprintf(try_path, sizeof(try_path), "%s/%s", ctx->default_linux, upper);
     if (stat(try_path, &st) == 0) {
         strncpy(linux_path, try_path, path_size - 1);
         linux_path[path_size - 1] = '\0';
@@ -433,18 +474,22 @@ int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
     }
 
     /* Try original case */
-    snprintf(try_path, sizeof(try_path), "%s/%s", ctx->default_linux, spec);
-    /* Remove VMS version ;N */
-    semi = strrchr(try_path, ';');
-    if (semi) *semi = '\0';
-
+    snprintf(try_path, sizeof(try_path), "%s/%s", ctx->default_linux, name_buf);
     if (stat(try_path, &st) == 0) {
         strncpy(linux_path, try_path, path_size - 1);
         linux_path[path_size - 1] = '\0';
         return 0;
     }
 
-    /* Return the lowercase version as default */
-    snprintf(linux_path, path_size, "%s/%s", ctx->default_linux, lower);
+    /* Case-insensitive directory scan */
+    char found_name[256];
+    if (vmsfs_find_case_insensitive(ctx->default_linux, name_buf,
+                                     found_name, sizeof(found_name)) == 0) {
+        snprintf(linux_path, path_size, "%s/%s", ctx->default_linux, found_name);
+        return 0;
+    }
+
+    /* Not found - return uppercase (VMS canonical for new files) */
+    snprintf(linux_path, path_size, "%s/%s", ctx->default_linux, upper);
     return 0;
 }

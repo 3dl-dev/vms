@@ -59,6 +59,39 @@ The PM agent coordinates work across specialized agents. Each has a spec in `doc
 - Blog outline → post authoring → Blog
 - Everything else (prioritization, decisions, coordination) → PM
 
+## Team
+
+VMS uses a three-role worker structure managed by the OS scheduler (`os next` command).
+
+### Profiles
+
+Worker profiles live in `.claude/profiles/`:
+
+- **manager.md** — persistent agent (long-running interactive session). Decomposes parent beads, assigns work to implementers/reviewers, reviews completed work, escalates blockers, reports status to CPEO.
+- **implementer.md** — ephemeral agent (one bead per session). Receives a focused bead with domain context hint (Systems, QA, TechWriter). Writes code/tests/docs, commits, pushes branch, closes bead.
+- **reviewer.md** — ephemeral agent (code review sessions). Reviews implementer branches for correctness, style, test coverage, domain fit before manager approves merge.
+
+### Domain Routing
+
+Beads carry a context hint indicating the domain specialty:
+
+| Hint | Routed to | Example Work |
+|------|-----------|--------------|
+| **Systems** | Implementer (Systems focus) | VMS system service, DCL feature, kernel module, RMS implementation, assembly |
+| **QA** | Implementer (QA focus) | Test infrastructure, CI/CD, static analysis, build validation |
+| **TechWriter** | Implementer (TechWriter focus) | API documentation, command reference, user guides, blog drafts |
+
+Manager reads domain hints from beads and assigns work accordingly.
+
+### Workflow
+
+1. Manager decomposes large beads and assigns domain context hints
+2. `os next` picks a ready bead, reads the implementer profile, launches implementer session in a git worktree
+3. Implementer executes the bead scope (code/tests/docs), pushes branch, closes bead
+4. Manager (or separate reviewer session) reviews the branch against the bead scope
+5. Manager approves merge (if tests pass, scope met, quality OK) or requests changes
+6. Manager escalates blockers or design questions to CPEO via beads
+
 ## Task-Type → Model Mapping
 
 | Task Type | Model | Rationale |

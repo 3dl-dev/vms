@@ -42,15 +42,15 @@ tests/qemu/run_tests.sh
 
 ## Agent Roster
 
-The PM agent coordinates work across specialized agents. Each has a spec in `docs/`.
-
-| Agent | Spec | Container | Role |
-|-------|------|-----------|------|
-| PM | CLAUDE.md | (beads via OS) | Prioritize, track, route work |
-| Systems Engineer | docs/agent-systems.md | (native gcc/cmake) | Implement system services, DCL, kernel modules, RMS |
-| QA Engineer | docs/agent-qa.md | (docker/qemu) | Test infrastructure, CI/CD, static analysis |
-| Technical Writer | docs/agent-writer.md | (markdown) | API docs, command reference, guides |
-| Blog | docs/agent-blog.md | (markdown) | Devblog posts (Baron's voice) |
+| Agent | Spec | Domain | Default Tier |
+|-------|------|--------|-------------|
+| Manager | `.claude/agents/manager.md` | `*` | inherit |
+| Systems Engineer | `.claude/agents/systems-engineer.md` | `src/**` | sonnet |
+| QA Engineer | `.claude/agents/qa-engineer.md` | `tests/**`, `.github/workflows/**` | sonnet |
+| Technical Writer | `.claude/agents/technical-writer.md` | `docs/**` | sonnet |
+| Implementer | `.claude/agents/implementer.md` | `*` | sonnet |
+| Reviewer | `.claude/agents/reviewer.md` | `*` (read-only) | sonnet |
+| Blog | `.claude/agents/blog.md` | `docs/blog/**` | sonnet |
 
 **Routing rules:**
 - System service / DCL / kernel / RMS / assembly implementation → Systems Engineer

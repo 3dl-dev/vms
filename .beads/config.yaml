@@ -1,1 +1,4 @@
 issue-prefix: "vms"
+
+no-db: true
+no-daemon: true

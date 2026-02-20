@@ -55,6 +55,10 @@ find_package(FLEX)
 find_package(BISON)
 find_package(Threads REQUIRED)
 
+if(BUILD_TESTS)
+    enable_testing()
+endif()
+
 # Subdirectories (order matters for dependencies)
 add_subdirectory(src/libvmssys)
 add_subdirectory(src/vmsprocess)
@@ -67,10 +71,6 @@ add_subdirectory(src/vmsdcl)
 if(BUILD_TOOLS)
     add_subdirectory(tools)
     add_subdirectory(src/ovmx_init)
-endif()
-
-if(BUILD_TESTS)
-    enable_testing()
 endif()
 
 # Install VMS directory tree

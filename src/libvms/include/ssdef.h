@@ -69,7 +69,9 @@ extern "C" {
 #define SS$_INSFMEM         292     /* Insufficient dynamic memory */
 #define SS$_TIMEOUT         556     /* Device timeout */
 #define SS$_ILLIOFUNC       580     /* Illegal I/O function */
+#define SS$_NOMORENODE      588     /* No more cluster nodes (VMS: 0x24C) */
 #define SS$_IVLOGNAM        596     /* Invalid logical name */
+#define SS$_POWERFAIL       598     /* Power failure detected (VMS: 0x254; 596 taken by SS$_IVLOGNAM) */
 #define SS$_RESULTOVF       1364    /* Result overflow */
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */

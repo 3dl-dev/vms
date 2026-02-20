@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # -----------------------------------------------------------------------
+  # Job 1: Build and unit test (host, shared libs, readline)
+  # -----------------------------------------------------------------------
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-cmake-gcc-readline
+          restore-keys: apt-${{ runner.os }}-
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake gcc make libc6-dev libreadline-dev
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: cmake-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt') }}
+          restore-keys: cmake-build-${{ runner.os }}-
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTS=ON \
+            -DBUILD_TOOLS=ON
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Test
+        run: cd build && ctest --output-on-failure
+
+  # -----------------------------------------------------------------------
+  # Job 2: Docker build + smoke test
+  # -----------------------------------------------------------------------
+  docker-build:
+    name: Docker Build & Smoke Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ovmx-test:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — vmsdcl SHOW TIME
+        run: |
+          docker run --rm \
+            --entrypoint vmsdcl \
+            ovmx-test:latest \
+            -c "SHOW TIME"
+
+  # -----------------------------------------------------------------------
+  # Job 3: Conformance tests
+  #
+  # Runs inside the builder stage (has gcc, source tree, and built libs).
+  # The conformance programs are compiled and executed against the VMS libs.
+  # Uses the GHA Docker layer cache populated by the docker-build job.
+  # -----------------------------------------------------------------------
+  conformance:
+    name: Conformance Tests
+    runs-on: ubuntu-latest
+    needs: docker-build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build builder stage (uses GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          push: false
+          load: true
+          tags: ovmx-builder:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run conformance tests
+        run: |
+          docker run --rm \
+            --entrypoint bash \
+            -v "${{ github.workspace }}/tests/conformance/vms_programs:/tests/vms_programs:ro" \
+            ovmx-builder:latest \
+            /src/tests/conformance/run_conformance.sh

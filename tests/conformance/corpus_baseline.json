@@ -1,0 +1,19 @@
+{
+  "timestamp": "",
+  "total": 0,
+  "summary": {
+    "compile-pass": 0,
+    "compile-fail": 0,
+    "link-fail": 0,
+    "run-pass": 0,
+    "run-fail": 0,
+    "run-crash": 0
+  },
+  "programs": [],
+  "gaps": {
+    "missing_functions": [],
+    "missing_headers": [],
+    "missing_constants": []
+  },
+  "regressions": []
+}

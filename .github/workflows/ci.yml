@@ -119,3 +119,172 @@ jobs:
             -v "${{ github.workspace }}/tests/conformance/vms_programs:/tests/vms_programs:ro" \
             ovmx-builder:latest \
             /src/tests/conformance/run_conformance.sh
+
+  # -----------------------------------------------------------------------
+  # Job 4: Corpus conformance — compile tier1-examples against OVMX headers
+  #
+  # This is a metric job, not a gate. It NEVER fails the build due to
+  # compile/link/run failures in the corpus — those are expected gaps.
+  # It DOES fail on regressions: a program that previously passed but
+  # now fails compilation.
+  #
+  # The JSON report is uploaded as a build artifact for trend analysis.
+  # -----------------------------------------------------------------------
+  corpus-conformance:
+    name: Corpus Conformance
+    runs-on: ubuntu-latest
+    needs: docker-build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build builder stage (uses GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          push: false
+          load: true
+          tags: ovmx-builder:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run corpus conformance harness
+        run: |
+          docker run --rm \
+            --entrypoint bash \
+            -v "${{ github.workspace }}/tests/conformance/corpus_baseline.json:/src/tests/conformance/corpus_baseline.json:ro" \
+            ovmx-builder:latest \
+            -c "bash /src/tests/conformance/run_corpus.sh /src/tests/conformance/corpus_baseline.json" \
+            > corpus_report.json
+        # Exit code 0 = no regressions (even if many compile-fail)
+        # Exit code 1 = regression detected (previously-passing program now fails)
+
+      - name: Upload corpus report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-conformance-report-${{ github.sha }}
+          path: corpus_report.json
+          retention-days: 90
+
+  # -----------------------------------------------------------------------
+  # Job 5: Static analysis (clang-tidy + cppcheck)
+  #
+  # Runs in parallel with all other jobs — no `needs:` dependency.
+  # INFORMATIONAL ONLY: always exits 0, findings are uploaded as artifacts.
+  # src/libvmssys/ is excluded (freestanding, no glibc — false positives).
+  # src/kernel/    is excluded (standalone Makefiles, not in compile_commands.json).
+  # -----------------------------------------------------------------------
+  static-analysis:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-static-analysis
+          restore-keys: apt-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            cmake gcc make libc6-dev libreadline-dev \
+            clang-tidy cppcheck
+
+      - name: Configure (generate compile_commands.json)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTS=ON \
+            -DBUILD_TOOLS=ON \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+
+      - name: Build (required for generated headers)
+        run: cmake --build build -j$(nproc)
+
+      - name: Run clang-tidy
+        run: |
+          # Collect source files from compile_commands.json,
+          # excluding freestanding (libvmssys) and kernel directories.
+          python3 - <<'PYEOF'
+          import json, subprocess, sys, os
+
+          db_path = "build/compile_commands.json"
+          if not os.path.exists(db_path):
+              print("compile_commands.json not found, skipping clang-tidy")
+              sys.exit(0)
+
+          with open(db_path) as f:
+              db = json.load(f)
+
+          cwd = os.getcwd()
+          excluded = ("src/libvmssys/", "src/kernel/")
+          files = []
+          for entry in db:
+              rel = entry["file"].replace(cwd + "/", "")
+              if not any(rel.startswith(ex) for ex in excluded):
+                  files.append(entry["file"])
+
+          if not files:
+              print("No files to analyze after exclusions.")
+              sys.exit(0)
+
+          print(f"Running clang-tidy on {len(files)} files...")
+          result = subprocess.run(
+              ["clang-tidy", "-p", "build"] + files,
+              capture_output=True, text=True
+          )
+          output = result.stdout + result.stderr
+          print(output)
+          with open("clang-tidy-results.txt", "w") as out:
+              out.write(output)
+          # Always exit 0 — findings are informational only
+          sys.exit(0)
+          PYEOF
+
+      - name: Run cppcheck
+        run: |
+          cppcheck \
+            --suppressions-list=cppcheck.suppressions \
+            --enable=warning,performance,portability \
+            --error-exitcode=0 \
+            --std=c11 \
+            -D_GNU_SOURCE \
+            -I src/libvms/include \
+            -I src/vmsrms/include \
+            -I src/vmsfs/include \
+            -I src/vmslnm/include \
+            -I src/vmsprocess/include \
+            -I src/vmsdcl/include \
+            --suppress=missingInclude:src/libvmssys/* \
+            --suppress=missingInclude:src/kernel/* \
+            -j$(nproc) \
+            src/ 2>&1 | tee cppcheck-results.txt || true
+          echo "cppcheck complete (exit forced to 0)"
+
+      - name: Upload clang-tidy results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clang-tidy-results
+          path: clang-tidy-results.txt
+          if-no-files-found: ignore
+
+      - name: Upload cppcheck results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cppcheck-results
+          path: cppcheck-results.txt
+          if-no-files-found: ignore

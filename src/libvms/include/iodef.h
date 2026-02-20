@@ -110,12 +110,20 @@ extern "C" {
 #define IO$M_DMOUNT         0x0200  /* Bit 9: dismount */
 
 /* ================================================================
- * I/O Status Block (IOSB) structure
+ * I/O Status Block (IOSB) structures
  *
  * Every QIO/QIOW operation returns status in an IOSB.
  * The first word is the completion status; the remaining
  * words are device-dependent.
+ *
+ * These definitions are guarded by _IOSB_STRUCT_DEFINED so that
+ * iosbdef.h (which provides the extended union form with the
+ * iosb$l_getxxi_status field) can be included first without
+ * causing redefinition errors.
  * ================================================================ */
+
+#ifndef _IOSB_STRUCT_DEFINED
+#define _IOSB_STRUCT_DEFINED
 
 struct _iosb {
     uint16_t  iosb$w_status;      /* Completion status */
@@ -143,6 +151,8 @@ struct _dk_iosb {
 };
 
 typedef struct _dk_iosb DK_IOSB;
+
+#endif /* _IOSB_STRUCT_DEFINED */
 
 /* ================================================================
  * Convenience macros

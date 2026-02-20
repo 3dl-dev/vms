@@ -1,0 +1,1465 @@
+<FRONT_MATTER>(NETLIB_DOC_1)
+<TITLE_PAGE>
+<TITLE>(NETLIB Programmer's Guide)
+<ABSTRACT>(<REFERENCE>(RELMONTH))
+<P>This manual contains information about NETLIB, a library
+for TCP/IP network programming on VMS systems.
+<ENDABSTRACT>
+<REVISION_INFO>(This is an updated manual.)
+<REVISION_INFO>(Operating System and Version:\OpenVMS VAX V6.2 or later)
+<REVISION_INFO>(\OpenVMS Alpha V6.0 or later;)
+<REVISION_INFO>(\OpenVMS Industry Standard 64 V8.2 or later)
+<REVISION_INFO>(Software Version:\<REFERENCE>(VER))
+<ENDTITLE_PAGE>(Endless Software Solutions<LINE>Perth, Western Australia)
+<INCLUDE>(SRC_DIR:COPYRIGHT.SDML)
+<CONTENTS_FILE>
+
+<PREFACE>(\NETLIB_DOC_2) 
+<P>
+There are several TCP/IP packages available for VMS systems today.  Each
+provides a VMS-style programming interface, using the $QIO system service,
+and most also provide a <quote>(socket) programming library, based on
+the communications model developed for BSD UNIX.  Unfortunately, the
+$QIO-based driver interface is generally difficult to use, while the
+socket libraries are designed for ease of use only from the C programming
+language.  In addition, the libraries do not typically provide support
+for VMS-style asynchronous programming.
+<P>
+NETLIB was originally developed to support MadGoat Software's Message
+Exchange mail package, which needed to support many TCP/IP packages doing
+VMS-style asynchronous programming.  NETLIB provides a consistent, VMS-style
+interface for TCP/IP-based network programs.
+
+<head1>(Intended Audience\NETLIB_INST_3)
+<p>This manual is intended for programmers writing applications that use
+NETLIB.
+<head1>(Document Structure\NETLIB_INST_4)
+<p>This document consists of an introductory chapter, a section containing
+routine descriptions, and an appendix describing the status codes returned
+by NETLIB routines.
+
+<head1>(Related Documents\NETLIB_INST_5)
+<p>The <emphasis>(NETLIB Installation Guide) describes how to install NETLIB.
+
+<endpreface>
+<ENDFRONT_MATTER>
+
+<CHAPTER>(Using NETLIB\NETLIB_DOC_3)
+<P>
+This chapter discusses the NETLIB programming interface.
+
+<HEAD1>(Overview\NETLIB_DOC_4)
+<P>NETLIB provides a single programming interface that can be used
+with almost any TCP/IP package for VMS systems.  While every package
+provides a $QIO interface and most also provide a socket library,
+the advantages to using NETLIB instead are:
+<list>(unnumbered)
+<le>NETLIB allows VMS-style asynchronous programming (using ASTs) without
+having to use the $QIO interface directly.
+<le>NETLIB provides a VMS common language environment style of
+programming interface, making it easier to use from other languages
+than a UNIX-type socket library written for C programmers.
+<le>NETLIB provides some additional utility routines for domain name
+lookups and line-oriented network traffic.
+<endlist>
+
+<head2>(NETLIB Services\NETLIB_DOC_5)
+<P>NETLIB provides services for writing TCP/IP-based network programs,
+both client and server.  Servers can either be standalone, AST-driven
+programs, or can be single-threaded server processes <quote>(forked)
+by the <quote>(master server) provided with each TCP/IP package.
+<p>
+NETLIB services can be grouped into four basic areas:
+<list>(unnumbered)
+<le><emphasis>(Connection services\bold).
+These routines provide the services necessary for performing TCP/IP
+network I/O.
+<le><emphasis>(Line-mode services\bold).  These routines provide
+a line-oriented network reads and writes, for line-oriented protocols
+that run over TCP.
+<le><emphasis>(DNS resolver services\bold).  These routines provide
+host name and address lookup services.  A direct DNS query routine
+is also provided.
+<le><emphasis>(Utility routines\bold).  These are routines for
+doing byte-order conversions, IP address parsing and formatting,
+and other miscellaneous services.
+<endlist>
+
+<HEAD1>(Header files\NETLIB_DOC_6)
+<P>
+NETLIB includes header files for both C and BLISS programming, called
+NETLIBDEF.H and NETLIBDEF.R32, respectively.  The header files reside
+in the NETLIB_DIR: directory.  These files define constants and structures
+that are used by the NETLIB programming interface.
+
+<HEAD1>(NETLIB Data Structures\NETLIB_DOC_7)
+<P>
+NETLIB uses several data structures in its programming interface.  Some
+of these data structures (INADDRDEF and SINDEF) are common to all BSD
+socket-oriented programming libraries, one (MXRRDEF) is special to NETLIB. 
+The header files provided
+with NETLIB defines these structures for BLISS and C programmers.
+<HEAD2>(INADDRDEF Structure\NETLIB_DOC_8)
+<p>The INADDRDEF structure is used for passing an IP address.  The contents
+is (currently) a longword, in network byte order (see <reference>(byte_ordering)
+for more information).  Its definition is (in C) is:
+<interactive>
+    struct INADDRDEF {
+    	unsigned long inaddr_l_addr;
+    }
+<endinteractive>
+<HEAD2>(SINDEF Structure\NETLIB_DOC_9)
+<P>The SINDEF structure defines an IP <quote>(socket,) which is a combination
+of an IP address and a TCP or UDP port number.  Its definition is:
+<interactive>
+    struct SINDEF {
+    	unsigned short sin_w_family;
+    	unsigned short sin_w_port;
+        struct INADDRDEF sin_x_addr;
+        unsigned char sin_x_mbz[8];
+    }
+<endinteractive>
+<cp>The <emphasis>(sin_w_family\bold) field should always be set to
+NETLIB_K_AF_INET (value 2).  The <emphasis>(sin_w_mbz\bold) field should
+always be zeroed.
+<cp>This is a specific form of the more general SOCKADDRDEF structure for
+use with IP-based sockets.  NETLIB currently only supports IP network
+programming, so other types of addresses should not be used.
+
+<HEAD2>(MXRRDEF Structure\NETLIB_DOC_10)
+<P>The MXRRDEF structure is used to return MX resource record information
+in a call to NETLIB_DNS_MX_LOOKUP:
+<interactive>
+    struct MXRRDEF {
+        unsigned int mxrr_l_preference;
+        unsigned int mxrr_l_length;
+        char         mxrr_t_name[128];
+    }
+<endinteractive>
+<p>This structure is NETLIB-specific.
+
+<HEAD2>(NETLIB_DNS_HEADER Structure\NETLIB_DOC_11)
+<p>A domain name server accepts queries and returns replies prefixed with
+with a standard header.  A definition of this header is provided in the
+NETLIB_DNS_HEADER structure.  Refer to the NETLIBDEF header file and
+the appropriate DNS RFCs (such as RFC 1035) for more information about
+this header.  Only those programs which use the NETLIB_DNS_QUERY routine
+will need this header definition.
+
+<HEAD1>(Byte-Order Considerations\byte_ordering)
+<P>
+In NETLIB routines, addresses and port numbers are expected to be in
+<quote>(network order;) that is, with the high-order byte first.  This
+is opposite the natural byte-order for VAX and AXP systems running VMS,
+which places the low-order byte first.  NETLIB provides routines that
+can be used to reverse byte order for use in the calls which expect
+it.
+
+<HEAD1>(Synchronous vs. Asynchronous Operation\NETLIB_DOC_12)
+<P>
+Most NETLIB routines can be executed synchronously (where the routine
+uses $QIOW) or asynchronously ($QIO is used instead of $QIOW).  To have
+a routine called asynchronously, specify a non-zero <emphasis>(astadr\bold) argument
+(and, optionally, the <emphasis>(astprm\bold) argument, to have a parameter
+passed to the AST routine).
+
+<HEAD1>(I/O Status Block\NETLIB_DOC_13)
+<P>
+Most NETLIB routines include an optional parameter for a VMS-style I/O
+status block (IOSB), which is used to return status information to the calling
+program.  The first word of the IOSB is the NETLIB status code for the
+call; the second word, for read and write operations, is the number of
+bytes transferred.  The second longword of the IOSB is not used by NETLIB.
+
+<HEAD1>(Linking NETLIB Programs\NETLIB_DOC_14)
+<p>
+To link your program with NETLIB, include the following line in a LINK
+options file:
+<interactive>
+    NETLIB_SHR/SHARE
+<endinteractive>
+<p>
+Note that in older versions of NETLIB, you would like against NETLIB_SHRXFR.
+However, that extra shareable image is no longer needed.  The NETLIB_SHRXFR
+logical name is still provided by NETLIB, though, for compatibility with
+old build procedures.
+
+<HEAD1>(Contacting the Author\NETLIB_DOC_15)
+<p>There is no formal support for NETLIB.  If you have Internet connectivity,
+however, you may wish to subscribe to one or more of the following MadGoat
+Software mailing lists:
+<list>(simple)
+<le><emphasis>(Info-MadGoat@MadGoat.Com\bold)
+<p>
+        Discussion of MadGoat Software products by users and MadGoat
+        developers.  To subscribe, send a message to
+    	<emphasis>(Info-MadGoat-Request@MadGoat.Com)
+        with the word SUBSCRIBE in the first line of the body of the
+        message.
+<le><emphasis>(MadGoat-Announce@MadGoat.Com\bold)
+<p>
+        Announcements of new releases and new products from MadGoat.
+        To subscribe, send a message to
+<emphasis>(MadGoat-Announce-Request@MadGoat.Com)
+        with the word SUBSCRIBE in the first line of the body of the
+        message.
+<le><emphasis>(MadGoat-Bugs@MadGoat.Com\bold)
+<p>
+        Address for reporting bugs in MadGoat Software products.  Please
+        include the name of the package and version in the subject header
+        of the message, so the report can be more easily directed to the
+        appropriate developer.
+<endlist>
+
+
+<part>(Routine Descriptions\rtnpart)
+<part_page>
+<title>(<reference>(rtnpart)\<reference>(rtnpart\text))
+<abstract>
+This part describes the each of the NETLIB routines.
+<endabstract>
+<endpart_page>(renumber)
+
+
+<routine_section>(NETLIB Routines\RTN)
+
+<set_template_heading>(rsdeflist\CONDITION VALUES RETURNED)
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_ACCEPT\Accept an incoming connection\\NETLIB_DOC_16)
+
+<overview>
+NETLIB_ACCEPT waits for an incoming connection and accepts it, creating
+a new socket for the new connection.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_ACCEPT)
+<fargs>(socket ,newsocket [,remaddr] [,remaddr-size] [,remaddr-len] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket that was established as a listener.
+<argitem>(newsocket\longword_unsigned\longword (unsigned)\write only\by reference)
+<argdef>Socket for the accepted connection (created and returned by this
+routine).
+<argitem>(remaddr\structure\longword (unsigned)\write only\by reference)
+<argdef>Address of a socket_address structure into which the remote
+address/port information for the new connection is written.
+<argitem>(remaddr-size\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the <emphasis>(remaddr\bold) structure.
+<argitem>(remaddr-len\longword_unsigned\longword (unsigned)\write only\by reference)
+<argdef>Longword into which the actual returned lenght of the socket address
+is written.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine is used as part of a <quote>(passive) open sequence, typically
+by servers that bind a socket to a specific port number, then establish
+a listener to handle the incoming connections.  This call is used to accept
+an incoming connection, creating a new socket for the new connection.  The
+listener socket is not affected by this call, so you can call NETLIB_ACCEPT
+again to wait for another incoming connection on the same port after one
+accept completes.
+<p>
+If you want to know the address and port number of the remote end of
+the accepted connection, you can either use the <emphasis>(remaddr\bold),
+<emphasis>(remaddr-size\bold), and <emphasis>(remaddr-len\bold) arguments on this
+call, or follow this call with a call to NETLIB_GETPEERNAME.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_ADDRESS_TO_NAME\Get the host name for an IP address\\NETLIB_DOC_17)
+
+<overview>
+NETLIB_ADDRESS_TO_NAME performs an inverse host lookup, returning a name
+associated with an IP address.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_ADDRESS_TO_NAME)
+<fargs>(socket, [which], address, addrsize, hostname [,retlen] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The socket about which you wish to obtain the option information.
+<argitem>(which\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>A code indicating the type of lookup to be performed.  Possible values
+are NETLIB_K_LOOKUP_DNS (1), which requests that the name be looked up using
+the Domain Name System, and NETLIB_K_LOOKUP_HOST_TABLE (2), which requests
+that the name be looked up in the local host table.  If omitted, the default
+is NETLIB_K_LOOKUP_DNS.  See the Description section for information on
+package-specific restrictions with this parameter.
+<argitem>(address\structure\longword (unsigned)\read only\by reference)
+<argdef>An INADDRDEF structure containing the address to be looked up.
+<argitem>(addrsize\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The size of the address passed in the <emphasis>(address\bold) parameter.
+<argitem>(hostname\char_string\character string\write only\by descriptor)
+<argdef>A buffer into which the returned host name will be written.
+<argitem>(retlen\word_unsigned\word (unsigned)\write only\by reference)
+<argdef>The returned length of the host name, in bytes.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine performs an address-to-name lookup on the specified IP address.
+Each TCP/IP package implements this function slightly differently, so
+there are some restrictions on the use of this routine.
+<P>
+The <emphasis>(which\bold) argument is ignored, since
+these packages do not provide separate access to DNS and local host tables.
+Host table lookup will occur first, followed by a DNS lookup.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_ADDRTOSTR\Format an IP address to a string\\NETLIB_DOC_18)
+
+<overview>
+NETLIB_ADDRTOSTR is a utility routine for formatting an IP address
+as a character string.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_ADDRTOSTR)
+<fargs>(address, string [,retlen])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(address\INADDRDEF structure\longword (unsigned)\read only\by reference)
+<argdef>An INADDRDEF structure containing the address to be formatted.
+<argitem>(string\char_string\character string\write only\by descriptor)
+<argdef>The string to hold the formatted address.
+<argitem>(retlen\word_unsigned\word (unsigned)\write only\by reference)
+<argdef>The number of characters written to <emphasis>(string\bold).
+<endargdeflist>
+
+<description>
+This is a utility routine which formats an IP address to a character
+string, using the dotted-decimal format.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_BIND\Bind a socket to an address/port\\NETLIB_DOC_19)
+
+<overview>
+NETLIB_BIND sets the address and/or port number for a socket.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_BIND)
+<fargs>(socket, socket-address, sockaddr-len [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket to be bound.
+<argitem>(socket-address\structure\longword (unsigned)\read only\by reference)
+<argdef>Socket_address structure describing the addreses and port to which
+the socket is to be bound.
+<argitem>(sockaddr-len\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the socket address structure.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine is used primarily by server programs to bind a socket to
+a particular port, and is typically followed by a call to NETLIB_LISTEN
+to open a passive connection on that port.
+<P>If a program does not bind a socket to a particular local address/port
+combination, the underlying TCP/IP software will automatically assign
+an address and/or port.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_CLOSE\Close down a socket\\NETLIB_DOC_20)
+
+<overview>
+NETLIB_CLOSE closes a socket.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_CLOSE)
+<fargs>(socket)
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket to be closed.
+<endargdeflist>
+
+<description>
+This routine deletes the specified socket, closing the associated network
+communications channel, if one is open.  Once closed, the socket can no longer
+be used; you must open a new one with the NETLIB_SOCKET call.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_CONNECT\Connect a socket to a remote address/port\\NETLIB_DOC_21)
+
+<overview>
+NETLIB_CONNECT connects a socket to a remote address/port.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_CONNECT)
+<fargs>(socket, socket-address, sockaddr-len [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket to be connected.
+<argitem>(socket-address\structure\longword (unsigned)\read only\by reference)
+<argdef>Socket_address structure describing the addreses and port to which
+the socket is to be connected.
+<argitem>(sockaddr-len\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the socket address structure.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine is used primarily with TCP-based programs to establish a
+connection to a remote system.  When used with UDP, this routine fixes
+the address to which subsequent UDP datagrams will be sent.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_CONNECT_BY_NAME\Establish a TCP connection to a host by name\\NETLIB_DOC_22)
+
+<overview>
+NETLIB_CONNECT_BY_NAME establishes a TCP connection to a host using the
+host's name, rather than its IP address.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_CONNECT_BY_NAME)
+<fargs>(socket, hostname, port [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>A STREAM-type socket allocated with NETLIB_SOCKET.
+<argitem>(hostname\char_string\character string\read only\by descriptor)
+<argdef>A character string containing either a host name or an IP address
+in dotted-decimal format.
+<argitem>(port\word_unsigned\word (unsigned)\read only\by reference)
+<argdef>The port number to connect to on the destination host.  Unlike
+the SIN_W_PORT field of a SINDEF (socket address) structure, this
+number is specified in <emphasis>(host order), not network order.
+NETLIB_CONNECT_BY_NAME will automatically convert the port number to
+network order for you.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine converts the specified name or dotted-decimal address to
+an IP address and uses NETLIB_CONNECT to connect to the specified host and
+port.  If multiple addresses are returned by the host name lookup, each
+address will be tried until a connection is established or all addresses
+have been tried.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_DNS_EXPANDNAME\Expand a name in a DNS response\\NETLIB_DOC_23)
+
+<overview>
+NETLIB_DNS_EXPANDNAME is a utility routine used for extracting a domain name
+from a DNS response.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_DNS_EXPANDNAME)
+<fargs>(bufstart, buflen, bufptr, name [,retlen] [,skipcount])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(bufstart\pointer\longword (unsigned)\read only\by value)
+<argdef>A pointer to the start of the DNS response buffer.
+<argitem>(buflen\word_unsigned\word (unsigned)\read only\by reference)
+<argdef>The size of the buffer, in bytes.
+<argitem>(bufptr\pointer\longword (unsigned)\read only\by value)
+<argdef>A pointer to the area of the buffer containing the domain name
+to be expanded.
+<argitem>(name\char_string\character string\write only\by descriptor)
+<argdef>A descriptor for a character string buffer into which the
+expanded name will be written.
+<argitem>(retlen\word_unsigned\word (unsigned)\write only\by reference)
+<argdef>The returned length of the expanded name, in bytes.
+<argitem>(skipcount\word_unsigned\word (unsigned)\write only\by reference)
+<argdef>The number of bytes in the buffer that were used for the domain
+name.
+<endargdeflist>
+
+<description>
+This is a utility routine used when parsing a response returned by
+a call to NETLIB_DNS_QUERY.  It expands a domain name stored in a DNS
+response out to the typical, human-readable, dotted-domain format.
+<p>
+This routine is needed because of the way domain names are represented
+in DNS responses.  Refer to RFC 1035 for further information on the format
+of DNS queries and responses.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_DNS_MX_LOOKUP\Look up MX records for a domain name\\NETLIB_DOC_24)
+
+<overview>
+NETLIB_DNS_MX_LOOKUP looks up a host name, returning any MX records.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_DNS_MX_LOOKUP)
+<fargs>(socket, hostname, mxrrlist, mxrrlist-size [,mxrrcount] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Any socket allocated with NETLIB_SOCKET.
+<argitem>(hostname\char_string\character string\read only\by descriptor)
+<argdef>The host name to be looked up.
+<argitem>(mxrrlist\array of structures\longword (unsigned)\write only\by reference)
+<argdef>An array of MXRRDEF structures into which the MX records will be
+written.
+<argitem>(mxrrlist-size\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The number of elements in the <emphasis>(mxrrlist\bold) array.
+<argitem>(mxrrcount\longword_unsigned\longword (unsigned)\write only\by reference)
+<argdef>The actual number of MX records written to <emphasis>(mxrrlist\bold).
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine performs a DNS lookup on the specified name, returning any
+Mail Exchanger (MX) records for that name.
+<p>
+This routine is a front-end that uses NETLIB_DNS_QUERY to perform the DNS queries.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_DNS_QUERY\Perform a DNS query\\NETLIB_DOC_25)
+
+<overview>
+NETLIB_DNS_QUERY formats a domain name service query and returns the
+response from a DNS server.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_DNS_QUERY)
+<fargs>(socket, name, [class], type, buffer, bufsize [,flags] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>A socket allocated with NETLIB_SOCKET.  Any socket can be used.
+<argitem>(name\char_string\character string\read only\by descriptor)
+<argdef>The domain name to be looked up.
+<argitem>(class\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The class of the query.  For Internet domain names, this should be
+NETLIB_K_DNS_CLASS_IN, which is the default if this parameter is omitted.
+<argitem>(type\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The type of query.  Valid type codes are specified by Internet RFCs
+on the DNS, the codes provided by NETLIB are listed in <reference>(dns_types).
+<table>(Domain Name Service query types\dns_types)
+<table_setup>(3\25\5)
+<table_heads>(Symbolic name\Value\Description)
+<table_row>(NETLIB_K_DNS_TYPE_A\1\Address (A) records)
+<table_row>(NETLIB_K_DNS_TYPE_NS\2\Name Server (NS) records)
+<table_row>(NETLIB_K_DNS_TYPE_CNAME\5\Canonical Name (CNAME) records)
+<table_row>(NETLIB_K_DNS_TYPE_SOA\6\Start-of-Authority (SOA) records)
+<table_row>(NETLIB_K_DNS_TYPE_WKS\11\Well-known-server (WKS) records)
+<table_row>(NETLIB_K_DNS_TYPE_PTR\12\Pointer (PTR) records)
+<table_row>(NETLIB_K_DNS_TYPE_HINFO\13\Host information (HINFO) records)
+<table_row>(NETLIB_K_DNS_TYPE_MX\15\Mail Exchanger (MX) records)
+<table_row>(NETLIB_K_DNS_TYPE_TXT\16\Text (TXT) records)
+<table_row>(NETLIB_K_DNS_QTYPE_ALL\255\Any available information)
+<endtable>
+<argitem>(buffer\varying_arg\longword (unsigned)\write only\by reference)
+<argdef>A buffer into which the DNS response will be copied.
+<argitem>(bufsize\word_unsigned\word (unsigned)\read only\by reference)
+<argdef>The size of <emphasis>(buffer\bold), in bytes.
+<argitem>(flags\longword_mask\longword (unsigned)\read only\by reference)
+<argdef>A bitmask of flags specifying options for this query.  Valid flags
+are listed in <reference>(query_flags).  If omitted, the default value
+for this parameter is 1.
+<table>(Flag values for NETLIB_DNS_QUERY\query_flags)
+<table_setup>(3\25\5)
+<table_heads>(Symbolic name\Value\Description)
+<table_row>(NETLIB_M_DOMAIN_SEARCH\1\Perform a domain search on the default
+domain.)
+<table_row>(NETLIB_M_NO_RECURSION\2\Specify a non-recursive query.)
+<endtable>
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine formats a DNS query and returns the response from the first
+name server to provide an answer that indicates either that the query succeeded,
+or that the name does not exist in the DNS.  If the query fails due to an
+I/O error, that error status is returned and/or stored in the IOSB status
+word.
+<P>
+Even when this routine returns a success status, the caller should
+verify that the return code in the header of the DNS reply is NETLIB_K_DNS_RC_SUCCESS,
+indicating a successful lookup, before attempting to parse the rest
+of the reply.
+<p>
+The TCPIP$BIND_<emphasis>(xxx) logical names are used to determine the
+name server(s) to use for lookups. If no name servers can be found, SS$_UNSUPPORTED is
+returned.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_DNS_SKIPNAME\Skip a name in a DNS response\\NETLIB_DOC_26)
+
+<overview>
+NETLIB_DNS_SKIPNAME is a utility routine used for parsing DNS responses
+which skips over a domain name.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_DNS_SKIPNAME)
+<fargs>(bufptr, buflen)
+<endformat>
+<returns>(longword_signed\longword (signed)\write only\by value)
+<argdeflist>
+<argitem>(bufptr\pointer\longword (unsigned)\read only\by value)
+<argdef>A pointer to the area of the DNS response buffer that begins
+the name to be skipped.
+<argitem>(buflen\word_unsigned\word (unsigned)\read only\by reference)
+<argdef>A count of the number of bytes in the buffer, starting from
+<emphasis>(bufptr\bold).
+<endargdeflist>
+
+<description>
+This is a utility routine used when parsing a response returned by
+a call to NETLIB_DNS_QUERY.  It returns a count of the number of
+bytes to skip allocated to the domain name positioned in the buffer
+at location <emphasis>(bufptr\bold).  If the operation fails, -1 is
+returned to indicate an error.
+<p>
+This routine is needed because of the way domain names are represented
+in DNS responses.  Refer to RFC 1035 for further information on the format
+of DNS queries and responses.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_GETPEERNAME\Get remote socket address\\NETLIB_DOC_27)
+
+<overview>
+NETLIB_GETSOCKNAME returns the remote address and port information for
+a connected socket.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_GETPEERNAME)
+<fargs>(socket, socket-address, sockaddr-size, sockaddr-retlen
+    	    [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket for which the information is to be returned.
+<argitem>(socket-address\structure\longword (unsigned)\write only\by reference)
+<argdef>Socket_address structure which will hold the returned address/port
+information.
+<argitem>(sockaddr-size\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the socket address structure.
+<argitem>(sockaddr-retlen\longword_unsigned\longword (unsigned)\write only\by reference)
+<argdef>Returned actual length of the socket address.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine is used to return the remote address and port information for a
+socket that is connected to a remote system.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_GETSOCKNAME\Get local socket address\\NETLIB_DOC_28)
+
+<overview>
+NETLIB_GETSOCKNAME returns the local address and port information for
+a socket.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_GETSOCKNAME)
+<fargs>(socket, socket-address, sockaddr-size, sockaddr-retlen
+    	    [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket for which the information is to be returned.
+<argitem>(socket-address\structure\longword (unsigned)\write only\by reference)
+<argdef>Socket_address structure which will hold the returned address/port
+information.
+<argitem>(sockaddr-size\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the socket address structure.
+<argitem>(sockaddr-retlen\longword_unsigned\longword (unsigned)\write only\by reference)
+<argdef>Returned actual length of the socket address.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine is used to return the local address and port information for a
+socket that has been bound or connected.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_GETSOCKOPT\Get socket options\\NETLIB_DOC_29)
+
+<overview>
+NETLIB_GETSOCKOPT gets the current state of a socket option.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_GETSOCKOPT)
+<fargs>(socket, level, option, value, valsize [,vallen] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The socket about which you wish to obtain the option information.
+<argitem>(level\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef><quote>(Level) of the option being set.  The only level globally
+supported is NETLIB_K_LEVEL_SOCKET (value X'FFFF').  Some packages also
+support protocol-level option settings.
+<argitem>(option\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Longword representing the option being set.  Not all packages support
+all options, but most support the ones listed in <reference>(option_table).
+<P>Consult your TCP/IP documentation on other available options
+and on option value ranges.
+<argitem>(value\varying_arg\longword (unsigned)\write only\by reference)
+<argdef>Value to set for the option.  Values vary from option to option.
+<argitem>(valsize\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the <emphasis>(value\bold) argument, in bytes.
+<argitem>(vallen\longword_unsigned\longword (unsigned)\write only\by reference)
+<argdef>Actual returned length of <emphasis>(value\bold), in bytes.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine provides an interface to the <emphasis>(getsockopt\bold) service
+provided by most TCP/IP packages (most are based on the BSD socket
+communications model).  
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_GET_HOSTNAME\Get local host's name\\NETLIB_DOC_29_AND_A_HALF)
+
+<overview>
+NETLIB_GET_HOSTNAME returns the Internet host name of the local host.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_GET_HOSTNAME)
+<fargs>(namdsc [,retlen])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(namdsc\char_string\character string\write only\by descriptor)
+<argdef>Character string buffer that gets the returned host name.
+<argitem>(retlen\word_unsigned\word (unsigned)\write only\by reference)
+<argdef>The returned length of the host name.
+<endargdeflist>
+
+<description>
+This routine returns the name of the local host by translating the
+appropriate logical name defined for the TCP/IP package running on the
+system.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_HTON_LONG\Convert host-order longword to network order\\NETLIB_DOC_30)
+
+<overview>
+NETLIB_HTON_LONG is a utility routine for converting a longword in
+the local host's byte order to a network-order longword.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_HTON_LONG)
+<fargs>(value)
+<endformat>
+<returns>(longword_unsigned\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(value\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The longword to be converted.
+<endargdeflist>
+
+<description>
+This is a utility routine which reverses the byte order of a longword
+to convert it from the native format for the local host (which is
+<quote>(little-endian) for VAX and AXP systems running VMS) to network
+order (which is <quote>(big-endian)).  The returned value is the
+network-order longword.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_HTON_WORD\Convert host-order word to network order\\NETLIB_DOC_31)
+
+<overview>
+NETLIB_HTON_WORD is a utility routine for converting a word in
+the local host's byte order to a network-order word.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_HTON_WORD)
+<fargs>(value)
+<endformat>
+<returns>(word_unsigned\word (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(value\word_unsigned\word (unsigned)\read only\by reference)
+<argdef>The word to be converted.
+<endargdeflist>
+
+<description>
+This is a utility routine which reverses the byte order of a word
+to convert it from the native format for the local host (which is
+<quote>(little-endian) for VAX and AXP systems running VMS) to network
+order (which is <quote>(big-endian)).  The return value is the
+network-order word.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_LISTEN\Listen for incoming connections\\NETLIB_DOC_32)
+
+<overview>
+NETLIB_LISTEN sets a socket up to listen for incoming connections.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_LISTEN)
+<fargs>(socket [,backlog] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket to be set up as a listener.
+<argitem>(backlog\unsigned int\longword (unsigned)\read only\by reference)
+<argdef>The number of backlogged connections to allow on this listener.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine is used as part of a <quote>(passive) open sequence, typically
+by servers that bind a socket to a specific port number, then establish
+a listener to handle the incoming connections.  This call is usually followed
+by one or more invocations of NETLIB_ACCEPT to accept the incoming connections.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_NAME_TO_ADDRESS\Get the IP address(es) for a host name\\NETLIB_DOC_33)
+
+<overview>
+NETLIB_NAME_TO_ADDRESS looks up a host name, returning its IP address(es).
+<endoverview>
+
+<format>
+<frtn>(NETLIB_NAME_TO_ADDRESS)
+<fargs>(socket, [which], hostname, addrlist, addrlist-size [,addrcount] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The socket about which you wish to obtain the option information.
+<argitem>(which\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>A code indicating the type of lookup to be performed.  Possible values
+are NETLIB_K_LOOKUP_DNS (1), which requests that the name be looked up using
+the Domain Name System, and NETLIB_K_LOOKUP_HOST_TABLE (2), which requests
+that the name be looked up in the local host table.  If omitted, the default
+is NETLIB_K_LOOKUP_DNS.  See the Description section for information on
+package-specific restrictions with this parameter.
+<argitem>(hostname\char_string\character string\read only\by descriptor)
+<argdef>The host name to be looked up.
+<argitem>(addrlist\array of structures\longword (unsigned)\write only\by reference)
+<argdef>An array of INADDRDEF structures into which the addresses will be
+written.
+<argitem>(addrlist-size\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The number of elements in the <emphasis>(addrlist\bold) array.
+<argitem>(addrcount\longword_unsigned\longword (unsigned)\write only\by reference)
+<argdef>The actual number of addresses written to <emphasis>(addrlist\bold).
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine performs a name-to-address lookup on the specified host name.
+Each TCP/IP package implements this function slightly differently, so
+there are some restrictions on the use of this routine.
+<P>
+The <emphasis>(which\bold) argument is ignored, since
+these packages do not provide separate access to DNS and local host tables.
+Host table lookup will occur first, followed by a DNS lookup.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_NTOH_LONG\Convert network-order longword to host order\\NETLIB_DOC_34)
+
+<overview>
+NETLIB_NTOH_LONG is a utility routine for converting a longword in
+the network byte order to a host-order longword.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_NTOH_LONG)
+<fargs>(value)
+<endformat>
+<returns>(longword_unsigned\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(value\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The longword to be converted.
+<endargdeflist>
+
+<description>
+This is a utility routine which reverses the byte order of a longword
+to convert it from network order to host order.  The return value is the
+host-order longword.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_NTOH_WORD\Convert network-order word to host order\\NETLIB_DOC_35)
+
+<overview>
+NETLIB_NTOH_WORD is a utility routine for converting a word in
+the network byte order to a host-order word.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_NTOH_WORD)
+<fargs>(value)
+<endformat>
+<returns>(word_unsigned\word (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(value\word_unsigned\word (unsigned)\read only\by reference)
+<argdef>The word to be converted.
+<endargdeflist>
+
+<description>
+This is a utility routine which reverses the byte order of a word
+to convert it from network order to host order.  The return value
+is the host-order word.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_READ\Receive data from remote system\\NETLIB_DOC_36)
+
+<overview>
+NETLIB_READ reads data sent by a remote system from a socket.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_READ)
+<fargs>(socket, buffer [,socket-address] [,sockaddr-size] [,sockaddr-len]
+    	    	[,timeout] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket to which data should be written.
+<argitem>(buffer\unspecified\longword (unsigned)\write only\by descriptor (fixed-length))
+<argdef>The address of a descriptor for a buffer to receive the data.
+<argitem>(socket-address\structure\longword (unsigned)\write only\by reference)
+<argdef>Socket_address structure to receive the addreses and port from which
+the data is to be sent.  Typically used only with unconnected UDP sockets).
+<argitem>(sockaddr-size\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the socket address structure.  Typically used only with unconnected
+UDP sockets.
+<argitem>(sockaddr-len\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Returned length of the socket address structure.
+Typically used only with unconnected UDP sockets.
+<argitem>(timeout\delta_time\quadword (signed)\read only\by reference)
+<argdef>Amount of time that NETLIB_READ should wait for the read to complete.
+If omitted, no timeout is used.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine reads data from the socket into the specified buffer.
+The read will complete when the buffer is full, or if the read times
+out (if <emphasis>(timeout\bold) is specified).  A fixed-length descriptor
+should be used for the buffer.  To obtain the actual number of bytes
+read in this call, use an I/O status block.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_READLINE\Read a <quote>(line) of data\\NETLIB_DOC_37)
+
+<overview>
+NETLIB_READLINE reads a <quote>(line) of data from the socket.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_READLINE)
+<fargs>(socket, buffer [,retlen] [,flags] [,timeout] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket from which data should be read.
+<argitem>(buffer\char_string\character string\write only\by descriptor)
+<argdef>The address of a descriptor for the buffer to hold the line.
+<argitem>(retlen\word_unsigned\word (unsigned)\write only\by reference)
+<argdef>The address of a word which receives the actual length of the
+received line.
+<argitem>(flags\bitmask\longword (unsigned)\read only\by reference)
+<argdef>The address of a bitmask containing flags controlling this call.
+Valid flags are listed in <reference>(readline_flags).  If omitted, the default
+value for this parameter is 1.
+<table>(Flag values for NETLIB_READLINE\readline_flags)
+<table_setup>(3\25\5)
+<table_heads>(Symbolic name\Value\Description)
+<table_row>(NETLIB_M_ALLOW_LF\1\Allows a bare linefeed as a line terminator, in addition
+            to a CR/LF sequence.)
+<table_row>(NETLIB_M_FLUSH\2\Causes NETLIB_READLINE to return any data it may have in
+            its internal buffers.  See the routine description for more information.)
+<table_row>(NETLIB_M_ALLOW_CR\4\Allows a bare carriage return as a line terminator, in addition
+            to a CR/LF sequence.)
+<endtable>
+<argitem>(timeout\delta_time\quadword (signed)\read only\by reference)
+<argdef>The address of a VMS delta time value specifying the timeout for
+this read.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine is intended for TCP-based programs that use a protocol
+which delimits commands and replies with carriage-return/linefeed pairs.
+It completes only when the specified buffer is full; when a complete,
+terminated, line has been received; or if a timeout occurs.  The line
+terminator is stripped from the returned data.
+<P>
+The NETLIB_M_FLUSH flag was added in NETLIB V2.2, for those programs that
+need to switch between line-mode reads using this routine and <quote>(raw)
+reads using NETLIB_READ on the same TCP stream.  Use this flag after your
+last line-mode read, but before you switch to raw reads; it will return
+any data that NETLIB_READLINE has buffered but not yet processed.  If the
+internal buffer is empty when NETLIB_M_FLUSH is specified, the return
+status will be SS$_NORMAL and the returned length will be zero; otherwise,
+the buffered data and its actual length will be returned, without any
+line-mode processing performed.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_SERVER_SETUP\Socket setup for <quote>(forked) servers\\NETLIB_DOC_38)
+<overview>
+NETLIB_SERVER_SETUP creates and sets up the socket used by a server
+process <quote>(forked) from a TCP/IP package's <quote>(master server).
+<endoverview>
+<format>
+<frtn>(NETLIB_SERVER_SETUP)
+<fargs>(socket, socket-address, sockaddr-size)
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\write only\by reference)
+<argdef>Returned socket handle for use in subsequent NETLIB calls.
+<argitem>(socket-address\special_structure\longword (unsigned)\read only\by reference)
+<argdef>Socket address describing port being opened.  See note in description
+section.
+<argitem>(sockaddr-size\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the structure passed in <emphasis>(socket-address\bold) argument.
+<endargdeflist>
+
+<description>
+This routine creates a NETLIB socket for the communications channel
+in a server program invoked by a TCP/IP package's <quote>(master server.)
+The <emphasis>(socket-address\bold) and
+<emphasis>(sockaddr-size\bold) arguments must
+be provided, although they are ignored
+(the actual address and port number are pre-determined).
+<NOTE>
+For at least some TCP/IP packages, this routine should be called
+<emphasis>(before) any language-specific I/O routines (for example,
+the <emphasis>(printf\bold) routine in the C run-time library) are called,
+to prevent the run-time system from interfering with the network channel.
+<ENDNOTE>
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_SETSOCKOPT\Set socket options\\NETLIB_DOC_39)
+
+<overview>
+NETLIB_SETSOCKOPT modifies attributes of a a socket.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_SETSOCKOPT)
+<fargs>(socket, level, option, value, vallen [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>The socket you wish to modify.
+<argitem>(level\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef><quote>(Level) of the option being set.  The only level globally
+supported is NETLIB_K_LEVEL_SOCKET (value X'FFFF').  Some packages also
+support protocol-level option settings.
+<argitem>(option\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Longword representing the option being set.  Not all packages support
+all options, but most support the ones listed in <reference>(option_table).
+<table>(Socket options\option_table)
+<table_setup>(3\25\5)
+<table_heads>(Symbolic name\Value\Description)
+<table_row>(NETLIB_K_OPTION_REUSEADDR\4\Allows a port number to be reused.
+Value is a longword, either 1 (on) or 0 (off).  Default for most packages
+is off, but NETLIB turns this option on automatically unless you explicitly
+call NETLIB_SETSOCKOPT to set it.)
+<table_row>(NETLIB_K_OPTION_SNDBUF\4097\Sets socket buffer size for sends.
+Value is a longword, typically with a maximum value of 32768.)
+<table_row>(NETLIB_K_OPTION_RCVBUF\4098\Sets socket buffer size for receives.
+Value is a longword, typically with a maximum value of 32768.)
+<endtable>
+<P>Consult your TCP/IP documentation on other available options
+and on option value ranges. 
+<argitem>(value\varying_arg\longword (unsigned)\read only\by reference)
+<argdef>Value to set for the option.  Values vary from option to option.
+<argitem>(vallen\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the <emphasis>(value\bold) argument, in bytes.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine provides an interface to the <emphasis>(setsockopt\bold) service
+provided by most TCP/IP packages (most are based on the BSD socket
+communications model).  
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_SHUTDOWN\Shut down a connection\\NETLIB_DOC_40)
+
+<overview>
+NETLIB_SHUTDOWN shuts down a connection without deleting the socket.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_SHUTDOWN)
+<fargs>(socket [,shuttype] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket to be set up as a listener.
+<argitem>(shuttype\unsigned int\longword (unsigned)\read only\by reference)
+<argdef>Type of shutdown to be performed.  Possible values are listed
+in <reference>(shut_table).  If omitted, the default is
+NETLIB_K_SHUTDOWN_RECEIVER.
+<table>(Shutdown types\shut_table)
+<table_setup>(3\25\5)
+<table_heads>(Symbolic name\Value\Description)
+<table_row>(NETLIB_K_SHUTDOWN_RECEIVER\0\Prevent any further receives.)
+<table_row>(NETLIB_K_SHUTDOWN_SENDER\1\Prevent any further sends.)
+<table_row>(NETLIB_K_SHUTDOWN_BOTH\2\Prevent any further sends/receives.)
+<endtable>
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine closes the network connection currently open on the
+specified socket, without deleting the socket.  Any data still waiting
+to be received or sent can be discarded or retained by specifying an
+appropriate shutdown type in <emphasis>(shuttype\bold).
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_SOCKET\Create a NETLIB communication endpoint\\NETLIB_DOC_41)
+
+<overview>
+NETLIB_SOCKET creates a <quote>(socket) -- that is, a local endpoint for
+TCP/IP communication.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_SOCKET)
+<fargs>(socket [,socket-type] [,socket-family])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\write only\by reference)
+<argdef>The returned socket context, for use in subsequent NETLIB calls.
+<argitem>(socket-type\longword_unsigned \longword (unsigned)\read only\by referencee)
+<argdef>Type of socket to be created.  Allowed values are shown in
+<reference>(socket_type_table).  If omitted, the default is
+NETLIB_K_TYPE_STREAM.
+<table>(Socket types\socket_type_table)
+<table_setup>(3\25\5)
+<table_heads>(Symbolic name\Value\Description)
+<table_row>(NETLIB_K_TYPE_STREAM\1\Connection-oriented socket (for TCP).)
+<table_row>(NETLIB_K_TYPE_DGRAM\2\Connectionless socket (for UDP).)
+<endtable>
+<argitem>(socket-family\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Address/protocol family.  Only NETLIB_K_AF_INET (value 2) is permitted,
+and is assumed by default if omitted.
+<endargdeflist>
+
+<description>
+This routine creates a <quote>(socket) (an endpoint for network
+communication).  One socket is required for each network connection.
+This will be the first call in most NETLIB-based programs.  The only
+exception to this rule is a program that is intended to be run as
+a <quote>(forked) server from a TCP/IP package's <quote>(master server),
+which will use the NETLIB_SERVER_SETUP routine instead.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_STRTOADDR\Convert a dotted-address to binary form\\NETLIB_DOC_42)
+
+<overview>
+NETLIB_STRTOADDR is a utility routine for converting a character string
+holding a dotted-decimal IP addreses into its binary equivalent.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_STRTOADDR)
+<fargs>(string, address)
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(string\char_string\character string\read only\by descriptor)
+<argdef>The string containing the dotted-decimal address.
+<argitem>(address\INADDRDEF structure\longword (unsigned)\write only\by reference)
+<argdef>An INADDRDEF structure to hold the returned address.
+<endargdeflist>
+
+<description>
+This is a utility routine which parses a character string containing
+an IP address in dotted-decimal format, returning the binary representation
+of that address in network order (suitable for a call to NETLIB_CONNECT,
+for example).
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_VERSION\Obtain version information for NETLIB\\NETLIB_VERSION_DESCRIP)
+
+<overview>
+NETLIB_VERSION returns a character string containing the version of NETLIB.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_VERSION)
+<fargs>(verstr [,retlen])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(verstr\char_string\character string\write only\by descriptor)
+<argdef>A character string into which the version information is copied.
+<argitem>(retlen\word_unsigned \word (unsigned)\write only\by reference)
+<argdef>The length of the version information string.
+<endargdeflist>
+
+<description>
+This routine, added in NETLIB V2.2, returns a copy of the version information
+for the NETLIB library installed on the running system.  For V2.2, the string
+has the format <QUOTE>(NETLIB V2.2).
+<NOTE>
+If you need to use this routine to make a run-time determination of available
+NETLIB features, and you wish to be compatible with NETLIB versions prior to
+V2.2, you should dynamically locate this routine's symbol name via LIB$FIND_IMAGE_SYMBOL.
+If the symbol is not found, then you are running a version of NETLIB that pre-dates
+V2.2.
+<ENDNOTE>
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_WRITE\Send data to remote system\\NETLIB_DOC_43)
+
+<overview>
+NETLIB_WRITE writes data to a socket for transmission to a remote system.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_WRITE)
+<fargs>(socket, buffer [,socket-address] [,sockaddr-len] [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket to which data should be written.
+<argitem>(buffer\unspecified\longword (unsigned)\read only\by descriptor)
+<argdef>The address of a descriptor for the data to be sent.
+<argitem>(socket-address\structure\longword (unsigned)\read only\by reference)
+<argdef>Socket_address structure describing the addreses and port to which
+the data is to be sent.  Used only with unconnected UDP sockets).
+<argitem>(sockaddr-len\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Size of the socket address structure.  Used only with unconnected
+UDP sockets.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine writes the specified data to the socket for transmission
+to the remote system.  For UDP sockets that have not been connected
+to a specific remote address, the <emphasis>(socket-address\bold) argument
+specifies the remote address/port to which the datagram is to be sent.
+<enddescription>
+
+<comment>(----------------------------------------------------------------)
+<routine>(NETLIB_WRITELINE\Send data with CR/LF termination\\NETLIB_DOC_44)
+
+<overview>
+NETLIB_WRITELINE writes data to a socket for transmission to a remote system,
+terminating the data with a CR/LF pair.
+<endoverview>
+
+<format>
+<frtn>(NETLIB_WRITELINE)
+<fargs>(socket, buffer [,iosb] [,astadr] [,astprm])
+<endformat>
+<returns>(cond_value\longword (unsigned)\write only\by value)
+<argdeflist>
+<argitem>(socket\longword_unsigned\longword (unsigned)\read only\by reference)
+<argdef>Socket to which data should be written.
+<argitem>(buffer\char_string\character string\read only\by descriptor)
+<argdef>The address of a descriptor for the data to be sent.
+<argitem>(iosb\io_status_block\longword (unsigned)\write only\by reference)
+<argdef>I/O status block to receive the status for this call.
+<argitem>(astadr\procedure\longword (unsigned)\call\by reference)
+<argdef>Address of an AST routine to be invoked on completion of this operation.
+<argitem>(astprm\user_arg\longword (unsigned)\read only\by value)
+<argdef>Parameter to be passed to the AST routine.
+<endargdeflist>
+
+<description>
+This routine functions identically to NETLIB_WRITE, but adds a carriage-return/
+linefeed pair to the data sent to the remote system.  It is intended
+for TCP-based programs that use a protocol which delimits commands and
+responses with CR/LFs.
+<note>
+If you use NETLIB_WRITELINE asynchronously, you should only have one
+outstanding call at any given time, to ensure proper operation with
+all TCP/IP packages.
+<endnote>
+<enddescription>
+
+<endroutine_section>
+
+<APPENDIX>(Status Codes\status_codes)
+<P>
+NETLIB translates all TCP/IP status codes into the codes used by
+DEC TCP/IP Services.  The status codes are described in
+<reference>(status_table).  For synchronous NETLIB calls, these codes are 
+returned in R0 and also in the IOSB, if one is specified; for asynchronous
+calls, you should always specify an IOSB to receive the status of the
+network I/O operation.
+<P>
+Some NETLIB routines may also return status codes from other facilities,
+such as the LIB$ and STR$ routines when processing strings.
+
+<table>(NETLIB Status Codes\status_table)
+<table_setup>(2\20)
+<table_heads>(Symbolic Name\Description)
+<table_row>(SS$_ABORT\Catch-all code for errors not covered by other codes.)
+<table_row>(SS$_INSFARG\Not enough arguments specified on NETLIB call.)
+<table_row>(SS$_BADPARAM\Invalid value specified for an argument to a NETLIB
+call.  This code can also be returned by the underlying TCP/IP driver
+when an invalid value is specified for a network I/O operation.)
+<table_row>(SS$_NOSUCHNODE\Destination address required.)
+<table_row>(SS$_INSFMEM\Memory allocation failure.)
+<table_row>(SS$_NOPRIV\Insufficient privilege for requested operation.)
+<table_row>(SS$_ACCVIO\Invalid memory address specified.)
+<table_row>(SS$_FILALRACC\Socket already connected.)
+<table_row>(SS$_LINKDISCON\Network link has been disconnected.)
+<table_row>(SS$_TOOMUCHDATA\Result too large for user's buffer.)
+<table_row>(SS$_SUSPENDED\I/O operation would block.)
+<table_row>(SS$_NOTNETDEV\Network operation requested for non-network device.)
+<table_row>(SS$_PROTOCOL\Protocol type or option incorrect.  Protocol
+or socket type not supported.  Other general protocol failure.)
+<table_row>(SS$_ILLCNTRFUNC\Operation not supported on socket.)
+<table_row>(SS$_DUPLNAM\Address/port already in use.)
+<table_row>(SS$_IVADDR\Invalid address.)
+<table_row>(SS$_UNREACHABLE\Network or host unreachable.)
+<table_row>(SS$_RESET\Network connection has been reset.)
+<table_row>(SS$_LINKABORT\Connection aborted by network software.)
+<table_row>(SS$_CONNECFAIL\Connection failure, or reset by peer process.)
+<table_row>(SS$_NOLINKS\Socket is not connected.)
+<table_row>(SS$_SHUT\Socket, host, or network software has been shut down.)
+<table_row>(SS$_TIMEOUT\Operation timed out.)
+<table_row>(SS$_REJECT\Connection refused.)
+<endtable>
+<ENDAPPENDIX>

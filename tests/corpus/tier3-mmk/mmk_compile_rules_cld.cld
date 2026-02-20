@@ -1,0 +1,24 @@
+MODULE MMK_COMPILE_RULES_CLD
+IDENT "V1.1"
+!++
+!
+! DESCRIPTION:
+!
+!   This is the command table used by the MMK_COMPILE_RULES
+!   utility.
+!
+! AUTHOR:   	    M. Madison
+!   	    	    COPYRIGHT © 1993  MADGOAT SOFTWARE.
+!   	    	    ALL RIGHTS RESERVED.
+!
+! CREATION DATE:    30-Apr-1993
+!
+! MODIFICATION HISTORY:
+!
+!   30-APR-1993	V1.0	Madison	    Initial coding.
+!   16-SEP-1993	V1.1	Madison	    It's MMK now.
+!--
+
+DEFINE VERB MMKC
+    PARAMETER P1,LABEL=RULES_FILE,PROMPT="Rules file",VALUE(TYPE=$FILE,REQUIRED)
+    QUALIFIER OUTPUT, NONNEGATABLE, VALUE(TYPE=$FILE, REQUIRED)

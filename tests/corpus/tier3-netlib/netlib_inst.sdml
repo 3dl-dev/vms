@@ -1,0 +1,229 @@
+<FRONT_MATTER>(NETLIB_INST_1)
+
+<TITLE_PAGE>
+<TITLE>(NETLIB Installation Guide)
+<ABSTRACT>(<REFERENCE>(RELMONTH))
+<P>This manual describes the installation of NETLIB, a library for
+writing TCP/IP-based network applications.
+<ENDABSTRACT>
+<REVISION_INFO>(This an updated manual.)
+<REVISION_INFO>(Operating System and Version:\OpenVMS VAX V6.2 or later)
+<REVISION_INFO>(\OpenVMS Alpha V6.0 or later)
+<REVISION_INFO>(\OpenVMS Industry Standard 64 V8.2 or later)
+<REVISION_INFO>(Software Version:\<REFERENCE>(VER))
+<ENDTITLE_PAGE>(Endless Software Solutions<LINE>Perth, Western Australia)
+<INCLUDE>(SRC_DIR:COPYRIGHT.SDML)
+<CONTENTS_FILE>
+<PREFACE>(\NETLIB_INST_2)
+<P>
+Once upon a time, there were several TCP/IP packages available for VMS
+systems.  Each provided a VMS-style programming interface, using the $QIO
+system service, and most provided a "socket" programming library, based on
+the communications model developed for BSD UNIX.
+Unfortunately, there was no standard among any of the packages for the
+$QIO-based programming interface (most, but not all, emulated Digital's,
+at least to some degree), and the $QIO-based interface is not very easy
+to use.
+<P>
+The socket libraries provided with these packages provided a somewhat
+easier-to-use programming interface, but didn't permit VMS-style asynchronous
+programming (using ASTs), and generally required at least a re-LINK, and
+sometimes source modifications, when moving from one vendor's library
+to another.
+<P>
+So, enter NETLIB.  NETLIB was originally developed to support MadGoat
+Software's Message Exchange (now maintained by Endless Software Solutions)
+mail package, which needed to support many TCP/IP packages doing VMS-style
+asynchronous programming.  NETLIB provides a consistent, VMS-style
+interface for TCP/IP-based network programs, operating with all of the
+currently available TCP/IP packages available today for VMS (with one
+minor exception).  In addition, NETLIB allows for flexibility in
+in the use of a TCP/IP package, by selecting the vendor-dependent
+library code at run-time, rather than link-time.
+<P>
+Now, fast-forward to the 21st century and OpenVMS is avilable on three
+architectures (VAX, Alpha and Industry Standard 64).  There are only three
+major TCP/IP interfaces still in development on OpenVMS.  These are:
+<LIST>(UNNUMBERED)
+<LE>HP TCP/IP Services for OpenVMS (formerly Digital UCX)
+<LE>Process Multinet
+<LE>Process TCPware
+<ENDLIST>
+<P>
+The last two now have excellent emulation of HP TCP/IP $QIO-interface and
+so support for all packages, except TCP/IP, has been dropped.  However,
+NETLIB is still a relevant and useful package.  As well as being a major
+component of MX and other TCP/IP based application it also now provides an
+asynchronous interface to the OpenSSL package, as well as the existing API.
+<head1>(Intended Audience\NETLIB_INST_3)
+<p>This manual is intended for system managers or users
+responsible for installing and setting up NETLIB.
+<head1>(Document Structure\NETLIB_INST_4)
+<p>This document consists of two chapters.  Chapter 1 describes the
+installation of NETLIB, the network interface library used by NETLIB.
+Chapter 2 describes the installation and configuration of NETLIB.
+
+<head1>(Related Documents\NETLIB_INST_5)
+<p>The <emphasis>(NETLIB Programmer's Guide) describes how to use NETLIB
+and provides descriptions of the NETLIB routines.
+
+<ENDPREFACE>
+<ENDFRONT_MATTER>
+<CHAPTER>(Preparing to Install NETLIB\NETLIB_INST_6)
+<P>
+This chapter describes the steps that should be taken prior to installing
+NETLIB.
+
+<HEAD1>(Prerequisite Software\NETLIB_INST_11)
+<P>
+NETLIB requires OpenVMS Alpha V6.0 or later, or OpenVMS Industry Standard 64 E8.2 or later.
+NETLIB uses the HP TCP/IP Services (UCX) driver interface, and should support any
+third-party TCP/IP packages that includes that interface.
+<P>TCP/IP does not have to be installed or running on
+the system in order for NETLIB to be installed; however, you must
+be running TCP/IP before any NETLIB-based applications
+are run.
+<head1>(VMScluster Support\NETLIB_INST_12)
+<P>
+NETLIB supports all VMScluster configurations.  For mixed
+cluster configurations, you must install NETLIB once for
+each architecture.  Different directories must be used for each platform.
+<head1>(Installation Requirements\NETLIB_INST_13)
+<P>NETLIB requires the following resources:
+<list>(unnumbered)
+<le>Approximately 3,000 (VAX) or 4,000 (Alpha) free disk blocks on the
+installation working device (the system disk, or the device specified in
+the AWD option for VMSINSTAL).
+<le>Approximately 1,000 disk blocks after installation on the disk
+where NETLIB is installed for common files, plus an additional 50 (VAX) or
+(150) Alpha disk blocks per TCP/IP package selected.
+<le>If NETLIB is installed system-wide, you will need
+3 (VAX) or 7 (Alpha) global sections and 15 (VAX) or 30 (Alpha) global pages
+for the common NETLIB transfer vector library, plus 3 (VAX) or 10 (Alpha)
+global sections and approximately 50 (VAX) or 80 (Alpha) global pages for
+each TCP/IP-specific library.
+<le>Approximately 5 to 20 mintues for installation time, depending on
+system type and installation media.
+<le>If you are running CMU TCP/IP, the SYSGEN parameter MAXBUF must
+be set to at least 2300.
+<endlist>
+
+<HEAD1>(Release Notes\NETLIB_INST_14)
+<p>NETLIB is provided in a distribution kit suitable for installation
+with VMSINSTAL.  The release notes in the A save set of the distribution
+kit describe installation requirements for NETLIB.  You can retrieve
+the release notes by using OPTIONS N on VMSINSTAL:
+<interactive>
+<s>($ )<u>(@SYS$UPDATE:VMSINSTAL NETLIB<REFERENCE>(NUMVER) load-device OPTIONS N)
+<endinteractive>
+<p>where <emphasis>(load-device) represents the location of the
+NETLIB installation kit.
+
+<chapter>(Installing NETLIB System-wide\NETLIB_INST_8)
+<P>This chapter describes the NETLIB installation process for a system-wide
+NETLIB installation.
+<HEAD1>(Invoking the Installation Procedure\NETLIB_INST_15)
+<P>NETLIB is installled using the VMSINSTAL utility:
+<interactive>
+<s>($ )<u>(@SYS$UPDATE:VMSINSTAL NETLIB<REFERENCE>(NUMVER) load-device)
+<endinteractive>
+<p>where <emphasis>(load-device) represents the location of the NETLIB
+installation kit.
+<SUBHEAD1>(Installation Questions\NETLIB_INST_16)
+<p>
+The NETLIB installation procedure will ask you for a device and
+directory specification for the location where NETLIB should be installed,
+and will ask you to select the TCP/IP package support you want to install.
+The procedure attempts to select automatically the appropriate TCP/IP support
+for your system.
+<P>You will next be asked to specify a directory into which the NETLIB
+libraries will be installed.  If NETLIB is already installed and started,
+the installation procedure will provide the current NETLIB directory
+location as the default answer; otherwise, it will use SYS$COMMON:[SYSLIB]
+as the default.  If the directory you specify does not already exist,
+it will be created by the installation procedure.
+<P>After selecting a directory, you will be asked if you want the
+NETLIB programming support files and documentation installed.  If so,
+you will be asked for a directory into which the documentation will be
+placed (the programming support files go into the NETLIB library directory).
+<P>Once all questions, the appropriate binaries
+are loaded, and the requested libraries are created and moved to the 
+directory you specified.  If you elected to install the programming
+support and/or documentation, those files will be loaded and moved
+into the appropriate directories.
+
+<HEAD1>(Post-Installation Steps\postinstall)
+<p>Once NETLIB has been installed, it should be started by invoking
+its startup command procedure:
+<interactive>
+<s>($ )<u>(@SYS$STARTUP:NETLIB_STARTUP)
+<endinteractive>
+<p>This should be done from a suitably privileged account.
+This invocation of NETLIB_STARTUP should also be added to your
+system startup command procedure.
+
+<CHAPTER>(Installing NETLIB for Personal Use\personal_install)
+<P>If you are not a system manager but still want to use NETLIB, you
+can install a copy of NETLIB for your own personal use.  To do this,
+create a temporary working directory and SET DEFAULT to it:
+<interactive>
+<s>($ )<u>(CREATE/DIRECTORY [.TEMP])
+<s>($ )<u>(SET DEFAULT [.TEMP])
+<endinteractive>
+<p>Next, unload the contents of the NETLIB save sets into the working
+directory.  All installations require the A save set:
+<interactive>
+<s>($ )<U>(BACKUP disk:[dir]NETLIB<REFERENCE>(NUMVER).A/SAVE [])
+<endinteractive>
+<P>For Alpha systems, you will need the B save set:
+<interactive>
+<s>($ )<U>(BACKUP disk:[dir]NETLIB<REFERENCE>(NUMVER).B/SAVE [])
+<endinteractive>
+<P>For IA64 systems, you will need the C save set:
+<interactive>
+<s>($ )<U>(BACKUP disk:[dir]NETLIB<REFERENCE>(NUMVER).C/SAVE [])
+<endinteractive>
+<P>Next, invoke the user-install command procedure:
+<interactive>
+<S>($ )<U>(@NETLIB_USER_INSTALL)
+<endinteractive>
+<p>Answer the questions from the installation script and the NETLIB
+files will be created.  Once the installation procedure is complete,
+you can delete the files and the working directory:
+<interactive>
+<s>($ )<u>(SET DEFAULT [-])
+<s>($ )<u>(DELETE [.TEMP]*.*;*)
+<s>($ )<U>(SET PROTECTION=O:RWED TEMP.DIR)
+<S>($ )<U>(DELETE TEMP.DIR;)
+<ENDINTERACTIVE>
+<P>
+If you want to use the programming support files or documentation,
+use BACKUP to retrieve them from saveset NETLIB<REFERENCE>(NUMVER).D.
+
+<head1>(Personal NETLIB Restriction\NETLIB_INST_10)
+<p>You cannot use a personal NETLIB with NETLIB-based applications that
+are installed with privileges.
+
+
+<chapter>(On-Line Documentation\online_doc)
+<P>
+The NETLIB documentation set is provided in a form suitable for use with
+the VMS DECwindows Bookreader program (VMS V5.3 and later).  To make
+the NETLIB on-line documentation available automatically through Bookreader,
+you should add a reference to the directory containing the documentation
+(if you elected to install those files) to the DECW$BOOK logical name.
+
+<chapter>(Multi-Language Header Files\headers)
+<P>
+The NETLIB software package ships with a header file called NETLIBDEF.SDL.
+This contains definitions for the NETLIB routine entry points and the
+structures and constants used by the NETLIB routines.
+<P>
+This file can be used with the Structure Definition Language (SDL) tool
+to generate a header for any language supported by SDL.  At this point
+only headers for BLISS, C and BASIC are typically shipped as standard.  An
+example of the commands necessary to build a Fortran header using SDL are
+included below.
+<interactive>
+<s>($ )<u>(SDL/VAX/LANGUAGE=FORTRAN NETLIBDEF.SDL)
+<endinteractive>

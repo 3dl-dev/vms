@@ -1,0 +1,16 @@
+# cppcheck suppressions for OVMX
+#
+# Keep this file minimal — suppress only known false positives.
+# Real findings should become follow-up beads.
+
+# System headers are not bundled with the project; cppcheck cannot find them.
+missingIncludeSystem
+
+# VMS naming convention uses $ in identifiers (sys$creprc, lib$getdvi, etc.).
+# cppcheck may warn about non-standard identifier characters.
+# Suppress dollar-sign-related noise at the project level.
+[src/*]:unknownMacro
+
+# src/libvmssys is a freestanding layer (no glibc). Suppress missing-include
+# warnings that arise because standard headers are intentionally absent.
+missingInclude:src/libvmssys/*

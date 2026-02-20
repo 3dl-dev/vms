@@ -1,0 +1,34 @@
+---
+# OVMX clang-tidy configuration
+#
+# Conservative initial setup — informational only, not blocking CI.
+# VMS naming conventions use $ in identifiers (sys$creprc, lib$getdvi, etc.),
+# which requires special handling to avoid false positives.
+#
+# Excluded from analysis:
+#   src/libvmssys/ — freestanding layer, no glibc, causes false positives
+#   src/kernel/    — standalone Makefiles, not in compile_commands.json
+
+Checks: >
+  bugprone-*,
+  clang-analyzer-*,
+  misc-redundant-expression,
+  performance-*,
+  -bugprone-reserved-identifier,
+  -bugprone-easily-swappable-parameters,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+
+# Informational only — do not treat any warnings as errors
+WarningsAsErrors: ''
+
+# Only report diagnostics for project headers (not system headers)
+HeaderFilterRegex: 'src/.*'
+
+# Allow $ in identifiers (VMS naming convention: sys$, lib$, str$, etc.)
+ExtraArgs:
+  - -Wno-dollar-in-identifier-extension
+
+CheckOptions:
+  # Do not warn about $ in identifier names
+  - key: bugprone-reserved-identifier.AllowedIdentifiers
+    value: '.*\$.*'

@@ -9,6 +9,9 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
+# Always generate compile_commands.json (used by clang-tidy static analysis)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Expose POSIX and GNU APIs (sigaction, timer_t, FNM_CASEFOLD, etc.)
 add_compile_definitions(_GNU_SOURCE)
 

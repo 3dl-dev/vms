@@ -42,7 +42,8 @@
       "WebFetch(domain:openssl-library.org)",
       "WebFetch(domain:cdn.openbsd.org)",
       "WebFetch(domain:gist.github.com)",
-      "WebFetch(domain:www.linuxfromscratch.org)"
+      "WebFetch(domain:www.linuxfromscratch.org)",
+      "Skill(bd-plan)"
     ]
   }
 }

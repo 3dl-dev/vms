@@ -682,6 +682,245 @@ uint32_t lib$tparse(
 #define LIB$K_CLI_LOCAL_SYM     1   /* Local symbol */
 #define LIB$K_CLI_GLOBAL_SYM    2   /* Global symbol */
 
+/* ================================================================
+ * Bit and Arithmetic Interlocked Routines
+ * ================================================================ */
+
+/**
+ * lib$adawi - Add aligned word interlocked
+ *
+ * @param add   Pointer to signed word addend
+ * @param sum   Pointer to signed word accumulator (updated in place)
+ * @param sign  Pointer to signed word receiving sign of result (-1/0/1)
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$adawi(
+    const int16_t *add,
+    int16_t *sum,
+    int16_t *sign
+);
+
+/**
+ * lib$bbcci - Branch on Bit Clear and Clear Interlocked
+ *
+ * @param bit_position  Pointer to longword bit position
+ * @param base_address  Pointer to start of bit array
+ *
+ * @return  Old value of the bit (1 if was set, 0 if was clear)
+ */
+uint32_t lib$bbcci(
+    const int32_t *bit_position,
+    void *base_address
+);
+
+/**
+ * lib$bbssi - Branch on Bit Set and Set Interlocked
+ *
+ * @param bit_position  Pointer to longword bit position
+ * @param base_address  Pointer to start of bit array
+ *
+ * @return  Old value of the bit (1 if was set, 0 if was clear)
+ */
+uint32_t lib$bbssi(
+    const int32_t *bit_position,
+    void *base_address
+);
+
+/**
+ * lib$extv - Extract signed bit field
+ *
+ * @param pos           Pointer to longword bit position (0-based)
+ * @param size          Pointer to byte field size (0-32 bits)
+ * @param base_address  Pointer to start of bit array
+ *
+ * @return  Sign-extended 32-bit field value
+ */
+int32_t lib$extv(
+    const int32_t *pos,
+    const uint8_t *size,
+    const void *base_address
+);
+
+/**
+ * lib$extzv - Extract zero-extended (unsigned) bit field
+ *
+ * @param pos           Pointer to longword bit position (0-based)
+ * @param size          Pointer to byte field size (0-32 bits)
+ * @param base_address  Pointer to start of bit array
+ *
+ * @return  Zero-extended 32-bit field value
+ */
+uint32_t lib$extzv(
+    const int32_t *pos,
+    const uint8_t *size,
+    const void *base_address
+);
+
+/**
+ * lib$insv - Insert bit field
+ *
+ * @param source        Pointer to longword whose low bits are inserted
+ * @param pos           Pointer to longword bit position (0-based)
+ * @param size          Pointer to byte field size (0-32 bits)
+ * @param base_address  Pointer to start of bit array (modified in place)
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$insv(
+    const int32_t *source,
+    const int32_t *pos,
+    const uint8_t *size,
+    void *base_address
+);
+
+/* ================================================================
+ * Event Flag Routines
+ * ================================================================ */
+
+/**
+ * lib$get_ef - Allocate a free local event flag
+ *
+ * @param efn  Pointer to receive allocated event flag number (24-63)
+ *
+ * @return  SS$_NORMAL on success, LIB$_INSEF if no flags available
+ */
+uint32_t lib$get_ef(
+    uint32_t *efn
+);
+
+/**
+ * lib$free_ef - Release a previously allocated event flag
+ *
+ * @param efn  Pointer to event flag number to release
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$free_ef(
+    const uint32_t *efn
+);
+
+/* ================================================================
+ * String and Character Operation Routines
+ * ================================================================ */
+
+/**
+ * lib$ichar - Integer value of first character
+ *
+ * @param str  Pointer to string descriptor
+ *
+ * @return  ASCII value of first character (not a status code)
+ */
+uint32_t lib$ichar(
+    const struct dsc$descriptor_s *str
+);
+
+/**
+ * lib$index - Find position of substring in string
+ *
+ * @param str  Pointer to descriptor of string to search
+ * @param sub  Pointer to descriptor of substring to find
+ *
+ * @return  1-based position of first match, or 0 if not found
+ */
+uint32_t lib$index(
+    const struct dsc$descriptor_s *str,
+    const struct dsc$descriptor_s *sub
+);
+
+/**
+ * lib$len - Length of string excluding trailing spaces
+ *
+ * @param str  Pointer to string descriptor
+ *
+ * @return  Length without trailing spaces (not a status code)
+ */
+uint32_t lib$len(
+    const struct dsc$descriptor_s *str
+);
+
+/**
+ * lib$locc - Locate character in string
+ *
+ * @param char_to_find  Descriptor whose first char is searched for
+ * @param str           Descriptor of string to search
+ *
+ * @return  1-based position of first match, or 0 if not found
+ */
+uint32_t lib$locc(
+    const struct dsc$descriptor_s *char_to_find,
+    const struct dsc$descriptor_s *str
+);
+
+/**
+ * lib$lp_lines - Lines per page for listing output
+ *
+ * @return  Default lines per page (66)
+ */
+uint32_t lib$lp_lines(void);
+
+/**
+ * lib$matchc - Match characters (substring search)
+ *
+ * @param sub  Descriptor of substring to search for
+ * @param str  Descriptor of string to search
+ *
+ * @return  1-based position after match end, or 0 if not found
+ */
+uint32_t lib$matchc(
+    const struct dsc$descriptor_s *sub,
+    const struct dsc$descriptor_s *str
+);
+
+/**
+ * lib$movc3 - Move (copy) characters, 3-argument form
+ *
+ * @param len  Pointer to word containing number of bytes to copy
+ * @param src  Pointer to source buffer
+ * @param dst  Pointer to destination buffer
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$movc3(
+    const uint16_t *len,
+    const void *src,
+    void *dst
+);
+
+/**
+ * lib$movc5 - Move characters with fill, 5-argument form
+ *
+ * @param src_len    Pointer to word containing source length
+ * @param src        Pointer to source buffer
+ * @param fill_char  Pointer to fill character
+ * @param dst_len    Pointer to word containing destination length
+ * @param dst        Pointer to destination buffer
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$movc5(
+    const uint16_t *src_len,
+    const void *src,
+    const char *fill_char,
+    const uint16_t *dst_len,
+    void *dst
+);
+
+/**
+ * lib$spanc - Span characters matching a table and mask
+ *
+ * @param str    Pointer to string descriptor
+ * @param table  Pointer to 256-byte translation table
+ * @param mask   Pointer to byte mask for table lookup
+ *
+ * @return  1-based position of first non-matching char, or 0 if all match
+ */
+uint32_t lib$spanc(
+    const struct dsc$descriptor_s *str,
+    const unsigned char *table,
+    const unsigned char *mask
+);
+
 #ifdef __cplusplus
 }
 #endif

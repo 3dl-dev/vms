@@ -1023,6 +1023,21 @@ uint32_t sys$setpri(
  */
 uint32_t sys$cancel(uint16_t chan);
 
+/* ================================================================
+ * Floating-Point Services
+ * ================================================================ */
+
+/**
+ * sys$check_fen - Check Floating-point ENable status
+ *
+ * @param flags  Optional pointer to longword receiving FP bank flags
+ *               (IA-64 only; set to 0 on other platforms)
+ *
+ * @return  1 if floating-point is enabled, 0 if disabled
+ *          (Note: boolean return, not a VMS condition code)
+ */
+uint32_t sys$check_fen(uint32_t *flags);
+
 #ifdef __cplusplus
 }
 #endif

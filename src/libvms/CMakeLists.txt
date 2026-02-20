@@ -21,9 +21,13 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/lib_signal.c
     rtl/lib_datetime.c
     rtl/lib_misc.c
+    rtl/lib_string_ops.c
+    rtl/lib_bitops.c
+    rtl/lib_eventflags.c
     rtl/str_routines.c
     rtl/mth_routines.c
     rtl/ots_routines.c
+    syssvc/sys_float.c
 )
 target_include_directories(vms PUBLIC include ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
 target_link_libraries(vms PUBLIC vmsprocess pthread m)

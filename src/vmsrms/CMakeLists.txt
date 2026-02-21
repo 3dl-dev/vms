@@ -22,12 +22,10 @@ target_include_directories(vmsrms PUBLIC
 
 target_link_libraries(vmsrms PUBLIC vms vmsfs vmslnm)
 
-if(NOT OVMX_STATIC)
-    set_target_properties(vmsrms PROPERTIES
-        VERSION ${PROJECT_VERSION}
-        SOVERSION 0
-    )
-endif()
-
-install(TARGETS vmsrms LIBRARY DESTINATION lib)
+set_target_properties(vmsrms PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "LIBVMSRMS\$SHR"
+    SUFFIX ".EXE"
+)
+install(TARGETS vmsrms LIBRARY DESTINATION ${VMS_SHARE_DIR})
 install(DIRECTORY include/rms/ DESTINATION include/vms/rms)

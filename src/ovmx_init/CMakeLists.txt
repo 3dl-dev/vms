@@ -13,10 +13,12 @@ target_include_directories(ovmx_init PRIVATE
 target_compile_definitions(ovmx_init PRIVATE
     _POSIX_C_SOURCE=200809L
     _DEFAULT_SOURCE
-    OVMX_BIN_DIR="${CMAKE_INSTALL_PREFIX}/bin"
-    OVMX_SBIN_DIR="${CMAKE_INSTALL_PREFIX}/sbin"
 )
 
 target_link_libraries(ovmx_init PRIVATE vmsprocess pthread)
 
-install(TARGETS ovmx_init RUNTIME DESTINATION bin)
+set_target_properties(ovmx_init PROPERTIES
+    OUTPUT_NAME "STARTUP"
+    SUFFIX ".EXE"
+)
+install(TARGETS ovmx_init RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

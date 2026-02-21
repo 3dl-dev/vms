@@ -22,6 +22,7 @@
 #include "sha256.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
+#include "ovmx_accounting.h"
 
 /* Maximum number of login attempts before disconnect */
 #define MAX_ATTEMPTS   3
@@ -185,69 +186,32 @@ static int authenticate(const sysuaf_record_t *rec, const char *password)
 }
 
 /* ------------------------------------------------------------------ */
-/* Format VMS-style date: DD-MMM-YYYY HH:MM:SS                       */
+/* Start a VMS session: banner, environment, exec DCL shell           */
 /* ------------------------------------------------------------------ */
-static void format_vms_time(char *buf, size_t bufsiz)
+static void start_session(const sysuaf_record_t *rec)
 {
     static const char *months[] = {
         "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
         "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
     };
 
-    time_t now = time(NULL);
-    struct tm *tm = localtime(&now);
-    snprintf(buf, bufsiz, "%02d-%s-%04d %02d:%02d:%02d",
-             tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
-             tm->tm_hour, tm->tm_min, tm->tm_sec);
-}
+    printf("\n   Welcome to OpenVMS (tm) OVMX V7.3\n");
 
-/* ------------------------------------------------------------------ */
-/* Read and update last-login timestamp for a user.                   */
-/* Returns 1 if a previous timestamp was found (written to prev_buf). */
-/* Always writes the current time as the new last login.              */
-/* ------------------------------------------------------------------ */
-static int update_lastlogin(const char *username, char *prev_buf, size_t prev_size)
-{
-    char path[512];
-    snprintf(path, sizeof(path), "%s/%s", LASTLOGIN_DIR, username);
+    /* Read the REAL last login time from accounting records */
+    time_t last_login = 0;
+    int has_last = (ovmx_accounting_get_lastlogin(rec->username, &last_login) == 0);
 
-    /* Try to read the previous timestamp */
-    int found = 0;
-    FILE *fp = fopen(path, "r");
-    if (fp) {
-        if (fgets(prev_buf, (int)prev_size, fp) != NULL) {
-            trim_trailing(prev_buf);
-            found = (prev_buf[0] != '\0');
-        }
-        fclose(fp);
-    }
-
-    /* Write current timestamp */
-    char cur[64];
-    format_vms_time(cur, sizeof(cur));
-    fp = fopen(path, "w");
-    if (fp) {
-        fprintf(fp, "%s\n", cur);
-        fclose(fp);
-    }
-
-    return found;
-}
-
-/* ------------------------------------------------------------------ */
-/* Start a VMS session: banner, environment, exec DCL shell           */
-/* ------------------------------------------------------------------ */
-static void start_session(const sysuaf_record_t *rec)
-{
-    printf("\n   Welcome to OpenVMS (tm) V7.3\n");
-
-    /* Display last login time (from saved file), then update it */
-    char prev_login[64] = {0};
-    if (update_lastlogin(rec->username, prev_login, sizeof(prev_login))) {
-        printf("\n   Last interactive login on %s\n\n", prev_login);
+    if (has_last && last_login > 0) {
+        struct tm *tm = localtime(&last_login);
+        printf("\n   Last interactive login on %02d-%s-%04d %02d:%02d:%02d\n\n",
+               tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
+               tm->tm_hour, tm->tm_min, tm->tm_sec);
     } else {
-        printf("\n");
+        printf("\n   No previous interactive login recorded.\n\n");
     }
+
+    /* Record this login now (after showing last, before launching DCL) */
+    ovmx_accounting_record_login(rec->username);
 
     /* Set up environment for session */
     setenv("VMS_USERNAME",    rec->username,    1);

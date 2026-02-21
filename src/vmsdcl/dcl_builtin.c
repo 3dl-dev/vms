@@ -38,6 +38,9 @@
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
+#include "opcdef.h"
+#include "ovmx_accounting.h"
+#include "starlet.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -3728,6 +3731,26 @@ static int cmd_logout(struct dcl_command *cmd)
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
 
+    /* Write an OPCOM logout record to the operator log */
+    {
+        struct {
+            struct opcdef hdr;
+            char text[128];
+        } msgbuf;
+        memset(&msgbuf, 0, sizeof(msgbuf));
+        msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_RQST;
+        msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+        int n = snprintf(msgbuf.hdr.opc$l_ms_text, sizeof(msgbuf.text),
+                         "logout: user %s at %02d-%s-%04d %02d:%02d:%02d",
+                         upper_user,
+                         tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+                         tm.tm_hour, tm.tm_min, tm.tm_sec);
+        struct dsc$descriptor_s desc;
+        desc.dsc$a_pointer = (char *)&msgbuf.hdr;
+        desc.dsc$w_length  = (uint16_t)(8 + n);
+        sys$sndopr(&desc, 0);
+    }
+
     ctx->exit_requested = 1;
     ctx->logout_requested = 1;
     return SS$_NORMAL;
@@ -3883,6 +3906,185 @@ static int cmd_monitor(struct dcl_command *cmd)
         return SS$_ABORT;
     }
 
+    return SS$_NORMAL;
+}
+
+/* ================================================================== */
+/*           OPCOM Commands: REPLY and REQUEST                         */
+/* ================================================================== */
+
+/*
+ * REPLY /ENABLE - Enable the current terminal as an operator terminal.
+ * REPLY /DISABLE - Disable operator terminal.
+ *
+ * On real VMS, REPLY /ENABLE marks the terminal as an operator console.
+ * Messages sent via sys$sndopr are then written to enabled terminals.
+ * In OVMX, we log the enable/disable event to OPERATOR.LOG and
+ * print a confirmation message — operator messages go to the log.
+ *
+ * Usage:
+ *   REPLY /ENABLE[=class]   - enable operator messages
+ *   REPLY /DISABLE          - disable operator terminal
+ *   REPLY /TO=rqid "text"   - reply to a pending request
+ */
+static int cmd_reply(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+    const char *username = ctx->username[0] ? ctx->username : "SYSTEM";
+
+    /* Build a minimal OPC message for the log */
+    struct {
+        struct opcdef hdr;
+        char text[128];
+    } msgbuf;
+    memset(&msgbuf, 0, sizeof(msgbuf));
+
+    struct dsc$descriptor_s desc;
+    desc.dsc$a_pointer = (char *)&msgbuf.hdr;
+    desc.dsc$w_length  = 0;  /* filled below */
+
+    if (dcl_has_qualifier(cmd, "ENABLE")) {
+        const char *cls = dcl_qualifier_value(cmd, "ENABLE");
+        char detail[64] = "CENTRAL";
+        if (cls && cls[0]) {
+            strncpy(detail, cls, sizeof(detail) - 1);
+        }
+        printf("%%OPCOM-I-OPRENA, operator %s enabled for %s class messages\n",
+               username, detail);
+
+        msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_ENABLE;
+        msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+        int n = snprintf(msgbuf.hdr.opc$l_ms_text,
+                         sizeof(msgbuf.text),
+                         "operator %s enabled (%s)", username, detail);
+        desc.dsc$w_length = (uint16_t)(8 + n);
+        sys$sndopr(&desc, 0);
+
+    } else if (dcl_has_qualifier(cmd, "DISABLE")) {
+        printf("%%OPCOM-I-OPRDIS, operator %s disabled\n", username);
+
+        msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_DISABLE;
+        msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+        int n = snprintf(msgbuf.hdr.opc$l_ms_text,
+                         sizeof(msgbuf.text),
+                         "operator %s disabled", username);
+        desc.dsc$w_length = (uint16_t)(8 + n);
+        sys$sndopr(&desc, 0);
+
+    } else if (dcl_has_qualifier(cmd, "TO")) {
+        /* REPLY /TO=rqid "reply text" */
+        const char *to_val = dcl_qualifier_value(cmd, "TO");
+        const char *reply_text = (cmd->param_count >= 1) ? cmd->params[0] : "";
+
+        printf("%%OPCOM-I-REPLY, reply sent to request %s: %s\n",
+               to_val ? to_val : "?", reply_text);
+
+        msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_REPLY;
+        msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+        int n = snprintf(msgbuf.hdr.opc$l_ms_text,
+                         sizeof(msgbuf.text),
+                         "reply to rqid %s: %s",
+                         to_val ? to_val : "0", reply_text);
+        desc.dsc$w_length = (uint16_t)(8 + n);
+        sys$sndopr(&desc, 0);
+
+    } else {
+        dcl_error("DCL", 2, "SYNTAX",
+                  "REPLY requires /ENABLE, /DISABLE, or /TO qualifier");
+        return SS$_BADPARAM;
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * REQUEST "message" - Send a request message to the operator.
+ *
+ * Usage:
+ *   REQUEST "message text"
+ *   REQUEST /REPLY "message text"   - wait for operator reply (not implemented)
+ *
+ * Sends a message to OPCOM (logs to OPERATOR.LOG).
+ * Prints a confirmation showing the request was sent.
+ */
+static int cmd_request(struct dcl_command *cmd)
+{
+    const char *msg_text = "";
+    if (cmd->param_count >= 1 && cmd->params[0][0] != '\0') {
+        msg_text = cmd->params[0];
+    } else {
+        dcl_error("DCL", 2, "SYNTAX",
+                  "REQUEST requires a message string parameter");
+        return SS$_BADPARAM;
+    }
+
+    /* Build OPC message buffer */
+    struct {
+        struct opcdef hdr;
+        char text[128];
+    } msgbuf;
+    memset(&msgbuf, 0, sizeof(msgbuf));
+
+    msgbuf.hdr.opc$b_ms_type   = OPC$_RQ_RQST;
+    msgbuf.hdr.opc$b_ms_target = OPC$M_NM_CENTRL;
+
+    int n = snprintf(msgbuf.hdr.opc$l_ms_text, sizeof(msgbuf.text),
+                     "%s", msg_text);
+    if (n > 127) n = 127;
+
+    struct dsc$descriptor_s desc;
+    desc.dsc$a_pointer = (char *)&msgbuf.hdr;
+    desc.dsc$w_length  = (uint16_t)(8 + n);
+
+    uint32_t status = sys$sndopr(&desc, 0);
+    if (!(status & 1)) {
+        dcl_error("OPCOM", 2, "SNDOPR", "failed to send operator message");
+        return (int)status;
+    }
+
+    printf("%%OPCOM-I-RQSTPEND, request sent to operator: %s\n", msg_text);
+    return SS$_NORMAL;
+}
+
+/* ================================================================== */
+/*                     ACCOUNTING Command                               */
+/* ================================================================== */
+
+/*
+ * ACCOUNTING - Display login accounting information for the current user.
+ *
+ * Shows last login time read from /etc/ovmx/lastlogin/<USERNAME>.
+ * Matches OpenVMS ACCOUNTING utility output style.
+ */
+static int cmd_accounting(struct dcl_command *cmd)
+{
+    (void)cmd;
+
+    struct dcl_context *ctx = dcl_get_context();
+    const char *username = ctx->username[0] ? ctx->username : "SYSTEM";
+
+    static const char *months[] = {
+        "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
+    };
+
+    time_t last_login = 0;
+    int found = (ovmx_accounting_get_lastlogin(username, &last_login) == 0);
+
+    printf("\n  OVMX Accounting for user %s\n", username);
+    printf("  %s\n\n", "----------------------------------------");
+
+    if (found && last_login > 0) {
+        struct tm tm;
+        localtime_r(&last_login, &tm);
+        printf("  Last interactive login: %02d-%s-%04d %02d:%02d:%02d\n",
+               tm.tm_mday, months[tm.tm_mon], 1900 + tm.tm_year,
+               tm.tm_hour, tm.tm_min, tm.tm_sec);
+    } else {
+        printf("  Last interactive login: (no previous login recorded)\n");
+    }
+
+    printf("\n");
     return SS$_NORMAL;
 }
 
@@ -4075,6 +4277,8 @@ static int cmd_recall(struct dcl_command *cmd)
 /* ================================================================== */
 
 static struct dcl_verb builtin_verbs[] = {
+    { "ACCOUNTING",  cmd_accounting,  CDU_F_ABBREV | CDU_F_QUALIFIER, 4,
+      "Display login accounting information for the current user" },
     { "APPEND",      cmd_append,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Append source file to destination file" },
     { "ASSIGN",      cmd_assign,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -4123,6 +4327,10 @@ static struct dcl_verb builtin_verbs[] = {
       "Read a record from a file into a symbol" },
     { "RENAME",      cmd_rename,      CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Change the name and/or location of a file" },
+    { "REPLY",       cmd_reply,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Send an operator reply or enable/disable operator terminal" },
+    { "REQUEST",     cmd_request,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Send a request message to the operator" },
     { "RUN",         cmd_run,         CDU_F_ABBREV | CDU_F_PARAM, 2,
       "Execute a program image" },
     { "SEARCH",      cmd_search,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,

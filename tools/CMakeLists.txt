@@ -18,7 +18,7 @@ target_compile_definitions(vms_login PRIVATE
     OVMX_BIN_DIR="${CMAKE_INSTALL_PREFIX}/bin"
 )
 
-target_link_libraries(vms_login PRIVATE vmsprocess pthread)
+target_link_libraries(vms_login PRIVATE vms vmsprocess pthread)
 
 install(TARGETS vms_login RUNTIME DESTINATION bin)
 

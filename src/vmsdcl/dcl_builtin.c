@@ -32,6 +32,11 @@
 #include "ssdef.h"
 #include "vms/logical.h"
 
+#ifdef HAVE_READLINE
+#include <readline/readline.h>
+#include <readline/history.h>
+#endif
+
 /* External functions */
 extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);
@@ -692,6 +697,18 @@ static int cmd_set(struct dcl_command *cmd)
         return cmd_set_protection(cmd);
     if (dcl_match_command(subcmd, "PASSWORD", 3))
         return cmd_set_password(cmd);
+    if (dcl_match_command(subcmd, "NOON", 4)) {
+        /* SET NOON — suppress ON ERROR handler at current level */
+        struct dcl_context *noon_ctx = dcl_get_context();
+        noon_ctx->noon_active = 1;
+        return SS$_NORMAL;
+    }
+    if (dcl_match_command(subcmd, "ON", 2)) {
+        /* SET ON — re-enable ON ERROR handler */
+        struct dcl_context *on_ctx = dcl_get_context();
+        on_ctx->noon_active = 0;
+        return SS$_NORMAL;
+    }
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SET keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;
@@ -2016,6 +2033,97 @@ static int cmd_help(struct dcl_command *cmd)
 }
 
 /* ================================================================== */
+/*                     RECALL Command                                  */
+/* ================================================================== */
+
+/*
+ * RECALL - Show or re-execute commands from history.
+ *
+ * RECALL          — show last command
+ * RECALL /ALL     — numbered history list
+ * RECALL n        — re-execute command number n
+ * RECALL string   — find and re-execute most recent match
+ */
+static int cmd_recall(struct dcl_command *cmd)
+{
+#ifndef HAVE_READLINE
+    (void)cmd;
+    printf("%%DCL-W-RECALL, command recall requires readline support\n");
+    return SS$_NORMAL;
+#else
+    int show_all = dcl_has_qualifier(cmd, "ALL");
+
+    if (show_all) {
+        /* RECALL /ALL — print numbered history */
+        HIST_ENTRY **hist = history_list();
+        if (!hist || !hist[0]) {
+            printf("%%DCL-I-RECALL, no history available\n");
+            return SS$_NORMAL;
+        }
+        int count = 0;
+        while (hist[count]) count++;
+        for (int i = 0; i < count; i++) {
+            /* history_list() is 0-indexed; history_get() uses offset_history */
+            printf("%5d  %s\n", history_base + i, hist[i]->line);
+        }
+        return SS$_NORMAL;
+    }
+
+    if (cmd->param_count == 0) {
+        /* RECALL with no args — show most recent command */
+        HIST_ENTRY *entry = current_history();
+        /* Go to the most recent history entry */
+        while (next_history() != NULL) { /* advance to end */ }
+        entry = previous_history();
+        if (!entry) {
+            printf("%%DCL-I-RECALL, no history available\n");
+            return SS$_NORMAL;
+        }
+        printf("%s\n", entry->line);
+        return SS$_NORMAL;
+    }
+
+    /* Parameter given — check if it's a number */
+    const char *param = cmd->params[0];
+    int is_number = 1;
+    for (size_t i = 0; param[i]; i++) {
+        if (!isdigit((unsigned char)param[i])) { is_number = 0; break; }
+    }
+
+    if (is_number) {
+        /* RECALL n — re-execute command number n */
+        int n = atoi(param);
+        HIST_ENTRY *entry = history_get(n);
+        if (!entry) {
+            printf("%%DCL-W-RECALL, no command number %d in history\n", n);
+            return SS$_NORMAL;
+        }
+        printf("%s\n", entry->line);
+        /* Feed the command back to the executor */
+        return dcl_execute_line(entry->line);
+    } else {
+        /* RECALL string — find most recent command starting with string */
+        HIST_ENTRY **hist = history_list();
+        if (!hist) {
+            printf("%%DCL-I-RECALL, no history available\n");
+            return SS$_NORMAL;
+        }
+        int count = 0;
+        while (hist[count]) count++;
+        size_t plen = strlen(param);
+        for (int i = count - 1; i >= 0; i--) {
+            if (strncasecmp(hist[i]->line, param, plen) == 0) {
+                printf("%s\n", hist[i]->line);
+                return dcl_execute_line(hist[i]->line);
+            }
+        }
+        printf("%%DCL-W-RECALL, no command matching \"%s\" in history\n", param);
+        return SS$_NORMAL;
+    }
+#endif
+}
+
+/* ================================================================== */
 /*                     Command Table                                   */
 /* ================================================================== */
 
@@ -2052,6 +2160,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Execute a command using system shell (piping/redirection)" },
     { "PURGE",     cmd_purge,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Delete old versions of a file" },
+    { "RECALL",    cmd_recall,    CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Show or re-execute commands from command history" },
     { "READ",      cmd_read,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Read a record from a file into a symbol" },
     { "RENAME",    cmd_rename,    CDU_F_ABBREV | CDU_F_PARAM, 3,

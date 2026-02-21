@@ -230,10 +230,13 @@ int dcl_execute_script(const char *filename, int argc, char **argv)
             int severity = status & 7;
             int handle_error = 0;
 
-            if (severity >= 4 && ctx->proc_stack[ctx->proc_depth].on_severe) {
-                handle_error = ctx->proc_stack[ctx->proc_depth].on_severe;
-            } else if (severity >= 2 && ctx->proc_stack[ctx->proc_depth].on_error) {
-                handle_error = ctx->proc_stack[ctx->proc_depth].on_error;
+            /* SET NOON suppresses the ON ERROR handler */
+            if (!ctx->noon_active) {
+                if (severity >= 4 && ctx->proc_stack[ctx->proc_depth].on_severe) {
+                    handle_error = ctx->proc_stack[ctx->proc_depth].on_severe;
+                } else if (severity >= 2 && ctx->proc_stack[ctx->proc_depth].on_error) {
+                    handle_error = ctx->proc_stack[ctx->proc_depth].on_error;
+                }
             }
 
             if (handle_error == 1) {

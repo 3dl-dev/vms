@@ -63,6 +63,9 @@ struct dcl_context {
     int on_error_goto;        /* ON ERROR THEN GOTO label */
     char on_error_label[256];
 
+    /* SET NOON / SET ON — suppress error handler */
+    int noon_active;          /* 1 = NOON (suppress ON ERROR handler) */
+
     /* Interactive vs batch */
     int interactive;
     int exit_requested;

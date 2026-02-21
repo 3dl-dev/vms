@@ -339,6 +339,8 @@ int main(int argc, char *argv[])
         /* Set up readline */
         rl_readline_name = "DCL";
         using_history();
+        /* Bind Ctrl-B to previous-history (VMS-style recall key) */
+        rl_bind_key(2, rl_get_previous_history);
 #endif
     }
 

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdint.h>
 
 #include "dcl/context.h"
 #include "dcl/parser.h"
@@ -24,29 +25,643 @@ extern void dcl_error(const char *facility, int severity, const char *ident,
 extern int dcl_eval_lexical(struct dcl_context *ctx, const char *expr,
                             char *result, size_t result_size);
 extern int dcl_find_label(FILE *fp, const char *label);
+extern int dcl_execute_line(const char *line);
+
+/* -------------------------------------------------------------------------
+ * DCL Expression Evaluator
+ *
+ * Handles both integer arithmetic (+ - * /) and string operations
+ * (+ for concatenation, - for substring removal) in symbol assignments.
+ *
+ * Grammar (integer mode):
+ *   expr   = term (('+' | '-') term)*
+ *   term   = factor (('*' | '/') factor)*
+ *   factor = '(' expr ')' | integer_literal | string_literal | symbol_ref
+ *
+ * Type detection: if either operand is a string, use string semantics.
+ * -------------------------------------------------------------------------
+ */
 
 /*
- * Evaluate a simple DCL expression for IF conditions.
- * Returns 1 if true, 0 if false.
- *
- * Supports:
- *   expr .EQS. expr  (string comparison)
- *   expr .NES. expr
- *   expr .EQ. expr   (integer comparison)
- *   expr .NE. expr
- *   expr .LT. expr, .GT., .LE., .GE.
- *   expr .LTS. expr, .GTS., .LES., .GES.
+ * Expression value — either an integer or a string.
  */
-static int eval_condition(struct dcl_context *ctx, const char *expr)
-{
-    if (!expr) return 0;
+typedef struct {
+    int     is_string;  /* 1 = string value, 0 = integer value */
+    long    ival;
+    char    sval[DCL_MAX_VALUE];
+} expr_val_t;
 
-    /* Find the operator */
+/*
+ * Parser state for recursive descent.
+ */
+typedef struct {
+    const char *input;
+    size_t      pos;
+    size_t      len;
+    struct dcl_context *ctx;
+} expr_parser_t;
+
+static void ep_skip_ws(expr_parser_t *ep)
+{
+    while (ep->pos < ep->len &&
+           (ep->input[ep->pos] == ' ' || ep->input[ep->pos] == '\t'))
+        ep->pos++;
+}
+
+static char ep_peek(expr_parser_t *ep)
+{
+    if (ep->pos >= ep->len) return '\0';
+    return ep->input[ep->pos];
+}
+
+static char ep_consume(expr_parser_t *ep)
+{
+    if (ep->pos >= ep->len) return '\0';
+    return ep->input[ep->pos++];
+}
+
+/* Forward declaration */
+static expr_val_t parse_expr(expr_parser_t *ep);
+
+/*
+ * Make integer value.
+ */
+static expr_val_t make_int(long v)
+{
+    expr_val_t r;
+    r.is_string = 0;
+    r.ival = v;
+    r.sval[0] = '\0';
+    return r;
+}
+
+/*
+ * Make string value.
+ */
+static expr_val_t make_str(const char *s)
+{
+    expr_val_t r;
+    r.is_string = 1;
+    r.ival = 0;
+    strncpy(r.sval, s, sizeof(r.sval) - 1);
+    r.sval[sizeof(r.sval) - 1] = '\0';
+    return r;
+}
+
+/*
+ * Coerce value to string representation.
+ */
+static const char *val_to_str(expr_val_t *v, char *buf, size_t bufsz)
+{
+    if (v->is_string) return v->sval;
+    snprintf(buf, bufsz, "%ld", v->ival);
+    return buf;
+}
+
+/*
+ * Parse a primary (atom): number, quoted string, symbol reference, or
+ * parenthesised sub-expression.
+ */
+static expr_val_t parse_primary(expr_parser_t *ep)
+{
+    ep_skip_ws(ep);
+    char c = ep_peek(ep);
+
+    /* Parenthesised expression */
+    if (c == '(') {
+        ep_consume(ep); /* ( */
+        expr_val_t v = parse_expr(ep);
+        ep_skip_ws(ep);
+        if (ep_peek(ep) == ')') ep_consume(ep);
+        return v;
+    }
+
+    /* Quoted string literal */
+    if (c == '"') {
+        ep_consume(ep); /* opening " */
+        char buf[DCL_MAX_VALUE];
+        size_t bi = 0;
+        while (ep->pos < ep->len) {
+            char ch = ep->input[ep->pos];
+            if (ch == '"') {
+                ep->pos++;
+                /* Doubled quote = literal " */
+                if (ep->pos < ep->len && ep->input[ep->pos] == '"') {
+                    if (bi < sizeof(buf) - 1) buf[bi++] = '"';
+                    ep->pos++;
+                } else {
+                    break;
+                }
+            } else {
+                if (bi < sizeof(buf) - 1) buf[bi++] = ch;
+                ep->pos++;
+            }
+        }
+        buf[bi] = '\0';
+        return make_str(buf);
+    }
+
+    /* Apostrophe symbol substitution: 'SYMNAME' */
+    if (c == '\'') {
+        ep_consume(ep); /* ' */
+        char symname[256];
+        size_t si = 0;
+        while (ep->pos < ep->len && si < sizeof(symname) - 1) {
+            char ch = ep->input[ep->pos];
+            if (ch == '\'') { ep->pos++; break; }
+            if (isalnum((unsigned char)ch) || ch == '_' || ch == '$') {
+                symname[si++] = ch;
+                ep->pos++;
+            } else break;
+        }
+        symname[si] = '\0';
+        const char *val = dcl_sym_get(symname);
+        if (!val) return make_int(0);
+        /* Try integer */
+        char *endp;
+        long iv = strtol(val, &endp, 0);
+        if (*endp == '\0' && val[0] != '\0') return make_int(iv);
+        return make_str(val);
+    }
+
+    /* Ampersand symbol substitution: &SYMNAME */
+    if (c == '&') {
+        ep_consume(ep); /* & */
+        char symname[256];
+        size_t si = 0;
+        while (ep->pos < ep->len && si < sizeof(symname) - 1) {
+            char ch = ep->input[ep->pos];
+            if (isalnum((unsigned char)ch) || ch == '_' || ch == '$') {
+                symname[si++] = ch;
+                ep->pos++;
+            } else break;
+        }
+        symname[si] = '\0';
+        const char *val = dcl_sym_get(symname);
+        if (!val) return make_int(0);
+        char *endp;
+        long iv = strtol(val, &endp, 0);
+        if (*endp == '\0' && val[0] != '\0') return make_int(iv);
+        return make_str(val);
+    }
+
+    /* Lexical function F$xxx(...) */
+    if ((c == 'F' || c == 'f') &&
+        ep->pos + 1 < ep->len &&
+        (ep->input[ep->pos + 1] == '$')) {
+        /* Collect to end of function call (balance parens) */
+        char buf[DCL_MAX_VALUE];
+        size_t bi = 0;
+        int depth = 0;
+        while (ep->pos < ep->len) {
+            char ch = ep->input[ep->pos];
+            if (ch == '(') depth++;
+            else if (ch == ')') {
+                if (depth == 0) break;
+                depth--;
+            } else if (depth == 0 &&
+                       (ch == ' ' || ch == '+' || ch == '-' ||
+                        ch == '*' || ch == '/')) {
+                if (ch != ' ') break;
+            }
+            if (bi < sizeof(buf) - 1) buf[bi++] = ch;
+            ep->pos++;
+        }
+        buf[bi] = '\0';
+        char result[DCL_MAX_VALUE];
+        result[0] = '\0';
+        if (ep->ctx)
+            dcl_eval_lexical(ep->ctx, buf, result, sizeof(result));
+        char *endp;
+        long iv = strtol(result, &endp, 0);
+        if (*endp == '\0' && result[0] != '\0') return make_int(iv);
+        return make_str(result);
+    }
+
+    /* Numeric literal (possibly hex with 0x prefix) */
+    if (isdigit((unsigned char)c) ||
+        (c == '-' && ep->pos + 1 < ep->len &&
+         isdigit((unsigned char)ep->input[ep->pos + 1]))) {
+        char buf[64];
+        size_t bi = 0;
+        if (c == '-') { buf[bi++] = ep_consume(ep); }
+        /* Check for hex */
+        if (ep_peek(ep) == '0' &&
+            ep->pos + 1 < ep->len &&
+            (ep->input[ep->pos + 1] == 'x' || ep->input[ep->pos + 1] == 'X')) {
+            buf[bi++] = ep_consume(ep); /* 0 */
+            buf[bi++] = ep_consume(ep); /* x */
+        }
+        while (ep->pos < ep->len && bi < sizeof(buf) - 1) {
+            char ch = ep->input[ep->pos];
+            if (isxdigit((unsigned char)ch)) {
+                buf[bi++] = ch;
+                ep->pos++;
+            } else break;
+        }
+        buf[bi] = '\0';
+        char *endp;
+        long iv = strtol(buf, &endp, 0);
+        return make_int(iv);
+    }
+
+    /* Unquoted word — treat as symbol reference or string literal */
+    if (isalpha((unsigned char)c) || c == '_' || c == '$') {
+        char word[256];
+        size_t wi = 0;
+        while (ep->pos < ep->len && wi < sizeof(word) - 1) {
+            char ch = ep->input[ep->pos];
+            if (isalnum((unsigned char)ch) || ch == '_' || ch == '$') {
+                word[wi++] = ch;
+                ep->pos++;
+            } else break;
+        }
+        word[wi] = '\0';
+
+        /* Look up as symbol first */
+        const char *val = dcl_sym_get(word);
+        if (val) {
+            char *endp;
+            long iv = strtol(val, &endp, 0);
+            if (*endp == '\0' && val[0] != '\0') return make_int(iv);
+            return make_str(val);
+        }
+        /* Not a symbol - treat as string literal */
+        return make_str(word);
+    }
+
+    /* Anything else: return 0/empty */
+    return make_int(0);
+}
+
+/*
+ * Parse multiplicative expression: factor (* | /) factor ...
+ */
+static expr_val_t parse_term(expr_parser_t *ep)
+{
+    expr_val_t left = parse_primary(ep);
+
+    while (1) {
+        ep_skip_ws(ep);
+        char op = ep_peek(ep);
+        if (op != '*' && op != '/') break;
+        ep_consume(ep);
+        ep_skip_ws(ep);
+        expr_val_t right = parse_primary(ep);
+
+        /* Integer-only operations */
+        if (left.is_string || right.is_string) {
+            /* Type error — leave left unchanged */
+            break;
+        }
+        if (op == '*') {
+            left.ival *= right.ival;
+        } else {
+            if (right.ival == 0) {
+                /* Division by zero: VMS yields 0 */
+                left.ival = 0;
+            } else {
+                left.ival /= right.ival;
+            }
+        }
+    }
+    return left;
+}
+
+/*
+ * Parse additive expression: term (('+' | '-') term) ...
+ *
+ * When both operands are integers: arithmetic.
+ * When either operand is a string:
+ *   '+' = concatenation
+ *   '-' = remove first occurrence of right from left
+ */
+static expr_val_t parse_expr(expr_parser_t *ep)
+{
+    expr_val_t left = parse_term(ep);
+
+    while (1) {
+        ep_skip_ws(ep);
+        char op = ep_peek(ep);
+        if (op != '+' && op != '-') break;
+        ep_consume(ep);
+        ep_skip_ws(ep);
+        expr_val_t right = parse_term(ep);
+
+        if (!left.is_string && !right.is_string) {
+            /* Integer arithmetic */
+            if (op == '+') left.ival += right.ival;
+            else           left.ival -= right.ival;
+        } else {
+            /* String semantics */
+            char lbuf[64], rbuf[64];
+            const char *ls = val_to_str(&left,  lbuf, sizeof(lbuf));
+            const char *rs = val_to_str(&right, rbuf, sizeof(rbuf));
+
+            if (op == '+') {
+                /* Concatenate */
+                char result[DCL_MAX_VALUE];
+                size_t ll = strlen(ls);
+                size_t rl = strlen(rs);
+                if (ll + rl >= sizeof(result))
+                    rl = sizeof(result) - ll - 1;
+                memcpy(result, ls, ll);
+                memcpy(result + ll, rs, rl);
+                result[ll + rl] = '\0';
+                left = make_str(result);
+            } else {
+                /* Remove first occurrence of rs from ls */
+                char result[DCL_MAX_VALUE];
+                const char *found = strstr(ls, rs);
+                if (found) {
+                    size_t prefix = (size_t)(found - ls);
+                    size_t rlen = strlen(rs);
+                    size_t suffix = strlen(found + rlen);
+                    if (prefix + suffix >= sizeof(result))
+                        suffix = sizeof(result) - prefix - 1;
+                    memcpy(result, ls, prefix);
+                    memcpy(result + prefix, found + rlen, suffix);
+                    result[prefix + suffix] = '\0';
+                } else {
+                    strncpy(result, ls, sizeof(result) - 1);
+                    result[sizeof(result) - 1] = '\0';
+                }
+                left = make_str(result);
+            }
+        }
+    }
+    return left;
+}
+
+/*
+ * Evaluate a DCL expression string.
+ * Performs symbol substitution then arithmetic/string evaluation.
+ * Returns the result in *out_val.
+ */
+static void eval_expr(struct dcl_context *ctx, const char *expr,
+                      expr_val_t *out_val)
+{
+    /* First pass: symbol substitution */
+    char subst[DCL_MAX_VALUE];
+    dcl_sym_substitute(expr, subst, sizeof(subst));
+
+    expr_parser_t ep;
+    ep.input = subst;
+    ep.pos   = 0;
+    ep.len   = strlen(subst);
+    ep.ctx   = ctx;
+
+    *out_val = parse_expr(&ep);
+}
+
+/*
+ * Check whether a string contains any arithmetic operator outside of
+ * quotes or parentheses. Used to decide whether to evaluate or assign
+ * as a plain string.
+ */
+static int has_arith_op(const char *s)
+{
+    int depth = 0;
+    int in_quote = 0;
+    for (const char *p = s; *p; p++) {
+        if (in_quote) {
+            if (*p == '"') {
+                /* Doubled quote: peek ahead */
+                if (*(p + 1) == '"') p++;
+                else in_quote = 0;
+            }
+            continue;
+        }
+        if (*p == '"') { in_quote = 1; continue; }
+        if (*p == '(') { depth++; continue; }
+        if (*p == ')') { depth--; continue; }
+        if (depth == 0 && (*p == '+' || *p == '-' || *p == '*' || *p == '/'))
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * -------------------------------------------------------------------------
+ * Condition evaluator
+ *
+ * Supports full boolean expressions:
+ *   .NOT. expr
+ *   expr .AND. expr
+ *   expr .OR. expr
+ *   expr .EQ.|.NE.|.LT.|.GT.|.LE.|.GE. expr     (integer)
+ *   expr .EQS.|.NES.|.LTS.|.GTS.|.LES.|.GES. expr (string)
+ *   (expr)
+ *
+ * Operator precedence (low to high):
+ *   .OR.
+ *   .AND.
+ *   .NOT.
+ *   comparison operators (.EQ., .GT., etc.)
+ *   primary (value)
+ * -------------------------------------------------------------------------
+ */
+
+/* Condition parser state */
+typedef struct {
+    const char *input;
+    size_t      pos;
+    size_t      len;
+    struct dcl_context *cctx;
+} cond_parser_t;
+
+static void cp_skip_ws(cond_parser_t *cp)
+{
+    while (cp->pos < cp->len &&
+           (cp->input[cp->pos] == ' ' || cp->input[cp->pos] == '\t'))
+        cp->pos++;
+}
+
+/*
+ * Match a dot operator at current position (case-insensitive).
+ * Returns length of operator if matched, 0 otherwise.
+ */
+static size_t cp_match_op(cond_parser_t *cp, const char *op)
+{
+    size_t oplen = strlen(op);
+    if (cp->pos + oplen > cp->len) return 0;
+    for (size_t j = 0; j < oplen; j++) {
+        if (toupper((unsigned char)cp->input[cp->pos + j]) != op[j]) return 0;
+    }
+    return oplen;
+}
+
+/* Forward declarations for recursive descent */
+static int cond_or(cond_parser_t *cp);
+static int cond_and(cond_parser_t *cp);
+static int cond_not(cond_parser_t *cp);
+static int cond_compare(cond_parser_t *cp);
+
+/*
+ * Collect a comparison operand (up to a comparison operator, .AND., .OR.,
+ * .NOT., or ')').  Performs symbol/lexical substitution.
+ */
+static void cp_collect_operand(cond_parser_t *cp, char *buf, size_t bufsz)
+{
+    cp_skip_ws(cp);
+    size_t start = cp->pos;
+    size_t end   = cp->pos;
+
+    /* Track parenthesis depth so we don't stop inside nested parens */
+    int depth = 0;
+
+    while (cp->pos < cp->len) {
+        char c = cp->input[cp->pos];
+
+        if (c == '(') { depth++; cp->pos++; end = cp->pos; continue; }
+        if (c == ')') {
+            if (depth == 0) break;
+            depth--;
+            cp->pos++;
+            end = cp->pos;
+            continue;
+        }
+
+        /* Check for any dot operator at depth 0 */
+        if (depth == 0 && c == '.') {
+            static const char *dot_ops[] = {
+                ".EQS.", ".NES.", ".LTS.", ".GTS.", ".LES.", ".GES.",
+                ".EQ.",  ".NE.",  ".LT.",  ".GT.",  ".LE.",  ".GE.",
+                ".AND.", ".OR.",  ".NOT.",
+            };
+            int found = 0;
+            for (size_t i = 0; i < sizeof(dot_ops)/sizeof(dot_ops[0]); i++) {
+                if (cp_match_op(cp, dot_ops[i])) { found = 1; break; }
+            }
+            if (found) break;
+        }
+
+        cp->pos++;
+        end = cp->pos;
+    }
+
+    /* Copy and trim */
+    size_t len = end - start;
+    if (len >= bufsz) len = bufsz - 1;
+    memcpy(buf, cp->input + start, len);
+    buf[len] = '\0';
+
+    /* Trim trailing whitespace */
+    while (len > 0 && (buf[len - 1] == ' ' || buf[len - 1] == '\t'))
+        buf[--len] = '\0';
+}
+
+/*
+ * Evaluate a single operand string: substitute symbols, lexical fns,
+ * unquote, return in buf.
+ */
+static void cp_eval_operand(cond_parser_t *cp, const char *raw,
+                            char *buf, size_t bufsz)
+{
+    /* Symbol substitution */
+    char subst[DCL_MAX_VALUE];
+    dcl_sym_substitute(raw, subst, sizeof(subst));
+
+    /* Trim */
+    char *s = subst;
+    while (*s == ' ' || *s == '\t') s++;
+    size_t slen = strlen(s);
+    while (slen > 0 && (s[slen-1] == ' ' || s[slen-1] == '\t'))
+        s[--slen] = '\0';
+
+    /* Unquote */
+    if (slen >= 2 && s[0] == '"' && s[slen-1] == '"') {
+        s[slen-1] = '\0';
+        s++;
+        slen -= 2;
+    }
+
+    /* Lexical function */
+    if (strncasecmp(s, "F$", 2) == 0 && cp->cctx) {
+        dcl_eval_lexical(cp->cctx, s, buf, bufsz);
+        return;
+    }
+
+    strncpy(buf, s, bufsz - 1);
+    buf[bufsz - 1] = '\0';
+}
+
+/*
+ * OR — lowest precedence
+ */
+static int cond_or(cond_parser_t *cp)
+{
+    int left = cond_and(cp);
+    while (1) {
+        cp_skip_ws(cp);
+        size_t adv = cp_match_op(cp, ".OR.");
+        if (!adv) break;
+        cp->pos += adv;
+        int right = cond_and(cp);
+        left = left || right;
+    }
+    return left;
+}
+
+/*
+ * AND
+ */
+static int cond_and(cond_parser_t *cp)
+{
+    int left = cond_not(cp);
+    while (1) {
+        cp_skip_ws(cp);
+        size_t adv = cp_match_op(cp, ".AND.");
+        if (!adv) break;
+        cp->pos += adv;
+        int right = cond_not(cp);
+        left = left && right;
+    }
+    return left;
+}
+
+/*
+ * NOT
+ */
+static int cond_not(cond_parser_t *cp)
+{
+    cp_skip_ws(cp);
+    size_t adv = cp_match_op(cp, ".NOT.");
+    if (adv) {
+        cp->pos += adv;
+        return !cond_not(cp);
+    }
+    return cond_compare(cp);
+}
+
+/*
+ * Comparison: operand [.OP. operand]
+ */
+static int cond_compare(cond_parser_t *cp)
+{
+    cp_skip_ws(cp);
+
+    /* Parenthesised sub-expression */
+    if (cp->pos < cp->len && cp->input[cp->pos] == '(') {
+        cp->pos++; /* ( */
+        int v = cond_or(cp);
+        cp_skip_ws(cp);
+        if (cp->pos < cp->len && cp->input[cp->pos] == ')') cp->pos++;
+        return v;
+    }
+
+    /* Collect left operand */
+    char lraw[DCL_MAX_VALUE];
+    cp_collect_operand(cp, lraw, sizeof(lraw));
+
+    /* Check for comparison operator */
+    cp_skip_ws(cp);
+
     static const struct {
         const char *op;
         int is_string;
-        int type;  /* 0=eq, 1=ne, 2=lt, 3=gt, 4=le, 5=ge */
-    } ops[] = {
+        int type;  /* 0=eq 1=ne 2=lt 3=gt 4=le 5=ge */
+    } cmp_ops[] = {
         { ".EQS.", 1, 0 }, { ".NES.", 1, 1 },
         { ".LTS.", 1, 2 }, { ".GTS.", 1, 3 },
         { ".LES.", 1, 4 }, { ".GES.", 1, 5 },
@@ -55,121 +670,93 @@ static int eval_condition(struct dcl_context *ctx, const char *expr)
         { ".LE.",  0, 4 }, { ".GE.",  0, 5 },
     };
 
-    for (size_t i = 0; i < sizeof(ops) / sizeof(ops[0]); i++) {
-        /* Case-insensitive search for operator */
-        const char *p = expr;
-        while (*p) {
-            size_t oplen = strlen(ops[i].op);
-            int match = 1;
-            for (size_t j = 0; j < oplen && p[j]; j++) {
-                if (toupper((unsigned char)p[j]) != ops[i].op[j]) {
-                    match = 0;
-                    break;
-                }
+    for (size_t i = 0; i < sizeof(cmp_ops)/sizeof(cmp_ops[0]); i++) {
+        size_t adv = cp_match_op(cp, cmp_ops[i].op);
+        if (!adv) continue;
+        cp->pos += adv;
+
+        char rraw[DCL_MAX_VALUE];
+        cp_collect_operand(cp, rraw, sizeof(rraw));
+
+        char lval[DCL_MAX_VALUE], rval[DCL_MAX_VALUE];
+        cp_eval_operand(cp, lraw, lval, sizeof(lval));
+        cp_eval_operand(cp, rraw, rval, sizeof(rval));
+
+        if (cmp_ops[i].is_string) {
+            int cmp = strcmp(lval, rval);
+            switch (cmp_ops[i].type) {
+                case 0: return (cmp == 0);
+                case 1: return (cmp != 0);
+                case 2: return (cmp < 0);
+                case 3: return (cmp > 0);
+                case 4: return (cmp <= 0);
+                case 5: return (cmp >= 0);
             }
-            if (match) {
-                /* Extract left and right operands */
-                char left[1024] = {0};
-                char right[1024] = {0};
-
-                size_t llen = (size_t)(p - expr);
-                if (llen >= sizeof(left)) llen = sizeof(left) - 1;
-                memcpy(left, expr, llen);
-                left[llen] = '\0';
-
-                const char *r = p + strlen(ops[i].op);
-                strncpy(right, r, sizeof(right) - 1);
-                right[sizeof(right) - 1] = '\0';
-
-                /* Trim whitespace */
-                char *ls = left;
-                while (*ls == ' ' || *ls == '\t') ls++;
-                size_t ll = strlen(ls);
-                while (ll > 0 && (ls[ll - 1] == ' ' || ls[ll - 1] == '\t'))
-                    ls[--ll] = '\0';
-
-                char *rs = right;
-                while (*rs == ' ' || *rs == '\t') rs++;
-                size_t rl = strlen(rs);
-                while (rl > 0 && (rs[rl - 1] == ' ' || rs[rl - 1] == '\t'))
-                    rs[--rl] = '\0';
-
-                /* Unquote strings */
-                if (ll >= 2 && ls[0] == '"' && ls[ll - 1] == '"') {
-                    ls[ll - 1] = '\0'; ls++;
-                }
-                if (rl >= 2 && rs[0] == '"' && rs[rl - 1] == '"') {
-                    rs[rl - 1] = '\0'; rs++;
-                }
-
-                /* Evaluate lexical functions if present */
-                char lval[1024], rval[1024];
-                if (strncasecmp(ls, "F$", 2) == 0) {
-                    dcl_eval_lexical(ctx, ls, lval, sizeof(lval));
-                    ls = lval;
-                } else {
-                    strncpy(lval, ls, sizeof(lval) - 1);
-                    ls = lval;
-                }
-                if (strncasecmp(rs, "F$", 2) == 0) {
-                    dcl_eval_lexical(ctx, rs, rval, sizeof(rval));
-                    rs = rval;
-                } else {
-                    strncpy(rval, rs, sizeof(rval) - 1);
-                    rs = rval;
-                }
-
-                int result;
-                if (ops[i].is_string) {
-                    int cmp = strcmp(ls, rs);
-                    switch (ops[i].type) {
-                        case 0: result = (cmp == 0); break;
-                        case 1: result = (cmp != 0); break;
-                        case 2: result = (cmp < 0); break;
-                        case 3: result = (cmp > 0); break;
-                        case 4: result = (cmp <= 0); break;
-                        case 5: result = (cmp >= 0); break;
-                        default: result = 0;
-                    }
-                } else {
-                    long lv = strtol(ls, NULL, 0);
-                    long rv = strtol(rs, NULL, 0);
-                    switch (ops[i].type) {
-                        case 0: result = (lv == rv); break;
-                        case 1: result = (lv != rv); break;
-                        case 2: result = (lv < rv); break;
-                        case 3: result = (lv > rv); break;
-                        case 4: result = (lv <= rv); break;
-                        case 5: result = (lv >= rv); break;
-                        default: result = 0;
-                    }
-                }
-                return result;
+        } else {
+            long lv, rv;
+            /* Try to resolve as symbol if not purely numeric */
+            char *ep;
+            lv = strtol(lval, &ep, 0);
+            if (*ep != '\0') {
+                const char *sv = dcl_sym_get(lval);
+                lv = sv ? strtol(sv, NULL, 0) : 0;
             }
-            p++;
+            rv = strtol(rval, &ep, 0);
+            if (*ep != '\0') {
+                const char *sv = dcl_sym_get(rval);
+                rv = sv ? strtol(sv, NULL, 0) : 0;
+            }
+            switch (cmp_ops[i].type) {
+                case 0: return (lv == rv);
+                case 1: return (lv != rv);
+                case 2: return (lv < rv);
+                case 3: return (lv > rv);
+                case 4: return (lv <= rv);
+                case 5: return (lv >= rv);
+            }
         }
     }
 
-    /* No operator found - treat as boolean:
-     * non-empty non-zero string = true
-     * "TRUE" = true, "FALSE" = false
-     * 0 = false, non-zero = true */
-    const char *p = expr;
-    while (*p == ' ' || *p == '\t') p++;
-    char val[256];
-    strncpy(val, p, sizeof(val) - 1);
-    val[sizeof(val) - 1] = '\0';
-    size_t vlen = strlen(val);
-    while (vlen > 0 && (val[vlen - 1] == ' ' || val[vlen - 1] == '\t'))
-        val[--vlen] = '\0';
+    /* No comparison operator — treat as boolean value */
+    char lval[DCL_MAX_VALUE];
+    cp_eval_operand(cp, lraw, lval, sizeof(lval));
 
-    if (strcasecmp(val, "TRUE") == 0 || strcasecmp(val, "1") == 0) return 1;
-    if (strcasecmp(val, "FALSE") == 0 || strcasecmp(val, "0") == 0 ||
-        val[0] == '\0') return 0;
+    if (strcasecmp(lval, "TRUE") == 0)  return 1;
+    if (strcasecmp(lval, "FALSE") == 0) return 0;
+    if (lval[0] == '\0') return 0;
 
-    /* Try numeric */
-    long v = strtol(val, NULL, 0);
+    char *ep;
+    long v = strtol(lval, &ep, 0);
     return (v != 0) ? 1 : 0;
+}
+
+/*
+ * Evaluate a DCL IF condition string.
+ * Returns 1 if true, 0 if false.
+ *
+ * Supports:
+ *   .NOT. expr
+ *   expr .AND. expr
+ *   expr .OR. expr
+ *   expr .EQ.|.NE.|.LT.|.GT.|.LE.|.GE. expr
+ *   expr .EQS.|.NES.|.LTS.|.GTS.|.LES.|.GES. expr
+ *   (expr)
+ */
+static int eval_condition(struct dcl_context *ctx, const char *expr)
+{
+    if (!expr) return 0;
+
+    /* Symbol-substitute the entire condition first */
+    char subst[DCL_MAX_LINE];
+    dcl_sym_substitute(expr, subst, sizeof(subst));
+
+    cond_parser_t cp;
+    cp.input = subst;
+    cp.pos   = 0;
+    cp.len   = strlen(subst);
+    cp.cctx  = ctx;
+
+    return cond_or(&cp);
 }
 
 /*
@@ -236,27 +823,59 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
         while (len > 0 && (trimmed[len - 1] == ' ' || trimmed[len - 1] == '\t'))
             trimmed[--len] = '\0';
 
-        /* Remove surrounding quotes from string values */
-        if (len >= 2 && trimmed[0] == '"' && trimmed[len - 1] == '"') {
-            trimmed[len - 1] = '\0';
-            memmove(trimmed, trimmed + 1, len - 1);
-        }
-
-        /* Check if it's a lexical function */
-        if (strncasecmp(trimmed, "F$", 2) == 0) {
+        /* Check if it's a lexical function with no operators */
+        if (strncasecmp(trimmed, "F$", 2) == 0 && !has_arith_op(trimmed)) {
             char result[DCL_MAX_VALUE];
             dcl_eval_lexical(ctx, trimmed, result, sizeof(result));
-            dcl_sym_set(cmd->verb, result, scope);
-        } else {
-            /* Check for arithmetic expression */
-            /* For now, handle simple integer expressions */
+            /* Try to store as integer */
             char *endp;
-            long val = strtol(trimmed, &endp, 0);
-            if (*endp == '\0' && trimmed[0] != '\0') {
-                /* Pure integer */
+            long val = strtol(result, &endp, 0);
+            if (*endp == '\0' && result[0] != '\0')
                 dcl_sym_set_int(cmd->verb, (int32_t)val, scope);
+            else
+                dcl_sym_set(cmd->verb, result, scope);
+        } else if (has_arith_op(trimmed)) {
+            /* Expression evaluation (arithmetic or string ops) */
+            expr_val_t result;
+            eval_expr(ctx, trimmed, &result);
+            if (result.is_string) {
+                dcl_sym_set(cmd->verb, result.sval, scope);
             } else {
-                dcl_sym_set(cmd->verb, trimmed, scope);
+                dcl_sym_set_int(cmd->verb, (int32_t)result.ival, scope);
+            }
+        } else {
+            /* Simple value: perform symbol substitution, then assign */
+            char subst[DCL_MAX_VALUE];
+            dcl_sym_substitute(trimmed, subst, sizeof(subst));
+
+            /* Remove surrounding quotes */
+            size_t slen = strlen(subst);
+            char *sv = subst;
+            if (slen >= 2 && sv[0] == '"' && sv[slen - 1] == '"') {
+                sv[slen - 1] = '\0';
+                sv++;
+                slen -= 2;
+            }
+
+            /* Lexical function after substitution */
+            if (strncasecmp(sv, "F$", 2) == 0) {
+                char result[DCL_MAX_VALUE];
+                dcl_eval_lexical(ctx, sv, result, sizeof(result));
+                char *endp;
+                long val = strtol(result, &endp, 0);
+                if (*endp == '\0' && result[0] != '\0')
+                    dcl_sym_set_int(cmd->verb, (int32_t)val, scope);
+                else
+                    dcl_sym_set(cmd->verb, result, scope);
+            } else {
+                /* Try integer */
+                char *endp;
+                long val = strtol(sv, &endp, 0);
+                if (*endp == '\0' && sv[0] != '\0') {
+                    dcl_sym_set_int(cmd->verb, (int32_t)val, scope);
+                } else {
+                    dcl_sym_set(cmd->verb, sv, scope);
+                }
             }
         }
     }
@@ -302,30 +921,48 @@ int dcl_execute_command(struct dcl_command *cmd)
 
     /* Handle special verbs that aren't in the command table */
     if (strcasecmp(cmd->verb, "IF") == 0) {
-        /* Parse: IF condition THEN command */
-        /* The condition and THEN clause are in the params */
-        /* Reconstruct the condition from params */
+        /* Parse: IF condition THEN command
+         * cmd->rest holds everything after "IF " on the line.
+         * We split on the keyword THEN (case-insensitive, surrounded by spaces
+         * or at start/end of tokens).  We do a case-insensitive scan for
+         * " THEN " (or " THEN" at end) to find the split point.
+         */
         char condition[DCL_MAX_LINE] = {0};
         char then_cmd[DCL_MAX_LINE] = {0};
         int found_then = 0;
 
-        for (int i = 0; i < cmd->param_count; i++) {
-            if (strcasecmp(cmd->params[i], "THEN") == 0) {
+        /* Search for THEN as a whole word in cmd->rest */
+        const char *rest = cmd->rest;
+        const char *p = rest;
+        while (*p) {
+            /* Look for THEN as a word boundary */
+            if ((p == rest || p[-1] == ' ' || p[-1] == '\t') &&
+                strncasecmp(p, "THEN", 4) == 0 &&
+                (p[4] == '\0' || p[4] == ' ' || p[4] == '\t')) {
+                /* Found THEN */
+                size_t clen = (size_t)(p - rest);
+                /* Trim trailing whitespace from condition */
+                while (clen > 0 && (rest[clen-1] == ' ' || rest[clen-1] == '\t'))
+                    clen--;
+                if (clen >= sizeof(condition)) clen = sizeof(condition) - 1;
+                memcpy(condition, rest, clen);
+                condition[clen] = '\0';
+
+                /* Skip "THEN" and leading whitespace */
+                const char *after = p + 4;
+                while (*after == ' ' || *after == '\t') after++;
+                strncpy(then_cmd, after, sizeof(then_cmd) - 1);
+                then_cmd[sizeof(then_cmd) - 1] = '\0';
                 found_then = 1;
-                /* Collect the rest as the THEN command */
-                for (int j = i + 1; j < cmd->param_count; j++) {
-                    if (then_cmd[0]) strncat(then_cmd, " ",
-                                             sizeof(then_cmd) - strlen(then_cmd) - 1);
-                    strncat(then_cmd, cmd->params[j],
-                            sizeof(then_cmd) - strlen(then_cmd) - 1);
-                }
                 break;
-            } else {
-                if (condition[0]) strncat(condition, " ",
-                                          sizeof(condition) - strlen(condition) - 1);
-                strncat(condition, cmd->params[i],
-                        sizeof(condition) - strlen(condition) - 1);
             }
+            p++;
+        }
+
+        if (!found_then) {
+            /* No THEN found — entire rest is the condition */
+            strncpy(condition, rest, sizeof(condition) - 1);
+            condition[sizeof(condition) - 1] = '\0';
         }
 
         int cond_result = eval_condition(ctx, condition);

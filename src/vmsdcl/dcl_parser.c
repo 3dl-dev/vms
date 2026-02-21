@@ -265,6 +265,14 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
     /* Regular command: verb [subcommand] [params] [/qualifiers] */
     str_upcase_copy(cmd->verb, tok.value, sizeof(cmd->verb));
 
+    /* IF is handled specially: store the entire rest of line in cmd->rest
+     * so the executor can parse condition and THEN clause without hitting
+     * the DCL_MAX_PARAMS limit. */
+    if (strcasecmp(cmd->verb, "IF") == 0) {
+        collect_rest(&lex, cmd->rest, sizeof(cmd->rest));
+        return 0;
+    }
+
     /* Parse the rest of the tokens */
     while (1) {
         if (dcl_lexer_next(&lex, &tok) != 0) break;

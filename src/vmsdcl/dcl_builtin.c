@@ -24,6 +24,10 @@
 #include <sys/utsname.h>
 #include <utmpx.h>
 #include <limits.h>
+#include <sys/statvfs.h>
+#include <sys/ioctl.h>
+#include <termios.h>
+#include <mntent.h>
 
 #include "dcl/context.h"
 #include "dcl/parser.h"
@@ -76,6 +80,10 @@ static const char *vms_months[] = {
 /* ================================================================== */
 /*                          SHOW Commands                              */
 /* ================================================================== */
+
+/* Forward declarations for helper functions used by cmd_show_process */
+static int cmd_show_process_privileges(struct dcl_context *ctx);
+static int cmd_show_process_quotas(struct dcl_context *ctx);
 
 /*
  * SHOW TIME - Display current date and time in VMS format.
@@ -220,6 +228,66 @@ static int cmd_show_logical(struct dcl_command *cmd)
 }
 
 /*
+ * Helper: read CPU time from /proc/pid/stat and format as VMS HH:MM:SS.CC.
+ * Fields 14 (utime) and 15 (stime) are in clock ticks.
+ * Returns 1 on success, 0 on failure.  cpu_str must be >= 14 bytes.
+ */
+static int read_proc_cpu(int pid, char *cpu_str, size_t cpu_len)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
+
+    /* /proc/pid/stat: pid (comm) state ppid ... utime stime ...
+     * We need to skip past the comm field (may contain spaces/parens) */
+    char line[1024];
+    if (!fgets(line, sizeof(line), fp)) {
+        fclose(fp);
+        return 0;
+    }
+    fclose(fp);
+
+    /* Find closing ')' of comm field */
+    char *p = strrchr(line, ')');
+    if (!p) return 0;
+    p++; /* skip ')' */
+
+    /* Now parse: state ppid pgrp session tty_nr tpgid flags
+     * minflt cminflt majflt cmajflt utime stime
+     * That's 12 more fields after ')' */
+    unsigned long utime = 0, stime = 0;
+    char state;
+    long ppid, pgrp, session, tty_nr, tpgid;
+    unsigned long flags, minflt, cminflt, majflt, cmajflt;
+
+    if (sscanf(p, " %c %ld %ld %ld %ld %ld %lu %lu %lu %lu %lu %lu %lu",
+               &state, &ppid, &pgrp, &session, &tty_nr, &tpgid,
+               &flags, &minflt, &cminflt, &majflt, &cmajflt,
+               &utime, &stime) < 13) {
+        /* Fallback: scan as individual fields */
+        utime = 0; stime = 0;
+    }
+
+    long hz = sysconf(_SC_CLK_TCK);
+    if (hz <= 0) hz = 100;
+
+    unsigned long total_ticks = utime + stime;
+    unsigned long total_sec   = total_ticks / (unsigned long)hz;
+    unsigned long centisec    = (total_ticks % (unsigned long)hz) * 100UL /
+                                (unsigned long)hz;
+    unsigned long hh = total_sec / 3600;
+    unsigned long mm = (total_sec % 3600) / 60;
+    unsigned long ss = total_sec % 60;
+
+    snprintf(cpu_str, cpu_len, "%lu %02lu:%02lu:%02lu.%02lu",
+             hh / 24,          /* days (usually 0) */
+             hh % 24, mm, ss, centisec);
+
+    return 1;
+}
+
+/*
  * SHOW SYSTEM - Show process list (like VMS SHOW SYSTEM).
  */
 static int cmd_show_system(struct dcl_command *cmd)
@@ -240,9 +308,12 @@ static int cmd_show_system(struct dcl_command *cmd)
            (int)(ts.tv_nsec / 10000000));
     printf("  Pid    Process Name    State  Pri      I/O       CPU"
            "       Page flts  Pages\n");
+
+    /* Show the current process first */
+    char self_cpu[32] = "0 00:00:00.00";
+    read_proc_cpu((int)getpid(), self_cpu, sizeof(self_cpu));
     printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
-           (unsigned)getpid(), "OVMX", "HIB", 4, 0,
-           "0 00:00:00.00", 0, 0);
+           (unsigned)getpid(), "OVMX", "HIB", 4, 0, self_cpu, 0, 0);
 
     /* Read /proc to list processes */
     DIR *proc_dir = opendir("/proc");
@@ -254,7 +325,7 @@ static int cmd_show_system(struct dcl_command *cmd)
             if (!isdigit((unsigned char)entry->d_name[0])) continue;
 
             int pid = atoi(entry->d_name);
-            if (pid <= 0) continue;
+            if (pid <= 0 || pid == (int)getpid()) continue;
 
             /* Read process name from /proc/pid/comm */
             char path[256];
@@ -280,9 +351,12 @@ static int cmd_show_system(struct dcl_command *cmd)
             for (size_t i = 0; pname[i]; i++)
                 pname[i] = (char)toupper((unsigned char)pname[i]);
 
+            /* Read CPU time */
+            char cpu_str[32] = "0 00:00:00.00";
+            read_proc_cpu(pid, cpu_str, sizeof(cpu_str));
+
             printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
-                   (unsigned)pid, pname, "COM", 4, 0,
-                   "0 00:00:00.00", 0, 0);
+                   (unsigned)pid, pname, "COM", 4, 0, cpu_str, 0, 0);
             count++;
         }
         closedir(proc_dir);
@@ -293,11 +367,20 @@ static int cmd_show_system(struct dcl_command *cmd)
 
 /*
  * SHOW PROCESS - Show current process information.
+ * Supports /PRIVILEGES and /QUOTAS qualifiers.
  */
 static int cmd_show_process(struct dcl_command *cmd)
 {
-    (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
+
+    /* Check for /PRIVILEGES qualifier */
+    if (dcl_has_qualifier(cmd, "PRIVILEGES"))
+        return cmd_show_process_privileges(ctx);
+
+    /* Check for /QUOTAS qualifier */
+    if (dcl_has_qualifier(cmd, "QUOTAS"))
+        return cmd_show_process_quotas(ctx);
+
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
@@ -486,6 +569,377 @@ static int cmd_show_protection(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/*
+ * SHOW DEVICE - List mounted filesystems as VMS devices.
+ */
+static int cmd_show_device(struct dcl_command *cmd)
+{
+    (void)cmd;
+
+    printf("Device                  Device           Error    Volume"
+           "         Free  Trans Mnt\n");
+    printf(" Name                   Status           Count     Label"
+           "        Blocks Count Cnt\n");
+
+    FILE *fp = fopen("/proc/mounts", "r");
+    if (!fp) {
+        /* Fallback: show at least root */
+        struct statvfs svfs;
+        if (statvfs("/", &svfs) == 0) {
+            unsigned long long free_blocks =
+                (unsigned long long)svfs.f_bavail *
+                (svfs.f_bsize / 512 ? svfs.f_bsize / 512 : 1);
+            printf("$1$DGA0:              Mounted              0  %-14s%9llu     1   1\n",
+                   "OVMXSYS", free_blocks);
+        }
+        return SS$_NORMAL;
+    }
+
+    char line[512];
+    int dev_index = 0;
+    while (fgets(line, sizeof(line), fp) && dev_index < 16) {
+        char dev[256], mntpt[256], fstype[64], opts[256];
+        int freq, passno;
+        if (sscanf(line, "%255s %255s %63s %255s %d %d",
+                   dev, mntpt, fstype, opts, &freq, &passno) < 3)
+            continue;
+
+        /* Skip pseudo filesystems */
+        if (strcmp(fstype, "proc") == 0 || strcmp(fstype, "sysfs") == 0 ||
+            strcmp(fstype, "devtmpfs") == 0 || strcmp(fstype, "tmpfs") == 0 ||
+            strcmp(fstype, "cgroup") == 0 || strcmp(fstype, "cgroup2") == 0 ||
+            strcmp(fstype, "devpts") == 0 || strcmp(fstype, "mqueue") == 0 ||
+            strcmp(fstype, "hugetlbfs") == 0 || strcmp(fstype, "pstore") == 0 ||
+            strcmp(fstype, "securityfs") == 0 || strcmp(fstype, "debugfs") == 0 ||
+            strcmp(fstype, "bpf") == 0 || strcmp(fstype, "tracefs") == 0)
+            continue;
+
+        /* Build VMS device name */
+        char vms_dev[32];
+        snprintf(vms_dev, sizeof(vms_dev), "$1$DGA%d:", dev_index);
+
+        /* Build a short label from mount point */
+        char label[16];
+        if (strcmp(mntpt, "/") == 0) {
+            strncpy(label, "OVMXSYS", sizeof(label) - 1);
+        } else {
+            /* Use last path component, uppercased, max 12 chars */
+            char *last = strrchr(mntpt, '/');
+            const char *base = last ? last + 1 : mntpt;
+            size_t li;
+            for (li = 0; li < sizeof(label) - 1 && base[li]; li++)
+                label[li] = (char)toupper((unsigned char)base[li]);
+            label[li] = '\0';
+            if (li == 0) {
+                strncpy(label, "DISK", sizeof(label) - 1);
+                label[sizeof(label) - 1] = '\0';
+            }
+        }
+
+        /* Get free blocks (512-byte) */
+        unsigned long long free_512 = 0;
+        struct statvfs svfs;
+        if (statvfs(mntpt, &svfs) == 0) {
+            unsigned long bsize = svfs.f_bsize ? svfs.f_bsize : 512;
+            free_512 = (unsigned long long)svfs.f_bavail * (bsize / 512 + (bsize % 512 ? 1 : 0));
+        }
+
+        printf("%-24s Mounted              0  %-14s%9llu     1   1\n",
+               vms_dev, label, free_512);
+        dev_index++;
+    }
+    fclose(fp);
+
+    if (dev_index == 0) {
+        /* Nothing printed — show a stub */
+        printf("$1$DGA0:              Mounted              0  %-14s%9d     1   1\n",
+               "OVMXSYS", 0);
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW MEMORY - Display physical memory usage.
+ */
+static int cmd_show_memory(struct dcl_command *cmd)
+{
+    (void)cmd;
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm;
+    localtime_r(&ts.tv_sec, &tm);
+
+    /* Read /proc/meminfo */
+    long total_kb = 0, free_kb = 0, available_kb = 0;
+    long buffers_kb = 0, cached_kb = 0;
+    FILE *fp = fopen("/proc/meminfo", "r");
+    if (fp) {
+        char line[256];
+        while (fgets(line, sizeof(line), fp)) {
+            long val = 0;
+            if (sscanf(line, "MemTotal: %ld", &val) == 1)      total_kb = val;
+            else if (sscanf(line, "MemFree: %ld", &val) == 1)  free_kb = val;
+            else if (sscanf(line, "MemAvailable: %ld", &val) == 1) available_kb = val;
+            else if (sscanf(line, "Buffers: %ld", &val) == 1)  buffers_kb = val;
+            else if (sscanf(line, "Cached: %ld", &val) == 1)   cached_kb = val;
+        }
+        fclose(fp);
+    }
+
+    /* VMS uses 512-byte pages */
+    long page_size_bytes = 512;
+    long total_pages  = (total_kb  * 1024L) / page_size_bytes;
+    long free_pages   = (free_kb   * 1024L) / page_size_bytes;
+    long avail_pages  = (available_kb * 1024L) / page_size_bytes;
+    long buf_pages    = (buffers_kb * 1024L) / page_size_bytes;
+    long cached_pages = (cached_kb  * 1024L) / page_size_bytes;
+    long inuse_pages  = total_pages - free_pages;
+    double total_mb   = (double)total_kb / 1024.0;
+
+    printf("\n              System Memory Resources on %2d-%s-%04d"
+           " %02d:%02d:%02d.%02d\n\n",
+           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+           tm.tm_hour, tm.tm_min, tm.tm_sec,
+           (int)(ts.tv_nsec / 10000000));
+    printf("Physical Memory Usage (pages):\n");
+    printf("    Total Physical Pages   %9ld   Main Memory (MB)   %9.2f\n",
+           total_pages, total_mb);
+    printf("    Free List Size         %9ld\n", free_pages);
+    printf("    Modified List Size     %9ld\n", buf_pages + cached_pages);
+    printf("    Available              %9ld\n", avail_pages);
+    printf("    In Use                 %9ld\n", inuse_pages);
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW STATUS - Display last command exit status.
+ */
+static int cmd_show_status(struct dcl_command *cmd)
+{
+    (void)cmd;
+    struct dcl_context *ctx = dcl_get_context();
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    struct tm tm;
+    localtime_r(&ts.tv_sec, &tm);
+
+    uint32_t status = ctx->last_status ? ctx->last_status : SS$_NORMAL;
+
+    /* Determine severity and message */
+    int severity = status & 7;
+    const char *sev_str;
+    const char *fac_str = "SYSTEM";
+    const char *msg;
+
+    switch (severity) {
+    case 1: sev_str = "S"; break;
+    case 0: sev_str = "W"; break;
+    case 2: sev_str = "E"; break;
+    case 4: sev_str = "F"; break;
+    default: sev_str = "I"; break;
+    }
+
+    if (status == SS$_NORMAL)
+        msg = "normal successful completion";
+    else if (status == 0)
+        msg = "image exit";
+    else
+        msg = "condition";
+
+    printf("  Status at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+           tm.tm_hour, tm.tm_min, tm.tm_sec,
+           (int)(ts.tv_nsec / 10000000));
+    printf("  Condition value: %%X%08X\n", status);
+    printf("  Message: %%%s-%s-NORMAL, %s\n", fac_str, sev_str, msg);
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW TERMINAL - Display terminal characteristics.
+ */
+static int cmd_show_terminal(struct dcl_command *cmd)
+{
+    (void)cmd;
+    struct dcl_context *ctx = dcl_get_context();
+
+    int width = 80, height = 24;
+    int is_vt100 = 1;
+
+    /* Try to get terminal size */
+    struct winsize ws;
+    memset(&ws, 0, sizeof(ws));
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+        if (ws.ws_col > 0) width  = (int)ws.ws_col;
+        if (ws.ws_row > 0) height = (int)ws.ws_row;
+    }
+
+    /* Terminal name */
+    const char *term_name = "_FTA0:";
+    char *term_env = getenv("TERM");
+    if (term_env && (strncasecmp(term_env, "vt", 2) == 0 ||
+                     strncasecmp(term_env, "xterm", 5) == 0))
+        is_vt100 = 1;
+    else if (term_env && strncasecmp(term_env, "ansi", 4) == 0)
+        is_vt100 = 1;
+
+    (void)is_vt100;
+
+    const char *owner = ctx->username[0] ? ctx->username : "SYSTEM";
+
+    printf("Terminal: %-12s Device_Type: VT100         Owner: %s\n\n",
+           term_name, owner);
+    printf("Terminal Characteristics:\n");
+    printf("  Interactive         Echo               Type_ahead          Hostsync\n");
+    printf("  TTsync              Lowercase          Tab                 Wrap\n");
+    printf("  Width: %3d          Page: %3d\n", width, height);
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW PROCESS /PRIVILEGES - Display process privilege mask.
+ */
+static int cmd_show_process_privileges(struct dcl_context *ctx)
+{
+    /* Known VMS privileges in approximate display order */
+    static const struct {
+        const char *name;
+        uint64_t    bit;
+        const char *desc;
+    } privs[] = {
+        { "TMPMBX",  (1ULL << 0),  "may create temporary mailbox"   },
+        { "NETMBX",  (1ULL << 1),  "may create network device"      },
+        { "GRPNAM",  (1ULL << 2),  "may insert in group logical name table" },
+        { "SYSNAM",  (1ULL << 3),  "may insert in system logical name table" },
+        { "OPER",    (1ULL << 4),  "operator privilege"             },
+        { "SYSPRV",  (1ULL << 5),  "may access objects via system protection" },
+        { "BYPASS",  (1ULL << 6),  "may bypass object access control" },
+        { "CMKRNL",  (1ULL << 7),  "may change mode to kernel"      },
+        { "CMEXEC",  (1ULL << 8),  "may change mode to executive"   },
+        { "SYSNAM",  (1ULL << 9),  "may insert in system logical name table" },
+        { "MOUNT",   (1ULL << 10), "may execute mount volume QIO"   },
+        { "VOLPRO",  (1ULL << 11), "may override volume protection" },
+        { "PHY_IO",  (1ULL << 12), "may issue physical I/O"         },
+        { "LOG_IO",  (1ULL << 13), "may issue logical I/O"          },
+        { "PSWAPM",  (1ULL << 14), "may change process swap mode"   },
+        { "DETACH",  (1ULL << 15), "may create detached processes"  },
+        { "ACNT",    (1ULL << 16), "may disable accounting"         },
+        { "PRMCEB",  (1ULL << 17), "may create permanent common event flag" },
+        { "PRMGBL",  (1ULL << 18), "may create permanent global sections" },
+        { "PRMMBX",  (1ULL << 19), "may create permanent mailbox"   },
+        { "EXQUOTA", (1ULL << 20), "may exceed disk quota"          },
+        { "ALTPRI",  (1ULL << 21), "may set any base priority"      },
+        { "SETPRV",  (1ULL << 22), "may set any privilege"          },
+        { "WORLD",   (1ULL << 23), "may affect other processes in system" },
+        { "SHARE",   (1ULL << 24), "may assign channel to non-shared device" },
+        { NULL, 0, NULL }
+    };
+
+    /* Read privileges: from context (set via VMS_PRIVILEGES env var), else default */
+    uint64_t privmask = ctx->privileges;
+    if (privmask == 0) {
+        /* Default: give TMPMBX and NETMBX */
+        privmask = (1ULL << 0) | (1ULL << 1);
+    }
+
+    printf("Process privileges:\n");
+    int found = 0;
+    for (int i = 0; privs[i].name; i++) {
+        if (privmask & privs[i].bit) {
+            printf(" %-16s %s\n", privs[i].name, privs[i].desc);
+            found++;
+        }
+    }
+    if (!found)
+        printf(" (no privileges enabled)\n");
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW PROCESS /QUOTAS - Display process quotas.
+ */
+static int cmd_show_process_quotas(struct dcl_context *ctx)
+{
+    const char *acct = ctx->username[0] ? ctx->username : "SYSTEM";
+
+    printf("Process Quotas:\n");
+    printf(" Account name: %s\n", acct);
+    printf(" CPU limit:                      Infinite"
+           "  Direct I/O limit:        40\n");
+    printf(" Buffered I/O byte count quota:    32768"
+           "  Buffered I/O limit:      40\n");
+    printf(" Timer queue entry quota:            30"
+           "  Open file quota:         40\n");
+    printf(" Paging file quota:              32768"
+           "  Subprocess quota:         8\n");
+    printf(" AST quota:                        40"
+           "  Enqueue quota:          300\n");
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW TRANSLATION - Translate a logical name (show full chain).
+ */
+static int cmd_show_translation(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 2) {
+        dcl_error("DCL", 2, "NOKEYW",
+                  "missing logical name - supply name to translate");
+        return SS$_BADPARAM;
+    }
+
+    const char *logname = cmd->params[1];
+
+    /* Uppercase for display */
+    char upper_name[256];
+    size_t i;
+    for (i = 0; i < sizeof(upper_name) - 1 && logname[i]; i++)
+        upper_name[i] = (char)toupper((unsigned char)logname[i]);
+    upper_name[i] = '\0';
+
+    char value[256];
+    if (dcl_translate_logical(logname, value, sizeof(value)) != 0) {
+        dcl_error("DCL", 0, "NOLOG", "no logical name match");
+        return SS$_NOLOGNAM;
+    }
+
+    /* Print translation chain (resolve iteratively up to 8 levels) */
+    printf("   \"%s\" = \"%s\"\n", upper_name, value);
+
+    char current[256];
+    strncpy(current, value, sizeof(current) - 1);
+    current[sizeof(current) - 1] = '\0';
+
+    int depth = 0;
+    while (depth < 8) {
+        char next[256];
+        if (dcl_translate_logical(current, next, sizeof(next)) != 0)
+            break;
+        /* Avoid cycles */
+        if (strcmp(next, current) == 0) break;
+
+        /* Uppercase current for display */
+        char upper_cur[256];
+        for (i = 0; i < sizeof(upper_cur) - 1 && current[i]; i++)
+            upper_cur[i] = (char)toupper((unsigned char)current[i]);
+        upper_cur[i] = '\0';
+
+        printf("   \"%s\" = \"%s\"\n", upper_cur, next);
+        strncpy(current, next, sizeof(current) - 1);
+        current[sizeof(current) - 1] = '\0';
+        depth++;
+    }
+
+    return SS$_NORMAL;
+}
+
 /* ================================================================== */
 /*                          SHOW Dispatcher                            */
 /* ================================================================== */
@@ -517,6 +971,16 @@ static int cmd_show(struct dcl_command *cmd)
         return cmd_show_verify(cmd);
     if (dcl_match_command(subcmd, "PROTECTION", 3))
         return cmd_show_protection(cmd);
+    if (dcl_match_command(subcmd, "DEVICE", 3))
+        return cmd_show_device(cmd);
+    if (dcl_match_command(subcmd, "MEMORY", 3))
+        return cmd_show_memory(cmd);
+    if (dcl_match_command(subcmd, "STATUS", 4))
+        return cmd_show_status(cmd);
+    if (dcl_match_command(subcmd, "TERMINAL", 4))
+        return cmd_show_terminal(cmd);
+    if (dcl_match_command(subcmd, "TRANSLATION", 5))
+        return cmd_show_translation(cmd);
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SHOW keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;

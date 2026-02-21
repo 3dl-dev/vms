@@ -34,7 +34,7 @@
 #define STARTUP_PATH     "/vms/sys$manager/STARTUP.COM"
 #define VMSLNMD_PATH     OVMX_SBIN_DIR "/vmslnmd"
 #define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
-#define SSHD_PATH        "/usr/sbin/sshd"
+#define SSHD_PATH        OVMX_BIN_DIR "/vmssshd"
 
 static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -149,11 +149,9 @@ static pid_t start_sshd(void)
         return -1;  /* sshd not available */
     }
 
-    mkdir("/run/sshd", 0755);
-
     pid_t pid = fork();
     if (pid == 0) {
-        /* Detach from console terminal so sshd gets its own session */
+        /* Detach from console terminal so vmssshd gets its own session */
         setsid();
         int devnull = open("/dev/null", O_RDWR);
         if (devnull >= 0) {
@@ -163,7 +161,7 @@ static pid_t start_sshd(void)
         }
         /* Restore default signal handling */
         signal(SIGHUP, SIG_DFL);
-        execl(SSHD_PATH, SSHD_PATH, "-D", (char *)NULL);
+        execl(SSHD_PATH, "vmssshd", (char *)NULL);
         _exit(1);
     }
     return pid;

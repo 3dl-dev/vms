@@ -12,7 +12,7 @@ RUN cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TOOLS=ON \
 
 FROM ubuntu:24.04 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreadline8t64 openssh-server libssh-4 \
+    libreadline8t64 libssh-4 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/build/bin/ /usr/local/bin/
@@ -31,6 +31,7 @@ RUN ln -sf /usr/local/bin/vms_login      /vms/sys\$system/LOGINOUT.EXE \
  ; ln -sf /usr/local/bin/vms_monitor     /vms/sys\$system/MONITOR.EXE  2>/dev/null \
  ; ln -sf /usr/local/bin/vms_mail        /vms/sys\$system/MAIL.EXE     2>/dev/null \
  ; ln -sf /usr/local/bin/vms_authorize   /vms/sys\$system/AUTHORIZE.EXE 2>/dev/null \
+ ; ln -sf /usr/local/bin/vmssshd        /vms/sys\$system/VMSSSHD.EXE  2>/dev/null \
  ; true
 
 # Populate SYS$LIBRARY with VMS header files
@@ -41,14 +42,11 @@ RUN cp /usr/local/include/starlet.h  /vms/sys\$library/ 2>/dev/null || true \
  && cp /usr/local/include/libdef.h   /vms/sys\$library/ 2>/dev/null || true \
  && cp /usr/local/include/str\$routines.h /vms/sys\$library/ 2>/dev/null || true
 
-# Create Linux users from sysuaf.dat for SSH access (PAM authenticates against sysuaf.dat)
+# Create home directories for SYSUAF users
 RUN grep -v '^#' /etc/ovmx/sysuaf.dat | grep -v '^$' | while IFS=: read -r uname rest; do \
         lower=$(echo "$uname" | tr 'A-Z' 'a-z'); \
-        id "$lower" >/dev/null 2>&1 || useradd -m -s /bin/sh "$lower"; \
-    done \
-    && ssh-keygen -A \
-    && mkdir -p /run/sshd \
-    && cp /etc/ssh/sshd_config.ovmx /etc/ssh/sshd_config
+        mkdir -p "/home/$lower"; \
+    done
 
 EXPOSE 22
 

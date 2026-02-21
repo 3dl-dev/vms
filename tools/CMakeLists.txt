@@ -36,24 +36,6 @@ target_compile_definitions(vms_help PRIVATE
 
 install(TARGETS vms_help RUNTIME DESTINATION bin)
 
-add_executable(vms_ssh_auth
-    vms_ssh_auth.c
-)
-
-target_include_directories(vms_ssh_auth PRIVATE
-    ${VMS_INCLUDE_DIR}
-    ${VMS_PROCESS_INCLUDE_DIR}
-)
-
-target_compile_definitions(vms_ssh_auth PRIVATE
-    _POSIX_C_SOURCE=200809L
-    _DEFAULT_SOURCE
-)
-
-target_link_libraries(vms_ssh_auth PRIVATE vms)
-
-install(TARGETS vms_ssh_auth RUNTIME DESTINATION bin)
-
 add_executable(vms_authorize
     vms_authorize.c
 )

@@ -1,19 +1,23 @@
 /*
- * ovmx_init.c - OVMX Boot Orchestrator
+ * ovmx_init.c - OVMX Boot Orchestrator (STARTUP.EXE)
  *
- * This is the ENTRYPOINT for the OVMX Docker container.
- * It creates runtime directories, starts the logical name daemon,
- * displays a VMS-style boot banner, then enters a login loop
- * (fork+exec vms_login; on child exit, re-present login).
+ * Unified PID 1 / ENTRYPOINT for OVMX on both Docker and bare-metal (QEMU).
+ * Handles the entire boot sequence: filesystem setup, kernel module loading,
+ * VMS directory provisioning, SYSUAF user provisioning, daemon startup,
+ * boot banner, and console login loop.
+ *
+ * No shell scripts, no busybox, no /etc/passwd — SYSUAF is the user database.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <time.h>
+#include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -28,6 +32,15 @@
 #define VMSLNMD_PATH     "/vms/sys$system/VMSLNMD.EXE"
 #define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
 #define SSHD_PATH        "/vms/sys$system/VMSSSHD.EXE"
+#define SYSUAF_PATH      "/etc/ovmx/sysuaf.dat"
+
+/* Binary search paths — Docker puts them in /usr/local/bin, QEMU in /vms/sys$system */
+static const char *bin_search_dirs[] = {
+    "/vms/sys$system", "/usr/local/bin", "/bin", "/sbin", NULL
+};
+static const char *lib_search_dirs[] = {
+    "/vms/sys$share", "/usr/local/lib", "/lib", NULL
+};
 
 static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -49,10 +62,81 @@ static void sigchld_handler(int sig)
     while (waitpid(-1, NULL, WNOHANG) > 0) {}
 }
 
+/* ------------------------------------------------------------------ */
+/* Bare-metal bootstrap                                               */
+/* ------------------------------------------------------------------ */
+
+static void load_kernel_module(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return;
+    int fd = open(path, O_RDONLY);
+    if (fd >= 0) {
+        syscall(SYS_finit_module, fd, "", 0);
+        close(fd);
+    }
+}
+
 /*
- * Bare-metal bootstrap: mount essential filesystems and load kernel modules.
- * Called when ovmx_init is running as PID 1 on a real or virtual machine
- * (not inside a Docker container where these are already set up).
+ * Recursive copy of a directory tree (for vmsfs backing dir).
+ * Handles regular files, directories, and symlinks.
+ */
+static void copy_recursive(const char *src, const char *dst)
+{
+    struct stat st;
+    if (stat(src, &st) != 0)
+        return;
+
+    mkdir(dst, st.st_mode & 07777);
+
+    DIR *d = opendir(src);
+    if (!d) return;
+
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL) {
+        if (ent->d_name[0] == '.' &&
+            (ent->d_name[1] == '\0' ||
+             (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
+            continue;
+
+        char src_path[512], dst_path[512];
+        snprintf(src_path, sizeof(src_path), "%s/%s", src, ent->d_name);
+        snprintf(dst_path, sizeof(dst_path), "%s/%s", dst, ent->d_name);
+
+        struct stat es;
+        if (lstat(src_path, &es) != 0)
+            continue;
+
+        if (S_ISDIR(es.st_mode)) {
+            copy_recursive(src_path, dst_path);
+        } else if (S_ISLNK(es.st_mode)) {
+            char link_target[512];
+            ssize_t len = readlink(src_path, link_target, sizeof(link_target) - 1);
+            if (len > 0) {
+                link_target[len] = '\0';
+                symlink(link_target, dst_path);
+            }
+        } else if (S_ISREG(es.st_mode)) {
+            int sfd = open(src_path, O_RDONLY);
+            if (sfd < 0) continue;
+            int dfd = open(dst_path, O_WRONLY | O_CREAT | O_TRUNC, es.st_mode & 07777);
+            if (dfd < 0) { close(sfd); continue; }
+            char buf[4096];
+            ssize_t n;
+            while ((n = read(sfd, buf, sizeof(buf))) > 0)
+                write(dfd, buf, (size_t)n);
+            close(dfd);
+            close(sfd);
+        }
+    }
+    closedir(d);
+}
+
+/*
+ * Bare-metal bootstrap: mount filesystems, set hostname, load kernel
+ * modules, mount vmsfs. Called when running as PID 1 on bare metal
+ * or QEMU — not inside a Docker container.
  */
 static void bare_metal_init(void)
 {
@@ -66,30 +150,164 @@ static void bare_metal_init(void)
     mkdir("/dev/shm", 0755);
     mount("tmpfs", "/dev/shm", "tmpfs", 0, NULL);
 
-    /* Load kernel modules via finit_module */
-    struct stat st;
-    if (stat("/lib/modules/vms.ko", &st) == 0) {
-        int fd = open("/lib/modules/vms.ko", O_RDONLY);
-        if (fd >= 0) { syscall(SYS_finit_module, fd, "", 0); close(fd); }
-    }
-    if (stat("/lib/modules/vmsfs.ko", &st) == 0) {
-        int fd = open("/lib/modules/vmsfs.ko", O_RDONLY);
-        if (fd >= 0) { syscall(SYS_finit_module, fd, "", 0); close(fd); }
+    /* Set hostname */
+    sethostname("OVMX", 4);
+
+    /* Load VMS kernel modules */
+    load_kernel_module("/lib/modules/vms.ko");
+    load_kernel_module("/lib/modules/vmsfs.ko");
+
+    /* Mount vmsfs over /vms for case-insensitive file access.
+     * vmsfs needs a backing directory separate from the mount point. */
+    struct stat vms_st;
+    if (stat("/vms", &vms_st) == 0) {
+        mkdir("/var", 0755);
+        mkdir("/var/vmsfs", 0755);
+        copy_recursive("/vms", "/var/vmsfs");
+        mount("none", "/vms", "vmsfs", 0, "backing=/var/vmsfs,case_blind=1");
     }
 }
 
+/* ------------------------------------------------------------------ */
+/* System provisioning — runs on every boot (Docker and bare metal)   */
+/* ------------------------------------------------------------------ */
+
 /*
- * Create runtime directories needed by OVMX.
+ * Create the VMS directory tree. mkdir is idempotent — safe to call
+ * even if directories already exist from the image.
  */
-static void create_runtime_dirs(void)
+static void provision_dirs(void)
 {
-    mkdir("/tmp/ovmx", 0755);
-    mkdir("/tmp/ovmx/locks", 0755);
+    mkdir("/vms", 0755);
     mkdir("/vms/sys$system", 0755);
+    mkdir("/vms/sys$share", 0755);
     mkdir("/vms/sys$library", 0755);
     mkdir("/vms/sys$manager", 0755);
     mkdir("/vms/sys$login", 0755);
     mkdir("/vms/sys$help", 0755);
+    mkdir("/tmp/ovmx", 0755);
+    mkdir("/tmp/ovmx/locks", 0755);
+    mkdir("/etc/ovmx", 0755);
+    mkdir("/etc/ovmx/lastlogin", 0755);
+}
+
+/*
+ * Create a symlink at vms_path → discovered binary location.
+ * Searches bin_search_dirs for the named file. Skips if vms_path
+ * already exists (binary placed directly in SYS$SYSTEM by initramfs).
+ */
+static void ensure_vms_binary(const char *vms_path, const char *name)
+{
+    struct stat st;
+    if (lstat(vms_path, &st) == 0)
+        return;  /* Already exists */
+
+    for (int i = 0; bin_search_dirs[i]; i++) {
+        char path[256];
+        snprintf(path, sizeof(path), "%s/%s", bin_search_dirs[i], name);
+        if (stat(path, &st) == 0) {
+            symlink(path, vms_path);
+            return;
+        }
+    }
+}
+
+/*
+ * Create a symlink at vms_path → discovered library location.
+ */
+static void ensure_vms_library(const char *vms_path, const char *name)
+{
+    struct stat st;
+    if (lstat(vms_path, &st) == 0)
+        return;
+
+    for (int i = 0; lib_search_dirs[i]; i++) {
+        char path[256];
+        snprintf(path, sizeof(path), "%s/%s", lib_search_dirs[i], name);
+        if (stat(path, &st) == 0) {
+            symlink(path, vms_path);
+            return;
+        }
+    }
+}
+
+/*
+ * Populate SYS$SYSTEM and SYS$SHARE with VMS-named binaries/images.
+ * On QEMU, files are already at VMS paths (initramfs). On Docker,
+ * creates symlinks from /vms/sys$system/ to /usr/local/bin/.
+ */
+static void provision_symlinks(void)
+{
+    /* SYS$SYSTEM executables */
+    ensure_vms_binary("/vms/sys$system/LOGINOUT.EXE", "LOGINOUT.EXE");
+    ensure_vms_binary("/vms/sys$system/DCL.EXE", "DCL.EXE");
+    ensure_vms_binary("/vms/sys$system/HELP.EXE", "HELP.EXE");
+    ensure_vms_binary("/vms/sys$system/AUTHORIZE.EXE", "AUTHORIZE.EXE");
+    ensure_vms_binary("/vms/sys$system/MAIL.EXE", "MAIL.EXE");
+    ensure_vms_binary("/vms/sys$system/MONITOR.EXE", "MONITOR.EXE");
+    ensure_vms_binary("/vms/sys$system/VMSSSHD.EXE", "VMSSSHD.EXE");
+    ensure_vms_binary("/vms/sys$system/VMSLNMD.EXE", "VMSLNMD.EXE");
+    ensure_vms_binary("/vms/sys$system/STARTUP.EXE", "STARTUP.EXE");
+
+    /* SYS$SHARE shareable images */
+    ensure_vms_library("/vms/sys$share/LIBVMS$SHR.EXE", "LIBVMS$SHR.EXE");
+    ensure_vms_library("/vms/sys$share/LIBVMSPROCESS$SHR.EXE", "LIBVMSPROCESS$SHR.EXE");
+    ensure_vms_library("/vms/sys$share/LIBVMSLNM$SHR.EXE", "LIBVMSLNM$SHR.EXE");
+    ensure_vms_library("/vms/sys$share/LIBVMSFS$SHR.EXE", "LIBVMSFS$SHR.EXE");
+    ensure_vms_library("/vms/sys$share/LIBVMSRMS$SHR.EXE", "LIBVMSRMS$SHR.EXE");
+}
+
+/*
+ * Read SYSUAF and create home directories for each user.
+ * SYSUAF format: USERNAME:HASH:UIC_GROUP:UIC_MEMBER:DEFAULT_DIR:FLAGS:PRIVS
+ * No /etc/passwd — SYSUAF is the user database.
+ */
+static void provision_sysuaf_users(void)
+{
+    FILE *fp = fopen(SYSUAF_PATH, "r");
+    if (!fp)
+        return;
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp)) {
+        /* Skip comments and blank lines */
+        if (line[0] == '#' || line[0] == '\n' || line[0] == '\0')
+            continue;
+
+        /* Extract default_dir (field 4, 0-indexed) */
+        char *field = line;
+        for (int i = 0; i < 4; i++) {
+            field = strchr(field, ':');
+            if (!field) break;
+            field++;
+        }
+        if (!field)
+            continue;
+
+        /* Terminate at next colon or newline */
+        char *end = field;
+        while (*end && *end != ':' && *end != '\n' && *end != '\r')
+            end++;
+        *end = '\0';
+
+        /* Create the home directory if non-empty */
+        if (field[0] != '\0') {
+            mkdir(field, 0755);
+        }
+    }
+    fclose(fp);
+}
+
+/*
+ * Provision the OVMX system — called on every boot.
+ * Creates VMS directory tree, populates SYS$SYSTEM/SYS$SHARE,
+ * and provisions SYSUAF user home directories.
+ */
+static void provision_system(void)
+{
+    provision_dirs();
+    provision_symlinks();
+    provision_sysuaf_users();
 }
 
 /*
@@ -260,8 +478,8 @@ int main(void)
         vms_pcb_set_default_dir("SYS$SYSROOT:[SYSMGR]");
     }
 
-    /* Step 2: Create runtime directories */
-    create_runtime_dirs();
+    /* Step 2: Provision system (VMS dirs, SYS$SYSTEM/SYS$SHARE, SYSUAF users) */
+    provision_system();
 
     /* Step 3: Start logical name daemon */
     int lnm_started = 0;

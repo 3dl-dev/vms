@@ -53,3 +53,19 @@ target_compile_definitions(vms_ssh_auth PRIVATE
 )
 
 install(TARGETS vms_ssh_auth RUNTIME DESTINATION bin)
+
+add_executable(vms_mail
+    vms_mail.c
+)
+
+target_include_directories(vms_mail PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+
+target_compile_definitions(vms_mail PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+install(TARGETS vms_mail RUNTIME DESTINATION bin)

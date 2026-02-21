@@ -201,7 +201,7 @@ static void display_boot_banner(int lnm_started, int sshd_started)
     localtime_r(&ts.tv_sec, &tm);
 
     printf("\n");
-    printf("    OVMX V7.3\n");
+    printf("    OpenVMS V7.3\n");
     printf("    %2d-%s-%04d %02d:%02d:%02d.%02d\n\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,

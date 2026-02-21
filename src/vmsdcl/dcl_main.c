@@ -171,18 +171,32 @@ static void display_banner(void)
     localtime_r(&ts.tv_sec, &tm);
 
     printf("\n");
-    printf("        OVMX V7.3  on node %-8s %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+    printf("        OpenVMS V7.3  on node %-8s %2d-%s-%04d %02d:%02d:%02d.%02d\n",
            uts.nodename, tm.tm_mday, vms_months_main[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
     printf("\n");
 
-    /* Last login message */
-    printf("    Last interactive login on %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-           tm.tm_mday, vms_months_main[tm.tm_mon], 1900 + tm.tm_year,
-           tm.tm_hour, tm.tm_min, tm.tm_sec,
-           (int)(ts.tv_nsec / 10000000));
-    printf("\n");
+    /* Last login message — read from per-user lastlogin file if available */
+    const char *vms_user = getenv("VMS_USERNAME");
+    if (vms_user && vms_user[0]) {
+        char lastlogin_path[512];
+        snprintf(lastlogin_path, sizeof(lastlogin_path),
+                 "/etc/ovmx/lastlogin/%s", vms_user);
+        FILE *lf = fopen(lastlogin_path, "r");
+        if (lf) {
+            char prev[64];
+            if (fgets(prev, sizeof(prev), lf) != NULL) {
+                /* trim trailing newline */
+                size_t plen = strlen(prev);
+                while (plen > 0 && (prev[plen-1] == '\n' || prev[plen-1] == '\r'))
+                    prev[--plen] = '\0';
+                if (prev[0])
+                    printf("    Last interactive login on %s\n\n", prev);
+            }
+            fclose(lf);
+        }
+    }
 }
 
 /*

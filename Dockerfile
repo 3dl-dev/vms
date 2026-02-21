@@ -21,7 +21,25 @@ COPY --from=builder /src/distro/rootfs/ /
 
 RUN ldconfig && mkdir -p /vms/sys\$system /vms/sys\$library /vms/sys\$manager \
     /vms/sys\$login /vms/sys\$help /tmp/ovmx/locks \
-    /home/DEFAULT /home/GUEST /home/USER1 /home/USER2
+    /home/DEFAULT /home/GUEST /home/USER1 /home/USER2 \
+    /etc/ovmx/lastlogin
+
+# Populate SYS$SYSTEM with symlinks to installed binaries
+RUN ln -sf /usr/local/bin/vms_login      /vms/sys\$system/LOGINOUT.EXE \
+ && ln -sf /usr/local/bin/vmsdcl         /vms/sys\$system/DCL.EXE \
+ && ln -sf /usr/local/bin/vms_help       /vms/sys\$system/HELP.EXE \
+ ; ln -sf /usr/local/bin/vms_monitor     /vms/sys\$system/MONITOR.EXE  2>/dev/null \
+ ; ln -sf /usr/local/bin/vms_mail        /vms/sys\$system/MAIL.EXE     2>/dev/null \
+ ; ln -sf /usr/local/bin/vms_authorize   /vms/sys\$system/AUTHORIZE.EXE 2>/dev/null \
+ ; true
+
+# Populate SYS$LIBRARY with VMS header files
+RUN cp /usr/local/include/starlet.h  /vms/sys\$library/ 2>/dev/null || true \
+ && cp /usr/local/include/ssdef.h    /vms/sys\$library/ 2>/dev/null || true \
+ && cp /usr/local/include/descrip.h  /vms/sys\$library/ 2>/dev/null || true \
+ && cp /usr/local/include/rms.h      /vms/sys\$library/ 2>/dev/null || true \
+ && cp /usr/local/include/libdef.h   /vms/sys\$library/ 2>/dev/null || true \
+ && cp /usr/local/include/str\$routines.h /vms/sys\$library/ 2>/dev/null || true
 
 # Create Linux users from sysuaf.dat for SSH access (PAM authenticates against sysuaf.dat)
 RUN grep -v '^#' /etc/ovmx/sysuaf.dat | grep -v '^$' | while IFS=: read -r uname rest; do \

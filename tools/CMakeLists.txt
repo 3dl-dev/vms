@@ -38,22 +38,6 @@ target_compile_definitions(vms_help PRIVATE
 
 install(TARGETS vms_help RUNTIME DESTINATION bin)
 
-add_executable(vms_ssh_auth
-    vms_ssh_auth.c
-    sha256.c
-)
-
-target_include_directories(vms_ssh_auth PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-target_compile_definitions(vms_ssh_auth PRIVATE
-    _POSIX_C_SOURCE=200809L
-    _DEFAULT_SOURCE
-)
-
-install(TARGETS vms_ssh_auth RUNTIME DESTINATION bin)
-
 add_executable(vms_authorize
     vms_authorize.c
     sha256.c

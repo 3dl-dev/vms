@@ -286,31 +286,6 @@ static void start_session(const sysuaf_record_t *rec)
 }
 
 /* ------------------------------------------------------------------ */
-/* SSH mode: user already authenticated by PAM against sysuaf.dat     */
-/* ------------------------------------------------------------------ */
-static int ssh_login(void)
-{
-    const char *user = getenv("USER");
-    if (!user || user[0] == '\0')
-        return 1;
-
-    char username[64];
-    strncpy(username, user, sizeof(username) - 1);
-    username[sizeof(username) - 1] = '\0';
-    upcase(username);
-
-    sysuaf_record_t user_rec;
-    memset(&user_rec, 0, sizeof(user_rec));
-    if (lookup_user(username, &user_rec) < 0) {
-        fprintf(stderr, "User authorization failure\n");
-        return 1;
-    }
-
-    start_session(&user_rec);
-    return 1;  /* Should not reach here */
-}
-
-/* ------------------------------------------------------------------ */
 /* Console mode: interactive login with username/password prompts      */
 /* ------------------------------------------------------------------ */
 static int console_login(void)
@@ -367,11 +342,10 @@ static int console_login(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Main: dispatch based on --ssh flag                                  */
+/* Main                                                                */
 /* ------------------------------------------------------------------ */
 int main(int argc, char *argv[])
 {
-    if (argc > 1 && strcmp(argv[1], "--ssh") == 0)
-        return ssh_login();
+    (void)argc; (void)argv;
     return console_login();
 }

@@ -21,7 +21,8 @@ COPY --from=builder /src/distro/rootfs/ /
 
 RUN ldconfig && mkdir -p /vms/sys\$system /vms/sys\$library /vms/sys\$manager \
     /vms/sys\$login /vms/sys\$help /tmp/ovmx/locks \
-    /home/DEFAULT /home/GUEST /home/USER1 /home/USER2
+    /home/DEFAULT /home/GUEST /home/USER1 /home/USER2 \
+    /etc/ovmx/lastlogin
 
 # Create Linux users from sysuaf.dat for SSH access (PAM authenticates against sysuaf.dat)
 RUN grep -v '^#' /etc/ovmx/sysuaf.dat | grep -v '^$' | while IFS=: read -r uname rest; do \

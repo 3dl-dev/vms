@@ -13,9 +13,11 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_ast.c
     syssvc/sys_lock.c
     syssvc/sys_misc.c
+    syssvc/sys_opcom.c
     syssvc/sys_security.c
     syssvc/sys_fao.c
     syssvc/sys_msg.c
+    rtl/ovmx_accounting.c
     rtl/lib_vm.c
     rtl/lib_output.c
     rtl/lib_signal.c

@@ -34,6 +34,7 @@
 #include "chfdef.h"
 #include "msgdef.h"
 #include "libclidef.h"
+#include "opcdef.h"
 
 /* ================================================================
  * Run-time library routine headers
@@ -1022,6 +1023,26 @@ uint32_t sys$setpri(
  * @return  SS$_NORMAL on success
  */
 uint32_t sys$cancel(uint16_t chan);
+
+/* ================================================================
+ * Operator Communication Services
+ * ================================================================ */
+
+/**
+ * sys$sndopr - Send message to operator
+ *
+ * Sends a message to the OPCOM operator communication manager.
+ * The message is written to the operator log file.
+ *
+ * @param msgbuf  Pointer to descriptor of OPCDEF message buffer
+ * @param chan    Optional reply mailbox channel (0 = no reply)
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$sndopr(
+    const struct dsc$descriptor_s *msgbuf,
+    uint16_t chan
+);
 
 /* ================================================================
  * Floating-Point Services

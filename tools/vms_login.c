@@ -22,6 +22,7 @@
 #include "sha256.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
+#include "ovmx_accounting.h"
 
 /* Maximum number of login attempts before disconnect */
 #define MAX_ATTEMPTS   3
@@ -184,32 +185,32 @@ static int authenticate(const sysuaf_record_t *rec, const char *password)
 }
 
 /* ------------------------------------------------------------------ */
-/* Format VMS-style date: DD-MMM-YYYY HH:MM:SS                       */
+/* Start a VMS session: banner, environment, exec DCL shell           */
 /* ------------------------------------------------------------------ */
-static void format_vms_time(char *buf, size_t bufsiz)
+static void start_session(const sysuaf_record_t *rec)
 {
     static const char *months[] = {
         "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
         "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
     };
 
-    time_t now = time(NULL);
-    struct tm *tm = localtime(&now);
-    snprintf(buf, bufsiz, "%02d-%s-%04d %02d:%02d:%02d",
-             tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
-             tm->tm_hour, tm->tm_min, tm->tm_sec);
-}
-
-/* ------------------------------------------------------------------ */
-/* Start a VMS session: banner, environment, exec DCL shell           */
-/* ------------------------------------------------------------------ */
-static void start_session(const sysuaf_record_t *rec)
-{
-    char timebuf[64];
-    format_vms_time(timebuf, sizeof(timebuf));
-
     printf("\n   Welcome to OpenVMS (tm) OVMX V7.3\n");
-    printf("\n   Last interactive login on %s\n\n", timebuf);
+
+    /* Read the REAL last login time from accounting records */
+    time_t last_login = 0;
+    int has_last = (ovmx_accounting_get_lastlogin(rec->username, &last_login) == 0);
+
+    if (has_last && last_login > 0) {
+        struct tm *tm = localtime(&last_login);
+        printf("\n   Last interactive login on %02d-%s-%04d %02d:%02d:%02d\n\n",
+               tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
+               tm->tm_hour, tm->tm_min, tm->tm_sec);
+    } else {
+        printf("\n   No previous interactive login recorded.\n\n");
+    }
+
+    /* Record this login now (after showing last, before launching DCL) */
+    ovmx_accounting_record_login(rec->username);
 
     /* Set up environment for session */
     setenv("VMS_USERNAME",    rec->username,    1);

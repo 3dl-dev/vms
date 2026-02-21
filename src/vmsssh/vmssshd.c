@@ -2,16 +2,16 @@
  * vmssshd.c - VMS-native SSH server daemon for OVMX
  *
  * Fork-per-connection SSH server using libssh (server-side API).
- * Authenticates against SYSUAF, allocates a PTY, and runs /bin/sh
- * on the PTY slave side while forwarding data over the SSH channel.
+ * Authenticates against SYSUAF, allocates a PTY, performs full VMS
+ * LOGINOUT-equivalent session initialization, and execs vmsdcl --login.
  *
  * Usage:
  *   vmssshd [-p port] [-k host_key_path] [-d]
  *
  * %VMSSSH-I-STARTUP, server started on port 22
  *
- * This bead (vms-825.2) runs /bin/sh as the shell.
- * vms-825.3 will replace it with LOGINOUT -> DCL.
+ * Session flow: auth -> PCB init -> VMS env -> banner -> exec vmsdcl --login
+ * (vms-825.3: LOGINOUT-equivalent process creation)
  */
 
 /* _GNU_SOURCE (set globally by CMake) already implies _POSIX_C_SOURCE and _DEFAULT_SOURCE */
@@ -37,6 +37,14 @@
 #include <libssh/server.h>
 
 #include "sysuaf.h"
+#include "vms/pcb.h"
+#include "vms/privs.h"
+#include "ovmx_accounting.h"
+
+#ifndef OVMX_BIN_DIR
+#define OVMX_BIN_DIR "/usr/local/bin"
+#endif
+#define DCL_SHELL_PATH OVMX_BIN_DIR "/vmsdcl"
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -291,14 +299,18 @@ static void handle_connection(ssh_session session)
         exit(1);
     }
 
-    /* Look up shell from SYSUAF record or use /bin/sh */
+    /* Look up SYSUAF record for session setup */
     sysuaf_record_t sysuaf_rec;
-    const char *shell_path = "/bin/sh";
-    const char *home_dir   = "/";
-    if (sysuaf_lookup(authed_user, &sysuaf_rec) == 0) {
-        if (sysuaf_rec.default_dir[0] != '\0')
-            home_dir = sysuaf_rec.default_dir;
+    memset(&sysuaf_rec, 0, sizeof(sysuaf_rec));
+    if (sysuaf_lookup(authed_user, &sysuaf_rec) != 0) {
+        /* Should not happen — user was authenticated above — but be safe */
+        fprintf(stderr, "%%VMSSSH-E-UAFMISS, cannot re-read SYSUAF for %s\n", authed_user);
+        strncpy(sysuaf_rec.username, authed_user, sizeof(sysuaf_rec.username) - 1);
+        strncpy(sysuaf_rec.default_dir, "/", sizeof(sysuaf_rec.default_dir) - 1);
     }
+
+    const char *home_dir = (sysuaf_rec.default_dir[0] != '\0')
+                           ? sysuaf_rec.default_dir : "/";
 
     pid_t shell_pid = fork();
     if (shell_pid < 0) {
@@ -312,7 +324,7 @@ static void handle_connection(ssh_session session)
     }
 
     if (shell_pid == 0) {
-        /* ---- Child: set up PTY slave and exec shell ---- */
+        /* ---- Child: set up PTY slave and exec VMS session (LOGINOUT-equivalent) ---- */
         close(master_fd);
 
         /* New session, PTY slave becomes controlling terminal */
@@ -335,17 +347,67 @@ static void handle_connection(ssh_session session)
         if (slave_fd > STDERR_FILENO)
             close(slave_fd);
 
-        /* Set environment */
-        setenv("TERM", "vt100", 1);
-        setenv("HOME", home_dir, 1);
-        setenv("SHELL", shell_path, 1);
-        setenv("USER", authed_user, 1);
-        setenv("LOGNAME", authed_user, 1);
+        /* ---- Step 1: Initialize PCB with user identity ---- */
+        uint64_t user_privs = parse_privilege_string(sysuaf_rec.privileges);
+        struct vms_pcb *pcb = vms_pcb_init(user_privs);
+        if (pcb) {
+            uint32_t uic = (sysuaf_rec.uic_group << 16) | sysuaf_rec.uic_member;
+            char prcnam[16];
+            snprintf(prcnam, sizeof(prcnam), "_FTA%d:", (int)(getpid() % 100));
+            vms_pcb_set_identity((uint32_t)getpid(), uic, sysuaf_rec.username, prcnam);
+            vms_pcb_set_default_dir(sysuaf_rec.default_dir);
+        }
 
-        /* Exec shell */
-        execl(shell_path, shell_path, NULL);
-        perror("execl");
-        exit(127);
+        /* ---- Step 2: Set up VMS environment variables ---- */
+        setenv("TERM",        "vt100",               1);
+        setenv("HOME",        home_dir,               1);
+        setenv("USER",        authed_user,            1);
+        setenv("LOGNAME",     authed_user,            1);
+        setenv("SHELL",       DCL_SHELL_PATH,         1);
+
+        setenv("VMS_USERNAME",    sysuaf_rec.username,    1);
+
+        char uic_group_str[16], uic_member_str[16];
+        snprintf(uic_group_str,  sizeof(uic_group_str),  "%u", sysuaf_rec.uic_group);
+        snprintf(uic_member_str, sizeof(uic_member_str), "%u", sysuaf_rec.uic_member);
+        setenv("VMS_UIC_GROUP",   uic_group_str,  1);
+        setenv("VMS_UIC_MEMBER",  uic_member_str, 1);
+        setenv("VMS_DEFAULT_DIR", sysuaf_rec.default_dir, 1);
+        setenv("VMS_PRIVILEGES",  sysuaf_rec.privileges,  1);
+        setenv("SYS$LOGIN",       sysuaf_rec.default_dir, 1);
+        setenv("SYS$SCRATCH",     "/tmp",                 1);
+
+        /* ---- Step 3: Display VMS login banner ---- */
+        static const char *months[] = {
+            "JAN","FEB","MAR","APR","MAY","JUN",
+            "JUL","AUG","SEP","OCT","NOV","DEC"
+        };
+
+        printf("\n   Welcome to OpenVMS (tm) OVMX V7.3\n");
+
+        time_t last_login = 0;
+        if (ovmx_accounting_get_lastlogin(sysuaf_rec.username, &last_login) == 0
+                && last_login > 0) {
+            struct tm *tm = localtime(&last_login);
+            printf("\n   Last interactive login on %02d-%s-%04d %02d:%02d:%02d\n\n",
+                   tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
+                   tm->tm_hour, tm->tm_min, tm->tm_sec);
+        } else {
+            printf("\n   No previous interactive login recorded.\n\n");
+        }
+
+        /* Record this login (after displaying last, before launching DCL) */
+        ovmx_accounting_record_login(sysuaf_rec.username);
+        fflush(stdout);
+
+        /* ---- Step 4: Exec vmsdcl --login ---- */
+        execl(DCL_SHELL_PATH, "vmsdcl", "--login", (char *)NULL);
+
+        /* Fallback if vmsdcl is not installed */
+        perror("vmsdcl");
+        fprintf(stderr, "%%VMSSSH-W-NOSHELL, vmsdcl not found — falling back to /bin/sh\n");
+        execl("/bin/sh", "sh", (char *)NULL);
+        _exit(1);
     }
 
     /* ---- Parent: forward data between SSH channel and PTY master ---- */

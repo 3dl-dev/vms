@@ -1750,6 +1750,54 @@ static int cmd_logout(struct dcl_command *cmd)
 }
 
 /*
+ * MAIL - Launch VMS MAIL utility.
+ */
+static int cmd_mail(struct dcl_command *cmd)
+{
+    /* Build argv for exec: vms_mail [qualifiers/args] */
+    char mail_path[PATH_MAX];
+
+#ifndef OVMX_BIN_DIR
+#define OVMX_BIN_DIR "/usr/local/bin"
+#endif
+    snprintf(mail_path, sizeof(mail_path), "%s/vms_mail", OVMX_BIN_DIR);
+
+    /* Collect qualifiers and params into an argv */
+    char *exec_argv[64];
+    int exec_argc = 0;
+    exec_argv[exec_argc++] = mail_path;
+
+    /* Pass through qualifiers first */
+    for (int i = 0; i < cmd->qualifier_count && exec_argc < 62; i++) {
+        exec_argv[exec_argc++] = cmd->qualifiers[i].name;
+    }
+
+    /* Pass through params */
+    for (int i = 0; i < cmd->param_count && exec_argc < 62; i++) {
+        if (cmd->params[i][0] != '\0')
+            exec_argv[exec_argc++] = cmd->params[i];
+    }
+    exec_argv[exec_argc] = NULL;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execv(mail_path, exec_argv);
+        /* If exec fails, try just "vms_mail" on PATH */
+        execvp("vms_mail", exec_argv);
+        _exit(1);
+    } else if (pid > 0) {
+        int wstatus;
+        waitpid(pid, &wstatus, 0);
+        if (WIFEXITED(wstatus))
+            return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
+    } else {
+        dcl_error("DCL", 4, "CREPRC", "cannot create process for MAIL");
+        return SS$_ABORT;
+    }
+    return SS$_NORMAL;
+}
+
+/*
  * INQUIRE - Prompt user for input, store in symbol.
  */
 static int cmd_inquire(struct dcl_command *cmd)
@@ -1974,6 +2022,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Read input from SYS$INPUT and assign to a symbol" },
     { "LOGOUT",    cmd_logout,    CDU_F_ABBREV, 2,
       "Terminate an interactive session" },
+    { "MAIL",      cmd_mail,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
+      "Send and receive electronic mail messages" },
     { "MONITOR",   cmd_monitor,   CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Display real-time system activity statistics" },
     { "OPEN",      cmd_open,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,

@@ -107,3 +107,26 @@ set_target_properties(vms_monitor PROPERTIES
     SUFFIX ".EXE"
 )
 install(TARGETS vms_monitor RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+add_executable(vms_initialize
+    vms_initialize.c
+)
+
+target_include_directories(vms_initialize PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+)
+
+target_compile_definitions(vms_initialize PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vms_initialize PRIVATE
+    -Wall -Wextra
+)
+
+set_target_properties(vms_initialize PROPERTIES
+    OUTPUT_NAME "INITIALIZE"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_initialize RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

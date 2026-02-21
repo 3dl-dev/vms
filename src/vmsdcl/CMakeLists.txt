@@ -41,4 +41,8 @@ if(NOT OVMX_STATIC)
     endif()
 endif()
 
-install(TARGETS vmsdcl RUNTIME DESTINATION bin)
+set_target_properties(vmsdcl PROPERTIES
+    OUTPUT_NAME "DCL"
+    SUFFIX ".EXE"
+)
+install(TARGETS vmsdcl RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

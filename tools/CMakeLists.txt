@@ -13,12 +13,15 @@ target_include_directories(vms_login PRIVATE
 target_compile_definitions(vms_login PRIVATE
     _POSIX_C_SOURCE=200809L
     _DEFAULT_SOURCE
-    OVMX_BIN_DIR="${CMAKE_INSTALL_PREFIX}/bin"
 )
 
 target_link_libraries(vms_login PRIVATE vms vmsprocess pthread)
 
-install(TARGETS vms_login RUNTIME DESTINATION bin)
+set_target_properties(vms_login PROPERTIES
+    OUTPUT_NAME "LOGINOUT"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_login RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vms_help
     vms_help.c
@@ -34,7 +37,11 @@ target_compile_definitions(vms_help PRIVATE
     _DEFAULT_SOURCE
 )
 
-install(TARGETS vms_help RUNTIME DESTINATION bin)
+set_target_properties(vms_help PROPERTIES
+    OUTPUT_NAME "HELP"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_help RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vms_authorize
     vms_authorize.c
@@ -56,7 +63,11 @@ target_compile_options(vms_authorize PRIVATE
 
 target_link_libraries(vms_authorize PRIVATE vms)
 
-install(TARGETS vms_authorize RUNTIME DESTINATION bin)
+set_target_properties(vms_authorize PROPERTIES
+    OUTPUT_NAME "AUTHORIZE"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_authorize RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vms_mail
     vms_mail.c
@@ -72,7 +83,11 @@ target_compile_definitions(vms_mail PRIVATE
     _DEFAULT_SOURCE
 )
 
-install(TARGETS vms_mail RUNTIME DESTINATION bin)
+set_target_properties(vms_mail PROPERTIES
+    OUTPUT_NAME "MAIL"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_mail RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
 add_executable(vms_monitor
     vms_monitor.c
@@ -87,4 +102,8 @@ target_compile_options(vms_monitor PRIVATE
     -Wall -Wextra
 )
 
-install(TARGETS vms_monitor RUNTIME DESTINATION bin)
+set_target_properties(vms_monitor PROPERTIES
+    OUTPUT_NAME "MONITOR"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_monitor RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

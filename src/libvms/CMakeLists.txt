@@ -37,8 +37,10 @@ add_library(vms ${OVMX_LIB_TYPE}
 )
 target_include_directories(vms PUBLIC include ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
 target_link_libraries(vms PUBLIC vmsprocess pthread m)
-if(NOT OVMX_STATIC)
-    set_target_properties(vms PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
-endif()
-install(TARGETS vms LIBRARY DESTINATION lib)
+set_target_properties(vms PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "LIBVMS\$SHR"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms LIBRARY DESTINATION ${VMS_SHARE_DIR})
 install(DIRECTORY include/ DESTINATION include/vms)

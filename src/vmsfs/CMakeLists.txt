@@ -6,7 +6,9 @@ add_library(vmsfs ${OVMX_LIB_TYPE}
 )
 target_include_directories(vmsfs PUBLIC include ${VMS_INCLUDE_DIR} ${VMS_LNM_INCLUDE_DIR})
 target_link_libraries(vmsfs PUBLIC vmslnm)
-if(NOT OVMX_STATIC)
-    set_target_properties(vmsfs PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
-endif()
-install(TARGETS vmsfs LIBRARY DESTINATION lib)
+set_target_properties(vmsfs PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "LIBVMSFS\$SHR"
+    SUFFIX ".EXE"
+)
+install(TARGETS vmsfs LIBRARY DESTINATION ${VMS_SHARE_DIR})

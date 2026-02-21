@@ -29,10 +29,7 @@
 
 /* Paths */
 #define LASTLOGIN_DIR      "/etc/ovmx/lastlogin"
-#ifndef OVMX_BIN_DIR
-#define OVMX_BIN_DIR "/usr/local/bin"
-#endif
-#define DCL_SHELL_PATH     OVMX_BIN_DIR "/vmsdcl"
+#define DCL_SHELL_PATH     "/vms/sys$system/DCL.EXE"
 
 /* ------------------------------------------------------------------ */
 /* Helper: upcase a string in-place                                   */

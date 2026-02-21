@@ -14,14 +14,12 @@ target_include_directories(vmslnm PUBLIC
 
 target_link_libraries(vmslnm PUBLIC pthread)
 
-if(NOT OVMX_STATIC)
-    set_target_properties(vmslnm PROPERTIES
-        VERSION ${PROJECT_VERSION}
-        SOVERSION 0
-    )
-endif()
-
-install(TARGETS vmslnm LIBRARY DESTINATION lib)
+set_target_properties(vmslnm PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "LIBVMSLNM\$SHR"
+    SUFFIX ".EXE"
+)
+install(TARGETS vmslnm LIBRARY DESTINATION ${VMS_SHARE_DIR})
 
 # Daemon executable
 add_executable(lnm_daemon_exe lnm_daemon.c)
@@ -31,6 +29,9 @@ target_include_directories(lnm_daemon_exe PRIVATE
 )
 target_link_libraries(lnm_daemon_exe PRIVATE vmslnm pthread)
 target_compile_definitions(lnm_daemon_exe PRIVATE LNM_DAEMON_MAIN)
-set_target_properties(lnm_daemon_exe PROPERTIES OUTPUT_NAME vmslnmd)
+set_target_properties(lnm_daemon_exe PROPERTIES
+    OUTPUT_NAME "VMSLNMD"
+    SUFFIX ".EXE"
+)
 
-install(TARGETS lnm_daemon_exe RUNTIME DESTINATION sbin)
+install(TARGETS lnm_daemon_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

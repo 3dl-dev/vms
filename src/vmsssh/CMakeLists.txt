@@ -13,4 +13,8 @@ target_link_libraries(vmssshd PRIVATE
     util      # openpty()
 )
 
-install(TARGETS vmssshd RUNTIME DESTINATION bin)
+set_target_properties(vmssshd PROPERTIES
+    OUTPUT_NAME "VMSSSHD"
+    SUFFIX ".EXE"
+)
+install(TARGETS vmssshd RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

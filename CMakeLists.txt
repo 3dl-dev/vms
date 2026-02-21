@@ -28,6 +28,15 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# VMS directory layout
+set(VMS_SHARE_DIR "vms/sys\$share")
+set(VMS_SYSTEM_DIR "vms/sys\$system")
+
+# Runtime library search path — all binaries find shareable images in SYS$SHARE
+set(CMAKE_INSTALL_RPATH "/vms/sys\$share")
+set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
+set(CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/lib")
+
 # Global VMS include path (for #include <descrip.h> etc.)
 set(VMS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/libvms/include)
 set(VMS_RMS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/vmsrms/include)
@@ -44,8 +53,6 @@ option(OVMX_STATIC "Build all libraries as static and link statically" OFF)
 
 if(OVMX_STATIC)
     set(OVMX_LIB_TYPE STATIC)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
-    set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
 else()
     set(OVMX_LIB_TYPE SHARED)
 endif()

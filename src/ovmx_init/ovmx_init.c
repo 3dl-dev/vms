@@ -22,19 +22,12 @@
 
 #include "vms/pcb.h"
 
-#ifndef OVMX_BIN_DIR
-#define OVMX_BIN_DIR "/usr/local/bin"
-#endif
-#ifndef OVMX_SBIN_DIR
-#define OVMX_SBIN_DIR "/usr/local/bin"
-#endif
-
-#define VMS_LOGIN_PATH   OVMX_BIN_DIR "/vms_login"
-#define VMSDCL_PATH      OVMX_BIN_DIR "/vmsdcl"
+#define VMS_LOGIN_PATH   "/vms/sys$system/LOGINOUT.EXE"
+#define VMSDCL_PATH      "/vms/sys$system/DCL.EXE"
 #define STARTUP_PATH     "/vms/sys$manager/STARTUP.COM"
-#define VMSLNMD_PATH     OVMX_SBIN_DIR "/vmslnmd"
+#define VMSLNMD_PATH     "/vms/sys$system/VMSLNMD.EXE"
 #define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
-#define SSHD_PATH        OVMX_BIN_DIR "/vmssshd"
+#define SSHD_PATH        "/vms/sys$system/VMSSSHD.EXE"
 
 static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",

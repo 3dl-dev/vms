@@ -169,8 +169,19 @@ static void bare_metal_init(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* System provisioning — runs on every boot (Docker and bare metal)   */
+/* System install / boot separation                                   */
 /* ------------------------------------------------------------------ */
+
+/*
+ * Check if the system is already installed on the system disk.
+ * DCL.EXE in SYS$SYSTEM is the marker — if it exists (file or symlink),
+ * a prior install populated the tree and we can skip straight to boot.
+ */
+static int is_system_installed(void)
+{
+    struct stat st;
+    return (lstat("/vms/sys$system/DCL.EXE", &st) == 0);
+}
 
 /*
  * Create the VMS directory tree. mkdir is idempotent — safe to call
@@ -299,15 +310,21 @@ static void provision_sysuaf_users(void)
 }
 
 /*
- * Provision the OVMX system — called on every boot.
+ * Install the OVMX system onto the system disk.
  * Creates VMS directory tree, populates SYS$SYSTEM/SYS$SHARE,
  * and provisions SYSUAF user home directories.
+ *
+ * Idempotent — safe to run on an already-installed system (mkdir
+ * and symlink creation skip existing entries). Called only when
+ * is_system_installed() returns false.
  */
-static void provision_system(void)
+static void install_system(void)
 {
+    printf("%%STARTUP-I-INSTALL, installing OVMX system\n");
     provision_dirs();
     provision_symlinks();
     provision_sysuaf_users();
+    printf("%%STARTUP-I-INSTALLED, system installation complete\n");
 }
 
 /*
@@ -478,8 +495,12 @@ int main(void)
         vms_pcb_set_default_dir("SYS$SYSROOT:[SYSMGR]");
     }
 
-    /* Step 2: Provision system (VMS dirs, SYS$SYSTEM/SYS$SHARE, SYSUAF users) */
-    provision_system();
+    /* Step 2: Install system if not already on the system disk */
+    if (is_system_installed()) {
+        printf("%%STARTUP-I-SYSBOOT, system disk detected, skipping install\n");
+    } else {
+        install_system();
+    }
 
     /* Step 3: Start logical name daemon */
     int lnm_started = 0;

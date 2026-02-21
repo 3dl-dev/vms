@@ -53,3 +53,18 @@ target_compile_definitions(vms_ssh_auth PRIVATE
 )
 
 install(TARGETS vms_ssh_auth RUNTIME DESTINATION bin)
+
+add_executable(vms_monitor
+    vms_monitor.c
+)
+
+target_compile_definitions(vms_monitor PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vms_monitor PRIVATE
+    -Wall -Wextra
+)
+
+install(TARGETS vms_monitor RUNTIME DESTINATION bin)

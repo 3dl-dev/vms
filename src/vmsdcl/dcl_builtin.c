@@ -1797,6 +1797,64 @@ static int cmd_inquire(struct dcl_command *cmd)
 }
 
 /* ================================================================== */
+/*                        MONITOR Command                              */
+/* ================================================================== */
+
+/*
+ * MONITOR - Real-time system activity display.
+ * Executes the vms_monitor binary with the subcommand argument.
+ */
+static int cmd_monitor(struct dcl_command *cmd)
+{
+    /* Locate vms_monitor binary: try install path first, then build path */
+    static const char *candidates[] = {
+        "/usr/local/bin/vms_monitor",
+        "/usr/bin/vms_monitor",
+        NULL
+    };
+
+    const char *monitor_bin = NULL;
+    for (int i = 0; candidates[i]; i++) {
+        if (access(candidates[i], X_OK) == 0) {
+            monitor_bin = candidates[i];
+            break;
+        }
+    }
+
+    if (!monitor_bin) {
+        /* Fall back to PATH-based search */
+        monitor_bin = "vms_monitor";
+    }
+
+    /* Build argv for exec: vms_monitor [subcommand] */
+    const char *subcommand = (cmd->param_count >= 1 && cmd->params[0][0] != '\0')
+                             ? cmd->params[0] : "SYSTEM";
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Child: exec vms_monitor with the subcommand */
+        execlp(monitor_bin, monitor_bin, subcommand, (char *)NULL);
+        /* If execlp fails, try absolute candidate paths */
+        for (int i = 0; candidates[i]; i++) {
+            execl(candidates[i], candidates[i], subcommand, (char *)NULL);
+        }
+        fprintf(stderr, "%%MONITOR-F-NOIMG, cannot execute vms_monitor\n");
+        _exit(1);
+    } else if (pid > 0) {
+        int wstatus;
+        waitpid(pid, &wstatus, 0);
+        if (WIFEXITED(wstatus)) {
+            return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
+        }
+    } else {
+        dcl_error("DCL", 4, "CREPRC", "cannot create process for MONITOR");
+        return SS$_ABORT;
+    }
+
+    return SS$_NORMAL;
+}
+
+/* ================================================================== */
 /*                         HELP Command                                */
 /* ================================================================== */
 
@@ -1916,6 +1974,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Read input from SYS$INPUT and assign to a symbol" },
     { "LOGOUT",    cmd_logout,    CDU_F_ABBREV, 2,
       "Terminate an interactive session" },
+    { "MONITOR",   cmd_monitor,   CDU_F_ABBREV | CDU_F_PARAM, 3,
+      "Display real-time system activity statistics" },
     { "OPEN",      cmd_open,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Open a file for reading or writing" },
     { "PIPE",      cmd_pipe,      CDU_F_ABBREV | CDU_F_PARAM, 3,

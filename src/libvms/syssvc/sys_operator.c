@@ -95,7 +95,7 @@ static FILE *open_operator_log(void)
  * @param msgbuf  Descriptor of message text to log
  * @param chan     Channel number (ignored — OVMX logs all to OPERATOR.LOG)
  */
-uint32_t sys$sndopr(struct dsc$descriptor_s *msgbuf, uint16_t chan)
+uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
 {
     (void)chan;
 

@@ -1182,22 +1182,6 @@ uint32_t sys$getdviw(
  * ================================================================ */
 
 /**
- * sys$sndopr - Send message to operator
- *
- * Writes a formatted OPCOM-style log entry to the operator log
- * file (/vms/sys$manager/OPERATOR.LOG).
- *
- * @param msgbuf  Pointer to descriptor of message text
- * @param chan    Channel number (ignored — all logged to OPERATOR.LOG)
- *
- * @return  SS$_NORMAL on success
- */
-uint32_t sys$sndopr(
-    struct dsc$descriptor_s *msgbuf,
-    uint16_t chan
-);
-
-/**
  * sys$brkthruw - Broadcast message to terminal(s)
  *
  * Sends a broadcast message to the specified terminal device.

@@ -92,6 +92,24 @@ struct dcl_context {
         char name[64];
         int  mode;  /* 0=read, 1=write, 2=append */
     } channels[16];
+
+    /* SET MESSAGE flags (1 = show, 0 = suppress) */
+    int msg_facility;
+    int msg_severity;
+    int msg_ident;
+    int msg_text;
+
+    /* SET TERMINAL settings */
+    int term_width;
+    int term_page;
+    int term_echo;
+    int term_wrap;
+
+    /* SET PROCESS settings */
+    int process_priority;
+
+    /* SET WORKING_SET settings */
+    int ws_quota;
 };
 
 /* Global context accessor */

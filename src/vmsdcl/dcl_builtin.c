@@ -26,6 +26,8 @@
 #include <limits.h>
 #include <sys/statvfs.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
+#include <sys/time.h>
 #include <termios.h>
 #include <mntent.h>
 
@@ -35,6 +37,7 @@
 #include "dcl/cdu.h"
 #include "ssdef.h"
 #include "vms/logical.h"
+#include "vms/privs.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -1081,12 +1084,77 @@ static int cmd_set_verify(struct dcl_command *cmd)
 }
 
 /*
- * SET TERMINAL - Stub (acknowledge but no-op).
+ * SET TERMINAL /WIDTH= /PAGE= /ECHO /NOECHO /WRAP /NOWRAP
+ *
+ * Stores settings in context and applies them to the real terminal
+ * via ioctl(TIOCSWINSZ) for width/page.  ECHO is toggled via termios.
  */
 static int cmd_set_terminal(struct dcl_command *cmd)
 {
-    (void)cmd;
-    /* Silently succeed - terminal settings are managed by Linux */
+    struct dcl_context *ctx = dcl_get_context();
+
+    /* /WIDTH=n */
+    const char *width_val = dcl_qualifier_value(cmd, "WIDTH");
+    if (width_val && *width_val) {
+        int w = atoi(width_val);
+        if (w < 1 || w > 32767) {
+            dcl_error("SET", 2, "INVWIDTH",
+                      "invalid terminal width - \\%s\\", width_val);
+            return SS$_BADPARAM;
+        }
+        ctx->term_width = w;
+    }
+
+    /* /PAGE=n */
+    const char *page_val = dcl_qualifier_value(cmd, "PAGE");
+    if (page_val && *page_val) {
+        int p = atoi(page_val);
+        if (p < 0 || p > 32767) {
+            dcl_error("SET", 2, "INVPAGE",
+                      "invalid terminal page length - \\%s\\", page_val);
+            return SS$_BADPARAM;
+        }
+        ctx->term_page = p;
+    }
+
+    /* /ECHO vs /NOECHO */
+    if (dcl_has_qualifier(cmd, "NOECHO")) {
+        ctx->term_echo = 0;
+    } else if (dcl_has_qualifier(cmd, "ECHO")) {
+        ctx->term_echo = 1;
+    }
+
+    /* /WRAP vs /NOWRAP */
+    if (dcl_has_qualifier(cmd, "NOWRAP")) {
+        ctx->term_wrap = 0;
+    } else if (dcl_has_qualifier(cmd, "WRAP")) {
+        ctx->term_wrap = 1;
+    }
+
+    /* Apply width/page to terminal window size if stdout is a tty */
+    if (isatty(STDOUT_FILENO)) {
+        struct winsize ws;
+        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
+            if (width_val && *width_val)
+                ws.ws_col = (unsigned short)ctx->term_width;
+            if (page_val && *page_val)
+                ws.ws_row = (unsigned short)ctx->term_page;
+            ioctl(STDOUT_FILENO, TIOCSWINSZ, &ws);
+        }
+    }
+
+    /* Apply echo setting via termios */
+    if (isatty(STDIN_FILENO)) {
+        struct termios tio;
+        if (tcgetattr(STDIN_FILENO, &tio) == 0) {
+            if (ctx->term_echo)
+                tio.c_lflag |= ECHO;
+            else
+                tio.c_lflag &= ~(tcflag_t)ECHO;
+            tcsetattr(STDIN_FILENO, TCSANOW, &tio);
+        }
+    }
+
     return SS$_NORMAL;
 }
 
@@ -1143,6 +1211,521 @@ static int cmd_set_password(struct dcl_command *cmd)
 }
 
 /*
+ * SET MESSAGE /FACILITY /NOFACILITY /SEVERITY /NOSEVERITY
+ *             /IDENTIFICATION /NOIDENTIFICATION /TEXT /NOTEXT
+ *
+ * Controls which components of VMS error messages are displayed.
+ * On OpenVMS, dcl_error() respects these flags when formatting output.
+ */
+static int cmd_set_message(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    /* /[NO]FACILITY */
+    if (dcl_has_qualifier(cmd, "NOFACILITY"))
+        ctx->msg_facility = 0;
+    else if (dcl_has_qualifier(cmd, "FACILITY"))
+        ctx->msg_facility = 1;
+
+    /* /[NO]SEVERITY */
+    if (dcl_has_qualifier(cmd, "NOSEVERITY"))
+        ctx->msg_severity = 0;
+    else if (dcl_has_qualifier(cmd, "SEVERITY"))
+        ctx->msg_severity = 1;
+
+    /* /[NO]IDENTIFICATION */
+    if (dcl_has_qualifier(cmd, "NOIDENTIFICATION") ||
+        dcl_has_qualifier(cmd, "NOIDENT"))
+        ctx->msg_ident = 0;
+    else if (dcl_has_qualifier(cmd, "IDENTIFICATION") ||
+             dcl_has_qualifier(cmd, "IDENT"))
+        ctx->msg_ident = 1;
+
+    /* /[NO]TEXT */
+    if (dcl_has_qualifier(cmd, "NOTEXT"))
+        ctx->msg_text = 0;
+    else if (dcl_has_qualifier(cmd, "TEXT"))
+        ctx->msg_text = 1;
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SET CONTROL[=(item,...)] / SET NOCONTROL[=(item,...)]
+ *
+ * Enables or disables Ctrl-Y (and Ctrl-C) trapping.
+ * SET CONTROL=Y   — enable Ctrl-Y interrupt
+ * SET NOCONTROL=Y — disable Ctrl-Y interrupt
+ *
+ * The value is in cmd->params[1] for "SET CONTROL=Y" style,
+ * or parsed from qualifiers. VMS also allows SET CONTROL=(Y,T).
+ */
+static int cmd_set_control(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    /*
+     * Determine enable vs disable from the subcommand word.
+     * "CONTROL"   => enable
+     * "NOCONTROL" => disable
+     */
+    int enable = 1;
+    if (cmd->param_count >= 1 &&
+        dcl_match_command(cmd->params[0], "NOCONTROL", 9))
+        enable = 0;
+
+    /*
+     * The item list may be in params[1] (bare word after =) or in
+     * the qualifier value when parsed as /CONTROL=Y.  Accept both.
+     * Default target is Y when no item specified.
+     */
+    const char *item = (cmd->param_count >= 2) ? cmd->params[1] : "Y";
+
+    /* Parse item list — may be "(Y)" or "Y" or "(Y,T)" */
+    char item_buf[64];
+    strncpy(item_buf, item, sizeof(item_buf) - 1);
+    item_buf[sizeof(item_buf) - 1] = '\0';
+
+    /* Strip surrounding parens */
+    size_t ilen = strlen(item_buf);
+    if (ilen > 0 && item_buf[0] == '(') {
+        memmove(item_buf, item_buf + 1, ilen);
+        ilen--;
+    }
+    if (ilen > 0 && item_buf[ilen - 1] == ')') {
+        item_buf[ilen - 1] = '\0';
+    }
+
+    /* Walk comma-separated tokens */
+    char *saveptr = NULL;
+    char *tok = strtok_r(item_buf, ",", &saveptr);
+    while (tok) {
+        while (*tok == ' ') tok++;
+        if (strcasecmp(tok, "Y") == 0) {
+            ctx->ctrl_y_enabled = enable;
+        }
+        /* T = Ctrl-T (broadcast) — track but not implemented beyond flag */
+        tok = strtok_r(NULL, ",", &saveptr);
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SET PROCESS /NAME=procname /PRIORITY=n /PRIVILEGES=(priv,...)
+ *
+ * /NAME=    — rename the process name (stored in context; no OS rename)
+ * /PRIORITY= — set base priority; requires ALTPRI privilege
+ * /PRIVILEGES= — set process privileges; requires SETPRV or OPER
+ */
+static int cmd_set_process(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    /* /NAME=name */
+    const char *name_val = dcl_qualifier_value(cmd, "NAME");
+    if (name_val && *name_val) {
+        strncpy(ctx->process_name, name_val, sizeof(ctx->process_name) - 1);
+        ctx->process_name[sizeof(ctx->process_name) - 1] = '\0';
+        /* Upper-case the name, VMS style */
+        for (size_t i = 0; ctx->process_name[i]; i++)
+            ctx->process_name[i] = (char)toupper((unsigned char)ctx->process_name[i]);
+    }
+
+    /* /PRIORITY=n — requires ALTPRI */
+    const char *pri_val = dcl_qualifier_value(cmd, "PRIORITY");
+    if (pri_val && *pri_val) {
+        if (!(ctx->privileges & PRV$M_ALTPRI) &&
+            !(ctx->privileges & PRV$M_SYSPRV) &&
+            !(ctx->privileges & PRV$M_BYPASS)) {
+            dcl_error("SET", 2, "NOPRIV",
+                      "no privilege for SET PROCESS /PRIORITY");
+            return SS$_NOPRIV;
+        }
+        int pri = atoi(pri_val);
+        if (pri < 0 || pri > 31) {
+            dcl_error("SET", 2, "INVPRI",
+                      "invalid priority \\%d\\ - must be 0-31", pri);
+            return SS$_BADPARAM;
+        }
+        ctx->process_priority = pri;
+        /* Best-effort: try to set Linux scheduling niceness proportionally */
+        /* VMS pri 0 = lowest, 15 = normal, 31 = highest
+         * Linux nice: -20 (highest) to +19 (lowest) */
+        int nice_val = 19 - (pri * 39) / 31;
+        setpriority(PRIO_PROCESS, 0, nice_val);
+    }
+
+    /* /PRIVILEGES=(priv,...) — requires SETPRV or OPER */
+    const char *privs_val = dcl_qualifier_value(cmd, "PRIVILEGES");
+    if (privs_val && *privs_val) {
+        if (!(ctx->privileges & PRV$M_SETPRV) &&
+            !(ctx->privileges & PRV$M_SYSPRV) &&
+            !(ctx->privileges & PRV$M_BYPASS)) {
+            dcl_error("SET", 2, "NOPRIV",
+                      "no privilege for SET PROCESS /PRIVILEGES");
+            return SS$_NOPRIV;
+        }
+        /* Strip outer parens if present */
+        char pv[512];
+        strncpy(pv, privs_val, sizeof(pv) - 1);
+        pv[sizeof(pv) - 1] = '\0';
+        size_t pvlen = strlen(pv);
+        if (pvlen > 0 && pv[0] == '(') {
+            memmove(pv, pv + 1, pvlen);
+            pvlen--;
+        }
+        if (pvlen > 0 && pv[pvlen - 1] == ')') {
+            pv[pvlen - 1] = '\0';
+        }
+        ctx->privileges = parse_privilege_string(pv);
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SET FILE /VERSION_LIMIT=n /EXPIRATION_DATE=ddmmyyyy
+ *
+ * /VERSION_LIMIT — sets ODS-2 version limit on a file.
+ *   Under Linux this is advisory (no direct FS support); we record
+ *   the intent but cannot enforce it at the kernel level.
+ * /EXPIRATION_DATE — sets the file expiration date (utimes).
+ */
+static int cmd_set_file(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    /* Need at least a filespec after SET FILE */
+    if (cmd->param_count < 2) {
+        dcl_error("SET", 2, "NOFILES",
+                  "missing file specification");
+        return SS$_BADPARAM;
+    }
+
+    const char *filespec = cmd->params[1];
+    char linux_path[1024];
+    dcl_resolve_path(ctx, filespec, linux_path, sizeof(linux_path));
+
+    struct stat st;
+    if (stat(linux_path, &st) != 0) {
+        dcl_error("SET", 2, "NOSUCHFILE",
+                  "file not found - \\%s\\", filespec);
+        return SS$_NOSUCHFILE;
+    }
+
+    /* /VERSION_LIMIT=n — advisory; just validate and acknowledge */
+    const char *vl = dcl_qualifier_value(cmd, "VERSION_LIMIT");
+    if (vl && *vl) {
+        int vlim = atoi(vl);
+        if (vlim < 0 || vlim > 32767) {
+            dcl_error("SET", 2, "INVVLIM",
+                      "invalid version limit \\%s\\", vl);
+            return SS$_BADPARAM;
+        }
+        /* On Linux/ext4 there is no native version-limit support.
+         * We acknowledge the setting without error. */
+    }
+
+    /* /EXPIRATION_DATE=dd-mmm-yyyy or absolute quadword in decimal.
+     * Accept VMS date string format: dd-MMM-yyyy[:hh:mm:ss] */
+    const char *exp_date = dcl_qualifier_value(cmd, "EXPIRATION_DATE");
+    if (exp_date && *exp_date) {
+        struct tm exp_tm;
+        memset(&exp_tm, 0, sizeof(exp_tm));
+
+        /* Parse VMS date: dd-MMM-yyyy or dd-MMM-yyyy:hh:mm:ss */
+        static const char *mon_names[] = {
+            "JAN","FEB","MAR","APR","MAY","JUN",
+            "JUL","AUG","SEP","OCT","NOV","DEC"
+        };
+
+        char date_buf[64];
+        strncpy(date_buf, exp_date, sizeof(date_buf) - 1);
+        date_buf[sizeof(date_buf) - 1] = '\0';
+        /* Upper-case for comparison */
+        for (size_t i = 0; date_buf[i]; i++)
+            date_buf[i] = (char)toupper((unsigned char)date_buf[i]);
+
+        int day = 0, mon = -1, year = 0;
+        int hr = 0, mi = 0, sc = 0;
+        char mon_str[4] = {0};
+
+        /* Try dd-MMM-yyyy:hh:mm:ss then dd-MMM-yyyy */
+        int parsed = 0;
+        if (sscanf(date_buf, "%d-%3s-%d:%d:%d:%d",
+                   &day, mon_str, &year, &hr, &mi, &sc) >= 3)
+            parsed = 1;
+        else if (sscanf(date_buf, "%d-%3s-%d", &day, mon_str, &year) == 3)
+            parsed = 1;
+
+        if (parsed) {
+            for (int m = 0; m < 12; m++) {
+                if (strncmp(mon_str, mon_names[m], 3) == 0) {
+                    mon = m;
+                    break;
+                }
+            }
+        }
+
+        if (!parsed || mon < 0) {
+            dcl_error("SET", 2, "IVTIME",
+                      "invalid expiration date - \\%s\\", exp_date);
+            return SS$_IVTIME;
+        }
+
+        exp_tm.tm_mday = day;
+        exp_tm.tm_mon  = mon;
+        exp_tm.tm_year = year - 1900;
+        exp_tm.tm_hour = hr;
+        exp_tm.tm_min  = mi;
+        exp_tm.tm_sec  = sc;
+        exp_tm.tm_isdst = -1;
+
+        time_t exp_t = mktime(&exp_tm);
+        if (exp_t == (time_t)-1) {
+            dcl_error("SET", 2, "IVTIME",
+                      "cannot convert expiration date - \\%s\\", exp_date);
+            return SS$_IVTIME;
+        }
+
+        /* Set atime = now, mtime = expiration date */
+        struct timeval tv[2];
+        gettimeofday(&tv[0], NULL);
+        tv[1].tv_sec  = exp_t;
+        tv[1].tv_usec = 0;
+        if (utimes(linux_path, tv) != 0) {
+            dcl_error("SET", 2, "PRV",
+                      "cannot set expiration date - %s", strerror(errno));
+            return SS$_NOPRIV;
+        }
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SET UIC [uic]
+ *
+ * Changes the current process UIC (user identification code).
+ * On OpenVMS: SET UIC [group,member]
+ * Requires SETPRV, SYSPRV, or BYPASS privilege to change to another UIC.
+ * Without privilege, only reports the current UIC.
+ */
+static int cmd_set_uic(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    if (cmd->param_count < 2) {
+        /* No argument: display current UIC */
+        printf("  Current UIC: [%03o,%03o]\n", ctx->uic_group, ctx->uic_member);
+        return SS$_NORMAL;
+    }
+
+    const char *uic_str = cmd->params[1];
+
+    /* Check privilege */
+    if (!(ctx->privileges & PRV$M_SETPRV) &&
+        !(ctx->privileges & PRV$M_SYSPRV) &&
+        !(ctx->privileges & PRV$M_BYPASS)) {
+        dcl_error("SET", 2, "NOPRIV",
+                  "no privilege for SET UIC");
+        return SS$_NOPRIV;
+    }
+
+    /* Parse [group,member] in octal — strip brackets */
+    char uic_buf[64];
+    strncpy(uic_buf, uic_str, sizeof(uic_buf) - 1);
+    uic_buf[sizeof(uic_buf) - 1] = '\0';
+
+    size_t ulen = strlen(uic_buf);
+    if (ulen > 0 && uic_buf[0] == '[') {
+        memmove(uic_buf, uic_buf + 1, ulen);
+        ulen--;
+    }
+    if (ulen > 0 && uic_buf[ulen - 1] == ']') {
+        uic_buf[ulen - 1] = '\0';
+    }
+
+    unsigned int grp = 0, mem = 0;
+    if (sscanf(uic_buf, "%o,%o", &grp, &mem) != 2) {
+        dcl_error("SET", 2, "IVUIC",
+                  "invalid UIC format - \\%s\\ (expected [group,member])", uic_str);
+        return SS$_BADPARAM;
+    }
+
+    ctx->uic_group  = grp;
+    ctx->uic_member = mem;
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SET WORKING_SET /QUOTA=n /EXTENT=n /LIMIT=n
+ *
+ * Controls process working set size.  On Linux we map /QUOTA to
+ * RLIMIT_AS (virtual address space) as the closest approximation.
+ * VMS page size is 512 bytes; values are in pages.
+ */
+static int cmd_set_working_set(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+#define VMS_PAGE_SIZE 512
+
+    /* /QUOTA=n pages */
+    const char *quota_val = dcl_qualifier_value(cmd, "QUOTA");
+    if (quota_val && *quota_val) {
+        int pages = atoi(quota_val);
+        if (pages < 0) {
+            dcl_error("SET", 2, "INVQUO",
+                      "invalid working set quota \\%s\\", quota_val);
+            return SS$_BADPARAM;
+        }
+        ctx->ws_quota = pages;
+
+        /* Best-effort: adjust RLIMIT_DATA */
+        if (pages > 0) {
+            struct rlimit rl;
+            if (getrlimit(RLIMIT_DATA, &rl) == 0) {
+                rlim_t new_limit = (rlim_t)pages * VMS_PAGE_SIZE;
+                if (rl.rlim_max == RLIM_INFINITY || new_limit <= rl.rlim_max) {
+                    rl.rlim_cur = new_limit;
+                    setrlimit(RLIMIT_DATA, &rl);
+                }
+            }
+        }
+    }
+
+    /* /EXTENT=n and /LIMIT=n are also valid — acknowledge silently */
+    /* (EXTENT = maximum working set, LIMIT = minimum guaranteed pages) */
+
+    return SS$_NORMAL;
+#undef VMS_PAGE_SIZE
+}
+
+/*
+ * SET TIME [dd-mmm-yyyy:hh:mm:ss] — set system clock (privileged).
+ *
+ * Requires OPER or SYSPRV privilege.  Uses settimeofday(2).
+ */
+static int cmd_set_time(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    if (cmd->param_count < 2) {
+        /* No argument: display current time (same as SHOW TIME).
+         * Reading the clock requires no privilege on VMS or Linux. */
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        struct tm tm;
+        localtime_r(&ts.tv_sec, &tm);
+        static const char *mon_abbr[] = {
+            "JAN","FEB","MAR","APR","MAY","JUN",
+            "JUL","AUG","SEP","OCT","NOV","DEC"
+        };
+        printf("  %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+               tm.tm_mday, mon_abbr[tm.tm_mon], 1900 + tm.tm_year,
+               tm.tm_hour, tm.tm_min, tm.tm_sec,
+               (int)(ts.tv_nsec / 10000000));
+        return SS$_NORMAL;
+    }
+
+    /* Privilege check — required when actually setting the clock */
+    if (!(ctx->privileges & PRV$M_OPER) &&
+        !(ctx->privileges & PRV$M_SYSPRV) &&
+        !(ctx->privileges & PRV$M_BYPASS)) {
+        dcl_error("SET", 2, "NOPRIV",
+                  "no privilege for SET TIME");
+        return SS$_NOPRIV;
+    }
+
+    const char *time_str = cmd->params[1];
+
+    /* Parse VMS format: dd-MMM-yyyy:hh:mm:ss or hh:mm:ss (time only) */
+    static const char *mon_names[] = {
+        "JAN","FEB","MAR","APR","MAY","JUN",
+        "JUL","AUG","SEP","OCT","NOV","DEC"
+    };
+
+    char ts_buf[64];
+    strncpy(ts_buf, time_str, sizeof(ts_buf) - 1);
+    ts_buf[sizeof(ts_buf) - 1] = '\0';
+    for (size_t i = 0; ts_buf[i]; i++)
+        ts_buf[i] = (char)toupper((unsigned char)ts_buf[i]);
+
+    struct tm new_tm;
+    memset(&new_tm, 0, sizeof(new_tm));
+
+    /* Get current local time as base */
+    time_t now = time(NULL);
+    localtime_r(&now, &new_tm);
+
+    int day = 0, mon = -1, year = 0;
+    int hr = 0, mi = 0, sc = 0;
+    char mon_str[4] = {0};
+    int have_date = 0;
+
+    /* Try full datetime first, then time-only */
+    if (sscanf(ts_buf, "%d-%3s-%d:%d:%d:%d",
+               &day, mon_str, &year, &hr, &mi, &sc) >= 3) {
+        have_date = 1;
+    } else if (sscanf(ts_buf, "%d:%d:%d", &hr, &mi, &sc) >= 2) {
+        /* time only — keep current date */
+    } else {
+        dcl_error("SET", 2, "IVTIME",
+                  "invalid time specification - \\%s\\", time_str);
+        return SS$_IVTIME;
+    }
+
+    if (have_date) {
+        for (int m = 0; m < 12; m++) {
+            if (strncmp(mon_str, mon_names[m], 3) == 0) {
+                mon = m;
+                break;
+            }
+        }
+        if (mon < 0) {
+            dcl_error("SET", 2, "IVTIME",
+                      "invalid month - \\%s\\", mon_str);
+            return SS$_IVTIME;
+        }
+        new_tm.tm_mday = day;
+        new_tm.tm_mon  = mon;
+        new_tm.tm_year = year - 1900;
+    }
+
+    new_tm.tm_hour   = hr;
+    new_tm.tm_min    = mi;
+    new_tm.tm_sec    = sc;
+    new_tm.tm_isdst  = -1;
+
+    time_t new_t = mktime(&new_tm);
+    if (new_t == (time_t)-1) {
+        dcl_error("SET", 2, "IVTIME",
+                  "cannot convert time - \\%s\\", time_str);
+        return SS$_IVTIME;
+    }
+
+    struct timeval tv;
+    tv.tv_sec  = new_t;
+    tv.tv_usec = 0;
+
+    if (settimeofday(&tv, NULL) != 0) {
+        if (errno == EPERM) {
+            dcl_error("SET", 2, "NOPRIV",
+                      "cannot set system time - insufficient OS privilege");
+            return SS$_NOPRIV;
+        }
+        dcl_error("SET", 2, "IVTIME",
+                  "cannot set system time - %s", strerror(errno));
+        return SS$_IVTIME;
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
  * SET Dispatcher
  */
 static int cmd_set(struct dcl_command *cmd)
@@ -1161,7 +1744,7 @@ static int cmd_set(struct dcl_command *cmd)
     if (dcl_match_command(subcmd, "VERIFY", 3) ||
         dcl_match_command(subcmd, "NOVERIFY", 3))
         return cmd_set_verify(cmd);
-    if (dcl_match_command(subcmd, "TERMINAL", 3))
+    if (dcl_match_command(subcmd, "TERMINAL", 4))
         return cmd_set_terminal(cmd);
     if (dcl_match_command(subcmd, "PROTECTION", 3))
         return cmd_set_protection(cmd);
@@ -1179,6 +1762,21 @@ static int cmd_set(struct dcl_command *cmd)
         on_ctx->noon_active = 0;
         return SS$_NORMAL;
     }
+    if (dcl_match_command(subcmd, "MESSAGE", 3))
+        return cmd_set_message(cmd);
+    if (dcl_match_command(subcmd, "CONTROL", 4) ||
+        dcl_match_command(subcmd, "NOCONTROL", 9))
+        return cmd_set_control(cmd);
+    if (dcl_match_command(subcmd, "PROCESS", 3))
+        return cmd_set_process(cmd);
+    if (dcl_match_command(subcmd, "FILE", 4))
+        return cmd_set_file(cmd);
+    if (dcl_match_command(subcmd, "UIC", 3))
+        return cmd_set_uic(cmd);
+    if (dcl_match_command(subcmd, "WORKING_SET", 4))
+        return cmd_set_working_set(cmd);
+    if (dcl_match_command(subcmd, "TIME", 4))
+        return cmd_set_time(cmd);
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SET keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;

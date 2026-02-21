@@ -70,6 +70,21 @@ void dcl_context_init(struct dcl_context *ctx)
     ctx->if_depth = 0;
     ctx->gosub_depth = 0;
 
+    /* SET MESSAGE defaults: all flags on */
+    ctx->msg_facility = 1;
+    ctx->msg_severity = 1;
+    ctx->msg_ident    = 1;
+    ctx->msg_text     = 1;
+
+    /* SET TERMINAL defaults */
+    ctx->term_width = 80;
+    ctx->term_page  = 24;
+    ctx->term_echo  = 1;
+    ctx->term_wrap  = 1;
+
+    /* SET PROCESS defaults */
+    ctx->process_priority = 4;   /* Default VMS base priority */
+
     /* Get current directory */
     if (getcwd(ctx->default_linux, sizeof(ctx->default_linux)) == NULL) {
         strcpy(ctx->default_linux, "/");

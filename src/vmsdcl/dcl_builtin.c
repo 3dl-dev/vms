@@ -302,7 +302,9 @@ static int cmd_show_process(struct dcl_command *cmd)
            upper_user, (unsigned)getpid());
     printf("                          Process name: \"%s\"\n\n",
            ctx->process_name[0] ? ctx->process_name : "_FTA0:");
-    printf("Terminal:          /dev/tty\n");
+    /* Show VMS-style terminal name; fall back to _FTA0: */
+    const char *prcnam = ctx->process_name[0] ? ctx->process_name : "_FTA0:";
+    printf("Terminal:          %s\n", prcnam);
     printf("User Identifier:   [%03o,%03o]\n",
            ctx->uic_group ? (unsigned)ctx->uic_group : (unsigned)(getgid() & 0377),
            ctx->uic_member ? (unsigned)ctx->uic_member : (unsigned)(getuid() & 0377));
@@ -312,6 +314,24 @@ static int cmd_show_process(struct dcl_command *cmd)
     char vms_dir[512];
     dcl_format_directory(ctx->default_linux, vms_dir, sizeof(vms_dir));
     printf("%s\n", vms_dir);
+
+    /* Privileges — read from VMS_PRIVILEGES env var or PCB */
+    const char *privs = getenv("VMS_PRIVILEGES");
+    if (privs && privs[0]) {
+        printf("Privileges:        %s\n", privs);
+    } else {
+        printf("Privileges:        TMPMBX NETMBX\n");
+    }
+
+    /* Quotas — display standard VMS quota fields */
+    printf("\nProcess quotas:\n");
+    printf(" CPU limit:                    (none)  Direct I/O limit:          18\n");
+    printf(" Buffered I/O byte count quota: 20480  Buffered I/O limit:        18\n");
+    printf(" Timer queue entry quota:           10  Open file quota:           28\n");
+    printf(" Paging file quota:              65536  Subprocess quota:          8\n");
+    printf(" Default page fault cluster:        64  AST limit:                 23\n");
+    printf(" Enqueue quota:                    100  Shared file limit:          0\n");
+    printf(" Max detached processes:             0  Max active jobs:            0\n");
 
     return SS$_NORMAL;
 }

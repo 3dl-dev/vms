@@ -28,6 +28,7 @@
 
 /* Paths */
 #define SYSUAF_PATH        "/etc/ovmx/sysuaf.dat"
+#define LASTLOGIN_DIR      "/etc/ovmx/lastlogin"
 #ifndef OVMX_BIN_DIR
 #define OVMX_BIN_DIR "/usr/local/bin"
 #endif
@@ -201,15 +202,52 @@ static void format_vms_time(char *buf, size_t bufsiz)
 }
 
 /* ------------------------------------------------------------------ */
+/* Read and update last-login timestamp for a user.                   */
+/* Returns 1 if a previous timestamp was found (written to prev_buf). */
+/* Always writes the current time as the new last login.              */
+/* ------------------------------------------------------------------ */
+static int update_lastlogin(const char *username, char *prev_buf, size_t prev_size)
+{
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", LASTLOGIN_DIR, username);
+
+    /* Try to read the previous timestamp */
+    int found = 0;
+    FILE *fp = fopen(path, "r");
+    if (fp) {
+        if (fgets(prev_buf, (int)prev_size, fp) != NULL) {
+            trim_trailing(prev_buf);
+            found = (prev_buf[0] != '\0');
+        }
+        fclose(fp);
+    }
+
+    /* Write current timestamp */
+    char cur[64];
+    format_vms_time(cur, sizeof(cur));
+    fp = fopen(path, "w");
+    if (fp) {
+        fprintf(fp, "%s\n", cur);
+        fclose(fp);
+    }
+
+    return found;
+}
+
+/* ------------------------------------------------------------------ */
 /* Start a VMS session: banner, environment, exec DCL shell           */
 /* ------------------------------------------------------------------ */
 static void start_session(const sysuaf_record_t *rec)
 {
-    char timebuf[64];
-    format_vms_time(timebuf, sizeof(timebuf));
+    printf("\n   Welcome to OpenVMS (tm) V7.3\n");
 
-    printf("\n   Welcome to OpenVMS (tm) OVMX V7.3\n");
-    printf("\n   Last interactive login on %s\n\n", timebuf);
+    /* Display last login time (from saved file), then update it */
+    char prev_login[64] = {0};
+    if (update_lastlogin(rec->username, prev_login, sizeof(prev_login))) {
+        printf("\n   Last interactive login on %s\n\n", prev_login);
+    } else {
+        printf("\n");
+    }
 
     /* Set up environment for session */
     setenv("VMS_USERNAME",    rec->username,    1);

@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     linux-image-generic \
     busybox-static \
     cpio \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install QEMU for the correct architecture
@@ -63,6 +64,13 @@ RUN for f in /src/tests/qemu/test_*.c; do \
         echo "Built: $(basename $out)"; \
     done
 
+# Build mkimage_vmsfs (host tool) and create test image
+COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
+RUN gcc -O2 -Wall -o /src/tests/qemu/mkimage_vmsfs \
+        /src/tests/qemu/mkimage_vmsfs.c \
+        -I/src/kernel/vmsfs && \
+    /src/tests/qemu/mkimage_vmsfs /vmsfs_test.img
+
 # Locate the kernel image (may already exist as symlink)
 RUN KVER=$(cat /tmp/kver) && \
     if [ ! -e /boot/vmlinuz ]; then \
@@ -70,17 +78,38 @@ RUN KVER=$(cat /tmp/kver) && \
     fi && \
     ls -la /boot/vmlinuz
 
+# Find and decompress loop.ko for block-device tests
+RUN KVER=$(cat /tmp/kver) && \
+    LOOP_MOD=$(find /lib/modules/$KVER -name 'loop.ko*' | head -1) && \
+    if [ -n "$LOOP_MOD" ]; then \
+        echo "Found loop module: $LOOP_MOD"; \
+        case "$LOOP_MOD" in \
+            *.zst) zstd -d "$LOOP_MOD" -o /tmp/loop.ko ;; \
+            *.xz)  xz -d -c "$LOOP_MOD" > /tmp/loop.ko ;; \
+            *.gz)  gzip -d -c "$LOOP_MOD" > /tmp/loop.ko ;; \
+            *)     cp "$LOOP_MOD" /tmp/loop.ko ;; \
+        esac; \
+        echo "Decompressed: $(ls -la /tmp/loop.ko)"; \
+    else \
+        echo "WARNING: loop.ko not found, block-device test will skip"; \
+    fi
+
 # Assemble initramfs
 COPY tests/qemu/init.sh /src/tests/qemu/init.sh
 RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
              /initramfs/proc /initramfs/sys /initramfs/tests \
-             /initramfs/tmp /initramfs/mnt/vmsfs && \
-    # Busybox provides sh, mount, insmod, reboot, grep, etc.
+             /initramfs/tmp /initramfs/mnt/vmsfs \
+             /initramfs/mnt/vmsfs_blkdev /initramfs/test_data && \
+    # Busybox provides sh, mount, insmod, reboot, grep, losetup, etc.
     cp /bin/busybox /initramfs/bin/busybox && \
     ln -s busybox /initramfs/bin/sh && \
     # Kernel modules
     cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
     cp /src/kernel/vmsfs/vmsfs.ko /initramfs/lib/modules/ && \
+    # Loop module (for block-device test)
+    [ -f /tmp/loop.ko ] && cp /tmp/loop.ko /initramfs/lib/modules/ || true && \
+    # Block-device test image
+    [ -f /vmsfs_test.img ] && cp /vmsfs_test.img /initramfs/test_data/ || true && \
     # Test programs (statically linked, no libc needed in VM)
     for f in /src/tests/qemu/test_kmod_*; do \
         [ -x "$f" ] && cp "$f" /initramfs/tests/ || true; \

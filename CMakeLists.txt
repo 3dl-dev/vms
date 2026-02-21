@@ -75,10 +75,16 @@ add_subdirectory(src/vmsfs)
 add_subdirectory(src/vmsrms)
 add_subdirectory(src/vmsdcl)
 
-add_subdirectory(src/vmsssh)
-
-if(BUILD_TESTS)
-    add_subdirectory(tests/vmsssh)
+# vmssshd requires libssh — skip if headers not available
+find_path(LIBSSH_INCLUDE_DIR NAMES libssh/libssh.h)
+find_library(LIBSSH_LIBRARY NAMES ssh)
+if(LIBSSH_INCLUDE_DIR AND LIBSSH_LIBRARY)
+    add_subdirectory(src/vmsssh)
+    if(BUILD_TESTS)
+        add_subdirectory(tests/vmsssh)
+    endif()
+else()
+    message(STATUS "libssh not found — vmssshd will not be built")
 endif()
 
 if(BUILD_TOOLS)

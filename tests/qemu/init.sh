@@ -17,6 +17,24 @@ echo ""
 TOTAL_PASS=0
 TOTAL_FAIL=0
 
+# Set up loop device for block-device vmsfs test
+# loop may be built-in (CONFIG_BLK_DEV_LOOP=y) or a module
+if [ -f /lib/modules/loop.ko ]; then
+    echo "--- Loading loop.ko ---"
+    insmod /lib/modules/loop.ko
+fi
+if [ -f /test_data/vmsfs_test.img ]; then
+    echo "--- Setting up loop device for blkdev test ---"
+    # Create /dev/loop0 if devtmpfs didn't auto-create it
+    [ -b /dev/loop0 ] || mknod /dev/loop0 b 7 0
+    losetup /dev/loop0 /test_data/vmsfs_test.img
+    if [ -b /dev/loop0 ]; then
+        echo "  OK: loop0 attached to vmsfs_test.img"
+    else
+        echo "  WARN: losetup failed or /dev/loop0 not present"
+    fi
+fi
+
 # Load vms.ko
 echo "--- Loading vms.ko ---"
 insmod /lib/modules/vms.ko

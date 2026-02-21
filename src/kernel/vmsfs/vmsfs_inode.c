@@ -76,6 +76,8 @@ struct inode *vmsfs_alloc_inode(struct super_block *sb)
     vi->vms_prot = 0;
     vi->base_name[0] = '\0';
     vi->extension[0] = '\0';
+    vi->fid = 0;
+    vi->map_count = 0;
 
     return &vi->vfs_inode;
 }

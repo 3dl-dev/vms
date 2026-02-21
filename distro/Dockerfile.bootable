@@ -40,8 +40,7 @@ RUN KVER=$(cat /tmp/kver) && \
     cd src/kernel && make KDIR=/lib/modules/${KVER}/build 2>&1 && \
     cd vmsfs && make KDIR=/lib/modules/${KVER}/build 2>&1
 
-# Build OVMX userspace — static musl for now (vms-840/841 will switch to
-# musl dynamic with shareable images)
+# Build OVMX userspace — static musl (no glibc dependency)
 RUN cmake -B build-static \
     -DCMAKE_C_COMPILER=musl-gcc \
     -DCMAKE_BUILD_TYPE=Release \
@@ -64,7 +63,6 @@ RUN mkdir -p /initramfs/dev /initramfs/proc /initramfs/sys \
     cp build-static/bin/LOGINOUT.EXE /initramfs/vms/sys\$system/ && \
     cp build-static/bin/HELP.EXE     /initramfs/vms/sys\$system/ && \
     cp build-static/bin/VMSLNMD.EXE  /initramfs/vms/sys\$system/ && \
-    cp build-static/bin/VMSSSHD.EXE  /initramfs/vms/sys\$system/ 2>/dev/null ; \
     cp build-static/bin/AUTHORIZE.EXE /initramfs/vms/sys\$system/ 2>/dev/null ; \
     cp build-static/bin/MAIL.EXE     /initramfs/vms/sys\$system/ 2>/dev/null ; \
     cp build-static/bin/MONITOR.EXE  /initramfs/vms/sys\$system/ 2>/dev/null ; \

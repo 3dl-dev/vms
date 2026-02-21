@@ -2,11 +2,13 @@
 /*
  * vmsfs.h - Internal header for the VMS filesystem kernel module (vmsfs.ko)
  *
- * Defines superblock, inode, and dentry structures for a kernel-native
- * VMS filesystem that overlays a backing directory (typically ext4) with
- * VMS file versioning, case-insensitive lookup, and SOGW protection.
+ * Supports two mount modes:
+ *   1. Overlay mode (backing=PATH) — overlays a host directory with VMS
+ *      versioning, case-insensitive lookup, and SOGW protection.
+ *   2. Block-device mode — mounts a block device formatted with the VMSFS
+ *      on-disk format (vmsfs_ondisk.h). Read-only for now.
  *
- * OVMX Project - Phase 4b: Kernel-native VMS Filesystem
+ * OVMX Project - Phase 4b/7: Kernel-native VMS Filesystem
  */
 
 #ifndef _VMSFS_H
@@ -17,6 +19,9 @@
 #include <linux/dcache.h>
 #include <linux/namei.h>
 #include <linux/slab.h>
+#include <linux/buffer_head.h>
+
+#include "vmsfs_ondisk.h"
 
 #define VMSFS_MAGIC       0x564D5346  /* "VMSF" */
 #define VMSFS_MAX_VERSION 32767
@@ -26,26 +31,51 @@
 /* Maximum length of a full versioned filename: name.type;version */
 #define VMSFS_MAX_FILENAME (VMSFS_MAX_NAME + 1 + VMSFS_MAX_TYPE + 1 + 5)
 
+/* Mount modes */
+enum vmsfs_mode {
+    VMSFS_MODE_OVERLAY,   /* backing=PATH directory overlay */
+    VMSFS_MODE_BLKDEV,    /* block-device with on-disk format */
+};
+
 /* Mount options */
 struct vmsfs_mount_opts {
-    char backing_path[PATH_MAX];  /* backing directory on host FS */
+    char backing_path[PATH_MAX];  /* backing directory on host FS (overlay) */
     int  version_limit;           /* max versions per file (default 32767) */
     int  case_blind;              /* case-insensitive lookup (default 1) */
 };
 
 /* Superblock private data */
 struct vmsfs_sb_info {
+    enum vmsfs_mode mode;
     struct vmsfs_mount_opts opts;
+
+    /* Overlay mode */
     struct path backing;          /* backing directory path */
+
+    /* Block-device mode */
+    struct vmsfs_home_block *home;  /* cached home block */
+    unsigned long *bitmap;          /* cached storage bitmap */
+    uint32_t bitmap_lbn;
+    uint32_t bitmap_blocks;
+    uint32_t index_lbn;
+    uint32_t max_files;
+    uint32_t data_lbn;
+    uint32_t total_blocks;
+    uint32_t free_blocks;
 };
 
 /* Inode private data - embedded VFS inode for container_of */
 struct vmsfs_inode_info {
     struct inode vfs_inode;       /* must be first for container_of */
     int version;                  /* file version number (0 for dirs) */
-    uint16_t vms_prot;           /* SOGW protection mask (stub) */
+    uint16_t vms_prot;           /* SOGW protection mask */
     char base_name[VMSFS_MAX_NAME + 1];  /* name without version */
     char extension[VMSFS_MAX_TYPE + 1];  /* extension (after dot) */
+
+    /* Block-device mode: cached retrieval pointers */
+    uint32_t fid;                /* file header number */
+    uint16_t map_count;          /* valid retrieval pointers */
+    struct vmsfs_retrieval_ptr map[VMSFS_MAX_RETRIEVAL];
 };
 
 static inline struct vmsfs_sb_info *VMSFS_SB(struct super_block *sb)
@@ -135,5 +165,24 @@ struct inode *vmsfs_new_inode(struct super_block *sb, umode_t mode);
 /* Module init/exit for inode cache (called from vmsfs_super.c) */
 int vmsfs_inode_cache_init(void);
 void vmsfs_inode_cache_destroy(void);
+
+/* ================================================================
+ * Block-device mode operations (vmsfs_blkdev.c)
+ * ================================================================ */
+
+/* Read a file header by FID and create/populate a VFS inode */
+struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid);
+
+/* Block-device directory inode operations */
+extern const struct inode_operations vmsfs_blkdev_dir_iops;
+
+/* Block-device directory file operations */
+extern const struct file_operations vmsfs_blkdev_dir_fops;
+
+/* Block-device file operations */
+extern const struct file_operations vmsfs_blkdev_file_fops;
+
+/* Block-device file inode operations */
+extern const struct inode_operations vmsfs_blkdev_file_iops;
 
 #endif /* _VMSFS_H */

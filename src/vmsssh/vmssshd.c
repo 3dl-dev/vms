@@ -1,0 +1,594 @@
+/*
+ * vmssshd.c - VMS-native SSH server daemon for OVMX
+ *
+ * Fork-per-connection SSH server using libssh (server-side API).
+ * Authenticates against SYSUAF, allocates a PTY, and runs /bin/sh
+ * on the PTY slave side while forwarding data over the SSH channel.
+ *
+ * Usage:
+ *   vmssshd [-p port] [-k host_key_path] [-d]
+ *
+ * %VMSSSH-I-STARTUP, server started on port 22
+ *
+ * This bead (vms-825.2) runs /bin/sh as the shell.
+ * vms-825.3 will replace it with LOGINOUT -> DCL.
+ */
+
+/* _GNU_SOURCE (set globally by CMake) already implies _POSIX_C_SOURCE and _DEFAULT_SOURCE */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <signal.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <ctype.h>
+#include <pwd.h>
+
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/poll.h>
+
+#include <pty.h>   /* openpty(), forkpty() */
+
+#include <libssh/libssh.h>
+#include <libssh/server.h>
+
+#include "sysuaf.h"
+
+/* ------------------------------------------------------------------ */
+/* Constants                                                           */
+/* ------------------------------------------------------------------ */
+
+#define DEFAULT_PORT         22
+#define DEFAULT_HOST_KEY     "/etc/ovmx/ssh_host_rsa_key"
+#define AUTH_TIMEOUT_SEC     30
+#define MAX_AUTH_ATTEMPTS    3
+#define FORWARD_BUF_SIZE     4096
+
+/* ------------------------------------------------------------------ */
+/* Globals                                                             */
+/* ------------------------------------------------------------------ */
+
+static int g_port         = DEFAULT_PORT;
+static char g_host_key[256] = DEFAULT_HOST_KEY;
+static int g_daemon_mode  = 0;
+
+/* ------------------------------------------------------------------ */
+/* SIGCHLD handler — reap zombie children                             */
+/* ------------------------------------------------------------------ */
+
+static void sigchld_handler(int sig)
+{
+    (void)sig;
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
+}
+
+/* ------------------------------------------------------------------ */
+/* Helper: upcase string in-place                                     */
+/* ------------------------------------------------------------------ */
+
+static void str_upcase(char *s)
+{
+    for (; *s; s++)
+        *s = (char)toupper((unsigned char)*s);
+}
+
+/* ------------------------------------------------------------------ */
+/* generate_host_key: auto-generate RSA key if missing               */
+/* ------------------------------------------------------------------ */
+
+static int generate_host_key(const char *path)
+{
+    struct stat st;
+    if (stat(path, &st) == 0)
+        return 0; /* already exists */
+
+    /* Ensure directory exists */
+    char dir[256];
+    strncpy(dir, path, sizeof(dir) - 1);
+    dir[sizeof(dir)-1] = '\0';
+    char *slash = strrchr(dir, '/');
+    if (slash) {
+        *slash = '\0';
+        mkdir(dir, 0755); /* ignore error if it exists */
+    }
+
+    fprintf(stderr, "%%VMSSSH-I-KEYGEN, generating RSA host key at %s\n", path);
+
+    ssh_key key = NULL;
+    int rc = ssh_pki_generate(SSH_KEYTYPE_RSA, 2048, &key);
+    if (rc != SSH_OK) {
+        fprintf(stderr, "%%VMSSSH-E-KEYFAIL, ssh_pki_generate failed: %d\n", rc);
+        return -1;
+    }
+
+    rc = ssh_pki_export_privkey_file(key, NULL, NULL, NULL, path);
+    ssh_key_free(key);
+
+    if (rc != SSH_OK) {
+        fprintf(stderr, "%%VMSSSH-E-KEYWRITE, cannot write host key to %s: rc=%d\n",
+                path, rc);
+        return -1;
+    }
+
+    chmod(path, 0600);
+    fprintf(stderr, "%%VMSSSH-I-KEYOK, host key written to %s\n", path);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* handle_connection: child process — auth + PTY + data forwarding   */
+/* ------------------------------------------------------------------ */
+
+static void handle_connection(ssh_session session)
+{
+    /* Key exchange */
+    if (ssh_handle_key_exchange(session) != SSH_OK) {
+        fprintf(stderr, "%%VMSSSH-E-KEXFAIL, key exchange failed: %s\n",
+                ssh_get_error(session));
+        ssh_disconnect(session);
+        ssh_free(session);
+        exit(1);
+    }
+
+    /* Set auth timeout */
+    ssh_options_set(session, SSH_OPTIONS_TIMEOUT, &(int){AUTH_TIMEOUT_SEC});
+
+    /* ---- Authentication phase ---- */
+    int authenticated = 0;
+    int auth_attempts = 0;
+    char authed_user[64] = {0};
+
+    while (!authenticated) {
+        ssh_message msg = ssh_message_get(session);
+        if (msg == NULL)
+            break;
+
+        int msg_type    = ssh_message_type(msg);
+        int msg_subtype = ssh_message_subtype(msg);
+
+        if (msg_type == SSH_REQUEST_AUTH) {
+            if (msg_subtype == SSH_AUTH_METHOD_PASSWORD) {
+                const char *user = ssh_message_auth_user(msg);
+                /* ssh_message_auth_password() is deprecated in favour of the
+                 * callback-based API, but we use the message-loop pattern here.
+                 * Suppress the deprecation warning for this specific call. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+                const char *pass = ssh_message_auth_password(msg);
+#pragma GCC diagnostic pop
+
+                if (!user) {
+                    ssh_message_auth_set_methods(msg, SSH_AUTH_METHOD_PASSWORD);
+                    ssh_message_reply_default(msg);
+                    ssh_message_free(msg);
+                    continue;
+                }
+
+                /* Copy and upcase username for SYSUAF (VMS usernames are uppercase) */
+                char uname[64];
+                strncpy(uname, user, sizeof(uname) - 1);
+                uname[sizeof(uname)-1] = '\0';
+                str_upcase(uname);
+
+                sysuaf_record_t rec;
+                int found = (sysuaf_lookup(uname, &rec) == 0);
+
+                if (found && sysuaf_authenticate(&rec, pass ? pass : "")) {
+                    strncpy(authed_user, uname, sizeof(authed_user) - 1);
+                    ssh_message_auth_reply_success(msg, 0);
+                    authenticated = 1;
+                    fprintf(stderr, "%%VMSSSH-I-LOGIN, user %s authenticated\n", uname);
+                } else {
+                    auth_attempts++;
+                    fprintf(stderr, "%%VMSSSH-W-AUTHERR, authentication failed for user %s"
+                            " (attempt %d)\n", uname, auth_attempts);
+                    if (auth_attempts >= MAX_AUTH_ATTEMPTS) {
+                        ssh_message_reply_default(msg);
+                        ssh_message_free(msg);
+                        break;
+                    }
+                    ssh_message_auth_set_methods(msg, SSH_AUTH_METHOD_PASSWORD);
+                    ssh_message_reply_default(msg);
+                }
+            } else {
+                /* Only password auth supported */
+                ssh_message_auth_set_methods(msg, SSH_AUTH_METHOD_PASSWORD);
+                ssh_message_reply_default(msg);
+            }
+        } else {
+            ssh_message_reply_default(msg);
+        }
+
+        ssh_message_free(msg);
+    }
+
+    if (!authenticated) {
+        fprintf(stderr, "%%VMSSSH-W-AUTHFAIL, authentication failed — closing\n");
+        ssh_disconnect(session);
+        ssh_free(session);
+        exit(1);
+    }
+
+    /* ---- Channel phase ---- */
+    ssh_channel channel = NULL;
+    int got_shell = 0;
+
+    /* PTY dimensions (set by pty-req) */
+    int pty_cols = 80;
+    int pty_rows = 24;
+
+    while (!got_shell) {
+        ssh_message msg = ssh_message_get(session);
+        if (msg == NULL)
+            break;
+
+        int msg_type    = ssh_message_type(msg);
+        int msg_subtype = ssh_message_subtype(msg);
+
+        if (msg_type == SSH_REQUEST_CHANNEL_OPEN &&
+            msg_subtype == SSH_CHANNEL_SESSION) {
+            channel = ssh_message_channel_request_open_reply_accept(msg);
+            if (!channel) {
+                fprintf(stderr, "%%VMSSSH-E-CHANFAIL, cannot open channel\n");
+                ssh_message_free(msg);
+                break;
+            }
+        } else if (msg_type == SSH_REQUEST_CHANNEL) {
+            if (msg_subtype == SSH_CHANNEL_REQUEST_PTY) {
+                /* Extract dimensions — these accessors are deprecated in favour
+                 * of the callback API, but required for the message-loop pattern. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+                pty_cols = ssh_message_channel_request_pty_width(msg);
+                pty_rows = ssh_message_channel_request_pty_height(msg);
+#pragma GCC diagnostic pop
+                if (pty_cols <= 0) pty_cols = 80;
+                if (pty_rows <= 0) pty_rows = 24;
+                ssh_message_channel_request_reply_success(msg);
+            } else if (msg_subtype == SSH_CHANNEL_REQUEST_SHELL ||
+                       msg_subtype == SSH_CHANNEL_REQUEST_EXEC) {
+                ssh_message_channel_request_reply_success(msg);
+                got_shell = 1;
+                ssh_message_free(msg);
+                break;
+            } else {
+                ssh_message_reply_default(msg);
+            }
+        } else {
+            ssh_message_reply_default(msg);
+        }
+
+        ssh_message_free(msg);
+    }
+
+    if (!channel || !got_shell) {
+        fprintf(stderr, "%%VMSSSH-W-NOCHAN, no channel/shell established\n");
+        ssh_disconnect(session);
+        ssh_free(session);
+        exit(1);
+    }
+
+    /* ---- Allocate PTY and fork shell ---- */
+    int master_fd = -1;
+    int slave_fd  = -1;
+    char slave_name[256];
+
+    struct winsize ws;
+    memset(&ws, 0, sizeof(ws));
+    ws.ws_col = (unsigned short)pty_cols;
+    ws.ws_row = (unsigned short)pty_rows;
+
+    if (openpty(&master_fd, &slave_fd, slave_name, NULL, &ws) < 0) {
+        fprintf(stderr, "%%VMSSSH-E-PTYOPEN, openpty() failed: %s\n", strerror(errno));
+        ssh_channel_send_eof(channel);
+        ssh_disconnect(session);
+        ssh_free(session);
+        exit(1);
+    }
+
+    /* Look up shell from SYSUAF record or use /bin/sh */
+    sysuaf_record_t sysuaf_rec;
+    const char *shell_path = "/bin/sh";
+    const char *home_dir   = "/";
+    if (sysuaf_lookup(authed_user, &sysuaf_rec) == 0) {
+        if (sysuaf_rec.default_dir[0] != '\0')
+            home_dir = sysuaf_rec.default_dir;
+    }
+
+    pid_t shell_pid = fork();
+    if (shell_pid < 0) {
+        fprintf(stderr, "%%VMSSSH-E-FORKFAIL, fork() failed: %s\n", strerror(errno));
+        close(master_fd);
+        close(slave_fd);
+        ssh_channel_send_eof(channel);
+        ssh_disconnect(session);
+        ssh_free(session);
+        exit(1);
+    }
+
+    if (shell_pid == 0) {
+        /* ---- Child: set up PTY slave and exec shell ---- */
+        close(master_fd);
+
+        /* New session, PTY slave becomes controlling terminal */
+        if (setsid() < 0) {
+            perror("setsid");
+            exit(1);
+        }
+
+        /* Make slave the controlling terminal */
+        if (ioctl(slave_fd, TIOCSCTTY, 0) < 0) {
+            perror("TIOCSCTTY");
+            /* non-fatal on some kernels */
+        }
+
+        /* Redirect stdio to PTY slave */
+        dup2(slave_fd, STDIN_FILENO);
+        dup2(slave_fd, STDOUT_FILENO);
+        dup2(slave_fd, STDERR_FILENO);
+
+        if (slave_fd > STDERR_FILENO)
+            close(slave_fd);
+
+        /* Set environment */
+        setenv("TERM", "vt100", 1);
+        setenv("HOME", home_dir, 1);
+        setenv("SHELL", shell_path, 1);
+        setenv("USER", authed_user, 1);
+        setenv("LOGNAME", authed_user, 1);
+
+        /* Exec shell */
+        execl(shell_path, shell_path, NULL);
+        perror("execl");
+        exit(127);
+    }
+
+    /* ---- Parent: forward data between SSH channel and PTY master ---- */
+    close(slave_fd);
+
+    /* Set master fd non-blocking */
+    int flags = fcntl(master_fd, F_GETFL, 0);
+    fcntl(master_fd, F_SETFL, flags | O_NONBLOCK);
+
+    char buf[FORWARD_BUF_SIZE];
+
+    for (;;) {
+        struct pollfd fds[2];
+
+        /* Check if channel is still open */
+        if (ssh_channel_is_closed(channel) || ssh_channel_is_eof(channel))
+            break;
+
+        /* Poll: SSH channel fd (via session socket) + PTY master */
+        int ssh_fd = ssh_get_fd(session);
+
+        fds[0].fd      = ssh_fd;
+        fds[0].events  = POLLIN;
+        fds[0].revents = 0;
+
+        fds[1].fd      = master_fd;
+        fds[1].events  = POLLIN;
+        fds[1].revents = 0;
+
+        int ret = poll(fds, 2, 1000); /* 1s timeout for periodic EOF checks */
+
+        if (ret < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+
+        /* Data from SSH channel -> PTY master */
+        if (fds[0].revents & POLLIN) {
+            int n = ssh_channel_read_nonblocking(channel, buf, sizeof(buf), 0);
+            if (n > 0) {
+                ssize_t written = 0;
+                while (written < n) {
+                    ssize_t w = write(master_fd, buf + written, (size_t)(n - written));
+                    if (w < 0) {
+                        if (errno == EINTR) continue;
+                        goto done;
+                    }
+                    written += w;
+                }
+            } else if (n < 0 || (n == 0 && ssh_channel_is_eof(channel))) {
+                break;
+            }
+        }
+
+        /* Data from PTY master -> SSH channel */
+        if (fds[1].revents & POLLIN) {
+            ssize_t n = read(master_fd, buf, sizeof(buf));
+            if (n > 0) {
+                ssh_channel_write(channel, buf, (uint32_t)n);
+            } else if (n < 0) {
+                if (errno == EIO)
+                    break; /* PTY slave closed: shell exited */
+                /* EAGAIN / other: no data available, continue */
+            }
+        }
+
+        /* PTY hangup: shell exited */
+        if (fds[1].revents & (POLLHUP | POLLERR))
+            break;
+
+        /* Check if shell child exited */
+        if (waitpid(shell_pid, NULL, WNOHANG) == shell_pid)
+            break;
+    }
+
+done:
+    /* Clean up */
+    close(master_fd);
+    ssh_channel_send_eof(channel);
+    ssh_channel_close(channel);
+    ssh_channel_free(channel);
+
+    /* Wait for shell to exit */
+    waitpid(shell_pid, NULL, 0);
+
+    ssh_disconnect(session);
+    ssh_free(session);
+
+    fprintf(stderr, "%%VMSSSH-I-LOGOUT, session ended for user %s\n", authed_user);
+    exit(0);
+}
+
+/* ------------------------------------------------------------------ */
+/* parse_args                                                          */
+/* ------------------------------------------------------------------ */
+
+static void usage(const char *prog)
+{
+    fprintf(stderr,
+            "Usage: %s [-p port] [-k host_key_path] [-d]\n"
+            "  -p port          Listen port (default: %d)\n"
+            "  -k path          Host key file (default: %s)\n"
+            "  -d               Daemon mode (fork to background)\n",
+            prog, DEFAULT_PORT, DEFAULT_HOST_KEY);
+}
+
+static int parse_args(int argc, char **argv)
+{
+    int opt;
+    while ((opt = getopt(argc, argv, "p:k:dh")) != -1) {
+        switch (opt) {
+        case 'p':
+            g_port = atoi(optarg);
+            if (g_port <= 0 || g_port > 65535) {
+                fprintf(stderr, "%%VMSSSH-E-BADPORT, invalid port: %s\n", optarg);
+                return -1;
+            }
+            break;
+        case 'k':
+            strncpy(g_host_key, optarg, sizeof(g_host_key) - 1);
+            g_host_key[sizeof(g_host_key)-1] = '\0';
+            break;
+        case 'd':
+            g_daemon_mode = 1;
+            break;
+        case 'h':
+            usage(argv[0]);
+            return -1;
+        default:
+            usage(argv[0]);
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* main                                                                */
+/* ------------------------------------------------------------------ */
+
+int main(int argc, char **argv)
+{
+    if (parse_args(argc, argv) < 0)
+        return 1;
+
+    /* Auto-generate host key if missing */
+    if (generate_host_key(g_host_key) < 0)
+        return 1;
+
+    /* Daemonize if requested */
+    if (g_daemon_mode) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+            return 1;
+        }
+        if (pid > 0)
+            return 0; /* parent exits */
+        setsid();
+        /* redirect stdio to /dev/null */
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            /* keep stderr for logging */
+            close(devnull);
+        }
+    }
+
+    /* SIGCHLD: reap children */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigchld_handler;
+    sa.sa_flags   = SA_RESTART | SA_NOCLDSTOP;
+    sigemptyset(&sa.sa_mask);
+    if (sigaction(SIGCHLD, &sa, NULL) < 0) {
+        perror("sigaction");
+        return 1;
+    }
+
+    /* Ignore SIGPIPE — broken SSH connections should not kill the server */
+    signal(SIGPIPE, SIG_IGN);
+
+    /* Create ssh_bind */
+    ssh_bind sshbind = ssh_bind_new();
+    if (!sshbind) {
+        fprintf(stderr, "%%VMSSSH-F-BIND, ssh_bind_new() failed\n");
+        return 1;
+    }
+
+    /* Configure bind */
+    ssh_bind_options_set(sshbind, SSH_BIND_OPTIONS_BINDPORT, &g_port);
+    ssh_bind_options_set(sshbind, SSH_BIND_OPTIONS_RSAKEY, g_host_key);
+
+    /* Start listening */
+    if (ssh_bind_listen(sshbind) < 0) {
+        fprintf(stderr, "%%VMSSSH-F-LISTEN, cannot listen on port %d: %s\n",
+                g_port, ssh_get_error(sshbind));
+        ssh_bind_free(sshbind);
+        return 1;
+    }
+
+    fprintf(stderr, "%%VMSSSH-I-STARTUP, vmssshd listening on port %d\n", g_port);
+
+    /* Accept loop */
+    for (;;) {
+        ssh_session session = ssh_new();
+        if (!session) {
+            fprintf(stderr, "%%VMSSSH-E-NOMEM, ssh_new() failed\n");
+            sleep(1);
+            continue;
+        }
+
+        int rc = ssh_bind_accept(sshbind, session);
+        if (rc != SSH_OK) {
+            fprintf(stderr, "%%VMSSSH-E-ACCEPT, ssh_bind_accept failed: %s\n",
+                    ssh_get_error(sshbind));
+            ssh_free(session);
+            continue;
+        }
+
+        fprintf(stderr, "%%VMSSSH-I-CONNECT, new connection accepted\n");
+
+        pid_t child = fork();
+        if (child < 0) {
+            fprintf(stderr, "%%VMSSSH-E-FORKFAIL, fork() failed: %s\n", strerror(errno));
+            ssh_free(session);
+            continue;
+        }
+
+        if (child == 0) {
+            /* Child: close the bind socket and handle the connection */
+            ssh_bind_free(sshbind);
+            handle_connection(session);
+            /* handle_connection calls exit(), but just in case: */
+            exit(0);
+        }
+
+        /* Parent: free our reference to the session (child owns it) */
+        ssh_free(session);
+    }
+
+    ssh_bind_free(sshbind);
+    return 0;
+}

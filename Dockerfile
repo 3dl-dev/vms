@@ -1,7 +1,7 @@
 FROM ubuntu:24.04 AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    cmake gcc make libc6-dev libreadline-dev \
+    cmake gcc make libc6-dev libreadline-dev libssh-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
@@ -12,7 +12,7 @@ RUN cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TOOLS=ON \
 
 FROM ubuntu:24.04 AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreadline8t64 openssh-server \
+    libreadline8t64 openssh-server libssh-4 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /src/build/bin/ /usr/local/bin/

@@ -68,6 +68,8 @@ add_subdirectory(src/vmsfs)
 add_subdirectory(src/vmsrms)
 add_subdirectory(src/vmsdcl)
 
+add_subdirectory(src/vmsssh)
+
 if(BUILD_TOOLS)
     add_subdirectory(tools)
     add_subdirectory(src/ovmx_init)

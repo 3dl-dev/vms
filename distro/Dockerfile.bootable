@@ -3,6 +3,10 @@
 # Produces a Docker image that boots OVMX in QEMU. All dependencies
 # (compiler, QEMU, kernel, initramfs) are contained — no host tools needed.
 #
+# STARTUP.EXE (ovmx_init) is /init — no busybox, no shell scripts.
+# It handles all boot setup: filesystem mounts, kernel modules, VMS
+# directory provisioning, SYSUAF user creation, daemon startup, login loop.
+#
 # Usage:
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
 #   docker run --rm -it ovmx-boot
@@ -14,7 +18,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake gcc make musl-tools linux-libc-dev \
     linux-headers-generic linux-image-generic \
-    kmod busybox-static cpio \
+    kmod cpio \
     && rm -rf /var/lib/apt/lists/*
 
 # Determine kernel version from installed packages
@@ -36,7 +40,8 @@ RUN KVER=$(cat /tmp/kver) && \
     cd src/kernel && make KDIR=/lib/modules/${KVER}/build 2>&1 && \
     cd vmsfs && make KDIR=/lib/modules/${KVER}/build 2>&1
 
-# Build OVMX userspace — static musl, install prefix=/
+# Build OVMX userspace — static musl for now (vms-840/841 will switch to
+# musl dynamic with shareable images)
 RUN cmake -B build-static \
     -DCMAKE_C_COMPILER=musl-gcc \
     -DCMAKE_BUILD_TYPE=Release \
@@ -46,40 +51,30 @@ RUN cmake -B build-static \
     -DBUILD_TOOLS=ON \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
-# Assemble initramfs
-RUN mkdir -p /initramfs/bin /initramfs/sbin /initramfs/etc/ovmx \
-             /initramfs/dev /initramfs/proc /initramfs/sys \
-             /initramfs/tmp /initramfs/mnt /initramfs/root \
+# Assemble initramfs — STARTUP.EXE is /init directly, no busybox
+RUN mkdir -p /initramfs/dev /initramfs/proc /initramfs/sys \
+             /initramfs/tmp /initramfs/var /initramfs/mnt \
              /initramfs/lib/modules \
-             /initramfs/vms/sys\$system \
-             /initramfs/vms/sys\$library \
-             /initramfs/vms/sys\$manager \
-             /initramfs/vms/sys\$login \
-             /initramfs/vms/sys\$help \
-             /initramfs/home/DEFAULT \
-             /initramfs/home/GUEST \
-             /initramfs/home/USER1 \
-             /initramfs/home/USER2 \
-             /initramfs/home/root \
-             /initramfs/tmp/ovmx/locks && \
-    # Busybox — single binary providing sh, mount, insmod, etc.
-    cp /bin/busybox /initramfs/bin/busybox && \
-    chroot /initramfs /bin/busybox --install -s /bin && \
-    # OVMX binaries
-    cp build-static/bin/ovmx_init /initramfs/sbin/init && \
-    cp build-static/bin/vmsdcl /initramfs/bin/ && \
-    cp build-static/bin/vms_login /initramfs/bin/ && \
-    cp build-static/bin/vms_help /initramfs/bin/ && \
-    cp build-static/bin/vmslnmd /initramfs/sbin/ && \
+             /initramfs/vms \
+             /initramfs/etc/ovmx && \
+    # OVMX binaries → VMS paths (STARTUP.EXE is /init)
+    mkdir -p /initramfs/vms/sys\$system && \
+    cp build-static/bin/STARTUP.EXE  /initramfs/init && \
+    cp build-static/bin/DCL.EXE      /initramfs/vms/sys\$system/ && \
+    cp build-static/bin/LOGINOUT.EXE /initramfs/vms/sys\$system/ && \
+    cp build-static/bin/HELP.EXE     /initramfs/vms/sys\$system/ && \
+    cp build-static/bin/VMSLNMD.EXE  /initramfs/vms/sys\$system/ && \
+    cp build-static/bin/VMSSSHD.EXE  /initramfs/vms/sys\$system/ 2>/dev/null ; \
+    cp build-static/bin/AUTHORIZE.EXE /initramfs/vms/sys\$system/ 2>/dev/null ; \
+    cp build-static/bin/MAIL.EXE     /initramfs/vms/sys\$system/ 2>/dev/null ; \
+    cp build-static/bin/MONITOR.EXE  /initramfs/vms/sys\$system/ 2>/dev/null ; \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs/lib/modules/ && \
     # Configuration
     cp -r distro/rootfs/etc/ovmx/* /initramfs/etc/ovmx/ && \
+    mkdir -p /initramfs/vms/sys\$manager && \
     cp distro/rootfs/vms/sys\$manager/* /initramfs/vms/sys\$manager/ && \
-    # Init wrapper (PID 1 shell bootstrap → execs ovmx_init)
-    cp distro/boot/init-wrapper.sh /initramfs/init && \
-    chmod +x /initramfs/init && \
     # Pack the initramfs
     cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
     echo "Initramfs size: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"

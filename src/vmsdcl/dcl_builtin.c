@@ -61,6 +61,12 @@ extern int      vmsfs_format_protection(uint16_t prot, char *buf, size_t bufsize
 extern mode_t   vmsfs_protection_to_mode(uint16_t vms_prot);
 extern uint16_t vmsfs_mode_to_protection(mode_t mode);
 
+/* VMS wildcard match (supports % as single-character wildcard) */
+extern int vmsfs_wildcard_match(const char *pattern, const char *name);
+
+/* VMS ODS-2 name validation */
+extern int vmsfs_is_valid_ods2_name(const char *name);
+
 /* VMS month abbreviations */
 static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -799,57 +805,139 @@ static int cmd_directory(struct dcl_command *cmd)
         return SS$_NOSUCHFILE;
     }
 
-    struct dirent *entry;
+    /* Collect all matching entries for sorting */
+    struct dir_entry {
+        char vms_name[256];  /* Formatted VMS name (UPPERCASE, with version) */
+        char raw_name[256];  /* Original d_name for name part comparison */
+        int  version;        /* Numeric version for sort (descending) */
+        long blocks;
+        struct stat st;
+    };
+
+    int capacity = 256;
+    struct dir_entry *entries = malloc((size_t)capacity * sizeof(*entries));
+    if (!entries) {
+        closedir(dir);
+        if (pattern) free((void *)pattern);
+        return SS$_INSFMEM;
+    }
+    int entry_count = 0;
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        /* Skip . and .. */
+        if (strcmp(de->d_name, ".") == 0 ||
+            strcmp(de->d_name, "..") == 0) continue;
+
+        /* Apply wildcard filter if pattern specified.
+         * Use vmsfs_wildcard_match() which handles VMS % (single-char) and * */
+        if (pattern) {
+            if (!vmsfs_wildcard_match(pattern, de->d_name)) continue;
+        }
+
+        /* Stat the file */
+        char full_path[2048];
+        snprintf(full_path, sizeof(full_path), "%s%s", linux_dir, de->d_name);
+        struct stat st;
+        if (stat(full_path, &st) != 0) continue;
+
+        /* Grow array if needed */
+        if (entry_count >= capacity) {
+            capacity *= 2;
+            struct dir_entry *tmp = realloc(entries,
+                                            (size_t)capacity * sizeof(*entries));
+            if (!tmp) {
+                free(entries);
+                closedir(dir);
+                if (pattern) free((void *)pattern);
+                return SS$_INSFMEM;
+            }
+            entries = tmp;
+        }
+
+        struct dir_entry *e = &entries[entry_count];
+        e->st = st;
+        e->blocks = (st.st_size + 511) / 512;
+        strncpy(e->raw_name, de->d_name, sizeof(e->raw_name) - 1);
+        e->raw_name[sizeof(e->raw_name) - 1] = '\0';
+
+        /* Format the filename in VMS style (uppercase) */
+        size_t ni = 0;
+        for (size_t i = 0; de->d_name[i] && ni < sizeof(e->vms_name) - 1; i++) {
+            e->vms_name[ni++] = (char)toupper((unsigned char)de->d_name[i]);
+        }
+        e->vms_name[ni] = '\0';
+
+        /* Determine version number.
+         * If the filename already contains ;N, extract it.
+         * Otherwise append ;1 for regular files. */
+        char *semi = strrchr(e->vms_name, ';');
+        if (semi && semi[1] != '\0') {
+            /* Already has a version suffix — use it */
+            e->version = atoi(semi + 1);
+            /* Don't double-add: nothing to append */
+        } else if (S_ISREG(st.st_mode)) {
+            /* No version suffix — add ;1 */
+            e->version = 1;
+            strncat(e->vms_name, ";1",
+                    sizeof(e->vms_name) - strlen(e->vms_name) - 1);
+        } else {
+            e->version = 0;  /* Directories don't have versions per se */
+        }
+
+        /* Add .DIR;1 suffix for subdirectories */
+        if (S_ISDIR(st.st_mode)) {
+            strncat(e->vms_name, ".DIR;1",
+                    sizeof(e->vms_name) - strlen(e->vms_name) - 1);
+        }
+
+        /* Ensure a dot separator for regular files without one.
+         * Insert '.' before ';1' so "FOO;1" becomes "FOO.;1". */
+        if (S_ISREG(st.st_mode) && !strchr(de->d_name, '.')) {
+            char *s = strrchr(e->vms_name, ';');
+            if (s) {
+                memmove(s + 1, s, strlen(s) + 1);
+                *s = '.';
+            }
+        }
+
+        entry_count++;
+    }
+    closedir(dir);
+
+    /* Sort entries: name ascending (ignoring version), version descending.
+     * VMS displays files alphabetically, with multiple versions of the same
+     * file in descending version order.
+     * Sort by vms_name up to (not including) ';', then version descending. */
+    for (int i = 0; i < entry_count - 1; i++) {
+        for (int j = i + 1; j < entry_count; j++) {
+            /* Get name without version for comparison */
+            char na[256], nb[256];
+            strncpy(na, entries[i].vms_name, sizeof(na) - 1); na[sizeof(na)-1]='\0';
+            strncpy(nb, entries[j].vms_name, sizeof(nb) - 1); nb[sizeof(nb)-1]='\0';
+            char *sa = strrchr(na, ';'); if (sa) *sa = '\0';
+            char *sb = strrchr(nb, ';'); if (sb) *sb = '\0';
+
+            int cmp = strcasecmp(na, nb);
+            if (cmp > 0 || (cmp == 0 && entries[i].version < entries[j].version)) {
+                struct dir_entry tmp = entries[i];
+                entries[i] = entries[j];
+                entries[j] = tmp;
+            }
+        }
+    }
+
     int file_count = 0;
     long total_blocks = 0;
     int col = 0;
     int col_width = (show_size || show_date) ? 0 : (80 / columns);
 
-    while ((entry = readdir(dir)) != NULL) {
-        /* Skip . and .. */
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0) continue;
+    for (int idx = 0; idx < entry_count; idx++) {
+        struct dir_entry *e = &entries[idx];
+        const char *vms_name = e->vms_name;
+        long blocks = e->blocks;
+        struct stat *st = &e->st;
 
-        /* Apply wildcard filter if pattern specified */
-        if (pattern) {
-            if (fnmatch(pattern, entry->d_name, FNM_CASEFOLD) != 0) continue;
-        }
-
-        /* Stat the file */
-        char full_path[2048];
-        snprintf(full_path, sizeof(full_path), "%s%s", linux_dir, entry->d_name);
-        struct stat st;
-        if (stat(full_path, &st) != 0) continue;
-
-        /* Format the filename in VMS style (uppercase, add version) */
-        char vms_name[256];
-        size_t ni = 0;
-        for (size_t i = 0; entry->d_name[i] && ni < sizeof(vms_name) - 1; i++) {
-            vms_name[ni++] = (char)toupper((unsigned char)entry->d_name[i]);
-        }
-        vms_name[ni] = '\0';
-
-        /* Add ;1 version number for regular files */
-        if (S_ISREG(st.st_mode)) {
-            strncat(vms_name, ";1", sizeof(vms_name) - strlen(vms_name) - 1);
-        }
-
-        /* Add .DIR;1 suffix for directories */
-        if (S_ISDIR(st.st_mode)) {
-            strncat(vms_name, ".DIR;1", sizeof(vms_name) - strlen(vms_name) - 1);
-        }
-
-        /* Ensure the name has an extension dot for regular files */
-        if (S_ISREG(st.st_mode) && !strchr(entry->d_name, '.')) {
-            /* Insert .  before ;1 */
-            char *semi = strrchr(vms_name, ';');
-            if (semi) {
-                memmove(semi + 1, semi, strlen(semi) + 1);
-                *semi = '.';
-            }
-        }
-
-        long blocks = (st.st_size + 511) / 512;
         total_blocks += blocks;
         file_count++;
 
@@ -859,13 +947,13 @@ static int cmd_directory(struct dcl_command *cmd)
             printf(" %6ld", blocks);
 
             struct tm tm;
-            localtime_r(&st.st_mtime, &tm);
+            localtime_r(&st->st_mtime, &tm);
             printf("  %2d-%s-%04d %02d:%02d:%02d.00",
                    tm.tm_mday, vms_months[tm.tm_mon],
                    1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
 
             /* Protection: use vmsfs functions for proper VMS format */
-            uint16_t vprot = vmsfs_mode_to_protection(st.st_mode);
+            uint16_t vprot = vmsfs_mode_to_protection(st->st_mode);
             char prot_buf[64];
             vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
             printf(" %s", prot_buf);
@@ -878,7 +966,7 @@ static int cmd_directory(struct dcl_command *cmd)
             }
             if (show_date) {
                 struct tm tm;
-                localtime_r(&st.st_mtime, &tm);
+                localtime_r(&st->st_mtime, &tm);
                 printf("  %2d-%s-%04d %02d:%02d:%02d.00",
                        tm.tm_mday, vms_months[tm.tm_mon],
                        1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
@@ -898,7 +986,8 @@ static int cmd_directory(struct dcl_command *cmd)
             }
         }
     }
-    closedir(dir);
+
+    free(entries);
 
     /* Finish last line of columnar output */
     if (col > 0 && !show_size && !show_date && !show_full && !show_brief) {
@@ -1144,6 +1233,29 @@ static int cmd_create(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
+    /* Validate against ODS-2 naming rules before resolving the path.
+     * Strip any directory spec to get just the filename portion. */
+    const char *fname_for_check = cmd->params[0];
+    /* Skip past device: and [dir] if present */
+    const char *bracket_end = strrchr(fname_for_check, ']');
+    if (bracket_end) fname_for_check = bracket_end + 1;
+    else {
+        const char *col = strrchr(fname_for_check, ':');
+        if (col) fname_for_check = col + 1;
+    }
+    /* Strip version ;N for ODS-2 check */
+    char name_check[256];
+    strncpy(name_check, fname_for_check, sizeof(name_check) - 1);
+    name_check[sizeof(name_check) - 1] = '\0';
+    char *semi_check = strrchr(name_check, ';');
+    if (semi_check) *semi_check = '\0';
+
+    if (name_check[0] != '\0' && !vmsfs_is_valid_ods2_name(name_check)) {
+        dcl_error("RMS", 2, "SYN",
+                  "invalid ODS-2 filename - %s", cmd->params[0]);
+        return SS$_BADPARAM;
+    }
+
     char linux_path[1024];
     dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
 
@@ -1245,15 +1357,189 @@ static int cmd_search(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/* vmsfs version management API (from vmsfs/version.h) */
+extern int vmsfs_purge_versions(const char *linux_dir, const char *basename,
+                                const char *ext, int keep_count);
+extern int vmsfs_list_versions(const char *linux_dir, const char *basename,
+                               const char *ext, int *versions, int max_versions,
+                               int *count);
+
 /*
- * PURGE - Delete all but highest version of files.
+ * PURGE - Delete all but the highest N versions of files.
+ *
+ * Syntax: PURGE [filespec] [/KEEP=n]
+ *   filespec  - VMS file specification (wildcards allowed); defaults to *.*
+ *   /KEEP=n   - Number of versions to keep; default is 1
+ *
+ * Calls vmsfs_purge_versions() for each matching file base name found
+ * in the target directory.
  */
 static int cmd_purge(struct dcl_command *cmd)
 {
-    (void)cmd;
-    /* In our Linux-based system, we don't have true file versions.
-     * This is a stub that acknowledges the command. */
-    printf("%%PURGE-I-NOPURGE, no file versions to purge on this system\n");
+    struct dcl_context *ctx = dcl_get_context();
+
+    /* Determine keep count from /KEEP=n qualifier */
+    int keep_count = 1;
+    const char *keep_val = dcl_qualifier_value(cmd, "KEEP");
+    if (keep_val && keep_val[0]) {
+        keep_count = atoi(keep_val);
+        if (keep_count < 1) keep_count = 1;
+    }
+
+    /* Determine the target directory and pattern */
+    char linux_dir[1024];
+    const char *pattern = NULL;
+
+    if (cmd->param_count >= 1 && cmd->params[0][0] != '\0') {
+        char resolved[1024];
+        dcl_resolve_path(ctx, cmd->params[0], resolved, sizeof(resolved));
+
+        struct stat st;
+        if (stat(resolved, &st) == 0 && S_ISDIR(st.st_mode)) {
+            strncpy(linux_dir, resolved, sizeof(linux_dir) - 1);
+            linux_dir[sizeof(linux_dir) - 1] = '\0';
+        } else {
+            /* Split path into directory + filename pattern */
+            char *last_slash = strrchr(resolved, '/');
+            if (last_slash) {
+                pattern = strdup(last_slash + 1);
+                *(last_slash + 1) = '\0';
+                strncpy(linux_dir, resolved, sizeof(linux_dir) - 1);
+                linux_dir[sizeof(linux_dir) - 1] = '\0';
+            } else {
+                pattern = strdup(resolved);
+                strncpy(linux_dir, ctx->default_linux, sizeof(linux_dir) - 1);
+                linux_dir[sizeof(linux_dir) - 1] = '\0';
+            }
+        }
+    } else {
+        /* Default: current directory, all files (*.*) */
+        strncpy(linux_dir, ctx->default_linux, sizeof(linux_dir) - 1);
+        linux_dir[sizeof(linux_dir) - 1] = '\0';
+    }
+
+    /* Ensure trailing slash */
+    size_t dlen = strlen(linux_dir);
+    if (dlen > 0 && linux_dir[dlen - 1] != '/') {
+        if (dlen < sizeof(linux_dir) - 1) {
+            linux_dir[dlen] = '/';
+            linux_dir[dlen + 1] = '\0';
+        }
+    }
+
+    /* Scan the directory and collect unique base names (name without version).
+     * For each unique base+ext, call vmsfs_purge_versions(). */
+    DIR *dir = opendir(linux_dir);
+    if (!dir) {
+        dcl_error("RMS", 2, "DNF", "directory not found - %s", linux_dir);
+        if (pattern) free((void *)pattern);
+        return SS$_NOSUCHFILE;
+    }
+
+    /* Track processed bases to avoid duplicate purge calls */
+    struct purge_base {
+        char name[64];
+        char ext[64];
+    };
+    int cap = 64;
+    struct purge_base *bases = malloc((size_t)cap * sizeof(*bases));
+    if (!bases) {
+        closedir(dir);
+        if (pattern) free((void *)pattern);
+        return SS$_INSFMEM;
+    }
+    int base_count = 0;
+    int total_deleted = 0;
+
+    struct dirent *de;
+    /* Remove trailing slash for opendir (already done) — iterate entries */
+    /* Strip the trailing slash from linux_dir to use as dir arg to vmsfs */
+    char dir_notrail[1024];
+    strncpy(dir_notrail, linux_dir, sizeof(dir_notrail) - 1);
+    dir_notrail[sizeof(dir_notrail) - 1] = '\0';
+    size_t dtlen = strlen(dir_notrail);
+    if (dtlen > 1 && dir_notrail[dtlen - 1] == '/') {
+        dir_notrail[dtlen - 1] = '\0';
+    }
+
+    while ((de = readdir(dir)) != NULL) {
+        if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0) continue;
+
+        /* Only process versioned files (must contain ;N) */
+        const char *semi = strrchr(de->d_name, ';');
+        if (!semi) continue;
+
+        /* Apply wildcard pattern filter if one was given */
+        if (pattern) {
+            if (!vmsfs_wildcard_match(pattern, de->d_name)) continue;
+        }
+
+        /* Extract base (name) and ext from the portion before ';' */
+        char base_ext[256];
+        size_t belen = (size_t)(semi - de->d_name);
+        if (belen >= sizeof(base_ext)) belen = sizeof(base_ext) - 1;
+        memcpy(base_ext, de->d_name, belen);
+        base_ext[belen] = '\0';
+
+        /* Split base_ext into name and extension */
+        char fname[64] = {0};
+        char fext[64]  = {0};
+        const char *dot = strrchr(base_ext, '.');
+        if (dot) {
+            size_t nlen = (size_t)(dot - base_ext);
+            if (nlen >= sizeof(fname)) nlen = sizeof(fname) - 1;
+            memcpy(fname, base_ext, nlen);
+            fname[nlen] = '\0';
+            strncpy(fext, dot + 1, sizeof(fext) - 1);
+            fext[sizeof(fext) - 1] = '\0';
+        } else {
+            strncpy(fname, base_ext, sizeof(fname) - 1);
+            fname[sizeof(fname) - 1] = '\0';
+        }
+
+        /* Check if we already processed this base */
+        int already = 0;
+        for (int k = 0; k < base_count; k++) {
+            if (strcasecmp(bases[k].name, fname) == 0 &&
+                strcasecmp(bases[k].ext,  fext)  == 0) {
+                already = 1;
+                break;
+            }
+        }
+        if (already) continue;
+
+        /* Record this base */
+        if (base_count >= cap) {
+            cap *= 2;
+            struct purge_base *tmp = realloc(bases, (size_t)cap * sizeof(*bases));
+            if (!tmp) { free(bases); closedir(dir);
+                        if (pattern) free((void *)pattern);
+                        return SS$_INSFMEM; }
+            bases = tmp;
+        }
+        strncpy(bases[base_count].name, fname, sizeof(bases[0].name) - 1);
+        bases[base_count].name[sizeof(bases[0].name) - 1] = '\0';
+        strncpy(bases[base_count].ext,  fext,  sizeof(bases[0].ext)  - 1);
+        bases[base_count].ext[sizeof(bases[0].ext) - 1] = '\0';
+        base_count++;
+
+        /* Purge old versions for this file */
+        int deleted = vmsfs_purge_versions(dir_notrail, fname,
+                                            fext[0] ? fext : NULL, keep_count);
+        if (deleted > 0) {
+            total_deleted += deleted;
+        }
+    }
+    closedir(dir);
+    free(bases);
+    if (pattern) free((void *)pattern);
+
+    if (total_deleted == 0) {
+        printf("%%PURGE-I-NOPURGE, no file versions to purge\n");
+    } else {
+        printf("%%PURGE-I-PURGED, %d old version%s deleted\n",
+               total_deleted, total_deleted != 1 ? "s" : "");
+    }
     return SS$_NORMAL;
 }
 

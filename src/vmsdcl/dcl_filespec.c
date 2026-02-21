@@ -396,8 +396,16 @@ int dcl_translate_logical(const char *name, char *result, size_t result_size)
      * may not have been initialized with yet.
      */
     if (strcmp(upper, "SYS$DISK") == 0) {
-        struct dcl_context *ctx = dcl_get_context();
-        strncpy(result, ctx->default_linux, result_size - 1);
+        /*
+         * SYS$DISK is the current default DEVICE (disk), not the current
+         * directory.  In real VMS, SET DEFAULT [USERS.SMITH] changes the
+         * directory component but SYS$DISK stays as the device (e.g. DKA0:).
+         *
+         * For OVMX we map SYS$DISK to the VMS root mount point ("/vms")
+         * so that SYS$DISK:[DIR]FILE correctly resolves under /vms/dir/file,
+         * independent of the user's current working directory.
+         */
+        strncpy(result, "/vms", result_size - 1);
         result[result_size - 1] = '\0';
         return 0;
     }

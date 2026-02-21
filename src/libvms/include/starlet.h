@@ -972,7 +972,20 @@ uint32_t sys$forcex(
 );
 
 /**
- * sys$suspend - Suspend a process
+ * sys$suspnd - Suspend a process (canonical VMS name)
+ *
+ * @param pidadr  Optional pointer to process ID
+ * @param prcnam  Optional pointer to descriptor of process name
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$suspnd(
+    const uint32_t *pidadr,
+    const struct dsc$descriptor_s *prcnam
+);
+
+/**
+ * sys$suspend - Suspend a process (backwards-compatible alias for sys$suspnd)
  *
  * @param pidadr  Optional pointer to process ID
  * @param prcnam  Optional pointer to descriptor of process name
@@ -1037,6 +1050,157 @@ uint32_t sys$cancel(uint16_t chan);
  *          (Note: boolean return, not a VMS condition code)
  */
 uint32_t sys$check_fen(uint32_t *flags);
+
+/* ================================================================
+ * User Authorization File Services
+ * ================================================================ */
+
+/**
+ * sys$getuai - Get User Authorization Information
+ *
+ * Retrieves user account information from /etc/ovmx/sysuaf.dat
+ * via an item list of UAI$_ codes.
+ *
+ * @param efn      Event flag (ignored — synchronous)
+ * @param context  Context pointer for iterating (pass NULL)
+ * @param usrnam   Pointer to descriptor of username to look up
+ * @param itmlst   Pointer to item list of UAI$_ codes
+ * @param iosb     Pointer to I/O status block (may be NULL)
+ * @param astadr   Optional AST completion routine (ignored)
+ * @param astprm   AST parameter (ignored)
+ *
+ * @return  SS$_NORMAL on success, SS$_NOSUCHID if user not found
+ */
+uint32_t sys$getuai(
+    uint32_t efn,
+    uint32_t *context,
+    struct dsc$descriptor_s *usrnam,
+    void *itmlst,
+    struct _iosb *iosb,
+    void (*astadr)(uint32_t),
+    uint32_t astprm
+);
+
+/**
+ * sys$setuai - Set User Authorization Information
+ *
+ * Updates user account fields in /etc/ovmx/sysuaf.dat.
+ * Requires SYSPRV privilege.
+ *
+ * @param efn      Event flag (ignored — synchronous)
+ * @param context  Context pointer (pass NULL)
+ * @param usrnam   Pointer to descriptor of username
+ * @param itmlst   Pointer to item list of UAI$_ codes to update
+ * @param iosb     Pointer to I/O status block (may be NULL)
+ * @param astadr   Optional AST completion routine (ignored)
+ * @param astprm   AST parameter (ignored)
+ *
+ * @return  SS$_NORMAL on success, SS$_NOPRIV if no SYSPRV privilege
+ */
+uint32_t sys$setuai(
+    uint32_t efn,
+    uint32_t *context,
+    struct dsc$descriptor_s *usrnam,
+    void *itmlst,
+    struct _iosb *iosb,
+    void (*astadr)(uint32_t),
+    uint32_t astprm
+);
+
+/* ================================================================
+ * Device Information Services
+ * ================================================================ */
+
+/**
+ * sys$getdvi - Get Device/Volume Information
+ *
+ * Retrieves device and volume attributes via an item list of DVI$_ codes.
+ * Identifies the device either by channel number (chan) or name (devnam);
+ * devnam takes priority.
+ *
+ * @param efn      Event flag (ignored — synchronous)
+ * @param chan     I/O channel number (0 if using devnam)
+ * @param devnam   Pointer to descriptor of device name (NULL if using chan)
+ * @param itmlst   Pointer to item list of DVI$_ codes
+ * @param iosb     Pointer to I/O status block (may be NULL)
+ * @param astadr   Optional AST completion routine (ignored)
+ * @param astprm   AST parameter (ignored)
+ * @param nullarg  Reserved, pass 0
+ *
+ * @return  SS$_NORMAL on success, SS$_NOSUCHDEV if device not found
+ */
+uint32_t sys$getdvi(
+    uint32_t efn,
+    uint16_t chan,
+    struct dsc$descriptor_s *devnam,
+    void *itmlst,
+    struct _iosb *iosb,
+    void (*astadr)(uint32_t),
+    uint32_t astprm,
+    uint32_t nullarg
+);
+
+/**
+ * sys$getdviw - Get Device/Volume Information (synchronous wait)
+ *
+ * Identical to sys$getdvi — our implementation is always synchronous.
+ */
+uint32_t sys$getdviw(
+    uint32_t efn,
+    uint16_t chan,
+    struct dsc$descriptor_s *devnam,
+    void *itmlst,
+    struct _iosb *iosb,
+    void (*astadr)(uint32_t),
+    uint32_t astprm,
+    uint32_t nullarg
+);
+
+/* ================================================================
+ * Operator Communication Services
+ * ================================================================ */
+
+/**
+ * sys$sndopr - Send message to operator
+ *
+ * Writes a formatted OPCOM-style log entry to the operator log
+ * file (/vms/sys$manager/OPERATOR.LOG).
+ *
+ * @param msgbuf  Pointer to descriptor of message text
+ * @param chan    Channel number (ignored — all logged to OPERATOR.LOG)
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t sys$sndopr(
+    struct dsc$descriptor_s *msgbuf,
+    uint16_t chan
+);
+
+/**
+ * sys$brkthruw - Broadcast message to terminal(s)
+ *
+ * Sends a broadcast message to the specified terminal device.
+ * If sendto is NULL or empty, broadcasts to the current terminal (TT:).
+ *
+ * @param efn      Event flag (ignored — synchronous)
+ * @param msgbuf   Pointer to descriptor of message to broadcast
+ * @param sendto   Pointer to descriptor of target terminal device name
+ * @param sndtyp   Send type flags (ignored)
+ * @param iosb     Pointer to I/O status block (may be NULL)
+ * @param astadr   Optional AST completion routine (ignored)
+ * @param astprm   AST parameter (ignored)
+ *
+ * @return  SS$_NORMAL on success, SS$_NOSUCHDEV if terminal not found
+ */
+uint32_t sys$brkthruw(
+    uint32_t efn,
+    struct dsc$descriptor_s *msgbuf,
+    struct dsc$descriptor_s *sendto,
+    uint32_t sndtyp,
+    struct _iosb *iosb,
+    void (*astadr)(uint32_t),
+    uint32_t astprm
+);
 
 #ifdef __cplusplus
 }

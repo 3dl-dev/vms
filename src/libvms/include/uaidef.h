@@ -112,6 +112,10 @@ extern "C" {
 /* Security and audit */
 #define UAI$_AUDIT_FLAGS    0x00A0  /* Audit flags (Q) */
 
+/* Login history */
+#define UAI$_LSTLOGIN_I     0x00B0  /* Last interactive login date/time (Q) */
+#define UAI$_LSTLOGIN_N     0x00B1  /* Last non-interactive login date/time (Q) */
+
 /* ================================================================
  * UAI$M_ flag bit masks for UAI$_FLAGS item
  *

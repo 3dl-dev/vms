@@ -367,13 +367,16 @@ uint32_t sys$forcex(const uint32_t *pidadr,
 }
 
 /*
- * sys$suspend - Suspend a process.
+ * sys$suspnd - Suspend a process (canonical VMS name).
  *
  * Sends SIGSTOP to the target process. If pidadr is NULL,
  * suspend the current process.
+ *
+ * The VMS system service name is sys$suspnd (no trailing 'e').
+ * sys$suspend is provided as a backwards-compatibility alias.
  */
-uint32_t sys$suspend(const uint32_t *pidadr,
-                     const struct dsc$descriptor_s *prcnam) {
+uint32_t sys$suspnd(const uint32_t *pidadr,
+                    const struct dsc$descriptor_s *prcnam) {
     (void)prcnam;
 
     pid_t pid;
@@ -385,6 +388,17 @@ uint32_t sys$suspend(const uint32_t *pidadr,
 
     if (kill(pid, SIGSTOP) < 0) return SS$_NONEXPR;
     return SS$_NORMAL;
+}
+
+/*
+ * sys$suspend - Backwards-compatibility alias for sys$suspnd.
+ *
+ * OVMX originally implemented the suspend service under this name.
+ * Retained so that any code calling sys$suspend continues to work.
+ */
+uint32_t sys$suspend(const uint32_t *pidadr,
+                     const struct dsc$descriptor_s *prcnam) {
+    return sys$suspnd(pidadr, prcnam);
 }
 
 /*

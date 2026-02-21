@@ -149,6 +149,7 @@ extern "C" {
 #define SS$_NOSYSNAM        2220    /* No SYSNAM privilege */
 #define SS$_NOGRACELOGIN    2224    /* No grace login */
 #define SS$_INVLOGIN        2228    /* Invalid login */
+#define SS$_NOSUCHID        2580    /* No such user identifier */
 
 /* ================================================================
  * Timer and AST status codes

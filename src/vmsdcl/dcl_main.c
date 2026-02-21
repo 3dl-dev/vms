@@ -29,6 +29,7 @@
 #include "ssdef.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
+#include "vms/logical.h"
 
 /* Global DCL context */
 static struct dcl_context dcl_ctx;
@@ -192,6 +193,21 @@ static void setup_session(struct dcl_context *ctx)
 {
     /* Initialize symbol tables */
     dcl_sym_init();
+
+    /* Initialize the LNM manager and populate default system logicals */
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (mgr) {
+        const char *vms_root = getenv("VMS_ROOT");
+        if (!vms_root) vms_root = "/vms";
+        lnm_setup_defaults(mgr, vms_root);
+
+        /*
+         * Override SYS$DISK with the current process default directory
+         * so it reflects the actual working directory of this session.
+         */
+        lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$DISK",
+                   ctx->default_linux, LNM_ATTR_TERMINAL, LNM_MODE_USER);
+    }
 
     /* Register built-in commands */
     dcl_register_builtins();

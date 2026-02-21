@@ -18,6 +18,7 @@
 #include "dcl/context.h"
 #include "dcl/parser.h"
 #include "ssdef.h"
+#include "vms/logical.h"
 
 /* Forward declaration of logical name translation */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
@@ -360,15 +361,14 @@ int dcl_format_directory(const char *linux_path, char *vms_dir, size_t dir_size)
 
 /*
  * Translate a logical name to its equivalence string.
- * This is a simplified wrapper that checks the logical name tables.
+ *
+ * Queries the LNM manager first (process/job/group/system search list).
+ * Falls back to hardcoded values for SYS$DISK and SYS$LOGIN which are
+ * process-context-dependent and may not yet be in the LNM tables.
  */
 int dcl_translate_logical(const char *name, char *result, size_t result_size)
 {
     if (!name || !result || result_size == 0) return -1;
-
-    /* Try using the LNM subsystem */
-    /* We need to include the LNM headers conditionally */
-    /* For now, handle well-known system logicals */
 
     /* Uppercase the name for comparison */
     char upper[256];
@@ -378,6 +378,23 @@ int dcl_translate_logical(const char *name, char *result, size_t result_size)
     }
     upper[i] = '\0';
 
+    /*
+     * Query the LNM manager via the standard LNM$FILE_DEV search list
+     * (process -> job -> group -> system).
+     */
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (mgr) {
+        uint16_t rlen = 0;
+        uint32_t status = lnm_translate(mgr, LNM_FILE_DEV, upper,
+                                        result, result_size, &rlen, NULL);
+        if (status == SS$_NORMAL || status == SS$_SUPERSEDE)
+            return 0;
+    }
+
+    /*
+     * Fallback: handle process-context logicals that the LNM manager
+     * may not have been initialized with yet.
+     */
     if (strcmp(upper, "SYS$DISK") == 0) {
         struct dcl_context *ctx = dcl_get_context();
         strncpy(result, ctx->default_linux, result_size - 1);
@@ -393,33 +410,6 @@ int dcl_translate_logical(const char *name, char *result, size_t result_size)
             return 0;
         }
     }
-
-    if (strcmp(upper, "SYS$SYSTEM") == 0) {
-        strncpy(result, "/vms/sys$system", result_size - 1);
-        result[result_size - 1] = '\0';
-        return 0;
-    }
-
-    if (strcmp(upper, "SYS$LIBRARY") == 0) {
-        strncpy(result, "/vms/sys$library", result_size - 1);
-        result[result_size - 1] = '\0';
-        return 0;
-    }
-
-    if (strcmp(upper, "SYS$HELP") == 0) {
-        strncpy(result, "/vms/sys$help", result_size - 1);
-        result[result_size - 1] = '\0';
-        return 0;
-    }
-
-    if (strcmp(upper, "SYS$SCRATCH") == 0) {
-        strncpy(result, "/tmp", result_size - 1);
-        result[result_size - 1] = '\0';
-        return 0;
-    }
-
-    /* Try LNM manager if available */
-    /* lnm_translate(...) would go here */
 
     return -1; /* Not found */
 }

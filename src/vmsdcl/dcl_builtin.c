@@ -30,6 +30,7 @@
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
 #include "ssdef.h"
+#include "vms/logical.h"
 
 /* External functions */
 extern void dcl_error(const char *facility, int severity, const char *ident,
@@ -99,67 +100,109 @@ static int cmd_show_default(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/* Callback context for enumerating logical names under SHOW LOGICAL */
+struct show_lnm_ctx {
+    const char *table_name;
+};
+
+static int show_lnm_callback(const char *name, const lnm_entry_t *entry, void *ctx)
+{
+    struct show_lnm_ctx *sctx = (struct show_lnm_ctx *)ctx;
+    if (entry->num_translations > 0) {
+        printf("   \"%s\" = \"%s\" (%s)\n",
+               name, entry->translations[0].value, sctx->table_name);
+    }
+    return 0;
+}
+
 /*
  * SHOW LOGICAL - Display logical name translations.
+ *
+ * With a name argument: translate that specific name and show it.
+ * Without arguments: enumerate all tables (process, job, group, system).
  */
 static int cmd_show_logical(struct dcl_command *cmd)
 {
-    struct dcl_context *ctx = dcl_get_context();
-
-    /* Well-known system logicals to display */
-    static const struct {
-        const char *name;
-        const char *table;
-    } known_logicals[] = {
-        { "SYS$DISK",     "LNM$PROCESS_TABLE" },
-        { "SYS$LOGIN",    "LNM$JOB" },
-        { "SYS$SCRATCH",  "LNM$JOB" },
-        { "SYS$SYSTEM",   "LNM$SYSTEM" },
-        { "SYS$LIBRARY",  "LNM$SYSTEM" },
-        { "SYS$HELP",     "LNM$SYSTEM" },
-        { "SYS$INPUT",    "LNM$PROCESS_TABLE" },
-        { "SYS$OUTPUT",   "LNM$PROCESS_TABLE" },
-        { "SYS$ERROR",    "LNM$PROCESS_TABLE" },
-        { "SYS$COMMAND",  "LNM$PROCESS_TABLE" },
-        { NULL, NULL }
-    };
+    lnm_manager_t *mgr = lnm_get_manager();
 
     if (cmd->param_count >= 2) {
-        /* SHOW LOGICAL specific-name: Look up in param[1] */
+        /* SHOW LOGICAL <name> — look up and display a specific logical */
         /* Note: param[0] is the subcommand "LOGICAL" (from SHOW LOGICAL) */
         const char *logname = cmd->params[1];
-        char value[256];
-        if (dcl_translate_logical(logname, value, sizeof(value)) == 0) {
-            /* Uppercase the name for display */
-            char upper_name[256];
-            size_t i;
-            for (i = 0; i < sizeof(upper_name) - 1 && logname[i]; i++)
-                upper_name[i] = (char)toupper((unsigned char)logname[i]);
-            upper_name[i] = '\0';
 
-            printf("   \"%s\" = \"%s\" (LNM$PROCESS_TABLE)\n", upper_name, value);
+        /* Uppercase for display */
+        char upper_name[256];
+        size_t i;
+        for (i = 0; i < sizeof(upper_name) - 1 && logname[i]; i++)
+            upper_name[i] = (char)toupper((unsigned char)logname[i]);
+        upper_name[i] = '\0';
+
+        char value[256];
+        if (dcl_translate_logical(upper_name, value, sizeof(value)) == 0) {
+            /*
+             * Determine which table the name was found in so we can
+             * show the correct table name in the output.
+             */
+            const char *found_table = LNM_PROCESS_TABLE;
+            if (mgr) {
+                static const struct { lnm_table_t **tbl; const char *tname; } tables[] = {
+                    { NULL, LNM_PROCESS_TABLE },
+                    { NULL, LNM_JOB_TABLE     },
+                    { NULL, LNM_GROUP_TABLE   },
+                    { NULL, LNM_SYSTEM_TABLE  },
+                    { NULL, NULL              }
+                };
+                /* Search tables in order to find where the name lives */
+                lnm_table_t *search[4];
+                search[0] = mgr->process_table;
+                search[1] = mgr->job_table;
+                search[2] = mgr->group_table;
+                search[3] = mgr->system_table;
+                const char *tnames[4] = {
+                    LNM_PROCESS_TABLE, LNM_JOB_TABLE,
+                    LNM_GROUP_TABLE,   LNM_SYSTEM_TABLE
+                };
+                for (int t = 0; t < 4; t++) {
+                    if (!search[t]) continue;
+                    uint32_t st = lnm_translate(mgr, tnames[t], upper_name,
+                                                value, sizeof(value), NULL, NULL);
+                    if (st == SS$_NORMAL || st == SS$_SUPERSEDE) {
+                        found_table = tnames[t];
+                        break;
+                    }
+                }
+                (void)tables;
+            }
+            printf("   \"%s\" = \"%s\" (%s)\n", upper_name, value, found_table);
         } else {
-            dcl_error("DCL", 0, "NOLOG",
-                      "no logical name match");
+            dcl_error("DCL", 0, "NOLOG", "no logical name match");
             return SS$_NOLOGNAM;
         }
     } else {
-        /* Show all known logicals */
-        printf("(LNM$PROCESS_TABLE)\n\n");
-        for (int i = 0; known_logicals[i].name; i++) {
-            char value[256];
-            if (dcl_translate_logical(known_logicals[i].name,
-                                      value, sizeof(value)) == 0) {
-                printf("   \"%s\" = \"%s\" (%s)\n",
-                       known_logicals[i].name, value,
-                       known_logicals[i].table);
-            }
-        }
+        /* Show all logical names from all tables */
+        if (mgr) {
+            struct show_lnm_ctx sctx;
 
-        /* Also show SYS$DISK pointing to current default */
-        char vms_dir[512];
-        dcl_format_directory(ctx->default_linux, vms_dir, sizeof(vms_dir));
-        (void)vms_dir;
+            printf("(LNM$PROCESS_TABLE)\n\n");
+            sctx.table_name = LNM_PROCESS_TABLE;
+            lnm_enumerate(mgr, LNM_PROCESS_TABLE, show_lnm_callback, &sctx);
+
+            printf("\n(LNM$JOB)\n\n");
+            sctx.table_name = LNM_JOB_TABLE;
+            lnm_enumerate(mgr, LNM_JOB_TABLE, show_lnm_callback, &sctx);
+
+            printf("\n(LNM$GROUP)\n\n");
+            sctx.table_name = LNM_GROUP_TABLE;
+            lnm_enumerate(mgr, LNM_GROUP_TABLE, show_lnm_callback, &sctx);
+
+            printf("\n(LNM$SYSTEM)\n\n");
+            sctx.table_name = LNM_SYSTEM_TABLE;
+            lnm_enumerate(mgr, LNM_SYSTEM_TABLE, show_lnm_callback, &sctx);
+        } else {
+            /* LNM not available — show nothing (graceful degrade) */
+            printf("(LNM$PROCESS_TABLE)\n\n");
+            printf("   %%DCL-W-NOLOGNAM, logical name manager not available\n");
+        }
     }
 
     return SS$_NORMAL;
@@ -1183,6 +1226,15 @@ static int cmd_purge(struct dcl_command *cmd)
 
 /*
  * DEFINE - Define a logical name.
+ *
+ * Qualifiers:
+ *   /PROCESS   (default) — create in LNM$PROCESS_TABLE
+ *   /JOB                 — create in LNM$JOB
+ *   /GROUP               — create in LNM$GROUP
+ *   /SYSTEM              — create in LNM$SYSTEM
+ *
+ * If the LNM manager is not available, fall back to storing as a
+ * global DCL symbol so callers don't lose the value entirely.
  */
 static int cmd_define(struct dcl_command *cmd)
 {
@@ -1193,22 +1245,53 @@ static int cmd_define(struct dcl_command *cmd)
     }
 
     const char *logname = cmd->params[0];
-    const char *equiv = cmd->params[1];
+    const char *equiv   = cmd->params[1];
 
-    /* For now, store as a symbol (a real implementation would use LNM) */
+    /* Uppercase the logical name */
     char upper_name[256];
     size_t i;
     for (i = 0; i < sizeof(upper_name) - 1 && logname[i]; i++)
         upper_name[i] = (char)toupper((unsigned char)logname[i]);
     upper_name[i] = '\0';
 
-    dcl_sym_set(upper_name, equiv, DCL_SYM_GLOBAL);
+    /* Determine target table from qualifiers (/PROCESS is the default) */
+    const char *table = LNM_PROCESS_TABLE;
+    if (dcl_has_qualifier(cmd, "SYSTEM"))
+        table = LNM_SYSTEM_TABLE;
+    else if (dcl_has_qualifier(cmd, "GROUP"))
+        table = LNM_GROUP_TABLE;
+    else if (dcl_has_qualifier(cmd, "JOB"))
+        table = LNM_JOB_TABLE;
+
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (mgr) {
+        uint32_t status = lnm_create(mgr, table, upper_name, equiv,
+                                     LNM_ATTR_TERMINAL, LNM_MODE_USER);
+        if (status != SS$_NORMAL && status != SS$_SUPERSEDE) {
+            dcl_error("DCL", 2, "LNMFAIL",
+                      "failed to create logical name \\%s\\", upper_name);
+            return (int)status;
+        }
+    } else {
+        /* Graceful fallback: store as global symbol */
+        dcl_sym_set(upper_name, equiv, DCL_SYM_GLOBAL);
+    }
 
     return SS$_NORMAL;
 }
 
 /*
  * DEASSIGN - Remove a logical name.
+ *
+ * Qualifiers:
+ *   /PROCESS   (default) — delete from LNM$PROCESS_TABLE
+ *   /JOB                 — delete from LNM$JOB
+ *   /GROUP               — delete from LNM$GROUP
+ *   /SYSTEM              — delete from LNM$SYSTEM
+ *   /ALL                 — delete from all tables (searches in order)
+ *
+ * If the LNM manager is not available, attempt to remove from the
+ * global symbol table as a fallback.
  */
 static int cmd_deassign(struct dcl_command *cmd)
 {
@@ -1217,7 +1300,50 @@ static int cmd_deassign(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    dcl_sym_delete(cmd->params[0], DCL_SYM_GLOBAL);
+    /* Uppercase the logical name */
+    char upper_name[256];
+    size_t i;
+    for (i = 0; i < sizeof(upper_name) - 1 && cmd->params[0][i]; i++)
+        upper_name[i] = (char)toupper((unsigned char)cmd->params[0][i]);
+    upper_name[i] = '\0';
+
+    /* Determine target table from qualifiers (/PROCESS is the default) */
+    const char *table = LNM_PROCESS_TABLE;
+    int all_tables = dcl_has_qualifier(cmd, "ALL");
+    if (!all_tables) {
+        if (dcl_has_qualifier(cmd, "SYSTEM"))
+            table = LNM_SYSTEM_TABLE;
+        else if (dcl_has_qualifier(cmd, "GROUP"))
+            table = LNM_GROUP_TABLE;
+        else if (dcl_has_qualifier(cmd, "JOB"))
+            table = LNM_JOB_TABLE;
+    }
+
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (mgr) {
+        if (all_tables) {
+            /* Try all tables; ignore "not found" errors */
+            lnm_delete(mgr, LNM_PROCESS_TABLE, upper_name, LNM_MODE_USER);
+            lnm_delete(mgr, LNM_JOB_TABLE,     upper_name, LNM_MODE_USER);
+            lnm_delete(mgr, LNM_GROUP_TABLE,   upper_name, LNM_MODE_USER);
+            lnm_delete(mgr, LNM_SYSTEM_TABLE,  upper_name, LNM_MODE_USER);
+        } else {
+            uint32_t status = lnm_delete(mgr, table, upper_name, LNM_MODE_USER);
+            if (status == SS$_NOLOGNAM) {
+                /* Not an error on VMS — deassigning a non-existent name is silent */
+                return SS$_NORMAL;
+            }
+            if (status != SS$_NORMAL) {
+                dcl_error("DCL", 1, "NOLOGNAM",
+                          "no logical name match for \\%s\\", upper_name);
+                return (int)status;
+            }
+        }
+    } else {
+        /* Graceful fallback: remove from global symbol table */
+        dcl_sym_delete(upper_name, DCL_SYM_GLOBAL);
+    }
+
     return SS$_NORMAL;
 }
 

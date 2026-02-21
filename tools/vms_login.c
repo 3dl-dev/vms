@@ -19,7 +19,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#include "sha256.h"
+#include "sysuaf.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "ovmx_accounting.h"
@@ -28,23 +28,11 @@
 #define MAX_ATTEMPTS   3
 
 /* Paths */
-#define SYSUAF_PATH        "/etc/ovmx/sysuaf.dat"
 #define LASTLOGIN_DIR      "/etc/ovmx/lastlogin"
 #ifndef OVMX_BIN_DIR
 #define OVMX_BIN_DIR "/usr/local/bin"
 #endif
 #define DCL_SHELL_PATH     OVMX_BIN_DIR "/vmsdcl"
-
-/* SYSUAF record */
-typedef struct {
-    char     username[64];
-    char     password_hash[128];
-    uint32_t uic_group;
-    uint32_t uic_member;
-    char     default_dir[256];
-    char     flags[64];
-    char     privileges[256];
-} sysuaf_record_t;
 
 /* ------------------------------------------------------------------ */
 /* Helper: upcase a string in-place                                   */
@@ -98,91 +86,6 @@ static int read_password(char *buf, size_t bufsiz)
 
     trim_trailing(buf);
     return 0;
-}
-
-/* ------------------------------------------------------------------ */
-/* Look up a user in sysuaf.dat                                       */
-/* ------------------------------------------------------------------ */
-static int lookup_user(const char *username, sysuaf_record_t *rec)
-{
-    FILE *fp = fopen(SYSUAF_PATH, "r");
-    if (!fp)
-        return -1;
-
-    char line[1024];
-    while (fgets(line, sizeof(line), fp)) {
-        /* Skip comments and blank lines */
-        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
-            continue;
-
-        trim_trailing(line);
-
-        /* Parse: USERNAME:PASSWORD_HASH:UIC_GROUP:UIC_MEMBER:DEFAULT_DIR:FLAGS:PRIVILEGES */
-        char *fields[7];
-        char *p = line;
-        int nf = 0;
-
-        for (nf = 0; nf < 7 && p; nf++) {
-            fields[nf] = p;
-            char *colon = strchr(p, ':');
-            if (colon) {
-                *colon = '\0';
-                p = colon + 1;
-            } else {
-                p = NULL;
-            }
-        }
-
-        if (nf < 5)
-            continue;  /* malformed line */
-
-        /* Case-insensitive compare */
-        char uname_copy[64];
-        strncpy(uname_copy, fields[0], sizeof(uname_copy) - 1);
-        uname_copy[sizeof(uname_copy) - 1] = '\0';
-        upcase(uname_copy);
-
-        char search_copy[64];
-        strncpy(search_copy, username, sizeof(search_copy) - 1);
-        search_copy[sizeof(search_copy) - 1] = '\0';
-        upcase(search_copy);
-
-        if (strcmp(uname_copy, search_copy) == 0) {
-            strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
-            upcase(rec->username);
-            strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
-            rec->uic_group  = (uint32_t)strtoul(fields[2], NULL, 10);
-            rec->uic_member = (uint32_t)strtoul(fields[3], NULL, 10);
-            strncpy(rec->default_dir, fields[4], sizeof(rec->default_dir) - 1);
-            if (nf > 5)
-                strncpy(rec->flags, fields[5], sizeof(rec->flags) - 1);
-            if (nf > 6)
-                strncpy(rec->privileges, fields[6], sizeof(rec->privileges) - 1);
-            fclose(fp);
-            return 0;
-        }
-    }
-
-    fclose(fp);
-    return -1;  /* User not found */
-}
-
-/* ------------------------------------------------------------------ */
-/* Authenticate: compare supplied password against stored hash        */
-/* Empty hash = no password required. Non-empty = SHA256 hex compare. */
-/* ------------------------------------------------------------------ */
-static int authenticate(const sysuaf_record_t *rec, const char *password)
-{
-    /* Empty hash = no password required */
-    if (rec->password_hash[0] == '\0')
-        return 1;
-
-    /* Hash the supplied password with SHA256 */
-    char hex[65];
-    sha256_hex((const uint8_t *)password, strlen(password), hex);
-
-    /* Compare against stored hex hash (case-insensitive) */
-    return (strcasecmp(hex, rec->password_hash) == 0);
 }
 
 /* ------------------------------------------------------------------ */
@@ -265,7 +168,7 @@ static int ssh_login(void)
 
     sysuaf_record_t user_rec;
     memset(&user_rec, 0, sizeof(user_rec));
-    if (lookup_user(username, &user_rec) < 0) {
+    if (sysuaf_lookup(username, &user_rec) < 0) {
         fprintf(stderr, "User authorization failure\n");
         return 1;
     }
@@ -308,14 +211,14 @@ static int console_login(void)
 
         /* Look up user */
         memset(&user_rec, 0, sizeof(user_rec));
-        if (lookup_user(username, &user_rec) < 0) {
+        if (sysuaf_lookup(username, &user_rec) < 0) {
             printf("\nUser authorization failure\n\n");
             attempts++;
             continue;
         }
 
         /* Authenticate */
-        if (!authenticate(&user_rec, password)) {
+        if (!sysuaf_authenticate(&user_rec, password)) {
             printf("\nUser authorization failure\n\n");
             attempts++;
             continue;

@@ -4,7 +4,8 @@
  * Implements the OpenVMS AUTHORIZE utility interface for managing
  * the System User Authorization File (SYSUAF) at /etc/ovmx/sysuaf.dat
  *
- * Build: part of tools/ CMakeLists.txt (links sha256.c)
+ * SHA256 is provided by libvms (src/libvms/rtl/sha256.c).
+ * Build: part of tools/ CMakeLists.txt (links vms library)
  */
 
 #define _POSIX_C_SOURCE 200809L

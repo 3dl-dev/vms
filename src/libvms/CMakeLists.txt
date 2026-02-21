@@ -32,6 +32,8 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_uai.c
     syssvc/sys_device.c
     syssvc/sys_operator.c
+    rtl/sha256.c
+    rtl/sysuaf.c
 )
 target_include_directories(vms PUBLIC include ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
 target_link_libraries(vms PUBLIC vmsprocess pthread m)

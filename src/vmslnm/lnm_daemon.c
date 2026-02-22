@@ -39,10 +39,11 @@
 #include "vms/logical.h"
 #include "ssdef.h"
 
+#include "ovmx_layout.h"
 #define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
-#define LNM_CONF_PATH    "/etc/ovmx/sylogicals.conf"
+#define LNM_CONF_PATH    VMS_LNM_CONF_PATH
 #define LNM_LINE_MAX     1024
-#define LNM_VMS_ROOT     "/vms"
+#define LNM_VMS_ROOT     SYSDISK_MOUNT
 
 #ifdef LNM_DAEMON_MAIN
 

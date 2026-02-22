@@ -69,29 +69,38 @@ RUN cmake -B build-static \
 # -- FAT initramfs -------------------------------------------------------------
 # All OVMX binaries included. STARTUP.EXE detects a blank /dev/vda and
 # installs the full OS onto it. Use this for first boot or recovery.
+#
+# ODS-2 directory layout:
+#   /vms/SYS0/SYSCOMMON/SYSEXE/  — executables
+#   /vms/SYS0/SYSCOMMON/SYSLIB/  — shareable images
+#   /vms/SYS0/SYSCOMMON/SYSMGR/  — manager configs
+#   /vms/SYS0/SYSCOMMON/SYSHLP/  — help files
+#   /vms/USERS/                   — user home directories
 RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/tmp /initramfs-fat/var /initramfs-fat/mnt \
              /initramfs-fat/lib/modules \
-             /initramfs-fat/vms \
-             /initramfs-fat/etc/ovmx && \
-    # OVMX binaries → VMS paths (STARTUP.EXE is /init)
-    mkdir -p /initramfs-fat/vms/sys\$system && \
-    cp build-static/bin/STARTUP.EXE  /initramfs-fat/init && \
-    cp build-static/bin/DCL.EXE      /initramfs-fat/vms/sys\$system/ && \
-    cp build-static/bin/LOGINOUT.EXE /initramfs-fat/vms/sys\$system/ && \
-    cp build-static/bin/HELP.EXE     /initramfs-fat/vms/sys\$system/ && \
-    cp build-static/bin/VMSLNMD.EXE  /initramfs-fat/vms/sys\$system/ && \
-    cp build-static/bin/AUTHORIZE.EXE /initramfs-fat/vms/sys\$system/ 2>/dev/null ; \
-    cp build-static/bin/MAIL.EXE     /initramfs-fat/vms/sys\$system/ 2>/dev/null ; \
-    cp build-static/bin/MONITOR.EXE  /initramfs-fat/vms/sys\$system/ 2>/dev/null ; \
-    cp build-static/bin/INITIALIZE.EXE /initramfs-fat/vms/sys\$system/ 2>/dev/null ; \
+             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE \
+             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB \
+             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR \
+             /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP \
+             /initramfs-fat/vms/USERS && \
+    # OVMX binaries → SYSEXE (STARTUP.EXE is also /init)
+    cp build-static/bin/STARTUP.EXE    /initramfs-fat/init && \
+    cp build-static/bin/DCL.EXE        /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/LOGINOUT.EXE   /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/HELP.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/VMSLNMD.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp build-static/bin/AUTHORIZE.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/MAIL.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/MONITOR.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/INITIALIZE.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-fat/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-fat/lib/modules/ && \
-    # Configuration
-    cp -r distro/rootfs/etc/ovmx/* /initramfs-fat/etc/ovmx/ && \
-    mkdir -p /initramfs-fat/vms/sys\$manager && \
-    cp distro/rootfs/vms/sys\$manager/* /initramfs-fat/vms/sys\$manager/ && \
+    # System disk config files → VMS-standard locations
+    cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR/ && \
+    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # Pack the fat initramfs
     cd /initramfs-fat && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
     echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
@@ -103,19 +112,17 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
 RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/tmp /initramfs-slim/var /initramfs-slim/mnt \
              /initramfs-slim/lib/modules \
-             /initramfs-slim/vms \
-             /initramfs-slim/etc/ovmx && \
+             /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE \
+             /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR && \
     # Bootstrap binaries only
-    cp build-static/bin/STARTUP.EXE  /initramfs-slim/init && \
-    mkdir -p /initramfs-slim/vms/sys\$system && \
-    cp build-static/bin/INITIALIZE.EXE /initramfs-slim/vms/sys\$system/ 2>/dev/null ; \
+    cp build-static/bin/STARTUP.EXE    /initramfs-slim/init && \
+    cp build-static/bin/INITIALIZE.EXE /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-slim/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-slim/lib/modules/ && \
-    # Minimal config (STARTUP.EXE reads these at boot)
-    cp -r distro/rootfs/etc/ovmx/* /initramfs-slim/etc/ovmx/ && \
-    mkdir -p /initramfs-slim/vms/sys\$manager && \
-    cp distro/rootfs/vms/sys\$manager/* /initramfs-slim/vms/sys\$manager/ && \
+    # Minimal config — SYSUAF + manager files (STARTUP.EXE reads these at boot)
+    cp distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+    cp -r distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/* /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR/ && \
     # Pack the slim initramfs
     cd /initramfs-slim && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx-slim.cpio.gz && \
     echo "SLIM initramfs: $(ls -lh /boot/initramfs-ovmx-slim.cpio.gz | awk '{print $5}')"

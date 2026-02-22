@@ -35,15 +35,13 @@ static void lastlogin_path(const char *username, char *buf, size_t bufsiz)
 }
 
 /* ------------------------------------------------------------------ */
-/* Ensure /etc/ovmx/lastlogin exists.                                 */
+/* Ensure lastlogin directory exists on system disk.                   */
 /* ------------------------------------------------------------------ */
 static void ensure_dir(void)
 {
     struct stat st;
     if (stat(OVMX_LASTLOGIN_DIR, &st) == 0)
         return;
-    /* Try to create the hierarchy */
-    mkdir("/etc/ovmx", 0755);
     mkdir(OVMX_LASTLOGIN_DIR, 0755);
 }
 

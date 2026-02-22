@@ -45,7 +45,8 @@ int dcl_execute_script(const char *filename, int argc, char **argv);
 int dcl_format_directory(const char *linux_path, char *vms_dir, size_t dir_size);
 
 /* Login script paths */
-#define SYLOGIN_PATH  "/vms/sys$manager/SYLOGIN.COM"
+#include "ovmx_layout.h"
+#define SYLOGIN_PATH  VMS_SYLOGIN_PATH
 
 /* parse_privilege_string() is now in vms/privs.h (shared header) */
 
@@ -198,7 +199,7 @@ static void display_banner(void)
     if (vms_user && vms_user[0]) {
         char lastlogin_path[512];
         snprintf(lastlogin_path, sizeof(lastlogin_path),
-                 "/etc/ovmx/lastlogin/%s", vms_user);
+                 "%s/%s", VMS_LASTLOGIN_DIR, vms_user);
         FILE *lf = fopen(lastlogin_path, "r");
         if (lf) {
             char prev[64];
@@ -227,7 +228,7 @@ static void setup_session(struct dcl_context *ctx)
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
         const char *vms_root = getenv("VMS_ROOT");
-        if (!vms_root) vms_root = "/vms";
+        if (!vms_root) vms_root = SYSDISK_MOUNT;
         lnm_setup_defaults(mgr, vms_root);
 
         /*

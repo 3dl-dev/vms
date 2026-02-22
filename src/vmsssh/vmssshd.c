@@ -51,7 +51,8 @@
 /* ------------------------------------------------------------------ */
 
 #define DEFAULT_PORT         22
-#define DEFAULT_HOST_KEY     "/etc/ovmx/ssh_host_rsa_key"
+#include "ovmx_layout.h"
+#define DEFAULT_HOST_KEY     VMS_SSH_HOST_KEY
 #define AUTH_TIMEOUT_SEC     30
 #define MAX_AUTH_ATTEMPTS    3
 #define FORWARD_BUF_SIZE     4096

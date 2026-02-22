@@ -2,8 +2,8 @@
  * sysuaf.h - SYSUAF (System User Authorization File) library
  *
  * Shared interface for looking up users and authenticating passwords
- * against /etc/ovmx/sysuaf.dat. Used by vms_login, vms_ssh_auth,
- * and the upcoming vmssshd.
+ * against SYS$SYSTEM:SYSUAF.DAT. Used by vms_login, vms_ssh_auth,
+ * and vmssshd.
  *
  * The library is usable without any VMS runtime being initialized —
  * it is pure file parsing and SHA256 hashing.
@@ -13,8 +13,9 @@
 #define SYSUAF_H
 
 #include <stdint.h>
+#include "ovmx_layout.h"
 
-#define SYSUAF_PATH "/etc/ovmx/sysuaf.dat"
+#define SYSUAF_PATH VMS_SYSUAF_PATH
 
 typedef struct {
     char     username[64];

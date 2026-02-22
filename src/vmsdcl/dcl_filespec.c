@@ -2,8 +2,8 @@
  * dcl_filespec.c - VMS filespec handling for DCL
  *
  * Resolves VMS-style filespecs to Linux paths and vice versa.
- * Handles device/logical translation, directory specs ([DIR.SUB]),
- * relative specs ([.SUB], [-]), and wildcard expansion.
+ * All VMS-to-Linux translation is delegated to vmsfs_to_linux_path()
+ * — the single translation function in the system.
  */
 
 #include <stdio.h>
@@ -19,6 +19,8 @@
 #include "dcl/parser.h"
 #include "ssdef.h"
 #include "vms/logical.h"
+#include "vmsfs/filespec.h"
+#include "ovmx_layout.h"
 
 /* Forward declaration of logical name translation */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
@@ -28,231 +30,110 @@ extern int vmsfs_find_case_insensitive(const char *dir_path, const char *name,
                                         char *result, size_t result_size);
 
 /*
- * Convert a VMS directory spec to a Linux path component.
- * [DIR.SUB]     -> /dir/sub/
- * [.SUB]        -> sub/         (relative)
- * [-]           -> ../          (parent)
- * [-.DIR]       -> ../dir/
- * [DIR]         -> /dir/
+ * Strip a VMS version suffix (;N) from a Linux path in-place.
+ * Only strips if the suffix is a valid version number.
  */
-static int translate_vms_dir(const char *vms_dir, char *linux_dir, size_t dir_size)
+static void strip_version_suffix(char *path)
 {
-    if (!vms_dir || !linux_dir || dir_size == 0) return -1;
+    char *semi = strrchr(path, ';');
+    if (!semi) return;
 
-    linux_dir[0] = '\0';
-    size_t out = 0;
-
-    const char *p = vms_dir;
-
-    /* Skip leading [ or < */
-    if (*p == '[' || *p == '<') p++;
-
-    /* Check for relative spec */
-    if (*p == '.') {
-        /* [.SUB] - relative to current directory */
-        p++; /* skip the dot */
-    } else if (*p == '-') {
-        /* [-] or [-.DIR] - parent directory */
-        while (*p == '-') {
-            if (out + 3 < dir_size) {
-                linux_dir[out++] = '.';
-                linux_dir[out++] = '.';
-                linux_dir[out++] = '/';
-            }
-            p++;
-            if (*p == '.') p++;
-        }
-    } else if (*p != ']' && *p != '>' && *p != '\0') {
-        /* Absolute directory - start with / */
-        if (out < dir_size - 1) linux_dir[out++] = '/';
-    }
-
-    /* Convert directory components (dots become slashes) */
-    while (*p && *p != ']' && *p != '>') {
-        if (*p == '.') {
-            if (out < dir_size - 1) linux_dir[out++] = '/';
-        } else {
-            if (out < dir_size - 1)
-                linux_dir[out++] = (char)tolower((unsigned char)*p);
-        }
+    /* Only strip if everything after ; is digits */
+    const char *p = semi + 1;
+    if (*p == '\0') return;  /* bare ; with nothing after */
+    while (*p) {
+        if (!isdigit((unsigned char)*p)) return;
         p++;
     }
+    *semi = '\0';
+}
 
-    /* Ensure trailing slash */
-    if (out > 0 && linux_dir[out - 1] != '/') {
-        if (out < dir_size - 1) linux_dir[out++] = '/';
+/*
+ * Case-insensitive file lookup in a directory.
+ * Tries: the path as-is, then uppercase filename, then directory scan.
+ * Returns 0 on success, -1 on failure.
+ * On success, linux_path is updated to the found path.
+ */
+static int resolve_case(char *linux_path, size_t path_size)
+{
+    if (!linux_path[0] || linux_path[0] != '/')
+        return 0;  /* No resolution needed for relative or empty paths */
+
+    struct stat st;
+    if (stat(linux_path, &st) == 0)
+        return 0;  /* Path already exists as-is */
+
+    /* Split into directory and filename */
+    char *last_slash = strrchr(linux_path, '/');
+    if (!last_slash || last_slash == linux_path)
+        return -1;
+
+    char dir_part[VMSFS_MAX_PATH];
+    size_t dlen = (size_t)(last_slash - linux_path);
+    if (dlen >= sizeof(dir_part)) return -1;
+    memcpy(dir_part, linux_path, dlen);
+    dir_part[dlen] = '\0';
+
+    const char *filename = last_slash + 1;
+    if (!filename[0]) return -1;
+
+    /* Try uppercase filename */
+    char upper[512];
+    size_t i;
+    for (i = 0; i < sizeof(upper) - 1 && filename[i]; i++)
+        upper[i] = (char)toupper((unsigned char)filename[i]);
+    upper[i] = '\0';
+
+    char try_path[VMSFS_MAX_PATH];
+    snprintf(try_path, sizeof(try_path), "%s/%s", dir_part, upper);
+    if (stat(try_path, &st) == 0) {
+        strncpy(linux_path, try_path, path_size - 1);
+        linux_path[path_size - 1] = '\0';
+        return 0;
     }
 
-    linux_dir[out] = '\0';
-    return 0;
+    /* Case-insensitive directory scan */
+    char found_name[256];
+    if (vmsfs_find_case_insensitive(dir_part, filename,
+                                     found_name, sizeof(found_name)) == 0) {
+        snprintf(try_path, sizeof(try_path), "%s/%s", dir_part, found_name);
+        strncpy(linux_path, try_path, path_size - 1);
+        linux_path[path_size - 1] = '\0';
+        return 0;
+    }
+
+    /* Not found — leave the path as-is (for new file creation) */
+    return -1;
 }
 
 /*
  * Resolve a VMS filespec to a Linux path.
  *
- * Handles:
- *   device:[dir]file.ext;ver  - full filespec
- *   [dir]file.ext             - no device (use default)
- *   file.ext                  - just a filename
- *   [.sub]file.ext            - relative directory
- *   logical:file.ext          - logical name as device
+ * Delegates entirely to vmsfs_to_linux_path() for the VMS→Linux
+ * translation, then does DCL-specific post-processing:
+ *   - Strip version suffix (;N) since Linux doesn't use file versions
+ *   - Case-insensitive file lookup with fallback to uppercase
  *
  * Returns 0 on success.
  */
 int dcl_resolve_filespec(struct dcl_context *ctx, const char *spec,
                          char *linux_path, size_t path_size)
 {
+    (void)ctx;  /* defaults are handled by caller building full spec */
+
     if (!spec || !linux_path || path_size == 0) return -1;
 
-    linux_path[0] = '\0';
-    char device[128] = {0};
-    char dir_spec[512] = {0};
-    char name_part[512] = {0};
-
-    const char *p = spec;
-
-    /* Check for device: or logical: prefix */
-    const char *colon = strchr(p, ':');
-    const char *bracket = strchr(p, '[');
-
-    if (colon && (!bracket || colon < bracket)) {
-        /* Has a device/logical prefix */
-        size_t dlen = (size_t)(colon - p);
-        if (dlen < sizeof(device)) {
-            memcpy(device, p, dlen);
-            device[dlen] = '\0';
-        }
-        p = colon + 1;
+    int status = vmsfs_to_linux_path(spec, linux_path, path_size);
+    if (!$VMS_STATUS_SUCCESS(status)) {
+        linux_path[0] = '\0';
+        return -1;
     }
 
-    /* Check for [directory] spec */
-    if (*p == '[' || *p == '<') {
-        const char *end = strchr(p, (*p == '[') ? ']' : '>');
-        if (end) {
-            size_t dirlen = (size_t)(end - p + 1);
-            if (dirlen < sizeof(dir_spec)) {
-                memcpy(dir_spec, p, dirlen);
-                dir_spec[dirlen] = '\0';
-            }
-            p = end + 1;
-        }
-    }
+    /* Strip version suffix — Linux filesystem doesn't use ;N */
+    strip_version_suffix(linux_path);
 
-    /* Rest is the filename */
-    strncpy(name_part, p, sizeof(name_part) - 1);
-    name_part[sizeof(name_part) - 1] = '\0';
-
-    /* Remove version number (;N) from filename for Linux */
-    char *semi = strrchr(name_part, ';');
-    if (semi) *semi = '\0';
-
-    /* Build the Linux path */
-    char base_dir[1024] = {0};
-
-    /* Resolve device/logical */
-    if (device[0]) {
-        char trans[512];
-        if (dcl_translate_logical(device, trans, sizeof(trans)) == 0) {
-            strncpy(base_dir, trans, sizeof(base_dir) - 1);
-        } else {
-            /* Try as a direct path mapping */
-            snprintf(base_dir, sizeof(base_dir), "/vms/%s", device);
-        }
-    }
-
-    /* Resolve directory spec */
-    if (dir_spec[0]) {
-        char linux_dir[512];
-        translate_vms_dir(dir_spec, linux_dir, sizeof(linux_dir));
-
-        if (linux_dir[0] == '/') {
-            /* Absolute directory */
-            if (base_dir[0]) {
-                /* Append to device root */
-                size_t blen = strlen(base_dir);
-                if (blen > 0 && base_dir[blen - 1] == '/') {
-                    snprintf(base_dir + blen, sizeof(base_dir) - blen,
-                             "%s", linux_dir + 1);
-                } else {
-                    strncat(base_dir, linux_dir, sizeof(base_dir) - blen - 1);
-                }
-            } else {
-                /* Use default device + this directory */
-                snprintf(base_dir, sizeof(base_dir), "%s%s",
-                         ctx->default_linux, linux_dir);
-            }
-        } else {
-            /* Relative directory */
-            if (!base_dir[0]) {
-                strncpy(base_dir, ctx->default_linux, sizeof(base_dir) - 1);
-            }
-            size_t blen = strlen(base_dir);
-            if (blen > 0 && base_dir[blen - 1] != '/') {
-                if (blen < sizeof(base_dir) - 1) base_dir[blen++] = '/';
-            }
-            strncat(base_dir, linux_dir, sizeof(base_dir) - blen - 1);
-        }
-    } else if (!base_dir[0]) {
-        /* No device and no directory - use current default */
-        strncpy(base_dir, ctx->default_linux, sizeof(base_dir) - 1);
-    }
-
-    /* Ensure base_dir has trailing slash */
-    size_t blen = strlen(base_dir);
-    if (blen > 0 && base_dir[blen - 1] != '/') {
-        if (blen < sizeof(base_dir) - 1) {
-            base_dir[blen] = '/';
-            base_dir[blen + 1] = '\0';
-        }
-    }
-
-    /* Combine base_dir + filename */
-    if (name_part[0]) {
-        /* VMS is case-insensitive; try uppercase first, then case-insensitive scan */
-        char upper_name[512];
-        size_t i;
-        for (i = 0; i < sizeof(upper_name) - 1 && name_part[i]; i++) {
-            upper_name[i] = (char)toupper((unsigned char)name_part[i]);
-        }
-        upper_name[i] = '\0';
-
-        /* Try uppercase (VMS canonical) */
-        char try_path[1024];
-        struct stat fst;
-        snprintf(try_path, sizeof(try_path), "%s%s", base_dir, upper_name);
-        if (stat(try_path, &fst) == 0) {
-            strncpy(linux_path, try_path, path_size - 1);
-            linux_path[path_size - 1] = '\0';
-        } else {
-            /* Try original case */
-            snprintf(try_path, sizeof(try_path), "%s%s", base_dir, name_part);
-            if (stat(try_path, &fst) == 0) {
-                strncpy(linux_path, try_path, path_size - 1);
-                linux_path[path_size - 1] = '\0';
-            } else {
-                /* Case-insensitive scan of directory */
-                char found_name[256];
-                /* Strip trailing slash from base_dir for opendir */
-                char scan_dir[1024];
-                strncpy(scan_dir, base_dir, sizeof(scan_dir) - 1);
-                scan_dir[sizeof(scan_dir) - 1] = '\0';
-                size_t sdlen = strlen(scan_dir);
-                if (sdlen > 1 && scan_dir[sdlen - 1] == '/')
-                    scan_dir[sdlen - 1] = '\0';
-
-                if (vmsfs_find_case_insensitive(scan_dir, name_part,
-                                                 found_name, sizeof(found_name)) == 0) {
-                    snprintf(linux_path, path_size, "%s%s", base_dir, found_name);
-                } else {
-                    /* Default to uppercase for new files */
-                    snprintf(linux_path, path_size, "%s%s", base_dir, upper_name);
-                }
-            }
-        }
-    } else {
-        strncpy(linux_path, base_dir, path_size - 1);
-        linux_path[path_size - 1] = '\0';
-    }
+    /* Enhanced case-insensitive resolution */
+    resolve_case(linux_path, path_size);
 
     return 0;
 }
@@ -260,14 +141,18 @@ int dcl_resolve_filespec(struct dcl_context *ctx, const char *spec,
 /*
  * Convert a Linux path to a VMS-style display string.
  *
- * /home/user/dir/file.txt -> DISK$USER:[DIR]FILE.TXT
+ * /home/user/dir/file.txt -> SYS$DISK:[DIR]FILE.TXT
  */
 int dcl_format_filespec(const char *linux_path, char *vms_spec, size_t spec_size)
 {
     if (!linux_path || !vms_spec || spec_size == 0) return -1;
 
-    /* For simple display, just show the path in a VMS-like format */
-    /* Extract directory and filename parts */
+    /* Use the centralized Linux→VMS translation */
+    int status = vmsfs_to_vms_spec(linux_path, vms_spec, spec_size);
+    if ($VMS_STATUS_SUCCESS(status))
+        return 0;
+
+    /* Fallback: simple formatting */
     const char *last_slash = strrchr(linux_path, '/');
     char dir_part[512] = {0};
     char file_part[256] = {0};
@@ -396,16 +281,7 @@ int dcl_translate_logical(const char *name, char *result, size_t result_size)
      * may not have been initialized with yet.
      */
     if (strcmp(upper, "SYS$DISK") == 0) {
-        /*
-         * SYS$DISK is the current default DEVICE (disk), not the current
-         * directory.  In real VMS, SET DEFAULT [USERS.SMITH] changes the
-         * directory component but SYS$DISK stays as the device (e.g. DKA0:).
-         *
-         * For OVMX we map SYS$DISK to the VMS root mount point ("/vms")
-         * so that SYS$DISK:[DIR]FILE correctly resolves under /vms/dir/file,
-         * independent of the user's current working directory.
-         */
-        strncpy(result, "/vms", result_size - 1);
+        strncpy(result, SYSDISK_MOUNT, result_size - 1);
         result[result_size - 1] = '\0';
         return 0;
     }
@@ -424,7 +300,15 @@ int dcl_translate_logical(const char *name, char *result, size_t result_size)
 
 /*
  * Resolve a filespec, trying it both as VMS format and as a plain
- * Linux path. Returns 0 on success.
+ * Linux path.
+ *
+ * All VMS→Linux translation goes through vmsfs_to_linux_path().
+ * This function handles:
+ *   - Linux path passthrough (starts with / or ./ or ../)
+ *   - VMS filespec with device/directory (contains : or [)
+ *   - Plain filename (resolve relative to default directory)
+ *
+ * Returns 0 on success.
  */
 int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
                      char *linux_path, size_t path_size)
@@ -438,56 +322,24 @@ int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
         return 0;
     }
 
-    /* If it contains [ or :, parse as VMS filespec */
+    /*
+     * Build a full VMS filespec by filling in defaults, then let
+     * vmsfs_to_linux_path() do the translation.
+     */
+    char full_spec[1024];
+
     if (strchr(spec, '[') || strchr(spec, ':')) {
-        return dcl_resolve_filespec(ctx, spec, linux_path, path_size);
+        /* Already has device or directory — pass through to vmsfs */
+        strncpy(full_spec, spec, sizeof(full_spec) - 1);
+        full_spec[sizeof(full_spec) - 1] = '\0';
+    } else {
+        /*
+         * Plain filename — prefix with default directory.
+         * ctx->default_dir is VMS format like "SYS$DISK:[USERS.SYSTEM]"
+         */
+        snprintf(full_spec, sizeof(full_spec), "%s%s",
+                 ctx->default_dir, spec);
     }
 
-    /* Plain filename - resolve relative to default directory */
-    /* Strip VMS version number ;N if present */
-    char name_buf[512];
-    strncpy(name_buf, spec, sizeof(name_buf) - 1);
-    name_buf[sizeof(name_buf) - 1] = '\0';
-    char *semi = strrchr(name_buf, ';');
-    if (semi) *semi = '\0';
-
-    /* VMS is case-insensitive; canonical form is UPPERCASE.
-     * Try: uppercase (VMS canonical), original case, then case-insensitive scan. */
-    char upper[512];
-    size_t i;
-    for (i = 0; i < sizeof(upper) - 1 && name_buf[i]; i++) {
-        upper[i] = (char)toupper((unsigned char)name_buf[i]);
-    }
-    upper[i] = '\0';
-
-    char try_path[1024];
-    struct stat st;
-
-    /* Try uppercase first (VMS stores filenames in uppercase) */
-    snprintf(try_path, sizeof(try_path), "%s/%s", ctx->default_linux, upper);
-    if (stat(try_path, &st) == 0) {
-        strncpy(linux_path, try_path, path_size - 1);
-        linux_path[path_size - 1] = '\0';
-        return 0;
-    }
-
-    /* Try original case */
-    snprintf(try_path, sizeof(try_path), "%s/%s", ctx->default_linux, name_buf);
-    if (stat(try_path, &st) == 0) {
-        strncpy(linux_path, try_path, path_size - 1);
-        linux_path[path_size - 1] = '\0';
-        return 0;
-    }
-
-    /* Case-insensitive directory scan */
-    char found_name[256];
-    if (vmsfs_find_case_insensitive(ctx->default_linux, name_buf,
-                                     found_name, sizeof(found_name)) == 0) {
-        snprintf(linux_path, path_size, "%s/%s", ctx->default_linux, found_name);
-        return 0;
-    }
-
-    /* Not found - return uppercase (VMS canonical for new files) */
-    snprintf(linux_path, path_size, "%s/%s", ctx->default_linux, upper);
-    return 0;
+    return dcl_resolve_filespec(ctx, full_spec, linux_path, path_size);
 }

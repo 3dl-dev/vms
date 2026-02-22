@@ -27,7 +27,8 @@
 /* Constants                                                           */
 /* ------------------------------------------------------------------ */
 
-#define SYSUAF_PATH   "/etc/ovmx/sysuaf.dat"
+#include "ovmx_layout.h"
+#define SYSUAF_PATH   VMS_SYSUAF_PATH
 #define MAX_USERS     1024
 #define MAX_LINE      1024
 #define UAF_VERSION   "V7.3"

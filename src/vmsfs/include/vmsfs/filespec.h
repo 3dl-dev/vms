@@ -44,7 +44,8 @@ int vmsfs_to_linux_path(const char *vms_spec, char *linux_path, size_t path_size
 /* Translate a Linux path to a VMS filespec */
 int vmsfs_to_vms_spec(const char *linux_path, char *vms_spec, size_t spec_size);
 
-/* Resolve a VMS device/logical to a Linux directory prefix */
+/* Resolve a VMS device/logical to a Linux directory prefix.
+ * Resolution order: device table → LNM → fallback to /vms */
 int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size);
 
 /* Translate VMS directory spec [DIR.SUBDIR] to Linux path component */

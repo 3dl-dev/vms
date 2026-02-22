@@ -17,10 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreadline8t64 libssh-4 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OVMX: executables → SYS$SYSTEM, libraries → SYS$SHARE
+# Install OVMX: executables → SYSEXE, libraries → SYSLIB
 COPY --from=builder /install/ /
 COPY --from=builder /src/distro/rootfs/ /
 
 EXPOSE 22
 
-ENTRYPOINT ["/vms/sys$system/STARTUP.EXE"]
+ENTRYPOINT ["/vms/SYS0/SYSCOMMON/SYSEXE/STARTUP.EXE"]

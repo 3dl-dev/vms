@@ -21,14 +21,16 @@
 #include <sys/stat.h>
 
 #include "vmsfs/filespec.h"
+#include "vmsfs/device.h"
 #include "vmsfs/version.h"
+#include "ovmx_layout.h"
 #include "ssdef.h"
 #include "rmsdef.h"
 #include "lnmdef.h"
 #include "vms/logical.h"
 
-/* Default VMS root on Linux filesystem */
-static const char *vms_default_root = "/vms";
+/* Default VMS root on Linux filesystem — fallback only */
+static const char *vms_default_root = SYSDISK_MOUNT;
 
 /* Forward declaration for case-insensitive lookup (from vmsfs_case.c) */
 extern int vmsfs_find_case_insensitive(const char *dir_path, const char *name,
@@ -352,8 +354,18 @@ int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
     str_upcase(dev_upper);
 
     /*
-     * Try to translate as a logical name using the LNM manager.
-     * Search through the standard table hierarchy.
+     * Priority 1: Check the device table.
+     * Physical device names (DKA0:, DKB0:) resolve to mount points here.
+     * This is the ONE place where Unix paths are produced.
+     */
+    if (vmsfs_device_resolve(dev_upper, linux_dir, dir_size) == SS$_NORMAL) {
+        return SS$_NORMAL;
+    }
+
+    /*
+     * Priority 2: Try to translate as a logical name using the LNM manager.
+     * Logical device names (SYS$SYSDEVICE → DKA0:) resolve here,
+     * then recurse to hit the device table.
      */
     lnm_manager_t *mgr = lnm_get_manager();
     if (mgr) {
@@ -366,12 +378,13 @@ int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
         if ($VMS_STATUS_SUCCESS(status)) {
             equiv[equiv_len] = '\0';
             /*
-             * The equivalence might end with a colon (concealed device)
-             * or be a Linux path. If it starts with '/', use it directly.
-             * Otherwise, recurse to translate the result.
+             * The equivalence might be:
+             * - A device name with colon (DKA0:) → recurse
+             * - A Linux path (legacy, starts with /) → use directly
+             * - Another logical name → recurse
              */
             if (equiv[0] == '/') {
-                /* Remove trailing slash if present */
+                /* Legacy Linux path equivalence — use directly */
                 size_t elen = strlen(equiv);
                 if (elen > 1 && equiv[elen - 1] == '/') {
                     equiv[elen - 1] = '\0';
@@ -380,27 +393,22 @@ int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
                 linux_dir[dir_size - 1] = '\0';
                 return SS$_NORMAL;
             }
-            /* Equivalence is another logical or device name - try recursion */
+            /* Equivalence is another logical or device name — recurse */
             size_t elen = strlen(equiv);
             if (elen > 0 && equiv[elen - 1] == ':') {
                 equiv[elen - 1] = '\0';  /* Strip trailing colon */
-                return vmsfs_resolve_device(equiv, linux_dir, dir_size);
             }
-            /* Treat as a path under VMS root */
-            snprintf(linux_dir, dir_size, "%s/%s", vms_default_root, equiv);
-            str_downcase(linux_dir + strlen(vms_default_root) + 1);
-            return SS$_NORMAL;
+            return vmsfs_resolve_device(equiv, linux_dir, dir_size);
         }
     }
 
     /*
-     * No logical name translation found.
-     * Map device to /vms/<device_lowercase>/
+     * Priority 3: Fallback — assume system disk.
+     * This handles the case where no device table or LNM is set up yet
+     * (early boot, standalone DCL).
      */
-    char dev_lower[VMSFS_MAX_DEVICE + 1];
-    strncpy(dev_lower, dev_upper, sizeof(dev_lower));
-    str_downcase(dev_lower);
-    snprintf(linux_dir, dir_size, "%s/%s", vms_default_root, dev_lower);
+    strncpy(linux_dir, vms_default_root, dir_size - 1);
+    linux_dir[dir_size - 1] = '\0';
 
     return SS$_NORMAL;
 }
@@ -462,12 +470,12 @@ int vmsfs_translate_directory(const char *vms_dir, char *linux_dir, size_t dir_s
         p++;  /* Skip the leading dot - path is relative */
     }
 
-    /* Convert remaining directory components: dots -> slashes, downcase */
+    /* Convert remaining directory components: dots -> slashes, preserve case */
     while (*p && out < out_end) {
         if (*p == '.') {
             *out++ = '/';
         } else {
-            *out++ = (char)tolower((unsigned char)*p);
+            *out++ = *p;
         }
         p++;
     }

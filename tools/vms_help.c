@@ -31,7 +31,8 @@
 #define MAX_LINE   1024
 
 /* Default help library path */
-#define DEFAULT_HELP_PATH "/vms/sys$help/HELPLIB.HLP"
+#include "ovmx_layout.h"
+#define DEFAULT_HELP_PATH VMS_HELPLIB_PATH
 
 /* ------------------------------------------------------------------ */
 /* Built-in help text (used if no help file is found)                  */

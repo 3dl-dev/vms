@@ -26,23 +26,18 @@
 #include <errno.h>
 
 #include "vms/pcb.h"
+#include "ovmx_layout.h"
 
-#define VMS_LOGIN_PATH   "/vms/sys$system/LOGINOUT.EXE"
-#define VMSDCL_PATH      "/vms/sys$system/DCL.EXE"
-#define STARTUP_PATH     "/vms/sys$manager/STARTUP.COM"
-#define VMSLNMD_PATH     "/vms/sys$system/VMSLNMD.EXE"
 #define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
-#define SSHD_PATH        "/vms/sys$system/VMSSSHD.EXE"
-#define SYSUAF_PATH      "/etc/ovmx/sysuaf.dat"
 #define SYSDISK_DEV      "/dev/vda"
 #define INITRAMFS_BACKUP "/tmp/initramfs_vms"
 
-/* Binary search paths — Docker puts them in /usr/local/bin, QEMU in /vms/sys$system */
+/* Binary search paths — Docker puts them in /usr/local/bin, QEMU in SYSEXE */
 static const char *bin_search_dirs[] = {
-    "/vms/sys$system", "/usr/local/bin", "/bin", "/sbin", NULL
+    VMS_SYSEXE, "/usr/local/bin", "/bin", "/sbin", NULL
 };
 static const char *lib_search_dirs[] = {
-    "/vms/sys$share", "/usr/local/lib", "/lib", NULL
+    VMS_SYSLIB, "/usr/local/lib", "/lib", NULL
 };
 
 static const char *vms_months[] = {
@@ -168,26 +163,27 @@ static void bare_metal_init(void)
     load_kernel_module("/lib/modules/vmsfs.ko");
 
     struct stat vms_st;
-    if (stat("/vms", &vms_st) != 0)
-        return;  /* No /vms in initramfs */
+    if (stat(SYSDISK_MOUNT, &vms_st) != 0)
+        return;  /* No system disk root in initramfs */
 
     /* Check for system disk (virtio block device) */
     struct stat vda_st;
     if (stat(SYSDISK_DEV, &vda_st) == 0 && S_ISBLK(vda_st.st_mode)) {
         printf("%%STARTUP-I-SYSDISK, mounting system disk DKA0:\n");
 
-        /* Back up initramfs /vms before mounting over it */
-        copy_recursive("/vms", INITRAMFS_BACKUP);
+        /* Back up initramfs before mounting over it */
+        copy_recursive(SYSDISK_MOUNT, INITRAMFS_BACKUP);
 
         /* Try mounting — succeeds if disk is already formatted */
-        int rc = mount(SYSDISK_DEV, "/vms", "vmsfs", 0, NULL);
+        int rc = mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL);
         if (rc != 0) {
             /* Disk is blank or unformatted — run INITIALIZE.EXE */
             printf("%%STARTUP-I-INIT, initializing blank system disk\n");
 
             char init_path[256];
             snprintf(init_path, sizeof(init_path),
-                     "%s/sys$system/INITIALIZE.EXE", INITRAMFS_BACKUP);
+                     "%s/SYS0/SYSCOMMON/SYSEXE/INITIALIZE.EXE",
+                     INITRAMFS_BACKUP);
 
             pid_t pid = fork();
             if (pid == 0) {
@@ -200,7 +196,7 @@ static void bare_metal_init(void)
                 waitpid(pid, &ws, 0);
             }
 
-            rc = mount(SYSDISK_DEV, "/vms", "vmsfs", 0, NULL);
+            rc = mount(SYSDISK_DEV, SYSDISK_MOUNT, "vmsfs", 0, NULL);
         }
 
         if (rc == 0) {
@@ -218,14 +214,14 @@ static void bare_metal_init(void)
     mkdir("/var", 0755);
     mkdir("/var/vmsfs", 0755);
 
-    /* Use backup if we already copied /vms for a failed blkdev attempt */
+    /* Use backup if we already copied for a failed blkdev attempt */
     struct stat backup_st;
     if (stat(INITRAMFS_BACKUP, &backup_st) == 0)
         copy_recursive(INITRAMFS_BACKUP, "/var/vmsfs");
     else
-        copy_recursive("/vms", "/var/vmsfs");
+        copy_recursive(SYSDISK_MOUNT, "/var/vmsfs");
 
-    mount("none", "/vms", "vmsfs", 0, "backing=/var/vmsfs,case_blind=1");
+    mount("none", SYSDISK_MOUNT, "vmsfs", 0, "backing=/var/vmsfs,case_blind=1");
 }
 
 /* ------------------------------------------------------------------ */
@@ -234,32 +230,40 @@ static void bare_metal_init(void)
 
 /*
  * Check if the system is already installed on the system disk.
- * DCL.EXE in SYS$SYSTEM is the marker — if it exists (file or symlink),
+ * DCL.EXE in SYSEXE is the marker — if it exists (file or symlink),
  * a prior install populated the tree and we can skip straight to boot.
  */
 static int is_system_installed(void)
 {
     struct stat st;
-    return (lstat("/vms/sys$system/DCL.EXE", &st) == 0);
+    return (lstat(VMS_SYSEXE "/DCL.EXE", &st) == 0);
 }
 
 /*
- * Create the VMS directory tree. mkdir is idempotent — safe to call
- * even if directories already exist from the image.
+ * Create the VMS directory tree following ODS-2 conventions.
+ * mkdir is idempotent — safe to call even if directories already exist.
+ *
+ * MFD [000000]:         /vms/
+ * [SYS0]                /vms/SYS0/
+ * [SYS0.SYSCOMMON]      /vms/SYS0/SYSCOMMON/
+ * SYS$SYSTEM [SYSEXE]   /vms/SYS0/SYSCOMMON/SYSEXE/
+ * SYS$LIBRARY [SYSLIB]  /vms/SYS0/SYSCOMMON/SYSLIB/
+ * SYS$MANAGER [SYSMGR]  /vms/SYS0/SYSCOMMON/SYSMGR/
+ * SYS$HELP [SYSHLP]     /vms/SYS0/SYSCOMMON/SYSHLP/
+ * [USERS]               /vms/USERS/
  */
 static void provision_dirs(void)
 {
-    mkdir("/vms", 0755);
-    mkdir("/vms/sys$system", 0755);
-    mkdir("/vms/sys$share", 0755);
-    mkdir("/vms/sys$library", 0755);
-    mkdir("/vms/sys$manager", 0755);
-    mkdir("/vms/sys$login", 0755);
-    mkdir("/vms/sys$help", 0755);
+    mkdir(SYSDISK_MOUNT, 0755);
+    mkdir(SYSDISK_MOUNT "/SYS0", 0755);
+    mkdir(SYSDISK_MOUNT "/SYS0/SYSCOMMON", 0755);
+    mkdir(VMS_SYSEXE, 0755);
+    mkdir(VMS_SYSLIB, 0755);
+    mkdir(VMS_SYSMGR, 0755);
+    mkdir(VMS_SYSHLP, 0755);
+    mkdir(VMS_USERS, 0755);
     mkdir("/tmp/ovmx", 0755);
     mkdir("/tmp/ovmx/locks", 0755);
-    mkdir("/etc/ovmx", 0755);
-    mkdir("/etc/ovmx/lastlogin", 0755);
 }
 
 /*
@@ -303,29 +307,29 @@ static void ensure_vms_library(const char *vms_path, const char *name)
 }
 
 /*
- * Populate SYS$SYSTEM and SYS$SHARE with VMS-named binaries/images.
+ * Populate SYSEXE and SYSLIB with VMS-named binaries/images.
  * On QEMU, files are already at VMS paths (initramfs). On Docker,
- * creates symlinks from /vms/sys$system/ to /usr/local/bin/.
+ * creates symlinks from SYSEXE/SYSLIB to /usr/local/{bin,lib}/.
  */
 static void provision_symlinks(void)
 {
-    /* SYS$SYSTEM executables */
-    ensure_vms_binary("/vms/sys$system/LOGINOUT.EXE", "LOGINOUT.EXE");
-    ensure_vms_binary("/vms/sys$system/DCL.EXE", "DCL.EXE");
-    ensure_vms_binary("/vms/sys$system/HELP.EXE", "HELP.EXE");
-    ensure_vms_binary("/vms/sys$system/AUTHORIZE.EXE", "AUTHORIZE.EXE");
-    ensure_vms_binary("/vms/sys$system/MAIL.EXE", "MAIL.EXE");
-    ensure_vms_binary("/vms/sys$system/MONITOR.EXE", "MONITOR.EXE");
-    ensure_vms_binary("/vms/sys$system/VMSSSHD.EXE", "VMSSSHD.EXE");
-    ensure_vms_binary("/vms/sys$system/VMSLNMD.EXE", "VMSLNMD.EXE");
-    ensure_vms_binary("/vms/sys$system/STARTUP.EXE", "STARTUP.EXE");
+    /* [SYS0.SYSCOMMON.SYSEXE] executables */
+    ensure_vms_binary(VMS_SYSEXE "/LOGINOUT.EXE", "LOGINOUT.EXE");
+    ensure_vms_binary(VMS_SYSEXE "/DCL.EXE", "DCL.EXE");
+    ensure_vms_binary(VMS_SYSEXE "/HELP.EXE", "HELP.EXE");
+    ensure_vms_binary(VMS_SYSEXE "/AUTHORIZE.EXE", "AUTHORIZE.EXE");
+    ensure_vms_binary(VMS_SYSEXE "/MAIL.EXE", "MAIL.EXE");
+    ensure_vms_binary(VMS_SYSEXE "/MONITOR.EXE", "MONITOR.EXE");
+    ensure_vms_binary(VMS_SYSEXE "/VMSSSHD.EXE", "VMSSSHD.EXE");
+    ensure_vms_binary(VMS_SYSEXE "/VMSLNMD.EXE", "VMSLNMD.EXE");
+    ensure_vms_binary(VMS_SYSEXE "/STARTUP.EXE", "STARTUP.EXE");
 
-    /* SYS$SHARE shareable images */
-    ensure_vms_library("/vms/sys$share/LIBVMS$SHR.EXE", "LIBVMS$SHR.EXE");
-    ensure_vms_library("/vms/sys$share/LIBVMSPROCESS$SHR.EXE", "LIBVMSPROCESS$SHR.EXE");
-    ensure_vms_library("/vms/sys$share/LIBVMSLNM$SHR.EXE", "LIBVMSLNM$SHR.EXE");
-    ensure_vms_library("/vms/sys$share/LIBVMSFS$SHR.EXE", "LIBVMSFS$SHR.EXE");
-    ensure_vms_library("/vms/sys$share/LIBVMSRMS$SHR.EXE", "LIBVMSRMS$SHR.EXE");
+    /* [SYS0.SYSCOMMON.SYSLIB] shareable images */
+    ensure_vms_library(VMS_SYSLIB "/LIBVMS$SHR.EXE", "LIBVMS$SHR.EXE");
+    ensure_vms_library(VMS_SYSLIB "/LIBVMSPROCESS$SHR.EXE", "LIBVMSPROCESS$SHR.EXE");
+    ensure_vms_library(VMS_SYSLIB "/LIBVMSLNM$SHR.EXE", "LIBVMSLNM$SHR.EXE");
+    ensure_vms_library(VMS_SYSLIB "/LIBVMSFS$SHR.EXE", "LIBVMSFS$SHR.EXE");
+    ensure_vms_library(VMS_SYSLIB "/LIBVMSRMS$SHR.EXE", "LIBVMSRMS$SHR.EXE");
 }
 
 /*
@@ -335,7 +339,7 @@ static void provision_symlinks(void)
  */
 static void provision_sysuaf_users(void)
 {
-    FILE *fp = fopen(SYSUAF_PATH, "r");
+    FILE *fp = fopen(VMS_SYSUAF_PATH, "r");
     if (!fp)
         return;
 
@@ -386,14 +390,14 @@ static void install_system(void)
 
 /*
  * Install the OVMX system onto a block-device system disk.
- * Copies real binaries from the initramfs backup to /vms (the mounted
- * block device). No symlinks — vmsfs block-device mode stores real files.
+ * Copies real binaries from the initramfs backup to the mounted
+ * block device. No symlinks — vmsfs block-device mode stores real files.
  */
 static void install_system_blkdev(void)
 {
     printf("%%STARTUP-I-INSTALL, installing OVMX system to DKA0:\n");
     provision_dirs();
-    copy_recursive(INITRAMFS_BACKUP, "/vms");
+    copy_recursive(INITRAMFS_BACKUP, SYSDISK_MOUNT);
     provision_sysuaf_users();
     printf("%%STARTUP-I-INSTALLED, system installation complete\n");
 }
@@ -405,14 +409,14 @@ static void install_system_blkdev(void)
 static pid_t start_lnm_daemon(void)
 {
     struct stat st;
-    if (stat(VMSLNMD_PATH, &st) != 0) {
+    if (stat(VMS_LNMD_PATH, &st) != 0) {
         return -1;  /* vmslnmd not available */
     }
 
     pid_t pid = fork();
     if (pid == 0) {
         /* Child: exec vmslnmd */
-        execl(VMSLNMD_PATH, "vmslnmd", (char *)NULL);
+        execl(VMS_LNMD_PATH, "vmslnmd", (char *)NULL);
         _exit(1);
     }
     return pid;
@@ -444,7 +448,7 @@ static int wait_for_lnm_socket(int timeout_ms)
 static pid_t start_sshd(void)
 {
     struct stat st;
-    if (stat(SSHD_PATH, &st) != 0) {
+    if (stat(VMS_SSHD_PATH, &st) != 0) {
         return -1;  /* sshd not available */
     }
 
@@ -460,7 +464,7 @@ static pid_t start_sshd(void)
         }
         /* Restore default signal handling */
         signal(SIGHUP, SIG_DFL);
-        execl(SSHD_PATH, "vmssshd", (char *)NULL);
+        execl(VMS_SSHD_PATH, "vmssshd", (char *)NULL);
         _exit(1);
     }
     return pid;
@@ -473,12 +477,12 @@ static pid_t start_sshd(void)
 static void run_startup(void)
 {
     struct stat st;
-    if (stat(STARTUP_PATH, &st) != 0)
+    if (stat(VMS_STARTUP_PATH, &st) != 0)
         return;
 
     pid_t pid = fork();
     if (pid == 0) {
-        execl(VMSDCL_PATH, "vmsdcl", STARTUP_PATH, (char *)NULL);
+        execl(VMS_DCL_PATH, "vmsdcl", VMS_STARTUP_PATH, (char *)NULL);
         _exit(1);
     }
     if (pid > 0) {
@@ -613,14 +617,14 @@ int main(void)
         pid_t child = fork();
         if (child == 0) {
             /* Child: exec vms_login */
-            execl(VMS_LOGIN_PATH, "vms_login", (char *)NULL);
+            execl(VMS_LOGINOUT_PATH, "vms_login", (char *)NULL);
             /* If vms_login not found, exec vmsdcl directly */
-            execl(VMSDCL_PATH, "vmsdcl", (char *)NULL);
+            execl(VMS_DCL_PATH, "vmsdcl", (char *)NULL);
             /* Both failed — report why */
             fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
-                    VMS_LOGIN_PATH, strerror(errno));
+                    VMS_LOGINOUT_PATH, strerror(errno));
             fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
-                    VMSDCL_PATH, strerror(errno));
+                    VMS_DCL_PATH, strerror(errno));
             _exit(1);
         } else if (child > 0) {
             /* Parent: wait for login session to end */
@@ -650,12 +654,12 @@ int main(void)
                     /* Check if the binaries actually exist */
                     struct stat chk;
                     fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
-                            VMS_LOGIN_PATH,
-                            stat(VMS_LOGIN_PATH, &chk) == 0 ?
+                            VMS_LOGINOUT_PATH,
+                            stat(VMS_LOGINOUT_PATH, &chk) == 0 ?
                                 "exists" : strerror(errno));
                     fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
-                            VMSDCL_PATH,
-                            stat(VMSDCL_PATH, &chk) == 0 ?
+                            VMS_DCL_PATH,
+                            stat(VMS_DCL_PATH, &chk) == 0 ?
                                 "exists" : strerror(errno));
 
                     /* Back off instead of spinning */

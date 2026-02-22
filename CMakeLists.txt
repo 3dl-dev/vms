@@ -29,11 +29,11 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
 # VMS directory layout
-set(VMS_SHARE_DIR "vms/sys\$share")
-set(VMS_SYSTEM_DIR "vms/sys\$system")
+set(VMS_SHARE_DIR "vms/SYS0/SYSCOMMON/SYSLIB")
+set(VMS_SYSTEM_DIR "vms/SYS0/SYSCOMMON/SYSEXE")
 
 # Runtime library search path — all binaries find shareable images in SYS$SHARE
-set(CMAKE_INSTALL_RPATH "/vms/sys\$share")
+set(CMAKE_INSTALL_RPATH "/vms/SYS0/SYSCOMMON/SYSLIB")
 set(CMAKE_BUILD_WITH_INSTALL_RPATH OFF)
 set(CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/lib")
 
@@ -94,10 +94,8 @@ if(BUILD_TOOLS)
     add_subdirectory(src/ovmx_init)
 endif()
 
-# Install VMS directory tree
+# Install VMS system disk (ODS-2 directory structure)
 install(DIRECTORY distro/rootfs/vms/ DESTINATION /vms
     DIRECTORY_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
                          GROUP_READ GROUP_EXECUTE
                          WORLD_READ WORLD_EXECUTE)
-
-install(DIRECTORY distro/rootfs/etc/ DESTINATION /etc)

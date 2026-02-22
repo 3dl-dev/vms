@@ -25,7 +25,8 @@
 #include "vms/pcb.h"
 
 /* Operator log file path */
-#define OPERATOR_LOG_PATH "/vms/sys$manager/OPERATOR.LOG"
+#include "ovmx_layout.h"
+#define OPERATOR_LOG_PATH VMS_OPERATOR_LOG
 
 /* Fallback operator log (writable in container environments) */
 #define OPERATOR_LOG_FALLBACK "/tmp/OPERATOR.LOG"

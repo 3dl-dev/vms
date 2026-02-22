@@ -28,8 +28,9 @@
 #define MAX_ATTEMPTS   3
 
 /* Paths */
-#define LASTLOGIN_DIR      "/etc/ovmx/lastlogin"
-#define DCL_SHELL_PATH     "/vms/sys$system/DCL.EXE"
+#include "ovmx_layout.h"
+#define LASTLOGIN_DIR      VMS_LASTLOGIN_DIR
+#define DCL_SHELL_PATH     VMS_DCL_PATH
 
 /* ------------------------------------------------------------------ */
 /* Helper: upcase a string in-place                                   */

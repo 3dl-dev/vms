@@ -37,7 +37,8 @@
 /* Constants                                                           */
 /* ------------------------------------------------------------------ */
 
-#define SYSUAF_PATH     "/etc/ovmx/sysuaf.dat"
+#include "ovmx_layout.h"
+#define SYSUAF_PATH     VMS_SYSUAF_PATH
 #define MAIL_SUBDIR     ".vmsmail"
 #define MAIL_INDEX      "MAIL.IDX"
 #define MAX_MESSAGES    9999

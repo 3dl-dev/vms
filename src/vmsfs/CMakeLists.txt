@@ -3,6 +3,7 @@ add_library(vmsfs ${OVMX_LIB_TYPE}
     vmsfs_version.c
     vmsfs_case.c
     vmsfs_protect.c
+    vmsfs_device.c
 )
 target_include_directories(vmsfs PUBLIC include ${VMS_INCLUDE_DIR} ${VMS_LNM_INCLUDE_DIR})
 target_link_libraries(vmsfs PUBLIC vmslnm)

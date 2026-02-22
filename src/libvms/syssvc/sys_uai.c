@@ -23,7 +23,8 @@
 #include "vms/pcb.h"
 
 /* Path to the system authorization file */
-#define SYSUAF_PATH "/etc/ovmx/sysuaf.dat"
+#include "ovmx_layout.h"
+#define SYSUAF_PATH VMS_SYSUAF_PATH
 
 /* Maximum line length in sysuaf.dat */
 #define SYSUAF_LINE_MAX 512
@@ -410,7 +411,7 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
     }
 
     /* Rewrite sysuaf.dat with the updated record */
-    char tmp_path[] = "/etc/ovmx/sysuaf.dat.tmp";
+    char tmp_path[] = VMS_SYSEXE "/SYSUAF.DAT.TMP";
     FILE *in  = fopen(SYSUAF_PATH, "r");
     FILE *out = fopen(tmp_path, "w");
     if (!in || !out) {

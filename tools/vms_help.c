@@ -32,7 +32,9 @@
 
 /* Default help library path */
 #include "ovmx_layout.h"
+#include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
+#include "vms/logical.h"
 #define DEFAULT_HELP_PATH VMS_HELPLIB_PATH
 
 /* ------------------------------------------------------------------ */
@@ -499,6 +501,10 @@ static void interactive_help(void)
 /* ------------------------------------------------------------------ */
 int main(int argc, char *argv[])
 {
+    /* Bootstrap VMS namespace */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
+
     static char help_linux[1024];
     vmsfs_to_linux_path(DEFAULT_HELP_PATH, help_linux, sizeof(help_linux));
     const char *help_path = help_linux;

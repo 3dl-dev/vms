@@ -4,12 +4,14 @@ target_include_directories(vmssshd PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_PROCESS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
 )
 
 target_link_libraries(vmssshd PRIVATE
     ssh       # libssh server-side SSH protocol
     vms       # VMS runtime (includes SYSUAF)
     vmsfs     # filespec translation
+    vmslnm    # logical name resolution
     vmsprocess
     pthread
     util      # openpty()

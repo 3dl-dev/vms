@@ -2,8 +2,8 @@
  * vms_login.c - VMS-style login program for OVMX
  *
  * Displays a VMS-like login banner, prompts for username and
- * password, authenticates against /etc/ovmx/sysuaf.dat, and
- * then execs the DCL shell with --login flag.
+ * password, authenticates against SYSUAF.DAT, and then execs
+ * the DCL shell with --login flag.
  *
  * Build: part of tools/ CMakeLists.txt
  */
@@ -22,7 +22,9 @@
 #include "sysuaf.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
+#include "vms/logical.h"
 #include "ovmx_accounting.h"
+#include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 
 /* Maximum number of login attempts before disconnect */
@@ -115,7 +117,8 @@ static void start_session(const sysuaf_record_t *rec)
     /* Record this login now (after showing last, before launching DCL) */
     ovmx_accounting_record_login(rec->username);
 
-    /* Set up environment for session */
+    /* Set up environment for session.
+     * VMS_DEFAULT_DIR is a VMS directory spec from SYSUAF. */
     setenv("VMS_USERNAME",    rec->username,    1);
 
     char uic_group_str[16], uic_member_str[16];
@@ -126,9 +129,18 @@ static void start_session(const sysuaf_record_t *rec)
     setenv("VMS_DEFAULT_DIR", rec->default_dir, 1);
     setenv("VMS_PRIVILEGES",  rec->privileges, 1);
 
-    /* Build logical name equivalences */
+    /* Build logical name equivalences — VMS directory specs */
     setenv("SYS$LOGIN",   rec->default_dir, 1);
-    setenv("SYS$SCRATCH", "/tmp",           1);
+    setenv("SYS$SCRATCH", "SYS$SYSDEVICE:[SYSTMP]", 1);
+
+    /* chdir into the VMS tree so DCL inherits a VMS-rooted cwd.
+     * Translate the VMS directory spec to Linux for the syscall. */
+    char home_linux[512];
+    if (vmsfs_to_linux_path(rec->default_dir, home_linux, sizeof(home_linux)) == 1) {
+        /* Ensure home directory exists */
+        mkdir(home_linux, 0755);
+        chdir(home_linux);
+    }
 
     /* Initialize user PCB (lives until exec replaces address space) */
     uint64_t user_privs = parse_privilege_string(rec->privileges);
@@ -215,5 +227,11 @@ static int console_login(void)
 int main(int argc, char *argv[])
 {
     (void)argc; (void)argv;
+
+    /* Bootstrap VMS namespace — each exec'd process needs its own
+     * device table + LNM since these are in-process state. */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
+
     return console_login();
 }

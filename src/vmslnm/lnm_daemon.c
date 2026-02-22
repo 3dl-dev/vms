@@ -40,6 +40,7 @@
 #include "ssdef.h"
 
 #include "ovmx_layout.h"
+#include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
 #define LNM_CONF_PATH    VMS_LNM_CONF_PATH
@@ -301,6 +302,9 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failed to initialize logical name manager\n");
         return 1;
     }
+
+    /* Bootstrap device table before setting up logicals */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
 
     /* Set up default VMS system logicals */
     lnm_setup_defaults(mgr, LNM_VMS_ROOT);

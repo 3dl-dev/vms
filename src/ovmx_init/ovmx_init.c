@@ -415,19 +415,19 @@ static void provision_sysuaf_users(void)
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\0')
             continue;
 
-        /* Extract default_dir (field 4, 0-indexed) */
+        /* Extract default_dir (field 4, 0-indexed, pipe-delimited) */
         char *field = line;
         for (int i = 0; i < 4; i++) {
-            field = strchr(field, ':');
+            field = strchr(field, '|');
             if (!field) break;
             field++;
         }
         if (!field)
             continue;
 
-        /* Terminate at next colon or newline */
+        /* Terminate at next pipe or newline */
         char *end = field;
-        while (*end && *end != ':' && *end != '\n' && *end != '\r')
+        while (*end && *end != '|' && *end != '\n' && *end != '\r')
             end++;
         *end = '\0';
 

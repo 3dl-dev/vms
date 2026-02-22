@@ -28,7 +28,9 @@
 /* ------------------------------------------------------------------ */
 
 #include "ovmx_layout.h"
+#include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
+#include "vms/logical.h"
 #define SYSUAF_PATH   VMS_SYSUAF_PATH
 #define MAX_USERS     1024
 #define MAX_LINE      1024
@@ -142,7 +144,8 @@ static int load_sysuaf(void)
             continue;
         }
 
-        /* Parse: USERNAME:PASSWORD_HASH:UIC_GROUP:UIC_MEMBER:DEFAULT_DIR:FLAGS:PRIVILEGES */
+        /* Parse: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
+         * Pipe delimiter avoids conflict with VMS device colons in DEFAULT_DIR. */
         char *fields[7];
         char buf[MAX_LINE];
         strncpy(buf, line, sizeof(buf) - 1);
@@ -152,10 +155,10 @@ static int load_sysuaf(void)
         int nf = 0;
         for (nf = 0; nf < 7 && p != NULL; nf++) {
             fields[nf] = p;
-            char *colon = strchr(p, ':');
-            if (colon) {
-                *colon = '\0';
-                p = colon + 1;
+            char *sep = strchr(p, '|');
+            if (sep) {
+                *sep = '\0';
+                p = sep + 1;
             } else {
                 p = NULL;
             }
@@ -214,13 +217,13 @@ static int save_sysuaf(void)
     }
 
     fprintf(fp, "# System User Authorization File\n");
-    fprintf(fp, "# Format: USERNAME:PASSWORD_HASH:UIC_GROUP:UIC_MEMBER:"
-                "DEFAULT_DIR:FLAGS:PRIVILEGES\n");
+    fprintf(fp, "# Format: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|"
+                "DEFAULT_DIR|FLAGS|PRIVILEGES\n");
     fprintf(fp, "# Password hash is SHA256 hex. Empty = no password required.\n");
 
     for (int i = 0; i < g_nusers; i++) {
         const sysuaf_record_t *r = &g_users[i];
-        fprintf(fp, "%s:%s:%u:%u:%s:%s:%s\n",
+        fprintf(fp, "%s|%s|%u|%u|%s|%s|%s\n",
                 r->username,
                 r->password_hash,
                 r->uic_group,
@@ -388,7 +391,8 @@ static void cmd_add(const char *args)
     strncpy(rec.username, username, sizeof(rec.username) - 1);
     rec.uic_group  = DEFAULT_UIC_GROUP;
     rec.uic_member = next_uic_member(DEFAULT_UIC_GROUP);
-    snprintf(rec.default_dir, sizeof(rec.default_dir), "/home/%s", username);
+    snprintf(rec.default_dir, sizeof(rec.default_dir),
+             "SYS$SYSDEVICE:[USERS.%s]", username);
     strncpy(rec.privileges, DEFAULT_PRIVS, sizeof(rec.privileges) - 1);
 
     /* Parse qualifiers from rest of line */
@@ -410,14 +414,16 @@ static void cmd_add(const char *args)
         }
     }
 
+    /* DEVICE qualifier: sets the device portion of the default directory.
+     * Default is SYS$SYSDEVICE. */
+    const char *device = "SYS$SYSDEVICE";
     val = find_qualifier(args, "DEVICE");
-    /* DEVICE sets the volume portion — we store it as part of default_dir
-     * but for simplicity in our Linux implementation we just note it */
-    (void)val;  /* Device qualifier noted but Linux uses paths, not devices */
+    if (val)
+        device = val;
 
     val = find_qualifier(args, "DIRECTORY");
     if (val) {
-        /* Strip brackets if present */
+        /* Accept [DIR.SUBDIR] or DIR.SUBDIR format */
         const char *v = val;
         if (*v == '[') v++;
         char dir[256];
@@ -426,7 +432,8 @@ static void cmd_add(const char *args)
         size_t dlen = strlen(dir);
         if (dlen > 0 && dir[dlen - 1] == ']')
             dir[dlen - 1] = '\0';
-        snprintf(rec.default_dir, sizeof(rec.default_dir), "/home/%s", dir);
+        snprintf(rec.default_dir, sizeof(rec.default_dir),
+                 "%s:[%s]", device, dir);
     }
 
     val = find_qualifier(args, "PRIVILEGES");
@@ -488,19 +495,23 @@ static void cmd_modify(const char *args)
 
     val = find_qualifier(args, "DEFDIR");
     if (val) {
-        const char *v = val;
-        if (*v == '[') v++;
-        char dir[256];
-        strncpy(dir, v, sizeof(dir) - 1);
-        dir[sizeof(dir) - 1] = '\0';
-        size_t dlen = strlen(dir);
-        if (dlen > 0 && dir[dlen - 1] == ']')
-            dir[dlen - 1] = '\0';
-        /* If it starts with '/', use as-is; else prefix /home/ */
-        if (dir[0] == '/')
-            strncpy(r->default_dir, dir, sizeof(r->default_dir) - 1);
-        else
-            snprintf(r->default_dir, sizeof(r->default_dir), "/home/%s", dir);
+        /* Accept full VMS spec (DEV:[DIR]) or just [DIR] or DIR */
+        if (strchr(val, ':') || (val[0] == '[' && strchr(val, ']'))) {
+            /* Full VMS spec — store as-is */
+            strncpy(r->default_dir, val, sizeof(r->default_dir) - 1);
+            r->default_dir[sizeof(r->default_dir) - 1] = '\0';
+        } else {
+            const char *v = val;
+            if (*v == '[') v++;
+            char dir[256];
+            strncpy(dir, v, sizeof(dir) - 1);
+            dir[sizeof(dir) - 1] = '\0';
+            size_t dlen = strlen(dir);
+            if (dlen > 0 && dir[dlen - 1] == ']')
+                dir[dlen - 1] = '\0';
+            snprintf(r->default_dir, sizeof(r->default_dir),
+                     "SYS$SYSDEVICE:[%s]", dir);
+        }
     }
 
     val = find_qualifier(args, "UIC");
@@ -706,6 +717,10 @@ int main(int argc, char *argv[])
 {
     (void)argc;
     (void)argv;
+
+    /* Bootstrap VMS namespace */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
 
     /* Privilege check */
     if (!check_privilege()) {

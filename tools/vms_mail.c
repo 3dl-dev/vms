@@ -38,7 +38,9 @@
 /* ------------------------------------------------------------------ */
 
 #include "ovmx_layout.h"
+#include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
+#include "vms/logical.h"
 #define SYSUAF_PATH     VMS_SYSUAF_PATH
 #define MAIL_SUBDIR     ".vmsmail"
 #define MAIL_INDEX      "MAIL.IDX"
@@ -848,6 +850,10 @@ int mail_count_unread(const char *username)
 
 int main(int argc, char *argv[])
 {
+    /* Bootstrap VMS namespace */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
+
     /* Determine current username */
     const char *env_user = getenv("VMS_USERNAME");
     if (env_user && env_user[0]) {

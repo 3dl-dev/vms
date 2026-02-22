@@ -73,17 +73,18 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
 
         trim_trailing(line);
 
-        /* Parse: USERNAME:PASSWORD_HASH:UIC_GROUP:UIC_MEMBER:DEFAULT_DIR:FLAGS:PRIVILEGES */
+        /* Parse: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
+         * Pipe delimiter avoids conflict with VMS device colons in DEFAULT_DIR. */
         char *fields[7];
         char *p = line;
         int nf = 0;
 
         for (nf = 0; nf < 7 && p; nf++) {
             fields[nf] = p;
-            char *colon = strchr(p, ':');
-            if (colon) {
-                *colon = '\0';
-                p = colon + 1;
+            char *sep = strchr(p, '|');
+            if (sep) {
+                *sep = '\0';
+                p = sep + 1;
             } else {
                 p = NULL;
             }

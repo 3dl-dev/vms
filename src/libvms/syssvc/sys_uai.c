@@ -106,38 +106,33 @@ static int parse_uaf_line(const char *line, struct uaf_record *rec)
 
     char *f;
 
-    /* Field 1: USERNAME */
-    f = strtok(buf, ":");
+    /* Fields separated by '|' (pipe) to avoid conflict with VMS device colons.
+     * Format: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES */
+    f = strtok(buf, "|");
     if (!f) return -1;
     strncpy(rec->username, f, sizeof(rec->username) - 1);
 
-    /* Field 2: PASSWORD_HASH */
-    f = strtok(NULL, ":");
+    f = strtok(NULL, "|");
     if (!f) return -1;
     strncpy(rec->password_hash, f, sizeof(rec->password_hash) - 1);
 
-    /* Field 3: UIC_GROUP */
-    f = strtok(NULL, ":");
+    f = strtok(NULL, "|");
     if (!f) return -1;
     rec->uic_group = (unsigned int)strtoul(f, NULL, 10);
 
-    /* Field 4: UIC_MEMBER */
-    f = strtok(NULL, ":");
+    f = strtok(NULL, "|");
     if (!f) return -1;
     rec->uic_member = (unsigned int)strtoul(f, NULL, 10);
 
-    /* Field 5: DEFAULT_DIR */
-    f = strtok(NULL, ":");
+    f = strtok(NULL, "|");
     if (!f) return -1;
     strncpy(rec->default_dir, f, sizeof(rec->default_dir) - 1);
 
-    /* Field 6: FLAGS (optional, default 0) */
-    f = strtok(NULL, ":");
+    f = strtok(NULL, "|");
     if (f)
         rec->flags = (uint32_t)strtoul(f, NULL, 0);
 
-    /* Field 7: PRIVILEGES (optional) */
-    f = strtok(NULL, ":\n");
+    f = strtok(NULL, "|\n");
     if (f)
         strncpy(rec->privileges, f, sizeof(rec->privileges) - 1);
 
@@ -432,7 +427,7 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
         int rc = parse_uaf_line(line, &tmp);
         if (rc == 1 && strcasecmp(tmp.username, username) == 0) {
             /* Write the updated record */
-            fprintf(out, "%s:%s:%u:%u:%s:%u:%s\n",
+            fprintf(out, "%s|%s|%u|%u|%s|%u|%s\n",
                     rec.username, rec.password_hash,
                     rec.uic_group, rec.uic_member,
                     rec.default_dir, rec.flags, rec.privileges);

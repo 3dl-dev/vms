@@ -39,7 +39,9 @@
 #include "sysuaf.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
+#include "vms/logical.h"
 #include "ovmx_accounting.h"
+#include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 
 #ifndef OVMX_BIN_DIR
@@ -553,6 +555,10 @@ static int parse_args(int argc, char **argv)
 
 int main(int argc, char **argv)
 {
+    /* Bootstrap VMS namespace */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
+
     if (parse_args(argc, argv) < 0)
         return 1;
 

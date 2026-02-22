@@ -6,7 +6,7 @@
  *   1. Overlay mode (backing=PATH) — overlays a host directory with VMS
  *      versioning, case-insensitive lookup, and SOGW protection.
  *   2. Block-device mode — mounts a block device formatted with the VMSFS
- *      on-disk format (vmsfs_ondisk.h). Read-only for now.
+ *      on-disk format (vmsfs_ondisk.h). Supports read-write operations.
  *
  * OVMX Project - Phase 4b/7: Kernel-native VMS Filesystem
  */
@@ -20,6 +20,7 @@
 #include <linux/namei.h>
 #include <linux/slab.h>
 #include <linux/buffer_head.h>
+#include <linux/mutex.h>
 
 #include "vmsfs_ondisk.h"
 
@@ -55,6 +56,7 @@ struct vmsfs_sb_info {
     /* Block-device mode */
     struct vmsfs_home_block *home;  /* cached home block */
     unsigned long *bitmap;          /* cached storage bitmap */
+    struct mutex alloc_lock;        /* protects bitmap, free_blocks, FID alloc */
     uint32_t bitmap_lbn;
     uint32_t bitmap_blocks;
     uint32_t index_lbn;
@@ -172,6 +174,9 @@ void vmsfs_inode_cache_destroy(void);
 
 /* Read a file header by FID and create/populate a VFS inode */
 struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid);
+
+/* Write inode metadata + retrieval pointers back to on-disk file header */
+int vmsfs_blkdev_flush_inode(struct super_block *sb, struct inode *inode);
 
 /* Block-device directory inode operations */
 extern const struct inode_operations vmsfs_blkdev_dir_iops;

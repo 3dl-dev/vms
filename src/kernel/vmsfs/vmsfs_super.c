@@ -397,7 +397,7 @@ static int vmsfs_fill_super_blkdev(struct super_block *sb, void *data,
     sb->s_d_op = &vmsfs_dops;
     sb->s_maxbytes = MAX_LFS_FILESIZE;
     sb->s_time_gran = 1;
-    sb->s_flags |= SB_RDONLY;  /* read-only for now */
+    mutex_init(&sbi->alloc_lock);
 
     /* Load root inode from MFD (FID 3) */
     root_inode = vmsfs_blkdev_iget(sb, VMSFS_FID_MFD);

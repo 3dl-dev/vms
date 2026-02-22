@@ -1008,7 +1008,7 @@ static int cmd_set_default(struct dcl_command *cmd)
 
     dcl_resolve_path(ctx, dirspec, linux_path, sizeof(linux_path));
 
-    /* Remove trailing slash for stat, but keep it for storage */
+    /* Remove trailing slash for stat */
     char check_path[1024];
     strncpy(check_path, linux_path, sizeof(check_path) - 1);
     check_path[sizeof(check_path) - 1] = '\0';
@@ -1023,13 +1023,33 @@ static int cmd_set_default(struct dcl_command *cmd)
         return SS$_NOSUCHFILE;
     }
 
-    /* Get absolute path */
-    char abs_path[PATH_MAX];
-    if (realpath(check_path, abs_path) != NULL) {
-        /* Convert the resolved Linux path back to VMS spec */
-        vmsfs_to_vms_spec(abs_path, ctx->default_dir, sizeof(ctx->default_dir));
+    /* Store the VMS dirspec directly — don't round-trip through Linux.
+     * If the spec has a device/logical, use as-is.
+     * If relative ([DIR]), prepend the current default's device. */
+    if (strchr(dirspec, ':')) {
+        /* Full spec with device/logical — store directly */
+        strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
+        ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
+    } else if (dirspec[0] == '[') {
+        /* Relative spec — prepend current device */
+        char device[128] = "";
+        const char *colon = strchr(ctx->default_dir, ':');
+        if (colon) {
+            size_t dlen = (size_t)(colon - ctx->default_dir);
+            if (dlen < sizeof(device)) {
+                memcpy(device, ctx->default_dir, dlen);
+                device[dlen] = '\0';
+            }
+        }
+        if (device[0])
+            snprintf(ctx->default_dir, sizeof(ctx->default_dir),
+                     "%s:%s", device, dirspec);
+        else
+            strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
     } else {
-        vmsfs_to_vms_spec(check_path, ctx->default_dir, sizeof(ctx->default_dir));
+        /* Bare name — treat as logical or directory */
+        strncpy(ctx->default_dir, dirspec, sizeof(ctx->default_dir) - 1);
+        ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
     }
 
     /* Change the process working directory too */

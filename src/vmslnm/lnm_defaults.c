@@ -39,11 +39,11 @@
  *   SYS$SCRATCH   -> SYS$SYSDEVICE:[SYSTMP]
  *   SYS$LOGIN     -> SYS$SYSDEVICE:[USERS]  (overridden per-process by login)
  *   SYS$DISK      -> SYS$SYSDEVICE  (process default device)
- *   SYS$INPUT     -> /dev/stdin   (I/O device — no VMS equivalent yet)
- *   SYS$OUTPUT    -> /dev/stdout
- *   SYS$ERROR     -> /dev/stderr
- *   SYS$COMMAND   -> /dev/stdin
- *   TT            -> /dev/tty
+ *   TT            -> /dev/tty     (the ONE Linux path for terminal I/O)
+ *   SYS$INPUT     -> TT:
+ *   SYS$OUTPUT    -> TT:
+ *   SYS$ERROR     -> TT:
+ *   SYS$COMMAND   -> TT:
  */
 void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
 {
@@ -111,27 +111,31 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
                0, LNM_MODE_EXEC);
 
     /*
-     * I/O channel logicals.
-     * On a real VMS system these would be device names (TTA0:, etc.).
-     * These remain as Linux device paths until we have a terminal
-     * device driver layer.
+     * Terminal device — the ONE Linux path for I/O.
+     * On real VMS this would be the physical terminal (TTA0:, VTA123:).
+     * All I/O channel logicals point here via "TT:".
      */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$INPUT", "/dev/stdin",
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
-
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$OUTPUT", "/dev/stdout",
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
-
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$ERROR", "/dev/stderr",
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
-
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$COMMAND", "/dev/stdin",
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
-
-    /* TT -> terminal device */
     const char *tty = ttyname(STDIN_FILENO);
     if (!tty)
         tty = "/dev/tty";
     lnm_create(mgr, LNM_SYSTEM_TABLE, "TT", tty,
                LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+
+    /*
+     * I/O channel logicals — point at TT:, not Linux /dev/ paths.
+     * On real VMS these are per-process and may differ (e.g. batch
+     * jobs get SYS$INPUT pointing at a command file).  For now
+     * they all resolve through TT: → /dev/tty.
+     */
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$INPUT", "TT:",
+               0, LNM_MODE_EXEC);
+
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$OUTPUT", "TT:",
+               0, LNM_MODE_EXEC);
+
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$ERROR", "TT:",
+               0, LNM_MODE_EXEC);
+
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$COMMAND", "TT:",
+               0, LNM_MODE_EXEC);
 }

@@ -599,11 +599,16 @@ int main(void)
     fflush(stderr);
 
     /* Step 7: Login loop */
+    int consecutive_failures = 0;
+
     while (!shutdown_requested) {
         /* Check if stdin is still open (avoid tight loop on EOF) */
         if (!isatty(STDIN_FILENO) && feof(stdin)) {
             break;
         }
+
+        struct timespec t_before;
+        clock_gettime(CLOCK_MONOTONIC, &t_before);
 
         pid_t child = fork();
         if (child == 0) {
@@ -611,16 +616,57 @@ int main(void)
             execl(VMS_LOGIN_PATH, "vms_login", (char *)NULL);
             /* If vms_login not found, exec vmsdcl directly */
             execl(VMSDCL_PATH, "vmsdcl", (char *)NULL);
-            perror("exec");
+            /* Both failed — report why */
+            fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
+                    VMS_LOGIN_PATH, strerror(errno));
+            fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
+                    VMSDCL_PATH, strerror(errno));
             _exit(1);
         } else if (child > 0) {
             /* Parent: wait for login session to end */
             int wstatus;
             waitpid(child, &wstatus, 0);
 
-            /* If child exited very quickly, stdin may be exhausted */
+            struct timespec t_after;
+            clock_gettime(CLOCK_MONOTONIC, &t_after);
+            long elapsed_ms = (t_after.tv_sec - t_before.tv_sec) * 1000
+                            + (t_after.tv_nsec - t_before.tv_nsec) / 1000000;
+
+            /* Track consecutive fast failures (< 1 second) */
+            if (elapsed_ms < 1000) {
+                consecutive_failures++;
+                if (consecutive_failures >= 5) {
+                    fprintf(stderr,
+                        "%%STARTUP-F-LOGINFAIL, login process failing repeatedly\n");
+                    if (WIFEXITED(wstatus))
+                        fprintf(stderr,
+                            "%%STARTUP-F-LOGINFAIL, exit status %d\n",
+                            WEXITSTATUS(wstatus));
+                    else if (WIFSIGNALED(wstatus))
+                        fprintf(stderr,
+                            "%%STARTUP-F-LOGINFAIL, killed by signal %d\n",
+                            WTERMSIG(wstatus));
+
+                    /* Check if the binaries actually exist */
+                    struct stat chk;
+                    fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
+                            VMS_LOGIN_PATH,
+                            stat(VMS_LOGIN_PATH, &chk) == 0 ?
+                                "exists" : strerror(errno));
+                    fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
+                            VMSDCL_PATH,
+                            stat(VMSDCL_PATH, &chk) == 0 ?
+                                "exists" : strerror(errno));
+
+                    /* Back off instead of spinning */
+                    sleep(5);
+                    consecutive_failures = 0;
+                }
+            } else {
+                consecutive_failures = 0;
+            }
+
             if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) != 0) {
-                /* Brief pause to avoid tight loop if login keeps failing */
                 usleep(100000);
             }
 

@@ -76,12 +76,36 @@ done
 DISK="${DISK_PATH:-$DEFAULT_DISK}"
 
 # --- Step 1: Build Docker image if needed ---
+#
+# Rebuild when:
+#   --rebuild flag is set
+#   Image doesn't exist
+#   Source tree has changed since last build (git tree hash mismatch)
+#
+# The tree hash of the last build is stored in dist/.build-hash.
+# This catches any change to tracked files (source, Dockerfile, configs).
+
+BUILD_HASH_FILE="$DIST_DIR/.build-hash"
+
+current_tree_hash() {
+    # Hash of all tracked files — changes when any source file changes.
+    # Falls back to "unknown" if not in a git repo.
+    git -C "$SCRIPT_DIR" write-tree 2>/dev/null || echo "unknown"
+}
 
 need_build=0
 if [ "$FORCE_REBUILD" -eq 1 ]; then
     need_build=1
 elif ! docker image inspect "$IMAGE" &>/dev/null; then
     need_build=1
+else
+    CURRENT_HASH=$(current_tree_hash)
+    LAST_HASH=""
+    [ -f "$BUILD_HASH_FILE" ] && LAST_HASH=$(cat "$BUILD_HASH_FILE")
+    if [ "$CURRENT_HASH" != "$LAST_HASH" ]; then
+        echo "=== Source tree changed since last build, rebuilding ==="
+        need_build=1
+    fi
 fi
 
 if [ "$need_build" -eq 1 ]; then
@@ -90,6 +114,8 @@ if [ "$need_build" -eq 1 ]; then
     [ "$FORCE_REBUILD" -eq 1 ] && BUILD_ARGS="--no-cache"
     docker build -f "$SCRIPT_DIR/distro/Dockerfile.bootable" \
         -t "$IMAGE" $BUILD_ARGS "$SCRIPT_DIR"
+    mkdir -p "$DIST_DIR"
+    current_tree_hash > "$BUILD_HASH_FILE"
     echo "=== Build complete ==="
     echo ""
 fi

@@ -82,8 +82,54 @@ jobs:
             ovmx-test:latest \
             -c "SHOW TIME"
 
+      - name: Smoke test — Docker skips install (pre-installed state)
+        run: |
+          OUTPUT=$(timeout 10 docker run --rm ovmx-test:latest 2>&1 || true)
+          echo "$OUTPUT" | head -10
+          echo "$OUTPUT" | grep -qF '%STARTUP-I-SYSBOOT' \
+            && echo "PASS: Docker detects pre-installed system" \
+            || { echo "FAIL: Expected SYSBOOT skip-install message"; exit 1; }
+
   # -----------------------------------------------------------------------
-  # Job 3: Conformance tests
+  # Job 3: Persistent boot smoke test (QEMU)
+  #
+  # Builds the bootable image, boots QEMU twice with the same disk:
+  #   Boot 1: blank disk → STARTUP.EXE initializes, formats, installs
+  #   Boot 2: same disk  → STARTUP.EXE detects installed system, skips install
+  # Proves install-once / boot-many persistence across reboots.
+  # -----------------------------------------------------------------------
+  persistent-boot:
+    name: Persistent Boot Smoke Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run persistent boot smoke test
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_persistent_boot.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+  # -----------------------------------------------------------------------
+  # Job 4: Conformance tests
   #
   # Runs inside the builder stage (has gcc, source tree, and built libs).
   # The conformance programs are compiled and executed against the VMS libs.
@@ -121,7 +167,7 @@ jobs:
             /src/tests/conformance/run_conformance.sh
 
   # -----------------------------------------------------------------------
-  # Job 4: Corpus conformance — compile tier1-examples against OVMX headers
+  # Job 5: Corpus conformance — compile tier1-examples against OVMX headers
   #
   # This is a metric job, not a gate. It NEVER fails the build due to
   # compile/link/run failures in the corpus — those are expected gaps.
@@ -173,7 +219,7 @@ jobs:
           retention-days: 90
 
   # -----------------------------------------------------------------------
-  # Job 5: Static analysis (clang-tidy + cppcheck)
+  # Job 6: Static analysis (clang-tidy + cppcheck)
   #
   # Runs in parallel with all other jobs — no `needs:` dependency.
   # INFORMATIONAL ONLY: always exits 0, findings are uploaded as artifacts.

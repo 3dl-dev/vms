@@ -38,12 +38,6 @@ static struct dentry *vmsfs_blkdev_lookup(struct inode *dir,
                                           struct dentry *dentry,
                                           unsigned int flags);
 static int vmsfs_blkdev_iterate(struct file *file, struct dir_context *ctx);
-static ssize_t vmsfs_blkdev_read_iter(struct kiocb *iocb,
-                                      struct iov_iter *to);
-static ssize_t vmsfs_blkdev_write_iter(struct kiocb *iocb,
-                                       struct iov_iter *from);
-static loff_t vmsfs_blkdev_llseek(struct file *file, loff_t offset,
-                                  int whence);
 static int vmsfs_blkdev_getattr(struct mnt_idmap *idmap,
                                 const struct path *path, struct kstat *stat,
                                 u32 request_mask, unsigned int query_flags);
@@ -88,10 +82,12 @@ const struct inode_operations vmsfs_blkdev_file_iops = {
 
 const struct file_operations vmsfs_blkdev_file_fops = {
     .owner     = THIS_MODULE,
-    .read_iter = vmsfs_blkdev_read_iter,
-    .write_iter = vmsfs_blkdev_write_iter,
-    .llseek    = vmsfs_blkdev_llseek,
+    .read_iter = generic_file_read_iter,
+    .write_iter = generic_file_write_iter,
+    .llseek    = generic_file_llseek,
     .mmap      = generic_file_mmap,
+    .fsync     = generic_file_fsync,
+    .splice_read = filemap_splice_read,
 };
 
 /*
@@ -137,8 +133,17 @@ static int vmsfs_read_folio(struct file *file, struct folio *folio)
     return block_read_full_folio(folio, vmsfs_get_block);
 }
 
+static int vmsfs_write_begin(struct file *file, struct address_space *mapping,
+                             loff_t pos, unsigned len,
+                             struct page **pagep, void **fsdata)
+{
+    return block_write_begin(mapping, pos, len, pagep, vmsfs_get_block);
+}
+
 static const struct address_space_operations vmsfs_blkdev_aops = {
     .read_folio = vmsfs_read_folio,
+    .write_begin = vmsfs_write_begin,
+    .write_end = generic_write_end,
     .dirty_folio = block_dirty_folio,
     .invalidate_folio = block_invalidate_folio,
 };
@@ -1103,165 +1108,6 @@ static int vmsfs_blkdev_iterate(struct file *file, struct dir_context *ctx)
     }
 
     return 0;
-}
-
-/* ================================================================
- * File read (read_iter via VBN->LBN translation)
- * ================================================================ */
-
-static ssize_t vmsfs_blkdev_read_iter(struct kiocb *iocb,
-                                      struct iov_iter *to)
-{
-    struct inode *inode = file_inode(iocb->ki_filp);
-    struct super_block *sb = inode->i_sb;
-    struct vmsfs_inode_info *vi = VMSFS_I(inode);
-    loff_t pos = iocb->ki_pos;
-    loff_t size = i_size_read(inode);
-    ssize_t total = 0;
-
-    if (pos >= size)
-        return 0;
-
-    while (iov_iter_count(to) > 0 && pos < size) {
-        uint32_t vbn;
-        uint32_t offset_in_block;
-        uint32_t lbn;
-        struct buffer_head *bh;
-        size_t bytes;
-        int ret;
-
-        /* Compute VBN (1-based) and offset within block */
-        vbn = (pos / VMSFS_BLOCK_SIZE) + 1;
-        offset_in_block = pos % VMSFS_BLOCK_SIZE;
-
-        /* Translate VBN -> LBN */
-        ret = vmsfs_vbn_to_lbn(vi, vbn, &lbn);
-        if (ret)
-            break;
-
-        bh = sb_bread(sb, lbn);
-        if (!bh)
-            break;
-
-        /* How many bytes to copy from this block */
-        bytes = VMSFS_BLOCK_SIZE - offset_in_block;
-        if (pos + bytes > size)
-            bytes = size - pos;
-        if (bytes > iov_iter_count(to))
-            bytes = iov_iter_count(to);
-
-        if (copy_to_iter(bh->b_data + offset_in_block, bytes, to)
-            != bytes) {
-            brelse(bh);
-            if (total == 0)
-                total = -EFAULT;
-            break;
-        }
-
-        brelse(bh);
-        pos += bytes;
-        total += bytes;
-    }
-
-    iocb->ki_pos = pos;
-    return total;
-}
-
-/* ================================================================
- * File write (write_iter via VBN->LBN with allocation)
- * ================================================================ */
-
-static ssize_t vmsfs_blkdev_write_iter(struct kiocb *iocb,
-                                       struct iov_iter *from)
-{
-    struct inode *inode = file_inode(iocb->ki_filp);
-    struct super_block *sb = inode->i_sb;
-    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
-    struct vmsfs_inode_info *vi = VMSFS_I(inode);
-    loff_t pos = iocb->ki_pos;
-    ssize_t total = 0;
-    int ret;
-
-    if (iocb->ki_flags & IOCB_APPEND)
-        pos = i_size_read(inode);
-
-    while (iov_iter_count(from) > 0) {
-        uint32_t vbn;
-        uint32_t offset_in_block;
-        uint32_t lbn;
-        struct buffer_head *bh;
-        size_t bytes;
-
-        vbn = (pos / VMSFS_BLOCK_SIZE) + 1;
-        offset_in_block = pos % VMSFS_BLOCK_SIZE;
-
-        /* Translate VBN -> LBN, allocating if needed */
-        ret = vmsfs_vbn_to_lbn(vi, vbn, &lbn);
-        if (ret) {
-            mutex_lock(&sbi->alloc_lock);
-            ret = vmsfs_ensure_blocks(sb, inode, vbn);
-            mutex_unlock(&sbi->alloc_lock);
-            if (ret) {
-                if (total == 0)
-                    total = ret;
-                break;
-            }
-            ret = vmsfs_vbn_to_lbn(vi, vbn, &lbn);
-            if (ret) {
-                if (total == 0)
-                    total = -EIO;
-                break;
-            }
-        }
-
-        bh = sb_bread(sb, lbn);
-        if (!bh) {
-            if (total == 0)
-                total = -EIO;
-            break;
-        }
-
-        bytes = VMSFS_BLOCK_SIZE - offset_in_block;
-        if (bytes > iov_iter_count(from))
-            bytes = iov_iter_count(from);
-
-        if (copy_from_iter(bh->b_data + offset_in_block, bytes, from)
-            != bytes) {
-            brelse(bh);
-            if (total == 0)
-                total = -EFAULT;
-            break;
-        }
-
-        mark_buffer_dirty(bh);
-        brelse(bh);
-
-        pos += bytes;
-        total += bytes;
-
-        if (pos > i_size_read(inode))
-            i_size_write(inode, pos);
-    }
-
-    if (total > 0) {
-        struct timespec64 now = current_time(inode);
-
-        iocb->ki_pos = pos;
-        inode_set_mtime(inode, now.tv_sec, now.tv_nsec);
-        vmsfs_blkdev_flush_inode(sb, inode);
-
-        mutex_lock(&sbi->alloc_lock);
-        vmsfs_update_home_block(sb);
-        mutex_unlock(&sbi->alloc_lock);
-    }
-
-    return total;
-}
-
-static loff_t vmsfs_blkdev_llseek(struct file *file, loff_t offset,
-                                  int whence)
-{
-    return generic_file_llseek(file, offset, whence);
 }
 
 /* ================================================================

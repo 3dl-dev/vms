@@ -26,19 +26,24 @@
 #include <errno.h>
 
 #include "vms/pcb.h"
+#include "vms/logical.h"
+#include "vmsfs/device.h"
+#include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
 
 #define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
 #define SYSDISK_DEV      "/dev/vda"
 #define INITRAMFS_BACKUP "/tmp/initramfs_vms"
 
-/* Binary search paths — Docker puts them in /usr/local/bin, QEMU in SYSEXE */
-static const char *bin_search_dirs[] = {
-    VMS_SYSEXE, "/usr/local/bin", "/bin", "/sbin", NULL
-};
-static const char *lib_search_dirs[] = {
-    VMS_SYSLIB, "/usr/local/lib", "/lib", NULL
-};
+/*
+ * Binary/library search paths — initialized at runtime after device
+ * table is populated so VMS specs can be translated to Linux paths.
+ * Docker puts binaries in /usr/local/bin, QEMU in SYS$SYSTEM.
+ */
+static char sysexe_linux[512];
+static char syslib_linux[512];
+static const char *bin_search_dirs[5];
+static const char *lib_search_dirs[4];
 
 static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -47,6 +52,40 @@ static const char *vms_months[] = {
 
 static volatile sig_atomic_t shutdown_requested = 0;
 static int blkdev_mode = 0;
+
+/*
+ * Translate a VMS filespec to a Linux path.
+ * Wrapper that returns a static buffer — use immediately or copy.
+ * Falls back to SYSDISK_MOUNT-relative path if translation fails.
+ */
+static const char *vms_to_linux(const char *vms_spec, char *buf, size_t bufsz)
+{
+    if (vmsfs_to_linux_path(vms_spec, buf, bufsz) == 1)
+        return buf;
+    /* Fallback: shouldn't happen after device table init */
+    snprintf(buf, bufsz, "%s", vms_spec);
+    return buf;
+}
+
+/*
+ * Initialize runtime search paths after device table + LNM are live.
+ */
+static void init_search_paths(void)
+{
+    vms_to_linux(VMS_SYSEXE, sysexe_linux, sizeof(sysexe_linux));
+    vms_to_linux(VMS_SYSLIB, syslib_linux, sizeof(syslib_linux));
+
+    bin_search_dirs[0] = sysexe_linux;
+    bin_search_dirs[1] = "/usr/local/bin";
+    bin_search_dirs[2] = "/bin";
+    bin_search_dirs[3] = "/sbin";
+    bin_search_dirs[4] = NULL;
+
+    lib_search_dirs[0] = syslib_linux;
+    lib_search_dirs[1] = "/usr/local/lib";
+    lib_search_dirs[2] = "/lib";
+    lib_search_dirs[3] = NULL;
+}
 
 static void sigterm_handler(int sig)
 {
@@ -235,8 +274,10 @@ static void bare_metal_init(void)
  */
 static int is_system_installed(void)
 {
+    char path[512];
+    snprintf(path, sizeof(path), "%s/DCL.EXE", sysexe_linux);
     struct stat st;
-    return (lstat(VMS_SYSEXE "/DCL.EXE", &st) == 0);
+    return (lstat(path, &st) == 0);
 }
 
 /*
@@ -254,15 +295,32 @@ static int is_system_installed(void)
  */
 static void provision_dirs(void)
 {
+    char path[512];
+
+    /* MFD and intermediate directories */
     mkdir(SYSDISK_MOUNT, 0755);
-    mkdir(SYSDISK_MOUNT "/SYS0", 0755);
-    mkdir(SYSDISK_MOUNT "/SYS0/SYSCOMMON", 0755);
-    mkdir(VMS_SYSEXE, 0755);
-    mkdir(VMS_SYSLIB, 0755);
-    mkdir(VMS_SYSMGR, 0755);
-    mkdir(VMS_SYSHLP, 0755);
-    mkdir(VMS_USERS, 0755);
-    mkdir(SYSDISK_MOUNT "/SYSTMP", 0755);  /* SYS$SCRATCH */
+    vms_to_linux(VMS_SYSROOT, path, sizeof(path));
+    /* Create SYS0 first, then SYS0/SYSCOMMON */
+    char *last_slash = strrchr(path, '/');
+    if (last_slash) {
+        *last_slash = '\0';
+        mkdir(path, 0755);   /* SYS0 */
+        *last_slash = '/';
+    }
+    mkdir(path, 0755);       /* SYS0/SYSCOMMON */
+
+    /* System directories */
+    mkdir(sysexe_linux, 0755);
+    mkdir(syslib_linux, 0755);
+    vms_to_linux(VMS_SYSMGR, path, sizeof(path));
+    mkdir(path, 0755);
+    vms_to_linux(VMS_SYSHLP, path, sizeof(path));
+    mkdir(path, 0755);
+    vms_to_linux(VMS_USERS, path, sizeof(path));
+    mkdir(path, 0755);
+    vms_to_linux(VMS_SYSTMP, path, sizeof(path));
+    mkdir(path, 0755);
+
     mkdir("/tmp/ovmx", 0755);
     mkdir("/tmp/ovmx/locks", 0755);
 }
@@ -308,29 +366,34 @@ static void ensure_vms_library(const char *vms_path, const char *name)
 }
 
 /*
- * Populate SYSEXE and SYSLIB with VMS-named binaries/images.
+ * Populate SYS$SYSTEM and SYS$LIBRARY with VMS-named binaries/images.
  * On QEMU, files are already at VMS paths (initramfs). On Docker,
  * creates symlinks from SYSEXE/SYSLIB to /usr/local/{bin,lib}/.
  */
 static void provision_symlinks(void)
 {
+    char exe_path[512], lib_path[512];
+
     /* [SYS0.SYSCOMMON.SYSEXE] executables */
-    ensure_vms_binary(VMS_SYSEXE "/LOGINOUT.EXE", "LOGINOUT.EXE");
-    ensure_vms_binary(VMS_SYSEXE "/DCL.EXE", "DCL.EXE");
-    ensure_vms_binary(VMS_SYSEXE "/HELP.EXE", "HELP.EXE");
-    ensure_vms_binary(VMS_SYSEXE "/AUTHORIZE.EXE", "AUTHORIZE.EXE");
-    ensure_vms_binary(VMS_SYSEXE "/MAIL.EXE", "MAIL.EXE");
-    ensure_vms_binary(VMS_SYSEXE "/MONITOR.EXE", "MONITOR.EXE");
-    ensure_vms_binary(VMS_SYSEXE "/VMSSSHD.EXE", "VMSSSHD.EXE");
-    ensure_vms_binary(VMS_SYSEXE "/VMSLNMD.EXE", "VMSLNMD.EXE");
-    ensure_vms_binary(VMS_SYSEXE "/STARTUP.EXE", "STARTUP.EXE");
+    const char *exes[] = {
+        "LOGINOUT.EXE", "DCL.EXE", "HELP.EXE", "AUTHORIZE.EXE",
+        "MAIL.EXE", "MONITOR.EXE", "VMSSSHD.EXE", "VMSLNMD.EXE",
+        "STARTUP.EXE", NULL
+    };
+    for (int i = 0; exes[i]; i++) {
+        snprintf(exe_path, sizeof(exe_path), "%s/%s", sysexe_linux, exes[i]);
+        ensure_vms_binary(exe_path, exes[i]);
+    }
 
     /* [SYS0.SYSCOMMON.SYSLIB] shareable images */
-    ensure_vms_library(VMS_SYSLIB "/LIBVMS$SHR.EXE", "LIBVMS$SHR.EXE");
-    ensure_vms_library(VMS_SYSLIB "/LIBVMSPROCESS$SHR.EXE", "LIBVMSPROCESS$SHR.EXE");
-    ensure_vms_library(VMS_SYSLIB "/LIBVMSLNM$SHR.EXE", "LIBVMSLNM$SHR.EXE");
-    ensure_vms_library(VMS_SYSLIB "/LIBVMSFS$SHR.EXE", "LIBVMSFS$SHR.EXE");
-    ensure_vms_library(VMS_SYSLIB "/LIBVMSRMS$SHR.EXE", "LIBVMSRMS$SHR.EXE");
+    const char *libs[] = {
+        "LIBVMS$SHR.EXE", "LIBVMSPROCESS$SHR.EXE", "LIBVMSLNM$SHR.EXE",
+        "LIBVMSFS$SHR.EXE", "LIBVMSRMS$SHR.EXE", NULL
+    };
+    for (int i = 0; libs[i]; i++) {
+        snprintf(lib_path, sizeof(lib_path), "%s/%s", syslib_linux, libs[i]);
+        ensure_vms_library(lib_path, libs[i]);
+    }
 }
 
 /*
@@ -340,7 +403,9 @@ static void provision_symlinks(void)
  */
 static void provision_sysuaf_users(void)
 {
-    FILE *fp = fopen(VMS_SYSUAF_PATH, "r");
+    char sysuaf_path[512];
+    vms_to_linux(VMS_SYSUAF_PATH, sysuaf_path, sizeof(sysuaf_path));
+    FILE *fp = fopen(sysuaf_path, "r");
     if (!fp)
         return;
 
@@ -366,9 +431,17 @@ static void provision_sysuaf_users(void)
             end++;
         *end = '\0';
 
-        /* Create the home directory if non-empty */
+        /* Create the home directory if non-empty.
+         * default_dir may be a VMS spec (DKA0:[USERS.name]) — translate. */
         if (field[0] != '\0') {
-            mkdir(field, 0755);
+            char home_linux[512];
+            if (strchr(field, '[') || strchr(field, ':')) {
+                vms_to_linux(field, home_linux, sizeof(home_linux));
+            } else {
+                /* Legacy Linux path — use directly */
+                snprintf(home_linux, sizeof(home_linux), "%s", field);
+            }
+            mkdir(home_linux, 0755);
         }
     }
     fclose(fp);
@@ -409,15 +482,17 @@ static void install_system_blkdev(void)
  */
 static pid_t start_lnm_daemon(void)
 {
+    char lnmd_path[512];
+    vms_to_linux(VMS_LNMD_PATH, lnmd_path, sizeof(lnmd_path));
     struct stat st;
-    if (stat(VMS_LNMD_PATH, &st) != 0) {
+    if (stat(lnmd_path, &st) != 0) {
         return -1;  /* vmslnmd not available */
     }
 
     pid_t pid = fork();
     if (pid == 0) {
         /* Child: exec vmslnmd */
-        execl(VMS_LNMD_PATH, "vmslnmd", (char *)NULL);
+        execl(lnmd_path, "vmslnmd", (char *)NULL);
         _exit(1);
     }
     return pid;
@@ -448,8 +523,10 @@ static int wait_for_lnm_socket(int timeout_ms)
  */
 static pid_t start_sshd(void)
 {
+    char sshd_path[512];
+    vms_to_linux(VMS_SSHD_PATH, sshd_path, sizeof(sshd_path));
     struct stat st;
-    if (stat(VMS_SSHD_PATH, &st) != 0) {
+    if (stat(sshd_path, &st) != 0) {
         return -1;  /* sshd not available */
     }
 
@@ -465,7 +542,7 @@ static pid_t start_sshd(void)
         }
         /* Restore default signal handling */
         signal(SIGHUP, SIG_DFL);
-        execl(VMS_SSHD_PATH, "vmssshd", (char *)NULL);
+        execl(sshd_path, "vmssshd", (char *)NULL);
         _exit(1);
     }
     return pid;
@@ -477,13 +554,17 @@ static pid_t start_sshd(void)
  */
 static void run_startup(void)
 {
+    char startup_path[512], dcl_path[512];
+    vms_to_linux(VMS_STARTUP_PATH, startup_path, sizeof(startup_path));
+    vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
+
     struct stat st;
-    if (stat(VMS_STARTUP_PATH, &st) != 0)
+    if (stat(startup_path, &st) != 0)
         return;
 
     pid_t pid = fork();
     if (pid == 0) {
-        execl(VMS_DCL_PATH, "vmsdcl", VMS_STARTUP_PATH, (char *)NULL);
+        execl(dcl_path, "vmsdcl", startup_path, (char *)NULL);
         _exit(1);
     }
     if (pid > 0) {
@@ -571,6 +652,14 @@ int main(void)
         vms_pcb_set_default_dir("SYS$SYSROOT:[SYSMGR]");
     }
 
+    /* Step 1b: Bootstrap VMS namespace — device table + logical names.
+     * This is the bridge: one Linux mount point enters the device table,
+     * and from this point forward all paths are VMS filespecs translated
+     * at point of use. */
+    vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
+    lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
+    init_search_paths();
+
     /* Step 2: Install system if not already on the system disk */
     if (is_system_installed()) {
         printf("%%STARTUP-I-SYSBOOT, system disk detected, skipping install\n");
@@ -604,6 +693,10 @@ int main(void)
     fflush(stderr);
 
     /* Step 7: Login loop */
+    char loginout_path[512], dcl_path[512];
+    vms_to_linux(VMS_LOGINOUT_PATH, loginout_path, sizeof(loginout_path));
+    vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
+
     int consecutive_failures = 0;
 
     while (!shutdown_requested) {
@@ -618,10 +711,10 @@ int main(void)
         pid_t child = fork();
         if (child == 0) {
             /* Child: exec vms_login */
-            execl(VMS_LOGINOUT_PATH, "vms_login", (char *)NULL);
+            execl(loginout_path, "vms_login", (char *)NULL);
             /* If vms_login not found, exec vmsdcl directly */
-            execl(VMS_DCL_PATH, "vmsdcl", (char *)NULL);
-            /* Both failed — report why */
+            execl(dcl_path, "vmsdcl", (char *)NULL);
+            /* Both failed — report why (show VMS specs in diagnostics) */
             fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
                     VMS_LOGINOUT_PATH, strerror(errno));
             fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
@@ -652,15 +745,15 @@ int main(void)
                             "%%STARTUP-F-LOGINFAIL, killed by signal %d\n",
                             WTERMSIG(wstatus));
 
-                    /* Check if the binaries actually exist */
+                    /* Check if the binaries actually exist (VMS specs in messages) */
                     struct stat chk;
                     fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
                             VMS_LOGINOUT_PATH,
-                            stat(VMS_LOGINOUT_PATH, &chk) == 0 ?
+                            stat(loginout_path, &chk) == 0 ?
                                 "exists" : strerror(errno));
                     fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
                             VMS_DCL_PATH,
-                            stat(VMS_DCL_PATH, &chk) == 0 ?
+                            stat(dcl_path, &chk) == 0 ?
                                 "exists" : strerror(errno));
 
                     /* Back off instead of spinning */

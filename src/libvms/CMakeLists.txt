@@ -35,8 +35,8 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/sha256.c
     rtl/sysuaf.c
 )
-target_include_directories(vms PUBLIC include ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
-target_link_libraries(vms PUBLIC vmsprocess pthread m)
+target_include_directories(vms PUBLIC include ${VMS_FS_INCLUDE_DIR} ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
+target_link_libraries(vms PUBLIC vmsprocess vmsfs pthread m)
 set_target_properties(vms PROPERTIES
     PREFIX ""
     OUTPUT_NAME "LIBVMS\$SHR"

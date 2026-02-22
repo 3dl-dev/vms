@@ -40,6 +40,7 @@
 #include "ssdef.h"
 
 #include "ovmx_layout.h"
+#include "vmsfs/filespec.h"
 #define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
 #define LNM_CONF_PATH    VMS_LNM_CONF_PATH
 #define LNM_LINE_MAX     1024
@@ -305,7 +306,9 @@ int main(int argc, char *argv[])
     lnm_setup_defaults(mgr, LNM_VMS_ROOT);
 
     /* Load additional system logicals from configuration file */
-    load_config(mgr, LNM_CONF_PATH);
+    char lnm_conf_linux[1024];
+    vmsfs_to_linux_path(LNM_CONF_PATH, lnm_conf_linux, sizeof(lnm_conf_linux));
+    load_config(mgr, lnm_conf_linux);
 
     /* Ensure socket directory exists */
     if (ensure_socket_dir(LNM_SOCKET_PATH) < 0) {

@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include "ovmx_accounting.h"
+#include "vmsfs/filespec.h"
 
 /* ------------------------------------------------------------------ */
 /* Build the path to a user's last-login file.                        */
@@ -31,7 +32,9 @@ static void lastlogin_path(const char *username, char *buf, size_t bufsiz)
         upper[i] = (char)toupper((unsigned char)username[i]);
     upper[i] = '\0';
 
-    snprintf(buf, bufsiz, "%s/%s", OVMX_LASTLOGIN_DIR, upper);
+    char lastlogin_dir_linux[1024];
+    vmsfs_to_linux_path(OVMX_LASTLOGIN_DIR, lastlogin_dir_linux, sizeof(lastlogin_dir_linux));
+    snprintf(buf, bufsiz, "%s/%s", lastlogin_dir_linux, upper);
 }
 
 /* ------------------------------------------------------------------ */
@@ -39,10 +42,12 @@ static void lastlogin_path(const char *username, char *buf, size_t bufsiz)
 /* ------------------------------------------------------------------ */
 static void ensure_dir(void)
 {
+    char lastlogin_dir_linux[1024];
+    vmsfs_to_linux_path(OVMX_LASTLOGIN_DIR, lastlogin_dir_linux, sizeof(lastlogin_dir_linux));
     struct stat st;
-    if (stat(OVMX_LASTLOGIN_DIR, &st) == 0)
+    if (stat(lastlogin_dir_linux, &st) == 0)
         return;
-    mkdir(OVMX_LASTLOGIN_DIR, 0755);
+    mkdir(lastlogin_dir_linux, 0755);
 }
 
 /* ------------------------------------------------------------------ */

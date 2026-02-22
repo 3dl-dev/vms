@@ -206,9 +206,11 @@ static void display_banner(void)
     /* Last login message — read from per-user lastlogin file if available */
     const char *vms_user = getenv("VMS_USERNAME");
     if (vms_user && vms_user[0]) {
+        char lastlogin_dir_linux[1024];
+        vmsfs_to_linux_path(VMS_LASTLOGIN_DIR, lastlogin_dir_linux, sizeof(lastlogin_dir_linux));
         char lastlogin_path[512];
         snprintf(lastlogin_path, sizeof(lastlogin_path),
-                 "%s/%s", VMS_LASTLOGIN_DIR, vms_user);
+                 "%s/%s", lastlogin_dir_linux, vms_user);
         FILE *lf = fopen(lastlogin_path, "r");
         if (lf) {
             char prev[64];
@@ -379,8 +381,10 @@ int main(int argc, char *argv[])
     if (login_mode) {
         struct stat st;
         /* System-wide login script */
-        if (stat(SYLOGIN_PATH, &st) == 0 && S_ISREG(st.st_mode)) {
-            dcl_execute_script(SYLOGIN_PATH, 0, NULL);
+        char sylogin_linux[1024];
+        vmsfs_to_linux_path(SYLOGIN_PATH, sylogin_linux, sizeof(sylogin_linux));
+        if (stat(sylogin_linux, &st) == 0 && S_ISREG(st.st_mode)) {
+            dcl_execute_script(sylogin_linux, 0, NULL);
         }
         /* Per-user login script */
         const char *home = getenv("SYS$LOGIN");

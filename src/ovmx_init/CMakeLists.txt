@@ -1,5 +1,6 @@
 # ovmx_init - Boot orchestrator
-# Now links vmsprocess for PCB initialization at boot.
+# Links vmsprocess (PCB), vmsfs (device table + path translation),
+# and vmslnm (logical names) for VMS-native boot sequence.
 
 add_executable(ovmx_init
     ovmx_init.c
@@ -8,6 +9,8 @@ add_executable(ovmx_init
 target_include_directories(ovmx_init PRIVATE
     ${VMS_PROCESS_INCLUDE_DIR}
     ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
 )
 
 target_compile_definitions(ovmx_init PRIVATE
@@ -15,7 +18,7 @@ target_compile_definitions(ovmx_init PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(ovmx_init PRIVATE vmsprocess pthread)
+target_link_libraries(ovmx_init PRIVATE vmsprocess vmsfs vmslnm pthread)
 
 set_target_properties(ovmx_init PROPERTIES
     OUTPUT_NAME "STARTUP"

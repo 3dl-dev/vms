@@ -28,6 +28,7 @@
 /* ------------------------------------------------------------------ */
 
 #include "ovmx_layout.h"
+#include "vmsfs/filespec.h"
 #define SYSUAF_PATH   VMS_SYSUAF_PATH
 #define MAX_USERS     1024
 #define MAX_LINE      1024
@@ -111,13 +112,15 @@ static int load_sysuaf(void)
 {
     g_nusers = 0;
 
-    FILE *fp = fopen(SYSUAF_PATH, "r");
+    char sysuaf_linux[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
+    FILE *fp = fopen(sysuaf_linux, "r");
     if (!fp) {
         /* Non-fatal if file doesn't exist yet */
         if (errno == ENOENT)
             return 0;
         fprintf(stderr, "%%UAF-E-OPENIN, error opening %s: %s\n",
-                SYSUAF_PATH, strerror(errno));
+                sysuaf_linux, strerror(errno));
         return -1;
     }
 
@@ -191,8 +194,10 @@ static int load_sysuaf(void)
 static int save_sysuaf(void)
 {
     /* Write to a temp file then rename for atomicity */
-    char tmppath[256];
-    snprintf(tmppath, sizeof(tmppath), "%s.tmp.%d", SYSUAF_PATH, (int)getpid());
+    char sysuaf_linux2[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux2, sizeof(sysuaf_linux2));
+    char tmppath[1024];
+    snprintf(tmppath, sizeof(tmppath), "%s.tmp.%d", sysuaf_linux2, (int)getpid());
 
     FILE *fp = fopen(tmppath, "w");
     if (!fp) {
@@ -230,9 +235,9 @@ static int save_sysuaf(void)
     fclose(fp);
 
     /* Atomic rename */
-    if (rename(tmppath, SYSUAF_PATH) != 0) {
+    if (rename(tmppath, sysuaf_linux2) != 0) {
         fprintf(stderr, "%%UAF-E-RENAMEFAIL, error saving %s: %s\n",
-                SYSUAF_PATH, strerror(errno));
+                sysuaf_linux2, strerror(errno));
         unlink(tmppath);
         return -1;
     }

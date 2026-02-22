@@ -26,6 +26,7 @@
 
 /* Operator log file path */
 #include "ovmx_layout.h"
+#include "vmsfs/filespec.h"
 #define OPERATOR_LOG_PATH VMS_OPERATOR_LOG
 
 /* Fallback operator log (writable in container environments) */
@@ -78,7 +79,9 @@ static const char *get_current_username(void)
  */
 static FILE *open_operator_log(void)
 {
-    FILE *f = fopen(OPERATOR_LOG_PATH, "a");
+    char oplog_linux[1024];
+    vmsfs_to_linux_path(OPERATOR_LOG_PATH, oplog_linux, sizeof(oplog_linux));
+    FILE *f = fopen(oplog_linux, "a");
     if (!f)
         f = fopen(OPERATOR_LOG_FALLBACK, "a");
     return f;

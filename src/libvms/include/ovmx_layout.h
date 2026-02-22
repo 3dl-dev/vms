@@ -1,12 +1,12 @@
 /*
- * ovmx_layout.h - VMS System Disk Directory Layout
+ * ovmx_layout.h - VMS System Disk Layout (VMS-Native Filespecs)
  *
- * Defines the ODS-2 directory structure of the OVMX system disk.
- * This is the SINGLE place where the mapping between VMS directories
- * and their backing-store paths is defined.
+ * All constants are VMS filespecs — no Linux paths except the single
+ * SYSDISK_MOUNT used to bootstrap the device table.
  *
- * The mount point (SYSDISK_MOUNT) is the only Unix path constant.
- * Everything below it follows VMS ODS-2 conventions.
+ * Consumers call vmsfs_to_linux_path() at the point of each syscall.
+ * The device table (DKA0: → mount point) is populated at boot by
+ * STARTUP.EXE and at session start by DCL.
  *
  * VMS Directory Hierarchy:
  *   [000000]                        Master File Directory (MFD)
@@ -17,38 +17,59 @@
  *   [SYS0.SYSCOMMON.SYSMGR]        SYS$MANAGER — admin configs
  *   [SYS0.SYSCOMMON.SYSHLP]        SYS$HELP — help files
  *   [USERS]                         User home directories
+ *   [SYSTMP]                        Scratch / temporary files
  */
 
 #ifndef __OVMX_LAYOUT_H
 #define __OVMX_LAYOUT_H
 
-/* System disk mount point — the ONE Unix path in the system */
+/*
+ * System disk mount point — the ONE Linux path in the entire system.
+ * Used only to bootstrap the device table: DKA0: → SYSDISK_MOUNT.
+ */
 #define SYSDISK_MOUNT    "/vms"
 
-/* ODS-2 directory tree */
-#define VMS_SYSROOT      SYSDISK_MOUNT "/SYS0/SYSCOMMON"
-#define VMS_SYSEXE       VMS_SYSROOT "/SYSEXE"
-#define VMS_SYSLIB       VMS_SYSROOT "/SYSLIB"
-#define VMS_SYSMGR       VMS_SYSROOT "/SYSMGR"
-#define VMS_SYSHLP       VMS_SYSROOT "/SYSHLP"
-#define VMS_USERS        SYSDISK_MOUNT "/USERS"
+/*
+ * System disk device name.
+ * Matches the device table entry that maps to SYSDISK_MOUNT.
+ */
+#define SYSDISK_DEVICE   "DKA0"
 
-/* Standard VMS system files at their VMS-canonical locations */
-#define VMS_SYSUAF_PATH      VMS_SYSEXE "/SYSUAF.DAT"
-#define VMS_LASTLOGIN_DIR    VMS_SYSMGR "/LASTLOGIN"
-#define VMS_OPERATOR_LOG     VMS_SYSMGR "/OPERATOR.LOG"
-#define VMS_SYLOGIN_PATH     VMS_SYSMGR "/SYLOGIN.COM"
-#define VMS_STARTUP_PATH     VMS_SYSMGR "/STARTUP.COM"
-#define VMS_HELPLIB_PATH     VMS_SYSHLP "/HELPLIB.HLP"
-#define VMS_LNM_CONF_PATH    VMS_SYSMGR "/SYLOGICALS.CONF"
-#define VMS_SSH_HOST_KEY     VMS_SYSMGR "/SSH_HOST_RSA_KEY"
+/* ------------------------------------------------------------------ */
+/* VMS directory filespecs                                            */
+/* ------------------------------------------------------------------ */
 
-/* Executables */
-#define VMS_DCL_PATH         VMS_SYSEXE "/DCL.EXE"
-#define VMS_LOGINOUT_PATH    VMS_SYSEXE "/LOGINOUT.EXE"
-#define VMS_LNMD_PATH        VMS_SYSEXE "/VMSLNMD.EXE"
-#define VMS_SSHD_PATH        VMS_SYSEXE "/VMSSSHD.EXE"
-#define VMS_AUTHORIZE_PATH   VMS_SYSEXE "/AUTHORIZE.EXE"
-#define VMS_INITIALIZE_PATH  VMS_SYSEXE "/INITIALIZE.EXE"
+#define VMS_MFD          SYSDISK_DEVICE ":[000000]"
+#define VMS_SYSROOT      SYSDISK_DEVICE ":[SYS0.SYSCOMMON]"
+#define VMS_SYSEXE       SYSDISK_DEVICE ":[SYS0.SYSCOMMON.SYSEXE]"
+#define VMS_SYSLIB       SYSDISK_DEVICE ":[SYS0.SYSCOMMON.SYSLIB]"
+#define VMS_SYSMGR       SYSDISK_DEVICE ":[SYS0.SYSCOMMON.SYSMGR]"
+#define VMS_SYSHLP       SYSDISK_DEVICE ":[SYS0.SYSCOMMON.SYSHLP]"
+#define VMS_USERS        SYSDISK_DEVICE ":[USERS]"
+#define VMS_SYSTMP       SYSDISK_DEVICE ":[SYSTMP]"
+
+/* ------------------------------------------------------------------ */
+/* VMS filespecs for well-known system files                          */
+/* ------------------------------------------------------------------ */
+
+#define VMS_SYSUAF_PATH      "SYS$SYSTEM:SYSUAF.DAT"
+#define VMS_LASTLOGIN_DIR    "SYS$MANAGER:LASTLOGIN"
+#define VMS_OPERATOR_LOG     "SYS$MANAGER:OPERATOR.LOG"
+#define VMS_SYLOGIN_PATH     "SYS$MANAGER:SYLOGIN.COM"
+#define VMS_STARTUP_PATH     "SYS$MANAGER:STARTUP.COM"
+#define VMS_HELPLIB_PATH     "SYS$HELP:HELPLIB.HLP"
+#define VMS_LNM_CONF_PATH    "SYS$MANAGER:SYLOGICALS.CONF"
+#define VMS_SSH_HOST_KEY     "SYS$MANAGER:SSH_HOST_RSA_KEY"
+
+/* ------------------------------------------------------------------ */
+/* VMS filespecs for executables                                      */
+/* ------------------------------------------------------------------ */
+
+#define VMS_DCL_PATH         "SYS$SYSTEM:DCL.EXE"
+#define VMS_LOGINOUT_PATH    "SYS$SYSTEM:LOGINOUT.EXE"
+#define VMS_LNMD_PATH        "SYS$SYSTEM:VMSLNMD.EXE"
+#define VMS_SSHD_PATH        "SYS$SYSTEM:VMSSSHD.EXE"
+#define VMS_AUTHORIZE_PATH   "SYS$SYSTEM:AUTHORIZE.EXE"
+#define VMS_INITIALIZE_PATH  "SYS$SYSTEM:INITIALIZE.EXE"
 
 #endif /* __OVMX_LAYOUT_H */

@@ -24,6 +24,7 @@
 
 /* Path to the system authorization file */
 #include "ovmx_layout.h"
+#include "vmsfs/filespec.h"
 #define SYSUAF_PATH VMS_SYSUAF_PATH
 
 /* Maximum line length in sysuaf.dat */
@@ -152,7 +153,9 @@ static int find_uaf_record(const char *username_str,
                             struct uaf_record *out_rec,
                             long *out_offset)
 {
-    FILE *f = fopen(SYSUAF_PATH, "r");
+    char sysuaf_linux[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
+    FILE *f = fopen(sysuaf_linux, "r");
     if (!f)
         return -1;
 
@@ -411,8 +414,11 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
     }
 
     /* Rewrite sysuaf.dat with the updated record */
-    char tmp_path[] = VMS_SYSEXE "/SYSUAF.DAT.TMP";
-    FILE *in  = fopen(SYSUAF_PATH, "r");
+    char sysuaf_linux2[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux2, sizeof(sysuaf_linux2));
+    char tmp_path[1024];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.TMP", sysuaf_linux2);
+    FILE *in  = fopen(sysuaf_linux2, "r");
     FILE *out = fopen(tmp_path, "w");
     if (!in || !out) {
         if (in)  fclose(in);
@@ -437,7 +443,7 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
 
     fclose(in);
     fclose(out);
-    rename(tmp_path, SYSUAF_PATH);
+    rename(tmp_path, sysuaf_linux2);
 
     uint32_t status = SS$_NORMAL;
     if (iosb) {

@@ -8,6 +8,7 @@ target_include_directories(vms_login PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
     ${VMS_PROCESS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_login PRIVATE
@@ -15,7 +16,7 @@ target_compile_definitions(vms_login PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(vms_login PRIVATE vms vmsprocess pthread)
+target_link_libraries(vms_login PRIVATE vms vmsfs vmsprocess pthread)
 
 set_target_properties(vms_login PROPERTIES
     OUTPUT_NAME "LOGINOUT"
@@ -30,12 +31,15 @@ add_executable(vms_help
 target_include_directories(vms_help PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_help PRIVATE
     _POSIX_C_SOURCE=200809L
     _DEFAULT_SOURCE
 )
+
+target_link_libraries(vms_help PRIVATE vmsfs)
 
 set_target_properties(vms_help PROPERTIES
     OUTPUT_NAME "HELP"
@@ -50,6 +54,7 @@ add_executable(vms_authorize
 target_include_directories(vms_authorize PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_PROCESS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_authorize PRIVATE
@@ -61,7 +66,7 @@ target_compile_options(vms_authorize PRIVATE
     -Wall -Wextra
 )
 
-target_link_libraries(vms_authorize PRIVATE vms)
+target_link_libraries(vms_authorize PRIVATE vms vmsfs)
 
 set_target_properties(vms_authorize PROPERTIES
     OUTPUT_NAME "AUTHORIZE"
@@ -76,12 +81,15 @@ add_executable(vms_mail
 target_include_directories(vms_mail PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
 )
 
 target_compile_definitions(vms_mail PRIVATE
     _POSIX_C_SOURCE=200809L
     _DEFAULT_SOURCE
 )
+
+target_link_libraries(vms_mail PRIVATE vmsfs)
 
 set_target_properties(vms_mail PROPERTIES
     OUTPUT_NAME "MAIL"

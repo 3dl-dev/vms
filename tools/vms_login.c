@@ -23,6 +23,7 @@
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "ovmx_accounting.h"
+#include "vmsfs/filespec.h"
 
 /* Maximum number of login attempts before disconnect */
 #define MAX_ATTEMPTS   3
@@ -141,7 +142,9 @@ static void start_session(const sysuaf_record_t *rec)
     }
 
     /* Exec the DCL shell with --login flag */
-    execl(DCL_SHELL_PATH, "vmsdcl", "--login", (char *)NULL);
+    char dcl_linux[1024];
+    vmsfs_to_linux_path(DCL_SHELL_PATH, dcl_linux, sizeof(dcl_linux));
+    execl(dcl_linux, "vmsdcl", "--login", (char *)NULL);
 
     /* If exec fails, fall back to sh */
     perror("vmsdcl");

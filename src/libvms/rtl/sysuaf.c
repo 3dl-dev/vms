@@ -20,6 +20,7 @@
 
 #include "sha256.h"
 #include "sysuaf.h"
+#include "vmsfs/filespec.h"
 #include "vms/privs.h"
 
 /* ------------------------------------------------------------------ */
@@ -52,7 +53,9 @@ static void trim_trailing(char *s)
  */
 int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
 {
-    FILE *fp = fopen(SYSUAF_PATH, "r");
+    char sysuaf_linux[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
+    FILE *fp = fopen(sysuaf_linux, "r");
     if (!fp)
         return -1;
 

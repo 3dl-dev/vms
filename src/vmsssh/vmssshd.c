@@ -40,6 +40,7 @@
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "ovmx_accounting.h"
+#include "vmsfs/filespec.h"
 
 #ifndef OVMX_BIN_DIR
 #define OVMX_BIN_DIR "/usr/local/bin"
@@ -554,6 +555,14 @@ int main(int argc, char **argv)
 {
     if (parse_args(argc, argv) < 0)
         return 1;
+
+    /* Translate VMS filespec to Linux path if g_host_key looks like a VMS spec */
+    if (strchr(g_host_key, ':') && !strchr(g_host_key, '/')) {
+        char host_key_linux[256];
+        vmsfs_to_linux_path(g_host_key, host_key_linux, sizeof(host_key_linux));
+        strncpy(g_host_key, host_key_linux, sizeof(g_host_key) - 1);
+        g_host_key[sizeof(g_host_key) - 1] = '\0';
+    }
 
     /* Auto-generate host key if missing */
     if (generate_host_key(g_host_key) < 0)

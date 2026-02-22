@@ -38,6 +38,7 @@
 /* ------------------------------------------------------------------ */
 
 #include "ovmx_layout.h"
+#include "vmsfs/filespec.h"
 #define SYSUAF_PATH     VMS_SYSUAF_PATH
 #define MAIL_SUBDIR     ".vmsmail"
 #define MAIL_INDEX      "MAIL.IDX"
@@ -122,7 +123,9 @@ static void vms_date_short(char *buf, size_t bufsiz)
 static int user_exists(const char *username)
 {
     /* First check sysuaf.dat */
-    FILE *fp = fopen(SYSUAF_PATH, "r");
+    char sysuaf_linux[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
+    FILE *fp = fopen(sysuaf_linux, "r");
     if (fp) {
         char line[512];
         while (fgets(line, sizeof(line), fp)) {
@@ -161,7 +164,9 @@ static int user_exists(const char *username)
 static int get_user_homedir(const char *username, char *homedir, size_t sz)
 {
     /* Try sysuaf.dat first (default_dir field) */
-    FILE *fp = fopen(SYSUAF_PATH, "r");
+    char sysuaf_linux2[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux2, sizeof(sysuaf_linux2));
+    FILE *fp = fopen(sysuaf_linux2, "r");
     if (fp) {
         char line[512];
         while (fgets(line, sizeof(line), fp)) {

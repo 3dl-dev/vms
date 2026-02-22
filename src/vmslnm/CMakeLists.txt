@@ -26,8 +26,9 @@ add_executable(lnm_daemon_exe lnm_daemon.c)
 target_include_directories(lnm_daemon_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
 )
-target_link_libraries(lnm_daemon_exe PRIVATE vmslnm pthread)
+target_link_libraries(lnm_daemon_exe PRIVATE vmslnm vmsfs pthread)
 target_compile_definitions(lnm_daemon_exe PRIVATE LNM_DAEMON_MAIN)
 set_target_properties(lnm_daemon_exe PROPERTIES
     OUTPUT_NAME "VMSLNMD"

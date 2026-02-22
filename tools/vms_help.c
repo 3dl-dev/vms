@@ -32,6 +32,7 @@
 
 /* Default help library path */
 #include "ovmx_layout.h"
+#include "vmsfs/filespec.h"
 #define DEFAULT_HELP_PATH VMS_HELPLIB_PATH
 
 /* ------------------------------------------------------------------ */
@@ -498,7 +499,9 @@ static void interactive_help(void)
 /* ------------------------------------------------------------------ */
 int main(int argc, char *argv[])
 {
-    const char *help_path = DEFAULT_HELP_PATH;
+    static char help_linux[1024];
+    vmsfs_to_linux_path(DEFAULT_HELP_PATH, help_linux, sizeof(help_linux));
+    const char *help_path = help_linux;
     const char *env_path = getenv("SYS$HELP");
     if (env_path) {
         static char full_path[512];

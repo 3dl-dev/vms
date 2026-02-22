@@ -5,12 +5,15 @@
 #   ./boot.sh                          # Build (if needed), boot with default disk
 #   ./boot.sh --disk path/to/disk.img  # Boot with specified disk image
 #   ./boot.sh --fresh                  # Force fresh disk (delete and recreate)
-#   ./boot.sh --rebuild                # Force Docker rebuild + extract + boot
+#   ./boot.sh --rebuild                # Force Docker rebuild, then boot
 #   ./boot.sh --slim                   # Use slim initramfs (needs installed disk)
 #
-# First run:  Docker builds, extracts kernel+initramfs to dist/boot/,
-#             creates blank dist/sysdisk.img, boots → STARTUP.EXE initializes.
-# Later runs: Detects existing artifacts, skips build, boots → fast.
+# First run:  Docker builds the image, creates blank dist/sysdisk.img,
+#             boots → STARTUP.EXE initializes disk and installs.
+# Later runs: Detects image + disk exist, boots immediately → fast.
+#
+# QEMU runs inside Docker — no host QEMU install needed.
+# The disk image is volume-mounted so writes persist on the host.
 #
 # Environment:
 #   MEMORY  - Guest RAM (default: 512M)
@@ -19,7 +22,6 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIST_DIR="$SCRIPT_DIR/dist"
-BOOT_DIR="$DIST_DIR/boot"
 DEFAULT_DISK="$DIST_DIR/sysdisk.img"
 DISK_SIZE_MB=64
 
@@ -59,7 +61,7 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         --help|-h)
-            sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -73,16 +75,12 @@ done
 # Resolve disk path
 DISK="${DISK_PATH:-$DEFAULT_DISK}"
 
-# --- Step 1: Build + extract kernel and initramfs ---
-
-KERNEL="$BOOT_DIR/vmlinuz"
-INITRD_FAT="$BOOT_DIR/initramfs-ovmx.cpio.gz"
-INITRD_SLIM="$BOOT_DIR/initramfs-ovmx-slim.cpio.gz"
+# --- Step 1: Build Docker image if needed ---
 
 need_build=0
 if [ "$FORCE_REBUILD" -eq 1 ]; then
     need_build=1
-elif [ ! -f "$KERNEL" ] || [ ! -f "$INITRD_FAT" ]; then
+elif ! docker image inspect "$IMAGE" &>/dev/null; then
     need_build=1
 fi
 
@@ -93,24 +91,7 @@ if [ "$need_build" -eq 1 ]; then
     docker build -f "$SCRIPT_DIR/distro/Dockerfile.bootable" \
         -t "$IMAGE" $BUILD_ARGS "$SCRIPT_DIR"
     echo "=== Build complete ==="
-
-    echo "=== Extracting kernel and initramfs to $BOOT_DIR ==="
-    mkdir -p "$BOOT_DIR"
-    CID=$(docker create "$IMAGE")
-    docker cp "$CID:/boot/vmlinuz" "$KERNEL"
-    docker cp "$CID:/boot/initramfs-ovmx.cpio.gz" "$INITRD_FAT"
-    docker cp "$CID:/boot/initramfs-ovmx-slim.cpio.gz" "$INITRD_SLIM" 2>/dev/null || true
-    docker rm "$CID" >/dev/null
-    echo "=== Extraction complete ==="
     echo ""
-fi
-
-# Select initramfs
-if [ "$USE_SLIM" -eq 1 ] && [ -f "$INITRD_SLIM" ]; then
-    INITRD="$INITRD_SLIM"
-    echo "Using slim initramfs (bootstrap only)"
-else
-    INITRD="$INITRD_FAT"
 fi
 
 # --- Step 2: Prepare system disk ---
@@ -127,17 +108,24 @@ if [ ! -f "$DISK" ]; then
         echo "Error: specified disk not found: $DISK_PATH" >&2
         exit 1
     fi
-    echo "=== Creating blank system disk ($DISK_SIZE_MB MB) at $DEFAULT_DISK ==="
+    echo "=== Creating blank system disk ($DISK_SIZE_MB MB) ==="
     mkdir -p "$(dirname "$DEFAULT_DISK")"
     dd if=/dev/zero of="$DEFAULT_DISK" bs=1M count="$DISK_SIZE_MB" status=none
     echo "=== Disk created ==="
     echo ""
 fi
 
-# --- Step 3: Boot ---
+# --- Step 3: Boot via Docker ---
 
-echo "=== Booting OVMX (${MEMORY} RAM, disk: $DISK) ==="
+INITRD_ENV="fat"
+[ "$USE_SLIM" -eq 1 ] && INITRD_ENV="slim"
+
+echo "=== Booting OVMX (${MEMORY} RAM, disk: $DISK, initrd: $INITRD_ENV) ==="
 echo "=== Ctrl-A X to quit QEMU ==="
 echo ""
 
-DISK="$DISK" MEMORY="$MEMORY" exec "$SCRIPT_DIR/distro/boot/run-qemu.sh" "$KERNEL" "$INITRD"
+exec docker run --rm -it \
+    -e MEMORY="$MEMORY" \
+    -e INITRD="$INITRD_ENV" \
+    -v "$DISK:/tmp/sysdisk.img" \
+    "$IMAGE"

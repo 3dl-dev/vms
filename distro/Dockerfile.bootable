@@ -159,7 +159,7 @@ CMD ARCH=$(uname -m) && \
     else \
         INITRAMFS=/boot/initramfs-ovmx.cpio.gz; \
     fi && \
-    truncate -s 64M /tmp/sysdisk.img && \
+    if [ ! -e /tmp/sysdisk.img ]; then truncate -s 64M /tmp/sysdisk.img; fi && \
     exec $QEMU $MACHINE \
         -kernel /boot/vmlinuz \
         -initrd "$INITRAMFS" \

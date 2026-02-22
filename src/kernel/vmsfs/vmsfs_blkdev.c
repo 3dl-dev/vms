@@ -51,6 +51,10 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
                               struct dentry *dentry, umode_t mode);
 static int vmsfs_blkdev_unlink(struct inode *dir, struct dentry *dentry);
 static int vmsfs_blkdev_rmdir(struct inode *dir, struct dentry *dentry);
+static int vmsfs_vbn_to_lbn(struct vmsfs_inode_info *vi, uint32_t vbn,
+                            uint32_t *lbn_out);
+static int vmsfs_ensure_blocks(struct super_block *sb, struct inode *inode,
+                               uint32_t target_vbn);
 
 /* ================================================================
  * Operations tables
@@ -81,6 +85,56 @@ const struct file_operations vmsfs_blkdev_file_fops = {
     .read_iter = vmsfs_blkdev_read_iter,
     .write_iter = vmsfs_blkdev_write_iter,
     .llseek    = vmsfs_blkdev_llseek,
+    .mmap      = generic_file_mmap,
+};
+
+/*
+ * Map a logical file block to a device block (for page cache / mmap).
+ * Required for execve to mmap ELF segments from the filesystem.
+ */
+static int vmsfs_get_block(struct inode *inode, sector_t block,
+                           struct buffer_head *bh_result, int create)
+{
+    struct vmsfs_inode_info *vi = VMSFS_I(inode);
+    uint32_t vbn = (uint32_t)block + 1;  /* VBN is 1-based */
+    uint32_t lbn;
+    int ret;
+
+    ret = vmsfs_vbn_to_lbn(vi, vbn, &lbn);
+    if (ret) {
+        if (!create)
+            return 0;  /* Hole — return unmapped (zeroes) */
+
+        /* Allocate new block */
+        struct super_block *sb = inode->i_sb;
+        struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
+
+        mutex_lock(&sbi->alloc_lock);
+        ret = vmsfs_ensure_blocks(sb, inode, vbn);
+        mutex_unlock(&sbi->alloc_lock);
+        if (ret)
+            return ret;
+
+        ret = vmsfs_vbn_to_lbn(vi, vbn, &lbn);
+        if (ret)
+            return ret;
+
+        set_buffer_new(bh_result);
+    }
+
+    map_bh(bh_result, inode->i_sb, lbn);
+    return 0;
+}
+
+static int vmsfs_read_folio(struct file *file, struct folio *folio)
+{
+    return block_read_full_folio(folio, vmsfs_get_block);
+}
+
+static const struct address_space_operations vmsfs_blkdev_aops = {
+    .read_folio = vmsfs_read_folio,
+    .dirty_folio = block_dirty_folio,
+    .invalidate_folio = block_invalidate_folio,
 };
 
 /* ================================================================
@@ -193,16 +247,19 @@ struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid)
     if (inode->i_nlink == 0)
         set_nlink(inode, 1);
 
-    /* Set mode based on directory flag */
+    /* Set mode based on directory flag.
+     * VMS uses SOGW protection, not Unix rwx bits. Grant 0755 to all
+     * files so executables (.EXE) work without Unix-style +x tracking. */
     if (le16_to_cpu(fh->fh_flags) & VMSFS_FH_DIRECTORY) {
         inode->i_mode = S_IFDIR | 0755;
         inode->i_op = &vmsfs_blkdev_dir_iops;
         inode->i_fop = &vmsfs_blkdev_dir_fops;
         set_nlink(inode, 2);
     } else {
-        inode->i_mode = S_IFREG | 0644;
+        inode->i_mode = S_IFREG | 0755;
         inode->i_op = &vmsfs_blkdev_file_iops;
         inode->i_fop = &vmsfs_blkdev_file_fops;
+        inode->i_mapping->a_ops = &vmsfs_blkdev_aops;
     }
 
     brelse(bh);

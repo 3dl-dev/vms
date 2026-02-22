@@ -23,6 +23,7 @@
 #include <sys/wait.h>
 #include <sys/mount.h>
 #include <sys/syscall.h>
+#include <errno.h>
 
 #include "vms/pcb.h"
 
@@ -33,6 +34,8 @@
 #define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
 #define SSHD_PATH        "/vms/sys$system/VMSSSHD.EXE"
 #define SYSUAF_PATH      "/etc/ovmx/sysuaf.dat"
+#define SYSDISK_DEV      "/dev/vda"
+#define INITRAMFS_BACKUP "/tmp/initramfs_vms"
 
 /* Binary search paths — Docker puts them in /usr/local/bin, QEMU in /vms/sys$system */
 static const char *bin_search_dirs[] = {
@@ -48,6 +51,7 @@ static const char *vms_months[] = {
 };
 
 static volatile sig_atomic_t shutdown_requested = 0;
+static int blkdev_mode = 0;
 
 static void sigterm_handler(int sig)
 {
@@ -137,6 +141,12 @@ static void copy_recursive(const char *src, const char *dst)
  * Bare-metal bootstrap: mount filesystems, set hostname, load kernel
  * modules, mount vmsfs. Called when running as PID 1 on bare metal
  * or QEMU — not inside a Docker container.
+ *
+ * Two modes:
+ *   1. Block-device mode: /dev/vda (virtio disk) present — mount vmsfs
+ *      directly on the block device. If blank, run INITIALIZE.EXE first.
+ *   2. Overlay mode: no block device — copy /vms to backing dir, mount
+ *      vmsfs overlay (ephemeral, existing behavior).
  */
 static void bare_metal_init(void)
 {
@@ -157,15 +167,65 @@ static void bare_metal_init(void)
     load_kernel_module("/lib/modules/vms.ko");
     load_kernel_module("/lib/modules/vmsfs.ko");
 
-    /* Mount vmsfs over /vms for case-insensitive file access.
-     * vmsfs needs a backing directory separate from the mount point. */
     struct stat vms_st;
-    if (stat("/vms", &vms_st) == 0) {
-        mkdir("/var", 0755);
-        mkdir("/var/vmsfs", 0755);
-        copy_recursive("/vms", "/var/vmsfs");
-        mount("none", "/vms", "vmsfs", 0, "backing=/var/vmsfs,case_blind=1");
+    if (stat("/vms", &vms_st) != 0)
+        return;  /* No /vms in initramfs */
+
+    /* Check for system disk (virtio block device) */
+    struct stat vda_st;
+    if (stat(SYSDISK_DEV, &vda_st) == 0 && S_ISBLK(vda_st.st_mode)) {
+        printf("%%STARTUP-I-SYSDISK, mounting system disk DKA0:\n");
+
+        /* Back up initramfs /vms before mounting over it */
+        copy_recursive("/vms", INITRAMFS_BACKUP);
+
+        /* Try mounting — succeeds if disk is already formatted */
+        int rc = mount(SYSDISK_DEV, "/vms", "vmsfs", 0, NULL);
+        if (rc != 0) {
+            /* Disk is blank or unformatted — run INITIALIZE.EXE */
+            printf("%%STARTUP-I-INIT, initializing blank system disk\n");
+
+            char init_path[256];
+            snprintf(init_path, sizeof(init_path),
+                     "%s/sys$system/INITIALIZE.EXE", INITRAMFS_BACKUP);
+
+            pid_t pid = fork();
+            if (pid == 0) {
+                execl(init_path, "INITIALIZE.EXE",
+                      SYSDISK_DEV, "OVMX", (char *)NULL);
+                _exit(1);
+            }
+            if (pid > 0) {
+                int ws;
+                waitpid(pid, &ws, 0);
+            }
+
+            rc = mount(SYSDISK_DEV, "/vms", "vmsfs", 0, NULL);
+        }
+
+        if (rc == 0) {
+            printf("%%STARTUP-I-MOUNTED, system disk DKA0: mounted\n");
+            blkdev_mode = 1;
+            return;
+        }
+
+        printf("%%STARTUP-W-MOUNTFAIL, system disk mount failed (errno=%d), using overlay\n",
+               errno);
+        /* Fall through to overlay mode */
     }
+
+    /* Overlay mode — no system disk or block-device mount failed */
+    mkdir("/var", 0755);
+    mkdir("/var/vmsfs", 0755);
+
+    /* Use backup if we already copied /vms for a failed blkdev attempt */
+    struct stat backup_st;
+    if (stat(INITRAMFS_BACKUP, &backup_st) == 0)
+        copy_recursive(INITRAMFS_BACKUP, "/var/vmsfs");
+    else
+        copy_recursive("/vms", "/var/vmsfs");
+
+    mount("none", "/vms", "vmsfs", 0, "backing=/var/vmsfs,case_blind=1");
 }
 
 /* ------------------------------------------------------------------ */
@@ -310,19 +370,30 @@ static void provision_sysuaf_users(void)
 }
 
 /*
- * Install the OVMX system onto the system disk.
- * Creates VMS directory tree, populates SYS$SYSTEM/SYS$SHARE,
- * and provisions SYSUAF user home directories.
- *
- * Idempotent — safe to run on an already-installed system (mkdir
- * and symlink creation skip existing entries). Called only when
- * is_system_installed() returns false.
+ * Install the OVMX system onto the system disk (overlay mode).
+ * Creates VMS directory tree, populates SYS$SYSTEM/SYS$SHARE with
+ * symlinks to discovered binaries, and provisions SYSUAF user home
+ * directories.
  */
 static void install_system(void)
 {
     printf("%%STARTUP-I-INSTALL, installing OVMX system\n");
     provision_dirs();
     provision_symlinks();
+    provision_sysuaf_users();
+    printf("%%STARTUP-I-INSTALLED, system installation complete\n");
+}
+
+/*
+ * Install the OVMX system onto a block-device system disk.
+ * Copies real binaries from the initramfs backup to /vms (the mounted
+ * block device). No symlinks — vmsfs block-device mode stores real files.
+ */
+static void install_system_blkdev(void)
+{
+    printf("%%STARTUP-I-INSTALL, installing OVMX system to DKA0:\n");
+    provision_dirs();
+    copy_recursive(INITRAMFS_BACKUP, "/vms");
     provision_sysuaf_users();
     printf("%%STARTUP-I-INSTALLED, system installation complete\n");
 }
@@ -499,7 +570,10 @@ int main(void)
     if (is_system_installed()) {
         printf("%%STARTUP-I-SYSBOOT, system disk detected, skipping install\n");
     } else {
-        install_system();
+        if (blkdev_mode)
+            install_system_blkdev();
+        else
+            install_system();
     }
 
     /* Step 3: Start logical name daemon */

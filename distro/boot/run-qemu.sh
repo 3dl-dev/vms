@@ -10,6 +10,7 @@
 KERNEL="${1:-dist/boot/vmlinuz}"
 INITRD="${2:-dist/boot/initramfs-ovmx.cpio.gz}"
 MEMORY="${MEMORY:-512M}"
+DISK="${DISK:-}"
 ARCH=$(uname -m)
 
 if [ ! -f "$KERNEL" ]; then
@@ -21,6 +22,15 @@ fi
 if [ ! -f "$INITRD" ]; then
     echo "Error: initramfs not found at $INITRD" >&2
     exit 1
+fi
+
+DRIVE_ARGS=""
+if [ -n "$DISK" ]; then
+    if [ ! -f "$DISK" ]; then
+        echo "Creating blank system disk: $DISK (64MB)"
+        truncate -s 64M "$DISK"
+    fi
+    DRIVE_ARGS="-drive file=$DISK,format=raw,if=virtio"
 fi
 
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -43,4 +53,5 @@ exec $QEMU $MACHINE \
     -nic none \
     -nodefaults \
     -serial mon:stdio \
+    $DRIVE_ARGS \
     -no-reboot

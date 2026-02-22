@@ -108,6 +108,7 @@ CMD ARCH=$(uname -m) && \
         MACHINE=""; \
         CONSOLE="console=ttyS0"; \
     fi && \
+    truncate -s 64M /tmp/sysdisk.img && \
     exec $QEMU $MACHINE \
         -kernel /boot/vmlinuz \
         -initrd /boot/initramfs-ovmx.cpio.gz \
@@ -118,4 +119,5 @@ CMD ARCH=$(uname -m) && \
         -nic none \
         -nodefaults \
         -serial mon:stdio \
+        -drive file=/tmp/sysdisk.img,format=raw,if=virtio \
         -no-reboot

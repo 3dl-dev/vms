@@ -464,9 +464,14 @@ static struct dentry *vmsfs_mount(struct file_system_type *fs_type, int flags,
 
 static void vmsfs_kill_sb(struct super_block *sb)
 {
-    struct vmsfs_sb_info *sbi = VMSFS_SB(sb);
-
-    if (sbi && sbi->mode == VMSFS_MODE_BLKDEV)
+    /*
+     * Use sb->s_bdev to determine kill method, not sbi->mode.
+     * mount_bdev sets s_bdev before calling fill_super, so even if
+     * fill_super fails and frees sbi, s_bdev is still valid.
+     * Without this, a failed blkdev mount leaks the bdev reference
+     * and subsequent mounts fail with EBUSY.
+     */
+    if (sb->s_bdev)
         kill_block_super(sb);
     else
         kill_anon_super(sb);

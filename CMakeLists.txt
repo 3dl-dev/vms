@@ -53,6 +53,8 @@ option(OVMX_STATIC "Build all libraries as static and link statically" OFF)
 
 if(OVMX_STATIC)
     set(OVMX_LIB_TYPE STATIC)
+    # Produce fully static executables (no dynamic linker dependency)
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
 else()
     set(OVMX_LIB_TYPE SHARED)
 endif()

@@ -144,6 +144,11 @@ ENV MEMORY=512M
 
 # INITRD=fat (default) — use fat initramfs for first boot / install
 # INITRD=slim          — use slim initramfs for subsequent boots (system disk required)
+# SYSDISK_NAME          — disk filename inside /data volume (default: sysdisk.img)
+#
+# boot.sh mounts a host directory at /data so the container owns the disk
+# file and can write freely (avoids rootless Docker permission issues).
+# When run standalone (no /data mount), falls back to /tmp/sysdisk.img.
 CMD ARCH=$(uname -m) && \
     if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
         QEMU=qemu-system-aarch64; \
@@ -159,16 +164,21 @@ CMD ARCH=$(uname -m) && \
     else \
         INITRAMFS=/boot/initramfs-ovmx.cpio.gz; \
     fi && \
-    if [ ! -e /tmp/sysdisk.img ]; then truncate -s 64M /tmp/sysdisk.img; fi && \
+    if [ -d /data ]; then \
+        DISK="/data/${SYSDISK_NAME:-sysdisk.img}"; \
+    else \
+        DISK="/tmp/sysdisk.img"; \
+    fi && \
+    if [ ! -e "$DISK" ]; then truncate -s 64M "$DISK"; fi && \
     exec $QEMU $MACHINE \
         -kernel /boot/vmlinuz \
         -initrd "$INITRAMFS" \
         -nographic \
-        -append "$CONSOLE loglevel=7" \
+        -append "$CONSOLE loglevel=3 quiet" \
         -m $MEMORY \
         -smp 2 \
         -nic none \
         -nodefaults \
         -serial mon:stdio \
-        -drive file=/tmp/sysdisk.img,format=raw,if=virtio \
+        -drive file="$DISK",format=raw,if=virtio \
         -no-reboot

@@ -120,25 +120,23 @@ if [ "$need_build" -eq 1 ]; then
     echo ""
 fi
 
-# --- Step 2: Prepare system disk ---
+# --- Step 2: Prepare system disk directory ---
+#
+# We mount a host DIRECTORY into the container rather than a single file.
+# This avoids bind-mount permission issues (rootless Docker / user-namespace
+# remapping) — the container creates and owns the disk file inside the
+# mounted directory, so QEMU can read and write it freely.
+
+DISK_DIR="$(dirname "$DISK")"
+DISK_NAME="$(basename "$DISK")"
+
+mkdir -p "$DISK_DIR"
 
 if [ "$FORCE_FRESH" -eq 1 ] && [ -z "$DISK_PATH" ]; then
-    if [ -f "$DEFAULT_DISK" ]; then
+    if [ -f "$DISK" ]; then
         echo "=== Removing existing system disk ==="
-        rm -f "$DEFAULT_DISK"
+        rm -f "$DISK"
     fi
-fi
-
-if [ ! -f "$DISK" ]; then
-    if [ -n "$DISK_PATH" ]; then
-        echo "Error: specified disk not found: $DISK_PATH" >&2
-        exit 1
-    fi
-    echo "=== Creating blank system disk ($DISK_SIZE_MB MB) ==="
-    mkdir -p "$(dirname "$DEFAULT_DISK")"
-    dd if=/dev/zero of="$DEFAULT_DISK" bs=1M count="$DISK_SIZE_MB" status=none
-    echo "=== Disk created ==="
-    echo ""
 fi
 
 # --- Step 3: Boot via Docker ---
@@ -146,12 +144,13 @@ fi
 INITRD_ENV="fat"
 [ "$USE_SLIM" -eq 1 ] && INITRD_ENV="slim"
 
-echo "=== Booting OVMX (${MEMORY} RAM, disk: $DISK, initrd: $INITRD_ENV) ==="
+echo "=== Booting OVMX (${MEMORY} RAM, disk: $DISK_NAME, initrd: $INITRD_ENV) ==="
 echo "=== Ctrl-A X to quit QEMU ==="
 echo ""
 
 exec docker run --rm -it \
     -e MEMORY="$MEMORY" \
     -e INITRD="$INITRD_ENV" \
-    -v "$DISK:/tmp/sysdisk.img" \
+    -e SYSDISK_NAME="$DISK_NAME" \
+    -v "$DISK_DIR:/data" \
     "$IMAGE"

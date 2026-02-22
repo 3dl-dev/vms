@@ -63,30 +63,59 @@
 /* ================================================================
  * Protection mask (SOGW) — VMS convention: set bit = access DENIED
  *
- *   Bits 0-3:   System  (RWED)
- *   Bits 4-7:   Owner   (RWED)
- *   Bits 8-11:  Group   (RWED)
- *   Bits 12-15: World   (RWED)
+ * The 16-bit fh_protection field is a denial mask organized as four
+ * 4-bit fields, one per category:
  *
- * Within each 4-bit field:
- *   Bit 0: Read    (R)
- *   Bit 1: Write   (W)
- *   Bit 2: Execute (E)
- *   Bit 3: Delete  (D)
+ *   Bits  0- 3:  System (S)
+ *   Bits  4- 7:  Owner  (O)
+ *   Bits  8-11:  Group  (G)
+ *   Bits 12-15:  World  (W)
+ *
+ * Within each 4-bit nibble (bit 0 is the LSB of that nibble):
+ *   Bit 0: Read    (R) — 1 = Read access denied
+ *   Bit 1: Write   (W) — 1 = Write access denied
+ *   Bit 2: Execute (E) — 1 = Execute access denied
+ *   Bit 3: Delete  (D) — 1 = Delete access denied
+ *
+ * Example encodings (all denial masks):
+ *   0x0000 — S:RWED O:RWED G:RWED W:RWED (full access to all)
+ *   0xAA00 — S:RWED O:RWED G:RE   W:RE   (standard VMS default)
+ *   0xFF00 — S:RWED O:RWED G:none W:none (group/world denied all)
+ *   0xFFFF — all denied for all categories
+ *
+ * To extract a category's denial nibble:
+ *   sys_deny  = (prot >> VMSFS_PROT_SYS_SHIFT) & 0xF
+ *   own_deny  = (prot >> VMSFS_PROT_OWN_SHIFT) & 0xF
+ *   grp_deny  = (prot >> VMSFS_PROT_GRP_SHIFT) & 0xF
+ *   wld_deny  = (prot >> VMSFS_PROT_WLD_SHIFT) & 0xF
+ *
+ * To test whether a specific access bit is denied for a category:
+ *   denied = (prot >> shift) & VMSFS_PROT_R   (for read)
  * ================================================================ */
 
-#define VMSFS_PROT_R            0x1
-#define VMSFS_PROT_W            0x2
-#define VMSFS_PROT_E            0x4
-#define VMSFS_PROT_D            0x8
+/* Access bit positions within a 4-bit category nibble */
+#define VMSFS_PROT_R            0x1     /* Read    denied */
+#define VMSFS_PROT_W            0x2     /* Write   denied */
+#define VMSFS_PROT_E            0x4     /* Execute denied */
+#define VMSFS_PROT_D            0x8     /* Delete  denied */
 
-#define VMSFS_PROT_SYS_SHIFT    0
-#define VMSFS_PROT_OWN_SHIFT    4
-#define VMSFS_PROT_GRP_SHIFT    8
-#define VMSFS_PROT_WLD_SHIFT    12
+/* Bit shift to reach each category's 4-bit denial field */
+#define VMSFS_PROT_SYS_SHIFT    0       /* bits  0- 3: System */
+#define VMSFS_PROT_OWN_SHIFT    4       /* bits  4- 7: Owner  */
+#define VMSFS_PROT_GRP_SHIFT    8       /* bits  8-11: Group  */
+#define VMSFS_PROT_WLD_SHIFT    12      /* bits 12-15: World  */
 
-/* Default protection: S:RWED,O:RWED,G:RE,W: (world denied all) */
-#define VMSFS_PROT_DEFAULT      0xFF00
+/*
+ * Default protection: S:RWED, O:RWED, G:RE, W:RE
+ *
+ * Standard VMS default — system and owner have full access; group and world
+ * may read and execute but not write or delete.
+ *
+ * Group nibble (bits 8-11):  W=1, D=1, R=0, E=0 → 0xA << 8
+ * World nibble (bits 12-15): W=1, D=1, R=0, E=0 → 0xA << 12
+ * System (bits 0-3) and Owner (bits 4-7) are both 0 (full access).
+ */
+#define VMSFS_PROT_DEFAULT      0xAA00
 
 /* ================================================================
  * File header flags

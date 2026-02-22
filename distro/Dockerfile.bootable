@@ -3,13 +3,29 @@
 # Produces a Docker image that boots OVMX in QEMU. All dependencies
 # (compiler, QEMU, kernel, initramfs) are contained — no host tools needed.
 #
+# TWO initramfs images are produced:
+#
+#   initramfs-ovmx.cpio.gz       — FAT initramfs (all binaries)
+#                                   Use for: first boot / install / recovery
+#                                   Contains all OVMX binaries; STARTUP.EXE
+#                                   detects a blank system disk and installs.
+#
+#   initramfs-ovmx-slim.cpio.gz  — SLIM initramfs (bootstrap only)
+#                                   Use for: subsequent boots after install
+#                                   Contains only: STARTUP.EXE (/init),
+#                                   INITIALIZE.EXE, kernel modules, config,
+#                                   and SYS$MANAGER files. All other binaries
+#                                   (DCL, LOGIN, HELP, LNMD) must be on the
+#                                   system disk (/vms).
+#
 # STARTUP.EXE (ovmx_init) is /init — no busybox, no shell scripts.
 # It handles all boot setup: filesystem mounts, kernel modules, VMS
 # directory provisioning, SYSUAF user creation, daemon startup, login loop.
 #
 # Usage:
 #   docker build -f distro/Dockerfile.bootable -t ovmx-boot .
-#   docker run --rm -it ovmx-boot
+#   docker run --rm -it ovmx-boot                           # fat initramfs
+#   docker run --rm -it -e INITRD=slim ovmx-boot            # slim initramfs
 
 FROM ubuntu:24.04 AS builder
 
@@ -50,33 +66,59 @@ RUN cmake -B build-static \
     -DBUILD_TOOLS=ON \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
-# Assemble initramfs — STARTUP.EXE is /init directly, no busybox
-RUN mkdir -p /initramfs/dev /initramfs/proc /initramfs/sys \
-             /initramfs/tmp /initramfs/var /initramfs/mnt \
-             /initramfs/lib/modules \
-             /initramfs/vms \
-             /initramfs/etc/ovmx && \
+# -- FAT initramfs -------------------------------------------------------------
+# All OVMX binaries included. STARTUP.EXE detects a blank /dev/vda and
+# installs the full OS onto it. Use this for first boot or recovery.
+RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
+             /initramfs-fat/tmp /initramfs-fat/var /initramfs-fat/mnt \
+             /initramfs-fat/lib/modules \
+             /initramfs-fat/vms \
+             /initramfs-fat/etc/ovmx && \
     # OVMX binaries → VMS paths (STARTUP.EXE is /init)
-    mkdir -p /initramfs/vms/sys\$system && \
-    cp build-static/bin/STARTUP.EXE  /initramfs/init && \
-    cp build-static/bin/DCL.EXE      /initramfs/vms/sys\$system/ && \
-    cp build-static/bin/LOGINOUT.EXE /initramfs/vms/sys\$system/ && \
-    cp build-static/bin/HELP.EXE     /initramfs/vms/sys\$system/ && \
-    cp build-static/bin/VMSLNMD.EXE  /initramfs/vms/sys\$system/ && \
-    cp build-static/bin/AUTHORIZE.EXE /initramfs/vms/sys\$system/ 2>/dev/null ; \
-    cp build-static/bin/MAIL.EXE     /initramfs/vms/sys\$system/ 2>/dev/null ; \
-    cp build-static/bin/MONITOR.EXE  /initramfs/vms/sys\$system/ 2>/dev/null ; \
-    cp build-static/bin/INITIALIZE.EXE /initramfs/vms/sys\$system/ 2>/dev/null ; \
+    mkdir -p /initramfs-fat/vms/sys\$system && \
+    cp build-static/bin/STARTUP.EXE  /initramfs-fat/init && \
+    cp build-static/bin/DCL.EXE      /initramfs-fat/vms/sys\$system/ && \
+    cp build-static/bin/LOGINOUT.EXE /initramfs-fat/vms/sys\$system/ && \
+    cp build-static/bin/HELP.EXE     /initramfs-fat/vms/sys\$system/ && \
+    cp build-static/bin/VMSLNMD.EXE  /initramfs-fat/vms/sys\$system/ && \
+    cp build-static/bin/AUTHORIZE.EXE /initramfs-fat/vms/sys\$system/ 2>/dev/null ; \
+    cp build-static/bin/MAIL.EXE     /initramfs-fat/vms/sys\$system/ 2>/dev/null ; \
+    cp build-static/bin/MONITOR.EXE  /initramfs-fat/vms/sys\$system/ 2>/dev/null ; \
+    cp build-static/bin/INITIALIZE.EXE /initramfs-fat/vms/sys\$system/ 2>/dev/null ; \
     # Kernel modules
-    cp src/kernel/vms.ko /initramfs/lib/modules/ && \
-    cp src/kernel/vmsfs/vmsfs.ko /initramfs/lib/modules/ && \
+    cp src/kernel/vms.ko /initramfs-fat/lib/modules/ && \
+    cp src/kernel/vmsfs/vmsfs.ko /initramfs-fat/lib/modules/ && \
     # Configuration
-    cp -r distro/rootfs/etc/ovmx/* /initramfs/etc/ovmx/ && \
-    mkdir -p /initramfs/vms/sys\$manager && \
-    cp distro/rootfs/vms/sys\$manager/* /initramfs/vms/sys\$manager/ && \
-    # Pack the initramfs
-    cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
-    echo "Initramfs size: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
+    cp -r distro/rootfs/etc/ovmx/* /initramfs-fat/etc/ovmx/ && \
+    mkdir -p /initramfs-fat/vms/sys\$manager && \
+    cp distro/rootfs/vms/sys\$manager/* /initramfs-fat/vms/sys\$manager/ && \
+    # Pack the fat initramfs
+    cd /initramfs-fat && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx.cpio.gz && \
+    echo "FAT initramfs: $(ls -lh /boot/initramfs-ovmx.cpio.gz | awk '{print $5}')"
+
+# -- SLIM initramfs ------------------------------------------------------------
+# Bootstrap-only: STARTUP.EXE + INITIALIZE.EXE + kernel modules + config.
+# All other binaries (DCL, LOGIN, HELP, LNMD) must be on the system disk.
+# Use this after the system disk has been installed via the fat initramfs.
+RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
+             /initramfs-slim/tmp /initramfs-slim/var /initramfs-slim/mnt \
+             /initramfs-slim/lib/modules \
+             /initramfs-slim/vms \
+             /initramfs-slim/etc/ovmx && \
+    # Bootstrap binaries only
+    cp build-static/bin/STARTUP.EXE  /initramfs-slim/init && \
+    mkdir -p /initramfs-slim/vms/sys\$system && \
+    cp build-static/bin/INITIALIZE.EXE /initramfs-slim/vms/sys\$system/ 2>/dev/null ; \
+    # Kernel modules
+    cp src/kernel/vms.ko /initramfs-slim/lib/modules/ && \
+    cp src/kernel/vmsfs/vmsfs.ko /initramfs-slim/lib/modules/ && \
+    # Minimal config (STARTUP.EXE reads these at boot)
+    cp -r distro/rootfs/etc/ovmx/* /initramfs-slim/etc/ovmx/ && \
+    mkdir -p /initramfs-slim/vms/sys\$manager && \
+    cp distro/rootfs/vms/sys\$manager/* /initramfs-slim/vms/sys\$manager/ && \
+    # Pack the slim initramfs
+    cd /initramfs-slim && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx-slim.cpio.gz && \
+    echo "SLIM initramfs: $(ls -lh /boot/initramfs-ovmx-slim.cpio.gz | awk '{print $5}')"
 
 # Ensure vmlinuz symlink exists
 RUN KVER=$(cat /tmp/kver) && \
@@ -84,7 +126,8 @@ RUN KVER=$(cat /tmp/kver) && \
         ln -s vmlinuz-${KVER} /boot/vmlinuz; \
     fi
 
-# Runner stage — minimal image with just QEMU and boot artifacts
+# -- Runner stage --------------------------------------------------------------
+# Minimal image with just QEMU and boot artifacts.
 FROM ubuntu:24.04 AS runner
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -95,9 +138,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz
 COPY --from=builder /boot/initramfs-ovmx.cpio.gz /boot/initramfs-ovmx.cpio.gz
+COPY --from=builder /boot/initramfs-ovmx-slim.cpio.gz /boot/initramfs-ovmx-slim.cpio.gz
 
 ENV MEMORY=512M
 
+# INITRD=fat (default) — use fat initramfs for first boot / install
+# INITRD=slim          — use slim initramfs for subsequent boots (system disk required)
 CMD ARCH=$(uname -m) && \
     if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
         QEMU=qemu-system-aarch64; \
@@ -108,10 +154,15 @@ CMD ARCH=$(uname -m) && \
         MACHINE=""; \
         CONSOLE="console=ttyS0"; \
     fi && \
+    if [ "${INITRD:-fat}" = "slim" ]; then \
+        INITRAMFS=/boot/initramfs-ovmx-slim.cpio.gz; \
+    else \
+        INITRAMFS=/boot/initramfs-ovmx.cpio.gz; \
+    fi && \
     truncate -s 64M /tmp/sysdisk.img && \
     exec $QEMU $MACHINE \
         -kernel /boot/vmlinuz \
-        -initrd /boot/initramfs-ovmx.cpio.gz \
+        -initrd "$INITRAMFS" \
         -nographic \
         -append "$CONSOLE loglevel=7" \
         -m $MEMORY \

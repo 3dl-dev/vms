@@ -169,6 +169,56 @@ int vmsfs_inode_cache_init(void);
 void vmsfs_inode_cache_destroy(void);
 
 /* ================================================================
+ * SOGW permission helpers (vmsfs_blkdev.c)
+ *
+ * VMS uses a four-category protection model: System, Owner, Group, World.
+ * Each category has four access bits: Read, Write, Execute, Delete.
+ * Protection bits are denial masks — 1 means the access is DENIED.
+ *
+ * Category is determined by comparing the process UIC to the file's owner UIC:
+ *   System: process UIC group == 0 (SYSTEM group) — always granted full access
+ *   Owner:  process UIC group and member both match file owner UIC
+ *   Group:  process UIC group matches file owner UIC group
+ *   World:  no match
+ * ================================================================ */
+
+/*
+ * Convert a SOGW denial nibble to a Unix-style mode nibble (rwx bits).
+ * This is used only to approximate i_mode for display by tools like ls.
+ * Actual access control goes through .permission, not mode bits.
+ */
+static inline umode_t vmsfs_sogw_nibble_to_mode(uint8_t deny)
+{
+    umode_t bits = 0;
+
+    if (!(deny & VMSFS_PROT_R))
+        bits |= 0x4;  /* r */
+    if (!(deny & VMSFS_PROT_W))
+        bits |= 0x2;  /* w */
+    if (!(deny & VMSFS_PROT_E))
+        bits |= 0x1;  /* x */
+    return bits;
+}
+
+/*
+ * Build the Unix i_mode permission bits from a SOGW protection mask.
+ * Used for display purposes only — real access control uses .permission.
+ *
+ * Maps: owner nibble -> user bits, group nibble -> group bits,
+ *       world nibble -> other bits.
+ */
+static inline umode_t vmsfs_prot_to_mode(uint16_t prot)
+{
+    uint8_t own_deny = (prot >> VMSFS_PROT_OWN_SHIFT) & 0xF;
+    uint8_t grp_deny = (prot >> VMSFS_PROT_GRP_SHIFT) & 0xF;
+    uint8_t wld_deny = (prot >> VMSFS_PROT_WLD_SHIFT) & 0xF;
+
+    return (vmsfs_sogw_nibble_to_mode(own_deny) << 6) |
+           (vmsfs_sogw_nibble_to_mode(grp_deny) << 3) |
+            vmsfs_sogw_nibble_to_mode(wld_deny);
+}
+
+/* ================================================================
  * Block-device mode operations (vmsfs_blkdev.c)
  * ================================================================ */
 

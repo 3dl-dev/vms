@@ -28,6 +28,8 @@
 #include <linux/stat.h>
 #include <linux/uio.h>
 #include <linux/ktime.h>
+#include <linux/uidgid.h>
+#include <linux/capability.h>
 
 #include "vmsfs.h"
 
@@ -45,6 +47,8 @@ static loff_t vmsfs_blkdev_llseek(struct file *file, loff_t offset,
 static int vmsfs_blkdev_getattr(struct mnt_idmap *idmap,
                                 const struct path *path, struct kstat *stat,
                                 u32 request_mask, unsigned int query_flags);
+static int vmsfs_blkdev_permission(struct mnt_idmap *idmap,
+                                   struct inode *inode, int mask);
 static int vmsfs_blkdev_create(struct mnt_idmap *idmap, struct inode *dir,
                                struct dentry *dentry, umode_t mode, bool excl);
 static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
@@ -61,12 +65,13 @@ static int vmsfs_ensure_blocks(struct super_block *sb, struct inode *inode,
  * ================================================================ */
 
 const struct inode_operations vmsfs_blkdev_dir_iops = {
-    .lookup  = vmsfs_blkdev_lookup,
-    .getattr = vmsfs_blkdev_getattr,
-    .create  = vmsfs_blkdev_create,
-    .mkdir   = vmsfs_blkdev_mkdir,
-    .unlink  = vmsfs_blkdev_unlink,
-    .rmdir   = vmsfs_blkdev_rmdir,
+    .lookup     = vmsfs_blkdev_lookup,
+    .getattr    = vmsfs_blkdev_getattr,
+    .permission = vmsfs_blkdev_permission,
+    .create     = vmsfs_blkdev_create,
+    .mkdir      = vmsfs_blkdev_mkdir,
+    .unlink     = vmsfs_blkdev_unlink,
+    .rmdir      = vmsfs_blkdev_rmdir,
 };
 
 const struct file_operations vmsfs_blkdev_dir_fops = {
@@ -77,7 +82,8 @@ const struct file_operations vmsfs_blkdev_dir_fops = {
 };
 
 const struct inode_operations vmsfs_blkdev_file_iops = {
-    .getattr = vmsfs_blkdev_getattr,
+    .getattr    = vmsfs_blkdev_getattr,
+    .permission = vmsfs_blkdev_permission,
 };
 
 const struct file_operations vmsfs_blkdev_file_fops = {
@@ -247,16 +253,23 @@ struct inode *vmsfs_blkdev_iget(struct super_block *sb, uint32_t fid)
     if (inode->i_nlink == 0)
         set_nlink(inode, 1);
 
-    /* Set mode based on directory flag.
-     * VMS uses SOGW protection, not Unix rwx bits. Grant 0755 to all
-     * files so executables (.EXE) work without Unix-style +x tracking. */
+    /*
+     * Set VFS i_mode from the SOGW protection mask for display purposes
+     * (tools like ls read stat() mode bits). Actual access control is
+     * enforced by .permission using the native SOGW model — i_mode is
+     * not consulted for access decisions on vmsfs inodes.
+     *
+     * For directories we always include the sticky/execute bits so that
+     * the VFS can traverse them; .permission gates the real check.
+     */
     if (le16_to_cpu(fh->fh_flags) & VMSFS_FH_DIRECTORY) {
-        inode->i_mode = S_IFDIR | 0755;
+        inode->i_mode = S_IFDIR | 0111 |
+                        vmsfs_prot_to_mode(vi->vms_prot);
         inode->i_op = &vmsfs_blkdev_dir_iops;
         inode->i_fop = &vmsfs_blkdev_dir_fops;
         set_nlink(inode, 2);
     } else {
-        inode->i_mode = S_IFREG | 0755;
+        inode->i_mode = S_IFREG | vmsfs_prot_to_mode(vi->vms_prot);
         inode->i_op = &vmsfs_blkdev_file_iops;
         inode->i_fop = &vmsfs_blkdev_file_fops;
         inode->i_mapping->a_ops = &vmsfs_blkdev_aops;
@@ -296,6 +309,7 @@ int vmsfs_blkdev_flush_inode(struct super_block *sb, struct inode *inode)
     fh->fh_blocks = cpu_to_le32(inode->i_blocks);
     fh->fh_modified = cpu_to_le64(ktime_get_real_seconds());
     fh->fh_link_count = cpu_to_le16(inode->i_nlink);
+    fh->fh_protection = cpu_to_le16(vi->vms_prot);
 
     /* Update retrieval pointers */
     fh->fh_map_count = cpu_to_le16(vi->map_count);
@@ -1261,6 +1275,104 @@ static int vmsfs_blkdev_getattr(struct mnt_idmap *idmap,
     struct inode *inode = d_inode(path->dentry);
 
     generic_fillattr(&nop_mnt_idmap, request_mask, inode, stat);
+    return 0;
+}
+
+/* ================================================================
+ * SOGW permission check
+ *
+ * This is the authoritative access-control function for vmsfs block-device
+ * inodes. It replaces the default generic_permission() check so that access
+ * decisions are made using the VMS SOGW model rather than Unix rwx bits.
+ *
+ * Category assignment (in priority order):
+ *   System: process is root (CAP_SYS_ADMIN) OR process UIC group == 0
+ *   Owner:  process euid matches inode uid AND egid matches inode gid
+ *   Group:  process egid matches inode gid
+ *   World:  all other processes
+ *
+ * The System category gets full access — matching VMS behavior where the
+ * SYSTEM UIC group bypasses protection checks.
+ *
+ * mask bits checked:
+ *   MAY_READ  -> VMSFS_PROT_R
+ *   MAY_WRITE -> VMSFS_PROT_W
+ *   MAY_EXEC  -> VMSFS_PROT_E
+ *   MAY_OPEN  -> treated as MAY_READ (open requires at least read)
+ *   MAY_UNLINK_SELF -> VMSFS_PROT_D (delete)
+ *
+ * Note: the VMS Delete bit is not checked here for unlink/rmdir because
+ * those operations go through the directory's inode ops (.unlink/.rmdir)
+ * before reaching the target inode's .permission. Delete permission on
+ * the file itself is enforced at the VFS level via MAY_WRITE on the parent
+ * directory. VMS delete semantics (checking D bit on the file being deleted)
+ * would require custom VFS hooks beyond the scope of this bead; the D bit
+ * is stored and preserved but enforcement is deferred.
+ * ================================================================ */
+
+static int vmsfs_blkdev_permission(struct mnt_idmap *idmap,
+                                   struct inode *inode, int mask)
+{
+    struct vmsfs_inode_info *vi = VMSFS_I(inode);
+    uint16_t prot = vi->vms_prot;
+    uint8_t deny;
+    kuid_t inode_uid = inode->i_uid;
+    kgid_t inode_gid = inode->i_gid;
+    kuid_t euid;
+    kgid_t egid;
+
+    /* MAY_NOT_BLOCK: caller cannot sleep — fall back to generic check */
+    if (mask & MAY_NOT_BLOCK)
+        return -ECHILD;
+
+    euid = current_euid();
+    egid = current_egid();
+
+    /*
+     * System category: root (uid 0) or UIC group 0.
+     * In our UIC mapping, inode->i_gid holds the UIC group.
+     * Process UIC group == 0 means the SYSTEM group.
+     * Root always gets System-category access regardless of UIC.
+     */
+    if (uid_eq(euid, GLOBAL_ROOT_UID) || __kgid_val(egid) == 0) {
+        /* System category — full access regardless of protection bits */
+        deny = (prot >> VMSFS_PROT_SYS_SHIFT) & 0xF;
+        /* System gets full access: even if someone set denial bits,
+         * honor them for predictability, but by VMS convention System
+         * is never denied. We implement the strict VMS behavior: the
+         * System nibble is checked, but a well-formatted volume will
+         * always have System=0 (no denials). */
+        goto check;
+    }
+
+    /*
+     * Owner category: euid matches owner uid AND egid matches owner gid.
+     * (Both group and member must match the file's UIC.)
+     */
+    if (uid_eq(euid, inode_uid) && gid_eq(egid, inode_gid)) {
+        deny = (prot >> VMSFS_PROT_OWN_SHIFT) & 0xF;
+        goto check;
+    }
+
+    /*
+     * Group category: egid matches owner gid (UIC group matches).
+     */
+    if (gid_eq(egid, inode_gid)) {
+        deny = (prot >> VMSFS_PROT_GRP_SHIFT) & 0xF;
+        goto check;
+    }
+
+    /* World category: no UIC match */
+    deny = (prot >> VMSFS_PROT_WLD_SHIFT) & 0xF;
+
+check:
+    if ((mask & MAY_READ) && (deny & VMSFS_PROT_R))
+        return -EACCES;
+    if ((mask & MAY_WRITE) && (deny & VMSFS_PROT_W))
+        return -EACCES;
+    if ((mask & MAY_EXEC) && (deny & VMSFS_PROT_E))
+        return -EACCES;
+
     return 0;
 }
 

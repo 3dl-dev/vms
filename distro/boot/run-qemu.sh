@@ -6,31 +6,26 @@
 #
 # Environment variables:
 #   MEMORY  - Guest RAM (default: 512M)
+#   DISK    - Path to system disk image (optional; passed as /dev/vda if set)
+#
+# Initramfs variants:
+#   initramfs-ovmx.cpio.gz       — fat: all binaries (first boot / install)
+#   initramfs-ovmx-slim.cpio.gz  — slim: bootstrap only (needs system disk)
 
 KERNEL="${1:-dist/boot/vmlinuz}"
 INITRD="${2:-dist/boot/initramfs-ovmx.cpio.gz}"
 MEMORY="${MEMORY:-512M}"
-DISK="${DISK:-}"
 ARCH=$(uname -m)
 
 if [ ! -f "$KERNEL" ]; then
     echo "Error: kernel not found at $KERNEL" >&2
-    echo "Build first: docker build -f distro/Dockerfile.bootable -o type=local,dest=dist ." >&2
+    echo "Build first: ./boot.sh" >&2
     exit 1
 fi
 
 if [ ! -f "$INITRD" ]; then
     echo "Error: initramfs not found at $INITRD" >&2
     exit 1
-fi
-
-DRIVE_ARGS=""
-if [ -n "$DISK" ]; then
-    if [ ! -f "$DISK" ]; then
-        echo "Creating blank system disk: $DISK (64MB)"
-        truncate -s 64M "$DISK"
-    fi
-    DRIVE_ARGS="-drive file=$DISK,format=raw,if=virtio"
 fi
 
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -43,6 +38,16 @@ else
     CONSOLE="console=ttyS0"
 fi
 
+# Build disk arguments if DISK is set
+DISK_ARGS=""
+if [ -n "$DISK" ]; then
+    if [ ! -f "$DISK" ]; then
+        echo "Error: disk image not found: $DISK" >&2
+        exit 1
+    fi
+    DISK_ARGS="-drive file=$DISK,format=raw,if=virtio,cache=writeback"
+fi
+
 exec $QEMU $MACHINE \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
@@ -53,5 +58,5 @@ exec $QEMU $MACHINE \
     -nic none \
     -nodefaults \
     -serial mon:stdio \
-    $DRIVE_ARGS \
-    -no-reboot
+    -no-reboot \
+    $DISK_ARGS

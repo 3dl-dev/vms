@@ -281,18 +281,15 @@ int dcl_translate_logical(const char *name, char *result, size_t result_size)
      * may not have been initialized with yet.
      */
     if (strcmp(upper, "SYS$DISK") == 0) {
-        strncpy(result, SYSDISK_MOUNT, result_size - 1);
+        strncpy(result, "SYS$SYSDEVICE", result_size - 1);
         result[result_size - 1] = '\0';
         return 0;
     }
 
     if (strcmp(upper, "SYS$LOGIN") == 0) {
-        const char *home = getenv("HOME");
-        if (home) {
-            strncpy(result, home, result_size - 1);
-            result[result_size - 1] = '\0';
-            return 0;
-        }
+        strncpy(result, "SYS$SYSDEVICE:[USERS]", result_size - 1);
+        result[result_size - 1] = '\0';
+        return 0;
     }
 
     return -1; /* Not found */

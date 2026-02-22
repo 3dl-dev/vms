@@ -5,8 +5,9 @@
  * These correspond to the logicals defined by SYSGEN on a real
  * VMS system and are placed into the SYSTEM table.
  *
- * Equivalence strings use the ODS-2 directory layout under the
- * system disk mount point, matching real VMS conventions.
+ * All equivalence strings use VMS notation (device:[directory] specs),
+ * never Linux paths.  The single mapping from VMS device names to
+ * Linux mount points lives in the device table (vmsfs_device_add).
  */
 
 #include <stdio.h>
@@ -24,19 +25,21 @@
  * lnm_setup_defaults - Set up standard VMS system logicals.
  *
  * @mgr:      Manager instance
- * @vms_root: Root directory for VMS file tree (mount point)
+ * @vms_root: Root directory for VMS file tree (Linux mount point)
  *
- * Creates the following logicals in the SYSTEM table:
- *   SYS$SYSDEVICE -> {vms_root}   (system disk mount point)
- *   SYS$SYSTEM    -> {vms_root}/SYS0/SYSCOMMON/SYSEXE
- *   SYS$LIBRARY   -> {vms_root}/SYS0/SYSCOMMON/SYSLIB
- *   SYS$SHARE     -> {vms_root}/SYS0/SYSCOMMON/SYSLIB
- *   SYS$MANAGER   -> {vms_root}/SYS0/SYSCOMMON/SYSMGR
- *   SYS$HELP      -> {vms_root}/SYS0/SYSCOMMON/SYSHLP
- *   SYS$SCRATCH   -> /tmp
- *   SYS$LOGIN     -> user's home directory
- *   SYS$DISK      -> {vms_root}  (process default device = system disk)
- *   SYS$INPUT     -> /dev/stdin
+ * First registers DKA0: in the device table (the ONE place a Unix
+ * path is stored), then creates logicals with VMS equivalences:
+ *
+ *   SYS$SYSDEVICE -> DKA0:
+ *   SYS$SYSTEM    -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]
+ *   SYS$LIBRARY   -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]
+ *   SYS$SHARE     -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]
+ *   SYS$MANAGER   -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]
+ *   SYS$HELP      -> SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSHLP]
+ *   SYS$SCRATCH   -> SYS$SYSDEVICE:[SYSTMP]
+ *   SYS$LOGIN     -> SYS$SYSDEVICE:[USERS]  (overridden per-process by login)
+ *   SYS$DISK      -> SYS$SYSDEVICE  (process default device)
+ *   SYS$INPUT     -> /dev/stdin   (I/O device — no VMS equivalent yet)
  *   SYS$OUTPUT    -> /dev/stdout
  *   SYS$ERROR     -> /dev/stderr
  *   SYS$COMMAND   -> /dev/stdin
@@ -50,69 +53,68 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
     if (!vms_root)
         vms_root = SYSDISK_MOUNT;
 
-    char path[PATH_MAX];
-
     /*
      * System disk device logical.
      * SYS$SYSDEVICE is the system disk — everything derives from here.
      */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", vms_root,
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", "DKA0:",
                LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
 
     /*
-     * System directory logicals — ODS-2 layout.
-     * These map VMS standard logical names to their on-disk locations
-     * following the [SYS0.SYSCOMMON.*] hierarchy.
+     * System directory logicals — VMS-native equivalences.
+     * These map standard logical names to ODS-2 directory specs
+     * on the system device.
      */
 
     /* SYS$SYSTEM -> [SYS0.SYSCOMMON.SYSEXE] */
-    snprintf(path, sizeof(path), "%s/SYS0/SYSCOMMON/SYSEXE", vms_root);
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSTEM", path,
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSTEM",
+               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]",
+               0, LNM_MODE_EXEC);
 
     /* SYS$LIBRARY -> [SYS0.SYSCOMMON.SYSLIB] */
-    snprintf(path, sizeof(path), "%s/SYS0/SYSCOMMON/SYSLIB", vms_root);
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$LIBRARY", path,
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$LIBRARY",
+               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]",
+               0, LNM_MODE_EXEC);
 
     /* SYS$SHARE -> [SYS0.SYSCOMMON.SYSLIB] (same as SYS$LIBRARY on VMS) */
-    snprintf(path, sizeof(path), "%s/SYS0/SYSCOMMON/SYSLIB", vms_root);
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SHARE", path,
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SHARE",
+               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB]",
+               0, LNM_MODE_EXEC);
 
     /* SYS$MANAGER -> [SYS0.SYSCOMMON.SYSMGR] */
-    snprintf(path, sizeof(path), "%s/SYS0/SYSCOMMON/SYSMGR", vms_root);
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$MANAGER", path,
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$MANAGER",
+               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]",
+               0, LNM_MODE_EXEC);
 
     /* SYS$HELP -> [SYS0.SYSCOMMON.SYSHLP] */
-    snprintf(path, sizeof(path), "%s/SYS0/SYSCOMMON/SYSHLP", vms_root);
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$HELP", path,
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$HELP",
+               "SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSHLP]",
+               0, LNM_MODE_EXEC);
 
-    /* SYS$SCRATCH -> /tmp (will move to system disk in future) */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SCRATCH", "/tmp",
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    /* SYS$SCRATCH -> system temp directory */
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SCRATCH",
+               "SYS$SYSDEVICE:[SYSTMP]",
+               0, LNM_MODE_EXEC);
 
     /*
      * Per-user logicals — defaults in SYSTEM table,
      * overridden per-process by login.
      */
 
-    /* SYS$LOGIN -> user's home directory */
-    struct passwd *pw = getpwuid(getuid());
-    const char *home = pw ? pw->pw_dir : "/tmp";
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$LOGIN", home,
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    /* SYS$LOGIN -> default user area (overridden per-process) */
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$LOGIN",
+               "SYS$SYSDEVICE:[USERS]",
+               0, LNM_MODE_EXEC);
 
-    /* SYS$DISK -> system disk (process default device) */
-    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$DISK", vms_root,
-               LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    /* SYS$DISK -> system device (process default device) */
+    lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$DISK", "SYS$SYSDEVICE",
+               0, LNM_MODE_EXEC);
 
     /*
      * I/O channel logicals.
-     * On a real VMS system these would be device names (TTA0:, etc.);
-     * here they map to Linux device paths.
+     * On a real VMS system these would be device names (TTA0:, etc.).
+     * These remain as Linux device paths until we have a terminal
+     * device driver layer.
      */
     lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$INPUT", "/dev/stdin",
                LNM_ATTR_TERMINAL, LNM_MODE_EXEC);

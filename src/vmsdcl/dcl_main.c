@@ -30,6 +30,7 @@
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "vms/logical.h"
+#include "vmsfs/device.h"
 
 /* Global DCL context */
 static struct dcl_context dcl_ctx;
@@ -229,14 +230,20 @@ static void setup_session(struct dcl_context *ctx)
     if (mgr) {
         const char *vms_root = getenv("VMS_ROOT");
         if (!vms_root) vms_root = SYSDISK_MOUNT;
+
+        /* Register the system disk in the device table before LNM setup.
+         * DKA0: → vms_root is the ONE place a Unix path enters the namespace. */
+        vmsfs_device_add("DKA0", vms_root);
+
         lnm_setup_defaults(mgr, vms_root);
 
         /*
-         * Override SYS$DISK with the current process default directory
-         * so it reflects the actual working directory of this session.
+         * Override SYS$DISK with the process default device.
+         * On a VMS system this would be set from the process PCB;
+         * here we default to the system device.
          */
         lnm_create(mgr, LNM_PROCESS_TABLE, "SYS$DISK",
-                   ctx->default_linux, LNM_ATTR_TERMINAL, LNM_MODE_USER);
+                   "SYS$SYSDEVICE", 0, LNM_MODE_USER);
     }
 
     /* Register built-in commands */

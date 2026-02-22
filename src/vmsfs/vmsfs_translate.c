@@ -377,12 +377,7 @@ int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
                                          &equiv_len, &attrs);
         if ($VMS_STATUS_SUCCESS(status)) {
             equiv[equiv_len] = '\0';
-            /*
-             * The equivalence might be:
-             * - A device name with colon (DKA0:) → recurse
-             * - A Linux path (legacy, starts with /) → use directly
-             * - Another logical name → recurse
-             */
+
             if (equiv[0] == '/') {
                 /* Legacy Linux path equivalence — use directly */
                 size_t elen = strlen(equiv);
@@ -393,6 +388,16 @@ int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
                 linux_dir[dir_size - 1] = '\0';
                 return SS$_NORMAL;
             }
+
+            /*
+             * VMS filespec equivalence (contains '[' directory spec).
+             * e.g. SYS$SYSTEM → SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]
+             * Translate the entire VMS spec to a Linux path.
+             */
+            if (strchr(equiv, '[')) {
+                return vmsfs_to_linux_path(equiv, linux_dir, dir_size);
+            }
+
             /* Equivalence is another logical or device name — recurse */
             size_t elen = strlen(equiv);
             if (elen > 0 && equiv[elen - 1] == ':') {

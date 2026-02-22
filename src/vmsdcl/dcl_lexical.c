@@ -22,6 +22,7 @@
 #include "dcl/symbol.h"
 #include "ssdef.h"
 #include <vms/privs.h>
+#include "vmsfs/filespec.h"
 
 /* External functions */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
@@ -529,7 +530,8 @@ static int lex_environment(struct dcl_context *ctx, const char *args,
         s[i] = (char)toupper((unsigned char)s[i]);
 
     if (strcmp(s, "DEFAULT") == 0) {
-        dcl_format_directory(ctx->default_linux, result, result_size);
+        strncpy(result, ctx->default_dir, result_size - 1);
+        result[result_size - 1] = '\0';
     } else if (strcmp(s, "PROCEDURE") == 0) {
         if (ctx->proc_depth >= 0 && ctx->proc_stack[ctx->proc_depth].filename[0]) {
             strncpy(result, ctx->proc_stack[ctx->proc_depth].filename, result_size - 1);
@@ -764,7 +766,7 @@ static int lex_search(struct dcl_context *ctx, const char *args,
             fsc->dir_linux[dlen] = '\0';
             strncpy(fsc->pattern, slash + 1, sizeof(fsc->pattern) - 1);
         } else {
-            strncpy(fsc->dir_linux, ctx->default_linux, sizeof(fsc->dir_linux) - 1);
+            vmsfs_to_linux_path(ctx->default_dir, fsc->dir_linux, sizeof(fsc->dir_linux));
             strncpy(fsc->pattern, linux_path, sizeof(fsc->pattern) - 1);
         }
 
@@ -1665,7 +1667,8 @@ static int lex_directory(struct dcl_context *ctx, const char *args,
                          char *result, size_t result_size)
 {
     (void)args;
-    dcl_format_directory(ctx->default_linux, result, result_size);
+    strncpy(result, ctx->default_dir, result_size - 1);
+    result[result_size - 1] = '\0';
     return 0;
 }
 

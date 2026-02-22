@@ -31,6 +31,7 @@
 #include "vms/privs.h"
 #include "vms/logical.h"
 #include "vmsfs/device.h"
+#include "vmsfs/filespec.h"
 
 /* Global DCL context */
 static struct dcl_context dcl_ctx;
@@ -87,14 +88,21 @@ void dcl_context_init(struct dcl_context *ctx)
     /* SET PROCESS defaults */
     ctx->process_priority = 4;   /* Default VMS base priority */
 
-    /* Get current directory */
-    if (getcwd(ctx->default_linux, sizeof(ctx->default_linux)) == NULL) {
-        strcpy(ctx->default_linux, "/");
+    /* Set default directory from environment (VMS spec) or derive from cwd */
+    const char *env_defdir_init = getenv("VMS_DEFAULT_DIR");
+    if (env_defdir_init && env_defdir_init[0]) {
+        strncpy(ctx->default_dir, env_defdir_init, sizeof(ctx->default_dir) - 1);
+        ctx->default_dir[sizeof(ctx->default_dir) - 1] = '\0';
+    } else {
+        char cwd[512];
+        if (getcwd(cwd, sizeof(cwd)) != NULL) {
+            vmsfs_to_vms_spec(cwd, ctx->default_dir, sizeof(ctx->default_dir));
+        }
+        /* Fall back if cwd could not be obtained or translated */
+        if (ctx->default_dir[0] == '\0') {
+            strcpy(ctx->default_dir, "SYS$SYSDEVICE:[000000]");
+        }
     }
-
-    /* Convert to VMS format */
-    dcl_format_directory(ctx->default_linux, ctx->default_dir,
-                         sizeof(ctx->default_dir));
 
     /* Get user info */
     struct passwd *pw = getpwuid(getuid());

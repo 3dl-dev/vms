@@ -41,6 +41,7 @@
 #include "opcdef.h"
 #include "ovmx_accounting.h"
 #include "starlet.h"
+#include "vmsfs/filespec.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -118,9 +119,7 @@ static int cmd_show_default(struct dcl_command *cmd)
     (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
 
-    char vms_dir[512];
-    dcl_format_directory(ctx->default_linux, vms_dir, sizeof(vms_dir));
-    printf("  %s\n", vms_dir);
+    printf("  %s\n", ctx->default_dir);
 
     return SS$_NORMAL;
 }
@@ -409,11 +408,7 @@ static int cmd_show_process(struct dcl_command *cmd)
            ctx->uic_group ? (unsigned)ctx->uic_group : (unsigned)(getgid() & 0377),
            ctx->uic_member ? (unsigned)ctx->uic_member : (unsigned)(getuid() & 0377));
     printf("Base priority:     4\n");
-    printf("Default file spec: ");
-
-    char vms_dir[512];
-    dcl_format_directory(ctx->default_linux, vms_dir, sizeof(vms_dir));
-    printf("%s\n", vms_dir);
+    printf("Default file spec: %s\n", ctx->default_dir);
 
     /* Privileges — read from VMS_PRIVILEGES env var or PCB */
     const char *privs = getenv("VMS_PRIVILEGES");
@@ -1031,19 +1026,14 @@ static int cmd_set_default(struct dcl_command *cmd)
     /* Get absolute path */
     char abs_path[PATH_MAX];
     if (realpath(check_path, abs_path) != NULL) {
-        strncpy(ctx->default_linux, abs_path, sizeof(ctx->default_linux) - 1);
-        ctx->default_linux[sizeof(ctx->default_linux) - 1] = '\0';
+        /* Convert the resolved Linux path back to VMS spec */
+        vmsfs_to_vms_spec(abs_path, ctx->default_dir, sizeof(ctx->default_dir));
     } else {
-        strncpy(ctx->default_linux, check_path, sizeof(ctx->default_linux) - 1);
-        ctx->default_linux[sizeof(ctx->default_linux) - 1] = '\0';
+        vmsfs_to_vms_spec(check_path, ctx->default_dir, sizeof(ctx->default_dir));
     }
 
-    /* Also update the VMS format default */
-    dcl_format_directory(ctx->default_linux, ctx->default_dir,
-                         sizeof(ctx->default_dir));
-
     /* Change the process working directory too */
-    if (chdir(ctx->default_linux) != 0) {
+    if (chdir(check_path) != 0) {
         /* Non-fatal - VMS default and Linux CWD diverge */
     }
 
@@ -1814,13 +1804,11 @@ static int cmd_directory(struct dcl_command *cmd)
                 *(last_slash + 1) = '\0';
             } else {
                 pattern = strdup(linux_dir);
-                strncpy(linux_dir, ctx->default_linux,
-                        sizeof(linux_dir) - 1);
+                vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
             }
         }
     } else {
-        strncpy(linux_dir, ctx->default_linux, sizeof(linux_dir) - 1);
-        linux_dir[sizeof(linux_dir) - 1] = '\0';
+        vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
     }
 
     /* Ensure trailing slash */
@@ -2219,7 +2207,7 @@ static int cmd_delete(struct dcl_command *cmd)
             *(last_slash + 1) = '\0';
         } else {
             pat = dir;
-            strncpy(dir, ctx->default_linux, sizeof(dir) - 1);
+            vmsfs_to_linux_path(ctx->default_dir, dir, sizeof(dir));
         }
 
         DIR *dp = opendir(dir);
@@ -2524,14 +2512,12 @@ static int cmd_purge(struct dcl_command *cmd)
                 linux_dir[sizeof(linux_dir) - 1] = '\0';
             } else {
                 pattern = strdup(resolved);
-                strncpy(linux_dir, ctx->default_linux, sizeof(linux_dir) - 1);
-                linux_dir[sizeof(linux_dir) - 1] = '\0';
+                vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
             }
         }
     } else {
         /* Default: current directory, all files (*.*) */
-        strncpy(linux_dir, ctx->default_linux, sizeof(linux_dir) - 1);
-        linux_dir[sizeof(linux_dir) - 1] = '\0';
+        vmsfs_to_linux_path(ctx->default_dir, linux_dir, sizeof(linux_dir));
     }
 
     /* Ensure trailing slash */

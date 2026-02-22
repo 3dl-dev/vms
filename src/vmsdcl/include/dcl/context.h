@@ -19,8 +19,6 @@ struct dcl_context {
 
     /* Default directory (VMS-style) */
     char default_dir[512];
-    /* Default directory (Linux path) */
-    char default_linux[512];
 
     /* Command procedure stack */
     struct {

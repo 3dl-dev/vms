@@ -262,6 +262,7 @@ static void provision_dirs(void)
     mkdir(VMS_SYSMGR, 0755);
     mkdir(VMS_SYSHLP, 0755);
     mkdir(VMS_USERS, 0755);
+    mkdir(SYSDISK_MOUNT "/SYSTMP", 0755);  /* SYS$SCRATCH */
     mkdir("/tmp/ovmx", 0755);
     mkdir("/tmp/ovmx/locks", 0755);
 }
@@ -375,9 +376,9 @@ static void provision_sysuaf_users(void)
 
 /*
  * Install the OVMX system onto the system disk (overlay mode).
- * Creates VMS directory tree, populates SYS$SYSTEM/SYS$SHARE with
- * symlinks to discovered binaries, and provisions SYSUAF user home
- * directories.
+ * Creates ODS-2 directory tree, populates [SYS0.SYSCOMMON.SYSEXE]
+ * and [SYS0.SYSCOMMON.SYSLIB] with symlinks to discovered binaries,
+ * and provisions SYSUAF user home directories.
  */
 static void install_system(void)
 {

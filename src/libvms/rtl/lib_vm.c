@@ -399,14 +399,12 @@ uint32_t lib$delete_vm_zone(const uint32_t *zone_id)
 
     if (zid == 0)
         return LIB$_BADZONE;  /* Cannot delete the default zone */
-    if (zid >= MAX_ZONES)
-        return LIB$_BADZONE;
 
     ensure_init();
 
     pthread_mutex_lock(&zone_table_lock);
 
-    if (!zones[zid].active) {
+    if (zid >= MAX_ZONES || !zones[zid].active) {
         pthread_mutex_unlock(&zone_table_lock);
         return LIB$_BADZONE;
     }

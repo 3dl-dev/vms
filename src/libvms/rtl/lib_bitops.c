@@ -144,6 +144,11 @@ static uint32_t bitfield_extract(const void *base, int32_t pos,
     /* Handle zero-size case */
     if (size == 0) return 0;
 
+    /* Caller must ensure base_address points to memory covering at least
+     * (pos + size + 7) / 8 bytes from the base.  No bounds checking is
+     * performed here — this matches the VMS lib$extv / lib$extzv API
+     * contract which provides no extent parameter. */
+
     /* Collect up to 5 bytes spanning the field */
     int byte_start = pos / 8;
     int bit_offset = pos % 8;
@@ -253,6 +258,11 @@ uint32_t lib$insv(const int32_t *source, const int32_t *pos,
     /* Mask source value to field size */
     uint32_t field_mask = (sz == 32) ? 0xFFFFFFFFu : (uint32_t)((1u << sz) - 1u);
     val &= field_mask;
+
+    /* Caller must ensure base_address points to writable memory covering at
+     * least (*pos + *size + 7) / 8 bytes from the base.  No bounds checking
+     * is performed here — this matches the VMS lib$insv API contract which
+     * provides no extent parameter. */
 
     /* Insert bit-by-bit (simple, correct for all field sizes) */
     for (uint8_t i = 0; i < sz; i++) {

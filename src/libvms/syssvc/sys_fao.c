@@ -319,6 +319,10 @@ uint32_t sys$faol(
     if (outbuf->dsc$b_class == DSC$K_CLASS_D) {
         /* Dynamic descriptor - reallocate if needed */
         if (outbuf->dsc$w_length < output_len) {
+            /* Pass pointer directly: if realloc fails, it returns NULL and does
+             * NOT free the original buffer.  outbuf->dsc$a_pointer still holds
+             * the old (valid) pointer, so the descriptor remains consistent on
+             * the SS$_INSFMEM return path. */
             char *new_buf = (char *)realloc(outbuf->dsc$a_pointer, output_len);
             if (!new_buf) return SS$_INSFMEM;
             outbuf->dsc$a_pointer = new_buf;

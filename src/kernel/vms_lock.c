@@ -30,16 +30,7 @@
 
 #include "vms_internal.h"
 
-/* VMS status codes */
-#define SS__NORMAL      0x00000001
-#define SS__BADPARAM    0x00000014
-#define SS__NOTQUEUED   40   /* lock not queued (NOQUEUE flag) */
-#define SS__DEADLOCK    100  /* deadlock detected */
-#define SS__IVLOCKID    108  /* invalid lock ID */
-#define SS__SUBLOCKS    112  /* sublocks still held */
-#define SS__CANCELGRANT 116  /* conversion cancelled */
-#define SS__VALNOTVALID 120  /* value block not valid */
-#define SS__INSFMEM     20
+/* Status codes are in vms_internal.h */
 
 /* Lock mode compatibility matrix */
 static const uint8_t compat[6][6] = {
@@ -125,6 +116,11 @@ static void lock_insert_id(struct vms_lock_entry *entry)
 
     spin_lock(&vms_lock_id_lock);
     entry->lkid = vms_next_lock_id++;
+    /* Lock ID 0 is invalid — skip it on wraparound */
+    if (vms_next_lock_id == 0) {
+        pr_warn("vms_lock: lock ID counter wrapped around\n");
+        vms_next_lock_id = 1;
+    }
 
     p = &vms_lock_id_tree.rb_node;
     while (*p) {
@@ -207,6 +203,12 @@ static void resource_release(struct vms_lock_resource *res)
     int i, has_valblk = 0;
 
     spin_lock(&vms_res_hash_lock);
+    if (res->refcount <= 0) {
+        pr_warn("vms_lock: resource_release on already-zero refcount for '%s'\n",
+                res->name);
+        spin_unlock(&vms_res_hash_lock);
+        return;
+    }
     res->refcount--;
     if (res->refcount <= 0 && list_empty(&res->granted) && list_empty(&res->waiting)) {
         /* Preserve resource if it has a non-zero value block */
@@ -256,6 +258,11 @@ static int lock_compatible(struct vms_lock_resource *res,
  * Walk the wait-for graph: lock waits for resource -> resource has
  * granted locks -> those locks' processes may be waiting for other
  * resources -> etc. If we cycle back to the original process, deadlock.
+ *
+ * Limitation: depth-based cutoff (MAX_DEADLOCK_DEPTH) means we may
+ * report a false deadlock in very deep wait chains. A complete solution
+ * would require visited-set tracking across the full graph traversal,
+ * but this is acceptable for typical lock depths in VMS workloads.
  */
 static int check_deadlock(struct vms_lock_entry *lock, int depth)
 {
@@ -269,6 +276,10 @@ static int check_deadlock(struct vms_lock_entry *lock, int depth)
     list_for_each_entry(granted, &res->granted, res_granted) {
         if (compat[lock->requested_mode][granted->granted_mode])
             continue;  /* This one doesn't block us */
+
+        /* Null check: proc may be NULL if lock is being cleaned up */
+        if (!granted->proc)
+            continue;
 
         /* Does this process's owner hold a lock that's waiting? */
         struct vms_lock_entry *their_lock;
@@ -343,8 +354,10 @@ static void notify_blocking_asts(struct vms_lock_resource *res,
             struct vms_ast_state *ast_state;
 
             ast = kmalloc(sizeof(*ast), GFP_ATOMIC);
-            if (!ast)
+            if (!ast) {
+                pr_warn_ratelimited("vms_lock: failed to allocate blocking AST\n");
                 continue;
+            }
 
             ast->astadr = granted->blkastadr;
             ast->astprm = granted->lkid;
@@ -418,6 +431,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
 
+    memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
@@ -565,6 +579,7 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
 
+    memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
@@ -624,6 +639,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
 
+    memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
@@ -711,6 +727,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
     struct vms_getlki_args args;
     struct vms_lock_entry *lock;
 
+    memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 

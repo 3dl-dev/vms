@@ -20,6 +20,7 @@
 #include <linux/slab.h>
 #include <linux/hashtable.h>
 #include <linux/rbtree.h>
+#include <linux/capability.h>
 
 #include "vms_internal.h"
 
@@ -78,6 +79,16 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
     proc->linux_pid = pid;
     proc->vms_pid = vms_pid;
     proc->current_mode = PSL_C_USER;    /* start in user mode */
+
+    /*
+     * Privilege escalation guard: only CAP_SYS_ADMIN processes may request
+     * arbitrary privileges. Non-privileged processes are clamped to the safe
+     * default set (TMPMBX | NETMBX) regardless of what they pass in.
+     */
+    if (!capable(CAP_SYS_ADMIN)) {
+        /* Non-root processes get a restricted default privilege set */
+        init_privs &= VMS_DEFAULT_PRIVS;
+    }
     proc->cur_privs = init_privs;
     proc->perm_privs = init_privs;
     spin_lock_init(&proc->mode_lock);
@@ -153,6 +164,7 @@ static long vms_ioctl_register(unsigned long arg)
     struct vms_register_args args;
     struct vms_proc *proc;
 
+    memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
@@ -201,7 +213,7 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     case VMS_IOCTL_SETAST:
         return vms_ioctl_setast(proc, arg);
     case VMS_IOCTL_DELIVERAST:
-        return vms_ioctl_deliverast(proc);
+        return vms_ioctl_deliverast(proc, arg);
 
     /* Event flags (3c) */
     case VMS_IOCTL_SETEF:

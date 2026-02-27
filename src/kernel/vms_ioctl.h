@@ -89,7 +89,10 @@ struct vms_setast_args {
 
 #define VMS_IOCTL_DCLAST      _IOW(VMS_IOC_MAGIC, 0x10, struct vms_ast_args)
 #define VMS_IOCTL_SETAST      _IOWR(VMS_IOC_MAGIC, 0x11, struct vms_setast_args)
-#define VMS_IOCTL_DELIVERAST  _IO(VMS_IOC_MAGIC, 0x12)
+/* DELIVERAST: userspace passes a pointer to a vms_ast_args buffer to receive
+ * the next pending AST. Changed from _IO to _IOR so the ioctl arg carries the
+ * userspace buffer address instead of being ignored. */
+#define VMS_IOCTL_DELIVERAST  _IOR(VMS_IOC_MAGIC, 0x12, struct vms_ast_args)
 
 /* ================================================================
  * Event Flags (3c)

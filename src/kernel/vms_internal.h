@@ -21,6 +21,34 @@
 #include "vms_ioctl.h"
 
 /* ================================================================
+ * VMS status codes (canonical definitions — do not redefine in .c files)
+ * ================================================================ */
+
+#define SS__NORMAL      0x00000001
+#define SS__BADPARAM    0x00000014
+#define SS__NOPRIV      0x00000024
+#define SS__ACCVIO      0x0000000C
+#define SS__INSFMEM     0x00000014  /* insufficient memory */
+#define SS__EXASTLM     0x00000038  /* AST quota exceeded */
+#define SS__WASSET      9           /* flag/AST was enabled/set */
+#define SS__WASCLR      5           /* flag/AST was disabled/clear */
+#define SS__ILLEFC      44          /* illegal event flag number */
+#define SS__UNASEFC     48          /* unassociated common EFC */
+#define SS__NOTQUEUED   40          /* lock not queued (NOQUEUE flag) */
+#define SS__DEADLOCK    100         /* deadlock detected */
+#define SS__IVLOCKID    108         /* invalid lock ID */
+#define SS__SUBLOCKS    112         /* sublocks still held */
+#define SS__CANCELGRANT 116         /* conversion cancelled */
+#define SS__VALNOTVALID 120         /* value block not valid */
+
+/*
+ * Default privilege set for non-CAP_SYS_ADMIN processes.
+ * Allows basic operational use (mailboxes, networking) without
+ * granting any mode-change or bypass privileges.
+ */
+#define VMS_DEFAULT_PRIVS   ((1ULL << 7) | (1ULL << 8))  /* TMPMBX | NETMBX */
+
+/* ================================================================
  * Per-process VMS state
  *
  * Allocated on VMS_IOCTL_REGISTER, looked up by Linux pid.
@@ -169,7 +197,7 @@ long vms_ioctl_chkpriv(struct vms_proc *proc, unsigned long arg);
 /* AST delivery (3b) */
 long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setast(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_deliverast(struct vms_proc *proc);
+long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg);
 
 /* Event flags (3c) */
 long vms_ioctl_setef(struct vms_proc *proc, unsigned long arg);

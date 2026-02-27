@@ -17,8 +17,9 @@
  * modes. Each mode can independently enable/disable delivery.
  *
  * Delivery mechanism:
- *   Userspace calls DELIVERAST ioctl. Kernel picks the highest-priority
- *   enabled AST and returns {astadr, astprm, acmode}. Userspace runtime
+ *   Userspace calls DELIVERAST ioctl with a pointer to a vms_ast_args
+ *   buffer. Kernel picks the highest-priority enabled AST and writes
+ *   {astadr, astprm, acmode} into that buffer. Userspace runtime
  *   dispatches the call. This avoids signal-based delivery (no SIGUSR1).
  *
  *   For interrupt-driven delivery, the kernel can also send a real-time
@@ -32,14 +33,7 @@
 
 #include "vms_internal.h"
 
-/* VMS status codes */
-#define SS__NORMAL      0x00000001
-#define SS__BADPARAM    0x00000014
-#define SS__EXASTLM    0x00000038  /* AST quota exceeded */
-#define SS__WASSET      9   /* AST was enabled */
-#define SS__WASCLR      5   /* AST was disabled */
-#define SS__NOPRIV      0x00000024
-#define SS__INSFMEM     0x00000014  /* insufficient memory (overloaded) */
+/* Status codes are in vms_internal.h */
 
 /* Privilege bits */
 #define PRV_M_CMKRNL    (1ULL << 0)
@@ -62,6 +56,7 @@ long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg)
     struct vms_ast_entry *entry;
     struct vms_ast_state *ast_state;
 
+    memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
@@ -137,6 +132,7 @@ long vms_ioctl_setast(struct vms_proc *proc, unsigned long arg)
     struct vms_ast_state *ast_state;
     uint8_t mode;
 
+    memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
@@ -165,13 +161,14 @@ long vms_ioctl_setast(struct vms_proc *proc, unsigned long arg)
  * Scans from kernel mode (0) to user mode (3), returning the first
  * AST from an enabled queue. The AST is removed from the kernel queue.
  *
- * Returns the AST entry via the shared vms_ast_args structure.
- * If no ASTs are pending, returns status indicating nothing to deliver.
+ * The ioctl arg is a userspace pointer to a vms_ast_args buffer.
+ * The buffer is filled with {astadr, astprm, acmode, status=SS$_NORMAL}.
+ * If no ASTs are pending, returns -EAGAIN without touching the buffer.
  *
  * This is the polling interface. The kernel can also proactively
  * notify via signals when ASTs are queued (future enhancement).
  */
-long vms_ioctl_deliverast(struct vms_proc *proc)
+long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_ast_args args;
     struct vms_ast_entry *entry;
@@ -196,18 +193,15 @@ long vms_ioctl_deliverast(struct vms_proc *proc)
         ast_state->count--;
         spin_unlock(&ast_state->lock);
 
-        /* Return to userspace */
+        /* Fill buffer and return to userspace via the ioctl arg pointer */
         args.astadr = entry->astadr;
         args.astprm = entry->astprm;
         args.acmode = entry->acmode;
         args.status = SS__NORMAL;
         kfree(entry);
 
-        if (copy_to_user((void __user *)current->stack, &args, sizeof(args)))
+        if (copy_to_user((void __user *)arg, &args, sizeof(args)))
             return -EFAULT;
-        /* Actually we need a user pointer -- use the ioctl arg mechanism.
-         * DELIVERAST is _IO (no arg), so we return via the ioctl return value
-         * encoding, or we change it to _IOR. For now, return 0 = has AST. */
         return 0;
     }
 

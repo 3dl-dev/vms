@@ -15,9 +15,13 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <pthread.h>
 #include "rms/rms.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
+
+/* Mutex protecting internal file/stream identifier counters */
+static pthread_mutex_t rms_id_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Protection functions from vmsfs */
 extern uint16_t vmsfs_mode_to_protection(mode_t mode);
@@ -490,8 +494,10 @@ uint32_t sys$open(void *fab_ptr)
 
     /* Assign an internal file identifier */
     static uint16_t next_ifi = 1;
+    pthread_mutex_lock(&rms_id_lock);
     fab->fab$w_ifi = next_ifi++;
     if (next_ifi == 0) next_ifi = 1;
+    pthread_mutex_unlock(&rms_id_lock);
 
     fab->fab$l_sts = RMS$_NORMAL;
     fab->fab$l_stv = 0;
@@ -589,8 +595,10 @@ uint32_t sys$create(void *fab_ptr)
 
     /* Assign IFI */
     static uint16_t create_ifi = 1;
+    pthread_mutex_lock(&rms_id_lock);
     fab->fab$w_ifi = create_ifi++;
     if (create_ifi == 0) create_ifi = 1;
+    pthread_mutex_unlock(&rms_id_lock);
 
     fab->fab$l_sts = RMS$_CREATED;
     fab->fab$l_stv = 0;
@@ -737,8 +745,10 @@ uint32_t sys$connect(void *rab_ptr)
 
     /* Assign an internal stream identifier */
     static uint16_t next_isi = 1;
+    pthread_mutex_lock(&rms_id_lock);
     rab->rab$w_isi = next_isi++;
     if (next_isi == 0) next_isi = 1;
+    pthread_mutex_unlock(&rms_id_lock);
 
     /* If RAB$M_EOF is set, position to end of file */
     if (rab->rab$l_rop & RAB$M_EOF) {

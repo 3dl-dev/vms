@@ -289,7 +289,7 @@ static void btree_split_child(btree_node_t *parent, int idx)
     /* Copy upper half of keys to new node */
     new_node->num_keys = child->num_keys - mid - 1;
     for (int j = 0; j < new_node->num_keys; j++) {
-        memcpy(new_node->keys[j], child->keys[mid + 1 + j], MAX_KEY_SIZE);
+        memcpy(new_node->keys[j], child->keys[mid + 1 + j], child->key_lens[mid + 1 + j]);
         new_node->key_lens[j] = child->key_lens[mid + 1 + j];
         new_node->offsets[j] = child->offsets[mid + 1 + j];
     }
@@ -302,13 +302,13 @@ static void btree_split_child(btree_node_t *parent, int idx)
 
     /* Insert median key into parent */
     for (int j = parent->num_keys; j > idx; j--) {
-        memcpy(parent->keys[j], parent->keys[j - 1], MAX_KEY_SIZE);
+        memcpy(parent->keys[j], parent->keys[j - 1], parent->key_lens[j - 1]);
         parent->key_lens[j] = parent->key_lens[j - 1];
         parent->offsets[j] = parent->offsets[j - 1];
         parent->children[j + 1] = parent->children[j];
     }
 
-    memcpy(parent->keys[idx], child->keys[mid], MAX_KEY_SIZE);
+    memcpy(parent->keys[idx], child->keys[mid], child->key_lens[mid]);
     parent->key_lens[idx] = child->key_lens[mid];
     parent->offsets[idx] = child->offsets[mid];
     parent->children[idx + 1] = new_node;
@@ -352,7 +352,7 @@ static int btree_insert(btree_t *tree, btree_node_t *node,
 
         /* Shift keys right */
         for (int j = node->num_keys; j > i; j--) {
-            memcpy(node->keys[j], node->keys[j - 1], MAX_KEY_SIZE);
+            memcpy(node->keys[j], node->keys[j - 1], node->key_lens[j - 1]);
             node->key_lens[j] = node->key_lens[j - 1];
             node->offsets[j] = node->offsets[j - 1];
         }
@@ -399,7 +399,7 @@ static int btree_remove(btree_t *tree, btree_node_t *node,
         if (cmp == 0) {
             /* Found - remove by shifting left */
             for (int j = i; j < node->num_keys - 1; j++) {
-                memcpy(node->keys[j], node->keys[j + 1], MAX_KEY_SIZE);
+                memcpy(node->keys[j], node->keys[j + 1], node->key_lens[j + 1]);
                 node->key_lens[j] = node->key_lens[j + 1];
                 node->offsets[j] = node->offsets[j + 1];
                 if (!node->leaf) {

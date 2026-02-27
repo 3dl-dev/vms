@@ -126,7 +126,12 @@ uint32_t sys$parse(void *fab_ptr)
     }
     if (dcolon) {
         nam->nam$l_node = p;
-        nam->nam$b_node = (uint8_t)(dcolon - p + 2);  /* Include :: */
+        size_t node_len = (size_t)(dcolon - p + 2);  /* Include :: */
+        if (node_len > 255) {
+            fab->fab$l_sts = RMS$_FNM;
+            return RMS$_FNM;
+        }
+        nam->nam$b_node = (uint8_t)node_len;
         nam->nam$l_fnb |= NAM$M_NODE;
         p = dcolon + 2;
     }
@@ -143,7 +148,12 @@ uint32_t sys$parse(void *fab_ptr)
     }
     if (colon) {
         nam->nam$l_dev = p;
-        nam->nam$b_dev = (uint8_t)(colon - p + 1);  /* Include : */
+        size_t dev_len = (size_t)(colon - p + 1);  /* Include : */
+        if (dev_len > 255) {
+            fab->fab$l_sts = RMS$_FNM;
+            return RMS$_FNM;
+        }
+        nam->nam$b_dev = (uint8_t)dev_len;
         nam->nam$l_fnb |= NAM$M_EXP_DEV;
         p = colon + 1;
     }
@@ -156,7 +166,12 @@ uint32_t sys$parse(void *fab_ptr)
         }
         if (bracket) {
             nam->nam$l_dir = p;
-            nam->nam$b_dir = (uint8_t)(bracket - p + 1);  /* Include [] */
+            size_t dir_len = (size_t)(bracket - p + 1);  /* Include [] */
+            if (dir_len > 255) {
+                fab->fab$l_sts = RMS$_FNM;
+                return RMS$_FNM;
+            }
+            nam->nam$b_dir = (uint8_t)dir_len;
             nam->nam$l_fnb |= NAM$M_EXP_DIR;
 
             /* Check for wildcards in directory */
@@ -188,7 +203,12 @@ uint32_t sys$parse(void *fab_ptr)
     char *name_finish = dot ? dot : name_end;
     if (name_finish > name_start) {
         nam->nam$l_name = name_start;
-        nam->nam$b_name = (uint8_t)(name_finish - name_start);
+        size_t name_len = (size_t)(name_finish - name_start);
+        if (name_len > 255) {
+            fab->fab$l_sts = RMS$_FNM;
+            return RMS$_FNM;
+        }
+        nam->nam$b_name = (uint8_t)name_len;
         nam->nam$l_fnb |= NAM$M_EXP_NAME;
 
         /* Check for wildcards in name */
@@ -203,7 +223,12 @@ uint32_t sys$parse(void *fab_ptr)
     /* Type component (includes the dot) */
     if (dot) {
         nam->nam$l_type = dot;
-        nam->nam$b_type = (uint8_t)(name_end - dot);
+        size_t type_len = (size_t)(name_end - dot);
+        if (type_len > 255) {
+            fab->fab$l_sts = RMS$_FNM;
+            return RMS$_FNM;
+        }
+        nam->nam$b_type = (uint8_t)type_len;
         nam->nam$l_fnb |= NAM$M_EXP_TYPE;
 
         /* Check for wildcards in type */
@@ -218,7 +243,12 @@ uint32_t sys$parse(void *fab_ptr)
     /* Version component (includes the semicolon) */
     if (semi) {
         nam->nam$l_ver = semi;
-        nam->nam$b_ver = (uint8_t)(end - semi);
+        size_t ver_len = (size_t)(end - semi);
+        if (ver_len > 255) {
+            fab->fab$l_sts = RMS$_FNM;
+            return RMS$_FNM;
+        }
+        nam->nam$b_ver = (uint8_t)ver_len;
         nam->nam$l_fnb |= NAM$M_EXP_VER;
 
         /* Check for wildcard version ;* */

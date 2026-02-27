@@ -39,6 +39,7 @@ if(SSH_CLIENT_AVAILABLE)
     set_tests_properties(vmsssh_integration PROPERTIES
         LABELS "integration;ssh;docker"
         TIMEOUT 180
+        SKIP_RETURN_CODE 77
         ENVIRONMENT "TEST_CLIENT=${SSH_CLIENT_PATH}"
     )
 endif()

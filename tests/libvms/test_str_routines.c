@@ -34,11 +34,7 @@ static struct dsc$descriptor_s make_s(const char *s)
     return d;
 }
 
-/* Helper: extract C string from descriptor (null-terminates into buf) */
-static const char *desc_str(const struct dsc$descriptor_s *d, char *buf, size_t bufsz)
-{
-    return vms_desc_to_cstr(d, buf, bufsz);
-}
+
 
 /* ------------------------------------------------------------------ */
 /* str$copy_dx — static → static                                       */

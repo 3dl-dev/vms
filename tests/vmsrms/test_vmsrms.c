@@ -246,7 +246,7 @@ static void test_open_close(void)
 
     /* Clean up */
     unlink(resolved_open);
-    char meta2[300]; snprintf(meta2, sizeof(meta2), "%s.rms_meta", resolved_open);
+    char meta2[1100]; snprintf(meta2, sizeof(meta2), "%s.rms_meta", resolved_open);
     unlink(meta2);
 
     /* Try to open a non-existent file */

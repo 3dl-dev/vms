@@ -16,6 +16,12 @@
 
 set -euo pipefail
 
+# Skip gracefully if Docker is not available (e.g. running inside a container)
+if ! docker info >/dev/null 2>&1; then
+    echo "SKIP: Docker not available — vmsssh integration tests require Docker"
+    exit 77  # CTest SKIP_RETURN_CODE
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 

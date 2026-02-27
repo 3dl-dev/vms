@@ -162,6 +162,8 @@ int vmsfs_resolve_path_case(const char *full_path, char *resolved, size_t resolv
                 if (cur_len + 1 + strlen(found_name) < sizeof(current_dir)) {
                     current_dir[cur_len] = '/';
                     strcpy(current_dir + cur_len + 1, found_name);
+                } else {
+                    return -1;  /* path too long */
                 }
             }
         } else {
@@ -174,6 +176,8 @@ int vmsfs_resolve_path_case(const char *full_path, char *resolved, size_t resolv
                     current_dir[cur_len] = '/';
                     memcpy(current_dir + cur_len + 1, component, clen);
                     current_dir[cur_len + 1 + clen] = '\0';
+                } else {
+                    return -1;  /* path too long */
                 }
             }
         }

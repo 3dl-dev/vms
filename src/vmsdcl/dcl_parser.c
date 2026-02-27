@@ -109,9 +109,6 @@ static int parse_qualifier(dcl_lexer_t *lex, dcl_token_t *tok,
                         memcpy(q->value + vi, item.value, slen);
                         vi += slen;
                     }
-                    if (item.type == TOK_COMMA && vi < sizeof(q->value) - 1) {
-                        /* comma already in value from item */
-                    }
                 }
                 if (vi < sizeof(q->value) - 1) q->value[vi++] = ')';
                 q->value[vi] = '\0';
@@ -361,14 +358,10 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
  */
 int dcl_has_qualifier(const struct dcl_command *cmd, const char *name)
 {
+    if (!cmd || !name) return 0;
     for (int i = 0; i < cmd->qualifier_count; i++) {
         if (strcasecmp(cmd->qualifiers[i].name, name) == 0) {
             return cmd->qualifiers[i].negated ? 0 : 1;
-        }
-        /* Also check if a /NONAME negates this qualifier */
-        if (cmd->qualifiers[i].negated &&
-            strcasecmp(cmd->qualifiers[i].name, name) == 0) {
-            return 0;
         }
     }
     return 0;
@@ -379,6 +372,7 @@ int dcl_has_qualifier(const struct dcl_command *cmd, const char *name)
  */
 const char *dcl_qualifier_value(const struct dcl_command *cmd, const char *name)
 {
+    if (!cmd || !name) return NULL;
     for (int i = 0; i < cmd->qualifier_count; i++) {
         if (strcasecmp(cmd->qualifiers[i].name, name) == 0) {
             if (cmd->qualifiers[i].value[0] != '\0')

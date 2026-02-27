@@ -494,6 +494,12 @@ int main(int argc, char *argv[])
                         memcpy(combined + curlen + 1, cp, contlen + 1);
                         free(line);
                         line = combined;
+                    } else {
+                        /* malloc failed: restore the trailing dash that was
+                         * removed above so the line is not silently truncated */
+                        line[end - 1] = '-';
+                        free(cont);
+                        break;
                     }
                     free(cont);
                 } else {

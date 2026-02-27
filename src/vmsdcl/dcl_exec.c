@@ -844,7 +844,9 @@ static int exec_assign(struct dcl_context *ctx, struct dcl_command *cmd)
                 dcl_sym_set_int(cmd->verb, (int32_t)result.ival, scope);
             }
         } else {
-            /* Simple value: perform symbol substitution, then assign */
+            /* Simple value: perform symbol substitution, then assign.
+             * Note: eval_expr (above) also calls dcl_sym_substitute internally,
+             * but that is a separate branch — no double substitution occurs here. */
             char subst[DCL_MAX_VALUE];
             dcl_sym_substitute(trimmed, subst, sizeof(subst));
 

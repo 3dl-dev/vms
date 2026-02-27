@@ -43,7 +43,6 @@ set(VMS_RMS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/vmsrms/include)
 set(VMS_FS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/vmsfs/include)
 set(VMS_LNM_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/vmslnm/include)
 set(VMS_PROCESS_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/vmsprocess/include)
-set(VMS_DCL_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src/vmsdcl/include)
 
 # Options
 option(BUILD_TESTS "Build test programs" ON)
@@ -60,8 +59,6 @@ else()
 endif()
 
 # Find required packages
-find_package(FLEX)
-find_package(BISON)
 find_package(Threads REQUIRED)
 
 if(BUILD_TESTS)

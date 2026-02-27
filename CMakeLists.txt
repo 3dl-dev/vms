@@ -74,6 +74,14 @@ add_subdirectory(src/libvms)
 add_subdirectory(src/vmsrms)
 add_subdirectory(src/vmsdcl)
 
+if(BUILD_TESTS)
+    add_subdirectory(tests/libvms)
+    add_subdirectory(tests/vmsprocess)
+    add_subdirectory(tests/vmslnm)
+    add_subdirectory(tests/vmsfs)
+    add_subdirectory(tests/vmsrms)
+endif()
+
 # vmssshd requires libssh — skip if headers not available
 find_path(LIBSSH_INCLUDE_DIR NAMES libssh/libssh.h)
 find_library(LIBSSH_LIBRARY NAMES ssh)

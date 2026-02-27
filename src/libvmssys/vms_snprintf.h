@@ -11,6 +11,7 @@ int vms_vsnprintf(char *buf, vms_size_t size, const char *fmt, va_list ap);
 int vms_snprintf(char *buf, vms_size_t size, const char *fmt, ...)
     __attribute__((format(printf, 3, 4)));
 int vms_sprintf(char *buf, const char *fmt, ...)
-    __attribute__((format(printf, 2, 3)));
+    __attribute__((format(printf, 2, 3)))
+    __attribute__((deprecated("Use vms_snprintf instead")));
 
 #endif /* _VMS_SNPRINTF_H */

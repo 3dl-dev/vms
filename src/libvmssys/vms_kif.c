@@ -9,8 +9,10 @@
 #include "vms_syscall.h"
 #include "vms_string.h"
 
-/* File descriptor for /dev/vms */
-static int vms_dev_fd = -1;
+/* File descriptor for /dev/vms — thread-local so each thread opens/closes
+ * independently.  Callers must invoke vms_kif_open() before using any KIF
+ * function and vms_kif_close() when done, once per thread. */
+static __thread int vms_dev_fd = -1;
 
 /* ================================================================
  * Connection management
@@ -150,8 +152,10 @@ int vms_kif_deliverast(uint64_t *astadr, uint64_t *astprm, uint8_t *acmode)
     if (ret < 0)
         return -1;
 
-    /* DELIVERAST currently uses _IO (no data transfer).
-     * A full implementation would use _IOR to return the AST entry.
+    /* Output parameters (astadr, astprm, acmode) are part of the VMS
+     * SYS$DELIVERAST interface and must remain in the signature for API
+     * compatibility.  DELIVERAST currently uses _IO (no data transfer);
+     * a full implementation would use _IOR to return the AST entry.
      * For now, the return value indicates whether an AST was delivered. */
     (void)astadr;
     (void)astprm;

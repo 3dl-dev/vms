@@ -466,11 +466,15 @@ uint32_t str$append(struct dsc$descriptor_s *dest,
 
     struct dsc$descriptor_d *ddest = (struct dsc$descriptor_d *)dest;
 
-    uint16_t new_len = ddest->dsc$w_length + suffix->dsc$w_length;
-    char *new_buf = realloc(ddest->dsc$a_pointer, new_len);
-    if (!new_buf && new_len > 0) return SS$_INSFMEM;
+    /* Appending nothing is a no-op */
+    if (suffix->dsc$w_length == 0) return SS$_NORMAL;
 
-    if (suffix->dsc$a_pointer && suffix->dsc$w_length > 0) {
+    uint16_t new_len = ddest->dsc$w_length + suffix->dsc$w_length;
+    char *old_buf = ddest->dsc$a_pointer;
+    char *new_buf = realloc(old_buf, new_len);
+    if (!new_buf) return SS$_INSFMEM;
+
+    if (suffix->dsc$a_pointer) {
         memcpy(new_buf + ddest->dsc$w_length, suffix->dsc$a_pointer,
                suffix->dsc$w_length);
     }

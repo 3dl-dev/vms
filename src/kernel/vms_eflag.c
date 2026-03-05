@@ -29,7 +29,14 @@
 
 #include "vms_internal.h"
 
-/* Status codes are in vms_internal.h */
+/* VMS status codes */
+#define SS__NORMAL      0x00000001
+#define SS__WASSET      9
+#define SS__WASCLR      5
+#define SS__ILLEFC      44  /* illegal event flag number */
+#define SS__BADPARAM    20
+#define SS__UNASEFC     48  /* unassociated common EFC */
+#define SS__INSFMEM     20
 
 /* Global common event flag cluster list */
 LIST_HEAD(vms_common_ef_list);
@@ -376,45 +383,35 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
     /* Ensure null termination */
     args.name[31] = '\0';
 
-    /*
-     * Lock ordering: vms_common_ef_lock must be acquired BEFORE proc->ef.lock.
-     * We hold vms_common_ef_lock while searching, incrementing the refcount,
-     * and wiring the pointer into proc->ef — this prevents a concurrent free
-     * between finding the cluster and associating it with the process.
-     */
+    /* Search for existing cluster */
     spin_lock(&vms_common_ef_lock);
     list_for_each_entry(cluster, &vms_common_ef_list, list) {
         if (strncmp(cluster->name, args.name, 32) == 0) {
-            /* Found it — bump refcount while still holding the global lock */
+            /* Found it -- associate */
             cluster->refcount++;
+            spin_unlock(&vms_common_ef_lock);
 
-            /* Now acquire proc lock (nested, consistent ordering: global first) */
             spin_lock(&proc->ef.lock);
             /* Release old association if any */
             if (proc->ef.common[idx]) {
                 struct vms_common_ef_cluster *old = proc->ef.common[idx];
+                spin_lock(&vms_common_ef_lock);
                 old->refcount--;
                 if (old->refcount <= 0 && !old->perm) {
                     list_del(&old->list);
-                    /* Deferred free: drop both locks before kfree */
-                    proc->ef.common[idx] = cluster;
-                    spin_unlock(&proc->ef.lock);
-                    spin_unlock(&vms_common_ef_lock);
                     kfree(old);
-                    args.status = SS__NORMAL;
-                    goto out;
                 }
+                spin_unlock(&vms_common_ef_lock);
             }
             proc->ef.common[idx] = cluster;
             spin_unlock(&proc->ef.lock);
-            spin_unlock(&vms_common_ef_lock);
 
             args.status = SS__NORMAL;
             goto out;
         }
     }
 
-    /* Create new cluster — still holding vms_common_ef_lock */
+    /* Create new cluster */
     cluster = kzalloc(sizeof(*cluster), GFP_ATOMIC);
     if (!cluster) {
         spin_unlock(&vms_common_ef_lock);
@@ -430,12 +427,11 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
     init_waitqueue_head(&cluster->waitq);
     spin_lock_init(&cluster->lock);
     list_add_tail(&cluster->list, &vms_common_ef_list);
+    spin_unlock(&vms_common_ef_lock);
 
-    /* Wire into proc while still holding vms_common_ef_lock (consistent ordering) */
     spin_lock(&proc->ef.lock);
     proc->ef.common[idx] = cluster;
     spin_unlock(&proc->ef.lock);
-    spin_unlock(&vms_common_ef_lock);
 
     args.status = SS__NORMAL;
 

@@ -296,10 +296,17 @@ static int is_system_installed(void)
 static void provision_dirs(void)
 {
     char path[512];
+    int n;
 
     /* MFD and intermediate directories */
     mkdir(SYSDISK_MOUNT, 0755);
     vms_to_linux(VMS_SYSROOT, path, sizeof(path));
+    /* Validate path wasn't truncated before manipulating it */
+    n = (int)strlen(path);
+    if (n <= 0 || n >= (int)sizeof(path) - 1) {
+        fprintf(stderr, "%%STARTUP-E-PATHTRUNC, VMS_SYSROOT path too long\n");
+        return;
+    }
     /* Create SYS0 first, then SYS0/SYSCOMMON */
     char *last_slash = strrchr(path, '/');
     if (last_slash) {
@@ -333,15 +340,14 @@ static void provision_dirs(void)
 static void ensure_vms_binary(const char *vms_path, const char *name)
 {
     struct stat st;
-    if (lstat(vms_path, &st) == 0)
-        return;  /* Already exists */
 
     for (int i = 0; bin_search_dirs[i]; i++) {
         char path[256];
         snprintf(path, sizeof(path), "%s/%s", bin_search_dirs[i], name);
         if (stat(path, &st) == 0) {
-            symlink(path, vms_path);
-            return;
+            /* Atomic: just try symlink(), handle EEXIST */
+            if (symlink(path, vms_path) == 0 || errno == EEXIST)
+                return;
         }
     }
 }
@@ -352,15 +358,14 @@ static void ensure_vms_binary(const char *vms_path, const char *name)
 static void ensure_vms_library(const char *vms_path, const char *name)
 {
     struct stat st;
-    if (lstat(vms_path, &st) == 0)
-        return;
 
     for (int i = 0; lib_search_dirs[i]; i++) {
         char path[256];
         snprintf(path, sizeof(path), "%s/%s", lib_search_dirs[i], name);
         if (stat(path, &st) == 0) {
-            symlink(path, vms_path);
-            return;
+            /* Atomic: just try symlink(), handle EEXIST */
+            if (symlink(path, vms_path) == 0 || errno == EEXIST)
+                return;
         }
     }
 }

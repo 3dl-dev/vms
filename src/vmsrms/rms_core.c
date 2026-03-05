@@ -15,10 +15,12 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include "rms/rms.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
+#include "ovmx_layout.h"
 
 /* Mutex protecting internal file/stream identifier counters */
 static pthread_mutex_t rms_id_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -89,6 +91,65 @@ static int rms_strip_version(const char *filename, char *out, size_t outlen)
     memcpy(out, filename, len);
     out[len] = '\0';
     return 0;
+}
+
+/*
+ * rms_validate_path_boundary - Ensure a resolved path stays within VMS root.
+ *
+ * Canonicalizes the path with realpath() and verifies it starts with
+ * SYSDISK_MOUNT ("/vms"). For paths to files that don't yet exist,
+ * canonicalizes the parent directory instead.
+ *
+ * Returns 0 if the path is within the VMS root, -1 if it escapes.
+ */
+static int rms_validate_path_boundary(const char *path)
+{
+    if (!path || !path[0])
+        return -1;
+
+    /* Only validate absolute paths under VMS root */
+    if (path[0] != '/')
+        return 0;
+
+    char resolved[PATH_MAX];
+    if (realpath(path, resolved) != NULL) {
+        /* File exists — check the canonical path */
+        if (strncmp(resolved, SYSDISK_MOUNT, strlen(SYSDISK_MOUNT)) != 0)
+            return -1;
+        /* Ensure it's actually under /vms and not just /vmsXYZ */
+        size_t mount_len = strlen(SYSDISK_MOUNT);
+        if (resolved[mount_len] != '\0' && resolved[mount_len] != '/')
+            return -1;
+        return 0;
+    }
+
+    /*
+     * File doesn't exist yet (e.g., $CREATE) — canonicalize the parent
+     * directory and verify it's within the VMS root.
+     */
+    char pathcopy[PATH_MAX];
+    strncpy(pathcopy, path, sizeof(pathcopy) - 1);
+    pathcopy[sizeof(pathcopy) - 1] = '\0';
+
+    /* Find last slash to get parent directory */
+    char *last_slash = strrchr(pathcopy, '/');
+    if (!last_slash || last_slash == pathcopy) {
+        /* Root-level path or no slash — not under /vms */
+        return -1;
+    }
+    *last_slash = '\0';
+
+    if (realpath(pathcopy, resolved) != NULL) {
+        if (strncmp(resolved, SYSDISK_MOUNT, strlen(SYSDISK_MOUNT)) != 0)
+            return -1;
+        size_t mount_len = strlen(SYSDISK_MOUNT);
+        if (resolved[mount_len] != '\0' && resolved[mount_len] != '/')
+            return -1;
+        return 0;
+    }
+
+    /* Parent doesn't exist either — reject */
+    return -1;
 }
 
 /* Get next version number for a file in a directory */
@@ -237,8 +298,11 @@ static int resolve_filename(struct FAB *fab)
         }
     }
 
-    /* Check if it's a VMS filespec (contains : or [ or ;) */
-    if (strchr(spec, ':') || strchr(spec, '[') || strchr(spec, ';')) {
+    /* Check if it's a VMS filespec (contains : or [ — true VMS indicators).
+     * A lone ';' (version number) is handled by the VMS translation path
+     * but does NOT indicate a user-supplied VMS filespec for security purposes. */
+    int is_vms_spec = (strchr(spec, ':') != NULL || strchr(spec, '[') != NULL);
+    if (is_vms_spec || strchr(spec, ';')) {
         char linux_path[1024];
         if (vmsfs_to_linux_path(spec, linux_path, sizeof(linux_path)) == 0) {
             strncpy(fab->_resolved_path, linux_path,
@@ -249,7 +313,18 @@ static int resolve_filename(struct FAB *fab)
                     sizeof(fab->_resolved_path) - 1);
             fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
         }
+        /* Security: verify VMS-translated paths stay within VMS root.
+         * Only enforce boundary for true VMS filespecs (with : or [),
+         * not for paths that just have a version number (;N). */
+        if (is_vms_spec && fab->_resolved_path[0] == '/' &&
+            rms_validate_path_boundary(fab->_resolved_path) != 0) {
+            fab->_resolved_path[0] = '\0';
+            return -1;
+        }
     } else {
+        /* Raw Linux path (no VMS translation) — pass through without
+         * boundary check since this is a direct path, not user-supplied
+         * VMS filespec that could contain traversal tricks. */
         strncpy(fab->_resolved_path, spec,
                 sizeof(fab->_resolved_path) - 1);
         fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';

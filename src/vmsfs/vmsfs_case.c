@@ -20,10 +20,13 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <limits.h>
+#include <unistd.h>
 
 #include "vmsfs/filespec.h"
 #include "ssdef.h"
 #include "rmsdef.h"
+#include "ovmx_layout.h"
 
 /*
  * vmsfs_find_case_insensitive - Case-insensitive file lookup in a directory.
@@ -146,6 +149,14 @@ int vmsfs_resolve_path_case(const char *full_path, char *resolved, size_t resolv
         component[clen] = '\0';
 
         /*
+         * Security: reject ".." components to prevent path traversal
+         * escaping the VMS filesystem root.
+         */
+        if (strcmp(component, "..") == 0) {
+            return -1;
+        }
+
+        /*
          * Look up this component case-insensitively in current_dir.
          * If we find a match, use the actual name. Otherwise, keep
          * the original component as-is (it might not exist yet).
@@ -162,8 +173,6 @@ int vmsfs_resolve_path_case(const char *full_path, char *resolved, size_t resolv
                 if (cur_len + 1 + strlen(found_name) < sizeof(current_dir)) {
                     current_dir[cur_len] = '/';
                     strcpy(current_dir + cur_len + 1, found_name);
-                } else {
-                    return -1;  /* path too long */
                 }
             }
         } else {
@@ -176,10 +185,26 @@ int vmsfs_resolve_path_case(const char *full_path, char *resolved, size_t resolv
                     current_dir[cur_len] = '/';
                     memcpy(current_dir + cur_len + 1, component, clen);
                     current_dir[cur_len + 1 + clen] = '\0';
-                } else {
-                    return -1;  /* path too long */
                 }
             }
+        }
+
+        /*
+         * Security: after resolving each component, verify the path
+         * has not escaped the VMS filesystem boundary via symlinks.
+         * Only check paths that start under SYSDISK_MOUNT.
+         */
+        if (strncmp(full_path, SYSDISK_MOUNT, strlen(SYSDISK_MOUNT)) == 0) {
+            char canonical[PATH_MAX];
+            if (realpath(current_dir, canonical) != NULL) {
+                size_t mount_len = strlen(SYSDISK_MOUNT);
+                if (strncmp(canonical, SYSDISK_MOUNT, mount_len) != 0 ||
+                    (canonical[mount_len] != '\0' && canonical[mount_len] != '/')) {
+                    return -1;
+                }
+            }
+            /* If realpath fails (path doesn't exist yet), allow it through —
+             * the subsequent open/create will fail naturally. */
         }
 
         /* Advance past this component */

@@ -3628,18 +3628,30 @@ static int cmd_run(struct dcl_command *cmd)
  */
 static int cmd_spawn(struct dcl_command *cmd)
 {
-    /* If params given, execute as a shell command */
+    /* If params given, execute via fork/execvp (avoids shell injection) */
     if (cmd->param_count >= 1 && cmd->params[0][0] != '\0') {
-        /* Build the command string */
-        char shell_cmd[DCL_MAX_LINE] = {0};
-        for (int i = 0; i < cmd->param_count; i++) {
-            if (i > 0) strncat(shell_cmd, " ",
-                                sizeof(shell_cmd) - strlen(shell_cmd) - 1);
-            strncat(shell_cmd, cmd->params[i],
-                    sizeof(shell_cmd) - strlen(shell_cmd) - 1);
+        /* Build a NULL-terminated argv array from params */
+        char *argv[DCL_MAX_PARAMS + 1];
+        for (int i = 0; i < cmd->param_count; i++)
+            argv[i] = cmd->params[i];
+        argv[cmd->param_count] = NULL;
+
+        pid_t pid = fork();
+        if (pid == 0) {
+            /* Child: exec directly, no shell interpretation */
+            execvp(argv[0], argv);
+            fprintf(stderr, "%%DCL-E-CREPRC, cannot execute - %s\n", argv[0]);
+            _exit(127);
+        } else if (pid > 0) {
+            int wstatus;
+            waitpid(pid, &wstatus, 0);
+            if (WIFEXITED(wstatus))
+                return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
+            return SS$_ABORT;
+        } else {
+            dcl_error("DCL", 4, "CREPRC", "cannot create process");
+            return SS$_ABORT;
         }
-        int ret = system(shell_cmd);
-        return (ret == 0) ? SS$_NORMAL : SS$_ABORT;
     }
 
     /* No params - spawn an interactive shell */
@@ -3683,8 +3695,26 @@ static int cmd_pipe(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    int ret = system(shell_cmd);
-    return (ret == 0) ? SS$_NORMAL : SS$_ABORT;
+    /*
+     * PIPE intentionally uses /bin/sh for shell interpretation (piping,
+     * redirection). This is by design — PIPE is the VMS command for
+     * delegating to the host shell. We use fork/exec instead of system()
+     * to avoid system()'s signal handler side effects (SIGCHLD/SIGINT).
+     */
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl("/bin/sh", "sh", "-c", shell_cmd, (char *)NULL);
+        _exit(127);
+    } else if (pid > 0) {
+        int wstatus;
+        waitpid(pid, &wstatus, 0);
+        if (WIFEXITED(wstatus))
+            return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
+        return SS$_ABORT;
+    } else {
+        dcl_error("DCL", 4, "CREPRC", "cannot create process");
+        return SS$_ABORT;
+    }
 }
 
 /*

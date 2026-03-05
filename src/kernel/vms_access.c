@@ -22,7 +22,11 @@
 #define PRV_M_CMEXEC    (1ULL << 1)
 #define PRV_M_SETPRV    (1ULL << 5)
 
-/* Status codes are in vms_internal.h */
+/* VMS status codes */
+#define SS__NORMAL      0x00000001
+#define SS__NOPRIV      0x00000024
+#define SS__BADPARAM    0x00000014
+#define SS__ACCVIO      0x0000000C
 
 /*
  * vms_ioctl_setmode - Set access mode (VMS $SETMOD equivalent)
@@ -91,6 +95,7 @@ long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_getmode_args args;
 
+    memset(&args, 0, sizeof(args));
     spin_lock(&proc->mode_lock);
     args.mode = proc->current_mode;
     args.cur_privs = proc->cur_privs;

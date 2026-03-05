@@ -32,7 +32,7 @@ target_compile_definitions(vmsdcl PRIVATE
 )
 
 # Core link libraries
-target_link_libraries(vmsdcl PRIVATE pthread vms vmsfs vmsprocess vmslnm)
+target_link_libraries(vmsdcl PRIVATE pthread vms vmsfs vmsprocess vmslnm vmsqueue)
 
 # Try to find readline for better interactive experience (skip for static builds)
 if(NOT OVMX_STATIC)

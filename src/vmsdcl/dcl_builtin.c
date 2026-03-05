@@ -48,6 +48,7 @@
 #include "vmsfs/filespec.h"
 #include "dcl/vms_messages.h"
 #include "vms/pcb.h"
+#include "vmsqueue.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -97,6 +98,11 @@ static const char *vms_months[] = {
 /* Forward declarations for helper functions used by cmd_show_process */
 static int cmd_show_process_privileges(struct dcl_context *ctx);
 static int cmd_show_process_quotas(struct dcl_context *ctx);
+
+/* Forward declarations for queue commands (defined after PRINT/SUBMIT) */
+static int ensure_queue_init(void);
+static int cmd_show_queue(struct dcl_command *cmd);
+static int cmd_set_entry(struct dcl_command *cmd);
 
 /*
  * SHOW TIME - Display current date and time in VMS format.
@@ -1097,6 +1103,8 @@ static int cmd_show(struct dcl_command *cmd)
         return cmd_show_quota(cmd);
     if (dcl_match_command(subcmd, "ROOT", 3))
         return cmd_show_root(cmd);
+    if (dcl_match_command(subcmd, "QUEUE", 3))
+        return cmd_show_queue(cmd);
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SHOW keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;
@@ -2044,6 +2052,8 @@ static int cmd_set(struct dcl_command *cmd)
         return cmd_set_accounting(cmd);
     if (dcl_match_command(subcmd, "VOLUME", 3))
         return cmd_set_volume(cmd);
+    if (dcl_match_command(subcmd, "ENTRY", 3))
+        return cmd_set_entry(cmd);
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SET keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;
@@ -2435,6 +2445,32 @@ static int cmd_copy(struct dcl_command *cmd)
 static int cmd_delete(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
+
+    /* /ENTRY=n qualifier: delete a queue entry */
+    if (dcl_has_qualifier(cmd, "ENTRY")) {
+        const char *entry_str = dcl_qualifier_value(cmd, "ENTRY");
+        if (!entry_str || !entry_str[0]) {
+            dcl_error("DCL", 2, "NOENTRY", "missing entry number with /ENTRY");
+            return SS$_BADPARAM;
+        }
+        uint32_t entry_id = (uint32_t)atol(entry_str);
+        if (entry_id == 0) {
+            dcl_error("DCL", 2, "BADENTRY", "invalid entry number - %s", entry_str);
+            return SS$_BADPARAM;
+        }
+        int qsts = ensure_queue_init();
+        if (!(qsts & 1)) {
+            dcl_error("DELETE", 2, "QMANERR", "queue manager initialization failed");
+            return qsts;
+        }
+        qsts = vmsq_delete_entry(entry_id);
+        if (!(qsts & 1)) {
+            dcl_error("DELETE", 2, "ENTNOTFND", "entry %u not found", entry_id);
+            return qsts;
+        }
+        printf("%%DELETE-S-DELETED, entry %u deleted\n", entry_id);
+        return SS$_NORMAL;
+    }
 
     /* /SYMBOL qualifier: delete a symbol from the symbol table */
     if (dcl_has_qualifier(cmd, "SYMBOL")) {
@@ -3273,10 +3309,36 @@ static int cmd_sort(struct dcl_command *cmd)
 }
 
 /*
- * SUBMIT - Submit a command procedure for batch execution (stub).
- * Format: SUBMIT filespec
- * VMS SUBMIT queues a command procedure to a batch queue.
- * OVMX stub: acknowledges the command but executes synchronously.
+ * Queue initialization helper — ensures QMAN$MASTER.DAT exists and
+ * default queues (SYS$BATCH, SYS$PRINT) are created.
+ * Called lazily on first queue command.
+ */
+static int queue_initialized = 0;
+
+static int ensure_queue_init(void)
+{
+    if (queue_initialized)
+        return SS$_NORMAL;
+
+    /* Use /tmp for testing, SYS$MANAGER: in production */
+    const char *db_path = getenv("VMSQ_DB_PATH");
+    if (!db_path)
+        db_path = "/tmp/QMAN_MASTER.DAT";
+
+    int sts = vmsq_init(db_path);
+    if (sts & 1) {
+        queue_initialized = 1;
+        /* Create default queues if they don't exist (ignore DUPLNAM) */
+        vmsq_create_queue("SYS$BATCH", VMSQ_TYPE_BATCH);
+        vmsq_create_queue("SYS$PRINT", VMSQ_TYPE_PRINT);
+    }
+    return sts;
+}
+
+/*
+ * SUBMIT - Submit a command procedure for batch execution.
+ * Format: SUBMIT filespec [/QUEUE=name]
+ * Queues a command procedure to a batch queue via vmsqueue.
  */
 static int cmd_submit(struct dcl_command *cmd)
 {
@@ -3297,7 +3359,17 @@ static int cmd_submit(struct dcl_command *cmd)
         return SS$_NOSUCHFILE;
     }
 
-    /* VMS output: Job <name> (queue SYS$BATCH, entry <n>) started on queue SYS$BATCH */
+    int sts = ensure_queue_init();
+    if (!(sts & 1)) {
+        dcl_error("SUBMIT", 2, "QMANERR", "queue manager initialization failed");
+        return sts;
+    }
+
+    /* Get queue name (/QUEUE=name, default SYS$BATCH) */
+    const char *queue_name = dcl_qualifier_value(cmd, "QUEUE");
+    if (!queue_name || !queue_name[0]) queue_name = "SYS$BATCH";
+
+    /* Format job name from filename (uppercase, strip path and extension) */
     const char *bn = strrchr(cmd->params[0], ']');
     if (!bn) bn = strrchr(cmd->params[0], ':');
     if (bn) bn++; else bn = cmd->params[0];
@@ -3308,23 +3380,26 @@ static int cmd_submit(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)bn[i]);
     upper_name[i] = '\0';
 
-    /* Simulate a job number */
-    static int job_entry = 100;
-    job_entry++;
+    const char *user = ctx->username[0] ? ctx->username : "SYSTEM";
 
-    printf("Job %s (queue SYS$BATCH, entry %d) started on queue SYS$BATCH\n",
-           upper_name, job_entry);
+    uint32_t entry_id = 0;
+    sts = vmsq_submit(queue_name, upper_name, user, &entry_id);
+    if (!(sts & 1)) {
+        dcl_error("SUBMIT", 2, "SUBMITERR", "failed to submit job to queue %s",
+                  queue_name);
+        return sts;
+    }
 
-    /* Stub: in a real implementation, this would queue the job.
-     * For OVMX, we silently succeed — batch queuing not implemented. */
+    printf("%%SUBMIT-S-SUBMITTED, job %s (queue %s, entry %u) queued\n",
+           upper_name, queue_name, entry_id);
 
     return SS$_NORMAL;
 }
 
 /*
- * PRINT - Queue a file for printing (stub).
+ * PRINT - Queue a file for printing.
  * Format: PRINT filespec[,...] [/QUEUE=queue-name] [/COPIES=n]
- * VMS PRINT sends files to the print queue.
+ * Sends files to the print queue via vmsqueue.
  */
 static int cmd_print(struct dcl_command *cmd)
 {
@@ -3344,17 +3419,17 @@ static int cmd_print(struct dcl_command *cmd)
         return SS$_NOSUCHFILE;
     }
 
+    int sts = ensure_queue_init();
+    if (!(sts & 1)) {
+        dcl_error("PRINT", 2, "QMANERR", "queue manager initialization failed");
+        return sts;
+    }
+
     /* Get queue name (/QUEUE=name, default SYS$PRINT) */
     const char *queue_name = dcl_qualifier_value(cmd, "QUEUE");
     if (!queue_name || !queue_name[0]) queue_name = "SYS$PRINT";
 
-    /* Get copy count */
-    const char *copies_str = dcl_qualifier_value(cmd, "COPIES");
-    int copies = 1;
-    if (copies_str && copies_str[0]) copies = atoi(copies_str);
-    if (copies < 1) copies = 1;
-
-    /* Format filename for display */
+    /* Format filename for display (uppercase, keep extension) */
     const char *bn = strrchr(cmd->params[0], ']');
     if (!bn) bn = strrchr(cmd->params[0], ':');
     if (bn) bn++; else bn = cmd->params[0];
@@ -3365,14 +3440,156 @@ static int cmd_print(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)bn[i]);
     upper_name[i] = '\0';
 
-    static int print_entry = 200;
-    print_entry++;
+    const char *user = ctx->username[0] ? ctx->username : "SYSTEM";
 
-    printf("Job %s (queue %s, entry %d) pending\n",
-           upper_name, queue_name, print_entry);
+    uint32_t entry_id = 0;
+    sts = vmsq_submit(queue_name, upper_name, user, &entry_id);
+    if (!(sts & 1)) {
+        dcl_error("PRINT", 2, "PRINTERR", "failed to queue file to %s",
+                  queue_name);
+        return sts;
+    }
 
-    /* Stub: no actual printing implemented */
-    (void)copies;
+    printf("%%PRINT-S-QUEUED, job %s (queue %s, entry %u) queued\n",
+           upper_name, queue_name, entry_id);
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW QUEUE - Display queue status and entries.
+ * Format: SHOW QUEUE [name] [/ALL] [/FULL]
+ * Displays queue information matching VMS output format.
+ */
+static int cmd_show_queue(struct dcl_command *cmd)
+{
+    int sts = ensure_queue_init();
+    if (!(sts & 1)) {
+        dcl_error("SHOW", 2, "QMANERR", "queue manager initialization failed");
+        return sts;
+    }
+
+    int show_all = dcl_has_qualifier(cmd, "ALL");
+    int show_full = dcl_has_qualifier(cmd, "FULL");
+
+    /* Queue name is params[1] if present (params[0] is "QUEUE") */
+    const char *queue_name = NULL;
+    if (cmd->param_count >= 2 && cmd->params[1][0] != '\0')
+        queue_name = cmd->params[1];
+
+    /* If a specific queue name given, show just that queue */
+    if (queue_name) {
+        struct vms_queue qinfo;
+        sts = vmsq_show_queue(queue_name, &qinfo);
+        if (!(sts & 1)) {
+            dcl_error("SHOW", 2, "NOSUCHQUE", "no such queue - %s", queue_name);
+            return sts;
+        }
+
+        const char *type_str = qinfo.type == VMSQ_TYPE_BATCH ? "Batch" :
+                               qinfo.type == VMSQ_TYPE_PRINT ? "Printer" : "Generic";
+        const char *status_str = qinfo.status == VMSQ_STATUS_STARTED ? "started" :
+                                 qinfo.status == VMSQ_STATUS_STOPPED ? "stopped" :
+                                 qinfo.status == VMSQ_STATUS_PAUSED  ? "paused" : "unknown";
+
+        printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
+
+        if (show_full || show_all) {
+            struct vms_queue_entry entries[64];
+            int count = 0;
+            vmsq_show_entries(queue_name, entries, 64, &count);
+            for (int j = 0; j < count; j++) {
+                const char *entry_status =
+                    entries[j].status == VMSQ_ENTRY_PENDING   ? "Pending" :
+                    entries[j].status == VMSQ_ENTRY_EXECUTING ? "Executing" :
+                    entries[j].status == VMSQ_ENTRY_HOLDING   ? "Holding" :
+                    entries[j].status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
+                printf("    entry %-6u %-20s %-12s %-10s\n",
+                       entries[j].entry_id, entries[j].job_name,
+                       entries[j].username, entry_status);
+            }
+        }
+    } else {
+        /* Show all queues — iterate SYS$BATCH, SYS$PRINT, then any others */
+        const char *default_queues[] = { "SYS$BATCH", "SYS$PRINT", NULL };
+
+        for (int q = 0; default_queues[q]; q++) {
+            struct vms_queue qinfo;
+            sts = vmsq_show_queue(default_queues[q], &qinfo);
+            if (!(sts & 1)) continue;
+
+            const char *type_str = qinfo.type == VMSQ_TYPE_BATCH ? "Batch" :
+                                   qinfo.type == VMSQ_TYPE_PRINT ? "Printer" : "Generic";
+            const char *status_str = qinfo.status == VMSQ_STATUS_STARTED ? "started" :
+                                     qinfo.status == VMSQ_STATUS_STOPPED ? "stopped" :
+                                     qinfo.status == VMSQ_STATUS_PAUSED  ? "paused" : "unknown";
+
+            printf("  %s queue %s, %s\n", type_str, qinfo.name, status_str);
+
+            if (show_full || show_all) {
+                struct vms_queue_entry entries[64];
+                int count = 0;
+                vmsq_show_entries(default_queues[q], entries, 64, &count);
+                for (int j = 0; j < count; j++) {
+                    const char *entry_status =
+                        entries[j].status == VMSQ_ENTRY_PENDING   ? "Pending" :
+                        entries[j].status == VMSQ_ENTRY_EXECUTING ? "Executing" :
+                        entries[j].status == VMSQ_ENTRY_HOLDING   ? "Holding" :
+                        entries[j].status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
+                    printf("    entry %-6u %-20s %-12s %-10s\n",
+                           entries[j].entry_id, entries[j].job_name,
+                           entries[j].username, entry_status);
+                }
+            }
+        }
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SET ENTRY - Modify a queued job entry.
+ * Format: SET ENTRY n /HOLD or /RELEASE
+ */
+static int cmd_set_entry(struct dcl_command *cmd)
+{
+    int sts = ensure_queue_init();
+    if (!(sts & 1)) {
+        dcl_error("SET", 2, "QMANERR", "queue manager initialization failed");
+        return sts;
+    }
+
+    /* Entry number is params[1] (params[0] is "ENTRY") */
+    if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
+        dcl_error("SET", 2, "NOENTRY", "missing entry number");
+        return SS$_BADPARAM;
+    }
+
+    uint32_t entry_id = (uint32_t)atol(cmd->params[1]);
+    if (entry_id == 0) {
+        dcl_error("SET", 2, "BADENTRY", "invalid entry number - %s", cmd->params[1]);
+        return SS$_BADPARAM;
+    }
+
+    if (dcl_has_qualifier(cmd, "HOLD")) {
+        sts = vmsq_hold_entry(entry_id);
+        if (!(sts & 1)) {
+            dcl_error("SET", 2, "ENTNOTFND", "entry %u not found", entry_id);
+            return sts;
+        }
+        printf("%%SET-S-MODIFIED, entry %u set to HOLD\n", entry_id);
+    } else if (dcl_has_qualifier(cmd, "RELEASE")) {
+        sts = vmsq_release_entry(entry_id);
+        if (!(sts & 1)) {
+            dcl_error("SET", 2, "ENTNOTFND", "entry %u not found", entry_id);
+            return sts;
+        }
+        printf("%%SET-S-MODIFIED, entry %u released\n", entry_id);
+    } else {
+        dcl_error("SET", 2, "IVQUAL",
+                  "specify /HOLD or /RELEASE with SET ENTRY");
+        return SS$_BADPARAM;
+    }
 
     return SS$_NORMAL;
 }

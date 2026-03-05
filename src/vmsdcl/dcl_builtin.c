@@ -3723,50 +3723,224 @@ static int cmd_spawn(struct dcl_command *cmd)
 }
 
 /*
- * PIPE - Execute a command using the system shell (for piping, redirection).
+ * pipe_split_segments - Split a command line on unquoted '|' characters.
+ *
+ * Populates segments[] with pointers into the mutable buffer 'line'.
+ * Each '|' is replaced with '\0'.  Returns the number of segments,
+ * or -1 if max_seg is exceeded.
+ */
+static int pipe_split_segments(char *line, char **segments, int max_seg)
+{
+    int count = 0;
+    char *p = line;
+
+    /* Skip leading whitespace */
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '\0') return 0;
+
+    segments[count++] = p;
+
+    while (*p) {
+        if (*p == '"') {
+            /* Skip quoted string */
+            p++;
+            while (*p && *p != '"') p++;
+            if (*p == '"') p++;
+        } else if (*p == '|') {
+            /* Segment boundary */
+            *p = '\0';
+            p++;
+            while (*p == ' ' || *p == '\t') p++;
+            if (count >= max_seg) return -1;
+            segments[count++] = p;
+        } else {
+            p++;
+        }
+    }
+
+    /* Trim trailing whitespace from each segment */
+    for (int i = 0; i < count; i++) {
+        char *end = segments[i] + strlen(segments[i]) - 1;
+        while (end >= segments[i] && (*end == ' ' || *end == '\t'))
+            *end-- = '\0';
+    }
+
+    return count;
+}
+
+/*
+ * pipe_get_self_exe - Get the path of the current vmsdcl executable.
+ *
+ * Uses /proc/self/exe (Linux-specific).  Falls back to "vmsdcl" (PATH lookup).
+ */
+static const char *pipe_get_self_exe(void)
+{
+    static char exe_path[4096];
+    static int resolved = 0;
+
+    if (!resolved) {
+        ssize_t len = readlink("/proc/self/exe", exe_path, sizeof(exe_path) - 1);
+        if (len > 0) {
+            exe_path[len] = '\0';
+        } else {
+            /* Fallback: rely on PATH */
+            strncpy(exe_path, "vmsdcl", sizeof(exe_path) - 1);
+            exe_path[sizeof(exe_path) - 1] = '\0';
+        }
+        resolved = 1;
+    }
+    return exe_path;
+}
+
+/*
+ * PIPE - Execute a DCL pipeline.
+ *
+ * Syntax: PIPE cmd1 | cmd2 | cmd3
+ *
+ * Each segment is executed as a child process running vmsdcl -c "segment".
+ * Adjacent segments are connected via pipe(2), so stdout of cmd1 feeds
+ * stdin of cmd2, etc.  The exit status of the last segment is propagated.
+ *
+ * A single segment (no '|') simply runs vmsdcl -c "segment" with inherited
+ * stdin/stdout.
  */
 static int cmd_pipe(struct dcl_command *cmd)
 {
     /* Reconstruct the entire command line after PIPE */
-    char shell_cmd[DCL_MAX_LINE] = {0};
+    char pipeline[DCL_MAX_LINE] = {0};
     for (int i = 0; i < cmd->param_count; i++) {
-        if (i > 0) strncat(shell_cmd, " ",
-                            sizeof(shell_cmd) - strlen(shell_cmd) - 1);
-        strncat(shell_cmd, cmd->params[i],
-                sizeof(shell_cmd) - strlen(shell_cmd) - 1);
+        if (i > 0) strncat(pipeline, " ",
+                            sizeof(pipeline) - strlen(pipeline) - 1);
+        strncat(pipeline, cmd->params[i],
+                sizeof(pipeline) - strlen(pipeline) - 1);
     }
     if (cmd->rest[0]) {
-        if (shell_cmd[0]) strncat(shell_cmd, " | ",
-                                   sizeof(shell_cmd) - strlen(shell_cmd) - 1);
-        strncat(shell_cmd, cmd->rest,
-                sizeof(shell_cmd) - strlen(shell_cmd) - 1);
+        if (pipeline[0]) strncat(pipeline, " | ",
+                                  sizeof(pipeline) - strlen(pipeline) - 1);
+        strncat(pipeline, cmd->rest,
+                sizeof(pipeline) - strlen(pipeline) - 1);
     }
 
-    if (shell_cmd[0] == '\0') {
+    if (pipeline[0] == '\0') {
         dcl_error("DCL", 2, "NOKEYW", "missing command for PIPE");
         return SS$_BADPARAM;
     }
 
-    /*
-     * PIPE intentionally uses /bin/sh for shell interpretation (piping,
-     * redirection). This is by design — PIPE is the VMS command for
-     * delegating to the host shell. We use fork/exec instead of system()
-     * to avoid system()'s signal handler side effects (SIGCHLD/SIGINT).
-     */
-    pid_t pid = fork();
-    if (pid == 0) {
-        execl("/bin/sh", "sh", "-c", shell_cmd, (char *)NULL);
-        _exit(127);
-    } else if (pid > 0) {
-        int wstatus;
-        waitpid(pid, &wstatus, 0);
-        if (WIFEXITED(wstatus))
-            return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
-        return SS$_ABORT;
-    } else {
-        dcl_error("DCL", 4, "CREPRC", "cannot create process");
-        return SS$_ABORT;
+    /* Split into segments on '|' */
+#define PIPE_MAX_SEGMENTS 64
+    char *segments[PIPE_MAX_SEGMENTS];
+    int nseg = pipe_split_segments(pipeline, segments, PIPE_MAX_SEGMENTS);
+    if (nseg <= 0) {
+        dcl_error("DCL", 2, "NOKEYW", "missing command for PIPE");
+        return SS$_BADPARAM;
     }
+    if (nseg < 0) {
+        dcl_error("DCL", 2, "IVPIPE", "too many pipe segments");
+        return SS$_BADPARAM;
+    }
+
+    const char *dcl_exe = pipe_get_self_exe();
+
+    /*
+     * For N segments we need N-1 pipes.
+     * pipefds[i] connects segment i's stdout to segment i+1's stdin.
+     */
+    int pipefds[PIPE_MAX_SEGMENTS - 1][2];
+    pid_t pids[PIPE_MAX_SEGMENTS];
+
+    /* Create all pipes first */
+    for (int i = 0; i < nseg - 1; i++) {
+        if (pipe(pipefds[i]) < 0) {
+            dcl_error("DCL", 4, "CREPRC", "cannot create pipe");
+            /* Close any already-created pipes */
+            for (int j = 0; j < i; j++) {
+                close(pipefds[j][0]);
+                close(pipefds[j][1]);
+            }
+            return SS$_ABORT;
+        }
+    }
+
+    /* Fork each segment */
+    for (int i = 0; i < nseg; i++) {
+        /* Skip empty segments */
+        if (segments[i][0] == '\0') {
+            dcl_error("DCL", 2, "IVPIPE", "empty pipe segment");
+            /* Clean up pipes and already-forked children */
+            for (int j = 0; j < nseg - 1; j++) {
+                close(pipefds[j][0]);
+                close(pipefds[j][1]);
+            }
+            for (int j = 0; j < i; j++) {
+                waitpid(pids[j], NULL, 0);
+            }
+            return SS$_BADPARAM;
+        }
+
+        pid_t pid = fork();
+        if (pid < 0) {
+            dcl_error("DCL", 4, "CREPRC", "cannot create process");
+            /* Clean up */
+            for (int j = 0; j < nseg - 1; j++) {
+                close(pipefds[j][0]);
+                close(pipefds[j][1]);
+            }
+            for (int j = 0; j < i; j++) {
+                waitpid(pids[j], NULL, 0);
+            }
+            return SS$_ABORT;
+        }
+
+        if (pid == 0) {
+            /* Child process */
+
+            /* Wire stdin from previous pipe (except first segment) */
+            if (i > 0) {
+                dup2(pipefds[i - 1][0], STDIN_FILENO);
+            }
+
+            /* Wire stdout to next pipe (except last segment) */
+            if (i < nseg - 1) {
+                dup2(pipefds[i][1], STDOUT_FILENO);
+            }
+
+            /* Close all pipe fds in child */
+            for (int j = 0; j < nseg - 1; j++) {
+                close(pipefds[j][0]);
+                close(pipefds[j][1]);
+            }
+
+            /* Exec vmsdcl -c "segment" */
+            execl(dcl_exe, "vmsdcl", "-c", segments[i], (char *)NULL);
+            fprintf(stderr, "%%DCL-E-CREPRC, cannot execute - %s\n", dcl_exe);
+            _exit(127);
+        }
+
+        pids[i] = pid;
+    }
+
+    /* Parent: close all pipe fds */
+    for (int i = 0; i < nseg - 1; i++) {
+        close(pipefds[i][0]);
+        close(pipefds[i][1]);
+    }
+
+    /* Wait for all children, capture last segment's exit status */
+    int last_status = SS$_NORMAL;
+    for (int i = 0; i < nseg; i++) {
+        int wstatus;
+        waitpid(pids[i], &wstatus, 0);
+        if (i == nseg - 1) {
+            if (WIFEXITED(wstatus))
+                last_status = (WEXITSTATUS(wstatus) == 0)
+                              ? SS$_NORMAL : SS$_ABORT;
+            else
+                last_status = SS$_ABORT;
+        }
+    }
+
+    return last_status;
+#undef PIPE_MAX_SEGMENTS
 }
 
 /*
@@ -4404,7 +4578,7 @@ static struct dcl_verb builtin_verbs[] = {
     { "OPEN",        cmd_open,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Open a file for reading or writing" },
     { "PIPE",        cmd_pipe,        CDU_F_ABBREV | CDU_F_PARAM, 3,
-      "Execute a command using system shell (piping/redirection)" },
+      "Execute a DCL pipeline (cmd1 | cmd2 | ...)" },
     { "PRINT",       cmd_print,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Queue a file for printing" },
     { "PURGE",       cmd_purge,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,

@@ -39,3 +39,7 @@ libvms_add_test(test_libvms_str_routines
 # Test 5: mth$sin / mth$cos / mth$sqrt / mth$exp / mth$alog / mth$power / etc.
 libvms_add_test(test_libvms_mth_routines
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mth_routines.c)
+
+# Test 6: lib$/mth$/ots$ RTL — date/time, conversions, process/system info, output
+libvms_add_test(test_libvms_lib_rtl
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl.c)

@@ -70,6 +70,10 @@ double vms_sqrt(double x)
     double result;
     __asm__("fsqrt %d0, %d1" : "=w"(result) : "w"(x));
     return result;
+#elif defined(__x86_64__)
+    double result;
+    __asm__("sqrtsd %1, %0" : "=x"(result) : "x"(x));
+    return result;
 #else
     return __builtin_sqrt(x);
 #endif
@@ -80,6 +84,10 @@ float vms_sqrtf(float x)
 #if defined(__aarch64__)
     float result;
     __asm__("fsqrt %s0, %s1" : "=w"(result) : "w"(x));
+    return result;
+#elif defined(__x86_64__)
+    float result;
+    __asm__("sqrtss %1, %0" : "=x"(result) : "x"(x));
     return result;
 #else
     return __builtin_sqrtf(x);
@@ -92,6 +100,11 @@ double vms_floor(double x)
     double result;
     __asm__("frintm %d0, %d1" : "=w"(result) : "w"(x));
     return result;
+#elif defined(__x86_64__)
+    double result;
+    /* SSE4.1 roundsd: imm8=0x09 = round toward -inf + inexact suppress */
+    __asm__("roundsd $0x09, %1, %0" : "=x"(result) : "x"(x));
+    return result;
 #else
     return __builtin_floor(x);
 #endif
@@ -102,6 +115,11 @@ double vms_ceil(double x)
 #if defined(__aarch64__)
     double result;
     __asm__("frintp %d0, %d1" : "=w"(result) : "w"(x));
+    return result;
+#elif defined(__x86_64__)
+    double result;
+    /* SSE4.1 roundsd: imm8=0x0A = round toward +inf + inexact suppress */
+    __asm__("roundsd $0x0A, %1, %0" : "=x"(result) : "x"(x));
     return result;
 #else
     return __builtin_ceil(x);

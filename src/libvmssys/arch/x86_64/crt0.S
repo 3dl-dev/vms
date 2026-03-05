@@ -61,9 +61,10 @@ _start:
     /* Call main(argc, argv, envp) */
     call main
 
-    /* Exit with main's return value */
-    movq %rax, %rdi
-    call vms_sys_exit_group
+    /* Exit with main's return value via exit_group syscall */
+    movq %rax, %rdi          /* status = main() return value */
+    movq $231, %rax           /* __NR_exit_group on x86_64 */
+    syscall
 
     /* Should never reach here */
     ud2

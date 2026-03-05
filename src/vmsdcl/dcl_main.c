@@ -202,8 +202,24 @@ static void sigint_handler(int sig)
 }
 
 /*
- * Terminal VEOF configuration — Ctrl+Z is EOF on VMS, not Ctrl+D.
- * Save original termios so we can restore on exit.
+ * Ctrl+C handler — forwards signal to running child (VMS user-mode AST).
+ * Unlike Ctrl+Y, this does NOT return to DCL prompt.
+ */
+static void ctrl_c_handler(int sig)
+{
+    (void)sig;
+    pid_t child = (pid_t)dcl_running_child;
+    if (child > 0) {
+        kill(child, SIGINT);
+    }
+}
+
+/*
+ * Terminal configuration for VMS signal/EOF model.
+ * - VEOF = 26 (Ctrl+Z is EOF, not Ctrl+D)
+ * - VINTR = 25 (Ctrl+Y generates SIGINT for DCL interrupt)
+ * - VQUIT = 3 (Ctrl+C generates SIGQUIT for user-mode AST)
+ * - VSUSP = disabled (Ctrl+Z is EOF, not suspend)
  */
 static struct termios orig_termios;
 static int termios_saved = 0;
@@ -232,6 +248,12 @@ static void setup_vms_eof(void)
 
     /* Set VEOF to Ctrl+Z (0x1A = 26) — VMS convention */
     tio.c_cc[VEOF] = 26;
+    /* Disable Ctrl+Z as suspend (we use it for EOF) */
+    tio.c_cc[VSUSP] = _POSIX_VDISABLE;
+    /* Map Ctrl+Y (0x19) to VINTR — generates SIGINT for DCL interrupt */
+    tio.c_cc[VINTR] = 25;
+    /* Map Ctrl+C (0x03) to VQUIT — generates SIGQUIT for user-mode AST */
+    tio.c_cc[VQUIT] = 3;
     tcsetattr(STDIN_FILENO, TCSANOW, &tio);
 }
 
@@ -422,6 +444,14 @@ int main(int argc, char *argv[])
         sa.sa_flags = 0;
         sigemptyset(&sa.sa_mask);
         sigaction(SIGINT, &sa, NULL);
+
+        /* Ctrl+C → SIGQUIT: forward to child as user-mode AST */
+        struct sigaction sa_quit;
+        memset(&sa_quit, 0, sizeof(sa_quit));
+        sa_quit.sa_handler = ctrl_c_handler;
+        sa_quit.sa_flags = 0;
+        sigemptyset(&sa_quit.sa_mask);
+        sigaction(SIGQUIT, &sa_quit, NULL);
 
 #ifdef HAVE_READLINE
         /* Set up readline */

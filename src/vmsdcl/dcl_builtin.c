@@ -4697,8 +4697,17 @@ static int cmd_monitor(struct dcl_command *cmd)
         fprintf(stderr, "%%MONITOR-F-NOIMG, cannot execute vms_monitor\n");
         _exit(1);
     } else if (pid > 0) {
+        extern volatile sig_atomic_t dcl_running_child;
+        struct dcl_context *mon_ctx = dcl_get_context();
+        dcl_running_child = (sig_atomic_t)pid;
         int wstatus;
-        waitpid(pid, &wstatus, 0);
+        waitpid(pid, &wstatus, WUNTRACED);
+        dcl_running_child = 0;
+        if (WIFSTOPPED(wstatus)) {
+            printf("\nInterrupt\n");
+            mon_ctx->interrupted_pid = pid;
+            return SS$_ABORT;
+        }
         if (WIFEXITED(wstatus)) {
             return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
         }
@@ -5571,6 +5580,83 @@ static int cmd_dismount(struct dcl_command *cmd)
 }
 
 /* ================================================================== */
+/*                     CONTINUE Command                                */
+/* ================================================================== */
+
+/*
+ * CONTINUE - Resume an interrupted process (stopped by Ctrl-Y).
+ *
+ * On VMS, Ctrl-Y interrupts the currently running image and returns
+ * control to the DCL prompt.  CONTINUE resumes execution of the
+ * interrupted image.  If no image is interrupted, an informational
+ * message is displayed.
+ */
+static int cmd_continue(struct dcl_command *cmd)
+{
+    (void)cmd;
+    struct dcl_context *ctx = dcl_get_context();
+
+    if (ctx->interrupted_pid <= 0) {
+        printf("%%DCL-I-NOINTER, no interrupted image to continue\n");
+        return SS$_NORMAL;
+    }
+
+    pid_t pid = ctx->interrupted_pid;
+
+    /* Send SIGCONT to resume the stopped child */
+    if (kill(pid, SIGCONT) != 0) {
+        printf("%%DCL-W-NOPROC, process %d no longer exists\n", (int)pid);
+        ctx->interrupted_pid = 0;
+        return SS$_NONEXPR;
+    }
+
+    /* Wait for the child to finish (or be stopped again by another Ctrl-Y) */
+    int wstatus;
+    pid_t result;
+    while ((result = waitpid(pid, &wstatus, WUNTRACED)) < 0 && errno == EINTR)
+        ;
+
+    if (result > 0 && WIFSTOPPED(wstatus)) {
+        /* Child was stopped again (another Ctrl-Y during CONTINUE) */
+        printf("\nInterrupt\n");
+        /* Still interrupted — keep interrupted_pid */
+    } else {
+        /* Child exited or was signaled */
+        ctx->interrupted_pid = 0;
+    }
+
+    return SS$_NORMAL;
+}
+
+/* ================================================================== */
+/*                     EDIT Command                                    */
+/* ================================================================== */
+
+/* External EDT editor entry point (dcl_editor.c) */
+extern int edt_run(const char *filepath);
+
+/*
+ * EDIT - Launch EDT line-mode editor on a file.
+ *
+ * Format: EDIT filespec
+ */
+static int cmd_edit(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+        dcl_error("EDIT", 2, "NOFILE", "missing file specification");
+        return SS$_BADPARAM;
+    }
+
+    /* Resolve filespec to Linux path (file may not exist yet) */
+    char linux_path[1024];
+    dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
+
+    return edt_run(linux_path);
+}
+
+/* ================================================================== */
 /*                     Command Table                                   */
 /* ================================================================== */
 
@@ -5585,6 +5671,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Create, restore, or list a saveset file" },
     { "CLOSE",       cmd_close,       CDU_F_ABBREV | CDU_F_PARAM, 2,
       "Close a file that was opened for I/O" },
+    { "CONTINUE",    cmd_continue,    CDU_F_ABBREV, 4,
+      "Resume execution of an interrupted image" },
     { "COPY",        cmd_copy,        CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Copy a file" },
     { "CREATE",      cmd_create,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -5603,6 +5691,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Dismount a volume from a device" },
     { "DUMP",        cmd_dump,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Display contents of a file in hexadecimal and ASCII" },
+    { "EDIT",        cmd_edit,        CDU_F_ABBREV | CDU_F_PARAM, 2,
+      "Invoke the EDT text editor" },
     { "EXIT",        cmd_exit,        CDU_F_ABBREV, 2,
       "Terminate a command procedure or session" },
     { "HELP",        cmd_help,        CDU_F_ABBREV | CDU_F_PARAM, 2,

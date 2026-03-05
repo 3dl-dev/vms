@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/types.h>
 #include "dcl/terminal.h"
 
 #define DCL_MAX_NEST    32     /* Max procedure nesting depth */
@@ -73,6 +74,7 @@ struct dcl_context {
 
     /* Control-Y handling */
     int ctrl_y_enabled;
+    pid_t interrupted_pid;    /* PID of Ctrl-Y stopped child (0 = none) */
 
     /* User info */
     char username[64];

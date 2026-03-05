@@ -108,6 +108,7 @@ extern "C" {
  * Condition handling status codes
  * ================================================================ */
 
+#define SS$_CONTROLC        1617    /* Ctrl-C interrupt */
 #define SS$_RESIGNAL        2328    /* Resignal condition */
 #define SS$_UNWIND          2204    /* Unwind in progress */
 #define SS$_CONTINUE        2340    /* Continue execution */

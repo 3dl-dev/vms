@@ -6,6 +6,7 @@ add_executable(vmsdcl
     dcl_lexer.c
     dcl_parser.c
     dcl_exec.c
+    dcl_backup.c
     dcl_builtin.c
     dcl_terminal.c
     dcl_symbol.c
@@ -14,6 +15,7 @@ add_executable(vmsdcl
     dcl_io.c
     dcl_script.c
     dcl_messages.c
+    dcl_library.c
 )
 
 target_include_directories(vmsdcl PRIVATE

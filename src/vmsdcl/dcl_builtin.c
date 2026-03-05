@@ -922,6 +922,122 @@ static int cmd_show_translation(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/*
+ * SHOW LICENSE - Display active product licenses.
+ */
+static int cmd_show_license(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("Active licenses on this node:\n\n");
+    printf("------- Product ID --------    ---- Rating -----   -- Version --\n");
+    printf("Product Name          Producer  Units  Avail  Actv  Version  Termination\n");
+    printf("OVMX                  OVMX      0      0      100   V1.0     (none)\n");
+    printf("OVMX-TCP/IP           OVMX      0      0      100   V0.1     (none)\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW CLUSTER - Display VMScluster membership.
+ */
+static int cmd_show_cluster(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("%%SYSTEM-I-NOTMEMBER, this system is not a member of a VMScluster\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW NETWORK - Display DECnet/TCP network configuration.
+ */
+static int cmd_show_network(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("Product: OVMX TCP/IP Services for OpenVMS V0.1\n");
+    printf("Node: OVMX\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW ERROR - Display device error summary.
+ */
+static int cmd_show_error(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("\n         Device Error Count Summary\n");
+    printf("         Device   Error Count\n");
+    printf("         ------   -----------\n");
+    printf("No errors logged.\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW WORKING_SET - Display working set quotas.
+ */
+static int cmd_show_working_set(struct dcl_command *cmd)
+{
+    (void)cmd;
+    struct dcl_context *ctx = dcl_get_context();
+    int quota = ctx->ws_quota > 0 ? ctx->ws_quota : 8192;
+    int extent = quota * 2;
+    printf("  Working Set  [current,quota,extent] = [%d,%d,%d]\n",
+           quota, quota, extent);
+    printf("  Adjustment enabled  Authorized Quota = %d  Authorized Extent = %d\n",
+           quota, extent);
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW ACCOUNTING - Display accounting status.
+ */
+static int cmd_show_accounting(struct dcl_command *cmd)
+{
+    (void)cmd;
+    struct dcl_context *ctx = dcl_get_context();
+    if (ctx->accounting_enabled) {
+        printf("Accounting is currently enabled.\n");
+    } else {
+        printf("Accounting is currently disabled.\n");
+    }
+    printf("Accounting file: SYS$MANAGER:ACCOUNTNG.DAT\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW AUDIT - Display security auditing status.
+ */
+static int cmd_show_audit(struct dcl_command *cmd)
+{
+    (void)cmd;
+    struct dcl_context *ctx = dcl_get_context();
+    if (ctx->audit_enabled) {
+        printf("System security auditing is currently enabled.\n");
+    } else {
+        printf("System security auditing is currently disabled.\n");
+    }
+    printf("Audit log file: SYS$MANAGER:AUDIT.LOG\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW QUOTA - Display disk quota for current user.
+ */
+static int cmd_show_quota(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("  User [200,1] has 0 blocks used, 0 available\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW ROOT - Display system root directory.
+ */
+static int cmd_show_root(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("  System root is SYS$SYSDEVICE:[SYS0.SYSCOMMON.]\n");
+    return SS$_NORMAL;
+}
+
 /* ================================================================== */
 /*                          SHOW Dispatcher                            */
 /* ================================================================== */
@@ -963,6 +1079,24 @@ static int cmd_show(struct dcl_command *cmd)
         return cmd_show_terminal(cmd);
     if (dcl_match_command(subcmd, "TRANSLATION", 5))
         return cmd_show_translation(cmd);
+    if (dcl_match_command(subcmd, "LICENSE", 3))
+        return cmd_show_license(cmd);
+    if (dcl_match_command(subcmd, "CLUSTER", 3))
+        return cmd_show_cluster(cmd);
+    if (dcl_match_command(subcmd, "NETWORK", 3))
+        return cmd_show_network(cmd);
+    if (dcl_match_command(subcmd, "ERROR", 3))
+        return cmd_show_error(cmd);
+    if (dcl_match_command(subcmd, "WORKING_SET", 4))
+        return cmd_show_working_set(cmd);
+    if (dcl_match_command(subcmd, "ACCOUNTING", 3))
+        return cmd_show_accounting(cmd);
+    if (dcl_match_command(subcmd, "AUDIT", 3))
+        return cmd_show_audit(cmd);
+    if (dcl_match_command(subcmd, "QUOTA", 3))
+        return cmd_show_quota(cmd);
+    if (dcl_match_command(subcmd, "ROOT", 3))
+        return cmd_show_root(cmd);
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SHOW keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;
@@ -1791,6 +1925,66 @@ static int cmd_set_time(struct dcl_command *cmd)
 }
 
 /*
+ * SET HOST - Attempt DECnet connection (not available).
+ */
+static int cmd_set_host(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("%%SET-I-NOTAVAIL, DECnet is not available on this system\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * SET AUDIT /ENABLE /DISABLE - Toggle security auditing.
+ */
+static int cmd_set_audit(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    if (dcl_has_qualifier(cmd, "ENABLE")) {
+        ctx->audit_enabled = 1;
+        printf("%%SET-I-INTSET, auditing enabled\n");
+    } else if (dcl_has_qualifier(cmd, "DISABLE")) {
+        ctx->audit_enabled = 0;
+        printf("%%SET-I-INTSET, auditing disabled\n");
+    } else {
+        printf("%%SET-I-INTSET, security auditing is %s\n",
+               ctx->audit_enabled ? "enabled" : "disabled");
+    }
+    return SS$_NORMAL;
+}
+
+/*
+ * SET ACCOUNTING /ENABLE /DISABLE - Toggle accounting.
+ */
+static int cmd_set_accounting(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    if (dcl_has_qualifier(cmd, "ENABLE")) {
+        ctx->accounting_enabled = 1;
+        printf("%%SET-I-INTSET, accounting enabled\n");
+    } else if (dcl_has_qualifier(cmd, "DISABLE")) {
+        ctx->accounting_enabled = 0;
+        printf("%%SET-I-INTSET, accounting disabled\n");
+    } else {
+        printf("%%SET-I-INTSET, accounting is %s\n",
+               ctx->accounting_enabled ? "enabled" : "disabled");
+    }
+    return SS$_NORMAL;
+}
+
+/*
+ * SET VOLUME - Set volume characteristics (requires mounted VMSFS).
+ */
+static int cmd_set_volume(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("%%SET-I-NOTIMPL, SET VOLUME requires a mounted VMSFS volume\n");
+    return SS$_NORMAL;
+}
+
+/*
  * SET Dispatcher
  */
 static int cmd_set(struct dcl_command *cmd)
@@ -1842,6 +2036,14 @@ static int cmd_set(struct dcl_command *cmd)
         return cmd_set_working_set(cmd);
     if (dcl_match_command(subcmd, "TIME", 4))
         return cmd_set_time(cmd);
+    if (dcl_match_command(subcmd, "HOST", 3))
+        return cmd_set_host(cmd);
+    if (dcl_match_command(subcmd, "AUDIT", 3))
+        return cmd_set_audit(cmd);
+    if (dcl_match_command(subcmd, "ACCOUNTING", 3))
+        return cmd_set_accounting(cmd);
+    if (dcl_match_command(subcmd, "VOLUME", 3))
+        return cmd_set_volume(cmd);
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SET keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;

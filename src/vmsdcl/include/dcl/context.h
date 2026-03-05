@@ -106,6 +106,10 @@ struct dcl_context {
 
     /* SET WORKING_SET settings */
     int ws_quota;
+
+    /* SET ACCOUNTING / SET AUDIT flags */
+    int accounting_enabled;
+    int audit_enabled;
 };
 
 /* Global context accessor */

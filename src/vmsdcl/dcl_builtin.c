@@ -47,6 +47,7 @@
 #include "starlet.h"
 #include "vmsfs/filespec.h"
 #include "dcl/vms_messages.h"
+#include "vms/pcb.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -299,10 +300,15 @@ static int read_proc_cpu(int pid, char *cpu_str, size_t cpu_len)
 
 /*
  * SHOW SYSTEM - Show process list (like VMS SHOW SYSTEM).
+ *
+ * Shows only VMS-managed processes from the PCB table.
+ * No Linux process names (kworker, systemd, etc.) are exposed.
  */
 static int cmd_show_system(struct dcl_command *cmd)
 {
     (void)cmd;
+
+    struct dcl_context *ctx = dcl_get_context();
 
     struct utsname uts;
     uname(&uts);
@@ -311,65 +317,56 @@ static int cmd_show_system(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
+    /* Calculate uptime from /proc/uptime if available, else show --- */
+    char uptime_str[32];
+    {
+        FILE *uf = fopen("/proc/uptime", "r");
+        if (uf) {
+            double up_secs = 0;
+            if (fscanf(uf, "%lf", &up_secs) == 1 && up_secs > 0) {
+                unsigned long up = (unsigned long)up_secs;
+                unsigned long days = up / 86400;
+                unsigned long hrs  = (up % 86400) / 3600;
+                unsigned long mins = (up % 3600) / 60;
+                unsigned long secs = up % 60;
+                snprintf(uptime_str, sizeof(uptime_str),
+                         "%lu %02lu:%02lu:%02lu", days, hrs, mins, secs);
+            } else {
+                snprintf(uptime_str, sizeof(uptime_str), "---");
+            }
+            fclose(uf);
+        } else {
+            snprintf(uptime_str, sizeof(uptime_str), "---");
+        }
+    }
+
     printf("OpenVMS V7.3  on node %s  %2d-%s-%04d %02d:%02d:%02d.%02d"
-           "  Uptime  ---\n",
+           "  Uptime  %s\n",
            uts.nodename, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
-           (int)(ts.tv_nsec / 10000000));
+           (int)(ts.tv_nsec / 10000000), uptime_str);
     printf("  Pid    Process Name    State  Pri      I/O       CPU"
            "       Page flts  Pages\n");
 
-    /* Show the current process first */
-    char self_cpu[32] = "0 00:00:00.00";
-    read_proc_cpu((int)getpid(), self_cpu, sizeof(self_cpu));
-    printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
-           (unsigned)getpid(), "OVMX", "HIB", 4, 0, self_cpu, 0, 0);
+    /* Show VMS processes from PCB table only — no /proc scanning */
+    struct vms_pcb *pcb = vms_pcb_get();
 
-    /* Read /proc to list processes */
-    DIR *proc_dir = opendir("/proc");
-    if (proc_dir) {
-        struct dirent *entry;
-        int count = 0;
-        while ((entry = readdir(proc_dir)) != NULL && count < 20) {
-            /* Only process numeric directories */
-            if (!isdigit((unsigned char)entry->d_name[0])) continue;
-
-            int pid = atoi(entry->d_name);
-            if (pid <= 0 || pid == (int)getpid()) continue;
-
-            /* Read process name from /proc/pid/comm */
-            char path[256];
-            snprintf(path, sizeof(path), "/proc/%d/comm", pid);
-            FILE *fp = fopen(path, "r");
-            if (!fp) continue;
-
-            char pname[64];
-            if (!fgets(pname, sizeof(pname), fp)) {
-                fclose(fp);
-                continue;
-            }
-            fclose(fp);
-
-            /* Remove newline */
-            size_t plen = strlen(pname);
-            if (plen > 0 && pname[plen - 1] == '\n') pname[plen - 1] = '\0';
-
-            /* Truncate to 15 chars */
-            if (strlen(pname) > 15) pname[15] = '\0';
-
-            /* Uppercase */
-            for (size_t i = 0; pname[i]; i++)
-                pname[i] = (char)toupper((unsigned char)pname[i]);
-
-            /* Read CPU time */
-            char cpu_str[32] = "0 00:00:00.00";
-            read_proc_cpu(pid, cpu_str, sizeof(cpu_str));
-
-            printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
-                   (unsigned)pid, pname, "COM", 4, 0, cpu_str, 0, 0);
-            count++;
-        }
-        closedir(proc_dir);
+    if (pcb && pcb->vms_pid != 0) {
+        /* Use PCB identity */
+        const char *pname = pcb->prcnam[0] ? pcb->prcnam : "OVMX";
+        char cpu_str[32] = "0 00:00:00.00";
+        read_proc_cpu((int)getpid(), cpu_str, sizeof(cpu_str));
+        printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
+               pcb->vms_pid, pname, "CUR", 4, 0, cpu_str, 0, 340);
+    } else {
+        /* PCB not initialized — fabricate current process entry */
+        const char *pname = (ctx && ctx->process_name[0])
+                            ? ctx->process_name : "OVMX";
+        uint32_t vpid = (uint32_t)getpid();
+        char cpu_str[32] = "0 00:00:00.00";
+        read_proc_cpu((int)getpid(), cpu_str, sizeof(cpu_str));
+        printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
+               vpid, pname, "CUR", 4, 0, cpu_str, 0, 340);
     }
 
     return SS$_NORMAL;

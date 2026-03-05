@@ -1,0 +1,5 @@
+#!/bin/bash
+# TEST: DEFINE and SHOW LOGICAL work together
+# EXPECT: contains:TEST_VALUE_123
+VMSDCL="${VMSDCL:-vmsdcl}"
+printf 'DEFINE TESTLOG "TEST_VALUE_123"\nSHOW LOGICAL TESTLOG\n' | $VMSDCL 2>&1

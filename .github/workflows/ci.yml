@@ -49,7 +49,9 @@ jobs:
         run: cmake --build build -j$(nproc)
 
       - name: Test
-        run: cd build && ctest --output-on-failure
+        run: |
+          sudo mkdir -p /vms
+          cd build && ctest --output-on-failure
 
   # -----------------------------------------------------------------------
   # Job 2: Docker build + smoke test

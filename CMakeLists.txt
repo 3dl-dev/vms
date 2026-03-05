@@ -80,6 +80,7 @@ if(BUILD_TESTS)
     add_subdirectory(tests/vmslnm)
     add_subdirectory(tests/vmsfs)
     add_subdirectory(tests/vmsrms)
+    add_subdirectory(tests/dcl)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

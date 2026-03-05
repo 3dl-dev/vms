@@ -1,0 +1,6 @@
+#!/bin/bash
+# TEST: IF/THEN conditional execution works
+# EXPECT: contains:CONDITION_TRUE
+# EXPECT_NOT: contains:CONDITION_FALSE
+VMSDCL="${VMSDCL:-vmsdcl}"
+printf 'IF 1 .EQ. 1 THEN WRITE SYS$OUTPUT "CONDITION_TRUE"\nIF 1 .EQ. 2 THEN WRITE SYS$OUTPUT "CONDITION_FALSE"\n' | $VMSDCL 2>&1

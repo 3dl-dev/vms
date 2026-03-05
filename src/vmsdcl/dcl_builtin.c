@@ -42,6 +42,7 @@
 #include "ovmx_accounting.h"
 #include "starlet.h"
 #include "vmsfs/filespec.h"
+#include "dcl/vms_messages.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -1201,7 +1202,7 @@ static int cmd_set_protection(struct dcl_command *cmd)
     dcl_resolve_path(ctx, filespec, linux_path, sizeof(linux_path));
 
     if (chmod(linux_path, new_mode) != 0) {
-        dcl_error("RMS", 2, "PRV", "failed to set protection - %s", strerror(errno));
+        dcl_error("RMS", 2, "PRV", "failed to set protection - %s", vms_strerror(errno));
         return SS$_NOPRIV;
     }
 
@@ -1509,7 +1510,7 @@ static int cmd_set_file(struct dcl_command *cmd)
         tv[1].tv_usec = 0;
         if (utimes(linux_path, tv) != 0) {
             dcl_error("SET", 2, "PRV",
-                      "cannot set expiration date - %s", strerror(errno));
+                      "cannot set expiration date - %s", vms_strerror(errno));
             return SS$_NOPRIV;
         }
     }
@@ -1731,7 +1732,7 @@ static int cmd_set_time(struct dcl_command *cmd)
             return SS$_NOPRIV;
         }
         dcl_error("SET", 2, "IVTIME",
-                  "cannot set system time - %s", strerror(errno));
+                  "cannot set system time - %s", vms_strerror(errno));
         return SS$_IVTIME;
     }
 
@@ -2307,7 +2308,7 @@ static int cmd_rename(struct dcl_command *cmd)
 
     if (rename(src_path, dst_path) != 0) {
         dcl_error("RMS", 2, "RNF",
-                  "rename failed - %s", strerror(errno));
+                  "rename failed - %s", vms_strerror(errno));
         return SS$_FILACCERR;
     }
 
@@ -2345,7 +2346,7 @@ static int cmd_create(struct dcl_command *cmd)
             }
             dcl_error("RMS", 2, "CRE",
                       "cannot create directory - %s: %s",
-                      cmd->params[0], strerror(errno));
+                      cmd->params[0], vms_strerror(errno));
             return SS$_FILACCERR;
         }
 

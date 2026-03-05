@@ -27,6 +27,9 @@
 #include <sys/statvfs.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
+#include <net/if.h>
+#include <arpa/inet.h>
 #include <sys/time.h>
 #include <termios.h>
 #include <mntent.h>
@@ -4567,6 +4570,344 @@ static int cmd_recall(struct dcl_command *cmd)
 }
 
 /* ================================================================== */
+/*                     TCPIP Commands                                  */
+/* ================================================================== */
+
+/*
+ * Map a Linux network interface name to a VMS device name.
+ * eth*, ens*, enp* → SE0, SE1, ...
+ * lo              → LO0
+ * wlan*, wlp*     → EW0, EW1, ...
+ * tun*            → TN0, TN1, ...
+ * Everything else → XX0, XX1, ...
+ */
+static const char *tcpip_map_interface(const char *linux_name,
+                                        int *se_idx, int *ew_idx,
+                                        int *tn_idx, int *xx_idx)
+{
+    static char vms_name[16];
+
+    if (strcmp(linux_name, "lo") == 0) {
+        snprintf(vms_name, sizeof(vms_name), "LO0");
+    } else if (strncmp(linux_name, "eth", 3) == 0 ||
+               strncmp(linux_name, "ens", 3) == 0 ||
+               strncmp(linux_name, "enp", 3) == 0) {
+        snprintf(vms_name, sizeof(vms_name), "SE%d", (*se_idx)++);
+    } else if (strncmp(linux_name, "wlan", 4) == 0 ||
+               strncmp(linux_name, "wlp", 3) == 0) {
+        snprintf(vms_name, sizeof(vms_name), "EW%d", (*ew_idx)++);
+    } else if (strncmp(linux_name, "tun", 3) == 0) {
+        snprintf(vms_name, sizeof(vms_name), "TN%d", (*tn_idx)++);
+    } else {
+        snprintf(vms_name, sizeof(vms_name), "XX%d", (*xx_idx)++);
+    }
+
+    return vms_name;
+}
+
+/*
+ * Build a mapping table of Linux interface names → VMS device names.
+ * Scans /sys/class/net/ to enumerate interfaces.
+ */
+#define TCPIP_MAX_IFACES 32
+
+struct tcpip_ifmap {
+    char linux_name[IFNAMSIZ];
+    char vms_name[16];
+};
+
+static int tcpip_build_ifmap(struct tcpip_ifmap *map, int max_entries)
+{
+    DIR *d = opendir("/sys/class/net");
+    if (!d) return 0;
+
+    /* First pass: collect interface names */
+    char names[TCPIP_MAX_IFACES][IFNAMSIZ];
+    int count = 0;
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL && count < TCPIP_MAX_IFACES) {
+        if (ent->d_name[0] == '.') continue;
+        strncpy(names[count], ent->d_name, IFNAMSIZ - 1);
+        names[count][IFNAMSIZ - 1] = '\0';
+        count++;
+    }
+    closedir(d);
+
+    /* Sort for stable ordering */
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (strcmp(names[i], names[j]) > 0) {
+                char tmp[IFNAMSIZ];
+                memcpy(tmp, names[i], IFNAMSIZ);
+                memcpy(names[i], names[j], IFNAMSIZ);
+                memcpy(names[j], tmp, IFNAMSIZ);
+            }
+        }
+    }
+
+    /* Map names */
+    int se_idx = 0, ew_idx = 0, tn_idx = 0, xx_idx = 0;
+    int n = (count < max_entries) ? count : max_entries;
+    for (int i = 0; i < n; i++) {
+        strncpy(map[i].linux_name, names[i], IFNAMSIZ - 1);
+        map[i].linux_name[IFNAMSIZ - 1] = '\0';
+        const char *vn = tcpip_map_interface(names[i],
+                                              &se_idx, &ew_idx,
+                                              &tn_idx, &xx_idx);
+        strncpy(map[i].vms_name, vn, sizeof(map[i].vms_name) - 1);
+        map[i].vms_name[sizeof(map[i].vms_name) - 1] = '\0';
+    }
+    return n;
+}
+
+/* Look up VMS name for a Linux interface name in the map */
+static const char *tcpip_lookup_vms_name(const struct tcpip_ifmap *map,
+                                          int count, const char *linux_name)
+{
+    for (int i = 0; i < count; i++) {
+        if (strcmp(map[i].linux_name, linux_name) == 0)
+            return map[i].vms_name;
+    }
+    return linux_name; /* fallback — should not happen */
+}
+
+/*
+ * TCPIP SHOW INTERFACE [/FULL] - Display network interfaces with VMS names.
+ */
+static int cmd_tcpip_show_interface(struct dcl_command *cmd)
+{
+    struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
+    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES);
+
+    int full = dcl_has_qualifier(cmd, "FULL");
+
+    printf("\n");
+    printf("%-12s%-17s%-17s%-7s%s\n",
+           "Interface", "IP Address", "Network Mask", "MTU", "State");
+
+    int sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0) {
+        printf("%%TCPIP-E-SOCKERR, cannot open socket\n");
+        return SS$_BADPARAM;
+    }
+
+    for (int i = 0; i < ifcount; i++) {
+        struct ifreq ifr;
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, ifmap[i].linux_name, IFNAMSIZ - 1);
+
+        /* IP address */
+        char ip_str[INET_ADDRSTRLEN] = "*";
+        if (ioctl(sock, SIOCGIFADDR, &ifr) == 0) {
+            struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
+            inet_ntop(AF_INET, &addr->sin_addr, ip_str, sizeof(ip_str));
+        }
+
+        /* Netmask */
+        char mask_str[INET_ADDRSTRLEN] = "*";
+        if (ioctl(sock, SIOCGIFNETMASK, &ifr) == 0) {
+            struct sockaddr_in *mask = (struct sockaddr_in *)&ifr.ifr_netmask;
+            inet_ntop(AF_INET, &mask->sin_addr, mask_str, sizeof(mask_str));
+        }
+
+        /* MTU */
+        int mtu = 0;
+        if (ioctl(sock, SIOCGIFMTU, &ifr) == 0) {
+            mtu = ifr.ifr_mtu;
+        }
+
+        /* Flags (up/down) */
+        const char *state = "Down";
+        if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
+            if (ifr.ifr_flags & IFF_UP)
+                state = "Up";
+        }
+
+        printf("%-12s%-17s%-17s%-7d%s\n",
+               ifmap[i].vms_name, ip_str, mask_str, mtu, state);
+
+        if (full) {
+            /* Show hardware address */
+            if (ioctl(sock, SIOCGIFHWADDR, &ifr) == 0) {
+                unsigned char *hw = (unsigned char *)ifr.ifr_hwaddr.sa_data;
+                printf("             Hardware address: %02X-%02X-%02X-%02X-%02X-%02X\n",
+                       hw[0], hw[1], hw[2], hw[3], hw[4], hw[5]);
+            }
+        }
+    }
+
+    close(sock);
+    printf("\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * TCPIP SHOW ROUTE - Display routing table with VMS device names.
+ */
+static int cmd_tcpip_show_route(struct dcl_command *cmd)
+{
+    (void)cmd;
+
+    struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
+    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES);
+
+    FILE *fp = fopen("/proc/net/route", "r");
+    if (!fp) {
+        printf("%%TCPIP-E-NOROUTE, cannot read routing table\n");
+        return SS$_BADPARAM;
+    }
+
+    printf("\n");
+    printf("%-17s%-17s%-17s%s\n",
+           "Destination", "Gateway", "Mask", "Interface");
+
+    char line[256];
+    /* Skip header */
+    if (fgets(line, sizeof(line), fp) == NULL) {
+        fclose(fp);
+        return SS$_NORMAL;
+    }
+
+    while (fgets(line, sizeof(line), fp)) {
+        char iface[IFNAMSIZ];
+        unsigned long dest, gw, mask;
+        unsigned int flags;
+        int refs, use, metric, mtu, window, irtt;
+
+        if (sscanf(line, "%s %lx %lx %x %d %d %d %lx %d %d %d",
+                   iface, &dest, &gw, &flags, &refs, &use, &metric,
+                   &mask, &mtu, &window, &irtt) < 8)
+            continue;
+
+        /* Skip non-UP routes */
+        if (!(flags & 0x0001)) continue;
+
+        /* Destination */
+        char dest_str[32];
+        if (dest == 0) {
+            strcpy(dest_str, "default");
+        } else {
+            struct in_addr a;
+            a.s_addr = (in_addr_t)dest;
+            inet_ntop(AF_INET, &a, dest_str, sizeof(dest_str));
+        }
+
+        /* Gateway */
+        char gw_str[32];
+        if (gw == 0) {
+            strcpy(gw_str, "*");
+        } else {
+            struct in_addr a;
+            a.s_addr = (in_addr_t)gw;
+            inet_ntop(AF_INET, &a, gw_str, sizeof(gw_str));
+        }
+
+        /* Mask */
+        char mask_str[32];
+        {
+            struct in_addr a;
+            a.s_addr = (in_addr_t)mask;
+            inet_ntop(AF_INET, &a, mask_str, sizeof(mask_str));
+        }
+
+        /* VMS interface name */
+        const char *vms_iface = tcpip_lookup_vms_name(ifmap, ifcount, iface);
+
+        printf("%-17s%-17s%-17s%s\n", dest_str, gw_str, mask_str, vms_iface);
+    }
+
+    fclose(fp);
+    printf("\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * TCPIP SHOW HOST - Display host table entries.
+ */
+static int cmd_tcpip_show_host(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("\n");
+    printf("%-16s%s\n", "Host address", "Host name");
+
+    FILE *fp = fopen("/etc/hosts", "r");
+    if (!fp) {
+        /* Minimal fallback */
+        printf("%-16s%s\n", "127.0.0.1", "localhost");
+        printf("\n");
+        return SS$_NORMAL;
+    }
+
+    char line[512];
+    while (fgets(line, sizeof(line), fp)) {
+        /* Skip comments and blank lines */
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\n' || *p == '\0') continue;
+
+        char addr[128], hostname[256];
+        if (sscanf(p, "%127s %255s", addr, hostname) >= 2) {
+            printf("%-16s%s\n", addr, hostname);
+        }
+    }
+
+    fclose(fp);
+    printf("\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * TCPIP SHOW VERSION - Display TCP/IP Services version.
+ */
+static int cmd_tcpip_show_version(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("OVMX TCP/IP Services for OpenVMS V0.1\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * TCPIP - TCP/IP Services command with SHOW subcommands.
+ */
+static int cmd_tcpip(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 1) {
+        dcl_error("TCPIP", 2, "NOKEYW", "missing keyword - supply a TCPIP subcommand");
+        return SS$_BADPARAM;
+    }
+
+    const char *subcmd = cmd->params[0];
+
+    if (!dcl_match_command(subcmd, "SHOW", 2)) {
+        dcl_error("TCPIP", 2, "IVKEYW",
+                  "unrecognized TCPIP keyword - \\%s\\", subcmd);
+        return SS$_IVKEYW;
+    }
+
+    /* TCPIP SHOW <what> */
+    if (cmd->param_count < 2) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing SHOW keyword - supply what you want to show");
+        return SS$_BADPARAM;
+    }
+
+    const char *what = cmd->params[1];
+
+    if (dcl_match_command(what, "INTERFACE", 3))
+        return cmd_tcpip_show_interface(cmd);
+    if (dcl_match_command(what, "ROUTE", 3))
+        return cmd_tcpip_show_route(cmd);
+    if (dcl_match_command(what, "HOST", 3))
+        return cmd_tcpip_show_host(cmd);
+    if (dcl_match_command(what, "VERSION", 3))
+        return cmd_tcpip_show_version(cmd);
+
+    dcl_error("TCPIP", 2, "IVKEYW",
+              "unrecognized TCPIP SHOW keyword - \\%s\\", what);
+    return SS$_IVKEYW;
+}
+
+/* ================================================================== */
 /*                     Command Table                                   */
 /* ================================================================== */
 
@@ -4641,6 +4982,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Stop the current process" },
     { "SUBMIT",      cmd_submit,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Submit a command procedure to a batch queue" },
+    { "TCPIP",       cmd_tcpip,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "TCP/IP Services network management commands" },
     { "TYPE",        cmd_type,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Display the contents of a file" },
     { "WAIT",        cmd_wait,        CDU_F_ABBREV | CDU_F_PARAM, 2,

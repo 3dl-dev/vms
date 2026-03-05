@@ -79,11 +79,8 @@ void dcl_context_init(struct dcl_context *ctx)
     ctx->msg_ident    = 1;
     ctx->msg_text     = 1;
 
-    /* SET TERMINAL defaults */
-    ctx->term_width = 80;
-    ctx->term_page  = 24;
-    ctx->term_echo  = 1;
-    ctx->term_wrap  = 1;
+    /* SET TERMINAL defaults — full characteristics model */
+    vms_terminal_init(&ctx->terminal);
 
     /* SET PROCESS defaults */
     ctx->process_priority = 4;   /* Default VMS base priority */

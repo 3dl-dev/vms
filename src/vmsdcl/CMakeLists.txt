@@ -7,6 +7,7 @@ add_executable(vmsdcl
     dcl_parser.c
     dcl_exec.c
     dcl_builtin.c
+    dcl_terminal.c
     dcl_symbol.c
     dcl_lexical.c
     dcl_filespec.c

@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include "dcl/terminal.h"
 
 #define DCL_MAX_NEST    32     /* Max procedure nesting depth */
 #define DCL_MAX_PROMPT  64
@@ -97,11 +98,8 @@ struct dcl_context {
     int msg_ident;
     int msg_text;
 
-    /* SET TERMINAL settings */
-    int term_width;
-    int term_page;
-    int term_echo;
-    int term_wrap;
+    /* SET TERMINAL settings — full VMS characteristics model */
+    struct vms_terminal terminal;
 
     /* SET PROCESS settings */
     int process_priority;

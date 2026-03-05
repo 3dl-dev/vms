@@ -32,6 +32,7 @@
 #include <mntent.h>
 
 #include "dcl/context.h"
+#include "dcl/terminal.h"
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/cdu.h"
@@ -763,43 +764,22 @@ static int cmd_show_status(struct dcl_command *cmd)
 
 /*
  * SHOW TERMINAL - Display terminal characteristics.
+ *
+ * Dynamically displays actual terminal state from the
+ * vms_terminal characteristics model.
  */
 static int cmd_show_terminal(struct dcl_command *cmd)
 {
     (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
 
-    int width = 80, height = 24;
-    int is_vt100 = 1;
-
-    /* Try to get terminal size */
-    struct winsize ws;
-    memset(&ws, 0, sizeof(ws));
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
-        if (ws.ws_col > 0) width  = (int)ws.ws_col;
-        if (ws.ws_row > 0) height = (int)ws.ws_row;
+    /* Ensure owner is current */
+    if (ctx->username[0] && !ctx->terminal.owner[0]) {
+        strncpy(ctx->terminal.owner, ctx->username,
+                sizeof(ctx->terminal.owner) - 1);
     }
 
-    /* Terminal name */
-    const char *term_name = "_FTA0:";
-    char *term_env = getenv("TERM");
-    if (term_env && (strncasecmp(term_env, "vt", 2) == 0 ||
-                     strncasecmp(term_env, "xterm", 5) == 0))
-        is_vt100 = 1;
-    else if (term_env && strncasecmp(term_env, "ansi", 4) == 0)
-        is_vt100 = 1;
-
-    (void)is_vt100;
-
-    const char *owner = ctx->username[0] ? ctx->username : "SYSTEM";
-
-    printf("Terminal: %-12s Device_Type: VT100         Owner: %s\n\n",
-           term_name, owner);
-    printf("Terminal Characteristics:\n");
-    printf("  Interactive         Echo               Type_ahead          Hostsync\n");
-    printf("  TTsync              Lowercase          Tab                 Wrap\n");
-    printf("  Width: %3d          Page: %3d\n", width, height);
-
+    vms_terminal_show(&ctx->terminal, stdout);
     return SS$_NORMAL;
 }
 
@@ -1098,14 +1078,29 @@ static int cmd_set_verify(struct dcl_command *cmd)
 }
 
 /*
- * SET TERMINAL /WIDTH= /PAGE= /ECHO /NOECHO /WRAP /NOWRAP
+ * SET TERMINAL - Modify terminal characteristics.
  *
- * Stores settings in context and applies them to the real terminal
- * via ioctl(TIOCSWINSZ) for width/page.  ECHO is toggled via termios.
+ * SET TERMINAL /WIDTH=n /PAGE=n /ECHO /NOECHO /WRAP /NOWRAP
+ *              /INSERT /OVERSTRIKE /BROADCAST /NOBROADCAST
+ *              /LINE_EDITING /NOLINE_EDITING /DEVICE_TYPE=type
+ *              /HOSTSYNC /NOHOSTSYNC /TTSYNC /NOTTSYNC
+ *              /TYPEAHEAD /NOTYPEAHEAD /TAB /NOTAB
+ *              /SCOPE /NOSCOPE /LOWERCASE /UPPERCASE
+ *              /HOLDSCREEN /NOHOLDSCREEN /EIGHTBIT /NOEIGHTBIT
+ *              /READSYNC /NOREADSYNC /PASTHRU /NOPASTHRU
+ *              /ESCAPE /NOESCAPE /FORM /NOFORM
+ *              /FULLDUP /HALFDUP /MODEM /NOMODEM
+ *              /PAGE_CHAR /NOPAGE_CHAR /SECURE /NOSECURE
+ *              /FALLBACK /NOFALLBACK /SPEED=n /PARITY=type
+ *
+ * Stores settings in the vms_terminal model and applies those
+ * that map to real termios / ioctl.
  */
 static int cmd_set_terminal(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
+    struct vms_terminal *term = &ctx->terminal;
+    int changed = 0;
 
     /* /WIDTH=n */
     const char *width_val = dcl_qualifier_value(cmd, "WIDTH");
@@ -1116,7 +1111,8 @@ static int cmd_set_terminal(struct dcl_command *cmd)
                       "invalid terminal width - \\%s\\", width_val);
             return SS$_BADPARAM;
         }
-        ctx->term_width = w;
+        term->width = w;
+        changed = 1;
     }
 
     /* /PAGE=n */
@@ -1128,46 +1124,101 @@ static int cmd_set_terminal(struct dcl_command *cmd)
                       "invalid terminal page length - \\%s\\", page_val);
             return SS$_BADPARAM;
         }
-        ctx->term_page = p;
+        term->page = p;
+        changed = 1;
     }
 
-    /* /ECHO vs /NOECHO */
-    if (dcl_has_qualifier(cmd, "NOECHO")) {
-        ctx->term_echo = 0;
-    } else if (dcl_has_qualifier(cmd, "ECHO")) {
-        ctx->term_echo = 1;
+    /* /SPEED=n */
+    const char *speed_val = dcl_qualifier_value(cmd, "SPEED");
+    if (speed_val && *speed_val) {
+        int s = atoi(speed_val);
+        if (s < 0) {
+            dcl_error("SET", 2, "INVSPEED",
+                      "invalid terminal speed - \\%s\\", speed_val);
+            return SS$_BADPARAM;
+        }
+        term->speed = s;
+        changed = 1;
     }
 
-    /* /WRAP vs /NOWRAP */
-    if (dcl_has_qualifier(cmd, "NOWRAP")) {
-        ctx->term_wrap = 0;
-    } else if (dcl_has_qualifier(cmd, "WRAP")) {
-        ctx->term_wrap = 1;
+    /* /PARITY=type (NONE, EVEN, ODD) */
+    const char *parity_val = dcl_qualifier_value(cmd, "PARITY");
+    if (parity_val && *parity_val) {
+        if (strncasecmp(parity_val, "NONE", 4) == 0)
+            term->parity = 0;
+        else if (strncasecmp(parity_val, "EVEN", 4) == 0)
+            term->parity = 1;
+        else if (strncasecmp(parity_val, "ODD", 3) == 0)
+            term->parity = 2;
+        else {
+            dcl_error("SET", 2, "INVPAR",
+                      "invalid parity type - \\%s\\", parity_val);
+            return SS$_BADPARAM;
+        }
+        changed = 1;
     }
 
-    /* Apply width/page to terminal window size if stdout is a tty */
-    if (isatty(STDOUT_FILENO)) {
-        struct winsize ws;
-        if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
-            if (width_val && *width_val)
-                ws.ws_col = (unsigned short)ctx->term_width;
-            if (page_val && *page_val)
-                ws.ws_row = (unsigned short)ctx->term_page;
-            ioctl(STDOUT_FILENO, TIOCSWINSZ, &ws);
+    /* /DEVICE_TYPE=type */
+    const char *devtype_val = dcl_qualifier_value(cmd, "DEVICE_TYPE");
+    if (!devtype_val) devtype_val = dcl_qualifier_value(cmd, "DEVICE");
+    if (devtype_val && *devtype_val) {
+        strncpy(term->device_type, devtype_val, sizeof(term->device_type) - 1);
+        term->device_type[sizeof(term->device_type) - 1] = '\0';
+        /* Uppercase the device type */
+        for (char *p = term->device_type; *p; p++)
+            *p = (char)toupper((unsigned char)*p);
+        changed = 1;
+    }
+
+    /*
+     * Boolean characteristic qualifiers.
+     * Each pair: /NAME sets bit, /NONAME clears bit.
+     * Check NO-form first so that if both are present, the positive wins.
+     */
+    static const struct { const char *on; const char *off; uint32_t bit; } quals[] = {
+        { "ECHO",          "NOECHO",          TT_ECHO          },
+        { "WRAP",          "NOWRAP",          TT_WRAP          },
+        { "BROADCAST",     "NOBROADCAST",     TT_BROADCAST     },
+        { "TYPEAHEAD",     "NOTYPEAHEAD",     TT_TYPEAHEAD     },
+        { "HOSTSYNC",      "NOHOSTSYNC",      TT_HOSTSYNC      },
+        { "TTSYNC",        "NOTTSYNC",        TT_TTSYNC        },
+        { "LINE_EDITING",  "NOLINE_EDITING",  TT_LINE_EDITING  },
+        { "INSERT",        "OVERSTRIKE",      TT_INSERT        },
+        { "SCOPE",         "NOSCOPE",         TT_SCOPE         },
+        { "LOWERCASE",     "UPPERCASE",       TT_LOWERCASE     },
+        { "TAB",           "NOTAB",           TT_TAB           },
+        { "MECHTAB",       "NOMECHTAB",       TT_MECHTAB       },
+        { "HOLDSCREEN",    "NOHOLDSCREEN",    TT_HOLDSCREEN    },
+        { "EIGHTBIT",      "NOEIGHTBIT",      TT_EIGHTBIT      },
+        { "READSYNC",      "NOREADSYNC",      TT_READSYNC      },
+        { "PASTHRU",       "NOPASTHRU",       TT_PASTHRU       },
+        { "ESCAPE",        "NOESCAPE",        TT_ESCAPE        },
+        { "FORM",          "NOFORM",          TT_FORM          },
+        { "FULLDUP",       "HALFDUP",         TT_FULLDUP       },
+        { "MODEM",         "NOMODEM",         TT_MODEM         },
+        { "PAGE_CHAR",     "NOPAGE_CHAR",     TT_PAGE          },
+        { "SECURE",        "NOSECURE",        TT_SECURE        },
+        { "FALLBACK",      "NOFALLBACK",      TT_FALLBACK      },
+        { "DIALUP",        "NODIALUP",        TT_DIALUP        },
+        { "OPER",          "NOOPER",          TT_OPER          },
+        { "ALTYPEAHD",     "NOALTYPEAHD",     TT_ALTYPEAHD     },
+        { "RUNOUT",        "NORUNOUT",        TT_RUNOUT        },
+    };
+
+    for (unsigned i = 0; i < sizeof(quals)/sizeof(quals[0]); i++) {
+        if (dcl_has_qualifier(cmd, quals[i].off)) {
+            vms_terminal_set_char(term, quals[i].bit, 0);
+            changed = 1;
+        }
+        if (dcl_has_qualifier(cmd, quals[i].on)) {
+            vms_terminal_set_char(term, quals[i].bit, 1);
+            changed = 1;
         }
     }
 
-    /* Apply echo setting via termios */
-    if (isatty(STDIN_FILENO)) {
-        struct termios tio;
-        if (tcgetattr(STDIN_FILENO, &tio) == 0) {
-            if (ctx->term_echo)
-                tio.c_lflag |= ECHO;
-            else
-                tio.c_lflag &= ~(tcflag_t)ECHO;
-            tcsetattr(STDIN_FILENO, TCSANOW, &tio);
-        }
-    }
+    /* Apply changes to real terminal */
+    if (changed)
+        vms_terminal_apply(term);
 
     return SS$_NORMAL;
 }

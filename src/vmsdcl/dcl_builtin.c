@@ -3676,50 +3676,82 @@ static int cmd_run(struct dcl_command *cmd)
 }
 
 /*
- * SPAWN - Create a subprocess.
+ * SPAWN - Create a DCL subprocess.
+ *
+ * SPAWN                    — interactive DCL subprocess
+ * SPAWN cmd                — execute single DCL command in subprocess
+ * SPAWN /NOWAIT cmd        — run DCL subprocess in background
+ * SPAWN /OUTPUT=file cmd   — redirect subprocess stdout to file
  */
 static int cmd_spawn(struct dcl_command *cmd)
 {
-    /* If params given, execute via fork/execvp (avoids shell injection) */
-    if (cmd->param_count >= 1 && cmd->params[0][0] != '\0') {
-        /* Build a NULL-terminated argv array from params */
-        char *argv[DCL_MAX_PARAMS + 1];
-        for (int i = 0; i < cmd->param_count; i++)
-            argv[i] = cmd->params[i];
-        argv[cmd->param_count] = NULL;
+    /* Resolve our own binary path for re-exec */
+    char self_exe[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", self_exe, sizeof(self_exe) - 1);
+    if (len < 0)
+        strncpy(self_exe, "vmsdcl", sizeof(self_exe) - 1);
+    else
+        self_exe[len] = '\0';
 
-        pid_t pid = fork();
-        if (pid == 0) {
-            /* Child: exec directly, no shell interpretation */
-            execvp(argv[0], argv);
-            fprintf(stderr, "%%DCL-E-CREPRC, cannot execute - %s\n", argv[0]);
-            _exit(127);
-        } else if (pid > 0) {
-            int wstatus;
-            waitpid(pid, &wstatus, 0);
-            if (WIFEXITED(wstatus))
-                return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
-            return SS$_ABORT;
-        } else {
-            dcl_error("DCL", 4, "CREPRC", "cannot create process");
-            return SS$_ABORT;
+    /* Check qualifiers */
+    int nowait = dcl_has_qualifier(cmd, "NOWAIT");
+    const char *output_file = dcl_qualifier_value(cmd, "OUTPUT");
+
+    /* Build command text from params if any */
+    int has_command = (cmd->param_count >= 1 && cmd->params[0][0] != '\0');
+    char command_text[DCL_MAX_LINE] = {0};
+    if (has_command) {
+        for (int i = 0; i < cmd->param_count; i++) {
+            if (i > 0)
+                strncat(command_text, " ",
+                        sizeof(command_text) - strlen(command_text) - 1);
+            strncat(command_text, cmd->params[i],
+                    sizeof(command_text) - strlen(command_text) - 1);
+        }
+        /* Append rest-of-line if present (after pipe chars etc.) */
+        if (cmd->rest[0]) {
+            strncat(command_text, " ",
+                    sizeof(command_text) - strlen(command_text) - 1);
+            strncat(command_text, cmd->rest,
+                    sizeof(command_text) - strlen(command_text) - 1);
         }
     }
 
-    /* No params - spawn an interactive shell */
-    const char *shell = getenv("SHELL");
-    if (!shell) shell = "/bin/sh";
-
     pid_t pid = fork();
     if (pid == 0) {
-        execl(shell, shell, (char *)NULL);
-        _exit(1);
-    } else if (pid > 0) {
-        int wstatus;
-        waitpid(pid, &wstatus, 0);
-    }
+        /* Child process */
 
-    return SS$_NORMAL;
+        /* Handle /OUTPUT=file redirection */
+        if (output_file) {
+            int fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd >= 0) {
+                dup2(fd, STDOUT_FILENO);
+                close(fd);
+            }
+        }
+
+        if (has_command) {
+            execl(self_exe, "vmsdcl", "-c", command_text, (char *)NULL);
+        } else {
+            execl(self_exe, "vmsdcl", (char *)NULL);
+        }
+        fprintf(stderr, "%%DCL-E-CREPRC, cannot create subprocess\n");
+        _exit(127);
+    } else if (pid > 0) {
+        if (nowait) {
+            /* /NOWAIT: print PID and return immediately */
+            printf("%%DCL-I-SPAWNED, process id is %d\n", (int)pid);
+        } else {
+            int wstatus;
+            waitpid(pid, &wstatus, 0);
+            if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) != 0)
+                return SS$_ABORT;
+        }
+        return SS$_NORMAL;
+    } else {
+        dcl_error("DCL", 4, "CREPRC", "cannot create process");
+        return SS$_ABORT;
+    }
 }
 
 /*
@@ -4603,7 +4635,7 @@ static struct dcl_verb builtin_verbs[] = {
       "Display information about the system, process, or files" },
     { "SORT",        cmd_sort,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Sort records in a file" },
-    { "SPAWN",       cmd_spawn,       CDU_F_ABBREV | CDU_F_PARAM, 2,
+    { "SPAWN",       cmd_spawn,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Create a subprocess" },
     { "STOP",        cmd_stop,        CDU_F_ABBREV, 2,
       "Stop the current process" },

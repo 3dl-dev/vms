@@ -1,0 +1,7 @@
+#!/bin/bash
+# TEST: DEFINE creates logical name and DEASSIGN removes it
+# EXPECT: contains:TEST_EQUIV_VALUE
+# EXPECT: contains:no logical name match
+VMSDCL="${VMSDCL:-vmsdcl}"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+printf 'DEFINE TESTLOGICAL "TEST_EQUIV_VALUE"\nSHOW LOGICAL TESTLOGICAL\nDEASSIGN TESTLOGICAL\nSHOW LOGICAL TESTLOGICAL\n' | $VMSDCL 2>&1

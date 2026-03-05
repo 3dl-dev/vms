@@ -16,6 +16,7 @@
 #include <pwd.h>
 #include <sys/utsname.h>
 #include <sys/stat.h>
+#include <termios.h>
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -162,14 +163,34 @@ void dcl_context_init(struct dcl_context *ctx)
 }
 
 /*
- * Signal handler for Ctrl-C (keep shell alive).
+ * Signal handler for Ctrl-C / Ctrl-Y (VMS interrupt model).
+ *
+ * When a child process is running:
+ *   - If Ctrl-Y is enabled, stop the child (SIGTSTP) and return to DCL prompt
+ *   - The stopped child PID is saved so CONTINUE can resume it
+ * When no child is running:
+ *   - Cancel the current input line (standard shell behavior)
  */
 static volatile sig_atomic_t sigint_received = 0;
+
+/* Currently running child PID — set during waitpid, cleared after.
+ * Accessed from signal handler, so must be volatile sig_atomic_t. */
+volatile sig_atomic_t dcl_running_child = 0;
 
 static void sigint_handler(int sig)
 {
     (void)sig;
     sigint_received = 1;
+
+    pid_t child = (pid_t)dcl_running_child;
+    if (child > 0 && dcl_ctx.ctrl_y_enabled) {
+        /* Stop the running child process — VMS Ctrl-Y behavior */
+        kill(child, SIGTSTP);
+        /* The waitpid in the caller (with WUNTRACED) will pick up the stop */
+        return;
+    }
+
+    /* No child running — cancel current input line */
 #ifdef HAVE_READLINE
     printf("\n");
     rl_on_new_line();
@@ -178,6 +199,40 @@ static void sigint_handler(int sig)
 #else
     printf("\n");
 #endif
+}
+
+/*
+ * Terminal VEOF configuration — Ctrl+Z is EOF on VMS, not Ctrl+D.
+ * Save original termios so we can restore on exit.
+ */
+static struct termios orig_termios;
+static int termios_saved = 0;
+
+static void restore_termios(void)
+{
+    if (termios_saved) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
+        termios_saved = 0;
+    }
+}
+
+static void setup_vms_eof(void)
+{
+    if (!isatty(STDIN_FILENO))
+        return;
+
+    struct termios tio;
+    if (tcgetattr(STDIN_FILENO, &tio) != 0)
+        return;
+
+    /* Save original settings for restore on exit */
+    orig_termios = tio;
+    termios_saved = 1;
+    atexit(restore_termios);
+
+    /* Set VEOF to Ctrl+Z (0x1A = 26) — VMS convention */
+    tio.c_cc[VEOF] = 26;
+    tcsetattr(STDIN_FILENO, TCSANOW, &tio);
 }
 
 /*
@@ -325,6 +380,9 @@ int main(int argc, char *argv[])
     dcl_context_init(&dcl_ctx);
     setup_session(&dcl_ctx);
 
+    /* Set VEOF to Ctrl+Z (VMS convention) */
+    setup_vms_eof();
+
     /* Check for --login flag */
     int login_mode = 0;
     for (int i = 1; i < argc; i++) {
@@ -404,7 +462,7 @@ int main(int argc, char *argv[])
 #ifdef HAVE_READLINE
             line = readline(dcl_ctx.prompt);
             if (!line) {
-                /* EOF (Ctrl-D) */
+                /* EOF (Ctrl-Z on VMS) — treat as LOGOUT */
                 printf("\n");
                 break;
             }
@@ -512,6 +570,7 @@ int main(int argc, char *argv[])
     }
 
     /* Cleanup */
+    restore_termios();
     /* Close any open channels */
     for (int i = 0; i < 16; i++) {
         if (dcl_ctx.channels[i].fp) {

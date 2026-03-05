@@ -8,6 +8,7 @@ add_executable(vmsdcl
     dcl_exec.c
     dcl_backup.c
     dcl_builtin.c
+    dcl_editor.c
     dcl_terminal.c
     dcl_symbol.c
     dcl_lexical.c

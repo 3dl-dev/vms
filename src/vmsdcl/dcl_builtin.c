@@ -60,6 +60,13 @@ extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);
 extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
                             char *linux_path, size_t path_size);
+
+/* BACKUP command (dcl_backup.c) */
+extern int cmd_backup(struct dcl_command *cmd);
+
+/* LIBRARY command (dcl_library.c) */
+extern int cmd_library(struct dcl_command *cmd);
+
 extern int dcl_format_directory(const char *linux_path, char *vms_dir,
                                 size_t dir_size);
 extern int dcl_format_filespec(const char *linux_path, char *vms_spec,
@@ -90,6 +97,51 @@ static const char *vms_months[] = {
     "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
     "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
 };
+
+/* ================================================================== */
+/*                     VMS Device Table                                */
+/* ================================================================== */
+
+#define VMS_MAX_DEVICES 64
+
+struct vms_device {
+    char vms_name[16];      /* DUA0:, DKA0:, DNA0: */
+    char linux_path[256];   /* /dev/sda1, /mnt/data, etc. */
+    char volume_label[16];  /* Volume label */
+    int  mounted;           /* 1 = mounted, 0 = not mounted */
+};
+
+static struct vms_device vms_device_table[VMS_MAX_DEVICES];
+static int vms_device_count = 0;
+
+/*
+ * Find a device in the table by VMS name (case-insensitive).
+ * The name may or may not include trailing colon.
+ */
+static struct vms_device *vms_find_device(const char *name)
+{
+    char upper[16];
+    size_t len = strlen(name);
+    if (len >= sizeof(upper)) len = sizeof(upper) - 1;
+    for (size_t i = 0; i < len; i++)
+        upper[i] = (char)toupper((unsigned char)name[i]);
+    upper[len] = '\0';
+    /* Strip trailing colon for comparison */
+    if (len > 0 && upper[len - 1] == ':')
+        upper[--len] = '\0';
+
+    for (int i = 0; i < vms_device_count; i++) {
+        char dev[16];
+        strncpy(dev, vms_device_table[i].vms_name, sizeof(dev) - 1);
+        dev[sizeof(dev) - 1] = '\0';
+        size_t dlen = strlen(dev);
+        if (dlen > 0 && dev[dlen - 1] == ':')
+            dev[--dlen] = '\0';
+        if (strcasecmp(upper, dev) == 0)
+            return &vms_device_table[i];
+    }
+    return NULL;
+}
 
 /* ================================================================== */
 /*                          SHOW Commands                              */
@@ -663,6 +715,15 @@ static int cmd_show_device(struct dcl_command *cmd)
         /* Nothing printed — show a stub */
         printf("$1$DGA0:              Mounted              0  %-14s%9d     1   1\n",
                "OVMXSYS", 0);
+    }
+
+
+    /* Show user-mounted devices from the device table */
+    for (int i = 0; i < vms_device_count; i++) {
+        const char *status = vms_device_table[i].mounted ? "Mounted" : "Dismounted";
+        printf("%-24s %-14s       0  %-14s%9d     1   1\n",
+               vms_device_table[i].vms_name, status,
+               vms_device_table[i].volume_label, 0);
     }
 
     return SS$_NORMAL;
@@ -4161,8 +4222,17 @@ static int cmd_spawn(struct dcl_command *cmd)
             /* /NOWAIT: print PID and return immediately */
             printf("%%DCL-I-SPAWNED, process id is %d\n", (int)pid);
         } else {
+            extern volatile sig_atomic_t dcl_running_child;
+            struct dcl_context *spawn_ctx = dcl_get_context();
+            dcl_running_child = (sig_atomic_t)pid;
             int wstatus;
-            waitpid(pid, &wstatus, 0);
+            waitpid(pid, &wstatus, WUNTRACED);
+            dcl_running_child = 0;
+            if (WIFSTOPPED(wstatus)) {
+                printf("\nInterrupt\n");
+                spawn_ctx->interrupted_pid = pid;
+                return SS$_ABORT;
+            }
             if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) != 0)
                 return SS$_ABORT;
         }
@@ -5324,6 +5394,165 @@ static int cmd_tcpip(struct dcl_command *cmd)
 }
 
 /* ================================================================== */
+/*                    MOUNT / DISMOUNT Commands                        */
+/* ================================================================== */
+
+/*
+ * MOUNT - Mount a VMS device (virtual mapping to a directory).
+ *
+ * Syntax: MOUNT device: label [/SYSTEM]
+ */
+static int cmd_mount(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 1) {
+        dcl_error("MOUNT", 2, "NODEVICE",
+                  "no device specified");
+        return SS$_BADPARAM;
+    }
+
+    const char *device = cmd->params[0];
+
+    /* Validate device name */
+    size_t dlen = strlen(device);
+    if (dlen < 2) {
+        dcl_error("MOUNT", 2, "IVDEVNAM",
+                  "invalid device name - \\%s\\", device);
+        return SS$_IVDEVNAM;
+    }
+
+    /* Build canonical device name (uppercase, with colon) */
+    char dev_name[16];
+    size_t nlen = dlen;
+    if (nlen >= sizeof(dev_name) - 1) nlen = sizeof(dev_name) - 2;
+    for (size_t i = 0; i < nlen; i++)
+        dev_name[i] = (char)toupper((unsigned char)device[i]);
+    dev_name[nlen] = '\0';
+    if (dev_name[nlen - 1] != ':') {
+        dev_name[nlen] = ':';
+        dev_name[nlen + 1] = '\0';
+    }
+
+    /* Check if already mounted */
+    struct vms_device *existing = vms_find_device(dev_name);
+    if (existing && existing->mounted) {
+        dcl_error("MOUNT", 2, "DEVMOUNT",
+                  "device already mounted - _%s", dev_name);
+        return SS$_DEVMOUNT;
+    }
+
+    /* Get volume label */
+    char label[16] = "OVMX";
+    if (cmd->param_count >= 2) {
+        size_t llen = strlen(cmd->params[1]);
+        if (llen >= sizeof(label)) llen = sizeof(label) - 1;
+        for (size_t i = 0; i < llen; i++)
+            label[i] = (char)toupper((unsigned char)cmd->params[1][i]);
+        label[llen] = '\0';
+    }
+
+    /* Use current directory as mount path */
+    char linux_path[256];
+    if (!getcwd(linux_path, sizeof(linux_path))) {
+        strncpy(linux_path, "/", sizeof(linux_path) - 1);
+        linux_path[sizeof(linux_path) - 1] = '\0';
+    }
+
+    /* Add or update device table entry */
+    struct vms_device *dev = existing;
+    if (!dev) {
+        if (vms_device_count >= VMS_MAX_DEVICES) {
+            dcl_error("MOUNT", 2, "DEVFULL",
+                      "device table full");
+            return SS$_DEVALLOC;
+        }
+        dev = &vms_device_table[vms_device_count++];
+    }
+    strncpy(dev->vms_name, dev_name, sizeof(dev->vms_name) - 1);
+    dev->vms_name[sizeof(dev->vms_name) - 1] = '\0';
+    strncpy(dev->linux_path, linux_path, sizeof(dev->linux_path) - 1);
+    dev->linux_path[sizeof(dev->linux_path) - 1] = '\0';
+    strncpy(dev->volume_label, label, sizeof(dev->volume_label) - 1);
+    dev->volume_label[sizeof(dev->volume_label) - 1] = '\0';
+    dev->mounted = 1;
+
+    /* Create logical name for device -> linux path */
+    const char *table = LNM_PROCESS_TABLE;
+    if (dcl_has_qualifier(cmd, "SYSTEM"))
+        table = LNM_SYSTEM_TABLE;
+
+    /* Strip trailing colon for logical name */
+    char log_name[16];
+    strncpy(log_name, dev_name, sizeof(log_name) - 1);
+    log_name[sizeof(log_name) - 1] = '\0';
+    size_t lnlen = strlen(log_name);
+    if (lnlen > 0 && log_name[lnlen - 1] == ':')
+        log_name[lnlen - 1] = '\0';
+
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (mgr) {
+        lnm_create(mgr, table, log_name, linux_path,
+                   LNM_ATTR_TERMINAL, LNM_MODE_USER);
+    }
+
+    printf("%%MOUNT-I-MOUNTED, %s mounted on _%s\n", label, dev_name);
+    return SS$_NORMAL;
+}
+
+/*
+ * DISMOUNT - Dismount a VMS device.
+ *
+ * Syntax: DISMOUNT device:
+ */
+static int cmd_dismount(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 1) {
+        dcl_error("DISMOUNT", 2, "NODEVICE",
+                  "no device specified");
+        return SS$_BADPARAM;
+    }
+
+    const char *device = cmd->params[0];
+
+    /* Build canonical device name */
+    char dev_name[16];
+    size_t nlen = strlen(device);
+    if (nlen >= sizeof(dev_name) - 1) nlen = sizeof(dev_name) - 2;
+    for (size_t i = 0; i < nlen; i++)
+        dev_name[i] = (char)toupper((unsigned char)device[i]);
+    dev_name[nlen] = '\0';
+    if (dev_name[nlen - 1] != ':') {
+        dev_name[nlen] = ':';
+        dev_name[nlen + 1] = '\0';
+    }
+
+    struct vms_device *dev = vms_find_device(dev_name);
+    if (!dev || !dev->mounted) {
+        dcl_error("DISMOUNT", 2, "DEVNOTMNT",
+                  "device is not mounted - _%s", dev_name);
+        return SS$_DEVNOTMOUNT;
+    }
+
+    dev->mounted = 0;
+
+    /* Remove logical name */
+    char log_name[16];
+    strncpy(log_name, dev_name, sizeof(log_name) - 1);
+    log_name[sizeof(log_name) - 1] = '\0';
+    size_t lnlen = strlen(log_name);
+    if (lnlen > 0 && log_name[lnlen - 1] == ':')
+        log_name[lnlen - 1] = '\0';
+
+    lnm_manager_t *mgr = lnm_get_manager();
+    if (mgr) {
+        lnm_delete(mgr, LNM_PROCESS_TABLE, log_name, LNM_MODE_USER);
+        lnm_delete(mgr, LNM_SYSTEM_TABLE, log_name, LNM_MODE_USER);
+    }
+
+    printf("%%DISMOUNT-I-DISMOUNTED, _%s dismounted\n", dev_name);
+    return SS$_NORMAL;
+}
+
+/* ================================================================== */
 /*                     Command Table                                   */
 /* ================================================================== */
 
@@ -5334,6 +5563,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Append source file to destination file" },
     { "ASSIGN",      cmd_assign,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Assign a logical name (equivalence name to logical name)" },
+    { "BACKUP",      cmd_backup,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Create, restore, or list a saveset file" },
     { "CLOSE",       cmd_close,       CDU_F_ABBREV | CDU_F_PARAM, 2,
       "Close a file that was opened for I/O" },
     { "COPY",        cmd_copy,        CDU_F_ABBREV | CDU_F_PARAM, 3,
@@ -5350,6 +5581,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Compare two files and display differences" },
     { "DIRECTORY",   cmd_directory,   CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "List files in a directory" },
+    { "DISMOUNT",    cmd_dismount,    CDU_F_ABBREV | CDU_F_PARAM, 4,
+      "Dismount a volume from a device" },
     { "DUMP",        cmd_dump,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Display contents of a file in hexadecimal and ASCII" },
     { "EXIT",        cmd_exit,        CDU_F_ABBREV, 2,
@@ -5358,12 +5591,16 @@ static struct dcl_verb builtin_verbs[] = {
       "Obtain information about DCL commands" },
     { "INQUIRE",     cmd_inquire,     CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Read input from SYS$INPUT and assign to a symbol" },
+    { "LIBRARY",     cmd_library,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Manage text, help, and object libraries" },
     { "LOGOUT",      cmd_logout,      CDU_F_ABBREV, 2,
       "Terminate an interactive session" },
     { "MAIL",      cmd_mail,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Send and receive electronic mail messages" },
     { "MONITOR",   cmd_monitor,   CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Display real-time system activity statistics" },
+    { "MOUNT",       cmd_mount,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Mount a volume on a device" },
     { "OPEN",        cmd_open,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Open a file for reading or writing" },
     { "PIPE",        cmd_pipe,        CDU_F_ABBREV | CDU_F_PARAM, 3,

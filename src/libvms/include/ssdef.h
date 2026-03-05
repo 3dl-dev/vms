@@ -76,6 +76,7 @@ extern "C" {
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */
 #define SS$_NOSUCHDEV       2680    /* No such device */
+#define SS$_DEVMOUNT        2684    /* Device already mounted */
 #define SS$_DEVNOTMOUNT     2688    /* Device not mounted */
 #define SS$_NOSUCHFILE      2696    /* No such file */
 

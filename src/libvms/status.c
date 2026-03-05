@@ -55,6 +55,7 @@ static const struct status_entry known_codes[] = {
     { SS$_NOSUCHFILE,   "SYSTEM", "NOSUCHFILE",   "no such file" },
     { SS$_BUGCHECK,     "SYSTEM", "BUGCHECK",     "internal consistency failure" },
     { SS$_FILACCERR,    "SYSTEM", "FILACCERR",    "file access error" },
+    { SS$_DEVMOUNT,     "SYSTEM", "DEVMOUNT",     "device already mounted" },
     { SS$_DEVNOTMOUNT,  "SYSTEM", "DEVNOTMOUNT",  "device not mounted" },
     { SS$_DEVALLOC,     "SYSTEM", "DEVALLOC",     "device already allocated" },
     { SS$_IVDEVNAM,     "SYSTEM", "IVDEVNAM",     "invalid device name" },

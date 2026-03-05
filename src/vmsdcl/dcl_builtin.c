@@ -4140,9 +4140,18 @@ static int cmd_run(struct dcl_command *cmd)
         execl(linux_path, linux_path, (char *)NULL);
         _exit(1);
     } else if (pid > 0) {
-        /* Parent - wait for child */
+        /* Parent - wait for child (WUNTRACED for Ctrl-Y stop support) */
+        extern volatile sig_atomic_t dcl_running_child;
+        dcl_running_child = (sig_atomic_t)pid;
         int wstatus;
-        waitpid(pid, &wstatus, 0);
+        waitpid(pid, &wstatus, WUNTRACED);
+        dcl_running_child = 0;
+        if (WIFSTOPPED(wstatus)) {
+            /* Child was stopped by Ctrl-Y — save for CONTINUE */
+            printf("\nInterrupt\n");
+            ctx->interrupted_pid = pid;
+            return SS$_ABORT;
+        }
         if (WIFEXITED(wstatus)) {
             int exit_code = WEXITSTATUS(wstatus);
             return (exit_code == 0) ? SS$_NORMAL : SS$_ABORT;
@@ -4576,8 +4585,17 @@ static int cmd_mail(struct dcl_command *cmd)
         execvp("vms_mail", exec_argv);
         _exit(1);
     } else if (pid > 0) {
+        extern volatile sig_atomic_t dcl_running_child;
+        struct dcl_context *mail_ctx = dcl_get_context();
+        dcl_running_child = (sig_atomic_t)pid;
         int wstatus;
-        waitpid(pid, &wstatus, 0);
+        waitpid(pid, &wstatus, WUNTRACED);
+        dcl_running_child = 0;
+        if (WIFSTOPPED(wstatus)) {
+            printf("\nInterrupt\n");
+            mail_ctx->interrupted_pid = pid;
+            return SS$_ABORT;
+        }
         if (WIFEXITED(wstatus))
             return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
     } else {

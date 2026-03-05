@@ -349,13 +349,16 @@ static void test_ots_cvt_ti_l(void)
     int32_t result = 0;
     struct dsc$descriptor_s src = dsc$init("  123");
 
-    uint32_t st = ots$cvt_ti_l(&src, &result, NULL);
+    uint32_t uresult = 0;
+    uint32_t st = ots$cvt_ti_l(&src, &uresult, 4, 0);
+    result = (int32_t)uresult;
     check(st == SS$_NORMAL, "ots$cvt_ti_l('  123') returns SS$_NORMAL");
     check(result == 123, "ots$cvt_ti_l('  123') = 123");
 
     /* Negative */
     src = dsc$init("-456");
-    st = ots$cvt_ti_l(&src, &result, NULL);
+    st = ots$cvt_ti_l(&src, &uresult, 4, 0);
+    result = (int32_t)uresult;
     check(st == SS$_NORMAL, "ots$cvt_ti_l('-456') returns SS$_NORMAL");
     check(result == -456, "ots$cvt_ti_l('-456') = -456");
 }
@@ -376,7 +379,7 @@ static void test_ots_cvt_l_tz(void)
     desc.dsc$a_pointer = buf;
 
     int32_t val = 255;
-    uint32_t st = ots$cvt_l_tz(&val, &desc, NULL);
+    uint32_t st = ots$cvt_l_tz(&val, &desc, NULL, 4);
     check(st == SS$_NORMAL, "ots$cvt_l_tz(255) returns SS$_NORMAL");
 
     /* Should contain "FF" right-justified in 8-char field */
@@ -386,7 +389,7 @@ static void test_ots_cvt_l_tz(void)
     /* Zero */
     memset(buf, 0, sizeof(buf));
     val = 0;
-    st = ots$cvt_l_tz(&val, &desc, NULL);
+    st = ots$cvt_l_tz(&val, &desc, NULL, 4);
     check(st == SS$_NORMAL, "ots$cvt_l_tz(0) returns SS$_NORMAL");
     check(buf[7] == '0', "ots$cvt_l_tz(0) contains '0'");
 }
@@ -407,7 +410,7 @@ static void test_ots_cvt_l_to(void)
     desc.dsc$a_pointer = buf;
 
     int32_t val = 8;
-    uint32_t st = ots$cvt_l_to(&val, &desc, NULL);
+    uint32_t st = ots$cvt_l_to(&val, &desc, NULL, 4);
     check(st == SS$_NORMAL, "ots$cvt_l_to(8) returns SS$_NORMAL");
 
     /* 8 decimal = 10 octal, right-justified in 8-char field */
@@ -417,7 +420,7 @@ static void test_ots_cvt_l_to(void)
     /* 63 decimal = 77 octal */
     memset(buf, 0, sizeof(buf));
     val = 63;
-    st = ots$cvt_l_to(&val, &desc, NULL);
+    st = ots$cvt_l_to(&val, &desc, NULL, 4);
     check(st == SS$_NORMAL, "ots$cvt_l_to(63) returns SS$_NORMAL");
     check(buf[6] == '7' && buf[7] == '7',
           "ots$cvt_l_to(63) = '      77'");

@@ -28,7 +28,12 @@ check_vms_format() {
 # Test 1: Invalid command verb → %DCL-E-IVVERB
 output=$(echo "XYZZY_INVALID_CMD" | $VMSDCL 2>&1)
 check_vms_format "invalid verb" "$output"
-echo "$output" | grep -q '%DCL-E-IVVERB' && echo "PASS: IVVERB format" || echo "FAIL: IVVERB format"
+if echo "$output" | grep -q '%DCL-E-IVVERB'; then
+    echo "PASS: IVVERB format"
+    echo "$output" | grep '^%'
+else
+    echo "FAIL: IVVERB format"
+fi
 
 # Test 2: Missing SHOW keyword → %DCL-E-NOKEYW
 output=$(echo "SHOW" | $VMSDCL 2>&1)

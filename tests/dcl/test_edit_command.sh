@@ -7,7 +7,7 @@
 VMSDCL="${VMSDCL:-vmsdcl}"
 TDIR="dcl_edittest_$$"
 VDIR="$(echo "$TDIR" | tr a-z A-Z)"
-mkdir -p "/vms/$TDIR"
+mkdir -p "/vms/$VDIR"
 
 # Test 1: Create a file via EDIT with INSERT, then EXIT (saves)
 # All commands go through single stdin pipe: DCL commands first, then EDT commands
@@ -19,4 +19,4 @@ printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\nEDIT EDTFILE.TXT\nDELETE 2\n1\nSUBSTITUT
 # Display the resulting file to verify
 printf 'SET DEFAULT SYS$SYSDEVICE:[%s]\nTYPE EDTFILE.TXT\n' "$VDIR" | $VMSDCL 2>&1
 
-rm -rf "/vms/$TDIR"
+rm -rf "/vms/$VDIR"

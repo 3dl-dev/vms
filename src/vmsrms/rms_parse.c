@@ -12,9 +12,49 @@
 #include "rms/rms.h"
 #include "vmsfs/filespec.h"
 
-/* External: vmsfs resolve with defaults */
-extern int vmsfs_resolve(const char *spec, const char *default_spec,
-                         char *result, size_t resultlen);
+/*
+ * Apply defaults from default_spec to spec using vmsfs parse/compose.
+ * Missing fields in spec are filled from default_spec.
+ * Returns 0 on success, -1 on failure.
+ */
+static int apply_filespec_defaults(const char *spec, const char *default_spec,
+                                   char *result, size_t resultlen)
+{
+    vmsfs_filespec_t parsed, defaults;
+
+    if (vmsfs_parse_filespec(spec, &parsed) != 0)
+        return -1;
+
+    if (default_spec) {
+        if (vmsfs_parse_filespec(default_spec, &defaults) == 0) {
+            if (!parsed.has_device && defaults.has_device) {
+                memcpy(parsed.device, defaults.device, sizeof(parsed.device));
+                parsed.has_device = 1;
+            }
+            if (!parsed.has_directory && defaults.has_directory) {
+                memcpy(parsed.directory, defaults.directory, sizeof(parsed.directory));
+                parsed.has_directory = 1;
+            }
+            if (!parsed.has_name && defaults.has_name) {
+                memcpy(parsed.name, defaults.name, sizeof(parsed.name));
+                parsed.has_name = 1;
+            }
+            if (!parsed.has_type && defaults.has_type) {
+                memcpy(parsed.type, defaults.type, sizeof(parsed.type));
+                parsed.has_type = 1;
+            }
+            if (!parsed.has_version && defaults.has_version) {
+                parsed.version = defaults.version;
+                parsed.has_version = 1;
+            }
+        }
+    }
+
+    if (vmsfs_compose_filespec(&parsed, result, resultlen) != 0)
+        return -1;
+
+    return 0;
+}
 
 /*
  * sys$parse - Parse a filespec.
@@ -73,8 +113,8 @@ uint32_t sys$parse(void *fab_ptr)
 
     /* Apply defaults and expand the filespec */
     char combined[1024];
-    if (vmsfs_resolve(spec, default_spec[0] ? default_spec : NULL,
-                      combined, sizeof(combined)) < 0) {
+    if (apply_filespec_defaults(spec, default_spec[0] ? default_spec : NULL,
+                               combined, sizeof(combined)) < 0) {
         /* If resolve fails, use the raw spec */
         strncpy(combined, spec, sizeof(combined) - 1);
         combined[sizeof(combined) - 1] = '\0';

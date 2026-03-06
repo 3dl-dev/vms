@@ -331,20 +331,21 @@ int vmsfs_compose_filespec(const vmsfs_filespec_t *parts, char *result, size_t r
     return SS$_NORMAL;
 }
 
+/* Maximum recursion depth for device/logical name resolution */
+#define VMSFS_RESOLVE_MAX_DEPTH 10
+
 /*
- * vmsfs_resolve_device - Look up a VMS device name as a logical name.
- *
- * Uses the logical name manager to translate device names like SYS$DISK,
- * SYS$LOGIN, DKA0, etc. to Linux directory paths.
- *
- * Falls back to /vms/<device> if the logical name is not defined.
- *
- * Returns SS$_NORMAL on success.
+ * Internal recursive device resolver with depth tracking.
  */
-int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
+static int vmsfs_resolve_device_r(const char *device, char *linux_dir,
+                                   size_t dir_size, int depth)
 {
     if (!device || !linux_dir || dir_size == 0) {
         return SS$_BADPARAM;
+    }
+
+    if (depth >= VMSFS_RESOLVE_MAX_DEPTH) {
+        return SS$_RESULTOVF;  /* Logical name translation loop */
     }
 
     /* Upcase the device name for lookup */
@@ -403,7 +404,7 @@ int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
             if (elen > 0 && equiv[elen - 1] == ':') {
                 equiv[elen - 1] = '\0';  /* Strip trailing colon */
             }
-            return vmsfs_resolve_device(equiv, linux_dir, dir_size);
+            return vmsfs_resolve_device_r(equiv, linux_dir, dir_size, depth + 1);
         }
     }
 
@@ -416,6 +417,21 @@ int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
     linux_dir[dir_size - 1] = '\0';
 
     return SS$_NORMAL;
+}
+
+/*
+ * vmsfs_resolve_device - Look up a VMS device name as a logical name.
+ *
+ * Uses the logical name manager to translate device names like SYS$DISK,
+ * SYS$LOGIN, DKA0, etc. to Linux directory paths.
+ *
+ * Falls back to /vms/<device> if the logical name is not defined.
+ *
+ * Returns SS$_NORMAL on success, SS$_RESULTOVF on recursive loop.
+ */
+int vmsfs_resolve_device(const char *device, char *linux_dir, size_t dir_size)
+{
+    return vmsfs_resolve_device_r(device, linux_dir, dir_size, 0);
 }
 
 /*

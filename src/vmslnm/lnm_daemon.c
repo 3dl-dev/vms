@@ -51,6 +51,10 @@
 
 static volatile int daemon_running = 1;
 
+/* Read-write lock protecting the logical name manager.
+ * TRANSLATE/ENUMERATE take the read lock; CREATE/DELETE take the write lock. */
+static pthread_rwlock_t lnm_rwlock = PTHREAD_RWLOCK_INITIALIZER;
+
 static void handle_signal(int sig)
 {
     (void)sig;
@@ -113,8 +117,10 @@ static void process_command(lnm_manager_t *mgr, int client_fd, char *cmd)
             /* Trim leading whitespace from value */
             while (*value == ' ' || *value == '\t')
                 value++;
+            pthread_rwlock_wrlock(&lnm_rwlock);
             uint32_t status = lnm_create(mgr, table, name, value,
                                           0, LNM_MODE_USER);
+            pthread_rwlock_unlock(&lnm_rwlock);
             if ($VMS_STATUS_SUCCESS(status))
                 snprintf(response, sizeof(response), "OK\n");
             else
@@ -129,7 +135,9 @@ static void process_command(lnm_manager_t *mgr, int client_fd, char *cmd)
         if (!table || !name) {
             snprintf(response, sizeof(response), "ERR %08X\n", SS$_BADPARAM);
         } else {
+            pthread_rwlock_wrlock(&lnm_rwlock);
             uint32_t status = lnm_delete(mgr, table, name, LNM_MODE_USER);
+            pthread_rwlock_unlock(&lnm_rwlock);
             if ($VMS_STATUS_SUCCESS(status))
                 snprintf(response, sizeof(response), "OK\n");
             else
@@ -147,9 +155,11 @@ static void process_command(lnm_manager_t *mgr, int client_fd, char *cmd)
             char result[LNM_MAX_VALUE + 1];
             uint16_t result_len = 0;
             uint32_t attrs = 0;
+            pthread_rwlock_rdlock(&lnm_rwlock);
             uint32_t status = lnm_translate(mgr, table, name,
                                              result, sizeof(result),
                                              &result_len, &attrs);
+            pthread_rwlock_unlock(&lnm_rwlock);
             if ($VMS_STATUS_SUCCESS(status))
                 snprintf(response, sizeof(response), "OK %s\n", result);
             else
@@ -166,7 +176,9 @@ static void process_command(lnm_manager_t *mgr, int client_fd, char *cmd)
         } else {
             struct enum_ctx ctx;
             ctx.fd = client_fd;
+            pthread_rwlock_rdlock(&lnm_rwlock);
             uint32_t status = lnm_enumerate(mgr, table, enum_callback, &ctx);
+            pthread_rwlock_unlock(&lnm_rwlock);
             if (!$VMS_STATUS_SUCCESS(status)) {
                 snprintf(response, sizeof(response), "ERR %08X\n", status);
                 (void)write(client_fd, response, strlen(response));

@@ -697,16 +697,29 @@ int main(void)
     fflush(stdout);
     fflush(stderr);
 
-    /* Step 7: Login loop */
+    /* Step 7: Login loop (only if stdin is a terminal) */
     char loginout_path[512], dcl_path[512];
     vms_to_linux(VMS_LOGINOUT_PATH, loginout_path, sizeof(loginout_path));
     vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
 
+    int console_interactive = isatty(STDIN_FILENO);
     int consecutive_failures = 0;
+
+    if (!console_interactive && sshd_started) {
+        /* Non-interactive with SSH running (e.g. docker run without -it).
+         * Skip console login loop — just wait for shutdown signal.
+         * SSH sessions still work normally. */
+        fprintf(stderr,
+            "%%STARTUP-I-NONCONSOLE, no interactive console, "
+            "serving SSH connections only\n");
+        fflush(stderr);
+        while (!shutdown_requested)
+            pause();
+    }
 
     while (!shutdown_requested) {
         /* Check if stdin is still open (avoid tight loop on EOF) */
-        if (!isatty(STDIN_FILENO) && feof(stdin)) {
+        if (!console_interactive && feof(stdin)) {
             break;
         }
 

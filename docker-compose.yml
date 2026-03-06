@@ -3,7 +3,7 @@ services:
     build: .
     image: ovmx:latest
     ports:
-      - "2222:22"
+      - "127.0.0.1:2222:22"
     stdin_open: true
     tty: true
     restart: unless-stopped

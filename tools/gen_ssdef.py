@@ -80,7 +80,7 @@ STATUS_CODES = [
     ("SS$_NONEXPR",     0x0020, SEV_ERROR,    "Nonexistent process"),
     ("SS$_SUSPENDED",   0x0021, SEV_ERROR,    "Process suspended"),
     ("SS$_RESIGNAL",    0x0022, SEV_ERROR,    "Resignal condition"),
-    ("SS$_CONTINUE",    0x0006, SEV_SUCCESS,  "Continue execution"),
+    ("SS$_CONTINUE",    0x0000, SEV_SUCCESS,  "Continue execution (same as SS$_NORMAL)"),
     ("SS$_UNWIND",      0x0023, SEV_ERROR,    "Unwind call stack"),
 
     # Timer

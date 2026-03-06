@@ -714,7 +714,18 @@ static void fsearch_populate(struct fsearch_ctx *fsc)
     while ((de = readdir(d)) != NULL && fsc->match_count < FSEARCH_MAX_MATCHES) {
         if (de->d_name[0] == '.') continue;  /* skip hidden */
         if (fnmatch(fsc->pattern, de->d_name, FNM_CASEFOLD) == 0) {
-            fsc->matches[fsc->match_count++] = strdup(de->d_name);
+            char *dup = strdup(de->d_name);
+            if (!dup) {
+                /* Out of memory — free what we have and bail */
+                for (int j = 0; j < fsc->match_count; j++) {
+                    free(fsc->matches[j]);
+                    fsc->matches[j] = NULL;
+                }
+                fsc->match_count = 0;
+                closedir(d);
+                return;
+            }
+            fsc->matches[fsc->match_count++] = dup;
         }
     }
     closedir(d);

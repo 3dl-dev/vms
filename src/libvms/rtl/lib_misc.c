@@ -230,7 +230,8 @@ uint32_t lib$find_file(const struct dsc$descriptor_s *filespec,
         if (!pglob) return SS$_INSFMEM;
 
         int result = glob(spec, GLOB_NOCHECK | GLOB_TILDE, NULL, pglob);
-        if (result == GLOB_NOSPACE) {
+        if (result == GLOB_NOSPACE || result == GLOB_ABORTED) {
+            if (result == GLOB_ABORTED) globfree(pglob);
             free(pglob);
             return SS$_INSFMEM;
         }
@@ -278,13 +279,21 @@ uint32_t lib$find_file(const struct dsc$descriptor_s *filespec,
         ddest->dsc$a_pointer = (char *)malloc(len);
         if (!ddest->dsc$a_pointer) {
             ddest->dsc$w_length = 0;
+            globfree(pglob);
+            free(pglob);
+            *context = 0;
             return SS$_INSFMEM;
         }
         memcpy(ddest->dsc$a_pointer, match, len);
         ddest->dsc$w_length = len;
     } else {
         /* Static descriptor - truncate if needed */
-        if (!resultspec->dsc$a_pointer) return SS$_BADPARAM;
+        if (!resultspec->dsc$a_pointer) {
+            globfree(pglob);
+            free(pglob);
+            *context = 0;
+            return SS$_BADPARAM;
+        }
         uint16_t copylen = len;
         if (copylen > resultspec->dsc$w_length) {
             copylen = resultspec->dsc$w_length;

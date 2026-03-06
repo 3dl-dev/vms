@@ -76,6 +76,7 @@
 /* VMS filespecs for data files                                       */
 /* ------------------------------------------------------------------ */
 
+#define VMS_RIGHTSLIST_PATH   "SYS$SYSTEM:RIGHTSLIST.DAT"
 #define VMS_QMAN_DB          "SYS$MANAGER:QMAN$MASTER.DAT"
 
 #endif /* __OVMX_LAYOUT_H */

@@ -16,6 +16,7 @@
  *   -e expect    String that must appear in command output (case-insensitive)
  *   -x           Expect authentication to FAIL (exit 0 if auth rejected)
  *   -t secs      Connect timeout in seconds (default: 10)
+ *   -T term      TERM value for PTY request (default: xterm)
  *   -v           Verbose (print output to stdout)
  *
  * Exit codes:
@@ -61,7 +62,7 @@ static void usage(const char *prog)
 {
     fprintf(stderr,
         "Usage: %s -u user -P password [-h host] [-p port] [-c cmd] "
-        "[-e expect] [-x] [-t secs] [-v]\n", prog);
+        "[-e expect] [-x] [-t secs] [-T term] [-v]\n", prog);
     exit(2);
 }
 
@@ -73,11 +74,12 @@ int main(int argc, char *argv[])
     const char *password = NULL;
     const char *command  = NULL;
     const char *expect   = NULL;
+    const char *term_type = NULL;  /* TERM value for PTY request */
     int         expect_fail = 0;
     int         timeout  = 10;
     int         opt;
 
-    while ((opt = getopt(argc, argv, "h:p:u:P:c:e:xt:v")) != -1) {
+    while ((opt = getopt(argc, argv, "h:p:u:P:c:e:xt:T:v")) != -1) {
         switch (opt) {
         case 'h': host        = optarg; break;
         case 'p': port        = atoi(optarg); break;
@@ -87,6 +89,7 @@ int main(int argc, char *argv[])
         case 'e': expect      = optarg; break;
         case 'x': expect_fail = 1;      break;
         case 't': timeout     = atoi(optarg); break;
+        case 'T': term_type   = optarg; break;
         case 'v': verbose     = 1;      break;
         default:  usage(argv[0]);
         }
@@ -202,10 +205,34 @@ int main(int argc, char *argv[])
     /* ------------------------------------------------------------------ */
     /* Execute command or request shell                                    */
     /* ------------------------------------------------------------------ */
+
+    /* If -T was specified, request a PTY with that TERM type first.
+     * This is needed for terminal type negotiation tests. */
+    if (term_type) {
+        rc = ssh_channel_request_pty_size(channel, term_type, 80, 24);
+        if (rc != SSH_OK && verbose)
+            fprintf(stderr, "note: pty request with TERM=%s failed: %s\n",
+                    term_type, ssh_get_error(session));
+    }
+
     if (command) {
-        rc = ssh_channel_request_exec(channel, command);
+        /* If no explicit PTY was requested via -T, just exec directly */
+        if (!term_type) {
+            rc = ssh_channel_request_exec(channel, command);
+        } else {
+            /* PTY was already requested above; now request a shell
+             * and send the command as input */
+            rc = ssh_channel_request_shell(channel);
+            if (rc == SSH_OK) {
+                /* Send command followed by newline, then LOGOUT */
+                char cmd_buf[4096];
+                int cmd_len = snprintf(cmd_buf, sizeof(cmd_buf),
+                                       "%s\nLOGOUT\n", command);
+                ssh_channel_write(channel, cmd_buf, (uint32_t)cmd_len);
+            }
+        }
         if (rc != SSH_OK) {
-            fprintf(stderr, "error: ssh_channel_request_exec() failed: %s\n",
+            fprintf(stderr, "error: channel request failed: %s\n",
                     ssh_get_error(session));
             ssh_channel_close(channel);
             ssh_channel_free(channel);
@@ -215,10 +242,12 @@ int main(int argc, char *argv[])
         }
     } else {
         /* Request a PTY then a shell (so vmssshd sees SSH_CHANNEL_REQUEST_SHELL) */
-        rc = ssh_channel_request_pty(channel);
-        if (rc != SSH_OK && verbose)
-            fprintf(stderr, "note: pty request failed (may be OK): %s\n",
-                    ssh_get_error(session));
+        if (!term_type) {
+            rc = ssh_channel_request_pty(channel);
+            if (rc != SSH_OK && verbose)
+                fprintf(stderr, "note: pty request failed (may be OK): %s\n",
+                        ssh_get_error(session));
+        }
 
         rc = ssh_channel_request_shell(channel);
         if (rc != SSH_OK) {

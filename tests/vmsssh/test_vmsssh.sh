@@ -96,15 +96,15 @@ MAX_WAIT=30
 WAITED=0
 SSH_READY=0
 while [ "$WAITED" -lt "$MAX_WAIT" ]; do
-    # Check for vmssshd key (vmssshd mode)
-    if docker exec "$CONTAINER" sh -c 'test -f /etc/ovmx/ssh_host_rsa_key' >/dev/null 2>&1; then
+    # Check for vmssshd key (vmssshd mode) — try both legacy and VMS paths
+    if docker exec "$CONTAINER" sh -c 'test -f /etc/ovmx/ssh_host_rsa_key || test -f /vms/SYS0/SYSCOMMON/SYSMGR/ssh_host_rsa_key' >/dev/null 2>&1; then
         SSH_READY=1
         sleep 1  # give vmssshd a moment to fully bind
         break
     fi
     # Check for any sshd process (covers openssh fallback in older images)
-    if docker exec "$CONTAINER" pgrep -x sshd >/dev/null 2>&1 || \
-       docker exec "$CONTAINER" pgrep -x vmssshd >/dev/null 2>&1; then
+    # Use pidof or ps as pgrep may not be installed in minimal images
+    if docker exec "$CONTAINER" sh -c 'pidof vmssshd >/dev/null 2>&1 || pidof sshd >/dev/null 2>&1 || ps aux 2>/dev/null | grep -q "[v]mssshd"' 2>/dev/null; then
         SSH_READY=1
         sleep 2  # give sshd time to bind fully
         break
@@ -120,9 +120,9 @@ if [ "$SSH_READY" -eq 0 ]; then
 fi
 
 # Identify which SSH daemon is running
-if docker exec "$CONTAINER" pgrep -x vmssshd >/dev/null 2>&1; then
+if docker exec "$CONTAINER" sh -c 'pidof vmssshd >/dev/null 2>&1 || ps aux 2>/dev/null | grep -q "[v]mssshd"' 2>/dev/null; then
     echo "vmssshd is up (native VMS SSH daemon)."
-elif docker exec "$CONTAINER" pgrep -x sshd >/dev/null 2>&1; then
+elif docker exec "$CONTAINER" sh -c 'pidof sshd >/dev/null 2>&1 || ps aux 2>/dev/null | grep -q "[s]shd"' 2>/dev/null; then
     echo "OpenSSH sshd is up (proxying through vms_login)."
 else
     echo "SSH daemon is up."
@@ -244,10 +244,31 @@ else
 fi
 
 # ------------------------------------------------------------------ #
-# Test 10: SSH daemon process is running                              #
-# (vmssshd in native mode, or sshd in legacy openssh mode)           #
+# Test 10: PTY request with custom TERM type accepted                #
 # ------------------------------------------------------------------ #
-if docker exec "$CONTAINER" sh -c 'pgrep -x vmssshd >/dev/null 2>&1 || pgrep -x sshd >/dev/null 2>&1'; then
+# Verify vmssshd accepts PTY requests with different TERM values.
+# Full device_type verification is done by the unit test
+# (test_term_mapping); here we just verify the SSH session works.
+run_test "PTY request with TERM=xterm-256color accepted" \
+    -u SYSTEM -P "" -T xterm-256color -e "OpenVMS"
+
+# ------------------------------------------------------------------ #
+# Test 11: PTY request with TERM=vt220 accepted                     #
+# ------------------------------------------------------------------ #
+run_test "PTY request with TERM=vt220 accepted" \
+    -u SYSTEM -P "" -T vt220 -e "OpenVMS"
+
+# ------------------------------------------------------------------ #
+# Test 12: PTY request with TERM=dumb accepted (fallback)            #
+# ------------------------------------------------------------------ #
+run_test "PTY request with TERM=dumb accepted" \
+    -u SYSTEM -P "" -T dumb -e "OpenVMS"
+
+# ------------------------------------------------------------------ #
+# Test 13: SSH daemon process is running                              #
+# (vmssshd in native mode, or sshd in legacy openssh mode)            #
+# ------------------------------------------------------------------ #
+if docker exec "$CONTAINER" sh -c 'pidof vmssshd >/dev/null 2>&1 || pidof sshd >/dev/null 2>&1 || ps aux 2>/dev/null | grep -q "[v]mssshd\|[s]shd"'; then
     echo "  PASS: SSH daemon process is running in container"
     PASS=$((PASS + 1))
 else

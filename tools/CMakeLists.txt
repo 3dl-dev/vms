@@ -159,3 +159,26 @@ set_target_properties(vms_tcpip_config PROPERTIES
     SUFFIX ".EXE"
 )
 install(TARGETS vms_tcpip_config RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+add_executable(vms_sysgen
+    vms_sysgen.c
+)
+
+target_include_directories(vms_sysgen PRIVATE
+    ${VMS_INCLUDE_DIR}
+)
+
+target_compile_definitions(vms_sysgen PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vms_sysgen PRIVATE
+    -Wall -Wextra
+)
+
+set_target_properties(vms_sysgen PROPERTIES
+    OUTPUT_NAME "SYSGEN"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_sysgen RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

@@ -6249,6 +6249,527 @@ static int cmd_edit(struct dcl_command *cmd)
 }
 
 /* ================================================================== */
+/*                     ATTACH Command                                  */
+/* ================================================================== */
+
+/*
+ * ATTACH - Transfer terminal control to another process.
+ *
+ * ATTACH [process-name]    — switch to named subprocess
+ * ATTACH /ID=hex-pid       — switch by PID
+ *
+ * For now, uses the interrupted_pid from Ctrl-Y if available.
+ */
+static int cmd_attach(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    /* Check /ID=hex-pid qualifier */
+    const char *id_val = dcl_qualifier_value(cmd, "ID");
+    if (id_val && id_val[0]) {
+        pid_t target = (pid_t)strtol(id_val, NULL, 16);
+        if (target <= 0) {
+            dcl_error("DCL", 4, "ATTFAIL", "invalid process id - %s", id_val);
+            return SS$_BADPARAM;
+        }
+        /* Check if process exists */
+        if (kill(target, 0) != 0) {
+            dcl_error("DCL", 4, "ATTFAIL", "no such process");
+            return SS$_NONEXPR;
+        }
+        /* Send SIGCONT and wait */
+        kill(target, SIGCONT);
+        extern volatile sig_atomic_t dcl_running_child;
+        dcl_running_child = (sig_atomic_t)target;
+        int wstatus;
+        waitpid(target, &wstatus, WUNTRACED);
+        dcl_running_child = 0;
+        if (WIFSTOPPED(wstatus)) {
+            printf("\nInterrupt\n");
+            ctx->interrupted_pid = target;
+            return SS$_ABORT;
+        }
+        ctx->interrupted_pid = 0;
+        return SS$_NORMAL;
+    }
+
+    /* Check for process-name parameter */
+    if (cmd->param_count >= 1 && cmd->params[0][0] != '\0') {
+        /* Named process attach — for now, only support interrupted process */
+        if (ctx->interrupted_pid > 0) {
+            pid_t pid = ctx->interrupted_pid;
+            if (kill(pid, SIGCONT) != 0) {
+                dcl_error("DCL", 4, "ATTFAIL", "no such process");
+                ctx->interrupted_pid = 0;
+                return SS$_NONEXPR;
+            }
+            extern volatile sig_atomic_t dcl_running_child;
+            dcl_running_child = (sig_atomic_t)pid;
+            int wstatus;
+            waitpid(pid, &wstatus, WUNTRACED);
+            dcl_running_child = 0;
+            if (WIFSTOPPED(wstatus)) {
+                printf("\nInterrupt\n");
+                /* Keep interrupted_pid */
+            } else {
+                ctx->interrupted_pid = 0;
+            }
+            return SS$_NORMAL;
+        }
+        dcl_error("DCL", 4, "ATTFAIL", "no such process");
+        return SS$_NONEXPR;
+    }
+
+    /* No parameter and no /ID — try interrupted process */
+    if (ctx->interrupted_pid > 0) {
+        pid_t pid = ctx->interrupted_pid;
+        if (kill(pid, SIGCONT) != 0) {
+            dcl_error("DCL", 4, "ATTFAIL", "no such process");
+            ctx->interrupted_pid = 0;
+            return SS$_NONEXPR;
+        }
+        extern volatile sig_atomic_t dcl_running_child;
+        dcl_running_child = (sig_atomic_t)pid;
+        int wstatus;
+        waitpid(pid, &wstatus, WUNTRACED);
+        dcl_running_child = 0;
+        if (WIFSTOPPED(wstatus)) {
+            printf("\nInterrupt\n");
+        } else {
+            ctx->interrupted_pid = 0;
+        }
+        return SS$_NORMAL;
+    }
+
+    dcl_error("DCL", 4, "ATTFAIL", "no process specified");
+    return SS$_BADPARAM;
+}
+
+/* ================================================================== */
+/*                     CONVERT Command                                 */
+/* ================================================================== */
+
+/*
+ * CONVERT - Convert file format (basic file copy with record counting).
+ *
+ * CONVERT input-file output-file
+ * /FDL=fdl-file — accepted but ignored with informational message
+ */
+static int cmd_convert(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    if (cmd->param_count < 2) {
+        dcl_error("CONVERT", 2, "NOINPFIL", "missing input and/or output file");
+        return SS$_BADPARAM;
+    }
+
+    /* Check /FDL qualifier — accepted but not implemented */
+    if (dcl_has_qualifier(cmd, "FDL")) {
+        printf("%%CONVERT-I-FDL, /FDL qualifier accepted but ignored in this implementation\n");
+    }
+
+    char src_path[1024], dst_path[1024];
+    dcl_resolve_path(ctx, cmd->params[0], src_path, sizeof(src_path));
+    dcl_resolve_path(ctx, cmd->params[1], dst_path, sizeof(dst_path));
+
+    FILE *src = fopen(src_path, "r");
+    if (!src) {
+        dcl_error("CONVERT", 2, "OPENIN", "error opening %s as input", cmd->params[0]);
+        return SS$_NOSUCHFILE;
+    }
+
+    FILE *dst = fopen(dst_path, "w");
+    if (!dst) {
+        fclose(src);
+        dcl_error("CONVERT", 2, "OPENOUT", "error opening %s as output", cmd->params[1]);
+        return SS$_FILACCERR;
+    }
+
+    /* Copy line by line, counting records */
+    char line[4096];
+    long records = 0;
+    while (fgets(line, sizeof(line), src)) {
+        fputs(line, dst);
+        records++;
+    }
+
+    fclose(src);
+    fclose(dst);
+
+    printf("%%CONVERT-S-CONVERTED, %ld records converted\n", records);
+    return SS$_NORMAL;
+}
+
+/* ================================================================== */
+/*                     INSTALL Command                                 */
+/* ================================================================== */
+
+/*
+ * INSTALL - Manage known image list.
+ *
+ * INSTALL ADD image [/SHARED] [/OPEN] [/HEADER_RESIDENT]
+ * INSTALL LIST [/FULL]
+ * INSTALL REMOVE image
+ *
+ * Maintains list in /vms/SYS0/SYSCOMMON/SYSMGR/INSTALL_LIST.DAT
+ */
+
+#define INSTALL_LIST_PATH "/vms/SYS0/SYSCOMMON/SYSMGR/INSTALL_LIST.DAT"
+
+static int cmd_install(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+        dcl_error("INSTALL", 2, "NOCMD", "missing subcommand (ADD, LIST, or REMOVE)");
+        return SS$_BADPARAM;
+    }
+
+    char subcmd[32];
+    strncpy(subcmd, cmd->params[0], sizeof(subcmd) - 1);
+    subcmd[sizeof(subcmd) - 1] = '\0';
+    for (int i = 0; subcmd[i]; i++)
+        subcmd[i] = (char)toupper((unsigned char)subcmd[i]);
+
+    if (strcmp(subcmd, "ADD") == 0) {
+        if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
+            dcl_error("INSTALL", 2, "NOIMAGE", "missing image name");
+            return SS$_BADPARAM;
+        }
+
+        /* Build flags string */
+        char flags[128] = {0};
+        if (dcl_has_qualifier(cmd, "OPEN"))
+            strncat(flags, " Open", sizeof(flags) - strlen(flags) - 1);
+        if (dcl_has_qualifier(cmd, "HEADER_RESIDENT"))
+            strncat(flags, " Hdr", sizeof(flags) - strlen(flags) - 1);
+        if (dcl_has_qualifier(cmd, "SHARED"))
+            strncat(flags, " Shared", sizeof(flags) - strlen(flags) - 1);
+
+        /* Ensure directory exists */
+        mkdir("/vms/SYS0/SYSCOMMON/SYSMGR", 0755);
+
+        /* Append to install list */
+        FILE *fp = fopen(INSTALL_LIST_PATH, "a");
+        if (!fp) {
+            dcl_error("INSTALL", 2, "OPENERR", "cannot open install list");
+            return SS$_FILACCERR;
+        }
+
+        /* Convert image name to uppercase */
+        char image_upper[256];
+        strncpy(image_upper, cmd->params[1], sizeof(image_upper) - 1);
+        image_upper[sizeof(image_upper) - 1] = '\0';
+        for (int i = 0; image_upper[i]; i++)
+            image_upper[i] = (char)toupper((unsigned char)image_upper[i]);
+
+        fprintf(fp, "%s%s\n", image_upper, flags);
+        fclose(fp);
+
+        printf("%%INSTALL-I-ADDED, %s added to known image list\n", image_upper);
+        return SS$_NORMAL;
+
+    } else if (strcmp(subcmd, "LIST") == 0) {
+        FILE *fp = fopen(INSTALL_LIST_PATH, "r");
+        if (!fp) {
+            printf("%%INSTALL-I-NOIMAGES, no known images installed\n");
+            return SS$_NORMAL;
+        }
+
+        int full = dcl_has_qualifier(cmd, "FULL");
+        printf("\nINSTALL - Known Image List\n");
+        if (full) {
+            printf("%-50s %s\n", "Image Name", "Attributes");
+            printf("%-50s %s\n",
+                   "--------------------------------------------------",
+                   "----------");
+        }
+
+        char line[512];
+        int count = 0;
+        while (fgets(line, sizeof(line), fp)) {
+            /* Strip newline */
+            size_t len = strlen(line);
+            if (len > 0 && line[len - 1] == '\n')
+                line[--len] = '\0';
+            if (len == 0) continue;
+
+            /* Parse: "IMAGE FLAGS" */
+            char *space = strchr(line, ' ');
+            if (full && space) {
+                char image[256];
+                strncpy(image, line, (size_t)(space - line));
+                image[space - line] = '\0';
+                printf("DISK$SYSTEM:[SYSEXE]%s;1  %s\n", image, space + 1);
+            } else if (space) {
+                char image[256];
+                strncpy(image, line, (size_t)(space - line));
+                image[space - line] = '\0';
+                printf("DISK$SYSTEM:[SYSEXE]%s;1  %s\n", image, space + 1);
+            } else {
+                printf("DISK$SYSTEM:[SYSEXE]%s;1\n", line);
+            }
+            count++;
+        }
+        fclose(fp);
+
+        printf("\n%d known image%s\n", count, count != 1 ? "s" : "");
+        return SS$_NORMAL;
+
+    } else if (strcmp(subcmd, "REMOVE") == 0) {
+        if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
+            dcl_error("INSTALL", 2, "NOIMAGE", "missing image name");
+            return SS$_BADPARAM;
+        }
+
+        char target[256];
+        strncpy(target, cmd->params[1], sizeof(target) - 1);
+        target[sizeof(target) - 1] = '\0';
+        for (int i = 0; target[i]; i++)
+            target[i] = (char)toupper((unsigned char)target[i]);
+
+        FILE *fp = fopen(INSTALL_LIST_PATH, "r");
+        if (!fp) {
+            dcl_error("INSTALL", 2, "NOTKNOWN", "image %s is not a known image", target);
+            return SS$_NOSUCHFILE;
+        }
+
+        /* Read all lines, write back those that don't match */
+        char lines[256][512];
+        int count = 0;
+        int found = 0;
+        char line[512];
+        while (fgets(line, sizeof(line), fp) && count < 256) {
+            /* Check if this line starts with target */
+            size_t tlen = strlen(target);
+            if (strncasecmp(line, target, tlen) == 0 &&
+                (line[tlen] == ' ' || line[tlen] == '\n' || line[tlen] == '\0')) {
+                found = 1;
+                continue;
+            }
+            strncpy(lines[count], line, sizeof(lines[count]) - 1);
+            lines[count][sizeof(lines[count]) - 1] = '\0';
+            count++;
+        }
+        fclose(fp);
+
+        if (!found) {
+            dcl_error("INSTALL", 2, "NOTKNOWN", "image %s is not a known image", target);
+            return SS$_NOSUCHFILE;
+        }
+
+        fp = fopen(INSTALL_LIST_PATH, "w");
+        if (fp) {
+            for (int i = 0; i < count; i++)
+                fputs(lines[i], fp);
+            fclose(fp);
+        }
+
+        printf("%%INSTALL-I-REMOVED, %s removed from known image list\n", target);
+        return SS$_NORMAL;
+
+    } else {
+        dcl_error("INSTALL", 2, "INVCMD", "invalid subcommand - %s", subcmd);
+        return SS$_BADPARAM;
+    }
+}
+
+/* ================================================================== */
+/*                     LINK Command                                    */
+/* ================================================================== */
+
+/*
+ * LINK - Link object modules into an executable image.
+ *
+ * LINK file1[,file2,...]
+ * /EXECUTABLE=name — output executable name
+ * /MAP — produce link map
+ *
+ * Wraps the system linker (cc).
+ */
+static int cmd_link(struct dcl_command *cmd)
+{
+    struct dcl_context *ctx = dcl_get_context();
+
+    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+        dcl_error("LINK", 2, "NOFILES", "no input files specified");
+        return SS$_BADPARAM;
+    }
+
+    /* Collect input files — params may be comma-separated */
+    char *input_files[64];
+    int input_count = 0;
+    char resolved[64][1024];
+
+    for (int i = 0; i < cmd->param_count && input_count < 64; i++) {
+        if (cmd->params[i][0] == '\0') continue;
+
+        /* Split on commas */
+        char temp[DCL_MAX_LINE];
+        strncpy(temp, cmd->params[i], sizeof(temp) - 1);
+        temp[sizeof(temp) - 1] = '\0';
+
+        char *tok = strtok(temp, ",");
+        while (tok && input_count < 64) {
+            while (*tok == ' ') tok++;
+            if (*tok) {
+                dcl_resolve_path(ctx, tok, resolved[input_count],
+                                 sizeof(resolved[input_count]));
+                input_files[input_count] = resolved[input_count];
+                input_count++;
+            }
+            tok = strtok(NULL, ",");
+        }
+    }
+
+    if (input_count == 0) {
+        dcl_error("LINK", 2, "NOFILES", "no input files specified");
+        return SS$_BADPARAM;
+    }
+
+    /* Determine output name */
+    char output_name[1024];
+    const char *exe_val = dcl_qualifier_value(cmd, "EXECUTABLE");
+    if (exe_val && exe_val[0]) {
+        dcl_resolve_path(ctx, exe_val, output_name, sizeof(output_name));
+    } else {
+        /* Default: first input name without extension + .EXE */
+        strncpy(output_name, input_files[0], sizeof(output_name) - 1);
+        output_name[sizeof(output_name) - 1] = '\0';
+        char *dot = strrchr(output_name, '.');
+        if (dot) *dot = '\0';
+        strncat(output_name, ".EXE", sizeof(output_name) - strlen(output_name) - 1);
+    }
+
+    /* Check /MAP qualifier */
+    int want_map = dcl_has_qualifier(cmd, "MAP");
+    char map_name[1024] = {0};
+    if (want_map) {
+        strncpy(map_name, output_name, sizeof(map_name) - 1);
+        map_name[sizeof(map_name) - 1] = '\0';
+        char *dot = strrchr(map_name, '.');
+        if (dot) *dot = '\0';
+        strncat(map_name, ".MAP", sizeof(map_name) - strlen(map_name) - 1);
+    }
+
+    /* Print linking message */
+    printf("%%LINK-I-LINK, linking %s...\n", output_name);
+
+    /* Build cc command: cc -o output input1 input2 ... [-Wl,-Map,mapfile] */
+    char *argv[128];
+    int argc = 0;
+    argv[argc++] = "cc";
+    argv[argc++] = "-o";
+    argv[argc++] = output_name;
+    for (int i = 0; i < input_count && argc < 120; i++)
+        argv[argc++] = input_files[i];
+    if (want_map) {
+        static char map_flag[1100];
+        snprintf(map_flag, sizeof(map_flag), "-Wl,-Map,%s", map_name);
+        argv[argc++] = map_flag;
+    }
+    argv[argc] = NULL;
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execvp("cc", argv);
+        _exit(127);
+    } else if (pid > 0) {
+        int wstatus;
+        waitpid(pid, &wstatus, 0);
+        if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) == 0) {
+            printf("%%LINK-I-DONE, %s linked successfully\n", output_name);
+            return SS$_NORMAL;
+        } else {
+            dcl_error("LINK", 2, "FAILED", "error linking image");
+            return SS$_ABORT;
+        }
+    } else {
+        dcl_error("LINK", 4, "CREPRC", "cannot create linker process");
+        return SS$_ABORT;
+    }
+}
+
+/* ================================================================== */
+/*                     PHONE Command                                   */
+/* ================================================================== */
+
+/*
+ * PHONE - Phone utility for interactive conversation.
+ * Not available in OVMX — stub only.
+ */
+static int cmd_phone(struct dcl_command *cmd)
+{
+    (void)cmd;
+    dcl_error("PHONE", 0, "NOTAVAIL", "PHONE facility is not available");
+    return SS$_NORMAL;
+}
+
+/* ================================================================== */
+/*                     PRODUCT Command                                 */
+/* ================================================================== */
+
+/*
+ * PRODUCT - Software product management (minimal PCSI emulation).
+ *
+ * PRODUCT SHOW PRODUCT — list installed products
+ * PRODUCT SHOW HISTORY — show installation date
+ */
+static int cmd_product(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
+        dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
+        return SS$_NORMAL;
+    }
+
+    char subcmd[32];
+    strncpy(subcmd, cmd->params[0], sizeof(subcmd) - 1);
+    subcmd[sizeof(subcmd) - 1] = '\0';
+    for (int i = 0; subcmd[i]; i++)
+        subcmd[i] = (char)toupper((unsigned char)subcmd[i]);
+
+    if (strcmp(subcmd, "SHOW") != 0) {
+        dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
+        return SS$_NORMAL;
+    }
+
+    /* Need a second parameter for SHOW sub-subcommand */
+    if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
+        dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
+        return SS$_NORMAL;
+    }
+
+    char showwhat[32];
+    strncpy(showwhat, cmd->params[1], sizeof(showwhat) - 1);
+    showwhat[sizeof(showwhat) - 1] = '\0';
+    for (int i = 0; showwhat[i]; i++)
+        showwhat[i] = (char)toupper((unsigned char)showwhat[i]);
+
+    if (strcmp(showwhat, "PRODUCT") == 0) {
+        printf("----------------------------------- ----------- -----------\n");
+        printf("PRODUCT                             KIT TYPE    STATE\n");
+        printf("----------------------------------- ----------- -----------\n");
+        printf("OVMX V1.0                          Full LP     Installed\n");
+        printf("----------------------------------- ----------- -----------\n");
+        printf("1 product found\n");
+        return SS$_NORMAL;
+    } else if (strcmp(showwhat, "HISTORY") == 0) {
+        time_t now = time(NULL);
+        struct tm *tm = localtime(&now);
+        printf("----------------------------------- ----------- ----------- -----------\n");
+        printf("PRODUCT                             KIT TYPE    STATE       DATE\n");
+        printf("----------------------------------- ----------- ----------- -----------\n");
+        printf("OVMX V1.0                          Full LP     Installed   %2d-%s-%04d\n",
+               tm->tm_mday, vms_months[tm->tm_mon], 1900 + tm->tm_year);
+        printf("----------------------------------- ----------- ----------- -----------\n");
+        printf("1 item found\n");
+        return SS$_NORMAL;
+    } else {
+        dcl_error("PCSI", 0, "NOTIMPL", "operation not implemented");
+        return SS$_NORMAL;
+    }
+}
+
+/* ================================================================== */
 /*                     Command Table                                   */
 /* ================================================================== */
 
@@ -6259,12 +6780,16 @@ static struct dcl_verb builtin_verbs[] = {
       "Append source file to destination file" },
     { "ASSIGN",      cmd_assign,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Assign a logical name (equivalence name to logical name)" },
+    { "ATTACH",      cmd_attach,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Transfer terminal control to another process" },
     { "BACKUP",      cmd_backup,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Create, restore, or list a saveset file" },
     { "CLOSE",       cmd_close,       CDU_F_ABBREV | CDU_F_PARAM, 2,
       "Close a file that was opened for I/O" },
     { "CONTINUE",    cmd_continue,    CDU_F_ABBREV, 4,
       "Resume execution of an interrupted image" },
+    { "CONVERT",     cmd_convert,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
+      "Convert file format" },
     { "COPY",        cmd_copy,        CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Copy a file" },
     { "CREATE",      cmd_create,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -6291,8 +6816,12 @@ static struct dcl_verb builtin_verbs[] = {
       "Obtain information about DCL commands" },
     { "INQUIRE",     cmd_inquire,     CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Read input from SYS$INPUT and assign to a symbol" },
+    { "INSTALL",     cmd_install,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
+      "Manage known images" },
     { "LIBRARY",     cmd_library,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Manage text, help, and object libraries" },
+    { "LINK",        cmd_link,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
+      "Link object modules into executable image" },
     { "LOGOUT",      cmd_logout,      CDU_F_ABBREV, 2,
       "Terminate an interactive session" },
     { "MAIL",      cmd_mail,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
@@ -6303,10 +6832,14 @@ static struct dcl_verb builtin_verbs[] = {
       "Mount a volume on a device" },
     { "OPEN",        cmd_open,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Open a file for reading or writing" },
+    { "PHONE",       cmd_phone,       CDU_F_ABBREV | CDU_F_PARAM, 3,
+      "Phone utility for interactive conversation" },
     { "PIPE",        cmd_pipe,        CDU_F_ABBREV | CDU_F_PARAM, 3,
       "Execute a DCL pipeline (cmd1 | cmd2 | ...)" },
     { "PRINT",       cmd_print,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Queue a file for printing" },
+    { "PRODUCT",     cmd_product,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
+      "Software product management" },
     { "PURGE",       cmd_purge,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Delete old versions of a file" },
     { "RECALL",    cmd_recall,    CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,

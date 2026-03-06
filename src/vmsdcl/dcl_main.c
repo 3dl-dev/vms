@@ -26,6 +26,7 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/context.h"
+#include "dcl/terminal.h"
 #include "dcl/cdu.h"
 #include "ssdef.h"
 #include "vms/pcb.h"
@@ -83,6 +84,23 @@ void dcl_context_init(struct dcl_context *ctx)
     /* SET TERMINAL defaults — full characteristics model */
     vms_terminal_init(&ctx->terminal);
 
+    /* Terminal device allocation:
+     * If VMS_TERMINAL env var is set, use it directly (e.g., _OPA0: for console).
+     * Otherwise, if running interactively, allocate from the _FTA pool. */
+    const char *env_term = getenv("VMS_TERMINAL");
+    if (env_term && env_term[0]) {
+        strncpy(ctx->terminal.device_name, env_term,
+                sizeof(ctx->terminal.device_name) - 1);
+        ctx->terminal.device_name[sizeof(ctx->terminal.device_name) - 1] = '\0';
+    } else if (isatty(STDIN_FILENO)) {
+        const char *allocated = vms_term_allocate("_FTA", getpid(), NULL);
+        if (allocated) {
+            strncpy(ctx->terminal.device_name, allocated,
+                    sizeof(ctx->terminal.device_name) - 1);
+            ctx->terminal.device_name[sizeof(ctx->terminal.device_name) - 1] = '\0';
+        }
+    }
+
     /* SET PROCESS defaults */
     ctx->process_priority = 4;   /* Default VMS base priority */
 
@@ -114,9 +132,10 @@ void dcl_context_init(struct dcl_context *ctx)
         strcpy(ctx->username, "SYSTEM");
     }
 
-    /* Set process name */
-    snprintf(ctx->process_name, sizeof(ctx->process_name), "_FTA%d:",
-             (int)(getpid() % 100));
+    /* Set process name from allocated terminal device name */
+    strncpy(ctx->process_name, ctx->terminal.device_name,
+            sizeof(ctx->process_name) - 1);
+    ctx->process_name[sizeof(ctx->process_name) - 1] = '\0';
 
     /* Read multi-user context from environment (set by vms_login) */
     const char *env_user = getenv("VMS_USERNAME");
@@ -601,6 +620,8 @@ int main(int argc, char *argv[])
 
     /* Cleanup */
     restore_termios();
+    /* Deallocate terminal device */
+    vms_term_deallocate(dcl_ctx.terminal.device_name);
     /* Close any open channels */
     for (int i = 0; i < 16; i++) {
         if (dcl_ctx.channels[i].fp) {

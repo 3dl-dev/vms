@@ -715,6 +715,8 @@ int main(void)
 
         pid_t child = fork();
         if (child == 0) {
+            /* Console terminal device is _OPA0: */
+            setenv("VMS_TERMINAL", "_OPA0:", 1);
             /* Child: exec vms_login */
             execl(loginout_path, "vms_login", (char *)NULL);
             /* If vms_login not found, exec vmsdcl directly */

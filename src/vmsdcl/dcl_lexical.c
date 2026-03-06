@@ -546,6 +546,9 @@ static int lex_environment(struct dcl_context *ctx, const char *args,
         snprintf(result, result_size, "%s", ctx->interactive ? "TRUE" : "FALSE");
     } else if (strcmp(s, "DEPTH") == 0) {
         snprintf(result, result_size, "%d", ctx->proc_depth + 1);
+    } else if (strcmp(s, "TERMINAL") == 0) {
+        strncpy(result, ctx->terminal.device_name, result_size - 1);
+        result[result_size - 1] = '\0';
     } else {
         strncpy(result, "", result_size - 1);
     }

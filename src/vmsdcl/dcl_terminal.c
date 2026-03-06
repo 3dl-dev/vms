@@ -10,9 +10,16 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <signal.h>
+#include <errno.h>
 #include <termios.h>
 
 #include "dcl/terminal.h"
+
+/* Terminal device allocation table */
+static struct terminal_device term_table[VMS_TERM_MAX_DEVICES];
 
 /*
  * vms_terminal_init - Initialize terminal to VMS defaults.
@@ -179,4 +186,199 @@ void vms_terminal_show(const struct vms_terminal *term, FILE *out)
         fprintf(out, "\n");
 
     fprintf(out, "\n  Width: %3d          Page: %3d\n", term->width, term->page);
+}
+
+/* ------------------------------------------------------------------ */
+/* Terminal device allocation pool                                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Check if a process is alive by sending signal 0.
+ */
+static int pid_alive(pid_t pid)
+{
+    if (pid <= 0) return 0;
+    return (kill(pid, 0) == 0 || errno == EPERM);
+}
+
+/*
+ * Load the terminal table from the persistent file.
+ * Uses flock() for concurrent access safety.
+ */
+static int term_table_load(void)
+{
+    memset(term_table, 0, sizeof(term_table));
+
+    FILE *fp = fopen(VMS_TERM_TABLE_PATH, "rb");
+    if (!fp) return 0;
+
+    int fd = fileno(fp);
+    flock(fd, LOCK_SH);
+
+    size_t n = fread(term_table, sizeof(struct terminal_device),
+                     VMS_TERM_MAX_DEVICES, fp);
+    (void)n;
+
+    flock(fd, LOCK_UN);
+    fclose(fp);
+
+    /* Clean up stale entries (PIDs that no longer exist) */
+    for (int i = 0; i < VMS_TERM_MAX_DEVICES; i++) {
+        if (term_table[i].allocated && !pid_alive(term_table[i].owner_pid)) {
+            term_table[i].allocated = 0;
+            memset(term_table[i].name, 0, sizeof(term_table[i].name));
+            term_table[i].owner_pid = 0;
+            memset(term_table[i].owner_name, 0, sizeof(term_table[i].owner_name));
+        }
+    }
+
+    return 1;
+}
+
+/*
+ * Save the terminal table to the persistent file.
+ * Uses flock() for concurrent access safety.
+ */
+static int term_table_save(void)
+{
+    /* Ensure parent directory exists */
+    char dir[256];
+    strncpy(dir, VMS_TERM_TABLE_PATH, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = '\0';
+    char *slash = strrchr(dir, '/');
+    if (slash) {
+        *slash = '\0';
+        /* Best-effort mkdir; directory may already exist */
+        mkdir(dir, 0755);
+    }
+
+    FILE *fp = fopen(VMS_TERM_TABLE_PATH, "wb");
+    if (!fp) return 0;
+
+    int fd = fileno(fp);
+    flock(fd, LOCK_EX);
+
+    fwrite(term_table, sizeof(struct terminal_device),
+           VMS_TERM_MAX_DEVICES, fp);
+
+    flock(fd, LOCK_UN);
+    fclose(fp);
+    return 1;
+}
+
+/*
+ * vms_term_allocate - Allocate a terminal device name from the pool.
+ *
+ * Searches for the first free slot matching the given prefix
+ * (e.g., "_FTA" yields _FTA0: through _FTA99:).
+ * Returns the device name string (static storage) or NULL if full.
+ */
+const char *vms_term_allocate(const char *prefix, pid_t pid, const char *owner)
+{
+    if (!prefix) prefix = "_FTA";
+
+    term_table_load();
+
+    /* Find the first free index for this prefix */
+    for (int idx = 0; idx < VMS_TERM_MAX_DEVICES; idx++) {
+        char candidate[16];
+        snprintf(candidate, sizeof(candidate), "%s%d:", prefix, idx);
+
+        /* Check if this name is already in use */
+        int in_use = 0;
+        for (int i = 0; i < VMS_TERM_MAX_DEVICES; i++) {
+            if (term_table[i].allocated &&
+                strcmp(term_table[i].name, candidate) == 0) {
+                in_use = 1;
+                break;
+            }
+        }
+        if (in_use) continue;
+
+        /* Find a free slot in the table */
+        for (int i = 0; i < VMS_TERM_MAX_DEVICES; i++) {
+            if (!term_table[i].allocated) {
+                strncpy(term_table[i].name, candidate,
+                        sizeof(term_table[i].name) - 1);
+                term_table[i].name[sizeof(term_table[i].name) - 1] = '\0';
+                term_table[i].owner_pid = pid;
+                if (owner) {
+                    strncpy(term_table[i].owner_name, owner,
+                            sizeof(term_table[i].owner_name) - 1);
+                    term_table[i].owner_name[sizeof(term_table[i].owner_name) - 1] = '\0';
+                }
+                term_table[i].characteristics = TT_DEFAULT_CHARS;
+                term_table[i].allocated = 1;
+
+                term_table_save();
+                return term_table[i].name;
+            }
+        }
+        break; /* Table full */
+    }
+
+    return NULL;
+}
+
+/*
+ * vms_term_deallocate - Release a terminal device back to the pool.
+ */
+void vms_term_deallocate(const char *device_name)
+{
+    if (!device_name) return;
+
+    term_table_load();
+
+    for (int i = 0; i < VMS_TERM_MAX_DEVICES; i++) {
+        if (term_table[i].allocated &&
+            strcmp(term_table[i].name, device_name) == 0) {
+            term_table[i].allocated = 0;
+            memset(term_table[i].name, 0, sizeof(term_table[i].name));
+            term_table[i].owner_pid = 0;
+            memset(term_table[i].owner_name, 0, sizeof(term_table[i].owner_name));
+            term_table_save();
+            return;
+        }
+    }
+}
+
+/*
+ * vms_term_lookup - Find a terminal device by name.
+ * Returns a pointer into the static table, or NULL if not found.
+ */
+struct terminal_device *vms_term_lookup(const char *device_name)
+{
+    if (!device_name) return NULL;
+
+    term_table_load();
+
+    for (int i = 0; i < VMS_TERM_MAX_DEVICES; i++) {
+        if (term_table[i].allocated &&
+            strcmp(term_table[i].name, device_name) == 0) {
+            return &term_table[i];
+        }
+    }
+    return NULL;
+}
+
+/*
+ * vms_term_list - List all allocated terminal devices.
+ * Copies up to max entries into the output array.
+ * Returns 0 on success, sets *count to the number of entries copied.
+ */
+int vms_term_list(struct terminal_device *out, int max, int *count)
+{
+    if (!out || !count) return -1;
+
+    term_table_load();
+
+    int n = 0;
+    for (int i = 0; i < VMS_TERM_MAX_DEVICES && n < max; i++) {
+        if (term_table[i].allocated) {
+            memcpy(&out[n], &term_table[i], sizeof(struct terminal_device));
+            n++;
+        }
+    }
+    *count = n;
+    return 0;
 }

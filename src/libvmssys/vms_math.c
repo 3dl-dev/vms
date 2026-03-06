@@ -195,10 +195,10 @@ double vms_log(double x)
 
     /* log(m) via log(1+f) where f = m - 1 */
     double f = m - 1.0;
-    double f2 = f * f;
 
-    /* Rational approximation */
-    double p = f - f2 * (0.5 - f * (1.0/3.0 - f * (0.25 - f * (0.2 - f * (1.0/6.0)))));
+    /* Taylor series: ln(1+f) = f - f²/2 + f³/3 - f⁴/4 + f⁵/5 - f⁶/6
+     * Horner form: f * (1 - f*(1/2 - f*(1/3 - f*(1/4 - f*(1/5 - f*(1/6)))))) */
+    double p = f * (1.0 - f * (0.5 - f * (1.0/3.0 - f * (0.25 - f * (0.2 - f * (1.0/6.0))))));
 
     return (double)e * M_LN2_VAL + p;
 }

@@ -21,6 +21,7 @@
 
 #include "ssdef.h"
 #include "vms/pcb.h"
+#include "prvdef.h"
 
 /* ------------------------------------------------------------------ */
 /* Access mode constants                                              */
@@ -29,50 +30,6 @@
 #define PSL$C_EXEC       1
 #define PSL$C_SUPER      2
 #define PSL$C_USER       3
-
-/* ------------------------------------------------------------------ */
-/* Privilege bit definitions (matches VMS PRV$ symbols)               */
-/* ------------------------------------------------------------------ */
-#define PRV$M_CMKRNL     ((uint64_t)1 <<  0)
-#define PRV$M_CMEXEC     ((uint64_t)1 <<  1)
-#define PRV$M_SYSNAM     ((uint64_t)1 <<  2)
-#define PRV$M_GRPNAM     ((uint64_t)1 <<  3)
-#define PRV$M_ALLSPOOL   ((uint64_t)1 <<  4)
-#define PRV$M_DETACH     ((uint64_t)1 <<  5)
-#define PRV$M_DIAGNOSE   ((uint64_t)1 <<  6)
-#define PRV$M_LOG_IO     ((uint64_t)1 <<  7)
-#define PRV$M_GROUP      ((uint64_t)1 <<  8)
-#define PRV$M_NOACNT     ((uint64_t)1 <<  9)
-#define PRV$M_PRMCEB     ((uint64_t)1 << 10)
-#define PRV$M_PRMGBL     ((uint64_t)1 << 11)
-#define PRV$M_PRMMBX     ((uint64_t)1 << 12)
-#define PRV$M_PSWAPM     ((uint64_t)1 << 13)
-#define PRV$M_SETPRI     ((uint64_t)1 << 14)
-#define PRV$M_SETPRV     ((uint64_t)1 << 15)
-#define PRV$M_TMPMBX     ((uint64_t)1 << 16)
-#define PRV$M_WORLD      ((uint64_t)1 << 17)
-#define PRV$M_NETMBX     ((uint64_t)1 << 18)
-#define PRV$M_VOLPRO     ((uint64_t)1 << 19)
-#define PRV$M_PHY_IO     ((uint64_t)1 << 20)
-#define PRV$M_BUGCHK     ((uint64_t)1 << 21)
-#define PRV$M_PRMJNL     ((uint64_t)1 << 22)
-#define PRV$M_OPER       ((uint64_t)1 << 23)
-#define PRV$M_EXQUOTA    ((uint64_t)1 << 24)
-#define PRV$M_BYPASS     ((uint64_t)1 << 25)
-#define PRV$M_SYSGBL     ((uint64_t)1 << 26)
-#define PRV$M_SYSLCK     ((uint64_t)1 << 27)
-#define PRV$M_SHARE      ((uint64_t)1 << 28)
-#define PRV$M_UPGRADE    ((uint64_t)1 << 29)
-#define PRV$M_DOWNGRADE  ((uint64_t)1 << 30)
-#define PRV$M_SECURITY   ((uint64_t)1 << 31)
-#define PRV$M_ACNT       ((uint64_t)1 << 32)
-#define PRV$M_ALTPRI     ((uint64_t)1 << 33)
-#define PRV$M_READALL    ((uint64_t)1 << 34)
-#define PRV$M_IMPORT     ((uint64_t)1 << 35)
-#define PRV$M_AUDIT      ((uint64_t)1 << 36)
-#define PRV$M_SYSPRV     ((uint64_t)1 << 37)
-
-#define PRV$M_ALL        ((uint64_t)0x3FFFFFFFFF)
 
 /* ------------------------------------------------------------------ */
 /* Access mode API                                                    */

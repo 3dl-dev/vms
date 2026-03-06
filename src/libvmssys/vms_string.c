@@ -326,6 +326,25 @@ unsigned long vms_strtoul(const char *nptr, char **endptr, int base)
         if (digit >= base)
             break;
 
+        /* Overflow detection */
+        if (result > ((unsigned long)-1 - (unsigned long)digit) / (unsigned long)base) {
+            result = (unsigned long)-1;  /* saturate to ULONG_MAX */
+            /* Advance past remaining valid digits */
+            s++;
+            while (*s) {
+                int d = -1;
+                if (*s >= '0' && *s <= '9') d = *s - '0';
+                else if (*s >= 'a' && *s <= 'z') d = *s - 'a' + 10;
+                else if (*s >= 'A' && *s <= 'Z') d = *s - 'A' + 10;
+                else break;
+                if (d >= base) break;
+                s++;
+            }
+            if (endptr)
+                *endptr = (char *)s;
+            return result;
+        }
+
         result = result * (unsigned long)base + (unsigned long)digit;
         s++;
     }
@@ -350,7 +369,18 @@ long vms_strtol(const char *nptr, char **endptr, int base)
         s++;
     }
 
-    unsigned long val = vms_strtoul(s, endptr, base);
+    char *ep;
+    unsigned long val = vms_strtoul(s, &ep, base);
+
+    /* If no digits were consumed, endptr must point to original nptr */
+    if (ep == s) {
+        if (endptr)
+            *endptr = (char *)nptr;
+        return 0;
+    }
+
+    if (endptr)
+        *endptr = ep;
 
     if (neg)
         return -(long)val;

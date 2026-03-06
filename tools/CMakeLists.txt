@@ -140,3 +140,22 @@ set_target_properties(vms_initialize PROPERTIES
     SUFFIX ".EXE"
 )
 install(TARGETS vms_initialize RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+add_executable(vms_tcpip_config
+    vms_tcpip_config.c
+)
+
+target_compile_definitions(vms_tcpip_config PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vms_tcpip_config PRIVATE
+    -Wall -Wextra
+)
+
+set_target_properties(vms_tcpip_config PROPERTIES
+    OUTPUT_NAME "TCPIP\$CONFIG"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_tcpip_config RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

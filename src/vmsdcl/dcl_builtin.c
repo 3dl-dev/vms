@@ -5184,6 +5184,24 @@ static const char *tcpip_lookup_vms_name(const struct tcpip_ifmap *map,
     return linux_name; /* fallback — should not happen */
 }
 
+/* Reverse lookup: VMS device name → Linux interface name */
+static const char *tcpip_lookup_linux_name(const struct tcpip_ifmap *map,
+                                            int count, const char *vms_name)
+{
+    for (int i = 0; i < count; i++) {
+        if (strcasecmp(map[i].vms_name, vms_name) == 0)
+            return map[i].linux_name;
+    }
+    return NULL;
+}
+
+/* Path for VMS TCPIP config files */
+#define TCPIP_CONFIG_DIR "/vms/SYS0/SYSCOMMON/SYSEXE"
+#define TCPIP_HOST_DAT    TCPIP_CONFIG_DIR "/TCPIP$HOST.DAT"
+#define TCPIP_NS_DAT      TCPIP_CONFIG_DIR "/TCPIP$NAMESERVICE.DAT"
+#define TCPIP_IF_DAT      TCPIP_CONFIG_DIR "/TCPIP$INTERFACE.DAT"
+#define TCPIP_ROUTE_DAT   TCPIP_CONFIG_DIR "/TCPIP$ROUTE.DAT"
+
 /*
  * TCPIP SHOW INTERFACE [/FULL] - Display network interfaces with VMS names.
  */
@@ -5337,34 +5355,69 @@ static int cmd_tcpip_show_route(struct dcl_command *cmd)
 /*
  * TCPIP SHOW HOST - Display host table entries.
  */
-static int cmd_tcpip_show_host(struct dcl_command *cmd)
-{
-    (void)cmd;
-    printf("\n");
-    printf("%-16s%s\n", "Host address", "Host name");
+/* Track shown host entries to avoid duplicates across files */
+#define TCPIP_MAX_HOST_ENTRIES 256
 
-    FILE *fp = fopen("/etc/hosts", "r");
-    if (!fp) {
-        /* Minimal fallback */
-        printf("%-16s%s\n", "127.0.0.1", "localhost");
-        printf("\n");
-        return SS$_NORMAL;
+struct tcpip_host_entry {
+    char addr[128];
+    char name[256];
+};
+
+static int tcpip_host_already_shown(const struct tcpip_host_entry *shown,
+                                     int count,
+                                     const char *addr, const char *name)
+{
+    for (int i = 0; i < count; i++) {
+        if (strcmp(shown[i].addr, addr) == 0 &&
+            strcasecmp(shown[i].name, name) == 0)
+            return 1;
     }
+    return 0;
+}
+
+static int tcpip_print_hosts_from_file(const char *path,
+                                        struct tcpip_host_entry *shown,
+                                        int count)
+{
+    FILE *fp = fopen(path, "r");
+    if (!fp) return count;
 
     char line[512];
     while (fgets(line, sizeof(line), fp)) {
-        /* Skip comments and blank lines */
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
         if (*p == '#' || *p == '\n' || *p == '\0') continue;
 
         char addr[128], hostname[256];
         if (sscanf(p, "%127s %255s", addr, hostname) >= 2) {
-            printf("%-16s%s\n", addr, hostname);
+            if (count < TCPIP_MAX_HOST_ENTRIES &&
+                !tcpip_host_already_shown(shown, count, addr, hostname)) {
+                printf("%-16s%s\n", addr, hostname);
+                strncpy(shown[count].addr, addr, sizeof(shown[count].addr) - 1);
+                strncpy(shown[count].name, hostname, sizeof(shown[count].name) - 1);
+                count++;
+            }
         }
     }
-
     fclose(fp);
+    return count;
+}
+
+static int cmd_tcpip_show_host(struct dcl_command *cmd)
+{
+    (void)cmd;
+    printf("\n");
+    printf("%-16s%s\n", "Host address", "Host name");
+
+    struct tcpip_host_entry *shown = calloc(TCPIP_MAX_HOST_ENTRIES,
+                                             sizeof(struct tcpip_host_entry));
+    int count = 0;
+    if (shown) {
+        count = tcpip_print_hosts_from_file("/etc/hosts", shown, count);
+        tcpip_print_hosts_from_file(TCPIP_HOST_DAT, shown, count);
+        free(shown);
+    }
+
     printf("\n");
     return SS$_NORMAL;
 }
@@ -5380,7 +5433,289 @@ static int cmd_tcpip_show_version(struct dcl_command *cmd)
 }
 
 /*
- * TCPIP - TCP/IP Services command with SHOW subcommands.
+ * Ensure the TCPIP config directory exists.
+ */
+static void tcpip_ensure_config_dir(void)
+{
+    mkdir(TCPIP_CONFIG_DIR, 0755);
+}
+
+/*
+ * TCPIP SET HOST hostname /ADDRESS=ip
+ * Adds an entry to TCPIP$HOST.DAT and /etc/hosts.
+ */
+static int cmd_tcpip_set_host(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 3) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing hostname - usage: TCPIP SET HOST name /ADDRESS=ip");
+        return SS$_BADPARAM;
+    }
+
+    const char *hostname = cmd->params[2];
+    const char *address = dcl_qualifier_value(cmd, "ADDRESS");
+
+    if (!address) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing /ADDRESS qualifier");
+        return SS$_BADPARAM;
+    }
+
+    /* Validate IP address */
+    struct in_addr test_addr;
+    if (inet_pton(AF_INET, address, &test_addr) != 1) {
+        dcl_error("TCPIP", 2, "BADPARAM",
+                  "invalid IP address - \\%s\\", address);
+        return SS$_BADPARAM;
+    }
+
+    tcpip_ensure_config_dir();
+
+    /* Write to TCPIP$HOST.DAT */
+    FILE *fp = fopen(TCPIP_HOST_DAT, "a");
+    if (fp) {
+        fprintf(fp, "%-16s%s\n", address, hostname);
+        fclose(fp);
+    }
+
+    /* Also append to /etc/hosts for Linux DNS resolution */
+    fp = fopen("/etc/hosts", "a");
+    if (fp) {
+        fprintf(fp, "%-16s%s\n", address, hostname);
+        fclose(fp);
+    }
+
+    printf("%%TCPIP-I-INFO, host \"%s\" added\n", hostname);
+    return SS$_NORMAL;
+}
+
+/*
+ * TCPIP SET NAME_SERVICE /SYSTEM /SERVER=ip [/DOMAIN=domain]
+ * Configures DNS resolver.
+ */
+static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
+{
+    const char *server = dcl_qualifier_value(cmd, "SERVER");
+
+    if (!server) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing /SERVER qualifier");
+        return SS$_BADPARAM;
+    }
+
+    /* Validate IP address */
+    struct in_addr test_addr;
+    if (inet_pton(AF_INET, server, &test_addr) != 1) {
+        dcl_error("TCPIP", 2, "BADPARAM",
+                  "invalid server IP address - \\%s\\", server);
+        return SS$_BADPARAM;
+    }
+
+    const char *domain = dcl_qualifier_value(cmd, "DOMAIN");
+
+    tcpip_ensure_config_dir();
+
+    /* Write to TCPIP$NAMESERVICE.DAT */
+    FILE *fp = fopen(TCPIP_NS_DAT, "w");
+    if (fp) {
+        fprintf(fp, "SERVER=%s\n", server);
+        if (domain)
+            fprintf(fp, "DOMAIN=%s\n", domain);
+        fclose(fp);
+    }
+
+    /* Also write /etc/resolv.conf */
+    fp = fopen("/etc/resolv.conf", "w");
+    if (fp) {
+        if (domain)
+            fprintf(fp, "domain %s\n", domain);
+        fprintf(fp, "nameserver %s\n", server);
+        fclose(fp);
+    }
+
+    printf("%%TCPIP-I-INFO, name service configured\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * TCPIP SET INTERFACE ifname /HOST=ip /NETWORK_MASK=mask
+ * Configure a network interface (requires root/NET_ADMIN).
+ */
+static int cmd_tcpip_set_interface(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 3) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing interface name - usage: TCPIP SET INTERFACE name /HOST=ip /NETWORK_MASK=mask");
+        return SS$_BADPARAM;
+    }
+
+    const char *ifname = cmd->params[2];
+    const char *host_ip = dcl_qualifier_value(cmd, "HOST");
+    const char *netmask = dcl_qualifier_value(cmd, "NETWORK_MASK");
+
+    if (!host_ip) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing /HOST qualifier");
+        return SS$_BADPARAM;
+    }
+
+    /* Validate IP address */
+    struct in_addr test_addr;
+    if (inet_pton(AF_INET, host_ip, &test_addr) != 1) {
+        dcl_error("TCPIP", 2, "BADPARAM",
+                  "invalid IP address - \\%s\\", host_ip);
+        return SS$_BADPARAM;
+    }
+
+    /* Map VMS device name to Linux interface */
+    struct tcpip_ifmap ifmap[TCPIP_MAX_IFACES];
+    int ifcount = tcpip_build_ifmap(ifmap, TCPIP_MAX_IFACES);
+    const char *linux_if = tcpip_lookup_linux_name(ifmap, ifcount, ifname);
+
+    if (!linux_if) {
+        dcl_error("TCPIP", 2, "NOSUCHDEV",
+                  "unknown interface - \\%s\\", ifname);
+        return SS$_BADPARAM;
+    }
+
+    /* Check for root/NET_ADMIN privilege */
+    if (geteuid() != 0) {
+        printf("%%TCPIP-W-PRIVREQ, operation requires NET_ADMIN privilege\n");
+        /* Still persist to config file */
+    } else {
+        /* Apply with ioctl */
+        int sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sock >= 0) {
+            struct ifreq ifr;
+            memset(&ifr, 0, sizeof(ifr));
+            strncpy(ifr.ifr_name, linux_if, IFNAMSIZ - 1);
+
+            /* Set IP address */
+            struct sockaddr_in *addr = (struct sockaddr_in *)&ifr.ifr_addr;
+            addr->sin_family = AF_INET;
+            inet_pton(AF_INET, host_ip, &addr->sin_addr);
+            if (ioctl(sock, SIOCSIFADDR, &ifr) < 0) {
+                printf("%%TCPIP-W-IOERR, failed to set address: %s\n",
+                       strerror(errno));
+            }
+
+            /* Set netmask if provided */
+            if (netmask) {
+                struct sockaddr_in *mask = (struct sockaddr_in *)&ifr.ifr_netmask;
+                mask->sin_family = AF_INET;
+                inet_pton(AF_INET, netmask, &mask->sin_addr);
+                if (ioctl(sock, SIOCSIFNETMASK, &ifr) < 0) {
+                    printf("%%TCPIP-W-IOERR, failed to set netmask: %s\n",
+                           strerror(errno));
+                }
+            }
+
+            close(sock);
+        }
+    }
+
+    /* Persist to TCPIP$INTERFACE.DAT */
+    tcpip_ensure_config_dir();
+    FILE *fp = fopen(TCPIP_IF_DAT, "a");
+    if (fp) {
+        fprintf(fp, "%s %s", ifname, host_ip);
+        if (netmask)
+            fprintf(fp, " %s", netmask);
+        fprintf(fp, "\n");
+        fclose(fp);
+    }
+
+    printf("%%TCPIP-I-INFO, interface configured\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * TCPIP SET ROUTE /GATEWAY=ip /DEFAULT
+ *   or  /DESTINATION=dest /GATEWAY=gw /NETWORK_MASK=mask
+ * Configure a network route (requires root/NET_ADMIN).
+ */
+static int cmd_tcpip_set_route(struct dcl_command *cmd)
+{
+    const char *gateway = dcl_qualifier_value(cmd, "GATEWAY");
+
+    if (!gateway) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing /GATEWAY qualifier");
+        return SS$_BADPARAM;
+    }
+
+    /* Validate gateway IP */
+    struct in_addr test_addr;
+    if (inet_pton(AF_INET, gateway, &test_addr) != 1) {
+        dcl_error("TCPIP", 2, "BADPARAM",
+                  "invalid gateway IP address - \\%s\\", gateway);
+        return SS$_BADPARAM;
+    }
+
+    int is_default = dcl_has_qualifier(cmd, "DEFAULT");
+    const char *destination = dcl_qualifier_value(cmd, "DESTINATION");
+    const char *netmask = dcl_qualifier_value(cmd, "NETWORK_MASK");
+
+    if (!is_default && !destination) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "specify /DEFAULT or /DESTINATION");
+        return SS$_BADPARAM;
+    }
+
+    /* Check for root/NET_ADMIN privilege */
+    if (geteuid() != 0) {
+        printf("%%TCPIP-W-PRIVREQ, operation requires NET_ADMIN privilege\n");
+        /* Still persist to config file */
+    } else {
+        /* Use ip route add command */
+        char route_cmd[512];
+        if (is_default) {
+            snprintf(route_cmd, sizeof(route_cmd),
+                     "ip route replace default via %s 2>/dev/null", gateway);
+        } else {
+            if (netmask) {
+                /* Convert dotted netmask to CIDR prefix length */
+                struct in_addr mask_addr;
+                inet_pton(AF_INET, netmask, &mask_addr);
+                uint32_t mask_val = ntohl(mask_addr.s_addr);
+                int prefix = 0;
+                while (mask_val & 0x80000000) {
+                    prefix++;
+                    mask_val <<= 1;
+                }
+                snprintf(route_cmd, sizeof(route_cmd),
+                         "ip route replace %s/%d via %s 2>/dev/null",
+                         destination, prefix, gateway);
+            } else {
+                snprintf(route_cmd, sizeof(route_cmd),
+                         "ip route replace %s via %s 2>/dev/null",
+                         destination, gateway);
+            }
+        }
+        (void)system(route_cmd);
+    }
+
+    /* Persist to TCPIP$ROUTE.DAT */
+    tcpip_ensure_config_dir();
+    FILE *fp = fopen(TCPIP_ROUTE_DAT, "a");
+    if (fp) {
+        if (is_default) {
+            fprintf(fp, "DEFAULT %s\n", gateway);
+        } else {
+            fprintf(fp, "%s %s", destination, gateway);
+            if (netmask)
+                fprintf(fp, " %s", netmask);
+            fprintf(fp, "\n");
+        }
+        fclose(fp);
+    }
+
+    printf("%%TCPIP-I-INFO, route added\n");
+    return SS$_NORMAL;
+}
+
+/*
+ * TCPIP - TCP/IP Services command with SHOW and SET subcommands.
  */
 static int cmd_tcpip(struct dcl_command *cmd)
 {
@@ -5391,32 +5726,56 @@ static int cmd_tcpip(struct dcl_command *cmd)
 
     const char *subcmd = cmd->params[0];
 
-    if (!dcl_match_command(subcmd, "SHOW", 2)) {
+    if (dcl_match_command(subcmd, "SHOW", 2)) {
+        /* TCPIP SHOW <what> */
+        if (cmd->param_count < 2) {
+            dcl_error("TCPIP", 2, "NOKEYW",
+                      "missing SHOW keyword - supply what you want to show");
+            return SS$_BADPARAM;
+        }
+
+        const char *what = cmd->params[1];
+
+        if (dcl_match_command(what, "INTERFACE", 3))
+            return cmd_tcpip_show_interface(cmd);
+        if (dcl_match_command(what, "ROUTE", 3))
+            return cmd_tcpip_show_route(cmd);
+        if (dcl_match_command(what, "HOST", 3))
+            return cmd_tcpip_show_host(cmd);
+        if (dcl_match_command(what, "VERSION", 3))
+            return cmd_tcpip_show_version(cmd);
+
         dcl_error("TCPIP", 2, "IVKEYW",
-                  "unrecognized TCPIP keyword - \\%s\\", subcmd);
+                  "unrecognized TCPIP SHOW keyword - \\%s\\", what);
         return SS$_IVKEYW;
     }
 
-    /* TCPIP SHOW <what> */
-    if (cmd->param_count < 2) {
-        dcl_error("TCPIP", 2, "NOKEYW",
-                  "missing SHOW keyword - supply what you want to show");
-        return SS$_BADPARAM;
+    if (dcl_match_command(subcmd, "SET", 2)) {
+        /* TCPIP SET <what> */
+        if (cmd->param_count < 2) {
+            dcl_error("TCPIP", 2, "NOKEYW",
+                      "missing SET keyword - supply what you want to set");
+            return SS$_BADPARAM;
+        }
+
+        const char *what = cmd->params[1];
+
+        if (dcl_match_command(what, "HOST", 3))
+            return cmd_tcpip_set_host(cmd);
+        if (dcl_match_command(what, "NAME_SERVICE", 4))
+            return cmd_tcpip_set_name_service(cmd);
+        if (dcl_match_command(what, "INTERFACE", 3))
+            return cmd_tcpip_set_interface(cmd);
+        if (dcl_match_command(what, "ROUTE", 3))
+            return cmd_tcpip_set_route(cmd);
+
+        dcl_error("TCPIP", 2, "IVKEYW",
+                  "unrecognized TCPIP SET keyword - \\%s\\", what);
+        return SS$_IVKEYW;
     }
 
-    const char *what = cmd->params[1];
-
-    if (dcl_match_command(what, "INTERFACE", 3))
-        return cmd_tcpip_show_interface(cmd);
-    if (dcl_match_command(what, "ROUTE", 3))
-        return cmd_tcpip_show_route(cmd);
-    if (dcl_match_command(what, "HOST", 3))
-        return cmd_tcpip_show_host(cmd);
-    if (dcl_match_command(what, "VERSION", 3))
-        return cmd_tcpip_show_version(cmd);
-
     dcl_error("TCPIP", 2, "IVKEYW",
-              "unrecognized TCPIP SHOW keyword - \\%s\\", what);
+              "unrecognized TCPIP keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;
 }
 

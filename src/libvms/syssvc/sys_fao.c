@@ -278,10 +278,11 @@ uint32_t sys$faol(
     if (!ctrstr->dsc$a_pointer || ctrstr->dsc$w_length == 0) return SS$_BADPARAM;
     if (!outbuf->dsc$a_pointer) return SS$_BADPARAM;
 
-    /* Working buffer for output */
-    char temp_buf[FAO_MAX_INTERNAL_BUF];
+    /* Working buffer for output — heap-allocated to avoid 64KB stack frame */
+    char *temp_buf = (char *)malloc(FAO_MAX_INTERNAL_BUF);
+    if (!temp_buf) return SS$_INSFMEM;
     char *out = temp_buf;
-    char *out_end = temp_buf + sizeof(temp_buf);
+    char *out_end = temp_buf + FAO_MAX_INTERNAL_BUF;
 
     const char *ctrl = ctrstr->dsc$a_pointer;
     const char *ctrl_end = ctrl + ctrstr->dsc$w_length;
@@ -324,7 +325,7 @@ uint32_t sys$faol(
              * the old (valid) pointer, so the descriptor remains consistent on
              * the SS$_INSFMEM return path. */
             char *new_buf = (char *)realloc(outbuf->dsc$a_pointer, output_len);
-            if (!new_buf) return SS$_INSFMEM;
+            if (!new_buf) { free(temp_buf); return SS$_INSFMEM; }
             outbuf->dsc$a_pointer = new_buf;
             outbuf->dsc$w_length = (uint16_t)(output_len > 65535 ? 65535 : output_len);
         }
@@ -340,7 +341,75 @@ uint32_t sys$faol(
         memcpy(outbuf->dsc$a_pointer, temp_buf, copy_len);
     }
 
+    free(temp_buf);
     return status;
+}
+
+/*
+ * count_fao_args - Count the number of arguments consumed by FAO directives
+ *
+ * Scans the control string for FAO directives and returns how many
+ * uint64_t arguments they will consume from the parameter list.
+ */
+/*
+ * Also exported as sys$fao_count_args for use by lib$sys_fao.
+ */
+int count_fao_args(const char *ctrl, uint16_t len) {
+    const char *end = ctrl + len;
+    int count = 0;
+
+    while (ctrl < end) {
+        if (*ctrl != '!') { ctrl++; continue; }
+        ctrl++;  /* skip '!' */
+        if (ctrl >= end) break;
+
+        /* Skip numeric prefix */
+        int has_repeat = 0;
+        while (ctrl < end && *ctrl >= '0' && *ctrl <= '9') {
+            has_repeat = 1;
+            ctrl++;
+        }
+        if (ctrl >= end) break;
+
+        char first = *ctrl;
+
+        /* Single-char directives with no args */
+        if (first == '/' || first == '_' || first == '!') {
+            ctrl++;
+            continue;
+        }
+
+        /* !n*c or !*c — consumes 1 arg if no numeric prefix */
+        if (first == '*') {
+            ctrl++;
+            if (ctrl < end) ctrl++;  /* skip the fill char */
+            if (!has_repeat) count++;
+            continue;
+        }
+
+        /* %S — no args */
+        if (first == '%') {
+            ctrl++;
+            if (ctrl < end && (*ctrl == 'S' || *ctrl == 's')) ctrl++;
+            continue;
+        }
+
+        /* Parse alphabetic directive */
+        char dir[4] = {0};
+        int dlen = 0;
+        while (ctrl < end && dlen < 3 && ((*ctrl >= 'A' && *ctrl <= 'Z') ||
+               (*ctrl >= 'a' && *ctrl <= 'z'))) {
+            dir[dlen++] = (*ctrl >= 'a') ? (*ctrl - 32) : *ctrl;
+            ctrl++;
+        }
+
+        /* AD consumes 2 args (length + pointer), all others consume 1 */
+        if (dlen == 2 && dir[0] == 'A' && dir[1] == 'D')
+            count += 2;
+        else if (dlen > 0)
+            count += 1;
+    }
+    return count;
 }
 
 /*
@@ -355,24 +424,27 @@ uint32_t sys$fao(
     struct dsc$descriptor_s *outbuf,
     ...)
 {
-    /* Build argument array from varargs */
-    uint64_t args[256];
-    int arg_count = 0;
+    if (!ctrstr || !ctrstr->dsc$a_pointer) return SS$_BADPARAM;
 
+    /* Count actual directive arguments needed by the control string */
+    int needed = count_fao_args(ctrstr->dsc$a_pointer, ctrstr->dsc$w_length);
+    if (needed > 256) needed = 256;
+
+    /* Build argument array from varargs — only read what's needed */
+    uint64_t args[256];
     va_list ap;
     va_start(ap, outbuf);
-
-    /* Extract up to 256 arguments */
-    while (arg_count < 256) {
-        args[arg_count++] = va_arg(ap, uint64_t);
-
-        /* Heuristic: stop if we've processed the control string length worth of args
-         * In practice, most FAO calls have fewer than 20 arguments */
-        if (arg_count >= 64) break;
+    for (int i = 0; i < needed; i++) {
+        args[i] = va_arg(ap, uint64_t);
     }
-
     va_end(ap);
 
     /* Call sys$faol with the argument array */
     return sys$faol(ctrstr, outlen, outbuf, args);
+}
+
+/* Exported wrapper so lib$sys_fao (lib_datetime.c) can count directives.
+ * Uses a VMS-style name to match the naming convention. */
+int sys$fao_count_args(const char *ctrl, uint16_t len) {
+    return count_fao_args(ctrl, len);
 }

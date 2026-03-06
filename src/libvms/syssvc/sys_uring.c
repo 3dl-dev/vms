@@ -71,10 +71,13 @@ static struct io_uring_sqe *sqes;
 /*
  * vms_uring_init - Initialize io_uring for the current process
  */
+static int uring_initialized = 0;
+
 int vms_uring_init(void) {
     struct vms_pcb *pcb = vms_pcb_get();
     if (!pcb) return -1;
     if (pcb->uring_fd >= 0) return 0; /* already initialized */
+    if (uring_initialized) return 0;  /* guard: don't re-init after cleanup */
 
     struct io_uring_params params;
     memset(&params, 0, sizeof(params));
@@ -135,6 +138,7 @@ int vms_uring_init(void) {
     pcb->uring_cq_size = (uint32_t)cq_ring_sz;
 
     memset(completions, 0, sizeof(completions));
+    uring_initialized = 1;
 
     return 0;
 }
@@ -228,9 +232,10 @@ int vms_uring_process_completions(void) {
                     iosb->iosb$w_bcnt = 0;
                 } else {
                     iosb->iosb$w_status = (uint16_t)SS$_NORMAL;
-                    iosb->iosb$w_bcnt = (uint16_t)cqe->res;
+                    /* Clamp to 16-bit; full count in dev_depend */
+                    iosb->iosb$w_bcnt = (cqe->res > 65535) ? 65535 : (uint16_t)cqe->res;
                 }
-                iosb->iosb$l_dev_depend = 0;
+                iosb->iosb$l_dev_depend = (cqe->res > 0) ? (uint32_t)cqe->res : 0;
             }
 
             /* Set event flag */

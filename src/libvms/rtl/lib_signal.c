@@ -110,21 +110,21 @@ uint32_t lib$signal(uint32_t condition, ...) {
     struct chf$signal_array *sigarray = (struct chf$signal_array *)sigarray_buf;
     struct chf$mech_array mecharray;
 
-    /* Build signal array from variadic arguments */
+    /* Build signal array from variadic arguments.
+     * VMS convention: lib$signal(cond, num_fao_args, arg1, ..., argN)
+     * The first vararg is the count of FAO arguments that follow.
+     * If called with just a condition (no extra args), num_fao_args is 0. */
     va_start(ap, condition);
 
     sigarray->chf$is_sig_name = condition;
     sigarray->chf$is_sig_args = 1;  /* Start with condition itself */
 
-    /* Collect FAO arguments (up to 29 additional args) */
+    uint32_t num_fao = va_arg(ap, uint32_t);
+    if (num_fao > 29) num_fao = 29;  /* Cap to buffer capacity */
+
     uint32_t *arg_ptr = &sigarray->chf$is_sig_arg1;
-    for (int i = 0; i < 29; i++) {
-        uint32_t arg = va_arg(ap, uint32_t);
-        if (arg == 0 && i > 0) {
-            /* Heuristic: stop at first zero after at least one arg */
-            break;
-        }
-        *arg_ptr++ = arg;
+    for (uint32_t i = 0; i < num_fao; i++) {
+        *arg_ptr++ = va_arg(ap, uint32_t);
         sigarray->chf$is_sig_args++;
     }
 
@@ -220,20 +220,19 @@ uint32_t lib$stop(uint32_t condition, ...) {
     struct chf$signal_array *sigarray = (struct chf$signal_array *)sigarray_buf;
     struct chf$mech_array mecharray;
 
-    /* Build signal array from variadic arguments */
+    /* Build signal array from variadic arguments.
+     * VMS convention: lib$stop(cond, num_fao_args, arg1, ..., argN) */
     va_start(ap, condition);
 
     sigarray->chf$is_sig_name = condition;
     sigarray->chf$is_sig_args = 1;
 
-    /* Collect FAO arguments */
+    uint32_t num_fao = va_arg(ap, uint32_t);
+    if (num_fao > 29) num_fao = 29;
+
     uint32_t *arg_ptr = &sigarray->chf$is_sig_arg1;
-    for (int i = 0; i < 29; i++) {
-        uint32_t arg = va_arg(ap, uint32_t);
-        if (arg == 0 && i > 0) {
-            break;
-        }
-        *arg_ptr++ = arg;
+    for (uint32_t i = 0; i < num_fao; i++) {
+        *arg_ptr++ = va_arg(ap, uint32_t);
         sigarray->chf$is_sig_args++;
     }
 

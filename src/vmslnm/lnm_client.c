@@ -12,6 +12,7 @@
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
+#include <pthread.h>
 
 #include "vms/logical.h"
 #include "ssdef.h"
@@ -28,8 +29,9 @@ extern uint32_t      lnm_table_remove(lnm_table_t *table, const char *name);
 extern uint32_t      lnm_table_enumerate(lnm_table_t *table,
                                           lnm_enum_callback_t callback, void *ctx);
 
-/* Global static manager instance */
+/* Global static manager instance, protected by pthread_once */
 static lnm_manager_t *g_manager = NULL;
+static pthread_once_t g_manager_once = PTHREAD_ONCE_INIT;
 
 /*
  * validate_logical_name - Check that a logical name is valid.
@@ -174,21 +176,33 @@ void lnm_shutdown(lnm_manager_t *mgr)
     lnm_table_destroy(mgr->group_table);
     lnm_table_destroy(mgr->system_table);
 
-    if (g_manager == mgr)
+    if (g_manager == mgr) {
         g_manager = NULL;
+        /* Reset so lnm_get_manager() can re-initialize if called again */
+        g_manager_once = PTHREAD_ONCE_INIT;
+    }
 
     free(mgr);
 }
 
 /*
+ * lnm_init_once - pthread_once callback to initialize the global manager.
+ */
+static void lnm_init_once(void)
+{
+    g_manager = lnm_init();
+}
+
+/*
  * lnm_get_manager - Return the global/default manager instance.
  *
- * Initializes on first call. Returns NULL if initialization fails.
+ * Initializes on first call using pthread_once for thread safety.
+ * Concurrent first calls will not double-init.
+ * Returns NULL if initialization fails.
  */
 lnm_manager_t *lnm_get_manager(void)
 {
-    if (!g_manager)
-        g_manager = lnm_init();
+    pthread_once(&g_manager_once, lnm_init_once);
     return g_manager;
 }
 

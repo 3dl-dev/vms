@@ -339,23 +339,6 @@ int cmd_dump(struct dcl_command *cmd)
 }
 
 /* ================================================================== */
-/*                    Logical Name Operations                          */
-/* ================================================================== */
-
-/*
- * DEFINE - Define a logical name.
- *
- * Qualifiers:
- *   /PROCESS   (default) — create in LNM$PROCESS_TABLE
- *   /JOB                 — create in LNM$JOB
- *   /GROUP               — create in LNM$GROUP
- *   /SYSTEM              — create in LNM$SYSTEM
- *
- * If the LNM manager is not available, fall back to storing as a
- * global DCL symbol so callers don't lose the value entirely.
- */
-
-/* ================================================================== */
 /*           External Utility Executor                                 */
 /* ================================================================== */
 

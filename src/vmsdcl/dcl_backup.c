@@ -155,7 +155,11 @@ static int backup_save(struct dcl_context *ctx, const char *input_spec,
     hdr.version = BCK_VERSION;
     hdr.file_count = (uint32_t)file_count;
     hdr.created_date = (uint32_t)time(NULL);
-    fwrite(&hdr, sizeof(hdr), 1, out);
+    if (fwrite(&hdr, sizeof(hdr), 1, out) != 1) {
+        dcl_error("BACKUP", 2, "WRITEERR", "error writing backup header");
+        fclose(out);
+        return SS$_ABORT;
+    }
 
     /* Write each file entry */
     for (int i = 0; i < file_count; i++) {
@@ -177,15 +181,30 @@ static int backup_save(struct dcl_context *ctx, const char *input_spec,
         uint32_t name_len = (uint32_t)strlen(uname);
 
         /* Entry format: name_len(4) + name + data_len(4) + data */
-        fwrite(&name_len, sizeof(name_len), 1, out);
-        fwrite(uname, 1, name_len, out);
-        fwrite(&data_len, sizeof(data_len), 1, out);
+        if (fwrite(&name_len, sizeof(name_len), 1, out) != 1 ||
+            fwrite(uname, 1, name_len, out) != name_len ||
+            fwrite(&data_len, sizeof(data_len), 1, out) != 1) {
+            dcl_error("BACKUP", 2, "WRITEERR", "error writing backup entry");
+            fclose(in);
+            fclose(out);
+            return SS$_ABORT;
+        }
 
         /* Copy file data */
         char buf[8192];
         size_t n;
+        int write_err = 0;
         while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
-            fwrite(buf, 1, n, out);
+            if (fwrite(buf, 1, n, out) != n) {
+                write_err = 1;
+                break;
+            }
+        }
+        if (write_err) {
+            dcl_error("BACKUP", 2, "WRITEERR", "error writing backup data");
+            fclose(in);
+            fclose(out);
+            return SS$_ABORT;
         }
 
         fclose(in);

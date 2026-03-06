@@ -446,12 +446,21 @@ int cmd_copy(struct dcl_command *cmd)
 
     char buf[8192];
     size_t n;
+    int write_err = 0;
     while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
-        fwrite(buf, 1, n, dst);
+        if (fwrite(buf, 1, n, dst) != n) {
+            write_err = 1;
+            break;
+        }
     }
 
     fclose(src);
     fclose(dst);
+
+    if (write_err) {
+        dcl_error("RMS", 2, "WER", "write error - %s", cmd->params[1]);
+        return SS$_ABORT;
+    }
 
     /* /LOG qualifier: report the copy */
     if (dcl_has_qualifier(cmd, "LOG")) {
@@ -478,11 +487,13 @@ int cmd_delete(struct dcl_command *cmd)
             dcl_error("DCL", 2, "NOENTRY", "missing entry number with /ENTRY");
             return SS$_BADPARAM;
         }
-        uint32_t entry_id = (uint32_t)atol(entry_str);
-        if (entry_id == 0) {
+        char *endptr;
+        long entry_val = strtol(entry_str, &endptr, 10);
+        if (endptr == entry_str || *endptr != '\0' || entry_val <= 0) {
             dcl_error("DCL", 2, "BADENTRY", "invalid entry number - %s", entry_str);
             return SS$_BADPARAM;
         }
+        uint32_t entry_id = (uint32_t)entry_val;
         int qsts = ensure_queue_init();
         if (!(qsts & 1)) {
             dcl_error("DELETE", 2, "QMANERR", "queue manager initialization failed");
@@ -1084,12 +1095,21 @@ int cmd_append(struct dcl_command *cmd)
 
     char buf[8192];
     size_t n;
+    int write_err = 0;
     while ((n = fread(buf, 1, sizeof(buf), src)) > 0) {
-        fwrite(buf, 1, n, dst);
+        if (fwrite(buf, 1, n, dst) != n) {
+            write_err = 1;
+            break;
+        }
     }
 
     fclose(src);
     fclose(dst);
+
+    if (write_err) {
+        dcl_error("RMS", 2, "WER", "write error - %s", cmd->params[1]);
+        return SS$_ABORT;
+    }
 
     return SS$_NORMAL;
 }

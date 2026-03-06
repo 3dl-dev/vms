@@ -116,13 +116,6 @@ static int cmd_show_logical(struct dcl_command *cmd)
              */
             const char *found_table = LNM_PROCESS_TABLE;
             if (mgr) {
-                static const struct { lnm_table_t **tbl; const char *tname; } tables[] = {
-                    { NULL, LNM_PROCESS_TABLE },
-                    { NULL, LNM_JOB_TABLE     },
-                    { NULL, LNM_GROUP_TABLE   },
-                    { NULL, LNM_SYSTEM_TABLE  },
-                    { NULL, NULL              }
-                };
                 /* Search tables in order to find where the name lives */
                 lnm_table_t *search[4];
                 search[0] = mgr->process_table;
@@ -142,7 +135,6 @@ static int cmd_show_logical(struct dcl_command *cmd)
                         break;
                     }
                 }
-                (void)tables;
             }
             printf("   \"%s\" = \"%s\" (%s)\n", upper_name, value, found_table);
         } else {

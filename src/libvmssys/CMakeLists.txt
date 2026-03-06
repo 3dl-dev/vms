@@ -55,10 +55,13 @@ target_include_directories(vmssys PUBLIC
 )
 
 # Freestanding build: no glibc, no builtins except what we explicitly use
+# -fno-tree-vectorize: GCC vectorization generates SSE/AVX instructions
+# requiring 16-byte aligned stack which our custom CRT may not guarantee.
 target_compile_options(vmssys PRIVATE
     -ffreestanding
     -fno-builtin
     -fno-stack-protector
+    -fno-tree-vectorize
     -Wall
     -Wextra
     -O2
@@ -87,6 +90,7 @@ function(vmssys_add_test name source)
         -ffreestanding
         -fno-builtin
         -fno-stack-protector
+        -fno-tree-vectorize
         -O2
     )
     if(VMSSYS_ARCH STREQUAL "aarch64")

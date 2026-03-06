@@ -50,8 +50,8 @@ jobs:
 
       - name: Test
         run: |
-          sudo mkdir -p /vms
-          sudo chmod 777 /vms
+          sudo mkdir -p /vms/SYS0/SYSCOMMON/{SYSEXE,SYSLIB,SYSMGR,SYSHLP}
+          sudo chmod -R 777 /vms
           cd build && ctest --output-on-failure
 
   # -----------------------------------------------------------------------

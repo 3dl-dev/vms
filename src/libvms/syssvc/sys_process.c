@@ -127,7 +127,7 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
                     } else {
                         /* UIC: [group,member] packed as (gid << 16) | uid */
                         *(uint32_t *)item->bufaddr =
-                            (uint32_t)((getgid() << 16) | getuid());
+                            ((uint32_t)getgid() << 16) | (uint32_t)getuid();
                     }
                 }
                 if (item->retlen) *item->retlen = sizeof(uint32_t);

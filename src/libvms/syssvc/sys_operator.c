@@ -121,9 +121,9 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
     /* Get username */
     const char *username = get_current_username();
 
-    /* Static request counter */
-    static unsigned int req_count = 0;
-    req_count++;
+    /* Thread-safe static request counter */
+    static volatile unsigned int req_count = 0;
+    unsigned int this_req = __atomic_add_fetch(&req_count, 1, __ATOMIC_SEQ_CST);
 
     /* Open log */
     FILE *log = open_operator_log();
@@ -132,7 +132,7 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
 
     /* Write OPCOM header */
     fprintf(log, "%%%%OPCOM, %s, request %u from user %s on node OVMX\n",
-            timestamp, req_count, username);
+            timestamp, this_req, username);
 
     /* Write message body (strip trailing whitespace) */
     size_t msglen = strlen(msgtext);

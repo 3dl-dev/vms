@@ -124,8 +124,8 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
             case SYI$_MEMSIZE: {
                 long pages = sysconf(_SC_PHYS_PAGES);
                 long psize = sysconf(_SC_PAGE_SIZE);
-                /* Convert to VMS 512-byte pages */
-                uint32_t vms_pages = (uint32_t)(pages * (psize / 512));
+                /* Convert to VMS 512-byte pages (cast to uint64_t to avoid overflow) */
+                uint32_t vms_pages = (uint32_t)((uint64_t)pages * ((uint64_t)psize / 512));
                 if (item->bufaddr && item->buflen >= sizeof(uint32_t))
                     *(uint32_t *)item->bufaddr = vms_pages;
                 if (item->retlen) *item->retlen = sizeof(uint32_t);

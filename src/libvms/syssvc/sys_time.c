@@ -40,10 +40,12 @@ static uint64_t unix_to_vms_time(const struct timespec *ts) {
 /*
  * vms_to_unix_time - Convert a VMS 64-bit time to Unix timespec.
  */
-static void vms_to_unix_time(uint64_t vmstime, struct timespec *ts) {
+static int vms_to_unix_time(uint64_t vmstime, struct timespec *ts) {
+    if (vmstime < VMS_EPOCH_OFFSET) return -1;  /* Pre-Unix date */
     vmstime -= VMS_EPOCH_OFFSET;
     ts->tv_sec = (time_t)(vmstime / 10000000ULL);
     ts->tv_nsec = (long)((vmstime % 10000000ULL) * 100);
+    return 0;
 }
 
 /* ---- System Services ---- */
@@ -83,7 +85,7 @@ uint32_t sys$numtim(uint16_t timbuf[7], const uint64_t *timadr) {
 
     struct timespec ts;
     if (timadr) {
-        vms_to_unix_time(*timadr, &ts);
+        if (vms_to_unix_time(*timadr, &ts) < 0) return SS$_BADPARAM;
     } else {
         clock_gettime(CLOCK_REALTIME, &ts);
     }
@@ -119,6 +121,9 @@ uint32_t sys$asctim(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
 
     uint16_t numtim[7];
     sys$numtim(numtim, timadr);
+
+    /* Validate month range to prevent OOB access */
+    if (numtim[1] < 1 || numtim[1] > 12) return SS$_BADPARAM;
 
     char buf[24];
     int len = snprintf(buf, sizeof(buf), "%2d-%s-%04d %02d:%02d:%02d.%02d",
@@ -219,17 +224,18 @@ static void timer_signal_handler(int sig, siginfo_t *si, void *uc) {
     te->active = 0;
 }
 
-static void init_timer_signals(void) {
-    static int initialized = 0;
-    if (initialized) return;
+static pthread_once_t timer_once = PTHREAD_ONCE_INIT;
 
+static void init_timer_signals_once(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_flags = SA_SIGINFO | SA_RESTART;
     sa.sa_sigaction = timer_signal_handler;
     sigaction(SIGRTMIN, &sa, NULL);
+}
 
-    initialized = 1;
+static void init_timer_signals(void) {
+    pthread_once(&timer_once, init_timer_signals_once);
 }
 
 /*
@@ -301,7 +307,11 @@ uint32_t sys$setimr(uint32_t efn, const uint64_t *daytim,
     } else {
         /* Absolute time - convert from VMS to Unix */
         struct timespec abs_ts;
-        vms_to_unix_time((uint64_t)signed_time, &abs_ts);
+        if (vms_to_unix_time((uint64_t)signed_time, &abs_ts) < 0) {
+            te->active = 0;
+            pthread_mutex_unlock(&timer_mutex);
+            return SS$_BADPARAM;
+        }
         its.it_value = abs_ts;
     }
 

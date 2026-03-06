@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include "rms/rms.h"
+#include "rms_internal.h"
 
 /* B-tree order (max children per node) */
 #define BTREE_ORDER     64
@@ -86,6 +87,7 @@ static void btree_split_child(btree_node_t *parent, int idx);
 static int btree_remove(btree_t *tree, btree_node_t *node,
                         const uint8_t *key, uint16_t key_len,
                         uint8_t dtp);
+static int btree_write_node(FILE *f, btree_node_t *node);
 static void btree_save(btree_t *tree);
 static btree_t *btree_load(const char *data_path, struct FAB *fab);
 
@@ -421,29 +423,30 @@ static int btree_remove(btree_t *tree, btree_node_t *node,
 /*
  * Serialization: write a B-tree node to a FILE.
  */
-static void btree_write_node(FILE *f, btree_node_t *node)
+static int btree_write_node(FILE *f, btree_node_t *node)
 {
     if (!node) {
         int32_t marker = -1;
-        fwrite(&marker, sizeof(marker), 1, f);
-        return;
+        if (fwrite(&marker, sizeof(marker), 1, f) != 1) return -1;
+        return 0;
     }
 
     int32_t marker = node->num_keys;
-    fwrite(&marker, sizeof(marker), 1, f);
-    fwrite(&node->leaf, sizeof(node->leaf), 1, f);
+    if (fwrite(&marker, sizeof(marker), 1, f) != 1) return -1;
+    if (fwrite(&node->leaf, sizeof(node->leaf), 1, f) != 1) return -1;
 
     for (int i = 0; i < node->num_keys; i++) {
-        fwrite(&node->key_lens[i], sizeof(uint16_t), 1, f);
-        fwrite(node->keys[i], node->key_lens[i], 1, f);
-        fwrite(&node->offsets[i], sizeof(off_t), 1, f);
+        if (fwrite(&node->key_lens[i], sizeof(uint16_t), 1, f) != 1) return -1;
+        if (fwrite(node->keys[i], node->key_lens[i], 1, f) != 1) return -1;
+        if (fwrite(&node->offsets[i], sizeof(off_t), 1, f) != 1) return -1;
     }
 
     if (!node->leaf) {
         for (int i = 0; i <= node->num_keys; i++) {
-            btree_write_node(f, node->children[i]);
+            if (btree_write_node(f, node->children[i]) < 0) return -1;
         }
     }
+    return 0;
 }
 
 /*
@@ -459,6 +462,10 @@ static btree_node_t *btree_read_node(FILE *f)
     if (!node) return NULL;
 
     node->num_keys = marker;
+    if (marker > BTREE_MAX_KEYS) {
+        free(node);
+        return NULL;
+    }
     if (fread(&node->leaf, sizeof(node->leaf), 1, f) != 1) {
         free(node);
         return NULL;
@@ -548,11 +555,15 @@ static btree_t *btree_load(const char *data_path, struct FAB *fab)
     if (f) {
         uint32_t magic;
         if (fread(&magic, sizeof(magic), 1, f) == 1 && magic == IDX_MAGIC) {
-            fread(&tree->num_records, sizeof(tree->num_records), 1, f);
-            fread(&tree->key_size, sizeof(tree->key_size), 1, f);
-            fread(&tree->key_pos, sizeof(tree->key_pos), 1, f);
-            fread(&tree->key_dtp, sizeof(tree->key_dtp), 1, f);
-            fread(&tree->key_flags, sizeof(tree->key_flags), 1, f);
+            if (fread(&tree->num_records, sizeof(tree->num_records), 1, f) != 1 ||
+                fread(&tree->key_size, sizeof(tree->key_size), 1, f) != 1 ||
+                fread(&tree->key_pos, sizeof(tree->key_pos), 1, f) != 1 ||
+                fread(&tree->key_dtp, sizeof(tree->key_dtp), 1, f) != 1 ||
+                fread(&tree->key_flags, sizeof(tree->key_flags), 1, f) != 1) {
+                fclose(f);
+                tree->root = NULL;
+                return tree;
+            }
             tree->root = btree_read_node(f);
         }
         fclose(f);
@@ -580,36 +591,9 @@ static btree_t *get_tree(struct FAB *fab)
     return tree;
 }
 
-/*
- * Helper: read exactly count bytes.
- */
-static ssize_t idx_read_exact(int fd, void *buf, size_t count)
-{
-    size_t total = 0;
-    char *p = (char *)buf;
-    while (total < count) {
-        ssize_t n = read(fd, p + total, count - total);
-        if (n < 0) return -1;
-        if (n == 0) break;
-        total += (size_t)n;
-    }
-    return (ssize_t)total;
-}
-
-/*
- * Helper: write exactly count bytes.
- */
-static int idx_write_exact(int fd, const void *buf, size_t count)
-{
-    size_t total = 0;
-    const char *p = (const char *)buf;
-    while (total < count) {
-        ssize_t n = write(fd, p + total, count - total);
-        if (n <= 0) return -1;
-        total += (size_t)n;
-    }
-    return 0;
-}
+/* Use shared rms_read_exact / rms_write_exact from rms_core.c */
+#define idx_read_exact  rms_read_exact
+#define idx_write_exact rms_write_exact
 
 /*
  * rms_idx_get - Read a record from an indexed file.

@@ -226,30 +226,29 @@ int vmsfs_create_new_version(const char *linux_dir, const char *basename, const 
         return SS$_RESULTOVF;
     }
 
-    /* Create the file with O_CREAT|O_EXCL to prevent race conditions */
-    int fd = open(result_path, O_WRONLY | O_CREAT | O_EXCL, 0666);
-    if (fd < 0) {
-        if (errno == EEXIST) {
-            /*
-             * Race condition: another process created this version.
-             * Try the next version number.
-             */
-            next_ver++;
-            if (next_ver > VMS_MAX_VERSION) return RMS$_CRE;
+    /* Create the file with O_CREAT|O_EXCL to prevent race conditions.
+     * Retry in a bounded loop on EEXIST (another process may have
+     * created this version concurrently). */
+    int fd = -1;
+    int max_retries = 32;
+    for (int attempt = 0; attempt < max_retries; attempt++) {
+        fd = open(result_path, O_WRONLY | O_CREAT | O_EXCL, 0666);
+        if (fd >= 0) break;
 
-            status = vmsfs_version_filename(basename, ext, next_ver,
-                                             versioned_name, sizeof(versioned_name));
-            if (!$VMS_STATUS_SUCCESS(status)) return status;
+        if (errno != EEXIST) return RMS$_CRE;
 
-            n = snprintf(result_path, path_size, "%s/%s", linux_dir, versioned_name);
-            if (n < 0 || (size_t)n >= path_size) return SS$_RESULTOVF;
+        /* Race: another process created this version — try the next */
+        next_ver++;
+        if (next_ver > VMS_MAX_VERSION) return RMS$_CRE;
 
-            fd = open(result_path, O_WRONLY | O_CREAT | O_EXCL, 0666);
-            if (fd < 0) return RMS$_CRE;
-        } else {
-            return RMS$_CRE;
-        }
+        status = vmsfs_version_filename(basename, ext, next_ver,
+                                         versioned_name, sizeof(versioned_name));
+        if (!$VMS_STATUS_SUCCESS(status)) return status;
+
+        n = snprintf(result_path, path_size, "%s/%s", linux_dir, versioned_name);
+        if (n < 0 || (size_t)n >= path_size) return SS$_RESULTOVF;
     }
+    if (fd < 0) return RMS$_CRE;
 
     close(fd);
 

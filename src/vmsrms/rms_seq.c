@@ -16,44 +16,11 @@
 #include <string.h>
 #include <unistd.h>
 #include "rms/rms.h"
+#include "rms_internal.h"
 
-/*
- * Helper: Read exactly 'count' bytes from fd at current position.
- * Returns number of bytes read, or -1 on error.
- */
-static ssize_t read_exact(int fd, void *buf, size_t count)
-{
-    size_t total = 0;
-    char *p = (char *)buf;
-
-    while (total < count) {
-        ssize_t n = read(fd, p + total, count - total);
-        if (n < 0) return -1;
-        if (n == 0) break;  /* EOF */
-        total += (size_t)n;
-    }
-
-    return (ssize_t)total;
-}
-
-/*
- * Helper: Write exactly 'count' bytes to fd.
- * Returns 0 on success, -1 on error.
- */
-static int write_exact(int fd, const void *buf, size_t count)
-{
-    size_t total = 0;
-    const char *p = (const char *)buf;
-
-    while (total < count) {
-        ssize_t n = write(fd, p + total, count - total);
-        if (n < 0) return -1;
-        if (n == 0) return -1;
-        total += (size_t)n;
-    }
-
-    return 0;
-}
+/* Use shared rms_read_exact / rms_write_exact from rms_core.c */
+#define read_exact  rms_read_exact
+#define write_exact rms_write_exact
 
 /*
  * rms_seq_get - Read a record from a sequential file.

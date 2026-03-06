@@ -491,9 +491,13 @@ static void handle_connection(ssh_session session)
         if (ovmx_accounting_get_lastlogin(sysuaf_rec.username, &last_login) == 0
                 && last_login > 0) {
             struct tm *tm = localtime(&last_login);
-            printf("\n   Last interactive login on %02d-%s-%04d %02d:%02d:%02d\n\n",
-                   tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
-                   tm->tm_hour, tm->tm_min, tm->tm_sec);
+            if (tm) {
+                printf("\n   Last interactive login on %02d-%s-%04d %02d:%02d:%02d\n\n",
+                       tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
+                       tm->tm_hour, tm->tm_min, tm->tm_sec);
+            } else {
+                printf("\n   Last login time could not be determined.\n\n");
+            }
         } else {
             printf("\n   No previous interactive login recorded.\n\n");
         }
@@ -591,8 +595,10 @@ static void handle_connection(ssh_session session)
             break;
 
         /* Check if shell child exited */
-        if (waitpid(shell_pid, NULL, WNOHANG) == shell_pid)
+        if (waitpid(shell_pid, NULL, WNOHANG) == shell_pid) {
+            shell_pid = -1;  /* Already reaped */
             break;
+        }
     }
 
 done:
@@ -602,8 +608,9 @@ done:
     ssh_channel_close(channel);
     ssh_channel_free(channel);
 
-    /* Wait for shell to exit */
-    waitpid(shell_pid, NULL, 0);
+    /* Wait for shell to exit (if not already reaped) */
+    if (shell_pid > 0)
+        waitpid(shell_pid, NULL, 0);
 
     ssh_disconnect(session);
     ssh_free(session);

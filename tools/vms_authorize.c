@@ -22,16 +22,15 @@
 #include <stdint.h>
 
 #include "sha256.h"
+#include "sysuaf.h"
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
 /* ------------------------------------------------------------------ */
 
-#include "ovmx_layout.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "vms/logical.h"
-#define SYSUAF_PATH   VMS_SYSUAF_PATH
 #define MAX_USERS     1024
 #define MAX_LINE      1024
 #define UAF_VERSION   "V7.3"
@@ -39,20 +38,6 @@
 /* Default values for new users */
 #define DEFAULT_UIC_GROUP    200
 #define DEFAULT_PRIVS        "TMPMBX,NETMBX"
-
-/* ------------------------------------------------------------------ */
-/* Data structures                                                     */
-/* ------------------------------------------------------------------ */
-
-typedef struct {
-    char username[64];
-    char password_hash[128];  /* SHA-256 hex, or empty for no password */
-    uint32_t uic_group;
-    uint32_t uic_member;
-    char default_dir[256];
-    char flags[128];
-    char privileges[256];
-} sysuaf_record_t;
 
 /* In-memory database */
 static sysuaf_record_t g_users[MAX_USERS];

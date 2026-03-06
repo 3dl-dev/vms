@@ -16,6 +16,9 @@
 #include <dirent.h>
 #include <pwd.h>
 #include <fnmatch.h>
+#include <sys/statvfs.h>
+
+#include "vmsqueue.h"
 
 #include "dcl/context.h"
 #include "dcl/parser.h"
@@ -1692,6 +1695,662 @@ static int lex_unique(struct dcl_context *ctx, const char *args,
 }
 
 /*
+ * F$PID(context) - Return next PID in process list.
+ *
+ * Context is a symbol name used to track iteration state.
+ * First call with empty context: returns first PID, sets context.
+ * Subsequent calls: returns next PID.
+ * When no more processes: returns "".
+ * PIDs returned as 8-digit hex strings (VMS format).
+ */
+#define MAX_PID_LIST 256
+static pid_t pid_list[MAX_PID_LIST];
+static int pid_count = 0;
+static int pid_index = 0;
+
+static void populate_pid_list(void)
+{
+    pid_count = 0;
+    pid_index = 0;
+    DIR *d = opendir("/proc");
+    if (!d) {
+        /* Fallback: just return our own PID */
+        pid_list[pid_count++] = getpid();
+        return;
+    }
+    struct dirent *ent;
+    while ((ent = readdir(d)) != NULL && pid_count < MAX_PID_LIST) {
+        /* Only numeric entries are PIDs */
+        char *endp;
+        long p = strtol(ent->d_name, &endp, 10);
+        if (*endp == '\0' && p > 0) {
+            pid_list[pid_count++] = (pid_t)p;
+        }
+    }
+    closedir(d);
+}
+
+static int lex_pid(struct dcl_context *ctx, const char *args,
+                   char *result, size_t result_size)
+{
+    (void)ctx;
+    result[0] = '\0';
+    if (!args) { populate_pid_list(); }
+
+    /* Parse the context symbol name */
+    char sym_name[256] = {0};
+    if (args) {
+        const char *p = args;
+        while (*p == ' ') p++;
+        strncpy(sym_name, p, sizeof(sym_name) - 1);
+        size_t len = strlen(sym_name);
+        while (len > 0 && (sym_name[len-1] == ' ' || sym_name[len-1] == '\t'))
+            sym_name[--len] = '\0';
+        if (len >= 2 && sym_name[0] == '"' && sym_name[len-1] == '"') {
+            sym_name[len-1] = '\0';
+            memmove(sym_name, sym_name + 1, len - 1);
+        }
+    }
+
+    /* Check if context symbol is empty or "0" → fresh scan */
+    const char *ctx_val = NULL;
+    if (sym_name[0] != '\0') {
+        ctx_val = dcl_sym_get(sym_name);
+    }
+    if (!ctx_val || ctx_val[0] == '\0' || strcmp(ctx_val, "0") == 0) {
+        populate_pid_list();
+    }
+
+    if (pid_index >= pid_count) {
+        /* No more processes */
+        result[0] = '\0';
+        if (sym_name[0] != '\0')
+            dcl_sym_set(sym_name, "", DCL_SYM_LOCAL);
+        return 0;
+    }
+
+    snprintf(result, result_size, "%08X", (unsigned)pid_list[pid_index++]);
+
+    /* Update context symbol with current index */
+    if (sym_name[0] != '\0') {
+        char idx_str[16];
+        snprintf(idx_str, sizeof(idx_str), "%d", pid_index);
+        dcl_sym_set(sym_name, idx_str, DCL_SYM_LOCAL);
+    }
+
+    return 0;
+}
+
+/*
+ * F$CONTEXT(context_sym, ctx_type, sel_item, sel_value, sel_comp)
+ * Sets up selection criteria for F$PID iteration.
+ * Returns "" on success.
+ */
+static int lex_context(struct dcl_context *ctx, const char *args,
+                       char *result, size_t result_size)
+{
+    (void)ctx;
+    result[0] = '\0';
+    if (!args) return 0;
+
+    /* Parse: context_sym, ctx_type, sel_item, sel_value, sel_comp */
+    /* We accept and acknowledge the parameters but F$PID returns all processes */
+    const char *p = args;
+    char sym_name[256] = {0};
+
+    while (*p == ' ') p++;
+    /* Extract first arg (context symbol name) */
+    size_t i = 0;
+    int in_quote = 0;
+    while (*p && i < sizeof(sym_name) - 1) {
+        if (*p == '"') { in_quote = !in_quote; p++; continue; }
+        if (*p == ',' && !in_quote) break;
+        sym_name[i++] = *p++;
+    }
+    sym_name[i] = '\0';
+    /* Trim */
+    size_t len = strlen(sym_name);
+    while (len > 0 && (sym_name[len-1] == ' ' || sym_name[len-1] == '\t'))
+        sym_name[--len] = '\0';
+
+    /* Initialize context symbol to "0" to signal fresh scan on next F$PID */
+    if (sym_name[0] != '\0')
+        dcl_sym_set(sym_name, "0", DCL_SYM_LOCAL);
+
+    return 0;
+}
+
+/*
+ * F$DEVICE(search_name, dev_class, dev_type [, stream_id])
+ * Iterative device name lookup.
+ */
+#define MAX_DEV_LIST 64
+static char dev_list[MAX_DEV_LIST][64];
+static int dev_count = 0;
+static int dev_index = 0;
+
+static void populate_device_list(const char *pattern)
+{
+    dev_count = 0;
+    dev_index = 0;
+
+    /* Always include standard VMS devices */
+    static const char *std_devs[] = {
+        "_OPA0:", "_FTA0:", "SYS$SYSDEVICE:", NULL
+    };
+
+    for (int i = 0; std_devs[i] && dev_count < MAX_DEV_LIST; i++) {
+        if (pattern[0] == '\0' || pattern[0] == '*' ||
+            fnmatch(pattern, std_devs[i], FNM_CASEFOLD) == 0) {
+            strncpy(dev_list[dev_count], std_devs[i], 63);
+            dev_list[dev_count][63] = '\0';
+            dev_count++;
+        }
+    }
+
+    /* Add mounted filesystems from /proc/mounts */
+    FILE *f = fopen("/proc/mounts", "r");
+    if (f) {
+        char line[512];
+        while (fgets(line, sizeof(line), f) && dev_count < MAX_DEV_LIST) {
+            char devname[128], mntpoint[128];
+            if (sscanf(line, "%127s %127s", devname, mntpoint) == 2) {
+                /* Skip pseudo-filesystems */
+                if (strncmp(devname, "/dev/", 5) == 0) {
+                    char vms_name[64];
+                    /* Convert /dev/sda1 → _SDA1: */
+                    const char *base = devname + 5;
+                    snprintf(vms_name, sizeof(vms_name), "_%s:", base);
+                    /* Uppercase */
+                    for (size_t j = 0; vms_name[j]; j++)
+                        vms_name[j] = (char)toupper((unsigned char)vms_name[j]);
+
+                    if (pattern[0] == '\0' || pattern[0] == '*' ||
+                        fnmatch(pattern, vms_name, FNM_CASEFOLD) == 0) {
+                        strncpy(dev_list[dev_count], vms_name, 63);
+                        dev_list[dev_count][63] = '\0';
+                        dev_count++;
+                    }
+                }
+            }
+        }
+        fclose(f);
+    }
+}
+
+static int lex_device(struct dcl_context *ctx, const char *args,
+                      char *result, size_t result_size)
+{
+    (void)ctx;
+    result[0] = '\0';
+    if (!args) {
+        populate_device_list("*");
+    }
+
+    /* Parse: search_name [, dev_class [, dev_type [, stream_id]]] */
+    char search[256] = "*";
+    if (args) {
+        const char *p = args;
+        while (*p == ' ') p++;
+        size_t i = 0;
+        while (*p && *p != ',' && i < sizeof(search) - 1) {
+            if (*p != '"') search[i++] = *p;
+            p++;
+        }
+        search[i] = '\0';
+        /* Trim */
+        size_t len = strlen(search);
+        while (len > 0 && (search[len-1] == ' ' || search[len-1] == '\t'))
+            search[--len] = '\0';
+    }
+
+    /* On first call or when search pattern changes, repopulate */
+    if (dev_count == 0 || dev_index >= dev_count) {
+        populate_device_list(search);
+    }
+
+    if (dev_index >= dev_count) {
+        result[0] = '\0';
+        return 0;
+    }
+
+    strncpy(result, dev_list[dev_index++], result_size - 1);
+    result[result_size - 1] = '\0';
+    return 0;
+}
+
+/*
+ * F$GETDVI(device, item) - Get device information.
+ */
+static int lex_getdvi(struct dcl_context *ctx, const char *args,
+                      char *result, size_t result_size)
+{
+    (void)ctx;
+    result[0] = '\0';
+    if (!args) return 0;
+
+    /* Parse: device, item */
+    const char *p = args;
+    while (*p == ' ') p++;
+
+    char device[128] = {0};
+    size_t i = 0;
+    int in_quote = 0;
+    while (*p && i < sizeof(device) - 1) {
+        if (*p == '"') { in_quote = !in_quote; p++; continue; }
+        if (*p == ',' && !in_quote) break;
+        device[i++] = (char)toupper((unsigned char)*p);
+        p++;
+    }
+    device[i] = '\0';
+    /* Trim */
+    size_t dlen = strlen(device);
+    while (dlen > 0 && (device[dlen-1] == ' ' || device[dlen-1] == '\t'))
+        device[--dlen] = '\0';
+
+    if (*p == ',') p++;
+    while (*p == ' ') p++;
+
+    char item[64] = {0};
+    i = 0;
+    in_quote = 0;
+    while (*p && i < sizeof(item) - 1) {
+        if (*p == '"') { in_quote = !in_quote; p++; continue; }
+        if (*p == ',' && !in_quote) break;
+        item[i++] = (char)toupper((unsigned char)*p);
+        p++;
+    }
+    item[i] = '\0';
+    size_t ilen = strlen(item);
+    while (ilen > 0 && (item[ilen-1] == ' ' || item[ilen-1] == '\t'))
+        item[--ilen] = '\0';
+
+    /* Determine which Linux path to stat */
+    const char *stat_path = "/";
+    int is_terminal = 0;
+    if (strstr(device, "OPA0") || strstr(device, "FTA0") ||
+        strstr(device, "TT") || strstr(device, "FT")) {
+        is_terminal = 1;
+    }
+
+    if (strcmp(item, "DEVNAM") == 0) {
+        /* Return canonical device name */
+        if (strstr(device, "SYSDEVICE") || strstr(device, "SYS$SYSDEVICE")) {
+            snprintf(result, result_size, "_SYS$SYSDEVICE:");
+        } else {
+            snprintf(result, result_size, "_%s:", device);
+        }
+    } else if (strcmp(item, "EXISTS") == 0) {
+        /* Check if device exists — always TRUE for known devices */
+        snprintf(result, result_size, "TRUE");
+    } else if (strcmp(item, "DEVCLASS") == 0) {
+        if (is_terminal)
+            snprintf(result, result_size, "66"); /* DC$_TERM */
+        else
+            snprintf(result, result_size, "1");  /* DC$_DISK */
+    } else if (strcmp(item, "DEVTYPE") == 0) {
+        if (is_terminal)
+            snprintf(result, result_size, "112"); /* DT$_VT100 */
+        else
+            snprintf(result, result_size, "44");  /* DT$_RA92 */
+    } else if (strcmp(item, "VOLNAM") == 0) {
+        if (strstr(device, "SYSDEVICE") || device[0] == '\0')
+            snprintf(result, result_size, "OVMXSYS");
+        else
+            snprintf(result, result_size, "VOLUME");
+    } else if (strcmp(item, "FREEBLOCKS") == 0) {
+        struct statvfs st;
+        if (statvfs(stat_path, &st) == 0) {
+            unsigned long free_blocks = (unsigned long)(st.f_bavail * st.f_frsize / 512);
+            snprintf(result, result_size, "%lu", free_blocks);
+        } else {
+            snprintf(result, result_size, "0");
+        }
+    } else if (strcmp(item, "MAXBLOCK") == 0) {
+        struct statvfs st;
+        if (statvfs(stat_path, &st) == 0) {
+            unsigned long total_blocks = (unsigned long)(st.f_blocks * st.f_frsize / 512);
+            snprintf(result, result_size, "%lu", total_blocks);
+        } else {
+            snprintf(result, result_size, "0");
+        }
+    } else if (strcmp(item, "MOUNTCNT") == 0) {
+        snprintf(result, result_size, "1");
+    } else {
+        result[0] = '\0';
+    }
+
+    return 0;
+}
+
+/*
+ * F$IDENTIFIER(id, conversion) - Convert between UIC and identifier names.
+ */
+static int lex_identifier(struct dcl_context *ctx, const char *args,
+                          char *result, size_t result_size)
+{
+    (void)ctx;
+    result[0] = '\0';
+    if (!args) return 0;
+
+    /* Parse: id, conversion */
+    const char *p = args;
+    while (*p == ' ') p++;
+
+    char id_str[256] = {0};
+    size_t i = 0;
+    int in_quote = 0;
+    while (*p && i < sizeof(id_str) - 1) {
+        if (*p == '"') { in_quote = !in_quote; p++; continue; }
+        if (*p == ',' && !in_quote) break;
+        id_str[i++] = *p;
+        p++;
+    }
+    id_str[i] = '\0';
+    size_t ilen = strlen(id_str);
+    while (ilen > 0 && (id_str[ilen-1] == ' ' || id_str[ilen-1] == '\t'))
+        id_str[--ilen] = '\0';
+
+    if (*p == ',') p++;
+    while (*p == ' ') p++;
+
+    char conv[64] = {0};
+    i = 0;
+    in_quote = 0;
+    while (*p && i < sizeof(conv) - 1) {
+        if (*p == '"') { in_quote = !in_quote; p++; continue; }
+        conv[i++] = (char)toupper((unsigned char)*p);
+        p++;
+    }
+    conv[i] = '\0';
+    size_t clen = strlen(conv);
+    while (clen > 0 && (conv[clen-1] == ' ' || conv[clen-1] == '\t'))
+        conv[--clen] = '\0';
+
+    /* Uppercase the id for comparison */
+    char id_upper[256];
+    strncpy(id_upper, id_str, sizeof(id_upper) - 1);
+    id_upper[sizeof(id_upper) - 1] = '\0';
+    for (size_t j = 0; id_upper[j]; j++)
+        id_upper[j] = (char)toupper((unsigned char)id_upper[j]);
+
+    if (strcmp(conv, "NAME_TO_NUMBER") == 0) {
+        /* Convert username to UIC number */
+        /* Hardcoded well-known identities */
+        if (strcmp(id_upper, "SYSTEM") == 0) {
+            snprintf(result, result_size, "%d", (1 << 16) | 4); /* [1,4] */
+        } else if (strcmp(id_upper, "DEFAULT") == 0) {
+            snprintf(result, result_size, "%d", (200 << 16) | 1); /* [200,1] */
+        } else {
+            /* Try /etc/passwd lookup */
+            struct passwd *pw = getpwnam(id_str);
+            if (pw) {
+                /* Map uid,gid to VMS UIC format [group,member] */
+                snprintf(result, result_size, "%d",
+                         (int)((pw->pw_gid << 16) | (pw->pw_uid & 0xFFFF)));
+            } else {
+                snprintf(result, result_size, "0");
+            }
+        }
+    } else if (strcmp(conv, "NUMBER_TO_NAME") == 0) {
+        /* Convert UIC number to username */
+        long uic = strtol(id_str, NULL, 0);
+        int member = (int)(uic & 0xFFFF);
+        int group = (int)((uic >> 16) & 0xFFFF);
+
+        if (group == 1 && member == 4) {
+            snprintf(result, result_size, "SYSTEM");
+        } else {
+            /* Try /etc/passwd lookup by uid */
+            struct passwd *pw = getpwuid((uid_t)member);
+            if (pw) {
+                strncpy(result, pw->pw_name, result_size - 1);
+                result[result_size - 1] = '\0';
+                for (size_t j = 0; result[j]; j++)
+                    result[j] = (char)toupper((unsigned char)result[j]);
+            } else {
+                snprintf(result, result_size, "[%d,%d]", group, member);
+            }
+        }
+    } else {
+        result[0] = '\0';
+    }
+
+    return 0;
+}
+
+/*
+ * F$GETQUI(func, item [, id]) - Get queue information.
+ */
+static int lex_getqui(struct dcl_context *ctx, const char *args,
+                      char *result, size_t result_size)
+{
+    (void)ctx;
+    result[0] = '\0';
+    if (!args) return 0;
+
+    /* Parse: func, item [, id] */
+    const char *p = args;
+    while (*p == ' ') p++;
+
+    char func[64] = {0};
+    size_t i = 0;
+    int in_quote = 0;
+    while (*p && i < sizeof(func) - 1) {
+        if (*p == '"') { in_quote = !in_quote; p++; continue; }
+        if (*p == ',' && !in_quote) break;
+        func[i++] = (char)toupper((unsigned char)*p);
+        p++;
+    }
+    func[i] = '\0';
+    size_t flen = strlen(func);
+    while (flen > 0 && (func[flen-1] == ' ' || func[flen-1] == '\t'))
+        func[--flen] = '\0';
+
+    if (*p == ',') p++;
+    while (*p == ' ') p++;
+
+    char item_str[64] = {0};
+    i = 0;
+    in_quote = 0;
+    while (*p && i < sizeof(item_str) - 1) {
+        if (*p == '"') { in_quote = !in_quote; p++; continue; }
+        if (*p == ',' && !in_quote) break;
+        item_str[i++] = (char)toupper((unsigned char)*p);
+        p++;
+    }
+    item_str[i] = '\0';
+    size_t itlen = strlen(item_str);
+    while (itlen > 0 && (item_str[itlen-1] == ' ' || item_str[itlen-1] == '\t'))
+        item_str[--itlen] = '\0';
+
+    /* Optional: id parameter */
+    uint32_t entry_id = 0;
+    if (*p == ',') {
+        p++;
+        while (*p == ' ') p++;
+        char id_buf[32] = {0};
+        i = 0;
+        while (*p && *p != ',' && *p != ' ' && i < sizeof(id_buf) - 1) {
+            if (*p != '"') id_buf[i++] = *p;
+            p++;
+        }
+        id_buf[i] = '\0';
+        entry_id = (uint32_t)strtoul(id_buf, NULL, 0);
+    }
+
+    if (strcmp(func, "DISPLAY_QUEUE") == 0) {
+        /* Try to show queue info via vmsqueue API */
+        struct vms_queue qinfo;
+        const char *qname = "SYS$BATCH";
+        int rc = vmsq_show_queue(qname, &qinfo);
+        if (rc != 1) {  /* SS$_NORMAL = 1 */
+            result[0] = '\0';
+            return 0;
+        }
+        if (strcmp(item_str, "QUEUE_NAME") == 0) {
+            strncpy(result, qinfo.name, result_size - 1);
+            result[result_size - 1] = '\0';
+        } else if (strcmp(item_str, "ENTRY_NUMBER") == 0) {
+            snprintf(result, result_size, "%u", qinfo.entry_count);
+        } else {
+            result[0] = '\0';
+        }
+    } else if (strcmp(func, "DISPLAY_ENTRY") == 0) {
+        struct vms_queue_entry entry;
+        int rc = vmsq_show_entry(entry_id, &entry);
+        if (rc != 1) {
+            result[0] = '\0';
+            return 0;
+        }
+        if (strcmp(item_str, "JOB_NAME") == 0) {
+            strncpy(result, entry.job_name, result_size - 1);
+            result[result_size - 1] = '\0';
+        } else if (strcmp(item_str, "USERNAME") == 0) {
+            strncpy(result, entry.username, result_size - 1);
+            result[result_size - 1] = '\0';
+        } else if (strcmp(item_str, "ENTRY_NUMBER") == 0) {
+            snprintf(result, result_size, "%u", entry.entry_id);
+        } else {
+            result[0] = '\0';
+        }
+    } else {
+        result[0] = '\0';
+    }
+
+    return 0;
+}
+
+/*
+ * F$CVSI(bit_pos, length, source) - Extract signed bit field from string.
+ */
+static int lex_cvsi(struct dcl_context *ctx, const char *args,
+                    char *result, size_t result_size)
+{
+    (void)ctx;
+    result[0] = '\0';
+    if (!args) return 0;
+
+    /* Parse: bit_pos, length, source */
+    const char *p = args;
+    while (*p == ' ') p++;
+    int bit_pos = atoi(p);
+
+    p = strchr(p, ',');
+    if (!p) return -1;
+    p++;
+    while (*p == ' ') p++;
+    int length = atoi(p);
+
+    p = strchr(p, ',');
+    if (!p) return -1;
+    p++;
+    while (*p == ' ') p++;
+
+    /* Extract source string */
+    char source[4096] = {0};
+    strncpy(source, p, sizeof(source) - 1);
+    size_t slen = strlen(source);
+    while (slen > 0 && (source[slen-1] == ' ' || source[slen-1] == '\t'))
+        source[--slen] = '\0';
+    if (slen >= 2 && source[0] == '"' && source[slen-1] == '"') {
+        source[slen-1] = '\0';
+        memmove(source, source + 1, slen - 1);
+        slen -= 2;
+    }
+
+    if (bit_pos < 0 || length <= 0 || length > 32) {
+        snprintf(result, result_size, "0");
+        return 0;
+    }
+
+    /* Treat source as byte array, extract bit field */
+    const unsigned char *bytes = (const unsigned char *)source;
+    size_t byte_len = slen;
+    uint32_t value = 0;
+
+    for (int b = 0; b < length && b < 32; b++) {
+        int abs_bit = bit_pos + b;
+        int byte_idx = abs_bit / 8;
+        int bit_idx = abs_bit % 8;
+        if (byte_idx >= 0 && (size_t)byte_idx < byte_len) {
+            if (bytes[byte_idx] & (1U << bit_idx))
+                value |= (1U << b);
+        }
+    }
+
+    /* Sign extend */
+    if (length < 32 && (value & (1U << (length - 1)))) {
+        value |= ~((1U << length) - 1);
+    }
+
+    snprintf(result, result_size, "%d", (int32_t)value);
+    return 0;
+}
+
+/*
+ * F$CVUI(bit_pos, length, source) - Extract unsigned bit field from string.
+ */
+static int lex_cvui(struct dcl_context *ctx, const char *args,
+                    char *result, size_t result_size)
+{
+    (void)ctx;
+    result[0] = '\0';
+    if (!args) return 0;
+
+    /* Parse: bit_pos, length, source */
+    const char *p = args;
+    while (*p == ' ') p++;
+    int bit_pos = atoi(p);
+
+    p = strchr(p, ',');
+    if (!p) return -1;
+    p++;
+    while (*p == ' ') p++;
+    int length = atoi(p);
+
+    p = strchr(p, ',');
+    if (!p) return -1;
+    p++;
+    while (*p == ' ') p++;
+
+    /* Extract source string */
+    char source[4096] = {0};
+    strncpy(source, p, sizeof(source) - 1);
+    size_t slen = strlen(source);
+    while (slen > 0 && (source[slen-1] == ' ' || source[slen-1] == '\t'))
+        source[--slen] = '\0';
+    if (slen >= 2 && source[0] == '"' && source[slen-1] == '"') {
+        source[slen-1] = '\0';
+        memmove(source, source + 1, slen - 1);
+        slen -= 2;
+    }
+
+    if (bit_pos < 0 || length <= 0 || length > 32) {
+        snprintf(result, result_size, "0");
+        return 0;
+    }
+
+    /* Treat source as byte array, extract bit field (unsigned) */
+    const unsigned char *bytes = (const unsigned char *)source;
+    size_t byte_len = slen;
+    uint32_t value = 0;
+
+    for (int b = 0; b < length && b < 32; b++) {
+        int abs_bit = bit_pos + b;
+        int byte_idx = abs_bit / 8;
+        int bit_idx = abs_bit % 8;
+        if (byte_idx >= 0 && (size_t)byte_idx < byte_len) {
+            if (bytes[byte_idx] & (1U << bit_idx))
+                value |= (1U << b);
+        }
+    }
+
+    snprintf(result, result_size, "%u", value);
+    return 0;
+}
+
+/*
  * Dispatch table for lexical functions.
  */
 typedef int (*lex_func_t)(struct dcl_context *ctx, const char *args,
@@ -1728,6 +2387,14 @@ static const struct {
     { "F$PRIVILEGE",        lex_privilege },
     { "F$DIRECTORY",        lex_directory },
     { "F$UNIQUE",           lex_unique },
+    { "F$PID",              lex_pid },
+    { "F$CONTEXT",          lex_context },
+    { "F$DEVICE",           lex_device },
+    { "F$GETDVI",           lex_getdvi },
+    { "F$IDENTIFIER",       lex_identifier },
+    { "F$GETQUI",           lex_getqui },
+    { "F$CVSI",             lex_cvsi },
+    { "F$CVUI",             lex_cvui },
     { NULL, NULL }
 };
 

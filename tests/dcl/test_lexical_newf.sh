@@ -1,0 +1,9 @@
+#!/bin/bash
+# TEST: New lexical functions F$PID, F$DEVICE, F$GETDVI, F$IDENTIFIER, F$CVUI work
+# EXPECT: regex:P =
+# EXPECT: contains:_OPA0:
+# EXPECT: contains:SYS$SYSDEVICE
+# EXPECT: contains:SYSTEM
+# EXPECT: regex:C = 65
+VMSDCL="${VMSDCL:-vmsdcl}"
+printf 'P = F$PID("")\nSHOW SYMBOL P\nD = F$DEVICE("*")\nSHOW SYMBOL D\nG = F$GETDVI("SYS$SYSDEVICE","DEVNAM")\nSHOW SYMBOL G\nI = F$IDENTIFIER(65540,"NUMBER_TO_NAME")\nSHOW SYMBOL I\nC = F$CVUI(0,8,"A")\nSHOW SYMBOL C\n' | $VMSDCL 2>&1

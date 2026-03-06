@@ -54,12 +54,6 @@ int cmd_assign(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
-/*
- * DIFFERENCES - Compare two files and show differences.
- * Format: DIFFERENCES file1 file2
- * Implements a simple line-by-line diff with VMS-style output.
- */
-
 /* ================================================================== */
 /*                    Logical Name Operations                          */
 /* ================================================================== */
@@ -421,10 +415,3 @@ int cmd_write(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
-/* ================================================================== */
-/*                     Process/Session Commands                        */
-/* ================================================================== */
-
-/*
- * RUN - Execute a program.
- */

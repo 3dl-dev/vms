@@ -232,7 +232,10 @@ static void term_table_save(FILE *fp, const struct terminal_device *devs, int co
         /* non-fatal */
     }
     for (int i = 0; i < count; i++) {
-        fwrite(&devs[i], sizeof(devs[i]), 1, fp);
+        if (fwrite(&devs[i], sizeof(devs[i]), 1, fp) != 1) {
+            /* non-fatal: best-effort table save */
+            break;
+        }
     }
     fflush(fp);
 }

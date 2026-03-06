@@ -112,7 +112,11 @@ static int lbr_create(struct dcl_context *ctx, struct dcl_command *cmd)
     hdr.module_count = 0;
     hdr.reserved = 0;
 
-    fwrite(&hdr, sizeof(hdr), 1, fp);
+    if (fwrite(&hdr, sizeof(hdr), 1, fp) != 1) {
+        dcl_error("LIBRARIAN", 2, "WRITEERR", "error writing library header");
+        fclose(fp);
+        return SS$_ABORT;
+    }
     fclose(fp);
 
     printf("%%LIBRARIAN-S-CREATED, %s library %s created\n",
@@ -199,6 +203,12 @@ static int lbr_insert(struct dcl_context *ctx, struct dcl_command *cmd)
 
     fseek(src, 0, SEEK_END);
     long src_len = ftell(src);
+    if (src_len < 0) {
+        dcl_error("LIBRARIAN", 2, "READERR",
+                  "error determining file size - %s", cmd->params[2]);
+        fclose(src);
+        return SS$_ABORT;
+    }
     fseek(src, 0, SEEK_SET);
 
     char *src_data = malloc((size_t)src_len + 1);
@@ -232,6 +242,14 @@ static int lbr_insert(struct dcl_context *ctx, struct dcl_command *cmd)
                      hdr.module_count * sizeof(struct lbr_module));
     fseek(fp, 0, SEEK_END);
     long file_end = ftell(fp);
+    if (file_end < 0) {
+        dcl_error("LIBRARIAN", 2, "READERR",
+                  "error determining library size - %s", cmd->params[0]);
+        free(src_data);
+        free(modules);
+        fclose(fp);
+        return SS$_ABORT;
+    }
     long data_len = file_end - data_start;
     char *data = NULL;
 
@@ -354,9 +372,19 @@ static int lbr_insert(struct dcl_context *ctx, struct dcl_command *cmd)
     new_hdr.module_count = idx;
     new_hdr.reserved = 0;
 
-    fwrite(&new_hdr, sizeof(new_hdr), 1, fp);
-    fwrite(new_modules, sizeof(struct lbr_module), idx, fp);
-    fwrite(new_data, 1, total_data, fp);
+    if (fwrite(&new_hdr, sizeof(new_hdr), 1, fp) != 1 ||
+        fwrite(new_modules, sizeof(struct lbr_module), idx, fp) != idx ||
+        (total_data > 0 && fwrite(new_data, 1, total_data, fp) != total_data)) {
+        dcl_error("LIBRARIAN", 2, "WRITEERR",
+                  "error writing library - %s", cmd->params[0]);
+        fclose(fp);
+        free(new_data);
+        free(new_modules);
+        free(data);
+        free(src_data);
+        free(modules);
+        return SS$_ABORT;
+    }
     fclose(fp);
 
     printf("%%LIBRARIAN-S-%s, module %s %s\n",

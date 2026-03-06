@@ -351,11 +351,13 @@ int cmd_set_entry(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    uint32_t entry_id = (uint32_t)atol(cmd->params[1]);
-    if (entry_id == 0) {
+    char *endptr;
+    long entry_val = strtol(cmd->params[1], &endptr, 10);
+    if (endptr == cmd->params[1] || *endptr != '\0' || entry_val <= 0) {
         dcl_error("SET", 2, "BADENTRY", "invalid entry number - %s", cmd->params[1]);
         return SS$_BADPARAM;
     }
+    uint32_t entry_id = (uint32_t)entry_val;
 
     if (dcl_has_qualifier(cmd, "HOLD")) {
         sts = vmsq_hold_entry(entry_id);
@@ -399,12 +401,14 @@ int cmd_show_entry(struct dcl_command *cmd)
 
     /* Entry number is params[1] if present (params[0] is "ENTRY") */
     if (cmd->param_count >= 2 && cmd->params[1][0] != '\0') {
-        uint32_t entry_id = (uint32_t)atol(cmd->params[1]);
-        if (entry_id == 0) {
+        char *endptr;
+        long entry_val = strtol(cmd->params[1], &endptr, 10);
+        if (endptr == cmd->params[1] || *endptr != '\0' || entry_val <= 0) {
             dcl_error("SHOW", 2, "BADENTRY", "invalid entry number - %s",
                       cmd->params[1]);
             return SS$_BADPARAM;
         }
+        uint32_t entry_id = (uint32_t)entry_val;
 
         struct vms_queue_entry entry;
         sts = vmsq_show_entry(entry_id, &entry);
@@ -1056,23 +1060,6 @@ int cmd_logout(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
-/* ================================================================== */
-/*           External Utility Executor                                 */
-/* ================================================================== */
-
-/*
- * dcl_exec_utility - Fork/exec a VMS utility and wait for completion.
- *
- * Searches for the binary in SYS$SYSTEM first, then standard paths.
- * Handles Ctrl-Y interruption and child process management.
- *
- * @exe_name:  Binary name (e.g. "SYSGEN.EXE", "MAIL.EXE")
- * @facility:  Error message facility (e.g. "SYSGEN", "MAIL")
- * @argv:      NULL-terminated argument vector (argv[0] is placeholder)
- * @argc:      Number of arguments (not counting NULL terminator)
- *
- * Returns VMS status code.
- */
 /* ================================================================== */
 /*                     CONTINUE Command                                */
 /* ================================================================== */

@@ -366,10 +366,16 @@ int edt_run(const char *filepath)
             }
 
             char result[EDT_MAX_LINE * 2];
-            size_t prefix_len = found - line;
+            size_t prefix_len = (size_t)(found - line);
+            size_t suffix_len = strlen(found + old_len);
+            size_t total_len = prefix_len + new_len + suffix_len;
+            if (total_len >= sizeof(result)) {
+                printf("%%EDT-E-TOOLONG, substitution result exceeds maximum line length\n");
+                continue;
+            }
             memcpy(result, line, prefix_len);
             memcpy(result + prefix_len, new_str, new_len);
-            strcpy(result + prefix_len + new_len, found + old_len);
+            memcpy(result + prefix_len + new_len, found + old_len, suffix_len + 1);
 
             free(buf.lines[buf.dot - 1]);
             buf.lines[buf.dot - 1] = strdup(result);

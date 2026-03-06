@@ -35,7 +35,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: build
-          key: cmake-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt') }}
+          key: cmake-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt', 'src/**/*.c', 'src/**/*.h', 'src/**/*.S') }}
           restore-keys: cmake-build-${{ runner.os }}-
 
       - name: Configure
@@ -51,6 +51,7 @@ jobs:
       - name: Test
         run: |
           sudo mkdir -p /vms
+          sudo chmod 777 /vms
           cd build && ctest --output-on-failure
 
   # -----------------------------------------------------------------------

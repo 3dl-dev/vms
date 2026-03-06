@@ -3,11 +3,10 @@ build/
 build-static/
 dist/
 
-# CMake
+# CMake (generated in build directories)
 CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
-Makefile
 *.cmake
 
 # Object files and libraries

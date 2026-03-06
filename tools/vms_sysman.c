@@ -229,12 +229,20 @@ static void cmd_startup_remove(const char *rest)
         return;
     }
 
-    /* Read all lines, write back without the matching one */
-    char lines[256][512];
+    /* Read all lines, write back without the matching one.
+     * Use heap allocation to avoid 128KB stack buffer. */
+    #define SYSMAN_MAX_LINES 256
+    #define SYSMAN_LINE_LEN  512
+    char (*lines)[SYSMAN_LINE_LEN] = malloc(SYSMAN_MAX_LINES * SYSMAN_LINE_LEN);
+    if (!lines) {
+        printf("%%SYSMAN-E-NOMEM, memory allocation failed\n");
+        fclose(fp);
+        return;
+    }
     int count = 0;
     int removed = 0;
 
-    while (count < 256 && fgets(lines[count], sizeof(lines[count]), fp)) {
+    while (count < SYSMAN_MAX_LINES && fgets(lines[count], SYSMAN_LINE_LEN, fp)) {
         /* Check if this line contains the filename (after the colon) */
         char *colon = strchr(lines[count], ':');
         if (colon) {
@@ -257,17 +265,20 @@ static void cmd_startup_remove(const char *rest)
 
     if (!removed) {
         printf("%%SYSMAN-E-NOTFOUND, %s not found in startup list\n", filename);
+        free(lines);
         return;
     }
 
     fp = fopen(STARTUP_LIST, "w");
     if (!fp) {
         printf("%%SYSMAN-E-OPENERR, cannot write startup list\n");
+        free(lines);
         return;
     }
     for (int i = 0; i < count; i++)
         fputs(lines[i], fp);
     fclose(fp);
+    free(lines);
     printf("%%SYSMAN-I-REMOVED, %s removed from startup list\n", filename);
 }
 

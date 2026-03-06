@@ -107,9 +107,13 @@ static void start_session(const sysuaf_record_t *rec)
 
     if (has_last && last_login > 0) {
         struct tm *tm = localtime(&last_login);
-        printf("\n   Last interactive login on %02d-%s-%04d %02d:%02d:%02d\n\n",
-               tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
-               tm->tm_hour, tm->tm_min, tm->tm_sec);
+        if (tm) {
+            printf("\n   Last interactive login on %02d-%s-%04d %02d:%02d:%02d\n\n",
+                   tm->tm_mday, months[tm->tm_mon], tm->tm_year + 1900,
+                   tm->tm_hour, tm->tm_min, tm->tm_sec);
+        } else {
+            printf("\n   Last login time could not be determined.\n\n");
+        }
     } else {
         printf("\n   No previous interactive login recorded.\n\n");
     }

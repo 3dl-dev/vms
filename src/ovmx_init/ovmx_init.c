@@ -111,7 +111,11 @@ static void load_kernel_module(const char *path)
         return;
     int fd = open(path, O_RDONLY);
     if (fd >= 0) {
-        syscall(SYS_finit_module, fd, "", 0);
+        long rc = syscall(SYS_finit_module, fd, "", 0);
+        if (rc != 0) {
+            fprintf(stderr, "%%STARTUP-W-MODFAIL, failed to load %s: %s\n",
+                    path, strerror(errno));
+        }
         close(fd);
     }
 }
@@ -139,8 +143,13 @@ static void copy_recursive(const char *src, const char *dst)
             continue;
 
         char src_path[512], dst_path[512];
-        snprintf(src_path, sizeof(src_path), "%s/%s", src, ent->d_name);
-        snprintf(dst_path, sizeof(dst_path), "%s/%s", dst, ent->d_name);
+        int src_len = snprintf(src_path, sizeof(src_path), "%s/%s", src, ent->d_name);
+        int dst_len = snprintf(dst_path, sizeof(dst_path), "%s/%s", dst, ent->d_name);
+        if (src_len >= (int)sizeof(src_path) || dst_len >= (int)sizeof(dst_path)) {
+            fprintf(stderr, "%%STARTUP-W-PATHTRUNC, path too long, skipping: %s/%s\n",
+                    src, ent->d_name);
+            continue;
+        }
 
         struct stat es;
         if (lstat(src_path, &es) != 0)
@@ -162,8 +171,20 @@ static void copy_recursive(const char *src, const char *dst)
             if (dfd < 0) { close(sfd); continue; }
             char buf[4096];
             ssize_t n;
-            while ((n = read(sfd, buf, sizeof(buf))) > 0)
-                write(dfd, buf, (size_t)n);
+            while ((n = read(sfd, buf, sizeof(buf))) > 0) {
+                ssize_t total = 0;
+                while (total < n) {
+                    ssize_t w = write(dfd, buf + total, (size_t)(n - total));
+                    if (w < 0) {
+                        if (errno == EINTR) continue;
+                        fprintf(stderr, "%%STARTUP-W-COPYERR, write failed for %s: %s\n",
+                                dst_path, strerror(errno));
+                        goto copy_done;
+                    }
+                    total += w;
+                }
+            }
+            copy_done:
             close(dfd);
             close(sfd);
         }

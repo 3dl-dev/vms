@@ -132,7 +132,7 @@ static int analyze_disk_structure(const char *filename)
             ssize_t bm_nr = pread(fd, bitmap, bitmap_size, bm_off);
             if (bm_nr == (ssize_t)bitmap_size) {
                 for (uint32_t i = 0; i < hb.hb_total_blocks; i++) {
-                    if (bitmap[i / 8] & (1u << (i % 8)))
+                    if (!(bitmap[i / 8] & (1u << (i % 8))))
                         bitmap_free++;
                 }
                 if (bitmap_free != hb.hb_free_blocks)

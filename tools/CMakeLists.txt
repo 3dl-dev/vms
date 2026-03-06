@@ -187,6 +187,10 @@ add_executable(vms_sysman
     vms_sysman.c
 )
 
+target_include_directories(vms_sysman PRIVATE
+    ${VMS_INCLUDE_DIR}
+)
+
 target_compile_definitions(vms_sysman PRIVATE
     _POSIX_C_SOURCE=200809L
     _DEFAULT_SOURCE

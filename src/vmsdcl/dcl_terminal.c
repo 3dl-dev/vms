@@ -257,7 +257,7 @@ const char *vms_term_allocate(const char *prefix, pid_t pid, const char *owner)
     for (int i = 0; i < count; i++) {
         /* Extract unit number from existing entries with same prefix */
         if (strncmp(devs[i].name, prefix, strlen(prefix)) == 0) {
-            int unit = atoi(devs[i].name + strlen(prefix));
+            int unit = (int)strtol(devs[i].name + strlen(prefix), NULL, 10);
             if (unit >= next_unit)
                 next_unit = unit + 1;
         }

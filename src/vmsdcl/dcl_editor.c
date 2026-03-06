@@ -152,10 +152,10 @@ static int edt_parse_range(const struct edt_buffer *buf, const char *range,
     /* Try n:m */
     const char *colon = strchr(range, ':');
     if (colon) {
-        *start = atoi(range);
-        *end = atoi(colon + 1);
+        *start = (int)strtol(range, NULL, 10);
+        *end = (int)strtol(colon + 1, NULL, 10);
     } else {
-        *start = *end = atoi(range);
+        *start = *end = (int)strtol(range, NULL, 10);
     }
 
     if (*start < 1) *start = 1;
@@ -230,7 +230,7 @@ int edt_run(const char *filepath)
 
         /* Check if it's a line number */
         if (isdigit((unsigned char)verb[0])) {
-            int line_no = atoi(verb);
+            int line_no = (int)strtol(verb, NULL, 10);
             if (line_no >= 1 && line_no <= buf.count) {
                 buf.dot = line_no;
                 printf("  %d\t%s\n", buf.dot, buf.lines[buf.dot - 1]);

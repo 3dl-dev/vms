@@ -22,7 +22,6 @@
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <sys/utsname.h>
-#include <utmpx.h>
 #include <limits.h>
 #include <sys/statvfs.h>
 #include <sys/ioctl.h>
@@ -495,7 +494,10 @@ static int cmd_show_process(struct dcl_command *cmd)
 }
 
 /*
- * SHOW USERS - Show logged-in users.
+ * SHOW USERS - Show logged-in users from the terminal device table.
+ *
+ * Output matches OpenVMS format:
+ *   Username     Process Name      PID        Terminal
  */
 static int cmd_show_users(struct dcl_command *cmd)
 {
@@ -505,49 +507,47 @@ static int cmd_show_users(struct dcl_command *cmd)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    struct utsname uts;
-    uname(&uts);
-
     printf("      OpenVMS User Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
-    printf("    Total number of users = ");
 
-    /* Count logged-in users from utmpx */
-    int user_count = 0;
-    struct utmpx *ut;
-    setutxent();
-    printf("\n    Username     Node         Interactive  Subprocess   Batch\n");
-    while ((ut = getutxent()) != NULL) {
-        if (ut->ut_type == USER_PROCESS) {
-            user_count++;
+    struct terminal_device devs[100];
+    int count = 0;
+    vms_term_list(devs, 100, &count);
+
+    if (count == 0) {
+        /* No entries in device table — show at least the current user */
+        struct dcl_context *ctx = dcl_get_context();
+        char upper_name[64];
+        size_t i;
+        const char *src = ctx->username[0] ? ctx->username : "SYSTEM";
+        for (i = 0; i < sizeof(upper_name) - 1 && src[i]; i++)
+            upper_name[i] = (char)toupper((unsigned char)src[i]);
+        upper_name[i] = '\0';
+
+        printf("    Total number of users = 1, number of processes = 1\n\n");
+        printf("      Username     Process Name      PID        Terminal\n");
+        printf("      %-12s %-16s  %08X   %s\n",
+               upper_name, ctx->process_name[0] ? ctx->process_name : upper_name,
+               (unsigned)getpid(),
+               ctx->terminal.device_name[0] ? ctx->terminal.device_name : "_FTA0:");
+    } else {
+        printf("    Total number of users = %d, number of processes = %d\n\n",
+               count, count);
+        printf("      Username     Process Name      PID        Terminal\n");
+
+        for (int j = 0; j < count; j++) {
             char upper_name[64];
             size_t i;
-            for (i = 0; i < sizeof(upper_name) - 1 && ut->ut_user[i]; i++)
-                upper_name[i] = (char)toupper((unsigned char)ut->ut_user[i]);
+            for (i = 0; i < sizeof(upper_name) - 1 && devs[j].owner_name[i]; i++)
+                upper_name[i] = (char)toupper((unsigned char)devs[j].owner_name[i]);
             upper_name[i] = '\0';
 
-            printf("    %-12s %-12s      %d\n", upper_name, uts.nodename, 1);
+            printf("      %-12s %-16s  %08X   %s\n",
+                   upper_name, upper_name,
+                   (unsigned)devs[j].owner_pid, devs[j].name);
         }
     }
-    endutxent();
-
-    if (user_count == 0) {
-        /* Show at least the current user */
-        struct passwd *pw = getpwuid(getuid());
-        if (pw) {
-            char upper_name[64];
-            size_t i;
-            for (i = 0; i < sizeof(upper_name) - 1 && pw->pw_name[i]; i++)
-                upper_name[i] = (char)toupper((unsigned char)pw->pw_name[i]);
-            upper_name[i] = '\0';
-            printf("    %-12s %-12s      1\n", upper_name, uts.nodename);
-            user_count = 1;
-        }
-    }
-
-    /* Go back and fill in the total (we already printed the header) */
-    printf("    Total: %d user%s\n", user_count, user_count != 1 ? "s" : "");
 
     return SS$_NORMAL;
 }

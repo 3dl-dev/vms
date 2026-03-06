@@ -80,28 +80,21 @@ void vms_terminal_apply(const struct vms_terminal *term);
 /* Format SHOW TERMINAL output to FILE stream */
 void vms_terminal_show(const struct vms_terminal *term, FILE *out);
 
-/* Terminal device allocation pool */
+/* ---- Terminal Device Allocation Table ---- */
+
 #define VMS_TERM_MAX_DEVICES 100
-#define VMS_TERM_TABLE_PATH "/vms/SYS0/SYSCOMMON/SYSEXE/TERMINAL_TABLE.DAT"
+#define VMS_TERM_TABLE_PATH "/tmp/vms_terminals.dat"
 
 struct terminal_device {
-    char name[16];            /* _FTA0: */
-    pid_t owner_pid;          /* Linux PID of owning process */
-    char owner_name[64];      /* VMS process name */
-    uint32_t characteristics; /* from terminal model */
-    int allocated;            /* 0=free, 1=in use */
+    char     name[16];        /* e.g. "_FTA0:" */
+    pid_t    owner_pid;
+    char     owner_name[64];
+    uint32_t characteristics;
+    int      allocated;       /* 1 = in use */
 };
 
-/* Allocate a terminal device name. Returns device name or NULL. */
 const char *vms_term_allocate(const char *prefix, pid_t pid, const char *owner);
-
-/* Deallocate a terminal device. */
 void vms_term_deallocate(const char *device_name);
-
-/* Look up a terminal device by name. Returns NULL if not found. */
-struct terminal_device *vms_term_lookup(const char *device_name);
-
-/* List all allocated terminal devices. Returns count. */
-int vms_term_list(struct terminal_device *out, int max, int *count);
+void vms_term_list(struct terminal_device *out_devs, int max, int *count);
 
 #endif /* __DCL_TERMINAL_H */

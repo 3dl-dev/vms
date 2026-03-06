@@ -49,13 +49,11 @@ struct sysgen_param {
 /* ------------------------------------------------------------------ */
 /*  Paths                                                              */
 /* ------------------------------------------------------------------ */
-#define SYSMGR_DIR     "/vms/SYS0/SYSCOMMON/SYSMGR"
-#define STARTUP_LIST   SYSMGR_DIR "/STARTUP_LIST.DAT"
-#define SYSPARAMS_DAT  "/etc/ovmx/sysparams.dat"
+#include "ovmx_layout.h"
 
-#ifndef OVMX_BIN_DIR
-#define OVMX_BIN_DIR   "/usr/local/bin"
-#endif
+#define SYSMGR_DIR     VMS_MANAGER_DIR
+#define STARTUP_LIST   SYSMGR_DIR "/STARTUP_LIST.DAT"
+#define SYSPARAMS_DAT  SYSMGR_DIR "/SYSPARAMS.DAT"
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
@@ -444,10 +442,10 @@ static void cmd_do(const char *rest)
 
     /* Find DCL.EXE */
     char dcl_path[PATH_MAX];
-    snprintf(dcl_path, sizeof(dcl_path), "%s/DCL.EXE", OVMX_BIN_DIR);
+    snprintf(dcl_path, sizeof(dcl_path), "%s/DCL.EXE", VMS_SYSTEM_DIR);
     if (access(dcl_path, X_OK) != 0) {
         /* Try vmsdcl as fallback */
-        snprintf(dcl_path, sizeof(dcl_path), "%s/vmsdcl", OVMX_BIN_DIR);
+        snprintf(dcl_path, sizeof(dcl_path), "%s/vmsdcl", VMS_SYSTEM_DIR);
         if (access(dcl_path, X_OK) != 0) {
             /* Try PATH */
             strncpy(dcl_path, "vmsdcl", sizeof(dcl_path));

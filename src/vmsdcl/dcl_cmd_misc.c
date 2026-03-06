@@ -42,6 +42,7 @@
 #include "ovmx_accounting.h"
 #include "starlet.h"
 #include "vmsfs/filespec.h"
+#include "ovmx_layout.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -377,19 +378,14 @@ int dcl_exec_utility(const char *exe_name, const char *facility,
 {
     (void)argc;
 
-    /* Search order: SYS$SYSTEM, /usr/local/bin, PATH */
+    /* Search order: SYS$SYSTEM, then PATH via execvp */
     char sys_path[PATH_MAX];
     snprintf(sys_path, sizeof(sys_path),
-             "/vms/SYS0/SYSCOMMON/SYSEXE/%s", exe_name);
-
-    char usr_path[PATH_MAX];
-    snprintf(usr_path, sizeof(usr_path), "/usr/local/bin/%s", exe_name);
+             "%s/%s", VMS_SYSTEM_DIR, exe_name);
 
     const char *bin = NULL;
     if (access(sys_path, X_OK) == 0)
         bin = sys_path;
-    else if (access(usr_path, X_OK) == 0)
-        bin = usr_path;
 
     /* Set argv[0] to resolved path or exe_name for PATH search */
     argv[0] = (char *)(bin ? bin : exe_name);
@@ -1029,7 +1025,7 @@ static const char *tcpip_lookup_linux_name(const struct tcpip_ifmap *map,
 }
 
 /* Path for VMS TCPIP config files */
-#define TCPIP_CONFIG_DIR "/vms/SYS0/SYSCOMMON/SYSEXE"
+#define TCPIP_CONFIG_DIR VMS_SYSTEM_DIR
 #define TCPIP_HOST_DAT    TCPIP_CONFIG_DIR "/TCPIP$HOST.DAT"
 #define TCPIP_NS_DAT      TCPIP_CONFIG_DIR "/TCPIP$NAMESERVICE.DAT"
 #define TCPIP_IF_DAT      TCPIP_CONFIG_DIR "/TCPIP$INTERFACE.DAT"
@@ -1964,10 +1960,10 @@ int cmd_convert(struct dcl_command *cmd)
  * INSTALL LIST [/FULL]
  * INSTALL REMOVE image
  *
- * Maintains list in /vms/SYS0/SYSCOMMON/SYSMGR/INSTALL_LIST.DAT
+ * Maintains list in SYS$MANAGER:INSTALL_LIST.DAT
  */
 
-#define INSTALL_LIST_PATH "/vms/SYS0/SYSCOMMON/SYSMGR/INSTALL_LIST.DAT"
+#define INSTALL_LIST_PATH VMS_MANAGER_DIR "/INSTALL_LIST.DAT"
 
 int cmd_install(struct dcl_command *cmd)
 {
@@ -1998,7 +1994,7 @@ int cmd_install(struct dcl_command *cmd)
             strncat(flags, " Shared", sizeof(flags) - strlen(flags) - 1);
 
         /* Ensure directory exists */
-        mkdir("/vms/SYS0/SYSCOMMON/SYSMGR", 0755);
+        mkdir(VMS_MANAGER_DIR, 0755);
 
         /* Append to install list */
         FILE *fp = fopen(INSTALL_LIST_PATH, "a");

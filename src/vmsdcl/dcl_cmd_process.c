@@ -26,6 +26,7 @@
 #include "dcl/dcl_cmd.h"
 #include "ssdef.h"
 #include "vmsfs/filespec.h"
+#include "ovmx_layout.h"
 #include "vmsqueue.h"
 #include "opcdef.h"
 #include "starlet.h"
@@ -545,14 +546,14 @@ int cmd_set_queue(struct dcl_command *cmd)
 
 /*
  * SHOW INTRUSION - Display intrusion database.
- * Reads /vms/SYS0/SYSCOMMON/SYSMGR/INTRUSION.DAT
+ * Reads VMS_MANAGER_DIR/INTRUSION.DAT
  * Format per line: timestamp|username|source|type|count
  */
 int cmd_show_intrusion(struct dcl_command *cmd)
 {
     (void)cmd;
 
-    const char *intrusion_path = "/vms/SYS0/SYSCOMMON/SYSMGR/INTRUSION.DAT";
+    const char *intrusion_path = VMS_MANAGER_DIR "/INTRUSION.DAT";
     FILE *fp = fopen(intrusion_path, "r");
     if (!fp) {
         printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");

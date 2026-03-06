@@ -38,7 +38,7 @@
 /*
  * Binary/library search paths — initialized at runtime after device
  * table is populated so VMS specs can be translated to Linux paths.
- * Docker puts binaries in /usr/local/bin, QEMU in SYS$SYSTEM.
+ * Docker puts binaries in standard paths, QEMU in SYS$SYSTEM.
  */
 static char sysexe_linux[512];
 static char syslib_linux[512];
@@ -76,13 +76,13 @@ static void init_search_paths(void)
     vms_to_linux(VMS_SYSLIB, syslib_linux, sizeof(syslib_linux));
 
     bin_search_dirs[0] = sysexe_linux;
-    bin_search_dirs[1] = "/usr/local/bin";
+    bin_search_dirs[1] = VMS_SYSTEM_DIR;
     bin_search_dirs[2] = "/bin";
     bin_search_dirs[3] = "/sbin";
     bin_search_dirs[4] = NULL;
 
     lib_search_dirs[0] = syslib_linux;
-    lib_search_dirs[1] = "/usr/local/lib";
+    lib_search_dirs[1] = VMS_LIBRARY_DIR;
     lib_search_dirs[2] = "/lib";
     lib_search_dirs[3] = NULL;
 }

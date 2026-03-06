@@ -21,7 +21,8 @@
 #include "dcl/terminal.h"
 
 /* Path to the shared terminal device table */
-#define TERM_TABLE_PATH "/tmp/vms_terminals.dat"
+#include "ovmx_layout.h"
+#define TERM_TABLE_PATH VMS_TEMP_DIR "/VMS_TERMINALS.DAT"
 #define TERM_TABLE_MAX  256
 
 /*

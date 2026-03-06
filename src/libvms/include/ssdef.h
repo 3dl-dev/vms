@@ -111,7 +111,7 @@ extern "C" {
 #define SS$_CONTROLC        1617    /* Ctrl-C interrupt */
 #define SS$_RESIGNAL        2328    /* Resignal condition */
 #define SS$_UNWIND          2204    /* Unwind in progress */
-#define SS$_CONTINUE        2340    /* Continue execution */
+#define SS$_CONTINUE        1       /* Continue execution (same as SS$_NORMAL) */
 
 /* ================================================================
  * Success/informational status codes

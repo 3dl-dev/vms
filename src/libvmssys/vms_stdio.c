@@ -169,6 +169,10 @@ vms_size_t vms_fread(void *ptr, vms_size_t size, vms_size_t nmemb, vms_file_t *f
     if (size == 0 || nmemb == 0)
         return 0;
 
+    /* Overflow check */
+    if (nmemb > (vms_size_t)-1 / size)
+        return 0;
+
     vms_size_t total = size * nmemb;
     vms_size_t done = 0;
     char *dest = (char *)ptr;
@@ -233,6 +237,10 @@ int vms_fgetc(vms_file_t *f)
 vms_size_t vms_fwrite(const void *ptr, vms_size_t size, vms_size_t nmemb, vms_file_t *f)
 {
     if (size == 0 || nmemb == 0)
+        return 0;
+
+    /* Overflow check */
+    if (nmemb > (vms_size_t)-1 / size)
         return 0;
 
     vms_size_t total = size * nmemb;

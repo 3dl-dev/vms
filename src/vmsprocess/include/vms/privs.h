@@ -5,52 +5,16 @@
  * function. Used by dcl_main.c, vms_login.c, and sys_process.c to
  * convert comma-separated privilege name strings into uint64_t bitmasks.
  *
- * Privilege bit assignments match the VMS convention:
- *   Bit 0:  TMPMBX   - Create temporary mailbox
- *   Bit 1:  NETMBX   - Create network device
- *   Bit 2:  OPER     - Operator privilege
- *   Bit 3:  SYSPRV   - System privilege
- *   Bit 4:  BYPASS   - Bypass all protection
- *   Bit 5:  SETPRV   - Set any privilege
- *   Bit 6:  CMKRNL   - Change mode to kernel
- *   Bit 7:  CMEXEC   - Change mode to executive
- *   Bit 8:  SYSNAM   - Insert system logical names
- *   Bit 9:  GRPNAM   - Insert group logical names
- *   Bit 10: DETACH   - Create detached processes
- *   Bit 11: ALTPRI   - Alter process priority
- *   Bit 12: WORLD    - Affect other processes in the world
- *   Bit 13: GROUP    - Affect other processes in the group
- *   Bit 14: LOG_IO   - Logical I/O
- *   Bit 15: PHY_IO   - Physical I/O
+ * Privilege bit assignments match real OpenVMS Alpha values
+ * (see prvdef.h for the full authoritative set).
  */
 
 #ifndef __VMS_PRIVS_H
 #define __VMS_PRIVS_H
 
-#include <stdint.h>
 #include <string.h>
 #include <strings.h>   /* strcasecmp */
-
-/* Individual privilege bits */
-#define PRV$M_TMPMBX    (1ULL << 0)
-#define PRV$M_NETMBX    (1ULL << 1)
-#define PRV$M_OPER      (1ULL << 2)
-#define PRV$M_SYSPRV    (1ULL << 3)
-#define PRV$M_BYPASS    (1ULL << 4)
-#define PRV$M_SETPRV    (1ULL << 5)
-#define PRV$M_CMKRNL    (1ULL << 6)
-#define PRV$M_CMEXEC    (1ULL << 7)
-#define PRV$M_SYSNAM    (1ULL << 8)
-#define PRV$M_GRPNAM    (1ULL << 9)
-#define PRV$M_DETACH    (1ULL << 10)
-#define PRV$M_ALTPRI    (1ULL << 11)
-#define PRV$M_WORLD     (1ULL << 12)
-#define PRV$M_GROUP     (1ULL << 13)
-#define PRV$M_LOG_IO    (1ULL << 14)
-#define PRV$M_PHY_IO    (1ULL << 15)
-
-/* All privileges */
-#define PRV$M_ALL       0xFFFFFFFFFFFFFFFFULL
+#include "prvdef.h"    /* Single source of truth for PRV$M_* bit positions */
 
 /*
  * Parse a comma-separated privilege string into a bitmask.
@@ -76,6 +40,7 @@ static inline uint64_t parse_privilege_string(const char *str)
         { "SYSNAM",   PRV$M_SYSNAM },
         { "GRPNAM",   PRV$M_GRPNAM },
         { "DETACH",   PRV$M_DETACH },
+        { "SETPRI",   PRV$M_SETPRI },
         { "ALTPRI",   PRV$M_ALTPRI },
         { "WORLD",    PRV$M_WORLD },
         { "GROUP",    PRV$M_GROUP },

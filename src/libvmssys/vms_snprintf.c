@@ -166,16 +166,20 @@ int vms_vsnprintf(char *buf, vms_size_t size, const char *fmt, va_list ap)
             else if (length == 1) val = va_arg(ap, long);
             else                  val = va_arg(ap, int);
 
+            unsigned long long uval;
             if (val < 0) {
                 sign = '-';
-                val = -val;
-            } else if (flag_plus) {
-                sign = '+';
-            } else if (flag_space) {
-                sign = ' ';
+                /* Cast to unsigned before negating to avoid UB on LLONG_MIN */
+                uval = -(unsigned long long)val;
+            } else {
+                if (flag_plus)
+                    sign = '+';
+                else if (flag_space)
+                    sign = ' ';
+                uval = (unsigned long long)val;
             }
 
-            numlen = uint_to_str(numbuf, (unsigned long long)val, 10, 0);
+            numlen = uint_to_str(numbuf, uval, 10, 0);
 
             /* Apply precision (minimum digits) */
             int num_zeros = 0;

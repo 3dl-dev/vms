@@ -182,3 +182,45 @@ set_target_properties(vms_sysgen PROPERTIES
     SUFFIX ".EXE"
 )
 install(TARGETS vms_sysgen RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+add_executable(vms_sysman
+    vms_sysman.c
+)
+
+target_compile_definitions(vms_sysman PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vms_sysman PRIVATE
+    -Wall -Wextra
+)
+
+set_target_properties(vms_sysman PROPERTIES
+    OUTPUT_NAME "SYSMAN"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_sysman RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+add_executable(vms_analyze
+    vms_analyze.c
+)
+
+target_include_directories(vms_analyze PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/kernel/vmsfs
+)
+
+target_compile_definitions(vms_analyze PRIVATE
+    _POSIX_C_SOURCE=200809L
+    _DEFAULT_SOURCE
+)
+
+target_compile_options(vms_analyze PRIVATE
+    -Wall -Wextra
+)
+
+set_target_properties(vms_analyze PROPERTIES
+    OUTPUT_NAME "ANALYZE"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_analyze RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

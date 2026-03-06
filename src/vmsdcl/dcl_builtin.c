@@ -4781,61 +4781,129 @@ static int cmd_logout(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/* ================================================================== */
+/*           External Utility Executor                                 */
+/* ================================================================== */
+
 /*
- * MAIL - Launch VMS MAIL utility.
+ * dcl_exec_utility - Fork/exec a VMS utility and wait for completion.
+ *
+ * Searches for the binary in SYS$SYSTEM first, then standard paths.
+ * Handles Ctrl-Y interruption and child process management.
+ *
+ * @exe_name:  Binary name (e.g. "SYSGEN.EXE", "MAIL.EXE")
+ * @facility:  Error message facility (e.g. "SYSGEN", "MAIL")
+ * @argv:      NULL-terminated argument vector (argv[0] is placeholder)
+ * @argc:      Number of arguments (not counting NULL terminator)
+ *
+ * Returns VMS status code.
  */
-static int cmd_mail(struct dcl_command *cmd)
+static int dcl_exec_utility(const char *exe_name, const char *facility,
+                            char *argv[], int argc)
 {
-    /* Build argv for exec: vms_mail [qualifiers/args] */
-    char mail_path[PATH_MAX];
+    (void)argc;
 
-#ifndef OVMX_BIN_DIR
-#define OVMX_BIN_DIR "/usr/local/bin"
-#endif
-    snprintf(mail_path, sizeof(mail_path), "%s/vms_mail", OVMX_BIN_DIR);
+    /* Search order: SYS$SYSTEM, /usr/local/bin, PATH */
+    char sys_path[PATH_MAX];
+    snprintf(sys_path, sizeof(sys_path),
+             "/vms/SYS0/SYSCOMMON/SYSEXE/%s", exe_name);
 
-    /* Collect qualifiers and params into an argv */
-    char *exec_argv[64];
-    int exec_argc = 0;
-    exec_argv[exec_argc++] = mail_path;
+    char usr_path[PATH_MAX];
+    snprintf(usr_path, sizeof(usr_path), "/usr/local/bin/%s", exe_name);
 
-    /* Pass through qualifiers first */
-    for (int i = 0; i < cmd->qualifier_count && exec_argc < 62; i++) {
-        exec_argv[exec_argc++] = cmd->qualifiers[i].name;
-    }
+    const char *bin = NULL;
+    if (access(sys_path, X_OK) == 0)
+        bin = sys_path;
+    else if (access(usr_path, X_OK) == 0)
+        bin = usr_path;
 
-    /* Pass through params */
-    for (int i = 0; i < cmd->param_count && exec_argc < 62; i++) {
-        if (cmd->params[i][0] != '\0')
-            exec_argv[exec_argc++] = cmd->params[i];
-    }
-    exec_argv[exec_argc] = NULL;
+    /* Set argv[0] to resolved path or exe_name for PATH search */
+    argv[0] = (char *)(bin ? bin : exe_name);
 
     pid_t pid = fork();
     if (pid == 0) {
-        execv(mail_path, exec_argv);
-        /* If exec fails, try just "vms_mail" on PATH */
-        execvp("vms_mail", exec_argv);
+        if (bin)
+            execv(bin, argv);
+        execvp(exe_name, argv);
+        fprintf(stderr, "%%%s-F-NOIMG, cannot execute %s\n", facility, exe_name);
         _exit(1);
     } else if (pid > 0) {
         extern volatile sig_atomic_t dcl_running_child;
-        struct dcl_context *mail_ctx = dcl_get_context();
+        struct dcl_context *ctx = dcl_get_context();
         dcl_running_child = (sig_atomic_t)pid;
         int wstatus;
         waitpid(pid, &wstatus, WUNTRACED);
         dcl_running_child = 0;
         if (WIFSTOPPED(wstatus)) {
             printf("\nInterrupt\n");
-            mail_ctx->interrupted_pid = pid;
+            ctx->interrupted_pid = pid;
             return SS$_ABORT;
         }
         if (WIFEXITED(wstatus))
             return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
     } else {
-        dcl_error("DCL", 4, "CREPRC", "cannot create process for MAIL");
+        dcl_error("DCL", 4, "CREPRC", "cannot create process for %s", facility);
         return SS$_ABORT;
     }
     return SS$_NORMAL;
+}
+
+/* ================================================================== */
+/*                        ANALYZE Command                              */
+/* ================================================================== */
+
+static int cmd_analyze(struct dcl_command *cmd)
+{
+    const char *qualifier = NULL;
+    const char *param = NULL;
+
+    if (dcl_has_qualifier(cmd, "DISK_STRUCTURE"))
+        qualifier = "/DISK_STRUCTURE";
+    else if (dcl_has_qualifier(cmd, "SYSTEM"))
+        qualifier = "/SYSTEM";
+    else if (dcl_has_qualifier(cmd, "IMAGE"))
+        qualifier = "/IMAGE";
+    else if (dcl_has_qualifier(cmd, "OBJECT"))
+        qualifier = "/OBJECT";
+
+    if (!qualifier) {
+        if (cmd->param_count >= 1 && cmd->params[0][0] == '/') {
+            qualifier = cmd->params[0];
+            param = (cmd->param_count >= 2) ? cmd->params[1] : NULL;
+        } else {
+            dcl_error("ANALYZE", 2, "NOKEYW",
+                      "qualifier required (/DISK_STRUCTURE, /SYSTEM, /IMAGE, /OBJECT)");
+            return SS$_BADPARAM;
+        }
+    } else {
+        param = (cmd->param_count >= 1 && cmd->params[0][0] != '\0')
+                ? cmd->params[0] : NULL;
+    }
+
+    char *argv[8] = {NULL};
+    int argc = 0;
+    argv[argc++] = NULL; /* placeholder for binary path */
+    argv[argc++] = (char *)qualifier;
+    if (param)
+        argv[argc++] = (char *)param;
+    argv[argc] = NULL;
+    return dcl_exec_utility("ANALYZE.EXE", "ANALYZE", argv, argc);
+}
+
+/* MAIL — pass qualifiers and params through */
+static int cmd_mail(struct dcl_command *cmd)
+{
+    char *argv[64] = {NULL};
+    int argc = 0;
+    argv[argc++] = NULL; /* placeholder */
+    for (int i = 0; i < cmd->qualifier_count && argc < 62; i++)
+        argv[argc++] = cmd->qualifiers[i].name;
+    for (int i = 0; i < cmd->param_count && argc < 62; i++) {
+        if (cmd->params[i][0] != '\0')
+            argv[argc++] = cmd->params[i];
+    }
+    argv[argc] = NULL;
+    return dcl_exec_utility("MAIL.EXE", "MAIL", argv, argc);
 }
 
 /*
@@ -4885,131 +4953,29 @@ static int cmd_inquire(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
-/* ================================================================== */
-/*                        MONITOR Command                              */
-/* ================================================================== */
-
-/*
- * MONITOR - Real-time system activity display.
- * Executes the vms_monitor binary with the subcommand argument.
- */
+/* MONITOR — pass subcommand (default SYSTEM) */
 static int cmd_monitor(struct dcl_command *cmd)
 {
-    /* Locate vms_monitor binary: try install path first, then build path */
-    static const char *candidates[] = {
-        "/usr/local/bin/vms_monitor",
-        "/usr/bin/vms_monitor",
-        NULL
-    };
-
-    const char *monitor_bin = NULL;
-    for (int i = 0; candidates[i]; i++) {
-        if (access(candidates[i], X_OK) == 0) {
-            monitor_bin = candidates[i];
-            break;
-        }
-    }
-
-    if (!monitor_bin) {
-        /* Fall back to PATH-based search */
-        monitor_bin = "vms_monitor";
-    }
-
-    /* Build argv for exec: vms_monitor [subcommand] */
-    const char *subcommand = (cmd->param_count >= 1 && cmd->params[0][0] != '\0')
-                             ? cmd->params[0] : "SYSTEM";
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* Child: exec vms_monitor with the subcommand */
-        execlp(monitor_bin, monitor_bin, subcommand, (char *)NULL);
-        /* If execlp fails, try absolute candidate paths */
-        for (int i = 0; candidates[i]; i++) {
-            execl(candidates[i], candidates[i], subcommand, (char *)NULL);
-        }
-        fprintf(stderr, "%%MONITOR-F-NOIMG, cannot execute vms_monitor\n");
-        _exit(1);
-    } else if (pid > 0) {
-        extern volatile sig_atomic_t dcl_running_child;
-        struct dcl_context *mon_ctx = dcl_get_context();
-        dcl_running_child = (sig_atomic_t)pid;
-        int wstatus;
-        waitpid(pid, &wstatus, WUNTRACED);
-        dcl_running_child = 0;
-        if (WIFSTOPPED(wstatus)) {
-            printf("\nInterrupt\n");
-            mon_ctx->interrupted_pid = pid;
-            return SS$_ABORT;
-        }
-        if (WIFEXITED(wstatus)) {
-            return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
-        }
-    } else {
-        dcl_error("DCL", 4, "CREPRC", "cannot create process for MONITOR");
-        return SS$_ABORT;
-    }
-
-    return SS$_NORMAL;
+    const char *subcmd = (cmd->param_count >= 1 && cmd->params[0][0] != '\0')
+                         ? cmd->params[0] : "SYSTEM";
+    char *argv[4] = {NULL, (char *)subcmd, NULL};
+    return dcl_exec_utility("MONITOR.EXE", "MONITOR", argv, 2);
 }
 
-/* ================================================================== */
-/*           SYSGEN — System Generation Utility                        */
-/* ================================================================== */
-
+/* SYSGEN — interactive, no args */
 static int cmd_sysgen(struct dcl_command *cmd)
 {
     (void)cmd;
+    char *argv[2] = {NULL, NULL};
+    return dcl_exec_utility("SYSGEN.EXE", "SYSGEN", argv, 1);
+}
 
-    /* Locate SYSGEN.EXE: try install path first, then build path */
-    static const char *candidates[] = {
-        "/vms/SYS0/SYSCOMMON/SYSEXE/SYSGEN.EXE",
-        "/usr/local/bin/SYSGEN.EXE",
-        "/usr/bin/SYSGEN.EXE",
-        NULL
-    };
-
-    const char *sysgen_bin = NULL;
-    for (int i = 0; candidates[i]; i++) {
-        if (access(candidates[i], X_OK) == 0) {
-            sysgen_bin = candidates[i];
-            break;
-        }
-    }
-
-    if (!sysgen_bin) {
-        sysgen_bin = "SYSGEN.EXE";
-    }
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* Child: exec SYSGEN.EXE */
-        execlp(sysgen_bin, sysgen_bin, (char *)NULL);
-        for (int i = 0; candidates[i]; i++) {
-            execl(candidates[i], candidates[i], (char *)NULL);
-        }
-        fprintf(stderr, "%%SYSGEN-F-NOIMG, cannot execute SYSGEN.EXE\n");
-        _exit(1);
-    } else if (pid > 0) {
-        extern volatile sig_atomic_t dcl_running_child;
-        struct dcl_context *sysgen_ctx = dcl_get_context();
-        dcl_running_child = (sig_atomic_t)pid;
-        int wstatus;
-        waitpid(pid, &wstatus, WUNTRACED);
-        dcl_running_child = 0;
-        if (WIFSTOPPED(wstatus)) {
-            printf("\nInterrupt\n");
-            sysgen_ctx->interrupted_pid = pid;
-            return SS$_ABORT;
-        }
-        if (WIFEXITED(wstatus)) {
-            return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
-        }
-    } else {
-        dcl_error("DCL", 4, "CREPRC", "cannot create process for SYSGEN");
-        return SS$_ABORT;
-    }
-
-    return SS$_NORMAL;
+/* SYSMAN — interactive, no args */
+static int cmd_sysman(struct dcl_command *cmd)
+{
+    (void)cmd;
+    char *argv[2] = {NULL, NULL};
+    return dcl_exec_utility("SYSMAN.EXE", "SYSMAN", argv, 1);
 }
 
 /* ================================================================== */
@@ -6836,6 +6802,8 @@ static int cmd_product(struct dcl_command *cmd)
 static struct dcl_verb builtin_verbs[] = {
     { "ACCOUNTING",  cmd_accounting,  CDU_F_ABBREV | CDU_F_QUALIFIER, 4,
       "Display login accounting information for the current user" },
+    { "ANALYZE",     cmd_analyze,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 4,
+      "Analyze system components" },
     { "APPEND",      cmd_append,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Append source file to destination file" },
     { "ASSIGN",      cmd_assign,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
@@ -6930,6 +6898,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Submit a command procedure to a batch queue" },
     { "SYSGEN",      cmd_sysgen,      CDU_F_ABBREV | CDU_F_PARAM, 4,
       "Invoke SYSGEN system parameter utility" },
+    { "SYSMAN",      cmd_sysman,      CDU_F_ABBREV | CDU_F_PARAM, 4,
+      "Invoke SYSMAN system management utility" },
     { "TCPIP",       cmd_tcpip,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "TCP/IP Services network management commands" },
     { "TYPE",        cmd_type,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,

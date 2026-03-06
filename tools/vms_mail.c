@@ -44,7 +44,7 @@
 #define SYSUAF_PATH     VMS_SYSUAF_PATH
 #define MAIL_SUBDIR     ".vmsmail"
 #define MAIL_INDEX      "MAIL.IDX"
-#define MAX_MESSAGES    9999
+#define MAX_MESSAGES    1000
 #define MAX_SUBJECT     256
 #define MAX_USERNAME    64
 #define MAX_LINE        4096
@@ -134,9 +134,9 @@ static int user_exists(const char *username)
             if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
                 continue;
             trim_trailing(line);
-            /* First field is username */
-            char *colon = strchr(line, ':');
-            if (colon) *colon = '\0';
+            /* First field is username (SYSUAF uses pipe delimiter) */
+            char *delim = strchr(line, '|');
+            if (delim) *delim = '\0';
             char uname[MAX_USERNAME];
             strncpy(uname, line, sizeof(uname) - 1);
             uname[sizeof(uname) - 1] = '\0';
@@ -180,8 +180,8 @@ static int get_user_homedir(const char *username, char *homedir, size_t sz)
             int nf = 0;
             for (nf = 0; nf < 7 && p; nf++) {
                 fields[nf] = p;
-                char *colon = strchr(p, ':');
-                if (colon) { *colon = '\0'; p = colon + 1; }
+                char *delim = strchr(p, '|');
+                if (delim) { *delim = '\0'; p = delim + 1; }
                 else p = NULL;
             }
             if (nf < 5) continue;
@@ -356,7 +356,11 @@ static int deliver_message(const char *recipient_upper,
 
     /* Read recipient's current index to get next message number */
     char save_maildir[4096];
-    mail_entry_t save_msgs[MAX_MESSAGES];
+    mail_entry_t *save_msgs = malloc(MAX_MESSAGES * sizeof(mail_entry_t));
+    if (!save_msgs) {
+        fprintf(stderr, "%%MAIL-E-NOMEM, out of memory\n");
+        return -1;
+    }
     int save_count = g_msg_count;
     int save_current = g_current;
 
@@ -370,7 +374,12 @@ static int deliver_message(const char *recipient_upper,
     load_index();
     int new_num = next_msg_number();
     int recip_msg_count = g_msg_count;
-    mail_entry_t recip_msgs[MAX_MESSAGES];
+    mail_entry_t *recip_msgs = malloc(MAX_MESSAGES * sizeof(mail_entry_t));
+    if (!recip_msgs) {
+        fprintf(stderr, "%%MAIL-E-NOMEM, out of memory\n");
+        free(save_msgs);
+        return -1;
+    }
     memcpy(recip_msgs, g_messages, g_msg_count * sizeof(mail_entry_t));
 
     /* Restore sender's state */
@@ -379,6 +388,14 @@ static int deliver_message(const char *recipient_upper,
     memcpy(g_messages, save_msgs, save_count * sizeof(mail_entry_t));
     g_msg_count = save_count;
     g_current = save_current;
+    free(save_msgs);
+
+    /* Bounds check: recipient mailbox full */
+    if (recip_msg_count >= MAX_MESSAGES) {
+        fprintf(stderr, "%%MAIL-E-MAILFULL, recipient mailbox is full\n");
+        free(recip_msgs);
+        return -1;
+    }
 
     /* Write message file to recipient's maildir */
     char msgpath[4096];
@@ -386,6 +403,7 @@ static int deliver_message(const char *recipient_upper,
     FILE *fp = fopen(msgpath, "w");
     if (!fp) {
         fprintf(stderr, "%%MAIL-E-CANTWRITE, cannot write message file\n");
+        free(recip_msgs);
         return -1;
     }
 
@@ -425,6 +443,7 @@ static int deliver_message(const char *recipient_upper,
     FILE *ifp = fopen(idxpath, "w");
     if (!ifp) {
         fprintf(stderr, "%%MAIL-E-CANTWRITE, cannot write recipient index\n");
+        free(recip_msgs);
         return -1;
     }
     fprintf(ifp, "# OVMX MAIL index - do not edit manually\n");
@@ -436,6 +455,7 @@ static int deliver_message(const char *recipient_upper,
     }
     fclose(ifp);
 
+    free(recip_msgs);
     return 0;
 }
 
@@ -768,28 +788,28 @@ static void interactive_loop(void)
         (void)n;
         upcase(verb);
 
-        /* Minimum abbreviation matching (VMS style) */
-        if (strncmp(verb, "SEND", 2) == 0) {
+        /* Minimum abbreviation matching (VMS style, 3-4 char minimum) */
+        if (strncmp(verb, "SEND", 3) == 0) {
             cmd_send(NULL, NULL, NULL);
-        } else if (strncmp(verb, "READ", 2) == 0 ||
-                   strncmp(verb, "NEXT", 2) == 0) {
+        } else if (strncmp(verb, "READ", 3) == 0 ||
+                   strncmp(verb, "NEXT", 3) == 0) {
             int num = 0;
             if (arg[0] != '\0') num = atoi(arg);
             cmd_read(num);
-        } else if (strncmp(verb, "DIRECTORY", 2) == 0 ||
+        } else if (strncmp(verb, "DIRECTORY", 3) == 0 ||
                    strncmp(verb, "DIR", 3) == 0) {
             cmd_directory();
-        } else if (strncmp(verb, "DELETE", 2) == 0) {
+        } else if (strncmp(verb, "DELETE", 3) == 0) {
             int num = 0;
             if (arg[0] != '\0') num = atoi(arg);
             cmd_delete(num);
-        } else if (strncmp(verb, "REPLY", 2) == 0) {
+        } else if (strncmp(verb, "REPLY", 3) == 0) {
             cmd_reply();
-        } else if (strncmp(verb, "HELP", 1) == 0 ||
+        } else if (strncmp(verb, "HELP", 3) == 0 ||
                    verb[0] == '?') {
             cmd_help();
-        } else if (strncmp(verb, "EXIT", 2) == 0 ||
-                   strncmp(verb, "QUIT", 1) == 0) {
+        } else if (strncmp(verb, "EXIT", 3) == 0 ||
+                   strncmp(verb, "QUIT", 3) == 0) {
             break;
         } else {
             printf("%%MAIL-E-IVVERB, unrecognized MAIL command - \\%s\\\n", verb);

@@ -32,15 +32,6 @@
 
 #include "vms_internal.h"
 
-/* VMS status codes */
-#define SS__NORMAL      0x00000001
-#define SS__BADPARAM    0x00000014
-#define SS__EXASTLM    0x00000038  /* AST quota exceeded */
-#define SS__WASSET      9   /* AST was enabled */
-#define SS__WASCLR      5   /* AST was disabled */
-#define SS__NOPRIV      0x00000024
-#define SS__INSFMEM     0x0000002C  /* insufficient memory (44 decimal, matches real VMS) */
-
 /* Privilege bits */
 #define PRV_M_CMKRNL    (1ULL << 0)
 #define PRV_M_CMEXEC    (1ULL << 1)

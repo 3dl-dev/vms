@@ -206,43 +206,22 @@ static bool vmsfs_highest_actor(struct dir_context *ctx, const char *name,
     return true;  /* continue iteration */
 }
 
+/*
+ * vmsfs_find_highest_version - Find the highest version of a file.
+ *
+ * NOTE: This function is currently unused (dead code). The dentry_open()
+ * call requires a valid vfsmount which is not available in the calling
+ * context. Callers should use vmsfs_scan_highest_from_sbi() in
+ * vmsfs_file.c instead, which opens via filp_open with a full path.
+ *
+ * Retained as a stub returning 0 to preserve the API; remove once all
+ * callers have migrated.
+ */
 int vmsfs_find_highest_version(struct dentry *backing_dir, const char *base)
 {
-    struct vmsfs_highest_ctx hctx = {
-        .ctx.actor = vmsfs_highest_actor,
-        .ctx.pos = 0,
-        .base = base,
-        .highest = 0,
-    };
-    struct file *dir_file;
-    struct path dir_path;
-
-    if (!backing_dir || !base)
-        return 0;
-
-    dir_path.dentry = backing_dir;
-    dir_path.mnt = NULL;
-
-    /*
-     * Open the backing directory for iteration.
-     * We use filp_open with the dentry's full path, but since we have
-     * the dentry directly, we use dentry_open().
-     */
-    dir_file = dentry_open(&dir_path, O_RDONLY | O_DIRECTORY, current_cred());
-    if (IS_ERR(dir_file)) {
-        /*
-         * Fallback: If dentry_open fails (e.g., no vfsmount), try
-         * kern_path using the stored backing path from the superblock.
-         * This is the more common path since backing_dir may not have
-         * a mount reference.
-         */
-        return 0;
-    }
-
-    iterate_dir(dir_file, &hctx.ctx);
-    fput(dir_file);
-
-    return hctx.highest;
+    (void)backing_dir;
+    (void)base;
+    return 0;
 }
 
 /*

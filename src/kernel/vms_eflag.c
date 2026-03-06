@@ -29,16 +29,13 @@
 
 #include "vms_internal.h"
 
-/* VMS status codes */
-#define SS__NORMAL      0x00000001
-#define SS__WASSET      9
-#define SS__WASCLR      5
-#define SS__ILLEFC      44  /* illegal event flag number */
-#define SS__BADPARAM    20
-#define SS__UNASEFC     48  /* unassociated common EFC */
-#define SS__INSFMEM     44  /* matches real VMS */
 
-/* Global common event flag cluster list */
+/*
+ * Global common event flag cluster list.
+ *
+ * Lock ordering: proc->ef.lock MUST be acquired before vms_common_ef_lock.
+ * Never acquire proc->ef.lock while holding vms_common_ef_lock.
+ */
 LIST_HEAD(vms_common_ef_list);
 DEFINE_SPINLOCK(vms_common_ef_lock);
 
@@ -216,7 +213,7 @@ long vms_ioctl_waitfr(struct vms_proc *proc, unsigned long arg)
     spin_unlock(&proc->ef.lock);
 
     /* Wait until the flag is set */
-    ret = wait_event_interruptible(*waitq, (*flags & (1U << bit)));
+    ret = wait_event_interruptible(*waitq, (READ_ONCE(*flags) & (1U << bit)));
     if (ret) {
         args.status = SS__NORMAL; /* interrupted, but still return normally */
         goto out;
@@ -263,7 +260,7 @@ long vms_ioctl_wflor(struct vms_proc *proc, unsigned long arg)
     }
     spin_unlock(&proc->ef.lock);
 
-    ret = wait_event_interruptible(*waitq, (*flags & args.mask));
+    ret = wait_event_interruptible(*waitq, (READ_ONCE(*flags) & args.mask));
     if (ret) {
         args.status = SS__NORMAL;
         goto out;
@@ -306,7 +303,7 @@ long vms_ioctl_wfland(struct vms_proc *proc, unsigned long arg)
     spin_unlock(&proc->ef.lock);
 
     ret = wait_event_interruptible(*waitq,
-                                   ((*flags & args.mask) == args.mask));
+                                   ((READ_ONCE(*flags) & args.mask) == args.mask));
     if (ret) {
         args.status = SS__NORMAL;
         goto out;

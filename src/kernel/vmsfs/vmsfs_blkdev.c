@@ -98,9 +98,14 @@ static int vmsfs_get_block(struct inode *inode, sector_t block,
                            struct buffer_head *bh_result, int create)
 {
     struct vmsfs_inode_info *vi = VMSFS_I(inode);
-    uint32_t vbn = (uint32_t)block + 1;  /* VBN is 1-based */
+    uint32_t vbn;
     uint32_t lbn;
     int ret;
+
+    /* Validate block number fits in uint32_t after +1 conversion */
+    if (block >= (sector_t)UINT_MAX)
+        return -EFBIG;
+    vbn = (uint32_t)block + 1;  /* VBN is 1-based */
 
     ret = vmsfs_vbn_to_lbn(vi, vbn, &lbn);
     if (ret) {
@@ -1381,6 +1386,7 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
     /* Allocate initial data block for directory entries */
     ret = vmsfs_alloc_block(sb, &data_lbn);
     if (ret) {
+        vmsfs_free_fid(sb, fid);
         mutex_unlock(&sbi->alloc_lock);
         return ret;
     }
@@ -1389,6 +1395,7 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
     bh = sb_bread(sb, data_lbn);
     if (!bh) {
         vmsfs_free_block(sb, data_lbn);
+        vmsfs_free_fid(sb, fid);
         mutex_unlock(&sbi->alloc_lock);
         return -EIO;
     }
@@ -1402,6 +1409,7 @@ static int vmsfs_blkdev_mkdir(struct mnt_idmap *idmap, struct inode *dir,
     bh = sb_bread(sb, lbn);
     if (!bh) {
         vmsfs_free_block(sb, data_lbn);
+        vmsfs_free_fid(sb, fid);
         mutex_unlock(&sbi->alloc_lock);
         return -EIO;
     }

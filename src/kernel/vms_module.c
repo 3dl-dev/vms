@@ -65,12 +65,8 @@ struct vms_proc *vms_proc_find_or_err(void)
 
 struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_privs)
 {
-    struct vms_proc *proc;
+    struct vms_proc *existing, *proc;
     int i;
-
-    /* Check if already registered */
-    if (vms_proc_find(pid))
-        return ERR_PTR(-EEXIST);
 
     proc = kmem_cache_zalloc(vms_proc_cache, GFP_KERNEL);
     if (!proc)
@@ -114,8 +110,15 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
     proc->lock_count = 0;
     spin_lock_init(&proc->lock_list_lock);
 
-    /* Insert into hash table */
+    /* Atomically check-and-insert under spinlock to avoid TOCTOU race */
     spin_lock(&vms_proc_hash_lock);
+    hash_for_each_possible_rcu(vms_proc_hash, existing, hash_node, pid) {
+        if (existing->linux_pid == pid) {
+            spin_unlock(&vms_proc_hash_lock);
+            kmem_cache_free(vms_proc_cache, proc);
+            return ERR_PTR(-EEXIST);
+        }
+    }
     hash_add_rcu(vms_proc_hash, &proc->hash_node, pid);
     spin_unlock(&vms_proc_hash_lock);
 
@@ -255,6 +258,11 @@ static int vms_dev_open(struct inode *inode, struct file *filp)
 
 static int vms_dev_release(struct inode *inode, struct file *filp)
 {
+    struct vms_proc *proc = vms_proc_find(current->pid);
+
+    if (proc)
+        vms_proc_free(proc);
+
     return 0;
 }
 
@@ -292,7 +300,12 @@ static int __init vms_init(void)
 
     /* Initialize subsystems */
     hash_init(vms_proc_hash);
-    vms_lock_init();
+    ret = vms_lock_init();
+    if (ret) {
+        pr_err("vms: failed to initialize lock manager: %d\n", ret);
+        kmem_cache_destroy(vms_proc_cache);
+        return ret;
+    }
     vms_eflag_init();
 
     /* Register /dev/vms */

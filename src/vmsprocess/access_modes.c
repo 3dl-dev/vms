@@ -163,6 +163,9 @@ uint64_t priv_set(uint64_t mask, int enable)
     prev = pcb->cur_privs;
 
     if (enable) {
+        /* current_mode is safe to read here without a separate lock:
+         * the PCB is thread-local, so only this thread writes current_mode.
+         * priv_lock protects cur_privs against concurrent priv_check(). */
         if ((pcb->cur_privs & PRV$M_SETPRV) || pcb->current_mode == PSL$C_KERNEL) {
             pcb->cur_privs |= mask;
         }

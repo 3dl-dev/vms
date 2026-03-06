@@ -109,8 +109,12 @@ int vms_condvar_timedwait(vms_condvar_t *cv, vms_mutex_t *m,
 {
     uint32_t seq = atomic_load(&cv->seq);
     vms_mutex_unlock(m);
-    long ret = vms_sys_futex((uint32_t *)&cv->seq, VMS_FUTEX_WAIT_PRIVATE, seq,
-                              abstime, NULL, 0);
+    /* Use FUTEX_WAIT_BITSET_PRIVATE which interprets timeout as absolute
+     * (CLOCK_REALTIME), matching the abstime parameter semantics. Plain
+     * FUTEX_WAIT expects a *relative* timeout which would be incorrect. */
+    long ret = vms_sys_futex((uint32_t *)&cv->seq,
+                              VMS_FUTEX_WAIT_BITSET_PRIVATE, seq,
+                              abstime, NULL, VMS_FUTEX_BITSET_MATCH_ANY);
     vms_mutex_lock(m);
     return (ret == -VMS_ETIMEDOUT) ? -1 : 0;
 }

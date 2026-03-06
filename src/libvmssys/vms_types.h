@@ -458,6 +458,9 @@ struct vms_io_uring_params {
 #define VMS_FUTEX_WAKE          1
 #define VMS_FUTEX_WAIT_PRIVATE  (VMS_FUTEX_WAIT | 128)
 #define VMS_FUTEX_WAKE_PRIVATE  (VMS_FUTEX_WAKE | 128)
+#define VMS_FUTEX_WAIT_BITSET   9
+#define VMS_FUTEX_WAIT_BITSET_PRIVATE  (VMS_FUTEX_WAIT_BITSET | 128)
+#define VMS_FUTEX_BITSET_MATCH_ANY  0xFFFFFFFF
 
 /* ================================================================
  * Auxiliary vector (from kernel ELF loader)

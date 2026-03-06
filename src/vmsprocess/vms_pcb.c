@@ -17,9 +17,11 @@
 static __thread struct vms_pcb *current_pcb = NULL;
 
 /* Static PCB for the main process (avoids needing malloc before
- * the zone allocator is up) */
+ * the zone allocator is up).  main_pcb_used is accessed with atomic
+ * compare-and-swap to avoid a race when multiple threads call
+ * vms_pcb_init concurrently. */
 static struct vms_pcb main_pcb;
-static int main_pcb_used = 0;
+static volatile int main_pcb_used = 0;
 
 struct vms_pcb *vms_pcb_get(void)
 {
@@ -30,10 +32,11 @@ struct vms_pcb *vms_pcb_init(uint64_t initial_privs)
 {
     struct vms_pcb *pcb;
 
-    /* First call gets the static main PCB */
-    if (!main_pcb_used) {
+    /* First call gets the static main PCB (atomic CAS to avoid race) */
+    int expected = 0;
+    if (__atomic_compare_exchange_n(&main_pcb_used, &expected, 1, 0,
+                                    __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
         pcb = &main_pcb;
-        main_pcb_used = 1;
     } else {
         pcb = (struct vms_pcb *)calloc(1, sizeof(struct vms_pcb));
         if (!pcb)

@@ -161,8 +161,16 @@ double vms_exp(double x)
     /* Reconstruct: exp(x) = p * 2^n */
     int ni = (int)n;
     uint64_t bits = dbl_to_bits(p);
-    /* Add n to the exponent field (biased by 1023) */
-    bits += ((uint64_t)ni << 52);
+    /* Add n to the exponent field (biased by 1023).
+     * Validate that the resulting exponent stays in [1, 2046] to avoid
+     * corrupting the sign bit or producing NaN from denormals. */
+    int cur_exp = (int)((bits >> 52) & 0x7FF);
+    int new_exp = cur_exp + ni;
+    if (new_exp >= 2047)
+        return mk_double(0x7FF0000000000000ULL); /* +inf */
+    if (new_exp <= 0)
+        return 0.0; /* underflow to zero */
+    bits = (bits & 0x800FFFFFFFFFFFFFULL) | ((uint64_t)new_exp << 52);
     return mk_double(bits);
 }
 
@@ -352,9 +360,8 @@ double vms_atan(double x)
         double t = (x - 1.0) / (x + 1.0);
         result = M_PI_4_VAL + atan_core(t);
     } else if (x <= 2.414213562373095) {
-        /* 1 < x <= tan(3pi/8): atan(x) = pi/4 + atan((x-1)/(x+1)) */
-        double t = (x - 1.0) / (x + 1.0);
-        result = M_PI_4_VAL + atan_core(t);
+        /* 1 < x <= tan(3pi/8): atan(x) = pi/2 - atan(1/x) */
+        result = M_PI_2_VAL - atan_core(1.0 / x);
     } else {
         /* x > tan(3pi/8): atan(x) = pi/2 - atan(1/x) */
         result = M_PI_2_VAL - atan_core(1.0 / x);

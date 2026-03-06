@@ -9,6 +9,7 @@
 #include "vms_syscall.h"
 #include "vms_string.h"
 #include "vms_snprintf.h"
+#include "vms_futex.h"
 
 /* ================================================================
  * Standard streams (statically allocated, not heap)
@@ -37,29 +38,36 @@ void vms_stdio_init(void)
 #define MAX_VMS_FILES 64
 static vms_file_t vms_file_pool[MAX_VMS_FILES];
 static int vms_file_used[MAX_VMS_FILES];
+static vms_mutex_t vms_file_pool_lock = VMS_MUTEX_INIT;
 
 static vms_file_t *alloc_file(void)
 {
+    vms_mutex_lock(&vms_file_pool_lock);
     for (int i = 0; i < MAX_VMS_FILES; i++) {
         if (!vms_file_used[i]) {
             vms_file_used[i] = 1;
             vms_memset(&vms_file_pool[i], 0, sizeof(vms_file_t));
             vms_file_pool[i].flags = VMS_FILE_ALLOC;
+            vms_mutex_unlock(&vms_file_pool_lock);
             return &vms_file_pool[i];
         }
     }
+    vms_mutex_unlock(&vms_file_pool_lock);
     return NULL;
 }
 
 static void free_file(vms_file_t *f)
 {
     if (f->flags & VMS_FILE_ALLOC) {
+        vms_mutex_lock(&vms_file_pool_lock);
         for (int i = 0; i < MAX_VMS_FILES; i++) {
             if (&vms_file_pool[i] == f) {
                 vms_file_used[i] = 0;
+                vms_mutex_unlock(&vms_file_pool_lock);
                 return;
             }
         }
+        vms_mutex_unlock(&vms_file_pool_lock);
     }
 }
 
@@ -362,11 +370,31 @@ long vms_ftell(vms_file_t *f)
 int vms_vfprintf(vms_file_t *f, const char *fmt, va_list ap)
 {
     char tmp[2048];
+    va_list ap2;
+    va_copy(ap2, ap);
     int len = vms_vsnprintf(tmp, sizeof(tmp), fmt, ap);
     if (len > 0) {
-        int wlen = (len < (int)sizeof(tmp)) ? len : (int)sizeof(tmp) - 1;
-        vms_fwrite(tmp, 1, (vms_size_t)wlen, f);
+        if (len < (int)sizeof(tmp)) {
+            /* Output fits in stack buffer */
+            vms_fwrite(tmp, 1, (vms_size_t)len, f);
+        } else {
+            /* Output was truncated; allocate a larger buffer via mmap */
+            vms_size_t need = (vms_size_t)len + 1;
+            char *big = (char *)vms_sys_mmap(NULL, need,
+                                              VMS_PROT_READ | VMS_PROT_WRITE,
+                                              VMS_MAP_PRIVATE | VMS_MAP_ANONYMOUS,
+                                              -1, 0);
+            if (big != VMS_MAP_FAILED) {
+                vms_vsnprintf(big, need, fmt, ap2);
+                vms_fwrite(big, 1, (vms_size_t)len, f);
+                vms_sys_munmap(big, need);
+            } else {
+                /* Fallback: write the truncated buffer */
+                vms_fwrite(tmp, 1, sizeof(tmp) - 1, f);
+            }
+        }
     }
+    va_end(ap2);
     return len;
 }
 

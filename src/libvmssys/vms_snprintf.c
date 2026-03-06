@@ -13,9 +13,10 @@
 #include "vms_snprintf.h"
 #include "vms_string.h"
 
-/* Output a single character to buffer if space remains */
+/* Output a single character to buffer if space remains.
+ * Use pos + 1 < size instead of pos < size - 1 to avoid underflow when size==0. */
 #define PUTC(ch) do {                    \
-    if ((vms_size_t)pos < size - 1)      \
+    if ((vms_size_t)pos + 1 < size)      \
         buf[pos] = (ch);                 \
     pos++;                               \
 } while (0)
@@ -24,7 +25,7 @@
 static int put_str(char *buf, vms_size_t size, int pos, const char *s, int len)
 {
     for (int i = 0; i < len; i++) {
-        if ((vms_size_t)pos < size - 1)
+        if ((vms_size_t)pos + 1 < size)
             buf[pos] = s[i];
         pos++;
     }
@@ -35,7 +36,7 @@ static int put_str(char *buf, vms_size_t size, int pos, const char *s, int len)
 static int put_pad(char *buf, vms_size_t size, int pos, char c, int count)
 {
     while (count-- > 0) {
-        if ((vms_size_t)pos < size - 1)
+        if ((vms_size_t)pos + 1 < size)
             buf[pos] = c;
         pos++;
     }

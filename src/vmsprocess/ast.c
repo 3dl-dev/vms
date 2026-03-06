@@ -25,6 +25,13 @@ static int ast_initialized = 0;
 /* ------------------------------------------------------------------ */
 /* SIGUSR1 signal handler                                             */
 /* ------------------------------------------------------------------ */
+/*
+ * Signal-safety note: vms_pcb_get() returns a __thread pointer
+ * (single TLS load via thread register, e.g. TPIDR_EL0 on aarch64).
+ * This is async-signal-safe on Linux.  The subsequent write to
+ * ast_delivery_requested is a plain int store to thread-local memory,
+ * also async-signal-safe.  No locks, no malloc, no stdio are used.
+ */
 static void ast_signal_handler(int sig)
 {
     (void)sig;

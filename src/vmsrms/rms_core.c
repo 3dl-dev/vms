@@ -30,7 +30,8 @@ extern uint16_t vmsfs_mode_to_protection(mode_t mode);
 extern mode_t   vmsfs_protection_to_mode(uint16_t vms_prot);
 
 /* Security check from libvms */
-extern int vms$check_access(uint32_t uic, uint32_t protection, int access_type);
+extern int vms$check_access(uint32_t caller_uic, uint32_t owner_uic,
+                            uint32_t protection, int access_type);
 
 /* Protection access type flags (matching sys_security.c) */
 #define RMS_PROT_READ    0x08
@@ -245,8 +246,7 @@ static int rms_check_protection(const char *path, int access_type)
                           (uint32_t)(st.st_uid & 0xFFFF);
     uint32_t my_uic = rms_get_session_uic();
 
-    return vms$check_access(owner_uic, (uint32_t)vms_prot, access_type);
-    (void)my_uic;
+    return vms$check_access(my_uic, owner_uic, (uint32_t)vms_prot, access_type);
 }
 
 /*

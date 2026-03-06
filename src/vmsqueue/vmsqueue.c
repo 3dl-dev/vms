@@ -566,6 +566,30 @@ int vmsq_update_status(uint32_t entry_id, uint8_t new_status)
     return SS$_NORMAL;
 }
 
+int vmsq_set_queue_status(const char *name, uint8_t new_status)
+{
+    if (!g_db_file || !name)
+        return SS$_BADPARAM;
+
+    int status;
+    if ((status = db_lock()) != SS$_NORMAL)
+        return status;
+
+    int slot = find_queue_slot(name);
+    if (slot < 0) {
+        db_unlock();
+        return SS$_ITEMNOTFOUND;
+    }
+
+    struct qman_queue_record rec;
+    read_queue_record(slot, &rec);
+    rec.queue.status = new_status;
+    write_queue_record(slot, &rec);
+
+    db_unlock();
+    return SS$_NORMAL;
+}
+
 void vmsq_close(void)
 {
     if (g_db_file) {

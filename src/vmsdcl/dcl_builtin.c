@@ -154,7 +154,10 @@ static int cmd_show_process_quotas(struct dcl_context *ctx);
 /* Forward declarations for queue commands (defined after PRINT/SUBMIT) */
 static int ensure_queue_init(void);
 static int cmd_show_queue(struct dcl_command *cmd);
+static int cmd_show_entry(struct dcl_command *cmd);
 static int cmd_set_entry(struct dcl_command *cmd);
+static int cmd_set_queue(struct dcl_command *cmd);
+static int cmd_show_intrusion(struct dcl_command *cmd);
 
 /*
  * SHOW TIME - Display current date and time in VMS format.
@@ -1166,6 +1169,10 @@ static int cmd_show(struct dcl_command *cmd)
         return cmd_show_root(cmd);
     if (dcl_match_command(subcmd, "QUEUE", 3))
         return cmd_show_queue(cmd);
+    if (dcl_match_command(subcmd, "ENTRY", 3))
+        return cmd_show_entry(cmd);
+    if (dcl_match_command(subcmd, "INTRUSION", 3))
+        return cmd_show_intrusion(cmd);
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SHOW keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;
@@ -2115,6 +2122,8 @@ static int cmd_set(struct dcl_command *cmd)
         return cmd_set_volume(cmd);
     if (dcl_match_command(subcmd, "ENTRY", 3))
         return cmd_set_entry(cmd);
+    if (dcl_match_command(subcmd, "QUEUE", 3))
+        return cmd_set_queue(cmd);
 
     dcl_error("DCL", 2, "IVKEYW", "unrecognized SET keyword - \\%s\\", subcmd);
     return SS$_IVKEYW;
@@ -3650,6 +3659,230 @@ static int cmd_set_entry(struct dcl_command *cmd)
         dcl_error("SET", 2, "IVQUAL",
                   "specify /HOLD or /RELEASE with SET ENTRY");
         return SS$_BADPARAM;
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW ENTRY - Display detailed info about a specific queue entry.
+ * Format: SHOW ENTRY [entry-number]
+ * If no entry number given, shows all entries across all queues.
+ */
+static int cmd_show_entry(struct dcl_command *cmd)
+{
+    int sts = ensure_queue_init();
+    if (!(sts & 1)) {
+        dcl_error("SHOW", 2, "QMANERR", "queue manager initialization failed");
+        return sts;
+    }
+
+    /* VMS binary time conversion constants */
+    #define SHOW_ENTRY_VMS_UNIX_DIFF 3506716800ULL
+    #define SHOW_ENTRY_VMS_TICKS     10000000ULL
+
+    /* Entry number is params[1] if present (params[0] is "ENTRY") */
+    if (cmd->param_count >= 2 && cmd->params[1][0] != '\0') {
+        uint32_t entry_id = (uint32_t)atol(cmd->params[1]);
+        if (entry_id == 0) {
+            dcl_error("SHOW", 2, "BADENTRY", "invalid entry number - %s",
+                      cmd->params[1]);
+            return SS$_BADPARAM;
+        }
+
+        struct vms_queue_entry entry;
+        sts = vmsq_show_entry(entry_id, &entry);
+        if (!(sts & 1)) {
+            dcl_error("SHOW", 2, "ENTNOTFND", "entry %u not found", entry_id);
+            return sts;
+        }
+
+        const char *status_str =
+            entry.status == VMSQ_ENTRY_PENDING   ? "Pending" :
+            entry.status == VMSQ_ENTRY_EXECUTING ? "Executing" :
+            entry.status == VMSQ_ENTRY_HOLDING   ? "Holding" :
+            entry.status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
+
+        printf("  Entry  Jobname         Username     Status\n");
+        printf("  -----  -------         --------     ------\n");
+        printf("  %5u  %-15s %-12s %s\n",
+               entry.entry_id, entry.job_name, entry.username, status_str);
+
+        /* Show submission time and queue */
+        if (entry.submit_time) {
+            uint64_t unix_secs = entry.submit_time / SHOW_ENTRY_VMS_TICKS
+                                 - SHOW_ENTRY_VMS_UNIX_DIFF;
+            time_t t = (time_t)unix_secs;
+            struct tm tm;
+            localtime_r(&t, &tm);
+            printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
+                   tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+                   tm.tm_hour, tm.tm_min, entry.queue_name);
+        }
+    } else {
+        /* No entry number — show all entries across default queues */
+        const char *queues[] = { "SYS$BATCH", "SYS$PRINT", NULL };
+        int found = 0;
+
+        for (int q = 0; queues[q]; q++) {
+            struct vms_queue_entry entries[64];
+            int count = 0;
+            vmsq_show_entries(queues[q], entries, 64, &count);
+            if (count == 0) continue;
+
+            if (!found) {
+                printf("  Entry  Jobname         Username     Status\n");
+                printf("  -----  -------         --------     ------\n");
+                found = 1;
+            }
+
+            for (int j = 0; j < count; j++) {
+                const char *status_str =
+                    entries[j].status == VMSQ_ENTRY_PENDING   ? "Pending" :
+                    entries[j].status == VMSQ_ENTRY_EXECUTING ? "Executing" :
+                    entries[j].status == VMSQ_ENTRY_HOLDING   ? "Holding" :
+                    entries[j].status == VMSQ_ENTRY_COMPLETED ? "Completed" : "Unknown";
+                printf("  %5u  %-15s %-12s %s\n",
+                       entries[j].entry_id, entries[j].job_name,
+                       entries[j].username, status_str);
+                if (entries[j].submit_time) {
+                    uint64_t unix_secs = entries[j].submit_time / SHOW_ENTRY_VMS_TICKS
+                                         - SHOW_ENTRY_VMS_UNIX_DIFF;
+                    time_t t = (time_t)unix_secs;
+                    struct tm tm;
+                    localtime_r(&t, &tm);
+                    printf("         Submitted %2d-%s-%04d %02d:%02d on queue %s\n",
+                           tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
+                           tm.tm_hour, tm.tm_min, entries[j].queue_name);
+                }
+            }
+        }
+
+        if (!found) {
+            printf("%%SHOW-I-NOENTRY, no entries found\n");
+        }
+    }
+
+    #undef SHOW_ENTRY_VMS_UNIX_DIFF
+    #undef SHOW_ENTRY_VMS_TICKS
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SET QUEUE - Modify queue state.
+ * Format: SET QUEUE queue-name /STOP | /START | /PAUSE
+ */
+static int cmd_set_queue(struct dcl_command *cmd)
+{
+    int sts = ensure_queue_init();
+    if (!(sts & 1)) {
+        dcl_error("SET", 2, "QMANERR", "queue manager initialization failed");
+        return sts;
+    }
+
+    /* Queue name is params[1] (params[0] is "QUEUE") */
+    if (cmd->param_count < 2 || cmd->params[1][0] == '\0') {
+        dcl_error("SET", 2, "NOQUNAM", "missing queue name");
+        return SS$_BADPARAM;
+    }
+
+    const char *queue_name = cmd->params[1];
+
+    /* Check queue exists */
+    struct vms_queue qinfo;
+    sts = vmsq_show_queue(queue_name, &qinfo);
+    if (!(sts & 1)) {
+        dcl_error("SET", 2, "NOSUCHQUE", "no such queue - %s", queue_name);
+        return sts;
+    }
+
+    if (dcl_has_qualifier(cmd, "STOP")) {
+        sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_STOPPED);
+        if (!(sts & 1)) {
+            dcl_error("SET", 2, "QMANERR", "failed to stop queue %s", queue_name);
+            return sts;
+        }
+        printf("%%SET-S-QUEMOD, queue %s stopped\n", queue_name);
+    } else if (dcl_has_qualifier(cmd, "START")) {
+        sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_STARTED);
+        if (!(sts & 1)) {
+            dcl_error("SET", 2, "QMANERR", "failed to start queue %s", queue_name);
+            return sts;
+        }
+        printf("%%SET-S-QUEMOD, queue %s started\n", queue_name);
+    } else if (dcl_has_qualifier(cmd, "PAUSE")) {
+        sts = vmsq_set_queue_status(queue_name, VMSQ_STATUS_PAUSED);
+        if (!(sts & 1)) {
+            dcl_error("SET", 2, "QMANERR", "failed to pause queue %s", queue_name);
+            return sts;
+        }
+        printf("%%SET-S-QUEMOD, queue %s paused\n", queue_name);
+    } else {
+        dcl_error("SET", 2, "IVQUAL",
+                  "specify /STOP, /START, or /PAUSE with SET QUEUE");
+        return SS$_BADPARAM;
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * SHOW INTRUSION - Display intrusion database.
+ * Reads /vms/SYS0/SYSCOMMON/SYSMGR/INTRUSION.DAT
+ * Format per line: timestamp|username|source|type|count
+ */
+static int cmd_show_intrusion(struct dcl_command *cmd)
+{
+    (void)cmd;
+
+    const char *intrusion_path = "/vms/SYS0/SYSCOMMON/SYSMGR/INTRUSION.DAT";
+    FILE *fp = fopen(intrusion_path, "r");
+    if (!fp) {
+        printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
+        return SS$_NORMAL;
+    }
+
+    char line[512];
+    int found = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        /* Strip newline */
+        size_t len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n')
+            line[len - 1] = '\0';
+
+        /* Parse: timestamp|username|source|type|count */
+        char *timestamp = line;
+        char *username = strchr(timestamp, '|');
+        if (!username) continue;
+        *username++ = '\0';
+
+        char *source = strchr(username, '|');
+        if (!source) continue;
+        *source++ = '\0';
+
+        char *type = strchr(source, '|');
+        if (!type) continue;
+        *type++ = '\0';
+
+        char *count_str = strchr(type, '|');
+        if (!count_str) continue;
+        *count_str++ = '\0';
+
+        if (!found) {
+            printf("Intrusion   Type    Count  Expiration          Source\n");
+            found = 1;
+        }
+
+        printf("%-11s %-7s %5s  %-19s %s\n",
+               type, username, count_str, timestamp, source);
+    }
+
+    fclose(fp);
+
+    if (!found) {
+        printf("%%SHOW-I-NOINTRUSION, no intrusion records found\n");
     }
 
     return SS$_NORMAL;

@@ -11,6 +11,8 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define TCPIP_CONFIG_DIR "/vms/SYS0/SYSCOMMON/SYSEXE"
 #define TCPIP_NS_DAT     TCPIP_CONFIG_DIR "/TCPIP$NAMESERVICE.DAT"
@@ -82,10 +84,43 @@ static void read_current_config(char *domain, int dsz,
 
 static int run_tcpip_cmd(const char *cmd_line)
 {
-    char full[512];
-    snprintf(full, sizeof(full),
-             "echo '%s' | vmsdcl 2>/dev/null", cmd_line);
-    return system(full);
+    int pipefd[2];
+    if (pipe(pipefd) < 0)
+        return -1;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -1;
+    }
+
+    if (pid == 0) {
+        /* Child: wire pipe read-end to stdin, close write-end */
+        close(pipefd[1]);
+        dup2(pipefd[0], STDIN_FILENO);
+        close(pipefd[0]);
+
+        /* Redirect stderr to /dev/null */
+        FILE *devnull = fopen("/dev/null", "w");
+        if (devnull) {
+            dup2(fileno(devnull), STDERR_FILENO);
+            fclose(devnull);
+        }
+
+        execlp("vmsdcl", "vmsdcl", (char *)NULL);
+        _exit(127);
+    }
+
+    /* Parent: write the command into the pipe, then close */
+    close(pipefd[0]);
+    write(pipefd[1], cmd_line, strlen(cmd_line));
+    write(pipefd[1], "\n", 1);
+    close(pipefd[1]);
+
+    int wstatus;
+    waitpid(pid, &wstatus, 0);
+    return WIFEXITED(wstatus) ? WEXITSTATUS(wstatus) : -1;
 }
 
 static void configure_core(void)

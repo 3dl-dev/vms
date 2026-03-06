@@ -28,6 +28,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <stdint.h>
 #include <errno.h>
@@ -190,12 +191,21 @@ static void cmd_startup_add(const char *rest)
 
     str_upper(filename);
 
-    /* Ensure directory exists */
-    /* Use simple mkdir -p via system() for portability */
+    /* Ensure directory exists — create each path component directly */
     {
-        char mkdircmd[512];
-        snprintf(mkdircmd, sizeof(mkdircmd), "mkdir -p %s 2>/dev/null", SYSMGR_DIR);
-        (void)system(mkdircmd);
+        const char *dir = SYSMGR_DIR;
+        char tmp[512];
+        strncpy(tmp, dir, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
+
+        for (char *p = tmp + 1; *p; p++) {
+            if (*p == '/') {
+                *p = '\0';
+                (void)mkdir(tmp, 0755);
+                *p = '/';
+            }
+        }
+        (void)mkdir(tmp, 0755);
     }
 
     FILE *fp = fopen(STARTUP_LIST, "a");

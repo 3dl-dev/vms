@@ -57,7 +57,7 @@ static int format_integer(char *buf, size_t bufsz, int64_t value, int base, int 
 
     if (base == 10 && value < 0) {
         neg = 1;
-        uval = -value;
+        uval = (uint64_t)-(value + 1) + 1;  /* safe negation for INT64_MIN */
     } else {
         uval = (uint64_t)value;
     }

@@ -26,6 +26,7 @@
 #include "dcl/parser.h"
 #include "dcl/symbol.h"
 #include "dcl/context.h"
+#include "dcl/dcl_cmd.h"
 #include "dcl/terminal.h"
 #include "dcl/cdu.h"
 #include "ssdef.h"
@@ -53,12 +54,6 @@ int dcl_format_directory(const char *linux_path, char *vms_dir, size_t dir_size)
 #define SYLOGIN_PATH  VMS_SYLOGIN_PATH
 
 /* parse_privilege_string() is now in vms/privs.h (shared header) */
-
-/* VMS month abbreviations */
-static const char *vms_months_main[] = {
-    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
-};
 
 /*
  * Initialize DCL context with defaults.
@@ -300,7 +295,7 @@ static void display_banner(void)
 
     printf("\n");
     printf("        OpenVMS V7.3  on node %-8s %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-           uts.nodename, tm.tm_mday, vms_months_main[tm.tm_mon],
+           uts.nodename, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
     printf("\n");

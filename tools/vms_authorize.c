@@ -23,6 +23,7 @@
 
 #include "sha256.h"
 #include "sysuaf.h"
+#include "str_util.h"
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
@@ -44,23 +45,7 @@ static sysuaf_record_t g_users[MAX_USERS];
 static int             g_nusers = 0;
 static int             g_dirty  = 0;   /* set when in-memory data modified */
 
-/* ------------------------------------------------------------------ */
-/* String utilities                                                    */
-/* ------------------------------------------------------------------ */
-
-static void upcase(char *s)
-{
-    for (; *s; s++)
-        *s = (char)toupper((unsigned char)*s);
-}
-
-static void trim_trailing(char *s)
-{
-    size_t len = strlen(s);
-    while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r' ||
-                       s[len - 1] == ' '  || s[len - 1] == '\t'))
-        s[--len] = '\0';
-}
+/* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
 /* Skip leading whitespace; return pointer into s */
 static const char *skip_ws(const char *s)
@@ -119,7 +104,7 @@ static int load_sysuaf(void)
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
             continue;
 
-        trim_trailing(line);
+        str_trim(line);
         if (line[0] == '\0')
             continue;
 
@@ -159,7 +144,7 @@ static int load_sysuaf(void)
         memset(r, 0, sizeof(*r));
 
         strncpy(r->username, fields[0], sizeof(r->username) - 1);
-        upcase(r->username);
+        str_upcase(r->username);
 
         strncpy(r->password_hash, fields[1], sizeof(r->password_hash) - 1);
         r->uic_group  = (uint32_t)strtoul(fields[2], NULL, 10);
@@ -244,7 +229,7 @@ static int find_user(const char *username)
     char uname[64];
     strncpy(uname, username, sizeof(uname) - 1);
     uname[sizeof(uname) - 1] = '\0';
-    upcase(uname);
+    str_upcase(uname);
 
     for (int i = 0; i < g_nusers; i++) {
         if (strcmp(g_users[i].username, uname) == 0)
@@ -352,7 +337,7 @@ static void cmd_add(const char *args)
     while (*p && *p != ' ' && *p != '\t' && *p != '/' && i < 63)
         username[i++] = *p++;
     username[i] = '\0';
-    upcase(username);
+    str_upcase(username);
 
     if (username[0] == '\0') {
         printf("%%UAF-E-SYNTAX, username required\n");
@@ -450,7 +435,7 @@ static void cmd_modify(const char *args)
     while (*p && *p != ' ' && *p != '\t' && *p != '/' && i < 63)
         username[i++] = *p++;
     username[i] = '\0';
-    upcase(username);
+    str_upcase(username);
 
     int idx = find_user(username);
     if (idx < 0) {
@@ -528,7 +513,7 @@ static void cmd_remove(const char *args)
     while (*p && *p != ' ' && *p != '\t' && *p != '/' && i < 63)
         username[i++] = *p++;
     username[i] = '\0';
-    upcase(username);
+    str_upcase(username);
 
     int idx = find_user(username);
     if (idx < 0) {
@@ -544,8 +529,8 @@ static void cmd_remove(const char *args)
         printf("\n%%UAF-W-ABORTED, operation cancelled\n");
         return;
     }
-    trim_trailing(answer);
-    upcase(answer);
+    str_trim(answer);
+    str_upcase(answer);
     if (answer[0] != 'Y') {
         printf("%%UAF-W-ABORTED, operation cancelled\n");
         return;
@@ -602,7 +587,7 @@ static void cmd_show(const char *args)
     while (*p && *p != ' ' && *p != '\t' && *p != '/' && i < 63)
         username[i++] = *p++;
     username[i] = '\0';
-    upcase(username);
+    str_upcase(username);
 
     int idx = find_user(username);
     if (idx < 0) {
@@ -729,7 +714,7 @@ static int check_privilege(void)
     char uname[64];
     strncpy(uname, login, sizeof(uname) - 1);
     uname[sizeof(uname) - 1] = '\0';
-    upcase(uname);
+    str_upcase(uname);
 
     char sysuaf_linux[1024];
     vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
@@ -827,7 +812,7 @@ int main(int argc, char *argv[])
             break;
         }
 
-        trim_trailing(line);
+        str_trim(line);
         const char *p = skip_ws(line);
         if (!p || *p == '\0')
             continue;
@@ -838,7 +823,7 @@ int main(int argc, char *argv[])
         while (*p && *p != ' ' && *p != '\t' && vi < 31)
             verb[vi++] = *p++;
         verb[vi] = '\0';
-        upcase(verb);
+        str_upcase(verb);
 
         /* Skip whitespace after verb */
         while (*p == ' ' || *p == '\t')

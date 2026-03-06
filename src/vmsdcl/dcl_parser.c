@@ -13,28 +13,7 @@
 
 #include "dcl/lexer.h"
 #include "dcl/parser.h"
-
-/*
- * Convert a string to uppercase in-place.
- */
-static void str_upcase(char *s)
-{
-    for (; *s; s++) {
-        *s = (char)toupper((unsigned char)*s);
-    }
-}
-
-/*
- * Copy src to dst, uppercasing, up to max-1 chars.
- */
-static void str_upcase_copy(char *dst, const char *src, size_t max)
-{
-    size_t i;
-    for (i = 0; i < max - 1 && src[i]; i++) {
-        dst[i] = (char)toupper((unsigned char)src[i]);
-    }
-    dst[i] = '\0';
-}
+#include "str_util.h"
 
 /*
  * Match a (possibly abbreviated) command name against a full command name.

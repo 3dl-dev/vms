@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include "rms/rms.h"
 #include "rms_internal.h"
+#include "rms_util.h"
 
 /* B-tree order (max children per node) */
 #define BTREE_ORDER     64
@@ -591,9 +592,7 @@ static btree_t *get_tree(struct FAB *fab)
     return tree;
 }
 
-/* Use shared rms_read_exact / rms_write_exact from rms_core.c */
-#define idx_read_exact  rms_read_exact
-#define idx_write_exact rms_write_exact
+/* read_exact/write_exact now provided by rms_util.h */
 
 /*
  * rms_idx_get - Read a record from an indexed file.
@@ -667,7 +666,7 @@ uint32_t rms_idx_get(struct FAB *fab, struct RAB *rab)
         if (status != IDX_REC_ACTIVE) return RMS$_DEL;
 
         uint16_t reclen;
-        if (idx_read_exact(fd, &reclen, 2) < 2) return RMS$_RER;
+        if (rms_read_exact(fd, &reclen, 2) < 2) return RMS$_RER;
 
         if (reclen > rab->rab$w_usz) {
             rab->rab$l_stv = reclen;
@@ -675,7 +674,7 @@ uint32_t rms_idx_get(struct FAB *fab, struct RAB *rab)
         }
 
         if (reclen > 0) {
-            if (idx_read_exact(fd, rab->rab$l_ubf, reclen) < reclen) {
+            if (rms_read_exact(fd, rab->rab$l_ubf, reclen) < reclen) {
                 return RMS$_RER;
             }
         }
@@ -698,7 +697,7 @@ uint32_t rms_idx_get(struct FAB *fab, struct RAB *rab)
             if (n <= 0) return RMS$_EOF;
 
             uint16_t reclen;
-            if (idx_read_exact(fd, &reclen, 2) < 2) return RMS$_EOF;
+            if (rms_read_exact(fd, &reclen, 2) < 2) return RMS$_EOF;
 
             if (status == IDX_REC_ACTIVE) {
                 if (reclen > rab->rab$w_usz) {
@@ -709,7 +708,7 @@ uint32_t rms_idx_get(struct FAB *fab, struct RAB *rab)
                 }
 
                 if (reclen > 0) {
-                    if (idx_read_exact(fd, rab->rab$l_ubf, reclen) < reclen) {
+                    if (rms_read_exact(fd, rab->rab$l_ubf, reclen) < reclen) {
                         return RMS$_RER;
                     }
                 }
@@ -766,10 +765,10 @@ uint32_t rms_idx_put(struct FAB *fab, struct RAB *rab)
     off_t rec_offset = lseek(fd, 0, SEEK_END);
 
     uint8_t status = IDX_REC_ACTIVE;
-    if (idx_write_exact(fd, &status, 1) < 0) return RMS$_WER;
-    if (idx_write_exact(fd, &len, 2) < 0) return RMS$_WER;
+    if (rms_write_exact(fd, &status, 1) < 0) return RMS$_WER;
+    if (rms_write_exact(fd, &len, 2) < 0) return RMS$_WER;
     if (len > 0) {
-        if (idx_write_exact(fd, buf, len) < 0) return RMS$_WER;
+        if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
     }
 
     /* Insert key into B-tree */
@@ -787,7 +786,7 @@ uint32_t rms_idx_put(struct FAB *fab, struct RAB *rab)
         /* Duplicate key - we already wrote the record, so mark it deleted */
         lseek(fd, rec_offset, SEEK_SET);
         uint8_t del = IDX_REC_DELETED;
-        idx_write_exact(fd, &del, 1);
+        rms_write_exact(fd, &del, 1);
         return RMS$_DUP;
     }
 
@@ -832,13 +831,13 @@ uint32_t rms_idx_delete(struct FAB *fab, struct RAB *rab)
     /* Read the record to get its key (for B-tree removal) */
     lseek(fd, rab->_last_rec_offset + 1, SEEK_SET);  /* Skip status */
     uint16_t reclen;
-    if (idx_read_exact(fd, &reclen, 2) < 2) return RMS$_RER;
+    if (rms_read_exact(fd, &reclen, 2) < 2) return RMS$_RER;
 
     char *rec_buf = NULL;
     if (reclen > 0) {
         rec_buf = malloc(reclen);
         if (!rec_buf) return RMS$_DME;
-        if (idx_read_exact(fd, rec_buf, reclen) < reclen) {
+        if (rms_read_exact(fd, rec_buf, reclen) < reclen) {
             free(rec_buf);
             return RMS$_RER;
         }
@@ -859,7 +858,7 @@ uint32_t rms_idx_delete(struct FAB *fab, struct RAB *rab)
     /* Mark record as deleted in data file */
     lseek(fd, rab->_last_rec_offset, SEEK_SET);
     uint8_t del = IDX_REC_DELETED;
-    if (idx_write_exact(fd, &del, 1) < 0) return RMS$_WER;
+    if (rms_write_exact(fd, &del, 1) < 0) return RMS$_WER;
 
     tree->num_records--;
     tree->dirty = 1;
@@ -905,12 +904,12 @@ uint32_t rms_idx_update(struct FAB *fab, struct RAB *rab)
     /* Read old record to get old key */
     lseek(fd, rab->_last_rec_offset + 1, SEEK_SET);
     uint16_t old_len;
-    if (idx_read_exact(fd, &old_len, 2) < 2) return RMS$_RER;
+    if (rms_read_exact(fd, &old_len, 2) < 2) return RMS$_RER;
 
     char *old_buf = malloc(old_len > 0 ? old_len : 1);
     if (!old_buf) return RMS$_DME;
     if (old_len > 0) {
-        if (idx_read_exact(fd, old_buf, old_len) < old_len) {
+        if (rms_read_exact(fd, old_buf, old_len) < old_len) {
             free(old_buf);
             return RMS$_RER;
         }
@@ -936,14 +935,14 @@ uint32_t rms_idx_update(struct FAB *fab, struct RAB *rab)
         /* Mark old record as deleted */
         lseek(fd, rab->_last_rec_offset, SEEK_SET);
         uint8_t del = IDX_REC_DELETED;
-        idx_write_exact(fd, &del, 1);
+        rms_write_exact(fd, &del, 1);
 
         /* Append new record */
         off_t new_offset = lseek(fd, 0, SEEK_END);
         uint8_t status = IDX_REC_ACTIVE;
-        idx_write_exact(fd, &status, 1);
-        idx_write_exact(fd, &new_len, 2);
-        if (new_len > 0) idx_write_exact(fd, buf, new_len);
+        rms_write_exact(fd, &status, 1);
+        rms_write_exact(fd, &new_len, 2);
+        if (new_len > 0) rms_write_exact(fd, buf, new_len);
 
         /* Handle root split */
         if (tree->root->num_keys >= BTREE_MAX_KEYS) {
@@ -961,18 +960,18 @@ uint32_t rms_idx_update(struct FAB *fab, struct RAB *rab)
         if (new_len == old_len) {
             /* Same size - rewrite in place */
             lseek(fd, rab->_last_rec_offset + 3, SEEK_SET);  /* skip status + len */
-            if (idx_write_exact(fd, buf, new_len) < 0) return RMS$_WER;
+            if (rms_write_exact(fd, buf, new_len) < 0) return RMS$_WER;
         } else {
             /* Different size - delete and append */
             lseek(fd, rab->_last_rec_offset, SEEK_SET);
             uint8_t del = IDX_REC_DELETED;
-            idx_write_exact(fd, &del, 1);
+            rms_write_exact(fd, &del, 1);
 
             off_t new_offset = lseek(fd, 0, SEEK_END);
             uint8_t status = IDX_REC_ACTIVE;
-            idx_write_exact(fd, &status, 1);
-            idx_write_exact(fd, &new_len, 2);
-            if (new_len > 0) idx_write_exact(fd, buf, new_len);
+            rms_write_exact(fd, &status, 1);
+            rms_write_exact(fd, &new_len, 2);
+            if (new_len > 0) rms_write_exact(fd, buf, new_len);
 
             /* Update B-tree offset */
             btree_remove(tree, tree->root, new_key, new_key_len, tree->key_dtp);
@@ -1038,7 +1037,7 @@ uint32_t rms_idx_find(struct FAB *fab, struct RAB *rab)
     /* Read the record length to set _last_rec_size */
     lseek(fd, rec_offset + 1, SEEK_SET);  /* Skip status */
     uint16_t reclen;
-    if (idx_read_exact(fd, &reclen, 2) >= 2) {
+    if (rms_read_exact(fd, &reclen, 2) >= 2) {
         rab->_last_rec_size = reclen;
     }
 

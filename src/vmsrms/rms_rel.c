@@ -18,10 +18,7 @@
 #include <unistd.h>
 #include "rms/rms.h"
 #include "rms_internal.h"
-
-/* Use shared rms_read_exact / rms_write_exact from rms_core.c */
-#define rel_read_exact  rms_read_exact
-#define rel_write_exact rms_write_exact
+#include "rms_util.h"
 
 /* Cell status byte values */
 #define REL_CELL_EMPTY   0x00    /* Cell has never been used */
@@ -101,7 +98,7 @@ uint32_t rms_rel_get(struct FAB *fab, struct RAB *rab)
                 return RMS$_RTB;
             }
 
-            n = rel_read_exact(fd, rab->rab$l_ubf, reclen);
+            n = rms_read_exact(fd, rab->rab$l_ubf, reclen);
             if (n < reclen) return RMS$_RER;
 
             rab->rab$w_rsz = reclen;
@@ -205,7 +202,7 @@ uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
 
     /* Write status byte */
     uint8_t status_byte = REL_CELL_ACTIVE;
-    if (rel_write_exact(fd, &status_byte, 1) < 0) return RMS$_WER;
+    if (rms_write_exact(fd, &status_byte, 1) < 0) return RMS$_WER;
 
     /* Write record data, padded to MRS */
     uint16_t reclen = rab->rab$w_rsz;
@@ -219,7 +216,7 @@ uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
     memcpy(cell, buf, reclen);
     /* Remaining bytes stay zero (calloc) */
 
-    int rc = rel_write_exact(fd, cell, fab->fab$w_mrs);
+    int rc = rms_write_exact(fd, cell, fab->fab$w_mrs);
     free(cell);
     if (rc < 0) return RMS$_WER;
 
@@ -277,7 +274,7 @@ uint32_t rms_rel_update(struct FAB *fab, struct RAB *rab)
 
     memcpy(cell, buf, reclen);
 
-    int rc = rel_write_exact(fd, cell, fab->fab$w_mrs);
+    int rc = rms_write_exact(fd, cell, fab->fab$w_mrs);
     free(cell);
     if (rc < 0) return RMS$_WER;
 
@@ -311,7 +308,7 @@ uint32_t rms_rel_delete(struct FAB *fab, struct RAB *rab)
 
     /* Mark cell as deleted */
     uint8_t status_byte = REL_CELL_DELETED;
-    if (rel_write_exact(fd, &status_byte, 1) < 0) return RMS$_WER;
+    if (rms_write_exact(fd, &status_byte, 1) < 0) return RMS$_WER;
 
     return RMS$_NORMAL;
 }

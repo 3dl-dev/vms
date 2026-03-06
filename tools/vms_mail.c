@@ -38,6 +38,7 @@
 /* ------------------------------------------------------------------ */
 
 #include "ovmx_layout.h"
+#include "str_util.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "vms/logical.h"
@@ -81,19 +82,7 @@ static int          g_dirty = 0;        /* index needs rewriting */
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-static void upcase(char *s)
-{
-    for (; *s; s++)
-        *s = (char)toupper((unsigned char)*s);
-}
-
-static void trim_trailing(char *s)
-{
-    size_t n = strlen(s);
-    while (n > 0 && (s[n-1] == '\n' || s[n-1] == '\r' ||
-                     s[n-1] == ' '  || s[n-1] == '\t'))
-        s[--n] = '\0';
-}
+/* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
 /* Format current time as VMS date: DD-MON-YYYY HH:MM:SS.CC */
 static void vms_now(char *buf, size_t bufsiz)
@@ -133,18 +122,18 @@ static int user_exists(const char *username)
         while (fgets(line, sizeof(line), fp)) {
             if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
                 continue;
-            trim_trailing(line);
+            str_trim(line);
             /* First field is username (SYSUAF uses pipe delimiter) */
             char *delim = strchr(line, '|');
             if (delim) *delim = '\0';
             char uname[MAX_USERNAME];
             strncpy(uname, line, sizeof(uname) - 1);
             uname[sizeof(uname) - 1] = '\0';
-            upcase(uname);
+            str_upcase(uname);
             char search[MAX_USERNAME];
             strncpy(search, username, sizeof(search) - 1);
             search[sizeof(search) - 1] = '\0';
-            upcase(search);
+            str_upcase(search);
             if (strcmp(uname, search) == 0) {
                 fclose(fp);
                 return 1;
@@ -174,7 +163,7 @@ static int get_user_homedir(const char *username, char *homedir, size_t sz)
         while (fgets(line, sizeof(line), fp)) {
             if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
                 continue;
-            trim_trailing(line);
+            str_trim(line);
             char *fields[7];
             char *p = line;
             int nf = 0;
@@ -188,11 +177,11 @@ static int get_user_homedir(const char *username, char *homedir, size_t sz)
             char uname[MAX_USERNAME];
             strncpy(uname, fields[0], sizeof(uname) - 1);
             uname[sizeof(uname) - 1] = '\0';
-            upcase(uname);
+            str_upcase(uname);
             char search[MAX_USERNAME];
             strncpy(search, username, sizeof(search) - 1);
             search[sizeof(search) - 1] = '\0';
-            upcase(search);
+            str_upcase(search);
             if (strcmp(uname, search) == 0) {
                 strncpy(homedir, fields[4], sz - 1);
                 homedir[sz - 1] = '\0';
@@ -257,7 +246,7 @@ static void load_index(void)
 
     char line[MAX_LINE];
     while (fgets(line, sizeof(line), fp) && g_msg_count < MAX_MESSAGES) {
-        trim_trailing(line);
+        str_trim(line);
         if (line[0] == '\0' || line[0] == '#') continue;
 
         /* Format: NUMBER|READ|DELETED|FROM|DATE|SUBJECT */
@@ -607,13 +596,13 @@ static void cmd_send(const char *preset_to, const char *preset_subject,
     if (preset_to && preset_to[0]) {
         strncpy(to, preset_to, sizeof(to) - 1);
         to[sizeof(to) - 1] = '\0';
-        upcase(to);
+        str_upcase(to);
     } else {
         printf("To: ");
         fflush(stdout);
         if (!fgets(to, sizeof(to), stdin)) return;
-        trim_trailing(to);
-        upcase(to);
+        str_trim(to);
+        str_upcase(to);
     }
 
     if (to[0] == '\0') {
@@ -635,7 +624,7 @@ static void cmd_send(const char *preset_to, const char *preset_subject,
         printf("Subject: ");
         fflush(stdout);
         if (!fgets(subject, sizeof(subject), stdin)) return;
-        trim_trailing(subject);
+        str_trim(subject);
     }
 
     /* Read body */
@@ -655,7 +644,7 @@ static void cmd_send(const char *preset_to, const char *preset_subject,
         char line[MAX_LINE];
         while (1) {
             if (!fgets(line, sizeof(line), stdin)) break; /* EOF / Ctrl-Z */
-            trim_trailing(line);
+            str_trim(line);
             if (strcmp(line, BODY_SENTINEL) == 0) break;
 
             /* Append line + newline to body */
@@ -774,7 +763,7 @@ static void interactive_loop(void)
         fflush(stdout);
 
         if (!fgets(line, sizeof(line), stdin)) break; /* EOF */
-        trim_trailing(line);
+        str_trim(line);
 
         /* Skip empty lines */
         if (line[0] == '\0') continue;
@@ -786,7 +775,7 @@ static void interactive_loop(void)
 
         int n = sscanf(line, "%63s %4095[^\n]", verb, arg);
         (void)n;
-        upcase(verb);
+        str_upcase(verb);
 
         /* Minimum abbreviation matching (VMS style, 3-4 char minimum) */
         if (strncmp(verb, "SEND", 3) == 0) {
@@ -841,7 +830,7 @@ int mail_count_unread(const char *username)
     int count = 0;
     char line[MAX_LINE];
     while (fgets(line, sizeof(line), fp)) {
-        trim_trailing(line);
+        str_trim(line);
         if (line[0] == '#' || line[0] == '\0') continue;
 
         /* Parse: NUMBER|READ|DELETED|... */
@@ -879,13 +868,13 @@ int main(int argc, char *argv[])
     if (env_user && env_user[0]) {
         strncpy(g_username, env_user, sizeof(g_username) - 1);
         g_username[sizeof(g_username) - 1] = '\0';
-        upcase(g_username);
+        str_upcase(g_username);
     } else {
         struct passwd *pw = getpwuid(getuid());
         if (pw) {
             strncpy(g_username, pw->pw_name, sizeof(g_username) - 1);
             g_username[sizeof(g_username) - 1] = '\0';
-            upcase(g_username);
+            str_upcase(g_username);
         } else {
             strncpy(g_username, "SYSTEM", sizeof(g_username) - 1);
         }
@@ -933,7 +922,7 @@ int main(int argc, char *argv[])
         char to_upper[MAX_USERNAME];
         strncpy(to_upper, send_to, sizeof(to_upper) - 1);
         to_upper[sizeof(to_upper) - 1] = '\0';
-        upcase(to_upper);
+        str_upcase(to_upper);
 
         char subj[MAX_SUBJECT] = "";
         if (send_subject) {

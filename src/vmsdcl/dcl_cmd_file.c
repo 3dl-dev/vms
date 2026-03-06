@@ -25,6 +25,35 @@
 #include "vmsfs/filespec.h"
 #include "vmsqueue.h"
 
+/* Directory entry for sorting in DIRECTORY command */
+struct dir_entry {
+    char vms_name[256];  /* Formatted VMS name (UPPERCASE, with version) */
+    char raw_name[256];  /* Original d_name for name part comparison */
+    int  version;        /* Numeric version for sort (descending) */
+    long blocks;
+    struct stat st;
+};
+
+/* Compare directory entries: name ascending (case-insensitive), version descending */
+static int dir_entry_cmp(const void *a, const void *b)
+{
+    const struct dir_entry *ea = (const struct dir_entry *)a;
+    const struct dir_entry *eb = (const struct dir_entry *)b;
+
+    /* Compare name without version */
+    char na[256], nb[256];
+    strncpy(na, ea->vms_name, sizeof(na) - 1); na[sizeof(na)-1]='\0';
+    strncpy(nb, eb->vms_name, sizeof(nb) - 1); nb[sizeof(nb)-1]='\0';
+    char *sa = strrchr(na, ';'); if (sa) *sa = '\0';
+    char *sb = strrchr(nb, ';'); if (sb) *sb = '\0';
+
+    int cmp = strcasecmp(na, nb);
+    if (cmp != 0) return cmp;
+
+    /* Same name: sort by version descending */
+    return eb->version - ea->version;
+}
+
 int cmd_directory(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
@@ -130,13 +159,6 @@ int cmd_directory(struct dcl_command *cmd)
     }
 
     /* Collect all matching entries for sorting */
-    struct dir_entry {
-        char vms_name[256];  /* Formatted VMS name (UPPERCASE, with version) */
-        char raw_name[256];  /* Original d_name for name part comparison */
-        int  version;        /* Numeric version for sort (descending) */
-        long blocks;
-        struct stat st;
-    };
 
     int capacity = 256;
     struct dir_entry *entries = malloc((size_t)capacity * sizeof(*entries));
@@ -229,27 +251,8 @@ int cmd_directory(struct dcl_command *cmd)
     }
     closedir(dir);
 
-    /* Sort entries: name ascending (ignoring version), version descending.
-     * VMS displays files alphabetically, with multiple versions of the same
-     * file in descending version order.
-     * Sort by vms_name up to (not including) ';', then version descending. */
-    for (int i = 0; i < entry_count - 1; i++) {
-        for (int j = i + 1; j < entry_count; j++) {
-            /* Get name without version for comparison */
-            char na[256], nb[256];
-            strncpy(na, entries[i].vms_name, sizeof(na) - 1); na[sizeof(na)-1]='\0';
-            strncpy(nb, entries[j].vms_name, sizeof(nb) - 1); nb[sizeof(nb)-1]='\0';
-            char *sa = strrchr(na, ';'); if (sa) *sa = '\0';
-            char *sb = strrchr(nb, ';'); if (sb) *sb = '\0';
-
-            int cmp = strcasecmp(na, nb);
-            if (cmp > 0 || (cmp == 0 && entries[i].version < entries[j].version)) {
-                struct dir_entry tmp = entries[i];
-                entries[i] = entries[j];
-                entries[j] = tmp;
-            }
-        }
-    }
+    /* Sort entries: name ascending (case-insensitive), version descending */
+    qsort(entries, (size_t)entry_count, sizeof(struct dir_entry), dir_entry_cmp);
 
     int file_count = 0;
     long total_blocks = 0;

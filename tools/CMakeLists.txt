@@ -91,7 +91,7 @@ target_compile_definitions(vms_mail PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(vms_mail PRIVATE vmsfs vmslnm)
+target_link_libraries(vms_mail PRIVATE vms vmsfs vmslnm)
 
 set_target_properties(vms_mail PROPERTIES
     OUTPUT_NAME "MAIL"

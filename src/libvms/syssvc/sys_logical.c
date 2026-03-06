@@ -21,6 +21,7 @@
 #include <ctype.h>
 #include <pthread.h>
 #include "starlet.h"
+#include "str_util.h"
 
 #define MAX_LOGICALS 1024
 #define MAX_EQUIV_LEN 256
@@ -37,14 +38,7 @@ struct logical_entry {
 static struct logical_entry logical_table[MAX_LOGICALS];
 static pthread_mutex_t lnm_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-/* Upcase a string into a buffer */
-static void str_upcase(char *dst, const char *src, size_t maxlen) {
-    size_t i;
-    for (i = 0; i < maxlen - 1 && src[i]; i++) {
-        dst[i] = (char)toupper((unsigned char)src[i]);
-    }
-    dst[i] = '\0';
-}
+/* str_upcase_copy() now provided by str_util.h */
 
 /* Find a logical name in a specific table */
 static struct logical_entry *find_logical(const char *table, const char *name) {
@@ -127,8 +121,8 @@ uint32_t sys$crelnm(const uint32_t *attr,
     }
 
     /* Store the logical name (uppercased) */
-    str_upcase(entry->name, name, sizeof(entry->name));
-    str_upcase(entry->table, table, sizeof(entry->table));
+    str_upcase_copy(entry->name, name, sizeof(entry->name));
+    str_upcase_copy(entry->table, table, sizeof(entry->table));
     strncpy(entry->equiv, equiv, sizeof(entry->equiv) - 1);
     entry->equiv[sizeof(entry->equiv) - 1] = '\0';
     entry->attr = attr ? *attr : 0;

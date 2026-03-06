@@ -1,0 +1,35 @@
+test_libvms_fao 3 0
+test_libvms_lib_vm 2 0
+test_libvms_lib_bitops 4 0
+test_libvms_str_routines 4 0
+test_libvms_mth_routines 4 0
+test_vmssys_syscall 1 0
+test_vmssys_string 1 0
+test_vmssys_snprintf 1 0
+test_vmssys_futex 1 0
+test_vmssys_stdio 1 0
+test_vmssys_math 1 0
+test_vmssys_crt 1 0
+vmsprocess_unit 0 0
+vmslnm_unit 0 0
+vmsfs_unit 0 0
+vmsrms_unit 0 0
+vmsssh_integration 0 0
+---
+test_vmssys_syscall
+test_vmssys_string
+test_vmssys_snprintf
+test_vmssys_futex
+test_vmssys_stdio
+test_vmssys_math
+test_vmssys_crt
+test_libvms_fao
+test_libvms_lib_vm
+test_libvms_lib_bitops
+test_libvms_str_routines
+test_libvms_mth_routines
+vmsprocess_unit
+vmslnm_unit
+vmsfs_unit
+vmsrms_unit
+vmsssh_integration

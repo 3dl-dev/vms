@@ -25,9 +25,17 @@ You are a code implementer. You receive one bead per session and execute it to c
 - **Too large?**: If the bead reveals multi-step work, close it with `--reason "Needs decomposition"` and create child beads (via manager escalation).
 - **Blocked?**: If you hit a dependency, permission issue, or missing tool, add a bead comment explaining the blocker and exit. Don't improvise.
 
+## Build & Test
+
+cmake is not available on the host. **All builds run in containers.**
+
+- **Build + test**: `docker compose --profile dev run --rm build` — builds with cmake, runs ctest, maps UID so artifacts are owned by you
+- **Compile-only check**: `docker build -t ovmx-test:latest .` — multi-stage Dockerfile, builds from committed code (no local artifacts)
+- **NEVER raw `docker run -v` without `--user`**: Creates root-owned build artifacts that need sudo to clean. Always use the compose `build` service or pass `--user $(id -u):$(id -g)`.
+
 ## Quality Checks
 
-- All code builds: `cmake --build build`
+- All code builds: verify via `docker compose --profile dev run --rm build` or `docker build`
 - All tests pass: `ctest --output-on-failure` (or domain-specific test suite)
 - Follow VMS naming: `sys$`, `lib$`, `str$` for syscalls and RTL functions
 - No gold-plating: implement what's asked, nothing more

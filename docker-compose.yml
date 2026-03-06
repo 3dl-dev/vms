@@ -7,3 +7,15 @@ services:
     stdin_open: true
     tty: true
     restart: unless-stopped
+
+  build:
+    build:
+      context: .
+      target: builder
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - .:/src
+    working_dir: /src
+    entrypoint: ["bash", "-c"]
+    command: ["cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON -DBUILD_TOOLS=ON && cmake --build build -j$(nproc) && cd build && ctest --output-on-failure"]
+    profiles: ["dev"]

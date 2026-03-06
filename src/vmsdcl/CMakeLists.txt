@@ -8,6 +8,12 @@ add_executable(vmsdcl
     dcl_exec.c
     dcl_backup.c
     dcl_builtin.c
+    dcl_cmd_show.c
+    dcl_cmd_set.c
+    dcl_cmd_file.c
+    dcl_cmd_process.c
+    dcl_cmd_io.c
+    dcl_cmd_misc.c
     dcl_editor.c
     dcl_terminal.c
     dcl_symbol.c

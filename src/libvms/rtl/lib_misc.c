@@ -168,14 +168,12 @@ uint32_t lib$spawn(const struct dsc$descriptor_s *command,
         if (input_file && input_file->dsc$a_pointer) {
             char path[256];
             dsc$strncpy(path, input_file, sizeof(path));
-            FILE *f = freopen(path, "r", stdin);
-            (void)f;
+            if (!freopen(path, "r", stdin)) _exit(1);
         }
         if (output_file && output_file->dsc$a_pointer) {
             char path[256];
             dsc$strncpy(path, output_file, sizeof(path));
-            FILE *f = freopen(path, "w", stdout);
-            (void)f;
+            if (!freopen(path, "w", stdout)) _exit(1);
         }
 
         if (command && command->dsc$a_pointer && command->dsc$w_length > 0) {

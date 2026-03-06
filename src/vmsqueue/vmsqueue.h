@@ -158,6 +158,14 @@ int vmsq_release_entry(uint32_t entry_id);
 int vmsq_update_status(uint32_t entry_id, uint8_t new_status);
 
 /*
+ * Set queue status (start/stop/pause).
+ * @param name        Queue name
+ * @param new_status  VMSQ_STATUS_STARTED, STOPPED, or PAUSED
+ * @return SS$_NORMAL on success, SS$_ITEMNOTFOUND if not found
+ */
+int vmsq_set_queue_status(const char *name, uint8_t new_status);
+
+/*
  * Close the queue manager, flushing and closing the database file.
  */
 void vmsq_close(void);

@@ -79,4 +79,37 @@ void vms_terminal_apply(const struct vms_terminal *term);
 /* Format SHOW TERMINAL output to FILE stream */
 void vms_terminal_show(const struct vms_terminal *term, FILE *out);
 
+/* ---- Terminal Device Allocation Table ---- */
+
+/* Entry in the shared terminal device table */
+struct terminal_device {
+    char     name[16];        /* e.g. "_FTA0:" */
+    pid_t    owner_pid;
+    char     owner_name[64];
+    uint32_t characteristics;
+    int      allocated;       /* 1 = in use */
+};
+
+/*
+ * vms_term_allocate - Allocate a terminal device from the shared table.
+ *
+ * Assigns a unique device name with the given prefix (e.g. "_FTA").
+ * Records PID and owner in the table file.
+ * Returns static string with device name, or NULL on failure.
+ */
+const char *vms_term_allocate(const char *prefix, pid_t pid, const char *owner);
+
+/*
+ * vms_term_deallocate - Release a terminal device back to the table.
+ */
+void vms_term_deallocate(const char *device_name);
+
+/*
+ * vms_term_list - List all allocated terminal devices.
+ *
+ * Fills out_devs (up to max entries), sets *count to actual count.
+ * Automatically cleans up stale entries (dead PIDs).
+ */
+void vms_term_list(struct terminal_device *out_devs, int max, int *count);
+
 #endif /* __DCL_TERMINAL_H */

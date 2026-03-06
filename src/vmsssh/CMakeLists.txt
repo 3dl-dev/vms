@@ -1,10 +1,14 @@
-add_executable(vmssshd vmssshd.c)
+add_executable(vmssshd
+    vmssshd.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_terminal.c
+)
 
 target_include_directories(vmssshd PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_PROCESS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
 )
 
 target_link_libraries(vmssshd PRIVATE

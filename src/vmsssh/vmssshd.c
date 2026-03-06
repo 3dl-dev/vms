@@ -43,6 +43,7 @@
 #include "ovmx_accounting.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
+#include "dcl/terminal.h"
 
 #ifndef OVMX_BIN_DIR
 #define OVMX_BIN_DIR "/usr/local/bin"
@@ -354,10 +355,15 @@ static void handle_connection(ssh_session session)
         /* ---- Step 1: Initialize PCB with user identity ---- */
         uint64_t user_privs = parse_privilege_string(sysuaf_rec.privileges);
         struct vms_pcb *pcb = vms_pcb_init(user_privs);
+
+        /* Allocate a terminal device from the shared table */
+        const char *term_dev = vms_term_allocate("_FTA", getpid(), sysuaf_rec.username);
+        if (!term_dev) term_dev = "_FTA0:";  /* fallback */
+
         if (pcb) {
             uint32_t uic = (sysuaf_rec.uic_group << 16) | sysuaf_rec.uic_member;
             char prcnam[16];
-            snprintf(prcnam, sizeof(prcnam), "_FTA%d:", (int)(getpid() % 100));
+            snprintf(prcnam, sizeof(prcnam), "%s", term_dev);
             vms_pcb_set_identity((uint32_t)getpid(), uic, sysuaf_rec.username, prcnam);
             vms_pcb_set_default_dir(sysuaf_rec.default_dir);
         }
@@ -380,6 +386,7 @@ static void handle_connection(ssh_session session)
         setenv("VMS_PRIVILEGES",  sysuaf_rec.privileges,  1);
         setenv("SYS$LOGIN",       sysuaf_rec.default_dir, 1);
         setenv("SYS$SCRATCH",     "/tmp",                 1);
+        setenv("VMS_TERMINAL",    term_dev,               1);
 
         /* ---- Step 3: Display VMS login banner ---- */
         static const char *months[] = {

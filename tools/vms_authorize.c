@@ -727,7 +727,7 @@ static int check_privilege(void)
     while (fgets(line, sizeof(line), fp)) {
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
             continue;
-        trim_trailing(line);
+        str_trim(line);
         if (line[0] == '\0')
             continue;
 
@@ -740,7 +740,7 @@ static int check_privilege(void)
         char recname[64];
         strncpy(recname, line, sizeof(recname) - 1);
         recname[sizeof(recname) - 1] = '\0';
-        upcase(recname);
+        str_upcase(recname);
 
         if (strcmp(recname, uname) != 0)
             continue;
@@ -762,7 +762,7 @@ static int check_privilege(void)
             char privs[256];
             strncpy(privs, p, sizeof(privs) - 1);
             privs[sizeof(privs) - 1] = '\0';
-            trim_trailing(privs);
+            str_trim(privs);
 
             if (has_priv_word(privs, "ALL") ||
                 has_priv_word(privs, "SYSPRV"))

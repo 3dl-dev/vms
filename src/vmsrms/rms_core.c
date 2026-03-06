@@ -43,33 +43,7 @@ extern int vms$check_access(uint32_t caller_uic, uint32_t owner_uic,
 #define RMS_PROT_EXECUTE 0x02
 #define RMS_PROT_DELETE  0x01
 
-/*
- * Shared I/O helpers (declared in rms_internal.h, used by seq/rel/idx).
- */
-ssize_t rms_read_exact(int fd, void *buf, size_t count)
-{
-    size_t total = 0;
-    char *p = (char *)buf;
-    while (total < count) {
-        ssize_t n = read(fd, p + total, count - total);
-        if (n < 0) return -1;
-        if (n == 0) break;
-        total += (size_t)n;
-    }
-    return (ssize_t)total;
-}
-
-int rms_write_exact(int fd, const void *buf, size_t count)
-{
-    size_t total = 0;
-    const char *p = (const char *)buf;
-    while (total < count) {
-        ssize_t n = write(fd, p + total, count - total);
-        if (n <= 0) return -1;
-        total += (size_t)n;
-    }
-    return 0;
-}
+/* rms_read_exact / rms_write_exact now in rms_util.c */
 
 /* RMS metadata sidecar filename suffix */
 #define RMS_SIDECAR_SUFFIX ".rms_meta"

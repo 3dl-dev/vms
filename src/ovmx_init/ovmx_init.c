@@ -268,6 +268,68 @@ static void bare_metal_init(void)
 /* ------------------------------------------------------------------ */
 
 /*
+ * Copy a single file from src to dst if dst does not exist.
+ * Used to seed system data files (SYSUAF.DAT, RIGHTSLIST.DAT,
+ * STARTUP.COM) from initramfs to the mounted system disk on first boot.
+ */
+static void copy_seed_file(const char *src, const char *dst)
+{
+    struct stat st;
+    if (stat(dst, &st) == 0)
+        return;  /* Already exists on system disk */
+
+    int sfd = open(src, O_RDONLY);
+    if (sfd < 0)
+        return;  /* No seed file in initramfs */
+
+    int dfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dfd < 0) {
+        close(sfd);
+        return;
+    }
+
+    char buf[4096];
+    ssize_t n;
+    while ((n = read(sfd, buf, sizeof(buf))) > 0)
+        write(dfd, buf, (size_t)n);
+
+    close(dfd);
+    close(sfd);
+}
+
+/*
+ * Provision seed data files onto the system disk.
+ * On first boot (or after disk re-initialization), these files may
+ * not exist on the system disk. Copy seed versions from the initramfs
+ * backup so that SYSUAF, RIGHTSLIST, and STARTUP.COM are available
+ * from the mounted system disk, not the initramfs.
+ *
+ * On subsequent boots, existing files are preserved (no overwrite).
+ */
+static void provision_seed_files(void)
+{
+    char src[512], dst[512];
+
+    /* SYSUAF.DAT → SYS$SYSTEM */
+    vms_to_linux(VMS_SYSUAF_PATH, dst, sizeof(dst));
+    snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT",
+             INITRAMFS_BACKUP);
+    copy_seed_file(src, dst);
+
+    /* RIGHTSLIST.DAT → SYS$SYSTEM */
+    vms_to_linux(VMS_RIGHTSLIST_PATH, dst, sizeof(dst));
+    snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT",
+             INITRAMFS_BACKUP);
+    copy_seed_file(src, dst);
+
+    /* STARTUP.COM → SYS$MANAGER */
+    vms_to_linux(VMS_STARTUP_PATH, dst, sizeof(dst));
+    snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM",
+             INITRAMFS_BACKUP);
+    copy_seed_file(src, dst);
+}
+
+/*
  * Check if the system is already installed on the system disk.
  * DCL.EXE in SYSEXE is the marker — if it exists (file or symlink),
  * a prior install populated the tree and we can skip straight to boot.
@@ -674,6 +736,13 @@ int main(void)
         else
             install_system();
     }
+
+    /* Step 2b: Ensure seed data files exist on system disk.
+     * On first boot, install copies the whole tree but subsequent
+     * boots skip install. Seed files that were added after install
+     * (e.g., RIGHTSLIST.DAT, STARTUP.COM) are provisioned here
+     * without overwriting existing files. */
+    provision_seed_files();
 
     /* Step 3: Start logical name daemon */
     int lnm_started = 0;

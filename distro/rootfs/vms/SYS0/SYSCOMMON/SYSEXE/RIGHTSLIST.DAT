@@ -1,0 +1,8 @@
+# Rights Database
+# Format: IDENTIFIER:VALUE:ATTRIBUTES
+# Identifiers are rights that can be granted to users
+INTERACTIVE:1:RESOURCE
+BATCH:2:RESOURCE
+NETWORK:3:RESOURCE
+LOCAL:4:RESOURCE
+REMOTE:5:RESOURCE

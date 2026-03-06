@@ -12,6 +12,8 @@ target_include_directories(vmsqueue PUBLIC
     ${VMS_INCLUDE_DIR}
 )
 
+target_link_libraries(vmsqueue PRIVATE vmsfs)
+
 set_target_properties(vmsqueue PROPERTIES
     PREFIX ""
     OUTPUT_NAME "LIBVMSQUEUE\$SHR"

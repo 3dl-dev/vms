@@ -39,7 +39,7 @@
 #define SS__WASSET      9   /* AST was enabled */
 #define SS__WASCLR      5   /* AST was disabled */
 #define SS__NOPRIV      0x00000024
-#define SS__INSFMEM     0x00000014  /* insufficient memory (overloaded) */
+#define SS__INSFMEM     0x0000002C  /* insufficient memory (44 decimal, matches real VMS) */
 
 /* Privilege bits */
 #define PRV_M_CMKRNL    (1ULL << 0)

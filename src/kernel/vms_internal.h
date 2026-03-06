@@ -28,7 +28,7 @@
 #define SS__BADPARAM    0x00000014
 #define SS__NOPRIV      0x00000024
 #define SS__ACCVIO      0x0000000C
-#define SS__INSFMEM     0x00000014  /* insufficient memory */
+#define SS__INSFMEM     0x0000002C  /* insufficient memory (44 decimal, matches real VMS) */
 #define SS__EXASTLM     0x00000038  /* AST quota exceeded */
 #define SS__WASSET      9           /* flag/AST was enabled/set */
 #define SS__WASCLR      5           /* flag/AST was disabled/clear */

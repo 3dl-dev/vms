@@ -145,6 +145,17 @@ int cmd_differences(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/* qsort comparators for SORT command */
+static int sort_cmp_asc(const void *a, const void *b)
+{
+    return strcasecmp(*(const char **)a, *(const char **)b);
+}
+
+static int sort_cmp_desc(const void *a, const void *b)
+{
+    return strcasecmp(*(const char **)b, *(const char **)a);
+}
+
 /*
  * SORT - Sort a file.
  * Format: SORT input-file output-file
@@ -206,32 +217,11 @@ int cmd_sort(struct dcl_command *cmd)
     /* Sort: /REVERSE reverses, default ascending case-insensitive */
     int reverse = dcl_has_qualifier(cmd, "REVERSE");
 
-    /* Simple qsort with strcmp (case-insensitive) */
-    /* Use a comparison that respects /REVERSE */
-    /* We need a static/global for qsort comparator — use a function */
-    /* Since we can't pass extra args to qsort comparator, implement inline */
+    /* Sort using qsort with case-insensitive comparison */
     if (!reverse) {
-        /* Ascending */
-        for (size_t i = 0; i < line_count - 1; i++) {
-            for (size_t j = i + 1; j < line_count; j++) {
-                if (strcasecmp(lines[i], lines[j]) > 0) {
-                    char *tmp = lines[i];
-                    lines[i] = lines[j];
-                    lines[j] = tmp;
-                }
-            }
-        }
+        qsort(lines, line_count, sizeof(char *), sort_cmp_asc);
     } else {
-        /* Descending */
-        for (size_t i = 0; i < line_count - 1; i++) {
-            for (size_t j = i + 1; j < line_count; j++) {
-                if (strcasecmp(lines[i], lines[j]) < 0) {
-                    char *tmp = lines[i];
-                    lines[i] = lines[j];
-                    lines[j] = tmp;
-                }
-            }
-        }
+        qsort(lines, line_count, sizeof(char *), sort_cmp_desc);
     }
 
     /* Write sorted output */
@@ -980,16 +970,7 @@ static int tcpip_build_ifmap(struct tcpip_ifmap *map, int max_entries)
     closedir(d);
 
     /* Sort for stable ordering */
-    for (int i = 0; i < count - 1; i++) {
-        for (int j = i + 1; j < count; j++) {
-            if (strcmp(names[i], names[j]) > 0) {
-                char tmp[IFNAMSIZ];
-                memcpy(tmp, names[i], IFNAMSIZ);
-                memcpy(names[i], names[j], IFNAMSIZ);
-                memcpy(names[j], tmp, IFNAMSIZ);
-            }
-        }
-    }
+    qsort(names, (size_t)count, IFNAMSIZ, (int(*)(const void *, const void *))strcmp);
 
     /* Map names */
     int se_idx = 0, ew_idx = 0, tn_idx = 0, xx_idx = 0;

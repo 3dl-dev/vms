@@ -39,6 +39,7 @@
 #include <libssh/callbacks.h>
 
 #include "sysuaf.h"
+#include "str_util.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "vms/logical.h"
@@ -82,15 +83,7 @@ static void sigchld_handler(int sig)
         ;
 }
 
-/* ------------------------------------------------------------------ */
-/* Helper: upcase string in-place                                     */
-/* ------------------------------------------------------------------ */
-
-static void str_upcase(char *s)
-{
-    for (; *s; s++)
-        *s = (char)toupper((unsigned char)*s);
-}
+/* str_upcase() now provided by str_util.h */
 
 /* ------------------------------------------------------------------ */
 /* Window change callback context and handler                        */

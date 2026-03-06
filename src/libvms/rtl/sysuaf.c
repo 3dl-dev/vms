@@ -19,27 +19,12 @@
 #include <stdint.h>
 
 #include "sha256.h"
+#include "str_util.h"
 #include "sysuaf.h"
 #include "vmsfs/filespec.h"
 #include "vms/privs.h"
 
-/* ------------------------------------------------------------------ */
-/* Internal helpers                                                    */
-/* ------------------------------------------------------------------ */
-
-static void upcase(char *s)
-{
-    for (; *s; s++)
-        *s = (char)toupper((unsigned char)*s);
-}
-
-static void trim_trailing(char *s)
-{
-    size_t len = strlen(s);
-    while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r' ||
-                       s[len - 1] == ' '  || s[len - 1] == '\t'))
-        s[--len] = '\0';
-}
+/* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
 /* ------------------------------------------------------------------ */
 /* sysuaf_lookup                                                       */
@@ -63,7 +48,7 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
     char search_copy[64];
     strncpy(search_copy, username, sizeof(search_copy) - 1);
     search_copy[sizeof(search_copy) - 1] = '\0';
-    upcase(search_copy);
+    str_upcase(search_copy);
 
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
@@ -71,7 +56,7 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
             continue;
 
-        trim_trailing(line);
+        str_trim(line);
 
         /* Parse: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
          * Pipe delimiter avoids conflict with VMS device colons in DEFAULT_DIR. */
@@ -97,12 +82,12 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
         char uname_copy[64];
         strncpy(uname_copy, fields[0], sizeof(uname_copy) - 1);
         uname_copy[sizeof(uname_copy) - 1] = '\0';
-        upcase(uname_copy);
+        str_upcase(uname_copy);
 
         if (strcmp(uname_copy, search_copy) == 0) {
             memset(rec, 0, sizeof(*rec));
             strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
-            upcase(rec->username);
+            str_upcase(rec->username);
             strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
             rec->uic_group  = (uint32_t)strtoul(fields[2], NULL, 10);
             rec->uic_member = (uint32_t)strtoul(fields[3], NULL, 10);

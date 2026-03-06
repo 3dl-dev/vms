@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 
 #include "sysuaf.h"
+#include "str_util.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "vms/logical.h"
@@ -35,25 +36,7 @@
 #define LASTLOGIN_DIR      VMS_LASTLOGIN_DIR
 #define DCL_SHELL_PATH     VMS_DCL_PATH
 
-/* ------------------------------------------------------------------ */
-/* Helper: upcase a string in-place                                   */
-/* ------------------------------------------------------------------ */
-static void upcase(char *s)
-{
-    for (; *s; s++)
-        *s = (char)toupper((unsigned char)*s);
-}
-
-/* ------------------------------------------------------------------ */
-/* Helper: trim trailing whitespace / newlines                        */
-/* ------------------------------------------------------------------ */
-static void trim_trailing(char *s)
-{
-    size_t len = strlen(s);
-    while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r' ||
-                       s[len - 1] == ' '  || s[len - 1] == '\t'))
-        s[--len] = '\0';
-}
+/* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
 /* ------------------------------------------------------------------ */
 /* Read password with echo disabled                                   */
@@ -85,7 +68,7 @@ static int read_password(char *buf, size_t bufsiz)
         putchar('\n');
     }
 
-    trim_trailing(buf);
+    str_trim(buf);
     return 0;
 }
 
@@ -185,8 +168,8 @@ static int console_login(void)
         fflush(stdout);
         if (fgets(username, sizeof(username), stdin) == NULL)
             return 1;  /* EOF */
-        trim_trailing(username);
-        upcase(username);
+        str_trim(username);
+        str_upcase(username);
 
         if (username[0] == '\0')
             continue;

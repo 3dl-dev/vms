@@ -16,44 +16,7 @@
 #include <string.h>
 #include <unistd.h>
 #include "rms/rms.h"
-
-/*
- * Helper: Read exactly 'count' bytes from fd at current position.
- * Returns number of bytes read, or -1 on error.
- */
-static ssize_t read_exact(int fd, void *buf, size_t count)
-{
-    size_t total = 0;
-    char *p = (char *)buf;
-
-    while (total < count) {
-        ssize_t n = read(fd, p + total, count - total);
-        if (n < 0) return -1;
-        if (n == 0) break;  /* EOF */
-        total += (size_t)n;
-    }
-
-    return (ssize_t)total;
-}
-
-/*
- * Helper: Write exactly 'count' bytes to fd.
- * Returns 0 on success, -1 on error.
- */
-static int write_exact(int fd, const void *buf, size_t count)
-{
-    size_t total = 0;
-    const char *p = (const char *)buf;
-
-    while (total < count) {
-        ssize_t n = write(fd, p + total, count - total);
-        if (n < 0) return -1;
-        if (n == 0) return -1;
-        total += (size_t)n;
-    }
-
-    return 0;
-}
+#include "rms_util.h"
 
 /*
  * rms_seq_get - Read a record from a sequential file.
@@ -150,7 +113,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
                 return RMS$_RTB;
             }
 
-            ssize_t n = read_exact(fd, rab->rab$l_ubf, recsize);
+            ssize_t n = rms_read_exact(fd, rab->rab$l_ubf, recsize);
             if (n <= 0) {
                 rab->_eof = 1;
                 return RMS$_EOF;
@@ -173,7 +136,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
              * to word (2-byte) boundaries.
              */
             uint16_t reclen;
-            ssize_t n = read_exact(fd, &reclen, 2);
+            ssize_t n = rms_read_exact(fd, &reclen, 2);
             if (n <= 0) {
                 rab->_eof = 1;
                 return RMS$_EOF;
@@ -189,7 +152,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
             }
 
             if (reclen > 0) {
-                n = read_exact(fd, rab->rab$l_ubf, reclen);
+                n = rms_read_exact(fd, rab->rab$l_ubf, reclen);
                 if (n < reclen) return RMS$_RER;
             }
 
@@ -210,7 +173,7 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
              * The count includes the fixed control area.
              */
             uint16_t reclen;
-            ssize_t n = read_exact(fd, &reclen, 2);
+            ssize_t n = rms_read_exact(fd, &reclen, 2);
             if (n <= 0) {
                 rab->_eof = 1;
                 return RMS$_EOF;
@@ -233,13 +196,13 @@ uint32_t rms_seq_get(struct FAB *fab, struct RAB *rab)
             if (fsz > 0) {
                 char ctrl[256];
                 uint8_t to_read = (fsz <= sizeof(ctrl)) ? fsz : (uint8_t)sizeof(ctrl);
-                n = read_exact(fd, ctrl, to_read);
+                n = rms_read_exact(fd, ctrl, to_read);
                 if (n < to_read) return RMS$_RER;
             }
 
             /* Read the data portion */
             if (datalen > 0) {
-                n = read_exact(fd, rab->rab$l_ubf, datalen);
+                n = rms_read_exact(fd, rab->rab$l_ubf, datalen);
                 if (n < datalen) return RMS$_RER;
             }
 
@@ -290,27 +253,27 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
         case FAB$C_STMLF: {
             /* Stream-LF: write data followed by \n */
             if (len > 0) {
-                if (write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
-            if (write_exact(fd, "\n", 1) < 0) return RMS$_WER;
+            if (rms_write_exact(fd, "\n", 1) < 0) return RMS$_WER;
             break;
         }
 
         case FAB$C_STMCR: {
             /* Stream-CR: write data followed by \r */
             if (len > 0) {
-                if (write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
-            if (write_exact(fd, "\r", 1) < 0) return RMS$_WER;
+            if (rms_write_exact(fd, "\r", 1) < 0) return RMS$_WER;
             break;
         }
 
         case FAB$C_STM: {
             /* Stream: write data followed by \r\n */
             if (len > 0) {
-                if (write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
-            if (write_exact(fd, "\r\n", 2) < 0) return RMS$_WER;
+            if (rms_write_exact(fd, "\r\n", 2) < 0) return RMS$_WER;
             break;
         }
 
@@ -336,7 +299,7 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
             uint16_t copylen = (len < recsize) ? len : recsize;
             memcpy(padded, buf, copylen);
 
-            int rc = write_exact(fd, padded, recsize);
+            int rc = rms_write_exact(fd, padded, recsize);
             free(padded);
             if (rc < 0) return RMS$_WER;
             break;
@@ -352,14 +315,14 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
                 return RMS$_RTB;
             }
 
-            if (write_exact(fd, &len, 2) < 0) return RMS$_WER;
+            if (rms_write_exact(fd, &len, 2) < 0) return RMS$_WER;
             if (len > 0) {
-                if (write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
             /* Pad to word boundary */
             if (len & 1) {
                 char zero = 0;
-                if (write_exact(fd, &zero, 1) < 0) return RMS$_WER;
+                if (rms_write_exact(fd, &zero, 1) < 0) return RMS$_WER;
             }
             break;
         }
@@ -379,22 +342,22 @@ uint32_t rms_seq_put(struct FAB *fab, struct RAB *rab)
             }
 
             uint16_t total = (uint16_t)(fsz + len);
-            if (write_exact(fd, &total, 2) < 0) return RMS$_WER;
+            if (rms_write_exact(fd, &total, 2) < 0) return RMS$_WER;
 
             /* Write fixed control area (zeroed) */
             char ctrl[256];
             memset(ctrl, 0, sizeof(ctrl));
-            if (write_exact(fd, ctrl, fsz) < 0) return RMS$_WER;
+            if (rms_write_exact(fd, ctrl, fsz) < 0) return RMS$_WER;
 
             /* Write data */
             if (len > 0) {
-                if (write_exact(fd, buf, len) < 0) return RMS$_WER;
+                if (rms_write_exact(fd, buf, len) < 0) return RMS$_WER;
             }
 
             /* Pad to word boundary */
             if (total & 1) {
                 char zero = 0;
-                if (write_exact(fd, &zero, 1) < 0) return RMS$_WER;
+                if (rms_write_exact(fd, &zero, 1) < 0) return RMS$_WER;
             }
             break;
         }

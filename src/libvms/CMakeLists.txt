@@ -34,6 +34,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_operator.c
     rtl/sha256.c
     rtl/sysuaf.c
+    rtl/str_util.c
 )
 target_include_directories(vms PUBLIC include ${VMS_RMS_INCLUDE_DIR} ${VMS_FS_INCLUDE_DIR} ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
 target_link_libraries(vms PUBLIC vmsprocess vmsfs pthread m)

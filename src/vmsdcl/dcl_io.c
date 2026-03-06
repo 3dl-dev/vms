@@ -13,6 +13,7 @@
 
 #include "dcl/context.h"
 #include "dcl/parser.h"
+#include "dcl/vms_messages.h"
 
 #ifdef HAVE_READLINE
 #include <readline/readline.h>
@@ -115,12 +116,7 @@ void dcl_write_error(struct dcl_context *ctx, const char *text)
 void dcl_format_error(const char *facility, int severity, const char *ident,
                       const char *text, char *buf, size_t bufsize)
 {
-    static const char sev_chars[] = "WSEIF";  /* 0=W, 1=S, 2=E, 3=I, 4=F */
-    char sev_char = 'E';
-
-    if (severity >= 0 && severity <= 4) {
-        sev_char = sev_chars[severity];
-    }
+    char sev_char = vms_severity_char(severity);
 
     snprintf(buf, bufsize, "%%%s-%c-%s, %s",
              facility ? facility : "DCL",

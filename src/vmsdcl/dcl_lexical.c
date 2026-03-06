@@ -22,6 +22,7 @@
 
 #include "dcl/context.h"
 #include "dcl/parser.h"
+#include "dcl/dcl_cmd.h"
 #include "dcl/symbol.h"
 #include "ssdef.h"
 #include <vms/privs.h>
@@ -32,12 +33,6 @@ extern int dcl_translate_logical(const char *name, char *result, size_t result_s
 extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
                             char *linux_path, size_t path_size);
 extern int dcl_format_directory(const char *linux_path, char *vms_dir, size_t dir_size);
-
-/* VMS month abbreviations */
-static const char *vms_months[] = {
-    "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
-    "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
-};
 
 /*
  * Format current time in VMS format: DD-MMM-YYYY HH:MM:SS.CC

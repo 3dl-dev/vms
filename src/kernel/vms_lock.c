@@ -39,7 +39,7 @@
 #define SS__SUBLOCKS    112  /* sublocks still held */
 #define SS__CANCELGRANT 116  /* conversion cancelled */
 #define SS__VALNOTVALID 120  /* value block not valid */
-#define SS__INSFMEM     20
+#define SS__INSFMEM     44  /* matches real VMS */
 
 /* Lock mode compatibility matrix */
 static const uint8_t compat[6][6] = {

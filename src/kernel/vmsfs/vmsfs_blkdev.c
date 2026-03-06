@@ -117,6 +117,9 @@ static int vmsfs_get_block(struct inode *inode, sector_t block,
         if (ret)
             return ret;
 
+        /* Flush updated inode metadata (block map) to disk */
+        vmsfs_blkdev_flush_inode(sb, inode);
+
         ret = vmsfs_vbn_to_lbn(vi, vbn, &lbn);
         if (ret)
             return ret;
@@ -725,6 +728,9 @@ static int vmsfs_dir_add_entry(struct super_block *sb, struct inode *dir,
                 memset(de, 0, VMSFS_DIR_ENTRY_SIZE);
                 de->de_fid = cpu_to_le32(fid);
                 de->de_version = cpu_to_le16(version);
+                /* Clamp name_len to avoid overflowing de_name[] */
+                if (name_len > sizeof(de->de_name) - 1)
+                    name_len = sizeof(de->de_name) - 1;
                 de->de_name_len = name_len;
                 memcpy(de->de_name, name, name_len);
                 de->de_name[name_len] = '\0';
@@ -771,6 +777,9 @@ static int vmsfs_dir_add_entry(struct super_block *sb, struct inode *dir,
         de = (struct vmsfs_dir_entry *)bh->b_data;
         de->de_fid = cpu_to_le32(fid);
         de->de_version = cpu_to_le16(version);
+        /* Clamp name_len to avoid overflowing de_name[] */
+        if (name_len > sizeof(de->de_name) - 1)
+            name_len = sizeof(de->de_name) - 1;
         de->de_name_len = name_len;
         memcpy(de->de_name, name, name_len);
         de->de_name[name_len] = '\0';
@@ -1062,8 +1071,11 @@ static int vmsfs_blkdev_iterate(struct file *file, struct dir_context *ctx)
             de = (struct vmsfs_dir_entry *)(bh->b_data + off);
             de_fid = le32_to_cpu(de->de_fid);
 
-            if (de_fid == 0)
+            /* Always count every slot for stable positioning */
+            if (de_fid == 0) {
+                entry_pos++;
                 continue;
+            }
 
             /* Skip entries already emitted in previous calls */
             if (entry_pos < ctx->pos) {

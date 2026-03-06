@@ -36,7 +36,7 @@
 #define SS__ILLEFC      44  /* illegal event flag number */
 #define SS__BADPARAM    20
 #define SS__UNASEFC     48  /* unassociated common EFC */
-#define SS__INSFMEM     20
+#define SS__INSFMEM     44  /* matches real VMS */
 
 /* Global common event flag cluster list */
 LIST_HEAD(vms_common_ef_list);

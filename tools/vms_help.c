@@ -477,6 +477,10 @@ static void interactive_help(void)
         }
 
         /* Search for the topic */
+        if (depth >= MAX_DEPTH) {
+            printf("\n  Topic nesting too deep (max %d levels)\n", MAX_DEPTH);
+            continue;
+        }
         stack[depth] = strdup(input);
         depth++;
 
@@ -510,8 +514,15 @@ int main(int argc, char *argv[])
     const char *help_path = help_linux;
     const char *env_path = getenv("SYS$HELP");
     if (env_path) {
+        static char env_linux[512];
         static char full_path[512];
-        snprintf(full_path, sizeof(full_path), "%s/HELPLIB.HLP", env_path);
+        /* If env_path looks like a VMS filespec, translate it */
+        if (strchr(env_path, ':') || strchr(env_path, '[')) {
+            vmsfs_to_linux_path(env_path, env_linux, sizeof(env_linux));
+            snprintf(full_path, sizeof(full_path), "%s/HELPLIB.HLP", env_linux);
+        } else {
+            snprintf(full_path, sizeof(full_path), "%s/HELPLIB.HLP", env_path);
+        }
         help_path = full_path;
     }
 

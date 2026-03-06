@@ -18,9 +18,6 @@
  *   HELP
  */
 
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,18 +30,7 @@
 #include <errno.h>
 #include <limits.h>
 
-/* ------------------------------------------------------------------ */
-/*  sysparams.dat binary format (shared with SYSGEN)                  */
-/* ------------------------------------------------------------------ */
-struct sysgen_param {
-    char     name[32];
-    uint32_t current;
-    uint32_t default_val;
-    uint32_t min_val;
-    uint32_t max_val;
-    uint8_t  flags;
-    char     description[80];
-};
+#include "sysgen_params.h"
 
 /* ------------------------------------------------------------------ */
 /*  Paths                                                              */
@@ -318,30 +304,51 @@ static void cmd_parameters_show(const char *rest)
         return;
     }
 
-    struct sysgen_param param;
+    /* Read and validate sysgen_file header */
+    struct sysgen_file sf;
+    if (fread(&sf, sizeof(sf), 1, fp) != 1) {
+        printf("%%SYSMAN-E-READERR, error reading parameter file\n");
+        fclose(fp);
+        return;
+    }
+    fclose(fp);
+
+    if (sf.magic != SYSGEN_MAGIC) {
+        printf("%%SYSMAN-E-BADFILE, %s is not a valid SYSGEN parameter file\n",
+               SYSPARAMS_DAT);
+        return;
+    }
+    if (sf.version != SYSGEN_VERSION) {
+        printf("%%SYSMAN-E-BADVER, unsupported parameter file version %u\n",
+               sf.version);
+        return;
+    }
+    if (sf.count > SYSGEN_MAX_PARAMS)
+        sf.count = SYSGEN_MAX_PARAMS;
+
     int found = 0;
-    while (fread(&param, sizeof(param), 1, fp) == 1) {
+    for (uint32_t i = 0; i < sf.count; i++) {
+        struct sysgen_param *param = &sf.params[i];
         char pname[33];
-        memcpy(pname, param.name, 32);
+        memcpy(pname, param->name, 32);
         pname[32] = '\0';
         /* Trim trailing spaces */
-        for (int i = 31; i >= 0 && (pname[i] == ' ' || pname[i] == '\0'); i--)
-            pname[i] = '\0';
+        for (int j = 31; j >= 0 && (pname[j] == ' ' || pname[j] == '\0'); j--)
+            pname[j] = '\0';
         str_upper(pname);
         if (strcmp(pname, name) == 0) {
             found = 1;
             printf("\nParameter Name    Current    Default    Minimum    Maximum\n");
             printf("--------------    -------    -------    -------    -------\n");
             printf("%-16s  %-9u  %-9u  %-9u  %u\n",
-                   pname, param.current, param.default_val,
-                   param.min_val, param.max_val);
-            if (param.description[0])
-                printf("  %s\n", param.description);
+                   pname, param->current, param->default_val,
+                   param->min_val, param->max_val);
+            if (param->description[0])
+                printf("  %s\n", param->description);
             printf("\n");
             break;
         }
     }
-    fclose(fp);
 
     if (!found)
         printf("%%SYSMAN-E-NOTFOUND, parameter %s not found\n", name);
@@ -380,31 +387,53 @@ static void cmd_parameters_set(const char *rest)
         return;
     }
 
-    struct sysgen_param param;
-    long offset = 0;
+    /* Read and validate sysgen_file header */
+    struct sysgen_file sf;
+    if (fread(&sf, sizeof(sf), 1, fp) != 1) {
+        printf("%%SYSMAN-E-READERR, error reading parameter file\n");
+        fclose(fp);
+        return;
+    }
+
+    if (sf.magic != SYSGEN_MAGIC) {
+        printf("%%SYSMAN-E-BADFILE, %s is not a valid SYSGEN parameter file\n",
+               SYSPARAMS_DAT);
+        fclose(fp);
+        return;
+    }
+    if (sf.version != SYSGEN_VERSION) {
+        printf("%%SYSMAN-E-BADVER, unsupported parameter file version %u\n",
+               sf.version);
+        fclose(fp);
+        return;
+    }
+    if (sf.count > SYSGEN_MAX_PARAMS)
+        sf.count = SYSGEN_MAX_PARAMS;
+
     int found = 0;
-    while (fread(&param, sizeof(param), 1, fp) == 1) {
+    for (uint32_t i = 0; i < sf.count; i++) {
+        struct sysgen_param *param = &sf.params[i];
         char pname[33];
-        memcpy(pname, param.name, 32);
+        memcpy(pname, param->name, 32);
         pname[32] = '\0';
-        for (int i = 31; i >= 0 && (pname[i] == ' ' || pname[i] == '\0'); i--)
-            pname[i] = '\0';
+        for (int j = 31; j >= 0 && (pname[j] == ' ' || pname[j] == '\0'); j--)
+            pname[j] = '\0';
         str_upper(pname);
         if (strcmp(pname, name) == 0) {
             found = 1;
-            if (value < param.min_val || value > param.max_val) {
+            if (value < param->min_val || value > param->max_val) {
                 printf("%%SYSMAN-E-RANGE, value %u outside range [%u, %u]\n",
-                       value, param.min_val, param.max_val);
+                       value, param->min_val, param->max_val);
                 fclose(fp);
                 return;
             }
-            param.current = value;
-            fseek(fp, offset, SEEK_SET);
-            fwrite(&param, sizeof(param), 1, fp);
+            param->current = value;
+            /* Write entire file back */
+            fseek(fp, 0, SEEK_SET);
+            fwrite(&sf, sizeof(sf), 1, fp);
             printf("%%SYSMAN-I-SETPARAM, %s set to %u\n", pname, value);
             break;
         }
-        offset += (long)sizeof(param);
     }
     fclose(fp);
 

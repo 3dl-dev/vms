@@ -18,6 +18,7 @@
 #include <limits.h>
 #include <pthread.h>
 #include "rms/rms.h"
+#include "rms_internal.h"
 #include "vmsfs/filespec.h"
 #include "vmsfs/version.h"
 #include "ovmx_layout.h"
@@ -41,6 +42,34 @@ extern int vms$check_access(uint32_t caller_uic, uint32_t owner_uic,
 #define RMS_PROT_WRITE   0x04
 #define RMS_PROT_EXECUTE 0x02
 #define RMS_PROT_DELETE  0x01
+
+/*
+ * Shared I/O helpers (declared in rms_internal.h, used by seq/rel/idx).
+ */
+ssize_t rms_read_exact(int fd, void *buf, size_t count)
+{
+    size_t total = 0;
+    char *p = (char *)buf;
+    while (total < count) {
+        ssize_t n = read(fd, p + total, count - total);
+        if (n < 0) return -1;
+        if (n == 0) break;
+        total += (size_t)n;
+    }
+    return (ssize_t)total;
+}
+
+int rms_write_exact(int fd, const void *buf, size_t count)
+{
+    size_t total = 0;
+    const char *p = (const char *)buf;
+    while (total < count) {
+        ssize_t n = write(fd, p + total, count - total);
+        if (n <= 0) return -1;
+        total += (size_t)n;
+    }
+    return 0;
+}
 
 /* RMS metadata sidecar filename suffix */
 #define RMS_SIDECAR_SUFFIX ".rms_meta"
@@ -165,7 +194,9 @@ static int rms_next_version(const char *dir, const char *basename_noversion)
     name[sizeof(name) - 1] = '\0';
     char *dot = strrchr(name, '.');
     if (dot) {
-        strncpy(ext, dot, sizeof(ext) - 1);
+        /* Strip leading dot — vmsfs API expects ext without dot */
+        const char *ext_no_dot = (dot[1] != '\0') ? dot + 1 : "";
+        strncpy(ext, ext_no_dot, sizeof(ext) - 1);
         ext[sizeof(ext) - 1] = '\0';
         *dot = '\0';
     }
@@ -199,13 +230,19 @@ static int rms_resolve_version(const char *path, char *out, size_t outlen)
     name[sizeof(name) - 1] = '\0';
     char *dot = strrchr(name, '.');
     if (dot) {
-        strncpy(ext, dot, sizeof(ext) - 1);
+        /* Strip leading dot — vmsfs API expects ext without dot */
+        const char *ext_no_dot = (dot[1] != '\0') ? dot + 1 : "";
+        strncpy(ext, ext_no_dot, sizeof(ext) - 1);
         ext[sizeof(ext) - 1] = '\0';
         *dot = '\0';
     }
     int ver = vmsfs_get_highest_version(dir, name, ext);
     if (ver < 1) ver = 1;
-    snprintf(out, outlen, "%s/%s%s;%d", dir, name, ext, ver);
+    if (ext[0]) {
+        snprintf(out, outlen, "%s/%s.%s;%d", dir, name, ext, ver);
+    } else {
+        snprintf(out, outlen, "%s/%s;%d", dir, name, ver);
+    }
     return 0;
 }
 
@@ -462,7 +499,10 @@ static void save_metadata(struct FAB *fab)
         .num_keys = num_keys
     };
 
-    fwrite(&meta, sizeof(meta), 1, f);
+    if (fwrite(&meta, sizeof(meta), 1, f) != 1) {
+        fclose(f);
+        return;
+    }
 
     /* Write key definitions for indexed files */
     if (num_keys > 0) {
@@ -491,7 +531,7 @@ static void save_metadata(struct FAB *fab)
                 kmeta.siz[5] = xab->xab$b_siz5;
                 kmeta.siz[6] = xab->xab$b_siz6;
                 kmeta.siz[7] = xab->xab$b_siz7;
-                fwrite(&kmeta, sizeof(kmeta), 1, f);
+                if (fwrite(&kmeta, sizeof(kmeta), 1, f) != 1) break;
             }
             xab = (struct XABKEY *)xab->xab$l_nxt;
         }
@@ -633,7 +673,7 @@ uint32_t sys$create(void *fab_ptr)
     fab->_resolved_path[sizeof(fab->_resolved_path) - 1] = '\0';
 
     /* Determine creation flags */
-    int flags = O_CREAT | O_RDWR | O_TRUNC;
+    int flags = O_CREAT | O_RDWR;
     if (fab->fab$l_fop & FAB$M_SUP) {
         flags |= O_TRUNC;
     }
@@ -662,9 +702,12 @@ uint32_t sys$create(void *fab_ptr)
     if (fab->fab$b_org == FAB$C_REL && fab->fab$l_mrn > 0 &&
         fab->fab$w_mrs > 0) {
         size_t cell_size = (size_t)fab->fab$w_mrs + 1;  /* +1 for status */
-        size_t total = cell_size * fab->fab$l_mrn;
-        if (ftruncate(fd, (off_t)total) < 0) {
-            /* Non-fatal: allocation is best-effort */
+        /* Overflow check: ensure cell_size * mrn doesn't wrap */
+        if (fab->fab$l_mrn <= SIZE_MAX / cell_size) {
+            size_t total = cell_size * fab->fab$l_mrn;
+            if (ftruncate(fd, (off_t)total) < 0) {
+                /* Non-fatal: allocation is best-effort */
+            }
         }
     }
 
@@ -899,9 +942,11 @@ uint32_t sys$display(void *fab_ptr)
                     dat->xab$q_rdt = (uint64_t)st.st_mtime;
                 } else if (xab->xab$b_cod == XAB$C_PRO) {
                     struct XABPRO *pro = (struct XABPRO *)xab;
-                    /* Convert Unix permissions to VMS protection */
-                    pro->xab$l_uic = (uint32_t)st.st_uid;
-                    pro->xab$w_pro = (uint16_t)(st.st_mode & 0xFFFF);
+                    /* Convert Unix uid/gid to VMS UIC (group << 16 | member) */
+                    pro->xab$l_uic = ((uint32_t)(st.st_gid & 0xFFFF) << 16) |
+                                      (uint32_t)(st.st_uid & 0xFFFF);
+                    /* Convert Unix mode to VMS protection mask */
+                    pro->xab$w_pro = vmsfs_mode_to_protection(st.st_mode);
                 }
                 xab = (struct XABKEY *)xab->xab$l_nxt;
             }

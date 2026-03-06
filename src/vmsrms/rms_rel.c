@@ -17,6 +17,11 @@
 #include <string.h>
 #include <unistd.h>
 #include "rms/rms.h"
+#include "rms_internal.h"
+
+/* Use shared rms_read_exact / rms_write_exact from rms_core.c */
+#define rel_read_exact  rms_read_exact
+#define rel_write_exact rms_write_exact
 
 /* Cell status byte values */
 #define REL_CELL_EMPTY   0x00    /* Cell has never been used */
@@ -30,37 +35,6 @@
 static size_t cell_size(struct FAB *fab)
 {
     return (size_t)fab->fab$w_mrs + 1;
-}
-
-/*
- * Helper: Read exactly 'count' bytes.
- */
-static ssize_t rel_read_exact(int fd, void *buf, size_t count)
-{
-    size_t total = 0;
-    char *p = (char *)buf;
-    while (total < count) {
-        ssize_t n = read(fd, p + total, count - total);
-        if (n < 0) return -1;
-        if (n == 0) break;
-        total += (size_t)n;
-    }
-    return (ssize_t)total;
-}
-
-/*
- * Helper: Write exactly 'count' bytes.
- */
-static int rel_write_exact(int fd, const void *buf, size_t count)
-{
-    size_t total = 0;
-    const char *p = (const char *)buf;
-    while (total < count) {
-        ssize_t n = write(fd, p + total, count - total);
-        if (n <= 0) return -1;
-        total += (size_t)n;
-    }
-    return 0;
 }
 
 /*

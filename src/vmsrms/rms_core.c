@@ -694,9 +694,12 @@ uint32_t sys$close(void *fab_ptr)
         return RMS$_FAB;
     }
 
+    uint32_t close_sts = RMS$_NORMAL;
     if (fab->_linux_fd >= 0) {
         /* Flush before closing */
-        fsync(fab->_linux_fd);
+        if (fsync(fab->_linux_fd) < 0) {
+            close_sts = RMS$_WER;
+        }
         close(fab->_linux_fd);
         fab->_linux_fd = -1;
     }
@@ -725,9 +728,9 @@ uint32_t sys$close(void *fab_ptr)
     }
 
     fab->fab$w_ifi = 0;
-    fab->fab$l_sts = RMS$_NORMAL;
+    fab->fab$l_sts = close_sts;
     fab->fab$l_stv = 0;
-    return RMS$_NORMAL;
+    return close_sts;
 }
 
 /*

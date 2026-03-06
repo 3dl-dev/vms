@@ -191,7 +191,7 @@ uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
         }
 
         off_t offset = (off_t)(rrn * csize);
-        lseek(fd, offset, SEEK_SET);
+        if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_RER;
 
         /* Check if cell is already active */
         uint8_t existing;
@@ -227,7 +227,7 @@ uint32_t rms_rel_put(struct FAB *fab, struct RAB *rab)
 
     /* Write the record at the determined position */
     off_t offset = (off_t)(rrn * csize);
-    lseek(fd, offset, SEEK_SET);
+    if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_WER;
 
     /* Write status byte */
     uint8_t status_byte = REL_CELL_ACTIVE;
@@ -284,7 +284,7 @@ uint32_t rms_rel_update(struct FAB *fab, struct RAB *rab)
 
     size_t csize = cell_size(fab);
     off_t offset = (off_t)(rab->rab$l_bkt * csize);
-    lseek(fd, offset, SEEK_SET);
+    if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_RER;
 
     /* Verify cell is still active */
     uint8_t status_byte;
@@ -333,7 +333,7 @@ uint32_t rms_rel_delete(struct FAB *fab, struct RAB *rab)
 
     size_t csize = cell_size(fab);
     off_t offset = (off_t)(rab->rab$l_bkt * csize);
-    lseek(fd, offset, SEEK_SET);
+    if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_WER;
 
     /* Mark cell as deleted */
     uint8_t status_byte = REL_CELL_DELETED;
@@ -373,7 +373,7 @@ uint32_t rms_rel_find(struct FAB *fab, struct RAB *rab)
     }
 
     off_t offset = (off_t)(rrn * csize);
-    lseek(fd, offset, SEEK_SET);
+    if (lseek(fd, offset, SEEK_SET) < 0) return RMS$_RER;
 
     uint8_t status_byte;
     ssize_t n = read(fd, &status_byte, 1);

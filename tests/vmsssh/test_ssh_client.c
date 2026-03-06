@@ -228,6 +228,8 @@ int main(int argc, char *argv[])
                 char cmd_buf[4096];
                 int cmd_len = snprintf(cmd_buf, sizeof(cmd_buf),
                                        "%s\nLOGOUT\n", command);
+                if (cmd_len > (int)sizeof(cmd_buf))
+                    cmd_len = (int)sizeof(cmd_buf);
                 ssh_channel_write(channel, cmd_buf, (uint32_t)cmd_len);
             }
         }

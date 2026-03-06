@@ -125,7 +125,7 @@ static int channel_pty_window_change(ssh_session session,
 
     /* Send SIGWINCH to shell process group so it picks up the new size */
     if (ctx->shell_pid > 0)
-        kill(ctx->shell_pid, SIGWINCH);
+        kill(-ctx->shell_pid, SIGWINCH);
 
     fprintf(stderr, "%%VMSSSH-I-WINCHG, window changed to %dx%d\n", cols, rows);
     return 0;

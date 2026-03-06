@@ -272,26 +272,25 @@ static void bare_metal_init(void)
  * Used to seed system data files (SYSUAF.DAT, RIGHTSLIST.DAT,
  * STARTUP.COM) from initramfs to the mounted system disk on first boot.
  */
-static void copy_seed_file(const char *src, const char *dst)
+static void copy_seed_file(const char *src, const char *dst, mode_t mode)
 {
-    struct stat st;
-    if (stat(dst, &st) == 0)
-        return;  /* Already exists on system disk */
-
     int sfd = open(src, O_RDONLY);
     if (sfd < 0)
         return;  /* No seed file in initramfs */
 
-    int dfd = open(dst, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int dfd = open(dst, O_WRONLY | O_CREAT | O_EXCL, mode);
     if (dfd < 0) {
         close(sfd);
-        return;
+        return;  /* Already exists or cannot create */
     }
 
     char buf[4096];
     ssize_t n;
-    while ((n = read(sfd, buf, sizeof(buf))) > 0)
-        write(dfd, buf, (size_t)n);
+    while ((n = read(sfd, buf, sizeof(buf))) > 0) {
+        ssize_t written = write(dfd, buf, (size_t)n);
+        if (written < 0)
+            break;
+    }
 
     close(dfd);
     close(sfd);
@@ -310,23 +309,23 @@ static void provision_seed_files(void)
 {
     char src[512], dst[512];
 
-    /* SYSUAF.DAT → SYS$SYSTEM */
+    /* SYSUAF.DAT → SYS$SYSTEM (0600: contains password hashes) */
     vms_to_linux(VMS_SYSUAF_PATH, dst, sizeof(dst));
     snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT",
              INITRAMFS_BACKUP);
-    copy_seed_file(src, dst);
+    copy_seed_file(src, dst, 0600);
 
-    /* RIGHTSLIST.DAT → SYS$SYSTEM */
+    /* RIGHTSLIST.DAT → SYS$SYSTEM (0600: security data) */
     vms_to_linux(VMS_RIGHTSLIST_PATH, dst, sizeof(dst));
     snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT",
              INITRAMFS_BACKUP);
-    copy_seed_file(src, dst);
+    copy_seed_file(src, dst, 0600);
 
-    /* STARTUP.COM → SYS$MANAGER */
+    /* STARTUP.COM → SYS$MANAGER (0644: command procedure) */
     vms_to_linux(VMS_STARTUP_PATH, dst, sizeof(dst));
     snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM",
              INITRAMFS_BACKUP);
-    copy_seed_file(src, dst);
+    copy_seed_file(src, dst, 0644);
 }
 
 /*

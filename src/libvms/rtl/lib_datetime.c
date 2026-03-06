@@ -179,21 +179,25 @@ uint32_t lib$cvt_otb(int32_t ndigits, const char *text, int32_t *value) {
  * Thin wrapper around sys$fao for LIB$ compatibility.
  * See sys$fao in sys_fao.c for full implementation.
  */
+/* Forward declaration for directive counter in sys_fao.c */
+extern int sys$fao_count_args(const char *ctrl, uint16_t len);
+
 uint32_t lib$sys_fao(const struct dsc$descriptor_s *ctrl_str,
                      uint16_t *outlen,
                      struct dsc$descriptor_s *out_str, ...) {
+    if (!ctrl_str || !ctrl_str->dsc$a_pointer) return SS$_BADPARAM;
+
+    /* Count actual directive arguments needed by the control string */
+    int needed = sys$fao_count_args(ctrl_str->dsc$a_pointer, ctrl_str->dsc$w_length);
+    if (needed > 256) needed = 256;
+
+    /* Build argument array from varargs — only read what's needed */
+    uint64_t arglist[256];
     va_list args;
     va_start(args, out_str);
-
-    /* Build argument array from varargs */
-    uint64_t arglist[256];
-    int arg_count = 0;
-
-    while (arg_count < 256) {
-        arglist[arg_count++] = va_arg(args, uint64_t);
-        if (arg_count >= 64) break;
+    for (int i = 0; i < needed; i++) {
+        arglist[i] = va_arg(args, uint64_t);
     }
-
     va_end(args);
 
     /* Call sys$faol with the argument array */
@@ -210,8 +214,21 @@ uint32_t lib$sys_faol(const struct dsc$descriptor_s *ctrl_str,
                       uint16_t *outlen,
                       struct dsc$descriptor_s *out_str,
                       const uint32_t *prmlst) {
-    /* Cast prmlst to uint64_t* as sys$faol expects 64-bit arguments on this platform */
-    return sys$faol(ctrl_str, outlen, out_str, (const uint64_t *)prmlst);
+    if (!ctrl_str || !ctrl_str->dsc$a_pointer) return SS$_BADPARAM;
+
+    /* sys$faol expects a uint64_t array. Build one from the uint32_t parameter
+     * list to avoid strict-aliasing violations from type-punning. */
+    int needed = sys$fao_count_args(ctrl_str->dsc$a_pointer, ctrl_str->dsc$w_length);
+    if (needed > 256) needed = 256;
+
+    uint64_t args[256];
+    if (prmlst) {
+        for (int i = 0; i < needed; i++) {
+            args[i] = (uint64_t)prmlst[i];
+        }
+    }
+
+    return sys$faol(ctrl_str, outlen, out_str, prmlst ? args : NULL);
 }
 
 /*

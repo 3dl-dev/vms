@@ -81,8 +81,11 @@ static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
             }
             if (iosb) {
                 iosb->iosb$w_status = (uint16_t)SS$_NORMAL;
-                iosb->iosb$w_bcnt = (uint16_t)result;
-                iosb->iosb$l_dev_depend = 0;
+                /* VMS IOSB byte count is 16-bit; transfers >65535 bytes
+                 * are clamped.  The dev_depend field carries the full
+                 * 32-bit count when callers need it. */
+                iosb->iosb$w_bcnt = (result > 65535) ? 65535 : (uint16_t)result;
+                iosb->iosb$l_dev_depend = (uint32_t)result;
             }
             break;
 
@@ -108,8 +111,9 @@ static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
             }
             if (iosb) {
                 iosb->iosb$w_status = (uint16_t)SS$_NORMAL;
-                iosb->iosb$w_bcnt = (uint16_t)result;
-                iosb->iosb$l_dev_depend = 0;
+                /* Clamp to 16-bit; full count in dev_depend */
+                iosb->iosb$w_bcnt = (result > 65535) ? 65535 : (uint16_t)result;
+                iosb->iosb$l_dev_depend = (uint32_t)result;
             }
             break;
 

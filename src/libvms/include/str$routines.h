@@ -455,6 +455,7 @@ uint32_t str$analyze_sdesc(
 #define STR$_INSVIRMEM  0x0080104C  /* Insufficient virtual memory */
 #define STR$_NEGSTRLEN  0x00801054  /* Negative string length */
 #define STR$_WRONUMARG  0x0080105C  /* Wrong number of arguments */
+#define STR$_STRTOOLON  0x00801064  /* String too long */
 
 #ifdef __cplusplus
 }

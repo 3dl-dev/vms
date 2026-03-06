@@ -71,7 +71,9 @@ uint32_t str$concat(struct dsc$descriptor_s *dest,
                     const struct dsc$descriptor_s *src2, ...) {
     if (!dest || !src1 || !src2) return SS$_BADPARAM;
 
-    uint16_t total = src1->dsc$w_length + src2->dsc$w_length;
+    uint32_t total32 = (uint32_t)src1->dsc$w_length + (uint32_t)src2->dsc$w_length;
+    if (total32 > UINT16_MAX) return STR$_STRTOOLON;
+    uint16_t total = (uint16_t)total32;
 
     if (dest->dsc$b_class == DSC$K_CLASS_D) {
         struct dsc$descriptor_d *ddest = (struct dsc$descriptor_d *)dest;
@@ -433,7 +435,10 @@ uint32_t str$prefix(struct dsc$descriptor_s *dest,
 
     struct dsc$descriptor_d *ddest = (struct dsc$descriptor_d *)dest;
 
-    uint16_t new_len = prefix->dsc$w_length + ddest->dsc$w_length;
+    uint32_t new_len32 = (uint32_t)prefix->dsc$w_length + (uint32_t)ddest->dsc$w_length;
+    if (new_len32 > UINT16_MAX) return STR$_STRTOOLON;
+    uint16_t new_len = (uint16_t)new_len32;
+
     char *new_buf = malloc(new_len);
     if (!new_buf) return SS$_INSFMEM;
 
@@ -469,7 +474,10 @@ uint32_t str$append(struct dsc$descriptor_s *dest,
     /* Appending nothing is a no-op */
     if (suffix->dsc$w_length == 0) return SS$_NORMAL;
 
-    uint16_t new_len = ddest->dsc$w_length + suffix->dsc$w_length;
+    uint32_t new_len32 = (uint32_t)ddest->dsc$w_length + (uint32_t)suffix->dsc$w_length;
+    if (new_len32 > UINT16_MAX) return STR$_STRTOOLON;
+    uint16_t new_len = (uint16_t)new_len32;
+
     char *old_buf = ddest->dsc$a_pointer;
     char *new_buf = realloc(old_buf, new_len);
     if (!new_buf) return SS$_INSFMEM;

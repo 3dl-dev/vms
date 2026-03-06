@@ -125,6 +125,13 @@ uint32_t sys$enqw(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
         return SS$_EXENQLM;
     }
 
+    /* Reject resource names containing path separators or traversal */
+    if (strchr(name, '/') || strstr(name, "..")) {
+        pthread_mutex_unlock(&lock_mgr_mutex);
+        lksb->lksb$w_status = (uint16_t)SS$_BADPARAM;
+        return SS$_BADPARAM;
+    }
+
     /* Create/open the lock file for this resource */
     char lockpath[256];
     snprintf(lockpath, sizeof(lockpath), "%s/%s.lck", LOCK_DIR, name);

@@ -18,6 +18,42 @@
 #include "prcdef.h"
 #include "lnmdef.h"
 #include "rmsdef.h"
+#include <pthread.h>
+
+/*
+ * Side table for lib$find_file context handles.
+ * Maps uint32 handles (1..MAX_FIND_FILE_CONTEXTS) to glob_t pointers,
+ * avoiding 64-bit pointer truncation when stored in uint32_t *context.
+ */
+#define MAX_FIND_FILE_CONTEXTS 64
+static glob_t *find_file_table[MAX_FIND_FILE_CONTEXTS];
+static pthread_mutex_t find_file_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static uint32_t find_file_alloc(glob_t *pglob) {
+    pthread_mutex_lock(&find_file_lock);
+    for (uint32_t i = 0; i < MAX_FIND_FILE_CONTEXTS; i++) {
+        if (!find_file_table[i]) {
+            find_file_table[i] = pglob;
+            pthread_mutex_unlock(&find_file_lock);
+            return i + 1;  /* handles are 1-based */
+        }
+    }
+    pthread_mutex_unlock(&find_file_lock);
+    return 0;  /* table full */
+}
+
+static glob_t *find_file_lookup(uint32_t handle) {
+    if (handle == 0 || handle > MAX_FIND_FILE_CONTEXTS) return NULL;
+    return find_file_table[handle - 1];
+}
+
+static void find_file_release(uint32_t handle) {
+    if (handle > 0 && handle <= MAX_FIND_FILE_CONTEXTS) {
+        pthread_mutex_lock(&find_file_lock);
+        find_file_table[handle - 1] = NULL;
+        pthread_mutex_unlock(&find_file_lock);
+    }
+}
 
 /* Imported from starlet.h via forward declarations */
 extern uint32_t sys$getjpiw(uint32_t efn, const uint32_t *pidadr,
@@ -234,8 +270,14 @@ uint32_t lib$find_file(const struct dsc$descriptor_s *filespec,
             return SS$_INSFMEM;
         }
 
-        /* Store glob result in context */
-        *context = (uint32_t)(uintptr_t)pglob;
+        /* Store glob result in side table, return handle */
+        uint32_t handle = find_file_alloc(pglob);
+        if (handle == 0) {
+            globfree(pglob);
+            free(pglob);
+            return SS$_INSFMEM;
+        }
+        *context = handle;
 
         /* If no matches, return NMF immediately */
         if (pglob->gl_pathc == 0 ||
@@ -243,6 +285,7 @@ uint32_t lib$find_file(const struct dsc$descriptor_s *filespec,
             /* GLOB_NOCHECK means no match - just returned input */
             globfree(pglob);
             free(pglob);
+            find_file_release(*context);
             *context = 0;
             return RMS$_NMF;
         }
@@ -250,8 +293,8 @@ uint32_t lib$find_file(const struct dsc$descriptor_s *filespec,
         /* Mark that we're at the first result */
         pglob->gl_offs = 0;
     } else {
-        /* Subsequent call: retrieve stored glob_t */
-        pglob = (glob_t *)(uintptr_t)(*context);
+        /* Subsequent call: retrieve stored glob_t from side table */
+        pglob = find_file_lookup(*context);
         if (!pglob) return RMS$_NMF;
 
         /* Move to next match */
@@ -262,6 +305,7 @@ uint32_t lib$find_file(const struct dsc$descriptor_s *filespec,
     if (pglob->gl_offs >= pglob->gl_pathc) {
         globfree(pglob);
         free(pglob);
+        find_file_release(*context);
         *context = 0;
         return RMS$_NMF;
     }
@@ -319,9 +363,14 @@ uint32_t lib$find_file_end(uint32_t *context) {
     if (!context) return SS$_BADPARAM;
     if (*context == 0) return SS$_NORMAL;
 
-    glob_t *pglob = (glob_t *)(uintptr_t)(*context);
+    glob_t *pglob = find_file_lookup(*context);
+    if (!pglob) {
+        *context = 0;
+        return SS$_BADPARAM;
+    }
     globfree(pglob);
     free(pglob);
+    find_file_release(*context);
     *context = 0;
 
     return SS$_NORMAL;

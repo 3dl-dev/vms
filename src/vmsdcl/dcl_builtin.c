@@ -4720,6 +4720,66 @@ static int cmd_monitor(struct dcl_command *cmd)
 }
 
 /* ================================================================== */
+/*           SYSGEN — System Generation Utility                        */
+/* ================================================================== */
+
+static int cmd_sysgen(struct dcl_command *cmd)
+{
+    (void)cmd;
+
+    /* Locate SYSGEN.EXE: try install path first, then build path */
+    static const char *candidates[] = {
+        "/vms/SYS0/SYSCOMMON/SYSEXE/SYSGEN.EXE",
+        "/usr/local/bin/SYSGEN.EXE",
+        "/usr/bin/SYSGEN.EXE",
+        NULL
+    };
+
+    const char *sysgen_bin = NULL;
+    for (int i = 0; candidates[i]; i++) {
+        if (access(candidates[i], X_OK) == 0) {
+            sysgen_bin = candidates[i];
+            break;
+        }
+    }
+
+    if (!sysgen_bin) {
+        sysgen_bin = "SYSGEN.EXE";
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Child: exec SYSGEN.EXE */
+        execlp(sysgen_bin, sysgen_bin, (char *)NULL);
+        for (int i = 0; candidates[i]; i++) {
+            execl(candidates[i], candidates[i], (char *)NULL);
+        }
+        fprintf(stderr, "%%SYSGEN-F-NOIMG, cannot execute SYSGEN.EXE\n");
+        _exit(1);
+    } else if (pid > 0) {
+        extern volatile sig_atomic_t dcl_running_child;
+        struct dcl_context *sysgen_ctx = dcl_get_context();
+        dcl_running_child = (sig_atomic_t)pid;
+        int wstatus;
+        waitpid(pid, &wstatus, WUNTRACED);
+        dcl_running_child = 0;
+        if (WIFSTOPPED(wstatus)) {
+            printf("\nInterrupt\n");
+            sysgen_ctx->interrupted_pid = pid;
+            return SS$_ABORT;
+        }
+        if (WIFEXITED(wstatus)) {
+            return (WEXITSTATUS(wstatus) == 0) ? SS$_NORMAL : SS$_ABORT;
+        }
+    } else {
+        dcl_error("DCL", 4, "CREPRC", "cannot create process for SYSGEN");
+        return SS$_ABORT;
+    }
+
+    return SS$_NORMAL;
+}
+
+/* ================================================================== */
 /*           OPCOM Commands: REPLY and REQUEST                         */
 /* ================================================================== */
 
@@ -5743,6 +5803,8 @@ static struct dcl_verb builtin_verbs[] = {
       "Stop the current process" },
     { "SUBMIT",      cmd_submit,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Submit a command procedure to a batch queue" },
+    { "SYSGEN",      cmd_sysgen,      CDU_F_ABBREV | CDU_F_PARAM, 4,
+      "Invoke SYSGEN system parameter utility" },
     { "TCPIP",       cmd_tcpip,       CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "TCP/IP Services network management commands" },
     { "TYPE",        cmd_type,        CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,

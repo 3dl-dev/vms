@@ -12,6 +12,8 @@
 
 #include "vmsqueue.h"
 #include <ssdef.h>
+#include <ovmx_layout.h>
+#include <vmsfs/filespec.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -222,8 +224,14 @@ int vmsq_init(const char *db_path)
     if (g_db_file)
         return SS$_NORMAL;  /* Already initialized */
 
-    const char *path = db_path ? db_path : "/vms/SYS0/SYSCOMMON/SYSMGR/QMAN$MASTER.DAT";
-    strncpy(g_db_path, path, sizeof(g_db_path) - 1);
+    if (db_path) {
+        strncpy(g_db_path, db_path, sizeof(g_db_path) - 1);
+    } else {
+        /* Resolve VMS filespec to Linux path at runtime */
+        if (vmsfs_to_linux_path(VMS_QMAN_DB, g_db_path, sizeof(g_db_path)) != 0) {
+            return SS$_NOSUCHFILE;
+        }
+    }
 
     /* Try to open existing file */
     g_db_file = fopen(g_db_path, "r+b");

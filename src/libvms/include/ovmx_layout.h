@@ -72,4 +72,10 @@
 #define VMS_AUTHORIZE_PATH   "SYS$SYSTEM:AUTHORIZE.EXE"
 #define VMS_INITIALIZE_PATH  "SYS$SYSTEM:INITIALIZE.EXE"
 
+/* ------------------------------------------------------------------ */
+/* VMS filespecs for data files                                       */
+/* ------------------------------------------------------------------ */
+
+#define VMS_QMAN_DB          "SYS$MANAGER:QMAN$MASTER.DAT"
+
 #endif /* __OVMX_LAYOUT_H */

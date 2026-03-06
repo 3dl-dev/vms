@@ -111,18 +111,37 @@ uint32_t sys$chkpro(void *objpro) {
 /*
  * vms$check_access - Simplified access check (convenience wrapper).
  *
+ * Compares caller_uic against owner_uic and the protection mask to
+ * determine if the requested access_type is allowed.
+ *
  * Returns 1 if access is granted, 0 if denied.
  */
-int vms$check_access(uint32_t uic, uint32_t protection, int access_type) {
-    struct {
-        uint32_t owner_uic;
-        uint16_t protection;
-        uint16_t access_type;
-    } pro;
+int vms$check_access(uint32_t caller_uic, uint32_t owner_uic,
+                     uint32_t protection, int access_type) {
+    uint16_t prot = (uint16_t)protection;
+    uint16_t access = (uint16_t)access_type;
 
-    pro.owner_uic = uic;
-    pro.protection = (uint16_t)protection;
-    pro.access_type = (uint16_t)access_type;
+    /* Determine the relevant category based on caller vs owner UIC */
+    uint16_t category_mask;
 
-    return (sys$chkpro(&pro) & 1) ? 1 : 0;
+    if (caller_uic == 0) {
+        /* UID 0 (root) is treated as SYSTEM */
+        category_mask = (uint16_t)((prot >> PROT$V_SYSTEM) & 0x0F);
+    } else if (caller_uic == owner_uic) {
+        /* Owner access */
+        category_mask = (uint16_t)((prot >> PROT$V_OWNER) & 0x0F);
+    } else if ((caller_uic >> 16) == (owner_uic >> 16)) {
+        /* Same group */
+        category_mask = (uint16_t)((prot >> PROT$V_GROUP) & 0x0F);
+    } else {
+        /* World */
+        category_mask = (uint16_t)((prot >> PROT$V_WORLD) & 0x0F);
+    }
+
+    /* In VMS, a SET bit means access is DENIED */
+    if (category_mask & access) {
+        return 0;
+    }
+
+    return 1;
 }

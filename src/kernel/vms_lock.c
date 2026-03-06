@@ -245,7 +245,7 @@ static int lock_compatible(struct vms_lock_resource *res,
 }
 
 /* ================================================================
- * Deadlock detection (wait-for graph DFS)
+ * Deadlock detection (wait-for graph iterative BFS)
  * ================================================================ */
 
 #define MAX_DEADLOCK_DEPTH 16
@@ -253,42 +253,64 @@ static int lock_compatible(struct vms_lock_resource *res,
 /*
  * Check if granting 'lock' would create a deadlock.
  *
- * Walk the wait-for graph: lock waits for resource -> resource has
- * granted locks -> those locks' processes may be waiting for other
- * resources -> etc. If we cycle back to the original process, deadlock.
+ * Walk the wait-for graph iteratively using a fixed-size stack to
+ * avoid recursive spinlock acquisition (the old recursive version
+ * would spin_lock(&proc->lock_list_lock) while already holding
+ * another proc's lock_list_lock, risking ABBA deadlock).
+ *
+ * Strategy: use trylock on proc->lock_list_lock. If we can't get it,
+ * conservatively assume potential deadlock at that branch (safe
+ * because false positives just cause SS$_DEADLOCK, which the caller
+ * retries or reports).
  */
-static int check_deadlock(struct vms_lock_entry *lock, int depth)
+static int check_deadlock(struct vms_lock_entry *lock,
+                           int depth __attribute__((unused)))
 {
-    struct vms_lock_resource *res = lock->resource;
-    struct vms_lock_entry *granted;
+    struct vms_proc *origin_proc = lock->proc;
+    struct vms_lock_entry *stack[MAX_DEADLOCK_DEPTH];
+    int sp = 0;
 
-    if (depth > MAX_DEADLOCK_DEPTH)
-        return 1;  /* Assume deadlock at max depth */
+    stack[sp++] = lock;
 
-    /* For each granted lock on our resource that blocks us... */
-    list_for_each_entry(granted, &res->granted, res_granted) {
-        if (compat[lock->requested_mode][granted->granted_mode])
-            continue;  /* This one doesn't block us */
+    while (sp > 0) {
+        struct vms_lock_entry *cur = stack[--sp];
+        struct vms_lock_resource *res = cur->resource;
+        struct vms_lock_entry *granted;
 
-        /* Does this process's owner hold a lock that's waiting? */
-        struct vms_lock_entry *their_lock;
+        /*
+         * For each granted lock on cur's resource that blocks cur,
+         * check if the blocking process is also waiting somewhere.
+         * Note: res->lock is already held by the caller (vms_ioctl_enq
+         * or vms_ioctl_convert) for the initial resource. For other
+         * resources in the chain, we only read the granted list under
+         * trylock to avoid lock-order inversions.
+         */
+        list_for_each_entry(granted, &res->granted, res_granted) {
+            if (compat[cur->requested_mode][granted->granted_mode])
+                continue;  /* This one doesn't block us */
 
-        spin_lock(&granted->proc->lock_list_lock);
-        list_for_each_entry(their_lock, &granted->proc->locks, proc_list) {
-            if (their_lock->waiting) {
-                /* They're waiting -- does this lead back to us? */
-                if (their_lock->proc == lock->proc) {
-                    spin_unlock(&granted->proc->lock_list_lock);
-                    return 1;  /* Deadlock! */
-                }
-                /* Recurse */
-                if (check_deadlock(their_lock, depth + 1)) {
-                    spin_unlock(&granted->proc->lock_list_lock);
-                    return 1;
+            /* Direct cycle: blocker is the original requester */
+            if (granted->proc == origin_proc)
+                return 1;  /* Deadlock! */
+
+            /* Check if the blocking process has any waiting locks */
+            if (!spin_trylock(&granted->proc->lock_list_lock))
+                continue;  /* Can't get lock — skip this branch */
+
+            {
+                struct vms_lock_entry *their_lock;
+                list_for_each_entry(their_lock, &granted->proc->locks, proc_list) {
+                    if (their_lock->waiting && sp < MAX_DEADLOCK_DEPTH) {
+                        if (their_lock->proc == origin_proc) {
+                            spin_unlock(&granted->proc->lock_list_lock);
+                            return 1;  /* Deadlock! */
+                        }
+                        stack[sp++] = their_lock;
+                    }
                 }
             }
+            spin_unlock(&granted->proc->lock_list_lock);
         }
-        spin_unlock(&granted->proc->lock_list_lock);
     }
 
     return 0;

@@ -151,8 +151,8 @@ void vms_proc_free(struct vms_proc *proc)
     /* Release common event flag associations */
     vms_proc_release_common_ef(proc);
 
-    /* RCU-deferred free */
-    kmem_cache_free(vms_proc_cache, proc);
+    /* RCU-deferred free — proc may still be accessed by RCU readers */
+    kfree_rcu(proc, rcu);
 }
 
 /* ================================================================
@@ -318,14 +318,12 @@ static void __exit vms_exit(void)
     /* Unregister device */
     misc_deregister(&vms_misc);
 
-    /* Free all process state */
-    spin_lock(&vms_proc_hash_lock);
+    /* Free all process state (vms_proc_free handles sub-objects) */
     hash_for_each_safe(vms_proc_hash, bkt, tmp, proc, hash_node) {
-        hash_del(&proc->hash_node);
-        /* Direct free here since we're shutting down */
-        kmem_cache_free(vms_proc_cache, proc);
+        vms_proc_free(proc);
     }
-    spin_unlock(&vms_proc_hash_lock);
+    /* Wait for RCU callbacks to complete before destroying the cache */
+    rcu_barrier();
 
     /* Cleanup subsystems */
     vms_lock_cleanup();

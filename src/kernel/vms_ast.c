@@ -95,18 +95,19 @@ long vms_ioctl_dclast(struct vms_proc *proc, unsigned long arg)
 
     ast_state = &proc->ast[args.acmode];
 
+    /* Allocate before taking spinlock to avoid GFP_KERNEL in atomic context */
+    entry = kmalloc(sizeof(*entry), GFP_KERNEL);
+    if (!entry) {
+        args.status = SS__INSFMEM;
+        goto out;
+    }
+
     /* Check quota */
     spin_lock(&ast_state->lock);
     if (ast_state->count >= VMS_AST_MAX_PER_MODE) {
         spin_unlock(&ast_state->lock);
+        kfree(entry);
         args.status = SS__EXASTLM;
-        goto out;
-    }
-
-    entry = kmalloc(sizeof(*entry), GFP_KERNEL);
-    if (!entry) {
-        spin_unlock(&ast_state->lock);
-        args.status = SS__INSFMEM;
         goto out;
     }
 
@@ -175,7 +176,6 @@ long vms_ioctl_setast(struct vms_proc *proc, unsigned long arg)
  */
 long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg)
 {
-    (void)arg;
     struct vms_ast_args args;
     struct vms_ast_entry *entry;
     int mode;
@@ -206,7 +206,7 @@ long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg)
         args.status = SS__NORMAL;
         kfree(entry);
 
-        if (copy_to_user((void __user *)current->stack, &args, sizeof(args)))
+        if (copy_to_user((void __user *)arg, &args, sizeof(args)))
             return -EFAULT;
         /* Actually we need a user pointer -- use the ioctl arg mechanism.
          * DELIVERAST is _IO (no arg), so we return via the ioctl return value

@@ -144,102 +144,19 @@ static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
 }
 
 /*
- * sys$qio - Queue I/O Request (asynchronous).
+ * qio_validate_and_classify - Shared validation for sys$qio and sys$qiow.
  *
- * Submits the I/O via io_uring and returns immediately. The IOSB is
- * filled, event flag set, and AST called when the I/O completes.
- * Falls back to synchronous I/O if io_uring is not available.
- */
-uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
-                  void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
-                  void *p1, uint32_t p2, uint32_t p3,
-                  uint32_t p4, uint32_t p5, uint32_t p6) {
-    (void)p4; (void)p5; (void)p6;
-
-    int fd = vms$$chan_to_fd(chan);
-    if (fd < 0) return SS$_IVCHAN;
-
-    uint32_t base_func = func & 0xFF;  /* Strip function modifiers */
-
-    /* Handle IO$_NOP synchronously -- no I/O needed */
-    if (base_func == IO$_NOP) {
-        struct _iosb *iosb = (struct _iosb *)iosb_ptr;
-        if (iosb) {
-            iosb->iosb$w_status = (uint16_t)SS$_NORMAL;
-            iosb->iosb$w_bcnt = 0;
-            iosb->iosb$l_dev_depend = 0;
-        }
-        if (efn != 0) sys$setef(efn);
-        if (astadr) astadr(astprm);
-        return SS$_NORMAL;
-    }
-
-    /* Determine if this is a read or write operation */
-    int is_read;
-    switch (base_func) {
-        case IO$_READVBLK:
-        case IO$_READLBLK:
-        case IO$_READPBLK:
-            is_read = 1;
-            break;
-        case IO$_WRITEVBLK:
-        case IO$_WRITELBLK:
-        case IO$_WRITEPBLK:
-            is_read = 0;
-            break;
-        default: {
-            struct _iosb *iosb = (struct _iosb *)iosb_ptr;
-            if (iosb) {
-                iosb->iosb$w_status = (uint16_t)SS$_ILLIOFUNC;
-                iosb->iosb$w_bcnt = 0;
-                iosb->iosb$l_dev_depend = 0;
-            }
-            return SS$_ILLIOFUNC;
-        }
-    }
-
-    /* Validate buffer */
-    if (!p1) {
-        struct _iosb *iosb = (struct _iosb *)iosb_ptr;
-        if (iosb) {
-            iosb->iosb$w_status = (uint16_t)SS$_BADPARAM;
-            iosb->iosb$w_bcnt = 0;
-            iosb->iosb$l_dev_depend = 0;
-        }
-        return SS$_BADPARAM;
-    }
-
-    /* Try io_uring async submit */
-    if (uring_available()) {
-        /*
-         * Use p3 as the byte offset for block I/O.
-         * Pass (uint64_t)-1 to let the kernel use the file position
-         * when p3 is 0 (stream I/O).
-         */
-        uint64_t offset = (p3 != 0) ? (uint64_t)p3 : (uint64_t)-1;
-        int rc = vms_uring_submit_rw(fd, p1, p2, offset, is_read,
-                                      iosb_ptr, efn, astadr, astprm);
-        if (rc == 0)
-            return SS$_NORMAL;
-        /* Fall through to synchronous if submit failed */
-    }
-
-    /* Synchronous fallback */
-    return qio_sync(fd, base_func, iosb_ptr, p1, p2, efn, astadr, astprm);
-}
-
-/*
- * sys$qiow - Queue I/O Request and Wait for completion.
+ * Resolves the channel to an fd, validates the function code and buffer,
+ * and classifies the operation as read or write.
  *
- * Submits via io_uring and blocks until the I/O completes.
- * Falls back to synchronous I/O if io_uring is not available.
+ * Returns SS$_NORMAL on success (fd and is_read are set), or an error status.
  */
-uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
-                   void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
-                   void *p1, uint32_t p2, uint32_t p3,
-                   uint32_t p4, uint32_t p5, uint32_t p6) {
-    (void)p4; (void)p5; (void)p6;
-
+static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
+                                           void *iosb_ptr, void *p1,
+                                           uint32_t efn,
+                                           void (*astadr)(uint32_t),
+                                           uint32_t astprm,
+                                           int *out_fd, int *out_is_read) {
     int fd = vms$$chan_to_fd(chan);
     if (fd < 0) return SS$_IVCHAN;
 
@@ -255,7 +172,8 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
         }
         if (efn != 0) sys$setef(efn);
         if (astadr) astadr(astprm);
-        return SS$_NORMAL;
+        *out_fd = fd;
+        return 0xFFFFFFFF;  /* Sentinel: NOP handled, caller should return SS$_NORMAL */
     }
 
     /* Determine read/write */
@@ -293,16 +211,74 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
         return SS$_BADPARAM;
     }
 
+    *out_fd = fd;
+    *out_is_read = is_read;
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$qio - Queue I/O Request (asynchronous).
+ *
+ * Submits the I/O via io_uring and returns immediately. The IOSB is
+ * filled, event flag set, and AST called when the I/O completes.
+ * Falls back to synchronous I/O if io_uring is not available.
+ */
+uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
+                  void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
+                  void *p1, uint32_t p2, uint32_t p3,
+                  uint32_t p4, uint32_t p5, uint32_t p6) {
+    (void)p4; (void)p5; (void)p6;
+
+    int fd, is_read;
+    uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,
+                                                 efn, astadr, astprm,
+                                                 &fd, &is_read);
+    if (status == 0xFFFFFFFF) return SS$_NORMAL;  /* NOP handled */
+    if (status != SS$_NORMAL) return status;
+
+    uint32_t base_func = func & 0xFF;
+
+    /* Try io_uring async submit */
+    if (uring_available()) {
+        uint64_t offset = (p3 != 0) ? (uint64_t)p3 : (uint64_t)-1;
+        int rc = vms_uring_submit_rw(fd, p1, p2, offset, is_read,
+                                      iosb_ptr, efn, astadr, astprm);
+        if (rc == 0)
+            return SS$_NORMAL;
+    }
+
+    /* Synchronous fallback */
+    return qio_sync(fd, base_func, iosb_ptr, p1, p2, efn, astadr, astprm);
+}
+
+/*
+ * sys$qiow - Queue I/O Request and Wait for completion.
+ *
+ * Submits via io_uring and blocks until the I/O completes.
+ * Falls back to synchronous I/O if io_uring is not available.
+ */
+uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
+                   void *iosb_ptr, void (*astadr)(uint32_t), uint32_t astprm,
+                   void *p1, uint32_t p2, uint32_t p3,
+                   uint32_t p4, uint32_t p5, uint32_t p6) {
+    (void)p4; (void)p5; (void)p6;
+
+    int fd, is_read;
+    uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,
+                                                 efn, astadr, astprm,
+                                                 &fd, &is_read);
+    if (status == 0xFFFFFFFF) return SS$_NORMAL;  /* NOP handled */
+    if (status != SS$_NORMAL) return status;
+
+    uint32_t base_func = func & 0xFF;
+
     /* Try io_uring: submit + wait */
     if (uring_available()) {
         uint64_t offset = (p3 != 0) ? (uint64_t)p3 : (uint64_t)-1;
         int rc = vms_uring_submit_rw(fd, p1, p2, offset, is_read,
                                       iosb_ptr, efn, astadr, astprm);
         if (rc == 0) {
-            /* Block until completion */
             vms_uring_wait_completion();
-
-            /* Return status from IOSB if available */
             if (iosb_ptr) {
                 struct _iosb *iosb = (struct _iosb *)iosb_ptr;
                 if (iosb->iosb$w_status == (uint16_t)SS$_ENDOFFILE)
@@ -312,7 +288,6 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
             }
             return SS$_NORMAL;
         }
-        /* Fall through to synchronous if submit failed */
     }
 
     /* Synchronous fallback */

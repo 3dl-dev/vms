@@ -25,6 +25,8 @@
 #include <pthread.h>
 #include <errno.h>
 #include "starlet.h"
+#include "ovmx_layout.h"
+#include "vmsfs/filespec.h"
 
 /* Lock modes */
 #define LCK$K_NLMODE  0  /* Null */
@@ -43,7 +45,6 @@ struct lksb {
 };
 
 #define MAX_LOCKS 256
-#define LOCK_DIR "/tmp/ovmx/locks"
 
 /* Internal lock table entry */
 struct lock_entry {
@@ -60,11 +61,28 @@ static uint32_t next_lkid = 1;
 static pthread_mutex_t lock_mgr_mutex = PTHREAD_MUTEX_INITIALIZER;
 static int lock_dir_created = 0;
 
+/* Resolve the VMS lock directory to a Linux path */
+static const char *get_lock_dir(void) {
+    static char lock_dir[1024];
+    static int resolved = 0;
+    if (!resolved) {
+        char systmp_linux[512];
+        vmsfs_to_linux_path(VMS_SYSTMP, systmp_linux, sizeof(systmp_linux));
+        snprintf(lock_dir, sizeof(lock_dir), "%s/locks", systmp_linux);
+        resolved = 1;
+    }
+    return lock_dir;
+}
+
 /* Ensure the lock directory exists */
 static void ensure_lock_dir(void) {
     if (lock_dir_created) return;
-    mkdir("/tmp/ovmx", 0777);
-    mkdir(LOCK_DIR, 0777);
+    const char *dir = get_lock_dir();
+    /* Create parent (SYSTMP) and locks subdirectory */
+    char systmp_linux[512];
+    vmsfs_to_linux_path(VMS_SYSTMP, systmp_linux, sizeof(systmp_linux));
+    mkdir(systmp_linux, 0777);
+    mkdir(dir, 0777);
     lock_dir_created = 1;
 }
 
@@ -126,8 +144,8 @@ uint32_t sys$enqw(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
     }
 
     /* Create/open the lock file for this resource */
-    char lockpath[256];
-    snprintf(lockpath, sizeof(lockpath), "%s/%s.lck", LOCK_DIR, name);
+    char lockpath[1280];
+    snprintf(lockpath, sizeof(lockpath), "%s/%s.lck", get_lock_dir(), name);
 
     int lock_fd = open(lockpath, O_CREAT | O_RDWR, 0666);
     if (lock_fd < 0) {
@@ -157,6 +175,7 @@ uint32_t sys$enqw(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
 
     /* Fill in the lock table entry */
     locks[slot].lkid = next_lkid++;
+    if (next_lkid == 0) next_lkid = 1;  /* Skip 0 on wrap */
     strncpy(locks[slot].resnam, name, sizeof(locks[slot].resnam) - 1);
     locks[slot].resnam[sizeof(locks[slot].resnam) - 1] = '\0';
     locks[slot].lkmode = lkmode;

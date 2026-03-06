@@ -57,12 +57,13 @@ static uint64_t parse_privileges(const char *privstr)
         return ~(uint64_t)0;
     }
 
-    /* Walk comma-separated tokens */
+    /* Walk comma-separated tokens (thread-safe) */
     char buf[256];
     strncpy(buf, privstr, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
 
-    char *tok = strtok(buf, ",");
+    char *saveptr = NULL;
+    char *tok = strtok_r(buf, ",", &saveptr);
     while (tok) {
         /* Trim leading whitespace */
         while (*tok == ' ') tok++;
@@ -77,7 +78,7 @@ static uint64_t parse_privileges(const char *privstr)
         else if (strcmp(tok, "CMKRNL")  == 0) mask |= PRV$M_CMKRNL;
         else if (strcmp(tok, "ALL")     == 0) mask  = ~(uint64_t)0;
 
-        tok = strtok(NULL, ",");
+        tok = strtok_r(NULL, ",", &saveptr);
     }
     return mask;
 }
@@ -105,34 +106,35 @@ static int parse_uaf_line(const char *line, struct uaf_record *rec)
     memset(rec, 0, sizeof(*rec));
 
     char *f;
+    char *saveptr = NULL;
 
     /* Fields separated by '|' (pipe) to avoid conflict with VMS device colons.
      * Format: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES */
-    f = strtok(buf, "|");
+    f = strtok_r(buf, "|", &saveptr);
     if (!f) return -1;
     strncpy(rec->username, f, sizeof(rec->username) - 1);
 
-    f = strtok(NULL, "|");
+    f = strtok_r(NULL, "|", &saveptr);
     if (!f) return -1;
     strncpy(rec->password_hash, f, sizeof(rec->password_hash) - 1);
 
-    f = strtok(NULL, "|");
+    f = strtok_r(NULL, "|", &saveptr);
     if (!f) return -1;
     rec->uic_group = (unsigned int)strtoul(f, NULL, 10);
 
-    f = strtok(NULL, "|");
+    f = strtok_r(NULL, "|", &saveptr);
     if (!f) return -1;
     rec->uic_member = (unsigned int)strtoul(f, NULL, 10);
 
-    f = strtok(NULL, "|");
+    f = strtok_r(NULL, "|", &saveptr);
     if (!f) return -1;
     strncpy(rec->default_dir, f, sizeof(rec->default_dir) - 1);
 
-    f = strtok(NULL, "|");
+    f = strtok_r(NULL, "|", &saveptr);
     if (f)
         rec->flags = (uint32_t)strtoul(f, NULL, 0);
 
-    f = strtok(NULL, "|\n");
+    f = strtok_r(NULL, "|\n", &saveptr);
     if (f)
         strncpy(rec->privileges, f, sizeof(rec->privileges) - 1);
 
@@ -169,8 +171,6 @@ static int find_uaf_record(const char *username_str,
                 break;
             }
         }
-        offset = ftell(f);
-        (void)offset; /* update before next read */
         offset = ftell(f);
     }
 

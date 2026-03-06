@@ -686,27 +686,122 @@ static void cmd_help(void)
 /* ------------------------------------------------------------------ */
 
 /*
+ * Check if a privilege word appears as an exact token in a
+ * comma-separated privilege list.  Case-insensitive.
+ * E.g. has_priv_word("TMPMBX,SYSPRV,NETMBX", "SYSPRV") -> 1
+ *      has_priv_word("ALLSPOOL", "ALL") -> 0
+ */
+static int has_priv_word(const char *list, const char *word)
+{
+    if (!list || !word)
+        return 0;
+
+    size_t wlen = strlen(word);
+    const char *p = list;
+
+    while (*p) {
+        /* Skip leading whitespace/commas */
+        while (*p == ',' || *p == ' ' || *p == '\t')
+            p++;
+        if (*p == '\0')
+            break;
+
+        /* Find end of current token */
+        const char *tok = p;
+        while (*p && *p != ',' && *p != ' ' && *p != '\t')
+            p++;
+
+        size_t tlen = (size_t)(p - tok);
+        if (tlen == wlen && strncasecmp(tok, word, wlen) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+/*
  * Check that the caller has SYSPRV privilege.
- * We examine VMS_PRIVILEGES env var for "SYSPRV" or "ALL".
+ *
+ * Strategy (in order):
+ *   1. euid == 0 (root) — always authorized (SYSTEM equivalent)
+ *   2. Look up the calling user in SYSUAF and check for SYSPRV or ALL
+ *      in their privilege field.
+ *
+ * The previous implementation read VMS_PRIVILEGES from the environment,
+ * which any unprivileged process could spoof.  This version reads the
+ * on-disk SYSUAF directly, which is only writable by root.
  */
 static int check_privilege(void)
 {
-    const char *privs = getenv("VMS_PRIVILEGES");
-    if (!privs)
+    /* Root is always privileged */
+    if (geteuid() == 0)
+        return 1;
+
+    /* Look up the calling user's record in SYSUAF */
+    const char *login = getenv("USER");
+    if (!login)
         return 0;
 
-    /* Case-insensitive search for SYSPRV or ALL */
-    char buf[512];
-    strncpy(buf, privs, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-    upcase(buf);
+    char uname[64];
+    strncpy(uname, login, sizeof(uname) - 1);
+    uname[sizeof(uname) - 1] = '\0';
+    upcase(uname);
 
-    if (strstr(buf, "ALL"))
-        return 1;
-    if (strstr(buf, "SYSPRV"))
-        return 1;
+    char sysuaf_linux[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
+    FILE *fp = fopen(sysuaf_linux, "r");
+    if (!fp)
+        return 0;
 
-    return 0;
+    char line[MAX_LINE];
+    int authorized = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
+            continue;
+        trim_trailing(line);
+        if (line[0] == '\0')
+            continue;
+
+        /* Extract username (first pipe-delimited field) */
+        char *sep = strchr(line, '|');
+        if (!sep)
+            continue;
+        *sep = '\0';
+
+        char recname[64];
+        strncpy(recname, line, sizeof(recname) - 1);
+        recname[sizeof(recname) - 1] = '\0';
+        upcase(recname);
+
+        if (strcmp(recname, uname) != 0)
+            continue;
+
+        /* Found the user — extract privileges (7th field, index 6) */
+        char *p = sep + 1;
+        int field = 1; /* already past field 0 */
+        while (field < 6 && p) {
+            char *next = strchr(p, '|');
+            if (next)
+                p = next + 1;
+            else
+                p = NULL;
+            field++;
+        }
+
+        if (p) {
+            /* p now points at the privileges field */
+            char privs[256];
+            strncpy(privs, p, sizeof(privs) - 1);
+            privs[sizeof(privs) - 1] = '\0';
+            trim_trailing(privs);
+
+            if (has_priv_word(privs, "ALL") ||
+                has_priv_word(privs, "SYSPRV"))
+                authorized = 1;
+        }
+        break;
+    }
+    fclose(fp);
+    return authorized;
 }
 
 /* ------------------------------------------------------------------ */

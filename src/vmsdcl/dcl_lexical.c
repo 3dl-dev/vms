@@ -115,14 +115,14 @@ static int lex_extract(struct dcl_context *ctx, const char *args,
     /* Find the commas */
     const char *p = args;
     while (*p == ' ') p++;
-    start = atoi(p);
+    start = (int)strtol(p, NULL, 10);
 
     /* Skip to next comma */
     p = strchr(p, ',');
     if (!p) return 0;
     p++;
     while (*p == ' ') p++;
-    len = atoi(p);
+    len = (int)strtol(p, NULL, 10);
 
     /* Skip to the string argument */
     p = strchr(p, ',');
@@ -165,7 +165,7 @@ static int lex_element(struct dcl_context *ctx, const char *args,
 
     const char *p = args;
     while (*p == ' ') p++;
-    int element = atoi(p);
+    int element = (int)strtol(p, NULL, 10);
 
     p = strchr(p, ',');
     if (!p) return 0;
@@ -1080,7 +1080,7 @@ static int parse_vms_time(const char *ts, struct tm *tm_out, int *cs_out)
             *cs_out = 0;
             if (*end == '.') {
                 end++;
-                *cs_out = atoi(end);
+                *cs_out = (int)strtol(end, NULL, 10);
             }
             return 1;
         }
@@ -1541,7 +1541,7 @@ static int lex_fao(struct dcl_context *ctx, const char *args,
             while (*c >= '0' && *c <= '9' && ni < sizeof(numstr)-1)
                 numstr[ni++] = *c++;
             numstr[ni] = '\0';
-            int count = atoi(numstr);
+            int count = (int)strtol(numstr, NULL, 10);
             if (*c == '*') {
                 c++;
                 char fill = *c ? *c++ : ' ';
@@ -2237,13 +2237,13 @@ static int lex_cvsi(struct dcl_context *ctx, const char *args,
     /* Parse: bit_pos, length, source */
     const char *p = args;
     while (*p == ' ') p++;
-    int bit_pos = atoi(p);
+    int bit_pos = (int)strtol(p, NULL, 10);
 
     p = strchr(p, ',');
     if (!p) return -1;
     p++;
     while (*p == ' ') p++;
-    int length = atoi(p);
+    int length = (int)strtol(p, NULL, 10);
 
     p = strchr(p, ',');
     if (!p) return -1;
@@ -2304,13 +2304,13 @@ static int lex_cvui(struct dcl_context *ctx, const char *args,
     /* Parse: bit_pos, length, source */
     const char *p = args;
     while (*p == ' ') p++;
-    int bit_pos = atoi(p);
+    int bit_pos = (int)strtol(p, NULL, 10);
 
     p = strchr(p, ',');
     if (!p) return -1;
     p++;
     while (*p == ' ') p++;
-    int length = atoi(p);
+    int length = (int)strtol(p, NULL, 10);
 
     p = strchr(p, ',');
     if (!p) return -1;

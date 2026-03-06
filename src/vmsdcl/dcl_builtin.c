@@ -1337,8 +1337,9 @@ static int cmd_set_terminal(struct dcl_command *cmd)
     /* /WIDTH=n */
     const char *width_val = dcl_qualifier_value(cmd, "WIDTH");
     if (width_val && *width_val) {
-        int w = atoi(width_val);
-        if (w < 1 || w > 32767) {
+        char *endp;
+        int w = (int)strtol(width_val, &endp, 10);
+        if (endp == width_val || *endp != '\0' || w < 1 || w > 32767) {
             dcl_error("SET", 2, "INVWIDTH",
                       "invalid terminal width - \\%s\\", width_val);
             return SS$_BADPARAM;
@@ -1350,8 +1351,9 @@ static int cmd_set_terminal(struct dcl_command *cmd)
     /* /PAGE=n */
     const char *page_val = dcl_qualifier_value(cmd, "PAGE");
     if (page_val && *page_val) {
-        int p = atoi(page_val);
-        if (p < 0 || p > 32767) {
+        char *endp;
+        int p = (int)strtol(page_val, &endp, 10);
+        if (endp == page_val || *endp != '\0' || p < 0 || p > 32767) {
             dcl_error("SET", 2, "INVPAGE",
                       "invalid terminal page length - \\%s\\", page_val);
             return SS$_BADPARAM;
@@ -1363,8 +1365,9 @@ static int cmd_set_terminal(struct dcl_command *cmd)
     /* /SPEED=n */
     const char *speed_val = dcl_qualifier_value(cmd, "SPEED");
     if (speed_val && *speed_val) {
-        int s = atoi(speed_val);
-        if (s < 0) {
+        char *endp;
+        int s = (int)strtol(speed_val, &endp, 10);
+        if (endp == speed_val || *endp != '\0' || s < 0) {
             dcl_error("SET", 2, "INVSPEED",
                       "invalid terminal speed - \\%s\\", speed_val);
             return SS$_BADPARAM;
@@ -1639,8 +1642,9 @@ static int cmd_set_process(struct dcl_command *cmd)
                       "no privilege for SET PROCESS /PRIORITY");
             return SS$_NOPRIV;
         }
-        int pri = atoi(pri_val);
-        if (pri < 0 || pri > 31) {
+        char *endp;
+        int pri = (int)strtol(pri_val, &endp, 10);
+        if (endp == pri_val || *endp != '\0' || pri < 0 || pri > 31) {
             dcl_error("SET", 2, "INVPRI",
                       "invalid priority \\%d\\ - must be 0-31", pri);
             return SS$_BADPARAM;
@@ -1714,8 +1718,9 @@ static int cmd_set_file(struct dcl_command *cmd)
     /* /VERSION_LIMIT=n — advisory; just validate and acknowledge */
     const char *vl = dcl_qualifier_value(cmd, "VERSION_LIMIT");
     if (vl && *vl) {
-        int vlim = atoi(vl);
-        if (vlim < 0 || vlim > 32767) {
+        char *endp;
+        int vlim = (int)strtol(vl, &endp, 10);
+        if (endp == vl || *endp != '\0' || vlim < 0 || vlim > 32767) {
             dcl_error("SET", 2, "INVVLIM",
                       "invalid version limit \\%s\\", vl);
             return SS$_BADPARAM;
@@ -1873,8 +1878,9 @@ static int cmd_set_working_set(struct dcl_command *cmd)
     /* /QUOTA=n pages */
     const char *quota_val = dcl_qualifier_value(cmd, "QUOTA");
     if (quota_val && *quota_val) {
-        int pages = atoi(quota_val);
-        if (pages < 0) {
+        char *endp;
+        int pages = (int)strtol(quota_val, &endp, 10);
+        if (endp == quota_val || *endp != '\0' || pages < 0) {
             dcl_error("SET", 2, "INVQUO",
                       "invalid working set quota \\%s\\", quota_val);
             return SS$_BADPARAM;
@@ -2221,7 +2227,11 @@ static int cmd_directory(struct dcl_command *cmd)
     int show_trailing = dcl_has_qualifier(cmd, "TRAILING");
     int columns = 4;
     const char *col_val = dcl_qualifier_value(cmd, "COLUMNS");
-    if (col_val && col_val[0]) columns = atoi(col_val);
+    if (col_val && col_val[0]) {
+        char *endp;
+        int c = (int)strtol(col_val, &endp, 10);
+        if (endp != col_val && *endp == '\0') columns = c;
+    }
     if (columns < 1) columns = 1;
     if (columns > 8) columns = 8;
 
@@ -2327,7 +2337,7 @@ static int cmd_directory(struct dcl_command *cmd)
         char *semi = strrchr(e->vms_name, ';');
         if (semi && semi[1] != '\0') {
             /* Already has a version suffix — use it */
-            e->version = atoi(semi + 1);
+            e->version = (int)strtol(semi + 1, NULL, 10);
             /* Don't double-add: nothing to append */
         } else if (S_ISREG(st.st_mode)) {
             /* No version suffix — add ;1 */
@@ -2985,8 +2995,9 @@ static int cmd_purge(struct dcl_command *cmd)
     int keep_count = 1;
     const char *keep_val = dcl_qualifier_value(cmd, "KEEP");
     if (keep_val && keep_val[0]) {
-        keep_count = atoi(keep_val);
-        if (keep_count < 1) keep_count = 1;
+        char *endp;
+        keep_count = (int)strtol(keep_val, &endp, 10);
+        if (endp == keep_val || *endp != '\0' || keep_count < 1) keep_count = 1;
     }
 
     /* Determine the target directory and pattern */
@@ -5464,7 +5475,7 @@ static int cmd_recall(struct dcl_command *cmd)
 
     if (is_number) {
         /* RECALL n — re-execute command number n */
-        int n = atoi(param);
+        int n = (int)strtol(param, NULL, 10);
         HIST_ENTRY *entry = history_get(n);
         if (!entry) {
             printf("%%DCL-W-RECALL, no command number %d in history\n", n);

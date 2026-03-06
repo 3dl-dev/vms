@@ -145,6 +145,10 @@ add_executable(vms_tcpip_config
     vms_tcpip_config.c
 )
 
+target_include_directories(vms_tcpip_config PRIVATE
+    ${VMS_INCLUDE_DIR}
+)
+
 target_compile_definitions(vms_tcpip_config PRIVATE
     _POSIX_C_SOURCE=200809L
     _DEFAULT_SOURCE

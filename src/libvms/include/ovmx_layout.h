@@ -79,4 +79,20 @@
 #define VMS_RIGHTSLIST_PATH   "SYS$SYSTEM:RIGHTSLIST.DAT"
 #define VMS_QMAN_DB          "SYS$MANAGER:QMAN$MASTER.DAT"
 
+/* ------------------------------------------------------------------ */
+/* Linux paths — derived from SYSDISK_MOUNT                           */
+/*                                                                     */
+/* Use these ONLY in code that runs before the VMS filespec translator */
+/* is available (ovmx_init, early boot) or in contexts that need raw   */
+/* Linux paths (execv, access, stat).  Prefer VMS filespecs + runtime */
+/* translation everywhere else.                                        */
+/* ------------------------------------------------------------------ */
+
+#define VMS_SYSTEM_DIR   SYSDISK_MOUNT "/SYS0/SYSCOMMON/SYSEXE"
+#define VMS_LIBRARY_DIR  SYSDISK_MOUNT "/SYS0/SYSCOMMON/SYSLIB"
+#define VMS_MANAGER_DIR  SYSDISK_MOUNT "/SYS0/SYSCOMMON/SYSMGR"
+#define VMS_HELP_DIR     SYSDISK_MOUNT "/SYS0/SYSCOMMON/SYSHLP"
+#define VMS_USERS_DIR    SYSDISK_MOUNT "/USERS"
+#define VMS_TEMP_DIR     SYSDISK_MOUNT "/SYSTMP"
+
 #endif /* __OVMX_LAYOUT_H */

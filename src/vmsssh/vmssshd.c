@@ -48,17 +48,14 @@
 #include "vmsfs/filespec.h"
 #include "dcl/terminal.h"
 
-#ifndef OVMX_BIN_DIR
-#define OVMX_BIN_DIR "/usr/local/bin"
-#endif
-#define DCL_SHELL_PATH OVMX_BIN_DIR "/vmsdcl"
+#include "ovmx_layout.h"
+#define DCL_SHELL_PATH VMS_SYSTEM_DIR "/DCL.EXE"
 
 /* ------------------------------------------------------------------ */
 /* Constants                                                           */
 /* ------------------------------------------------------------------ */
 
 #define DEFAULT_PORT         22
-#include "ovmx_layout.h"
 #define DEFAULT_HOST_KEY     VMS_SSH_HOST_KEY
 #define AUTH_TIMEOUT_SEC     30
 #define MAX_AUTH_ATTEMPTS    3

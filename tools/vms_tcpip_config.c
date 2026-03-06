@@ -14,7 +14,9 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
-#define TCPIP_CONFIG_DIR "/vms/SYS0/SYSCOMMON/SYSEXE"
+#include "ovmx_layout.h"
+
+#define TCPIP_CONFIG_DIR VMS_SYSTEM_DIR
 #define TCPIP_NS_DAT     TCPIP_CONFIG_DIR "/TCPIP$NAMESERVICE.DAT"
 #define TCPIP_IF_DAT     TCPIP_CONFIG_DIR "/TCPIP$INTERFACE.DAT"
 #define TCPIP_ROUTE_DAT  TCPIP_CONFIG_DIR "/TCPIP$ROUTE.DAT"

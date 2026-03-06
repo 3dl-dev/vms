@@ -1,0 +1,3274 @@
+1 ACCOUNTING
+ Displays login accounting information for the current user.
+
+ Format: ACCOUNTING [/qualifier]
+
+ Displays the login history, session durations, and resource usage
+ for the current process or specified user account.
+
+2 Parameters
+ None.
+
+2 Qualifiers
+3 /FULL
+ Displays complete accounting detail including CPU time,
+ page faults, and I/O counts.
+
+3 /SINCE
+ Limits display to records since a specified date.
+
+ Format: /SINCE=date
+
+3 /USER
+ Displays accounting for a specified username.
+
+ Format: /USER=username
+
+2 Examples
+
+ $ ACCOUNTING
+ $ ACCOUNTING /FULL
+
+1 ANALYZE
+ Analyzes system components and data structures.
+
+ Format: ANALYZE component
+
+ Used to examine system internals, disk structures, and
+ error logs. Not all analysis modes are available in OVMX.
+
+2 Parameters
+3 component
+ The system component to analyze. Valid values include
+ DISK_STRUCTURE, ERROR_LOG, and SYSTEM.
+
+2 Examples
+
+ $ ANALYZE/DISK_STRUCTURE DKA0:
+ $ ANALYZE/ERROR_LOG
+
+1 APPEND
+ Appends the contents of one file to the end of another file.
+
+ Format: APPEND source-file destination-file
+
+ The source file is copied and appended to the end of the
+ destination file. If the destination does not exist, it is
+ created.
+
+2 Parameters
+3 source-file
+ The file whose contents will be appended to the destination.
+ Wildcards are permitted.
+
+3 destination-file
+ The file to which the source contents are appended.
+
+2 Qualifiers
+3 /CONFIRM
+ Prompts for confirmation before appending.
+
+3 /LOG
+ Displays each file as it is appended.
+
+3 /NEW_VERSION
+ Creates a new version of the destination file if one
+ already exists.
+
+2 Examples
+
+ $ APPEND DATA.TMP RESULTS.DAT
+ $ APPEND *.TXT COMBINED.TXT
+
+1 ASSIGN
+ Creates a logical name that translates to a specified equivalence
+ string.
+
+ Format: ASSIGN equivalence-name logical-name
+
+ ASSIGN creates a logical name in the process logical name table.
+ The equivalence name is the value to which the logical name
+ translates. See also DEFINE, which uses the opposite argument
+ order.
+
+2 Parameters
+3 equivalence-name
+ The string to which the logical name translates. This is
+ typically a device name, directory specification, or another
+ logical name.
+
+3 logical-name
+ The logical name to be created.
+
+2 Qualifiers
+3 /TABLE
+ Specifies the logical name table in which to create the
+ logical name.
+
+ Format: /TABLE=table-name
+
+ Default is LNM$PROCESS_TABLE.
+
+2 Examples
+
+ $ ASSIGN SYS$SYSDEVICE:[MYDIR] WORK
+ $ ASSIGN "node::disk:[dir]" REMOTE_DIR
+
+1 ATTACH
+ Transfers control to another process in your job tree.
+
+ Format: ATTACH [process-name]
+
+ Allows you to switch between interactive processes. The
+ process you attach to must be part of your current job.
+
+2 Parameters
+3 process-name
+ The name of the process to attach to. If omitted, attaches
+ to the parent process.
+
+2 Examples
+
+ $ ATTACH SMITH_1
+
+1 BACKUP
+ Creates, restores, or lists VMS saveset files.
+
+ Format: BACKUP source destination
+
+ BACKUP creates portable archive files in VMS saveset format.
+ Savesets contain file data, attributes, and directory structure.
+ BACKUP can also restore from savesets and list their contents.
+
+2 Parameters
+3 source
+ The source specification. For a save operation, this is a
+ file specification (wildcards allowed). For a restore or
+ list operation, this is a saveset file.
+
+3 destination
+ The destination specification. For a save operation, this
+ is the saveset filename (conventionally ending in .BCK).
+ For a restore operation, this is the target directory.
+
+2 Qualifiers
+3 /LIST
+ Lists the contents of a saveset without restoring.
+
+ Format: BACKUP/LIST saveset.BCK
+
+3 /LOG
+ Displays each file as it is processed.
+
+3 /VERIFY
+ Verifies the saveset after creation by reading it back
+ and comparing checksums.
+
+3 /CONFIRM
+ Prompts before processing each file.
+
+2 Examples
+
+ $ BACKUP [MYDIR...]*.*;* MYBACKUP.BCK/SAVE
+ $ BACKUP MYBACKUP.BCK/SAVE [RESTORE...]
+ $ BACKUP/LIST MYBACKUP.BCK
+
+1 CLOSE
+ Closes a file that was previously opened with the OPEN command.
+
+ Format: CLOSE logical-name
+
+ Closes the file associated with the specified logical name and
+ removes the logical name from the process table.
+
+2 Parameters
+3 logical-name
+ The logical name assigned to the file when it was opened.
+
+2 Examples
+
+ $ CLOSE INFILE
+ $ CLOSE OUTFILE
+
+1 CONTINUE
+ Resumes execution of a program that was interrupted.
+
+ Format: CONTINUE
+
+ CONTINUE resumes a program that was interrupted by Ctrl-Y.
+ The program continues from the point at which it was
+ interrupted.
+
+2 Examples
+
+ $ CONTINUE
+
+1 CONVERT
+ Converts files from one format to another.
+
+ Format: CONVERT input-file output-file
+
+ Converts record formats, file organizations, or file
+ structures between different RMS file types.
+
+2 Parameters
+3 input-file
+ The file to be converted.
+
+3 output-file
+ The name of the converted output file.
+
+2 Qualifiers
+3 /FDL
+ Uses an FDL (File Definition Language) file to specify
+ the output file characteristics.
+
+ Format: /FDL=fdl-file
+
+2 Examples
+
+ $ CONVERT OLD.DAT NEW.DAT
+
+1 COPY
+ Copies one or more files to a new location.
+
+ Format: COPY source-file destination-file
+
+ Creates a copy of the source file with the specified
+ destination name. Wildcards are permitted in the source
+ specification.
+
+2 Parameters
+3 source-file
+ The file to be copied. Wildcards are permitted.
+
+3 destination-file
+ The destination file specification.
+
+2 Qualifiers
+3 /CONFIRM
+ Prompts before each copy operation.
+
+3 /LOG
+ Displays each file as it is copied.
+
+3 /REPLACE
+ Replaces existing files at the destination.
+
+2 Examples
+
+ $ COPY SOURCE.TXT DEST.TXT
+ $ COPY *.DAT [.BACKUP]
+ $ COPY/LOG FILE.TXT [OTHERDIR]FILE.TXT
+
+1 CREATE
+ Creates a new file or directory.
+
+ Format: CREATE filespec
+         CREATE/DIRECTORY directory-spec
+
+ Without qualifiers, CREATE creates an empty file. With the
+ /DIRECTORY qualifier, creates a new directory.
+
+2 Parameters
+3 filespec
+ The name of the file or directory to create.
+
+2 Qualifiers
+3 /DIRECTORY
+ Creates a directory rather than a file.
+
+ Format: CREATE/DIRECTORY [.NEWDIR]
+
+3 /LOG
+ Displays the name of each file or directory created.
+
+3 /OWNER_UIC
+ Sets the owner UIC of the created file or directory.
+
+ Format: /OWNER_UIC=uic
+
+3 /PROTECTION
+ Sets the protection of the created file or directory.
+
+ Format: /PROTECTION=(S:RWED,O:RWED,G:RE,W:E)
+
+2 Examples
+
+ $ CREATE NEWFILE.TXT
+ $ CREATE/DIRECTORY [.SUBDIR]
+ $ CREATE/DIRECTORY/LOG [.PROJECT]
+
+1 DEASSIGN
+ Removes a logical name definition.
+
+ Format: DEASSIGN logical-name
+
+ Removes the specified logical name from the process logical
+ name table. See also ASSIGN and DEFINE.
+
+2 Parameters
+3 logical-name
+ The logical name to be removed.
+
+2 Qualifiers
+3 /TABLE
+ Specifies the logical name table from which to remove
+ the name.
+
+ Format: /TABLE=table-name
+
+2 Examples
+
+ $ DEASSIGN WORK
+ $ DEASSIGN/TABLE=LNM$SYSTEM SHARED_DIR
+
+1 DEFINE
+ Creates a logical name definition.
+
+ Format: DEFINE logical-name equivalence-name
+
+ DEFINE creates a logical name that translates to the specified
+ equivalence string. Note that DEFINE uses the opposite argument
+ order from ASSIGN.
+
+2 Parameters
+3 logical-name
+ The logical name to be created.
+
+3 equivalence-name
+ The string to which the logical name translates.
+
+2 Qualifiers
+3 /TABLE
+ Specifies the logical name table in which to create the
+ definition.
+
+ Format: /TABLE=table-name
+
+3 /LOG
+ Displays the logical name definition after creation.
+
+2 Examples
+
+ $ DEFINE MYDIR SYS$SYSDEVICE:[USERS.SMITH]
+ $ DEFINE/TABLE=LNM$SYSTEM SHARED SYS$SYSDEVICE:[SHARED]
+
+1 DELETE
+ Deletes one or more files, or deletes a symbol definition.
+
+ Format: DELETE filespec[,...]
+         DELETE/SYMBOL symbol-name
+
+ Removes the specified files from the disk. With the /SYMBOL
+ qualifier, removes a DCL symbol definition.
+
+2 Parameters
+3 filespec
+ The file or files to delete. Wildcards are permitted.
+ Multiple files can be specified separated by commas.
+
+2 Qualifiers
+3 /CONFIRM
+ Prompts before each delete operation.
+
+3 /LOG
+ Displays the name of each file as it is deleted.
+
+3 /SYMBOL
+ Deletes a DCL symbol instead of a file.
+
+ Format: DELETE/SYMBOL symbol-name
+
+3 /SYMBOL/GLOBAL
+ Deletes a global DCL symbol.
+
+ Format: DELETE/SYMBOL/GLOBAL symbol-name
+
+2 Examples
+
+ $ DELETE OLDFILE.TXT;*
+ $ DELETE/CONFIRM *.TMP;*
+ $ DELETE/SYMBOL MYVAR
+ $ DELETE/LOG SCRATCH.*;*
+
+1 DIFFERENCES
+ Compares two files and displays the differences between them.
+
+ Format: DIFFERENCES file-1 file-2
+
+ Reads both files and produces a listing of lines that differ.
+ Similar in concept to the Unix diff utility, but follows VMS
+ conventions for output format.
+
+2 Parameters
+3 file-1
+ The first file to compare.
+
+3 file-2
+ The second file to compare.
+
+2 Qualifiers
+3 /OUTPUT
+ Directs the differences output to a file.
+
+ Format: /OUTPUT=filespec
+
+3 /IGNORE
+ Specifies what differences to ignore.
+
+ Format: /IGNORE=(SPACING, CASE, TRAILING_SPACES)
+
+3 /PARALLEL
+ Displays differences in a side-by-side format.
+
+2 Examples
+
+ $ DIFFERENCES FILE1.TXT FILE2.TXT
+ $ DIFFERENCES/OUTPUT=DIFF.LIS PROG.C;2 PROG.C;1
+
+1 DIRECTORY
+ Lists the files in a directory.
+
+ Format: DIRECTORY [filespec]
+
+ Displays information about files in the specified or default
+ directory. Without arguments, lists all files in the current
+ default directory.
+
+2 Parameters
+3 filespec
+ The files to list. Wildcards are permitted. If omitted,
+ all files in the default directory are listed.
+
+2 Qualifiers
+3 /BRIEF
+ Displays only file names, without size, date, or other
+ details.
+
+3 /FULL
+ Displays complete file information including size, date,
+ owner, and protection.
+
+3 /SIZE
+ Displays file sizes alongside file names.
+
+3 /DATE
+ Displays file modification dates.
+
+3 /OWNER
+ Displays file owner information.
+
+3 /PROTECTION
+ Displays file protection settings.
+
+3 /VERSIONS
+ Specifies the version limit for display.
+
+ Format: /VERSIONS=n
+
+3 /TOTAL
+ Displays only summary totals (file count and total size)
+ without listing individual files.
+
+3 /COLUMNS
+ Specifies the number of columns for the display.
+
+ Format: /COLUMNS=n
+
+3 /OUTPUT
+ Directs the listing to a file instead of the terminal.
+
+ Format: /OUTPUT=filespec
+
+2 Examples
+
+ $ DIRECTORY
+ $ DIRECTORY *.TXT
+ $ DIRECTORY/FULL SYS$SYSTEM:*.EXE
+ $ DIRECTORY/SIZE/DATE [.SUBDIR]
+
+1 DISMOUNT
+ Dismounts a volume from a device.
+
+ Format: DISMOUNT device-name
+
+ Marks the volume as no longer available and removes
+ the device assignment.
+
+2 Parameters
+3 device-name
+ The name of the device to dismount.
+
+2 Examples
+
+ $ DISMOUNT DKA100:
+
+1 DUMP
+ Displays the contents of a file in hexadecimal and ASCII format.
+
+ Format: DUMP filespec
+
+ Reads the specified file and displays its contents as both
+ hexadecimal values and their ASCII character equivalents.
+
+2 Parameters
+3 filespec
+ The file to dump.
+
+2 Qualifiers
+3 /BLOCKS
+ Specifies a range of blocks to dump.
+
+ Format: /BLOCKS=(START:n,END:m)
+
+3 /BYTE
+ Displays data in byte format (default).
+
+3 /WORD
+ Displays data in word (16-bit) format.
+
+3 /LONGWORD
+ Displays data in longword (32-bit) format.
+
+3 /RECORDS
+ Dumps data on a record-by-record basis.
+
+3 /OUTPUT
+ Directs the dump output to a file.
+
+ Format: /OUTPUT=filespec
+
+2 Examples
+
+ $ DUMP DATAFILE.DAT
+ $ DUMP/BLOCKS=(START:1,END:10) DISK.IMG
+
+1 EDIT
+ Invokes the EDT text editor.
+
+ Format: EDIT filespec
+
+ Opens the specified file in the OVMX EDT line editor.
+ EDT provides line-oriented editing with commands for
+ inserting, deleting, moving, and substituting text.
+
+ EDT Commands:
+   TYPE [range]         Display lines
+   INSERT [line]        Insert text before a line
+   DELETE [range]       Delete lines
+   SUBSTITUTE /old/new/ [range]  Replace text
+   MOVE range TO line   Move lines
+   COPY range TO line   Copy lines
+   WRITE [file]         Save the file
+   EXIT                 Save and exit
+   QUIT                 Exit without saving
+   HELP                 Show EDT help
+
+2 Parameters
+3 filespec
+ The file to edit. If the file does not exist, a new file
+ is created.
+
+2 Examples
+
+ $ EDIT LOGIN.COM
+ $ EDIT SYS$LOGIN:NOTES.TXT
+
+1 EXIT
+ Terminates the current command procedure level or session.
+
+ Format: EXIT [status-code]
+
+ In a command procedure, EXIT returns control to the calling
+ procedure or to the interactive command level. In interactive
+ mode at the top level, EXIT terminates the session.
+
+2 Parameters
+3 status-code
+ An optional integer status code to return. Odd values
+ indicate success, even values indicate error.
+
+2 Examples
+
+ $ EXIT
+ $ EXIT 1
+ $ EXIT %X10000000
+
+1 HELP
+ Displays online help information about OVMX commands,
+ qualifiers, parameters, and lexical functions.
+
+ Format: HELP [topic [subtopic [...]]]
+
+ Without arguments, HELP displays a list of available topics.
+ You can navigate through help levels:
+   - Type a topic name to see its help text
+   - Press RETURN for a list of subtopics
+   - Type a period (.) to go up one level
+   - Press RETURN at the top level to exit
+
+2 Parameters
+3 topic
+ The name of the help topic to display.
+
+3 subtopic
+ Additional subtopic levels, separated by spaces.
+
+2 Examples
+
+ $ HELP
+ $ HELP COPY
+ $ HELP SET DEFAULT
+ $ HELP DIRECTORY Qualifiers /FULL
+ $ HELP SHOW TIME
+
+1 INQUIRE
+ Reads input from the terminal and assigns it to a symbol.
+
+ Format: INQUIRE symbol-name [prompt-string]
+
+ Prompts the user for input and assigns the response to the
+ specified DCL symbol. If the user presses only RETURN, the
+ symbol is assigned a null string.
+
+2 Parameters
+3 symbol-name
+ The name of the symbol to receive the input value.
+
+3 prompt-string
+ An optional prompt string to display. If omitted, the
+ symbol name followed by a colon is used as the prompt.
+
+2 Qualifiers
+3 /NOPUNCTUATION
+ Suppresses the default colon and space after the prompt
+ string.
+
+3 /GLOBAL
+ Creates a global symbol instead of a local symbol.
+
+2 Examples
+
+ $ INQUIRE NAME "Enter your name"
+ $ INQUIRE/GLOBAL ANSWER "Continue? (Y/N)"
+
+1 INSTALL
+ Manages known images (shared executables).
+
+ Format: INSTALL command [filespec]
+
+ Used to install shared images and manage the known image
+ list. Installed images can be shared among multiple processes.
+
+2 Parameters
+3 filespec
+ The image file to install or manage.
+
+2 Qualifiers
+3 /LIST
+ Lists currently installed images.
+
+3 /SHARED
+ Installs the image as a shared image.
+
+3 /OPEN
+ Installs the image as permanently open.
+
+2 Examples
+
+ $ INSTALL LIST
+ $ INSTALL ADD SYS$SYSTEM:LOGINOUT.EXE/SHARED
+
+1 LIBRARY
+ Manages text, help, and object module libraries.
+
+ Format: LIBRARY library-file [module-file]
+
+ LIBRARY creates and manages libraries that contain collections
+ of text modules, help text, object modules, or macro definitions.
+
+2 Parameters
+3 library-file
+ The name of the library file to operate on.
+
+3 module-file
+ The file containing modules to insert or extract.
+
+2 Qualifiers
+3 /CREATE
+ Creates a new library file.
+
+ Format: LIBRARY/CREATE library-file
+
+3 /INSERT
+ Inserts a module into the library.
+
+ Format: LIBRARY/INSERT library-file module-file
+
+3 /EXTRACT
+ Extracts a module from the library.
+
+ Format: LIBRARY/EXTRACT=module library-file
+
+3 /LIST
+ Lists the modules in a library.
+
+ Format: LIBRARY/LIST library-file
+
+3 /DELETE
+ Removes a module from the library.
+
+ Format: LIBRARY/DELETE=module library-file
+
+3 /HELP
+ Specifies that the library is a help library.
+
+3 /TEXT
+ Specifies that the library is a text library (default).
+
+3 /REPLACE
+ Replaces an existing module in the library.
+
+2 Examples
+
+ $ LIBRARY/CREATE MYLIB.TLB
+ $ LIBRARY/INSERT MYLIB.TLB MODULE.TXT
+ $ LIBRARY/LIST MYLIB.TLB
+ $ LIBRARY/EXTRACT=HEADER MYLIB.TLB
+
+1 LINK
+ Links object modules to create an executable image.
+
+ Format: LINK filespec[,...]
+
+ Resolves external references and combines one or more object
+ modules into an executable program image.
+
+2 Parameters
+3 filespec
+ One or more object files to link. Default file type is .OBJ.
+
+2 Qualifiers
+3 /EXECUTABLE
+ Specifies the name of the output executable file.
+
+ Format: /EXECUTABLE=filespec
+
+3 /MAP
+ Creates a link map file showing symbol locations.
+
+ Format: /MAP[=filespec]
+
+3 /DEBUG
+ Includes debug symbol information in the image.
+
+2 Examples
+
+ $ LINK MYPROG
+ $ LINK/EXECUTABLE=MYPROG.EXE MAIN,SUB1,SUB2
+
+1 LOGOUT
+ Terminates the current interactive session.
+
+ Format: LOGOUT
+
+ Ends the login session, closes all open files, and
+ deassigns all process logical names.
+
+2 Qualifiers
+3 /FULL
+ Displays accounting information before logging out.
+
+3 /BRIEF
+ Suppresses the logout message.
+
+2 Examples
+
+ $ LOGOUT
+ $ LOGOUT/FULL
+
+1 MAIL
+ Sends and receives electronic mail messages.
+
+ Format: MAIL [filespec] [recipient]
+
+ The MAIL utility provides electronic mail services within
+ the OVMX environment. Without arguments, enters interactive
+ mail mode.
+
+2 Parameters
+3 filespec
+ A file containing the message to send.
+
+3 recipient
+ The username of the mail recipient.
+
+2 Qualifiers
+3 /SUBJECT
+ Specifies the subject line for the message.
+
+ Format: /SUBJECT="text"
+
+2 Examples
+
+ $ MAIL
+ $ MAIL MESSAGE.TXT SMITH /SUBJECT="Meeting notes"
+
+1 MONITOR
+ Displays real-time system activity and performance statistics.
+
+ Format: MONITOR [class]
+
+ Shows live system metrics such as CPU usage, memory utilization,
+ I/O rates, and process activity.
+
+2 Parameters
+3 class
+ The class of data to monitor. Available classes include
+ SYSTEM, PROCESSES, DISK, and STATES.
+
+2 Examples
+
+ $ MONITOR
+ $ MONITOR SYSTEM
+ $ MONITOR PROCESSES
+
+1 MOUNT
+ Mounts a volume on a device, making it available for access.
+
+ Format: MOUNT device-name [volume-label]
+
+ Associates a physical or virtual device with the system,
+ enabling file operations on the mounted volume.
+
+2 Parameters
+3 device-name
+ The name of the device to mount.
+
+3 volume-label
+ An optional label to assign to the volume.
+
+2 Qualifiers
+3 /SYSTEM
+ Mounts the volume for system-wide access.
+
+3 /FOREIGN
+ Mounts the volume as a foreign volume (no file structure
+ processing).
+
+2 Examples
+
+ $ MOUNT DKA100: USERDATA
+ $ MOUNT/SYSTEM DKA200: SHARED
+
+1 OPEN
+ Opens a file for reading or writing.
+
+ Format: OPEN logical-name filespec
+
+ Opens the specified file and assigns a logical name to it.
+ The file can then be accessed with READ and WRITE commands
+ using the logical name.
+
+2 Parameters
+3 logical-name
+ The logical name to assign to the opened file.
+
+3 filespec
+ The file to open.
+
+2 Qualifiers
+3 /READ
+ Opens the file for reading only (default).
+
+3 /WRITE
+ Opens the file for writing.
+
+3 /APPEND
+ Opens the file for appending (write at end).
+
+3 /SHARE
+ Allows shared access to the file.
+
+2 Examples
+
+ $ OPEN/READ INFILE DATA.TXT
+ $ OPEN/WRITE OUTFILE RESULTS.DAT
+ $ OPEN/APPEND LOGFILE ACTIVITY.LOG
+
+1 PHONE
+ Provides real-time terminal-to-terminal communication.
+
+ Format: PHONE [username]
+
+ Initiates or answers a phone conversation with another
+ user on the system.
+
+2 Parameters
+3 username
+ The username of the person to call.
+
+2 Examples
+
+ $ PHONE SMITH
+
+1 PIPE
+ Executes one or more commands connected by pipes.
+
+ Format: PIPE command1 | command2 [| command3 ...]
+
+ Connects the output of one command to the input of the next,
+ similar to Unix-style pipelines. Each command runs as a
+ separate subprocess.
+
+2 Parameters
+3 command
+ One or more DCL commands separated by the pipe character (|).
+
+2 Examples
+
+ $ PIPE DIRECTORY | SEARCH SYS$PIPE ".TXT"
+ $ PIPE TYPE FILE.DAT | SORT SYS$PIPE SYS$OUTPUT
+
+1 PRINT
+ Queues a file for printing on a print device.
+
+ Format: PRINT filespec[,...]
+
+ Submits the specified file to a print queue for output.
+
+2 Parameters
+3 filespec
+ The file or files to print.
+
+2 Qualifiers
+3 /COPIES
+ Specifies the number of copies to print.
+
+ Format: /COPIES=n
+
+3 /QUEUE
+ Specifies the print queue.
+
+ Format: /QUEUE=queue-name
+
+3 /DELETE
+ Deletes the file after successful printing.
+
+3 /NOTIFY
+ Sends a notification when the print job completes.
+
+3 /FORMS
+ Specifies the forms type for printing.
+
+ Format: /FORMS=form-name
+
+2 Examples
+
+ $ PRINT REPORT.TXT
+ $ PRINT/COPIES=3 MEMO.TXT
+ $ PRINT/QUEUE=SYS$PRINT LISTING.LIS
+
+1 PRODUCT
+ Manages software products installed on the system.
+
+ Format: PRODUCT command [product-name]
+
+ Installs, removes, or displays information about layered
+ software products.
+
+2 Parameters
+3 command
+ The product management command: INSTALL, REMOVE, SHOW,
+ LIST, or CONFIGURE.
+
+3 product-name
+ The name of the product to manage.
+
+2 Examples
+
+ $ PRODUCT SHOW PRODUCT *
+ $ PRODUCT INSTALL OVMX
+
+1 PURGE
+ Deletes all but the most recent versions of a file.
+
+ Format: PURGE [filespec]
+
+ Removes older versions of files, keeping only the highest
+ version number. Without a file specification, purges all
+ files in the current directory.
+
+2 Parameters
+3 filespec
+ The file or files to purge. Wildcards are permitted.
+
+2 Qualifiers
+3 /KEEP
+ Specifies the number of versions to keep.
+
+ Format: /KEEP=n
+
+3 /CONFIRM
+ Prompts before deleting each version.
+
+3 /LOG
+ Displays each file version as it is deleted.
+
+2 Examples
+
+ $ PURGE
+ $ PURGE *.TXT
+ $ PURGE/KEEP=3 REPORT.DAT
+
+1 READ
+ Reads a record from an open file into a symbol.
+
+ Format: READ logical-name symbol-name
+
+ Reads the next record from the file identified by the
+ logical name and assigns its contents to the specified
+ DCL symbol.
+
+2 Parameters
+3 logical-name
+ The logical name of the file (from OPEN).
+
+3 symbol-name
+ The symbol to receive the record contents.
+
+2 Qualifiers
+3 /END_OF_FILE
+ Specifies a label to branch to on end-of-file.
+
+ Format: /END_OF_FILE=label
+
+3 /DELETE
+ Deletes the record after reading (for indexed files).
+
+2 Examples
+
+ $ OPEN/READ INP DATA.TXT
+ $ READ INP LINE
+ $ CLOSE INP
+
+1 RECALL
+ Displays or re-executes commands from the command history.
+
+ Format: RECALL [command-number]
+
+ Without arguments, displays the command history buffer.
+ With a number, re-executes the specified command from
+ the history.
+
+2 Parameters
+3 command-number
+ The number of a command in the history buffer to
+ re-execute.
+
+2 Qualifiers
+3 /ALL
+ Displays the entire command history buffer.
+
+2 Examples
+
+ $ RECALL
+ $ RECALL 5
+ $ RECALL/ALL
+
+1 RENAME
+ Changes the name or location of a file.
+
+ Format: RENAME old-name new-name
+
+ Changes the file specification of an existing file. Can be
+ used to move files between directories on the same device.
+
+2 Parameters
+3 old-name
+ The current file specification.
+
+3 new-name
+ The new file specification.
+
+2 Qualifiers
+3 /CONFIRM
+ Prompts before each rename.
+
+3 /LOG
+ Displays each file as it is renamed.
+
+2 Examples
+
+ $ RENAME OLDNAME.TXT NEWNAME.TXT
+ $ RENAME FILE.DAT [.ARCHIVE]FILE.DAT
+ $ RENAME/LOG *.TMP *.BAK
+
+1 REPLY
+ Sends an operator reply message or enables/disables an
+ operator terminal.
+
+ Format: REPLY ["message"]
+         REPLY/ENABLE[=class]
+         REPLY/DISABLE[=class]
+
+ Used by operators to respond to user REQUEST messages and
+ to manage operator terminal designations.
+
+2 Parameters
+3 message
+ The text of the reply message, enclosed in quotes.
+
+2 Qualifiers
+3 /ENABLE
+ Enables the current terminal as an operator terminal.
+
+ Format: /ENABLE[=class]
+
+3 /DISABLE
+ Disables operator status for the current terminal.
+
+3 /TO
+ Directs the reply to a specific request.
+
+ Format: /TO=request-id
+
+2 Examples
+
+ $ REPLY/ENABLE
+ $ REPLY "Backup will begin at 22:00"
+ $ REPLY/TO=5 "Request approved"
+
+1 REQUEST
+ Sends a message to the system operator.
+
+ Format: REQUEST "message"
+
+ Sends a request message to all enabled operator terminals.
+ The operator can respond using the REPLY command.
+
+2 Parameters
+3 message
+ The text of the request message, enclosed in quotes.
+
+2 Qualifiers
+3 /TO
+ Specifies a particular operator class to receive the
+ request.
+
+ Format: /TO=class
+
+2 Examples
+
+ $ REQUEST "Please mount tape MTA0:"
+ $ REQUEST/TO=TAPES "Need tape volume BACKUP_01"
+
+1 RUN
+ Executes a program image.
+
+ Format: RUN filespec
+
+ Loads and executes the specified program image. The default
+ file type is .EXE.
+
+2 Parameters
+3 filespec
+ The executable image to run.
+
+2 Examples
+
+ $ RUN MYPROG
+ $ RUN SYS$SYSTEM:AUTHORIZE
+
+1 SEARCH
+ Searches one or more files for a specified text string.
+
+ Format: SEARCH filespec search-string
+
+ Reads through the specified file(s) and displays each line
+ that contains the search string.
+
+2 Parameters
+3 filespec
+ The file or files to search. Wildcards are permitted.
+
+3 search-string
+ The text string to search for, enclosed in quotes.
+
+2 Qualifiers
+3 /EXACT
+ Performs a case-sensitive search. By default, the search
+ is case-insensitive.
+
+3 /LOG
+ Displays the name of each file searched.
+
+3 /NUMBERS
+ Displays line numbers alongside matching lines.
+
+3 /OUTPUT
+ Directs the search output to a file.
+
+ Format: /OUTPUT=filespec
+
+3 /STATISTICS
+ Displays statistics about the search (files searched,
+ lines matched).
+
+3 /WINDOW
+ Specifies the number of context lines to display before
+ and after each match.
+
+ Format: /WINDOW=(BEFORE:n,AFTER:m)
+
+2 Examples
+
+ $ SEARCH REPORT.TXT "error"
+ $ SEARCH *.COM "BACKUP"
+ $ SEARCH/EXACT CONFIG.DAT "SystemRoot"
+
+1 SET
+ Sets or modifies process, system, and file characteristics.
+
+ Format: SET parameter [value]
+
+ The SET command modifies a variety of system, process, and
+ file attributes. Each SET option is described under its own
+ subtopic.
+
+2 ACCOUNTING
+ Enables or modifies process accounting.
+
+ Format: SET ACCOUNTING [/qualifier]
+
+3 /ENABLE
+ Enables accounting data collection.
+
+3 /DISABLE
+ Disables accounting data collection.
+
+2 AUDIT
+ Enables or configures security auditing.
+
+ Format: SET AUDIT [/qualifier]
+
+3 /ENABLE
+ Enables security audit events.
+
+3 /DISABLE
+ Disables security audit events.
+
+2 CONTROL
+ Enables or disables Ctrl-Y and Ctrl-T handling.
+
+ Format: SET CONTROL[=T]
+         SET NOCONTROL[=Y]
+
+ SET CONTROL enables Ctrl-Y interrupts (default).
+ SET NOCONTROL disables Ctrl-Y interrupts.
+ SET CONTROL=T enables Ctrl-T status line.
+
+2 DEFAULT
+ Sets the default directory for file operations.
+
+ Format: SET DEFAULT directory-spec
+
+ Changes the current default directory. All subsequent file
+ operations that do not specify a directory will use this
+ directory.
+
+3 Examples
+
+ $ SET DEFAULT SYS$SYSDEVICE:[USERS.SMITH]
+ $ SET DEFAULT [.SUBDIR]
+ $ SET DEFAULT [-]
+
+2 ENTRY
+ Modifies attributes of a batch or print queue entry.
+
+ Format: SET ENTRY entry-number [/qualifier]
+
+3 /PRIORITY
+ Changes the priority of a queue entry.
+
+3 /RELEASE
+ Releases a held entry for processing.
+
+2 FILE
+ Modifies file attributes.
+
+ Format: SET FILE filespec [/qualifier]
+
+3 /VERSION_LIMIT
+ Sets the version limit for the file.
+
+ Format: /VERSION_LIMIT=n
+
+3 /PROTECTION
+ Sets file protection.
+
+ Format: /PROTECTION=(S:RWED,O:RWED,G:RE,W)
+
+2 HOST
+ Sets the system host name.
+
+ Format: SET HOST hostname
+
+ Establishes or changes the host name of the system.
+
+2 MESSAGE
+ Controls the display of system message components.
+
+ Format: SET MESSAGE [/qualifier]
+
+ Controls which parts of system messages are displayed:
+ facility name, severity, identification, and text.
+
+3 /FACILITY
+ Controls display of the facility prefix.
+
+3 /SEVERITY
+ Controls display of the severity level.
+
+3 /IDENTIFICATION
+ Controls display of the message identifier.
+
+3 /TEXT
+ Controls display of the message text.
+
+3 /NOFACILITY
+ Suppresses the facility prefix.
+
+3 /NOSEVERITY
+ Suppresses the severity level.
+
+3 /NOIDENTIFICATION
+ Suppresses the message identifier.
+
+3 /NOTEXT
+ Suppresses the message text.
+
+2 NOON
+ Suppresses the ON ERROR action at the current command level.
+
+ Format: SET NOON
+
+ Prevents ON ERROR THEN GOTO or ON ERROR THEN EXIT from
+ executing when a command returns an error status. The ON
+ ERROR handler remains defined but is not triggered.
+
+2 ON
+ Re-enables the ON ERROR action after SET NOON.
+
+ Format: SET ON
+
+ Reverses the effect of SET NOON, allowing the ON ERROR
+ handler to fire again on error status.
+
+2 PASSWORD
+ Changes the password for the current account.
+
+ Format: SET PASSWORD
+
+ Prompts for the old password, then for the new password
+ (entered twice for verification).
+
+2 PROCESS
+ Sets process characteristics.
+
+ Format: SET PROCESS [/qualifier]
+
+3 /NAME
+ Changes the process name.
+
+ Format: /NAME=new-name
+
+3 /PRIORITY
+ Sets the process base priority.
+
+ Format: /PRIORITY=n
+
+2 PROMPT
+ Changes the DCL command prompt.
+
+ Format: SET PROMPT string
+
+ Changes the prompt displayed by DCL. The string can include
+ spaces if enclosed in quotes.
+
+3 Examples
+
+ $ SET PROMPT "OVMX> "
+ $ SET PROMPT "''F$TIME()' $ "
+
+2 PROTECTION
+ Sets the default file protection.
+
+ Format: SET PROTECTION=(code)/DEFAULT
+         SET PROTECTION=(code) filespec
+
+ The protection code specifies access for System, Owner,
+ Group, and World categories, each with Read, Write,
+ Execute, and Delete permissions.
+
+3 Examples
+
+ $ SET PROTECTION=(S:RWED,O:RWED,G:RE,W:E)/DEFAULT
+ $ SET PROTECTION=(S:RWED,O:RWED,G,W) PRIVATE.DAT
+
+2 TERMINAL
+ Sets terminal characteristics.
+
+ Format: SET TERMINAL [device] [/qualifier]
+
+3 /WIDTH
+ Sets the terminal display width in columns.
+
+ Format: /WIDTH=n
+
+3 /PAGE
+ Sets the terminal page length in lines.
+
+ Format: /PAGE=n
+
+3 /ECHO
+ Enables character echo (default).
+
+3 /NOECHO
+ Disables character echo.
+
+3 /WRAP
+ Enables line wrapping at the terminal width.
+
+3 /NOWRAP
+ Disables line wrapping.
+
+3 /INSERT
+ Sets insert mode for line editing.
+
+3 /OVERSTRIKE
+ Sets overstrike mode for line editing.
+
+3 Examples
+
+ $ SET TERMINAL/WIDTH=132
+ $ SET TERMINAL/PAGE=48
+
+2 TIME
+ Sets the system date and time.
+
+ Format: SET TIME=dd-mmm-yyyy:hh:mm:ss
+
+ Requires OPER or SYSPRV privilege.
+
+2 UIC
+ Sets the UIC (User Identification Code) for the current
+ process.
+
+ Format: SET UIC [group,member]
+
+2 VERIFY
+ Enables or disables command procedure verification.
+
+ Format: SET VERIFY
+         SET NOVERIFY
+
+ When verification is enabled, each command in a command
+ procedure is displayed before it is executed.
+
+3 Examples
+
+ $ SET VERIFY
+ $ SET NOVERIFY
+
+2 VOLUME
+ Sets volume attributes for a mounted VMSFS volume.
+
+ Format: SET VOLUME device [/qualifier]
+
+ Requires a mounted VMSFS filesystem.
+
+2 WORKING_SET
+ Sets working set parameters for the current process.
+
+ Format: SET WORKING_SET [/qualifier]
+
+3 /QUOTA
+ Sets the working set quota.
+
+ Format: /QUOTA=n
+
+3 /EXTENT
+ Sets the working set extent.
+
+ Format: /EXTENT=n
+
+3 /LIMIT
+ Sets the working set limit.
+
+ Format: /LIMIT=n
+
+1 SHOW
+ Displays information about the system, process, or files.
+
+ Format: SHOW item [options]
+
+ The SHOW command displays various types of system and process
+ information. Each SHOW option is described under its own
+ subtopic.
+
+2 ACCOUNTING
+ Displays accounting information for the current session.
+
+ Format: SHOW ACCOUNTING
+
+ Displays session start time, elapsed time, CPU time used,
+ and other resource utilization statistics.
+
+2 AUDIT
+ Displays security audit configuration.
+
+ Format: SHOW AUDIT
+
+ Shows which security audit events are currently enabled.
+
+2 CLUSTER
+ Displays cluster membership information.
+
+ Format: SHOW CLUSTER
+
+ Shows the systems that are members of the VMScluster.
+
+2 DEFAULT
+ Displays the current default directory.
+
+ Format: SHOW DEFAULT
+
+ Shows the directory specification used as the default for
+ file operations.
+
+3 Examples
+
+ $ SHOW DEFAULT
+   SYS$SYSDEVICE:[USERS.SMITH]
+
+2 DEVICE
+ Displays information about mounted devices.
+
+ Format: SHOW DEVICE [device-name]
+
+ Lists mounted filesystems and their characteristics,
+ displayed as VMS device names. Without an argument,
+ shows all mounted devices.
+
+3 /FULL
+ Shows extended device characteristics including
+ volume label, free space, and mount status.
+
+3 Examples
+
+ $ SHOW DEVICE
+ $ SHOW DEVICE DKA0:
+
+2 ENTRY
+ Displays information about batch or print queue entries.
+
+ Format: SHOW ENTRY [entry-number]
+
+2 ERROR
+ Displays information about the last error that occurred.
+
+ Format: SHOW ERROR
+
+ Shows the error count and details of recent errors.
+
+2 INTRUSION
+ Displays the intrusion detection database.
+
+ Format: SHOW INTRUSION
+
+ Shows records of failed login attempts and suspected
+ break-in activity.
+
+2 LICENSE
+ Displays active product licenses.
+
+ Format: SHOW LICENSE
+
+ Lists the software licenses registered on the system.
+
+2 LOGICAL
+ Displays logical name definitions.
+
+ Format: SHOW LOGICAL [logical-name]
+
+ Without an argument, displays all logical names in the
+ process table. With an argument, translates the specified
+ logical name and shows its equivalence string.
+
+3 /TABLE
+ Specifies the logical name table to search.
+
+ Format: /TABLE=table-name
+
+3 /FULL
+ Shows the full translation chain, including iterative
+ translations.
+
+3 Examples
+
+ $ SHOW LOGICAL
+ $ SHOW LOGICAL SYS$LOGIN
+ $ SHOW LOGICAL/TABLE=LNM$SYSTEM *
+
+2 MEMORY
+ Displays system memory utilization.
+
+ Format: SHOW MEMORY
+
+ Shows total physical memory, available memory, and
+ memory usage breakdown.
+
+3 /FULL
+ Displays detailed memory pool statistics.
+
+2 NETWORK
+ Displays network configuration and status.
+
+ Format: SHOW NETWORK
+
+ Shows network interface information and connectivity
+ status.
+
+2 PROCESS
+ Displays information about the current process.
+
+ Format: SHOW PROCESS [process-name]
+
+ Shows process identification, priority, state, and
+ resource utilization.
+
+3 /PRIVILEGES
+ Displays the privileges held by the process.
+
+3 /QUOTAS
+ Displays the process resource quotas.
+
+3 /ALL
+ Displays all available process information.
+
+3 Examples
+
+ $ SHOW PROCESS
+ $ SHOW PROCESS/PRIVILEGES
+ $ SHOW PROCESS/QUOTAS
+
+2 PROTECTION
+ Displays the current default file protection.
+
+ Format: SHOW PROTECTION
+
+ Shows the default protection mask applied to newly
+ created files.
+
+3 Examples
+
+ $ SHOW PROTECTION
+   SYSTEM=RWED, OWNER=RWED, GROUP=RE, WORLD=NO ACCESS
+
+2 QUEUE
+ Displays information about batch and print queues.
+
+ Format: SHOW QUEUE [queue-name]
+
+ Lists the queues defined on the system and their
+ current entries.
+
+3 /ALL
+ Shows all entries in the specified queue.
+
+3 /FULL
+ Shows detailed queue and entry information.
+
+2 QUOTA
+ Displays disk quota information.
+
+ Format: SHOW QUOTA
+
+ Shows disk space quota and current usage for the
+ current user.
+
+2 ROOT
+ Displays the system root directory.
+
+ Format: SHOW ROOT
+
+ Shows the top-level system directory specification.
+
+2 STATUS
+ Displays the status of the last command executed.
+
+ Format: SHOW STATUS
+
+ Shows the exit status code and condition value from
+ the most recently executed command or program.
+
+2 SYMBOL
+ Displays the value of a DCL symbol.
+
+ Format: SHOW SYMBOL symbol-name
+
+ Translates and displays the specified symbol. Shows both
+ the symbol value and its type (string or integer).
+
+3 /ALL
+ Displays all defined symbols.
+
+3 /GLOBAL
+ Displays global symbols only.
+
+3 /LOCAL
+ Displays local symbols only.
+
+3 Examples
+
+ $ SHOW SYMBOL *
+ $ SHOW SYMBOL STATUS
+
+2 SYSTEM
+ Displays information about all processes on the system.
+
+ Format: SHOW SYSTEM
+
+ Lists all active processes with their PID, username,
+ state, priority, and resource consumption.
+
+3 /FULL
+ Displays extended process information.
+
+2 TERMINAL
+ Displays terminal characteristics.
+
+ Format: SHOW TERMINAL [device]
+
+ Shows the current settings for the terminal, including
+ width, page size, and editing mode.
+
+2 TIME
+ Displays the current date and time.
+
+ Format: SHOW TIME
+
+ Displays the date and time in VMS format:
+ DD-MMM-YYYY HH:MM:SS.CC
+
+3 Examples
+
+ $ SHOW TIME
+   5-MAR-2026 14:30:22.15
+
+2 TRANSLATION
+ Translates a logical name and shows the full chain.
+
+ Format: SHOW TRANSLATION logical-name
+
+ Iteratively translates the logical name, showing each
+ step in the translation chain until the final equivalence
+ string is reached.
+
+3 Examples
+
+ $ SHOW TRANSLATION SYS$SYSTEM
+
+2 USERS
+ Displays information about logged-in users.
+
+ Format: SHOW USERS
+
+ Lists all users currently logged in to the system.
+
+2 VERIFY
+ Displays the current verification setting.
+
+ Format: SHOW VERIFY
+
+ Shows whether command procedure verification is
+ currently enabled or disabled.
+
+2 WORKING_SET
+ Displays the current working set parameters.
+
+ Format: SHOW WORKING_SET
+
+ Shows the working set quota, extent, and current
+ size for the process.
+
+1 SORT
+ Sorts records in a file and writes the result.
+
+ Format: SORT input-file output-file
+
+ Reads the input file, sorts the records, and writes the
+ sorted output to the specified output file.
+
+2 Parameters
+3 input-file
+ The file containing records to sort.
+
+3 output-file
+ The file to receive the sorted records.
+
+2 Qualifiers
+3 /KEY
+ Specifies the sort key position and size.
+
+ Format: /KEY=(POSITION:n,SIZE:m)
+
+3 /DUPLICATE
+ Controls handling of duplicate records.
+
+3 /STABLE
+ Preserves the original order of records with equal keys.
+
+2 Examples
+
+ $ SORT UNSORTED.DAT SORTED.DAT
+ $ SORT/KEY=(POSITION:1,SIZE:20) DATA.TXT RESULT.TXT
+
+1 SPAWN
+ Creates a subprocess.
+
+ Format: SPAWN [command]
+
+ Creates a subprocess of the current process. Without an
+ argument, starts an interactive subprocess. With a command
+ argument, executes the command in a subprocess and returns.
+
+2 Parameters
+3 command
+ An optional command to execute in the subprocess.
+
+2 Qualifiers
+3 /NOWAIT
+ Returns control immediately without waiting for the
+ subprocess to complete.
+
+3 /NOLOGICAL_NAMES
+ Does not pass logical names to the subprocess.
+
+3 /NOSYMBOLS
+ Does not pass symbols to the subprocess.
+
+3 /OUTPUT
+ Directs subprocess output to a file.
+
+ Format: /OUTPUT=filespec
+
+3 /PROCESS
+ Assigns a name to the subprocess.
+
+ Format: /PROCESS=name
+
+2 Examples
+
+ $ SPAWN
+ $ SPAWN DIRECTORY *.TXT
+ $ SPAWN/NOWAIT BACKUP [...]*.* SAVE.BCK
+
+1 STOP
+ Stops the current process or a specified process.
+
+ Format: STOP [process-name]
+         STOP/ID=pid
+
+ Terminates execution of a process. Without arguments,
+ stops the current process.
+
+2 Parameters
+3 process-name
+ The name of the process to stop.
+
+2 Qualifiers
+3 /ID
+ Specifies the process by PID.
+
+ Format: /ID=hex-pid
+
+2 Examples
+
+ $ STOP
+ $ STOP BATCH_JOB
+ $ STOP/ID=20400123
+
+1 SUBMIT
+ Submits a command procedure to a batch queue for execution.
+
+ Format: SUBMIT filespec
+
+ Places the specified command procedure in a batch queue
+ for asynchronous execution.
+
+2 Parameters
+3 filespec
+ The command procedure file to submit. Default file
+ type is .COM.
+
+2 Qualifiers
+3 /QUEUE
+ Specifies the batch queue.
+
+ Format: /QUEUE=queue-name
+
+3 /AFTER
+ Specifies a time after which the job should execute.
+
+ Format: /AFTER=time
+
+3 /LOG_FILE
+ Specifies the log file for batch job output.
+
+ Format: /LOG_FILE=filespec
+
+3 /NOTIFY
+ Sends notification when the batch job completes.
+
+3 /PRIORITY
+ Sets the job priority.
+
+ Format: /PRIORITY=n
+
+3 /NAME
+ Assigns a name to the job.
+
+ Format: /NAME=job-name
+
+2 Examples
+
+ $ SUBMIT NIGHTLY.COM
+ $ SUBMIT/AFTER=22:00 BACKUP.COM
+ $ SUBMIT/QUEUE=SYS$BATCH/NOTIFY REPORT.COM
+
+1 SYSGEN
+ System generation utility.
+
+ Format: SYSGEN
+
+ Displays or modifies system parameters that control
+ the operating environment. In OVMX, SYSGEN provides
+ read-only access to system parameter values.
+
+2 Examples
+
+ $ RUN SYS$SYSTEM:SYSGEN
+ SYSGEN> SHOW MAXPROCESSCNT
+
+1 SYSMAN
+ System management utility.
+
+ Format: SYSMAN
+
+ Provides system management functions for cluster-wide
+ operations. In OVMX, SYSMAN provides basic local system
+ management capabilities.
+
+2 Examples
+
+ $ RUN SYS$SYSTEM:SYSMAN
+
+1 TCPIP
+ TCP/IP Services network management commands.
+
+ Format: TCPIP subcommand
+
+ Provides commands for managing TCP/IP network services,
+ including interface configuration, route management,
+ and service control.
+
+2 SHOW
+ Displays TCP/IP network information.
+
+3 INTERFACE
+ Shows network interface status and configuration.
+
+ Format: TCPIP SHOW INTERFACE
+
+3 ROUTE
+ Displays the routing table.
+
+ Format: TCPIP SHOW ROUTE
+
+3 VERSION
+ Displays the TCP/IP Services version.
+
+ Format: TCPIP SHOW VERSION
+
+3 HOST
+ Displays host name information.
+
+ Format: TCPIP SHOW HOST hostname
+
+2 SET
+ Configures TCP/IP parameters.
+
+3 INTERFACE
+ Configures a network interface.
+
+ Format: TCPIP SET INTERFACE iface /ADDRESS=addr
+
+3 HOST
+ Sets host table entries.
+
+ Format: TCPIP SET HOST hostname /ADDRESS=addr
+
+2 Examples
+
+ $ TCPIP SHOW INTERFACE
+ $ TCPIP SHOW ROUTE
+ $ TCPIP SHOW VERSION
+
+1 TYPE
+ Displays the contents of a file on the terminal.
+
+ Format: TYPE filespec
+
+ Reads the specified file and displays each record on
+ the terminal.
+
+2 Parameters
+3 filespec
+ The file to display.
+
+2 Qualifiers
+3 /PAGE
+ Pauses the display after each screenful of output.
+ Press RETURN to continue.
+
+3 /OUTPUT
+ Directs the output to a file instead of the terminal.
+
+ Format: /OUTPUT=filespec
+
+2 Examples
+
+ $ TYPE LOGIN.COM
+ $ TYPE/PAGE LONGFILE.TXT
+ $ TYPE SYS$MANAGER:SYLOGIN.COM
+
+1 WAIT
+ Suspends process execution for a specified time interval.
+
+ Format: WAIT delta-time
+
+ Pauses the current process for the specified duration.
+ The time format is HH:MM:SS or a number of seconds.
+
+2 Parameters
+3 delta-time
+ The time interval to wait. Format is HH:MM:SS or
+ a number of seconds.
+
+2 Examples
+
+ $ WAIT 00:00:05
+ $ WAIT 00:01:00
+
+1 WRITE
+ Writes a record to an open file or to a logical name.
+
+ Format: WRITE logical-name expression[,...]
+
+ Writes the value of the expression(s) to the file
+ identified by the logical name. SYS$OUTPUT writes
+ to the terminal.
+
+2 Parameters
+3 logical-name
+ The logical name of the file (from OPEN) or SYS$OUTPUT
+ for terminal output.
+
+3 expression
+ The data to write. Can be a quoted string, a symbol name,
+ or an expression combining these with the + operator.
+
+2 Qualifiers
+3 /SYMBOL
+ Writes the contents of a symbol, expanding it fully.
+
+2 Examples
+
+ $ WRITE SYS$OUTPUT "Hello, World!"
+ $ OPEN/WRITE OUTF RESULTS.DAT
+ $ WRITE OUTF "Line of data"
+ $ CLOSE OUTF
+
+1 F$CONTEXT
+ Sets or resets the process selection context for F$PID.
+
+ Format: F$CONTEXT(context_type, context_symbol, selection, value, match)
+
+ Establishes criteria for selecting processes with F$PID.
+ Use before calling F$PID in a loop.
+
+2 Parameters
+3 context_type
+ The type of context: "PROCESS" is the only valid type.
+
+3 context_symbol
+ A symbol name to hold the context state.
+
+3 selection
+ The selection criterion: USERNAME, NODENAME, etc.
+
+3 value
+ The value to match against.
+
+3 match
+ The match type: EQL or NEQ.
+
+2 Examples
+
+ $ x = F$CONTEXT("PROCESS", ctx, "USERNAME", "SMITH", "EQL")
+
+1 F$CVSI
+ Extracts a bit field from a character string and returns it
+ as a signed integer.
+
+ Format: F$CVSI(bit_position, size, source)
+
+2 Parameters
+3 bit_position
+ The starting bit position (0-based).
+
+3 size
+ The number of bits to extract.
+
+3 source
+ The source string.
+
+2 Examples
+
+ $ val = F$CVSI(0, 8, str)
+
+1 F$CVTIME
+ Converts or extracts components from a date/time string.
+
+ Format: F$CVTIME([time_string [, output_format [, field]]])
+
+ Without arguments, returns the current date/time. With
+ arguments, converts between time formats or extracts
+ specific fields.
+
+2 Parameters
+3 time_string
+ The date/time string to convert. If empty or omitted,
+ uses the current time.
+
+3 output_format
+ The output format: ABSOLUTE, COMPARISON, or DELTA.
+ Default is ABSOLUTE.
+
+3 field
+ The field to extract: YEAR, MONTH, DAY, HOUR, MINUTE,
+ SECOND, WEEKDAY, DATE, TIME, DATETIME.
+
+2 Examples
+
+ $ day = F$CVTIME(,,"WEEKDAY")
+ $ year = F$CVTIME(,,"YEAR")
+ $ t = F$CVTIME("15-JAN-2025","COMPARISON","DATE")
+
+1 F$CVUI
+ Extracts a bit field from a character string and returns it
+ as an unsigned integer.
+
+ Format: F$CVUI(bit_position, size, source)
+
+2 Parameters
+3 bit_position
+ The starting bit position (0-based).
+
+3 size
+ The number of bits to extract.
+
+3 source
+ The source string.
+
+2 Examples
+
+ $ val = F$CVUI(0, 16, str)
+
+1 F$DEVICE
+ Returns the next device name matching a search pattern.
+
+ Format: F$DEVICE(search_name, device_class, device_type)
+
+ Iterative function that returns one device name per call.
+ Returns an empty string when no more devices match.
+
+2 Parameters
+3 search_name
+ Wildcard device name pattern.
+
+3 device_class
+ The class of device to match.
+
+3 device_type
+ The type of device to match.
+
+2 Examples
+
+ $ dev = F$DEVICE("DK*","DISK","")
+
+1 F$DIRECTORY
+ Returns the current default directory in VMS format.
+
+ Format: F$DIRECTORY()
+
+ Equivalent to F$ENVIRONMENT("DEFAULT"). Returns the
+ current directory specification as a VMS-style string.
+
+2 Examples
+
+ $ dir = F$DIRECTORY()
+ $ WRITE SYS$OUTPUT "Default is ''F$DIRECTORY()'"
+
+1 F$EDIT
+ Performs string editing operations.
+
+ Format: F$EDIT(string, edit_list)
+
+ Applies one or more editing operations to the input string
+ and returns the result.
+
+2 Parameters
+3 string
+ The string to edit.
+
+3 edit_list
+ A comma-separated list of editing operations:
+   COLLAPSE  - Remove all spaces and tabs
+   COMPRESS  - Replace multiple spaces/tabs with one space
+   LOWERCASE - Convert to lowercase
+   TRIM      - Remove leading and trailing spaces
+   UNCOMMENT - Remove text after ! comment delimiter
+   UPCASE    - Convert to uppercase
+
+2 Examples
+
+ $ s = F$EDIT("  Hello  World  ", "TRIM,COMPRESS")
+ $ u = F$EDIT(name, "UPCASE")
+ $ c = F$EDIT(line, "UNCOMMENT,TRIM")
+
+1 F$ELEMENT
+ Extracts a delimited element from a string.
+
+ Format: F$ELEMENT(element_number, delimiter, string)
+
+ Splits the string at each occurrence of the delimiter and
+ returns the specified element (zero-based). If the element
+ number is beyond the last element, returns the delimiter.
+
+2 Parameters
+3 element_number
+ The zero-based index of the element to extract.
+
+3 delimiter
+ The delimiter character used to separate elements.
+
+3 string
+ The string containing delimited elements.
+
+2 Examples
+
+ $ second = F$ELEMENT(1, ",", "A,B,C")   ! Returns "B"
+ $ part = F$ELEMENT(0, " ", "HELLO WORLD")
+
+1 F$ENVIRONMENT
+ Returns information about the DCL environment.
+
+ Format: F$ENVIRONMENT(item)
+
+ Returns the value of the specified environment item.
+
+2 Parameters
+3 item
+ The environment attribute to query. Valid items:
+   DEFAULT      - Current default directory
+   DEPTH        - Current command procedure nesting depth
+   INTERACTIVE  - Whether session is interactive (TRUE/FALSE)
+   KEY_STATE    - Current keypad state
+   MAX_DEPTH    - Maximum command procedure depth
+   MESSAGE      - Current message format settings
+   ON_CONTROL_Y - Current Ctrl-Y action setting
+   ON_SEVERITY  - Current ON severity setting
+   PROMPT       - Current DCL prompt string
+   PROCEDURE    - Current command procedure name
+   SYMBOL_SCOPE - Current symbol scope
+   VERB_SCOPE   - Current verb scope
+   VERIFY       - Verification setting (0 or 1)
+
+2 Examples
+
+ $ dir = F$ENVIRONMENT("DEFAULT")
+ $ IF F$ENVIRONMENT("INTERACTIVE") THEN GOTO INTER
+ $ depth = F$ENVIRONMENT("DEPTH")
+
+1 F$EXTRACT
+ Extracts a substring from a string.
+
+ Format: F$EXTRACT(start, length, string)
+
+ Returns a substring beginning at the specified position
+ for the specified length. Positions are zero-based.
+
+2 Parameters
+3 start
+ The zero-based starting position.
+
+3 length
+ The number of characters to extract.
+
+3 string
+ The source string.
+
+2 Examples
+
+ $ mid = F$EXTRACT(3, 5, "ABCDEFGHIJ")  ! Returns "DEFGH"
+ $ first = F$EXTRACT(0, 1, name)
+
+1 F$FAO
+ Performs formatted ASCII output conversion.
+
+ Format: F$FAO(control_string, arg1, arg2, ...)
+
+ Converts values to formatted text using a control string
+ with formatting directives.
+
+2 Parameters
+3 control_string
+ The format control string containing FAO directives:
+   !AS  - ASCII string
+   !SL  - Signed longword (decimal)
+   !UL  - Unsigned longword (decimal)
+   !XL  - Longword (hexadecimal)
+   !OL  - Longword (octal)
+   !ZL  - Zero-filled longword
+   !/   - Newline
+   !_   - Tab
+   !^   - Form feed
+   !!   - Literal exclamation mark
+   !n*c - Repeat character c, n times
+
+3 arg1, arg2, ...
+ Arguments consumed by the formatting directives.
+
+2 Examples
+
+ $ s = F$FAO("PID=!XL, Name=!AS", pid, name)
+ $ line = F$FAO("Count: !SL!/Status: !AS", n, "OK")
+
+1 F$FILE_ATTRIBUTES
+ Returns an attribute of a file.
+
+ Format: F$FILE_ATTRIBUTES(filespec, item)
+
+ Queries the specified file and returns the requested
+ attribute value.
+
+2 Parameters
+3 filespec
+ The file to query.
+
+3 item
+ The attribute to retrieve. Valid items:
+   ALQ  - Allocation quantity (blocks)
+   BDT  - Backup date/time
+   BKS  - Bucket size
+   BLS  - Block size
+   CBT  - Contiguous best try
+   CDT  - Creation date/time
+   DEQ  - Default extension quantity
+   DID  - Directory ID
+   DVI  - Device name
+   EDT  - Expiration date/time
+   EOF  - End of file block
+   FID  - File ID
+   FSZ  - Fixed control area size
+   GRP  - File group number
+   KNOWN - Whether file is a known image
+   LRL  - Longest record length
+   MBM  - Member number
+   MRN  - Maximum record number
+   MRS  - Maximum record size
+   NOA  - Number of areas
+   NOK  - Number of keys
+   ORG  - File organization (SEQ, REL, IDX)
+   PRO  - File protection
+   PVN  - Prologue version number
+   RAT  - Record attributes
+   RCK  - Read check enabled
+   RDT  - Revision date/time
+   RFM  - Record format (VAR, FIX, VFC, UDF, STM, STMLF, STMCR)
+   RVN  - Revision number
+   SIZE - File size in bytes
+   UIC  - File owner UIC
+   WCK  - Write check enabled
+
+2 Examples
+
+ $ size = F$FILE_ATTRIBUTES("LOGIN.COM", "SIZE")
+ $ org = F$FILE_ATTRIBUTES("DATA.DAT", "ORG")
+ $ cdt = F$FILE_ATTRIBUTES("PROG.C", "CDT")
+
+1 F$GETDVI
+ Returns information about a device.
+
+ Format: F$GETDVI(device_name, item)
+
+ Queries the specified device and returns the requested
+ attribute.
+
+2 Parameters
+3 device_name
+ The device to query.
+
+3 item
+ The device attribute to retrieve (DEVCLASS, DEVTYPE,
+ FULLDEVNAM, FREEBLOCKS, MAXBLOCK, VOLNAM, etc.).
+
+2 Examples
+
+ $ class = F$GETDVI("SYS$SYSDEVICE", "DEVCLASS")
+
+1 F$GETJPI
+ Returns information about a process.
+
+ Format: F$GETJPI(pid, item)
+
+ Queries the specified process and returns the requested
+ information item.
+
+2 Parameters
+3 pid
+ The process ID, or empty string for the current process.
+
+3 item
+ The process attribute to retrieve. Valid items:
+   PRCNAM    - Process name
+   USERNAME  - Username
+   UIC       - User Identification Code
+   PID       - Process ID (hex)
+   GRP       - Group number
+   MEM       - Member number
+   MASTER_PID - Master process ID
+   OWNER     - Owner process ID
+   STS       - Process status flags
+   PRI       - Current priority
+   PRIB      - Base priority
+   STATE     - Process state
+   CPUTIM    - CPU time used (hundredths)
+   PAGEFLTS  - Page faults
+   PPGCNT    - Process page count
+   GPGCNT    - Global page count
+   WSSIZE    - Working set size
+   DFWSCNT   - Default working set size
+   WSQUOTA   - Working set quota
+   WSEXTENT  - Working set extent
+   VIRTPEAK  - Peak virtual size
+   DIRIO     - Direct I/O count
+   BUFIO     - Buffered I/O count
+   TERMINAL  - Terminal name
+   MODE      - Process mode
+   IMAGNAME  - Current image name
+   LOGINTIM  - Login time
+
+2 Examples
+
+ $ name = F$GETJPI("", "PRCNAM")
+ $ cpu = F$GETJPI("", "CPUTIM")
+
+1 F$GETQUI
+ Returns information about a batch or print queue.
+
+ Format: F$GETQUI(function, item, object_id, flags)
+
+ Queries the queue database for information about queues,
+ jobs, and entries.
+
+2 Parameters
+3 function
+ CANCEL_OPERATION, DISPLAY_ENTRY, DISPLAY_JOB,
+ DISPLAY_QUEUE, etc.
+
+3 item
+ The attribute to return.
+
+3 object_id
+ The queue, job, or entry identifier.
+
+3 flags
+ Search flags.
+
+2 Examples
+
+ $ queue = F$GETQUI("DISPLAY_QUEUE","QUEUE_NAME","SYS$BATCH")
+
+1 F$GETSYI
+ Returns system information.
+
+ Format: F$GETSYI(item)
+
+ Queries system attributes and returns the requested
+ information.
+
+2 Parameters
+3 item
+ The system attribute to retrieve. Valid items:
+   ARCH_NAME   - Architecture name (x86_64, aarch64)
+   ARCH_TYPE   - Architecture type number
+   BOOTTIME    - System boot time
+   CHARACTER_EMULATED - Character emulation (FALSE)
+   CLUSTER_MEMBER - Cluster membership (FALSE)
+   CLUSTER_NODES  - Number of cluster nodes
+   CLUSTER_FTIME  - Cluster failover time
+   CPU          - CPU type string
+   DECIMAL_EMULATED - Decimal emulation (FALSE)
+   FLOAT_EMULATED  - Float emulation (FALSE)
+   HW_NAME     - Hardware name
+   MAXPROCESSCNT - Maximum process count
+   MEMSIZE     - Physical memory size (pages)
+   NODENAME    - System node name
+   NODE_CSID   - Cluster system ID
+   NODE_NUMBER - Node number
+   PAGE_SIZE   - System page size (bytes)
+   PAGEFILE_FREE - Free page file pages
+   PAGEFILE_PAGE - Page file size
+   SID         - System ID
+   VERSION     - Operating system version
+   AVAILCPU_CNT - Available CPU count
+
+2 Examples
+
+ $ node = F$GETSYI("NODENAME")
+ $ ver = F$GETSYI("VERSION")
+ $ arch = F$GETSYI("ARCH_NAME")
+ $ mem = F$GETSYI("MEMSIZE")
+
+1 F$IDENTIFIER
+ Translates between identifier names and values.
+
+ Format: F$IDENTIFIER(id, conversion_type)
+
+ Converts between identifier names (like usernames) and
+ their numeric UIC values.
+
+2 Parameters
+3 id
+ The identifier name or numeric value.
+
+3 conversion_type
+ NAME_TO_NUMBER or NUMBER_TO_NAME.
+
+2 Examples
+
+ $ uic = F$IDENTIFIER("SYSTEM", "NAME_TO_NUMBER")
+
+1 F$INTEGER
+ Converts a string expression to an integer value.
+
+ Format: F$INTEGER(expression)
+
+ Evaluates the expression and returns its integer value.
+ String representations of numbers are converted.
+
+2 Parameters
+3 expression
+ The expression to convert to integer.
+
+2 Examples
+
+ $ n = F$INTEGER("42")
+ $ x = F$INTEGER(symbol_name)
+
+1 F$LENGTH
+ Returns the length of a string.
+
+ Format: F$LENGTH(string)
+
+ Returns the number of characters in the specified string.
+
+2 Parameters
+3 string
+ The string whose length is to be returned.
+
+2 Examples
+
+ $ len = F$LENGTH("Hello")         ! Returns 5
+ $ sz = F$LENGTH(my_symbol)
+
+1 F$LOCATE
+ Locates a substring within a string.
+
+ Format: F$LOCATE(substring, string)
+
+ Returns the zero-based position of the first occurrence of
+ the substring within the string. If the substring is not
+ found, returns the length of the string.
+
+2 Parameters
+3 substring
+ The text to search for.
+
+3 string
+ The string to search within.
+
+2 Examples
+
+ $ pos = F$LOCATE("XY", "ABCXYZ")  ! Returns 3
+ $ IF F$LOCATE("ERR", line) .NE. F$LENGTH(line) THEN -
+   WRITE SYS$OUTPUT "Found error"
+
+1 F$MESSAGE
+ Returns the message text for a system status code.
+
+ Format: F$MESSAGE(status_code)
+
+ Translates a numeric system status code into its
+ corresponding message text.
+
+2 Parameters
+3 status_code
+ The numeric status code to translate.
+
+2 Examples
+
+ $ msg = F$MESSAGE(%X10000001)
+ $ txt = F$MESSAGE($STATUS)
+
+1 F$MODE
+ Returns the mode of the current process.
+
+ Format: F$MODE()
+
+ Returns a string indicating the mode: INTERACTIVE, BATCH,
+ NETWORK, or OTHER.
+
+2 Examples
+
+ $ mode = F$MODE()
+ $ IF F$MODE() .EQS. "INTERACTIVE" THEN GOTO INTER_SETUP
+
+1 F$PARSE
+ Parses a file specification and returns a component.
+
+ Format: F$PARSE(filespec [, default [, related [, field]]])
+
+ Parses the file specification using default and related
+ specifications, then returns the requested field or the
+ fully expanded specification.
+
+2 Parameters
+3 filespec
+ The file specification to parse.
+
+3 default
+ Default file specification values.
+
+3 related
+ Related file specification for context.
+
+3 field
+ The field to return: NODE, DEVICE, DIRECTORY, NAME,
+ TYPE, VERSION, or empty for the full specification.
+
+2 Examples
+
+ $ dev = F$PARSE("LOGIN.COM",,,"DEVICE")
+ $ dir = F$PARSE("FILE.TXT",,,"DIRECTORY")
+ $ full = F$PARSE("PROG","SYS$SYSTEM:.EXE")
+
+1 F$PID
+ Returns the next process ID in the system.
+
+ Format: F$PID(context_symbol)
+
+ Iterative function that returns one PID per call.
+ Returns an empty string when no more processes match.
+ Use F$CONTEXT to set selection criteria.
+
+2 Parameters
+3 context_symbol
+ A symbol name holding the iteration context. Set to
+ empty string to start a new scan.
+
+2 Examples
+
+ $ pid = F$PID(ctx)
+ $ WRITE SYS$OUTPUT F$GETJPI(pid, "PRCNAM")
+
+1 F$PRIVILEGE
+ Checks whether the current process holds specified privileges.
+
+ Format: F$PRIVILEGE(privilege_list)
+
+ Returns TRUE if the process holds all of the specified
+ privileges, FALSE otherwise.
+
+2 Parameters
+3 privilege_list
+ A comma-separated list of privilege names to check.
+ Prefix with NO to check that a privilege is NOT held.
+ Valid privileges include: TMPMBX, NETMBX, SYSPRV,
+ BYPASS, OPER, WORLD, GROUP, CMKRNL, SYSNAM, etc.
+
+2 Examples
+
+ $ IF F$PRIVILEGE("SYSPRV") THEN GOTO PRIV_OPS
+ $ ok = F$PRIVILEGE("TMPMBX,NETMBX")
+
+1 F$PROCESS
+ Returns the process name of the current process.
+
+ Format: F$PROCESS()
+
+ Returns the name assigned to the current process.
+
+2 Examples
+
+ $ name = F$PROCESS()
+ $ WRITE SYS$OUTPUT "Process: ''F$PROCESS()'"
+
+1 F$SEARCH
+ Searches for files matching a wildcard specification.
+
+ Format: F$SEARCH(filespec)
+
+ Iterative function that returns one matching filename per
+ call. Returns an empty string when no more files match.
+ Each unique filespec maintains its own search context.
+
+2 Parameters
+3 filespec
+ The file specification, optionally containing wildcards.
+
+2 Examples
+
+ $ file = F$SEARCH("*.TXT")
+ $ LOOP:
+ $   f = F$SEARCH("[...]*.COM")
+ $   IF f .EQS. "" THEN GOTO DONE
+ $   WRITE SYS$OUTPUT f
+ $   GOTO LOOP
+ $ DONE:
+
+1 F$STRING
+ Converts an integer expression to a string.
+
+ Format: F$STRING(expression)
+
+ Evaluates the expression and returns its string
+ representation.
+
+2 Parameters
+3 expression
+ The integer expression to convert.
+
+2 Examples
+
+ $ s = F$STRING(42)        ! Returns "42"
+ $ t = F$STRING(2 + 3)     ! Returns "5"
+
+1 F$TIME
+ Returns the current date and time in VMS format.
+
+ Format: F$TIME()
+
+ Returns a string in the format DD-MMM-YYYY HH:MM:SS.CC.
+
+2 Examples
+
+ $ now = F$TIME()
+ $ WRITE SYS$OUTPUT "Current time: ''F$TIME()'"
+
+1 F$TRNLNM
+ Translates a logical name.
+
+ Format: F$TRNLNM(logical_name [, table_name])
+
+ Returns the equivalence string for the specified logical
+ name. If the logical name is not defined, returns an
+ empty string.
+
+2 Parameters
+3 logical_name
+ The logical name to translate.
+
+3 table_name
+ The logical name table to search. Default is
+ LNM$FILE_DEV which searches process, job, group,
+ and system tables.
+
+2 Examples
+
+ $ sys = F$TRNLNM("SYS$LOGIN")
+ $ val = F$TRNLNM("MYLOG", "LNM$SYSTEM_TABLE")
+ $ IF F$TRNLNM("WORKDIR") .NES. "" THEN SET DEFAULT WORKDIR
+
+1 F$TYPE
+ Returns the data type of a symbol.
+
+ Format: F$TYPE(symbol_name)
+
+ Returns "INTEGER" if the symbol has an integer value,
+ "STRING" if it has a string value, or empty string if
+ the symbol is not defined.
+
+2 Parameters
+3 symbol_name
+ The name of the symbol to check.
+
+2 Examples
+
+ $ t = F$TYPE(MY_VAR)
+ $ IF F$TYPE(X) .EQS. "" THEN X = 0
+
+1 F$UNIQUE
+ Returns a unique number for use in temporary file names.
+
+ Format: F$UNIQUE()
+
+ Returns a unique hexadecimal string suitable for
+ constructing unique temporary file names. Each call
+ returns a different value.
+
+2 Examples
+
+ $ temp = "TEMP_" + F$UNIQUE() + ".TMP"
+
+1 F$USER
+ Returns the username of the current process.
+
+ Format: F$USER()
+
+ Returns the username in uppercase.
+
+2 Examples
+
+ $ user = F$USER()
+ $ WRITE SYS$OUTPUT "Logged in as ''F$USER()'"
+
+1 F$VERIFY
+ Returns or sets the command verification setting.
+
+ Format: F$VERIFY([new_setting])
+
+ Without arguments, returns the current verification setting
+ (0 for off, 1 for on). With an argument, sets the verification
+ mode and returns the previous setting.
+
+2 Parameters
+3 new_setting
+ 0 to disable verification, 1 to enable it.
+
+2 Examples
+
+ $ old = F$VERIFY(0)       ! Save and disable verify
+ $ ! ... commands ...
+ $ old = F$VERIFY(old)     ! Restore previous setting
+
+1 HINTS
+ Tips for using OVMX effectively.
+
+ OVMX provides an OpenVMS-compatible environment on Linux. Most
+ DCL commands work as they would on a traditional VMS system.
+
+ Key differences from traditional OpenVMS:
+   - File versioning uses the native Linux filesystem
+   - Device names are mapped from Linux mount points
+   - Processes are Linux processes with VMS-style wrappers
+   - Privileges are mapped from Linux capabilities
+
+ Getting started:
+   - Use SHOW DEFAULT to see your current directory
+   - Use DIRECTORY to list files
+   - Use SET DEFAULT to change directories
+   - Use HELP command-name for detailed help on any command
+
+ Command abbreviation:
+   Most commands can be abbreviated to their minimum unique
+   prefix. For example, DIR for DIRECTORY, SHO for SHOW.
+
+ Command procedures:
+   Files with .COM extension can be executed with @filename.
+   Use SET VERIFY to debug command procedures.
+
+ Logical names:
+   Logical names provide device-independent file access.
+   Use DEFINE or ASSIGN to create logical names.
+   Use SHOW LOGICAL to display definitions.
+
+2 Symbols
+ DCL symbols store string or integer values.
+
+   $ name = "value"         ! String assignment
+   $ count = 42             ! Integer assignment
+   $ SHOW SYMBOL name       ! Display a symbol
+   $ DELETE/SYMBOL name     ! Remove a symbol
+
+ Global symbols persist across command procedure levels.
+ Local symbols are visible only at the current level.
+
+   $ name == "global"       ! Global assignment (==)
+   $ name := "also global"  ! Alternative global form
+
+2 FileVersions
+ OVMX supports VMS-style file versioning where each edit
+ creates a new version (FILE.TXT;1, FILE.TXT;2, etc.).
+
+ Use PURGE to remove old versions.
+ Use DELETE FILE.TXT;n to remove a specific version.
+ Use ;0 or no version to reference the latest version.
+
+2 Wildcards
+ VMS wildcards:
+   *   - Matches any characters in a field
+   %   - Matches exactly one character
+   ... - Matches any directory tree (recursive)
+
+ Examples:
+   *.TXT       - All .TXT files
+   FILE%.*     - FILE1.DAT, FILEA.TXT, etc.
+   [...]*.COM  - All .COM files in any subdirectory
+
+1 CONVENTIONS
+ Command line conventions used in OVMX.
+
+ Commands follow this general format:
+   $ COMMAND[/QUALIFIER[=value]] [parameter] [parameter]
+
+ Conventions used in help text:
+   UPPERCASE   - Keywords (type as shown, any case)
+   lowercase   - User-supplied values
+   [brackets]  - Optional items
+   {braces}    - Choose one of the enclosed items
+   ...         - Preceding item can be repeated
+   |           - Separates choices
+
+ Special characters:
+   @           - Execute a command procedure
+   !           - Comment delimiter (rest of line ignored)
+   -           - Line continuation (at end of line)
+   $           - DCL prompt / command prefix in procedures
+
+ String delimiters:
+   "string"    - Double quotes for string literals
+   'symbol'    - Single quotes for symbol substitution
+   ''symbol''  - Double substitution
+
+2 Abbreviations
+ Commands and qualifiers can be abbreviated to their
+ minimum unique prefix. For example:
+   DIR    for DIRECTORY
+   SHO    for SHOW
+   DEL    for DELETE
+   /CON   for /CONFIRM
+
+2 Expressions
+ DCL supports string and integer expressions:
+
+ String operators:
+   +   - Concatenation
+   -   - Remove trailing spaces then concatenate
+
+ Comparison operators:
+   .EQS.  - Equal (string)
+   .NES.  - Not equal (string)
+   .GTS.  - Greater than (string)
+   .GES.  - Greater or equal (string)
+   .LTS.  - Less than (string)
+   .LES.  - Less or equal (string)
+
+ Numeric operators:
+   +, -, *, /   - Arithmetic
+   .EQ.  - Equal (numeric)
+   .NE.  - Not equal (numeric)
+   .GT.  - Greater than (numeric)
+   .GE.  - Greater or equal (numeric)
+   .LT.  - Less than (numeric)
+   .LE.  - Less or equal (numeric)
+
+ Logical operators:
+   .AND.  - Logical AND
+   .OR.   - Logical OR
+   .NOT.  - Logical NOT
+
+1 SPECIFY
+ Rules for specifying file names in OVMX.
+
+ A full VMS file specification has this format:
+   node::device:[directory]name.type;version
+
+ Components:
+   node::       - Network node (not used in OVMX)
+   device:      - Device name (e.g., SYS$SYSDEVICE:)
+   [directory]  - Directory path
+   name         - File name (up to 39 characters)
+   .type        - File type/extension
+   ;version     - Version number
+
+ Directory specifications:
+   [dir]        - Absolute directory
+   [.subdir]    - Subdirectory of current default
+   [-]          - Parent directory
+   [dir.sub]    - Nested directory
+
+ Logical names in filespecs:
+   LOGICAL:filename   - Translates the logical name
+   SYS$LOGIN:FILE.TXT - File in login directory
+
+2 Defaults
+ When components are omitted from a filespec, defaults
+ are applied:
+   - Device defaults to the current default device
+   - Directory defaults to the current default directory
+   - Version defaults to the highest existing version
+     (for reading) or next version (for creating)
+
+2 Versions
+ File versions are positive integers appended after a
+ semicolon:
+   FILE.TXT;1   - Version 1
+   FILE.TXT;2   - Version 2
+   FILE.TXT;0   - Latest version (equivalent to omitting)
+   FILE.TXT;-1  - Previous version
+
+1 PARAMETERS
+ Global parameters available in command procedures.
+
+ Command procedures receive parameters P1 through P8:
+   $ @PROC.COM arg1 arg2 arg3
+
+ Inside PROC.COM:
+   P1 = "arg1"
+   P2 = "arg2"
+   P3 = "arg3"
+   P4 through P8 = ""
+
+ Parameters are positional. To pass a parameter containing
+ spaces, enclose it in quotes:
+   $ @PROC.COM "first param" second
+
+ P1 = "first param"
+ P2 = "second"
+
+2 Symbols
+ In addition to P1-P8, command procedures can access
+ these automatic symbols:
+
+   $STATUS   - Status of the last command
+   $SEVERITY - Severity of the last command (0-4)
+   $RESTART  - TRUE if procedure restarted after error
+
+ Severity levels:
+   0 - Warning
+   1 - Success
+   2 - Error
+   3 - Information
+   4 - Fatal
+
+1 LEXICAL_FUNCTIONS
+ Lexical functions are built-in functions that provide
+ string manipulation, system information, and file
+ operations within DCL expressions.
+
+ All lexical functions begin with F$ and are called
+ within expressions:
+   $ result = F$function(arguments)
+
+ Available lexical functions:
+
+ String functions:
+   F$EDIT       - Edit a string (trim, compress, etc.)
+   F$ELEMENT    - Extract delimited element
+   F$EXTRACT    - Extract substring
+   F$FAO        - Formatted ASCII output
+   F$LENGTH     - String length
+   F$LOCATE     - Find substring position
+
+ Conversion functions:
+   F$CVSI       - Extract signed bit field
+   F$CVTIME     - Convert/extract date/time
+   F$CVUI       - Extract unsigned bit field
+   F$INTEGER    - Convert to integer
+   F$STRING     - Convert to string
+
+ System information:
+   F$ENVIRONMENT - DCL environment info
+   F$GETDVI     - Device information
+   F$GETJPI     - Process information
+   F$GETSYI     - System information
+   F$MESSAGE    - Status code message text
+   F$MODE       - Process mode
+   F$PRIVILEGE  - Check privileges
+   F$PROCESS    - Process name
+   F$TIME       - Current date/time
+   F$USER       - Username
+
+ File functions:
+   F$DIRECTORY  - Current directory
+   F$FILE_ATTRIBUTES - File attributes
+   F$PARSE      - Parse file specification
+   F$SEARCH     - Wildcard file search
+
+ Symbol functions:
+   F$TYPE       - Symbol data type
+   F$VERIFY     - Get/set verify mode
+
+ Logical name functions:
+   F$TRNLNM     - Translate logical name
+
+ Other:
+   F$CONTEXT    - Set process selection context
+   F$DEVICE     - Iterate devices
+   F$GETQUI     - Queue information
+   F$IDENTIFIER - Identifier translation
+   F$PID        - Iterate process IDs
+   F$UNIQUE     - Generate unique string
+
+ Type HELP F$function-name for detailed help on each function.
+
+1 ON
+ Establishes error handling in a command procedure.
+
+ Format: ON severity THEN action
+
+ Sets up an error handler that executes the specified action
+ when a command returns an error at or above the specified
+ severity level.
+
+2 Parameters
+3 severity
+ The severity level that triggers the handler:
+   WARNING - Severity 0 or above
+   ERROR   - Severity 2 or above
+   SEVERE_ERROR - Severity 4
+
+3 action
+ The action to take:
+   CONTINUE - Continue with the next command
+   EXIT     - Exit the current procedure level
+   GOTO label - Branch to the specified label
+
+2 Examples
+
+ $ ON ERROR THEN GOTO CLEANUP
+ $ ON WARNING THEN CONTINUE
+ $ ON SEVERE_ERROR THEN EXIT
+
+1 IF
+ Conditionally executes a command or block of commands.
+
+ Format: IF expression THEN command
+         IF expression THEN
+           commands...
+         ENDIF
+
+ Evaluates the expression and executes the command(s)
+ only if the result is true.
+
+2 Parameters
+3 expression
+ A logical expression using comparison operators
+ (.EQS., .NES., .EQ., .NE., .GT., .LT., etc.)
+
+2 THEN
+ Keyword separating the condition from the command(s).
+ When THEN appears at the end of a line, begins a
+ block IF (terminated by ENDIF).
+
+2 ELSE
+ Specifies commands to execute when the IF condition
+ is false. Used in block IF constructs.
+
+2 ENDIF
+ Terminates a block IF construct.
+
+2 Examples
+
+ $ IF P1 .EQS. "" THEN EXIT
+ $ IF count .GT. 10 THEN GOTO DONE
+ $ IF F$MODE() .EQS. "INTERACTIVE" THEN -
+     WRITE SYS$OUTPUT "Interactive session"
+
+ Block IF example:
+ $ IF flag
+ $ THEN
+ $   WRITE SYS$OUTPUT "Flag is set"
+ $   count = count + 1
+ $ ELSE
+ $   WRITE SYS$OUTPUT "Flag is not set"
+ $ ENDIF
+
+1 GOTO
+ Transfers control to a labeled line in a command procedure.
+
+ Format: GOTO label
+
+ Branches to the line following the specified label.
+ Labels are defined by a line beginning with $ followed
+ by the label name and a colon.
+
+2 Parameters
+3 label
+ The label to branch to.
+
+2 Examples
+
+ $ GOTO START
+ $ ...
+ $ START:
+ $   WRITE SYS$OUTPUT "Starting"
+
+1 GOSUB
+ Calls a subroutine within a command procedure.
+
+ Format: GOSUB label
+
+ Transfers control to the specified label. Use RETURN
+ to return to the line following the GOSUB.
+
+2 Parameters
+3 label
+ The label of the subroutine.
+
+2 Examples
+
+ $ GOSUB INIT
+ $ GOSUB PROCESS_DATA
+ $ EXIT
+ $
+ $ INIT:
+ $   count = 0
+ $   RETURN
+ $
+ $ PROCESS_DATA:
+ $   ! ... processing ...
+ $   RETURN
+
+1 RETURN
+ Returns from a GOSUB subroutine call.
+
+ Format: RETURN [status]
+
+ Returns control to the line following the most recent
+ GOSUB call.
+
+2 Parameters
+3 status
+ Optional status code to return.
+
+2 Examples
+
+ $ RETURN
+ $ RETURN %X10000001

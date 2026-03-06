@@ -30,11 +30,13 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/poll.h>
+#include <sys/ioctl.h>
 
 #include <pty.h>   /* openpty(), forkpty() */
 
 #include <libssh/libssh.h>
 #include <libssh/server.h>
+#include <libssh/callbacks.h>
 
 #include "sysuaf.h"
 #include "vms/pcb.h"
@@ -88,6 +90,82 @@ static void str_upcase(char *s)
 {
     for (; *s; s++)
         *s = (char)toupper((unsigned char)*s);
+}
+
+/* ------------------------------------------------------------------ */
+/* Window change callback context and handler                        */
+/* ------------------------------------------------------------------ */
+
+struct pty_context {
+    int master_fd;
+    pid_t shell_pid;
+};
+
+static int channel_pty_window_change(ssh_session session,
+                                     ssh_channel channel,
+                                     int cols, int rows,
+                                     int px_width, int px_height,
+                                     void *userdata)
+{
+    (void)session;
+    (void)channel;
+    (void)px_width;
+    (void)px_height;
+
+    struct pty_context *ctx = (struct pty_context *)userdata;
+    if (!ctx || ctx->master_fd < 0)
+        return -1;
+
+    /* Update PTY window size */
+    struct winsize ws;
+    memset(&ws, 0, sizeof(ws));
+    ws.ws_col = (unsigned short)(cols > 0 ? cols : 80);
+    ws.ws_row = (unsigned short)(rows > 0 ? rows : 24);
+    ioctl(ctx->master_fd, TIOCSWINSZ, &ws);
+
+    /* Send SIGWINCH to shell process group so it picks up the new size */
+    if (ctx->shell_pid > 0)
+        kill(ctx->shell_pid, SIGWINCH);
+
+    fprintf(stderr, "%%VMSSSH-I-WINCHG, window changed to %dx%d\n", cols, rows);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* map_term_to_vms_device_type: SSH TERM → VMS device type           */
+/* ------------------------------------------------------------------ */
+
+static const char *map_term_to_vms_device_type(const char *term)
+{
+    if (!term || !term[0])
+        return "VT100";
+
+    /* vt400/vt420 family */
+    if (strncasecmp(term, "vt4", 3) == 0)
+        return "VT400";
+
+    /* vt300/vt320 family */
+    if (strncasecmp(term, "vt3", 3) == 0)
+        return "VT300";
+
+    /* vt200/vt220 family */
+    if (strncasecmp(term, "vt2", 3) == 0)
+        return "VT200";
+
+    /* vt100 family */
+    if (strncasecmp(term, "vt1", 3) == 0)
+        return "VT100";
+
+    /* xterm-256color → VT300 (color capable) */
+    if (strcasecmp(term, "xterm-256color") == 0)
+        return "VT300";
+
+    /* xterm* → VT100 */
+    if (strncasecmp(term, "xterm", 5) == 0)
+        return "VT100";
+
+    /* Fallback: dumb, unknown, anything else → VT100 */
+    return "VT100";
 }
 
 /* ------------------------------------------------------------------ */
@@ -231,9 +309,10 @@ static void handle_connection(ssh_session session)
     ssh_channel channel = NULL;
     int got_shell = 0;
 
-    /* PTY dimensions (set by pty-req) */
+    /* PTY dimensions and terminal type (set by pty-req) */
     int pty_cols = 80;
     int pty_rows = 24;
+    char ssh_term[64] = {0};  /* TERM value from SSH client */
 
     while (!got_shell) {
         ssh_message msg = ssh_message_get(session);
@@ -253,10 +332,16 @@ static void handle_connection(ssh_session session)
             }
         } else if (msg_type == SSH_REQUEST_CHANNEL) {
             if (msg_subtype == SSH_CHANNEL_REQUEST_PTY) {
-                /* Extract dimensions — these accessors are deprecated in favour
-                 * of the callback API, but required for the message-loop pattern. */
+                /* Extract TERM and dimensions — these accessors are deprecated
+                 * in favour of the callback API, but required for the
+                 * message-loop pattern. */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+                const char *req_term = ssh_message_channel_request_pty_term(msg);
+                if (req_term && req_term[0]) {
+                    strncpy(ssh_term, req_term, sizeof(ssh_term) - 1);
+                    ssh_term[sizeof(ssh_term) - 1] = '\0';
+                }
                 pty_cols = ssh_message_channel_request_pty_width(msg);
                 pty_rows = ssh_message_channel_request_pty_height(msg);
 #pragma GCC diagnostic pop
@@ -369,7 +454,13 @@ static void handle_connection(ssh_session session)
         }
 
         /* ---- Step 2: Set up VMS environment variables ---- */
-        setenv("TERM",        "vt100",               1);
+        /* Use SSH client's TERM value if provided, else default to vt100 */
+        setenv("TERM", ssh_term[0] ? ssh_term : "vt100", 1);
+
+        /* Map SSH TERM to VMS device type */
+        const char *vms_devtype = map_term_to_vms_device_type(
+            ssh_term[0] ? ssh_term : NULL);
+        setenv("VMS_DEVICE_TYPE", vms_devtype, 1);
         setenv("HOME",        home_dir,               1);
         setenv("USER",        authed_user,            1);
         setenv("LOGNAME",     authed_user,            1);
@@ -423,6 +514,15 @@ static void handle_connection(ssh_session session)
 
     /* ---- Parent: forward data between SSH channel and PTY master ---- */
     close(slave_fd);
+
+    /* Set up channel callback for window-change requests */
+    struct pty_context pty_ctx = { .master_fd = master_fd, .shell_pid = shell_pid };
+    struct ssh_channel_callbacks_struct channel_cb;
+    memset(&channel_cb, 0, sizeof(channel_cb));
+    ssh_callbacks_init(&channel_cb);
+    channel_cb.userdata = &pty_ctx;
+    channel_cb.channel_pty_window_change_function = channel_pty_window_change;
+    ssh_set_channel_callbacks(channel, &channel_cb);
 
     /* Set master fd non-blocking */
     int flags = fcntl(master_fd, F_GETFL, 0);

@@ -2,6 +2,18 @@
 # SSH integration tests for vmssshd
 
 # ------------------------------------------------------------------ #
+# test_term_mapping — unit test for TERM → VMS device type mapping    #
+# ------------------------------------------------------------------ #
+add_executable(test_term_mapping test_term_mapping.c)
+add_test(NAME term_mapping
+    COMMAND test_term_mapping
+)
+set_tests_properties(term_mapping PROPERTIES
+    LABELS "unit;ssh"
+    TIMEOUT 10
+)
+
+# ------------------------------------------------------------------ #
 # test_ssh_client — libssh-based SSH test client                      #
 # ------------------------------------------------------------------ #
 find_library(LIBSSH_LIBRARY NAMES ssh)

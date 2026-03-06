@@ -84,6 +84,15 @@ void dcl_context_init(struct dcl_context *ctx)
     /* SET TERMINAL defaults — full characteristics model */
     vms_terminal_init(&ctx->terminal);
 
+    /* Terminal device type: set from VMS_DEVICE_TYPE env var if present
+     * (set by vmssshd from SSH TERM negotiation) */
+    const char *env_devtype = getenv("VMS_DEVICE_TYPE");
+    if (env_devtype && env_devtype[0]) {
+        strncpy(ctx->terminal.device_type, env_devtype,
+                sizeof(ctx->terminal.device_type) - 1);
+        ctx->terminal.device_type[sizeof(ctx->terminal.device_type) - 1] = '\0';
+    }
+
     /* Terminal device allocation:
      * If VMS_TERMINAL env var is set, use it directly (e.g., _OPA0: for console).
      * Otherwise, if running interactively, allocate from the _FTA pool. */

@@ -446,6 +446,28 @@ static int cmd_show_process(struct dcl_command *cmd)
     if (dcl_has_qualifier(cmd, "QUOTAS"))
         return cmd_show_process_quotas(ctx);
 
+    /* /ALL qualifier: show all processes (list from /proc) */
+    if (dcl_has_qualifier(cmd, "ALL")) {
+        struct timespec ats;
+        clock_gettime(CLOCK_REALTIME, &ats);
+        struct tm atm;
+        localtime_r(&ats.tv_sec, &atm);
+        printf("      Processes at %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+               atm.tm_mday, vms_months[atm.tm_mon], 1900 + atm.tm_year,
+               atm.tm_hour, atm.tm_min, atm.tm_sec,
+               (int)(ats.tv_nsec / 10000000));
+        printf("    %-20s %-10s %-8s %s\n", "Process Name", "PID", "UIC", "State");
+        /* Show at least the current process */
+        const char *pname = ctx->process_name[0] ? ctx->process_name : "_FTA0:";
+        const char *uname = ctx->username[0] ? ctx->username : "SYSTEM";
+        printf("    %-20s %08X   [%03o,%03o] LEF\n",
+               pname, (unsigned)getpid(),
+               ctx->uic_group ? (unsigned)ctx->uic_group : (unsigned)(getgid() & 0377),
+               ctx->uic_member ? (unsigned)ctx->uic_member : (unsigned)(getuid() & 0377));
+        (void)uname;
+        return SS$_NORMAL;
+    }
+
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
@@ -2170,6 +2192,24 @@ static int cmd_directory(struct dcl_command *cmd)
     int show_date = dcl_has_qualifier(cmd, "DATE");
     int show_full = dcl_has_qualifier(cmd, "FULL");
     int show_brief = dcl_has_qualifier(cmd, "BRIEF");
+    int show_owner = dcl_has_qualifier(cmd, "OWNER");
+    int show_total = dcl_has_qualifier(cmd, "TOTAL");
+    int show_grand_total = dcl_has_qualifier(cmd, "GRAND_TOTAL");
+    /* /HEADING is default on; /NOHEADING suppresses it.
+     * The parser stores /NOHEADING as name="HEADING" negated=1,
+     * and dcl_has_qualifier returns 0 for negated qualifiers.
+     * So: if HEADING qualifier is absent → show (default).
+     *     if HEADING qualifier is present and not negated → show.
+     *     if HEADING qualifier is present and negated → hide.
+     * We detect negation by scanning the qualifiers directly. */
+    int show_heading = 1;
+    for (int qi = 0; qi < cmd->qualifier_count; qi++) {
+        if (strcasecmp(cmd->qualifiers[qi].name, "HEADING") == 0) {
+            show_heading = !cmd->qualifiers[qi].negated;
+            break;
+        }
+    }
+    int show_trailing = dcl_has_qualifier(cmd, "TRAILING");
     int columns = 4;
     const char *col_val = dcl_qualifier_value(cmd, "COLUMNS");
     if (col_val && col_val[0]) columns = atoi(col_val);
@@ -2179,7 +2219,11 @@ static int cmd_directory(struct dcl_command *cmd)
     if (show_full) {
         show_size = 1;
         show_date = 1;
+        show_owner = 1;
     }
+
+    /* If /TOTAL or /GRAND_TOTAL, suppress individual file listing */
+    int suppress_files = show_total || show_grand_total;
 
     /* Display header */
     char vms_dir[512];
@@ -2192,7 +2236,9 @@ static int cmd_directory(struct dcl_command *cmd)
         display_dir[ddlen - 1] = '\0';
     }
     dcl_format_directory(display_dir, vms_dir, sizeof(vms_dir));
-    printf("\nDirectory %s\n\n", vms_dir);
+    if (show_heading) {
+        printf("\nDirectory %s\n\n", vms_dir);
+    }
 
     /* Read directory entries */
     DIR *dir = opendir(linux_dir);
@@ -2339,6 +2385,9 @@ static int cmd_directory(struct dcl_command *cmd)
         total_blocks += blocks;
         file_count++;
 
+        /* If /TOTAL or /GRAND_TOTAL, skip individual file display */
+        if (suppress_files) continue;
+
         if (show_full) {
             /* Full listing: one file per line with all info */
             printf("%-39s", vms_name);
@@ -2355,9 +2404,16 @@ static int cmd_directory(struct dcl_command *cmd)
             char prot_buf[64];
             vmsfs_format_protection(vprot, prot_buf, sizeof(prot_buf));
             printf(" %s", prot_buf);
+
+            /* /OWNER: show file owner UIC */
+            if (show_owner) {
+                printf(" [%03o,%03o]",
+                       (unsigned)(st->st_gid & 0377),
+                       (unsigned)(st->st_uid & 0377));
+            }
             printf("\n");
-        } else if (show_size || show_date) {
-            /* Size and/or date */
+        } else if (show_size || show_date || show_owner) {
+            /* Size and/or date and/or owner */
             printf("%-39s", vms_name);
             if (show_size) {
                 printf(" %6ld", blocks);
@@ -2368,6 +2424,11 @@ static int cmd_directory(struct dcl_command *cmd)
                 printf("  %2d-%s-%04d %02d:%02d:%02d.00",
                        tm.tm_mday, vms_months[tm.tm_mon],
                        1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec);
+            }
+            if (show_owner) {
+                printf(" [%03o,%03o]",
+                       (unsigned)(st->st_gid & 0377),
+                       (unsigned)(st->st_uid & 0377));
             }
             printf("\n");
         } else if (show_brief) {
@@ -2388,14 +2449,29 @@ static int cmd_directory(struct dcl_command *cmd)
     free(entries);
 
     /* Finish last line of columnar output */
-    if (col > 0 && !show_size && !show_date && !show_full && !show_brief) {
+    if (col > 0 && !show_size && !show_date && !show_full && !show_brief &&
+        !show_owner && !suppress_files) {
         printf("\n");
     }
 
     /* Footer */
-    printf("\nTotal of %d file%s, %ld block%s.\n",
-           file_count, file_count != 1 ? "s" : "",
-           total_blocks, total_blocks != 1 ? "s" : "");
+    if (show_grand_total) {
+        printf("\nGrand total of %d directory, %d file%s, %ld block%s.\n",
+               1, file_count, file_count != 1 ? "s" : "",
+               total_blocks, total_blocks != 1 ? "s" : "");
+    } else {
+        printf("\nTotal of %d file%s, %ld block%s.\n",
+               file_count, file_count != 1 ? "s" : "",
+               total_blocks, total_blocks != 1 ? "s" : "");
+    }
+
+    /* /TRAILING: show trailing directory spec */
+    if (show_trailing) {
+        printf("\nTotal of %d file%s, %ld block%s.\n%s\n",
+               file_count, file_count != 1 ? "s" : "",
+               total_blocks, total_blocks != 1 ? "s" : "",
+               vms_dir);
+    }
 
     if (pattern) free((void *)pattern);
     return SS$_NORMAL;
@@ -2497,6 +2573,14 @@ static int cmd_copy(struct dcl_command *cmd)
     fclose(src);
     fclose(dst);
 
+    /* /LOG qualifier: report the copy */
+    if (dcl_has_qualifier(cmd, "LOG")) {
+        char vms_src[256], vms_dst[256];
+        dcl_format_filespec(src_path, vms_src, sizeof(vms_src));
+        dcl_format_filespec(dst_path, vms_dst, sizeof(vms_dst));
+        dcl_error("COPY", 1, "COPIED", "%s copied to %s", vms_src, vms_dst);
+    }
+
     return SS$_NORMAL;
 }
 
@@ -2558,9 +2642,11 @@ static int cmd_delete(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    int no_confirm = dcl_has_qualifier(cmd, "NOCONFIRM") ||
-                     dcl_has_qualifier(cmd, "CONFIRM");
-    /* Note: /CONFIRM with negation check handled by has_qualifier */
+    /* /CONFIRM prompts before each delete; /NOCONFIRM suppresses.
+     * The parser stores /NOCONFIRM as name="CONFIRM" negated=1,
+     * so dcl_has_qualifier(cmd, "CONFIRM") returns 0 for /NOCONFIRM. */
+    int do_confirm = dcl_has_qualifier(cmd, "CONFIRM");
+    int do_log = dcl_has_qualifier(cmd, "LOG");
 
     char linux_path[1024];
     dcl_resolve_path(ctx, cmd->params[0], linux_path, sizeof(linux_path));
@@ -2594,20 +2680,24 @@ static int cmd_delete(struct dcl_command *cmd)
                 char full[2048];
                 snprintf(full, sizeof(full), "%s%s", dir, entry->d_name);
 
-                if (!no_confirm) {
-                    char upper_name[256];
-                    size_t i;
-                    for (i = 0; i < sizeof(upper_name) - 1 && entry->d_name[i]; i++)
-                        upper_name[i] = (char)toupper((unsigned char)entry->d_name[i]);
-                    upper_name[i] = '\0';
-                    printf("Delete %s? [N]: ", upper_name);
+                if (do_confirm) {
+                    char vms_spec[256];
+                    dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
+                    printf("DELETE %s ? [N]: ", vms_spec);
                     fflush(stdout);
                     char resp[64];
                     if (!fgets(resp, sizeof(resp), stdin)) break;
                     if (toupper((unsigned char)resp[0]) != 'Y') continue;
                 }
 
-                if (unlink(full) == 0) deleted++;
+                if (unlink(full) == 0) {
+                    deleted++;
+                    if (do_log) {
+                        char vms_spec[256];
+                        dcl_format_filespec(full, vms_spec, sizeof(vms_spec));
+                        dcl_error("DELETE", 1, "DELETED", "%s deleted", vms_spec);
+                    }
+                }
             }
         }
         closedir(dp);
@@ -2618,22 +2708,28 @@ static int cmd_delete(struct dcl_command *cmd)
         }
     } else {
         /* Single file delete */
-        if (!no_confirm && ctx->interactive) {
-            const char *bn = strrchr(linux_path, '/');
-            if (bn) bn++; else bn = linux_path;
-            char upper[256];
-            size_t i;
-            for (i = 0; i < sizeof(upper) - 1 && bn[i]; i++)
-                upper[i] = (char)toupper((unsigned char)bn[i]);
-            upper[i] = '\0';
-            /* Actually, VMS DELETE does not prompt by default.
-             * Only prompt if /CONFIRM is specified (not /NOCONFIRM). */
+        if (do_confirm) {
+            char vms_spec[256];
+            dcl_format_filespec(linux_path, vms_spec, sizeof(vms_spec));
+            printf("DELETE %s ? [N]: ", vms_spec);
+            fflush(stdout);
+            char resp[64];
+            if (!fgets(resp, sizeof(resp), stdin) ||
+                toupper((unsigned char)resp[0]) != 'Y') {
+                return SS$_NORMAL;
+            }
         }
 
         if (unlink(linux_path) != 0) {
             dcl_error("RMS", 2, "FNF",
                       "file not found - %s", cmd->params[0]);
             return SS$_NOSUCHFILE;
+        }
+
+        if (do_log) {
+            char vms_spec[256];
+            dcl_format_filespec(linux_path, vms_spec, sizeof(vms_spec));
+            dcl_error("DELETE", 1, "DELETED", "%s deleted", vms_spec);
         }
     }
 
@@ -2660,6 +2756,14 @@ static int cmd_rename(struct dcl_command *cmd)
         dcl_error("RMS", 2, "RNF",
                   "rename failed - %s", vms_strerror(errno));
         return SS$_FILACCERR;
+    }
+
+    /* /LOG qualifier: report the rename */
+    if (dcl_has_qualifier(cmd, "LOG")) {
+        char vms_src[256], vms_dst[256];
+        dcl_format_filespec(src_path, vms_src, sizeof(vms_src));
+        dcl_format_filespec(dst_path, vms_dst, sizeof(vms_dst));
+        dcl_error("RENAME", 1, "RENAMED", "%s renamed to %s", vms_src, vms_dst);
     }
 
     return SS$_NORMAL;
@@ -2771,6 +2875,8 @@ static int cmd_search(struct dcl_command *cmd)
 
     const char *search_str = cmd->params[1];
     int exact = dcl_has_qualifier(cmd, "EXACT");
+    int show_numbers = dcl_has_qualifier(cmd, "NUMBERS");
+    int show_stats = dcl_has_qualifier(cmd, "STATISTICS");
 
     FILE *fp = fopen(linux_path, "r");
     if (!fp) {
@@ -2790,6 +2896,7 @@ static int cmd_search(struct dcl_command *cmd)
     char line[4096];
     int found = 0;
     int line_num = 0;
+    int match_count = 0;
 
     while (fgets(line, sizeof(line), fp)) {
         line_num++;
@@ -2817,11 +2924,20 @@ static int cmd_search(struct dcl_command *cmd)
             /* Remove trailing newline for cleaner output */
             size_t llen = strlen(line);
             if (llen > 0 && line[llen - 1] == '\n') line[llen - 1] = '\0';
-            printf("%s\n", line);
+            if (show_numbers) {
+                printf("%d: %s\n", line_num, line);
+            } else {
+                printf("%s\n", line);
+            }
+            match_count++;
         }
     }
 
     fclose(fp);
+
+    if (show_stats) {
+        printf("\n%d lines matched in 1 file\n", match_count);
+    }
 
     if (!found) {
         dcl_error("SEARCH", 0, "NOMATCHES",
@@ -2852,6 +2968,9 @@ extern int vmsfs_list_versions(const char *linux_dir, const char *basename,
 static int cmd_purge(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
+
+    int do_log = dcl_has_qualifier(cmd, "LOG");
+    int do_confirm = dcl_has_qualifier(cmd, "CONFIRM");
 
     /* Determine keep count from /KEEP=n qualifier */
     int keep_count = 1;
@@ -2996,11 +3115,46 @@ static int cmd_purge(struct dcl_command *cmd)
         bases[base_count].ext[sizeof(bases[0].ext) - 1] = '\0';
         base_count++;
 
+        /* /CONFIRM: prompt before purging this file */
+        if (do_confirm) {
+            char upper_name[128];
+            size_t ui;
+            for (ui = 0; ui < sizeof(upper_name) - 1 && fname[ui]; ui++)
+                upper_name[ui] = (char)toupper((unsigned char)fname[ui]);
+            upper_name[ui] = '\0';
+            char upper_ext[64];
+            for (ui = 0; ui < sizeof(upper_ext) - 1 && fext[ui]; ui++)
+                upper_ext[ui] = (char)toupper((unsigned char)fext[ui]);
+            upper_ext[ui] = '\0';
+            printf("PURGE %s%s%s ? [N]: ", upper_name,
+                   upper_ext[0] ? "." : "", upper_ext);
+            fflush(stdout);
+            char resp[64];
+            if (!fgets(resp, sizeof(resp), stdin) ||
+                toupper((unsigned char)resp[0]) != 'Y')
+                continue;
+        }
+
         /* Purge old versions for this file */
         int deleted = vmsfs_purge_versions(dir_notrail, fname,
                                             fext[0] ? fext : NULL, keep_count);
         if (deleted > 0) {
             total_deleted += deleted;
+            if (do_log) {
+                char upper_name[128];
+                size_t ui;
+                for (ui = 0; ui < sizeof(upper_name) - 1 && fname[ui]; ui++)
+                    upper_name[ui] = (char)toupper((unsigned char)fname[ui]);
+                upper_name[ui] = '\0';
+                char upper_ext[64];
+                for (ui = 0; ui < sizeof(upper_ext) - 1 && fext[ui]; ui++)
+                    upper_ext[ui] = (char)toupper((unsigned char)fext[ui]);
+                upper_ext[ui] = '\0';
+                dcl_error("PURGE", 1, "PURGED",
+                          "%s%s%s purged (%d version%s removed)",
+                          upper_name, upper_ext[0] ? "." : "", upper_ext,
+                          deleted, deleted != 1 ? "s" : "");
+            }
         }
     }
     closedir(dir);

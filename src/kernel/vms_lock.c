@@ -30,16 +30,6 @@
 
 #include "vms_internal.h"
 
-/* VMS status codes */
-#define SS__NORMAL      0x00000001
-#define SS__BADPARAM    0x00000014
-#define SS__NOTQUEUED   40   /* lock not queued (NOQUEUE flag) */
-#define SS__DEADLOCK    100  /* deadlock detected */
-#define SS__IVLOCKID    108  /* invalid lock ID */
-#define SS__SUBLOCKS    112  /* sublocks still held */
-#define SS__CANCELGRANT 116  /* conversion cancelled */
-#define SS__VALNOTVALID 120  /* value block not valid */
-#define SS__INSFMEM     20
 
 /* Lock mode compatibility matrix */
 static const uint8_t compat[6][6] = {
@@ -63,26 +53,47 @@ DEFINE_SPINLOCK(vms_res_hash_lock);
 static struct kmem_cache *vms_lock_cache;
 static struct kmem_cache *vms_resource_cache;
 
-void vms_lock_init(void)
+int vms_lock_init(void)
 {
     vms_lock_cache = kmem_cache_create("vms_lock",
                                         sizeof(struct vms_lock_entry),
                                         0, SLAB_HWCACHE_ALIGN, NULL);
+    if (!vms_lock_cache)
+        return -ENOMEM;
+
     vms_resource_cache = kmem_cache_create("vms_resource",
                                             sizeof(struct vms_lock_resource),
                                             0, SLAB_HWCACHE_ALIGN, NULL);
+    if (!vms_resource_cache) {
+        kmem_cache_destroy(vms_lock_cache);
+        vms_lock_cache = NULL;
+        return -ENOMEM;
+    }
+
     hash_init(vms_res_hash);
+    return 0;
 }
 
 void vms_lock_cleanup(void)
 {
     struct vms_lock_resource *res;
+    struct vms_lock_entry *lock, *ltmp;
     struct hlist_node *tmp;
     int bkt;
 
-    /* Free all resources */
+    /* Free all resources and their lock entries */
     spin_lock(&vms_res_hash_lock);
     hash_for_each_safe(vms_res_hash, bkt, tmp, res, hash_node) {
+        /* Free lock entries on granted list */
+        list_for_each_entry_safe(lock, ltmp, &res->granted, res_granted) {
+            list_del(&lock->res_granted);
+            kmem_cache_free(vms_lock_cache, lock);
+        }
+        /* Free lock entries on waiting list */
+        list_for_each_entry_safe(lock, ltmp, &res->waiting, res_waiting) {
+            list_del(&lock->res_waiting);
+            kmem_cache_free(vms_lock_cache, lock);
+        }
         hash_del(&res->hash_node);
         kmem_cache_free(vms_resource_cache, res);
     }
@@ -111,12 +122,26 @@ static struct vms_lock_entry *lock_find_by_id(uint32_t lkid)
         else if (lkid > entry->lkid)
             node = node->rb_right;
         else {
+            entry->refcount++;
             spin_unlock(&vms_lock_id_lock);
             return entry;
         }
     }
     spin_unlock(&vms_lock_id_lock);
     return NULL;
+}
+
+static void lock_put(struct vms_lock_entry *entry)
+{
+    spin_lock(&vms_lock_id_lock);
+    entry->refcount--;
+    if (entry->refcount <= 0) {
+        /* Entry was removed from tree and last reference dropped */
+        spin_unlock(&vms_lock_id_lock);
+        kmem_cache_free(vms_lock_cache, entry);
+        return;
+    }
+    spin_unlock(&vms_lock_id_lock);
 }
 
 static void lock_insert_id(struct vms_lock_entry *entry)
@@ -170,7 +195,7 @@ static struct vms_lock_resource *resource_find(const char *name)
 
 static struct vms_lock_resource *resource_find_or_create(const char *name)
 {
-    struct vms_lock_resource *res;
+    struct vms_lock_resource *res, *new_res;
     uint32_t key;
 
     spin_lock(&vms_res_hash_lock);
@@ -180,26 +205,36 @@ static struct vms_lock_resource *resource_find_or_create(const char *name)
         spin_unlock(&vms_res_hash_lock);
         return res;
     }
-
-    res = kmem_cache_zalloc(vms_resource_cache, GFP_ATOMIC);
-    if (!res) {
-        spin_unlock(&vms_res_hash_lock);
-        return NULL;
-    }
-
-    strscpy(res->name, name, sizeof(res->name));
-    INIT_LIST_HEAD(&res->granted);
-    INIT_LIST_HEAD(&res->waiting);
-    memset(res->valblk, 0, LCK_VALBLK_SIZE);
-    spin_lock_init(&res->lock);
-    res->refcount = 1;
-    res->parent = NULL;
-
-    key = resource_hash_key(name);
-    hash_add(vms_res_hash, &res->hash_node, key);
     spin_unlock(&vms_res_hash_lock);
 
-    return res;
+    /* Allocate outside spinlock so we can use GFP_KERNEL */
+    new_res = kmem_cache_zalloc(vms_resource_cache, GFP_KERNEL);
+    if (!new_res)
+        return NULL;
+
+    /* Re-check under lock — another thread may have created it */
+    spin_lock(&vms_res_hash_lock);
+    res = resource_find(name);
+    if (res) {
+        res->refcount++;
+        spin_unlock(&vms_res_hash_lock);
+        kmem_cache_free(vms_resource_cache, new_res);
+        return res;
+    }
+
+    strscpy(new_res->name, name, sizeof(new_res->name));
+    INIT_LIST_HEAD(&new_res->granted);
+    INIT_LIST_HEAD(&new_res->waiting);
+    memset(new_res->valblk, 0, LCK_VALBLK_SIZE);
+    spin_lock_init(&new_res->lock);
+    new_res->refcount = 1;
+    new_res->parent = NULL;
+
+    key = resource_hash_key(name);
+    hash_add(vms_res_hash, &new_res->hash_node, key);
+    spin_unlock(&vms_res_hash_lock);
+
+    return new_res;
 }
 
 static void resource_release(struct vms_lock_resource *res)
@@ -449,6 +484,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
+    lock->refcount = 1;
     lock->granted_mode = LCK_K_NLMODE;
     lock->requested_mode = args.lkmode;
     lock->flags = args.flags;
@@ -572,6 +608,8 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
 
     lock = lock_find_by_id(args.lkid);
     if (!lock || lock->proc != proc) {
+        if (lock)
+            lock_put(lock);
         args.status = SS__IVLOCKID;
         goto out;
     }
@@ -603,7 +641,8 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg)
     /* Remove from ID tree and free */
     lock_remove_id(lock);
     resource_release(res);
-    kmem_cache_free(vms_lock_cache, lock);
+    lock_put(lock);  /* drop lock_find_by_id reference */
+    lock_put(lock);  /* drop "exists in system" reference — triggers free */
 
     args.status = SS__NORMAL;
 
@@ -637,11 +676,14 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
 
     lock = lock_find_by_id(args.lkid);
     if (!lock || lock->proc != proc) {
+        if (lock)
+            lock_put(lock);
         args.status = SS__IVLOCKID;
         goto out;
     }
 
     if (lock->waiting) {
+        lock_put(lock);
         args.status = SS__CANCELGRANT;
         goto out;
     }
@@ -700,6 +742,8 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
         }
     }
 
+    lock_put(lock);  /* drop lock_find_by_id reference */
+
 out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -737,6 +781,7 @@ long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg)
     }
 
     args.status = SS__NORMAL;
+    lock_put(lock);  /* drop lock_find_by_id reference */
 
 out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))

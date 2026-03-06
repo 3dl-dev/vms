@@ -112,6 +112,7 @@ struct vms_lock_entry {
     struct vms_lock_resource *resource;
     struct vms_proc     *proc;
     int                 waiting;        /* 1 if on waiting list */
+    int                 refcount;       /* reference count for safe lookup */
 };
 
 /* Lock resource (named resource in the lock database) */
@@ -216,7 +217,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 
 /* Subsystem init/cleanup */
-void vms_lock_init(void);
+int vms_lock_init(void);
 void vms_lock_cleanup(void);
 void vms_eflag_init(void);
 void vms_eflag_cleanup(void);

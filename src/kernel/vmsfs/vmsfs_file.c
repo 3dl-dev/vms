@@ -126,10 +126,14 @@ static ssize_t vmsfs_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
     struct file *backing_file = iocb->ki_filp->private_data;
     struct file *vmsfs_file = iocb->ki_filp;
+    struct inode *inode = file_inode(vmsfs_file);
     ssize_t ret;
 
     if (!backing_file || !backing_file->f_op->read_iter)
         return -EIO;
+
+    /* Protect f_pos against concurrent I/O */
+    inode_lock(inode);
 
     /* Synchronize the position */
     backing_file->f_pos = vmsfs_file->f_pos;
@@ -140,6 +144,8 @@ static ssize_t vmsfs_read_iter(struct kiocb *iocb, struct iov_iter *to)
 
     /* Update the vmsfs file position */
     vmsfs_file->f_pos = backing_file->f_pos;
+
+    inode_unlock(inode);
 
     /* Update the vmsfs inode size if the backing file grew */
     if (ret > 0) {
@@ -161,10 +167,14 @@ static ssize_t vmsfs_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
     struct file *backing_file = iocb->ki_filp->private_data;
     struct file *vmsfs_file = iocb->ki_filp;
+    struct inode *inode = file_inode(vmsfs_file);
     ssize_t ret;
 
     if (!backing_file || !backing_file->f_op->write_iter)
         return -EIO;
+
+    /* Protect f_pos against concurrent I/O */
+    inode_lock(inode);
 
     /* Synchronize the position */
     backing_file->f_pos = vmsfs_file->f_pos;
@@ -175,6 +185,8 @@ static ssize_t vmsfs_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
     /* Update the vmsfs file position */
     vmsfs_file->f_pos = backing_file->f_pos;
+
+    inode_unlock(inode);
 
     /* Update the vmsfs inode size from the backing file */
     if (ret > 0) {

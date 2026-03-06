@@ -37,8 +37,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     kmod cpio \
     && rm -rf /var/lib/apt/lists/*
 
-# Determine kernel version from installed packages
-RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver
+# Determine kernel version and ensure build symlink exists
+RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && \
+    if [ ! -d "/lib/modules/${KVER}/build" ]; then \
+        echo "Build dir missing for $KVER, installing headers..." && \
+        apt-get update -qq && apt-get install -y --no-install-recommends \
+            linux-headers-${KVER} && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # Make kernel UAPI headers available to musl-gcc
 # musl doesn't ship linux/ or asm/ headers — symlink from linux-libc-dev

@@ -2,7 +2,7 @@
 # TEST: /LOG and /CONFIRM qualifiers work on file commands
 # EXPECT: contains:COPIED
 # EXPECT: contains:DELETED
-# EXPECT: regex:(SEARCH|NUMBERS|lines)
+# EXPECT: regex:[0-9]+:.*hello
 VMSDCL="${VMSDCL:-vmsdcl}"
 TDIR="dcl_qual_test_$$"
 mkdir -p "/vms/$TDIR"

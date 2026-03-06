@@ -21,6 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /install/ /
 COPY --from=builder /src/distro/rootfs/ /
 
+# Provide short-name symlinks so CI can use --entrypoint vmsdcl
+RUN ln -s /vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE /usr/local/bin/vmsdcl
+
 EXPOSE 22
 
 ENTRYPOINT ["/vms/SYS0/SYSCOMMON/SYSEXE/STARTUP.EXE"]

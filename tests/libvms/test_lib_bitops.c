@@ -162,7 +162,7 @@ static void test_insv(void)
     int32_t pos5  = 0;
     uint8_t size5 = 0;
     lib$insv(&src5, &pos5, &size5, buf);
-    check(buf[0] == (char)0xAA, "insv size 0 is no-op");
+    check(buf[0] == 0xAA, "insv size 0 is no-op");
 }
 
 /* ------------------------------------------------------------------ */

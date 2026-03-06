@@ -173,8 +173,9 @@ long vms_ioctl_setast(struct vms_proc *proc, unsigned long arg)
  * This is the polling interface. The kernel can also proactively
  * notify via signals when ASTs are queued (future enhancement).
  */
-long vms_ioctl_deliverast(struct vms_proc *proc)
+long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg)
 {
+    (void)arg;
     struct vms_ast_args args;
     struct vms_ast_entry *entry;
     int mode;

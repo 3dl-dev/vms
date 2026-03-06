@@ -50,6 +50,10 @@ static void format_vms_timestamp(char *buf, size_t bufsz)
     clock_gettime(CLOCK_REALTIME, &ts);
 
     struct tm *tm = localtime(&ts.tv_sec);
+    if (!tm) {
+        snprintf(buf, bufsz, "00-JAN-1970 00:00:00.00");
+        return;
+    }
     int hundredths = (int)(ts.tv_nsec / 10000000);
 
     snprintf(buf, bufsz, "%02d-%s-%04d %02d:%02d:%02d.%02d",

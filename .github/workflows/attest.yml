@@ -1,0 +1,34 @@
+name: Attest Commit
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - ".attestations/**"
+
+permissions:
+  contents: write
+
+jobs:
+  stamp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenTimestamps
+        run: pip install opentimestamps-client
+
+      - name: Stamp commit hash
+        run: |
+          mkdir -p .attestations
+          echo -n "${{ github.sha }}" > /tmp/commit.txt
+          ots stamp /tmp/commit.txt
+          mv /tmp/commit.txt.ots ".attestations/${{ github.sha }}.ots"
+
+      - name: Commit proof
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ".attestations/${{ github.sha }}.ots"
+          git commit -m "Attest ${{ github.sha }}"
+          git push

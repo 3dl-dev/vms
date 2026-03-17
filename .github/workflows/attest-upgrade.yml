@@ -1,0 +1,41 @@
+name: Upgrade Attestation Proofs
+
+on:
+  schedule:
+    - cron: "0 6 * * *"  # Daily 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install OpenTimestamps
+        run: pip install opentimestamps-client
+
+      - name: Upgrade pending proofs
+        run: |
+          UPGRADED=0
+          for ots_file in .attestations/*.ots; do
+            [ -f "$ots_file" ] || continue
+            if ots upgrade "$ots_file" 2>&1; then
+              UPGRADED=$((UPGRADED + 1))
+            fi
+          done
+          echo "Checked all proofs. $UPGRADED file(s) touched."
+
+      - name: Commit upgraded proofs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .attestations/
+          if git diff --cached --quiet; then
+            echo "No proofs upgraded."
+          else
+            git commit -m "Upgrade attestation proofs to Bitcoin-anchored"
+            git push
+          fi

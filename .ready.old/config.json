@@ -1,0 +1,9 @@
+{
+  "campfire_id": "ed9bdd43f81a574ecc07ec10f43ea24bd233e908a8465415bf3a54ab66433a13",
+  "durability": {
+    "meets_minimum": false,
+    "warnings": [
+      "manually initialized \u2014 skipped durability check (identity wrapped)"
+    ]
+  }
+}

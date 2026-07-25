@@ -48,3 +48,6 @@ __pycache__/
 
 # Environment
 .env
+
+# agent worktrees — never commit
+.claude/worktrees/

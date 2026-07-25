@@ -51,3 +51,6 @@ __pycache__/
 
 # agent worktrees — never commit
 .claude/worktrees/
+
+# rd local nostr sync cache
+.ready/nostr-log.jsonl

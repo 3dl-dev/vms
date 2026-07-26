@@ -1994,6 +1994,25 @@ uint32_t sys$enq(
 | `LCK$K_PWMODE` | 4 | Protected Write |
 | `LCK$K_EXMODE` | 5 | Exclusive |
 
+**Lock flags (`flags`, `LCK$M_`):** real OpenVMS `$LCKDEF` bit values. The
+kernel lock manager honors `VALBLK`, `CONVERT`, `NOQUEUE`, and `SYSTEM`; the
+remaining flags are accepted but not yet acted on.
+
+| Constant | Value | Honored | Description |
+|----------|-------|---------|-------------|
+| `LCK$M_VALBLK` | `0x0001` | yes | Read/write the 16-byte lock value block |
+| `LCK$M_CONVERT` | `0x0002` | yes | Convert the existing lock in `lksb$l_lkid` to `lkmode` |
+| `LCK$M_NOQUEUE` | `0x0004` | yes | Fail with `SS$_NOTQUEUED` if not immediately grantable |
+| `LCK$M_SYNCSTS` | `0x0008` | no | Synchronous-completion hint |
+| `LCK$M_SYSTEM` | `0x0010` | yes | System-wide resource namespace |
+
+> **Compat note:** these are the authentic `$LCKDEF` values, which differ
+> from the kernel lock manager's internal bitmask; `sys_lock.c` translates
+> at the `/dev/vms` boundary so kernel numbering never appears in the public
+> contract. Values are a single-lineage community reproduction (FreeVMS
+> `lckdef.h`) — VSI/HPE publish the names but no numeric values. See the
+> provenance comment in `starlet.h`.
+
 **Parameters:**
 
 | Parameter | Type | Required | Description |
@@ -2001,7 +2020,7 @@ uint32_t sys$enq(
 | `efn` | `uint32_t` | No | Event flag to set on completion |
 | `lkmode` | `uint32_t` | Yes | Lock mode (`LCK$K_` value) |
 | `lksb` | `void *` | Yes | Lock Status Block — receives lock ID and status |
-| `flags` | `uint32_t` | No | Lock flags; currently ignored |
+| `flags` | `uint32_t` | No | Lock flags (`LCK$M_` bits; see table above) |
 | `resnam` | `const struct dsc$descriptor_s *` | Yes | Resource name descriptor |
 | `parid` | `uint32_t` | No | Parent lock ID; currently ignored |
 | `astadr` | `void (*)(uint32_t)` | No | Completion AST; currently ignored for `sys$enq` |
@@ -2025,23 +2044,35 @@ struct lksb {
 
 | Status | Meaning |
 |--------|---------|
-| `SS$_NORMAL` | Lock granted |
+| `SS$_NORMAL` | Lock granted (or queued, for async `sys$enq`) |
 | `SS$_BADPARAM` | NULL `lksb` |
-| `SS$_EXENQLM` | Lock table full (max 256 concurrent locks) |
-| `SS$_DEADLOCK` | `flock()` failed (reported as deadlock) |
+| `SS$_NOTQUEUED` | `LCK$M_NOQUEUE` set and the mode was not immediately grantable |
+| `SS$_DEADLOCK` | Deadlock detected by the kernel lock manager |
+| `SS$_NOSUCHDEV` | `/dev/vms` unavailable (e.g. Docker mode — locking is kernel-only) |
+
+Status codes are translated from the kernel lock manager's internal values
+to the public `$SSDEF` codes at the library boundary (`kstat_to_ss` in
+`sys_lock.c`).
 
 **Description:**
 
-Acquires a named resource lock implemented as a file in `/tmp/ovmx/locks/`.
-Modes `NLMODE`-`CWMODE` use a shared `flock(LOCK_SH)`; modes `PRMODE`-`EXMODE`
-use an exclusive `flock(LOCK_EX)`. The lock blocks until the requested mode
-is available.
+`sys$enq`/`sys$enqw` route through the **kernel lock manager** (`vms.ko`, via
+`/dev/vms`) — the single authoritative lock manager — using its 6-mode
+compatibility matrix, value blocks, blocking ASTs, deadlock detection, and
+lock conversion. There is no userspace `flock` path; locking requires the
+kernel module and is therefore a QEMU-mode capability (in Docker mode, with
+no `/dev/vms`, these services return `SS$_NOSUCHDEV`).
 
-The current implementation of `sys$enq` is synchronous (same as `sys$enqw`).
+`sys$enqw` waits until the requested mode is granted; `sys$enq` returns
+immediately with the granted-or-queued status.
 
-**VMS Compatibility:** True distributed lock management, lock value blocks
-on acquire, blocking ASTs, lock conversion, and sub-resource locking (parent
-ID) are not implemented.
+**VMS Compatibility:** Value blocks, lock conversion (`LCK$M_CONVERT`),
+blocking ASTs, deadlock detection, and the full mode-compatibility matrix are
+supported through the kernel lock manager. Known gaps (tracked in `vms-ab6`):
+`sys$enqw`'s wait is currently a `GETLKI` poll loop rather than in-kernel
+blocking, so a deadlock that forms *after* a request is queued is not
+reported as `SS$_DEADLOCK`; completion ASTs on delayed grant are not yet
+delivered.
 
 ---
 
@@ -2074,20 +2105,23 @@ uint32_t sys$deq(
 | `lkid` | `uint32_t` | Yes | Lock ID from `lksb$l_lkid` |
 | `valblk` | `void *` | No | 16-byte value block to store in lock (copied to LKSB) |
 | `acmode` | `uint32_t` | No | Access mode; currently ignored |
-| `flags` | `uint32_t` | No | Dequeue flags; currently ignored |
+| `flags` | `uint32_t` | No | Dequeue flags (translated to the kernel bitmask; only `VALBLK` is currently acted on) |
 
 **Return Values:**
 
 | Status | Meaning |
 |--------|---------|
 | `SS$_NORMAL` | Lock released |
-| `SS$_BADPARAM` | Lock ID not found |
+| `SS$_IVLOCKID` | Lock ID not found / invalid |
+| `SS$_NOSUCHDEV` | `/dev/vms` unavailable (kernel-only, as for `sys$enq`) |
 
 **Description:**
 
-Releases the lock identified by `lkid`, unlocking the file lock and closing
-the lock file descriptor. If `valblk` is provided, its 16 bytes are copied
-into the LKSB value block.
+Releases the lock identified by `lkid` through the kernel lock manager. If
+`valblk` is supplied (with `LCK$M_VALBLK`), its 16 bytes update the resource's
+value block. Note: real OpenVMS `$DEQ` has its own flag namespace
+(`LCK$M_DEQALL`/`CANCEL`/`INVVALBLK`) distinct from the `$ENQ` flags; only the
+value-block behavior is currently honored.
 
 ---
 

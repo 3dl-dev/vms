@@ -556,7 +556,8 @@ static void handle_connection(ssh_session session)
         fds[1].events  = POLLIN;
         fds[1].revents = 0;
 
-        int ret = poll(fds, 2, 1000); /* 1s timeout for periodic exit checks */
+        int ret = poll(fds, 2, 200); /* short timeout: also drains libssh-buffered
+                                      * channel data the socket won't re-signal */
 
         if (ret < 0) {
             if (errno == EINTR)
@@ -564,8 +565,20 @@ static void handle_connection(ssh_session session)
             break;
         }
 
-        /* Data from SSH channel -> PTY master */
-        if (!client_eof && (fds[0].revents & POLLIN)) {
+        /* Data from SSH channel -> PTY master.
+         *
+         * Do NOT gate this read on the socket's POLLIN. libssh reads the
+         * client's channel payload off the socket into its own per-channel
+         * buffer during packet processing, so once a scripted client (an ssh
+         * heredoc) has sent its commands, the socket has nothing more to
+         * signal (no POLLIN) while those commands sit unread inside libssh.
+         * Polling the socket alone then never drains them: the session reaches
+         * the DCL prompt but the piped commands never drive it, and when EOF is
+         * observed we stop before draining — the flaky-UAT failure (vms-e18).
+         * ssh_channel_read_nonblocking() both pumps any pending socket packets
+         * AND returns already-buffered bytes, so we call it every iteration
+         * (poll's short timeout just throttles the idle spin). */
+        if (!client_eof) {
             int n = ssh_channel_read_nonblocking(channel, buf, sizeof(buf), 0);
             if (n > 0) {
                 ssize_t written = 0;
@@ -577,10 +590,22 @@ static void handle_connection(ssh_session session)
                     }
                     written += w;
                 }
+            } else if (n == SSH_EOF || (n == 0 && ssh_channel_is_eof(channel))) {
+                /* Client half-closed its input. A scripted client (an ssh
+                 * heredoc) EOFs its stdin right after sending commands, and
+                 * libssh signals this as SSH_EOF (-127) from
+                 * ssh_channel_read_nonblocking() — it is NOT an error. The old
+                 * code lumped -127 into "n < 0" and broke the loop, tearing the
+                 * whole session down on the client's normal EOF and SIGHUP-ing
+                 * DCL before it could read the piped commands off the PTY (the
+                 * flaky-UAT root cause, vms-e18). Treat it as a half-close:
+                 * stop reading input but keep the PTY alive and keep forwarding
+                 * DCL output until the shell child exits (it will, once it runs
+                 * the piped commands through LOGOUT). A real interactive user
+                 * never EOFs stdin, so their sessions are unaffected. */
+                client_eof = 1;
             } else if (n < 0) {
-                break;                     /* channel read error */
-            } else if (n == 0 && ssh_channel_is_eof(channel)) {
-                client_eof = 1;            /* half-close: keep draining PTY output */
+                break;                     /* genuine channel error (SSH_ERROR) */
             }
         }
 
@@ -588,7 +613,18 @@ static void handle_connection(ssh_session session)
         if (fds[1].revents & POLLIN) {
             ssize_t n = read(master_fd, buf, sizeof(buf));
             if (n > 0) {
-                ssh_channel_write(channel, buf, (uint32_t)n);
+                /* Write the whole buffer. ssh_channel_write() may write fewer
+                 * bytes than requested; ignoring its return silently drops
+                 * session output (an intermittent missing line — residual
+                 * vms-e18). Loop until all n bytes are sent. */
+                ssize_t off = 0;
+                while (off < n) {
+                    int w = ssh_channel_write(channel, buf + off,
+                                              (uint32_t)(n - off));
+                    if (w == SSH_ERROR)
+                        goto done;
+                    off += w;
+                }
             } else if (n < 0) {
                 if (errno == EIO)
                     break; /* PTY slave closed: shell exited */
@@ -608,6 +644,30 @@ static void handle_connection(ssh_session session)
     }
 
 done:
+    /* Final drain: DCL may have written its last output into the PTY just
+     * before exiting, and the forward loop breaks on child-exit/hangup without
+     * necessarily having read it. Flush anything still readable to the channel
+     * before we close, so the tail of the session is not lost (residual
+     * vms-e18). Bounded by poll's 200ms idle timeout. */
+    if (master_fd >= 0 && channel && !ssh_channel_is_closed(channel)) {
+        for (;;) {
+            struct pollfd pfd = { .fd = master_fd, .events = POLLIN, .revents = 0 };
+            if (poll(&pfd, 1, 200) <= 0)
+                break;
+            if (!(pfd.revents & (POLLIN | POLLHUP | POLLERR)))
+                break;
+            ssize_t n = read(master_fd, buf, sizeof(buf));
+            if (n <= 0)
+                break;
+            ssize_t off = 0;
+            while (off < n) {
+                int w = ssh_channel_write(channel, buf + off, (uint32_t)(n - off));
+                if (w == SSH_ERROR) { off = n; break; }
+                off += w;
+            }
+        }
+    }
+
     /* Clean up */
     close(master_fd);
     ssh_channel_send_eof(channel);

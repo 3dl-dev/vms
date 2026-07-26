@@ -79,13 +79,44 @@
 - [x] System logical names configuration (sylogicals.conf)
 - [x] Init script (S50ovmx)
 
-## Phase 8+: Future — PLANNED
+---
 
-- [ ] Enhanced DCL: pipes, command procedures, batch execution
-- [ ] Networking: DECnet-style logical names, cluster emulation concepts
-- [ ] Security hardening: privilege enforcement, audit logging
-- [ ] FUSE ODS-2 driver (BUILD_FUSE option exists, not yet built)
-- [ ] Buildroot integration (configs and package definitions exist in distro/)
-- [ ] VMS HELP content database
-- [ ] Extended RMS: multi-key indexed files, journaling
-- [ ] Process management: job controller, quota enforcement
+## PIVOT (2026-07-25): from standalone compatibility to cluster interop
+
+Phases 1-7 built a standalone VMS-compatible environment. The project has since
+pivoted to its real north star — **cut VSI's legs out via cluster interop**: an
+OVMX Linux node that joins a customer's live VMScluster so they migrate off VSI
+node-by-node, zero downtime. See `docs/product-vision.md` for the full thesis.
+
+Forward work is organized as **two co-required rails** (neither defers), tracked
+as rd epics rather than linear phases:
+
+### Rail A — Cluster interop (`vms-ci`) — the migration path IN
+Clean-room RE of the VMScluster wire protocol against a SIMH VAX 7.3 reference
+lab (`~/vax/cluster`). Ladder:
+- [ ] `vms-ci.0` Clean-room wire-only rule recorded as project invariant
+- [ ] `vms-ci.1` Distinct VAX node added to reference cluster + pristine formation capture
+- [ ] `vms-ci.2` NISCA/SCS/MSCP dissector + written protocol spec
+- [ ] `vms-ci.3` OVMX node appears as a member in real `SHOW CLUSTER`
+- [ ] `vms-ci.4` MSCP-served disk across the OVMX boundary
+- [ ] `vms-ci.5` Distributed Lock Manager participation (`$ENQ`/`$DEQ`) — data-integrity critical
+- [ ] `vms-ci.6` Rolling evacuation demo (workload moves VMS→OVMX, cluster stays up)
+
+### Rail B — VMS compatibility / image activation (`vms-913` + compat) — run their software
+- [ ] `vms-913` VMS image activation (IMGACT.EXE, shareable images, INSTALL, system disk) — a co-equal pillar, NOT deferred
+- [ ] `vms-801` Provable source compatibility with OpenVMS
+- [ ] `vms-898` Authenticity / no-Unix-leaks — enforced as a build-failing invariant
+
+The rails converge at `vms-ci.6` (evacuation needs both DLM and image activation).
+
+### Reorientation (`vms-pivot`)
+- [x] `vms-pivot.1` Reframe product vision + roadmap around cluster interop (this pivot)
+- [ ] `vms-pivot.2` Cluster-node architecture design + stale-implementation assessment
+- [ ] `vms-pivot.3` Re-triage the existing backlog against the two rails
+
+### Legacy Phase 8+ backlog (to be re-triaged in `vms-pivot.3`)
+Enhanced DCL (pipes/batch), DECnet-style networking, security hardening, FUSE
+ODS-2 driver, Buildroot integration, VMS HELP database, extended RMS
+(multi-key/journaling), job controller + quotas. These remain valid work but are
+reprioritized against the two rails — some are load-bearing for a cluster node,
+others defer.

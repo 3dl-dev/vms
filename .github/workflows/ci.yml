@@ -408,3 +408,42 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker rm -f ovmx-uat 2>/dev/null || true
+
+  # -----------------------------------------------------------------------
+  # Job 8: IMGACT.EXE activation proof (musl, aarch64)
+  #
+  # Gate on the OVMX image activator (bead vms-913.x). Runs the clean-room
+  # proof harness inside a native-musl Alpine container: builds IMGACT.EXE,
+  # activates a dynamic test executable through it (DT_HASH symbol lookup,
+  # RELATIVE/GLOB_DAT/JUMP_SLOT/TLSDESC relocs, TLS), and asserts both the
+  # success path (activated program prints PASS, exits 0) and the failure
+  # path (missing shareable image -> %IMGACT-F-IMGNOTFND, nonzero exit).
+  #
+  # IMGACT.EXE is aarch64-only until bead vms-913.11 (x86_64). GitHub runners
+  # are x86_64, so the harness runs under arm64 emulation via binfmt/QEMU.
+  # This is a hard gate (rule 10): a broken activator fails the build.
+  # -----------------------------------------------------------------------
+  imgact-proof:
+    name: IMGACT.EXE Activation Proof (musl)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build + activate IMGACT.EXE in Alpine (musl, arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc
+              sh /src/src/imgact/test/run_test.sh
+            '

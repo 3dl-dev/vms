@@ -523,18 +523,32 @@ static void handle_connection(ssh_session session)
     fcntl(master_fd, F_SETFL, flags | O_NONBLOCK);
 
     char buf[FORWARD_BUF_SIZE];
+    int client_eof = 0;   /* client half-closed its input; keep draining the PTY */
 
     for (;;) {
         struct pollfd fds[2];
 
-        /* Check if channel is still open */
-        if (ssh_channel_is_closed(channel) || ssh_channel_is_eof(channel))
+        /* End the session only when the channel is fully CLOSED — not on
+         * channel EOF alone. A scripted/piped client (e.g. an ssh heredoc)
+         * closes its stdin right after sending input, which raises
+         * channel-EOF while the DCL session is still starting up and
+         * producing output. Ending here tore the session down before any
+         * output (even the login banner) reached the client (vms-83e).
+         * Instead we treat client-EOF as a half-close: stop reading input
+         * but keep forwarding PTY->channel until the shell child exits
+         * (it will, once it processes the piped input — e.g. LOGOUT).
+         * A real interactive user never EOFs stdin, so their sessions are
+         * unaffected and still end via PTY hangup / child exit below. */
+        if (ssh_channel_is_closed(channel))
             break;
 
         /* Poll: SSH channel fd (via session socket) + PTY master */
         int ssh_fd = ssh_get_fd(session);
 
-        fds[0].fd      = ssh_fd;
+        /* Once the client has half-closed, stop polling the channel for
+         * input (fd = -1 is ignored by poll) — otherwise poll would spin
+         * on the readable-but-EOF descriptor. */
+        fds[0].fd      = client_eof ? -1 : ssh_fd;
         fds[0].events  = POLLIN;
         fds[0].revents = 0;
 
@@ -542,7 +556,7 @@ static void handle_connection(ssh_session session)
         fds[1].events  = POLLIN;
         fds[1].revents = 0;
 
-        int ret = poll(fds, 2, 1000); /* 1s timeout for periodic EOF checks */
+        int ret = poll(fds, 2, 1000); /* 1s timeout for periodic exit checks */
 
         if (ret < 0) {
             if (errno == EINTR)
@@ -551,7 +565,7 @@ static void handle_connection(ssh_session session)
         }
 
         /* Data from SSH channel -> PTY master */
-        if (fds[0].revents & POLLIN) {
+        if (!client_eof && (fds[0].revents & POLLIN)) {
             int n = ssh_channel_read_nonblocking(channel, buf, sizeof(buf), 0);
             if (n > 0) {
                 ssize_t written = 0;
@@ -563,8 +577,10 @@ static void handle_connection(ssh_session session)
                     }
                     written += w;
                 }
-            } else if (n < 0 || (n == 0 && ssh_channel_is_eof(channel))) {
-                break;
+            } else if (n < 0) {
+                break;                     /* channel read error */
+            } else if (n == 0 && ssh_channel_is_eof(channel)) {
+                client_eof = 1;            /* half-close: keep draining PTY output */
             }
         }
 

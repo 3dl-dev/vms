@@ -352,7 +352,12 @@ printf '}\n'
 # ---------------------------------------------------------------------------
 # Exit code: non-zero if regressions detected
 # ---------------------------------------------------------------------------
-if [ ${#regressions[@]} -gt 0 ]; then
+# Guard the length check: ${#regressions[@]} on a never-populated array
+# triggers "unbound variable" under `set -u` on bash < 4.4 (the builder
+# image). ${regressions[*]+x} is empty for an empty array and does NOT
+# error, so it short-circuits before the length is ever evaluated (same
+# safe-expansion idiom emit_json_array uses).
+if [ -n "${regressions[*]+x}" ] && [ ${#regressions[@]} -gt 0 ]; then
     printf '\n[REGRESSION] %d regression(s) detected: %s\n' \
         "${#regressions[@]}" "${regressions[*]}" >&2
     exit 1

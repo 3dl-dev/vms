@@ -86,6 +86,26 @@ static uint32_t kstat_to_ss(uint32_t k)
 }
 
 /*
+ * lckflags_to_kernel - Translate public OpenVMS LCK$M_* flag bits (real
+ * $LCKDEF values, see starlet.h) into the kernel lock manager's internal
+ * LCK_M_* bitmask (src/kernel/vms_ioctl.h) before crossing the /dev/vms
+ * ioctl boundary. The public and kernel bit layouts are different (e.g.
+ * public LCK$M_VALBLK is 0x01 but kernel LCK_M_VALBLK is 0x08); this keeps
+ * the kernel's private numbering from leaking into the public $ENQ contract.
+ * Only the flags the kernel lock manager actually implements are mapped;
+ * the remaining real-VMS flags have no kernel equivalent and are dropped.
+ */
+static uint32_t lckflags_to_kernel(uint32_t vms_flags)
+{
+    uint32_t k = 0;
+    if (vms_flags & LCK$M_VALBLK)  k |= LCK_M_VALBLK;
+    if (vms_flags & LCK$M_CONVERT) k |= LCK_M_CONVERT;
+    if (vms_flags & LCK$M_NOQUEUE) k |= LCK_M_NOQUEUE;
+    if (vms_flags & LCK$M_SYSTEM)  k |= LCK_M_SYSTEM;
+    return k;
+}
+
+/*
  * do_enq - Shared core for sys$enq / sys$enqw.
  *
  * Maps the VMS $ENQ parameter set onto vms_kif_enq (fresh lock request)
@@ -121,16 +141,20 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
     uint32_t lkid = 0;
     uint32_t status;
 
+    /* Public LCK$M_* semantics are tested on `flags` (real-VMS bits); the
+     * kernel ioctls receive the translated `kflags`. */
+    uint32_t kflags = lckflags_to_kernel(flags);
+
     if ((flags & LCK$M_CONVERT) && lksb->lksb$l_lkid != 0) {
         lkid = lksb->lksb$l_lkid;
-        status = vms_kif_convert(lkid, lkmode, flags,
+        status = vms_kif_convert(lkid, lkmode, kflags,
                                   (uint64_t)(uintptr_t)blkastadr, valblk);
     } else {
         char name[32] = "";
         if (resnam && resnam->dsc$a_pointer)
             dsc$strncpy(name, resnam, sizeof(name));
 
-        status = vms_kif_enq(efn, lkmode, flags, name, parid,
+        status = vms_kif_enq(efn, lkmode, kflags, name, parid,
                               (uint64_t)(uintptr_t)astadr, astprm,
                               (uint64_t)(uintptr_t)blkastadr,
                               &lkid, valblk);
@@ -250,5 +274,11 @@ uint32_t sys$deq(uint32_t lkid, void *valblk, uint32_t acmode,
     if (ensure_kif_open() < 0)
         return SS$_NOSUCHDEV;
 
-    return kstat_to_ss(vms_kif_deq(lkid, (uint8_t *)valblk, flags));
+    /* Translate public flags to the kernel bitmask at the boundary (same as
+     * $ENQ). NOTE: real OpenVMS $DEQ has its own flag namespace (LCK$M_DEQALL
+     * /CANCEL/INVVALBLK) distinct from the $ENQ flags defined in starlet.h;
+     * the kernel deq currently only acts on the VALBLK bit, so only that is
+     * meaningful here. Full $DEQ flag support is tracked separately. */
+    return kstat_to_ss(vms_kif_deq(lkid, (uint8_t *)valblk,
+                                   lckflags_to_kernel(flags)));
 }

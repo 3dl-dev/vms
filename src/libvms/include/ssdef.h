@@ -128,25 +128,30 @@ extern "C" {
  * Lock manager status codes
  * ================================================================ */
 
-#define SS$_NOTQUEUED       2588    /* Not queued */
-#define SS$_DEADLOCK        708     /* Deadlock detected */
-#define SS$_VALNOTVALID     712     /* Value block not valid */
-#define SS$_PARNOTGRANT     716     /* Parent lock not granted */
-#define SS$_CVTUNGRANT      2720    /* Convert ungrantable */
-
-/* SS$_IVLOCKID / SS$_SUBLOCKS: added for the kernel lock manager
- * (src/kernel/vms_lock.c) status mapping in sys_lock.c. Not independently
- * confirmed against a real OpenVMS message file -- continues this block's
- * existing +4 sequential numbering from SS$_PARNOTGRANT (716) rather than
- * guessing a real VMS value. Revisit if the authoritative value surfaces. */
-#define SS$_IVLOCKID        720     /* Invalid lock ID */
-#define SS$_SUBLOCKS        724     /* Sublocks still held */
+/* Real OpenVMS $SSDEF condition values (VMS compatibility is source-of-truth).
+ * Provenance: the Nankervis ODS2 ssdef.h lineage, redistributed via
+ * vsm.com.au (GCC-for-Alpha kit) and github.com/ztmr/FreeVMS; verified
+ * 2026-07-26. Single-lineage for the lock-specific codes (VSI/HPE manuals
+ * publish the names but no numbers); severity-bit structure checks pass and
+ * SS$_VALNOTVALID matches the VSI manual's "returned as a warning" wording.
+ * Not independently confirmed against an official VSI $SSDEF extract. */
+#define SS$_NOTQUEUED       2488    /* Not queued (0x9B8) */
+#define SS$_DEADLOCK        3594    /* Deadlock detected (0xE0A) */
+#define SS$_VALNOTVALID     2544    /* Value block not valid (0x9F0) */
+#define SS$_PARNOTGRANT     716     /* Parent lock not granted (UNVERIFIED — not
+                                     * in the researched set; see vms-b27 sweep) */
+#define SS$_CVTUNGRANT      8508    /* Convert ungrantable (0x213C) */
+#define SS$_IVLOCKID        8484    /* Invalid lock ID (0x2124) */
+#define SS$_SUBLOCKS        8492    /* Sublocks still held (0x212C) */
 
 /* ================================================================
  * Quota and resource status codes
  * ================================================================ */
 
-#define SS$_EXENQLM         2748    /* Exceeded enqueue limit */
+#define SS$_EXENQLM         10820   /* Exceeded enqueue limit (0x2A44) — authentic,
+                                     * per the ssdef.h lineage above. Neighbours
+                                     * EXASTLM/EXBYTLM below are UNVERIFIED (see
+                                     * the broader ssdef fidelity sweep). */
 #define SS$_EXASTLM         2756    /* Exceeded AST limit */
 #define SS$_EXBYTLM         2764    /* Exceeded byte count limit */
 

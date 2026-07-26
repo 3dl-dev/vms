@@ -690,13 +690,31 @@ uint32_t sys$dclexh(void *desblk);
 #define LCK$K_EXMODE  5  /* Exclusive */
 
 /* Lock flags (LCK$M_xxx) — passed as the flags parameter to $ENQ/$ENQW/$DEQ.
- * Bit values are defined to match the kernel lock manager's LCK_M_xxx
- * constants (src/kernel/vms_ioctl.h) exactly, so they pass through to the
- * /dev/vms ioctl layer with no translation. */
-#define LCK$M_CONVERT   0x01   /* Convert the existing lock named by lkid */
-#define LCK$M_NOQUEUE   0x02   /* Fail immediately (SS$_NOTQUEUED) if not grantable */
-#define LCK$M_SYSTEM    0x04   /* System-wide resource (reserved, unused) */
-#define LCK$M_VALBLK    0x08   /* Lock has a 16-byte value block */
+ *
+ * These are the real OpenVMS $LCKDEF bit values (source-of-truth: VMS
+ * compatibility). They do NOT match our kernel lock manager's internal
+ * LCK_M_xxx bitmask (src/kernel/vms_ioctl.h) — sys_lock.c translates the
+ * public flags to the kernel layout at the /dev/vms boundary so kernel
+ * numbering never leaks into this compat surface.
+ *
+ * Provenance: bit positions are single-source, from the FreeVMS lckdef.h
+ * reproduction (github.com/ztmr/FreeVMS). VSI/HPE manuals document the flag
+ * names and semantics but publish no numeric values; verified 2026-07-26.
+ * Not independently confirmed against an official VSI $LCKDEF extract. */
+#define LCK$M_VALBLK    0x0001  /* Lock has a 16-byte value block */
+#define LCK$M_CONVERT   0x0002  /* Convert the existing lock named by lkid */
+#define LCK$M_NOQUEUE   0x0004  /* Fail immediately (SS$_NOTQUEUED) if not grantable */
+#define LCK$M_SYNCSTS   0x0008  /* Synchronous completion (return SS$_SYNCH) */
+#define LCK$M_SYSTEM    0x0010  /* System-wide resource */
+#define LCK$M_NOQUOTA   0x0020  /* Do not charge against enqueue quota */
+#define LCK$M_CVTSYS    0x0040  /* Convert to a system lock */
+#define LCK$M_RECOVER   0x0080  /* Recovery lock */
+#define LCK$M_PROTECT   0x0100  /* Protected against forced dequeue */
+#define LCK$M_NODLCKWT  0x0200  /* Exclude from deadlock-wait detection */
+#define LCK$M_NODLCKBLK 0x0400  /* Exclude from deadlock-block detection */
+#define LCK$M_EXPEDITE  0x0800  /* Expedite grant */
+#define LCK$M_QUECVT    0x1000  /* Queued conversion */
+#define LCK$M_BYPASS    0x2000  /* Bypass fast-path */
 
 /**
  * sys$enq - Enqueue lock request

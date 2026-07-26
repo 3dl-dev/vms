@@ -1,11 +1,16 @@
 /*
  * sys_lock.c - Lock Manager System Services ($ENQ, $DEQ)
  *
- * VMS distributed lock manager emulated using local lock files.
- * Lock resources are represented as files in /tmp/ovmx/locks/,
- * and POSIX flock()/fcntl() is used for actual mutual exclusion.
+ * Routes exclusively through the kernel lock manager (the vms.ko module's
+ * distributed lock manager, reached via /dev/vms ioctl through the
+ * vms_kif_enq/deq/convert wrappers in libvmssys). There is no userspace
+ * lock table and no POSIX flock() fallback -- the kernel module is the
+ * single authoritative lock manager, matching the cluster-interop design
+ * (docs/design-cluster-node.md): real lock semantics require the
+ * QEMU/kernel target. Docker containers have no /dev/vms, so $ENQ/$DEQ
+ * return SS$_NOSUCHDEV there -- that is accepted, by design, not a bug.
  *
- * Lock modes (VMS compatible):
+ * Lock modes (VMS compatible), from starlet.h:
  *   LCK$K_NLMODE (0) - Null lock (no access)
  *   LCK$K_CRMODE (1) - Concurrent Read
  *   LCK$K_CWMODE (2) - Concurrent Write
@@ -16,27 +21,11 @@
 
 #include <stdint.h>
 #include <string.h>
-#include <stdlib.h>
-#include <stdio.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/file.h>
-#include <pthread.h>
-#include <errno.h>
 #include "starlet.h"
-#include "ovmx_layout.h"
-#include "vmsfs/filespec.h"
+#include "vms_kif.h"
 
-/* Lock modes */
-#define LCK$K_NLMODE  0  /* Null */
-#define LCK$K_CRMODE  1  /* Concurrent Read */
-#define LCK$K_CWMODE  2  /* Concurrent Write */
-#define LCK$K_PRMODE  3  /* Protected Read */
-#define LCK$K_PWMODE  4  /* Protected Write */
-#define LCK$K_EXMODE  5  /* Exclusive */
-
-/* Lock Status Block */
+/* Lock Status Block (VMS-compatible layout) */
 struct lksb {
     uint16_t lksb$w_status;
     uint16_t lksb$w_reserved;
@@ -44,218 +33,174 @@ struct lksb {
     char     lksb$b_valblk[16];  /* Lock value block */
 };
 
-#define MAX_LOCKS 256
-
-/* Internal lock table entry */
-struct lock_entry {
-    uint32_t  lkid;
-    char      resnam[64];      /* Resource name */
-    uint32_t  lkmode;          /* Granted lock mode */
-    int       lock_fd;         /* File descriptor for lock file */
-    struct lksb *lksb;         /* Pointer to caller's LKSB */
-    int       in_use;
-};
-
-static struct lock_entry locks[MAX_LOCKS];
-static uint32_t next_lkid = 1;
-static pthread_mutex_t lock_mgr_mutex = PTHREAD_MUTEX_INITIALIZER;
-static int lock_dir_created = 0;
-
-/* Resolve the VMS lock directory to a Linux path */
-static const char *get_lock_dir(void) {
-    static char lock_dir[1024];
-    static int resolved = 0;
-    if (!resolved) {
-        char systmp_linux[512];
-        vmsfs_to_linux_path(VMS_SYSTMP, systmp_linux, sizeof(systmp_linux));
-        snprintf(lock_dir, sizeof(lock_dir), "%s/locks", systmp_linux);
-        resolved = 1;
-    }
-    return lock_dir;
+/*
+ * Lazily open /dev/vms for this thread. vms_kif_open() is idempotent
+ * (it no-ops if the thread-local fd is already open), so it is safe to
+ * call on every $ENQ/$DEQ. Returns 0 if the kernel device is available,
+ * -1 otherwise (e.g. Docker mode, which has no /dev/vms).
+ */
+static int ensure_kif_open(void)
+{
+    return vms_kif_open() >= 0 ? 0 : -1;
 }
 
-/* Ensure the lock directory exists */
-static void ensure_lock_dir(void) {
-    if (lock_dir_created) return;
-    const char *dir = get_lock_dir();
-    /* Create parent (SYSTMP) and locks subdirectory */
-    char systmp_linux[512];
-    vmsfs_to_linux_path(VMS_SYSTMP, systmp_linux, sizeof(systmp_linux));
-    mkdir(systmp_linux, 0777);
-    mkdir(dir, 0777);
-    lock_dir_created = 1;
+/*
+ * do_enq - Shared core for sys$enq / sys$enqw.
+ *
+ * Maps the VMS $ENQ parameter set onto vms_kif_enq (fresh lock request)
+ * or vms_kif_convert (when LCK$M_CONVERT is set and the caller's LKSB
+ * already holds a lock ID), then fills in the caller's LKSB.
+ *
+ * When `wait` is set (sys$enqw), and the request was accepted but not
+ * NOQUEUE, this polls GETLKI until the lock is actually granted at the
+ * requested mode. This is necessary because the kernel's ENQ/CONVERT
+ * ioctls never block in-kernel: a request that cannot be granted
+ * immediately is queued and SS$_NORMAL is returned right away (with the
+ * granted mode still NL), and no completion AST is fired later when the
+ * queued request is granted. $ENQW's "wait" semantic is therefore
+ * implemented here, in userspace, via polling -- $ENQ (wait=0) returns
+ * immediately with whatever the kernel reports (granted or queued).
+ */
+static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
+                       uint32_t flags, const struct dsc$descriptor_s *resnam,
+                       uint32_t parid, void (*astadr)(uint32_t), uint32_t astprm,
+                       void (*blkastadr)(uint32_t), int wait)
+{
+    if (!lksb)
+        return SS$_BADPARAM;
+
+    if (ensure_kif_open() < 0) {
+        lksb->lksb$w_status = (uint16_t)SS$_NOSUCHDEV;
+        return SS$_NOSUCHDEV;
+    }
+
+    uint8_t valblk[16];
+    memcpy(valblk, lksb->lksb$b_valblk, sizeof(valblk));
+
+    uint32_t lkid = 0;
+    uint32_t status;
+
+    if ((flags & LCK$M_CONVERT) && lksb->lksb$l_lkid != 0) {
+        lkid = lksb->lksb$l_lkid;
+        status = vms_kif_convert(lkid, lkmode, flags,
+                                  (uint64_t)(uintptr_t)blkastadr, valblk);
+    } else {
+        char name[32] = "";
+        if (resnam && resnam->dsc$a_pointer)
+            dsc$strncpy(name, resnam, sizeof(name));
+
+        status = vms_kif_enq(efn, lkmode, flags, name, parid,
+                              (uint64_t)(uintptr_t)astadr, astprm,
+                              (uint64_t)(uintptr_t)blkastadr,
+                              &lkid, valblk);
+    }
+
+    if (wait && (status & 1) && !(flags & LCK$M_NOQUEUE) && lkid != 0) {
+        uint32_t granted_mode = 0, requested_mode = 0;
+        char qresnam[32];
+
+        for (;;) {
+            uint32_t gs = vms_kif_getlki(lkid, &granted_mode, &requested_mode,
+                                         qresnam, valblk);
+            if (!(gs & 1)) {
+                status = gs;
+                break;
+            }
+            if (granted_mode == lkmode)
+                break;
+            usleep(1000);
+        }
+    }
+
+    lksb->lksb$w_status = (uint16_t)status;
+    lksb->lksb$l_lkid = lkid;
+    memcpy(lksb->lksb$b_valblk, valblk, sizeof(valblk));
+
+    return status;
 }
 
 /*
  * sys$enqw - Enqueue lock request and wait (synchronous).
  *
- * Acquires a lock on the named resource at the requested mode.
- * Creates a lock file in /tmp/ovmx/locks/ and uses flock() to
- * acquire the actual OS-level lock.
- *
- * Modes NLMODE-CRMODE use shared locks; PRMODE-EXMODE use exclusive locks.
+ * Blocks (via a GETLKI poll loop -- see do_enq) until the requested
+ * lock mode is actually granted, unless LCK$M_NOQUEUE is specified.
  *
  * Parameters:
- *   efn      - Event flag to set on completion
+ *   efn      - Event flag set on completion
  *   lkmode   - Lock mode (LCK$K_xxx)
  *   lksb     - Lock status block
- *   flags    - Lock flags (ignored)
+ *   flags    - Lock flags (LCK$M_xxx)
  *   resnam   - Resource name descriptor
- *   parid    - Parent lock ID (ignored)
- *   astadr   - AST completion routine (ignored for $ENQW)
+ *   parid    - Parent lock ID (currently unused by the kernel manager)
+ *   astadr   - Completion AST routine
  *   astprm   - AST parameter
- *   blkastadr- Blocking AST routine (ignored)
- *   acmode   - Access mode (ignored)
- *   rsdm_id  - Resource domain ID (ignored)
+ *   blkastadr- Blocking AST routine
+ *   acmode   - Access mode (unused; the kernel manager does not
+ *              segregate lock namespaces by access mode)
+ *   rsdm_id  - Resource domain ID (unused; single-domain kernel manager)
  */
 uint32_t sys$enqw(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
                   uint32_t flags, const struct dsc$descriptor_s *resnam,
                   uint32_t parid, void (*astadr)(uint32_t), uint32_t astprm,
                   void (*blkastadr)(uint32_t), uint32_t acmode,
                   uint32_t rsdm_id) {
-    (void)efn; (void)flags; (void)parid; (void)astadr; (void)astprm;
-    (void)blkastadr; (void)acmode; (void)rsdm_id;
+    (void)acmode; (void)rsdm_id;
 
-    struct lksb *lksb = (struct lksb *)lksb_ptr;
-    if (!lksb) return SS$_BADPARAM;
+    uint32_t status = do_enq(efn, lkmode, (struct lksb *)lksb_ptr, flags,
+                              resnam, parid, astadr, astprm, blkastadr, 1);
 
-    char name[64] = "";
-    if (resnam && resnam->dsc$a_pointer) {
-        dsc$strncpy(name, resnam, sizeof(name));
-    }
-
-    ensure_lock_dir();
-
-    pthread_mutex_lock(&lock_mgr_mutex);
-
-    /* Find a free lock slot */
-    int slot = -1;
-    for (int i = 0; i < MAX_LOCKS; i++) {
-        if (!locks[i].in_use) {
-            slot = i;
-            break;
-        }
-    }
-
-    if (slot < 0) {
-        pthread_mutex_unlock(&lock_mgr_mutex);
-        lksb->lksb$w_status = (uint16_t)SS$_EXENQLM;
-        return SS$_EXENQLM;
-    }
-
-    /* Reject resource names containing path separators or traversal */
-    if (strchr(name, '/') || strstr(name, "..")) {
-        pthread_mutex_unlock(&lock_mgr_mutex);
-        lksb->lksb$w_status = (uint16_t)SS$_BADPARAM;
-        return SS$_BADPARAM;
-    }
-
-    /* Create/open the lock file for this resource */
-    char lockpath[1280];
-    snprintf(lockpath, sizeof(lockpath), "%s/%s.lck", get_lock_dir(), name);
-
-    int lock_fd = open(lockpath, O_CREAT | O_RDWR, 0666);
-    if (lock_fd < 0) {
-        pthread_mutex_unlock(&lock_mgr_mutex);
-        lksb->lksb$w_status = (uint16_t)SS$_BADPARAM;
-        return SS$_BADPARAM;
-    }
-
-    /* Acquire the flock based on mode */
-    int flock_op;
-    if (lkmode <= LCK$K_CWMODE) {
-        /* Null, CR, CW - use shared lock */
-        flock_op = LOCK_SH;
-    } else {
-        /* PR, PW, EX - use exclusive lock */
-        flock_op = LOCK_EX;
-    }
-
-    if (lkmode != LCK$K_NLMODE) {
-        if (flock(lock_fd, flock_op) < 0) {
-            close(lock_fd);
-            pthread_mutex_unlock(&lock_mgr_mutex);
-            lksb->lksb$w_status = (uint16_t)SS$_DEADLOCK;
-            return SS$_DEADLOCK;
-        }
-    }
-
-    /* Fill in the lock table entry */
-    locks[slot].lkid = next_lkid++;
-    if (next_lkid == 0) next_lkid = 1;  /* Skip 0 on wrap */
-    strncpy(locks[slot].resnam, name, sizeof(locks[slot].resnam) - 1);
-    locks[slot].resnam[sizeof(locks[slot].resnam) - 1] = '\0';
-    locks[slot].lkmode = lkmode;
-    locks[slot].lock_fd = lock_fd;
-    locks[slot].lksb = lksb;
-    locks[slot].in_use = 1;
-
-    /* Set lock status block */
-    lksb->lksb$w_status = (uint16_t)SS$_NORMAL;
-    lksb->lksb$l_lkid = locks[slot].lkid;
-
-    pthread_mutex_unlock(&lock_mgr_mutex);
-
-    /* Set event flag */
-    if (efn > 0) {
+    if (efn > 0)
         sys$setef(efn);
-    }
 
-    return SS$_NORMAL;
+    return status;
 }
 
 /*
  * sys$enq - Enqueue lock request (asynchronous).
  *
- * Currently implemented as synchronous (same as $ENQW).
+ * Returns immediately with whatever the kernel lock manager reports:
+ * granted, queued (SS$_NORMAL with the lock still at NL until a later
+ * DEQ/CONVERT elsewhere frees the resource -- see do_enq's comment on
+ * the missing completion AST), or SS$_NOTQUEUED if LCK$M_NOQUEUE was
+ * specified and the mode is incompatible.
  */
-uint32_t sys$enq(uint32_t efn, uint32_t lkmode, void *lksb,
+uint32_t sys$enq(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
                  uint32_t flags, const struct dsc$descriptor_s *resnam,
                  uint32_t parid, void (*astadr)(uint32_t), uint32_t astprm,
                  void (*blkastadr)(uint32_t), uint32_t acmode,
                  uint32_t rsdm_id) {
-    return sys$enqw(efn, lkmode, lksb, flags, resnam, parid,
-                    astadr, astprm, blkastadr, acmode, rsdm_id);
+    (void)acmode; (void)rsdm_id;
+
+    uint32_t status = do_enq(efn, lkmode, (struct lksb *)lksb_ptr, flags,
+                              resnam, parid, astadr, astprm, blkastadr, 0);
+
+    if (efn > 0 && (status & 1))
+        sys$setef(efn);
+
+    return status;
 }
 
 /*
  * sys$deq - Dequeue (release) a lock.
  *
- * Releases the lock identified by lkid, unlocking the file lock
- * and closing the lock file descriptor.
+ * Releases the lock identified by lkid via the kernel lock manager.
+ * If LCK$M_VALBLK is set in flags and valblk is non-NULL, the supplied
+ * value block replaces the resource's persistent value block (VMS
+ * semantics: $DEQ's valblk argument is input-only -- it is not filled
+ * in with the prior value).
  *
  * Parameters:
- *   lkid   - Lock ID (from $ENQ lksb)
- *   valblk - Optional value block to store in the lock (16 bytes)
- *   acmode - Access mode (ignored)
- *   flags  - Dequeue flags (ignored)
+ *   lkid   - Lock ID (from $ENQ/$ENQW's lksb)
+ *   valblk - Optional 16-byte value block to store in the resource
+ *   acmode - Access mode (unused; see sys$enqw)
+ *   flags  - Dequeue flags (LCK$M_xxx)
  */
 uint32_t sys$deq(uint32_t lkid, void *valblk, uint32_t acmode,
                  uint32_t flags) {
-    (void)acmode; (void)flags;
+    (void)acmode;
 
-    pthread_mutex_lock(&lock_mgr_mutex);
+    if (ensure_kif_open() < 0)
+        return SS$_NOSUCHDEV;
 
-    for (int i = 0; i < MAX_LOCKS; i++) {
-        if (locks[i].in_use && locks[i].lkid == lkid) {
-            /* Copy value block if provided */
-            if (valblk && locks[i].lksb) {
-                memcpy(locks[i].lksb->lksb$b_valblk, valblk, 16);
-            }
-
-            /* Release the file lock and close */
-            if (locks[i].lock_fd >= 0) {
-                flock(locks[i].lock_fd, LOCK_UN);
-                close(locks[i].lock_fd);
-            }
-
-            locks[i].in_use = 0;
-            locks[i].lock_fd = -1;
-            pthread_mutex_unlock(&lock_mgr_mutex);
-            return SS$_NORMAL;
-        }
-    }
-
-    pthread_mutex_unlock(&lock_mgr_mutex);
-    return SS$_BADPARAM;
+    return vms_kif_deq(lkid, (uint8_t *)valblk, flags);
 }

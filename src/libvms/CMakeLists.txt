@@ -37,7 +37,9 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/str_util.c
 )
 target_include_directories(vms PUBLIC include ${VMS_RMS_INCLUDE_DIR} ${VMS_FS_INCLUDE_DIR} ${VMS_LNM_INCLUDE_DIR} ${VMS_PROCESS_INCLUDE_DIR})
-target_link_libraries(vms PUBLIC vmsprocess vmsfs pthread m)
+# vmssys provides vms_kif_* (the /dev/vms ioctl wrappers used by sys_lock.c
+# to reach the kernel lock manager).
+target_link_libraries(vms PUBLIC vmsprocess vmsfs vmssys pthread m)
 set_target_properties(vms PROPERTIES
     PREFIX ""
     OUTPUT_NAME "LIBVMS\$SHR"

@@ -54,6 +54,12 @@ target_include_directories(vmssys PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+# vmssys is always STATIC (freestanding binaries link it directly), but
+# libvms (a SHARED library in dev builds) also links it now, to reach
+# vms_kif_* (the /dev/vms ioctl wrappers used by sys_lock.c). A static
+# archive linked into a shared object must be position-independent.
+set_target_properties(vmssys PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # Freestanding build: no glibc, no builtins except what we explicitly use
 # -fno-tree-vectorize: GCC vectorization generates SSE/AVX instructions
 # requiring 16-byte aligned stack which our custom CRT may not guarantee.

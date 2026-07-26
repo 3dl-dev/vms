@@ -681,6 +681,23 @@ uint32_t sys$dclexh(void *desblk);
  * Lock Manager Services
  * ================================================================ */
 
+/* Lock modes (LCK$K_xxx) — passed as the lkmode parameter. */
+#define LCK$K_NLMODE  0  /* Null */
+#define LCK$K_CRMODE  1  /* Concurrent Read */
+#define LCK$K_CWMODE  2  /* Concurrent Write */
+#define LCK$K_PRMODE  3  /* Protected Read */
+#define LCK$K_PWMODE  4  /* Protected Write */
+#define LCK$K_EXMODE  5  /* Exclusive */
+
+/* Lock flags (LCK$M_xxx) — passed as the flags parameter to $ENQ/$ENQW/$DEQ.
+ * Bit values are defined to match the kernel lock manager's LCK_M_xxx
+ * constants (src/kernel/vms_ioctl.h) exactly, so they pass through to the
+ * /dev/vms ioctl layer with no translation. */
+#define LCK$M_CONVERT   0x01   /* Convert the existing lock named by lkid */
+#define LCK$M_NOQUEUE   0x02   /* Fail immediately (SS$_NOTQUEUED) if not grantable */
+#define LCK$M_SYSTEM    0x04   /* System-wide resource (reserved, unused) */
+#define LCK$M_VALBLK    0x08   /* Lock has a 16-byte value block */
+
 /**
  * sys$enq - Enqueue lock request
  *

@@ -39,7 +39,11 @@ echo "SSH is ready. Running VMS session test..."
 # exit non-zero — under `set -euo pipefail` either would abort the script
 # before validation. Cap the wall time and keep whatever output we got so
 # the validation below produces a clear pass/fail instead of a silent hang.
-OUTPUT=$(timeout 120 env SSHPASS="$SSH_PASS" sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SSH_PORT $SSH_USER@$SSH_HOST 2>&1 <<'VMSEOF' || true
+# -tt forces PTY allocation: vmssshd serves an interactive DCL login and
+# produces no usable session on a non-TTY channel (the remote just closes
+# the connection). -tt makes this scripted run behave like a real terminal
+# login, feeding the heredoc as typed input so the DCL commands execute.
+OUTPUT=$(timeout 120 env SSHPASS="$SSH_PASS" sshpass -e ssh -tt -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SSH_PORT $SSH_USER@$SSH_HOST 2>&1 <<'VMSEOF' || true
 SHOW TIME
 SHOW SYSTEM
 SHOW MEMORY

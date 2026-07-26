@@ -8,14 +8,38 @@ SSH_HOST="${SSH_HOST:-localhost}"
 SSH_USER="${SSH_USER:-system}"
 SSH_PASS="${SSH_PASS:-MANAGER}"
 
-# Wait for SSH to be ready
+# Wait for SSH to be ready.
+#
+# Do NOT probe by running a remote command (`ssh host 'echo ready'`):
+# vmssshd ignores the exec command string and always starts an interactive
+# DCL login session (see src/vmsssh/vmssshd.c — EXEC is handled like SHELL),
+# so a command-mode probe never returns and hangs the whole loop until the
+# outer timeout fires (exit 124 — this was the bug, vms-0b7). Instead just
+# wait for the TCP port to accept connections, which cannot hang.
 echo "Waiting for SSH on ${SSH_HOST}:${SSH_PORT}..."
-timeout 60 bash -c "until SSHPASS='$SSH_PASS' sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SSH_PORT $SSH_USER@$SSH_HOST 'echo ready' 2>/dev/null; do sleep 2; done"
+ssh_ready=0
+for _ in $(seq 1 45); do
+    if (exec 3<>"/dev/tcp/${SSH_HOST}/${SSH_PORT}") 2>/dev/null; then
+        exec 3>&- 2>/dev/null || true
+        ssh_ready=1
+        break
+    fi
+    sleep 2
+done
+if [ "$ssh_ready" -ne 1 ]; then
+    echo "ERROR: SSH port ${SSH_HOST}:${SSH_PORT} never opened" >&2
+    exit 1
+fi
 
 echo "SSH is ready. Running VMS session test..."
 
-# Run the scripted session
-OUTPUT=$(SSHPASS="$SSH_PASS" sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SSH_PORT $SSH_USER@$SSH_HOST 2>&1 <<'VMSEOF'
+# Run the scripted session.
+# Bound it with `timeout` and `|| true`: the session runs on a PTY and one
+# of the piped commands (e.g. HELP's pager) could block, and LOGOUT may
+# exit non-zero — under `set -euo pipefail` either would abort the script
+# before validation. Cap the wall time and keep whatever output we got so
+# the validation below produces a clear pass/fail instead of a silent hang.
+OUTPUT=$(timeout 120 env SSHPASS="$SSH_PASS" sshpass -e ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SSH_PORT $SSH_USER@$SSH_HOST 2>&1 <<'VMSEOF' || true
 SHOW TIME
 SHOW SYSTEM
 SHOW MEMORY

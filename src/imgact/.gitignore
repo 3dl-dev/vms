@@ -1,0 +1,7 @@
+# IMGACT.EXE build artifacts (built inside the musl container via build-in-podman.sh)
+IMGACT.EXE
+*.o
+LIBTEST$SHR.EXE
+test/LIBTEST$SHR.EXE
+test/test_prog
+test_pie

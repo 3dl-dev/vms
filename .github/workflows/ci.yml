@@ -399,6 +399,12 @@ jobs:
           tests/uat/vms_session_test.sh
         timeout-minutes: 3
 
+      - name: Dump container logs (diagnostics)
+        if: always()
+        run: |
+          echo "=== ovmx-uat container logs (vmssshd/DCL stderr) ==="
+          docker logs ovmx-uat 2>&1 | tail -100 || echo "(no logs)"
+
       - name: Cleanup
         if: always()
         run: docker rm -f ovmx-uat 2>/dev/null || true

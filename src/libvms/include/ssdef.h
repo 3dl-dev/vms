@@ -134,6 +134,14 @@ extern "C" {
 #define SS$_PARNOTGRANT     716     /* Parent lock not granted */
 #define SS$_CVTUNGRANT      2720    /* Convert ungrantable */
 
+/* SS$_IVLOCKID / SS$_SUBLOCKS: added for the kernel lock manager
+ * (src/kernel/vms_lock.c) status mapping in sys_lock.c. Not independently
+ * confirmed against a real OpenVMS message file -- continues this block's
+ * existing +4 sequential numbering from SS$_PARNOTGRANT (716) rather than
+ * guessing a real VMS value. Revisit if the authoritative value surfaces. */
+#define SS$_IVLOCKID        720     /* Invalid lock ID */
+#define SS$_SUBLOCKS        724     /* Sublocks still held */
+
 /* ================================================================
  * Quota and resource status codes
  * ================================================================ */

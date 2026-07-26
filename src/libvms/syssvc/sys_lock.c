@@ -45,6 +45,47 @@ static int ensure_kif_open(void)
 }
 
 /*
+ * kstat_to_ss - Translate a kernel lock-manager status code into its
+ * public ssdef.h SS$_xxx constant.
+ *
+ * The kernel module (src/kernel/vms_internal.h, SS__xxx) uses a compact
+ * internal numbering scheme that does NOT match the public ssdef.h
+ * values for most lock-manager codes (e.g. "not queued" is 40 in the
+ * kernel, SS$_NOTQUEUED is 2588 in ssdef.h). This is the boundary where
+ * a raw kernel status crosses into the public sys$enq/sys$enqw/sys$deq
+ * contract -- translate here, once, at the point a status is stored
+ * into the caller's LKSB or returned. Internal control flow in do_enq
+ * (the wait-loop's success-bit and granted-mode checks) must keep using
+ * the raw kernel value; only the value that actually leaves this file
+ * gets mapped.
+ *
+ * The magic numbers on the left are the raw kernel SS__xxx values from
+ * src/kernel/vms_internal.h (kept as literals rather than an #include,
+ * since that header pulls in kernel-only headers and cannot be built
+ * into glibc userspace code). Anything not listed here -- including
+ * SS__NORMAL(1)/SS__BADPARAM(0x14)/SS__ACCVIO(0xC), which already
+ * share the same numeric value in both schemes -- passes through
+ * unchanged, so an unexpected kernel status is never silently mapped
+ * to the wrong public constant.
+ */
+static uint32_t kstat_to_ss(uint32_t k)
+{
+    switch (k) {
+    case 40:  return SS$_NOTQUEUED;    /* kernel SS__NOTQUEUED */
+    case 100: return SS$_DEADLOCK;     /* kernel SS__DEADLOCK */
+    case 108: return SS$_IVLOCKID;     /* kernel SS__IVLOCKID */
+    case 112: return SS$_SUBLOCKS;     /* kernel SS__SUBLOCKS */
+    case 116: return SS$_CVTUNGRANT;   /* kernel SS__CANCELGRANT -- same
+                                         * concept as ssdef.h's "convert
+                                         * ungrantable": a queued
+                                         * conversion could not be
+                                         * granted (deadlock avoidance) */
+    case 120: return SS$_VALNOTVALID;  /* kernel SS__VALNOTVALID */
+    default:  return k;
+    }
+}
+
+/*
  * do_enq - Shared core for sys$enq / sys$enqw.
  *
  * Maps the VMS $ENQ parameter set onto vms_kif_enq (fresh lock request)
@@ -112,11 +153,18 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
         }
     }
 
-    lksb->lksb$w_status = (uint16_t)status;
+    /* Translate raw kernel status -> public ssdef.h constant exactly once,
+     * at the boundary where it is stored/returned. Everything above this
+     * point (the wait-loop's `status & 1` and `granted_mode == lkmode`
+     * checks, and `gs`/`status` reassignment on GETLKI failure) operates
+     * on the raw kernel value. */
+    uint32_t pub_status = kstat_to_ss(status);
+
+    lksb->lksb$w_status = (uint16_t)pub_status;
     lksb->lksb$l_lkid = lkid;
     memcpy(lksb->lksb$b_valblk, valblk, sizeof(valblk));
 
-    return status;
+    return pub_status;
 }
 
 /*
@@ -202,5 +250,5 @@ uint32_t sys$deq(uint32_t lkid, void *valblk, uint32_t acmode,
     if (ensure_kif_open() < 0)
         return SS$_NOSUCHDEV;
 
-    return vms_kif_deq(lkid, (uint8_t *)valblk, flags);
+    return kstat_to_ss(vms_kif_deq(lkid, (uint8_t *)valblk, flags));
 }

@@ -1,5 +1,17 @@
 # OVMX Architecture
 
+## Invariant: Clean-Room Cluster Interop
+
+All VMScluster wire-protocol work in OVMX (SCS / NISCA / NISCS / MSCP / distributed lock
+manager) is **clean-room**: it is derived **only** from (a) observing traffic on the SIMH
+reference lab (`~/vax/cluster/`) and (b) public OpenVMS documentation and documented tool
+output (SDA, SYSGEN, SYSMAN; the *OpenVMS Cluster Systems* manual, IDSM, `$SSDEF`/`$LCKDEF`).
+We **never** disassemble, decompile, or copy VSI/HPE source or binaries, and never paste
+leaked VMS source. This is the legal footing for interoperability reverse-engineering
+(DMCA §1201(f), EU Software Directive Art. 6) and is a hard, non-negotiable project
+invariant — see rule 8 in `CLAUDE.md`. Captured protocol specimens and their decode live in
+`~/vax/cluster/captures/` (`RE-specimens-2026-07-26.md`).
+
 ## Component Layers
 
 ```

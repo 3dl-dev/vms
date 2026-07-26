@@ -223,3 +223,4 @@ vms/
 5. **Dual architecture**: x86_64 is primary, aarch64 is supported. Test on both when feasible.
 6. **Kernel module testing**: Use QEMU-based test infrastructure (`tests/qemu/`) for kernel modules — never load untested modules on the host.
 7. **DCL compatibility**: DCL should match OpenVMS DCL behavior, not bash. When in doubt, reference OpenVMS documentation.
+8. **Clean-room cluster RE (HARD INVARIANT)**: All VMScluster wire-protocol work (SCS/NISCA/NISCS/MSCP/DLM) is derived ONLY from (a) observing the wire on the reference lab and (b) public OpenVMS documentation (Cluster Systems manual, IDSM, `$SSDEF`/`$LCKDEF` etc.) and documented tool output (SDA/SYSGEN/SYSMAN). NEVER disassemble, decompile, or copy VSI/HPE source or binaries; never paste leaked VMS source. This is what makes the interop RE legally protected (DMCA 1201(f), EU SW Directive Art. 6) — it is not optional. The reference lab lives at `~/vax/cluster/` (see its `README-lab.md`).

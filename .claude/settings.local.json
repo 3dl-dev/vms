@@ -43,7 +43,9 @@
       "WebFetch(domain:cdn.openbsd.org)",
       "WebFetch(domain:gist.github.com)",
       "WebFetch(domain:www.linuxfromscratch.org)",
-      "Skill(bd-plan)"
+      "Skill(bd-plan)",
+      "Bash(awk '{print $1,$2}')",
+      "Bash(ip -br link show tap2)"
     ]
   }
 }

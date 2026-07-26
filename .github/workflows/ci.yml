@@ -13,6 +13,7 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -60,6 +61,7 @@ jobs:
   docker-build:
     name: Docker Build & Smoke Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -86,9 +88,20 @@ jobs:
             -c "SHOW TIME"
 
       - name: Smoke test — Docker skips install (pre-installed state)
+        timeout-minutes: 2
         run: |
-          OUTPUT=$(timeout 10 docker run --rm ovmx-test:latest 2>&1 || true)
-          echo "$OUTPUT" | head -10
+          # The default entrypoint boots and then serves SSH forever — it
+          # never exits, and its PID 1 does not die on SIGTERM. So we must
+          # NOT wrap `docker run` in `timeout` (timeout without -k waits
+          # forever for the child to exit, hanging the job to the 6h
+          # ceiling — see vms-021). Instead run detached, read the boot
+          # output from the logs, and force-remove the container, which
+          # guarantees teardown regardless of signal handling.
+          CID=$(docker run -d ovmx-test:latest)
+          sleep 10
+          OUTPUT=$(docker logs "$CID" 2>&1 | head -20)
+          docker rm -f "$CID" >/dev/null 2>&1 || true
+          echo "$OUTPUT"
           echo "$OUTPUT" | grep -qF '%STARTUP-I-SYSBOOT' \
             && echo "PASS: Docker detects pre-installed system" \
             || { echo "FAIL: Expected SYSBOOT skip-install message"; exit 1; }
@@ -104,6 +117,7 @@ jobs:
   persistent-boot:
     name: Persistent Boot Smoke Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -141,6 +155,7 @@ jobs:
   conformance:
     name: Conformance Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: docker-build
 
     steps:
@@ -182,6 +197,7 @@ jobs:
   corpus-conformance:
     name: Corpus Conformance
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: docker-build
 
     steps:
@@ -232,6 +248,7 @@ jobs:
   static-analysis:
     name: Static Analysis
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -348,6 +365,7 @@ jobs:
   uat-session:
     name: VMS User Acceptance Test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: docker-build
 
     steps:

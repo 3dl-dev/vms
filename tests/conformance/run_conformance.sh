@@ -32,7 +32,12 @@ mkdir -p "$BUILD_DIR"
 
 # Compilation flags
 INCLUDE_FLAGS="-I/src/src/libvms/include -I/src/src/vmsprocess/include -I/src/src/vmsfs/include -I/src/src/vmsrms/include"
-LIB_FLAGS="-L/src/build/lib -lvmsrms -lvmsfs -lvms -lvmsprocess -lvmssys -lpthread -lm"
+# The VMS runtime libraries are built as OpenVMS-style shareable images
+# (OUTPUT_NAME "LIBVMS$SHR", SUFFIX ".EXE" — see src/libvms/CMakeLists.txt),
+# so plain -lvms/-lvmsfs/... do NOT resolve (ld looks for libvms.so). Link
+# the exact filenames with -l:NAME. Only libvmssys keeps a conventional
+# archive name (libvmssys.a), so -lvmssys still works for it.
+LIB_FLAGS="-L/src/build/lib -l:LIBVMSRMS\$SHR.EXE -l:LIBVMSFS\$SHR.EXE -l:LIBVMS\$SHR.EXE -l:LIBVMSPROCESS\$SHR.EXE -lvmssys -lpthread -lm"
 CFLAGS="-Wall -Wextra -O2"
 
 # Find all .c files in test directory
@@ -54,11 +59,13 @@ for test_file in "$TEST_DIR"/*.c; do
 
     echo -e "${YELLOW}Test: $test_name${NC}"
 
-    # Compile
+    # Compile.
+    # NOTE: `set -e` is active, so gcc must be guarded by `if !` — a bare
+    # `gcc ...; rc=$?` would abort the whole script on the first compile
+    # failure, before any diagnostic is printed (which is exactly how this
+    # harness used to die silently on program 1).
     echo -n "  Compiling... "
-    gcc $CFLAGS $INCLUDE_FLAGS -o "$test_bin" "$test_file" $LIB_FLAGS > "$BUILD_DIR/${test_name}_compile.log" 2>&1
-    compile_rc=$?
-    if [ $compile_rc -ne 0 ]; then
+    if ! gcc $CFLAGS $INCLUDE_FLAGS -o "$test_bin" "$test_file" $LIB_FLAGS > "$BUILD_DIR/${test_name}_compile.log" 2>&1; then
         echo -e "${RED}FAILED${NC}"
         echo "  Compilation errors:"
         head -10 "$BUILD_DIR/${test_name}_compile.log" | sed 's/^/    /'

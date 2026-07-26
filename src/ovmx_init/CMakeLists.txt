@@ -18,10 +18,22 @@ target_compile_definitions(ovmx_init PRIVATE
     _DEFAULT_SOURCE
 )
 
-target_link_libraries(ovmx_init PRIVATE vmsprocess vmsfs vmslnm pthread)
+if(OVMX_IMGACT)
+    # Static PID-1 bootstrap: link the static twins, not the shareable images.
+    target_link_libraries(ovmx_init PRIVATE vmsprocess_static vmsfs_static vmslnm_static pthread)
+else()
+    target_link_libraries(ovmx_init PRIVATE vmsprocess vmsfs vmslnm pthread)
+endif()
 
 set_target_properties(ovmx_init PROPERTIES
     OUTPUT_NAME "STARTUP"
     SUFFIX ".EXE"
 )
+
+# STARTUP.EXE is PID 1: it must run before IMGACT.EXE exists in the process
+# tree, so it is always statically linked — even in OVMX_IMGACT (dynamic) mode,
+# where -static overrides the global PT_INTERP/dynamic-linker link flags.
+if(OVMX_IMGACT)
+    target_link_options(ovmx_init PRIVATE -static)
+endif()
 install(TARGETS ovmx_init RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

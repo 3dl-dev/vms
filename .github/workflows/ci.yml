@@ -447,3 +447,38 @@ jobs:
               export CC=gcc
               sh /src/src/imgact/test/run_test.sh
             '
+
+  # -----------------------------------------------------------------------
+  # Job 9: OVMX_IMGACT build mode (musl, aarch64)
+  #
+  # Gate on the image-activation build mode (bead vms-913.3): configure +
+  # build the whole tree with -DOVMX_IMGACT=ON and assert (via readelf) that
+  # shareable images carry VMS SONAMEs + DT_HASH, executables carry
+  # PT_INTERP=IMGACT.EXE + DT_HASH, STARTUP.EXE/IMGACT.EXE stay static, and
+  # nothing uses GNU_HASH. aarch64-only until bead vms-913.11; runs under
+  # arm64 emulation on the x86_64 runner.
+  # -----------------------------------------------------------------------
+  imgact-build-mode:
+    name: OVMX_IMGACT Build Mode (musl)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Configure + build + verify OVMX_IMGACT (arm64 musl)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc BUILD=/tmp/imgact-build
+              sh /src/src/imgact/test/verify_imgact_cmake.sh
+            '

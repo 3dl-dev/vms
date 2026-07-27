@@ -15,9 +15,12 @@
 #      then call musl __init_libc (programs the thread pointer, builds the TCB/TLS
 #      musl-style, sets the stack guard, makes malloc usable) -> transfer control.
 #      The consumer computes  snprintf("%d+%d",20,22)=5  +  (int)(strtod("3.5")*2)=7
-#      +  buf[0]-'0'=2  ==  14  and exits with it. Without musl init the first
-#      malloc/snprintf faults (no thread pointer / TCB); exit 14 proves the C-RTL
-#      is live.
+#      +  buf[0]-'0'=2  ==  14, and also free()s its buffer, mallocs+writes+frees a
+#      second one, and exits 14. Without musl init the first malloc/snprintf faults
+#      (no thread pointer / TCB); without the vms-36a LINK.EXE weak-override fix the
+#      free() SIGSEGVs (malloc had bound to musl's WEAK __simple_malloc, so buf
+#      carried no mallocng metadata). Exit 14 proves the C-RTL is live AND that
+#      mallocng malloc/free are a matched pair.
 #
 # Uses the arm64 musl container's libc.a + libgcc.a (aarch64-only for now,
 # CLAUDE.md test loop). Needs root to create /vms. Exit 0 on ok.
@@ -58,26 +61,37 @@ echo "-- it is a valid ET_DYN OVMX shareable (.vms\$sv + .vms\$rel) --"
 readelf -SW "$SYSLIB/DECC\$SHR.EXE" | grep -E '\.vms\$sv|\.vms\$rel' || true
 readelf -SW "$SYSLIB/DECC\$SHR.EXE" | grep -q '\.vms\$sv' || { echo "FAIL: no symbol vector"; exit 1; }
 
-echo "== consumer: malloc + snprintf(%d) + strtod (soft-float) through DECC\$SHR =="
+echo "== consumer: malloc + snprintf(%d) + strtod (soft-float) + free through DECC\$SHR =="
 # Format/number strings are built on the stack (immediate stores) so the consumer
 # itself needs no .rodata/relocations — only the imported C-RTL calls.
 cat > "$WORK/crtlcons.c" <<'EOF'
 extern void  *malloc(unsigned long);
+extern void   free(void *);
 extern int    snprintf(char *, unsigned long, const char *, ...);
 extern double strtod(const char *, char **);
 void _start(void) {
     char fmt[6]; fmt[0]='%'; fmt[1]='d'; fmt[2]='+'; fmt[3]='%'; fmt[4]='d'; fmt[5]=0;
     char num[4]; num[0]='3'; num[1]='.'; num[2]='5'; num[3]=0;
-    char *buf = malloc(32);               /* real musl malloc arena           */
+    char *buf = malloc(32);               /* real musl mallocng arena         */
     int n = snprintf(buf, 32, fmt, 20, 22);   /* libc writes into malloc'd mem;
                                                * -> "20+22", returns 5         */
     double d = strtod(num, 0);            /* -> 3.5 via libgcc soft-float     */
-    int rc = n + (int)(d * 2.0) + (buf[0] - '0');  /* 5 + 7 + 2 == 14         */
-    /* NB: free() is intentionally NOT exercised here — musl mallocng's free
-     * path traps its own integrity a_crash under VMS-native activation (malloc,
-     * writes, realloc-sized allocs, snprintf and strtod all work). Deferred to a
-     * follow-up (see rd) since the fix is in the LINK.EXE relocation coverage /
-     * mallocng-meta handling, not this activation path. */
+    int first = buf[0] - '0';             /* '2' -> 2                          */
+    free(buf);                            /* mallocng free — deallocates buf.  *
+                                           * Before the vms-36a LINK.EXE weak- *
+                                           * override fix this SIGSEGV'd: the  *
+                                           * exported malloc bound to musl's   *
+                                           * WEAK __simple_malloc bump alloc,  *
+                                           * so buf carried no mallocng meta   *
+                                           * and free's get_meta walked off    *
+                                           * the mapping. Now malloc binds to  *
+                                           * mallocng STRONG and free works.   */
+    char *buf2 = malloc(64);              /* reuse the arena after free ...    */
+    buf2[0] = 7; buf2[63] = 9;            /* ... write both ends ...           */
+    int ok = (buf2[0] == 7 && buf2[63] == 9); /* ... arena healthy post-free  */
+    free(buf2);                           /* free a second allocation          */
+    int rc = n + (int)(d * 2.0) + first;  /* 5 + 7 + 2 == 14                   */
+    if (!ok) rc = 99;                     /* fail marker if reuse-after-free bad */
     register long x8 __asm__("x8") = 94;  /* exit_group */
     register long x0 __asm__("x0") = rc;
     __asm__ volatile("svc 0" :: "r"(x8), "r"(x0) : "memory");
@@ -94,9 +108,11 @@ echo "== RUN ./CRTLPROG.EXE FOR REAL (kernel -> IMGACT.EXE -> musl init -> C-RTL
 set +e
 "$WORK/CRTLPROG.EXE"; RC=$?
 set -e
-echo "exit code = $RC (expect 14 = snprintf(5) + strtod*2(7) + buf[0](2), via live musl C-RTL)"
-[ "$RC" -eq 14 ] || { echo "FAIL: DECC\$SHR C-RTL did not init + run (got $RC, want 14)"; exit 1; }
+echo "exit code = $RC (expect 14 = snprintf(5) + strtod*2(7) + buf[0](2); free()+reuse OK)"
+[ "$RC" -eq 99 ] && { echo "FAIL: reuse-after-free returned bad data (arena corrupt)"; exit 1; }
+[ "$RC" -eq 14 ] || { echo "FAIL: DECC\$SHR C-RTL did not init + run (got $RC, want 14; 139=free SIGSEGV)"; exit 1; }
 
 echo
-echo "MILESTONE: a consumer calls musl malloc + snprintf + strtod through DECC\$SHR,"
-echo "VMS-native, after IMGACT.EXE drives musl runtime init (vms-61f.2)"
+echo "MILESTONE: a consumer calls musl malloc + snprintf + strtod + free (with reuse"
+echo "after free) through DECC\$SHR, VMS-native, after IMGACT.EXE drives musl runtime"
+echo "init (vms-61f.2); mallocng free works via the vms-36a LINK.EXE weak-override fix."

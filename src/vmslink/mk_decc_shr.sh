@@ -90,6 +90,17 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 # universals sit at the very end; only stdin/stdout/stderr are cross-image DATA
 # imports for libvms (every other import is a PROCEDURE) — no producer-pointer
 # ABS64 case (vms-212).
+#
+# 32 more PROCEDURE universals (access..utimes) were APPENDED for vms-b65.6 (DCL,
+# the executable consumer): the DCL shell's 114 libc imports include these POSIX
+# calls (file access/mode, cwd/chdir, terminal ioctl/tcgetattr/tcsetattr/isatty,
+# pty pipe, network inet_*/ntohl/socket for SHOW NETWORK-style probes, rlimit,
+# time gettimeofday/settimeofday/mktime/strptime/utimes, getpwnam, system/execvp,
+# strerror/rewind/fileno/flock/fstat/readlink/sleep/isxdigit) not previously pulled
+# by any library consumer. Enumerated empirically: `nm` the 22 compiled vmsdcl
+# objects for U symbols minus intra-image T defs minus the OVMX-universal set, then
+# comm against this vector. All appended at the END -> prior consumers' indices
+# unchanged (GSMATCH LEQUAL-compatible).
 VEC="\
 __init_libc=PROCEDURE,\
 malloc=PROCEDURE,free=PROCEDURE,calloc=PROCEDURE,realloc=PROCEDURE,\
@@ -140,7 +151,15 @@ time=PROCEDURE,timegm=PROCEDURE,timer_create=PROCEDURE,timer_delete=PROCEDURE,\
 timer_settime=PROCEDURE,uname=PROCEDURE,waitpid=PROCEDURE,\
 \
 stdin=DATA,stdout=DATA,stderr=DATA,\
-fnmatch=PROCEDURE,fsync=PROCEDURE,ftruncate=PROCEDURE"
+fnmatch=PROCEDURE,fsync=PROCEDURE,ftruncate=PROCEDURE,\
+access=PROCEDURE,chdir=PROCEDURE,chmod=PROCEDURE,execvp=PROCEDURE,\
+fileno=PROCEDURE,flock=PROCEDURE,fstat=PROCEDURE,getcwd=PROCEDURE,\
+geteuid=PROCEDURE,getpwnam=PROCEDURE,getrlimit=PROCEDURE,gettimeofday=PROCEDURE,\
+inet_ntop=PROCEDURE,inet_pton=PROCEDURE,ioctl=PROCEDURE,isatty=PROCEDURE,\
+isxdigit=PROCEDURE,mktime=PROCEDURE,ntohl=PROCEDURE,pipe=PROCEDURE,\
+readlink=PROCEDURE,rewind=PROCEDURE,setrlimit=PROCEDURE,settimeofday=PROCEDURE,\
+sleep=PROCEDURE,socket=PROCEDURE,strerror=PROCEDURE,strptime=PROCEDURE,\
+system=PROCEDURE,tcgetattr=PROCEDURE,tcsetattr=PROCEDURE,utimes=PROCEDURE"
 
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"

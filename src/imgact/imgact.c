@@ -801,6 +801,14 @@ struct ovmx_prod {
 	char                         name[128];
 	unsigned long                base;
 	const struct ovmx_sv_header *sv;
+	/* TLS (PT_TLS) + TLSDESC entries the activator must complete (.vms$tls). */
+	int                          has_tls;
+	unsigned long                tls_image;    /* runtime addr of .tdata image */
+	unsigned long                tls_filesz;
+	unsigned long                tls_memsz;
+	unsigned long                tls_align;
+	unsigned long                tls_offset;   /* assigned offset from TP        */
+	const struct ovmx_tls_header *tlsdesc;     /* .vms$tls header (0 if none)     */
 };
 static struct ovmx_prod g_prods[32];
 static int              g_nprods;
@@ -865,6 +873,9 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	 * before any of its universal code runs. Pages are RWX at this point. */
 	if (ok)
 		apply_vms_rel(fd, base);
+	/* Locate the .vms$tls TLSDESC table (completed after TLS offsets assigned). */
+	unsigned long tls_addr, tls_size;
+	int have_tlsdesc = ovmx_find_section(fd, OVMX_TLS_SECTION, &tls_addr, &tls_size);
 	sys_close(fd);
 	if (!ok)
 		return 0;
@@ -874,7 +885,71 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	p->base = base;
 	p->sv = (const struct ovmx_sv_header *)(base + sv_addr);
 	if (p->sv->magic != OVMX_SV_MAGIC) { g_nprods--; return 0; }
+
+	/* Record PT_TLS geometry (for the symbol-vector TLS setup pass). */
+	for (int i = 0; i < eh.e_phnum; i++) {
+		if (ph[i].p_type != PT_TLS) continue;
+		p->has_tls    = 1;
+		p->tls_image  = base + ph[i].p_vaddr;
+		p->tls_filesz = ph[i].p_filesz;
+		p->tls_memsz  = ph[i].p_memsz;
+		p->tls_align  = ph[i].p_align ? ph[i].p_align : 1;
+		break;
+	}
+	p->tlsdesc = have_tlsdesc
+		? (const struct ovmx_tls_header *)(base + tls_addr) : 0;
 	return p;
+}
+
+/* Symbol-vector TLS setup: assign each producer's TLS block an offset from TP,
+ * allocate the thread's TLS block, copy per-module init images, program the
+ * thread pointer, then complete each producer's TLSDESC entries (resolver +
+ * TP-relative offset). Mirrors the DT_HASH path (assign_tls_offsets/setup_tls +
+ * the R_AARCH64_TLSDESC handler) but over the .vms$imp producers. */
+static void setup_symvec_tls(void)
+{
+	unsigned long cursor = TLS_TCB_SIZE;   /* reserve the TCB above TP */
+	int any = 0;
+	for (int i = 0; i < g_nprods; i++) {
+		struct ovmx_prod *p = &g_prods[i];
+		if (!p->has_tls)
+			continue;
+		unsigned long off = ALIGN_UP(cursor, p->tls_align);
+		p->tls_offset = off;
+		cursor = off + p->tls_memsz;
+		any = 1;
+	}
+	if (!any)
+		return;
+
+	unsigned long len = PAGE_UP(cursor);
+	void *area = sys_mmap(0, len, PROT_READ | PROT_WRITE,
+			      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (area == MAP_FAILED)
+		die_tlserr("TLS block");
+	for (int i = 0; i < g_nprods; i++) {
+		struct ovmx_prod *p = &g_prods[i];
+		if (!p->has_tls)
+			continue;
+		memcpy((char *)area + p->tls_offset,
+		       (void *)p->tls_image, p->tls_filesz);
+		/* .tbss stays zero (anonymous mapping). */
+	}
+	imgact_set_tp(area);
+
+	for (int i = 0; i < g_nprods; i++) {
+		struct ovmx_prod *p = &g_prods[i];
+		if (!p->tlsdesc || p->tlsdesc->magic != OVMX_TLS_MAGIC)
+			continue;
+		const unsigned long *eo =
+			(const unsigned long *)((const char *)p->tlsdesc +
+						sizeof *p->tlsdesc);
+		for (unsigned k = 0; k < p->tlsdesc->count; k++) {
+			unsigned long *entry = (unsigned long *)(p->base + eo[k]);
+			entry[0] = (unsigned long)__tlsdesc_static;
+			entry[1] += p->tls_offset;
+		}
+	}
 }
 
 /* Resolve every .vms$imp import of the executable against producer symbol
@@ -917,6 +992,10 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
 		}
 		*(unsigned long *)(exe_base + ie[k].patch_off) = addr;
 	}
+
+	/* Set up TLS for any producer that has thread-local storage, before the
+	 * consumer (which may call into that producer's TLS-using code) runs. */
+	setup_symvec_tls();
 }
 
 unsigned long imgact_bootstrap(unsigned long *sp)

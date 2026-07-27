@@ -117,4 +117,44 @@ echo "exit code = $RC (expect 118 = g_base(100)+g_zero(0)+11+7 read through bias
 [ "$RC" -eq 118 ] || { echo "FAIL: GOT/.vms\$rel activation did not yield 118 (got $RC)"; exit 1; }
 
 echo
+echo "== TLS: a producer with __thread runs VMS-native via TLSDESC (vms-99c) =="
+# read_tls() accesses a thread-local through the TLSDESC sequence. LINK.EXE lays
+# out PT_TLS + a .tlsdesc table + .vms$tls; IMGACT sets up the thread's TLS block,
+# programs the thread pointer, and completes each TLSDESC entry (resolver +
+# TP-relative offset). Without that, the TLSDESC resolver call faults/returns
+# garbage. Correct activation yields t_val + a + b.
+cat > "$WORK/tlslib.c" <<'EOF'
+__thread int t_val = 100;                 /* thread-local, .tdata */
+int read_tls(int a, int b) { return t_val + a + b; }   /* TLSDESC access */
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/tlslib.o" "$WORK/tlslib.c"
+echo "-- TLSDESC relocations gcc emitted --"
+readelf -rW "$WORK/tlslib.o" | awk '/TLSDESC/{print $3}' | sort | uniq -c
+"$WORK/LINK.EXE" --shareable --symbol-vector "read_tls=PROCEDURE" \
+    --gsmatch LEQUAL,1,0 -o "$SYSLIB/LIBTLS\$SHR.EXE" "$WORK/tlslib.o"
+echo "-- producer program headers (expect a PT_TLS) + TLS sections --"
+readelf -lW "$SYSLIB/LIBTLS\$SHR.EXE" | grep -E "TLS" || true
+readelf -SW "$SYSLIB/LIBTLS\$SHR.EXE" | grep -E '\.tdata|\.tlsdesc|\.vms\$tls' || true
+readelf -lW "$SYSLIB/LIBTLS\$SHR.EXE" | grep -q "TLS" || { echo "FAIL: producer has no PT_TLS"; exit 1; }
+cat > "$WORK/tlscons.c" <<'EOF'
+extern int read_tls(int, int);
+void _start(void) {
+    int r = read_tls(10, 5);              /* == 100 + 10 + 5 == 115 via TLSDESC */
+    register long x8 __asm__("x8") = 94;  /* exit_group */
+    register long x0 __asm__("x0") = r;
+    __asm__ volatile("svc 0" :: "r"(x8), "r"(x0) : "memory");
+    __builtin_unreachable();
+}
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/tlscons.o" "$WORK/tlscons.c"
+"$WORK/LINK.EXE" --executable --use "$SYSLIB/LIBTLS\$SHR.EXE" \
+    -o "$WORK/TLSPROG.EXE" "$WORK/tlscons.o"
+chmod +x "$WORK/TLSPROG.EXE"
+set +e
+"$WORK/TLSPROG.EXE"; RC=$?
+set -e
+echo "exit code = $RC (expect 115 = t_val(100)+10+5 read from thread-local storage)"
+[ "$RC" -eq 115 ] || { echo "FAIL: TLS activation did not yield 115 (got $RC)"; exit 1; }
+
+echo
 echo "ALL REAL IMGACT SYMBOL-VECTOR ACTIVATION CHECKS PASSED"

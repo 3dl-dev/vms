@@ -120,6 +120,25 @@ readelf -SW "$WORK/LIBGOT\$SHR.EXE" | grep -q '\.vms\$rel' || { echo "FAIL: no .
 readelf -lW "$WORK/LIBGOT\$SHR.EXE" | grep -E 'LOAD .* RWE' >/dev/null || { echo "FAIL: writable image PT_LOAD is not RWX"; exit 1; }
 
 echo
+echo "== TLS producer: __thread synthesizes PT_TLS + .tlsdesc + .vms\$tls (vms-99c) =="
+echo "   (TLSDESC_ADR_PAGE21/LD64_LO12/ADD_LO12 -> a 2-word TLSDESC entry; PT_TLS"
+echo "    carries the .tdata init image; IMGACT completes the entries at activation.)"
+cat > "$WORK/tlsvar.c" <<'EOF'
+__thread int t_val = 100;   /* thread-local -> .tdata + TLSDESC access */
+int read_tls(int a, int b) { return t_val + a + b; }
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/tlsvar.o" "$WORK/tlsvar.c"
+echo "-- TLSDESC relocations gcc emitted --"
+readelf -rW "$WORK/tlsvar.o" | awk '/TLSDESC/{print $3}' | sort | uniq -c
+"$WORK/LINK.EXE" --shareable --symbol-vector "read_tls=PROCEDURE" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIBTLS\$SHR.EXE" "$WORK/tlsvar.o"
+readelf -lW "$WORK/LIBTLS\$SHR.EXE" | grep -E "TLS" || true
+readelf -SW "$WORK/LIBTLS\$SHR.EXE" | grep -E '\.tdata|\.tlsdesc|\.vms' || true
+readelf -lW "$WORK/LIBTLS\$SHR.EXE" | grep -q "TLS"        || { echo "FAIL: no PT_TLS"; exit 1; }
+readelf -SW "$WORK/LIBTLS\$SHR.EXE" | grep -q '\.tlsdesc'  || { echo "FAIL: no .tlsdesc table"; exit 1; }
+readelf -SW "$WORK/LIBTLS\$SHR.EXE" | grep -q '\.vms\$tls' || { echo "FAIL: no .vms\$tls"; exit 1; }
+
+echo
 echo "== resolve + CALL a universal symbol via the vector (IMGACT resolver, vms-8d5) =="
 $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/RESOLVE" "$SRC/test/resolve_call.c"
 "$WORK/RESOLVE" "$WORK/LIBMATH\$SHR.EXE"

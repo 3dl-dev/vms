@@ -35,10 +35,13 @@
 #define OVMX_IMP_SECTION  ".vms$imp"
 /* Section that lists image-relative slots needing +load_bias at activation. */
 #define OVMX_REL_SECTION  ".vms$rel"
+/* Section that lists the image's TLSDESC entries for the activator to complete. */
+#define OVMX_TLS_SECTION  ".vms$tls"
 
 #define OVMX_SV_MAGIC     0x31565356u  /* "VSV1" little-endian */
 #define OVMX_IMP_MAGIC    0x31504d49u  /* "IMP1" little-endian */
 #define OVMX_REL_MAGIC    0x314c4552u  /* "REL1" little-endian */
+#define OVMX_TLS_MAGIC    0x31534c54u  /* "TLS1" little-endian */
 
 /* GSMATCH match-control (public VMS semantics; values are OVMX-internal). */
 enum ovmx_gsmatch {
@@ -120,6 +123,25 @@ struct ovmx_rel_header {
     uint32_t magic;         /* OVMX_REL_MAGIC                                 */
     uint32_t count;         /* number of image-relative slot offsets          */
     /* uint64_t offsets[count]; */
+};
+
+/*
+ * `.vms$tls` layout: header then `count` image-relative offsets (u64 each), one
+ * per synthesized TLSDESC entry. A TLSDESC entry is two quadwords:
+ *   entry[0] = resolver function address  (LINK leaves 0; IMGACT fills with the
+ *              interpreter's __tlsdesc_static)
+ *   entry[1] = TP-relative offset of the variable (LINK pre-fills the
+ *              MODULE-relative offset = symbol value + addend; IMGACT adds the
+ *              module's assigned TLS block offset)
+ * This replaces the ELF R_AARCH64_TLSDESC dynamic relocation on the symbol-
+ * vector activation path, which has no PT_DYNAMIC. OVMX-original design
+ * (CLAUDE.md rule 8): the TLSDESC *semantics* are the public AArch64 ELF ABI;
+ * this section is OVMX's own carrier for the activator to complete them.
+ */
+struct ovmx_tls_header {
+    uint32_t magic;         /* OVMX_TLS_MAGIC                                 */
+    uint32_t count;         /* number of TLSDESC entries                     */
+    /* uint64_t entry_off[count]; image-relative offset of each 2-word entry  */
 };
 
 #endif /* OVMX_IMAGE_H */

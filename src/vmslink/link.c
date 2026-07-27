@@ -39,6 +39,20 @@
 #define R_AARCH64_LD64_GOT_LO12_NC 312
 #endif
 
+/* TLSDESC (general-dynamic TLS) relocation types (aarch64). */
+#ifndef R_AARCH64_TLSDESC_ADR_PAGE21
+#define R_AARCH64_TLSDESC_ADR_PAGE21 562
+#endif
+#ifndef R_AARCH64_TLSDESC_LD64_LO12
+#define R_AARCH64_TLSDESC_LD64_LO12  563
+#endif
+#ifndef R_AARCH64_TLSDESC_ADD_LO12
+#define R_AARCH64_TLSDESC_ADD_LO12   564
+#endif
+#ifndef R_AARCH64_TLSDESC_CALL
+#define R_AARCH64_TLSDESC_CALL       569
+#endif
+
 #define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
 
 /* --------------------------------------------------------------------------
@@ -80,6 +94,10 @@ struct obj {
     Elf64_Shdr   *data;     /* .data section header (0 if none) */
     int           bss_ndx;  /* .bss section index (0 if none) */
     Elf64_Shdr   *bss;      /* .bss section header (0 if none) */
+    int           tdata_ndx; /* .tdata (TLS init data) index (0 if none) */
+    Elf64_Shdr   *tdata;    /* .tdata section header (0 if none) */
+    int           tbss_ndx; /* .tbss (TLS zero data) index (0 if none) */
+    Elf64_Shdr   *tbss;     /* .tbss section header (0 if none) */
     Elf64_Rela   *rela;     /* relocations against .text (SHT_RELA) */
     int           nrela;
 };
@@ -135,6 +153,14 @@ static void load_obj(const char *path, struct obj *o)
         } else if (o->sh[i].sh_type == SHT_NOBITS && strcmp(nm, ".bss") == 0) {
             o->bss_ndx = i;
             o->bss = &o->sh[i];
+        } else if ((o->sh[i].sh_flags & SHF_TLS) &&
+                   o->sh[i].sh_type == SHT_PROGBITS && strcmp(nm, ".tdata") == 0) {
+            o->tdata_ndx = i;
+            o->tdata = &o->sh[i];
+        } else if ((o->sh[i].sh_flags & SHF_TLS) &&
+                   o->sh[i].sh_type == SHT_NOBITS && strcmp(nm, ".tbss") == 0) {
+            o->tbss_ndx = i;
+            o->tbss = &o->sh[i];
         } else if (o->sh[i].sh_type == SHT_SYMTAB) {
             o->sym  = (Elf64_Sym *)(o->buf + o->sh[i].sh_offset);
             o->nsym = o->sh[i].sh_size / sizeof(Elf64_Sym);
@@ -629,6 +655,63 @@ static int is_got_reloc(uint32_t type)
     return type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC;
 }
 
+/* A synthesized TLSDESC entry (two quadwords): [0]=resolver (IMGACT fills with
+ * __tlsdesc_static), [1]=TP-relative offset (LINK pre-fills the module-relative
+ * part; IMGACT adds the module's assigned TLS block offset). */
+struct tlsslot { char name[256]; int64_t addend; uint64_t va; uint64_t modoff; };
+
+static int find_tls(struct tlsslot *t, int nt, const char *name)
+{
+    for (int i = 0; i < nt; i++) if (strcmp(t[i].name, name) == 0) return i;
+    return -1;
+}
+
+static int is_tlsdesc_reloc(uint32_t type)
+{
+    return type == R_AARCH64_TLSDESC_ADR_PAGE21 ||
+           type == R_AARCH64_TLSDESC_LD64_LO12 ||
+           type == R_AARCH64_TLSDESC_ADD_LO12 ||
+           type == R_AARCH64_TLSDESC_CALL;
+}
+
+/* Patch a TLSDESC ADR_PAGE21 / LD64_LO12 / ADD_LO12 to reach the 2-word TLSDESC
+ * entry PC-relatively (same encodings as ADRP / LDR64 / ADD-imm12). TLSDESC_CALL
+ * is a marker at the blr and needs no patch. */
+static void patch_tlsdesc(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot)
+{
+    if (type == R_AARCH64_TLSDESC_ADR_PAGE21) {
+        int64_t d = (int64_t)(slot >> 12) - (int64_t)(site >> 12);
+        uint32_t immlo = (uint32_t)(d & 3), immhi = (uint32_t)((d >> 2) & 0x7FFFF);
+        *insn = (*insn & ~((3u << 29) | (0x7FFFFu << 5))) | (immlo << 29) | (immhi << 5);
+    } else if (type == R_AARCH64_TLSDESC_LD64_LO12) {
+        uint32_t imm = (uint32_t)((slot & 0xFFF) >> 3);
+        *insn = (*insn & ~(0xFFFu << 10)) | (imm << 10);
+    } else if (type == R_AARCH64_TLSDESC_ADD_LO12) {
+        *insn = (*insn & ~(0xFFFu << 10)) | (((uint32_t)slot & 0xFFF) << 10);
+    }
+    /* R_AARCH64_TLSDESC_CALL: no-op. */
+}
+
+/* Module-relative TLS offset of a TLS symbol: 0-based within the module's
+ * [.tdata | .tbss] block. tbss_base is where .tbss begins (aligned .tdata size). */
+static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base,
+                                  const char *name, int64_t addend)
+{
+    for (int j = 0; j < nobj; j++) {
+        struct obj *d = &objs[j];
+        for (int k = 0; k < d->nsym; k++) {
+            Elf64_Sym *s = &d->sym[k];
+            if (strcmp(d->str + s->st_name, name) != 0) continue;
+            if (d->tdata && s->st_shndx == (Elf64_Section)d->tdata_ndx)
+                return s->st_value + (uint64_t)addend;
+            if (d->tbss && s->st_shndx == (Elf64_Section)d->tbss_ndx)
+                return tbss_base + s->st_value + (uint64_t)addend;
+        }
+    }
+    die("TLS symbol not defined in any input .tdata/.tbss");
+    return 0;
+}
+
 /* Emit an OVMX shareable image from N objects: merge .text/.rodata/.data/.bss,
  * apply PC-relative relocations (local + cross-object), synthesize a GOT for
  * GOT-indirect global references, and record every image-relative slot that
@@ -643,6 +726,28 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         if (objs[i].data && objs[i].data->sh_size) has_data = 1;
         if (objs[i].bss && objs[i].bss->sh_size) has_bss = 1;
     }
+
+    /* TLS geometry (single TLS-bearing object per image for now). */
+    int tls_obj = -1;
+    for (int i = 0; i < nobj; i++) {
+        if ((objs[i].tdata && objs[i].tdata->sh_size) ||
+            (objs[i].tbss && objs[i].tbss->sh_size)) {
+            if (tls_obj >= 0)
+                die("multi-module TLS not supported yet (one TLS object per image)");
+            tls_obj = i;
+        }
+    }
+    int has_tls = (tls_obj >= 0);
+    uint64_t tdata_sz = (has_tls && objs[tls_obj].tdata) ? objs[tls_obj].tdata->sh_size : 0;
+    uint64_t tbss_sz  = (has_tls && objs[tls_obj].tbss)  ? objs[tls_obj].tbss->sh_size  : 0;
+    uint64_t tdata_al = (has_tls && objs[tls_obj].tdata && objs[tls_obj].tdata->sh_addralign)
+                        ? objs[tls_obj].tdata->sh_addralign : 8;
+    uint64_t tbss_al  = (has_tls && objs[tls_obj].tbss && objs[tls_obj].tbss->sh_addralign)
+                        ? objs[tls_obj].tbss->sh_addralign : 1;
+    uint64_t tls_align = tdata_al > tbss_al ? tdata_al : tbss_al;
+    if (tls_align == 0) tls_align = 1;
+    uint64_t tbss_base = tbss_sz ? ALIGN_UP(tdata_sz, tbss_al) : tdata_sz;
+    uint64_t tls_memsz = tbss_base + tbss_sz;
 
     /* Collect the distinct GOT-referenced symbols (from .text relocations). */
     static struct gotslot got[1024];
@@ -660,9 +765,26 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             }
         }
 
-    /* ---- Layout: [ehdr][phdr] text | rodata | got | data | sv | rel | bss ---- */
+    /* Collect the distinct TLSDESC-referenced symbols (one 2-word entry each). */
+    static struct tlsslot tls[512];
+    int ntls = 0;
+    for (int i = 0; i < nobj; i++)
+        for (int r = 0; r < objs[i].nrela; r++) {
+            uint32_t type = ELF64_R_TYPE(objs[i].rela[r].r_info);
+            if (!is_tlsdesc_reloc(type)) continue;
+            uint32_t si = ELF64_R_SYM(objs[i].rela[r].r_info);
+            const char *nm = objs[i].str + objs[i].sym[si].st_name;
+            if (find_tls(tls, ntls, nm) < 0) {
+                if (ntls >= 512) die("too many TLSDESC symbols");
+                snprintf(tls[ntls].name, sizeof tls[ntls].name, "%s", nm);
+                tls[ntls].addend = objs[i].rela[r].r_addend;
+                ntls++;
+            }
+        }
+
+    /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|tdata|sv|rel|tls|bss --- */
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
-    int      nph      = 1;
+    int      nph      = has_tls ? 2 : 1;   /* PT_LOAD (+ PT_TLS) */
     uint64_t cur      = ALIGN_UP(off_ph + nph * sizeof(Elf64_Phdr), 16);
     uint64_t text_beg = cur;
     for (int i = 0; i < nobj; i++) {
@@ -687,6 +809,12 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     uint64_t got_end = got_beg + (uint64_t)ngot * 8;
     cur = got_end;
 
+    /* TLSDESC entries (writable, 2 quadwords each, 8-aligned). */
+    uint64_t tlsdesc_beg = ALIGN_UP(cur, 8);
+    for (int i = 0; i < ntls; i++) tls[i].va = tlsdesc_beg + (uint64_t)i * 16;
+    uint64_t tlsdesc_end = tlsdesc_beg + (uint64_t)ntls * 16;
+    cur = tlsdesc_end;
+
     /* .data (writable, initialized). */
     uint64_t data_beg = cur;
     for (int i = 0; i < nobj; i++) {
@@ -698,6 +826,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         } else pl[i].data_va = 0;
     }
     uint64_t data_end = cur;
+
+    /* .tdata (TLS init image, file-backed). PT_TLS references it; a reserved
+     * vaddr is assigned even for a pure-.tbss image (tdata_sz == 0). */
+    uint64_t tdata_va = 0, tdata_end = data_end;
+    if (has_tls) {
+        cur = ALIGN_UP(cur, tls_align);
+        tdata_va = cur;
+        cur += tdata_sz;
+        tdata_end = cur;
+    }
 
     uint64_t off_sv = ALIGN_UP(cur, 8);
 
@@ -719,8 +857,17 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         rel_size = sizeof(struct ovmx_rel_header) + (uint64_t)nrel * 8;
     }
 
+    /* .vms$tls: one image-relative offset per TLSDESC entry. */
+    uint64_t after_rel = nrel ? off_rel + rel_size : off_sv + sv_size;
+    int ntlsdesc = ntls;
+    uint64_t off_tls = 0, tls_sec_size = 0;
+    if (ntlsdesc) {
+        off_tls = ALIGN_UP(after_rel, 8);
+        tls_sec_size = sizeof(struct ovmx_tls_header) + (uint64_t)ntlsdesc * 8;
+    }
+
     /* End of file-backed loaded content; .bss (NOBITS) extends memsz beyond it. */
-    uint64_t file_loaded_end = nrel ? off_rel + rel_size : off_sv + sv_size;
+    uint64_t file_loaded_end = ntlsdesc ? off_tls + tls_sec_size : after_rel;
     uint64_t bss_beg = file_loaded_end, bss_end = file_loaded_end;
     if (has_bss) {
         for (int i = 0; i < nobj; i++) {
@@ -738,17 +885,21 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     uint64_t off_shstr = ALIGN_UP(file_loaded_end, 4);
 
-    const char *secn[10]; int nsec = 0;
+    const char *secn[16]; int nsec = 0;
     secn[nsec++] = "";
     int ix_text = nsec; secn[nsec++] = ".text";
     int ix_ro = -1;   if (has_ro)   { ix_ro   = nsec; secn[nsec++] = ".rodata"; }
     int ix_got = -1;  if (ngot)     { ix_got  = nsec; secn[nsec++] = ".got"; }
+    int ix_tlsd = -1; if (ntls)     { ix_tlsd = nsec; secn[nsec++] = ".tlsdesc"; }
     int ix_data = -1; if (has_data) { ix_data = nsec; secn[nsec++] = ".data"; }
+    int ix_tdata = -1; if (has_tls && tdata_sz) { ix_tdata = nsec; secn[nsec++] = ".tdata"; }
     int ix_sv = nsec; secn[nsec++] = OVMX_SV_SECTION;
     int ix_rel = -1;  if (nrel)     { ix_rel  = nsec; secn[nsec++] = OVMX_REL_SECTION; }
+    int ix_tls = -1;  if (ntlsdesc) { ix_tls  = nsec; secn[nsec++] = OVMX_TLS_SECTION; }
     int ix_bss = -1;  if (has_bss)  { ix_bss  = nsec; secn[nsec++] = ".bss"; }
+    int ix_tbss = -1; if (has_tls && tbss_sz) { ix_tbss = nsec; secn[nsec++] = ".tbss"; }
     int ix_str = nsec; secn[nsec++] = ".shstrtab";
-    uint64_t sn_off[10]; uint64_t sn_sz = 0;
+    uint64_t sn_off[16]; uint64_t sn_sz = 0;
     for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
     uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
     uint64_t file_sz = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
@@ -765,13 +916,19 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf64_Phdr); eh->e_phnum = nph;
     eh->e_shentsize = sizeof(Elf64_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = ix_str;
 
-    /* One PT_LOAD. RWX when it carries a writable GOT/.data/.bss (the activator
-     * writes the GOT and biases it in place); R+X for a pure leaf/rodata image. */
-    int writable = (ngot || has_data || has_bss);
+    /* One PT_LOAD. RWX when it carries a writable GOT/TLSDESC/.data/.bss (the
+     * activator writes those in place); R+X for a pure leaf/rodata image.
+     * A PT_TLS follows when the image has thread-local storage. */
+    int writable = (ngot || ntls || has_data || has_bss || has_tls);
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
-    ph->p_type = PT_LOAD;
-    ph->p_flags = writable ? (PF_R | PF_W | PF_X) : (PF_R | PF_X);
-    ph->p_filesz = file_loaded_end; ph->p_memsz = bss_end; ph->p_align = PAGE;
+    ph[0].p_type = PT_LOAD;
+    ph[0].p_flags = writable ? (PF_R | PF_W | PF_X) : (PF_R | PF_X);
+    ph[0].p_filesz = file_loaded_end; ph[0].p_memsz = bss_end; ph[0].p_align = PAGE;
+    if (has_tls) {
+        ph[1].p_type = PT_TLS; ph[1].p_flags = PF_R;
+        ph[1].p_offset = tdata_va; ph[1].p_vaddr = tdata_va; ph[1].p_paddr = tdata_va;
+        ph[1].p_filesz = tdata_sz; ph[1].p_memsz = tls_memsz; ph[1].p_align = tls_align;
+    }
 
     for (int i = 0; i < nobj; i++) {
         memcpy(img + pl[i].text_va, objs[i].buf + objs[i].text->sh_offset,
@@ -784,6 +941,10 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                    objs[i].data->sh_size);
     }
 
+    /* Copy the TLS init image (.tdata); .tbss is zero-filled per thread. */
+    if (has_tls && tdata_sz)
+        memcpy(img + tdata_va, objs[tls_obj].buf + objs[tls_obj].tdata->sh_offset, tdata_sz);
+
     /* Fill GOT cells with image-relative target addresses. */
     for (int i = 0; i < ngot; i++) {
         got[i].value = resolve_named(objs, nobj, pl, got[i].name,
@@ -791,19 +952,33 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         *(uint64_t *)(img + got[i].va) = got[i].value;
     }
 
-    /* Apply relocations: GOT-indirect pairs -> GOT slot; the rest PC-relative. */
+    /* Fill TLSDESC entries: [0]=0 (IMGACT sets the resolver), [1]=module offset. */
+    for (int i = 0; i < ntls; i++) {
+        tls[i].modoff = tls_module_offset(objs, nobj, tbss_base,
+                                          tls[i].name, tls[i].addend);
+        uint64_t *e = (uint64_t *)(img + tls[i].va);
+        e[0] = 0;
+        e[1] = tls[i].modoff;
+    }
+
+    /* Apply relocations: GOT-indirect pairs -> GOT slot; TLSDESC -> TLSDESC
+     * entry; the rest PC-relative. */
     for (int i = 0; i < nobj; i++) {
         for (int r = 0; r < objs[i].nrela; r++) {
             Elf64_Rela *rl = &objs[i].rela[r];
             uint32_t type = ELF64_R_TYPE(rl->r_info);
             uint64_t site = pl[i].text_va + rl->r_offset;
             uint32_t *insn = (uint32_t *)(img + pl[i].text_va + rl->r_offset);
+            const char *nm = objs[i].str +
+                             objs[i].sym[ELF64_R_SYM(rl->r_info)].st_name;
             if (is_got_reloc(type)) {
-                const char *nm = objs[i].str +
-                                 objs[i].sym[ELF64_R_SYM(rl->r_info)].st_name;
                 int gi = find_got(got, ngot, nm);
                 if (gi < 0) die("internal: GOT slot missing for symbol");
                 patch_got(type, insn, site, got[gi].va);
+            } else if (is_tlsdesc_reloc(type)) {
+                int ti = find_tls(tls, ntls, nm);
+                if (ti < 0) die("internal: TLSDESC slot missing for symbol");
+                patch_tlsdesc(type, insn, site, tls[ti].va);
             } else {
                 uint64_t target = resolve_ref(objs, nobj, pl, i, ELF64_R_SYM(rl->r_info));
                 patch_pcrel(type, insn, site, target);
@@ -830,6 +1005,13 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         for (int i = 0; i < ngot; i++) off[i] = got[i].va;
     }
 
+    if (ntlsdesc) {
+        struct ovmx_tls_header *th = (struct ovmx_tls_header *)(img + off_tls);
+        th->magic = OVMX_TLS_MAGIC; th->count = (uint32_t)ntlsdesc;
+        uint64_t *eo = (uint64_t *)(img + off_tls + sizeof *th);
+        for (int i = 0; i < ntls; i++) eo[i] = tls[i].va;
+    }
+
     char *shstr = (char *)(img + off_shstr);
     for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
     Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
@@ -849,11 +1031,23 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_got].sh_offset = got_beg; sh[ix_got].sh_size = got_end - got_beg;
         sh[ix_got].sh_addralign = 8;
     }
+    if (ntls) {
+        sh[ix_tlsd].sh_name = sn_off[ix_tlsd]; sh[ix_tlsd].sh_type = SHT_PROGBITS;
+        sh[ix_tlsd].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_tlsd].sh_addr = tlsdesc_beg;
+        sh[ix_tlsd].sh_offset = tlsdesc_beg; sh[ix_tlsd].sh_size = tlsdesc_end - tlsdesc_beg;
+        sh[ix_tlsd].sh_addralign = 8;
+    }
     if (has_data) {
         sh[ix_data].sh_name = sn_off[ix_data]; sh[ix_data].sh_type = SHT_PROGBITS;
         sh[ix_data].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_data].sh_addr = data_beg;
         sh[ix_data].sh_offset = data_beg; sh[ix_data].sh_size = data_end - data_beg;
         sh[ix_data].sh_addralign = 8;
+    }
+    if (has_tls && tdata_sz) {
+        sh[ix_tdata].sh_name = sn_off[ix_tdata]; sh[ix_tdata].sh_type = SHT_PROGBITS;
+        sh[ix_tdata].sh_flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
+        sh[ix_tdata].sh_addr = tdata_va; sh[ix_tdata].sh_offset = tdata_va;
+        sh[ix_tdata].sh_size = tdata_sz; sh[ix_tdata].sh_addralign = tdata_al;
     }
     sh[ix_sv].sh_name = sn_off[ix_sv]; sh[ix_sv].sh_type = SHT_PROGBITS;
     sh[ix_sv].sh_flags = SHF_ALLOC; sh[ix_sv].sh_addr = off_sv;
@@ -863,6 +1057,18 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_rel].sh_flags = SHF_ALLOC; sh[ix_rel].sh_addr = off_rel;
         sh[ix_rel].sh_offset = off_rel; sh[ix_rel].sh_size = rel_size;
         sh[ix_rel].sh_addralign = 8;
+    }
+    if (ntlsdesc) {
+        sh[ix_tls].sh_name = sn_off[ix_tls]; sh[ix_tls].sh_type = SHT_PROGBITS;
+        sh[ix_tls].sh_flags = SHF_ALLOC; sh[ix_tls].sh_addr = off_tls;
+        sh[ix_tls].sh_offset = off_tls; sh[ix_tls].sh_size = tls_sec_size;
+        sh[ix_tls].sh_addralign = 8;
+    }
+    if (has_tls && tbss_sz) {
+        sh[ix_tbss].sh_name = sn_off[ix_tbss]; sh[ix_tbss].sh_type = SHT_NOBITS;
+        sh[ix_tbss].sh_flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
+        sh[ix_tbss].sh_addr = tdata_va + tbss_base; sh[ix_tbss].sh_offset = tdata_end;
+        sh[ix_tbss].sh_size = tbss_sz; sh[ix_tbss].sh_addralign = tbss_al;
     }
     if (has_bss) {
         sh[ix_bss].sh_name = sn_off[ix_bss]; sh[ix_bss].sh_type = SHT_NOBITS;
@@ -880,9 +1086,9 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int totrel = 0; for (int i = 0; i < nobj; i++) totrel += objs[i].nrela;
     fprintf(stderr,
         "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d object%s, %d universal%s, "
-        "%d reloc%s, %d GOT, GSMATCH=%s,%u,%u\n",
+        "%d reloc%s, %d GOT, %d TLS, GSMATCH=%s,%u,%u\n",
         out, nobj, nobj==1?"":"s", nuniv, nuniv==1?"":"s", totrel, totrel==1?"":"s",
-        ngot,
+        ngot, ntls,
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
     free(img);

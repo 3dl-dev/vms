@@ -118,3 +118,68 @@ vms-a17 ───────────────┘                        
 ```
 Rail A (cluster) proceeds in parallel and joins at `vms-ci.6` for the north-star
 rolling-evacuation demo.
+
+---
+
+# Swarm-dispatch DAG series
+
+The work is shaped as an **ordered series of DAGs**, each a single
+`/swarm-dispatch` unit sized to one clean session. A DAG's *entry* items are its
+`rd ready` leaves; internal edges are real `rd` dependencies (skip `level=epic`
+containers — dispatch their leaves). Each DAG ends at a **CI-green-by-SHA gate**.
+Select a DAG by label (`dag-1` … `dag-5`; Rail A = `dag-a1` …).
+
+**Rail B — main line (take in order):**
+
+```
+DAG-1  C runtime + linker enabler        [READY — take next]
+   vms-61f.1 ─▶ vms-61f.2                 (build DECC$SHR ▶ IMGACT musl-init)
+   vms-a17    (parallel, independent)     (ABS64 / .rela.data relocs)
+   gate: DECC$SHR activation CI job green; ABS64 reloc test green
+        │
+        ▼
+DAG-2  Core runtime migration
+   vms-b65.1 ─▶ vms-b65.2                 (vmsprocess$SHR ▶ LIBVMS$SHR)
+   gate: LIBVMS$SHR activates; a lib$/sys$ universal runs via IMGACT
+        │
+        ▼
+DAG-3  File / RMS stack migration
+   vms-b65.3 ─▶ vms-b65.4 ─▶ vms-b65.5   (vmslnm ▶ vmsfs ▶ vmsrms)
+   gate: each $SHR activates through IMGACT
+        │
+        ▼
+DAG-4  DCL VMS-native
+   vms-b65.6 ─▶ vms-034                   (build+run DCL ▶ CI gate)
+   gate: DCL runs a scripted .COM / SHOW TIME session VMS-native in CI
+        │
+        ▼
+DAG-5  ★ VMS system-call endpoint
+   vms-sys  (blocked by DAG-4 + vms-913)  → decompose into a SYS$ corpus ladder
+   gate: a real VMS program's SYS$ calls dispatch into OVMX services + execute
+```
+
+**Rail A — cluster interop (parallel stream, own series):**
+
+```
+DAG-A1  vms-ci.2 (dissector+spec) ∥ vms-ci.8 (node identity) ∥ vms-ce7 (satellite boot)
+   ▼
+DAG-A2  vms-ci.3  (OVMX appears in real SHOW CLUSTER)
+   ▼
+DAG-A3  vms-ci.4 (MSCP-served disk) ─▶ vms-ci.5 (DLM $ENQ/$DEQ)
+   ▼
+        vms-ci.6  rolling evacuation  ← JOINS Rail B here (needs vms-913 activation)
+```
+
+**Independent streams** (dispatch opportunistically, no spine dependency):
+`vms-801` source-compat corpus ladder · `vms-898` authenticity subs ·
+cross-cutting enablers (multi-module TLS, x86_64 `vms-913.11`, INSTALL DB).
+
+## DAG-1 detail (the next unit)
+- **Fan-out (parallel, dispatch together):** `vms-61f.1` (whole-archive musl →
+  `DECC$SHR.EXE` + `.vms$sv` libc vector) and `vms-a17` (ABS64/`.rela.data` in
+  LINK.EXE). Independent — different files, no shared state.
+- **Fan-in (after `vms-61f.1`):** `vms-61f.2` (IMGACT drives musl runtime init —
+  TP + `__init_tls` + libc init + malloc arena — on the `.vms$imp` path).
+- **Exit gate:** a consumer calling `malloc()`+`snprintf()` bound to `DECC$SHR`
+  runs for real through `IMGACT.EXE` (new CI job), and the ABS64 reloc test is
+  green — both by SHA. Unblocks DAG-2 (`vms-b65.1`).

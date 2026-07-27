@@ -139,7 +139,8 @@ statvfs=PROCEDURE,strtok_r=PROCEDURE,syscall=PROCEDURE,sysconf=PROCEDURE,\
 time=PROCEDURE,timegm=PROCEDURE,timer_create=PROCEDURE,timer_delete=PROCEDURE,\
 timer_settime=PROCEDURE,uname=PROCEDURE,waitpid=PROCEDURE,\
 \
-stdin=DATA,stdout=DATA,stderr=DATA"
+stdin=DATA,stdout=DATA,stderr=DATA,\
+fnmatch=PROCEDURE,fsync=PROCEDURE,ftruncate=PROCEDURE"
 
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"

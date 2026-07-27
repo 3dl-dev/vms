@@ -101,6 +101,53 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 # objects for U symbols minus intra-image T defs minus the OVMX-universal set, then
 # comm against this vector. All appended at the END -> prior consumers' indices
 # unchanged (GSMATCH LEQUAL-compatible).
+#
+# 39 PROCEDURE universals APPENDED for vms-4ba.4 (tcc itself running AS an OVMX
+# image, TCC.EXE): enumerated empirically the same way as the vms-b65.6 block
+# above — `nm` the 11 compiled tcc TUs (tcc.o, libtcc.o, tccpp.o, tccgen.o,
+# tccdbg.o, tccasm.o, tccelf.o, tccrun.o, arm64-{gen,link,asm}.o) for U symbols,
+# subtract intra-tcc-image T/D/B defs (tcc's own ~584 internal symbols), comm
+# against this vector. Two groups:
+#   (a) 18 libgcc IEEE-quad ("tf"/128-bit long double) soft-float helpers
+#       (__addtf3/__subtf3/__multf3/__divtf3, __*tf2 compares, __extend*tf2/
+#       __trunctf*2 conversions, __fixtfdi/__fixunstfdi/__floatun{di,si}tf) +
+#       __clear_cache: libgcc.a is ALREADY whole-archived into DECC$SHR (see the
+#       header comment above — "resolved WITHIN the image and kept INTERNAL");
+#       tcc's own long-double constant-folding (tccgen.c) and its arm64 JIT
+#       icache flush (`-run` mode) call these as CROSS-IMAGE imports, so they
+#       must now ALSO be exported, not just internally resolved.
+#   (b) 20 more musl libc.a POSIX/libc calls tcc references that no prior
+#       consumer needed: __assert_fail, atoi, dlclose/dlopen/dlsym (tcc's -l
+#       dynamic-load path), fdopen, ldexpl, longjmp/setjmp (tcc's own
+#       error-recovery jmp_buf), mprotect (tcc's -run JIT page permissions),
+#       remove, sem_init/sem_post/sem_wait, sigaddset/sigprocmask, strpbrk,
+#       strtof/strtold/strtoull. All confirmed present in musl libc.a as WEAK
+#       ('W') or GLOBAL defined symbols via nm (dlopen/fdopen/mprotect are musl
+#       weak stubs — 'nm | grep -w' must match W, not just T/D/B, or they look
+#       falsely absent).
+#
+#   NOT exported: `environ` (tcc's ONLY other cross-image reference, tccrun.c —
+#   the `-run` JIT execve-argv-passthrough path, never exercised by `tcc -c`).
+#   `environ` is musl's genuinely-zero-initialized (`.bss`) global — exporting
+#   ANY BSS-bucket DATA universal hits a REAL LINK.EXE gap discovered while
+#   bringing up this bead: emit_shareable()'s universal-symbol-vector resolution
+#   loop (resolve_named() over the --symbol-vector list) runs BEFORE the BSS
+#   section-placement loop that assigns sec_va[] for B_BSS-bucket sections, so
+#   placed_addr() reads sec_va[]==0 (not yet laid out) and resolve_named() wrongly
+#   dies with "%LINK-F-ERROR, universal symbol not defined in any input object"
+#   even though `environ` IS defined (just not yet placed). Confirmed via direct
+#   debug instrumentation (temporary, reverted) tracing resolve_named("environ")
+#   -> bucket=B_BSS, sec_va=0, da=0. Every PRIOR DATA universal (stdin/stdout/
+#   stderr) is B_DATA (statically initialized `FILE *const`, placed earlier in
+#   program order), so this is the FIRST BSS-bucket universal any consumer has
+#   needed — link.c/imgact.c are out of Systems-Engineer file-domain for this
+#   bead, so this is NOT patched here (see the vms-4ba.4 escalation / follow-up
+#   item). TCC.EXE's build (mk_tcc.sh) instead passes --allow-undefined so its
+#   `environ` GOT reference defers to a null cell rather than failing the whole
+#   link — safe because tccrun.c's `-run` path (the only reader) is dead code
+#   for the `tcc -c` proof this bead requires.
+# All appended at the END -> prior consumers' indices unchanged (GSMATCH
+# LEQUAL-compatible).
 VEC="\
 __init_libc=PROCEDURE,\
 malloc=PROCEDURE,free=PROCEDURE,calloc=PROCEDURE,realloc=PROCEDURE,\
@@ -159,7 +206,19 @@ inet_ntop=PROCEDURE,inet_pton=PROCEDURE,ioctl=PROCEDURE,isatty=PROCEDURE,\
 isxdigit=PROCEDURE,mktime=PROCEDURE,ntohl=PROCEDURE,pipe=PROCEDURE,\
 readlink=PROCEDURE,rewind=PROCEDURE,setrlimit=PROCEDURE,settimeofday=PROCEDURE,\
 sleep=PROCEDURE,socket=PROCEDURE,strerror=PROCEDURE,strptime=PROCEDURE,\
-system=PROCEDURE,tcgetattr=PROCEDURE,tcsetattr=PROCEDURE,utimes=PROCEDURE"
+system=PROCEDURE,tcgetattr=PROCEDURE,tcsetattr=PROCEDURE,utimes=PROCEDURE,\
+\
+__addtf3=PROCEDURE,__divtf3=PROCEDURE,__eqtf2=PROCEDURE,__extenddftf2=PROCEDURE,\
+__extendsftf2=PROCEDURE,__fixtfdi=PROCEDURE,__fixunstfdi=PROCEDURE,\
+__floatunditf=PROCEDURE,__floatunsitf=PROCEDURE,__getf2=PROCEDURE,\
+__gttf2=PROCEDURE,__letf2=PROCEDURE,__lttf2=PROCEDURE,__multf3=PROCEDURE,\
+__netf2=PROCEDURE,__subtf3=PROCEDURE,__trunctfdf2=PROCEDURE,\
+__trunctfsf2=PROCEDURE,__clear_cache=PROCEDURE,\
+__assert_fail=PROCEDURE,atoi=PROCEDURE,dlclose=PROCEDURE,dlopen=PROCEDURE,\
+dlsym=PROCEDURE,fdopen=PROCEDURE,ldexpl=PROCEDURE,longjmp=PROCEDURE,\
+mprotect=PROCEDURE,remove=PROCEDURE,sem_init=PROCEDURE,sem_post=PROCEDURE,\
+sem_wait=PROCEDURE,setjmp=PROCEDURE,sigaddset=PROCEDURE,sigprocmask=PROCEDURE,\
+strpbrk=PROCEDURE,strtof=PROCEDURE,strtold=PROCEDURE,strtoull=PROCEDURE"
 
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"

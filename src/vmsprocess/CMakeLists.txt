@@ -1,5 +1,6 @@
 set(VMSPROCESS_SOURCES
     vms_pcb.c
+    vms_process.c
     ast.c
     event_flags.c
     access_modes.c

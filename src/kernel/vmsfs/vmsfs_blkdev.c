@@ -23,6 +23,7 @@
 #include <linux/kernel.h>
 #include <linux/fs.h>
 #include <linux/buffer_head.h>
+#include <linux/mpage.h>
 #include <linux/string.h>
 #include <linux/ctype.h>
 #include <linux/stat.h>
@@ -148,8 +149,24 @@ static int vmsfs_write_begin(struct file *file, struct address_space *mapping,
     return block_write_begin(mapping, pos, len, pagep, vmsfs_get_block);
 }
 
+/*
+ * Write dirty page-cache folios back to the block device.
+ *
+ * Without a writepages hook the dirty file data staged in the page cache by
+ * the write path is never flushed to the underlying device — reads within a
+ * mount are served from the still-dirty cache, but after unmount/remount the
+ * on-disk data blocks read back as zero. mpage_writepages() maps each dirty
+ * folio to its device block via vmsfs_get_block() and submits the I/O.
+ */
+static int vmsfs_writepages(struct address_space *mapping,
+                            struct writeback_control *wbc)
+{
+    return mpage_writepages(mapping, wbc, vmsfs_get_block);
+}
+
 static const struct address_space_operations vmsfs_blkdev_aops = {
     .read_folio = vmsfs_read_folio,
+    .writepages = vmsfs_writepages,
     .write_begin = vmsfs_write_begin,
     .write_end = generic_write_end,
     .dirty_folio = block_dirty_folio,

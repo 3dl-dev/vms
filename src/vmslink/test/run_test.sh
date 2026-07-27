@@ -76,6 +76,27 @@ echo "lookup(2) exit = $RC (expect 90 = scale(TABLE[2]=30))"
 [ "$RC" -eq 90 ] || { echo "FAIL: non-leaf producer relocations wrong (got $RC, want 90)"; exit 1; }
 
 echo
+echo "== multi-object producer: cross-object call (R_AARCH64_CALL26) (vms-20b) =="
+cat > "$WORK/a.c" <<'EOF'
+extern int helper(int);                 /* defined in b.o -> cross-object CALL26 */
+int dispatch(int x, int y) { (void)y; return helper(x) + 1; }
+EOF
+cat > "$WORK/b.c" <<'EOF'
+int helper(int x) { return x * 10; }
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/a.o" "$WORK/a.c"
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/b.o" "$WORK/b.c"
+echo "-- a.o .text relocations (expect a CALL26 to helper) --"
+readelf -rW "$WORK/a.o" | awk '/R_AARCH64/{print $3}' | sort | uniq -c
+"$WORK/LINK.EXE" --shareable --symbol-vector "dispatch=PROCEDURE" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIB2\$SHR.EXE" "$WORK/a.o" "$WORK/b.o"
+set +e
+"$WORK/CALLSLOT" "$WORK/LIB2\$SHR.EXE" 0 5 0; RC=$?    # dispatch(5)=helper(5)+1=51
+set -e
+echo "dispatch(5) exit = $RC (expect 51 = helper(5)*... 5*10+1)"
+[ "$RC" -eq 51 ] || { echo "FAIL: cross-object CALL26 wrong (got $RC, want 51)"; exit 1; }
+
+echo
 echo "== resolve + CALL a universal symbol via the vector (IMGACT resolver, vms-8d5) =="
 $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/RESOLVE" "$SRC/test/resolve_call.c"
 "$WORK/RESOLVE" "$WORK/LIBMATH\$SHR.EXE"

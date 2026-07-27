@@ -140,22 +140,6 @@ static void load_obj(const char *path, struct obj *o)
     }
 }
 
-/* Resolve a declared universal symbol to its offset within .text. */
-static void resolve_univ(struct obj *o, struct univ *u)
-{
-    for (int i = 0; i < o->nsym; i++) {
-        const char *nm = o->str + o->sym[i].st_name;
-        if (strcmp(nm, u->name) != 0)
-            continue;
-        if (o->sym[i].st_shndx != (Elf64_Section)o->text_ndx)
-            die("universal symbol is not defined in .text (MVP limit)");
-        u->value = o->sym[i].st_value;   /* offset within .text; +text vaddr later */
-        u->resolved = 1;
-        return;
-    }
-    die("universal symbol not found in input object");
-}
-
 /* --------------------------------------------------------------------------
  * Option parsing.
  * -------------------------------------------------------------------------- */
@@ -476,29 +460,9 @@ static void emit_executable(struct obj *o, struct producer *ps, int np,
     free(img);
 }
 
-/* Apply one PC-relative relocation against a placed section. The producer image
- * is position-independent, so PC-relative fixups need no load-time relocation.
- * (bead vms-20b; ABS64/data-pointer fixups needing bias are a later increment.) */
-static void reloc_pcrel(struct obj *o, const Elf64_Rela *r, uint8_t *img,
-                        uint64_t sec_off, uint64_t sec_va,
-                        uint64_t text_va, uint64_t rodata_va)
+/* Patch one PC-relative relocation instruction to reach `target`. */
+static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t target)
 {
-    uint32_t type = ELF64_R_TYPE(r->r_info);
-    const Elf64_Sym *s = &o->sym[ELF64_R_SYM(r->r_info)];
-    uint64_t symva;
-    if (s->st_shndx == (Elf64_Section)o->text_ndx)
-        symva = text_va + s->st_value;
-    else if (o->rodata && s->st_shndx == (Elf64_Section)o->rodata_ndx)
-        symva = rodata_va + s->st_value;
-    else if (s->st_shndx == SHN_UNDEF)
-        die("producer references an undefined symbol (imports need a C RTL — vms-61f)");
-    else
-        die("producer relocation against an unsupported section");
-
-    uint64_t target = symva + (uint64_t)r->r_addend;
-    uint64_t site   = sec_va + r->r_offset;
-    uint32_t *insn  = (uint32_t *)(img + sec_off + r->r_offset);
-
     switch (type) {
     case R_AARCH64_CALL26:
     case R_AARCH64_JUMP26: {
@@ -512,10 +476,9 @@ static void reloc_pcrel(struct obj *o, const Elf64_Rela *r, uint8_t *img,
         *insn = (*insn & ~((3u << 29) | (0x7FFFFu << 5))) | (immlo << 29) | (immhi << 5);
         break;
     }
-    case R_AARCH64_ADD_ABS_LO12_NC: {
+    case R_AARCH64_ADD_ABS_LO12_NC:
         *insn = (*insn & ~(0xFFFu << 10)) | (((uint32_t)target & 0xFFF) << 10);
         break;
-    }
     case R_AARCH64_LDST8_ABS_LO12_NC:
     case R_AARCH64_LDST16_ABS_LO12_NC:
     case R_AARCH64_LDST32_ABS_LO12_NC:
@@ -530,57 +493,120 @@ static void reloc_pcrel(struct obj *o, const Elf64_Rela *r, uint8_t *img,
         break;
     }
     default:
-        die("producer .text uses an unsupported relocation (need a PC-relative type)");
+        die("unsupported .text relocation (need a PC-relative type)");
     }
 }
 
-/* Emit an OVMX shareable image from one object: merge .text (+ optional
- * .rodata), apply PC-relative relocations, and export the declared universals
- * through a .vms$sv symbol vector. (bead vms-20b) */
-static void emit_shareable(struct obj *o, struct univ *uv, int nuniv,
+/* Per-object placement of the merged sections. */
+struct placed { uint64_t text_va, ro_va; };
+
+/* Resolve a relocation's symbol to a final image vaddr (local or cross-object). */
+static uint64_t resolve_ref(struct obj *objs, int nobj, struct placed *pl,
+                            int oi, uint32_t symidx)
+{
+    struct obj *o = &objs[oi];
+    Elf64_Sym *s = &o->sym[symidx];
+    if (s->st_shndx == (Elf64_Section)o->text_ndx)
+        return pl[oi].text_va + s->st_value;
+    if (o->rodata && s->st_shndx == (Elf64_Section)o->rodata_ndx)
+        return pl[oi].ro_va + s->st_value;
+    if (s->st_shndx == SHN_UNDEF) {
+        const char *nm = o->str + s->st_name;
+        if (!nm[0]) die("undefined unnamed symbol in relocation");
+        for (int j = 0; j < nobj; j++) {
+            struct obj *d = &objs[j];
+            for (int k = 0; k < d->nsym; k++) {
+                Elf64_Sym *ds = &d->sym[k];
+                if (ds->st_shndx == SHN_UNDEF ||
+                    ELF64_ST_BIND(ds->st_info) == STB_LOCAL) continue;
+                if (strcmp(d->str + ds->st_name, nm) != 0) continue;
+                if (ds->st_shndx == (Elf64_Section)d->text_ndx)
+                    return pl[j].text_va + ds->st_value;
+                if (d->rodata && ds->st_shndx == (Elf64_Section)d->rodata_ndx)
+                    return pl[j].ro_va + ds->st_value;
+            }
+        }
+        die("unresolved external symbol (needs the C RTL -- vms-61f)");
+    }
+    die("relocation against an unsupported section");
+    return 0;
+}
+
+/* Find a declared universal by name across all objects -> image vaddr. */
+static uint64_t resolve_univ_multi(struct obj *objs, int nobj, struct placed *pl,
+                                   const char *name)
+{
+    for (int j = 0; j < nobj; j++) {
+        struct obj *d = &objs[j];
+        for (int k = 0; k < d->nsym; k++) {
+            Elf64_Sym *ds = &d->sym[k];
+            if (ELF64_ST_BIND(ds->st_info) == STB_LOCAL) continue;
+            if (strcmp(d->str + ds->st_name, name) != 0) continue;
+            if (ds->st_shndx == (Elf64_Section)d->text_ndx)
+                return pl[j].text_va + ds->st_value;
+            if (d->rodata && ds->st_shndx == (Elf64_Section)d->rodata_ndx)
+                return pl[j].ro_va + ds->st_value;
+        }
+    }
+    die("universal symbol not defined in any input object");
+    return 0;
+}
+
+/* Emit an OVMX shareable image from N objects: merge .text + .rodata, apply
+ * PC-relative relocations (local + cross-object), export universals. (vms-20b) */
+static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuniv,
                            uint32_t gk, uint32_t gmaj, uint32_t gmin, const char *out)
 {
-    for (int i = 0; i < nuniv; i++)
-        resolve_univ(o, &uv[i]);    /* uv[i].value = offset within .text */
-
-    int has_ro = o->rodata && o->rodata->sh_size > 0;
+    struct placed pl[64];
+    int has_ro = 0;
+    for (int i = 0; i < nobj; i++)
+        if (objs[i].rodata && objs[i].rodata->sh_size) has_ro = 1;
 
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
     int      nph      = 1;
-    uint64_t off_text = ALIGN_UP(off_ph + nph * sizeof(Elf64_Phdr), 16);
-    uint64_t text_sz  = o->text->sh_size;
-    uint64_t off_ro   = ALIGN_UP(off_text + text_sz, 16);
-    uint64_t ro_sz    = has_ro ? o->rodata->sh_size : 0;
-    uint64_t off_sv   = ALIGN_UP(has_ro ? off_ro + ro_sz : off_text + text_sz, 8);
+    uint64_t cur      = ALIGN_UP(off_ph + nph * sizeof(Elf64_Phdr), 16);
+    uint64_t text_beg = cur;
+    for (int i = 0; i < nobj; i++) {
+        cur = ALIGN_UP(cur, 16);
+        pl[i].text_va = cur;
+        cur += objs[i].text->sh_size;
+    }
+    uint64_t text_end = cur;
+    uint64_t ro_beg = cur;
+    for (int i = 0; i < nobj; i++) {
+        if (objs[i].rodata && objs[i].rodata->sh_size) {
+            cur = ALIGN_UP(cur, 16);
+            pl[i].ro_va = cur;
+            cur += objs[i].rodata->sh_size;
+        } else pl[i].ro_va = 0;
+    }
+    uint64_t ro_end = cur;
+    uint64_t off_sv = ALIGN_UP(cur, 8);
+
+    for (int i = 0; i < nuniv; i++)
+        uv[i].value = resolve_univ_multi(objs, nobj, pl, uv[i].name);
 
     uint32_t names_size = 0;
-    for (int i = 0; i < nuniv; i++)
-        names_size += (uint32_t)strlen(uv[i].name) + 1;
-    uint64_t sv_hdr_sz  = sizeof(struct ovmx_sv_header);
+    for (int i = 0; i < nuniv; i++) names_size += (uint32_t)strlen(uv[i].name) + 1;
+    uint64_t sv_hdr_sz = sizeof(struct ovmx_sv_header);
     uint64_t sv_names_o = sv_hdr_sz + (uint64_t)nuniv * sizeof(struct ovmx_sv_entry);
-    uint64_t sv_size    = sv_names_o + names_size;
-
+    uint64_t sv_size = sv_names_o + names_size;
     uint64_t loaded_end = off_sv + sv_size;
-    uint64_t off_shstr  = ALIGN_UP(loaded_end, 4);
+    uint64_t off_shstr = ALIGN_UP(loaded_end, 4);
 
-    /* Sections: [0]null [1].text [2].rodata? [.vms$sv] [.shstrtab] */
     const char *secn[6]; int nsec = 0;
-    secn[nsec++] = "";                 /* 0 null */
+    secn[nsec++] = "";
     int ix_text = nsec; secn[nsec++] = ".text";
-    int ix_ro   = -1; if (has_ro) { ix_ro = nsec; secn[nsec++] = ".rodata"; }
-    int ix_sv   = nsec; secn[nsec++] = OVMX_SV_SECTION;
-    int ix_str  = nsec; secn[nsec++] = ".shstrtab";
+    int ix_ro = -1; if (has_ro) { ix_ro = nsec; secn[nsec++] = ".rodata"; }
+    int ix_sv = nsec; secn[nsec++] = OVMX_SV_SECTION;
+    int ix_str = nsec; secn[nsec++] = ".shstrtab";
     uint64_t sn_off[6]; uint64_t sn_sz = 0;
     for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
     uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
-    uint64_t file_sz  = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
+    uint64_t file_sz = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
 
     uint8_t *img = calloc(1, file_sz);
     if (!img) die("oom building image");
-
-    uint64_t text_va = off_text, ro_va = off_ro, sv_va = off_sv;
-    for (int i = 0; i < nuniv; i++)
-        uv[i].value += text_va;    /* image-relative address of the universal */
 
     Elf64_Ehdr *eh = (Elf64_Ehdr *)img;
     memcpy(eh->e_ident, ELFMAG, SELFMAG);
@@ -593,16 +619,24 @@ static void emit_shareable(struct obj *o, struct univ *uv, int nuniv,
 
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
     ph->p_type = PT_LOAD; ph->p_flags = PF_R | PF_X;
-    ph->p_offset = 0; ph->p_vaddr = 0; ph->p_paddr = 0;
     ph->p_filesz = loaded_end; ph->p_memsz = loaded_end; ph->p_align = PAGE;
 
-    memcpy(img + off_text, o->buf + o->text->sh_offset, text_sz);
-    if (has_ro)
-        memcpy(img + off_ro, o->buf + o->rodata->sh_offset, ro_sz);
-
-    /* Apply PC-relative relocations against .text. */
-    for (int i = 0; i < o->nrela; i++)
-        reloc_pcrel(o, &o->rela[i], img, off_text, text_va, text_va, ro_va);
+    for (int i = 0; i < nobj; i++) {
+        memcpy(img + pl[i].text_va, objs[i].buf + objs[i].text->sh_offset,
+               objs[i].text->sh_size);
+        if (objs[i].rodata && objs[i].rodata->sh_size)
+            memcpy(img + pl[i].ro_va, objs[i].buf + objs[i].rodata->sh_offset,
+                   objs[i].rodata->sh_size);
+    }
+    for (int i = 0; i < nobj; i++) {
+        for (int r = 0; r < objs[i].nrela; r++) {
+            Elf64_Rela *rl = &objs[i].rela[r];
+            uint64_t target = resolve_ref(objs, nobj, pl, i, ELF64_R_SYM(rl->r_info));
+            uint64_t site = pl[i].text_va + rl->r_offset;
+            patch_pcrel(ELF64_R_TYPE(rl->r_info),
+                        (uint32_t *)(img + pl[i].text_va + rl->r_offset), site, target);
+        }
+    }
 
     struct ovmx_sv_header *svh = (struct ovmx_sv_header *)(img + off_sv);
     svh->magic = OVMX_SV_MAGIC; svh->count = nuniv;
@@ -618,18 +652,19 @@ static void emit_shareable(struct obj *o, struct univ *uv, int nuniv,
 
     char *shstr = (char *)(img + off_shstr);
     for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
-
     Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
     sh[ix_text].sh_name = sn_off[ix_text]; sh[ix_text].sh_type = SHT_PROGBITS;
-    sh[ix_text].sh_flags = SHF_ALLOC | SHF_EXECINSTR; sh[ix_text].sh_addr = text_va;
-    sh[ix_text].sh_offset = off_text; sh[ix_text].sh_size = text_sz; sh[ix_text].sh_addralign = 16;
+    sh[ix_text].sh_flags = SHF_ALLOC | SHF_EXECINSTR; sh[ix_text].sh_addr = text_beg;
+    sh[ix_text].sh_offset = text_beg; sh[ix_text].sh_size = text_end - text_beg;
+    sh[ix_text].sh_addralign = 16;
     if (has_ro) {
         sh[ix_ro].sh_name = sn_off[ix_ro]; sh[ix_ro].sh_type = SHT_PROGBITS;
-        sh[ix_ro].sh_flags = SHF_ALLOC; sh[ix_ro].sh_addr = ro_va;
-        sh[ix_ro].sh_offset = off_ro; sh[ix_ro].sh_size = ro_sz; sh[ix_ro].sh_addralign = 16;
+        sh[ix_ro].sh_flags = SHF_ALLOC; sh[ix_ro].sh_addr = ro_beg;
+        sh[ix_ro].sh_offset = ro_beg; sh[ix_ro].sh_size = ro_end - ro_beg;
+        sh[ix_ro].sh_addralign = 16;
     }
     sh[ix_sv].sh_name = sn_off[ix_sv]; sh[ix_sv].sh_type = SHT_PROGBITS;
-    sh[ix_sv].sh_flags = SHF_ALLOC; sh[ix_sv].sh_addr = sv_va;
+    sh[ix_sv].sh_flags = SHF_ALLOC; sh[ix_sv].sh_addr = off_sv;
     sh[ix_sv].sh_offset = off_sv; sh[ix_sv].sh_size = sv_size; sh[ix_sv].sh_addralign = 8;
     sh[ix_str].sh_name = sn_off[ix_str]; sh[ix_str].sh_type = SHT_STRTAB;
     sh[ix_str].sh_offset = off_shstr; sh[ix_str].sh_size = sn_sz; sh[ix_str].sh_addralign = 1;
@@ -638,20 +673,22 @@ static void emit_shareable(struct obj *o, struct univ *uv, int nuniv,
     if (fd < 0) die("cannot create output image");
     if (write(fd, img, file_sz) != (ssize_t)file_sz) die("short write output");
     close(fd);
+    int totrel = 0; for (int i = 0; i < nobj; i++) totrel += objs[i].nrela;
     fprintf(stderr,
-        "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d universal symbol%s, "
-        "%s%d reloc%s, GSMATCH=%s,%u,%u\n",
-        out, nuniv, nuniv == 1 ? "" : "s", has_ro ? "+.rodata, " : "",
-        o->nrela, o->nrela == 1 ? "" : "s",
+        "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d object%s, %d universal%s, "
+        "%d reloc%s, GSMATCH=%s,%u,%u\n",
+        out, nobj, nobj==1?"":"s", nuniv, nuniv==1?"":"s", totrel, totrel==1?"":"s",
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
     free(img);
 }
 
+
 int main(int argc, char **argv)
 {
     const char *out = NULL;
-    const char *in  = NULL;
+    const char *ins[64];
+    int nin = 0;
     struct univ uv[MAX_UNIV];
     int nuniv = 0;
     int shareable = 0, executable = 0;
@@ -677,28 +714,30 @@ int main(int argc, char **argv)
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "%%LINK-W-IGNORED, unknown option %s\n", argv[i]);
         } else {
-            in = argv[i];
+            if (nin >= 64) die("too many input objects");
+            ins[nin++] = argv[i];
         }
     }
-    if (!in)  die("no input object (usage: LINK.EXE --shareable "
-                  "--symbol-vector \"f=PROCEDURE\" --gsmatch LEQUAL,1,0 -o X.EXE in.o "
+    if (nin == 0) die("no input object (usage: LINK.EXE --shareable "
+                  "--symbol-vector \"f=PROCEDURE\" --gsmatch LEQUAL,1,0 -o X.EXE a.o [b.o ...] "
                   "| LINK.EXE --executable --use LIB$SHR.EXE -o PROG.EXE prog.o)");
     if (!out) die("no -o output");
     if (shareable == executable)
         die("specify exactly one of --shareable / --executable");
 
-    struct obj o;
-    load_obj(in, &o);
-
     if (executable) {
+        struct obj o;
+        load_obj(ins[0], &o);       /* single-object executable for now */
         if (np == 0) die("--executable needs at least one --use producer image");
         emit_executable(&o, producers, np, out);
         return 0;
     }
 
-    /* ---- Shareable image ---- */
+    /* ---- Shareable image (one or more objects) ---- */
     if (nuniv == 0) die("a shareable image needs --symbol-vector");
-    emit_shareable(&o, uv, nuniv, gk, gmaj, gmin, out);
-    free(o.buf);
+    static struct obj objs[64];
+    for (int i = 0; i < nin; i++)
+        load_obj(ins[i], &objs[i]);
+    emit_shareable(objs, nin, uv, nuniv, gk, gmaj, gmin, out);
     return 0;
 }

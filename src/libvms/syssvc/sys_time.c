@@ -67,6 +67,24 @@ uint32_t sys$gettim(uint64_t *timadr) {
 }
 
 /*
+ * sys$getutc - Get current system time in UTC.
+ *
+ * CLOCK_REALTIME is already UTC-based with no local-time offset
+ * applied, so this is functionally identical to sys$gettim above;
+ * it exists as a separate entry point for source compatibility with
+ * programs that call SYS$GETUTC explicitly (see starlet.h).
+ */
+uint32_t sys$getutc(uint64_t *timadr) {
+    if (!timadr) return SS$_BADPARAM;
+
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    *timadr = unix_to_vms_time(&ts);
+
+    return SS$_NORMAL;
+}
+
+/*
  * sys$numtim - Convert VMS binary time to 7-word numeric buffer.
  *
  * Output:

@@ -22,6 +22,9 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/lib_signal.c
     rtl/lib_datetime.c
     rtl/lib_misc.c
+    rtl/lib_dyndesc.c
+    rtl/lib_logical.c
+    rtl/lib_symbol.c
     rtl/lib_string_ops.c
     rtl/lib_bitops.c
     rtl/lib_eventflags.c

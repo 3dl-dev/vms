@@ -43,3 +43,8 @@ libvms_add_test(test_libvms_mth_routines
 # Test 6: lib$/mth$/ots$ RTL — date/time, conversions, process/system info, output
 libvms_add_test(test_libvms_lib_rtl
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_rtl.c)
+
+# Test 7: vms-cd4 conformance-gap batch — dynamic descriptors, simplified
+# logical-name/CLI-symbol wrappers, sys$purgws, sys$getutc
+libvms_add_test(test_libvms_lib_symtab
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_symtab.c)

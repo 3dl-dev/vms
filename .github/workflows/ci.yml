@@ -764,3 +764,28 @@ jobs:
               export CC=gcc WORK=/tmp/tls-over-crtl
               sh /src/src/imgact/test/run_tls_producer_over_crtl.sh
             '
+
+  vmsprocess-native:
+    name: vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link the real src/vmsprocess VMS-native + activate a consumer through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/vmsprocess-native
+              sh /src/src/imgact/test/run_vmsprocess_native.sh
+            '

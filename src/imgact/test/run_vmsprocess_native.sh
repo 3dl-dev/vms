@@ -12,8 +12,11 @@
 #   - vms-616 (run_tls_producer_over_crtl.sh): a TLS-bearing producer coexists with
 #     the C-RTL's thread-pointer ownership.
 # vmsprocess needs BOTH at once: it imports pthread/malloc/... from DECC$SHR AND is
-# a TLS producer (vms_pcb.c's `current_pcb` and vms_process.c's `proc` are __thread
-# — TWO objects contribute TLS to the one image).
+# a TLS producer. Its per-thread state is consolidated into a SINGLE TLS-defining
+# object (vms_pcb.c's `current_pcb`); vms_get_current_process caches its snapshot in
+# the PCB (pcb->cached_process) rather than a second __thread object, so the image
+# has exactly ONE TLS object — what the VMS-native linker supports today (vms-b65.1;
+# general multi-object TLS is tracked in vms-212).
 #
 # Chain, all VMS-native (no ld / no ld.so):
 #   1. build IMGACT.EXE + LINK.EXE.
@@ -43,7 +46,7 @@
 #        - the vmsprocess universals bound in the consumer,
 #        - the __thread PCB pointer round-tripped through TLSDESC against musl's TP
 #          across TWO functions (write in vms_pcb_init, read in eflag_set) — the
-#          TWO-TLS-object producer was absorbed correctly,
+#          single-TLS-object producer was absorbed correctly against musl's TP,
 #        - the pthread_mutex/cond path bound transitively to DECC$SHR and ran,
 #        - VMS event-flag semantics (WASCLR then WASSET) are exactly correct.
 #
@@ -88,7 +91,7 @@ CC="$CC" sh "$LINK_DIR/mk_vmsprocess_shr.sh" \
 echo "-- LIBVMSPROCESS\$SHR.EXE: PT_TLS + symbol vector + .vms\$tls + its own imports --"
 readelf -lW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -E '\bTLS\b' || true
 readelf -SW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -E '\.tdata|\.tbss|\.vms\$tls|\.vms\$sv|\.vms\$imp|\.plt|\.igot' || true
-readelf -lW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -q '\bTLS\b'    || { echo "FAIL: producer has no PT_TLS (expected: two __thread objects)"; exit 1; }
+readelf -lW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -q '\bTLS\b'    || { echo "FAIL: producer has no PT_TLS (expected: current_pcb __thread)"; exit 1; }
 readelf -SW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -q '\.tbss'     || { echo "FAIL: producer emitted no .tbss"; exit 1; }
 readelf -SW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -q '\.vms\$tls' || { echo "FAIL: producer emitted no .vms\$tls"; exit 1; }
 readelf -SW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -q '\.vms\$sv'  || { echo "FAIL: producer emitted no .vms\$sv (no universals)"; exit 1; }
@@ -132,6 +135,6 @@ echo "exit code = $RC (expect 42 = pcb!=NULL && eflag_set#1==SS\$_WASCLR(1) && #
 echo
 echo "MILESTONE (vms-b65.1): the REAL src/vmsprocess library links VMS-native into"
 echo "LIBVMSPROCESS\$SHR.EXE (its libc/pthread imports bound to DECC\$SHR, its"
-echo "two-object __thread TLS absorbed against musl's TP), activates through"
+echo "single-object __thread TLS absorbed against musl's TP), activates through"
 echo "IMGACT.EXE, and a consumer gets VMS-correct event-flag results. The template"
 echo "for the whole b65 lib-migration chain."

@@ -78,28 +78,40 @@ uint32_t vms_parse_uic(const char *str)
     return ((group & 0xFFFFu) << 16) | (member & 0xFFFFu);
 }
 
+/*
+ * No-PCB fallback storage. In normal operation every thread has a PCB and the
+ * snapshot lives in pcb->cached_process (the PCB is the designated per-thread
+ * home — see pcb.h). This plain static (NOT __thread — vmsprocess must keep
+ * exactly one TLS-defining object, vms_pcb.c) backs the degenerate path where a
+ * caller asks for the current process before any PCB was initialized (e.g. early
+ * bootstrap), so the function still returns a usable struct keyed off the real
+ * Linux PID rather than NULL. This fallback is process-wide, not per-thread; the
+ * pre-PCB window is single-threaded bootstrap, so that is acceptable.
+ */
+static vms_process_t s_no_pcb_process;
+
 vms_process_t *vms_get_current_process(void)
 {
-    static __thread vms_process_t proc;
     struct vms_pcb *pcb = vms_pcb_get();
+    vms_process_t *proc = pcb ? &pcb->cached_process : &s_no_pcb_process;
 
-    memset(&proc, 0, sizeof(proc));
+    memset(proc, 0, sizeof(*proc));
 
-    proc.linux_pid = getpid();
-    proc.vms_pid   = vms_pid_from_linux(proc.linux_pid);
-    proc.base_priority = VMS_DEFAULT_BASE_PRIORITY;
+    proc->linux_pid = getpid();
+    proc->vms_pid   = vms_pid_from_linux(proc->linux_pid);
+    proc->base_priority = VMS_DEFAULT_BASE_PRIORITY;
 
     if (pcb) {
         /* Prefer the identity recorded in the PCB (set via
          * vms_pcb_set_identity), falling back to the Linux-derived PID
          * if the PCB hasn't been assigned a VMS PID yet. */
         if (pcb->vms_pid != 0)
-            proc.vms_pid = pcb->vms_pid;
+            proc->vms_pid = pcb->vms_pid;
 
-        proc.uic = pcb->uic;
-        strncpy(proc.username, pcb->username, sizeof(proc.username) - 1);
-        strncpy(proc.prcnam, pcb->prcnam, sizeof(proc.prcnam) - 1);
+        proc->uic = pcb->uic;
+        strncpy(proc->username, pcb->username, sizeof(proc->username) - 1);
+        strncpy(proc->prcnam, pcb->prcnam, sizeof(proc->prcnam) - 1);
     }
 
-    return &proc;
+    return proc;
 }

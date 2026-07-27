@@ -241,6 +241,8 @@ struct obj {
 static struct obj g_objs[MAX_OBJS];
 static int        g_nobjs;
 static Elf64_auxv_t *g_auxv;      /* saved for __getauxval builtin */
+static char        **g_envp;      /* process envp — the C-RTL __init_libc arg */
+static char         *g_argv0;     /* process argv[0] (program name for musl)  */
 
 /* --------------------------------------------------------------------------
  * Interpreter-exported ("builtin") symbols.
@@ -1006,6 +1008,74 @@ static void setup_symvec_tls(void)
 	}
 }
 
+/* --------------------------------------------------------------------------
+ * musl C-RTL (DECC$SHR) runtime initialization (bead vms-61f.2).
+ *
+ * A whole-archived musl libc packaged as an OVMX shareable (DECC$SHR.EXE) is
+ * inert until musl's own bootstrap runs: musl expects to OWN the process thread
+ * pointer and set up its per-thread control block (the `struct pthread` TCB it
+ * reaches through TPIDR_EL0), the stack-guard canary, page size, and the malloc
+ * state — all BEFORE any libc entry point is called. That bootstrap is musl's
+ * `__init_libc()`, which internally runs `__init_tls`/`__init_tp` (allocate the
+ * TCB + any main-program TLS, program the thread pointer musl-style) and
+ * `__init_ssp` (from AT_RANDOM). It is exactly what musl's crt / `__libc_start_
+ * main` / ld-musl's `__dls3` call before transferring to the program.
+ *
+ * Rather than fragile-replicate musl's private `struct pthread` layout inside
+ * IMGACT, the activator DRIVES musl's own `__init_libc`, resolved by NAME from
+ * the C-RTL producer's symbol vector, passing it the real process envp (so musl
+ * recomputes the auxv it needs: AT_PHDR/AT_PHENT/AT_PHNUM, AT_RANDOM, AT_PAGESZ).
+ * musl then owns the thread pointer and TLS — which is why a C-RTL producer and
+ * an IMGACT-managed TLSDESC producer are mutually exclusive TLS owners in one
+ * process (see activate_symbol_vector). Reading/mirroring musl's MIT-licensed
+ * ldso/env sources to implement this is permitted (CLAUDE.md rule 8 concerns
+ * VMS/VSI/HPE only).
+ *
+ * C-RTL *constructors* (`__libc_start_init`) are not run here: a shareable built
+ * from pure musl libc.a + libgcc.a carries no .init_array and no crt `_init`, so
+ * there is nothing to run, and calling `__libc_start_init` would invoke an
+ * unresolved `_init`. Constructor execution belongs to the OVMX-lib migration
+ * wave (vms-b65.*), where producers actually carry init_array.
+ * -------------------------------------------------------------------------- */
+
+/* Find a universal by NAME in a producer's symbol vector; return its run-time
+ * address, or 0 if not exported. Binding is normally by index; the C-RTL
+ * bootstrap symbol is not one the consumer imports, so IMGACT looks it up by
+ * name (the .vms$sv name blob exists for exactly this + diagnostics). */
+static unsigned long sv_find_named(const struct ovmx_prod *p, const char *name)
+{
+	const struct ovmx_sv_header *h = p->sv;
+	const struct ovmx_sv_entry  *e = ovmx_sv_entries(h);
+	const char                  *names = ovmx_sv_names(h);
+	for (unsigned k = 0; k < h->count; k++) {
+		if (e[k].kind == OVMX_SV_RETIRED)
+			continue;
+		if (xstrcmp(names + e[k].name_off, name) == 0)
+			return p->base + e[k].value;
+	}
+	return 0;
+}
+
+/* The C-RTL producer is the one exporting musl's __init_libc bootstrap. */
+static struct ovmx_prod *find_crtl_producer(void)
+{
+	for (int i = 0; i < g_nprods; i++)
+		if (sv_find_named(&g_prods[i], "__init_libc"))
+			return &g_prods[i];
+	return 0;
+}
+
+/* Run musl's own libc bootstrap for a mapped C-RTL producer: program the thread
+ * pointer, build the TCB + TLS musl-style, set the stack guard, and make malloc
+ * usable. After this returns, every universal in the C-RTL is callable. */
+static void drive_crtl_init(struct ovmx_prod *crtl)
+{
+	unsigned long init_libc = sv_find_named(crtl, "__init_libc");
+	if (!init_libc)
+		die_undsym("__init_libc");
+	((void (*)(char **, char *))init_libc)(g_envp, g_argv0);
+}
+
 /* Resolve every .vms$imp import of the executable against producer symbol
  * vectors, patching the consumer's GOT cells. */
 static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
@@ -1047,9 +1117,27 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
 		*(unsigned long *)(exe_base + ie[k].patch_off) = addr;
 	}
 
-	/* Set up TLS for any producer that has thread-local storage, before the
-	 * consumer (which may call into that producer's TLS-using code) runs. */
-	setup_symvec_tls();
+	/* TLS ownership. A musl C-RTL (DECC$SHR) programs the thread pointer and
+	 * lays out the TCB/TLS itself inside __init_libc; IMGACT's own symbol-vector
+	 * TLS setup programs a *different* thread pointer for TLSDESC producers.
+	 * The two cannot both own TP in one process, so they are mutually exclusive:
+	 *  - C-RTL present  -> let musl own TP + TLS (drive_crtl_init).
+	 *  - no C-RTL       -> IMGACT owns TP for any TLSDESC producer (setup_symvec_tls).
+	 * A C-RTL coexisting with an IMGACT-managed TLSDESC producer is not yet
+	 * supported (would need musl to absorb the producer's TLS module); rather
+	 * than silently corrupt TP, fail cleanly. Neither the C-RTL consumer nor a
+	 * pure-libvmssys consumer hits that combo today. */
+	struct ovmx_prod *crtl = find_crtl_producer();
+	if (crtl) {
+		for (int i = 0; i < g_nprods; i++)
+			if (g_prods[i].has_tls)
+				die_tlserr("C-RTL + TLSDESC producer combo");
+		drive_crtl_init(crtl);
+	} else {
+		/* Set up TLS for any producer that has thread-local storage, before the
+		 * consumer (which may call into that producer's TLS-using code) runs. */
+		setup_symvec_tls();
+	}
 }
 
 unsigned long imgact_bootstrap(unsigned long *sp)
@@ -1079,7 +1167,9 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 
 	/* ---- Self-relocate IMGACT.EXE, then globals become usable. ---- */
 	self_relocate(at_base);
-	g_auxv = auxv;
+	g_auxv  = auxv;
+	g_envp  = envp;                         /* for the C-RTL __init_libc bootstrap */
+	g_argv0 = argc > 0 ? argv[0] : 0;
 
 	/* ---- Build the executable object from the kernel-provided phdrs. ----
 	 * The kernel has already mapped the main executable's LOAD segments;

@@ -925,6 +925,31 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
 {
     struct obj *o = &objs[oi];
     Elf64_Sym *s = &o->sym[symidx];
+    /* Weak-override (ELF symbol resolution): a WEAK symbol DEFINED in this
+     * object must yield to a STRONG global definition of the same name in
+     * another object. A relocation whose symtab entry is the locally-defined
+     * WEAK symbol must therefore bind to the strong def, not the local weak one.
+     *
+     * This is load-bearing for whole-archive musl: lite_malloc.lo defines
+     * __libc_malloc_impl as a WEAK alias of its __simple_malloc bump allocator,
+     * and mallocng's malloc.lo defines __libc_malloc_impl STRONG. gcc emits the
+     * intra-object JUMP26 in __libc_malloc / malloc against the *locally-defined
+     * weak* __libc_malloc_impl, so binding it to the local address would route
+     * the exported malloc to the simple allocator while free stays mallocng —
+     * the freed pointer then carries no mallocng metadata and free's get_meta
+     * dereferences p[-4] off the mapping (SIGSEGV). build_symhash already keeps
+     * the STRONG def for a name, so resolving weak-defined references by name
+     * through the global hash restores correct override. (vms-36a) */
+    if (s->st_shndx != SHN_UNDEF &&
+        ELF64_ST_BIND(s->st_info) == STB_WEAK) {
+        const char *nm = o->str + s->st_name;
+        int doi, dki;
+        if (nm[0] && sym_lookup(nm, &doi, &dki) &&
+            ELF64_ST_BIND(objs[doi].sym[dki].st_info) == STB_GLOBAL) {
+            uint64_t da = placed_addr(&objs[doi], &objs[doi].sym[dki]);
+            if (da) return da;
+        }
+    }
     uint64_t a = placed_addr(o, s);
     if (a) return a;
     if (s->st_shndx == SHN_UNDEF) {

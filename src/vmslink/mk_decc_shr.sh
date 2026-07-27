@@ -46,7 +46,14 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 # libc.a; each becomes a PROCEDURE universal in .vms$sv. (DATA universals such as
 # environ/stdin/stdout/stderr are added in vms-61f.2 with runtime init, since a
 # consumer needs the runtime's real objects, not just their addresses.)
+#
+# __init_libc is musl's C-RTL bootstrap (programs the thread pointer, builds the
+# TCB/TLS, sets the stack guard, makes malloc usable). It is not a consumer-
+# callable universal, but IMGACT's activation bootstrap (vms-61f.2) resolves it
+# BY NAME from the .vms$sv name blob to drive runtime init before transferring
+# control — so the production vector MUST export it. (vms-36a)
 VEC="\
+__init_libc=PROCEDURE,\
 malloc=PROCEDURE,free=PROCEDURE,calloc=PROCEDURE,realloc=PROCEDURE,\
 aligned_alloc=PROCEDURE,posix_memalign=PROCEDURE,\
 memcpy=PROCEDURE,memmove=PROCEDURE,memset=PROCEDURE,memcmp=PROCEDURE,memchr=PROCEDURE,\

@@ -97,6 +97,29 @@ echo "dispatch(5) exit = $RC (expect 51 = helper(5)*... 5*10+1)"
 [ "$RC" -eq 51 ] || { echo "FAIL: cross-object CALL26 wrong (got $RC, want 51)"; exit 1; }
 
 echo
+echo "== GOT producer: global-via-GOT synthesizes .got + .data/.bss + .vms\$rel (vms-20b) =="
+echo "   (ADR_GOT_PAGE/LD64_GOT_LO12_NC -> a synthesized GOT cell; each cell holds an"
+echo "    image-relative address recorded in .vms\$rel for +load_bias at activation.)"
+cat > "$WORK/gotvar.c" <<'EOF'
+int g_base = 100;   /* .data — read via GOT */
+int g_zero;         /* .bss  — read via GOT */
+int addbase(int a, int b) { return g_base + g_zero + a + b; }
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/gotvar.o" "$WORK/gotvar.c"
+echo "-- GOT relocations gcc emitted against .text --"
+readelf -rW "$WORK/gotvar.o" | awk '/GOT/{print $3}' | sort | uniq -c
+"$WORK/LINK.EXE" --shareable --symbol-vector "addbase=PROCEDURE" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIBGOT\$SHR.EXE" "$WORK/gotvar.o"
+echo "-- producer sections (expect .got, .data, .bss, .vms\$rel) --"
+readelf -SW "$WORK/LIBGOT\$SHR.EXE" | grep -E '\.got|\.data|\.bss|\.vms' || true
+readelf -SW "$WORK/LIBGOT\$SHR.EXE" | grep -q '\.got'      || { echo "FAIL: no .got synthesized"; exit 1; }
+readelf -SW "$WORK/LIBGOT\$SHR.EXE" | grep -q '\.data'     || { echo "FAIL: no .data merged"; exit 1; }
+readelf -SW "$WORK/LIBGOT\$SHR.EXE" | grep -q '\.bss'      || { echo "FAIL: no .bss merged"; exit 1; }
+readelf -SW "$WORK/LIBGOT\$SHR.EXE" | grep -q '\.vms\$rel' || { echo "FAIL: no .vms\$rel emitted"; exit 1; }
+# The PT_LOAD carrying a writable GOT/.data must be RWX.
+readelf -lW "$WORK/LIBGOT\$SHR.EXE" | grep -E 'LOAD .* RWE' >/dev/null || { echo "FAIL: writable image PT_LOAD is not RWX"; exit 1; }
+
+echo
 echo "== resolve + CALL a universal symbol via the vector (IMGACT resolver, vms-8d5) =="
 $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/RESOLVE" "$SRC/test/resolve_call.c"
 "$WORK/RESOLVE" "$WORK/LIBMATH\$SHR.EXE"

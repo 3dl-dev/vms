@@ -77,4 +77,44 @@ echo "exit code = $RC (expect 44 = %IMGACT-F-GSMATCH clean fatal, NOT a crash)"
 [ "$RC" -eq 44 ] || { echo "FAIL: GSMATCH reject must exit 44 cleanly (got $RC)"; exit 1; }
 
 echo
+echo "== GOT + .vms\$rel: producer reads globals via GOT under a real load bias (vms-20b) =="
+# addbase() reads g_base (.data) and g_zero (.bss) through GOT slots. IMGACT maps
+# the producer at a nonzero bias and must add that bias to each GOT slot via
+# .vms$rel; otherwise the GOT holds image-relative addresses and the load faults
+# or returns garbage. Correct activation yields g_base + g_zero + a + b.
+cat > "$WORK/gotvar.c" <<'EOF'
+int g_base = 100;   /* .data — read via ADR_GOT_PAGE/LD64_GOT_LO12_NC */
+int g_zero;         /* .bss  — read via GOT (must map + bias correctly) */
+int addbase(int a, int b) { return g_base + g_zero + a + b; }
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/gotvar.o" "$WORK/gotvar.c"
+echo "-- GOT relocations gcc emitted against .text --"
+readelf -rW "$WORK/gotvar.o" | awk '/GOT/{print $3}' | sort | uniq -c
+"$WORK/LINK.EXE" --shareable --symbol-vector "addbase=PROCEDURE" \
+    --gsmatch LEQUAL,1,0 -o "$SYSLIB/LIBGOT\$SHR.EXE" "$WORK/gotvar.o"
+echo "-- producer sections (expect .got, .data, .bss, .vms\$rel) --"
+readelf -SW "$SYSLIB/LIBGOT\$SHR.EXE" | grep -E '\.got|\.data|\.bss|\.vms' || true
+readelf -SW "$SYSLIB/LIBGOT\$SHR.EXE" | grep -q '\.vms\$rel' || { echo "FAIL: producer has no .vms\$rel"; exit 1; }
+
+cat > "$WORK/gotcons.c" <<'EOF'
+extern int addbase(int, int);
+void _start(void) {
+    int r = addbase(11, 7);               /* == 100 + 0 + 11 + 7 == 118 via GOT */
+    register long x8 __asm__("x8") = 94;  /* exit_group */
+    register long x0 __asm__("x0") = r;
+    __asm__ volatile("svc 0" :: "r"(x8), "r"(x0) : "memory");
+    __builtin_unreachable();
+}
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/gotcons.o" "$WORK/gotcons.c"
+"$WORK/LINK.EXE" --executable --use "$SYSLIB/LIBGOT\$SHR.EXE" \
+    -o "$WORK/GOTPROG.EXE" "$WORK/gotcons.o"
+chmod +x "$WORK/GOTPROG.EXE"
+set +e
+"$WORK/GOTPROG.EXE"; RC=$?
+set -e
+echo "exit code = $RC (expect 118 = g_base(100)+g_zero(0)+11+7 read through biased GOT)"
+[ "$RC" -eq 118 ] || { echo "FAIL: GOT/.vms\$rel activation did not yield 118 (got $RC)"; exit 1; }
+
+echo
 echo "ALL REAL IMGACT SYMBOL-VECTOR ACTIVATION CHECKS PASSED"

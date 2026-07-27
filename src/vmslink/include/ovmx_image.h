@@ -33,9 +33,12 @@
 #define OVMX_SV_SECTION   ".vms$sv"
 /* Section that carries a consumer image's universal-symbol imports. */
 #define OVMX_IMP_SECTION  ".vms$imp"
+/* Section that lists image-relative slots needing +load_bias at activation. */
+#define OVMX_REL_SECTION  ".vms$rel"
 
 #define OVMX_SV_MAGIC     0x31565356u  /* "VSV1" little-endian */
 #define OVMX_IMP_MAGIC    0x31504d49u  /* "IMP1" little-endian */
+#define OVMX_REL_MAGIC    0x314c4552u  /* "REL1" little-endian */
 
 /* GSMATCH match-control (public VMS semantics; values are OVMX-internal). */
 enum ovmx_gsmatch {
@@ -102,6 +105,21 @@ struct ovmx_imp_entry {
                             /* address at activation (a GOT-like cell)        */
     uint32_t req_major;     /* producer GSMATCH major this consumer linked to */
     uint32_t req_minor;     /* producer GSMATCH minor this consumer linked to */
+};
+
+/*
+ * `.vms$rel` layout: header then `count` image-relative offsets (u64 each). Each
+ * offset names an 8-byte slot inside the image (a synthesized GOT cell, or a
+ * pointer-valued data word) that LINK.EXE filled with an image-relative address.
+ * At activation IMGACT adds the image's load bias to each such slot — the
+ * VMS-native equivalent of the ELF R_*_RELATIVE relocation, without a
+ * PT_DYNAMIC/DT_RELA. OVMX-original design (CLAUDE.md rule 8): public VMS docs
+ * describe self-relative image fixups but publish no byte-level table format.
+ */
+struct ovmx_rel_header {
+    uint32_t magic;         /* OVMX_REL_MAGIC                                 */
+    uint32_t count;         /* number of image-relative slot offsets          */
+    /* uint64_t offsets[count]; */
 };
 
 #endif /* OVMX_IMAGE_H */

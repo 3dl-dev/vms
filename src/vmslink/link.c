@@ -31,6 +31,14 @@
 #include "ovmx_image.h"
 #include "ovmx_symvec.h"
 
+/* GOT-relative relocation types (aarch64). Guarded: older <elf.h> may lack them. */
+#ifndef R_AARCH64_ADR_GOT_PAGE
+#define R_AARCH64_ADR_GOT_PAGE    311
+#endif
+#ifndef R_AARCH64_LD64_GOT_LO12_NC
+#define R_AARCH64_LD64_GOT_LO12_NC 312
+#endif
+
 #define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
 
 /* --------------------------------------------------------------------------
@@ -68,6 +76,10 @@ struct obj {
     Elf64_Shdr   *text;     /* .text section header */
     int           rodata_ndx; /* .rodata section index (0 if none) */
     Elf64_Shdr   *rodata;   /* .rodata section header (0 if none) */
+    int           data_ndx; /* .data section index (0 if none) */
+    Elf64_Shdr   *data;     /* .data section header (0 if none) */
+    int           bss_ndx;  /* .bss section index (0 if none) */
+    Elf64_Shdr   *bss;      /* .bss section header (0 if none) */
     Elf64_Rela   *rela;     /* relocations against .text (SHT_RELA) */
     int           nrela;
 };
@@ -117,6 +129,12 @@ static void load_obj(const char *path, struct obj *o)
         } else if (o->sh[i].sh_type == SHT_PROGBITS && strcmp(nm, ".rodata") == 0) {
             o->rodata_ndx = i;
             o->rodata = &o->sh[i];
+        } else if (o->sh[i].sh_type == SHT_PROGBITS && strcmp(nm, ".data") == 0) {
+            o->data_ndx = i;
+            o->data = &o->sh[i];
+        } else if (o->sh[i].sh_type == SHT_NOBITS && strcmp(nm, ".bss") == 0) {
+            o->bss_ndx = i;
+            o->bss = &o->sh[i];
         } else if (o->sh[i].sh_type == SHT_SYMTAB) {
             o->sym  = (Elf64_Sym *)(o->buf + o->sh[i].sh_offset);
             o->nsym = o->sh[i].sh_size / sizeof(Elf64_Sym);
@@ -498,7 +516,22 @@ static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t t
 }
 
 /* Per-object placement of the merged sections. */
-struct placed { uint64_t text_va, ro_va; };
+struct placed { uint64_t text_va, ro_va, data_va, bss_va; };
+
+/* Map a symbol defined in object `d` to its final image vaddr, or 0 if it lives
+ * in a section this linker does not place. */
+static uint64_t placed_addr(struct obj *d, struct placed *p, Elf64_Sym *s)
+{
+    if (s->st_shndx == (Elf64_Section)d->text_ndx)
+        return p->text_va + s->st_value;
+    if (d->rodata && s->st_shndx == (Elf64_Section)d->rodata_ndx)
+        return p->ro_va + s->st_value;
+    if (d->data && s->st_shndx == (Elf64_Section)d->data_ndx)
+        return p->data_va + s->st_value;
+    if (d->bss && s->st_shndx == (Elf64_Section)d->bss_ndx)
+        return p->bss_va + s->st_value;
+    return 0;
+}
 
 /* Resolve a relocation's symbol to a final image vaddr (local or cross-object). */
 static uint64_t resolve_ref(struct obj *objs, int nobj, struct placed *pl,
@@ -506,10 +539,8 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, struct placed *pl,
 {
     struct obj *o = &objs[oi];
     Elf64_Sym *s = &o->sym[symidx];
-    if (s->st_shndx == (Elf64_Section)o->text_ndx)
-        return pl[oi].text_va + s->st_value;
-    if (o->rodata && s->st_shndx == (Elf64_Section)o->rodata_ndx)
-        return pl[oi].ro_va + s->st_value;
+    uint64_t a = placed_addr(o, &pl[oi], s);
+    if (a) return a;
     if (s->st_shndx == SHN_UNDEF) {
         const char *nm = o->str + s->st_name;
         if (!nm[0]) die("undefined unnamed symbol in relocation");
@@ -520,10 +551,8 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, struct placed *pl,
                 if (ds->st_shndx == SHN_UNDEF ||
                     ELF64_ST_BIND(ds->st_info) == STB_LOCAL) continue;
                 if (strcmp(d->str + ds->st_name, nm) != 0) continue;
-                if (ds->st_shndx == (Elf64_Section)d->text_ndx)
-                    return pl[j].text_va + ds->st_value;
-                if (d->rodata && ds->st_shndx == (Elf64_Section)d->rodata_ndx)
-                    return pl[j].ro_va + ds->st_value;
+                uint64_t da = placed_addr(d, &pl[j], ds);
+                if (da) return da;
             }
         }
         die("unresolved external symbol (needs the C RTL -- vms-61f)");
@@ -532,36 +561,87 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, struct placed *pl,
     return 0;
 }
 
-/* Find a declared universal by name across all objects -> image vaddr. */
-static uint64_t resolve_univ_multi(struct obj *objs, int nobj, struct placed *pl,
-                                   const char *name)
+/* Resolve a symbol by NAME (global def) across all objects -> image vaddr.
+ * Used for declared universals and for GOT-slot targets. */
+static uint64_t resolve_named(struct obj *objs, int nobj, struct placed *pl,
+                              const char *name, const char *whaterr)
 {
     for (int j = 0; j < nobj; j++) {
         struct obj *d = &objs[j];
         for (int k = 0; k < d->nsym; k++) {
             Elf64_Sym *ds = &d->sym[k];
             if (ELF64_ST_BIND(ds->st_info) == STB_LOCAL) continue;
+            if (ds->st_shndx == SHN_UNDEF) continue;
             if (strcmp(d->str + ds->st_name, name) != 0) continue;
-            if (ds->st_shndx == (Elf64_Section)d->text_ndx)
-                return pl[j].text_va + ds->st_value;
-            if (d->rodata && ds->st_shndx == (Elf64_Section)d->rodata_ndx)
-                return pl[j].ro_va + ds->st_value;
+            uint64_t da = placed_addr(d, &pl[j], ds);
+            if (da) return da;
         }
     }
-    die("universal symbol not defined in any input object");
+    die(whaterr);
     return 0;
 }
 
-/* Emit an OVMX shareable image from N objects: merge .text + .rodata, apply
- * PC-relative relocations (local + cross-object), export universals. (vms-20b) */
+/* A synthesized GOT slot: one per distinct symbol referenced GOT-indirectly. */
+struct gotslot { char name[256]; uint64_t va; uint64_t value; };
+
+static int find_got(struct gotslot *g, int ng, const char *name)
+{
+    for (int i = 0; i < ng; i++) if (strcmp(g[i].name, name) == 0) return i;
+    return -1;
+}
+
+/* Patch an ADR_GOT_PAGE / LD64_GOT_LO12_NC pair to reach `slot` PC-relatively.
+ * Identical bit-layout to ADR_PREL_PG_HI21 / LDST64_ABS_LO12_NC, but the target
+ * is the GOT cell rather than the symbol. */
+static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot)
+{
+    if (type == R_AARCH64_ADR_GOT_PAGE) {
+        int64_t d = (int64_t)(slot >> 12) - (int64_t)(site >> 12);
+        uint32_t immlo = (uint32_t)(d & 3), immhi = (uint32_t)((d >> 2) & 0x7FFFF);
+        *insn = (*insn & ~((3u << 29) | (0x7FFFFu << 5))) | (immlo << 29) | (immhi << 5);
+    } else { /* R_AARCH64_LD64_GOT_LO12_NC: 8-byte load, scale 3 */
+        uint32_t imm = (uint32_t)((slot & 0xFFF) >> 3);
+        *insn = (*insn & ~(0xFFFu << 10)) | (imm << 10);
+    }
+}
+
+static int is_got_reloc(uint32_t type)
+{
+    return type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC;
+}
+
+/* Emit an OVMX shareable image from N objects: merge .text/.rodata/.data/.bss,
+ * apply PC-relative relocations (local + cross-object), synthesize a GOT for
+ * GOT-indirect global references, and record every image-relative slot that
+ * needs +load_bias in .vms$rel. Exports declared universals via .vms$sv. (vms-20b) */
 static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuniv,
                            uint32_t gk, uint32_t gmaj, uint32_t gmin, const char *out)
 {
     struct placed pl[64];
-    int has_ro = 0;
-    for (int i = 0; i < nobj; i++)
+    int has_ro = 0, has_data = 0, has_bss = 0;
+    for (int i = 0; i < nobj; i++) {
         if (objs[i].rodata && objs[i].rodata->sh_size) has_ro = 1;
+        if (objs[i].data && objs[i].data->sh_size) has_data = 1;
+        if (objs[i].bss && objs[i].bss->sh_size) has_bss = 1;
+    }
 
+    /* Collect the distinct GOT-referenced symbols (from .text relocations). */
+    static struct gotslot got[1024];
+    int ngot = 0;
+    for (int i = 0; i < nobj; i++)
+        for (int r = 0; r < objs[i].nrela; r++) {
+            uint32_t type = ELF64_R_TYPE(objs[i].rela[r].r_info);
+            if (!is_got_reloc(type)) continue;
+            uint32_t si = ELF64_R_SYM(objs[i].rela[r].r_info);
+            const char *nm = objs[i].str + objs[i].sym[si].st_name;
+            if (find_got(got, ngot, nm) < 0) {
+                if (ngot >= 1024) die("too many GOT symbols");
+                snprintf(got[ngot].name, sizeof got[ngot].name, "%s", nm);
+                ngot++;
+            }
+        }
+
+    /* ---- Layout: [ehdr][phdr] text | rodata | got | data | sv | rel | bss ---- */
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
     int      nph      = 1;
     uint64_t cur      = ALIGN_UP(off_ph + nph * sizeof(Elf64_Phdr), 16);
@@ -581,26 +661,75 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         } else pl[i].ro_va = 0;
     }
     uint64_t ro_end = cur;
+
+    /* GOT cells (writable, 8-aligned). */
+    uint64_t got_beg = ALIGN_UP(cur, 8);
+    for (int i = 0; i < ngot; i++) got[i].va = got_beg + (uint64_t)i * 8;
+    uint64_t got_end = got_beg + (uint64_t)ngot * 8;
+    cur = got_end;
+
+    /* .data (writable, initialized). */
+    uint64_t data_beg = cur;
+    for (int i = 0; i < nobj; i++) {
+        if (objs[i].data && objs[i].data->sh_size) {
+            uint64_t al = objs[i].data->sh_addralign ? objs[i].data->sh_addralign : 8;
+            cur = ALIGN_UP(cur, al);
+            pl[i].data_va = cur;
+            cur += objs[i].data->sh_size;
+        } else pl[i].data_va = 0;
+    }
+    uint64_t data_end = cur;
+
     uint64_t off_sv = ALIGN_UP(cur, 8);
 
     for (int i = 0; i < nuniv; i++)
-        uv[i].value = resolve_univ_multi(objs, nobj, pl, uv[i].name);
+        uv[i].value = resolve_named(objs, nobj, pl, uv[i].name,
+                                    "universal symbol not defined in any input object");
 
     uint32_t names_size = 0;
     for (int i = 0; i < nuniv; i++) names_size += (uint32_t)strlen(uv[i].name) + 1;
     uint64_t sv_hdr_sz = sizeof(struct ovmx_sv_header);
     uint64_t sv_names_o = sv_hdr_sz + (uint64_t)nuniv * sizeof(struct ovmx_sv_entry);
     uint64_t sv_size = sv_names_o + names_size;
-    uint64_t loaded_end = off_sv + sv_size;
-    uint64_t off_shstr = ALIGN_UP(loaded_end, 4);
 
-    const char *secn[6]; int nsec = 0;
+    /* .vms$rel: one image-relative offset per GOT slot (all need +bias). */
+    int nrel = ngot;
+    uint64_t off_rel = 0, rel_size = 0;
+    if (nrel) {
+        off_rel = ALIGN_UP(off_sv + sv_size, 8);
+        rel_size = sizeof(struct ovmx_rel_header) + (uint64_t)nrel * 8;
+    }
+
+    /* End of file-backed loaded content; .bss (NOBITS) extends memsz beyond it. */
+    uint64_t file_loaded_end = nrel ? off_rel + rel_size : off_sv + sv_size;
+    uint64_t bss_beg = file_loaded_end, bss_end = file_loaded_end;
+    if (has_bss) {
+        for (int i = 0; i < nobj; i++) {
+            if (objs[i].bss && objs[i].bss->sh_size) {
+                uint64_t al = objs[i].bss->sh_addralign ? objs[i].bss->sh_addralign : 8;
+                bss_end = ALIGN_UP(bss_end, al);
+                if (bss_beg == file_loaded_end) bss_beg = bss_end;
+                pl[i].bss_va = bss_end;
+                bss_end += objs[i].bss->sh_size;
+            } else pl[i].bss_va = 0;
+        }
+    } else {
+        for (int i = 0; i < nobj; i++) pl[i].bss_va = 0;
+    }
+
+    uint64_t off_shstr = ALIGN_UP(file_loaded_end, 4);
+
+    const char *secn[10]; int nsec = 0;
     secn[nsec++] = "";
     int ix_text = nsec; secn[nsec++] = ".text";
-    int ix_ro = -1; if (has_ro) { ix_ro = nsec; secn[nsec++] = ".rodata"; }
+    int ix_ro = -1;   if (has_ro)   { ix_ro   = nsec; secn[nsec++] = ".rodata"; }
+    int ix_got = -1;  if (ngot)     { ix_got  = nsec; secn[nsec++] = ".got"; }
+    int ix_data = -1; if (has_data) { ix_data = nsec; secn[nsec++] = ".data"; }
     int ix_sv = nsec; secn[nsec++] = OVMX_SV_SECTION;
+    int ix_rel = -1;  if (nrel)     { ix_rel  = nsec; secn[nsec++] = OVMX_REL_SECTION; }
+    int ix_bss = -1;  if (has_bss)  { ix_bss  = nsec; secn[nsec++] = ".bss"; }
     int ix_str = nsec; secn[nsec++] = ".shstrtab";
-    uint64_t sn_off[6]; uint64_t sn_sz = 0;
+    uint64_t sn_off[10]; uint64_t sn_sz = 0;
     for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
     uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
     uint64_t file_sz = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
@@ -617,9 +746,13 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf64_Phdr); eh->e_phnum = nph;
     eh->e_shentsize = sizeof(Elf64_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = ix_str;
 
+    /* One PT_LOAD. RWX when it carries a writable GOT/.data/.bss (the activator
+     * writes the GOT and biases it in place); R+X for a pure leaf/rodata image. */
+    int writable = (ngot || has_data || has_bss);
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
-    ph->p_type = PT_LOAD; ph->p_flags = PF_R | PF_X;
-    ph->p_filesz = loaded_end; ph->p_memsz = loaded_end; ph->p_align = PAGE;
+    ph->p_type = PT_LOAD;
+    ph->p_flags = writable ? (PF_R | PF_W | PF_X) : (PF_R | PF_X);
+    ph->p_filesz = file_loaded_end; ph->p_memsz = bss_end; ph->p_align = PAGE;
 
     for (int i = 0; i < nobj; i++) {
         memcpy(img + pl[i].text_va, objs[i].buf + objs[i].text->sh_offset,
@@ -627,14 +760,35 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         if (objs[i].rodata && objs[i].rodata->sh_size)
             memcpy(img + pl[i].ro_va, objs[i].buf + objs[i].rodata->sh_offset,
                    objs[i].rodata->sh_size);
+        if (objs[i].data && objs[i].data->sh_size)
+            memcpy(img + pl[i].data_va, objs[i].buf + objs[i].data->sh_offset,
+                   objs[i].data->sh_size);
     }
+
+    /* Fill GOT cells with image-relative target addresses. */
+    for (int i = 0; i < ngot; i++) {
+        got[i].value = resolve_named(objs, nobj, pl, got[i].name,
+            "GOT symbol undefined (cross-image DATA import is a later increment)");
+        *(uint64_t *)(img + got[i].va) = got[i].value;
+    }
+
+    /* Apply relocations: GOT-indirect pairs -> GOT slot; the rest PC-relative. */
     for (int i = 0; i < nobj; i++) {
         for (int r = 0; r < objs[i].nrela; r++) {
             Elf64_Rela *rl = &objs[i].rela[r];
-            uint64_t target = resolve_ref(objs, nobj, pl, i, ELF64_R_SYM(rl->r_info));
+            uint32_t type = ELF64_R_TYPE(rl->r_info);
             uint64_t site = pl[i].text_va + rl->r_offset;
-            patch_pcrel(ELF64_R_TYPE(rl->r_info),
-                        (uint32_t *)(img + pl[i].text_va + rl->r_offset), site, target);
+            uint32_t *insn = (uint32_t *)(img + pl[i].text_va + rl->r_offset);
+            if (is_got_reloc(type)) {
+                const char *nm = objs[i].str +
+                                 objs[i].sym[ELF64_R_SYM(rl->r_info)].st_name;
+                int gi = find_got(got, ngot, nm);
+                if (gi < 0) die("internal: GOT slot missing for symbol");
+                patch_got(type, insn, site, got[gi].va);
+            } else {
+                uint64_t target = resolve_ref(objs, nobj, pl, i, ELF64_R_SYM(rl->r_info));
+                patch_pcrel(type, insn, site, target);
+            }
         }
     }
 
@@ -650,6 +804,13 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         noff += (uint32_t)l;
     }
 
+    if (nrel) {
+        struct ovmx_rel_header *rh = (struct ovmx_rel_header *)(img + off_rel);
+        rh->magic = OVMX_REL_MAGIC; rh->count = (uint32_t)nrel;
+        uint64_t *off = (uint64_t *)(img + off_rel + sizeof *rh);
+        for (int i = 0; i < ngot; i++) off[i] = got[i].va;
+    }
+
     char *shstr = (char *)(img + off_shstr);
     for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
     Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
@@ -663,9 +824,33 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_ro].sh_offset = ro_beg; sh[ix_ro].sh_size = ro_end - ro_beg;
         sh[ix_ro].sh_addralign = 16;
     }
+    if (ngot) {
+        sh[ix_got].sh_name = sn_off[ix_got]; sh[ix_got].sh_type = SHT_PROGBITS;
+        sh[ix_got].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_got].sh_addr = got_beg;
+        sh[ix_got].sh_offset = got_beg; sh[ix_got].sh_size = got_end - got_beg;
+        sh[ix_got].sh_addralign = 8;
+    }
+    if (has_data) {
+        sh[ix_data].sh_name = sn_off[ix_data]; sh[ix_data].sh_type = SHT_PROGBITS;
+        sh[ix_data].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_data].sh_addr = data_beg;
+        sh[ix_data].sh_offset = data_beg; sh[ix_data].sh_size = data_end - data_beg;
+        sh[ix_data].sh_addralign = 8;
+    }
     sh[ix_sv].sh_name = sn_off[ix_sv]; sh[ix_sv].sh_type = SHT_PROGBITS;
     sh[ix_sv].sh_flags = SHF_ALLOC; sh[ix_sv].sh_addr = off_sv;
     sh[ix_sv].sh_offset = off_sv; sh[ix_sv].sh_size = sv_size; sh[ix_sv].sh_addralign = 8;
+    if (nrel) {
+        sh[ix_rel].sh_name = sn_off[ix_rel]; sh[ix_rel].sh_type = SHT_PROGBITS;
+        sh[ix_rel].sh_flags = SHF_ALLOC; sh[ix_rel].sh_addr = off_rel;
+        sh[ix_rel].sh_offset = off_rel; sh[ix_rel].sh_size = rel_size;
+        sh[ix_rel].sh_addralign = 8;
+    }
+    if (has_bss) {
+        sh[ix_bss].sh_name = sn_off[ix_bss]; sh[ix_bss].sh_type = SHT_NOBITS;
+        sh[ix_bss].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_bss].sh_addr = bss_beg;
+        sh[ix_bss].sh_offset = file_loaded_end; sh[ix_bss].sh_size = bss_end - bss_beg;
+        sh[ix_bss].sh_addralign = 8;
+    }
     sh[ix_str].sh_name = sn_off[ix_str]; sh[ix_str].sh_type = SHT_STRTAB;
     sh[ix_str].sh_offset = off_shstr; sh[ix_str].sh_size = sn_sz; sh[ix_str].sh_addralign = 1;
 
@@ -676,8 +861,9 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int totrel = 0; for (int i = 0; i < nobj; i++) totrel += objs[i].nrela;
     fprintf(stderr,
         "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d object%s, %d universal%s, "
-        "%d reloc%s, GSMATCH=%s,%u,%u\n",
+        "%d reloc%s, %d GOT, GSMATCH=%s,%u,%u\n",
         out, nobj, nobj==1?"":"s", nuniv, nuniv==1?"":"s", totrel, totrel==1?"":"s",
+        ngot,
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
     free(img);

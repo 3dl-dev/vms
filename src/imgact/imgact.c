@@ -777,6 +777,26 @@ static int ovmx_find_section(int fd, const char *want,
 	return 0;
 }
 
+/* Apply the .vms$rel self-relative fixups: add the load bias to every
+ * image-relative slot LINK.EXE recorded (synthesized GOT cells, pointer data).
+ * The VMS-native equivalent of processing R_AARCH64_RELATIVE, without a
+ * PT_DYNAMIC. No-op for images with no .vms$rel. `fd` must be open on the image;
+ * `base` is its load bias. The target pages must already be writable. */
+static void apply_vms_rel(int fd, unsigned long base)
+{
+	unsigned long rel_addr, rel_size;
+	if (!ovmx_find_section(fd, OVMX_REL_SECTION, &rel_addr, &rel_size))
+		return;
+	const struct ovmx_rel_header *rh =
+		(const struct ovmx_rel_header *)(base + rel_addr);
+	if (rh->magic != OVMX_REL_MAGIC || rel_size < sizeof *rh)
+		return;
+	const unsigned long *off =
+		(const unsigned long *)((const char *)rh + sizeof *rh);
+	for (unsigned k = 0; k < rh->count; k++)
+		*(unsigned long *)(base + off[k]) += base;
+}
+
 struct ovmx_prod {
 	char                         name[128];
 	unsigned long                base;
@@ -841,6 +861,10 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 
 	unsigned long sv_addr, sv_size;
 	int ok = ovmx_find_section(fd, OVMX_SV_SECTION, &sv_addr, &sv_size);
+	/* Bias this producer's own self-relative slots (GOT cells, pointer data)
+	 * before any of its universal code runs. Pages are RWX at this point. */
+	if (ok)
+		apply_vms_rel(fd, base);
 	sys_close(fd);
 	if (!ok)
 		return 0;
@@ -864,6 +888,10 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
 		die_imgnotfnd(execfn);
 	unsigned long imp_addr, imp_size;
 	int ok = ovmx_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
+	/* Bias the executable's own self-relative slots (its GOT/pointer data), if
+	 * any; harmless no-op for the current PLT-only executables. */
+	if (ok)
+		apply_vms_rel(fd, exe_base);
 	sys_close(fd);
 	if (!ok)
 		die_imgfmterr("IMAGE.EXE");

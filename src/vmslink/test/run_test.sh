@@ -53,4 +53,9 @@ echo "$OUT" | grep -qE '\[  1\] PROCEDURE .* mymul'    || { echo "FAIL: slot 1 m
 echo "$OUT" | grep -qE 'value=0x0{16}' && { echo "FAIL: zero symbol value"; exit 1; } || true
 
 echo
+echo "== resolve + CALL a universal symbol via the vector (IMGACT resolver, vms-8d5) =="
+$CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/RESOLVE" "$SRC/test/resolve_call.c"
+"$WORK/RESOLVE" "$WORK/LIBMATH\$SHR.EXE"
+
+echo
 echo "ALL LINK.EXE MVP CHECKS PASSED"

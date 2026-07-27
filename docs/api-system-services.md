@@ -2023,9 +2023,9 @@ remaining flags are accepted but not yet acted on.
 | `flags` | `uint32_t` | No | Lock flags (`LCK$M_` bits; see table above) |
 | `resnam` | `const struct dsc$descriptor_s *` | Yes | Resource name descriptor |
 | `parid` | `uint32_t` | No | Parent lock ID; currently ignored |
-| `astadr` | `void (*)(uint32_t)` | No | Completion AST; currently ignored for `sys$enq` |
+| `astadr` | `void (*)(uint32_t)` | No | Completion AST; delivered on a later grant of a queued async `sys$enq` request (via `VMS_IOCTL_DELIVERAST`). Not used for `sys$enqw`, which blocks in-kernel instead |
 | `astprm` | `uint32_t` | No | AST parameter |
-| `blkastadr` | `void (*)(uint32_t)` | No | Blocking AST routine; currently ignored |
+| `blkastadr` | `void (*)(uint32_t)` | No | Blocking AST routine; delivered to holders of an incompatible granted lock when a new request blocks on their resource |
 | `acmode` | `uint32_t` | No | Access mode; currently ignored |
 | `rsdm_id` | `uint32_t` | No | Resource domain ID; currently ignored |
 
@@ -2066,13 +2066,26 @@ no `/dev/vms`, these services return `SS$_NOSUCHDEV`).
 `sys$enqw` waits until the requested mode is granted; `sys$enq` returns
 immediately with the granted-or-queued status.
 
+`sys$enqw`'s wait is implemented entirely in-kernel: it sets `LCK_M_SYNC` on
+the request and blocks on `wait_event_interruptible_timeout` until the lock
+manager grants the request or declares a deadlock, instead of the caller
+busy-polling `$GETLKI` from userspace. If the request is still queued when
+the wait times out (500ms), the lock manager re-runs deadlock detection
+against the resource's current wait-for graph before re-arming the wait —
+so a deadlock that forms *after* the request was queued is detected, not
+just deadlocks visible at enqueue time.
+
+For an async `sys$enq` that is queued (not immediately grantable) with an
+`astadr` supplied, the kernel lock manager queues a completion AST to the
+process's user-mode AST queue when the lock is later granted; userspace
+retrieves it via `VMS_IOCTL_DELIVERAST`. Completion ASTs are not queued for
+a synchronous (`LCK_M_SYNC`) waiter — that caller is blocked in-kernel and
+is woken directly on grant instead.
+
 **VMS Compatibility:** Value blocks, lock conversion (`LCK$M_CONVERT`),
-blocking ASTs, deadlock detection, and the full mode-compatibility matrix are
-supported through the kernel lock manager. Known gaps (tracked in `vms-ab6`):
-`sys$enqw`'s wait is currently a `GETLKI` poll loop rather than in-kernel
-blocking, so a deadlock that forms *after* a request is queued is not
-reported as `SS$_DEADLOCK`; completion ASTs on delayed grant are not yet
-delivered.
+blocking ASTs, completion ASTs on delayed grant, deadlock detection
+(including deadlocks that form after a request is queued), and the full
+mode-compatibility matrix are supported through the kernel lock manager.
 
 ---
 

@@ -42,6 +42,7 @@
 #endif
 #include "ovmx_image.h"   /* OVMX symbol-vector image format (LINK.EXE) */
 #include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
+#include "known_images.h" /* Known Image DB lookup (bead vms-913.5; wired vms-30d) */
 
 #ifndef AT_EXECFN
 #define AT_EXECFN 31
@@ -85,6 +86,10 @@ static void sys_exit(int code)
 {
 	syscall6(SYS_exit_group, code, 0, 0, 0, 0, 0);
 	for (;;) { }
+}
+static long sys_munmap(void *addr, unsigned long len)
+{
+	return syscall6(SYS_munmap, (long)addr, len, 0, 0, 0, 0);
 }
 
 #ifndef PROT_READ
@@ -138,6 +143,72 @@ static char *xstrcat(char *d, const char *s)
 	while (*p) p++;
 	xstrcpy(p, s);
 	return d;
+}
+
+/* --------------------------------------------------------------------------
+ * Known Image Database libc shim (bead vms-30d).
+ *
+ * known_images.c (bead vms-913.5) is a small, self-contained POSIX C module
+ * -- open()/fstat()/mmap()/munmap()/close()/string.h -- built normally
+ * everywhere else in the tree (see the hosted `known_images` CMake target
+ * and its unit/integration tests). IMGACT.EXE is -nostdlib/-ffreestanding
+ * and links against nothing, so this file's Makefile/CMakeLists.txt compile
+ * known_images.c as an extra translation unit of the IMGACT.EXE binary
+ * itself; its libc calls come out as undefined external symbols that must
+ * be satisfied within this link. These are the freestanding definitions
+ * that satisfy them, built on the same raw syscall6() primitive as the rest
+ * of this file (memcpy/memset above already follow this pattern). Only the
+ * subset known_images.c actually calls is implemented; signatures use
+ * plain integer/pointer types (no dependency on host <fcntl.h>/<sys/stat.h>/
+ * <sys/mman.h> struct layouts -- fstat()'s statbuf is passed straight
+ * through to the kernel, untouched by this file).
+ * -------------------------------------------------------------------------- */
+
+#if defined(__aarch64__)
+#  define IMGACT_SYS_FSTAT 80
+#elif defined(__x86_64__)
+#  define IMGACT_SYS_FSTAT 5
+#endif
+
+int open(const char *path, int flags, ...)
+{
+	return (int)sys_openat(path, flags);
+}
+int close(int fd)
+{
+	return (int)sys_close(fd);
+}
+int fstat(int fd, void *statbuf)
+{
+	return syscall6(IMGACT_SYS_FSTAT, fd, (long)statbuf, 0, 0, 0, 0) < 0 ? -1 : 0;
+}
+void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off)
+{
+	return sys_mmap(addr, len, prot, flags, fd, off);
+}
+int munmap(void *addr, unsigned long len)
+{
+	return sys_munmap(addr, len) < 0 ? -1 : 0;
+}
+char *strncpy(char *dst, const char *src, unsigned long n)
+{
+	unsigned long i = 0;
+	for (; i < n && src[i]; i++)
+		dst[i] = src[i];
+	for (; i < n; i++)
+		dst[i] = 0;
+	return dst;
+}
+int strncmp(const char *a, const char *b, unsigned long n)
+{
+	for (unsigned long i = 0; i < n; i++) {
+		unsigned char ca = (unsigned char)a[i], cb = (unsigned char)b[i];
+		if (ca != cb)
+			return (int)ca - (int)cb;
+		if (ca == 0)
+			return 0;
+	}
+	return 0;
 }
 
 /* --------------------------------------------------------------------------
@@ -501,7 +572,8 @@ static struct obj *load_object(const char *soname, const char *path)
  * DT_NEEDED resolution and recursive load.
  * -------------------------------------------------------------------------- */
 
-#define IMGACT_FALLBACK_SYSLIB "/vms/SYS0/SYSCOMMON/SYSLIB"
+#define IMGACT_FALLBACK_SYSLIB   "/vms/SYS0/SYSCOMMON/SYSLIB"
+#define IMGACT_KNOWN_IMAGES_DB   "/vms/SYS0/SYSCOMMON/SYSEXE/VMS$KNOWN_IMAGES.DAT"
 
 static struct obj *find_loaded(const char *soname)
 {
@@ -511,9 +583,45 @@ static struct obj *find_loaded(const char *soname)
 	return 0;
 }
 
-/* Resolve a SONAME to a path and map it. Search order per design spec §4;
- * for vms-913.2 only the hardcoded SYS$SHARE fallback is implemented (the
- * Known Image DB is bead 913.5, SYS$SHARE logical translation needs VMSLNMD). */
+/* --------------------------------------------------------------------------
+ * Known Image Database (Priority 1 of docs/design-image-activation.md §4).
+ *
+ * Lazily mmap(MAP_SHARED)'d on first DT_NEEDED lookup (bead vms-30d wiring
+ * of the vms-913.5 module) so activations with no DT_NEEDED entries never
+ * touch it. A missing/corrupt/absent database (-1) is cached, not retried
+ * per soname -- every subsequent lookup falls straight through to the
+ * Priority 2 SYS$SHARE fallback below.
+ * -------------------------------------------------------------------------- */
+
+static struct known_images_db g_known_db;
+static int                    g_known_db_state; /* 0=untried 1=open -1=unavailable */
+
+static const struct known_images_db *known_db(void)
+{
+	if (g_known_db_state == 0) {
+		g_known_db_state =
+			known_images_open(&g_known_db, IMGACT_KNOWN_IMAGES_DB) == 0 ? 1 : -1;
+	}
+	return g_known_db_state == 1 ? &g_known_db : 0;
+}
+
+/* Release the KFE mmap/fd once DT_NEEDED resolution is done; nothing past
+ * this point in imgact_bootstrap() needs it, and the fd should not leak
+ * into the activated program's descriptor table. */
+static void known_db_shutdown(void)
+{
+	if (g_known_db_state == 1)
+		known_images_close(&g_known_db);
+	g_known_db_state = -1;
+}
+
+/* Resolve a SONAME to a path and map it. Search order per design spec §4:
+ *   Priority 1: Known Image Database -- O(1) mmap'd hash lookup, no
+ *               filesystem search at all on a hit (bead vms-30d).
+ *   Priority 2: hardcoded SYS$SHARE fallback (vms-913.2; always available,
+ *               even before the Known Image DB exists or VMSLNMD starts).
+ * Priorities 3 (SYS$SHARE logical name via VMSLNMD) and 4 (ELF RPATH) are
+ * not yet implemented. */
 static struct obj *load_needed(const char *soname)
 {
 	struct obj *existing = find_loaded(soname);
@@ -521,10 +629,24 @@ static struct obj *load_needed(const char *soname)
 		return existing;
 
 	char path[512];
-	path[0] = 0;
-	xstrcat(path, IMGACT_FALLBACK_SYSLIB);
-	xstrcat(path, "/");
-	xstrcat(path, soname);
+
+	const struct known_images_db *kdb = known_db();
+	const struct kfe_entry *kfe = kdb ? known_images_lookup(kdb, soname) : 0;
+	if (kfe) {
+		/* kfe->path is a fixed-size field that may not be NUL-terminated
+		 * if a writer filled all 256 bytes; bound and terminate defensively
+		 * (same idiom known_images.c itself uses for soname). */
+		unsigned long n = sizeof(kfe->path);
+		if (n >= sizeof(path))
+			n = sizeof(path) - 1;
+		memcpy(path, kfe->path, n);
+		path[n] = 0;
+	} else {
+		path[0] = 0;
+		xstrcat(path, IMGACT_FALLBACK_SYSLIB);
+		xstrcat(path, "/");
+		xstrcat(path, soname);
+	}
 
 	struct obj *o = load_object(soname, path);
 	if (!o)
@@ -1204,6 +1326,7 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	/* ---- Load shareable images (recursively). ---- */
 	for (int i = 0; i < g_nobjs; i++)
 		load_deps(&g_objs[i]);
+	known_db_shutdown(); /* KFE lookups are done; release the mmap/fd (vms-30d) */
 
 	/* ---- Assign TLS offsets, relocate (leaves first), init TLS. ---- */
 	assign_tls_offsets();

@@ -24,14 +24,20 @@ extensions — packaged as a bootable Linux distribution.
 
 ## Quick Start
 
-### Docker (easiest)
+### Bootable QEMU VM — the OVMX runtime
+
+This is OVMX proper: it boots the kernel modules and runs the VMS-native
+toolchain (the `IMGACT.EXE` image activator and `LINK.EXE`, on a musl userland).
 
 ```bash
-docker compose up --build
-ssh system@localhost -p 2222    # password: MANAGER
+# Build the kernel + initramfs
+docker build -f Dockerfile.bootable -o dist .
+
+# Boot it
+./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
 ```
 
-### Local Build
+### Local Build — libraries, DCL, tests
 
 ```bash
 # Prerequisites (Debian/Ubuntu)
@@ -45,14 +51,16 @@ cmake --build build -j$(nproc)
 cd build && ctest --output-on-failure
 ```
 
-### Bootable QEMU VM
+### Docker container — dev/CI convenience, NOT the VMS-native runtime
+
+> ⚠️ The Docker image runs the OVMX userland on **glibc** and **bypasses the
+> VMS-native toolchain** — no `IMGACT.EXE` image activation, no `LINK.EXE` /
+> symbol vectors. It's a fast way to poke DCL over SSH or to run CI, but it does
+> **not** exercise the OVMX runtime. Use the QEMU VM above for that.
 
 ```bash
-# Build the kernel + initramfs
-docker build -f Dockerfile.bootable -o dist .
-
-# Boot it
-./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
+docker compose up --build
+ssh system@localhost -p 2222    # password: MANAGER
 ```
 
 ## Documentation
@@ -63,8 +71,10 @@ docker build -f Dockerfile.bootable -o dist .
 ## Project Status
 
 See [tracking/roadmap.md](tracking/roadmap.md) for the full phase plan.
-Phases 1-7 are complete. The project is functional as a Docker container and
-bootable QEMU VM with multi-user SSH access.
+Phases 1-7 are complete. OVMX runs as a bootable QEMU VM — the VMS-native
+runtime (image activation via `IMGACT.EXE`, linking via `LINK.EXE`, musl
+userland) — with multi-user SSH access. A glibc Docker container is also
+provided as a dev/CI convenience, but it bypasses the VMS-native toolchain.
 
 ## License
 

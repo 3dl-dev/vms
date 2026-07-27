@@ -24,7 +24,8 @@ cd build && ctest --output-on-failure
 cmake -B build-static -DCMAKE_C_COMPILER=musl-gcc -DOVMX_STATIC=ON -DBUILD_TOOLS=ON
 cmake --build build-static -j$(nproc)
 
-# Docker container (SSH on port 2222)
+# Docker container (glibc dev/CI convenience — NOT the VMS-native runtime;
+# bypasses IMGACT.EXE image activation + LINK.EXE. Use the QEMU VM for OVMX proper.)
 docker compose up --build
 ssh system@localhost -p 2222    # password: MANAGER
 

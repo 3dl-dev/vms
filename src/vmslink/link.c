@@ -859,12 +859,43 @@ static uint64_t resolve_named(struct obj *objs, int nobj,
     return 0;
 }
 
-/* A synthesized GOT slot: one per distinct symbol referenced GOT-indirectly. */
-struct gotslot { char name[256]; uint64_t va; uint64_t value; };
+/* A synthesized GOT slot: one per distinct symbol referenced GOT-indirectly.
+ *
+ * GLOBAL-bind references dedup by NAME (is_local=0): one slot serves every
+ * object that GOT-references the same global, resolved through the global
+ * symbol hash (build_symhash / resolve_named).
+ *
+ * LOCAL-bind references (STB_LOCAL — statics, string-literal labels `L.n` that
+ * tcc's arm64 backend routes through the GOT, arm64-gen.c:495-508) are NOT in
+ * the global hash (build_symhash skips STB_LOCAL, link.c:755) and their names
+ * are not unique across translation units — two TUs may each define their own
+ * local `L.1`. Such references get a PER-OBJECT slot keyed by (oi, sym) and are
+ * resolved directly via placed_addr() — the same mechanism resolve_ref() uses
+ * for non-GOT relocations against locals — so cross-TU name collisions are
+ * impossible and each local resolves to its own definition. (vms-9c1) */
+struct gotslot {
+    char     name[256];  /* diagnostic label; the dedup key only for globals */
+    uint64_t va;
+    uint64_t value;
+    int      is_local;   /* 1 = per-object local slot keyed by (oi, sym) */
+    int      oi;         /* defining object index      (valid when is_local) */
+    int      sym;        /* defining symbol index in oi (valid when is_local) */
+};
 
+/* Find an existing GLOBAL (name-keyed) slot. Local slots are never matched by
+ * name — their names are not unique across objects. (vms-9c1) */
 static int find_got(struct gotslot *g, int ng, const char *name)
 {
-    for (int i = 0; i < ng; i++) if (strcmp(g[i].name, name) == 0) return i;
+    for (int i = 0; i < ng; i++)
+        if (!g[i].is_local && strcmp(g[i].name, name) == 0) return i;
+    return -1;
+}
+
+/* Find an existing per-object LOCAL slot keyed by (object index, symbol index). */
+static int find_got_local(struct gotslot *g, int ng, int oi, int sym)
+{
+    for (int i = 0; i < ng; i++)
+        if (g[i].is_local && g[i].oi == oi && g[i].sym == sym) return i;
     return -1;
 }
 
@@ -1104,20 +1135,32 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
             if (!is_got_reloc(type)) continue;
             uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
-            const char *nm = objs[i].str + objs[i].sym[si].st_name;
-            /* A GOT reference bound to a --use producer is a cross-image DATA
-             * import (its own import cell, filled via .vms$imp) — not an intra-
-             * image GOT slot. (vms-e65) */
-            if (import_find(imp, nimp, nm) >= 0) continue;
-            if (find_got(got, ngot, nm) < 0) {
-                if (ngot >= got_cap) {
-                    got_cap = got_cap ? got_cap * 2 : 256;
-                    got = realloc(got, (size_t)got_cap * sizeof *got);
-                    if (!got) die("oom growing GOT table");
-                }
-                snprintf(got[ngot].name, sizeof got[ngot].name, "%s", nm);
-                ngot++;
+            Elf64_Sym *sym = &objs[i].sym[si];
+            const char *nm = objs[i].str + sym->st_name;
+            int is_local = (ELF64_ST_BIND(sym->st_info) == STB_LOCAL);
+            /* A LOCAL-bind GOT reference (tcc's per-TU statics / `L.n` string
+             * labels) is resolved per-object by (oi, symidx), never by the
+             * global name hash — so two TUs' distinct local `L.1`s get DISTINCT
+             * slots and each resolves to its own definition. (vms-9c1) */
+            if (is_local) {
+                if (find_got_local(got, ngot, i, (int)si) >= 0) continue;
+            } else {
+                /* A GLOBAL GOT reference bound to a --use producer is a
+                 * cross-image DATA import (its own import cell, filled via
+                 * .vms$imp) — not an intra-image GOT slot. (vms-e65) */
+                if (import_find(imp, nimp, nm) >= 0) continue;
+                if (find_got(got, ngot, nm) >= 0) continue;
             }
+            if (ngot >= got_cap) {
+                got_cap = got_cap ? got_cap * 2 : 256;
+                got = realloc(got, (size_t)got_cap * sizeof *got);
+                if (!got) die("oom growing GOT table");
+            }
+            snprintf(got[ngot].name, sizeof got[ngot].name, "%s", nm);
+            got[ngot].is_local = is_local;
+            got[ngot].oi  = is_local ? i : 0;
+            got[ngot].sym = is_local ? (int)si : 0;
+            ngot++;
         }
 
     /* Collect the distinct TLSDESC-referenced symbols (one 2-word entry each). */
@@ -1403,6 +1446,22 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * defined by any input object is a deferred import (vms-61f): under
      * --allow-undefined its cell stays 0 and is NOT recorded in .vms$rel. */
     for (int i = 0; i < ngot; i++) {
+        if (got[i].is_local) {
+            /* Defined LOCAL target: resolve directly to its placed vaddr (same
+             * mechanism resolve_ref uses for non-GOT local relocations). A
+             * defined local always lands in a flat-placed bucket (text/rodata/
+             * data/bss), so placed_addr is nonzero; a 0 here means the local
+             * lives in a section this linker does not place (e.g. TLS/ABS) — a
+             * reloc shape LINK.EXE does not model for GOT locals. (vms-9c1) */
+            got[i].value = placed_addr(&objs[got[i].oi],
+                                       &objs[got[i].oi].sym[got[i].sym]);
+            if (!got[i].value)
+                die("GOT reference to a LOCAL symbol in an unplaced section "
+                    "(TLS/ABS local GOT slots are unsupported)");
+            *(uint64_t *)(img + got[i].va) = got[i].value;
+            rel_off[nrel_filled++] = got[i].va;   /* image-relative -> bias at activation */
+            continue;
+        }
         got[i].value = resolve_named(objs, nobj, got[i].name, NULL);
         if (got[i].value) {
             *(uint64_t *)(img + got[i].va) = got[i].value;
@@ -1440,14 +1499,22 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             const char *nm = objs[i].str +
                              objs[i].sym[ELF64_R_SYM(rl->info)].st_name;
             if (is_got_reloc(type)) {
-                int ii = import_find(imp, nimp, nm);
-                if (ii >= 0) {
-                    /* Cross-image DATA import: read its import-GOT cell. */
-                    patch_got(type, insn, site, imp[ii].got_va);
-                } else {
-                    int gi = find_got(got, ngot, nm);
-                    if (gi < 0) die("internal: GOT slot missing for symbol");
+                uint32_t si = ELF64_R_SYM(rl->info);
+                if (ELF64_ST_BIND(objs[i].sym[si].st_info) == STB_LOCAL) {
+                    /* LOCAL GOT reference -> its per-object (oi, sym) slot. */
+                    int gi = find_got_local(got, ngot, i, (int)si);
+                    if (gi < 0) die("internal: local GOT slot missing for symbol");
                     patch_got(type, insn, site, got[gi].va);
+                } else {
+                    int ii = import_find(imp, nimp, nm);
+                    if (ii >= 0) {
+                        /* Cross-image DATA import: read its import-GOT cell. */
+                        patch_got(type, insn, site, imp[ii].got_va);
+                    } else {
+                        int gi = find_got(got, ngot, nm);
+                        if (gi < 0) die("internal: GOT slot missing for symbol");
+                        patch_got(type, insn, site, got[gi].va);
+                    }
                 }
             } else if (is_tlsdesc_reloc(type)) {
                 int ti = find_tls(tls, ntls, nm);

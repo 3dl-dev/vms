@@ -47,7 +47,14 @@ TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # Compilation flags — mirrors run_conformance.sh and the builder stage paths
 INCLUDE_FLAGS="-I/src/src/libvms/include -I/src/src/vmsprocess/include -I/src/src/vmsfs/include -I/src/src/vmsrms/include"
-LIB_FLAGS="-L/src/build/lib -lvmsrms -lvmsfs -lvms -lvmsprocess -lvmssys -lpthread -lm"
+# The VMS runtime libraries are built as OpenVMS-style shareable images
+# (OUTPUT_NAME "LIBVMS$SHR", SUFFIX ".EXE" — see src/libvms/CMakeLists.txt),
+# so plain -lvms/-lvmsfs/... do NOT resolve (ld looks for libvms.so). Link
+# the exact filenames with -l:NAME, same fix as run_conformance.sh. Only
+# libvmssys keeps a conventional archive name (libvmssys.a), so -lvmssys
+# still works for it. (Harness bug found + fixed under vms-801.4 — was
+# silently producing 100% compile-fail via "cannot find -lvmsrms" etc.)
+LIB_FLAGS="-L/src/build/lib -l:LIBVMSRMS\$SHR.EXE -l:LIBVMSFS\$SHR.EXE -l:LIBVMS\$SHR.EXE -l:LIBVMSPROCESS\$SHR.EXE -lvmssys -lpthread -lm"
 CFLAGS="-O2"
 
 # errchk.h is in the tier1-examples directory itself

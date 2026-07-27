@@ -215,8 +215,14 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
     }
     /* A data-only archive member (e.g. musl's stdout.lo) legitimately has no
      * .text; only the single-object executable path requires one (checked
-     * there). A relocatable object must still carry a symbol table. (vms-004) */
-    if (!o->sym)  die("input object has no symbol table");
+     * there). An archive can also carry EMPTY stub members with no symbol table
+     * at all — libgcc's config-disabled objects (_trampoline.o, _xf_to_dd.o, ...)
+     * are all-zero-size ELF placeholders. Such a member defines and references
+     * nothing, so it contributes nothing to the link: treat it as inert (no
+     * symbols, no relocations) rather than aborting, so the whole-archive C-RTL
+     * build (DECC$SHR, vms-61f.1) can pull every member of libc.a AND libgcc.a
+     * unconditionally. (vms-61f.1, relaxing the vms-004 hard check.) */
+    if (!o->sym) { o->nsym = 0; o->nreloc = 0; o->relocs = NULL; return; }
 
     /* Collect relocations against the first .text (SHT_RELA), for the simple
      * consumer path. REL (implicit-addend) is not emitted by aarch64 gcc. */
@@ -795,6 +801,33 @@ static size_t g_syms_cap;          /* power of two */
 static int  g_allow_undef;
 static long g_deferred;            /* count of deferred (unresolved) externals */
 
+/* Names referenced with a WEAK undefined reference and defined by NO input
+ * object. Standard ELF semantics resolve a weak undefined symbol to address 0 —
+ * it is NOT a deferred import and NOT an error. For DECC$SHR these are exactly
+ * the linker-defined section-boundary symbols __init_array_start/__init_array_end,
+ * __fini_array_start/__fini_array_end and _DYNAMIC: musl's libc.a + libgcc.a
+ * carry no .init_array/.fini_array sections and no dynamic section, so an empty
+ * (start == end == 0) constructor range and a null _DYNAMIC are the *correct*
+ * values — the C-RTL startup loop iterates zero static constructors. Resolving
+ * them to 0 is what lets DECC$SHR link with ZERO deferred externals. (vms-61f.1) */
+static char **g_weak;
+static int    g_nweak;
+
+static int weak_has(const char *name)
+{
+    for (int i = 0; i < g_nweak; i++)
+        if (strcmp(g_weak[i], name) == 0) return 1;
+    return 0;
+}
+
+static void weak_add(const char *name)
+{
+    if (weak_has(name)) return;
+    g_weak = realloc(g_weak, (size_t)(g_nweak + 1) * sizeof *g_weak);
+    if (!g_weak) die("oom recording weak-undefined symbol");
+    g_weak[g_nweak++] = strdup(name);
+}
+
 static size_t djb2(const char *s)
 {
     size_t h = 5381; int c;
@@ -855,6 +888,19 @@ static void build_symhash(struct obj *objs, int nobj)
             if (!nm[0]) continue;
             sym_insert(nm, i, k, bind);
         }
+    /* Second pass: a WEAK undefined reference to a symbol no object defines
+     * resolves to address 0 (ELF weak-undef semantics). Record such names so the
+     * resolver returns 0 legitimately instead of aborting / deferring. (vms-61f.1) */
+    for (int i = 0; i < nobj; i++)
+        for (int k = 0; k < objs[i].nsym; k++) {
+            Elf64_Sym *s = &objs[i].sym[k];
+            if (s->st_shndx != SHN_UNDEF) continue;
+            if (ELF64_ST_BIND(s->st_info) != STB_WEAK) continue;
+            const char *nm = objs[i].str + s->st_name;
+            if (!nm[0]) continue;
+            int doi, dki;
+            if (!sym_lookup(nm, &doi, &dki)) weak_add(nm);
+        }
 }
 
 /* Map a symbol defined in object `d` to its final image vaddr, using the
@@ -889,6 +935,7 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
             uint64_t da = placed_addr(&objs[doi], &objs[doi].sym[dki]);
             if (da) return da;
         }
+        if (weak_has(nm)) return 0;   /* weak-undef resolves to 0 (ELF semantics) */
         if (g_allow_undef) { g_deferred++; return 0; }
         die("unresolved external symbol (needs the C RTL -- vms-61f; "
             "pass --allow-undefined to record it as a deferred import)");
@@ -1277,12 +1324,21 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * defined by any input object is a deferred import (vms-61f): under
      * --allow-undefined its cell stays 0 and is NOT recorded in .vms$rel. */
     for (int i = 0; i < ngot; i++) {
-        got[i].value = resolve_named(objs, nobj, got[i].name,
-            g_allow_undef ? NULL
-              : "GOT symbol undefined (cross-image DATA import is a later increment)");
-        *(uint64_t *)(img + got[i].va) = got[i].value;
-        if (got[i].value) rel_off[nrel_filled++] = got[i].va;
-        else g_deferred++;
+        got[i].value = resolve_named(objs, nobj, got[i].name, NULL);
+        if (got[i].value) {
+            *(uint64_t *)(img + got[i].va) = got[i].value;
+            rel_off[nrel_filled++] = got[i].va;   /* image-relative -> bias at activation */
+            continue;
+        }
+        /* Undefined GOT symbol. A WEAK reference (no definition anywhere) is a
+         * legitimate address-0 resolution — the linker-defined empty
+         * __init_array/__fini_array bounds and null _DYNAMIC of a C-RTL with no
+         * static constructors. Otherwise it is a deferred import
+         * (--allow-undefined) or, strict, a hard error. (vms-61f.1) */
+        *(uint64_t *)(img + got[i].va) = 0;   /* cell = 0, NOT biased/recorded */
+        if (weak_has(got[i].name))      { /* correct 0; nothing to defer */ }
+        else if (g_allow_undef)         { g_deferred++; }
+        else die("GOT symbol undefined (cross-image DATA import is a later increment)");
     }
 
     /* Fill TLSDESC entries: [0]=0 (IMGACT sets the resolver), [1]=module offset. */

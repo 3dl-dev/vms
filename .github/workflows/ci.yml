@@ -518,6 +518,41 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # Job 10b: DECC$SHR.EXE — the OVMX C run-time library shareable (aarch64)
+  #
+  # Gate on the C-RTL shareable (bead vms-61f.1, pillar vms-ade): LINK.EXE links
+  # the WHOLE musl libc.a + libgcc.a (soft-float/long-double builtins) into a
+  # single OVMX shareable carrying a .vms$sv symbol vector of the C-RTL universals
+  # (malloc/free/memcpy/strlen/printf/...) — VMS-native, NO ld/ld.so. Asserts the
+  # image links CLEAN (zero deferred externals) and exports the universals as
+  # PROCEDURE. Runtime init is vms-61f.2. aarch64-only; runs under arm64 emulation.
+  # -----------------------------------------------------------------------
+  decc-shr:
+    name: DECC$SHR VMS-native C-RTL Shareable
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build LINK.EXE + link DECC$SHR from whole musl libc.a + libgcc.a (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils >/dev/null
+              export CC=gcc WORK=/tmp/decc-shr-test
+              sh /src/src/vmslink/test/run_decc_shr.sh
+            '
+
+  # -----------------------------------------------------------------------
   # Job 11: real IMGACT.EXE symbol-vector activation (aarch64)
   #
   # Gate on the VMS-native activation path (bead vms-714): builds IMGACT.EXE

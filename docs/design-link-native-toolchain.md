@@ -1,7 +1,11 @@
 # OVMX VMS-Native Link + Activate Toolchain (LINK.EXE, path B)
 
-> Status: DESIGN (bead vms-b49, pillar vms-ade). Supersedes the ELF-symbol-export
-> approach (vms-55f) for how OVMX shareable images export/import symbols.
+> Status: **IMPLEMENTED** (bead vms-b49, pillar vms-ade). Supersedes the
+> ELF-symbol-export approach (vms-55f) for how OVMX shareable images export/import
+> symbols. §§1-6 are the original design (still current); §7 documents the
+> as-built toolchain — whole-archive ingestion, DECC$SHR, weak/strong symbol
+> resolution, cross-image import binding, TLS-producer coexistence, and the first
+> real OVMX-library migration — with known limitations.
 >
 > **Operator ruling (2026-07-26): "no unix/linux, all VMS." Modern VMS, path B.**
 > Wean OVMX off the Unix linker/loader (`ld`, `ld.so`/ld-musl, ELF dynamic-linking
@@ -168,3 +172,175 @@ Source: VSI "Porting Applications … Alpha to I64"
   crutch** — kept working, not deepened, superseded image-by-image by vms-b65.
 - **vms-55f / vms-034** (ELF-symbol-export / DCL-e2e over DT_HASH) are superseded
   by the symbol-vector path and re-sequenced behind vms-b65.
+
+## 7. As-built: the LINK.EXE + IMGACT toolchain (OVMX design, clean-room per §4)
+
+The pieces below are **OVMX-original engineering** — how LINK.EXE (`src/vmslink/link.c`)
+and IMGACT (`src/imgact/imgact.c`) actually implement §§1-6 in ELF terms. Nothing
+here claims VMS-format authenticity beyond what §5 already grounds (symbol vector,
+GSMATCH, upward compatibility); the resolution *mechanics* (archive parsing,
+GOT/PLT synthesis, TLSDESC rewriting) are ordinary ELF linker/loader engineering,
+labelled as such, not derived from or compared against VSI's actual LINK.EXE
+internals.
+
+### 7.1 Whole-archive `.a` ingestion (vms-004)
+LINK.EXE parses `ar` archives **in-process** — no `ld -r` staging step. `load_archive()`
+walks the archive's member table and pulls **every** object member into a growable
+`objs[]` array (`src/vmslink/link.c`, `load_archive`/`file_is_archive`). A data-only
+member with no symbol table and no relocations (e.g. musl's `stdout.lo`) is accepted
+as an empty stub rather than aborting the link. Symbol resolution runs over a global
+defined-symbol hash so the whole musl `libc.a` (1345 members) links in seconds, not
+minutes. `.rela.data` **ABS64** pointer-initializer relocations (`S+A` written as a
+64-bit word — stdio `FILE` structs, locale/pointer tables) are resolved and biased
+through a `.vms$rel` image-relative slot at activation, alongside GOT cells.
+Verified in `src/vmslink/test/run_test.sh` (multi-object merge, proofs 118/99) and
+exercised at archive scale by `run_decc_shr.sh` below.
+
+### 7.2 DECC$SHR — the C-RTL shareable (vms-61f.1, vms-61f.2)
+`src/vmslink/mk_decc_shr.sh` whole-archives musl's `libc.a` **and** `libgcc.a`
+(soft-float/long-double/complex builtins musl's stdio/printf reference internally)
+into a single OVMX shareable, `DECC$SHR.EXE`, exporting the C run-time universals
+(`malloc`/`free`/`memcpy`/`strlen`/`printf`/... — see the script for the full list)
+as `PROCEDURE` universals in `.vms$sv`. Composition is **strict**: no
+`--allow-undefined`, so the image links with **zero deferred externals**.
+
+- **`init_array`/`_DYNAMIC` weak-undef → 0**: musl's `libc.a`/`libgcc.a` carry no
+  `.init_array`/`.fini_array` and no dynamic section, so the linker-defined boundary
+  symbols (`__init_array_start`/`end`, `__fini_array_start`/`end`, `_DYNAMIC`) are
+  weak-undefined with no def anywhere in the archive set. LINK.EXE resolves a
+  weak-undefined symbol to address 0 — standard ELF semantics — rather than
+  aborting the link (`link.c`, `weak_add`/`resolve_ref`, §7.3 below).
+- **Runtime init at activation (vms-61f.2)**: `DECC$SHR.EXE`'s `.vms$sv` also
+  exports musl's own bootstrap, `__init_libc`, by name (not consumer-callable —
+  looked up by IMGACT, not bound by any consumer's imports). At activation IMGACT
+  resolves `__init_libc` from the C-RTL producer's symbol vector and **calls it**
+  with the real process `envp`/`argv[0]` (`imgact.c`, `drive_crtl_init` /
+  `find_crtl_producer`) before transferring control. `__init_libc` internally runs
+  musl's `__init_tls`/`__init_tp` (programs the thread pointer, builds the TCB,
+  allocates any main-program TLS) and `__init_ssp` — exactly what musl's own
+  `crt`/`__libc_start_main` do, driven from outside rather than replicated inside
+  IMGACT. Reading/mirroring musl's MIT-licensed ldso/env sources for this purpose
+  is permitted (not a VSI/HPE clean-room concern — musl is not VMS).
+- **Tests**: `src/vmslink/test/run_decc_shr.sh` (link-clean assertion + OVMXDUMP
+  universal listing; CI job `decc-shr`), `src/imgact/test/run_decc_shr_activation.sh`
+  (end-to-end: a consumer calls real musl `malloc`/`snprintf`/`strtod`/`free`
+  through IMGACT-driven activation, exit code proves the arithmetic; CI job
+  `decc-shr-activate`).
+
+### 7.3 Weak/strong symbol override (vms-36a)
+`resolve_ref()` (`link.c`) honors ELF weak-vs-strong override when resolving a
+reference **by name**: if the reference's own definition is `STB_WEAK` but a
+`STB_GLOBAL` (strong) definition of the same name exists elsewhere in the link,
+the strong definition wins — matching standard ELF/`ld` symbol-resolution
+semantics, not a VMS-specific rule. This mattered concretely for musl's allocator:
+`malloc`/`free` have both a strong `mallocng` implementation and a weak
+`__simple_malloc` fallback in `libc.a`; without the override a `free()` call could
+bind to the strong `free` while some caller had bound `malloc` to the weak
+`__simple_malloc`, producing a buffer with no `mallocng` metadata and a SIGSEGV on
+free. `run_decc_shr_activation.sh`'s exit code (14) is only reachable with this fix
+in place — it exercises a `malloc`+`snprintf`+`strtod` compute **and** a
+`free()`/second `malloc`+`free` pair.
+
+### 7.4 Cross-image import binding for shareables (vms-e65)
+Before vms-e65, only a leaf **executable** could import universals from a `--use`
+producer (`emit_executable`). vms-e65 extends the same binding to a **shareable**
+image being built by `emit_shareable`: a CALL/GOT reference not defined by any
+input object of the shareable itself, but exported by one of its own `--use`
+producers, becomes a **cross-image import** — LINK.EXE emits a PLT stub (for CALL
+sites) and/or an import-GOT cell (for GOT/DATA references), recorded in the
+shareable's own `.vms$imp` section (producer soname + symbol-vector index per
+entry). At activation IMGACT applies a producer's `.vms$imp` **transitively**: a
+consumer that imports from a lib shareable, which itself imports from DECC$SHR,
+gets DECC$SHR's bindings pulled in without the consumer naming DECC$SHR directly
+(`imgact.c`, `apply_vms_rel` + the transitive producer-load path, see the
+"transitive imports" comments near `load_ovmx_producer`). This is the spine
+increment that unblocks every real OVMX-library migration (the b65 chain, §7.6):
+a library can both **export** universals in its own `.vms$sv` and **import** libc/
+pthread universals from DECC$SHR in the same image.
+Test: `src/imgact/test/run_shareable_import_activation.sh` (TESTLIB$SHR.EXE
+exports `lib_compute`, imports `pthread_mutex_lock`/`unlock`+`malloc`+`memset`+
+`free` from DECC$SHR; CI job `shareable-import-activate`).
+
+### 7.5 TLS-producer / C-RTL coexistence (vms-616)
+vms-61f.2 made C-RTL TLS ownership and IMGACT-managed TLSDESC ownership **mutually
+exclusive** in one process: musl (once `__init_libc` runs) owns the thread pointer
+and its own TCB layout, and knows nothing about any other image's TLS module. A
+real OVMX library shareable is typically **both** a TLS producer (its own
+`.tdata`/`.tbss` + TLSDESC entries) **and** an importer of libc/pthread universals
+from DECC$SHR — it must coexist with musl's TP ownership rather than own the TP
+itself. `setup_producer_tls_over_crtl()` (`imgact.c`) resolves this: for each
+non-C-RTL producer with a TLS module, IMGACT allocates the module its own
+per-thread block (anonymous `mmap`, module image copied in, `.tbss` zeroed) and
+rewrites the producer's **static** TLSDESC entries relative to musl's
+already-programmed TP — `entry[1] += (block − TP)` — so the standard TLSDESC access
+sequence (`TP + returned offset`) lands inside the IMGACT-owned block without
+replicating musl's private `struct pthread`/DTV internals.
+**Scope, stated in the code**: correct for the **main thread only**, which is all
+OVMX activation exercises today; a program that spawns pthreads would need the
+module registered into each new thread's block by musl itself (a resurrected
+`__tls_get_new` / true DTV registration path) — deferred, tracked as vms-244
+(§7.7).
+Test: `src/imgact/test/run_tls_producer_over_crtl.sh` (TLSLIB$SHR.EXE is a TLS
+producer that also imports from DECC$SHR; CI job `tls-producer-over-crtl`).
+
+### 7.6 The b65 library-migration template (vms-b65.1)
+`src/vmsprocess` is the **first real OVMX library** migrated onto the VMS-native
+toolchain, and the worked template for the rest of the chain (`libvms` → `vmslnm`
+→ `vmsfs` → `vmsrms` → `vmsdcl`). Recipe (`src/vmslink/mk_vmsprocess_shr.sh`):
+
+1. Compile the library's translation units `-fPIC -O2 -ffreestanding -fno-builtin
+   -fno-stack-protector -mno-outline-atomics` (musl target). `-fno-builtin` keeps
+   `memset`/`strncpy`/... as real `CALL26` imports to DECC$SHR instead of inlined
+   builtins; `-mno-outline-atomics` avoids `__aarch64_*` outline-atomic helpers
+   DECC$SHR does not export (small inline atomics stay lock-free).
+2. Enumerate universals (every non-static function defined across the objects) →
+   the `--symbol-vector` list, all `PROCEDURE`, cross-checked against the library's
+   public header. Order is append-only (§3, upward compatibility) — never reorder
+   or delete once a consumer binds an index.
+3. Enumerate imports (`nm *.o | awk '$1=="U"'`) and confirm every one is already a
+   DECC$SHR universal; append any gap to `mk_decc_shr.sh`'s vector (never insert —
+   append-only keeps existing consumers' bound indices valid, a GSMATCH `LEQUAL`-
+   compatible change). `getpid` was the one gap found for vmsprocess
+   (`vms_get_current_process`).
+4. `LINK.EXE --shareable --use DECC$SHR --symbol-vector "<vec>" --gsmatch
+   LEQUAL,1,0 -o LIB<NAME>$SHR.EXE <objs>` — **strict**, no `--allow-undefined`:
+   every libc/pthread import must bind.
+5. Verify: an executable `LINK.EXE --executable --use LIB<NAME>$SHR` a consumer,
+   run it for real, assert a VMS-correct result via exit code; DECC$SHR's own
+   bindings arrive transitively through the lib's `.vms$imp` (§7.4).
+
+**vmsprocess concretely**: `LIBVMSPROCESS$SHR.EXE` exports the process-control
+universals (`vms_pcb_*`, `eflag_*`, `ast_*`, `access_mode_*`, `priv_*`,
+`vms_get_current_process`/`vms_pid_from_linux`/`vms_format_uic`/`vms_parse_uic`)
+and imports `pthread_mutex_*`/`pthread_cond_*`, `malloc`/`calloc`/`free`,
+`memset`/`strncpy`/`snprintf`/`sscanf`, `getpid`, `close`/`raise`/`sigaction`/
+`sigemptyset` from DECC$SHR — exercising §7.4 (cross-image import binding) and
+§7.5 (TLS coexistence) **together**, since it is also a TLS producer. Its
+per-thread state is consolidated into a **single** TLS-defining object
+(`vms_pcb.c`'s `current_pcb`): `vms_process.c`'s process-snapshot cache
+(`vms_get_current_process`) is deliberately a plain (non-`__thread`) fallback
+static keyed off the PCB rather than a second `__thread` variable, because
+LINK.EXE supports only one TLS-defining object per image (§7.7) — vmsprocess was
+shaped to fit that constraint rather than the constraint being lifted.
+Test: `src/imgact/test/run_vmsprocess_native.sh` (CI job `vmsprocess-native`,
+`vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)`).
+
+### 7.7 Known limitations (as-built, tracked)
+- **Multi-module TLS unsupported** — `emit_shareable` accepts only **one**
+  TLS-defining object per image; a second object in the same image with its own
+  `.tdata`/`.tbss` aborts the link (`link.c`: `"multi-module TLS not supported yet
+  (one TLS object per image)"`). Multiple `__thread` variables **within** one
+  object are fine (they merge into that object's `.tbss`). This is why vmsprocess
+  (§7.6) consolidated onto a single TLS object rather than the linker growing a
+  general multi-object TLS layout. General support (per-object TLS offsets merged
+  into one image TLS block + `.vms$tls` fixups) is tracked as **vms-212**, along
+  with the related **ABS64-to-producer cross-image data pointer** gap: §7.1's
+  `.rela.data` ABS64 handling resolves pointer initializers **within** an image
+  (via `.vms$rel`), but an ABS64 reference to a symbol defined only in a `--use`
+  producer is not bound the way CALL/GOT cross-image imports are (§7.4) — not yet
+  supported.
+- **Producer TLS is single-thread today** — `setup_producer_tls_over_crtl()`
+  (§7.5) is correct for the process's main thread, which is all current OVMX
+  activation exercises. A program that spawns additional pthreads would need each
+  new thread's block populated with the producer's TLS module by musl itself (a
+  DTV-registration path), which is not implemented. Tracked as **vms-244**.

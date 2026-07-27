@@ -40,6 +40,27 @@ build the tool; see ../Makefile in this directory for the wrapper target.
 "mob" is a rolling branch — this is a COMMIT PIN, not a live tracking ref;
 re-vendor explicitly (below) to move it, never assume "mob" means latest.
 
+CAUGHT DEFECT (fixed): the vendored src/.gitignore ships patterns meant
+for tinycc's OWN working tree (build artifacts) but two of them also
+matched real upstream files, so a plain `git add` silently dropped them.
+Audited by diffing `git ls-files` in a fresh upstream checkout of the
+pinned commit against the committed third-party/tcc/src tree:
+  - src/conftest.c  — matched src/.gitignore's `conftest*` pattern, but
+    IS a real upstream source file: configure's compiler probe compiles
+    it, and the top-level Makefile compiles it with -DC2STR to build
+    c2str.exe (needed to generate tccdefs_.h). REQUIRED — force-added
+    with `git add -f` (see the commit that added this note).
+  - src/win32/include/tcc/tcc_libm.h — matched src/.gitignore's
+    `win32/include/tcc/tccdefs.h`-adjacent win32 exclusions (this whole
+    win32/include/tcc/ subtree is win32-only). Confirmed NOT needed: only
+    referenced from win32/include/math.h (`#include "tcc/tcc_libm.h"`),
+    which is itself excluded and irrelevant to our native Linux aarch64
+    build. Left excluded — this is a correct, audited omission, not an
+    oversight.
+No other upstream files were found excluded (full `git ls-files` diff
+against the pinned commit shows exactly these two after the conftest.c
+fix, and only the second is intentional).
+
 To re-vendor at a new pin:
   git clone https://github.com/TinyCC/tinycc.git /tmp/tcc-src
   git -C /tmp/tcc-src checkout <new-ref>

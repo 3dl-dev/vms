@@ -282,6 +282,22 @@ uint32_t sys$dlcefc(const struct dsc$descriptor_s *name);
 uint32_t sys$gettim(uint64_t *timadr);
 
 /**
+ * sys$getutc - Get current system time in UTC.
+ *
+ * @param timadr  Pointer to quadword to receive 64-bit VMS time
+ *
+ * @return  SS$_NORMAL on success
+ *
+ * Like sys$gettim, but always returns Coordinated Universal Time
+ * regardless of the process/system time zone differential factor.
+ * OVMX's internal clock (CLOCK_REALTIME) is already UTC-based with no
+ * local offset applied, so sys$getutc and sys$gettim currently return
+ * identical values; the separate entry point is provided for source
+ * compatibility with programs that call SYS$GETUTC explicitly.
+ */
+uint32_t sys$getutc(uint64_t *timadr);
+
+/**
  * sys$numtim - Convert binary time to numeric components
  *
  * @param timbuf  Array of 7 words: year, month, day, hour, minute, second, hundredths
@@ -605,6 +621,26 @@ uint32_t sys$expreg(
     void *retadr,
     uint32_t acmode,
     uint32_t region
+);
+
+/**
+ * sys$purgws - Purge working set
+ *
+ * @param inadr  Address range to purge (two-pointer array: start, end;
+ *               see VA_RANGE in va_rangedef.h)
+ *
+ * @return  SS$_NORMAL on success, SS$_BADPARAM if inadr is NULL
+ *
+ * On real VMS, removes all but a minimal number of resident pages in
+ * the given range from the process's working set. OVMX processes are
+ * demand-paged by the Linux VMM rather than a VMS-style adjustable
+ * working set, so there is no equivalent resident-page list to trim;
+ * OVMX validates the address range and returns success without
+ * further action (consistent with how sys$cretva/sys$deltva above
+ * already treat page-residency-adjacent parameters as no-ops).
+ */
+uint32_t sys$purgws(
+    const void *inadr
 );
 
 /**

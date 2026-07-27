@@ -122,6 +122,27 @@ uint32_t sys$deltva(const void *inadr, void *retadr, uint32_t acmode) {
 }
 
 /*
+ * sys$purgws - Purge working set.
+ *
+ * inadr points to a two-pointer [start, end] range (see VA_RANGE in
+ * va_rangedef.h). OVMX processes are demand-paged by the Linux VMM
+ * rather than a VMS-style adjustable working set, so there is no
+ * resident-page list to trim; validate the range and return success
+ * without further action, matching how sys$cretva/sys$deltva above
+ * already treat page-residency-adjacent parameters as no-ops.
+ */
+uint32_t sys$purgws(const void *inadr) {
+    if (!inadr) return SS$_BADPARAM;
+
+    const void **in = (const void **)inadr;
+    uintptr_t start = (uintptr_t)in[0];
+    uintptr_t end = (uintptr_t)in[1];
+    if (end < start) return SS$_BADPARAM;
+
+    return SS$_NORMAL;
+}
+
+/*
  * sys$crmpsc - Create and Map a Section.
  *
  * Maps a file (identified by chan) into the process address space.

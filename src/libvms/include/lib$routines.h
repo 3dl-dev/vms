@@ -24,6 +24,12 @@
 extern "C" {
 #endif
 
+/* Forward declaration - full definition in lnmdef.h. Only used here
+ * as a pointer type (lib$set_logical's optional item list), so a
+ * forward declaration avoids requiring every lib$routines.h includer
+ * to also pull in lnmdef.h. */
+struct item_list_3;
+
 /* ================================================================
  * Memory Management Routines
  * ================================================================ */
@@ -541,6 +547,108 @@ uint32_t lib$set_symbol(
     const struct dsc$descriptor_s *symbol,
     const struct dsc$descriptor_s *value,
     const uint32_t *table_type
+);
+
+/**
+ * lib$delete_symbol - Delete a CLI symbol
+ *
+ * @param symbol       Pointer to descriptor of symbol name
+ * @param table_type   Optional pointer to table type indicator
+ *                      (LIB$K_CLI_LOCAL_SYM or LIB$K_CLI_GLOBAL_SYM;
+ *                      defaults to LOCAL if not supplied)
+ *
+ * @return  SS$_NORMAL on success, LIB$_NOSUCHSYM if not found
+ */
+uint32_t lib$delete_symbol(
+    const struct dsc$descriptor_s *symbol,
+    const uint32_t *table_type
+);
+
+/* ================================================================
+ * Logical Name Routines (simplified interface)
+ * ================================================================ */
+
+/**
+ * lib$set_logical - Define a logical name (simplified interface)
+ *
+ * @param lognam   Pointer to descriptor of the logical name
+ * @param eqvnam   Optional pointer to descriptor of the equivalence
+ *                 string (used to build a one-entry item list when
+ *                 itmlst is not supplied)
+ * @param tabnam   Optional pointer to descriptor of the table name
+ *                 (defaults to LNM$PROCESS_TABLE)
+ * @param attr     Optional pointer to attribute flags
+ * @param itmlst   Optional pointer to an item list, passed through
+ *                 to SYS$CRELNM verbatim if supplied
+ *
+ * @return  SS$_NORMAL or SS$_SUPERSEDE on success
+ */
+uint32_t lib$set_logical(
+    const struct dsc$descriptor_s *lognam,
+    const struct dsc$descriptor_s *eqvnam,
+    const struct dsc$descriptor_s *tabnam,
+    const uint32_t *attr,
+    const struct item_list_3 *itmlst
+);
+
+/**
+ * lib$delete_logical - Delete a logical name (simplified interface)
+ *
+ * @param lognam  Pointer to descriptor of the logical name
+ * @param tabnam  Optional pointer to descriptor of the table name
+ *                (defaults to LNM$PROCESS_TABLE)
+ *
+ * @return  SS$_NORMAL on success, SS$_NOLOGNAM if not found
+ */
+uint32_t lib$delete_logical(
+    const struct dsc$descriptor_s *lognam,
+    const struct dsc$descriptor_s *tabnam
+);
+
+/* ================================================================
+ * Dynamic String Descriptor Routines
+ * ================================================================ */
+
+/**
+ * lib$sget1_dd - Allocate one dynamic string descriptor
+ *
+ * @param len     Pointer to longword requested length in bytes
+ * @param dyndsc  Pointer to the dynamic descriptor to initialize
+ *
+ * @return  SS$_NORMAL on success, SS$_INSFMEM if allocation fails
+ */
+uint32_t lib$sget1_dd(
+    const uint32_t *len,
+    struct dsc$descriptor_d *dyndsc
+);
+
+/**
+ * lib$sfree1_dd - Free one dynamic string descriptor
+ *
+ * @param dyndsc  Pointer to the dynamic descriptor to free (declared
+ *                as a raw 64-bit pointer to match the
+ *                "(unsigned __int64 *)&desc" cast used at call sites;
+ *                reinterpreted internally as
+ *                struct dsc$descriptor_d *)
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$sfree1_dd(
+    uint64_t *dyndsc
+);
+
+/**
+ * lib$sfreen_dd - Free N dynamic string descriptors in one call
+ *
+ * @param n            Pointer to longword count of descriptors
+ * @param dyndsc_array  Pointer to first element of an array of
+ *                       dynamic descriptors
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$sfreen_dd(
+    const uint32_t *n,
+    struct dsc$descriptor_d *dyndsc_array
 );
 
 /* ================================================================

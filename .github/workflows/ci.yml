@@ -998,20 +998,18 @@ jobs:
   # print "hello" and exit 0 (mirrors mk_dcl.sh:112-115 / run_dcl_native.sh).
   #
   # GATED BY TCC_EXPECT_LINK (env flag, mirrors DCL_EXPECT_LINK above): set to
-  # 0 here (non-blocking) because the LINK.EXE step is a KNOWN, CONFIRMED,
-  # escalated architecture gap as of vms-4ba.3 — tcc's arm64 backend GOT-
-  # references EVERY symbol including locally-defined statics/string-literal
-  # labels (arm64-gen.c arm64_sym(), unconditional for ELF, no invocation flag
-  # avoids it), and LINK.EXE's GOT-slot resolver only searches the GLOBAL
-  # symbol hash (build_symhash() skips STB_LOCAL binds, link.c:755) — so it
-  # reports the (defined) local symbol as an undefined GOT import. This is a
-  # LINK.EXE-side resolution gap, not a reloc-type gap, and is out of the
-  # Systems-Engineer file-domain for this bead (see the vms-4ba.3 escalation:
-  # do not edit link.c/imgact.c to route around it). Everything up to the
-  # LINK.EXE step (tcc build + hello.o codegen-shape assertions + the six-
-  # library producer graph) runs and is asserted for real on every CI run;
-  # flip TCC_EXPECT_LINK=1 locally (or here, once link.c's GOT resolution is
-  # fixed) to re-check the full activation DONE condition as a hard gate.
+  # 1 here (BLOCKING) as of vms-9c1 — LINK.EXE's GOT-slot resolver now resolves
+  # tcc's GOT references to DEFINED LOCAL symbols (statics, string-literal labels
+  # 'L.n'). Previously tcc's arm64 backend GOT-references EVERY symbol including
+  # locally-defined statics (arm64-gen.c arm64_sym(), unconditional for ELF),
+  # while LINK.EXE only searched the GLOBAL symbol hash (build_symhash() skips
+  # STB_LOCAL binds, link.c:755) — reporting the defined local as an undefined
+  # GOT import. vms-9c1 gives every LOCAL-bind GOT reference a PER-OBJECT
+  # (obj,sym) slot resolved via placed_addr(), so single-TU HELLO.EXE AND the
+  # multi-TU cross-collision case (XTU.EXE, two TUs each with their own local
+  # 'L.1') both link and activate. The full DONE-condition round-trip (tcc build
+  # -> hello.o/tu*.o -> LINK.EXE --executable -> IMGACT activation) is now a hard
+  # gate. Set TCC_EXPECT_LINK=0 only to soften the LINK.EXE step while iterating.
   # -----------------------------------------------------------------------
   tcc-object-native:
     name: tcc Object LINK.EXE Compatibility (S2 crux, musl)
@@ -1027,13 +1025,13 @@ jobs:
         with:
           platforms: arm64
 
-      - name: Build stock tcc, compile hello.c, attempt LINK.EXE --executable + IMGACT activation (arm64)
+      - name: Build stock tcc, compile hello.c + cross-TU objects, LINK.EXE --executable + IMGACT activation (arm64)
         run: |
           docker run --rm --platform linux/arm64 \
             -v "${{ github.workspace }}":/src -w /src \
             docker.io/library/alpine:3.20 sh -c '
               set -e
               apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
-              export CC=gcc WORK=/tmp/tcc-object-native TCC_EXPECT_LINK=0
+              export CC=gcc WORK=/tmp/tcc-object-native TCC_EXPECT_LINK=1
               sh /src/src/imgact/test/run_tcc_object_native.sh
             '

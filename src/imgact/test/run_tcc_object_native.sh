@@ -209,12 +209,13 @@ while read -r nm; do
     readelf -s "$WORK/hello.o" | awk -v n="$nm" '$5=="LOCAL" && $NF==n{f=1} END{exit !f}' && LOCAL_GOT="$LOCAL_GOT $nm"
 done < "$WORK/got_syms.txt"
 if [ -n "$LOCAL_GOT" ]; then
-    echo "   FINDING: hello.o GOT-references LOCAL-bind symbol(s):$LOCAL_GOT — this is the"
-    echo "   vms-4ba.2 §5.3 residual risk manifesting. LINK.EXE's build_symhash() skips"
-    echo "   STB_LOCAL symbols (link.c:755), so resolve_named() cannot find these GOT"
-    echo "   targets even though they ARE defined in this object. The LINK.EXE step below"
-    echo "   is expected to hard-fail with '%LINK-F-ERROR, GOT symbol undefined' unless"
-    echo "   TCC_EXPECT_LINK=0 softens it — see the vms-4ba.3 escalation."
+    echo "   PRESENT: hello.o GOT-references LOCAL-bind symbol(s):$LOCAL_GOT — the"
+    echo "   vms-4ba.2 §5.3 residual risk. Pre-vms-9c1 this hard-failed: LINK.EXE's"
+    echo "   build_symhash() skips STB_LOCAL (link.c:755) so resolve_named() could not"
+    echo "   find these defined locals ('%LINK-F-ERROR, GOT symbol undefined'). vms-9c1"
+    echo "   fixed it: LINK.EXE now gives each LOCAL-bind GOT reference a per-object"
+    echo "   (obj,sym) slot resolved via placed_addr(), so the LINK.EXE step below"
+    echo "   RESOLVES these locals and links cleanly (hard gate under TCC_EXPECT_LINK=1)."
 else
     echo "   No LOCAL-bind GOT-referenced symbols in this particular hello.o build — the"
     echo "   residual risk did not manifest for this exact program (compiler-version /"
@@ -276,9 +277,99 @@ grep -q 'hello' "$WORK/hello.out" || { echo "FAIL: HELLO.EXE did not print 'hell
 [ "$RC" -eq 0 ] || { echo "FAIL: HELLO.EXE did not exit clean (got $RC)"; exit 1; }
 
 echo
-echo "MILESTONE (vms-4ba.3, S2 CRUX): stock, UNMODIFIED tinycc ($(sed -n 's/^Pinned commit:\s*//p' "$TCC_DIR/VENDOR-REV")),"
-echo "compiling with DEFAULT flags (no -gstabs, no __thread), emits an aarch64 ELF"
-echo "object that OVMX's LINK.EXE accepts AS-IS (no linker change) into a VMS-native"
-echo "EXECUTABLE image, which IMGACT.EXE activates — printf runs through DECC\$SHR,"
-echo "no ld / no ld.so. The vms-4ba.2 reloc-gap ruling holds end-to-end. Unblocks"
+echo "================================================================================"
+echo "== CROSS-TU LOCAL-COLLISION test (vms-9c1 DONE condition 2) =="
+echo "================================================================================"
+# Two translation units, compiled SEPARATELY by tcc. Each independently defines
+# its own static object AND its own string literal — tcc's per-compilation label
+# counter resets each `tcc -c`, so BOTH TUs emit a local `L.1`, `L.2`, ... . tcc
+# GOT-references every one of them (arm64-gen.c:495-508). If LINK.EXE keyed local
+# GOT slots by NAME (the pre-vms-9c1 bug would instead not resolve them at all;
+# a naive name-keyed fix would COLLIDE), tu_a's `L.1` and tu_b's `L.1` would share
+# a single GOT slot and one TU would read the OTHER's data. vms-9c1 gives every
+# LOCAL-bind GOT reference a PER-OBJECT (oi, symidx) slot, so the two same-named
+# locals resolve to DISTINCT addresses. The program below OBSERVES both correct,
+# distinct values (its own tag string + its own static int); any collision would
+# make a_report() print b_tag / b_val (or vice-versa) or mis-return, and the
+# activated image would exit nonzero. This is a REAL activation, not a mock.
+cat > "$WORK/tu_a.c" <<'EOF'
+#include <stdio.h>
+static const char a_tag[] = "AAA-local-a";   /* local object -> L.n, GOT-ref'd */
+static int a_val = 111;                       /* local static  -> GOT-ref'd     */
+int a_report(void)
+{
+    printf("A:%s:%d\n", a_tag, a_val);        /* format string is ALSO a local L.n */
+    return a_val;
+}
+EOF
+cat > "$WORK/tu_b.c" <<'EOF'
+#include <stdio.h>
+static const char b_tag[] = "BBB-local-b";   /* independent TU: its OWN L.1 too */
+static int b_val = 222;
+int b_report(void)
+{
+    printf("B:%s:%d\n", b_tag, b_val);
+    return b_val;
+}
+EOF
+cat > "$WORK/xtu_main.c" <<'EOF'
+#include <stdio.h>
+extern int a_report(void);
+extern int b_report(void);
+int main(void)
+{
+    int a = a_report();
+    int b = b_report();
+    /* If the two TUs' local L.n GOT slots collided, one of these is wrong. */
+    if (a != 111) { printf("BAD: a_val=%d (expected 111)\n", a); return 3; }
+    if (b != 222) { printf("BAD: b_val=%d (expected 222)\n", b); return 4; }
+    printf("XTU-OK\n");
+    return 0;
+}
+EOF
+"$TCC" -c "$WORK/tu_a.c"     -o "$WORK/tu_a.o"
+"$TCC" -c "$WORK/tu_b.c"     -o "$WORK/tu_b.o"
+"$TCC" -c "$WORK/xtu_main.c" -o "$WORK/xtu_main.o"
+
+echo "-- confirm BOTH tu_a.o and tu_b.o GOT-reference a LOCAL symbol named 'L.1' (the collision the fix must survive) --"
+for o in tu_a tu_b; do
+    readelf -s "$WORK/$o.o" | awk '$5=="LOCAL" && $NF=="L.1"{f=1} END{exit !f}' \
+      || echo "   NOTE: $o.o has no LOCAL 'L.1' (tcc label naming differs in this build) — the test still exercises distinct per-TU locals"
+done
+
+echo "-- link XTU.EXE from THREE tcc objects (each with its own local L.n) — vms-9c1 --"
+set +e
+"$WORK/LINK.EXE" --executable \
+    --use "$SYSLIB/DECC\$SHR.EXE" --use "$SYSLIB/LIBVMS\$SHR.EXE" --use "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
+    --use "$SYSLIB/LIBVMSFS\$SHR.EXE" --use "$SYSLIB/LIBVMSLNM\$SHR.EXE" --use "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
+    -o "$SYSEXE/XTU.EXE" "$WORK/xtu_main.o" "$WORK/tu_a.o" "$WORK/tu_b.o" 2>"$WORK/xtu_link.err"
+XLRC=$?
+set -e
+echo "-- LINK.EXE --executable (cross-TU) exit=$XLRC; message: --"
+tail -5 "$WORK/xtu_link.err" | sed 's/^/   /'
+[ "$XLRC" -eq 0 ] || { echo "FAIL: XTU.EXE link failed — vms-9c1 local GOT resolution regression"; exit 1; }
+chmod +x "$SYSEXE/XTU.EXE"
+
+echo "-- activate XTU.EXE through IMGACT.EXE and observe BOTH distinct locals --"
+set +e
+"$SYSEXE/XTU.EXE" > "$WORK/xtu.out" 2>&1
+XRC=$?
+set -e
+echo "-- program output: --"; sed 's/^/   /' "$WORK/xtu.out"
+echo "exit code = $XRC"
+grep -q '^A:AAA-local-a:111$' "$WORK/xtu.out" || { echo "FAIL: TU A did not observe its OWN local tag/value (cross-TU local GOT slots collided)"; exit 1; }
+grep -q '^B:BBB-local-b:222$' "$WORK/xtu.out" || { echo "FAIL: TU B did not observe its OWN local tag/value (cross-TU local GOT slots collided)"; exit 1; }
+grep -q '^XTU-OK$'            "$WORK/xtu.out" || { echo "FAIL: XTU.EXE did not reach XTU-OK (a local resolved to the wrong address)"; exit 1; }
+[ "$XRC" -eq 0 ] || { echo "FAIL: XTU.EXE did not exit clean (got $XRC) — a cross-TU local resolved wrong"; exit 1; }
+echo "-- confirmed: two separately-compiled TUs' same-named locals resolved to DISTINCT addresses --"
+
+echo
+echo "MILESTONE (vms-4ba.3 + vms-9c1, S2 CRUX): stock, UNMODIFIED tinycc ($(sed -n 's/^Pinned commit:\s*//p' "$TCC_DIR/VENDOR-REV")),"
+echo "compiling with DEFAULT flags (no -gstabs, no __thread), emits aarch64 ELF"
+echo "objects that OVMX's LINK.EXE links (single-TU HELLO.EXE and multi-TU XTU.EXE)"
+echo "into VMS-native EXECUTABLE images, which IMGACT.EXE activates — printf runs"
+echo "through DECC\$SHR, no ld / no ld.so. vms-9c1 closed the last gap: LINK.EXE now"
+echo "resolves tcc's GOT references to DEFINED LOCAL symbols (statics, string-literal"
+echo "labels 'L.n') via per-object (obj,sym) slots, so cross-TU 'L.1' collisions are"
+echo "impossible. The vms-4ba.2 reloc-gap ruling holds end-to-end. Unblocks"
 echo "vms-4ba.4 (tcc itself running AS an OVMX image)."

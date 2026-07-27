@@ -16,6 +16,7 @@
 #include "vms/privs.h"
 #include "vms/ast.h"
 #include "vms/eflag.h"
+#include "vms/process.h"
 #include "ssdef.h"
 
 static int failures = 0;
@@ -288,16 +289,102 @@ static void test_ast(void)
     vms_pcb_cleanup();
 }
 
+/* ------------------------------------------------------------------ */
+/* Test: UIC format/parse round trip                                   */
+/* ------------------------------------------------------------------ */
+static void test_uic(void)
+{
+    printf("\n--- UIC format/parse ---\n");
+
+    char buf[32];
+
+    /* [1,4] packed as (group<<16)|member, per SET UIC / rms_get_session_uic
+     * convention already used across the codebase. */
+    uint32_t uic = (1u << 16) | 4u;
+    vms_format_uic(uic, buf, sizeof(buf));
+    check(strcmp(buf, "[001,004]") == 0, "vms_format_uic([1,4]) == \"[001,004]\"");
+    check(vms_parse_uic(buf) == uic, "vms_parse_uic round-trips vms_format_uic output");
+
+    /* Bracket-free form also accepted */
+    check(vms_parse_uic("1,4") == uic, "vms_parse_uic accepts bracket-free \"1,4\"");
+
+    /* A larger, more realistic group/member pair */
+    uint32_t uic2 = (0377u << 16) | 0012u;
+    vms_format_uic(uic2, buf, sizeof(buf));
+    check(vms_parse_uic(buf) == uic2, "vms_parse_uic round-trips [377,012]");
+
+    /* Zero UIC round-trips too */
+    vms_format_uic(0, buf, sizeof(buf));
+    check(strcmp(buf, "[000,000]") == 0, "vms_format_uic(0) == \"[000,000]\"");
+    check(vms_parse_uic(buf) == 0, "vms_parse_uic(\"[000,000]\") == 0");
+
+    /* Invalid input: NULL and malformed strings return 0 rather than
+     * crashing (the header declares no error-status return path). */
+    check(vms_parse_uic(NULL) == 0, "vms_parse_uic(NULL) == 0");
+    check(vms_parse_uic("garbage") == 0, "vms_parse_uic(\"garbage\") == 0");
+
+    /* NULL/zero-size buffer must not crash */
+    vms_format_uic(uic, NULL, sizeof(buf));
+    vms_format_uic(uic, buf, 0);
+    check(1, "vms_format_uic tolerates NULL/zero-size buffer");
+}
+
+/* ------------------------------------------------------------------ */
+/* Test: vms_pid_from_linux                                            */
+/* ------------------------------------------------------------------ */
+static void test_pid_from_linux(void)
+{
+    printf("\n--- vms_pid_from_linux ---\n");
+
+    check(vms_pid_from_linux(1234) == 1234u, "vms_pid_from_linux(1234) == 1234");
+    check(vms_pid_from_linux(getpid()) == (uint32_t)getpid(),
+          "vms_pid_from_linux(getpid()) == (uint32_t)getpid()");
+}
+
+/* ------------------------------------------------------------------ */
+/* Test: vms_get_current_process                                       */
+/* ------------------------------------------------------------------ */
+static void test_current_process(void)
+{
+    printf("\n--- vms_get_current_process ---\n");
+
+    struct vms_pcb *pcb = vms_pcb_init(0);
+    if (!pcb) { check(0, "vms_pcb_init for current-process test"); return; }
+
+    vms_pcb_set_identity(0x777, (0020u << 16) | 0015u, "TESTUSER", "TESTPRC");
+
+    vms_process_t *proc = vms_get_current_process();
+    check(proc != NULL, "vms_get_current_process returns non-NULL");
+    check(proc->linux_pid == getpid(), "current process linux_pid == getpid()");
+    check(proc->vms_pid == 0x777, "current process vms_pid reflects PCB identity");
+    check(proc->uic == ((0020u << 16) | 0015u), "current process uic reflects PCB identity");
+    check(strcmp(proc->username, "TESTUSER") == 0, "current process username reflects PCB identity");
+    check(strcmp(proc->prcnam, "TESTPRC") == 0, "current process prcnam reflects PCB identity");
+
+    vms_pcb_cleanup();
+
+    /* Without an initialized PCB, still returns a usable struct keyed
+     * off the real Linux PID rather than NULL or garbage. */
+    vms_process_t *proc2 = vms_get_current_process();
+    check(proc2 != NULL, "vms_get_current_process returns non-NULL with no PCB");
+    check(proc2->linux_pid == getpid(), "no-PCB current process linux_pid == getpid()");
+    check(proc2->vms_pid == vms_pid_from_linux(getpid()),
+          "no-PCB current process vms_pid falls back to vms_pid_from_linux(getpid())");
+}
+
 int main(void)
 {
     printf("=== vmsprocess unit tests ===\n");
 
     test_pcb();
     test_privs();
+    test_uic();
+    test_pid_from_linux();
 
     /* Re-init PCB for subsequent tests that need it */
     test_event_flags();
     test_ast();
+    test_current_process();
 
     if (failures == 0)
         printf("\nAll vmsprocess tests passed.\n");

@@ -65,10 +65,17 @@ echo "$OUT" | grep -E 'PROCEDURE +value=0x0{16}' \
     && { echo "FAIL: a universal resolved to address 0"; exit 1; } || true
 
 echo
-echo "== the compiler-runtime builtins are INTERNAL, not exported =="
-# __addtf3 & friends are linked in (from libgcc.a) but must NOT appear in the
-# symbol vector — a C-RTL consumer never calls them directly.
-for b in __addtf3 __trunctfdf2 __multc3 __fixtfsi; do
+echo "== unneeded compiler-runtime builtins stay INTERNAL, not exported =="
+# Most of libgcc.a's builtins are linked in but never appear in the symbol
+# vector — a C-RTL consumer never calls them directly. EXCEPTION (vms-4ba.4):
+# __addtf3/__trunctfdf2 and 16 other IEEE-quad ("tf", 128-bit long double)
+# helpers WERE promoted to real universals for tcc-as-an-OVMX-image (TCC.EXE
+# is a genuine cross-image CONSUMER of them — its own long-double constant
+# folding calls them, unlike every prior consumer) — see mk_decc_shr.sh's
+# vms-4ba.4 comment block for the full list. __multc3 (complex multiply) and
+# __fixtfsi (another tf conversion, unused by tcc) are NOT in that list and
+# must stay internal-only, so they remain the regression check here.
+for b in __multc3 __fixtfsi; do
     echo "$OUT" | grep -qE "PROCEDURE .* $b\$" \
         && { echo "FAIL: compiler-runtime builtin $b leaked into .vms\$sv"; exit 1; } \
         || true

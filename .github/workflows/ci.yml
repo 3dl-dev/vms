@@ -1035,3 +1035,53 @@ jobs:
               export CC=gcc WORK=/tmp/tcc-object-native TCC_EXPECT_LINK=1
               sh /src/src/imgact/test/run_tcc_object_native.sh
             '
+
+  # -----------------------------------------------------------------------
+  # tcc-native — S2 ENDPOINT proof (bead vms-4ba.4, epic vms-4ba "self-host
+  # S2: a C compiler as an OVMX image"). Builds stock, UNMODIFIED tinycc AS a
+  # VMS-native EXECUTABLE image (TCC.EXE, via the new src/vmslink/mk_tcc.sh
+  # recipe: 11 tcc TUs compiled with the proven freestanding musl CFLAGS,
+  # linked via LINK.EXE --executable --use {DECC$SHR + the five OVMX
+  # shareables}). IMGACT.EXE activates TCC.EXE (no ld / no ld.so), the
+  # ACTIVATED tcc compiles a real hello.c to hello.o, and that hello.o
+  # round-trips through the vms-4ba.3 LINK.EXE path into HELLO.EXE, which
+  # IMGACT-activates and prints "hello", exit 0.
+  #
+  # DECC$SHR gained 39 more PROCEDURE universals for this bead (libgcc IEEE-
+  # quad long-double helpers + POSIX calls tcc needs) — see mk_decc_shr.sh's
+  # vms-4ba.4 comment block. One tcc cross-image reference (`environ`,
+  # tccrun.c's `-run` JIT path — dead code for `tcc -c`) is deliberately left
+  # as a deferred import (--allow-undefined) rather than exported, because
+  # exporting it hits a genuine LINK.EXE gap (universal-vector resolution runs
+  # before BSS section placement) that is out of Systems-Engineer file-domain
+  # to fix here; mk_tcc.sh hard-asserts the deferred count is exactly 1.
+  #
+  # TCC_EXPECT_LINK (mirrors DCL_EXPECT_LINK / the tcc-object-native job
+  # above): set to 1 here (BLOCKING) — the vms-4ba.3 CRUX (vms-9c1) is closed,
+  # so a LINK.EXE failure on TCC.EXE's own build or the hello.o round-trip is
+  # a real regression.
+  # -----------------------------------------------------------------------
+  tcc-native:
+    name: TCC.EXE VMS-native Link + Activate (self-hosting S2 endpoint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build TCC.EXE VMS-native, activate it, compile hello.c -> hello.o, round-trip through LINK.EXE + IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/tcc-native TCC_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_tcc_native.sh
+            '

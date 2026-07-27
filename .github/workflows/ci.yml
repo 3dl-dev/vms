@@ -484,6 +484,46 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # Job 9b: OVMX_IMGACT build mode + activation (musl, x86_64)
+  #
+  # x86_64 counterpart of Job 9 (imgact-build-mode) + the IMGACT activation
+  # proof, gating bead vms-be5. GitHub runners ARE x86_64, so this runs the
+  # NATIVE x86_64 musl Alpine image with NO emulation (contrast the aarch64
+  # jobs, which need setup-qemu-action). Two proofs:
+  #   1. verify_imgact_cmake_x86_64.sh — configure+build the whole tree with
+  #      -DOVMX_IMGACT=ON, assert PT_INTERP=IMGACT.EXE + DT_HASH layout, no
+  #      GNU_HASH, and TLS uses the TLSDESC dialect (-mtls-dialect=gnu2) with
+  #      no general-dynamic __tls_get_addr relocs the x86_64 IMGACT can't bind.
+  #   2. run_test_x86_64.sh — build the x86_64 IMGACT.EXE backend and activate
+  #      a gnu2-TLSDESC shareable + PT_INTERP consumer FOR REAL (QEMU=env, i.e.
+  #      run natively since the runner is x86_64), then assert the missing-image
+  #      failure path yields %IMGACT-F-IMGNOTFND.
+  # -----------------------------------------------------------------------
+  imgact-x86_64:
+    name: OVMX_IMGACT Build + Activate (musl, x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build + verify + activate OVMX_IMGACT (native x86_64 musl)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers >/dev/null
+              echo "=== 1/2: OVMX_IMGACT x86_64 build + layout + TLSDESC verify ==="
+              CC=gcc READELF=readelf BUILD=/tmp/imgact-build-x86_64 \
+                sh /src/src/imgact/test/verify_imgact_cmake_x86_64.sh
+              echo "=== 2/2: x86_64 IMGACT.EXE activation proof (native, QEMU=env) ==="
+              CC=gcc READELF=readelf QEMU=env \
+                sh /src/src/imgact/test/run_test_x86_64.sh
+            '
+
+  # -----------------------------------------------------------------------
   # Job 10: LINK.EXE — VMS-native linker MVP (aarch64)
   #
   # Gate on the OVMX/VMS linker (bead vms-9dd): builds LINK.EXE + OVMXDUMP,

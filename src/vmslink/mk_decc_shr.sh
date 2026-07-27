@@ -63,6 +63,11 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 # they are not re-listed here.) pthread_once/toupper/ttyname were appended for
 # vms-b65.3 (vmslnm's lnm_get_manager singleton + lnm_setup_defaults terminal
 # logicals). All appended at the END — indices for prior consumers are unchanged.
+# __errno_location + the ctype (isalnum/tolower) + strncasecmp + the dirent
+# (opendir/readdir/closedir) + stat/realpath/unlink universals at the very END
+# were appended for vms-b65.4 (vmsfs's filespec translation, ODS-2 version scan,
+# case-insensitive path resolution, and device-table ops need them). Appended at
+# the END — indices for prior consumers are unchanged (GSMATCH LEQUAL-compatible).
 VEC="\
 __init_libc=PROCEDURE,\
 malloc=PROCEDURE,free=PROCEDURE,calloc=PROCEDURE,realloc=PROCEDURE,\
@@ -88,7 +93,10 @@ pthread_cond_init=PROCEDURE,pthread_cond_wait=PROCEDURE,\
 pthread_cond_broadcast=PROCEDURE,pthread_cond_destroy=PROCEDURE,\
 raise=PROCEDURE,sigaction=PROCEDURE,sigemptyset=PROCEDURE,\
 getpid=PROCEDURE,\
-pthread_once=PROCEDURE,toupper=PROCEDURE,ttyname=PROCEDURE"
+pthread_once=PROCEDURE,toupper=PROCEDURE,ttyname=PROCEDURE,\
+__errno_location=PROCEDURE,isalnum=PROCEDURE,tolower=PROCEDURE,\
+strncasecmp=PROCEDURE,opendir=PROCEDURE,readdir=PROCEDURE,closedir=PROCEDURE,\
+stat=PROCEDURE,realpath=PROCEDURE,unlink=PROCEDURE"
 
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"

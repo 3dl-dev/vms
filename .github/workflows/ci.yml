@@ -950,3 +950,38 @@ jobs:
               export CC=gcc WORK=/tmp/exec-tls
               sh /src/src/imgact/test/run_exec_tls.sh
             '
+
+  # -----------------------------------------------------------------------
+  # DCL-native ENDPOINT (pillar vms-ade / bead vms-b65.6) — S1 of self-hosting
+  # (vms-116). The REAL src/vmsdcl shell (21 TUs) + src/vmsqueue links as a
+  # VMS-native ET_DYN executable via LINK.EXE --executable --use {DECC$SHR + the
+  # five OVMX shareables}: a 22-object main() program with the full intra-image
+  # reloc set, 139 cross-image imports all bound, and its own single-object TLS.
+  # IMGACT.EXE activates it (crt0 recovers argc/argv off the kernel stack) and
+  # DCL runs a scripted session (SHOW TIME + A = 2+3 / SHOW SYMBOL A) to VMS-
+  # correct output, clean exit. NO ld / NO ld.so — the operator's "all VMS" path.
+  # -----------------------------------------------------------------------
+  dcl-native:
+    name: DCL.EXE VMS-native Link + Activate (self-hosting S1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link the real src/vmsdcl into DCL.EXE VMS-native + activate a scripted session through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/dcl-native DCL_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_dcl_native.sh
+            '

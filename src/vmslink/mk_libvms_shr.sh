@@ -103,15 +103,21 @@ for c in $LIST; do
     OBJS="$OBJS $WORK/$b.o"
 done
 
-# Generate the PROCEDURE symbol vector from the compiled objects: every GLOBAL
-# defined-text symbol (nm type 'T') becomes a universal, name-sorted for a
-# deterministic vector. `$` in names (lib$/str$/...) is safe: it comes from
-# command substitution, which is NOT re-expanded when the value is used.
-VEC=$(nm $OBJS 2>/dev/null | awk 'NF==3 && $2=="T"{print $3}' | sort -u \
-      | sed 's/$/=PROCEDURE/' | paste -sd, -)
-[ -n "$VEC" ] || { echo "mk_libvms_shr: FAIL: empty symbol vector (no T symbols?)"; exit 1; }
-NVEC=$(printf '%s' "$VEC" | tr ',' '\n' | grep -c '=PROCEDURE' || true)
-echo "mk_libvms_shr: symbol vector has $NVEC PROCEDURE universals"
+# Generate the symbol vector from the compiled objects. Every GLOBAL defined-text
+# symbol (nm type 'T') becomes a PROCEDURE universal; every GLOBAL defined-DATA
+# symbol (nm type 'D' initialized, 'B' bss/tentative, 'R' rodata) becomes a =DATA
+# universal (vms-bd1/vms-b65.6). A cross-image consumer that GOT-imports one of
+# these tables binds it to the producer's =DATA universal (vms-e65; link.c honors
+# `=DATA`, exactly the stdin/stdout/stderr path). Name-sorted for a deterministic,
+# GSMATCH-stable vector. `$` in names (lib$/str$/...) is safe: it comes from command
+# substitution, which is NOT re-expanded when the value is used.
+VEC=$( { nm $OBJS 2>/dev/null | awk 'NF==3 && $2=="T"{print $3"=PROCEDURE"}'; \
+         nm $OBJS 2>/dev/null | awk 'NF==3 && ($2=="D"||$2=="B"||$2=="R"){print $3"=DATA"}'; } \
+      | sort -u | paste -sd, -)
+[ -n "$VEC" ] || { echo "mk_libvms_shr: FAIL: empty symbol vector (no T/D symbols?)"; exit 1; }
+NPROC=$(printf '%s' "$VEC" | tr ',' '\n' | grep -c '=PROCEDURE' || true)
+NDATA=$(printf '%s' "$VEC" | tr ',' '\n' | grep -c '=DATA' || true)
+echo "mk_libvms_shr: symbol vector has $NPROC PROCEDURE + $NDATA DATA universals"
 
 echo "mk_libvms_shr: LINK.EXE --shareable --use {DECC\$SHR,LIBVMSPROCESS\$SHR,LIBVMSSYS\$SHR,LIBVMSFS\$SHR} -> $OUT"
 # STRICT (no --allow-undefined): every libc/libm/DATA import MUST bind to DECC$SHR,

@@ -29,6 +29,9 @@
 #include <sys/stat.h>
 
 #include "ovmx_image.h"
+#include "ovmx_symvec.h"
+
+#define IMGACT_INTERP "/vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE"
 
 /* --------------------------------------------------------------------------
  * Declared universal symbols (from SYMBOL_VECTOR=).
@@ -63,6 +66,8 @@ struct obj {
     const char   *str;      /* .strtab */
     int           text_ndx; /* .text section index */
     Elf64_Shdr   *text;     /* .text section header */
+    Elf64_Rela   *rela;     /* relocations against .text (SHT_RELA) */
+    int           nrela;
 };
 
 static void *xat(struct obj *o, uint64_t off, uint64_t sz, const char *what)
@@ -116,12 +121,17 @@ static void load_obj(const char *path, struct obj *o)
     if (!o->text) die("input object has no .text section");
     if (!o->sym)  die("input object has no symbol table");
 
-    /* MVP: refuse relocations against .text — we copy bytes verbatim. */
+    /* Collect relocations against .text (SHT_RELA). REL (implicit-addend) is
+     * not emitted by aarch64 gcc; reject it if seen. */
     for (int i = 0; i < o->nsh; i++) {
-        if ((o->sh[i].sh_type == SHT_RELA || o->sh[i].sh_type == SHT_REL) &&
-            o->sh[i].sh_info == (Elf64_Word)o->text_ndx &&
-            o->sh[i].sh_size != 0)
-            die("MVP cannot link a .text with relocations (needs a leaf object)");
+        if (o->sh[i].sh_info != (Elf64_Word)o->text_ndx || o->sh[i].sh_size == 0)
+            continue;
+        if (o->sh[i].sh_type == SHT_REL)
+            die("REL relocations against .text are unsupported (expected RELA)");
+        if (o->sh[i].sh_type == SHT_RELA) {
+            o->rela  = (Elf64_Rela *)(o->buf + o->sh[i].sh_offset);
+            o->nrela = o->sh[i].sh_size / sizeof(Elf64_Rela);
+        }
     }
 }
 
@@ -195,13 +205,276 @@ static void parse_gsmatch(char *spec, uint32_t *kind, uint32_t *maj, uint32_t *m
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((uint64_t)(a) - 1))
 #define PAGE 0x1000u
 
+/* --------------------------------------------------------------------------
+ * Consumer/executable linking: bind imports to producer symbol vectors.
+ * -------------------------------------------------------------------------- */
+
+/* aarch64 instruction encoders for the PLT stub + call patch. */
+static uint32_t enc_adrp(int rd, int64_t page_delta)
+{
+    uint32_t immlo = (uint32_t)(page_delta & 0x3);
+    uint32_t immhi = (uint32_t)((page_delta >> 2) & 0x7FFFF);
+    return 0x90000000u | (immlo << 29) | (immhi << 5) | (uint32_t)rd;
+}
+static uint32_t enc_ldr_u64(int rt, int rn, uint32_t off /*8-aligned*/)
+{
+    return 0xF9400000u | ((off / 8) << 10) | ((uint32_t)rn << 5) | (uint32_t)rt;
+}
+static uint32_t enc_br(int rn) { return 0xD61F0000u | ((uint32_t)rn << 5); }
+
+/* A loaded producer shareable image (read to bind universal symbols). */
+struct producer {
+    char                    name[256];   /* soname used in .vms$imp (basename) */
+    uint8_t                *buf;
+    struct ovmx_sv_header  *sv;
+};
+
+static void load_producer(const char *path, struct producer *p)
+{
+    memset(p, 0, sizeof *p);
+    const char *base = strrchr(path, '/');
+    snprintf(p->name, sizeof p->name, "%s", base ? base + 1 : path);
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) die("cannot open producer image (--use)");
+    struct stat st;
+    if (fstat(fd, &st) < 0) die("fstat producer");
+    p->buf = malloc(st.st_size);
+    if (!p->buf || read(fd, p->buf, st.st_size) != (ssize_t)st.st_size)
+        die("read producer");
+    close(fd);
+
+    Elf64_Ehdr *eh = (Elf64_Ehdr *)p->buf;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) || eh->e_type != ET_DYN)
+        die("producer is not an OVMX shareable image (ET_DYN)");
+    Elf64_Shdr *sh = (Elf64_Shdr *)(p->buf + eh->e_shoff);
+    const char *shstr = (const char *)(p->buf + sh[eh->e_shstrndx].sh_offset);
+    for (int i = 0; i < eh->e_shnum; i++)
+        if (strcmp(shstr + sh[i].sh_name, OVMX_SV_SECTION) == 0)
+            p->sv = (struct ovmx_sv_header *)(p->buf + sh[i].sh_offset);
+    if (!p->sv || p->sv->magic != OVMX_SV_MAGIC)
+        die("producer image has no .vms$sv symbol vector");
+}
+
+/* Find universal `name` across producers -> (producer index, vector index). */
+static int find_universal(struct producer *ps, int np, const char *name,
+                          int *pidx, uint32_t *svidx)
+{
+    for (int p = 0; p < np; p++) {
+        const struct ovmx_sv_entry *e = ovmx_sv_entries(ps[p].sv);
+        const char *nm = ovmx_sv_names(ps[p].sv);
+        for (uint32_t i = 0; i < ps[p].sv->count; i++) {
+            if (e[i].kind == OVMX_SV_RETIRED) continue;
+            if (strcmp(nm + e[i].name_off, name) == 0) {
+                *pidx = p; *svidx = i; return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+struct import {
+    char     name[256];
+    int      pidx;         /* producer index */
+    uint32_t svidx;        /* vector index within that producer */
+    uint64_t plt_va;       /* PLT stub address (assigned at layout) */
+    uint64_t got_va;       /* GOT cell address (assigned at layout) */
+};
+
+/* Emit an OVMX executable image (ET_DYN, PT_INTERP=IMGACT.EXE) whose imports
+ * bind to producer symbol vectors via .vms$imp. IMGACT resolves each import at
+ * activation (ovmx_symvec.h) and writes the address into the GOT cell. */
+static void emit_executable(struct obj *o, struct producer *ps, int np,
+                            const char *out)
+{
+    /* Resolve _start. */
+    uint64_t start_off = 0; int start_found = 0;
+    for (int i = 0; i < o->nsym; i++)
+        if (strcmp(o->str + o->sym[i].st_name, "_start") == 0 &&
+            o->sym[i].st_shndx == (Elf64_Section)o->text_ndx) {
+            start_off = o->sym[i].st_value; start_found = 1;
+        }
+    if (!start_found) die("executable object has no _start in .text");
+
+    /* Collect imports from CALL26/JUMP26 relocations to undefined symbols. */
+    struct import imp[256];
+    int nimp = 0;
+    for (int i = 0; i < o->nrela; i++) {
+        uint32_t type = ELF64_R_TYPE(o->rela[i].r_info);
+        uint32_t si   = ELF64_R_SYM(o->rela[i].r_info);
+        const char *nm = o->str + o->sym[si].st_name;
+        if (type != R_AARCH64_CALL26 && type != R_AARCH64_JUMP26)
+            die("MVP consumer supports only CALL26/JUMP26 relocs in .text");
+        if (o->sym[si].st_shndx != SHN_UNDEF)
+            die("MVP consumer supports only external (imported) calls");
+        int found = -1;
+        for (int k = 0; k < nimp; k++)
+            if (strcmp(imp[k].name, nm) == 0) found = k;
+        if (found < 0) {
+            if (nimp >= 256) die("too many imports");
+            found = nimp++;
+            snprintf(imp[found].name, sizeof imp[found].name, "%s", nm);
+            if (!find_universal(ps, np, nm, &imp[found].pidx, &imp[found].svidx))
+                die("unresolved universal symbol (not in any --use image)");
+        }
+    }
+    if (nimp == 0) die("consumer imports nothing (no external calls to bind)");
+
+    /* ---- Layout ----
+     * [ehdr][phdr x2][.interp][.text][.plt][.got][.vms$imp][.shstrtab][shdrs] */
+    uint64_t off_eh     = 0;
+    uint64_t off_ph     = sizeof(Elf64_Ehdr);
+    int      nph        = 2;
+    uint64_t off_interp = off_ph + nph * sizeof(Elf64_Phdr);
+    uint64_t interp_sz  = strlen(IMGACT_INTERP) + 1;
+    uint64_t off_text   = ALIGN_UP(off_interp + interp_sz, 16);
+    uint64_t text_sz    = o->text->sh_size;
+    uint64_t off_plt    = ALIGN_UP(off_text + text_sz, 4);
+    uint64_t plt_sz     = (uint64_t)nimp * 12;
+    uint64_t off_got    = ALIGN_UP(off_plt + plt_sz, 8);
+    uint64_t got_sz     = (uint64_t)nimp * 8;
+    uint64_t off_imp    = ALIGN_UP(off_got + got_sz, 8);
+
+    /* .vms$imp: dedup producer sonames into a name blob. */
+    char     names[4096]; uint32_t names_sz = 0;
+    uint32_t prod_off[64];
+    for (int p = 0; p < np; p++) {
+        prod_off[p] = names_sz;
+        size_t l = strlen(ps[p].name) + 1;
+        memcpy(names + names_sz, ps[p].name, l);
+        names_sz += (uint32_t)l;
+    }
+    uint64_t imp_hdr    = sizeof(struct ovmx_imp_header);
+    uint64_t imp_ents   = (uint64_t)nimp * sizeof(struct ovmx_imp_entry);
+    uint64_t imp_names_o = imp_hdr + imp_ents;
+    uint64_t imp_size   = imp_names_o + names_sz;
+
+    uint64_t loaded_end = off_imp + imp_size;
+    uint64_t off_shstr  = ALIGN_UP(loaded_end, 4);
+    const char *secn[] = { "", ".interp", ".text", ".plt", ".got",
+                           OVMX_IMP_SECTION, ".shstrtab" };
+    int nsec = 7;
+    uint64_t sn_off[7]; uint64_t sn_sz = 0;
+    for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
+    uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
+    uint64_t file_sz  = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
+
+    uint8_t *img = calloc(1, file_sz);
+    if (!img) die("oom building executable");
+
+    /* vaddr == file offset (single identity-mapped PT_LOAD). */
+    uint64_t text_va = off_text, plt_va = off_plt, got_va = off_got;
+    for (int i = 0; i < nimp; i++) {
+        imp[i].plt_va = plt_va + (uint64_t)i * 12;
+        imp[i].got_va = got_va + (uint64_t)i * 8;
+    }
+
+    /* ELF header */
+    Elf64_Ehdr *eh = (Elf64_Ehdr *)(img + off_eh);
+    memcpy(eh->e_ident, ELFMAG, SELFMAG);
+    eh->e_ident[EI_CLASS] = ELFCLASS64;
+    eh->e_ident[EI_DATA]  = ELFDATA2LSB;
+    eh->e_ident[EI_VERSION] = EV_CURRENT;
+    eh->e_type = ET_DYN; eh->e_machine = EM_AARCH64; eh->e_version = EV_CURRENT;
+    eh->e_entry = text_va + start_off;
+    eh->e_phoff = off_ph; eh->e_shoff = off_shdr;
+    eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf64_Phdr); eh->e_phnum = nph;
+    eh->e_shentsize = sizeof(Elf64_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = 6;
+
+    /* Program headers: PT_INTERP + PT_LOAD (RWX: GOT is written at activation). */
+    Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
+    ph[0].p_type = PT_INTERP; ph[0].p_flags = PF_R;
+    ph[0].p_offset = off_interp; ph[0].p_vaddr = off_interp; ph[0].p_paddr = off_interp;
+    ph[0].p_filesz = interp_sz; ph[0].p_memsz = interp_sz; ph[0].p_align = 1;
+    ph[1].p_type = PT_LOAD; ph[1].p_flags = PF_R | PF_W | PF_X;
+    ph[1].p_offset = 0; ph[1].p_vaddr = 0; ph[1].p_paddr = 0;
+    ph[1].p_filesz = loaded_end; ph[1].p_memsz = loaded_end; ph[1].p_align = PAGE;
+
+    memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
+    memcpy(img + off_text, o->buf + o->text->sh_offset, text_sz);
+
+    /* Patch CALL26/JUMP26 sites to branch to their PLT stubs. */
+    for (int i = 0; i < o->nrela; i++) {
+        uint32_t type = ELF64_R_TYPE(o->rela[i].r_info);
+        const char *nm = o->str + o->sym[ELF64_R_SYM(o->rela[i].r_info)].st_name;
+        int k = -1;
+        for (int j = 0; j < nimp; j++) if (strcmp(imp[j].name, nm) == 0) k = j;
+        uint64_t site = text_va + o->rela[i].r_offset;
+        int64_t  disp = (int64_t)imp[k].plt_va - (int64_t)site;
+        uint32_t imm26 = (uint32_t)((disp >> 2) & 0x03FFFFFF);
+        uint32_t op = (type == R_AARCH64_JUMP26) ? 0x14000000u : 0x94000000u;
+        uint32_t *insn = (uint32_t *)(img + off_text + o->rela[i].r_offset);
+        *insn = op | imm26;
+    }
+
+    /* PLT stubs: adrp x16,GOT ; ldr x16,[x16,#lo12] ; br x16. */
+    for (int i = 0; i < nimp; i++) {
+        uint32_t *s = (uint32_t *)(img + off_plt + (uint64_t)i * 12);
+        int64_t pd = (int64_t)(imp[i].got_va >> 12) - (int64_t)(imp[i].plt_va >> 12);
+        s[0] = enc_adrp(16, pd);
+        s[1] = enc_ldr_u64(16, 16, (uint32_t)(imp[i].got_va & 0xfff));
+        s[2] = enc_br(16);
+    }
+    /* GOT cells left zero; IMGACT fills them at activation. */
+
+    /* .vms$imp */
+    struct ovmx_imp_header *ih = (struct ovmx_imp_header *)(img + off_imp);
+    ih->magic = OVMX_IMP_MAGIC; ih->count = nimp;
+    ih->names_off = (uint32_t)imp_names_o; ih->names_size = names_sz;
+    struct ovmx_imp_entry *ie =
+        (struct ovmx_imp_entry *)(img + off_imp + imp_hdr);
+    for (int i = 0; i < nimp; i++) {
+        ie[i].producer_off = prod_off[imp[i].pidx];
+        ie[i].sv_index = imp[i].svidx;
+        ie[i].patch_off = imp[i].got_va;
+        /* Record the producer version we linked against, for GSMATCH. */
+        ie[i].req_major = ps[imp[i].pidx].sv->gsmatch_major;
+        ie[i].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
+    }
+    memcpy(img + off_imp + imp_names_o, names, names_sz);
+
+    /* .shstrtab + section headers */
+    char *shstr = (char *)(img + off_shstr);
+    for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
+    Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
+    struct { int idx; uint32_t type; uint64_t flags, addr, off, size, align; } S[] = {
+        { 1, SHT_PROGBITS, SHF_ALLOC,                    off_interp, off_interp, interp_sz, 1 },
+        { 2, SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR,    text_va,    off_text,   text_sz,   16 },
+        { 3, SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR,    plt_va,     off_plt,    plt_sz,    4 },
+        { 4, SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,        got_va,     off_got,    got_sz,    8 },
+        { 5, SHT_PROGBITS, SHF_ALLOC,                    off_imp,    off_imp,    imp_size,  8 },
+        { 6, SHT_STRTAB,   0,                            0,          off_shstr,  sn_sz,     1 },
+    };
+    for (unsigned i = 0; i < sizeof S / sizeof S[0]; i++) {
+        sh[S[i].idx].sh_name = sn_off[S[i].idx];
+        sh[S[i].idx].sh_type = S[i].type;
+        sh[S[i].idx].sh_flags = S[i].flags;
+        sh[S[i].idx].sh_addr = S[i].addr;
+        sh[S[i].idx].sh_offset = S[i].off;
+        sh[S[i].idx].sh_size = S[i].size;
+        sh[S[i].idx].sh_addralign = S[i].align;
+    }
+
+    int fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (fd < 0) die("cannot create output image");
+    if (write(fd, img, file_sz) != (ssize_t)file_sz) die("short write output");
+    close(fd);
+    fprintf(stderr,
+        "%%LINK-S-CREATED, %s: ET_DYN executable image, %d import%s, "
+        "PT_INTERP=%s\n",
+        out, nimp, nimp == 1 ? "" : "s", IMGACT_INTERP);
+    free(img);
+}
+
 int main(int argc, char **argv)
 {
     const char *out = NULL;
     const char *in  = NULL;
     struct univ uv[MAX_UNIV];
     int nuniv = 0;
-    int shareable = 0;
+    int shareable = 0, executable = 0;
+    struct producer producers[64];
+    int np = 0;
     uint32_t gk = OVMX_GSMATCH_EQUAL, gmaj = 0, gmin = 0;
     memset(uv, 0, sizeof uv);
 
@@ -210,6 +483,11 @@ int main(int argc, char **argv)
             out = argv[++i];
         } else if (strcmp(argv[i], "--shareable") == 0) {
             shareable = 1;
+        } else if (strcmp(argv[i], "--executable") == 0) {
+            executable = 1;
+        } else if (strcmp(argv[i], "--use") == 0 && i + 1 < argc) {
+            if (np >= 64) die("too many --use producer images");
+            load_producer(argv[++i], &producers[np++]);
         } else if (strcmp(argv[i], "--symbol-vector") == 0 && i + 1 < argc) {
             nuniv = parse_symbol_vector(argv[++i], uv);
         } else if (strcmp(argv[i], "--gsmatch") == 0 && i + 1 < argc) {
@@ -221,13 +499,25 @@ int main(int argc, char **argv)
         }
     }
     if (!in)  die("no input object (usage: LINK.EXE --shareable "
-                  "--symbol-vector \"f=PROCEDURE\" --gsmatch LEQUAL,1,0 -o X.EXE in.o)");
+                  "--symbol-vector \"f=PROCEDURE\" --gsmatch LEQUAL,1,0 -o X.EXE in.o "
+                  "| LINK.EXE --executable --use LIB$SHR.EXE -o PROG.EXE prog.o)");
     if (!out) die("no -o output");
-    if (!shareable) die("MVP only builds shareable images (--shareable)");
-    if (nuniv == 0) die("a shareable image needs --symbol-vector");
+    if (shareable == executable)
+        die("specify exactly one of --shareable / --executable");
 
     struct obj o;
     load_obj(in, &o);
+
+    if (executable) {
+        if (np == 0) die("--executable needs at least one --use producer image");
+        emit_executable(&o, producers, np, out);
+        return 0;
+    }
+
+    /* ---- Shareable image ---- */
+    if (nuniv == 0) die("a shareable image needs --symbol-vector");
+    if (o.nrela != 0)
+        die("shareable MVP needs a leaf object (no .text relocations)");
     for (int i = 0; i < nuniv; i++)
         resolve_univ(&o, &uv[i]);
 

@@ -100,6 +100,8 @@ struct ovmx_imp_entry {
     uint32_t sv_index;      /* index into the producer's symbol vector        */
     uint64_t patch_off;     /* image-relative slot to receive the resolved    */
                             /* address at activation (a GOT-like cell)        */
+    uint32_t req_major;     /* producer GSMATCH major this consumer linked to */
+    uint32_t req_minor;     /* producer GSMATCH minor this consumer linked to */
 };
 
 #endif /* OVMX_IMAGE_H */

@@ -58,4 +58,45 @@ $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/RESOLVE" "$SRC/test/
 "$WORK/RESOLVE" "$WORK/LIBMATH\$SHR.EXE"
 
 echo
+echo "== 2-image link + activate: consumer imports myadd via symbol vector (vms-142) =="
+$CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/ACTIVATE" "$SRC/test/ovmx_activate.c"
+cat > "$WORK/consumer.c" <<'EOF'
+extern int myadd(int, int);
+void _start(void) {
+    int r = myadd(7, 35);                 /* == 42, resolved across images */
+    register long x8 __asm__("x8") = 94;  /* exit_group */
+    register long x0 __asm__("x0") = r;
+    __asm__ volatile("svc 0" :: "r"(x8), "r"(x0) : "memory");
+    __builtin_unreachable();
+}
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/consumer.o" "$WORK/consumer.c"
+
+echo "-- LINK.EXE --executable: bind myadd to LIBMATH\$SHR.EXE's vector --"
+"$WORK/LINK.EXE" --executable --use "$WORK/LIBMATH\$SHR.EXE" \
+    -o "$WORK/ADDER.EXE" "$WORK/consumer.o"
+readelf -lW "$WORK/ADDER.EXE" | grep -iE "INTERP|IMGACT" || true
+readelf -SW "$WORK/ADDER.EXE" | grep -E '\.plt|\.got|\.vms' || true
+
+echo "-- activate ADDER.EXE (SYS\$IMGACT resolves .vms\$imp via symbol vector) --"
+set +e
+"$WORK/ACTIVATE" "$WORK/ADDER.EXE" "$WORK/LIBMATH\$SHR.EXE"; RC=$?
+set -e
+echo "consumer exit code = $RC (expect 42 = myadd(7,35))"
+[ "$RC" -eq 42 ] || { echo "FAIL: cross-image symbol-vector call did not yield 42"; exit 1; }
+
+echo
+echo "== GSMATCH reject: same consumer vs an OLDER producer must NOT activate =="
+mkdir -p "$WORK/old"
+"$WORK/LINK.EXE" --shareable \
+    --symbol-vector "myadd=PROCEDURE,mymul=PROCEDURE" \
+    --gsmatch LEQUAL,1,500 \
+    -o "$WORK/old/LIBMATH\$SHR.EXE" "$WORK/math.o"
+set +e
+"$WORK/ACTIVATE" "$WORK/ADDER.EXE" "$WORK/old/LIBMATH\$SHR.EXE"; RC=$?
+set -e
+echo "activation against older (minor 500 < linked 1000) exit = $RC (expect nonzero, not 42)"
+[ "$RC" -ne 42 ] || { echo "FAIL: GSMATCH reject did not block activation"; exit 1; }
+
+echo
 echo "ALL LINK.EXE MVP CHECKS PASSED"

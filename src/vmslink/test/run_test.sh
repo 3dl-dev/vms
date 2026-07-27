@@ -185,6 +185,33 @@ echo "activation against older (minor 500 < linked 1000) exit = $RC (expect nonz
 [ "$RC" -ne 42 ] || { echo "FAIL: GSMATCH reject did not block activation"; exit 1; }
 
 echo
+echo "== section-merge by flags: .rodata.str1.8 + SECTION-symbol nonzero addend (vms-fa1) =="
+# gcc pools string literals in name-variant sections (.rodata.str1.8) and reaches
+# them through a SECTION symbol + addend (here 0 and 8). LINK.EXE must classify
+# sections by ELF FLAGS (not exact names) AND add the relocation addend; the old
+# name-exact path died "relocation against an unsupported section" and dropped
+# the addend. pickstr() selects the second literal, so both are exercised.
+cat > "$WORK/pickstr.c" <<'EOF'
+int pickstr(int i, int u) {
+    (void)u;
+    const char *s = (i & 1) ? "bravo9" : "alpha"; /* -> .rodata.str1.8, addend 0 & 8 */
+    return (int)(unsigned char)s[(i >> 1) & 7];
+}
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -fno-builtin -c -o "$WORK/pickstr.o" "$WORK/pickstr.c"
+echo "-- rodata variant + SECTION-symbol relocs --"
+readelf -SW "$WORK/pickstr.o" | grep -oE '\.rodata[.a-z0-9]*' | sort -u
+readelf -rW "$WORK/pickstr.o" | grep -E "ADR_PREL|ADD_ABS" || true
+readelf -SW "$WORK/pickstr.o" | grep -q '\.rodata\.str1\.8' || { echo "FAIL: expected a .rodata.str1.8 variant to exercise"; exit 1; }
+"$WORK/LINK.EXE" --shareable --symbol-vector "pickstr=PROCEDURE" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIBSTR\$SHR.EXE" "$WORK/pickstr.o"
+set +e
+"$WORK/CALLSLOT" "$WORK/LIBSTR\$SHR.EXE" 0 3 0; RC=$?   # i=3: "bravo9"[1] = 'r' = 114
+set -e
+echo "pickstr(3) exit = $RC (expect 114 = 'r' = \"bravo9\"[1], via .rodata.str1.8 + addend)"
+[ "$RC" -eq 114 ] || { echo "FAIL: section-merge/addend wrong (got $RC, want 114)"; exit 1; }
+
+echo
 echo "== cross-image DATA import: consumer reads an exported DATA universal (vms-20b) =="
 # The producer exports a variable as a DATA universal; the consumer reads it via
 # a GOT pair (ADR_GOT_PAGE/LD64_GOT_LO12_NC) against the undefined symbol. LINK's

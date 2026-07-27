@@ -73,6 +73,16 @@ static void die(const char *msg)
     exit(1);
 }
 
+/* Section bucket: input sections are classified + merged by ELF flags, not by
+ * exact name, so gcc's split sections (.text.unlikely, .rodata.str1.8,
+ * .rodata.cst8, .data.rel.ro, ...) all land in the right output region. (vms-fa1) */
+enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_BSS, B_TDATA, B_TBSS };
+
+#define OBJ_MAXSEC 256
+
+/* One relocation, tagged with the section it patches (site = sec_va + off). */
+struct reloc { uint64_t off; uint64_t info; int64_t add; int sec; };
+
 /* --------------------------------------------------------------------------
  * Input object: slurp the file and index the ELF structures we need.
  * -------------------------------------------------------------------------- */
@@ -86,6 +96,8 @@ struct obj {
     Elf64_Sym    *sym;      /* .symtab */
     int           nsym;
     const char   *str;      /* .strtab */
+    /* Legacy single-section handles (the *first* of each), used by the simple
+     * single-.text consumer path (emit_executable). */
     int           text_ndx; /* .text section index */
     Elf64_Shdr   *text;     /* .text section header */
     int           rodata_ndx; /* .rodata section index (0 if none) */
@@ -98,8 +110,13 @@ struct obj {
     Elf64_Shdr   *tdata;    /* .tdata section header (0 if none) */
     int           tbss_ndx; /* .tbss (TLS zero data) index (0 if none) */
     Elf64_Shdr   *tbss;     /* .tbss section header (0 if none) */
-    Elf64_Rela   *rela;     /* relocations against .text (SHT_RELA) */
+    Elf64_Rela   *rela;     /* relocations against the first .text (SHT_RELA) */
     int           nrela;
+    /* Per-section classification + placement (the shareable path, vms-fa1). */
+    uint8_t       sec_bucket[OBJ_MAXSEC]; /* B_* per section index (0 = unplaced) */
+    uint64_t      sec_va[OBJ_MAXSEC];     /* assigned image vaddr, filled at layout */
+    struct reloc *relocs;   /* relocs against every executable section */
+    int           nreloc;
 };
 
 static void *xat(struct obj *o, uint64_t off, uint64_t sz, const char *what)
@@ -170,8 +187,8 @@ static void load_obj(const char *path, struct obj *o)
     if (!o->text) die("input object has no .text section");
     if (!o->sym)  die("input object has no symbol table");
 
-    /* Collect relocations against .text (SHT_RELA). REL (implicit-addend) is
-     * not emitted by aarch64 gcc; reject it if seen. */
+    /* Collect relocations against the first .text (SHT_RELA), for the simple
+     * consumer path. REL (implicit-addend) is not emitted by aarch64 gcc. */
     for (int i = 0; i < o->nsh; i++) {
         if (o->sh[i].sh_info != (Elf64_Word)o->text_ndx || o->sh[i].sh_size == 0)
             continue;
@@ -181,6 +198,50 @@ static void load_obj(const char *path, struct obj *o)
             o->rela  = (Elf64_Rela *)(o->buf + o->sh[i].sh_offset);
             o->nrela = o->sh[i].sh_size / sizeof(Elf64_Rela);
         }
+    }
+
+    /* Classify every allocatable section by ELF flags (not by name), so gcc's
+     * split sections merge into the right output region. (vms-fa1) */
+    if (o->nsh > OBJ_MAXSEC) die("object has too many sections");
+    for (int i = 0; i < o->nsh; i++) {
+        Elf64_Shdr *s = &o->sh[i];
+        if (!(s->sh_flags & SHF_ALLOC)) continue;
+        if (s->sh_flags & SHF_TLS)
+            o->sec_bucket[i] = (s->sh_type == SHT_NOBITS) ? B_TBSS : B_TDATA;
+        else if (s->sh_type == SHT_NOBITS)
+            o->sec_bucket[i] = B_BSS;
+        else if (s->sh_type == SHT_PROGBITS)
+            o->sec_bucket[i] = (s->sh_flags & SHF_EXECINSTR) ? B_TEXT
+                             : (s->sh_flags & SHF_WRITE)     ? B_DATA
+                             :                                 B_RODATA;
+        /* Other allocatable types (SHT_INIT_ARRAY, SHT_NOTE, ...) stay B_NONE;
+         * a relocation into one dies loudly rather than silently misplacing. */
+    }
+
+    /* Collect relocations against every executable section into one flat list,
+     * each tagged with the section it patches. (Data-section relocations —
+     * .rela.data ABS64 — are a separate increment, vms-a17.) */
+    int cap = 0;
+    for (int i = 0; i < o->nsh; i++) {
+        if (o->sh[i].sh_type != SHT_RELA) continue;
+        int t = (int)o->sh[i].sh_info;
+        if (t >= 0 && t < o->nsh && o->sec_bucket[t] == B_TEXT)
+            cap += o->sh[i].sh_size / sizeof(Elf64_Rela);
+    }
+    o->relocs = cap ? malloc((size_t)cap * sizeof(struct reloc)) : NULL;
+    if (cap && !o->relocs) die("oom collecting relocations");
+    o->nreloc = 0;
+    for (int i = 0; i < o->nsh; i++) {
+        int t = (int)o->sh[i].sh_info;
+        if (t < 0 || t >= o->nsh || o->sec_bucket[t] != B_TEXT) continue;
+        if (o->sh[i].sh_type == SHT_REL)
+            die("REL relocations are unsupported (expected RELA)");
+        if (o->sh[i].sh_type != SHT_RELA) continue;
+        Elf64_Rela *ra = (Elf64_Rela *)(o->buf + o->sh[i].sh_offset);
+        int n = o->sh[i].sh_size / sizeof(Elf64_Rela);
+        for (int j = 0; j < n; j++)
+            o->relocs[o->nreloc++] = (struct reloc){
+                ra[j].r_offset, ra[j].r_info, ra[j].r_addend, t };
     }
 }
 
@@ -560,31 +621,27 @@ static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t t
     }
 }
 
-/* Per-object placement of the merged sections. */
-struct placed { uint64_t text_va, ro_va, data_va, bss_va; };
-
-/* Map a symbol defined in object `d` to its final image vaddr, or 0 if it lives
- * in a section this linker does not place. */
-static uint64_t placed_addr(struct obj *d, struct placed *p, Elf64_Sym *s)
+/* Map a symbol defined in object `d` to its final image vaddr, using the
+ * per-section placement filled at layout. Returns 0 for a symbol in a section
+ * this linker does not place flat (unplaced, or TLS — addressed via TLSDESC). */
+static uint64_t placed_addr(struct obj *d, Elf64_Sym *s)
 {
-    if (s->st_shndx == (Elf64_Section)d->text_ndx)
-        return p->text_va + s->st_value;
-    if (d->rodata && s->st_shndx == (Elf64_Section)d->rodata_ndx)
-        return p->ro_va + s->st_value;
-    if (d->data && s->st_shndx == (Elf64_Section)d->data_ndx)
-        return p->data_va + s->st_value;
-    if (d->bss && s->st_shndx == (Elf64_Section)d->bss_ndx)
-        return p->bss_va + s->st_value;
-    return 0;
+    int sh = (int)s->st_shndx;
+    if (sh <= 0 || sh >= d->nsh) return 0;
+    switch (d->sec_bucket[sh]) {
+    case B_TEXT: case B_RODATA: case B_DATA: case B_BSS:
+        return d->sec_va[sh] + s->st_value;
+    default:
+        return 0;
+    }
 }
 
 /* Resolve a relocation's symbol to a final image vaddr (local or cross-object). */
-static uint64_t resolve_ref(struct obj *objs, int nobj, struct placed *pl,
-                            int oi, uint32_t symidx)
+static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
 {
     struct obj *o = &objs[oi];
     Elf64_Sym *s = &o->sym[symidx];
-    uint64_t a = placed_addr(o, &pl[oi], s);
+    uint64_t a = placed_addr(o, s);
     if (a) return a;
     if (s->st_shndx == SHN_UNDEF) {
         const char *nm = o->str + s->st_name;
@@ -596,7 +653,7 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, struct placed *pl,
                 if (ds->st_shndx == SHN_UNDEF ||
                     ELF64_ST_BIND(ds->st_info) == STB_LOCAL) continue;
                 if (strcmp(d->str + ds->st_name, nm) != 0) continue;
-                uint64_t da = placed_addr(d, &pl[j], ds);
+                uint64_t da = placed_addr(d, ds);
                 if (da) return da;
             }
         }
@@ -608,7 +665,7 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, struct placed *pl,
 
 /* Resolve a symbol by NAME (global def) across all objects -> image vaddr.
  * Used for declared universals and for GOT-slot targets. */
-static uint64_t resolve_named(struct obj *objs, int nobj, struct placed *pl,
+static uint64_t resolve_named(struct obj *objs, int nobj,
                               const char *name, const char *whaterr)
 {
     for (int j = 0; j < nobj; j++) {
@@ -618,7 +675,7 @@ static uint64_t resolve_named(struct obj *objs, int nobj, struct placed *pl,
             if (ELF64_ST_BIND(ds->st_info) == STB_LOCAL) continue;
             if (ds->st_shndx == SHN_UNDEF) continue;
             if (strcmp(d->str + ds->st_name, name) != 0) continue;
-            uint64_t da = placed_addr(d, &pl[j], ds);
+            uint64_t da = placed_addr(d, ds);
             if (da) return da;
         }
     }
@@ -719,13 +776,14 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
 static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuniv,
                            uint32_t gk, uint32_t gmaj, uint32_t gmin, const char *out)
 {
-    struct placed pl[64];
     int has_ro = 0, has_data = 0, has_bss = 0;
-    for (int i = 0; i < nobj; i++) {
-        if (objs[i].rodata && objs[i].rodata->sh_size) has_ro = 1;
-        if (objs[i].data && objs[i].data->sh_size) has_data = 1;
-        if (objs[i].bss && objs[i].bss->sh_size) has_bss = 1;
-    }
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++) {
+            if (objs[i].sh[s].sh_size == 0) continue;
+            if (objs[i].sec_bucket[s] == B_RODATA) has_ro = 1;
+            if (objs[i].sec_bucket[s] == B_DATA)   has_data = 1;
+            if (objs[i].sec_bucket[s] == B_BSS)    has_bss = 1;
+        }
 
     /* TLS geometry (single TLS-bearing object per image for now). */
     int tls_obj = -1;
@@ -749,14 +807,14 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     uint64_t tbss_base = tbss_sz ? ALIGN_UP(tdata_sz, tbss_al) : tdata_sz;
     uint64_t tls_memsz = tbss_base + tbss_sz;
 
-    /* Collect the distinct GOT-referenced symbols (from .text relocations). */
+    /* Collect the distinct GOT-referenced symbols (across all code sections). */
     static struct gotslot got[1024];
     int ngot = 0;
     for (int i = 0; i < nobj; i++)
-        for (int r = 0; r < objs[i].nrela; r++) {
-            uint32_t type = ELF64_R_TYPE(objs[i].rela[r].r_info);
+        for (int r = 0; r < objs[i].nreloc; r++) {
+            uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
             if (!is_got_reloc(type)) continue;
-            uint32_t si = ELF64_R_SYM(objs[i].rela[r].r_info);
+            uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
             const char *nm = objs[i].str + objs[i].sym[si].st_name;
             if (find_got(got, ngot, nm) < 0) {
                 if (ngot >= 1024) die("too many GOT symbols");
@@ -769,15 +827,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     static struct tlsslot tls[512];
     int ntls = 0;
     for (int i = 0; i < nobj; i++)
-        for (int r = 0; r < objs[i].nrela; r++) {
-            uint32_t type = ELF64_R_TYPE(objs[i].rela[r].r_info);
+        for (int r = 0; r < objs[i].nreloc; r++) {
+            uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
             if (!is_tlsdesc_reloc(type)) continue;
-            uint32_t si = ELF64_R_SYM(objs[i].rela[r].r_info);
+            uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
             const char *nm = objs[i].str + objs[i].sym[si].st_name;
             if (find_tls(tls, ntls, nm) < 0) {
                 if (ntls >= 512) die("too many TLSDESC symbols");
                 snprintf(tls[ntls].name, sizeof tls[ntls].name, "%s", nm);
-                tls[ntls].addend = objs[i].rela[r].r_addend;
+                tls[ntls].addend = objs[i].relocs[r].add;
                 ntls++;
             }
         }
@@ -786,21 +844,29 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
     int      nph      = has_tls ? 2 : 1;   /* PT_LOAD (+ PT_TLS) */
     uint64_t cur      = ALIGN_UP(off_ph + nph * sizeof(Elf64_Phdr), 16);
+
+    /* Place every input section of a bucket contiguously, recording each
+     * section's assigned image vaddr in objs[i].sec_va[] for symbol resolution.
+     * `bkt` selects which bucket; returns the end cursor. */
     uint64_t text_beg = cur;
-    for (int i = 0; i < nobj; i++) {
-        cur = ALIGN_UP(cur, 16);
-        pl[i].text_va = cur;
-        cur += objs[i].text->sh_size;
-    }
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++)
+            if (objs[i].sec_bucket[s] == B_TEXT && objs[i].sh[s].sh_size) {
+                uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 4;
+                cur = ALIGN_UP(cur, al < 4 ? 4 : al);
+                objs[i].sec_va[s] = cur;
+                cur += objs[i].sh[s].sh_size;
+            }
     uint64_t text_end = cur;
     uint64_t ro_beg = cur;
-    for (int i = 0; i < nobj; i++) {
-        if (objs[i].rodata && objs[i].rodata->sh_size) {
-            cur = ALIGN_UP(cur, 16);
-            pl[i].ro_va = cur;
-            cur += objs[i].rodata->sh_size;
-        } else pl[i].ro_va = 0;
-    }
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++)
+            if (objs[i].sec_bucket[s] == B_RODATA && objs[i].sh[s].sh_size) {
+                uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+                cur = ALIGN_UP(cur, al);
+                objs[i].sec_va[s] = cur;
+                cur += objs[i].sh[s].sh_size;
+            }
     uint64_t ro_end = cur;
 
     /* GOT cells (writable, 8-aligned). */
@@ -817,14 +883,14 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* .data (writable, initialized). */
     uint64_t data_beg = cur;
-    for (int i = 0; i < nobj; i++) {
-        if (objs[i].data && objs[i].data->sh_size) {
-            uint64_t al = objs[i].data->sh_addralign ? objs[i].data->sh_addralign : 8;
-            cur = ALIGN_UP(cur, al);
-            pl[i].data_va = cur;
-            cur += objs[i].data->sh_size;
-        } else pl[i].data_va = 0;
-    }
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++)
+            if (objs[i].sec_bucket[s] == B_DATA && objs[i].sh[s].sh_size) {
+                uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+                cur = ALIGN_UP(cur, al);
+                objs[i].sec_va[s] = cur;
+                cur += objs[i].sh[s].sh_size;
+            }
     uint64_t data_end = cur;
 
     /* .tdata (TLS init image, file-backed). PT_TLS references it; a reserved
@@ -840,7 +906,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     uint64_t off_sv = ALIGN_UP(cur, 8);
 
     for (int i = 0; i < nuniv; i++)
-        uv[i].value = resolve_named(objs, nobj, pl, uv[i].name,
+        uv[i].value = resolve_named(objs, nobj, uv[i].name,
                                     "universal symbol not defined in any input object");
 
     uint32_t names_size = 0;
@@ -870,17 +936,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     uint64_t file_loaded_end = ntlsdesc ? off_tls + tls_sec_size : after_rel;
     uint64_t bss_beg = file_loaded_end, bss_end = file_loaded_end;
     if (has_bss) {
-        for (int i = 0; i < nobj; i++) {
-            if (objs[i].bss && objs[i].bss->sh_size) {
-                uint64_t al = objs[i].bss->sh_addralign ? objs[i].bss->sh_addralign : 8;
-                bss_end = ALIGN_UP(bss_end, al);
-                if (bss_beg == file_loaded_end) bss_beg = bss_end;
-                pl[i].bss_va = bss_end;
-                bss_end += objs[i].bss->sh_size;
-            } else pl[i].bss_va = 0;
-        }
-    } else {
-        for (int i = 0; i < nobj; i++) pl[i].bss_va = 0;
+        int first = 1;
+        for (int i = 0; i < nobj; i++)
+            for (int s = 0; s < objs[i].nsh; s++)
+                if (objs[i].sec_bucket[s] == B_BSS && objs[i].sh[s].sh_size) {
+                    uint64_t al = objs[i].sh[s].sh_addralign ? objs[i].sh[s].sh_addralign : 8;
+                    bss_end = ALIGN_UP(bss_end, al);
+                    if (first) { bss_beg = bss_end; first = 0; }
+                    objs[i].sec_va[s] = bss_end;
+                    bss_end += objs[i].sh[s].sh_size;
+                }
     }
 
     uint64_t off_shstr = ALIGN_UP(file_loaded_end, 4);
@@ -930,16 +995,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         ph[1].p_filesz = tdata_sz; ph[1].p_memsz = tls_memsz; ph[1].p_align = tls_align;
     }
 
-    for (int i = 0; i < nobj; i++) {
-        memcpy(img + pl[i].text_va, objs[i].buf + objs[i].text->sh_offset,
-               objs[i].text->sh_size);
-        if (objs[i].rodata && objs[i].rodata->sh_size)
-            memcpy(img + pl[i].ro_va, objs[i].buf + objs[i].rodata->sh_offset,
-                   objs[i].rodata->sh_size);
-        if (objs[i].data && objs[i].data->sh_size)
-            memcpy(img + pl[i].data_va, objs[i].buf + objs[i].data->sh_offset,
-                   objs[i].data->sh_size);
-    }
+    /* Copy each placed PROGBITS section (text/rodata/data) to its vaddr. */
+    for (int i = 0; i < nobj; i++)
+        for (int s = 0; s < objs[i].nsh; s++) {
+            int b = objs[i].sec_bucket[s];
+            if ((b == B_TEXT || b == B_RODATA || b == B_DATA) &&
+                objs[i].sh[s].sh_size)
+                memcpy(img + objs[i].sec_va[s],
+                       objs[i].buf + objs[i].sh[s].sh_offset, objs[i].sh[s].sh_size);
+        }
 
     /* Copy the TLS init image (.tdata); .tbss is zero-filled per thread. */
     if (has_tls && tdata_sz)
@@ -947,7 +1011,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* Fill GOT cells with image-relative target addresses. */
     for (int i = 0; i < ngot; i++) {
-        got[i].value = resolve_named(objs, nobj, pl, got[i].name,
+        got[i].value = resolve_named(objs, nobj, got[i].name,
             "GOT symbol undefined (cross-image DATA import is a later increment)");
         *(uint64_t *)(img + got[i].va) = got[i].value;
     }
@@ -961,16 +1025,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         e[1] = tls[i].modoff;
     }
 
-    /* Apply relocations: GOT-indirect pairs -> GOT slot; TLSDESC -> TLSDESC
-     * entry; the rest PC-relative. */
+    /* Apply relocations across every code section: GOT-indirect pairs -> GOT
+     * slot; TLSDESC -> TLSDESC entry; the rest PC-relative (with addend). */
     for (int i = 0; i < nobj; i++) {
-        for (int r = 0; r < objs[i].nrela; r++) {
-            Elf64_Rela *rl = &objs[i].rela[r];
-            uint32_t type = ELF64_R_TYPE(rl->r_info);
-            uint64_t site = pl[i].text_va + rl->r_offset;
-            uint32_t *insn = (uint32_t *)(img + pl[i].text_va + rl->r_offset);
+        for (int r = 0; r < objs[i].nreloc; r++) {
+            struct reloc *rl = &objs[i].relocs[r];
+            uint32_t type = ELF64_R_TYPE(rl->info);
+            uint64_t site = objs[i].sec_va[rl->sec] + rl->off;
+            uint32_t *insn = (uint32_t *)(img + site);
             const char *nm = objs[i].str +
-                             objs[i].sym[ELF64_R_SYM(rl->r_info)].st_name;
+                             objs[i].sym[ELF64_R_SYM(rl->info)].st_name;
             if (is_got_reloc(type)) {
                 int gi = find_got(got, ngot, nm);
                 if (gi < 0) die("internal: GOT slot missing for symbol");
@@ -980,7 +1044,8 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 if (ti < 0) die("internal: TLSDESC slot missing for symbol");
                 patch_tlsdesc(type, insn, site, tls[ti].va);
             } else {
-                uint64_t target = resolve_ref(objs, nobj, pl, i, ELF64_R_SYM(rl->r_info));
+                uint64_t target = resolve_ref(objs, nobj, i, ELF64_R_SYM(rl->info))
+                                  + (uint64_t)rl->add;
                 patch_pcrel(type, insn, site, target);
             }
         }
@@ -1083,7 +1148,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     if (fd < 0) die("cannot create output image");
     if (write(fd, img, file_sz) != (ssize_t)file_sz) die("short write output");
     close(fd);
-    int totrel = 0; for (int i = 0; i < nobj; i++) totrel += objs[i].nrela;
+    int totrel = 0; for (int i = 0; i < nobj; i++) totrel += objs[i].nreloc;
     fprintf(stderr,
         "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d object%s, %d universal%s, "
         "%d reloc%s, %d GOT, %d TLS, GSMATCH=%s,%u,%u\n",

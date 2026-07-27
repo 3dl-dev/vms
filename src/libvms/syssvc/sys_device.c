@@ -27,6 +27,7 @@
 #include "starlet.h"
 #include "dvidef.h"
 #include "dcdef.h"
+#include "dvsdef.h"
 
 /*
  * Device type codes — a subset of VMS DT$_ values.
@@ -314,4 +315,120 @@ uint32_t sys$getdviw(uint32_t efn, uint16_t chan,
                      uint32_t nullarg)
 {
     return sys$getdvi(efn, chan, devnam, itmlst, iosb, astadr, astprm, nullarg);
+}
+
+/*
+ * Minimal static device table for SYS$DEVICE_SCAN, mirroring the
+ * devices classify_device() above already recognizes (SYS$DISK/DKA0 as
+ * the root disk, TT: as the controlling terminal, MBA0 as a
+ * representative mailbox device). OVMX doesn't maintain a dynamic
+ * device database, so the scan enumerates this fixed set.
+ */
+struct scan_device {
+    const char *name;
+    int         devclass;
+};
+
+static const struct scan_device scan_devices[] = {
+    { "SYS$DISK", DC$_DISK },
+    { "DKA0",     DC$_DISK },
+    { "TT",       DC$_TERM },
+    { "MBA0",     DC$_MAILBOX },
+};
+#define SCAN_DEVICE_COUNT (sizeof(scan_devices) / sizeof(scan_devices[0]))
+
+/*
+ * vms$$wild_match - Minimal VMS wildcard matcher (case-insensitive).
+ *
+ * Supports '*' (any sequence, including empty) and '%' (exactly one
+ * character) — the wildcard characters documented for the wildnam
+ * argument of $DEVICE_SCAN in the OpenVMS System Services Reference
+ * Manual.
+ */
+static int vms$$wild_match(const char *pat, const char *str) {
+    if (!pat || !*pat) return 1;  /* empty pattern matches everything */
+
+    if (*pat == '*') {
+        if (vms$$wild_match(pat + 1, str)) return 1;
+        for (; *str; str++)
+            if (vms$$wild_match(pat + 1, str + 1)) return 1;
+        return 0;
+    }
+    if (*pat == '%') {
+        return *str && vms$$wild_match(pat + 1, str + 1);
+    }
+    if (!*str) return 0;
+
+    char pc = (*pat >= 'a' && *pat <= 'z') ? (char)(*pat - 'a' + 'A') : *pat;
+    char sc = (*str >= 'a' && *str <= 'z') ? (char)(*str - 'a' + 'A') : *str;
+    if (pc != sc) return 0;
+
+    return vms$$wild_match(pat + 1, str + 1);
+}
+
+/*
+ * sys$device_scan - Scan for devices matching a wildcard name/item filter.
+ *
+ * See the doc comment in starlet.h for the overall contract. ctx is a
+ * caller-zeroed GENERIC_64: gen64$l_longword[0] holds the next index
+ * into scan_devices[] to examine, gen64$l_longword[1] is a
+ * "matched at least one device so far" flag used to distinguish the
+ * SS$_NOSUCHDEV (nothing ever matched) vs SS$_NOMOREDEV (matched
+ * before, now exhausted) termination cases.
+ */
+uint32_t sys$device_scan(struct dsc$descriptor_s *devnam, uint16_t *devnamlen,
+                         const struct dsc$descriptor_s *wildnam,
+                         void *itmlst, GENERIC_64 *ctx)
+{
+    if (!devnam || !devnam->dsc$a_pointer || !ctx) return SS$_BADPARAM;
+
+    char pattern[64] = "*";
+    if (wildnam && wildnam->dsc$a_pointer && wildnam->dsc$w_length > 0) {
+        size_t plen = wildnam->dsc$w_length;
+        if (plen > sizeof(pattern) - 1) plen = sizeof(pattern) - 1;
+        memcpy(pattern, wildnam->dsc$a_pointer, plen);
+        pattern[plen] = '\0';
+        /* Strip trailing colon, matching classify_device()'s convention. */
+        size_t plen2 = strlen(pattern);
+        if (plen2 > 0 && pattern[plen2 - 1] == ':') pattern[plen2 - 1] = '\0';
+    }
+
+    /* Optional DVS$_DEVCLASS filter from itmlst (single-entry item list,
+     * matching the corpus convention — see dvsitms in
+     * tests/corpus/tier1-examples/sys_device_scan.c). Field layout is
+     * the same struct item_list_3 sys$getdvi already parses above. */
+    int have_class_filter = 0;
+    uint32_t class_filter = 0;
+    if (itmlst) {
+        const struct item_list_3 *items = (const struct item_list_3 *)itmlst;
+        for (; items->buflen != 0 || items->item_code != 0; items++) {
+            if (items->item_code == DVS$_DEVCLASS && items->bufaddr) {
+                have_class_filter = 1;
+                class_filter = *(const uint32_t *)items->bufaddr;
+                break;
+            }
+        }
+    }
+
+    uint32_t idx = ctx->gen64$l_longword[0];
+    uint32_t matched_any = ctx->gen64$l_longword[1];
+
+    for (; idx < SCAN_DEVICE_COUNT; idx++) {
+        if (have_class_filter && scan_devices[idx].devclass != (int)class_filter)
+            continue;
+        if (!vms$$wild_match(pattern, scan_devices[idx].name))
+            continue;
+
+        uint16_t len = (uint16_t)strlen(scan_devices[idx].name);
+        if (len > devnam->dsc$w_length) len = devnam->dsc$w_length;
+        memcpy(devnam->dsc$a_pointer, scan_devices[idx].name, len);
+        if (devnamlen) *devnamlen = len;
+
+        ctx->gen64$l_longword[0] = idx + 1;
+        ctx->gen64$l_longword[1] = 1;
+        return SS$_NORMAL;
+    }
+
+    ctx->gen64$l_longword[0] = idx;
+    return matched_any ? SS$_NOMOREDEV : SS$_NOSUCHDEV;
 }

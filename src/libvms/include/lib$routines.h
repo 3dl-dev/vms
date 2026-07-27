@@ -30,6 +30,13 @@ extern "C" {
  * to also pull in lnmdef.h. */
 struct item_list_3;
 
+/* Forward declaration - full definition in gen64def.h. Only used here
+ * as a pointer type (lib$sys_asctim's time argument, which corpus call
+ * sites pass as "&binary_time" where binary_time is GENERIC_64 - see
+ * gen64def.h), so a forward declaration avoids requiring every
+ * lib$routines.h includer to also pull in gen64def.h. */
+struct _generic_64;
+
 /* ================================================================
  * Memory Management Routines
  * ================================================================ */
@@ -1027,6 +1034,70 @@ uint32_t lib$spanc(
     const struct dsc$descriptor_s *str,
     const unsigned char *table,
     const unsigned char *mask
+);
+
+/* ================================================================
+ * Date/Time Routines (continued)
+ * ================================================================ */
+
+/**
+ * lib$sys_asctim - Convert binary time to ASCII string (RTL entry point)
+ *
+ * Functionally identical to sys$asctim (see starlet.h); documented as
+ * a separate RTL procedure entry point in the OpenVMS RTL Library
+ * (LIB$) Manual for callers that prefer the LIB$ calling interface.
+ * OVMX implements it as a thin wrapper around sys$asctim.
+ *
+ * @param timlen  Optional pointer to receive string length
+ * @param timbuf  Pointer to descriptor of output buffer
+ * @param timadr  Optional pointer to a 64-bit time value (NULL = current
+ *                time). Declared as GENERIC_64* to match corpus call
+ *                sites that pass "&binary_time" where binary_time is
+ *                GENERIC_64 (see gen64def.h) - functionally the same
+ *                64-bit quadword sys$asctim accepts as uint64_t*.
+ * @param cvtflg  Conversion flags (0 = full, 1 = date only)
+ *
+ * @return  SS$_NORMAL on success
+ */
+uint32_t lib$sys_asctim(
+    uint16_t *timlen,
+    struct dsc$descriptor_s *timbuf,
+    const struct _generic_64 *timadr,
+    uint32_t cvtflg
+);
+
+/* ================================================================
+ * Device Information Routines
+ * ================================================================ */
+
+/**
+ * lib$getdvi - Get Device/Volume Information (simplified wrapper)
+ *
+ * Provides a simpler calling interface to sys$getdviw for retrieving
+ * a single DVI$_ item, mirroring lib$getjpi/lib$getsyi in lib_misc.c.
+ *
+ * @param item_code    Pointer to longword containing the DVI$_ item code
+ * @param chan         Optional I/O channel number, passed by value (0 if
+ *                      using devnam) - matches sys$getdvi's chan argument
+ *                      in starlet.h, which is likewise passed by value
+ * @param devnam       Optional descriptor of device name
+ * @param resultval    Optional address of longword to receive the item
+ *                      value (for numeric items)
+ * @param resultstring Optional descriptor to receive the item value as
+ *                      a string
+ * @param string_length Optional address of word to receive the length
+ *                      written to resultstring
+ *
+ * @return  SS$_NORMAL on success, SS$_BADPARAM if item_code is missing,
+ *          SS$_NOSUCHDEV if the device cannot be identified
+ */
+uint32_t lib$getdvi(
+    const uint32_t *item_code,
+    uint16_t chan,
+    const struct dsc$descriptor_s *devnam,
+    void *resultval,
+    struct dsc$descriptor_s *resultstring,
+    uint16_t *string_length
 );
 
 #ifdef __cplusplus

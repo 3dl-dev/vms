@@ -35,6 +35,7 @@
 #include "msgdef.h"
 #include "libclidef.h"
 #include "opcdef.h"
+#include "gen64def.h"
 
 /* ================================================================
  * Run-time library routine headers
@@ -676,6 +677,109 @@ uint32_t sys$crmpsc(
     uint32_t pfc
 );
 
+/**
+ * sys$deltva_64 - Delete virtual address space (64-bit region API)
+ *
+ * The 64-bit-addressing counterpart to sys$deltva, used with the P0/P1/P2
+ * region-based VA management family (sys$create_region_64, sys$cretva_64,
+ * sys$expreg_64, ...). OVMX implements only this one entry point of that
+ * family for now (see docs/conformance-gap-report.md, vms-fb3); the
+ * region_id_64 argument is accepted for call-site compatibility but not
+ * validated against a region registry (no sys$create_region_64 exists
+ * yet to have created one).
+ *
+ * Signature matches the corpus call sites (tests/corpus/tier1-examples/
+ * sys_cretva_64.c, sys_gs64.c, sys_create_gpfn.c): unlike 32-bit
+ * sys$deltva (a single two-pointer VA_RANGE), the 64-bit form takes an
+ * explicit byte length and separate output address/length pointers.
+ *
+ * @param region_id_64  Pointer to the 64-bit region identifier (GENERIC_64;
+ *                       accepted, not yet validated - see above)
+ * @param inadr_64       Start address of the range to delete
+ * @param bytlen_64      Length in bytes of the range to delete
+ * @param acmode         Access mode (ignored)
+ * @param retadr_64      Optional pointer to receive the deleted start address
+ * @param retlen_64      Optional pointer to receive the deleted byte length
+ *
+ * @return  SS$_NORMAL on success, SS$_BADPARAM if inadr_64 is NULL
+ */
+uint32_t sys$deltva_64(
+    const GENERIC_64 *region_id_64,
+    void *inadr_64,
+    uint64_t bytlen_64,
+    uint32_t acmode,
+    void **retadr_64,
+    uint64_t *retlen_64
+);
+
+/**
+ * sys$dgblsc - Delete global section
+ *
+ * Marks a global section for deletion. Per documented VMS behavior, the
+ * section is not actually removed until every process that has mapped
+ * it also deletes its virtual-address range onto it (via sys$deltva /
+ * sys$deltva_64) - this call only marks intent. OVMX does not maintain
+ * a cross-process named-global-section registry (sys$mgblsc/
+ * sys$mgblsc_64/sys$mgblsc_gpfn_64 are not implemented - see
+ * docs/conformance-gap-report.md), so this validates its arguments and
+ * returns success without a registry lookup, consistent with how
+ * sys$purgws above documents an equivalent honest simplification.
+ *
+ * @param flags   Section flags (SEC$M_SYSGBL etc. - ignored)
+ * @param gsdnam  Descriptor of the global section name (required)
+ * @param ident   Optional section version identification
+ *
+ * @return  SS$_NORMAL on success, SS$_BADPARAM if gsdnam is missing
+ */
+uint32_t sys$dgblsc(
+    uint32_t flags,
+    const struct dsc$descriptor_s *gsdnam,
+    void *ident
+);
+
+/**
+ * sys$lkwset - Lock pages into working set
+ *
+ * @param inadr   Address range to lock (VA_RANGE - see va_rangedef.h)
+ * @param retadr  Returned address range actually locked
+ * @param acmode  Access mode (ignored)
+ *
+ * @return  SS$_NORMAL on success, SS$_BADPARAM if inadr is NULL
+ *
+ * OVMX processes are demand-paged by the Linux VMM rather than a
+ * VMS-style adjustable working set with a lockable resident-page list
+ * (see sys$purgws above for the same tradeoff), so there is no
+ * WSQUOTA-bounded lock to perform; OVMX validates the range, echoes it
+ * to retadr, and returns success without further action. Because OVMX
+ * has no working-set quota, this never returns the real VMS
+ * SS$_LKWSETFUL condition (exceeded lockable-page quota) - flagged in
+ * vms-fb3 findings since that status value was not independently
+ * cross-verified against a second source this session.
+ */
+uint32_t sys$lkwset(
+    const void *inadr,
+    void *retadr,
+    uint32_t acmode
+);
+
+/**
+ * sys$ulwset - Unlock pages from working set
+ *
+ * @param inadr   Address range to unlock (VA_RANGE - see va_rangedef.h)
+ * @param retadr  Optional returned address range actually unlocked
+ * @param acmode  Access mode (ignored)
+ *
+ * @return  SS$_NORMAL on success, SS$_BADPARAM if inadr is NULL
+ *
+ * Companion no-op to sys$lkwset above - see that comment for the
+ * demand-paging rationale.
+ */
+uint32_t sys$ulwset(
+    const void *inadr,
+    void *retadr,
+    uint32_t acmode
+);
+
 /* ================================================================
  * AST (Asynchronous System Trap) Services
  * ================================================================ */
@@ -1248,6 +1352,43 @@ uint32_t sys$getdviw(
     uint32_t nullarg
 );
 
+/**
+ * sys$device_scan - Scan for devices matching a wildcard name/item filter
+ *
+ * Returns device names one at a time on successive calls, each call
+ * continuing from where the last left off via ctx. Matching is against
+ * the (VMS-wildcard, "*"/"%") devnam pattern and, if itmlst is supplied,
+ * further filtered by item codes such as DVS$_DEVCLASS (see dvsdef.h).
+ *
+ * @param devnam    Descriptor to receive the next matching device name
+ * @param devnamlen Pointer to receive the length written to devnam
+ * @param wildnam   Optional descriptor of a wildcard device-name pattern
+ *                  (NULL/empty matches all devices)
+ * @param itmlst    Optional item list of DVS$_ filter codes. Declared as
+ *                  void* (rather than a specific item-list struct type)
+ *                  because corpus call sites pass either ILE3 (iledef.h)
+ *                  or struct item_list_3 (lnmdef.h) arrays interchangeably
+ *                  — the two are field-for-field layout compatible, same
+ *                  convention already used by sys$getdvi/sys$getuai above.
+ * @param ctx       Context for continuing the scan across calls; the
+ *                  caller zero-initializes it before the first call
+ *
+ * @return  SS$_NORMAL with a device name in devnam,
+ *          SS$_NOSUCHDEV if no device ever matched the filter,
+ *          SS$_NOMOREDEV if the scan reached the end of the device list
+ *          (see the file-header PROVENANCE flag on SS$_NOMOREDEV's
+ *          numeric value in ssdef.h — sourced this session but not
+ *          independently cross-verified; flagged for operator sign-off
+ *          per vms-fb3 findings)
+ */
+uint32_t sys$device_scan(
+    struct dsc$descriptor_s *devnam,
+    uint16_t *devnamlen,
+    const struct dsc$descriptor_s *wildnam,
+    void *itmlst,
+    GENERIC_64 *ctx
+);
+
 /* ================================================================
  * Operator Communication Services
  * ================================================================ */
@@ -1276,6 +1417,46 @@ uint32_t sys$brkthruw(
     struct _iosb *iosb,
     void (*astadr)(uint32_t),
     uint32_t astprm
+);
+
+/* ================================================================
+ * Condition Handling Services
+ * ================================================================ */
+
+/**
+ * sys$unwind - Unwind the call stack, invoking intervening handlers
+ *
+ * Called from within a condition handler (see lib$establish/lib$signal
+ * in lib_signal.c) to abandon signal delivery and transfer control back
+ * to an earlier call frame instead of returning normally to the point
+ * where the condition was signaled.
+ *
+ * IMPLEMENTATION NOTE: OVMX's condition-handling model (lib_signal.c)
+ * invokes established handlers as ordinary in-process function calls
+ * from within lib$signal/lib$stop, rather than a hardware exception
+ * dispatch with saved per-frame register/PC state to unwind through.
+ * There is therefore no machine frame for sys$unwind to transfer control
+ * to at an arbitrary newpc - that argument is accepted for source
+ * compatibility but not acted upon. What OVMX DOES perform, matching
+ * real SYS$UNWIND's documented side effect, is popping condition
+ * handlers off the handler chain (down to the target depth) so that
+ * lib$establish/lib$revert bookkeeping stays consistent across the
+ * unwind - the same class of honest, partial simplification already
+ * used for LIB$SET_SYMBOL/LIB$GET_SYMBOL (see the file-header comment
+ * in lib_symbol.c).
+ *
+ * @param depadr  Optional pointer to the target call depth (as obtained
+ *                from a chf$mech_array's chf$is_mch_depth field - see
+ *                chfdef.h). NULL means "unwind one level" (pop the
+ *                currently executing handler and return to the frame
+ *                that established it).
+ * @param newpc   Ignored - see IMPLEMENTATION NOTE above.
+ *
+ * @return  SS$_NORMAL
+ */
+uint32_t sys$unwind(
+    const uint32_t *depadr,
+    void *newpc
 );
 
 #ifdef __cplusplus

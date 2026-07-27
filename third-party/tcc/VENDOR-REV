@@ -1,0 +1,49 @@
+Vendored package:  tinycc (Tiny C Compiler)
+Upstream URL:      https://github.com/TinyCC/tinycc.git
+                    (GitHub mirror of the canonical repo.or.cz/tinycc.git)
+Pinned ref:        mob (branch tip at vendor time)
+Pinned commit:     85ba3ae8f1e22044255d54c28be04e5fc3e88ae0
+Commit date:       2026-07-24 19:27:21 +0200
+Commit subject:    {arm,i386,riscv64}-asm.c: fix generic operand modifier 'n' not negating
+Vendored:          2026-07-27
+License:           LGPL 2.1 (see src/COPYING) — LGPL vendoring is not a
+                    clean-room concern; OVMX's clean-room HARD INVARIANT
+                    (CLAUDE.md rule 8) covers VMS *formats* only, not this
+                    upstream C source.
+
+Why mob (not the newest tag, release_0_9_27 / 2017-12-12): release_0_9_27
+DOES carry a complete aarch64 backend (arm64-gen.c/arm64-link.c) but its
+include/stdarg.h predates modern musl headers — Alpine's current musl
+declares libc `va_list` via a bare `__builtin_va_list` token
+(bits/alltypes.h, `__NEED_va_list` block) that release_0_9_27's parser
+does not accept, so `tcc -c` on any TU that includes <stdio.h> fails with
+"';' expected (got "va_list")" before reaching codegen. The mob branch's
+include/stdarg.h (see that file) resolves va_start/va_arg/va_copy/va_end
+through tcc's builtin_va_* forms compatible with modern musl's
+`__builtin_va_list`-based headers — verified empirically (see
+test/run_tcc_hello.sh): mob-branch tcc compiles and runs hello.c against
+Alpine's live musl headers; release_0_9_27 does not. This was found by
+direct build+test in the target arm64 musl Alpine container, not assumed.
+
+The mob build also fails to build lib/libtcc1.a's OPTIONAL bounds-checker
+object (bcheck.o -> wchar_t redefinition against Alpine's current
+stddef.h) — this is a separate, non-essential debug-instrumentation
+library asset; `make`'s failure on that target does not stop `tcc` itself
+from building or the compile+link+run proof from passing. Left as a known
+gap (informational only) rather than patched, since patching upstream
+source is out of scope for this vendoring bead; a later S2 bead can pin
+forward or patch if bounds-checking is ever needed.
+
+Vendored as a plain source copy (no .git, no submodule) under src/ — the
+upstream tinycc build system (configure + make) is used unmodified to
+build the tool; see ../Makefile in this directory for the wrapper target.
+"mob" is a rolling branch — this is a COMMIT PIN, not a live tracking ref;
+re-vendor explicitly (below) to move it, never assume "mob" means latest.
+
+To re-vendor at a new pin:
+  git clone https://github.com/TinyCC/tinycc.git /tmp/tcc-src
+  git -C /tmp/tcc-src checkout <new-ref>
+  rsync -a --exclude='.git' /tmp/tcc-src/ third-party/tcc/src/
+  # update the fields above with the new commit SHA/date/subject, and
+  # re-run third-party/tcc/test/run_tcc_hello.sh to reconfirm the DONE
+  # conditions still hold at the new pin.

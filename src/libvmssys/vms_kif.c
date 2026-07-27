@@ -148,18 +148,19 @@ uint32_t vms_kif_setast(int enable)
 
 int vms_kif_deliverast(uint64_t *astadr, uint64_t *astprm, uint8_t *acmode)
 {
-    int ret = vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_DELIVERAST, 0);
-    if (ret < 0)
+    struct vms_ast_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+
+    /* VMS_IOCTL_DELIVERAST is _IOR: pass a pointer to the buffer the kernel
+     * fills with the next pending AST. Returns 0 with the buffer populated
+     * when an AST is delivered, or <0 (kernel -EAGAIN) when none is pending. */
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_DELIVERAST, (unsigned long)&args) < 0)
         return -1;
 
-    /* Output parameters (astadr, astprm, acmode) are part of the VMS
-     * SYS$DELIVERAST interface and must remain in the signature for API
-     * compatibility.  DELIVERAST currently uses _IO (no data transfer);
-     * a full implementation would use _IOR to return the AST entry.
-     * For now, the return value indicates whether an AST was delivered. */
-    (void)astadr;
-    (void)astprm;
-    (void)acmode;
+    if (astadr) *astadr = args.astadr;
+    if (astprm) *astprm = args.astprm;
+    if (acmode) *acmode = args.acmode;
     return 0;
 }
 

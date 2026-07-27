@@ -113,6 +113,9 @@ struct vms_lock_entry {
     struct vms_proc     *proc;
     int                 waiting;        /* 1 if on waiting list */
     int                 refcount;       /* reference count for safe lookup */
+    wait_queue_head_t   wait_wq;        /* sync ENQ ($ENQW): blocker sleeps here */
+    int                 grant_state;    /* sync wake: 0=pending, SS__NORMAL=granted,
+                                         *            SS__DEADLOCK=cycle detected */
 };
 
 /* Lock resource (named resource in the lock database) */

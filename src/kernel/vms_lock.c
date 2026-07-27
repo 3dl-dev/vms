@@ -27,8 +27,20 @@
 #include <linux/rbtree.h>
 #include <linux/hashtable.h>
 #include <linux/jhash.h>
+#include <linux/wait.h>
+#include <linux/jiffies.h>
 
 #include "vms_internal.h"
+
+/*
+ * Deadlock re-scan interval for a lock blocked in-kernel (sync $ENQW).
+ * A cycle is normally caught at enqueue time by the request that closes it;
+ * this bounded timer is the safety net that catches a cycle enqueue-time
+ * detection missed (check_deadlock uses trylock and may skip a branch),
+ * i.e. a deadlock that only becomes observable AFTER the request queued.
+ * Analogous to VMS SYSGEN DEADLOCK_WAIT, but far shorter for a local manager.
+ */
+#define VMS_DEADLOCK_WAIT_MS 500
 
 
 /* Lock mode compatibility matrix */
@@ -355,6 +367,48 @@ static int check_deadlock(struct vms_lock_entry *lock,
  * Grant waiting locks after a dequeue or conversion
  * ================================================================ */
 
+/*
+ * Queue a completion AST for a waiter that was just granted. This is the
+ * async ($ENQ, no LCK_M_SYNC) path: the caller returned immediately with the
+ * request queued, and asked to be notified via astadr when the lock is
+ * finally granted. Delivered through the process's user-mode AST queue, which
+ * userspace drains via VMS_IOCTL_DELIVERAST.
+ *
+ * Skipped for a sync waiter (LCK_M_SYNC): that caller is blocked in-kernel in
+ * enq_wait_sync() and is woken directly, so there is nobody to drain an AST.
+ * Skipped when no astadr was supplied.
+ *
+ * Called with res->lock held (from try_grant_waiters); allocates GFP_ATOMIC
+ * and nests ast_state->lock inside res->lock (same order as
+ * notify_blocking_asts, so no new lock-order inversion).
+ */
+static void queue_completion_ast(struct vms_lock_entry *lock)
+{
+    struct vms_ast_entry *ast;
+    struct vms_ast_state *ast_state;
+
+    if (!lock->astadr || (lock->flags & LCK_M_SYNC))
+        return;
+
+    ast = kmalloc(sizeof(*ast), GFP_ATOMIC);
+    if (!ast)
+        return;
+
+    ast->astadr = lock->astadr;
+    ast->astprm = lock->astprm;
+    ast->acmode = PSL_C_USER;
+
+    ast_state = &lock->proc->ast[PSL_C_USER];
+    spin_lock(&ast_state->lock);
+    if (ast_state->count < VMS_AST_MAX_PER_MODE) {
+        list_add_tail(&ast->list, &ast_state->pending);
+        ast_state->count++;
+    } else {
+        kfree(ast);
+    }
+    spin_unlock(&ast_state->lock);
+}
+
 static void try_grant_waiters(struct vms_lock_resource *res)
 {
     struct vms_lock_entry *waiter, *tmp;
@@ -370,6 +424,15 @@ static void try_grant_waiters(struct vms_lock_resource *res)
             /* Copy resource value block if requested */
             if (waiter->flags & LCK_M_VALBLK)
                 memcpy(waiter->valblk, res->valblk, LCK_VALBLK_SIZE);
+
+            /*
+             * Signal completion. Async waiters get a completion AST;
+             * sync ($ENQW) waiters blocked in enq_wait_sync() are woken.
+             * Both are cheap and safe under res->lock.
+             */
+            queue_completion_ast(waiter);
+            WRITE_ONCE(waiter->grant_state, SS__NORMAL);
+            wake_up(&waiter->wait_wq);
         } else {
             /* FIFO: stop at first non-grantable waiter
              * (VMS actually checks all waiters, but FIFO is simpler
@@ -458,6 +521,71 @@ void vms_proc_release_locks(struct vms_proc *proc)
 }
 
 /* ================================================================
+ * Synchronous ($ENQW) in-kernel blocking
+ * ================================================================ */
+
+/*
+ * enq_wait_sync - Block the caller until its queued lock is granted, or a
+ * deadlock is detected.
+ *
+ * Preconditions: `lock` is on res->waiting (lock->waiting == 1), res->lock is
+ * NOT held, and lock->grant_state was reset to 0 before it was queued. The
+ * lock entry stays alive for the duration of the wait: it is owned by the
+ * calling process (only that process can DEQ it) and, for CONVERT, an extra
+ * find-reference is held by the caller.
+ *
+ * Returns:
+ *   SS__NORMAL   - granted. try_grant_waiters moved the lock to res->granted,
+ *                  set granted_mode, and set grant_state. Entry left intact.
+ *   SS__DEADLOCK - a cycle was detected on a bounded re-scan. The entry has
+ *                  been removed from res->waiting and lock->waiting cleared;
+ *                  the caller decides how to unwind (free for a fresh ENQ,
+ *                  restore granted mode for a CONVERT).
+ *
+ * The wait is interruptible so a signal (e.g. an AST-delivery RT signal) can
+ * wake us; on a spurious/signal wake with the request still pending we simply
+ * re-arm. Only a genuine timeout (ret == 0) triggers a deadlock re-scan.
+ */
+static int enq_wait_sync(struct vms_lock_resource *res,
+                         struct vms_lock_entry *lock)
+{
+    const long to = msecs_to_jiffies(VMS_DEADLOCK_WAIT_MS);
+
+    for (;;) {
+        long ret = wait_event_interruptible_timeout(
+                       lock->wait_wq,
+                       READ_ONCE(lock->grant_state) != 0, to);
+
+        if (READ_ONCE(lock->grant_state) == SS__NORMAL)
+            return SS__NORMAL;
+        if (READ_ONCE(lock->grant_state) == SS__DEADLOCK)
+            return SS__DEADLOCK;
+
+        /*
+         * Woke without a grant. Re-check under res->lock: the grant may have
+         * raced in just after our condition test, otherwise on a timeout
+         * re-run deadlock detection for this still-waiting request.
+         */
+        spin_lock(&res->lock);
+        if (!lock->waiting) {
+            /* Granted between the wakeup and acquiring res->lock. */
+            WRITE_ONCE(lock->grant_state, SS__NORMAL);
+            spin_unlock(&res->lock);
+            return SS__NORMAL;
+        }
+        if (ret == 0 && check_deadlock(lock, 0)) {
+            list_del(&lock->res_waiting);
+            lock->waiting = 0;
+            WRITE_ONCE(lock->grant_state, SS__DEADLOCK);
+            spin_unlock(&res->lock);
+            return SS__DEADLOCK;
+        }
+        spin_unlock(&res->lock);
+        /* Signal wake or benign timeout: keep waiting. */
+    }
+}
+
+/* ================================================================
  * ioctl handlers
  * ================================================================ */
 
@@ -516,6 +644,8 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
     lock->resource = res;
     lock->proc = proc;
     lock->waiting = 0;
+    init_waitqueue_head(&lock->wait_wq);
+    lock->grant_state = 0;
 
     if (args.flags & LCK_M_VALBLK)
         memcpy(lock->valblk, args.valblk, LCK_VALBLK_SIZE);
@@ -575,6 +705,7 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
         } else {
             /* Queue the request */
             lock->waiting = 1;
+            lock->grant_state = 0;
             list_add_tail(&lock->res_waiting, &res->waiting);
 
             /* Check for deadlock */
@@ -597,14 +728,44 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg)
                 notify_blocking_asts(res, lock);
                 spin_unlock(&res->lock);
 
-                /*
-                 * In a fully synchronous (ENQw) model, we'd block here.
-                 * For the async model, return the lock ID and let
-                 * userspace poll/wait. For now, mark as queued.
-                 */
-                args.lkid = lock->lkid;
-                args.lk_status = lock->requested_mode;
-                args.status = SS__NORMAL;
+                if (args.flags & LCK_M_SYNC) {
+                    /*
+                     * Synchronous $ENQW: block in-kernel until the request
+                     * is granted (by another process's DEQ/CONVERT, via
+                     * try_grant_waiters) or a deadlock is detected. This
+                     * replaces the old userspace GETLKI poll loop.
+                     */
+                    if (enq_wait_sync(res, lock) == SS__DEADLOCK) {
+                        /* Never granted: unwind the fresh request. */
+                        spin_lock(&proc->lock_list_lock);
+                        list_del(&lock->proc_list);
+                        proc->lock_count--;
+                        spin_unlock(&proc->lock_list_lock);
+                        lock_remove_id(lock);
+                        resource_release(res);
+                        kmem_cache_free(vms_lock_cache, lock);
+
+                        args.lkid = 0;
+                        args.status = SS__DEADLOCK;
+                        goto out;
+                    }
+
+                    /* Granted at the requested mode. */
+                    args.lkid = lock->lkid;
+                    args.lk_status = lock->granted_mode;
+                    if (args.flags & LCK_M_VALBLK)
+                        memcpy(args.valblk, lock->valblk, LCK_VALBLK_SIZE);
+                    args.status = SS__NORMAL;
+                } else {
+                    /*
+                     * Async $ENQ: return the lock ID with the request
+                     * queued (granted mode still NL). A completion AST is
+                     * delivered later, on grant, if astadr was supplied.
+                     */
+                    args.lkid = lock->lkid;
+                    args.lk_status = lock->requested_mode;
+                    args.status = SS__NORMAL;
+                }
             }
         }
     }
@@ -744,6 +905,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
             /* Move to waiting list, keep granted mode until converted */
             lock->requested_mode = args.lkmode;
             lock->waiting = 1;
+            lock->grant_state = 0;
             list_del(&lock->res_granted);
             list_add_tail(&lock->res_waiting, &res->waiting);
 
@@ -758,8 +920,29 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
             } else {
                 notify_blocking_asts(res, lock);
                 spin_unlock(&res->lock);
-                args.lk_status = lock->requested_mode;
-                args.status = SS__NORMAL;
+
+                if (args.flags & LCK_M_SYNC) {
+                    /* Synchronous convert: block until granted at the new
+                     * mode, or a deadlock is detected. On deadlock the lock
+                     * retains its original granted mode (VMS semantics --
+                     * a failed convert does not lose the held lock). */
+                    if (enq_wait_sync(res, lock) == SS__DEADLOCK) {
+                        spin_lock(&res->lock);
+                        lock->requested_mode = lock->granted_mode;
+                        lock->waiting = 0;
+                        list_add_tail(&lock->res_granted, &res->granted);
+                        spin_unlock(&res->lock);
+                        args.status = SS__DEADLOCK;
+                    } else {
+                        args.lk_status = lock->granted_mode;
+                        if (args.flags & LCK_M_VALBLK)
+                            memcpy(args.valblk, lock->valblk, LCK_VALBLK_SIZE);
+                        args.status = SS__NORMAL;
+                    }
+                } else {
+                    args.lk_status = lock->requested_mode;
+                    args.status = SS__NORMAL;
+                }
             }
         }
     }

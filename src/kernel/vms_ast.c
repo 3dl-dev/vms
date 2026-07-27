@@ -197,11 +197,12 @@ long vms_ioctl_deliverast(struct vms_proc *proc, unsigned long arg)
         args.status = SS__NORMAL;
         kfree(entry);
 
+        /* VMS_IOCTL_DELIVERAST is _IOR: `arg` is a userspace pointer to a
+         * struct vms_ast_args that receives the delivered AST entry. Return
+         * 0 to signal "an AST was delivered"; the caller reads astadr/astprm/
+         * acmode from the buffer. */
         if (copy_to_user((void __user *)arg, &args, sizeof(args)))
             return -EFAULT;
-        /* Actually we need a user pointer -- use the ioctl arg mechanism.
-         * DELIVERAST is _IO (no arg), so we return via the ioctl return value
-         * encoding, or we change it to _IOR. For now, return 0 = has AST. */
         return 0;
     }
 

@@ -9,6 +9,17 @@
 #                                   Use for: first boot / install / recovery
 #                                   Contains all OVMX binaries; STARTUP.EXE
 #                                   detects a blank system disk and installs.
+#                                   On aarch64 hosts (bead vms-913.6) the
+#                                   dynamic binaries (DCL, LOGINOUT, HELP,
+#                                   VMSLNMD, AUTHORIZE, MAIL, ...) are built
+#                                   -DOVMX_IMGACT=ON: PT_INTERP=IMGACT.EXE,
+#                                   DT_HASH, activated by IMGACT.EXE against
+#                                   the LIB*$SHR.EXE shareables in SYSLIB —
+#                                   see docs/design-image-activation.md.
+#                                   STARTUP.EXE and IMGACT.EXE stay static.
+#                                   On other host arches (x86_64 support is
+#                                   bead vms-913.11) this falls back to the
+#                                   OVMX_STATIC binaries, unchanged.
 #
 #   initramfs-ovmx-slim.cpio.gz  — SLIM initramfs (bootstrap only)
 #                                   Use for: subsequent boots after install
@@ -71,6 +82,42 @@ RUN cmake -B build-static \
     -DBUILD_TOOLS=ON \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
+# Build OVMX userspace — dynamic musl + IMGACT.EXE image activation
+# (bead vms-913.6). This targets the DT_HASH activation path (vms-913.2):
+# ordinary ELF PLT/GOT via IMGACT.EXE as PT_INTERP, not the VMS-native
+# symbol-vector/LINK.EXE path (separate WIP, see docs/design-link-native-
+# toolchain.md). IMGACT.EXE is aarch64-only until bead vms-913.11 adds
+# x86_64 (src/imgact/CMakeLists.txt has a configure-time FATAL_ERROR on any
+# other CMAKE_SYSTEM_PROCESSOR), so this step is skipped on non-aarch64
+# hosts and the fat initramfs below falls back to the OVMX_STATIC binaries
+# built above — unchanged pre-vms-913.6 behavior on those hosts.
+# STARTUP.EXE and IMGACT.EXE itself always stay static regardless of host
+# arch (the OVMX_IMGACT CMake mode forces -static on ovmx_init; IMGACT.EXE
+# is -nostdlib) — see docs/design-image-activation.md §7-8.
+#
+# -mno-outline-atomics: GCC's aarch64 outline-atomics codegen calls libgcc
+# helpers (__aarch64_*_acq_rel) that reference __getauxval to probe for LSE
+# hardware support at runtime. musl only exports getauxval (no leading
+# underscores); src/libvmssys/CMakeLists.txt already disables outline-atomics
+# for its own target for exactly this reason. Passed globally here via
+# CMAKE_C_FLAGS so every OVMX_IMGACT translation unit (libvms, vmsdcl, ...)
+# gets the same treatment, not just libvmssys.
+RUN HOSTARCH=$(uname -m) && \
+    if [ "$HOSTARCH" = "aarch64" ] || [ "$HOSTARCH" = "arm64" ]; then \
+        echo "Host arch $HOSTARCH: building OVMX_IMGACT dynamic userspace" && \
+        cmake -B build-imgact \
+            -DCMAKE_C_COMPILER=musl-gcc \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/ \
+            -DOVMX_IMGACT=ON \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_TOOLS=ON \
+            -DCMAKE_C_FLAGS=-mno-outline-atomics \
+        && cmake --build build-imgact --parallel $(nproc) 2>&1 ; \
+    else \
+        echo "Host arch $HOSTARCH: OVMX_IMGACT build skipped (aarch64-only until vms-913.11); fat initramfs will use static binaries"; \
+    fi
+
 # -- FAT initramfs -------------------------------------------------------------
 # All OVMX binaries included. STARTUP.EXE detects a blank /dev/vda and
 # installs the full OS onto it. Use this for first boot or recovery.
@@ -89,16 +136,36 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSMGR \
              /initramfs-fat/vms/SYS0/SYSCOMMON/SYSHLP \
              /initramfs-fat/vms/USERS && \
-    # OVMX binaries → SYSEXE (STARTUP.EXE is also /init)
-    cp build-static/bin/STARTUP.EXE    /initramfs-fat/init && \
-    cp build-static/bin/DCL.EXE        /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp build-static/bin/LOGINOUT.EXE   /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp build-static/bin/HELP.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp build-static/bin/VMSLNMD.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp build-static/bin/AUTHORIZE.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    cp build-static/bin/MAIL.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    cp build-static/bin/MONITOR.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    cp build-static/bin/INITIALIZE.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    if [ -d build-imgact/bin ]; then \
+        echo "Fat initramfs: OVMX_IMGACT dynamic binaries (musl, DT_HASH, PT_INTERP=IMGACT.EXE)" && \
+        # STARTUP.EXE is static even in this build mode (also /init)
+        cp build-imgact/bin/STARTUP.EXE    /initramfs-fat/init && \
+        # IMGACT.EXE — the ELF interpreter every dynamic OVMX binary points at
+        cp build-imgact/bin/IMGACT.EXE     /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp build-imgact/bin/DCL.EXE        /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp build-imgact/bin/LOGINOUT.EXE   /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp build-imgact/bin/HELP.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp build-imgact/bin/VMSLNMD.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp build-imgact/bin/AUTHORIZE.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+        cp build-imgact/bin/MAIL.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+        cp build-imgact/bin/MONITOR.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+        cp build-imgact/bin/INITIALIZE.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+        # LIB*$SHR.EXE shareables (the .a static twins in build-imgact/lib/
+        # are for STARTUP.EXE's own link only — never installed on the disk)
+        cp build-imgact/lib/*.EXE          /initramfs-fat/vms/SYS0/SYSCOMMON/SYSLIB/ && \
+        true ; \
+    else \
+        echo "Fat initramfs: static musl binaries (OVMX_IMGACT unavailable on this host arch)" && \
+        cp build-static/bin/STARTUP.EXE    /initramfs-fat/init && \
+        cp build-static/bin/DCL.EXE        /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp build-static/bin/LOGINOUT.EXE   /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp build-static/bin/HELP.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp build-static/bin/VMSLNMD.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp build-static/bin/AUTHORIZE.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+        cp build-static/bin/MAIL.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+        cp build-static/bin/MONITOR.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+        cp build-static/bin/INITIALIZE.EXE /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    fi && \
     # Kernel modules
     cp src/kernel/vms.ko /initramfs-fat/lib/modules/ && \
     cp src/kernel/vmsfs/vmsfs.ko /initramfs-fat/lib/modules/ && \

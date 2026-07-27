@@ -86,5 +86,6 @@ static inline long syscall6(long n, long a, long b, long c, long d, long e,
 void _start(void);                 /* ELF entry point                        */
 void __tlsdesc_static(void);       /* TLSDESC static resolver (%rax in/out)  */
 void imgact_set_tp(void *tp);      /* arch_prctl(ARCH_SET_FS, tp)            */
+void *imgact_get_tp(void);         /* mov %fs:0, %rax (TCB self-pointer)     */
 
 #endif /* OVMX_IMGACT_ARCH_X86_64_H */

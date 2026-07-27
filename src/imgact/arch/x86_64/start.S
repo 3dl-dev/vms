@@ -66,4 +66,20 @@ imgact_set_tp:
 	ret
 	.size imgact_set_tp,.-imgact_set_tp
 
+/*
+ * void *imgact_get_tp(void)   [returns the thread pointer (FS base) in %rax]
+ * Read the userspace thread pointer. Used when a C-RTL (musl DECC$SHR) already
+ * owns TP and IMGACT must resolve a coexisting TLS producer's static TLSDESC
+ * entries relative to that already-programmed TP (bead vms-616). On x86_64 the
+ * TP is the FS base; musl stores the TCB self-pointer at %fs:0, so read it there
+ * (no rdfsbase dependency).
+ */
+	.global imgact_get_tp
+	.hidden imgact_get_tp
+	.type imgact_get_tp,@function
+imgact_get_tp:
+	mov	%fs:0, %rax
+	ret
+	.size imgact_get_tp,.-imgact_get_tp
+
 	.section .note.GNU-stack,"",@progbits

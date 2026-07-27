@@ -700,3 +700,42 @@ jobs:
               export CC=gcc WORK=/tmp/decc-shr-act
               sh /src/src/imgact/test/run_decc_shr_activation.sh
             '
+
+  # -----------------------------------------------------------------------
+  # Job 14: lib-shareable transitive import activation (aarch64)
+  #
+  # The spine increment (pillar vms-ade / bead vms-e65) that unblocks the b65
+  # lib-migration chain: LINK.EXE's emit_shareable can now BIND a LIBRARY
+  # shareable's own libc/pthread CALL imports to DECC$SHR (PLT + import GOT +
+  # .vms$imp), and IMGACT.EXE resolves that binding TRANSITIVELY at activation.
+  # mk_decc_shr.sh builds DECC$SHR with the appended pthread universals; a lib
+  # shareable TESTLIB$SHR imports pthread_mutex_lock/unlock + malloc + memset +
+  # free from it and exports lib_compute; a consumer that names ONLY TESTLIB$SHR
+  # runs FOR REAL and returns 42 — proving the lib's own imports bound transitively
+  # to DECC$SHR (a real pthread/malloc path executed through it). Runs under arm64
+  # emulation.
+  # -----------------------------------------------------------------------
+  shareable-import-activate:
+    name: Lib-Shareable Transitive Import Activation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Bind a lib shareable's imports to DECC$SHR through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/shr-import-act
+              sh /src/src/imgact/test/run_shareable_import_activation.sh
+            '

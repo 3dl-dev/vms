@@ -965,6 +965,14 @@ struct ovmx_prod {
 static struct ovmx_prod g_prods[32];
 static int              g_nprods;
 
+/* Transitive-import machinery (vms-e65): a producer shareable may itself import
+ * universals from another producer (a lib shareable -> DECC$SHR). These three
+ * are mutually recursive (bind -> load -> resolve -> bind), so forward-declare. */
+static struct ovmx_prod *load_ovmx_producer(const char *soname);
+static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
+			 const char *whoami);
+static void resolve_producer_imports(struct ovmx_prod *p, unsigned long imp_addr);
+
 /* Map a producer shareable image's PT_LOAD segments and locate its .vms$sv. */
 static struct ovmx_prod *load_ovmx_producer(const char *soname)
 {
@@ -1028,6 +1036,11 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	/* Locate the .vms$tls TLSDESC table (completed after TLS offsets assigned). */
 	unsigned long tls_addr, tls_size;
 	int have_tlsdesc = ovmx_find_section(fd, OVMX_TLS_SECTION, &tls_addr, &tls_size);
+	/* Locate this producer's OWN .vms$imp: a lib shareable that itself imports
+	 * from another producer (e.g. libc/pthread from DECC$SHR). Resolved
+	 * transitively after registration below. (vms-e65) */
+	unsigned long imp_addr, imp_size;
+	int have_imp = ovmx_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
 	sys_close(fd);
 	if (!ok)
 		return 0;
@@ -1050,7 +1063,52 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	}
 	p->tlsdesc = have_tlsdesc
 		? (const struct ovmx_tls_header *)(base + tls_addr) : 0;
+
+	/* Transitively bind this producer's own imports. Done AFTER registration so a
+	 * dependency cycle dedups through find-loaded, and AFTER apply_vms_rel above so
+	 * the .vms$sv values it exports are already load-biased before a dependent
+	 * reads them. Its GOT cells are writable (RWX PT_LOAD). (vms-e65) */
+	if (have_imp)
+		resolve_producer_imports(p, imp_addr);
 	return p;
+}
+
+/* Bind every .vms$imp import at `ih` into image `base`: map each named producer
+ * (recursively — transitive imports), GSMATCH-resolve the universal by vector
+ * index, and store the run-time address into the importing image's GOT cell.
+ * Shared by the executable's activation and a producer's transitive resolution
+ * (a lib shareable that itself imports from DECC$SHR — vms-e65). */
+static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
+			 const char *whoami)
+{
+	if (ih->magic != OVMX_IMP_MAGIC)
+		die_imgfmterr(whoami);
+	const struct ovmx_imp_entry *ie =
+		(const struct ovmx_imp_entry *)((const char *)ih + sizeof *ih);
+	const char *names = (const char *)ih + ih->names_off;
+	for (unsigned k = 0; k < ih->count; k++) {
+		const char *soname = names + ie[k].producer_off;
+		struct ovmx_prod *p = load_ovmx_producer(soname);
+		if (!p)
+			die_imgnotfnd(soname);
+		unsigned long addr = ovmx_sv_resolve(p->sv, ie[k].sv_index, p->base,
+						     ie[k].req_major, ie[k].req_minor);
+		if (!addr) {
+			vms_fatal("GSMATCH", "shareable image version mismatch", soname);
+			sys_exit(IMGACT_EXIT_FAIL);
+		}
+		*(unsigned long *)(base + ie[k].patch_off) = addr;
+	}
+}
+
+/* Resolve a producer shareable's OWN cross-image imports (its .vms$imp) against
+ * the producers it names — transitive binding, e.g. a lib shareable -> DECC$SHR.
+ * The .vms$imp table lives in the producer's mapped image at base + imp_addr. */
+static void resolve_producer_imports(struct ovmx_prod *p, unsigned long imp_addr)
+{
+	const struct ovmx_imp_header *ih =
+		(const struct ovmx_imp_header *)(p->base + imp_addr);
+	bind_imports(p->base, ih, p->name);
 }
 
 /* Symbol-vector TLS setup: assign each producer's TLS block an offset from TP,
@@ -1217,27 +1275,12 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
 	if (!ok)
 		die_imgfmterr("IMAGE.EXE");
 
+	/* Bind the executable's imports. load_ovmx_producer transitively resolves
+	 * each producer's OWN imports too, so a lib shareable's libc/pthread calls
+	 * are already bound to DECC$SHR by the time we return here. (vms-e65) */
 	const struct ovmx_imp_header *ih =
 		(const struct ovmx_imp_header *)(exe_base + imp_addr);
-	if (ih->magic != OVMX_IMP_MAGIC)
-		die_imgfmterr("IMAGE.EXE");
-	const struct ovmx_imp_entry *ie =
-		(const struct ovmx_imp_entry *)((const char *)ih + sizeof *ih);
-	const char *names = (const char *)ih + ih->names_off;
-
-	for (unsigned k = 0; k < ih->count; k++) {
-		const char *soname = names + ie[k].producer_off;
-		struct ovmx_prod *p = load_ovmx_producer(soname);
-		if (!p)
-			die_imgnotfnd(soname);
-		unsigned long addr = ovmx_sv_resolve(p->sv, ie[k].sv_index, p->base,
-						     ie[k].req_major, ie[k].req_minor);
-		if (!addr) {
-			vms_fatal("GSMATCH", "shareable image version mismatch", soname);
-			sys_exit(IMGACT_EXIT_FAIL);
-		}
-		*(unsigned long *)(exe_base + ie[k].patch_off) = addr;
-	}
+	bind_imports(exe_base, ih, "IMAGE.EXE");
 
 	/* TLS ownership. A musl C-RTL (DECC$SHR) programs the thread pointer and
 	 * lays out the TCB/TLS itself inside __init_libc; IMGACT's own symbol-vector

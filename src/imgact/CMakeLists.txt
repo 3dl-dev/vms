@@ -20,6 +20,9 @@ add_executable(imgact
     ${IMGACT_ARCHDIR}/start.S
 )
 
+# Shared OVMX image + symbol-vector format/resolver (LINK.EXE contract).
+target_include_directories(imgact PRIVATE ${CMAKE_SOURCE_DIR}/src/vmslink/include)
+
 target_compile_options(imgact PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
     -O2 -Wall -Wextra

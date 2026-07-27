@@ -31,6 +31,12 @@
 #include <elf.h>
 
 #include "arch/aarch64/imgact_arch.h"
+#include "ovmx_image.h"   /* OVMX symbol-vector image format (LINK.EXE) */
+#include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
+
+#ifndef AT_EXECFN
+#define AT_EXECFN 31
+#endif
 
 #ifndef O_RDONLY
 #define O_RDONLY 0
@@ -731,6 +737,160 @@ static unsigned long exec_bias(Elf64_Phdr *phdr, int phnum, unsigned long at_phd
 	return 0;
 }
 
+/* --------------------------------------------------------------------------
+ * OVMX symbol-vector activation (bead vms-714).
+ *
+ * An image produced by LINK.EXE has no PT_DYNAMIC. A shareable image exports
+ * universal symbols through a .vms$sv symbol vector; an executable imports them
+ * through a .vms$imp table naming (producer soname, vector index). IMGACT binds
+ * each import by vector POSITION + GSMATCH (ovmx_symvec.h), writing the resolved
+ * address into the consumer's GOT cell — the VMS-native replacement for ELF
+ * DT_HASH/DT_NEEDED resolution.
+ * -------------------------------------------------------------------------- */
+
+/* Find a section's load vaddr + size by name, via the file's section headers. */
+static int ovmx_find_section(int fd, const char *want,
+			     unsigned long *addr, unsigned long *size)
+{
+	Elf64_Ehdr eh;
+	if (sys_pread(fd, &eh, sizeof eh, 0) != (long)sizeof eh)
+		return 0;
+	if (eh.e_shnum == 0 || eh.e_shnum > 64 || eh.e_shstrndx >= eh.e_shnum)
+		return 0;
+	Elf64_Shdr sh[64];
+	unsigned long ssz = (unsigned long)eh.e_shnum * sizeof(Elf64_Shdr);
+	if (sys_pread(fd, sh, ssz, (long)eh.e_shoff) != (long)ssz)
+		return 0;
+	static char strtab[2048];
+	unsigned long stsz = sh[eh.e_shstrndx].sh_size;
+	if (stsz > sizeof strtab)
+		return 0;
+	if (sys_pread(fd, strtab, stsz, (long)sh[eh.e_shstrndx].sh_offset) != (long)stsz)
+		return 0;
+	for (int i = 0; i < eh.e_shnum; i++) {
+		if (xstrcmp(strtab + sh[i].sh_name, want) == 0) {
+			*addr = sh[i].sh_addr;
+			*size = sh[i].sh_size;
+			return 1;
+		}
+	}
+	return 0;
+}
+
+struct ovmx_prod {
+	char                         name[128];
+	unsigned long                base;
+	const struct ovmx_sv_header *sv;
+};
+static struct ovmx_prod g_prods[32];
+static int              g_nprods;
+
+/* Map a producer shareable image's PT_LOAD segments and locate its .vms$sv. */
+static struct ovmx_prod *load_ovmx_producer(const char *soname)
+{
+	for (int i = 0; i < g_nprods; i++)
+		if (xstrcmp(g_prods[i].name, soname) == 0)
+			return &g_prods[i];
+	if (g_nprods >= 32)
+		return 0;
+
+	/* Search: SYS$SHARE fallback, then the name as given. */
+	char path[256];
+	xstrcpy(path, IMGACT_FALLBACK_SYSLIB "/");
+	xstrcat(path, soname);
+	int fd = (int)sys_openat(path, O_RDONLY);
+	if (fd < 0)
+		fd = (int)sys_openat(soname, O_RDONLY);
+	if (fd < 0)
+		return 0;
+
+	Elf64_Ehdr eh;
+	if (sys_pread(fd, &eh, sizeof eh, 0) != (long)sizeof eh) { sys_close(fd); return 0; }
+	Elf64_Phdr ph[16];
+	if (eh.e_phnum > 16) { sys_close(fd); return 0; }
+	if (sys_pread(fd, ph, (unsigned long)eh.e_phnum * sizeof(Elf64_Phdr),
+		      (long)eh.e_phoff) < 0) { sys_close(fd); return 0; }
+
+	unsigned long lo = ~0UL, hi = 0;
+	for (int i = 0; i < eh.e_phnum; i++) {
+		if (ph[i].p_type != PT_LOAD) continue;
+		if (PAGE_DOWN(ph[i].p_vaddr) < lo) lo = PAGE_DOWN(ph[i].p_vaddr);
+		if (ph[i].p_vaddr + ph[i].p_memsz > hi) hi = ph[i].p_vaddr + ph[i].p_memsz;
+	}
+	if (lo == ~0UL) { sys_close(fd); return 0; }
+	unsigned long span = PAGE_UP(hi) - lo;
+	void *map = sys_mmap(0, span, PROT_READ | PROT_WRITE,
+			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (map == MAP_FAILED) { sys_close(fd); return 0; }
+	unsigned long base = (unsigned long)map - lo;
+	for (int i = 0; i < eh.e_phnum; i++) {
+		if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0) continue;
+		if (sys_pread(fd, (void *)(base + ph[i].p_vaddr), ph[i].p_filesz,
+			      (long)ph[i].p_offset) < 0) { sys_close(fd); return 0; }
+	}
+	for (int i = 0; i < eh.e_phnum; i++) {
+		if (ph[i].p_type != PT_LOAD) continue;
+		int prot = 0;
+		if (ph[i].p_flags & PF_R) prot |= PROT_READ;
+		if (ph[i].p_flags & PF_W) prot |= PROT_WRITE;
+		if (ph[i].p_flags & PF_X) prot |= PROT_EXEC;
+		unsigned long a = PAGE_DOWN(base + ph[i].p_vaddr);
+		unsigned long z = PAGE_UP(base + ph[i].p_vaddr + ph[i].p_memsz);
+		sys_mprotect((void *)a, z - a, prot);
+	}
+
+	unsigned long sv_addr, sv_size;
+	int ok = ovmx_find_section(fd, OVMX_SV_SECTION, &sv_addr, &sv_size);
+	sys_close(fd);
+	if (!ok)
+		return 0;
+
+	struct ovmx_prod *p = &g_prods[g_nprods++];
+	xstrcpy(p->name, soname);
+	p->base = base;
+	p->sv = (const struct ovmx_sv_header *)(base + sv_addr);
+	if (p->sv->magic != OVMX_SV_MAGIC) { g_nprods--; return 0; }
+	return p;
+}
+
+/* Resolve every .vms$imp import of the executable against producer symbol
+ * vectors, patching the consumer's GOT cells. */
+static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
+{
+	if (!execfn)
+		die_imgfmterr("IMAGE.EXE");
+	int fd = (int)sys_openat(execfn, O_RDONLY);
+	if (fd < 0)
+		die_imgnotfnd(execfn);
+	unsigned long imp_addr, imp_size;
+	int ok = ovmx_find_section(fd, OVMX_IMP_SECTION, &imp_addr, &imp_size);
+	sys_close(fd);
+	if (!ok)
+		die_imgfmterr("IMAGE.EXE");
+
+	const struct ovmx_imp_header *ih =
+		(const struct ovmx_imp_header *)(exe_base + imp_addr);
+	if (ih->magic != OVMX_IMP_MAGIC)
+		die_imgfmterr("IMAGE.EXE");
+	const struct ovmx_imp_entry *ie =
+		(const struct ovmx_imp_entry *)((const char *)ih + sizeof *ih);
+	const char *names = (const char *)ih + ih->names_off;
+
+	for (unsigned k = 0; k < ih->count; k++) {
+		const char *soname = names + ie[k].producer_off;
+		struct ovmx_prod *p = load_ovmx_producer(soname);
+		if (!p)
+			die_imgnotfnd(soname);
+		unsigned long addr = ovmx_sv_resolve(p->sv, ie[k].sv_index, p->base,
+						     ie[k].req_major, ie[k].req_minor);
+		if (!addr) {
+			vms_fatal("GSMATCH", "shareable image version mismatch", soname);
+			sys_exit(IMGACT_EXIT_FAIL);
+		}
+		*(unsigned long *)(exe_base + ie[k].patch_off) = addr;
+	}
+}
+
 unsigned long imgact_bootstrap(unsigned long *sp)
 {
 	/* ---- Parse the initial process stack (no globals yet). ---- */
@@ -744,12 +904,14 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 
 	unsigned long at_base = 0, at_phdr = 0, at_entry = 0;
 	long at_phnum = 0;
+	const char *at_execfn = 0;
 	for (Elf64_auxv_t *a = auxv; a->a_type != AT_NULL; a++) {
 		switch (a->a_type) {
-		case AT_BASE:  at_base  = a->a_un.a_val; break;
-		case AT_PHDR:  at_phdr  = a->a_un.a_val; break;
-		case AT_PHNUM: at_phnum = (long)a->a_un.a_val; break;
-		case AT_ENTRY: at_entry = a->a_un.a_val; break;
+		case AT_BASE:   at_base   = a->a_un.a_val; break;
+		case AT_PHDR:   at_phdr   = a->a_un.a_val; break;
+		case AT_PHNUM:  at_phnum  = (long)a->a_un.a_val; break;
+		case AT_ENTRY:  at_entry  = a->a_un.a_val; break;
+		case AT_EXECFN: at_execfn = (const char *)a->a_un.a_val; break;
 		default: break;
 		}
 	}
@@ -767,15 +929,24 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	int ephnum = (int)at_phnum;
 	unsigned long ebias = exec_bias(ephdr, ephnum, at_phdr);
 
+	Elf64_Dyn *edyn = 0;
+	for (int i = 0; i < ephnum; i++)
+		if (ephdr[i].p_type == PT_DYNAMIC)
+			edyn = (Elf64_Dyn *)(ebias + ephdr[i].p_vaddr);
+
+	/* An OVMX symbol-vector image (LINK.EXE output) has no PT_DYNAMIC: it
+	 * binds universal symbols through .vms$imp, not ELF DT_HASH. (vms-714) */
+	if (!edyn) {
+		activate_symbol_vector(ebias, at_execfn);
+		return at_entry;
+	}
+
+	/* ---- Legacy ELF DT_NEEDED path (913.2 bootstrap). ---- */
 	struct obj *exe = &g_objs[g_nobjs++];
 	memset(exe, 0, sizeof(*exe));
 	xstrcpy(exe->name, "IMAGE.EXE");
 	exe->base = ebias;
-	for (int i = 0; i < ephnum; i++)
-		if (ephdr[i].p_type == PT_DYNAMIC)
-			exe->dyn = (Elf64_Dyn *)(ebias + ephdr[i].p_vaddr);
-	if (!exe->dyn)
-		die_imgfmterr("IMAGE.EXE");
+	exe->dyn = edyn;
 	parse_dynamic(exe);
 	scan_tls(exe, ephdr, ephnum);
 

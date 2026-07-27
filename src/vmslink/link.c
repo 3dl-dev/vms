@@ -324,7 +324,7 @@ static void emit_executable(struct obj *o, struct producer *ps, int np,
      * [ehdr][phdr x2][.interp][.text][.plt][.got][.vms$imp][.shstrtab][shdrs] */
     uint64_t off_eh     = 0;
     uint64_t off_ph     = sizeof(Elf64_Ehdr);
-    int      nph        = 2;
+    int      nph        = 3;   /* PT_PHDR, PT_INTERP, PT_LOAD */
     uint64_t off_interp = off_ph + nph * sizeof(Elf64_Phdr);
     uint64_t interp_sz  = strlen(IMGACT_INTERP) + 1;
     uint64_t off_text   = ALIGN_UP(off_interp + interp_sz, 16);
@@ -381,14 +381,19 @@ static void emit_executable(struct obj *o, struct producer *ps, int np,
     eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf64_Phdr); eh->e_phnum = nph;
     eh->e_shentsize = sizeof(Elf64_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = 6;
 
-    /* Program headers: PT_INTERP + PT_LOAD (RWX: GOT is written at activation). */
+    /* Program headers: PT_PHDR (so the activator can derive the load bias),
+     * PT_INTERP, PT_LOAD (RWX: GOT is written at activation). */
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
-    ph[0].p_type = PT_INTERP; ph[0].p_flags = PF_R;
-    ph[0].p_offset = off_interp; ph[0].p_vaddr = off_interp; ph[0].p_paddr = off_interp;
-    ph[0].p_filesz = interp_sz; ph[0].p_memsz = interp_sz; ph[0].p_align = 1;
-    ph[1].p_type = PT_LOAD; ph[1].p_flags = PF_R | PF_W | PF_X;
-    ph[1].p_offset = 0; ph[1].p_vaddr = 0; ph[1].p_paddr = 0;
-    ph[1].p_filesz = loaded_end; ph[1].p_memsz = loaded_end; ph[1].p_align = PAGE;
+    ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
+    ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
+    ph[0].p_filesz = (uint64_t)nph * sizeof(Elf64_Phdr);
+    ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
+    ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
+    ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
+    ph[1].p_filesz = interp_sz; ph[1].p_memsz = interp_sz; ph[1].p_align = 1;
+    ph[2].p_type = PT_LOAD; ph[2].p_flags = PF_R | PF_W | PF_X;
+    ph[2].p_offset = 0; ph[2].p_vaddr = 0; ph[2].p_paddr = 0;
+    ph[2].p_filesz = loaded_end; ph[2].p_memsz = loaded_end; ph[2].p_align = PAGE;
 
     memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
     memcpy(img + off_text, o->buf + o->text->sh_offset, text_sz);

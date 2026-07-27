@@ -14,6 +14,7 @@ ARCHDIR := arch/$(ARCH)
 # IMGACT.EXE is a freestanding static-PIE ELF interpreter that exports no
 # symbols (hidden visibility) and self-relocates. It links against nothing.
 IMGACT_CFLAGS := -std=gnu11 -O2 -Wall -Wextra \
+                 -I../vmslink/include \
                  -fPIC -fvisibility=hidden -ffreestanding \
                  -fno-stack-protector -fno-builtin -fno-asynchronous-unwind-tables
 IMGACT_LDFLAGS := -nostdlib -nostartfiles -shared \

@@ -516,3 +516,38 @@ jobs:
               export CC=gcc WORK=/tmp/vmslink-test
               sh /src/src/vmslink/test/run_test.sh
             '
+
+  # -----------------------------------------------------------------------
+  # Job 11: real IMGACT.EXE symbol-vector activation (aarch64)
+  #
+  # Gate on the VMS-native activation path (bead vms-714): builds IMGACT.EXE
+  # with .vms$imp support, links a producer + consumer with LINK.EXE, installs
+  # IMGACT at its PT_INTERP path, and runs the consumer FOR REAL (kernel ->
+  # PT_INTERP=IMGACT.EXE -> resolve symbol vector + GSMATCH -> transfer). The
+  # cross-image call must return 42; a GSMATCH-older producer must exit 44
+  # (%IMGACT-F-GSMATCH), not crash. Runs under arm64 emulation.
+  # -----------------------------------------------------------------------
+  imgact-symvec:
+    name: IMGACT.EXE Symbol-Vector Activation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Activate a VMS-native image through the real IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/symvec-act
+              sh /src/src/imgact/test/run_symvec_activation.sh
+            '

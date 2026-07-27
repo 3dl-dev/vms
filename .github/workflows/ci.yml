@@ -864,3 +864,28 @@ jobs:
               export CC=gcc WORK=/tmp/libvms-native
               sh /src/src/imgact/test/run_libvms_native.sh
             '
+
+  vmsrms-native:
+    name: vmsrms VMS-native Migration (LIBVMSRMS$SHR)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link the real src/vmsrms VMS-native (over DECC$SHR + LIBVMS$SHR + LIBVMSFS$SHR) + activate a consumer through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/vmsrms-native
+              sh /src/src/imgact/test/run_vmsrms_native.sh
+            '

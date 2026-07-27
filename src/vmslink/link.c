@@ -42,6 +42,13 @@
 #define R_AARCH64_ABS64           257
 #endif
 
+/* 32-bit PC-relative data reference (S+A-P written as a 32-bit word). Emitted
+ * for relative/switch tables and some -fPIC data-relative constants. Guarded.
+ * (vms-ba1) */
+#ifndef R_AARCH64_PREL32
+#define R_AARCH64_PREL32          261
+#endif
+
 /* Additional PC-relative .text relocation types musl-scale code emits. Guarded:
  * older <elf.h> may lack them. (vms-004) */
 #ifndef R_AARCH64_LD_PREL_LO19
@@ -121,7 +128,7 @@ struct obj {
     int           nsym;
     const char   *str;      /* .strtab */
     /* Legacy single-section handles (the *first* of each), used by the simple
-     * single-.text consumer path (emit_executable). */
+     * legacy single-.text consumer path (pre-vms-ba1). */
     int           text_ndx; /* .text section index */
     Elf64_Shdr   *text;     /* .text section header */
     int           rodata_ndx; /* .rodata section index (0 if none) */
@@ -443,6 +450,7 @@ static void parse_gsmatch(char *spec, uint32_t *kind, uint32_t *maj, uint32_t *m
  * -------------------------------------------------------------------------- */
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((uint64_t)(a) - 1))
 #define PAGE 0x1000u
+#define CRT0_NINSN 7   /* instructions in the synthesized executable crt0 (vms-ba1) */
 
 /* --------------------------------------------------------------------------
  * Consumer/executable linking: bind imports to producer symbol vectors.
@@ -522,7 +530,7 @@ struct import {
 };
 
 /* Patch an ADR_GOT_PAGE / LD64_GOT_LO12_NC pair to reach `slot` PC-relatively
- * (defined below; forward-declared for emit_executable's data imports). */
+ * (defined below; forward-declared for the executable data-import path). */
 static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot);
 
 /* Find an interned import by name -> index, or -1. */
@@ -534,7 +542,7 @@ static int import_find(struct import *imp, int nimp, const char *nm)
 }
 
 /* Byte size of a .vms$imp section: header + entries + deduped soname blob.
- * Shared by emit_executable (consumer imports) and emit_shareable (a lib
+ * Shared by the executable and shareable emit paths (a lib
  * shareable's own cross-image imports — vms-e65). */
 static uint64_t vms_imp_size(int nimp, struct producer *ps, int np)
 {
@@ -547,7 +555,7 @@ static uint64_t vms_imp_size(int nimp, struct producer *ps, int np)
 /* Write the .vms$imp section at img+off_imp. Each import's patch_off is its GOT
  * cell (imp[i].got_va); IMGACT resolves (producer soname, sv_index) -> run-time
  * address and stores it there at activation. Producer sonames are deduped into a
- * trailing name blob. Shared by emit_executable and emit_shareable (vms-e65). */
+ * trailing name blob. Shared by the executable and shareable emit paths (vms-e65). */
 static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
                           int nimp, struct producer *ps, int np)
 {
@@ -580,183 +588,6 @@ static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
     free(prod_off);
 }
 
-/* Emit an OVMX executable image (ET_DYN, PT_INTERP=IMGACT.EXE) whose imports
- * bind to producer symbol vectors via .vms$imp. IMGACT resolves each import at
- * activation (ovmx_symvec.h) and writes the address into the GOT cell. */
-static void emit_executable(struct obj *o, struct producer *ps, int np,
-                            const char *out)
-{
-    /* Resolve _start. */
-    uint64_t start_off = 0; int start_found = 0;
-    for (int i = 0; i < o->nsym; i++)
-        if (strcmp(o->str + o->sym[i].st_name, "_start") == 0 &&
-            o->sym[i].st_shndx == (Elf64_Section)o->text_ndx) {
-            start_off = o->sym[i].st_value; start_found = 1;
-        }
-    if (!start_found) die("executable object has no _start in .text");
-
-    /* Collect imports: CALL26/JUMP26 -> PLT (call) import; ADR_GOT_PAGE /
-     * LD64_GOT_LO12_NC to an undefined symbol -> GOT (DATA) import. Both bind to
-     * a producer universal via .vms$imp; IMGACT fills the GOT cell. */
-    struct import imp[256];
-    int nimp = 0;
-    for (int i = 0; i < o->nrela; i++) {
-        uint32_t type = ELF64_R_TYPE(o->rela[i].r_info);
-        uint32_t si   = ELF64_R_SYM(o->rela[i].r_info);
-        const char *nm = o->str + o->sym[si].st_name;
-        int is_call = (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26);
-        int is_data = (type == R_AARCH64_ADR_GOT_PAGE ||
-                       type == R_AARCH64_LD64_GOT_LO12_NC);
-        if (!is_call && !is_data)
-            die("consumer supports only CALL26/JUMP26 (calls) and GOT (data) relocs in .text");
-        if (o->sym[si].st_shndx != SHN_UNDEF)
-            die("consumer supports only external (imported) references");
-        int found = -1;
-        for (int k = 0; k < nimp; k++)
-            if (strcmp(imp[k].name, nm) == 0) found = k;
-        if (found < 0) {
-            if (nimp >= 256) die("too many imports");
-            found = nimp++;
-            snprintf(imp[found].name, sizeof imp[found].name, "%s", nm);
-            imp[found].is_data = is_data;
-            if (!find_universal(ps, np, nm, &imp[found].pidx, &imp[found].svidx))
-                die("unresolved universal symbol (not in any --use image)");
-        }
-    }
-    if (nimp == 0) die("consumer imports nothing (no external references to bind)");
-
-    /* ---- Layout ----
-     * [ehdr][phdr x2][.interp][.text][.plt][.got][.vms$imp][.shstrtab][shdrs] */
-    uint64_t off_eh     = 0;
-    uint64_t off_ph     = sizeof(Elf64_Ehdr);
-    int      nph        = 3;   /* PT_PHDR, PT_INTERP, PT_LOAD */
-    uint64_t off_interp = off_ph + nph * sizeof(Elf64_Phdr);
-    uint64_t interp_sz  = strlen(IMGACT_INTERP) + 1;
-    uint64_t off_text   = ALIGN_UP(off_interp + interp_sz, 16);
-    uint64_t text_sz    = o->text->sh_size;
-    uint64_t off_plt    = ALIGN_UP(off_text + text_sz, 4);
-    uint64_t plt_sz     = (uint64_t)nimp * 12;
-    uint64_t off_got    = ALIGN_UP(off_plt + plt_sz, 8);
-    uint64_t got_sz     = (uint64_t)nimp * 8;
-    uint64_t off_imp    = ALIGN_UP(off_got + got_sz, 8);
-    uint64_t imp_size   = vms_imp_size(nimp, ps, np);
-
-    uint64_t loaded_end = off_imp + imp_size;
-    uint64_t off_shstr  = ALIGN_UP(loaded_end, 4);
-    const char *secn[] = { "", ".interp", ".text", ".plt", ".got",
-                           OVMX_IMP_SECTION, ".shstrtab" };
-    int nsec = 7;
-    uint64_t sn_off[7]; uint64_t sn_sz = 0;
-    for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
-    uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
-    uint64_t file_sz  = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
-
-    uint8_t *img = calloc(1, file_sz);
-    if (!img) die("oom building executable");
-
-    /* vaddr == file offset (single identity-mapped PT_LOAD). */
-    uint64_t text_va = off_text, plt_va = off_plt, got_va = off_got;
-    for (int i = 0; i < nimp; i++) {
-        imp[i].plt_va = plt_va + (uint64_t)i * 12;
-        imp[i].got_va = got_va + (uint64_t)i * 8;
-    }
-
-    /* ELF header */
-    Elf64_Ehdr *eh = (Elf64_Ehdr *)(img + off_eh);
-    memcpy(eh->e_ident, ELFMAG, SELFMAG);
-    eh->e_ident[EI_CLASS] = ELFCLASS64;
-    eh->e_ident[EI_DATA]  = ELFDATA2LSB;
-    eh->e_ident[EI_VERSION] = EV_CURRENT;
-    eh->e_type = ET_DYN; eh->e_machine = EM_AARCH64; eh->e_version = EV_CURRENT;
-    eh->e_entry = text_va + start_off;
-    eh->e_phoff = off_ph; eh->e_shoff = off_shdr;
-    eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf64_Phdr); eh->e_phnum = nph;
-    eh->e_shentsize = sizeof(Elf64_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = 6;
-
-    /* Program headers: PT_PHDR (so the activator can derive the load bias),
-     * PT_INTERP, PT_LOAD (RWX: GOT is written at activation). */
-    Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
-    ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
-    ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
-    ph[0].p_filesz = (uint64_t)nph * sizeof(Elf64_Phdr);
-    ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
-    ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
-    ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
-    ph[1].p_filesz = interp_sz; ph[1].p_memsz = interp_sz; ph[1].p_align = 1;
-    ph[2].p_type = PT_LOAD; ph[2].p_flags = PF_R | PF_W | PF_X;
-    ph[2].p_offset = 0; ph[2].p_vaddr = 0; ph[2].p_paddr = 0;
-    ph[2].p_filesz = loaded_end; ph[2].p_memsz = loaded_end; ph[2].p_align = PAGE;
-
-    memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
-    memcpy(img + off_text, o->buf + o->text->sh_offset, text_sz);
-
-    /* Patch reference sites: calls branch to a PLT stub; DATA reads (the GOT
-     * ADRP/LDR pair) address the import's GOT cell directly. */
-    for (int i = 0; i < o->nrela; i++) {
-        uint32_t type = ELF64_R_TYPE(o->rela[i].r_info);
-        const char *nm = o->str + o->sym[ELF64_R_SYM(o->rela[i].r_info)].st_name;
-        int k = -1;
-        for (int j = 0; j < nimp; j++) if (strcmp(imp[j].name, nm) == 0) k = j;
-        uint64_t site = text_va + o->rela[i].r_offset;
-        uint32_t *insn = (uint32_t *)(img + off_text + o->rela[i].r_offset);
-        if (type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC) {
-            patch_got(type, insn, site, imp[k].got_va);
-        } else {
-            int64_t  disp = (int64_t)imp[k].plt_va - (int64_t)site;
-            uint32_t imm26 = (uint32_t)((disp >> 2) & 0x03FFFFFF);
-            uint32_t op = (type == R_AARCH64_JUMP26) ? 0x14000000u : 0x94000000u;
-            *insn = op | imm26;
-        }
-    }
-
-    /* PLT stubs for call imports: adrp x16,GOT ; ldr x16,[x16,#lo12] ; br x16.
-     * (DATA imports leave their stub bytes unused — the site reads the GOT cell
-     * directly — but a slot is still reserved to keep the layout uniform.) */
-    for (int i = 0; i < nimp; i++) {
-        if (imp[i].is_data) continue;
-        uint32_t *s = (uint32_t *)(img + off_plt + (uint64_t)i * 12);
-        int64_t pd = (int64_t)(imp[i].got_va >> 12) - (int64_t)(imp[i].plt_va >> 12);
-        s[0] = enc_adrp(16, pd);
-        s[1] = enc_ldr_u64(16, 16, (uint32_t)(imp[i].got_va & 0xfff));
-        s[2] = enc_br(16);
-    }
-    /* GOT cells left zero; IMGACT fills them at activation. */
-
-    /* .vms$imp (header + entries + producer-soname blob; patch_off = GOT cell). */
-    vms_imp_write(img, off_imp, imp, nimp, ps, np);
-
-    /* .shstrtab + section headers */
-    char *shstr = (char *)(img + off_shstr);
-    for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
-    Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
-    struct { int idx; uint32_t type; uint64_t flags, addr, off, size, align; } S[] = {
-        { 1, SHT_PROGBITS, SHF_ALLOC,                    off_interp, off_interp, interp_sz, 1 },
-        { 2, SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR,    text_va,    off_text,   text_sz,   16 },
-        { 3, SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR,    plt_va,     off_plt,    plt_sz,    4 },
-        { 4, SHT_PROGBITS, SHF_ALLOC | SHF_WRITE,        got_va,     off_got,    got_sz,    8 },
-        { 5, SHT_PROGBITS, SHF_ALLOC,                    off_imp,    off_imp,    imp_size,  8 },
-        { 6, SHT_STRTAB,   0,                            0,          off_shstr,  sn_sz,     1 },
-    };
-    for (unsigned i = 0; i < sizeof S / sizeof S[0]; i++) {
-        sh[S[i].idx].sh_name = sn_off[S[i].idx];
-        sh[S[i].idx].sh_type = S[i].type;
-        sh[S[i].idx].sh_flags = S[i].flags;
-        sh[S[i].idx].sh_addr = S[i].addr;
-        sh[S[i].idx].sh_offset = S[i].off;
-        sh[S[i].idx].sh_size = S[i].size;
-        sh[S[i].idx].sh_addralign = S[i].align;
-    }
-
-    int fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0755);
-    if (fd < 0) die("cannot create output image");
-    if (write(fd, img, file_sz) != (ssize_t)file_sz) die("short write output");
-    close(fd);
-    fprintf(stderr,
-        "%%LINK-S-CREATED, %s: ET_DYN executable image, %d import%s, "
-        "PT_INTERP=%s\n",
-        out, nimp, nimp == 1 ? "" : "s", IMGACT_INTERP);
-    free(img);
-}
 
 /* Patch one PC-relative relocation instruction to reach `target`. */
 static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t target)
@@ -805,6 +636,15 @@ static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t t
                     type == R_AARCH64_LDST64_ABS_LO12_NC ? 3 : 4;
         uint32_t imm = (uint32_t)((target & 0xFFF) >> scale);
         *insn = (*insn & ~(0xFFFu << 10)) | (imm << 10);
+        break;
+    }
+    case R_AARCH64_PREL32: {
+        /* 32-bit PC-relative data word: S + A - P. `target` already carries the
+         * addend (caller adds rl->add before calling); write S+A-P at the site.
+         * Not an instruction field — a full 32-bit relative datum (switch/
+         * relative tables). Fixes a latent emit_shareable gap too. (vms-ba1) */
+        int64_t d = (int64_t)target - (int64_t)site;
+        *insn = (uint32_t)(uint64_t)d;
         break;
     }
     default:
@@ -1129,16 +969,39 @@ static int defined_placed(struct obj *objs, const char *name)
  * Cross-image imports (vms-e65): a CALL/JUMP or GOT reference to a symbol not
  * defined by any input object but exported by a --use producer becomes an import
  * — a PLT stub (calls) + import-GOT cell + .vms$imp entry, bound at activation to
- * the producer universal (exactly like emit_executable). This is what lets a lib
- * shareable resolve its libc/pthread calls against DECC$SHR. */
+ * the producer universal. This is what lets a lib shareable resolve its libc/
+ * pthread calls against DECC$SHR.
+ *
+ * is_exec (vms-ba1): the SAME machinery emits a leaf EXECUTABLE. An executable is
+ * a shareable that (a) exports no symbol vector (nuniv may be 0), (b) carries
+ * PT_PHDR + PT_INTERP=IMGACT.EXE program headers so the kernel activates it
+ * through IMGACT, (c) force-binds exit() as an import, and (d) gets a synthesized
+ * crt0 entry stub (e_entry) that recovers argc/argv/envp off the initial process
+ * stack and calls main() then exit(). All the multi-object merge / reloc / GOT /
+ * ABS64 .vms$rel / cross-image import logic is shared verbatim — a real main()
+ * C program links exactly like a library does. */
 static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuniv,
                            uint32_t gk, uint32_t gmaj, uint32_t gmin,
                            int allow_undef, struct producer *ps, int np,
-                           const char *out)
+                           const char *out, int is_exec)
 {
     g_allow_undef = allow_undef;
     g_deferred = 0;
     build_symhash(objs, nobj);
+
+    /* Executable entry mode. An object set that defines its own `_start` is a
+     * FREESTANDING program (it owns entry + exit — the pre-vms-ba1 consumers and
+     * STARTUP.EXE): e_entry -> _start, no crt0, no C-RTL exit import. Otherwise a
+     * `main()` program gets the synthesized crt0 (argc/argv/envp -> main -> exit).
+     * A shareable (is_exec == 0) uses neither. (vms-ba1) */
+    int exe_start = 0;   /* executable defines its own _start (freestanding)   */
+    if (is_exec) {
+        int oi, ki;
+        exe_start = sym_lookup("_start", &oi, &ki);
+        if (!exe_start && !sym_lookup("main", &oi, &ki))
+            die("--executable object set defines neither _start nor main()");
+    }
+    int use_crt0 = is_exec && !exe_start;   /* synthesize crt0 for a main() prog */
 
     /* ---- Cross-image imports (bind to --use producers). Scan every reloc: a
      * CALL/JUMP26 or GOT reference to a symbol that is UNDEF in its own object,
@@ -1177,6 +1040,30 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             }
             if (is_call) imp[k].is_data = 0;   /* any call use needs a PLT stub */
         }
+
+    /* An executable's synthesized crt0 (below) tail-calls exit() to flush the
+     * C-RTL and terminate. Bind exit as a call import even when no input object
+     * references it directly, so IMGACT resolves it from a --use producer
+     * (DECC$SHR) at activation and the crt0 `bl exit` reaches a real PLT stub. */
+    int exit_imp = -1;
+    if (use_crt0) {
+        exit_imp = import_find(imp, nimp, "exit");
+        if (exit_imp < 0) {
+            int pidx; uint32_t svidx;
+            if (!find_universal(ps, np, "exit", &pidx, &svidx))
+                die("--executable needs exit() from a --use producer (DECC$SHR)");
+            if (nimp >= imp_cap) {
+                imp_cap = imp_cap ? imp_cap * 2 : 32;
+                imp = realloc(imp, (size_t)imp_cap * sizeof *imp);
+                if (!imp) die("oom growing import table");
+            }
+            exit_imp = nimp++;
+            memset(&imp[exit_imp], 0, sizeof imp[exit_imp]);
+            snprintf(imp[exit_imp].name, sizeof imp[exit_imp].name, "%s", "exit");
+            imp[exit_imp].pidx = pidx; imp[exit_imp].svidx = svidx;
+        }
+        imp[exit_imp].is_data = 0;   /* always a call import */
+    }
 
     int has_ro = 0, has_data = 0, has_bss = 0;
     for (int i = 0; i < nobj; i++)
@@ -1264,8 +1151,19 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|tdata|sv|rel|tls|bss --- */
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
-    int      nph      = has_tls ? 2 : 1;   /* PT_LOAD (+ PT_TLS) */
+    /* shareable: PT_LOAD (+ PT_TLS). executable: PT_PHDR, PT_INTERP, PT_LOAD
+     * (+ PT_TLS) — the kernel maps the executable and reads PT_INTERP=IMGACT. */
+    int      nph      = is_exec ? (3 + (has_tls ? 1 : 0)) : (has_tls ? 2 : 1);
     uint64_t cur      = ALIGN_UP(off_ph + nph * sizeof(Elf64_Phdr), 16);
+
+    /* executable: the PT_INTERP string (IMGACT.EXE), placed in the loaded range
+     * ahead of .text so its file offset == vaddr (identity map). */
+    uint64_t off_interp = 0, interp_sz = 0;
+    if (is_exec) {
+        off_interp = cur;
+        interp_sz  = strlen(IMGACT_INTERP) + 1;
+        cur = ALIGN_UP(cur + interp_sz, 16);
+    }
 
     /* Place every input section of a bucket contiguously, recording each
      * section's assigned image vaddr in objs[i].sec_va[] for symbol resolution.
@@ -1279,6 +1177,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 objs[i].sec_va[s] = cur;
                 cur += objs[i].sh[s].sh_size;
             }
+    /* executable: reserve the crt0 entry stub at the end of the merged text.
+     * crt0 reads argc/argv/envp off the initial process stack (the kernel set it
+     * up; IMGACT's _start preserves SP across the bl to imgact_bootstrap), calls
+     * main(argc,argv,envp), then tail-calls exit(). e_entry -> crt0. (vms-ba1) */
+    uint64_t crt0_va = 0;
+    if (use_crt0) {
+        cur = ALIGN_UP(cur, 4);
+        crt0_va = cur;
+        cur += CRT0_NINSN * 4;
+    }
     uint64_t text_end = cur;
     uint64_t ro_beg = cur;
     for (int i = 0; i < nobj; i++)
@@ -1434,20 +1342,43 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     eh->e_phoff = off_ph; eh->e_shoff = off_shdr;
     eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf64_Phdr); eh->e_phnum = nph;
     eh->e_shentsize = sizeof(Elf64_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = ix_str;
+    /* kernel adds the load bias -> AT_ENTRY. Freestanding _start programs enter
+     * at _start directly; main() programs enter at the synthesized crt0. */
+    if (is_exec)
+        eh->e_entry = exe_start
+            ? resolve_named(objs, nobj, "_start", "--executable: _start not placed")
+            : crt0_va;
 
     /* One PT_LOAD. RWX when it carries a writable GOT/TLSDESC/.data/.bss (the
      * activator writes those in place); R+X for a pure leaf/rodata image.
-     * A PT_TLS follows when the image has thread-local storage. */
-    int writable = (ngot || ntls || has_data || has_bss || has_tls || nimp);
+     * A PT_TLS follows when the image has thread-local storage. An executable
+     * adds PT_PHDR (so IMGACT derives the load bias) + PT_INTERP=IMGACT.EXE, and
+     * its GOT/import cells are written at activation so it is always writable. */
+    int writable = (ngot || ntls || has_data || has_bss || has_tls || nimp || is_exec);
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
-    ph[0].p_type = PT_LOAD;
-    ph[0].p_flags = writable ? (PF_R | PF_W | PF_X) : (PF_R | PF_X);
-    ph[0].p_filesz = file_loaded_end; ph[0].p_memsz = bss_end; ph[0].p_align = PAGE;
-    if (has_tls) {
-        ph[1].p_type = PT_TLS; ph[1].p_flags = PF_R;
-        ph[1].p_offset = tdata_va; ph[1].p_vaddr = tdata_va; ph[1].p_paddr = tdata_va;
-        ph[1].p_filesz = tdata_sz; ph[1].p_memsz = tls_memsz; ph[1].p_align = tls_align;
+    int li;   /* index of the PT_LOAD phdr */
+    if (is_exec) {
+        ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
+        ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
+        ph[0].p_filesz = (uint64_t)nph * sizeof(Elf64_Phdr);
+        ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
+        ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
+        ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
+        ph[1].p_filesz = interp_sz; ph[1].p_memsz = interp_sz; ph[1].p_align = 1;
+        li = 2;
+    } else {
+        li = 0;
     }
+    ph[li].p_type = PT_LOAD;
+    ph[li].p_flags = writable ? (PF_R | PF_W | PF_X) : (PF_R | PF_X);
+    ph[li].p_filesz = file_loaded_end; ph[li].p_memsz = bss_end; ph[li].p_align = PAGE;
+    if (has_tls) {
+        int ti = li + 1;
+        ph[ti].p_type = PT_TLS; ph[ti].p_flags = PF_R;
+        ph[ti].p_offset = tdata_va; ph[ti].p_vaddr = tdata_va; ph[ti].p_paddr = tdata_va;
+        ph[ti].p_filesz = tdata_sz; ph[ti].p_memsz = tls_memsz; ph[ti].p_align = tls_align;
+    }
+    if (is_exec) memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
 
     /* Copy each placed PROGBITS section (text/rodata/data) to its vaddr. */
     for (int i = 0; i < nobj; i++)
@@ -1563,6 +1494,30 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         stub[0] = enc_adrp(16, pd);
         stub[1] = enc_ldr_u64(16, 16, (uint32_t)(imp[i].got_va & 0xfff));
         stub[2] = enc_br(16);
+    }
+
+    /* Synthesized crt0 (executable entry). The initial process stack the kernel
+     * built for the PT_INTERP'd program (argc, argv[], NULL, envp[], NULL, auxv)
+     * is intact at SP on entry — IMGACT's _start hands SP to imgact_bootstrap via
+     * a bl/ret pair that leaves SP unchanged, then branches to e_entry with GP
+     * regs cleared, exactly as the kernel enters a _start. musl's __init_libc has
+     * already run (IMGACT drove it from DECC$SHR before transfer), so the C-RTL
+     * is live. crt0 recovers argc/argv/envp and calls main(argc,argv,envp), then
+     * tail-calls exit(ret) to flush stdio and terminate. (vms-ba1) */
+    if (use_crt0) {
+        uint64_t main_va = resolve_named(objs, nobj, "main",
+            "--executable object set defines no main()");
+        if (exit_imp < 0) die("internal: exit import missing for crt0");
+        uint32_t *c = (uint32_t *)(img + crt0_va);
+        c[0] = 0xF94003E0u;   /* ldr  x0, [sp]              ; x0 = argc          */
+        c[1] = 0x910023E1u;   /* add  x1, sp, #8            ; x1 = argv          */
+        c[2] = 0x8B000C22u;   /* add  x2, x1, x0, lsl #3    ; &argv[argc] (=NULL) */
+        c[3] = 0x91002042u;   /* add  x2, x2, #8            ; x2 = envp          */
+        int64_t dmain = (int64_t)main_va - (int64_t)(crt0_va + 16);
+        c[4] = 0x94000000u | (uint32_t)((dmain >> 2) & 0x03FFFFFF);  /* bl main   */
+        int64_t dexit = (int64_t)imp[exit_imp].plt_va - (int64_t)(crt0_va + 20);
+        c[5] = 0x94000000u | (uint32_t)((dexit >> 2) & 0x03FFFFFF);  /* bl exit   */
+        c[6] = 0xD4200000u;   /* brk #0                     ; exit never returns */
     }
 
     struct ovmx_sv_header *svh = (struct ovmx_sv_header *)(img + off_sv);
@@ -1687,9 +1642,10 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int abs_applied = nrel_filled;
     for (int i = 0; i < ngot; i++) if (got[i].value) abs_applied--;
     fprintf(stderr,
-        "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d object%s, %d universal%s, "
+        "%%LINK-S-CREATED, %s: ET_DYN %s image, %d object%s, %d universal%s, "
         "%d reloc%s, %d GOT, %d TLS, %d ABS64-ptr, %d import%s, GSMATCH=%s,%u,%u\n",
-        out, nobj, nobj==1?"":"s", nuniv, nuniv==1?"":"s", totrel, totrel==1?"":"s",
+        out, is_exec ? "executable" : "shareable",
+        nobj, nobj==1?"":"s", nuniv, nuniv==1?"":"s", totrel, totrel==1?"":"s",
         ngot, ntls, abs_applied, nimp, nimp==1?"":"s",
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
@@ -1763,18 +1719,17 @@ int main(int argc, char **argv)
     if (shareable == executable)
         die("specify exactly one of --shareable / --executable");
 
-    if (executable) {
-        struct obj o;
-        load_obj(ins[0], &o);       /* single-object executable for now */
-        if (np == 0) die("--executable needs at least one --use producer image");
-        emit_executable(&o, producers, np, out);
-        return 0;
-    }
+    if (executable && np == 0)
+        die("--executable needs at least one --use producer image (DECC$SHR)");
+    if (!executable && nuniv == 0)
+        die("a shareable image needs --symbol-vector");
 
-    /* ---- Shareable image: one or more objects and/or whole `.a` archives ----
+    /* ---- One or more objects and/or whole `.a` archives ----
      * Inputs grow dynamically; an archive expands to all of its object members
-     * in-process (whole-archive, no `ld -r`). (vms-004) */
-    if (nuniv == 0) die("a shareable image needs --symbol-vector");
+     * in-process (whole-archive, no `ld -r`). Both --shareable and --executable
+     * ingest inputs identically and run the SAME emit path (emit_shareable with
+     * is_exec); an executable additionally synthesizes crt0 + PT_INTERP. (vms-004,
+     * vms-ba1) */
     struct obj *objs = NULL; int nobj = 0, cap = 0;
     for (int i = 0; i < nin; i++) {
         if (file_is_archive(ins[i]))
@@ -1784,6 +1739,6 @@ int main(int argc, char **argv)
     }
     if (nobj == 0) die("no object members found in inputs");
     emit_shareable(objs, nobj, uv, nuniv, gk, gmaj, gmin, allow_undef,
-                   producers, np, out);
+                   producers, np, out, executable);
     return 0;
 }

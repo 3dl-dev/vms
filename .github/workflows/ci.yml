@@ -889,3 +889,39 @@ jobs:
               export CC=gcc WORK=/tmp/vmsrms-native
               sh /src/src/imgact/test/run_vmsrms_native.sh
             '
+
+  # -----------------------------------------------------------------------
+  # Executable-emit milestone (pillar vms-ade / bead vms-ba1). LINK.EXE's
+  # rebuilt emit_executable links a REAL multi-object main() C program — two
+  # translation units, a .rodata string table (ADR_PREL relocs) + a const
+  # pointer table (ABS64 -> .vms$rel), and libc calls (printf/strlen) through
+  # DECC$SHR — VMS-native via `LINK.EXE --executable --use DECC$SHR`. It
+  # activates through IMGACT.EXE: a synthesized crt0 recovers argc/argv/envp off
+  # the kernel-built process stack and calls main() then exit(). Runs twice (no
+  # args -> exit 5; two args -> exit 7), proving argc is read from the stack. NO
+  # ld / NO ld.so. Unblocks vms-c86 (executable TLS) and vms-b65.6 (DCL-native).
+  # -----------------------------------------------------------------------
+  multiobj-exec:
+    name: Multi-Object main() Executable Link + Activate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link + activate a multi-object main() program through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/multiobj-exec
+              sh /src/src/imgact/test/run_multiobj_exec.sh
+            '

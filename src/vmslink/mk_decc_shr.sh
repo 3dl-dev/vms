@@ -43,9 +43,11 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 [ -f "$LIBGCC" ] || { echo "mk_decc_shr: libgcc.a not found: $LIBGCC"; exit 1; }
 
 # The C run-time universals DECC$SHR exports. Every name is defined by musl's
-# libc.a; each becomes a PROCEDURE universal in .vms$sv. (DATA universals such as
-# environ/stdin/stdout/stderr are added in vms-61f.2 with runtime init, since a
-# consumer needs the runtime's real objects, not just their addresses.)
+# libc.a; each becomes a PROCEDURE universal in .vms$sv. (The stdin/stdout/stderr
+# DATA universals are appended at the END for vms-b65.2 — musl statically
+# initializes these `FILE *const` objects at image build, so a consumer's GOT
+# data-import binds to the real object address via vms-e65's =DATA path. `environ`
+# and other runtime-populated DATA objects still wait on vms-61f.2 runtime init.)
 #
 # __init_libc is musl's C-RTL bootstrap (programs the thread pointer, builds the
 # TCB/TLS, sets the stack guard, makes malloc usable). It is not a consumer-
@@ -68,6 +70,26 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 # were appended for vms-b65.4 (vmsfs's filespec translation, ODS-2 version scan,
 # case-insensitive path resolution, and device-table ops need them). Appended at
 # the END — indices for prior consumers are unchanged (GSMATCH LEQUAL-compatible).
+#
+# The FINAL block (the libm transcendentals + the process/time/glob/pwd libc
+# universals, and the stdin/stdout/stderr DATA universals) was appended for
+# vms-b65.2 — the LIBVMS$SHR migration, the largest OVMX runtime. libvms's
+# system services + lib$/str$/mth$/ots$ RTL import them: mth_routines.c /
+# sys_float.c pull the libm transcendentals (sin/cos/tan/exp/log*/pow/sqrt/
+# floor/ceil/round/fmod/fabs* + f-variants), sys_process.c / lib_misc.c the
+# fork/exec*/kill/pause/*priority/get{uid,gid,pwuid,rusage} process controls,
+# lib_datetime.c the time/*time_r/timegm/timer_* clocks, sys_time.c
+# clock_gettime, sys_uring.c syscall/mmap/munmap, lib_logical.c glob/globfree,
+# lib_output.c fwrite(...,stdout)/fprintf(stderr,...) (the stdin/stdout/stderr
+# DATA universals — musl statically initializes these `FILE *const` objects, so
+# a consumer's GOT data-import binds to DECC$SHR's real object, vms-e65's
+# =DATA path, link.c:400). The rest (dup/dup2/mkdir/rename/socketpair/statvfs/
+# sysconf/uname/strtok_r/fscanf/freopen/gmtime_r/localtime*/__libc_current_sigrtmin/
+# _exit) are scattered across the RTL. ALL appended at the END (GSMATCH LEQUAL-
+# compatible): prior consumers' bound vector indices are unchanged. DATA
+# universals sit at the very end; only stdin/stdout/stderr are cross-image DATA
+# imports for libvms (every other import is a PROCEDURE) — no producer-pointer
+# ABS64 case (vms-212).
 VEC="\
 __init_libc=PROCEDURE,\
 malloc=PROCEDURE,free=PROCEDURE,calloc=PROCEDURE,realloc=PROCEDURE,\
@@ -96,7 +118,28 @@ getpid=PROCEDURE,\
 pthread_once=PROCEDURE,toupper=PROCEDURE,ttyname=PROCEDURE,\
 __errno_location=PROCEDURE,isalnum=PROCEDURE,tolower=PROCEDURE,\
 strncasecmp=PROCEDURE,opendir=PROCEDURE,readdir=PROCEDURE,closedir=PROCEDURE,\
-stat=PROCEDURE,realpath=PROCEDURE,unlink=PROCEDURE"
+stat=PROCEDURE,realpath=PROCEDURE,unlink=PROCEDURE,\
+\
+acos=PROCEDURE,acosf=PROCEDURE,asin=PROCEDURE,asinf=PROCEDURE,\
+atan=PROCEDURE,atan2=PROCEDURE,atan2f=PROCEDURE,atanf=PROCEDURE,\
+ceil=PROCEDURE,cos=PROCEDURE,cosf=PROCEDURE,cosh=PROCEDURE,\
+exp=PROCEDURE,expf=PROCEDURE,fabs=PROCEDURE,fabsf=PROCEDURE,\
+floor=PROCEDURE,fmod=PROCEDURE,log=PROCEDURE,log10=PROCEDURE,\
+log10f=PROCEDURE,log2=PROCEDURE,logf=PROCEDURE,pow=PROCEDURE,\
+round=PROCEDURE,sin=PROCEDURE,sinf=PROCEDURE,sinh=PROCEDURE,\
+sqrt=PROCEDURE,sqrtf=PROCEDURE,tan=PROCEDURE,tanf=PROCEDURE,tanh=PROCEDURE,\
+__libc_current_sigrtmin=PROCEDURE,_exit=PROCEDURE,clock_gettime=PROCEDURE,\
+dup=PROCEDURE,dup2=PROCEDURE,execl=PROCEDURE,execv=PROCEDURE,fork=PROCEDURE,\
+freopen=PROCEDURE,fscanf=PROCEDURE,getgid=PROCEDURE,getpriority=PROCEDURE,\
+getpwuid=PROCEDURE,getrusage=PROCEDURE,getuid=PROCEDURE,glob=PROCEDURE,\
+globfree=PROCEDURE,gmtime_r=PROCEDURE,kill=PROCEDURE,localtime=PROCEDURE,\
+localtime_r=PROCEDURE,mkdir=PROCEDURE,mmap=PROCEDURE,munmap=PROCEDURE,\
+pause=PROCEDURE,rename=PROCEDURE,setpriority=PROCEDURE,socketpair=PROCEDURE,\
+statvfs=PROCEDURE,strtok_r=PROCEDURE,syscall=PROCEDURE,sysconf=PROCEDURE,\
+time=PROCEDURE,timegm=PROCEDURE,timer_create=PROCEDURE,timer_delete=PROCEDURE,\
+timer_settime=PROCEDURE,uname=PROCEDURE,waitpid=PROCEDURE,\
+\
+stdin=DATA,stdout=DATA,stderr=DATA"
 
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"

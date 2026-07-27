@@ -25,6 +25,7 @@
 
 #include <stdint.h>
 #include <pthread.h>
+#include "vms/process.h"   /* vms_process_t (cached_process, below) */
 
 /* ================================================================
  * Forward declarations and constants
@@ -118,6 +119,14 @@ struct vms_pcb {
     char            username[32];
     char            prcnam[16];
     char            default_dir[256];
+
+    /* Per-thread cache for vms_get_current_process(): the PCB is the
+     * per-thread home (see header banner), so this snapshot lives here
+     * rather than in a separate __thread object. Keeping it in the PCB
+     * ensures vmsprocess has exactly ONE TLS-defining object (vms_pcb.c's
+     * current_pcb) — required by the VMS-native linker, which supports one
+     * TLS object per image (vms-b65.1; general multi-object TLS is vms-212). */
+    vms_process_t   cached_process;
 
     /* Access mode (per-thread) */
     uint8_t         current_mode;       /* PCB_MODE_KERNEL..PCB_MODE_USER */

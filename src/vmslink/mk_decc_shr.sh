@@ -60,7 +60,9 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 # pthread / signal / getpid (the b65 lib-migration chain; the import-binding path
 # itself is vms-e65). getpid was appended for vms-b65.1 (vmsprocess's
 # vms_get_current_process needs it). (calloc/close are already exported above, so
-# they are not re-listed here.)
+# they are not re-listed here.) pthread_once/toupper/ttyname were appended for
+# vms-b65.3 (vmslnm's lnm_get_manager singleton + lnm_setup_defaults terminal
+# logicals). All appended at the END — indices for prior consumers are unchanged.
 VEC="\
 __init_libc=PROCEDURE,\
 malloc=PROCEDURE,free=PROCEDURE,calloc=PROCEDURE,realloc=PROCEDURE,\
@@ -85,7 +87,8 @@ pthread_mutex_unlock=PROCEDURE,pthread_mutex_destroy=PROCEDURE,\
 pthread_cond_init=PROCEDURE,pthread_cond_wait=PROCEDURE,\
 pthread_cond_broadcast=PROCEDURE,pthread_cond_destroy=PROCEDURE,\
 raise=PROCEDURE,sigaction=PROCEDURE,sigemptyset=PROCEDURE,\
-getpid=PROCEDURE"
+getpid=PROCEDURE,\
+pthread_once=PROCEDURE,toupper=PROCEDURE,ttyname=PROCEDURE"
 
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"

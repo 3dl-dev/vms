@@ -53,6 +53,29 @@ echo "$OUT" | grep -qE '\[  1\] PROCEDURE .* mymul'    || { echo "FAIL: slot 1 m
 echo "$OUT" | grep -qE 'value=0x0{16}' && { echo "FAIL: zero symbol value"; exit 1; } || true
 
 echo
+echo "== non-leaf producer: .rodata + PC-relative data relocations (vms-20b) =="
+echo "   (ADR_PREL_PG_HI21 + ADD_ABS_LO12_NC; same-section calls are assembler-"
+echo "    resolved, so CALL26/JUMP26 relocs are exercised by the multi-object step)"
+$CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/CALLSLOT" "$SRC/test/call_slot.c"
+cat > "$WORK/nonleaf.c" <<'EOF'
+static const int TABLE[4] = { 10, 20, 30, 40 };   /* .rodata */
+/* noinline forces a real local BL -> exercises R_AARCH64_CALL26 */
+static __attribute__((noinline)) int scale(int x) { return x * 3; }
+/* reads .rodata (ADRP/ADD) AND calls a local function (CALL26) */
+int lookup(int i, int unused) { (void)unused; return scale(TABLE[i & 3]); }
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/nonleaf.o" "$WORK/nonleaf.c"
+echo "-- relocations gcc emitted against .text --"
+readelf -rW "$WORK/nonleaf.o" | awk '/R_AARCH64/{print $3}' | sort | uniq -c
+"$WORK/LINK.EXE" --shareable --symbol-vector "lookup=PROCEDURE" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIBLOOK\$SHR.EXE" "$WORK/nonleaf.o"
+set +e
+"$WORK/CALLSLOT" "$WORK/LIBLOOK\$SHR.EXE" 0 2 0; RC=$?    # lookup(2)=scale(TABLE[2])=30*3=90
+set -e
+echo "lookup(2) exit = $RC (expect 90 = scale(TABLE[2]=30))"
+[ "$RC" -eq 90 ] || { echo "FAIL: non-leaf producer relocations wrong (got $RC, want 90)"; exit 1; }
+
+echo
 echo "== resolve + CALL a universal symbol via the vector (IMGACT resolver, vms-8d5) =="
 $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/RESOLVE" "$SRC/test/resolve_call.c"
 "$WORK/RESOLVE" "$WORK/LIBMATH\$SHR.EXE"

@@ -66,6 +66,8 @@ struct obj {
     const char   *str;      /* .strtab */
     int           text_ndx; /* .text section index */
     Elf64_Shdr   *text;     /* .text section header */
+    int           rodata_ndx; /* .rodata section index (0 if none) */
+    Elf64_Shdr   *rodata;   /* .rodata section header (0 if none) */
     Elf64_Rela   *rela;     /* relocations against .text (SHT_RELA) */
     int           nrela;
 };
@@ -112,6 +114,9 @@ static void load_obj(const char *path, struct obj *o)
         if (o->sh[i].sh_type == SHT_PROGBITS && strcmp(nm, ".text") == 0) {
             o->text_ndx = i;
             o->text = &o->sh[i];
+        } else if (o->sh[i].sh_type == SHT_PROGBITS && strcmp(nm, ".rodata") == 0) {
+            o->rodata_ndx = i;
+            o->rodata = &o->sh[i];
         } else if (o->sh[i].sh_type == SHT_SYMTAB) {
             o->sym  = (Elf64_Sym *)(o->buf + o->sh[i].sh_offset);
             o->nsym = o->sh[i].sh_size / sizeof(Elf64_Sym);
@@ -471,6 +476,178 @@ static void emit_executable(struct obj *o, struct producer *ps, int np,
     free(img);
 }
 
+/* Apply one PC-relative relocation against a placed section. The producer image
+ * is position-independent, so PC-relative fixups need no load-time relocation.
+ * (bead vms-20b; ABS64/data-pointer fixups needing bias are a later increment.) */
+static void reloc_pcrel(struct obj *o, const Elf64_Rela *r, uint8_t *img,
+                        uint64_t sec_off, uint64_t sec_va,
+                        uint64_t text_va, uint64_t rodata_va)
+{
+    uint32_t type = ELF64_R_TYPE(r->r_info);
+    const Elf64_Sym *s = &o->sym[ELF64_R_SYM(r->r_info)];
+    uint64_t symva;
+    if (s->st_shndx == (Elf64_Section)o->text_ndx)
+        symva = text_va + s->st_value;
+    else if (o->rodata && s->st_shndx == (Elf64_Section)o->rodata_ndx)
+        symva = rodata_va + s->st_value;
+    else if (s->st_shndx == SHN_UNDEF)
+        die("producer references an undefined symbol (imports need a C RTL — vms-61f)");
+    else
+        die("producer relocation against an unsupported section");
+
+    uint64_t target = symva + (uint64_t)r->r_addend;
+    uint64_t site   = sec_va + r->r_offset;
+    uint32_t *insn  = (uint32_t *)(img + sec_off + r->r_offset);
+
+    switch (type) {
+    case R_AARCH64_CALL26:
+    case R_AARCH64_JUMP26: {
+        int64_t d = (int64_t)target - (int64_t)site;
+        *insn = (*insn & ~0x03FFFFFFu) | (uint32_t)((d >> 2) & 0x03FFFFFF);
+        break;
+    }
+    case R_AARCH64_ADR_PREL_PG_HI21: {
+        int64_t d = (int64_t)(target >> 12) - (int64_t)(site >> 12);
+        uint32_t immlo = (uint32_t)(d & 3), immhi = (uint32_t)((d >> 2) & 0x7FFFF);
+        *insn = (*insn & ~((3u << 29) | (0x7FFFFu << 5))) | (immlo << 29) | (immhi << 5);
+        break;
+    }
+    case R_AARCH64_ADD_ABS_LO12_NC: {
+        *insn = (*insn & ~(0xFFFu << 10)) | (((uint32_t)target & 0xFFF) << 10);
+        break;
+    }
+    case R_AARCH64_LDST8_ABS_LO12_NC:
+    case R_AARCH64_LDST16_ABS_LO12_NC:
+    case R_AARCH64_LDST32_ABS_LO12_NC:
+    case R_AARCH64_LDST64_ABS_LO12_NC:
+    case R_AARCH64_LDST128_ABS_LO12_NC: {
+        int scale = type == R_AARCH64_LDST8_ABS_LO12_NC  ? 0 :
+                    type == R_AARCH64_LDST16_ABS_LO12_NC ? 1 :
+                    type == R_AARCH64_LDST32_ABS_LO12_NC ? 2 :
+                    type == R_AARCH64_LDST64_ABS_LO12_NC ? 3 : 4;
+        uint32_t imm = (uint32_t)((target & 0xFFF) >> scale);
+        *insn = (*insn & ~(0xFFFu << 10)) | (imm << 10);
+        break;
+    }
+    default:
+        die("producer .text uses an unsupported relocation (need a PC-relative type)");
+    }
+}
+
+/* Emit an OVMX shareable image from one object: merge .text (+ optional
+ * .rodata), apply PC-relative relocations, and export the declared universals
+ * through a .vms$sv symbol vector. (bead vms-20b) */
+static void emit_shareable(struct obj *o, struct univ *uv, int nuniv,
+                           uint32_t gk, uint32_t gmaj, uint32_t gmin, const char *out)
+{
+    for (int i = 0; i < nuniv; i++)
+        resolve_univ(o, &uv[i]);    /* uv[i].value = offset within .text */
+
+    int has_ro = o->rodata && o->rodata->sh_size > 0;
+
+    uint64_t off_ph   = sizeof(Elf64_Ehdr);
+    int      nph      = 1;
+    uint64_t off_text = ALIGN_UP(off_ph + nph * sizeof(Elf64_Phdr), 16);
+    uint64_t text_sz  = o->text->sh_size;
+    uint64_t off_ro   = ALIGN_UP(off_text + text_sz, 16);
+    uint64_t ro_sz    = has_ro ? o->rodata->sh_size : 0;
+    uint64_t off_sv   = ALIGN_UP(has_ro ? off_ro + ro_sz : off_text + text_sz, 8);
+
+    uint32_t names_size = 0;
+    for (int i = 0; i < nuniv; i++)
+        names_size += (uint32_t)strlen(uv[i].name) + 1;
+    uint64_t sv_hdr_sz  = sizeof(struct ovmx_sv_header);
+    uint64_t sv_names_o = sv_hdr_sz + (uint64_t)nuniv * sizeof(struct ovmx_sv_entry);
+    uint64_t sv_size    = sv_names_o + names_size;
+
+    uint64_t loaded_end = off_sv + sv_size;
+    uint64_t off_shstr  = ALIGN_UP(loaded_end, 4);
+
+    /* Sections: [0]null [1].text [2].rodata? [.vms$sv] [.shstrtab] */
+    const char *secn[6]; int nsec = 0;
+    secn[nsec++] = "";                 /* 0 null */
+    int ix_text = nsec; secn[nsec++] = ".text";
+    int ix_ro   = -1; if (has_ro) { ix_ro = nsec; secn[nsec++] = ".rodata"; }
+    int ix_sv   = nsec; secn[nsec++] = OVMX_SV_SECTION;
+    int ix_str  = nsec; secn[nsec++] = ".shstrtab";
+    uint64_t sn_off[6]; uint64_t sn_sz = 0;
+    for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
+    uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
+    uint64_t file_sz  = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
+
+    uint8_t *img = calloc(1, file_sz);
+    if (!img) die("oom building image");
+
+    uint64_t text_va = off_text, ro_va = off_ro, sv_va = off_sv;
+    for (int i = 0; i < nuniv; i++)
+        uv[i].value += text_va;    /* image-relative address of the universal */
+
+    Elf64_Ehdr *eh = (Elf64_Ehdr *)img;
+    memcpy(eh->e_ident, ELFMAG, SELFMAG);
+    eh->e_ident[EI_CLASS] = ELFCLASS64; eh->e_ident[EI_DATA] = ELFDATA2LSB;
+    eh->e_ident[EI_VERSION] = EV_CURRENT;
+    eh->e_type = ET_DYN; eh->e_machine = EM_AARCH64; eh->e_version = EV_CURRENT;
+    eh->e_phoff = off_ph; eh->e_shoff = off_shdr;
+    eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf64_Phdr); eh->e_phnum = nph;
+    eh->e_shentsize = sizeof(Elf64_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = ix_str;
+
+    Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
+    ph->p_type = PT_LOAD; ph->p_flags = PF_R | PF_X;
+    ph->p_offset = 0; ph->p_vaddr = 0; ph->p_paddr = 0;
+    ph->p_filesz = loaded_end; ph->p_memsz = loaded_end; ph->p_align = PAGE;
+
+    memcpy(img + off_text, o->buf + o->text->sh_offset, text_sz);
+    if (has_ro)
+        memcpy(img + off_ro, o->buf + o->rodata->sh_offset, ro_sz);
+
+    /* Apply PC-relative relocations against .text. */
+    for (int i = 0; i < o->nrela; i++)
+        reloc_pcrel(o, &o->rela[i], img, off_text, text_va, text_va, ro_va);
+
+    struct ovmx_sv_header *svh = (struct ovmx_sv_header *)(img + off_sv);
+    svh->magic = OVMX_SV_MAGIC; svh->count = nuniv;
+    svh->gsmatch_kind = gk; svh->gsmatch_major = gmaj; svh->gsmatch_minor = gmin;
+    svh->names_off = (uint32_t)sv_names_o; svh->names_size = names_size;
+    struct ovmx_sv_entry *sve = (struct ovmx_sv_entry *)(img + off_sv + sv_hdr_sz);
+    char *nblob = (char *)(img + off_sv + sv_names_o); uint32_t noff = 0;
+    for (int i = 0; i < nuniv; i++) {
+        sve[i].value = uv[i].value; sve[i].kind = uv[i].kind; sve[i].name_off = noff;
+        size_t l = strlen(uv[i].name) + 1; memcpy(nblob + noff, uv[i].name, l);
+        noff += (uint32_t)l;
+    }
+
+    char *shstr = (char *)(img + off_shstr);
+    for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
+
+    Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
+    sh[ix_text].sh_name = sn_off[ix_text]; sh[ix_text].sh_type = SHT_PROGBITS;
+    sh[ix_text].sh_flags = SHF_ALLOC | SHF_EXECINSTR; sh[ix_text].sh_addr = text_va;
+    sh[ix_text].sh_offset = off_text; sh[ix_text].sh_size = text_sz; sh[ix_text].sh_addralign = 16;
+    if (has_ro) {
+        sh[ix_ro].sh_name = sn_off[ix_ro]; sh[ix_ro].sh_type = SHT_PROGBITS;
+        sh[ix_ro].sh_flags = SHF_ALLOC; sh[ix_ro].sh_addr = ro_va;
+        sh[ix_ro].sh_offset = off_ro; sh[ix_ro].sh_size = ro_sz; sh[ix_ro].sh_addralign = 16;
+    }
+    sh[ix_sv].sh_name = sn_off[ix_sv]; sh[ix_sv].sh_type = SHT_PROGBITS;
+    sh[ix_sv].sh_flags = SHF_ALLOC; sh[ix_sv].sh_addr = sv_va;
+    sh[ix_sv].sh_offset = off_sv; sh[ix_sv].sh_size = sv_size; sh[ix_sv].sh_addralign = 8;
+    sh[ix_str].sh_name = sn_off[ix_str]; sh[ix_str].sh_type = SHT_STRTAB;
+    sh[ix_str].sh_offset = off_shstr; sh[ix_str].sh_size = sn_sz; sh[ix_str].sh_addralign = 1;
+
+    int fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+    if (fd < 0) die("cannot create output image");
+    if (write(fd, img, file_sz) != (ssize_t)file_sz) die("short write output");
+    close(fd);
+    fprintf(stderr,
+        "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d universal symbol%s, "
+        "%s%d reloc%s, GSMATCH=%s,%u,%u\n",
+        out, nuniv, nuniv == 1 ? "" : "s", has_ro ? "+.rodata, " : "",
+        o->nrela, o->nrela == 1 ? "" : "s",
+        gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
+        gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
+    free(img);
+}
+
 int main(int argc, char **argv)
 {
     const char *out = NULL;
@@ -521,154 +698,7 @@ int main(int argc, char **argv)
 
     /* ---- Shareable image ---- */
     if (nuniv == 0) die("a shareable image needs --symbol-vector");
-    if (o.nrela != 0)
-        die("shareable MVP needs a leaf object (no .text relocations)");
-    for (int i = 0; i < nuniv; i++)
-        resolve_univ(&o, &uv[i]);
-
-    /* ---- Layout (file offsets == the mapped image up to end of .vms$sv) ----
-     * [ehdr][phdr:PT_LOAD][.text][.vms$sv][.shstrtab][shdrs]
-     * The PT_LOAD covers ehdr..end(.vms$sv); shstrtab+shdrs trail, unmapped
-     * (IMGACT reads section headers from the file to find .vms$sv). */
-    uint64_t off_eh    = 0;
-    uint64_t off_ph    = sizeof(Elf64_Ehdr);
-    int      nph       = 1;
-    uint64_t off_text  = ALIGN_UP(off_ph + nph * sizeof(Elf64_Phdr), 16);
-    uint64_t text_sz   = o.text->sh_size;
-
-    uint64_t off_sv    = ALIGN_UP(off_text + text_sz, 8);
-    /* Build the .vms$sv payload: header + entries + name blob. */
-    uint32_t names_size = 0;
-    for (int i = 0; i < nuniv; i++)
-        names_size += (uint32_t)strlen(uv[i].name) + 1;
-    uint64_t sv_hdr_sz  = sizeof(struct ovmx_sv_header);
-    uint64_t sv_ent_sz  = (uint64_t)nuniv * sizeof(struct ovmx_sv_entry);
-    uint64_t sv_names_o = sv_hdr_sz + sv_ent_sz;
-    uint64_t sv_size    = sv_names_o + names_size;
-
-    uint64_t loaded_end = off_sv + sv_size;              /* end of PT_LOAD */
-    uint64_t off_shstr  = ALIGN_UP(loaded_end, 4);
-
-    /* .shstrtab contents */
-    const char *secnames[] = { "", ".text", OVMX_SV_SECTION, ".shstrtab" };
-    int nsec = 4;                                        /* incl. null section */
-    uint64_t shstr_off[4];
-    uint64_t shstr_sz = 0;
-    for (int i = 0; i < nsec; i++) {
-        shstr_off[i] = shstr_sz;
-        shstr_sz += strlen(secnames[i]) + 1;
-    }
-    uint64_t off_shdr = ALIGN_UP(off_shstr + shstr_sz, 8);
-    uint64_t file_sz  = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
-
-    uint8_t *img = calloc(1, file_sz);
-    if (!img) die("oom building image");
-
-    /* text vaddr == its file offset (identity map within the one PT_LOAD). */
-    uint64_t text_vaddr = off_text;
-    uint64_t sv_vaddr   = off_sv;
-
-    /* Fill universal-symbol run-time-relative values. */
-    for (int i = 0; i < nuniv; i++)
-        uv[i].value += text_vaddr;     /* image-relative addr of the symbol */
-
-    /* ELF header */
-    Elf64_Ehdr *eh = (Elf64_Ehdr *)(img + off_eh);
-    memcpy(eh->e_ident, ELFMAG, SELFMAG);
-    eh->e_ident[EI_CLASS]   = ELFCLASS64;
-    eh->e_ident[EI_DATA]    = ELFDATA2LSB;
-    eh->e_ident[EI_VERSION] = EV_CURRENT;
-    eh->e_type      = ET_DYN;
-    eh->e_machine   = EM_AARCH64;
-    eh->e_version   = EV_CURRENT;
-    eh->e_entry     = 0;                 /* shareable image: no start entry */
-    eh->e_phoff     = off_ph;
-    eh->e_shoff     = off_shdr;
-    eh->e_ehsize    = sizeof(Elf64_Ehdr);
-    eh->e_phentsize = sizeof(Elf64_Phdr);
-    eh->e_phnum     = nph;
-    eh->e_shentsize = sizeof(Elf64_Shdr);
-    eh->e_shnum     = nsec;
-    eh->e_shstrndx  = 3;                 /* .shstrtab is section index 3 */
-
-    /* Program header: one PT_LOAD, R+X, covering ehdr..end(.vms$sv). */
-    Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
-    ph->p_type   = PT_LOAD;
-    ph->p_flags  = PF_R | PF_X;
-    ph->p_offset = 0;
-    ph->p_vaddr  = 0;
-    ph->p_paddr  = 0;
-    ph->p_filesz = loaded_end;
-    ph->p_memsz  = loaded_end;
-    ph->p_align  = PAGE;
-
-    /* .text bytes, copied verbatim. */
-    memcpy(img + off_text, o.buf + o.text->sh_offset, text_sz);
-
-    /* .vms$sv */
-    struct ovmx_sv_header *svh = (struct ovmx_sv_header *)(img + off_sv);
-    svh->magic         = OVMX_SV_MAGIC;
-    svh->count         = nuniv;
-    svh->gsmatch_kind  = gk;
-    svh->gsmatch_major = gmaj;
-    svh->gsmatch_minor = gmin;
-    svh->names_off     = (uint32_t)sv_names_o;
-    svh->names_size    = names_size;
-    struct ovmx_sv_entry *sve =
-        (struct ovmx_sv_entry *)(img + off_sv + sv_hdr_sz);
-    char *nblob = (char *)(img + off_sv + sv_names_o);
-    uint32_t noff = 0;
-    for (int i = 0; i < nuniv; i++) {
-        sve[i].value    = uv[i].value;   /* image-relative; IMGACT adds bias */
-        sve[i].kind     = uv[i].kind;
-        sve[i].name_off = noff;
-        size_t l = strlen(uv[i].name) + 1;
-        memcpy(nblob + noff, uv[i].name, l);
-        noff += (uint32_t)l;
-    }
-
-    /* .shstrtab */
-    char *shstr = (char *)(img + off_shstr);
-    for (int i = 0; i < nsec; i++)
-        memcpy(shstr + shstr_off[i], secnames[i], strlen(secnames[i]) + 1);
-
-    /* Section headers: [0]=null [1]=.text [2]=.vms$sv [3]=.shstrtab */
-    Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
-    sh[1].sh_name   = shstr_off[1];
-    sh[1].sh_type   = SHT_PROGBITS;
-    sh[1].sh_flags  = SHF_ALLOC | SHF_EXECINSTR;
-    sh[1].sh_addr   = text_vaddr;
-    sh[1].sh_offset = off_text;
-    sh[1].sh_size   = text_sz;
-    sh[1].sh_addralign = 16;
-
-    sh[2].sh_name   = shstr_off[2];
-    sh[2].sh_type   = SHT_PROGBITS;
-    sh[2].sh_flags  = SHF_ALLOC;
-    sh[2].sh_addr   = sv_vaddr;
-    sh[2].sh_offset = off_sv;
-    sh[2].sh_size   = sv_size;
-    sh[2].sh_addralign = 8;
-
-    sh[3].sh_name   = shstr_off[3];
-    sh[3].sh_type   = SHT_STRTAB;
-    sh[3].sh_offset = off_shstr;
-    sh[3].sh_size   = shstr_sz;
-    sh[3].sh_addralign = 1;
-
-    /* Write it out. */
-    int fd = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0755);
-    if (fd < 0) die("cannot create output image");
-    if (write(fd, img, file_sz) != (ssize_t)file_sz) die("short write output");
-    close(fd);
-
-    fprintf(stderr,
-        "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d universal symbol%s, "
-        "GSMATCH=%s,%u,%u\n",
-        out, nuniv, nuniv == 1 ? "" : "s",
-        gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
-        gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
-    free(img);
+    emit_shareable(&o, uv, nuniv, gk, gmaj, gmin, out);
     free(o.buf);
     return 0;
 }

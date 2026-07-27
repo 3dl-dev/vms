@@ -965,6 +965,12 @@ struct ovmx_prod {
 static struct ovmx_prod g_prods[32];
 static int              g_nprods;
 
+/* The executable module itself (its own PT_TLS + .vms$tls TLSDESC table), for
+ * the symbol-vector path. Unlike a producer it has no .vms$sv (sv stays 0) and
+ * is not in g_prods, so find_crtl_producer never touches it; it participates in
+ * TLS setup exactly like a TLS-producing shareable does (bead vms-c86). */
+static struct ovmx_prod g_exe;
+
 /* Transitive-import machinery (vms-e65): a producer shareable may itself import
  * universals from another producer (a lib shareable -> DECC$SHR). These three
  * are mutually recursive (bind -> load -> resolve -> bind), so forward-declare. */
@@ -1111,46 +1117,67 @@ static void resolve_producer_imports(struct ovmx_prod *p, unsigned long imp_addr
 	bind_imports(p->base, ih, p->name);
 }
 
-/* Symbol-vector TLS setup: assign each producer's TLS block an offset from TP,
+/* Copy a module's .tdata init image into the combined TLS block at its assigned
+ * tls_offset and complete its static TLSDESC entries (resolver + TP-relative
+ * offset). Shared by every TLS participant in the IMGACT-owned (no-C-RTL) path:
+ * producer shareables AND the executable module (bead vms-c86). */
+static void symvec_tls_place(struct ovmx_prod *p, char *tp)
+{
+	if (p->tls_filesz)
+		memcpy(tp + p->tls_offset, (void *)p->tls_image, p->tls_filesz);
+	/* .tbss stays zero (anonymous mapping). */
+	if (!p->tlsdesc || p->tlsdesc->magic != OVMX_TLS_MAGIC)
+		return;
+	const unsigned long *eo =
+		(const unsigned long *)((const char *)p->tlsdesc + sizeof *p->tlsdesc);
+	for (unsigned k = 0; k < p->tlsdesc->count; k++) {
+		unsigned long *entry = (unsigned long *)(p->base + eo[k]);
+		entry[0] = (unsigned long)__tlsdesc_static;
+		entry[1] += p->tls_offset;
+	}
+}
+
+/* Symbol-vector TLS setup: assign each TLS module a block offset from TP,
  * allocate the thread's TLS block, copy per-module init images, program the
- * thread pointer, then complete each producer's TLSDESC entries (resolver +
+ * thread pointer, then complete each module's TLSDESC entries (resolver +
  * TP-relative offset). Mirrors the DT_HASH path (assign_tls_offsets/setup_tls +
- * the R_AARCH64_TLSDESC handler) but over the .vms$imp producers. */
+ * the R_AARCH64_TLSDESC handler) but over the .vms$imp producers PLUS the
+ * executable module itself (g_exe) when it carries its own TLS (bead vms-c86). */
 static void setup_symvec_tls(void)
 {
-	/* Assign each producer's TLS block a signed TP-relative base offset,
-	 * matching the DT_HASH path (assign_tls_offsets) but over g_prods. */
+	/* Gather every TLS participant: producer shareables then the executable
+	 * module. The executable is laid out exactly like a producer; only its
+	 * source differs (kernel-mapped main image vs IMGACT-mapped shareable). */
+	struct ovmx_prod *mods[33];
+	int nmods = 0;
+	for (int i = 0; i < g_nprods; i++)
+		if (g_prods[i].has_tls)
+			mods[nmods++] = &g_prods[i];
+	if (g_exe.has_tls)
+		mods[nmods++] = &g_exe;
+	if (nmods == 0)
+		return;
+
+	/* Assign each module a signed TP-relative base offset, matching the
+	 * DT_HASH path (assign_tls_offsets). */
 	unsigned long tp_off, total;
-	int any = 0;
 #if IMGACT_TLS_VARIANT == 1
 	unsigned long cursor = TLS_TCB_SIZE;   /* reserve TCB below the blocks */
-	for (int i = 0; i < g_nprods; i++) {
-		struct ovmx_prod *p = &g_prods[i];
-		if (!p->has_tls)
-			continue;
-		unsigned long off = ALIGN_UP(cursor, p->tls_align);
-		p->tls_offset = off;                       /* positive */
-		cursor = off + p->tls_memsz;
-		any = 1;
+	for (int i = 0; i < nmods; i++) {
+		unsigned long off = ALIGN_UP(cursor, mods[i]->tls_align);
+		mods[i]->tls_offset = off;                 /* positive */
+		cursor = off + mods[i]->tls_memsz;
 	}
-	if (!any)
-		return;
 	tp_off = 0;
 	total  = cursor;
 #else
 	unsigned long run = 0, maxalign = 16;
-	for (int i = 0; i < g_nprods; i++) {
-		struct ovmx_prod *p = &g_prods[i];
-		if (!p->has_tls)
-			continue;
-		run = ALIGN_UP(run + p->tls_memsz, p->tls_align);
-		p->tls_offset = (unsigned long)(-(long)run);   /* negative */
-		if (p->tls_align > maxalign)
-			maxalign = p->tls_align;
-		any = 1;
+	for (int i = 0; i < nmods; i++) {
+		run = ALIGN_UP(run + mods[i]->tls_memsz, mods[i]->tls_align);
+		mods[i]->tls_offset = (unsigned long)(-(long)run);   /* negative */
+		if (mods[i]->tls_align > maxalign)
+			maxalign = mods[i]->tls_align;
 	}
-	if (!any)
-		return;
 	tp_off = ALIGN_UP(run, maxalign);
 	total  = tp_off + TLS_TCB_SIZE;
 #endif
@@ -1161,31 +1188,13 @@ static void setup_symvec_tls(void)
 	if (area == MAP_FAILED)
 		die_tlserr("TLS block");
 	char *tp = (char *)area + tp_off;
-	for (int i = 0; i < g_nprods; i++) {
-		struct ovmx_prod *p = &g_prods[i];
-		if (!p->has_tls)
-			continue;
-		memcpy(tp + p->tls_offset, (void *)p->tls_image, p->tls_filesz);
-		/* .tbss stays zero (anonymous mapping). */
-	}
 #if IMGACT_TLS_VARIANT == 2
 	*(void **)tp = tp;   /* self-pointer at %fs:0 (Variant II TCB) */
 #endif
 	imgact_set_tp(tp);
 
-	for (int i = 0; i < g_nprods; i++) {
-		struct ovmx_prod *p = &g_prods[i];
-		if (!p->tlsdesc || p->tlsdesc->magic != OVMX_TLS_MAGIC)
-			continue;
-		const unsigned long *eo =
-			(const unsigned long *)((const char *)p->tlsdesc +
-						sizeof *p->tlsdesc);
-		for (unsigned k = 0; k < p->tlsdesc->count; k++) {
-			unsigned long *entry = (unsigned long *)(p->base + eo[k]);
-			entry[0] = (unsigned long)__tlsdesc_static;
-			entry[1] += p->tls_offset;
-		}
-	}
+	for (int i = 0; i < nmods; i++)
+		symvec_tls_place(mods[i], tp);
 }
 
 /* TLS producer coexisting with a C-RTL (bead vms-616).
@@ -1208,6 +1217,43 @@ static void setup_symvec_tls(void)
  * A program that spawns pthreads would need the module laid into each new
  * thread's block by musl (true DTV registration via a resurrected __tls_get_new
  * path); that multi-thread producer-TLS case is deferred (vms-616 follow-up). */
+/* Absorb one TLS module (a producer shareable OR the executable) into musl's
+ * already-programmed TLS view: give the module its own per-thread block and bias
+ * its static TLSDESC entries relative to musl's TP. `tp` is musl's thread
+ * pointer. Shared by producers and the executable module (bead vms-c86). */
+static void absorb_tls_over_crtl(struct ovmx_prod *p, unsigned long tp)
+{
+	/* Per-thread TLS instance: [.tdata init image | .tbss zero]. */
+	unsigned long al  = p->tls_align ? p->tls_align : 1;
+	unsigned long len = PAGE_UP(p->tls_memsz ? p->tls_memsz : 1);
+	void *blk = sys_mmap(0, len, PROT_READ | PROT_WRITE,
+			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (blk == MAP_FAILED)
+		die_tlserr("producer TLS block");
+	/* mmap is page-aligned, so any sane module alignment is satisfied. */
+	if (al > PAGE_SIZE)
+		die_tlserr("producer TLS overalignment");
+	if (p->tls_filesz)
+		memcpy(blk, (void *)p->tls_image, p->tls_filesz);
+	/* .tbss stays zero (anonymous mapping). */
+
+	/* Signed distance from musl's TP to this block's base. TLSDESC
+	 * returns module_offset + delta; TP + that == blk + module_offset. */
+	unsigned long delta = (unsigned long)blk - tp;
+	p->tls_offset = delta;   /* recorded for symmetry/diagnostics */
+
+	if (!p->tlsdesc || p->tlsdesc->magic != OVMX_TLS_MAGIC)
+		return;
+	const unsigned long *eo =
+		(const unsigned long *)((const char *)p->tlsdesc +
+					sizeof *p->tlsdesc);
+	for (unsigned k = 0; k < p->tlsdesc->count; k++) {
+		unsigned long *entry = (unsigned long *)(p->base + eo[k]);
+		entry[0] = (unsigned long)__tlsdesc_static;
+		entry[1] += delta;   /* module-relative -> TP-relative */
+	}
+}
+
 static void setup_producer_tls_over_crtl(struct ovmx_prod *crtl)
 {
 	unsigned long tp = (unsigned long)imgact_get_tp();
@@ -1215,36 +1261,12 @@ static void setup_producer_tls_over_crtl(struct ovmx_prod *crtl)
 		struct ovmx_prod *p = &g_prods[i];
 		if (!p->has_tls || p == crtl)
 			continue;
-		/* Per-thread TLS instance: [.tdata init image | .tbss zero]. */
-		unsigned long al  = p->tls_align ? p->tls_align : 1;
-		unsigned long len = PAGE_UP(p->tls_memsz ? p->tls_memsz : 1);
-		void *blk = sys_mmap(0, len, PROT_READ | PROT_WRITE,
-				     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		if (blk == MAP_FAILED)
-			die_tlserr("producer TLS block");
-		/* mmap is page-aligned, so any sane module alignment is satisfied. */
-		if (al > PAGE_SIZE)
-			die_tlserr("producer TLS overalignment");
-		if (p->tls_filesz)
-			memcpy(blk, (void *)p->tls_image, p->tls_filesz);
-		/* .tbss stays zero (anonymous mapping). */
-
-		/* Signed distance from musl's TP to this block's base. TLSDESC
-		 * returns module_offset + delta; TP + that == blk + module_offset. */
-		unsigned long delta = (unsigned long)blk - tp;
-		p->tls_offset = delta;   /* recorded for symmetry/diagnostics */
-
-		if (!p->tlsdesc || p->tlsdesc->magic != OVMX_TLS_MAGIC)
-			continue;
-		const unsigned long *eo =
-			(const unsigned long *)((const char *)p->tlsdesc +
-						sizeof *p->tlsdesc);
-		for (unsigned k = 0; k < p->tlsdesc->count; k++) {
-			unsigned long *entry = (unsigned long *)(p->base + eo[k]);
-			entry[0] = (unsigned long)__tlsdesc_static;
-			entry[1] += delta;   /* module-relative -> TP-relative */
-		}
+		absorb_tls_over_crtl(p, tp);
 	}
+	/* The executable module's own TLS (e.g. DCL's dcl_messages.o) is absorbed
+	 * the same way — it is not in g_prods, so handle it explicitly (vms-c86). */
+	if (g_exe.has_tls)
+		absorb_tls_over_crtl(&g_exe, tp);
 }
 
 /* --------------------------------------------------------------------------
@@ -1316,8 +1338,10 @@ static void drive_crtl_init(struct ovmx_prod *crtl)
 }
 
 /* Resolve every .vms$imp import of the executable against producer symbol
- * vectors, patching the consumer's GOT cells. */
-static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
+ * vectors, patching the consumer's GOT cells. `ephdr`/`ephnum` are the
+ * kernel-mapped main image's program headers (for its PT_TLS geometry). */
+static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
+				   Elf64_Phdr *ephdr, int ephnum)
 {
 	if (!execfn)
 		die_imgfmterr("IMAGE.EXE");
@@ -1330,6 +1354,28 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
 	 * any; harmless no-op for the current PLT-only executables. */
 	if (ok)
 		apply_vms_rel(fd, exe_base);
+
+	/* Record the executable module's OWN TLS geometry (PT_TLS) + its .vms$tls
+	 * TLSDESC table, so the executable participates in TLS setup exactly like a
+	 * TLS-producing shareable. DCL.EXE is a single-TLS-object image
+	 * (dcl_messages.o). Located while fd is still open. (bead vms-c86) */
+	g_exe.base = exe_base;
+	for (int i = 0; i < ephnum; i++) {
+		if (ephdr[i].p_type != PT_TLS)
+			continue;
+		g_exe.has_tls    = 1;
+		g_exe.tls_image  = exe_base + ephdr[i].p_vaddr;
+		g_exe.tls_filesz = ephdr[i].p_filesz;
+		g_exe.tls_memsz  = ephdr[i].p_memsz;
+		g_exe.tls_align  = ephdr[i].p_align ? ephdr[i].p_align : 1;
+		break;
+	}
+	if (g_exe.has_tls) {
+		unsigned long tls_addr, tls_size;
+		if (ovmx_find_section(fd, OVMX_TLS_SECTION, &tls_addr, &tls_size))
+			g_exe.tlsdesc =
+				(const struct ovmx_tls_header *)(exe_base + tls_addr);
+	}
 	sys_close(fd);
 	if (!ok)
 		die_imgfmterr("IMAGE.EXE");
@@ -1348,7 +1394,10 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
 	 *    imports from DECC$SHR then has its TLS module ABSORBED into that view:
 	 *    IMGACT gives the module its own block and biases its static TLSDESC
 	 *    entries relative to musl's TP (setup_producer_tls_over_crtl, vms-616).
-	 *  - no C-RTL      -> IMGACT owns TP for any TLSDESC producer (setup_symvec_tls).
+	 *    The executable module's OWN TLS (e.g. DCL's dcl_messages.o) is absorbed
+	 *    the same way in that pass (g_exe, vms-c86).
+	 *  - no C-RTL      -> IMGACT owns TP for any TLSDESC producer AND the
+	 *    executable's own TLS (setup_symvec_tls includes g_exe, vms-c86).
 	 * (The truly-conflicting "two things both want to BE the TP owner" case does
 	 * not arise: DECC$SHR carries no PT_TLS — musl's own TLS comes from the main
 	 * program's PT_TLS, which OVMX consumers do not have.) */
@@ -1411,7 +1460,7 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	/* An OVMX symbol-vector image (LINK.EXE output) has no PT_DYNAMIC: it
 	 * binds universal symbols through .vms$imp, not ELF DT_HASH. (vms-714) */
 	if (!edyn) {
-		activate_symbol_vector(ebias, at_execfn);
+		activate_symbol_vector(ebias, at_execfn, ephdr, ephnum);
 		return at_entry;
 	}
 

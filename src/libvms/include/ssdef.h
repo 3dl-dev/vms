@@ -76,6 +76,19 @@ extern "C" {
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */
 #define SS$_NOSUCHDEV       2680    /* No such device */
+/* SS$_NOMOREDEV: needed as the sys$device_scan wildcard-scan-exhausted
+ * terminator (see starlet.h). PROVENANCE: 0x0A58/2648, sourced this
+ * session from a GCC-for-Alpha OpenVMS toolkit SSDEF.H mirror
+ * (vsm.com.au/ftp/KITS/GCC-FOR-ALPHA/INCLUDE/VMS/SSDEF.H). NOT
+ * independently cross-verified against a second lineage this session
+ * (a spot-check against the Nankervis/ODS2 ssdef.h - github.com/simh/
+ * simtools - found that source disagrees with this file's *existing*
+ * SS$_NOSUCHDEV value, 2312 vs 2680, so multi-source drift is a live
+ * risk here, not a hypothetical one). Flagged for operator sign-off
+ * per docs/../memory vms-purity-guardrail; do not treat as authoritative
+ * until confirmed. Tracked in vms-fb3 findings.
+ */
+#define SS$_NOMOREDEV       2648
 #define SS$_DEVMOUNT        2684    /* Device already mounted */
 #define SS$_DEVNOTMOUNT     2688    /* Device not mounted */
 #define SS$_NOSUCHFILE      2696    /* No such file */

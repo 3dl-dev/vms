@@ -15,6 +15,7 @@
 #include "ssdef.h"
 #include "descrip.h"
 #include "lib$routines.h"
+#include "gen64def.h"
 
 /* Forward declaration for sys$faol from sys_fao.c */
 extern uint32_t sys$faol(
@@ -22,6 +23,13 @@ extern uint32_t sys$faol(
     uint16_t *outlen,
     struct dsc$descriptor_s *outbuf,
     const uint64_t *prmlst);
+
+/* Forward declaration for sys$asctim from sys_time.c */
+extern uint32_t sys$asctim(
+    uint16_t *timlen,
+    struct dsc$descriptor_s *timbuf,
+    const uint64_t *timadr,
+    uint32_t cvtflg);
 
 /* VMS epoch offset from Unix epoch in 100ns ticks */
 #define VMS_EPOCH_OFFSET 0x007C95674BEB4000ULL
@@ -239,4 +247,22 @@ uint32_t lib$cvt_from_internal_time(const uint32_t *operation,
                                      uint32_t *result, const void *time_val) {
     (void)operation; (void)result; (void)time_val;
     return SS$_NORMAL;
+}
+
+/*
+ * lib$sys_asctim - Convert binary time to ASCII string (RTL entry point).
+ *
+ * See the doc comment in lib$routines.h: a thin wrapper around
+ * sys$asctim (starlet.h/sys_time.c), declared with a GENERIC_64* time
+ * argument to match corpus call sites (tests/corpus/tier1-examples/
+ * lib_sys_asctim.c and friends) that pass "&binary_time" where
+ * binary_time is GENERIC_64. GENERIC_64's gen64$q_quadword member is
+ * the same uint64_t quadword sys$asctim's timadr already expects, so
+ * this just forwards the address through.
+ */
+uint32_t lib$sys_asctim(uint16_t *timlen, struct dsc$descriptor_s *timbuf,
+                        const struct _generic_64 *timadr, uint32_t cvtflg) {
+    const uint64_t *raw_timadr = timadr ? &timadr->gen64$q_quadword : NULL;
+
+    return sys$asctim(timlen, timbuf, raw_timadr, cvtflg);
 }

@@ -315,3 +315,28 @@ uint32_t lib$sig_to_ret(void *signal_args, void *mechanism_args) {
     /* Continue execution - the calling function will return the condition */
     return SS$_CONTINUE;
 }
+
+/* ================================================================
+ * Internal accessors for SYS$UNWIND (sys_condition.c)
+ *
+ * SYS$UNWIND needs to pop handlers off this file's thread-local
+ * handler_stack/handler_count state directly (see the sys$unwind doc
+ * comment in starlet.h for why: OVMX's handler chain is walked
+ * in-process rather than via a real machine-frame unwind, so "unwind"
+ * here means "pop the chain back to a target depth"). These two
+ * accessors are the only cross-file entry points into that state,
+ * mirroring the existing vms$$chan_to_fd()-style internal-helper
+ * convention used elsewhere in libvms (see sys_memory.c).
+ * ================================================================ */
+
+int vms$$handler_depth(void) {
+    return handler_count;
+}
+
+int vms$$handler_unwind_to(int target_depth) {
+    if (target_depth < 0) target_depth = 0;
+    while (handler_count > target_depth) {
+        handler_count--;
+    }
+    return handler_count;
+}

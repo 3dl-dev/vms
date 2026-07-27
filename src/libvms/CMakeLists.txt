@@ -35,6 +35,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_uai.c
     syssvc/sys_device.c
     syssvc/sys_operator.c
+    syssvc/sys_condition.c
     rtl/sha256.c
     rtl/sysuaf.c
     rtl/str_util.c

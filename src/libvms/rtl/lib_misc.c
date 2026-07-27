@@ -66,6 +66,11 @@ extern uint32_t sys$getsyiw(uint32_t efn, const uint32_t *csidadr,
                               const struct item_list_3 *itmlst,
                               void *iosb,
                               void (*astadr)(uint32_t), uint32_t astprm);
+extern uint32_t sys$getdviw(uint32_t efn, uint16_t chan,
+                             struct dsc$descriptor_s *devnam,
+                             void *itmlst, void *iosb,
+                             void (*astadr)(uint32_t), uint32_t astprm,
+                             uint32_t nullarg);
 
 /*
  * lib$getjpi - Get Job/Process Information (simplified wrapper).
@@ -140,6 +145,44 @@ uint32_t lib$getsyi(const uint32_t *item_code,
     items[1].retlen = NULL;
 
     return sys$getsyiw(0, csid, node, items, NULL, NULL, 0);
+}
+
+/*
+ * lib$getdvi - Get Device/Volume Information (simplified wrapper).
+ *
+ * Provides a simpler calling interface to sys$getdviw for retrieving
+ * a single item, mirroring lib$getjpi/lib$getsyi above.
+ *
+ * Parameters:
+ *   item_code     - DVI$_ item code
+ *   chan          - I/O channel (0 if using devnam), passed by value
+ *   devnam        - Device name descriptor (or NULL if using chan)
+ *   resultval     - Receives numeric result (or NULL)
+ *   resultstring  - Receives string result (or NULL)
+ *   string_length - Receives actual length of result (or NULL)
+ */
+uint32_t lib$getdvi(const uint32_t *item_code, uint16_t chan,
+                    const struct dsc$descriptor_s *devnam,
+                    void *resultval, struct dsc$descriptor_s *resultstring,
+                    uint16_t *string_length) {
+    if (!item_code) return SS$_BADPARAM;
+
+    struct item_list_3 items[2];
+    memset(items, 0, sizeof(items));
+
+    items[0].buflen = resultstring ? resultstring->dsc$w_length : sizeof(uint32_t);
+    items[0].item_code = (uint16_t)*item_code;
+    items[0].bufaddr = resultstring ? (void *)resultstring->dsc$a_pointer
+                                    : (void *)resultval;
+    items[0].retlen = string_length;
+    /* Terminator */
+    items[1].buflen = 0;
+    items[1].item_code = 0;
+    items[1].bufaddr = NULL;
+    items[1].retlen = NULL;
+
+    return sys$getdviw(0, chan, (struct dsc$descriptor_s *)devnam, items,
+                       NULL, NULL, 0, 0);
 }
 
 /*

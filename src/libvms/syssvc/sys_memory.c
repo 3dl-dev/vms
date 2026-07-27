@@ -200,3 +200,91 @@ uint32_t sys$crmpsc(const void *inadr, void *retadr, uint32_t acmode,
 
     return SS$_NORMAL;
 }
+
+/*
+ * sys$deltva_64 - Delete virtual address space (64-bit region API).
+ *
+ * See the doc comment in starlet.h: region_id_64 is accepted for
+ * call-site compatibility but not validated against a region registry
+ * (OVMX doesn't implement sys$create_region_64 yet).
+ */
+uint32_t sys$deltva_64(const GENERIC_64 *region_id_64, void *inadr_64,
+                       uint64_t bytlen_64, uint32_t acmode,
+                       void **retadr_64, uint64_t *retlen_64) {
+    (void)region_id_64; (void)acmode;
+
+    if (!inadr_64 || bytlen_64 == 0) return SS$_BADPARAM;
+
+    munmap(inadr_64, (size_t)bytlen_64);
+
+    if (retadr_64) *retadr_64 = inadr_64;
+    if (retlen_64) *retlen_64 = bytlen_64;
+
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$dgblsc - Delete global section.
+ *
+ * See the doc comment in starlet.h: OVMX has no cross-process named
+ * global-section registry, so this validates its arguments and returns
+ * success (the "mark for deletion, actual deletion happens once all
+ * mapping processes delete their VA ranges" semantic is a no-op here
+ * because there is no registry entry to mark).
+ */
+uint32_t sys$dgblsc(uint32_t flags, const struct dsc$descriptor_s *gsdnam,
+                    void *ident) {
+    (void)flags; (void)ident;
+
+    if (!gsdnam || !gsdnam->dsc$a_pointer) return SS$_BADPARAM;
+
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$lkwset - Lock pages into working set.
+ *
+ * See the doc comment in starlet.h: OVMX is demand-paged by the Linux
+ * VMM (no adjustable working set to lock pages into), so this validates
+ * the range, echoes it to retadr, and returns success.
+ */
+uint32_t sys$lkwset(const void *inadr, void *retadr, uint32_t acmode) {
+    (void)acmode;
+    if (!inadr) return SS$_BADPARAM;
+
+    const void **in = (const void **)inadr;
+    uintptr_t start = (uintptr_t)in[0];
+    uintptr_t end = (uintptr_t)in[1];
+    if (end < start) return SS$_BADPARAM;
+
+    if (retadr) {
+        void **ret = (void **)retadr;
+        ret[0] = (void *)start;
+        ret[1] = (void *)end;
+    }
+
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$ulwset - Unlock pages from working set.
+ *
+ * Companion no-op to sys$lkwset above.
+ */
+uint32_t sys$ulwset(const void *inadr, void *retadr, uint32_t acmode) {
+    (void)acmode;
+    if (!inadr) return SS$_BADPARAM;
+
+    const void **in = (const void **)inadr;
+    uintptr_t start = (uintptr_t)in[0];
+    uintptr_t end = (uintptr_t)in[1];
+    if (end < start) return SS$_BADPARAM;
+
+    if (retadr) {
+        void **ret = (void **)retadr;
+        ret[0] = (void *)start;
+        ret[1] = (void *)end;
+    }
+
+    return SS$_NORMAL;
+}

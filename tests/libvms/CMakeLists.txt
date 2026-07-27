@@ -48,3 +48,9 @@ libvms_add_test(test_libvms_lib_rtl
 # logical-name/CLI-symbol wrappers, sys$purgws, sys$getutc
 libvms_add_test(test_libvms_lib_symtab
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_symtab.c)
+
+# Test 8: vms-fb3 conformance-gap batch (round 2) — lib$sys_asctim,
+# sys$deltva_64, lib$getdvi, sys$dgblsc, sys$device_scan, sys$unwind,
+# sys$lkwset/sys$ulwset
+libvms_add_test(test_libvms_lib_fb3
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_fb3.c)

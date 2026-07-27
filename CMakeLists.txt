@@ -138,6 +138,7 @@ endif()
 if(BUILD_TOOLS)
     add_subdirectory(tools)
     add_subdirectory(src/ovmx_init)
+    add_subdirectory(src/vmslink)   # LINK.EXE + OVMXDUMP (VMS-native linker)
 endif()
 
 # Install VMS system disk (ODS-2 directory structure)

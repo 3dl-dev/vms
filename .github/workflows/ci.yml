@@ -482,3 +482,37 @@ jobs:
               export CC=gcc BUILD=/tmp/imgact-build
               sh /src/src/imgact/test/verify_imgact_cmake.sh
             '
+
+  # -----------------------------------------------------------------------
+  # Job 10: LINK.EXE — VMS-native linker MVP (aarch64)
+  #
+  # Gate on the OVMX/VMS linker (bead vms-9dd): builds LINK.EXE + OVMXDUMP,
+  # compiles a leaf object with gcc, links it into an OVMX shareable image
+  # WITHOUT ld, and asserts the image is a valid ET_DYN whose .vms$sv symbol
+  # vector exports the declared universal symbols + GSMATCH. aarch64-only for
+  # now (LINK.EXE rejects non-aarch64 objects); runs under arm64 emulation.
+  # -----------------------------------------------------------------------
+  vmslink-mvp:
+    name: LINK.EXE VMS-native Linker (MVP)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build LINK.EXE + link an OVMX shareable image (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils >/dev/null
+              export CC=gcc WORK=/tmp/vmslink-test
+              sh /src/src/vmslink/test/run_test.sh
+            '

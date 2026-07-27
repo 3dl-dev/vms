@@ -89,6 +89,21 @@ if(OVMX_IMGACT)
     # PT_INTERP = IMGACT.EXE for every executable.
     set(CMAKE_EXE_LINKER_FLAGS
         "${CMAKE_EXE_LINKER_FLAGS} -Wl,--dynamic-linker=${OVMX_IMGACT_PATH}")
+
+    # TLS dialect: IMGACT resolves ONLY the TLSDESC relocation family (see
+    # docs/design-image-activation.md section 10 + each arch's imgact_arch.h);
+    # it does NOT implement the general-dynamic __tls_get_addr / DTPMOD / DTPOFF
+    # path. The compiler must therefore emit TLSDESC, not the GD model.
+    #   * aarch64: GCC already defaults to the TLSDESC (`desc`) dialect, so no
+    #     flag is needed — the aarch64 IMGACT proof (CI) exercises TLSDESC.
+    #   * x86_64:  GCC defaults to the GD model (__tls_get_addr); TLSDESC must be
+    #     requested explicitly with -mtls-dialect=gnu2 (bead vms-be5). Without
+    #     this, x86_64 shareables emit R_X86_64_DTPMOD64/DTPOFF64 + calls to
+    #     __tls_get_addr, which the x86_64 IMGACT backend cannot activate.
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -mtls-dialect=gnu2")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mtls-dialect=gnu2")
+    endif()
 endif()
 
 # Find required packages

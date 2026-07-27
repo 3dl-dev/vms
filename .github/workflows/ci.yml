@@ -621,3 +621,42 @@ jobs:
               export CC=gcc WORK=/tmp/libvmssys-native
               sh /src/src/imgact/test/run_libvmssys_native.sh
             '
+
+  # -----------------------------------------------------------------------
+  # Job 13: DECC$SHR C-RTL activation — musl runtime init at activation (aarch64)
+  #
+  # The C-RTL milestone (pillar vms-ade / bead vms-61f.2): a consumer actually
+  # CALLS musl libc through DECC$SHR, VMS-native. LINK.EXE whole-archives musl
+  # libc.a + libgcc.a into DECC$SHR.EXE (exporting malloc/snprintf/strtod plus
+  # musl's own __init_libc bootstrap), links a consumer importing them, and runs
+  # it FOR REAL: kernel -> PT_INTERP=IMGACT.EXE -> resolve the symbol vector,
+  # then drive musl __init_libc (programs the thread pointer, builds the TCB/TLS
+  # musl-style, sets the stack guard, makes malloc usable) -> transfer control.
+  # The consumer computes snprintf("%d+%d")=5 + strtod("3.5")*2=7 + buf[0]=2 == 14.
+  # Proves musl libc is live post-activation with NO ld/ld.so. Runs under arm64
+  # emulation.
+  # -----------------------------------------------------------------------
+  decc-shr-activate:
+    name: DECC$SHR C-RTL Activation (musl init)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Activate DECC$SHR + drive musl init through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/decc-shr-act
+              sh /src/src/imgact/test/run_decc_shr_activation.sh
+            '

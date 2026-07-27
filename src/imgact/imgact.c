@@ -1188,6 +1188,65 @@ static void setup_symvec_tls(void)
 	}
 }
 
+/* TLS producer coexisting with a C-RTL (bead vms-616).
+ *
+ * A real OVMX library shareable (e.g. VMSPROCESS$SHR) is BOTH a TLS producer —
+ * it has its own .tdata/.tbss and TLSDESC entries — AND an importer of libc/
+ * pthread universals from DECC$SHR. After drive_crtl_init(), musl (the C-RTL)
+ * owns the thread pointer and laid out its own TCB/TLS; it knows nothing about
+ * the producer's TLS module, and its static (dynamic-linker-free) build has no
+ * __tls_get_new to grow the DTV. Rather than replicate musl's `struct pthread`
+ * / DTV internals, IMGACT absorbs each producer's TLS module into the running
+ * process's TLS view by allocating the module its own per-thread block and
+ * resolving the producer's STATIC TLSDESC entries relative to MUSL's already-
+ * programmed TP: a variable's returned offset is (block - TP) + module_offset,
+ * so the standard TLSDESC access sequence (TP + returned offset) lands inside
+ * the IMGACT-owned block. entry[0] therefore stays __tlsdesc_static; only
+ * entry[1] (pre-filled by LINK.EXE with the module-relative offset) is biased.
+ *
+ * Scope: correct for the MAIN thread, which is all OVMX activation uses today.
+ * A program that spawns pthreads would need the module laid into each new
+ * thread's block by musl (true DTV registration via a resurrected __tls_get_new
+ * path); that multi-thread producer-TLS case is deferred (vms-616 follow-up). */
+static void setup_producer_tls_over_crtl(struct ovmx_prod *crtl)
+{
+	unsigned long tp = (unsigned long)imgact_get_tp();
+	for (int i = 0; i < g_nprods; i++) {
+		struct ovmx_prod *p = &g_prods[i];
+		if (!p->has_tls || p == crtl)
+			continue;
+		/* Per-thread TLS instance: [.tdata init image | .tbss zero]. */
+		unsigned long al  = p->tls_align ? p->tls_align : 1;
+		unsigned long len = PAGE_UP(p->tls_memsz ? p->tls_memsz : 1);
+		void *blk = sys_mmap(0, len, PROT_READ | PROT_WRITE,
+				     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (blk == MAP_FAILED)
+			die_tlserr("producer TLS block");
+		/* mmap is page-aligned, so any sane module alignment is satisfied. */
+		if (al > PAGE_SIZE)
+			die_tlserr("producer TLS overalignment");
+		if (p->tls_filesz)
+			memcpy(blk, (void *)p->tls_image, p->tls_filesz);
+		/* .tbss stays zero (anonymous mapping). */
+
+		/* Signed distance from musl's TP to this block's base. TLSDESC
+		 * returns module_offset + delta; TP + that == blk + module_offset. */
+		unsigned long delta = (unsigned long)blk - tp;
+		p->tls_offset = delta;   /* recorded for symmetry/diagnostics */
+
+		if (!p->tlsdesc || p->tlsdesc->magic != OVMX_TLS_MAGIC)
+			continue;
+		const unsigned long *eo =
+			(const unsigned long *)((const char *)p->tlsdesc +
+						sizeof *p->tlsdesc);
+		for (unsigned k = 0; k < p->tlsdesc->count; k++) {
+			unsigned long *entry = (unsigned long *)(p->base + eo[k]);
+			entry[0] = (unsigned long)__tlsdesc_static;
+			entry[1] += delta;   /* module-relative -> TP-relative */
+		}
+	}
+}
+
 /* --------------------------------------------------------------------------
  * musl C-RTL (DECC$SHR) runtime initialization (bead vms-61f.2).
  *
@@ -1282,22 +1341,21 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn)
 		(const struct ovmx_imp_header *)(exe_base + imp_addr);
 	bind_imports(exe_base, ih, "IMAGE.EXE");
 
-	/* TLS ownership. A musl C-RTL (DECC$SHR) programs the thread pointer and
-	 * lays out the TCB/TLS itself inside __init_libc; IMGACT's own symbol-vector
-	 * TLS setup programs a *different* thread pointer for TLSDESC producers.
-	 * The two cannot both own TP in one process, so they are mutually exclusive:
-	 *  - C-RTL present  -> let musl own TP + TLS (drive_crtl_init).
-	 *  - no C-RTL       -> IMGACT owns TP for any TLSDESC producer (setup_symvec_tls).
-	 * A C-RTL coexisting with an IMGACT-managed TLSDESC producer is not yet
-	 * supported (would need musl to absorb the producer's TLS module); rather
-	 * than silently corrupt TP, fail cleanly. Neither the C-RTL consumer nor a
-	 * pure-libvmssys consumer hits that combo today. */
+	/* TLS ownership. There is exactly one thread pointer (TPIDR_EL0) per
+	 * process, so whoever programs it defines the TLS coordinate system:
+	 *  - C-RTL present -> musl owns TP + its own TCB/TLS (drive_crtl_init).
+	 *    A TLS-bearing lib producer (its own .tdata/.tbss + TLSDESC) that also
+	 *    imports from DECC$SHR then has its TLS module ABSORBED into that view:
+	 *    IMGACT gives the module its own block and biases its static TLSDESC
+	 *    entries relative to musl's TP (setup_producer_tls_over_crtl, vms-616).
+	 *  - no C-RTL      -> IMGACT owns TP for any TLSDESC producer (setup_symvec_tls).
+	 * (The truly-conflicting "two things both want to BE the TP owner" case does
+	 * not arise: DECC$SHR carries no PT_TLS — musl's own TLS comes from the main
+	 * program's PT_TLS, which OVMX consumers do not have.) */
 	struct ovmx_prod *crtl = find_crtl_producer();
 	if (crtl) {
-		for (int i = 0; i < g_nprods; i++)
-			if (g_prods[i].has_tls)
-				die_tlserr("C-RTL + TLSDESC producer combo");
-		drive_crtl_init(crtl);
+		drive_crtl_init(crtl);            /* musl owns TP + its TCB/TLS  */
+		setup_producer_tls_over_crtl(crtl);  /* absorb producer TLS modules */
 	} else {
 		/* Set up TLS for any producer that has thread-local storage, before the
 		 * consumer (which may call into that producer's TLS-using code) runs. */

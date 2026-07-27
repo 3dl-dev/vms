@@ -739,3 +739,28 @@ jobs:
               export CC=gcc WORK=/tmp/shr-import-act
               sh /src/src/imgact/test/run_shareable_import_activation.sh
             '
+
+  tls-producer-over-crtl:
+    name: TLS Producer / C-RTL Coexistence Activation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Activate a TLS-bearing lib shareable coexisting with DECC$SHR through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/tls-over-crtl
+              sh /src/src/imgact/test/run_tls_producer_over_crtl.sh
+            '

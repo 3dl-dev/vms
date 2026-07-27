@@ -152,6 +152,16 @@ struct vms_ef_common_args {
 #define LCK_M_NOQUEUE   0x02   /* Don't queue if not granted */
 #define LCK_M_SYSTEM    0x04   /* System-wide resource */
 #define LCK_M_VALBLK    0x08   /* Lock has value block */
+/*
+ * LCK_M_SYNC (OVMX design choice, not a real $LCKDEF bit): request that the
+ * kernel ENQ/CONVERT ioctl BLOCK in-kernel until the lock is granted (or a
+ * deadlock is detected), instead of returning immediately with the request
+ * queued. This is how sys$enqw's synchronous "wait" is realized without a
+ * userspace poll loop. Callers that want async ($ENQ) semantics leave it
+ * clear. Lives in the kernel LCK_M_* namespace and is never exposed through
+ * the public $ENQ flag contract (see src/libvms/syssvc/sys_lock.c).
+ */
+#define LCK_M_SYNC      0x10   /* Block in-kernel until granted (sync ENQ) */
 
 /* Lock value block size */
 #define LCK_VALBLK_SIZE 16

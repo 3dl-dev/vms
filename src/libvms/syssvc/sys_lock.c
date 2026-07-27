@@ -112,15 +112,13 @@ static uint32_t lckflags_to_kernel(uint32_t vms_flags)
  * or vms_kif_convert (when LCK$M_CONVERT is set and the caller's LKSB
  * already holds a lock ID), then fills in the caller's LKSB.
  *
- * When `wait` is set (sys$enqw), and the request was accepted but not
- * NOQUEUE, this polls GETLKI until the lock is actually granted at the
- * requested mode. This is necessary because the kernel's ENQ/CONVERT
- * ioctls never block in-kernel: a request that cannot be granted
- * immediately is queued and SS$_NORMAL is returned right away (with the
- * granted mode still NL), and no completion AST is fired later when the
- * queued request is granted. $ENQW's "wait" semantic is therefore
- * implemented here, in userspace, via polling -- $ENQ (wait=0) returns
- * immediately with whatever the kernel reports (granted or queued).
+ * When `wait` is set (sys$enqw), the LCK_M_SYNC flag asks the kernel lock
+ * manager to block in-kernel until the request is granted (or a deadlock is
+ * detected) and to return the final status directly -- so a queued sync
+ * request never returns until it is actually granted at the requested mode.
+ * $ENQ (wait=0) returns immediately with whatever the kernel reports
+ * (granted or queued); on a later grant the kernel delivers a completion AST
+ * if astadr was supplied.
  */
 static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
                        uint32_t flags, const struct dsc$descriptor_s *resnam,
@@ -145,6 +143,18 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
      * kernel ioctls receive the translated `kflags`. */
     uint32_t kflags = lckflags_to_kernel(flags);
 
+    /*
+     * $ENQW's synchronous "wait" is realized by asking the kernel lock
+     * manager to BLOCK in-kernel until the request is granted (or a
+     * deadlock is detected), via the LCK_M_SYNC flag. This replaces the
+     * former userspace GETLKI poll loop, which busy-polled forever and
+     * could not observe a deadlock that formed after the request was
+     * queued. LCK_M_SYNC is inert for LCK$M_NOQUEUE (the kernel never
+     * queues in that case), so it is safe to set unconditionally for wait.
+     */
+    if (wait)
+        kflags |= LCK_M_SYNC;
+
     if ((flags & LCK$M_CONVERT) && lksb->lksb$l_lkid != 0) {
         lkid = lksb->lksb$l_lkid;
         status = vms_kif_convert(lkid, lkmode, kflags,
@@ -160,28 +170,10 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
                               &lkid, valblk);
     }
 
-    if (wait && (status & 1) && !(flags & LCK$M_NOQUEUE) && lkid != 0) {
-        uint32_t granted_mode = 0, requested_mode = 0;
-        char qresnam[32];
-
-        for (;;) {
-            uint32_t gs = vms_kif_getlki(lkid, &granted_mode, &requested_mode,
-                                         qresnam, valblk);
-            if (!(gs & 1)) {
-                status = gs;
-                break;
-            }
-            if (granted_mode == lkmode)
-                break;
-            usleep(1000);
-        }
-    }
-
     /* Translate raw kernel status -> public ssdef.h constant exactly once,
-     * at the boundary where it is stored/returned. Everything above this
-     * point (the wait-loop's `status & 1` and `granted_mode == lkmode`
-     * checks, and `gs`/`status` reassignment on GETLKI failure) operates
-     * on the raw kernel value. */
+     * at the boundary where it is stored/returned. The kernel has already
+     * blocked (for a queued sync request) and reports the final granted /
+     * deadlock status directly -- no userspace wait loop remains. */
     uint32_t pub_status = kstat_to_ss(status);
 
     lksb->lksb$w_status = (uint16_t)pub_status;
@@ -194,8 +186,8 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
 /*
  * sys$enqw - Enqueue lock request and wait (synchronous).
  *
- * Blocks (via a GETLKI poll loop -- see do_enq) until the requested
- * lock mode is actually granted, unless LCK$M_NOQUEUE is specified.
+ * Blocks in-kernel (via the LCK_M_SYNC flag -- see do_enq) until the
+ * requested lock mode is actually granted, unless LCK$M_NOQUEUE is specified.
  *
  * Parameters:
  *   efn      - Event flag set on completion

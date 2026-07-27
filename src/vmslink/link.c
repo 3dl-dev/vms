@@ -8,12 +8,17 @@
  * docs/design-link-native-toolchain.md). IMGACT (SYS$IMGACT) later binds
  * consumers to these universal symbols by vector POSITION, not by ELF hash.
  *
- * MVP SCOPE (vms-9dd): the producer side. Input is one relocatable ELF object
- * whose exported functions/data are self-contained (position-independent, no
- * relocations in the linked section — a leaf). LINK.EXE lays out a minimal
- * mappable ET_DYN image (one PT_LOAD) and emits `.vms$sv` with one entry per
- * declared universal symbol, plus GSMATCH. Full multi-object linking, external
- * references, relocations and TLS are later beads (vms-142/b65).
+ * Producer side. LINK.EXE merges N relocatable ELF objects (and/or whole `ar`
+ * archives — parsed in-process, no `ld -r`) into a mappable ET_DYN image: it
+ * lays out text/rodata/data/bss by ELF flags, applies PC-relative relocations
+ * (local + cross-object), synthesizes a GOT for GOT-indirect references and a
+ * TLSDESC table for thread-local access, resolves .rela.data ABS64 pointer
+ * initializers, records every image-relative slot in `.vms$rel` for load-bias,
+ * and emits `.vms$sv` (declared universals) + GSMATCH. Input arrays and the
+ * per-object section tables are dynamically sized, so the whole musl libc.a
+ * (1345 members / 3600+ sections) ingests without a static cap. With
+ * --allow-undefined, references not yet defined (compiler runtime / crt) are
+ * recorded as deferred imports for the C RTL to satisfy at activation (vms-61f).
  *
  * This program is a host tool built by the normal (bootstrap) toolchain; it is
  * the tool that makes VMS images, not itself a VMS image yet.
@@ -30,6 +35,27 @@
 
 #include "ovmx_image.h"
 #include "ovmx_symvec.h"
+
+/* ABS64 pointer-initializer relocation (S+A written as a 64-bit word — used in
+ * .rela.data for pointer tables like stdio FILE structs). Guarded. (vms-004) */
+#ifndef R_AARCH64_ABS64
+#define R_AARCH64_ABS64           257
+#endif
+
+/* Additional PC-relative .text relocation types musl-scale code emits. Guarded:
+ * older <elf.h> may lack them. (vms-004) */
+#ifndef R_AARCH64_LD_PREL_LO19
+#define R_AARCH64_LD_PREL_LO19    273
+#endif
+#ifndef R_AARCH64_ADR_PREL_LO21
+#define R_AARCH64_ADR_PREL_LO21   274
+#endif
+#ifndef R_AARCH64_TSTBR14
+#define R_AARCH64_TSTBR14         279
+#endif
+#ifndef R_AARCH64_CONDBR19
+#define R_AARCH64_CONDBR19        280
+#endif
 
 /* GOT-relative relocation types (aarch64). Guarded: older <elf.h> may lack them. */
 #ifndef R_AARCH64_ADR_GOT_PAGE
@@ -78,8 +104,6 @@ static void die(const char *msg)
  * .rodata.cst8, .data.rel.ro, ...) all land in the right output region. (vms-fa1) */
 enum { B_NONE = 0, B_TEXT, B_RODATA, B_DATA, B_BSS, B_TDATA, B_TBSS };
 
-#define OBJ_MAXSEC 256
-
 /* One relocation, tagged with the section it patches (site = sec_va + off). */
 struct reloc { uint64_t off; uint64_t info; int64_t add; int sec; };
 
@@ -112,10 +136,12 @@ struct obj {
     Elf64_Shdr   *tbss;     /* .tbss section header (0 if none) */
     Elf64_Rela   *rela;     /* relocations against the first .text (SHT_RELA) */
     int           nrela;
-    /* Per-section classification + placement (the shareable path, vms-fa1). */
-    uint8_t       sec_bucket[OBJ_MAXSEC]; /* B_* per section index (0 = unplaced) */
-    uint64_t      sec_va[OBJ_MAXSEC];     /* assigned image vaddr, filled at layout */
-    struct reloc *relocs;   /* relocs against every executable section */
+    /* Per-section classification + placement (the shareable path, vms-fa1).
+     * Dynamically sized to nsh — no fixed cap, so whole-archive combines with
+     * thousands of sections ingest without a %LINK-F "too many sections". (vms-004) */
+    uint8_t      *sec_bucket; /* [nsh] B_* per section index (0 = unplaced) */
+    uint64_t     *sec_va;     /* [nsh] assigned image vaddr, filled at layout */
+    struct reloc *relocs;   /* relocs against every code AND data section */
     int           nreloc;
 };
 
@@ -126,21 +152,19 @@ static void *xat(struct obj *o, uint64_t off, uint64_t sz, const char *what)
     return o->buf + off;
 }
 
-static void load_obj(const char *path, struct obj *o)
+/* Parse an ELF relocatable object already resident in memory. `buf` must remain
+ * live for the whole run (o->buf points into it) — the caller owns/keeps it.
+ * `name` is a diagnostic label (file path or "archive.a(member.o)"). (vms-004) */
+static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name)
 {
     memset(o, 0, sizeof *o);
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) die("cannot open input object");
-    struct stat st;
-    if (fstat(fd, &st) < 0) die("fstat input");
-    o->size = (size_t)st.st_size;
-    o->buf = malloc(o->size);
-    if (!o->buf) die("oom reading object");
-    if (read(fd, o->buf, o->size) != (ssize_t)o->size) die("short read object");
-    close(fd);
+    o->buf = buf;
+    o->size = size;
 
-    if (o->size < sizeof(Elf64_Ehdr) || memcmp(o->buf, ELFMAG, SELFMAG) != 0)
-        die("input is not ELF");
+    if (o->size < sizeof(Elf64_Ehdr) || memcmp(o->buf, ELFMAG, SELFMAG) != 0) {
+        fprintf(stderr, "%%LINK-F-ERROR, %s: input is not ELF\n", name);
+        exit(1);
+    }
     o->eh = (Elf64_Ehdr *)o->buf;
     if (o->eh->e_ident[EI_CLASS] != ELFCLASS64)
         die("input is not ELF64");
@@ -154,6 +178,11 @@ static void load_obj(const char *path, struct obj *o)
                               "bad section header table");
     o->nsh = o->eh->e_shnum;
     o->shstr = (const char *)(o->buf + o->sh[o->eh->e_shstrndx].sh_offset);
+
+    /* Per-section arrays sized to this object's section count (no fixed cap). */
+    o->sec_bucket = calloc((size_t)o->nsh, 1);
+    o->sec_va     = calloc((size_t)o->nsh, sizeof *o->sec_va);
+    if (!o->sec_bucket || !o->sec_va) die("oom allocating per-section tables");
 
     /* Find .text, .symtab, .strtab. */
     for (int i = 0; i < o->nsh; i++) {
@@ -184,7 +213,9 @@ static void load_obj(const char *path, struct obj *o)
             o->str  = (const char *)(o->buf + o->sh[o->sh[i].sh_link].sh_offset);
         }
     }
-    if (!o->text) die("input object has no .text section");
+    /* A data-only archive member (e.g. musl's stdout.lo) legitimately has no
+     * .text; only the single-object executable path requires one (checked
+     * there). A relocatable object must still carry a symbol table. (vms-004) */
     if (!o->sym)  die("input object has no symbol table");
 
     /* Collect relocations against the first .text (SHT_RELA), for the simple
@@ -202,7 +233,6 @@ static void load_obj(const char *path, struct obj *o)
 
     /* Classify every allocatable section by ELF flags (not by name), so gcc's
      * split sections merge into the right output region. (vms-fa1) */
-    if (o->nsh > OBJ_MAXSEC) die("object has too many sections");
     for (int i = 0; i < o->nsh; i++) {
         Elf64_Shdr *s = &o->sh[i];
         if (!(s->sh_flags & SHF_ALLOC)) continue;
@@ -218,14 +248,17 @@ static void load_obj(const char *path, struct obj *o)
          * a relocation into one dies loudly rather than silently misplacing. */
     }
 
-    /* Collect relocations against every executable section into one flat list,
-     * each tagged with the section it patches. (Data-section relocations —
-     * .rela.data ABS64 — are a separate increment, vms-a17.) */
+    /* Collect relocations against every code AND data section into one flat
+     * list, each tagged with the section it patches. Data-section relocations
+     * are .rela.data ABS64 pointer initializers (stdio FILE structs, locale
+     * ptables, *_lockptr sets, ...) — resolved + biased at emit time. (vms-004
+     * folds in vms-a17; formerly only B_TEXT was collected.) */
     int cap = 0;
     for (int i = 0; i < o->nsh; i++) {
         if (o->sh[i].sh_type != SHT_RELA) continue;
         int t = (int)o->sh[i].sh_info;
-        if (t >= 0 && t < o->nsh && o->sec_bucket[t] == B_TEXT)
+        if (t >= 0 && t < o->nsh &&
+            (o->sec_bucket[t] == B_TEXT || o->sec_bucket[t] == B_DATA))
             cap += o->sh[i].sh_size / sizeof(Elf64_Rela);
     }
     o->relocs = cap ? malloc((size_t)cap * sizeof(struct reloc)) : NULL;
@@ -233,7 +266,8 @@ static void load_obj(const char *path, struct obj *o)
     o->nreloc = 0;
     for (int i = 0; i < o->nsh; i++) {
         int t = (int)o->sh[i].sh_info;
-        if (t < 0 || t >= o->nsh || o->sec_bucket[t] != B_TEXT) continue;
+        if (t < 0 || t >= o->nsh ||
+            (o->sec_bucket[t] != B_TEXT && o->sec_bucket[t] != B_DATA)) continue;
         if (o->sh[i].sh_type == SHT_REL)
             die("REL relocations are unsupported (expected RELA)");
         if (o->sh[i].sh_type != SHT_RELA) continue;
@@ -243,6 +277,111 @@ static void load_obj(const char *path, struct obj *o)
             o->relocs[o->nreloc++] = (struct reloc){
                 ra[j].r_offset, ra[j].r_info, ra[j].r_addend, t };
     }
+}
+
+/* Read a whole file into a fresh malloc buffer (kept live for the run). */
+static uint8_t *slurp(const char *path, size_t *out_size)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) die("cannot open input file");
+    struct stat st;
+    if (fstat(fd, &st) < 0) die("fstat input");
+    size_t sz = (size_t)st.st_size;
+    uint8_t *buf = malloc(sz ? sz : 1);
+    if (!buf) die("oom reading file");
+    size_t got = 0;
+    while (got < sz) {
+        ssize_t r = read(fd, buf + got, sz - got);
+        if (r <= 0) die("short read input");
+        got += (size_t)r;
+    }
+    close(fd);
+    *out_size = sz;
+    return buf;
+}
+
+/* Load a single relocatable object from a file path. */
+static void load_obj(const char *path, struct obj *o)
+{
+    size_t sz;
+    uint8_t *buf = slurp(path, &sz);
+    parse_obj(o, buf, sz, path);
+}
+
+/* --------------------------------------------------------------------------
+ * `ar` archive ingestion (whole-archive, VMS-native, in-process). (vms-004)
+ *
+ * Operator ruling "no unix/linux, all VMS": LINK.EXE parses the System V/GNU
+ * `ar` format itself and pulls EVERY object member — never `ld -r`. Each member
+ * is copied to an 8-byte-aligned buffer (aarch64-safe ELF field access) and
+ * parsed like a standalone .o. The `/` symbol table and `//` long-name string
+ * table members are skipped; long member names (`/<offset>`) are ignored for
+ * labeling (resolution is by symbol, not filename).
+ * -------------------------------------------------------------------------- */
+#define AR_MAGIC "!<arch>\n"
+#define AR_MAGIC_LEN 8
+#define AR_HDR_SIZE  60
+
+/* Read a right-space-padded decimal field of `len` bytes. */
+static uint64_t ar_dec(const char *f, int len)
+{
+    uint64_t v = 0;
+    for (int i = 0; i < len && f[i] >= '0' && f[i] <= '9'; i++)
+        v = v * 10 + (uint64_t)(f[i] - '0');
+    return v;
+}
+
+/* Grow the objs array by one and return the (zeroed) new slot. */
+static struct obj *push_obj(struct obj **objs, int *n, int *cap)
+{
+    if (*n >= *cap) {
+        *cap = *cap ? *cap * 2 : 64;
+        *objs = realloc(*objs, (size_t)*cap * sizeof(struct obj));
+        if (!*objs) die("oom growing object table");
+    }
+    return &(*objs)[(*n)++];
+}
+
+/* Parse every object member of an `ar` archive into the growable objs array. */
+static void load_archive(const char *path, struct obj **objs, int *n, int *cap)
+{
+    size_t asize;
+    uint8_t *abuf = slurp(path, &asize);
+    size_t pos = AR_MAGIC_LEN;
+    int members = 0;
+    while (pos + AR_HDR_SIZE <= asize) {
+        const char *h = (const char *)(abuf + pos);
+        if (h[58] != '`' || h[59] != '\n')
+            die("malformed ar member header");
+        uint64_t msize = ar_dec(h + 48, 10);
+        size_t mdata = pos + AR_HDR_SIZE;
+        if (mdata + msize > asize) die("ar member extends past end of archive");
+
+        /* Member name: 16-byte field, trailing spaces (GNU trims a '/'). */
+        char nm[17];
+        memcpy(nm, h, 16); nm[16] = '\0';
+        int e = 16; while (e > 0 && nm[e - 1] == ' ') nm[--e] = '\0';
+
+        /* Skip the symbol table ("/"/"/SYM64/") and long-name table ("//"). */
+        int is_special = (strcmp(nm, "/") == 0 || strcmp(nm, "//") == 0 ||
+                          strcmp(nm, "/SYM64/") == 0);
+        if (!is_special) {
+            /* Copy to an 8-aligned buffer for safe ELF field access on arm64. */
+            uint8_t *mb = malloc(msize ? msize : 1);
+            if (!mb) die("oom copying ar member");
+            memcpy(mb, abuf + mdata, msize);
+            char label[300];
+            snprintf(label, sizeof label, "%s(%s)", path, nm);
+            struct obj *o = push_obj(objs, n, cap);
+            parse_obj(o, mb, (size_t)msize, label);
+            members++;
+        }
+        pos = mdata + msize;
+        if (pos & 1) pos++;   /* members are 2-byte aligned */
+    }
+    free(abuf);
+    fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d object member%s pulled (whole-archive)\n",
+            path, members, members == 1 ? "" : "s");
 }
 
 /* --------------------------------------------------------------------------
@@ -600,6 +739,23 @@ static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t t
         *insn = (*insn & ~((3u << 29) | (0x7FFFFu << 5))) | (immlo << 29) | (immhi << 5);
         break;
     }
+    case R_AARCH64_ADR_PREL_LO21: {   /* adr Xd, sym : 21-bit byte displacement */
+        int64_t d = (int64_t)target - (int64_t)site;
+        uint32_t immlo = (uint32_t)(d & 3), immhi = (uint32_t)((d >> 2) & 0x7FFFF);
+        *insn = (*insn & ~((3u << 29) | (0x7FFFFu << 5))) | (immlo << 29) | (immhi << 5);
+        break;
+    }
+    case R_AARCH64_CONDBR19:          /* b.cond / cbz / cbnz : imm19 << 5, *4 */
+    case R_AARCH64_LD_PREL_LO19: {    /* ldr (literal)      : imm19 << 5, *4 */
+        int64_t d = ((int64_t)target - (int64_t)site) >> 2;
+        *insn = (*insn & ~(0x7FFFFu << 5)) | (((uint32_t)d & 0x7FFFF) << 5);
+        break;
+    }
+    case R_AARCH64_TSTBR14: {         /* tbz / tbnz : imm14 << 5, *4 */
+        int64_t d = ((int64_t)target - (int64_t)site) >> 2;
+        *insn = (*insn & ~(0x3FFFu << 5)) | (((uint32_t)d & 0x3FFF) << 5);
+        break;
+    }
     case R_AARCH64_ADD_ABS_LO12_NC:
         *insn = (*insn & ~(0xFFFu << 10)) | (((uint32_t)target & 0xFFF) << 10);
         break;
@@ -621,6 +777,86 @@ static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t t
     }
 }
 
+/* --------------------------------------------------------------------------
+ * Global defined-symbol hash. Whole-archive musl links 1345 members with tens
+ * of thousands of cross-object references; a linear symbol scan per reference
+ * is O(refs · members · syms) and does not finish under emulation. A single
+ * name -> (object, symbol) hash makes every cross-object resolution O(1) and is
+ * what lets LINK.EXE ingest the whole archive in seconds, not minutes. (vms-004)
+ * -------------------------------------------------------------------------- */
+struct symref { const char *name; int oi; int ki; unsigned char bind; };
+static struct symref *g_syms;
+static size_t g_syms_cap;          /* power of two */
+
+/* Undefined-external policy: with --allow-undefined a reference not defined by
+ * any input object is a *deferred import* (satisfied later by the C RTL / a
+ * companion shareable — vms-61f), recorded loudly rather than aborting. Off by
+ * default: a normal single-shareable build still fails hard on a dangling ref. */
+static int  g_allow_undef;
+static long g_deferred;            /* count of deferred (unresolved) externals */
+
+static size_t djb2(const char *s)
+{
+    size_t h = 5381; int c;
+    while ((c = (unsigned char)*s++)) h = ((h << 5) + h) + (size_t)c;
+    return h;
+}
+
+/* Insert a defined global; prefer a STRONG (GLOBAL) def over a WEAK one. */
+static void sym_insert(const char *name, int oi, int ki, unsigned char bind)
+{
+    size_t mask = g_syms_cap - 1;
+    size_t i = djb2(name) & mask;
+    for (;;) {
+        if (!g_syms[i].name) {
+            g_syms[i] = (struct symref){ name, oi, ki, bind };
+            return;
+        }
+        if (strcmp(g_syms[i].name, name) == 0) {
+            if (g_syms[i].bind == STB_WEAK && bind == STB_GLOBAL)
+                g_syms[i] = (struct symref){ name, oi, ki, bind };  /* strong wins */
+            return;
+        }
+        i = (i + 1) & mask;
+    }
+}
+
+/* Look up a defined global by name -> (object index, symbol index), or -1. */
+static int sym_lookup(const char *name, int *oi, int *ki)
+{
+    if (!g_syms) return 0;
+    size_t mask = g_syms_cap - 1;
+    size_t i = djb2(name) & mask;
+    for (;;) {
+        if (!g_syms[i].name) return 0;
+        if (strcmp(g_syms[i].name, name) == 0) {
+            *oi = g_syms[i].oi; *ki = g_syms[i].ki; return 1;
+        }
+        i = (i + 1) & mask;
+    }
+}
+
+/* Build the hash over every defined (non-LOCAL, non-UNDEF) global symbol. */
+static void build_symhash(struct obj *objs, int nobj)
+{
+    size_t total = 0;
+    for (int i = 0; i < nobj; i++) total += (size_t)objs[i].nsym;
+    size_t cap = 64;
+    while (cap < total * 2 + 16) cap <<= 1;
+    g_syms_cap = cap;
+    g_syms = calloc(cap, sizeof *g_syms);
+    if (!g_syms) die("oom building symbol hash");
+    for (int i = 0; i < nobj; i++)
+        for (int k = 0; k < objs[i].nsym; k++) {
+            Elf64_Sym *s = &objs[i].sym[k];
+            unsigned char bind = ELF64_ST_BIND(s->st_info);
+            if (bind == STB_LOCAL || s->st_shndx == SHN_UNDEF) continue;
+            const char *nm = objs[i].str + s->st_name;
+            if (!nm[0]) continue;
+            sym_insert(nm, i, k, bind);
+        }
+}
+
 /* Map a symbol defined in object `d` to its final image vaddr, using the
  * per-section placement filled at layout. Returns 0 for a symbol in a section
  * this linker does not place flat (unplaced, or TLS — addressed via TLSDESC). */
@@ -636,7 +872,9 @@ static uint64_t placed_addr(struct obj *d, Elf64_Sym *s)
     }
 }
 
-/* Resolve a relocation's symbol to a final image vaddr (local or cross-object). */
+/* Resolve a relocation's symbol to a final image vaddr (local or cross-object).
+ * Returns 0 for a deferred external under --allow-undefined (caller skips the
+ * patch); otherwise dies on a dangling reference. */
 static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
 {
     struct obj *o = &objs[oi];
@@ -646,40 +884,37 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
     if (s->st_shndx == SHN_UNDEF) {
         const char *nm = o->str + s->st_name;
         if (!nm[0]) die("undefined unnamed symbol in relocation");
-        for (int j = 0; j < nobj; j++) {
-            struct obj *d = &objs[j];
-            for (int k = 0; k < d->nsym; k++) {
-                Elf64_Sym *ds = &d->sym[k];
-                if (ds->st_shndx == SHN_UNDEF ||
-                    ELF64_ST_BIND(ds->st_info) == STB_LOCAL) continue;
-                if (strcmp(d->str + ds->st_name, nm) != 0) continue;
-                uint64_t da = placed_addr(d, ds);
-                if (da) return da;
-            }
+        int doi, dki;
+        if (sym_lookup(nm, &doi, &dki)) {
+            uint64_t da = placed_addr(&objs[doi], &objs[doi].sym[dki]);
+            if (da) return da;
         }
-        die("unresolved external symbol (needs the C RTL -- vms-61f)");
+        if (g_allow_undef) { g_deferred++; return 0; }
+        die("unresolved external symbol (needs the C RTL -- vms-61f; "
+            "pass --allow-undefined to record it as a deferred import)");
     }
+    (void)nobj;
+    /* Defined, but in a section this linker doesn't place flat (TLS, or an
+     * allocatable type like SHT_INIT_ARRAY): a pointer into it is deferred
+     * under --allow-undefined, otherwise a hard error. */
+    if (g_allow_undef) { g_deferred++; return 0; }
     die("relocation against an unsupported section");
     return 0;
 }
 
-/* Resolve a symbol by NAME (global def) across all objects -> image vaddr.
- * Used for declared universals and for GOT-slot targets. */
+/* Resolve a symbol by NAME (global def) -> image vaddr. Returns 0 when not
+ * defined by any input object (caller decides: die for a declared universal,
+ * defer for a GOT import under --allow-undefined). */
 static uint64_t resolve_named(struct obj *objs, int nobj,
                               const char *name, const char *whaterr)
 {
-    for (int j = 0; j < nobj; j++) {
-        struct obj *d = &objs[j];
-        for (int k = 0; k < d->nsym; k++) {
-            Elf64_Sym *ds = &d->sym[k];
-            if (ELF64_ST_BIND(ds->st_info) == STB_LOCAL) continue;
-            if (ds->st_shndx == SHN_UNDEF) continue;
-            if (strcmp(d->str + ds->st_name, name) != 0) continue;
-            uint64_t da = placed_addr(d, ds);
-            if (da) return da;
-        }
+    (void)nobj;
+    int doi, dki;
+    if (sym_lookup(name, &doi, &dki)) {
+        uint64_t da = placed_addr(&objs[doi], &objs[doi].sym[dki]);
+        if (da) return da;
     }
-    die(whaterr);
+    if (whaterr) die(whaterr);
     return 0;
 }
 
@@ -774,8 +1009,13 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
  * GOT-indirect global references, and record every image-relative slot that
  * needs +load_bias in .vms$rel. Exports declared universals via .vms$sv. (vms-20b) */
 static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuniv,
-                           uint32_t gk, uint32_t gmaj, uint32_t gmin, const char *out)
+                           uint32_t gk, uint32_t gmaj, uint32_t gmin,
+                           int allow_undef, const char *out)
 {
+    g_allow_undef = allow_undef;
+    g_deferred = 0;
+    build_symhash(objs, nobj);
+
     int has_ro = 0, has_data = 0, has_bss = 0;
     for (int i = 0; i < nobj; i++)
         for (int s = 0; s < objs[i].nsh; s++) {
@@ -807,9 +1047,9 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     uint64_t tbss_base = tbss_sz ? ALIGN_UP(tdata_sz, tbss_al) : tdata_sz;
     uint64_t tls_memsz = tbss_base + tbss_sz;
 
-    /* Collect the distinct GOT-referenced symbols (across all code sections). */
-    static struct gotslot got[1024];
-    int ngot = 0;
+    /* Collect the distinct GOT-referenced symbols (across all code sections).
+     * Growable — musl references hundreds of globals GOT-indirectly. (vms-004) */
+    struct gotslot *got = NULL; int ngot = 0, got_cap = 0;
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++) {
             uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
@@ -817,15 +1057,18 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
             const char *nm = objs[i].str + objs[i].sym[si].st_name;
             if (find_got(got, ngot, nm) < 0) {
-                if (ngot >= 1024) die("too many GOT symbols");
+                if (ngot >= got_cap) {
+                    got_cap = got_cap ? got_cap * 2 : 256;
+                    got = realloc(got, (size_t)got_cap * sizeof *got);
+                    if (!got) die("oom growing GOT table");
+                }
                 snprintf(got[ngot].name, sizeof got[ngot].name, "%s", nm);
                 ngot++;
             }
         }
 
     /* Collect the distinct TLSDESC-referenced symbols (one 2-word entry each). */
-    static struct tlsslot tls[512];
-    int ntls = 0;
+    struct tlsslot *tls = NULL; int ntls = 0, tls_cap = 0;
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++) {
             uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
@@ -833,12 +1076,25 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
             const char *nm = objs[i].str + objs[i].sym[si].st_name;
             if (find_tls(tls, ntls, nm) < 0) {
-                if (ntls >= 512) die("too many TLSDESC symbols");
+                if (ntls >= tls_cap) {
+                    tls_cap = tls_cap ? tls_cap * 2 : 64;
+                    tls = realloc(tls, (size_t)tls_cap * sizeof *tls);
+                    if (!tls) die("oom growing TLSDESC table");
+                }
                 snprintf(tls[ntls].name, sizeof tls[ntls].name, "%s", nm);
                 tls[ntls].addend = objs[i].relocs[r].add;
                 ntls++;
             }
         }
+
+    /* Count ABS64 data-pointer relocations up front — each needs a .vms$rel
+     * slot (image-relative pointer biased at activation), so the section must
+     * be sized before layout. (vms-004) */
+    int nabs = 0;
+    for (int i = 0; i < nobj; i++)
+        for (int r = 0; r < objs[i].nreloc; r++)
+            if (ELF64_R_TYPE(objs[i].relocs[r].info) == R_AARCH64_ABS64)
+                nabs++;
 
     /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|tdata|sv|rel|tls|bss --- */
     uint64_t off_ph   = sizeof(Elf64_Ehdr);
@@ -915,8 +1171,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     uint64_t sv_names_o = sv_hdr_sz + (uint64_t)nuniv * sizeof(struct ovmx_sv_entry);
     uint64_t sv_size = sv_names_o + names_size;
 
-    /* .vms$rel: one image-relative offset per GOT slot (all need +bias). */
-    int nrel = ngot;
+    /* .vms$rel: one image-relative offset per GOT slot AND per ABS64 data
+     * pointer — all hold an image-relative address biased at activation. Sized
+     * for the upper bound (ngot + nabs); the header count records how many were
+     * actually resolved (deferred imports are excluded). (vms-004) */
+    int nrel = ngot + nabs;
     uint64_t off_rel = 0, rel_size = 0;
     if (nrel) {
         off_rel = ALIGN_UP(off_sv + sv_size, 8);
@@ -1009,11 +1268,21 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     if (has_tls && tdata_sz)
         memcpy(img + tdata_va, objs[tls_obj].buf + objs[tls_obj].tdata->sh_offset, tdata_sz);
 
-    /* Fill GOT cells with image-relative target addresses. */
+    /* Image-relative slots (GOT cells + ABS64 data pointers) to bias at
+     * activation; filled as they resolve, header count set at the end. */
+    uint64_t *rel_off = nrel ? calloc((size_t)nrel, 8) : NULL;
+    int nrel_filled = 0;
+
+    /* Fill GOT cells with image-relative target addresses. A GOT symbol not
+     * defined by any input object is a deferred import (vms-61f): under
+     * --allow-undefined its cell stays 0 and is NOT recorded in .vms$rel. */
     for (int i = 0; i < ngot; i++) {
         got[i].value = resolve_named(objs, nobj, got[i].name,
-            "GOT symbol undefined (cross-image DATA import is a later increment)");
+            g_allow_undef ? NULL
+              : "GOT symbol undefined (cross-image DATA import is a later increment)");
         *(uint64_t *)(img + got[i].va) = got[i].value;
+        if (got[i].value) rel_off[nrel_filled++] = got[i].va;
+        else g_deferred++;
     }
 
     /* Fill TLSDESC entries: [0]=0 (IMGACT sets the resolver), [1]=module offset. */
@@ -1043,9 +1312,20 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 int ti = find_tls(tls, ntls, nm);
                 if (ti < 0) die("internal: TLSDESC slot missing for symbol");
                 patch_tlsdesc(type, insn, site, tls[ti].va);
+            } else if (type == R_AARCH64_ABS64) {
+                /* Pointer initializer (.rela.data): write S+A as a 64-bit
+                 * image-relative address and record the slot in .vms$rel so
+                 * the activator adds the load bias. A deferred external leaves
+                 * the slot 0 (unbiased). (vms-004, folds in vms-a17) */
+                uint64_t s = resolve_ref(objs, nobj, i, ELF64_R_SYM(rl->info));
+                if (s == 0) continue;   /* deferred (counted in resolve_ref) */
+                uint64_t value = s + (uint64_t)rl->add;
+                *(uint64_t *)(img + site) = value;
+                rel_off[nrel_filled++] = site;
             } else {
-                uint64_t target = resolve_ref(objs, nobj, i, ELF64_R_SYM(rl->info))
-                                  + (uint64_t)rl->add;
+                uint64_t target = resolve_ref(objs, nobj, i, ELF64_R_SYM(rl->info));
+                if (target == 0) continue;   /* deferred external, skip patch */
+                target += (uint64_t)rl->add;
                 patch_pcrel(type, insn, site, target);
             }
         }
@@ -1065,9 +1345,9 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     if (nrel) {
         struct ovmx_rel_header *rh = (struct ovmx_rel_header *)(img + off_rel);
-        rh->magic = OVMX_REL_MAGIC; rh->count = (uint32_t)nrel;
+        rh->magic = OVMX_REL_MAGIC; rh->count = (uint32_t)nrel_filled;
         uint64_t *off = (uint64_t *)(img + off_rel + sizeof *rh);
-        for (int i = 0; i < ngot; i++) off[i] = got[i].va;
+        for (int i = 0; i < nrel_filled; i++) off[i] = rel_off[i];
     }
 
     if (ntlsdesc) {
@@ -1149,28 +1429,50 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     if (write(fd, img, file_sz) != (ssize_t)file_sz) die("short write output");
     close(fd);
     int totrel = 0; for (int i = 0; i < nobj; i++) totrel += objs[i].nreloc;
+    /* ABS64 data pointers written = filled .vms$rel slots minus the resolved
+     * GOT cells (GOT slots are pushed into rel_off first). */
+    int abs_applied = nrel_filled;
+    for (int i = 0; i < ngot; i++) if (got[i].value) abs_applied--;
     fprintf(stderr,
         "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d object%s, %d universal%s, "
-        "%d reloc%s, %d GOT, %d TLS, GSMATCH=%s,%u,%u\n",
+        "%d reloc%s, %d GOT, %d TLS, %d ABS64-ptr, GSMATCH=%s,%u,%u\n",
         out, nobj, nobj==1?"":"s", nuniv, nuniv==1?"":"s", totrel, totrel==1?"":"s",
-        ngot, ntls,
+        ngot, ntls, abs_applied,
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
+    if (g_deferred)
+        fprintf(stderr, "%%LINK-I-DEFEXT, %ld external reference%s left unresolved "
+                "(deferred imports — satisfied by the C RTL / a companion "
+                "shareable at activation, vms-61f)\n",
+                g_deferred, g_deferred == 1 ? "" : "s");
+    free(rel_off); free(got); free(tls); free(g_syms); g_syms = NULL;
     free(img);
 }
 
 
+/* Peek an input file's first bytes to tell an `ar` archive from a bare .o. */
+static int file_is_archive(const char *path)
+{
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) die("cannot open input file");
+    char m[AR_MAGIC_LEN];
+    ssize_t r = read(fd, m, AR_MAGIC_LEN);
+    close(fd);
+    return r == AR_MAGIC_LEN && memcmp(m, AR_MAGIC, AR_MAGIC_LEN) == 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *out = NULL;
-    const char *ins[64];
+    const char **ins = calloc((size_t)argc, sizeof *ins);  /* <= argc inputs */
     int nin = 0;
     struct univ uv[MAX_UNIV];
     int nuniv = 0;
-    int shareable = 0, executable = 0;
-    struct producer producers[64];
+    int shareable = 0, executable = 0, allow_undef = 0;
+    struct producer *producers = calloc((size_t)argc, sizeof *producers);
     int np = 0;
     uint32_t gk = OVMX_GSMATCH_EQUAL, gmaj = 0, gmin = 0;
+    if (!ins || !producers) die("oom parsing arguments");
     memset(uv, 0, sizeof uv);
 
     for (int i = 1; i < argc; i++) {
@@ -1180,8 +1482,9 @@ int main(int argc, char **argv)
             shareable = 1;
         } else if (strcmp(argv[i], "--executable") == 0) {
             executable = 1;
+        } else if (strcmp(argv[i], "--allow-undefined") == 0) {
+            allow_undef = 1;
         } else if (strcmp(argv[i], "--use") == 0 && i + 1 < argc) {
-            if (np >= 64) die("too many --use producer images");
             load_producer(argv[++i], &producers[np++]);
         } else if (strcmp(argv[i], "--symbol-vector") == 0 && i + 1 < argc) {
             nuniv = parse_symbol_vector(argv[++i], uv);
@@ -1190,12 +1493,12 @@ int main(int argc, char **argv)
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "%%LINK-W-IGNORED, unknown option %s\n", argv[i]);
         } else {
-            if (nin >= 64) die("too many input objects");
             ins[nin++] = argv[i];
         }
     }
-    if (nin == 0) die("no input object (usage: LINK.EXE --shareable "
-                  "--symbol-vector \"f=PROCEDURE\" --gsmatch LEQUAL,1,0 -o X.EXE a.o [b.o ...] "
+    if (nin == 0) die("no input (usage: LINK.EXE --shareable "
+                  "--symbol-vector \"f=PROCEDURE\" --gsmatch LEQUAL,1,0 [--allow-undefined] "
+                  "-o X.EXE a.o [b.o | lib.a ...] "
                   "| LINK.EXE --executable --use LIB$SHR.EXE -o PROG.EXE prog.o)");
     if (!out) die("no -o output");
     if (shareable == executable)
@@ -1209,11 +1512,18 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    /* ---- Shareable image (one or more objects) ---- */
+    /* ---- Shareable image: one or more objects and/or whole `.a` archives ----
+     * Inputs grow dynamically; an archive expands to all of its object members
+     * in-process (whole-archive, no `ld -r`). (vms-004) */
     if (nuniv == 0) die("a shareable image needs --symbol-vector");
-    static struct obj objs[64];
-    for (int i = 0; i < nin; i++)
-        load_obj(ins[i], &objs[i]);
-    emit_shareable(objs, nin, uv, nuniv, gk, gmaj, gmin, out);
+    struct obj *objs = NULL; int nobj = 0, cap = 0;
+    for (int i = 0; i < nin; i++) {
+        if (file_is_archive(ins[i]))
+            load_archive(ins[i], &objs, &nobj, &cap);
+        else
+            load_obj(ins[i], push_obj(&objs, &nobj, &cap));
+    }
+    if (nobj == 0) die("no object members found in inputs");
+    emit_shareable(objs, nobj, uv, nuniv, gk, gmaj, gmin, allow_undef, out);
     return 0;
 }

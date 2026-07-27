@@ -6,7 +6,8 @@
 # ET_DYN whose .vms$sv exports the declared universal symbols with the right
 # kinds and GSMATCH. Proves LINK.EXE produces OVMX images WITHOUT ld.
 #
-# Runs in any gcc environment (host or musl container). Exit 0 only on success.
+# The later stages compile aarch64 objects and link the real musl libc.a, so this
+# harness runs in the arm64 musl container (CI vmslink-mvp job). Exit 0 = success.
 
 set -e
 CC=${CC:-gcc}
@@ -245,6 +246,57 @@ set +e
 set -e
 echo "consumer exit code = $RC (expect 99 = shared_counter(90)+9 read across images)"
 [ "$RC" -eq 99 ] || { echo "FAIL: cross-image DATA import did not yield 99 (got $RC)"; exit 1; }
+
+echo
+echo "== ABS64 .rela.data pointer initializers relocate + record in .vms\$rel (vms-004) =="
+# int (*tbl[])(int) = { f, g }; forces two R_AARCH64_ABS64 relocs in .data (pointer
+# initializers). LINK.EXE must resolve each to the target function's image-relative
+# address, write it into the .data slot, AND record the slot in .vms$rel so the
+# activator adds the load bias. abs_check proves both pointers landed on real
+# addresses (== &f, == &g) and are listed in .vms$rel.
+$CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/ABSCHECK" "$SRC/test/abs_check.c"
+cat > "$WORK/ptr.c" <<'EOF'
+int f(int x) { return x + 1; }
+int g(int x) { return x + 2; }
+int (*tbl[2])(int) = { f, g };            /* .data: two ABS64 pointer inits */
+int usetbl(int i, int x) { return tbl[i & 1](x); }
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/ptr.o" "$WORK/ptr.c"
+echo "-- ABS64 relocs gcc emitted against .data --"
+readelf -rW "$WORK/ptr.o" | awk '/ABS64/{print $3}' | sort | uniq -c
+readelf -rW "$WORK/ptr.o" | grep -q "R_AARCH64_ABS64" || { echo "FAIL: expected ABS64 pointer inits"; exit 1; }
+"$WORK/LINK.EXE" --shareable \
+    --symbol-vector "f=PROCEDURE,g=PROCEDURE,tbl=DATA,usetbl=PROCEDURE" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIBPTR\$SHR.EXE" "$WORK/ptr.o"
+"$WORK/ABSCHECK" "$WORK/LIBPTR\$SHR.EXE" tbl 0 f || { echo "FAIL: tbl[0] != &f"; exit 1; }
+"$WORK/ABSCHECK" "$WORK/LIBPTR\$SHR.EXE" tbl 8 g || { echo "FAIL: tbl[1] != &g"; exit 1; }
+
+echo
+echo "== whole-archive musl libc.a ingestion: caps + ar parse + ABS64 at scale (vms-004) =="
+# The real musl libc.a is 1345 archive members / 3600+ sections — far past the old
+# static caps (OBJ_MAXSEC=256, objs[64]) that emitted %LINK-F "too many sections".
+# LINK.EXE must parse the `ar` format itself (no ld -r), pull ALL members, merge
+# and relocate them WITH the .rela.data ABS64 pointer inits (stdio FILE structs,
+# etc.), and defer the compiler-runtime/crt externals it can't yet bind (vms-61f).
+if [ -f /usr/lib/libc.a ]; then
+    MUSL=/usr/lib/libc.a
+    echo "-- libc.a: $(ar t $MUSL | wc -l) members --"
+    "$WORK/LINK.EXE" --shareable --allow-undefined \
+        --symbol-vector "malloc=PROCEDURE,free=PROCEDURE,__stdout_used=DATA,__stdout_FILE=DATA" \
+        --gsmatch EQUAL,1,0 -o "$WORK/LIBC\$SHR.EXE" "$MUSL" \
+        || { echo "FAIL: LINK.EXE could not ingest the whole musl libc.a"; exit 1; }
+    readelf -h "$WORK/LIBC\$SHR.EXE" | grep -q "DYN" || { echo "FAIL: musl image not ET_DYN"; exit 1; }
+    readelf -SW "$WORK/LIBC\$SHR.EXE" | grep -q '\.vms\$rel' || { echo "FAIL: no .vms\$rel in musl image"; exit 1; }
+    # At least one real stdio FILE pointer must have relocated to an in-image
+    # address recorded in .vms$rel (the ABS64 pointer-init path on real musl).
+    "$WORK/ABSCHECK" "$WORK/LIBC\$SHR.EXE" __stdout_used 0 __stdout_FILE \
+        || { echo "FAIL: musl stdio pointer did not relocate to a real address"; exit 1; }
+    echo "musl libc.a ingested + stdio pointer relocated OK"
+else
+    echo "FAIL: /usr/lib/libc.a not found — this harness must run in the arm64 musl"
+    echo "      container (the CI vmslink-mvp job; see CLAUDE.md test loop)."
+    exit 1
+fi
 
 echo
 echo "ALL LINK.EXE MVP CHECKS PASSED"

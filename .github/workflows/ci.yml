@@ -551,3 +551,38 @@ jobs:
               export CC=gcc WORK=/tmp/symvec-act
               sh /src/src/imgact/test/run_symvec_activation.sh
             '
+
+  # Job 12: real src/libvmssys linked + activated VMS-native (aarch64)
+  #
+  # The pillar milestone (vms-ade / bead vms-80a): the whole toolchain end to
+  # end on REAL code. Compiles the actual src/libvmssys, links it into an OVMX
+  # shareable image with LINK.EXE (no ld), and runs a consumer that calls the
+  # real vms_strlen through the symbol vector — kernel -> PT_INTERP=IMGACT.EXE
+  # -> activate (GOT/.vms$rel bias + TLS setup) -> transfer. Must return 5.
+  # Built with -mno-outline-atomics so gcc inlines atomics (no libgcc helpers).
+  # Runs under arm64 emulation.
+  # -----------------------------------------------------------------------
+  libvmssys-native:
+    name: libvmssys VMS-native Link + Activate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link + activate real libvmssys with LINK.EXE + IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/libvmssys-native
+              sh /src/src/imgact/test/run_libvmssys_native.sh
+            '

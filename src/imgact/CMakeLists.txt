@@ -21,8 +21,15 @@ endif()
 
 set(IMGACT_ARCHDIR "${CMAKE_CURRENT_SOURCE_DIR}/arch/${IMGACT_ARCH}")
 
+# known_images.c (bead vms-913.5) is compiled directly as an extra source of
+# THIS freestanding target (not the hosted `known_images` CMake library) so
+# it picks up the same -ffreestanding/-nostdlib flags below; imgact.c
+# provides the libc shim (open/fstat/mmap/munmap/close/strncpy/strncmp) its
+# calls need. Wires known_images_lookup() into the DT_NEEDED search path
+# (bead vms-30d).
 add_executable(imgact
     imgact.c
+    known_images.c
     ${IMGACT_ARCHDIR}/start.S
 )
 

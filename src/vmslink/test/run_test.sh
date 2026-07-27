@@ -166,4 +166,39 @@ echo "activation against older (minor 500 < linked 1000) exit = $RC (expect nonz
 [ "$RC" -ne 42 ] || { echo "FAIL: GSMATCH reject did not block activation"; exit 1; }
 
 echo
+echo "== cross-image DATA import: consumer reads an exported DATA universal (vms-20b) =="
+# The producer exports a variable as a DATA universal; the consumer reads it via
+# a GOT pair (ADR_GOT_PAGE/LD64_GOT_LO12_NC) against the undefined symbol. LINK's
+# --executable path turns that into a .vms$imp DATA binding + GOT cell; the
+# activator resolves the producer's DATA universal (its biased .data address) and
+# writes it into the cell, so the consumer's load dereferences the real variable.
+cat > "$WORK/datalib.c" <<'EOF'
+int shared_counter = 90;                  /* exported DATA universal (.data) */
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/datalib.o" "$WORK/datalib.c"
+"$WORK/LINK.EXE" --shareable --symbol-vector "shared_counter=DATA" \
+    --gsmatch EQUAL,1,0 -o "$WORK/LIBDATA\$SHR.EXE" "$WORK/datalib.o"
+cat > "$WORK/datacons.c" <<'EOF'
+extern int shared_counter;                /* imported via GOT (ADR_GOT_PAGE/LD64) */
+void _start(void) {
+    int r = shared_counter + 9;           /* == 99, data resolved across images */
+    register long x8 __asm__("x8") = 94;  /* exit_group */
+    register long x0 __asm__("x0") = r;
+    __asm__ volatile("svc 0" :: "r"(x8), "r"(x0) : "memory");
+    __builtin_unreachable();
+}
+EOF
+$CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/datacons.o" "$WORK/datacons.c"
+echo "-- consumer .text relocations (expect a GOT pair to shared_counter) --"
+readelf -rW "$WORK/datacons.o" | awk '/R_AARCH64/{print $3}' | sort | uniq -c
+"$WORK/LINK.EXE" --executable --use "$WORK/LIBDATA\$SHR.EXE" \
+    -o "$WORK/DATAPROG.EXE" "$WORK/datacons.o"
+readelf -SW "$WORK/DATAPROG.EXE" | grep -E '\.got|\.vms\$imp' || true
+set +e
+"$WORK/ACTIVATE" "$WORK/DATAPROG.EXE" "$WORK/LIBDATA\$SHR.EXE"; RC=$?
+set -e
+echo "consumer exit code = $RC (expect 99 = shared_counter(90)+9 read across images)"
+[ "$RC" -eq 99 ] || { echo "FAIL: cross-image DATA import did not yield 99 (got $RC)"; exit 1; }
+
+echo
 echo "ALL LINK.EXE MVP CHECKS PASSED"

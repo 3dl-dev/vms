@@ -286,7 +286,12 @@ struct import {
     uint32_t svidx;        /* vector index within that producer */
     uint64_t plt_va;       /* PLT stub address (assigned at layout) */
     uint64_t got_va;       /* GOT cell address (assigned at layout) */
+    int      is_data;      /* 1 = DATA import (GOT-read), 0 = call import (PLT) */
 };
+
+/* Patch an ADR_GOT_PAGE / LD64_GOT_LO12_NC pair to reach `slot` PC-relatively
+ * (defined below; forward-declared for emit_executable's data imports). */
+static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot);
 
 /* Emit an OVMX executable image (ET_DYN, PT_INTERP=IMGACT.EXE) whose imports
  * bind to producer symbol vectors via .vms$imp. IMGACT resolves each import at
@@ -303,17 +308,22 @@ static void emit_executable(struct obj *o, struct producer *ps, int np,
         }
     if (!start_found) die("executable object has no _start in .text");
 
-    /* Collect imports from CALL26/JUMP26 relocations to undefined symbols. */
+    /* Collect imports: CALL26/JUMP26 -> PLT (call) import; ADR_GOT_PAGE /
+     * LD64_GOT_LO12_NC to an undefined symbol -> GOT (DATA) import. Both bind to
+     * a producer universal via .vms$imp; IMGACT fills the GOT cell. */
     struct import imp[256];
     int nimp = 0;
     for (int i = 0; i < o->nrela; i++) {
         uint32_t type = ELF64_R_TYPE(o->rela[i].r_info);
         uint32_t si   = ELF64_R_SYM(o->rela[i].r_info);
         const char *nm = o->str + o->sym[si].st_name;
-        if (type != R_AARCH64_CALL26 && type != R_AARCH64_JUMP26)
-            die("MVP consumer supports only CALL26/JUMP26 relocs in .text");
+        int is_call = (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26);
+        int is_data = (type == R_AARCH64_ADR_GOT_PAGE ||
+                       type == R_AARCH64_LD64_GOT_LO12_NC);
+        if (!is_call && !is_data)
+            die("consumer supports only CALL26/JUMP26 (calls) and GOT (data) relocs in .text");
         if (o->sym[si].st_shndx != SHN_UNDEF)
-            die("MVP consumer supports only external (imported) calls");
+            die("consumer supports only external (imported) references");
         int found = -1;
         for (int k = 0; k < nimp; k++)
             if (strcmp(imp[k].name, nm) == 0) found = k;
@@ -321,11 +331,12 @@ static void emit_executable(struct obj *o, struct producer *ps, int np,
             if (nimp >= 256) die("too many imports");
             found = nimp++;
             snprintf(imp[found].name, sizeof imp[found].name, "%s", nm);
+            imp[found].is_data = is_data;
             if (!find_universal(ps, np, nm, &imp[found].pidx, &imp[found].svidx))
                 die("unresolved universal symbol (not in any --use image)");
         }
     }
-    if (nimp == 0) die("consumer imports nothing (no external calls to bind)");
+    if (nimp == 0) die("consumer imports nothing (no external references to bind)");
 
     /* ---- Layout ----
      * [ehdr][phdr x2][.interp][.text][.plt][.got][.vms$imp][.shstrtab][shdrs] */
@@ -405,22 +416,30 @@ static void emit_executable(struct obj *o, struct producer *ps, int np,
     memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
     memcpy(img + off_text, o->buf + o->text->sh_offset, text_sz);
 
-    /* Patch CALL26/JUMP26 sites to branch to their PLT stubs. */
+    /* Patch reference sites: calls branch to a PLT stub; DATA reads (the GOT
+     * ADRP/LDR pair) address the import's GOT cell directly. */
     for (int i = 0; i < o->nrela; i++) {
         uint32_t type = ELF64_R_TYPE(o->rela[i].r_info);
         const char *nm = o->str + o->sym[ELF64_R_SYM(o->rela[i].r_info)].st_name;
         int k = -1;
         for (int j = 0; j < nimp; j++) if (strcmp(imp[j].name, nm) == 0) k = j;
         uint64_t site = text_va + o->rela[i].r_offset;
-        int64_t  disp = (int64_t)imp[k].plt_va - (int64_t)site;
-        uint32_t imm26 = (uint32_t)((disp >> 2) & 0x03FFFFFF);
-        uint32_t op = (type == R_AARCH64_JUMP26) ? 0x14000000u : 0x94000000u;
         uint32_t *insn = (uint32_t *)(img + off_text + o->rela[i].r_offset);
-        *insn = op | imm26;
+        if (type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC) {
+            patch_got(type, insn, site, imp[k].got_va);
+        } else {
+            int64_t  disp = (int64_t)imp[k].plt_va - (int64_t)site;
+            uint32_t imm26 = (uint32_t)((disp >> 2) & 0x03FFFFFF);
+            uint32_t op = (type == R_AARCH64_JUMP26) ? 0x14000000u : 0x94000000u;
+            *insn = op | imm26;
+        }
     }
 
-    /* PLT stubs: adrp x16,GOT ; ldr x16,[x16,#lo12] ; br x16. */
+    /* PLT stubs for call imports: adrp x16,GOT ; ldr x16,[x16,#lo12] ; br x16.
+     * (DATA imports leave their stub bytes unused — the site reads the GOT cell
+     * directly — but a slot is still reserved to keep the layout uniform.) */
     for (int i = 0; i < nimp; i++) {
+        if (imp[i].is_data) continue;
         uint32_t *s = (uint32_t *)(img + off_plt + (uint64_t)i * 12);
         int64_t pd = (int64_t)(imp[i].got_va >> 12) - (int64_t)(imp[i].plt_va >> 12);
         s[0] = enc_adrp(16, pd);

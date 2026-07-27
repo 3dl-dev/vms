@@ -183,3 +183,52 @@ cross-cutting enablers (multi-module TLS, x86_64 `vms-913.11`, INSTALL DB).
 - **Exit gate:** a consumer calling `malloc()`+`snprintf()` bound to `DECC$SHR`
   runs for real through `IMGACT.EXE` (new CI job), and the ABS64 reloc test is
   green — both by SHA. Unblocks DAG-2 (`vms-b65.1`).
+
+---
+
+# Full roadmap as parallel DAG streams (the whole board, not just Rail B)
+
+The roadmap is **five DAG streams that run concurrently**, converging at two
+nodes. Most streams have `rd ready` entry points **now** — swarm can dispatch all
+five in parallel; they are not gated on each other except at the convergences.
+
+```
+STREAM B  Toolchain → run software        dag-1 ▶ dag-2 ▶ dag-3 ▶ dag-4 ─┐
+          61f.1∥a17 ▶ 61f.2 ▶ libs ▶ DCL                                 │
+                                                                         ▼
+STREAM C  Activation infrastructure       dag-c1 {913.4 GSMATCH ∥ 913.5   ├─▶ vms-sys ★
+          (vms-913)                        INSTALL ∥ 913.6 initramfs ∥     │   SYS$ calls
+                                           913.11 x86_64} ▶ dag-c2         │   dispatch into
+                                           913.7 sysdisk ▶ 913.10 boot ───┘   OVMX services
+
+STREAM A  Cluster interop (vms-ci)        dag-a1 {ci.8 node-id ∥ pivot.2
+          — north-star business rail       design ∥ ab6/ac4 lock-mgr ∥
+                                           ce7 boot} ▶ dag-a2 ci.3         ┐
+                                           (SHOW CLUSTER) ▶ dag-a3         │
+                                           ci.4 MSCP ▶ ci.5 DLM ───────────┼─▶ vms-ci.6 ★
+                                                                          │   rolling
+                              STREAM C (vms-913 activation) ──────────────┘   evacuation
+
+STREAM D  Source compatibility (vms-801)  dag-d1 Eight-Cubed ▶ dag-d2 MMK ▶ dag-d3 NETLIB
+          — feeds vms-sys corpus          (parallel to B/C; corpus-driven)
+
+STREAM E  Authenticity (vms-898)          dag-e  (mostly closed; SSH + remainder)
+          — indistinguishability          runs independently
+```
+
+**Two convergence nodes** (already wired):
+- `vms-sys` (VMS system-call endpoint) ← STREAM B `dag-4` (DCL/runtime) + STREAM C (`vms-913` activation).
+- `vms-ci.6` (rolling evacuation, the sale) ← STREAM A `ci.5` (DLM) + STREAM C (`vms-913` activation).
+
+**Dispatchable right now (5 streams in parallel):**
+| Stream | Ready entry items | First DAG |
+|--------|-------------------|-----------|
+| B toolchain | `vms-61f.1`, `vms-a17` | `dag-1` |
+| C activation | `vms-913.4`, `.5`, `.6`, `.11` | `dag-c1` |
+| A cluster | `vms-ci.8`, `vms-pivot.2`, `vms-ab6`, `vms-ac4`, `vms-ce7` | `dag-a1` |
+| D compat | `vms-801.4` | `dag-d1` |
+| E authenticity | `vms-898.11` | `dag-e` |
+
+Clean-room caveat: STREAM A's leaf tasks are RE-discovery-heavy (you learn the
+sub-tasks by dissecting the wire); its **milestone DAG** is fixed but individual
+items decompose on contact. STREAMS B/C/D are fully specified up front.

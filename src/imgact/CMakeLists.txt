@@ -5,15 +5,21 @@
 # _DYNAMIC (RELATIVE relocs only), and exports no symbols. This mirrors the
 # standalone src/imgact/Makefile recipe proven by the vms-913.2 harness.
 #
-# aarch64 only until bead vms-913.11 adds the x86_64 entry stub.
+# aarch64 and x86_64 are supported (beads vms-913.2 and vms-913.11); each arch
+# provides its entry stub, TLSDESC resolver, TP setter, and syscall/reloc/TLS
+# definitions under arch/<arch>/.
 
-if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
+    set(IMGACT_ARCH "aarch64")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
+    set(IMGACT_ARCH "x86_64")
+else()
     message(FATAL_ERROR
-        "OVMX_IMGACT is aarch64-only (CMAKE_SYSTEM_PROCESSOR="
-        "${CMAKE_SYSTEM_PROCESSOR}). x86_64 support is bead vms-913.11.")
+        "OVMX_IMGACT supports aarch64 and x86_64 only (CMAKE_SYSTEM_PROCESSOR="
+        "${CMAKE_SYSTEM_PROCESSOR}).")
 endif()
 
-set(IMGACT_ARCHDIR "${CMAKE_CURRENT_SOURCE_DIR}/arch/aarch64")
+set(IMGACT_ARCHDIR "${CMAKE_CURRENT_SOURCE_DIR}/arch/${IMGACT_ARCH}")
 
 add_executable(imgact
     imgact.c

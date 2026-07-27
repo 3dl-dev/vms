@@ -1,7 +1,8 @@
 /*
- * IMGACT.EXE — OVMX image activator (aarch64).
+ * IMGACT.EXE — OVMX image activator (aarch64 + x86_64).
  *
- * Bead vms-913.2. Design contract: docs/design-image-activation.md.
+ * Beads vms-913.2 (aarch64 core) and vms-913.11 (x86_64). Design contract:
+ * docs/design-image-activation.md.
  *
  * IMGACT.EXE is a static-PIE, freestanding binary registered as the ELF
  * PT_INTERP for all OVMX executables. On exec(), the kernel loads IMGACT.EXE,
@@ -21,16 +22,24 @@
  * comes from the OVMX design spec and public VMS documentation only.
  * ---------------------------------------------------------------------------
  *
- * Scope (vms-913.2): aarch64 core activator + minimal proof harness. Out of
- * scope and deferred to sibling beads: GSMATCH enforcement (913.4), the
- * INSTALL known-image DB (913.5), CMake OVMX_IMGACT mode (913.3), x86_64
- * (913.11). GNU_HASH is not yet supported; OVMX images are linked
- * --hash-style=sysv (DT_HASH) for now.
+ * Scope: aarch64 + x86_64 core activator + minimal proof harness. All
+ * architecture-specific detail (syscall ABI, relocation numbers, TLS variant,
+ * entry/TP/TLSDESC assembly) lives under arch/<arch>/; the loader body is
+ * architecture-independent. Out of scope and deferred to sibling beads:
+ * GSMATCH enforcement (913.4), the INSTALL known-image DB (913.5), CMake
+ * OVMX_IMGACT mode (913.3). GNU_HASH is not yet supported; OVMX images are
+ * linked --hash-style=sysv (DT_HASH) for now.
  */
 
 #include <elf.h>
 
-#include "arch/aarch64/imgact_arch.h"
+#if defined(__aarch64__)
+#  include "arch/aarch64/imgact_arch.h"
+#elif defined(__x86_64__)
+#  include "arch/x86_64/imgact_arch.h"
+#else
+#  error "IMGACT.EXE: unsupported architecture (aarch64 and x86_64 only)"
+#endif
 #include "ovmx_image.h"   /* OVMX symbol-vector image format (LINK.EXE) */
 #include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
 
@@ -44,33 +53,10 @@
 
 /* --------------------------------------------------------------------------
  * Freestanding syscall layer (no libc; IMGACT.EXE is -nostdlib).
+ *
+ * The raw syscall primitive (syscall6) and the per-arch syscall numbers are
+ * provided by arch/<arch>/imgact_arch.h; the typed wrappers below are shared.
  * -------------------------------------------------------------------------- */
-
-#define SYS_openat      56
-#define SYS_close       57
-#define SYS_read        63
-#define SYS_pread64     67
-#define SYS_write       64
-#define SYS_mmap        222
-#define SYS_mprotect    226
-#define SYS_munmap      215
-#define SYS_exit_group  94
-
-static long syscall6(long n, long a, long b, long c, long d, long e, long f)
-{
-	register long x8 __asm__("x8") = n;
-	register long x0 __asm__("x0") = a;
-	register long x1 __asm__("x1") = b;
-	register long x2 __asm__("x2") = c;
-	register long x3 __asm__("x3") = d;
-	register long x4 __asm__("x4") = e;
-	register long x5 __asm__("x5") = f;
-	__asm__ volatile("svc 0"
-			 : "+r"(x0)
-			 : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
-			 : "memory", "cc");
-	return x0;
-}
 
 static long sys_openat(const char *path, int flags)
 {
@@ -558,43 +544,77 @@ static void load_deps(struct obj *o)
 }
 
 /* --------------------------------------------------------------------------
- * TLS layout (Variant I / TLS_ABOVE_TP).
+ * TLS layout.
+ *
+ * Each TLS module is assigned a SIGNED TP-relative base offset in o->tls_offset
+ * (stored in an unsigned long; two's-complement wraparound makes TP + offset
+ * work for both signs). A variable at st_value within the module lives at
+ * TP + tls_offset + st_value — the value a static TLSDESC descriptor returns.
+ *
+ *   Variant I  (aarch64, TLS_ABOVE_TP): TP is the block base; the TCB is
+ *     reserved first (offsets positive), blocks grow upward.
+ *   Variant II (x86_64): the TCB sits at/above TP (with a self-pointer at TP);
+ *     blocks live below TP (offsets negative). g_tls_tp_off is the distance
+ *     from the mmap base up to TP.
  * -------------------------------------------------------------------------- */
 
-static unsigned long g_tls_total;
+static unsigned long g_tls_total;    /* bytes to mmap for the whole TLS area */
+static unsigned long g_tls_tp_off;   /* offset of TP within the mmap'd area  */
 
 static void assign_tls_offsets(void)
 {
-	unsigned long cursor = TLS_TCB_SIZE;   /* reserve TCB above TP */
+#if IMGACT_TLS_VARIANT == 1
+	unsigned long cursor = TLS_TCB_SIZE;   /* reserve TCB below the blocks */
 	for (int i = 0; i < g_nobjs; i++) {
 		struct obj *o = &g_objs[i];
 		if (!o->has_tls)
 			continue;
 		unsigned long off = ALIGN_UP(cursor, o->tls_align);
-		o->tls_offset = off;
+		o->tls_offset = off;                       /* positive */
 		cursor = off + o->tls_memsz;
 	}
-	g_tls_total = cursor;
+	g_tls_tp_off = 0;                              /* TP == mmap base */
+	g_tls_total  = cursor;
+#else
+	/* Variant II: cumulative distance below TP (Drepper, variant 2). */
+	unsigned long run = 0, maxalign = 16;
+	for (int i = 0; i < g_nobjs; i++) {
+		struct obj *o = &g_objs[i];
+		if (!o->has_tls)
+			continue;
+		run = ALIGN_UP(run + o->tls_memsz, o->tls_align);
+		o->tls_offset = (unsigned long)(-(long)run);   /* negative */
+		if (o->tls_align > maxalign)
+			maxalign = o->tls_align;
+	}
+	g_tls_tp_off = ALIGN_UP(run, maxalign);        /* TP above the blocks */
+	g_tls_total  = g_tls_tp_off + TLS_TCB_SIZE;    /* + TCB above TP       */
+#endif
 }
 
-/* Allocate the TLS block, copy per-module init images, program TPIDR_EL0. */
+/* Allocate the TLS block, copy per-module init images, program the TP. */
 static void setup_tls(void)
 {
 	unsigned long len = PAGE_UP(g_tls_total);
+	if (len == 0)
+		return;
 	void *area = sys_mmap(0, len, PROT_READ | PROT_WRITE,
 			      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (area == MAP_FAILED)
 		die_tlserr("TLS block");
+	char *tp = (char *)area + g_tls_tp_off;
 
 	for (int i = 0; i < g_nobjs; i++) {
 		struct obj *o = &g_objs[i];
 		if (!o->has_tls)
 			continue;
-		memcpy((char *)area + o->tls_offset,
-		       (void *)o->tls_image, o->tls_filesz);
+		memcpy(tp + o->tls_offset, (void *)o->tls_image, o->tls_filesz);
 		/* .tbss already zero (anonymous mapping). */
 	}
-	imgact_set_tp(area);
+#if IMGACT_TLS_VARIANT == 2
+	*(void **)tp = tp;   /* self-pointer at %fs:0 (Variant II TCB) */
+#endif
+	imgact_set_tp(tp);
 }
 
 /* --------------------------------------------------------------------------
@@ -611,12 +631,15 @@ static void apply_rela(struct obj *o, Elf64_Rela *rela, unsigned long size)
 		unsigned long *where = (unsigned long *)(o->base + r->r_offset);
 
 		switch (type) {
-		case R_AARCH64_RELATIVE:
+		case IMGACT_R_RELATIVE:
+			/* B + A (base-relative), identical on aarch64/x86_64. */
 			*where = o->base + (unsigned long)r->r_addend;
 			break;
 
-		case R_AARCH64_GLOB_DAT:
-		case R_AARCH64_JUMP_SLOT: {
+		case IMGACT_R_GLOB_DAT:
+		case IMGACT_R_JUMP_SLOT: {
+			/* S (+ A). The x86_64 JUMP_SLOT/GLOB_DAT addend is 0,
+			 * so the shared S + A form is correct on both arches. */
 			const char *name = o->strtab + o->symtab[symi].st_name;
 			struct symres res = resolve_sym(name);
 			if (!res.found) {
@@ -632,7 +655,11 @@ static void apply_rela(struct obj *o, Elf64_Rela *rela, unsigned long size)
 			break;
 		}
 
-		case R_AARCH64_TLSDESC: {
+		case IMGACT_R_TLSDESC: {
+			/* Fill the 2-word descriptor: [resolver, TP-rel offset].
+			 * o->tls_offset carries the module block's signed
+			 * TP-relative base (positive on Variant I, negative on
+			 * Variant II), so the same arithmetic serves both. */
 			unsigned long arg;
 			if (symi) {
 				const char *name =
@@ -651,7 +678,7 @@ static void apply_rela(struct obj *o, Elf64_Rela *rela, unsigned long size)
 			break;
 		}
 
-		case R_AARCH64_ABS64: {
+		case IMGACT_R_ABS64: {
 			const char *name = o->strtab + o->symtab[symi].st_name;
 			struct symres res = resolve_sym(name);
 			if (!res.found)
@@ -696,8 +723,9 @@ static void run_init(struct obj *o)
  *
  * Applied before any global/GOT access. Uses only the caller-supplied load
  * base, the hidden _DYNAMIC symbol (reached PC-relative, no GOT), and locals.
- * Only R_AARCH64_RELATIVE appears in a -nostdlib static-PIE binary's own
- * relocations. MUST NOT call other functions or touch globals.
+ * Only the RELATIVE relocation (R_AARCH64_RELATIVE / R_X86_64_RELATIVE)
+ * appears in a -nostdlib static-PIE binary's own relocations. MUST NOT call
+ * other functions or touch globals.
  * -------------------------------------------------------------------------- */
 
 extern Elf64_Dyn _DYNAMIC[] __attribute__((visibility("hidden")));
@@ -716,7 +744,7 @@ static void self_relocate(unsigned long base)
 	Elf64_Rela *r = (Elf64_Rela *)rela;
 	unsigned long n = relasz / sizeof(Elf64_Rela);
 	for (unsigned long i = 0; i < n; i++) {
-		if (ELF64_R_TYPE(r[i].r_info) == R_AARCH64_RELATIVE) {
+		if (ELF64_R_TYPE(r[i].r_info) == IMGACT_R_RELATIVE) {
 			unsigned long *w =
 				(unsigned long *)(base + r[i].r_offset);
 			*w = base + (unsigned long)r[i].r_addend;
@@ -908,34 +936,60 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
  * the R_AARCH64_TLSDESC handler) but over the .vms$imp producers. */
 static void setup_symvec_tls(void)
 {
-	unsigned long cursor = TLS_TCB_SIZE;   /* reserve the TCB above TP */
+	/* Assign each producer's TLS block a signed TP-relative base offset,
+	 * matching the DT_HASH path (assign_tls_offsets) but over g_prods. */
+	unsigned long tp_off, total;
 	int any = 0;
+#if IMGACT_TLS_VARIANT == 1
+	unsigned long cursor = TLS_TCB_SIZE;   /* reserve TCB below the blocks */
 	for (int i = 0; i < g_nprods; i++) {
 		struct ovmx_prod *p = &g_prods[i];
 		if (!p->has_tls)
 			continue;
 		unsigned long off = ALIGN_UP(cursor, p->tls_align);
-		p->tls_offset = off;
+		p->tls_offset = off;                       /* positive */
 		cursor = off + p->tls_memsz;
 		any = 1;
 	}
 	if (!any)
 		return;
-
-	unsigned long len = PAGE_UP(cursor);
-	void *area = sys_mmap(0, len, PROT_READ | PROT_WRITE,
-			      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-	if (area == MAP_FAILED)
-		die_tlserr("TLS block");
+	tp_off = 0;
+	total  = cursor;
+#else
+	unsigned long run = 0, maxalign = 16;
 	for (int i = 0; i < g_nprods; i++) {
 		struct ovmx_prod *p = &g_prods[i];
 		if (!p->has_tls)
 			continue;
-		memcpy((char *)area + p->tls_offset,
-		       (void *)p->tls_image, p->tls_filesz);
+		run = ALIGN_UP(run + p->tls_memsz, p->tls_align);
+		p->tls_offset = (unsigned long)(-(long)run);   /* negative */
+		if (p->tls_align > maxalign)
+			maxalign = p->tls_align;
+		any = 1;
+	}
+	if (!any)
+		return;
+	tp_off = ALIGN_UP(run, maxalign);
+	total  = tp_off + TLS_TCB_SIZE;
+#endif
+
+	unsigned long len = PAGE_UP(total);
+	void *area = sys_mmap(0, len, PROT_READ | PROT_WRITE,
+			      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (area == MAP_FAILED)
+		die_tlserr("TLS block");
+	char *tp = (char *)area + tp_off;
+	for (int i = 0; i < g_nprods; i++) {
+		struct ovmx_prod *p = &g_prods[i];
+		if (!p->has_tls)
+			continue;
+		memcpy(tp + p->tls_offset, (void *)p->tls_image, p->tls_filesz);
 		/* .tbss stays zero (anonymous mapping). */
 	}
-	imgact_set_tp(area);
+#if IMGACT_TLS_VARIANT == 2
+	*(void **)tp = tp;   /* self-pointer at %fs:0 (Variant II TCB) */
+#endif
+	imgact_set_tp(tp);
 
 	for (int i = 0; i < g_nprods; i++) {
 		struct ovmx_prod *p = &g_prods[i];

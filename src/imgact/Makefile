@@ -1,14 +1,16 @@
-# Makefile — IMGACT.EXE, the OVMX image activator (bead vms-913.2).
+# Makefile — IMGACT.EXE, the OVMX image activator (beads vms-913.2, vms-913.11).
 #
 # Standalone build (full CMake OVMX_IMGACT integration is bead 913.3).
 # Requires a native musl toolchain (e.g. Alpine's `gcc`, which is musl-based).
 # Do NOT build on the host — use build-in-podman.sh, which runs this Makefile
 # inside an Alpine container per the project's containerized-deps rule.
 #
-# aarch64 only for 913.2; x86_64 is bead 913.11.
+# aarch64 and x86_64 are supported. ARCH defaults to the host machine but may
+# be overridden for a cross build, e.g.:
+#   make ARCH=x86_64 CC="x86_64-linux-gnu-gcc"
 
 CC      ?= gcc
-ARCH    ?= aarch64
+ARCH    ?= $(shell uname -m | sed -e 's/arm64/aarch64/' -e 's/amd64/x86_64/')
 ARCHDIR := arch/$(ARCH)
 
 # IMGACT.EXE is a freestanding static-PIE ELF interpreter that exports no

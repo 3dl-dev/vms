@@ -18,6 +18,10 @@ extern int get_tls_x(void);
 extern int get_lp(void);
 extern int read_counter(void);
 
+#if defined(__aarch64__)
+/* aarch64: syscall number in x8, args in x0..x2, `svc 0`. */
+#define SC_write       64
+#define SC_exit_group  94
 static long syscall3(long n, long a, long b, long c)
 {
 	register long x8 __asm__("x8") = n;
@@ -30,11 +34,27 @@ static long syscall3(long n, long a, long b, long c)
 			 : "memory", "cc");
 	return x0;
 }
+#elif defined(__x86_64__)
+/* x86_64: syscall number in rax, args in rdi/rsi/rdx, `syscall`. */
+#define SC_write       1
+#define SC_exit_group  231
+static long syscall3(long n, long a, long b, long c)
+{
+	long r;
+	__asm__ volatile("syscall"
+			 : "=a"(r)
+			 : "a"(n), "D"(a), "S"(b), "d"(c)
+			 : "rcx", "r11", "memory");
+	return r;
+}
+#else
+#error "test_prog: unsupported architecture"
+#endif
 static void out(const char *s)
 {
 	const char *p = s;
 	while (*p) p++;
-	syscall3(64 /*write*/, 1, (long)s, p - s);
+	syscall3(SC_write, 1, (long)s, p - s);
 }
 static void out_int(int v)
 {
@@ -67,6 +87,6 @@ void _start(void)
 	out(" r4=");  out_int(r4);
 	out(")\n");
 
-	syscall3(94 /*exit_group*/, ok ? 0 : 1, 0, 0);
+	syscall3(SC_exit_group, ok ? 0 : 1, 0, 0);
 	for (;;) { }
 }

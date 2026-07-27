@@ -29,6 +29,7 @@
 #include <linux/seq_file.h>
 #include <linux/parser.h>
 #include <linux/namei.h>
+#include <linux/writeback.h>
 
 #include "vmsfs.h"
 
@@ -133,6 +134,45 @@ static void vmsfs_put_super(struct super_block *sb)
     }
 }
 
+/*
+ * vmsfs_write_inode - Persist a dirty inode's metadata to its on-disk header.
+ *
+ * The block-device write path stages file data through the page cache and
+ * only calls vmsfs_blkdev_flush_inode() when a new block is allocated in
+ * vmsfs_get_block() — which runs during write_begin, before
+ * generic_write_end() updates inode->i_size. Without a write_inode hook the
+ * final size (and any subsequent map growth) would never reach disk, so a
+ * file that was written and then unmounted would read back as zero-length
+ * after remount. The VFS marks the inode dirty on size change; this hook is
+ * how that dirty state is flushed on sync/unmount.
+ *
+ * Overlay-mode inodes have no on-disk header — nothing to do.
+ */
+static int vmsfs_write_inode(struct inode *inode,
+                             struct writeback_control *wbc)
+{
+    struct vmsfs_sb_info *sbi = VMSFS_SB(inode->i_sb);
+    int ret;
+
+    if (!sbi || sbi->mode != VMSFS_MODE_BLKDEV)
+        return 0;
+
+    /* Uninitialized / non-blkdev inodes carry no FID. */
+    if (VMSFS_I(inode)->fid == 0)
+        return 0;
+
+    /*
+     * Serialize against the block-allocation path, which mutates the
+     * cached retrieval map (vi->map / vi->map_count) under this lock and
+     * itself flushes the header via vmsfs_blkdev_flush_inode().
+     */
+    mutex_lock(&sbi->alloc_lock);
+    ret = vmsfs_blkdev_flush_inode(inode->i_sb, inode);
+    mutex_unlock(&sbi->alloc_lock);
+
+    return ret;
+}
+
 static int vmsfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 {
     struct vmsfs_sb_info *sbi = VMSFS_SB(dentry->d_sb);
@@ -190,6 +230,7 @@ extern void vmsfs_free_inode(struct inode *inode);
 const struct super_operations vmsfs_sops = {
     .alloc_inode   = vmsfs_alloc_inode,
     .free_inode    = vmsfs_free_inode,
+    .write_inode   = vmsfs_write_inode,
     .put_super     = vmsfs_put_super,
     .statfs        = vmsfs_statfs,
     .show_options  = vmsfs_show_options,

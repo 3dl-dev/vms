@@ -52,6 +52,13 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 # callable universal, but IMGACT's activation bootstrap (vms-61f.2) resolves it
 # BY NAME from the .vms$sv name blob to drive runtime init before transferring
 # control — so the production vector MUST export it. (vms-36a)
+#
+# The pthread_{mutex,cond}_* + raise/sigaction/sigemptyset universals at the END
+# are APPENDED (never inserted): the symbol vector is append-only, so existing
+# consumers' bound vector indices stay valid — a GSMATCH-compatible additive
+# change (LEQUAL). They let OVMX libs that migrate onto DECC$SHR bind pthread /
+# signal (the b65 lib-migration chain; the import-binding path itself is vms-e65).
+# (calloc/close are already exported above, so they are not re-listed here.)
 VEC="\
 __init_libc=PROCEDURE,\
 malloc=PROCEDURE,free=PROCEDURE,calloc=PROCEDURE,realloc=PROCEDURE,\
@@ -69,7 +76,13 @@ fseek=PROCEDURE,ftell=PROCEDURE,fgets=PROCEDURE,fgetc=PROCEDURE,getchar=PROCEDUR
 perror=PROCEDURE,\
 qsort=PROCEDURE,bsearch=PROCEDURE,abs=PROCEDURE,labs=PROCEDURE,\
 exit=PROCEDURE,abort=PROCEDURE,atexit=PROCEDURE,getenv=PROCEDURE,setenv=PROCEDURE,\
-open=PROCEDURE,close=PROCEDURE,read=PROCEDURE,write=PROCEDURE,lseek=PROCEDURE"
+open=PROCEDURE,close=PROCEDURE,read=PROCEDURE,write=PROCEDURE,lseek=PROCEDURE,\
+\
+pthread_mutex_init=PROCEDURE,pthread_mutex_lock=PROCEDURE,\
+pthread_mutex_unlock=PROCEDURE,pthread_mutex_destroy=PROCEDURE,\
+pthread_cond_init=PROCEDURE,pthread_cond_wait=PROCEDURE,\
+pthread_cond_broadcast=PROCEDURE,pthread_cond_destroy=PROCEDURE,\
+raise=PROCEDURE,sigaction=PROCEDURE,sigemptyset=PROCEDURE"
 
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"

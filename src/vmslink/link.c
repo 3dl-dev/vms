@@ -525,6 +525,61 @@ struct import {
  * (defined below; forward-declared for emit_executable's data imports). */
 static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot);
 
+/* Find an interned import by name -> index, or -1. */
+static int import_find(struct import *imp, int nimp, const char *nm)
+{
+    for (int i = 0; i < nimp; i++)
+        if (strcmp(imp[i].name, nm) == 0) return i;
+    return -1;
+}
+
+/* Byte size of a .vms$imp section: header + entries + deduped soname blob.
+ * Shared by emit_executable (consumer imports) and emit_shareable (a lib
+ * shareable's own cross-image imports — vms-e65). */
+static uint64_t vms_imp_size(int nimp, struct producer *ps, int np)
+{
+    uint32_t names_sz = 0;
+    for (int p = 0; p < np; p++) names_sz += (uint32_t)strlen(ps[p].name) + 1;
+    return sizeof(struct ovmx_imp_header)
+         + (uint64_t)nimp * sizeof(struct ovmx_imp_entry) + names_sz;
+}
+
+/* Write the .vms$imp section at img+off_imp. Each import's patch_off is its GOT
+ * cell (imp[i].got_va); IMGACT resolves (producer soname, sv_index) -> run-time
+ * address and stores it there at activation. Producer sonames are deduped into a
+ * trailing name blob. Shared by emit_executable and emit_shareable (vms-e65). */
+static void vms_imp_write(uint8_t *img, uint64_t off_imp, struct import *imp,
+                          int nimp, struct producer *ps, int np)
+{
+    uint64_t imp_hdr = sizeof(struct ovmx_imp_header);
+    uint64_t imp_ents = (uint64_t)nimp * sizeof(struct ovmx_imp_entry);
+    uint64_t imp_names_o = imp_hdr + imp_ents;
+
+    uint32_t *prod_off = calloc((size_t)(np > 0 ? np : 1), sizeof *prod_off);
+    if (!prod_off) die("oom .vms$imp producer offsets");
+    char *nb = (char *)(img + off_imp + imp_names_o);
+    uint32_t names_sz = 0;
+    for (int p = 0; p < np; p++) {
+        prod_off[p] = names_sz;
+        size_t l = strlen(ps[p].name) + 1;
+        memcpy(nb + names_sz, ps[p].name, l);
+        names_sz += (uint32_t)l;
+    }
+    struct ovmx_imp_header *ih = (struct ovmx_imp_header *)(img + off_imp);
+    ih->magic = OVMX_IMP_MAGIC; ih->count = (uint32_t)nimp;
+    ih->names_off = (uint32_t)imp_names_o; ih->names_size = names_sz;
+    struct ovmx_imp_entry *ie =
+        (struct ovmx_imp_entry *)(img + off_imp + imp_hdr);
+    for (int i = 0; i < nimp; i++) {
+        ie[i].producer_off = prod_off[imp[i].pidx];
+        ie[i].sv_index = imp[i].svidx;
+        ie[i].patch_off = imp[i].got_va;
+        ie[i].req_major = ps[imp[i].pidx].sv->gsmatch_major;
+        ie[i].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
+    }
+    free(prod_off);
+}
+
 /* Emit an OVMX executable image (ET_DYN, PT_INTERP=IMGACT.EXE) whose imports
  * bind to producer symbol vectors via .vms$imp. IMGACT resolves each import at
  * activation (ovmx_symvec.h) and writes the address into the GOT cell. */
@@ -584,20 +639,7 @@ static void emit_executable(struct obj *o, struct producer *ps, int np,
     uint64_t off_got    = ALIGN_UP(off_plt + plt_sz, 8);
     uint64_t got_sz     = (uint64_t)nimp * 8;
     uint64_t off_imp    = ALIGN_UP(off_got + got_sz, 8);
-
-    /* .vms$imp: dedup producer sonames into a name blob. */
-    char     names[4096]; uint32_t names_sz = 0;
-    uint32_t prod_off[64];
-    for (int p = 0; p < np; p++) {
-        prod_off[p] = names_sz;
-        size_t l = strlen(ps[p].name) + 1;
-        memcpy(names + names_sz, ps[p].name, l);
-        names_sz += (uint32_t)l;
-    }
-    uint64_t imp_hdr    = sizeof(struct ovmx_imp_header);
-    uint64_t imp_ents   = (uint64_t)nimp * sizeof(struct ovmx_imp_entry);
-    uint64_t imp_names_o = imp_hdr + imp_ents;
-    uint64_t imp_size   = imp_names_o + names_sz;
+    uint64_t imp_size   = vms_imp_size(nimp, ps, np);
 
     uint64_t loaded_end = off_imp + imp_size;
     uint64_t off_shstr  = ALIGN_UP(loaded_end, 4);
@@ -680,21 +722,8 @@ static void emit_executable(struct obj *o, struct producer *ps, int np,
     }
     /* GOT cells left zero; IMGACT fills them at activation. */
 
-    /* .vms$imp */
-    struct ovmx_imp_header *ih = (struct ovmx_imp_header *)(img + off_imp);
-    ih->magic = OVMX_IMP_MAGIC; ih->count = nimp;
-    ih->names_off = (uint32_t)imp_names_o; ih->names_size = names_sz;
-    struct ovmx_imp_entry *ie =
-        (struct ovmx_imp_entry *)(img + off_imp + imp_hdr);
-    for (int i = 0; i < nimp; i++) {
-        ie[i].producer_off = prod_off[imp[i].pidx];
-        ie[i].sv_index = imp[i].svidx;
-        ie[i].patch_off = imp[i].got_va;
-        /* Record the producer version we linked against, for GSMATCH. */
-        ie[i].req_major = ps[imp[i].pidx].sv->gsmatch_major;
-        ie[i].req_minor = ps[imp[i].pidx].sv->gsmatch_minor;
-    }
-    memcpy(img + off_imp + imp_names_o, names, names_sz);
+    /* .vms$imp (header + entries + producer-soname blob; patch_off = GOT cell). */
+    vms_imp_write(img, off_imp, imp, nimp, ps, np);
 
     /* .shstrtab + section headers */
     char *shstr = (char *)(img + off_shstr);
@@ -1076,17 +1105,78 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj, uint64_t tbss_base
     return 0;
 }
 
+/* True if `name` is defined by some input object in a section this linker places
+ * flat (text/rodata/data/bss) — i.e. resolve_named would yield a nonzero image
+ * vaddr at emit. Used to distinguish an intra-image reference (resolved locally)
+ * from a cross-image import (bound to a --use producer). build_symhash must have
+ * run. (vms-e65) */
+static int defined_placed(struct obj *objs, const char *name)
+{
+    int doi, dki;
+    if (!sym_lookup(name, &doi, &dki)) return 0;
+    Elf64_Sym *s = &objs[doi].sym[dki];
+    int shx = (int)s->st_shndx;
+    if (shx <= 0 || shx >= objs[doi].nsh) return 0;
+    int b = objs[doi].sec_bucket[shx];
+    return b == B_TEXT || b == B_RODATA || b == B_DATA || b == B_BSS;
+}
+
 /* Emit an OVMX shareable image from N objects: merge .text/.rodata/.data/.bss,
  * apply PC-relative relocations (local + cross-object), synthesize a GOT for
  * GOT-indirect global references, and record every image-relative slot that
- * needs +load_bias in .vms$rel. Exports declared universals via .vms$sv. (vms-20b) */
+ * needs +load_bias in .vms$rel. Exports declared universals via .vms$sv. (vms-20b)
+ *
+ * Cross-image imports (vms-e65): a CALL/JUMP or GOT reference to a symbol not
+ * defined by any input object but exported by a --use producer becomes an import
+ * — a PLT stub (calls) + import-GOT cell + .vms$imp entry, bound at activation to
+ * the producer universal (exactly like emit_executable). This is what lets a lib
+ * shareable resolve its libc/pthread calls against DECC$SHR. */
 static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuniv,
                            uint32_t gk, uint32_t gmaj, uint32_t gmin,
-                           int allow_undef, const char *out)
+                           int allow_undef, struct producer *ps, int np,
+                           const char *out)
 {
     g_allow_undef = allow_undef;
     g_deferred = 0;
     build_symhash(objs, nobj);
+
+    /* ---- Cross-image imports (bind to --use producers). Scan every reloc: a
+     * CALL/JUMP26 or GOT reference to a symbol that is UNDEF in its own object,
+     * not defined by any input object, but exported by a --use producer, is an
+     * import. Call uses get a PLT stub; a symbol used as a call anywhere forces a
+     * stub even if also address-taken. These are excluded from the intra-image
+     * GOT below and routed to import cells IMGACT fills via .vms$imp. (vms-e65) */
+    struct import *imp = NULL; int nimp = 0, imp_cap = 0;
+    for (int i = 0; i < nobj; i++)
+        for (int r = 0; r < objs[i].nreloc; r++) {
+            uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
+            int is_call = (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26);
+            int is_gotr = is_got_reloc(type);
+            if (!is_call && !is_gotr) continue;
+            uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
+            Elf64_Sym *s = &objs[i].sym[si];
+            if (s->st_shndx != SHN_UNDEF) continue;      /* locally defined     */
+            const char *nm = objs[i].str + s->st_name;
+            if (!nm[0]) continue;
+            if (defined_placed(objs, nm)) continue;      /* intra-image def     */
+            int pidx; uint32_t svidx;
+            if (!find_universal(ps, np, nm, &pidx, &svidx))
+                continue;   /* not a producer universal: weak/deferred path below */
+            int k = import_find(imp, nimp, nm);
+            if (k < 0) {
+                if (nimp >= imp_cap) {
+                    imp_cap = imp_cap ? imp_cap * 2 : 32;
+                    imp = realloc(imp, (size_t)imp_cap * sizeof *imp);
+                    if (!imp) die("oom growing import table");
+                }
+                k = nimp++;
+                memset(&imp[k], 0, sizeof imp[k]);
+                snprintf(imp[k].name, sizeof imp[k].name, "%s", nm);
+                imp[k].pidx = pidx; imp[k].svidx = svidx;
+                imp[k].is_data = is_gotr ? 1 : 0;
+            }
+            if (is_call) imp[k].is_data = 0;   /* any call use needs a PLT stub */
+        }
 
     int has_ro = 0, has_data = 0, has_bss = 0;
     for (int i = 0; i < nobj; i++)
@@ -1128,6 +1218,10 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (!is_got_reloc(type)) continue;
             uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
             const char *nm = objs[i].str + objs[i].sym[si].st_name;
+            /* A GOT reference bound to a --use producer is a cross-image DATA
+             * import (its own import cell, filled via .vms$imp) — not an intra-
+             * image GOT slot. (vms-e65) */
+            if (import_find(imp, nimp, nm) >= 0) continue;
             if (find_got(got, ngot, nm) < 0) {
                 if (ngot >= got_cap) {
                     got_cap = got_cap ? got_cap * 2 : 256;
@@ -1231,6 +1325,22 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         tdata_end = cur;
     }
 
+    /* Import-GOT cells: one per cross-image import (writable — IMGACT fills each
+     * with the resolved producer address from .vms$imp at activation). Excluded
+     * from .vms$rel (absolute, not load-biased). (vms-e65) */
+    uint64_t impgot_beg = ALIGN_UP(cur, 8);
+    for (int i = 0; i < nimp; i++) imp[i].got_va = impgot_beg + (uint64_t)i * 8;
+    uint64_t impgot_end = impgot_beg + (uint64_t)nimp * 8;
+    cur = impgot_end;
+
+    /* PLT stubs: one 12-byte slot per import (only call imports emit a stub, but
+     * a uniform per-import slot keeps indexing trivial). Executable — lives in
+     * the RWX PT_LOAD. (vms-e65) */
+    uint64_t plt_beg = ALIGN_UP(cur, 4);
+    for (int i = 0; i < nimp; i++) imp[i].plt_va = plt_beg + (uint64_t)i * 12;
+    uint64_t plt_end = plt_beg + (uint64_t)nimp * 12;
+    cur = plt_end;
+
     uint64_t off_sv = ALIGN_UP(cur, 8);
 
     for (int i = 0; i < nuniv; i++)
@@ -1263,8 +1373,18 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         tls_sec_size = sizeof(struct ovmx_tls_header) + (uint64_t)ntlsdesc * 8;
     }
 
+    /* .vms$imp: this shareable's OWN cross-image imports (bound to --use
+     * producers at activation, like a consumer). Must be in the loaded range so
+     * IMGACT can read it by section vaddr. (vms-e65) */
+    uint64_t after_tls = ntlsdesc ? off_tls + tls_sec_size : after_rel;
+    uint64_t off_imp = 0, imp_size = 0;
+    if (nimp) {
+        off_imp = ALIGN_UP(after_tls, 8);
+        imp_size = vms_imp_size(nimp, ps, np);
+    }
+
     /* End of file-backed loaded content; .bss (NOBITS) extends memsz beyond it. */
-    uint64_t file_loaded_end = ntlsdesc ? off_tls + tls_sec_size : after_rel;
+    uint64_t file_loaded_end = nimp ? off_imp + imp_size : after_tls;
     uint64_t bss_beg = file_loaded_end, bss_end = file_loaded_end;
     if (has_bss) {
         int first = 1;
@@ -1281,7 +1401,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     uint64_t off_shstr = ALIGN_UP(file_loaded_end, 4);
 
-    const char *secn[16]; int nsec = 0;
+    const char *secn[24]; int nsec = 0;
     secn[nsec++] = "";
     int ix_text = nsec; secn[nsec++] = ".text";
     int ix_ro = -1;   if (has_ro)   { ix_ro   = nsec; secn[nsec++] = ".rodata"; }
@@ -1289,13 +1409,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int ix_tlsd = -1; if (ntls)     { ix_tlsd = nsec; secn[nsec++] = ".tlsdesc"; }
     int ix_data = -1; if (has_data) { ix_data = nsec; secn[nsec++] = ".data"; }
     int ix_tdata = -1; if (has_tls && tdata_sz) { ix_tdata = nsec; secn[nsec++] = ".tdata"; }
+    int ix_igot = -1; if (nimp)     { ix_igot = nsec; secn[nsec++] = ".igot"; }
+    int ix_plt = -1;  if (nimp)     { ix_plt  = nsec; secn[nsec++] = ".plt"; }
     int ix_sv = nsec; secn[nsec++] = OVMX_SV_SECTION;
     int ix_rel = -1;  if (nrel)     { ix_rel  = nsec; secn[nsec++] = OVMX_REL_SECTION; }
     int ix_tls = -1;  if (ntlsdesc) { ix_tls  = nsec; secn[nsec++] = OVMX_TLS_SECTION; }
+    int ix_imp = -1;  if (nimp)     { ix_imp  = nsec; secn[nsec++] = OVMX_IMP_SECTION; }
     int ix_bss = -1;  if (has_bss)  { ix_bss  = nsec; secn[nsec++] = ".bss"; }
     int ix_tbss = -1; if (has_tls && tbss_sz) { ix_tbss = nsec; secn[nsec++] = ".tbss"; }
     int ix_str = nsec; secn[nsec++] = ".shstrtab";
-    uint64_t sn_off[16]; uint64_t sn_sz = 0;
+    uint64_t sn_off[24]; uint64_t sn_sz = 0;
     for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
     uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
     uint64_t file_sz = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
@@ -1315,7 +1438,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     /* One PT_LOAD. RWX when it carries a writable GOT/TLSDESC/.data/.bss (the
      * activator writes those in place); R+X for a pure leaf/rodata image.
      * A PT_TLS follows when the image has thread-local storage. */
-    int writable = (ngot || ntls || has_data || has_bss || has_tls);
+    int writable = (ngot || ntls || has_data || has_bss || has_tls || nimp);
     Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
     ph[0].p_type = PT_LOAD;
     ph[0].p_flags = writable ? (PF_R | PF_W | PF_X) : (PF_R | PF_X);
@@ -1386,9 +1509,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             const char *nm = objs[i].str +
                              objs[i].sym[ELF64_R_SYM(rl->info)].st_name;
             if (is_got_reloc(type)) {
-                int gi = find_got(got, ngot, nm);
-                if (gi < 0) die("internal: GOT slot missing for symbol");
-                patch_got(type, insn, site, got[gi].va);
+                int ii = import_find(imp, nimp, nm);
+                if (ii >= 0) {
+                    /* Cross-image DATA import: read its import-GOT cell. */
+                    patch_got(type, insn, site, imp[ii].got_va);
+                } else {
+                    int gi = find_got(got, ngot, nm);
+                    if (gi < 0) die("internal: GOT slot missing for symbol");
+                    patch_got(type, insn, site, got[gi].va);
+                }
             } else if (is_tlsdesc_reloc(type)) {
                 int ti = find_tls(tls, ntls, nm);
                 if (ti < 0) die("internal: TLSDESC slot missing for symbol");
@@ -1404,12 +1533,36 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 *(uint64_t *)(img + site) = value;
                 rel_off[nrel_filled++] = site;
             } else {
-                uint64_t target = resolve_ref(objs, nobj, i, ELF64_R_SYM(rl->info));
-                if (target == 0) continue;   /* deferred external, skip patch */
-                target += (uint64_t)rl->add;
-                patch_pcrel(type, insn, site, target);
+                int ii = import_find(imp, nimp, nm);
+                if (ii >= 0 &&
+                    (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26)) {
+                    /* Cross-image CALL/JUMP import: branch to its PLT stub. */
+                    int64_t disp = (int64_t)imp[ii].plt_va - (int64_t)site;
+                    uint32_t imm26 = (uint32_t)((disp >> 2) & 0x03FFFFFF);
+                    uint32_t op = (type == R_AARCH64_JUMP26) ? 0x14000000u
+                                                             : 0x94000000u;
+                    *insn = op | imm26;
+                } else {
+                    uint64_t target =
+                        resolve_ref(objs, nobj, i, ELF64_R_SYM(rl->info));
+                    if (target == 0) continue;  /* deferred external, skip patch */
+                    target += (uint64_t)rl->add;
+                    patch_pcrel(type, insn, site, target);
+                }
             }
         }
+    }
+
+    /* PLT stubs for call imports: adrp x16,cell ; ldr x16,[x16,#lo12] ; br x16.
+     * (Data-import slots stay unused — the site reads the import cell directly.)
+     * The import-GOT cells stay 0; IMGACT fills them from .vms$imp. (vms-e65) */
+    for (int i = 0; i < nimp; i++) {
+        if (imp[i].is_data) continue;
+        uint32_t *stub = (uint32_t *)(img + imp[i].plt_va);
+        int64_t pd = (int64_t)(imp[i].got_va >> 12) - (int64_t)(imp[i].plt_va >> 12);
+        stub[0] = enc_adrp(16, pd);
+        stub[1] = enc_ldr_u64(16, 16, (uint32_t)(imp[i].got_va & 0xfff));
+        stub[2] = enc_br(16);
     }
 
     struct ovmx_sv_header *svh = (struct ovmx_sv_header *)(img + off_sv);
@@ -1437,6 +1590,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         uint64_t *eo = (uint64_t *)(img + off_tls + sizeof *th);
         for (int i = 0; i < ntls; i++) eo[i] = tls[i].va;
     }
+
+    /* .vms$imp: this shareable's own cross-image imports (patch_off = import-GOT
+     * cell). IMGACT binds each to its --use producer at activation. (vms-e65) */
+    if (nimp)
+        vms_imp_write(img, off_imp, imp, nimp, ps, np);
 
     char *shstr = (char *)(img + off_shstr);
     for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
@@ -1490,6 +1648,20 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_tls].sh_offset = off_tls; sh[ix_tls].sh_size = tls_sec_size;
         sh[ix_tls].sh_addralign = 8;
     }
+    if (nimp) {
+        sh[ix_igot].sh_name = sn_off[ix_igot]; sh[ix_igot].sh_type = SHT_PROGBITS;
+        sh[ix_igot].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_igot].sh_addr = impgot_beg;
+        sh[ix_igot].sh_offset = impgot_beg; sh[ix_igot].sh_size = impgot_end - impgot_beg;
+        sh[ix_igot].sh_addralign = 8;
+        sh[ix_plt].sh_name = sn_off[ix_plt]; sh[ix_plt].sh_type = SHT_PROGBITS;
+        sh[ix_plt].sh_flags = SHF_ALLOC | SHF_EXECINSTR; sh[ix_plt].sh_addr = plt_beg;
+        sh[ix_plt].sh_offset = plt_beg; sh[ix_plt].sh_size = plt_end - plt_beg;
+        sh[ix_plt].sh_addralign = 4;
+        sh[ix_imp].sh_name = sn_off[ix_imp]; sh[ix_imp].sh_type = SHT_PROGBITS;
+        sh[ix_imp].sh_flags = SHF_ALLOC; sh[ix_imp].sh_addr = off_imp;
+        sh[ix_imp].sh_offset = off_imp; sh[ix_imp].sh_size = imp_size;
+        sh[ix_imp].sh_addralign = 8;
+    }
     if (has_tls && tbss_sz) {
         sh[ix_tbss].sh_name = sn_off[ix_tbss]; sh[ix_tbss].sh_type = SHT_NOBITS;
         sh[ix_tbss].sh_flags = SHF_ALLOC | SHF_WRITE | SHF_TLS;
@@ -1516,17 +1688,23 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     for (int i = 0; i < ngot; i++) if (got[i].value) abs_applied--;
     fprintf(stderr,
         "%%LINK-S-CREATED, %s: ET_DYN shareable image, %d object%s, %d universal%s, "
-        "%d reloc%s, %d GOT, %d TLS, %d ABS64-ptr, GSMATCH=%s,%u,%u\n",
+        "%d reloc%s, %d GOT, %d TLS, %d ABS64-ptr, %d import%s, GSMATCH=%s,%u,%u\n",
         out, nobj, nobj==1?"":"s", nuniv, nuniv==1?"":"s", totrel, totrel==1?"":"s",
-        ngot, ntls, abs_applied,
+        ngot, ntls, abs_applied, nimp, nimp==1?"":"s",
         gk == OVMX_GSMATCH_ALWAYS ? "ALWAYS" :
         gk == OVMX_GSMATCH_EQUAL  ? "EQUAL"  : "LEQUAL", gmaj, gmin);
+    if (nimp)
+        fprintf(stderr, "%%LINK-I-IMPORT, %d cross-image import%s bound to --use "
+                "producer%s (%d PLT stub%s + import GOT; resolved at activation "
+                "via .vms$imp)\n",
+                nimp, nimp==1?"":"s", np==1?"":"s",
+                nimp, nimp==1?"":"s");
     if (g_deferred)
         fprintf(stderr, "%%LINK-I-DEFEXT, %ld external reference%s left unresolved "
                 "(deferred imports — satisfied by the C RTL / a companion "
                 "shareable at activation, vms-61f)\n",
                 g_deferred, g_deferred == 1 ? "" : "s");
-    free(rel_off); free(got); free(tls); free(g_syms); g_syms = NULL;
+    free(rel_off); free(got); free(tls); free(imp); free(g_syms); g_syms = NULL;
     free(img);
 }
 
@@ -1605,6 +1783,7 @@ int main(int argc, char **argv)
             load_obj(ins[i], push_obj(&objs, &nobj, &cap));
     }
     if (nobj == 0) die("no object members found in inputs");
-    emit_shareable(objs, nobj, uv, nuniv, gk, gmaj, gmin, allow_undef, out);
+    emit_shareable(objs, nobj, uv, nuniv, gk, gmaj, gmin, allow_undef,
+                   producers, np, out);
     return 0;
 }

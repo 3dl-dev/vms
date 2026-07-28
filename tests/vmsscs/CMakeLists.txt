@@ -28,3 +28,18 @@ set_tests_properties(vmsscs_hello_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-5fe - directed HELLO + VMS$VAXcluster SCS connect handshake test.
+add_executable(test_scs_connect test_scs_connect.c)
+
+target_include_directories(test_scs_connect PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_connect PRIVATE vmsscs_hello vmsscs_connect)
+
+add_test(NAME vmsscs_connect_unit COMMAND test_scs_connect)
+set_tests_properties(vmsscs_connect_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

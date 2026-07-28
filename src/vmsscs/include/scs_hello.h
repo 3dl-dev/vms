@@ -96,6 +96,50 @@ void scs_hello_multicast_addr(uint16_t group, uint8_t mac_out[6]);
 int scs_hello_build_frame(const struct scs_hello_params *p,
                            uint8_t out[SCS_HELLO_FRAME_LEN]);
 
+/*
+ * scs_hello_build_directed_frame - Build a DIRECTED HELLO (vms-5fe), the
+ * spec sec 4(b) "directed form": the channel-formation reply a node sends
+ * point-to-point to a specific peer whose directed HELLO it just received.
+ *
+ * Identical to the multicast HELLO template (scs_hello_build_frame) except
+ * for the four fields that distinguish a directed HELLO on the wire, taken
+ * from a real VAX2->VAX1 directed HELLO (scs-idle-baseline.pcap frame 2,
+ * decoded byte-exact):
+ *
+ *   - Ethernet dst (abs 0-5) and SCA dest logical addr (abs 16-21) = the
+ *     peer's MAC. Pass the exact Ethernet SOURCE address of the directed
+ *     HELLO you are replying to (a real HW MAC for a non-DECnet node like
+ *     VAX2, or the peer's logical LAVC addr for a DECnet node like VAX1);
+ *     the real wire mirrors abs 0 into abs 16, which this builder reproduces.
+ *   - join nonce (abs 68-71): 4 wire-order bytes. GROUNDED as present +
+ *     cross-boot-stable (spec sec 4a/4g); the VALUE is REPLAYED for a known
+ *     cluster (the lab's ee-05-39-5b, group 1) -- NOT a general credential
+ *     impl (see spec sec 4g "credential question", tracked as vms-732).
+ *   - directed-HELLO flag (abs 92-93) = 0x0001. GROUNDED (spec sec 4b).
+ *   - poller-sweep marker (abs 128-129) = 0x001F (=31, SDA SHOW PORTS
+ *     'Poller Sweep 31'). GROUNDED (spec sec 4b).
+ *
+ * The per-frame word at abs 30-31 is set to a directed value (0xb300)
+ * observed on real directed HELLOs; its semantics are ungrounded (spec sec
+ * 4a offset-30), so this is a documented REPLAY of an observed constant,
+ * not a grounded field.
+ *
+ * p supplies OVMX's own identity (src_mac, node_name, timer_tick) exactly
+ * as for the multicast builder; p->dst_mac is IGNORED (peer_mac is used).
+ *
+ * Returns 0 on success, -1 if any pointer arg is NULL or node_name is
+ * longer than SCS_HELLO_NODENAME_LEN.
+ */
+int scs_hello_build_directed_frame(const struct scs_hello_params *p,
+                                    const uint8_t peer_mac[6],
+                                    const uint8_t nonce[4],
+                                    uint8_t out[SCS_HELLO_FRAME_LEN]);
+
+/* The reference-lab (cluster group 1) join nonce, wire order (abs 68-71).
+ * REPLAYED for the known lab cluster only -- see the build-directed note
+ * and spec sec 4(g). */
+#define SCS_HELLO_LAB_NONCE_BYTES { 0xee, 0x05, 0x39, 0x5b }
+
 #ifdef __cplusplus
 }
 #endif

@@ -21,12 +21,19 @@ target_include_directories(vmsscs_hello PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-5fe - VMS$VAXcluster SCS connect handshake (directed HELLO reply lives
+# in vmsscs_hello; the connect-request/response builder + parser is here).
+add_library(vmsscs_connect STATIC scs_connect.c)
+target_include_directories(vmsscs_connect PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

@@ -35,12 +35,22 @@ target_include_directories(vmsscs_start PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-691 - SCS sequenced-message VC engine: 0x48 credit-return builder
+# (spec sec 4h) + seq/ack tracking + retransmit trigger. Keeps the NISCA VC
+# alive so the VAX stops logging "Excessive packet losses / Closed Virtual
+# Circuit". Depends on vmsscs_start for the scs_seq_state helpers.
+add_library(vmsscs_vc STATIC scs_vc.c)
+target_include_directories(vmsscs_vc PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_vc PUBLIC vmsscs_start)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_start)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_start vmsscs_vc)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

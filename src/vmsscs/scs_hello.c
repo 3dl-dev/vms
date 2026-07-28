@@ -137,6 +137,7 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
 int scs_hello_build_directed_frame(const struct scs_hello_params *p,
                                     const uint8_t peer_mac[6],
                                     const uint8_t nonce[4],
+                                    uint16_t incarnation,
                                     uint8_t out[SCS_HELLO_FRAME_LEN])
 {
     if (p == NULL || peer_mac == NULL || nonce == NULL || out == NULL) {
@@ -160,8 +161,13 @@ int scs_hello_build_directed_frame(const struct scs_hello_params *p,
 
     memcpy(out + 68, nonce, 4); /* join nonce (GROUNDED present/stable; value REPLAYED, sec 4g) */
 
-    out[92] = 0x01;
-    out[93] = 0x00;             /* directed-HELLO flag = 0x0001 (GROUNDED, sec 4b) */
+    /* directed-HELLO flag / node-incarnation counter (abs 92-93), LE u16 --
+     * the incarnation this sender attributes to the peer (spec sec 4b/4i.B).
+     * Echoes the value the member advertised for us (read off the wire); for a
+     * fresh/first contact that is 1, byte-exact to every fresh-formation
+     * specimen. GROUNDED. */
+    out[92] = (uint8_t)(incarnation & 0xff);
+    out[93] = (uint8_t)((incarnation >> 8) & 0xff);
 
     out[128] = 0x1f;
     out[129] = 0x00;            /* poller-sweep marker = 31 (GROUNDED, sec 4b) */

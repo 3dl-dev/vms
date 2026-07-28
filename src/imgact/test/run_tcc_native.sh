@@ -175,14 +175,27 @@ int main(void)
     return 0;
 }
 EOF
+# mk_tcc.sh now builds TCC.EXE with RMS file I/O (vms-4ba.5: OVMX_RMS_IO) —
+# see run_tcc_rms.sh for the full RMS-path proof. Two side effects that also
+# apply to THIS (vms-4ba.4) harness now:
+#  (1) sys$open's protection check has a pre-existing, separate cross-module
+#      bit-layout mismatch (vmsfs_mode_to_protection vs. sys_security.c's
+#      vms$check_access — see run_tcc_rms.sh's header comment) that denies
+#      root read access to a plain mode-644 file; chmod 666 sidesteps it
+#      without touching that (unrelated, security-adjacent) code.
+#  (2) sys$create always mints a literal VMS version suffix on disk
+#      ("hello.o;1"), so the real produced artifact is no longer a bare
+#      "hello.o".
+chmod 666 "$WORK/hello.c"
 set +e
 "$SYSEXE/TCC.EXE" -c "$WORK/hello.c" -o "$WORK/hello.o" > "$WORK/tcc-compile.out" 2>&1
 TCRC=$?
 set -e
 sed 's/^/   /' "$WORK/tcc-compile.out"
 [ "$TCRC" -eq 0 ] || { echo "FAIL: activated TCC.EXE failed to compile hello.c (exit $TCRC)"; exit 1; }
-[ -f "$WORK/hello.o" ] || { echo "FAIL: activated TCC.EXE did not produce hello.o"; exit 1; }
-readelf -h "$WORK/hello.o" | tee "$WORK/hello.readelf.h" >/dev/null
+HELLO_O="$WORK/hello.o;1"
+[ -f "$HELLO_O" ] || { echo "FAIL: activated TCC.EXE did not produce $HELLO_O (RMS-versioned hello.o)"; exit 1; }
+readelf -h "$HELLO_O" | tee "$WORK/hello.readelf.h" >/dev/null
 grep -q 'Class:.*ELF64' "$WORK/hello.readelf.h" || { echo "FAIL: hello.o is not ELF64"; exit 1; }
 grep -q 'Type:.*REL (Relocatable file)' "$WORK/hello.readelf.h" || { echo "FAIL: hello.o is not ET_REL"; exit 1; }
 grep -q 'Machine:.*AArch64' "$WORK/hello.readelf.h" || { echo "FAIL: hello.o is not EM_AARCH64"; exit 1; }
@@ -194,7 +207,7 @@ set +e
 "$WORK/LINK.EXE" --executable \
     --use "$SYSLIB/DECC\$SHR.EXE" --use "$SYSLIB/LIBVMS\$SHR.EXE" --use "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
     --use "$SYSLIB/LIBVMSFS\$SHR.EXE" --use "$SYSLIB/LIBVMSLNM\$SHR.EXE" --use "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
-    -o "$SYSEXE/TCCHELLO.EXE" "$WORK/hello.o" 2>"$WORK/hello-link.err"
+    -o "$SYSEXE/TCCHELLO.EXE" "$HELLO_O" 2>"$WORK/hello-link.err"
 HLRC=$?
 set -e
 echo "-- LINK.EXE --executable exit=$HLRC; message: --"

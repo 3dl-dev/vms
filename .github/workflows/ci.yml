@@ -1085,3 +1085,40 @@ jobs:
               export CC=gcc WORK=/tmp/tcc-native TCC_EXPECT_LINK=1
               sh /src/src/imgact/test/run_tcc_native.sh
             '
+
+  # -----------------------------------------------------------------------
+  # tcc-rms — S2 RMS I/O proof (bead vms-4ba.5, epic vms-4ba). Sibling of
+  # tcc-native: same six-producer graph + TCC.EXE build (mk_tcc.sh now also
+  # compiles the OVMX RMS I/O shim, third-party/tcc/ovmx/ovmx_rms_io.c, and
+  # defines OVMX_RMS_IO so tcc's own primary-source read and output-object
+  # write route through sys$open/$connect/$get and sys$create/$connect/$put/
+  # $close instead of raw open()/read()/write()). Proves the RMS path is
+  # actually exercised (a real trace, byte-count cross-check, scratch-file
+  # cleanup check — see run_tcc_rms.sh's header) and that the RMS-delivered
+  # hello.o still round-trips through LINK.EXE + IMGACT exactly like the
+  # vms-4ba.4 raw-POSIX build did.
+  # -----------------------------------------------------------------------
+  tcc-rms:
+    name: TCC.EXE RMS File I/O (sys$open/$get read, sys$create/$put write)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build TCC.EXE with RMS I/O, activate it, compile hello.c -> hello.o via sys$open/$get + sys$create/$put, round-trip through LINK.EXE + IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/tcc-rms TCC_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_tcc_rms.sh
+            '

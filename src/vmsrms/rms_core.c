@@ -212,11 +212,48 @@ static int rms_resolve_version(const char *path, char *out, size_t outlen)
     }
     int ver = vmsfs_get_highest_version(dir, name, ext);
     if (ver < 1) ver = 1;
+    char candidate[1024];
     if (ext[0]) {
-        snprintf(out, outlen, "%s/%s.%s;%d", dir, name, ext, ver);
+        snprintf(candidate, sizeof(candidate), "%s/%s.%s;%d", dir, name, ext, ver);
     } else {
-        snprintf(out, outlen, "%s/%s;%d", dir, name, ver);
+        snprintf(candidate, sizeof(candidate), "%s/%s;%d", dir, name, ver);
     }
+
+    /* OVMX (vms-4ba.5): vmsfs_get_highest_version() treats a plain,
+     * unversioned on-disk file as "version 1" (see its own doc comment), but
+     * that only tells us the VERSION NUMBER to use — it does not mean a file
+     * literally named "name;1" exists. Every file sys$create() itself
+     * produces DOES carry a literal ";N" suffix on disk (see sys$create
+     * below), so this candidate always resolves correctly for RMS-created
+     * files. But for a file that was authored OUTSIDE RMS with no version
+     * syntax at all (e.g. a .c source someone just wrote), the synthesized
+     * "name;1" candidate does not exist and open() would wrongly fail with
+     * RMS$_FNF even though the file is right there under its plain name.
+     * Surfaced by vms-4ba.5 (TCC.EXE reading its own hello.c via RMS) — a
+     * general RMS gap, not tcc-specific. Fix: if the versioned candidate
+     * isn't real but the plain unversioned name is, resolve to the plain
+     * name instead of a synthesized version that doesn't exist. This is
+     * strictly additive: RMS-created files (which always have both a real
+     * ";N" candidate AND, at version 1, no separate unversioned copy) are
+     * unaffected — the candidate stat() succeeds and this branch is
+     * skipped. */
+    struct stat st;
+    if (stat(candidate, &st) != 0) {
+        char plain[1024];
+        if (ext[0]) {
+            snprintf(plain, sizeof(plain), "%s/%s.%s", dir, name, ext);
+        } else {
+            snprintf(plain, sizeof(plain), "%s/%s", dir, name);
+        }
+        if (stat(plain, &st) == 0) {
+            strncpy(out, plain, outlen - 1);
+            out[outlen - 1] = '\0';
+            return 0;
+        }
+    }
+
+    strncpy(out, candidate, outlen - 1);
+    out[outlen - 1] = '\0';
     return 0;
 }
 

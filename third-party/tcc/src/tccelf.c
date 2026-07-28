@@ -20,6 +20,12 @@
 
 #include "tcc.h"
 
+#ifdef OVMX_RMS_IO
+/* OVMX (vms-4ba.5): RMS-backed I/O shim for tcc's own file reads/writes —
+ * see third-party/tcc/ovmx/ovmx_rms_io.h for scope. */
+#include "ovmx_rms_io.h"
+#endif
+
 /* Define this to get some debug output during relocation processing.  */
 #undef DEBUG_RELOC
 
@@ -2764,16 +2770,32 @@ static int tcc_write_elf_file(TCCState *s1, const char *filename, int phnum,
 {
     int fd, mode, file_type, ret;
     FILE *f;
+#ifdef OVMX_RMS_IO
+    /* OVMX (vms-4ba.5): tcc's own ELF assembly below (tcc_output_elf /
+     * tcc_output_binary, all fwrite()/fputc() driven) is left completely
+     * untouched — it still writes into a private scratch fd via the stock
+     * open()/fdopen() sequence a few lines down. What's OVMX-specific is the
+     * FINAL delivery of the finished object to `filename` (the path the
+     * caller actually asked for, e.g. "hello.o"): once the scratch file is
+     * complete, ovmx_rms_deliver_file() ships its bytes out via
+     * sys$create/sys$connect/sys$put/sys$close (see ovmx_rms_io.c) — tcc
+     * itself never calls open()/write() on `filename`. */
+    char ovmx_scratch[1200];
+    snprintf(ovmx_scratch, sizeof(ovmx_scratch), "%s.ovmxscratch", filename);
+    const char *write_target = ovmx_scratch;
+#else
+    const char *write_target = filename;
+#endif
 
     file_type = s1->output_type;
     if (file_type == TCC_OUTPUT_OBJ)
         mode = 0666;
     else
         mode = 0777;
-    unlink(filename);
-    fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, mode);
+    unlink(write_target);
+    fd = open(write_target, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, mode);
     if (fd < 0 || (f = fdopen(fd, "wb")) == NULL)
-        return tcc_error_noabort("could not write '%s: %s'", filename, strerror(errno));
+        return tcc_error_noabort("could not write '%s: %s'", write_target, strerror(errno));
     if (s1->verbose)
         printf("<- %s\n", filename);
 #ifdef TCC_TARGET_COFF
@@ -2786,6 +2808,12 @@ static int tcc_write_elf_file(TCCState *s1, const char *filename, int phnum,
     else
         ret = tcc_output_binary(s1, f);
     fclose(f);
+
+#ifdef OVMX_RMS_IO
+    if (ret == 0)
+        ret = ovmx_rms_deliver_file(ovmx_scratch, filename);
+    unlink(ovmx_scratch);
+#endif
 
     return ret;
 }

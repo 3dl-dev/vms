@@ -66,6 +66,12 @@
 
 #include "tcc.h"
 
+#ifdef OVMX_RMS_IO
+/* OVMX (vms-4ba.5): RMS-backed I/O shim for tcc's own file reads/writes —
+ * see third-party/tcc/ovmx/ovmx_rms_io.h for scope. */
+#include "ovmx_rms_io.h"
+#endif
+
 /********************************************************/
 /* global variables */
 
@@ -764,7 +770,19 @@ ST_FUNC void tcc_close(void)
     TCCState *s1 = tcc_state;
     BufferedFile *bf = file;
     if (bf->fd > 0) {
+#ifdef OVMX_RMS_IO
+        /* OVMX (vms-4ba.5): fd >= OVMX_RMS_FD_BASE means this BufferedFile
+         * was opened via ovmx_rms_open_read() (the primary source file, see
+         * tcc_add_file_internal below) — close it via sys$close. Nested
+         * #include files, opened by the stock _tcc_open()/open() path,
+         * still close() normally. */
+        if (bf->fd >= OVMX_RMS_FD_BASE)
+            ovmx_rms_close_read(bf->fd);
+        else
+            close(bf->fd);
+#else
         close(bf->fd);
+#endif
         total_lines += bf->line_num - 1;
     }
     if (bf->true_filename != bf->filename)
@@ -1234,7 +1252,18 @@ ST_FUNC int tcc_add_file_internal(TCCState *s1, const char *filename, int flags)
         return 0;
 
     /* open the file */
+#ifdef OVMX_RMS_IO
+    /* OVMX (vms-4ba.5): this is tcc's PRIMARY input-file open — the .c the
+     * caller named on the command line (tcc_add_file() -> here). Route it
+     * through RMS (sys$open + sys$connect) instead of the stock
+     * _tcc_open()/open() below. #include header lookups (tccpp.c's
+     * tcc_open(), which probes many candidate system-include paths per
+     * header) are intentionally left on the stock path — see
+     * ovmx_rms_io.h's SCOPE note. */
+    fd = ovmx_rms_open_read(filename);
+#else
     fd = _tcc_open(s1, filename);
+#endif
     if (fd < 0) {
         if (flags & AFF_PRINT_ERROR)
             tcc_error_noabort("file '%s' not found", filename);

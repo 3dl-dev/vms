@@ -126,15 +126,26 @@ law that clean-room RE does not touch. Authenticity therefore has an un-escapabl
 
 Promote to a project invariant (CLAUDE.md, sibling to #8). Tracked as an rd decision item.
 
-### INV-1 — System-identity single source of truth (dual identity)
+### INV-1 — System-identity single source of truth
 
 One module owns system identity; every surface reads it — never a hardcoded `V7.3` in N places
-again. Identity is **dual**:
-- **Brand identity** = OVMX (human-facing product name / badge).
-- **Compatibility identity** = the VMS-compatible version token in machine-interop surfaces.
-  Target: **V9.2-x on x86-64** (honest to the metal; current VSI target). `SHOW SYSTEM`,
-  `F$GETSYI VERSION`, banner header, MONITOR header all read this one source.
-  (arm64 sub-decision: no authentic VMS arch exists on ARM — posture deferred; see D1.)
+again. Identity has **two version numbers plus an iron rule** (D1, resolved 2026-07-27):
+
+- **OVMX product version (brand — ours).** OVMX tags its *own* version: **V0.1** at first release,
+  **V1** eventually. Human-facing surfaces show this, badged per INV-0 — e.g.
+  `OVMX V0.1 — OpenVMS-compatible`. This is the honest "what is this" answer (SHOW SYSTEM header,
+  login banner).
+- **VMS-compatibility version (machine — true-to-arch).** The token software reads to interoperate
+  (`F$GETSYI VERSION`/`SYI$_VERSION`) is chosen **true to the running arch**: on **x86-64**, the real
+  VSI x86-64 version (**V9.2-x**), which happens to give full interop. Derived from arch, not a
+  global constant.
+- **Iron rule — never lie to the metal.** OVMX reports the arch it actually runs on. Where an arch
+  has a VMS lineage (x86-64), the compat version matches it. Where it does **not** (**ARM**), OVMX
+  does not fake a VMS arch — it presents its own identity honestly. **OVMX-on-ARM is a new frontier**
+  (OpenVMS never ran on ARM): a headline capability to celebrate, not a tell to paper over.
+
+Every surface is classified **human** (→ OVMX brand badge) or **machine** (→ true-to-arch compat
+token) and reads the one identity module.
 
 ### INV-2 — Message-ident fidelity gate
 No emitted message may use an invented ident. New idents require oracle + operator sign-off. A
@@ -383,12 +394,11 @@ integration test) — tracked separately from this roadmap.
 
 ## 10. Open operator decisions (block specific items, not the tree)
 
-- **D1 — Compatibility version target** (reframed 2026-07-27; decoupled from branding per
-  INV-0). *Not* "what does OVMX call itself" — that's OVMX (INV-0). This is the VMS-compatible
-  version token reported in machine-interop surfaces (`F$GETSYI VERSION`, `SHOW SYSTEM` header).
-  Working default: **V9.2-x on x86-64** (honest to the metal, current VSI target). Affects A1,
-  A4, B5. **Open sub-decision:** arm64 has no authentic VMS arch — decide whether the arm64 build
-  reports x86-64 compat, its own token, or is x86-64-only. Deferred.
+- **D1 — Versioning [RESOLVED 2026-07-27].** OVMX tags its **own** product version (**V0.1** first
+  release → **V1**), shown on human surfaces badged "OpenVMS-compatible" (INV-0). The machine-facing
+  VMS-compat token is **true-to-arch**: **V9.2-x on x86-64** (full interop). **Iron rule: never lie
+  to the metal** — ARM has no VMS lineage, so OVMX-on-ARM presents its own identity honestly and is
+  a celebrated new frontier, not a faked VMS arch. Folded into INV-1. Affects A1, A4, B5.
 - **D2 — HELP delivery:** wire the HELP verb to `HELP.EXE` + a help-library file (recommended),
   or build an in-process `.HLB` reader? Affects A2.
 - **D3 — Message ident list:** operator sign-off on the verified vs OVMX-design ident set. A3.

@@ -52,6 +52,8 @@ payload begins at offset 14 (after the 14-byte Ethernet header).
 | `scs-idle-baseline.pcap` | 36 | §4(b) HELLO baseline, §4(d) SCS envelope baseline |
 | `formation-ci1-joinwindow.pcap` | 2992 | §4(c) connect/directory-lookup phase, §4(g) membership handshake |
 | `ci3-join-membership-live2node-20260728.pcap` | 58 | §4(g) join-nonce cross-boot stability (vms-b6c) |
+| `cd0-bootB-zk1099-join-20260728.pcap` | 18297 | §4(g) phase-2 START/config body grounding — joiner reconfigured to SCSNODE `"ZK"`/SCSSYSTEMID 1099/VOTES 0 (vms-cd0) |
+| `cd0-bootC-zk1099-votes2-20260728.pcap` | ~18k | §4(g) vote-varying diff — same node, VOTES 2 (vms-cd0) |
 | `formation-ci1.pcap` | 18541 | §1 message-class census (Table 2), §4(e) MSCP, large block-transfer frames |
 | `scs-dlm-lockconflict.pcap` | 100 | §4(f) DLM section |
 | `scs-node-leave.pcap` | 2901 | cross-check only (teardown, not separately decoded here) |
@@ -400,18 +402,69 @@ the keystone CONNECT-REQUEST (SCA#39) and CONNECT-RESPONSE (SCA#42) are
 | 16 | **SCS message-type byte** | inferred label, GROUNDED correlation: value partitions the exchange 100%/0-residual — `0x41`=START/config (6 frames), `0x5b`=directory lookup (9), `0x4b`=sequenced-application message = connect **and** all VC/DLM data (2 951), `0x48`=credit-return short (9). No public SCS opcode *table* was used, so the numeric→name mapping is inferred; the value↔phase partition itself is a grounded fact. Reconfirmed on `formation-ci1.pcap` (same four values dominate; the bulk-block-transfer class additionally shows `0x7b`/`0xb3`, left unknown as in §4e). |
 | 17 | **format/version constant `0x13`** | **GROUNDED: 2 975/2 975 directed SCS-envelope frames carry `0x13` here, 0 residuals** — a fixed protocol-format byte, not a counter. |
 
-**Phase 2 — START/config carries the node's identity to the connection
-manager** (opcode `0x41`, 106-byte frames 15/16; verified byte-exact both
-directions). GROUNDED ASCII fields, directly observed:
+**Phase 2 — START/config body — GROUNDED field map** (opcode `0x41`,
+106-byte class; captured for `vms-cd0`). The identity a joining node presents
+for membership rides here. This was grounded by **controlled reconfiguration**
+of the lab: the joiner (VAX2/`[SYS1]`) was rebooted twice with SYSGEN-varied
+`SCSNODE`/`SCSSYSTEMID`/`VOTES` and the bodies byte-diffed. New specimens:
+`cd0-bootB-zk1099-join-20260728.pcap` (SCSNODE `"ZK"`, SCSSYSTEMID **1099**,
+VOTES 0) and `cd0-bootC-zk1099-votes2-20260728.pcap` (same, VOTES **2**),
+diffed against the golden `formation-ci1-joinwindow.pcap` (VAX1 1025 / VAX2 1026)
+and re-validated on the full-run `formation-ci1.pcap`.
 
-- **software version string**: `"VMS V7.3f"` (VAX1) / `"VMS V7.3"` (VAX2),
-  length-prefixed at payload offset ~44
-- **hardware-type string**: `"VAX "`
-- **node name**: `"VAX1  "` / `"VAX2  "` (space-padded, as §4a)
+All payload offsets are **payload-relative** (payload byte 0 = abs frame
+offset 14; add 14 for the absolute offset). The 106-byte START body:
 
-These are the parameters a joining node presents for membership. The
-surrounding integer fields (a `0x3e`=62 length-ish word, a `0x0240`/`0x00d8`
-pair) are **unknown** — reported as raw hex, not guessed.
+| Pay off | Size | Field | Grounding |
+|---|---|---|---|
+| 16 | 1 | opcode `0x41` (START/config) | §4g partition (inferred label) |
+| 17 | 1 | format constant `0x13` | GROUNDED (§4g) |
+| 18 | 2 | SCS counter region begins (`0x0000`) | see "counters" below |
+| 20 | 2 | SCS sequence counter A (also mirrored at [30:32]) | GROUNDED mechanism / inferred CSB mapping |
+| 22 | 2 | SCS counter B (ack-side) | GROUNDED mechanism / inferred CSB mapping |
+| 24 | 2 | constant `0x0012` = 18 = SYSGEN `NISCS_LAN_OVRHD` | **GROUNDED** (byte-exact to tunable; 42/42 frames) |
+| 26 | 4 | zero | constant observed |
+| 30 | 2 | SCS sequence counter A (mirror of [20:22]) | GROUNDED mechanism |
+| 32 | 6 | zero | constant observed |
+| 38 | 2 | constant `0x0001` | constant observed |
+| 40 | 2 | zero | constant observed |
+| **42** | **2** | **inner length** = (payload length − 44) | **GROUNDED**: `0x003e`=62 for the 106-byte START and `0x0002`=2 for the 46-byte ack — the length identity `LE16([42:44]) == len(payload) − 44` holds **42/42 frames, 0 residuals** across both length classes (same proof style as §2's outer length). The config descriptor section starts at payload [44]. |
+| **44** | **2** | **config-round counter** | **GROUNDED**: increments `0 → 0 → 1 → 1 → 2 → 2` across START(round 0), START-retransmit(round 1) and the 46-byte ack(round 2); both nodes carry the same round. |
+| **46** | **2** | **SCSSYSTEMID** (LE `uint16`) | **GROUNDED**: `0x0401`=1025 (VAX1), `0x0402`=1026 (VAX2), `0x044b`=**1099** (the reconfigured ZK node) — byte-exact to the SYSGEN/SDA-reported SCSSYSTEMID in **28/28** 106-byte frames across three distinct values. The joiner's logical LAVC src addr [10:16] tracks it (`aa:00:04:00:4b:04`, node `0x4b`=75 = 1099 & 1023). |
+| 48 | 4 | zero (SCSSYSTEMIDH region) | constant observed |
+| 52 | 2 | constant `0x0001` | 28/28 |
+| 54 | 2 | constant `0x0240` = 576 | 28/28; inferred (SCS transport param, no tunable match) |
+| 56 | 2 | constant `0x00d8` = 216 | 28/28; inferred |
+| **58** | **8** | **software version string** `"VMS V7.3"` (ASCII) | **GROUNDED**: byte-exact `56 4d 53 20 56 37 2e 33` in **28/28** frames. *Correction to the earlier §4g note:* the field is `"VMS V7.3"` for **all** nodes; the previously-reported `"VMS V7.3f"` was a misread — the `f` (`0x66`) is the first byte of the per-boot token at [66:], which happened to be printable in the golden VAX1 frame (it is `0xd8`/`0x5d`/`0xae` in other boots). |
+| 66 | 5 | per-boot token (version-side) | inferred: incarnation/timestamp, **not identity** — changes across reboots of the *same* node (see below) |
+| 71 | 1 | token/flag (`0x00`/`0x01` observed) | unknown |
+| 72 | 2 | constant `0x00bc` = 188 | observed constant |
+| **74** | **4** | **hardware-type string** `"VAX "` (ASCII) | **GROUNDED**: 28/28 frames |
+| 78 | 2 | constant `0x0006` | 28/28 |
+| 80 | 2 | `0x0a` = 10 = SYSGEN `CLUSTER_CREDITS` at [81] | GROUNDED numeric match (as §4g credit) |
+| 82 | 6 | zero | constant observed |
+| 88 | 2 | constant `0x0077` | 28/28 |
+| **90** | **8** | **node name** (ASCII, **fixed 8-byte, blank-padded, left-justified**) | **GROUNDED**: `"VAX1    "`, `"VAX2    "`, and `"ZK      "` — the 2-char `"ZK"` name occupies the same 8-byte field with 6 trailing spaces and **the following bytes do not shift** (28/28), proving a fixed-width blank-filled field, *not* the length-prefixed encoding HELLO uses (§4a). Distinct encoding from §4a. |
+| 98 | 6 | per-boot token (name-side) | inferred: incarnation/timestamp, not identity |
+| 104 | 2 | constant `0x00bc` = 188 | observed constant |
+
+**The per-boot tokens ([66:71] and [98:104]) are NOT node identity.** They
+change across reboots of the *same* node: VAX1's tokens differ between the
+days-old golden capture and the fresh `cd0-boot*` captures although VAX1's
+name/SCSSYSTEMID are unchanged. Within a single join both nodes share sub-spans
+(e.g. `51 7b`, `e8 fb 01`), consistent with a cluster-wide time/incarnation
+component with per-node low bytes. Best label: **inferred incarnation/timestamp
+token**; not derivable further from passive capture.
+
+**SCS counters in the START phase.** Region [18:32] carries the same
+sequenced-message counters as §4d: a 16-bit counter at [20:22] mirrored at
+[30:32], and a second counter at [22:24]. On a fresh join they read `0x0001`;
+on VAX1 (already running, higher sequence) they read e.g. `0x1a29`. They advance
+per message in lockstep with the flow, driving the reliable START→ack exchange.
+The **mechanism** is GROUNDED; the precise next-seq/last-ack CSB assignment is
+**inferred** (same honesty caveat as §4d/§4g). Note these per-node counters are
+what makes a captured START **non-replayable** — a valid START must advance
+OVMX's *own* counters, not echo a VAX's.
 
 **Phase 4 — the connect→accept handshake and Connection-ID binding**
 (opcode `0x4b`). This is the keystone finding, and it is GROUNDED against the
@@ -452,15 +505,35 @@ numeric match to the tunable, but its offset shifts between message classes,
 so it is not pinned to a single fixed field — reported as a grounded value,
 not a grounded offset.
 
-**Vote / quorum — RE GAP (not grounded).** VAX1 has `VOTES 1`, VAX2 `VOTES 0`,
-`EXPECTED_VOTES 1` (SYSGEN, §3 lab config). We could **not** isolate a vote or
-quorum field in the connect/config body by passive diffing: with only one
-vote configuration on the wire there is no contrast to bind a byte to. The
-connection manager unquestionably exchanges votes/quorum at membership time,
-but this specimen set cannot locate the field. **Recommended next step:** a
-targeted capture that *varies* `VOTES`/`EXPECTED_VOTES` on the joining node
-across two boots and diffs the phase-2/phase-4 bodies — a lab reconfiguration
-(disk-mutating; snapshot first), filed as a follow-up.
+**Vote / quorum — GROUNDED NEGATIVE RESULT** (the vote-varying capture
+recommended below was **done** for `vms-cd0`, subsuming `vms-41d`). The joiner
+was rebooted with `VOTES 0` (`cd0-bootB`) and then `VOTES 2` (`cd0-bootC`),
+everything else identical (SCSNODE `"ZK"`, SCSSYSTEMID 1099). **No byte of the
+phase-2 0x41 START/config body cleanly tracks the node's votes.** Two independent
+lines of evidence:
+
+1. The golden capture already carried a vote contrast — VAX1 `VOTES 1` vs VAX2
+   `VOTES 0` — and the full byte-diff of their 0x41 bodies shows **no
+   vote-isolated byte** (only SCSSYSTEMID [46], node-name char [93], and the
+   per-boot tokens differ).
+2. In `cd0-bootC` the joiner's `VOTES 0→2` change *appeared* to flip payload
+   byte [22] `0x01→0x02` — but this is a **false positive**: byte [22] is a
+   per-node SCS sequence counter (§4d region), and in the *same* Boot-C cluster
+   the VAX1-sourced 0x41 frames carry `[22]=0x01` while the ZK-sourced frames
+   carry `[22]=0x02` for the **same** cluster quorum. Ground truth from
+   `F$GETSYI` on VAX1 during Boot C: `QUORUM=1`, `EXPECTED_VOTES=1` (VMS held
+   expected-votes at the configured 1), so quorum was `1` in **every** captured
+   config — byte [22]'s value is therefore uncorrelated with quorum too.
+
+**Conclusion:** the connection manager unquestionably reconciles votes/quorum at
+membership time (VAX1's cluster state reflects ZK's configured votes), but it is
+**not carried as a locatable field in the phase-2 START/config body** — it is
+exchanged later, most plausibly in the post-connect 190-byte `VMS$VAXcluster`
+sequenced-message VC traffic (§4d), whose SYSAP body is not yet decoded. For
+OVMX this means the START/config response does **not** need to encode a vote
+field; votes are negotiated on the established VC. **GROUNDED (negative):
+vote/quorum absent from the 0x41 body, validated across 4 node-vote
+configurations {1,0,0,2} with quorum held at 1.**
 
 **The join nonce and the credential question — the central finding.**
 The 4-byte join nonce (§4a offset 68, abs; payload [54:58] of the discovery
@@ -520,12 +593,16 @@ For visibility, every field NOT marked GROUNDED above:
 - The directory-lookup/connect-handshake opcode fields (§4c) — **partially
   closed by §4(g)**: the offset-16 message-type byte and offset-17 `0x13`
   format constant are now grounded, and the `VMS$VAXcluster` connect Con.ID
-  binding (§4g phase 4) is grounded; the remaining connect/config body
-  integers (START/config length-ish words, per-message credit offset) stay
-  unknown.
-- **Vote/quorum membership fields** (§4g): the connection manager exchanges
-  votes/quorum on join, but no byte could be bound with a single vote config
-  on the wire — needs a vote-varying capture (§4g).
+  binding (§4g phase 4) is grounded. **The phase-2 START/config body is now
+  GROUNDED** (§4g phase 2, `vms-cd0`): inner length [42:44], config-round
+  counter [44:46], SCSSYSTEMID [46:48], version/hardware/node-name ASCII fields.
+  Remaining unknown in that body: the `0x0240`/`0x00d8` pair [54:58] (constants,
+  no tunable match) and the per-boot incarnation tokens [66:71]/[98:104].
+- **Vote/quorum membership fields** (§4g): **RESOLVED as a grounded negative**
+  (`vms-cd0`, subsumes `vms-41d`) — a vote-varying capture (VOTES 0 vs 2 on the
+  same reconfigured joiner) proves votes/quorum is **not** carried in the
+  phase-2 0x41 body; it is exchanged later on the established VC (candidate: the
+  190-byte `VMS$VAXcluster` SYSAP body, §4d, still undecoded).
 - **Join-nonce derivation** (§4g): the nonce `ee05395b` is grounded as
   credential-derived and cross-boot-stable, but the `(group#, password) →
   nonce` hash is not derivable from passive capture — observe/replay only for

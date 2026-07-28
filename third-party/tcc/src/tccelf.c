@@ -57,7 +57,29 @@ struct sym_version {
 #define shf_RELRO SHF_ALLOC
 static const char rdata[] = ".rdata";
 #else
+/* OVMX (vms-4ba.6): tcc creates its relocatable read-only data section
+ * (.data.ro — holds pointer-initializer tables such as tcc_options[]) as
+ * SHF_ALLOC only, relying on tcc's OWN linker sort_sections() to add
+ * SHF_WRITE at final link (the GNU_RELRO idiom — see line ~2286). For a
+ * `tcc -c` RELOCATABLE OBJECT that final-link fixup never runs, so .data.ro
+ * stays read-only in the .o while still carrying R_AARCH64_ABS64 pointer
+ * relocations (.rela.data.ro). OVMX's consumer linker LINK.EXE keys on
+ * SHF_WRITE to decide which sections' ABS64 pointer-initializers to
+ * resolve+bias (src/vmslink/link.c classifies non-writable PROGBITS as
+ * B_RODATA and collects ABS64 relocs only from B_TEXT/B_DATA) — matching
+ * gcc, which emits such tables into .data.rel.ro WITH SHF_WRITE. Without
+ * SHF_WRITE LINK.EXE silently drops the .rela.data.ro relocations, so every
+ * .data.ro pointer lands NULL; a self-hosted TCC.EXE then matches no
+ * command-line option ("invalid option"). Emitting .data.ro writable from
+ * creation makes LINK.EXE treat it as ordinary relocatable data —
+ * functionally identical to gcc's pre-RELRO .data.rel.ro (OVMX does not do
+ * RELRO). Stock tcc behavior is preserved unless OVMX_DATA_RO_WRITABLE is
+ * defined (set by src/vmslink/mk_tcc.sh for the OVMX-native TCC.EXE build). */
+#ifdef OVMX_DATA_RO_WRITABLE
+#define shf_RELRO (SHF_ALLOC | SHF_WRITE)
+#else
 #define shf_RELRO SHF_ALLOC /* eventually made SHF_WRITE in sort_sections() */
+#endif
 static const char rdata[] = ".data.ro";
 #endif
 

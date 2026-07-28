@@ -111,7 +111,14 @@ GSMATCH=${GSMATCH:-LEQUAL,1,0}
 #   (a) 18 libgcc IEEE-quad ("tf"/128-bit long double) soft-float helpers
 #       (__addtf3/__subtf3/__multf3/__divtf3, __*tf2 compares, __extend*tf2/
 #       __trunctf*2 conversions, __fixtfdi/__fixunstfdi/__floatun{di,si}tf) +
-#       __clear_cache: libgcc.a is ALREADY whole-archived into DECC$SHR (see the
+#       __clear_cache. (vms-4ba.6 APPENDED a 19th quad helper, __negtf2, the
+#       long-double unary-negation soft-float routine: gcc INLINES -(long
+#       double) as a sign-bit flip so the gcc-built gen-1 TCC.EXE never
+#       referenced it, but a SELF-HOSTED tcc — tcc compiling tcc, vms-4ba.6 —
+#       emits a real __negtf2 CALL for the same expression, so the second-
+#       generation TCC.EXE needs it as a cross-image import. Same
+#       whole-archived/hidden-in-libgcc status as its 18 siblings.)
+#       libgcc.a is ALREADY whole-archived into DECC$SHR (see the
 #       header comment above — "resolved WITHIN the image and kept INTERNAL");
 #       tcc's own long-double constant-folding (tccgen.c) and its arm64 JIT
 #       icache flush (`-run` mode) call these as CROSS-IMAGE imports, so they
@@ -213,7 +220,7 @@ __extendsftf2=PROCEDURE,__fixtfdi=PROCEDURE,__fixunstfdi=PROCEDURE,\
 __floatunditf=PROCEDURE,__floatunsitf=PROCEDURE,__getf2=PROCEDURE,\
 __gttf2=PROCEDURE,__letf2=PROCEDURE,__lttf2=PROCEDURE,__multf3=PROCEDURE,\
 __netf2=PROCEDURE,__subtf3=PROCEDURE,__trunctfdf2=PROCEDURE,\
-__trunctfsf2=PROCEDURE,__clear_cache=PROCEDURE,\
+__trunctfsf2=PROCEDURE,__negtf2=PROCEDURE,__clear_cache=PROCEDURE,\
 __assert_fail=PROCEDURE,atoi=PROCEDURE,dlclose=PROCEDURE,dlopen=PROCEDURE,\
 dlsym=PROCEDURE,fdopen=PROCEDURE,ldexpl=PROCEDURE,longjmp=PROCEDURE,\
 mprotect=PROCEDURE,remove=PROCEDURE,sem_init=PROCEDURE,sem_post=PROCEDURE,\

@@ -126,7 +126,15 @@ CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-
 # libtcc.c/tccpp.c/tccelf.c that route tcc's primary-source read + object
 # write through RMS instead of raw open()/read()/write(). Applied uniformly
 # to every TU below — harmless no-op for the TUs that don't reference it.
-DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO"
+# -DOVMX_DATA_RO_WRITABLE (vms-4ba.6): makes tcc emit its .data.ro
+# pointer-initializer section (tcc_options[] et al.) with SHF_WRITE, so
+# LINK.EXE resolves the ABS64 pointer relocations it carries — see the
+# OVMX seam in third-party/tcc/src/tccelf.c (shf_RELRO). REQUIRED for a
+# self-hosted TCC.EXE (gen-2, tcc-compiled): without it every .data.ro
+# pointer lands NULL and the second-generation tcc matches no CLI option.
+# Only affects tccelf.c's section creation; a no-op for TUs that never
+# emit relocatable rodata.
+DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO -DOVMX_DATA_RO_WRITABLE"
 INCS="-I$WORK -I$TCC_SRC -I$OVMX_DIR"
 
 # Core TUs (compiled as-is — no ONE_SOURCE define, so each is its own real TU).

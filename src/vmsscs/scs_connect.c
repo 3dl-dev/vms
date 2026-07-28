@@ -55,6 +55,12 @@ static const uint8_t connect_response_tmpl[SCS_CONNECT_SCA_LEN] = {
     /* [98:110]*/ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x06, 0x00
 };
 
+static void put_le16(uint8_t *dst, uint16_t v)
+{
+    dst[0] = (uint8_t)(v & 0xff);
+    dst[1] = (uint8_t)((v >> 8) & 0xff);
+}
+
 static void put_le32(uint8_t *dst, uint32_t v)
 {
     dst[0] = (uint8_t)(v & 0xff);
@@ -92,6 +98,24 @@ static int build_from_tmpl(const struct scs_connect_params *p,
     memcpy(out + 14 + 10, p->src_mac, 6);       /* src logical  (abs 24) = OVMX HW MAC */
     put_le32(out + 14 + 50, remote_conid);      /* Remote Con.ID (abs 64) */
     put_le32(out + 14 + 54, p->local_conid);    /* Local  Con.ID (abs 68) */
+
+    /* --- vms-c6d: thread the LIVE SCS VC counters (spec sec 4h(4)), replacing
+     * the golden template's replayed 6/7 (request) / 7/8 (response). recv_ack at
+     * [18:20] repeated at [26:28] and [34:36]; send_seq at [20:22] mirrored at
+     * [30:32] (the [20:22]==[30:32] mirror is GROUNDED 17758/17758 frames). The
+     * node-incarnation echo at [22:24] is the established-join gate (sec 4i.B),
+     * echoing the value the member advertised in its directed-HELLO [78:80]; a 0
+     * leaves the template's fresh-contact value 1, preserving byte-exact golden
+     * reproduction for the fresh-formation path and the unit tests. Payload
+     * offsets are +14 for absolute (payload byte 0 = abs frame 14). */
+    put_le16(out + 14 + 18, p->recv_ack);       /* leading counter [18:20] */
+    put_le16(out + 14 + 20, p->send_seq);       /* send-seq        [20:22] */
+    if (p->incarnation != 0) {
+        put_le16(out + 14 + 22, p->incarnation); /* node-incarnation [22:24] */
+    }
+    put_le16(out + 14 + 26, p->recv_ack);       /* recv_ack mirror [26:28] */
+    put_le16(out + 14 + 30, p->send_seq);       /* send-seq mirror [30:32] (== [20:22], GROUNDED) */
+    put_le16(out + 14 + 34, p->recv_ack);       /* recv_ack 3rd    [34:36] */
 
     return 0;
 }

@@ -479,6 +479,12 @@ int main(int argc, char **argv)
                 memcpy(cp.peer_logical, ps->logical, 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = 0;
+                /* vms-c6d: re-send the SAME outstanding sequenced message --
+                 * reuse the recorded unacked send_seq (do NOT advance) and the
+                 * current recv_ack. */
+                cp.recv_ack = ps->vc.seq.recv_seq;
+                cp.send_seq = ps->vc.unacked_seq;
+                cp.incarnation = ps->incarnation;
                 uint8_t rframe[SCS_CONNECT_FRAME_LEN];
                 if (scs_connect_build_request(&cp, rframe) == 0 &&
                     send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe, sizeof(rframe)) > 0) {
@@ -674,6 +680,11 @@ int main(int argc, char **argv)
                 memcpy(cp.peer_logical, ps->logical, 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = 0;
+                /* vms-c6d: thread live counters -- this self-initiated request is
+                 * a sequenced message, so advance OVMX's send_seq for it. */
+                cp.recv_ack = ps->vc.seq.recv_seq;
+                cp.send_seq = scs_seq_advance(&ps->vc.seq);
+                cp.incarnation = ps->incarnation;
                 uint8_t cframe[SCS_CONNECT_FRAME_LEN];
                 if (scs_connect_build_request(&cp, cframe) == 0 &&
                     send_frame_to(sock, (int)ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
@@ -682,7 +693,7 @@ int main(int argc, char **argv)
                     /* vms-691: the connect-request is OVMX's own outstanding
                      * sequenced message -- track it for retransmit until the
                      * peer's CONNECT-RESPONSE binds the Con.ID pair. */
-                    scs_vc_record_sent(&ps->vc, ps->vc.seq.send_seq, monotonic_ms());
+                    scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
                     log_ts(stdout);
                     printf(" SCSD-I-CONNREQ, sent CONNECT-REQUEST local_conid=0x%08X to peer\n",
                            OVMX_LOCAL_CONID);
@@ -928,8 +939,19 @@ int main(int argc, char **argv)
             if (ps == NULL) {
                 continue;
             }
-            if (v.remote_conid == 0 && !ps->connected) {
-                /* Peer's CONNECT-REQUEST to us -> answer, echoing its Con.ID. */
+            if (v.remote_conid == 0) {
+                /* vms-c6d: the ESTABLISHED VAX drives the VMS$VAXcluster 0x4b
+                 * CONNECT-REQUEST (remote Con.ID still 0 = OVMX's not yet known)
+                 * and OVMX answers with a CONNECT-RESPONSE echoing the VAX's
+                 * Con.ID and supplying its own -- the admission act that binds
+                 * the CDT (spec sec 4g phase 4). The response MUST carry OVMX's
+                 * LIVE VC counters: recv_ack = recv_seq (acks the VAX's just-sent
+                 * request send_seq, already note_recv'd by the credit block) and
+                 * a freshly-advanced send_seq. Baking the golden 7/8 made the VAX
+                 * reject the accept and retransmit forever. The VAX retransmits
+                 * its request until it accepts our response, so RE-ANSWER each
+                 * request (a new sequenced message with current counters) instead
+                 * of going silent once bound -- a lost response then self-heals. */
                 struct scs_connect_params cp;
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
@@ -937,15 +959,22 @@ int main(int argc, char **argv)
                 memcpy(cp.peer_logical, ps->logical, 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = v.local_conid;
+                cp.recv_ack = ps->vc.seq.recv_seq;
+                cp.send_seq = scs_seq_advance(&ps->vc.seq);
+                cp.incarnation = ps->incarnation; /* §4i.B established-join echo (0 => fresh 1) */
                 uint8_t rframe[SCS_CONNECT_FRAME_LEN];
                 if (scs_connect_build_response(&cp, rframe) == 0 &&
                     send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe, sizeof(rframe)) > 0) {
                     ps->remote_conid = v.local_conid;
-                    ps->connected = 1;
                     connect_resp_sent++;
+                    int first = !ps->connected;
+                    ps->connected = 1;
                     log_ts(stdout);
-                    printf(" SCSD-I-CONNRESP, answered peer CONNECT-REQUEST:"
-                           " remote=0x%08X local=0x%08X\n", v.local_conid, OVMX_LOCAL_CONID);
+                    printf(" SCSD-I-CONNRESP, %s peer VMS$VAXcluster CONNECT-REQUEST:"
+                           " remote=0x%08X local=0x%08X recv_ack=%u send_seq=%u incarnation=%u\n",
+                           first ? "answered" : "re-answered",
+                           v.local_conid, OVMX_LOCAL_CONID, cp.recv_ack, cp.send_seq,
+                           cp.incarnation ? cp.incarnation : 1);
                     fflush(stdout);
                 }
             } else if (v.remote_conid == OVMX_LOCAL_CONID && !ps->connected) {

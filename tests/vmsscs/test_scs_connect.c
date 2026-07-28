@@ -39,6 +39,11 @@ static uint32_t le32(const uint8_t *p)
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+static uint16_t le16(const uint8_t *p)
+{
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
 /* OVMX test identity. */
 static const uint8_t ovmx_mac[6] = { 0x02, 0x00, 0x00, 0x4f, 0x56, 0x58 }; /* "OVX", local bit */
 /* VAX1 (DECnet node): Ethernet src == its logical LAVC addr. */
@@ -188,13 +193,70 @@ static void test_build_response(void)
     check(scs_connect_build_response(NULL, out) == -1, "build_response NULL rejected");
 }
 
+/*
+ * vms-c6d: the CONNECT-RESPONSE must carry OVMX's LIVE SCS VC counters, NOT the
+ * golden template's replayed 7/8. This is the completing fix: with the golden
+ * counters baked in, the VAX rejected OVMX's accept (its live VC had advanced
+ * past the directory phase) and retransmitted its 0x4b forever. Assert the live
+ * recv_ack / send_seq land at their GROUNDED offsets (spec sec 4h(4)): recv_ack
+ * at [18:20]/[26:28]/[34:36] (abs 32/40/48), send_seq at [20:22] mirrored
+ * [30:32] (abs 34/44), and the incarnation echo at [22:24] (abs 36).
+ */
+static void test_response_live_counters(void)
+{
+    printf("[CONNECT-RESPONSE threads LIVE VC counters (vms-c6d)]\n");
+    struct scs_connect_params cp;
+    memset(&cp, 0, sizeof(cp));
+    memcpy(cp.dst_mac, vax1_mac, 6);
+    memcpy(cp.src_mac, ovmx_mac, 6);
+    memcpy(cp.peer_logical, vax1_mac, 6);
+    cp.local_conid = SCS_CONNECT_OVMX_CONID_BASE | 0x0001u;
+    cp.remote_conid = 0x62C50009u;          /* echo the VAX's Con.ID */
+    /* Live counters deliberately DIFFERENT from the golden 7/8 (proves they are
+     * threaded, not replayed): OVMX's VC advanced to send_seq=19 through the
+     * directory phase, and the VAX's last send_seq (our recv_seq) was 17. */
+    cp.recv_ack = 17;
+    cp.send_seq = 19;
+    cp.incarnation = 3;                     /* established-join: member advertised N=3 */
+
+    uint8_t out[SCS_CONNECT_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_connect_build_response(&cp, out) == 0, "build_response (live counters) succeeds");
+
+    /* Con.ID binding (the admission act) still correct. */
+    check(le32(out + 64) == 0x62C50009u, "Remote Con.ID == echoed VAX Con.ID (abs 64)");
+    check(le32(out + 68) == (SCS_CONNECT_OVMX_CONID_BASE | 0x0001u), "Local Con.ID == OVMX's (abs 68)");
+
+    /* Live counters at the GROUNDED offsets -- NOT the golden 7/8. */
+    check(le16(out + 32) == 17, "recv_ack [18:20] == live recv_seq 17 (abs 32), not golden 7");
+    check(le16(out + 34) == 19, "send_seq [20:22] == live send_seq 19 (abs 34), not golden 8");
+    check(le16(out + 36) == 3,  "incarnation [22:24] == echoed N=3 (abs 36)");
+    check(le16(out + 40) == 17, "recv_ack mirror [26:28] == 17 (abs 40)");
+    check(le16(out + 44) == 19, "send_seq mirror [30:32] == 19 (abs 44), GROUNDED [20:22]==[30:32]");
+    check(le16(out + 48) == 17, "recv_ack 3rd repeat [34:36] == 17 (abs 48)");
+    check(le16(out + 34) == le16(out + 44), "send-seq mirror holds ([20:22]==[30:32])");
+
+    /* A zero incarnation leaves the template's fresh-contact value 1 (byte-exact
+     * golden reproduction for the fresh-formation path). */
+    struct scs_connect_params fresh = cp;
+    fresh.incarnation = 0;
+    fresh.recv_ack = 7;
+    fresh.send_seq = 8;
+    uint8_t out2[SCS_CONNECT_FRAME_LEN];
+    check(scs_connect_build_response(&fresh, out2) == 0, "build_response (fresh) succeeds");
+    check(le16(out2 + 36) == 1, "incarnation 0 leaves the fresh template value 1 (abs 36)");
+    check(le16(out2 + 32) == 7 && le16(out2 + 34) == 8,
+          "fresh-formation golden counters 7/8 reproduced when passed explicitly");
+}
+
 int main(void)
 {
-    printf("test_scs_connect: directed HELLO + SCS connect (vms-5fe)\n");
+    printf("test_scs_connect: directed HELLO + SCS connect (vms-5fe/vms-c6d)\n");
     test_directed_hello();
     test_parse_real_frames();
     test_build_request();
     test_build_response();
+    test_response_live_counters();
     printf("test_scs_connect: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

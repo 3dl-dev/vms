@@ -89,3 +89,21 @@ set_tests_properties(vmsscs_dir_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-224 - VMS$VAXcluster connection-manager add-member transaction: op
+# 0x14/0x01/0x02 config builders (byte-exact vs golden joiner frames), VOTES=0
+# non-voting, the 0x81 response echoing the member's REAL captured (txn,checksum)
+# token (spec sec 4j). THE MILESTONE builders.
+add_executable(test_scs_member test_scs_member.c)
+
+target_include_directories(test_scs_member PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_member PRIVATE vmsscs_member)
+
+add_test(NAME vmsscs_member_unit COMMAND test_scs_member)
+set_tests_properties(vmsscs_member_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

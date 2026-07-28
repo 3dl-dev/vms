@@ -44,6 +44,7 @@
 #include "scs_connect.h"
 #include "scs_dir.h"
 #include "scs_hello.h"
+#include "scs_member.h"
 #include "scs_start.h"
 #include "scs_vc.h"
 #include "sysgen_params.h"
@@ -212,6 +213,13 @@ struct peer_state {
     int      dir_connected;        /* SCS$DIRECTORY Con.ID pair bound (we sent CONNECT-RESPONSE) */
     uint32_t dir_remote_conid;     /* the peer's SCS$DIRECTORY handle (learned from its request) */
     long     dir_lookups_answered; /* SCS$DIR_LOOKUP responses we sent this peer */
+    /* --- vms-224: connection-manager add-member SYSAP dialogue (spec sec 4j) ---
+     * The 190-byte VMS$VAXcluster VC carries a SECOND, application-level
+     * send/ack-msg# counter pair (body[0:4]) distinct from the SCS VC seq. */
+    int      cm_config_sent;       /* we sent our op 0x14/0x01/0x02 config burst */
+    uint16_t sysap_send;           /* OVMX's next SYSAP send-msg# (body[0:2]; from 1) */
+    uint16_t sysap_recv;           /* high-water of the member's SYSAP send-msg# (ack target) */
+    long     cm_responses;         /* 0x81 responses we sent to member 0x03/0x05 txns */
 };
 
 static int mac_eq(const uint8_t *a, const uint8_t *b)
@@ -251,6 +259,73 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
     da.sll_halen = 6;
     memcpy(da.sll_addr, mac, 6);
     return sendto(sock, frame, len, 0, (struct sockaddr *)&da, sizeof(da));
+}
+
+/*
+ * cm_send_config_burst - vms-224: drive OVMX's connection-manager add-member
+ * config burst on the bound 190-byte VMS$VAXcluster VC (spec sec 4j): op 0x14
+ * (node model advertisement), op 0x01 (cluster parameters, VOTES=0 non-voting),
+ * op 0x02 (config/topology). Each is a sequenced SCS message -- it advances the
+ * VC send_seq (SCS layer) AND carries its own SYSAP send-msg# (application
+ * layer). This is the joiner's active contribution that lets the member drive
+ * the op 0x03 commit + op 0x05 lock-rebuild transactions, promoting OVMX to a
+ * full MEMBER. Returns the number of frames sent (0..3).
+ */
+static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
+                                const uint8_t our_hw_mac[6])
+{
+    if (ps->sysap_send == 0) {
+        ps->sysap_send = 1; /* SYSAP send-msg# starts at 1 (spec sec 4j) */
+    }
+
+    struct scs_member_params mp;
+    uint8_t frame[SCS_MEMBER_FRAME_LEN];
+    int sent = 0;
+
+    /* Shared identity + connection fields for all three frames. */
+    memset(&mp, 0, sizeof(mp));
+    memcpy(mp.dst_mac, ps->eth_mac, 6);
+    memcpy(mp.src_mac, our_hw_mac, 6);
+    memcpy(mp.peer_logical, ps->logical, 6);
+    mp.remote_conid = ps->remote_conid;
+    mp.local_conid = OVMX_LOCAL_CONID;
+    mp.incarnation = ps->incarnation;
+
+    /* op 0x14 node CPU/model advertisement (OVMX's own model string). */
+    mp.recv_ack = ps->vc.seq.recv_seq;
+    mp.send_seq = scs_seq_advance(&ps->vc.seq);
+    mp.sysap_send_msg = ps->sysap_send++;
+    mp.sysap_ack_msg = ps->sysap_recv;
+    mp.model = NULL; /* OVMX_MODEL_STRING default */
+    if (scs_member_build_model(&mp, frame) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
+        sent++;
+    }
+
+    /* op 0x01 cluster parameters -- VOTES=0 (OVMX joins non-voting so it can
+     * never break VAX1/VAX2 quorum, design sec 8). */
+    mp.recv_ack = ps->vc.seq.recv_seq;
+    mp.send_seq = scs_seq_advance(&ps->vc.seq);
+    mp.sysap_send_msg = ps->sysap_send++;
+    mp.sysap_ack_msg = ps->sysap_recv;
+    mp.votes = SCS_MEMBER_VOTES_NONVOTING;
+    if (scs_member_build_params(&mp, frame) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
+        sent++;
+    }
+
+    /* op 0x02 config/topology. */
+    mp.recv_ack = ps->vc.seq.recv_seq;
+    mp.send_seq = scs_seq_advance(&ps->vc.seq);
+    mp.sysap_send_msg = ps->sysap_send++;
+    mp.sysap_ack_msg = ps->sysap_recv;
+    if (scs_member_build_config(&mp, frame) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
+        sent++;
+    }
+
+    ps->cm_config_sent = 1;
+    return sent;
 }
 
 int main(int argc, char **argv)
@@ -358,6 +433,8 @@ int main(int argc, char **argv)
     long retransmit_sent = 0;    /* vms-691: connect-request retransmits sent */
     long dir_conn_resp_sent = 0; /* vms-246: SCS$DIRECTORY CONNECT-RESPONSEs sent */
     long dir_lookup_sent = 0;    /* vms-246: SCS$DIR_LOOKUP responses sent */
+    long cm_config_frames = 0;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
+    long cm_response_sent = 0;   /* vms-224: 0x81 responses to member 0x03/0x05 txns */
 
     /* OVMX identity for the phase-2 START/config body (vms-21e). Resolved once;
      * shared by every peer's START responder. */
@@ -589,6 +666,82 @@ int main(int argc, char **argv)
                                ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
                                ps->credit_sent);
                         fflush(stdout);
+                    }
+                }
+            }
+        }
+
+        /* --- vms-224: connection-manager add-member SYSAP dialogue (spec sec
+         * 4j) on the bound 190-byte VMS$VAXcluster VC. THE MILESTONE. Once the
+         * 0x4b connect binds the VC (ps->connected), OVMX (the joiner) drives
+         * its config burst (op 0x14/0x01/0x02) and then answers the member's
+         * op 0x03 commit + op 0x05 lock-rebuild transactions with a 0x81
+         * response echoing the (txn,checksum) token -- which is what promotes
+         * OVMX to a full cluster MEMBER (a CSB in SDA SHOW CLUSTER). The credit
+         * block above already 0x48-acked this frame at the SCS layer. */
+        if (do_connect && cls == SCS_CLASS_SCS_FIXED) {
+            struct scs_member_view mv;
+            if (scs_member_parse(buf, (size_t)n, &mv) == 0 &&
+                mv.msgtype == SCS_MEMBER_MSGTYPE &&
+                (mv.remote_conid == OVMX_LOCAL_CONID ||
+                 mv.local_conid == OVMX_LOCAL_CONID)) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps != NULL && ps->connected) {
+                    /* Track the member's SYSAP send-msg# high-water (our ack
+                     * target). Only category-0x01 config messages carry the
+                     * membership dialogue; DLM (cat 0x02) rides here later. */
+                    if (mv.sysap_send_msg > ps->sysap_recv) {
+                        ps->sysap_recv = mv.sysap_send_msg;
+                    }
+
+                    /* Trigger our config burst on the member's first category-
+                     * 0x01 message if the bind path did not already send it
+                     * (defensive: the VC is provably ready once the member is
+                     * talking membership on it). */
+                    if (!ps->cm_config_sent &&
+                        (mv.category & 0x7f) == SCS_MEMBER_CAT_CONFIG) {
+                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac);
+                        cm_config_frames += c;
+                        log_ts(stdout);
+                        printf(" SCSD-I-CMCONFIG, sent add-member config burst"
+                               " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"
+                               " to member %02x:%02x:%02x:%02x:%02x:%02x\n",
+                               c, ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
+                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5]);
+                        fflush(stdout);
+                    }
+
+                    /* Answer the member-driven op 0x03 commit / op 0x05
+                     * lock-rebuild transactions (echo the token, spec sec 4j). */
+                    if (mv.is_member_txn) {
+                        if (ps->sysap_send == 0) {
+                            ps->sysap_send = 1;
+                        }
+                        struct scs_member_params mp;
+                        memset(&mp, 0, sizeof(mp));
+                        memcpy(mp.dst_mac, ps->eth_mac, 6);
+                        memcpy(mp.src_mac, our_hw_mac, 6);
+                        memcpy(mp.peer_logical, ps->logical, 6);
+                        mp.remote_conid = ps->remote_conid;
+                        mp.local_conid = OVMX_LOCAL_CONID;
+                        mp.incarnation = ps->incarnation;
+                        mp.recv_ack = ps->vc.seq.recv_seq;
+                        mp.send_seq = scs_seq_advance(&ps->vc.seq);
+                        mp.sysap_send_msg = ps->sysap_send++;
+                        mp.sysap_ack_msg = mv.sysap_send_msg; /* ack this request */
+                        uint8_t rframe[SCS_MEMBER_FRAME_LEN];
+                        if (scs_member_build_response(&mp, buf, (size_t)n, rframe) == 0 &&
+                            send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe,
+                                          sizeof(rframe)) > 0) {
+                            ps->cm_responses++;
+                            cm_response_sent++;
+                            log_ts(stdout);
+                            printf(" SCSD-I-CMRESP, 0x81 response to member op 0x%02x"
+                                   " txn=0x%04x csum=0x%04x (echoed) send_msg=%u ack_msg=%u\n",
+                                   mv.opcode, mv.txn, mv.checksum,
+                                   mp.sysap_send_msg, mp.sysap_ack_msg);
+                            fflush(stdout);
+                        }
                     }
                 }
             }
@@ -976,6 +1129,18 @@ int main(int argc, char **argv)
                            v.local_conid, OVMX_LOCAL_CONID, cp.recv_ack, cp.send_seq,
                            cp.incarnation ? cp.incarnation : 1);
                     fflush(stdout);
+                    /* vms-224: VC bound -> immediately drive the add-member
+                     * config burst (op 0x14/0x01/0x02). The member RX block
+                     * re-triggers it defensively if this send is lost. */
+                    if (first && !ps->cm_config_sent) {
+                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac);
+                        cm_config_frames += c;
+                        log_ts(stdout);
+                        printf(" SCSD-I-CMCONFIG, sent add-member config burst"
+                               " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"
+                               " on VC bind\n", c);
+                        fflush(stdout);
+                    }
                 }
             } else if (v.remote_conid == OVMX_LOCAL_CONID && !ps->connected) {
                 /* Peer's CONNECT-RESPONSE to our request -> the pair is bound. */
@@ -985,6 +1150,16 @@ int main(int argc, char **argv)
                 printf(" SCSD-I-CONNBOUND, peer accepted our connect:"
                        " local=0x%08X remote=0x%08X\n", OVMX_LOCAL_CONID, v.local_conid);
                 fflush(stdout);
+                /* vms-224: VC bound -> drive the add-member config burst. */
+                if (!ps->cm_config_sent) {
+                    int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac);
+                    cm_config_frames += c;
+                    log_ts(stdout);
+                    printf(" SCSD-I-CMCONFIG, sent add-member config burst"
+                           " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"
+                           " on VC bind\n", c);
+                    fflush(stdout);
+                }
             }
             continue;
         }
@@ -1007,6 +1182,8 @@ int main(int argc, char **argv)
                 credit_sent, retransmit_sent);
         fprintf(stderr, "  DIR-CONNECT-RESP-SENT=%ld DIR-LOOKUP-RESP-SENT=%ld\n",
                 dir_conn_resp_sent, dir_lookup_sent);
+        fprintf(stderr, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld\n",
+                cm_config_frames, cm_response_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (!peers[i].in_use) {
                 continue;
@@ -1015,7 +1192,8 @@ int main(int argc, char **argv)
                     "  PEER %02x:%02x:%02x:%02x:%02x:%02x channel=%s directed_replies=%ld"
                     " incarnation=%u start_replied=%d start_acked=%d dir_connected=%s"
                     " dir_lookups=%ld connect_sent=%d connected=%s"
-                    " credit_sent=%ld retx=%u remote_conid=0x%08X\n",
+                    " credit_sent=%ld retx=%u remote_conid=0x%08X"
+                    " cm_config=%s cm_responses=%ld sysap_send=%u sysap_recv=%u\n",
                     peers[i].eth_mac[0], peers[i].eth_mac[1], peers[i].eth_mac[2],
                     peers[i].eth_mac[3], peers[i].eth_mac[4], peers[i].eth_mac[5],
                     peers[i].channel_up ? "UP" : "down", peers[i].directed_replies,
@@ -1024,7 +1202,9 @@ int main(int argc, char **argv)
                     peers[i].dir_connected ? "YES" : "no", peers[i].dir_lookups_answered,
                     peers[i].connect_sent, peers[i].connected ? "YES" : "no",
                     peers[i].credit_sent, peers[i].vc.retransmit_count,
-                    peers[i].remote_conid);
+                    peers[i].remote_conid,
+                    peers[i].cm_config_sent ? "YES" : "no", peers[i].cm_responses,
+                    peers[i].sysap_send, peers[i].sysap_recv);
         }
     }
 

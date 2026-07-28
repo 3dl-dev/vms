@@ -50,10 +50,10 @@ payload begins at offset 14 (after the 14-byte Ethernet header).
 | pcap | Frames (0x6007) | Used for |
 |---|---|---|
 | `scs-idle-baseline.pcap` | 36 | §4(b) HELLO baseline, §4(d) SCS envelope baseline |
-| `formation-ci1-joinwindow.pcap` | 2992 | §4(c) connect/directory-lookup phase, §4(g) membership handshake, §4(h) SCS$DIRECTORY connect + 0x5b/0x48 bodies (vms-560) |
+| `formation-ci1-joinwindow.pcap` | 2992 | §4(c) connect/directory-lookup phase, §4(g) membership handshake, §4(h) SCS$DIRECTORY connect + 0x5b/0x48 bodies (vms-560), §4(j) CM add-member transaction envelope on the 190-byte VMS$VAXcluster VC (vms-f85) |
 | `ci3-join-membership-live2node-20260728.pcap` | 58 | §4(g) join-nonce cross-boot stability (vms-b6c) |
 | `cd0-bootB-zk1099-join-20260728.pcap` | 18297 | §4(g) phase-2 START/config body grounding — joiner reconfigured to SCSNODE `"ZK"`/SCSSYSTEMID 1099/VOTES 0 (vms-cd0) |
-| `cd0-bootC-zk1099-votes2-20260728.pcap` | ~18k | §4(g) vote-varying diff — same node, VOTES 2 (vms-cd0) |
+| `cd0-bootC-zk1099-votes2-20260728.pcap` | ~18k | §4(g) vote-varying diff — same node, VOTES 2 (vms-cd0); §4(j) VOTES grounding at 190-byte VC body[22:24] via the VOTES 0↔2 byte-diff (vms-f85) |
 | `af2-established-rejoin-20260728.pcap` | 16340 | §4(i) joining an ESTABLISHED cluster — VAX2 drop-and-rejoin while VAX1 stays up (Member State Seq 2→3→4); rejoin `0x41` START = SCA 2850–2855 (vms-af2) |
 | `af2-firsttimer-established-20260728.pcap` | 51072 | §4(i).B — fresh-identity **first-timer** VX3/1050 joins established VAX1 (STARTs SCA 2558–2563), then **2nd** (20170–20175) and **3rd** (33591–33596) incarnations; grounds the `[22:24]` incarnation counter 1→2→3 and its `[78:80]` HELLO advertisement (vms-af2) |
 | `formation-ci1.pcap` | 18541 | §1 message-class census (Table 2), §4(e) MSCP, large block-transfer frames, §4(h) 0x5b/0x48 scale re-validation (605/622 frames, vms-560) |
@@ -275,7 +275,7 @@ DLM and MSCP sections below.
 | 32 | 32 | SCS sequence-number region: two 16-bit counters, each repeated up to 3×, zero-padded to 32 bits; a constant `0x0012` (=18 decimal) sits at offset 38–39 | the `18` is **GROUNDED**: byte-exact match to SYSGEN `NISCS_LAN_OVRHD 18`. The repeated 16-bit values plausibly correspond to the CSB's "Next seq. number" / "Last seq num rcvd" / "Last ack. seq num" triad documented in SDA `SHOW CLUSTER`, but the specific mapping of which repeat is which CSB field is **inferred**, not independently confirmed. |
 | **64** | **4** | **Remote Connection ID**, LE `uint32` | **GROUNDED**: e.g. bytes `09 00 c5 62` = `0x62C50009`, byte-exact to VAX1's `Local Con. ID` for `VMS$VAXcluster` in the SDA decoder ring, appearing in a frame sent BY VAX2 — i.e. this field is the *destination's* Con.ID as the sender addresses it. |
 | **68** | **4** | **Local Connection ID**, LE `uint32` | **GROUNDED**: the complementary value (e.g. `0x33580008`, VAX2's own Con.ID) — confirmed the pair swaps consistently with send direction (VAX1→VAX2 frames show `remote=0x33580008 (VAX2)`, `local=0x62C50009 (VAX1)`, and vice versa for VAX2→VAX1 frames). This directly matches CDT terminology "Local Con. ID" / "Remote Con. ID" from `SHOW CONNECTIONS`. |
-| 72 | 132 | SYSAP-specific message body | **not grounded at the byte/opcode level.** Contains directly-observed ASCII resource/queue names (see §4f for the DLM case) but no confirmed field map. |
+| 72 | 132 | SYSAP-specific message body | **the transaction envelope is now GROUNDED in §4(j)** (`vms-f85`): a SYSAP-level send-msg#/ack-msg# counter pair, a transaction-id/checksum correlation token, a message-category/flags byte (bit `0x80` = response), and an opcode. The `VMS$VAXcluster` connection-manager add-member dialogue rides here, and the joiner's **VOTES** field is grounded at body-offset 22 (abs 94). The per-opcode DLM/MSCP sub-fields (lock mode, resource-id, status; §4f) remain undecoded. |
 
 ### 4(e) MSCP disk-serving request/response framing
 
@@ -885,6 +885,170 @@ incarnation counter is unprobed (grounded only for N ∈ {1,2,3}).
 
 ---
 
+### 4(j) Connection-manager add-member transaction (the 190-byte VMS$VAXcluster SYSAP body)
+
+This subsection grounds the **132-byte SYSAP body** (abs frame offset 72+,
+payload-relative [58:]) of the 190-byte `VMS$VAXcluster`↔`VMS$VAXcluster`
+message class (§4d) — the channel the connection manager uses to admit a joiner
+as a full cluster **MEMBER** *after* the `0x4b` connect binds the VC (§4g phase
+4). Everything through the `0x4b` CONNECT-RESPONSE (a bound Con.ID pair, §4g)
+establishes only a *transient* SYSAP connection; the joiner does not appear in
+SDA `SHOW CLUSTER` as a CSB, and the Member State Seq does not advance, until
+this add-member dialogue completes. Captured for `vms-f85`.
+
+> **Body-offset convention for this subsection.** All offsets here are
+> **SYSAP-body-relative**: `body[0]` = payload offset 58 = **abs frame offset
+> 72** (the first byte after the Local Connection-ID at §4d abs [68:72]). Add 72
+> to get an absolute frame offset, or 58 to get a §4d payload-relative offset.
+> The 132-byte body spans `body[0..131]` = abs [72..203] of the 204-byte frame.
+
+**Specimens & method (pure passive analysis + the vms-cd0 controlled-reconfig
+captures — no new lab mutation).** The transaction envelope was grounded on the
+golden `formation-ci1-joinwindow.pcap` (VAX2 joins VAX1; 2902 `VMS$VAXcluster`
+190-byte VC frames, isolated by the §3 Con.ID pair `{0x62C50009, 0x33580008}`)
+and re-validated on the full run `formation-ci1.pcap`. The **VOTES** field was
+grounded by byte-diffing the two `vms-cd0` vote-varying captures
+(`cd0-bootB-zk1099-join` VOTES 0 vs `cd0-bootC-zk1099-votes2` VOTES 2, same
+`ZK`/1099 joiner) and cross-validated against the golden (VAX1 VOTES 1 / VAX2
+VOTES 0) and `af2-established-rejoin` — **five captures / four vote
+configurations**. The **CSID** finding uses `af2-established-rejoin` (where the
+rejoining node is assigned a *new* CSID `00010003`, SDA-confirmed §4i).
+
+#### The SYSAP transaction envelope — GROUNDED field map
+
+Every 190-byte `VMS$VAXcluster` VC frame carries this fixed 10-byte header at the
+top of the SYSAP body, followed by an opcode-specific payload:
+
+| body off | abs | Size | Field | Grounding |
+|---|---|---|---|---|
+| 0 | 72 | 2 | **SYSAP send-msg#** — the sender's own application-level message counter (distinct from the §4d/§4h SCS `send_seq` at abs [46:48]) | **GROUNDED**: strictly monotonic **per sender**, 2902/2902 golden VC frames (VAX1: 1,2,3,… independent of VAX2: 1,2,3,…). Starts at 1 on the first VC message. On the full run `formation-ci1.pcap` it stays monotonic across 17 541 VC frames with only 2 single-step (−1) retransmit dips — i.e. 17 539/17 541. |
+| 2 | 74 | 2 | **SYSAP ack-msg#** — acknowledges the peer's highest send-msg# seen | **GROUNDED**: `ack-msg# ≤ peer's max send-msg#` in 2902/2902 frames; advances in lockstep with the peer's sends (application-layer analogue of the §4h SCS seq/ack). |
+| 4 | 76 | 2 | **transaction number** — small per-dialogue id, **shared by a request and its matching response** | **GROUNDED**: see the req/resp correlation below. |
+| 6 | 78 | 2 | **transaction checksum / correlation token** — a per-transaction value, **shared by a request and its response** | **GROUNDED as a correlation token** (17/17 responses match their request on `(txn, checksum, opcode)`); the *derivation* of the checksum from the transaction content is **unknown** (one-way, not recoverable from passive capture). |
+| 8 | 80 | 1 | **message-category / flags byte** — bit `0x80` = **response**; the low bits select the category | **GROUNDED**: every response category pairs with its request (`0x01/0x81`, `0x02/0x82`, `0x05/0x85`, `0x06/0x86`). Categories observed: **`0x01`** = membership/config (the add-member dialogue, small count — 2× each opcode per join), **`0x02`** = steady-state DLM traffic (the 613+306+272+… bulk), **`0x04`** = credit/commit ack, plus `0x05`/`0x06`. |
+| 9 | 81 | 1 | **opcode** (within the category) | **GROUNDED value↔role partition** (inferred numeric→name labels; no public SCS opcode table used). Category-`0x01` add-member opcodes: **`0x14`** node CPU/model advertisement, **`0x01`** cluster-parameters (carries VOTES + version), **`0x02`** config/topology, **`0x03`** membership-commit transaction, **`0x05`** lock/resource rebuild. Category-`0x04` acks carry opcode `0x49`/`0x00`/`0x01`/`0x02`. |
+
+**Request/response correlation — GROUNDED.** Reading each frame as
+`(category, opcode, txn, checksum)`, **every one of the 17 category-response
+frames (`flag & 0x80`) in the golden VC matches a prior request frame with the
+identical `(txn, checksum, opcode)` triple, 17/17, 0 residuals.** This is what
+proves `body[4:8]` is a request/response correlation token and `body[8]` bit
+`0x80` is the response direction.
+
+#### The joiner's add-member SEND sequence — GROUNDED (the deliverable)
+
+After the `0x4b` CONNECT-RESPONSE binds the VC (§4g phase 4), the 190-byte VC
+opens with a **symmetric category-`0x01` config exchange** — each node sends
+three messages advertising its own identity, then the *member* drives the commit
+transactions and the *joiner* responds. Directly observed order (golden
+SCA#45→70; reproduced in both `cd0` captures):
+
+| # | Dir | body[8] | body[9] | Payload / role |
+|---|---|---|---|---|
+| 1 | J→M **and** M→J | `0x01` | `0x14` | **node CPU/model advertisement**: a length-prefixed ASCII string at `body[16]` (len `0x15`=21) + `"VAXserver 3900 Series"`. |
+| 2 | J→M **and** M→J | `0x01` | `0x01` | **cluster-parameters**: the node's **VOTES** at `body[22:24]` (below) + software version `"V7.3"` (fixed 8-byte field further into the body). |
+| 3 | J→M **and** M→J | `0x01` | `0x02` | **config/topology** (acks the peer's msg#2 via `ack-msg#`). |
+| 4 | M→J | `0x04` | `0x49`/`0x00` | member **commit/credit ack**. |
+| 5 | M→J req / J→M resp | `0x01`/`0x81` | `0x03` | **membership-commit transaction** (first `(txn,checksum)`-correlated exchange; member requests, joiner echoes the token in its `0x81` response). |
+| 6 | M→J req / J→M resp | `0x01`/`0x81` | `0x05` | **lock/resource-database rebuild** transactions (member requests, joiner responds). |
+
+The category-`0x01` dialogue occurs **once per join** (2× per opcode = the two
+nodes); immediately afterward the VC transitions to the steady-state
+category-`0x02` DLM traffic (§4d/§4f). The joiner's *active* contribution is the
+three category-`0x01` config messages (opcodes `0x14`, `0x01`, `0x02`) that
+carry its identity + votes, plus its `0x81` responses to the member-driven
+`0x03`/`0x05` transactions; it advances its own `send-msg#`/`ack-msg#` in
+lockstep (never copying the member's counters), exactly as the §4h SCS seq/ack
+rule but at the SYSAP layer.
+
+#### VOTES — GROUNDED across four configurations (resolves the §4g deferral)
+
+§4g proved (grounded negative) that votes are **not** in the phase-2 `0x41`
+START body and are "exchanged later on the established VC." This subsection
+locates them. In the category-`0x01` opcode-`0x01` cluster-parameters message,
+the sender's **VOTES** is an LE `uint16` at **`body[22:24]`** (payload [80:82],
+**abs frame offset 94**):
+
+| specimen | node | configured VOTES | `body[22:24]` |
+|---|---|---|---|
+| `cd0-bootB` (joiner ZK/1099) | ZK | 0 | `0x0000` |
+| `cd0-bootC` (joiner ZK/1099) | ZK | 2 | `0x0002` |
+| `formation-ci1-joinwindow` | VAX1 (member) | 1 | `0x0001` |
+| `formation-ci1-joinwindow` | VAX2 (joiner) | 0 | `0x0000` |
+| `af2-established-rejoin` | VAX1 / VAX2 | 1 / 0 | `0x0001` / `0x0000` |
+
+**GROUNDED**: the `cd0-bootB`→`cd0-bootC` byte-diff of the joiner's op-`0x01`
+message differs in exactly **two** bytes, and only `body[22]` (`0x00`→`0x02`)
+tracks the controlled VOTES change 0→2; every other byte is identical. Combined
+with the golden VAX1=1/VAX2=0 and the af2 re-confirmation, `body[22:24]` matches
+the SYSGEN/SDA-reported VOTES byte-exact in **all four vote values {0,1,2}**.
+The second differing byte, `body[84]`, is a **false positive** — it reads
+`0x0e`(14)/`0x0d`(13) between the two `cd0` boots but `0xd4`(212) for the golden
+VAX1 (VOTES 1) vs `0x0e`(14) for the golden VAX2 (VOTES 0), i.e. **non-monotonic
+in votes** — so `body[84]` is an unrelated per-boot/timing field, not a vote
+field. `body[18:20]` is likewise **not** votes (it stayed `0` for ZK across the
+VOTES 0→2 change, though it happens to read 1 for the coordinator VAX1). Only
+`body[22:24]` survives controlled variation. **The OVMX takeaway: a non-voting
+OVMX node sends `body[22:24] = 0x0000` in its op-`0x01` cluster-parameters
+message.**
+
+**EXPECTED_VOTES — RE gap.** `EXPECTED_VOTES` was held at 1 (SDA/`F$GETSYI`
+ground truth, §4g) in **every** captured configuration, so no wire contrast
+exists to locate it. It is almost certainly a sibling field in the same op-`0x01`
+body. **Recommended next step:** the identical controlled-reconfig method used
+here for VOTES — reboot the joiner with `SET EXPECTED_VOTES` varied (e.g. 1 vs
+3) via `MC SYSGEN`, byte-diff the op-`0x01` bodies. (Disk-mutating: snapshot
+`d0.dsk` first, restore golden after — same runbook as `vms-cd0`.)
+
+#### CSID assignment — GROUNDED that it rides this VC (field not fully isolated)
+
+The connection manager assigns each admitted member a **CSID** (VAX1
+`00010001`, VAX2 `00010002`; §3). That the assignment rides the 190-byte VC body
+is proven by the `af2-established-rejoin` capture: when VAX2 drops and rejoins it
+is assigned a **new** CSID `00010003` (SDA `SHOW CLUSTER`, §4i), and that exact
+value — which did **not** exist on the wire before the rejoin — appears as an LE
+`uint32` in the rejoin VC body at **`body[30]`** (owner-CSID slot, 302 frames)
+and `body[108]` (379 frames), while the peer VAX1 keeps `00010001` at the same
+slot. In the fresh golden formation the same slots carry `00010001`/`00010002`.
+**GROUNDED (presence + the fresh-assignment `00010003` appearing exactly where
+SDA says a new CSID was minted).** What is **not** isolated is the discrete
+"here is your CSID" *assignment* field in the commit handshake (candidate: the
+op-`0x03` transaction body): the coordinator CSID `00010001` doubles as the
+**cluster ID** and appears pervasively (2099 frames at `body[30]` in af2), which
+confounds a clean single-field pin. Reported as an owner/peer **routing tag** at
+`body[30:34]` (abs 102:106), grounded; the assignment-vs-routing distinction is
+inferred.
+
+#### RE gaps left in §4j (honest)
+
+- **EXPECTED_VOTES** — not isolable (held at 1 in all captures); recommended
+  controlled reconfig above.
+- **Member State Seq bump** (SDA `0001→0002` on join, `2→3→4` on af2
+  drop/rejoin) — not pinned to a specific body field. **Recommended next step:**
+  correlate an af2-style drop/rejoin (where SDA shows the seq stepping) against a
+  candidate body field via the same controlled-reconfig method.
+- **CSID assignment field** — the CSIDs are grounded as owner/peer routing tags
+  (`body[30:34]`), but the discrete assignment field in the `0x03` commit body is
+  not isolated (coordinator CSID = cluster ID confound).
+- **transaction checksum `body[6:8]`** — grounded as a correlation token; its
+  derivation is one-way and not recoverable from passive capture.
+- **opcode `0x02`/`0x03`/`0x05`/`0x06` sub-field semantics** beyond the envelope,
+  and the category-`0x04` ack opcode meanings (`0x49`/`0x00`), remain undecoded —
+  they are the same DLM/MSCP body-decode gap flagged in §4d/§4f.
+
+**What `vms-224` needs to drive OVMX to MEMBER (byte-level).** After the `0x4b`
+connect binds `VMS$VAXcluster`, OVMX must, on the 190-byte VC: (1) send
+category-`0x01` op-`0x14` (send-msg#1) with its CPU/model string; (2) send
+category-`0x01` op-`0x01` (send-msg#2) with **`body[22:24] = 0x0000`** (non-voting)
+and the version field; (3) send category-`0x01` op-`0x02` (send-msg#3); each
+stamping `body[0:2]` = its own send-msg# and `body[2:4]` = ack of the member's
+last send-msg#; then (4) **respond** to the member's op-`0x03` commit and op-`0x05`
+lock-rebuild requests by echoing their `(txn, checksum)` at `body[4:8]` with
+`body[8] = 0x81`. Success is confirmed by the SDA oracle: a CSB with OVMX's
+assigned CSID appears in `SHOW CLUSTER` and the Member State Seq advances.
+
+---
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:
@@ -896,9 +1060,17 @@ For visibility, every field NOT marked GROUNDED above:
   offset-100 12-byte constant tail, offset-130 constant `0x0064`.
 - SCS 190-byte class: the offset-30 sequence/type word, the exact CSB-field
   mapping of the three repeated 16-bit counters at offset 32–63 (candidate:
-  Next-seq/Last-seq-rcvd/Last-ack-seq from `SHOW CLUSTER`, not confirmed),
-  and the entire 132-byte SYSAP body beyond the Con.ID pair (opcode,
-  lock-mode, status fields for DLM; command block for MSCP).
+  Next-seq/Last-seq-rcvd/Last-ack-seq from `SHOW CLUSTER`, not confirmed). The
+  **132-byte SYSAP body is now partially GROUNDED in §4(j)** (`vms-f85`): the
+  SYSAP transaction envelope (send-msg#/ack-msg# at body[0:4], txn/checksum
+  correlation token at body[4:8], message-category+response-bit at body[8],
+  opcode at body[9]), the connection-manager add-member SEND sequence
+  (category-`0x01` opcodes `0x14`/`0x01`/`0x02`/`0x03`/`0x05`), the joiner's
+  **VOTES** at body[22:24] (abs 94, four vote configs), and member-CSID routing
+  tags at body[30:34]. Still unknown in that body: the per-opcode DLM
+  lock-mode/resource-id/status and MSCP command-block sub-fields, `EXPECTED_VOTES`,
+  the Member-State-Seq field, the discrete CSID-assignment field, and the
+  transaction-checksum derivation (see §4j gaps).
 - Non-190-byte SCS envelope classes (58/62/66/70/94/106/110 and the
   206–1500-byte block-transfer classes): **the `0x5b` directory-lookup and
   `0x48` credit-return classes are now GROUNDED in §4(h)** (`vms-560`) — the

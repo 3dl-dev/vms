@@ -58,3 +58,18 @@ set_tests_properties(vmsscs_start_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-691 - SCS VC engine: 0x48 credit-return builder + seq/ack + retransmit.
+add_executable(test_scs_vc test_scs_vc.c)
+
+target_include_directories(test_scs_vc PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_vc PRIVATE vmsscs_vc)
+
+add_test(NAME vmsscs_vc_unit COMMAND test_scs_vc)
+set_tests_properties(vmsscs_vc_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

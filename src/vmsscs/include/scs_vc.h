@@ -116,6 +116,21 @@ struct scs_vc {
 void scs_vc_init(struct scs_vc *vc);
 
 /*
+ * scs_vc_reset_seq - reset the VC sequence space to a fresh post-START VC:
+ * send_seq=1, recv_seq=0, dropping any outstanding-unacked retransmit
+ * bookkeeping. Call ONCE at START completion (the STARTDONE round-2
+ * transition, vms-246). Per spec sec 4i.A the phase-2 0x41 START/config-round
+ * counters are SEPARATE from the SCS VC and must NOT carry into it -- both
+ * sides reset the VC to send_seq=1/recv_seq=0 when START completes, then run
+ * the sec 4h directory lockstep byte-identical to a fresh formation. Without
+ * this reset, recv_seq accumulated across the formation phase, so OVMX's 0x5b
+ * CONNECT-RESPONSE acked a sequence the VAX never sent post-reset (recv_ack too
+ * high) and the VAX rejected the SCS$DIRECTORY connect. Preserves the
+ * `initialized` flag and observability stats. No-op if vc is NULL.
+ */
+void scs_vc_reset_seq(struct scs_vc *vc);
+
+/*
  * scs_vc_note_recv - record a peer sequenced message's send_seq (advances
  * recv_seq high-water). Call once per received sequenced message before
  * building its credit-return. A send_seq of 0 (e.g. a 0x48 short) is a pure

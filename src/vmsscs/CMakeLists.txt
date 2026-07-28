@@ -45,12 +45,22 @@ target_include_directories(vmsscs_vc PUBLIC
 )
 target_link_libraries(vmsscs_vc PUBLIC vmsscs_start)
 
+# vms-246 - SCS$DIRECTORY connect + SCS$DIR_LOOKUP responder: binds the
+# SCS$DIRECTORY Con.ID pair and answers the established node's SYSAP-name
+# lookups (spec sec 4h) so the VAX advances to the VMS$VAXcluster 0x4b connect.
+# Depends on vmsscs_connect for the shared SCS envelope constants.
+add_library(vmsscs_dir STATIC scs_dir.c)
+target_include_directories(vmsscs_dir PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_dir PUBLIC vmsscs_connect)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_start vmsscs_vc)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

@@ -115,7 +115,13 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
  *     cross-boot-stable (spec sec 4a/4g); the VALUE is REPLAYED for a known
  *     cluster (the lab's ee-05-39-5b, group 1) -- NOT a general credential
  *     impl (see spec sec 4g "credential question", tracked as vms-732).
- *   - directed-HELLO flag (abs 92-93) = 0x0001. GROUNDED (spec sec 4b).
+ *   - directed-HELLO flag / node-incarnation counter (abs 92-93) = the
+ *     `incarnation` argument, LE u16. This field carries the incarnation
+ *     number the sender attributes to the peer (spec sec 4b / 4i.B): 1 on a
+ *     fresh/first contact, 2,3,... on successive re-forms. The joiner echoes
+ *     the value the member advertised in ITS directed HELLO here (read off
+ *     the wire, never hard-coded); for a first contact that is 1, matching
+ *     every fresh-formation specimen. GROUNDED (spec sec 4b/4i.B).
  *   - poller-sweep marker (abs 128-129) = 0x001F (=31, SDA SHOW PORTS
  *     'Poller Sweep 31'). GROUNDED (spec sec 4b).
  *
@@ -133,6 +139,7 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
 int scs_hello_build_directed_frame(const struct scs_hello_params *p,
                                     const uint8_t peer_mac[6],
                                     const uint8_t nonce[4],
+                                    uint16_t incarnation,
                                     uint8_t out[SCS_HELLO_FRAME_LEN]);
 
 /* The reference-lab (cluster group 1) join nonce, wire order (abs 68-71).

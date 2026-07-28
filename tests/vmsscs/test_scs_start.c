@@ -102,6 +102,7 @@ static void test_build_start(void)
     sp.config_round = 1;
     sp.send_seq = 1;
     sp.recv_ack = 0;
+    sp.incarnation = 1; /* fresh contact: member advertises N=1 (spec sec 4i.B) */
 
     uint8_t out[SCS_START_FRAME_LEN];
     memset(out, 0xAA, sizeof(out));
@@ -121,7 +122,7 @@ static void test_build_start(void)
     /* Counters (state-machine driven, not replayed). */
     check(le16(out + 32) == 0, "leading counter [18:20]==recv_ack==0 (abs 32, GROUNDED)");
     check(le16(out + 34) == 1, "SCS send_seq [20:22]==1 (abs 34, GROUNDED joiner value)");
-    check(le16(out + 36) == 1, "cnt_b [22:24]==send_seq==1 (abs 36)");
+    check(le16(out + 36) == 1, "incarnation [22:24]==N==1 for a fresh contact (abs 36, spec 4i.B)");
     check(le16(out + 44) == 1, "send_seq mirror [30:32]==1 (abs 44, GROUNDED)");
 
     /* GROUNDED constants + identity. */
@@ -162,6 +163,7 @@ static void test_build_ack(void)
     memcpy(sp.peer_logical, vax1_mac, 6);
     sp.send_seq = 1;
     sp.recv_ack = 0;
+    sp.incarnation = 1;
 
     uint8_t out[SCS_START_ACK_FRAME_LEN];
     memset(out, 0xAA, sizeof(out));
@@ -178,6 +180,54 @@ static void test_build_ack(void)
     check(scs_start_parse(out, sizeof(out), &v) == 0, "parse our ACK ok");
     check(v.is_ack == 1 && v.total_sca_len == 46 && v.config_round == 2,
           "round-trip: 46B round-2 ACK");
+}
+
+/*
+ * The established-join gate (spec sec 4i.B, vms-af2/vms-691): the joiner MUST
+ * stamp its 0x41 START [22:24] with the node-incarnation the member advertises
+ * in its directed-HELLO [78:80] (1 fresh, 2/3/... on successive re-forms).
+ * This is the field whose hard-coding to 1 stalled OVMX against an established
+ * VAX1 that advertised N=2. Prove the builder echoes the SUPPLIED N verbatim
+ * into [22:24] while send_seq [20:22] and its mirror [30:32] stay independent.
+ */
+static void test_incarnation_echo(void)
+{
+    printf("[incarnation echo: 0x41 START [22:24] == member-advertised N (spec 4i.B)]\n");
+    struct scs_start_params sp;
+    memset(&sp, 0, sizeof(sp));
+    memcpy(sp.dst_mac, vax1_mac, 6);
+    memcpy(sp.src_mac, ovmx_mac, 6);
+    memcpy(sp.peer_logical, vax1_mac, 6);
+    sp.scssystemid = 1030;
+    strncpy(sp.node_name, "OVMX", sizeof(sp.node_name) - 1);
+    sp.config_round = 0;
+    sp.send_seq = 1;   /* GROUNDED joiner value, spec 4i.A -- independent of N */
+    sp.recv_ack = 0;
+
+    uint8_t out[SCS_START_FRAME_LEN];
+
+    /* N in {1,2,3} -- the grounded range across the vms-af2 specimens. */
+    for (uint16_t n = 1; n <= 3; n++) {
+        sp.incarnation = n;
+        memset(out, 0xAA, sizeof(out));
+        check(scs_start_build(&sp, out) == 0, "build START with incarnation N");
+        check(le16(out + 36) == n, "[22:24] echoes the member-advertised N (abs 36)");
+        /* The echo must NOT disturb the sequence counters. */
+        check(le16(out + 34) == 1, "send_seq [20:22] stays 1, independent of N (abs 34)");
+        check(le16(out + 44) == 1, "send_seq mirror [30:32] stays 1, independent of N (abs 44)");
+        check(le16(out + 32) == 0, "recv_ack [18:20] stays 0, independent of N (abs 32)");
+    }
+
+    /* The gate value is carried, not derived: a large residual member send_seq
+     * (spec 4i.A) is NEVER what [22:24] should be -- only the small incarnation
+     * counter. Confirm N and send_seq are wholly decoupled. */
+    sp.incarnation = 2;
+    sp.send_seq = 11974; /* the af2 residual-VC continuation value */
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "build with N=2 and a large send_seq");
+    check(le16(out + 36) == 2, "[22:24]==incarnation 2, NOT the send_seq (abs 36)");
+    check(le16(out + 34) == 11974, "send_seq [20:22] carries its own value (abs 34)");
+    check(le16(out + 44) == 11974, "mirror [30:32]==send_seq, not the incarnation (abs 44)");
 }
 
 static void test_parse_real(void)
@@ -216,6 +266,7 @@ int main(void)
     test_seq_state();
     test_build_start();
     test_build_ack();
+    test_incarnation_echo();
     test_parse_real();
     printf("test_scs_start: %d failure(s)\n", failures);
     return failures ? 1 : 0;

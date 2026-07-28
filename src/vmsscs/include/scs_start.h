@@ -39,12 +39,27 @@
  * OVMX computes the SCS sequenced-message counters from its OWN tracked
  * scs_seq_state, not by echoing a captured frame's bytes. The START is
  * sequenced-message #1, so a fresh joiner emits send_seq=1 at [20:22] (and
- * the mirror at [30:32]) and cnt_b=1 at [22:24] -- byte-exact to the joiner
- * VAX2 emitted and the established VAX accepted (GROUNDED). The leading
- * counter [18:20] is 0 during the pre-VC START phase (GROUNDED observed; its
- * exact CSB role is inferred per spec sec 4d/4g). scs_seq_state advances
- * send_seq per NEW sequenced message and tracks the peer's send_seq for the
- * later 0x4b connect phase (spec sec 4g phase 4).
+ * the mirror at [30:32]) -- byte-exact to the joiner VAX2 emitted and the
+ * established VAX accepted (GROUNDED). The leading counter [18:20] is 0
+ * during the pre-VC START phase (GROUNDED observed; its exact CSB role is
+ * inferred per spec sec 4d/4g). scs_seq_state advances send_seq per NEW
+ * sequenced message and tracks the peer's send_seq for the later 0x4b connect
+ * phase (spec sec 4g phase 4).
+ *
+ * INCARNATION COUNTER [22:24] -- THE ESTABLISHED-JOIN GATE (spec sec 4i.B,
+ * vms-af2/vms-691). The second SCS counter in the START body, [22:24], is NOT
+ * a sequence counter: it is the node-incarnation number the MEMBER attributes
+ * to the joiner, constant across all three of the joiner's START frames. The
+ * member advertises it in its directed-HELLO flag at payload [78:80] (abs 92):
+ * 1 for a first contact, incrementing 2,3,... each time this node re-forms its
+ * channel against a member holding a residual CSB for it. The joiner MUST echo
+ * that value into [22:24]; sending the wrong value stalls the join (the member
+ * will not advance its config-round past 0). OVMX's earlier stall (vms-691)
+ * was a hard-coded [22:24]=1 while the member advertised [78:80]=2. This is
+ * carried as scs_start_params.incarnation, READ from the member's directed
+ * HELLO on the wire (never a hard-coded constant). GROUNDED byte-exact across
+ * 6 vms-af2 specimens spanning [22:24] in {1,2,3}. In every fresh-formation
+ * capture N==1, which is why [22:24] previously read as a plain "cnt_b=1".
  *
  * REPLAYED (ungrounded, spec sec 4g/sec 5) fields left at their captured
  * values, labeled REPLAY: the [54:56]=0x0240 / [56:58]=0x00d8 constant pair,
@@ -113,6 +128,10 @@ struct scs_start_params {
     uint16_t config_round;    /* config-round counter [44:46] */
     uint16_t send_seq;        /* SCS send-seq [20:22] + mirror [30:32] (from scs_seq_state) */
     uint16_t recv_ack;        /* leading counter [18:20] (0 during START; inferred CSB role) */
+    uint16_t incarnation;     /* node-incarnation counter [22:24] -- the value the MEMBER
+                                 advertises in its directed-HELLO [78:80]; the established-join
+                                 gate (spec sec 4i.B). READ from the wire, never hard-coded.
+                                 1 for a fresh/first contact. */
 };
 
 /*

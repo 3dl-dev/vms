@@ -153,6 +153,11 @@ add_subdirectory(src/vmsrms)
 add_subdirectory(src/vmsqueue)
 add_subdirectory(src/vmsdcl)
 
+# vmsscs - SCS Datalink daemon (SCSD, docs/design-cluster-node.md sec 3.1).
+# No dependency on the OVMX library chain above (plain POSIX AF_PACKET
+# sockets), so it builds unconditionally like known_images.
+add_subdirectory(src/vmsscs)
+
 if(BUILD_TESTS)
     add_subdirectory(tests/libvms)
     add_subdirectory(tests/vmsprocess)
@@ -161,6 +166,7 @@ if(BUILD_TESTS)
     add_subdirectory(tests/vmsrms)
     add_subdirectory(tests/vmsqueue)
     add_subdirectory(tests/dcl)
+    add_subdirectory(tests/vmsscs)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

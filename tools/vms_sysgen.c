@@ -36,53 +36,82 @@
 
 static const struct sysgen_param default_params[] = {
     {"MAXPROCESSCNT",   64,      64,      4,       1024,     0,
-     "Maximum number of concurrent processes"},
+     "Maximum number of concurrent processes", SYSGEN_TYPE_NUMERIC, "", ""},
     {"CHANNELCNT",      16,      16,      4,       256,      SYSGEN_F_DYNAMIC,
-     "Number of I/O channels per process"},
+     "Number of I/O channels per process", SYSGEN_TYPE_NUMERIC, "", ""},
     {"DEFPRI",          4,       4,       0,       31,       SYSGEN_F_DYNAMIC,
-     "Default process priority"},
+     "Default process priority", SYSGEN_TYPE_NUMERIC, "", ""},
     {"MAXPRI",          31,      31,      0,       31,       0,
-     "Maximum process priority"},
+     "Maximum process priority", SYSGEN_TYPE_NUMERIC, "", ""},
     {"MAXBUF",          8192,    8192,    512,     65536,    SYSGEN_F_DYNAMIC,
-     "Maximum buffered I/O byte count"},
+     "Maximum buffered I/O byte count", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DWSDEFAULT",  256,     256,     64,      65536,    SYSGEN_F_DYNAMIC,
-     "Default working set size"},
+     "Default working set size", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DWSQUOTA",    512,     512,     64,      65536,    SYSGEN_F_DYNAMIC,
-     "Working set quota"},
+     "Working set quota", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DWSEXTENT",   2048,    2048,    64,      262144,   SYSGEN_F_DYNAMIC,
-     "Working set extent"},
+     "Working set extent", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DENQLM",      200,     200,     4,       32767,    SYSGEN_F_DYNAMIC,
-     "Default enqueue limit"},
+     "Default enqueue limit", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DFILLM",      100,     100,     4,       8192,     SYSGEN_F_DYNAMIC,
-     "Default open file limit"},
+     "Default open file limit", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DTQELM",      20,      20,      1,       1024,     SYSGEN_F_DYNAMIC,
-     "Default timer queue entry limit"},
+     "Default timer queue entry limit", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DBIOLM",      40,      40,      4,       4096,     SYSGEN_F_DYNAMIC,
-     "Default buffered I/O limit"},
+     "Default buffered I/O limit", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DDIOLM",      40,      40,      4,       4096,     SYSGEN_F_DYNAMIC,
-     "Default direct I/O limit"},
+     "Default direct I/O limit", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DBYTLM",      65536,   65536,   1024,    16777216, SYSGEN_F_DYNAMIC,
-     "Default buffered I/O byte limit"},
+     "Default buffered I/O byte limit", SYSGEN_TYPE_NUMERIC, "", ""},
     {"PQL_DPGFLQUOTA",  50000,   50000,   1024,    4194304,  SYSGEN_F_DYNAMIC,
-     "Default page file quota"},
+     "Default page file quota", SYSGEN_TYPE_NUMERIC, "", ""},
     {"VIRTUALPAGECNT",  1048576, 1048576, 1024,    67108864, 0,
-     "Virtual page count"},
+     "Virtual page count", SYSGEN_TYPE_NUMERIC, "", ""},
     {"GBLPAGES",        8192,    8192,    256,     4194304,  SYSGEN_F_DYNAMIC,
-     "Global pages"},
+     "Global pages", SYSGEN_TYPE_NUMERIC, "", ""},
     {"GBLSECTIONS",     256,     256,     16,      4096,     SYSGEN_F_DYNAMIC,
-     "Global sections"},
+     "Global sections", SYSGEN_TYPE_NUMERIC, "", ""},
     {"LNMPHASHTBL",     128,     128,     16,      8192,     SYSGEN_F_DYNAMIC,
-     "Logical name hash table size"},
+     "Logical name hash table size", SYSGEN_TYPE_NUMERIC, "", ""},
     {"ACP_MAPCACHE",    32,      32,      4,       256,      SYSGEN_F_DYNAMIC,
-     "ACP map cache size"},
+     "ACP map cache size", SYSGEN_TYPE_NUMERIC, "", ""},
     {"BALSETCNT",       16,      16,      4,       256,      0,
-     "Maximum number of processes in balance set"},
+     "Maximum number of processes in balance set", SYSGEN_TYPE_NUMERIC, "", ""},
     {"IRPCOUNT",        256,     256,     32,      4096,     0,
-     "Number of I/O request packets"},
+     "Number of I/O request packets", SYSGEN_TYPE_NUMERIC, "", ""},
     {"SRPCOUNT",        256,     256,     32,      4096,     0,
-     "Number of small request packets"},
+     "Number of small request packets", SYSGEN_TYPE_NUMERIC, "", ""},
     {"LRPCOUNT",        32,      32,      4,       512,      0,
-     "Number of large request packets"},
+     "Number of large request packets", SYSGEN_TYPE_NUMERIC, "", ""},
+
+    /* --- vms-ci.8: cluster node-identity parameters ---
+     * OVMX-defined defaults (NOT VMS-authentic values) — see item vms-ci.8.
+     * SCSSYSTEMID/ALLOCLASS/VOTES/EXPECTED_VOTES/VAXCLUSTER mirror the real
+     * VMS SYSGEN parameter names; SCSNODE is the only string-typed param. */
+    { .name = "SCSSYSTEMID", .current = 0, .default_val = 0,
+      .min_val = 0, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Cluster system ID (OVMX default 0)",
+      .type = SYSGEN_TYPE_NUMERIC },
+    { .name = "ALLOCLASS", .current = 0, .default_val = 0,
+      .min_val = 0, .max_val = 255, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Allocation class for shared cluster devices",
+      .type = SYSGEN_TYPE_NUMERIC },
+    { .name = "VOTES", .current = 1, .default_val = 1,
+      .min_val = 0, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Cluster quorum votes contributed by this node",
+      .type = SYSGEN_TYPE_NUMERIC },
+    { .name = "EXPECTED_VOTES", .current = 1, .default_val = 1,
+      .min_val = 1, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Expected total cluster quorum votes",
+      .type = SYSGEN_TYPE_NUMERIC },
+    { .name = "VAXCLUSTER", .current = 0, .default_val = 0,
+      .min_val = 0, .max_val = 2, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Cluster participation (0=disabled,1=enabled,2=auto)",
+      .type = SYSGEN_TYPE_NUMERIC },
+    { .name = "SCSNODE", .flags = SYSGEN_F_DYNAMIC,
+      .description = "Cluster node name (SCS system name, max 6 chars)",
+      .type = SYSGEN_TYPE_STRING,
+      .str_current = "OVMX", .str_default = "OVMX" },
 };
 
 #define DEFAULT_PARAM_COUNT \
@@ -254,8 +283,13 @@ static void show_header(void)
 
 static void show_param(const struct sysgen_param *p)
 {
-    printf("  %-32s %10u %10u %10u %10u",
-           p->name, p->current, p->default_val, p->min_val, p->max_val);
+    if (p->type == SYSGEN_TYPE_STRING) {
+        printf("  %-32s %10s %10s %10s %10s",
+               p->name, p->str_current, p->str_default, "-", "-");
+    } else {
+        printf("  %-32s %10u %10u %10u %10u",
+               p->name, p->current, p->default_val, p->min_val, p->max_val);
+    }
     if (p->flags & SYSGEN_F_DYNAMIC)
         printf("  D");
     printf("\n");
@@ -359,16 +393,6 @@ static void cmd_set(const char *arg)
         return;
     }
 
-    /* Parse numeric value */
-    char *endptr;
-    unsigned long val = strtoul(value_str, &endptr, 0);
-    if (*endptr != '\0') {
-        fprintf(stderr,
-                "%%SYSGEN-E-IVVAL, \"%s\" is not a valid numeric value\n",
-                value_str);
-        return;
-    }
-
     /* Find parameter (case-insensitive) */
     struct sysgen_param *found = NULL;
     for (uint32_t i = 0; i < working_set.count; i++) {
@@ -388,6 +412,32 @@ static void cmd_set(const char *arg)
         fprintf(stderr,
                 "%%SYSGEN-E-RDONLY, parameter %s is informational (read-only)\n",
                 found->name);
+        return;
+    }
+
+    if (found->type == SYSGEN_TYPE_STRING) {
+        char newval[SYSGEN_STRVAL_LEN];
+        strncpy(newval, value_str, sizeof(newval) - 1);
+        newval[sizeof(newval) - 1] = '\0';
+        str_upper(newval);
+
+        char oldval[SYSGEN_STRVAL_LEN];
+        memcpy(oldval, found->str_current, sizeof(oldval));
+        memcpy(found->str_current, newval, sizeof(found->str_current));
+        working_set_modified = 1;
+
+        printf("%%SYSGEN-I-SETPARAM, %s changed from %s to %s\n",
+               found->name, oldval, found->str_current);
+        return;
+    }
+
+    /* Parse numeric value */
+    char *endptr;
+    unsigned long val = strtoul(value_str, &endptr, 0);
+    if (*endptr != '\0') {
+        fprintf(stderr,
+                "%%SYSGEN-E-IVVAL, \"%s\" is not a valid numeric value\n",
+                value_str);
         return;
     }
 

@@ -58,3 +58,8 @@ libvms_add_test(test_libvms_lib_fb3
 # Test 9: vms-846.1 — binary SYSUAF record layout + RMS primary-key XABKEY
 libvms_add_test(test_libvms_sysuaf_record
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_record.c)
+
+# Test 10: vms-ci.8 — node identity + cluster SYSGEN params (SCSNODE/
+# SCSSYSTEMID round-trip through the typed SYSGEN store, sys$getsyi)
+libvms_add_test(test_libvms_sysgen_identity
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysgen_identity.c)

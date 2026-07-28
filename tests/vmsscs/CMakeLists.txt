@@ -73,3 +73,19 @@ set_tests_properties(vmsscs_vc_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-246 - SCS$DIRECTORY connect + SCS$DIR_LOOKUP responder: CONNECT-RESPONSE
+# Con.ID binding + lookup-response builder ("NOT PRESENT HERE" / affirmative).
+add_executable(test_scs_dir test_scs_dir.c)
+
+target_include_directories(test_scs_dir PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_dir PRIVATE vmsscs_dir)
+
+add_test(NAME vmsscs_dir_unit COMMAND test_scs_dir)
+set_tests_properties(vmsscs_dir_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

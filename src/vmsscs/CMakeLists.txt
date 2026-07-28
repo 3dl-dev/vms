@@ -55,12 +55,23 @@ target_include_directories(vmsscs_dir PUBLIC
 )
 target_link_libraries(vmsscs_dir PUBLIC vmsscs_connect)
 
+# vms-224 - VMS$VAXcluster connection-manager add-member transaction on the
+# 190-byte VC (spec sec 4j): builds the op 0x14/0x01/0x02 config frames the
+# joiner sends + the 0x81 responses to the member-driven 0x03/0x05 commit/
+# lock-rebuild transactions. This is what promotes OVMX to a full cluster
+# MEMBER (a CSB in SDA SHOW CLUSTER). Depends on nothing else in vmsscs
+# (plain POSIX + stdint template builders).
+add_library(vmsscs_member STATIC scs_member.c)
+target_include_directories(vmsscs_member PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

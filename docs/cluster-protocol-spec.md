@@ -50,11 +50,11 @@ payload begins at offset 14 (after the 14-byte Ethernet header).
 | pcap | Frames (0x6007) | Used for |
 |---|---|---|
 | `scs-idle-baseline.pcap` | 36 | §4(b) HELLO baseline, §4(d) SCS envelope baseline |
-| `formation-ci1-joinwindow.pcap` | 2992 | §4(c) connect/directory-lookup phase, §4(g) membership handshake |
+| `formation-ci1-joinwindow.pcap` | 2992 | §4(c) connect/directory-lookup phase, §4(g) membership handshake, §4(h) SCS$DIRECTORY connect + 0x5b/0x48 bodies (vms-560) |
 | `ci3-join-membership-live2node-20260728.pcap` | 58 | §4(g) join-nonce cross-boot stability (vms-b6c) |
 | `cd0-bootB-zk1099-join-20260728.pcap` | 18297 | §4(g) phase-2 START/config body grounding — joiner reconfigured to SCSNODE `"ZK"`/SCSSYSTEMID 1099/VOTES 0 (vms-cd0) |
 | `cd0-bootC-zk1099-votes2-20260728.pcap` | ~18k | §4(g) vote-varying diff — same node, VOTES 2 (vms-cd0) |
-| `formation-ci1.pcap` | 18541 | §1 message-class census (Table 2), §4(e) MSCP, large block-transfer frames |
+| `formation-ci1.pcap` | 18541 | §1 message-class census (Table 2), §4(e) MSCP, large block-transfer frames, §4(h) 0x5b/0x48 scale re-validation (605/622 frames, vms-560) |
 | `scs-dlm-lockconflict.pcap` | 100 | §4(f) DLM section |
 | `scs-node-leave.pcap` | 2901 | cross-check only (teardown, not separately decoded here) |
 | `satellite-niscs-boot-solicit.pcap` | 231 | §4(c) SOLICIT |
@@ -241,10 +241,12 @@ observation, e.g.:
 - frame 58 (110 bytes): body contains `"MSCP$DISK"` and
   `"VMS$DISK_CL_DRVR5.0"` (5.0 looks like a class-driver version string)
 
-The exact opcode/field layout of this lookup exchange (offsets [30:*]) is
-**not grounded** — only the presence and content of the ASCII SYSAP names
-is. Byte-level request/response framing here is left `unknown` in the
-dissector.
+The exact opcode/field layout of this lookup exchange was originally left
+`unknown` here; it is **now grounded in §4(h)** (`vms-560`): the `0x5b`
+directory frames carry a `SCS$DIRECTORY` SYSAP connect handshake (handle pair
+at [50:58], same offsets as §4g phase 4) followed by a name-resolution body
+whose 16-byte result field carries the literal `"NOT PRESENT HERE"` on a
+negative lookup, and each is credit-acked by a `0x48` short (§4h).
 
 ### 4(d) SCS message header (the 190-byte fixed class)
 
@@ -571,6 +573,149 @@ algorithm. **Recommended follow-up:** locate the hash construction in public
 OpenVMS security/cluster documentation (not on the wire); until then, treat
 nonce handling as *observe-and-replay for a known cluster only*.
 
+### 4(h) SCS$DIRECTORY connect + directory-lookup (0x5b) + credit-return (0x48)
+
+This subsection grounds the frame BODIES the joiner runs *between* the phase-2
+0x41 START (§4g phase 2) and the phase-4 0x4b `VMS$VAXcluster` connect (§4g
+phase 4): the SCS$DIRECTORY SYSAP connection + name-resolution exchange (opcode
+`0x5b`, `0x7b` is its retransmit) and the per-message credit-return short
+(opcode `0x48`). Captured for `vms-560`. **Specimen:**
+`formation-ci1-joinwindow.pcap`, the golden VAX2-joins-VAX1 handshake — the
+directory phase is SCA frames 21–31 (raw `--frame` 29–39, per the §4g +8 raw
+offset) interleaved with the credit shorts 22–32, and every structural claim
+was re-validated byte-for-byte on the independent full run `formation-ci1.pcap`
+(different session; 605 `0x5b` frames + 622 `0x48` frames). All offsets are
+**payload-relative** (payload byte 0 = abs frame offset 14; add 14 for
+absolute).
+
+**The SCS envelope is one shape.** `0x5b` and `0x48` reuse the same
+[0:18] envelope as §4d/§4g — length [0:2], dst-logical [2:8], connect-flag
+`0x0001` [8:10], src-logical [10:16], opcode [16], format constant `0x13` [17]
+(GROUNDED 605/605 for `0x5b`, 622/622 for `0x48` in the full run, 0 residuals) —
+and the same SCS sequenced-message counter region beginning at [18].
+
+**(1) The `0x5b` connection-handle pair is at [50:58] — the SAME offsets as
+§4g phase-4 and §4d.** The directory exchange opens with a full SYSAP
+connect handshake for `SCS$DIRECTORY`, structurally identical to the
+`VMS$VAXcluster` connect: a remote/local connection-handle pair sits at
+**remote [50:54], local [54:58]** (LE `uint32`), and it fills by the same
+`remote = 0 → learned` admission act (spec §4g phase 4). Directly observed
+sequence:
+
+| SCA | Dir | remote [50:54] | local [54:58] | Reading |
+|---|---|---|---|---|
+| 21 | V1→V2 | `0x00000000` | `0x63050008` | CONNECT-REQUEST: VAX1 offers its `SCS$DIRECTORY` handle, remote still zero |
+| 23 | V2→V1 | `0x63050008` | `0x00000000` | VAX2 echoes VAX1's handle, its own not yet assigned |
+| 25 | V2→V1 | `0x63050008` | `0x33590007` | CONNECT-RESPONSE: VAX2 supplies its own handle — pair now bound |
+| 27 | V1→V2 | `0x33590007` | `0x63050008` | both endpoints carry the bound pair (swapped by direction) thereafter |
+
+**GROUNDED (mechanism + offsets):** the handle location [50:58] and the
+`remote = 0 → filled → swaps-with-direction` binding reproduce §4g phase-4
+byte-for-byte. The specific values `0x63050008` (VAX1) / `0x33590007` (VAX2) are
+**not** in the §3 decoder ring because that ring is an *idle-state* SDA snapshot
+that only lists `SCS$DIRECTORY` in its **listen** CDT (`62C50000`); a formed
+`SCS$DIRECTORY` connection allocates a new open Con.ID exactly as
+`VMS$VAXcluster` listen `62C50003` becomes connected `62C50009` (§3). So the
+handle *identity* is **inferred** (the dynamically-allocated `SCS$DIRECTORY`
+CDT Con.IDs), the handle *binding* is **GROUNDED**.
+
+**(2) SCS$DIR_LOOKUP body — name resolution with a grounded negative marker.**
+Past the handle pair the body carries fixed-position, blank-padded ASCII SYSAP
+name fields beginning at [62]. Two observed shapes, selected by a
+directory-operation field at **[46:48]** (a per-dialogue message counter:
+`0,1,2,3` across the connect handshake frames 21–27, then `10` for the
+`MSCP$TAPE` lookup 29/31 — its exact role is **inferred**; a companion
+flag/status word sits at [48:50]):
+
+- **connect frame** (SCA 21): target SYSAP `"SCS$DIRECTORY   "` (16-byte field
+  [62:78]) + operation `"SCS$DIR_LOOKUP"` (blank-padded, [78:]).
+- **lookup req/resp** (SCA 29/31): queried name `"MSCP$TAPE       "` (16-byte
+  [62:78]) + a 16-byte **result field [78:94]**: all-zero in the request, and
+  the literal ASCII **`"NOT PRESENT HERE"`** in the negative response.
+
+**GROUNDED (directly observed ASCII):** the queried SYSAP name and, decisively,
+the `"NOT PRESENT HERE"` result string that signals a negative resolution — the
+same string §4c reported but now pinned to the [78:94] result field. The exact
+byte width of each name field varies by operation (the operation name in the
+connect frame runs longer than 16 bytes), so field *widths* are reported
+as-observed, not asserted as a fixed schema; the *presence, position, and
+negative-marker semantics* are grounded.
+
+**(3) `0x48` credit-return short — the 41-byte body.** Every credit-return is a
+fixed 41-byte SCA frame (Ethernet-padded to 60). Its distinguishing feature vs.
+a sequenced message: **[20:22] (send-seq) is 0** — a credit-return carries no
+new sequence number of its own; it purely acknowledges. The acknowledged
+sequence number (the sender's `recv_seq` = the peer's last `send_seq`) is
+carried at **[18:20] and doubled at [26:28]** (GROUNDED: `[18:20] == [26:28]`,
+**622/622** frames, 0 residuals), with a third repeat usually at [34:36]
+(**616/622** — the §4d "up to 3× repeat" pattern; the 6 exceptions are
+steady-state shorts on the established VC where [34:36] reads 0). Field map of
+the clean archetype (SCA 26, an idle-directory credit-ack):
+
+| Pay off | Size | Field | Grounding |
+|---|---|---|---|
+| 16 | 1 | opcode `0x48` | §4g partition (inferred label) |
+| 17 | 1 | format constant `0x13` | GROUNDED (622/622) |
+| 18 | 2 | **acknowledged sequence** (= receiver's `recv_seq`) | **GROUNDED**: pairs 1:1 with the peer's just-sent `send_seq` (see lockstep below) |
+| 20 | 2 | send-seq — **`0x0000`** (credit-return emits no new seq) | **GROUNDED (622/622)** |
+| 22 | 2 | constant `0x0001` | GROUNDED (622/622) |
+| 24 | 2 | `0x0012` = 18 = SYSGEN `NISCS_LAN_OVRHD` | **GROUNDED (622/622)** |
+| 26 | 2 | acknowledged-sequence mirror (== [18:20]) | **GROUNDED (622/622)** |
+| 28 | 2 | zero | observed |
+| 30 | 2 | secondary counter (sender's own outstanding seq) | inferred — small in the connect phase, large on the steady VC; not cleanly a single function of [18:20] |
+| 32 | 2 | zero | observed |
+| 34 | 2 | acknowledged-sequence 3rd repeat | GROUNDED (616/622; §4d triple-repeat) |
+| 36 | 2 | zero | observed |
+| 38 | 2 | constant `0x0001` | inferred (598/622; not fully constant) |
+| 40 | 1 | zero pad | observed |
+
+The **credit count is not a locatable multi-value field** in the 41-byte short:
+the connection's Send/Recv credit is 10/8 (§3), but no `0x0a`/`0x08` byte tracks
+it here. The observable credit behavior is **strict 1-for-1**: every sequenced
+message is answered by exactly one `0x48` returning exactly one message's worth
+of credit, which is what drives the tight per-message lockstep below. A bulk
+credit-grant field, if one exists, is not on the wire in this class — reported
+as an RE gap.
+
+**(4) Seq/ack lockstep — grounded across the whole phase (extends §4g).** For
+every sequenced message (`0x41`/`0x5b`/`0x4b`) the sender stamps
+`send_seq` at [20:22] **mirrored byte-exact at [30:32]** (GROUNDED:
+`[20:22] == [30:32]`, **17,758/17,758** such frames in the full run, 0
+residuals) and its `recv_ack` (the peer's last `send_seq`) at [18:20]. Reading
+each frame as `(recv_ack, send_seq)`, the golden phase advances in exact
+lockstep (directly observed, SCA 33→44):
+
+```
+SCA33 V1→V2 (3,4)   SCA37 V1→V2 (5,6)   SCA41 V1→V2 (7,8)
+SCA34 V2→V1 (4,4)   SCA38 V2→V1 (6,6)   SCA42 V2→V1 (7,8)
+SCA35 V1→V2 (4,5)   SCA39 V1→V2 (6,7)   SCA43 V1→V2 (8,9)
+SCA36 V2→V1 (5,5)   SCA40 V2→V1 (7,7)   SCA44 V2→V1 (8,9)
+```
+
+This reproduces the §4g phase-4 example `(5,6)(6,7)(7,8)(8,9)` / `(6,6)(7,7)…`
+exactly and extends the grounding backward through the directory phase to the
+first sequenced message. **The rule (GROUNDED mechanism):** a node holds
+`send_seq` (its own next number) and `recv_seq` (highest peer `send_seq` seen);
+a sequenced message stamps `send_seq` (+mirror) and `recv_ack = recv_seq`, then
+increments `send_seq`; a `0x48` credit-return stamps `[18:20] = recv_seq` with
+`send_seq = 0` (no advance). A VC engine can reproduce the exchange from this
+state alone — no captured counter needs replaying. (This is exactly what the
+`vms-21e` `scs_seq_state` machine in `src/vmsscs/scs_start.c` already tracks;
+§4h grounds the `0x5b`/`0x48` classes it must also drive.) The precise
+next-seq/last-ack CSB assignment (§3 `SHOW CLUSTER` triad) remains **inferred**,
+same honesty caveat as §4d/§4g.
+
+**RE gaps left in §4h (honest):** (a) the `0x5b` directory-operation field
+[46:48] and its companion [48:50] flag — the value↔operation mapping is
+inferred, not documented; (b) the `0x48` secondary counter [30:32] and the
+early-phase shorts' non-zero residual at [30:40] (SCA 22/24 carry printable
+leftover bytes) are not grounded to a field; (c) the affirmative
+(non-`"NOT PRESENT HERE"`) lookup *result* encoding — the capture's directory
+lookups that resolve carry the resolved SYSAP name back, but no separate
+status/handle-return field was isolated; (d) the absolute `SCS$DIRECTORY`
+connection Con.IDs are inferred (dynamically-allocated, absent from the
+idle-state decoder ring).
+
 ---
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
@@ -587,17 +732,26 @@ For visibility, every field NOT marked GROUNDED above:
   Next-seq/Last-seq-rcvd/Last-ack-seq from `SHOW CLUSTER`, not confirmed),
   and the entire 132-byte SYSAP body beyond the Con.ID pair (opcode,
   lock-mode, status fields for DLM; command block for MSCP).
-- All non-190-byte SCS envelope classes (58/62/66/70/94/106/110 and the
-  206–1500-byte block-transfer classes): header layout beyond the common
-  dst/flag/src preamble is entirely unknown.
-- The directory-lookup/connect-handshake opcode fields (§4c) — **partially
-  closed by §4(g)**: the offset-16 message-type byte and offset-17 `0x13`
-  format constant are now grounded, and the `VMS$VAXcluster` connect Con.ID
-  binding (§4g phase 4) is grounded. **The phase-2 START/config body is now
-  GROUNDED** (§4g phase 2, `vms-cd0`): inner length [42:44], config-round
-  counter [44:46], SCSSYSTEMID [46:48], version/hardware/node-name ASCII fields.
-  Remaining unknown in that body: the `0x0240`/`0x00d8` pair [54:58] (constants,
-  no tunable match) and the per-boot incarnation tokens [66:71]/[98:104].
+- Non-190-byte SCS envelope classes (58/62/66/70/94/106/110 and the
+  206–1500-byte block-transfer classes): **the `0x5b` directory-lookup and
+  `0x48` credit-return classes are now GROUNDED in §4(h)** (`vms-560`) — the
+  connection-handle pair at [50:58], the inner-length [42:44], the
+  `"NOT PRESENT HERE"` result marker, the `0x48` acknowledged-sequence at
+  [18:20]/[26:28], and the seq/ack lockstep. The `0x4b` connect classes are
+  grounded in §4(g) phase 4. The 206–1500-byte block-transfer classes remain
+  unknown beyond the common dst/flag/src preamble.
+- The directory-lookup/connect-handshake opcode fields (§4c) — **now grounded
+  in §4(h)** (`vms-560`, see the bullet above): the `SCS$DIRECTORY` connect
+  handshake, the name-resolution body, and its credit-return acks. Earlier
+  partial closes retained: the offset-16 message-type byte and offset-17 `0x13`
+  format constant (§4g), the `VMS$VAXcluster` connect Con.ID binding (§4g phase
+  4). **The phase-2 START/config body is GROUNDED** (§4g phase 2, `vms-cd0`):
+  inner length [42:44], config-round counter [44:46], SCSSYSTEMID [46:48],
+  version/hardware/node-name ASCII fields. Remaining unknown in that body: the
+  `0x0240`/`0x00d8` pair [54:58] (constants, no tunable match) and the per-boot
+  incarnation tokens [66:71]/[98:104]. Remaining unknown in §4h: the `0x5b`
+  directory-operation field [46:48], the `0x48` secondary counter [30:32], and
+  the affirmative-lookup result encoding.
 - **Vote/quorum membership fields** (§4g): **RESOLVED as a grounded negative**
   (`vms-cd0`, subsumes `vms-41d`) — a vote-varying capture (VOTES 0 vs 2 on the
   same reconfigured joiner) proves votes/quorum is **not** carried in the

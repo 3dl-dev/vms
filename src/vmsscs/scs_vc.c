@@ -66,6 +66,22 @@ void scs_vc_init(struct scs_vc *vc)
     vc->initialized = 1;
 }
 
+void scs_vc_reset_seq(struct scs_vc *vc)
+{
+    if (vc == NULL) {
+        return;
+    }
+    /* send_seq=1, recv_seq=0 -- the fresh post-START VC starting point
+     * (spec sec 4i.A). The phase-2 START/config counters do NOT carry into
+     * the SCS VC. */
+    scs_seq_init(&vc->seq);
+    vc->have_unacked = 0;
+    vc->unacked_seq = 0;
+    vc->unacked_sent_ms = 0;
+    vc->retransmit_count = 0;
+    vc->initialized = 1;
+}
+
 void scs_vc_note_recv(struct scs_vc *vc, uint16_t peer_send_seq)
 {
     if (vc == NULL) {

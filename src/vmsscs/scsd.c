@@ -42,6 +42,7 @@
 #include "cluster_authorize.h"
 #include "scs_classify.h"
 #include "scs_connect.h"
+#include "scs_dir.h"
 #include "scs_hello.h"
 #include "scs_start.h"
 #include "scs_vc.h"
@@ -206,6 +207,11 @@ struct peer_state {
     int      start_acked;          /* we sent the round-2 46-byte ack -> START complete */
     long     start_replies;        /* count of 0x41 frames we sent to this peer */
     long     credit_sent;          /* vms-691: 0x48 credit-returns we sent this peer */
+    /* --- vms-246: SCS$DIRECTORY / SCS$DIR_LOOKUP responder state --- */
+    int      dir_seen;             /* the peer has begun the directory exchange with us */
+    int      dir_connected;        /* SCS$DIRECTORY Con.ID pair bound (we sent CONNECT-RESPONSE) */
+    uint32_t dir_remote_conid;     /* the peer's SCS$DIRECTORY handle (learned from its request) */
+    long     dir_lookups_answered; /* SCS$DIR_LOOKUP responses we sent this peer */
 };
 
 static int mac_eq(const uint8_t *a, const uint8_t *b)
@@ -350,6 +356,8 @@ int main(int argc, char **argv)
     long start_ack_sent = 0;
     long credit_sent = 0;        /* vms-691: total 0x48 credit-returns sent */
     long retransmit_sent = 0;    /* vms-691: connect-request retransmits sent */
+    long dir_conn_resp_sent = 0; /* vms-246: SCS$DIRECTORY CONNECT-RESPONSEs sent */
+    long dir_lookup_sent = 0;    /* vms-246: SCS$DIR_LOOKUP responses sent */
 
     /* OVMX identity for the phase-2 START/config body (vms-21e). Resolved once;
      * shared by every peer's START responder. */
@@ -545,8 +553,8 @@ int main(int argc, char **argv)
          * `continue`: 0x4b/190 frames still fall through to branch (c) for
          * Con.ID binding. */
         if (do_connect && n >= 36 && buf[31] == SCS_FORMAT_CONST &&
-            (buf[30] == SCS_MSGTYPE_DIRLOOKUP || buf[30] == SCS_MSGTYPE_SEQAPP ||
-             cls == SCS_CLASS_SCS_FIXED)) {
+            (buf[30] == SCS_MSGTYPE_DIRLOOKUP || buf[30] == SCS_DIR_OPCODE_RETX ||
+             buf[30] == SCS_MSGTYPE_SEQAPP || cls == SCS_CLASS_SCS_FIXED)) {
             uint16_t peer_send_seq = (uint16_t)(buf[34] | ((uint16_t)buf[35] << 8)); /* [20:22] */
             uint16_t peer_recv_ack = (uint16_t)(buf[32] | ((uint16_t)buf[33] << 8)); /* [18:20] */
             struct peer_state *ps = peer_find_or_add(peers, src_mac);
@@ -650,7 +658,15 @@ int main(int argc, char **argv)
              * (ps->start_acked) and the peer has not already bound it. Firing a
              * CONNECT-REQUEST before START (the old vms-5fe behavior) put a
              * premature 0x4b on the wire that the VAX ignored. */
-            if (do_connect && ps->start_acked && !ps->connect_sent && !ps->connected) {
+            /* vms-246: once the peer begins the SCS$DIRECTORY exchange (dir_seen),
+             * OVMX is a pure joiner-responder: the ESTABLISHED node drives the
+             * VMS$VAXcluster 0x4b connect (spec sec 4g phase-4 is VAX1->VAX2), so
+             * OVMX must NOT self-initiate a competing CONNECT-REQUEST here --
+             * doing so would put a second sequenced message on the VC and desync
+             * OVMX's send_seq against the directory responses. Completing the
+             * VAX-initiated 0x4b connect is item vms-c6d. */
+            if (do_connect && ps->start_acked && !ps->dir_seen &&
+                !ps->connect_sent && !ps->connected) {
                 struct scs_connect_params cp;
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
@@ -693,7 +709,14 @@ int main(int argc, char **argv)
             if (!ps->vc.initialized) {
                 scs_vc_init(&ps->vc);
             }
-            scs_vc_note_recv(&ps->vc, sv.send_seq);
+            /* vms-246: the 0x41 START handshake is driven by the config-round
+             * (spec sec 4g/4i.A), NOT by the SCS VC sequence space. Do NOT fold
+             * the member's START send_seq into the VC recv_seq -- the member's
+             * round-0 START may carry a large residual send_seq (sec 4i.A) and
+             * the post-START VC resets to send_seq=1/recv_seq=0 on BOTH sides.
+             * Feeding START counters into the VC left OVMX acking a sequence the
+             * VAX never sent post-reset, so the VAX rejected OVMX's directory
+             * CONNECT-RESPONSE and retransmitted its 0x5b/0x7b request forever. */
             memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* START src-logical, abs 24 */
 
             log_ts(stdout);
@@ -753,16 +776,137 @@ int main(int argc, char **argv)
                         send_frame_to(sock, (int)ifindex, ps->eth_mac, aframe, sizeof(aframe)) > 0) {
                         start_ack_sent++;
                         ps->start_acked = 1;
+                        /* vms-246 FIX: the START->VC transition. Per spec sec
+                         * 4i.A the phase-2 0x41 config-round counters are
+                         * SEPARATE from the SCS VC; both sides reset the VC to
+                         * send_seq=1/recv_seq=0 when START completes. Do it
+                         * ONCE here (guarded by !start_acked) -- NOT per frame.
+                         * Without it, recv_seq accumulated across formation, so
+                         * OVMX's 0x5b CONNECT-RESPONSE carried recv_ack too high
+                         * (observed 4 vs the golden joiner's 1) and the VAX
+                         * rejected the SCS$DIRECTORY connect and retransmitted. */
+                        scs_vc_reset_seq(&ps->vc);
                         log_ts(stdout);
                         printf(" SCSD-I-STARTDONE, START/config complete with peer"
-                               " %02x:%02x:%02x:%02x:%02x:%02x -- awaiting 0x4b connect\n",
+                               " %02x:%02x:%02x:%02x:%02x:%02x -- VC reset"
+                               " (send_seq=%u recv_seq=%u), awaiting 0x4b connect\n",
                                ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
-                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5]);
+                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
+                               ps->vc.seq.send_seq, ps->vc.seq.recv_seq);
                         fflush(stdout);
                     }
                 }
             }
             continue;
+        }
+
+        /* (b2) vms-246: SCS$DIRECTORY connect + SCS$DIR_LOOKUP responder. After
+         * START, the ESTABLISHED node opens an SCS$DIRECTORY SCS connection to
+         * the joiner (OVMX) and queries OVMX's directory for each SYSAP it wants
+         * to reach. OVMX must (1) bind the SCS$DIRECTORY Con.ID pair by answering
+         * the CONNECT-REQUEST with a CONNECT-RESPONSE, and (2) answer each lookup
+         * (affirm VMS$VAXcluster -- the connection manager OVMX serves --, and
+         * "NOT PRESENT HERE" for SYSAPs it does not) so the VAX resolves OVMX and
+         * proceeds to send the VMS$VAXcluster 0x4b CONNECT-REQUEST (spec sec 4h;
+         * next item vms-c6d). Only sequenced directory frames (0x5b/0x7b, and the
+         * 0x4b form the lookups switch to once the connection is up) reach here;
+         * the credit-ack block above already 0x48-acked them. */
+        if (do_connect &&
+            (buf[30] == SCS_DIR_OPCODE || buf[30] == SCS_DIR_OPCODE_RETX ||
+             buf[30] == SCS_MSGTYPE_SEQAPP)) {
+            struct scs_dir_view dv;
+            if (scs_dir_parse(buf, (size_t)n, &dv) == 0 &&
+                (dv.is_dir_connect_request || dv.is_lookup_request)) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps == NULL) {
+                    continue;
+                }
+                if (!ps->vc.initialized) {
+                    scs_vc_init(&ps->vc);
+                }
+                ps->dir_seen = 1;
+                memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* src-logical, abs 24 */
+                /* Ensure recv_ack is current even if the credit block did not run
+                 * (e.g. a 0x7b retransmit); note_recv only advances the high-water. */
+                scs_vc_note_recv(&ps->vc, dv.send_seq);
+
+                if (dv.is_dir_connect_request && !ps->dir_connected) {
+                    /* Learn the peer's SCS$DIRECTORY handle (its local Con.ID),
+                     * then reply op=1 CONNECT-ECHO + op=2 CONNECT-RESPONSE. Each
+                     * is a sequenced message: advance OVMX's send_seq per frame
+                     * (spec sec 4h(4)). */
+                    ps->dir_remote_conid = dv.local_conid;
+                    struct scs_dir_params dp;
+                    memset(&dp, 0, sizeof(dp));
+                    memcpy(dp.dst_mac, ps->eth_mac, 6);
+                    memcpy(dp.src_mac, our_hw_mac, 6);
+                    memcpy(dp.peer_logical, ps->logical, 6);
+                    dp.remote_conid = ps->dir_remote_conid;
+                    dp.local_conid = SCS_DIR_OVMX_CONID;
+                    /* vms-246 (§4i established-join): echo the member's current
+                     * node-incarnation into the directory [22:24], the same
+                     * value it stamps in its own 0x5b connect-request and its
+                     * 0x41 START (§4i.B). Read off the wire (ps->incarnation);
+                     * 0 leaves the fresh template value 1. */
+                    dp.incarnation = ps->incarnation;
+
+                    dp.recv_ack = ps->vc.seq.recv_seq;
+                    dp.send_seq = scs_seq_advance(&ps->vc.seq);
+                    uint8_t eframe[SCS_DIR_ECHO_FRAME_LEN];
+                    if (scs_dir_build_connect_echo(&dp, eframe) == 0) {
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, eframe, sizeof(eframe));
+                    }
+
+                    dp.recv_ack = ps->vc.seq.recv_seq;
+                    dp.send_seq = scs_seq_advance(&ps->vc.seq);
+                    uint8_t rframe[SCS_DIR_RESP_FRAME_LEN];
+                    if (scs_dir_build_connect_response(&dp, rframe) == 0 &&
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe,
+                                      sizeof(rframe)) > 0) {
+                        ps->dir_connected = 1;
+                        dir_conn_resp_sent++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-DIRCONN, bound SCS$DIRECTORY: remote=0x%08X"
+                               " local=0x%08X with peer %02x:%02x:%02x:%02x:%02x:%02x\n",
+                               ps->dir_remote_conid, (unsigned)SCS_DIR_OVMX_CONID,
+                               ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
+                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5]);
+                        fflush(stdout);
+                    }
+                } else if (dv.is_lookup_request) {
+                    /* Answer the SYSAP-name lookup. OVMX serves ONLY the
+                     * VMS$VAXcluster connection manager; affirm it, refuse the
+                     * rest with the GROUNDED "NOT PRESENT HERE" marker. */
+                    struct scs_dir_lookup_params lp;
+                    memset(&lp, 0, sizeof(lp));
+                    memcpy(lp.dst_mac, ps->eth_mac, 6);
+                    memcpy(lp.src_mac, our_hw_mac, 6);
+                    memcpy(lp.peer_logical, ps->logical, 6);
+                    lp.remote_conid = ps->dir_remote_conid ? ps->dir_remote_conid
+                                                           : dv.local_conid;
+                    lp.local_conid = SCS_DIR_OVMX_CONID;
+                    lp.recv_ack = ps->vc.seq.recv_seq;
+                    lp.send_seq = scs_seq_advance(&ps->vc.seq);
+                    lp.incarnation = ps->incarnation; /* §4i established-join echo (see connect branch) */
+                    lp.opcode = dv.opcode; /* echo the request opcode (0x5b/0x4b) */
+                    lp.op = dv.op;
+                    memcpy(lp.name, dv.name, SCS_DIR_NAME_LEN);
+                    lp.affirmative = (memcmp(dv.name, "VMS$VAXcluster", 14) == 0);
+                    uint8_t lframe[SCS_DIR_LOOKUP_FRAME_LEN];
+                    if (scs_dir_build_lookup_response(&lp, lframe) == 0 &&
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, lframe,
+                                      sizeof(lframe)) > 0) {
+                        ps->dir_lookups_answered++;
+                        dir_lookup_sent++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-DIRLOOKUP, resolved '%s' -> %s (op=0x%02x)\n",
+                               dv.name, lp.affirmative ? "AFFIRMATIVE" : "NOT PRESENT HERE",
+                               dv.opcode);
+                        fflush(stdout);
+                    }
+                }
+                continue;
+            }
         }
 
         /* (c) SCS envelope directed to us -> inspect; complete the connect. */
@@ -832,19 +976,23 @@ int main(int argc, char **argv)
                 " CONNECT-REQ-SENT=%ld CONNECT-RESP-SENT=%ld CREDIT-SENT=%ld RETX-SENT=%ld\n",
                 directed_sent, start_sent, start_ack_sent, connect_req_sent, connect_resp_sent,
                 credit_sent, retransmit_sent);
+        fprintf(stderr, "  DIR-CONNECT-RESP-SENT=%ld DIR-LOOKUP-RESP-SENT=%ld\n",
+                dir_conn_resp_sent, dir_lookup_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (!peers[i].in_use) {
                 continue;
             }
             fprintf(stderr,
                     "  PEER %02x:%02x:%02x:%02x:%02x:%02x channel=%s directed_replies=%ld"
-                    " incarnation=%u start_replied=%d start_acked=%d connect_sent=%d connected=%s"
+                    " incarnation=%u start_replied=%d start_acked=%d dir_connected=%s"
+                    " dir_lookups=%ld connect_sent=%d connected=%s"
                     " credit_sent=%ld retx=%u remote_conid=0x%08X\n",
                     peers[i].eth_mac[0], peers[i].eth_mac[1], peers[i].eth_mac[2],
                     peers[i].eth_mac[3], peers[i].eth_mac[4], peers[i].eth_mac[5],
                     peers[i].channel_up ? "UP" : "down", peers[i].directed_replies,
                     peers[i].incarnation,
                     peers[i].start_replied, peers[i].start_acked,
+                    peers[i].dir_connected ? "YES" : "no", peers[i].dir_lookups_answered,
                     peers[i].connect_sent, peers[i].connected ? "YES" : "no",
                     peers[i].credit_sent, peers[i].vc.retransmit_count,
                     peers[i].remote_conid);

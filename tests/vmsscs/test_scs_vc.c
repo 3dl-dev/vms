@@ -200,6 +200,52 @@ static void test_retransmit_trigger(void)
     scs_vc_mark_retransmitted(NULL, 1);
 }
 
+static void test_vc_reset_at_start_completion(void)
+{
+    printf("[VC reset at START completion (vms-246, spec sec 4i.A)]\n");
+    struct scs_vc vc;
+    scs_vc_init(&vc);
+
+    /* Simulate the formation phase polluting the VC: several peer sequenced
+     * messages advance recv_seq, OVMX advances its own send_seq, and it has an
+     * outstanding-unacked message pending retransmit. This is the state that
+     * left OVMX's 0x5b CONNECT-RESPONSE carrying recv_ack=4 vs the golden
+     * joiner's 1. */
+    scs_vc_note_recv(&vc, 4);
+    (void)scs_seq_advance(&vc.seq);   /* send_seq 1 -> 2 */
+    (void)scs_seq_advance(&vc.seq);   /* send_seq 2 -> 3 */
+    scs_vc_record_sent(&vc, 3, 1000);
+    check(vc.seq.recv_seq == 4 && vc.seq.send_seq == 3 && vc.have_unacked == 1,
+          "pre-reset: recv_seq=4 send_seq=3 with an outstanding message (polluted)");
+
+    /* THE FIX: at STARTDONE the SCS VC resets, INDEPENDENT of the START/config
+     * counters -- send_seq back to 1, recv_seq back to 0, outstanding cleared. */
+    scs_vc_reset_seq(&vc);
+    check(vc.seq.send_seq == 1, "reset: send_seq == 1 (fresh post-START VC)");
+    check(vc.seq.recv_seq == 0, "reset: recv_seq == 0 (formation-phase seq does NOT carry in)");
+    check(vc.have_unacked == 0 && vc.retransmit_count == 0,
+          "reset: outstanding retransmit state cleared");
+    check(vc.initialized == 1, "reset: VC stays initialized");
+
+    /* After reset, the first directory CONNECT-REQUEST (send_seq=1) brings
+     * recv_seq to 1, so OVMX's CONNECT-RESPONSE now acks recv_ack=1 (golden). */
+    scs_vc_note_recv(&vc, 1);
+    check(vc.seq.recv_seq == 1,
+          "post-reset: first directory request (send_seq=1) -> recv_seq=1 (recv_ack now 1, not 4)");
+
+    /* Reset is independent of how large the pre-reset counters grew (sec 4i.A:
+     * the member's residual send_seq, e.g. 11974, must not leak into the VC). */
+    scs_vc_init(&vc);
+    scs_vc_note_recv(&vc, 11974);
+    scs_vc_reset_seq(&vc);
+    check(vc.seq.recv_seq == 0 && vc.seq.send_seq == 1,
+          "reset independent of a large residual send_seq (11974 -> recv_seq 0)");
+
+    /* NULL-safety. */
+    scs_vc_reset_seq(NULL);
+    check(1, "reset_seq(NULL) is a safe no-op");
+}
+
 int main(void)
 {
     printf("test_scs_vc: SCS VC engine -- credit-return + seq/ack + retransmit (vms-691)\n");
@@ -207,6 +253,7 @@ int main(void)
     test_credit_fields();
     test_seq_ack();
     test_retransmit_trigger();
+    test_vc_reset_at_start_completion();
     printf("test_scs_vc: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

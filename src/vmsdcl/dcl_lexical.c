@@ -27,6 +27,7 @@
 #include "ssdef.h"
 #include <vms/privs.h>
 #include "vmsfs/filespec.h"
+#include "sysgen_params.h"
 
 /* External functions */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
@@ -1264,10 +1265,26 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
     struct utsname uts;
     uname(&uts);
 
-    if (strcmp(s, "NODENAME") == 0 || strcmp(s, "SCSNODE") == 0) {
+    if (strcmp(s, "NODENAME") == 0) {
+        /* Linux hostname — distinct from the configured SCSNODE (vms-ci.8) */
         strncpy(result, uts.nodename, result_size - 1);
         for (size_t i = 0; result[i]; i++)
             result[i] = (char)toupper((unsigned char)result[i]);
+    } else if (strcmp(s, "SCSNODE") == 0) {
+        /* Configured cluster node identity (SYSGEN SCSNODE) — falls back
+         * to the OVMX default when SYSGEN is unconfigured. */
+        char node[SYSGEN_STRVAL_LEN];
+        if (sysgen_read_string("SCSNODE", node, sizeof(node)) != 0) {
+            strncpy(node, "OVMX", sizeof(node) - 1);
+            node[sizeof(node) - 1] = '\0';
+        }
+        strncpy(result, node, result_size - 1);
+        for (size_t i = 0; result[i]; i++)
+            result[i] = (char)toupper((unsigned char)result[i]);
+    } else if (strcmp(s, "SCSSYSTEMID") == 0) {
+        uint32_t sysid = 0;   /* OVMX default when unconfigured */
+        (void)sysgen_read_param("SCSSYSTEMID", &sysid);
+        snprintf(result, result_size, "%u", sysid);
     } else if (strcmp(s, "VERSION") == 0) {
         strncpy(result, "V7.3", result_size - 1);
     } else if (strcmp(s, "HW_NAME") == 0) {

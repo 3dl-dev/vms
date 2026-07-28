@@ -202,6 +202,8 @@ typedef struct _uic UIC;
 #define SYI$_HW_MODEL       0x020C  /* Hardware model (longword) */
 #define SYI$_CLUSTER_MEMBER 0x020D  /* Cluster member flag (longword) */
 #define SYI$_CLUSTER_NODES  0x020E  /* Number of cluster nodes (longword) */
+#define SYI$_SCSNODE        0x020F  /* Node's SCS system name (string); OVMX-private code; see vms-3ab */
+#define SYI$_SCSSYSTEMID    0x0210  /* Node's cluster system ID (longword); OVMX-private code; see vms-3ab */
 
 #ifdef __cplusplus
 }

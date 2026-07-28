@@ -276,8 +276,18 @@ def decode_scs_envelope(pl, base):
     fields.append(Field(base + 10, 6, "Source logical LAVC addr (sender's own)", mac_label(pl[10:16])))
     if len(pl) < 18:
         return fields
-    fields.append(Field(base + 16, 2, "unknown/inferred: SCS sequence/type word (varies per-message)",
-                         "0x%s" % pl[16:18].hex()))
+    # offset 16 = SCS message-type byte (inferred names, GROUNDED value<->phase
+    # partition, 2975/2975 directed envelope frames in the join window -- see
+    # spec 4(g)); offset 17 = format/version constant 0x13 (GROUNDED constant).
+    SCS_MSGTYPE = {0x41: "START/config", 0x5b: "directory-lookup",
+                   0x4b: "sequenced-application (connect/VC/DLM data)",
+                   0x48: "credit-return short"}
+    mt = pl[16]
+    mtname = SCS_MSGTYPE.get(mt, "unknown message-type")
+    fields.append(Field(base + 16, 1, "SCS message-type byte (inferred label; GROUNDED value<->phase partition, spec 4g)",
+                         "0x%02x (%s)" % (mt, mtname)))
+    b17note = " (GROUNDED constant 0x13 across all directed SCS-envelope frames)" if pl[17] == 0x13 else ""
+    fields.append(Field(base + 17, 1, "SCS format/version constant", "0x%02x%s" % (pl[17], b17note)))
     # ONLY the fixed 190-byte message class has a validated Con.ID location
     # at offset [50:58] (see docstring). Everything else is presented as
     # unlabeled body.

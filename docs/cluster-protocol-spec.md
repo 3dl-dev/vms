@@ -50,7 +50,8 @@ payload begins at offset 14 (after the 14-byte Ethernet header).
 | pcap | Frames (0x6007) | Used for |
 |---|---|---|
 | `scs-idle-baseline.pcap` | 36 | §4(b) HELLO baseline, §4(d) SCS envelope baseline |
-| `formation-ci1-joinwindow.pcap` | 2992 | §4(c) connect/directory-lookup phase |
+| `formation-ci1-joinwindow.pcap` | 2992 | §4(c) connect/directory-lookup phase, §4(g) membership handshake |
+| `ci3-join-membership-live2node-20260728.pcap` | 58 | §4(g) join-nonce cross-boot stability (vms-b6c) |
 | `formation-ci1.pcap` | 18541 | §1 message-class census (Table 2), §4(e) MSCP, large block-transfer frames |
 | `scs-dlm-lockconflict.pcap` | 100 | §4(f) DLM section |
 | `scs-node-leave.pcap` | 2901 | cross-check only (teardown, not separately decoded here) |
@@ -358,6 +359,145 @@ diffing — the resource-name strings and burst timing are the only
 grounded correlation to the T1/T2/T3 narrative. This is flagged as an open
 RE gap (see report to PM / follow-on item).
 
+### 4(g) Connection-manager membership handshake (VMS$VAXcluster join)
+
+This subsection isolates the SCS exchange by which a joining node is admitted
+to the cluster and the `VMS$VAXcluster`↔`VMS$VAXcluster` connection (the
+connection manager's own SCS connection, which subsequently carries all DLM
+and membership traffic — §4(f)) is established. It was captured for `vms-b6c`.
+
+**Specimens.** The byte-level grounding below is taken from
+`formation-ci1-joinwindow.pcap` (VAX2 joining VAX1's running cluster), and
+every structural claim was re-validated, byte-for-byte at the same payload
+offsets, against the independent full-run `formation-ci1.pcap` (different
+capture session, 18 541 SCA frames). A fresh third specimen,
+`ci3-join-membership-live2node-20260728.pcap`, was captured for the nonce
+stability finding below. All three agree.
+
+**The join is a fixed phase sequence** (GROUNDED — directly observed, 0-based
+**SCA-frame** indices into `formation-ci1-joinwindow.pcap`, per the §1 index
+convention). Note: `dissect_sca.py --frame N` counts *all* pcap records, and
+this pcap has 8 non-SCA records early (raw indices 2,4,5,6,8,12,16,17), so for
+frames past SCA#17 the raw `--frame` argument is the SCA index **+ 8** — e.g.
+the keystone CONNECT-REQUEST (SCA#39) and CONNECT-RESPONSE (SCA#42) are
+`--frame 47` and `--frame 50`:
+
+| Phase | Frames | What happens on the wire |
+|---|---|---|
+| 0. Discovery | 0–11 | VAX1 multicasts HELLO to group 1 (`AB-00-04-01-01-01`); the joiner (VAX2) appears with its own multicast HELLO (frame 11) |
+| 1. Directed-VC channel handshake | 12–14 | 3 **directed** HELLO frames, dst = peer's *hardware* MAC, distinguished by the offset-16 per-frame word stepping `b200`→`b300`→`b400` (§4a offset-30). Carry the join nonce (below). |
+| 2. START / config exchange | 15–20 | opcode-`0x41` 106-byte frames carrying ASCII **software version + hardware type + node name** (below), plus a 46-byte opcode-`0x41` ack |
+| 3. Directory lookup | 21–36 | opcode-`0x5b` frames resolving SYSAP names: `SCS$DIRECTORY`/`SCS$DIR_LOOKUP`, then `MSCP$TAPE`→`"NOT PRESENT HERE"`, `MSCP$DISK` |
+| 4. **SYSAP connect / accept** | 37–44 | opcode-`0x4b` frames establishing the `VMS$VAXcluster` connection and binding the Connection-ID pair (below) |
+| 5. Credit / ack settle | 45–57 | opcode-`0x48` 41-byte credit-return shorts + opcode-`0x4b` 58/62-byte acks; steady-state 190-byte VC (§4d) begins |
+
+**SCS envelope opcode/format bytes** (offsets 16–17, payload-relative; abs
+30–31). Across **all 2 975 directed SCS-envelope frames** in
+`formation-ci1-joinwindow.pcap`:
+
+| Offset | Field | Grounding |
+|---|---|---|
+| 16 | **SCS message-type byte** | inferred label, GROUNDED correlation: value partitions the exchange 100%/0-residual — `0x41`=START/config (6 frames), `0x5b`=directory lookup (9), `0x4b`=sequenced-application message = connect **and** all VC/DLM data (2 951), `0x48`=credit-return short (9). No public SCS opcode *table* was used, so the numeric→name mapping is inferred; the value↔phase partition itself is a grounded fact. Reconfirmed on `formation-ci1.pcap` (same four values dominate; the bulk-block-transfer class additionally shows `0x7b`/`0xb3`, left unknown as in §4e). |
+| 17 | **format/version constant `0x13`** | **GROUNDED: 2 975/2 975 directed SCS-envelope frames carry `0x13` here, 0 residuals** — a fixed protocol-format byte, not a counter. |
+
+**Phase 2 — START/config carries the node's identity to the connection
+manager** (opcode `0x41`, 106-byte frames 15/16; verified byte-exact both
+directions). GROUNDED ASCII fields, directly observed:
+
+- **software version string**: `"VMS V7.3f"` (VAX1) / `"VMS V7.3"` (VAX2),
+  length-prefixed at payload offset ~44
+- **hardware-type string**: `"VAX "`
+- **node name**: `"VAX1  "` / `"VAX2  "` (space-padded, as §4a)
+
+These are the parameters a joining node presents for membership. The
+surrounding integer fields (a `0x3e`=62 length-ish word, a `0x0240`/`0x00d8`
+pair) are **unknown** — reported as raw hex, not guessed.
+
+**Phase 4 — the connect→accept handshake and Connection-ID binding**
+(opcode `0x4b`). This is the keystone finding, and it is GROUNDED against the
+SDA `SHOW CONNECTIONS` decoder ring (§3). The **110-byte** connect frames
+carry the Local/Remote Connection-ID pair at the *same* payload offsets as
+the 190-byte class (§4d): **remote at [50:54], local at [54:58]**, LE `uint32`.
+Both `VMS$VAXcluster` SYSAP names (local endpoint, then remote endpoint)
+follow in ASCII at [62:]. The pair is negotiated exactly as a connection
+manager would:
+
+| Frame | Dir | remote Con.ID [50:54] | local Con.ID [54:58] | Reading |
+|---|---|---|---|---|
+| 39 | VAX1→VAX2 | `0x00000000` (peer's not yet known) | `0x62C50009` (VAX1's own) | **CONNECT-REQUEST**: VAX1 offers its local Con.ID, remote still zero |
+| 42 | VAX2→VAX1 | `0x62C50009` (VAX1's, now learned) | `0x33580008` (VAX2's own) | **CONNECT-RESPONSE/ACCEPT**: VAX2 echoes VAX1's Con.ID and supplies its own |
+
+Both values are **byte-exact** to the SDA `SHOW CONNECTIONS` CDT pair
+`Local Con. ID 62C50009` / `Remote Con. ID 33580008` for
+`VMS$VAXcluster`↔`VAX2::VMS$VAXcluster` (§3). The `remote=0 → filled`
+transition across the request/response is the admission act: after frame 42
+both nodes share the bound pair, and every subsequent 190-byte VC/DLM frame
+(§4d, §4f) addresses it. Identical offsets and values reproduced in
+`formation-ci1.pcap` (frames 39/42). **GROUNDED.**
+
+**SCS sequenced-message counters** (offsets 18–19 and 20–21, two LE `uint16`).
+Across the connect exchange (frames 37→44) the pair advances monotonically in
+lockstep with the message flow — VAX1 emits `(5,6),(6,7),(7,8),(8,9)`; VAX2
+emits `(6,6),(7,7),(7,8),(8,9)` — i.e. a sender's counter reappears as the
+peer's other counter one frame later. This GROUNDS the *mechanism* (a
+reliable sequenced-message send/acknowledge pair driving the handshake); the
+precise send-vs-ack assignment is **inferred** (candidate: the CSB
+`Next seq`/`Last seq num rcvd` triad from SDA `SHOW CLUSTER`, §3), not
+independently confirmed — the same honesty caveat as §4d.
+
+**Credit.** The value `0x0a` (10 = SYSGEN `CLUSTER_CREDITS`, §3) is present in
+the connect/VC frames (e.g. frame 37 payload [46], frame 39 payload [48]) and
+is the dominant value at that region across directed frames. GROUNDED as a
+numeric match to the tunable, but its offset shifts between message classes,
+so it is not pinned to a single fixed field — reported as a grounded value,
+not a grounded offset.
+
+**Vote / quorum — RE GAP (not grounded).** VAX1 has `VOTES 1`, VAX2 `VOTES 0`,
+`EXPECTED_VOTES 1` (SYSGEN, §3 lab config). We could **not** isolate a vote or
+quorum field in the connect/config body by passive diffing: with only one
+vote configuration on the wire there is no contrast to bind a byte to. The
+connection manager unquestionably exchanges votes/quorum at membership time,
+but this specimen set cannot locate the field. **Recommended next step:** a
+targeted capture that *varies* `VOTES`/`EXPECTED_VOTES` on the joining node
+across two boots and diffs the phase-2/phase-4 bodies — a lab reconfiguration
+(disk-mutating; snapshot first), filed as a follow-up.
+
+**The join nonce and the credential question — the central finding.**
+The 4-byte join nonce (§4a offset 68, abs; payload [54:58] of the discovery
+header) was observed as the single value **`ee05395b`** on *every* directed
+frame that carries it:
+
+- `formation-ci1-joinwindow.pcap`: 3/3 directed HELLOs → `ee05395b`
+- `formation-ci1.pcap`: 59/59 directed HELLOs → `ee05395b`
+- `ci3-join-membership-live2node-20260728.pcap` (a **completely fresh boot**,
+  captured this session on an independently re-booted cluster): 20/20 directed
+  HELLOs → `ee05395b`
+- and the diskless-boot SOLICIT (§4c): `ee05395b`
+
+Because the identical value survives a full cluster reboot, the nonce is
+**derived from the persistent cluster credential** (the cluster group number +
+password stored hashed in `CLUSTER_AUTHORIZE.DAT`, per the public SYSMAN
+`CONFIGURATION SHOW CLUSTER_AUTHORIZATION` documentation, §3) — it is **not** a
+per-session or per-boot random challenge. **GROUNDED (presence + cross-boot
+stability, 82/82 directed-nonce frames across three independent captures).**
+
+**What is NOT grounded — the derivation.** How `(group#, password)` maps to
+`ee05395b` is **unknown and not derivable from passive capture.** Only one
+credential (group 1, the lab password) was ever on the wire, so there is no
+input/output contrast; and the transform is a one-way hash of the cluster
+password (documented conceptually as a hashed `CLUSTER_AUTHORIZE.DAT` secret),
+which cannot be inverted from observed outputs. **This means OVMX can, for a
+*known* cluster, replay a captured nonce to interoperate on the lab wire, but
+a lab-replay is NOT a general credential implementation** — an OVMX node that
+must join an *arbitrary* cluster needs the documented `CLUSTER_AUTHORIZE` hash
+algorithm, and that algorithm is not present in any wire byte. Deriving it by
+varying the password on the lab and correlating outputs is clean-room-legal
+but was out of scope here (it mutates `CLUSTER_AUTHORIZE.DAT` on the shared
+disk) and, being a hash, would at best yield correlation points, not the
+algorithm. **Recommended follow-up:** locate the hash construction in public
+OpenVMS security/cluster documentation (not on the wire); until then, treat
+nonce handling as *observe-and-replay for a known cluster only*.
+
 ---
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
@@ -377,7 +517,20 @@ For visibility, every field NOT marked GROUNDED above:
 - All non-190-byte SCS envelope classes (58/62/66/70/94/106/110 and the
   206–1500-byte block-transfer classes): header layout beyond the common
   dst/flag/src preamble is entirely unknown.
-- The directory-lookup/connect-handshake opcode fields (§4c).
+- The directory-lookup/connect-handshake opcode fields (§4c) — **partially
+  closed by §4(g)**: the offset-16 message-type byte and offset-17 `0x13`
+  format constant are now grounded, and the `VMS$VAXcluster` connect Con.ID
+  binding (§4g phase 4) is grounded; the remaining connect/config body
+  integers (START/config length-ish words, per-message credit offset) stay
+  unknown.
+- **Vote/quorum membership fields** (§4g): the connection manager exchanges
+  votes/quorum on join, but no byte could be bound with a single vote config
+  on the wire — needs a vote-varying capture (§4g).
+- **Join-nonce derivation** (§4g): the nonce `ee05395b` is grounded as
+  credential-derived and cross-boot-stable, but the `(group#, password) →
+  nonce` hash is not derivable from passive capture — observe/replay only for
+  a known cluster; a general implementation needs the documented
+  `CLUSTER_AUTHORIZE` hash (not on the wire).
 
 ---
 

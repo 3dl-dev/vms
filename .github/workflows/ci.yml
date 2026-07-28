@@ -1122,3 +1122,57 @@ jobs:
               export CC=gcc WORK=/tmp/tcc-rms TCC_EXPECT_LINK=1
               sh /src/src/imgact/test/run_tcc_rms.sh
             '
+
+  # -----------------------------------------------------------------------
+  # tcc-selfhost — S2 FIXPOINT proof (bead vms-4ba.6, epic vms-4ba). The
+  # summit: tcc COMPILES tcc INSIDE OVMX. A gcc-built seed TCC.EXE (the only
+  # Unix-compiler step, identical to tcc-native) is activated through IMGACT
+  # (no gcc, no ld.so) and compiles every one of tcc's 12 TUs — reading each
+  # .c and writing each .o through RMS — into a SECOND TCC.EXE (LINK.EXE
+  # --executable). That gen-2 compiler then compiles hello.c into a running
+  # image ('hello', exit 0), AND recompiles tcc a THIRD time producing objects
+  # BYTE-IDENTICAL to gen-2 — the classic self-host fixpoint. The compiler now
+  # reproduces itself with no Unix compiler in the loop.
+  #
+  # The ONE OVMX adaptation that makes tcc-built-tcc work: tcc emits its
+  # pointer-initializer tables (tcc_options[] etc.) into a `.data.ro` section
+  # created SHF_ALLOC-only (upstream tcc's own linker adds SHF_WRITE at final
+  # link via GNU_RELRO; a `tcc -c` object never gets that fixup). OVMX's
+  # LINK.EXE applies data-pointer relocations only to WRITABLE sections (gcc
+  # dodges this via .data.rel.ro WITH SHF_WRITE), so without the fix every
+  # `.data.ro` pointer in a tcc-built binary lands NULL and gen-2 tcc matches
+  # no CLI option. Fixed by a define-gated OVMX seam in the vendored tcc
+  # (third-party/tcc/src/tccelf.c shf_RELRO, activated by -DOVMX_DATA_RO_WRITABLE
+  # in src/vmslink/mk_tcc.sh) — emit `.data.ro` writable, matching gcc's
+  # pre-RELRO .data.rel.ro. Entirely in tcc/mk_tcc.sh scope; NOT a link.c change.
+  # mk_decc_shr.sh also exports one more libgcc quad helper (__negtf2) that a
+  # self-hosted tcc emits where gcc inlined it, keeping gen-2's deferred set to
+  # exactly one dead-for-`-c` reference (environ), same as gen-1.
+  #
+  # TCC_EXPECT_LINK (default 1, BLOCKING — mirrors tcc-native/tcc-rms): a
+  # LINK.EXE failure on any generation's build is a real regression.
+  # -----------------------------------------------------------------------
+  tcc-selfhost:
+    name: TCC.EXE Self-Host Fixpoint (tcc compiles tcc inside OVMX, S2 summit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: gen-1 seed TCC.EXE -> gen-1 compiles all tcc TUs under IMGACT -> gen-2 TCC.EXE -> gen-2 compiles+runs hello -> gen-2==gen-3 byte-identity (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/tcc-selfhost TCC_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_tcc_selfhost.sh
+            '

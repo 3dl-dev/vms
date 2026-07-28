@@ -54,6 +54,7 @@ payload begins at offset 14 (after the 14-byte Ethernet header).
 | `ci3-join-membership-live2node-20260728.pcap` | 58 | §4(g) join-nonce cross-boot stability (vms-b6c) |
 | `cd0-bootB-zk1099-join-20260728.pcap` | 18297 | §4(g) phase-2 START/config body grounding — joiner reconfigured to SCSNODE `"ZK"`/SCSSYSTEMID 1099/VOTES 0 (vms-cd0) |
 | `cd0-bootC-zk1099-votes2-20260728.pcap` | ~18k | §4(g) vote-varying diff — same node, VOTES 2 (vms-cd0) |
+| `af2-established-rejoin-20260728.pcap` | 16340 | §4(i) joining an ESTABLISHED cluster — VAX2 drop-and-rejoin while VAX1 stays up (Member State Seq 2→3→4); rejoin `0x41` START = SCA 2850–2855 (vms-af2) |
 | `formation-ci1.pcap` | 18541 | §1 message-class census (Table 2), §4(e) MSCP, large block-transfer frames, §4(h) 0x5b/0x48 scale re-validation (605/622 frames, vms-560) |
 | `scs-dlm-lockconflict.pcap` | 100 | §4(f) DLM section |
 | `scs-node-leave.pcap` | 2901 | cross-check only (teardown, not separately decoded here) |
@@ -716,6 +717,120 @@ status/handle-return field was isolated; (d) the absolute `SCS$DIRECTORY`
 connection Con.IDs are inferred (dynamically-allocated, absent from the
 idle-state decoder ring).
 
+### 4(i) Joining an ALREADY-ESTABLISHED cluster (member-state-seq > 1)
+
+All the §4g/§4h grounding above comes from **fresh 2-node formations**, where
+both nodes boot into the cluster at about the same time and every node's
+phase-2 `0x41` START carries `send_seq` (`[20:22]`) = **1**. OVMX's real target,
+however, is a node joining a cluster that is **already up** — a running member
+whose connection manager has already reconfigured one or more times. This
+subsection grounds what is different on the wire in that case. Captured for
+`vms-af2`.
+
+**Method — controlled drop-and-rejoin (clean-room: reconfiguring our own
+lab).** With the golden 2-node cluster running (VAX1 `[SYS0]` + VAX2 `[SYS1]`),
+a passive `br0` capture was started, then VAX2 was cleanly shut down with
+`@SYS$SYSTEM:SHUTDOWN` **REMOVE_NODE** so it *left* the cluster while **VAX1
+stayed up** and reconfigured, and VAX2 was then rebooted to **rejoin the now-
+established VAX1**. The SDA oracle was read at each transition:
+
+| SDA `SHOW CLUSTER` on VAX1 (CLUB) | Member State Seq. Num |
+|---|---|
+| both members, steady state (before drop) | **0002** |
+| after VAX2's REMOVE_NODE departure | **0003** |
+| after VAX2 rejoins | **0004** |
+
+So the join under study is a join into `Member State Seq. Num = 3` (established),
+vs. the `= 1` incarnation of every fresh-formation specimen. On rejoin VAX2 was
+re-admitted as `member` with a **new** CSID `00010003` (was `00010002`).
+**Specimen:** `af2-established-rejoin-20260728.pcap` (16 340 SCA frames; the
+rejoin `0x41` START is SCA frames 2850–2855, the post-START SCS VC 2856+).
+
+**The single byte-level difference — GROUNDED.** The rejoin START handshake is
+byte-identical to a fresh formation **except one field in one frame**: the
+established member's (VAX1's) **round-0** `0x41` START carries a large
+`send_seq` instead of 1. Byte-diff of the round-0 START `[16:48]`, fresh vs.
+established (payload-relative offsets):
+
+```
+FRESH   (formation-ci1-joinwindow SCA 23, VAX1->VAX2, round 0):
+  41 13 00 00 01 00 01 00 12 00 00 00 00 00 01 00 ...  3e 00 00 00 01 04
+                 ^^^^^ send_seq[20:22]=0x0001    ^^^^^ mirror[30:32]=0x0001
+ESTAB.  (af2-established-rejoin  SCA 2851, VAX1->VAX2, round 0):
+  41 13 00 00 c6 2e 01 00 12 00 00 00 00 00 c6 2e ...  3e 00 00 00 01 04
+                 ^^^^^ send_seq[20:22]=0x2EC6=11974  ^^^^^ mirror[30:32]=0x2EC6
+```
+
+Every other byte is identical: opcode `0x41`, format `0x13`, `recv_ack`
+`[18:20]` = 0, `NISCS_LAN_OVRHD` `[24:26]` = 18, inner-length `[42:44]` = 62,
+config-round `[44:46]` = 0, SCSSYSTEMID `[46:48]` = 1025. The `send_seq`
+mirror rule of §4g/§4h holds even at the elevated value: `[20:22] == [30:32]`
+byte-exact, **6/6** of the af2 `0x41` frames.
+
+**The elevated `send_seq` is the prior VC's continuation — GROUNDED.** VAX1's
+**last** `send_seq` to VAX2 on the *old* (pre-departure) `VMS$VAXcluster` VC was
+**11973** (`af2` SCA 2624, a `0x4b` frame); its round-0 rejoin START carries
+**11974 = 11973 + 1**. I.e. when an established member re-forms a channel to a
+node it has seen before, it does **not** reset its channel send-sequence to 1 —
+its first START continues from where the prior VC left off (`prior_send_seq +
+1`). It then resets: VAX1's **round-1** START (`af2` SCA 2852) already reads
+`send_seq = 1`, and the whole post-START SCS VC restarts from 1 (below). This is
+exactly why the fresh-formation value is always 1 (a never-before-seen peer has
+no prior VC, so the continuation base is 0). On the `vms-cd0`/`vms-21e` OVMX
+captures the same field read **2** because VAX1 had exchanged exactly one prior
+message with that node before the retry (`1 + 1`).
+
+**What the JOINING node does differently: nothing — GROUNDED (negative).** The
+joiner (VAX2) is byte-identical to fresh formation across the entire rejoin. All
+of its `0x41` frames (`af2` SCA 2850/2853/2854) carry `send_seq = 1`,
+`recv_ack = 0`, `mirror = 1`; the config-round `[44:46]` walks `0 → 1 → 2`
+exactly as in §4g. The joiner does **not** echo, `recv_ack`, or otherwise react
+to the member's elevated `send_seq` — it neither mirrors 11974 nor acks it. The
+**config-round counter `[44:46]`, not `send_seq`, is what drives the START
+handshake to completion**; a correct joiner therefore must *ignore* the
+member's START `send_seq` (accept any value, do not require 1, do not echo it)
+and advance purely on the config-round. Because the joiner behaves identically,
+the join **completed** (SDA: VAX2 `member`, CSID `00010003`, Member State Seq
+advanced 3→4).
+
+**Post-START SCS VC is byte-identical to fresh — GROUNDED.** After the `0x41`
+START (round 2), the SCS sequenced-message VC (opcodes `0x5b`/`0x4b`/`0x48`,
+§4h) **resets to `send_seq = 1`** on both sides and runs the identical §4h
+seq/ack lockstep. Frame-for-frame the rejoin (`af2` SCA 2856→2871) reproduces
+the fresh directory/connect phase (`formation-ci1-joinwindow` SCA 29→44):
+`(op, recv_ack, send_seq)` = `5b(0,1) 48(1,0) 5b(1,1) 48(1,0) 5b(2,2) 48(2,0)
+5b(2,2) 5b(2,3) 48(3,0) 5b(3,3) 48(3,0) 4b(3,4) 4b(4,4) …` on both. The
+`send_seq==mirror` identity holds `17 758/17 758`-style across the run as in
+§4h. So joining an established cluster needs **no** change to the directory-
+lookup / `VMS$VAXcluster`-connect / credit-return logic already grounded in
+§4g phase-4 and §4h.
+
+**Concrete answer for OVMX (the deliverable).** To join a member whose START
+`send_seq > 1`, an OVMX joiner changes **nothing** in what it emits vs. the
+fresh case — it emits `0x41` START with `send_seq = 1`, `recv_ack = 0`,
+`mirror = send_seq`, and drives `config-round 0→1→2`; then runs the §4h VC from
+`send_seq = 1`. The one thing it must do that the fresh case never exercises is
+be **tolerant on receive**: it must accept a round-0 START from the peer whose
+`send_seq[20:22]` (and its `[30:32]` mirror) is an arbitrary large value
+(`prior_VC_send_seq + 1`), must **not** treat `send_seq != 1` as an error, and
+must **not** copy that value into its own `send_seq`/`recv_ack` — it advances by
+config-round alone. A joiner that instead validates the peer's START `send_seq`
+against 1, or echoes it into `recv_ack`/`send_seq`, will fail to advance the
+config-round for exactly the established-cluster case — which matches the
+observed OVMX stall at round 0 when the member's `send_seq` was 2 (the
+`vms-21e`/`vms-691` symptom). **GROUNDED:** the corrective is a receive-side
+tolerance, not a new emitted field. Validated byte-exact across the 6 `0x41`
+rejoin frames + the prior-VC continuation (11973→11974) + the 16 post-START VC
+frames, 0 residuals; the SDA oracle confirms admission (Member State Seq 2→3→4,
+new CSID).
+
+**RE gap left in §4i (honest):** the *reason* VAX1 emits exactly one START at
+the continued `send_seq` before resetting to 1 (round-0 continued vs. round-1
+reset) is observed, not explained — it is consistent with the old channel block
+being used to frame the first response and then torn down and re-inited, but
+the internal state transition is not derivable from passive capture. It does
+not affect the joiner contract (which is receive-tolerant either way).
+
 ---
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
@@ -752,6 +867,15 @@ For visibility, every field NOT marked GROUNDED above:
   incarnation tokens [66:71]/[98:104]. Remaining unknown in §4h: the `0x5b`
   directory-operation field [46:48], the `0x48` secondary counter [30:32], and
   the affirmative-lookup result encoding.
+- **Joining an ESTABLISHED cluster** (§4i, `vms-af2`): **RESOLVED as a grounded
+  negative** — a drop-and-rejoin capture (VAX2 leaves via REMOVE_NODE, VAX1 stays
+  up to Member State Seq 3, VAX2 rejoins) proves the joiner emits **nothing**
+  different from the fresh case; the only wire difference is the established
+  member's round-0 `0x41` START `send_seq[20:22]` = `prior_VC_send_seq+1`
+  (11973→11974, not 1). The joiner must be *receive-tolerant* of that value
+  (accept ≠ 1, do not echo it) and advance by config-round `[44:46]`; the
+  post-START VC resets to `send_seq=1` byte-identical to §4h. This is the OVMX
+  established-join stall corrective.
 - **Vote/quorum membership fields** (§4g): **RESOLVED as a grounded negative**
   (`vms-cd0`, subsumes `vms-41d`) — a vote-varying capture (VOTES 0 vs 2 on the
   same reconfigured joiner) proves votes/quorum is **not** carried in the

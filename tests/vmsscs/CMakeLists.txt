@@ -43,3 +43,18 @@ set_tests_properties(vmsscs_connect_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-21e - phase-2 START/config (0x41) builder + SCS seq/ack state machine.
+add_executable(test_scs_start test_scs_start.c)
+
+target_include_directories(test_scs_start PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_start PRIVATE vmsscs_start)
+
+add_test(NAME vmsscs_start_unit COMMAND test_scs_start)
+set_tests_properties(vmsscs_start_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

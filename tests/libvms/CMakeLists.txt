@@ -54,3 +54,7 @@ libvms_add_test(test_libvms_lib_symtab
 # sys$lkwset/sys$ulwset
 libvms_add_test(test_libvms_lib_fb3
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_fb3.c)
+
+# Test 9: vms-846.1 — binary SYSUAF record layout + RMS primary-key XABKEY
+libvms_add_test(test_libvms_sysuaf_record
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_record.c)

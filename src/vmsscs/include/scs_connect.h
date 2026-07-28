@@ -18,14 +18,24 @@
  *   - abs 64 Remote Con.ID (LE u32), abs 68 Local Con.ID (LE u32)
  *   - abs 76 / abs 92 the two ASCII "VMS$VAXcluster  " SYSAP endpoint names
  *
- * REPLAYED (ungrounded, spec sec 4g/sec 5) fields left at their captured
- * values: the SCS sequence counters (abs 32/34 and the repeats at 40-55),
- * the connect-state bytes (abs 56-61), and the trailing body bytes
- * (abs 108-123). These are tied to the live channel's message flow and
- * cannot be grounded from passive capture; replaying a real frame's values
- * is the documented lab-shortcut posture (mirrors the nonce replay), NOT a
- * general connect-body implementation. A veracity adversary should treat
- * every non-substituted byte here as a labeled replay.
+ * LIVE-THREADED counters (vms-c6d). The SCS sequenced-message counters are NO
+ * LONGER replayed: build_from_tmpl substitutes OVMX's LIVE VC send_seq/recv_ack
+ * from struct scs_connect_params (recv_ack at [18:20]/[26:28]/[34:36], send_seq
+ * at [20:22] mirrored [30:32], node-incarnation echo at [22:24]) -- the same
+ * GROUNDED offsets and mechanism as the 0x5b directory exchange (scs_dir.c,
+ * spec sec 4h(4)). Baking the golden frame's captured 7/8 counters made the VAX
+ * reject OVMX's CONNECT-RESPONSE (its live VC had advanced past the directory
+ * phase to a different send_seq) and retransmit the 0x4b forever; threading the
+ * live counters is what lets the VAX accept the accept.
+ *
+ * REPLAYED (ungrounded, spec sec 4g/sec 5) fields still left at their captured
+ * values: the connect-state / inner-length body bytes (abs 56-61 and abs
+ * 108-123) and the [42:56] region beyond the counters. These are tied to the
+ * live channel's message flow and cannot be grounded from passive capture;
+ * replaying a real frame's values is the documented lab-shortcut posture
+ * (mirrors the nonce replay), NOT a general connect-body implementation. A
+ * veracity adversary should treat every non-substituted byte here as a labeled
+ * replay.
  *
  * OVMX DESIGN CHOICE (not VMS-authentic, labeled per rule 8): OVMX allocates
  * its own Local Con.ID (SCS_CONNECT_OVMX_CONID_BASE | index). The value is
@@ -64,6 +74,12 @@ struct scs_connect_params {
                                  same as dst_mac */
     uint32_t local_conid;     /* OVMX's own Con.ID (goes in the Local Con.ID field) */
     uint32_t remote_conid;    /* peer's Con.ID: 0 for a REQUEST, the peer's own for a RESPONSE */
+    /* --- vms-c6d: LIVE SCS VC counters threaded into the 0x4b frame (spec sec
+     * 4h(4)); NOT the golden template's replayed values. --- */
+    uint16_t recv_ack;        /* [18:20]/[26:28]/[34:36] = OVMX recv_seq (peer's last send_seq) */
+    uint16_t send_seq;        /* [20:22] mirrored [30:32] = OVMX's own send_seq for this frame */
+    uint16_t incarnation;     /* [22:24] node-incarnation echo (0 => leave the
+                               * fresh-golden template value 1; spec sec 4i.B) */
 };
 
 /*

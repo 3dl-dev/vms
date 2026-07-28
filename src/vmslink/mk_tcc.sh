@@ -1,9 +1,22 @@
 #!/bin/sh
-# mk_tcc.sh — build recipe for TCC.EXE, stock UNMODIFIED tinycc (third-party/tcc)
-# built AS a VMS-native EXECUTABLE image (bead vms-4ba.4, epic vms-4ba "self-host
-# S2: a C compiler as an OVMX image"). Mirrors mk_dcl.sh exactly: compile every
-# TU with the proven freestanding musl CFLAGS, then LINK.EXE --executable --use
+# mk_tcc.sh — build recipe for TCC.EXE, tinycc (third-party/tcc) built AS a
+# VMS-native EXECUTABLE image (bead vms-4ba.4, epic vms-4ba "self-host S2: a C
+# compiler as an OVMX image"). Mirrors mk_dcl.sh exactly: compile every TU
+# with the proven freestanding musl CFLAGS, then LINK.EXE --executable --use
 # {DECC$SHR + the five OVMX shareables} -o TCC.EXE.
+#
+# RMS FILE I/O (vms-4ba.5): TCC.EXE's own primary-source-file read and
+# output-object write are routed through OVMX's RMS system services
+# (sys$open/$connect/$get to read, sys$create/$connect/$put/$close to write)
+# instead of talking to DECC$SHR's raw open()/read()/write() for those two
+# files. This is a small, clearly-labeled OVMX addition: a new companion TU
+# (third-party/tcc/ovmx/ovmx_rms_io.c, added to OBJS below) plus three
+# `#ifdef OVMX_RMS_IO` seams in the otherwise-stock vendored tcc source
+# (libtcc.c's tcc_add_file_internal/tcc_close, tccpp.c's handle_eob,
+# tccelf.c's tcc_write_elf_file) — every edit is tagged "OVMX (vms-4ba.5)" in
+# the vendored files themselves so a diff against upstream tinycc stays
+# self-documenting. See ovmx_rms_io.h for exactly what is and is not routed
+# through RMS (header/#include search is deliberately left on the stock path).
 #
 # COMPOSITION: tinycc's NATIVE (non-cross, non-ONE_SOURCE) build shape — the same
 # shape `third-party/tcc/Makefile`'s `make tcc` produces via stock ./configure &&
@@ -83,12 +96,16 @@ LNM_SHR=${7:?need LIBVMSLNM\$SHR.EXE}
 RMS_SHR=${8:?need LIBVMSRMS\$SHR.EXE}
 HERE=$(cd "$(dirname "$0")" && pwd)                                   # src/vmslink
 TCC_SRC=${9:-$(cd "$HERE/../../third-party/tcc/src" && pwd)}          # third-party/tcc/src
+OVMX_DIR=$(cd "$HERE/../../third-party/tcc/ovmx" && pwd)              # third-party/tcc/ovmx (vms-4ba.5 shim)
+VMSRMS_INC=$(cd "$HERE/../vmsrms/include" && pwd)                     # rms/{fab,rab,rms}.h
+LIBVMS_INC=$(cd "$HERE/../libvms/include" && pwd)                     # rmsdef.h/ssdef.h (rms.h deps)
 CC=${CC:-gcc}
 
 for f in "$DECC_SHR" "$VMS_SHR" "$PROC_SHR" "$FS_SHR" "$LNM_SHR" "$RMS_SHR"; do
     [ -f "$f" ] || { echo "mk_tcc: producer image not found: $f"; exit 1; }
 done
 [ -d "$TCC_SRC" ] || { echo "mk_tcc: tcc src dir not found: $TCC_SRC"; exit 1; }
+[ -d "$OVMX_DIR" ] || { echo "mk_tcc: OVMX shim dir not found: $OVMX_DIR"; exit 1; }
 
 WORK=${WORK:-/tmp/mk-tcc}
 rm -rf "$WORK"
@@ -105,8 +122,12 @@ $CC -DC2STR "$TCC_SRC/conftest.c" -o "$WORK/c2str.exe"
 [ -f "$WORK/tccdefs_.h" ] || { echo "mk_tcc: c2str did not produce tccdefs_.h"; exit 1; }
 
 CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics"
-DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
-INCS="-I$WORK -I$TCC_SRC"
+# -DOVMX_RMS_IO (vms-4ba.5): activates the three #ifdef seams in
+# libtcc.c/tccpp.c/tccelf.c that route tcc's primary-source read + object
+# write through RMS instead of raw open()/read()/write(). Applied uniformly
+# to every TU below — harmless no-op for the TUs that don't reference it.
+DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -DOVMX_RMS_IO"
+INCS="-I$WORK -I$TCC_SRC -I$OVMX_DIR"
 
 # Core TUs (compiled as-is — no ONE_SOURCE define, so each is its own real TU).
 CORE_TUS="tccpp tccgen tccdbg tccasm tccelf tccrun arm64-gen arm64-link arm64-asm"
@@ -126,9 +147,15 @@ for t in $WRAPPER_TUS; do
     OBJS="$OBJS $WORK/$t.o"
 done
 
+# 12th object (vms-4ba.5): the OVMX RMS I/O shim itself. Needs rms/rms.h in
+# addition to the standard INCS.
+echo "  cc ovmx_rms_io.c (vms-4ba.5 RMS I/O shim)"
+$CC $CFLAGS $DEFS $INCS -I"$VMSRMS_INC" -I"$LIBVMS_INC" -c -o "$WORK/ovmx_rms_io.o" "$OVMX_DIR/ovmx_rms_io.c"
+OBJS="$OBJS $WORK/ovmx_rms_io.o"
+
 NOBJ=$(echo $OBJS | wc -w)
 echo "mk_tcc: $NOBJ tcc objects compiled VMS-native-clean"
-[ "$NOBJ" -eq 11 ] || { echo "mk_tcc: FAIL: expected 11 tcc objects, got $NOBJ"; exit 1; }
+[ "$NOBJ" -eq 12 ] || { echo "mk_tcc: FAIL: expected 12 tcc objects (11 stock + ovmx_rms_io.o), got $NOBJ"; exit 1; }
 
 echo "mk_tcc: LINK.EXE --executable --use {6 producers} --allow-undefined (environ only) -> $OUT"
 # --allow-undefined: see the header comment — defers ONLY tcc's dead-for-`-c`

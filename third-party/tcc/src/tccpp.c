@@ -21,6 +21,12 @@
 #define USING_GLOBALS
 #include "tcc.h"
 
+#ifdef OVMX_RMS_IO
+/* OVMX (vms-4ba.5): RMS-backed I/O shim for tcc's own file reads/writes —
+ * see third-party/tcc/ovmx/ovmx_rms_io.h for scope. */
+#include "ovmx_rms_io.h"
+#endif
+
 #if defined(_WIN32) && defined(__TINYC__)
   /* allow self-host build with tcc 0.9.27 - doesn't have ldexpl in tcc_libm.h .
    *
@@ -663,7 +669,20 @@ static int handle_eob(void)
 #else
             len = IO_BUF_SIZE;
 #endif
+#ifdef OVMX_RMS_IO
+            /* OVMX (vms-4ba.5): fd >= OVMX_RMS_FD_BASE means this
+             * BufferedFile is the RMS-opened primary source (see
+             * tcc_add_file_internal in libtcc.c) — pull its bytes via the
+             * sys$get loop in ovmx_rms_read() instead of read(). Nested
+             * #include files (opened by the stock _tcc_open()/open() path)
+             * still read() normally. */
+            if (bf->fd >= OVMX_RMS_FD_BASE)
+                len = ovmx_rms_read(bf->fd, bf->buffer, len);
+            else
+                len = read(bf->fd, bf->buffer, len);
+#else
             len = read(bf->fd, bf->buffer, len);
+#endif
             if (len < 0)
                 len = 0;
         } else {

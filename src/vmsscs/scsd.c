@@ -42,6 +42,7 @@
 #include "scs_classify.h"
 #include "scs_connect.h"
 #include "scs_hello.h"
+#include "scs_start.h"
 #include "sysgen_params.h"
 
 /* DEC LAVC/SCA ethertype -- docs/cluster-protocol-spec.md sec 2. */
@@ -130,6 +131,26 @@ static uint16_t resolve_cluster_group(void)
     return SCS_HELLO_MCAST_GROUP1;
 }
 
+/* OVMX's default SCSSYSTEMID when the SYSGEN store has none configured. The
+ * reference lab uses 1025 (VAX1), 1026 (VAX2), 1027 (VAX3 satellite); 1030 is
+ * a non-colliding default so OVMX presents a distinct cluster identity. The
+ * live value should come from the vms-ci.8 SYSGEN store (SET SCSSYSTEMID). */
+#define OVMX_DEFAULT_SCSSYSTEMID 1030u
+
+/*
+ * resolve_scssystemid - Read SCSSYSTEMID from the SYSGEN store (vms-ci.8),
+ * falling back to OVMX_DEFAULT_SCSSYSTEMID. Truncated to the 16-bit field the
+ * phase-2 START body carries (spec sec 4g [46:48]).
+ */
+static uint16_t resolve_scssystemid(void)
+{
+    uint32_t v = 0;
+    if (sysgen_read_param("SCSSYSTEMID", &v) == 0 && v != 0) {
+        return (uint16_t)(v & 0xffffu);
+    }
+    return OVMX_DEFAULT_SCSSYSTEMID;
+}
+
 /* --- vms-5fe: directed-HELLO / SCS-connect responder state --- */
 
 #define OVMX_MAX_PEERS 4
@@ -155,6 +176,12 @@ struct peer_state {
     int      connect_sent;    /* we sent a CONNECT-REQUEST */
     int      connected;       /* Con.ID pair bound */
     uint32_t remote_conid;    /* peer's Con.ID once learned */
+    /* --- vms-21e: phase-2 START/config handshake state --- */
+    struct scs_seq_state seq;      /* OVMX's own SCS sequenced-message counters for this VC */
+    int      seq_init;             /* scs_seq_init() has run for this peer */
+    int      start_replied;        /* we answered the peer's 0x41 START (sent round 0/1) */
+    int      start_acked;          /* we sent the round-2 46-byte ack -> START complete */
+    long     start_replies;        /* count of 0x41 frames we sent to this peer */
 };
 
 static int mac_eq(const uint8_t *a, const uint8_t *b)
@@ -295,6 +322,14 @@ int main(int argc, char **argv)
     long directed_sent = 0;
     long connect_req_sent = 0;
     long connect_resp_sent = 0;
+    long start_sent = 0;
+    long start_ack_sent = 0;
+
+    /* OVMX identity for the phase-2 START/config body (vms-21e). Resolved once;
+     * shared by every peer's START responder. */
+    char ovmx_node[SYSGEN_STRVAL_LEN];
+    resolve_node_identity(ovmx_node, sizeof(ovmx_node));
+    uint16_t ovmx_scssystemid = resolve_scssystemid();
 
     if (emit_hello) {
         uint8_t hw_mac[6];
@@ -476,9 +511,14 @@ int main(int argc, char **argv)
                 ps->channel_up = 1;
             }
 
-            /* After a couple of directed exchanges, optionally open the SCS
-             * connection from our side (CONNECT-REQUEST, spec sec 4g). */
-            if (do_connect && !ps->connect_sent && ps->directed_replies >= 2) {
+            /* vms-21e: OVMX is the JOINER, so the established node drives the
+             * 0x4b CONNECT-REQUEST and OVMX answers it (branch (c) below). We
+             * only open the connection from our side as a FALLBACK, and only
+             * AFTER the phase-2 START/config handshake has completed
+             * (ps->start_acked) and the peer has not already bound it. Firing a
+             * CONNECT-REQUEST before START (the old vms-5fe behavior) put a
+             * premature 0x4b on the wire that the VAX ignored. */
+            if (do_connect && ps->start_acked && !ps->connect_sent && !ps->connected) {
                 struct scs_connect_params cp;
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
@@ -500,7 +540,87 @@ int main(int argc, char **argv)
             continue;
         }
 
-        /* (b) SCS envelope directed to us -> inspect; complete the connect. */
+        /* (b) vms-21e: phase-2 START/config (opcode 0x41). After the channel
+         * forms, the established node streams 0x41 START frames and WAITS for
+         * OVMX's own 0x41 START before proceeding to the 0x4b connect. Answer
+         * as the joiner does (spec sec 4g phase 2): reply round-0 + round-1
+         * START, then the round-2 46-byte ack when the peer acks. */
+        if (do_connect && n >= 32 && buf[30] == SCS_START_OPCODE) {
+            struct scs_start_view sv;
+            if (scs_start_parse(buf, (size_t)n, &sv) != 0) {
+                continue;
+            }
+            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            if (ps == NULL) {
+                continue;
+            }
+            if (!ps->seq_init) {
+                scs_seq_init(&ps->seq);
+                ps->seq_init = 1;
+            }
+            scs_seq_note_recv(&ps->seq, sv.send_seq);
+            memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* START src-logical, abs 24 */
+
+            log_ts(stdout);
+            printf(" SCSD-I-STARTRX, %s round=%u peer_seq=%u peer_sysid=%u\n",
+                   sv.is_ack ? "ack" : "START", sv.config_round, sv.send_seq,
+                   sv.is_ack ? 0 : sv.scssystemid);
+            fflush(stdout);
+
+            struct scs_start_params sp;
+            memset(&sp, 0, sizeof(sp));
+            memcpy(sp.dst_mac, ps->eth_mac, 6);
+            memcpy(sp.src_mac, our_hw_mac, 6);
+            memcpy(sp.peer_logical, ps->logical, 6);
+            sp.scssystemid = ovmx_scssystemid;
+            strncpy(sp.node_name, ovmx_node, SCS_START_NODENAME_LEN);
+            sp.node_name[SCS_START_NODENAME_LEN] = '\0';
+            /* START is sequenced-message #1 for a fresh VC: send_seq=1 (from the
+             * state machine), leading counter 0 (GROUNDED joiner values). */
+            sp.send_seq = ps->seq.send_seq;
+            sp.recv_ack = 0;
+
+            if (!sv.is_ack) {
+                if (!ps->start_replied) {
+                    /* Send our round-0 then round-1 START (the joiner emits both
+                     * back-to-back; spec sec 4g phase-2 ordering #24/#25). */
+                    for (uint16_t rnd = 0; rnd <= 1; rnd++) {
+                        sp.config_round = rnd;
+                        uint8_t sframe[SCS_START_FRAME_LEN];
+                        if (scs_start_build(&sp, sframe) == 0 &&
+                            send_frame_to(sock, (int)ifindex, ps->eth_mac, sframe, sizeof(sframe)) > 0) {
+                            start_sent++;
+                            ps->start_replies++;
+                        }
+                    }
+                    ps->start_replied = 1;
+                    log_ts(stdout);
+                    printf(" SCSD-I-STARTTX, sent round-0+round-1 START"
+                           " (sysid=%u node='%s' send_seq=%u)\n",
+                           ovmx_scssystemid, ovmx_node, sp.send_seq);
+                    fflush(stdout);
+                }
+            } else {
+                /* Peer's round-2 46-byte ack -> answer with ours; START done. */
+                if (!ps->start_acked) {
+                    uint8_t aframe[SCS_START_ACK_FRAME_LEN];
+                    if (scs_start_build_ack(&sp, aframe) == 0 &&
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, aframe, sizeof(aframe)) > 0) {
+                        start_ack_sent++;
+                        ps->start_acked = 1;
+                        log_ts(stdout);
+                        printf(" SCSD-I-STARTDONE, START/config complete with peer"
+                               " %02x:%02x:%02x:%02x:%02x:%02x -- awaiting 0x4b connect\n",
+                               ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
+                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5]);
+                        fflush(stdout);
+                    }
+                }
+            }
+            continue;
+        }
+
+        /* (c) SCS envelope directed to us -> inspect; complete the connect. */
         if (do_connect && (cls == SCS_CLASS_OTHER || cls == SCS_CLASS_SCS_FIXED)) {
             struct scs_connect_view v;
             if (scs_connect_parse(buf, (size_t)n, &v) != 0) {
@@ -563,18 +683,20 @@ int main(int argc, char **argv)
         fprintf(stderr, "  HELLO-SENT=%ld\n", hello_sent);
     }
     if (respond) {
-        fprintf(stderr, "  DIRECTED-HELLO-SENT=%ld CONNECT-REQ-SENT=%ld CONNECT-RESP-SENT=%ld\n",
-                directed_sent, connect_req_sent, connect_resp_sent);
+        fprintf(stderr, "  DIRECTED-HELLO-SENT=%ld START-SENT=%ld START-ACK-SENT=%ld"
+                " CONNECT-REQ-SENT=%ld CONNECT-RESP-SENT=%ld\n",
+                directed_sent, start_sent, start_ack_sent, connect_req_sent, connect_resp_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (!peers[i].in_use) {
                 continue;
             }
             fprintf(stderr,
                     "  PEER %02x:%02x:%02x:%02x:%02x:%02x channel=%s directed_replies=%ld"
-                    " connect_sent=%d connected=%s remote_conid=0x%08X\n",
+                    " start_replied=%d start_acked=%d connect_sent=%d connected=%s remote_conid=0x%08X\n",
                     peers[i].eth_mac[0], peers[i].eth_mac[1], peers[i].eth_mac[2],
                     peers[i].eth_mac[3], peers[i].eth_mac[4], peers[i].eth_mac[5],
                     peers[i].channel_up ? "UP" : "down", peers[i].directed_replies,
+                    peers[i].start_replied, peers[i].start_acked,
                     peers[i].connect_sent, peers[i].connected ? "YES" : "no",
                     peers[i].remote_conid);
         }

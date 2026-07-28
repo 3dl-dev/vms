@@ -43,6 +43,7 @@
 #include "scs_connect.h"
 #include "scs_hello.h"
 #include "scs_start.h"
+#include "scs_vc.h"
 #include "sysgen_params.h"
 
 /* DEC LAVC/SCA ethertype -- docs/cluster-protocol-spec.md sec 2. */
@@ -63,6 +64,22 @@ static void on_signal(int signo)
     (void)signo;
     g_stop = 1;
 }
+
+/* Monotonic milliseconds -- feeds the VC retransmit timer (scs_vc_*). */
+static uint64_t monotonic_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
+}
+
+/* vms-691: VC keepalive/retransmit tunables. OVMX keeps at most one of its own
+ * sequenced messages (the connect-request) in flight; if the peer has not
+ * acked it within VC_RETRANSMIT_TIMEOUT_MS it is re-sent, capped at
+ * VC_RETRANSMIT_MAX so the retransmit path never out-paces real-node cadence
+ * (the reply-amplification guard). */
+#define VC_RETRANSMIT_TIMEOUT_MS 2000u
+#define VC_RETRANSMIT_MAX        5u
 
 static void log_ts(FILE *out)
 {
@@ -176,12 +193,12 @@ struct peer_state {
     int      connect_sent;    /* we sent a CONNECT-REQUEST */
     int      connected;       /* Con.ID pair bound */
     uint32_t remote_conid;    /* peer's Con.ID once learned */
-    /* --- vms-21e: phase-2 START/config handshake state --- */
-    struct scs_seq_state seq;      /* OVMX's own SCS sequenced-message counters for this VC */
-    int      seq_init;             /* scs_seq_init() has run for this peer */
+    /* --- vms-21e / vms-691: SCS sequenced-message VC engine state --- */
+    struct scs_vc vc;              /* seq/ack tracking + credit + retransmit (embeds scs_seq_state) */
     int      start_replied;        /* we answered the peer's 0x41 START (sent round 0/1) */
     int      start_acked;          /* we sent the round-2 46-byte ack -> START complete */
     long     start_replies;        /* count of 0x41 frames we sent to this peer */
+    long     credit_sent;          /* vms-691: 0x48 credit-returns we sent this peer */
 };
 
 static int mac_eq(const uint8_t *a, const uint8_t *b)
@@ -324,6 +341,8 @@ int main(int argc, char **argv)
     long connect_resp_sent = 0;
     long start_sent = 0;
     long start_ack_sent = 0;
+    long credit_sent = 0;        /* vms-691: total 0x48 credit-returns sent */
+    long retransmit_sent = 0;    /* vms-691: connect-request retransmits sent */
 
     /* OVMX identity for the phase-2 START/config body (vms-21e). Resolved once;
      * shared by every peer's START responder. */
@@ -421,6 +440,46 @@ int main(int argc, char **argv)
             }
         }
 
+        /* --- vms-691: retransmit OVMX's own unacked sequenced message (the
+         * connect-request) on timeout, so a dropped CONNECT-REQUEST does not
+         * stall the handshake. Rate-capped (VC_RETRANSMIT_MAX) to respect the
+         * reply-amplification guard. Only while the connect is still unbound. */
+        if (do_connect) {
+            uint64_t now_ms = monotonic_ms();
+            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+                struct peer_state *ps = &peers[i];
+                if (!ps->in_use || ps->connected || !ps->connect_sent) {
+                    continue;
+                }
+                if (ps->vc.retransmit_count >= VC_RETRANSMIT_MAX) {
+                    continue;
+                }
+                if (!scs_vc_retransmit_due(&ps->vc, now_ms, VC_RETRANSMIT_TIMEOUT_MS)) {
+                    continue;
+                }
+                struct scs_connect_params cp;
+                memset(&cp, 0, sizeof(cp));
+                memcpy(cp.dst_mac, ps->eth_mac, 6);
+                memcpy(cp.src_mac, our_hw_mac, 6);
+                memcpy(cp.peer_logical, ps->logical, 6);
+                cp.local_conid = OVMX_LOCAL_CONID;
+                cp.remote_conid = 0;
+                uint8_t rframe[SCS_CONNECT_FRAME_LEN];
+                if (scs_connect_build_request(&cp, rframe) == 0 &&
+                    send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe, sizeof(rframe)) > 0) {
+                    scs_vc_mark_retransmitted(&ps->vc, now_ms);
+                    retransmit_sent++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-RETX, retransmit CONNECT-REQUEST to peer"
+                           " %02x:%02x:%02x:%02x:%02x:%02x (attempt %u)\n",
+                           ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
+                           ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
+                           ps->vc.retransmit_count);
+                    fflush(stdout);
+                }
+            }
+        }
+
         ssize_t n = recv(sock, buf, sizeof(buf), 0);
         if (n < 0) {
             if (errno == EINTR) {
@@ -468,6 +527,55 @@ int main(int argc, char **argv)
             continue;
         }
         const uint8_t *src_mac = buf + OFF_ETH_SRC;
+
+        /* --- vms-691: VC engine -- credit-ack every sequenced message the peer
+         * sends us AFTER the phase-2 START completes. Each 0x5b directory /
+         * 0x4b connect / 190-byte VC message (send_seq != 0 at [20:22], abs 34)
+         * is answered by EXACTLY ONE 0x48 credit-return (strict 1-for-1, spec
+         * sec 4h(3)). This is what stops the VAX's "%PEA0 Excessive packet
+         * losses / Closed Virtual Circuit" teardown. The 0x41 START phase uses
+         * its own config-round ack mechanism (branch (b) below) so 0x41 is
+         * excluded here; a 0x48 credit-return (send_seq==0) is a pure ack and
+         * is never itself acked (scs_vc_owes_credit guards the storm). We do
+         * NOT `continue`: 0x4b/190 frames still fall through to branch (c) for
+         * Con.ID binding. */
+        if (do_connect && n >= 36 && buf[31] == SCS_FORMAT_CONST &&
+            (buf[30] == SCS_MSGTYPE_DIRLOOKUP || buf[30] == SCS_MSGTYPE_SEQAPP ||
+             cls == SCS_CLASS_SCS_FIXED)) {
+            uint16_t peer_send_seq = (uint16_t)(buf[34] | ((uint16_t)buf[35] << 8)); /* [20:22] */
+            uint16_t peer_recv_ack = (uint16_t)(buf[32] | ((uint16_t)buf[33] << 8)); /* [18:20] */
+            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            if (ps != NULL) {
+                if (!ps->vc.initialized) {
+                    scs_vc_init(&ps->vc);
+                }
+                /* The peer's leading counter [18:20] acks OVMX's own sequenced
+                 * sends -- clears our outstanding connect-request so it stops
+                 * being retransmitted. */
+                scs_vc_note_peer_ack(&ps->vc, peer_recv_ack);
+                memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* src-logical, abs 24 */
+
+                if (scs_vc_owes_credit(peer_send_seq)) {
+                    scs_vc_note_recv(&ps->vc, peer_send_seq);
+                    uint8_t cframe[SCS_CREDIT_FRAME_LEN];
+                    if (scs_vc_build_credit_for(&ps->vc, ps->eth_mac, our_hw_mac,
+                                                ps->logical, cframe) == 0 &&
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, cframe,
+                                      sizeof(cframe)) > 0) {
+                        ps->credit_sent++;
+                        credit_sent++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-CREDIT, 0x48 credit-return acked peer_seq=%u"
+                               " to %02x:%02x:%02x:%02x:%02x:%02x (#%ld)\n",
+                               peer_send_seq,
+                               ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
+                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
+                               ps->credit_sent);
+                        fflush(stdout);
+                    }
+                }
+            }
+        }
 
         /* (a) Directed HELLO -> reply with our directed HELLO (NISCA channel,
          * spec sec 4b). The frame is already known to be unicast to our HW MAC
@@ -531,6 +639,10 @@ int main(int argc, char **argv)
                     send_frame_to(sock, (int)ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
                     ps->connect_sent = 1;
                     connect_req_sent++;
+                    /* vms-691: the connect-request is OVMX's own outstanding
+                     * sequenced message -- track it for retransmit until the
+                     * peer's CONNECT-RESPONSE binds the Con.ID pair. */
+                    scs_vc_record_sent(&ps->vc, ps->vc.seq.send_seq, monotonic_ms());
                     log_ts(stdout);
                     printf(" SCSD-I-CONNREQ, sent CONNECT-REQUEST local_conid=0x%08X to peer\n",
                            OVMX_LOCAL_CONID);
@@ -554,11 +666,10 @@ int main(int argc, char **argv)
             if (ps == NULL) {
                 continue;
             }
-            if (!ps->seq_init) {
-                scs_seq_init(&ps->seq);
-                ps->seq_init = 1;
+            if (!ps->vc.initialized) {
+                scs_vc_init(&ps->vc);
             }
-            scs_seq_note_recv(&ps->seq, sv.send_seq);
+            scs_vc_note_recv(&ps->vc, sv.send_seq);
             memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* START src-logical, abs 24 */
 
             log_ts(stdout);
@@ -576,8 +687,14 @@ int main(int argc, char **argv)
             strncpy(sp.node_name, ovmx_node, SCS_START_NODENAME_LEN);
             sp.node_name[SCS_START_NODENAME_LEN] = '\0';
             /* START is sequenced-message #1 for a fresh VC: send_seq=1 (from the
-             * state machine), leading counter 0 (GROUNDED joiner values). */
-            sp.send_seq = ps->seq.send_seq;
+             * state machine), leading counter 0. recv_ack MUST stay 0 here:
+             * the real cluster sends recv_ack=0 in EVERY 0x41 START frame
+             * (VAX1 and the real joiner VAX2, all config-rounds; byte-verified
+             * against formation-ci1-joinwindow.pcap), and with recv_ack=0 the
+             * START handshake completes on the wire (VAX advances round
+             * 0->1->2, ovmx-21e-start.pcap). Do NOT ground this to recv_seq --
+             * that is the regression that stalled VAX1 at round 0. GROUNDED. */
+            sp.send_seq = ps->vc.seq.send_seq;
             sp.recv_ack = 0;
 
             if (!sv.is_ack) {
@@ -684,21 +801,24 @@ int main(int argc, char **argv)
     }
     if (respond) {
         fprintf(stderr, "  DIRECTED-HELLO-SENT=%ld START-SENT=%ld START-ACK-SENT=%ld"
-                " CONNECT-REQ-SENT=%ld CONNECT-RESP-SENT=%ld\n",
-                directed_sent, start_sent, start_ack_sent, connect_req_sent, connect_resp_sent);
+                " CONNECT-REQ-SENT=%ld CONNECT-RESP-SENT=%ld CREDIT-SENT=%ld RETRANSMIT-SENT=%ld\n",
+                directed_sent, start_sent, start_ack_sent, connect_req_sent, connect_resp_sent,
+                credit_sent, retransmit_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (!peers[i].in_use) {
                 continue;
             }
             fprintf(stderr,
                     "  PEER %02x:%02x:%02x:%02x:%02x:%02x channel=%s directed_replies=%ld"
-                    " start_replied=%d start_acked=%d connect_sent=%d connected=%s remote_conid=0x%08X\n",
+                    " start_replied=%d start_acked=%d connect_sent=%d connected=%s remote_conid=0x%08X"
+                    " credit_sent=%ld recv_seq=%u send_seq=%u\n",
                     peers[i].eth_mac[0], peers[i].eth_mac[1], peers[i].eth_mac[2],
                     peers[i].eth_mac[3], peers[i].eth_mac[4], peers[i].eth_mac[5],
                     peers[i].channel_up ? "UP" : "down", peers[i].directed_replies,
                     peers[i].start_replied, peers[i].start_acked,
                     peers[i].connect_sent, peers[i].connected ? "YES" : "no",
-                    peers[i].remote_conid);
+                    peers[i].remote_conid,
+                    peers[i].credit_sent, peers[i].vc.seq.recv_seq, peers[i].vc.seq.send_seq);
         }
     }
 

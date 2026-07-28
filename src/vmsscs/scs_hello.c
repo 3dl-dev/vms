@@ -133,3 +133,38 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
 
     return 0;
 }
+
+int scs_hello_build_directed_frame(const struct scs_hello_params *p,
+                                    const uint8_t peer_mac[6],
+                                    const uint8_t nonce[4],
+                                    uint8_t out[SCS_HELLO_FRAME_LEN])
+{
+    if (p == NULL || peer_mac == NULL || nonce == NULL || out == NULL) {
+        return -1;
+    }
+
+    /* Lay down the shared HELLO template with the peer's MAC as the dst;
+     * scs_hello_build_frame() mirrors dst_mac into both the Ethernet dst
+     * (abs 0) and the SCA dest logical addr (abs 16), matching the real
+     * directed HELLO (scs-idle-baseline.pcap frame 2). */
+    struct scs_hello_params dp = *p;
+    memcpy(dp.dst_mac, peer_mac, 6);
+    int rc = scs_hello_build_frame(&dp, out);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* Patch the directed-specific fields (spec sec 4a/4b). */
+    out[30] = 0xb3;
+    out[31] = 0x00;             /* per-frame word: directed value (ungrounded, REPLAYED, sec 4a) */
+
+    memcpy(out + 68, nonce, 4); /* join nonce (GROUNDED present/stable; value REPLAYED, sec 4g) */
+
+    out[92] = 0x01;
+    out[93] = 0x00;             /* directed-HELLO flag = 0x0001 (GROUNDED, sec 4b) */
+
+    out[128] = 0x1f;
+    out[129] = 0x00;            /* poller-sweep marker = 31 (GROUNDED, sec 4b) */
+
+    return 0;
+}

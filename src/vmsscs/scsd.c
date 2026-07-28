@@ -40,6 +40,7 @@
 
 #include "cluster_authorize.h"
 #include "scs_classify.h"
+#include "scs_connect.h"
 #include "scs_hello.h"
 #include "sysgen_params.h"
 
@@ -129,11 +130,79 @@ static uint16_t resolve_cluster_group(void)
     return SCS_HELLO_MCAST_GROUP1;
 }
 
+/* --- vms-5fe: directed-HELLO / SCS-connect responder state --- */
+
+#define OVMX_MAX_PEERS 4
+
+/* OVMX's own VMS$VAXcluster Con.ID for this run (OVMX design choice; opaque
+ * to the peer -- see scs_connect.h). */
+#define OVMX_LOCAL_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0001u)
+
+/* Absolute frame offsets used by the responder (spec byte-offset convention:
+ * 0 = first byte of Ethernet dst). */
+#define OFF_ETH_DST      0
+#define OFF_ETH_SRC      6
+#define OFF_HELLO_SRCLOG 24  /* HELLO SCA src-logical addr (abs 24-29) */
+#define OFF_HELLO_DIRFLG 92  /* directed-HELLO flag (abs 92-93) */
+
+struct peer_state {
+    int      in_use;
+    uint8_t  eth_mac[6];      /* peer's Ethernet source MAC (we reply here) */
+    uint8_t  logical[6];      /* peer's advertised SCA src-logical addr (HELLO abs 24) */
+    int      channel_up;      /* >=1 directed HELLO exchanged */
+    long     directed_replies;
+    struct timespec last_directed; /* CLOCK_MONOTONIC of our last directed reply (rate limit) */
+    int      connect_sent;    /* we sent a CONNECT-REQUEST */
+    int      connected;       /* Con.ID pair bound */
+    uint32_t remote_conid;    /* peer's Con.ID once learned */
+};
+
+static int mac_eq(const uint8_t *a, const uint8_t *b)
+{
+    return memcmp(a, b, 6) == 0;
+}
+
+static struct peer_state *peer_find_or_add(struct peer_state *tbl, const uint8_t mac[6])
+{
+    int free_slot = -1;
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        if (tbl[i].in_use && mac_eq(tbl[i].eth_mac, mac)) {
+            return &tbl[i];
+        }
+        if (!tbl[i].in_use && free_slot < 0) {
+            free_slot = i;
+        }
+    }
+    if (free_slot < 0) {
+        return NULL;
+    }
+    memset(&tbl[free_slot], 0, sizeof(tbl[free_slot]));
+    tbl[free_slot].in_use = 1;
+    memcpy(tbl[free_slot].eth_mac, mac, 6);
+    return &tbl[free_slot];
+}
+
+/* Send a fully-built Ethernet frame to a specific unicast MAC on ifindex. */
+static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
+                             const uint8_t *frame, size_t len)
+{
+    struct sockaddr_ll da;
+    memset(&da, 0, sizeof(da));
+    da.sll_family = AF_PACKET;
+    da.sll_protocol = htons(SCA_ETHERTYPE);
+    da.sll_ifindex = ifindex;
+    da.sll_halen = 6;
+    memcpy(da.sll_addr, mac, 6);
+    return sendto(sock, frame, len, 0, (struct sockaddr *)&da, sizeof(da));
+}
+
 int main(int argc, char **argv)
 {
     const char *ifname = "br0";
     int duration = 0; /* 0 = run until SIGINT/SIGTERM */
     int emit_hello = 0;
+    int respond = 0;      /* vms-5fe: reply to directed HELLOs (channel formation) */
+    int do_connect = 0;   /* vms-5fe: also drive the VMS$VAXcluster SCS connect */
     int hello_interval = HELLO_DEFAULT_INTERVAL_SEC;
 
     for (int i = 1; i < argc; i++) {
@@ -143,21 +212,43 @@ int main(int argc, char **argv)
             duration = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--emit-hello") == 0) {
             emit_hello = 1;
+        } else if (strcmp(argv[i], "--respond") == 0) {
+            respond = 1;
+        } else if (strcmp(argv[i], "--connect") == 0) {
+            do_connect = 1;
         } else if (strcmp(argv[i], "--hello-interval") == 0 && i + 1 < argc) {
             hello_interval = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             fprintf(stderr,
-                    "usage: %s [--iface IFACE] [--duration SECONDS] [--emit-hello] [--hello-interval SECONDS]\n"
+                    "usage: %s [--iface IFACE] [--duration SECONDS] [--emit-hello]\n"
+                    "          [--respond] [--connect] [--hello-interval SECONDS]\n"
                     "  SCS datalink listener: opens an AF_PACKET raw socket on\n"
                     "  ethertype 0x%04x (DEC SCA/LAVC), classifies received frames\n"
                     "  by the GROUNDED length rule, and logs them.\n"
                     "  --emit-hello        also multicast a spec-valid HELLO beacon\n"
                     "                      (identity from SCSNODE/cluster-group config;\n"
                     "                      see docs/cluster-protocol-spec.md sec 4a/4b)\n"
+                    "  --respond           reply to a peer's DIRECTED HELLO with our own\n"
+                    "                      directed HELLO to form the NISCA channel\n"
+                    "                      (implies --emit-hello; spec sec 4b)\n"
+                    "  --connect           additionally drive the VMS$VAXcluster SCS\n"
+                    "                      connect: send CONNECT-REQUEST after the\n"
+                    "                      channel forms and answer a peer CONNECT-\n"
+                    "                      REQUEST with CONNECT-RESPONSE (spec sec 4g).\n"
+                    "                      Implies --respond.\n"
                     "  --hello-interval N  seconds between HELLO beacons (default %d)\n",
                     argv[0], SCA_ETHERTYPE, HELLO_DEFAULT_INTERVAL_SEC);
             return 0;
         }
+    }
+
+    /* --connect implies --respond implies --emit-hello (a beacon is what makes
+     * the peer VAX send us the directed HELLO we reply to). */
+    if (do_connect) {
+        respond = 1;
+    }
+    if (respond) {
+        emit_hello = 1;
     }
 
     int sock = socket(AF_PACKET, SOCK_RAW, htons(SCA_ETHERTYPE));
@@ -195,6 +286,16 @@ int main(int argc, char **argv)
     memset(&hello_params, 0, sizeof(hello_params));
     memset(&hello_dst, 0, sizeof(hello_dst));
 
+    /* vms-5fe responder state. */
+    struct peer_state peers[OVMX_MAX_PEERS];
+    memset(peers, 0, sizeof(peers));
+    static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
+    uint8_t our_hw_mac[6];
+    memset(our_hw_mac, 0, sizeof(our_hw_mac));
+    long directed_sent = 0;
+    long connect_req_sent = 0;
+    long connect_resp_sent = 0;
+
     if (emit_hello) {
         uint8_t hw_mac[6];
         if (get_iface_hwaddr(ifname, hw_mac) != 0) {
@@ -208,6 +309,7 @@ int main(int argc, char **argv)
         resolve_node_identity(node_name, sizeof(node_name));
         uint16_t group = resolve_cluster_group();
 
+        memcpy(our_hw_mac, hw_mac, 6);
         scs_hello_multicast_addr(group, hello_params.dst_mac);
         memcpy(hello_params.src_mac, hw_mac, 6);
         strncpy(hello_params.node_name, node_name, SCS_HELLO_NODENAME_LEN);
@@ -324,6 +426,130 @@ int main(int argc, char **argv)
                buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
                buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
         fflush(stdout);
+
+        /* --- vms-5fe responder --- only act on frames unicast to our HW MAC
+         * (our own multicast beacon prompts the peer's directed HELLO). */
+        if (!respond || !mac_eq(buf + OFF_ETH_DST, our_hw_mac)) {
+            continue;
+        }
+        const uint8_t *src_mac = buf + OFF_ETH_SRC;
+
+        /* (a) Directed HELLO -> reply with our directed HELLO (NISCA channel,
+         * spec sec 4b). The frame is already known to be unicast to our HW MAC
+         * (gated above), so any non-zero directed flag marks a directed HELLO
+         * aimed at us. Observed on the wire: an established member uses 0x0001,
+         * but a member SOLICITING a not-yet-joined node (us) uses 0x0002 --
+         * accept both. */
+        if (cls == SCS_CLASS_HELLO && n >= OFF_HELLO_DIRFLG + 2 &&
+            (buf[OFF_HELLO_DIRFLG] != 0x00 || buf[OFF_HELLO_DIRFLG + 1] != 0x00)) {
+            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            if (ps == NULL) {
+                continue;
+            }
+            memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6);
+
+            /* Rate-limit our directed replies to a real-node cadence (~1/s per
+             * peer). Replying 1:1 to every received directed HELLO amplifies
+             * into a tight ping-pong storm with the peer; real nodes beacon on
+             * a timer instead. */
+            struct timespec dnow;
+            clock_gettime(CLOCK_MONOTONIC, &dnow);
+            int due = (ps->directed_replies == 0) ||
+                      (dnow.tv_sec - ps->last_directed.tv_sec >= 1);
+            if (due) {
+                uint8_t dframe[SCS_HELLO_FRAME_LEN];
+                hello_params.timer_tick = (uint32_t)directed_sent;
+                if (scs_hello_build_directed_frame(&hello_params, src_mac, lab_nonce, dframe) == 0 &&
+                    send_frame_to(sock, (int)ifindex, src_mac, dframe, sizeof(dframe)) > 0) {
+                    directed_sent++;
+                    ps->directed_replies++;
+                    ps->channel_up = 1;
+                    ps->last_directed = dnow;
+                    log_ts(stdout);
+                    printf(" SCSD-I-DIRHELLO, replied directed HELLO to peer"
+                           " %02x:%02x:%02x:%02x:%02x:%02x (reply #%ld)\n",
+                           src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
+                           ps->directed_replies);
+                    fflush(stdout);
+                }
+            } else {
+                ps->channel_up = 1;
+            }
+
+            /* After a couple of directed exchanges, optionally open the SCS
+             * connection from our side (CONNECT-REQUEST, spec sec 4g). */
+            if (do_connect && !ps->connect_sent && ps->directed_replies >= 2) {
+                struct scs_connect_params cp;
+                memset(&cp, 0, sizeof(cp));
+                memcpy(cp.dst_mac, ps->eth_mac, 6);
+                memcpy(cp.src_mac, our_hw_mac, 6);
+                memcpy(cp.peer_logical, ps->logical, 6);
+                cp.local_conid = OVMX_LOCAL_CONID;
+                cp.remote_conid = 0;
+                uint8_t cframe[SCS_CONNECT_FRAME_LEN];
+                if (scs_connect_build_request(&cp, cframe) == 0 &&
+                    send_frame_to(sock, (int)ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
+                    ps->connect_sent = 1;
+                    connect_req_sent++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-CONNREQ, sent CONNECT-REQUEST local_conid=0x%08X to peer\n",
+                           OVMX_LOCAL_CONID);
+                    fflush(stdout);
+                }
+            }
+            continue;
+        }
+
+        /* (b) SCS envelope directed to us -> inspect; complete the connect. */
+        if (do_connect && (cls == SCS_CLASS_OTHER || cls == SCS_CLASS_SCS_FIXED)) {
+            struct scs_connect_view v;
+            if (scs_connect_parse(buf, (size_t)n, &v) != 0) {
+                continue;
+            }
+            log_ts(stdout);
+            printf(" SCSD-I-SCSENV, msgtype=0x%02x fmt=0x%02x len=%u"
+                   " remote_conid=0x%08X local_conid=0x%08X\n",
+                   v.msgtype, v.format, v.total_sca_len, v.remote_conid, v.local_conid);
+            fflush(stdout);
+
+            if (v.msgtype != SCS_MSGTYPE_SEQAPP || !v.has_conid) {
+                continue;
+            }
+            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            if (ps == NULL) {
+                continue;
+            }
+            if (v.remote_conid == 0 && !ps->connected) {
+                /* Peer's CONNECT-REQUEST to us -> answer, echoing its Con.ID. */
+                struct scs_connect_params cp;
+                memset(&cp, 0, sizeof(cp));
+                memcpy(cp.dst_mac, ps->eth_mac, 6);
+                memcpy(cp.src_mac, our_hw_mac, 6);
+                memcpy(cp.peer_logical, ps->logical, 6);
+                cp.local_conid = OVMX_LOCAL_CONID;
+                cp.remote_conid = v.local_conid;
+                uint8_t rframe[SCS_CONNECT_FRAME_LEN];
+                if (scs_connect_build_response(&cp, rframe) == 0 &&
+                    send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe, sizeof(rframe)) > 0) {
+                    ps->remote_conid = v.local_conid;
+                    ps->connected = 1;
+                    connect_resp_sent++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-CONNRESP, answered peer CONNECT-REQUEST:"
+                           " remote=0x%08X local=0x%08X\n", v.local_conid, OVMX_LOCAL_CONID);
+                    fflush(stdout);
+                }
+            } else if (v.remote_conid == OVMX_LOCAL_CONID && !ps->connected) {
+                /* Peer's CONNECT-RESPONSE to our request -> the pair is bound. */
+                ps->remote_conid = v.local_conid;
+                ps->connected = 1;
+                log_ts(stdout);
+                printf(" SCSD-I-CONNBOUND, peer accepted our connect:"
+                       " local=0x%08X remote=0x%08X\n", OVMX_LOCAL_CONID, v.local_conid);
+                fflush(stdout);
+            }
+            continue;
+        }
     }
 
     log_ts(stderr);
@@ -335,6 +561,23 @@ int main(int argc, char **argv)
             counts[SCS_CLASS_SOLICIT], counts[SCS_CLASS_OTHER], counts[SCS_CLASS_RUNT]);
     if (emit_hello) {
         fprintf(stderr, "  HELLO-SENT=%ld\n", hello_sent);
+    }
+    if (respond) {
+        fprintf(stderr, "  DIRECTED-HELLO-SENT=%ld CONNECT-REQ-SENT=%ld CONNECT-RESP-SENT=%ld\n",
+                directed_sent, connect_req_sent, connect_resp_sent);
+        for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+            if (!peers[i].in_use) {
+                continue;
+            }
+            fprintf(stderr,
+                    "  PEER %02x:%02x:%02x:%02x:%02x:%02x channel=%s directed_replies=%ld"
+                    " connect_sent=%d connected=%s remote_conid=0x%08X\n",
+                    peers[i].eth_mac[0], peers[i].eth_mac[1], peers[i].eth_mac[2],
+                    peers[i].eth_mac[3], peers[i].eth_mac[4], peers[i].eth_mac[5],
+                    peers[i].channel_up ? "UP" : "down", peers[i].directed_replies,
+                    peers[i].connect_sent, peers[i].connected ? "YES" : "no",
+                    peers[i].remote_conid);
+        }
     }
 
     close(sock);

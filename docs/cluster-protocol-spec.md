@@ -56,7 +56,8 @@ payload begins at offset 14 (after the 14-byte Ethernet header).
 | `cd0-bootC-zk1099-votes2-20260728.pcap` | ~18k | §4(g) vote-varying diff — same node, VOTES 2 (vms-cd0); §4(j) VOTES grounding at 190-byte VC body[22:24] via the VOTES 0↔2 byte-diff (vms-f85) |
 | `af2-established-rejoin-20260728.pcap` | 16340 | §4(i) joining an ESTABLISHED cluster — VAX2 drop-and-rejoin while VAX1 stays up (Member State Seq 2→3→4); rejoin `0x41` START = SCA 2850–2855 (vms-af2) |
 | `af2-firsttimer-established-20260728.pcap` | 51072 | §4(i).B — fresh-identity **first-timer** VX3/1050 joins established VAX1 (STARTs SCA 2558–2563), then **2nd** (20170–20175) and **3rd** (33591–33596) incarnations; grounds the `[22:24]` incarnation counter 1→2→3 and its `[78:80]` HELLO advertisement (vms-af2) |
-| `formation-ci1.pcap` | 18541 | §1 message-class census (Table 2), §4(e) MSCP, large block-transfer frames, §4(h) 0x5b/0x48 scale re-validation (605/622 frames, vms-560) |
+| `formation-ci1.pcap` | 18541 | §1 message-class census (Table 2), §4(e) MSCP, large block-transfer frames, §4(h) 0x5b/0x48 scale re-validation (605/622 frames, vms-560), §4(k) the 2 padded-HELLO channel-size-verification frames (idx 5990/7534) — the acked case |
+| `ci3-addmember-20260728.pcap` | 1922 | §4(k) NISCA channel packet-size verification: 25 unacked padded directed HELLOs VAX1→OVMX (1500/1069/853/745B), the retransmit ladder, the stalled-join wall (vms-84f) |
 | `scs-dlm-lockconflict.pcap` | 100 | §4(f) DLM section |
 | `scs-node-leave.pcap` | 2901 | cross-check only (teardown, not separately decoded here) |
 | `satellite-niscs-boot-solicit.pcap` | 231 | §4(c) SOLICIT |
@@ -123,7 +124,8 @@ frames by this length instead (see Table 2).
 | 41 | 622 | SCS short (ack/credit) | Ethernet-padded to 60 bytes total |
 | 120 | 151 | **HELLO** | §4(b) |
 | 70, 110, 94, 62, 58, 66, 106, 86 | 158 combined | SCS connect/directory-lookup & MSCP req/resp | §4(c), §4(e) |
-| 526, 398, 634, 462, 270, 1500, 82, 369, 302, 590, 718 | 52 combined | **large block-transfer** frames (up to `NISCS_MAX_PKTSZ`=1498, GROUNDED against SYSGEN tunable) | header NOT decoded (see §4(d) caveat) |
+| 526, 398, 634, 462, 270, 82, 369, 302, 590, 718 | 50 combined | **MSCP bulk block-transfer** (`0x4b`/`0x13` sequenced-application, nonzero data body, up to `NISCS_MAX_PKTSZ`=1498, GROUNDED against SYSGEN tunable) | header NOT decoded (see §4(d)/§4(e) caveat) |
+| 1500 | 2 | **padded directed HELLO** (channel packet-size verification, zero-pad body) | **GROUNDED in §4(k)** (`vms-84f`) — distinct from the MSCP class above |
 
 `78` (SOLICIT) doesn't appear in `formation-ci1.pcap` (no satellite boot in
 that capture); it's the majority class in `satellite-niscs-boot-solicit.pcap`
@@ -307,6 +309,16 @@ discovery-header prefix (`08 00 00 80 05 01 00 00`) plus a
 `"VAX2  "`-style embedded node name, meaning this frame class has an
 **entirely different header shape** that was not further decoded. Marked
 unknown in the dissector rather than mislabeled.
+
+**Correction (`vms-84f`, §4k):** frame 5990 is **not** an MSCP bulk transfer at
+all — it is a **padded directed HELLO** (a PEDRIVER channel packet-size
+verification frame), which is why it carries the HELLO discovery-header prefix
+and an embedded node name and a body that is **pure zero padding**. It is now
+GROUNDED in **§4(k)**. The genuine MSCP bulk block-transfer frames are the
+separate `0x4b`/`0x13` sequenced-application class (206–718 bytes here, nonzero
+data body); only the two 1500-byte frames in `formation-ci1.pcap` (idx 5990,
+7534) are padded HELLOs. This distinguishes the two large-frame families the
+census (Table 2) had lumped together.
 
 ### 4(f) DLM: enqueue / deny / release / grant (`scs-dlm-lockconflict.pcap`)
 
@@ -1049,6 +1061,187 @@ assigned CSID appears in `SHOW CLUSTER` and the Member State Seq advances.
 
 ---
 
+### 4(k) NISCA channel packet-size verification — the padded directed HELLO ("op-0xb3")
+
+This subsection grounds the frame class that `vms-224` wire-observed as VAX1
+"flooding op-0xb3 block-transfer frames to the joiner and retransmitting until
+acked" — the last thing an established VAX1 waits on before it opens the
+joiner's CSB. Captured for `vms-84f`. **The finding corrects the working name:
+these frames are NOT a data/state block transfer. They carry no cluster state —
+their body is pure zero padding. They are PEDRIVER *channel packet-size
+verification* HELLOs: a directed HELLO (§4a/§4b) zero-padded up to
+`NISCS_MAX_PKTSZ`, used to prove the LAN channel can carry a full-size packet.
+What VAX1 waits for is the joiner to *reciprocate* the padded HELLO — the "ack"
+is the joiner's own padded HELLO on the reverse channel, not an acknowledgement
+of transferred data.**
+
+> **Provenance / clean-room label.** "PEDRIVER", "channel", and
+> `NISCS_MAX_PKTSZ` are public (SDA `SHOW PORTS` PEDRIVER port `PEA0`, §3; the
+> documented SYSGEN tunable; the public *OpenVMS Cluster Systems* description of
+> PEDRIVER LAN channels being characterized by a maximum packet size before the
+> VC will use them). The **byte-level frame structure and the ack contrast below
+> are GROUNDED** from the wire. The **mechanism name** ("packet-size
+> verification / channel-usability handshake") is **inferred** from the observed
+> behavior + that public channel concept — no VSI/HPE binary was consulted.
+
+**Specimens & method (pure passive analysis — no lab mutation).**
+- **`ci3-addmember-20260728.pcap`** (1922 SCA frames) — an OVMX joiner
+  (`b6:16:8a:dc:3a:53`) attempting to join the established VAX1
+  (`aa:00:04:00:01:04`). The join reaches the `0x41`/`0x5b`/`0x4b` VC-setup phase
+  but then **stalls**: VAX1 floods **25** padded directed HELLOs to OVMX and OVMX
+  never reciprocates. This is the block-transfer-**without**-a-receiver-ack case
+  (ideal for grounding the header + the retransmit ladder).
+- Golden **`formation-ci1.pcap`** (full run, 18541 SCA frames) — a *successful*
+  fresh formation containing exactly **2** padded HELLOs, one each direction
+  (the block-transfer-**with**-ack case). Diffing the two isolates the ack.
+- `formation-ci1-joinwindow.pcap` (the 3000-frame join window) contains **zero**
+  padded HELLOs — a fresh 2-node formation whose channels come up without a
+  size-verification stall, matching the `vms-224` observation that only an
+  established-cluster join exhibits this wall.
+
+All offsets are **payload-relative** (payload byte 0 = abs frame offset 14).
+
+#### The padded-HELLO frame — GROUNDED structure
+
+Every one of the 25 `ci3` frames and the 2 golden frames decodes as a **directed
+HELLO with a zero-pad tail**. Verified byte-exact:
+
+| Pay off | Size | Field | Grounding |
+|---|---|---|---|
+| 0 | 2 | SCA length field (LE u16 + 2 = total) | GROUNDED (§2): `0x05da`→1500, `0x042b`→1069, `0x0353`→853, `0x02e7`→745 |
+| 2 | 6 | dest logical LAVC addr (the joiner) | GROUNDED (§4a) |
+| 8 | 2 | connect flag `0x0001` | observed constant |
+| 10 | 6 | src logical LAVC addr (VAX1 `aa:00:04:00:01:04`) | GROUNDED (§4a) |
+| **16** | **1** | **per-frame word `0xb3`** (§4a offset-30) | GROUNDED value: VAX1's directed-HELLO per-frame word (the `b2/b3/b4` channel-handshake stepping, §4g phase 1). **This is `vms-224`'s "op-0xb3": it is a directed-HELLO per-frame word, NOT a distinct block-transfer opcode** — a genuine 120-byte directed HELLO carries the same `0xb3` (a `0xb2`-step directed HELLO differs from the padded frame in this one byte only). The padded frame's distinguishing feature is its **size**, not this byte. |
+| 17 | 1 | `0x00` | observed (note: **not** the `0x13` SCS-envelope format constant — this is a HELLO-family frame, not an `0x4b` sequenced message) |
+| 22 | 1 | **message-class byte `0x05`** (HELLO) | GROUNDED (§4a): every padded frame carries the HELLO class byte, not SOLICIT `0x02` |
+| 26 | 1 + n | node-name length (`6`) + name (`"VAX1  "`) | GROUNDED (§4a) |
+| 54 | 4 | join nonce `ee05395b` | GROUNDED (§4a/§4g) |
+| 78 | 2 | node-incarnation counter (§4b/§4i.B) | GROUNDED: `0x0009`/`0x000a` in `ci3` (VAX1 has seen this OVMX node reconnect 9–10×); `0x0001` in the golden (fresh). Separate concern from this section — see the §4i.B gate. |
+| 82 | 4 | changing timer/tick (§4b abs-96) | the **only** field that varies across a retransmit (below) |
+| 106 | 6 | sender's real hardware LAN MAC (§4b) | GROUNDED: VAX1 `08:00:2b:4a:b7:15` |
+| 114 | 2 | poller-sweep marker `0x001f`=31 (§4b) | GROUNDED (SDA `Poller Sweep 31`) |
+| 116 | 2 | constant `0x0064` (§4b) | observed |
+| **120** | **total−120** | **zero pad** (see caveat for the 745-byte class) | **GROUNDED for the 1500/1069/853-byte classes (21/25 `ci3` frames + both golden frames): pl[120:total] is entirely zero** — `1380/1380` bytes zero in the 1500-byte frame, `0` nonzero. The frame is a genuine §4b 120-byte directed HELLO followed by a run of zeros. **Caveat:** the four smallest-step **745-byte** frames (round 2) are *not* pure zero — they carry a deterministic ~55-nonzero-byte structured blob at `pl[393:532]` (byte-identical across all four retransmits); its content is **unknown** (it *echoes* opcode-like bytes `0x14`/`0x01`/`0x02` and a `bc 00 03…` run reminiscent of the §4j add-member config opcodes and the §4b HELLO tail, but this is not grounded). See the caveat below. |
+
+**Proof it is a pure padded HELLO (byte-exact):**
+- A retransmit of the *same* padded frame differs in **only 4 bytes** — the
+  timer/tick at `[82:86]` (`ci3` idx 85 vs 109, 1500B: `4/1500` bytes differ, all
+  in `[82:86]`). The ~1440-byte body is identical across every retransmit.
+- The 1069/853-byte frames are byte-identical **prefixes** of the 1500-byte frame
+  (differ only in the length field `[0:2]` and the timer `[82:86]`) — the pad is
+  simply truncated, confirming there is no length-dependent content.
+- Two VAX1-sourced padded HELLOs to *different* joiners (`ci3` idx 85 → OVMX vs
+  golden idx 7534 → VAX2, both 1500B) differ in **12 bytes only**: the dest addr
+  `[2:8]`, the incarnation `[78]`, and the timer `[83:88]`. Same class.
+- `pl[120:total]` is **pure zero** in 21/25 `ci3` frames (the 1500/1069/853-byte
+  classes) and in both golden 1500-byte frames. The exception is the four
+  745-byte frames (see the offset-120 caveat above and the RE-gaps note below):
+  they carry a small ungrounded structured blob at `pl[393:532]`, identical
+  across their four retransmits. The pure-zero result holds for **every frame at
+  the sizes VAX1 actually probes first (1500 → 1069 → 853)** and for the golden
+  ack pair — i.e. the *ack-relevant* frames are pure padded HELLOs.
+
+#### The retransmit ladder (unacked) — GROUNDED (`ci3`)
+
+With OVMX never reciprocating, VAX1 sends the **largest** size first and steps
+**down**, ~4 frames per size at a steady **~6.0 s** interval, across two join
+attempts (~380 s apart):
+
+```
+1500 ×4  →  1069 ×4  →  853 (×1, attempt 1 ends)        [attempt 1]
+1500 ×4  →  1069 ×4  →  853 ×4  →  745 ×4                [attempt 2]
+```
+
+Size ladder `1500 → 1069 → 853 → 745`; the pad-decrement roughly halves each step
+(`431, 216, 108`). The max, **1500 = `NISCS_MAX_PKTSZ` 1498 + 2**, is byte-exact
+against the SYSGEN tunable (§3, matches the §4e cap). Interpretation
+(**inferred**): PEDRIVER probes the channel at full size, and on no
+acknowledgement steps the verification size down looking for a size the peer will
+confirm. Retransmit interval **6.010 s ± 0.15** (24/24 inter-frame gaps), a
+distinct timer from `RECNXINTERVAL 20`.
+
+#### The ACK — GROUNDED by the golden-vs-`ci3` contrast (the deliverable)
+
+**The frame that appears in the golden and is missing in `ci3` is the joiner's
+own padded HELLO on the reverse channel.** This is the load-bearing deliverable
+for `vms-9f3`:
+
+| capture | result | padded HELLOs, member→joiner | padded HELLOs, joiner→member | member retransmits? |
+|---|---|---|---|---|
+| golden `formation-ci1` | **join succeeds** | **1** (VAX1→VAX2, idx 7534, 1500B) | **1** (VAX2→VAX1, idx 5990, 1500B) | **no** |
+| `ci3-addmember` | **join STALLS** | **25** (VAX1→OVMX, 1500/1069/853/745) | **0** | **yes, forever** |
+
+In the golden the **joiner (VAX2) sends its padded HELLO first** (idx 5990,
+t≈…736), and the **member (VAX1) reciprocates** with its own identical-size
+padded HELLO (idx 7534, t≈…737) — one exchange, no retransmit, and the CSB opens.
+The reciprocal frame (idx 7534) is a padded directed HELLO carrying VAX1's *own*
+identity (name `"VAX1  "`, HW MAC `08:00:2b:4a:b7:15`), zero-padded to the same
+1500 bytes — structurally identical to the `ci3` VAX1→OVMX frames but on the
+reverse channel. **GROUNDED: exactly one padded HELLO per direction in the
+successful case, zero from the joiner in the stalled case.**
+
+**An unpadded 120-byte HELLO is NOT the ack (GROUNDED negative).** In `ci3`, OVMX
+is alive and *does* send directed HELLOs throughout the retransmit window (23
+multicast + 23 directed 120-byte HELLOs in the idx 80–310 window), yet VAX1 keeps
+retransmitting the padded probe. **OVMX's largest frame in the entire capture is
+190 bytes** — it never emits a frame ≥745 bytes. So VAX1's requirement is
+specifically a *padded* HELLO at (or near) the probe size; the ordinary 120-byte
+directed HELLO that completes the §4g phase-1 channel handshake does not satisfy
+the size-verification, and the join wall stands.
+
+**Concrete answer for OVMX (`vms-9f3`).** OVMX already builds a 120-byte directed
+HELLO (it runs the §4g phase-1 `b2/b3/b4` handshake). The fix is to
+**participate in the packet-size verification** with a *padded* HELLO:
+
+1. **Reciprocate (the unstick):** on receiving a padded directed HELLO of total
+   size *N* from VAX1 (a HELLO-class `pl[22]=0x05` frame with `total > 120` and a
+   zero pad tail), reply with OVMX's **own** directed HELLO — its identity, its
+   `pl[16]` per-frame word, incarnation per §4i.B — **zero-padded to the same
+   size *N*** (the largest OVMX received successfully; up to `NISCS_MAX_PKTSZ`),
+   sent to VAX1 on the reverse channel. This is the exact frame that is present
+   (golden) / absent (`ci3`) and it stops VAX1's retransmit and lets it open the
+   CSB.
+2. **Initiate (match the golden joiner):** ideally OVMX also *sends first* — emit
+   a padded HELLO up to `NISCS_MAX_PKTSZ` to advertise its own channel size, as
+   golden VAX2 did (idx 5990), so the member reciprocates and both directions
+   verify.
+
+The pad is pure zeros appended after the standard 120-byte directed HELLO; no new
+field content is required. Success is confirmed by the SDA oracle exactly as
+§4j: a CSB with the joiner's CSID appears in `SHOW CLUSTER` and the Member State
+Seq advances.
+
+#### RE gaps left in §4k (honest)
+
+- **Why the joiner initiates in the golden but the member initiates in `ci3`** is
+  not pinned — plausibly the established member starts probing a new/unverified
+  channel when the joiner has not, but that is an inference from two captures.
+- **The exact size OVMX must echo to satisfy VAX1** is grounded as "the probe
+  size, up to `NISCS_MAX_PKTSZ`" (both golden directions used the full 1500); it
+  was not independently varied. Whether a smaller reciprocal (e.g. VAX1's stepped
+  853/745) would also satisfy VAX1 is untested (would need an OVMX that acks at a
+  reduced size).
+- **The step-down algorithm** (why `1500→1069→853→745`, ~4 per size, 6 s) is
+  reported as-observed; the precise PEDRIVER size-search rule is not derivable
+  from passive capture.
+- The incarnation counter `pl[78]` = 9/10 in `ci3` shows the OVMX join has also
+  been cycling the §4i.B incarnation gate; that is a **separate** field and
+  concern (see §4i.B) — the padded-HELLO ack grounded here is what *this* capture
+  shows VAX1 retransmitting on.
+- **The 745-byte class's `pl[393:532]` blob is unknown.** When VAX1 stepped its
+  probe all the way down to 745 bytes (round 2's final size) it appended a small
+  deterministic ~55-nonzero-byte structure instead of pure zeros — it *may* be a
+  compact channel/config descriptor VAX1 tries at the smallest size (the bytes
+  loosely echo §4j add-member opcodes `0x14`/`0x01`/`0x02` and a `bc 00 03…`
+  run), but the content is **not grounded** from passive capture. It does not
+  affect the ack (which is a reciprocal padded HELLO, and the golden ack pair is
+  pure-zero 1500-byte). Grounding it would need an OVMX that acks the larger
+  probes so VAX1 never reaches the 745-byte step, or a controlled capture that
+  isolates what that size carries.
+
+---
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:
@@ -1077,8 +1270,12 @@ For visibility, every field NOT marked GROUNDED above:
   connection-handle pair at [50:58], the inner-length [42:44], the
   `"NOT PRESENT HERE"` result marker, the `0x48` acknowledged-sequence at
   [18:20]/[26:28], and the seq/ack lockstep. The `0x4b` connect classes are
-  grounded in §4(g) phase 4. The 206–1500-byte block-transfer classes remain
-  unknown beyond the common dst/flag/src preamble.
+  grounded in §4(g) phase 4. Of the large classes: the **1500-byte padded
+  directed HELLO** (channel packet-size verification) is **GROUNDED in §4(k)**
+  (`vms-84f`) — a zero-padded §4b HELLO whose reciprocal on the reverse channel
+  is the "ack" an established VAX1 waits on before opening the joiner's CSB; the
+  remaining `0x4b`/`0x13` **MSCP bulk block-transfer** classes (206–718 bytes,
+  nonzero data body) remain unknown beyond the common dst/flag/src preamble.
 - The directory-lookup/connect-handshake opcode fields (§4c) — **now grounded
   in §4(h)** (`vms-560`, see the bullet above): the `SCS$DIRECTORY` connect
   handshake, the name-resolution body, and its credit-return acks. Earlier

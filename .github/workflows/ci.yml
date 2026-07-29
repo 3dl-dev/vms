@@ -212,15 +212,44 @@ jobs:
             --build-arg NEGATIVE_CONTROL=1 \
             -t ovmx-ktest-negctl:latest .
 
-      - name: Assert the harness FAILS when the executive is absent
+      - name: Assert the harness FAILS for the RIGHT REASON when the executive is absent
         run: |
-          if docker run --rm ovmx-ktest-negctl:latest; then
+          set +e
+          OUTPUT=$(docker run --rm ovmx-ktest-negctl:latest 2>&1)
+          RC=$?
+          set -e
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
             echo "FAIL: expected the kernel-executive harness to fail with vms.ko unloaded, but it exited 0"
             echo "This means a broken executive assertion would NOT fail CI -- the exact defect class vms-6b8 exists to kill."
             exit 1
-          else
-            echo "PASS: harness correctly went red with the executive absent (honest failure, no silent fallback)"
           fi
+
+          # A nonzero exit alone proves nothing: a missing QEMU binary, a boot
+          # panic, run_tests.sh's hard-coded 120s TIMEOUT, or a runner OOM would
+          # ALL make this job go green for the WRONG reason. Assert the actual
+          # REASON the harness reported, not merely that something failed.
+          echo "$OUTPUT" | grep -qF 'cannot open /dev/vms' \
+            || { echo "FAIL: did not see the expected 'cannot open /dev/vms' failure text -- the job may have gone red for an unrelated reason (QEMU missing, boot panic, run_tests.sh timeout, runner OOM), not because the executive is absent"; exit 1; }
+
+          # Pin the exact pass/fail split init.sh reports for this scenario.
+          # This also proves the harness ran to completion and reached its own
+          # FINAL RESULTS accounting -- a timeout or panic would never print
+          # this line at all, so this line alone rules those causes out.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 7 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/7-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+
+          # POSITIVE assertion paired with the two negative assertions above:
+          # vmsfs.ko has no dependency on vms.ko/the executive, so it must
+          # still load and pass with the executive absent. If the harness
+          # failed indiscriminately (e.g. gutted/always-fail), this would also
+          # fail, and the negative assertions above would be proving nothing
+          # about the executive specifically.
+          echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
+            || { echo "FAIL: vmsfs.ko (independent of vms.ko) did not pass with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency"; exit 1; }
+
+          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: /dev/vms unopenable, exact 3-passed/7-failed split), with vmsfs's independent facility still passing"
 
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests

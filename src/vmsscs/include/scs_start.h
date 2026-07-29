@@ -31,7 +31,9 @@
  *   - [42:44] inner length = payload_len - 44 (62 for START, 2 for ACK)
  *   - [44:46] config-round counter (0,1 for START rounds; 2 for the ACK)
  *   - [46:48] SCSSYSTEMID (LE u16) -- OVMX's, from the vms-ci.8 SYSGEN store
- *   - [58:66] software version "VMS V7.3" (ASCII, from template)
+ *   - [58:66] software version -- SUBSTITUTED to OVMX's own identity
+ *     SCS_START_SW_VERSION ("VMX V0.1"), NOT the template's "VMS V7.3"
+ *     (authenticity INV-0; the SHOW CLUSTER SOFTWARE column, display-only)
  *   - [74:78] hardware type "VAX " (ASCII, from template)
  *   - [90:98] node name (ASCII, 8-byte blank-padded, left-justified) -- OVMX's SCSNODE
  *
@@ -91,6 +93,16 @@ extern "C" {
 #define SCS_START_FORMAT        0x13 /* format/version constant (GROUNDED, spec sec 4g) */
 #define SCS_START_ACK_ROUND     2    /* config-round of the terminating 46-byte ack */
 #define SCS_START_NODENAME_LEN  8    /* fixed 8-byte blank-padded node-name field (spec sec 4g) */
+
+/* Software-version string OVMX advertises in the START/config body [58:66]
+ * (exactly 8 bytes, ASCII, no NUL on the wire). This is the value the real
+ * VAX's SHOW CLUSTER prints in its SOFTWARE column. OVMX advertises its OWN
+ * identity here -- NOT a "VMS Vx.y" masquerade (authenticity INV-0 /
+ * trademark-ceiling: OVMX is OpenVMS-COMPATIBLE, it never claims to BE OpenVMS).
+ * GROUNDED (vms-d94, live on VAX 7.3): the field is display-only -- the member
+ * does NOT validate it for cluster admission (OVMX still reaches SHOW CLUSTER
+ * status NEW advertising this). Must be exactly SCS_START_NODENAME_LEN bytes. */
+#define SCS_START_SW_VERSION    "VMX V0.1"
 
 /*
  * scs_seq_state - OVMX's own SCS sequenced-message counter state for one VC.

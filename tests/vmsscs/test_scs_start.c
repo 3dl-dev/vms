@@ -135,7 +135,8 @@ static void test_build_start(void)
     check(le16(out + 56) == 62, "inner length [42:44]==62==paylen-44 (abs 56, GROUNDED)");
     check(le16(out + 58) == 1, "config-round [44:46]==1 (abs 58, substituted)");
     check(le16(out + 60) == 1030, "SCSSYSTEMID [46:48]==1030 (abs 60, OVMX identity)");
-    check_bytes(out + 72, (const uint8_t *)"VMS V7.3", 8, "version [58:66]=='VMS V7.3' (abs 72, GROUNDED)");
+    check_bytes(out + 72, (const uint8_t *)SCS_START_SW_VERSION, 8,
+                "version [58:66]==OVMX identity 'VMX V0.1' (abs 72, substituted; authenticity INV-0)");
     check_bytes(out + 88, (const uint8_t *)"VAX ", 4, "hardware [74:78]=='VAX ' (abs 88, GROUNDED)");
     check_bytes(out + 104, (const uint8_t *)"OVMX    ", 8,
                 "node name [90:98]=='OVMX    ' 8-byte blank-padded (abs 104, GROUNDED encoding)");

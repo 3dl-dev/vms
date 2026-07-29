@@ -126,6 +126,13 @@ int scs_start_build(const struct scs_start_params *p,
     /* Class-specific: config-round, SCSSYSTEMID, node name. */
     put_le16(out + 14 + 44, p->config_round);   /* config-round counter [44:46] */
     put_le16(out + 14 + 46, p->scssystemid);    /* SCSSYSTEMID (LE u16) [46:48] */
+
+    /* Software-version [58:66]: overwrite the golden template's "VMS V7.3" with
+     * OVMX's OWN identity (vms-d94). This is the SHOW CLUSTER SOFTWARE column;
+     * OVMX advertises what it IS, not a VMS masquerade (authenticity INV-0). The
+     * member does not validate it -- live-verified OVMX reaches status NEW with
+     * it. SCS_START_SW_VERSION is a fixed 8-byte string (no NUL on the wire). */
+    memcpy(out + 14 + 58, SCS_START_SW_VERSION, SCS_START_NODENAME_LEN);
     {
         /* Node name: fixed 8-byte, blank-padded, left-justified [90:98]
          * (GROUNDED distinct encoding vs. HELLO's length-prefixed form). */

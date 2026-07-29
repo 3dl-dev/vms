@@ -344,7 +344,29 @@ static void setup_session(struct dcl_context *ctx)
 
         /* Register the system disk in the device table before LNM setup.
          * DKA0: → vms_root is the ONE place a Unix path enters the namespace. */
-        vmsfs_device_add("DKA0", vms_root);
+        vmsfs_device_add(SYSDISK_DEVICE, vms_root);
+
+        /*
+         * ALSO register the system disk in the DCL-visible device table
+         * (vms_device_table, dcl_builtin.c) — a separate table from the one
+         * above. vmsfs_device_add() feeds vmsfs_to_linux_path()'s path
+         * resolver; vms_device_table feeds SHOW DEVICE and MOUNT/DISMOUNT
+         * (dcl_cmd_show.c / dcl_cmd_misc.c). Without this, SHOW DEVICE on a
+         * fresh session showed nothing at all — the boot-registered system
+         * disk was invisible to it (vms-b9f C1). Volume label "OVMXSYS"
+         * reuses the existing OVMX system-device convention already used by
+         * F$GETDVI's VOLNAM item (dcl_lexical.c) — not a new invented value.
+         */
+        if (vms_device_count < VMS_MAX_DEVICES && !vms_find_device(SYSDISK_DEVICE ":")) {
+            struct vms_device *sysdev = &vms_device_table[vms_device_count++];
+            strncpy(sysdev->vms_name, SYSDISK_DEVICE ":", sizeof(sysdev->vms_name) - 1);
+            sysdev->vms_name[sizeof(sysdev->vms_name) - 1] = '\0';
+            strncpy(sysdev->linux_path, vms_root, sizeof(sysdev->linux_path) - 1);
+            sysdev->linux_path[sizeof(sysdev->linux_path) - 1] = '\0';
+            strncpy(sysdev->volume_label, "OVMXSYS", sizeof(sysdev->volume_label) - 1);
+            sysdev->volume_label[sizeof(sysdev->volume_label) - 1] = '\0';
+            sysdev->mounted = 1;
+        }
 
         lnm_setup_defaults(mgr, vms_root);
 

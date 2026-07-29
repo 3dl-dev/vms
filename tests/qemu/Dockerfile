@@ -72,6 +72,46 @@ RUN for f in /src/tests/qemu/test_*.c; do \
         echo "Built: $(basename $out)"; \
     done
 
+# Build the vms-ln0 logical-name placement cost benchmark.
+#
+# Unlike the test_kmod_* programs (which are standalone), this one links the
+# REAL src/vmslnm/ sources, so the in-process translate baseline it reports is
+# the actual shipping implementation rather than a reimplementation of it.
+# It needs a real /dev/vms and fails honestly (SS$_NOSUCHDEV) without one.
+COPY src/vmslnm/ /src/vmslnm/
+COPY src/libvms/include/ /src/libvms/include/
+COPY src/vmsfs/ /src/vmsfs/
+COPY tests/qemu/bench_lnm_cost.c tests/qemu/bench_lnm_peropen.c /src/tests/qemu/
+RUN gcc -static -O2 -Wall -Wextra \
+        -o /src/tests/qemu/bench_lnm_cost \
+        /src/tests/qemu/bench_lnm_cost.c \
+        /src/vmslnm/lnm_table.c \
+        /src/vmslnm/lnm_translate.c \
+        /src/vmslnm/lnm_client.c \
+        /src/vmslnm/lnm_defaults.c \
+        -I/src/kernel -I/src/vmslnm/include -I/src/libvms/include \
+        -lpthread && \
+    echo "Built: bench_lnm_cost"
+
+# Companion measurement: how many logical-name translations one file open
+# performs. Links the REAL vmsfs translation pipeline and interposes on
+# lnm_translate with --wrap (no stub: the wrapper forwards to __real_).
+RUN gcc -static -O2 -Wall \
+        -o /src/tests/qemu/bench_lnm_peropen \
+        /src/tests/qemu/bench_lnm_peropen.c \
+        /src/vmsfs/vmsfs_translate.c \
+        /src/vmsfs/vmsfs_device.c \
+        /src/vmsfs/vmsfs_case.c \
+        /src/vmsfs/vmsfs_version.c \
+        /src/vmsfs/vmsfs_protect.c \
+        /src/vmslnm/lnm_table.c \
+        /src/vmslnm/lnm_translate.c \
+        /src/vmslnm/lnm_client.c \
+        /src/vmslnm/lnm_defaults.c \
+        -I/src/vmsfs/include -I/src/vmslnm/include -I/src/libvms/include \
+        -Wl,--wrap=lnm_translate -lpthread && \
+    echo "Built: bench_lnm_peropen"
+
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
 RUN gcc -O2 -Wall -o /src/tests/qemu/mkimage_vmsfs \
@@ -122,6 +162,9 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     for f in /src/tests/qemu/test_kmod_*; do \
         [ -x "$f" ] && cp "$f" /initramfs/tests/ || true; \
     done && \
+    # Measurement programs (vms-ln0); run after the pass/fail suite
+    cp /src/tests/qemu/bench_lnm_cost /initramfs/tests/ && \
+    cp /src/tests/qemu/bench_lnm_peropen /initramfs/tests/ && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

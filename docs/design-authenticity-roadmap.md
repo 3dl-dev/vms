@@ -63,7 +63,7 @@ completeness.
 **Not tells (leave alone):** AUTHORIZE has no DCL verb — that is *authentic* (real VMS is
 `RUN SYS$SYSTEM:AUTHORIZE`). Message *format* is already correct. Queue store schema is real.
 
-## 2.1 Root cause beneath the tells: **OVMX has no executive**
+## 2.1 Root cause beneath the tells: **no shared system state in the path OVMX runs**
 
 > Added 2026-07-28, after the INV-1 work found that `DEFINE/SYSTEM` does not propagate between
 > processes. That finding was not a one-off bug — chasing it exposed a **single root cause under a
@@ -71,8 +71,14 @@ completeness.
 
 On OpenVMS, the **executive** owns the system-wide data structures — logical name tables, the
 process list, the device table, event flag clusters, mailboxes — in system space, and every process
-sees the same ones. OVMX has no such thing. OVMX is **N independent Linux processes, each privately
-simulating an entire VMS system in its own address space.**
+sees the same ones.
+
+In the path OVMX actually runs today, that is missing: OVMX behaves as **N independent Linux
+processes, each privately simulating an entire VMS system in its own address space.** But see
+**§2.1.1 — the executive is half-built, not absent.** `vms.ko` already implements a real one
+(locks, event flags incl. common clusters, ASTs, access modes); userspace calls it only for
+`$ENQ`/`$DEQ`, and it does not exist in Docker at all. The heading below is the *symptom* as
+observed from userspace, not a claim that no executive code exists.
 
 The dividing line is mechanical and almost perfectly predictive:
 
@@ -94,8 +100,11 @@ per-process — and the fake reports success.
   `Total number of users = 1, number of processes = 1` — permanently. (No live rd item: the
   `vms-901`/`904` children named by `vms-898.11` predate the nostr board and were never migrated —
   worth re-creating when M1 is worked.)
-- **Event flags.** Stored in the PCB (`pcb->ef_clusters`). VMS clusters 2 and 3 are **common event
-  flag clusters**, explicitly shared via `$ASCEFC`; that is not expressible here.
+- **Event flags.** The *userspace* path stores them in the PCB (`pcb->ef_clusters`), so they are
+  per-process there. **CORRECTION (2026-07-28): this is a wiring gap, not an absence** — `vms.ko`
+  already implements event flags *including* VMS common clusters (`vms_eflag.c`,
+  `vms_common_ef_lock`, ioctls `VMS_IOCTL_SETEF`/`ASCEFC`/`DACEFC`). `event_flags.c` simply never
+  calls them. Same for ASTs (`0x10-0x12`) and access modes/privileges (`0x01-0x04`).
 - **Mailboxes.** `$CREMBX` is implemented as a Unix **socketpair**, and the mailbox's logical name is
   created in **`LNM$PROCESS_TABLE`**. A socketpair cannot be joined by an unrelated process and the
   name cannot be resolved outside the creator, so the canonical VMS IPC pattern — proc A creates
@@ -117,10 +126,46 @@ format work but are actually *blocked on shared state* and cannot honestly close
 Fixing these one surface at a time produces *better-looking* LARP: a `SHOW SYSTEM` that formats one
 fabricated row beautifully is still one fabricated row. **The substrate is the work.**
 
-**Scope:** a system-state substrate — shared, persistent-for-the-life-of-the-boot storage for the
-executive-owned structures, with the per-process tables becoming caches/views over it. The
-`lnm.sock` daemon is a partial precedent (it already loads `SYLOGICALS.CONF`; nothing connects to
-it), as is the `MAP_SHARED` known-image DB. Tracked as **`vms-6b8`**.
+### 2.1.1 The executive is half-built, not absent — and the gap is three different things
+
+`vms.ko` is already a real VMS executive. Correcting the framing above: the work is far less
+greenfield than "build a substrate" implies.
+
+| Facility | Kernel ioctls in `vms_ioctl.h` | Userspace calls it? |
+|---|---|---|
+| Lock manager (`$ENQ`/`$DEQ`) | `0x30+` | **Yes** — `sys_lock.c` via `vms_kif` |
+| Event flags, incl. common clusters | `0x20`–`0x27` | **No** — `event_flags.c` uses the PCB |
+| ASTs | `0x10`–`0x12` | **No** |
+| Access modes / privileges | `0x01`–`0x04` | **No** |
+| Logical names, process table, device table, mailboxes | *none* | — |
+
+So `vms-6b8` is **three** distinct problems:
+
+1. **Unwired** — event flags, ASTs, privileges: kernel implementations exist and are ignored.
+   Cheapest real win on the whole board; route them through `vms_kif`.
+2. **Absent** — process table, logical names, device table, mailboxes: no kernel support at all.
+3. **Unavailable in Docker** — containers have no `/dev/vms`, and Docker is where CI runs.
+
+**The Docker question is the actual ruling needed.** `sys_lock.c` already set a precedent and wrote
+the policy down: the kernel module is the single authoritative lock manager, and in Docker `$ENQ`
+returns `SS$_NOSUCHDEV` — *"accepted, by design, not a bug."* Generalising that to the whole
+executive means **Docker/CI mode has no system-wide state at all**, and every executive-dependent
+authenticity item is gated behind the QEMU harness. The alternative is one executive API with two
+backends (kernel ioctl when `/dev/vms` exists; degraded otherwise) — which keeps CI able to test,
+and where **INV-6 bites hardest: a degraded backend must declare itself, never silently report
+success.** That silent-success failure mode is the exact bug class this whole section documents.
+
+**Recommended order** (not yet ruled): (1) wire the existing unused ioctls; (2) formalise the
+two-backend seam `sys_lock.c` improvised; (3) extend kernel-side biggest-tell-first — process
+table, then device table, then mailboxes.
+
+**Caveat against a blanket "kernel everything" rule:** logical-name translation is on the hot path
+of *every file open*. An ioctl per translation is a syscall round trip. LNM may deserve a shared
+mapping (the `MAP_SHARED` known-image DB is the in-tree precedent) or kernel-side storage with a
+per-process cache plus invalidation. Decide LNM separately from the rest.
+
+**Scope:** tracked as **`vms-6b8`**. The `lnm.sock` daemon (already loads `SYLOGICALS.CONF`; nothing
+connects to it) and the `MAP_SHARED` known-image DB are the two userspace precedents.
 
 ### 2.2 Re-tiering: rank by tell-probability, not by feature completeness
 

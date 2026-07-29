@@ -20,10 +20,13 @@ ioctl.** This is option **C, corrected**: the mapping comes from the *executive*
 file. That single correction turns all three of option C's stated costs — cross-process
 locking, crash consistency, and no protection — into non-issues, while keeping option C's
 defining property of zero syscalls on the hot path. Option A (ioctl per translation) is
-**rejected on measured cost**: **79.0 µs mean (n=5 trials, range 76.2–81.6 µs)** per executive
-round trip against **0.94 µs mean** for the in-process four-table translate it would replace —
-**84.5× mean (range 78.5×–88.4×)** — on the only runtime target OVMX has. That 79.0 µs is itself
-a measured **lower bound** for a real translate ioctl (§1.1, §4a) — the true cost of option A is
+**rejected on measured cost**: across **6 independent boots** of the identical binary (n=5
+trials/boot, 30 trials total — see §1.1 for the full boot-by-boot table), the executive round
+trip costs a between-boot envelope of **~74–83 µs mean per boot**, roughly **78×–105× the
+in-process four-table translate** it would replace, on the only runtime target OVMX has. No
+single boot's tight n=5 bracket (e.g. "79.0 µs, 84.5×") bounds this reproduction variance — that
+bracket measures within-boot jitter only (§1.1). Every figure in this envelope is itself a
+measured **lower bound** for a real translate ioctl (§1.1, §4a) — the true cost of option A is
 higher still. Option B (kernel-owned + per-process cache with invalidation) is **rejected on failure
 mode**: a missed invalidation is a silently wrong translation that reports success, which is
 the same class of defect as the per-process fake this epic exists to kill. LNM$PROCESS stays
@@ -117,8 +120,34 @@ its true cost is unmeasured and **higher** than the 79.0 µs mean reported here.
 rounded up by guess; the direction of the remaining error is always toward strengthening the
 rejection of option A.
 
+**The n=5 bracket above does NOT bound reproduction variance — it bounds within-boot jitter.**
+All five trials in that box share one process, one QEMU boot, one warm TCG translation cache,
+and one host thermal state; only the 300 ms accumulation window is fresh per trial. A prior
+adversarial pass falsified treating it as a reproduction bound by following the `Reproduce:` line
+below twice and getting figures outside the box's own range in both directions. Six independent
+boots of the identical binary are now on record:
+
+| boot | source | `vms_inout` mean | ratio mean [range] |
+|---|---|---|---|
+| 1 | this record (box above) | 79.0 µs | 84.5× [78.5×, 88.4×] |
+| 2 | this rework, `podman run` #1 | 74.4 µs | 87.9× [85.1×, 89.1×] |
+| 3 | this rework, `podman run` #2 | 74.6 µs | 92.9× [90.1×, 97.1×] |
+| 4 | this rework, `podman run` #3 | 73.7 µs | 92.6× [87.9×, 100.3×] |
+| 5 | veracity adversary, prior wave | 75.3 µs | 89.3× [84.8×, 93.4×] |
+| 6 | veracity adversary, prior wave | 83.4 µs | 96.7× [89.2×, 104.5×] |
+
+Union across all 6 boots (30 trials total, `boots=6, trials=5/boot`): ratio **78.5×–104.5×**,
+mean-of-boot-means **90.6× on 76.7 µs**. That is the real reproduction-variance envelope — a
+~29% peak-to-peak spread around the mean, i.e. **roughly ±14%** boot to boot, not the ~13%
+two-run comparison that motivated moving to n=5 trials in the first place. **§0 and §5 quote
+this between-boot envelope, not boot 1's tight n=5 bracket.** The margin over the ruled option
+(two orders of magnitude, §2.4) makes none of this a threat to the ruling; it only means the
+precision the earlier draft implied was never there.
+
 Reproduce: `podman build -f tests/qemu/Dockerfile -t ovmx-ktest .` then
-`podman run --rm ovmx-ktest`, and read the `bench_lnm_cost` section of the serial log.
+`podman run --rm ovmx-ktest`, and read the `bench_lnm_cost` section of the serial log. Run it
+more than once — no two boots in the table above are the same execution — to see the spread
+directly.
 
 ### 1.2 Translations per file open — K
 
@@ -148,8 +177,10 @@ not assume misses are cheap.
 
 ### 1.3 Option A, priced
 
-Multiplying the two measurements — using the n=5 trial **range**, not a single point estimate,
-on the runtime target as it exists today:
+Multiplying the two measurements — using boot 1's n=5 trial **range**, not a single point
+estimate, on the runtime target as it exists today. This table prices **one specific boot**;
+it is a worked example of the method, not the reproduction-variance bound — see §1.1's 6-boot
+table for that, and §5 for the headline that quotes it instead of this single boot:
 
 | | per translation (n=5) | K = 1.83 (mean open) | K = 3 (system-image open) |
 |---|---|---|---|
@@ -169,27 +200,50 @@ There is no `/dev/kvm` on the measuring machine and CI runs the QEMU suite insid
 so the guest is emulated with TCG. TCG does **not** inflate everything uniformly, and pretending
 the mean 84.5× is a hardware number would be dishonest. The identical binary was therefore run
 natively on the host (`--calibrate`, which explicitly skips the `/dev/vms` cases and labels its
-output CALIBRATION). `getppid`/`enotty` below are single-sample context; `lnm_hit_s` is the same
-n=5 trial protocol as §1.1, native this time:
+output CALIBRATION).
+
+**This is the program's actual, complete `--calibrate` output, pasted verbatim — not
+reconstructed.** A previous draft hand-composed a `[lnm_hit_s] ... native ... (n=5)` line as if
+it were one of the individual `[label]` RESULTS lines below; the program cannot emit that line
+in that form. In calibration mode `n_trials` stays 0 (the `/dev/vms` half of every trial is
+skipped by design), so `lnm_hit_s` never gets its own `[lnm_hit_s]` line in the RESULTS block —
+it appears exactly once, inside the `DERIVED (n=0 trials; ...)` block, phrased as
+`lnm_hit_s (in-process 4-table translate), native: ...`. Reproduce natively (no `/dev/vms`
+needed): `gcc -static -O2 -Wall -Wextra -o bench_lnm_cost tests/qemu/bench_lnm_cost.c
+src/vmslnm/lnm_{table,translate,client,defaults}.c -Isrc/kernel -Isrc/vmslnm/include
+-Isrc/libvms/include -lpthread && ./bench_lnm_cost --calibrate`:
 
 ```
-  [getppid]   syscall(SYS_getppid) - syscall floor                    64.0 ns/op
-  [enotty]    ioctl(non-vms fd) -> ENOTTY - dispatch floor            70.2 ns/op
-  [lnm_hit_p] lnm_translate FILE_DEV, hit LNM$PROCESS (1 tbl)         29.4 ns/op
-  [lnm_hit_s] lnm_translate FILE_DEV, hit LNM$SYSTEM (4 tbl), native  61.2 ns/op  [59.9, 63.0] (n=5)
+RESULTS (lower is better):
+
+REPEATED TRIALS (n=5), CHKPRIV round trip vs in-process 4-table translate:
+  [clock]    clock_gettime pair (noise floor)                          496.6 ns/op   (n=604200)
+  [getppid]  syscall(SYS_getppid) - syscall floor                       59.7 ns/op   (n=5024200)
+  [enotty]   ioctl(non-vms fd) -> ENOTTY - dispatch floor               69.9 ns/op   (n=4292400)
+  [lnm_hit_p] lnm_translate FILE_DEV, hit LNM$PROCESS (1 tbl)            24.1 ns/op   (n=12473400)
+  [lnm_miss] lnm_translate FILE_DEV, miss all 4 tables                  56.5 ns/op   (n=5312200)
+
+DERIVED (n=0 trials; MEAN with [MIN, MAX] range -- not a single-sample point estimate):
+  (calibration mode: /dev/vms cases skipped, no ioctl trials to aggregate)
+  lnm_hit_s (in-process 4-table translate), native: mean 53.9 ns/op [53.1, 54.5] (n=5)
 ```
+
+`getppid`/`enotty` above are single-sample context, as on the QEMU side; `lnm_hit_s` is the same
+n=5 trial protocol as §1.1, native this time.
 
 | | QEMU TCG | native host | TCG inflation |
 |---|---|---|---|
-| syscall floor (`getppid`, single sample) | 40190.5 ns | 64.0 ns | **628×** |
-| ioctl dispatch (`ENOTTY`, single sample) | 39121.3 ns | 70.2 ns | **557×** |
-| in-process 4-table translate (n=5 mean, both sides) | 935.8 ns | 61.2 ns | **15.3×** |
+| syscall floor (`getppid`, single sample) | 40190.5 ns | 59.7 ns | **673×** |
+| ioctl dispatch (`ENOTTY`, single sample) | 39121.3 ns | 69.9 ns | **560×** |
+| in-process 4-table translate (n=5 mean, both sides) | 935.8 ns | 53.9 ns | **17.4×** |
 
-So TCG inflates **kernel entry ~39× more than it inflates userspace compute** (average of
-628×/557× ÷ 15.3× ≈ 38.8). Correcting the measured mean 84.5× by that differential projects an
-executive ioctl at roughly **2.2× the in-process translate** on an accelerated (KVM or
-bare-metal) runtime — i.e. about **+72 ns per translation** (using the native 61.2 ns baseline,
-the relevant one for an accelerated runtime), **+132 ns per mean open** (K = 1.83). That is a
+So TCG inflates **kernel entry ~35× more than it inflates userspace compute** (average of
+673×/560× ÷ 17.4× ≈ 35.4). Correcting the measured mean 84.5× (boot 1, §1.1 — the same caveat
+about single-boot precision applies here too, but this whole paragraph is already labelled
+directional, not a headline figure) by that differential projects an executive ioctl at roughly
+**2.4× the in-process translate** on an accelerated (KVM or bare-metal) runtime — i.e. about
+**+74 ns per translation** (using the native 53.9 ns baseline,
+the relevant one for an accelerated runtime), **+136 ns per mean open** (K = 1.83). That is a
 tolerable **~15 % tax**, not a catastrophe. This projection is directional, not a headline figure
 this ruling is quoted against — it is not held to the same n≥5 QEMU-target precision bar as
 §1.1's `vms_inout`/ratio, which is why it is kept in a caveat section rather than the summary
@@ -436,17 +490,20 @@ lab, and raise them for sign-off:
 
 ## 5. Summary table
 
-**Reading this table: MEASURED and PROJECTED are not the same claim, and are never merged into
-one label again after the previous draft blurred them in this exact table.** MEASURED means a
-number `bench_lnm_cost` produced against real `vms.ko`/`/dev/vms` (n=5 trials, §1.1). PROJECTED
+**Reading this table: MEASURED, DERIVED and PROJECTED are three different claims, and are never
+merged into one label.** MEASURED means a number `bench_lnm_cost` produced directly against real
+`vms.ko`/`/dev/vms` (n=5 trials/boot, §1.1). DERIVED means a number obtained by combining two
+*separately* measured quantities — neither program prints it as a single figure — for example
+`bench_lnm_cost`'s per-translation cost multiplied by `bench_lnm_peropen`'s K (§1.2); the
+previous draft labelled one such row MEASURED and that was wrong, corrected below. PROJECTED
 means an estimate for a read path that is **not built yet** — it borrows a measured number from
 a different, structurally-similar code path as its estimate, per §2.4's reasoning, and must be
 checked against a real measurement once `vms-d37` builds it (§3.5).
 
 | | A: ioctl/translate | B: cache + invalidation | C: file `MAP_SHARED` | **C-corrected: `mmap(/dev/vms)`** |
 |---|---|---|---|---|
-| cost per translation | **79.0 µs mean, range 76.2–81.6 µs (n=5) — MEASURED.** CHKPRIV proxy; a genuine **lower bound**, not a ceiling (§4a) | 0.94 µs steady-state — MEASURED (reuses today's in-process lookup unmodified); **~79 µs — PROJECTED** for the refill after any DEFINE (assumed to cost what A's ioctl costs, since a refill is also an executive round trip) | 0.94 µs class — **PROJECTED.** Reuses today's in-process lookup as an estimate; C as literally proposed is unimplemented | **0.94 µs class — PROJECTED, NOT MEASURED.** The seqlock/arena read this option needs does not exist yet (§2.4). `vms-d37` must re-run this benchmark against the built read path (§3.5) before treating this as confirmed |
-| cost per mean open (K=1.83) | **139–149 µs — MEASURED** (range, n=5; floor — §4a) | ~1.72 µs steady — MEASURED; ~139–149 µs — PROJECTED after a DEFINE | ~1.72 µs — PROJECTED | **~1.72 µs — PROJECTED, NOT MEASURED** |
+| cost per translation | **~74–83 µs mean per boot, ~78×–105× vs in-process (6 boots, n=5 trials/boot, §1.1) — MEASURED, between-boot envelope.** No single boot's tight n=5 bracket bounds this. CHKPRIV proxy; a genuine **lower bound**, not a ceiling (§4a) | 0.94 µs steady-state — MEASURED (reuses today's in-process lookup unmodified); **~74–83 µs — PROJECTED** for the refill after any DEFINE (assumed to cost what A's ioctl costs, since a refill is also an executive round trip) | 0.94 µs class — **PROJECTED.** Reuses today's in-process lookup as an estimate; C as literally proposed is unimplemented | **0.94 µs class — PROJECTED, NOT MEASURED.** The seqlock/arena read this option needs does not exist yet (§2.4). `vms-d37` must re-run this benchmark against the built read path (§3.5) before treating this as confirmed |
+| cost per mean open (K=1.83) | **~135–152 µs class — DERIVED** (Row 1's per-boot envelope × K=1.83, where K comes from the *separate* `bench_lnm_peropen` program, §1.2 — not a single number either program printed; floor — §4a) | ~1.72 µs steady — MEASURED; ~135–152 µs — PROJECTED after a DEFINE (same DERIVED class as option A's row) | ~1.72 µs — PROJECTED | **~1.72 µs — PROJECTED, NOT MEASURED** |
 | works with no `/dev/vms` | no (correct) | no (correct) | **yes (wrong)** | **no (correct)** |
 | silent-wrong-answer failure mode | none | **missed invalidation** | none | none |
 | write protection | executive | executive | **none** | **MMU, read-only** |

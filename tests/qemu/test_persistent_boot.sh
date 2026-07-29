@@ -99,7 +99,7 @@ check "Boot 1: blank disk initialized"    "$OUTPUT1" "%STARTUP-I-INIT, initializ
 check "Boot 1: disk mounted"              "$OUTPUT1" "%STARTUP-I-MOUNTED"
 check "Boot 1: install started"           "$OUTPUT1" "%STARTUP-I-INSTALL, installing"
 check "Boot 1: install completed"         "$OUTPUT1" "%STARTUP-I-INSTALLED"
-check "Boot 1: boot banner"              "$OUTPUT1" "OpenVMS V7.3"
+check "Boot 1: boot banner"              "$OUTPUT1" "OpenVMS-compatible"
 echo ""
 
 # Verify disk is not empty (persistence proof — data was written)
@@ -120,7 +120,7 @@ check "Boot 2: disk mounted"              "$OUTPUT2" "%STARTUP-I-MOUNTED"
 check "Boot 2: install skipped"           "$OUTPUT2" "%STARTUP-I-SYSBOOT"
 check "Boot 2: no disk initialization"    "$OUTPUT2" "%STARTUP-I-INIT, initializing" "absent"
 check "Boot 2: no install"                "$OUTPUT2" "%STARTUP-I-INSTALL, installing" "absent"
-check "Boot 2: boot banner"              "$OUTPUT2" "OpenVMS V7.3"
+check "Boot 2: boot banner"              "$OUTPUT2" "OpenVMS-compatible"
 echo ""
 
 # --- Results ---

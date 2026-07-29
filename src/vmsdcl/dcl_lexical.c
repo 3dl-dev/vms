@@ -28,6 +28,7 @@
 #include <vms/privs.h>
 #include "vmsfs/filespec.h"
 #include "sysgen_params.h"
+#include "ovmx_identity.h"
 
 /* External functions */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
@@ -1286,7 +1287,9 @@ static int lex_getsyi(struct dcl_context *ctx, const char *args,
         (void)sysgen_read_param("SCSSYSTEMID", &sysid);
         snprintf(result, result_size, "%u", sysid);
     } else if (strcmp(s, "VERSION") == 0) {
-        strncpy(result, "V7.3", result_size - 1);
+        /* Machine surface: the true-to-arch VMS-compat token, from the
+         * identity SSOT (INV-1). Never a hardcoded constant here. */
+        strncpy(result, ovmx_compat_version(), result_size - 1);
     } else if (strcmp(s, "HW_NAME") == 0) {
         strncpy(result, uts.machine, result_size - 1);
         for (size_t i = 0; result[i]; i++)

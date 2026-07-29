@@ -167,6 +167,15 @@ if(BUILD_TESTS)
     add_subdirectory(tests/vmsqueue)
     add_subdirectory(tests/dcl)
     add_subdirectory(tests/vmsscs)
+
+    # INV-1 standing gate (vms-e652): system identity has ONE owner, and the
+    # login banner stays driven by SYS$WELCOME rather than a compiled-in
+    # printf. Source scan — no build artifacts needed.
+    add_test(NAME identity_ssot_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_identity_ssot.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(identity_ssot_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

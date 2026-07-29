@@ -3,7 +3,7 @@
 # EXPECT: contains:OVMX
 # EXPECT: contains:OVMX-TCP/IP
 # EXPECT: contains:%SYSTEM-I-NOTMEMBER
-# EXPECT: contains:OVMX TCP/IP Services for OpenVMS
+# EXPECT: regex:OVMX TCP/IP Services V[0-9]+\.[0-9]+
 # EXPECT: contains:Node: OVMX
 # EXPECT: contains:Device Error Count Summary
 # EXPECT: contains:No errors logged.

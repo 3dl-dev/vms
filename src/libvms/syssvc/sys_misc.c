@@ -17,6 +17,7 @@
 #include "starlet.h"
 #include "vms/pcb.h"
 #include "sysgen_params.h"
+#include "ovmx_identity.h"
 
 /*
  * sys$setprv - Set or clear process privileges.
@@ -101,7 +102,11 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
             }
 
             case SYI$_VERSION: {
-                const char *ver = "V0.1";
+                /* Machine surface: the true-to-arch VMS-compat token from
+                 * the identity SSOT (INV-1). This used to answer "V0.1"
+                 * while F$GETSYI answered "V7.3" -- two different answers
+                 * to the same question, which is the tell INV-1 kills. */
+                const char *ver = ovmx_compat_version();
                 uint16_t len = (uint16_t)strlen(ver);
                 if (len > item->buflen) len = item->buflen;
                 if (item->bufaddr) memcpy(item->bufaddr, ver, len);

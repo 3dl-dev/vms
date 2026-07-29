@@ -147,6 +147,26 @@ again. Identity has **two version numbers plus an iron rule** (D1, resolved 2026
 Every surface is classified **human** (→ OVMX brand badge) or **machine** (→ true-to-arch compat
 token) and reads the one identity module.
 
+**Login banners are logicals, not printfs** (refinement, 2026-07-28, operator correction during
+implementation). On real VMS the login banner is *not* compiled into LOGINOUT — a manager defines
+**`SYS$ANNOUNCE`** (displayed before the `Username:` prompt) and **`SYS$WELCOME`** (displayed after
+authentication) at boot, in `SYS$MANAGER:SYLOGICALS.COM` (OVMX: `SYLOGICALS.CONF`). An equivalence
+string beginning with `@` names a **file** whose contents are displayed, which is how a site gets a
+multi-line banner. Both ship **undefined**, exactly as VMS does: with no `SYS$WELCOME`, LOGINOUT
+prints its built-in banner — and that built-in is the only thing the identity module supplies.
+
+This matters more than the version string it replaced. A greybeard types
+`DEFINE/SYSTEM SYS$WELCOME "..."` within the first ten minutes; a hardcoded `printf()` swallows it
+silently, which is a *worse* tell than a wrong version — the verb appears to work and does nothing.
+Implemented in `ovmx_banner.h`; the INV-1 gate asserts LOGINOUT and the SSH daemon keep resolving
+the logical rather than regressing to a compiled-in greeting.
+
+**Known gap (filed separately):** OVMX logical-name tables are currently **per-process** —
+`lnm_get_manager()` builds an in-process table and nothing but the daemon itself reads
+`SYLOGICALS.CONF`. So a boot-time or `DEFINE/SYSTEM` definition does not yet propagate to other
+processes; the banner reads whatever its own process can see. The banner is correctly wired *to* the
+logical, so it starts working the moment system-wide logicals do.
+
 ### INV-2 — Message-ident fidelity gate
 No emitted message may use an invented ident. New idents require oracle + operator sign-off. A
 **CI lint** fails the build on any ident outside the verified catalog. (A3 seeds the catalog;

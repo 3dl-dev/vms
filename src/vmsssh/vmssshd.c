@@ -49,6 +49,8 @@
 #include "dcl/terminal.h"
 
 #include "ovmx_layout.h"
+#include "ovmx_identity.h"
+#include "ovmx_banner.h"
 #define DCL_SHELL_PATH VMS_SYSTEM_DIR "/DCL.EXE"
 
 /* ------------------------------------------------------------------ */
@@ -475,7 +477,11 @@ static void handle_connection(ssh_session session)
             "JUL","AUG","SEP","OCT","NOV","DEC"
         };
 
-        printf("\n   Welcome to OpenVMS (tm) OVMX V7.3\n");
+        /* SYS$WELCOME (boot-defined logical), falling back to the built-in
+         * badged OVMX identity. The old hardcoded "Welcome to OpenVMS (tm)
+         * OVMX V7.3" both ignored the logical and claimed VSI's mark. */
+        printf("\n");
+        ovmx_banner_welcome(stdout);
 
         time_t last_login = 0;
         if (ovmx_accounting_get_lastlogin(sysuaf_rec.username, &last_login) == 0

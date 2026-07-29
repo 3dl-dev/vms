@@ -220,11 +220,38 @@ struct peer_state {
     uint16_t sysap_send;           /* OVMX's next SYSAP send-msg# (body[0:2]; from 1) */
     uint16_t sysap_recv;           /* high-water of the member's SYSAP send-msg# (ack target) */
     long     cm_responses;         /* 0x81 responses we sent to member 0x03/0x05 txns */
+    /* --- vms-9f3: NISCA channel packet-size verification (padded directed
+     * HELLO, spec sec 4k). An ESTABLISHED VAX1 zero-pads a directed HELLO up to
+     * NISCS_MAX_PKTSZ and retransmits it (1500->1069->853->745, ~6s) until OVMX
+     * RECIPROCATES on the reverse channel; that reciprocal is what lets VAX1
+     * open OVMX's CSB and drive the sec 4j add-member commit. */
+    long     padded_replies;       /* padded HELLOs we sent this peer (reciprocations) */
+    struct timespec last_padded;   /* CLOCK_MONOTONIC of our last padded send (rate limit) */
+    int      padded_initiated;     /* we proactively sent one padded HELLO (golden joiner-first) */
+    uint16_t peer_padded_sca;      /* largest padded-HELLO total SCA size seen from the peer */
 };
 
 static int mac_eq(const uint8_t *a, const uint8_t *b)
 {
     return memcmp(a, b, 6) == 0;
+}
+
+/*
+ * is_padded_hello - vms-9f3: is `buf` (n bytes on the wire) a padded directed
+ * HELLO (spec sec 4k)? A HELLO-family frame -- message-class byte 0x05 at abs 36
+ * and NOT the 0x13 SCS-envelope format constant at abs 31 (this is a HELLO, not
+ * an 0x4b sequenced message) -- whose total SCA content EXCEEDS a normal
+ * 120-byte HELLO, up to NISCS_MAX_PKTSZ (+2). Per sec 4k the distinguishing
+ * feature of a padded HELLO is its SIZE plus the HELLO class byte; the pad tail
+ * is pure zeros. The frame is already known to be unicast to our HW MAC (gated
+ * by the caller).
+ */
+static int is_padded_hello(const uint8_t *buf, size_t n)
+{
+    return n > (size_t)SCS_HELLO_FRAME_LEN &&
+           n <= (size_t)SCS_HELLO_PADDED_MAX_FRAME &&
+           buf[31] == 0x00 &&   /* HELLO family, NOT the 0x13 SCS envelope (sec 4k) */
+           buf[36] == 0x05;     /* message-class byte 0x05 == HELLO (spec sec 4a/4k) */
 }
 
 static struct peer_state *peer_find_or_add(struct peer_state *tbl, const uint8_t mac[6])
@@ -435,6 +462,7 @@ int main(int argc, char **argv)
     long dir_lookup_sent = 0;    /* vms-246: SCS$DIR_LOOKUP responses sent */
     long cm_config_frames = 0;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
     long cm_response_sent = 0;   /* vms-224: 0x81 responses to member 0x03/0x05 txns */
+    long padded_sent = 0;        /* vms-9f3: padded directed HELLOs sent (sec 4k channel verify) */
 
     /* OVMX identity for the phase-2 START/config body (vms-21e). Resolved once;
      * shared by every peer's START responder. */
@@ -506,6 +534,9 @@ int main(int argc, char **argv)
     long counts[5] = {0, 0, 0, 0, 0};
     long total_frames = 0;
     static uint8_t buf[SCA_FRAME_MAX];
+    /* vms-9f3: reusable send buffer for padded directed HELLOs (up to 1514B on
+     * the wire) -- static to keep it off the loop's stack frame. */
+    static uint8_t pframe[SCS_HELLO_PADDED_MAX_FRAME];
     struct timespec last_hello = {0, 0};
 
     while (!g_stop) {
@@ -747,6 +778,68 @@ int main(int argc, char **argv)
             }
         }
 
+        /* (a0) vms-9f3: NISCA channel packet-size verification (spec sec 4k).
+         * An ESTABLISHED VAX1 zero-pads a directed HELLO up to NISCS_MAX_PKTSZ
+         * (1500 SCA / 1514 wire) and retransmits it (~6s: 1500->1069->853->745)
+         * until OVMX RECIPROCATES with its OWN padded HELLO on the reverse
+         * channel. That reciprocal is the "ack" VAX1 waits on before opening
+         * OVMX's CSB and driving the sec 4j add-member commit -- an unpadded
+         * 120-byte HELLO does NOT satisfy it (GROUNDED negative, sec 4k). We
+         * reply to the SAME total size (capped at NISCS_MAX_PKTSZ), rate-limited
+         * to ~5s so we never out-pace VAX1's ~6s probe cadence (reply-
+         * amplification guard: do NOT flood 1500B frames). A padded HELLO does
+         * not classify as SCS_CLASS_HELLO (length != 120), so it reaches here as
+         * SCS_CLASS_OTHER and is detected by is_padded_hello(). */
+        if (is_padded_hello(buf, (size_t)n)) {
+            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            if (ps == NULL) {
+                continue;
+            }
+            memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* src-logical, abs 24 */
+            uint16_t rx_sca = (uint16_t)((size_t)n - 14u); /* total SCA content received */
+            if (rx_sca > ps->peer_padded_sca) {
+                ps->peer_padded_sca = rx_sca;
+            }
+            /* The member advertises the node-incarnation it attributes to OVMX
+             * in the padded HELLO's abs-92 flag too (sec 4i.B); capture it. */
+            uint16_t adv_inc =
+                (uint16_t)(buf[OFF_HELLO_DIRFLG] | ((uint16_t)buf[OFF_HELLO_DIRFLG + 1] << 8));
+            if (adv_inc != 0) {
+                ps->incarnation = adv_inc;
+            }
+            uint16_t echo_inc = ps->incarnation ? ps->incarnation : 1;
+
+            /* Echo to the same size, never above the GROUNDED NISCS_MAX_PKTSZ ceiling. */
+            uint16_t echo_sca = rx_sca > SCS_HELLO_PADDED_MAX_SCA
+                                    ? (uint16_t)SCS_HELLO_PADDED_MAX_SCA : rx_sca;
+            struct timespec pnow;
+            clock_gettime(CLOCK_MONOTONIC, &pnow);
+            int pdue = (ps->padded_replies == 0) ||
+                       (pnow.tv_sec - ps->last_padded.tv_sec >= 5);
+            if (pdue) {
+                size_t plen = 0;
+                hello_params.timer_tick = (uint32_t)directed_sent;
+                if (scs_hello_build_padded_directed_frame(&hello_params, src_mac, lab_nonce,
+                                                          echo_inc, echo_sca,
+                                                          pframe, sizeof(pframe), &plen) == 0 &&
+                    send_frame_to(sock, (int)ifindex, src_mac, pframe, plen) > 0) {
+                    ps->padded_replies++;
+                    ps->padded_initiated = 1; /* a reciprocation counts as our advertisement */
+                    ps->channel_up = 1;
+                    ps->last_padded = pnow;
+                    padded_sent++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-PADHELLO, reciprocated padded HELLO (%u SCA / %zu wire)"
+                           " to %02x:%02x:%02x:%02x:%02x:%02x (reply #%ld)\n",
+                           echo_sca, plen,
+                           src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
+                           ps->padded_replies);
+                    fflush(stdout);
+                }
+            }
+            continue;
+        }
+
         /* (a) Directed HELLO -> reply with our directed HELLO (NISCA channel,
          * spec sec 4b). The frame is already known to be unicast to our HW MAC
          * (gated above), so any non-zero directed flag marks a directed HELLO
@@ -808,6 +901,33 @@ int main(int argc, char **argv)
                 }
             } else {
                 ps->channel_up = 1;
+            }
+
+            /* vms-9f3: match the golden joiner (VAX2) -- once our directed
+             * channel is up, proactively send ONE padded HELLO up to
+             * NISCS_MAX_PKTSZ to advertise OVMX's own channel size, as golden
+             * idx 5990 did (spec sec 4k step 2), so an established VAX1 that is
+             * waiting for the joiner to initiate verifies both directions. ONE
+             * frame, guarded by padded_initiated -- not a flood. */
+            if (ps->channel_up && !ps->padded_initiated) {
+                size_t plen = 0;
+                hello_params.timer_tick = (uint32_t)directed_sent;
+                if (scs_hello_build_padded_directed_frame(&hello_params, src_mac, lab_nonce,
+                                                          echo_incarnation,
+                                                          (uint16_t)SCS_HELLO_PADDED_MAX_SCA,
+                                                          pframe, sizeof(pframe), &plen) == 0 &&
+                    send_frame_to(sock, (int)ifindex, src_mac, pframe, plen) > 0) {
+                    ps->padded_initiated = 1;
+                    clock_gettime(CLOCK_MONOTONIC, &ps->last_padded);
+                    padded_sent++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-PADINIT, initiated padded HELLO (%u SCA / %zu wire)"
+                           " to %02x:%02x:%02x:%02x:%02x:%02x (golden joiner-first)\n",
+                           (unsigned)SCS_HELLO_PADDED_MAX_SCA, plen,
+                           src_mac[0], src_mac[1], src_mac[2],
+                           src_mac[3], src_mac[4], src_mac[5]);
+                    fflush(stdout);
+                }
             }
 
             /* vms-21e: OVMX is the JOINER, so the established node drives the
@@ -1182,8 +1302,8 @@ int main(int argc, char **argv)
                 credit_sent, retransmit_sent);
         fprintf(stderr, "  DIR-CONNECT-RESP-SENT=%ld DIR-LOOKUP-RESP-SENT=%ld\n",
                 dir_conn_resp_sent, dir_lookup_sent);
-        fprintf(stderr, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld\n",
-                cm_config_frames, cm_response_sent);
+        fprintf(stderr, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld PADDED-HELLO-SENT=%ld\n",
+                cm_config_frames, cm_response_sent, padded_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (!peers[i].in_use) {
                 continue;
@@ -1193,7 +1313,8 @@ int main(int argc, char **argv)
                     " incarnation=%u start_replied=%d start_acked=%d dir_connected=%s"
                     " dir_lookups=%ld connect_sent=%d connected=%s"
                     " credit_sent=%ld retx=%u remote_conid=0x%08X"
-                    " cm_config=%s cm_responses=%ld sysap_send=%u sysap_recv=%u\n",
+                    " cm_config=%s cm_responses=%ld sysap_send=%u sysap_recv=%u"
+                    " padded_replies=%ld padded_init=%d peer_padded_sca=%u\n",
                     peers[i].eth_mac[0], peers[i].eth_mac[1], peers[i].eth_mac[2],
                     peers[i].eth_mac[3], peers[i].eth_mac[4], peers[i].eth_mac[5],
                     peers[i].channel_up ? "UP" : "down", peers[i].directed_replies,
@@ -1204,7 +1325,9 @@ int main(int argc, char **argv)
                     peers[i].credit_sent, peers[i].vc.retransmit_count,
                     peers[i].remote_conid,
                     peers[i].cm_config_sent ? "YES" : "no", peers[i].cm_responses,
-                    peers[i].sysap_send, peers[i].sysap_recv);
+                    peers[i].sysap_send, peers[i].sysap_recv,
+                    peers[i].padded_replies, peers[i].padded_initiated,
+                    peers[i].peer_padded_sca);
         }
     }
 

@@ -6,10 +6,19 @@
  *   2. Declare an AST (DCLAST)
  *   3. Enable/disable AST delivery (SETAST)
  *   4. Verify previous state return values
- *
- * Note: Actual AST delivery to userspace requires signal handling
- * which is more complex to test. Here we test the ioctl interface
- * and queue management.
+ *   5. DELIVERAST actually fires: proves the kernel queue is real, not
+ *      decoration -- declares two ASTs with distinct astprm values,
+ *      then drains DELIVERAST with a real buffer and asserts (a) the
+ *      first call returns the FIRST-declared entry's astadr/astprm/
+ *      acmode unchanged (FIFO, correct content -- the positive
+ *      assertion), (b) the second call returns the second entry, and
+ *      (c) a third call reports "queue now empty" (EAGAIN) -- the
+ *      queue was actually consumed, not just always reporting success.
+ *      This is the userspace-facing proof for vms-as1 (AST delivery
+ *      routed through the executive): src/libvms/syssvc/sys_ast.c's
+ *      sys$dclast/sys$setast now call exactly these three ioctls
+ *      (via vms_kif) instead of simulating delivery in a per-process
+ *      PCB queue -- see docs/design-executive-retrofit.md.
  */
 
 #include <stdio.h>
@@ -71,7 +80,7 @@ int main(void) {
     ioctl(fd, VMS_IOCTL_DCLAST, &ast);
     CHECK(ast.status == SS_NORMAL, "DCLAST while disabled: queued");
 
-    /* 4. Declare a second AST */
+    /* 4. Declare a second AST (distinct astprm so FIFO order is provable) */
     memset(&ast, 0, sizeof(ast));
     ast.astadr = (uint64_t)(uintptr_t)dummy_ast;
     ast.astprm = 99;
@@ -86,11 +95,28 @@ int main(void) {
     CHECK(sa.status == SS_WASCLR, "SETAST(enable) returns WASCLR");
     CHECK(sa.prev_state == 0, "prev state was disabled");
 
-    /* 6. Request delivery (the kernel will try to deliver via signal) */
-    int rc = ioctl(fd, VMS_IOCTL_DELIVERAST, NULL);
-    /* This may or may not produce visible effect since we're in initramfs
-     * without a proper signal handler. Just verify the ioctl doesn't crash. */
-    CHECK(rc == 0 || rc == -1, "DELIVERAST ioctl doesn't crash");
+    /* 6. DELIVERAST actually fires: pass a real buffer (VMS_IOCTL_DELIVERAST
+     * is _IOR -- the kernel writes the delivered AST entry into it) and
+     * assert the content the kernel hands back matches what was declared,
+     * in declaration order. This is the positive assertion pairing with
+     * the "doesn't crash" style check the old version of this test settled
+     * for -- an ioctl that always returns -1 (e.g. the NULL-pointer bug
+     * this test used to have) would have passed that check too. */
+    struct vms_ast_args deliver1 = {0};
+    int rc1 = ioctl(fd, VMS_IOCTL_DELIVERAST, &deliver1);
+    CHECK(rc1 == 0 && deliver1.astadr == (uint64_t)(uintptr_t)dummy_ast
+              && deliver1.astprm == 42 && deliver1.acmode == PSL_C_USER,
+          "DELIVERAST #1 returns the first-declared AST (astprm=42)");
+
+    struct vms_ast_args deliver2 = {0};
+    int rc2 = ioctl(fd, VMS_IOCTL_DELIVERAST, &deliver2);
+    CHECK(rc2 == 0 && deliver2.astadr == (uint64_t)(uintptr_t)dummy_ast
+              && deliver2.astprm == 99 && deliver2.acmode == PSL_C_USER,
+          "DELIVERAST #2 returns the second-declared AST (astprm=99)");
+
+    struct vms_ast_args deliver3 = {0};
+    int rc3 = ioctl(fd, VMS_IOCTL_DELIVERAST, &deliver3);
+    CHECK(rc3 != 0, "DELIVERAST #3: queue actually drained (no third AST)");
 
     close(fd);
 

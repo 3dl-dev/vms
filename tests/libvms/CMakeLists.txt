@@ -82,3 +82,12 @@ target_link_libraries(test_libvms_identity PRIVATE
     m
 )
 add_test(NAME test_libvms_identity COMMAND test_libvms_identity)
+
+# Test 12: vms-as1 (executive retrofit Phase 1) — sys$dclast/sys$setast route
+# through vms_kif/vms.ko; on a host with no /dev/vms (this build environment
+# is never the QEMU runtime -- CLAUDE.md Rule 9), they must fail honestly
+# with SS$_NOSUCHDEV rather than silently simulating AST delivery locally.
+# The positive "AST actually fires via the executive" proof lives in the
+# QEMU kernel-executive CI job (tests/qemu/test_kmod_ast.c).
+libvms_add_test(test_libvms_ast
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_ast.c)

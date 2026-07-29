@@ -1612,6 +1612,17 @@ int cmd_mount(struct dcl_command *cmd)
         dev_name[nlen + 1] = '\0';
     }
 
+    /* Reject unrecognized device classes. Real VMS requires the device to be a
+     * real, autoconfigured unit; OVMX has no physical controllers, so it
+     * validates against a known set of VMS device-class mnemonics instead of
+     * accepting an arbitrary string ("MOUNT DKA100:" used to succeed for any
+     * name at all — vms-b9f). */
+    if (!dcl_is_known_device_class(dev_name)) {
+        dcl_error("MOUNT", 2, "NOSUCHDEV",
+                  "no such device available - _%s", dev_name);
+        return SS$_NOSUCHDEV;
+    }
+
     /* Check if already mounted */
     struct vms_device *existing = vms_find_device(dev_name);
     if (existing && existing->mounted) {

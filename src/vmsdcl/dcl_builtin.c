@@ -76,6 +76,69 @@ struct vms_device *vms_find_device(const char *name)
     return NULL;
 }
 
+/*
+ * Recognized VMS disk/tape device-class mnemonics (OpenVMS I/O device naming
+ * convention — public documentation, e.g. the VSI OpenVMS I/O User's
+ * Reference Manual "Device Naming" chapter). This is OVMX's own allowlist
+ * standing in for "the device was autoconfigured" (OVMX has no physical
+ * controllers) — flagged for operator purity sign-off per CLAUDE.md Rule 5
+ * (never self-certify a VMS-authentic constant/format).
+ */
+static const char *known_device_classes[] = {
+    "DK", "DU", "DG", "DJ", "DL", "DM", "DR", "DB", /* disks */
+    "MU", "MK", "MS",                               /* tapes */
+    NULL
+};
+
+int dcl_is_known_device_class(const char *name)
+{
+    if (!name || !name[0])
+        return 0;
+
+    const char *p = name;
+
+    /* Optional allocation-class prefix: $<digits>$ */
+    if (*p == '$') {
+        p++;
+        if (!isdigit((unsigned char)*p))
+            return 0;
+        while (isdigit((unsigned char)*p))
+            p++;
+        if (*p != '$')
+            return 0;
+        p++;
+    }
+
+    /* Exactly 3 letters: 2-letter device code + 1 controller letter */
+    char code2[3];
+    for (int i = 0; i < 3; i++) {
+        if (!isalpha((unsigned char)p[i]))
+            return 0;
+        if (i < 2)
+            code2[i] = (char)toupper((unsigned char)p[i]);
+    }
+    code2[2] = '\0';
+    p += 3;
+
+    /* At least one digit (unit number) */
+    if (!isdigit((unsigned char)*p))
+        return 0;
+    while (isdigit((unsigned char)*p))
+        p++;
+
+    /* Optional trailing colon, then must be end of string */
+    if (*p == ':')
+        p++;
+    if (*p != '\0')
+        return 0;
+
+    for (int j = 0; known_device_classes[j]; j++) {
+        if (strcmp(code2, known_device_classes[j]) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 /* ================================================================== */
 /*                     Command Table                                   */
 /* ================================================================== */

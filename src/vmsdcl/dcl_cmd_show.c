@@ -12,12 +12,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/statvfs.h>
 #include <sys/utsname.h>
 #include <pwd.h>
 #include <grp.h>
 #include <limits.h>
-#include <mntent.h>
 
 #include "dcl/context.h"
 #include "dcl/terminal.h"
@@ -547,83 +545,11 @@ static int cmd_show_device(struct dcl_command *cmd)
     printf(" Name                   Status           Count     Label"
            "        Blocks Count Cnt\n");
 
-    FILE *fp = fopen("/proc/mounts", "r");
-    if (!fp) {
-        /* Fallback: show at least root */
-        struct statvfs svfs;
-        if (statvfs("/", &svfs) == 0) {
-            unsigned long long free_blocks =
-                (unsigned long long)svfs.f_bavail *
-                (svfs.f_bsize / 512 ? svfs.f_bsize / 512 : 1);
-            printf("$1$DGA0:              Mounted              0  %-14s%9llu     1   1\n",
-                   "OVMXSYS", free_blocks);
-        }
-        return SS$_NORMAL;
-    }
-
-    char line[512];
-    int dev_index = 0;
-    while (fgets(line, sizeof(line), fp) && dev_index < 16) {
-        char dev[256], mntpt[256], fstype[64], opts[256];
-        int freq, passno;
-        if (sscanf(line, "%255s %255s %63s %255s %d %d",
-                   dev, mntpt, fstype, opts, &freq, &passno) < 3)
-            continue;
-
-        /* Skip pseudo filesystems */
-        if (strcmp(fstype, "proc") == 0 || strcmp(fstype, "sysfs") == 0 ||
-            strcmp(fstype, "devtmpfs") == 0 || strcmp(fstype, "tmpfs") == 0 ||
-            strcmp(fstype, "cgroup") == 0 || strcmp(fstype, "cgroup2") == 0 ||
-            strcmp(fstype, "devpts") == 0 || strcmp(fstype, "mqueue") == 0 ||
-            strcmp(fstype, "hugetlbfs") == 0 || strcmp(fstype, "pstore") == 0 ||
-            strcmp(fstype, "securityfs") == 0 || strcmp(fstype, "debugfs") == 0 ||
-            strcmp(fstype, "bpf") == 0 || strcmp(fstype, "tracefs") == 0)
-            continue;
-
-        /* Build VMS device name */
-        char vms_dev[32];
-        snprintf(vms_dev, sizeof(vms_dev), "$1$DGA%d:", dev_index);
-
-        /* Build a short label from mount point */
-        char label[16];
-        if (strcmp(mntpt, "/") == 0) {
-            strncpy(label, "OVMXSYS", sizeof(label) - 1);
-        } else {
-            /* Use last path component, uppercased, max 12 chars */
-            char *last = strrchr(mntpt, '/');
-            const char *base = last ? last + 1 : mntpt;
-            size_t li;
-            for (li = 0; li < sizeof(label) - 1 && base[li]; li++)
-                label[li] = (char)toupper((unsigned char)base[li]);
-            label[li] = '\0';
-            if (li == 0) {
-                strncpy(label, "DISK", sizeof(label) - 1);
-                label[sizeof(label) - 1] = '\0';
-            }
-        }
-
-        /* Get free blocks (512-byte) */
-        unsigned long long free_512 = 0;
-        struct statvfs svfs;
-        if (statvfs(mntpt, &svfs) == 0) {
-            unsigned long bsize = svfs.f_bsize ? svfs.f_bsize : 512;
-            free_512 = (unsigned long long)svfs.f_bavail * (bsize / 512 + (bsize % 512 ? 1 : 0));
-        }
-
-        printf("%-24s Mounted              0  %-14s%9llu     1   1\n",
-               vms_dev, label, free_512);
-        dev_index++;
-    }
-    fclose(fp);
-
-    if (dev_index == 0) {
-        /* Nothing printed — show a stub */
-        printf("$1$DGA0:              Mounted              0  %-14s%9d     1   1\n",
-               "OVMXSYS", 0);
-    }
-
-
-    /* Show user-mounted devices from the device table */
+    /* List ONLY devices OVMX itself knows about (the vms_device_table, populated by
+     * MOUNT/DISMOUNT) — never the host's /proc/mounts. Reading /proc/mounts here used to
+     * print every host mount as a synthetic "$1$DGAn:" VMS disk with the mount point's
+     * basename (uppercased) as the Volume Label — a direct host-Linux leak (vms-b9f,
+     * INV-4, docs/design-authenticity-roadmap.md §2.2). See tests/dcl/test_show_device_no_leak.sh. */
     for (int i = 0; i < vms_device_count; i++) {
         const char *status = vms_device_table[i].mounted ? "Mounted" : "Dismounted";
         printf("%-24s %-14s       0  %-14s%9d     1   1\n",

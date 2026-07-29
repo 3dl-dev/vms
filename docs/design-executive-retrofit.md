@@ -3,9 +3,9 @@
 > **Status:** dispatch-ready decomposition. Parent `vms-6b8`, under the authenticity pillar
 > `vms-898`. Root-cause analysis lives in `docs/design-authenticity-roadmap.md` §2.1–2.1.1.
 >
-> **Depends on PR #1** (`worktree-authenticity-inv1`) for CLAUDE.md **Project-Specific Rule 9** and
-> the roadmap §2.1 analysis. This branch is cut from `main`, so those are not present here yet; this
-> document is self-contained and does not require them to be read first.
+> **COLD-START GATE:** this DAG must not be dispatched until PR #1 and PR #2 are merged to `main` —
+> see §4 (`vms-pre`). Every item also carries its constraints inline, so items remain executable if
+> the docs are missing; the docs carry the *why*.
 
 ## 1. The problem in one paragraph
 
@@ -55,45 +55,81 @@ exercises.
 5. **Purity** — VMS-authentic values/formats pin to the oracle with operator sign-off; never
    self-certify.
 
-## 4. The tree
+## 4. Cold-start prerequisite (`vms-pre`) — READ FIRST
+
+**The DAG is gated on a human action.** Every item below references artifacts that, as of
+2026-07-28, **do not exist on `main`** (verified with `git cat-file -e main:<path>`):
+
+| Artifact | Where it lives |
+|---|---|
+| `docs/design-executive-retrofit.md` (this file) | PR #2, `worktree-executive-retrofit` |
+| `tests/integration/test_runtime_target.sh` | PR #1, `worktree-authenticity-inv1` |
+| CLAUDE.md **Rule 9** (one runtime target) | PR #1 |
+| roadmap §2.1/§2.1.1 executive analysis | PR #1 (the file exists on `main`, the sections do not) |
+
+An agent dispatched cold from `main` would be told to "obey Rule 9" and find no Rule 9 — then
+re-derive the exact conclusion this epic exists to correct: that Docker is a live runtime and a
+per-process fallback is acceptable. **`vms-pre` blocks the three DAG entry points until PR #1 and
+PR #2 are merged.**
+
+Belt and braces: every item also carries its constraints **inline**, so it is executable even if the
+docs are missing. The docs carry the *why* — and an agent without the why will "fix" things back.
+
+## 5. The tree
+
+**Rigor tier: `heavy`** (Pass 0). blast = heavy (kernel + libvms + vmsprocess + vmsdcl + CI, >20
+files, >3 packages); reversibility = standard (new ioctl contracts; Phase 4 deletes facilities);
+adversarial = **heavy floor** (privileges/access modes are a security surface); coverage modifier
+**+1** — no CI job loads `vms.ko`, so every touched path is uncovered. Full rigor: implementers,
+reviewers, concurrent veracity adversaries, five sweeps, e2e.
 
 ```
-vms-6b8  EPIC: executive retrofit
-├── PHASE 0 — enabling (nothing else starts first)
-│   └── vms-e4d   QEMU CI job loads vms.ko and proves executive assertions      [QA]
-├── PHASE 1 — wire what already exists (cheap, real, no new kernel design)
-│   ├── vms-EF1   two processes share a common event flag cluster              [Systems]
-│   ├── vms-AST1  ASTs are delivered by the executive                          [Systems]
-│   └── vms-PRV1  privileges/access modes are enforced by the executive        [Systems]
-├── PHASE 2 — remove the harness that caused the drift
-│   └── vms-71a   migrate Docker CI jobs to musl/QEMU; delete Dockerfile       [QA]
-├── PHASE 3 — extend the executive (biggest tell first)
-│   ├── vms-PT1   executive owns a process table every process can query       [Systems]
-│   ├── vms-LNM0  DESIGN SPIKE: where do logical name tables live?             [Systems, gated]
-│   ├── vms-LNM1  DEFINE/SYSTEM propagates across processes  (vms-d37)         [Systems]
-│   ├── vms-DEV1  executive owns the device table                              [Systems]
-│   └── vms-MBX1  named mailboxes connect two unrelated processes              [Systems]
-└── PHASE 4 — retire the fakes
-    └── vms-FAKE1 per-process userspace fakes deleted; gate forbids return     [Systems]
+vms-6b8  EPIC: executive retrofit                                    rigor: heavy
+└── vms-pre   PREREQUISITE (human): merge PR #1 + PR #2 to main      [human]
+    ├── PHASE 0 — enabling (hard barrier)
+    │   └── vms-e4d   QEMU CI job loads vms.ko                       [implementer/QA, sonnet]
+    ├── PHASE 1 — wire ioctls that ALREADY exist in vms.ko  (parallel-safe)
+    │   ├── vms-ef1   two processes share a common event flag cluster [implementer, sonnet]
+    │   ├── vms-as1   ASTs delivered by the executive                 [implementer, sonnet]
+    │   ├── vms-pv1   privileges/access modes enforced by executive   [implementer, sonnet]
+    │   ├── vms-vx1   VERACITY: Phase 1 cannot be faked  (concurrent) [veracity-adversary, opus]
+    │   ├── vms-rv1   REVIEW: Phase 1 wiring                          [reviewer, sonnet]
+    │   └── vms-rv2   SECURITY REVIEW: privilege surface              [sweeper-security, opus]
+    ├── PHASE 2 — remove the harness that caused the drift
+    │   └── vms-71a   migrate Docker CI jobs; delete Dockerfile       [implementer/QA, sonnet]
+    ├── PHASE 3 — extend the executive (biggest tell first)
+    │   ├── vms-pt1   executive owns a process table                  [implementer, opus]
+    │   ├── vms-ln0   DESIGN RULING: where do LNM tables live?        [designer, opus, gated]
+    │   ├── vms-d37   DEFINE/SYSTEM propagates across processes       [implementer, opus]
+    │   ├── vms-dv1   executive owns the device table                 [implementer, opus]
+    │   ├── vms-mb1   named mailboxes connect unrelated processes     [implementer, opus]
+    │   ├── vms-vx2   VERACITY: Phase 3 cannot be faked  (concurrent) [veracity-adversary, opus]
+    │   └── vms-rv3   REVIEW: Phase 3 structures                      [reviewer, opus]
+    ├── PHASE 4 — retire the fakes
+    │   └── vms-fk1   delete per-process fakes; gate forbids return   [implementer, sonnet]
+    └── PARENT-LEVEL (depend on all implementation items)
+        ├── vms-e2e   E2E: executive holds under a multi-process session [e2e-verification, opus]
+        └── vms-sw1..sw5  sweeps: security / bugs / dead-code / antipatterns / test-coverage
 ```
 
-Consumers unblocked downstream (already wired in rd): `vms-853` (A1 SHOW SYSTEM), `vms-46b` (A4
-login, via `vms-d37`), `vms-c17` (SPAWN), `vms-905` (broadcast).
+Consumers unblocked downstream (wired in rd, and each annotated "SUBSTRATE-BLOCKED" so a cold agent
+does not mistake them for display work): `vms-853` (A1 SHOW SYSTEM), `vms-46b` (A4 login, via
+`vms-d37`), `vms-c17` (SPAWN), `vms-905` (broadcast).
 
-**Independent of this tree — can dispatch immediately, in parallel:** `vms-b9f` (`SHOW DEVICE`
-prints the host Linux mount table — an INV-4 leak on a first-two-minutes command). The *leak* fix
-needs no executive; the *real* device table is `vms-DEV1`.
+**Independent — dispatch in parallel with anything:** `vms-b9f` (`SHOW DEVICE` prints the host Linux
+mount table; INV-4 leak on a first-two-minutes command). Needs no executive.
 
-## 5. Dispatch notes
+## 6. Dispatch notes
 
-- **Phase 0 is a hard barrier.** Do not dispatch Phase 1 until `vms-e4d` is green — Phase 1 items
+- **`vms-pre` first, then Phase 0.** `vms-pre` is a HUMAN action (merge PR #1 + PR #2); no agent
+  can close it. After that, do not dispatch Phase 1 until `vms-e4d` is green — Phase 1 items
   have no way to prove themselves otherwise, and a "passing" Phase 1 item without it is exactly the
   silent-fake failure mode this epic exists to kill.
 - **Phase 1 items are parallel-safe** (three disjoint facilities, separate files) once Phase 0
   lands. Ideal for concurrent worktree dispatch.
-- **Phase 3 is mostly serial** — `vms-PT1` first (biggest tell, unblocks the most), and `vms-LNM0`
-  must be ruled before `vms-LNM1` is dispatched.
-- **`vms-LNM0` is operator-gated.** Logical-name translation sits on the hot path of *every file
+- **Phase 3 is mostly serial** — `vms-pt1` first (biggest tell, unblocks the most), and `vms-ln0`
+  must be ruled before `vms-d37` is dispatched.
+- **`vms-ln0` is operator-gated.** Logical-name translation sits on the hot path of *every file
   open*; an ioctl per translation is a syscall round trip. Kernel-side with a per-process cache and
   invalidation, or a shared mapping (the `MAP_SHARED` known-image DB is the in-tree precedent)?
   Decide before writing code — it is the one genuine design fork left in the epic.

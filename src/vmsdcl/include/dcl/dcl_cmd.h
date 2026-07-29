@@ -95,6 +95,17 @@ extern int vms_device_count;
 
 struct vms_device *vms_find_device(const char *name);
 
+/*
+ * Validate a device name against known VMS device-class mnemonics (2-letter
+ * device code + 1 controller letter + unit number, optional "$n$" allocation-
+ * class prefix, optional trailing colon) — the OpenVMS I/O device naming
+ * convention (public documentation). OVMX has no physical controllers, so
+ * this allowlist stands in for "the device was autoconfigured"; see
+ * docs/design-executive-retrofit.md and vms-b9f. Returns 1 if recognized,
+ * 0 otherwise.
+ */
+int dcl_is_known_device_class(const char *name);
+
 /* Queue initialization helper */
 int ensure_queue_init(void);
 

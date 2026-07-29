@@ -96,15 +96,18 @@ extern int vms_device_count;
 struct vms_device *vms_find_device(const char *name);
 
 /*
- * Validate a device name against known VMS device-class mnemonics (2-letter
- * device code + 1 controller letter + unit number, optional "$n$" allocation-
- * class prefix, optional trailing colon) — the OpenVMS I/O device naming
- * convention (public documentation). OVMX has no physical controllers, so
- * this allowlist stands in for "the device was autoconfigured"; see
- * docs/design-executive-retrofit.md and vms-b9f. Returns 1 if recognized,
- * 0 otherwise.
+ * Check whether a device name (optional trailing colon, case-insensitive) is one of
+ * OVMX's fixed, pre-autoconfigured virtual devices — the small inventory MOUNT is
+ * allowed to operate on. Real VMS's MOUNT only succeeds against hardware SYSGEN
+ * AUTOCONFIGURE already found at boot; OVMX has no physical controllers, so it stands
+ * in a small, fixed set of exactly-named devices instead (vms-b9f R2 — a class+unit
+ * syntax allowlist was tried first and disproved live against the oracle: MOUNT
+ * DBZ0:/DRA0:/MSA0:/$1$DGA0: all matched a "known class, unit 0" pattern but were never
+ * modeled by OVMX, and real VMS does not treat "syntactically plausible" as "exists").
+ * See docs/design-executive-retrofit.md and vms-b9f. Returns 1 if it is one of OVMX's
+ * configured devices, 0 otherwise.
  */
-int dcl_is_known_device_class(const char *name);
+int dcl_is_configured_device(const char *name);
 
 /* Queue initialization helper */
 int ensure_queue_init(void);

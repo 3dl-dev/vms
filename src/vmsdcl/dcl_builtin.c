@@ -23,6 +23,7 @@
 #include "dcl/cdu.h"
 #include "dcl/dcl_cmd.h"
 #include "ssdef.h"
+#include "ovmx_layout.h"
 
 /* BACKUP command (dcl_backup.c) */
 extern int cmd_backup(struct dcl_command *cmd);
@@ -77,83 +78,45 @@ struct vms_device *vms_find_device(const char *name)
 }
 
 /*
- * Recognized VMS disk/tape device-class mnemonics (OpenVMS I/O device naming
- * convention — public documentation, e.g. the VSI OpenVMS I/O User's
- * Reference Manual "Device Naming" chapter). This is OVMX's own allowlist
- * standing in for "the device was autoconfigured" (OVMX has no physical
- * controllers) — flagged for operator purity sign-off per CLAUDE.md Rule 5
- * (never self-certify a VMS-authentic constant/format).
+ * OVMX's fixed virtual-hardware inventory. Real VMS's MOUNT only succeeds against a
+ * device SYSGEN AUTOCONFIGURE already found at boot; OVMX has no physical controllers,
+ * so it stands in a small, FIXED set of exactly-named devices as "the hardware this box
+ * has" -- the boot system disk (SYSDISK_DEVICE, registered separately in
+ * dcl_main.c setup_session()) plus the two scratch disks tests/dcl/test_mount.sh
+ * exercises. This replaces a device-CLASS allowlist (any recognized VMS disk/tape
+ * mnemonic at unit 0) that was tried first and disproved live against the oracle
+ * (OpenVMS VAX 7.3, ~/vax/cluster/vax1, 2026-07-29): MOUNT DBZ0:/DRA0:/MSA0:/$1$DGA0:
+ * are all syntactically "known class, unit 0" but were never actually modeled by OVMX,
+ * and the oracle's real MOUNT does not treat "syntactically plausible" as "exists" --
+ * MOUNT DUA99: (valid class, unit never configured) fails with the IDENTICAL
+ * "%MOUNT-F-NOSUCHDEV, no such device available" as the bogus class MOUNT ZZQ0: (vms-b9f
+ * R2). An exact-name inventory also fixes the DKA00: phantom-device bug: "DKA00" is a
+ * different string from "DKA0" and no longer matches anything. Which devices belong in
+ * this inventory is an OVMX product decision, not itself VMS-authentic -- flagged for
+ * operator purity sign-off per CLAUDE.md Rule 5.
  */
-static const char *known_device_classes[] = {
-    "DK", "DU", "DG", "DJ", "DL", "DM", "DR", "DB", /* disks */
-    "MU", "MK", "MS",                               /* tapes */
+static const char *known_devices[] = {
+    SYSDISK_DEVICE, /* "DKA0" -- boot system disk */
+    "DUA0", "DJA0", /* OVMX's two scratch/test disks */
     NULL
 };
 
-int dcl_is_known_device_class(const char *name)
+int dcl_is_configured_device(const char *name)
 {
     if (!name || !name[0])
         return 0;
 
-    const char *p = name;
+    char upper[16];
+    size_t len = strlen(name);
+    if (len >= sizeof(upper)) len = sizeof(upper) - 1;
+    for (size_t i = 0; i < len; i++)
+        upper[i] = (char)toupper((unsigned char)name[i]);
+    upper[len] = '\0';
+    if (len > 0 && upper[len - 1] == ':')
+        upper[--len] = '\0';
 
-    /* Optional allocation-class prefix: $<digits>$ */
-    if (*p == '$') {
-        p++;
-        if (!isdigit((unsigned char)*p))
-            return 0;
-        while (isdigit((unsigned char)*p))
-            p++;
-        if (*p != '$')
-            return 0;
-        p++;
-    }
-
-    /* Exactly 3 letters: 2-letter device code + 1 controller letter */
-    char code2[3];
-    for (int i = 0; i < 3; i++) {
-        if (!isalpha((unsigned char)p[i]))
-            return 0;
-        if (i < 2)
-            code2[i] = (char)toupper((unsigned char)p[i]);
-    }
-    code2[2] = '\0';
-    p += 3;
-
-    /* At least one digit (unit number) */
-    if (!isdigit((unsigned char)*p))
-        return 0;
-    const char *unit_start = p;
-    while (isdigit((unsigned char)*p))
-        p++;
-
-    /*
-     * Reject any unit number other than 0. Real VMS rejects a syntactically
-     * valid but never-configured unit with the SAME error as an unrecognized
-     * class -- pinned live against the oracle (OpenVMS VAX 7.3,
-     * ~/vax/cluster/vax1, 2026-07-29): MOUNT DUA99: (valid class "DU", unit
-     * never configured on that system) returned the IDENTICAL
-     * "%MOUNT-F-NOSUCHDEV, no such device available" as the bogus class
-     * MOUNT ZZQ0:. OVMX has no physical controllers to autoconfigure real
-     * units against, so it stands in exactly one unit -- unit 0 -- per
-     * recognized class (vms-b9f C3: DKA100:/DKA999:/MKB300:/$77$DGA4242:
-     * must all be rejected, not just unrecognized classes). This unit-0-only
-     * rule is an OVMX product-behavior stand-in, not itself a VMS-authentic
-     * constant -- flagged for operator review alongside known_device_classes.
-     */
-    for (const char *d = unit_start; d < p; d++) {
-        if (*d != '0')
-            return 0;
-    }
-
-    /* Optional trailing colon, then must be end of string */
-    if (*p == ':')
-        p++;
-    if (*p != '\0')
-        return 0;
-
-    for (int j = 0; known_device_classes[j]; j++) {
-        if (strcmp(code2, known_device_classes[j]) == 0)
+    for (int j = 0; known_devices[j]; j++) {
+        if (strcmp(upper, known_devices[j]) == 0)
             return 1;
     }
     return 0;

@@ -550,9 +550,20 @@ static int cmd_show_device(struct dcl_command *cmd)
      * print every host mount as a synthetic "$1$DGAn:" VMS disk with the mount point's
      * basename (uppercased) as the Volume Label — a direct host-Linux leak (vms-b9f,
      * INV-4, docs/design-authenticity-roadmap.md §2.2). See tests/dcl/test_show_device_no_leak.sh. */
+    /* Column layout pinned live against the oracle (OpenVMS VAX 7.3, ~/vax/cluster/vax1,
+     * 2026-07-29): `SHOW DEVICE D` on a mounted disk ($2$DUA0: (VAX1) Mounted 0 SYSDSK1
+     * 1461447 250 2) put Status at column 24, Volume Label at column 48, and Free Blocks
+     * at column 63 -- byte-identical to the header OVMX already prints (verified: header's
+     * "Status"/"Label" words also fall at 24/51 in the same capture). The previous format
+     * string had an extra literal space between the device-name and status fields, which
+     * shifted EVERY field one column right (Status at 25, Label at 49) and also used a
+     * 9-wide Free Blocks field where the oracle's is 8-wide (vms-b9f R3). Fixed by removing
+     * that stray space and narrowing %9d to %8d; Trans Count / Mnt Cnt literals shifted to
+     * match (OVMX hardcodes both to 1 -- pre-existing simplification, not itself part of
+     * this fix). */
     for (int i = 0; i < vms_device_count; i++) {
         const char *status = vms_device_table[i].mounted ? "Mounted" : "Dismounted";
-        printf("%-24s %-14s       0  %-14s%9d     1   1\n",
+        printf("%-24s%-14s       0  %-14s%8d   1     1\n",
                vms_device_table[i].vms_name, status,
                vms_device_table[i].volume_label, 0);
     }

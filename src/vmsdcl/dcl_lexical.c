@@ -28,6 +28,7 @@
 #include <vms/privs.h>
 #include "vmsfs/filespec.h"
 #include "sysgen_params.h"
+#include "ovmx_layout.h"
 #include "ovmx_identity.h"
 
 /* External functions */
@@ -2021,8 +2022,24 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
         else
             snprintf(result, result_size, "44");  /* DT$_RA92 */
     } else if (strcmp(item, "VOLNAM") == 0) {
+        /* Look up the actual registered volume label (vms_device_table -- the same
+         * table SHOW DEVICE reads, dcl_builtin.c) instead of a hardcoded
+         * SYSDEVICE-only heuristic (vms-b9f R5). Before this fix, SHOW DEVICE and
+         * F$GETDVI disagreed about DKA0:'s volume label: SHOW DEVICE printed
+         * "OVMXSYS" (from vms_device_table, set at boot -- dcl_main.c
+         * setup_session()) but F$GETDVI("DKA0","VOLNAM") returned the separate
+         * hardcoded literal "OVMXSYS"/"VOLUME" below, which only ever matched
+         * when the device string literally contained "SYSDEVICE" or was empty --
+         * so F$GETDVI("DKA0",...) (no "SYSDEVICE" substring) fell through to the
+         * generic "VOLUME" literal. Resolving SYS$SYSDEVICE to the boot system
+         * device and looking up whichever device was actually named means the
+         * two interfaces read the same source of truth and can't disagree again. */
+        const char *lookup = device;
         if (strstr(device, "SYSDEVICE") || device[0] == '\0')
-            snprintf(result, result_size, "OVMXSYS");
+            lookup = SYSDISK_DEVICE ":";
+        struct vms_device *voldev = vms_find_device(lookup);
+        if (voldev && voldev->mounted)
+            snprintf(result, result_size, "%s", voldev->volume_label);
         else
             snprintf(result, result_size, "VOLUME");
     } else if (strcmp(item, "FREEBLOCKS") == 0) {

@@ -1,0 +1,96 @@
+#!/bin/sh
+#
+# test_identity_ssot.sh - INV-1 standing gate (rd vms-e652)
+#
+# INV-1 says ONE module owns system identity and every surface reads it.
+# A one-time cleanup does not hold that: the next hardcoded "V7.3" walks
+# straight back in. This gate fails the build when a VMS/OVMX version
+# literal appears in a string outside the identity SSOT.
+#
+# Before INV-1 the tree carried FOUR different hardcoded versions at once
+# (V7.3 in DCL/login/MONITOR/AUTHORIZE, V1.0 in STARTUP.COM, V0.1 in the
+# TCP/IP banner, plus a separate F$GETSYI VERSION constant) -- which is
+# precisely the tell INV-1 exists to prevent.
+#
+# Spec: docs/design-authenticity-roadmap.md sec 4.5 INV-1.
+#
+# If you are here because this test failed: do not add an allowlist entry.
+# Read the version from ovmx_identity.h instead -- that is the whole point.
+
+set -u
+
+SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
+status=0
+
+# The SSOT itself is the one place a version literal is legal.
+SSOT="src/libvms/include/ovmx_identity.h"
+
+# src/vmsscs/** is exempt: version tokens there are OBSERVED CLUSTER WIRE
+# DATA (e.g. the software-version field of a captured SCS START packet),
+# not OVMX's own identity. They must match the specimen, not our version.
+#
+# distro/**/STARTUP.COM and SYLOGICALS.CONF are scanned as text below.
+
+echo "INV-1 identity SSOT gate: scanning for hardcoded version literals"
+
+# --- 1. C sources: version literals inside string literals ----------
+# Comment lines are excluded: documentation legitimately quotes the old
+# values ("this used to answer V7.3"). A real hardcode is on a code line --
+#   const char *ver = "V0.1";
+# -- which does not start with a comment marker, so it is still caught.
+hits=$(grep -rnE '"[^"]*(OpenVMS V|VMS V[0-9]|V[0-9]+\.[0-9]+(-[0-9]+)?)[^"]*"' \
+        --include=*.c --include=*.h \
+        "$SRC_ROOT/src" "$SRC_ROOT/tools" 2>/dev/null \
+        | grep -v "$SSOT" \
+        | grep -v "/src/vmsscs/" \
+        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)' \
+        || true)
+
+if [ -n "$hits" ]; then
+    echo "FAIL: version literal(s) outside the identity SSOT ($SSOT):"
+    echo "$hits" | sed 's/^/  /'
+    echo "  -> read the version from ovmx_identity.h instead."
+    status=1
+else
+    echo "  OK: no hardcoded version literals in src/ or tools/"
+fi
+
+# --- 2. Boot-time DCL/config must not bake in a banner version ------
+for f in "$SRC_ROOT/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM" \
+         "$SRC_ROOT/distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/SYLOGICALS.CONF"; do
+    [ -f "$f" ] || continue
+    bad=$(grep -nE '(OpenVMS V|OVMX V)[0-9]' "$f" | grep -v '^[0-9]*:[[:space:]]*#' || true)
+    if [ -n "$bad" ]; then
+        echo "FAIL: hardcoded version in $(basename "$f"):"
+        echo "$bad" | sed 's/^/  /'
+        echo "  -> the banner comes from the identity module / SYS\$WELCOME."
+        status=1
+    else
+        echo "  OK: $(basename "$f") carries no hardcoded version"
+    fi
+done
+
+# --- 3. The login banner must stay logical-driven -------------------
+# LOGINOUT and the SSH daemon must resolve SYS$WELCOME, not printf a
+# greeting. This is the regression that prompted the gate.
+for f in "$SRC_ROOT/tools/vms_login.c" "$SRC_ROOT/src/vmsssh/vmssshd.c"; do
+    [ -f "$f" ] || continue
+    if grep -qE 'ovmx_banner_welcome' "$f"; then
+        echo "  OK: $(basename "$f") resolves SYS\$WELCOME"
+    else
+        echo "FAIL: $(basename "$f") no longer resolves SYS\$WELCOME"
+        echo "  -> the login banner is a boot-defined logical, not a printf."
+        status=1
+    fi
+    if grep -qE 'printf\("[^"]*Welcome to' "$f"; then
+        echo "FAIL: $(basename "$f") hardcodes a welcome banner in printf()"
+        status=1
+    fi
+done
+
+if [ "$status" -eq 0 ]; then
+    echo "INV-1 identity SSOT gate: PASS"
+else
+    echo "INV-1 identity SSOT gate: FAIL"
+fi
+exit "$status"

@@ -31,6 +31,7 @@
 #include "dcl/cdu.h"
 #include "ssdef.h"
 #include "vms/pcb.h"
+#include "ovmx_identity.h"
 #include "vms/privs.h"
 #include "vms/logical.h"
 #include "vmsfs/device.h"
@@ -293,9 +294,12 @@ static void display_banner(void)
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
+    char sysname[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(sysname, sizeof(sysname));
+
     printf("\n");
-    printf("        OpenVMS V7.3  on node %-8s %2d-%s-%04d %02d:%02d:%02d.%02d\n",
-           uts.nodename, tm.tm_mday, vms_months[tm.tm_mon],
+    printf("        %s  on node %-8s %2d-%s-%04d %02d:%02d:%02d.%02d\n",
+           ovmx_product_banner(), sysname, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
     printf("\n");

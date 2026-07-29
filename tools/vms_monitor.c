@@ -36,6 +36,8 @@
 #include <sys/types.h>
 #include <sys/ioctl.h>
 
+#include "ovmx_identity.h"
+
 /* ================================================================== */
 /*                         Constants                                   */
 /* ================================================================== */
@@ -44,7 +46,9 @@
 #define MAX_PROCS        64
 #define BAR_WIDTH        23     /* chars inside the bar brackets */
 #define NODE_NAME        "OVMX"
-#define OVMX_VERSION     "OVMX V7.3"
+/* Identity comes from the SSOT (INV-1); MONITOR's header column is tight,
+ * so it uses the unbadged brand id. */
+#define OVMX_VERSION     OVMX_PRODUCT_ID
 
 /* ================================================================== */
 /*                         Data Types                                  */

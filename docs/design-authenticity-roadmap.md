@@ -51,9 +51,171 @@ completeness.
 | `SET TERMINAL` | self-labeled "(stub)" | `dcl_cmd_set.c:157` |
 | `SHOW AUDIT / VOLUME`, `SET AUDIT / VOLUME` | acknowledge-only | `dcl_cmd_show.c`, `dcl_cmd_set.c` |
 | RUN | native `fork/execl` of a Linux binary, not the VMS image activator | `dcl_cmd_process.c:650` |
+| `SHOW DEVICE` | **prints the host's Linux mount table** as VMS disks — volume labels are mount-point basenames incl. the kernel version (`5.15.167.4-MICR`, `BINFMT_MISC`). INV-4 leak, first-two-minutes command | §2.2, `vms-b9f` |
+| `SHOW USERS` | permanently reports `users = 1, processes = 1` — reads only its own PCB | §2.1, `vms-6b8` |
+| `SPAWN` | silent no-op — no subprocess, no `%DCL-S-SPAWNED` | §2.3, `vms-c17` |
+| Logical names | `LNM$SYSTEM` is **per-process**; `DEFINE/SYSTEM` succeeds and dies with the process | §2.1, `vms-d37` |
+| Mailboxes | `$CREMBX` is a Unix socketpair named in `LNM$PROCESS_TABLE` — cross-process rendezvous impossible | §2.1, `vms-6b8` |
+
+> **Read §2.1 before working any row above.** Several of these are symptoms of one root cause (no
+> shared system state), not independent surface bugs.
 
 **Not tells (leave alone):** AUTHORIZE has no DCL verb — that is *authentic* (real VMS is
 `RUN SYS$SYSTEM:AUTHORIZE`). Message *format* is already correct. Queue store schema is real.
+
+## 2.1 Root cause beneath the tells: **no shared system state in the path OVMX runs**
+
+> Added 2026-07-28, after the INV-1 work found that `DEFINE/SYSTEM` does not propagate between
+> processes. That finding was not a one-off bug — chasing it exposed a **single root cause under a
+> large fraction of the board**, which §2's per-surface table cannot see because it lists symptoms.
+
+On OpenVMS, the **executive** owns the system-wide data structures — logical name tables, the
+process list, the device table, event flag clusters, mailboxes — in system space, and every process
+sees the same ones.
+
+In the path OVMX actually runs today, that is missing: OVMX behaves as **N independent Linux
+processes, each privately simulating an entire VMS system in its own address space.** But see
+**§2.1.1 — the executive is half-built, not absent.** `vms.ko` already implements a real one
+(locks, event flags incl. common clusters, ASTs, access modes); userspace calls it only for
+`$ENQ`/`$DEQ`, and it does not exist in Docker at all. The heading below is the *symptom* as
+observed from userspace, not a claim that no executive code exists.
+
+The dividing line is mechanical and almost perfectly predictive:
+
+| Backing | Result | Facilities |
+|---|---|---|
+| **File-backed** | genuinely shared — *accidentally correct* | queue DB, SYSGEN params, SYSUAF + RIGHTSLIST, accounting/lastlogin, known-image DB (`mmap(MAP_SHARED)`) |
+| **Memory-resident** | per-process **fiction** | logical name tables, process table (PCB), event flags, mailboxes, device table |
+
+Where VMS keeps state in a file, OVMX is real. Where VMS keeps it in system memory, OVMX fakes it
+per-process — and the fake reports success.
+
+**Evidence (all empirical, two processes unless noted):**
+
+- **Logical names.** `DEFINE/SYSTEM CROSSPROC HELLO` in proc 1 → visible in proc 1; proc 2 →
+  `%DCL-W-NOLOG, no logical name match`. (`vms-d37`)
+- **Process table.** There is no shared process table *at all* — no `shm_open`/`MAP_SHARED` anywhere
+  in `src/vmsprocess/`. `SHOW SYSTEM` reads `vms_pcb_get()`, i.e. **its own PCB**. With a second DCL
+  process alive it still prints exactly one row. `SHOW USERS` likewise reports
+  `Total number of users = 1, number of processes = 1` — permanently. (No live rd item: the
+  `vms-901`/`904` children named by `vms-898.11` predate the nostr board and were never migrated —
+  worth re-creating when M1 is worked.)
+- **Event flags.** The *userspace* path stores them in the PCB (`pcb->ef_clusters`), so they are
+  per-process there. **CORRECTION (2026-07-28): this is a wiring gap, not an absence** — `vms.ko`
+  already implements event flags *including* VMS common clusters (`vms_eflag.c`,
+  `vms_common_ef_lock`, ioctls `VMS_IOCTL_SETEF`/`ASCEFC`/`DACEFC`). `event_flags.c` simply never
+  calls them. Same for ASTs (`0x10-0x12`) and access modes/privileges (`0x01-0x04`).
+- **Mailboxes.** `$CREMBX` is implemented as a Unix **socketpair**, and the mailbox's logical name is
+  created in **`LNM$PROCESS_TABLE`**. A socketpair cannot be joined by an unrelated process and the
+  name cannot be resolved outside the creator, so the canonical VMS IPC pattern — proc A creates
+  `MYMBX`, proc B `$ASSIGN`s it by name — **cannot work at all**.
+- **Device table.** No shared backing; each process has its own.
+
+**Why this matters more than any single surface item.** Several M1/M2 items are written as display or
+format work but are actually *blocked on shared state* and cannot honestly close without it:
+
+| Item | Written as | Actually needs |
+|---|---|---|
+| **A1** `SHOW SYSTEM` real process table | display fix | a shared process table |
+| **A4** login fidelity | banner text | system-wide logicals (`vms-d37`) |
+| `SHOW USERS` (no live item — 898.11's children predate the nostr board) | display fix | shared process + terminal table |
+| **B1** MONITOR live screen | rendering | shared process table |
+| **B6/B7** `SHOW DEVICE` / `MOUNT` | depth | shared device table |
+| `vms-905` broadcast / `REPLY` | messaging | cross-process IPC (mailboxes) |
+
+Fixing these one surface at a time produces *better-looking* LARP: a `SHOW SYSTEM` that formats one
+fabricated row beautifully is still one fabricated row. **The substrate is the work.**
+
+### 2.1.1 The executive is half-built, not absent — and the gap is three different things
+
+`vms.ko` is already a real VMS executive. Correcting the framing above: the work is far less
+greenfield than "build a substrate" implies.
+
+| Facility | Kernel ioctls in `vms_ioctl.h` | Userspace calls it? |
+|---|---|---|
+| Lock manager (`$ENQ`/`$DEQ`) | `0x30+` | **Yes** — `sys_lock.c` via `vms_kif` |
+| Event flags, incl. common clusters | `0x20`–`0x27` | **No** — `event_flags.c` uses the PCB |
+| ASTs | `0x10`–`0x12` | **No** |
+| Access modes / privileges | `0x01`–`0x04` | **No** |
+| Logical names, process table, device table, mailboxes | *none* | — |
+
+So `vms-6b8` is **three** distinct problems:
+
+1. **Unwired** — event flags, ASTs, privileges: kernel implementations exist and are ignored.
+   Cheapest real win on the whole board; route them through `vms_kif`.
+2. **Absent** — process table, logical names, device table, mailboxes: no kernel support at all.
+3. **Unavailable in Docker** — containers have no `/dev/vms`, and Docker is where CI runs.
+
+**RULING (operator, 2026-07-28): there is no Docker question — the Docker *runtime* layer is dead.**
+OVMX has exactly one runtime: the real-kernel/QEMU path, with `vms.ko` as the executive reached via
+`/dev/vms`. See CLAUDE.md Project-Specific Rule 9, enforced by `tests/integration/test_runtime_target.sh`.
+So the executive is **kernel-mode, full stop** — there is no two-backend seam to design, and the
+per-process userspace tables are not "fallbacks" but **legacy to be replaced**. When `/dev/vms` is
+absent the correct behavior is to **fail honestly** (`SS$_NOSUCHDEV`, as `sys_lock.c` already does),
+never to fake per-process success.
+
+**But this exposes the real blocker, which is CI.** No CI job ever loads `vms.ko`: `persistent-boot`
+runs its QEMU script *inside a Docker container*, and there is no kernel-module job at all. The
+kernel executive is therefore **unprovable in CI today**. That is not incidental — it is the
+mechanical *cause* of the whole gap: because CI runs in Docker and Docker has no `/dev/vms`, OVMX
+grew per-process userspace fakes that report success while sharing nothing. **The architecture
+drifted to fit the test harness**, which is why only `sys_lock.c` was ever wired.
+
+So the retrofit cannot start with the executive. It starts with a QEMU CI job that loads `vms.ko`
+and runs executive tests — otherwise every future change drifts back to the userspace fake, because
+that is the only path CI exercises.
+
+**Retrofit order** (`vms-6b8`; ruling settled, sequencing set by testability):
+1. **QEMU CI job that loads `vms.ko`** — the enabling prerequisite. Without it the executive is
+   unprovable and will rot back into userspace fakes. (`vms-e4d`)
+2. **Wire the already-implemented ioctls** — event flags, ASTs, privileges. Wiring, not design;
+   cheapest real executive behavior on the board.
+3. **Migrate the Docker-based CI jobs** to the musl/QEMU path, then delete the root `Dockerfile`
+   and `docker-compose.yml`. (`vms-71a`)
+4. **Extend kernel-side biggest-tell-first** — process table, then device table, then mailboxes.
+
+**Caveat against a blanket "kernel everything" rule:** logical-name translation is on the hot path
+of *every file open*. An ioctl per translation is a syscall round trip. LNM may deserve a shared
+mapping (the `MAP_SHARED` known-image DB is the in-tree precedent) or kernel-side storage with a
+per-process cache plus invalidation. Decide LNM separately from the rest.
+
+**Scope:** tracked as **`vms-6b8`**. The `lnm.sock` daemon (already loads `SYLOGICALS.CONF`; nothing
+connects to it) and the `MAP_SHARED` known-image DB are the two userspace precedents.
+
+### 2.2 Re-tiering: rank by tell-probability, not by feature completeness
+
+§1 says items are ranked by **tell-probability**, but the milestone split partly ranks by *feature
+completeness*, and that misfiled at least one severe tell:
+
+**`SHOW DEVICE` prints the host's Linux mount table.** Every host mount is presented as a VMS disk,
+with the mount's basename as the Volume Label:
+
+```
+$1$DGA0:   Mounted   0   5.15.167.4-MICR   8210896  1  1     <- WSL kernel-modules mount
+$1$DGA1:   Mounted   0   DRIVERS          81989128  1  1     <- /usr/lib/wsl/drivers
+$1$DGA6:   Mounted   0   BINFMT_MISC             0  1  1     <- /proc/sys/fs/binfmt_misc
+```
+
+That is a **direct INV-4 (no-Linux-leak) violation on a first-two-minutes command** — a greybeard
+types `SHOW DEVICE` before almost anything else. It is currently filed under **B6 in Milestone 2**
+as an "off real state" *depth* item. By the roadmap's own ranking rule it is **Milestone 1**, and it
+is a leak, not a depth gap. Tracked as **`vms-b9f`**.
+
+The general lesson: an item's tier must be set by *when a knowledgeable user hits it and how surely
+it betrays the shim*, never by how much code it needs. Re-check the tier of every item against that
+rule when M2 is created.
+
+### 2.3 Other silent-success findings from the same sweep
+
+Probed interactively; all report success or say nothing while doing nothing (INV-6 class):
+
+- **`SPAWN`** — silent no-op. VMS creates a subprocess and reports `%DCL-S-SPAWNED, process <name>
+  spawned`. (`vms-c17`)
+- **`MOUNT DKA100:`** — returns `%MOUNT-I-MOUNTED, OVMX mounted on _DKA100:` for a device that need
+  not exist. Accepts anything. (folded into `vms-b9f`)
+- **`DEASSIGN FOO`** (no qualifier) on a name that exists only in `LNM$SYSTEM` — silent no-op, no
+  message. VMS defaults `DEASSIGN` to `LNM$PROCESS` and should report not-found. (noted on `vms-d37`)
+- **`SET TERMINAL/WIDTH=132`** — self-declared stub, silent. Already known (§2).
 
 ## 3. The oracle & purity guardrail (shapes every value item)
 
@@ -146,6 +308,43 @@ again. Identity has **two version numbers plus an iron rule** (D1, resolved 2026
 
 Every surface is classified **human** (→ OVMX brand badge) or **machine** (→ true-to-arch compat
 token) and reads the one identity module.
+
+**Login banners are logicals, not printfs** (refinement, 2026-07-28, operator correction during
+implementation). On real VMS the login banner is *not* compiled into LOGINOUT — a manager defines
+**`SYS$ANNOUNCE`** (displayed before the `Username:` prompt) and **`SYS$WELCOME`** (displayed after
+authentication) at boot, in `SYS$MANAGER:SYLOGICALS.COM` (OVMX: `SYLOGICALS.CONF`). An equivalence
+string beginning with `@` names a **file** whose contents are displayed, which is how a site gets a
+multi-line banner. Both ship **undefined**, exactly as VMS does: with no `SYS$WELCOME`, LOGINOUT
+prints its built-in banner — and that built-in is the only thing the identity module supplies.
+
+This matters more than the version string it replaced. A greybeard types
+`DEFINE/SYSTEM SYS$WELCOME "..."` within the first ten minutes; a hardcoded `printf()` swallows it
+silently, which is a *worse* tell than a wrong version — the verb appears to work and does nothing.
+Implemented in `ovmx_banner.h`; the INV-1 gate asserts LOGINOUT and the SSH daemon keep resolving
+the logical rather than regressing to a compiled-in greeting.
+
+**Logical names are themselves an authenticity surface** (`vms-d37`, blocks A4). Wiring the banner to
+`SYS$WELCOME` exposed that OVMX logical-name tables are **per-process**: `lnm_get_manager()` builds an
+in-process table, and nothing but the daemon itself reads `SYLOGICALS.CONF`. Demonstrated across two
+DCL processes:
+
+```
+proc 1:  DEFINE/SYSTEM CROSSPROC HELLO  /  SHOW LOGICAL CROSSPROC
+         ->    "CROSSPROC" = "HELLO" (LNM$SYSTEM)
+proc 2:  SHOW LOGICAL CROSSPROC
+         -> %DCL-W-NOLOG, no logical name match
+```
+
+`DEFINE/SYSTEM` reports success and the definition dies with the process. This is not adjacent
+infrastructure to be fixed later — logicals are *how a VMS system is configured*, so this is the
+epic's own thesis (uneven **depth**, not absence) and squarely INV-6 territory: a facility that looks
+implemented and silently isn't. It is the reason **A4 cannot honestly close on the banner work alone**
+— the banner is correctly wired *to* the logical, but a sysadmin still cannot set it.
+
+The in-process facility is otherwise genuinely deep and should not be rebuilt: all four tables
+(`LNM$PROCESS/JOB/GROUP/SYSTEM`), hierarchical search order, `/TABLE=`, `/PROCESS`, `/SYSTEM`,
+`DEASSIGN/SYSTEM`, and table attribution in `SHOW LOGICAL` all work. The single missing piece is
+cross-process sharing.
 
 ### INV-2 — Message-ident fidelity gate
 No emitted message may use an invented ident. New idents require oracle + operator sign-off. A

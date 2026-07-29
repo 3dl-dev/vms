@@ -103,6 +103,10 @@ add_executable(vms_monitor
     vms_monitor.c
 )
 
+target_include_directories(vms_monitor PRIVATE
+    ${VMS_INCLUDE_DIR}
+)
+
 target_compile_definitions(vms_monitor PRIVATE
     _POSIX_C_SOURCE=200809L
     _DEFAULT_SOURCE

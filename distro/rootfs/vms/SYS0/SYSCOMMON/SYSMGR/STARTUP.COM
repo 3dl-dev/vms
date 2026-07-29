@@ -13,9 +13,9 @@ $! Define system-wide logical names
 $ DEFINE/SYSTEM SYS$STARTUP SYS$MANAGER
 $ DEFINE/SYSTEM SYS$LOGIN SYS$MANAGER
 $!
-$! Welcome banner
-$ WRITE SYS$OUTPUT ""
-$ WRITE SYS$OUTPUT "    OVMX V1.0 -- OpenVMS-Compatible Environment for Linux"
-$ WRITE SYS$OUTPUT ""
+$! Login banners are NOT set here -- LOGINOUT reads SYS$ANNOUNCE and
+$! SYS$WELCOME, which a manager defines in SYS$MANAGER:SYLOGICALS.CONF.
+$! The startup banner itself is displayed by STARTUP.EXE from the system
+$! identity module, so there is exactly one place that knows the version.
 $!
 $ EXIT

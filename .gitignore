@@ -1,6 +1,8 @@
 # Build directories
 build/
 build-static/
+# any local/CI build tree (build-local, build-ci8, build-246gate, ...)
+build-*/
 dist/
 
 # CMake (generated in build directories)

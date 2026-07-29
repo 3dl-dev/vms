@@ -41,6 +41,7 @@
 #include "opcdef.h"
 #include "ovmx_accounting.h"
 #include "starlet.h"
+#include "ovmx_identity.h"
 #include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
 
@@ -1221,7 +1222,7 @@ static int cmd_tcpip_show_host(struct dcl_command *cmd)
 static int cmd_tcpip_show_version(struct dcl_command *cmd)
 {
     (void)cmd;
-    printf("OVMX TCP/IP Services for OpenVMS V0.1\n");
+    printf("OVMX TCP/IP Services %s\n", ovmx_product_version());
     return SS$_NORMAL;
 }
 
@@ -2260,7 +2261,7 @@ int cmd_product(struct dcl_command *cmd)
         printf("----------------------------------- ----------- -----------\n");
         printf("PRODUCT                             KIT TYPE    STATE\n");
         printf("----------------------------------- ----------- -----------\n");
-        printf("OVMX V1.0                          Full LP     Installed\n");
+        printf("OVMX %-30s Full LP     Installed\n", ovmx_product_version());
         printf("----------------------------------- ----------- -----------\n");
         printf("1 product found\n");
         return SS$_NORMAL;
@@ -2270,7 +2271,8 @@ int cmd_product(struct dcl_command *cmd)
         printf("----------------------------------- ----------- ----------- -----------\n");
         printf("PRODUCT                             KIT TYPE    STATE       DATE\n");
         printf("----------------------------------- ----------- ----------- -----------\n");
-        printf("OVMX V1.0                          Full LP     Installed   %2d-%s-%04d\n",
+        printf("OVMX %-30s Full LP     Installed   %2d-%s-%04d\n",
+               ovmx_product_version(),
                tm->tm_mday, vms_months[tm->tm_mon], 1900 + tm->tm_year);
         printf("----------------------------------- ----------- ----------- -----------\n");
         printf("1 item found\n");

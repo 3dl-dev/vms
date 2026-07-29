@@ -32,9 +32,11 @@
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "vms/logical.h"
+#include "ovmx_identity.h"
 #define MAX_USERS     1024
 #define MAX_LINE      1024
-#define UAF_VERSION   "V7.3"
+/* AUTHORIZE reports the OVMX product version from the SSOT (INV-1). */
+#define UAF_VERSION   OVMX_PRODUCT_VERSION
 
 /* Default values for new users */
 #define DEFAULT_UIC_GROUP    200

@@ -31,6 +31,7 @@
 #include "starlet.h"
 #include "vmsfs/filespec.h"
 #include "vms/pcb.h"
+#include "ovmx_identity.h"
 #include "vmsqueue.h"
 
 /* Forward declarations for queue/intrusion subcommands (dcl_cmd_process.c) */
@@ -273,9 +274,15 @@ static int cmd_show_system(struct dcl_command *cmd)
         }
     }
 
-    printf("OpenVMS V7.3  on node %s  %2d-%s-%04d %02d:%02d:%02d.%02d"
+    /* Human surface: badged brand identity + SCSNODE (INV-0/INV-1). Never a
+     * bare VSI product-and-version claim, and never the Linux hostname
+     * (INV-4 leak). */
+    char sysname[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(sysname, sizeof(sysname));
+
+    printf("%s  on node %s  %2d-%s-%04d %02d:%02d:%02d.%02d"
            "  Uptime  %s\n",
-           uts.nodename, tm.tm_mday, vms_months[tm.tm_mon],
+           ovmx_product_banner(), sysname, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000), uptime_str);
     printf("  Pid    Process Name    State  Pri      I/O       CPU"
@@ -896,8 +903,10 @@ static int cmd_show_license(struct dcl_command *cmd)
     printf("Active licenses on this node:\n\n");
     printf("------- Product ID --------    ---- Rating -----   -- Version --\n");
     printf("Product Name          Producer  Units  Avail  Actv  Version  Termination\n");
-    printf("OVMX                  OVMX      0      0      100   V1.0     (none)\n");
-    printf("OVMX-TCP/IP           OVMX      0      0      100   V0.1     (none)\n");
+    printf("OVMX                  OVMX      0      0      100   %-8s (none)\n",
+           ovmx_product_version());
+    printf("OVMX-TCP/IP           OVMX      0      0      100   %-8s (none)\n",
+           ovmx_product_version());
     return SS$_NORMAL;
 }
 
@@ -917,8 +926,10 @@ static int cmd_show_cluster(struct dcl_command *cmd)
 static int cmd_show_network(struct dcl_command *cmd)
 {
     (void)cmd;
-    printf("Product: OVMX TCP/IP Services for OpenVMS V0.1\n");
-    printf("Node: OVMX\n");
+    char netnode[OVMX_IDENTITY_MAXLEN];
+    ovmx_node_name(netnode, sizeof(netnode));
+    printf("Product: OVMX TCP/IP Services %s\n", ovmx_product_version());
+    printf("Node: %s\n", netnode);
     return SS$_NORMAL;
 }
 

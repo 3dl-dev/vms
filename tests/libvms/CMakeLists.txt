@@ -63,3 +63,22 @@ libvms_add_test(test_libvms_sysuaf_record
 # SCSSYSTEMID round-trip through the typed SYSGEN store, sys$getsyi)
 libvms_add_test(test_libvms_sysgen_identity
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sysgen_identity.c)
+
+# Test 11: vms-e652 (INV-1) — system-identity SSOT + SYS$ANNOUNCE/SYS$WELCOME.
+# Not via libvms_add_test(): the banner resolver translates logical names and
+# VMS filespecs, so this one also needs vmslnm and vmsfs.
+add_executable(test_libvms_identity
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_identity.c)
+target_include_directories(test_libvms_identity PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_identity PRIVATE
+    vms
+    vmsfs
+    vmslnm
+    pthread
+    m
+)
+add_test(NAME test_libvms_identity COMMAND test_libvms_identity)

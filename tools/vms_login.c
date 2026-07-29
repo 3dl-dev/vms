@@ -33,6 +33,8 @@
 
 /* Paths */
 #include "ovmx_layout.h"
+#include "ovmx_identity.h"
+#include "ovmx_banner.h"
 #define LASTLOGIN_DIR      VMS_LASTLOGIN_DIR
 #define DCL_SHELL_PATH     VMS_DCL_PATH
 
@@ -82,7 +84,10 @@ static void start_session(const sysuaf_record_t *rec)
         "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
     };
 
-    printf("\n   Welcome to OpenVMS (tm) OVMX V7.3\n");
+    /* SYS$WELCOME (a boot-defined logical), falling back to the built-in
+     * badged OVMX identity when undefined -- as LOGINOUT does on VMS. */
+    printf("\n");
+    ovmx_banner_welcome(stdout);
 
     /* Read the REAL last login time from accounting records */
     time_t last_login = 0;
@@ -165,6 +170,10 @@ static int console_login(void)
     /* Disable stdio buffering on stdin so that unread data remains
      * in the kernel pipe/tty buffer and is available after exec(). */
     setvbuf(stdin, NULL, _IONBF, 0);
+
+    /* SYS$ANNOUNCE -- displayed once before the first Username: prompt.
+     * Undefined by default, in which case nothing is printed (VMS). */
+    ovmx_banner_announce(stdout);
 
     while (attempts < MAX_ATTEMPTS) {
         /* Prompt for username */

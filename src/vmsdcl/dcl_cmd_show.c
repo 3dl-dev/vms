@@ -596,24 +596,42 @@ static int cmd_show_device(struct dcl_command *cmd)
              * device to the same linux_path and apply the same arithmetic, the two
              * interfaces cannot disagree again -- this isn't a value coincidentally
              * matched, it's the same computation. See lex_getdvi() for the mirrored
-             * fix. NOTE (unresolved, flagged for operator sign-off): the oracle's
-             * 8-wide Free Blocks field (pinned live, vms-b9f R3) assumed VAX/Alpha-era
-             * disk sizes; OVMX's backing store is a full host filesystem tree, whose
-             * real free-block count can exceed 8 digits (observed on dev host: 10
-             * digits). %8lu is a MINIMUM width -- it will not truncate -- so on a
-             * large-enough backing filesystem the row widens and Trans/Mnt Cnt shift
-             * right of their oracle columns. This is a real host-vs-VAX-disk-size
-             * mismatch, not an invented format; no oracle capture exists for an
-             * overflowing Free Blocks field, so it is not fabricated here. */
+             * fix.
+             *
+             * Row width (vms-b9f T1, round 5 -- OVMX DESIGN CHOICE, NOT oracle-derived,
+             * flagged for operator sign-off per CLAUDE.md Rule 5/8): the oracle's Free
+             * Blocks field is 8 digits wide (pinned live, vms-b9f R3) because VAX/Alpha
+             * era disks (largest is RA92, a few hundred MB) never produce a 9+-digit
+             * block count. OVMX's backing store is a full host filesystem tree and CAN
+             * exceed 8 digits (10 digits observed on dev hosts). Round 4's plain %8lu is
+             * a MINIMUM width, not a truncating one -- it let the row widen past 80
+             * bytes and shifted Trans Count / Mnt Cnt off their oracle columns (measured:
+             * 82-byte row, Trans@77 instead of 75, Mnt@81 instead of 79 -- this round's
+             * defect). No oracle capture of an overflowing Free Blocks field exists, or
+             * can exist (VAX 7.3's largest disk cannot overflow an 8-digit field), so
+             * there is no VMS-authentic overflow behavior to pin here -- this is purely
+             * an OVMX product decision. Chosen: clamp the DISPLAYED value to the field's
+             * 8-digit ceiling (99,999,999 blocks, ~48.8 GB) so the row is ALWAYS exactly
+             * 80 bytes, matching the oracle's fixed-width layout, at the cost of the
+             * display not reflecting free space beyond that ceiling on a larger backing
+             * filesystem. F$GETDVI("...","FREEBLOCKS") (dcl_lexical.c lex_getdvi) is
+             * UNCHANGED and keeps returning the real, unclamped figure -- so above the
+             * clamp threshold SHOW DEVICE and F$GETDVI will legitimately read
+             * differently. Reconciling that (or replacing the clamp with a real
+             * per-volume figure sized to the volume, not the host) is vms-dv1's problem
+             * (the real device table owns per-volume free-space truth); this item only
+             * owns keeping SHOW DEVICE's own row byte-exact against the oracle. */
             unsigned long free_blocks = 0;
             struct statvfs st;
             if (vms_device_table[i].linux_path[0] != '\0' &&
                 statvfs(vms_device_table[i].linux_path, &st) == 0) {
                 free_blocks = (unsigned long)(st.f_bavail * st.f_frsize / 512);
             }
+            unsigned long free_blocks_display =
+                free_blocks > 99999999UL ? 99999999UL : free_blocks;
             printf("%-24s%-14s       0  %-14s%8lu     1   1\n",
                    vms_device_table[i].vms_name, "Mounted",
-                   vms_device_table[i].volume_label, free_blocks);
+                   vms_device_table[i].volume_label, free_blocks_display);
         } else {
             printf("%-24s%-14s       0\n",
                    vms_device_table[i].vms_name, "Online");

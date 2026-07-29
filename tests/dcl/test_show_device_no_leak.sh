@@ -46,6 +46,17 @@
 # all six pinned live against the oracle on 2026-07-29 (both the $2$DUA0:/$2$DUA1: mounted
 # rows and a live MOUNT/DISMOUNT cycle on $2$DUA3: for the not-mounted row below).
 #
+# vms-b9f T1, round 5: round 4's fix for the R3/R4 findings above (making Free Blocks a
+# real, non-fabricated statvfs()-derived number) introduced a NEW layout break: %8lu is a
+# minimum, non-truncating width, so on this dev host's 10-digit free-block count the row
+# grew from the oracle's 80 bytes to 82, and Trans Count/Mnt Cnt shifted from 75/79 to
+# 77/81. Fixed in dcl_cmd_show.c by clamping the DISPLAYED figure to an 8-digit ceiling
+# (an OVMX design choice, not oracle-derived -- see that file's comment and
+# oracle_pins_for_signoff). The checks below now also assert the row's TOTAL LENGTH is
+# exactly 80 bytes and read Free Blocks/Trans Count/Mnt Cnt at their fixed ABSOLUTE
+# offsets (69/75/79) again, rather than the width-relative slicing round 4 needed while
+# the field was unbounded-width.
+#
 # The not-mounted row (also R3, round 3): OVMX used to print "Dismounted" with a full row
 # of zeroed fields and a stale volume label for a registered-but-unmounted device -- its
 # own leak of internal state that isn't a real VMS status. Pinned live by actually driving
@@ -103,56 +114,63 @@ fi
 
 echo "LEAK_CHECK_COMPLETE ($LEAKS_FOUND leaks found)"
 
-# Column-position check (vms-b9f R4, hardened round 3; reworked round 4 for S1).
-# Status@24, Error Count@45 and Volume Label@48 are all BEFORE the Free Blocks field and
-# their byte offsets never move, so they're still sliced at fixed offsets, pinned live
-# against the oracle (~/vax/cluster/vax1, 2026-07-29).
+# Column-position check (vms-b9f R4, hardened round 3; reworked round 4 for S1;
+# reworked round 5 for T1 -- the row is byte-exact against the oracle again).
 #
-# Free Blocks/Trans Count/Mnt Cnt CANNOT be sliced at fixed absolute offsets any more
-# (vms-b9f S1, round 4): Free Blocks used to be a hardcoded literal "0" (always exactly
-# 8 bytes wide via %8d), so 69/75/79 were constant. It is now a real statvfs()-derived
-# free-block count for the device's own backing filesystem (dcl_cmd_show.c), which can
-# be (and on this dev host, measurably is -- 10 digits) wider than the oracle-era 8-digit
-# assumption; the printf field is a MINIMUM width and does not truncate, so Trans
-# Count/Mnt Cnt's absolute column shifts right by however many extra digits Free Blocks
-# printed. Hardcoding 69/75/79 here would make a CORRECT, non-fabricated Free Blocks
-# implementation fail this gate for no reason other than this host's disk being bigger
-# than a VAX-era one -- exactly the failure mode vms-b9f wave 3 hit and left STILL OPEN.
-#
-# Fixed layout invariants that DO still hold regardless of Free Blocks' width (both
-# pinned against dcl_cmd_show.c's format string, which never changed shape, only the
-# Free Blocks value itself): Trans Count and Mnt Cnt are always the LAST 10 bytes of a
-# mounted row ("     1   1" -- 5 spaces, digit, 3 spaces, digit), and the Free Blocks
-# field always starts immediately after Volume Label ends, at byte 62 (48 + 14-wide
-# label field). Slice using those relative anchors instead of absolute end-columns.
-# Positive cross-check (vms-b9f S1): SHOW DEVICE's Free Blocks and F$GETDVI's FREEBLOCKS
-# item must report the IDENTICAL number for the SAME device -- the actual regression this
-# round fixes (the branch previously hardcoded SHOW DEVICE's Free Blocks to 0 while
-# F$GETDVI reported a real, different-source figure). Query both in ONE process
+# vms-b9f T1, round 5: round 4 made Free Blocks a real statvfs()-derived figure with a
+# MINIMUM-width %8lu (not truncating), so on a backing filesystem bigger than a VAX-era
+# disk (this dev host: 10 digits) the row widened past 80 bytes and Trans Count/Mnt Cnt
+# shifted off their oracle columns (measured: 82 bytes, Trans@77 not 75, Mnt@81 not 79).
+# Fixed in dcl_cmd_show.c by clamping the DISPLAYED Free Blocks to an 8-digit ceiling
+# (99999999) -- an OVMX design choice, not oracle-derived (see the code comment there
+# for the full rationale and operator-sign-off flag) -- so the row is now UNCONDITIONALLY
+# exactly 80 bytes and every field sits back at its pinned oracle offset. Assert that
+# directly (byte-exact length, not just "doesn't crash"): a regression that re-widens the
+# row must fail this gate, not just the relative-offset slices below.
+freedvi_run=$(printf 'SHOW DEVICE\nX = F$GETDVI("DKA0","FREEBLOCKS")\nSHOW SYMBOL X\n' | $VMSDCL 2>&1)
+dka0_line=$(echo "$freedvi_run" | grep '^DKA0:')
+fgetdvi_freeblocks=$(echo "$freedvi_run" | grep -oE 'X = [0-9]+' | head -1 | awk '{print $3}')
+
+dka0_len=${#dka0_line}
+status_field="${dka0_line:24:7}"
+errcnt_field="${dka0_line:45:1}"
+label_field="${dka0_line:48:7}"
+# Absolute column positions (vms-b9f T1: "ASSERT THE COLUMN POSITIONS, not substring
+# contains: checks" -- these are now fixed again because the row width is fixed).
+freeblk_last_digit="${dka0_line:69:1}"
+transcnt_digit="${dka0_line:75:1}"
+mntcnt_digit="${dka0_line:79:1}"
+freeblk_field="${dka0_line:62:8}"
+freeblk_trimmed=$(echo "$freeblk_field" | tr -d ' ')
+
+# FREEBLOCKS_CONSISTENT (vms-b9f S1, round 4; clamp-aware round 5): SHOW DEVICE's Free
+# Blocks and F$GETDVI's FREEBLOCKS item must report the IDENTICAL number for the SAME
+# device UNLESS SHOW DEVICE's value is sitting at the T1 clamp ceiling (99999999) --
+# in which case the real (unclamped) F$GETDVI figure must be at or above that ceiling,
+# proving the clamp fired for a genuine reason and isn't just silently wrong. Below the
+# ceiling the two must match exactly, same as before. Query both in ONE process
 # invocation, back-to-back -- NOT the earlier standalone "$output" capture, which is a
 # SEPARATE DCL.EXE run and can legitimately disagree by a few blocks with a live
 # filesystem between two process launches (observed in dev: an 8-block drift with no
 # code defect involved). Extract the DKA0: row from THIS SAME run too, so the column
 # slice and the F$GETDVI comparison are reading literally the same statvfs() snapshot.
-freedvi_run=$(printf 'SHOW DEVICE\nX = F$GETDVI("DKA0","FREEBLOCKS")\nSHOW SYMBOL X\n' | $VMSDCL 2>&1)
-dka0_line=$(echo "$freedvi_run" | grep '^DKA0:')
-fgetdvi_freeblocks=$(echo "$freedvi_run" | grep -oE 'X = [0-9]+' | head -1 | awk '{print $3}')
+freeblocks_consistent=0
+if [ -n "$freeblk_trimmed" ] && [ -n "$fgetdvi_freeblocks" ]; then
+    if [ "$freeblk_trimmed" = "99999999" ]; then
+        [ "$fgetdvi_freeblocks" -ge 99999999 ] && freeblocks_consistent=1
+    else
+        [ "$freeblk_trimmed" = "$fgetdvi_freeblocks" ] && freeblocks_consistent=1
+    fi
+fi
 
-status_field="${dka0_line:24:7}"
-errcnt_field="${dka0_line:45:1}"
-label_field="${dka0_line:48:7}"
-dka0_len=${#dka0_line}
-trailing10="${dka0_line: -10}"
-freeblk_field="${dka0_line:62:$((dka0_len - 10 - 62))}"
-freeblk_trimmed=$(echo "$freeblk_field" | tr -d ' ')
-
-if [ "$status_field" = "Mounted" ] && [ "$errcnt_field" = "0" ] && \
-   [ "$label_field" = "OVMXSYS" ] && [ "$trailing10" = "     1   1" ] && \
-   [ -n "$freeblk_trimmed" ] && [ "$freeblk_trimmed" = "$fgetdvi_freeblocks" ]; then
-    echo "COLUMN_LAYOUT_OK (Status@24='$status_field' ErrCnt@45='$errcnt_field' Label@48='$label_field' FreeBlk='$freeblk_trimmed' Trailing10='$trailing10')"
+if [ "$dka0_len" -eq 80 ] && [ "$status_field" = "Mounted" ] && [ "$errcnt_field" = "0" ] && \
+   [ "$label_field" = "OVMXSYS" ] && [ -n "$freeblk_last_digit" ] && \
+   [ "$transcnt_digit" = "1" ] && [ "$mntcnt_digit" = "1" ] && \
+   [ "$freeblocks_consistent" -eq 1 ]; then
+    echo "COLUMN_LAYOUT_OK (len=$dka0_len Status@24='$status_field' ErrCnt@45='$errcnt_field' Label@48='$label_field' FreeBlk@69='$freeblk_last_digit' Trans@75='$transcnt_digit' Mnt@79='$mntcnt_digit')"
     echo "FREEBLOCKS_CONSISTENT (SHOW DEVICE='$freeblk_trimmed' F\$GETDVI='$fgetdvi_freeblocks')"
 else
-    echo "COLUMN_LAYOUT_BROKEN (Status@24='$status_field' ErrCnt@45='$errcnt_field' Label@48='$label_field' FreeBlk='$freeblk_trimmed' Trailing10='$trailing10', DKA0: line='$dka0_line')"
+    echo "COLUMN_LAYOUT_BROKEN (len=$dka0_len Status@24='$status_field' ErrCnt@45='$errcnt_field' Label@48='$label_field' FreeBlk@69='$freeblk_last_digit' Trans@75='$transcnt_digit' Mnt@79='$mntcnt_digit', DKA0: line='$dka0_line')"
     echo "FREEBLOCKS_MISMATCH (SHOW DEVICE='$freeblk_trimmed' F\$GETDVI='$fgetdvi_freeblocks')"
 fi
 

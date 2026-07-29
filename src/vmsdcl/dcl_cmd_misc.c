@@ -1612,13 +1612,14 @@ int cmd_mount(struct dcl_command *cmd)
         dev_name[nlen + 1] = '\0';
     }
 
-    /* Reject unrecognized/unconfigured device units. Real VMS requires the
-     * device to be a real, autoconfigured unit; OVMX has no physical
-     * controllers, so it validates against a known set of VMS device-class
-     * mnemonics AND requires unit 0 (its one stand-in unit per class — see
-     * dcl_is_known_device_class in dcl_builtin.c) instead of accepting an
-     * arbitrary string or unit number ("MOUNT DKA100:" used to succeed for
-     * any name at all — vms-b9f).
+    /* Reject any device OVMX does not actually have. Real VMS requires the device to
+     * be a real, autoconfigured unit; OVMX has no physical controllers, so it checks
+     * against its own small, fixed inventory of exactly-named virtual devices
+     * (dcl_is_configured_device, dcl_builtin.c) instead of accepting anything whose
+     * CLASS syntax merely looks plausible ("MOUNT DKA100:" used to succeed for any
+     * name at all — vms-b9f; a later class+unit-0 allowlist still let through
+     * DBZ0:/DRA0:/MSA0:/$1$DGA0: — vms-b9f R2 — because it validated *syntax*, not
+     * *existence*).
      *
      * Message text/severity pinned live against the oracle (OpenVMS VAX 7.3,
      * ~/vax/cluster/vax1, 2026-07-29): MOUNT of an unconfigured device
@@ -1628,7 +1629,7 @@ int cmd_mount(struct dcl_command *cmd)
      * device name echoed back. The prior "- _%s" suffix and severity 'E'
      * were self-certified from model recollection (CLAUDE.md Rule 8
      * violation) -- corrected here. */
-    if (!dcl_is_known_device_class(dev_name)) {
+    if (!dcl_is_configured_device(dev_name)) {
         dcl_error("MOUNT", 4, "NOSUCHDEV",
                   "no such device available");
         return SS$_NOSUCHDEV;
@@ -1726,6 +1727,27 @@ int cmd_dismount(struct dcl_command *cmd)
     if (dev_name[nlen - 1] != ':') {
         dev_name[nlen] = ':';
         dev_name[nlen + 1] = '\0';
+    }
+
+    /* Refuse to dismount the system device -- matching real OpenVMS, which never
+     * allows the system disk to be dismounted while the system is running. Pinned
+     * live against the oracle (OpenVMS VAX 7.3, ~/vax/cluster/vax1, 2026-07-29):
+     * DISMOUNT SYS$SYSDEVICE: and DISMOUNT of the system device's own unit name both
+     * produced the byte-identical "%DISM-F-SYSDEV, The system device cannot be
+     * dismounted" -- facility DISM (not DISMOUNT), severity F (fatal, sev_chars[4] in
+     * dcl_messages.c). vms-b9f R1: registering DKA0: into vms_device_table at boot (so
+     * SHOW DEVICE could see it -- dcl_main.c setup_session()) made it dismountable for
+     * the first time, a regression this fix closes. Without this check, DIRECTORY
+     * DKA0:[000000] would also keep listing files after a "successful" dismount:
+     * vmsfs's OWN device table (which vmsfs_to_linux_path() actually reads) is
+     * separate from vms_device_table and DISMOUNT never touched it -- so SHOW DEVICE
+     * would report a dismounted state that was not true. Refusing the dismount
+     * outright removes that inconsistency at the source. */
+    if (strcmp(dev_name, SYSDISK_DEVICE ":") == 0 ||
+        strcmp(dev_name, "SYS$SYSDEVICE:") == 0) {
+        dcl_error("DISM", 4, "SYSDEV",
+                  "The system device cannot be dismounted");
+        return SS$_ABORT;
     }
 
     struct vms_device *dev = vms_find_device(dev_name);

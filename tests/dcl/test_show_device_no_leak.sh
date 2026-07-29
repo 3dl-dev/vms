@@ -5,6 +5,8 @@
 # EXPECT: contains:DKA0:
 # EXPECT: contains:Mounted
 # EXPECT: contains:OVMXSYS
+# EXPECT: contains:COLUMN_LAYOUT_OK
+# EXPECT_NOT: contains:COLUMN_LAYOUT_BROKEN
 #
 # This is a HARD gate (unlike the informational tests/dcl/test_no_unix_leaks.sh): before the
 # vms-b9f fix, this test FAILS the harness (EXPECT_NOT violated), not just logs a finding.
@@ -16,6 +18,15 @@
 # appear, shown as "Mounted" with its OVMXSYS volume label (the existing OVMX system-device
 # convention already used by F$GETDVI's VOLNAM item, dcl_lexical.c). A SHOW DEVICE that prints
 # only headers now fails this test.
+#
+# vms-b9f R4: those three EXPECT lines are bare substring checks -- a row emitted as
+# "DKA0: Mounted OVMXSYS" with no column padding at all would pass all three, so they never
+# actually verified the COLUMN LAYOUT was intact (and R3 found it wasn't: Status and Volume
+# Label were both one column off from the oracle). The COLUMN_LAYOUT_OK/BROKEN check below
+# slices the DKA0: data row at the exact byte offsets pinned live against the oracle (OpenVMS
+# VAX 7.3, ~/vax/cluster/vax1, 2026-07-29: `SHOW DEVICE D` on a mounted disk put Status at
+# column 24 and Volume Label at column 48) and asserts the actual substrings found there,
+# not just that they appear SOMEWHERE in the line.
 # Root cause (vms-b9f / INV-4, docs/design-authenticity-roadmap.md §2.2): cmd_show_device()
 # used to fopen("/proc/mounts") and print every host mount as a synthetic "$1$DGAn:" VMS
 # disk, with the mount-point basename (uppercased) as the Volume Label. On a WSL host this
@@ -63,3 +74,16 @@ if [ -r /proc/mounts ]; then
 fi
 
 echo "LEAK_CHECK_COMPLETE ($LEAKS_FOUND leaks found)"
+
+# Column-position check (vms-b9f R4): find the DKA0: data row and slice it at the exact
+# byte offsets pinned against the oracle, rather than grepping for the field text anywhere
+# in the line. Bash substring indexing (${var:offset:len}) is 0-based and byte-oriented,
+# matching the printf field offsets in dcl_cmd_show.c.
+dka0_line=$(echo "$output" | grep '^DKA0:')
+status_field="${dka0_line:24:7}"
+label_field="${dka0_line:48:7}"
+if [ "$status_field" = "Mounted" ] && [ "$label_field" = "OVMXSYS" ]; then
+    echo "COLUMN_LAYOUT_OK (Status@24='$status_field' Label@48='$label_field')"
+else
+    echo "COLUMN_LAYOUT_BROKEN (Status@24='$status_field' Label@48='$label_field', DKA0: line='$dka0_line')"
+fi

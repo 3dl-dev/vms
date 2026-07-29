@@ -179,7 +179,34 @@ jobs:
         run: docker build -f tests/qemu/Dockerfile -t ovmx-ktest:latest .
 
       - name: Boot QEMU, insmod vms.ko, run executive assertions against /dev/vms
-        run: docker run --rm ovmx-ktest:latest
+        run: |
+          set +e
+          OUTPUT=$(docker run --rm ovmx-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: kernel-executive harness exited nonzero"
+            exit 1
+          fi
+
+          # Pin the exact suite count (vms-1d9 round 3): a nonzero exit
+          # code alone does not catch a test that silently stops being
+          # built/staged/run while everything else stays green -- e.g. if
+          # tests/qemu/Dockerfile's qemu_syssvc_tests build or its
+          # test_syssvc_* glob-copy step ever quietly drops a registered
+          # test, TOTAL_PASS/TOTAL_FAIL in init.sh would both just get
+          # smaller and the job would still exit 0. This assertion is
+          # the SAME defense the negative-control job already relies on,
+          # applied to the positive (device-present) run: it must be
+          # updated by hand whenever a suite is intentionally added or
+          # removed, exactly like the negative-control count below.
+          #
+          # 2 (vms.ko + vmsfs.ko load) + 8 test_kmod_* + 1 test_syssvc_lock
+          # = 11, all passing when the executive is present.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 11 suites passed, 0 suites failed ===' \
+            || { echo "FAIL: did not see the expected 11-suites-passed/0-suites-failed split -- a suite may have silently stopped running (build/copy step dropped it) without failing the job"; exit 1; }
 
   # -----------------------------------------------------------------------
   # Job 3c: Kernel Executive — negative control (vms-e4d)

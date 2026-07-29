@@ -170,9 +170,43 @@ int main(void)
     printf("=== test_syssvc_lock (public sys$enq/sys$enqw/sys$deq API) ===\n");
 
     if (bootstrap("parent") < 0) {
-        printf("=== test_syssvc_lock: %d passed, %d failed (SKIPPED: no /dev/vms) ===\n",
+        /*
+         * NO-SILENT-FALLBACK PROOF (vms-1d9 round 3 -- adversarial review
+         * of round 2 found this path proved nothing: it printed a bootstrap
+         * message and exited SKIP without ever calling a public sys$ entry
+         * point, so CLAUDE.md Rule 9 / vms-6b8's "fail honestly, never fake
+         * success" constraint for sys_lock.c was satisfied by code reading,
+         * not by a running assertion).
+         *
+         * bootstrap()'s own vms_kif_open() call already failed above, but
+         * vms_kif_open() is idempotent on failure (vms_kif.c: the
+         * thread-local fd stays -1 and every call retries the same open),
+         * so calling the PUBLIC sys$enqw/sys$deq entry points here drives
+         * the REAL production code path: sys_lock.c's do_enq()/sys$deq()
+         * each call ensure_kif_open() themselves, and when THAT fails
+         * (same failure, independently re-derived, not reused from above)
+         * return SS$_NOSUCHDEV -- both as the function's return value AND
+         * written into the caller's LKSB. Assert on that status, not on a
+         * string this program authored.
+         */
+        $DESCRIPTOR(resnam_absent, "SYSSVC_LOCK_TEST_ABSENT");
+        struct lksb lksb_absent = {0};
+        uint32_t st = sys$enqw(0, LCK$K_EXMODE, &lksb_absent, 0,
+                                &resnam_absent, 0, NULL, 0, NULL, 0, 0);
+        CHECK(st == SS$_NOSUCHDEV,
+              "parent: sys$enqw returns SS$_NOSUCHDEV when /dev/vms is absent (public API, real status, not a fake success)");
+        CHECK(lksb_absent.lksb$w_status == SS$_NOSUCHDEV,
+              "parent: sys$enqw's own LKSB records SS$_NOSUCHDEV when /dev/vms is absent");
+
+        uint32_t dst = sys$deq(0xDEADBEEF, NULL, 0, 0);
+        CHECK(dst == SS$_NOSUCHDEV,
+              "parent: sys$deq returns SS$_NOSUCHDEV when /dev/vms is absent (public API, real status, not a fake success)");
+
+        printf("=== test_syssvc_lock: %d passed, %d failed (SKIPPED: no /dev/vms -- cross-process scenario not exercised, but the no-silent-fallback path above WAS) ===\n",
                pass, fail);
-        return EXIT_SKIP;
+        /* A failed no-silent-fallback assertion is a real regression, not
+         * an honest skip -- report it as FAIL (exit 1), never masked as 77. */
+        return fail > 0 ? 1 : EXIT_SKIP;
     }
 
     $DESCRIPTOR(resnam, "SYSSVC_LOCK_TEST1");

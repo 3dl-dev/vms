@@ -113,9 +113,9 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=OFF \
-    && cmake --build build-static --target test_syssvc_lock --parallel $(nproc) 2>&1 && \
-    echo "--- test_syssvc_lock (public sys\$ API, static musl) ---" && \
-    ls -la build-static/bin/test_syssvc_lock
+    && cmake --build build-static --target qemu_syssvc_tests --parallel $(nproc) 2>&1 && \
+    echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
+    ls -la build-static/bin/test_syssvc_*
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -168,8 +168,13 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         [ -x "$f" ] && cp "$f" /initramfs/tests/ || true; \
     done && \
     # Public sys$ API test(s), statically linked against real libvms
-    # (musl) -- see the OVMX_STATIC build stage above (vms-1d9).
-    cp /src/repo/build-static/bin/test_syssvc_lock /initramfs/tests/ && \
+    # (musl) -- see the OVMX_STATIC build stage above (vms-1d9). Copies
+    # EVERY test_syssvc_* binary the qemu_syssvc_tests target produced, by
+    # glob -- not one binary by literal name -- so a future test_syssvc_*.c
+    # (e.g. test_syssvc_event.c) needs no Dockerfile edit to reach QEMU.
+    for f in /src/repo/build-static/bin/test_syssvc_*; do \
+        [ -x "$f" ] && cp "$f" /initramfs/tests/ || true; \
+    done && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

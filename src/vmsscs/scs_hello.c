@@ -152,10 +152,23 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
     return 0;
 }
 
+uint8_t scs_hello_response_pfw(uint8_t recv_pfw)
+{
+    /* GROUNDED request/response rule (spec sec 4a offset-30): reply X+1 up to b4;
+     * a received CONFIRM (b4) or anything else re-initiates a fresh REQUEST (b3),
+     * sustaining the joiner's ongoing b3<->b4 verify keepalive (vms-d94). */
+    switch (recv_pfw) {
+    case SCS_HELLO_PFW_INIT:    return SCS_HELLO_PFW_REQUEST; /* b2 -> b3 */
+    case SCS_HELLO_PFW_REQUEST: return SCS_HELLO_PFW_CONFIRM; /* b3 -> b4 (the fix) */
+    default:                    return SCS_HELLO_PFW_REQUEST; /* b4/other -> b3 */
+    }
+}
+
 int scs_hello_build_directed_frame(const struct scs_hello_params *p,
                                     const uint8_t peer_mac[6],
                                     const uint8_t nonce[4],
                                     uint16_t incarnation,
+                                    uint8_t per_frame_word,
                                     uint8_t out[SCS_HELLO_FRAME_LEN])
 {
     if (p == NULL || peer_mac == NULL || nonce == NULL || out == NULL) {
@@ -174,8 +187,9 @@ int scs_hello_build_directed_frame(const struct scs_hello_params *p,
     }
 
     /* Patch the directed-specific fields (spec sec 4a/4b). */
-    out[30] = 0xb3;
-    out[31] = 0x00;             /* per-frame word: directed value (ungrounded, REPLAYED, sec 4a) */
+    out[30] = per_frame_word;
+    out[31] = 0x00;             /* abs-30 channel-verify word (GROUNDED, sec 4a offset-30);
+                                 * low byte = caller state (b2/b3/b4), high byte constant 0x00 */
 
     memcpy(out + 68, nonce, 4); /* join nonce (GROUNDED present/stable; value REPLAYED, sec 4g) */
 
@@ -219,7 +233,11 @@ int scs_hello_build_padded_directed_frame(const struct scs_hello_params *p,
      * scs_hello_build_directed_frame only memsets its own 134-byte window. */
     memset(out, 0, frame_len);
 
-    int rc = scs_hello_build_directed_frame(p, peer_mac, nonce, incarnation, out);
+    /* A padded HELLO is always a channel-verify REQUEST (b3) -- GROUNDED
+     * (spec sec 4a offset-30 / sec 4k): every padded HELLO in both formation
+     * captures carries b3, acked by a plain b4. */
+    int rc = scs_hello_build_directed_frame(p, peer_mac, nonce, incarnation,
+                                            SCS_HELLO_PFW_REQUEST, out);
     if (rc != 0) {
         return rc;
     }

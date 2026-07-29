@@ -107,9 +107,54 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
                            uint8_t out[SCS_HELLO_FRAME_LEN]);
 
 /*
+ * --- vms-d94: the abs-30 per-frame word (the NISCA channel-verify handshake) ---
+ *
+ * The directed-HELLO per-frame word at abs offset 30 (SCA payload [16:18], low
+ * byte carries the state; high byte 0x00) is a two-phase channel-verify
+ * REQUEST/RESPONSE counter, GROUNDED byte-exact across TWO independent fresh
+ * formations (spec sec 4a offset-30):
+ *   - clean-cluster/captures/formation-clean-2node.pcap (VAXA member /
+ *     VAXB joiner) and
+ *   - cluster/captures/formation-ci1-joinwindow.pcap (VAX1 member / VAX2 joiner).
+ * Both open with the identical bootstrap: member sends b2 (INIT), joiner replies
+ * b3 (REQUEST), member replies b4 (CONFIRM). The rule is "on receiving a directed
+ * HELLO carrying word X, reply with X+1, saturating at b4": b2->b3, b3->b4. b4 is
+ * the terminal channel-confirmed ack. After the bootstrap both nodes run an
+ * ongoing b3<->b4 keepalive: a node periodically re-initiates the verify with a
+ * fresh b3 REQUEST (a plain OR a sec-4k padded HELLO) and the peer immediately
+ * (~0.2ms) acks it with a plain b4 CONFIRM. The JOINER never originates b2
+ * (0/213 joiner directed HELLOs in the clean capture); it starts at b3 and
+ * toggles b3<->b4. OVMX's prior fixed-b3 builder (vms-5fe) never emitted b4, so
+ * the member never saw OVMX confirm the channel and the NISCA handshake never
+ * finalized -- this is the vms-d94 gate.
+ */
+#define SCS_HELLO_PFW_INIT     0xb2 /* channel INIT (member's first directed contact only; sec 4a) */
+#define SCS_HELLO_PFW_REQUEST  0xb3 /* channel-verify REQUEST/probe (sec 4a offset-30) */
+#define SCS_HELLO_PFW_CONFIRM  0xb4 /* channel-verify CONFIRM/ack -- terminal (sec 4a offset-30) */
+
+/*
+ * scs_hello_response_pfw - the GROUNDED abs-30 response rule (spec sec 4a).
+ * Given the per-frame word `recv_pfw` (abs-30 low byte) of a directed HELLO just
+ * received from the peer, return the word OVMX must stamp in its reply:
+ *   b2 (INIT)    -> b3 (REQUEST)   -- respond to the member's channel init
+ *   b3 (REQUEST) -> b4 (CONFIRM)   -- ack the peer's verify probe (THE vms-d94 fix)
+ *   else (b4/other) -> b3 (REQUEST) -- re-initiate the verify, sustaining the
+ *                                      ongoing b3<->b4 keepalive the joiner runs.
+ * Pure function of the received word; no state. Byte-exact to the request/response
+ * cadence in both formation captures.
+ */
+uint8_t scs_hello_response_pfw(uint8_t recv_pfw);
+
+/*
  * scs_hello_build_directed_frame - Build a DIRECTED HELLO (vms-5fe), the
  * spec sec 4(b) "directed form": the channel-formation reply a node sends
  * point-to-point to a specific peer whose directed HELLO it just received.
+ *
+ * `per_frame_word` sets the abs-30 channel-verify state (SCS_HELLO_PFW_REQUEST
+ * b3 / SCS_HELLO_PFW_CONFIRM b4 / SCS_HELLO_PFW_INIT b2); compute it from the
+ * received word via scs_hello_response_pfw() so OVMX reaches/sends b4 and toggles
+ * b3<->b4 (vms-d94) instead of holding a fixed b3 (vms-5fe). Only the low byte is
+ * caller-set; abs-31 is always 0x00 (GROUNDED, sec 4a).
  *
  * Identical to the multicast HELLO template (scs_hello_build_frame) except
  * for the four fields that distinguish a directed HELLO on the wire, taken
@@ -135,10 +180,10 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
  *   - poller-sweep marker (abs 128-129) = 0x001F (=31, SDA SHOW PORTS
  *     'Poller Sweep 31'). GROUNDED (spec sec 4b).
  *
- * The per-frame word at abs 30-31 is set to a directed value (0xb300)
- * observed on real directed HELLOs; its semantics are ungrounded (spec sec
- * 4a offset-30), so this is a documented REPLAY of an observed constant,
- * not a grounded field.
+ * The per-frame word at abs 30-31 carries `per_frame_word` in the low byte
+ * (abs 30) and 0x00 in the high byte (abs 31). Its semantics are now GROUNDED
+ * as the channel-verify request/response counter (spec sec 4a offset-30, see
+ * scs_hello_response_pfw above), not an ungrounded replayed constant.
  *
  * p supplies OVMX's own identity (src_mac, node_name, timer_tick) exactly
  * as for the multicast builder; p->dst_mac is IGNORED (peer_mac is used).
@@ -150,6 +195,7 @@ int scs_hello_build_directed_frame(const struct scs_hello_params *p,
                                     const uint8_t peer_mac[6],
                                     const uint8_t nonce[4],
                                     uint16_t incarnation,
+                                    uint8_t per_frame_word,
                                     uint8_t out[SCS_HELLO_FRAME_LEN]);
 
 /*
@@ -196,7 +242,10 @@ int scs_hello_build_directed_frame(const struct scs_hello_params *p,
  * Lays down the ordinary directed HELLO (scs_hello_build_directed_frame, with
  * identical p / peer_mac / nonce / incarnation semantics), zero-extends the SCA
  * content to `total_sca_len`, and rewrites ONLY the SCA length field at abs
- * 14-15 to encode the padded total. The resulting frame is 14 + total_sca_len
+ * 14-15 to encode the padded total. The padded frame is a channel-verify
+ * REQUEST, so its abs-30 word is always SCS_HELLO_PFW_REQUEST (b3) -- GROUNDED:
+ * every padded HELLO in both formation captures carries b3 and is acked by a
+ * plain b4 (spec sec 4a offset-30 / sec 4k). The resulting frame is 14 + total_sca_len
  * bytes on the wire; the on-wire length is written to *frame_len_out.
  *
  * `total_sca_len` must be in [SCS_HELLO_SCA_LEN (120), SCS_HELLO_PADDED_MAX_SCA

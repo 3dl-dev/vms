@@ -864,35 +864,39 @@ int main(int argc, char **argv)
              * joiner VAX2->VAX1 and member VAX1->VAX2 1500B frames carry abs-92
              * = 1). Stamping the echoed member incarnation here instead makes
              * VAX1 reject the channel-size verification and re-probe forever. */
-            uint16_t echo_inc = SCS_HELLO_JOINER_INCARNATION;
-
-            /* Echo to the same size, never above the GROUNDED NISCS_MAX_PKTSZ ceiling. */
-            uint16_t echo_sca = rx_sca > SCS_HELLO_PADDED_MAX_SCA
-                                    ? (uint16_t)SCS_HELLO_PADDED_MAX_SCA : rx_sca;
+            /* vms-d94: a padded HELLO is a channel-verify REQUEST (its abs-30
+             * word is b3, spec sec 4a offset-30 / sec 4k). The GROUNDED ack to a
+             * padded b3 probe is a PLAIN b4 CONFIRM HELLO -- byte-exact in
+             * formation-clean-2node.pcap: VAXA->VAXB padded(1514) b3 @+34.2159 is
+             * answered +0.2ms later by VAXB->VAXA PLAIN b4 @+34.2161 (and
+             * symmetrically). OVMX previously RECIPROCATED a padded probe with its
+             * OWN padded b3 (grounded on the degraded ci3 flood captures); on the
+             * clean reference that never satisfies VAX1's size-verify -- VAX1's
+             * probe needs a b4 ack it never got, so it re-floods forever and no
+             * CSB opens. We now ACK each padded probe with a plain b4. OVMX's OWN
+             * outbound size-verify (proving OVMX can SEND a full 1500B frame) is
+             * the one-shot proactive padded b3 sent from the plain-HELLO path
+             * below (guarded by padded_initiated). */
+            uint8_t pad_resp_pfw = scs_hello_response_pfw(buf[30]); /* b3 -> b4 */
+            ps->channel_up = 1;
             struct timespec pnow;
             clock_gettime(CLOCK_MONOTONIC, &pnow);
-            int pdue = (ps->padded_replies == 0) ||
-                       (pnow.tv_sec - ps->last_padded.tv_sec >= 5);
-            if (pdue) {
-                size_t plen = 0;
-                hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
-                if (scs_hello_build_padded_directed_frame(&hello_params, src_mac, lab_nonce,
-                                                          echo_inc, echo_sca,
-                                                          pframe, sizeof(pframe), &plen) == 0 &&
-                    send_frame_to(sock, (int)ifindex, src_mac, pframe, plen) > 0) {
-                    ps->padded_replies++;
-                    ps->padded_initiated = 1; /* a reciprocation counts as our advertisement */
-                    ps->channel_up = 1;
-                    ps->last_padded = pnow;
-                    padded_sent++;
-                    log_ts(stdout);
-                    printf(" SCSD-I-PADHELLO, reciprocated padded HELLO (%u SCA / %zu wire)"
-                           " to %02x:%02x:%02x:%02x:%02x:%02x (reply #%ld)\n",
-                           echo_sca, plen,
-                           src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
-                           ps->padded_replies);
-                    fflush(stdout);
-                }
+            uint8_t ackframe[SCS_HELLO_FRAME_LEN];
+            hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
+            if (scs_hello_build_directed_frame(&hello_params, src_mac, lab_nonce,
+                                               SCS_HELLO_JOINER_INCARNATION,
+                                               pad_resp_pfw, ackframe) == 0 &&
+                send_frame_to(sock, (int)ifindex, src_mac, ackframe, sizeof(ackframe)) > 0) {
+                ps->padded_replies++;
+                ps->last_padded = pnow;
+                directed_sent++;
+                log_ts(stdout);
+                printf(" SCSD-I-PADACK, acked padded HELLO probe (%u SCA rx, abs30 %02x->%02x)"
+                       " with plain b4 CONFIRM to %02x:%02x:%02x:%02x:%02x:%02x (ack #%ld)\n",
+                       rx_sca, buf[30], pad_resp_pfw,
+                       src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
+                       ps->padded_replies);
+                fflush(stdout);
             }
             continue;
         }
@@ -951,20 +955,29 @@ int main(int argc, char **argv)
             if (due) {
                 uint8_t dframe[SCS_HELLO_FRAME_LEN];
                 hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
+                /* vms-d94: reply per the GROUNDED abs-30 channel-verify rule
+                 * (spec sec 4a offset-30): the received per-frame word buf[30]
+                 * (b2/b3/b4) drives our reply word -- b2->b3, b3->b4 (the fix
+                 * that makes the member see OVMX CONFIRM the channel), b4->b3
+                 * (re-initiate). OVMX previously held a fixed b3 and never sent
+                 * b4, so VAX1's NISCA handshake never finalized (vms-5fe). */
+                uint8_t resp_pfw = scs_hello_response_pfw(buf[30]);
                 /* abs 92 = SCS_HELLO_JOINER_INCARNATION (1): OVMX's own directed
                  * HELLO carries the incarnation it attributes to the peer on a
                  * fresh first contact, NOT the member's advertised value (spec
                  * sec 4i.B). The member's value is echoed only into START [22:24]. */
                 if (scs_hello_build_directed_frame(&hello_params, src_mac, lab_nonce,
-                                                   SCS_HELLO_JOINER_INCARNATION, dframe) == 0 &&
+                                                   SCS_HELLO_JOINER_INCARNATION,
+                                                   resp_pfw, dframe) == 0 &&
                     send_frame_to(sock, (int)ifindex, src_mac, dframe, sizeof(dframe)) > 0) {
                     directed_sent++;
                     ps->directed_replies++;
                     ps->channel_up = 1;
                     ps->last_directed = dnow;
                     log_ts(stdout);
-                    printf(" SCSD-I-DIRHELLO, replied directed HELLO to peer"
-                           " %02x:%02x:%02x:%02x:%02x:%02x (reply #%ld)\n",
+                    printf(" SCSD-I-DIRHELLO, replied directed HELLO (abs30 %02x->%02x)"
+                           " to peer %02x:%02x:%02x:%02x:%02x:%02x (reply #%ld)\n",
+                           buf[30], resp_pfw,
                            src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
                            ps->directed_replies);
                     fflush(stdout);

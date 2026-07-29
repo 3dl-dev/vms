@@ -63,7 +63,8 @@ int main(void)
 
     /* Reference: the plain 134-byte directed HELLO with the same identity. */
     uint8_t unpadded[SCS_HELLO_FRAME_LEN];
-    check(scs_hello_build_directed_frame(&p, peer_mac, nonce, incarnation, unpadded) == 0,
+    check(scs_hello_build_directed_frame(&p, peer_mac, nonce, incarnation,
+                                         SCS_HELLO_PFW_REQUEST, unpadded) == 0,
           "scs_hello_build_directed_frame (reference) succeeds");
 
     /* --- N = 1500 (NISCS_MAX_PKTSZ + 2): the max probe --- */

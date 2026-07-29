@@ -28,6 +28,7 @@
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
+#include "vms/priv_display.h"
 #include "starlet.h"
 #include "vmsfs/filespec.h"
 #include "vms/pcb.h"
@@ -41,6 +42,25 @@ extern int cmd_show_intrusion(struct dcl_command *cmd);
 
 /* Forward declarations for helper functions used by cmd_show_process */
 static int cmd_show_process_privileges(struct dcl_context *ctx);
+
+/*
+ * The privilege mask this process actually holds.
+ *
+ * Sourced from the PCB, which vms_pcb_init() fills in from the EXECUTIVE
+ * (vms.ko via /dev/vms) -- it is what the executive granted, not what the
+ * login environment asked for. With no executive reachable the PCB holds
+ * nothing, and that is what gets reported: SHOW PROCESS must not invent a
+ * privilege set nobody granted.
+ */
+static uint64_t current_privilege_mask(struct dcl_context *ctx)
+{
+    struct vms_pcb *pcb = vms_pcb_get();
+
+    if (pcb)
+        return pcb->cur_privs;
+    return ctx ? ctx->privileges : 0;
+}
+
 static int cmd_show_process_quotas(struct dcl_context *ctx);
 
 static int cmd_show_time(struct dcl_command *cmd)
@@ -374,13 +394,15 @@ static int cmd_show_process(struct dcl_command *cmd)
     printf("Base priority:     4\n");
     printf("Default file spec: %s\n", ctx->default_dir);
 
-    /* Privileges — read from VMS_PRIVILEGES env var or PCB */
-    const char *privs = getenv("VMS_PRIVILEGES");
-    if (privs && privs[0]) {
-        printf("Privileges:        %s\n", privs);
-    } else {
-        printf("Privileges:        TMPMBX NETMBX\n");
-    }
+    /*
+     * Privileges — the set the EXECUTIVE granted (see
+     * current_privilege_mask), rendered from the same prvdef.h bits the
+     * rest of the system uses. This used to echo the VMS_PRIVILEGES
+     * environment variable, and print a hard-coded "TMPMBX NETMBX" when it
+     * was unset: a privilege report the process wrote about itself, which
+     * claimed two privileges nobody had granted.
+     */
+    (void)vms_priv_render_summary(current_privilege_mask(ctx), stdout);
 
     /* Quotas — display standard VMS quota fields */
     printf("\nProcess quotas:\n");
@@ -757,61 +779,13 @@ static int cmd_show_terminal(struct dcl_command *cmd)
 
 /*
  * SHOW PROCESS /PRIVILEGES - Display process privilege mask.
+ *
+ * Names, descriptions and layout live in vms/priv_display.h, pinned to the
+ * reference lab and unit-tested (tests/vmsprocess/test_priv_display.c).
  */
 static int cmd_show_process_privileges(struct dcl_context *ctx)
 {
-    /* Known VMS privileges in approximate display order */
-    static const struct {
-        const char *name;
-        uint64_t    bit;
-        const char *desc;
-    } privs[] = {
-        { "TMPMBX",  (1ULL << 0),  "may create temporary mailbox"   },
-        { "NETMBX",  (1ULL << 1),  "may create network device"      },
-        { "GRPNAM",  (1ULL << 2),  "may insert in group logical name table" },
-        { "SYSNAM",  (1ULL << 3),  "may insert in system logical name table" },
-        { "OPER",    (1ULL << 4),  "operator privilege"             },
-        { "SYSPRV",  (1ULL << 5),  "may access objects via system protection" },
-        { "BYPASS",  (1ULL << 6),  "may bypass object access control" },
-        { "CMKRNL",  (1ULL << 7),  "may change mode to kernel"      },
-        { "CMEXEC",  (1ULL << 8),  "may change mode to executive"   },
-        { "SYSNAM",  (1ULL << 9),  "may insert in system logical name table" },
-        { "MOUNT",   (1ULL << 10), "may execute mount volume QIO"   },
-        { "VOLPRO",  (1ULL << 11), "may override volume protection" },
-        { "PHY_IO",  (1ULL << 12), "may issue physical I/O"         },
-        { "LOG_IO",  (1ULL << 13), "may issue logical I/O"          },
-        { "PSWAPM",  (1ULL << 14), "may change process swap mode"   },
-        { "DETACH",  (1ULL << 15), "may create detached processes"  },
-        { "ACNT",    (1ULL << 16), "may disable accounting"         },
-        { "PRMCEB",  (1ULL << 17), "may create permanent common event flag" },
-        { "PRMGBL",  (1ULL << 18), "may create permanent global sections" },
-        { "PRMMBX",  (1ULL << 19), "may create permanent mailbox"   },
-        { "EXQUOTA", (1ULL << 20), "may exceed disk quota"          },
-        { "ALTPRI",  (1ULL << 21), "may set any base priority"      },
-        { "SETPRV",  (1ULL << 22), "may set any privilege"          },
-        { "WORLD",   (1ULL << 23), "may affect other processes in system" },
-        { "SHARE",   (1ULL << 24), "may assign channel to non-shared device" },
-        { NULL, 0, NULL }
-    };
-
-    /* Read privileges: from context (set via VMS_PRIVILEGES env var), else default */
-    uint64_t privmask = ctx->privileges;
-    if (privmask == 0) {
-        /* Default: give TMPMBX and NETMBX */
-        privmask = (1ULL << 0) | (1ULL << 1);
-    }
-
-    printf("Process privileges:\n");
-    int found = 0;
-    for (int i = 0; privs[i].name; i++) {
-        if (privmask & privs[i].bit) {
-            printf(" %-16s %s\n", privs[i].name, privs[i].desc);
-            found++;
-        }
-    }
-    if (!found)
-        printf(" (no privileges enabled)\n");
-
+    (void)vms_priv_render_detail(current_privilege_mask(ctx), stdout);
     return SS$_NORMAL;
 }
 

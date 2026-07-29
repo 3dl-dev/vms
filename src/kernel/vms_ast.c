@@ -33,8 +33,9 @@
 #include "vms_internal.h"
 
 /* Privilege bits */
-#define PRV_M_CMKRNL    (1ULL << 0)
-#define PRV_M_CMEXEC    (1ULL << 1)
+/* PRV_M_CMKRNL / PRV_M_CMEXEC come from vms_ioctl.h (oracle-pinned, shared
+ * with userspace) -- see the PROVENANCE note there. Do not re-define them
+ * locally; divergent local copies are what put SETPRV on the DETACH bit. */
 
 /*
  * vms_ioctl_dclast - Declare AST ($DCLAST equivalent)

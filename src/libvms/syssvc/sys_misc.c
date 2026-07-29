@@ -18,47 +18,72 @@
 #include "vms/pcb.h"
 #include "sysgen_params.h"
 #include "ovmx_identity.h"
+#include "vms_exec.h"
 
 /*
  * sys$setprv - Set or clear process privileges.
  *
- * On real VMS this controls what operations a process can perform.
- * Privilege state is stored in the PCB and shared across threads.
+ * Routes exclusively through the EXECUTIVE (the vms.ko kernel module, via
+ * /dev/vms, behind the vms_exec_* gateway in libvmssys). The privilege set
+ * is the executive's, not ours: this service asks, the executive rules, and
+ * the PCB fields are only a cache of the answer that is re-read from the
+ * executive after every call.
+ *
+ * Before this, $SETPRV simply OR'd the caller's mask into pcb->cur_privs --
+ * i.e. a process granted itself whatever privileges it named, and every
+ * later privilege check consulted that self-written value. That is the
+ * defect this wiring exists to kill.
+ *
+ * NO SILENT FALLBACK (CLAUDE.md rule 9): with no /dev/vms there is no
+ * executive, so there is nothing that can authorize a privilege change and
+ * the service returns SS$_NOSUCHDEV -- exactly as $ENQ/$DEQ do in
+ * sys_lock.c. It must never report success for a change nobody authorized.
  *
  * Parameters:
  *   enbflg - 1 to enable privileges, 0 to disable
  *   prvadr - Pointer to 64-bit privilege mask (bits to change)
  *   prmflg - 1 to change permanent privileges, 0 for current only
  *   prvprv - Receives previous privilege mask (or NULL)
+ *
+ * Returns SS$_NORMAL, SS$_NOTALLPRIV (only the authorized subset of the
+ * requested mask was enabled -- real VMS behaviour, observed on the
+ * reference lab; see src/libvmssys/vms_exec.c PROVENANCE), or
+ * SS$_NOSUCHDEV.
  */
 uint32_t sys$setprv(uint32_t enbflg, const uint64_t *prvadr,
                     uint32_t prmflg, uint64_t *prvprv) {
     struct vms_pcb *pcb = vms_pcb_get();
     if (!pcb) return SS$_BADPARAM;
 
-    pthread_mutex_lock(&pcb->priv_lock);
-
-    /* Return previous privileges */
-    if (prvprv) *prvprv = pcb->cur_privs;
+    uint64_t prev = 0;
+    uint32_t status;
 
     if (prvadr) {
-        if (enbflg) {
-            /* Enable specified privileges */
-            pcb->cur_privs |= *prvadr;
-            if (prmflg) {
-                pcb->perm_privs |= *prvadr;
-            }
-        } else {
-            /* Disable specified privileges */
-            pcb->cur_privs &= ~(*prvadr);
-            if (prmflg) {
-                pcb->perm_privs &= ~(*prvadr);
-            }
-        }
+        status = vms_exec_setprv(*prvadr, enbflg ? 1 : 0, prmflg ? 1 : 0,
+                                 &prev);
+    } else {
+        /* No mask: this is a pure "report my privileges" call. */
+        status = vms_exec_getprv(&prev, NULL, NULL);
     }
 
+    if (prvprv) *prvprv = prev;
+
+    /*
+     * Refresh the PCB cache from the executive, so every existing reader of
+     * pcb->cur_privs / pcb->perm_privs (e.g. sys$creprc's inherited child
+     * privileges, sys_uai.c's SYSPRV check) sees the executive's answer and
+     * not a locally computed one. On failure the cache is cleared: a caller
+     * that could not reach the executive holds nothing.
+     */
+    uint64_t cur = 0, perm = 0;
+    (void)vms_exec_getprv(&cur, &perm, NULL);
+
+    pthread_mutex_lock(&pcb->priv_lock);
+    pcb->cur_privs = cur;
+    pcb->perm_privs = perm;
     pthread_mutex_unlock(&pcb->priv_lock);
-    return SS$_NORMAL;
+
+    return status;
 }
 
 /*

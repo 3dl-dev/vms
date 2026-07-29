@@ -1388,13 +1388,24 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 12,    "SYSTEM", 'E', "ACCVIO",        "access violation" },
         { 20,    "SYSTEM", 'E', "BADPARAM",      "bad parameter value" },
         { 28,    "SYSTEM", 'E', "EXQUOTA",       "exceeded quota" },
-        { 36,    "SYSTEM", 'E', "NOPRIV",        "no privilege for attempted operation" },
+        /* NOPRIV: severity and text corrected to what the system itself
+         * prints. Observed on the reference lab (~/vax/cluster, OpenVMS VAX
+         * V7.3, node VAX1): F$MESSAGE(36) -> "%SYSTEM-F-NOPRIV, insufficient
+         * privilege or object protection violation". It was -E- with
+         * invented text. */
+        { 36,    "SYSTEM", 'F', "NOPRIV",        "insufficient privilege or object protection violation" },
         { 44,    "SYSTEM", 'E', "ABORT",         "abort" },
         { 292,   "SYSTEM", 'E', "INSFMEM",       "insufficient dynamic memory" },
         { 388,   "SYSTEM", 'E', "IVTIME",        "invalid time" },
         { 434,   "SYSTEM", 'E', "DUPLNAM",       "duplicate name" },
         { 444,   "SYSTEM", 'W', "NOLOGNAM",      "no logical name match" },
-        { 532,   "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges available" },
+        /* NOTALLPRIV: code corrected 532 -> 1664 and text corrected.
+         * Observed on the reference lab: F$MESSAGE(1664) -> "%SYSTEM-W-
+         * NOTALLPRIV, not all requested privileges authorized", while
+         * F$MESSAGE(532) -> "%SYSTEM-F-RESULTOVF, resultant string
+         * overflow" -- i.e. the old entry answered with a different
+         * message's code entirely. */
+        { 1664,  "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges authorized" },
         { 548,   "SYSTEM", 'E', "IVIDENT",       "invalid identifier" },
         { 556,   "SYSTEM", 'E', "TIMEOUT",       "device timeout" },
         { 580,   "SYSTEM", 'E', "ILLIOFUNC",     "illegal I/O function" },
@@ -1421,7 +1432,12 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 2584,  "SYSTEM", 'W', "SUSPENDED",     "process suspended" },
         { 2588,  "SYSTEM", 'W', "NOTQUEUED",     "not queued" },
         { 2632,  "SYSTEM", 'E', "INCOMPAT",      "incompatible attributes" },
-        { 2680,  "SYSTEM", 'E', "NOSUCHDEV",     "no such device" },
+        /* NOSUCHDEV: code corrected 2680 -> 2312, severity -E- -> -W-, text
+         * corrected. Observed on the reference lab: F$MESSAGE(2312) ->
+         * "%SYSTEM-W-NOSUCHDEV, no such device available", while
+         * F$MESSAGE(2680) -> "%SYSTEM-W-RMTPATH, description of path
+         * between two remote nodes". */
+        { 2312,  "SYSTEM", 'W', "NOSUCHDEV",     "no such device available" },
         { 2688,  "SYSTEM", 'E', "DEVNOTMOUNT",   "device not mounted" },
         { 2696,  "SYSTEM", 'E', "NOSUCHFILE",    "no such file" },
         { 2700,  "SYSTEM", 'W', "NOTRAN",        "no translation for logical name" },

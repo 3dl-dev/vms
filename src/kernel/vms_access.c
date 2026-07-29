@@ -17,16 +17,11 @@
 
 #include "vms_internal.h"
 
-/* VMS privilege bits (matching PRV$M_* in starlet.h) */
-#define PRV_M_CMKRNL    (1ULL << 0)
-#define PRV_M_CMEXEC    (1ULL << 1)
-#define PRV_M_SETPRV    (1ULL << 5)
+/* PRV_M_* privilege bits come from vms_ioctl.h (oracle-pinned, shared with
+ * userspace). They are deliberately NOT redefined here -- a local copy is
+ * how PRV_M_SETPRV came to be bit 5 (DETACH) instead of bit 14. */
 
-/* VMS status codes */
-#define SS__NORMAL      0x00000001
-#define SS__NOPRIV      0x00000024
-#define SS__BADPARAM    0x00000014
-#define SS__ACCVIO      0x0000000C
+/* VMS status codes come from vms_internal.h (canonical, oracle-pinned) */
 
 /*
  * vms_ioctl_setmode - Set access mode (VMS $SETMOD equivalent)
@@ -113,15 +108,26 @@ long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg)
 /*
  * vms_ioctl_setprv - Set/clear privileges ($SETPRV equivalent)
  *
- * VMS semantics:
- *   - Enabling privileges requires SETPRV or being in kernel mode
- *   - Disabling privileges is always allowed
- *   - If 'permanent' flag is set, changes permanent mask too
- *   - Returns previous privilege mask
+ * VMS semantics (observed on the reference lab, see SS__NOTALLPRIV in
+ * vms_internal.h):
+ *   - Disabling privileges is always allowed.
+ *   - Enabling privileges the caller is AUTHORIZED for (i.e. already in the
+ *     permanent/authorized mask) is always allowed -- that is how a process
+ *     re-enables a privilege it turned off, and it needs no SETPRV.
+ *   - Enabling privileges OUTSIDE the authorized mask requires SETPRV, or
+ *     kernel mode. The subset that IS authorized is still enabled, and the
+ *     call returns SS$_NOTALLPRIV rather than enabling nothing.
+ *   - WIDENING the permanent (authorized) mask is a strictly privileged
+ *     operation: without SETPRV / kernel mode it is refused outright, and
+ *     no part of it is applied. This is the escalation-critical branch --
+ *     if an unprivileged process could add to perm_privs, it could then
+ *     "re-enable" anything on the next call, defeating the check above.
+ *   - Returns the previous CURRENT privilege mask.
  */
 long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_priv_args args;
+    int authorized;
 
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
@@ -132,35 +138,38 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg)
     /* Save previous state */
     args.prev = proc->cur_privs;
 
-    if (args.enable) {
-        /* Enabling privileges requires SETPRV or kernel mode */
-        if (proc->current_mode != PSL_C_KERNEL &&
-            !(proc->cur_privs & PRV_M_SETPRV)) {
-            /* Can only re-enable permanent privileges */
-            uint64_t allowed = args.mask & proc->perm_privs;
-            proc->cur_privs |= allowed;
-            if (allowed != args.mask) {
-                spin_unlock(&proc->mode_lock);
-                args.status = SS__NOPRIV;
-                goto out;
-            }
-        } else {
-            proc->cur_privs |= args.mask;
-        }
+    /* May this process grant itself privileges it is not authorized for? */
+    authorized = (proc->current_mode == PSL_C_KERNEL) ||
+                 ((proc->cur_privs & PRV_M_SETPRV) != 0);
 
-        if (args.permanent)
-            proc->perm_privs |= args.mask;
+    if (args.enable) {
+        if (authorized) {
+            proc->cur_privs |= args.mask;
+            if (args.permanent)
+                proc->perm_privs |= args.mask;
+            args.status = SS__NORMAL;
+        } else {
+            /*
+             * Unprivileged enable: only the authorized subset is granted.
+             * perm_privs is NOT widened here under any circumstances --
+             * doing so is what would turn this branch into an escalation.
+             */
+            uint64_t allowed = args.mask & proc->perm_privs;
+
+            proc->cur_privs |= allowed;
+            args.status = (allowed == args.mask) ? SS__NORMAL
+                                                 : SS__NOTALLPRIV;
+        }
     } else {
-        /* Disabling is always allowed */
+        /* Disabling is always allowed, current and permanent alike. */
         proc->cur_privs &= ~args.mask;
         if (args.permanent)
             proc->perm_privs &= ~args.mask;
+        args.status = SS__NORMAL;
     }
 
     spin_unlock(&proc->mode_lock);
-    args.status = SS__NORMAL;
 
-out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

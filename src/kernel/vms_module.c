@@ -162,7 +162,7 @@ void vms_proc_free(struct vms_proc *proc)
  * ioctl dispatch
  * ================================================================ */
 
-static long vms_ioctl_register(unsigned long arg)
+static long vms_ioctl_register(struct file *filp, unsigned long arg)
 {
     struct vms_register_args args;
     struct vms_proc *proc;
@@ -179,6 +179,18 @@ static long vms_ioctl_register(unsigned long arg)
         return 0;
     }
 
+    /*
+     * Bind the registration to THIS open file description. vms_dev_release
+     * then tears down only the registration it created, instead of freeing
+     * whatever vms_proc happens to be hashed under current->pid. Without
+     * this, closing any /dev/vms fd destroyed the caller's executive state,
+     * and a process that had been DENIED privileges could close, reopen and
+     * REGISTER again to get a fresh (higher) privilege assertion and a reset
+     * permanent mask -- privilege enforcement bypassed via a second entry
+     * point rather than by defeating the check.
+     */
+    filp->private_data = proc;
+
     args.status = 0x00000001;  /* SS$_NORMAL */
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -192,7 +204,7 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
 
     /* REGISTER doesn't require an existing proc */
     if (cmd == VMS_IOCTL_REGISTER)
-        return vms_ioctl_register(arg);
+        return vms_ioctl_register(filp, arg);
 
     /* All other ioctls require a registered process */
     proc = vms_proc_find_or_err();
@@ -253,15 +265,24 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
 
 static int vms_dev_open(struct inode *inode, struct file *filp)
 {
+    filp->private_data = NULL;
     return 0;
 }
 
 static int vms_dev_release(struct inode *inode, struct file *filp)
 {
-    struct vms_proc *proc = vms_proc_find(current->pid);
+    struct vms_proc *proc = filp->private_data;
 
-    if (proc)
+    /*
+     * Tear down only the registration this file description created, and
+     * only in the task that created it. An fd inherited across fork() and
+     * closed in the child must not destroy the parent's executive state,
+     * and closing a second, unregistered fd must destroy nothing at all.
+     */
+    if (proc && proc->linux_pid == current->pid) {
+        filp->private_data = NULL;
         vms_proc_free(proc);
+    }
 
     return 0;
 }

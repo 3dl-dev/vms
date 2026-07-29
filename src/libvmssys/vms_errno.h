@@ -67,7 +67,9 @@
 #define SS$_INSFMEM      292
 #define SS$_TIMEOUT      556
 #define SS$_ILLIOFUNC    580
-#define SS$_NOSUCHDEV    2680
+/* 2312, not 2680 -- see the PROVENANCE note on SS$_NOSUCHDEV in
+ * src/libvms/include/ssdef.h (oracle-pinned; 2680 is SS$_RMTPATH). */
+#define SS$_NOSUCHDEV    2312
 #define SS$_NOSUCHFILE   2696
 #define SS$_ENDOFFILE    2160
 #define SS$_IVCHAN       602

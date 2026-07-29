@@ -64,13 +64,36 @@ RUN KVER=$(cat /tmp/kver) && \
     ls -la /src/kernel/vmsfs/vmsfs.ko && \
     modinfo /src/kernel/vmsfs/vmsfs.ko
 
-# Copy test source and build statically-linked test programs
+# Copy test source and build statically-linked test programs.
+#
+# test_kmod_privwire is built separately: it links the PRODUCTION userspace
+# privilege gateway (src/libvmssys/vms_exec.c + vms_kif.c, the same objects
+# libvms and vmsprocess link) so the QEMU job proves that OVMX userspace --
+# not just a hand-written ioctl call -- reaches the executive. crt0.S is
+# deliberately NOT linked: glibc supplies _start here, we only need the
+# syscall trampolines from syscall.S.
 COPY tests/qemu/test_*.c /src/tests/qemu/
+COPY src/libvmssys/ /src/libvmssys/
 RUN for f in /src/tests/qemu/test_*.c; do \
+        case "$f" in *test_kmod_privwire.c) continue ;; esac; \
         out="${f%.c}"; \
         gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel && \
         echo "Built: $(basename $out)"; \
     done
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+        aarch64|arm64) VMSARCH=aarch64 ;; \
+        *)             VMSARCH=x86_64 ;; \
+    esac && \
+    gcc -static -O2 -Wall \
+        -o /src/tests/qemu/test_kmod_privwire \
+        /src/tests/qemu/test_kmod_privwire.c \
+        /src/libvmssys/vms_exec.c \
+        /src/libvmssys/vms_kif.c \
+        /src/libvmssys/vms_string.c \
+        /src/libvmssys/arch/${VMSARCH}/syscall.S \
+        -I/src/kernel -I/src/libvmssys && \
+    echo "Built: test_kmod_privwire (links the production vms_exec gateway)"
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/

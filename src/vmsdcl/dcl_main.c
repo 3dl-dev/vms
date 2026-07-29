@@ -155,6 +155,13 @@ void dcl_context_init(struct dcl_context *ctx)
     const char *env_member = getenv("VMS_UIC_MEMBER");
     if (env_member) ctx->uic_member = (uint32_t)strtoul(env_member, NULL, 10);
 
+    /*
+     * VMS_PRIVILEGES is what LOGIN asked the executive for on this process's
+     * behalf; it is NOT the answer. ctx->privileges is overwritten below
+     * with the set the executive actually granted (via the PCB), so a DCL
+     * privilege check can never be satisfied by an environment variable the
+     * process could have set itself.
+     */
     const char *env_privs = getenv("VMS_PRIVILEGES");
     if (env_privs) ctx->privileges = parse_privilege_string(env_privs);
 
@@ -183,6 +190,19 @@ void dcl_context_init(struct dcl_context *ctx)
             if (env_defdir && env_defdir[0])
                 vms_pcb_set_default_dir(env_defdir);
         }
+    }
+
+    /*
+     * Adopt the EXECUTIVE's answer. vms_pcb_init() sent the request to
+     * vms.ko via /dev/vms and cached what was granted; with no executive
+     * reachable that is nothing, and DCL then correctly holds no privileges
+     * rather than believing its own environment (CLAUDE.md rule 9 -- absence
+     * denies, it never grants).
+     */
+    {
+        struct vms_pcb *pcb = vms_pcb_get();
+        if (pcb)
+            ctx->privileges = pcb->cur_privs;
     }
 }
 

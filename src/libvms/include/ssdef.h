@@ -58,7 +58,19 @@ extern "C" {
 #define SS$_IVTIME          388     /* Invalid time */
 #define SS$_DUPLNAM         434     /* Duplicate name */
 #define SS$_NOLOGNAM        444     /* No logical name match */
-#define SS$_NOTALLPRIV      532     /* Not all privileges available */
+/*
+ * SS$_NOTALLPRIV — CORRECTED 1664 (was 532). PROVENANCE: observed on the
+ * reference lab (~/vax/cluster, OpenVMS VAX V7.3, node VAX1) by scanning
+ * F$MESSAGE across the SYSTEM-facility code range from a DCL command
+ * procedure. 1664 is the severity-0 (warning) form:
+ *     F$MESSAGE(1664) -> "%SYSTEM-W-NOTALLPRIV, not all requested
+ *                         privileges authorized"
+ * The old value 532 is NOT this code at all — on the same system
+ *     F$MESSAGE(532)  -> "%SYSTEM-F-RESULTOVF, resultant string overflow"
+ * (532 is the severity-4 form of SS$_RESULTOVF, defined below as 1364).
+ * Needs operator sign-off per the purity guardrail (vms-pv1).
+ */
+#define SS$_NOTALLPRIV      1664    /* Not all requested privileges authorized */
 #define SS$_IVIDENT         548     /* Invalid identifier */
 #define SS$_IVSECFLG        564     /* Invalid section flags */
 
@@ -75,7 +87,22 @@ extern "C" {
 #define SS$_RESULTOVF       1364    /* Result overflow */
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */
-#define SS$_NOSUCHDEV       2680    /* No such device */
+/*
+ * SS$_NOSUCHDEV — CORRECTED 2312 (was 2680). The drift flagged in the
+ * SS$_NOMOREDEV note below (2312 vs 2680, vms-fb3) is now RESOLVED against
+ * the oracle rather than against a second header lineage. PROVENANCE:
+ * observed on the reference lab (~/vax/cluster, OpenVMS VAX V7.3, node
+ * VAX1) via F$MESSAGE from a DCL command procedure:
+ *     F$MESSAGE(2312) -> "%SYSTEM-W-NOSUCHDEV, no such device available"
+ *     F$MESSAGE(2680) -> "%SYSTEM-W-RMTPATH, description of path between
+ *                         two remote nodes"     <-- the OLD value is a
+ *                                                   DIFFERENT message
+ * 2312 is the severity-0 (warning) form, matching the -W- severity the
+ * system itself prints. This is the status $ENQ/$DEQ/$SETPRV return off
+ * the kernel target (no /dev/vms). Needs operator sign-off per the purity
+ * guardrail (vms-pv1).
+ */
+#define SS$_NOSUCHDEV       2312    /* No such device available */
 /* SS$_NOMOREDEV: needed as the sys$device_scan wildcard-scan-exhausted
  * terminator (see starlet.h). PROVENANCE: 0x0A58/2648, sourced this
  * session from a GCC-for-Alpha OpenVMS toolkit SSDEF.H mirror

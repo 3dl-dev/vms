@@ -26,8 +26,28 @@
 
 #define SS__NORMAL      0x00000001
 #define SS__BADPARAM    0x00000014
-#define SS__NOPRIV      0x00000024
+#define SS__NOPRIV      0x00000024  /* 36 — oracle-pinned, see below */
 #define SS__ACCVIO      0x0000000C
+/*
+ * SS__NOTALLPRIV (1664) — $SETPRV's "not all requested privileges
+ * authorized" status. Real OpenVMS $SETPRV does NOT fail an enable request
+ * outright when the caller lacks SETPRV: it enables the subset that is in
+ * the process's AUTHORIZED (permanent) mask and returns this warning.
+ *
+ * PROVENANCE (clean-room, CLAUDE.md rule 8): observed on the reference lab
+ * (~/vax/cluster, OpenVMS VAX V7.3, node VAX1) by scanning F$MESSAGE over
+ * the SYSTEM-facility code range from a DCL command procedure:
+ *     F$MESSAGE(1664) -> "%SYSTEM-W-NOTALLPRIV, not all requested
+ *                         privileges authorized"
+ *     F$MESSAGE(36)   -> "%SYSTEM-F-NOPRIV, insufficient privilege or
+ *                         object protection violation"
+ * 1664 is the severity-0 (warning) form, which is the form $SSDEF defines.
+ * The partial-enable behaviour itself was also observed on the lab: after
+ * SET PROCESS/PRIVILEGE=(NOSYSPRV,NOSETPRV,...), a bare
+ * SET PROCESS/PRIVILEGE=SYSPRV succeeded ($STATUS = %X10000001) because
+ * SYSPRV is in SYSTEM's authorized set.
+ */
+#define SS__NOTALLPRIV  1664
 #define SS__INSFMEM     0x0000002C  /* insufficient memory (44 decimal, matches real VMS) */
 #define SS__EXASTLM     0x00000038  /* AST quota exceeded */
 #define SS__WASSET      9           /* flag/AST was enabled/set */
@@ -45,8 +65,14 @@
  * Default privilege set for non-CAP_SYS_ADMIN processes.
  * Allows basic operational use (mailboxes, networking) without
  * granting any mode-change or bypass privileges.
+ *
+ * CORRECTED: this was written as (1<<7)|(1<<8) with the comment
+ * "TMPMBX | NETMBX". Bits 7 and 8 are PRV$V_LOG_IO and PRV$V_GROUP
+ * (oracle-pinned, see vms_ioctl.h), so the "safe default" was in fact
+ * handing every unprivileged process LOGICAL I/O and GROUP. TMPMBX and
+ * NETMBX are bits 15 and 20.
  */
-#define VMS_DEFAULT_PRIVS   ((1ULL << 7) | (1ULL << 8))  /* TMPMBX | NETMBX */
+#define VMS_DEFAULT_PRIVS   (PRV_M_TMPMBX | PRV_M_NETMBX)
 
 /* ================================================================
  * Per-process VMS state

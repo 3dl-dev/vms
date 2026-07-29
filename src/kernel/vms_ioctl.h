@@ -41,6 +41,40 @@
 #define PSL_C_SUPER     2
 #define PSL_C_USER      3
 
+/*
+ * Privilege bits the EXECUTIVE enforces. These live in the shared ioctl
+ * header, not in a private list inside vms_access.c, because a kernel-side
+ * copy is exactly how they drifted: vms_access.c had SETPRV at bit 5 (which
+ * is DETACH) and vms_internal.h's "TMPMBX | NETMBX" default was bits 7 and 8
+ * (which are LOG_IO and GROUP). The executive was checking the wrong bit for
+ * "may set any privilege", and handing every unprivileged process LOG_IO.
+ *
+ * PROVENANCE (clean-room, CLAUDE.md rule 8 -- documented tool output):
+ * read off the shipped VMS symbol table on the reference lab
+ * (~/vax/cluster, OpenVMS VAX V7.3, node VAX1):
+ *     $ ANALYZE/SYSTEM
+ *     SDA> READ SYS$SYSTEM:SYSDEF.STB
+ *     SDA> EVALUATE PRV$V_CMKRNL   -> Decimal = 0
+ *     SDA> EVALUATE PRV$V_CMEXEC   -> Decimal = 1
+ *     SDA> EVALUATE PRV$V_DETACH   -> Decimal = 5
+ *     SDA> EVALUATE PRV$V_LOG_IO   -> Decimal = 7
+ *     SDA> EVALUATE PRV$V_GROUP    -> Decimal = 8
+ *     SDA> EVALUATE PRV$V_SETPRV   -> Decimal = 14
+ *     SDA> EVALUATE PRV$V_TMPMBX   -> Decimal = 15
+ *     SDA> EVALUATE PRV$V_OPER     -> Decimal = 18
+ *     SDA> EVALUATE PRV$V_NETMBX   -> Decimal = 20
+ *     SDA> EVALUATE PRV$V_SYSPRV   -> Decimal = 28
+ *     SDA> EVALUATE PRV$V_BYPASS   -> Decimal = 29
+ * These agree with src/libvms/include/prvdef.h, which userspace uses.
+ * src/vmsprocess/access_modes.c carries _Static_asserts that keep the two
+ * in step -- if either side is edited alone, the build fails.
+ */
+#define PRV_M_CMKRNL    (1ULL <<  0)   /* change mode to kernel */
+#define PRV_M_CMEXEC    (1ULL <<  1)   /* change mode to executive */
+#define PRV_M_SETPRV    (1ULL << 14)   /* may set any privilege bit */
+#define PRV_M_TMPMBX    (1ULL << 15)   /* may create temporary mailbox */
+#define PRV_M_NETMBX    (1ULL << 20)   /* may create network device */
+
 struct vms_mode_args {
     uint8_t  mode;          /* target access mode (0-3) */
     uint8_t  pad[3];

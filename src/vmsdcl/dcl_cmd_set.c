@@ -26,6 +26,7 @@
 #include "ssdef.h"
 #include "vms/logical.h"
 #include "vms/privs.h"
+#include "vms/pcb.h"
 #include "starlet.h"
 #include "vmsfs/filespec.h"
 
@@ -505,7 +506,44 @@ static int cmd_set_process(struct dcl_command *cmd)
         if (pvlen > 0 && pv[pvlen - 1] == ')') {
             pv[pvlen - 1] = '\0';
         }
-        ctx->privileges = parse_privilege_string(pv);
+
+        /*
+         * Ask the EXECUTIVE, then adopt its answer.
+         *
+         * This used to be "ctx->privileges = parse_privilege_string(pv)" --
+         * DCL granted the process whatever privileges the command named, by
+         * writing them into its own variable. Nothing checked whether the
+         * process was authorized for them, and every later privilege test
+         * read back that self-written value. $SETPRV now routes to vms.ko
+         * (src/libvms/syssvc/sys_misc.c -> src/libvmssys/vms_exec.c), so the
+         * executive decides and DCL believes only what it is told.
+         *
+         * NOTE (tracked, not fixed here): VMS SET PROCESS/PRIVILEGE takes
+         * NOxxx forms to DISABLE a privilege, and enables the named ones
+         * without clearing the rest. parse_privilege_string has no NOxxx
+         * support, so only the enable direction is wired.
+         */
+        uint64_t want = parse_privilege_string(pv);
+        uint64_t prev = 0;
+        uint32_t st = sys$setprv(1, &want, 0, &prev);
+
+        struct vms_pcb *pcb = vms_pcb_get();
+        if (pcb)
+            ctx->privileges = pcb->cur_privs;
+
+        if (st == SS$_NOSUCHDEV) {
+            dcl_error("SET", 2, "NOPRIV",
+                      "no executive available to authorize SET PROCESS"
+                      " /PRIVILEGES");
+            return st;
+        }
+        if (st == SS$_NOTALLPRIV) {
+            dcl_error("SET", 0, "NOTALLPRIV",
+                      "not all requested privileges authorized");
+            return st;
+        }
+        if (!(st & 1))
+            return st;
     }
 
     return SS$_NORMAL;

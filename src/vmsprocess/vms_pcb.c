@@ -12,6 +12,7 @@
 #include <signal.h>
 #include "vms/pcb.h"
 #include "ssdef.h"
+#include "vms_exec.h"
 
 /* Thread-local PCB pointer */
 static __thread struct vms_pcb *current_pcb = NULL;
@@ -56,10 +57,28 @@ struct vms_pcb *vms_pcb_init(uint64_t initial_privs)
     /* Start in user mode */
     pcb->current_mode = PCB_MODE_USER;
 
-    /* Privileges */
-    pcb->cur_privs = initial_privs;
-    pcb->perm_privs = initial_privs;
+    /*
+     * Privileges are NOT ours to assign. `initial_privs` is a REQUEST that
+     * goes to the executive (vms.ko via /dev/vms); the PCB then caches what
+     * the executive actually granted. Before this, whatever the caller
+     * passed became the process's privileges by fiat -- a process could
+     * simply assert about itself that it held SYSPRV.
+     *
+     * NO SILENT FALLBACK (CLAUDE.md rule 9): with no executive reachable
+     * there is no authority to grant anything, so the process holds NO
+     * privileges. Absence denies; it must never grant the requested set.
+     */
     pthread_mutex_init(&pcb->priv_lock, NULL);
+    {
+        uint64_t granted = 0, perm = 0;
+
+        if (vms_exec_attach((uint32_t)getpid(), initial_privs, &granted)
+                == VMS_EXEC_SS_NORMAL) {
+            (void)vms_exec_getprv(&granted, &perm, &pcb->current_mode);
+        }
+        pcb->cur_privs = granted;
+        pcb->perm_privs = perm;
+    }
 
     /* Event flags: all clear */
     memset(pcb->ef_clusters, 0, sizeof(pcb->ef_clusters));

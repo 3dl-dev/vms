@@ -1653,12 +1653,25 @@ int cmd_mount(struct dcl_command *cmd)
         label[llen] = '\0';
     }
 
-    /* Use current directory as mount path */
+    /* Backing path for the DCL-visible device table entry (vms_device_table): the same
+     * VMS_ROOT / SYSDISK_MOUNT the boot system disk itself is registered under
+     * (dcl_main.c setup_session(), which registers DKA0: with linux_path = vms_root).
+     * This used to be getcwd() -- whatever host directory the DCL process happened to be
+     * running in at the moment of MOUNT. Since OVMX has no real per-device backing store
+     * for the scratch inventory (DUA0:/DJA0: -- vms-dv1, the real shared device table,
+     * needs the kernel executive and is explicitly out of scope here), that made MOUNT a
+     * host-path leak in disguise: DIRECTORY DUA0:[000000] would list whatever host
+     * directory (e.g. /tmp) the shell happened to be in when MOUNT ran (vms-b9f, round 3
+     * finding: "dumped the entire host /tmp"), rather than anything under OVMX's own VMS
+     * filesystem. Anchoring to vms_root instead removes the host-path dependency; it does
+     * NOT fully reconcile vms_device_table's mounted/dismounted state with vmsfs's own
+     * resolution (that reconciliation is vms-dv1's job -- see unresolved constraint in the
+     * vms-b9f closing notes). */
     char linux_path[256];
-    if (!getcwd(linux_path, sizeof(linux_path))) {
-        strncpy(linux_path, "/", sizeof(linux_path) - 1);
-        linux_path[sizeof(linux_path) - 1] = '\0';
-    }
+    const char *vms_root = getenv("VMS_ROOT");
+    if (!vms_root) vms_root = SYSDISK_MOUNT;
+    strncpy(linux_path, vms_root, sizeof(linux_path) - 1);
+    linux_path[sizeof(linux_path) - 1] = '\0';
 
     /* Add or update device table entry */
     struct vms_device *dev = existing;

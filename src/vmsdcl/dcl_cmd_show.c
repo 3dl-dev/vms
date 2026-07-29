@@ -558,14 +558,38 @@ static int cmd_show_device(struct dcl_command *cmd)
      * string had an extra literal space between the device-name and status fields, which
      * shifted EVERY field one column right (Status at 25, Label at 49) and also used a
      * 9-wide Free Blocks field where the oracle's is 8-wide (vms-b9f R3). Fixed by removing
-     * that stray space and narrowing %9d to %8d; Trans Count / Mnt Cnt literals shifted to
-     * match (OVMX hardcodes both to 1 -- pre-existing simplification, not itself part of
-     * this fix). */
+     * that stray space and narrowing %9d to %8d.
+     *
+     * Trans Count / Mnt Cnt (vms-b9f R3, round 3): the first attempt at this literal
+     * ("   1     1") put the (hardcoded, OVMX-only) Trans Count digit at column 73 and
+     * Mnt Cnt at 79. Disproved live: the SAME oracle capture used for the row above also
+     * has a second mounted row, $2$DUA1: (VAX1) Mounted 0 VAX1DATA 2830590 1 2 -- its
+     * single-digit Trans Count sits at column 75, not 73 (a 3-digit value spanning 73-75,
+     * as $2$DUA0:'s "250" does, is consistent with EITHER alignment; the 1-digit row is
+     * the one that discriminates). Re-verified directly against the live oracle
+     * (~/vax/cluster/vax1, 2026-07-29, `SHOW DEVICE D`) on 2026-07-29 for this rework:
+     * $2$DUA0: 250 spans columns 73-75, $2$DUA1:'s single digit sits at column 75, Mnt
+     * Cnt at 79 in both rows. Literal corrected to "     1   1" so the hardcoded Trans
+     * Count "1" lands at 75 (right-aligned, matching Mnt Cnt's own right-alignment to 79).
+     *
+     * Not-mounted row (vms-b9f R3, round 3): pinned live against the same oracle by
+     * driving an actual MOUNT/DISMOUNT cycle (`MOUNT/OVERRIDE=IDENTIFICATION DUA3: ...`
+     * then `DISMOUNT DUA3:`), not inferred. A device that is registered but not mounted
+     * -- both a never-mounted scratch unit ($2$DUA2:/$2$DUA3:) and a unit just dismounted
+     * -- prints ONLY "Online" at column 24 and the Error Count digit at column 45, then
+     * the row ends (46 bytes total): no Volume Label, no Free Blocks, no Trans/Mnt Count.
+     * OVMX previously printed "Dismounted" with a full row of zeroed fields and a stale
+     * volume label for this state, which is its own leak of internal state that isn't
+     * true in VMS terms. */
     for (int i = 0; i < vms_device_count; i++) {
-        const char *status = vms_device_table[i].mounted ? "Mounted" : "Dismounted";
-        printf("%-24s%-14s       0  %-14s%8d   1     1\n",
-               vms_device_table[i].vms_name, status,
-               vms_device_table[i].volume_label, 0);
+        if (vms_device_table[i].mounted) {
+            printf("%-24s%-14s       0  %-14s%8d     1   1\n",
+                   vms_device_table[i].vms_name, "Mounted",
+                   vms_device_table[i].volume_label, 0);
+        } else {
+            printf("%-24s%-14s       0\n",
+                   vms_device_table[i].vms_name, "Online");
+        }
     }
 
     return SS$_NORMAL;

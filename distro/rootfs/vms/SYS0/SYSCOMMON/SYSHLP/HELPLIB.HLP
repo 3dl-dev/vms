@@ -502,7 +502,7 @@
 
 2 Examples
 
- $ DISMOUNT DKA100:
+ $ DISMOUNT DUA0:
 
 1 DUMP
  Displays the contents of a file in hexadecimal and ASCII format.
@@ -859,8 +859,8 @@
 
 2 Examples
 
- $ MOUNT DKA100: USERDATA
- $ MOUNT/SYSTEM DKA200: SHARED
+ $ MOUNT DUA0: USERDATA
+ $ MOUNT/SYSTEM DJA0: SHARED
 
 1 OPEN
  Opens a file for reading or writing.

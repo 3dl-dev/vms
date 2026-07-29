@@ -1,0 +1,49 @@
+# Dockerfile, distro/Dockerfile.bootable, and tests/qemu/Dockerfile all
+# `COPY . <dest>` the whole build context into their image (vms-1d9 F1).
+# With no .dockerignore, ANY local build tree, .git history, or stray
+# artifact sitting in the working copy landed in the image byte-for-byte --
+# slow, fat, and a disclosure risk. Everything excluded below was verified
+# NOT to be read by any build step: `grep -rn` across CMakeLists.txt (root
+# + subdirs) and all three Dockerfiles turns up no reference to these paths
+# outside of comments.
+
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Local/CI build trees -- these are gitignored (see .gitignore's
+# `build-*/`) but gitignore has NO effect on `docker build`'s context; only
+# .dockerignore does. Confirmed present on disk in this exact working copy
+# as build-ci/, build-docker/, build-test/, build-verify/ (~3MB each) plus
+# a stray top-level `build` symlink/dir pattern.
+build/
+build-*/
+dist/
+
+# Agent/worktree/session state -- never part of the buildable tree
+.claude/
+.campfire/
+.beads/
+.ready/
+.ready.old/
+.attestations/
+.github/
+
+# Historical/reference docs -- not read by any build step
+docs/
+tracking/
+third-party/
+
+# Repo metadata not needed inside the image
+README.md
+LICENSE
+CLAUDE.md
+.clang-tidy
+cppcheck.suppressions
+
+# Editor/OS cruft
+*.swp
+*.swo
+*~
+.DS_Store

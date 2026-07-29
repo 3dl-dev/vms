@@ -237,8 +237,16 @@ jobs:
           # This also proves the harness ran to completion and reached its own
           # FINAL RESULTS accounting -- a timeout or panic would never print
           # this line at all, so this line alone rules those causes out.
-          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 7 suites failed ===' \
-            || { echo "FAIL: did not see the expected 3-suites-passed/7-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+          #
+          # 4 passed / 8 failed (was 3/7 before vms-ln0): vms-ln0 added two
+          # measurement suites to init.sh -- bench_lnm_cost (opens /dev/vms,
+          # so it fails honestly here, joining the FAIL count) and
+          # bench_lnm_peropen (does not touch /dev/vms at all, so it still
+          # passes here, joining the PASS count). Verified by rebuilding this
+          # exact scenario locally (podman build --build-arg NEGATIVE_CONTROL=1
+          # + podman run) against the vms-ln0 branch merged onto current main.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 4 suites passed, 8 suites failed ===' \
+            || { echo "FAIL: did not see the expected 4-suites-passed/8-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
 
           # POSITIVE assertion paired with the two negative assertions above:
           # vmsfs.ko has no dependency on vms.ko/the executive, so it must

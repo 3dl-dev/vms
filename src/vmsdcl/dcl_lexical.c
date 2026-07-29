@@ -1877,33 +1877,31 @@ static void populate_device_list(const char *pattern)
         }
     }
 
-    /* Add mounted filesystems from /proc/mounts */
-    FILE *f = fopen("/proc/mounts", "r");
-    if (f) {
-        char line[512];
-        while (fgets(line, sizeof(line), f) && dev_count < MAX_DEV_LIST) {
-            char devname[128], mntpoint[128];
-            if (sscanf(line, "%127s %127s", devname, mntpoint) == 2) {
-                /* Skip pseudo-filesystems */
-                if (strncmp(devname, "/dev/", 5) == 0) {
-                    char vms_name[64];
-                    /* Convert /dev/sda1 → _SDA1: */
-                    const char *base = devname + 5;
-                    snprintf(vms_name, sizeof(vms_name), "_%s:", base);
-                    /* Uppercase */
-                    for (size_t j = 0; vms_name[j]; j++)
-                        vms_name[j] = (char)toupper((unsigned char)vms_name[j]);
+    /*
+     * Add devices from OVMX's own device table (vms_device_table,
+     * dcl_builtin.c — populated at boot for the system disk and by
+     * MOUNT/DISMOUNT) — NEVER the host's /proc/mounts. This function used to
+     * fopen("/proc/mounts") directly and turn e.g. "/dev/sda1" into
+     * "_SDA1:", leaking the host's real Linux block devices through
+     * F$DEVICE(), a documented VMS lexical (vms-b9f C4 — verified live:
+     * F$DEVICE() returned "_SDB:", this host's real root disk).
+     */
+    for (int i = 0; i < vms_device_count && dev_count < MAX_DEV_LIST; i++) {
+        if (!vms_device_table[i].mounted)
+            continue;
+        char vms_name[64];
+        /* vms_device_table[].vms_name already carries a trailing colon
+         * (e.g. "DKA0:") — see cmd_mount()/dcl_main.c setup_session(). */
+        snprintf(vms_name, sizeof(vms_name), "_%s", vms_device_table[i].vms_name);
+        for (size_t j = 0; vms_name[j]; j++)
+            vms_name[j] = (char)toupper((unsigned char)vms_name[j]);
 
-                    if (pattern[0] == '\0' || pattern[0] == '*' ||
-                        fnmatch(pattern, vms_name, FNM_CASEFOLD) == 0) {
-                        strncpy(dev_list[dev_count], vms_name, 63);
-                        dev_list[dev_count][63] = '\0';
-                        dev_count++;
-                    }
-                }
-            }
+        if (pattern[0] == '\0' || pattern[0] == '*' ||
+            fnmatch(pattern, vms_name, FNM_CASEFOLD) == 0) {
+            strncpy(dev_list[dev_count], vms_name, 63);
+            dev_list[dev_count][63] = '\0';
+            dev_count++;
         }
-        fclose(f);
     }
 }
 

@@ -1,12 +1,15 @@
 #!/bin/bash
 # TEST: Error messages and output must not leak Unix paths or terminology
 # EXPECT: contains:LEAK_CHECK_COMPLETE
+# EXPECT_NOT: contains:UNIX_LEAK_DETECTED
 #
-# NOTE: This test detects Unix leaks but currently reports them as findings
-# rather than failures. Each leak found creates backlog for authenticity beads.
-# When all leaks are fixed, the EXPECT_NOT below can be uncommented to make
-# this a hard gate.
-# FUTURE_EXPECT_NOT: contains:UNIX_LEAK_DETECTED
+# HARD GATE (vms-b9f C5 rework): this suite used to have its EXPECT_NOT commented out as
+# "FUTURE_EXPECT_NOT" and could never fail -- the whole Unix-leak class was ungated. It is
+# now a real EXPECT_NOT: if any check below finds a leak, the script prints
+# "UNIX_LEAK_DETECTED" and the harness fails. Proven to actually catch a regression by
+# temporarily reintroducing the vms-b9f F$DEVICE()/proc-mounts leak in dcl_lexical.c and
+# re-running this test -- it went from PASS to FAIL (see vms-b9f return notes); reverted
+# before commit.
 VMSDCL="${VMSDCL:-vmsdcl}"
 
 # Patterns that indicate Unix leakage in VMS output
@@ -67,7 +70,39 @@ check_output "OPEN nonexistent" "$output"
 output=$(echo "RENAME NONEXISTENT_FILE.TXT NEWNAME.TXT" | $VMSDCL 2>&1)
 check_output "RENAME nonexistent" "$output"
 
+# Test 11: F$DEVICE() must not enumerate the host's real Linux block devices as VMS device
+# names (vms-b9f C4 sibling leak: populate_device_list() in dcl_lexical.c used to read
+# /proc/mounts directly and turn e.g. /dev/sda into "_SDA:", independently of SHOW DEVICE's
+# own leak through the SAME root cause). Host-independent: derive this host's actual block
+# device basenames from /proc/mounts at run time, walk F$DEVICE("*") to enumerate everything
+# OVMX reports, and assert none of the host's basenames appear.
+devlist_input=""
+for _i in $(seq 1 20); do
+    devlist_input="${devlist_input}D = F\$DEVICE(\"*\")
+SHOW SYMBOL D
+"
+done
+output=$(printf '%s' "$devlist_input" | $VMSDCL 2>&1)
+if [ -r /proc/mounts ]; then
+    while read -r dev _mnt fstype _rest; do
+        case "$fstype" in
+            proc|sysfs|devtmpfs|tmpfs|cgroup|cgroup2|devpts|mqueue|hugetlbfs|pstore|securityfs|debugfs|bpf|tracefs)
+                continue ;;
+        esac
+        case "$dev" in
+            /dev/*) ;;
+            *) continue ;;
+        esac
+        base=$(basename "$dev" | tr '[:lower:]' '[:upper:]')
+        [ -z "$base" ] && continue
+        if echo "$output" | grep -qF "_${base}:"; then
+            echo "  LEAK in F\$DEVICE(): host block device '$dev' appeared as _${base}:"
+            LEAKS_FOUND=$((LEAKS_FOUND + 1))
+        fi
+    done < /proc/mounts
+fi
+
 if [ $LEAKS_FOUND -gt 0 ]; then
-    echo "WARNING: $LEAKS_FOUND commands leaked Unix paths/errors (backlog for authenticity beads)"
+    echo "UNIX_LEAK_DETECTED: $LEAKS_FOUND commands leaked Unix paths/errors"
 fi
 echo "LEAK_CHECK_COMPLETE ($LEAKS_FOUND leaks found)"

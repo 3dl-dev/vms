@@ -123,8 +123,28 @@ int dcl_is_known_device_class(const char *name)
     /* At least one digit (unit number) */
     if (!isdigit((unsigned char)*p))
         return 0;
+    const char *unit_start = p;
     while (isdigit((unsigned char)*p))
         p++;
+
+    /*
+     * Reject any unit number other than 0. Real VMS rejects a syntactically
+     * valid but never-configured unit with the SAME error as an unrecognized
+     * class -- pinned live against the oracle (OpenVMS VAX 7.3,
+     * ~/vax/cluster/vax1, 2026-07-29): MOUNT DUA99: (valid class "DU", unit
+     * never configured on that system) returned the IDENTICAL
+     * "%MOUNT-F-NOSUCHDEV, no such device available" as the bogus class
+     * MOUNT ZZQ0:. OVMX has no physical controllers to autoconfigure real
+     * units against, so it stands in exactly one unit -- unit 0 -- per
+     * recognized class (vms-b9f C3: DKA100:/DKA999:/MKB300:/$77$DGA4242:
+     * must all be rejected, not just unrecognized classes). This unit-0-only
+     * rule is an OVMX product-behavior stand-in, not itself a VMS-authentic
+     * constant -- flagged for operator review alongside known_device_classes.
+     */
+    for (const char *d = unit_start; d < p; d++) {
+        if (*d != '0')
+            return 0;
+    }
 
     /* Optional trailing colon, then must be end of string */
     if (*p == ':')

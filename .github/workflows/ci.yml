@@ -146,6 +146,83 @@ jobs:
             /test.sh
 
   # -----------------------------------------------------------------------
+  # Job 3b: Kernel Executive (vms-e4d, epic vms-6b8 PHASE 0 HARD BARRIER)
+  #
+  # This is the ONLY CI job that boots a real kernel, insmods vms.ko, and runs
+  # executive assertions against /dev/vms. Before this job existed, NO CI job
+  # ever loaded vms.ko (persistent-boot above runs entirely inside Docker,
+  # which has no /dev/vms) — so every executive facility (access modes, ASTs,
+  # event flags, the lock manager) was provably untested in CI, and userspace
+  # code drifted toward per-process fakes that report success without ever
+  # touching the executive. tests/qemu/Dockerfile builds vms.ko + vmsfs.ko
+  # against a real Ubuntu kernel, assembles an initramfs with statically-linked
+  # test programs (ENQ/CONVERT/DEQ round-trips, AST delivery, event-flag
+  # clusters, access-mode/privilege checks, cross-process lock arbitration,
+  # vmsfs mount/read/write), and boots QEMU on the serial console via
+  # tests/qemu/run_tests.sh, which exits nonzero if any suite failed.
+  #
+  # Docker here is BUILD/TEST TOOLING (produces the kernel module + boots the
+  # real kernel in QEMU) — it is NOT standing in as the runtime; nothing in
+  # this job talks to /dev/vms from inside a container's own namespace, it
+  # boots an independent guest kernel that loads the module for real.
+  # -----------------------------------------------------------------------
+  kernel-executive:
+    name: Kernel Executive (vms.ko via /dev/vms, QEMU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build kernel executive test image
+        run: docker build -f tests/qemu/Dockerfile -t ovmx-ktest:latest .
+
+      - name: Boot QEMU, insmod vms.ko, run executive assertions against /dev/vms
+        run: docker run --rm ovmx-ktest:latest
+
+  # -----------------------------------------------------------------------
+  # Job 3c: Kernel Executive — negative control (vms-e4d)
+  #
+  # Proves the kernel-executive gate above can actually fail. Builds the SAME
+  # harness with --build-arg NEGATIVE_CONTROL=1, which patches init.sh to skip
+  # insmod of vms.ko (simulating the executive being absent) while everything
+  # else — building vms.ko itself, loading vmsfs.ko, the test binaries — stays
+  # real. Every test that opens /dev/vms then fails honestly ("cannot open
+  # /dev/vms", the same SS$_NOSUCHDEV path src/libvms/syssvc/sys_lock.c already
+  # takes) instead of silently passing. run_tests.sh exits 1 in that case, so
+  # THIS job inverts the check: it PASSES only if the container run fails,
+  # and FAILS (catching a regression in the harness itself) if the container
+  # run unexpectedly succeeds while the executive is supposed to be absent.
+  # This is what keeps "a CI job that cannot fail is decoration" from
+  # regressing silently — it re-proves the gate can trip on every push.
+  # -----------------------------------------------------------------------
+  kernel-executive-negative-control:
+    name: Kernel Executive — Negative Control (proves the gate can fail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build kernel executive test image WITHOUT loading vms.ko
+        run: |
+          docker build -f tests/qemu/Dockerfile \
+            --build-arg NEGATIVE_CONTROL=1 \
+            -t ovmx-ktest-negctl:latest .
+
+      - name: Assert the harness FAILS when the executive is absent
+        run: |
+          if docker run --rm ovmx-ktest-negctl:latest; then
+            echo "FAIL: expected the kernel-executive harness to fail with vms.ko unloaded, but it exited 0"
+            echo "This means a broken executive assertion would NOT fail CI -- the exact defect class vms-6b8 exists to kill."
+            exit 1
+          else
+            echo "PASS: harness correctly went red with the executive absent (honest failure, no silent fallback)"
+          fi
+
+  # -----------------------------------------------------------------------
   # Job 4: Conformance tests
   #
   # Runs inside the builder stage (has gcc, source tree, and built libs).

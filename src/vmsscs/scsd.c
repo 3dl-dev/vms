@@ -271,6 +271,15 @@ struct peer_state {
     int      joiner_cm_sent;       /* we sent the add-member burst on our own connection */
     uint16_t joiner_req_seq;       /* the send_seq of our CONNECT-REQUEST (retransmits REUSE it) */
     struct timespec last_joiner_req; /* CLOCK_MONOTONIC of our last joiner CONNECT-REQUEST (retx) */
+    /* --- vms-760: OVMX's OWN SCS$DIRECTORY connection to the member (the active
+     * joiner opens its own directory + queries the member, clean-ref idx25/32).
+     * Distinct from the member-opened directory connection (dir_* above). --- */
+    int      own_dir_sent;         /* we sent our own SCS$DIRECTORY CONNECT-REQUEST */
+    int      own_dir_connected;    /* the member accepted it (pair bound) */
+    uint32_t own_dir_remote_conid; /* the member's handle on OUR directory connection */
+    int      own_dir_lookup_sent;  /* we sent our VMS$VAXcluster lookup-request on it */
+    uint16_t own_dir_req_seq;      /* send_seq of our dir CONNECT-REQUEST (retransmits REUSE it) */
+    struct timespec last_own_dir;  /* CLOCK_MONOTONIC of our last own-dir send (retx rate-limit) */
     /* --- vms-9f3: NISCA channel packet-size verification (padded directed
      * HELLO, spec sec 4k). An ESTABLISHED VAX1 zero-pads a directed HELLO up to
      * NISCS_MAX_PKTSZ and retransmits it (1500->1069->853->745, ~6s) until OVMX
@@ -447,6 +456,72 @@ static int send_joiner_connect_request(int sock, int ifindex, struct peer_state 
         ps->joiner_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
         scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * send_own_dir_connect_request - vms-760: open OVMX's OWN SCS$DIRECTORY
+ * connection to the member (the active joiner's idx25). A real joiner opens its
+ * own directory connection and queries the member; OVMX previously only ANSWERED
+ * the member's directory. remote=0 (member's handle not yet known), local =
+ * SCS_DIR_OVMX_JOINER_CONID. One sequenced message; retransmits reuse the seq.
+ */
+static int send_own_dir_connect_request(int sock, int ifindex, struct peer_state *ps,
+                                        const uint8_t our_hw_mac[6],
+                                        const uint8_t our_src_logical[6])
+{
+    struct scs_dir_params dp;
+    memset(&dp, 0, sizeof(dp));
+    memcpy(dp.dst_mac, ps->eth_mac, 6);
+    memcpy(dp.src_mac, our_hw_mac, 6);
+    memcpy(dp.src_logical, our_src_logical, 6);
+    memcpy(dp.peer_logical, ps->logical, 6);
+    dp.local_conid = SCS_DIR_OVMX_JOINER_CONID;
+    dp.remote_conid = 0;
+    dp.recv_ack = ps->vc.seq.recv_seq;
+    if (ps->own_dir_req_seq == 0) {
+        ps->own_dir_req_seq = scs_seq_advance(&ps->vc.seq);
+    }
+    dp.send_seq = ps->own_dir_req_seq;
+    dp.incarnation = ps->incarnation;
+    uint8_t f[SCS_DIR_RESP_FRAME_LEN];
+    if (scs_dir_build_connect_request(&dp, f) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        ps->own_dir_sent = 1;
+        clock_gettime(CLOCK_MONOTONIC, &ps->last_own_dir);
+        scs_vc_record_sent(&ps->vc, dp.send_seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * send_own_dir_lookup - vms-760: query the member's directory for `name` on OUR
+ * directory connection (idx32-style). Advances the shared VC send_seq (a new
+ * sequenced message).
+ */
+static int send_own_dir_lookup(int sock, int ifindex, struct peer_state *ps,
+                               const uint8_t our_hw_mac[6],
+                               const uint8_t our_src_logical[6], const char *name)
+{
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, ps->eth_mac, 6);
+    memcpy(lp.src_mac, our_hw_mac, 6);
+    memcpy(lp.src_logical, our_src_logical, 6);
+    memcpy(lp.peer_logical, ps->logical, 6);
+    lp.remote_conid = ps->own_dir_remote_conid; /* member's handle on OUR dir connection */
+    lp.local_conid = SCS_DIR_OVMX_JOINER_CONID;
+    lp.recv_ack = ps->vc.seq.recv_seq;
+    lp.send_seq = scs_seq_advance(&ps->vc.seq);
+    lp.incarnation = ps->incarnation;
+    strncpy(lp.name, name, SCS_DIR_NAME_LEN - 1);
+    uint8_t f[SCS_DIR_LOOKUP_FRAME_LEN];
+    if (scs_dir_build_lookup_request(&lp, f) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        scs_vc_record_sent(&ps->vc, lp.send_seq, monotonic_ms());
         return 1;
     }
     return 0;
@@ -1209,6 +1284,20 @@ int main(int argc, char **argv)
                                ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
                                ps->vc.seq.send_seq, ps->vc.seq.recv_seq);
                         fflush(stdout);
+                        /* vms-760: PROMPTLY open OUR OWN SCS$DIRECTORY connection
+                         * to the member (the active-joiner idx25). A real joiner
+                         * opens its own directory + queries the member; the member
+                         * appears to require this before it reciprocates the
+                         * add-member config (the NEW->MEMBER gap). */
+                        if (!ps->own_dir_sent &&
+                            send_own_dir_connect_request(sock, (int)ifindex, ps,
+                                                         our_hw_mac, our_src_logical)) {
+                            log_ts(stdout);
+                            printf(" SCSD-I-OWNDIRREQ, opened OUR SCS$DIRECTORY connect"
+                                   " local=0x%08X seq=%u\n",
+                                   (unsigned)SCS_DIR_OVMX_JOINER_CONID, ps->own_dir_req_seq);
+                            fflush(stdout);
+                        }
                     }
                 }
             }
@@ -1252,6 +1341,51 @@ int main(int argc, char **argv)
                         printf(" SCSD-I-CMCONFIG, sent add-member config burst"
                                " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"
                                " on OUR joiner VC\n", c);
+                        fflush(stdout);
+                    }
+                }
+                continue;
+            }
+            /* vms-760: the member ACCEPTS OUR OWN SCS$DIRECTORY connect (same
+             * Con.ID-signature acceptance as the VMS$VAXcluster case: remote ==
+             * our handle, local = the member's freshly-supplied handle). Bind it
+             * and query the member's directory for VMS$VAXcluster (idx32-style) --
+             * the active-joiner directory drive the member appears to require
+             * before it reciprocates the add-member config. */
+            if (rconid == SCS_DIR_OVMX_JOINER_CONID && lconid != 0) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps != NULL && !ps->own_dir_connected) {
+                    ps->own_dir_remote_conid = lconid;
+                    ps->own_dir_connected = 1;
+                    log_ts(stdout);
+                    printf(" SCSD-I-OWNDIRBOUND, member accepted OUR SCS$DIRECTORY"
+                           " connect: local=0x%08X remote=0x%08X\n",
+                           (unsigned)SCS_DIR_OVMX_JOINER_CONID, lconid);
+                    fflush(stdout);
+                    if (!ps->own_dir_lookup_sent &&
+                        send_own_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
+                                            our_src_logical, "VMS$VAXcluster")) {
+                        ps->own_dir_lookup_sent = 1;
+                        log_ts(stdout);
+                        printf(" SCSD-I-OWNDIRLOOKUP, queried member directory for"
+                               " VMS$VAXcluster\n");
+                        fflush(stdout);
+                    }
+                    /* vms-760: now that OUR directory connection is up + queried
+                     * (clean-ref order: directory THEN VMS$VAXcluster connect),
+                     * open OUR VMS$VAXcluster connection. The member no longer
+                     * opens its own directory connect to us once we opened ours,
+                     * so dir_connected may never fire -- drive the connect here
+                     * too (guarded by joiner_connect_sent so it fires once). */
+                    if (ps->start_acked && !ps->joiner_connected &&
+                        !ps->joiner_connect_sent &&
+                        send_joiner_connect_request(sock, (int)ifindex, ps,
+                                                    our_hw_mac, our_src_logical)) {
+                        connect_req_sent++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-CONNREQ, sent OUR VMS$VAXcluster CONNECT-REQUEST"
+                               " local_conid=0x%08X seq=%u (after own-dir drive)\n",
+                               OVMX_JOINER_CONID, ps->joiner_req_seq);
                         fflush(stdout);
                     }
                 }

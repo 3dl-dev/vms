@@ -115,6 +115,78 @@ static const uint8_t dir_affirmative_result[SCS_DIR_RESULT_LEN] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00
 };
 
+/* vms-760: OVMX's OWN SCS$DIRECTORY CONNECT-REQUEST (the active joiner opening a
+ * directory connection TO the member). 110-byte SCA, byte-exact to the clean
+ * joiner's frame (formation-clean-2node.pcap idx25) EXCEPT [8:10] connect-flag
+ * = 0x0001 (the golden-lab value; the clean ref carried 0x03e8, a config
+ * artifact -- the existing response templates above also use 0x0001). Substituted
+ * at build time: dst/src logical, counters, local Con.ID [54:58]. remote [50:54]
+ * stays 0 (peer's handle not yet known). name [62:78]="SCS$DIRECTORY   ",
+ * operation [78:110]="SCS$DIR_LOOKUP" (blank-padded) are replayed byte-exact. */
+static const uint8_t dir_connreq_tmpl[SCS_DIR_RESP_SCA_LEN] = {
+    /* [0:2]   */ 0x6c, 0x00,
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,       /* dst logical (SUBST) */
+    /* [8:10]  */ 0x01, 0x00,                               /* connect flag (golden 0x0001) */
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x5b, 0x13,
+    /* [18:20] */ 0x00, 0x00,                               /* recv_ack (SUBST) */
+    /* [20:22] */ 0x01, 0x00,                               /* send_seq (SUBST) */
+    /* [22:24] */ 0x01, 0x00,                               /* incarnation (SUBST) */
+    /* [24:26] */ 0x12, 0x00,
+    /* [26:28] */ 0x00, 0x00,                               /* recv_ack mirror (SUBST) */
+    /* [28:30] */ 0x00, 0x00,
+    /* [30:32] */ 0x01, 0x00,                               /* send_seq mirror (SUBST) */
+    /* [32:34] */ 0x00, 0x00,
+    /* [34:36] */ 0x00, 0x00,                               /* recv_ack 3rd (SUBST) */
+    /* [36:38] */ 0x00, 0x00,
+    /* [38:40] */ 0x01, 0x00,
+    /* [40:42] */ 0x00, 0x02,
+    /* [42:44] */ 0x42, 0x00,                               /* inner length = 66 */
+    /* [44:46] */ 0x04, 0x00,
+    /* [46:48] */ 0x00, 0x00,                               /* op = 0 (connect) */
+    /* [48:50] */ 0x03, 0x00,                               /* flag = 3 */
+    /* [50:54] */ 0x00, 0x00, 0x00, 0x00,                   /* remote Con.ID = 0 (not yet known) */
+    /* [54:58] */ 0x07, 0x00, 0x00, 0x00,                   /* local Con.ID (SUBST) */
+    /* [58:62] */ 0x00, 0x00, 0x01, 0x00,
+    /* [62:78] */ 'S','C','S','$','D','I','R','E','C','T','O','R','Y',' ',' ',' ',
+    /* [78:94] */ 'S','C','S','$','D','I','R','_','L','O','O','K','U','P',' ',' ',
+    /* [94:110]*/ ' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '
+};
+
+/* vms-760: OVMX's directory LOOKUP-REQUEST (querying the member's directory).
+ * 94-byte SCA, byte-exact to the clean joiner's lookup (idx32) EXCEPT [8:10]
+ * connect-flag = 0x0001 (golden). Substituted: dst/src logical, counters, remote
+ * Con.ID [50:54] (member's directory handle), local [54:58], name [62:78].
+ * op[46:48]=0x0a, [58:62] request marker=0, result [78:94]=zeros (a request). */
+static const uint8_t dir_lookupreq_tmpl[SCS_DIR_LOOKUP_SCA_LEN] = {
+    /* [0:2]   */ 0x5c, 0x00,
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,       /* dst logical (SUBST) */
+    /* [8:10]  */ 0x01, 0x00,                               /* connect flag (golden 0x0001) */
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x5b, 0x13,
+    /* [18:20] */ 0x02, 0x00,                               /* recv_ack (SUBST) */
+    /* [20:22] */ 0x03, 0x00,                               /* send_seq (SUBST) */
+    /* [22:24] */ 0x01, 0x00,                               /* incarnation (SUBST) */
+    /* [24:26] */ 0x12, 0x00,
+    /* [26:28] */ 0x02, 0x00,                               /* recv_ack mirror (SUBST) */
+    /* [28:30] */ 0x00, 0x00,
+    /* [30:32] */ 0x03, 0x00,                               /* send_seq mirror (SUBST) */
+    /* [32:34] */ 0x00, 0x00,
+    /* [34:36] */ 0x02, 0x00,                               /* recv_ack 3rd (SUBST) */
+    /* [36:38] */ 0x00, 0x00,
+    /* [38:40] */ 0x01, 0x00,
+    /* [40:42] */ 0x00, 0x02,
+    /* [42:44] */ 0x32, 0x00,                               /* inner length = 50 */
+    /* [44:46] */ 0x04, 0x00,
+    /* [46:48] */ 0x0a, 0x00,                               /* op = 0x0a (lookup) */
+    /* [48:50] */ 0x00, 0x00,                               /* flag = 0 */
+    /* [50:54] */ 0x08, 0x00, 0xdc, 0xe2,                   /* remote Con.ID (SUBST, member's) */
+    /* [54:58] */ 0x07, 0x00, 0x00, 0x00,                   /* local Con.ID (SUBST) */
+    /* [58:62] */ 0x00, 0x00, 0x00, 0x00,                   /* request marker = 0 */
+    /* [62:78] */ 'M','S','C','P','$','T','A','P','E',' ',' ',' ',' ',' ',' ',' ',
+    /* [78:94] */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0            /* result = zeros (request) */
+};
+
 static void put_le16(uint8_t *dst, uint16_t v)
 {
     dst[0] = (uint8_t)(v & 0xff);
@@ -257,6 +329,48 @@ int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
     } else {
         memcpy(out + 14 + 78, SCS_DIR_NOT_PRESENT, SCS_DIR_RESULT_LEN);
     }
+    return 0;
+}
+
+int scs_dir_build_connect_request(const struct scs_dir_params *p,
+                                  uint8_t out[SCS_DIR_RESP_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_connreq_tmpl, SCS_DIR_RESP_SCA_LEN, p->recv_ack, p->send_seq,
+                     p->incarnation, out);
+    /* remote Con.ID stays 0 (member's not yet known); local = OVMX's own. */
+    put_le32(out + 14 + 50, 0);
+    put_le32(out + 14 + 54, p->local_conid);
+    return 0;
+}
+
+int scs_dir_build_lookup_request(const struct scs_dir_lookup_params *p,
+                                 uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_lookupreq_tmpl, SCS_DIR_LOOKUP_SCA_LEN, p->recv_ack, p->send_seq,
+                     p->incarnation, out);
+    put_le16(out + 14 + 46, SCS_DIR_OP_LOOKUP);  /* op = 0x0a */
+    put_le32(out + 14 + 50, p->remote_conid);    /* member's directory handle */
+    put_le32(out + 14 + 54, p->local_conid);     /* OVMX's own handle */
+    /* Queried SYSAP name into [62:78], 16-byte blank-padded (as the response). */
+    {
+        uint8_t namebuf[SCS_DIR_NAME_LEN];
+        memset(namebuf, ' ', sizeof(namebuf));
+        size_t n = 0;
+        while (n < SCS_DIR_NAME_LEN && p->name[n] != '\0') {
+            n++;
+        }
+        memcpy(namebuf, p->name, n);
+        memcpy(out + 14 + 62, namebuf, SCS_DIR_NAME_LEN);
+    }
+    /* result [78:94] stays zeros (a request carries no result). */
     return 0;
 }
 

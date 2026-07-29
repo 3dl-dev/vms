@@ -101,8 +101,16 @@ extern "C" {
 
 /* Recognizable OVMX SCS$DIRECTORY Con.ID ("OX" base | 7). OVMX design choice,
  * opaque to the peer (see header note). Distinct from OVMX's VMS$VAXcluster
- * handle (SCS_CONNECT_OVMX_CONID_BASE | 1). */
+ * handle (SCS_CONNECT_OVMX_CONID_BASE | 1). Used when OVMX ANSWERS the member's
+ * directory connect. */
 #define SCS_DIR_OVMX_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0007u)
+
+/* Handle OVMX uses when it OPENS ITS OWN SCS$DIRECTORY connection to the member
+ * (vms-760: the active joiner opens its own directory connection and queries the
+ * member's directory, clean-ref formation-clean-2node.pcap idx25). Distinct from
+ * SCS_DIR_OVMX_CONID so the member-opened and OVMX-opened directory connections
+ * do not collide. */
+#define SCS_DIR_OVMX_JOINER_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0008u)
 
 /* 16-byte SYSAP-name field width [62:78] and result field width [78:94]. */
 #define SCS_DIR_NAME_LEN   16
@@ -171,6 +179,28 @@ int scs_dir_build_connect_response(const struct scs_dir_params *p,
  */
 int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
                                   uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN]);
+
+/*
+ * scs_dir_build_connect_request - vms-760: build OVMX's OWN SCS$DIRECTORY
+ * CONNECT-REQUEST (the active joiner opening a directory connection TO the
+ * member). remote Con.ID [50:54]=0 (member's not yet known), local [54:58]=
+ * p->local_conid (OVMX's joiner directory handle). 110-byte SCA class, byte-exact
+ * to the clean joiner's frame (formation-clean-2node.pcap idx25): op[46:48]=0,
+ * flag[48:50]=3, name [62:78]="SCS$DIRECTORY   ", operation "SCS$DIR_LOOKUP".
+ * Returns 0, or -1 if p/out is NULL.
+ */
+int scs_dir_build_connect_request(const struct scs_dir_params *p,
+                                  uint8_t out[SCS_DIR_RESP_FRAME_LEN]);
+
+/*
+ * scs_dir_build_lookup_request - vms-760: build OVMX's directory LOOKUP-REQUEST
+ * querying the member's directory for p->name. op[46:48]=0x0a, [58:62] request
+ * marker=0, result [78:94]=zeros. remote [50:54]=member's directory handle,
+ * local [54:58]=OVMX's joiner directory handle. 94-byte SCA class, byte-exact to
+ * the clean joiner's lookup (idx32) modulo the queried name. Returns 0/-1.
+ */
+int scs_dir_build_lookup_request(const struct scs_dir_lookup_params *p,
+                                 uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN]);
 
 /* Read-only view of a received directory (0x5b / 0x4b-directory) frame. */
 struct scs_dir_view {

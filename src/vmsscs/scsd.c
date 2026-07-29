@@ -76,6 +76,21 @@ static uint64_t monotonic_ms(void)
     return (uint64_t)ts.tv_sec * 1000u + (uint64_t)(ts.tv_nsec / 1000000);
 }
 
+/* vms-9f3: OVMX's own local 100ns-tick clock for the HELLO timer field (abs
+ * 96-101). The reference-lab wire carries a 48-bit LE counter advancing at
+ * ~1e7 ticks/s = 100ns/tick (measured across the af2/ci3 padded directed
+ * HELLOs); it is per-sender and the ONLY field that varies across a
+ * channel-verify retransmit (spec sec 4k). PEDRIVER rejects a channel whose
+ * verify HELLO carries a dead/static timer, so every emitted HELLO stamps the
+ * CURRENT tick sampled here. Clean-room: this is OVMX's OWN monotonic clock in
+ * 100ns units, never a value copied from VSI source. */
+static uint64_t hello_timer_tick100(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 10000000u + (uint64_t)(ts.tv_nsec / 100);
+}
+
 /* vms-691: VC keepalive/retransmit tunables. The VAX beacons directed HELLOs
  * on its poller sweep; OVMX re-sends its connect-request if the peer has not
  * acked it within RETRANSMIT_TIMEOUT_MS, capped at RETRANSMIT_MAX to respect
@@ -575,7 +590,7 @@ int main(int argc, char **argv)
             clock_gettime(CLOCK_MONOTONIC, &now);
             if (now.tv_sec - last_hello.tv_sec >= hello_interval) {
                 uint8_t frame[SCS_HELLO_FRAME_LEN];
-                hello_params.timer_tick = (uint32_t)hello_sent;
+                hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
                 if (scs_hello_build_frame(&hello_params, frame) == 0) {
                     ssize_t sent = sendto(sock, frame, sizeof(frame), 0,
                                            (struct sockaddr *)&hello_dst, sizeof(hello_dst));
@@ -860,7 +875,7 @@ int main(int argc, char **argv)
                        (pnow.tv_sec - ps->last_padded.tv_sec >= 5);
             if (pdue) {
                 size_t plen = 0;
-                hello_params.timer_tick = (uint32_t)directed_sent;
+                hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
                 if (scs_hello_build_padded_directed_frame(&hello_params, src_mac, lab_nonce,
                                                           echo_inc, echo_sca,
                                                           pframe, sizeof(pframe), &plen) == 0 &&
@@ -935,7 +950,7 @@ int main(int argc, char **argv)
                       (dnow.tv_sec - ps->last_directed.tv_sec >= 1);
             if (due) {
                 uint8_t dframe[SCS_HELLO_FRAME_LEN];
-                hello_params.timer_tick = (uint32_t)directed_sent;
+                hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
                 /* abs 92 = SCS_HELLO_JOINER_INCARNATION (1): OVMX's own directed
                  * HELLO carries the incarnation it attributes to the peer on a
                  * fresh first contact, NOT the member's advertised value (spec
@@ -966,7 +981,7 @@ int main(int argc, char **argv)
              * frame, guarded by padded_initiated -- not a flood. */
             if (ps->channel_up && !ps->padded_initiated) {
                 size_t plen = 0;
-                hello_params.timer_tick = (uint32_t)directed_sent;
+                hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
                 /* abs-92 = SCS_HELLO_JOINER_INCARNATION (1): OVMX's own padded
                  * HELLO carries the incarnation it attributes to the peer on a
                  * fresh first contact, NOT the member's advertised value (spec

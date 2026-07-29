@@ -105,18 +105,33 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
     out[94] = 0x92;
     out[95] = 0x05; /* constant trailer 0x9205 (inferred-constant, sec 4b) */
 
-    out[96] = (uint8_t)(p->timer_tick & 0xff);
-    out[97] = (uint8_t)((p->timer_tick >> 8) & 0xff);
-    out[98] = (uint8_t)((p->timer_tick >> 16) & 0xff);
-    out[99] = (uint8_t)((p->timer_tick >> 24) & 0xff); /* changing value, LE (inferred/unknown
-                                                          * semantics, per-sender/per-time, sec 4b) */
+    /* abs 96-101: 48-bit little-endian monotonic timer, 100ns per tick
+     * (spec sec 4b offset-96 "changing value"; GROUNDED sec 4k as the ONLY
+     * field that varies across a channel-verify retransmit). Clean-room,
+     * derived from the reference-lab wire (labeled inferred): the field is a
+     * 6-byte LE counter advancing at ~1e7 ticks/s (measured 9.998e6/s across
+     * af2-firsttimer/ci3 padded HELLOs = 100ns/tick, the VMS system-time unit),
+     * a per-sender running clock -- each node carries its OWN current value
+     * (VAX1 and the joiner differ below the shared high word), they do NOT echo
+     * each other. The caller supplies OVMX's own local 100ns tick.
+     *
+     * vms-9f3 FIX: the high 2 bytes (abs 100-101) were previously baked into the
+     * constant tail as 0x0099 -- that was a frozen snapshot of THIS timer's high
+     * word at scs-idle-baseline capture time, NOT a constant. Freezing it made
+     * OVMX's channel-verify timer look dead (never advancing at 100ns rate),
+     * which is why VAX1's PEDRIVER rejected OVMX's padded HELLO and stepped the
+     * probe size down instead of converging. All 6 bytes are now the live tick. */
+    for (int i = 0; i < 6; i++) {
+        out[96 + i] = (uint8_t)((p->timer_tick >> (8 * i)) & 0xffu);
+    }
 
-    /* Constant tail, abs 100-111 (inferred-constant, sec 4b) -- byte-exact
-     * against both baseline frames. */
-    static const uint8_t tail_const[12] = {
-        0x99, 0x00, 0xbc, 0x00, 0x03, 0x58, 0x51, 0x41, 0x00, 0x00, 0x00, 0x00
+    /* Constant tail, abs 102-111 (inferred-constant, sec 4b) -- byte-exact
+     * against both idle-baseline HELLOs (scs-idle-baseline frames 1/4) AND the
+     * golden padded directed HELLOs (af2-established-rejoin idx 8659/8665). */
+    static const uint8_t tail_const[10] = {
+        0xbc, 0x00, 0x03, 0x58, 0x51, 0x41, 0x00, 0x00, 0x00, 0x00
     };
-    memcpy(out + 100, tail_const, sizeof(tail_const));
+    memcpy(out + 102, tail_const, sizeof(tail_const));
 
     /* abs 112-119: zero padding (already memset above) */
 

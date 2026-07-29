@@ -130,6 +130,48 @@ int main(void)
           memcmp(pad120, unpadded, SCS_HELLO_FRAME_LEN) == 0,
           "N=120 == plain 134-byte directed HELLO (byte-identical)");
 
+    /* --- vms-9f3 REQUIRED: the timer field (abs 96-101) is a LIVE 48-bit LE
+     * value, not static. Two builds with different tick inputs must differ at
+     * abs 96 (and across the whole 6-byte field), while every identity field
+     * (eth-src, abs-24 src-logical, abs-92 incarnation, join nonce, recv-side
+     * fields) stays byte-identical -- proving only the timer advances. --- */
+    struct scs_hello_params pa = p, pb = p;
+    pa.timer_tick = 0x0000111111111111ull;
+    pb.timer_tick = 0x0000222222222222ull;
+    static uint8_t ba[SCS_HELLO_PADDED_MAX_FRAME];
+    static uint8_t bb[SCS_HELLO_PADDED_MAX_FRAME];
+    size_t la = 0, lb = 0;
+    check(scs_hello_build_padded_directed_frame(&pa, peer_mac, nonce, incarnation,
+                                                SCS_HELLO_PADDED_MAX_SCA, ba, sizeof(ba), &la) == 0 &&
+          scs_hello_build_padded_directed_frame(&pb, peer_mac, nonce, incarnation,
+                                                SCS_HELLO_PADDED_MAX_SCA, bb, sizeof(bb), &lb) == 0,
+          "two padded HELLOs with different tick inputs build");
+    check(ba[96] != bb[96], "timer abs 96 ADVANCES with tick input (non-static, vms-9f3)");
+    check(memcmp(ba + 96, bb + 96, 6) != 0, "timer field abs 96-101 differs between the two builds");
+    check(memcmp(ba + 6, bb + 6, 6) == 0, "eth-src (abs 6) UNCHANGED across the timer change");
+    check(memcmp(ba + 24, bb + 24, 6) == 0, "src-logical (abs 24) UNCHANGED across the timer change");
+    check(memcmp(ba + 92, bb + 92, 2) == 0, "incarnation echo (abs 92-93) UNCHANGED across the timer change");
+    check(memcmp(ba + 68, bb + 68, 4) == 0, "join nonce (abs 68-71) UNCHANGED across the timer change");
+    /* The whole frame apart from the 6 timer bytes is identical (abs 16-95 and
+     * abs 102..end), so the timer is the SOLE per-frame variation (spec sec 4k). */
+    check(memcmp(ba + 16, bb + 16, 96 - 16) == 0 &&
+          memcmp(ba + 102, bb + 102, la - 102) == 0,
+          "ONLY abs 96-101 varies between the two builds (rest byte-identical)");
+
+    /* The full 48-bit value lands LE across abs 96-101: reproduce the golden
+     * af2 joiner tick (0x021561fad2c0 -> c0 d2 fa 61 15 02), proving abs 100-101
+     * are LIVE timer bytes now, not the old frozen 0x0099 (vms-9f3). */
+    struct scs_hello_params pg = p;
+    pg.timer_tick = 0x021561fad2c0ull;
+    static uint8_t bg[SCS_HELLO_PADDED_MAX_FRAME];
+    size_t lg = 0;
+    check(scs_hello_build_padded_directed_frame(&pg, peer_mac, nonce, incarnation,
+                                                SCS_HELLO_PADDED_MAX_SCA, bg, sizeof(bg), &lg) == 0,
+          "build padded HELLO with golden-magnitude tick");
+    static const uint8_t golden_timer[6] = { 0xc0, 0xd2, 0xfa, 0x61, 0x15, 0x02 };
+    check(memcmp(bg + 96, golden_timer, 6) == 0,
+          "abs 96-101 == golden af2 joiner timer (LE48), abs 100-101 live not 0x0099 (vms-9f3)");
+
     /* --- error paths --- */
     uint8_t small[64];
     size_t dummy = 0;

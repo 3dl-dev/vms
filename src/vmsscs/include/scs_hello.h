@@ -39,10 +39,16 @@
  *     space-padded to 6, matching the documented SCSNODE 6-char maximum),
  *     so the field is reproduced as a fixed-width 6-byte name, not a
  *     variable-length one.
- *   - Timer/tick (abs 96-99): unknown/inferred, observed to increase
- *     within a capture. Caller-supplied (e.g. a per-emission counter);
- *     this is a per-sender/per-time field, not an identity field, and is
- *     expected to differ from any specific real capture.
+ *   - Timer/tick (abs 96-101): a 48-bit little-endian monotonic clock, 100ns
+ *     per tick (the VMS system-time unit). Clean-room, measured off the
+ *     reference-lab wire (labeled inferred): advances at ~1e7 ticks/s across
+ *     the af2/ci3 padded directed HELLOs and is the ONLY field that varies
+ *     across a channel-verify retransmit (spec sec 4k). Per-sender/per-time,
+ *     NOT an identity field -- each node carries its own current value and is
+ *     expected to differ from any specific real capture. Caller supplies OVMX's
+ *     own local 100ns tick. NOTE: the high 2 bytes (abs 100-101) are part of
+ *     this live timer, not a constant -- an earlier revision mis-froze them as
+ *     an idle-capture snapshot 0x0099 (vms-9f3).
  */
 #ifndef SCS_HELLO_H
 #define SCS_HELLO_H
@@ -68,7 +74,8 @@ struct scs_hello_params {
                                   a real cluster node writes its LOGICAL addr here, NOT its raw
                                   HW MAC (vms-9f3 -- VAX1's PEDRIVER keys peer identity on abs 24) */
     char     node_name[SCS_HELLO_NODENAME_LEN + 1]; /* NUL-terminated, <=6 chars, SCSNODE */
-    uint32_t timer_tick;      /* caller-supplied per-emission counter, abs offset 96-99 */
+    uint64_t timer_tick;      /* caller-supplied 48-bit LE monotonic 100ns-tick clock,
+                                  abs offset 96-101 (low 48 bits used; see header note) */
 };
 
 /*

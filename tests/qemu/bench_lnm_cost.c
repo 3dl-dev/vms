@@ -57,7 +57,21 @@
  * Usage:
  *   bench_lnm_cost              # runtime target: requires /dev/vms
  *   bench_lnm_cost --calibrate  # host calibration: skips /dev/vms
+ *
+ * REPEATED TRIALS (vms-ln0 rework, C2)
+ * -------------------------------------
+ * A single 300ms-accumulation sample understates run-to-run variance: an
+ * independent re-run of this exact binary produced 78.1 us / 83.7x against
+ * the 90.1 us / 96.4x quoted from one run, a 13% spread on the figure the
+ * whole ruling is quoted against. So the two cases that feed the ruling
+ * (VMS_IOCTL_CHKPRIV round trip, and the in-process 4-table translate it is
+ * compared against) are each sampled TRIALS independent times -- each trial
+ * re-runs run_case() from scratch (fresh warmup, fresh 300ms accumulation
+ * window) -- and reported as min/mean/max over n=TRIALS, not a single point
+ * estimate. Every downstream figure (the ratio, the per-open cost) is
+ * restated as a range derived from that spread, not a single number.
  */
+#define TRIALS 5
 #define _GNU_SOURCE
 
 #include <errno.h>
@@ -337,56 +351,129 @@ int main(int argc, char **argv)
                                      op_getppid, NULL);
     struct result r_enot  = run_case("[enotty]", "ioctl(non-vms fd) -> ENOTTY - dispatch floor",
                                      op_enotty, &nullctx);
-    struct result r_vms, r_vmsio;
+    struct result r_vms;
     memset(&r_vms, 0, sizeof(r_vms));
-    memset(&r_vmsio, 0, sizeof(r_vmsio));
     r_vms.label   = "[vms_out]";
     r_vms.what    = "ioctl(/dev/vms, GETMODE) - exec round trip, out only";
-    r_vmsio.label = "[vms_inout]";
-    r_vmsio.what  = "ioctl(/dev/vms, CHKPRIV) - exec round trip, in+out";
-    if (!calibrate) {
+    if (!calibrate)
         r_vms = run_case(r_vms.label, r_vms.what, op_vms_getmode, &vmsctx);
-        r_vmsio = run_case(r_vmsio.label, r_vmsio.what, op_vms_chkpriv, &vmsctx);
-    }
 
     struct result r_lp = run_case("[lnm_hit_p]", "lnm_translate FILE_DEV, hit LNM$PROCESS (1 tbl)",
                                   op_lnm, &lp);
-    struct result r_ls = run_case("[lnm_hit_s]", "lnm_translate FILE_DEV, hit LNM$SYSTEM (4 tbl)",
-                                  op_lnm, &ls);
     struct result r_lm = run_case("[lnm_miss]", "lnm_translate FILE_DEV, miss all 4 tables",
                                   op_lnm, &lm);
+
+    /* The two figures the ruling is quoted against: CHKPRIV round trip and
+     * the in-process 4-table translate it replaces. Each is sampled TRIALS
+     * independent times (see file header, C2) instead of once. */
+    struct result vmsio_trial[TRIALS];
+    struct result ls_trial[TRIALS];
+    double vmsio_ns[TRIALS], ls_ns[TRIALS], ratio_trial[TRIALS];
+    int n_trials = 0;
+
+    printf("\nREPEATED TRIALS (n=%d), CHKPRIV round trip vs in-process 4-table translate:\n",
+           TRIALS);
+    for (int t = 0; t < TRIALS; t++) {
+        memset(&vmsio_trial[t], 0, sizeof(vmsio_trial[t]));
+        if (!calibrate)
+            vmsio_trial[t] = run_case("[vms_inout]",
+                "ioctl(/dev/vms, CHKPRIV) - exec round trip, in+out",
+                op_vms_chkpriv, &vmsctx);
+        ls_trial[t] = run_case("[lnm_hit_s]",
+            "lnm_translate FILE_DEV, hit LNM$SYSTEM (4 tbl)", op_lnm, &ls);
+
+        if (calibrate || !vmsio_trial[t].valid || !ls_trial[t].valid)
+            continue;
+
+        vmsio_ns[n_trials] = vmsio_trial[t].ns_per_op;
+        ls_ns[n_trials] = ls_trial[t].ns_per_op;
+        ratio_trial[n_trials] = vmsio_ns[n_trials] / ls_ns[n_trials];
+        printf("  trial %d: vms_inout=%9.1f ns/op   lnm_hit_s=%7.1f ns/op   ratio=%.1fx\n",
+               t + 1, vmsio_ns[n_trials], ls_ns[n_trials], ratio_trial[n_trials]);
+        n_trials++;
+    }
+
+    /* Aggregate the trials: min/mean/max, n stated. This replaces the old
+     * single-sample point estimate everywhere downstream. */
+    double vmsio_min = 0, vmsio_max = 0, vmsio_mean = 0;
+    double ratio_min = 0, ratio_max = 0, ratio_mean = 0;
+    double ls_mean = 0;
+    if (n_trials > 0) {
+        vmsio_min = vmsio_max = vmsio_ns[0];
+        ratio_min = ratio_max = ratio_trial[0];
+        for (int i = 0; i < n_trials; i++) {
+            if (vmsio_ns[i] < vmsio_min) vmsio_min = vmsio_ns[i];
+            if (vmsio_ns[i] > vmsio_max) vmsio_max = vmsio_ns[i];
+            if (ratio_trial[i] < ratio_min) ratio_min = ratio_trial[i];
+            if (ratio_trial[i] > ratio_max) ratio_max = ratio_trial[i];
+            vmsio_mean += vmsio_ns[i];
+            ratio_mean += ratio_trial[i];
+            ls_mean += ls_ns[i];
+        }
+        vmsio_mean /= n_trials;
+        ratio_mean /= n_trials;
+        ls_mean /= n_trials;
+    }
+
+    /* Use the mean-trial results as "the" figure everywhere else in this
+     * report, so the rest of the output (print_result, per-open table) is
+     * built on the same n-trial basis rather than trial 0 alone. */
+    struct result r_vmsio = vmsio_trial[0];
+    struct result r_ls = ls_trial[0];
+    if (n_trials > 0) {
+        r_vmsio.ns_per_op = vmsio_mean;
+        r_ls.ns_per_op = ls_mean;
+    }
 
     print_result(&r_clock);
     print_result(&r_ppid);
     print_result(&r_enot);
     print_result(&r_vms);
-    print_result(&r_vmsio);
+    if (n_trials > 0) {
+        printf("  [vms_inout] ioctl(/dev/vms, CHKPRIV) - exec round trip, in+out  %10.1f ns/op   (mean of n=%d trials)\n",
+               r_vmsio.ns_per_op, n_trials);
+        printf("  [lnm_hit_s] lnm_translate FILE_DEV, hit LNM$SYSTEM (4 tbl)      %10.2f ns/op   (mean of n=%d trials)\n",
+               r_ls.ns_per_op, n_trials);
+    }
     print_result(&r_lp);
-    print_result(&r_ls);
     print_result(&r_lm);
 
-    printf("\nDERIVED:\n");
-    if (r_ls.valid && r_ls.ns_per_op > 0.0) {
+    printf("\nDERIVED (n=%d trials; MEAN with [MIN, MAX] range -- not a single-sample point estimate):\n",
+           n_trials);
+    if (n_trials > 0) {
+        printf("  vms_inout (CHKPRIV round trip)                    : mean %.1f us  [%.1f, %.1f] us\n",
+               vmsio_mean / 1000.0, vmsio_min / 1000.0, vmsio_max / 1000.0);
+        printf("  lnm_hit_s (in-process 4-table translate)          : mean %.2f us\n",
+               ls_mean / 1000.0);
+        printf("  exec ioctl (in+out) / in-process 4-table translate: mean %.1fx  [%.1fx, %.1fx]\n",
+               ratio_mean, ratio_min, ratio_max);
         if (r_vms.valid)
-            printf("  exec ioctl (out only) / in-process 4-table translate = %.1fx\n",
-                   r_vms.ns_per_op / r_ls.ns_per_op);
-        if (r_vmsio.valid)
-            printf("  exec ioctl (in+out)   / in-process 4-table translate = %.1fx\n",
-                   r_vmsio.ns_per_op / r_ls.ns_per_op);
-        printf("  enotty dispatch       / in-process 4-table translate = %.1fx\n",
-               r_enot.ns_per_op / r_ls.ns_per_op);
-    }
-    if (r_vmsio.valid) {
-        /* Option A per-open projection. K = logical-name translations per
-         * file open that MISS LNM$PROCESS and therefore must reach the
-         * executive. Reported for a range so the reader can apply the K
-         * measured separately on the vmsfs path. */
+            printf("  exec ioctl (out only) / in-process 4-table translate (single sample, context only) = %.1fx\n",
+                   r_vms.ns_per_op / ls_mean);
+        printf("  enotty dispatch       / in-process 4-table translate (single sample, context only) = %.1fx\n",
+               r_enot.ns_per_op / ls_mean);
+
+        /* Option A per-open projection, restated as a range using the
+         * trial min/max rather than a single sample (C2). K = logical-name
+         * translations per file open that MISS LNM$PROCESS and therefore
+         * must reach the executive under option A. */
         printf("  Option A added cost per file open, by translations/open K\n");
-        printf("  (using the in+out ioctl figure):\n");
+        printf("  (range across the %d trials' ioctl figure, mean in-process figure):\n", n_trials);
         for (int k = 1; k <= 4; k++)
-            printf("      K=%d : %.2f us/open (ioctl) vs %.2f us/open (in-process)\n",
-                   k, (double)k * r_vmsio.ns_per_op / 1000.0,
-                   (double)k * r_ls.ns_per_op / 1000.0);
+            printf("      K=%d : %.2f-%.2f us/open (ioctl, range) vs %.2f us/open (in-process, mean)\n",
+                   k, (double)k * vmsio_min / 1000.0, (double)k * vmsio_max / 1000.0,
+                   (double)k * ls_mean / 1000.0);
+    } else if (calibrate) {
+        double cal_min = ls_trial[0].ns_per_op, cal_max = ls_trial[0].ns_per_op, cal_mean = 0;
+        for (int i = 0; i < TRIALS; i++) {
+            if (ls_trial[i].ns_per_op < cal_min) cal_min = ls_trial[i].ns_per_op;
+            if (ls_trial[i].ns_per_op > cal_max) cal_max = ls_trial[i].ns_per_op;
+            cal_mean += ls_trial[i].ns_per_op;
+        }
+        cal_mean /= TRIALS;
+        printf("  (calibration mode: /dev/vms cases skipped, no ioctl trials to aggregate)\n");
+        printf("  lnm_hit_s (in-process 4-table translate), native: mean %.1f ns/op [%.1f, %.1f] (n=%d)\n",
+               cal_mean, cal_min, cal_max, TRIALS);
     }
 
     if (vmsfd >= 0)

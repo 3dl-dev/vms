@@ -2,7 +2,10 @@
 
 > **Item:** `vms-ln0` (Phase 3 of the executive retrofit, `vms-6b8`, under the authenticity
 > pillar `vms-898`).
-> **Status:** RULED — pending operator sign-off (rd gate on `vms-ln0`).
+> **Status:** RULED — pending operator sign-off. This record does not itself raise an `rd`
+> gate: a prior draft claimed to, but that gate published to a mangled board ID and never
+> reached the operator. The design gate for `vms-ln0` is raised from the project root by the
+> orchestrator, carrying this ruling and the un-self-certified values in §4.
 > **Blocks:** `vms-d37` (`DEFINE/SYSTEM` propagates across processes). A cold agent reading
 > `vms-d37` plus this file should know exactly what to build.
 > **Plan context:** `docs/design-executive-retrofit.md` §5, §6.
@@ -17,9 +20,11 @@ ioctl.** This is option **C, corrected**: the mapping comes from the *executive*
 file. That single correction turns all three of option C's stated costs — cross-process
 locking, crash consistency, and no protection — into non-issues, while keeping option C's
 defining property of zero syscalls on the hot path. Option A (ioctl per translation) is
-**rejected on measured cost**: 90.1 µs per executive round trip against 0.93 µs for the
-in-process four-table translate it would replace — **96×** — on the only runtime target OVMX
-has. Option B (kernel-owned + per-process cache with invalidation) is **rejected on failure
+**rejected on measured cost**: **79.0 µs mean (n=5 trials, range 76.2–81.6 µs)** per executive
+round trip against **0.94 µs mean** for the in-process four-table translate it would replace —
+**84.5× mean (range 78.5×–88.4×)** — on the only runtime target OVMX has. That 79.0 µs is itself
+a measured **lower bound** for a real translate ioctl (§1.1, §4a) — the true cost of option A is
+higher still. Option B (kernel-owned + per-process cache with invalidation) is **rejected on failure
 mode**: a missed invalidation is a silently wrong translation that reports success, which is
 the same class of defect as the per-process fake this epic exists to kill. LNM$PROCESS stays
 per-process and is not touched.
@@ -70,27 +75,50 @@ performed outside every timed loop, so it is not charged to the per-translation 
 ### 1.1 Cost of one translation — runtime target
 
 QEMU guest, `aarch64`, Linux `6.8.0-136-generic`, `vms.ko` + `vmsfs.ko` loaded, `/dev/vms`
-present and answering:
+present and answering.
+
+**A single 300 ms-accumulation sample understates run-to-run variance.** An earlier draft of
+this record quoted a single run (90.1 µs, 96.4×) as if it were exact. An independent re-run of
+the identical binary gave 78.1 µs / 83.7× — a 13% spread on the number the whole ruling is
+quoted against. `bench_lnm_cost` was changed to sample the two figures the ruling turns on —
+the `CHKPRIV` round trip and the in-process 4-table translate it is compared against — as
+**5 independent trials** (fresh warmup, fresh 300 ms window, each trial), and report
+min/mean/max with `n` stated instead of a single point estimate. This run, reproduced today:
 
 ```
-  [clock]     clock_gettime pair (noise floor)                       969.0 ns/op
-  [getppid]   syscall(SYS_getppid) - syscall floor                 45016.7 ns/op
-  [enotty]    ioctl(non-vms fd) -> ENOTTY - dispatch floor         46468.7 ns/op
-  [vms_out]   ioctl(/dev/vms, GETMODE) - exec round trip, out only 68502.0 ns/op
-  [vms_inout] ioctl(/dev/vms, CHKPRIV) - exec round trip, in+out   90099.5 ns/op
-  [lnm_hit_p] lnm_translate FILE_DEV, hit LNM$PROCESS (1 tbl)        461.7 ns/op
-  [lnm_hit_s] lnm_translate FILE_DEV, hit LNM$SYSTEM (4 tbl)         934.4 ns/op
-  [lnm_miss]  lnm_translate FILE_DEV, miss all 4 tables              942.3 ns/op
+  trial 1: vms_inout=  81575.7 ns/op   lnm_hit_s=  945.4 ns/op   ratio=86.3x
+  trial 2: vms_inout=  76212.9 ns/op   lnm_hit_s=  971.0 ns/op   ratio=78.5x
+  trial 3: vms_inout=  79718.1 ns/op   lnm_hit_s=  901.5 ns/op   ratio=88.4x
+  trial 4: vms_inout=  80425.1 ns/op   lnm_hit_s=  919.3 ns/op   ratio=87.5x
+  trial 5: vms_inout=  77154.4 ns/op   lnm_hit_s=  941.8 ns/op   ratio=81.9x
 
-  exec ioctl (out only) / in-process 4-table translate = 73.3x
-  exec ioctl (in+out)   / in-process 4-table translate = 96.4x
+  vms_inout (CHKPRIV round trip)                     : mean 79.0 us  [76.2, 81.6] us   (n=5)
+  lnm_hit_s (in-process 4-table translate)           : mean 0.94 us                    (n=5)
+  exec ioctl (in+out) / in-process 4-table translate : mean 84.5x    [78.5x, 88.4x]     (n=5)
+```
+
+Context figures below are single-sample (they are not the headline the ruling is quoted
+against — only `vms_inout` and `lnm_hit_s` above are):
+
+```
+  [clock]     clock_gettime pair (noise floor)                       1101.3 ns/op
+  [getppid]   syscall(SYS_getppid) - syscall floor                  40190.5 ns/op
+  [enotty]    ioctl(non-vms fd) -> ENOTTY - dispatch floor          39121.3 ns/op
+  [vms_out]   ioctl(/dev/vms, GETMODE) - exec round trip, out only  59775.7 ns/op
+  [lnm_hit_p] lnm_translate FILE_DEV, hit LNM$PROCESS (1 tbl)         387.4 ns/op
+  [lnm_miss]  lnm_translate FILE_DEV, miss all 4 tables               930.4 ns/op
 ```
 
 `CHKPRIV` is the figure the ruling uses. It is the closest shape `vms.ko` currently offers to
 what a logical-name translate ioctl would do — PCB lookup, `copy_from_user`, `spin_lock`,
-consult executive state, `copy_to_user` — and it is still a **lower bound**, because a real
-translate ioctl copies a longer name in, walks a hash chain, and copies a longer value out.
-Nothing here is rounded up by guess.
+consult executive state, `copy_to_user` — and it is still a **lower bound** (see §4a): a real
+translate ioctl copies a longer name in, walks a hash chain, and copies a longer value out, so
+its true cost is unmeasured and **higher** than the 79.0 µs mean reported here. Nothing here is
+rounded up by guess; the direction of the remaining error is always toward strengthening the
+rejection of option A.
+
+Reproduce: `podman build -f tests/qemu/Dockerfile -t ovmx-ktest .` then
+`podman run --rm ovmx-ktest`, and read the `bench_lnm_cost` section of the serial log.
 
 ### 1.2 Translations per file open — K
 
@@ -120,49 +148,59 @@ not assume misses are cheap.
 
 ### 1.3 Option A, priced
 
-Multiplying the two measurements, on the runtime target as it exists today:
+Multiplying the two measurements — using the n=5 trial **range**, not a single point estimate,
+on the runtime target as it exists today:
 
-| | per translation | K = 1.83 (mean open) | K = 3 (system-image open) |
+| | per translation (n=5) | K = 1.83 (mean open) | K = 3 (system-image open) |
 |---|---|---|---|
-| Option A (ioctl) | 90.1 µs | **165 µs / open** | **270 µs / open** |
-| in-process (today) | 0.93 µs | 1.71 µs / open | 2.80 µs / open |
+| Option A (ioctl, measured floor — §4a) | 76.2–81.6 µs (mean 79.0 µs) | **139–149 µs / open** | **229–245 µs / open** |
+| in-process (today, measured) | 0.94 µs (mean) | ~1.72 µs / open | ~2.82 µs / open |
 
-For scale: the guest's own minimal syscall floor is 45 µs. Option A would make logical-name
-translation cost **~4× an entire file open's syscall budget**, and would make it the dominant
-term in every `$OPEN`, every image activation, and every DCL command that touches a file.
+For scale: the guest's own minimal syscall floor (`[getppid]`, single sample, §1.1) is in the
+~39–45 µs class across runs of this suite. Option A would cost roughly **3–6× an entire file
+open's syscall budget** depending on how many translations reach the executive (K = 1.83 to
+K = 3), and would make it the dominant term in every `$OPEN`, every image activation, and every
+DCL command that touches a file. Recall these are floor figures (§4a): the real translate ioctl
+option A would need is not yet built, and its measured proxy is a lower bound, not a ceiling.
 
 ### 1.4 Honest caveat: QEMU TCG inflates syscalls, and by how much
 
 There is no `/dev/kvm` on the measuring machine and CI runs the QEMU suite inside a container,
 so the guest is emulated with TCG. TCG does **not** inflate everything uniformly, and pretending
-the 96× is a hardware number would be dishonest. The identical binary was therefore run natively
-on the host (`--calibrate`, which explicitly skips the `/dev/vms` cases and labels its output
-CALIBRATION):
+the mean 84.5× is a hardware number would be dishonest. The identical binary was therefore run
+natively on the host (`--calibrate`, which explicitly skips the `/dev/vms` cases and labels its
+output CALIBRATION). `getppid`/`enotty` below are single-sample context; `lnm_hit_s` is the same
+n=5 trial protocol as §1.1, native this time:
 
 ```
-  [getppid]   syscall(SYS_getppid) - syscall floor                    63.4 ns/op
-  [enotty]    ioctl(non-vms fd) -> ENOTTY - dispatch floor            67.7 ns/op
-  [lnm_hit_p] lnm_translate FILE_DEV, hit LNM$PROCESS (1 tbl)         32.7 ns/op
-  [lnm_hit_s] lnm_translate FILE_DEV, hit LNM$SYSTEM (4 tbl)          57.9 ns/op
+  [getppid]   syscall(SYS_getppid) - syscall floor                    64.0 ns/op
+  [enotty]    ioctl(non-vms fd) -> ENOTTY - dispatch floor            70.2 ns/op
+  [lnm_hit_p] lnm_translate FILE_DEV, hit LNM$PROCESS (1 tbl)         29.4 ns/op
+  [lnm_hit_s] lnm_translate FILE_DEV, hit LNM$SYSTEM (4 tbl), native  61.2 ns/op  [59.9, 63.0] (n=5)
 ```
 
 | | QEMU TCG | native host | TCG inflation |
 |---|---|---|---|
-| syscall floor (`getppid`) | 45016.7 ns | 63.4 ns | **710×** |
-| ioctl dispatch (`ENOTTY`) | 46468.7 ns | 67.7 ns | **686×** |
-| in-process 4-table translate | 934.4 ns | 57.9 ns | **16.1×** |
+| syscall floor (`getppid`, single sample) | 40190.5 ns | 64.0 ns | **628×** |
+| ioctl dispatch (`ENOTTY`, single sample) | 39121.3 ns | 70.2 ns | **557×** |
+| in-process 4-table translate (n=5 mean, both sides) | 935.8 ns | 61.2 ns | **15.3×** |
 
-So TCG inflates **kernel entry ~43× more than it inflates userspace compute**. Correcting the
-measured 96.4× by that differential projects an executive ioctl at roughly **2.3× the
-in-process translate** on an accelerated (KVM or bare-metal) runtime — i.e. about **+73 ns per
-translation, +134 ns per mean open**. That is a tolerable 5–15 % tax, not a catastrophe.
+So TCG inflates **kernel entry ~39× more than it inflates userspace compute** (average of
+628×/557× ÷ 15.3× ≈ 38.8). Correcting the measured mean 84.5× by that differential projects an
+executive ioctl at roughly **2.2× the in-process translate** on an accelerated (KVM or
+bare-metal) runtime — i.e. about **+72 ns per translation** (using the native 61.2 ns baseline,
+the relevant one for an accelerated runtime), **+132 ns per mean open** (K = 1.83). That is a
+tolerable **~15 % tax**, not a catastrophe. This projection is directional, not a headline figure
+this ruling is quoted against — it is not held to the same n≥5 QEMU-target precision bar as
+§1.1's `vms_inout`/ratio, which is why it is kept in a caveat section rather than the summary
+table's ruled-option cell (§5, and see the labeling fix there).
 
 **Both numbers matter, and they point the same way:**
 
 - On an accelerated runtime, option A is affordable but is a permanent tax on the hottest path
   in the system, bought for **zero correctness benefit** over the ruled option.
 - On the runtime OVMX actually has today — unaccelerated QEMU, which is what CI runs and what
-  developers boot — option A costs 165–270 µs per open and is disqualifying.
+  developers boot — option A costs 139–245 µs per open (§1.3) and is disqualifying.
 
 A design that is only tolerable on hardware nobody in the project currently runs is not a
 design; it is a bet. The ruled option is fast on both.
@@ -174,9 +212,11 @@ design; it is a bet. The ruled option is fast on both.
 ### 2.1 Option A — kernel-owned, ioctl per translation
 
 Rejected. Simplest and most consistent with the rest of the executive, and correctness is not
-in question — but §1.3 prices it at 165–270 µs per file open on the runtime target. Its only
-advantage over the ruled option is that it needs no `->mmap` in `vms.ko`, which is perhaps
-80 lines of kernel code.
+in question — but §1.3 prices it at 139–245 µs per file open on the runtime target (n=5 trial
+range; mean 79.0 µs/translation), and that figure is itself a measured **lower bound** (§4a) —
+the real translate ioctl this option needs is not yet built, so its true cost can only be
+higher. Its only advantage over the ruled option is that it needs no `->mmap` in `vms.ko`, which
+is perhaps 80 lines of kernel code.
 
 ### 2.2 Option B — kernel-owned + per-process cache with invalidation
 
@@ -228,8 +268,18 @@ That single correction resolves every cost the item attributed to option C:
 | no protection — any process can corrupt it | **gone.** The MMU enforces read-only. This is the direct analogue of VMS protecting system space by processor access mode, not a workaround for the absence of one. |
 | offsets, not pointers | **survives** — see §3.2. But this cost is common to every option, including A. |
 
-And it keeps what made C attractive: **translation performs no syscall**, so the hot path costs
-what it costs today (0.93 µs in QEMU, 58 ns native) instead of 90.1 µs.
+And it keeps what made C attractive: **translation performs no syscall**. The C-corrected read
+path — a seqlock-guarded arena read via `mmap()` — does not exist yet (that is `vms-d37`'s job,
+§3), so its cost is **projected, not measured**: the projection is that a lock-free read of an
+offset-addressed arena is the same shape of work as today's in-process hash lookup (pointer/offset
+chasing over a small fixed structure, no syscall), so it should cost in the same class as the
+0.94 µs (QEMU, n=5 mean) / 61.2 ns (native, n=5 mean) measured today for `lnm_hit_s` — instead of
+the 79.0 µs (QEMU, n=5 mean) measured for option A's ioctl round trip. **This is a projection
+about an unbuilt read path, not a measurement of it; do not read "0.94 µs class" in this
+paragraph, or the C-corrected cell of the §5 summary table, as something that was measured.**
+§3.5 states the follow-up: `vms-d37` must re-run `bench_lnm_cost` after building the arena and
+confirm the projection against a real measurement, precisely because a projection is not
+evidence until it is checked.
 
 It also satisfies the standing constraints without a special case:
 
@@ -271,8 +321,9 @@ logicals would be **32 MB** of arena.
 
 This is not an argument against C. It is an argument that **every** option needs a compact
 record: option A would have to `copy_to_user` 33 KB per translation, which is far worse than
-the 90 µs already measured. The compact, offset-addressed record is therefore **common cost**,
-not a differentiator, and it should be built first because A, B and C all need it.
+the ~79 µs already measured for a 32-byte round trip (§1.1). The compact, offset-addressed
+record is therefore **common cost**, not a differentiator, and it should be built first because
+A, B and C all need it.
 
 Requirements for the shared record:
 
@@ -339,17 +390,33 @@ plus a negative control in the same suite: with `/dev/vms` absent, `DEFINE/SYSTE
 with `SS$_NOSUCHDEV` and does not report success.
 `tests/integration/test_runtime_target.sh` is the gate that keeps a fallback from creeping back.
 
-Re-run `tests/qemu/bench_lnm_cost` and `bench_lnm_peropen` after the change. The expected
-result is that per-translation cost is **unchanged** from the in-process baseline in §1.1
-(0.93 µs class, not 90 µs class). If it lands in the 90 µs class, the read path is going
-through an ioctl and the ruling has been implemented as option A by accident.
+Re-run `tests/qemu/bench_lnm_cost` and `bench_lnm_peropen` after the change, with n=5 trials as
+§1.1 does. The expected result is that per-translation cost is **unchanged in class** from the
+in-process baseline in §1.1 (0.94 µs class, not 79–90 µs class) — this is the point where §2.4's
+projection gets checked against an actual measurement of the built arena read. If it lands in
+the tens-of-µs class, the read path is going through an ioctl and the ruling has been
+implemented as option A by accident.
 
 ---
 
 ## 4. Purity — values that need operator sign-off before they are written
 
-Per the standing purity constraint, these are **not** self-certified here. `vms-d37` must pin
-each to public OpenVMS documentation or the reference lab, and raise them for sign-off:
+### 4a. Option A's residual: the measured 79.0 µs is a floor, not a ceiling
+
+Not a sign-off item (nothing here is invented or self-certified) — a completeness caveat that
+applies everywhere §1.1–§1.3 cite Option A's cost. `bench_lnm_cost`'s `CHKPRIV` ioctl was chosen
+as the closest existing shape to a logical-name translate ioctl (PCB lookup, `copy_from_user`,
+`spin_lock`, compare, `copy_to_user` — verified against `src/kernel/vms_access.c:175-196`), and
+it is genuinely representative of that shape. But a real translate ioctl copies a **longer** name
+in, walks a **hash chain** the way `lnm_translate()` does today, and copies a **longer** value
+out (up to `LNM_MAX_VALUE`, not the fixed 32 B `CHKPRIV` moves). None of that extra work is
+included in the 79.0 µs mean. So **every Option-A figure in this record — 79.0 µs, the 78.5×–
+88.4× ratio, the 139–245 µs/open range — is a measured lower bound.** The true cost of Option A,
+if it were built, is higher. This strengthens the rejection of Option A; it does not weaken it.
+
+Per the standing purity constraint, the following ARE self-certification risks and are **not**
+self-certified here. `vms-d37` must pin each to public OpenVMS documentation or the reference
+lab, and raise them for sign-off:
 
 1. **Privilege required to define in LNM$SYSTEM and LNM$GROUP.** Believed `SYSNAM` and
    `GRPNAM` respectively; pin to the documented privilege list before the executive enforces it.
@@ -369,10 +436,17 @@ each to public OpenVMS documentation or the reference lab, and raise them for si
 
 ## 5. Summary table
 
+**Reading this table: MEASURED and PROJECTED are not the same claim, and are never merged into
+one label again after the previous draft blurred them in this exact table.** MEASURED means a
+number `bench_lnm_cost` produced against real `vms.ko`/`/dev/vms` (n=5 trials, §1.1). PROJECTED
+means an estimate for a read path that is **not built yet** — it borrows a measured number from
+a different, structurally-similar code path as its estimate, per §2.4's reasoning, and must be
+checked against a real measurement once `vms-d37` builds it (§3.5).
+
 | | A: ioctl/translate | B: cache + invalidation | C: file `MAP_SHARED` | **C-corrected: `mmap(/dev/vms)`** |
 |---|---|---|---|---|
-| cost per translation (QEMU, measured) | 90.1 µs | 0.93 µs steady, 90.1 µs after any DEFINE | 0.93 µs class | **0.93 µs class** |
-| cost per mean open (K=1.83) | 165 µs | ~1.7 µs steady | ~1.7 µs | **~1.7 µs** |
+| cost per translation | **79.0 µs mean, range 76.2–81.6 µs (n=5) — MEASURED.** CHKPRIV proxy; a genuine **lower bound**, not a ceiling (§4a) | 0.94 µs steady-state — MEASURED (reuses today's in-process lookup unmodified); **~79 µs — PROJECTED** for the refill after any DEFINE (assumed to cost what A's ioctl costs, since a refill is also an executive round trip) | 0.94 µs class — **PROJECTED.** Reuses today's in-process lookup as an estimate; C as literally proposed is unimplemented | **0.94 µs class — PROJECTED, NOT MEASURED.** The seqlock/arena read this option needs does not exist yet (§2.4). `vms-d37` must re-run this benchmark against the built read path (§3.5) before treating this as confirmed |
+| cost per mean open (K=1.83) | **139–149 µs — MEASURED** (range, n=5; floor — §4a) | ~1.72 µs steady — MEASURED; ~139–149 µs — PROJECTED after a DEFINE | ~1.72 µs — PROJECTED | **~1.72 µs — PROJECTED, NOT MEASURED** |
 | works with no `/dev/vms` | no (correct) | no (correct) | **yes (wrong)** | **no (correct)** |
 | silent-wrong-answer failure mode | none | **missed invalidation** | none | none |
 | write protection | executive | executive | **none** | **MMU, read-only** |
@@ -380,4 +454,8 @@ each to public OpenVMS documentation or the reference lab, and raise them for si
 | needs compact shared record | yes | yes | yes | yes (common cost) |
 | new kernel surface | ioctls | ioctls + notify | none | ioctls + `->mmap` |
 
-**Ruled: C-corrected.** LNM$PROCESS stays per-process.
+**Ruled: C-corrected.** LNM$PROCESS stays per-process. The ruling does not depend on the
+PROJECTED cells turning out exactly right — it depends on C-corrected having **no syscall on the
+hot path at all** (§2.4), which is true by construction regardless of the projected number's
+precision. The projected cells exist so `vms-d37`'s post-build re-measurement (§3.5) has
+something concrete to confirm or contradict.

@@ -257,7 +257,7 @@ jobs:
           echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
             || { echo "FAIL: vmsfs.ko (independent of vms.ko) did not pass with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency"; exit 1; }
 
-          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: /dev/vms unopenable, exact 3-passed/7-failed split), with vmsfs's independent facility still passing"
+          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: saw 'cannot open /dev/vms', exact 4-passed/8-failed split), with vmsfs's independent facility still passing"
 
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests

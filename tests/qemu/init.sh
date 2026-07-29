@@ -91,6 +91,11 @@ if [ -x /tests/bench_lnm_cost ]; then
     fi
 fi
 
+# Measurement program for the vms-ln0 K multiplier (translations per open).
+# Also a real correctness suite: it asserts each representative open
+# resolves through its expected table(s) with the expected call counts and
+# a VMS success status, so a routing regression (e.g. one that silently
+# changed K) fails this suite instead of shipping green.
 if [ -x /tests/bench_lnm_peropen ]; then
     echo ""
     echo "--- bench_lnm_peropen (vms-ln0 measurement) ---"

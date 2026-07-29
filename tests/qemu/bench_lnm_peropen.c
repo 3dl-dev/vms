@@ -28,6 +28,7 @@
 
 #include "vms/logical.h"
 #include "ssdef.h"
+#include "stsdef.h"
 #include "vmsfs/filespec.h"
 
 /* ------------------------------------------------ lnm_translate interposer */
@@ -89,8 +90,28 @@ extern int vmsfs_to_linux_path(const char *vms_spec, char *linux_path,
 static int total_calls;
 static int total_exec;
 static int cases;
+static int g_failed;   /* set nonzero the moment any expectation is violated */
 
-static void measure(const char *label, const char *spec)
+/*
+ * measure() now ASSERTS, it does not just report. Each of the six
+ * representative opens has a known-good (status, calls, calls_needing_exec)
+ * triple, captured against the real shipping vmsfs_to_linux_path() +
+ * lnm_translate() pipeline (see the `Reproduce:` note in
+ * docs/design-logical-name-placement.md and the commit that added these
+ * checks). A regression that silently changes which table a translation
+ * resolves through -- exactly the class of defect the vms-ln0 veracity
+ * review injected to move K from 1.83 to 0.83 -- now fails this suite
+ * instead of shipping green:
+ *   - `status` must be a VMS SUCCESS code ($VMS_STATUS_SUCCESS): every one
+ *     of these six specs is a valid VMS-style path and must resolve.
+ *   - `g_calls` (total lnm_translate() invocations for this open) and
+ *     `g_calls_needing_exec` (how many of those would leave the process
+ *     under option A) must match the pinned expected counts exactly -- this
+ *     is what "resolves to its expected path" means: not just that SOME
+ *     table answered, but that the SAME tables answer as today's real run.
+ */
+static void measure(const char *label, const char *spec,
+                    int expected_calls, int expected_exec)
 {
     char out[1024];
 
@@ -106,6 +127,21 @@ static void measure(const char *label, const char *spec)
            g_calls, g_calls_needing_exec);
     for (int i = 0; i < g_trace_n; i++)
         printf("        %s\n", g_trace[i]);
+
+    if (!$VMS_STATUS_SUCCESS(st)) {
+        printf("      FAIL: expected a VMS success status, got %d\n", st);
+        g_failed = 1;
+    }
+    if (g_calls != expected_calls) {
+        printf("      FAIL: expected %d lnm_translate call(s), got %d\n",
+               expected_calls, g_calls);
+        g_failed = 1;
+    }
+    if (g_calls_needing_exec != expected_exec) {
+        printf("      FAIL: expected %d call(s) reaching the executive, got %d\n",
+               expected_exec, g_calls_needing_exec);
+        g_failed = 1;
+    }
     printf("\n");
 
     total_calls += g_calls;
@@ -129,13 +165,15 @@ int main(void)
     lnm_create(g_mgr, LNM_PROCESS_TABLE, "SYS$LOGIN", "DKA0:[USERS.SYSTEM]",
                0, LNM_MODE_USER);
 
-    /* Representative opens, in rough order of how often DCL/RMS does them. */
-    measure("system image (SYS$SYSTEM)", "SYS$SYSTEM:LOGINOUT.EXE");
-    measure("shareable (SYS$LIBRARY)",   "SYS$LIBRARY:DECC$SHR.EXE");
-    measure("login-relative file",       "SYS$LOGIN:LOGIN.COM");
-    measure("explicit device",           "DKA0:[USERS.SYSTEM]FOO.DAT");
-    measure("help library (SYS$HELP)",   "SYS$HELP:HELPLIB.HLB");
-    measure("device-less, dir only",     "[USERS.SYSTEM]BAR.TXT");
+    /* Representative opens, in rough order of how often DCL/RMS does them.
+     * expected (calls, calls_needing_exec) pinned against the real pipeline
+     * -- see the assertion note on measure() above. */
+    measure("system image (SYS$SYSTEM)", "SYS$SYSTEM:LOGINOUT.EXE",     3, 3);
+    measure("shareable (SYS$LIBRARY)",   "SYS$LIBRARY:DECC$SHR.EXE",    3, 3);
+    measure("login-relative file",       "SYS$LOGIN:LOGIN.COM",         2, 1);
+    measure("explicit device",           "DKA0:[USERS.SYSTEM]FOO.DAT", 1, 1);
+    measure("help library (SYS$HELP)",   "SYS$HELP:HELPLIB.HLB",       3, 3);
+    measure("device-less, dir only",     "[USERS.SYSTEM]BAR.TXT",      0, 0);
 
     printf("TOTALS over %d representative opens:\n", cases);
     printf("  lnm_translate calls           : %d  (mean %.2f per open)\n",
@@ -144,6 +182,21 @@ int main(void)
            total_exec, (double)total_exec / (double)cases);
     printf("\nK is the multiplier to apply to the per-translation ioctl cost\n");
     printf("measured by bench_lnm_cost.\n");
-    printf("\nPASS: bench_lnm_peropen\n");
+
+    if (total_calls != 12 || total_exec != 11) {
+        printf("\nFAIL: expected totals (12 calls, 11 reaching the executive, "
+               "K=1.83), got (%d, %d, K=%.2f)\n",
+               total_calls, total_exec, (double)total_exec / (double)cases);
+        g_failed = 1;
+    }
+
+    if (g_failed) {
+        printf("\nFAIL: bench_lnm_peropen (one or more opens did not resolve "
+               "to its expected table/count -- see FAIL lines above)\n");
+        return 1;
+    }
+
+    printf("\nPASS: bench_lnm_peropen (6/6 opens resolved to expected table "
+           "and count; 12 translations, 11 reaching the executive, K=1.83)\n");
     return 0;
 }

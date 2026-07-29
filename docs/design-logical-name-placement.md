@@ -558,18 +558,29 @@ self-certified here. `vms-d37` must pin each to public OpenVMS documentation or 
 lab, and raise them for sign-off:
 
 1. **Privilege required to define in LNM$SYSTEM and LNM$GROUP.** Believed `SYSNAM` and
-   `GRPNAM` respectively; pin to the documented privilege list before the executive enforces it.
-2. **Status returned when the logical name table / quota is exhausted.** `SS$_EXLNMQUOTA` is
-   the expected name but **does not exist in `src/libvms/include/ssdef.h` today**, so it would
-   have to be added — and `ssdef.h:86` already carries an in-file warning that multi-source
-   drift on these values is live (`SS$_NOSUCHDEV` 2312 vs 2680). Pin the numeric value; do not
-   invent one.
+   `GRPNAM` respectively; **still open for operator sign-off** — pin to the documented privilege
+   list before the executive enforces it. Not settled by this round.
+2. **Status returned when the logical name table / quota is exhausted — PINNED.**
+   `SS$_EXLNMQUOTA = 8780`. Provenance: pinned live against the reference lab (`~/vax/cluster`,
+   OpenVMS VAX V7.3, node vax1) in the same oracle session that resolved item 4 below, by the
+   `vms-ln0` round-3 veracity adversary; tracked with the sibling `SS$_NOSUCHDEV` finding in
+   `vms-556`. It genuinely did not exist in `src/libvms/include/ssdef.h` before this pin — it
+   must still be **added** there (that edit is `vms-556`'s scope, not this design record's; this
+   record only removes the "needs inventing" flag).
 3. **SYSGEN parameter names governing table sizing** (`LNMSHASHTBL` / `LNMPHASHTBL` class).
-   If OVMX exposes them, the names and semantics come from the documented parameter set.
-4. **`SS$_NOSUCHDEV` = 2680** as used on the no-executive path — inherited from the existing
-   `sys_lock.c` behaviour, and already flagged in-file as contested. Not introduced by this
-   ruling, but `vms-d37` should not deepen the dependency without sign-off (tracked by
-   `vms-c90`).
+   **Still open for operator sign-off** in this record — if OVMX exposes them, the names and
+   semantics come from the documented parameter set. Not settled by this round.
+4. **`SS$_NOSUCHDEV` — PINNED to 2312, NOT 2680.** Provenance: the `vms-ln0` round-3 veracity
+   adversary ran `F$MESSAGE` against both candidate values on the live reference lab
+   (`~/vax/cluster`, OpenVMS VAX V7.3): `F$MESSAGE(2312)` = `%SYSTEM-W-NOSUCHDEV, no such device
+   available`; `F$MESSAGE(2680)` = `%SYSTEM-W-RMTPATH, description of path between two remote
+   nodes` — a **different message entirely**, not a version drift. `src/libvms/include/ssdef.h`
+   currently ships 2680 and is therefore wrong for this status, in three files per the same
+   finding. Correcting `ssdef.h` and its consumers is `vms-556`'s scope (tracked there, with the
+   coupled QEMU assertion in `tests/qemu/test_syssvc_lock.c` called out so it moves in lockstep);
+   this record's job is only to stop citing 2680 as the no-executive-path status. **Every
+   `SS$_NOSUCHDEV` reference in this design record uses the name, never the number, for exactly
+   this reason — no numeric literal here needs editing.**
 
 ---
 

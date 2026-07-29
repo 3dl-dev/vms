@@ -391,13 +391,14 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.send_seq = scs_seq_advance(&ps->vc.seq);
     mp.sysap_send_msg = ps->sysap_send++;
     mp.sysap_ack_msg = ps->sysap_recv;
-    mp.votes = SCS_MEMBER_VOTES_NONVOTING;
+    mp.votes = SCS_MEMBER_VOTES_NONVOTING; /* VOTES=1 tested (vms-d94), did NOT change NEW->MEMBER */
     if (scs_member_build_params(&mp, frame) == 0 &&
         send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
         sent++;
     }
 
-    /* op 0x02 config/topology. */
+    /* op 0x02 config/topology. (vms-d94: holding 0x02 to a later step was tested
+     * and did NOT change NEW->MEMBER, so the initial burst sends all three.) */
     mp.recv_ack = ps->vc.seq.recv_seq;
     mp.send_seq = scs_seq_advance(&ps->vc.seq);
     mp.sysap_send_msg = ps->sysap_send++;

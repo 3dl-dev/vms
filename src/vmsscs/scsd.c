@@ -218,6 +218,10 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
  * would collide the two SCS connections. */
 #define OVMX_LOCAL_CONID  (SCS_CONNECT_OVMX_CONID_BASE | 0x0001u)
 #define OVMX_JOINER_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0002u)
+/* vms-760: OVMX's MSCP$DISK client connection handle (VMS$DISK_CL_DRVR ->
+ * MSCP$DISK). Distinct from 0x0001 (local), 0x0002 (joiner VC), 0x0007 (dir),
+ * 0x0008 (own dir). */
+#define OVMX_MSCP_CONID   (SCS_CONNECT_OVMX_CONID_BASE | 0x000Au)
 
 /* Absolute frame offsets used by the responder (spec byte-offset convention:
  * 0 = first byte of Ethernet dst). */
@@ -280,6 +284,17 @@ struct peer_state {
     int      own_dir_lookup_sent;  /* we sent our VMS$VAXcluster lookup-request on it */
     uint16_t own_dir_req_seq;      /* send_seq of our dir CONNECT-REQUEST (retransmits REUSE it) */
     struct timespec last_own_dir;  /* CLOCK_MONOTONIC of our last own-dir send (retx rate-limit) */
+    /* --- vms-760: OVMX's OWN MSCP$DISK client connection to the member
+     * (VMS$DISK_CL_DRVR -> MSCP$DISK, clean-ref formation-clean-2node.pcap SCA
+     * idx35 connect -> idx39 member accept). This is the connection OVMX has
+     * never presented in any capture; the member reciprocates the add-member
+     * config on the joiner VC only once the joiner presents this full
+     * connection-set (NEW->MEMBER, spec sec 4L(7)). --- */
+    int      mscp_connect_sent;    /* we sent our MSCP$DISK CONNECT-REQUEST */
+    int      mscp_connected;       /* the member accepted it (Con.ID pair bound) */
+    uint32_t mscp_remote_conid;    /* the member's MSCP handle on OUR connection (from its accept) */
+    uint16_t mscp_req_seq;         /* send_seq of our MSCP CONNECT-REQUEST (retransmits REUSE it) */
+    struct timespec last_mscp_req; /* CLOCK_MONOTONIC of our last MSCP CONNECT-REQUEST (retx) */
     /* --- vms-9f3: NISCA channel packet-size verification (padded directed
      * HELLO, spec sec 4k). An ESTABLISHED VAX1 zero-pads a directed HELLO up to
      * NISCS_MAX_PKTSZ and retransmits it (1500->1069->853->745, ~6s) until OVMX
@@ -455,6 +470,45 @@ static int send_joiner_connect_request(int sock, int ifindex, struct peer_state 
         send_frame_to(sock, ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
         ps->joiner_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
+        scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * send_mscp_connect_request - vms-760: send OVMX's MSCP$DISK client
+ * CONNECT-REQUEST (VMS$DISK_CL_DRVR -> MSCP$DISK) to the member, remote=0,
+ * offering OVMX_MSCP_CONID. The clean joiner opens this disk-client connection
+ * BEFORE its VMS$VAXcluster VC (clean-ref MSCP idx35 precedes VC idx47); the
+ * live member requires the joiner to present it before it reciprocates the
+ * add-member config (NEW->MEMBER, spec sec 4L(7)). Rides the SAME shared
+ * per-channel SCS send_seq as every sequenced send: first send allocates a
+ * send_seq; retransmits REUSE it (spec sec 4L(4)). Returns 1 if a frame sent.
+ */
+static int send_mscp_connect_request(int sock, int ifindex, struct peer_state *ps,
+                                     const uint8_t our_hw_mac[6],
+                                     const uint8_t our_src_logical[6])
+{
+    struct scs_connect_params cp;
+    memset(&cp, 0, sizeof(cp));
+    memcpy(cp.dst_mac, ps->eth_mac, 6);
+    memcpy(cp.src_mac, our_hw_mac, 6);
+    memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
+    memcpy(cp.peer_logical, ps->logical, 6);
+    cp.local_conid = OVMX_MSCP_CONID;
+    cp.remote_conid = 0; /* CONNECT-REQUEST: the member's Con.ID is not yet known */
+    cp.recv_ack = ps->vc.seq.recv_seq; /* always ack the member's latest send_seq */
+    if (ps->mscp_req_seq == 0) {
+        ps->mscp_req_seq = scs_seq_advance(&ps->vc.seq); /* allocate once */
+    }
+    cp.send_seq = ps->mscp_req_seq; /* retransmits reuse the same seq */
+    cp.incarnation = ps->incarnation;
+    uint8_t cframe[SCS_CONNECT_FRAME_LEN];
+    if (scs_connect_build_mscp_request(&cp, cframe) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
+        ps->mscp_connect_sent = 1;
+        clock_gettime(CLOCK_MONOTONIC, &ps->last_mscp_req);
         scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
         return 1;
     }
@@ -1284,20 +1338,23 @@ int main(int argc, char **argv)
                                ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
                                ps->vc.seq.send_seq, ps->vc.seq.recv_seq);
                         fflush(stdout);
-                        /* vms-760: PROMPTLY open OUR OWN SCS$DIRECTORY connection
-                         * to the member (the active-joiner idx25). A real joiner
-                         * opens its own directory + queries the member; the member
-                         * appears to require this before it reciprocates the
-                         * add-member config (the NEW->MEMBER gap). */
-                        if (!ps->own_dir_sent &&
-                            send_own_dir_connect_request(sock, (int)ifindex, ps,
-                                                         our_hw_mac, our_src_logical)) {
-                            log_ts(stdout);
-                            printf(" SCSD-I-OWNDIRREQ, opened OUR SCS$DIRECTORY connect"
-                                   " local=0x%08X seq=%u\n",
-                                   (unsigned)SCS_DIR_OVMX_JOINER_CONID, ps->own_dir_req_seq);
-                            fflush(stdout);
-                        }
+                        /* vms-760: do NOT open OUR OWN SCS$DIRECTORY connection
+                         * here. Byte-verified against d94-760b.pcap: OVMX
+                         * preemptively opening its own directory connect
+                         * SUPPRESSES the member's own directory probe of OVMX,
+                         * which leaves the VMS$VAXcluster connect permanently
+                         * loc=0 (member never supplies its VC handle) -- OVMX
+                         * retransmits the connect forever and never reaches even
+                         * NEW. This is an OVMX drive bug, NOT a protocol
+                         * incompatibility (the clean member opens its OWN dir
+                         * probe regardless, formation-clean-2node SCA idx76, and
+                         * still reciprocates). Revert to the passive dir-RESPONDER
+                         * path (branch b2 below) that reaches NEW cleanly, and add
+                         * the joiner's missing MSCP$DISK client connection (fired
+                         * in the DIRCONN branch, before the VC connect) as the
+                         * NEW->MEMBER lever. The send_own_dir_* builders remain in
+                         * the tree for the grounded dir-client contingency (spec
+                         * sec 4L(7)) but are no longer driven from here. */
                     }
                 }
             }
@@ -1321,6 +1378,28 @@ int main(int argc, char **argv)
                               ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
             uint32_t lconid = (uint32_t)buf[68] | ((uint32_t)buf[69] << 8) |
                               ((uint32_t)buf[70] << 16) | ((uint32_t)buf[71] << 24);
+            /* vms-760: the member ACCEPTS OUR MSCP$DISK client connect. Same
+             * Con.ID-signature acceptance as the VMS$VAXcluster case (opcode
+             * agnostic per spec sec 4L(3): the member's accept is msgtype 0x4b,
+             * NOT 0x5b; key on the handle pair, not the opcode). remote == our
+             * MSCP handle, local = the member's freshly-supplied MSCP handle
+             * (clean-ref SCA idx39, e.g. 0xE23A0009). Bind it; the existing 1-for-1
+             * 0x48 credit path already credited this sequenced frame. The bound
+             * MSCP$DISK connection is the joiner-connection-set element the member
+             * requires before it reciprocates the add-member config (NEW->MEMBER). */
+            if (rconid == OVMX_MSCP_CONID && lconid != 0) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps != NULL && !ps->mscp_connected) {
+                    ps->mscp_remote_conid = lconid;
+                    ps->mscp_connected = 1;
+                    log_ts(stdout);
+                    printf(" SCSD-I-MSCPBOUND, member accepted OUR MSCP$DISK"
+                           " connect: local=0x%08X remote=0x%08X\n",
+                           (unsigned)OVMX_MSCP_CONID, lconid);
+                    fflush(stdout);
+                }
+                continue;
+            }
             if (rconid == OVMX_JOINER_CONID && lconid != 0) {
                 struct peer_state *ps = peer_find_or_add(peers, src_mac);
                 if (ps != NULL && !ps->joiner_connected) {
@@ -1466,9 +1545,25 @@ int main(int argc, char **argv)
                                ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
                                ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5]);
                         fflush(stdout);
-                        /* vms-d94: the post-START directory phase has begun --
-                         * PROMPTLY open OUR VMS$VAXcluster connection to the
-                         * member (clean-ref idx52) before its CM times out and
+                        /* vms-760: do NOT fire the MSCP$DISK connect here. LIVE-
+                         * GROUNDED (d94-760mscp.pcap, 2026-07-29): a joiner MSCP
+                         * connect-request the member cannot yet process (because
+                         * OVMX never resolved MSCP$DISK as a directory CLIENT
+                         * first) is not accepted AND, riding the shared per-channel
+                         * send_seq, it creates an in-order HOLE that freezes the
+                         * member's recv_ack (observed ack=2 forever) so it NEVER
+                         * accepts the VMS$VAXcluster connect at the next seq --
+                         * regressing OVMX below NEW to blank status. The clean
+                         * joiner (formation-clean-2node SCA idx20/31/35/47) opens
+                         * its OWN dir-CLIENT connection, LOOKS UP MSCP$DISK +
+                         * VMS$VAXcluster on the member (affirmative) and ONLY THEN
+                         * connects each SYSAP, all on one shared monotonic seq.
+                         * The full dir-client resolution choreography is the next
+                         * deliverable (spec sec 4L(7)); the MSCP builder + accept
+                         * handler + peer_state stay in the tree for it. Until then
+                         * keep the clean NEW-reaching path: VC connect only. */
+                        /* vms-d94: PROMPTLY open OUR VMS$VAXcluster connection to
+                         * the member (clean-ref idx52) before its CM times out and
                          * re-issues START. */
                         if (ps->start_acked && !ps->joiner_connected &&
                             send_joiner_connect_request(sock, (int)ifindex, ps,

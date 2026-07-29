@@ -100,6 +100,21 @@ int scs_connect_build_request(const struct scs_connect_params *p,
 int scs_connect_build_response(const struct scs_connect_params *p,
                                uint8_t out[SCS_CONNECT_FRAME_LEN]);
 
+/*
+ * scs_connect_build_mscp_request - vms-760: Build the JOINER's MSCP$DISK
+ * client CONNECT-REQUEST (VMS$DISK_CL_DRVR -> MSCP$DISK), remote Con.ID = 0,
+ * local = p->local_conid. Same 110-byte SCA connect class as the
+ * VMS$VAXcluster request, but msgtype 0x5b and the MSCP$DISK/VMS$DISK_CL_DRVR
+ * SYSAP names + "V5.0" class descriptor. Byte template = the clean 1->2-node
+ * formation joiner MSCP$DISK connect (formation-clean-2node.pcap SCA idx35);
+ * identity/Con.ID/seq fields are substituted exactly as the VMS$VAXcluster
+ * request. The joiner presenting this connection is the GROUNDED predicate the
+ * live member requires before it reciprocates the add-member config on the
+ * joiner VC (NEW->MEMBER, spec sec 4L(7)). Returns 0, or -1 if p/out is NULL.
+ */
+int scs_connect_build_mscp_request(const struct scs_connect_params *p,
+                                   uint8_t out[SCS_CONNECT_FRAME_LEN]);
+
 /* Read-only view of a received SCS-envelope frame's grounded fields. */
 struct scs_connect_view {
     uint16_t total_sca_len;  /* LE u16 at abs 14 + 2 */

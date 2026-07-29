@@ -1399,13 +1399,46 @@ at `NEW`; `VOTES=0` is legitimate — an existing member ran `VOTES=0`); sending
 `0x02` **prematurely** in the initial burst (held it — still `NEW`); and
 **3-node reconfiguration coordination** (zero member↔member 190-byte VC traffic
 followed the joiner's connect, so the member is **not** blocked waiting on the
-peer member's ack). The leading remaining hypothesis: the member reciprocates only
-once the joiner presents the **full connection-set a real joiner establishes** —
-notably actively **opening its own `SCS$DIRECTORY` connection** (dir connect/lookup
-**requests**, of which only the *response* side is currently built) and possibly
-returning its live `VMS$VAXcluster` handle in the directory-lookup **response** —
-so the member can resolve the joiner and reciprocate. This is the next
-deliverable.
+peer member's ack).
+
+The missing predicate is now **GROUNDED** as the **full joiner-CLIENT connection
+choreography** (`vms-760`, live 2026-07-29). Byte-anchored against the clean
+1→2-node formation (`formation-clean-2node.pcap`, joiner `08:00:2b:94:ca:47`), the
+real joiner, on **one shared monotonic per-channel `send_seq`**, does — in order:
+(a) open its **own `SCS$DIRECTORY` CLIENT connection** (SCA idx20, `send_seq=1`,
+local handle `0x4e630007`); (b) **look up each SYSAP on the member as a client**
+before connecting to it — `MSCP$TAPE`/`MSCP$DISK` (idx31, `seq4`) and
+`VMS$VAXcluster` (idx41, `seq7`), each answered **affirmatively** by the member on
+that dir-client connection; (c) only **then** open the `MSCP$DISK` client
+connection `VMS$DISK_CL_DRVR→MSCP$DISK` (idx35, `seq6`, local `0x4e620008`); (d)
+open the `VMS$VAXcluster` VC (idx47, `seq10`, local `0x4e620009`); (e) send the
+add-member burst (idx54, `seq14`, `cat=0x01/op=0x14`). The member reciprocates its
+own `0x14/0x01` (idx59) within ~1 ms of receiving (e), **independently of the
+joiner's later `0x02`** (idx97, +3.5 s). The single element OVMX has **never**
+presented in any capture is the joiner acting as a **directory + disk CLIENT** —
+0 `VMS$DISK_CL_DRVR` frames vs the clean joiner's 41.
+
+**Shared-sequence deadlock — the mechanism, live-grounded (`d94-760mscp.pcap`).**
+The per-channel `send_seq` is **shared across all Con.ID pairs** (clean joiner
+draws `1,3,4,5,6,7,9,10,14…` across its dir/MSCP/VC connections from one counter);
+OVMX's single-counter model is therefore **correct**, not the bug. The consequence:
+a connect the member **cannot yet process** — e.g. OVMX firing the `MSCP$DISK`
+connect **without first resolving `MSCP$DISK` via a dir-client lookup** — occupies
+a slot in that shared sequence and creates an **in-order hole**. Observed live: the
+member froze its `recv_ack` at `2` (the last dir-response) and **never** accepted
+the `VMS$VAXcluster` connect at the next `seq`, regressing OVMX **below `NEW` to
+blank** status. This falsifies the "inject the `MSCP$DISK` connect standalone"
+shortcut and proves the SYSAP **resolution ordering** (lookup-before-connect) is
+load-bearing, not cosmetic. The byte-exact `MSCP$DISK` connect builder
+(`scs_connect_build_mscp_request`, template = clean idx35) is built and verified,
+but must not be driven until the dir-client resolution precedes it.
+
+**Next deliverable:** implement the full dir-client resolution choreography (a),
+(b), (c), (d) with correct shared-`send_seq` ordering. This subsumes the earlier
+own-`SCS$DIRECTORY`-connect attempt (`vms-760`/d94-760b), which regressed only
+because OVMX's own-dir drive **mis-sequenced** and suppressed the member's parallel
+dir probe (the clean member opens **its own** dir connect regardless, idx76) — an
+OVMX drive bug, **not** a protocol incompatibility.
 
 **Clean-room provenance:** every claim here is from (a) observing the reference
 lab wire (`formation-clean-2node.pcap` + live `SHOW CLUSTER`/`SDA` output on the
@@ -1488,15 +1521,18 @@ For visibility, every field NOT marked GROUNDED above:
   nonce` hash is not derivable from passive capture — observe/replay only for
   a known cluster; a general implementation needs the documented
   `CLUSTER_AUTHORIZE` hash (not on the wire).
-- **`NEW → MEMBER` reciprocal transaction** (§4L(7)): the choreography that
-  promotes a `NEW` node to `MEMBER` is **not yet grounded**. The joiner's
-  add-member burst is credited but not reciprocated by the live member; VOTES,
-  premature-`0x02`, and 3-node coordination are ruled out as the cause. Leading
-  hypothesis: the joiner must open its own `SCS$DIRECTORY` connection (dir
-  connect/lookup *requests*) and/or hand back its live `VMS$VAXcluster` handle in
-  the lookup response. The choreography/timing that IS grounded (active-joiner
-  drive, prompt-connect timeout, Con.ID-signature acceptance, `NEW` status,
-  display-only software-version) is in §4L.
+- **`NEW → MEMBER` reciprocal transaction** (§4L(7)): the missing predicate is
+  now **GROUNDED** (`vms-760`, live 2026-07-29) as the **full joiner-CLIENT
+  connection choreography** — the joiner opens its own `SCS$DIRECTORY` client
+  connection, **looks up each SYSAP** (`MSCP$DISK`, `VMS$VAXcluster`) on the member
+  before connecting to it, then opens the `MSCP$DISK` and `VMS$VAXcluster`
+  connections and sends the add-member burst, all on **one shared monotonic
+  `send_seq`**; the member reciprocates within ~1 ms. Live-proven mechanism: the
+  shared sequence deadlocks if any connect the member cannot yet process (e.g. an
+  `MSCP$DISK` connect with no prior dir-client lookup) occupies a slot — it froze
+  the member's `recv_ack` and dropped OVMX below `NEW`. VOTES, premature-`0x02`,
+  and 3-node coordination remain ruled out. **Implementation of the choreography is
+  the next deliverable** (the byte-exact `MSCP$DISK` connect builder is done).
 
 ---
 

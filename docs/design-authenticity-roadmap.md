@@ -51,9 +51,111 @@ completeness.
 | `SET TERMINAL` | self-labeled "(stub)" | `dcl_cmd_set.c:157` |
 | `SHOW AUDIT / VOLUME`, `SET AUDIT / VOLUME` | acknowledge-only | `dcl_cmd_show.c`, `dcl_cmd_set.c` |
 | RUN | native `fork/execl` of a Linux binary, not the VMS image activator | `dcl_cmd_process.c:650` |
+| `SHOW DEVICE` | **prints the host's Linux mount table** as VMS disks — volume labels are mount-point basenames incl. the kernel version (`5.15.167.4-MICR`, `BINFMT_MISC`). INV-4 leak, first-two-minutes command | §2.2, `vms-b9f` |
+| `SHOW USERS` | permanently reports `users = 1, processes = 1` — reads only its own PCB | §2.1, `vms-6b8` |
+| `SPAWN` | silent no-op — no subprocess, no `%DCL-S-SPAWNED` | §2.3, `vms-c17` |
+| Logical names | `LNM$SYSTEM` is **per-process**; `DEFINE/SYSTEM` succeeds and dies with the process | §2.1, `vms-d37` |
+| Mailboxes | `$CREMBX` is a Unix socketpair named in `LNM$PROCESS_TABLE` — cross-process rendezvous impossible | §2.1, `vms-6b8` |
+
+> **Read §2.1 before working any row above.** Several of these are symptoms of one root cause (no
+> shared system state), not independent surface bugs.
 
 **Not tells (leave alone):** AUTHORIZE has no DCL verb — that is *authentic* (real VMS is
 `RUN SYS$SYSTEM:AUTHORIZE`). Message *format* is already correct. Queue store schema is real.
+
+## 2.1 Root cause beneath the tells: **OVMX has no executive**
+
+> Added 2026-07-28, after the INV-1 work found that `DEFINE/SYSTEM` does not propagate between
+> processes. That finding was not a one-off bug — chasing it exposed a **single root cause under a
+> large fraction of the board**, which §2's per-surface table cannot see because it lists symptoms.
+
+On OpenVMS, the **executive** owns the system-wide data structures — logical name tables, the
+process list, the device table, event flag clusters, mailboxes — in system space, and every process
+sees the same ones. OVMX has no such thing. OVMX is **N independent Linux processes, each privately
+simulating an entire VMS system in its own address space.**
+
+The dividing line is mechanical and almost perfectly predictive:
+
+| Backing | Result | Facilities |
+|---|---|---|
+| **File-backed** | genuinely shared — *accidentally correct* | queue DB, SYSGEN params, SYSUAF + RIGHTSLIST, accounting/lastlogin, known-image DB (`mmap(MAP_SHARED)`) |
+| **Memory-resident** | per-process **fiction** | logical name tables, process table (PCB), event flags, mailboxes, device table |
+
+Where VMS keeps state in a file, OVMX is real. Where VMS keeps it in system memory, OVMX fakes it
+per-process — and the fake reports success.
+
+**Evidence (all empirical, two processes unless noted):**
+
+- **Logical names.** `DEFINE/SYSTEM CROSSPROC HELLO` in proc 1 → visible in proc 1; proc 2 →
+  `%DCL-W-NOLOG, no logical name match`. (`vms-d37`)
+- **Process table.** There is no shared process table *at all* — no `shm_open`/`MAP_SHARED` anywhere
+  in `src/vmsprocess/`. `SHOW SYSTEM` reads `vms_pcb_get()`, i.e. **its own PCB**. With a second DCL
+  process alive it still prints exactly one row. `SHOW USERS` likewise reports
+  `Total number of users = 1, number of processes = 1` — permanently. (No live rd item: the
+  `vms-901`/`904` children named by `vms-898.11` predate the nostr board and were never migrated —
+  worth re-creating when M1 is worked.)
+- **Event flags.** Stored in the PCB (`pcb->ef_clusters`). VMS clusters 2 and 3 are **common event
+  flag clusters**, explicitly shared via `$ASCEFC`; that is not expressible here.
+- **Mailboxes.** `$CREMBX` is implemented as a Unix **socketpair**, and the mailbox's logical name is
+  created in **`LNM$PROCESS_TABLE`**. A socketpair cannot be joined by an unrelated process and the
+  name cannot be resolved outside the creator, so the canonical VMS IPC pattern — proc A creates
+  `MYMBX`, proc B `$ASSIGN`s it by name — **cannot work at all**.
+- **Device table.** No shared backing; each process has its own.
+
+**Why this matters more than any single surface item.** Several M1/M2 items are written as display or
+format work but are actually *blocked on shared state* and cannot honestly close without it:
+
+| Item | Written as | Actually needs |
+|---|---|---|
+| **A1** `SHOW SYSTEM` real process table | display fix | a shared process table |
+| **A4** login fidelity | banner text | system-wide logicals (`vms-d37`) |
+| `SHOW USERS` (no live item — 898.11's children predate the nostr board) | display fix | shared process + terminal table |
+| **B1** MONITOR live screen | rendering | shared process table |
+| **B6/B7** `SHOW DEVICE` / `MOUNT` | depth | shared device table |
+| `vms-905` broadcast / `REPLY` | messaging | cross-process IPC (mailboxes) |
+
+Fixing these one surface at a time produces *better-looking* LARP: a `SHOW SYSTEM` that formats one
+fabricated row beautifully is still one fabricated row. **The substrate is the work.**
+
+**Scope:** a system-state substrate — shared, persistent-for-the-life-of-the-boot storage for the
+executive-owned structures, with the per-process tables becoming caches/views over it. The
+`lnm.sock` daemon is a partial precedent (it already loads `SYLOGICALS.CONF`; nothing connects to
+it), as is the `MAP_SHARED` known-image DB. Tracked as **`vms-6b8`**.
+
+### 2.2 Re-tiering: rank by tell-probability, not by feature completeness
+
+§1 says items are ranked by **tell-probability**, but the milestone split partly ranks by *feature
+completeness*, and that misfiled at least one severe tell:
+
+**`SHOW DEVICE` prints the host's Linux mount table.** Every host mount is presented as a VMS disk,
+with the mount's basename as the Volume Label:
+
+```
+$1$DGA0:   Mounted   0   5.15.167.4-MICR   8210896  1  1     <- WSL kernel-modules mount
+$1$DGA1:   Mounted   0   DRIVERS          81989128  1  1     <- /usr/lib/wsl/drivers
+$1$DGA6:   Mounted   0   BINFMT_MISC             0  1  1     <- /proc/sys/fs/binfmt_misc
+```
+
+That is a **direct INV-4 (no-Linux-leak) violation on a first-two-minutes command** — a greybeard
+types `SHOW DEVICE` before almost anything else. It is currently filed under **B6 in Milestone 2**
+as an "off real state" *depth* item. By the roadmap's own ranking rule it is **Milestone 1**, and it
+is a leak, not a depth gap. Tracked as **`vms-b9f`**.
+
+The general lesson: an item's tier must be set by *when a knowledgeable user hits it and how surely
+it betrays the shim*, never by how much code it needs. Re-check the tier of every item against that
+rule when M2 is created.
+
+### 2.3 Other silent-success findings from the same sweep
+
+Probed interactively; all report success or say nothing while doing nothing (INV-6 class):
+
+- **`SPAWN`** — silent no-op. VMS creates a subprocess and reports `%DCL-S-SPAWNED, process <name>
+  spawned`. (`vms-c17`)
+- **`MOUNT DKA100:`** — returns `%MOUNT-I-MOUNTED, OVMX mounted on _DKA100:` for a device that need
+  not exist. Accepts anything. (folded into `vms-b9f`)
+- **`DEASSIGN FOO`** (no qualifier) on a name that exists only in `LNM$SYSTEM` — silent no-op, no
+  message. VMS defaults `DEASSIGN` to `LNM$PROCESS` and should report not-found. (noted on `vms-d37`)
+- **`SET TERMINAL/WIDTH=132`** — self-declared stub, silent. Already known (§2).
 
 ## 3. The oracle & purity guardrail (shapes every value item)
 

@@ -47,6 +47,24 @@ set_tests_properties(vmsscs_hello_padded_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-d94 - directed-HELLO abs-30 channel-verify per-frame word (spec sec 4a
+# offset-30): proves the builder can reach b4 (not just the fixed b3 vms-5fe
+# held), the response rule b2->b3/b3->b4/b4->b3, and that changing the word
+# changes ONLY abs30 (keep-everything-else invariant).
+add_executable(test_scs_hello_pfw test_scs_hello_pfw.c)
+
+target_include_directories(test_scs_hello_pfw PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_hello_pfw PRIVATE vmsscs_hello)
+
+add_test(NAME vmsscs_hello_pfw_unit COMMAND test_scs_hello_pfw)
+set_tests_properties(vmsscs_hello_pfw_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
 # vms-5fe - directed HELLO + VMS$VAXcluster SCS connect handshake test.
 add_executable(test_scs_connect test_scs_connect.c)
 

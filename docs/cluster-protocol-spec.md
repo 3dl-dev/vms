@@ -179,7 +179,7 @@ multicast and directed) and `satellite-niscs-boot-solicit.pcap` frame 1100
 | 16 | 6 | Dest/group logical LAVC addr | GROUNDED (matches multicast group or peer's logical MAC) |
 | 22 | 2 | Connect flag, constant `0x0001` | observed constant |
 | 24 | 6 | Src logical LAVC addr (sender's own) | GROUNDED |
-| 30 | 2 | per-frame word (`a000` mcast / `b300`,`b400` directed VAX1↔VAX2 / `b600` VAX3 SOLICIT) | unknown/inferred — varies by sender+direction, exact semantics not grounded |
+| 30 | 2 | per-frame word: `a000` on multicast HELLO / `b600` on VAX3 SOLICIT / **`b200`,`b300`,`b400` on directed HELLO = the NISCA channel-verify request/response counter** | **GROUNDED (directed values) in the offset-30 subsection below (`vms-d94`)**; the multicast `a0`/SOLICIT `b6` values remain inferred-constant |
 | 32 | 4 | constant prefix `08 00 00 80` | unknown/inferred |
 | 36 | 1 | **message-class byte**: `0x05` on every HELLO, `0x02` on every SOLICIT | inferred (consistent 100% split across all captures, but not documented anywhere — a working label, not a confirmed opcode enum) |
 | 37 | 3 | constant suffix `01 00 00` | unknown/inferred |
@@ -189,6 +189,74 @@ multicast and directed) and `satellite-niscs-boot-solicit.pcap` frame 1100
 | 64 | 1 | constant `0x03` | unknown |
 | 65 | 3 | zero | unknown |
 | 68 | 4 | **connect/join nonce** | **GROUNDED**: `0x00000000` on every multicast HELLO, and the identical non-zero shared token (e.g. `ee 05 39 5b`) on every directed HELLO between VAX1/VAX2 *and* on the VAX3 boot SOLICIT — the same cluster-wide token the initial RE-specimens doc flagged. Confirmed frame examples: `scs-idle-baseline.pcap` frame 1 (zero, multicast) vs. frame 2/3 (`ee05395b`, directed); `satellite-niscs-boot-solicit.pcap` frame 1100 (`ee05395b`). |
+
+#### 4(a).1 The directed-HELLO offset-30 per-frame word — the NISCA channel-verify handshake (GROUNDED, `vms-d94`)
+
+The abs-30 word (SCA payload `[16:18]`; the state lives in the **low byte** at
+abs 30, high byte abs 31 is constant `0x00`) on **directed** HELLOs is a
+**two-phase channel-verify REQUEST/RESPONSE counter**, not an opaque constant.
+This was left `unknown/inferred` in the table above and in §4(k); it is now
+**GROUNDED byte-exact across two independent fresh formations**:
+
+- `~/vax/clean-cluster/captures/formation-clean-2node.pcap` — VAXA
+  (`08:00:2b:fb:72:36`, member) / VAXB (`08:00:2b:94:ca:47`, joiner), the clean
+  isolated-bridge reference.
+- `~/vax/cluster/captures/formation-ci1-joinwindow.pcap` — VAX1 (member) / VAX2
+  (joiner), the golden lab formation.
+
+**The bootstrap (byte-identical in both captures).** The channel opens with a
+fixed three-step exchange, the member initiating:
+
+```
+formation-clean-2node.pcap (directed HELLOs):        formation-ci1-joinwindow.pcap:
+  +26.9909  VAXA(mem) ->VAXB(join)  abs30 = b2         +0.0000  VAX1(mem) ->VAX2(join)  abs30 = b2
+  +26.9911  VAXB(join)->VAXA(mem)   abs30 = b3         +0.0003  VAX2(join)->VAX1(mem)   abs30 = b3
+  +26.9922  VAXA(mem) ->VAXB(join)  abs30 = b4         +0.0012  VAX1(mem) ->VAX2(join)  abs30 = b4
+```
+
+**The rule (GROUNDED):** on receiving a directed HELLO carrying word `X`, a node
+replies with `X + 1`, **saturating at b4**: `b2 → b3`, `b3 → b4`. The values are:
+
+| word | meaning |
+|---|---|
+| **b2** | channel **INIT** — the member's *first* directed contact only. The **joiner never originates b2** (0 of 213 joiner directed HELLOs in the clean capture carry b2). |
+| **b3** | channel-verify **REQUEST** / probe. A node initiates a verify by sending b3 (as a plain directed HELLO **or** a §4(k) padded HELLO). |
+| **b4** | channel-verify **CONFIRM** / ack — terminal. Sent in immediate (~0.2 ms) response to a received b3. There is no b5. |
+
+**The ongoing keepalive (GROUNDED).** After the bootstrap reaches b4 the channel
+is confirmed, and the two nodes run an indefinite **b3↔b4 oscillation**: each
+node periodically re-initiates the verify with a fresh b3 REQUEST (on its
+poller-sweep timer, ~1–10 s apart) and the peer immediately acks it with a b4
+CONFIRM. The initiator role alternates between the two nodes. Frame counts over
+`formation-clean-2node.pcap` (directed HELLOs, class-`0x05`):
+
+| sender | b2 | b3 | b4 |
+|---|---|---|---|
+| VAXA (member) | 1 | 72 | 70 |
+| VAXB (joiner) | **0** | 70 | 72 |
+
+The near-even b3/b4 split on **both** nodes is the oscillation; the joiner's
+`b2 = 0` confirms only the member ever INITs. The **padded** §(4k) size-verify
+HELLOs are simply b3 REQUESTs (each acked by a plain b4): in the clean capture
+VAXB→VAXA padded(1514) carries b3 and is answered `+0.2 ms` later by VAXA→VAXB
+plain b4, and symmetrically for VAXA's own padded probe. This **grounds the
+§4(k) "op-0xb3"**: it is exactly this REQUEST word on a size-padded frame.
+
+**The OVMX gate (`vms-d94`).** OVMX's directed-HELLO builder (`vms-5fe`)
+hard-held abs-30 at a fixed b3 and **never emitted b4**, so the member never saw
+OVMX CONFIRM the channel; VAX1's NISCA handshake never finalized and it looped
+the padded-HELLO flood + START round-0 forever (the §4(k) symptom). The
+corrective is the response rule above: OVMX reads the received word `buf[30]` and
+replies `b2→b3`, `b3→b4` (the fix), `b4→b3` (re-initiate), so it reaches b4 and
+toggles b3↔b4 like the real joiner VAXB. Implemented as `scs_hello_response_pfw()`
++ the `per_frame_word` arg of `scs_hello_build_directed_frame()` in
+`src/vmsscs/scs_hello.c`, driven from the `scsd.c` `--respond` path.
+
+**Clean-room note:** the b2/b3/b4 rule is derived purely from the request/response
+timing and frame-count structure observed on the reference-lab wire (two
+independent captures) plus the saturating-increment pattern; no VSI/HPE source or
+binary was read. The low-byte-carries-state / high-byte-`0x00` split and the
+INIT/REQUEST/CONFIRM labels are OVMX working labels for the observed values.
 
 ### 4(b) HELLO frame — offsets 72–133 (HELLO-specific tail)
 
@@ -1246,7 +1314,10 @@ Seq advances.
 
 For visibility, every field NOT marked GROUNDED above:
 
-- HELLO/SOLICIT: the offset-30 "per-frame word", the offset-36 message-class
+- HELLO/SOLICIT: the offset-30 "per-frame word" is **now GROUNDED for the
+  directed values (b2/b3/b4) in §4(a).1** (`vms-d94`, the NISCA channel-verify
+  request/response counter); only the multicast `a0` / SOLICIT `b6` values of
+  that word remain inferred-constant. Still unknown: the offset-36 message-class
   byte's exact semantics (label works empirically, not documented), the
   offset-47 17-byte capability span, offset-64 constant byte, offset-94
   trailer word, offset-96 "changing 4-byte value" (candidate: local timer),

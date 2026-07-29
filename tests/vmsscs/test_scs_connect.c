@@ -67,7 +67,8 @@ static void test_directed_hello(void)
     static const uint8_t nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
     uint8_t out[SCS_HELLO_FRAME_LEN];
     memset(out, 0xAA, sizeof(out));
-    int rc = scs_hello_build_directed_frame(&p, vax1_mac, nonce, 1, out);
+    int rc = scs_hello_build_directed_frame(&p, vax1_mac, nonce, 1,
+                                            SCS_HELLO_PFW_REQUEST, out);
     check(rc == 0, "scs_hello_build_directed_frame succeeds");
 
     /* Directed frame is addressed to the PEER (abs 0), and abs 16 mirrors it. */
@@ -84,17 +85,18 @@ static void test_directed_hello(void)
     check(out[92] == 0x01 && out[93] == 0x00,
           "directed-HELLO flag / incarnation == 0x0001 for a fresh contact (GROUNDED, spec 4b/4i.B)");
     check(out[128] == 0x1f && out[129] == 0x00, "poller-sweep marker == 0x001f=31 (GROUNDED)");
-    /* per-frame word: directed replay value (ungrounded). */
-    check(out[30] == 0xb3 && out[31] == 0x00, "per-frame word == 0xb300 (directed, REPLAYED)");
+    /* abs-30 channel-verify word: b3 REQUEST here (GROUNDED, spec sec 4a offset-30). */
+    check(out[30] == SCS_HELLO_PFW_REQUEST && out[31] == 0x00,
+          "per-frame word == 0xb300 (b3 REQUEST, GROUNDED sec 4a)");
 
     /* Length + node name unchanged from the multicast template. */
     check(out[14] == 0x76 && out[15] == 0x00, "SCA length field == 0x0076 (total 120)");
     check(out[40] == 6, "node-name length prefix == 6");
     check_bytes(out + 41, (const uint8_t *)"OVMX  ", 6, "node name == 'OVMX  '");
 
-    check(scs_hello_build_directed_frame(NULL, vax1_mac, nonce, 1, out) == -1, "NULL params rejected");
-    check(scs_hello_build_directed_frame(&p, NULL, nonce, 1, out) == -1, "NULL peer rejected");
-    check(scs_hello_build_directed_frame(&p, vax1_mac, NULL, 1, out) == -1, "NULL nonce rejected");
+    check(scs_hello_build_directed_frame(NULL, vax1_mac, nonce, 1, SCS_HELLO_PFW_REQUEST, out) == -1, "NULL params rejected");
+    check(scs_hello_build_directed_frame(&p, NULL, nonce, 1, SCS_HELLO_PFW_REQUEST, out) == -1, "NULL peer rejected");
+    check(scs_hello_build_directed_frame(&p, vax1_mac, NULL, 1, SCS_HELLO_PFW_REQUEST, out) == -1, "NULL nonce rejected");
 }
 
 /* Byte-exact 124-byte real CONNECT-REQUEST (raw frame 47) and

@@ -129,7 +129,8 @@ static void build_common(const struct scs_member_params *p, const uint8_t *tmpl,
 
     /* Identity substitutions (SCA-content offsets + 14). */
     memcpy(out + 14 + 2, p->peer_logical, 6);  /* dest logical [2:8]  (abs 16) */
-    memcpy(out + 14 + 10, p->src_mac, 6);       /* src logical  [10:16](abs 24) = OVMX HW MAC */
+    memcpy(out + 14 + 10, p->src_logical, 6);   /* src-logical [10:16](abs 24) = aa:00:04:00:<sysid>
+                                                 * cluster-LOGICAL addr, NOT raw HW MAC (vms-9f3) */
 
     /* SCS sequenced-message counters (spec sec 4h): recv_ack at [18:20]
      * repeated at [26:28]/[34:36]; send_seq at [20:22] mirrored at [30:32]

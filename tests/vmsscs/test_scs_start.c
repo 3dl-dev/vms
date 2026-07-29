@@ -37,6 +37,9 @@ static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); 
 
 /* OVMX test identity. */
 static const uint8_t ovmx_mac[6] = { 0x02, 0x00, 0x00, 0x4f, 0x56, 0x58 };
+/* vms-9f3: OVMX's cluster-LOGICAL addr aa:00:04:00:<LE16(1030)> = ..:06:04;
+ * written at abs 24, DISTINCT from the raw HW MAC at eth-src. */
+static const uint8_t ovmx_logical[6] = { 0xaa, 0x00, 0x04, 0x00, 0x06, 0x04 };
 /* VAX1 (DECnet node): Ethernet src == its logical LAVC addr. */
 static const uint8_t vax1_mac[6] = { 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04 };
 
@@ -96,6 +99,7 @@ static void test_build_start(void)
     memset(&sp, 0, sizeof(sp));
     memcpy(sp.dst_mac, vax1_mac, 6);
     memcpy(sp.src_mac, ovmx_mac, 6);
+    memcpy(sp.src_logical, ovmx_logical, 6);
     memcpy(sp.peer_logical, vax1_mac, 6);
     sp.scssystemid = 1030;
     strncpy(sp.node_name, "OVMX", sizeof(sp.node_name) - 1);
@@ -116,7 +120,8 @@ static void test_build_start(void)
     /* SCA envelope (abs = 14 + payload offset). */
     check(out[14] == 0x68 && out[15] == 0x00, "SCA length field 0x0068 (total 106)");
     check_bytes(out + 16, vax1_mac, 6, "SCA dest logical == peer_logical (abs 16)");
-    check_bytes(out + 24, ovmx_mac, 6, "SCA src logical == OVMX HW MAC (abs 24)");
+    check_bytes(out + 24, ovmx_logical, 6, "SCA src-logical == cluster-LOGICAL addr, NOT HW MAC (abs 24, vms-9f3)");
+    check(memcmp(out + 24, ovmx_mac, 6) != 0, "src-logical (abs 24) DISTINCT from raw HW MAC (vms-9f3)");
     check(out[30] == 0x41 && out[31] == 0x13, "opcode 0x41, format 0x13 (abs 30/31, GROUNDED)");
 
     /* Counters (state-machine driven, not replayed). */
@@ -160,6 +165,7 @@ static void test_build_ack(void)
     memset(&sp, 0, sizeof(sp));
     memcpy(sp.dst_mac, vax1_mac, 6);
     memcpy(sp.src_mac, ovmx_mac, 6);
+    memcpy(sp.src_logical, ovmx_logical, 6);
     memcpy(sp.peer_logical, vax1_mac, 6);
     sp.send_seq = 1;
     sp.recv_ack = 0;
@@ -197,6 +203,7 @@ static void test_incarnation_echo(void)
     memset(&sp, 0, sizeof(sp));
     memcpy(sp.dst_mac, vax1_mac, 6);
     memcpy(sp.src_mac, ovmx_mac, 6);
+    memcpy(sp.src_logical, ovmx_logical, 6);
     memcpy(sp.peer_logical, vax1_mac, 6);
     sp.scssystemid = 1030;
     strncpy(sp.node_name, "OVMX", sizeof(sp.node_name) - 1);

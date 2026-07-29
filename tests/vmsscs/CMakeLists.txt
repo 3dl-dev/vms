@@ -29,6 +29,24 @@ set_tests_properties(vmsscs_hello_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-9f3 - padded directed-HELLO builder (NISCA channel packet-size
+# verification, spec sec 4k): proves the padded frame is a genuine directed
+# HELLO with only the SCA length field changed + a pure-zero pad tail, and that
+# smaller probes are byte-identical prefixes of the 1500-byte frame.
+add_executable(test_scs_hello_padded test_scs_hello_padded.c)
+
+target_include_directories(test_scs_hello_padded PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_hello_padded PRIVATE vmsscs_hello)
+
+add_test(NAME vmsscs_hello_padded_unit COMMAND test_scs_hello_padded)
+set_tests_properties(vmsscs_hello_padded_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
 # vms-5fe - directed HELLO + VMS$VAXcluster SCS connect handshake test.
 add_executable(test_scs_connect test_scs_connect.c)
 

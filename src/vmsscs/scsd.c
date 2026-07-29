@@ -170,6 +170,25 @@ static uint16_t resolve_scssystemid(void)
     return OVMX_DEFAULT_SCSSYSTEMID;
 }
 
+/*
+ * ovmx_cluster_logical - vms-9f3: compute OVMX's cluster-LOGICAL LAVC address
+ * from its SCSSYSTEMID. GROUNDED convention (spec sec 3 decoder ring + README-lab):
+ * a cluster node's logical addr is aa:00:04:00:<LE16(SCSSYSTEMID)>, e.g. VAX2
+ * sysid 1026=0x0402 -> aa:00:04:00:02:04. This is the value a real member writes
+ * in the SCA src-logical field (abs 24); OVMX's raw HW MAC there was why VAX1's
+ * PEDRIVER never verified the channel (the old bug). No DECnet is needed to emit
+ * it -- it is a cluster field that happens to use the LAVC address format.
+ */
+static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
+{
+    out[0] = 0xaa;
+    out[1] = 0x00;
+    out[2] = 0x04;
+    out[3] = 0x00;
+    out[4] = (uint8_t)(sysid & 0xff);        /* LE16 low byte  */
+    out[5] = (uint8_t)((sysid >> 8) & 0xff); /* LE16 high byte */
+}
+
 /* --- vms-5fe: directed-HELLO / SCS-connect responder state --- */
 
 #define OVMX_MAX_PEERS 4
@@ -220,11 +239,38 @@ struct peer_state {
     uint16_t sysap_send;           /* OVMX's next SYSAP send-msg# (body[0:2]; from 1) */
     uint16_t sysap_recv;           /* high-water of the member's SYSAP send-msg# (ack target) */
     long     cm_responses;         /* 0x81 responses we sent to member 0x03/0x05 txns */
+    /* --- vms-9f3: NISCA channel packet-size verification (padded directed
+     * HELLO, spec sec 4k). An ESTABLISHED VAX1 zero-pads a directed HELLO up to
+     * NISCS_MAX_PKTSZ and retransmits it (1500->1069->853->745, ~6s) until OVMX
+     * RECIPROCATES on the reverse channel; that reciprocal is what lets VAX1
+     * open OVMX's CSB and drive the sec 4j add-member commit. */
+    long     padded_replies;       /* padded HELLOs we sent this peer (reciprocations) */
+    struct timespec last_padded;   /* CLOCK_MONOTONIC of our last padded send (rate limit) */
+    int      padded_initiated;     /* we proactively sent one padded HELLO (golden joiner-first) */
+    uint16_t peer_padded_sca;      /* largest padded-HELLO total SCA size seen from the peer */
 };
 
 static int mac_eq(const uint8_t *a, const uint8_t *b)
 {
     return memcmp(a, b, 6) == 0;
+}
+
+/*
+ * is_padded_hello - vms-9f3: is `buf` (n bytes on the wire) a padded directed
+ * HELLO (spec sec 4k)? A HELLO-family frame -- message-class byte 0x05 at abs 36
+ * and NOT the 0x13 SCS-envelope format constant at abs 31 (this is a HELLO, not
+ * an 0x4b sequenced message) -- whose total SCA content EXCEEDS a normal
+ * 120-byte HELLO, up to NISCS_MAX_PKTSZ (+2). Per sec 4k the distinguishing
+ * feature of a padded HELLO is its SIZE plus the HELLO class byte; the pad tail
+ * is pure zeros. The frame is already known to be unicast to our HW MAC (gated
+ * by the caller).
+ */
+static int is_padded_hello(const uint8_t *buf, size_t n)
+{
+    return n > (size_t)SCS_HELLO_FRAME_LEN &&
+           n <= (size_t)SCS_HELLO_PADDED_MAX_FRAME &&
+           buf[31] == 0x00 &&   /* HELLO family, NOT the 0x13 SCS envelope (sec 4k) */
+           buf[36] == 0x05;     /* message-class byte 0x05 == HELLO (spec sec 4a/4k) */
 }
 
 static struct peer_state *peer_find_or_add(struct peer_state *tbl, const uint8_t mac[6])
@@ -272,7 +318,8 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
  * full MEMBER. Returns the number of frames sent (0..3).
  */
 static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
-                                const uint8_t our_hw_mac[6])
+                                const uint8_t our_hw_mac[6],
+                                const uint8_t our_src_logical[6])
 {
     if (ps->sysap_send == 0) {
         ps->sysap_send = 1; /* SYSAP send-msg# starts at 1 (spec sec 4j) */
@@ -286,6 +333,7 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     memset(&mp, 0, sizeof(mp));
     memcpy(mp.dst_mac, ps->eth_mac, 6);
     memcpy(mp.src_mac, our_hw_mac, 6);
+    memcpy(mp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 cluster-logical addr */
     memcpy(mp.peer_logical, ps->logical, 6);
     mp.remote_conid = ps->remote_conid;
     mp.local_conid = OVMX_LOCAL_CONID;
@@ -424,6 +472,8 @@ int main(int argc, char **argv)
     static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
     uint8_t our_hw_mac[6];
     memset(our_hw_mac, 0, sizeof(our_hw_mac));
+    uint8_t our_src_logical[6]; /* vms-9f3: OVMX's cluster-LOGICAL LAVC addr (abs 24) */
+    memset(our_src_logical, 0, sizeof(our_src_logical));
     long directed_sent = 0;
     long connect_req_sent = 0;
     long connect_resp_sent = 0;
@@ -435,12 +485,19 @@ int main(int argc, char **argv)
     long dir_lookup_sent = 0;    /* vms-246: SCS$DIR_LOOKUP responses sent */
     long cm_config_frames = 0;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
     long cm_response_sent = 0;   /* vms-224: 0x81 responses to member 0x03/0x05 txns */
+    long padded_sent = 0;        /* vms-9f3: padded directed HELLOs sent (sec 4k channel verify) */
 
     /* OVMX identity for the phase-2 START/config body (vms-21e). Resolved once;
      * shared by every peer's START responder. */
     char ovmx_node[SYSGEN_STRVAL_LEN];
     resolve_node_identity(ovmx_node, sizeof(ovmx_node));
     uint16_t ovmx_scssystemid = resolve_scssystemid();
+    /* vms-9f3: OVMX's cluster-LOGICAL LAVC address, computed ONCE from its own
+     * SCSSYSTEMID (aa:00:04:00:<LE16(sysid)>). Written at the SCA src-logical
+     * field (abs 24) of every emitted frame; the raw HW MAC stays at eth-src
+     * and the HELLO HW-MAC tail. This is the fix that lets VAX1's PEDRIVER
+     * verify the channel and open an OVMX CSB. */
+    ovmx_cluster_logical(ovmx_scssystemid, our_src_logical);
 
     if (emit_hello) {
         uint8_t hw_mac[6];
@@ -458,6 +515,7 @@ int main(int argc, char **argv)
         memcpy(our_hw_mac, hw_mac, 6);
         scs_hello_multicast_addr(group, hello_params.dst_mac);
         memcpy(hello_params.src_mac, hw_mac, 6);
+        memcpy(hello_params.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
         strncpy(hello_params.node_name, node_name, SCS_HELLO_NODENAME_LEN);
         hello_params.node_name[SCS_HELLO_NODENAME_LEN] = '\0';
 
@@ -506,6 +564,9 @@ int main(int argc, char **argv)
     long counts[5] = {0, 0, 0, 0, 0};
     long total_frames = 0;
     static uint8_t buf[SCA_FRAME_MAX];
+    /* vms-9f3: reusable send buffer for padded directed HELLOs (up to 1514B on
+     * the wire) -- static to keep it off the loop's stack frame. */
+    static uint8_t pframe[SCS_HELLO_PADDED_MAX_FRAME];
     struct timespec last_hello = {0, 0};
 
     while (!g_stop) {
@@ -553,6 +614,7 @@ int main(int argc, char **argv)
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
                 memcpy(cp.src_mac, our_hw_mac, 6);
+                memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                 memcpy(cp.peer_logical, ps->logical, 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = 0;
@@ -653,7 +715,7 @@ int main(int argc, char **argv)
                     scs_vc_note_recv(&ps->vc, peer_send_seq);
                     uint8_t cframe[SCS_CREDIT_FRAME_LEN];
                     if (scs_vc_build_credit_for(&ps->vc, ps->eth_mac, our_hw_mac,
-                                                ps->logical, cframe) == 0 &&
+                                                our_src_logical, ps->logical, cframe) == 0 &&
                         send_frame_to(sock, (int)ifindex, ps->eth_mac, cframe,
                                       sizeof(cframe)) > 0) {
                         ps->credit_sent++;
@@ -700,7 +762,7 @@ int main(int argc, char **argv)
                      * talking membership on it). */
                     if (!ps->cm_config_sent &&
                         (mv.category & 0x7f) == SCS_MEMBER_CAT_CONFIG) {
-                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac);
+                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
                         cm_config_frames += c;
                         log_ts(stdout);
                         printf(" SCSD-I-CMCONFIG, sent add-member config burst"
@@ -721,6 +783,7 @@ int main(int argc, char **argv)
                         memset(&mp, 0, sizeof(mp));
                         memcpy(mp.dst_mac, ps->eth_mac, 6);
                         memcpy(mp.src_mac, our_hw_mac, 6);
+                        memcpy(mp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                         memcpy(mp.peer_logical, ps->logical, 6);
                         mp.remote_conid = ps->remote_conid;
                         mp.local_conid = OVMX_LOCAL_CONID;
@@ -747,6 +810,78 @@ int main(int argc, char **argv)
             }
         }
 
+        /* (a0) vms-9f3: NISCA channel packet-size verification (spec sec 4k).
+         * An ESTABLISHED VAX1 zero-pads a directed HELLO up to NISCS_MAX_PKTSZ
+         * (1500 SCA / 1514 wire) and retransmits it (~6s: 1500->1069->853->745)
+         * until OVMX RECIPROCATES with its OWN padded HELLO on the reverse
+         * channel. That reciprocal is the "ack" VAX1 waits on before opening
+         * OVMX's CSB and driving the sec 4j add-member commit -- an unpadded
+         * 120-byte HELLO does NOT satisfy it (GROUNDED negative, sec 4k). We
+         * reply to the SAME total size (capped at NISCS_MAX_PKTSZ), rate-limited
+         * to ~5s so we never out-pace VAX1's ~6s probe cadence (reply-
+         * amplification guard: do NOT flood 1500B frames). A padded HELLO does
+         * not classify as SCS_CLASS_HELLO (length != 120), so it reaches here as
+         * SCS_CLASS_OTHER and is detected by is_padded_hello(). */
+        if (is_padded_hello(buf, (size_t)n)) {
+            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            if (ps == NULL) {
+                continue;
+            }
+            memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* src-logical, abs 24 */
+            uint16_t rx_sca = (uint16_t)((size_t)n - 14u); /* total SCA content received */
+            if (rx_sca > ps->peer_padded_sca) {
+                ps->peer_padded_sca = rx_sca;
+            }
+            /* The member advertises the node-incarnation it attributes to OVMX
+             * in the padded HELLO's abs-92 flag (sec 4i.B); capture it so the
+             * START [22:24] responder can echo it (that echo is the sec 4i.B
+             * gate and is driven elsewhere -- left unchanged). */
+            uint16_t adv_inc =
+                (uint16_t)(buf[OFF_HELLO_DIRFLG] | ((uint16_t)buf[OFF_HELLO_DIRFLG + 1] << 8));
+            if (adv_inc != 0) {
+                ps->incarnation = adv_inc;
+            }
+            /* OVMX's OWN padded HELLO carries the incarnation OVMX attributes to
+             * the PEER, which for a freshly-booted joiner's first contact is 1 --
+             * NOT the member's advertised value. GROUNDED (spec sec 4i.B: "the
+             * joiner's own directed HELLO always carries [78:80]=0x0001"), and
+             * byte-exact in the golden formation-ci1 padded pair (BOTH the
+             * joiner VAX2->VAX1 and member VAX1->VAX2 1500B frames carry abs-92
+             * = 1). Stamping the echoed member incarnation here instead makes
+             * VAX1 reject the channel-size verification and re-probe forever. */
+            uint16_t echo_inc = SCS_HELLO_JOINER_INCARNATION;
+
+            /* Echo to the same size, never above the GROUNDED NISCS_MAX_PKTSZ ceiling. */
+            uint16_t echo_sca = rx_sca > SCS_HELLO_PADDED_MAX_SCA
+                                    ? (uint16_t)SCS_HELLO_PADDED_MAX_SCA : rx_sca;
+            struct timespec pnow;
+            clock_gettime(CLOCK_MONOTONIC, &pnow);
+            int pdue = (ps->padded_replies == 0) ||
+                       (pnow.tv_sec - ps->last_padded.tv_sec >= 5);
+            if (pdue) {
+                size_t plen = 0;
+                hello_params.timer_tick = (uint32_t)directed_sent;
+                if (scs_hello_build_padded_directed_frame(&hello_params, src_mac, lab_nonce,
+                                                          echo_inc, echo_sca,
+                                                          pframe, sizeof(pframe), &plen) == 0 &&
+                    send_frame_to(sock, (int)ifindex, src_mac, pframe, plen) > 0) {
+                    ps->padded_replies++;
+                    ps->padded_initiated = 1; /* a reciprocation counts as our advertisement */
+                    ps->channel_up = 1;
+                    ps->last_padded = pnow;
+                    padded_sent++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-PADHELLO, reciprocated padded HELLO (%u SCA / %zu wire)"
+                           " to %02x:%02x:%02x:%02x:%02x:%02x (reply #%ld)\n",
+                           echo_sca, plen,
+                           src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
+                           ps->padded_replies);
+                    fflush(stdout);
+                }
+            }
+            continue;
+        }
+
         /* (a) Directed HELLO -> reply with our directed HELLO (NISCA channel,
          * spec sec 4b). The frame is already known to be unicast to our HW MAC
          * (gated above), so any non-zero directed flag marks a directed HELLO
@@ -761,25 +896,34 @@ int main(int argc, char **argv)
             }
             memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6);
 
-            /* vms-af2/vms-691: the member advertises the node-incarnation it
-             * attributes to OVMX in its directed-HELLO flag [78:80] (abs 92),
-             * LE u16. Capture it -- OVMX echoes it into both its own directed
-             * HELLO abs 92 and its 0x41 START [22:24] (the established-join
-             * gate, spec sec 4i.B). READ off the wire; never a hard-coded
-             * constant. 1 for a fresh/first contact. */
+            /* vms-af2/vms-691/vms-9f3: the member advertises the node-incarnation
+             * it attributes to OVMX in its directed-HELLO flag [78:80] (abs 92),
+             * LE u16. Capture it -- OVMX echoes it into its 0x41 START [22:24]
+             * (the established-join gate, spec sec 4i.B; driven by the START
+             * responder from ps->incarnation). READ off the wire; never a
+             * hard-coded constant. 1 for a fresh/first contact.
+             *
+             * CRITICAL (spec sec 4i.B, GROUNDED on the golden wire): the value
+             * OVMX stamps in its OWN directed HELLO abs 92 is NOT this advertised
+             * value -- "the joiner's own directed HELLO always carries
+             * [78:80]=0x0001". abs 92 is the incarnation the SENDER attributes to
+             * the PEER, which for a freshly-booted joiner's first contact is 1.
+             * The member's advertised value belongs ONLY in the START [22:24].
+             * Echoing it back into OVMX's own HELLO abs 92 (the earlier bug)
+             * leaves VAX1's PEDRIVER channel unverifiable -- it re-probes the
+             * padded-HELLO ladder and re-sends START round-0 forever, and no CSB
+             * ever opens. */
             uint16_t adv_incarnation =
                 (uint16_t)(buf[OFF_HELLO_DIRFLG] | ((uint16_t)buf[OFF_HELLO_DIRFLG + 1] << 8));
             if (adv_incarnation != 0 && adv_incarnation != ps->incarnation) {
                 ps->incarnation = adv_incarnation;
                 log_ts(stdout);
                 printf(" SCSD-I-INCARN, member advertises node-incarnation N=%u"
-                       " (abs 92 [78:80]) -- will echo into START [22:24]\n",
-                       adv_incarnation);
+                       " (abs 92 [78:80]) -- will echo into START [22:24]"
+                       " (own HELLO abs 92 stays %u)\n",
+                       adv_incarnation, (unsigned)SCS_HELLO_JOINER_INCARNATION);
                 fflush(stdout);
             }
-            /* The incarnation OVMX stamps in its OWN directed HELLO / START:
-             * the observed value if seen, else 1 (fresh-contact GROUNDED). */
-            uint16_t echo_incarnation = ps->incarnation ? ps->incarnation : 1;
 
             /* Rate-limit our directed replies to a real-node cadence (~1/s per
              * peer). Replying 1:1 to every received directed HELLO amplifies
@@ -792,8 +936,12 @@ int main(int argc, char **argv)
             if (due) {
                 uint8_t dframe[SCS_HELLO_FRAME_LEN];
                 hello_params.timer_tick = (uint32_t)directed_sent;
+                /* abs 92 = SCS_HELLO_JOINER_INCARNATION (1): OVMX's own directed
+                 * HELLO carries the incarnation it attributes to the peer on a
+                 * fresh first contact, NOT the member's advertised value (spec
+                 * sec 4i.B). The member's value is echoed only into START [22:24]. */
                 if (scs_hello_build_directed_frame(&hello_params, src_mac, lab_nonce,
-                                                   echo_incarnation, dframe) == 0 &&
+                                                   SCS_HELLO_JOINER_INCARNATION, dframe) == 0 &&
                     send_frame_to(sock, (int)ifindex, src_mac, dframe, sizeof(dframe)) > 0) {
                     directed_sent++;
                     ps->directed_replies++;
@@ -808,6 +956,37 @@ int main(int argc, char **argv)
                 }
             } else {
                 ps->channel_up = 1;
+            }
+
+            /* vms-9f3: match the golden joiner (VAX2) -- once our directed
+             * channel is up, proactively send ONE padded HELLO up to
+             * NISCS_MAX_PKTSZ to advertise OVMX's own channel size, as golden
+             * idx 5990 did (spec sec 4k step 2), so an established VAX1 that is
+             * waiting for the joiner to initiate verifies both directions. ONE
+             * frame, guarded by padded_initiated -- not a flood. */
+            if (ps->channel_up && !ps->padded_initiated) {
+                size_t plen = 0;
+                hello_params.timer_tick = (uint32_t)directed_sent;
+                /* abs-92 = SCS_HELLO_JOINER_INCARNATION (1): OVMX's own padded
+                 * HELLO carries the incarnation it attributes to the peer on a
+                 * fresh first contact, NOT the member's advertised value (spec
+                 * sec 4i.B; golden pair carries abs-92 = 1). */
+                if (scs_hello_build_padded_directed_frame(&hello_params, src_mac, lab_nonce,
+                                                          SCS_HELLO_JOINER_INCARNATION,
+                                                          (uint16_t)SCS_HELLO_PADDED_MAX_SCA,
+                                                          pframe, sizeof(pframe), &plen) == 0 &&
+                    send_frame_to(sock, (int)ifindex, src_mac, pframe, plen) > 0) {
+                    ps->padded_initiated = 1;
+                    clock_gettime(CLOCK_MONOTONIC, &ps->last_padded);
+                    padded_sent++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-PADINIT, initiated padded HELLO (%u SCA / %zu wire)"
+                           " to %02x:%02x:%02x:%02x:%02x:%02x (golden joiner-first)\n",
+                           (unsigned)SCS_HELLO_PADDED_MAX_SCA, plen,
+                           src_mac[0], src_mac[1], src_mac[2],
+                           src_mac[3], src_mac[4], src_mac[5]);
+                    fflush(stdout);
+                }
             }
 
             /* vms-21e: OVMX is the JOINER, so the established node drives the
@@ -830,6 +1009,7 @@ int main(int argc, char **argv)
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
                 memcpy(cp.src_mac, our_hw_mac, 6);
+                memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                 memcpy(cp.peer_logical, ps->logical, 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = 0;
@@ -893,6 +1073,7 @@ int main(int argc, char **argv)
             memset(&sp, 0, sizeof(sp));
             memcpy(sp.dst_mac, ps->eth_mac, 6);
             memcpy(sp.src_mac, our_hw_mac, 6);
+            memcpy(sp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
             memcpy(sp.peer_logical, ps->logical, 6);
             sp.scssystemid = ovmx_scssystemid;
             strncpy(sp.node_name, ovmx_node, SCS_START_NODENAME_LEN);
@@ -1004,6 +1185,7 @@ int main(int argc, char **argv)
                     memset(&dp, 0, sizeof(dp));
                     memcpy(dp.dst_mac, ps->eth_mac, 6);
                     memcpy(dp.src_mac, our_hw_mac, 6);
+                    memcpy(dp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                     memcpy(dp.peer_logical, ps->logical, 6);
                     dp.remote_conid = ps->dir_remote_conid;
                     dp.local_conid = SCS_DIR_OVMX_CONID;
@@ -1045,6 +1227,7 @@ int main(int argc, char **argv)
                     memset(&lp, 0, sizeof(lp));
                     memcpy(lp.dst_mac, ps->eth_mac, 6);
                     memcpy(lp.src_mac, our_hw_mac, 6);
+                    memcpy(lp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                     memcpy(lp.peer_logical, ps->logical, 6);
                     lp.remote_conid = ps->dir_remote_conid ? ps->dir_remote_conid
                                                            : dv.local_conid;
@@ -1109,6 +1292,7 @@ int main(int argc, char **argv)
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
                 memcpy(cp.src_mac, our_hw_mac, 6);
+                memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                 memcpy(cp.peer_logical, ps->logical, 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = v.local_conid;
@@ -1133,7 +1317,7 @@ int main(int argc, char **argv)
                      * config burst (op 0x14/0x01/0x02). The member RX block
                      * re-triggers it defensively if this send is lost. */
                     if (first && !ps->cm_config_sent) {
-                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac);
+                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
                         cm_config_frames += c;
                         log_ts(stdout);
                         printf(" SCSD-I-CMCONFIG, sent add-member config burst"
@@ -1152,7 +1336,7 @@ int main(int argc, char **argv)
                 fflush(stdout);
                 /* vms-224: VC bound -> drive the add-member config burst. */
                 if (!ps->cm_config_sent) {
-                    int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac);
+                    int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
                     cm_config_frames += c;
                     log_ts(stdout);
                     printf(" SCSD-I-CMCONFIG, sent add-member config burst"
@@ -1182,8 +1366,8 @@ int main(int argc, char **argv)
                 credit_sent, retransmit_sent);
         fprintf(stderr, "  DIR-CONNECT-RESP-SENT=%ld DIR-LOOKUP-RESP-SENT=%ld\n",
                 dir_conn_resp_sent, dir_lookup_sent);
-        fprintf(stderr, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld\n",
-                cm_config_frames, cm_response_sent);
+        fprintf(stderr, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld PADDED-HELLO-SENT=%ld\n",
+                cm_config_frames, cm_response_sent, padded_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (!peers[i].in_use) {
                 continue;
@@ -1193,7 +1377,8 @@ int main(int argc, char **argv)
                     " incarnation=%u start_replied=%d start_acked=%d dir_connected=%s"
                     " dir_lookups=%ld connect_sent=%d connected=%s"
                     " credit_sent=%ld retx=%u remote_conid=0x%08X"
-                    " cm_config=%s cm_responses=%ld sysap_send=%u sysap_recv=%u\n",
+                    " cm_config=%s cm_responses=%ld sysap_send=%u sysap_recv=%u"
+                    " padded_replies=%ld padded_init=%d peer_padded_sca=%u\n",
                     peers[i].eth_mac[0], peers[i].eth_mac[1], peers[i].eth_mac[2],
                     peers[i].eth_mac[3], peers[i].eth_mac[4], peers[i].eth_mac[5],
                     peers[i].channel_up ? "UP" : "down", peers[i].directed_replies,
@@ -1204,7 +1389,9 @@ int main(int argc, char **argv)
                     peers[i].credit_sent, peers[i].vc.retransmit_count,
                     peers[i].remote_conid,
                     peers[i].cm_config_sent ? "YES" : "no", peers[i].cm_responses,
-                    peers[i].sysap_send, peers[i].sysap_recv);
+                    peers[i].sysap_send, peers[i].sysap_recv,
+                    peers[i].padded_replies, peers[i].padded_initiated,
+                    peers[i].peer_padded_sca);
         }
     }
 

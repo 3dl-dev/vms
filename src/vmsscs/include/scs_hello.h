@@ -62,8 +62,11 @@ extern "C" {
 struct scs_hello_params {
     uint8_t  dst_mac[6];      /* Ethernet dst + SCA dest/group logical addr;
                                   the cluster multicast address (GROUNDED for group 1) */
-    uint8_t  src_mac[6];      /* Ethernet src + SCA src-logical-addr + HELLO-tail HW MAC;
+    uint8_t  src_mac[6];      /* Ethernet src (abs 6) + HELLO-tail HW MAC (abs 120);
                                   OVMX's real emitting-interface HW MAC (see header note) */
+    uint8_t  src_logical[6];  /* SCA src-logical LAVC addr (abs 24) = aa:00:04:00:<LE16(sysid)>;
+                                  a real cluster node writes its LOGICAL addr here, NOT its raw
+                                  HW MAC (vms-9f3 -- VAX1's PEDRIVER keys peer identity on abs 24) */
     char     node_name[SCS_HELLO_NODENAME_LEN + 1]; /* NUL-terminated, <=6 chars, SCSNODE */
     uint32_t timer_tick;      /* caller-supplied per-emission counter, abs offset 96-99 */
 };
@@ -141,6 +144,68 @@ int scs_hello_build_directed_frame(const struct scs_hello_params *p,
                                     const uint8_t nonce[4],
                                     uint16_t incarnation,
                                     uint8_t out[SCS_HELLO_FRAME_LEN]);
+
+/*
+ * --- vms-9f3: NISCA channel packet-size verification (padded directed HELLO,
+ * spec sec 4k) ---
+ *
+ * Before an ESTABLISHED VAX1 will open a joining node's CSB and drive the
+ * sec 4j add-member commit, the LAN channel must prove it can carry a
+ * full-size packet. VAX1 sends the joiner a DIRECTED HELLO (sec 4b)
+ * zero-padded up to NISCS_MAX_PKTSZ and retransmits it (1500 -> 1069 -> 853
+ * -> 745, ~6 s apart) until the joiner RECIPROCATES with its own padded HELLO
+ * on the reverse channel. That reciprocal is the "ack" (GROUNDED sec 4k: the
+ * golden formation shows exactly ONE padded HELLO each direction, then the
+ * join proceeds; an unpadded 120-byte HELLO does NOT satisfy it).
+ *
+ * A padded HELLO is byte-for-byte a standard 120-byte-SCA directed HELLO
+ * (built by scs_hello_build_directed_frame) whose SCA content is zero-extended
+ * to `total_sca_len`, with ONLY the SCA length field at abs 14-15 changed to
+ * encode the larger total (LE16 = total_sca_len - 2). The pad tail (abs 134..)
+ * is pure zeros -- no new field content (GROUNDED sec 4k: retransmits differ
+ * only in the timer, and the smaller sizes are byte-identical prefixes of the
+ * 1500-byte frame apart from the length field).
+ */
+/*
+ * The incarnation value a JOINER stamps into the abs-92 flag of its OWN
+ * directed/padded HELLO. GROUNDED (spec sec 4i.B): "the joiner's own directed
+ * HELLO always carries [78:80]=0x0001" -- abs-92 carries the incarnation the
+ * SENDER attributes to the PEER, which for a freshly-booted joiner's first
+ * contact is 1, regardless of how established the cluster is. Byte-exact in the
+ * golden formation-ci1 padded pair (both directions carry abs-92 = 1). The
+ * member's advertised incarnation is echoed ONLY into the 0x41 START [22:24]
+ * (the sec 4i.B gate), never back into the joiner's own HELLO.
+ */
+#define SCS_HELLO_JOINER_INCARNATION 1
+
+#define SCS_HELLO_NISCS_MAX_PKTSZ  1498 /* SYSGEN NISCS_MAX_PKTSZ, GROUNDED (spec sec 3) */
+#define SCS_HELLO_PADDED_MAX_SCA   1500 /* max total SCA content = NISCS_MAX_PKTSZ + 2, GROUNDED (sec 4k) */
+#define SCS_HELLO_PADDED_MAX_FRAME (14 + SCS_HELLO_PADDED_MAX_SCA) /* 1514 bytes on the wire */
+
+/*
+ * scs_hello_build_padded_directed_frame - Build a padded directed HELLO
+ * (spec sec 4k) of `total_sca_len` total SCA content bytes into out.
+ *
+ * Lays down the ordinary directed HELLO (scs_hello_build_directed_frame, with
+ * identical p / peer_mac / nonce / incarnation semantics), zero-extends the SCA
+ * content to `total_sca_len`, and rewrites ONLY the SCA length field at abs
+ * 14-15 to encode the padded total. The resulting frame is 14 + total_sca_len
+ * bytes on the wire; the on-wire length is written to *frame_len_out.
+ *
+ * `total_sca_len` must be in [SCS_HELLO_SCA_LEN (120), SCS_HELLO_PADDED_MAX_SCA
+ * (1500)]; out_cap must be >= 14 + total_sca_len. A total_sca_len of 120 yields
+ * a plain directed HELLO (degenerate case, no pad).
+ *
+ * Returns 0 on success; -1 if any pointer arg is NULL, node_name is too long,
+ * total_sca_len is out of range, or out_cap is too small.
+ */
+int scs_hello_build_padded_directed_frame(const struct scs_hello_params *p,
+                                          const uint8_t peer_mac[6],
+                                          const uint8_t nonce[4],
+                                          uint16_t incarnation,
+                                          uint16_t total_sca_len,
+                                          uint8_t *out, size_t out_cap,
+                                          size_t *frame_len_out);
 
 /* The reference-lab (cluster group 1) join nonce, wire order (abs 68-71).
  * REPLAYED for the known lab cluster only -- see the build-directed note

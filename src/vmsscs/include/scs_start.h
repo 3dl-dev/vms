@@ -120,7 +120,9 @@ uint16_t scs_seq_advance(struct scs_seq_state *s);
 
 struct scs_start_params {
     uint8_t  dst_mac[6];      /* Ethernet dst = peer's observed src MAC */
-    uint8_t  src_mac[6];      /* Ethernet src + SCA src-logical addr = OVMX HW MAC */
+    uint8_t  src_mac[6];      /* Ethernet src (abs 6) = OVMX HW MAC */
+    uint8_t  src_logical[6];  /* SCA src-logical addr [10:16] (abs 24) = aa:00:04:00:<LE16(sysid)>;
+                                 the cluster-LOGICAL addr, NOT the raw HW MAC (vms-9f3) */
     uint8_t  peer_logical[6]; /* SCA dest-logical addr [2:8] = peer's advertised logical addr
                                  (its src-logical field; == dst_mac for a non-DECnet peer) */
     uint16_t scssystemid;     /* OVMX's SCSSYSTEMID (LE u16 at [46:48]) */

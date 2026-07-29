@@ -75,7 +75,9 @@ extern "C" {
  */
 struct scs_credit_params {
     uint8_t  dst_mac[6];      /* Ethernet dst = peer's observed Ethernet src MAC */
-    uint8_t  src_mac[6];      /* Ethernet src + SCA src-logical addr = OVMX HW MAC */
+    uint8_t  src_mac[6];      /* Ethernet src (abs 6) = OVMX HW MAC */
+    uint8_t  src_logical[6];  /* SCA src-logical addr [10:16] (abs 24) = aa:00:04:00:<LE16(sysid)>;
+                                 the cluster-LOGICAL addr, NOT the raw HW MAC (vms-9f3) */
     uint8_t  peer_logical[6]; /* SCA dest-logical addr [2:8] = peer's advertised logical addr */
     uint16_t acked_seq;       /* peer's send_seq we're acking (= OVMX recv_seq) [18:20]/[26:28]/[34:36] */
     uint16_t secondary_seq;   /* [30:32] inferred: OVMX's own outstanding send_seq (reproduced) */
@@ -154,6 +156,7 @@ int scs_vc_owes_credit(uint16_t peer_send_seq);
 int scs_vc_build_credit_for(struct scs_vc *vc,
                             const uint8_t dst_mac[6],
                             const uint8_t src_mac[6],
+                            const uint8_t src_logical[6],
                             const uint8_t peer_logical[6],
                             uint8_t out[SCS_CREDIT_FRAME_LEN]);
 

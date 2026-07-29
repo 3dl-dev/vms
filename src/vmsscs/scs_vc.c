@@ -35,7 +35,8 @@ int scs_credit_build(const struct scs_credit_params *p,
     put_le16(out + 14 + 0, SCS_CREDIT_SCA_LEN - 2); /* [0:2] length 0x0027 (GROUNDED) */
     memcpy(out + 14 + 2, p->peer_logical, 6);        /* [2:8] dst-logical (GROUNDED subst) */
     put_le16(out + 14 + 8, 0x0001);                  /* [8:10] connect flag (GROUNDED) */
-    memcpy(out + 14 + 10, p->src_mac, 6);            /* [10:16] src-logical = OVMX HW MAC */
+    memcpy(out + 14 + 10, p->src_logical, 6);        /* [10:16] src-logical = aa:00:04:00:<sysid>
+                                                      * cluster-LOGICAL addr, NOT raw HW MAC (vms-9f3) */
     out[14 + 16] = SCS_CREDIT_OPCODE;                /* [16] opcode 0x48 (GROUNDED) */
     out[14 + 17] = SCS_CREDIT_FORMAT;                /* [17] format 0x13 (GROUNDED 622/622) */
     put_le16(out + 14 + 18, p->acked_seq);           /* [18:20] acked seq (GROUNDED) */
@@ -105,17 +106,19 @@ int scs_vc_owes_credit(uint16_t peer_send_seq)
 int scs_vc_build_credit_for(struct scs_vc *vc,
                             const uint8_t dst_mac[6],
                             const uint8_t src_mac[6],
+                            const uint8_t src_logical[6],
                             const uint8_t peer_logical[6],
                             uint8_t out[SCS_CREDIT_FRAME_LEN])
 {
     if (vc == NULL || dst_mac == NULL || src_mac == NULL ||
-        peer_logical == NULL || out == NULL) {
+        src_logical == NULL || peer_logical == NULL || out == NULL) {
         return -1;
     }
     struct scs_credit_params p;
     memset(&p, 0, sizeof(p));
     memcpy(p.dst_mac, dst_mac, 6);
     memcpy(p.src_mac, src_mac, 6);
+    memcpy(p.src_logical, src_logical, 6);
     memcpy(p.peer_logical, peer_logical, 6);
     p.acked_seq = vc->seq.recv_seq;
     /* Secondary counter [30:32] is inferred as "the sender's own outstanding

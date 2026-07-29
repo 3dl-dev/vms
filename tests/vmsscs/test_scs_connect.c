@@ -46,6 +46,8 @@ static uint16_t le16(const uint8_t *p)
 
 /* OVMX test identity. */
 static const uint8_t ovmx_mac[6] = { 0x02, 0x00, 0x00, 0x4f, 0x56, 0x58 }; /* "OVX", local bit */
+/* vms-9f3: OVMX's cluster-LOGICAL addr (abs 24), DISTINCT from the raw HW MAC. */
+static const uint8_t ovmx_logical[6] = { 0xaa, 0x00, 0x04, 0x00, 0x06, 0x04 };
 /* VAX1 (DECnet node): Ethernet src == its logical LAVC addr. */
 static const uint8_t vax1_mac[6] = { 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04 };
 
@@ -58,6 +60,7 @@ static void test_directed_hello(void)
      * builder IGNORES it in favor of peer_mac. */
     scs_hello_multicast_addr(SCS_HELLO_MCAST_GROUP1, p.dst_mac);
     memcpy(p.src_mac, ovmx_mac, 6);
+    memcpy(p.src_logical, ovmx_logical, 6);
     strncpy(p.node_name, "OVMX", sizeof(p.node_name) - 1);
     p.timer_tick = 0;
 
@@ -71,7 +74,9 @@ static void test_directed_hello(void)
     check_bytes(out + 0, vax1_mac, 6, "Ethernet dst == peer MAC (directed, not multicast)");
     check_bytes(out + 16, vax1_mac, 6, "SCA dest logical addr mirrors peer MAC (abs 16)");
     check_bytes(out + 6, ovmx_mac, 6, "Ethernet src == OVMX HW MAC");
-    check_bytes(out + 24, ovmx_mac, 6, "SCA src logical addr == OVMX HW MAC (abs 24)");
+    check_bytes(out + 24, ovmx_logical, 6, "SCA src-logical == cluster-LOGICAL addr, NOT HW MAC (abs 24, vms-9f3)");
+    check(memcmp(out + 24, ovmx_mac, 6) != 0, "src-logical (abs 24) DISTINCT from raw HW MAC (vms-9f3)");
+    check_bytes(out + 120, ovmx_mac, 6, "HELLO-tail HW MAC == raw HW MAC (abs 120, unchanged)");
 
     /* GROUNDED directed markers (spec sec 4b). */
     static const uint8_t nonce_want[4] = SCS_HELLO_LAB_NONCE_BYTES;
@@ -143,6 +148,7 @@ static void test_build_request(void)
     memset(&cp, 0, sizeof(cp));
     memcpy(cp.dst_mac, vax1_mac, 6);
     memcpy(cp.src_mac, ovmx_mac, 6);
+    memcpy(cp.src_logical, ovmx_logical, 6);
     memcpy(cp.peer_logical, vax1_mac, 6);
     cp.local_conid = SCS_CONNECT_OVMX_CONID_BASE | 0x0001u;
     cp.remote_conid = 0; /* ignored */
@@ -156,7 +162,8 @@ static void test_build_request(void)
     check(out[12] == 0x60 && out[13] == 0x07, "ethertype 0x6007");
     check(out[14] == 0x6c && out[15] == 0x00, "SCA length field 0x006c (total 110)");
     check_bytes(out + 16, vax1_mac, 6, "SCA dest logical == peer_logical (abs 16)");
-    check_bytes(out + 24, ovmx_mac, 6, "SCA src logical == OVMX HW MAC (abs 24)");
+    check_bytes(out + 24, ovmx_logical, 6, "SCA src-logical == cluster-LOGICAL addr, NOT HW MAC (abs 24, vms-9f3)");
+    check(memcmp(out + 24, ovmx_mac, 6) != 0, "src-logical (abs 24) DISTINCT from raw HW MAC (vms-9f3)");
     check(out[30] == 0x4b && out[31] == 0x13, "msgtype 0x4b, format 0x13 (abs 30/31, GROUNDED)");
     check(le32(out + 64) == 0x00000000u, "Remote Con.ID == 0 (CONNECT-REQUEST, abs 64)");
     check(le32(out + 68) == (SCS_CONNECT_OVMX_CONID_BASE | 0x0001u), "Local Con.ID == OVMX's (abs 68)");
@@ -178,6 +185,7 @@ static void test_build_response(void)
     memset(&cp, 0, sizeof(cp));
     memcpy(cp.dst_mac, vax1_mac, 6);
     memcpy(cp.src_mac, ovmx_mac, 6);
+    memcpy(cp.src_logical, ovmx_logical, 6);
     memcpy(cp.peer_logical, vax1_mac, 6);
     cp.local_conid = SCS_CONNECT_OVMX_CONID_BASE | 0x0001u;
     cp.remote_conid = 0x62C50009u; /* echo the peer's (VAX1) Con.ID */
@@ -209,6 +217,7 @@ static void test_response_live_counters(void)
     memset(&cp, 0, sizeof(cp));
     memcpy(cp.dst_mac, vax1_mac, 6);
     memcpy(cp.src_mac, ovmx_mac, 6);
+    memcpy(cp.src_logical, ovmx_logical, 6);
     memcpy(cp.peer_logical, vax1_mac, 6);
     cp.local_conid = SCS_CONNECT_OVMX_CONID_BASE | 0x0001u;
     cp.remote_conid = 0x62C50009u;          /* echo the VAX's Con.ID */

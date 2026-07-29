@@ -141,8 +141,9 @@ static void joiner_params(struct scs_member_params *mp, uint16_t recv_ack,
                           uint16_t send_seq, uint16_t sysap_send, uint16_t sysap_ack)
 {
     memset(mp, 0, sizeof(*mp));
-    memcpy(mp->dst_mac, vax1_logical, 6);   /* Ethernet header unused by SCA compare */
-    memcpy(mp->src_mac, vax2_logical, 6);   /* src_mac -> SCA src-logical [10:16] */
+    memcpy(mp->dst_mac, vax1_logical, 6);     /* Ethernet header unused by SCA compare */
+    memcpy(mp->src_mac, vax2_logical, 6);     /* Ethernet src (VAX2 is a DECnet node here) */
+    memcpy(mp->src_logical, vax2_logical, 6); /* SCA src-logical [10:16] (abs 24) = VAX2 logical (vms-9f3) */
     memcpy(mp->peer_logical, vax1_logical, 6);
     mp->remote_conid = VAX1_VC_CONID;
     mp->local_conid = VAX2_VC_CONID;
@@ -272,6 +273,7 @@ static void test_response_echoes_real_checksum(void)
     memset(&mp, 0, sizeof(mp));
     memcpy(mp.dst_mac, vax1_logical, 6);
     memcpy(mp.src_mac, vax2_logical, 6);
+    memcpy(mp.src_logical, vax2_logical, 6); /* SCA src-logical (abs 24) = VAX2 logical (vms-9f3) */
     memcpy(mp.peer_logical, vax1_logical, 6);
     mp.remote_conid = VAX1_VC_CONID;
     mp.local_conid = VAX2_VC_CONID;

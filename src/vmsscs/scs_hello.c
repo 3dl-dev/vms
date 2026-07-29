@@ -48,8 +48,11 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
     out[22] = 0x01;
     out[23] = 0x00; /* connect flag, constant 0x0001 (observed constant) */
 
-    memcpy(out + 24, p->src_mac, 6); /* src logical addr, sender's own (GROUNDED location;
-                                       * OVMX uses its real HW MAC here -- see scs_hello.h) */
+    memcpy(out + 24, p->src_logical, 6); /* src-logical LAVC addr, sender's own (GROUNDED, sec 4a):
+                                           * the cluster-LOGICAL addr aa:00:04:00:<sysid>, NOT the
+                                           * raw HW MAC -- VAX1's PEDRIVER keys peer identity here
+                                           * (vms-9f3). eth-src (out+6) + HW-MAC-tail (out+120)
+                                           * keep the raw src_mac. */
 
     out[30] = 0xa0;
     out[31] = 0x00; /* per-frame word, multicast value (inferred-constant, sec 4a) */
@@ -172,5 +175,50 @@ int scs_hello_build_directed_frame(const struct scs_hello_params *p,
     out[128] = 0x1f;
     out[129] = 0x00;            /* poller-sweep marker = 31 (GROUNDED, sec 4b) */
 
+    return 0;
+}
+
+int scs_hello_build_padded_directed_frame(const struct scs_hello_params *p,
+                                          const uint8_t peer_mac[6],
+                                          const uint8_t nonce[4],
+                                          uint16_t incarnation,
+                                          uint16_t total_sca_len,
+                                          uint8_t *out, size_t out_cap,
+                                          size_t *frame_len_out)
+{
+    if (p == NULL || peer_mac == NULL || nonce == NULL || out == NULL ||
+        frame_len_out == NULL) {
+        return -1;
+    }
+    /* Must span at least the full 120-byte directed HELLO, and no more than
+     * NISCS_MAX_PKTSZ (+2) of SCA content -- the GROUNDED probe ceiling (sec 4k). */
+    if (total_sca_len < SCS_HELLO_SCA_LEN || total_sca_len > SCS_HELLO_PADDED_MAX_SCA) {
+        return -1;
+    }
+    size_t frame_len = (size_t)14 + (size_t)total_sca_len;
+    if (out_cap < frame_len) {
+        return -1;
+    }
+
+    /* Zero the WHOLE frame first so the pad tail (abs 134..) is pure zeros;
+     * scs_hello_build_directed_frame only memsets its own 134-byte window. */
+    memset(out, 0, frame_len);
+
+    int rc = scs_hello_build_directed_frame(p, peer_mac, nonce, incarnation, out);
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* Rewrite ONLY the SCA length field (abs 14-15) to encode the padded total:
+     * LE16 = total_sca_len - 2 (spec sec 2 length identity). Every other byte of
+     * the 120-byte directed HELLO (abs 16-133) is unchanged, and abs 134.. stays
+     * zero -- the padded frame is a genuine directed HELLO plus a zero tail
+     * (GROUNDED sec 4k: smaller probes are byte-identical prefixes of the 1500B
+     * frame apart from this length field). */
+    uint16_t lenword = (uint16_t)(total_sca_len - 2u);
+    out[14] = (uint8_t)(lenword & 0xff);
+    out[15] = (uint8_t)((lenword >> 8) & 0xff);
+
+    *frame_len_out = frame_len;
     return 0;
 }

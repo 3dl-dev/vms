@@ -144,6 +144,7 @@ static uint32_t get_le32(const uint8_t *src)
  * (dst/src logical) and the SCS sequence counters. Con.ID/name/result are
  * substituted by the per-class callers afterward. */
 static void dir_build_common(const uint8_t *dst_mac, const uint8_t *src_mac,
+                             const uint8_t *src_logical,
                              const uint8_t *peer_logical, const uint8_t *tmpl,
                              size_t sca_len, uint16_t recv_ack, uint16_t send_seq,
                              uint16_t incarnation, uint8_t *out)
@@ -159,7 +160,8 @@ static void dir_build_common(const uint8_t *dst_mac, const uint8_t *src_mac,
 
     /* Envelope address substitutions (payload-relative + 14). */
     memcpy(out + 14 + 2, peer_logical, 6);  /* dst logical [2:8]  (abs 16) */
-    memcpy(out + 14 + 10, src_mac, 6);      /* src logical [10:16] (abs 24) = OVMX HW MAC */
+    memcpy(out + 14 + 10, src_logical, 6);  /* src-logical [10:16] (abs 24) = aa:00:04:00:<sysid>
+                                             * cluster-LOGICAL addr, NOT raw HW MAC (vms-9f3) */
 
     /* Sequence counters (spec sec 4h(4)): recv_ack at [18:20]/[26:28]/[34:36],
      * send_seq at [20:22] mirrored at [30:32]. */
@@ -191,8 +193,8 @@ int scs_dir_build_connect_echo(const struct scs_dir_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
-    dir_build_common(p->dst_mac, p->src_mac, p->peer_logical, dir_echo_tmpl,
-                     SCS_DIR_ECHO_SCA_LEN, p->recv_ack, p->send_seq,
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_echo_tmpl, SCS_DIR_ECHO_SCA_LEN, p->recv_ack, p->send_seq,
                      p->incarnation, out);
     /* Con.ID: remote = peer's handle (echoed), local stays 0 for the echo. */
     put_le32(out + 14 + 50, p->remote_conid);
@@ -205,8 +207,8 @@ int scs_dir_build_connect_response(const struct scs_dir_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
-    dir_build_common(p->dst_mac, p->src_mac, p->peer_logical, dir_resp_tmpl,
-                     SCS_DIR_RESP_SCA_LEN, p->recv_ack, p->send_seq,
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_resp_tmpl, SCS_DIR_RESP_SCA_LEN, p->recv_ack, p->send_seq,
                      p->incarnation, out);
     /* Con.ID pair now bound: remote = peer's handle, local = OVMX's own. */
     put_le32(out + 14 + 50, p->remote_conid);
@@ -220,8 +222,8 @@ int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
     if (p == NULL || out == NULL) {
         return -1;
     }
-    dir_build_common(p->dst_mac, p->src_mac, p->peer_logical, dir_lookup_tmpl,
-                     SCS_DIR_LOOKUP_SCA_LEN, p->recv_ack, p->send_seq,
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_lookup_tmpl, SCS_DIR_LOOKUP_SCA_LEN, p->recv_ack, p->send_seq,
                      p->incarnation, out);
 
     /* Opcode echoes the request (0x5b before the SCS$DIRECTORY connection is up,

@@ -95,7 +95,8 @@ static int build_from_tmpl(const struct scs_connect_params *p,
 
     /* Substitute the identity + Con.ID fields (GROUNDED positions). */
     memcpy(out + 14 + 2, p->peer_logical, 6);  /* dest logical (abs 16) */
-    memcpy(out + 14 + 10, p->src_mac, 6);       /* src logical  (abs 24) = OVMX HW MAC */
+    memcpy(out + 14 + 10, p->src_logical, 6);   /* src-logical (abs 24) = aa:00:04:00:<sysid>
+                                                 * cluster-LOGICAL addr, NOT raw HW MAC (vms-9f3) */
     put_le32(out + 14 + 50, remote_conid);      /* Remote Con.ID (abs 64) */
     put_le32(out + 14 + 54, p->local_conid);    /* Local  Con.ID (abs 68) */
 

@@ -116,7 +116,9 @@ extern "C" {
  */
 struct scs_dir_params {
     uint8_t  dst_mac[6];      /* Ethernet dst = peer's observed Ethernet src MAC */
-    uint8_t  src_mac[6];      /* Ethernet src + SCA src-logical [10:16] = OVMX HW MAC */
+    uint8_t  src_mac[6];      /* Ethernet src (abs 6) = OVMX HW MAC */
+    uint8_t  src_logical[6];  /* SCA src-logical [10:16] (abs 24) = aa:00:04:00:<LE16(sysid)>;
+                                 cluster-LOGICAL addr, NOT the raw HW MAC (vms-9f3) */
     uint8_t  peer_logical[6]; /* SCA dest-logical [2:8] = peer's advertised logical addr */
     uint32_t remote_conid;    /* [50:54] peer's SCS$DIRECTORY handle (learned) */
     uint32_t local_conid;     /* [54:58] OVMX's own SCS$DIRECTORY handle */
@@ -132,6 +134,7 @@ struct scs_dir_params {
 struct scs_dir_lookup_params {
     uint8_t  dst_mac[6];
     uint8_t  src_mac[6];
+    uint8_t  src_logical[6];  /* SCA src-logical [10:16] (abs 24) = aa:00:04:00:<sysid> (vms-9f3) */
     uint8_t  peer_logical[6];
     uint32_t remote_conid;    /* peer's SCS$DIRECTORY handle */
     uint32_t local_conid;     /* OVMX's SCS$DIRECTORY handle */

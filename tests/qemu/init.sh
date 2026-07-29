@@ -77,6 +77,31 @@ for test in /tests/test_kmod_*; do
     fi
 done
 
+# Measurement program for the vms-ln0 logical-name placement ruling.
+# Not a correctness test, but it does assert that /dev/vms answers before it
+# times anything -- so it counts as a suite: a silent skip would be worse.
+if [ -x /tests/bench_lnm_cost ]; then
+    echo ""
+    echo "--- bench_lnm_cost (vms-ln0 measurement) ---"
+    /tests/bench_lnm_cost
+    if [ $? -eq 0 ]; then
+        TOTAL_PASS=$((TOTAL_PASS+1))
+    else
+        TOTAL_FAIL=$((TOTAL_FAIL+1))
+    fi
+fi
+
+if [ -x /tests/bench_lnm_peropen ]; then
+    echo ""
+    echo "--- bench_lnm_peropen (vms-ln0 measurement) ---"
+    /tests/bench_lnm_peropen
+    if [ $? -eq 0 ]; then
+        TOTAL_PASS=$((TOTAL_PASS+1))
+    else
+        TOTAL_FAIL=$((TOTAL_FAIL+1))
+    fi
+fi
+
 echo ""
 echo "=== FINAL RESULTS: $TOTAL_PASS suites passed, $TOTAL_FAIL suites failed ==="
 echo ""

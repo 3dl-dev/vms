@@ -146,6 +146,112 @@ jobs:
             /test.sh
 
   # -----------------------------------------------------------------------
+  # Job 3b: Kernel Executive (vms-e4d, epic vms-6b8 PHASE 0 HARD BARRIER)
+  #
+  # This is the ONLY CI job that boots a real kernel, insmods vms.ko, and runs
+  # executive assertions against /dev/vms. Before this job existed, NO CI job
+  # ever loaded vms.ko (persistent-boot above runs entirely inside Docker,
+  # which has no /dev/vms) — so every executive facility (access modes, ASTs,
+  # event flags, the lock manager) was provably untested in CI, and userspace
+  # code drifted toward per-process fakes that report success without ever
+  # touching the executive. tests/qemu/Dockerfile builds vms.ko + vmsfs.ko
+  # against a real Ubuntu kernel, assembles an initramfs with statically-linked
+  # test programs (ENQ/CONVERT/DEQ round-trips, AST delivery, event-flag
+  # clusters, access-mode/privilege checks, cross-process lock arbitration,
+  # vmsfs mount/read/write), and boots QEMU on the serial console via
+  # tests/qemu/run_tests.sh, which exits nonzero if any suite failed.
+  #
+  # Docker here is BUILD/TEST TOOLING (produces the kernel module + boots the
+  # real kernel in QEMU) — it is NOT standing in as the runtime; nothing in
+  # this job talks to /dev/vms from inside a container's own namespace, it
+  # boots an independent guest kernel that loads the module for real.
+  # -----------------------------------------------------------------------
+  kernel-executive:
+    name: Kernel Executive (vms.ko via /dev/vms, QEMU)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build kernel executive test image
+        run: docker build -f tests/qemu/Dockerfile -t ovmx-ktest:latest .
+
+      - name: Boot QEMU, insmod vms.ko, run executive assertions against /dev/vms
+        run: docker run --rm ovmx-ktest:latest
+
+  # -----------------------------------------------------------------------
+  # Job 3c: Kernel Executive — negative control (vms-e4d)
+  #
+  # Proves the kernel-executive gate above can actually fail. Builds the SAME
+  # harness with --build-arg NEGATIVE_CONTROL=1, which patches init.sh to skip
+  # insmod of vms.ko (simulating the executive being absent) while everything
+  # else — building vms.ko itself, loading vmsfs.ko, the test binaries — stays
+  # real. Every test that opens /dev/vms then fails honestly ("cannot open
+  # /dev/vms", the same SS$_NOSUCHDEV path src/libvms/syssvc/sys_lock.c already
+  # takes) instead of silently passing. run_tests.sh exits 1 in that case, so
+  # THIS job inverts the check: it PASSES only if the container run fails,
+  # and FAILS (catching a regression in the harness itself) if the container
+  # run unexpectedly succeeds while the executive is supposed to be absent.
+  # This is what keeps "a CI job that cannot fail is decoration" from
+  # regressing silently — it re-proves the gate can trip on every push.
+  # -----------------------------------------------------------------------
+  kernel-executive-negative-control:
+    name: Kernel Executive — Negative Control (proves the gate can fail)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build kernel executive test image WITHOUT loading vms.ko
+        run: |
+          docker build -f tests/qemu/Dockerfile \
+            --build-arg NEGATIVE_CONTROL=1 \
+            -t ovmx-ktest-negctl:latest .
+
+      - name: Assert the harness FAILS for the RIGHT REASON when the executive is absent
+        run: |
+          set +e
+          OUTPUT=$(docker run --rm ovmx-ktest-negctl:latest 2>&1)
+          RC=$?
+          set -e
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: expected the kernel-executive harness to fail with vms.ko unloaded, but it exited 0"
+            echo "This means a broken executive assertion would NOT fail CI -- the exact defect class vms-6b8 exists to kill."
+            exit 1
+          fi
+
+          # A nonzero exit alone proves nothing: a missing QEMU binary, a boot
+          # panic, run_tests.sh's hard-coded 120s TIMEOUT, or a runner OOM would
+          # ALL make this job go green for the WRONG reason. Assert the actual
+          # REASON the harness reported, not merely that something failed.
+          echo "$OUTPUT" | grep -qF 'cannot open /dev/vms' \
+            || { echo "FAIL: did not see the expected 'cannot open /dev/vms' failure text -- the job may have gone red for an unrelated reason (QEMU missing, boot panic, run_tests.sh timeout, runner OOM), not because the executive is absent"; exit 1; }
+
+          # Pin the exact pass/fail split init.sh reports for this scenario.
+          # This also proves the harness ran to completion and reached its own
+          # FINAL RESULTS accounting -- a timeout or panic would never print
+          # this line at all, so this line alone rules those causes out.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 7 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/7-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+
+          # POSITIVE assertion paired with the two negative assertions above:
+          # vmsfs.ko has no dependency on vms.ko/the executive, so it must
+          # still load and pass with the executive absent. If the harness
+          # failed indiscriminately (e.g. gutted/always-fail), this would also
+          # fail, and the negative assertions above would be proving nothing
+          # about the executive specifically.
+          echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
+            || { echo "FAIL: vmsfs.ko (independent of vms.ko) did not pass with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency"; exit 1; }
+
+          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: /dev/vms unopenable, exact 3-passed/7-failed split), with vmsfs's independent facility still passing"
+
+  # -----------------------------------------------------------------------
   # Job 4: Conformance tests
   #
   # Runs inside the builder stage (has gcc, source tree, and built libs).

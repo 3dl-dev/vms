@@ -14,6 +14,14 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# NEGATIVE_CONTROL=1 simulates the executive being absent: vms.ko is built
+# normally (so the module and vmsfs.ko are proven buildable) but init.sh's
+# insmod of vms.ko is skipped, so /dev/vms never appears and every test that
+# depends on it fails honestly with "cannot open /dev/vms" (the real
+# SS$_NOSUCHDEV path, not a fake). This build arg exists ONLY to prove the CI
+# gate can actually go red — it is never set for the real barrier job.
+ARG NEGATIVE_CONTROL=0
+
 # Install: build tools, kernel packages, QEMU, busybox for initramfs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     make gcc libc6-dev kmod \
@@ -116,6 +124,10 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     done && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
+    if [ "$NEGATIVE_CONTROL" = "1" ]; then \
+        sed -i 's/^insmod \/lib\/modules\/vms\.ko$/echo "NEGATIVE CONTROL: simulating vms.ko load failure (executive absent)"/' /initramfs/init && \
+        echo "NEGATIVE_CONTROL=1: patched init.sh to skip insmod vms.ko"; \
+    fi && \
     chmod +x /initramfs/init && \
     # Pack initramfs
     cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \

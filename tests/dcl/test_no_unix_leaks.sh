@@ -102,6 +102,30 @@ if [ -r /proc/mounts ]; then
     done < /proc/mounts
 fi
 
+# Test 12: MOUNT-ing one of OVMX's fixed scratch devices (DUA0:/DJA0:, dcl_builtin.c
+# known_devices[]) must not leak the CALLING PROCESS'S current working directory into the
+# mounted device's DIRECTORY listing (vms-b9f, round 3 finding: cmd_mount() used
+# getcwd() as the device's backing path, so DIRECTORY DUA0:[000000] dumped whatever host
+# directory the shell happened to be in when MOUNT ran -- observed live: run from a temp
+# directory containing a marker file, DIRECTORY DUA0:[000000] listed that marker file).
+# This is a NEGATIVE/POSITIVE pair per the standing rule: the negative check below (no
+# marker file) is worthless on its own -- a DIRECTORY command gutted to print nothing
+# would also show no marker -- so it is paired with a positive assertion that DIRECTORY
+# still produces real output (a "Directory" header and a "Total of" summary line).
+mount_leak_dir=$(mktemp -d)
+mount_leak_marker="OVMX_MOUNT_HOST_LEAK_MARKER_$$"
+touch "$mount_leak_dir/$mount_leak_marker"
+output=$(cd "$mount_leak_dir" && printf 'MOUNT DUA0: LEAKCHK\nDIRECTORY DUA0:[000000]\nDISMOUNT DUA0:\n' | $VMSDCL 2>&1)
+rm -rf "$mount_leak_dir"
+if echo "$output" | grep -qF "$mount_leak_marker"; then
+    echo "  LEAK in MOUNT/DIRECTORY: host cwd marker file '$mount_leak_marker' appeared in DIRECTORY DUA0:[000000]"
+    LEAKS_FOUND=$((LEAKS_FOUND + 1))
+fi
+if ! echo "$output" | grep -q "^Directory " || ! echo "$output" | grep -q "^Total of "; then
+    echo "  LEAK in MOUNT/DIRECTORY: DIRECTORY DUA0:[000000] did not produce a real directory listing (gutted, not fixed)"
+    LEAKS_FOUND=$((LEAKS_FOUND + 1))
+fi
+
 if [ $LEAKS_FOUND -gt 0 ]; then
     echo "UNIX_LEAK_DETECTED: $LEAKS_FOUND commands leaked Unix paths/errors"
 fi

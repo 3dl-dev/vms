@@ -24,14 +24,9 @@
 #include <unistd.h>
 #include "starlet.h"
 #include "vms_kif.h"
-
-/* Lock Status Block (VMS-compatible layout) */
-struct lksb {
-    uint16_t lksb$w_status;
-    uint16_t lksb$w_reserved;
-    uint32_t lksb$l_lkid;
-    char     lksb$b_valblk[16];  /* Lock value block */
-};
+#include "lksdef.h"  /* struct lksb — now a public header (vms-1d9); same
+                      * field layout this file always used, just no longer
+                      * a private duplicate only sys_lock.c could see. */
 
 /*
  * Lazily open /dev/vms for this thread. vms_kif_open() is idempotent

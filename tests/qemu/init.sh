@@ -63,8 +63,12 @@ fi
 # Create directories needed by vmsfs tests
 mkdir -p /tmp/vmsfs_backing /mnt/vmsfs
 
-# Run each test program
-for test in /tests/test_kmod_*; do
+# Run each test program. test_kmod_* drive /dev/vms with raw ioctls
+# (kernel lock manager, ASTs, event flags, access modes, vmsfs). test_syssvc_*
+# drive the same /dev/vms through the PUBLIC sys$ API in src/libvms instead
+# (vms-1d9) -- exercising the userspace system-service layer the ioctl tests
+# cannot see at all.
+for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     [ -x "$test" ] || continue
     echo ""
     echo "--- $(basename $test) ---"
@@ -72,6 +76,13 @@ for test in /tests/test_kmod_*; do
     rc=$?
     if [ $rc -eq 0 ]; then
         TOTAL_PASS=$((TOTAL_PASS+1))
+    elif [ $rc -eq 77 ]; then
+        # Honest skip (e.g. /dev/vms absent) -- should never happen in this
+        # job, since vms.ko was just insmod'd above. Count as a FAIL: if it
+        # ever fires here, the executive is not actually present, which is
+        # exactly what this job exists to catch.
+        echo "  SKIP reported inside the kernel-executive job -- treating as FAIL"
+        TOTAL_FAIL=$((TOTAL_FAIL+1))
     else
         TOTAL_FAIL=$((TOTAL_FAIL+1))
     fi

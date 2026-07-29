@@ -168,6 +168,12 @@ if(BUILD_TESTS)
     add_subdirectory(tests/dcl)
     add_subdirectory(tests/vmsscs)
 
+    # Public sys$ API tests for the QEMU kernel-executive harness (vms-1d9,
+    # epic vms-6b8 Phase 0.5). Links real src/libvms against a real
+    # /dev/vms when present; SKIP (ctest exit 77), never a fake PASS,
+    # when it is not (see tests/qemu/CMakeLists.txt).
+    add_subdirectory(tests/qemu)
+
     # INV-1 standing gate (vms-e652): system identity has ONE owner, and the
     # login banner stays driven by SYS$WELCOME rather than a compiled-in
     # printf. Source scan — no build artifacts needed.

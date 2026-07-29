@@ -308,8 +308,8 @@ for this rework, gave `lnm_hit_s` native means of 66.2 and 54.1 ns/op — a ~22%
 reported native spread (~4.6%), consistent with this rework running on a more contended host
 (a shared container environment, not a dedicated machine) — it does not change which figure was
 transcribed above: the run pasted is the first of the three taken, not selected after seeing all
-three, and its own point value (54.6) sits at the low end of the three-run range, not the high
-end where cherry-picking a favorable native baseline would land.
+three, and its own point value (54.6) sits near the low end of the three-run range (54.1–66.2),
+not the high end where cherry-picking a favorable native baseline would land.
 
 | | QEMU TCG | native host | TCG inflation |
 |---|---|---|---|

@@ -209,8 +209,15 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
 #define OVMX_MAX_PEERS 4
 
 /* OVMX's own VMS$VAXcluster Con.ID for this run (OVMX design choice; opaque
- * to the peer -- see scs_connect.h). */
-#define OVMX_LOCAL_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0001u)
+ * to the peer -- see scs_connect.h). We use two distinct handles: one for the
+ * connection the MEMBER opens to OVMX (answered with a CONNECT-RESPONSE), and a
+ * separate one for the connection OVMX opens to the member as an ACTIVE JOINER
+ * (the clean-ref grounded requirement, vms-d94: VAXB opens its OWN
+ * VMS$VAXcluster connection and sends the add-member burst on IT --
+ * formation-clean-2node.pcap idx52/59). A single handle for both directions
+ * would collide the two SCS connections. */
+#define OVMX_LOCAL_CONID  (SCS_CONNECT_OVMX_CONID_BASE | 0x0001u)
+#define OVMX_JOINER_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0002u)
 
 /* Absolute frame offsets used by the responder (spec byte-offset convention:
  * 0 = first byte of Ethernet dst). */
@@ -254,6 +261,15 @@ struct peer_state {
     uint16_t sysap_send;           /* OVMX's next SYSAP send-msg# (body[0:2]; from 1) */
     uint16_t sysap_recv;           /* high-water of the member's SYSAP send-msg# (ack target) */
     long     cm_responses;         /* 0x81 responses we sent to member 0x03/0x05 txns */
+    /* --- vms-d94: ACTIVE-JOINER VMS$VAXcluster connection (the connection OVMX
+     * OPENS to the member, distinct from the member-opened one above). The
+     * clean-ref join sends the add-member burst on THIS joiner-initiated
+     * connection (formation-clean-2node.pcap idx52 CONNECT-REQ -> idx59 CM). */
+    int      joiner_connect_sent;  /* we sent our own VMS$VAXcluster CONNECT-REQUEST */
+    int      joiner_connected;     /* the member accepted it (Con.ID pair bound) */
+    uint32_t joiner_remote_conid;  /* the member's Con.ID on OUR connection (from its response) */
+    int      joiner_cm_sent;       /* we sent the add-member burst on our own connection */
+    struct timespec last_joiner_req; /* CLOCK_MONOTONIC of our last joiner CONNECT-REQUEST (retx) */
     /* --- vms-9f3: NISCA channel packet-size verification (padded directed
      * HELLO, spec sec 4k). An ESTABLISHED VAX1 zero-pads a directed HELLO up to
      * NISCS_MAX_PKTSZ and retransmits it (1500->1069->853->745, ~6s) until OVMX
@@ -334,7 +350,8 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
  */
 static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
                                 const uint8_t our_hw_mac[6],
-                                const uint8_t our_src_logical[6])
+                                const uint8_t our_src_logical[6],
+                                uint32_t local_conid, uint32_t remote_conid)
 {
     if (ps->sysap_send == 0) {
         ps->sysap_send = 1; /* SYSAP send-msg# starts at 1 (spec sec 4j) */
@@ -344,14 +361,16 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     uint8_t frame[SCS_MEMBER_FRAME_LEN];
     int sent = 0;
 
-    /* Shared identity + connection fields for all three frames. */
+    /* Shared identity + connection fields for all three frames. The Con.ID pair
+     * identifies WHICH VMS$VAXcluster connection the burst rides (vms-d94: the
+     * add-member burst must ride the JOINER-initiated connection). */
     memset(&mp, 0, sizeof(mp));
     memcpy(mp.dst_mac, ps->eth_mac, 6);
     memcpy(mp.src_mac, our_hw_mac, 6);
     memcpy(mp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 cluster-logical addr */
     memcpy(mp.peer_logical, ps->logical, 6);
-    mp.remote_conid = ps->remote_conid;
-    mp.local_conid = OVMX_LOCAL_CONID;
+    mp.remote_conid = remote_conid;
+    mp.local_conid = local_conid;
     mp.incarnation = ps->incarnation;
 
     /* op 0x14 node CPU/model advertisement (OVMX's own model string). */
@@ -771,22 +790,11 @@ int main(int argc, char **argv)
                         ps->sysap_recv = mv.sysap_send_msg;
                     }
 
-                    /* Trigger our config burst on the member's first category-
-                     * 0x01 message if the bind path did not already send it
-                     * (defensive: the VC is provably ready once the member is
-                     * talking membership on it). */
-                    if (!ps->cm_config_sent &&
-                        (mv.category & 0x7f) == SCS_MEMBER_CAT_CONFIG) {
-                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
-                        cm_config_frames += c;
-                        log_ts(stdout);
-                        printf(" SCSD-I-CMCONFIG, sent add-member config burst"
-                               " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"
-                               " to member %02x:%02x:%02x:%02x:%02x:%02x\n",
-                               c, ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
-                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5]);
-                        fflush(stdout);
-                    }
+                    /* vms-d94: the add-member burst is NO LONGER triggered on
+                     * the member-opened connection -- it rides OUR joiner
+                     * connection (see the OVMX_JOINER_CONID bind branch). We keep
+                     * tracking the member's SYSAP send-msg# high-water above so
+                     * our joiner-side acks (sysap_ack_msg) stay correct. */
 
                     /* Answer the member-driven op 0x03 commit / op 0x05
                      * lock-rebuild transactions (echo the token, spec sec 4j). */
@@ -1017,48 +1025,63 @@ int main(int argc, char **argv)
                 }
             }
 
-            /* vms-21e: OVMX is the JOINER, so the established node drives the
-             * 0x4b CONNECT-REQUEST and OVMX answers it (branch (c) below). We
-             * only open the connection from our side as a FALLBACK, and only
-             * AFTER the phase-2 START/config handshake has completed
-             * (ps->start_acked) and the peer has not already bound it. Firing a
-             * CONNECT-REQUEST before START (the old vms-5fe behavior) put a
-             * premature 0x4b on the wire that the VAX ignored. */
-            /* vms-246: once the peer begins the SCS$DIRECTORY exchange (dir_seen),
-             * OVMX is a pure joiner-responder: the ESTABLISHED node drives the
-             * VMS$VAXcluster 0x4b connect (spec sec 4g phase-4 is VAX1->VAX2), so
-             * OVMX must NOT self-initiate a competing CONNECT-REQUEST here --
-             * doing so would put a second sequenced message on the VC and desync
-             * OVMX's send_seq against the directory responses. Completing the
-             * VAX-initiated 0x4b connect is item vms-c6d. */
-            if (do_connect && ps->start_acked && !ps->dir_seen &&
-                !ps->connect_sent && !ps->connected) {
-                struct scs_connect_params cp;
-                memset(&cp, 0, sizeof(cp));
-                memcpy(cp.dst_mac, ps->eth_mac, 6);
-                memcpy(cp.src_mac, our_hw_mac, 6);
-                memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-                memcpy(cp.peer_logical, ps->logical, 6);
-                cp.local_conid = OVMX_LOCAL_CONID;
-                cp.remote_conid = 0;
-                /* vms-c6d: thread live counters -- this self-initiated request is
-                 * a sequenced message, so advance OVMX's send_seq for it. */
-                cp.recv_ack = ps->vc.seq.recv_seq;
-                cp.send_seq = scs_seq_advance(&ps->vc.seq);
-                cp.incarnation = ps->incarnation;
-                uint8_t cframe[SCS_CONNECT_FRAME_LEN];
-                if (scs_connect_build_request(&cp, cframe) == 0 &&
-                    send_frame_to(sock, (int)ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
-                    ps->connect_sent = 1;
-                    connect_req_sent++;
-                    /* vms-691: the connect-request is OVMX's own outstanding
-                     * sequenced message -- track it for retransmit until the
-                     * peer's CONNECT-RESPONSE binds the Con.ID pair. */
-                    scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
-                    log_ts(stdout);
-                    printf(" SCSD-I-CONNREQ, sent CONNECT-REQUEST local_conid=0x%08X to peer\n",
-                           OVMX_LOCAL_CONID);
-                    fflush(stdout);
+            /* vms-d94: OVMX is a cluster JOINER, and a real joiner ACTIVELY OPENS
+             * its OWN VMS$VAXcluster connection to the member and sends its
+             * add-member request on it -- it is NOT a pure passive responder.
+             * GROUNDED on the clean 2-node reference (formation-clean-2node.pcap):
+             * the joiner VAXB, after the START handshake + directory exchange,
+             * sends its OWN VMS$VAXcluster CONNECT-REQUEST (idx52, remote=0,
+             * offering its own Con.ID) and then streams the 190-byte add-member
+             * config on THAT joiner-initiated connection (idx59). The prior
+             * vms-246 "pure joiner-responder" derivation was wrong: it saw only
+             * the member->joiner connect in formation-ci1 and missed that the
+             * joiner ALSO opens its own connection (VMS$VAXcluster is symmetric).
+             * OVMX answering the member's connect but sending its burst on the
+             * MEMBER-opened connection is exactly why VAX1 ignored the burst and
+             * re-issued START round-0 forever.
+             *
+             * Fire OUR CONNECT-REQUEST once the START/config handshake has
+             * completed (start_acked) and the directory exchange is bound
+             * (dir_connected) -- the clean-ref ordering (START -> directory ->
+             * our VMS$VAXcluster connect). Use OVMX_JOINER_CONID (distinct from
+             * the OVMX_LOCAL_CONID we answer the member's connect with) so the
+             * two SCS connections do not collide. Retransmit every ~1s until the
+             * member accepts (joiner_connected), since the request is one
+             * sequenced message that may be lost -- the clean joiner sends
+             * several. */
+            if (do_connect && ps->start_acked && ps->dir_connected &&
+                !ps->joiner_connected) {
+                long now_ms = monotonic_ms();
+                long last_ms = ps->last_joiner_req.tv_sec * 1000L +
+                               ps->last_joiner_req.tv_nsec / 1000000L;
+                if (!ps->joiner_connect_sent || (now_ms - last_ms) >= 1000) {
+                    struct scs_connect_params cp;
+                    memset(&cp, 0, sizeof(cp));
+                    memcpy(cp.dst_mac, ps->eth_mac, 6);
+                    memcpy(cp.src_mac, our_hw_mac, 6);
+                    memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
+                    memcpy(cp.peer_logical, ps->logical, 6);
+                    cp.local_conid = OVMX_JOINER_CONID;
+                    cp.remote_conid = 0; /* CONNECT-REQUEST: peer's not yet known */
+                    /* Thread the shared per-channel VC send_seq: this request is a
+                     * sequenced message on the same NISCA channel as the directory
+                     * responses, so it advances the same counter (spec sec 4h). */
+                    cp.recv_ack = ps->vc.seq.recv_seq;
+                    cp.send_seq = scs_seq_advance(&ps->vc.seq);
+                    cp.incarnation = ps->incarnation;
+                    uint8_t cframe[SCS_CONNECT_FRAME_LEN];
+                    if (scs_connect_build_request(&cp, cframe) == 0 &&
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
+                        ps->joiner_connect_sent = 1;
+                        connect_req_sent++;
+                        clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
+                        scs_vc_record_sent(&ps->vc, cp.send_seq, now_ms);
+                        log_ts(stdout);
+                        printf(" SCSD-I-CONNREQ, sent OUR VMS$VAXcluster CONNECT-REQUEST"
+                               " local_conid=0x%08X to member (active joiner)\n",
+                               OVMX_JOINER_CONID);
+                        fflush(stdout);
+                    }
                 }
             }
             continue;
@@ -1341,35 +1364,37 @@ int main(int argc, char **argv)
                            v.local_conid, OVMX_LOCAL_CONID, cp.recv_ack, cp.send_seq,
                            cp.incarnation ? cp.incarnation : 1);
                     fflush(stdout);
-                    /* vms-224: VC bound -> immediately drive the add-member
-                     * config burst (op 0x14/0x01/0x02). The member RX block
-                     * re-triggers it defensively if this send is lost. */
-                    if (first && !ps->cm_config_sent) {
-                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
-                        cm_config_frames += c;
-                        log_ts(stdout);
-                        printf(" SCSD-I-CMCONFIG, sent add-member config burst"
-                               " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"
-                               " on VC bind\n", c);
-                        fflush(stdout);
-                    }
+                    /* vms-d94: do NOT send the add-member burst on this
+                     * member-opened connection. The clean-ref grounding
+                     * (formation-clean-2node.pcap) shows the joiner sends its
+                     * add-member config on the connection IT opens (idx52/59),
+                     * not on the member-opened one -- OVMX doing the latter is
+                     * exactly why VAX1 ignored the burst and looped START. We
+                     * still answer the member's CONNECT-REQUEST (above) to keep
+                     * that connection alive; the burst rides our own joiner
+                     * connection, bound in the OVMX_JOINER_CONID branch below. */
                 }
-            } else if (v.remote_conid == OVMX_LOCAL_CONID && !ps->connected) {
-                /* Peer's CONNECT-RESPONSE to our request -> the pair is bound. */
-                ps->remote_conid = v.local_conid;
-                ps->connected = 1;
+            } else if (v.remote_conid == OVMX_JOINER_CONID && !ps->joiner_connected) {
+                /* vms-d94: the member's CONNECT-RESPONSE to OUR active-joiner
+                 * CONNECT-REQUEST -> the joiner-initiated VMS$VAXcluster pair is
+                 * bound {local=OVMX_JOINER_CONID, remote=member's}. THIS is the
+                 * connection the add-member burst must ride (clean-ref idx59). */
+                ps->joiner_remote_conid = v.local_conid;
+                ps->joiner_connected = 1;
                 log_ts(stdout);
-                printf(" SCSD-I-CONNBOUND, peer accepted our connect:"
-                       " local=0x%08X remote=0x%08X\n", OVMX_LOCAL_CONID, v.local_conid);
+                printf(" SCSD-I-JOINBOUND, member accepted OUR VMS$VAXcluster connect:"
+                       " local=0x%08X remote=0x%08X\n", OVMX_JOINER_CONID, v.local_conid);
                 fflush(stdout);
-                /* vms-224: VC bound -> drive the add-member config burst. */
-                if (!ps->cm_config_sent) {
-                    int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
+                if (!ps->joiner_cm_sent) {
+                    int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac,
+                                                 our_src_logical,
+                                                 OVMX_JOINER_CONID, ps->joiner_remote_conid);
                     cm_config_frames += c;
+                    ps->joiner_cm_sent = 1;
                     log_ts(stdout);
                     printf(" SCSD-I-CMCONFIG, sent add-member config burst"
                            " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"
-                           " on VC bind\n", c);
+                           " on OUR joiner VC\n", c);
                     fflush(stdout);
                 }
             }

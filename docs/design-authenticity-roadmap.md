@@ -161,11 +161,28 @@ silently, which is a *worse* tell than a wrong version — the verb appears to w
 Implemented in `ovmx_banner.h`; the INV-1 gate asserts LOGINOUT and the SSH daemon keep resolving
 the logical rather than regressing to a compiled-in greeting.
 
-**Known gap (filed separately):** OVMX logical-name tables are currently **per-process** —
-`lnm_get_manager()` builds an in-process table and nothing but the daemon itself reads
-`SYLOGICALS.CONF`. So a boot-time or `DEFINE/SYSTEM` definition does not yet propagate to other
-processes; the banner reads whatever its own process can see. The banner is correctly wired *to* the
-logical, so it starts working the moment system-wide logicals do.
+**Logical names are themselves an authenticity surface** (`vms-d37`, blocks A4). Wiring the banner to
+`SYS$WELCOME` exposed that OVMX logical-name tables are **per-process**: `lnm_get_manager()` builds an
+in-process table, and nothing but the daemon itself reads `SYLOGICALS.CONF`. Demonstrated across two
+DCL processes:
+
+```
+proc 1:  DEFINE/SYSTEM CROSSPROC HELLO  /  SHOW LOGICAL CROSSPROC
+         ->    "CROSSPROC" = "HELLO" (LNM$SYSTEM)
+proc 2:  SHOW LOGICAL CROSSPROC
+         -> %DCL-W-NOLOG, no logical name match
+```
+
+`DEFINE/SYSTEM` reports success and the definition dies with the process. This is not adjacent
+infrastructure to be fixed later — logicals are *how a VMS system is configured*, so this is the
+epic's own thesis (uneven **depth**, not absence) and squarely INV-6 territory: a facility that looks
+implemented and silently isn't. It is the reason **A4 cannot honestly close on the banner work alone**
+— the banner is correctly wired *to* the logical, but a sysadmin still cannot set it.
+
+The in-process facility is otherwise genuinely deep and should not be rebuilt: all four tables
+(`LNM$PROCESS/JOB/GROUP/SYSTEM`), hierarchical search order, `/TABLE=`, `/PROCESS`, `/SYSTEM`,
+`DEASSIGN/SYSTEM`, and table attribution in `SHOW LOGICAL` all work. The single missing piece is
+cross-process sharing.
 
 ### INV-2 — Message-ident fidelity gate
 No emitted message may use an invented ident. New idents require oracle + operator sign-off. A

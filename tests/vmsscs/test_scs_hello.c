@@ -105,12 +105,15 @@ int main(void)
     check_bytes(out + 92, zero4, 2, "directed-HELLO flag == 0x0000 (GROUNDED, multicast)");
     static const uint8_t trailer_9205[2] = { 0x92, 0x05 };
     check_bytes(out + 94, trailer_9205, 2, "constant trailer == 0x9205 (inferred-constant)");
-    static const uint8_t timer_le[4] = { 0x44, 0x33, 0x22, 0x11 };
-    check_bytes(out + 96, timer_le, 4, "timer/tick == caller-supplied value, LE");
-    static const uint8_t tail_const[12] = {
-        0x99, 0x00, 0xbc, 0x00, 0x03, 0x58, 0x51, 0x41, 0x00, 0x00, 0x00, 0x00
+    /* abs 96-101: 48-bit LE timer (vms-9f3). timer_tick=0x11223344 -> 6-byte LE
+     * = 44 33 22 11 00 00. The high 2 bytes (abs 100-101) belong to THIS live
+     * timer, not to the constant tail -- they are no longer the frozen 0x0099. */
+    static const uint8_t timer_le[6] = { 0x44, 0x33, 0x22, 0x11, 0x00, 0x00 };
+    check_bytes(out + 96, timer_le, 6, "timer/tick (abs 96-101) == caller-supplied 48-bit value, LE (vms-9f3)");
+    static const uint8_t tail_const[10] = {
+        0xbc, 0x00, 0x03, 0x58, 0x51, 0x41, 0x00, 0x00, 0x00, 0x00
     };
-    check_bytes(out + 100, tail_const, 12, "constant tail matches baseline capture (inferred-constant)");
+    check_bytes(out + 102, tail_const, 10, "constant tail (abs 102-111) matches baseline capture (inferred-constant)");
     uint8_t zero8[8];
     memset(zero8, 0, sizeof(zero8));
     check_bytes(out + 112, zero8, 8, "bytes 112-119 == zero padding");

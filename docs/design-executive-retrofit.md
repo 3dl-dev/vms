@@ -131,12 +131,16 @@ mount table; INV-4 leak on a first-two-minutes command). Needs no executive.
   must be ruled before `vms-d37` is dispatched.
 - **`vms-ln0` is operator-gated. RULED — see `docs/design-logical-name-placement.md`.**
   Logical-name translation sits on the hot path of *every file open*; an ioctl per translation is a
-  syscall round trip. Measured on the runtime target: an executive ioctl costs 90.1 µs against
-  0.93 µs for the in-process four-table translate it would replace (96×), and a file open performs
-  a mean of 1.83 translations that would have to reach the executive — so option A costs
-  165 µs/open. **Ruling: the executive owns LNM$SYSTEM/GROUP/JOB; userspace reads them through a
-  read-only `mmap()` on `/dev/vms`; all mutations go through ioctl. LNM$PROCESS stays
-  per-process.** `vms-d37` must be built to that record, not to a per-translation ioctl.
+  syscall round trip. Measured on the runtime target (n=5 trials, not a single run): an executive
+  ioctl costs a mean 79.0 µs (range 76.2–81.6 µs) against a mean 0.94 µs for the in-process
+  four-table translate it would replace (mean 84.5×, range 78.5×–88.4×) — and that 79.0 µs is
+  itself a measured lower bound, not the real translate ioctl's ceiling. A file open performs a
+  mean of 1.83 translations that would have to reach the executive — so option A costs
+  139–149 µs/open (mean case) to 229–245 µs/open (system-image open). **Ruling: the executive owns
+  LNM$SYSTEM/GROUP/JOB; userspace reads them through a read-only `mmap()` on `/dev/vms`; all
+  mutations go through ioctl. LNM$PROCESS stays per-process.** `vms-d37` must be built to that
+  record, not to a per-translation ioctl. See `docs/design-logical-name-placement.md` §5 for which
+  of these numbers are measured and which are projected — do not conflate the two.
 - **Model tiers:** kernel/executive design → Opus; wiring and CI harness work → Sonnet; mechanical
   edits → Haiku.
 - Each item carries its own done-condition and constraints in rd; `rd show <id>` is authoritative

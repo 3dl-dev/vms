@@ -1310,6 +1310,111 @@ Seq advances.
 
 ---
 
+### 4(L) The active-joiner drive sequence — reaching `SHOW CLUSTER` membership (GROUNDED live, `vms-d94`)
+
+§4(g)–§4(k) decode the individual frame classes of the join. This section
+grounds the **choreography and timing** a joiner must reproduce to be admitted —
+i.e. *who must initiate what, and when* — derived from the clean 1→2-node
+reference `formation-clean-2node.pcap` (VAXB joining an established VAXA) and
+byte-verified **live** against a real VAX 7.3 by driving an OVMX joiner to each
+observed state. It corrects a first-pass model (that the joiner is a passive
+responder) that stalled the join indefinitely.
+
+**(1) The joiner actively DRIVES the post-START sequence; it is not a passive
+responder — GROUNDED.** The moment the phase-2 START/config handshake completes
+(§4g/§4i: config-round `0→1→2`, both nodes' 46-byte round-2 ack), the joiner
+VAXB *immediately* (Δt ≈ 0.1 ms in the clean reference) begins issuing its own
+requests — it does **not** wait to be asked. In order it: opens its **own**
+`SCS$DIRECTORY` connection to the member and looks up SYSAP names (§4h); sends
+its **own** `VMS$VAXcluster` **CONNECT-REQUEST** (§4g phase 4, JOINER→MEMBER,
+remote Con.ID = 0, offering its local handle); and streams the add-member config
+(§4j) on **that joiner-initiated VC**. A node that only *answers* the member's
+directory queries and sends its config on the **member-initiated** connection is
+never admitted (see (2)). The corollary, grounded on both captures: `VMS$VAXcluster`
+is symmetric but the **join is joiner-driven** — in a formation there is exactly
+one `VMS$VAXcluster` CONNECT-REQUEST and it is JOINER→MEMBER; the member does not
+open the cluster-manager connection to the joiner.
+
+**(2) The member's connection manager re-issues START on a timeout unless the
+joiner promptly drives the connect — GROUNDED live.** After START completes the
+member holds the channel open and waits for the joiner's `VMS$VAXcluster`
+CONNECT-REQUEST. If it does not arrive **promptly** — observed member timeout
+≈ 1.4 s — the member abandons the attempt and **re-issues the phase-2 `0x41`
+START at config-round 0**, looping indefinitely (observed 65 re-issues over
+425 s against a joiner that delayed its connect ~7 s). A joiner that fires its
+CONNECT-REQUEST the instant the post-START directory phase begins is accepted and
+the member **stops** re-issuing START. **START completing is therefore necessary
+but NOT sufficient**: the earlier "member loops START forever" symptom (mistaken
+at times for a START-handshake or 190-byte-VC defect) is the connection manager
+timing out while waiting for a joiner that never drove the connect.
+
+**(3) The member accepts the joiner's connect by Con.ID signature, not by
+opcode — GROUNDED live.** The member accepts the joiner's `VMS$VAXcluster`
+CONNECT-REQUEST by returning a frame whose **remote Con.ID == the joiner's
+offered local handle** and whose **local Con.ID is the member's freshly-supplied
+handle**, carrying the `VMS$VAXcluster` name and the affirmative descriptor
+(§4h `01 1b 01 03 …`). The observed message-type byte on that acceptance is
+**`0x5b`** (the directory/resolution class, §4g/§4h) — **not** the `0x4b`
+sequenced-application byte a connect-response was assumed to use. A joiner must
+therefore recognize its connect being bound by the **Con.ID pair**
+(`remote == own-handle, local != 0`), independent of the opcode, then treat the
+pair `{own-handle, member-handle}` as the bound cluster-manager VC.
+
+**(4) The joiner-connect sequence semantics — GROUNDED.** The CONNECT-REQUEST is
+one sequenced message on the **shared per-channel** VC sequence (§4h): it advances
+the channel `send_seq` exactly once, and **retransmissions REUSE that same
+`send_seq`** (a retransmit is not a new message — advancing it per retransmit
+desynchronizes the peer). `recv_ack` tracks the member's latest `send_seq` per
+the §4h lockstep. The joiner's directory responses and its connect-request share
+this one counter.
+
+**(5) `SHOW CLUSTER` status `NEW` — the transitional membership state, GROUNDED
+live.** Once the member accepts the joiner's `VMS$VAXcluster` connect and receives
+its add-member burst (§4j op `0x14/0x01/0x02`), it opens a CSB for the node and
+`SHOW CLUSTER` reports it with status **`NEW`** — the documented transitional
+state a node occupies before `MEMBER`. Contrast the observed progression by joiner
+completeness: a node that forms the channel (§4a.1) + answers START but never
+drives the connect appears in the SYSTEMS table with **blank** status; a node that
+promptly drives the connect + add-member reaches **`NEW`**; reaching **`MEMBER`**
+requires the reciprocal transaction in (7).
+
+**(6) The `[58:66]` software-version field is display-only — GROUNDED live.** The
+START/config software-version string (§4g `[58:66]`, `"VMS V7.3"` in every
+captured VMS node) is what `SHOW CLUSTER` prints in its **SOFTWARE** column. It is
+**not validated for admission**: a node advertising **`"VMX V0.1"`** (not a
+`"VMS Vx.y"` string) still reaches `NEW`, and `SHOW CLUSTER` prints `VMX V0.1`
+verbatim. OVMX advertises its own identity here rather than impersonating VMS
+(authenticity INV-0 / trademark ceiling). The field is a fixed 8-byte ASCII span.
+
+**(7) `NEW → MEMBER` — the remaining RE gap (honest).** Promotion from `NEW` to
+`MEMBER` was **not** achieved and is the open frontier. After the joiner's
+add-member burst the member **credits** it (§4h `0x48`) but does **not**
+reciprocate config on the joiner VC — instead it directory-looks-up the joiner
+(`MSCP$DISK`, then `VMS$VAXcluster`) and idles. In the clean 1→2-node formation
+the member instead **reciprocates** its own `0x14/0x01` on the joiner VC and then
+drives the interactive `0x02 → 0x03` (commit) `→ 0x05` (lock-rebuild) `→ 0x06`
+sequence of §4j to `MEMBER` (Member State Seq bump). **Ruled out live** as the
+cause of the stall: the joiner's **VOTES** value (tested `0` and `1`; both stall
+at `NEW`; `VOTES=0` is legitimate — an existing member ran `VOTES=0`); sending the
+`0x02` **prematurely** in the initial burst (held it — still `NEW`); and
+**3-node reconfiguration coordination** (zero member↔member 190-byte VC traffic
+followed the joiner's connect, so the member is **not** blocked waiting on the
+peer member's ack). The leading remaining hypothesis: the member reciprocates only
+once the joiner presents the **full connection-set a real joiner establishes** —
+notably actively **opening its own `SCS$DIRECTORY` connection** (dir connect/lookup
+**requests**, of which only the *response* side is currently built) and possibly
+returning its live `VMS$VAXcluster` handle in the directory-lookup **response** —
+so the member can resolve the joiner and reciprocate. This is the next
+deliverable.
+
+**Clean-room provenance:** every claim here is from (a) observing the reference
+lab wire (`formation-clean-2node.pcap` + live `SHOW CLUSTER`/`SDA` output on the
+lab VAX) and (b) public OpenVMS documentation on cluster connection management and
+the `NEW`/`MEMBER` SDA states. No VSI/HPE binary was disassembled (CLAUDE.md
+Rule 8).
+
+---
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:
@@ -1383,6 +1488,15 @@ For visibility, every field NOT marked GROUNDED above:
   nonce` hash is not derivable from passive capture — observe/replay only for
   a known cluster; a general implementation needs the documented
   `CLUSTER_AUTHORIZE` hash (not on the wire).
+- **`NEW → MEMBER` reciprocal transaction** (§4L(7)): the choreography that
+  promotes a `NEW` node to `MEMBER` is **not yet grounded**. The joiner's
+  add-member burst is credited but not reciprocated by the live member; VOTES,
+  premature-`0x02`, and 3-node coordination are ruled out as the cause. Leading
+  hypothesis: the joiner must open its own `SCS$DIRECTORY` connection (dir
+  connect/lookup *requests*) and/or hand back its live `VMS$VAXcluster` handle in
+  the lookup response. The choreography/timing that IS grounded (active-joiner
+  drive, prompt-connect timeout, Con.ID-signature acceptance, `NEW` status,
+  display-only software-version) is in §4L.
 
 ---
 

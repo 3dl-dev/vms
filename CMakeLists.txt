@@ -176,6 +176,15 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(identity_ssot_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
+
+    # Rule 9 standing gate: ONE runtime target (kernel/QEMU). Docker is not a
+    # runtime, and no executive facility may silently fall back to a
+    # per-process userspace fake when /dev/vms is absent. Source scan.
+    add_test(NAME runtime_target_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_runtime_target.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(runtime_target_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

@@ -146,18 +146,33 @@ So `vms-6b8` is **three** distinct problems:
 2. **Absent** — process table, logical names, device table, mailboxes: no kernel support at all.
 3. **Unavailable in Docker** — containers have no `/dev/vms`, and Docker is where CI runs.
 
-**The Docker question is the actual ruling needed.** `sys_lock.c` already set a precedent and wrote
-the policy down: the kernel module is the single authoritative lock manager, and in Docker `$ENQ`
-returns `SS$_NOSUCHDEV` — *"accepted, by design, not a bug."* Generalising that to the whole
-executive means **Docker/CI mode has no system-wide state at all**, and every executive-dependent
-authenticity item is gated behind the QEMU harness. The alternative is one executive API with two
-backends (kernel ioctl when `/dev/vms` exists; degraded otherwise) — which keeps CI able to test,
-and where **INV-6 bites hardest: a degraded backend must declare itself, never silently report
-success.** That silent-success failure mode is the exact bug class this whole section documents.
+**RULING (operator, 2026-07-28): there is no Docker question — the Docker *runtime* layer is dead.**
+OVMX has exactly one runtime: the real-kernel/QEMU path, with `vms.ko` as the executive reached via
+`/dev/vms`. See CLAUDE.md Project-Specific Rule 9, enforced by `tests/integration/test_runtime_target.sh`.
+So the executive is **kernel-mode, full stop** — there is no two-backend seam to design, and the
+per-process userspace tables are not "fallbacks" but **legacy to be replaced**. When `/dev/vms` is
+absent the correct behavior is to **fail honestly** (`SS$_NOSUCHDEV`, as `sys_lock.c` already does),
+never to fake per-process success.
 
-**Recommended order** (not yet ruled): (1) wire the existing unused ioctls; (2) formalise the
-two-backend seam `sys_lock.c` improvised; (3) extend kernel-side biggest-tell-first — process
-table, then device table, then mailboxes.
+**But this exposes the real blocker, which is CI.** No CI job ever loads `vms.ko`: `persistent-boot`
+runs its QEMU script *inside a Docker container*, and there is no kernel-module job at all. The
+kernel executive is therefore **unprovable in CI today**. That is not incidental — it is the
+mechanical *cause* of the whole gap: because CI runs in Docker and Docker has no `/dev/vms`, OVMX
+grew per-process userspace fakes that report success while sharing nothing. **The architecture
+drifted to fit the test harness**, which is why only `sys_lock.c` was ever wired.
+
+So the retrofit cannot start with the executive. It starts with a QEMU CI job that loads `vms.ko`
+and runs executive tests — otherwise every future change drifts back to the userspace fake, because
+that is the only path CI exercises.
+
+**Retrofit order** (`vms-6b8`; ruling settled, sequencing set by testability):
+1. **QEMU CI job that loads `vms.ko`** — the enabling prerequisite. Without it the executive is
+   unprovable and will rot back into userspace fakes. (`vms-e4d`)
+2. **Wire the already-implemented ioctls** — event flags, ASTs, privileges. Wiring, not design;
+   cheapest real executive behavior on the board.
+3. **Migrate the Docker-based CI jobs** to the musl/QEMU path, then delete the root `Dockerfile`
+   and `docker-compose.yml`. (`vms-71a`)
+4. **Extend kernel-side biggest-tell-first** — process table, then device table, then mailboxes.
 
 **Caveat against a blanket "kernel everything" rule:** logical-name translation is on the hot path
 of *every file open*. An ioctl per translation is a syscall round trip. LNM may deserve a shared

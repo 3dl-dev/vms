@@ -8,7 +8,7 @@
 
 ## Project Status
 
-Phases 1-7 are complete. The project is functional as a Docker container and bootable QEMU VM. See `tracking/roadmap.md` for phase history and `docs/product-vision.md` for scope.
+Phases 1-7 are complete. OVMX runs as a bootable QEMU VM — the single runtime target (Rule 9). (The Docker product container is dead legacy, retained only until CI migrates off it.) See `tracking/roadmap.md` for phase history and `docs/product-vision.md` for scope.
 
 ## Quick Reference
 
@@ -24,12 +24,8 @@ cd build && ctest --output-on-failure
 cmake -B build-static -DCMAKE_C_COMPILER=musl-gcc -DOVMX_STATIC=ON -DBUILD_TOOLS=ON
 cmake --build build-static -j$(nproc)
 
-# Docker container (glibc dev/CI convenience — NOT the VMS-native runtime;
-# bypasses IMGACT.EXE image activation + LINK.EXE. Use the QEMU VM for OVMX proper.)
-docker compose up --build
-ssh system@localhost -p 2222    # password: MANAGER
-
-# Bootable QEMU VM
+# Bootable QEMU VM — THE runtime (see Project-Specific Rule 9).
+# vms.ko provides the VMS executive; userspace reaches it via /dev/vms.
 docker build -f Dockerfile.bootable -o dist .
 ./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
 
@@ -158,7 +154,7 @@ When artifacts disagree, resolve conflicts in this order:
 - **Specs and plans**: Structured markdown in `docs/`
 - **Tracking**: Beads for active work. `tracking/` files are historical reference — do not delete, but create new work as beads
 - **Tests**: Integration in `tests/integration/`, QEMU kernel tests in `tests/qemu/`, unit tests in `tests/libvmssys/`
-- **Build configs**: CMakeLists.txt hierarchy, Dockerfile, Dockerfile.bootable, docker-compose.yml
+- **Build configs**: CMakeLists.txt hierarchy, Dockerfile.bootable (builds the runtime), src/kernel/Dockerfile + tests/qemu/Dockerfile (build/test tooling). Root Dockerfile + docker-compose.yml are dead legacy (Rule 9).
 
 ## Library Build Order (Dependency Graph)
 
@@ -179,8 +175,8 @@ vms/
 ├── CLAUDE.md              # This file — project instructions
 ├── README.md              # User-facing project overview
 ├── CMakeLists.txt         # Top-level build configuration
-├── docker-compose.yml     # OVMX product container (SSH on port 2222)
-├── Dockerfile             # OVMX product build (Docker mode)
+├── docker-compose.yml     # DEAD LEGACY — not a runtime (Rule 9); pending removal
+├── Dockerfile             # DEAD LEGACY — glibc product container (Rule 9); pending removal
 ├── Dockerfile.bootable    # Bootable distro builder (QEMU mode)
 ├── boot.sh                # QEMU boot wrapper
 ├── src/                   # Source code
@@ -229,3 +225,33 @@ vms/
    - **The link/image toolchain** (object/image/symbol-vector/GSMATCH/ident formats for LINK.EXE + IMGACT) — from the VSI OpenVMS Linker Utility Manual, the I64/x86 porting guides, and other public docs. Where the public docs do NOT publish a byte-level layout, OVMX defines its **own** representation and LABELS it as an OVMX design choice — never presented as VMS-authentic (see `docs/design-link-native-toolchain.md`).
 
    NEVER disassemble, decompile, or copy VSI/HPE source or binaries; never paste leaked VMS source. This is what makes the interop RE legally protected (DMCA 1201(f), EU SW Directive Art. 6) — it is not optional. The reference lab lives at `~/vax/cluster/` (see its `README-lab.md`).
+
+9. **One runtime target: the kernel/QEMU path (HARD INVARIANT)**. Operator ruling 2026-07-28 — the
+   Docker *runtime* layer is **dead**. OVMX has exactly **one** runtime: the real-kernel / QEMU path,
+   where `vms.ko` provides the VMS **executive** and userspace reaches it through `/dev/vms`
+   (`vms_kif`). Docker is **never** an OVMX runtime, never a supported way to "run OVMX", and never
+   a target whose limitations get designed around.
+
+   **This distinction is load-bearing — do not collapse it:**
+   - **Docker as a RUNTIME target — FORBIDDEN.** The root `Dockerfile` and `docker-compose.yml`
+     (glibc product container, SSH on 2222) are **deprecated legacy**, retained only because CI
+     still depends on them. They are being removed — see the migration item in rd. Do not add
+     features to them, do not document them as a way to run OVMX, do not add new CI jobs on them.
+   - **Docker/podman as BUILD or TEST tooling — FINE and expected.** `distro/Dockerfile.bootable`
+     (builds the bootable QEMU image), `src/kernel/Dockerfile` (builds `vms.ko`), and
+     `tests/qemu/Dockerfile` (QEMU test harness) *produce and test the real runtime*. Rule: "ALL
+     deps containerized — NEVER install on host" depends on these. Keep them.
+
+   **Why this keeps being forgotten, and the trap to avoid:** Docker containers have no `/dev/vms`.
+   Because CI runs in Docker, the kernel executive is currently *unprovable in CI* — and so OVMX
+   grew per-process userspace fakes (logical name tables, process table, event flags, mailboxes)
+   that report success while sharing nothing. **The architecture drifted to fit the test harness.**
+   Therefore:
+
+   - **Never add a silent userspace fallback for an executive facility.** If `/dev/vms` is absent,
+     the correct behavior is to **fail honestly** (`SS$_NOSUCHDEV`, as `sys_lock.c` already does) —
+     never to fake per-process success. A silent fallback is the exact LARP bug class the
+     authenticity invariants exist to kill (INV-6).
+   - **An executive facility is not done until a test exercises it against a real `/dev/vms`.**
+   - The standing gate `tests/integration/test_runtime_target.sh` enforces the mechanical parts of
+     this rule. Do not add allowlist entries to it to make it pass.

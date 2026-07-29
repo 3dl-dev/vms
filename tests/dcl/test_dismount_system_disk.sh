@@ -5,7 +5,7 @@
 # EXPECT: contains:DKA0:
 # EXPECT: contains:Mounted
 # EXPECT: contains:OVMXSYS
-# EXPECT: contains:NEWDIR.DIR
+# EXPECT: contains:B9FCHKDIR.DIR
 # EXPECT_NOT: contains:%DISMOUNT-I-DISMOUNTED
 # EXPECT_NOT: contains:Dismounted
 #
@@ -32,6 +32,28 @@
 # DISMOUNT/DKA0: entirely -- gutted, not fixed): DKA0: must still show "Mounted" with its
 # "OVMXSYS" label in SHOW DEVICE, and DIRECTORY DKA0:[000000] must still list its files,
 # proving the device is genuinely untouched, not just silently refused-and-broken.
+#
+# vms-b9f S2, round 4: the previous positive file-listing assertion
+# (`EXPECT: contains:NEWDIR.DIR`) was ORDER-DEPENDENT on shared /vms filesystem state --
+# it passed only because tests/dcl/test_create_dir.sh happens to run before this test
+# (run_dcl_tests.sh globs test_*.sh alphabetically, "create" < "dismount") and leaks
+# /vms/NEWDIR: that test's `SET DEFAULT SYS$SYSDEVICE:[dcl_test_$$]` silently fails, so
+# its `CREATE/DIRECTORY [.NEWDIR]` lands at DKA0:[000000] instead of inside its own
+# scratch directory, and its cleanup only removes its own scratch dir, not the
+# mis-placed NEWDIR (test_create_dir.sh's bug, out of scope for this item). PROVEN: with
+# /vms/NEWDIR removed and this test run alone, the assertion failed ("Total of 1 file",
+# SYS0.DIR only). Fixed by making THIS test self-contained: create its own
+# uniquely-named marker directory directly on DKA0:'s root before the DISMOUNT attempt,
+# assert on that marker (not on another test's leftovers, and not authored to match a
+# filter this test also writes), and remove it again afterward -- both before and after,
+# idempotently -- so this test cannot itself become a future test's ordering dependency.
 VMSDCL="${VMSDCL:-vmsdcl}"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
+
+MARKER_DIR="/vms/B9FCHKDIR"
+rm -rf "$MARKER_DIR"
+mkdir -p "$MARKER_DIR"
+
 printf 'DISMOUNT DKA0:\nSHOW DEVICE\nDIRECTORY DKA0:[000000]\n' | $VMSDCL 2>&1
+
+rm -rf "$MARKER_DIR"

@@ -1993,12 +1993,35 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
     while (ilen > 0 && (item[ilen-1] == ' ' || item[ilen-1] == '\t'))
         item[--ilen] = '\0';
 
-    /* Determine which Linux path to stat */
+    /* Determine which Linux path to stat.
+     *
+     * vms-b9f S1 (round 4): this used to be unconditionally "/" -- the host's root
+     * filesystem -- for every device, regardless of which device was actually named.
+     * SHOW DEVICE (dcl_cmd_show.c) hardcoded Free Blocks to 0, so the two interfaces
+     * disagreed; fixing SHOW DEVICE to report a real number without also fixing this
+     * would just make them disagree on a NEW pair of numbers instead (this host's "/"
+     * vs. the device's own backing path can be, and in this sandbox measurably are,
+     * different statvfs() results). Resolve to the device's actual registered
+     * linux_path (vms_device_table -- the same table SHOW DEVICE reads, dcl_builtin.c)
+     * so FREEBLOCKS/MAXBLOCK below and SHOW DEVICE's Free Blocks column read the
+     * identical source and cannot disagree again. Mirrors the VOLNAM fix a few lines
+     * up in this same function (vms-b9f R5) and the SHOW DEVICE side of this fix
+     * (dcl_cmd_show.c cmd_show_device()). Falls back to "/" only if the named device
+     * isn't in the table (e.g. a terminal device, or SYSDEVICE couldn't resolve),
+     * preserving prior behavior for those cases. */
     const char *stat_path = "/";
     int is_terminal = 0;
     if (strstr(device, "OPA0") || strstr(device, "FTA0") ||
         strstr(device, "TT") || strstr(device, "FT")) {
         is_terminal = 1;
+    }
+    if (!is_terminal) {
+        const char *dev_lookup = device;
+        if (strstr(device, "SYSDEVICE") || device[0] == '\0')
+            dev_lookup = SYSDISK_DEVICE ":";
+        struct vms_device *statdev = vms_find_device(dev_lookup);
+        if (statdev && statdev->linux_path[0] != '\0')
+            stat_path = statdev->linux_path;
     }
 
     if (strcmp(item, "DEVNAM") == 0) {

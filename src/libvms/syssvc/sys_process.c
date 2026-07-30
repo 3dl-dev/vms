@@ -24,6 +24,7 @@
 #include <pwd.h>
 #include <stdio.h>
 #include "starlet.h"
+#include "prcdef.h"
 #include "vms/pcb.h"
 
 /*
@@ -198,13 +199,118 @@ uint32_t sys$wake(const uint32_t *pidadr,
 }
 
 /*
- * sys$creprc - Create a subprocess.
+ * creprc_child_setup - Child-side setup shared by both sys$creprc paths.
  *
- * Uses fork()+exec() to create a new process running the specified image.
+ * Establishes the new process's VMS identity in its PCB, applies
+ * SYS$INPUT/SYS$OUTPUT/SYS$ERROR redirection from the caller's
+ * descriptors, then execs the image. Does not return.
+ *
+ * detached: when nonzero, any stream the caller did NOT supply is
+ * attached to the null device instead of being inherited. A VMS detached
+ * process has no controlling terminal, so it must not hold the creator's
+ * console open.
+ */
+static void creprc_child_setup(const char *img_path,
+                               const struct dsc$descriptor_s *input,
+                               const struct dsc$descriptor_s *output,
+                               const struct dsc$descriptor_s *error,
+                               uint64_t child_privs, uint32_t child_uic,
+                               const char *prcnam_in,
+                               const struct vms_pcb *parent_pcb,
+                               int detached)
+{
+    char child_prcnam[16] = {0};
+    if (prcnam_in)
+        snprintf(child_prcnam, sizeof(child_prcnam), "%s", prcnam_in);
+
+    struct vms_pcb *child_pcb = vms_pcb_init(child_privs);
+    if (child_pcb) {
+        const char *username = parent_pcb ? parent_pcb->username : "UNKNOWN";
+        if (!child_prcnam[0])
+            snprintf(child_prcnam, sizeof(child_prcnam), "_%08X", getpid());
+        vms_pcb_set_identity((uint32_t)getpid(), child_uic,
+                             username, child_prcnam);
+        if (parent_pcb && parent_pcb->default_dir[0])
+            vms_pcb_set_default_dir(parent_pcb->default_dir);
+        /* Inherit quotas from parent */
+        if (parent_pcb)
+            memcpy(child_pcb->quotas, parent_pcb->quotas,
+                   sizeof(child_pcb->quotas));
+    }
+
+    /* Set up I/O redirection */
+    if (input && input->dsc$a_pointer) {
+        char path[256];
+        dsc$strncpy(path, input, sizeof(path));
+        int fd = open(path, O_RDONLY);
+        if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
+    } else if (detached) {
+        int fd = open("/dev/null", O_RDONLY);
+        if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
+    }
+    if (output && output->dsc$a_pointer) {
+        char path[256];
+        dsc$strncpy(path, output, sizeof(path));
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
+    } else if (detached) {
+        int fd = open("/dev/null", O_WRONLY);
+        if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
+    }
+    if (error && error->dsc$a_pointer) {
+        char path[256];
+        dsc$strncpy(path, error, sizeof(path));
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
+    } else if (detached) {
+        int fd = open("/dev/null", O_WRONLY);
+        if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
+    }
+
+    /*
+     * NOTE: the PCB identity set above does NOT survive the execl() below
+     * -- the PCB is process-local memory (vms_pcb.c keeps it in a static /
+     * calloc'd block), so exec discards it. The prcnam argument therefore
+     * does not reach the activated image.
+     *
+     * This is NOT worked around here on purpose. On VMS a process name is
+     * meaningful because it lives in the executive's process table, where
+     * any process can look it up ($GETJPI by prcnam) and SHOW SYSTEM can
+     * enumerate it. OVMX has no shared process table yet -- SHOW SYSTEM
+     * reports only the calling process. Smuggling the name across exec
+     * (e.g. through the environment) would let each process self-report a
+     * name that nothing else can see: the appearance of a named process
+     * without the shared property that makes the name mean anything.
+     *
+     * So sys$creprc does not pretend. Callers that need a named process
+     * are told plainly that the name cannot be assigned (see DCL
+     * RUN/PROCESS_NAME), and the real fix is an executive-resident process
+     * table -- tracked in rd.
+     */
+    execl(img_path, img_path, (char *)NULL);
+    _exit(1);  /* exec failed */
+}
+
+/*
+ * sys$creprc - Create a process.
+ *
+ * Two distinct kinds of process, selected by the stsflg argument:
+ *
+ *   default            a subprocess. fork()+exec(); the creator remains
+ *                      its parent and is expected to wait on it.
+ *
+ *   PRC$M_DETACH       a detached process. Not part of the creator's job
+ *                      tree, owns no controlling terminal, and outlives
+ *                      the creator. This is what RUN/DETACHED and the
+ *                      system startup procedures create for services.
+ *
  * Inherits VMS context (privileges, UIC, username, quotas) from the
- * parent PCB when parameters are zero/NULL. I/O redirection is set up
- * from the input/output/error descriptors.
- * The new process PID is returned in *pidadr if non-NULL.
+ * creator's PCB when parameters are zero/NULL. I/O redirection is set up
+ * from the input/output/error descriptors. prcnam becomes the new
+ * process's VMS process name. The new process PID is returned in *pidadr
+ * if non-NULL.
+ *
+ * Reference: OpenVMS System Services Reference Manual ($CREPRC).
  */
 uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                     const struct dsc$descriptor_s *input,
@@ -214,7 +320,7 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                     const struct dsc$descriptor_s *prcnam,
                     uint32_t baspri, uint32_t uic, uint32_t mbxunt,
                     uint32_t stsflg) {
-    (void)quota; (void)baspri; (void)mbxunt; (void)stsflg;
+    (void)quota; (void)baspri; (void)mbxunt;
 
     if (!image || !image->dsc$a_pointer) return SS$_BADPARAM;
 
@@ -242,48 +348,72 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     if (prcnam && prcnam->dsc$a_pointer)
         dsc$strncpy(child_prcnam, prcnam, sizeof(child_prcnam));
 
+    /*
+     * Detached process.
+     *
+     * Double-fork: the intermediate child calls setsid() to leave the
+     * creator's session and controlling terminal, forks the real process,
+     * reports its PID back over a pipe, then exits immediately so the
+     * service is reparented away from the creator. The creator reaps only
+     * the intermediate, so it never waits on the service itself.
+     *
+     * The PID travels over the pipe rather than being inferred from
+     * wait(), because a creator with its own SIGCHLD handler (PID 1 does)
+     * may reap the intermediate before we get to it.
+     */
+    if (stsflg & PRC$M_DETACH) {
+        int pfd[2];
+        if (pipe(pfd) != 0) return SS$_INSFMEM;
+
+        pid_t mid = fork();
+        if (mid < 0) {
+            close(pfd[0]);
+            close(pfd[1]);
+            return SS$_INSFMEM;
+        }
+        if (mid == 0) {
+            close(pfd[0]);
+            setsid();               /* leave the creator's session/terminal */
+            pid_t svc = fork();
+            if (svc < 0)
+                _exit(1);
+            if (svc > 0) {
+                ssize_t w;
+                do {
+                    w = write(pfd[1], &svc, sizeof(svc));
+                } while (w < 0 && errno == EINTR);
+                _exit(0);
+            }
+            close(pfd[1]);
+            creprc_child_setup(img_path, input, output, error,
+                               child_privs, child_uic, child_prcnam,
+                               parent_pcb, 1);
+        }
+
+        close(pfd[1]);
+        pid_t svc_pid = 0;
+        ssize_t n;
+        do {
+            n = read(pfd[0], &svc_pid, sizeof(svc_pid));
+        } while (n < 0 && errno == EINTR);
+        close(pfd[0]);
+        waitpid(mid, NULL, 0);      /* reap the intermediate only */
+
+        if (n != (ssize_t)sizeof(svc_pid) || svc_pid <= 0)
+            return SS$_NOSLOT;
+
+        if (pidadr) *pidadr = (uint32_t)svc_pid;
+        return SS$_NORMAL;
+    }
+
+    /* Subprocess. */
     pid_t pid = fork();
     if (pid < 0) return SS$_INSFMEM;
 
     if (pid == 0) {
-        /* Child: Initialize PCB with inherited context */
-        struct vms_pcb *child_pcb = vms_pcb_init(child_privs);
-        if (child_pcb) {
-            const char *username = parent_pcb ? parent_pcb->username : "UNKNOWN";
-            if (!child_prcnam[0])
-                snprintf(child_prcnam, sizeof(child_prcnam), "_%08X", getpid());
-            vms_pcb_set_identity((uint32_t)getpid(), child_uic,
-                                 username, child_prcnam);
-            if (parent_pcb && parent_pcb->default_dir[0])
-                vms_pcb_set_default_dir(parent_pcb->default_dir);
-            /* Inherit quotas from parent */
-            if (parent_pcb)
-                memcpy(child_pcb->quotas, parent_pcb->quotas,
-                       sizeof(child_pcb->quotas));
-        }
-
-        /* Set up I/O redirection */
-        if (input && input->dsc$a_pointer) {
-            char path[256];
-            dsc$strncpy(path, input, sizeof(path));
-            int fd = open(path, O_RDONLY);
-            if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
-        }
-        if (output && output->dsc$a_pointer) {
-            char path[256];
-            dsc$strncpy(path, output, sizeof(path));
-            int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
-        }
-        if (error && error->dsc$a_pointer) {
-            char path[256];
-            dsc$strncpy(path, error, sizeof(path));
-            int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
-        }
-
-        execl(img_path, img_path, (char *)NULL);
-        _exit(1);  /* exec failed */
+        creprc_child_setup(img_path, input, output, error,
+                           child_privs, child_uic, child_prcnam,
+                           parent_pcb, 0);
     }
 
     /* Parent process */

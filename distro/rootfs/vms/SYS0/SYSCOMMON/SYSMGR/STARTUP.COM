@@ -18,4 +18,9 @@ $! SYS$WELCOME, which a manager defines in SYS$MANAGER:SYLOGICALS.CONF.
 $! The startup banner itself is displayed by STARTUP.EXE from the system
 $! identity module, so there is exactly one place that knows the version.
 $!
+$! Site-specific startup. Services (SSH and anything a manager adds) are
+$! started from SYSTARTUP_VMS.COM as detached processes -- never from
+$! STARTUP.EXE, which starts no services at all.
+$ IF F$SEARCH("SYS$MANAGER:SYSTARTUP_VMS.COM") .NES. "" THEN @SYS$MANAGER:SYSTARTUP_VMS.COM
+$!
 $ EXIT

@@ -32,7 +32,6 @@
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
 
-#define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
 #define SYSDISK_DEV      "/dev/vda"
 #define INITRAMFS_BACKUP "/tmp/initramfs_vms"
 
@@ -565,76 +564,22 @@ static void install_system_blkdev(void)
 }
 
 /*
- * Try to start the logical name daemon.
- * Returns the child PID on success, -1 if vmslnmd not found.
+ * NOTE ON SERVICES: STARTUP.EXE starts no services.
+ *
+ * It used to fork the SSH daemon and the logical name daemon directly,
+ * which was wrong on three counts: the service was invisible to
+ * SYS$MANAGER (so it could not be enabled or disabled the VMS way), it
+ * became an anonymous Linux child rather than a named detached process,
+ * and a missing service image was skipped SILENTLY -- which is how
+ * VMSSSHD.EXE went missing from the initramfs unnoticed.
+ *
+ * Services now start where VMS starts them: STARTUP.COM invokes
+ * SYSTARTUP_VMS.COM, which invokes each service's own startup procedure,
+ * which creates the service with RUN/DETACHED (sys$creprc PRC$M_DETACH)
+ * under a VMS process name. See SYS$STARTUP:TCPIP$SSH_STARTUP.COM.
+ *
+ * Do not add a service back into this file. Add it to SYSTARTUP_VMS.COM.
  */
-static pid_t start_lnm_daemon(void)
-{
-    char lnmd_path[512];
-    vms_to_linux(VMS_LNMD_PATH, lnmd_path, sizeof(lnmd_path));
-    struct stat st;
-    if (stat(lnmd_path, &st) != 0) {
-        return -1;  /* vmslnmd not available */
-    }
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* Child: exec vmslnmd */
-        execl(lnmd_path, "vmslnmd", (char *)NULL);
-        _exit(1);
-    }
-    return pid;
-}
-
-/*
- * Wait for the LNM daemon socket to appear (up to timeout_ms).
- */
-static int wait_for_lnm_socket(int timeout_ms)
-{
-    struct stat st;
-    int elapsed = 0;
-    int interval = 50000; /* 50ms */
-
-    while (elapsed < timeout_ms * 1000) {
-        if (stat(LNM_SOCKET_PATH, &st) == 0) {
-            return 1;  /* Socket appeared */
-        }
-        usleep((useconds_t)interval);
-        elapsed += interval;
-    }
-    return 0;  /* Timed out */
-}
-
-/*
- * Try to start the SSH daemon for remote access.
- * Returns the child PID on success, -1 if sshd not found.
- */
-static pid_t start_sshd(void)
-{
-    char sshd_path[512];
-    vms_to_linux(VMS_SSHD_PATH, sshd_path, sizeof(sshd_path));
-    struct stat st;
-    if (stat(sshd_path, &st) != 0) {
-        return -1;  /* sshd not available */
-    }
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* Detach from console terminal so vmssshd gets its own session */
-        setsid();
-        int devnull = open("/dev/null", O_RDWR);
-        if (devnull >= 0) {
-            dup2(devnull, STDIN_FILENO);
-            if (devnull > STDERR_FILENO)
-                close(devnull);
-        }
-        /* Restore default signal handling */
-        signal(SIGHUP, SIG_DFL);
-        execl(sshd_path, "vmssshd", (char *)NULL);
-        _exit(1);
-    }
-    return pid;
-}
 
 /*
  * Run SYS$MANAGER:STARTUP.COM via DCL subprocess.
@@ -663,8 +608,12 @@ static void run_startup(void)
 
 /*
  * Display VMS-style boot banner.
+ *
+ * Announces only what STARTUP.EXE itself did. Services announce
+ * themselves from their own startup procedures, as VMS does -- this
+ * banner must never claim a service is running.
  */
-static void display_boot_banner(int lnm_started, int sshd_started)
+static void display_boot_banner(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -682,14 +631,6 @@ static void display_boot_banner(int lnm_started, int sshd_started)
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
-
-    if (lnm_started) {
-        printf("%%STDRV-I-LNMSTART, logical name daemon started\n");
-    }
-
-    if (sshd_started) {
-        printf("%%STDRV-I-SSHSTART, SSH remote access started on port 22\n");
-    }
 
     /* Re-read time for "completed" message */
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -765,29 +706,20 @@ int main(void)
      * without overwriting existing files. */
     provision_seed_files();
 
-    /* Step 3: Start logical name daemon */
-    int lnm_started = 0;
-    pid_t lnm_pid = start_lnm_daemon();
-    if (lnm_pid > 0) {
-        lnm_started = wait_for_lnm_socket(2000);
-    }
-
-    /* Step 4: Run STARTUP.COM */
+    /* Step 3: Run STARTUP.COM.
+     *
+     * This is also what starts the system's services:
+     *   STARTUP.COM -> SYSTARTUP_VMS.COM -> <service>_STARTUP.COM
+     *                                       -> RUN/DETACHED
+     * STARTUP.EXE deliberately starts no services of its own. */
     run_startup();
 
-    /* Step 5: Start SSH daemon */
-    int sshd_started = 0;
-    pid_t sshd_pid = start_sshd();
-    if (sshd_pid > 0) {
-        sshd_started = 1;
-    }
-
-    /* Step 6: Boot banner */
-    display_boot_banner(lnm_started, sshd_started);
+    /* Step 4: Boot banner */
+    display_boot_banner();
     fflush(stdout);
     fflush(stderr);
 
-    /* Step 7: Login loop (only if stdin is a terminal) */
+    /* Step 5: Login loop (only if stdin is a terminal) */
     char loginout_path[512], dcl_path[512];
     vms_to_linux(VMS_LOGINOUT_PATH, loginout_path, sizeof(loginout_path));
     vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
@@ -795,13 +727,14 @@ int main(void)
     int console_interactive = isatty(STDIN_FILENO);
     int consecutive_failures = 0;
 
-    if (!console_interactive && sshd_started) {
-        /* Non-interactive with SSH running (e.g. docker run without -it).
-         * Skip console login loop — just wait for shutdown signal.
-         * SSH sessions still work normally. */
+    if (!console_interactive) {
+        /* No console to log in on. Skip the login loop and wait for a
+         * shutdown signal; any services the startup procedures created are
+         * detached and keep running. STARTUP.EXE does not track them, so it
+         * must not claim here that any particular service is available. */
         fprintf(stderr,
             "%%STARTUP-I-NONCONSOLE, no interactive console, "
-            "serving SSH connections only\n");
+            "no console login started\n");
         fflush(stderr);
         while (!shutdown_requested)
             pause();
@@ -888,15 +821,8 @@ int main(void)
         }
     }
 
-    /* Clean up: kill daemons if we started them */
-    if (sshd_pid > 0) {
-        kill(sshd_pid, SIGTERM);
-        waitpid(sshd_pid, NULL, 0);
-    }
-    if (lnm_pid > 0) {
-        kill(lnm_pid, SIGTERM);
-        waitpid(lnm_pid, NULL, 0);
-    }
-
+    /* No daemon teardown here: STARTUP.EXE started no services, so it owns
+     * none. Detached services are reparented to PID 1 and reaped by the
+     * SIGCHLD handler; stopping them is a shutdown procedure's job. */
     return 0;
 }

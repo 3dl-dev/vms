@@ -30,6 +30,7 @@
 #include "vmsqueue.h"
 #include "opcdef.h"
 #include "starlet.h"
+#include "prcdef.h"
 
 int cmd_wait(struct dcl_command *cmd)
 {
@@ -619,6 +620,112 @@ int cmd_show_intrusion(struct dcl_command *cmd)
 /* ================================================================== */
 
 /*
+ * Build a CLASS_S string descriptor over a runtime C string.
+ * Returns a descriptor whose pointer is NULL when s is NULL/empty, which
+ * is how sys$creprc distinguishes "argument omitted".
+ */
+static struct dsc$descriptor_s dsc_from_str(const char *s)
+{
+    struct dsc$descriptor_s d;
+    d.dsc$w_length  = s ? (uint16_t)strlen(s) : 0;
+    d.dsc$b_dtype   = DSC$K_DTYPE_T;
+    d.dsc$b_class   = DSC$K_CLASS_S;
+    d.dsc$a_pointer = (s && *s) ? (char *)s : NULL;
+    return d;
+}
+
+/*
+ * Parse a VMS UIC specification "[group,member]" into a packed UIC.
+ * VMS UICs are octal. Returns 0 (meaning "inherit from creator") when
+ * the spec is absent or unparseable.
+ */
+static uint32_t parse_uic(const char *spec)
+{
+    if (!spec || !*spec)
+        return 0;
+    while (*spec == '[')
+        spec++;
+    char *end = NULL;
+    unsigned long group = strtoul(spec, &end, 8);
+    if (!end || *end != ',')
+        return 0;
+    unsigned long member = strtoul(end + 1, NULL, 8);
+    return (uint32_t)(((group & 0xFFFF) << 16) | (member & 0xFFFF));
+}
+
+/*
+ * RUN/DETACHED - create a detached process.
+ *
+ * This is the mechanism the system startup procedures use to start
+ * services (see SYS$STARTUP:TCPIP$SSH_STARTUP.COM). A detached process
+ * has no controlling terminal and outlives the DCL process that created
+ * it, so DCL does not wait on it.
+ *
+ * Qualifiers: /PROCESS_NAME=, /INPUT=, /OUTPUT=, /ERROR=, /UIC=
+ */
+static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
+                        const char *image_path)
+{
+    char in_path[1024]  = {0};
+    char out_path[1024] = {0};
+    char err_path[1024] = {0};
+
+    const char *q;
+    if ((q = dcl_qualifier_value(cmd, "INPUT")) && *q)
+        dcl_resolve_path(ctx, q, in_path, sizeof(in_path));
+    if ((q = dcl_qualifier_value(cmd, "OUTPUT")) && *q)
+        dcl_resolve_path(ctx, q, out_path, sizeof(out_path));
+    if ((q = dcl_qualifier_value(cmd, "ERROR")) && *q)
+        dcl_resolve_path(ctx, q, err_path, sizeof(err_path));
+
+    const char *prcnam = dcl_qualifier_value(cmd, "PROCESS_NAME");
+    uint32_t uic = parse_uic(dcl_qualifier_value(cmd, "UIC"));
+
+    /*
+     * /PROCESS_NAME cannot be honored yet, and says so rather than being
+     * quietly ignored.
+     *
+     * A VMS process name is meaningful because it lives in the executive's
+     * process table, where other processes can look it up and SHOW SYSTEM
+     * can enumerate it. OVMX has no shared process table: the PCB is
+     * process-local and does not survive exec, so a name handed to
+     * sys$creprc never reaches the activated image. Reporting it here keeps
+     * the gap visible instead of shipping a decorative qualifier.
+     * Tracked in rd vms-8019.
+     */
+    if (prcnam && *prcnam) {
+        fprintf(stderr,
+                "%%RUN-W-NOPRCNAM, process name %s cannot be assigned - "
+                "no executive process table (rd vms-8019)\n", prcnam);
+    }
+
+    struct dsc$descriptor_s img_d  = dsc_from_str(image_path);
+    struct dsc$descriptor_s in_d   = dsc_from_str(in_path);
+    struct dsc$descriptor_s out_d  = dsc_from_str(out_path);
+    struct dsc$descriptor_s err_d  = dsc_from_str(err_path);
+    struct dsc$descriptor_s prc_d  = dsc_from_str(prcnam);
+
+    uint32_t pid = 0;
+    uint32_t status = sys$creprc(&pid, &img_d,
+                                 in_d.dsc$a_pointer  ? &in_d  : NULL,
+                                 out_d.dsc$a_pointer ? &out_d : NULL,
+                                 err_d.dsc$a_pointer ? &err_d : NULL,
+                                 NULL, NULL,
+                                 prc_d.dsc$a_pointer ? &prc_d : NULL,
+                                 0, uic, 0, PRC$M_DETACH);
+
+    if (!(status & 1)) {
+        dcl_error("DCL", 4, "CREPRC", "cannot create detached process - %s",
+                  cmd->params[0]);
+        return status;
+    }
+
+    /* VMS reports the new process ID on success. */
+    printf("%%RUN-S-PROC_ID, identification of created process is %08X\n", pid);
+    return SS$_NORMAL;
+}
+
+/*
  * RUN - Execute a program.
  */
 int cmd_run(struct dcl_command *cmd)
@@ -646,6 +753,11 @@ int cmd_run(struct dcl_command *cmd)
             return SS$_NOSUCHFILE;
         }
     }
+
+    /* /DETACHED creates a detached process instead of running the image
+     * as a subprocess of this DCL. */
+    if (dcl_has_qualifier(cmd, "DETACHED"))
+        return run_detached(ctx, cmd, linux_path);
 
     pid_t pid = fork();
     if (pid == 0) {

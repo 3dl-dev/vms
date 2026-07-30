@@ -489,17 +489,33 @@ jobs:
   # This job injects ONE minimal defect per facility — the vms-e4d
   # compat[EX][CR] flip, mechanised, plus one of the same shape for every
   # other facility — boots each in QEMU against a REAL /dev/vms, and asserts
-  # that the right suite went red, for the right named assertion, while that
-  # facility's own sibling assertions and every other suite stayed green.
+  # that the COMPLETE set of assertions that went red is EXACTLY the set the
+  # manifest names for that defect, and that no suite outside the facility's
+  # own set failed.
+  #
+  # THE EQUALITY IS THE POINT, and it is what round 1 of vms-e7d got wrong.
+  # That version checked minimality with a hand-maintained allowlist of
+  # sibling assertions that had to stay green; an adversary measured four of
+  # nine mutations reddening assertions the manifest named nowhere, while the
+  # job still printed "the mutation is minimal". A partial allowlist is
+  # satisfiable by something other than the property it certifies. The check
+  # now slices every FAIL line out of the run and requires set equality, so a
+  # mutation that trips an unnamed property cannot pass.
   #
   # It also runs the PRISTINE image first as a positive control, so a harness
   # that fails indiscriminately cannot pass this job.
+  #
+  # WHAT THIS JOB DOES NOT COVER, stated because an implicit narrowing is how
+  # a gate quietly stops meaning what its name says: vmsfs.ko and its two
+  # suites. vmsfs is a filesystem module, not an executive facility — nothing
+  # in it is reached through /dev/vms — and job 3c above is where it is
+  # covered. facility_defects.sh declares that exclusion and prints it.
   #
   # Docker here is BUILD/TEST TOOLING (CLAUDE.md Rule 9): it builds vms.ko and
   # boots an independent guest kernel that loads it for real. Nothing in this
   # job treats a container as an OVMX runtime.
   #
-  # Runtime note: ~10 QEMU boots, one of which (executive-not-pinned) is
+  # Runtime note: ~11 QEMU boots, one of which (executive-not-pinned) is
   # EXPECTED to hang until run_tests.sh's 120s timeout, because unloading an
   # unpinned vms.ko under an open descriptor Oopses the guest kernel. That is
   # the guarantee being demonstrated, not a flake — the control asserts the

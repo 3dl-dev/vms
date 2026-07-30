@@ -15,7 +15,7 @@
 #                                   Contains only: STARTUP.EXE (/init),
 #                                   INITIALIZE.EXE, kernel modules, config,
 #                                   and SYS$MANAGER files. All other binaries
-#                                   (DCL, LOGIN, HELP, LNMD) must be on the
+#                                   (DCL, LOGIN, HELP) must be on the
 #                                   system disk (/vms).
 #
 # STARTUP.EXE (ovmx_init) is /init — no busybox, no shell scripts.
@@ -111,7 +111,7 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
 
 # -- SLIM initramfs ------------------------------------------------------------
 # Bootstrap-only: STARTUP.EXE + INITIALIZE.EXE + kernel modules + config.
-# All other binaries (DCL, LOGIN, HELP, LNMD) must be on the system disk.
+# All other binaries (DCL, LOGIN, HELP) must be on the system disk.
 # Use this after the system disk has been installed via the fat initramfs.
 RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/tmp /initramfs-slim/var /initramfs-slim/mnt \

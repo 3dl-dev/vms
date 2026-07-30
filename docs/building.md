@@ -44,7 +44,7 @@ cmake --build build -j$(nproc)
 
 **Outputs** in `build/`:
 - Libraries: `libvms.so`, `libvmsprocess.so`, `libvmslnm.so`, `libvmsfs.so`, `librms.so`, `libvmssys.a`
-- Executables: `vmsdcl`, `vmslnmd`, `vms_login`, `vms_help`, `vms_ssh_auth`, `ovmx_init`
+- Executables: `vmsdcl`, `vms_login`, `vms_help`, `vms_ssh_auth`, `ovmx_init`
 - Tests: `test_vmssys_*`, integration tests
 
 ## Static Build

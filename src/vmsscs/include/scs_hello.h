@@ -73,6 +73,16 @@ struct scs_hello_params {
     uint8_t  src_logical[6];  /* SCA src-logical LAVC addr (abs 24) = aa:00:04:00:<LE16(sysid)>;
                                   a real cluster node writes its LOGICAL addr here, NOT its raw
                                   HW MAC (vms-9f3 -- VAX1's PEDRIVER keys peer identity on abs 24) */
+    uint8_t  peer_logical[6]; /* DIRECTED HELLOs only: the PEER's cluster-logical LAVC addr
+                                 (abs 16), taken from abs 24 of the frame being replied to.
+                                 GROUNDED, vax3-2to3-established-join-20260730.pcap frame 182:
+                                 VAX3 answers VAX2's probe with Ethernet dst =
+                                 08:00:2b:78:56:b9 (VAX2's HW MAC) but SCA dest-logical =
+                                 aa:00:04:00:02:04 (VAX2's LOGICAL addr) -- the two fields are
+                                 NOT the same address on a node whose HW MAC is not a DECnet
+                                 aa:00:04:.. address. All-zero = fall back to mirroring the
+                                 Ethernet dst (the pre-vms-760 behaviour). Ignored by the
+                                 multicast builder, whose abs 16 is the group address. */
     char     node_name[SCS_HELLO_NODENAME_LEN + 1]; /* NUL-terminated, <=6 chars, SCSNODE */
     uint64_t timer_tick;      /* caller-supplied 48-bit LE monotonic 100ns-tick clock,
                                   abs offset 96-101 (low 48 bits used; see header note) */
@@ -161,11 +171,24 @@ uint8_t scs_hello_response_pfw(uint8_t recv_pfw);
  * from a real VAX2->VAX1 directed HELLO (scs-idle-baseline.pcap frame 2,
  * decoded byte-exact):
  *
- *   - Ethernet dst (abs 0-5) and SCA dest logical addr (abs 16-21) = the
- *     peer's MAC. Pass the exact Ethernet SOURCE address of the directed
- *     HELLO you are replying to (a real HW MAC for a non-DECnet node like
- *     VAX2, or the peer's logical LAVC addr for a DECnet node like VAX1);
- *     the real wire mirrors abs 0 into abs 16, which this builder reproduces.
+ *   - Ethernet dst (abs 0-5) = the peer's HW MAC: pass the exact Ethernet
+ *     SOURCE address of the directed HELLO you are replying to.
+ *   - SCA dest logical addr (abs 16-21) = the peer's CLUSTER-LOGICAL addr,
+ *     supplied via p->peer_logical (read off abs 24 of the frame being
+ *     replied to). These are two DIFFERENT addresses whenever the peer's HW
+ *     MAC is not itself a DECnet aa:00:04:.. address.
+ *     CORRECTED (vms-760): this comment previously claimed the wire simply
+ *     mirrors abs 0 into abs 16, inferred from a 2-node lab in which VAX1's
+ *     HW MAC IS its logical addr (aa:00:04:00:01:04) -- so the two fields
+ *     were indistinguishable. The 3-node reference disproves it (frame 182:
+ *     VAX3->VAX2 carries eth-dst 08:00:2b:78:56:b9 but abs 16
+ *     aa:00:04:00:02:04). Mirroring instead makes VAX2/VAX3 silently DROP
+ *     every reply: they re-probe (abs30 b2) forever and never send the b4
+ *     that finalises the channel, so they never open SCS connections to the
+ *     joiner and the cluster-wide reconfiguration never runs.
+ *     If p->peer_logical is all-zero the builder falls back to mirroring
+ *     abs 0 (pre-vms-760 behaviour), which is correct only for a peer whose
+ *     HW MAC equals its logical addr.
  *   - join nonce (abs 68-71): 4 wire-order bytes. GROUNDED as present +
  *     cross-boot-stable (spec sec 4a/4g); the VALUE is REPLAYED for a known
  *     cluster (the lab's ee-05-39-5b, group 1) -- NOT a general credential

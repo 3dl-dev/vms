@@ -1743,6 +1743,10 @@ int main(int argc, char **argv)
             clock_gettime(CLOCK_MONOTONIC, &pnow);
             uint8_t ackframe[SCS_HELLO_FRAME_LEN];
             hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
+            /* vms-760: reply's SCA dest-logical (abs 16) = the PEER's logical
+             * addr, read off abs 24 of the frame we are answering -- not its HW
+             * MAC. See scs_hello.h. */
+            memcpy(hello_params.peer_logical, buf + 24, 6);
             if (scs_hello_build_directed_frame(&hello_params, src_mac, lab_nonce,
                                                SCS_HELLO_JOINER_INCARNATION,
                                                pad_resp_pfw, ackframe) == 0 &&
@@ -1826,6 +1830,9 @@ int main(int argc, char **argv)
                  * HELLO carries the incarnation it attributes to the peer on a
                  * fresh first contact, NOT the member's advertised value (spec
                  * sec 4i.B). The member's value is echoed only into START [22:24]. */
+                /* vms-760: SCA dest-logical (abs 16) = the PEER's logical addr
+                 * from abs 24 of the probe, not its HW MAC (see scs_hello.h). */
+                memcpy(hello_params.peer_logical, buf + 24, 6);
                 if (scs_hello_build_directed_frame(&hello_params, src_mac, lab_nonce,
                                                    SCS_HELLO_JOINER_INCARNATION,
                                                    resp_pfw, dframe) == 0 &&
@@ -1859,6 +1866,9 @@ int main(int argc, char **argv)
                  * HELLO carries the incarnation it attributes to the peer on a
                  * fresh first contact, NOT the member's advertised value (spec
                  * sec 4i.B; golden pair carries abs-92 = 1). */
+                /* vms-760: SCA dest-logical (abs 16) = the PEER's logical addr
+                 * from abs 24 of the probe, not its HW MAC (see scs_hello.h). */
+                memcpy(hello_params.peer_logical, buf + 24, 6);
                 if (scs_hello_build_padded_directed_frame(&hello_params, src_mac, lab_nonce,
                                                           SCS_HELLO_JOINER_INCARNATION,
                                                           (uint16_t)SCS_HELLO_PADDED_MAX_SCA,
@@ -2402,6 +2412,44 @@ int main(int argc, char **argv)
                            " connect: local=0x%08X remote=0x%08X\n",
                            OVMX_JOINER_CONID, lconid);
                     fflush(stdout);
+                    /* vms-760: CONFIRM the VMS$VAXcluster VC (op=3) BEFORE the
+                     * add-member burst -- the same load-bearing confirm the MSCP
+                     * connection gets above (§4(m)).
+                     * GROUNDED, vax3-2to3-established-join-20260730.pcap: VAX3's VC
+                     * CONNECT-REQ is frame 132 (ss=10), VAX1's op=2 ACCEPT frame 136
+                     * (ss=11, +0.9391), VAX3's op=3 CONFIRM frame 139 (ss=13, +0.9393,
+                     * 76 bytes, mt=0x5b, recv_ack=11) and ONLY THEN the two 204-byte
+                     * config frames 142/143 (ss=14,15, +0.9394). VAX1 answers 0.3 ms
+                     * later (frames 145/146, +0.9397) and opens its own connections
+                     * back at +0.9543.
+                     * Without this confirm the VC stays half-open: the member binds
+                     * it but its connection manager never runs the add-member dialogue
+                     * on it, so the config burst is ignored -- SHOW CLUSTER stays NEW
+                     * with ZERO member-initiated traffic back (d94-disc2/disc3.pcap,
+                     * where OVMX sends only op=10 on conid 0x4f580002, never op=3). */
+                    {
+                        struct scs_dir_params vc;
+                        memset(&vc, 0, sizeof(vc));
+                        memcpy(vc.dst_mac, ps->eth_mac, 6);
+                        memcpy(vc.src_mac, our_hw_mac, 6);
+                        memcpy(vc.src_logical, our_src_logical, 6);
+                        memcpy(vc.peer_logical, ps->logical, 6);
+                        vc.remote_conid = ps->joiner_remote_conid;
+                        vc.local_conid = OVMX_JOINER_CONID;
+                        vc.recv_ack = ps->vc.seq.recv_seq;
+                        vc.send_seq = scs_seq_advance(&ps->vc.seq);
+                        vc.incarnation = ps->incarnation;
+                        uint8_t vf[SCS_DIR_CONFIRM_FRAME_LEN];
+                        if (scs_dir_build_connect_confirm(&vc, vf) == 0) {
+                            send_frame_to(sock, (int)ifindex, ps->eth_mac, vf, sizeof(vf));
+                            scs_vc_record_sent(&ps->vc, vc.send_seq, monotonic_ms());
+                            log_ts(stdout);
+                            printf(" SCSD-I-JOINCONFIRM, confirmed OUR VMS$VAXcluster"
+                                   " VC (op=3 seq=%u) before the add-member burst\n",
+                                   vc.send_seq);
+                            fflush(stdout);
+                        }
+                    }
                     if (!ps->joiner_cm_sent) {
                         int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac,
                                                      our_src_logical,

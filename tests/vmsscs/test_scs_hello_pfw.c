@@ -122,6 +122,51 @@ int main(void)
     check(reached_b4, "OVMX REACHES b4 during the handshake (no longer stuck at b3)");
     check(saw_b3 && saw_b4, "OVMX TOGGLES b3<->b4 across the exchange (grounded keepalive)");
 
+    /* --- (5) vms-760: SCA dest-logical (abs 16) is the peer's CLUSTER-LOGICAL
+     * addr, which is NOT the peer's HW MAC (the Ethernet dst, abs 0).
+     * GROUNDED byte-exact on vax3-2to3-established-join-20260730.pcap frame 182
+     * (VAX3 answering VAX2's channel probe):
+     *     abs  0 = 08:00:2b:78:56:b9   VAX2's HW MAC
+     *     abs 16 = aa:00:04:00:02:04   VAX2's LOGICAL addr
+     *     abs 24 = aa:00:04:00:03:04   VAX3's own logical addr
+     * Mirroring abs 0 into abs 16 (the pre-760 behaviour) makes every peer whose
+     * HW MAC is not a DECnet aa:00:04:.. address DROP the reply: it re-probes
+     * with b2 forever, never sends b4, and never opens SCS connections to the
+     * joiner. That is invisible in a 2-node lab where VAX1's HW MAC IS its
+     * logical addr, which is exactly how the bug survived. */
+    {
+        static const uint8_t v2_hw[6]  = { 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9 };
+        static const uint8_t v2_log[6] = { 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04 };
+        check(memcmp(v2_hw, v2_log, 6) != 0,
+              "vms-760: the reference peer's HW MAC and logical addr genuinely differ");
+
+        struct scs_hello_params pl = p;
+        memcpy(pl.peer_logical, v2_log, 6);
+        uint8_t fl[SCS_HELLO_FRAME_LEN];
+        check(scs_hello_build_directed_frame(&pl, v2_hw, nonce, 1,
+                                             SCS_HELLO_PFW_REQUEST, fl) == 0,
+              "vms-760: build directed HELLO with a distinct peer logical addr");
+        check(memcmp(fl + 0, v2_hw, 6) == 0,
+              "vms-760: Ethernet dst abs0 == peer HW MAC (ref frame 182)");
+        check(memcmp(fl + 16, v2_log, 6) == 0,
+              "vms-760: SCA dest-logical abs16 == peer LOGICAL addr (ref frame 182)");
+        check(memcmp(fl + 16, fl + 0, 6) != 0,
+              "vms-760: abs16 is NOT a mirror of abs0 when they differ");
+        check(memcmp(fl + 24, ovmx_log, 6) == 0,
+              "vms-760: abs24 still carries OUR OWN logical addr");
+
+        /* All-zero peer_logical keeps the legacy mirror (correct only when the
+         * peer's HW MAC equals its logical addr, e.g. VAX1). */
+        struct scs_hello_params pz = p;
+        memset(pz.peer_logical, 0, 6);
+        uint8_t fz[SCS_HELLO_FRAME_LEN];
+        check(scs_hello_build_directed_frame(&pz, v2_hw, nonce, 1,
+                                             SCS_HELLO_PFW_REQUEST, fz) == 0,
+              "vms-760: build directed HELLO with no peer logical addr supplied");
+        check(memcmp(fz + 16, v2_hw, 6) == 0,
+              "vms-760: absent peer_logical falls back to mirroring abs0");
+    }
+
     if (failures == 0) {
         printf("\nALL PASS (vms-d94 abs-30 channel-verify rule)\n");
         return 0;

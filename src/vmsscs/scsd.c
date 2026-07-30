@@ -445,11 +445,19 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.local_conid = local_conid;
     mp.incarnation = ps->incarnation;
 
+    /* vms-760 server-first: match af2's initial add-member burst EXACTLY -- the
+     * joiner sends only MODEL + PARAMS (2 frames), each with sysap_ack_msg=0 (NOT
+     * acking the member's config, even though it arrived), and does NOT send the
+     * op 0x02 CONFIG initially (af2 sends CONFIG ~1.8s later as part of the
+     * member-driven reconfiguration round). Sending CONFIG early + acking amsg!=0
+     * left VAX1 acking with a bare cat-0x04 and never entering reconfiguration. */
+    int pure = (getenv("OVMX_PURE_SERVER") != NULL);
+
     /* op 0x14 node CPU/model advertisement (OVMX's own model string). */
     mp.recv_ack = ps->vc.seq.recv_seq;
     mp.send_seq = scs_seq_advance(&ps->vc.seq);
     mp.sysap_send_msg = ps->sysap_send++;
-    mp.sysap_ack_msg = ps->sysap_recv;
+    mp.sysap_ack_msg = pure ? 0 : ps->sysap_recv;
     mp.model = NULL; /* OVMX_MODEL_STRING default */
     if (scs_member_build_model(&mp, frame) == 0 &&
         send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
@@ -461,22 +469,24 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.recv_ack = ps->vc.seq.recv_seq;
     mp.send_seq = scs_seq_advance(&ps->vc.seq);
     mp.sysap_send_msg = ps->sysap_send++;
-    mp.sysap_ack_msg = ps->sysap_recv;
+    mp.sysap_ack_msg = pure ? 0 : ps->sysap_recv;
     mp.votes = SCS_MEMBER_VOTES_NONVOTING; /* VOTES=1 tested (vms-d94), did NOT change NEW->MEMBER */
     if (scs_member_build_params(&mp, frame) == 0 &&
         send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
         sent++;
     }
 
-    /* op 0x02 config/topology. (vms-d94: holding 0x02 to a later step was tested
-     * and did NOT change NEW->MEMBER, so the initial burst sends all three.) */
-    mp.recv_ack = ps->vc.seq.recv_seq;
-    mp.send_seq = scs_seq_advance(&ps->vc.seq);
-    mp.sysap_send_msg = ps->sysap_send++;
-    mp.sysap_ack_msg = ps->sysap_recv;
-    if (scs_member_build_config(&mp, frame) == 0 &&
-        send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
-        sent++;
+    /* op 0x02 config/topology. In pure-server (af2) mode this is DEFERRED to the
+     * reconfiguration round; only the legacy active-joiner path sends it here. */
+    if (!pure) {
+        mp.recv_ack = ps->vc.seq.recv_seq;
+        mp.send_seq = scs_seq_advance(&ps->vc.seq);
+        mp.sysap_send_msg = ps->sysap_send++;
+        mp.sysap_ack_msg = ps->sysap_recv;
+        if (scs_member_build_config(&mp, frame) == 0 &&
+            send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
+            sent++;
+        }
     }
 
     ps->cm_config_sent = 1;
@@ -1922,8 +1932,15 @@ int main(int argc, char **argv)
                      * connect. The per-name result descriptor is selected inside
                      * scs_dir_build_lookup_response (VMS$VAXcluster -> 011b0103
                      * blob; MSCP$DISK -> the name echoed). MSCP$TAPE stays a miss. */
+                    /* vms-760: OVMX_DISKLESS -> serve ONLY VMS$VAXcluster (join as a
+                     * diskless/satellite node). Grounded: advertising MSCP$DISK makes
+                     * VAX1 open a disk-client connect and then drive MSCP disk-serving
+                     * config ops (cat-0x04 "DISK" msgs) against OVMX's fake disk, which
+                     * OVMX cannot fulfill -> membership reconfiguration derails. A real
+                     * satellite serves no disk and still becomes MEMBER. */
                     lp.affirmative = (memcmp(dv.name, "VMS$VAXcluster", 14) == 0) ||
-                                     (memcmp(dv.name, "MSCP$DISK", 9) == 0);
+                                     (getenv("OVMX_DISKLESS") == NULL &&
+                                      memcmp(dv.name, "MSCP$DISK", 9) == 0);
                     uint8_t lframe[SCS_DIR_LOOKUP_FRAME_LEN];
                     if (scs_dir_build_lookup_response(&lp, lframe) == 0 &&
                         send_frame_to(sock, (int)ifindex, ps->eth_mac, lframe,

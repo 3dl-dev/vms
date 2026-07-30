@@ -1,46 +1,61 @@
-# Dockerfile, distro/Dockerfile.bootable, and tests/qemu/Dockerfile all
-# `COPY . <dest>` the whole build context into their image (vms-1d9 F1).
-# With no .dockerignore, ANY local build tree, .git history, or stray
-# artifact sitting in the working copy landed in the image byte-for-byte --
-# slow, fat, and a disclosure risk. Everything excluded below was verified
-# NOT to be read by any build step: `grep -rn` across CMakeLists.txt (root
-# + subdirs) and all three Dockerfiles turns up no reference to these paths
-# outside of comments.
+# .dockerignore -- build-context exclusions for every image built from the
+# repo root (Dockerfile, distro/Dockerfile.bootable, src/kernel/Dockerfile,
+# tests/qemu/Dockerfile; the last one does `COPY . /src/repo/`).
+#
+# WHY IT EXISTS: without it, `docker build .` ships the whole working copy
+# into the context -- .git history, every local build-*/ tree, and (in the
+# orchestrator's checkout) .claude/worktrees/, which contains entire nested
+# clones of this repo. Slow, fat, and a disclosure risk.
+#
+# WHY IT IS SHORT NOW (vms-1d9 round 5): round 4 shipped a broad exclusion
+# list validated by `grep -rn` across CMakeLists.txt and the Dockerfiles.
+# That method cannot see dependencies that flow through add_test()-invoked
+# shell scripts, and it missed two real ones:
+#   * CLAUDE.md    -- tests/integration/test_runtime_target.sh:85 greps it for
+#                     "One runtime target: the kernel/QEMU path". Excluding it
+#                     broke THIS EPIC'S OWN Rule 9 standing gate inside the
+#                     image (`ctest -R runtime_target_gate` went red in there
+#                     while CI stayed green, because CI only ran ctest on the
+#                     host checkout -- a silently broken guardrail). 30K.
+#   * third-party/ -- src/imgact/test/run_tcc_native.sh, run_tcc_rms.sh,
+#                     run_tcc_object_native.sh, run_tcc_selfhost.sh and
+#                     src/vmslink/mk_tcc.sh all hard-require
+#                     third-party/tcc/src. 6.0M.
+# Both are now un-excluded, along with docs/, tracking/, .github/, .beads/,
+# README.md, LICENSE, .clang-tidy and cppcheck.suppressions.
+#
+# STANDING RULE FOR EDITING THIS FILE: exclude ONLY things that are not
+# version-controlled source. Do NOT exclude tracked files to save space --
+# the whole tracked tree minus .git and build-*/ is ~22M, which is not worth
+# one broken gate. Any new exclusion must be justified by RUNNING the test
+# suite inside the resulting image (`ctest` in the image's build dir) and
+# diffing the result against the host checkout, NOT by grepping the build
+# files. "The file is gone from the image" is not evidence that nothing
+# needed it.
 
-# Version control
+# Version control object database. The tracked worktree itself is still
+# copied; only .git is dropped. Verified by running the full ctest suite
+# inside the built image: no test shells out to git.
 .git
-.gitignore
-.gitattributes
 
-# Local/CI build trees -- these are gitignored (see .gitignore's
-# `build-*/`) but gitignore has NO effect on `docker build`'s context; only
-# .dockerignore does. Confirmed present on disk in this exact working copy
-# as build-ci/, build-docker/, build-test/, build-verify/ (~3MB each) plus
-# a stray top-level `build` symlink/dir pattern.
+# Local/CI build trees. These are gitignored (.gitignore's `build-*/`) but
+# gitignore has NO effect on `docker build`'s context -- only .dockerignore
+# does. Present on disk as build-ci/, build-docker/, build-test/,
+# build-verify/ (~3MB each). Every Dockerfile configures its own fresh build
+# directory, so a stale host build tree is never an input.
 build/
 build-*/
 dist/
 
-# Agent/worktree/session state -- never part of the buildable tree
+# Agent/session state -- generated, not source, and not read by any build or
+# test step. .claude/ matters most: .claude/worktrees/ holds entire nested
+# checkouts of this repo in the orchestrator's copy, so leaving it in the
+# context can multiply the build context several times over.
 .claude/
 .campfire/
-.beads/
 .ready/
 .ready.old/
 .attestations/
-.github/
-
-# Historical/reference docs -- not read by any build step
-docs/
-tracking/
-third-party/
-
-# Repo metadata not needed inside the image
-README.md
-LICENSE
-CLAUDE.md
-.clang-tidy
-cppcheck.suppressions
 
 # Editor/OS cruft
 *.swp

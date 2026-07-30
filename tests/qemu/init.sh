@@ -68,10 +68,40 @@ mkdir -p /tmp/vmsfs_backing /mnt/vmsfs
 # drive the same /dev/vms through the PUBLIC sys$ API in src/libvms instead
 # (vms-1d9) -- exercising the userspace system-service layer the ioctl tests
 # cannot see at all.
+#
+# PER-SUITE VERDICT LINE (vms-1d9 round 5). After each suite we print
+#
+#     === SUITE <name> rc=<exit code> ===
+#
+# and .github/workflows/ci.yml asserts on THAT, per suite, instead of on the
+# aggregate "FINAL RESULTS" tally below. Two real defects made this necessary,
+# both proven by adversarial review against running artifacts:
+#
+#  1. The aggregate tally cannot distinguish an honest skip (rc 77) from a
+#     failed assertion (rc 1) -- the two branches below both increment
+#     TOTAL_FAIL. An adversary injected a real silent fallback into
+#     src/libvms/syssvc/sys_lock.c (returning SS$_NORMAL instead of
+#     SS$_NOSUCHDEV with /dev/vms absent, in both do_enq and sys$deq); the
+#     test's SS$_NOSUCHDEV assertions all FAILED and its exit code changed
+#     77 -> 1, yet the negative-control job's FINAL RESULTS accounting was
+#     BYTE-IDENTICAL to the clean tree and every CI assertion still passed.
+#     A per-process fake reporting success was invisible to the whole gate.
+#     rc is the test binary's real exit status, derived from real production
+#     status codes -- not a message the harness prints unconditionally.
+#
+#  2. Any assertion on the aggregate count is either a pin that turns CI red
+#     when a legitimate new suite is ADDED, or a floor that stops protecting
+#     every suite added after it was written. Per-suite lines let CI derive
+#     the expected set from the checkout (`ls tests/qemu/test_*.c`), which is
+#     addition-tolerant AND drop-detecting with nothing maintained by hand.
+#
+# The TOTAL_PASS/TOTAL_FAIL tally is kept for human readers and for
+# run_tests.sh's exit code; it is no longer the thing CI pins.
 for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     [ -x "$test" ] || continue
+    name=$(basename "$test")
     echo ""
-    echo "--- $(basename $test) ---"
+    echo "--- $name ---"
     "$test"
     rc=$?
     if [ $rc -eq 0 ]; then
@@ -86,6 +116,7 @@ for test in /tests/test_kmod_* /tests/test_syssvc_*; do
     else
         TOTAL_FAIL=$((TOTAL_FAIL+1))
     fi
+    echo "=== SUITE $name rc=$rc ==="
 done
 
 echo ""

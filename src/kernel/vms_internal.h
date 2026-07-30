@@ -211,21 +211,41 @@ struct vms_device {
     uint32_t            devtype;        /* device type code; 0 = Unknown */
 
     /*
-     * Ownership comes from ALLOCATION, not from assigning a channel.
-     * This is measured, not assumed: on the ~/vax OpenVMS VAX V7.3 lab
-     * a process that held an open channel to NLA0: left the device's
-     * "Owner process" empty and its "Owner process ID" 00000000, while
-     * ALLOCATE set both and added the word "allocated" to the
-     * SHOW DEVICE/FULL status clause
-     * (docs/oracle/vax73-terminal-device.md sections 7-9).
-     *
-     * refcnt is the device's "Reference count": one per assigned
-     * channel plus one for an outstanding allocation -- also measured
-     * (NLA0: 2 -> 3 -> 2 across an OPEN/CLOSE; OPA0: 2 -> 3 on
-     * ALLOCATE and back to 2 on DEALLOCATE).
+     * shareable mirrors the word the oracle prints in SHOW DEVICE/FULL's
+     * status clause. It decides whether a channel confers ownership, so
+     * it is not decoration. MEASURED, ~/vax OpenVMS VAX V7.3, node VAX2
+     * (docs/oracle/vax73-terminal-device.md section 7):
+     *   "Device NLA0: ... record-oriented device, shareable, mailbox
+     *    device."                                  -> shareable
+     *   "Terminal TTA0: ... is online, record-oriented device, carriage
+     *    control."                                 -> not shareable
      */
-    uint32_t            allocated;      /* 1 while allocated to owner_* */
-    uint32_t            owner_pid;      /* VMS pid of the allocating process */
+    uint32_t            shareable;      /* 1 = "shareable" in the status clause */
+
+    /*
+     * OWNERSHIP AND ALLOCATION ARE TWO DIFFERENT THINGS, and both are
+     * measured (docs/oracle/vax73-terminal-device.md section 7):
+     *
+     *  - A channel to a NON-shareable device that nobody owns makes the
+     *    assigner the OWNER, with no allocation. TTA0: went from
+     *    Owner "" / refcount 0 to Owner "SYSTEM" / refcount 1 on a bare
+     *    OPEN/WRITE, and its status clause still said only "is online,
+     *    record-oriented device, carriage control" -- no "allocated".
+     *  - A channel to a SHAREABLE device confers nothing. The same DCL
+     *    sequence on NLA0: left Owner "" with the reference count
+     *    moving 2 -> 3 -> 2.
+     *  - $ALLOC sets `allocated`, and it is the only thing that does.
+     *  - Ownership without allocation ends when the owner returns its
+     *    last channel (CLOSE -> Owner "", refcount 0) or dies
+     *    (STOP CHANHOLD -> Owner "", refcount 0). An ALLOCATION outlives
+     *    the channel until $DALLOC or the owner's death.
+     *
+     * refcnt is the device's "Reference count": one per assigned channel
+     * plus one for an outstanding allocation. Implicit ownership costs
+     * no reference (TTA0: one channel -> refcount 1, owned).
+     */
+    uint32_t            allocated;      /* 1 while $ALLOC'd to owner_* */
+    uint32_t            owner_pid;      /* VMS pid of the owner, 0 = unowned */
     pid_t               owner_linux_pid;
     uint32_t            owner_uic;
     uint32_t            refcnt;
@@ -240,10 +260,9 @@ struct vms_device {
 
     /*
      * Every channel currently assigned to this device, by any process.
-     * The device has to know this to answer $ALLOC: the oracle refuses
-     * to allocate a device that another process merely has channels to
-     * (ALLOCATE NLA0: -> %SYSTEM-W-DEVALLOC with the owner field still
-     * empty and a reference count of 2).
+     * The device has to know this to decide when implicit ownership
+     * ends: it ends when the owner has no channel left, not when any
+     * channel is returned.
      */
     struct list_head    chanlist;       /* of vms_channel.devlink */
 

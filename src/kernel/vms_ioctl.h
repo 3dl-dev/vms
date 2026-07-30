@@ -315,12 +315,22 @@ struct vms_register_args {
 /*
  * One row of the executive device table, as handed to userspace.
  *
- * owner_pid is 0 when the device is not allocated -- ownership comes
- * from $ALLOC, never from $ASSIGN (measured on the oracle; see
- * docs/oracle/vax73-terminal-device.md section 7). `allocated` is the
- * flag behind the word "allocated" in SHOW DEVICE/FULL's status
- * clause. refcnt is the "Reference count": one per assigned channel
- * plus one for an outstanding allocation.
+ * owner_pid and `allocated` are TWO DIFFERENT THINGS, exactly as the
+ * oracle prints them as two different things (measured; see
+ * docs/oracle/vax73-terminal-device.md section 7):
+ *
+ *   - owner_pid is "Owner process ID". A device can be owned with no
+ *     allocation at all: on the lab a bare OPEN/WRITE to the
+ *     non-shareable terminal TTA0: moved it from Owner "" to
+ *     Owner "SYSTEM" / 20400216 with no "allocated" in its status
+ *     clause, and the console OPA0: shows Owner "SYSTEM" on a system
+ *     where nobody has run ALLOCATE. A channel to a SHAREABLE device
+ *     (NLA0:) confers nothing.
+ *   - `allocated` is the flag behind the word "allocated" in SHOW
+ *     DEVICE/FULL's status clause, and only $ALLOC sets it.
+ *
+ * refcnt is the "Reference count": one per assigned channel plus one
+ * for an outstanding allocation. Ownership itself costs no reference.
  *
  * opcnt/errcnt are the
  * "Operations completed" and "Error count" SHOW DEVICE/FULL reports.
@@ -336,7 +346,7 @@ struct vms_devinfo {
     char     devnam[VMS_DEVNAM_SIZE];   /* physical name, e.g. "OPA0:" */
     uint32_t devclass;                  /* DC$_ device class */
     uint32_t devtype;                   /* device type code; 0 = Unknown */
-    uint32_t owner_pid;                 /* VMS pid of the owner, 0 = not allocated */
+    uint32_t owner_pid;                 /* VMS pid of the owner, 0 = unowned */
     uint32_t owner_uic;                 /* (group << 16) | member */
     uint32_t refcnt;                    /* channels assigned + allocation */
     uint32_t errcnt;                    /* Error count */
@@ -350,13 +360,19 @@ struct vms_devinfo {
 
 /*
  * $ALLOC / $DALLOC: allocate a device to this process, and give it
- * back. This is what makes a process the device's OWNER; $ASSIGN does
- * not (oracle, docs/oracle/vax73-terminal-device.md section 7).
+ * back. Allocation is not the only route to ownership -- see
+ * struct vms_devinfo -- but it is the only thing that makes a device
+ * "allocated", and it holds the device after the last channel is gone.
  *
- * $ALLOC returns SS$_DEVALLOC when the device is allocated to another
- * process, or when another process merely holds channels to it -- both
- * observed on the lab. $DALLOC returns SS$_DEVNOTALLOC when this
- * process does not have it allocated.
+ * $ALLOC returns SS$_DEVALLOC when the device is OWNED by another
+ * process, whether that owner allocated it (ALLOCATE OPA0: from a
+ * detached process while the interactive job held the console) or
+ * merely assigned a channel to it (ALLOCATE TTA0: while the detached
+ * CHANHOLD process held one channel and no allocation). Both are
+ * measured; see docs/oracle/vax73-terminal-device.md section 7.
+ *
+ * $DALLOC returns SS$_DEVNOTALLOC when this process does not have the
+ * device ALLOCATED -- including when it owns the device by channel.
  */
 struct vms_alloc_args {
     char     devnam[VMS_DEVNAM_SIZE];

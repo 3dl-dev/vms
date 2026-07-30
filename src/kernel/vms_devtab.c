@@ -175,6 +175,7 @@ static struct vms_device *devtab_lookup_locked(const char *devnam)
 static struct vms_device *vms_devtab_create(const char *devnam,
                                             uint32_t devclass,
                                             uint32_t devtype,
+                                            uint32_t shareable,
                                             uint64_t devchar,
                                             uint32_t width, uint32_t page)
 {
@@ -185,11 +186,12 @@ static struct vms_device *vms_devtab_create(const char *devnam,
         return NULL;
 
     strscpy(dev->devnam, devnam, sizeof(dev->devnam));
-    dev->devclass = devclass;
-    dev->devtype  = devtype;
-    dev->devchar  = devchar;
-    dev->width    = width;
-    dev->page     = page;
+    dev->devclass  = devclass;
+    dev->devtype   = devtype;
+    dev->shareable = shareable;
+    dev->devchar   = devchar;
+    dev->width     = width;
+    dev->page      = page;
     INIT_LIST_HEAD(&dev->chanlist);
     spin_lock_init(&dev->lock);
 
@@ -204,7 +206,14 @@ int vms_devtab_init(void)
 {
     struct vms_device *console;
 
+    /*
+     * shareable = 0: the oracle's terminals are not shareable. Neither
+     * "Terminal OPA0: ..." nor "Terminal TTA0: ..." carries the word
+     * "shareable" in SHOW DEVICE/FULL's status clause, where NLA0: and
+     * the MBAn: mailboxes do.
+     */
     console = vms_devtab_create(VMS_CONSOLE_DEVNAM, DC__TERM, VMS_DT_UNKNOWN,
+                                0 /* shareable */,
                                 VMS_CONSOLE_DEVCHAR,
                                 VMS_CONSOLE_WIDTH, VMS_CONSOLE_PAGE);
     if (!console)
@@ -243,45 +252,99 @@ static struct vms_channel *chan_find_locked(struct vms_proc *proc, uint32_t chan
     return NULL;
 }
 
-/* Caller holds dev->lock. Clear an outstanding allocation. */
-static void device_dealloc_locked(struct vms_device *dev)
+/*
+ * The caller's UIC, from its Linux credentials.
+ *
+ * NOT ORACLE-PINNED, and recorded as such in vms-d0b's findings: it is
+ * OVMX's own mapping and no test asserts it. It will have to agree with
+ * whatever replaces the VMS_UIC_* environment facade (vms-2b8).
+ */
+static uint32_t caller_uic(void)
 {
-    if (!dev->allocated)
-        return;
-    dev->allocated = 0;
-    dev->owner_pid = 0;
-    dev->owner_linux_pid = 0;
-    dev->owner_uic = 0;
-    if (dev->refcnt > 0)
-        dev->refcnt--;
+    return (((uint32_t)from_kgid(&init_user_ns, current_gid()) & 0xFFFFu) << 16) |
+           ((uint32_t)from_kuid(&init_user_ns, current_uid()) & 0xFFFFu);
+}
+
+/* Caller holds dev->lock. Does `pid` still hold a channel to this device? */
+static int device_has_channel_locked(struct vms_device *dev, pid_t pid)
+{
+    struct vms_channel *ch;
+
+    list_for_each_entry(ch, &dev->chanlist, devlink) {
+        if (ch->owner_linux_pid == pid)
+            return 1;
+    }
+    return 0;
 }
 
 /*
- * Give a channel back: unlink it from the device and drop the
- * reference it held.
+ * Caller holds dev->lock. End ownership that rests on nothing but a
+ * channel.
  *
- * Note what this does NOT do: it does not touch ownership. Ownership
- * is allocation, and allocation is released by $DALLOC or by the
- * owner's death -- not by handing back a channel. That split is the
- * oracle's, not a convenience: on the lab a process holding an open
- * channel never became the device's owner in the first place.
+ * ORACLE (VAX 7.3, non-shareable terminal TTA0:): a bare OPEN/WRITE
+ * made the opener the owner; CLOSE put the device back to
+ * Owner "" / reference count 0. An ALLOCATION is different and is not
+ * touched here -- DEALLOCATE OPA0: left the still-channel-holding job
+ * as Owner "SYSTEM" with the reference count going 3 -> 2, so the
+ * allocation is what ends, not the ownership.
+ */
+static void device_release_implicit_owner_locked(struct vms_device *dev, pid_t pid)
+{
+    if (dev->allocated)
+        return;
+    if (pid == 0 || dev->owner_linux_pid != pid)
+        return;
+    if (device_has_channel_locked(dev, pid))
+        return;
+
+    dev->owner_pid = 0;
+    dev->owner_linux_pid = 0;
+    dev->owner_uic = 0;
+}
+
+/*
+ * Caller holds dev->lock. Give an allocation back: the device stops
+ * being "allocated" and loses the reference the allocation held. What
+ * happens to ownership afterwards is the implicit rule above -- the
+ * ex-allocator keeps the device while it still holds a channel.
+ */
+static void device_dealloc_locked(struct vms_device *dev)
+{
+    pid_t owner = dev->owner_linux_pid;
+
+    if (!dev->allocated)
+        return;
+    dev->allocated = 0;
+    if (dev->refcnt > 0)
+        dev->refcnt--;
+    device_release_implicit_owner_locked(dev, owner);
+}
+
+/*
+ * Give a channel back: unlink it from the device, drop the reference it
+ * held, and end any ownership that channel was carrying.
  */
 static void device_release_channel(struct vms_channel *ch)
 {
     struct vms_device *dev = ch->dev;
+    pid_t pid = ch->owner_linux_pid;
 
     spin_lock(&dev->lock);
     list_del(&ch->devlink);
     if (dev->refcnt > 0)
         dev->refcnt--;
+    device_release_implicit_owner_locked(dev, pid);
     spin_unlock(&dev->lock);
 }
 
 /*
- * Release everything a dying process held: its channels, and any
- * device it had allocated. A device allocated by a process that no
- * longer exists would be permanently unallocatable, which is not a
- * state VMS has.
+ * Release everything a dying process held: its channels (which ends any
+ * ownership resting on them) and any device it had allocated.
+ *
+ * ORACLE: STOP CHANHOLD -- a detached process whose only claim on TTA0:
+ * was one assigned channel -- put the device back to Owner "" with a
+ * reference count of 0. A device left owned by a process that no longer
+ * exists is not a state VMS has.
  */
 void vms_proc_release_channels(struct vms_proc *proc)
 {
@@ -320,10 +383,19 @@ void vms_proc_release_channels(struct vms_proc *proc)
  * ORACLE-PINNED SEMANTICS (docs/oracle/vax73-terminal-device.md
  * section 7), because the obvious guesses are both wrong:
  *
- *   - Assigning a channel does NOT make the caller the device's
- *     owner. On the lab an open channel to NLA0: left "Owner process"
- *     empty and "Owner process ID" 00000000 for as long as it was
- *     held. Ownership is $ALLOC's job.
+ *   - A channel to a NON-SHAREABLE device that nobody owns DOES make
+ *     the caller its owner, without allocating it. TTA0: on the lab sat
+ *     at Owner "" / reference count 0; a bare OPEN/WRITE (a channel and
+ *     nothing else) moved it to Owner "SYSTEM" / Owner process ID
+ *     20400216 / reference count 1, with no "allocated" in the status
+ *     clause -- and a DEALLOCATE at that moment was refused
+ *     %SYSTEM-W-DEVNOTALLOC. This is why the console shows an owner on
+ *     a system where nobody ever ran ALLOCATE.
+ *
+ *   - A channel to a SHAREABLE device confers nothing. The identical
+ *     DCL sequence on NLA0: ("shareable, mailbox device") left
+ *     Owner "" / Owner process ID 00000000 with only the reference
+ *     count moving.
  *
  *   - $ASSIGN to a device another process owns SUCCEEDS. A detached
  *     process on the lab assigned a channel to OPA0: -- the console,
@@ -380,6 +452,16 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
     spin_lock(&dev->lock);
     dev->refcnt++;
     list_add_tail(&ch->devlink, &dev->chanlist);
+    /*
+     * Implicit ownership. Note what is NOT here: no reference is added
+     * for it (TTA0: showed one channel, one reference, and an owner),
+     * and `allocated` stays clear.
+     */
+    if (!dev->shareable && dev->owner_linux_pid == 0) {
+        dev->owner_pid = proc->vms_pid;
+        dev->owner_linux_pid = proc->linux_pid;
+        dev->owner_uic = caller_uic();
+    }
     spin_unlock(&dev->lock);
     spin_unlock(&vms_device_list_lock);
 
@@ -434,33 +516,39 @@ long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg)
 /*
  * $ALLOC - allocate a device to this process.
  *
- * This, not $ASSIGN, is what makes a process a device's owner. Every
- * branch below is a case observed on the ~/vax OpenVMS VAX V7.3 lab
- * (docs/oracle/vax73-terminal-device.md sections 7-9):
+ * There is exactly ONE refusal, and it is about OWNERSHIP, not about
+ * allocation and not about channels: a device somebody else owns
+ * cannot be allocated. Both observed cases on the ~/vax OpenVMS VAX
+ * V7.3 lab reduce to it (docs/oracle/vax73-terminal-device.md
+ * section 7):
  *
- *   allocated to another process   -> %SYSTEM-W-DEVALLOC
+ *   owner holds an allocation  -> %SYSTEM-W-DEVALLOC
  *       ALLOCATE OPA0: from a detached process while the interactive
  *       job held the console.
- *   another process holds channels -> %SYSTEM-W-DEVALLOC
- *       ALLOCATE NLA0: with "Owner process" empty and a reference
- *       count of 2 -- foreign channels alone are enough.
- *   already allocated to us        -> success, reference count unchanged
+ *   owner holds only a channel -> %SYSTEM-W-DEVALLOC
+ *       CHANHOLD, a detached process whose only claim on TTA0: was one
+ *       assigned channel, showed as "Owner process CHANHOLD" with the
+ *       status clause carrying no "allocated"; ALLOCATE TTA0: from the
+ *       interactive job was refused all the same.
+ *   already allocated to us    -> success, reference count unchanged
  *       ALLOCATE OPA0: twice in a row: 2 -> 3 -> 3.
- *   otherwise                      -> success, reference count + 1
+ *   ours by channel, or free   -> success, reference count + 1
+ *       ALLOCATE OPA0: from the job that already owned it (by channel,
+ *       not by allocation): reference count 2 -> 3, and the status
+ *       clause gained the word "allocated".
  *
- * The caller's UIC is taken from its Linux credentials. That mapping
- * is NOT oracle-pinned and is noted as such in vms-d0b's findings; it
- * will have to agree with whatever replaces the VMS_UIC_* environment
- * facade (vms-2b8).
+ * WHAT IS NOT MODELLED (rule 10 -- do not invent a handler for a
+ * condition that was never measured): %SYSTEM-W-DEVASSIGN, "device has
+ * channels assigned" (2120). VMS clearly has this condition -- its own
+ * message facility printed the text -- but no probe ever provoked it,
+ * so OVMX does not return it anywhere. Filed rather than guessed.
  */
 long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_alloc_args args;
     struct vms_device *dev;
-    struct vms_channel *ch;
     char devnam[VMS_DEVNAM_SIZE];
     uint32_t status;
-    int foreign = 0;
 
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
@@ -482,29 +570,17 @@ long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg)
     }
 
     spin_lock(&dev->lock);
-    if (dev->allocated && dev->owner_linux_pid == proc->linux_pid) {
-        args.status = SS__NORMAL;            /* already ours; idempotent */
-    } else if (dev->allocated) {
+    if (dev->owner_linux_pid != 0 && dev->owner_linux_pid != proc->linux_pid) {
         args.status = SS__DEVALLOC;
+    } else if (dev->allocated) {
+        args.status = SS__NORMAL;            /* already ours; idempotent */
     } else {
-        list_for_each_entry(ch, &dev->chanlist, devlink) {
-            if (ch->owner_linux_pid != proc->linux_pid) {
-                foreign = 1;
-                break;
-            }
-        }
-        if (foreign) {
-            args.status = SS__DEVALLOC;
-        } else {
-            dev->allocated = 1;
-            dev->owner_pid = proc->vms_pid;
-            dev->owner_linux_pid = proc->linux_pid;
-            dev->owner_uic =
-                (((uint32_t)from_kgid(&init_user_ns, current_gid()) & 0xFFFFu) << 16) |
-                ((uint32_t)from_kuid(&init_user_ns, current_uid()) & 0xFFFFu);
-            dev->refcnt++;
-            args.status = SS__NORMAL;
-        }
+        dev->allocated = 1;
+        dev->owner_pid = proc->vms_pid;
+        dev->owner_linux_pid = proc->linux_pid;
+        dev->owner_uic = caller_uic();
+        dev->refcnt++;
+        args.status = SS__NORMAL;
     }
     spin_unlock(&dev->lock);
     spin_unlock(&vms_device_list_lock);
@@ -518,9 +594,17 @@ out:
 /*
  * $DALLOC - give an allocated device back.
  *
- * Deallocating a device this process does not have allocated is
- * %SYSTEM-W-DEVNOTALLOC on the lab (a second DEALLOCATE OPA0: right
- * after the first).
+ * Deallocating a device this process does not have ALLOCATED is
+ * %SYSTEM-W-DEVNOTALLOC on the lab, and "does not have allocated"
+ * includes a device it owns by channel: DEALLOCATE TTA0: while holding
+ * only an open channel to it was refused %SYSTEM-W-DEVNOTALLOC with
+ * Owner "SYSTEM" left in place. A second DEALLOCATE OPA0: right after
+ * the first is refused the same way.
+ *
+ * What a successful $DALLOC does NOT do is make the device unowned:
+ * DEALLOCATE OPA0: took the reference count 3 -> 2 and dropped the word
+ * "allocated", and the job that still held channels stayed Owner
+ * "SYSTEM". Ownership then follows the implicit rule.
  */
 long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg)
 {

@@ -45,23 +45,33 @@
 # (vms-c86): it links a 22-object program entered at main() whose relocs are
 # dominated by INTRA-image references (2111 ADRP + 2120 ADD_ABS_LO12 + 981 ABS64 +
 # 235 PREL32 + LDST* + 40 TLSDESC), synthesizes a crt0 (_start -> musl init -> main
-# -> exit), binds 139 cross-image imports across the six --use producers, and carries
+# -> exit), binds 140 cross-image imports across the seven --use producers, and carries
 # DCL's own single-TLS-object (dcl_messages.o) as PT_TLS. IMGACT.EXE recovers
 # argc/argv off the kernel process stack and activates it. Empirical LINK result:
-# ET_DYN executable, 22 objects, 8539 relocs, 5 GOT, 1 TLS, 981 ABS64-ptr, 139
-# imports. (link.c/imgact.c are the complete toolchain and are OUT of the
+# ET_DYN executable, 22 objects, 8647 relocs, 5 GOT, 1 TLS, 1014 ABS64-ptr, 140
+# imports. (These figures are a MEASUREMENT of one build, not a pin -- nothing
+# asserts them, and any change to what DCL calls moves them. vms-8019 round 7
+# moved the import count by one: SHOW SYSTEM's CPU column is now read from
+# sys$getjpi instead of from a second /proc parser inside the DCL layer.) (link.c/imgact.c are the complete toolchain and are OUT of the
 # Systems-Engineer file-domain; do NOT edit them here.)
 # =============================================================================
+#
+# LIBVMSSYS$SHR$ (the SEVENTH producer) was added for vms-8019: SHOW SYSTEM is
+# now a READER of the executive's process table, so dcl_cmd_show.c calls
+# vms_kif_procscan() — a /dev/vms client entry point DEFINED in src/libvmssys,
+# hence exported by LIBVMSSYS$SHR and by nothing else. DCL previously imported
+# no vms_kif_* at all, which is exactly why the shell could only ever print the
+# calling process: it had no way to ask the executive anything.
 #
 # Usage:  mk_dcl.sh <LINK.EXE> <out-DCL.EXE> \
 #             <DECC$SHR.EXE> <LIBVMS$SHR.EXE> <LIBVMSPROCESS$SHR.EXE> \
 #             <LIBVMSFS$SHR.EXE> <LIBVMSLNM$SHR.EXE> <LIBVMSRMS$SHR.EXE> \
-#             [vmsdcl-src-dir] [repo-src-dir]
+#             <LIBVMSSYS$SHR.EXE> [vmsdcl-src-dir] [repo-src-dir]
 # Env:    CC (default gcc)
 # Must run in the arm64 musl container where the producer .EXE already exist.
 set -e
 
-LINK_EXE=${1:?usage: mk_dcl.sh <LINK.EXE> <out> <DECC$SHR> <LIBVMS$SHR> <LIBVMSPROCESS$SHR> <LIBVMSFS$SHR> <LIBVMSLNM$SHR> <LIBVMSRMS$SHR> [dcl-src] [repo-src]}
+LINK_EXE=${1:?usage: mk_dcl.sh <LINK.EXE> <out> <DECC$SHR> <LIBVMS$SHR> <LIBVMSPROCESS$SHR> <LIBVMSFS$SHR> <LIBVMSLNM$SHR> <LIBVMSRMS$SHR> <LIBVMSSYS$SHR> [dcl-src] [repo-src]}
 OUT=${2:?need output DCL.EXE path}
 DECC_SHR=${3:?need DECC\$SHR.EXE}
 VMS_SHR=${4:?need LIBVMS\$SHR.EXE}
@@ -69,12 +79,13 @@ PROC_SHR=${5:?need LIBVMSPROCESS\$SHR.EXE}
 FS_SHR=${6:?need LIBVMSFS\$SHR.EXE}
 LNM_SHR=${7:?need LIBVMSLNM\$SHR.EXE}
 RMS_SHR=${8:?need LIBVMSRMS\$SHR.EXE}
+SYS_SHR=${9:?need LIBVMSSYS\$SHR.EXE (vms_kif_* producer -- SHOW SYSTEM reads the executive process table)}
 HERE=$(cd "$(dirname "$0")" && pwd)                      # src/vmslink
-DCL=${9:-$(cd "$HERE/../vmsdcl" && pwd)}                 # src/vmsdcl
-REPO_SRC=${10:-$(cd "$HERE/.." && pwd)}                  # src
+DCL=${10:-$(cd "$HERE/../vmsdcl" && pwd)}                # src/vmsdcl
+REPO_SRC=${11:-$(cd "$HERE/.." && pwd)}                  # src
 CC=${CC:-gcc}
 
-for f in "$DECC_SHR" "$VMS_SHR" "$PROC_SHR" "$FS_SHR" "$LNM_SHR" "$RMS_SHR"; do
+for f in "$DECC_SHR" "$VMS_SHR" "$PROC_SHR" "$FS_SHR" "$LNM_SHR" "$RMS_SHR" "$SYS_SHR"; do
     [ -f "$f" ] || { echo "mk_dcl: producer image not found: $f"; exit 1; }
 done
 [ -d "$DCL" ] || { echo "mk_dcl: vmsdcl src dir not found: $DCL"; exit 1; }
@@ -86,7 +97,7 @@ CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
 INCS="-I$DCL/include -I$REPO_SRC/libvms/include -I$REPO_SRC/vmsfs/include \
 -I$REPO_SRC/vmslnm/include -I$REPO_SRC/vmsrms/include \
--I$REPO_SRC/vmsprocess/include -I$REPO_SRC/vmsqueue"
+-I$REPO_SRC/vmsprocess/include -I$REPO_SRC/vmsqueue -I$REPO_SRC/libvmssys"
 
 # The 21 vmsdcl TUs (== src/vmsdcl/CMakeLists.txt, minus readline convenience).
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \
@@ -95,7 +106,7 @@ dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script dcl_messages 
 dcl_library"
 
 echo "mk_dcl: LINK.EXE=$LINK_EXE  CC=$CC"
-echo "mk_dcl: --use DECC\$SHR LIBVMS\$SHR LIBVMSPROCESS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSRMS\$SHR"
+echo "mk_dcl: --use DECC\$SHR LIBVMS\$SHR LIBVMSPROCESS\$SHR LIBVMSFS\$SHR LIBVMSLNM\$SHR LIBVMSRMS\$SHR LIBVMSSYS\$SHR"
 
 OBJS=""
 for t in $TUS; do
@@ -107,11 +118,11 @@ echo "  cc vmsqueue.c"
 $CC $CFLAGS $DEFS $INCS -c -o "$WORK/vmsqueue.o" "$REPO_SRC/vmsqueue/vmsqueue.c"
 OBJS="$OBJS $WORK/vmsqueue.o"
 
-echo "mk_dcl: LINK.EXE --executable --use {6 producers} -> $OUT"
+echo "mk_dcl: LINK.EXE --executable --use {7 producers} -> $OUT"
 # shellcheck disable=SC2086
 "$LINK_EXE" --executable \
     --use "$DECC_SHR" --use "$VMS_SHR" --use "$PROC_SHR" \
-    --use "$FS_SHR" --use "$LNM_SHR" --use "$RMS_SHR" \
+    --use "$FS_SHR" --use "$LNM_SHR" --use "$RMS_SHR" --use "$SYS_SHR" \
     -o "$OUT" $OBJS
 
 echo "mk_dcl: created $OUT"

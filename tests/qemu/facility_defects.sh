@@ -76,9 +76,15 @@
 # table, authenticated identity -- plus two properties of the binding itself:
 # that a caller's PCB is per-PROCESS (not per-thread), and that an open
 # descriptor pins the module.
-# bind-client-no-register is the only defect outside vms.ko: it is the vms-9fc
-# defect itself (kif_bind() not calling vms_kif_register()), i.e. the product
-# half of the interface, which no kernel-side mutation can reach.
+# TWO defects are outside vms.ko, both because the property they name lives in
+# the PRODUCT half of the interface, where no kernel-side mutation can reach it:
+#   bind-client-no-register  the vms-9fc defect itself (kif_bind() not calling
+#                            vms_kif_register()).
+#   creprc-handshake-eintr   $CREPRC's report pipe read not retried on EINTR,
+#                            so a signal caught by the CALLER decided what the
+#                            service reported about the CHILD (vms-8019).
+# Both are edits under src/, not src/kernel/, so cmd_selftest copies libvms and
+# libvmssys alongside kernel/ when it checks that every anchor still matches.
 #
 # vmsfs.ko (src/kernel/vmsfs/, and the two suites that drive it) is NOT an
 # executive facility and is NOT covered here. See scope_* below: that exclusion
@@ -121,7 +127,8 @@ proctab-duplicate-name
 ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
-bind-client-no-register"
+bind-client-no-register
+creprc-handshake-eintr"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -412,13 +419,20 @@ EOF
         case "$_f" in
         facility)     echo "process table (VMS_IOCTL_SETPRN/GETJPI/PROCSCAN)";;
         targets)      echo "kernel/vms_proctab.c";;
-        suites_red)   echo "test_kmod_procnam";;
+        # BOTH layers of the same refusal: the raw-ioctl suite and the
+        # public-API suite. vms-8019 made $CREPRC report the executive's own
+        # clash status to the CREATOR, so the same single kernel edit is now
+        # visible through sys$creprc as well -- and MEASURED to be: with the
+        # clash test short-circuited, test_syssvc_procnam reddens exactly one
+        # assertion, its own name for the same property.
+        suites_red)   echo "test_kmod_procnam test_syssvc_procnam";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "\$SETPRN stops rejecting a name already held in the UIC group: the SS\$_DUPLNAM clash test is short-circuited. Name storage, lookup, scan and validation are untouched.";;
+        why)          echo "\$SETPRN stops rejecting a name already held in the UIC group: the SS\$_DUPLNAM clash test is short-circuited. Name storage, lookup, scan and validation are untouched. Both the raw-ioctl suite and the public sys\$ suite name it, one assertion each.";;
         require_fail) cat <<'EOF'
 duplicate process name rejected with SS$_DUPLNAM
+sys$creprc refuses a duplicate process name with SS$_DUPLNAM
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -550,11 +564,14 @@ EOF
         case "$_f" in
         facility)     echo "kernel-interface binding in the PRODUCT (vms_kif kif_bind -> vms_kif_register)";;
         targets)      echo "libvmssys/vms_kif.c";;
-        # MEASURED: only test_kmod_bind. Round 1 also listed the three suites
-        # below, which permitted four suite groups to redden while only one
-        # can -- an attribution claim weaker than it read. They are now
-        # declared as what they are: BLIND.
-        suites_red)   echo "test_kmod_bind";;
+        # MEASURED: test_kmod_bind, and -- since vms-8019 -- test_syssvc_procnam.
+        # Round 1 also listed the suites in blind_suites below, which permitted
+        # four suite groups to redden while only one could; those are now
+        # declared as what they are: BLIND. test_syssvc_procnam is the
+        # opposite case and is here on measurement, not permission: it is the
+        # FIRST public-API suite that does NOT hand-register, so it is the
+        # first one that can see this defect at all.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
 These four drive the product's own vms_kif client, so restoring the vms-9fc
@@ -570,13 +587,19 @@ this as an asserted fact rather than a note: the pattern is still SPREADING,
 and the gate now says so on every run.
 Tracked as rd item vms-f27. Do NOT fix it by widening suites_red: that would
 re-hide the gap behind a set the control merely permits to redden.
+THE COUNTER-EXAMPLE, added by vms-8019 and worth keeping in view: the FIFTH
+client suite, test_syssvc_procnam, does NOT hand-register -- it opens
+/dev/vms and then uses the public sys$ API, which is what a product image
+does -- and it goes red immediately. So the blindness above is not a property
+of driving vms_kif; it is a property of hand-registering first.
 EOF
                       ;;
         isolation)    echo "isolated";;
-        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Only test_kmod_bind detects it; the three client suites that ought to are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
+        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Two suites detect it: test_kmod_bind, and test_syssvc_procnam through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
         require_fail) cat <<'EOF'
 $SETEF reaches the executive with no explicit register
 $GETJPI(self) resolves the auto-bound process
+the caller has a row in the executive's process table
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -590,11 +613,14 @@ forked child's $SETEF reaches the executive
 forked child is not rejected as an unregistered task
 forked child resolves itself in the process table
 child's executive entry is the CHILD's, not the parent's
+the executive assigned the caller a VMS process ID
+sys$creprc created the subject process
+sys$creprc returned the subject's pid
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-TWELVE assertions go red, and that IS the defect rather than evidence against
-it: the mutation deletes the ONE call that binds a process to the executive,
+Assertions across two suites go red, and that IS the defect rather than
+evidence against it: the mutation deletes the ONE call that binds a process to the executive,
 and a process with no PCB can use no facility. Round 1 named two of the twelve
 and framed the result as narrow ("only test_kmod_bind goes red"), which is
 true at suite granularity and misleading at property granularity -- the exact
@@ -612,10 +638,65 @@ a blunderbuss: "$SETEF does not report the caller's parameters as bad" (the
 failure is SS$_BUGCHECK, not the SS$_BADPARAM mistranslation vms-9fc also
 fixed) and "module rejects an unregistered task with -ESRCH" (the executive
 side is untouched and still refuses correctly). Suites 4-6 stay green too --
-they register explicitly, which is precisely why the three blind_suites below
+they register explicitly, which is precisely why the four blind_suites below
 cannot see this defect at all.
+The last three, in test_syssvc_procnam, are the same missing bind arriving at
+the PUBLIC API (vms-8019). "the caller has a row in the executive's process
+table" is $GETJPI(self) from an unbound process -- the same property as the
+require_fail entry above, one layer up, which is why it is in require_fail and
+not here. "the executive assigned the caller a VMS process ID" reads the pid
+out of the row that call failed to return. "sys$creprc created the subject
+process" and "sys$creprc returned the subject's pid" are the forked CHILD
+failing to bind, exactly as suite 3 does one layer down: with no registration
+the child cannot report a process ID, so the creation handshake fails and
+$CREPRC reports the child lost. That suite then stops, by design, rather than
+asserting about a subject it knows was not created -- which is why exactly
+four of its assertions appear here and none of the rest of the suite, however
+many it has grown to. (The count is deliberately not written down: it was, and
+adding an assertion to the suite silently rotted it. The require_fail set is
+the machine-checked statement; this paragraph is the reasoning.)
 EOF
                       ;;
+        esac;;
+
+    creprc-handshake-eintr)
+        case "$_f" in
+        facility)     echo "process creation handshake in the PRODUCT (\$CREPRC's report pipe, src/libvms/syssvc/sys_process.c)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_procnam";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+$CREPRC's handshake read goes back to a bare read(2), so a signal delivered to
+the CALLER through a handler without SA_RESTART returns EINTR and the service
+reads that as "the child died before reporting". This is the vms-8019 round-4
+defect exactly, and it is not a theoretical one: DCL installs its interactive
+SIGINT/SIGQUIT handlers with sa_flags = 0 (src/vmsdcl/dcl_main.c) and DCL is
+what calls $CREPRC, so a Ctrl-C in the handshake window is the production
+trigger.
+THE DEFECT HAS TWO ENDINGS AND THE SCHEDULER PICKS ONE. Either the caller
+closes the pipe's read end first, so the child's report takes SIGPIPE, the
+child dies, and $CREPRC answers OVMX$_PRCLOST ("nothing was ever entered in
+the table") about a process that WAS created and registered; or the child
+reports first, activates its image, and $CREPRC's reap blocks for the lifetime
+of that image, so the call never comes back at all. BOTH were measured from
+this same mutation on this same commit -- the second on an aarch64 host under
+TCG, the FIRST on the x86_64 CI runner. They are one property (the caller's
+signal decided what $CREPRC said about the child) seen through two channels,
+so the suite asserts them as ONE assertion and prints which ending it saw;
+naming them separately is what made an earlier revision of this control flaky.
+Nothing else in the file is touched: with no signal delivered the mutated code
+and the correct code are byte-for-byte equivalent in behaviour, which is why
+the ONLY assertion it reddens is the one that arranges the signal.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+sys$creprc returned, and reported no process lost, while the caller caught signals
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
@@ -667,6 +748,12 @@ apply_edit() {
         sed -i 's|(void)vms_kif_register(NULL);|/* NEGCTL bind-client-no-register: the vms-9fc defect, restored */|' "$_file";;
     ident-username-unguarded)
         sed -i 's|if (strncmp(proc->username, args.username, VMS_USERNAME_SIZE) != 0) {|if (0 \&\& strncmp(proc->username, args.username, VMS_USERNAME_SIZE) != 0) { /* NEGCTL ident-username-unguarded */|' "$_file";;
+    creprc-handshake-eintr)
+        # The ONE edit, and it is the code as it actually shipped for one
+        # round: the creation handshake's read is a bare read(2) again. It
+        # changes nothing except what happens when a signal is delivered to
+        # the CALLER while it waits -- which is the whole property.
+        sed -i 's|ssize_t r = creprc_read_all(namefd\[0\], \&rep, sizeof(rep));|ssize_t r = read(namefd[0], \&rep, sizeof(rep)); /* NEGCTL creprc-handshake-eintr */|' "$_file";;
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -956,8 +1043,12 @@ cmd_selftest() {
 
         rm -rf "$_st_tmp/tree"
         mkdir -p "$_st_tmp/tree"
-        if ! cp -a "$_st_root/kernel" "$_st_root/libvmssys" "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys} for the self-test"
+        # libvms is copied too: a defect may target the PRODUCT half of an
+        # interface (creprc-handshake-eintr does), and a target this function
+        # cannot see would be reported as a dead anchor on every run.
+        if ! cp -a "$_st_root/kernel" "$_st_root/libvmssys" "$_st_root/libvms" \
+                   "$_st_tmp/tree/" 2>/dev/null; then
+            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms} for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

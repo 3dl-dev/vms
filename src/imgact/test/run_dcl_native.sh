@@ -17,7 +17,7 @@
 #   3. DCL.EXE links as a VMS-native ET_DYN executable via
 #      `LINK.EXE --executable --use {DECC$SHR + the five OVMX shareables}` — a
 #      22-object, main()-entered program with a full intra-image reloc set
-#      (ADRP/ADD/ABS64/PREL32/LDST), 139 cross-image imports all bound, and its own
+#      (ADRP/ADD/ABS64/PREL32/LDST), 140 cross-image imports all bound, and its own
 #      single-object TLS (dcl_messages.o) carried as PT_TLS.
 #   4. IMGACT.EXE activates DCL.EXE (crt0 recovers argc/argv off the kernel stack,
 #      calls main(argv[1]=session.com)); DCL runs a scripted session (SHOW TIME +
@@ -77,7 +77,7 @@ done
 $CC -fPIC -mno-outline-atomics -c -o "$WORK/sys_syscall.o" "$LIBVMSSYS_DIR/arch/aarch64/syscall.S"
 SYSOBJS="$SYSOBJS $WORK/sys_syscall.o"
 "$WORK/LINK.EXE" --shareable \
-    --symbol-vector "vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE" \
+    --symbol-vector "vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE" \
     --gsmatch LEQUAL,1,0 -o "$SYSLIB/LIBVMSSYS\$SHR.EXE" $SYSOBJS
 
 echo "== LIBVMSPROCESS\$SHR.EXE =="
@@ -114,7 +114,9 @@ echo
 echo "== compile the real src/vmsdcl (21 TUs) + src/vmsqueue VMS-native =="
 CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics"
 DEFS="-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE"
-INCS="-I$DCL_DIR/include -I$LIBVMS_INC -I$VMSFS_INC -I$LNM_INC -I$RMS_INC -I$VMSPROC_DIR/include -I$SRC/vmsqueue"
+# -I$LIBVMSSYS_DIR (vms-8019): dcl_cmd_show.c includes "vms_kif.h" — SHOW SYSTEM
+# reads the executive's process table through vms_kif_procscan().
+INCS="-I$DCL_DIR/include -I$LIBVMS_INC -I$VMSFS_INC -I$LNM_INC -I$RMS_INC -I$VMSPROC_DIR/include -I$SRC/vmsqueue -I$LIBVMSSYS_DIR"
 TUS="dcl_main dcl_lexer dcl_parser dcl_exec dcl_backup dcl_builtin dcl_cmd_show \
 dcl_cmd_set dcl_cmd_file dcl_cmd_process dcl_cmd_io dcl_cmd_misc dcl_editor \
 dcl_terminal dcl_symbol dcl_lexical dcl_filespec dcl_io dcl_script dcl_messages \
@@ -141,11 +143,12 @@ echo "-- TLS-defining objects (single-object TLS, within the per-image limit): -
 for o in $DCLOBJS; do readelf -SW "$o" 2>/dev/null | grep -qE '\.tdata|\.tbss' && echo "   TLS: $(basename $o)"; done
 
 echo
-echo "== link DCL.EXE VMS-native (LINK.EXE --executable --use the six shareables) =="
+echo "== link DCL.EXE VMS-native (LINK.EXE --executable --use the seven shareables) =="
 set +e
 sh "$LINK_DIR/mk_dcl.sh" "$WORK/LINK.EXE" "$SYSEXE/DCL.EXE" \
     "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
     "$SYSLIB/LIBVMSFS\$SHR.EXE" "$SYSLIB/LIBVMSLNM\$SHR.EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" \
+    "$SYSLIB/LIBVMSSYS\$SHR.EXE" \
     "$DCL_DIR" "$SRC" 2>"$WORK/link.err"
 LRC=$?
 set -e

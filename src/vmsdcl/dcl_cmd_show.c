@@ -34,6 +34,8 @@
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
 #include "vmsqueue.h"
+/* The executive process table's reader (SHOW SYSTEM enumerates it). */
+#include "vms_kif.h"
 
 /* Forward declarations for queue/intrusion subcommands (dcl_cmd_process.c) */
 extern int cmd_show_queue(struct dcl_command *cmd);
@@ -174,54 +176,50 @@ static int cmd_show_logical(struct dcl_command *cmd)
 }
 
 /*
- * Helper: read CPU time from /proc/pid/stat and format as VMS HH:MM:SS.CC.
- * Fields 14 (utime) and 15 (stime) are in clock ticks.
- * Returns 1 on success, 0 on failure.  cpu_str must be >= 14 bytes.
+ * cpu_time_of - the CPU time SHOW SYSTEM displays for one process row,
+ * formatted as VMS "d hh:mm:ss.cc".
+ *
+ * THE FIGURE IS READ FROM THE SYSTEM SERVICE, NOT FROM /proc
+ * (vms-8019 round 7). What stood here was a SECOND, independent
+ * /proc/<pid>/stat parser living in the DCL layer -- a user-visible VMS
+ * command sourcing its own answer for an item $GETJPI already answers
+ * (JPI$_CPUTIM), which is the Rule 11 corollary inverted: a command is a
+ * READER of an executive facility, never a thing that fabricates its own
+ * answer. Two parsers of one quantity is also how the two layers came to
+ * DISAGREE about one condition -- this one blanked the column when the
+ * read failed while sys$getjpi invented a zero for the identical failure.
+ * There is now one implementation and therefore one answer.
+ *
+ * Returns 1 with cpu_str filled, or 0 when the service will not report
+ * the item -- which, for a row the scan has already established this
+ * caller may read, means the process no longer exists (SS$_NONEXPR).
+ * The caller then prints no figure and displays the row anyway -- the
+ * same treatment as a redacted row; see cmd_show_system(), whose comment
+ * records why dropping the row was written and backed out.
  */
-static int read_proc_cpu(int pid, char *cpu_str, size_t cpu_len)
+static int cpu_time_of(uint32_t vms_pid, char *cpu_str, size_t cpu_len)
 {
-    char path[256];
-    snprintf(path, sizeof(path), "/proc/%d/stat", pid);
-    FILE *fp = fopen(path, "r");
-    if (!fp) return 0;
+    struct item_list_3 items[2];
+    uint32_t centisec_total = 0;
+    uint16_t retlen = 0;
 
-    /* /proc/pid/stat: pid (comm) state ppid ... utime stime ...
-     * We need to skip past the comm field (may contain spaces/parens) */
-    char line[1024];
-    if (!fgets(line, sizeof(line), fp)) {
-        fclose(fp);
+    memset(items, 0, sizeof(items));
+    items[0].buflen    = sizeof(uint32_t);
+    items[0].item_code = JPI$_CPUTIM;
+    items[0].bufaddr   = &centisec_total;
+    items[0].retlen    = &retlen;
+
+    uint32_t st = sys$getjpi(0, &vms_pid, NULL, items, NULL, NULL, 0);
+
+    /* An unset item is as much a refusal as a failure status, and for the
+     * same reason: the service reports JPI$_CPUTIM or it reports nothing,
+     * never a zero standing in for a figure it could not obtain. */
+    if (!(st & 1) || retlen != sizeof(uint32_t))
         return 0;
-    }
-    fclose(fp);
 
-    /* Find closing ')' of comm field */
-    char *p = strrchr(line, ')');
-    if (!p) return 0;
-    p++; /* skip ')' */
-
-    /* Now parse: state ppid pgrp session tty_nr tpgid flags
-     * minflt cminflt majflt cmajflt utime stime
-     * That's 12 more fields after ')' */
-    unsigned long utime = 0, stime = 0;
-    char state;
-    long ppid, pgrp, session, tty_nr, tpgid;
-    unsigned long flags, minflt, cminflt, majflt, cmajflt;
-
-    if (sscanf(p, " %c %ld %ld %ld %ld %ld %lu %lu %lu %lu %lu %lu %lu",
-               &state, &ppid, &pgrp, &session, &tty_nr, &tpgid,
-               &flags, &minflt, &cminflt, &majflt, &cmajflt,
-               &utime, &stime) < 13) {
-        /* Fallback: scan as individual fields */
-        utime = 0; stime = 0;
-    }
-
-    long hz = sysconf(_SC_CLK_TCK);
-    if (hz <= 0) hz = 100;
-
-    unsigned long total_ticks = utime + stime;
-    unsigned long total_sec   = total_ticks / (unsigned long)hz;
-    unsigned long centisec    = (total_ticks % (unsigned long)hz) * 100UL /
-                                (unsigned long)hz;
+    /* JPI$_CPUTIM counts 10-millisecond units, i.e. centiseconds. */
+    unsigned long total_sec = centisec_total / 100UL;
+    unsigned long centisec  = centisec_total % 100UL;
     unsigned long hh = total_sec / 3600;
     unsigned long mm = (total_sec % 3600) / 60;
     unsigned long ss = total_sec % 60;
@@ -243,7 +241,11 @@ static int cmd_show_system(struct dcl_command *cmd)
 {
     (void)cmd;
 
-    struct dcl_context *ctx = dcl_get_context();
+    /* No dcl_get_context() here any more: the only thing this function
+     * used the DCL context for was ctx->process_name, which it printed as
+     * a FABRICATED process row when the PCB was empty (vms-8019). The row
+     * source is now the executive's table, so the context is not a source
+     * of process identity at all. */
 
     struct utsname uts;
     uname(&uts);
@@ -286,28 +288,123 @@ static int cmd_show_system(struct dcl_command *cmd)
            ovmx_product_banner(), sysname, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000), uptime_str);
-    printf("  Pid    Process Name    State  Pri      I/O       CPU"
-           "       Page flts  Pages\n");
+    /*
+     * ================================================================
+     * THIS HEADER IS DELIBERATELY NARROWER THAN VMS's. OPERATOR RULING,
+     * vms-8019 round 4. DO NOT "RESTORE" THE MISSING COLUMNS.
+     * ================================================================
+     *
+     * OpenVMS SHOW SYSTEM also prints State, Pri, I/O, Page flts and
+     * Pages. OVMX cannot source any of those from the executive's
+     * process table, so it does not print them AT ALL.
+     *
+     * What stood here until this round printed "---" in each of them.
+     * Rule 10 allows exactly two answers -- reproduce what VMS prints,
+     * or do not expose the thing at all -- and a not-available marker
+     * is neither. It is a display for a condition VMS never faces,
+     * shipped in a user-visible VMS command, which is precisely the
+     * illegal third answer. An absent column is a visibly incomplete
+     * table; "---" in a VMS-shaped table is a fabricated
+     * not-available state dressed as VMS output.
+     *
+     * THE VERBATIM QUESTION FOR THE ORACLE, owned by vms-6a7 ("SHOW
+     * SYSTEM lists every process on the system", which explicitly owns
+     * the display: "Match the real VMS column set and header -- pin
+     * the format to the oracle"):
+     *
+     *   "What does OpenVMS VAX 7.3 SHOW SYSTEM print in the State,
+     *    Pri, I/O, Page flts and Pages columns -- what are the exact
+     *    column widths and header spelling -- and is any of it
+     *    sourceable from what the OVMX executive actually holds?"
+     *
+     * Until that is answered the columns stay absent. Widening this
+     * header without an oracle transcript re-commits the defect.
+     */
+    printf("  Pid    Process Name          CPU\n");
 
-    /* Show VMS processes from PCB table only — no /proc scanning */
-    struct vms_pcb *pcb = vms_pcb_get();
+    /*
+     * ENUMERATE THE EXECUTIVE'S PROCESS TABLE (vms-8019).
+     *
+     * SHOW SYSTEM is a READER of an executive facility, never a thing
+     * that fabricates its own answer (CLAUDE.md Rule 11 corollary). What
+     * stood here did the opposite: it printed exactly ONE row -- the
+     * CALLING process -- out of that process's own private PCB, and if
+     * the PCB was empty it FABRICATED a row from getpid() and the DCL
+     * context's self-declared process name. A system display that can
+     * only ever see the process running it is not a system display.
+     *
+     * The rows now come from src/kernel/vms_proctab.c through
+     * vms_kif_procscan(), so every process the executive knows about is
+     * listed, named as the executive knows it -- which is the only sense
+     * in which a VMS process name means anything.
+     *
+     * There is no absent-executive branch and must not be one: the first
+     * vms_kif_* call binds and registers this process (kif_bind), so the
+     * table always holds at least the caller. If the scan yields nothing
+     * at all, the executive is unreachable -- a state OVMX does not run
+     * in (Rule 9: PID 1 refuses to boot without it) -- and printing a
+     * fabricated row to cover it is the illegal third answer (Rule 10).
+     */
+    uint32_t index = 0;
+    struct vms_procinfo info;
 
-    if (pcb && pcb->vms_pid != 0) {
-        /* Use PCB identity */
-        const char *pname = pcb->prcnam[0] ? pcb->prcnam : "OVMX";
-        char cpu_str[32] = "0 00:00:00.00";
-        read_proc_cpu((int)getpid(), cpu_str, sizeof(cpu_str));
-        printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
-               pcb->vms_pid, pname, "CUR", 4, 0, cpu_str, 0, 340);
-    } else {
-        /* PCB not initialized — fabricate current process entry */
-        const char *pname = (ctx && ctx->process_name[0])
-                            ? ctx->process_name : "OVMX";
-        uint32_t vpid = (uint32_t)getpid();
-        char cpu_str[32] = "0 00:00:00.00";
-        read_proc_cpu((int)getpid(), cpu_str, sizeof(cpu_str));
-        printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
-               vpid, pname, "CUR", 4, 0, cpu_str, 0, 340);
+    while (vms_kif_procscan(&index, &info) & 1) {
+        /*
+         * A REDACTED ROW GETS NO CPU FIGURE -- NOT A ZERO, NOT A MARKER.
+         *
+         * The executive returns rows the caller may not $GETJPI with
+         * every identity field withheld and info.redacted set (see
+         * src/kernel/vms_ioctl.h), so $GETJPI on such a row would be
+         * refused SS$_NOPRIV -- there is no accounting to source.
+         *
+         * What stood here read /proc/0/stat, ignored the failure, and
+         * printed the buffer's initialiser -- so a process whose
+         * accounting this caller is FORBIDDEN to read displayed a
+         * concrete, plausible "0 00:00:00.00". A fabricated accounting
+         * value is exactly what this item exists to delete, and it had
+         * survived inside the very function that was converted.
+         *
+         * OVMX cannot source the figure, so it prints no figure. Same
+         * Rule 10 answer as the absent columns above, applied per row
+         * instead of per table. What OpenVMS displays in the CPU column
+         * for a process the caller cannot read is NOT PINNED -- it goes
+         * with the rest of the column question to vms-6a7 -- and until
+         * it is pinned, nothing is the only honest width.
+         *
+         * THE FIGURE IS THE SERVICE'S OR IT IS ABSENT (vms-8019 round 7).
+         * The scan is a snapshot walked one row at a time, so a process
+         * can also exit between being scanned and being read; the service
+         * then answers SS$_NONEXPR and, exactly as for a redacted row,
+         * this prints no figure. One rule covers both, because from the
+         * display's side they are one condition -- OVMX cannot source the
+         * figure -- and the alternative was to invent a second display
+         * rule (dropping the row) for a condition VMS's own SHOW SYSTEM
+         * never faces, which is the illegal third answer in the shape it
+         * always takes: reasonable-looking, and unpinned. What a VMS
+         * SHOW SYSTEM does with a process deleted mid-walk goes to
+         * vms-6a7 with the rest of the column question.
+         */
+        char cpu_str[32] = "";
+        if (!info.redacted &&
+            !cpu_time_of(info.vms_pid, cpu_str, sizeof(cpu_str)))
+            cpu_str[0] = '\0';
+
+        /*
+         * The empty Process Name column for an unnamed row is a KNOWN
+         * DIVERGENCE with its own item: vms-d0e, "OVMX assigns no
+         * default process name at creation, so JPI$_PRCNAM is empty
+         * where VMS always has a name". See the JPI$_PRCNAM comment in
+         * src/libvms/syssvc/sys_process.c for why the invented
+         * "_%08X" name was deleted (it was a name only its owner could
+         * resolve) -- deleting a wrong answer did not produce a right
+         * one, and inventing a replacement here would just re-commit
+         * it one layer up. A blank is what OVMX prints until vms-d0e
+         * pins what the executive should assign.
+         */
+        printf(" %08X %-15s  %s\n",
+               info.vms_pid,
+               info.prcnam[0] ? info.prcnam : "",
+               cpu_str);
     }
 
     return SS$_NORMAL;

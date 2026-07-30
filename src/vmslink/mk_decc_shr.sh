@@ -225,8 +225,24 @@ __assert_fail=PROCEDURE,atoi=PROCEDURE,dlclose=PROCEDURE,dlopen=PROCEDURE,\
 dlsym=PROCEDURE,fdopen=PROCEDURE,ldexpl=PROCEDURE,longjmp=PROCEDURE,\
 mprotect=PROCEDURE,remove=PROCEDURE,sem_init=PROCEDURE,sem_post=PROCEDURE,\
 sem_wait=PROCEDURE,setjmp=PROCEDURE,sigaddset=PROCEDURE,sigprocmask=PROCEDURE,\
-strpbrk=PROCEDURE,strtof=PROCEDURE,strtold=PROCEDURE,strtoull=PROCEDURE"
+strpbrk=PROCEDURE,strtof=PROCEDURE,strtold=PROCEDURE,strtoull=PROCEDURE,\
+\
+fcntl=PROCEDURE"
 
+# fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
+# unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
+# FD_CLOEXEC on its report pipe so a concurrent exec in another thread of the
+# CALLING process cannot leak the write end and leave the creator blocked in
+# read() forever. pipe2(O_CLOEXEC) would need _GNU_SOURCE and is not in the
+# vector either; fcntl() is a plain C-RTL entry point (OpenVMS's own DECC$SHR
+# exports it) that musl's libc.a defines, so DECC$SHR is the right producer.
+#
+# THE GENERAL RULE, because this is the commonest way to break the VMS-native
+# toolchain jobs: EVERY libc call added to an OVMX library is a claim that
+# DECC$SHR provides it. The claim is checked by LINK.EXE at link time — the
+# STRICT (no --allow-undefined) libvms/vmsrms/DCL/tcc links fail if it is
+# false. --allow-undefined is NOT the fix; it records the symbol as a deferred
+# import and hides the breakage.
 echo "mk_decc_shr: LINK.EXE=$LINK_EXE"
 echo "mk_decc_shr: libc.a=$LIBC  libgcc.a=$LIBGCC  GSMATCH=$GSMATCH"
 

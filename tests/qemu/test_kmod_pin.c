@@ -130,7 +130,10 @@ int main(void)
     struct vms_register_args reg;
     memset(&reg, 0, sizeof(reg));
     reg.vms_pid = (uint32_t)getpid();
-    reg.init_privs = 0;
+    /* NO init_privs (vms-2b8): VMS_IOCTL_REGISTER no longer carries a
+     * privilege mask. A process naming its own privileges is the honor
+     * system that item removed, in either direction. The executive now
+     * DERIVES the mask from the task's real credentials. */
     int irc = ioctl(fd, VMS_IOCTL_REGISTER, &reg);
     CHECK(irc == 0 && reg.status == SS_NORMAL,
           "the executive still serves ioctls after the refused unload");

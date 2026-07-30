@@ -83,8 +83,8 @@ RUN KVER=$(cat /tmp/kver) && \
 #   test_syssvc_*.c            -> NOT built here; built by the cmake/musl
 #                                 stage below against the REAL src/libvms
 #                                 public sys$ API (vms-1d9).
-#   test_kmod_devtab/procnam.c -> NOT built here; built below against
-#                                 src/libvmssys (the real kernel-interface
+#   test_kmod_devtab/procnam/  -> NOT built here; built below against
+#   test_kmod_ident.c             src/libvmssys (the real kernel-interface
 #                                 client), see that stage's comment.
 #   everything else            -> plain gcc -static against vms_ioctl.h.
 #

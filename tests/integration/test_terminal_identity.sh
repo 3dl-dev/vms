@@ -135,6 +135,17 @@ if [ -f "$TERM_C" ]; then
     fi
 fi
 
+# --- 3c. No invented device-name literal anywhere in the tree -----------
+# "_FTA0:" was the name every DCL process printed for its terminal when it
+# did not know one -- from SHOW PROCESS, SHOW USERS, F$PROCESS(), vmssshd's
+# PCB naming and F$DEVICE's hardcoded device list. Deleting the environment
+# handoff while leaving those literals would have changed nothing a user can
+# see: the real runtime's UAT still printed Terminal: _FTA0: with the handoff
+# already gone. There is no allowlist here on purpose -- if a new site needs
+# a device name, it reads one from the executive.
+scan_absent "no invented terminal-device-name literal in the tree" \
+    '"_FTA0:"' $SRC_FILES
+
 # --- 4. SHOW DEVICE has no second source for a device row --------------
 SHOW_C="$SRC_ROOT/src/vmsdcl/dcl_cmd_show.c"
 scan_absent "SHOW DEVICE does not build device rows from /proc/mounts" \

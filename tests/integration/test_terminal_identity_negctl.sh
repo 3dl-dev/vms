@@ -63,6 +63,7 @@ R_SET_TERM='no code hands VMS_TERMINAL down through the environment'
 R_SET_TYPE='no code hands VMS_DEVICE_TYPE down through the environment'
 R_POOL='DCL does not allocate its own terminal name from a private pool'
 R_DEFAULT='DCL does not seed a default terminal device name'
+R_LITERAL='no invented terminal-device-name literal in the tree'
 R_MOUNTS='SHOW DEVICE does not build device rows from /proc/mounts'
 R_DEVTAB='SHOW DEVICE does not read the process-local MOUNT table'
 R_READER='SHOW DEVICE does not call vms_kif_devscan()'
@@ -126,25 +127,25 @@ expect_red() {
 printf '%s\n' 'static const char *evade(void) { return getenv("VMS_TERMINAL"); }' >> "$MAIN_C"
 expect_red "A: getenv(\"VMS_TERMINAL\") reintroduced in DCL" \
     "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" "$R_POOL" \
-    "$R_DEFAULT" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
+    "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
 
 # --- B. ...and the device type with it -----------------------------------
 printf '%s\n' 'static const char *evade(void) { return getenv("VMS_DEVICE_TYPE"); }' >> "$MAIN_C"
 expect_red "B: getenv(\"VMS_DEVICE_TYPE\") reintroduced in DCL" \
     "$R_GET_TYPE" "$R_GET_TERM" "$R_SET_TERM" "$R_SET_TYPE" "$R_POOL" \
-    "$R_DEFAULT" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
+    "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
 
 # --- C. PID 1 announces the console terminal to its children -------------
 printf '%s\n' 'static void evade(void) { setenv("VMS_TERMINAL", "_OPA0:", 1); }' >> "$INIT_C"
 expect_red "C: setenv(\"VMS_TERMINAL\") reintroduced in PID 1" \
     "$R_SET_TERM" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TYPE" "$R_POOL" \
-    "$R_DEFAULT" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
+    "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
 
 # --- D. ...and the device type with it -----------------------------------
 printf '%s\n' 'static void evade(void) { setenv("VMS_DEVICE_TYPE", "VT100", 1); }' >> "$INIT_C"
 expect_red "D: setenv(\"VMS_DEVICE_TYPE\") reintroduced in PID 1" \
     "$R_SET_TYPE" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_POOL" \
-    "$R_DEFAULT" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
+    "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
 
 # --- E. DCL hands itself a name out of the private _FTA pool -------------
 # The env vars stay deleted here: this is the OTHER half of the old code,
@@ -152,7 +153,7 @@ expect_red "D: setenv(\"VMS_DEVICE_TYPE\") reintroduced in PID 1" \
 printf '%s\n' 'static const char *evade(void) { return vms_term_allocate("_FTA", getpid(), NULL); }' >> "$MAIN_C"
 expect_red "E: private _FTA name pool reintroduced in DCL" \
     "$R_POOL" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" \
-    "$R_DEFAULT" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
+    "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
 
 # --- F. SHOW DEVICE stops reading the executive --------------------------
 # The absence checks alone cannot see this: a SHOW DEVICE that prints
@@ -161,7 +162,7 @@ expect_red "E: private _FTA name pool reintroduced in DCL" \
 sed -i 's/vms_kif_devscan(/vms_kif_devscan_DISABLED(/g' "$SHOW_C"
 expect_red "F: SHOW DEVICE no longer calls \$DEVICE_SCAN on the executive" \
     "$R_READER" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" \
-    "$R_POOL" "$R_DEFAULT" "$R_MOUNTS" "$R_DEVTAB"
+    "$R_POOL" "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_DEVTAB"
 
 # --- G. SHOW DEVICE regrows a second row source --------------------------
 # Kept minimal: the reader stays, /proc/mounts comes back alongside it --
@@ -170,13 +171,13 @@ expect_red "F: SHOW DEVICE no longer calls \$DEVICE_SCAN on the executive" \
 sed -i 's|^static int cmd_show_device|static const char *evade_src = "/proc/mounts";\nstatic int cmd_show_device|' "$SHOW_C"
 expect_red "G: /proc/mounts reintroduced as a device-row source" \
     "$R_MOUNTS" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" \
-    "$R_POOL" "$R_DEFAULT" "$R_DEVTAB" "$R_READER"
+    "$R_POOL" "$R_DEFAULT" "$R_LITERAL" "$R_DEVTAB" "$R_READER"
 
 # --- H. ...or the process-local MOUNT table ------------------------------
 sed -i 's|^static int cmd_show_device|static int evade_n(void) { return vms_device_table[0].mounted; }\nstatic int cmd_show_device|' "$SHOW_C"
 expect_red "H: process-local vms_device_table reintroduced as a row source" \
     "$R_DEVTAB" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" \
-    "$R_POOL" "$R_DEFAULT" "$R_MOUNTS" "$R_READER"
+    "$R_POOL" "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_READER"
 
 # --- J. The compiled-in default terminal name comes back -----------------
 # The third source, and the reason deleting the other two was not enough:
@@ -186,6 +187,15 @@ sed -i 's|^    /\* owner is set later from context \*/|    strncpy(term->device_
 expect_red "J: compiled-in default terminal name reintroduced" \
     "$R_DEFAULT" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" \
     "$R_POOL" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
+
+# --- K. An invented device-name literal comes back -----------------------
+# The form it actually had: a display falling back to a hardcoded VMS device
+# name when the real field was empty. Every source of the name can be gone
+# and this still makes DCL print one.
+sed -i 's|^static int cmd_show_device|static const char *evade_nm(const char *n) { return n[0] ? n : "_FTA0:"; }\nstatic int cmd_show_device|' "$SHOW_C"
+expect_red "K: hardcoded \"_FTA0:\" display fallback reintroduced" \
+    "$R_LITERAL" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" \
+    "$R_POOL" "$R_DEFAULT" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
 
 # --- I. The evasion the STRIPPER must not fall for -----------------------
 # A token inside a comment is prose, not code. If the gate matched raw text

@@ -403,15 +403,18 @@ static void handle_connection(ssh_session session)
         uint64_t user_privs = parse_privilege_string(sysuaf_rec.privileges);
         struct vms_pcb *pcb = vms_pcb_init(user_privs);
 
-        /* Allocate a terminal device from the shared table */
-        const char *term_dev = vms_term_allocate("_FTA", getpid(), sysuaf_rec.username);
-        if (!term_dev) term_dev = "_FTA0:";  /* fallback */
-
+        /*
+         * DELETED (vms-fb9): this took a name out of the private "_FTA"
+         * pool file -- falling back to the literal "_FTA0:" when even that
+         * failed -- and used it as the session's PROCESS name. A terminal
+         * device name is not a process name, the pool is not the executive,
+         * and the fallback was an invented VMS device name. The process
+         * name is executive-owned state OVMX does not have yet, so the
+         * session is created without one rather than with a fake one.
+         */
         if (pcb) {
             uint32_t uic = (sysuaf_rec.uic_group << 16) | sysuaf_rec.uic_member;
-            char prcnam[16];
-            snprintf(prcnam, sizeof(prcnam), "%s", term_dev);
-            vms_pcb_set_identity((uint32_t)getpid(), uic, sysuaf_rec.username, prcnam);
+            vms_pcb_set_identity((uint32_t)getpid(), uic, sysuaf_rec.username, "");
             vms_pcb_set_default_dir(sysuaf_rec.default_dir);
         }
 

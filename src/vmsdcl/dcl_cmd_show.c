@@ -647,7 +647,9 @@ static int cmd_show_process(struct dcl_command *cmd)
                (int)(ats.tv_nsec / 10000000));
         printf("    %-20s %-10s %-8s %s\n", "Process Name", "PID", "UIC", "State");
         /* Show at least the current process */
-        const char *pname = ctx->process_name[0] ? ctx->process_name : "_FTA0:";
+        /* No "_FTA0:" fallback (vms-fb9): an empty process name is reported
+         * empty, not filled in with an invented VMS device name. */
+        const char *pname = ctx->process_name;
         const char *uname = ctx->username[0] ? ctx->username : "SYSTEM";
         printf("    %-20s %08X   [%03o,%03o] LEF\n",
                pname, (unsigned)getpid(),
@@ -900,7 +902,10 @@ static int cmd_show_users(struct dcl_command *cmd)
         printf("      %-12s %-16s  %08X   %s\n",
                upper_name, ctx->process_name[0] ? ctx->process_name : upper_name,
                (unsigned)getpid(),
-               ctx->terminal.device_name[0] ? ctx->terminal.device_name : "_FTA0:");
+               /* No "_FTA0:" fallback (vms-fb9) -- see the note in
+                * cmd_show_process. An unknown terminal is reported as
+                * unknown, never as an invented device name. */
+               ctx->terminal.device_name);
     } else {
         printf("    Total number of users = %d, number of processes = %d\n\n",
                count, count);

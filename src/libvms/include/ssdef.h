@@ -61,7 +61,15 @@ extern "C" {
  * only because the section split predates the pinning. */
 #define SS$_DUPLNAM         148     /* Duplicate name (%SYSTEM-F-DUPLNAM) */
 #define SS$_NOLOGNAM        444     /* No logical name match */
-#define SS$_NOTALLPRIV      532     /* Not all privileges available */
+/* ORACLE-PINNED (vms-2b8). MEASURED on the reference lab OpenVMS VAX
+ * V7.3 node VAX1, 2026-07-30 (docs/oracle/vax73-privileges.md §1):
+ *   $ WRITE SYS$OUTPUT "1664="+F$MESSAGE(1664)
+ *   1664=%SYSTEM-W-NOTALLPRIV, not all requested privileges authorized
+ * This was 532, which the SAME oracle session disproves:
+ *   $ WRITE SYS$OUTPUT "532="+F$MESSAGE(532)
+ *   532=%SYSTEM-F-RESULTOVF, resultant string overflow
+ * Severity is W, matching the partial-success condition it reports. */
+#define SS$_NOTALLPRIV      1664    /* Not all requested privileges authorized (%SYSTEM-W-NOTALLPRIV) */
 #define SS$_IVIDENT         548     /* Invalid identifier */
 /* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM.
  * 564 is SS$_UNASEFC; this collision was created by pinning UNASEFC,
@@ -123,7 +131,15 @@ extern "C" {
 #define SS$_IVLOGNAM        340     /* Invalid logical name (%SYSTEM-F-IVLOGNAM) */
 #define SS$_VOLINV          596     /* Volume is not software enabled (%SYSTEM-F-VOLINV) */
 #define SS$_POWERFAIL       868     /* Power failure occurred (%SYSTEM-F-POWERFAIL) */
-#define SS$_RESULTOVF       1364    /* Result overflow */
+/* ORACLE-PINNED (vms-2b8). MEASURED on OpenVMS VAX V7.3 node VAX1,
+ * 2026-07-30 (docs/oracle/vax73-privileges.md §1):
+ *   $ WRITE SYS$OUTPUT "532="+F$MESSAGE(532)
+ *   532=%SYSTEM-F-RESULTOVF, resultant string overflow
+ * Was 1364. Corrected here because leaving it would contradict the
+ * SS$_NOTALLPRIV pin above, which vacated 532 in the same session.
+ * Every in-tree consumer uses the SYMBOL, not the literal (vmsfs,
+ * vmslnm, libvms/status.c), so the value change is transparent. */
+#define SS$_RESULTOVF       532     /* Resultant string overflow (%SYSTEM-F-RESULTOVF) */
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */
 #define SS$_NOSUCHDEV       2680    /* No such device */

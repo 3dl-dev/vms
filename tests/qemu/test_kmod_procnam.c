@@ -47,6 +47,7 @@
  */
 #define SS_NORMAL       1
 #define SS_DUPLNAM      148
+#define SS_IVLOGNAM     340
 #define SS_NONEXPR      2280
 
 #define CHILD_NAME      "VMS$WORKER"
@@ -54,6 +55,14 @@
 #define ABSENT_NAME     "VMS$NOSUCH"
 #define ZERO_NAME       "VMS$GRP0"
 #define G300_NAME       "VMS$GRP300"
+
+/*
+ * Name-length boundary pair. LEN16_NAME is LEN15_NAME plus one
+ * character, so a truncating implementation turns the illegal name into
+ * the legal one and answers SS$_NORMAL for both.
+ */
+#define LEN15_NAME      "VMS$TRUNCBAIT12"     /* 15 chars: the VMS maximum */
+#define LEN16_NAME      "VMS$TRUNCBAIT123"    /* 16 chars: one too many */
 
 /*
  * UIC group used by the cross-group case. OVMX maps UIC [group,member]
@@ -438,6 +447,83 @@ int main(int argc, char **argv)
         kill(helper, SIGKILL);
         waitpid(helper, NULL, 0);
         close(gpipe[0]);
+    }
+
+    /* --------------------------------------------------------------
+     * 8. THE NAME-LENGTH RULE IS THE EXECUTIVE'S, AND IT REJECTS --
+     *    IT DOES NOT TRUNCATE.
+     *
+     * ORACLE-PINNED on the reference lab, OpenVMS VAX V7.3 node VAX1,
+     * 2026-07-30:
+     *
+     *   $ SET PROCESS/NAME="IMPL8019NAM15X"      ! 14 chars
+     *   $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM")
+     *   IMPL8019NAM15X
+     *   $ SET PROCESS/NAME="IMPL8019NAM15XY"     ! 15 chars
+     *   $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM")
+     *   IMPL8019NAM15XY
+     *   $ SET PROCESS/NAME="IMPL8019NAM15XYZ"    ! 16 chars
+     *   %SET-E-NOTSET, error modifying process name
+     *   -SYSTEM-F-IVLOGNAM, invalid logical name
+     *   $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM")
+     *   IMPL8019NAM15XY                          ! UNCHANGED
+     *
+     * VMS refuses the oversized name outright and leaves the existing
+     * name in place: it neither truncates it into a legal name nor
+     * applies it partially. Truncating in the userspace client would
+     * have produced SS$_NORMAL for the 16-character case and named the
+     * process something the caller never asked for -- and, worse, made
+     * an oversized LOOKUP key resolve a DIFFERENT process. These
+     * assertions are what tell those two implementations apart.
+     * -------------------------------------------------------------- */
+    {
+        char toolong[256];
+
+        status = vms_kif_setprn(LEN15_NAME);
+        CHECK(status == SS_NORMAL,
+              "a 15-character name (the VMS maximum) is accepted");
+
+        /* DISCRIMINATOR: with a truncating client this returns
+         * SS$_NORMAL, because the clipped name is the one we already
+         * hold and therefore clashes with nobody. */
+        status = vms_kif_setprn(LEN16_NAME);
+        CHECK(status == SS_IVLOGNAM,
+              "a 16-character name is rejected with SS$_IVLOGNAM");
+
+        memset(&info, 0, sizeof(info));
+        status = vms_kif_getjpi_self(&info);
+        CHECK(status == SS_NORMAL && strcmp(info.prcnam, LEN15_NAME) == 0,
+              "the rejected name was not applied, not even truncated");
+
+        /* Far past the userspace transfer buffer: clipping there must
+         * still not manufacture a legal name. */
+        memset(toolong, 'X', sizeof(toolong) - 1);
+        toolong[sizeof(toolong) - 1] = '\0';
+        status = vms_kif_setprn(toolong);
+        CHECK(status == SS_IVLOGNAM,
+              "a name longer than the transfer buffer is also rejected");
+
+        memset(&info, 0, sizeof(info));
+        status = vms_kif_getjpi_self(&info);
+        CHECK(status == SS_NORMAL && strcmp(info.prcnam, LEN15_NAME) == 0,
+              "our name survived both rejections intact");
+
+        /* DISCRIMINATOR: an oversized LOOKUP key must be refused, not
+         * clipped into a key that resolves the process holding its
+         * first 15 characters -- which is us. */
+        memset(&info, 0, sizeof(info));
+        status = vms_kif_getjpi_prcnam(LEN16_NAME, &info);
+        CHECK(status == SS_IVLOGNAM,
+              "an oversized lookup key is rejected, not truncated into a match");
+        CHECK(info.linux_pid == 0,
+              "the rejected lookup returned no row");
+
+        /* Control: the legal 15-character key does resolve, so the two
+         * rejections above are the length rule and not a dead lookup. */
+        memset(&info, 0, sizeof(info));
+        status = vms_kif_getjpi_prcnam(LEN15_NAME, &info);
+        CHECK(status == SS_NORMAL && info.linux_pid == (uint32_t)getpid(),
+              "the legal 15-character key still resolves to us");
     }
 
 done:

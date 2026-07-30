@@ -137,11 +137,17 @@ static void proc_fill_info(const struct vms_proc *proc,
 /*
  * name_is_valid - reject malformed name strings from userspace.
  *
- * This is a trust-boundary check on an untrusted buffer, not a VMS
- * behavior: the executive must never index a string that is not
- * NUL-terminated inside the buffer it was given. A zero-length name is
- * also rejected -- an unnamed process is expressed by never calling
- * SETPRN, not by setting the empty name.
+ * This is a trust-boundary check on an untrusted buffer AND the length
+ * rule VMS enforces: the executive must never index a string that is
+ * not NUL-terminated inside the buffer it was given, and a name that
+ * does not fit in VMS_PRCNAM_SIZE is not a legal VMS process name. A
+ * zero-length name is also rejected -- an unnamed process is expressed
+ * by never calling SETPRN, not by setting the empty name.
+ *
+ * name is an inbound VMS_PRCNAM_XFER buffer, so an oversized name is
+ * VISIBLE here (no NUL within the first VMS_PRCNAM_SIZE bytes) and is
+ * rejected rather than truncated -- which is what the oracle does; see
+ * the VMS_PRCNAM_XFER comment in vms_ioctl.h for the transcript.
  */
 static bool name_is_valid(const char *name)
 {
@@ -254,7 +260,7 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
-    if (args.select == VMS_JPI_SEL_PRCNAM && !name_is_valid(args.info.prcnam)) {
+    if (args.select == VMS_JPI_SEL_PRCNAM && !name_is_valid(args.sel_prcnam)) {
         memset(&args.info, 0, sizeof(args.info));
         args.status = SS__IVLOGNAM;
         goto out;
@@ -271,7 +277,7 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
         target = find_by_vms_pid(args.info.vms_pid);
         break;
     case VMS_JPI_SEL_PRCNAM:
-        target = find_by_name(uic_group(proc->uic), args.info.prcnam);
+        target = find_by_name(uic_group(proc->uic), args.sel_prcnam);
         break;
     default:
         target = NULL;

@@ -241,6 +241,36 @@ struct vms_register_args {
 #define VMS_PRCNAM_SIZE 16
 
 /*
+ * Inbound name transfer buffer -- OVMX DESIGN CHOICE, not a VMS format.
+ *
+ * A name travelling FROM userspace INTO the executive is carried in a
+ * buffer strictly larger than the longest legal VMS process name, so an
+ * OVERSIZED name arrives INTACT and the executive is the thing that
+ * rejects it. Copying an inbound name into a VMS_PRCNAM_SIZE field in
+ * userspace would truncate it into a legal-looking name and convert a
+ * rejection into a success -- for $SETPRN, silently naming the process
+ * something the caller never asked for; for the $GETJPI prcnam
+ * selector, silently resolving a DIFFERENT process.
+ *
+ * Oracle (VAX1, OpenVMS VAX V7.3, 2026-07-30, documented tool output):
+ *   $ SET PROCESS/NAME="IMPL8019NAM15XY"     ! 15 chars -> accepted
+ *   $ SET PROCESS/NAME="IMPL8019NAM15XYZ"    ! 16 chars
+ *   %SET-E-NOTSET, error modifying process name
+ *   -SYSTEM-F-IVLOGNAM, invalid logical name
+ *   $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM") ! old name UNCHANGED
+ *   IMPL8019NAM15XY
+ * VMS rejects the oversized name outright and leaves the existing name
+ * in place. It does not truncate, and it does not partially apply.
+ *
+ * The userspace copy is still bounded (at VMS_PRCNAM_XFER - 1), but
+ * that bound cannot turn a rejection into an acceptance: every name too
+ * long to fit in VMS_PRCNAM_SIZE is illegal, and VMS_PRCNAM_XFER is far
+ * larger than VMS_PRCNAM_SIZE, so a clipped name still has no NUL
+ * within the executive's inspection window and is still rejected.
+ */
+#define VMS_PRCNAM_XFER 64
+
+/*
  * One row of the executive process table.
  *
  * uic is [group,member] packed as (group << 16) | member -- the same
@@ -266,7 +296,14 @@ struct vms_procinfo {
 struct vms_getjpi_args {
     uint32_t select;            /* VMS_JPI_SEL_* */
     uint32_t status;            /* return: SS$_ status */
-    struct vms_procinfo info;   /* in: selector value; out: the row */
+    struct vms_procinfo info;   /* in: vms_pid selector; out: the row */
+    /*
+     * The name selector lives OUTSIDE info, in an inbound transfer
+     * buffer, so an oversized name reaches the executive untruncated.
+     * info.prcnam is output-only: it is the row's name, never the
+     * lookup key.
+     */
+    char     sel_prcnam[VMS_PRCNAM_XFER];
 };
 
 /*
@@ -282,7 +319,7 @@ struct vms_procscan_args {
 };
 
 struct vms_setprn_args {
-    char     prcnam[VMS_PRCNAM_SIZE];   /* new process name */
+    char     prcnam[VMS_PRCNAM_XFER];   /* new process name, untruncated */
     uint32_t status;                    /* return: SS$_ status */
     uint32_t pad;
 };
@@ -314,15 +351,23 @@ struct vms_setprn_args {
  */
 _Static_assert(sizeof(struct vms_procinfo) == 40,
                "vms_procinfo layout changed: process-table ioctl ABI break");
-_Static_assert(sizeof(struct vms_setprn_args) == 24,
+_Static_assert(sizeof(struct vms_setprn_args) == 72,
                "vms_setprn_args layout changed: VMS_IOCTL_SETPRN ABI break");
-_Static_assert(sizeof(struct vms_getjpi_args) == 48,
+_Static_assert(sizeof(struct vms_getjpi_args) == 112,
                "vms_getjpi_args layout changed: VMS_IOCTL_GETJPI ABI break");
 _Static_assert(sizeof(struct vms_procscan_args) == 48,
                "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
-_Static_assert(VMS_IOCTL_SETPRN == 0xC0185641u,
+/*
+ * The inbound transfer buffer must be strictly larger than the
+ * executive's inspection window, or an oversized name would be clipped
+ * to exactly VMS_PRCNAM_SIZE-1 characters and pass name_is_valid() --
+ * reintroducing the silent truncation this split exists to kill.
+ */
+_Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
+               "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
+_Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,
                "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETJPI == 0xC0305642u,
+_Static_assert(VMS_IOCTL_GETJPI == 0xC0705642u,
                "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_PROCSCAN == 0xC0305643u,
                "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");

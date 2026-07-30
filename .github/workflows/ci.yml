@@ -141,7 +141,120 @@ jobs:
         run: docker build -f tests/qemu/Dockerfile -t ovmx-ktest:latest .
 
       - name: Boot QEMU, insmod vms.ko, run executive assertions against /dev/vms
-        run: docker run --rm ovmx-ktest:latest
+        run: |
+          set +e
+          RAW=$(docker run --rm ovmx-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          # QEMU's serial console emits CRLF; normalise so line-anchored
+          # matching below is not defeated by a trailing \r.
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: kernel-executive harness exited nonzero"
+            exit 1
+          fi
+
+          # ---------------------------------------------------------------
+          # WHY THIS IS NOT A COUNT ASSERTION (vms-1d9 round 5)
+          #
+          # A nonzero exit code alone does not catch a suite that silently
+          # stops being built/staged/run while everything else stays green:
+          # if tests/qemu/Dockerfile's qemu_syssvc_tests build or its
+          # test_syssvc_* glob-copy step quietly drops a registered test,
+          # init.sh's TOTAL_PASS/TOTAL_FAIL both just get smaller and the
+          # job still exits 0. Two previous attempts at closing that gap
+          # both failed, each proven by a real podman build + QEMU boot:
+          #
+          #   round 3: pinned the EXACT tally ('11 suites passed, 0 failed').
+          #            Strong against a drop, but turns the job RED the
+          #            moment a legitimate new test_syssvc_*.c is ADDED --
+          #            defeating the glob-based generality this item exists
+          #            to deliver for vms-ef1 / vms-as1 / vms-pv1.
+          #   round 4: replaced it with a FLOOR (>= 11) plus a HAND-
+          #            MAINTAINED suite-name list whose own comment said it
+          #            is not updated when a suite is added. So every suite
+          #            added after that point was permanently unprotected:
+          #            adversary added a suite, dropped it from the
+          #            initramfs, and got '11 suites passed, 0 failed',
+          #            rc 0, 'PASS: all checks satisfied'.
+          #
+          # This version DERIVES the expected suite set from the checkout at
+          # CI time and asserts, per suite, on the machine-readable verdict
+          # line init.sh prints ("=== SUITE <name> rc=<exit code> ===").
+          # No count, no hand-maintained list. Consequences:
+          #   * suite ADDED   -> its source appears in the derived set, it is
+          #                      asserted automatically, job stays GREEN
+          #   * suite DROPPED -> source present, verdict line absent -> RED
+          #   * suite FAILS   -> verdict line says rc!=0 -> RED
+          # All three directions are proven by real podman+QEMU runs (see
+          # vms-1d9 notes), not by inspection.
+          # ---------------------------------------------------------------
+          EXPECTED=$(cd "$GITHUB_WORKSPACE" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
+                     | xargs -n1 basename | sed 's/\.c$//' | sort)
+          echo "Derived expected suites from the checkout:"
+          echo "$EXPECTED" | sed 's/^/  /'
+
+          # `|| true`: grep -c exits 1 on an empty set, and GitHub runs `run:`
+          # steps under `bash -e`, so without it an empty derived set would
+          # abort the step with no diagnostic instead of hitting the explicit
+          # floor check below.
+          N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
+          # Monotone FLOOR on the number of suite SOURCES, not on any tally.
+          # The derived set above cannot notice a suite whose .c file was
+          # deleted outright (the set simply shrinks), so this catches that.
+          # It is a floor, so ADDING suites never requires touching it; only
+          # deliberately removing a suite does, which is the intended
+          # forcing function (see project Rule: do not delete the test that
+          # exposed a defect).
+          if [ "$N_EXPECTED" -lt 12 ]; then
+            echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 12)."
+            echo "A tests/qemu/test_kmod_*.c or test_syssvc_*.c was deleted. Deleting an executive"
+            echo "suite is not a way to make this gate pass -- see vms-6b8."
+            exit 1
+          fi
+
+          # init.sh prints one verdict line per staged binary it actually
+          # execs, carrying the binary's REAL exit status. A missing line
+          # proves the binary never ran (dropped by the build or the
+          # initramfs copy); rc!=0 proves it ran and failed.
+          BAD=""
+          for suite in $EXPECTED; do
+            line=$(echo "$OUTPUT" | grep -F "=== SUITE $suite rc=" | tail -1)
+            if [ -z "$line" ]; then
+              BAD="$BAD
+            $suite: NEVER RAN (no verdict line -- not built, or not staged into the initramfs)"
+              continue
+            fi
+            rc=$(printf '%s' "$line" | sed -n 's/.*rc=\([0-9][0-9]*\).*/\1/p')
+            if [ "$rc" != "0" ]; then
+              BAD="$BAD
+            $suite: rc=$rc (expected 0; rc=77 means it reported an honest SKIP inside the one job that HAS a real /dev/vms)"
+            fi
+          done
+          echo "$OUTPUT" | grep -qF 'PASS: vms.ko loaded, /dev/vms present' \
+            || BAD="$BAD
+            vms.ko: did not load / /dev/vms absent"
+          echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
+            || BAD="$BAD
+            vmsfs.ko: did not load / filesystem not registered"
+
+          if [ -n "$BAD" ]; then
+            echo "FAIL: kernel-executive suite verdicts not all clean:$BAD"
+            exit 1
+          fi
+
+          # Aggregate cross-check: init.sh's own tally must agree that
+          # nothing failed. This is deliberately NOT a count -- it catches a
+          # suite that failed inside init.sh's accounting without producing
+          # a verdict line at all (e.g. a harness edit that reorders them),
+          # and it proves the harness reached its own accounting rather than
+          # panicking or timing out mid-run.
+          echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: [0-9]+ suites passed, 0 suites failed ===' \
+            || { echo "FAIL: expected a '<N> suites passed, 0 suites failed' split -- a suite failed, or the harness never reached its own accounting (panic/timeout)"; exit 1; }
+
+          echo "PASS: all $N_EXPECTED derived suites ran with rc=0 against a real /dev/vms, both modules loaded"
 
   # -----------------------------------------------------------------------
   # Job 3c: Kernel Executive — negative control (vms-e4d)
@@ -181,9 +294,10 @@ jobs:
       - name: Assert the harness FAILS for the RIGHT REASON when the executive is absent
         run: |
           set +e
-          OUTPUT=$(docker run --rm ovmx-ktest-negctl:latest 2>&1)
+          RAW=$(docker run --rm ovmx-ktest-negctl:latest 2>&1)
           RC=$?
           set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
           echo "$OUTPUT"
 
           if [ "$RC" -eq 0 ]; then
@@ -199,45 +313,158 @@ jobs:
           echo "$OUTPUT" | grep -qF 'cannot open /dev/vms' \
             || { echo "FAIL: did not see the expected 'cannot open /dev/vms' failure text -- the job may have gone red for an unrelated reason (QEMU missing, boot panic, run_tests.sh timeout, runner OOM), not because the executive is absent"; exit 1; }
 
-          # Pin the exact pass/fail split init.sh reports for this scenario.
-          # This also proves the harness ran to completion and reached its own
-          # FINAL RESULTS accounting -- a timeout or panic would never print
-          # this line at all, so this line alone rules those causes out.
+          # ---------------------------------------------------------------
+          # PER-SUITE VERDICTS, DERIVED FROM THE CHECKOUT (vms-1d9)
           #
-          # MAINTENANCE CONVENTION (deliberate, do NOT soften): adding a suite
-          # that depends on the executive MUST bump the failed count here, and
-          # adding one that does not MUST bump the passed count. Turning this
-          # into a range or a regex to avoid the edit would let a suite silently
-          # stop depending on /dev/vms -- which is the whole thing this job
-          # exists to detect. The brittleness IS the feature.
+          # This block replaces an exact tally pin ('3 suites passed, N
+          # suites failed'). The pin's own comment argued "the brittleness IS
+          # the feature", and for detecting a suite that stops depending on
+          # /dev/vms that was true -- but it bought that with two defects,
+          # both proven by real podman builds + QEMU boots, not by argument:
           #
-          # THIS LINE IS A MERGE MAGNET AND THE TEXTUAL MERGE OF IT IS WRONG.
-          # Each branch that adds an executive-dependent suite bumps the count
-          # by one INDEPENDENTLY, so two such branches both read "N+1" and git
-          # merges them cleanly to "N+1" when the truth is "N+2". Recompute it
-          # from the tree; never take it from either side of a conflict.
-          #   7 failed  -- baseline (8 test_kmod_* suites + the 2 module loads)
-          #   8 failed  -- vms-8019 added test_kmod_procnam
-          #   8 failed  -- vms-0ff  added test_kmod_pin
-          #   9 failed  -- vms-d0b  added test_kmod_devtab
-          #  10 failed  -- ALL THREE on the merged tree (this line)
-          # Arithmetic on the merged tree: 11 test_kmod_* suites exist, 9 of
-          # them open /dev/vms and fail with the executive absent, plus the
-          # vms.ko load itself = 10 failed; vmsfs.ko's load + the 2 vmsfs
-          # suites are executive-independent = 3 passed.
-          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 10 suites failed ===' \
-            || { echo "FAIL: did not see the expected 3-suites-passed/10-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+          # (a) IT BROKE ON A LEGITIMATE ADDITION. Adding one
+          #     test_syssvc_*.c that honestly needs /dev/vms moved the split
+          #     by one and turned THIS job red for a correct change -- which
+          #     defeats the glob-based generality vms-1d9 exists to hand to
+          #     vms-ef1 / vms-as1 / vms-pv1.
+          #
+          # (b) IT COULD NOT SEE A PER-SUITE REGRESSION. A tally is a sum:
+          #     one suite silently vanishing and another silently starting
+          #     to fail cancel out, and init.sh funnels an honest skip (77)
+          #     and a failed assertion (1) into the SAME counter, so a suite
+          #     whose assertions all failed produced byte-identical
+          #     accounting to the clean tree.
+          #
+          # Fix for both: assert the PER-SUITE exit code init.sh now prints
+          # ("=== SUITE <name> rc=<code> ==="), against a suite set DERIVED
+          # from `ls tests/qemu/test_*.c` at CI time. Nothing is maintained
+          # by hand, and each suite is judged on its own verdict:
+          #
+          #   test_syssvc_*      -> rc MUST be exactly 77 (honest skip).
+          #        These link the real src/libvms public sys$ API. The suite
+          #        returns 77 ONLY if every device-absent assertion it made
+          #        passed (`return fail > 0 ? 1 : EXIT_SKIP`), and those
+          #        assertions are that a public sys$ entry point called with
+          #        no executive present DID NOT REPORT SUCCESS. So:
+          #           rc=77 -> no sys$ entry point fabricated a success.
+          #           rc=1  -> one did, or another assertion failed. RED.
+          #           rc=0  -> the suite claims outright success with no
+          #                    /dev/vms at all. RED.
+          #        NOTE what is deliberately NOT asserted: any particular
+          #        status VALUE. vms-0ff ruled that OVMX has no
+          #        "executive absent" state to have a VMS-defined status for
+          #        (PID 1 refuses to boot without it), and the per-call
+          #        SS$_NOSUCHDEV returns sys_lock.c used to make were
+          #        DELETED as a fiction. Pinning a value here would freeze
+          #        that superseded contract into a gate. What survives the
+          #        ruling is strictly the absence of a fabricated success,
+          #        which is a property, not a VMS behaviour -- and it is
+          #        observable only in this rig, which is deliberately booted
+          #        without an executive (see this job's header).
+          #        CONTRACT for future test_syssvc_*.c (vms-ef1, vms-as1,
+          #        vms-pv1): the suite MUST require a real /dev/vms and MUST
+          #        exit 77 when it is absent, never 0.
+          #
+          #   test_kmod_vmsfs*   -> rc MUST be 0.
+          #        POSITIVE control paired with the negatives: vmsfs has no
+          #        dependency on vms.ko, so it must still fully pass with the
+          #        executive absent. If the harness were failing
+          #        indiscriminately (gutted, always-fail, boot broken), this
+          #        would fail too and every negative assertion here would be
+          #        proving nothing about the executive specifically.
+          #
+          #   every other test_kmod_* -> rc MUST be nonzero.
+          #        Raw-ioctl executive tests; they cannot pass without
+          #        /dev/vms. An rc=0 here means something is faking the
+          #        executive.
+          #
+          # Nothing is maintained by hand; adding a suite of any of the three
+          # kinds is absorbed automatically.
+          # ---------------------------------------------------------------
+          EXPECTED=$(cd "$GITHUB_WORKSPACE" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
+                     | xargs -n1 basename | sed 's/\.c$//' | sort)
+          # `|| true`: grep -c exits 1 on an empty set, and GitHub runs `run:`
+          # steps under `bash -e`, so without it an empty derived set would
+          # abort the step with no diagnostic instead of hitting the explicit
+          # floor check below.
+          N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
+          echo "Derived expected suites from the checkout ($N_EXPECTED):"
+          echo "$EXPECTED" | sed 's/^/  /'
 
-          # POSITIVE assertion paired with the two negative assertions above:
-          # vmsfs.ko has no dependency on vms.ko/the executive, so it must
-          # still load and pass with the executive absent. If the harness
-          # failed indiscriminately (e.g. gutted/always-fail), this would also
-          # fail, and the negative assertions above would be proving nothing
-          # about the executive specifically.
+          # SUITE-COUNT FLOOR. The derived set above is drop-detecting for a
+          # suite that stops RUNNING, but blind to one whose .c is DELETED
+          # outright -- the expected set just shrinks with it. This floor is
+          # the guard against that, and it is the count on the tree at the
+          # time this line was written. It is a MINIMUM, so adding suites
+          # never requires touching it; only deliberately deleting one does,
+          # which is the intended forcing function.
+          if [ "$N_EXPECTED" -lt 12 ]; then
+            echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 12) -- a suite source was deleted."
+            echo "Deleting an executive suite is not a way to make this gate pass."
+            exit 1
+          fi
+
+          BAD=""
+          N_SYSSVC=0
+          for suite in $EXPECTED; do
+            line=$(echo "$OUTPUT" | grep -F "=== SUITE $suite rc=" | tail -1)
+            if [ -z "$line" ]; then
+              BAD="$BAD
+            $suite: NEVER RAN (no verdict line -- not built, or not staged into the initramfs)"
+              continue
+            fi
+            rc=$(printf '%s' "$line" | sed -n 's/.*rc=\([0-9][0-9]*\).*/\1/p')
+            case "$suite" in
+              test_syssvc_*)
+                N_SYSSVC=$((N_SYSSVC+1))
+                if [ "$rc" = "0" ]; then
+                  BAD="$BAD
+            $suite: rc=0 -- claims SUCCESS through the public sys\$ API with NO /dev/vms present. A fake pass; expected the honest-skip code 77."
+                elif [ "$rc" != "77" ]; then
+                  BAD="$BAD
+            $suite: rc=$rc -- expected the honest-skip code 77. A device-absent assertion inside the suite FAILED, which means a public sys\$ entry point reported SUCCESS with no executive present: a fabricated success (vms-6b8's signature defect). See the suite's own FAIL lines above."
+                fi
+                ;;
+              test_kmod_vmsfs*)
+                if [ "$rc" != "0" ]; then
+                  BAD="$BAD
+            $suite: rc=$rc -- expected 0. vmsfs does not depend on vms.ko, so it must still pass with the executive absent; if it fails, the harness is failing indiscriminately and the negative assertions prove nothing."
+                fi
+                ;;
+              *)
+                if [ "$rc" = "0" ]; then
+                  BAD="$BAD
+            $suite: rc=0 -- a raw-ioctl executive test PASSED with no /dev/vms. Something is faking the executive."
+                fi
+                ;;
+            esac
+          done
+
+          if [ "$N_SYSSVC" -lt 1 ]; then
+            BAD="$BAD
+            no test_syssvc_* suite ran at all -- the userspace public-sys\$ layer is not in the initramfs, so the silent-fallback gate above checked nothing."
+          fi
+
+          # vms.ko must NOT have loaded (that is the scenario), and vmsfs.ko
+          # must have -- the paired negative/positive at module-load level.
+          echo "$OUTPUT" | grep -qF 'FAIL: vms.ko load or /dev/vms creation failed' \
+            || BAD="$BAD
+            vms.ko: expected the load to fail (NEGATIVE_CONTROL skips the insmod) but no such failure was reported -- the negative control may not have been applied at all."
           echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
-            || { echo "FAIL: vmsfs.ko (independent of vms.ko) did not pass with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency"; exit 1; }
+            || BAD="$BAD
+            vmsfs.ko: did not load with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency."
 
-          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: /dev/vms unopenable, exact 3-passed/10-failed split), with vmsfs's independent facility still passing"
+          if [ -n "$BAD" ]; then
+            echo "FAIL: negative control did not go red for the RIGHT REASON:$BAD"
+            exit 1
+          fi
+
+          # Proves the harness reached its own accounting rather than
+          # panicking or timing out. Deliberately NOT a count (see above).
+          echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: [0-9]+ suites passed, [0-9]+ suites failed ===' \
+            || { echo "FAIL: the harness never reached its own FINAL RESULTS accounting -- boot panic, QEMU missing, or run_tests.sh timeout, not an executive-absent failure"; exit 1; }
+
+          echo "PASS: harness went red for the RIGHT REASON -- executive absent, all $N_SYSSVC public-sys\$ suite(s) returned the honest-skip code 77 (so no sys\$ entry point fabricated a success), every executive-dependent raw-ioctl suite failed, and vmsfs's independent facility still passed"
 
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests

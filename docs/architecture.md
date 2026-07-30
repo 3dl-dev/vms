@@ -16,8 +16,8 @@ invariant — see rule 8 in `CLAUDE.md`. Captured protocol specimens and their d
 
 ```
 Layer 7 ─ System Integration
-           Docker compose, SSH, PAM, init scripts
-           [Dockerfile, docker-compose.yml, distro/rootfs/]
+           SSH, PAM, init scripts
+           [distro/rootfs/]
 
 Layer 6 ─ Boot & Init
            Static binaries, initramfs, QEMU boot
@@ -79,27 +79,9 @@ kernel/ (out-of-tree, separate build)
 
 ## Boot Sequence
 
-### Docker Mode
-
-```
-docker compose up --build
-  │
-  ├── Build stage: cmake + gcc → shared libraries + executables
-  ├── Runtime stage: Ubuntu 24.04 minimal
-  │     ├── Install: libreadline, openssh-server
-  │     ├── Copy: binaries → /usr/local/bin, libs → /usr/local/lib
-  │     ├── Copy: distro/rootfs → / (configs, scripts, SYSUAF)
-  │     ├── Generate Linux users from sysuaf.dat
-  │     └── Configure sshd
-  │
-  └── ENTRYPOINT: ovmx_init
-        ├── Start vmslnmd (logical name daemon)
-        ├── Load system logicals from sylogicals.conf
-        ├── Execute STARTUP.COM
-        └── Start sshd → accepts connections on port 22 (mapped to 2222)
-```
-
-### QEMU Mode
+OVMX has exactly one runtime: the real-kernel/QEMU path (CLAUDE.md Rule 9).
+`distro/Dockerfile.bootable` is build TOOLING that produces the kernel +
+initramfs — it is not itself a runtime.
 
 ```
 docker build -f Dockerfile.bootable -o dist .

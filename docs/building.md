@@ -15,8 +15,9 @@ sudo apt install linux-headers-$(uname -r)
 # For QEMU testing
 sudo apt install qemu-system-x86
 
-# For Docker
-sudo apt install docker.io docker-compose-v2
+# For the build/test tooling containers (distro/Dockerfile.bootable,
+# src/kernel/Dockerfile, tests/qemu/Dockerfile) — NOT an OVMX runtime (Rule 9)
+sudo apt install docker.io
 ```
 
 ## CMake Options
@@ -59,19 +60,6 @@ cmake -B build-static \
 
 cmake --build build-static -j$(nproc)
 ```
-
-## Docker Container
-
-Full runtime with SSH access.
-
-```bash
-docker compose up --build
-```
-
-- Builds OVMX inside Ubuntu 24.04 container
-- Installs openssh-server, configures SYSUAF users
-- SSH available on port 2222: `ssh system@localhost -p 2222` (password: `MANAGER`)
-- Runs `ovmx_init` as PID 1
 
 ## Bootable QEMU VM
 

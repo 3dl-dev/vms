@@ -616,11 +616,29 @@ static int cm_response_shape(uint8_t category, uint8_t opcode)
         }
         return CM_RSP_NONE;
     case SCS_MEMBER_CAT_DLM:
-        /* GROUNDED behaviourally: the coordinator gates the barrier on these
-         * being answered (five unanswered ones froze it at step 5). A joiner
-         * holds no locks, so acknowledging the record is all we can truthfully
-         * say; real grant/deny/block/remaster is NOT implemented (spec 4p). */
-        return CM_RSP_ECHO;
+        /* PARTIALLY GROUNDED, AND THE GAP IS DANGEROUS -- see run coord2.
+         *
+         * Answering cat 0x02 at all is grounded BEHAVIOURALLY: the coordinator
+         * gates the barrier on these (five unanswered ones froze it at step 5).
+         * A joiner holds no locks, so acknowledging the record is all we can
+         * truthfully say; real grant/deny/block/remaster is NOT implemented.
+         *
+         * But the SHAPE was never grounded -- it was inherited from cat 0x01.
+         * In coord2 the allowlist correctly refused cat-0x01 op 0x12 and the
+         * barrier reached 3/12, the furthest ever on a pristine cluster; then we
+         * echoed op 0x00 three times and ALL THREE VAXes bugchecked INCONSTATE.
+         * A blanket 'echo any op in this category' is a DEFAULT wearing an
+         * allowlist's clothes, which is the exact bug this function exists to
+         * kill -- reproduced one level down.
+         *
+         * Until the per-op table is grounded against the reference we answer
+         * ONLY the opcode we have actually watched a real joiner answer, and
+         * refuse the rest. NOTE this may re-freeze the barrier: that is the
+         * recoverable failure, and it is preferable to crashing the cluster. */
+        if (opcode == SCS_MEMBER_OP_LOCKRB) {   /* 0x05 lock/resource rebuild */
+            return CM_RSP_ECHO;
+        }
+        return CM_RSP_NONE;
     case SCS_MEMBER_CAT_MEMBERSHIP:
         /* Closes the transaction. Token + our OWN parameter block, never an
          * echo -- echoing this is what bugchecked VAX1 previously. */
@@ -2155,9 +2173,11 @@ int main(int argc, char **argv)
                             ps->cm_responses++;
                             cm_response_sent++;
                             log_ts(stdout);
-                            printf(" SCSD-I-CMRESP, 0x81 response to member op 0x%02x"
-                                   " txn=0x%04x csum=0x%04x (echoed) send_msg=%u ack_msg=%u\n",
-                                   mv.opcode, mv.txn, mv.checksum,
+                            printf(" SCSD-I-CMRESP, 0x81 response to member cat 0x%02x"
+                                   " op 0x%02x txn=0x%04x csum=0x%04x (%s)"
+                                   " send_msg=%u ack_msg=%u\n",
+                                   mv.category, mv.opcode, mv.txn, mv.checksum,
+                                   cm_shape == CM_RSP_TOKEN ? "token-only" : "echoed",
                                    mp.sysap_send_msg, mp.sysap_ack_msg);
                             fflush(stdout);
                         }

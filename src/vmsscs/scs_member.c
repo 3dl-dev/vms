@@ -17,6 +17,7 @@
 #include "scs_member.h"
 
 #include <string.h>
+#include <time.h>
 
 /* op 0x14 model advertisement -- golden SCA#48 (VAX2->VAX1). */
 static const uint8_t member_model_tmpl[SCS_MEMBER_SCA_LEN] = {
@@ -88,6 +89,47 @@ static void put_le16(uint8_t *dst, uint16_t v)
 {
     dst[0] = (uint8_t)(v & 0xff);
     dst[1] = (uint8_t)((v >> 8) & 0xff);
+}
+
+/*
+ * scs_member_vms_time_now - the current time as a VMS 64-bit absolute time:
+ * 100 ns intervals since 17-NOV-1858 00:00:00. The offset from the POSIX epoch
+ * is 3506716800 seconds.
+ *
+ * This MUST be live. Shipping a replayed constant here is what bugchecked VAX3
+ * and VAX1 (see scs_member_build_token_response): the peers exchange times whose
+ * high longword reads ~0x00bc03xx, and the frozen value we sent was ~26 years
+ * adrift of the cluster's era.
+ */
+uint64_t scs_member_vms_time_now(void)
+{
+    return ((uint64_t)time(NULL) + 3506716800ULL) * 10000000ULL;
+}
+
+/*
+ * scs_member_close_is_resource - does this cat-0x06 request name a lock
+ * RESOURCE in ASCII at body[48:]? The two variants take DIFFERENT responses.
+ * The membership-close carries 00 01 04 00 there; the resource variant carries
+ * a printable name (e.g. "F11B$aSYSDSK1", "DTI$SYSTEM$VAX2").
+ */
+int scs_member_close_is_resource(const uint8_t *rbody)
+{
+    if (rbody == NULL) {
+        return 0;
+    }
+    for (int i = 48; i < 56; i++) {
+        if (rbody[i] < 0x20 || rbody[i] > 0x7e) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void put_le64(uint8_t *dst, uint64_t v)
+{
+    for (int i = 0; i < 8; i++) {
+        dst[i] = (uint8_t)((v >> (8 * i)) & 0xff);
+    }
 }
 
 static void put_le32(uint8_t *dst, uint32_t v)
@@ -325,27 +367,56 @@ int scs_member_build_token_response(const struct scs_member_params *p,
         return -1;
     }
 
-    /* vms-760: base this on the PARAMS template, not the config one. The real
-     * cat-0x86 response carries the responder's OWN node-parameter block, and
-     * that block is structurally the one we already send in our op-0x01 PARAMS
-     * message -- byte-for-byte the same shape at the same offsets:
-     *   body[72:76] = 0x00000010, body[76:80] = 0x00000001,
-     *   body[88:96] = "V7.3    "
-     * (ref frame 673 vs the golden op-0x01; the spans that differ, body[64:72]
-     * and body[80:88], are per-node/per-boot values, and ours are our own).
-     * Sending an EMPTY body here left the coordinator holding the barrier: it
-     * answered our step-5 request and then never released step 5 (d94-e11
-     * frames 1297 -> 1299/1301 -> nothing). */
-    build_common(p, member_params_tmpl, out);
+    /* vms-760: BUILD THIS FRESH. It previously started from the PARAMS template,
+     * which made body[10:132] BYTE-IDENTICAL to our own op-0x01 PARAMS body --
+     * verified, zero differing offsets. That frame KILLED TWO REAL VAXES:
+     * VAX3 bugchecked INCONSTATE 0.27 ms after receiving ours and VAX1
+     * INVEXCEPTN 0.18 ms after; VAX2, which never received one, survived
+     * (captures/ovmx-760-relay-crash-20260730.pcap f1351 -> VAX3 dead at f1355,
+     * f1379 -> VAX1 dead at f1380).
+     *
+     * The real joiner's close differs from its OWN PARAMS at 17 offsets
+     * (ref f673 vs f143). The reasoning "the close carries our node-parameter
+     * block, and PARAMS already carries that block, so reuse it" was a
+     * STRUCTURAL GUESS, and the bytes say it is wrong. Worst of the leftovers:
+     * body[64:72] must be a LIVE VMS absolute time -- the reference sends one
+     * matching the peers' era (high longword ~0x00bc03xx) while we shipped a
+     * replayed constant ~26 years off.
+     *
+     * Everything not named below is ZERO. Do not reintroduce a template here. */
+    build_common(p, member_config_tmpl, out);
 
     uint8_t *body = out + 72;
     const uint8_t *rbody = req_frame + 72;
+    memset(body, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF);
+
     put_le16(body + 0, p->sysap_send_msg);
     put_le16(body + 2, p->sysap_ack_msg);
     body[4] = rbody[4]; body[5] = rbody[5]; /* txn      -- carried verbatim */
     body[6] = rbody[6]; body[7] = rbody[7]; /* checksum -- carried verbatim */
     body[8] = (uint8_t)(rbody[8] | SCS_MEMBER_RESPONSE_BIT);
     body[9] = rbody[9];
+
+    if (scs_member_close_is_resource(rbody)) {
+        /* Variant B -- the request names a lock RESOURCE in ASCII at body[48:].
+         * Members answer these with body[24] = 0x04 and nothing else
+         * (ref f339 -> f342, f716 -> f728). Using variant A's block here would
+         * be the same over-generalisation that caused the crash. */
+        body[24] = 0x04;
+        return 0;
+    }
+
+    /* Variant A -- the membership-close proper (ref f671 -> f673). */
+    put_le16(body + 10, 0x0003);
+    put_le16(body + 24, 0x0003);
+    put_le32(body + 44, 0x00000003);
+    put_le32(body + 48, 0x0000006e); /* 110 -- value NOT explained; replayed */
+    put_le64(body + 64, scs_member_vms_time_now());
+    put_le32(body + 72, 0x00000010);
+    put_le32(body + 76, 0x00000001);
+    body[82] = 0x2b;
+    put_le16(body + 84, 0x678d);
+    memcpy(body + 88, "V7.3    ", 8);
     return 0;
 }
 

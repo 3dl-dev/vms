@@ -377,8 +377,110 @@ static void test_null_guards(void)
     CHECK(scs_member_build_model(&mp, out) == -1, "build_model rejects oversized model");
 }
 
+/*
+ * vms-760: the cat-0x06 CLOSE must be built FRESH, never from the op-0x01 PARAMS
+ * template. The PARAMS-derived version made body[10:132] byte-identical to our
+ * own PARAMS body and killed two real VAXes (VAX3 INCONSTATE, VAX1 INVEXCEPTN,
+ * each within 0.3 ms of receiving ours). These assertions are the regression
+ * guard: this frame is fatal to other machines when it is wrong.
+ */
+static void test_close_is_not_the_params_body(void)
+{
+    struct scs_member_params mp;
+    uint8_t req[SCS_MEMBER_FRAME_LEN];
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+    uint8_t params[SCS_MEMBER_FRAME_LEN];
+
+    memset(&mp, 0, sizeof(mp));
+    mp.sysap_send_msg = 7;
+    mp.sysap_ack_msg = 9;
+
+    /* A membership-close request: body[48:52] = 00 01 04 00, no ASCII name. */
+    memset(req, 0, sizeof(req));
+    req[14] = (uint8_t)((SCS_MEMBER_SCA_LEN - 2) & 0xff);
+    req[15] = (uint8_t)(((SCS_MEMBER_SCA_LEN - 2) >> 8) & 0xff);
+    req[72 + 4] = 0x11; req[72 + 5] = 0x22;   /* txn      */
+    req[72 + 6] = 0x33; req[72 + 7] = 0x44;   /* checksum */
+    req[72 + 8] = SCS_MEMBER_CAT_MEMBERSHIP;
+    req[72 + 9] = 0x00;
+    req[72 + 48] = 0x00; req[72 + 49] = 0x01;
+    req[72 + 50] = 0x04; req[72 + 51] = 0x00;
+
+    CHECK(scs_member_build_token_response(&mp, req, sizeof(req), out) == 0,
+          "close: builder accepts a well-formed request");
+
+    const uint8_t *body = out + 72;
+    CHECK(body[8] == (SCS_MEMBER_CAT_MEMBERSHIP | SCS_MEMBER_RESPONSE_BIT),
+          "close: category carries the response bit (0x86)");
+    CHECK(body[4] == 0x11 && body[5] == 0x22 && body[6] == 0x33 && body[7] == 0x44,
+          "close: (txn, checksum) carried verbatim -- never derived");
+
+    /* THE regression: the close must NOT be our PARAMS body. */
+    CHECK(scs_member_build_params(&mp, params) == 0, "close: params built");
+    CHECK(memcmp(body + 10, params + 72 + 10, 122) != 0,
+          "close: body[10:132] is NOT byte-identical to our op-0x01 PARAMS body");
+
+    /* The live VMS time. A replayed constant here is a prime bugcheck suspect;
+     * assert it lands in the cluster's era rather than 26 years adrift. The
+     * reference peers carry a high longword of ~0x00bc03xx. */
+    uint32_t t_hi = (uint32_t)body[68] | ((uint32_t)body[69] << 8) |
+                    ((uint32_t)body[70] << 16) | ((uint32_t)body[71] << 24);
+    CHECK(t_hi >= 0x00bc0000u && t_hi < 0x00bd0000u,
+          "close: body[64:72] is a LIVE VMS time in the cluster's era");
+    CHECK(t_hi != 0x009f570eu,
+          "close: body[64:72] is not the old replayed PARAMS timestamp");
+
+    /* Grounded scalars of variant A (ref f671 -> f673). */
+    CHECK(body[10] == 0x03 && body[11] == 0x00, "close: body[10:12] = 0x0003");
+    CHECK(body[24] == 0x03 && body[25] == 0x00, "close: body[24:26] = 0x0003");
+    CHECK(body[44] == 0x03, "close: body[44:48] = 3");
+    CHECK(body[48] == 0x6e, "close: body[48:52] = 110");
+    CHECK(memcmp(body + 88, "V7.3    ", 8) == 0, "close: version string");
+    CHECK(body[82] == 0x2b, "close: body[82] = 0x2b");
+
+    /* Spans the reference leaves empty must be empty. */
+    for (int i = 12; i < 24; i++) {
+        CHECK(body[i] == 0, "close: body[12:24] zeroed (no peer handle echoed)");
+    }
+    for (int i = 96; i < 132; i++) {
+        CHECK(body[i] == 0, "close: body[96:132] zeroed");
+    }
+}
+
+/* The resource variant takes a DIFFERENT response -- body[24]=0x04, else zero.
+ * Using variant A here would repeat the over-generalisation that crashed the
+ * cluster, one category down. */
+static void test_close_resource_variant(void)
+{
+    struct scs_member_params mp;
+    uint8_t req[SCS_MEMBER_FRAME_LEN];
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+
+    memset(&mp, 0, sizeof(mp));
+    memset(req, 0, sizeof(req));
+    req[14] = (uint8_t)((SCS_MEMBER_SCA_LEN - 2) & 0xff);
+    req[15] = (uint8_t)(((SCS_MEMBER_SCA_LEN - 2) >> 8) & 0xff);
+    req[72 + 8] = SCS_MEMBER_CAT_MEMBERSHIP;
+    memcpy(req + 72 + 48, "DTI$SYST", 8);
+
+    CHECK(scs_member_close_is_resource(req + 72) == 1,
+          "close: an ASCII resource name is detected");
+    CHECK(scs_member_build_token_response(&mp, req, sizeof(req), out) == 0,
+          "close: resource variant builds");
+
+    const uint8_t *body = out + 72;
+    CHECK(body[24] == 0x04, "close/resource: body[24] = 0x04");
+    CHECK(body[10] == 0 && body[11] == 0,
+          "close/resource: does NOT carry variant A's body[10:12]");
+    for (int i = 64; i < 96; i++) {
+        CHECK(body[i] == 0, "close/resource: no parameter block or timestamp");
+    }
+}
+
 int main(void)
 {
+    test_close_is_not_the_params_body();
+    test_close_resource_variant();
     test_op14_byte_exact();
     test_op01_byte_exact_and_votes();
     test_op02_byte_exact();

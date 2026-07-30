@@ -237,15 +237,44 @@ int scs_member_build_ack(const struct scs_member_params *p,
  * exactly the "plausible handler for a condition VMS never faces" failure mode;
  * the response shape is per-category and must be grounded per category.
  *
- * Fields of the real response that are NOT reproduced, because their meaning is
- * not grounded: body[10:12]=0x0003, body[24:26]=0x0003, body[44:48]=0x00000003
- * and body[48:52]=0x0000006e (0x0003 plausibly tracks the 3-node membership, but
- * one specimen cannot establish that). They are left zero. The same zero-payload
- * discipline is already accepted by VMS for our category-0x04 acks.
+ * vms-760 UPDATE -- the note below this line used to say those fields were left
+ * zero "because their meaning is not grounded". Leaving them zero was not the
+ * problem; building the frame from the op-0x01 PARAMS template WAS. That made
+ * body[10:132] byte-identical to our own PARAMS body and KILLED TWO REAL VAXES
+ * (VAX3 INCONSTATE, VAX1 INVEXCEPTN, each within 0.3 ms of receiving ours).
+ * The response is now built FRESH, all-zero except the fields the reference
+ * carries, including a LIVE VMS time at body[64:72] -- a replayed timestamp
+ * ~26 years off the cluster's era is among the prime suspects for the bugcheck.
+ * There are TWO variants; scs_member_close_is_resource() picks between them.
  */
 int scs_member_build_token_response(const struct scs_member_params *p,
                                     const uint8_t *req_frame, size_t req_len,
                                     uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
+/* Current time as a VMS 64-bit absolute time (100 ns since 17-NOV-1858). */
+uint64_t scs_member_vms_time_now(void);
+
+/* Does this cat-0x06 request name a lock RESOURCE in ASCII at body[48:]?
+ * The membership-close and the resource variant take DIFFERENT responses. */
+int scs_member_close_is_resource(const uint8_t *rbody);
+
+/* vms-760: ops the NON-COORDINATOR members send the joiner once the coordinator
+ * has relayed the addition. None of these appears before the relay, which is why
+ * they were never grounded until OVMX first reached this phase. */
+#define SCS_MEMBER_OP_RELAY 0x12 /* the coordinator's relay of a new member. A
+                                  * response must OVERWRITE body[20:24] with a
+                                  * small integer -- the request carries the
+                                  * PEER'S live CSID/cluster id there and echoing
+                                  * it back reflects its own handle at it
+                                  * (ref f286->f288 0x20400212 -> 0x00000003;
+                                  * f404->f406 0x050007A2 -> 0x00000004). The
+                                  * value tracks the post-transition member count
+                                  * in both specimens -- INFERRED, 2 specimens. */
+#define SCS_MEMBER_OP_0F    0x0f /* meaning UNKNOWN. Answered with a plain echo
+                                  * by real members (crash capture f1367->f1368,
+                                  * where body[18] was already 1). */
+#define SCS_MEMBER_OP_08    0x08 /* meaning UNKNOWN. Plain echo + all three
+                                  * mutations (crash capture f1372->f1373). */
 
 /* The cluster-wide state-transition barrier (vms-760). */
 #define SCS_MEMBER_OP_BARRIER      0x0b /* joiner-INITIATED barrier step */

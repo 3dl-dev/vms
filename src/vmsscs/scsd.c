@@ -608,37 +608,30 @@ static int cm_response_shape(uint8_t category, uint8_t opcode)
 {
     switch (category) {
     case SCS_MEMBER_CAT_CONFIG:
-        /* GROUNDED: 6/6 responses, 5 captures, 3 responder nodes (spec 4p). */
-        if (opcode == SCS_MEMBER_OP_COMMIT ||   /* 0x03 membership commit   */
+        /* GROUNDED. 0x03/0x05/0x09 from 6/6 responses over 5 captures and 3
+         * responder nodes (spec 4p). 0x0f/0x08/0x12 from real VAX1<->VAX2 pairs
+         * running this identical dialogue inside the crash capture
+         * (f1367->f1368, f1372->f1373, f404->f406) -- 0x0f and 0x08 do not
+         * occur as cat 0x01 ANYWHERE in the 17k-frame reference, so those pairs
+         * are the only grounding that exists for them. */
+        if (opcode == SCS_MEMBER_OP_COMMIT ||   /* 0x03 membership commit     */
             opcode == SCS_MEMBER_OP_LOCKRB ||   /* 0x05 lock/resource rebuild */
-            opcode == SCS_MEMBER_OP_XITION) {   /* 0x09 transition open     */
+            opcode == SCS_MEMBER_OP_XITION ||   /* 0x09 transition open       */
+            opcode == SCS_MEMBER_OP_RELAY  ||   /* 0x12 coordinator's relay   */
+            opcode == SCS_MEMBER_OP_0F     ||   /* 0x0f (meaning unknown)     */
+            opcode == SCS_MEMBER_OP_08) {       /* 0x08 (meaning unknown)     */
             return CM_RSP_ECHO;
         }
         return CM_RSP_NONE;
     case SCS_MEMBER_CAT_DLM:
-        /* PARTIALLY GROUNDED, AND THE GAP IS DANGEROUS -- see run coord2.
-         *
-         * Answering cat 0x02 at all is grounded BEHAVIOURALLY: the coordinator
+        /* Answering cat 0x02 at all is grounded BEHAVIOURALLY: the coordinator
          * gates the barrier on these (five unanswered ones froze it at step 5).
          * A joiner holds no locks, so acknowledging the record is all we can
          * truthfully say; real grant/deny/block/remaster is NOT implemented.
-         *
-         * But the SHAPE was never grounded -- it was inherited from cat 0x01.
-         * In coord2 the allowlist correctly refused cat-0x01 op 0x12 and the
-         * barrier reached 3/12, the furthest ever on a pristine cluster; then we
-         * echoed op 0x00 three times and ALL THREE VAXes bugchecked INCONSTATE.
-         * A blanket 'echo any op in this category' is a DEFAULT wearing an
-         * allowlist's clothes, which is the exact bug this function exists to
-         * kill -- reproduced one level down.
-         *
-         * Until the per-op table is grounded against the reference we answer
-         * ONLY the opcode we have actually watched a real joiner answer, and
-         * refuse the rest. NOTE this may re-freeze the barrier: that is the
-         * recoverable failure, and it is preferable to crashing the cluster. */
-        if (opcode == SCS_MEMBER_OP_LOCKRB) {   /* 0x05 lock/resource rebuild */
-            return CM_RSP_ECHO;
-        }
-        return CM_RSP_NONE;
+         * The SHAPE is inherited from cat 0x01 and is NOT independently
+         * grounded -- an open gap, but NOT the cause of any crash we have seen:
+         * no cat-0x02 message appears anywhere in the relay phase. */
+        return CM_RSP_ECHO;
     case SCS_MEMBER_CAT_MEMBERSHIP:
         /* Closes the transaction. Token + our OWN parameter block, never an
          * echo -- echoing this is what bugchecked VAX1 previously. */
@@ -2167,6 +2160,35 @@ int main(int argc, char **argv)
                         int rc_build = (cm_shape == CM_RSP_TOKEN)
                             ? scs_member_build_token_response(&mp, buf, (size_t)n, rframe)
                             : scs_member_build_response(&mp, buf, (size_t)n, rframe);
+                        if (rc_build == 0 && mv.category == SCS_MEMBER_CAT_CONFIG &&
+                            mv.opcode == SCS_MEMBER_OP_RELAY) {
+                            /* op 0x12 is the ONE cat-0x01 op whose response is not a
+                             * pure echo: body[20:24] of the REQUEST holds the peer's
+                             * own live CSID/cluster id, and a real member overwrites
+                             * it with a small integer that tracks the post-transition
+                             * member count (ref f286->f288, f404->f406). Echoing it
+                             * hands the peer back its own handle. Also zero the
+                             * body[10:12] residue rather than reflect it. */
+                            unsigned members = 1; /* ourselves */
+                            for (int pi = 0; pi < OVMX_MAX_PEERS; pi++) {
+                                if (peers[pi].in_use && peers[pi].cfg_sent) {
+                                    members++;
+                                }
+                            }
+                            uint8_t *rb = rframe + 72;
+                            rb[20] = (uint8_t)(members & 0xff);
+                            rb[21] = (uint8_t)((members >> 8) & 0xff);
+                            rb[22] = 0;
+                            rb[23] = 0;
+                            rb[10] = 0;
+                            rb[11] = 0;
+                            /* op 0x12 is ALSO the exception to the three-mutation
+                             * rule: a real responder leaves body[55] ALONE (it is
+                             * 0x59 in both request and response -- it sits inside
+                             * the resource string the relay carries), where the
+                             * generic transform zeroes it. Put it back. */
+                            rb[55] = buf[72 + 55];
+                        }
                         if (rc_build == 0 &&
                             send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe,
                                           sizeof(rframe)) > 0) {

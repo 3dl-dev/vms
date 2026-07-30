@@ -98,6 +98,161 @@ else
     echo "  OK: no silent /dev/vms fallback path detected"
 fi
 
+# --- structural helpers for check 3b ------------------------------------
+# Check 3b is the only check here that has to reason about CONTROL FLOW, so it
+# gets a small structural reader rather than more greps. Everything below is
+# character-level: brace/paren depth, statement boundaries, callee identity.
+# Three rounds of this check were evaded by token searches; a token search
+# cannot express "the halt is the last reachable statement".
+
+# strip_comments: remove /* */ and // comments from stdin.
+# Prose about halting must never stand in for halting, and a `}` or `;` inside
+# a comment must not desynchronise the statement reader below.
+strip_comments() {
+    awk '
+        {
+            line = $0; out = ""; i = 1
+            while (i <= length(line)) {
+                if (inblk) {
+                    p = index(substr(line, i), "*/")
+                    if (p == 0) { i = length(line) + 1 } else { inblk = 0; i = i + p + 1 }
+                    continue
+                }
+                two = substr(line, i, 2)
+                if (two == "/*") { inblk = 1; i += 2; out = out " "; continue }
+                if (two == "//") { break }
+                out = out substr(line, i, 1); i++
+            }
+            print out
+        }
+    '
+}
+
+# func_body <file> <name>: the definition of <name>, comments stripped.
+# A call site ends in `;` and is skipped, so the first hit is the definition.
+func_body() {
+    strip_comments < "$1" | awk -v fn="$2" '
+        BEGIN { re = "(^|[^A-Za-z0-9_])" fn "[ \t]*\\(" }
+        !in_func && $0 ~ re && $0 !~ /;[ \t]*$/ && $0 !~ /^[ \t]*#/ { in_func = 1 }
+        in_func {
+            print
+            o = gsub(/{/, "{"); c = gsub(/}/, "}")
+            if (o > 0) started = 1
+            depth += o - c
+            if (started && depth <= 0) exit
+        }
+    '
+}
+
+# last_top_stmt: read a block (or a single bare statement) on stdin and print
+# its LAST TOP-LEVEL statement, normalised to one line with string literals
+# blanked. "Top-level" means depth 0 relative to the block's own braces, so a
+# statement nested inside an `if` is NOT a top-level statement of the block --
+# which is exactly what makes a conditional halt detectable.
+last_top_stmt() {
+    sed -E 's/"([^"\\]|\\.)*"/""/g' | awk '
+        { s = s $0 " " }
+        END {
+            p = 0; open_at = 0
+            for (i = 1; i <= length(s); i++) {
+                ch = substr(s, i, 1)
+                if (ch == "(") p++
+                else if (ch == ")") p--
+                else if (p == 0 && ch == "{") { open_at = i; break }
+                else if (p == 0 && ch == ";") { break }
+            }
+            if (open_at > 0) {
+                d = 0
+                for (i = open_at; i <= length(s); i++) {
+                    ch = substr(s, i, 1)
+                    if (ch == "{") d++
+                    else if (ch == "}") { d--; if (d == 0) break }
+                }
+                body = substr(s, open_at + 1, i - open_at - 1)
+            } else body = s
+
+            n = 0; cur = ""; p = 0; d = 0
+            for (i = 1; i <= length(body); i++) {
+                ch = substr(body, i, 1)
+                cur = cur ch
+                if (ch == "(") p++
+                else if (ch == ")") p--
+                else if (ch == "{") d++
+                else if (ch == "}") { d--; if (d == 0) { n++; stmt[n] = cur; cur = "" } }
+                else if (ch == ";" && p == 0 && d == 0) { n++; stmt[n] = cur; cur = "" }
+            }
+            if (cur ~ /[^ \t]/) { n++; stmt[n] = cur }
+            for (j = n; j >= 1; j--) {
+                t = stmt[j]
+                gsub(/^[ \t;]+/, "", t); gsub(/[ \t;]+$/, "", t)
+                if (t != "") { print t; exit }
+            }
+        }
+    '
+}
+
+# bare_call_name: print the callee if stdin is EXACTLY one call expression
+# `NAME(...)` -- nothing before it, nothing after the matching `)`. An `if`,
+# a ternary, an `&&`/`||` guard or a trailing statement all fail this, so the
+# call it names is unconditional within its block.
+bare_call_name() {
+    awk '
+        { s = s $0 " " }
+        END {
+            gsub(/^[ \t]+/, "", s); gsub(/[ \t]+$/, "", s)
+            if (!match(s, /^[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) exit
+            name = substr(s, 1, RLENGTH); sub(/[ \t]*\($/, "", name)
+            if (name ~ /^(if|for|while|switch|do|return|goto|else|sizeof)$/) exit
+            p = 0
+            for (i = RLENGTH; i <= length(s); i++) {
+                ch = substr(s, i, 1)
+                if (ch == "(") p++
+                else if (ch == ")") { p--; if (p == 0) break }
+            }
+            rest = substr(s, i + 1); gsub(/[ \t;]/, "", rest)
+            if (rest != "") exit
+            print name
+        }
+    '
+}
+
+# The recognised halt entry points, and the primitives that actually end the
+# process. HALT_ENTRIES pins the callee by NAME; terminates() then re-derives
+# FROM THE SOURCE that the named function really ends the system, so a
+# same-named non-halting stub cannot satisfy the check either.
+HALT_ENTRIES="execinit_halt ovmx_exec_halt halt_now _exit exit abort reboot"
+PRIMITIVE_TERMINATORS="_exit exit abort reboot"
+
+in_set() {
+    case " $2 " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
+# terminates <file> <name>: follow the tail call chain (halt wrapper ->
+# halt_now -> _exit/reboot) and succeed only if it bottoms out in a primitive
+# that does not return.
+terminates() {
+    tn="$2"
+    ti=0
+    while [ "$ti" -lt 5 ]; do
+        if in_set "$tn" "$PRIMITIVE_TERMINATORS"; then return 0; fi
+        tb=$(func_body "$1" "$tn")
+        [ -n "$tb" ] || return 1
+        # A halt wrapper must have NO path back to its caller, so it may not
+        # contain a `return` at all. Otherwise the escape hatch just moves one
+        # frame down: `if (getenv("OVMX_ALLOW_NO_EXEC")) return;` ahead of the
+        # terminator leaves the last statement looking perfectly terminal.
+        if printf '%s\n' "$tb" \
+                | grep -qE '(^|[^A-Za-z0-9_])return([^A-Za-z0-9_]|$)'; then
+            return 1
+        fi
+        tn=$(printf '%s\n' "$tb" | last_top_stmt | bare_call_name)
+        [ -n "$tn" ] || return 1
+        ti=$((ti + 1))
+    done
+    return 1
+}
+
 # --- 3b. The executive must be INTEGRAL, not optional -------------------
 # The guarantee that makes check 3 enforceable: PID 1 refuses to bring the
 # system up unless the executive is reachable, and pins it for the life of
@@ -133,24 +288,49 @@ fi
 #   (d) no return/goto precedes the halt inside that branch -- a warn-then-
 #       return leaves the caller running, which is the whole defect;
 #   (e) the descriptor is never closed inside the function -- a
-#       probe-and-release is not a pin.
+#       probe-and-release is not a pin;
+#   (f) the branch is TERMINAL: its LAST TOP-LEVEL statement is an
+#       unconditional call to a recognised halt entry point (see below);
+#   (g) that entry point really ends the system, re-derived from the source;
+#   (h) none of the pinned halt names is redefined by a macro.
+#
+# BOUNDARY OF THIS CHECK, stated so nobody reads more into its OK line than it
+# says. It asserts things about the FUNCTION executive_attach(), not about PID
+# 1's call graph: a tree in which executive_attach() is never called still
+# passes 3b, and I confirmed that by execution rather than assuming it. That
+# gap is covered BEHAVIOURALLY, not here -- tests/qemu/test_executive_integral.sh
+# Boot B (vms.ko absent) and Boot C (module loads, /dev/vms never appears) both
+# boot the real image and assert the halt line appears and `Username:` does not,
+# so an uncalled executive_attach() fails CI there. Closing it in this lint
+# would need the same statement-level machinery applied to main(); a weaker
+# "is the name mentioned somewhere" version is the exact defect class this file
+# has been fixed for three rounds running, so it is not added here.
+#
+# ROUND 4 CORRECTION, and why (f)/(g) exist. (c) and (d) together are a
+# TOKEN-ORDER check, not a terminality check: (d) only compares the byte offset
+# of the first return/goto against the first halt token. A halt with a
+# reachable path OUT of the branch still satisfied both, so THREE one-hunk
+# mutations were certified with "OK: ... halts inside the open-failure branch":
+#     if (getenv("OVMX_ALLOW_NO_EXEC") == NULL) ovmx_exec_halt(...);
+#     fprintf(stderr, "%OVMX-W-EXEC, continuing without executive\n");
+#         -- Rule 9's warn-and-continue AND Rule 10's env-var bridge at once;
+#     if (errno != ENODEV) ovmx_exec_halt(...);
+#         -- falls through on one errno;
+#     ovmx_exec_halt_reason(...);
+#         -- (c)'s regex matched any identifier containing "halt"; nothing
+#            checked WHICH function was called or whether it halts.
+# All three boot PID 1 to a login prompt with no executive. The property the
+# check actually needs is that the failure branch CANNOT RETURN TO THE CALLER
+# AT ALL, so (f) requires the halt to be the branch's last top-level statement
+# -- nothing after it, nothing enclosing it -- and (g) pins the callee.
+# Each of the three, plus a gutted `ovmx_exec_halt` body and a halt followed by
+# one more statement, is a recorded control in test_runtime_target_negctl.sh.
 init_c="$SRC_ROOT/src/ovmx_init/ovmx_init.c"
 if [ ! -f "$init_c" ]; then
     echo "FAIL: $init_c is missing -- the boot-time executive guarantee lives there"
     status=1
 else
-    body=$(awk '
-        BEGIN { in_func = 0; depth = 0; started = 0 }
-        !in_func && $0 ~ /executive_attach[ \t]*\(/ && $0 !~ /;[ \t]*$/ { in_func = 1 }
-        in_func {
-            print
-            o = gsub(/{/, "{")
-            c = gsub(/}/, "}")
-            if (o > 0) started = 1
-            depth += o - c
-            if (started && depth <= 0) exit
-        }
-    ' "$init_c")
+    body=$(func_body "$init_c" executive_attach)
 
     if [ -z "$body" ]; then
         echo "FAIL: could not locate executive_attach() in ovmx_init.c"
@@ -200,10 +380,9 @@ else
                 reason="$reason
     - the open() result ($openvar) has no \`if ($openvar < 0)\` failure branch"
             else
-                # Strip comments before looking for control flow: prose about
-                # halting must not stand in for halting.
-                code=$(printf '%s\n' "$branch" | sed 's;//.*;;' | tr '\n' ' ' \
-                       | sed 's;/\*[^*]*\*\+\([^/*][^*]*\*\+\)*/; ;g')
+                # $body is already comment-free (func_body strips them), so
+                # prose about halting cannot stand in for halting.
+                code=$(printf '%s\n' "$branch" | tr '\n' ' ')
                 offsets=$(printf '%s\n' "$code" | awk '{
                     h = match($0, /[A-Za-z_]*halt[A-Za-z_]*[ \t]*\(|reboot[ \t]*\(|exit[ \t]*\(|abort[ \t]*\(/)
                     e = match($0, /(^|[^A-Za-z0-9_])(return|goto)([^A-Za-z0-9_]|$)/)
@@ -223,7 +402,45 @@ else
                     reason="$reason
     - the /dev/vms failure branch returns to the caller before it halts, so
       the halt is unreachable and PID 1 continues without an executive."
+                else
+                    # (f) TERMINALITY. The last top-level statement of the
+                    # branch must be a bare, unconditional call to a recognised
+                    # halt entry point. A conditional halt, a halt followed by
+                    # anything, or a call to some other function all leave a
+                    # path back to the caller.
+                    last=$(printf '%s\n' "$branch" | last_top_stmt)
+                    callee=$(printf '%s\n' "$last" | bare_call_name)
+                    if [ -z "$callee" ] || ! in_set "$callee" "$HALT_ENTRIES"; then
+                        reason="$reason
+    - the /dev/vms failure branch does not END in an unconditional halt: its
+      last top-level statement is
+          $last
+      Recognised halt entry points: $HALT_ENTRIES.
+      A halt that is nested in a condition, or followed by another statement,
+      leaves a path out of the branch -- PID 1 survives a missing executive."
+                    # (g) and the entry point must really end the system, so a
+                    # same-named stub that only prints cannot satisfy (f).
+                    elif ! terminates "$init_c" "$callee"; then
+                        reason="$reason
+    - the /dev/vms failure branch calls $callee(), but $callee() no longer
+      terminates the system: its call chain does not bottom out in one of
+      $PRIMITIVE_TERMINATORS. A halt that returns is not a halt."
+                    fi
                 fi
+            fi
+
+            # (h) the pinned names are reserved. Pinning the callee by name is
+            # only worth anything if the name still means the function the
+            # gate inspected -- `#define ovmx_exec_halt(w, d) fprintf(...)`
+            # would otherwise turn the check into a spelling test.
+            halt_alt=$(printf '%s' "$HALT_ENTRIES" | tr ' ' '|')
+            shadow=$(strip_comments < "$init_c" \
+                     | grep -nE "^[[:space:]]*#[[:space:]]*define[[:space:]]+($halt_alt)[[:space:](]" || true)
+            if [ -n "$shadow" ]; then
+                reason="$reason
+    - a halt entry point is REDEFINED by a macro in ovmx_init.c, so the pinned
+      name no longer names the function this gate inspected:
+$(printf '%s\n' "$shadow" | sed 's/^/          /')"
             fi
 
             # (e) the descriptor is pinned, not probed and released
@@ -240,7 +457,9 @@ else
             echo "     for the life of the system (pins vms.ko: rmmod -> EBUSY)."
             status=1
         else
-            echo "  OK: executive_attach() opens /dev/vms, halts inside the open-failure branch, holds it open"
+            echo "  OK: executive_attach() opens /dev/vms; the open-failure branch is terminal"
+            echo "      (ends in an unconditional call to a halt that reaches $PRIMITIVE_TERMINATORS)"
+            echo "      and the descriptor is never closed"
         fi
     fi
 fi
@@ -276,15 +495,31 @@ direct=$(grep -rnE 'vms_kif_open[[:space:]]*\([[:space:]]*\)[[:space:]]*(<|>|=|!
          --include=*.c --include=*.h "$SRC_ROOT/src" 2>/dev/null \
         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
 
+#
+# ROUND 4 CORRECTION. Pass (ii) ended with `| grep -vE '=[[:space:]]*vms_kif_open'`,
+# meant to skip the assignment itself -- but it dropped the WHOLE LINE, so any
+# line carrying BOTH the capture and the use was invisible. All three shapes
+# above walk straight through it when written on one line:
+#     int rc = vms_kif_open(); if (rc < 0) { }
+#     int rc = vms_kif_open(); (void)(rc >= 0 ? 0 : -1);
+#     int rc = vms_kif_open(); switch (rc) { case -1: break; default: break; }
+# Round 3 fixed the multi-line FORMATTING of the class, not the class. The
+# exclusion is now textual, not line-level: only the `<x> = vms_kif_open()`
+# fragment is blanked, and what remains of the line is still scanned. The
+# one-line form of each shape is a recorded control in the negctl suite.
 indirect=""
 for f in $(grep -rlE 'vms_kif_open[[:space:]]*\(' --include=*.c --include=*.h "$SRC_ROOT/src" 2>/dev/null); do
     vars=$(grep -oE '\b[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*vms_kif_open[[:space:]]*\([[:space:]]*\)' "$f" \
             | sed -E 's/[[:space:]]*=.*//' | sort -u)
+    [ -n "$vars" ] || continue
+    # Line-numbered file with ONLY the capture fragments blanked out.
+    scan=$(grep -n '' "$f" \
+           | sed -E 's/[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*vms_kif_open[[:space:]]*\([[:space:]]*\)//g')
     for v in $vars; do
         [ -n "$v" ] || continue
-        hit=$(grep -nE "(if|while|switch)[[:space:]]*\\([^)]*\\b${v}\\b|\\b${v}\\b[[:space:]]*(<=|>=|==|!=|<|>)|[0-9)][[:space:]]*(<=|>=|==|!=|<|>)[[:space:]]*\\b${v}\\b|\\b${v}\\b[[:space:]]*(&&|\\|\\||\\?)|(&&|\\|\\|)[[:space:]]*[!]?[[:space:]]*\\b${v}\\b|[!][[:space:]]*\\b${v}\\b|\\breturn\\b[^;]*\\b${v}\\b" "$f" \
-                | grep -vE '^[0-9]+:[[:space:]]*(\*|//|/\*)' \
-                | grep -vE '=[[:space:]]*vms_kif_open' || true)
+        hit=$(printf '%s\n' "$scan" \
+                | grep -E "(if|while|switch)[[:space:]]*\\([^)]*\\b${v}\\b|\\b${v}\\b[[:space:]]*(<=|>=|==|!=|<|>)|[0-9)][[:space:]]*(<=|>=|==|!=|<|>)[[:space:]]*\\b${v}\\b|\\b${v}\\b[[:space:]]*(&&|\\|\\||\\?)|(&&|\\|\\|)[[:space:]]*[!]?[[:space:]]*\\b${v}\\b|[!][[:space:]]*\\b${v}\\b|\\breturn\\b[^;]*\\b${v}\\b" \
+                | grep -vE '^[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
         if [ -n "$hit" ]; then
             indirect="$indirect
 $f: variable '$v' captures vms_kif_open() and is consumed as a presence value later:

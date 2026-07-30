@@ -218,4 +218,77 @@ struct vms_register_args {
 
 #define VMS_IOCTL_REGISTER  _IOWR(VMS_IOC_MAGIC, 0x40, struct vms_register_args)
 
+/* ================================================================
+ * Process table (executive-resident PCB directory)
+ *
+ * On OpenVMS the process name lives in the executive's process
+ * database, not in the process's own address space: $SETPRN writes it,
+ * $GETJPI resolves a process by it, and SHOW SYSTEM enumerates the
+ * table. That is why a VMS process name means anything at all -- every
+ * other process can see it.
+ *
+ * These ioctls put the same property behind /dev/vms. The entry is
+ * keyed by the Linux pid, which is invariant across execve(), so the
+ * name survives image activation without any userspace carrier.
+ * ================================================================ */
+
+/*
+ * VMS process names are 1-15 characters (OpenVMS System Services
+ * Reference, $SETPRN / $CREPRC prcnam argument). 16 bytes = 15
+ * significant characters plus the NUL terminator, matching the
+ * in-tree struct vms_pcb prcnam[16].
+ */
+#define VMS_PRCNAM_SIZE 16
+
+/*
+ * One row of the executive process table.
+ *
+ * uic is [group,member] packed as (group << 16) | member -- the same
+ * packing sys$getjpi's JPI$_UIC item returns. The executive derives it
+ * from the task's credentials; it is never supplied by the process
+ * itself (a process must not be able to declare its own UIC).
+ */
+struct vms_procinfo {
+    uint32_t vms_pid;                   /* VMS-style process ID */
+    uint32_t linux_pid;                 /* Linux pid backing the process */
+    char     prcnam[VMS_PRCNAM_SIZE];   /* process name ("" if unnamed) */
+    uint32_t uic;                       /* (group << 16) | member */
+    uint8_t  current_mode;              /* PSL_C_KERNEL..PSL_C_USER */
+    uint8_t  pad[3];
+    uint64_t cur_privs;                 /* current privilege mask */
+};
+
+/* Selector for VMS_IOCTL_GETJPI: how the target process is named. */
+#define VMS_JPI_SEL_SELF    0   /* the calling process */
+#define VMS_JPI_SEL_PID     1   /* by vms_pid */
+#define VMS_JPI_SEL_PRCNAM  2   /* by prcnam, within the caller's UIC group */
+
+struct vms_getjpi_args {
+    uint32_t select;            /* VMS_JPI_SEL_* */
+    uint32_t status;            /* return: SS$_ status */
+    struct vms_procinfo info;   /* in: selector value; out: the row */
+};
+
+/*
+ * Cursor-driven enumeration of the process table (the reader behind
+ * SHOW SYSTEM). Set index to 0 for the first row; each call returns
+ * one row and advances index. SS$_NONEXPR terminates the scan, which
+ * is what $PROCESS_SCAN returns when the wildcard search is exhausted.
+ */
+struct vms_procscan_args {
+    uint32_t index;             /* in: cursor; out: cursor for next call */
+    uint32_t status;            /* return: SS$_ status */
+    struct vms_procinfo info;   /* out: the row at the incoming cursor */
+};
+
+struct vms_setprn_args {
+    char     prcnam[VMS_PRCNAM_SIZE];   /* new process name */
+    uint32_t status;                    /* return: SS$_ status */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_SETPRN    _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_setprn_args)
+#define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
+#define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
+
 #endif /* _VMS_IOCTL_H */

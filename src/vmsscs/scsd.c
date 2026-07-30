@@ -286,6 +286,11 @@ enum join_step {
  * +5.8774 -- ~4.9 s later. What it is really waiting on is not grounded; the
  * delay is copied from the reference. */
 #define JOIN_CFG2_DELAY_MS   4900u
+/* vms-760: how long to hold the step-1 barrier request after the op 0x0a GO.
+ * The coordinator's measured per-member fan-out gap is 20-214 us; 3 ms clears it
+ * with a wide margin while staying far inside the transition's own timeout (the
+ * reference holds step 5 for 89 ms without complaint). Tunable for bisecting. */
+#define JOIN_BARRIER_GO_DELAY_MS 3u
 /* vms-760: cat-0x04 ack cadence -- ack once per this many unacked coordinator
  * messages. SET TO 1 DELIBERATELY. The reference joiner batches at one per three
  * (85 acks for a 254-message burst), but our poll loop is HELLO-driven and far too
@@ -359,6 +364,18 @@ struct peer_state {
     uint32_t barrier_epoch;        /* body[12:16] latched from the coordinator's op 0x09 */
     int      barrier_step;         /* current step N, 1..12; 0 = barrier not running */
     int      barrier_done;         /* step 12 released -- transition complete */
+    /* vms-760: WE ARE TOO FAST. OVMX answers the coordinator's op 0x0a GO in
+     * ~20 us -- quicker than the coordinator's own fan-out loop, which takes
+     * 20-214 us per additional member. A step-1 op 0x0b that lands while the
+     * coordinator is still fanning 0x0a out to the other members is acked with
+     * tag 0x0260 and response marker 0x00 ("received in the go phase, NOT
+     * counted") instead of 0x0210 / 0x01, and the barrier stays a member short
+     * forever. GROUNDED 6/6 across every 3-member run; epoch 5 produced BOTH
+     * outcomes, so it is a race, not cluster state. So the step-1 request is
+     * DEFERRED by barrier_go_ms + JOIN_BARRIER_GO_DELAY_MS instead of being sent
+     * from the receive path. */
+    long     barrier_go_ms;        /* monotonic_ms() when the op 0x0a GO arrived */
+    int      barrier_go_pending;   /* step-1 op 0x0b is deferred, not yet sent */
     uint16_t own_txn;              /* our per-VC transaction-context id */
     uint16_t own_cksum;            /* our per-VC counter, +1 per transaction we initiate */
     uint32_t cm_local_conid;       /* our Con.ID on the VC the CM dialogue rides */
@@ -2121,7 +2138,31 @@ int main(int argc, char **argv)
                         (size_t)n >= 90 && !ps->barrier_step && !ps->barrier_done) {
                         uint16_t tag = (uint16_t)buf[88] | ((uint16_t)buf[89] << 8);
                         if (tag == SCS_MEMBER_BARRIER_TAG) {
+                            /* DO NOT answer from here -- see barrier_go_pending.
+                             * Replying at receive-path speed (~20 us) beats the
+                             * coordinator's own 0x0a fan-out and gets our step
+                             * uncounted. Defer to the poll loop. */
                             ps->barrier_step = 1;
+                            ps->barrier_go_ms = monotonic_ms();
+                            ps->barrier_go_pending = 1;
+                            log_ts(stdout);
+                            printf(" SCSD-I-XITGO, barrier GO received -- deferring"
+                                   " step 1 by %d ms so it lands after the"
+                                   " coordinator's fan-out\n",
+                                   (int)JOIN_BARRIER_GO_DELAY_MS);
+                            fflush(stdout);
+                            /* Sleep here rather than leaving it to the poll loop:
+                             * the receive loop only wakes on traffic or a 1 s
+                             * SO_RCVTIMEO, so the poll path would make the gap
+                             * anywhere from 3 ms to 1 s. We have nothing else to
+                             * do during the GO phase, and the whole point is to
+                             * control this interval precisely. The poll-loop
+                             * emitter below stays as a belt-and-braces fallback. */
+                            struct timespec gowait;
+                            gowait.tv_sec = 0;
+                            gowait.tv_nsec = (long)JOIN_BARRIER_GO_DELAY_MS * 1000000L;
+                            nanosleep(&gowait, NULL);
+                            ps->barrier_go_pending = 0;
                             cm_send_barrier_step(sock, (int)ifindex, ps, our_hw_mac,
                                                  our_src_logical, ps->barrier_step);
                         }
@@ -2527,6 +2568,18 @@ int main(int argc, char **argv)
                         fflush(stdout);
                     }
                 }
+            }
+
+            /* vms-760: emit the DEFERRED step-1 barrier request once the
+             * coordinator has had time to finish fanning op 0x0a out to the
+             * other members. Sending it from the receive path (~20 us) is what
+             * got it acked 0x0260 and never counted, freezing the whole
+             * cluster's transition -- 6/6 across every 3-member run. */
+            if (ps->barrier_go_pending &&
+                (monotonic_ms() - ps->barrier_go_ms) >= (long)JOIN_BARRIER_GO_DELAY_MS) {
+                ps->barrier_go_pending = 0;
+                cm_send_barrier_step(sock, (int)ifindex, ps, our_hw_mac,
+                                     our_src_logical, ps->barrier_step);
             }
 
             /* vms-760: FLUSH a residual cat-0x04 ack backlog. The receive path

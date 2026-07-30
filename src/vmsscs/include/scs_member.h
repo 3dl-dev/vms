@@ -76,6 +76,10 @@ extern "C" {
 /* SYSAP category/flags byte (body[8]). */
 #define SCS_MEMBER_CAT_CONFIG   0x01 /* membership / config dialogue */
 #define SCS_MEMBER_CAT_ACK      0x04 /* member commit/credit ack */
+#define SCS_MEMBER_CAT_DLM      0x02 /* distributed lock manager. During a join the
+                                      * coordinator replays lock-resource records as
+                                      * token-correlated cat-0x02 transactions and
+                                      * gates the barrier on them being answered. */
 #define SCS_MEMBER_CAT_MEMBERSHIP 0x06 /* vms-760: the category the coordinator uses to
                                         * CLOSE the add-member transaction; token-correlated
                                         * and echoed exactly like category 0x01

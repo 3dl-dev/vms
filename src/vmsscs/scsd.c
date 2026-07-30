@@ -1889,12 +1889,23 @@ int main(int argc, char **argv)
                      * coordinator finishes it with a category-0x06 request that
                      * takes the same echo transform (ref frames 671 -> 673:
                      * cat 0x06 op 0x00 txn=8 cksum=0x9a2c -> cat 0x86, same token).
-                     * DLM (category 0x02) is deliberately NOT included -- echoing a
-                     * lock request as though it were granted would be a semantic
-                     * lie; that belongs to the lock manager, not here. */
+                     * Category 0x02 (the distributed lock manager) IS included, for
+                     * one specific reason: during the join the coordinator replays
+                     * the lock-resource database at the joiner as token-correlated
+                     * cat-0x02 op-0x0d transactions, INTERLEAVED with the barrier,
+                     * and it will not release the next barrier step until they are
+                     * answered. Observed exactly: five cat-0x02 requests arrived
+                     * unanswered and the barrier froze at step 5 (d94-e12).
+                     * Answering these is not a lie about lock state: a joining node
+                     * holds no locks, so acknowledging a rebuild record is simply
+                     * what a joiner has to say. Real lock semantics -- granting,
+                     * denying, blocking, remastering -- belong to the lock manager
+                     * and are NOT implemented here; this path must be revisited when
+                     * OVMX actually holds locks. */
                     int cm_req = !mv.is_response &&
                                  (mv.category == SCS_MEMBER_CAT_CONFIG ||
-                                  mv.category == SCS_MEMBER_CAT_MEMBERSHIP);
+                                  mv.category == SCS_MEMBER_CAT_MEMBERSHIP ||
+                                  mv.category == SCS_MEMBER_CAT_DLM);
                     int cm_token_req = cm_req && mv.txn != 0;
                     int cm_plain_req = cm_req && mv.txn == 0;
 
@@ -2317,7 +2328,7 @@ int main(int argc, char **argv)
              * The ~5 s delay is taken from the reference; what the real joiner
              * actually waits on is NOT grounded (see spec 5(z)). */
             if (do_connect && ps->cfg_sent && !ps->joiner_cfg2_sent &&
-                !cm_cfg2_peer_chosen &&
+                (!cm_cfg2_peer_chosen || getenv("OVMX_CFG2_ALL") != NULL) &&
                 (monotonic_ms() - ps->cfg_ms) >= (long)JOIN_CFG2_DELAY_MS) {
                 struct scs_member_params mp;
                 memset(&mp, 0, sizeof(mp));

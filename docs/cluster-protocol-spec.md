@@ -1711,14 +1711,51 @@ shape likewise does not generalise:
   records as token-correlated transactions **interleaved with the barrier**, and
   gates the next step on them being answered. Five unanswered cat-`0x02`
   requests froze the barrier at step 5.
-  > ⚠ **The cat-`0x02` response SHAPE is NOT grounded, and the echo is
-  > known-wrong.** OVMX inherited the cat-`0x01` echo here. In run `coord3` we
-  > blind-echoed eight cat-`0x02` `op 0x0d` records and VAX1 and VAX3 bugchecked
-  > **`LOCKMGRERR, Error detected by Lock Manager`** immediately after
-  > `completing VAXcluster state transition`. A joining node holds no locks, so
-  > echoing a lock-resource rebuild record asserts lock state it does not have.
-  > Grounding what a real (also lock-less) joiner sends for `op 0x0d` is the
-  > current frontier. Specimen: `ovmx-760-lockmgrerr-20260730.pcap`.
+  **`op 0x0d` is the ONLY cat-`0x02` opcode that occurs during a join** (216/216
+  in the reference), and its response is now **GROUNDED to an unusual degree**:
+  the recipe below reconstructs **1367 of 1367** real responses byte-for-byte,
+  from four responder nodes across two captures, with zero residuals.
+
+  ```
+  memcpy(resp_body, req_body, 132);      /* VERBATIM echo            */
+  resp[0:2] = own SYSAP send-msg#        /* envelope                 */
+  resp[2:4] = ack of the peer's send#    /* envelope                 */
+  resp[8]  |= 0x80                       /* 0x02 -> 0x82             */
+  resp[34]  = 0xf9                       /* MANDATORY, unconditional */
+  /* everything else -- txn/cksum, opcode, body[12:16], the L1 region
+     and the resource name -- echoed byte for byte                   */
+  ```
+
+  `body[34]` is written **unconditionally**: requests carried `0xf9`(209),
+  `0x00`(3), `0x20`(2), `0x72`(1), `0xbc`(1) and *every* response carried `0xf9`,
+  landing mid-ASCII in two specimens — a fixed-offset stamp, not a payload field.
+  INFERRED to be a per-opcode result code; `op 0x01/0x07/0x15` use `0xfa`.
+
+  **Request layout (GROUNDED):** `body[12:14]=0x0001` and `body[14:16]=0x0003`
+  invariant · `body[16]` = L1 length · `body[47]` = **resource-name length** ·
+  `body[48 : 48+len]` = the **lock RESOURCE NAME** in ASCII + binary sub-key.
+  Observed verbatim: `"F11B$aSYSDSK1     "`, `"CACHE$cmSYSDSK1     "`,
+  `"VCC$vSYSDSK1     "`, `"SYS$_$2$DUA0:"`, `"SYS$SYS_ID"` — the documented
+  Files-11 / extent-cache / VCC namespaces (§4(f)).
+
+  > ⚠ **DO NOT apply the cat-`0x01` mutations here.** `body[18]` is the 2nd byte
+  > of the L1 region and **`body[55]` is the 8TH BYTE OF THE RESOURCE NAME** for
+  > every observed length (13–24). OVMX applied both and shipped
+  > `"CACHE$cmSYSDSK1"` as `"CACHE$c\0SYSDSK1"` on all eight replies; VAX1 and
+  > VAX3 took a fatal **`LOCKMGRERR`**. The in-capture control is decisive:
+  > across the same milliseconds VAX1 and VAX3 exchanged the *same* records with
+  > each other correctly and neither crashed. Specimen:
+  > `ovmx-760-lockmgrerr-20260730.pcap`.
+
+  > **The plausible-sounding theory that was WRONG.** "A joiner holds no locks,
+  > so echoing a rebuild record asserts lock state it does not have" was carried
+  > for three sessions and is false. The echo returns the **coordinator's own
+  > record** with a result code and claims nothing — which is exactly why a
+  > lock-less joiner answers all 216. Refusing them instead pins the barrier at
+  > step 5 forever: the coordinator **retransmits each unanswered record up to
+  > 3×** (measured, `ovmx-760-dlm-refused-20260730.pcap`). Step 5 *is* the
+  > lock-rebuild barrier step — in the reference it is held for 89 ms while 216
+  > of these transactions run.
 
 #### Residue: several "fields" are uninitialised buffer contents
 
@@ -1779,6 +1816,48 @@ pairs grounded in the reference; for anything else send **nothing** and log it.
 Silence is the safer failure — but not a free one. A joiner that fails to answer
 something the coordinator gates on strands the transition, which times out and
 drops healthy members. An unanswered pair is a gap to close, not a resting state.
+
+### 4(q) After the barrier — what makes a node a MEMBER (GROUNDED, `vms-760`)
+
+**There is no "you are now a member" message, and no joiner-emitted field flips.**
+Membership *follows from the transition completing*. Grounded three ways:
+
+- Every non-DLM message in the 500 ms after `op 0x0c`#12 recurs elsewhere in the
+  capture; none is unique to the transition. `cat 0x06`/`0x86 op 0x00` is a
+  recurring member poll (~1/s, and one occurs *before* the barrier);
+  `cat 0x02 op 0x02` is an **OPCOM broadcast relay** (ASCII `"OPCO"` at
+  `abs 82 = 0x00bb`), not a membership message and never answered.
+- The joiner's HELLOs are **byte-identical across the boundary** except the
+  padded-vs-plain framing (abs 14–15), the §4(a).1 channel-verify oscillator
+  (abs 30) and a free-running tick (abs 96–100). Incarnation (`abs 92`) and
+  poller sweep (`abs 128`) are unchanged. Sampled over +390 s.
+- The joiner's **CSID is already on the wire ~160 ms *before* the barrier opens**
+  (frame 297), and it never appears in a HELLO (0 hits in 741 sampled).
+
+> `SHOW CLUSTER`'s `NEW` → `MEMBER` is **member-side state produced by the
+> transition**. There is nothing extra for a joiner to emit to be *rendered* as
+> `MEMBER`.
+
+**`op 0x0c`#12 must NOT be answered**, exactly like every other release. No
+`0x81`/`0x0c` exists anywhere in the capture, and `op 0x0c` carries `txn=0`, so
+there is nothing to correlate. The joiner's next frame is a **standalone
+`cat 0x04` credit ack** — for steps 1–11 that ack rode piggyback on the next
+`op 0x0b`; after step 12 there is no next step, so it goes out alone. Answering
+the release would invent a message VMS never sends (Rule 10).
+
+**Ongoing MEMBER obligations** (a node that stops meeting them may be dropped):
+HELLO cadence is *unchanged* (~2.3 s); **SCS credit return (`mt 0x48`) becomes
+continuous** (~0.75 frames/s combined, vs a handful during setup); members
+re-issue an `MSCP$DISK` CONNECT-REQUEST every ~10 s **indefinitely**; fresh
+`SCS$DIRECTORY` connections open post-join; `SCA$TRANSPORT` is opened once by a
+peer; and `mt 0x7b` (len 204) frames appear on the `VMS$VAXcluster` Con.ID pair
+— **payload undecoded**; accept and ack at the SCS level, answer nothing above it.
+
+**The post-barrier DLM burst is a consequence, not an obligation** (INFERRED):
+membership is reached at the release, before any of it; all 338 cat-`0x02` frames
+in the window are joiner-initiated and every resource is Files-11/MOUNT
+(`MOU$_`, `F11B$*`, `VCC$v`, `DMT$_`), never `CNX$`/quorum. A lock-less OVMX
+likely needs to emit **no** outbound DLM to reach or hold `MEMBER`.
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
 

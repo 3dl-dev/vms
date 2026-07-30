@@ -237,8 +237,16 @@ jobs:
           # This also proves the harness ran to completion and reached its own
           # FINAL RESULTS accounting -- a timeout or panic would never print
           # this line at all, so this line alone rules those causes out.
-          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 7 suites failed ===' \
-            || { echo "FAIL: did not see the expected 3-suites-passed/7-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+          #
+          # MAINTENANCE CONVENTION (deliberate, do NOT soften): adding a suite
+          # that depends on the executive MUST bump the failed count here, and
+          # adding one that does not MUST bump the passed count. Turning this
+          # into a range or a regex to avoid the edit would let a suite silently
+          # stop depending on /dev/vms -- which is the whole thing this job
+          # exists to detect. The brittleness IS the feature.
+          # 8 failed as of vms-8019, which added test_kmod_procnam.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 8 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/8-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
 
           # POSITIVE assertion paired with the two negative assertions above:
           # vmsfs.ko has no dependency on vms.ko/the executive, so it must

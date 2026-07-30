@@ -45,6 +45,7 @@
 #include "scs_dir.h"
 #include "scs_hello.h"
 #include "scs_member.h"
+#include "scs_mscp.h"
 #include "scs_start.h"
 #include "scs_vc.h"
 #include "sysgen_params.h"
@@ -229,6 +230,34 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
  * 0x000A MSCP-client. Opaque to the peer (OVMX design choice, scs_connect.h). */
 #define OVMX_MSCP_SERVER_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x000Bu)
 
+/* vms-760 PURE-SERVER disk-CLIENT (established-join): after OVMX reaches NEW as a
+ * pure server, a real joiner is ALSO a disk CLIENT -- it opens its OWN
+ * SCS$DIRECTORY + MSCP$DISK connections BACK to VAX1 and runs MSCP disk discovery
+ * (SET CONTROLLER CHARACTERISTICS + GET UNIT STATUS enumeration), proving it can
+ * reach the cluster system disk before VAX1 commits it to MEMBER (af2-firsttimer-
+ * established). These two handles are DISTINCT from every other conid -- in
+ * particular from the OVMX_JOIN_SEQ active-joiner handles (SCS_DIR_OVMX_JOINER_
+ * CONID 0x0008 / OVMX_MSCP_CONID 0x000A) -- so this pure-server client path is
+ * fully isolated: the existing join-sequencer receive handlers key on those other
+ * conids and never match these, and vice-versa (no cross-drive, Rule-9 clean). */
+#define OVMX_PS_DIR_CONID  (SCS_CONNECT_OVMX_CONID_BASE | 0x000Cu)
+#define OVMX_PS_MSCP_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x000Du)
+
+/* vms-760 pure-server disk-client state machine (stop-and-wait; one drive frame
+ * outstanding). Advanced receive-driven by VAX1's echoes on OUR PS conids. NEVER
+ * opens a VMS$VAXcluster VC (that would short-circuit admission -- the whole
+ * point of pure-server); only the dir + MSCP CLIENT connects + MSCP discovery. */
+enum ps_client_step {
+    PSC_IDLE = 0,
+    PSC_DIR_CONNECT,     /* sent OUR dir connect; await VAX1 op2 accept */
+    PSC_DIR_LOOKUP_TAPE, /* sent dir confirm + MSCP$TAPE lookup; await response (miss) */
+    PSC_DIR_LOOKUP_DISK, /* sent MSCP$DISK lookup; await HIT */
+    PSC_MSCP_CONNECT,    /* sent OUR MSCP$DISK connect; await VAX1 op2 accept */
+    PSC_SCC,             /* sent MSCP confirm + SET CONTROLLER CHARACTERISTICS; await SCC-END */
+    PSC_GUS,             /* GET UNIT STATUS enumeration in progress */
+    PSC_DONE             /* enumeration hit the OFFLINE terminator -- disk discovery complete */
+};
+
 /* Absolute frame offsets used by the responder (spec byte-offset convention:
  * 0 = first byte of Ethernet dst). */
 #define OFF_ETH_DST      0
@@ -329,6 +358,32 @@ struct peer_state {
     long     mscp_srv_accepts;     /* op=4 accepts we sent this peer */
     uint16_t mscp_srv_echo_seq;    /* send_seq allocated for the op=1 echo (reused on retransmit) */
     uint16_t mscp_srv_accept_seq;  /* send_seq allocated for the op=4 accept (reused on retransmit) */
+    /* --- vms-760 PURE-SERVER disk-CLIENT: after OVMX reaches NEW as a pure
+     * server it opens its OWN SCS$DIRECTORY + MSCP$DISK connections back to VAX1
+     * (distinct PS conids) and runs MSCP disk discovery (SCC + GUS enumeration).
+     * A SEPARATE state machine from the OVMX_JOIN_SEQ sequencer -- it NEVER opens
+     * a VMS$VAXcluster VC. All sends ride the shared per-channel ps->vc.seq;
+     * connect/lookup seqs are allocate-once/retransmit-reuse (the 760mscp hole). */
+    int      psc_step;             /* enum ps_client_step; current stop-and-wait state */
+    int      psc_credit_done;      /* VAX1's op6/op8 credit handshake on OUR server dir
+                                    * connection is complete -> safe to open our client
+                                    * connect (af2: joiner opens its dir AFTER this) */
+    int      psc_dir_sent;         /* we sent OUR PS SCS$DIRECTORY CONNECT-REQUEST */
+    int      psc_dir_connected;    /* VAX1 accepted it (op2, pair bound) */
+    uint32_t psc_dir_remote_conid; /* VAX1's handle on OUR PS dir connection */
+    uint16_t psc_dir_req_seq;      /* send_seq of OUR PS dir CONNECT-REQUEST (retx REUSE) */
+    uint16_t psc_lookup_seq;       /* send_seq of the outstanding PS dir lookup (retx REUSE) */
+    int      psc_mscp_sent;        /* we sent OUR PS MSCP$DISK CONNECT-REQUEST */
+    int      psc_mscp_connected;   /* VAX1 accepted it (op2, pair bound) */
+    uint32_t psc_mscp_remote_conid;/* VAX1's MSCP$DISK server handle on OUR connection */
+    uint16_t psc_mscp_req_seq;     /* send_seq of OUR PS MSCP CONNECT-REQUEST (retx REUSE) */
+    uint16_t psc_mscp_msgid;       /* MSCP message-id (SCC/GUS correlation token; increments) */
+    long     psc_scc_sent;         /* SET CONTROLLER CHARACTERISTICS commands sent (af2 sends 2) */
+    long     psc_gus_sent;         /* GET UNIT STATUS commands sent */
+    long     psc_gus_avail;        /* UNIT AVAILABLE (status 4) responses seen */
+    char     psc_lookup_name[16];  /* SYSAP name of the outstanding PS lookup (for retx rebuild) */
+    struct timespec psc_last_tx;   /* CLOCK_MONOTONIC of the outstanding PS drive frame */
+    unsigned psc_retx;             /* retransmits of the current PS step (cap = JOIN_RETX_MAX) */
     /* --- vms-760: the NEW->MEMBER join SEQUENCER. The joiner presents the FULL
      * dir-CLIENT connection-set in strict stop-and-wait order on the ONE shared
      * per-channel send_seq (docs/design-cluster-join-choreography.md): own dir
@@ -692,6 +747,317 @@ static int send_own_dir_confirm(int sock, int ifindex, struct peer_state *ps,
     return 0;
 }
 
+/* ======================================================================
+ * vms-760 PURE-SERVER disk-CLIENT send helpers. Each rides the SHARED
+ * per-channel ps->vc.seq (contiguous with every server-side send). Connect +
+ * lookup seqs are allocate-once / retransmit-reuse (never advance on a
+ * retransmit -- that is the 760mscp hole); confirm + MSCP data frames advance
+ * once. These use the DISTINCT PS conids (OVMX_PS_DIR_CONID / OVMX_PS_MSCP_CONID)
+ * so the OVMX_JOIN_SEQ receive handlers never match them. All are gated by the
+ * caller on getenv("OVMX_PURE_SERVER"). NONE opens a VMS$VAXcluster VC.
+ * ====================================================================== */
+
+/* Open OUR OWN PS SCS$DIRECTORY connection to VAX1 (remote=0, local=PS dir). */
+static int ps_send_dir_connect(int sock, int ifindex, struct peer_state *ps,
+                               const uint8_t our_hw_mac[6],
+                               const uint8_t our_src_logical[6])
+{
+    struct scs_dir_params dp;
+    memset(&dp, 0, sizeof(dp));
+    memcpy(dp.dst_mac, ps->eth_mac, 6);
+    memcpy(dp.src_mac, our_hw_mac, 6);
+    memcpy(dp.src_logical, our_src_logical, 6);
+    memcpy(dp.peer_logical, ps->logical, 6);
+    dp.local_conid = OVMX_PS_DIR_CONID;
+    dp.remote_conid = 0;
+    dp.recv_ack = ps->vc.seq.recv_seq;
+    if (ps->psc_dir_req_seq == 0) {
+        ps->psc_dir_req_seq = scs_seq_advance(&ps->vc.seq); /* allocate once */
+    }
+    dp.send_seq = ps->psc_dir_req_seq; /* retransmits reuse the same seq */
+    dp.incarnation = ps->incarnation;
+    uint8_t f[SCS_DIR_RESP_FRAME_LEN];
+    /* vms-760: OVMX's VMS$VAXcluster VC is established by now (OVMX reached NEW), so
+     * OVMX's OWN client connects are data-phase (msgtype 0x4b), NOT the 0x5b the
+     * builder emits for fresh VC formation. GROUNDED: af2's joiner opens its dir +
+     * MSCP client connects with 0x4b post-NEW; VAX1 ECHOES a 0x5b connect (op=1) but
+     * never op=2-accepts it -> the client connection never binds. */
+    if (scs_dir_build_connect_request(&dp, f) == 0 &&
+        (f[30] = SCS_MSGTYPE_SEQAPP, 1) &&
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        ps->psc_dir_sent = 1;
+        clock_gettime(CLOCK_MONOTONIC, &ps->psc_last_tx);
+        scs_vc_record_sent(&ps->vc, dp.send_seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
+/* Send the op=3 CONNECT-CONFIRM on OUR PS dir connection (fire-and-forget). */
+static int ps_send_dir_confirm(int sock, int ifindex, struct peer_state *ps,
+                               const uint8_t our_hw_mac[6],
+                               const uint8_t our_src_logical[6])
+{
+    struct scs_dir_params dp;
+    memset(&dp, 0, sizeof(dp));
+    memcpy(dp.dst_mac, ps->eth_mac, 6);
+    memcpy(dp.src_mac, our_hw_mac, 6);
+    memcpy(dp.src_logical, our_src_logical, 6);
+    memcpy(dp.peer_logical, ps->logical, 6);
+    dp.remote_conid = ps->psc_dir_remote_conid;
+    dp.local_conid = OVMX_PS_DIR_CONID;
+    dp.recv_ack = ps->vc.seq.recv_seq;
+    dp.send_seq = scs_seq_advance(&ps->vc.seq);
+    dp.incarnation = ps->incarnation;
+    uint8_t f[SCS_DIR_CONFIRM_FRAME_LEN];
+    if (scs_dir_build_connect_confirm(&dp, f) == 0 &&
+        (f[30] = SCS_MSGTYPE_SEQAPP, 1) &&   /* post-NEW: data-phase 0x4b */
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        scs_vc_record_sent(&ps->vc, dp.send_seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
+/* Query VAX1's directory for `name` on OUR PS dir connection. First send (retx=0)
+ * allocates + stores the shared send_seq and name; a retransmit (retx=1) REUSES
+ * them. Returns 1 if a frame was sent. */
+static int ps_send_dir_lookup(int sock, int ifindex, struct peer_state *ps,
+                              const uint8_t our_hw_mac[6],
+                              const uint8_t our_src_logical[6],
+                              const char *name, int retx)
+{
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, ps->eth_mac, 6);
+    memcpy(lp.src_mac, our_hw_mac, 6);
+    memcpy(lp.src_logical, our_src_logical, 6);
+    memcpy(lp.peer_logical, ps->logical, 6);
+    lp.remote_conid = ps->psc_dir_remote_conid;
+    lp.local_conid = OVMX_PS_DIR_CONID;
+    lp.recv_ack = ps->vc.seq.recv_seq;
+    if (retx) {
+        lp.send_seq = ps->psc_lookup_seq;
+        strncpy(lp.name, ps->psc_lookup_name, SCS_DIR_NAME_LEN - 1);
+    } else {
+        lp.send_seq = scs_seq_advance(&ps->vc.seq);
+        ps->psc_lookup_seq = lp.send_seq;
+        memset(ps->psc_lookup_name, 0, sizeof(ps->psc_lookup_name));
+        strncpy(ps->psc_lookup_name, name, SCS_DIR_NAME_LEN - 1);
+        strncpy(lp.name, name, SCS_DIR_NAME_LEN - 1);
+    }
+    lp.incarnation = ps->incarnation;
+    uint8_t f[SCS_DIR_LOOKUP_FRAME_LEN];
+    if (scs_dir_build_lookup_request(&lp, f) == 0 &&
+        (f[30] = SCS_MSGTYPE_SEQAPP, 1) &&   /* post-NEW: data-phase 0x4b */
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        scs_vc_record_sent(&ps->vc, lp.send_seq, monotonic_ms());
+        clock_gettime(CLOCK_MONOTONIC, &ps->psc_last_tx);
+        return 1;
+    }
+    return 0;
+}
+
+/* Open OUR OWN PS MSCP$DISK client connection (remote=0, local=PS mscp). */
+static int ps_send_mscp_connect(int sock, int ifindex, struct peer_state *ps,
+                                const uint8_t our_hw_mac[6],
+                                const uint8_t our_src_logical[6])
+{
+    struct scs_connect_params cp;
+    memset(&cp, 0, sizeof(cp));
+    memcpy(cp.dst_mac, ps->eth_mac, 6);
+    memcpy(cp.src_mac, our_hw_mac, 6);
+    memcpy(cp.src_logical, our_src_logical, 6);
+    memcpy(cp.peer_logical, ps->logical, 6);
+    cp.local_conid = OVMX_PS_MSCP_CONID;
+    cp.remote_conid = 0;
+    cp.recv_ack = ps->vc.seq.recv_seq;
+    if (ps->psc_mscp_req_seq == 0) {
+        ps->psc_mscp_req_seq = scs_seq_advance(&ps->vc.seq); /* allocate once */
+    }
+    cp.send_seq = ps->psc_mscp_req_seq; /* retransmits reuse */
+    cp.incarnation = ps->incarnation;
+    uint8_t f[SCS_CONNECT_FRAME_LEN];
+    /* vms-760: post-NEW client MSCP connect -> data-phase msgtype 0x4b AND connect-class
+     * [8:10]=0x0001 (GROUNDED af2), NOT the builder's 0x5b / 0x03e8 fresh-formation values. */
+    if (scs_connect_build_mscp_request(&cp, f) == 0 &&
+        (f[30] = SCS_MSGTYPE_SEQAPP, f[22] = 0x01, f[23] = 0x00, 1) &&
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        ps->psc_mscp_sent = 1;
+        clock_gettime(CLOCK_MONOTONIC, &ps->psc_last_tx);
+        scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
+/* Send the op=3 CONNECT-CONFIRM on OUR PS MSCP$DISK connection (structurally the
+ * generic op=3 dir confirm, but on the MSCP conid pair). Fire-and-forget. */
+static int ps_send_mscp_confirm(int sock, int ifindex, struct peer_state *ps,
+                                const uint8_t our_hw_mac[6],
+                                const uint8_t our_src_logical[6])
+{
+    struct scs_dir_params dp;
+    memset(&dp, 0, sizeof(dp));
+    memcpy(dp.dst_mac, ps->eth_mac, 6);
+    memcpy(dp.src_mac, our_hw_mac, 6);
+    memcpy(dp.src_logical, our_src_logical, 6);
+    memcpy(dp.peer_logical, ps->logical, 6);
+    dp.remote_conid = ps->psc_mscp_remote_conid;
+    dp.local_conid = OVMX_PS_MSCP_CONID;
+    dp.recv_ack = ps->vc.seq.recv_seq;
+    dp.send_seq = scs_seq_advance(&ps->vc.seq);
+    dp.incarnation = ps->incarnation;
+    uint8_t f[SCS_DIR_CONFIRM_FRAME_LEN];
+    if (scs_dir_build_connect_confirm(&dp, f) == 0 &&
+        (f[30] = SCS_MSGTYPE_SEQAPP, 1) &&   /* post-NEW: data-phase 0x4b */
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        scs_vc_record_sent(&ps->vc, dp.send_seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
+/* vms-760: SCS connection-management credit/ready handshake. After a connection
+ * binds (op0/1/2/3), VAX1 runs op8->op9 and op6->op7 control exchanges on it, and
+ * GATES further admission (incl. accepting the joiner's own client connects) on the
+ * joiner answering them. GROUNDED af2 143.759 (member's dir conn) + 143.893 (joiner's):
+ * the answer is a standard connection-response reflection -- swap eth+cluster-logical,
+ * op -> op+1 (6->7 / 8->9), swap the Con.ID pair (rc<->lc), advance the shared VC seq.
+ * op6 is a 62-byte SCA request; op7/op9 are 58-byte (72-byte frame) -- we emit 72. */
+static int scs_reflect_credit(int sock, int ifindex, struct peer_state *ps,
+                              const uint8_t our_hw_mac[6],
+                              const uint8_t our_src_logical[6],
+                              const uint8_t *buf, size_t n)
+{
+    if (n < 72) {
+        return 0;
+    }
+    uint8_t r[72];
+    memcpy(r, buf, 72);                        /* base structure (drops op6's tail 4B) */
+    memcpy(r + 0, ps->eth_mac, 6);             /* eth dst = VAX1 */
+    memcpy(r + 6, our_hw_mac, 6);              /* eth src = OVMX */
+    memcpy(r + 14 + 2, ps->logical, 6);        /* dst cluster-logical = VAX1 (abs16) */
+    memcpy(r + 14 + 10, our_src_logical, 6);   /* src cluster-logical = OVMX (abs24) */
+    uint16_t rseq = (uint16_t)buf[34] | ((uint16_t)buf[35] << 8); /* their send_seq */
+    uint16_t sseq = scs_seq_advance(&ps->vc.seq);
+    /* recv_ack @abs 32/40/48, send_seq @abs 34/44 (dir_build_common layout). */
+    r[32] = (uint8_t)rseq; r[33] = (uint8_t)(rseq >> 8);
+    r[40] = (uint8_t)rseq; r[41] = (uint8_t)(rseq >> 8);
+    r[48] = (uint8_t)rseq; r[49] = (uint8_t)(rseq >> 8);
+    r[34] = (uint8_t)sseq; r[35] = (uint8_t)(sseq >> 8);
+    r[44] = (uint8_t)sseq; r[45] = (uint8_t)(sseq >> 8);
+    r[60] = (uint8_t)(buf[60] + 1);            /* op 6->7 / 8->9 */
+    r[61] = 0;
+    memcpy(r + 64, buf + 68, 4);               /* rc = their lc (address the requester) */
+    memcpy(r + 68, buf + 64, 4);               /* lc = their rc (our conid) */
+    return send_frame_to(sock, ifindex, ps->eth_mac, r, sizeof(r)) > 0;
+}
+
+/* vms-760: send OVMX's OWN op6 DISCONNECT-REQUEST to complete the bidirectional
+ * teardown of a transient directory connection. GROUNDED af2 143.76011: after acking
+ * VAX1's op6 (with op7), the joiner sends its own op6 (76-byte, 62-B SCA, tail
+ * 00 00 01 00) and VAX1 acks op7 -> the connection is fully closed, and ONLY THEN does
+ * the joiner open its own client dir connect. Built from the received VAX1 op6 frame
+ * (`buf`, 76 bytes): reflect identity + swap the Con.ID pair, op stays 6, keep the tail. */
+static int scs_send_disconnect(int sock, int ifindex, struct peer_state *ps,
+                               const uint8_t our_hw_mac[6],
+                               const uint8_t our_src_logical[6], const uint8_t *buf)
+{
+    uint8_t d[76];
+    memcpy(d, buf, 76);
+    memcpy(d + 0, ps->eth_mac, 6);
+    memcpy(d + 6, our_hw_mac, 6);
+    memcpy(d + 14 + 2, ps->logical, 6);
+    memcpy(d + 14 + 10, our_src_logical, 6);
+    uint16_t rseq = (uint16_t)buf[34] | ((uint16_t)buf[35] << 8);
+    uint16_t sseq = scs_seq_advance(&ps->vc.seq);
+    d[32] = (uint8_t)rseq; d[33] = (uint8_t)(rseq >> 8);
+    d[40] = (uint8_t)rseq; d[41] = (uint8_t)(rseq >> 8);
+    d[48] = (uint8_t)rseq; d[49] = (uint8_t)(rseq >> 8);
+    d[34] = (uint8_t)sseq; d[35] = (uint8_t)(sseq >> 8);
+    d[44] = (uint8_t)sseq; d[45] = (uint8_t)(sseq >> 8);
+    d[60] = 6; d[61] = 0;                       /* op stays 6 (disconnect-REQUEST) */
+    memcpy(d + 64, buf + 68, 4);                /* rc = VAX1 (address the peer) */
+    memcpy(d + 68, buf + 64, 4);                /* lc = OUR conid */
+    d[72] = 0x00; d[73] = 0x00; d[74] = 0x01; d[75] = 0x00; /* GROUNDED joiner op6 tail */
+    return send_frame_to(sock, ifindex, ps->eth_mac, d, sizeof(d)) > 0;
+}
+
+/* Fill the shared MSCP command envelope (identity + Con.ID pair + live counters
+ * + correlation token) for a PS disk-client command. */
+static void ps_fill_mscp(const struct peer_state *ps, const uint8_t our_hw_mac[6],
+                         const uint8_t our_src_logical[6],
+                         uint16_t class_token, uint16_t msg_id, uint16_t unit,
+                         uint16_t send_seq, struct scs_mscp_params *mp)
+{
+    memset(mp, 0, sizeof(*mp));
+    memcpy(mp->dst_mac, ps->eth_mac, 6);
+    memcpy(mp->src_mac, our_hw_mac, 6);
+    memcpy(mp->src_logical, our_src_logical, 6);
+    memcpy(mp->peer_logical, ps->logical, 6);
+    mp->remote_conid = ps->psc_mscp_remote_conid;
+    mp->local_conid = OVMX_PS_MSCP_CONID;
+    mp->recv_ack = ps->vc.seq.recv_seq;
+    mp->send_seq = send_seq;
+    mp->incarnation = ps->incarnation;
+    mp->class_token = class_token;
+    mp->msg_id = msg_id;
+    mp->unit = unit;
+}
+
+/* Send a SET CONTROLLER CHARACTERISTICS command on OUR PS MSCP connection (the
+ * FIRST MSCP message; opcode 0x04). Advances the shared send_seq once. */
+static int ps_send_scc(int sock, int ifindex, struct peer_state *ps,
+                       const uint8_t our_hw_mac[6],
+                       const uint8_t our_src_logical[6])
+{
+    if (ps->psc_mscp_msgid == 0) {
+        ps->psc_mscp_msgid = SCS_MSCP_SCC_MSGID0;
+    }
+    struct scs_mscp_params mp;
+    uint16_t seq = scs_seq_advance(&ps->vc.seq);
+    ps_fill_mscp(ps, our_hw_mac, our_src_logical, SCS_MSCP_SCC_CLASS,
+                 ps->psc_mscp_msgid, 0, seq, &mp);
+    uint8_t f[SCS_MSCP_FRAME_LEN];
+    if (scs_mscp_build_scc(&mp, f) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        ps->psc_scc_sent++;
+        ps->psc_mscp_msgid++; /* next command's correlation token */
+        clock_gettime(CLOCK_MONOTONIC, &ps->psc_last_tx);
+        scs_vc_record_sent(&ps->vc, seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
+/* Send a GET UNIT STATUS command for `unit` on OUR PS MSCP connection (opcode
+ * 0x03, NEXT-UNIT modifier). Advances the shared send_seq once. */
+static int ps_send_gus(int sock, int ifindex, struct peer_state *ps,
+                       const uint8_t our_hw_mac[6],
+                       const uint8_t our_src_logical[6], uint16_t unit)
+{
+    if (ps->psc_mscp_msgid == 0 || ps->psc_gus_sent == 0) {
+        /* GUS uses its own correlation-token stream, seeded from the grounded
+         * af2 GUS message-id; the SCC stream ends when GUS begins. */
+        ps->psc_mscp_msgid = (uint16_t)(SCS_MSCP_GUS_MSGID0 + ps->psc_gus_sent);
+    }
+    struct scs_mscp_params mp;
+    uint16_t seq = scs_seq_advance(&ps->vc.seq);
+    ps_fill_mscp(ps, our_hw_mac, our_src_logical, SCS_MSCP_GUS_CLASS,
+                 ps->psc_mscp_msgid, unit, seq, &mp);
+    uint8_t f[SCS_MSCP_FRAME_LEN];
+    if (scs_mscp_build_gus(&mp, f) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        ps->psc_gus_sent++;
+        ps->psc_mscp_msgid++;
+        clock_gettime(CLOCK_MONOTONIC, &ps->psc_last_tx);
+        scs_vc_record_sent(&ps->vc, seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *ifname = "br0";
@@ -1017,6 +1383,59 @@ int main(int argc, char **argv)
         }
         const uint8_t *src_mac = buf + OFF_ETH_SRC;
 
+        /* --- vms-760 server-first: answer VAX1's op8->op9 / op6->op7 SCS
+         * connection credit/ready handshake on ANY of OUR connections. VAX1 runs
+         * this after a connection binds and GATES admission (incl. accepting the
+         * joiner's own client connects) on it. rc@64 = OUR conid (peer addresses
+         * us); op@60 in {6,8}. Reflect it (scs_reflect_credit). --- */
+        if (getenv("OVMX_PURE_SERVER") != NULL && n >= 72 &&
+            (buf[30] == SCS_MSGTYPE_SEQAPP || buf[30] == SCS_DIR_OPCODE)) {
+            uint16_t cm_op = (uint16_t)buf[60] | ((uint16_t)buf[61] << 8);
+            uint32_t cm_rc = (uint32_t)buf[64] | ((uint32_t)buf[65] << 8) |
+                             ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
+            if ((cm_op == 6 || cm_op == 8) &&
+                (cm_rc & 0xFFFF0000u) == SCS_CONNECT_OVMX_CONID_BASE) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps != NULL) {
+                    if (!ps->vc.initialized) {
+                        scs_vc_init(&ps->vc);
+                    }
+                    scs_vc_note_recv(&ps->vc,
+                        (uint16_t)buf[34] | ((uint16_t)buf[35] << 8));
+                    scs_reflect_credit(sock, (int)ifindex, ps, our_hw_mac,
+                                       our_src_logical, buf, (size_t)n);
+                    /* vms-760: op6 on OUR server dir connection (SCS_DIR_OVMX_CONID)
+                     * is the LAST credit frame -- af2's joiner opens its own client
+                     * dir connect only AFTER this settles. Mark it done and kick off
+                     * the disk-discovery machine (once config has been exchanged). */
+                    if (cm_op == 6 && cm_rc == SCS_DIR_OVMX_CONID) {
+                        /* complete the bidirectional teardown: send OUR op6 too,
+                         * fully closing the server dir connection before we open
+                         * our own client dir connect (af2 143.76011). */
+                        if (n >= 76) {
+                            scs_send_disconnect(sock, (int)ifindex, ps, our_hw_mac,
+                                                our_src_logical, buf);
+                        }
+                        ps->psc_credit_done = 1;
+                        if (ps->cm_config_sent && ps->psc_step == PSC_IDLE &&
+                            !ps->psc_dir_sent &&
+                            ps_send_dir_connect(sock, (int)ifindex, ps,
+                                                our_hw_mac, our_src_logical)) {
+                            ps->psc_step = PSC_DIR_CONNECT;
+                            ps->psc_retx = 0;
+                            log_ts(stdout);
+                            printf(" SCSD-I-PSCLIENT, opened OUR SCS$DIRECTORY client"
+                                   " connect local=0x%08X seq=%u (disk-discovery step 1,"
+                                   " post-credit)\n",
+                                   (unsigned)OVMX_PS_DIR_CONID, ps->psc_dir_req_seq);
+                            fflush(stdout);
+                        }
+                    }
+                }
+                continue;
+            }
+        }
+
         /* --- vms-691: VC engine -- credit-ack every sequenced message the peer
          * sends us. Each 0x5b directory / 0x4b connect / 190-byte VC message
          * (send_seq != 0 at [20:22], abs 34) is answered by EXACTLY ONE 0x48
@@ -1105,6 +1524,27 @@ int main(int argc, char **argv)
                                " remote=0x%08X (server-first)\n",
                                c, (unsigned)OVMX_LOCAL_CONID, ps->remote_conid);
                         fflush(stdout);
+
+                        /* vms-760: OVMX has now reached NEW (answered VAX1's
+                         * config). A real joiner is ALSO a disk CLIENT -- KICK OFF
+                         * the pure-server disk-discovery machine: open OUR OWN
+                         * SCS$DIRECTORY connection back to VAX1 (step 1). VAX1 will
+                         * not COMMIT us to MEMBER until we complete MSCP disk
+                         * discovery on the connection-set this opens. This is
+                         * ADDITIVE to the server-side NEW path; it never opens a
+                         * VMS$VAXcluster VC (which would short-circuit admission). */
+                        if (ps->psc_credit_done && ps->psc_step == PSC_IDLE &&
+                            !ps->psc_dir_sent &&
+                            ps_send_dir_connect(sock, (int)ifindex, ps,
+                                                our_hw_mac, our_src_logical)) {
+                            ps->psc_step = PSC_DIR_CONNECT;
+                            ps->psc_retx = 0;
+                            log_ts(stdout);
+                            printf(" SCSD-I-PSCLIENT, opened OUR SCS$DIRECTORY client"
+                                   " connect local=0x%08X seq=%u (disk-discovery step 1)\n",
+                                   (unsigned)OVMX_PS_DIR_CONID, ps->psc_dir_req_seq);
+                            fflush(stdout);
+                        }
                     }
 
                     /* Answer the member-driven op 0x03 commit / op 0x05
@@ -1399,6 +1839,45 @@ int main(int argc, char **argv)
                     }
                 }
             }
+
+            /* vms-760 PURE-SERVER disk-client: stop-and-wait retransmit of the
+             * current outstanding PS drive frame if VAX1's response has not
+             * arrived. Reuses the stored send_seq (never advances -- 760mscp
+             * hole). Only the connect/lookup steps are retransmitted here; the
+             * happy path advances receive-driven and never needs this. */
+            if (getenv("OVMX_PURE_SERVER") != NULL && ps->psc_step != PSC_IDLE &&
+                ps->psc_step != PSC_DONE && ps->psc_retx < JOIN_RETX_MAX) {
+                long now_ms = monotonic_ms();
+                long last_ms = ps->psc_last_tx.tv_sec * 1000L +
+                               ps->psc_last_tx.tv_nsec / 1000000L;
+                if ((now_ms - last_ms) >= (long)JOIN_RETX_TIMEOUT_MS) {
+                    int sent = 0;
+                    switch (ps->psc_step) {
+                    case PSC_DIR_CONNECT:
+                        sent = ps_send_dir_connect(sock, (int)ifindex, ps,
+                                                   our_hw_mac, our_src_logical);
+                        break;
+                    case PSC_DIR_LOOKUP_TAPE:
+                    case PSC_DIR_LOOKUP_DISK:
+                        sent = ps_send_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
+                                                  our_src_logical, NULL, 1);
+                        break;
+                    case PSC_MSCP_CONNECT:
+                        sent = ps_send_mscp_connect(sock, (int)ifindex, ps,
+                                                    our_hw_mac, our_src_logical);
+                        break;
+                    default:
+                        break; /* SCC/GUS in flight advance receive-driven */
+                    }
+                    if (sent) {
+                        ps->psc_retx++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-PSCLIENT, retransmit disk-discovery step %d"
+                               " (retx %u)\n", ps->psc_step, ps->psc_retx);
+                        fflush(stdout);
+                    }
+                }
+            }
             continue;
         }
 
@@ -1534,6 +2013,170 @@ int main(int argc, char **argv)
                 }
             }
             continue;
+        }
+
+        /* (b0) vms-760 PURE-SERVER disk-CLIENT: drive + track OVMX's OWN
+         * SCS$DIRECTORY + MSCP$DISK connections back to VAX1 and run MSCP disk
+         * discovery (SET CONTROLLER CHARACTERISTICS + GET UNIT STATUS
+         * enumeration). Gated on OVMX_PURE_SERVER and keyed on the DISTINCT PS
+         * conids (OVMX_PS_DIR_CONID / OVMX_PS_MSCP_CONID), so the OVMX_JOIN_SEQ
+         * handlers below never see these frames (and vice-versa). Placed BEFORE
+         * (b1)/(b1.5)/(b2) so a PS-conid frame is intercepted here; the VC credit
+         * block above has already 0x48-acked it. NEVER opens a VMS$VAXcluster VC.
+         * A PS-conid frame always `continue`s from this block; a non-PS frame
+         * falls through untouched to (b1). */
+        if (do_connect && getenv("OVMX_PURE_SERVER") != NULL && n >= 72 &&
+            (buf[30] == SCS_MSGTYPE_SEQAPP || buf[30] == SCS_DIR_OPCODE ||
+             buf[30] == SCS_DIR_OPCODE_RETX)) {
+            uint32_t ps_rconid = (uint32_t)buf[64] | ((uint32_t)buf[65] << 8) |
+                                 ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
+            uint32_t ps_lconid = (uint32_t)buf[68] | ((uint32_t)buf[69] << 8) |
+                                 ((uint32_t)buf[70] << 16) | ((uint32_t)buf[71] << 24);
+            uint16_t ps_dop = (uint16_t)buf[60] | ((uint16_t)buf[61] << 8);
+
+            /* --- frames on OUR PS SCS$DIRECTORY connection --- */
+            if (ps_rconid == OVMX_PS_DIR_CONID && ps_lconid != 0) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps == NULL) {
+                    continue;
+                }
+                /* (A) VAX1's op=2 CONNECT-RESPONSE binds OUR dir connection ->
+                 * send op=3 confirm, then start the SYSAP lookups (MSCP$TAPE
+                 * first, expected miss; then MSCP$DISK), the choreography VAX1
+                 * requires before it accepts OUR MSCP$DISK connect. */
+                if (!ps->psc_dir_connected && ps_dop == SCS_DIR_OP_RESPONSE) {
+                    ps->psc_dir_remote_conid = ps_lconid;
+                    ps->psc_dir_connected = 1;
+                    ps_send_dir_confirm(sock, (int)ifindex, ps, our_hw_mac,
+                                        our_src_logical);
+                    ps->psc_step = PSC_DIR_LOOKUP_TAPE;
+                    ps->psc_retx = 0;
+                    ps_send_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
+                                       our_src_logical, "MSCP$TAPE", 0);
+                    log_ts(stdout);
+                    printf(" SCSD-I-PSCLIENT, OUR dir bound (remote=0x%08X); confirm +"
+                           " lookup MSCP$TAPE seq=%u (disk-discovery step 2-3)\n",
+                           ps_lconid, ps->psc_lookup_seq);
+                    fflush(stdout);
+                    continue;
+                }
+                /* (B) VAX1's lookup RESPONSE (op=0x0a) advances TAPE->DISK->connect.
+                 * HIT vs MISS = result [78:94] (abs 92) != "NOT PRESENT HERE". */
+                if (ps_dop == SCS_DIR_OP_LOOKUP && n >= 108) {
+                    int affirmative =
+                        memcmp(buf + 92, SCS_DIR_NOT_PRESENT, SCS_DIR_RESULT_LEN) != 0;
+                    ps->psc_retx = 0;
+                    if (ps->psc_step == PSC_DIR_LOOKUP_TAPE) {
+                        ps->psc_step = PSC_DIR_LOOKUP_DISK;
+                        ps_send_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
+                                           our_src_logical, "MSCP$DISK", 0);
+                        log_ts(stdout);
+                        printf(" SCSD-I-PSCLIENT, MSCP$TAPE %s; lookup MSCP$DISK"
+                               " seq=%u (disk-discovery step 4)\n",
+                               affirmative ? "HIT" : "miss", ps->psc_lookup_seq);
+                        fflush(stdout);
+                    } else if (ps->psc_step == PSC_DIR_LOOKUP_DISK && affirmative) {
+                        ps->psc_step = PSC_MSCP_CONNECT;
+                        ps_send_mscp_connect(sock, (int)ifindex, ps, our_hw_mac,
+                                             our_src_logical);
+                        log_ts(stdout);
+                        printf(" SCSD-I-PSCLIENT, MSCP$DISK HIT; OUR MSCP$DISK connect"
+                               " local=0x%08X seq=%u (disk-discovery step 5)\n",
+                               (unsigned)OVMX_PS_MSCP_CONID, ps->psc_mscp_req_seq);
+                        fflush(stdout);
+                    }
+                    continue;
+                }
+                continue; /* any other PS-dir frame (e.g. op=1 echo): already acked */
+            }
+
+            /* --- frames on OUR PS MSCP$DISK connection --- */
+            if (ps_rconid == OVMX_PS_MSCP_CONID && ps_lconid != 0) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps == NULL) {
+                    continue;
+                }
+                /* (A) VAX1's op=2 accept binds OUR MSCP connection -> send op=3
+                 * confirm, then the FIRST MSCP command (SET CONTROLLER
+                 * CHARACTERISTICS). af2 sends SCC twice; the 2nd is sent on the
+                 * first SCC-END below. */
+                if (!ps->psc_mscp_connected && ps_dop == SCS_DIR_OP_RESPONSE) {
+                    ps->psc_mscp_remote_conid = ps_lconid;
+                    ps->psc_mscp_connected = 1;
+                    ps_send_mscp_confirm(sock, (int)ifindex, ps, our_hw_mac,
+                                         our_src_logical);
+                    ps->psc_step = PSC_SCC;
+                    ps->psc_retx = 0;
+                    ps_send_scc(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
+                    log_ts(stdout);
+                    printf(" SCSD-I-PSCLIENT, OUR MSCP$DISK bound (remote=0x%08X);"
+                           " confirm + SET CONTROLLER CHARACTERISTICS (disk-discovery"
+                           " step 6)\n", ps_lconid);
+                    fflush(stdout);
+                    continue;
+                }
+                /* (B) an MSCP END response (opcode | 0x80). MSCP data frames
+                 * carry op[46:48]=0x0a (== SCS_DIR_OP_LOOKUP); gating on it keeps
+                 * a retransmitted op=2 accept from ever being mis-parsed as data. */
+                struct scs_mscp_view mvv;
+                if (ps_dop == SCS_DIR_OP_LOOKUP &&
+                    scs_mscp_parse(buf, (size_t)n, &mvv) == 0 && mvv.is_end) {
+                    if (mvv.opcode == (SCS_MSCP_OP_SET_CTLR_CHAR | SCS_MSCP_END_BIT) &&
+                        ps->psc_step == PSC_SCC) {
+                        /* af2 sends SCC TWICE before GUS: the 2nd SCC on the first
+                         * SCC-END; begin the GUS enumeration on the second. */
+                        if (ps->psc_scc_sent < 2) {
+                            ps_send_scc(sock, (int)ifindex, ps, our_hw_mac,
+                                        our_src_logical);
+                            log_ts(stdout);
+                            printf(" SCSD-I-PSCLIENT, SCC-END #%ld (status 0x%04x);"
+                                   " 2nd SCC sent\n", ps->psc_scc_sent, mvv.status);
+                            fflush(stdout);
+                        } else {
+                            ps->psc_step = PSC_GUS;
+                            ps->psc_gus_sent = 0;
+                            ps->psc_mscp_msgid = 0; /* reseed the GUS token stream */
+                            ps_send_gus(sock, (int)ifindex, ps, our_hw_mac,
+                                        our_src_logical, 0x0001);
+                            log_ts(stdout);
+                            printf(" SCSD-I-PSCLIENT, SCC complete; GET UNIT STATUS"
+                                   " enumeration begins (unit 0x0001, step 7)\n");
+                            fflush(stdout);
+                        }
+                    } else if (mvv.opcode ==
+                                   (SCS_MSCP_OP_GET_UNIT_STATUS | SCS_MSCP_END_BIT) &&
+                               ps->psc_step == PSC_GUS) {
+                        if (mvv.status == SCS_MSCP_ST_OFFLINE) {
+                            /* end-of-list terminator: disk discovery COMPLETE. VAX1
+                             * self-triggers reconfiguration -> op0x03 COMMIT ->
+                             * MEMBER on its next poll (~1.7s); no further client
+                             * frame is required (af2 grounded). */
+                            ps->psc_step = PSC_DONE;
+                            log_ts(stdout);
+                            printf(" SCSD-I-PSDONE, MSCP disk discovery complete:"
+                                   " %ld unit(s) AVAILABLE + OFFLINE terminator."
+                                   " Awaiting VAX1 reconfiguration -> MEMBER\n",
+                                   ps->psc_gus_avail);
+                            fflush(stdout);
+                        } else {
+                            if (mvv.status == SCS_MSCP_ST_AVAILABLE) {
+                                ps->psc_gus_avail++;
+                            }
+                            /* NEXT-UNIT: next unit = returned unit-word + 1. */
+                            uint16_t next_unit = (uint16_t)(mvv.unit + 1);
+                            ps_send_gus(sock, (int)ifindex, ps, our_hw_mac,
+                                        our_src_logical, next_unit);
+                            log_ts(stdout);
+                            printf(" SCSD-I-PSCLIENT, GUS-END unit=0x%04x status=0x%04x;"
+                                   " next GUS unit=0x%04x (%ld avail)\n",
+                                   mvv.unit, mvv.status, next_unit, ps->psc_gus_avail);
+                            fflush(stdout);
+                        }
+                    }
+                    continue;
+                }
+                continue; /* any other PS-mscp frame (e.g. op=1 echo): already acked */
+            }
         }
 
         /* (b1) vms-d94: the member ACCEPTS OUR active-joiner VMS$VAXcluster

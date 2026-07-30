@@ -913,13 +913,22 @@ static int cmd_show_status(struct dcl_command *cmd)
  *
  *   To read a device you must name one. SHOW TERMINAL names the terminal
  *   THIS JOB is on, and on VMS that binding lives in the executive --
- *   the job's terminal is recorded in the executive's process database,
- *   which OVMX does not have (src/vmsprocess/vms_pcb.c is a per-process
- *   block). vms-fb9 DELETED the three fakes that used to answer the
- *   question (VMS_TERMINAL, VMS_DEVICE_TYPE, the private _FTA pool --
- *   see src/vmsdcl/dcl_main.c), so ctx->terminal.device_name is now
- *   EMPTY rather than invented. Printing no name is the correct state:
- *   an unanswerable question gets no answer (rule 10).
+ *   the job's terminal is recorded in the executive's process database.
+ *   vms-fb9 DELETED the three fakes that used to answer the question
+ *   (VMS_TERMINAL, VMS_DEVICE_TYPE, the private _FTA pool -- see
+ *   src/vmsdcl/dcl_main.c), so ctx->terminal.device_name is now EMPTY
+ *   rather than invented. Printing no name is the correct state: an
+ *   unanswerable question gets no answer (rule 10).
+ *
+ *   CHECKED, 2026-07-30, so the next reader does not re-derive it: the
+ *   executive process table that landed with vms-9fc DOES NOT CARRY A
+ *   TERMINAL. struct vms_procinfo (src/kernel/vms_ioctl.h) holds
+ *   vms_pid, linux_pid, prcnam, uic, current_mode and cur_privs and
+ *   nothing else. So vms-8019, which converts the process-table READERS
+ *   (SHOW SYSTEM, SHOW PROCESS), does not unblock this either -- there
+ *   is no field for it to read. What SHOW TERMINAL needs is a
+ *   job-to-terminal binding IN the executive, established where the
+ *   session's channel to the device is, and that does not exist yet.
  *
  *   Do NOT close this gap by picking a device -- not OPA0: because it is
  *   the only terminal in the table, not ttyname(), not isatty(). Any of

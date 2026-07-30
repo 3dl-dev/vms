@@ -37,7 +37,16 @@
 #include "vmsqueue.h"
 #include "descrip.h"
 #include "jpidef.h"
-/* The executive process table's reader (SHOW SYSTEM enumerates it). */
+/* The kernel-interface client: SHOW SYSTEM enumerates the executive process
+ * table through it, and SHOW DEVICE reads the executive's device table
+ * through it (vms-fb9). This is the same client src/libvms's system
+ * services call; DCL uses it directly because the public $DEVICE_SCAN /
+ * $GETDVI in src/libvms/syssvc/sys_device.c are themselves still
+ * fabricators (a static scan_devices[] table and statvfs() of "/"), pinned
+ * in that shape by host ctests that assert their invented answers
+ * (tests/libvms/test_lib_fb3.c). Converting those services is tracked
+ * separately -- it is not resolvable here without deleting host coverage,
+ * which this item is explicitly forbidden to do. */
 #include "vms_kif.h"
 
 /*
@@ -995,113 +1004,130 @@ static int cmd_show_protection(struct dcl_command *cmd)
 }
 
 /*
- * SHOW DEVICE - List mounted filesystems as VMS devices.
+ * Print one SHOW DEVICE row, emitting the column header before the
+ * first one. Lazy so that a scan matching nothing prints the oracle's
+ * bare "%SYSTEM-W-NOSUCHDEV" with no header above it, exactly as
+ * section 6 of docs/oracle/vax73-terminal-device.md recorded it.
  *
- * STOPGAP -- FACADE, NOT VMS (vms-d0b). This walks /proc/mounts and a
- * process-local vms_device_table[], and where it finds nothing it
- * prints a hardcoded stub row. On VMS, SHOW DEVICE is a READER of the
- * executive's I/O database -- it cannot invent a device, and every
- * process sees the same list.
+ * Column geometry is taken character-for-character from section 4 of
+ * that file: the name occupies columns 0-23, the status 24-29, and the
+ * error count is right-aligned ending at column 45.
+ */
+static void show_device_row(const struct vms_devinfo *info, int *rows)
+{
+    if (*rows == 0) {
+        printf("Device                  Device           Error\n");
+        printf(" Name                   Status           Count\n");
+    }
+    printf("%-24s%-6s%16u\n", info->devnam, "Online", info->errcnt);
+    (*rows)++;
+}
+
+/*
+ * SHOW DEVICE - a READER of the executive's device table (vms-fb9).
  *
- * The executive now has that table (src/kernel/vms_devtab.c;
- * $DEVICE_SCAN over it is vms_kif_devscan()). Converting this function
- * to read it is blocked on DCL being buildable into the QEMU runtime --
- * see the vms-d0b escalation. Note also that no terminal appears in
- * this listing at all today, though OPA0: is in the executive's table:
- * see docs/oracle/vax73-terminal-device.md for the format VMS uses for
- * a terminal row.
+ * WHAT THIS USED TO BE, and why it is gone. Until vms-fb9 this function
+ * walked /proc/mounts, translated Linux mount points into invented
+ * "$1$DGAn:" names, appended a process-local vms_device_table[] that
+ * MOUNT/DISMOUNT keep in this process's own memory, and -- if all of
+ * that produced nothing -- printed a hardcoded "$1$DGA0: Mounted"
+ * stub row. Not one of those rows came from anywhere another process
+ * could see, and the stub row was printed on a system with no devices
+ * at all. On VMS, SHOW DEVICE is a READER of the executive's I/O
+ * database: it cannot invent a device, and every process on the node
+ * sees the same list (CLAUDE.md rule 11 corollary).
+ *
+ * WHAT IT IS NOW: $DEVICE_SCAN / $GETDVI over the executive-resident
+ * device table in vms.ko (src/kernel/vms_devtab.c), read through
+ * vms_kif_devscan() / vms_kif_getdvi_devnam(). Every field printed
+ * comes out of that table. If the executive reports no matching
+ * device, nothing is printed but the oracle's message -- there is no
+ * stub row and no second source to fall back to.
+ *
+ * FORMAT, oracle-pinned (docs/oracle/vax73-terminal-device.md):
+ *   section 4 -- the two header lines and the terminal row, verbatim
+ *                from OpenVMS VAX V7.3 on the ~/vax lab.
+ *   section 6 -- a device that does not exist prints ONLY
+ *                "%SYSTEM-W-NOSUCHDEV, no such device available",
+ *                with no column header above it. That is why the
+ *                header is emitted lazily, before the first row,
+ *                rather than unconditionally at the top.
+ *
+ * DEVICE STATUS. The oracle prints "Online" for OPA0:. The executive's
+ * device table carries no online/offline field, and a device that is
+ * not in the table is not reported at all -- so "Online" is not a value
+ * read from a field, it is the only state a row in this table can be
+ * in. It is written as a constant rather than dressed up as a lookup
+ * precisely so nobody reads it as a characteristic that was measured.
+ * The oracle's /FULL form (section 5) additionally reports owner,
+ * owner UIC, owner PID, reference count, device protection and default
+ * buffer size; SHOW DEVICE/FULL is not implemented here, and no part
+ * of it is half-printed into the brief form.
+ *
+ * DEVICE-NAME ARGUMENT. The name is handed to the executive as-is and
+ * the executive resolves it -- including the physical-name folding
+ * rule (upper case, one trailing colon, no leading underscore) and the
+ * SS$_IVDEVNAM / SS$_NOSUCHDEV verdicts, which live in
+ * src/kernel/vms_devtab.c normalize_devnam() and nowhere else. DCL
+ * does not re-implement or second-guess that rule; a reader that
+ * decided for itself which names exist would be the same defect one
+ * level up.
+ *
+ * NOT implemented, and deliberately not guessed at: the oracle records
+ * that "SHOW DEVICE TT" -- a device CLASS prefix, which OPA0: does not
+ * begin with -- returns the terminal row on the lab (section 4). The
+ * rule VMS uses to get from "TT" to OPA0: is not published in anything
+ * this work has, so it is left unimplemented rather than approximated
+ * (rule 10). A class prefix reports NOSUCHDEV here.
  */
 static int cmd_show_device(struct dcl_command *cmd)
 {
-    (void)cmd;
+    const char *want = (cmd && cmd->param_count >= 2) ? cmd->params[1] : NULL;
 
-    printf("Device                  Device           Error    Volume"
-           "         Free  Trans Mnt\n");
-    printf(" Name                   Status           Count     Label"
-           "        Blocks Count Cnt\n");
+    /*
+     * Bind this thread to the executive. The result is deliberately NOT
+     * tested, for the same reason src/libvms/syssvc/sys_lock.c's
+     * bind_to_executive() does not test it: the condition it would test
+     * for -- an unreachable executive -- is one OVMX is never in, because
+     * PID 1 refuses to bring the system up without /dev/vms and pins it
+     * open for the life of the system (src/ovmx_init/ovmx_init.c,
+     * executive_attach). Adding an "if the executive is missing" branch
+     * here would be a handler for a state VMS cannot be in (rule 10), and
+     * the only thing such a branch could usefully do is fabricate rows --
+     * which is the defect this rewrite removes.
+     */
+    (void)vms_kif_open();
 
-    FILE *fp = fopen("/proc/mounts", "r");
-    if (!fp) {
-        /* Fallback: show at least root */
-        struct statvfs svfs;
-        if (statvfs("/", &svfs) == 0) {
-            unsigned long long free_blocks =
-                (unsigned long long)svfs.f_bavail *
-                (svfs.f_bsize / 512 ? svfs.f_bsize / 512 : 1);
-            printf("$1$DGA0:              Mounted              0  %-14s%9llu     1   1\n",
-                   "OVMXSYS", free_blocks);
+    struct vms_devinfo info;
+    int rows = 0;
+
+    if (want) {
+        uint32_t status = vms_kif_getdvi_devnam(want, &info);
+
+        if (status == SS$_IVDEVNAM) {
+            /* Oracle section 9, from VMS's own message facility:
+             * "%SYSTEM-W-IVDEVNAM, invalid device name". */
+            dcl_error("SYSTEM", 0, "IVDEVNAM", "invalid device name");
+            return SS$_IVDEVNAM;
         }
-        return SS$_NORMAL;
+        if (status & 1) {
+            info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+            show_device_row(&info, &rows);
+        }
+    } else {
+        uint32_t index = 0;
+
+        while (vms_kif_devscan(&index, &info) == SS$_NORMAL) {
+            info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+            show_device_row(&info, &rows);
+        }
     }
 
-    char line[512];
-    int dev_index = 0;
-    while (fgets(line, sizeof(line), fp) && dev_index < 16) {
-        char dev[256], mntpt[256], fstype[64], opts[256];
-        int freq, passno;
-        if (sscanf(line, "%255s %255s %63s %255s %d %d",
-                   dev, mntpt, fstype, opts, &freq, &passno) < 3)
-            continue;
-
-        /* Skip pseudo filesystems */
-        if (strcmp(fstype, "proc") == 0 || strcmp(fstype, "sysfs") == 0 ||
-            strcmp(fstype, "devtmpfs") == 0 || strcmp(fstype, "tmpfs") == 0 ||
-            strcmp(fstype, "cgroup") == 0 || strcmp(fstype, "cgroup2") == 0 ||
-            strcmp(fstype, "devpts") == 0 || strcmp(fstype, "mqueue") == 0 ||
-            strcmp(fstype, "hugetlbfs") == 0 || strcmp(fstype, "pstore") == 0 ||
-            strcmp(fstype, "securityfs") == 0 || strcmp(fstype, "debugfs") == 0 ||
-            strcmp(fstype, "bpf") == 0 || strcmp(fstype, "tracefs") == 0)
-            continue;
-
-        /* Build VMS device name */
-        char vms_dev[32];
-        snprintf(vms_dev, sizeof(vms_dev), "$1$DGA%d:", dev_index);
-
-        /* Build a short label from mount point */
-        char label[16];
-        if (strcmp(mntpt, "/") == 0) {
-            strncpy(label, "OVMXSYS", sizeof(label) - 1);
-        } else {
-            /* Use last path component, uppercased, max 12 chars */
-            char *last = strrchr(mntpt, '/');
-            const char *base = last ? last + 1 : mntpt;
-            size_t li;
-            for (li = 0; li < sizeof(label) - 1 && base[li]; li++)
-                label[li] = (char)toupper((unsigned char)base[li]);
-            label[li] = '\0';
-            if (li == 0) {
-                strncpy(label, "DISK", sizeof(label) - 1);
-                label[sizeof(label) - 1] = '\0';
-            }
-        }
-
-        /* Get free blocks (512-byte) */
-        unsigned long long free_512 = 0;
-        struct statvfs svfs;
-        if (statvfs(mntpt, &svfs) == 0) {
-            unsigned long bsize = svfs.f_bsize ? svfs.f_bsize : 512;
-            free_512 = (unsigned long long)svfs.f_bavail * (bsize / 512 + (bsize % 512 ? 1 : 0));
-        }
-
-        printf("%-24s Mounted              0  %-14s%9llu     1   1\n",
-               vms_dev, label, free_512);
-        dev_index++;
-    }
-    fclose(fp);
-
-    if (dev_index == 0) {
-        /* Nothing printed — show a stub */
-        printf("$1$DGA0:              Mounted              0  %-14s%9d     1   1\n",
-               "OVMXSYS", 0);
-    }
-
-
-    /* Show user-mounted devices from the device table */
-    for (int i = 0; i < vms_device_count; i++) {
-        const char *status = vms_device_table[i].mounted ? "Mounted" : "Dismounted";
-        printf("%-24s %-14s       0  %-14s%9d     1   1\n",
-               vms_device_table[i].vms_name, status,
-               vms_device_table[i].volume_label, 0);
+    if (rows == 0) {
+        /* Oracle section 6, verbatim: SHOW DEVICE ZZA0: ->
+         * "%SYSTEM-W-NOSUCHDEV, no such device available". */
+        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+        return SS$_NOSUCHDEV;
     }
 
     return SS$_NORMAL;
@@ -1218,12 +1244,40 @@ static int cmd_show_status(struct dcl_command *cmd)
  * the device, which is why what one process sets, another sees.
  *
  * The executive now has that table (src/kernel/vms_devtab.c, proven
- * A-writes/B-reads by tests/qemu/test_kmod_devtab.c). Converting this
- * function to read it is blocked on DCL being buildable into the QEMU
- * runtime -- see the vms-d0b escalation. The characteristic list this
- * prints also does not match the oracle: see
- * docs/oracle/vax73-terminal-device.md for what VMS V7.3 actually
- * displays.
+ * A-writes/B-reads by tests/qemu/test_kmod_devtab.c). The characteristic
+ * list this prints also does not match the oracle: see
+ * docs/oracle/vax73-terminal-device.md section 2 for what VMS V7.3
+ * actually displays.
+ *
+ * STILL NOT CONVERTED, AND WHY -- restated 2026-07-30 (vms-fb9), because
+ * the reason changed and the old one no longer applies. SHOW DEVICE
+ * above IS now a reader; this is not, and the blocker is NOT the test
+ * harness any more:
+ *
+ *   To read a device you must name one. SHOW TERMINAL names the terminal
+ *   THIS JOB is on, and on VMS that binding lives in the executive --
+ *   the job's terminal is recorded in the executive's process database,
+ *   which OVMX does not have (src/vmsprocess/vms_pcb.c is a per-process
+ *   block). vms-fb9 DELETED the three fakes that used to answer the
+ *   question (VMS_TERMINAL, VMS_DEVICE_TYPE, the private _FTA pool --
+ *   see src/vmsdcl/dcl_main.c), so ctx->terminal.device_name is now
+ *   EMPTY rather than invented. Printing no name is the correct state:
+ *   an unanswerable question gets no answer (rule 10).
+ *
+ *   Do NOT close this gap by picking a device -- not OPA0: because it is
+ *   the only terminal in the table, not ttyname(), not isatty(). Any of
+ *   those is this process deciding what it is on, which is the exact
+ *   defect just deleted. The fix is the executive-resident process/
+ *   terminal binding.
+ *
+ * A SECOND, INDEPENDENT BLOCKER, verified in code this session: nothing
+ * in production ever calls vms_kif_register(), and src/kernel/vms_module.c
+ * rejects every ioctl from an unregistered process with -ESRCH ("All other
+ * ioctls require a registered process"). So even the SHOW DEVICE reader
+ * above cannot get a row out of a real /dev/vms yet. That is tracked
+ * separately and is not fixable here -- registering DCL with a
+ * self-chosen VMS PID and privilege mask would be exactly the identity
+ * facade being deleted elsewhere.
  */
 static int cmd_show_terminal(struct dcl_command *cmd)
 {

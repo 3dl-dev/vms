@@ -641,11 +641,23 @@ static int cm_response_shape(uint8_t category, uint8_t opcode)
          * This is the same class of defect as the PARAMS-derived close, one
          * category over, and it is the next thing to ground: what does a real
          * joiner -- which also holds no locks -- send for cat 0x02 op 0x0d?
-         * Specimen: captures/ovmx-760-lockmgrerr-20260730.pcap. Until that is
-         * answered from the reference, this echo is KNOWN-WRONG, not merely
-         * ungrounded. Left in place only because refusing it re-freezes the
-         * barrier; both failures are recoverable, neither is correct. */
-        return CM_RSP_ECHO;
+         * Specimen: captures/ovmx-760-lockmgrerr-20260730.pcap.
+         *
+         * Until that is answered from the reference, the echo is KNOWN-WRONG,
+         * not merely ungrounded, so it is NO LONGER THE DEFAULT. Both available
+         * behaviours fail, but they do not fail equally:
+         *   default (refuse)      -> the barrier re-freezes at step 5. The
+         *                            cluster stays up and the lab survives.
+         *   OVMX_DLM_ECHO=1       -> the barrier advances, and real VAXes take a
+         *                            fatal LOCKMGRERR.
+         * A run that crashes the cluster costs a ~6.5 min lab reset and destroys
+         * the oracle you were trying to read, so the safe failure is the one you
+         * get unless you deliberately ask for the other. Keep BOTH until the
+         * shape is grounded -- the pair is the bisect. */
+        if (getenv("OVMX_DLM_ECHO") != NULL) {
+            return CM_RSP_ECHO;
+        }
+        return CM_RSP_NONE;
     case SCS_MEMBER_CAT_MEMBERSHIP:
         /* Closes the transaction. Token + our OWN parameter block, never an
          * echo -- echoing this is what bugchecked VAX1 previously. */

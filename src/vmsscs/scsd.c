@@ -291,6 +291,10 @@ enum join_step {
  * with a wide margin while staying far inside the transition's own timeout (the
  * reference holds step 5 for 89 ms without complaint). Tunable for bisecting. */
 #define JOIN_BARRIER_GO_DELAY_MS 3u
+/* vms-760: cap on how long we hold the deferred op 0x02 waiting for a peer we
+ * have a channel to but no config from. Beyond this we proceed with whoever has
+ * configured, rather than let one silent peer block the join indefinitely. */
+#define JOIN_CFG2_MAX_WAIT_MS 20000u
 /* vms-760: cat-0x04 ack cadence -- ack once per this many unacked coordinator
  * messages. SET TO 1 DELIBERATELY. The reference joiner batches at one per three
  * (85 acks for a 254-message burst), but our poll loop is HELLO-driven and far too
@@ -2607,10 +2611,38 @@ int main(int argc, char **argv)
              * previous behaviour) leaves the dialogue permanently half-finished.
              * The ~5 s delay is taken from the reference; what the real joiner
              * actually waits on is NOT grounded (see spec 5(z)). */
+            /* vms-760: the candidate set must SETTLE before we pick.
+             * coord9: the timer fired 4.9 s after VAX2's config while VAX3 --
+             * the actual coordinator -- had not yet exchanged config with us at
+             * all. cm_pick_coordinator() correctly returned the highest peer it
+             * could see, which was the wrong node, and VAX2 acked the op 0x02
+             * without proposing anything. Picking early is the same bug as
+             * picking by the wrong rule.
+             * So: wait for the delay to elapse since the LAST peer configured,
+             * and, while any peer we have an open channel to has still not
+             * configured, keep waiting -- bounded, so a permanently silent peer
+             * cannot block the join forever. */
+            long cfg_settle_ms = 0;
+            int cfg_waiting_on_peer = 0;
+            for (int pi = 0; pi < OVMX_MAX_PEERS; pi++) {
+                if (!peers[pi].in_use) {
+                    continue;
+                }
+                if (peers[pi].cfg_sent && peers[pi].cfg_ms > cfg_settle_ms) {
+                    cfg_settle_ms = peers[pi].cfg_ms;
+                }
+                if (peers[pi].channel_up && !peers[pi].cfg_sent) {
+                    cfg_waiting_on_peer = 1;
+                }
+            }
+            if (cfg_waiting_on_peer && cfg_settle_ms != 0 &&
+                (monotonic_ms() - cfg_settle_ms) < (long)JOIN_CFG2_MAX_WAIT_MS) {
+                cfg_settle_ms = monotonic_ms(); /* hold the timer open */
+            }
             if (do_connect && ps->cfg_sent && !ps->joiner_cfg2_sent &&
                 (getenv("OVMX_CFG2_ALL") != NULL ||
                  cm_pick_coordinator(peers) == ps) &&
-                (monotonic_ms() - ps->cfg_ms) >= (long)JOIN_CFG2_DELAY_MS) {
+                (monotonic_ms() - cfg_settle_ms) >= (long)JOIN_CFG2_DELAY_MS) {
                 struct scs_member_params mp;
                 memset(&mp, 0, sizeof(mp));
                 memcpy(mp.dst_mac, ps->eth_mac, 6);

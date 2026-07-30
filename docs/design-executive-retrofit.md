@@ -46,9 +46,79 @@ exercises.
    `/dev/vms`. Docker is **not** a runtime. Docker as *build/test tooling* is fine and expected —
    `distro/Dockerfile.bootable`, `src/kernel/Dockerfile`, `tests/qemu/Dockerfile` produce and test
    the real runtime. **Never collapse those two.**
-2. **No silent fallback.** If `/dev/vms` is absent, **fail honestly** (`SS$_NOSUCHDEV`, as
-   `sys_lock.c` already does). Never fake per-process success. Enforced by
-   `tests/integration/test_runtime_target.sh` (arrives with PR #1).
+2. **The executive is integral — its absence is made unreachable, not handled.** *(Corrected
+   2026-07-29; this constraint previously said "if `/dev/vms` is absent, fail honestly with
+   `SS$_NOSUCHDEV`, as `sys_lock.c` already does". That rule is **superseded**, and every item
+   written under it is wrong on this point.)*
+
+   Apply the governing rule — *what would VMS do?* On OpenVMS, SYSBOOT loads the executive before
+   any process exists; **VMS is never in the state where a running system has no executive**. So
+   the deliverable is not an error path. It is a guarantee:
+
+   - **Boot is fatal.** `src/ovmx_init/ovmx_init.c` (`executive_attach`) refuses to bring the
+     system up unless `vms.ko` loads and `/dev/vms` opens. No image can ever run without the
+     executive.
+   - **The executive is pinned.** PID 1 holds the `/dev/vms` descriptor for the life of the
+     system. `vms.ko`'s `file_operations` carry `.owner = THIS_MODULE`, so that open descriptor
+     holds a module reference and `rmmod vms` fails with `EBUSY` while OVMX runs. Mid-life loss is
+     **prevented**, not responded to.
+   - **Therefore per-call fallbacks are deleted, not corrected.** `sys_lock.c`'s `ensure_kif_open()`
+     status return and `vms_kif.c`'s absent-fd guard are gone. Do not reintroduce a status for a
+     condition no caller can observe.
+   - **`SS$_NOSUCHDEV` keeps its real meaning** — a caller named a VMS device that does not exist.
+     Only the "the executive is missing" uses were wrong. Classify each site; never blanket-replace.
+
+   Why the old rule was itself a defect: `SS$_NOSUCHDEV`-on-absence encoded "OVMX runs, minus the
+   executive", and no such system exists. A handled-but-impossible-on-VMS state is the same class of
+   lie as a per-process fake that reports success — it just fails more politely. Enforced by
+   `tests/integration/test_runtime_target.sh`.
+
+   **The fail-stop boot turned out to be VMS-authentic, not an OVMX invention.** Pinned to the
+   oracle (`~/vax/cluster`, OpenVMS VAX V7.3, node VAX2, 2026-07-29): renaming
+   `SYS$COMMON:[SYS$LDR]EXCEPTION.EXE` aside and cold-booting `B/R5:10000000 DUA0` produces
+
+   ```
+   %EXECINIT, error loading system file - EXCEPTION.EXE R0 = 00000910
+   ?06 HLT INST
+           PC = 871306A6
+   >>>
+   ```
+
+   and **the machine halts** — no degraded boot, no bugcheck, no crash dump. Capture archived at
+   `~/vax/cluster/captures/vax2-execinit-missing-exception-2026-07-29.log`. Four properties are
+   reproduced deliberately, because they are the authenticity tells: the facility is **EXECINIT**,
+   not SYSBOOT; there is **no severity letter and no mnemonic**; the image is a **bare filename**;
+   and the status is printed raw as `R0 = ` + 8 hex digits.
+
+   This also **disproves an earlier wave's `%SYSBOOT-F-LDFAIL`** — the complete VAX 7.3 SYSBOOT
+   message set (`HELP/MESSAGE/FACILITY=SYSBOOT`, ~48 entries) contains no such mnemonic. The
+   independently useful corroboration is `SYSBOOT-E-I/O error reading file`, whose shipped Help
+   Message text states that if the error occurred reading a system loadable image, *"SYSBOOT
+   terminates the bootstrap operation"*.
+
+   One thing remains a genuine **OVMX design choice**, labelled per CLAUDE.md Rule 8 and never
+   presented as VMS-authentic: the `%OVMX-I-EXECINIT` detail line carrying the underlying Linux
+   error (VMS prints nothing more — `?06 HLT INST` comes from the VAX console firmware, which OVMX
+   has no analogue of).
+
+   **Correction (vms-a35 round 2, Rule 10):** the original wave of this work reported `/dev/vms`
+   failing to *open*, and any module-load errno other than the oracle's `ENOENT`, in the SAME
+   `%EXECINIT, error loading system file - <FILE>` shape as the oracle-pinned case, just without an
+   `R0`. That was itself an invented VMS message — the oracle's `%EXECINIT` line always carries
+   `R0 = `, so a bare `%EXECINIT` with no `R0` does not exist in VMS, and wearing the facility name
+   for a condition VMS is never in is Rule 10's illegal third answer. Both non-oracle-pinned
+   failures now report through a distinct `%OVMX-F-EXECINIT` line (`ovmx_exec_halt()` in
+   `ovmx_init.c`) instead, and the executive-attached success line moved from `%STARTUP-I-EXEC` to
+   `%OVMX-I-EXEC` for the same reason — a message naming a Linux device node is an OVMX event, not
+   a VMS one. `tests/qemu/test_executive_integral.sh` Boot C is the negative control for the
+   `/dev/vms`-absent path (vms.ko loads via a substitute module that registers no device node).
+
+   **Not silently "fixed" here:** the oracle's `R0 = 00000910` decodes via `F$MESSAGE` to
+   `%SYSTEM-W-NOSUCHFILE`, while in-tree `ssdef.h` defines `SS$_NOSUCHFILE` as 2696 (0xA88). That
+   drift is real and tracked (vms-556 / vms-c90, alongside `SS$_NOSUCHDEV` 2680 vs the oracle's
+   2312) and needs **operator sign-off** — a VMS constant is never self-certified. `ovmx_init.c`
+   uses the observed value only to reproduce an observed console line, and says so at the
+   definition.
 3. **Not done until proven against a real `/dev/vms`.** A userspace unit test that never loads
    `vms.ko` does not close an executive item.
 4. **Clean-room** (CLAUDE.md Rule 8) still applies to any VMS structure layout or constant.

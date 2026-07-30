@@ -94,6 +94,19 @@ jobs:
             ovmx-boot:latest \
             /test.sh
 
+      # vms-0ff. Reuses the image built above (no extra build). Boots the REAL
+      # runtime twice: once with the executive present (must come up), once
+      # with vms.ko removed from the initramfs (must NOT come up). The second
+      # boot is a negative control — it proves this check can actually go red,
+      # which is the only thing that distinguishes a gate from decoration.
+      - name: The executive is integral — OVMX must not boot without it
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_executive_integral.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
   # -----------------------------------------------------------------------
   # Job 3b: Kernel Executive (vms-e4d, epic vms-6b8 PHASE 0 HARD BARRIER)
   #
@@ -137,9 +150,13 @@ jobs:
   # harness with --build-arg NEGATIVE_CONTROL=1, which patches init.sh to skip
   # insmod of vms.ko (simulating the executive being absent) while everything
   # else — building vms.ko itself, loading vmsfs.ko, the test binaries — stays
-  # real. Every test that opens /dev/vms then fails honestly ("cannot open
-  # /dev/vms", the same SS$_NOSUCHDEV path src/libvms/syssvc/sys_lock.c already
-  # takes) instead of silently passing. run_tests.sh exits 1 in that case, so
+  # real. Every test that opens /dev/vms then fails ("cannot open /dev/vms")
+  # instead of silently passing. (This comment used to add "the same
+  # SS$_NOSUCHDEV path sys_lock.c already takes"; that path was DELETED by
+  # vms-0ff — an unreachable executive is now prevented at boot, not reported
+  # per call. The harness is a test rig deliberately booted without an
+  # executive, which is why it can still observe a state the product cannot.)
+  # run_tests.sh exits 1 in that case, so
   # THIS job inverts the check: it PASSES only if the container run fails,
   # and FAILS (catching a regression in the harness itself) if the container
   # run unexpectedly succeeds while the executive is supposed to be absent.
@@ -193,10 +210,23 @@ jobs:
           # into a range or a regex to avoid the edit would let a suite silently
           # stop depending on /dev/vms -- which is the whole thing this job
           # exists to detect. The brittleness IS the feature.
-          # 8 failed as of vms-8019, which added test_kmod_procnam.
-          # 9 failed as of vms-d0b, which added test_kmod_devtab.
-          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 9 suites failed ===' \
-            || { echo "FAIL: did not see the expected 3-suites-passed/9-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+          #
+          # THIS LINE IS A MERGE MAGNET AND THE TEXTUAL MERGE OF IT IS WRONG.
+          # Each branch that adds an executive-dependent suite bumps the count
+          # by one INDEPENDENTLY, so two such branches both read "N+1" and git
+          # merges them cleanly to "N+1" when the truth is "N+2". Recompute it
+          # from the tree; never take it from either side of a conflict.
+          #   7 failed  -- baseline (8 test_kmod_* suites + the 2 module loads)
+          #   8 failed  -- vms-8019 added test_kmod_procnam
+          #   8 failed  -- vms-0ff  added test_kmod_pin
+          #   9 failed  -- vms-d0b  added test_kmod_devtab
+          #  10 failed  -- ALL THREE on the merged tree (this line)
+          # Arithmetic on the merged tree: 11 test_kmod_* suites exist, 9 of
+          # them open /dev/vms and fail with the executive absent, plus the
+          # vms.ko load itself = 10 failed; vmsfs.ko's load + the 2 vmsfs
+          # suites are executive-independent = 3 passed.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 10 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/10-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
 
           # POSITIVE assertion paired with the two negative assertions above:
           # vmsfs.ko has no dependency on vms.ko/the executive, so it must
@@ -207,7 +237,7 @@ jobs:
           echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
             || { echo "FAIL: vmsfs.ko (independent of vms.ko) did not pass with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency"; exit 1; }
 
-          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: /dev/vms unopenable, exact 3-passed/7-failed split), with vmsfs's independent facility still passing"
+          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: /dev/vms unopenable, exact 3-passed/10-failed split), with vmsfs's independent facility still passing"
 
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests

@@ -16,16 +16,22 @@
 # actually has: boot the real kernel under QEMU, log in over the console, and
 # drive DCL there.
 #
-# PROVENANCE (disclosed per vms-71a re-dispatch ruling): this script started
-# as a near-verbatim copy of origin/vms-0ff-executive-fatal:tests/uat/
-# vms_session_qemu.sh. The one substantive diff at the boot/login wait below
-# is the `wait_for '%STARTUP-I-EXEC'` assertion that branch has and this one
-# does not -- `%STARTUP-I-EXEC` is printed by src/ovmx_init/ovmx_init.c only
-# on vms-0ff-executive-fatal (executive-refuses-to-boot work), not on main,
-# so waiting for it here would hang forever. See the comment at that line.
-# Everything else in the harness (assertion anchoring, prompt sync, timeout
-# split) was rewritten for this item; the executive wait is the only part
-# knowingly carried over unchanged in shape (minus the string it waits on).
+# PROVENANCE (disclosed per vms-71a re-dispatch ruling, completed by the
+# vms-a35 PR #6 rebase): this script started as a near-verbatim copy of
+# origin/vms-0ff-executive-fatal:tests/uat/vms_session_qemu.sh, with the
+# `wait_for '%STARTUP-I-EXEC'` assertion that branch has deliberately NOT
+# ported (main's src/ovmx_init/ovmx_init.c did not print that string yet, so
+# waiting for it would have hung forever). vms-0ff has since merged, so
+# ovmx_init.c prints an executive-attached line once the kernel executive
+# attaches, and the wait is ported below (see "Boot and log in"). Everything
+# else in the harness (assertion anchoring, prompt sync, timeout split) is
+# unique to this file and was never present on vms-0ff-executive-fatal.
+#
+# vms-a35 round 2: the string itself moved from `%STARTUP-I-EXEC` to
+# `%OVMX-I-EXEC` (see src/ovmx_init/ovmx_init.c, executive_attach) --
+# a message that names a Linux device node (/dev/vms) is an OVMX event,
+# not a VMS one, and may not wear the STARTUP facility (Rule 10). This
+# wait was updated to match.
 #
 # NEARLY THE SAME COMMANDS as tests/uat/vms_session_test.sh (the retired SSH
 # UAT), with ONE deliberate change: `SET DEFAULT SYS$MANAGER` (no trailing
@@ -66,14 +72,17 @@ FIFO=/tmp/uat-console.in
 # Timeouts are split so a slow boot cannot silently eat the budget for the
 # rest of the session (or vice versa) and surface as an opaque mid-session
 # guest death instead of a diagnosable timeout at the right stage.
-BOOT_TIMEOUT=120     # budget to reach the login (Username:) prompt
+BOOT_TIMEOUT=120     # budget for EACH of the two boot-phase waits below
+                      # (executive attach, then the login prompt) -- see
+                      # SESSION_TIMEOUT's comment for why it is counted twice
 STEP_TIMEOUT=60      # budget for each named login-flow wait (password/welcome/logout)
 COMMAND_TIMEOUT=10   # budget for the DCL prompt to return after one command
                       # (observed on this host: whole 16-command session completes
                       # in well under 1s per command under TCG -- 10s is a >10x margin)
-# Overall wall-clock kill switch for the whole QEMU process: boot + 3 named
-# steps + up to 16 commands, each at its own budget, plus slack. This is a
-# safety net (the guest should return far faster than this in the normal
+# Overall wall-clock kill switch for the whole QEMU process: two boot-phase
+# waits (executive attach, then login prompt -- each at BOOT_TIMEOUT) + 3
+# named steps + up to 16 commands, each at its own budget, plus slack. This
+# is a safety net (the guest should return far faster than this in the normal
 # case, observed 11-14s end to end on this host) so a genuinely wedged QEMU
 # process cannot run forever -- it is NOT the pacing budget for any single
 # stage (that would let a slow boot silently eat the rest of the session's
@@ -81,7 +90,7 @@ COMMAND_TIMEOUT=10   # budget for the DCL prompt to return after one command
 # under the CI step's `timeout-minutes: 10` (600s) in ci.yml's uat-session
 # job so THIS timeout fires first with a diagnosis, instead of GH Actions
 # SIGKILLing the job with no console log captured.
-SESSION_TIMEOUT=$((BOOT_TIMEOUT + STEP_TIMEOUT * 3 + COMMAND_TIMEOUT * 16))
+SESSION_TIMEOUT=$((BOOT_TIMEOUT * 2 + STEP_TIMEOUT * 3 + COMMAND_TIMEOUT * 16))
 
 ARCH=$(uname -m)
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -165,16 +174,13 @@ fail_with_console() {
 }
 
 # --- Boot and log in -----------------------------------------------------
-# NOTE ON PROVENANCE: origin/vms-0ff-executive-fatal's version of this script
-# waits here for `%STARTUP-I-EXEC` before the login prompt -- that branch's
-# ovmx_init.c prints it once the kernel executive attaches, and asserting it
-# turns a silent boot-guarantee regression into a clear failure instead of a
-# confusing login timeout. main's src/ovmx_init/ovmx_init.c does NOT print
-# that string (as of this commit), so waiting for it here would hang forever.
-# The wait is intentionally NOT ported. Whoever rebases this file onto a
-# branch where ovmx_init.c prints `%STARTUP-I-EXEC` (e.g. the vms-a35 PR #6
-# rebase) should take THAT branch's fuller version of this section rather
-# than silently keeping this one.
+# The executive must come up first; if it does not, PID 1 aborts the boot and
+# there is no session to test. Asserting it here (vms-0ff, ported by the
+# vms-a35 PR #6 rebase) keeps a silent regression in the boot guarantee from
+# surfacing as a confusing login timeout instead of a clear one.
+wait_for '%OVMX-I-EXEC' "$BOOT_TIMEOUT" \
+    || fail_with_console "ERROR: the executive never attached — the system did not come up"
+
 wait_for 'Username:' "$BOOT_TIMEOUT" || fail_with_console "ERROR: no login prompt"
 send 'SYSTEM'
 wait_for 'Password:' || fail_with_console "ERROR: no password prompt"

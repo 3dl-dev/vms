@@ -1853,6 +1853,20 @@ re-issue an `MSCP$DISK` CONNECT-REQUEST every ~10 s **indefinitely**; fresh
 peer; and `mt 0x7b` (len 204) frames appear on the `VMS$VAXcluster` Con.ID pair
 — **payload undecoded**; accept and ack at the SCS level, answer nothing above it.
 
+**What a LOCK-LESS member actually receives — MEASURED, not inferred.** Over a
+7-minute OVMX membership with full CM tracing, the *entire* post-`XITDONE`
+inbound inventory was: **5×** `cat 0x06 op 0x00` (answered `0x86`), **1×**
+`cat 0x04 op 0x00` (notification, correctly unanswered), **1×** `cat 0x02
+op 0x01` (refused, see §4(p) — free). **Zero** `cat 0x02 op 0x12`.
+
+> The reference joiner answers 411 `cat 0x02 op 0x12` and 138 `op 0x01` post-join
+> because it is a real node **with lock activity**. A node holding no locks never
+> provokes them. So the reference's post-join answer table is a **superset scoped
+> to a lock-holding member**, not a checklist every member must meet — and the
+> steady-state obligations of a lock-less member are far smaller than it implies.
+> Do not implement the whole table on the strength of the reference alone;
+> measure what actually arrives first.
+
 **The post-barrier DLM burst is a consequence, not an obligation** (INFERRED):
 membership is reached at the release, before any of it; all 338 cat-`0x02` frames
 in the window are joiner-initiated and every resource is Files-11/MOUNT

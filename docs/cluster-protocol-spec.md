@@ -1711,6 +1711,14 @@ shape likewise does not generalise:
   records as token-correlated transactions **interleaved with the barrier**, and
   gates the next step on them being answered. Five unanswered cat-`0x02`
   requests froze the barrier at step 5.
+  > ⚠ **The cat-`0x02` response SHAPE is NOT grounded, and the echo is
+  > known-wrong.** OVMX inherited the cat-`0x01` echo here. In run `coord3` we
+  > blind-echoed eight cat-`0x02` `op 0x0d` records and VAX1 and VAX3 bugchecked
+  > **`LOCKMGRERR, Error detected by Lock Manager`** immediately after
+  > `completing VAXcluster state transition`. A joining node holds no locks, so
+  > echoing a lock-resource rebuild record asserts lock state it does not have.
+  > Grounding what a real (also lock-less) joiner sends for `op 0x0d` is the
+  > current frontier. Specimen: `ovmx-760-lockmgrerr-20260730.pcap`.
 
 #### Residue: several "fields" are uninitialised buffer contents
 
@@ -1878,7 +1886,16 @@ VMS logs `%CNXMAN, received VAXcluster membership request`, `proposed addition o
 node OVMX…`, and `completing VAXcluster state transition`, and SDA shows a real
 CSB with an assigned CSID.
 
-**Where it stops — the fan-out anomaly.** Measured as a controlled pair on a
+> **SUPERSEDED 2026-07-30g — the fan-out anomaly below is SOLVED.** A
+> non-coordinator peer silently discards `op 0x02` (see §4(p)); fan-out only ever
+> worked because it happened to include the coordinator. Aiming a single `op
+> 0x02` at the coordinator produces the relay, the commit, and the barrier. The
+> live frontier is now **the cat-`0x02` `op 0x0d` DLM response shape**, which
+> bugchecks peers with `LOCKMGRERR` — see §4(p) and `docs/HANDOFF-vms-760.md`.
+> The historical measurement is kept below because it is what identified the
+> recipient, not the message, as the variable.
+
+**The fan-out anomaly (historical).** Measured as a controlled pair on a
 **pristine** 3-node cluster (`reset3.sh`; zero ghost CSBs; all three peers
 verified `MEMBER` before each run):
 

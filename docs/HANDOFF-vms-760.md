@@ -1,7 +1,11 @@
 # Handoff — vms-760 (OVMX → `SHOW CLUSTER` MEMBER)
 
-**Rewritten 2026-07-30 (session f). Read this, then `rd show vms-760`, then
-`docs/cluster-protocol-spec.md` §4(m), §4(n), §4(o), §4(p), §5(z).**
+**Rewritten 2026-07-30 (session g). Read this, then `rd show vms-01c` and `rd show
+vms-760`, then `docs/cluster-protocol-spec.md` §4(m), §4(n), §4(o), §4(p), §5(z).**
+
+> **`vms-760` can no longer publish rd notes** (its event exceeds the relay size
+> limit — see §0b). Live notes go on **`vms-01c`**; `vms-760`'s local history is
+> still readable with `rd show vms-760`.
 
 The protocol knowledge is in the spec. This file is *state, procedure, and how to
 run the session so you don't die of context exhaustion halfway through.*
@@ -96,7 +100,43 @@ If you need the full history, `rd show vms-760` locally. Consider closing
 `vms-760` once MEMBER lands and opening a fresh item for the follow-on work
 rather than continuing to append.
 
-## 1. Where it stands
+## 1. Where it stands (rewritten 2026-07-30g)
+
+**The fan-out anomaly is SOLVED, the relay works, and the failure has moved.**
+
+The `op 0x02` must go to **the coordinator**. A non-coordinator peer *silently
+discards it* — byte-verified: in `d94-e15` all three members received a
+byte-identical `op 0x02` within 400 ms, VAX1 and VAX2 only acked and did nothing
+(VAX1 had a **383 ms head start**), and only VAX3 relayed. The reference joiner
+picks the coordinator too (VAX2, not VAX1). Our "first eligible" rule picked
+VAX1 — the wrong node — which is the whole reason `d94-e14` was acked and then
+silent. `cm_pick_coordinator()` now picks by highest DECnet node number.
+**Fan-out never started competing transitions** — that §4(p) claim is withdrawn;
+fan-out only worked because it happened to include the coordinator.
+
+Our `op 0x02`, our `0x81`/`0x09` echo and our config frames are **byte-correct**.
+That line of investigation is closed.
+
+**Progress this session, measured on a pristine lab:** barrier `1 → 3 → 5` of 12,
+`INCONSTATE` eliminated, and VMS logs `proposed addition of node OVMXC3`.
+
+### Two crashes, both instructive, both fixed or named
+
+Getting the relay working exposed a whole phase we had never reached: once the
+coordinator relays, **the non-coordinator members open their own transactions**
+carrying ops absent from the pre-relay dialogue.
+
+1. **`INCONSTATE` on VAX3 and `INVEXCEPTN` on VAX1 — FIXED.** The killer was our
+   cat-`0x06` **close**, built from the `op 0x01` PARAMS template, which made
+   `body[10:132]` byte-identical to our own PARAMS body. The real joiner's close
+   differs from its own PARAMS at **17 offsets**, and `body[64:72]` must be a
+   **live VMS time** — we shipped a replayed constant ~26 years off the era.
+   Now built fresh, with two variants (membership-close vs lock-resource), and
+   two regression tests. VAX2, which never received one, survived — a clean
+   control.
+2. **`LOCKMGRERR` on VAX1 and VAX3 — the CURRENT FRONTIER, see §2.**
+
+## 1b. Where it stood before (kept for continuity)
 
 OVMX now runs the real VMScluster add-member protocol. On the live 3-node lab
 VMS prints, on its own console:
@@ -117,7 +157,47 @@ interleaved cat-`0x02` DLM rebuild transactions.
 
 **`SHOW CLUSTER` still reads `NEW`.** That is the whole remaining gap.
 
-## 2. The frontier — one clean bisect, already set up
+## 2. The frontier — the cat-`0x02` `op 0x0d` DLM response (2026-07-30g)
+
+**Start here.** In run `coord3`, with the close fixed, the barrier reached 5/12
+and then **VAX1 and VAX3 bugchecked `LOCKMGRERR, Error detected by Lock Manager`**
+immediately after `completing VAXcluster state transition`. We had blind-echoed
+**eight cat-`0x02` `op 0x0d`** lock-resource rebuild records.
+
+A joining node **holds no locks**, so echoing a rebuild record back asserts lock
+state we do not have — and the peer's lock manager checks it. This is the same
+defect class as the PARAMS-derived close, one category over: a shape inherited
+rather than grounded. The code says so at `cm_response_shape()`.
+
+> **The question to delegate first:** what does a real joiner — which also holds
+> no locks — send in response to cat `0x02` `op 0x0d`? Diff against
+> `vax3-2to3-established-join-20260730.pcap`, where this same phase completes and
+> nobody crashes. Specimen of the failure:
+> `captures/ovmx-760-lockmgrerr-20260730.pcap` (+ `~/vax/cluster/work/scsd-coord3.log`,
+> timestamps aligned).
+
+Refusing these instead re-freezes the barrier at step 5 (grounded). **Both
+failures are recoverable; neither is correct.** Do not "fix" it by picking
+whichever failure looks tidier — ground the shape.
+
+### Also open, lower priority
+
+- **Peer selection is right but for a possibly-wrong reason.** The best-grounded
+  rule is "the peer that opened a `VMS$VAXcluster` VC **to** the joiner" (3/3
+  established joins). **We destroy that signal ourselves** by preemptively
+  opening our own VC to all three peers — so the fallback ("highest
+  SCSSYSTEMID", read at abs 60 of each member's 120-byte directed HELLO) is what
+  actually carries us. Highest-SCSSYSTEMID is still confounded with
+  "most-recently-added"; disambiguating needs a lab where those orderings
+  disagree (e.g. SYSGEN VAX3 to sysid 1024, or reboot VAX2 last).
+- **`op 0x02` `body[10:12]`.** §4(p) says send zeros (residue). One agent found a
+  correlation the other way: all nine *working* requests carry `0x4150` (`"AP"`),
+  and the one malformed failing run zeroed it. **Correlation only — do not act,
+  but do not forget.**
+- `d94-e10/e11/e12/e13` are **VOID** — every VAX in them self-reports
+  `name="VAX1" sysid=1025`. Any conclusion resting on those is unsound.
+
+## 2b. The previous frontier — SOLVED, kept for the record
 
 A controlled pair on a **pristine** cluster (`reset3.sh`, zero ghost CSBs,
 3 × MEMBER verified before each run):
@@ -151,7 +231,14 @@ Two readings, both testable, both kept live behind `OVMX_CFG2_ALL`:
 
 ## 3. Lab — repeatable and non-destructive
 
-Live 3-node cluster: VAX1 + VAX2 + VAX3, all MEMBER.
+Live 3-node cluster: VAX1 + VAX2 + VAX3.
+
+> ⚠ **2026-07-30g: `reset3.sh` does not always land 3 MEMBER.** After one reset
+> `F$GETSYI("CLUSTER_NODES")` read **2** with all three SIMH processes up (VAX3
+> booted but had not rejoined; it joined ~1 min later). **Always verify
+> `CLUSTER_NODES` = 3 immediately before a run you intend to believe, and
+> re-check rather than assuming the reset worked.** Also: the reset can leave the
+> VAX1 console at the `Username:` prompt — run `login.sh` before probing.
 
 ```bash
 T=~/vax/cluster/tools

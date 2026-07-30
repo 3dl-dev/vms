@@ -624,13 +624,27 @@ static int cm_response_shape(uint8_t category, uint8_t opcode)
         }
         return CM_RSP_NONE;
     case SCS_MEMBER_CAT_DLM:
-        /* Answering cat 0x02 at all is grounded BEHAVIOURALLY: the coordinator
+        /* THE CURRENT FRONTIER -- read this before changing it.
+         *
+         * Answering cat 0x02 at all is grounded BEHAVIOURALLY: the coordinator
          * gates the barrier on these (five unanswered ones froze it at step 5).
-         * A joiner holds no locks, so acknowledging the record is all we can
-         * truthfully say; real grant/deny/block/remaster is NOT implemented.
-         * The SHAPE is inherited from cat 0x01 and is NOT independently
-         * grounded -- an open gap, but NOT the cause of any crash we have seen:
-         * no cat-0x02 message appears anywhere in the relay phase. */
+         * But the SHAPE is inherited from cat 0x01 and has NEVER been grounded.
+         *
+         * Run coord3, with the rebuilt cat-0x06 close: INCONSTATE is GONE and
+         * the barrier reached 5/12, but VAX1 and VAX3 then bugchecked
+         * LOCKMGRERR ("Error detected by Lock Manager") right after
+         * "completing VAXcluster state transition". We had blind-echoed EIGHT
+         * cat-0x02 op-0x0d records. A joining node holds no locks, so echoing a
+         * lock-resource rebuild record back asserts lock state we do not have --
+         * and the peer's lock manager checks it.
+         *
+         * This is the same class of defect as the PARAMS-derived close, one
+         * category over, and it is the next thing to ground: what does a real
+         * joiner -- which also holds no locks -- send for cat 0x02 op 0x0d?
+         * Specimen: captures/ovmx-760-lockmgrerr-20260730.pcap. Until that is
+         * answered from the reference, this echo is KNOWN-WRONG, not merely
+         * ungrounded. Left in place only because refusing it re-freezes the
+         * barrier; both failures are recoverable, neither is correct. */
         return CM_RSP_ECHO;
     case SCS_MEMBER_CAT_MEMBERSHIP:
         /* Closes the transaction. Token + our OWN parameter block, never an

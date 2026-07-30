@@ -1644,6 +1644,94 @@ on.
 (frame 8658) carries `0x0004` and binary data in those places. One specimen of
 one variant; see §5(z).
 
+### 4(p) The cluster-wide state-transition BARRIER (GROUNDED, `vms-760`)
+
+After the add-member commit the coordinator runs a **12-step barrier**. It is not
+joiner-private work: the coordinator runs the same dialogue with **every** member
+and releases step *N* to nobody until **all** of them have sent their step-*N*
+request.
+
+| step | dir | cat | op | note |
+|---|---|---|---|---|
+| open | M→J | `0x01` | `0x09` | `body[16:18]=0x0240`; carries the transition **epoch** at `body[12:16]` |
+| | J→M | `0x81` | `0x09` | echo + **three** mutations (below) |
+| go | M→J | `0x01` | `0x0a` | `body[16:18]=0x0260`. **Never answered.** Start the barrier at N=1 |
+| ×12 | J→M | `0x01` | `0x0b` | epoch at `body[12:16]`, step N (LE u32) at `body[16:20]` |
+| | M→J | `0x81` | `0x0b` | the coordinator's ack — **not** the release |
+| | M→J | `0x01` | `0x0c` | release of step N. **Never answered.** N<12 → N+1; N=12 → complete |
+
+**GROUNDED across 6 joins / 4 clusters / 3 different joiner nodes**: exactly 12
+steps, indices 1…12, and the `0x0240`/`0x0260`/`0x0210` tags are invariant. The
+count 12 is the only termination signal — `0x0c#12` is byte-identical to earlier
+releases apart from its index.
+
+**The gating is directly observable.** At step 5 the reference coordinator held
+the joiner's completed request for **89 ms** and released `0x0c#5` to *both*
+members 0.8 ms after the last member caught up. `0x0c#N` never precedes `0x0b#N`
+anywhere — 72 ordered pairs, 0 residuals.
+
+> **A joiner that ignores the barrier does not merely fail to join — it breaks
+> the cluster.** The coordinator's barrier stays permanently one member short, so
+> the transition times out, `%CNXMAN, aborting VAXcluster state transition` is
+> logged, and the healthy members are dropped. Observed twice before this was
+> implemented.
+
+**Notifications carry `txn=0` and are NEVER answered.** `op 0x0a` and `op 0x0c`
+get no response of any kind — no `0x8a`/`0x8c` exists in any capture, and no
+cat-`0x04` ack is attributable to them. Only the `op 0x06` burst is acked. An
+`op 0x0a` whose `body[16:18]` is not `0x0260` (e.g. `0x0460`, seen on a running
+cluster) is **not** a barrier start.
+
+#### The `0x81` echo takes THREE mutations — corrects §4(j)
+
+§4(j) says a response echoes the request body with the response bit set. It is
+echo **plus three** edits, verified on `0x03`, `0x05` and `0x09` over 6/6
+responses in 5 captures with 3 different responder nodes:
+
+```
+body[8] |= 0x80        response bit
+body[18]  = 0x01       response marker
+body[55]  = 0x00       cleared (held 0x0e / 0x0a / 0x06 in the requests)
+```
+
+#### Category is per-SYSAP, and the response SHAPE is per-category
+
+`cat`/`op` are namespaces scoped to the SYSAP the Con.ID resolves to; the same
+numbers mean different things on `SCA$TRANSPORT` and `VMS$VAXcluster`. Response
+shape likewise does not generalise:
+
+- **cat `0x01`** — echo the whole body (+ the three mutations).
+- **cat `0x06`** — closes the transaction. Carry only the `(txn,checksum)`; send
+  your **own** node-parameter block, the same one carried in the `op 0x01`
+  PARAMS message (`body[72:76]=0x10`, `body[76:80]=0x01`,
+  `body[88:96]="V7.3    "`). **Echoing this request's payload bugchecks the
+  peer** — it carries that peer's live Con.IDs and cluster id, and reflecting
+  them back produced a fatal `INCONSTATE, Inconsistent I/O data base`.
+- **cat `0x02`** (DLM) — during the join the coordinator replays lock-resource
+  records as token-correlated transactions **interleaved with the barrier**, and
+  gates the next step on them being answered. Five unanswered cat-`0x02`
+  requests froze the barrier at step 5.
+
+#### Residue: several "fields" are uninitialised buffer contents
+
+`op 0x02`'s `body[10:12]` and `body[40:52]`, and the varying opcode of a
+cat-`0x04` ack, are **not data**. 9 of 12 genuine `op 0x02` specimens carry zeros
+there and are acked identically; the outliers hold printable digraphs (`"AP"`,
+`"IS"`) and ASCII spaces. A real cat-`0x04` ack reads
+`04 49 "IR_LOOKUP  SCS$DIRECTORY"` — a leftover `"DIR_LOOKUP SCS$DIRECTORY"`
+whose first two bytes were overwritten by the category and opcode. An
+implementation should send zeros; do not reproduce another implementation's
+uninitialised memory.
+
+#### Admission is single-coordinator
+
+The joiner sends its `op 0x02` to **exactly one** peer, which relays the new node
+to the rest (`op 0x12`) and then runs the barrier across all members. Sending it
+to every peer starts N competing cluster-wide transitions and the cluster aborts
+them. *Which* peer a real joiner picks is **not grounded** — "last to complete
+config", "last MSCP walk" and "highest SCSSYSTEMID" are mutually confounded in
+the only 3-node specimen available.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:
@@ -1732,48 +1820,39 @@ For visibility, every field NOT marked GROUNDED above:
 
 ---
 
-### 5(z) OPEN — what still blocks `MEMBER` (the current frontier)
+### 5(z) OPEN — the last gap to `MEMBER` (current frontier)
 
-> **Supersedes the previous 5(z).** That entry concluded admission was gated by
-> a predicate **above** the SCS frame layer, because the member bound every
-> connection and then never spoke again. That conclusion was **wrong**, and the
-> reasoning behind it is worth keeping as a caution: the joiner's own
-> `VMS$VAXcluster` VC was **half-open** — it had never been sent its op-3
-> confirm (§4m). A half-open VC accepts frames, binds the Con.ID pair, and
-> silently discards the SYSAP dialogue, which is indistinguishable from a policy
-> refusal if you only look at what the member sends. A second defect
-> (§4a.0, directed-HELLO abs 16) independently prevented every peer whose HW MAC
-> is not a DECnet address from verifying its channel at all.
+**Resolved since the previous entry** (which wrongly concluded admission was
+gated above the SCS layer — it was a half-open VC, §4m, plus a directed-HELLO
+addressing bug, §4a.0). OVMX now:
 
-**Resolved since:** with both fixed, OVMX opens its `SCS$DIRECTORY`, `MSCP$DISK`
-and `VMS$VAXcluster` connections and all three are accepted; it completes the
-MSCP unit enumeration identically to a real VAX; **all three members** now
-complete the `0x14`/`0x01` config exchange with it and open connections back;
-and OVMX sends the deferred admission `0x02` byte-identical to reference
-frame 285 in the SYSAP body.
+- opens `SCS$DIRECTORY`, `MSCP$DISK` and `VMS$VAXcluster`, all accepted;
+- completes the MSCP unit enumeration identically to a real VAX;
+- exchanges config with **all** members and sends the deferred `op 0x02`;
+- is answered `cat 0x04`, and driven through `op 0x03` COMMIT, `op 0x05` lock
+  rebuilds, the `op 0x06` burst, `op 0x09`, `op 0x12`, and the cat-`0x06` close;
+- executes the §4(p) **barrier to step 5 of 12** with correct releases, and
+  answers the interleaved cat-`0x02` DLM rebuild transactions.
 
-**Still open — no member acks the `0x02`, and `SHOW CLUSTER` reads `NEW`.**
-Two candidates, in order:
+VMS logs `%CNXMAN, received VAXcluster membership request`, `proposed addition of
+node OVMX…`, and `completing VAXcluster state transition`, and SDA shows a real
+CSB with an assigned CSID.
 
-1. **The member stops mid-way through its reciprocal discovery.** On the
-   reference, after the joiner tears down the transient directory connection the
-   member answers the joiner's op 6 with op 7 and then opens `MSCP$DISK` **back**
-   to the joiner (frames 174 → 175 → 176). Against OVMX the member answers the
-   directory lookups, exchanges credits, sends its own op 6, receives OVMX's
-   op 6 — **and then goes silent**: no op 7, no `MSCP$DISK` connect. OVMX's op 6
-   is byte-identical to the reference's modulo identity/seq/Con.ID, so the
-   divergence is in *state*, not in that frame. Start here.
-2. **The replayed `0x02` body fields** (`body[10:12]`, `body[40:52]`) may be
-   node- or cluster-specific rather than reusable. Only one specimen of the
-   admission variant exists. A second established-join capture — ideally a
-   *different* joiner — would settle whether those bytes are portable.
+**Where it stops.** The coordinator answers our `0x0b#5` and never sends
+`0x0c#5`. It is waiting for its **other members** to reach step 5, and they never
+join the transition: the capture contains **zero** VAX↔VAX 190-byte CM frames for
+the entire run, so the coordinator never relayed the new node to its peers. In
+the reference it relays within 0.3 ms of the `op 0x02` (`op 0x12`) and then
+barriers with everyone. Step 5 is exactly where the reference coordinator waits
+for its other member, so the mechanism matches — what is missing is whatever
+makes the coordinator propagate this transition cluster-wide.
 
-> **Lab hygiene is now part of the method, not a footnote.** Each failed attempt
-> leaves a stale `NEW`/`BRK_NEW` CSB in the member's cluster view. After ~16 of
-> them in one session, `SHOW CLUSTER` began rendering an **empty table** — the
-> oracle degrades before it errors. **Clear the member's stale CSBs before any
-> MEMBER attempt, and treat any negative result gathered after a long run of
-> tests as inconclusive until reproduced on a clean cluster.**
+Candidates, in order: (a) something in our `op 0x02` or `op 0x09` response that
+the coordinator needs before it will relay; (b) a message the joiner must send to
+the **non-coordinator** members (our VCs to them carry only cat-`0x04` traffic
+after config); (c) the coordinator relaying over a class we are not looking at.
+Note the destructive failure mode is now understood and no longer occurs: the
+cluster stays healthy at 3 members across these runs.
 
 ## 6. Using the dissector
 

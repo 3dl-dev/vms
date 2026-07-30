@@ -157,6 +157,15 @@ RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
 # locally while never entering the initramfs and never running in QEMU,
 # with the job staying green.
 COPY . /src/repo/
+#
+# `vmsdcl` is built alongside them (vms-fb9). tests/qemu/test_syssvc_showdev.c
+# does not call a sys$ entry point to make its assertions -- it EXECUTES the
+# shipped DCL.EXE and reads what a user would see, because the thing under
+# test is whether the user-visible SHOW DEVICE is a reader of the executive's
+# device table or is answering from somewhere else. Naming the target here is
+# correct and is NOT the "one binary by literal name" defect the comment
+# above warns about: that rule is about which TEST suites reach the image
+# (still a glob), not about which product image a suite needs.
 RUN cd /src/repo && \
     cmake -B build-static \
         -DCMAKE_C_COMPILER=musl-gcc \
@@ -164,9 +173,11 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=OFF \
-    && cmake --build build-static --target qemu_syssvc_tests --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests vmsdcl --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
-    ls -la build-static/bin/test_syssvc_*
+    ls -la build-static/bin/test_syssvc_* && \
+    echo "--- DCL.EXE (the shipped image test_syssvc_showdev drives) ---" && \
+    ls -la build-static/bin/DCL.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -236,6 +247,12 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # kernel-only harness this item exists to replace, and the QEMU job
     # stays green while proving nothing about src/libvms.
     { [ "$n_syssvc" -ge 1 ] || { echo "FATAL: no test_syssvc_* binary staged into the initramfs -- the userspace public-sys\$ layer would be untested"; exit 1; }; } && \
+    # The shipped DCL image, which test_syssvc_showdev.c EXECUTES (vms-fb9).
+    # Hard-failed rather than tolerated: without it that suite cannot run the
+    # command it exists to test, and a suite that silently degrades to
+    # "binary missing" is a green job proving nothing.
+    cp /src/repo/build-static/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
+    chmod +x /initramfs/tests/DCL.EXE && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

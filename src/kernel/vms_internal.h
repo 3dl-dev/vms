@@ -26,22 +26,39 @@
 
 #define SS__NORMAL      0x00000001
 #define SS__BADPARAM    0x00000014
-#define SS__DUPLNAM     434         /* duplicate process name (ssdef.h SS$_DUPLNAM) */
-#define SS__NONEXPR     2540        /* nonexistent process (ssdef.h SS$_NONEXPR) */
 /*
- * SS__IVLOGNAM is the status the executive returns for a malformed
+ * Process-table statuses -- ORACLE-PINNED (vms-8019).
+ *
+ * SOURCE: the reference lab OpenVMS VAX V7.3 node VAX1 (~/vax/cluster),
+ * 2026-07-30, by two independent documented-tool observations:
+ *
+ *   1. LIBRARY/EXTRACT=$SSDEF/OUTPUT=SYS$SCRATCH:SSDEF.MAR
+ *          SYS$LIBRARY:STARLET.MLB
+ *      SEARCH SYS$SCRATCH:SSDEF.MAR "IVLOGNAM","DUPLNAM","NONEXPR"
+ *        $EQU  SS$_DUPLNAM    148
+ *        $EQU  SS$_IVLOGNAM   340
+ *        $EQU  SS$_NONEXPR    2280
+ *
+ *   2. round-trip through the message formatter:
+ *        F$MESSAGE(148)  -> %SYSTEM-F-DUPLNAM,  duplicate name
+ *        F$MESSAGE(340)  -> %SYSTEM-F-IVLOGNAM, invalid logical name
+ *        F$MESSAGE(2280) -> %SYSTEM-W-NONEXPR,  nonexistent process
+ *
+ * These replace 434 / 596 / 2540, which this tree carried and which the
+ * same oracle disproves: F$MESSAGE(596) is %SYSTEM-F-VOLINV, and
+ * SS$_VOLINV is 596 in $SSDEF.
+ *
+ * SS__IVLOGNAM is what the executive returns for a malformed
  * process-name string handed to VMS_IOCTL_SETPRN (unterminated buffer,
- * or zero length). PROVENANCE: the value 596 is this tree's existing
- * ssdef.h SS$_IVLOGNAM; the *choice* of SS$_IVLOGNAM as $SETPRN's
- * invalid-name status comes from the OpenVMS System Services Reference
- * condition-value list for $SETPRN and has NOT been re-verified against
- * the ~/vax oracle in this session. Flagged for operator sign-off per
- * the vms-purity-guardrail rule -- do not treat as authoritative.
- * The kernel-side validation itself is a trust-boundary check on
- * untrusted userspace input and is required regardless of which status
- * VMS reports.
+ * or zero length). The CHOICE of IVLOGNAM for a bad process name is
+ * oracle-pinned too, behaviourally, on the same node:
+ *   $ SET PROCESS/NAME="THISNAMEISWAYTOOLONG"
+ *   %SET-E-NOTSET, error modifying process name
+ *   -SYSTEM-F-IVLOGNAM, invalid logical name
  */
-#define SS__IVLOGNAM    596         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
+#define SS__DUPLNAM     148         /* duplicate process name (ssdef.h SS$_DUPLNAM) */
+#define SS__NONEXPR     2280        /* nonexistent process (ssdef.h SS$_NONEXPR) */
+#define SS__IVLOGNAM    340         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
 #define SS__NOPRIV      0x00000024
 #define SS__ACCVIO      0x0000000C
 #define SS__INSFMEM     0x0000002C  /* insufficient memory (44 decimal, matches real VMS) */
@@ -225,6 +242,9 @@ struct vms_proc *vms_proc_find(pid_t pid);
 struct vms_proc *vms_proc_find_or_err(void);
 struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_privs);
 void vms_proc_free(struct vms_proc *proc);
+/* Tear down an entry the caller has ALREADY unlinked under
+ * vms_proc_hash_lock (the unlink is the ownership claim). */
+void vms_proc_free_claimed(struct vms_proc *proc);
 
 /* Drop table entries whose backing task no longer exists. */
 void vms_proc_reap_dead(void);

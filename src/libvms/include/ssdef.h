@@ -56,7 +56,10 @@ extern "C" {
  * ================================================================ */
 
 #define SS$_IVTIME          388     /* Invalid time */
-#define SS$_DUPLNAM         434     /* Duplicate name */
+/* ORACLE-PINNED (vms-8019, see the block above SS$_IVLOGNAM below).
+ * Real severity is F (148 & 7 == 4), not W -- it sits in this section
+ * only because the section split predates the pinning. */
+#define SS$_DUPLNAM         148     /* Duplicate name (%SYSTEM-F-DUPLNAM) */
 #define SS$_NOLOGNAM        444     /* No logical name match */
 #define SS$_NOTALLPRIV      532     /* Not all privileges available */
 #define SS$_IVIDENT         548     /* Invalid identifier */
@@ -70,8 +73,35 @@ extern "C" {
 #define SS$_TIMEOUT         556     /* Device timeout */
 #define SS$_ILLIOFUNC       580     /* Illegal I/O function */
 #define SS$_NOMORENODE      588     /* No more cluster nodes (VMS: 0x24C) */
-#define SS$_IVLOGNAM        596     /* Invalid logical name */
-#define SS$_POWERFAIL       598     /* Power failure detected (VMS: 0x254; 596 taken by SS$_IVLOGNAM) */
+/* ================================================================
+ * ORACLE-PINNED VALUES (vms-8019, 2026-07-30)
+ *
+ * Pinned on the reference lab node VAX1, OpenVMS VAX V7.3, by two
+ * independent documented-tool observations:
+ *
+ *   LIBRARY/EXTRACT=$SSDEF/OUTPUT=SYS$SCRATCH:SSDEF.MAR
+ *       SYS$LIBRARY:STARLET.MLB
+ *   SEARCH SYS$SCRATCH:SSDEF.MAR "IVLOGNAM","DUPLNAM","NONEXPR","VOLINV","POWERFAIL"
+ *       $EQU  SS$_DUPLNAM    148
+ *       $EQU  SS$_IVLOGNAM   340
+ *       $EQU  SS$_VOLINV     596
+ *       $EQU  SS$_POWERFAIL  868
+ *       $EQU  SS$_NONEXPR    2280
+ *
+ *   F$MESSAGE(148)  -> %SYSTEM-F-DUPLNAM,   duplicate name
+ *   F$MESSAGE(340)  -> %SYSTEM-F-IVLOGNAM,  invalid logical name
+ *   F$MESSAGE(596)  -> %SYSTEM-F-VOLINV,    volume is not software enabled
+ *   F$MESSAGE(868)  -> %SYSTEM-F-POWERFAIL, power failure occurred
+ *   F$MESSAGE(2280) -> %SYSTEM-W-NONEXPR,   nonexistent process
+ *
+ * This retires the old note that "596 is taken by SS$_IVLOGNAM" and the
+ * displaced SS$_POWERFAIL 598 that the note justified: 596 is VOLINV,
+ * and 598 is VOLINV re-severitied, not a distinct condition at all.
+ * The remaining unpinned constants in this header are vms-c90.
+ * ================================================================ */
+#define SS$_IVLOGNAM        340     /* Invalid logical name (%SYSTEM-F-IVLOGNAM) */
+#define SS$_VOLINV          596     /* Volume is not software enabled (%SYSTEM-F-VOLINV) */
+#define SS$_POWERFAIL       868     /* Power failure occurred (%SYSTEM-F-POWERFAIL) */
 #define SS$_RESULTOVF       1364    /* Result overflow */
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */
@@ -112,7 +142,8 @@ extern "C" {
  * Process-related status codes
  * ================================================================ */
 
-#define SS$_NONEXPR         2540    /* Nonexistent process */
+/* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM. */
+#define SS$_NONEXPR         2280    /* Nonexistent process (%SYSTEM-W-NONEXPR) */
 #define SS$_SUSPENDED       2584    /* Process suspended */
 #define SS$_INCOMPAT        2632    /* Incompatible attributes */
 #define SS$_NOSLOT          2732    /* No PCB slot available */

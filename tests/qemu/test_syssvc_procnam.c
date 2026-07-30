@@ -24,6 +24,13 @@
  * every assertion below is A-WRITES / B-READS -- the name is written by one
  * Linux process and read back by a DIFFERENT one, through the public API.
  *
+ * P1-P10 cover JPI$_PID and JPI$_PRCNAM. Block P11 covers the other three
+ * item codes this item rewrote -- JPI$_UIC, JPI$_CPUTIM and JPI$_USERNAME --
+ * against a helper that sits in a DIFFERENT UIC GROUP and burns its OWN CPU,
+ * because on a rig where every process is root and idle those three answers
+ * read identically whether they come from the executive's row or from the
+ * caller's own PCB. A test that cannot tell the two apart is not coverage.
+ *
  * THE LONG-LIVED SUBJECT PROCESS. $CREPRC's image is exec'd with no
  * arguments, so the subject is /bin/sh with its stdin redirected (by
  * $CREPRC's own input descriptor) to a script that sleeps. That choice is
@@ -52,6 +59,7 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <errno.h>
+#include <time.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -59,6 +67,7 @@
 #include "jpidef.h"
 #include "lib$routines.h"
 #include "vms_kif.h"
+#include "vms/pcb.h"
 
 #define EXIT_SKIP 77
 
@@ -83,6 +92,27 @@ static int fail = 0;
 
 #define HOLD_SCRIPT   "/tmp/ovmx8019_hold.sh"
 #define SUBJECT_IMAGE "/bin/sh"
+
+/* The UIC group the P11 helper moves into. OVMX maps UIC [group,member]
+ * onto the task's [gid,uid] (src/kernel/vms_module.c vms_proc_register),
+ * so a helper that setgid()s to this value lands in a different UIC group
+ * from the root parent (group 0) while staying uid 0 -- which it must, or
+ * it loses the privilege to open /dev/vms at all. Same value and same
+ * technique as tests/qemu/test_kmod_procnam.c's cross-group case, one
+ * layer down. */
+#define ALT_UIC_GROUP 300
+
+/* CPU each helper burn consumes, measured by the helper itself with
+ * clock() -- CPU time, not wall time, so nothing here is paced by a guess
+ * about how fast an emulated guest runs (a fixed-sleep test is a flaky
+ * test). Half a second of CPU is ~50 JPI$_CPUTIM units, two orders of
+ * magnitude above the 10ms resolution the item code reports in. */
+#define BURN_CLOCKS   (CLOCKS_PER_SEC / 2)
+
+/* What the caller writes into its OWN pcb->username before block P11, so
+ * that a username answered out of the caller's private PCB is recognisable
+ * as such when it is returned for a DIFFERENT process. */
+#define CALLER_PCB_USER "P11CALLER"
 
 static struct dsc$descriptor_s str_dsc(const char *s)
 {
@@ -130,6 +160,138 @@ static uint32_t getjpi_pid_of(const char *prcnam, uint32_t *out_pid)
     items[0].retlen    = &len;
 
     return sys$getjpi(0, NULL, &nd, items, NULL, NULL, 0);
+}
+
+/*
+ * getjpi_u32_of / getjpi_str_of - read ONE item code about a process
+ * selected BY VMS PID. Used by block P11 for the three item codes this
+ * item rewrote to read the executive's row (JPI$_UIC, JPI$_CPUTIM,
+ * JPI$_USERNAME) rather than the caller's private PCB.
+ */
+static uint32_t getjpi_u32_of(uint32_t vms_pid, uint32_t item_code,
+                              uint32_t *out)
+{
+    struct item_list_3 items[2];
+    uint16_t len = 0;
+
+    *out = 0;
+    memset(items, 0, sizeof(items));
+    items[0].buflen    = sizeof(uint32_t);
+    items[0].item_code = (uint16_t)item_code;
+    items[0].bufaddr   = out;
+    items[0].retlen    = &len;
+
+    return sys$getjpi(0, &vms_pid, NULL, items, NULL, NULL, 0);
+}
+
+static uint32_t getjpi_str_of(uint32_t vms_pid, uint32_t item_code,
+                              char *out, size_t outsz)
+{
+    struct item_list_3 items[2];
+    uint16_t len = 0;
+
+    memset(out, 0, outsz);
+    memset(items, 0, sizeof(items));
+    items[0].buflen    = (uint16_t)(outsz - 1);
+    items[0].item_code = (uint16_t)item_code;
+    items[0].bufaddr   = out;
+    items[0].retlen    = &len;
+
+    return sys$getjpi(0, &vms_pid, NULL, items, NULL, NULL, 0);
+}
+
+/* read_full/write_full - pipe I/O that does not silently accept a short
+ * transfer. A partially-read report would otherwise look like a helper
+ * that failed, or worse, like one that succeeded with garbage. */
+static int read_full(int fd, void *buf, size_t n)
+{
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = read(fd, (char *)buf + got, n - got);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) return -1;
+        got += (size_t)r;
+    }
+    return 0;
+}
+
+static int write_full(int fd, const void *buf, size_t n)
+{
+    size_t put = 0;
+    while (put < n) {
+        ssize_t w = write(fd, (const char *)buf + put, n - put);
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) return -1;
+        put += (size_t)w;
+    }
+    return 0;
+}
+
+/* What the P11 helper reports back about itself, once. */
+struct helper_report {
+    uint32_t ok;
+    uint32_t vms_pid;
+    uint32_t uic;               /* the UIC the EXECUTIVE derived for it */
+};
+
+/* Consume BURN_CLOCKS of CPU. volatile so the loop is not optimised out. */
+static void burn_cpu(void)
+{
+    clock_t start = clock();
+    volatile unsigned long sink = 0;
+
+    do {
+        for (int i = 0; i < 20000; i++)
+            sink += (unsigned long)i;
+    } while (clock() - start < (clock_t)BURN_CLOCKS);
+}
+
+/*
+ * alt_group_helper - the P11 subject. Never returns.
+ *
+ * setgid()s into ALT_UIC_GROUP BEFORE its first vms_kif_* call, because
+ * the executive derives the UIC from the task's credentials AT
+ * REGISTRATION (vms_proc_register) -- a process cannot declare it later,
+ * which is the property that makes JPI$_UIC worth reading from the
+ * executive at all. It stays uid 0 so it keeps the privilege to open
+ * /dev/vms.
+ *
+ * Then it burns CPU on demand and acknowledges each burn, so the parent
+ * synchronises on an OBSERVED event rather than on a sleep.
+ */
+static void alt_group_helper(int cmdfd, int repfd)
+{
+    struct helper_report rep;
+    struct vms_procinfo info;
+
+    memset(&rep, 0, sizeof(rep));
+
+    if (setgid(ALT_UIC_GROUP) != 0) {
+        (void)write_full(repfd, &rep, sizeof(rep));   /* ok == 0 */
+        _exit(1);
+    }
+
+    /* First kernel-interface call: binds and registers this process. */
+    if (!(vms_kif_getjpi_self(&info) & 1)) {
+        (void)write_full(repfd, &rep, sizeof(rep));   /* ok == 0 */
+        _exit(1);
+    }
+
+    rep.ok      = 1;
+    rep.vms_pid = info.vms_pid;
+    rep.uic     = info.uic;
+    if (write_full(repfd, &rep, sizeof(rep)) != 0)
+        _exit(1);
+
+    for (;;) {
+        char ack = 'B';
+        burn_cpu();
+        if (write_full(repfd, &ack, 1) != 0)
+            _exit(0);
+        char cmd;
+        if (read_full(cmdfd, &cmd, 1) != 0)
+            _exit(0);           /* parent closed the command pipe: done */
+    }
 }
 
 /*
@@ -519,6 +681,165 @@ int main(void)
     CHECK(st & 1, "the subject's name is available again once it has exited");
     reap(retaken);
     unlink(HOLD_SCRIPT);
+
+    /* ---------------------------------------------------------------
+     * P11. THE OTHER THREE ITEM CODES $GETJPI NOW READS OUT OF THE
+     *      EXECUTIVE'S ROW: JPI$_UIC, JPI$_CPUTIM and JPI$_USERNAME.
+     *
+     * P1-P10 above only exercise JPI$_PID and JPI$_PRCNAM. The three
+     * codes below were rewritten by this item from "answer out of the
+     * caller's own PCB / getuid() / getrusage(SELF)" to "answer from the
+     * row the executive resolved", and a rewrite nothing asserts on is
+     * the untested-product-code this epic exists to stop shipping.
+     *
+     * Every check here is A-writes / B-reads and, more importantly, is
+     * DISCRIMINATING -- it fails if the code collapses back onto the
+     * caller. That needs a subject whose values genuinely differ from
+     * the caller's, which is why the subject is a helper in a DIFFERENT
+     * UIC GROUP burning its OWN CPU: on a rig where every process is
+     * root and idle, "the executive's UIC" and "my UIC" are the same
+     * number and the assertion would read identically either way.
+     * --------------------------------------------------------------- */
+    int cmdfd[2] = { -1, -1 }, repfd[2] = { -1, -1 };
+    pid_t helper = -1;
+
+    if (pipe(cmdfd) != 0 || pipe(repfd) != 0) {
+        CHECK(0, "P11: pipes for the cross-UIC-group helper");
+    } else if ((helper = fork()) < 0) {
+        CHECK(0, "P11: fork of the cross-UIC-group helper");
+    } else if (helper == 0) {
+        close(cmdfd[1]);
+        close(repfd[0]);
+        alt_group_helper(cmdfd[0], repfd[1]);
+        _exit(0);                               /* not reached */
+    } else {
+        close(cmdfd[0]);
+        close(repfd[1]);
+
+        struct helper_report rep;
+        memset(&rep, 0, sizeof(rep));
+        int got = read_full(repfd[0], &rep, sizeof(rep));
+
+        CHECK(got == 0 && rep.ok == 1 && rep.vms_pid != 0,
+              "a helper in UIC group 300 registered with the executive");
+        CHECK(got == 0 && (rep.uic >> 16) == (uint32_t)ALT_UIC_GROUP,
+              "the executive derived the helper's UIC group from its credentials");
+
+        if (got == 0 && rep.ok == 1) {
+            char ack;
+            CHECK(read_full(repfd[0], &ack, 1) == 0,
+                  "the helper reported its first CPU burn");
+
+            /* --- JPI$_UIC ------------------------------------------
+             * Must be the row the executive holds for the HELPER. If
+             * this reverts to pcb->uic or to (getgid()<<16)|getuid(),
+             * it becomes the caller's 0x00000000 and both checks fail.
+             *
+             * Mutation M-A (JPI$_UIC restored to the pre-item
+             * "pcb->uic, else (getgid()<<16)|getuid()") was built and run
+             * in this harness: 45/0 -> 43/2, and the two that flipped are
+             * exactly the two below. Both are detectors.
+             */
+            uint32_t helper_uic = 0, self_uic = 0;
+            st = getjpi_u32_of(rep.vms_pid, JPI$_UIC, &helper_uic);
+            CHECK(st & 1, "sys$getjpi read JPI$_UIC for another process");
+            CHECK(helper_uic == rep.uic,
+                  "JPI$_UIC is the UIC the EXECUTIVE derived for the helper");
+            st = getjpi_u32_of(selfpid, JPI$_UIC, &self_uic);
+            CHECK((st & 1) && helper_uic != self_uic,
+                  "JPI$_UIC distinguishes the target from the caller");
+
+            /* --- JPI$_CPUTIM ---------------------------------------
+             * Measured as a DELTA against the caller's own, so nothing
+             * depends on an absolute threshold or on how fast the
+             * emulated guest is. Between the two readings the helper
+             * burns another BURN_CLOCKS of CPU while the caller is
+             * blocked in read(). If JPI$_CPUTIM answered from
+             * getrusage(RUSAGE_SELF) -- what it did before this item --
+             * both readings would be the CALLER's.
+             *
+             * WHICH OF THESE ACTUALLY DISCRIMINATES, MEASURED, not
+             * assumed. Mutation M-B (jpi_cputim's "if (linux_pid ==
+             * getpid())" forced to "if (1)", so every answer is
+             * getrusage(RUSAGE_SELF)) was built and run in this harness:
+             * 45/0 -> 44/1, and the ONE assertion that flipped was
+             * "the CPU growth reported is the HELPER's". `t1 > 0` and
+             * `t2 > t1` both stayed GREEN under the mutation, because the
+             * caller is itself accumulating CPU between the two readings.
+             * They are companions, not detectors; the delta comparison is
+             * the detector. Do not delete it as redundant.
+             */
+            uint32_t t1 = 0, t2 = 0, s1 = 0, s2 = 0;
+            st = getjpi_u32_of(rep.vms_pid, JPI$_CPUTIM, &t1);
+            CHECK(st & 1, "sys$getjpi read JPI$_CPUTIM for another process");
+            CHECK(t1 > 0, "JPI$_CPUTIM reports CPU the helper actually burned");
+            (void)getjpi_u32_of(selfpid, JPI$_CPUTIM, &s1);
+
+            char go = 'G';
+            CHECK(write_full(cmdfd[1], &go, 1) == 0,
+                  "the helper was told to burn a second CPU quantum");
+            CHECK(read_full(repfd[0], &ack, 1) == 0,
+                  "the helper reported its second CPU burn");
+
+            (void)getjpi_u32_of(rep.vms_pid, JPI$_CPUTIM, &t2);
+            (void)getjpi_u32_of(selfpid, JPI$_CPUTIM, &s2);
+            CHECK(t2 > t1,
+                  "JPI$_CPUTIM tracks the TARGET's consumption over time");
+            CHECK((t2 - t1) > (s2 - s1),
+                  "the CPU growth reported is the HELPER's, not the caller's");
+
+            /* --- JPI$_USERNAME -------------------------------------
+             * The executive's row carries no username yet (vms-2b8 is
+             * adding identity to struct vms_proc), so for a non-self
+             * target sys$getjpi resolves the account database with the
+             * MEMBER half of the executive-reported UIC. Give the
+             * CALLER a recognisable self-declared PCB username first:
+             * if the non-self branch ever collapses back onto the
+             * caller's PCB -- which is exactly what the whole service
+             * did before this item -- that string comes back for the
+             * helper and the check fails.
+             *
+             * HONEST LIMIT, stated rather than papered over: this does
+             * NOT discriminate "the UIC MEMBER the executive reported"
+             * from "getuid()". It cannot, on this rig or in the
+             * product: /dev/vms is a root-only misc device, so every
+             * process that can reach the executive has uid 0 and both
+             * expressions are 0. What IS discriminated is PCB-vs-row,
+             * which is the change this item made. The remaining gap
+             * closes when vms-2b8 puts a username in the executive's
+             * row and the derivation goes away entirely.
+             *
+             * Mutation M-C (the `is_self ?` guard removed from BOTH the
+             * pcb binding and the username branch, i.e. the pre-item
+             * "always answer from my own PCB") was built and run in this
+             * harness: 45/0 -> 44/1, flipping exactly the
+             * "NOT the caller's own PCB username" check below.
+             */
+            vms_pcb_init(0);
+            vms_pcb_set_identity(selfpid, self_uic, CALLER_PCB_USER, "");
+
+            char huser[64], suser[64];
+            st = getjpi_str_of(rep.vms_pid, JPI$_USERNAME, huser, sizeof(huser));
+            CHECK(st & 1, "sys$getjpi read JPI$_USERNAME for another process");
+            CHECK(huser[0] != '\0',
+                  "JPI$_USERNAME for another process is not empty");
+            CHECK(strcmp(huser, CALLER_PCB_USER) != 0,
+                  "JPI$_USERNAME for another process is NOT the caller's own PCB username");
+
+            st = getjpi_str_of(selfpid, JPI$_USERNAME, suser, sizeof(suser));
+            CHECK((st & 1) && strcmp(suser, CALLER_PCB_USER) == 0,
+                  "JPI$_USERNAME for the CALLER still reads its own PCB (vms-2b8 owns that facade)");
+        }
+
+        close(cmdfd[1]);            /* releases the helper from its loop */
+        close(repfd[0]);
+        if (helper > 0) {
+            kill(helper, SIGKILL);
+            int hst;
+            while (waitpid(helper, &hst, 0) < 0 && errno == EINTR)
+                ;
+        }
+    }
 
     printf("=== test_syssvc_procnam: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

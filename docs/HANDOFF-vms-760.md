@@ -257,6 +257,14 @@ Two readings, both testable, both kept live behind `OVMX_CFG2_ALL`:
 
 Live 3-node cluster: VAX1 + VAX2 + VAX3.
 
+> ⚠ **2026-07-30g: I broke the reset rule and got a junk result — don't repeat
+> it.** Runs `coord5` and `coord6` went out back-to-back with no reset between
+> them. By `coord6` the transition epoch had drifted to `0x00000007`, the barrier
+> stopped at step 1, and **no cat-`0x02` request arrived at all** — so the run
+> said nothing about the change it was meant to test. Stale CSBs and a
+> half-transitioned cluster degrade the oracle *silently*: you get a plausible
+> number, not an error. **One reset, one believable run.**
+
 > ⚠ **2026-07-30g: `reset3.sh` does not always land 3 MEMBER.** After one reset
 > `F$GETSYI("CLUSTER_NODES")` read **2** with all three SIMH processes up (VAX3
 > booted but had not rejoined; it joined ~1 min later). **Always verify

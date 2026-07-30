@@ -39,13 +39,30 @@
 
 #include "vms_kif.h"
 
+/*
+ * Status values are ORACLE-PINNED (vms-8019) on the reference lab
+ * OpenVMS VAX V7.3 node VAX1: $SSDEF extracted from
+ * SYS$LIBRARY:STARLET.MLB gives SS$_DUPLNAM 148 and SS$_NONEXPR 2280,
+ * and F$MESSAGE round-trips them to %SYSTEM-F-DUPLNAM / %SYSTEM-W-NONEXPR.
+ */
 #define SS_NORMAL       1
-#define SS_DUPLNAM      434
-#define SS_NONEXPR      2540
+#define SS_DUPLNAM      148
+#define SS_NONEXPR      2280
 
 #define CHILD_NAME      "VMS$WORKER"
 #define PARENT_NAME     "VMS$PARENT"
 #define ABSENT_NAME     "VMS$NOSUCH"
+#define ZERO_NAME       "VMS$GRP0"
+#define G300_NAME       "VMS$GRP300"
+
+/*
+ * UIC group used by the cross-group case. OVMX maps UIC [group,member]
+ * onto the task's [gid,uid], so a helper that setgid()s to this value
+ * lands in a different UIC group from the root parent (group 0) while
+ * remaining uid 0 -- it keeps the privilege needed to open /dev/vms,
+ * which a full setuid() would drop.
+ */
+#define ALT_UIC_GROUP   300
 
 static int pass = 0, fail = 0;
 
@@ -59,6 +76,15 @@ struct child_report {
     uint32_t getjpi_status;             /* status of its GETJPI(self) */
     uint32_t linux_pid;                 /* pid the executive has for it */
     char     prcnam[VMS_PRCNAM_SIZE];   /* name the executive has for it */
+};
+
+/* What the cross-UIC-group helper reports back over a pipe. */
+struct group_report {
+    uint32_t setprn_shared;     /* SETPRN of a name group 0 already holds */
+    uint32_t lookup_status;     /* GETJPI(prcnam) of that shared name */
+    uint32_t lookup_pid;        /* ... and the pid it resolved to */
+    uint32_t setprn_private;    /* SETPRN of a name only this group holds */
+    uint32_t own_uic;           /* the UIC the executive derived for us */
 };
 
 static int open_and_register(void)
@@ -111,6 +137,62 @@ static int child_after_exec(int wfd)
         pause();
 
     return 0;
+}
+
+/*
+ * alt_group_helper - the other half of the UIC-group scoping case.
+ *
+ * Runs in a DIFFERENT UIC group from the parent (setgid before
+ * registering, so the executive derives the new group from our
+ * credentials -- we never get to declare it). It then does the two
+ * things that a group-blind implementation cannot do:
+ *
+ *   - takes a process name the parent's group already holds, which
+ *     must be ACCEPTED because uniqueness is scoped to the group; and
+ *   - resolves that shared name to ITSELF, not to the parent's row.
+ *
+ * Finally it renames itself to a name that exists only in this group,
+ * so the parent can prove it CANNOT see it from group 0.
+ *
+ * Called in a forked child; never returns.
+ */
+static void alt_group_helper(int wfd)
+{
+    struct group_report rep;
+    struct vms_procinfo info;
+
+    memset(&rep, 0, sizeof(rep));
+
+    /* setgid() only: staying uid 0 keeps the privilege needed to open
+     * /dev/vms, while moving us into UIC group ALT_UIC_GROUP. */
+    if (setgid(ALT_UIC_GROUP) != 0)
+        _exit(80);
+
+    /* Drop the inherited descriptor and take our own channel. */
+    vms_kif_close();
+    if (vms_kif_open() < 0)
+        _exit(81);
+    if (vms_kif_register((uint32_t)getpid(), 0) != SS_NORMAL)
+        _exit(82);
+
+    memset(&info, 0, sizeof(info));
+    if (vms_kif_getjpi_self(&info) == SS_NORMAL)
+        rep.own_uic = info.uic;
+
+    rep.setprn_shared = vms_kif_setprn(ZERO_NAME);
+
+    memset(&info, 0, sizeof(info));
+    rep.lookup_status = vms_kif_getjpi_prcnam(ZERO_NAME, &info);
+    rep.lookup_pid = info.linux_pid;
+
+    rep.setprn_private = vms_kif_setprn(G300_NAME);
+
+    if (write(wfd, &rep, sizeof(rep)) != (ssize_t)sizeof(rep))
+        _exit(83);
+    close(wfd);
+
+    for (;;)
+        pause();
 }
 
 int main(int argc, char **argv)
@@ -259,6 +341,106 @@ int main(int argc, char **argv)
     status = vms_kif_setprn(CHILD_NAME);
     CHECK(status == SS_NORMAL, "released name is available again");
 
+    /* --------------------------------------------------------------
+     * 7. UIC-GROUP SCOPING.
+     *
+     * ORACLE-PINNED on the reference lab, OpenVMS VAX V7.3 node VAX1,
+     * 2026-07-30 -- three detached processes, same process name,
+     * different UICs:
+     *
+     *   RUN/DETACHED/UIC=[300,1]/PROCESS_NAME=OVMXDUP ...
+     *     %RUN-S-PROC_ID, identification of created process is 20200220
+     *   RUN/DETACHED/UIC=[301,1]/PROCESS_NAME=OVMXDUP ...
+     *     %RUN-S-PROC_ID, identification of created process is 20200221
+     *   RUN/DETACHED/UIC=[300,2]/PROCESS_NAME=OVMXDUP ...
+     *     %RUN-F-CREPRC, process creation failed
+     *     -SYSTEM-F-DUPLNAM, duplicate name
+     *
+     * i.e. the SAME name in a DIFFERENT group is accepted; the same
+     * name in the SAME group is refused with SS$_DUPLNAM.
+     *
+     * Every process above this line runs as root, so uic_group is 0
+     * everywhere and the group comparison is trivially true -- those
+     * assertions cannot tell a group-scoped table from a global one.
+     * The helper below is the only part of this test that can.
+     * -------------------------------------------------------------- */
+    {
+        struct group_report grpt;
+        int gpipe[2];
+        pid_t helper;
+
+        status = vms_kif_setprn(ZERO_NAME);
+        CHECK(status == SS_NORMAL, "group 0 takes a name");
+
+        if (pipe(gpipe) < 0) {
+            printf("  FAIL: pipe() for group helper\n");
+            fail++;
+            goto done;
+        }
+
+        helper = fork();
+        if (helper < 0) {
+            printf("  FAIL: fork() for group helper\n");
+            fail++;
+            close(gpipe[0]);
+            close(gpipe[1]);
+            goto done;
+        }
+        if (helper == 0) {
+            close(gpipe[0]);
+            alt_group_helper(gpipe[1]);
+            _exit(84);   /* not reached */
+        }
+
+        close(gpipe[1]);
+        memset(&grpt, 0, sizeof(grpt));
+        if (read(gpipe[0], &grpt, sizeof(grpt)) != (ssize_t)sizeof(grpt)) {
+            printf("  FAIL: cross-UIC-group helper never reported\n");
+            fail++;
+            kill(helper, SIGKILL);
+            waitpid(helper, NULL, 0);
+            goto done;
+        }
+
+        /* The executive derived the helper's UIC from its credentials. */
+        CHECK((grpt.own_uic >> 16) == (uint32_t)ALT_UIC_GROUP,
+              "executive derives the helper's UIC group from its credentials");
+
+        /* DISCRIMINATOR A: a name held in group 0 is free in group 300.
+         * A group-blind table returns SS$_DUPLNAM here. */
+        CHECK(grpt.setprn_shared == SS_NORMAL,
+              "same process name in a different UIC group is accepted");
+
+        /* DISCRIMINATOR B: the helper resolves the shared name to
+         * itself, not to the group-0 holder. */
+        CHECK(grpt.lookup_status == SS_NORMAL &&
+              grpt.lookup_pid == (uint32_t)helper,
+              "name lookup resolves within the caller's own UIC group");
+
+        CHECK(grpt.setprn_private == SS_NORMAL,
+              "helper renames itself to a group-private name");
+
+        /* DISCRIMINATOR C: from group 0, a name that exists only in
+         * group 300 must not resolve at all. A group-blind table
+         * returns SS$_NORMAL here. */
+        memset(&info, 0, sizeof(info));
+        status = vms_kif_getjpi_prcnam(G300_NAME, &info);
+        CHECK(status == SS_NONEXPR,
+              "a name held only in another UIC group does not resolve");
+
+        /* Control: our own name in our own group still resolves, so a
+         * failure above is scoping and not a broken lookup. */
+        memset(&info, 0, sizeof(info));
+        status = vms_kif_getjpi_prcnam(ZERO_NAME, &info);
+        CHECK(status == SS_NORMAL && info.linux_pid == (uint32_t)getpid(),
+              "our own name still resolves to us in our own group");
+
+        kill(helper, SIGKILL);
+        waitpid(helper, NULL, 0);
+        close(gpipe[0]);
+    }
+
+done:
     vms_kif_close();
 
     printf("=== test_kmod_procnam: %d passed, %d failed ===\n", pass, fail);

@@ -291,4 +291,40 @@ struct vms_setprn_args {
 #define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
 #define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
 
+/*
+ * ABI lock for the process-table ioctls (vms-8019).
+ *
+ * The kernel side of this header gets _IOWR from <linux/ioctl.h>; the
+ * userspace side may instead fall back to the hand-rolled macros at the
+ * top of this file, and OVMX builds on two architectures. Nothing
+ * previously checked that all four combinations produce the same
+ * numbers -- the executive proof has only ever been RUN on aarch64, so
+ * the x86_64 half of that agreement was an assumption.
+ *
+ * These assertions turn it into a build failure instead. They are
+ * evaluated by every translation unit that includes this header, kernel
+ * or userspace, on whatever architecture is compiling -- so the CI
+ * x86_64 build proves the layout even where the QEMU proof cannot run.
+ *
+ * The literals are the asm-generic _IOC encoding written out by hand:
+ *   (dir << 30) | (sizeof(struct) << 16) | ('V' << 8) | nr
+ * with dir == 3 (_IOC_READ|_IOC_WRITE). If a struct grows, these fail
+ * and the ioctl NUMBER has changed -- which is a wire break, not a
+ * cosmetic one, and must be handled deliberately.
+ */
+_Static_assert(sizeof(struct vms_procinfo) == 40,
+               "vms_procinfo layout changed: process-table ioctl ABI break");
+_Static_assert(sizeof(struct vms_setprn_args) == 24,
+               "vms_setprn_args layout changed: VMS_IOCTL_SETPRN ABI break");
+_Static_assert(sizeof(struct vms_getjpi_args) == 48,
+               "vms_getjpi_args layout changed: VMS_IOCTL_GETJPI ABI break");
+_Static_assert(sizeof(struct vms_procscan_args) == 48,
+               "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
+_Static_assert(VMS_IOCTL_SETPRN == 0xC0185641u,
+               "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETJPI == 0xC0305642u,
+               "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0305643u,
+               "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
+
 #endif /* _VMS_IOCTL_H */

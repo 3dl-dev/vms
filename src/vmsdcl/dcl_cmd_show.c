@@ -34,6 +34,8 @@
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
 #include "vmsqueue.h"
+/* The executive process table's reader (SHOW SYSTEM enumerates it). */
+#include "vms_kif.h"
 
 /* Forward declarations for queue/intrusion subcommands (dcl_cmd_process.c) */
 extern int cmd_show_queue(struct dcl_command *cmd);
@@ -289,25 +291,54 @@ static int cmd_show_system(struct dcl_command *cmd)
     printf("  Pid    Process Name    State  Pri      I/O       CPU"
            "       Page flts  Pages\n");
 
-    /* Show VMS processes from PCB table only — no /proc scanning */
-    struct vms_pcb *pcb = vms_pcb_get();
+    /*
+     * ENUMERATE THE EXECUTIVE'S PROCESS TABLE (vms-8019).
+     *
+     * SHOW SYSTEM is a READER of an executive facility, never a thing
+     * that fabricates its own answer (CLAUDE.md Rule 11 corollary). What
+     * stood here did the opposite: it printed exactly ONE row -- the
+     * CALLING process -- out of that process's own private PCB, and if
+     * the PCB was empty it FABRICATED a row from getpid() and the DCL
+     * context's self-declared process name. A system display that can
+     * only ever see the process running it is not a system display.
+     *
+     * The rows now come from src/kernel/vms_proctab.c through
+     * vms_kif_procscan(), so every process the executive knows about is
+     * listed, named as the executive knows it -- which is the only sense
+     * in which a VMS process name means anything.
+     *
+     * There is no absent-executive branch and must not be one: the first
+     * vms_kif_* call binds and registers this process (kif_bind), so the
+     * table always holds at least the caller. If the scan yields nothing
+     * at all, the executive is unreachable -- a state OVMX does not run
+     * in (Rule 9: PID 1 refuses to boot without it) -- and printing a
+     * fabricated row to cover it is the illegal third answer (Rule 10).
+     */
+    uint32_t index = 0;
+    struct vms_procinfo info;
 
-    if (pcb && pcb->vms_pid != 0) {
-        /* Use PCB identity */
-        const char *pname = pcb->prcnam[0] ? pcb->prcnam : "OVMX";
+    while (vms_kif_procscan(&index, &info) & 1) {
         char cpu_str[32] = "0 00:00:00.00";
-        read_proc_cpu((int)getpid(), cpu_str, sizeof(cpu_str));
-        printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
-               pcb->vms_pid, pname, "CUR", 4, 0, cpu_str, 0, 340);
-    } else {
-        /* PCB not initialized — fabricate current process entry */
-        const char *pname = (ctx && ctx->process_name[0])
-                            ? ctx->process_name : "OVMX";
-        uint32_t vpid = (uint32_t)getpid();
-        char cpu_str[32] = "0 00:00:00.00";
-        read_proc_cpu((int)getpid(), cpu_str, sizeof(cpu_str));
-        printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
-               vpid, pname, "CUR", 4, 0, cpu_str, 0, 340);
+        read_proc_cpu((int)info.linux_pid, cpu_str, sizeof(cpu_str));
+
+        /*
+         * State, Pri, I/O, Page flts and Pages are printed as "---".
+         *
+         * They are properties of the VMS SCHEDULER and of VMS process
+         * accounting, and the OVMX executive maintains neither -- the
+         * row carries identity, not scheduling state. The values that
+         * used to appear in these columns ("CUR", 4, 0, 0, 340) were
+         * constants, and repeating a constant once per enumerated
+         * process would turn one decoration into a table of them.
+         * Under Rule 10 the answer to "VMS reports something OVMX does
+         * not compute" is not a plausible-looking number; "---" is the
+         * same not-available marker this function already uses for
+         * uptime. Sourcing them for real is a separate item.
+         */
+        printf(" %08X %-15s %-5s %3s %9s  %s  %9s  %5s\n",
+               info.vms_pid,
+               info.prcnam[0] ? info.prcnam : "",
+               "---", "---", "---", cpu_str, "---", "---");
     }
 
     return SS$_NORMAL;

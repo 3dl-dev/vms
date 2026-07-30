@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include "starlet.h"
 #include "vms/pcb.h"
+#include "vms_kif.h"
 
 /*
  * sys$exit - Terminate process with a VMS status code.
@@ -53,64 +54,175 @@ uint32_t sys$exit(uint32_t code) {
 }
 
 /*
+ * jpi_cputim - CPU time of a process, in the 10-millisecond units
+ * JPI$_CPUTIM reports.
+ *
+ * Self is answered from getrusage(RUSAGE_SELF). Another process is
+ * answered from /proc/<pid>/stat fields 14 and 15 (utime, stime, in
+ * clock ticks). That is not a fabrication and not a way around the
+ * executive: the linux_pid it reads came OUT of the executive's row for
+ * the resolved process, and CPU time consumed is a real property of a
+ * real process, measured by the kernel that ran it -- the same quantity
+ * VMS reports, from the only accounting that exists. The OVMX executive
+ * does not maintain its own CPU accounting, so there is nothing here to
+ * read it from instead.
+ *
+ * Returns 0 (and leaves the item length set) when /proc cannot answer.
+ */
+static uint32_t jpi_cputim(uint32_t linux_pid)
+{
+    if (linux_pid == (uint32_t)getpid()) {
+        struct rusage ru;
+        getrusage(RUSAGE_SELF, &ru);
+        return (uint32_t)(
+            (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 100 +
+            (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 10000);
+    }
+
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%u/stat", (unsigned)linux_pid);
+    FILE *f = fopen(path, "r");
+    if (!f) return 0;
+
+    char buf[1024];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    if (n == 0) return 0;
+    buf[n] = '\0';
+
+    /* The comm field is parenthesised and may contain spaces, so field
+     * splitting has to start after the LAST ')'. utime/stime are the
+     * 12th and 13th fields after that point. */
+    char *p = strrchr(buf, ')');
+    if (!p) return 0;
+    p++;
+
+    unsigned long long utime = 0, stime = 0;
+    int field = 0;
+    for (char *tok = strtok(p, " "); tok; tok = strtok(NULL, " ")) {
+        field++;                        /* field 1 here == stat field 3 */
+        if (field == 12) utime = strtoull(tok, NULL, 10);
+        else if (field == 13) { stime = strtoull(tok, NULL, 10); break; }
+    }
+
+    long hz = sysconf(_SC_CLK_TCK);
+    if (hz <= 0) hz = 100;
+    return (uint32_t)(((utime + stime) * 100ULL) / (unsigned long long)hz);
+}
+
+/*
  * sys$getjpi - Get Job/Process Information.
  *
- * Returns information about a process via an item list. Supported items:
- *   JPI$_PID      - Process ID (getpid)
- *   JPI$_PRCNAM   - Process name (from PCB)
- *   JPI$_USERNAME - Username (from PCB or passwd database)
- *   JPI$_UIC      - User Identification Code (from PCB or [gid,uid])
- *   JPI$_CPUTIM   - CPU time in 10-millisecond units
+ * A READER OF THE EXECUTIVE PROCESS TABLE (vms-8019, CLAUDE.md Rule 11).
+ *
+ * This service used to ignore both pidadr and prcnam entirely and answer
+ * every question out of the CALLER's own per-process PCB -- so $GETJPI on
+ * another process returned the asker's own name, uic and cpu time, and
+ * resolving a process BY NAME was not implemented at all. That is the
+ * defect this item exists to remove: a process name that only its owner
+ * can see is not a VMS process name, it is a variable.
+ *
+ * The target is now resolved in the executive (src/kernel/vms_proctab.c,
+ * behind /dev/vms) and every item that the executive's row carries is
+ * answered FROM that row:
+ *   JPI$_PID      - the row's VMS process ID
+ *   JPI$_PRCNAM   - the row's process name, as set by $SETPRN / $CREPRC
+ *   JPI$_UIC      - the row's UIC, derived by the executive from the
+ *                   task's real credentials (a process cannot declare it)
+ *   JPI$_CPUTIM   - see jpi_cputim() above
+ *   JPI$_USERNAME - see the item's own comment below
+ *
+ * Selection follows the VMS argument rules: prcnam names a process,
+ * otherwise a non-zero *pidadr names one, otherwise the caller. There is
+ * NO fallback to local state when the executive cannot resolve the
+ * target -- the honest answer is SS$_NONEXPR, which is what VMS returns
+ * for a process that does not exist.
  */
 uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam,
                     const struct item_list_3 *itmlst,
                     void *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm) {
-    (void)efn; (void)prcnam; (void)iosb; (void)astadr; (void)astprm;
-
-    pid_t pid = pidadr ? (pid_t)*pidadr : getpid();
+    (void)efn; (void)iosb; (void)astadr; (void)astprm;
 
     if (!itmlst) return SS$_BADPARAM;
 
-    struct vms_pcb *pcb = vms_pcb_get();
+    struct vms_procinfo info;
+    uint32_t status;
+
+    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
+        /* The key travels untruncated: VMS_PRCNAM_XFER is deliberately
+         * larger than any legal process name so that an oversized name
+         * is REJECTED by the executive (SS$_IVLOGNAM) instead of being
+         * clipped into a valid one that resolves a different process.
+         * See the VMS_PRCNAM_XFER comment in src/kernel/vms_ioctl.h. */
+        char key[VMS_PRCNAM_XFER];
+        dsc$strncpy(key, prcnam, sizeof(key));
+        status = vms_kif_getjpi_prcnam(key, &info);
+    } else if (pidadr && *pidadr != 0) {
+        status = vms_kif_getjpi_pid(*pidadr, &info);
+    } else {
+        status = vms_kif_getjpi_self(&info);
+    }
+
+    if (!(status & 1))
+        return status;
+
+    int is_self = (info.linux_pid == (uint32_t)getpid());
+    struct vms_pcb *pcb = is_self ? vms_pcb_get() : NULL;
 
     for (const struct item_list_3 *item = itmlst;
          item->buflen != 0 || item->item_code != 0; item++) {
         switch (item->item_code) {
             case JPI$_PID:
                 if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)item->bufaddr = (uint32_t)pid;
+                    *(uint32_t *)item->bufaddr = info.vms_pid;
                 if (item->retlen) *item->retlen = sizeof(uint32_t);
                 break;
 
             case JPI$_PRCNAM:
+                /*
+                 * The row's name, verbatim -- including the empty string
+                 * for a process that has never been named.
+                 *
+                 * This used to invent "_%08X" from the pid when the PCB
+                 * carried no name. That invented name was exactly the
+                 * facade this item exists to delete: nothing else could
+                 * resolve it (the executive skips unnamed rows in
+                 * find_by_name), so $GETJPI reported a name to its owner
+                 * that no other process could see. OVMX does not yet
+                 * assign a default name at process creation the way VMS
+                 * does; until it does, an unnamed process reports no
+                 * name rather than one only it believes in.
+                 */
                 if (item->bufaddr) {
-                    const char *name = "";
-                    char default_name[16];
-
-                    if (pcb && pcb->prcnam[0] != '\0') {
-                        name = pcb->prcnam;
-                    } else {
-                        /* Generate a default process name from PID */
-                        snprintf(default_name, sizeof(default_name),
-                                 "_%08X", (uint32_t)pid);
-                        name = default_name;
-                    }
-
-                    uint16_t len = (uint16_t)strlen(name);
+                    uint16_t len = (uint16_t)strlen(info.prcnam);
                     if (len > item->buflen) len = item->buflen;
-                    memcpy(item->bufaddr, name, len);
+                    memcpy(item->bufaddr, info.prcnam, len);
                     if (item->retlen) *item->retlen = len;
                 }
                 break;
 
             case JPI$_USERNAME: {
+                /*
+                 * The executive's row does not carry a username yet
+                 * (vms-2b8 is adding identity to struct vms_proc), so
+                 * for another process the name is resolved through the
+                 * passwd database from the UIC MEMBER the executive
+                 * reported -- executive-supplied, credential-derived
+                 * data, not anything the target process declared.
+                 *
+                 * For the caller itself the existing PCB path is kept
+                 * unchanged. It is a self-declared value (the
+                 * VMS_USERNAME facade) and it is NOT this item's to
+                 * remove -- vms-2b8 owns it, and both branches touch
+                 * the same struct.
+                 */
                 const char *name = NULL;
-                if (pcb && pcb->username[0] != '\0') {
+                if (is_self && pcb && pcb->username[0] != '\0') {
                     name = pcb->username;
                 } else {
-                    struct passwd *pw = getpwuid(getuid());
+                    struct passwd *pw = getpwuid((uid_t)(info.uic & 0xFFFFu));
                     name = pw ? pw->pw_name : "UNKNOWN";
                 }
                 uint16_t len = (uint16_t)strlen(name);
@@ -121,25 +233,13 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
             }
 
             case JPI$_UIC:
-                if (item->bufaddr && item->buflen >= sizeof(uint32_t)) {
-                    if (pcb && pcb->uic != 0) {
-                        *(uint32_t *)item->bufaddr = pcb->uic;
-                    } else {
-                        /* UIC: [group,member] packed as (gid << 16) | uid */
-                        *(uint32_t *)item->bufaddr =
-                            ((uint32_t)getgid() << 16) | (uint32_t)getuid();
-                    }
-                }
+                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+                    *(uint32_t *)item->bufaddr = info.uic;
                 if (item->retlen) *item->retlen = sizeof(uint32_t);
                 break;
 
             case JPI$_CPUTIM: {
-                /* CPU time in 10ms units */
-                struct rusage ru;
-                getrusage(RUSAGE_SELF, &ru);
-                uint32_t cputim = (uint32_t)(
-                    (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 100 +
-                    (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 10000);
+                uint32_t cputim = jpi_cputim(info.linux_pid);
                 if (item->bufaddr && item->buflen >= sizeof(uint32_t))
                     *(uint32_t *)item->bufaddr = cputim;
                 if (item->retlen) *item->retlen = sizeof(uint32_t);
@@ -237,21 +337,76 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     if (child_uic == 0 && parent_pcb)
         child_uic = parent_pcb->uic;
 
-    /* Process name */
-    char child_prcnam[16] = {0};
-    if (prcnam && prcnam->dsc$a_pointer)
+    /*
+     * Process name.
+     *
+     * Held in an inbound transfer buffer, not a VMS_PRCNAM_SIZE field:
+     * an oversized name must reach the EXECUTIVE intact so the executive
+     * rejects it (SS$_IVLOGNAM), exactly as VMS does. Clipping it here
+     * would create a process under a name the caller never asked for.
+     */
+    char child_prcnam[VMS_PRCNAM_XFER] = {0};
+    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0)
         dsc$strncpy(child_prcnam, prcnam, sizeof(child_prcnam));
 
+    /*
+     * NAMING HANDSHAKE -- OVMX design choice, matching VMS's OBSERVABLE
+     * semantics (CLAUDE.md Rule 8: labelled as OVMX's own mechanism).
+     *
+     * On VMS the executive names the process AS IT CREATES IT, so a
+     * clash is reported to the CREATOR:
+     *   Oracle (VAX1, OpenVMS VAX V7.3, recorded on this item): a third
+     *   detached process taking a PROCESS_NAME already held in the same
+     *   UIC group is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM.
+     *
+     * OVMX creates the process with fork(), and only the child can enter
+     * itself in the executive's table (the entry is keyed by ITS tgid).
+     * So the child performs $SETPRN before exec and reports the status
+     * back over a pipe; $CREPRC returns that status to its caller. The
+     * pipe is O_CLOEXEC, so it costs the activated image nothing.
+     *
+     * Naming happens BEFORE the exec and before the I/O redirection: the
+     * executive entry is keyed by the pid, which execve() does not
+     * change, so the name survives image activation with no userspace
+     * carrier of any kind. That is the whole point -- the rejected
+     * VMS_PRCNAM environment-variable "fix" carried a name the image
+     * could only tell itself.
+     */
+    int namefd[2] = { -1, -1 };
+    if (child_prcnam[0]) {
+        if (pipe(namefd) < 0)
+            return SS$_INSFMEM;
+        /* Not pipe2(O_CLOEXEC): that needs _GNU_SOURCE, and this file is
+         * built against both glibc and musl. */
+        fcntl(namefd[0], F_SETFD, FD_CLOEXEC);
+        fcntl(namefd[1], F_SETFD, FD_CLOEXEC);
+    }
+
     pid_t pid = fork();
-    if (pid < 0) return SS$_INSFMEM;
+    if (pid < 0) {
+        if (namefd[0] >= 0) { close(namefd[0]); close(namefd[1]); }
+        return SS$_INSFMEM;
+    }
 
     if (pid == 0) {
+        /* Child: enter the executive's process table under the requested
+         * name before anything else can fail, and tell the creator how it
+         * went. An unnamed process is expressed by never calling $SETPRN,
+         * never by naming it something invented. */
+        if (child_prcnam[0]) {
+            close(namefd[0]);
+            uint32_t nst = vms_kif_setprn(child_prcnam);
+            ssize_t w = write(namefd[1], &nst, sizeof(nst));
+            (void)w;
+            close(namefd[1]);
+            if (!(nst & 1))
+                _exit(1);
+        }
+
         /* Child: Initialize PCB with inherited context */
         struct vms_pcb *child_pcb = vms_pcb_init(child_privs);
         if (child_pcb) {
             const char *username = parent_pcb ? parent_pcb->username : "UNKNOWN";
-            if (!child_prcnam[0])
-                snprintf(child_prcnam, sizeof(child_prcnam), "_%08X", getpid());
             vms_pcb_set_identity((uint32_t)getpid(), child_uic,
                                  username, child_prcnam);
             if (parent_pcb && parent_pcb->default_dir[0])
@@ -287,6 +442,33 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     }
 
     /* Parent process */
+    if (child_prcnam[0]) {
+        close(namefd[1]);
+        uint32_t nst = 0;
+        ssize_t r = read(namefd[0], &nst, sizeof(nst));
+        close(namefd[0]);
+
+        if (r == (ssize_t)sizeof(nst) && !(nst & 1)) {
+            /* The executive refused the name (SS$_DUPLNAM within the UIC
+             * group, or SS$_IVLOGNAM for a malformed one). The child has
+             * already exited; reap it so the caller is not left with a
+             * zombie for a process that was never named, and hand the
+             * caller the executive's own status. */
+            int wstatus;
+            while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
+                ;
+            return nst;
+        }
+
+        /*
+         * Anything else means the child never got as far as reporting --
+         * it died between fork() and the write. The PROCESS was still
+         * created, which is what $CREPRC's contract is about, and there
+         * is no VMS status for "the creator could not hear the child",
+         * so no status is invented for it (Rule 10).
+         */
+    }
+
     if (pidadr) *pidadr = (uint32_t)pid;
     return SS$_NORMAL;
 }

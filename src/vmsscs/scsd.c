@@ -669,6 +669,26 @@ static int cm_response_shape(uint8_t category, uint8_t opcode)
         if (opcode == SCS_MEMBER_OP_DLM_REBUILD) {
             return CM_RSP_DLM;
         }
+        /* op 0x01 (and its 3x-higher-volume sibling op 0x12): SILENCE IS THE
+         * GROUNDED ANSWER HERE, not a gap to be closed. Do not "finish" this.
+         *
+         * A real responder's 0x82/0x01 reply is NOT derivable from the request:
+         * it echoes body[0:20] and body[56:132] but REWRITES the 36-byte window
+         * body[20:56] from its own lock-manager state. Mechanically tested over
+         * 17218 real request/response pairs in two captures -- the op-0x0d
+         * recipe reconstructs 0 of them, and no recipe short of "have a lock
+         * database" reconstructs more than 37%. body[28:32] of the request is
+         * the SENDER'S lock handle and body[112:116] is address-shaped sender
+         * state; echoing either reflects a peer's live lock-database pointer,
+         * which is the INCONSTATE/LOCKMGRERR failure mode exactly.
+         *
+         * And refusing costs nothing: in the run where OVMX reached MEMBER, one
+         * arrived 47.8 s after membership, OVMX answered only the SCS credit,
+         * VAX1 NEVER retransmitted it, and OVMX was not dropped -- the opposite
+         * of op 0x0d, which retransmits 3x and freezes the barrier.
+         *
+         * OVMX holds no locks. The honest answer to a lock request is nothing.
+         * Revisit only when OVMX has a real lock manager to answer FROM. */
         return CM_RSP_NONE;
     case SCS_MEMBER_CAT_MEMBERSHIP:
         /* Closes the transaction. Token + our OWN parameter block, never an

@@ -63,20 +63,23 @@ struct vms_proc *vms_proc_find(pid_t pid)
 }
 
 /*
- * ONE PCB PER PROCESS, SHARED BY EVERY THREAD (vms-2b8).
+ * vms_proc_find_or_err - this TASK'S process entry.
  *
- * The key is current->tgid, NOT current->pid. In the kernel current->pid is
- * the THREAD id: keying on it mints one executive process entry per Linux
- * thread, so two threads of one image would hold two different identities,
- * two different privilege masks and two different sets of event flags, and
- * neither could see the other's. On OpenVMS a process has exactly one PCB
- * and every thread of it shares that PCB -- identity is a property of the
- * PROCESS. A per-thread row is the same facade shape as a per-process
- * logical name table (CLAUDE.md Rule 11), one layer in: it reports a
- * perfectly consistent identity that nothing else in the process shares.
+ * KEYED ON THE THREAD GROUP, NOT THE THREAD (vms-9fc round 2).
  *
- * This also makes the entry survive execve() from a non-leader thread,
- * which changes current->pid to the tgid but leaves the tgid itself alone.
+ * On OpenVMS a process has exactly ONE PCB and its kernel threads SHARE
+ * it -- that shared residency is the entire meaning of a process-wide
+ * event flag cluster, a process logical name table, a process name and a
+ * process's lock ids. Keying this table on current->pid (the Linux TID)
+ * minted one VMS process per THREAD: two threads of one image disagreed
+ * about their own identity, could not see each other's event flags, and
+ * could not release each other's locks. That is Rule 11's facade shape
+ * inverted -- per-thread state pretending to be per-process -- and it is
+ * not something VMS can be in.
+ *
+ * Linux's process-wide identifier is the thread-group id: current->tgid,
+ * which is what getpid(2) returns, while current->pid is what gettid(2)
+ * returns. So tgid is the key, and task_tgid() is the pinned identity.
  */
 struct vms_proc *vms_proc_find_or_err(void)
 {
@@ -191,8 +194,10 @@ struct vms_proc *vms_proc_register(pid_t pid)
     memset(proc->username, 0, sizeof(proc->username));
 
     /*
-     * Pin the backing task's pid so the entry's liveness can be tested
-     * without racing pid reuse. Released in vms_proc_free().
+     * Pin the backing PROCESS's pid so the entry's liveness can be tested
+     * without racing pid reuse. task_tgid(), not task_pid(): the entry
+     * belongs to the whole thread group and must outlive any one thread
+     * in it (see vms_proc_find_or_err). Released in vms_proc_free().
      */
     proc->pid_ref = get_pid(task_tgid(current));
 
@@ -375,18 +380,59 @@ static long vms_ioctl_register(unsigned long arg)
     vms_proc_reap_dead();
 
     /*
-     * NOTHING FROM args IS READ. The struct is output-only now: the
-     * privilege mask went in the first round of this item, and the VMS
-     * process ID goes here. A registration that takes no input from the
-     * process cannot be steered by one.
+     * NOTHING FROM args IS READ. The struct is output-only: the privilege
+     * mask went in the first round of vms-2b8 and the VMS process ID went
+     * in the third. A registration that takes no input from the process
+     * cannot be steered by one.
+     *
+     * ADOPT, do not recreate, and do not report an error (vms-9fc).
+     *
+     * This used to answer 0x1C for a task that already had an entry, which
+     * made registration a once-per-image operation. It is not: the executive
+     * entry belongs to the PROCESS and survives execve(), so the very next
+     * image activated in the same process would be told "already registered"
+     * and, having nothing else to do with that, would carry on unregistered.
+     *
+     * ORACLE PIN (reference lab node VAX1, OpenVMS VAX V7.3, 2026-07-30):
+     * activating an image inside an existing process does not recreate the
+     * process and is not an error. SHOW PROCESS/ACCOUNTING before and after
+     * two further image activations reports
+     *     Process ID: 2020021D   Process name: "SYSTEM"   Images activated: 19
+     *     Process ID: 2020021D   Process name: "SYSTEM"   Images activated: 21
+     * -- same PCB, same identity, same connect time, images activated simply
+     * counts up. So the VMS-faithful answer to "register a process that
+     * already exists" is to hand back the process that already exists --
+     * INCLUDING the VMS process ID it was already assigned. Minting a second
+     * ID for the same process would make one process answer to two, which is
+     * the collision defect vms-2b8 round 3 removed, arriving from the other
+     * direction.
      */
-    proc = vms_proc_register(current->tgid);
-    if (IS_ERR(proc)) {
-        args.vms_pid = 0;
-        args.status = 0x0000001C;  /* SS$_DUPNAM (already registered) */
+    proc = vms_proc_find_or_err();
+    if (proc) {
+        args.vms_pid = proc->vms_pid;
+        args.status = 0x00000001;  /* SS$_NORMAL */
         if (copy_to_user((void __user *)arg, &args, sizeof(args)))
             return -EFAULT;
         return 0;
+    }
+
+    /* current->tgid, not current->pid: one PCB per process, shared by
+     * every thread in it (see vms_proc_find_or_err). */
+    proc = vms_proc_register(current->tgid);
+    if (IS_ERR(proc)) {
+        if (PTR_ERR(proc) != -EEXIST)
+            return PTR_ERR(proc);   /* -ENOMEM -> SS$_INSFMEM at the boundary */
+
+        /*
+         * Lost the insert race, or the hash holds an entry for this pid
+         * number that is NOT ours (a recycled pid the reaper missed).
+         * Re-resolve through the pid-identity check: adopting on the
+         * strength of a matching pid NUMBER would hand this task another
+         * process's entry, and its privileges with it.
+         */
+        proc = vms_proc_find_or_err();
+        if (!proc)
+            return -ESRCH;
     }
 
     args.vms_pid = proc->vms_pid;

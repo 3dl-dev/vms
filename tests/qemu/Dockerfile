@@ -84,7 +84,7 @@ RUN KVER=$(cat /tmp/kver) && \
 #                                 stage below against the REAL src/libvms
 #                                 public sys$ API (vms-1d9).
 #   test_kmod_devtab/procnam/  -> NOT built here; built below against
-#   test_kmod_ident.c             src/libvmssys (the real kernel-interface
+#   test_kmod_ident/bind.c        src/libvmssys (the real kernel-interface
 #                                 client), see that stage's comment.
 #   everything else            -> plain gcc -static against vms_ioctl.h.
 #
@@ -96,7 +96,7 @@ COPY tests/qemu/test_*.c /src/tests/qemu/
 RUN for f in /src/tests/qemu/test_*.c; do \
         case "$f" in \
             */test_syssvc_*.c) continue;; \
-            */test_kmod_devtab.c|*/test_kmod_procnam.c|*/test_kmod_ident.c) continue;; \
+            */test_kmod_devtab.c|*/test_kmod_procnam.c|*/test_kmod_ident.c|*/test_kmod_bind.c) continue;; \
         esac; \
         out="${f%.c}"; \
         gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel || exit 1; \
@@ -111,7 +111,7 @@ RUN for f in /src/tests/qemu/test_*.c; do \
 # graph arrives in the NEXT stage (vms-1d9), which is a heavier, separate build.
 COPY src/libvmssys/ /src/libvmssys/
 RUN ARCH=$(uname -m) && \
-    for t in test_kmod_devtab test_kmod_procnam test_kmod_ident; do \
+    for t in test_kmod_devtab test_kmod_procnam test_kmod_ident test_kmod_bind; do \
         gcc -static -O2 -Wall -pthread -o /src/tests/qemu/$t \
             /src/tests/qemu/$t.c \
             /src/libvmssys/vms_kif.c \

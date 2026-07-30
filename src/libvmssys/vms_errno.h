@@ -66,7 +66,19 @@
 #define SS$_ABORT        44
 #define SS$_INSFMEM      292
 #define SS$_TIMEOUT      556
-#define SS$_ILLIOFUNC    580
+/* ORACLE-PINNED (vms-9fc, 2026-07-30), reference lab VAX1 OpenVMS VAX V7.3.
+ * $SSDEF extracted from SYS$LIBRARY:STARLET.MLB gives
+ *     $EQU  SS$_ILLIOFUNC   244
+ *     $EQU  SS$_BUGCHECK    676
+ * and F$MESSAGE round-trips both:
+ *     244 -> %SYSTEM-F-ILLIOFUNC, illegal I/O function code
+ *     676 -> %SYSTEM-F-BUGCHECK,  internal consistency failure
+ * The previous value on the ILLIOFUNC line, 580, is a DIFFERENT condition
+ * on the oracle -- F$MESSAGE(580) is %SYSTEM-F-VASFULL, "virtual address
+ * space is full". Corrected in ssdef.h at the same time; the two copies of
+ * this constant disagreeing is vms-6d3, not this change. */
+#define SS$_ILLIOFUNC    244
+#define SS$_BUGCHECK     676
 #define SS$_NOSUCHDEV    2680
 #define SS$_NOSUCHFILE   2696
 #define SS$_ENDOFFILE    2160

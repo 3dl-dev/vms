@@ -349,6 +349,28 @@ check_response 'SHOW TERMINAL' '(Terminal|Device|VT100)'
 # anything real.
 check_response 'HELP SHOW' '(SHOW|Additional information)'
 
+# PID 1's identity is ESTABLISHED BY THE EXECUTIVE, not declared (vms-2b8).
+#
+# PID 1 used to call vms_pcb_init(0xFFFFFFFFFFFFFFFF) followed by
+# vms_pcb_set_identity(1, [1,4], "SYSTEM", "SYSTEM") -- a process writing
+# its own user name, UIC and every privilege bit into a private structure.
+# It now reads the SYSTEM record from SYSUAF and asks the executive to
+# stamp it (VMS_IOCTL_SETIDENT, which refuses any caller without SETPRV),
+# then prints the row the executive holds back to it.
+#
+# WHOLE-LOG grep, and safe as one: this is a BOOT-TIME diagnostic, printed
+# before the login prompt exists. The script cannot have typed it -- the
+# session has not started -- so unlike the command-response assertions
+# above it is not echo-satisfiable. The values are asserted, not just the
+# line: deleting the SETIDENT call leaves the user name empty and the UIC
+# [0,0] (root's derived credentials), and this goes red.
+if echo "$OUTPUT" | grep -qF 'system identity SYSTEM [1,4] established by the executive'; then
+    PASS=$((PASS + 1))
+else
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: PID 1's identity was not established by the executive from SYSUAF"
+fi
+
 # Unix leak checks -- scanned against the WHOLE log (including the boot log
 # and command echoes), which is a strictly BROADER surface than before.
 # Safe: none of these strings are ones this script ever sends, so widening

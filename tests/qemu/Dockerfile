@@ -166,7 +166,17 @@ RUN cd /src/repo && \
         -DBUILD_TOOLS=OFF \
     && cmake --build build-static --target qemu_syssvc_tests --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
-    ls -la build-static/bin/test_syssvc_*
+    ls -la build-static/bin/test_syssvc_* && \
+    # DCL.EXE, so a suite can run a real user-visible DCL COMMAND against a
+    # real executive (vms-2b8). SHOW PROCESS is a READER of the executive's
+    # process table, and the only way to prove it reports the identity the
+    # executive holds -- rather than the one planted in its environment --
+    # is to run the command itself where a process table exists. ctest
+    # never has a /dev/vms (CLAUDE.md Rule 9), so asserting on the reader
+    # helper alone would leave dcl_cmd_show.c ungated in the one
+    # environment where it can actually work.
+    cmake --build build-static --target vmsdcl --parallel $(nproc) 2>&1 && \
+    ls -la build-static/bin/DCL.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/
@@ -236,6 +246,14 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # kernel-only harness this item exists to replace, and the QEMU job
     # stays green while proving nothing about src/libvms.
     { [ "$n_syssvc" -ge 1 ] || { echo "FATAL: no test_syssvc_* binary staged into the initramfs -- the userspace public-sys\$ layer would be untested"; exit 1; }; } && \
+    # DCL.EXE (vms-2b8). Staged under /bin, NOT /tests: init.sh execs
+    # everything matching /tests/test_kmod_* or /tests/test_syssvc_*, and
+    # DCL is not a suite -- it is a subject that test_syssvc_ident drives.
+    # Absence is FATAL rather than skipped, for the same reason the
+    # n_syssvc check above is: a missing subject would silently turn the
+    # SHOW PROCESS assertions into no-ops with the job still green.
+    { cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || \
+      { echo "FATAL: DCL.EXE was not built into the static tree -- SHOW PROCESS would go unproven against a real executive"; exit 1; }; } && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

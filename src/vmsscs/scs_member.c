@@ -213,34 +213,13 @@ int scs_member_build_config(const struct scs_member_params *p,
 
     build_common(p, member_config_tmpl, out);
 
-    /* vms-760: two fields the template left zero that the ADMISSION-triggering
-     * op-0x02 carries. REPLAYED from the single specimen we have of that
-     * message -- vax3-2to3-established-join-20260730.pcap frame 285 (+5.8774,
-     * VAX3->VAX2), the 0x02 whose arrival makes the peer answer 0x04/0x00 in
-     * 0.3 ms and then drive op 0x03 COMMIT -> op 0x05 lock rebuild -> MEMBER:
-     *
-     *   body[10:12] (abs 82-83) = 0x5041
-     *   body[40:52] (abs 112-123) = twelve 0x20 spaces (a blank fixed-width
-     *                               text field; VAX3 runs with no quorum disk)
-     *
-     * SEMANTICS NOT GROUNDED, and these are NOT constants: the reference's
-     * OTHER op-0x02 (frame 8658, +13.6761, the later fuller reconfiguration
-     * message) carries 0x0004 at body[10:12] and binary data across
-     * body[40:52]. This is a value replay from one specimen of one variant --
-     * the same standing as the join nonce in scs_hello.h, and it is recorded as
-     * an open RE gap in spec 5(z), not as a decoded field.
-     *
-     * Applied ONLY when the caller asks for the admission variant: the
-     * FORMATION golden's op 0x02 (SCA#60) has zeros at both offsets and is
-     * pinned byte-exact by test_op02_byte_exact. These are two different
-     * observed messages; the flag selects between them rather than declaring
-     * either one wrong. */
-    if (p->config_admission) {
-        out[82] = 0x41;
-        out[83] = 0x50;
-        memset(out + 112, 0x20, 12);
-    }
-
+    /* vms-760: body[10:12] and body[40:52] are left ZERO.
+     * An earlier revision replayed 0x5041 and twelve 0x20 spaces here, copied
+     * from the one admission specimen we had. A survey of every op-0x02 in the
+     * capture library retired that: 9 of 12 genuine VMS specimens carry zeros in
+     * both places and are acked identically, and the 3 outliers hold printable
+     * digraphs ("AP", "IS") and ASCII spaces -- stale buffer contents, not data.
+     * We do not reproduce another implementation's uninitialised memory. */
     return 0;
 }
 
@@ -283,6 +262,59 @@ int scs_member_parse(const uint8_t *frame, size_t len, struct scs_member_view *v
                         (v->category & 0x7f) == SCS_MEMBER_CAT_CONFIG &&
                         (v->opcode == SCS_MEMBER_OP_COMMIT ||
                          v->opcode == SCS_MEMBER_OP_LOCKRB));
+    return 0;
+}
+
+int scs_member_build_ack(const struct scs_member_params *p,
+                         uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+
+    /* Any 190-byte template supplies the correct constant envelope span;
+     * build_common substitutes identity, Con.ID pair and live counters. */
+    build_common(p, member_config_tmpl, out);
+
+    uint8_t *body = out + 72;
+    /* A cat-0x04 ack is header-only: everything past the category/opcode is
+     * payload we do not carry. Zero it rather than inherit template bytes. */
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    body[8] = SCS_MEMBER_CAT_ACK; /* 0x04 */
+    body[9] = 0x00;               /* see header: real VMS carries residue here */
+    return 0;
+}
+
+int scs_member_build_token_response(const struct scs_member_params *p,
+                                    const uint8_t *req_frame, size_t req_len,
+                                    uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || req_frame == NULL || out == NULL) {
+        return -1;
+    }
+    if (req_len < SCS_MEMBER_FRAME_LEN) {
+        return -1;
+    }
+    uint16_t lenword = get_le16(req_frame + 14);
+    if ((uint16_t)(lenword + 2) != SCS_MEMBER_SCA_LEN) {
+        return -1;
+    }
+
+    build_common(p, member_config_tmpl, out);
+
+    uint8_t *body = out + 72;
+    const uint8_t *rbody = req_frame + 72;
+
+    /* Empty payload -- deliberately NOT the requester's body (see header). */
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    body[4] = rbody[4]; body[5] = rbody[5]; /* txn      -- carried verbatim */
+    body[6] = rbody[6]; body[7] = rbody[7]; /* checksum -- carried verbatim */
+    body[8] = (uint8_t)(rbody[8] | SCS_MEMBER_RESPONSE_BIT);
+    body[9] = rbody[9];
     return 0;
 }
 

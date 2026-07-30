@@ -65,11 +65,21 @@ extern "C" {
 
 /* SCS envelope (shared with sec 4d/4g/4h) -- SCA-content offsets. */
 #define SCS_MEMBER_MSGTYPE    0x4b /* sequenced-application (VC data) [16] */
+#define SCS_MEMBER_MSGTYPE_ALT 0x5b /* vms-760: the SAME 190-byte CM class is also sent
+                                     * with the establishing-phase msgtype, even on a
+                                     * long-established VC (ref frame 217; the op 0x09
+                                     * that ends the add-member transaction, d94-e3
+                                     * frame 1212). Message class is the length + Con.ID
+                                     * pair -- never gate a CM handler on 0x4b alone. */
 #define SCS_MEMBER_FORMAT     0x13 /* format constant [17] (GROUNDED) */
 
 /* SYSAP category/flags byte (body[8]). */
 #define SCS_MEMBER_CAT_CONFIG   0x01 /* membership / config dialogue */
 #define SCS_MEMBER_CAT_ACK      0x04 /* member commit/credit ack */
+#define SCS_MEMBER_CAT_MEMBERSHIP 0x06 /* vms-760: the category the coordinator uses to
+                                        * CLOSE the add-member transaction; token-correlated
+                                        * and echoed exactly like category 0x01
+                                        * (ref frames 671 -> 673, 2185 -> 2186) */
 #define SCS_MEMBER_RESPONSE_BIT 0x80 /* OR'd into body[8] for a response */
 
 /* SYSAP opcodes (body[9]) in the category-0x01 add-member dialogue. */
@@ -78,6 +88,10 @@ extern "C" {
 #define SCS_MEMBER_OP_CONFIG  0x02 /* config / topology */
 #define SCS_MEMBER_OP_COMMIT  0x03 /* member-driven membership-commit txn */
 #define SCS_MEMBER_OP_LOCKRB  0x05 /* member-driven lock/resource rebuild txn */
+#define SCS_MEMBER_OP_MEMBERSHIP 0x06 /* coordinator's post-commit membership burst;
+                                       * txn=0, NOT token-correlated -- acknowledged
+                                       * with a category-0x04 ack, never 0x81-echoed
+                                       * (vms-760, ref frames 303-312 -> 313/314/315) */
 
 /* SYSAP-body-relative field offsets (body[0] = SCA offset 58). */
 #define SCS_MEMBER_VOTES_BODYOFF 22 /* VOTES LE u16 (abs 94) -- op 0x01 (GROUNDED) */
@@ -105,14 +119,6 @@ struct scs_member_params {
     uint16_t sysap_ack_msg;   /* SYSAP body[2:4] (ack of member's highest send-msg#) */
     uint16_t votes;           /* op 0x01 only: SYSAP body[22:24] (0 = non-voting) */
     const char *model;        /* op 0x14 only: model string; NULL => OVMX default */
-    int      config_admission; /* op 0x02 only (vms-760). 0 (default) => reproduce the
-                                  FORMATION golden SCA#60 byte-exact. 1 => the variant the
-                                  2->3 established-join reference sends to TRIGGER admission
-                                  (frame 285): body[10:12]=0x5041 and twelve spaces at
-                                  body[40:52]. The two specimens genuinely differ, so this
-                                  is a selector between observed variants, not a fix to one
-                                  of them. Semantics of both fields are UNGROUNDED -- see
-                                  scs_member_build_config() and spec 5(z). */
 };
 
 /*
@@ -177,6 +183,63 @@ int scs_member_parse(const uint8_t *frame, size_t len, struct scs_member_view *v
 int scs_member_build_response(const struct scs_member_params *p,
                               const uint8_t *req_frame, size_t req_len,
                               uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
+/*
+ * scs_member_build_ack - build a category-0x04 SYSAP ACKNOWLEDGEMENT.
+ *
+ * A cat-0x04 message carries NO payload: its whole content is the SYSAP header
+ * pair (our send-msg#, and an ack-msg# naming the highest peer send-msg# we
+ * have taken). The coordinator emits a burst of category-0x01 opcode-0x06
+ * messages during the add-member transaction and expects the joiner to keep
+ * acknowledging them with these; a joiner that stays silent stalls the
+ * transaction with its CSB left open.
+ *
+ * GROUNDED, vax3-2to3-established-join-20260730.pcap: VAX2 sends op 0x06
+ * sm=9..18 (frames 303-312) and VAX3 answers with cat-0x04 frames 313 (sm=9
+ * am=11), 314 (sm=10 am=14), 315 (sm=11 am=17) -- roughly one ack per three
+ * messages, each naming a higher watermark.
+ *
+ * BODY[9] IS NOT MEANINGFUL. Real VMS acks carry 0x49/0x44/0x00/0x02 there and
+ * the bytes after it are visibly a stale buffer: frame 313 reads
+ * `04 49 "IR_LOOKUP  SCS$DIRECTORY"` -- a leftover "DIR_LOOKUP SCS$DIRECTORY"
+ * whose first two bytes were overwritten by the category and opcode. VMS accepts
+ * any value because it never reads it. OVMX writes 0x00 and zero payload: we do
+ * not reproduce another implementation's uninitialised memory.
+ */
+int scs_member_build_ack(const struct scs_member_params *p,
+                         uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
+/*
+ * scs_member_build_token_response - respond to a token-correlated request by
+ * carrying its (txn,checksum) and category|0x80 on an OTHERWISE EMPTY body.
+ *
+ * This is NOT scs_member_build_response. That one echoes the requester's whole
+ * 132-byte SYSAP body, which is right for the category-0x01 transactions (spec
+ * sec 4j: responses match their request on (txn,checksum,opcode)) but WRONG for
+ * the category-0x06 request that closes the add-member transaction.
+ *
+ * GROUNDED, vax3-2to3-established-join-20260730.pcap frames 671 -> 673. The
+ * request body carries live cluster structures -- Con.IDs (`eb a4 0a 00 e3 18`),
+ * the cluster id (`e0 5a 62 7a`) and more. The real response does NOT send them
+ * back: body[8]=0x86, body[9]=0x00, the token at body[4:8] carried verbatim, and
+ * the payload rebuilt from zero.
+ *
+ * WHY THIS FUNCTION EXISTS AT ALL: echoing the payload instead CRASHED the peer.
+ * VAX1 took a fatal bugcheck -- `INCONSTATE, Inconsistent I/O data base` -- when
+ * OVMX replied to a category-0x06 request with its own I/O structures reflected
+ * back at it. Reusing a transform across a category where it does not apply is
+ * exactly the "plausible handler for a condition VMS never faces" failure mode;
+ * the response shape is per-category and must be grounded per category.
+ *
+ * Fields of the real response that are NOT reproduced, because their meaning is
+ * not grounded: body[10:12]=0x0003, body[24:26]=0x0003, body[44:48]=0x00000003
+ * and body[48:52]=0x0000006e (0x0003 plausibly tracks the 3-node membership, but
+ * one specimen cannot establish that). They are left zero. The same zero-payload
+ * discipline is already accepted by VMS for our category-0x04 acks.
+ */
+int scs_member_build_token_response(const struct scs_member_params *p,
+                                    const uint8_t *req_frame, size_t req_len,
+                                    uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
 #ifdef __cplusplus
 }

@@ -286,6 +286,10 @@ enum join_step {
  * +5.8774 -- ~4.9 s later. What it is really waiting on is not grounded; the
  * delay is copied from the reference. */
 #define JOIN_CFG2_DELAY_MS   4900u
+/* vms-760: cat-0x04 ack cadence -- ack once per this many unacked coordinator
+ * messages. GROUNDED: the reference joiner emits 85 acks for a 254-message
+ * op-0x06 burst (frames 313/314/315 carry am=11/14/17). */
+#define SCS_CM_ACK_EVERY     3u
 
 struct peer_state {
     int      in_use;
@@ -332,6 +336,15 @@ struct peer_state {
     int      joiner_cm_sent;       /* we sent the add-member burst on our own connection */
     long     joiner_cm_ms;         /* monotonic_ms() when that burst went out */
     int      joiner_cfg2_sent;     /* vms-760: the DEFERRED op 0x02 config/topology went out */
+    uint16_t sysap_acked;          /* vms-760: highest peer send-msg# we have cat-0x04 acked */
+    long     cm_acks;              /* cat-0x04 acks emitted to this peer */
+    /* vms-760: WHICH virtual circuit carried our config burst -- the VC we opened
+     * (OVMX_JOINER_CONID) normally, or the one the MEMBER opened (OVMX_LOCAL_CONID)
+     * under OVMX_NO_OWN_VC. The deferred op 0x02 must ride the SAME VC. */
+    int      cfg_sent;             /* a config burst has gone out on this peer */
+    long     cfg_ms;               /* monotonic_ms() when it did */
+    uint32_t cfg_local_conid;      /* our Con.ID on that VC */
+    uint32_t cfg_remote_conid;     /* the member's Con.ID on that VC */
     uint16_t joiner_req_seq;       /* the send_seq of our CONNECT-REQUEST (retransmits REUSE it) */
     struct timespec last_joiner_req; /* CLOCK_MONOTONIC of our last joiner CONNECT-REQUEST (retx) */
     /* --- vms-760: OVMX's OWN SCS$DIRECTORY connection to the member (the active
@@ -566,6 +579,13 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     }
 
     ps->cm_config_sent = 1;
+    /* vms-760: remember which VC carried it so the deferred op 0x02 rides the same one. */
+    if (sent > 0) {
+        ps->cfg_sent = 1;
+        ps->cfg_ms = monotonic_ms();
+        ps->cfg_local_conid = local_conid;
+        ps->cfg_remote_conid = remote_conid;
+    }
     return sent;
 }
 
@@ -1055,6 +1075,29 @@ static int scs_reflect_credit(int sock, int ifindex, struct peer_state *ps,
     r[61] = 0;
     memcpy(r + 64, buf + 68, 4);               /* rc = their lc (address the requester) */
     memcpy(r + 68, buf + 64, 4);               /* lc = their rc (our conid) */
+
+    /* vms-760 -- THE STALL. Both LENGTH words must describe the frame we are
+     * ACTUALLY emitting, not the one we are answering. The memcpy above inherits
+     * them from the request; for op8 (a 58-byte SCA, like our reply) that happens
+     * to be right, but an op6 request is a 62-byte SCA, so our 58-byte op7 went
+     * out declaring 4 bytes it did not carry.
+     *
+     * GROUNDED INVARIANT, vax3-2to3-established-join-20260730.pcap: across 13556
+     * audited SCS frames (both peers, whole capture) declared[abs14] ==
+     * payload_len - 2 and inner[abs56] == payload_len - 44, with ZERO exceptions;
+     * every op7 in the capture carries exactly 56/14 over a 72-byte frame.
+     *
+     * The member validates it. Our over-declared op7 was dropped as a runt, so the
+     * member's recv_seq stayed put, the next (well-formed) frame arrived with a
+     * sequence gap and was dropped too, its directory connection was left
+     * disconnect-pending -- and because MSCP$DISK is opened only AFTER that
+     * teardown completes, it never opened one to us. Reproduced identically
+     * against all three VAXes in d94-vcfix/vcfix2/cm4. Derive, never inherit. */
+    uint16_t sca_len = (uint16_t)(sizeof(r) - 14 - 2); /* 56 */
+    uint16_t inner_len = (uint16_t)(sizeof(r) - 58);   /* 14 */
+    r[14] = (uint8_t)sca_len;   r[15] = (uint8_t)(sca_len >> 8);
+    r[56] = (uint8_t)inner_len; r[57] = (uint8_t)(inner_len >> 8);
+
     return send_frame_to(sock, ifindex, ps->eth_mac, r, sizeof(r)) > 0;
 }
 
@@ -1085,6 +1128,15 @@ static int scs_send_disconnect(int sock, int ifindex, struct peer_state *ps,
     memcpy(d + 64, buf + 68, 4);                /* rc = VAX1 (address the peer) */
     memcpy(d + 68, buf + 64, 4);                /* lc = OUR conid */
     d[72] = 0x00; d[73] = 0x00; d[74] = 0x01; d[75] = 0x00; /* GROUNDED joiner op6 tail */
+    /* vms-760: DERIVE the length words from what we emit, never inherit them.
+     * Here in/out are both 62-byte SCA so the inherited values happened to be
+     * right, but inheriting is the bug class that broke op7 in
+     * scs_reflect_credit() -- close it everywhere. Invariant (13556/13556 ref
+     * frames): declared == payload-2, inner == payload-44. */
+    uint16_t d_sca = (uint16_t)(sizeof(d) - 14 - 2);  /* 60 */
+    uint16_t d_inner = (uint16_t)(sizeof(d) - 58);    /* 18 */
+    d[14] = (uint8_t)d_sca;   d[15] = (uint8_t)(d_sca >> 8);
+    d[56] = (uint8_t)d_inner; d[57] = (uint8_t)(d_inner >> 8);
     return send_frame_to(sock, ifindex, ps->eth_mac, d, sizeof(d)) > 0;
 }
 
@@ -1610,8 +1662,17 @@ int main(int argc, char **argv)
             int cm_on_joiner_vc = cm_parsed &&
                                   (mv.remote_conid == OVMX_JOINER_CONID ||
                                    mv.local_conid == OVMX_JOINER_CONID);
+            /* vms-760: a 190-byte CM message is identified by its LENGTH CLASS and
+             * Con.ID pair, NOT by msgtype. The coordinator sends some of them with
+             * msgtype 0x5b even on a long-established VC -- d94-e3.pcap frame 1212
+             * is the op 0x09 that ends the add-member transaction, 204 bytes on our
+             * joiner Con.ID pair, carrying 0x5b. Gating on 0x4b alone silently
+             * DISCARDED it before any handler ran, so the coordinator waited forever
+             * for a response it was never going to get and the CSB stayed 'open'.
+             * The reference does the same thing (frame 217). Accept both phases. */
             if (cm_parsed &&
-                mv.msgtype == SCS_MEMBER_MSGTYPE &&
+                (mv.msgtype == SCS_MEMBER_MSGTYPE ||
+                 mv.msgtype == SCS_MEMBER_MSGTYPE_ALT) &&
                 (mv.remote_conid == OVMX_LOCAL_CONID ||
                  mv.local_conid == OVMX_LOCAL_CONID ||
                  cm_on_joiner_vc)) {
@@ -1632,7 +1693,8 @@ int main(int argc, char **argv)
                      * with ITS add-member burst on receipt (af2 143.759: member
                      * config ss=12 -> joiner config ss=12). Fire once, on the first
                      * member SYSAP config frame (not a commit/lock txn). */
-                    if (getenv("OVMX_PURE_SERVER") != NULL && !ps->cm_config_sent &&
+                    if ((getenv("OVMX_PURE_SERVER") != NULL ||
+                         getenv("OVMX_NO_OWN_VC") != NULL) && !ps->cm_config_sent &&
                         !mv.is_member_txn) {
                         int c = cm_send_config_burst(sock, (int)ifindex, ps,
                                                      our_hw_mac, our_src_logical,
@@ -1667,9 +1729,92 @@ int main(int argc, char **argv)
                         }
                     }
 
-                    /* Answer the member-driven op 0x03 commit / op 0x05
-                     * lock-rebuild transactions (echo the token, spec sec 4j). */
-                    if (mv.is_member_txn) {
+                    /* vms-760: ACKNOWLEDGE the coordinator's category-0x01
+                     * opcode-0x06 burst with a category-0x04 ack.
+                     *
+                     * This is the LAST step of the add-member transaction and the
+                     * one OVMX was missing. GROUNDED, vax3-2to3 reference: after the
+                     * commit (op 0x03) and the lock rebuilds (op 0x05), the
+                     * coordinator sends a run of op 0x06 messages (frames 303-312,
+                     * sm=9..18) and the joiner answers with cat-0x04 acks naming a
+                     * rising watermark (frames 313/314/315: am=11/14/17). Observed
+                     * live in d94-e1.pcap: VAX3 sent 14 op-0x06 frames (434-447) and
+                     * OVMX answered NONE, so the transaction never completed and the
+                     * CSB stayed 'open'. op 0x06 carries txn=0 -- it is NOT a
+                     * token-correlated request, so it must NOT get a 0x81 echo. */
+                    /* vms-760: what distinguishes the two kinds of coordinator
+                     * message is the CORRELATION TOKEN, not the opcode.
+                     * GROUNDED over the reference's whole admission tail:
+                     *   txn != 0  (0x03 txn=8, 0x05 txn=9..11, 0x09 txn=8)
+                     *             -> token-correlated request, answer 0x81 echo
+                     *   txn == 0  (0x06, 0x0a, 0x0c)
+                     *             -> not correlated, answer a cat-0x04 ack
+                     * Keying on an opcode allowlist instead is what left op 0x09
+                     * unanswered and stalled the transaction (d94-e2.pcap: VAX3
+                     * sent 293 op-0x06 then op 0x09 txn=10 and everything
+                     * stopped). This rule needs no list and covers 0x0a/0x0c too. */
+                    /* The membership dialogue spans more than one category: the
+                     * coordinator finishes it with a category-0x06 request that
+                     * takes the same echo transform (ref frames 671 -> 673:
+                     * cat 0x06 op 0x00 txn=8 cksum=0x9a2c -> cat 0x86, same token).
+                     * DLM (category 0x02) is deliberately NOT included -- echoing a
+                     * lock request as though it were granted would be a semantic
+                     * lie; that belongs to the lock manager, not here. */
+                    int cm_req = !mv.is_response &&
+                                 (mv.category == SCS_MEMBER_CAT_CONFIG ||
+                                  mv.category == SCS_MEMBER_CAT_MEMBERSHIP);
+                    int cm_token_req = cm_req && mv.txn != 0;
+                    int cm_plain_req = cm_req && mv.txn == 0;
+
+                    /* Ack CADENCE, grounded: the reference joiner answers a
+                     * 254-message op-0x06 burst with 85 cat-0x04 acks -- one per
+                     * three, each naming a higher watermark (frames 313/314/315:
+                     * am=11/14/17). Acking every single message tripled the frame
+                     * count against a real cluster for no benefit. A trailing
+                     * backlog of one or two is still conveyed, because every 0x81
+                     * response also carries our ack-msg#. */
+                    if (cm_plain_req &&
+                        (uint16_t)(ps->sysap_recv - ps->sysap_acked) >= SCS_CM_ACK_EVERY) {
+                        struct scs_member_params ap;
+                        memset(&ap, 0, sizeof(ap));
+                        memcpy(ap.dst_mac, ps->eth_mac, 6);
+                        memcpy(ap.src_mac, our_hw_mac, 6);
+                        memcpy(ap.src_logical, our_src_logical, 6);
+                        memcpy(ap.peer_logical, ps->logical, 6);
+                        if (cm_on_joiner_vc) {
+                            ap.remote_conid = ps->joiner_remote_conid;
+                            ap.local_conid = OVMX_JOINER_CONID;
+                        } else {
+                            ap.remote_conid = ps->remote_conid;
+                            ap.local_conid = OVMX_LOCAL_CONID;
+                        }
+                        ap.incarnation = ps->incarnation;
+                        ap.recv_ack = ps->vc.seq.recv_seq;
+                        ap.send_seq = scs_seq_advance(&ps->vc.seq);
+                        if (ps->sysap_send == 0) {
+                            ps->sysap_send = 1;
+                        }
+                        ap.sysap_send_msg = ps->sysap_send++;
+                        ap.sysap_ack_msg = ps->sysap_recv;
+                        uint8_t aframe[SCS_MEMBER_FRAME_LEN];
+                        if (scs_member_build_ack(&ap, aframe) == 0 &&
+                            send_frame_to(sock, (int)ifindex, ps->eth_mac, aframe,
+                                          sizeof(aframe)) > 0) {
+                            scs_vc_record_sent(&ps->vc, ap.send_seq, monotonic_ms());
+                            ps->sysap_acked = ps->sysap_recv;
+                            ps->cm_acks++;
+                            log_ts(stdout);
+                            printf(" SCSD-I-CMACK, cat-0x04 ack of the coordinator's"
+                                   " op 0x06 burst (send_msg=%u ack_msg=%u)\n",
+                                   ap.sysap_send_msg, ap.sysap_ack_msg);
+                            fflush(stdout);
+                        }
+                    }
+
+                    /* Answer every token-correlated member-driven transaction by
+                     * echoing its (txn,checksum) -- commit 0x03, lock rebuild
+                     * 0x05, and 0x09 (spec sec 4j). */
+                    if (cm_token_req) {
                         if (ps->sysap_send == 0) {
                             ps->sysap_send = 1;
                         }
@@ -1694,8 +1839,18 @@ int main(int argc, char **argv)
                         mp.send_seq = scs_seq_advance(&ps->vc.seq);
                         mp.sysap_send_msg = ps->sysap_send++;
                         mp.sysap_ack_msg = mv.sysap_send_msg; /* ack this request */
+                        /* The response SHAPE is per-category, not universal.
+                         * cat 0x01 (commit/lock-rebuild/0x09): echo the requester's
+                         *   whole SYSAP body with the response bit set (spec 4j).
+                         * cat 0x06 (closes the transaction): carry ONLY the token on
+                         *   an empty body -- echoing its payload reflects the peer's
+                         *   own I/O structures back at it and bugchecks it
+                         *   (INCONSTATE). See scs_member_build_token_response(). */
                         uint8_t rframe[SCS_MEMBER_FRAME_LEN];
-                        if (scs_member_build_response(&mp, buf, (size_t)n, rframe) == 0 &&
+                        int rc_build = (mv.category == SCS_MEMBER_CAT_MEMBERSHIP)
+                            ? scs_member_build_token_response(&mp, buf, (size_t)n, rframe)
+                            : scs_member_build_response(&mp, buf, (size_t)n, rframe);
+                        if (rc_build == 0 &&
                             send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe,
                                           sizeof(rframe)) > 0) {
                             ps->cm_responses++;
@@ -1991,24 +2146,21 @@ int main(int argc, char **argv)
              * previous behaviour) leaves the dialogue permanently half-finished.
              * The ~5 s delay is taken from the reference; what the real joiner
              * actually waits on is NOT grounded (see spec 5(z)). */
-            if (do_connect && ps->join_step == JS_ADD_MEMBER &&
-                ps->joiner_cm_sent && !ps->joiner_cfg2_sent &&
-                ps->joiner_connected &&
-                (monotonic_ms() - ps->joiner_cm_ms) >= (long)JOIN_CFG2_DELAY_MS) {
+            if (do_connect && ps->cfg_sent && !ps->joiner_cfg2_sent &&
+                (monotonic_ms() - ps->cfg_ms) >= (long)JOIN_CFG2_DELAY_MS) {
                 struct scs_member_params mp;
                 memset(&mp, 0, sizeof(mp));
                 memcpy(mp.dst_mac, ps->eth_mac, 6);
                 memcpy(mp.src_mac, our_hw_mac, 6);
                 memcpy(mp.src_logical, our_src_logical, 6);
                 memcpy(mp.peer_logical, ps->logical, 6);
-                mp.remote_conid = ps->joiner_remote_conid;
-                mp.local_conid = OVMX_JOINER_CONID;
+                mp.remote_conid = ps->cfg_remote_conid;
+                mp.local_conid = ps->cfg_local_conid;
                 mp.incarnation = ps->incarnation;
                 mp.recv_ack = ps->vc.seq.recv_seq;
                 mp.send_seq = scs_seq_advance(&ps->vc.seq);
                 mp.sysap_send_msg = ps->sysap_send++;
                 mp.sysap_ack_msg = ps->sysap_recv; /* ref frame 285: amsg=2 = peer's smsg */
-                mp.config_admission = 1;           /* the frame-285 admission variant */
                 uint8_t c2frame[SCS_MEMBER_FRAME_LEN];
                 if (scs_member_build_config(&mp, c2frame) == 0 &&
                     send_frame_to(sock, (int)ifindex, ps->eth_mac, c2frame,
@@ -2586,6 +2738,28 @@ int main(int argc, char **argv)
                                " connect local=0x%08X seq=%u (step 5/8)\n",
                                (unsigned)OVMX_MSCP_CONID, ps->mscp_req_seq);
                         fflush(stdout);
+                    } else if (ps->join_step == JS_DIR_LOOKUP_VC && affirmative &&
+                               getenv("OVMX_NO_OWN_VC") != NULL) {
+                        /* vms-760: run the joiner's CLIENT half (own directory +
+                         * MSCP$DISK discovery) but do NOT open our own
+                         * VMS$VAXcluster VC -- leave that to the member, and let
+                         * the add-member dialogue ride the VC IT opens.
+                         *
+                         * GROUNDED motivation, vax3-2to3-established-join pcap:
+                         * there is exactly ONE VC per node pair, and the peer that
+                         * actually DROVE the commit was VAX2 -- over a VC VAX2
+                         * itself opened (frame 208). VAX3 had opened its own VC to
+                         * VAX1 (frame 132), and VAX1 never drove a commit on it;
+                         * VAX3 sent VAX1 its op 0x02 only at +13.6761, AFTER it was
+                         * already MEMBER. Because OVMX opens its own VC to EVERY
+                         * member, no member ever opens one back, so nothing ever
+                         * plays VAX2's role. */
+                        ps->join_step = JS_ADD_MEMBER;
+                        ps->js_retx = 0;
+                        log_ts(stdout);
+                        printf(" SCSD-I-JOINSEQ, VMS$VAXcluster HIT; NOT opening our own"
+                               " VC (OVMX_NO_OWN_VC) -- awaiting the member's VC connect\n");
+                        fflush(stdout);
                     } else if (ps->join_step == JS_DIR_LOOKUP_VC && affirmative) {
                         /* VMS$VAXcluster resolved -> open the VC connect. */
                         ps->join_step = JS_VC_CONNECT;
@@ -2791,8 +2965,16 @@ int main(int argc, char **argv)
 
                     dp.recv_ack = ps->vc.seq.recv_seq;
                     dp.send_seq = scs_seq_advance(&ps->vc.seq);
+                    /* vms-760: answer in the CONNECTION's phase, not the builder's
+                     * default. msgtype tracks the phase the connection has reached
+                     * (§4m): an established member probes us with a DATA-phase 0x4b
+                     * request and the real VAX answers 0x4b (ref frames 162->163/164),
+                     * whereas the templates here emit the 0x5b establishing form.
+                     * Mirror what we were sent. */
+                    uint8_t peer_mt = buf[30];
                     uint8_t eframe[SCS_DIR_ECHO_FRAME_LEN];
                     if (scs_dir_build_connect_echo(&dp, eframe) == 0) {
+                        eframe[30] = peer_mt;
                         send_frame_to(sock, (int)ifindex, ps->eth_mac, eframe, sizeof(eframe));
                     }
 
@@ -2800,6 +2982,7 @@ int main(int argc, char **argv)
                     dp.send_seq = scs_seq_advance(&ps->vc.seq);
                     uint8_t rframe[SCS_DIR_RESP_FRAME_LEN];
                     if (scs_dir_build_connect_response(&dp, rframe) == 0 &&
+                        (rframe[30] = peer_mt, 1) &&
                         send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe,
                                       sizeof(rframe)) > 0) {
                         ps->dir_connected = 1;

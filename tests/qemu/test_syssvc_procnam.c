@@ -1644,17 +1644,20 @@ int main(void)
      * That is reachable entirely from the public API, with no race
      * against the child: DCL installs its interactive SIGINT/SIGQUIT
      * handlers with sa_flags = 0 (src/vmsdcl/dcl_main.c) and DCL is what
-     * calls $CREPRC. So the probe below adopts that same disposition and
-     * an interval timer, and asserts the property the status is supposed
-     * to carry: every process $CREPRC reports created must be in the
-     * table under the name it was given, and the call must return.
+     * calls $CREPRC. So the probe below adopts that same disposition, has
+     * the signal delivered to it while it is provably blocked waiting for
+     * the child (see sigprobe_tracer -- the child is held still by ptrace,
+     * so this is an ordering, not a race), and asserts the property the
+     * status is supposed to carry: every process $CREPRC reports created
+     * must be in the table under the name it was given, and the call must
+     * return.
      *
-     * WHICH ASSERTION IS THE DETECTOR: `prclost == 0` and the bounded
-     * completion. `interrupted >= SIGPROBE_MIN_HITS` is not a detector,
-     * it is the ARRANGEMENT CHECK -- it proves the signals really were
-     * delivered during the calls, so that a green result means the code
-     * survived the condition rather than never meeting it. Without it
-     * this block would pass on a build where the timer never fired.
+     * WHICH ASSERTION IS THE DETECTOR: the bounded completion and
+     * `prclost == 0`. `arranged >= SIGPROBE_MIN_ARRANGED` is not a
+     * detector, it is the ARRANGEMENT CHECK -- it proves the caller really
+     * was interrupted mid-handshake, so a green result means the code
+     * survived the condition rather than never meeting it. Without it this
+     * block would pass on a run where the tracer never managed it.
      * --------------------------------------------------------------- */
     hs = fopen(HOLD_SCRIPT, "w");           /* P10 unlinked it */
     if (!hs) {

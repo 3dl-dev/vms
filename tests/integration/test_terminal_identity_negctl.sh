@@ -43,16 +43,19 @@ MAIN_C="$ROOT/src/vmsdcl/dcl_main.c"
 SHOW_C="$ROOT/src/vmsdcl/dcl_cmd_show.c"
 INIT_C="$ROOT/src/ovmx_init/ovmx_init.c"
 TERM_C="$ROOT/src/vmsdcl/dcl_terminal.c"
+LEX_C="$ROOT/src/vmsdcl/dcl_lexical.c"
 cp "$MAIN_C" "$WORK/dcl_main.c.orig"
 cp "$SHOW_C" "$WORK/dcl_cmd_show.c.orig"
 cp "$INIT_C" "$WORK/ovmx_init.c.orig"
 cp "$TERM_C" "$WORK/dcl_terminal.c.orig"
+cp "$LEX_C" "$WORK/dcl_lexical.c.orig"
 
 restore() {
     cp "$WORK/dcl_main.c.orig" "$MAIN_C"
     cp "$WORK/dcl_cmd_show.c.orig" "$SHOW_C"
     cp "$WORK/ovmx_init.c.orig" "$INIT_C"
     cp "$WORK/dcl_terminal.c.orig" "$TERM_C"
+    cp "$WORK/dcl_lexical.c.orig" "$LEX_C"
 }
 
 # Reason fragments, one per gate property. Each is the REQUIRED string for
@@ -61,7 +64,7 @@ R_GET_TERM='no code reads VMS_TERMINAL from the environment'
 R_GET_TYPE='no code reads VMS_DEVICE_TYPE from the environment'
 R_SET_TERM='no code hands VMS_TERMINAL down through the environment'
 R_SET_TYPE='no code hands VMS_DEVICE_TYPE down through the environment'
-R_POOL='DCL does not allocate its own terminal name from a private pool'
+R_POOL='no code allocates a terminal name from a private pool'
 R_DEFAULT='DCL does not seed a default terminal device name'
 R_LITERAL='no invented terminal-device-name literal in the tree'
 R_MOUNTS='SHOW DEVICE does not build device rows from /proc/mounts'
@@ -152,6 +155,24 @@ expect_red "D: setenv(\"VMS_DEVICE_TYPE\") reintroduced in PID 1" \
 # the fallback that ran when neither variable was set.
 printf '%s\n' 'static const char *evade(void) { return vms_term_allocate("_FTA", getpid(), NULL); }' >> "$MAIN_C"
 expect_red "E: private _FTA name pool reintroduced in DCL" \
+    "$R_POOL" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" \
+    "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
+
+# --- E2. ...from a DIFFERENT file. THE PROVEN EVASION ---------------------
+# The pool check used to name src/vmsdcl/dcl_main.c. An adversary moved the
+# call into dcl_lexical.c's lex_process() and the gate stayed GREEN with the
+# pool still in use. This is that evasion, checked in.
+printf '%s\n' 'static const char *evade(void) { return vms_term_allocate("_FTA", getpid(), NULL); }' >> "$LEX_C"
+expect_red "E2: the pool called from another file (the proven gate bypass)" \
+    "$R_POOL" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" \
+    "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
+
+# --- E3. ...or the allocator itself coming back --------------------------
+# vms_term_allocate() is deleted, not merely uncalled, so its DEFINITION
+# reappearing is a regression in its own right -- a name generator with no
+# caller today is a name generator with a caller tomorrow.
+printf '%s\n' 'const char *vms_term_allocate(const char *p, pid_t q, const char *o) { (void)p; (void)q; (void)o; return ""; }' >> "$TERM_C"
+expect_red "E3: the allocator DEFINITION reintroduced" \
     "$R_POOL" "$R_GET_TERM" "$R_GET_TYPE" "$R_SET_TERM" "$R_SET_TYPE" \
     "$R_DEFAULT" "$R_LITERAL" "$R_MOUNTS" "$R_DEVTAB" "$R_READER"
 

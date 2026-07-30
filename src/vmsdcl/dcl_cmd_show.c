@@ -350,7 +350,9 @@ static int cmd_show_process(struct dcl_command *cmd)
                (int)(ats.tv_nsec / 10000000));
         printf("    %-20s %-10s %-8s %s\n", "Process Name", "PID", "UIC", "State");
         /* Show at least the current process */
-        const char *pname = ctx->process_name[0] ? ctx->process_name : "_FTA0:";
+        /* No "_FTA0:" fallback (vms-fb9): an empty process name is reported
+         * empty, not filled in with an invented VMS device name. */
+        const char *pname = ctx->process_name;
         const char *uname = ctx->username[0] ? ctx->username : "SYSTEM";
         printf("    %-20s %08X   [%03o,%03o] LEF\n",
                pname, (unsigned)getpid(),
@@ -374,10 +376,26 @@ static int cmd_show_process(struct dcl_command *cmd)
            (int)(ts.tv_nsec / 10000000),
            upper_user, (unsigned)getpid());
     printf("                          Process name: \"%s\"\n\n",
-           ctx->process_name[0] ? ctx->process_name : "_FTA0:");
-    /* Show VMS-style terminal name; fall back to _FTA0: */
-    const char *prcnam = ctx->process_name[0] ? ctx->process_name : "_FTA0:";
-    printf("Terminal:          %s\n", prcnam);
+           ctx->process_name);
+    /*
+     * TWO DEFECTS FIXED HERE (vms-fb9), both of which the UAT on the real
+     * runtime printed as recently as this commit's parent:
+     *
+     *  1. This line printed the PROCESS NAME under the label "Terminal:".
+     *     They are different things; the terminal is a device.
+     *  2. Both this and the process name above fell back to the literal
+     *     "_FTA0:" when the field was empty -- an invented VMS device name,
+     *     the same one every other DCL process invented, which is the exact
+     *     fabrication this item deletes. Deleting the environment handoff
+     *     while leaving this would have changed nothing a user can see.
+     *
+     * Both fields are now printed as they are. Empty means OVMX cannot
+     * answer yet: the terminal comes from the executive's device table
+     * bound to this job, and the process name from the executive's process
+     * table, neither of which DCL can reach. An empty field is the honest
+     * report of an unanswerable question (rule 10).
+     */
+    printf("Terminal:          %s\n", ctx->terminal.device_name);
     printf("User Identifier:   [%03o,%03o]\n",
            ctx->uic_group ? (unsigned)ctx->uic_group : (unsigned)(getgid() & 0377),
            ctx->uic_member ? (unsigned)ctx->uic_member : (unsigned)(getuid() & 0377));
@@ -442,7 +460,10 @@ static int cmd_show_users(struct dcl_command *cmd)
         printf("      %-12s %-16s  %08X   %s\n",
                upper_name, ctx->process_name[0] ? ctx->process_name : upper_name,
                (unsigned)getpid(),
-               ctx->terminal.device_name[0] ? ctx->terminal.device_name : "_FTA0:");
+               /* No "_FTA0:" fallback (vms-fb9) -- see the note in
+                * cmd_show_process. An unknown terminal is reported as
+                * unknown, never as an invented device name. */
+               ctx->terminal.device_name);
     } else {
         printf("    Total number of users = %d, number of processes = %d\n\n",
                count, count);

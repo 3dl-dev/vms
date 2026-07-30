@@ -193,8 +193,9 @@ static int cmd_show_logical(struct dcl_command *cmd)
  * Returns 1 with cpu_str filled, or 0 when the service will not report
  * the item -- which, for a row the scan has already established this
  * caller may read, means the process no longer exists (SS$_NONEXPR).
- * The caller must then drop the row rather than display it: see
- * cmd_show_system().
+ * The caller then prints no figure and displays the row anyway -- the
+ * same treatment as a redacted row; see cmd_show_system(), whose comment
+ * records why dropping the row was written and backed out.
  */
 static int cpu_time_of(uint32_t vms_pid, char *cpu_str, size_t cpu_len)
 {

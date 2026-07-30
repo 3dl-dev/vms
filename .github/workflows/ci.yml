@@ -234,7 +234,11 @@ jobs:
           echo "Derived expected suites from the checkout:"
           echo "$EXPECTED" | sed 's/^/  /'
 
-          N_EXPECTED=$(echo "$EXPECTED" | grep -c .)
+          # `|| true`: grep -c exits 1 on an empty set, and GitHub runs `run:`
+          # steps under `bash -e`, so without it an empty derived set would
+          # abort the step with no diagnostic instead of hitting the explicit
+          # floor check below.
+          N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
           # Monotone FLOOR on the number of suite SOURCES, not on any tally.
           # The derived set above cannot notice a suite whose .c file was
           # deleted outright (the set simply shrinks), so this catches that.
@@ -410,7 +414,11 @@ jobs:
           # ---------------------------------------------------------------
           EXPECTED=$(cd "$GITHUB_WORKSPACE" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
                      | xargs -n1 basename | sed 's/\.c$//' | sort)
-          N_EXPECTED=$(echo "$EXPECTED" | grep -c .)
+          # `|| true`: grep -c exits 1 on an empty set, and GitHub runs `run:`
+          # steps under `bash -e`, so without it an empty derived set would
+          # abort the step with no diagnostic instead of hitting the explicit
+          # floor check below.
+          N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
           echo "Derived expected suites from the checkout ($N_EXPECTED):"
           echo "$EXPECTED" | sed 's/^/  /'
 

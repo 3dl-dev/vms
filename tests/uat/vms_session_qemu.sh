@@ -223,6 +223,7 @@ for cmd in \
     'DIRECTORY' \
     'SHOW PROCESS' \
     'SHOW PROCESS /PRIVILEGES' \
+    'SPAWN SHOW PROCESS' \
     'SHOW LOGICAL SYS$LOGIN' \
     'DEFINE UAT_TEST "session_test_passed"' \
     'SHOW LOGICAL UAT_TEST' \
@@ -294,6 +295,20 @@ check_response() {
     fi
 }
 
+# Anchored negative: asserts a pattern is ABSENT from ONE command's own
+# captured response. Same anchoring rationale as check_response -- a
+# whole-log negative would be defeated by any other command that happens
+# to print the string.
+check_not_response() {
+    local cmd="$1" pattern="$2"
+    if printf '%s' "${CMD_OUTPUT[$cmd]}" | grep -qiE "$pattern"; then
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  FAIL: response to '$cmd' should NOT contain '$pattern' (got: $(printf '%s' "${CMD_OUTPUT[$cmd]}" | tr '\n' ' '))"
+    else
+        PASS=$((PASS + 1))
+    fi
+}
+
 # SHOW TIME should print a VMS date (DD-MMM-YYYY) in its own response.
 # Anchored, not a whole-log scan: LOGOUT's own message ("logged out at
 # 1-JAN-1970 00:00:09.95") independently matches this exact date-format
@@ -332,6 +347,33 @@ check_response 'SHOW PROCESS' 'SYSTEM'
 # %DCL-E-IVVERB and no privilege list is ever printed makes this assertion
 # fail; the unmutated run still passes.
 check_response 'SHOW PROCESS /PRIVILEGES' '(TMPMBX|NETMBX|OPER)'
+
+# THE SESSION REALLY IS THE AUTHENTICATED USER AT THE OS LEVEL (vms-2b8
+# round 6). This is the only externally observable proof that
+# tools/vms_login.c's credential drop happened, and it is why the
+# assertion is on a SPAWNed subprocess rather than on the session itself.
+#
+# The session's own UIC comes from the row LOGINOUT stamped out of
+# SYSUAF, so SHOW PROCESS reports [001,004] whether or not the drop
+# occurred -- it cannot distinguish. A SUBPROCESS is different: it
+# registers with the executive on its own, and vms_proc_register() in
+# src/kernel/vms_module.c derives its UIC from the task's REAL Linux
+# credentials, inheriting nothing. So the subprocess's UIC is a direct
+# readout of what the session is running as:
+#   drop performed  -> [001,004]   (setgid(1), setuid(4) from SYSUAF)
+#   drop absent     -> [000,000]   (root, as every session used to be)
+#
+# That difference is not cosmetic. While sessions ran as root, every
+# subprocess also registered holding CMKRNL|CMEXEC|SETPRV|WORLD, and
+# SETPRV is what VMS_IOCTL_SETIDENT requires to claim any identity at
+# all -- an ordinary user's subprocess could stamp itself SYSTEM with
+# all 37 privileges (reproduced against a real /dev/vms; the refusal is
+# asserted in tests/qemu/test_syssvc_ident.c scenario D).
+#
+# Anchored to SPAWN's own response segment, not the whole log: '[001,004]'
+# also appears in the SHOW PROCESS response earlier in the same session.
+check_response 'SPAWN SHOW PROCESS' '\[001,004\]'
+check_not_response 'SPAWN SHOW PROCESS' '\[000,000\]'
 
 # SHOW TERMINAL should show terminal info in its own response. Anchored, not
 # a whole-log scan: grep is case-insensitive, so 'Terminal' matches the echo

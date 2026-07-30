@@ -16,6 +16,8 @@
 #include <time.h>
 #include <termios.h>
 #include <pwd.h>
+#include <grp.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -132,19 +134,34 @@ static void start_session(const sysuaf_record_t *rec)
      * "logging in" was a process choosing a username (CLAUDE.md
      * Rule 10's worked example, in its original habitat).
      *
-     * NOT FATAL, and that is not a fallback: the session continues with
-     * whatever identity the executive DOES hold for it, which for an
-     * unstamped process is no user name and the UIC derived from its
-     * real credentials. It is never the identity that was asked for and
-     * refused. A failure here is reported, not papered over.
+     * FAILURE IS FATAL (round 6). It used to print a warning and hand
+     * the user a session anyway, which is CLAUDE.md Rule 10's illegal
+     * third answer twice over: VMS has no state in which LOGINOUT
+     * checks a password against SYSUAF and then starts a session with
+     * no identity, so there is no behaviour to reproduce and the
+     * condition must be made UNREACHABLE rather than handled -- and the
+     * warning wore the LOGINOUT facility with an invented code, which
+     * is a self-certified VMS diagnostic. Worse, it degraded UPWARD:
+     * an unstamped session kept the credentials LOGINOUT was started
+     * with (root, UIC [0,0], the executive's whole enforced mask),
+     * i.e. strictly MORE privilege than the SYSUAF record grants.
+     *
+     * Unreachable, not merely refused: PID 1 halts at boot if the
+     * executive is absent (vms-0ff), so by the time any Username:
+     * prompt exists /dev/vms answers. The message wears the OVMX
+     * facility because a rejected ioctl is an OVMX event, not a VMS
+     * one -- the same reasoning ovmx_init.c uses for %OVMX-I-EXEC.
      */
     {
         uint32_t login_uic = (rec->uic_group << 16) | rec->uic_member;
         uint64_t login_privs = parse_privilege_string(rec->privileges);
         uint32_t ist = vms_kif_setident(rec->username, login_uic, login_privs);
-        if (!(ist & 1))
-            printf("%%LOGINOUT-W-NOIDENT, the executive refused this "
-                   "identity (status %u)\n", (unsigned)ist);
+        if (!(ist & 1)) {
+            printf("%%OVMX-F-NOIDENT, the executive refused the "
+                   "authenticated identity (status %u)\n", (unsigned)ist);
+            fflush(stdout);
+            _exit(1);
+        }
     }
 
     /* Set up environment for session.
@@ -171,6 +188,17 @@ static void start_session(const sysuaf_record_t *rec)
     if (vmsfs_to_linux_path(rec->default_dir, home_linux, sizeof(home_linux)) == 1) {
         /* Ensure home directory exists */
         mkdir(home_linux, 0755);
+        /* SYS$LOGIN is owned by the user's UIC on VMS, and the UIC is
+         * [gid,uid] here (the same mapping the executive derives and
+         * that src/vmsrms/rms_core.c enforces protection against). This
+         * must happen while LOGINOUT still has the privilege to do it,
+         * i.e. before the credential drop below. */
+        if (chown(home_linux, (uid_t)rec->uic_member,
+                  (gid_t)rec->uic_group) != 0)
+            printf("%%OVMX-W-LOGINOWN, %s could not be given to UIC "
+                   "[%o,%o]: %s\n", rec->default_dir,
+                   (unsigned)rec->uic_group, (unsigned)rec->uic_member,
+                   strerror(errno));
         chdir(home_linux);
     }
 
@@ -187,6 +215,66 @@ static void start_session(const sysuaf_record_t *rec)
             vms_pcb_set_identity(linfo.vms_pid, linfo.uic, linfo.username,
                                  prcnam);
             vms_pcb_set_default_dir(rec->default_dir);
+        }
+    }
+
+    /*
+     * BECOME THE AUTHENTICATED USER (vms-2b8 round 6).
+     *
+     * WHY THIS IS NOT OPTIONAL. The executive's identity row is keyed on
+     * the thread group, and a NEW task derives its own authorized mask
+     * at registration from capable(CAP_SYS_ADMIN) -- see
+     * vms_proc_register() in src/kernel/vms_module.c. So until this
+     * call, every DCL session AND EVERY PROCESS IT SPAWNS ran as Linux
+     * root: each child registered holding CMKRNL|CMEXEC|SETPRV|WORLD
+     * before it executed a single instruction, and SETPRV is exactly
+     * what VMS_IOCTL_SETIDENT requires to establish an arbitrary
+     * identity. It was proven by execution, not argued: an ordinary
+     * FIELD/[200,10] session forked a child, the child re-registered,
+     * and it stamped itself SYSTEM [1,4] with all 37 privileges. The
+     * executive's refusal was real but it protected exactly one task,
+     * and a privilege reduction survived only until the next fork.
+     *
+     * The UIC is [gid,uid] throughout OVMX -- the executive derives
+     * proc->uic that way, and src/vmsrms/rms_core.c enforces file
+     * protection against the same pair. Before this call those two
+     * disagreed for every session: the executive reported the SYSUAF
+     * UIC while RMS saw root's [0,0]. After it they are the same UIC by
+     * construction, because there is only one.
+     *
+     * THIS IS NOT A NEW VMS BEHAVIOUR AND IS NOT PRESENTED AS ONE
+     * (CLAUDE.md Rule 8/10). OpenVMS has no Linux credentials; the
+     * uid/gid pair is OVMX's substrate for the UIC. What changes here
+     * is only that the substrate is made to agree with the identity the
+     * executive was already enforcing, so the enforcement is not
+     * layered over a process that could sidestep it by forking.
+     *
+     * ORDER MATTERS. It runs AFTER VMS_IOCTL_SETIDENT (which needs the
+     * SETPRV that root-derived registration granted), after the SYS$LOGIN
+     * chown, and after the accounting write -- and BEFORE execl, so the
+     * image the user drives never holds credentials it did not
+     * authenticate for. The executive's row survives: it is keyed on the
+     * thread group id, which neither setuid nor exec changes.
+     *
+     * FAILURE IS FATAL. "LOGINOUT authenticated a user and then ran the
+     * session as root anyway" is not a VMS state and gets no handler
+     * (Rule 10): the condition is made unreachable.
+     */
+    {
+        uid_t want_uid = (uid_t)rec->uic_member;
+        gid_t want_gid = (gid_t)rec->uic_group;
+
+        if (setgroups(0, NULL) != 0 ||
+            setgid(want_gid) != 0 ||
+            setuid(want_uid) != 0 ||
+            getuid()  != want_uid || geteuid() != want_uid ||
+            getgid()  != want_gid || getegid() != want_gid) {
+            printf("%%OVMX-F-NOUIC, could not become UIC [%o,%o] for user "
+                   "%s: %s\n", (unsigned)rec->uic_group,
+                   (unsigned)rec->uic_member, rec->username,
+                   strerror(errno));
+            fflush(stdout);
+            _exit(1);
         }
     }
 

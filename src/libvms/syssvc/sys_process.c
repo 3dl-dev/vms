@@ -328,6 +328,73 @@ uint32_t sys$wake(const uint32_t *pidadr,
 }
 
 /*
+ * creprc_write_all / creprc_read_all -- the $CREPRC creation handshake's
+ * transfers, made SIGNAL-PROOF.
+ *
+ * WHY THESE EXIST (the defect they delete): a bare read() on the pipe
+ * returns -1/EINTR whenever a signal is delivered to the CALLER through a
+ * handler installed without SA_RESTART. That is not an exotic condition --
+ * src/vmsdcl/dcl_main.c installs DCL's interactive SIGINT and SIGQUIT
+ * handlers with sa_flags = 0, and DCL is the process that calls $CREPRC
+ * (RUN, RUN/DETACHED). A Ctrl-C landing in the handshake window made the
+ * short-read branch fire with the child PERFECTLY HEALTHY: $CREPRC reported
+ * OVMX$_PRCLOST -- "no VMS process was created, nothing was ever entered in
+ * the table" -- for a process that WAS created, IS in the executive's table
+ * and IS enumerable by SHOW SYSTEM, and then reaped it. Measured on a
+ * NATIVE host against this branch's own LIBVMS$SHR.EXE and recorded on
+ * vms-8019: 788 of 4000 calls under a DCL-shaped handler, 0 of 4000 without
+ * one. (Under QEMU the same window is a fraction of a millisecond wide,
+ * which is why tests/qemu/test_syssvc_procnam.c's P13 holds the forked
+ * child still with ptrace instead of trying to catch it.)
+ *
+ * The signal disposition of the caller is not a fact about the child, so it
+ * must not be able to change what $CREPRC says about the child. With these
+ * loops in place a short read really does mean "the child died before
+ * reporting", which is the only condition OVMX$_PRCLOST is documented to
+ * name, and is what makes the unconditional waitpid() below correct rather
+ * than an indefinite block on a live process.
+ *
+ * The child's write needs the same treatment for the same reason with the
+ * roles swapped: a child that reported successfully but was interrupted
+ * mid-write still exec's its image, and the parent would see a short read
+ * and declare a running process lost.
+ *
+ * A genuine EOF (read returns 0) and a genuine error other than EINTR both
+ * stop the loop and are reported as a short transfer.
+ */
+static ssize_t creprc_write_all(int fd, const void *buf, size_t len)
+{
+    const char *p = (const char *)buf;
+    size_t done = 0;
+    while (done < len) {
+        ssize_t w = write(fd, p + done, len - done);
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (w == 0) break;
+        done += (size_t)w;
+    }
+    return (ssize_t)done;
+}
+
+static ssize_t creprc_read_all(int fd, void *buf, size_t len)
+{
+    char *p = (char *)buf;
+    size_t done = 0;
+    while (done < len) {
+        ssize_t r = read(fd, p + done, len - done);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (r == 0) break;      /* genuine EOF: the writer is gone */
+        done += (size_t)r;
+    }
+    return (ssize_t)done;
+}
+
+/*
  * sys$creprc - Create a subprocess.
  *
  * Uses fork()+exec() to create a new process running the specified image.
@@ -457,10 +524,21 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             else
                 rep.status = gst;
         }
-        ssize_t w = write(namefd[1], &rep, sizeof(rep));
+        /* Retried on EINTR and on a short write: an interrupted report
+         * from a child that is about to exec its image would reach the
+         * creator as a short read, i.e. as OVMX$_PRCLOST for a running
+         * process. */
+        ssize_t w = creprc_write_all(namefd[1], &rep, sizeof(rep));
         (void)w;
         close(namefd[1]);
-        if (!(rep.status & 1))
+        /* A report the creator never received describes a process the
+         * creator does not know exists. The creator reads a short transfer
+         * as OVMX$_PRCLOST -- "nothing was created" -- so the child must
+         * not go on to activate the image and make that statement false.
+         * Only a genuine write error can end the loop short, and this
+         * keeps "short transfer" and "no process" the same fact rather
+         * than two facts that can disagree. */
+        if (!(rep.status & 1) || w != (ssize_t)sizeof(rep))
             _exit(1);
 
         /* Child: Initialize PCB with inherited context */
@@ -504,7 +582,12 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     /* Parent process */
     close(namefd[1]);
     struct creprc_report rep = { 0, 0 };
-    ssize_t r = read(namefd[0], &rep, sizeof(rep));
+    /* Retried on EINTR: see creprc_read_all. A signal caught by the
+     * CALLER must not be able to change what $CREPRC says about the
+     * CHILD, and it is what makes r < sizeof(rep) mean "the child died
+     * before reporting" -- the precondition of both the OVMX$_PRCLOST
+     * return and the unconditional waitpid() below. */
+    ssize_t r = creprc_read_all(namefd[0], &rep, sizeof(rep));
     close(namefd[0]);
 
     if (r != (ssize_t)sizeof(rep) || !(rep.status & 1)) {
@@ -513,6 +596,15 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * the name-refusal case used to be reaped, so the short-read
          * case leaked a zombie for a process the caller was
          * simultaneously told had been created.
+         *
+         * THAT CLAIM IS TRUE ONLY BECAUSE OF creprc_read_all(): a bare
+         * read() also came back short when the CALLER caught a signal
+         * under a handler without SA_RESTART, and the waitpid() below
+         * then blocked for the entire lifetime of a live, correctly
+         * created process. Both halves of this branch -- the status and
+         * the reap -- depend on a short transfer meaning the child died.
+         * The child likewise refuses to activate its image if its own
+         * report did not get through, so the two cannot disagree.
          *
          *  - r == sizeof(rep) with a failure status: the executive
          *    refused the name (SS$_DUPLNAM within the UIC group, or

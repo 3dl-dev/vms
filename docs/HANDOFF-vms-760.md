@@ -141,11 +141,16 @@ barrier steps released** (`XITDONE`), 178 cat-`0x02` DLM records answered,
   nothing and looks like failure. Keep run node-names ≤ 6 chars.
 - One `SCSD-W-CMUNGROUNDED` fired — cat `0x02` `op 0x01`, correctly refused,
   and membership was reached anyway. It is still an ungrounded pair: ground it.
-- The SDA CSB dumped *after* the daemon exited reads
-  `State: 09 wait / Flags: …removed…`. That is the post-exit state; `SHOW
-  CLUSTER` during the run is the authority. OVMX does not yet *persist* as a
-  member across the daemon's lifetime — it joins, holds, and leaves when SCSD
-  exits. Staying joined is the next outcome, not a bug in this one.
+- **PERSISTENCE CONFIRMED (soak, `d94-persist`).** OVMX held `MEMBER` across
+  **nine consecutive minute-marks** of an ~11 min run, with a real cluster ID
+  (`csid 00010004`). On daemon exit the cluster detected the loss, timed it out,
+  and logged `Node OVMXP1 (csid 00010004) has been removed from the VAXcluster`
+  — a clean departure, no stranded transition, cluster back to 3, **zero
+  bugchecks**. Only 2 `CMUNGROUNDED` refusals fired in the whole soak and
+  membership held throughout. Specimen:
+  `captures/ovmx-760-persist-10min-20260730.pcap`.
+  Departure is by peer *timeout*, not an explicit leave handshake — a real node
+  presumably announces its departure. Refinement, not a defect.
 
 ## 1b. Where it stood before (kept for continuity)
 

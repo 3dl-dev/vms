@@ -87,24 +87,52 @@ jobs:
             ovmx-test:latest \
             -c "SHOW TIME"
 
-      - name: Smoke test — Docker skips install (pre-installed state)
+      - name: Smoke test — PID 1 REFUSES to come up without the executive
         timeout-minutes: 2
         run: |
-          # The default entrypoint boots and then serves SSH forever — it
-          # never exits, and its PID 1 does not die on SIGTERM. So we must
-          # NOT wrap `docker run` in `timeout` (timeout without -k waits
-          # forever for the child to exit, hanging the job to the 6h
-          # ceiling — see vms-021). Instead run detached, read the boot
-          # output from the logs, and force-remove the container, which
-          # guarantees teardown regardless of signal handling.
-          CID=$(docker run -d ovmx-test:latest)
-          sleep 10
-          OUTPUT=$(docker logs "$CID" 2>&1 | head -20)
-          docker rm -f "$CID" >/dev/null 2>&1 || true
+          # CHANGED BY vms-0ff. This step used to boot the container to a
+          # login-serving system and assert '%STARTUP-I-SYSBOOT' (install
+          # skipped). That assertion is now WRONG TO WANT: a container has no
+          # /dev/vms, so what it was really certifying is OVMX coming up with
+          # NO EXECUTIVE — precisely the state epic vms-6b8 exists to make
+          # unreachable. On OpenVMS, SYSBOOT loads the executive before any
+          # process exists; VMS is never in that state, so OVMX must not be.
+          #
+          # The dead-legacy container (Rule 9, removal tracked in vms-71a) now
+          # earns its keep as a witness for the opposite property: on a
+          # substrate with no executive, PID 1 must ABORT rather than boot.
+          # Install-skip behaviour is covered on the REAL runtime by the
+          # persistent-boot job (Boot 2), so no coverage is lost here.
+          #
+          # PID 1 now exits by itself, so the detached-run dance is no longer
+          # needed to guarantee teardown — but `docker run` is still not
+          # wrapped in `timeout` (see vms-021).
+          set +e
+          OUTPUT=$(docker run --rm ovmx-test:latest 2>&1)
+          RC=$?
+          set -e
           echo "$OUTPUT"
-          echo "$OUTPUT" | grep -qF '%STARTUP-I-SYSBOOT' \
-            && echo "PASS: Docker detects pre-installed system" \
-            || { echo "FAIL: Expected SYSBOOT skip-install message"; exit 1; }
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: PID 1 came up (exit 0) on a substrate with no executive."
+            echo "The boot-time guarantee in src/ovmx_init/ovmx_init.c (executive_attach) has regressed."
+            exit 1
+          fi
+
+          # Nonzero alone proves nothing — a missing image or an unrelated
+          # crash also exits nonzero. Assert the REASON.
+          echo "$OUTPUT" | grep -qF '%STARTUP-F-NOEXEC' \
+            || { echo "FAIL: exited nonzero but never reported %STARTUP-F-NOEXEC — it went red for some other reason, not the absent executive"; exit 1; }
+          echo "$OUTPUT" | grep -qF '%STARTUP-F-NOBOOT' \
+            || { echo "FAIL: reported NOEXEC but not %STARTUP-F-NOBOOT — startup did not declare itself aborted"; exit 1; }
+
+          # And prove it stopped EARLY: no login prompt, no completed startup.
+          if echo "$OUTPUT" | grep -qF 'Username:'; then
+            echo "FAIL: reached a login prompt anyway — it printed a fatal error and booted regardless"
+            exit 1
+          fi
+
+          echo "PASS: PID 1 refused to boot without the executive, for the right reason"
 
   # -----------------------------------------------------------------------
   # Job 3: Persistent boot smoke test (QEMU)
@@ -141,6 +169,19 @@ jobs:
         run: |
           docker run --rm \
             -v ${{ github.workspace }}/tests/qemu/test_persistent_boot.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-0ff. Reuses the image built above (no extra build). Boots the REAL
+      # runtime twice: once with the executive present (must come up), once
+      # with vms.ko removed from the initramfs (must NOT come up). The second
+      # boot is a negative control — it proves this check can actually go red,
+      # which is the only thing that distinguishes a gate from decoration.
+      - name: The executive is integral — OVMX must not boot without it
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_executive_integral.sh:/test.sh:ro \
             --entrypoint bash \
             ovmx-boot:latest \
             /test.sh
@@ -188,9 +229,13 @@ jobs:
   # harness with --build-arg NEGATIVE_CONTROL=1, which patches init.sh to skip
   # insmod of vms.ko (simulating the executive being absent) while everything
   # else — building vms.ko itself, loading vmsfs.ko, the test binaries — stays
-  # real. Every test that opens /dev/vms then fails honestly ("cannot open
-  # /dev/vms", the same SS$_NOSUCHDEV path src/libvms/syssvc/sys_lock.c already
-  # takes) instead of silently passing. run_tests.sh exits 1 in that case, so
+  # real. Every test that opens /dev/vms then fails ("cannot open /dev/vms")
+  # instead of silently passing. (This comment used to add "the same
+  # SS$_NOSUCHDEV path sys_lock.c already takes"; that path was DELETED by
+  # vms-0ff — an unreachable executive is now prevented at boot, not reported
+  # per call. The harness is a test rig deliberately booted without an
+  # executive, which is why it can still observe a state the product cannot.)
+  # run_tests.sh exits 1 in that case, so
   # THIS job inverts the check: it PASSES only if the container run fails,
   # and FAILS (catching a regression in the harness itself) if the container
   # run unexpectedly succeeds while the executive is supposed to be absent.
@@ -237,8 +282,13 @@ jobs:
           # This also proves the harness ran to completion and reached its own
           # FINAL RESULTS accounting -- a timeout or panic would never print
           # this line at all, so this line alone rules those causes out.
-          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 7 suites failed ===' \
-            || { echo "FAIL: did not see the expected 3-suites-passed/7-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+          # NOTE: this split moved 7 -> 8 failures when vms-0ff added
+          # tests/qemu/test_kmod_pin.c (which asserts an open /dev/vms
+          # descriptor pins vms.ko). Adding an executive-dependent suite MUST
+          # move this number; if you add one and this line still passes
+          # unchanged, the suite is not actually reaching the executive.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 8 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/8-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
 
           # POSITIVE assertion paired with the two negative assertions above:
           # vmsfs.ko has no dependency on vms.ko/the executive, so it must

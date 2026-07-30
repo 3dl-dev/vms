@@ -39,8 +39,13 @@ uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs)
 {
     struct vms_register_args args;
 
-    if (vms_dev_fd < 0)
-        return 0x00000014; /* SS$_BADPARAM */
+    /* No "executive absent" check. The executive is INTEGRAL: PID 1 refuses
+     * to bring the system up unless /dev/vms is open, and holds it open for
+     * the life of the system (src/ovmx_init/ovmx_init.c, executive_attach),
+     * so no caller can observe its absence. This guard used to report
+     * SS$_BADPARAM for that impossible case, which was doubly wrong -- it
+     * described an unreachable state, and it did so with a status that means
+     * something else entirely. See CLAUDE.md Rule 9. */
 
     vms_memset(&args, 0, sizeof(args));
     args.vms_pid = vms_pid;

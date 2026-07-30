@@ -46,9 +46,36 @@ exercises.
    `/dev/vms`. Docker is **not** a runtime. Docker as *build/test tooling* is fine and expected —
    `distro/Dockerfile.bootable`, `src/kernel/Dockerfile`, `tests/qemu/Dockerfile` produce and test
    the real runtime. **Never collapse those two.**
-2. **No silent fallback.** If `/dev/vms` is absent, **fail honestly** (`SS$_NOSUCHDEV`, as
-   `sys_lock.c` already does). Never fake per-process success. Enforced by
-   `tests/integration/test_runtime_target.sh` (arrives with PR #1).
+2. **The executive is integral — its absence is made unreachable, not handled.** *(Corrected
+   2026-07-29; this constraint previously said "if `/dev/vms` is absent, fail honestly with
+   `SS$_NOSUCHDEV`, as `sys_lock.c` already does". That rule is **superseded**, and every item
+   written under it is wrong on this point.)*
+
+   Apply the governing rule — *what would VMS do?* On OpenVMS, SYSBOOT loads the executive before
+   any process exists; **VMS is never in the state where a running system has no executive**. So
+   the deliverable is not an error path. It is a guarantee:
+
+   - **Boot is fatal.** `src/ovmx_init/ovmx_init.c` (`executive_attach`) refuses to bring the
+     system up unless `vms.ko` loads and `/dev/vms` opens. No image can ever run without the
+     executive.
+   - **The executive is pinned.** PID 1 holds the `/dev/vms` descriptor for the life of the
+     system. `vms.ko`'s `file_operations` carry `.owner = THIS_MODULE`, so that open descriptor
+     holds a module reference and `rmmod vms` fails with `EBUSY` while OVMX runs. Mid-life loss is
+     **prevented**, not responded to.
+   - **Therefore per-call fallbacks are deleted, not corrected.** `sys_lock.c`'s `ensure_kif_open()`
+     status return and `vms_kif.c`'s absent-fd guard are gone. Do not reintroduce a status for a
+     condition no caller can observe.
+   - **`SS$_NOSUCHDEV` keeps its real meaning** — a caller named a VMS device that does not exist.
+     Only the "the executive is missing" uses were wrong. Classify each site; never blanket-replace.
+
+   Why the old rule was itself a defect: `SS$_NOSUCHDEV`-on-absence encoded "OVMX runs, minus the
+   executive", and no such system exists. A handled-but-impossible-on-VMS state is the same class of
+   lie as a per-process fake that reports success — it just fails more politely. Enforced by
+   `tests/integration/test_runtime_target.sh`.
+
+   Where OVMX must still invent a representation because VMS has no analogue (the `%STARTUP-F-NOEXEC`
+   / `%STARTUP-F-NOBOOT` messages), it is **labelled an OVMX design choice** per CLAUDE.md Rule 8 —
+   never presented as VMS-authentic.
 3. **Not done until proven against a real `/dev/vms`.** A userspace unit test that never loads
    `vms.ko` does not close an executive item.
 4. **Clean-room** (CLAUDE.md Rule 8) still applies to any VMS structure layout or constant.

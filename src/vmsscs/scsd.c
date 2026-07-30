@@ -1485,7 +1485,11 @@ int main(int argc, char **argv)
          * this after a connection binds and GATES admission (incl. accepting the
          * joiner's own client connects) on it. rc@64 = OUR conid (peer addresses
          * us); op@60 in {6,8}. Reflect it (scs_reflect_credit). --- */
-        if (getenv("OVMX_PURE_SERVER") != NULL && n >= 72 &&
+        /* vms-760: answering the peer's op6/op8 connection-management handshake is a
+         * PROTOCOL requirement on every path, not a pure-server nicety -- the real
+         * joiner (VAX3) answers them while driving its own connects. Previously gated
+         * to pure-server, so the sequencer path left them unanswered. */
+        if (do_connect && n >= 72 &&
             (buf[30] == SCS_MSGTYPE_SEQAPP || buf[30] == SCS_DIR_OPCODE)) {
             uint16_t cm_op = (uint16_t)buf[60] | ((uint16_t)buf[61] << 8);
             uint32_t cm_rc = (uint32_t)buf[64] | ((uint32_t)buf[65] << 8) |
@@ -1514,7 +1518,7 @@ int main(int argc, char **argv)
                                                 our_src_logical, buf);
                         }
                         ps->psc_credit_done = 1;
-                        if (ps->cm_config_sent && ps->psc_step == PSC_IDLE &&
+                        if (getenv("OVMX_PURE_SERVER") != NULL && ps->cm_config_sent && ps->psc_step == PSC_IDLE &&
                             !ps->psc_dir_sent &&
                             ps_send_dir_connect(sock, (int)ifindex, ps,
                                                 our_hw_mac, our_src_logical)) {

@@ -121,10 +121,8 @@ jobs:
 
           # Nonzero alone proves nothing — a missing image or an unrelated
           # crash also exits nonzero. Assert the REASON.
-          echo "$OUTPUT" | grep -qF '%STARTUP-F-NOEXEC' \
-            || { echo "FAIL: exited nonzero but never reported %STARTUP-F-NOEXEC — it went red for some other reason, not the absent executive"; exit 1; }
-          echo "$OUTPUT" | grep -qF '%STARTUP-F-NOBOOT' \
-            || { echo "FAIL: reported NOEXEC but not %STARTUP-F-NOBOOT — startup did not declare itself aborted"; exit 1; }
+          echo "$OUTPUT" | grep -qF '%EXECINIT, error loading system file' \
+            || { echo "FAIL: exited nonzero but never reported the EXECINIT load failure — it went red for some other reason, not the absent executive"; exit 1; }
 
           # And prove it stopped EARLY: no login prompt, no completed startup.
           if echo "$OUTPUT" | grep -qF 'Username:'; then

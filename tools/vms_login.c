@@ -27,6 +27,8 @@
 #include "ovmx_accounting.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
+/* LOGINOUT stamps the authenticated identity onto the executive's row. */
+#include "vms_kif.h"
 
 /* Maximum number of login attempts before disconnect */
 #define MAX_ATTEMPTS   3
@@ -109,17 +111,55 @@ static void start_session(const sysuaf_record_t *rec)
     /* Record this login now (after showing last, before launching DCL) */
     ovmx_accounting_record_login(rec->username);
 
-    /* Set up environment for session.
-     * VMS_DEFAULT_DIR is a VMS directory spec from SYSUAF. */
-    setenv("VMS_USERNAME",    rec->username,    1);
+    /*
+     * ESTABLISH THE AUTHENTICATED IDENTITY IN THE EXECUTIVE (vms-2b8).
+     *
+     * This is the whole point of LOGINOUT: the password has just been
+     * checked against SYSUAF, and what that proved has to be recorded
+     * somewhere every other process can see it and no process can
+     * rewrite it. VMS_IOCTL_SETIDENT writes it into the executive's
+     * process table, and the executive refuses the call outright unless
+     * this process holds SETPRV -- so LOGINOUT can establish an
+     * identity, and the session it hands over to cannot widen it.
+     *
+     * The row survives the execl() below, because the executive keys it
+     * on the thread-group id and exec does not change that. Nothing in
+     * the DCL image reads an environment variable to learn who it is.
+     *
+     * WHAT THIS REPLACES: setenv("VMS_USERNAME"/"VMS_UIC_GROUP"/
+     * "VMS_UIC_MEMBER"/"VMS_PRIVILEGES") -- ordinary environment
+     * variables that DCL then believed. Any process could set them, so
+     * "logging in" was a process choosing a username (CLAUDE.md
+     * Rule 10's worked example, in its original habitat).
+     *
+     * NOT FATAL, and that is not a fallback: the session continues with
+     * whatever identity the executive DOES hold for it, which for an
+     * unstamped process is no user name and the UIC derived from its
+     * real credentials. It is never the identity that was asked for and
+     * refused. A failure here is reported, not papered over.
+     */
+    {
+        uint32_t login_uic = (rec->uic_group << 16) | rec->uic_member;
+        uint64_t login_privs = parse_privilege_string(rec->privileges);
+        uint32_t ist = vms_kif_setident(rec->username, login_uic, login_privs);
+        if (!(ist & 1))
+            printf("%%LOGINOUT-W-NOIDENT, the executive refused this "
+                   "identity (status %u)\n", (unsigned)ist);
+    }
 
-    char uic_group_str[16], uic_member_str[16];
-    snprintf(uic_group_str, sizeof(uic_group_str), "%u", rec->uic_group);
-    snprintf(uic_member_str, sizeof(uic_member_str), "%u", rec->uic_member);
-    setenv("VMS_UIC_GROUP",   uic_group_str, 1);
-    setenv("VMS_UIC_MEMBER",  uic_member_str, 1);
+    /* Set up environment for session.
+     * VMS_DEFAULT_DIR is a VMS directory spec from SYSUAF.
+     *
+     * VMS_USERNAME REMAINS, AND IT IS STILL A FACADE. Its last reader
+     * in the product is tools/vms_mail.c, which uses it to pick whose
+     * mailbox to open -- so a user can still read another user's mail
+     * by setting it. Deleting it here without converting MAIL would
+     * silently break MAIL instead of fixing the hole, and MAIL is
+     * outside this item. It is left LOUD rather than silent (vms-2b8
+     * scope note 3) and reported. The UIC and privilege variables are
+     * gone: they have no readers left. */
+    setenv("VMS_USERNAME",    rec->username,    1);
     setenv("VMS_DEFAULT_DIR", rec->default_dir, 1);
-    setenv("VMS_PRIVILEGES",  rec->privileges, 1);
 
     /* Build logical name equivalences — VMS directory specs */
     setenv("SYS$LOGIN",   rec->default_dir, 1);
@@ -134,15 +174,20 @@ static void start_session(const sysuaf_record_t *rec)
         chdir(home_linux);
     }
 
-    /* Initialize user PCB (lives until exec replaces address space) */
-    uint64_t user_privs = parse_privilege_string(rec->privileges);
-    struct vms_pcb *pcb = vms_pcb_init(user_privs);
-    if (pcb) {
-        uint32_t uic = (rec->uic_group << 16) | rec->uic_member;
-        char prcnam[16];
-        snprintf(prcnam, sizeof(prcnam), "_FTA%d:", (int)(getpid() % 100));
-        vms_pcb_set_identity((uint32_t)getpid(), uic, rec->username, prcnam);
-        vms_pcb_set_default_dir(rec->default_dir);
+    /* Initialize user PCB (lives until exec replaces address space).
+     * Seeded from the row the executive just stamped -- a copy of the
+     * executive's verdict, not a second, independent claim. */
+    struct vms_procinfo linfo;
+    memset(&linfo, 0, sizeof(linfo));
+    if (vms_kif_getjpi_self(&linfo) & 1) {
+        struct vms_pcb *pcb = vms_pcb_init(linfo.cur_privs);
+        if (pcb) {
+            char prcnam[16];
+            snprintf(prcnam, sizeof(prcnam), "_FTA%d:", (int)(getpid() % 100));
+            vms_pcb_set_identity(linfo.vms_pid, linfo.uic, linfo.username,
+                                 prcnam);
+            vms_pcb_set_default_dir(rec->default_dir);
+        }
     }
 
     /* Exec the DCL shell with --login flag */

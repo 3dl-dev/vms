@@ -29,10 +29,13 @@
 
 #include "vms/pcb.h"
 #include "vms/logical.h"
+#include "vms/privs.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
+/* PID 1's identity is established THROUGH the executive, not declared. */
+#include "vms_kif.h"
 
 #define SYSDISK_DEV      "/dev/vda"
 #define INITRAMFS_BACKUP "/tmp/initramfs_vms"
@@ -752,6 +755,143 @@ static void install_system_blkdev(void)
 }
 
 /*
+ * Read one pipe-delimited field of a SYSUAF record by user name.
+ * Returns 0 and fills out on success, -1 if there is no such user, no
+ * such field, or SYSUAF.DAT cannot be read.
+ */
+static int sysuaf_field(const char *username, int index,
+                        char *out, size_t outsz)
+{
+    char sysuaf_path[512];
+    vms_to_linux(VMS_SYSUAF_PATH, sysuaf_path, sizeof(sysuaf_path));
+    FILE *fp = fopen(sysuaf_path, "r");
+    if (!fp)
+        return -1;
+
+    size_t namelen = strlen(username);
+    char line[512];
+    int found = -1;
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (line[0] == '#' || line[0] == '\n' || line[0] == '\0')
+            continue;
+        if (strncmp(line, username, namelen) != 0 || line[namelen] != '|')
+            continue;
+
+        char *field = line;
+        for (int i = 0; i < index; i++) {
+            field = strchr(field, '|');
+            if (!field) break;
+            field++;
+        }
+        if (!field)
+            break;
+
+        char *end = field;
+        while (*end && *end != '|' && *end != '\n' && *end != '\r')
+            end++;
+        *end = '\0';
+
+        snprintf(out, outsz, "%s", field);
+        found = 0;
+        break;
+    }
+
+    fclose(fp);
+    return found;
+}
+
+/*
+ * Establish PID 1's identity through the executive (vms-2b8).
+ *
+ * WHAT THIS REPLACES, so it is never put back: PID 1 used to call
+ *     vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
+ *     vms_pcb_set_identity(1, (1 << 16) | 4, "SYSTEM", "SYSTEM");
+ * -- a process writing its own user name, its own UIC and every
+ * privilege bit in existence into a structure it owns privately. The
+ * answer it wrote was the right one; WHO DECIDED IT was the defect
+ * (CLAUDE.md Rule 11). Nothing outside PID 1 could see that PCB, and
+ * nothing could refuse it.
+ *
+ * The identity now comes from the two places a VMS identity can come
+ * from, and PID 1 supplies neither of them:
+ *   - WHAT the identity is: SYSUAF's SYSTEM record -- the same user
+ *     database LOGINOUT authenticates against, and the same one that
+ *     already decides the UIC and privileges of every other session.
+ *   - WHETHER PID 1 may establish it: the executive's own judgement.
+ *     VMS_IOCTL_SETIDENT refuses any caller that does not hold SETPRV
+ *     an identity that is not a weakening of its own, and SETPRV is
+ *     derived in vms.ko from capable(CAP_SYS_ADMIN) at registration --
+ *     a credential no process can grant itself.
+ *
+ * So this is LOGINOUT's shape, run for the system process: read the
+ * authorized record, ask the executive to stamp it, and let the
+ * executive say no. The row it writes is what every other process on
+ * the node sees for PID 1, which is the whole point.
+ *
+ * FAILURE IS FATAL, and deliberately so. There is no VMS in which the
+ * system process has no identity, so there is no VMS behaviour to
+ * reproduce for that state and no plausible-looking default to pick
+ * (Rule 10): the condition is made unreachable instead. The diagnostic
+ * wears the OVMX facility, not a VMS one, because the event is OVMX's.
+ */
+static void establish_system_identity(void)
+{
+    char uic_group[32] = "", uic_member[32] = "", priv_str[256] = "";
+
+    /* SYSUAF fields, 0-indexed and pipe-delimited, the same layout
+     * provision_sysuaf_users() above walks:
+     *   0 USERNAME | 1 HASH | 2 UIC_GROUP | 3 UIC_MEMBER
+     *   4 DEFAULT_DIR | 5 FLAGS | 6 PRIVILEGES
+     * Parsed here rather than through libvms's sysuaf_lookup() because
+     * PID 1 must stay statically linked against the minimal set of
+     * libraries (see the -static note at the bottom of this target's
+     * CMakeLists.txt); it does not link libvms. */
+    if (sysuaf_field("SYSTEM", 2, uic_group, sizeof(uic_group)) != 0 ||
+        sysuaf_field("SYSTEM", 3, uic_member, sizeof(uic_member)) != 0 ||
+        sysuaf_field("SYSTEM", 6, priv_str, sizeof(priv_str)) != 0)
+        ovmx_exec_halt("no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT",
+                       "the system process has no authorized identity");
+
+    uint32_t uic = ((uint32_t)strtoul(uic_group, NULL, 10) << 16) |
+                    (uint32_t)strtoul(uic_member, NULL, 10);
+    uint64_t privs = parse_privilege_string(priv_str);
+
+    uint32_t st = vms_kif_setident("SYSTEM", uic, privs);
+    if (!(st & 1)) {
+        char detail[64];
+        snprintf(detail, sizeof(detail), "SS$ status %u", (unsigned)st);
+        ovmx_exec_halt("the executive refused the system process's identity",
+                       detail);
+    }
+
+    /*
+     * Seed the userspace PCB from the row the executive just wrote --
+     * a copy of the executive's verdict, never a declaration. (The PCB
+     * is per-process and therefore a facade for anything system-wide;
+     * removing it is vms-8019's, not this item's. What this item
+     * removes is PID 1 CHOOSING what goes in it.)
+     */
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    st = vms_kif_getjpi_self(&info);
+    if (!(st & 1))
+        ovmx_exec_halt("the executive holds no row for the system process",
+                       "identity was stamped but cannot be read back");
+
+    struct vms_pcb *pcb = vms_pcb_init(info.cur_privs);
+    if (pcb) {
+        vms_pcb_set_identity(info.vms_pid, info.uic, info.username,
+                             info.prcnam);
+        vms_pcb_set_default_dir("SYS$SYSROOT:[SYSMGR]");
+    }
+
+    printf("%%OVMX-I-EXEC, system identity %s [%o,%o] established by the executive\n",
+           info.username, (unsigned)((info.uic >> 16) & 0xFFFFu),
+           (unsigned)(info.uic & 0xFFFFu));
+}
+
+/*
  * Try to start the SSH daemon for remote access.
  * Returns the child PID on success, -1 if sshd not found.
  */
@@ -881,33 +1021,6 @@ int main(void)
     /* Ignore SIGHUP so login children can terminate without killing us */
     signal(SIGHUP, SIG_IGN);
 
-    /*
-     * Step 1: SYSTEM process PCB.
-     *
-     * STOPGAP (vms-2b8). This is a process declaring its own full
-     * privilege mask into a USERSPACE PCB -- the shape this item exists
-     * to remove. It is left in place for exactly one reason: nothing in
-     * the product calls vms_kif_register() yet (vms-9fc), so PID 1 has
-     * no row in the executive's process table to stamp an identity
-     * onto, and every reader below still reads this PCB.
-     *
-     * PID 1 is the one process for which "SYSTEM, fully privileged" is
-     * the right ANSWER -- the wrongness is entirely in WHO DECIDES it.
-     * The executive already derives that verdict for itself from
-     * capable(CAP_SYS_ADMIN) at registration, and PID 1 already holds
-     * /dev/vms open (executive_attach), so the correct sequence once
-     * vms-9fc lands is: register, then vms_kif_setident("SYSTEM",
-     * (1<<16)|4, <SYSUAF mask>), and delete the call below. Not done
-     * here because introducing a new fatal boot dependency is vms-9fc's
-     * decision to make, not this item's.
-     */
-    struct vms_pcb *pcb = vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
-    if (pcb) {
-        uint32_t system_uic = (1 << 16) | 4;  /* [1,4] SYSTEM */
-        vms_pcb_set_identity(1, system_uic, "SYSTEM", "SYSTEM");
-        vms_pcb_set_default_dir("SYS$SYSROOT:[SYSMGR]");
-    }
-
     /* Step 1b: Bootstrap VMS namespace — device table + logical names.
      * This is the bridge: one Linux mount point enters the device table,
      * and from this point forward all paths are VMS filespecs translated
@@ -932,6 +1045,12 @@ int main(void)
      * (e.g., RIGHTSLIST.DAT, STARTUP.COM) are provisioned here
      * without overwriting existing files. */
     provision_seed_files();
+
+    /* Step 2c: Establish PID 1's identity — from SYSUAF, through the
+     * executive. Must run after provision_seed_files(): SYSUAF.DAT is
+     * one of the files it seeds, so on a first boot there is no user
+     * database before this point. */
+    establish_system_identity();
 
     /* Step 3: Run STARTUP.COM.
      * There is no logical name daemon to start first: on VMS the logical name

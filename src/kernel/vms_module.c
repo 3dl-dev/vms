@@ -166,25 +166,18 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
     return proc;
 }
 
-void vms_proc_free(struct vms_proc *proc)
+/*
+ * vms_proc_free_claimed - tear down an entry already removed from the hash.
+ *
+ * The caller must have unlinked proc under vms_proc_hash_lock; that
+ * removal IS the ownership claim, so exactly one caller reaches here
+ * per entry. Callers that still need to claim go through
+ * vms_proc_free().
+ */
+void vms_proc_free_claimed(struct vms_proc *proc)
 {
     int i;
     struct vms_ast_entry *ast, *tmp;
-
-    /*
-     * Claim the entry: an entry can now be freed from three places
-     * (channel release of an exiting task, the lazy reaper, and module
-     * unload), so removal from the hash is what decides ownership.
-     * hash_del_rcu() leaves the node unhashed, so a second claimant
-     * bails out here instead of double-freeing.
-     */
-    spin_lock(&vms_proc_hash_lock);
-    if (hlist_unhashed(&proc->hash_node)) {
-        spin_unlock(&vms_proc_hash_lock);
-        return;
-    }
-    hash_del_rcu(&proc->hash_node);
-    spin_unlock(&vms_proc_hash_lock);
 
     /* Free AST queues */
     for (i = 0; i < 4; i++) {
@@ -210,6 +203,26 @@ void vms_proc_free(struct vms_proc *proc)
 
     /* RCU-deferred free — proc may still be accessed by RCU readers */
     kfree_rcu(proc, rcu);
+}
+
+void vms_proc_free(struct vms_proc *proc)
+{
+    /*
+     * Claim the entry: an entry can now be freed from three places
+     * (channel release of an exiting task, the lazy reaper, and module
+     * unload), so removal from the hash is what decides ownership.
+     * hash_del_rcu() leaves the node unhashed, so a second claimant
+     * bails out here instead of double-freeing.
+     */
+    spin_lock(&vms_proc_hash_lock);
+    if (hlist_unhashed(&proc->hash_node)) {
+        spin_unlock(&vms_proc_hash_lock);
+        return;
+    }
+    hash_del_rcu(&proc->hash_node);
+    spin_unlock(&vms_proc_hash_lock);
+
+    vms_proc_free_claimed(proc);
 }
 
 /* ================================================================

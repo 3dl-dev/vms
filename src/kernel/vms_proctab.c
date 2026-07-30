@@ -73,10 +73,17 @@ static bool vms_proc_task_alive(struct vms_proc *proc)
  * are therefore reclaimed here, lazily, on every operation that reads
  * or mutates the table.
  *
- * One victim per pass: vms_proc_free() takes vms_proc_hash_lock itself,
- * so the scan cannot free in place. The table is small (VMS SHOW SYSTEM
- * walks the PCB vector linearly too) and reaping only runs on process
- * table operations.
+ * One victim per pass: the teardown below the hash removal can sleep on
+ * nothing but must not run under the hash spinlock, so the scan unlinks
+ * one entry and then leaves the lock to tear it down. The table is small
+ * (VMS SHOW SYSTEM walks the PCB vector linearly too) and reaping only
+ * runs on process table operations.
+ *
+ * The victim is UNLINKED WHILE THE LOCK IS STILL HELD, and that removal
+ * is the ownership claim (see vms_proc_free()). Selecting a victim under
+ * the lock and only claiming it afterwards would be a use-after-free: a
+ * concurrent vms_dev_release() could claim and kfree_rcu() the same
+ * entry in the gap, and the claim itself reads proc->hash_node.
  */
 void vms_proc_reap_dead(void)
 {
@@ -92,6 +99,7 @@ void vms_proc_reap_dead(void)
         spin_lock(&vms_proc_hash_lock);
         hash_for_each_safe(vms_proc_hash, bkt, tmp, proc, hash_node) {
             if (!vms_proc_task_alive(proc)) {
+                hash_del_rcu(&proc->hash_node);
                 victim = proc;
                 break;
             }
@@ -101,7 +109,7 @@ void vms_proc_reap_dead(void)
         if (!victim)
             break;
 
-        vms_proc_free(victim);
+        vms_proc_free_claimed(victim);
     }
 
     mutex_unlock(&vms_reap_mutex);

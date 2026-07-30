@@ -10,6 +10,7 @@
  */
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -23,6 +24,7 @@
 #include <sys/wait.h>
 #include <sys/mount.h>
 #include <sys/syscall.h>
+#include <sys/reboot.h>
 #include <errno.h>
 
 #include "vms/pcb.h"
@@ -105,20 +107,115 @@ static void sigchld_handler(int sig)
 /* Bare-metal bootstrap                                               */
 /* ------------------------------------------------------------------ */
 
-static void load_kernel_module(const char *path)
+/*
+ * The system does not come up. Print the reason and halt.
+ *
+ * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): OpenVMS has no message for "the
+ * executive vanished" because VMS is never in that state -- SYSBOOT loads
+ * the executive before any process exists, so a running VMS system always
+ * has one. The %STARTUP-F-* mnemonics below are OVMX's own, not VMS-
+ * authentic, and must never be presented as such.
+ *
+ * As PID 1 we power the machine off rather than exit: an exiting PID 1
+ * panics the kernel and leaves QEMU wedged, whereas a clean power-off ends
+ * the boot with the diagnostic still on the console -- the closest analogue
+ * to a VAX halting to the >>> console prompt. If reboot(2) is unavailable
+ * (no CAP_SYS_BOOT, e.g. the dead-legacy container), exit nonzero instead.
+ */
+static void boot_fatal(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "%%STARTUP-F-NOBOOT, system startup aborted, "
+                    "OVMX is not running\n");
+    fflush(NULL);
+
+    if (getpid() == 1) {
+        sync();
+        reboot(RB_POWER_OFF);
+        /* Only reached without CAP_SYS_BOOT. */
+    }
+    _exit(1);
+}
+
+/*
+ * Load a kernel module. Returns 0 on success, -1 with errno set otherwise.
+ * Callers decide whether a failure is survivable -- for the executive it is
+ * not (see executive_attach).
+ */
+static int load_kernel_module(const char *path)
 {
     struct stat st;
     if (stat(path, &st) != 0)
-        return;
+        return -1;
     int fd = open(path, O_RDONLY);
-    if (fd >= 0) {
-        long rc = syscall(SYS_finit_module, fd, "", 0);
-        if (rc != 0) {
-            fprintf(stderr, "%%STARTUP-W-MODFAIL, failed to load %s: %s\n",
-                    path, strerror(errno));
-        }
-        close(fd);
+    if (fd < 0)
+        return -1;
+    long rc = syscall(SYS_finit_module, fd, "", 0);
+    int saved = errno;
+    close(fd);
+    if (rc != 0) {
+        errno = saved;
+        return -1;
     }
+    return 0;
+}
+
+/*
+ * Bind this system to its executive, permanently.
+ *
+ * The executive is INTEGRAL, not optional. On OpenVMS the executive IS the
+ * operating system: it is resident before the first process exists, and no
+ * image can run without it. OVMX therefore does not have -- and must never
+ * grow -- a mode in which it comes up without one. There is no graceful
+ * degradation to design here, because the degraded state is one VMS can
+ * never be in; a handled-but-impossible-on-VMS state is itself an
+ * authenticity defect (CLAUDE.md Rule 9).
+ *
+ * Two guarantees are established here, and everything downstream depends on
+ * both:
+ *
+ *   1. BOOT IS FATAL. If vms.ko will not load, or /dev/vms will not open,
+ *      the system does not come up. After this function returns, every image
+ *      OVMX will ever run is guaranteed a reachable executive -- which is
+ *      what lets the system services drop their absent-executive paths
+ *      entirely rather than reporting a status no caller can observe.
+ *
+ *   2. THE EXECUTIVE IS PINNED FOR THE LIFE OF THE SYSTEM. PID 1 holds this
+ *      descriptor open and never closes it. vms.ko's file_operations carry
+ *      .owner = THIS_MODULE (src/kernel/vms_module.c), so an open descriptor
+ *      holds a module reference: `rmmod vms` fails with EBUSY for as long as
+ *      OVMX is running. Mid-life loss of the executive is PREVENTED, not
+ *      handled -- there is no response to design because the event cannot
+ *      occur.
+ *
+ * Boundary of guarantee 2, stated honestly: a privileged operator on the
+ * host can still unlink the /dev/vms node itself. That does not unload or
+ * disturb the running executive (this descriptor stays valid), but it would
+ * stop new processes from opening it by path. OVMX does not defend against
+ * a privileged actor deliberately sabotaging the running system, exactly as
+ * VMS does not defend against one corrupting a resident executive image.
+ */
+static int executive_fd = -1;
+
+static void executive_attach(void)
+{
+    if (executive_fd >= 0)
+        return;                 /* already attached; idempotent by design */
+
+    if (load_kernel_module("/lib/modules/vms.ko") != 0 && errno != EEXIST) {
+        boot_fatal("%%STARTUP-F-NOEXEC, cannot load the VMS executive "
+                   "(vms.ko): %s\n", strerror(errno));
+    }
+
+    executive_fd = open("/dev/vms", O_RDWR | O_CLOEXEC);
+    if (executive_fd < 0) {
+        boot_fatal("%%STARTUP-F-NOEXEC, cannot attach to the VMS executive "
+                   "(/dev/vms): %s\n", strerror(errno));
+    }
+    printf("%%STARTUP-I-EXEC, VMS executive attached on /dev/vms\n");
 }
 
 /*
@@ -219,9 +316,19 @@ static void bare_metal_init(void)
     /* Set hostname */
     sethostname("OVMX", 4);
 
-    /* Load VMS kernel modules */
-    load_kernel_module("/lib/modules/vms.ko");
-    load_kernel_module("/lib/modules/vmsfs.ko");
+    /* The executive comes up before anything else runs -- including
+     * INITIALIZE.EXE below, which is an OVMX image like any other and so is
+     * covered by the same guarantee. */
+    executive_attach();
+
+    /* vmsfs.ko is the filesystem, not the executive; a failure here shows up
+     * as a mount failure below, which already has its own handling. The
+     * executive itself is loaded and pinned by executive_attach(), called
+     * from main() once /dev exists. */
+    if (load_kernel_module("/lib/modules/vmsfs.ko") != 0 && errno != EEXIST) {
+        fprintf(stderr, "%%STARTUP-W-MODFAIL, failed to load vmsfs.ko: %s\n",
+                strerror(errno));
+    }
 
     struct stat vms_st;
     if (stat(SYSDISK_MOUNT, &vms_st) != 0)
@@ -712,6 +819,13 @@ int main(void)
     if (getpid() == 1 && stat("/proc/version", &bm_st) != 0) {
         bare_metal_init();
     }
+
+    /* No image runs without the executive. On bare metal this is already
+     * satisfied (bare_metal_init attached it before INITIALIZE.EXE ran) and
+     * this call is a no-op; on any other substrate it is the gate. Placing
+     * it here, unconditionally, is deliberate: a boot path that skips the
+     * Linux plumbing must not thereby skip the executive. */
+    executive_attach();
 
     /* Set up signal handling */
     struct sigaction sa;

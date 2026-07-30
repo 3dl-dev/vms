@@ -94,6 +94,19 @@ jobs:
             ovmx-boot:latest \
             /test.sh
 
+      # vms-0ff. Reuses the image built above (no extra build). Boots the REAL
+      # runtime twice: once with the executive present (must come up), once
+      # with vms.ko removed from the initramfs (must NOT come up). The second
+      # boot is a negative control — it proves this check can actually go red,
+      # which is the only thing that distinguishes a gate from decoration.
+      - name: The executive is integral — OVMX must not boot without it
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_executive_integral.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
   # -----------------------------------------------------------------------
   # Job 3b: Kernel Executive (vms-e4d, epic vms-6b8 PHASE 0 HARD BARRIER)
   #
@@ -137,9 +150,13 @@ jobs:
   # harness with --build-arg NEGATIVE_CONTROL=1, which patches init.sh to skip
   # insmod of vms.ko (simulating the executive being absent) while everything
   # else — building vms.ko itself, loading vmsfs.ko, the test binaries — stays
-  # real. Every test that opens /dev/vms then fails honestly ("cannot open
-  # /dev/vms", the same SS$_NOSUCHDEV path src/libvms/syssvc/sys_lock.c already
-  # takes) instead of silently passing. run_tests.sh exits 1 in that case, so
+  # real. Every test that opens /dev/vms then fails ("cannot open /dev/vms")
+  # instead of silently passing. (This comment used to add "the same
+  # SS$_NOSUCHDEV path sys_lock.c already takes"; that path was DELETED by
+  # vms-0ff — an unreachable executive is now prevented at boot, not reported
+  # per call. The harness is a test rig deliberately booted without an
+  # executive, which is why it can still observe a state the product cannot.)
+  # run_tests.sh exits 1 in that case, so
   # THIS job inverts the check: it PASSES only if the container run fails,
   # and FAILS (catching a regression in the harness itself) if the container
   # run unexpectedly succeeds while the executive is supposed to be absent.
@@ -186,8 +203,13 @@ jobs:
           # This also proves the harness ran to completion and reached its own
           # FINAL RESULTS accounting -- a timeout or panic would never print
           # this line at all, so this line alone rules those causes out.
-          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 7 suites failed ===' \
-            || { echo "FAIL: did not see the expected 3-suites-passed/7-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+          # NOTE: this split moved 7 -> 8 failures when vms-0ff added
+          # tests/qemu/test_kmod_pin.c (which asserts an open /dev/vms
+          # descriptor pins vms.ko). Adding an executive-dependent suite MUST
+          # move this number; if you add one and this line still passes
+          # unchanged, the suite is not actually reaching the executive.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 8 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/8-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
 
           # POSITIVE assertion paired with the two negative assertions above:
           # vmsfs.ko has no dependency on vms.ko/the executive, so it must

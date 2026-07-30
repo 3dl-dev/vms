@@ -33,7 +33,7 @@ Layer 4 ─ User Interface
 
 Layer 3 ─ File Services
            Record management, VMS filesystem, logical names
-           [vmsrms, vmsfs, vmslnm + vmslnmd daemon]
+           [vmsrms, vmsfs, vmslnm]
 
 Layer 2 ─ VMS Runtime
            System services and RTL
@@ -57,7 +57,9 @@ libvmssys (freestanding, static only)
   │     │
   │     └── libvms (+ pthread, math)
   │           │
-  │           ├── vmslnm (+ pthread) ──→ vmslnmd daemon
+  │           ├── vmslnm (+ pthread) — per-process tables only;
+  │           │     no daemon (deleted, vms-a4b); executive-resident
+  │           │     placement is an open ruling, see vms-ln0
   │           │     │
   │           │     └── vmsfs
   │           │           │
@@ -93,8 +95,7 @@ docker build -f Dockerfile.bootable -o dist .
         ├── Load: vms.ko, vmsfs.ko
         ├── Generate /etc/passwd, /etc/group from sysuaf.dat
         └── exec /sbin/init (ovmx_init)
-              ├── Start vmslnmd
-              ├── Load system logicals
+              ├── (no logical name daemon — deleted, vms-a4b; VMS has no such process)
               ├── Execute STARTUP.COM
               └── Launch login shell (vmsdcl)
 ```
@@ -135,7 +136,7 @@ User types command via SSH
 | libvmssys | `src/libvmssys/vms_runtime_init.c` | `vmssys.h` | libvmssys.a |
 | vmsprocess | `src/vmsprocess/vms_pcb.c` | `include/vms/process.h` | libvmsprocess |
 | libvms | `src/libvms/syssvc/sys_qio.c` | `include/starlet.h` | libvms |
-| vmslnm | `src/vmslnm/lnm_table.c` | `include/vms/logical.h` | libvmslnm, vmslnmd |
+| vmslnm | `src/vmslnm/lnm_table.c` | `include/vms/logical.h` | libvmslnm |
 | vmsfs | `src/vmsfs/vmsfs_translate.c` | `include/vmsfs/filespec.h` | libvmsfs |
 | vmsrms | `src/vmsrms/rms_core.c` | `include/rms/rms.h` | librms |
 | vmsdcl | `src/vmsdcl/dcl_main.c` | `include/dcl/context.h` | vmsdcl |

@@ -82,6 +82,20 @@ experiment loses nothing. One who inherits a half-finished thought loses a day.
 
 ---
 
+## 0b. One operational hazard — `vms-760` is close to un-publishable
+
+`.ready/nostr-rejected.jsonl` recorded `invalid: event too large: 66138`. The
+item now carries six long session notes and its serialized event has outgrown the
+relay's limit. The notes are all in the local store and `rd show vms-760` renders
+them, but **new progress notes may stop publishing**, which silently breaks
+cross-machine sync.
+
+Mitigation: keep future `rd progress` notes **short** and put the long-form
+narrative **here** and in the spec, which are git-tracked and have no size limit.
+If you need the full history, `rd show vms-760` locally. Consider closing
+`vms-760` once MEMBER lands and opening a fresh item for the follow-on work
+rather than continuing to append.
+
 ## 1. Where it stands
 
 OVMX now runs the real VMScluster add-member protocol. On the live 3-node lab

@@ -62,9 +62,13 @@
 #include <errno.h>
 #include <time.h>
 
+#include <poll.h>
+#include <sys/ptrace.h>
+
 #include "starlet.h"
 #include "descrip.h"
 #include "ssdef.h"
+#include "ovmx_status.h"
 #include "jpidef.h"
 #include "lib$routines.h"
 #include "vms_kif.h"
@@ -123,6 +127,79 @@ static int fail = 0;
  * builds the one arrangement that reaches it through the USER-VISIBLE
  * command: a SHOW SYSTEM whose caller is in its own UIC group and holds no
  * WORLD privilege, looking at a process in a THIRD group. */
+/* ---- P13: a signal caught by the CALLER of $CREPRC ------------------
+ *
+ * The creation handshake's pipe read used to be a bare read(), so ANY
+ * signal delivered to the caller through a handler without SA_RESTART
+ * made it return -1/EINTR -- which $CREPRC then read as "the child died
+ * before reporting" and answered with OVMX$_PRCLOST, a SEVERE status
+ * asserting that no process was created, for a process that WAS created
+ * and IS in the executive's table. It then reaped that live process,
+ * blocking for as long as the created image ran.
+ *
+ * The production trigger is ordinary: DCL installs its interactive
+ * SIGINT/SIGQUIT handlers with sa_flags = 0 (no SA_RESTART) in
+ * src/vmsdcl/dcl_main.c, and DCL is the process that calls $CREPRC (RUN,
+ * RUN/DETACHED), so a Ctrl-C landing in the handshake window is the
+ * real-world case.
+ *
+ * HOW THE WINDOW IS HIT, AND WHY IT IS NOT A RACE. The first version of
+ * this block used a repeating interval timer, which is how the defect was
+ * originally demonstrated on a native host (788 of 4000 calls). MEASURED
+ * ON THIS RIG, THAT DOES NOT WORK: one run delivered 4716 signals across
+ * 6 $CREPRC calls and interrupted the read ZERO times, and 18 calls across
+ * three runs never reached it once. The read window is the time the caller
+ * spends blocked waiting for the child's report, and under QEMU that is a
+ * fraction of a millisecond out of a ~20 ms call -- a few percent per call.
+ * A detector that fires a few percent of the time is a flaky gate, which
+ * is a broken gate, and it was very nearly reported here as a proof: one
+ * early "hang" under the mutation was the timer storm's own 13-fold
+ * run-to-run variance, not the defect.
+ *
+ * So the window is not chased, it is HELD OPEN. A tracer process runs the
+ * probe under ptrace with PTRACE_O_TRACEFORK, so every process $CREPRC
+ * forks is stopped at birth. While it is stopped it cannot write its
+ * report, so the caller's read is blocked and STAYS blocked; the tracer
+ * waits for the caller to actually be sleeping (an observed condition in
+ * /proc, not a delay), delivers the signal, and only then releases the
+ * child. Ordering is enforced by ptrace rather than by timing, so the
+ * arrangement is the same on every run and on every machine speed.
+ */
+#define SIGPROBE_NAME_PFX   "OVMX8019SG"   /* + 2 digits = 12 chars */
+
+/* Iterations. Detection no longer depends on catching anything, so a
+ * handful is enough; each costs a fork + exec of /bin/sh under emulation.
+ * SIGPROBE_MIN_ARRANGED is the ARRANGEMENT check -- how many calls the
+ * tracer actually managed to interrupt. It is not the detector; it is what
+ * stops a green result from meaning "the condition never arose". */
+#define SIGPROBE_ITERS         6
+#define SIGPROBE_MIN_ARRANGED  3
+
+/* How long the tracer waits for the caller to be blocked, polling
+ * /proc/<pid>/stat. Bounded so a probe that never sleeps cannot wedge the
+ * tracer; the consequence of giving up is one un-arranged call, which the
+ * arrangement check counts. */
+#define SIGPROBE_SLEEP_POLLS   2000
+#define SIGPROBE_SLEEP_POLL_US 1000
+
+/* THE NO-HANG BOUND, and why this number.
+ *
+ * It has a hard ceiling above it and a measurement below it:
+ *   CEILING  tests/qemu/run_tests.sh gives the WHOLE guest 120 s. A bound
+ *            at or near that is not a bound at all -- the guest is killed
+ *            mid-probe and the suite prints no verdict, which is a harness
+ *            timeout, not a test failure. Measured: with the bound at
+ *            120000 the injected control produced NO verdict line for this
+ *            suite instead of a FAIL.
+ *   FLOOR    the probe's own measured cost, printed on every run as part
+ *            of the P13 line so the margin is visible rather than claimed.
+ *            Without a signal storm the six iterations cost a few hundred
+ *            milliseconds on aarch64 TCG with no KVM.
+ * If the printed elapsed figure ever approaches this bound, cut
+ * SIGPROBE_ITERS first; raising the bound alone eventually hits the
+ * ceiling and turns the control back into a harness timeout. */
+#define SIGPROBE_BOUND_MS   20000
+
 #define XGRP_UIC_GROUP   302      /* the row the SHOW SYSTEM caller may not read */
 #define XGRP_NAME        "OVMX8019XGRP"
 #define SHOW_UIC_GROUP   301      /* the SHOW SYSTEM caller's own group */
@@ -444,7 +521,321 @@ static void reap(uint32_t pid)
     if (pid == 0) return;
     kill((pid_t)pid, SIGKILL);
     int st;
-    waitpid((pid_t)pid, &st, 0);
+    while (waitpid((pid_t)pid, &st, 0) < 0 && errno == EINTR)
+        ;
+}
+
+/* ================================================================
+ * P13 machinery: $CREPRC under a caller that catches signals.
+ * ================================================================ */
+
+static volatile sig_atomic_t sigprobe_hits = 0;
+
+static void sigprobe_handler(int sig)
+{
+    (void)sig;
+    sigprobe_hits++;
+}
+
+/* The merged P13 report: the probe fills everything except `arranged`,
+ * which only the tracer can know, and the tracer merges the two before
+ * forwarding one struct to the suite. */
+struct sigprobe_report {
+    uint32_t ok;              /* probe loop completed AND tracer worked */
+    uint32_t iters;           /* $CREPRC calls made */
+    uint32_t arranged;        /* calls interrupted while the caller waited */
+    uint32_t prclost;         /* calls that returned OVMX$_PRCLOST */
+    uint32_t failed;          /* calls that returned any other failure */
+    uint32_t unresolvable;    /* successes whose pid no row answers for */
+};
+
+/*
+ * proc_is_sleeping - is this process blocked in the kernel right now?
+ *
+ * Field 3 of /proc/<pid>/stat, read AFTER the last ')' because the comm
+ * field is parenthesised and may contain spaces. 'S' is interruptible
+ * sleep; a ptrace-stopped task reads 't' and a running one 'R', so this
+ * cannot confuse "stopped by me" with "waiting for the child".
+ */
+static int proc_is_sleeping(pid_t pid)
+{
+    char path[64], buf[512], *p;
+    FILE *f;
+    size_t n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    f = fopen(path, "r");
+    if (!f) return 0;
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    if (n == 0) return 0;
+    buf[n] = '\0';
+    p = strrchr(buf, ')');
+    if (!p || !p[1]) return 0;
+    return p[2] == 'S';
+}
+
+/*
+ * sigprobe_child - create processes while catching signals. Never returns.
+ *
+ * Runs under the tracer (PTRACE_TRACEME + raise(SIGSTOP) is the standard
+ * handshake that lets the tracer set its options before anything else
+ * happens). It installs EXACTLY DCL's signal disposition and then just
+ * creates processes: the arrangement -- holding the forked child still and
+ * delivering the signal -- is entirely the tracer's job, so nothing here
+ * depends on timing.
+ *
+ * Each iteration takes a name of its own and, on success, requires the
+ * executive to resolve BY NAME back to the very process ID $CREPRC
+ * returned. That is the statement OVMX$_PRCLOST denies: "no VMS process
+ * was created ... nothing was ever entered in the table". A run that
+ * reports the process lost while the table answers for it by name is a
+ * status that does not describe the world.
+ *
+ * The subject is reaped inside the loop, so at most one is alive at a time
+ * and the names are never in contention.
+ */
+static void sigprobe_child(int repfd)
+{
+    struct sigprobe_report rep;
+    struct sigaction sa;
+
+    memset(&rep, 0, sizeof(rep));
+
+    if (ptrace(PTRACE_TRACEME, 0, 0, 0) != 0) {
+        (void)write_full(repfd, &rep, sizeof(rep));     /* ok == 0 */
+        _exit(1);
+    }
+    raise(SIGSTOP);                 /* the tracer sets its options here */
+
+    /* EXACTLY DCL's disposition: sa_flags = 0, i.e. deliberately WITHOUT
+     * SA_RESTART. Do not "fix" this to SA_RESTART -- the whole point is
+     * that a caller is allowed to choose this, and $CREPRC's answer about
+     * the child must not depend on the caller's choice. */
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigprobe_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    if (sigaction(SIGALRM, &sa, NULL) != 0) {
+        (void)write_full(repfd, &rep, sizeof(rep));     /* ok == 0 */
+        _exit(1);
+    }
+
+    while (rep.iters < SIGPROBE_ITERS) {
+        char nm[16];
+        uint32_t pid = 0, st;
+
+        snprintf(nm, sizeof(nm), SIGPROBE_NAME_PFX "%02u",
+                 (unsigned)(rep.iters % 100));
+
+        st = spawn_named(nm, &pid);
+        rep.iters++;
+
+        if (st == OVMX$_PRCLOST) {
+            rep.prclost++;
+        } else if (!(st & 1)) {
+            rep.failed++;
+        } else {
+            uint32_t byname = 0;
+            uint32_t lpid = linux_pid_of(pid);
+            if (pid == 0 || lpid == 0 ||
+                !(getjpi_pid_of(nm, &byname) & 1) || byname != pid)
+                rep.unresolvable++;
+            reap(lpid);
+        }
+    }
+
+    rep.ok = 1;
+    (void)write_full(repfd, &rep, sizeof(rep));
+    _exit(0);
+}
+
+/*
+ * sigprobe_tracer - hold each forked child still and interrupt the caller.
+ * Never returns.
+ *
+ * THIS IS THE ARRANGEMENT, and it is deterministic by construction:
+ *
+ *   1. PTRACE_O_TRACEFORK means every process the probe forks is stopped
+ *      before it executes an instruction. A stopped child cannot write the
+ *      creation report, so the caller's handshake read blocks and STAYS
+ *      blocked -- there is no window to race.
+ *   2. The tracer waits for the caller to be genuinely asleep (state 'S'
+ *      in /proc), which is an OBSERVED condition, not a delay.
+ *   3. Only then does it send SIGALRM. Because the probe is traced, the
+ *      signal arrives as a signal-delivery-stop, and the tracer injects it
+ *      with PTRACE_CONT(..., SIGALRM) -- so the handler runs and the read
+ *      returns EINTR, exactly as it would for a DCL user pressing Ctrl-C.
+ *   4. Only THEN is the child released (PTRACE_DETACH), so it registers,
+ *      reports and execs its image as usual.
+ *
+ * Correct code retries the read and returns the child's real status. The
+ * pre-fix code takes the EINTR as "the child died", reports OVMX$_PRCLOST
+ * and reaps a live process -- which blocks for the lifetime of the image
+ * it just started, and is what the suite's bounded wait catches.
+ */
+static void sigprobe_tracer(int repfd)
+{
+    struct sigprobe_report rep, prep;
+    int a[2] = { -1, -1 };
+    pid_t probe, held = -1;
+    int status, probe_alive = 1;
+
+    memset(&rep, 0, sizeof(rep));
+    setpgid(0, 0);                  /* one group the suite can kill */
+
+    if (pipe(a) != 0) {
+        (void)write_full(repfd, &rep, sizeof(rep));     /* ok == 0 */
+        _exit(1);
+    }
+
+    probe = fork();
+    if (probe < 0) {
+        (void)write_full(repfd, &rep, sizeof(rep));     /* ok == 0 */
+        _exit(1);
+    }
+    if (probe == 0) {
+        close(a[0]);
+        close(repfd);
+        sigprobe_child(a[1]);
+        _exit(0);                                       /* not reached */
+    }
+    close(a[1]);
+
+    /* The probe's own raise(SIGSTOP) -- where its options get set. */
+    while (waitpid(probe, &status, 0) < 0 && errno == EINTR)
+        ;
+    if (!WIFSTOPPED(status) ||
+        ptrace(PTRACE_SETOPTIONS, probe, 0, PTRACE_O_TRACEFORK) != 0 ||
+        ptrace(PTRACE_CONT, probe, 0, 0) != 0) {
+        kill(probe, SIGKILL);
+        (void)write_full(repfd, &rep, sizeof(rep));     /* ok == 0 */
+        _exit(1);
+    }
+
+    while (probe_alive) {
+        pid_t pid = waitpid(-1, &status, 0);
+        int sig, event;
+
+        if (pid < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            if (pid == probe) probe_alive = 0;
+            continue;
+        }
+        if (!WIFSTOPPED(status))
+            continue;
+
+        sig   = WSTOPSIG(status);
+        event = (status >> 16) & 0xff;
+
+        if (pid != probe) {
+            /* The held child's birth stop. Leave it stopped: releasing it
+             * here is exactly the race this design exists to remove. */
+            continue;
+        }
+
+        if (event == PTRACE_EVENT_FORK) {
+            unsigned long msg = 0;
+            int i;
+
+            if (ptrace(PTRACE_GETEVENTMSG, probe, 0, &msg) == 0)
+                held = (pid_t)msg;
+            ptrace(PTRACE_CONT, probe, 0, 0);
+
+            for (i = 0; i < SIGPROBE_SLEEP_POLLS; i++) {
+                if (proc_is_sleeping(probe)) break;
+                usleep(SIGPROBE_SLEEP_POLL_US);
+            }
+            if (i < SIGPROBE_SLEEP_POLLS) {
+                kill(probe, SIGALRM);   /* interrupts the handshake read */
+                rep.arranged++;
+            } else if (held > 0) {
+                /* Never observed the caller blocked: release the child
+                 * rather than wedge, and do not count this call as
+                 * arranged. */
+                ptrace(PTRACE_DETACH, held, 0, 0);
+                held = -1;
+            }
+            continue;
+        }
+
+        if (event != 0) {
+            ptrace(PTRACE_CONT, probe, 0, 0);
+            continue;
+        }
+
+        if (sig == SIGALRM) {
+            ptrace(PTRACE_CONT, probe, 0, SIGALRM);     /* inject it */
+            if (held > 0) {
+                ptrace(PTRACE_DETACH, held, 0, 0);      /* now let it run */
+                held = -1;
+            }
+            continue;
+        }
+
+        ptrace(PTRACE_CONT, probe, 0, sig);
+    }
+
+    memset(&prep, 0, sizeof(prep));
+    if (read_full(a[0], &prep, sizeof(prep)) == 0) {
+        rep.ok           = prep.ok;
+        rep.iters        = prep.iters;
+        rep.prclost      = prep.prclost;
+        rep.failed       = prep.failed;
+        rep.unresolvable = prep.unresolvable;
+    }
+    close(a[0]);
+    (void)write_full(repfd, &rep, sizeof(rep));
+    _exit(0);
+}
+
+/* now_ms - CLOCK_MONOTONIC in milliseconds, for the probe's time bound. */
+static long long now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/*
+ * read_full_bounded - read_full with a deadline.
+ *
+ * The bound is the assertion, not a convenience: the defect this block
+ * detects made $CREPRC block in waitpid() on a LIVE process, so a probe
+ * that hung would otherwise hang the whole QEMU rig instead of reporting
+ * a failure. Returns 0 on a complete read, -1 on error or EOF, -2 on
+ * timeout.
+ */
+static int read_full_bounded(int fd, void *buf, size_t n, int timeout_ms)
+{
+    long long deadline = now_ms() + timeout_ms;
+    size_t got = 0;
+
+    while (got < n) {
+        struct pollfd pfd;
+        long long left = deadline - now_ms();
+        int pr;
+
+        if (left <= 0) return -2;
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        pr = poll(&pfd, 1, (int)left);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (pr == 0) return -2;
+
+        ssize_t r = read(fd, (char *)buf + got, n - got);
+        if (r < 0 && errno == EINTR) continue;
+        if (r <= 0) return -1;
+        got += (size_t)r;
+    }
+    return 0;
 }
 
 /*
@@ -846,6 +1237,18 @@ int main(void)
     CHECK(st == SS$_DUPLNAM,
           "sys$creprc refuses a duplicate process name with SS$_DUPLNAM");
 
+    /* If the executive ever DOES accept the duplicate -- which happens
+     * only with the clash test defeated, i.e. under the
+     * proctab-duplicate-name negative control -- reap it at once. Two live
+     * rows holding one name make the next lookup's answer depend on hash
+     * order, so the assertion below would go red on some runs and green on
+     * others: MEASURED, one run of that control reddened it and the next
+     * did not. A negative control whose red set varies run to run is a
+     * flaky gate. This also stops a `sleep 600` leaking for the rest of
+     * the suite. */
+    if ((st & 1) && dup_pid != 0)
+        reap(linux_pid_of(dup_pid));
+
     /* The name must still belong to the ORIGINAL subject afterwards --
      * a refused creation must not have stolen or cleared it. */
     found = 0;
@@ -1223,6 +1626,108 @@ int main(void)
             while (waitpid(xproc, &xst, 0) < 0 && errno == EINTR)
                 ;
         }
+    }
+
+    /* ---------------------------------------------------------------
+     * P13. A SIGNAL CAUGHT BY THE CALLER MUST NOT CHANGE WHAT $CREPRC
+     *      SAYS ABOUT THE CHILD.
+     *
+     * The creation handshake's read used to be a bare read(), so a
+     * signal delivered to the CALLER under a handler without SA_RESTART
+     * returned -1/EINTR -- which $CREPRC read as "the child died before
+     * reporting" and answered with OVMX$_PRCLOST ("no VMS process was
+     * created ... nothing was ever entered in the table") for a process
+     * that was created, was in the executive's table and was resolvable
+     * BY NAME. Worse, it then reaped that live process, so $CREPRC
+     * blocked for the whole lifetime of the image it had just started.
+     *
+     * That is reachable entirely from the public API, with no race
+     * against the child: DCL installs its interactive SIGINT/SIGQUIT
+     * handlers with sa_flags = 0 (src/vmsdcl/dcl_main.c) and DCL is what
+     * calls $CREPRC. So the probe below adopts that same disposition and
+     * an interval timer, and asserts the property the status is supposed
+     * to carry: every process $CREPRC reports created must be in the
+     * table under the name it was given, and the call must return.
+     *
+     * WHICH ASSERTION IS THE DETECTOR: `prclost == 0` and the bounded
+     * completion. `interrupted >= SIGPROBE_MIN_HITS` is not a detector,
+     * it is the ARRANGEMENT CHECK -- it proves the signals really were
+     * delivered during the calls, so that a green result means the code
+     * survived the condition rather than never meeting it. Without it
+     * this block would pass on a build where the timer never fired.
+     * --------------------------------------------------------------- */
+    hs = fopen(HOLD_SCRIPT, "w");           /* P10 unlinked it */
+    if (!hs) {
+        CHECK(0, "P13: cannot recreate the subject's hold script");
+    } else {
+        fprintf(hs, "sleep 600\n");
+        fclose(hs);
+        chmod(HOLD_SCRIPT, 0644);
+
+        int prep[2] = { -1, -1 };
+        pid_t probe = -1;
+
+        if (pipe(prep) != 0) {
+            CHECK(0, "P13: pipe for the signal probe");
+        } else if ((probe = fork()) < 0) {
+            CHECK(0, "P13: fork of the signal probe");
+        } else if (probe == 0) {
+            close(prep[0]);
+            sigprobe_tracer(prep[1]);
+            _exit(0);                       /* not reached */
+        } else {
+            struct sigprobe_report prp;
+            long long t_start = now_ms(), t_ms;
+            int prc;
+
+            close(prep[1]);
+            memset(&prp, 0, sizeof(prp));
+            prc = read_full_bounded(prep[0], &prp, sizeof(prp),
+                                    SIGPROBE_BOUND_MS);
+            t_ms = now_ms() - t_start;
+
+            if (prc == -2) {
+                /* The defect's signature: $CREPRC blocked on a process
+                 * it had just created. Kill the probe's whole group so
+                 * its subjects do not outlive it. */
+                /* The probe reports ONCE, at the end of its loop, so a
+                 * timeout means it is still inside a $CREPRC call -- there
+                 * is no partial report to print. */
+                printf("  (P13 probe did not report within %d ms -- "
+                       "sys$creprc did not return)\n", SIGPROBE_BOUND_MS);
+                kill(-probe, SIGKILL);
+            }
+            close(prep[0]);
+            if (probe > 0) {
+                int pst;
+                kill(probe, SIGKILL);
+                while (waitpid(probe, &pst, 0) < 0 && errno == EINTR)
+                    ;
+            }
+
+            CHECK(prc == 0 && prp.ok == 1,
+                  "sys$creprc RETURNED on every call while the caller caught signals");
+
+            if (prc == 0 && prp.ok == 1) {
+                printf("  (P13: %u calls, %u interrupted mid-handshake, "
+                       "%lld ms of the %d ms bound)\n",
+                       (unsigned)prp.iters, (unsigned)prp.arranged,
+                       t_ms, SIGPROBE_BOUND_MS);
+                /* The ARRANGEMENT check, not a detector: it proves the
+                 * caller really was interrupted while waiting for the
+                 * child, so a green result means the code survived the
+                 * condition rather than never meeting it. */
+                CHECK(prp.arranged >= SIGPROBE_MIN_ARRANGED,
+                      "the caller really was signalled while blocked in the creation handshake");
+                CHECK(prp.prclost == 0,
+                      "sys$creprc never reported OVMX$_PRCLOST for a process it created");
+                CHECK(prp.failed == 0,
+                      "sys$creprc reported no other failure under a non-restarting handler");
+                CHECK(prp.unresolvable == 0,
+                      "every process sys$creprc reported is in the executive's table, by name");
+            }
+        }
+        unlink(HOLD_SCRIPT);
     }
 
     printf("=== test_syssvc_procnam: %d passed, %d failed ===\n", pass, fail);

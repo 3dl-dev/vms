@@ -226,8 +226,10 @@ echo "Suites derived from the checkout ($N_EXPECTED):"
 echo "$EXPECTED" | sed 's/^/  /'
 echo ""
 
-if [ "$N_EXPECTED" -lt 13 ]; then
-    echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 13)."
+# A FLOOR, not a pin: adding a suite must never turn this red, deleting one
+# always must. Raised 13 -> 14 when vms-2b8 landed test_kmod_ident.c.
+if [ "$N_EXPECTED" -lt 14 ]; then
+    echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 14)."
     echo "A suite source was deleted. Deleting the test that would expose a defect is"
     echo "not a way to make this gate pass."
     exit 1

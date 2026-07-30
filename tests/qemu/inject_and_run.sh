@@ -22,14 +22,15 @@
 #
 # WHAT IT REBUILDS, AND WHY EACH ONE
 #   vms.ko                      the executive itself
-#   test_kmod_{devtab,procnam,bind}
-#                               the three suites that link the REAL
+#   every test_kmod_*.c that CALLS a vms_kif_ entry point
+#                               the suites that link the REAL
 #                               src/libvmssys/vms_kif.c client rather than a
-#                               hand-rolled ioctl copy
+#                               hand-rolled ioctl copy. DERIVED from the
+#                               sources, never listed -- see the loop below.
 #   qemu_syssvc_tests           the public sys$ suites, built through the
 #                               CMake graph against src/libvms
 #
-# All three are rebuilt for EVERY defect, not just the ones whose sources
+# All of them are rebuilt for EVERY defect, not just the ones whose sources
 # changed. That is deliberate: a conditional rebuild is one more thing that
 # can silently not happen, and it would leave a stale binary asserting
 # "unaffected" for a facility it was never rebuilt against. The incremental
@@ -69,15 +70,42 @@ echo "--- rebuilding vms.ko ---"
 ( cd /src/kernel && make KDIR="/lib/modules/${KVER}/build" clean >/dev/null 2>&1 \
                  && make KDIR="/lib/modules/${KVER}/build" ) || exit 4
 
-echo "--- rebuilding the libvmssys-linked suites ---"
-for t in test_kmod_devtab test_kmod_procnam test_kmod_bind; do
-    gcc -static -O2 -Wall -o "/src/tests/qemu/$t" \
-        "/src/tests/qemu/$t.c" \
+# DERIVED, NEVER A LITERAL LIST. This was `for t in test_kmod_devtab
+# test_kmod_procnam test_kmod_bind`, and vms-2b8 landed test_kmod_ident.c --
+# a FOURTH libvmssys-linked suite -- which the list did not know about, so the
+# defect rebuild would have left a stale test_kmod_ident in the initramfs
+# asserting "unaffected" for a facility it was never rebuilt against. Exactly
+# the hand-maintained-list failure the rest of this harness derives its way
+# out of.
+#
+# The discriminator is a CALL to a vms_kif_ entry point, not a mention of one:
+# test_kmod_lock_mproc.c and test_kmod_lock_sync.c both name vms_kif in a
+# comment and must NOT be linked against it, or they would be built
+# differently here than tests/qemu/Dockerfile built them.
+echo "--- rebuilding the libvmssys-linked suites (derived from the sources) ---"
+n_kif=0
+for s in /src/tests/qemu/test_kmod_*.c; do
+    grep -qE 'vms_kif_[A-Za-z0-9_]*\(' "$s" || continue
+    t=$(basename "$s" .c)
+    echo "    $t (calls vms_kif_*)"
+    gcc -static -O2 -Wall -o "/src/tests/qemu/$t" "$s" \
         /src/libvmssys/vms_kif.c \
         /src/libvmssys/vms_string.c \
         "/src/libvmssys/arch/${ARCH}/syscall.S" \
         -I/src/kernel -I/src/libvmssys || exit 4
+    n_kif=$((n_kif + 1))
 done
+# A rebuild that silently found nothing to rebuild would leave every
+# client-side suite stale, and bind-client-no-register -- whose target IS
+# src/libvmssys/vms_kif.c -- would then be injected into a binary nobody
+# recompiled and report the gate as having caught nothing.
+if [ "$n_kif" -lt 1 ]; then
+    echo "FATAL: no tests/qemu/test_kmod_*.c calls a vms_kif_ entry point."
+    echo "  Either every client suite was deleted or the discriminator no"
+    echo "  longer matches the sources. Either way this run would inject into"
+    echo "  binaries it never rebuilt."
+    exit 4
+fi
 
 echo "--- rebuilding the public sys\$ suites ---"
 ( cd /src/repo && cmake --build build-static --target qemu_syssvc_tests \

@@ -73,11 +73,12 @@
 # The executive is vms.ko, reached through /dev/vms (CLAUDE.md Rule 9). Its
 # facilities are the ioctl groups src/kernel/vms_module.c dispatches -- access
 # modes, ASTs, event flags, the lock manager, the device table, the process
-# table -- plus two properties of the binding itself: that a caller's PCB is
-# per-PROCESS (not per-thread), and that an open descriptor pins the module.
-# The ninth defect is the only one outside vms.ko: it is the vms-9fc defect
-# itself (kif_bind() not calling vms_kif_register()), i.e. the product half of
-# the interface, which no kernel-side mutation can reach.
+# table, authenticated identity -- plus two properties of the binding itself:
+# that a caller's PCB is per-PROCESS (not per-thread), and that an open
+# descriptor pins the module.
+# bind-client-no-register is the only defect outside vms.ko: it is the vms-9fc
+# defect itself (kif_bind() not calling vms_kif_register()), i.e. the product
+# half of the interface, which no kernel-side mutation can reach.
 #
 # vmsfs.ko (src/kernel/vmsfs/, and the two suites that drive it) is NOT an
 # executive facility and is NOT covered here. See scope_* below: that exclusion
@@ -117,6 +118,7 @@ lock-compat-ex-cr
 lock-compat-cr-ex
 devtab-owner-not-recorded
 proctab-duplicate-name
+ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
 bind-client-no-register"
@@ -212,12 +214,34 @@ defect_field() {
         isolation)    echo "isolated";;
         why)          echo "\$SETMOD to KERNEL mode stops requiring CMKRNL: the executive lets a process escalate its own access mode. One condition, inverted.";;
         require_fail) cat <<'EOF'
-KERNEL mode denied without CMKRNL
-mode still USER after denied escalation
+KERNEL mode DENIED without CMKRNL (SS$_NOPRIV)
+... and the mode is still USER after the denied escalation
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+an unprivileged process cannot $SETPRV itself CMKRNL
+... and still does not hold CMKRNL afterwards
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+THE TWO EXTRAS ARE THE REASON THE GUARD EXISTS, not evidence the mutation is
+coarse. vms_access.c:168 computes
+    may_exceed = (proc->current_mode == PSL_C_KERNEL) || (cur_privs & SETPRV)
+so KERNEL access mode IS the authority to exceed the authorized mask. The
+unprivileged child (test_kmod_access.c:100-121) escalates, then immediately
+tries to $SETPRV itself CMKRNL; with the escalation wrongly allowed it is now
+in KERNEL mode when it asks, so it gets the privilege and holds it afterwards.
+One inverted condition, one process, one straight line: a defect that lets a
+process into KERNEL mode does not stop at the mode. Naming only the two
+setmode assertions would describe the smaller half of what the mutation
+actually proves.
+These reds appeared when vms-2b8 landed -- before it, $SETPRV had no
+mode-derived authority. The equality check caught the change on the first run
+after the rebase and named both extras with their suite; the previous
+allowlist would have passed silently, which is precisely the failure this
+round was re-dispatched to fix.
+EOF
+                      ;;
         esac;;
 
     ast-setast-disable)
@@ -401,6 +425,62 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    ident-username-unguarded)
+        case "$_f" in
+        facility)     echo "authenticated identity (VMS_IOCTL_SETIDENT: user name, UIC and authorized mask)";;
+        targets)      echo "kernel/vms_proctab.c";;
+        suites_red)   echo "test_kmod_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "\$SETIDENT stops guarding the USER NAME for a caller without SETPRV: the name clause of the one-way-drop rule is short-circuited, while the UIC clause and the authorized-mask subset clause are left intact. This is the vms-2b8 round-3 defect exactly -- the version that guarded the two fields nobody displays and left the one every reader shows unprotected, so an unprivileged process could stamp itself \"SYSTEM\" and \$GETJPI would report it to everyone.";;
+        require_fail) cat <<'EOF'
+USER NAME CLAUSE ISOLATED: own UIC, own mask, name "SYSTEM" -> SS$_NOPRIV
+USER NAME CLAUSE ISOLATED: same UIC, same mask, different name -> SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+... and the process is STILL UNNAMED (a process cannot name itself a user)
+an UNNAMED process cannot stamp an identity at all -- there is no name it is allowed to hold constant
+... and the executive still holds the name it authenticated
+the refused climb-back changed nothing
+A WRITES the user name, B READS it (identity is executive-resident)
+B resolves A BY NAME within the UIC group and sees the same identity
+the scan returns a SAME-GROUP row in full (no privilege needed)
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+NINE reds, one removed guard, and the size of the blast radius IS the argument
+for the guard. test_kmod_ident is sequential and shares one executive row per
+process, so the moment a rename that should have been refused succeeds, every
+later READ of that row in the same suite is reading a name the process gave
+itself:
+  the two require_fail entries are the refusals themselves, from both sides
+    -- an unnamed process stamping "SYSTEM" (l.815) and a named process
+    changing to a different name (l.913);
+  "... and the process is STILL UNNAMED" and "an UNNAMED process cannot stamp
+    an identity at all" are the same refusal read back on the unnamed caller
+    (l.817, l.835) -- with the guard gone it now has a name;
+  "... and the executive still holds the name it authenticated" (l.919) and
+    "the refused climb-back changed nothing" (l.966) are process A's own row
+    after its rename wrongly succeeded;
+  "A WRITES the user name, B READS it", "B resolves A BY NAME ..." and "the
+    scan returns a SAME-GROUP row in full" (l.992, l.999, l.1033) are Rule 11's
+    A-writes/B-reads checks -- a second process, and a PROCSCAN, reading the
+    corrupted name out of the executive. Those three are the most valuable reds
+    in the set: they show the defect is executive-resident, not local to the
+    liar.
+There is no finer edit inside this clause: it is a single `if`. A DIFFERENT
+clause of the same rule (the UIC test, or the authorized-mask subset test)
+would give a smaller red set, and the suite has "CLAUSE ISOLATED" assertions
+for each -- but the name clause is the one vms-2b8 round 3 had to add, because
+the earlier version guarded the two fields nobody displays and left the one
+every reader shows unprotected. Controlling the clause that matters least
+would be tidier and worth less.
+EOF
+                      ;;
+        esac;;
+
     executive-not-pinned)
         case "$_f" in
         facility)     echo "executive residency (vms_fops.owner pins vms.ko while /dev/vms is open)";;
@@ -409,7 +489,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "fatal";;
-        why)          echo "vms_fops loses .owner = THIS_MODULE, so an open descriptor no longer holds a module reference and test_kmod_pin's own rmmod succeeds. FATAL, and measured, not assumed: the guest then takes 'Unable to handle kernel paging request' + 'Internal error: Oops' with Comm: test_kmod_pin, and the run never reaches its own accounting. That IS the guarantee -- an unpinned executive is not a degraded system, it is a dead one -- so the control asserts what is checkable (the eight suites before it ran clean, the three pin assertions went red by name) instead of pretending the unload is survivable.";;
+        why)          echo "vms_fops loses .owner = THIS_MODULE, so an open descriptor no longer holds a module reference and test_kmod_pin's own rmmod succeeds. FATAL, and measured, not assumed: the guest then takes 'Unable to handle kernel paging request' + 'Internal error: Oops' with Comm: test_kmod_pin, and the run never reaches its own accounting. That IS the guarantee -- an unpinned executive is not a degraded system, it is a dead one -- so the control asserts what is checkable (every suite ordered before test_kmod_pin ran clean -- a count derived from the checkout, never written down -- and the three pin assertions went red by name) instead of pretending the unload is survivable.";;
         require_fail) cat <<'EOF'
 an open /dev/vms descriptor holds a reference on vms.ko
 rmmod vms is REFUSED while a descriptor is open (executive pinned)
@@ -424,7 +504,12 @@ EOF
         case "$_f" in
         facility)     echo "PCB identity: one executive process per THREAD GROUP, shared by its threads";;
         targets)      echo "kernel/vms_module.c";;
-        suites_red)   echo "test_kmod_bind";;
+        # MEASURED after vms-2b8: test_kmod_ident grew its own thread section
+        # (l.878-887) and detects this too. It was NOT in this list, and the
+        # red-set equality check named the three new assertions on the first
+        # run after the rebase. Both suites belong here -- two independent
+        # suites catching one defect is coverage, not a blunderbuss.
+        suites_red)   echo "test_kmod_bind test_kmod_ident";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -434,6 +519,9 @@ sibling thread resolves in the process table
 sibling thread sees the process name the main thread set
 sibling thread sees the event flag the main thread set
 sibling thread can $DEQ the lock the main thread took
+a second thread of the process is known to the executive
+... as the SAME process, not a second one (one PCB per process)
+... and sees the identity the other thread stamped
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -467,16 +555,19 @@ EOF
         # can -- an attribution claim weaker than it read. They are now
         # declared as what they are: BLIND.
         suites_red)   echo "test_kmod_bind";;
-        blind_suites) echo "test_kmod_devtab test_kmod_procnam test_syssvc_lock";;
+        blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
-These three drive the product's own vms_kif client, so restoring the vms-9fc
+These four drive the product's own vms_kif client, so restoring the vms-9fc
 defect (kif_bind() no longer calling vms_kif_register()) SHOULD turn them red.
 It does not: each calls vms_kif_open() and vms_kif_register() BY HAND before
-using a facility (test_syssvc_lock.c:136-140), supplying the exact product step
-kif_bind() exists to perform. MEASURED, not argued -- with the defect injected
-all three stay rc=0. They are therefore structurally blind to the entire
-auto-bind defect class, which is how vms-9fc survived to be found by
-inspection rather than by CI.
+using a facility (test_syssvc_lock.c:136-140, test_kmod_ident.c:306/364-367/
+541-544/588-593), supplying the exact product step kif_bind() exists to
+perform. MEASURED, not argued -- with the defect injected all four stay rc=0.
+They are therefore structurally blind to the entire auto-bind defect class,
+which is how vms-9fc survived to be found by inspection rather than by CI.
+test_kmod_ident is the newest of them (vms-2b8), which is the point of pinning
+this as an asserted fact rather than a note: the pattern is still SPREADING,
+and the gate now says so on every run.
 Tracked as rd item vms-f27. Do NOT fix it by widening suites_red: that would
 re-hide the gap behind a set the control merely permits to redden.
 EOF
@@ -567,7 +658,15 @@ apply_edit() {
     pcb-per-thread)
         sed -i 's|vms_proc_find(current->tgid)|vms_proc_find(current->pid) /* NEGCTL pcb-per-thread */|' "$_file";;
     bind-client-no-register)
-        sed -i 's|(void)vms_kif_register((uint32_t)vms_sys_getpid(), 0);|/* NEGCTL bind-client-no-register: the vms-9fc defect, restored */|' "$_file";;
+        # Re-anchored after vms-2b8 changed the registration ABI: vms_pid is
+        # OUTPUT-ONLY now and vms_kif_register() takes a pointer, so the old
+        # anchor `vms_kif_register((uint32_t)vms_sys_getpid(), 0)` is gone.
+        # The manifest self-test caught this in 0.2s as BROKEN FIXTURE, which
+        # is the failure mode it exists for -- a dead anchor injects nothing
+        # and the QEMU control then certifies a defect never applied.
+        sed -i 's|(void)vms_kif_register(NULL);|/* NEGCTL bind-client-no-register: the vms-9fc defect, restored */|' "$_file";;
+    ident-username-unguarded)
+        sed -i 's|if (strncmp(proc->username, args.username, VMS_USERNAME_SIZE) != 0) {|if (0 \&\& strncmp(proc->username, args.username, VMS_USERNAME_SIZE) != 0) { /* NEGCTL ident-username-unguarded */|' "$_file";;
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -894,16 +993,34 @@ cmd_selftest() {
     # observed, so under the equality check it would fail the control for the
     # wrong reason -- and under the deleted forbid_fail it would have been
     # vacuously satisfied forever. Catch it here, in seconds, not in QEMU.
+    #
+    # The manifest holds the PRINTED text; the source holds C. Two differences
+    # have to be normalised away or a perfectly good entry is reported absent
+    # -- a false red in the fast job, which is how a useful check gets deleted
+    # by the next person in a hurry:
+    #   * escaped quotes -- test_kmod_ident.c writes  name \"SYSTEM\"  and
+    #     prints  name "SYSTEM";
+    #   * adjacent-literal concatenation -- the same file splits
+    #     "USER NAME CLAUSE ISOLATED: same UIC, same mask, different name "
+    #     "-> SS$_NOPRIV"  across two lines, and prints one string.
+    # So both sides are reduced to the same shape: quotes and backslashes
+    # deleted, every whitespace run collapsed to one space, the whole corpus on
+    # one line. That is deliberately loose -- this check exists to catch a
+    # TYPO, not to parse C.
+    cat "$_st_tests"/test_kmod_*.c "$_st_tests"/test_syssvc_*.c 2>/dev/null \
+        | tr -d '"\\' | tr '\n\t' '  ' | tr -s ' ' >"$_st_tmp.src"
     _st_absent=""
     for _st_d in $DEFECTS; do
         for _st_fld in require_fail knock_on_fail; do
             defect_field "$_st_d" "$_st_fld" | while IFS= read -r _st_txt; do
                 [ -n "$_st_txt" ] || continue
-                grep -qsF -- "$_st_txt" "$_st_tests"/test_kmod_*.c "$_st_tests"/test_syssvc_*.c \
+                _st_needle=$(printf '%s' "$_st_txt" | tr -d '"\\' | tr -s ' ')
+                grep -qsF -- "$_st_needle" "$_st_tmp.src" \
                     || echo "$_st_d/$_st_fld: [$_st_txt]"
             done
         done
     done >"$_st_tmp.absent" 2>/dev/null
+    rm -f "$_st_tmp.src"
     _st_absent=$(cat "$_st_tmp.absent" 2>/dev/null); rm -f "$_st_tmp.absent"
     if [ -n "$_st_absent" ]; then
         echo "FAIL: assertion text(s) named by the manifest that appear in NO suite source:"

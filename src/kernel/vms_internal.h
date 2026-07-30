@@ -196,7 +196,11 @@ struct vms_lock_resource {
 /* Per-process VMS state */
 struct vms_proc {
     struct hlist_node   hash_node;      /* in global process hash */
-    pid_t               linux_pid;      /* Linux PID (key) */
+    pid_t               linux_pid;      /* Linux thread-group id == getpid(2)
+                                         * (key). NOT a thread id: one PCB
+                                         * per process, shared by its
+                                         * threads -- see
+                                         * vms_proc_find_or_err(). */
     uint32_t            vms_pid;        /* VMS-style PID */
 
     /*
@@ -213,11 +217,14 @@ struct vms_proc {
     uint32_t            uic;            /* (group << 16) | member */
 
     /*
-     * Reference to the backing task's struct pid. The PCB belongs to
-     * the PROCESS, not to an open channel, so it is not destroyed when
-     * /dev/vms is closed (notably the implicit close at exec time).
-     * Liveness is tested through this reference and dead entries are
-     * reaped lazily -- see vms_proc_reap_dead().
+     * Reference to the backing PROCESS's struct pid -- task_tgid(), the
+     * thread group's pid, NOT task_pid() (vms-9fc round 2). The PCB
+     * belongs to the PROCESS, not to an open channel and not to a
+     * thread, so it is not destroyed when /dev/vms is closed (notably
+     * the implicit close at exec time) and not destroyed when one
+     * thread of a multithreaded image exits. Liveness is tested through
+     * this reference and dead entries are reaped lazily -- see
+     * vms_proc_reap_dead().
      */
     struct pid          *pid_ref;
 

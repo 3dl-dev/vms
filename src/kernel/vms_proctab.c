@@ -11,8 +11,10 @@
  *
  * This file gives OVMX the same property. The name is stored in
  * struct vms_proc, which lives in kernel memory and is keyed by the
- * Linux pid. Because execve() does not change the pid, the name
- * survives image activation with no userspace carrier of any kind.
+ * Linux thread-group id (getpid(2)). Because execve() does not change
+ * it, the name survives image activation with no userspace carrier of
+ * any kind; because it is the group id and not a thread id, every
+ * thread of the image sees the same name (vms-9fc round 2).
  *
  * Scoping follows VMS: a process name is unique within, and resolved
  * within, the caller's UIC group (OpenVMS System Services Reference,
@@ -45,11 +47,16 @@ static inline uint32_t uic_group(uint32_t uic)
 }
 
 /*
- * vms_proc_task_alive - does the task backing this entry still exist?
+ * vms_proc_task_alive - does the PROCESS backing this entry still exist?
  *
- * pid_task() returns NULL once the task has been released, which is
- * the point at which the VMS process has ceased to exist and its slot
- * may be reused.
+ * proc->pid_ref is the thread group's pid (task_tgid), so the task it
+ * resolves to is the group leader. The kernel does not release the
+ * leader while any other thread of the group is still running, so this
+ * is a whole-process liveness test, not a per-thread one -- a thread
+ * exiting out of a live multithreaded image must not make its process
+ * reapable. pid_task() returns NULL once the leader has been released,
+ * which is the point at which the VMS process has ceased to exist and
+ * its slot may be reused.
  */
 static bool vms_proc_task_alive(struct vms_proc *proc)
 {

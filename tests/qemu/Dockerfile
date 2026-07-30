@@ -112,7 +112,7 @@ RUN for f in /src/tests/qemu/test_*.c; do \
 COPY src/libvmssys/ /src/libvmssys/
 RUN ARCH=$(uname -m) && \
     for t in test_kmod_devtab test_kmod_procnam test_kmod_ident; do \
-        gcc -static -O2 -Wall -o /src/tests/qemu/$t \
+        gcc -static -O2 -Wall -pthread -o /src/tests/qemu/$t \
             /src/tests/qemu/$t.c \
             /src/libvmssys/vms_kif.c \
             /src/libvmssys/vms_string.c \

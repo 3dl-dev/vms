@@ -25,6 +25,7 @@
 #include <linux/uidgid.h>
 #include <linux/pid.h>
 #include <linux/sched.h>
+#include <linux/sched/signal.h>     /* thread_group_empty() */
 
 #include "vms_internal.h"
 
@@ -61,9 +62,25 @@ struct vms_proc *vms_proc_find(pid_t pid)
     return NULL;
 }
 
+/*
+ * ONE PCB PER PROCESS, SHARED BY EVERY THREAD (vms-2b8).
+ *
+ * The key is current->tgid, NOT current->pid. In the kernel current->pid is
+ * the THREAD id: keying on it mints one executive process entry per Linux
+ * thread, so two threads of one image would hold two different identities,
+ * two different privilege masks and two different sets of event flags, and
+ * neither could see the other's. On OpenVMS a process has exactly one PCB
+ * and every thread of it shares that PCB -- identity is a property of the
+ * PROCESS. A per-thread row is the same facade shape as a per-process
+ * logical name table (CLAUDE.md Rule 11), one layer in: it reports a
+ * perfectly consistent identity that nothing else in the process shares.
+ *
+ * This also makes the entry survive execve() from a non-leader thread,
+ * which changes current->pid to the tgid but leaves the tgid itself alone.
+ */
 struct vms_proc *vms_proc_find_or_err(void)
 {
-    struct vms_proc *proc = vms_proc_find(current->pid);
+    struct vms_proc *proc = vms_proc_find(current->tgid);
 
     /*
      * A table entry now outlives the /dev/vms channel (vms-8019), so an
@@ -73,7 +90,7 @@ struct vms_proc *vms_proc_find_or_err(void)
      * privileges with it. Match on the pinned struct pid, which is
      * unique per process instance, rather than on the reusable number.
      */
-    if (proc && proc->pid_ref != task_pid(current))
+    if (proc && proc->pid_ref != task_tgid(current))
         return NULL;
 
     return proc;
@@ -120,7 +137,7 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid)
      * Pin the backing task's pid so the entry's liveness can be tested
      * without racing pid reuse. Released in vms_proc_free().
      */
-    proc->pid_ref = get_pid(task_pid(current));
+    proc->pid_ref = get_pid(task_tgid(current));
 
     /*
      * THE AUTHORIZED MASK IS DERIVED, NOT REQUESTED (vms-2b8).
@@ -284,7 +301,7 @@ static long vms_ioctl_register(unsigned long arg)
      */
     vms_proc_reap_dead();
 
-    proc = vms_proc_register(current->pid, args.vms_pid);
+    proc = vms_proc_register(current->tgid, args.vms_pid);
     if (IS_ERR(proc)) {
         args.status = 0x0000001C;  /* SS$_DUPNAM (already registered) */
         if (copy_to_user((void __user *)arg, &args, sizeof(args)))
@@ -411,8 +428,16 @@ static int vms_dev_release(struct inode *inode, struct file *filp)
      * actually going away. Entries whose task exits without ever
      * reaching this path (a forked child sharing the parent's struct
      * file, for instance) are reclaimed by vms_proc_reap_dead().
+     *
+     * AND ONLY WHEN THE WHOLE THREAD GROUP IS GOING AWAY (vms-2b8). The
+     * entry is keyed by tgid and shared by every thread, so an exiting
+     * worker thread that happens to hold a channel must not delete the
+     * PCB out from under the threads still running: on VMS a thread
+     * terminating does not delete the process. thread_group_empty() is
+     * true only for the last thread standing, which is the point at
+     * which the VMS process really is ending.
      */
-    if (!(current->flags & PF_EXITING))
+    if (!(current->flags & PF_EXITING) || !thread_group_empty(current))
         return 0;
 
     proc = vms_proc_find_or_err();
@@ -429,10 +454,46 @@ static const struct file_operations vms_fops = {
     .release        = vms_dev_release,
 };
 
+/*
+ * THE EXECUTIVE ENTRY POINT IS NOT PRIVILEGE-GATED (vms-2b8).
+ *
+ * miscdevice with no .mode creates the node 0600 root:root, which meant NO
+ * UNPRIVILEGED PROCESS COULD REACH THE EXECUTIVE AT ALL. That is not a
+ * conservative default here, it is a different system: with a 0600 door,
+ * every reachable caller is root, multi-user OVMX cannot exist, and the
+ * per-service privilege checks this module enforces are unreachable in the
+ * product even though they are demonstrable in a test.
+ *
+ * VMS SEMANTICS THIS MATCHES (CLAUDE.md Rule 10, answer 1). On OpenVMS the
+ * system-service entry sequence -- the change-mode-to-kernel/exec instruction
+ * that the $-service jackets execute -- is an UNPRIVILEGED instruction
+ * available to every process at every access mode. There is no permission on
+ * "may I call the executive". Access control lives INSIDE each service, which
+ * validates the caller's privilege mask and returns SS$_NOPRIV. That is
+ * exactly the shape this module already has (vms_ioctl_setident,
+ * vms_ioctl_setprv, vms_access_check), so the door must be open for the
+ * checks behind it to be the thing that decides.
+ *
+ * OVMX DESIGN CHOICE, labelled as such (CLAUDE.md Rule 8): /dev/vms is an
+ * OVMX construct with no VMS counterpart, so no public OpenVMS document
+ * publishes a mode for it. 0666 is chosen as the closest Linux expression of
+ * "every process may enter the executive"; it is not presented as
+ * VMS-authentic.
+ *
+ * KNOWN CONSEQUENCE, deliberately not handled here and reported to the
+ * security review (vms-cb5): an unprivileged process may now consume
+ * executive memory -- process entries, locks, event flags, queued ASTs --
+ * with no bound. VMS bounds exactly this with per-process quotas (BYTLM,
+ * ENQLM, ASTLM) charged from SYSUAF. OVMX has no quota system yet, so this
+ * enlarges a local denial-of-service surface. Adding an arbitrary in-module
+ * cap would be the illegal third answer (Rule 10): VMS's answer is quotas,
+ * and quotas are the item to write, not a limit invented here.
+ */
 static struct miscdevice vms_misc = {
     .minor  = MISC_DYNAMIC_MINOR,
     .name   = "vms",
     .fops   = &vms_fops,
+    .mode   = 0666,
 };
 
 /* ================================================================

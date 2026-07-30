@@ -21,6 +21,16 @@
  *   - PROCESS A ESTABLISHES AN IDENTITY AND PROCESS B READS IT BACK
  *     (CLAUDE.md Rule 11: a per-process fake passes every single-process
  *     test, and fails this one).
+ *   - A SECOND THREAD OF A SEES A'S IDENTITY, because on VMS a process has
+ *     one PCB shared by every thread. A per-THREAD row is the same facade
+ *     one layer in, and passes every single-threaded test here.
+ *
+ * EACH REFUSAL RULE IS PROVED THROUGH A PROBE THAT ONLY THAT RULE CAN
+ * REFUSE. The executive's grant rule has two clauses -- the requested
+ * privilege mask must be a subset of the caller's, AND the requested UIC
+ * must be the caller's own -- and a probe that violates both cannot fail
+ * on either: delete one clause and such a test stays green. So the two
+ * clauses get one isolating probe each (struct b_report1, below).
  *
  * Process B is a real credential change, not a flag: it setgid()s and
  * setuid()s away from root, so capable(CAP_SYS_ADMIN) is genuinely
@@ -36,6 +46,7 @@
  * under test.
  */
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -86,6 +97,10 @@
  * "did the executive hand out something it should not have". */
 #define PRV_M_SYSPRV    (1ULL << 28)
 
+/* SYSTEM's UIC [1,4]. Used ONLY as the target of the UIC-alone escalation
+ * probe below -- it is the UIC an attacker actually wants. */
+#define SYS_UIC     (((uint32_t)1 << 16) | 4u)
+
 static int pass = 0, fail = 0;
 
 #define CHECK(cond, msg) do { \
@@ -106,6 +121,38 @@ struct b_report1 {
     uint32_t setident_escalate; /* B tries to become privileged */
     uint64_t perm_after_escalate;
     char     username_after_escalate[VMS_USERNAME_SIZE];
+
+    /*
+     * THE TWO CLAUSES OF THE GRANT RULE, ISOLATED.
+     *
+     * vms_ioctl_setident refuses a caller without SETPRV on EITHER of two
+     * grounds: the requested authorized mask is not a subset of the
+     * caller's, OR the requested UIC is not the caller's. setident_escalate
+     * above trips BOTH at once, so it cannot fail on one of them -- delete
+     * either clause from the executive and that assertion still passes.
+     * (Measured: deleting `|| args.uic != cur_uic` left the whole suite at
+     * 36 passed / 0 failed.) A guard whose removal is invisible to the test
+     * that exists to prove it is an untested guard.
+     *
+     * So each clause gets a probe that can ONLY be refused by that clause:
+     *   uic_only  - asks for EXACTLY the mask it already holds, with
+     *               SYSTEM's UIC. The subset test passes by construction,
+     *               so only the UIC clause can refuse it.
+     *   priv_only - asks for its OWN UIC, with one extra privilege. The
+     *               UIC test passes by construction, so only the subset
+     *               clause can refuse it.
+     * Each records the resulting identity as well as the status: a refusal
+     * that still applied half the change would be worse than an allow.
+     */
+    uint32_t setident_uic_only;
+    uint32_t uic_after_uic_only;
+    uint64_t perm_after_uic_only;
+    char     username_after_uic_only[VMS_USERNAME_SIZE];
+
+    uint32_t setident_priv_only;
+    uint32_t uic_after_priv_only;
+    uint64_t perm_after_priv_only;
+    char     username_after_priv_only[VMS_USERNAME_SIZE];
 
     uint32_t setprv_unauth;     /* enable SYSPRV, temporary */
     uint32_t chkpriv_sysprv;
@@ -131,6 +178,53 @@ struct b_report2 {
 struct a_signal {
     uint32_t a_vms_pid;
 };
+
+/* What a SECOND THREAD of process A sees when it asks who it is. */
+struct thread_obs {
+    uint32_t status;
+    uint32_t vms_pid;
+    uint32_t uic;
+    uint64_t perm_privs;
+    char     username[VMS_USERNAME_SIZE];
+};
+
+/*
+ * identity_thread - a second thread of process A asks the executive who
+ * it is.
+ *
+ * ONE PCB PER PROCESS (CLAUDE.md Rule 11, one layer in). If the executive
+ * keys its process table on the LINUX THREAD id rather than the process,
+ * this thread is a different VMS process from the one that created it: it
+ * gets its own row, its own privilege mask and its own event flags, and
+ * neither thread can see the other's. That fake passes every
+ * single-threaded test in this file perfectly, which is exactly why it
+ * needs its own probe.
+ *
+ * The channel is opened HERE and not inherited: vms_dev_fd in
+ * src/libvmssys/vms_kif.c is __thread, so a second thread necessarily
+ * enters the executive through a second open file. Two channels into the
+ * executive from one process must resolve to ONE row.
+ */
+static void *identity_thread(void *arg)
+{
+    struct thread_obs *obs = arg;
+    struct vms_procinfo info;
+
+    if (vms_kif_open() < 0) {
+        obs->status = 0;    /* not a VMS status: "never got in" */
+        return NULL;
+    }
+
+    memset(&info, 0, sizeof(info));
+    obs->status     = vms_kif_getjpi_self(&info);
+    obs->vms_pid    = info.vms_pid;
+    obs->uic        = info.uic;
+    obs->perm_privs = info.perm_privs;
+    memcpy(obs->username, info.username, VMS_USERNAME_SIZE);
+
+    vms_kif_close();
+    return NULL;
+}
 
 /*
  * process_b - the unprivileged half.
@@ -193,6 +287,34 @@ static int process_b(int rfd, int wfd)
     (void)vms_kif_getjpi_self(&info);
     r1.perm_after_escalate = info.perm_privs;
     memcpy(r1.username_after_escalate, info.username, VMS_USERNAME_SIZE);
+
+    /*
+     * Escalation attempt 1a: THE UIC CLAUSE ALONE. Ask for exactly the
+     * authorized mask the executive just reported for us -- the subset
+     * test cannot possibly reject that -- and take SYSTEM's UIC with it.
+     * The UIC is the group-scoping key that find_by_name() and every
+     * group-scoped facility read, so a process that can pick its own UIC
+     * picks whose processes it can see.
+     */
+    r1.setident_uic_only = vms_kif_setident("GUEST", SYS_UIC, r1.perm_privs);
+    memset(&info, 0, sizeof(info));
+    (void)vms_kif_getjpi_self(&info);
+    r1.uic_after_uic_only  = info.uic;
+    r1.perm_after_uic_only = info.perm_privs;
+    memcpy(r1.username_after_uic_only, info.username, VMS_USERNAME_SIZE);
+
+    /*
+     * Escalation attempt 1b: THE SUBSET CLAUSE ALONE. Keep our own UIC --
+     * the UIC test cannot possibly reject that -- and ask for one
+     * privilege we do not hold.
+     */
+    r1.setident_priv_only =
+        vms_kif_setident("GUEST", B_UIC, r1.perm_privs | PRV_M_SYSPRV);
+    memset(&info, 0, sizeof(info));
+    (void)vms_kif_getjpi_self(&info);
+    r1.uic_after_priv_only  = info.uic;
+    r1.perm_after_priv_only = info.perm_privs;
+    memcpy(r1.username_after_priv_only, info.username, VMS_USERNAME_SIZE);
 
     /* Escalation attempt 2: enable a privilege outside our authorization. */
     r1.setprv_unauth = vms_kif_setprv(PRV_M_SYSPRV, 1, 0, &prev);
@@ -263,18 +385,39 @@ int main(void)
     }
 
     /*
-     * TEST FIXTURE, stated plainly: /dev/vms is a miscdevice with no
-     * .mode, so it is created 0600 root:root and NO unprivileged
-     * process can reach the executive at all. Process B must be able to
-     * open it for this test to say anything about enforcement, so the
-     * still-root parent opens the door. The executive's own decisions
-     * are what is under test, not the device's permission bits -- and
-     * the device permission is itself a real gap, reported separately.
+     * NO FIXTURE. This used to chmod /dev/vms 0666 so the unprivileged
+     * half could reach the executive at all, because the miscdevice
+     * carried no .mode and therefore shipped 0600 root:root. A test that
+     * has to widen the product's own permissions before it can run is
+     * proving enforcement under a posture the product does not have: with
+     * a 0600 door every reachable caller is root, and the entire
+     * unprivileged half of this proof is unreachable outside the fixture.
+     *
+     * The module now sets .mode = 0666 deliberately, because on OpenVMS
+     * the executive entry sequence is unprivileged for every process and
+     * access control lives inside each service (see the comment on
+     * vms_misc in src/kernel/vms_module.c). So the posture is asserted
+     * here instead of being manufactured: if a later change quietly puts
+     * the 0600 door back, this goes red rather than silently reverting the
+     * product to single-user while the test keeps passing.
      */
-    if (chmod("/dev/vms", 0666) != 0) {
-        printf("  FAIL: cannot chmod /dev/vms for the unprivileged half\n");
-        printf("=== test_kmod_ident: %d passed, %d failed ===\n", pass, fail + 1);
-        return 1;
+    {
+        struct stat st;
+
+        if (stat("/dev/vms", &st) != 0) {
+            printf("  FAIL: cannot stat /dev/vms\n");
+            printf("=== test_kmod_ident: %d passed, %d failed ===\n", pass, fail + 1);
+            return 1;
+        }
+        CHECK((st.st_mode & 0666) == 0666,
+              "the executive entry point is reachable by every process, "
+              "as the VMS system-service entry is (no test fixture)");
+        if ((st.st_mode & 0666) != 0666) {
+            printf("  (mode is %04o -- the unprivileged half below cannot run)\n",
+                   (unsigned)(st.st_mode & 07777));
+            printf("=== test_kmod_ident: %d passed, %d failed ===\n", pass, fail);
+            return 1;
+        }
     }
 
     /* ----------------------------------------------------------------
@@ -362,6 +505,26 @@ int main(void)
     CHECK(r1.username_after_escalate[0] == '\0',
           "refused identity leaves the process still unnamed (no partial effect)");
 
+    /*
+     * ... and each half of the grant rule proved on its own. Deleting
+     * either clause from vms_ioctl_setident must turn exactly one of these
+     * two pairs red; if a clause can be deleted and the suite stays green,
+     * that clause is not being tested by anything.
+     */
+    CHECK(r1.setident_uic_only == SS_NOPRIV,
+          "UIC CLAUSE ISOLATED: same authorized mask, SYSTEM's UIC -> SS$_NOPRIV");
+    CHECK(r1.uic_after_uic_only == B_UIC &&
+          r1.perm_after_uic_only == (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX) &&
+          r1.username_after_uic_only[0] == '\0',
+          "... and the refused UIC change applied nothing at all");
+
+    CHECK(r1.setident_priv_only == SS_NOPRIV,
+          "SUBSET CLAUSE ISOLATED: own UIC, one extra privilege -> SS$_NOPRIV");
+    CHECK(r1.uic_after_priv_only == B_UIC &&
+          r1.perm_after_priv_only == (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX) &&
+          r1.username_after_priv_only[0] == '\0',
+          "... and the refused privilege grant applied nothing at all");
+
     CHECK(r1.setprv_unauth == SS_NOTALLPRIV,
           "$SETPRV outside the authorized mask reports SS$_NOTALLPRIV");
     CHECK(r1.chkpriv_sysprv == SS_NOPRIV,
@@ -399,6 +562,36 @@ int main(void)
           "the executive holds the stamped authorized mask");
     CHECK((info.perm_privs & (1ULL << 18)) != 0,
           "SETPRV permitted granting OPER, which registration had not granted");
+
+    /* ----------------------------------------------------------------
+     * 4b. IDENTITY IS PER-PROCESS, NOT PER-THREAD.
+     *
+     * A second thread of A must see the identity A just stamped -- the
+     * same row, the same VMS pid, the same UIC, the same mask. If the
+     * executive minted a row per Linux thread, this thread would either
+     * be unknown to the executive or be a second, differently-privileged
+     * VMS process wearing the same image.
+     * ---------------------------------------------------------------- */
+    {
+        pthread_t th;
+        struct thread_obs obs;
+
+        memset(&obs, 0, sizeof(obs));
+        if (pthread_create(&th, NULL, identity_thread, &obs) != 0) {
+            printf("  FAIL: pthread_create\n");
+            fail++;
+        } else {
+            pthread_join(th, NULL);
+
+            CHECK(obs.status == SS_NORMAL,
+                  "a second thread of the process is known to the executive");
+            CHECK(obs.vms_pid == a_vms_pid,
+                  "... as the SAME process, not a second one (one PCB per process)");
+            CHECK(strcmp(obs.username, A_USERNAME) == 0 &&
+                  obs.uic == A_UIC && obs.perm_privs == A_PRIVS,
+                  "... and sees the identity the other thread stamped");
+        }
+    }
 
     /* ----------------------------------------------------------------
      * 5. THE SECOND CORE REFUSAL: the drop is one-way.

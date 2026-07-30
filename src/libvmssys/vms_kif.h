@@ -110,4 +110,41 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
                           uint32_t *requested_mode, char *resnam,
                           uint8_t *valblk);
 
+/* ================================================================
+ * Device table (executive-resident I/O database)
+ *
+ * The executive owns the devices; a process owns only its channels to
+ * them. A device attribute read here is the attribute every process
+ * on the node sees, and a characteristic set here is seen by every
+ * process on the node -- which is the whole difference between a VMS
+ * device and a private notion of one.
+ * ================================================================ */
+
+/* $ASSIGN a channel to a device by name. SS$_NOSUCHDEV if the
+ * executive has no such device; SS$_IVDEVNAM if the name is not a
+ * device name at all. */
+uint32_t vms_kif_assign(const char *devnam, uint32_t *chan);
+
+/* $DASSGN the channel. SS$_IVCHAN if it is not one of ours. */
+uint32_t vms_kif_dassgn(uint32_t chan);
+
+/* Read a device row by name. SS$_NOSUCHDEV if there is no such device. */
+uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info);
+
+/* Read the device row behind an assigned channel. SS$_IVCHAN if the
+ * channel is not ours. */
+uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo *info);
+
+/* Enumerate the device table. Pass *index = 0 for the first row; each
+ * call fills info and advances *index. Returns SS$_NOMOREDEV when the
+ * scan is exhausted. */
+uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info);
+
+/* Set terminal characteristics through an assigned channel (the
+ * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
+ * if the caller holds no such channel. */
+uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
+                           uint64_t setchar, uint64_t clrchar,
+                           uint32_t width, uint32_t page);
+
 #endif /* _VMS_KIF_H */

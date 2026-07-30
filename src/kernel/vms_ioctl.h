@@ -218,4 +218,190 @@ struct vms_register_args {
 
 #define VMS_IOCTL_REGISTER  _IOWR(VMS_IOC_MAGIC, 0x40, struct vms_register_args)
 
+/* ================================================================
+ * Device table (executive-resident I/O database)
+ *
+ * On OpenVMS a device is not something a process owns a private idea
+ * of: the driver enters a Unit Control Block in the executive's I/O
+ * database at boot, and from then on the device EXISTS for every
+ * process on the node. $ASSIGN takes a channel to it, $GETDVI reads
+ * its attributes, $DEVICE_SCAN enumerates it, and SHOW DEVICE /
+ * SHOW TERMINAL are readers of that one table. The owner, the
+ * reference count and the terminal characteristics are properties of
+ * the device, not of whoever happens to be asking.
+ *
+ * These ioctls put the same property behind /dev/vms (vms-d0b). The
+ * console terminal OPA0: is created by the executive at module init,
+ * exactly as the terminal driver creates it at VMS boot -- no process
+ * registers it, and no process can be the only one that sees it.
+ * ================================================================ */
+
+/*
+ * VMS device names: at most 15 significant characters plus the
+ * terminating NUL (OpenVMS I/O User's Reference Manual; the physical
+ * name form is ddcu:, e.g. OPA0:).
+ */
+#define VMS_DEVNAM_SIZE 16
+
+/*
+ * Terminal characteristics.
+ *
+ * PROVENANCE (CLAUDE.md rules 8 and 10): the NAMES below and the fact
+ * that each is a two-state characteristic are pinned to the oracle --
+ * SHOW TERMINAL on the ~/vax OpenVMS VAX V7.3 lab console (nodes VAX1
+ * and VAX2, 30-JUL-2026), captured verbatim in
+ * docs/oracle/vax73-terminal-device.md. Every name here appears in
+ * that output; no name was invented, and no characteristic VMS does
+ * not display was added.
+ *
+ * The BIT POSITIONS are an OVMX design choice and are NOT VMS's
+ * $TTDEF layout. The public OpenVMS documentation available to this
+ * work does not publish the byte-level TT$M_ layout, so rather than
+ * guess at it OVMX defines its own vector and labels it as its own
+ * (rule 8: define our representation, never present it as
+ * VMS-authentic). Nothing outside the executive and its client may
+ * assume these values match VMS.
+ */
+#define VMS_TTC_INTERACTIVE     (1ULL << 0)
+#define VMS_TTC_ECHO            (1ULL << 1)
+#define VMS_TTC_TYPEAHEAD       (1ULL << 2)
+#define VMS_TTC_ESCAPE          (1ULL << 3)
+#define VMS_TTC_HOSTSYNC        (1ULL << 4)
+#define VMS_TTC_TTSYNC          (1ULL << 5)
+#define VMS_TTC_LOWERCASE       (1ULL << 6)
+#define VMS_TTC_TAB             (1ULL << 7)
+#define VMS_TTC_WRAP            (1ULL << 8)
+#define VMS_TTC_HARDCOPY        (1ULL << 9)
+#define VMS_TTC_REMOTE          (1ULL << 10)
+#define VMS_TTC_EIGHTBIT        (1ULL << 11)
+#define VMS_TTC_BROADCAST       (1ULL << 12)
+#define VMS_TTC_READSYNC        (1ULL << 13)
+#define VMS_TTC_FORM            (1ULL << 14)
+#define VMS_TTC_FULLDUP         (1ULL << 15)
+#define VMS_TTC_MODEM           (1ULL << 16)
+#define VMS_TTC_LOCAL_ECHO      (1ULL << 17)
+#define VMS_TTC_AUTOBAUD        (1ULL << 18)
+#define VMS_TTC_HANGUP          (1ULL << 19)
+#define VMS_TTC_BRDCSTMBX       (1ULL << 20)
+#define VMS_TTC_DMA             (1ULL << 21)
+#define VMS_TTC_ALTYPEAHD       (1ULL << 22)
+#define VMS_TTC_SET_SPEED       (1ULL << 23)
+#define VMS_TTC_COMMSYNC        (1ULL << 24)
+#define VMS_TTC_LINE_EDITING    (1ULL << 25)
+#define VMS_TTC_INSERT_EDITING  (1ULL << 26)
+#define VMS_TTC_FALLBACK        (1ULL << 27)
+#define VMS_TTC_DIALUP          (1ULL << 28)
+#define VMS_TTC_SECURE_SERVER   (1ULL << 29)
+#define VMS_TTC_DISCONNECT      (1ULL << 30)
+#define VMS_TTC_PASTHRU         (1ULL << 31)
+#define VMS_TTC_SYSPASSWORD     (1ULL << 32)
+#define VMS_TTC_SIXEL           (1ULL << 33)
+#define VMS_TTC_SOFT_CHARACTERS (1ULL << 34)
+#define VMS_TTC_PRINTER_PORT    (1ULL << 35)
+#define VMS_TTC_NUMERIC_KEYPAD  (1ULL << 36)
+#define VMS_TTC_ANSI_CRT        (1ULL << 37)
+#define VMS_TTC_REGIS           (1ULL << 38)
+#define VMS_TTC_BLOCK_MODE      (1ULL << 39)
+#define VMS_TTC_ADVANCED_VIDEO  (1ULL << 40)
+#define VMS_TTC_EDIT_MODE       (1ULL << 41)
+#define VMS_TTC_DEC_CRT         (1ULL << 42)
+#define VMS_TTC_DEC_CRT2        (1ULL << 43)
+#define VMS_TTC_DEC_CRT3        (1ULL << 44)
+#define VMS_TTC_DEC_CRT4        (1ULL << 45)
+#define VMS_TTC_DEC_CRT5        (1ULL << 46)
+#define VMS_TTC_ANSI_COLOR      (1ULL << 47)
+#define VMS_TTC_VMS_STYLE_INPUT (1ULL << 48)
+
+/*
+ * One row of the executive device table, as handed to userspace.
+ *
+ * owner_pid is 0 when the device is unowned. opcnt/errcnt are the
+ * "Operations completed" and "Error count" SHOW DEVICE/FULL reports.
+ *
+ * NOTE what is deliberately ABSENT (rule 10 -- hide what we cannot
+ * answer faithfully rather than reporting a plausible value): the
+ * oracle's SHOW TERMINAL also prints Input/Output speed, Parity, and
+ * LFfill/CRfill. OVMX's console is a QEMU serial line with no such
+ * physical parameters to report, so the executive does not carry a
+ * value for them and no reader can print one.
+ */
+struct vms_devinfo {
+    char     devnam[VMS_DEVNAM_SIZE];   /* physical name, e.g. "OPA0:" */
+    uint32_t devclass;                  /* DC$_ device class */
+    uint32_t devtype;                   /* device type code; 0 = Unknown */
+    uint32_t owner_pid;                 /* VMS pid of the owner, 0 = unowned */
+    uint32_t owner_uic;                 /* (group << 16) | member */
+    uint32_t refcnt;                    /* channels currently assigned */
+    uint32_t errcnt;                    /* Error count */
+    uint64_t opcnt;                     /* Operations completed */
+    uint64_t devchar;                   /* VMS_TTC_* (terminals only) */
+    uint32_t width;                     /* terminal width */
+    uint32_t page;                      /* terminal page length */
+};
+
+/* $ASSIGN: take a channel to a device by name. */
+struct vms_assign_args {
+    char     devnam[VMS_DEVNAM_SIZE];   /* in: device name (with or without ':') */
+    uint32_t chan;                      /* out: channel number */
+    uint32_t status;                    /* return: SS$_ status */
+};
+
+/* $DASSGN: give a channel back. */
+struct vms_dassgn_args {
+    uint32_t chan;
+    uint32_t status;
+};
+
+/* Selector for VMS_IOCTL_GETDVI: how the device is named. */
+#define VMS_DVI_SEL_DEVNAM  0   /* by info.devnam */
+#define VMS_DVI_SEL_CHAN    1   /* by an assigned channel */
+
+struct vms_getdvi_args {
+    uint32_t select;            /* VMS_DVI_SEL_* */
+    uint32_t chan;              /* in: channel, for VMS_DVI_SEL_CHAN */
+    uint32_t status;            /* return: SS$_ status */
+    uint32_t pad;
+    struct vms_devinfo info;    /* in: name for SEL_DEVNAM; out: the row */
+};
+
+/*
+ * Cursor-driven enumeration of the device table (the reader behind
+ * SHOW DEVICE). Set index to 0 for the first row; each call returns
+ * one row and advances index. SS$_NOMOREDEV terminates the scan,
+ * which is what $DEVICE_SCAN returns when the search is exhausted.
+ */
+struct vms_devscan_args {
+    uint32_t index;             /* in: cursor; out: cursor for next call */
+    uint32_t status;            /* return: SS$_ status */
+    struct vms_devinfo info;    /* out: the row at the incoming cursor */
+};
+
+/*
+ * Modify terminal characteristics THROUGH AN ASSIGNED CHANNEL, the
+ * way VMS does it: SET TERMINAL is $QIO IO$_SETMODE on a channel, not
+ * an operation that names a device out of nowhere. A caller with no
+ * channel to the device gets SS$_IVCHAN, which is why a process
+ * cannot quietly redefine a terminal it never opened.
+ */
+#define VMS_TTSET_CHAR      0x1     /* apply setchar/clrchar */
+#define VMS_TTSET_WIDTH     0x2     /* apply width */
+#define VMS_TTSET_PAGE      0x4     /* apply page */
+
+struct vms_setmode_args {
+    uint32_t chan;              /* channel assigned to the terminal */
+    uint32_t flags;             /* VMS_TTSET_* : which fields are being set */
+    uint64_t setchar;           /* VMS_TTC_* bits to set */
+    uint64_t clrchar;           /* VMS_TTC_* bits to clear */
+    uint32_t width;
+    uint32_t page;
+    uint32_t status;            /* return: SS$_ status */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_ASSIGN    _IOWR(VMS_IOC_MAGIC, 0x50, struct vms_assign_args)
+#define VMS_IOCTL_DASSGN    _IOWR(VMS_IOC_MAGIC, 0x51, struct vms_dassgn_args)
+#define VMS_IOCTL_GETDVI    _IOWR(VMS_IOC_MAGIC, 0x52, struct vms_getdvi_args)
+#define VMS_IOCTL_DEVSCAN   _IOWR(VMS_IOC_MAGIC, 0x53, struct vms_devscan_args)
+#define VMS_IOCTL_TTSETMODE _IOWR(VMS_IOC_MAGIC, 0x54, struct vms_setmode_args)
+
 #endif /* _VMS_IOCTL_H */

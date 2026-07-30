@@ -376,3 +376,125 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 
     return args.status;
 }
+
+/* ================================================================
+ * Device table (executive-resident I/O database)
+ *
+ * These are readers of, and a channel-scoped writer to, shared state
+ * the executive owns. What they report about a device is what every
+ * other process on the node sees -- not a per-process idea of what a
+ * device looks like.
+ * ================================================================ */
+
+uint32_t vms_kif_assign(const char *devnam, uint32_t *chan)
+{
+    struct vms_assign_args args;
+
+    if (!devnam || !chan)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_ASSIGN, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    /* VMS writes the channel only on success (odd status); a failed
+     * $ASSIGN must not disturb the caller's channel variable. */
+    if (args.status & 1)
+        *chan = args.chan;
+
+    return args.status;
+}
+
+uint32_t vms_kif_dassgn(uint32_t chan)
+{
+    struct vms_dassgn_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_DASSGN, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    return args.status;
+}
+
+uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info)
+{
+    struct vms_getdvi_args args;
+
+    if (!devnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    args.select = VMS_DVI_SEL_DEVNAM;
+    vms_strncpy(args.info.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_GETDVI, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    if (info)
+        vms_memcpy(info, &args.info, sizeof(*info));
+
+    return args.status;
+}
+
+uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo *info)
+{
+    struct vms_getdvi_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.select = VMS_DVI_SEL_CHAN;
+    args.chan = chan;
+
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_GETDVI, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    if (info)
+        vms_memcpy(info, &args.info, sizeof(*info));
+
+    return args.status;
+}
+
+uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info)
+{
+    struct vms_devscan_args args;
+
+    if (!index)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    args.index = *index;
+
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_DEVSCAN, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    *index = args.index;
+    if (info)
+        vms_memcpy(info, &args.info, sizeof(*info));
+
+    return args.status;
+}
+
+uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
+                           uint64_t setchar, uint64_t clrchar,
+                           uint32_t width, uint32_t page)
+{
+    struct vms_setmode_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+    args.flags = flags;
+    args.setchar = setchar;
+    args.clrchar = clrchar;
+    args.width = width;
+    args.page = page;
+
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_TTSETMODE, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    return args.status;
+}

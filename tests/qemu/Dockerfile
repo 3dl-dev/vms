@@ -67,10 +67,26 @@ RUN KVER=$(cat /tmp/kver) && \
 # Copy test source and build statically-linked test programs
 COPY tests/qemu/test_*.c /src/tests/qemu/
 RUN for f in /src/tests/qemu/test_*.c; do \
+        case "$f" in */test_kmod_devtab.c) continue;; esac; \
         out="${f%.c}"; \
         gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel && \
         echo "Built: $(basename $out)"; \
     done
+
+# The device-table test (vms-d0b) drives the real userspace kernel-interface
+# client rather than a hand-rolled ioctl copy, so the client libvms will call is
+# the client under test. That needs libvmssys's freestanding syscall trampoline
+# and string helpers linked in -- it does NOT pull in libvms, which still cannot
+# be built into this initramfs (tracked separately).
+COPY src/libvmssys/ /src/libvmssys/
+RUN ARCH=$(uname -m) && \
+    gcc -static -O2 -Wall -o /src/tests/qemu/test_kmod_devtab \
+        /src/tests/qemu/test_kmod_devtab.c \
+        /src/libvmssys/vms_kif.c \
+        /src/libvmssys/vms_string.c \
+        /src/libvmssys/arch/${ARCH}/syscall.S \
+        -I/src/kernel -I/src/libvmssys && \
+    echo "Built: test_kmod_devtab (linked against src/libvmssys/vms_kif.c)"
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/

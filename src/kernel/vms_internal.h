@@ -42,6 +42,24 @@
 #define SS__VALNOTVALID 120         /* value block not valid */
 
 /*
+ * Device-table statuses. Values are this tree's existing ssdef.h
+ * (src/libvms/include/ssdef.h) -- they are NOT independently
+ * re-derived here, so the executive and the runtime cannot drift
+ * apart. Note that ssdef.h already carries an operator-sign-off flag
+ * on SS$_NOSUCHDEV / SS$_NOMOREDEV (multi-source disagreement, see
+ * vms-fb3); this file inherits that caveat rather than papering over
+ * it. The CHOICE of status per condition is pinned to the oracle
+ * where observable: SHOW DEVICE of an absent device on the ~/vax
+ * OpenVMS VAX V7.3 lab reports
+ *   %SYSTEM-W-NOSUCHDEV, no such device available
+ * (docs/oracle/vax73-terminal-device.md).
+ */
+#define SS__IVCHAN      602         /* invalid I/O channel */
+#define SS__IVDEVNAM    608         /* invalid device name */
+#define SS__NOMOREDEV   2648        /* device scan exhausted */
+#define SS__NOSUCHDEV   2680        /* no such device available */
+
+/*
  * Default privilege set for non-CAP_SYS_ADMIN processes.
  * Allows basic operational use (mailboxes, networking) without
  * granting any mode-change or bypass privileges.
@@ -153,7 +171,60 @@ struct vms_proc {
     int                 lock_count;
     spinlock_t          lock_list_lock;
 
+    /*
+     * I/O channels (device table, vms-d0b). A channel is this
+     * process's handle on a device that the EXECUTIVE owns -- the
+     * device itself is not per-process, only the channel to it is.
+     * Released when the process's executive state is torn down, which
+     * is what drops the device's reference count and its ownership.
+     */
+    struct list_head    channels;       /* struct vms_channel */
+    uint32_t            next_chan;      /* channel number allocator */
+    spinlock_t          chan_lock;
+
     struct rcu_head     rcu;
+};
+
+/* ================================================================
+ * Device table (executive-resident I/O database)
+ *
+ * One entry per device on the node, created by the executive and
+ * visible to every process. See vms_devtab.c.
+ * ================================================================ */
+
+struct vms_device {
+    struct list_head    list;           /* in vms_device_list */
+    char                devnam[VMS_DEVNAM_SIZE];
+    uint32_t            devclass;       /* DC$_ device class */
+    uint32_t            devtype;        /* device type code; 0 = Unknown */
+
+    /*
+     * Ownership. owner_pid is the VMS pid of the process that first
+     * took a channel to the device and is held until the LAST channel
+     * is given back -- SHOW DEVICE/FULL's "Owner process ID" together
+     * with "Reference count".
+     */
+    uint32_t            owner_pid;
+    pid_t               owner_linux_pid;
+    uint32_t            owner_uic;
+    uint32_t            refcnt;
+
+    uint32_t            errcnt;
+    uint64_t            opcnt;
+
+    /* Terminal state (devclass == DC$_TERM) */
+    uint64_t            devchar;        /* VMS_TTC_* */
+    uint32_t            width;
+    uint32_t            page;
+
+    spinlock_t          lock;
+};
+
+/* A process's handle on a device. */
+struct vms_channel {
+    struct list_head    list;           /* in vms_proc->channels */
+    uint32_t            chan;
+    struct vms_device   *dev;
 };
 
 /* ================================================================
@@ -219,11 +290,23 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 
+/* Device table (executive-resident I/O database) */
+long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg);
+
 /* Subsystem init/cleanup */
 int vms_lock_init(void);
 void vms_lock_cleanup(void);
 void vms_eflag_init(void);
 void vms_eflag_cleanup(void);
+int vms_devtab_init(void);
+void vms_devtab_cleanup(void);
+
+/* Give back every channel a process holds (process teardown). */
+void vms_proc_release_channels(struct vms_proc *proc);
 
 /* Lock manager helpers */
 void vms_proc_release_locks(struct vms_proc *proc);

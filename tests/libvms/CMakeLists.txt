@@ -82,3 +82,9 @@ target_link_libraries(test_libvms_identity PRIVATE
     m
 )
 add_test(NAME test_libvms_identity COMMAND test_libvms_identity)
+
+# Test 12: vms-2b8 — the SYSTEM protection category is "UIC group <=
+# MAXSYSGROUP", not "UID 0". Guards the rule RMS enforces file protection
+# with once a session really runs as the authenticated user's UIC.
+libvms_add_test(test_libvms_protection
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_protection.c)

@@ -56,3 +56,8 @@ __pycache__/
 
 # rd local nostr sync cache
 .ready/nostr-log.jsonl
+
+# session-local, never committed
+.telemetry/
+.ready/*.lock
+.ready/nostr-rejected.jsonl

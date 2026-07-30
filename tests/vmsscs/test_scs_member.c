@@ -477,8 +477,69 @@ static void test_close_resource_variant(void)
     }
 }
 
+/*
+ * vms-760: the cat-0x02 op-0x0d DLM rebuild response. A verbatim echo plus
+ * body[34]=0xf9 -- and it must NOT take the cat-0x01 body[18]/body[55]
+ * mutations, which land in the L1 region and the 8th byte of the lock RESOURCE
+ * NAME. Applying them corrupted every record we answered and gave VAX1 and VAX3
+ * a fatal LOCKMGRERR. This test is the guard on that.
+ */
+static void test_dlm_rebuild_response(void)
+{
+    struct scs_member_params mp;
+    uint8_t req[SCS_MEMBER_FRAME_LEN];
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+
+    memset(&mp, 0, sizeof(mp));
+    mp.sysap_send_msg = 5;
+    mp.sysap_ack_msg = 6;
+
+    memset(req, 0, sizeof(req));
+    req[14] = (uint8_t)((SCS_MEMBER_SCA_LEN - 2) & 0xff);
+    req[15] = (uint8_t)(((SCS_MEMBER_SCA_LEN - 2) >> 8) & 0xff);
+    uint8_t *rb = req + 72;
+    rb[4] = 0xaa; rb[5] = 0xbb;                 /* txn      */
+    rb[6] = 0xcc; rb[7] = 0xdd;                 /* checksum */
+    rb[8] = SCS_MEMBER_CAT_DLM;
+    rb[9] = SCS_MEMBER_OP_DLM_REBUILD;
+    rb[12] = 0x01; rb[14] = 0x03;               /* the two invariants */
+    rb[18] = 0x5a;                              /* L1 payload byte  */
+    rb[34] = 0x72;                              /* request-side stamp */
+    rb[47] = 20;                                /* resource-name length */
+    memcpy(rb + 48, "CACHE$cmSYSDSK1     ", 20);
+
+    CHECK(scs_member_build_dlm_response(&mp, req, sizeof(req), out) == 0,
+          "dlm: builder accepts a well-formed op-0x0d record");
+
+    const uint8_t *ob = out + 72;
+    CHECK(ob[8] == (SCS_MEMBER_CAT_DLM | SCS_MEMBER_RESPONSE_BIT),
+          "dlm: category carries the response bit (0x82)");
+    CHECK(ob[9] == SCS_MEMBER_OP_DLM_REBUILD, "dlm: opcode echoed");
+    CHECK(ob[4] == 0xaa && ob[5] == 0xbb && ob[6] == 0xcc && ob[7] == 0xdd,
+          "dlm: (txn, checksum) echoed verbatim");
+    CHECK(ob[SCS_MEMBER_DLM_RESULT_BODYOFF] == SCS_MEMBER_DLM_RESULT_0D,
+          "dlm: body[34] stamped 0xf9 unconditionally");
+
+    /* The two mutations that killed real VAXes must NOT be applied. */
+    CHECK(ob[18] == 0x5a, "dlm: body[18] NOT mutated (cat-0x01 only)");
+    CHECK(ob[55] == req[72 + 55],
+          "dlm: body[55] NOT zeroed -- it is the 8th byte of the resource name");
+
+    /* The resource name must survive intact -- this is the whole ballgame. */
+    CHECK(ob[47] == 20, "dlm: resource-name length echoed");
+    CHECK(memcmp(ob + 48, "CACHE$cmSYSDSK1     ", 20) == 0,
+          "dlm: lock resource name echoed byte-for-byte (corruption = LOCKMGRERR)");
+    CHECK(ob[12] == 0x01 && ob[14] == 0x03, "dlm: body[12:16] invariants echoed");
+
+    /* Envelope: our own counters, everything else verbatim. */
+    CHECK(ob[0] == 5 && ob[2] == 6, "dlm: own send#/ack# substituted");
+    CHECK(scs_member_build_dlm_response(&mp, req, 4, out) == -1,
+          "dlm: short frame rejected");
+}
+
 int main(void)
 {
+    test_dlm_rebuild_response();
     test_close_is_not_the_params_body();
     test_close_resource_variant();
     test_op14_byte_exact();

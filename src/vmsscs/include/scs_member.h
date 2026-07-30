@@ -251,6 +251,19 @@ int scs_member_build_token_response(const struct scs_member_params *p,
                                     const uint8_t *req_frame, size_t req_len,
                                     uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
+/* vms-760: the DLM lock-resource rebuild record replayed during barrier step 5.
+ * It is the ONLY cat-0x02 opcode that occurs during a join (216/216 in the
+ * reference). Its response is a VERBATIM echo + body[34] -- and it must NOT take
+ * the cat-0x01 body[18]/body[55] mutations, which land inside the L1 region and
+ * the lock RESOURCE NAME respectively. See scs_member_build_dlm_response(). */
+#define SCS_MEMBER_OP_DLM_REBUILD    0x0d
+#define SCS_MEMBER_DLM_RESULT_BODYOFF 34   /* result-code stamp, fixed offset */
+#define SCS_MEMBER_DLM_RESULT_0D      0xf9 /* the value for op 0x0d ONLY */
+
+int scs_member_build_dlm_response(const struct scs_member_params *p,
+                                  const uint8_t *req_frame, size_t req_len,
+                                  uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
 /* Current time as a VMS 64-bit absolute time (100 ns since 17-NOV-1858). */
 uint64_t scs_member_vms_time_now(void);
 

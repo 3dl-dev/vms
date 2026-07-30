@@ -575,6 +575,7 @@ static struct peer_state *cm_pick_coordinator(struct peer_state *tbl)
 #define CM_RSP_NONE  0  /* not grounded -- answer NOTHING (see cm_response_shape) */
 #define CM_RSP_ECHO  1  /* full-body 0x81 echo + the three sec 4(p) mutations */
 #define CM_RSP_TOKEN 2  /* (txn,checksum) + OUR OWN node-parameter block only */
+#define CM_RSP_DLM   3  /* verbatim echo + body[34]=0xf9, NO cat-0x01 mutations */
 
 /*
  * cm_response_shape - decide how (and WHETHER) to answer a token-correlated
@@ -624,38 +625,28 @@ static int cm_response_shape(uint8_t category, uint8_t opcode)
         }
         return CM_RSP_NONE;
     case SCS_MEMBER_CAT_DLM:
-        /* THE CURRENT FRONTIER -- read this before changing it.
+        /* GROUNDED to an unusual degree. op 0x0d is the ONLY cat-0x02 opcode
+         * that occurs during a join (216/216 in the reference), and its response
+         * is a VERBATIM echo plus body[34]=0xf9 -- WITHOUT the cat-0x01
+         * body[18]/body[55] mutations, which land inside the L1 region and the
+         * lock RESOURCE NAME respectively. The recipe reconstructs 1367/1367
+         * real responses byte-for-byte across four responder nodes and two
+         * captures. See scs_member_build_dlm_response().
          *
-         * Answering cat 0x02 at all is grounded BEHAVIOURALLY: the coordinator
-         * gates the barrier on these (five unanswered ones froze it at step 5).
-         * But the SHAPE is inherited from cat 0x01 and has NEVER been grounded.
+         * The earlier reasoning -- "echoing a rebuild record asserts lock state
+         * a joiner does not have" -- was WRONG, and it is worth saying so here
+         * because it sounded right for three sessions. The echo returns the
+         * COORDINATOR'S OWN record with a result code; it claims nothing about
+         * our locks, which is exactly why a lock-less joiner can answer all 216.
+         * What killed VAX1 and VAX3 was CORRUPTING the resource name
+         * ("CACHE$cmSYSDSK1" -> "CACHE$c\0SYSDSK1"), not echoing it.
          *
-         * Run coord3, with the rebuilt cat-0x06 close: INCONSTATE is GONE and
-         * the barrier reached 5/12, but VAX1 and VAX3 then bugchecked
-         * LOCKMGRERR ("Error detected by Lock Manager") right after
-         * "completing VAXcluster state transition". We had blind-echoed EIGHT
-         * cat-0x02 op-0x0d records. A joining node holds no locks, so echoing a
-         * lock-resource rebuild record back asserts lock state we do not have --
-         * and the peer's lock manager checks it.
-         *
-         * This is the same class of defect as the PARAMS-derived close, one
-         * category over, and it is the next thing to ground: what does a real
-         * joiner -- which also holds no locks -- send for cat 0x02 op 0x0d?
-         * Specimen: captures/ovmx-760-lockmgrerr-20260730.pcap.
-         *
-         * Until that is answered from the reference, the echo is KNOWN-WRONG,
-         * not merely ungrounded, so it is NO LONGER THE DEFAULT. Both available
-         * behaviours fail, but they do not fail equally:
-         *   default (refuse)      -> the barrier re-freezes at step 5. The
-         *                            cluster stays up and the lab survives.
-         *   OVMX_DLM_ECHO=1       -> the barrier advances, and real VAXes take a
-         *                            fatal LOCKMGRERR.
-         * A run that crashes the cluster costs a ~6.5 min lab reset and destroys
-         * the oracle you were trying to read, so the safe failure is the one you
-         * get unless you deliberately ask for the other. Keep BOTH until the
-         * shape is grounded -- the pair is the bisect. */
-        if (getenv("OVMX_DLM_ECHO") != NULL) {
-            return CM_RSP_ECHO;
+         * Every other cat-0x02 opcode stays refused: none occurs during a join,
+         * so none is grounded, and op 0x01/0x07/0x15 are known to use a
+         * DIFFERENT result code (0xfa) -- exactly the near-miss that makes a
+         * generalised handler fatal. */
+        if (opcode == SCS_MEMBER_OP_DLM_REBUILD) {
+            return CM_RSP_DLM;
         }
         return CM_RSP_NONE;
     case SCS_MEMBER_CAT_MEMBERSHIP:
@@ -2183,9 +2174,17 @@ int main(int argc, char **argv)
                          * grounded allowlist in cm_response_shape() -- never from a
                          * default. See that function for why. */
                         uint8_t rframe[SCS_MEMBER_FRAME_LEN];
-                        int rc_build = (cm_shape == CM_RSP_TOKEN)
-                            ? scs_member_build_token_response(&mp, buf, (size_t)n, rframe)
-                            : scs_member_build_response(&mp, buf, (size_t)n, rframe);
+                        int rc_build;
+                        if (cm_shape == CM_RSP_TOKEN) {
+                            rc_build = scs_member_build_token_response(
+                                &mp, buf, (size_t)n, rframe);
+                        } else if (cm_shape == CM_RSP_DLM) {
+                            rc_build = scs_member_build_dlm_response(
+                                &mp, buf, (size_t)n, rframe);
+                        } else {
+                            rc_build = scs_member_build_response(
+                                &mp, buf, (size_t)n, rframe);
+                        }
                         if (rc_build == 0 && mv.category == SCS_MEMBER_CAT_CONFIG &&
                             mv.opcode == SCS_MEMBER_OP_RELAY) {
                             /* op 0x12 is the ONE cat-0x01 op whose response is not a
@@ -2225,7 +2224,7 @@ int main(int argc, char **argv)
                                    " op 0x%02x txn=0x%04x csum=0x%04x (%s)"
                                    " send_msg=%u ack_msg=%u\n",
                                    mv.category, mv.opcode, mv.txn, mv.checksum,
-                                   cm_shape == CM_RSP_TOKEN ? "token-only" : "echoed",
+                                   cm_shape == CM_RSP_TOKEN ? "token-only" : (cm_shape == CM_RSP_DLM ? "dlm-echo" : "echoed"),
                                    mp.sysap_send_msg, mp.sysap_ack_msg);
                             fflush(stdout);
                         }

@@ -420,6 +420,69 @@ int scs_member_build_token_response(const struct scs_member_params *p,
     return 0;
 }
 
+/*
+ * scs_member_build_dlm_response - answer a category-0x02 op-0x0d DLM
+ * lock-resource rebuild record.
+ *
+ * GROUNDED to an unusual degree: this recipe reconstructs 1367 of 1367 real
+ * responses byte-for-byte, from FOUR different responder nodes across two
+ * captures (vax3-2to3-established-join: joiner 216/216, VAX2 201/201, VAX1
+ * 29/29; af2-firsttimer-established: joiner 921/921). Zero residuals.
+ *
+ * It is a VERBATIM echo plus exactly four edits -- and critically it does NOT
+ * take the two cat-0x01 mutations. Those offsets land INSIDE the payload here:
+ *   body[18] is the 2nd byte of the L1 region;
+ *   body[55] is the 8TH BYTE OF THE LOCK RESOURCE NAME for every observed
+ *            name length (13..24).
+ * Applying them corrupted every record we answered -- e.g. "CACHE$cmSYSDSK1"
+ * went out as "CACHE$c\0SYSDSK1" -- and VAX1 and VAX3 both took a fatal
+ * LOCKMGRERR. The in-capture control is decisive: across the SAME milliseconds
+ * VAX1 and VAX3 exchanged the same records with each OTHER correctly and
+ * neither crashed. The only variable was our mutation.
+ *
+ * The echo acknowledges the COORDINATOR'S OWN RECORD coming back with a result
+ * code; it asserts nothing about locks WE hold. That is why a joiner holding no
+ * locks can answer all 216 of them truthfully -- the earlier worry that echoing
+ * "claims lock state we do not have" was misplaced. What was wrong was the
+ * corruption, not the echoing.
+ */
+int scs_member_build_dlm_response(const struct scs_member_params *p,
+                                  const uint8_t *req_frame, size_t req_len,
+                                  uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || req_frame == NULL || out == NULL) {
+        return -1;
+    }
+    if (req_len < SCS_MEMBER_FRAME_LEN) {
+        return -1;
+    }
+    uint16_t lenword = get_le16(req_frame + 14);
+    if ((uint16_t)(lenword + 2) != SCS_MEMBER_SCA_LEN) {
+        return -1;
+    }
+
+    build_common(p, member_config_tmpl, out);
+
+    uint8_t *obody = out + 72;
+    const uint8_t *rbody = req_frame + 72;
+    memcpy(obody, rbody, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF); /* VERBATIM */
+
+    put_le16(obody + 0, p->sysap_send_msg);
+    put_le16(obody + 2, p->sysap_ack_msg);
+    obody[8] = (uint8_t)(rbody[8] | SCS_MEMBER_RESPONSE_BIT); /* 0x02 -> 0x82 */
+    /* body[34]: MANDATORY, written unconditionally. The requests carried 0xf9
+     * (209), 0x00 (3), 0x20 (2), 0x72 (1), 0xbc (1) and EVERY response carried
+     * 0xf9 -- in two specimens it lands mid-ASCII, which proves it is a
+     * fixed-offset stamp and not a payload field. INFERRED to be a per-opcode
+     * result code; op 0x01/0x07/0x15 responses use 0xfa. DO NOT generalise this
+     * value, or this whole shape, to another cat-0x02 opcode. */
+    obody[SCS_MEMBER_DLM_RESULT_BODYOFF] = SCS_MEMBER_DLM_RESULT_0D;
+    /* Everything else -- txn/cksum at [4:8], opcode at [9], the invariants at
+     * [12:16], the L1 region, and the resource name at [47 : 47+1+len] -- is
+     * echoed byte for byte. Mutating ANY of it is LOCKMGRERR. */
+    return 0;
+}
+
 int scs_member_build_response(const struct scs_member_params *p,
                               const uint8_t *req_frame, size_t req_len,
                               uint8_t out[SCS_MEMBER_FRAME_LEN])

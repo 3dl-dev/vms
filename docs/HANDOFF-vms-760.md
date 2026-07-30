@@ -131,9 +131,14 @@ barrier steps released** (`XITDONE`), 178 cat-`0x02` DLM records answered,
 
 **Caveats to carry, not to gloss:**
 
-- `coord10` is **one run**. Two confirmation runs were launched immediately,
-  because this session established that a single barrier result can be luck.
-  Check §1a for their outcome before treating MEMBER as reproducible.
+- **REPRODUCIBLE — 3/3.** `coord10`, `coord11`, `coord12` each completed 12/12
+  barrier steps with `XITDONE`, each on a freshly reset lab, **zero bugchecks**
+  across all three VAXes throughout. `coord10` and `coord12` show `MEMBER` in
+  `SHOW CLUSTER`; `coord11`'s console evidence was erased by the *next* run's
+  reset (`reset3.sh` truncates `vax1.log`) — its SCSD log still shows 12/12.
+  *Harness note:* VMS truncates `SCSNODE` to **6 characters**, so `OVMXR11` and
+  `OVMXR12` both appear as `OVMXR1`; a `grep` for the full name silently finds
+  nothing and looks like failure. Keep run node-names ≤ 6 chars.
 - One `SCSD-W-CMUNGROUNDED` fired — cat `0x02` `op 0x01`, correctly refused,
   and membership was reached anyway. It is still an ungrounded pair: ground it.
 - The SDA CSB dumped *after* the daemon exited reads

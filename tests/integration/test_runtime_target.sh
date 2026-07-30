@@ -104,34 +104,118 @@ fi
 # the system. If this erodes, every per-call fallback we just deleted becomes
 # necessary again -- so the gate holds the guarantee itself, not just its
 # consequences.
+#
+# BEHAVIOURAL, NOT TOKEN-PRESENCE (2026-07-30, vms-a35 round 2). The previous
+# version of this check only asked whether the strings "executive_attach",
+# "execinit_halt" and "/dev/vms" appeared ANYWHERE in ovmx_init.c -- so
+# executive_attach() could be reduced to a no-op (e.g. open /dev/vms and
+# immediately close it again, or drop the halt-on-failure branch entirely)
+# and the check would still pass as long as those three tokens survived
+# somewhere else in the file, including in a comment. What actually has to
+# hold, checked structurally against the extracted body of
+# executive_attach() itself:
+#   (a) it opens "/dev/vms" and captures the descriptor in a variable;
+#   (b) that variable is checked for failure;
+#   (c) a halt/exit/reboot call is reachable in the function (the response
+#       to that failure);
+#   (d) the descriptor is never closed again inside the function -- a
+#       probe-and-release is not a pin.
 init_c="$SRC_ROOT/src/ovmx_init/ovmx_init.c"
 if [ ! -f "$init_c" ]; then
     echo "FAIL: $init_c is missing -- the boot-time executive guarantee lives there"
     status=1
 else
-    missing=""
-    grep -q 'executive_attach' "$init_c" || missing="$missing executive_attach()"
-    grep -q 'execinit_halt' "$init_c"    || missing="$missing execinit_halt()"
-    grep -q '"/dev/vms"' "$init_c"       || missing="$missing open(/dev/vms)"
-    if [ -n "$missing" ]; then
-        echo "FAIL: ovmx_init.c no longer establishes the executive guarantee:$missing"
-        echo "  -> PID 1 must refuse to boot without /dev/vms and hold it open"
-        echo "     for the life of the system (pins vms.ko: rmmod -> EBUSY)."
+    body=$(awk '
+        BEGIN { in_func = 0; depth = 0; started = 0 }
+        !in_func && $0 ~ /executive_attach[ \t]*\(/ && $0 !~ /;[ \t]*$/ { in_func = 1 }
+        in_func {
+            print
+            o = gsub(/{/, "{")
+            c = gsub(/}/, "}")
+            if (o > 0) started = 1
+            depth += o - c
+            if (started && depth <= 0) exit
+        }
+    ' "$init_c")
+
+    if [ -z "$body" ]; then
+        echo "FAIL: could not locate executive_attach() in ovmx_init.c"
         status=1
     else
-        echo "  OK: PID 1 still refuses to boot without the executive"
+        reason=""
+
+        openvar=$(printf '%s\n' "$body" \
+            | grep -oE '[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*open[[:space:]]*\([[:space:]]*"/dev/vms"' \
+            | head -1 | sed -E 's/[[:space:]]*=.*//')
+        [ -n "$openvar" ] \
+            || reason="$reason
+    - no open(\"/dev/vms\") result is captured into a variable"
+
+        if [ -n "$openvar" ] && ! printf '%s\n' "$body" \
+                | grep -qE "\\b${openvar}\\b[[:space:]]*(<[[:space:]]*0|==[[:space:]]*-1)"; then
+            reason="$reason
+    - the open() result ($openvar) is never checked for failure"
+        fi
+
+        printf '%s\n' "$body" \
+            | grep -qE '\b[A-Za-z_]*halt[A-Za-z_]*[[:space:]]*\(|\breboot[[:space:]]*\(|\b_exit[[:space:]]*\(|\bexit[[:space:]]*\(|\babort[[:space:]]*\(' \
+            || reason="$reason
+    - no halt/exit/reboot call is reachable in the function"
+
+        if [ -n "$openvar" ] && printf '%s\n' "$body" \
+                | grep -qE "\\bclose[[:space:]]*\\([[:space:]]*${openvar}[[:space:]]*\\)"; then
+            reason="$reason
+    - the /dev/vms descriptor ($openvar) is closed inside executive_attach() -- not pinned"
+        fi
+
+        if [ -n "$reason" ]; then
+            echo "FAIL: executive_attach() no longer establishes the executive guarantee:$reason"
+            echo "  -> PID 1 must refuse to boot without /dev/vms and hold it open"
+            echo "     for the life of the system (pins vms.ko: rmmod -> EBUSY)."
+            status=1
+        else
+            echo "  OK: executive_attach() opens /dev/vms, halts on failure, holds it open"
+        fi
     fi
 fi
 
 # --- 3c. No per-call "is the executive there?" test --------------------
 # Opening /dev/vms is unconditional; branching on whether it succeeded is the
-# reintroduction of the deleted fallback, whatever status it returns. This is
-# the precise shape that was removed from sys_lock.c's ensure_kif_open():
-#     return vms_kif_open() >= 0 ? 0 : -1;     <- flagged
-#     (void)vms_kif_open();                    <- fine
-probe=$(grep -rnE 'vms_kif_open[[:space:]]*\([[:space:]]*\)[[:space:]]*(<|>|=|!|\?)|(if|while)[[:space:]]*\([^)]*vms_kif_open' \
+# reintroduction of the deleted fallback, whatever status it returns and
+# however indirectly the branch is reached. Two shapes are checked:
+#   (i)  the return value is tested inline, e.g. `vms_kif_open() < 0` or
+#        `if (vms_kif_open())` -- the pre-existing check.
+#   (ii) the return value is captured into a variable first and THAT
+#        variable is branched on later:
+#            int rc = vms_kif_open();
+#            if (rc < 0) return SS$_NOSUCHDEV;
+#        which evades (i) because no operator sits directly after the call.
+#        (2026-07-30, vms-a35 round 2 adversary finding.) The precise shape
+#        removed from sys_lock.c's ensure_kif_open() was:
+#            return vms_kif_open() >= 0 ? 0 : -1;     <- flagged by (i)
+#            (void)vms_kif_open();                    <- fine (discarded)
+direct=$(grep -rnE 'vms_kif_open[[:space:]]*\([[:space:]]*\)[[:space:]]*(<|>|=|!|\?)|(if|while)[[:space:]]*\([^)]*vms_kif_open' \
          --include=*.c --include=*.h "$SRC_ROOT/src" 2>/dev/null \
         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
+
+indirect=""
+for f in $(grep -rlE 'vms_kif_open[[:space:]]*\(' --include=*.c --include=*.h "$SRC_ROOT/src" 2>/dev/null); do
+    vars=$(grep -oE '\b[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*vms_kif_open[[:space:]]*\([[:space:]]*\)' "$f" \
+            | sed -E 's/[[:space:]]*=.*//' | sort -u)
+    for v in $vars; do
+        [ -n "$v" ] || continue
+        hit=$(grep -nE "(if|while)[[:space:]]*\\([^)]*\\b${v}\\b|\\b${v}\\b[[:space:]]*(<|>|==|!=)[[:space:]]*[-0-9]" "$f" \
+                | grep -vE '^[0-9]+:[[:space:]]*(\*|//|/\*)' \
+                | grep -vE '=[[:space:]]*vms_kif_open' || true)
+        if [ -n "$hit" ]; then
+            indirect="$indirect
+$f: variable '$v' captures vms_kif_open() and is branched on later:
+$hit"
+        fi
+    done
+done
+
+probe="$direct$indirect"
 if [ -n "$probe" ]; then
     echo "FAIL: code branches on whether the executive could be opened:"
     echo "$probe" | sed 's/^/  /'

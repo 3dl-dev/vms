@@ -45,11 +45,14 @@
 # (vms-c86): it links a 22-object program entered at main() whose relocs are
 # dominated by INTRA-image references (2111 ADRP + 2120 ADD_ABS_LO12 + 981 ABS64 +
 # 235 PREL32 + LDST* + 40 TLSDESC), synthesizes a crt0 (_start -> musl init -> main
-# -> exit), binds 139 cross-image imports across the six --use producers, and carries
+# -> exit), binds 140 cross-image imports across the seven --use producers, and carries
 # DCL's own single-TLS-object (dcl_messages.o) as PT_TLS. IMGACT.EXE recovers
 # argc/argv off the kernel process stack and activates it. Empirical LINK result:
-# ET_DYN executable, 22 objects, 8539 relocs, 5 GOT, 1 TLS, 981 ABS64-ptr, 139
-# imports. (link.c/imgact.c are the complete toolchain and are OUT of the
+# ET_DYN executable, 22 objects, 8647 relocs, 5 GOT, 1 TLS, 1014 ABS64-ptr, 140
+# imports. (These figures are a MEASUREMENT of one build, not a pin -- nothing
+# asserts them, and any change to what DCL calls moves them. vms-8019 round 7
+# moved the import count by one: SHOW SYSTEM's CPU column is now read from
+# sys$getjpi instead of from a second /proc parser inside the DCL layer.) (link.c/imgact.c are the complete toolchain and are OUT of the
 # Systems-Engineer file-domain; do NOT edit them here.)
 # =============================================================================
 #

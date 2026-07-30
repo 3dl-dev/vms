@@ -1337,7 +1337,7 @@ jobs:
   # (vms-116). The REAL src/vmsdcl shell (21 TUs) + src/vmsqueue links as a
   # VMS-native ET_DYN executable via LINK.EXE --executable --use {DECC$SHR + the
   # five OVMX shareables}: a 22-object main() program with the full intra-image
-  # reloc set, 139 cross-image imports all bound, and its own single-object TLS.
+  # reloc set, 140 cross-image imports all bound, and its own single-object TLS.
   # IMGACT.EXE activates it (crt0 recovers argc/argv off the kernel stack) and
   # DCL runs a scripted session (SHOW TIME + A = 2+3 / SHOW SYMBOL A) to VMS-
   # correct output, clean exit. NO ld / NO ld.so — the operator's "all VMS" path.

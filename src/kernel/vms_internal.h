@@ -26,6 +26,39 @@
 
 #define SS__NORMAL      0x00000001
 #define SS__BADPARAM    0x00000014
+/*
+ * Process-table statuses -- ORACLE-PINNED (vms-8019).
+ *
+ * SOURCE: the reference lab OpenVMS VAX V7.3 node VAX1 (~/vax/cluster),
+ * 2026-07-30, by two independent documented-tool observations:
+ *
+ *   1. LIBRARY/EXTRACT=$SSDEF/OUTPUT=SYS$SCRATCH:SSDEF.MAR
+ *          SYS$LIBRARY:STARLET.MLB
+ *      SEARCH SYS$SCRATCH:SSDEF.MAR "IVLOGNAM","DUPLNAM","NONEXPR"
+ *        $EQU  SS$_DUPLNAM    148
+ *        $EQU  SS$_IVLOGNAM   340
+ *        $EQU  SS$_NONEXPR    2280
+ *
+ *   2. round-trip through the message formatter:
+ *        F$MESSAGE(148)  -> %SYSTEM-F-DUPLNAM,  duplicate name
+ *        F$MESSAGE(340)  -> %SYSTEM-F-IVLOGNAM, invalid logical name
+ *        F$MESSAGE(2280) -> %SYSTEM-W-NONEXPR,  nonexistent process
+ *
+ * These replace 434 / 596 / 2540, which this tree carried and which the
+ * same oracle disproves: F$MESSAGE(596) is %SYSTEM-F-VOLINV, and
+ * SS$_VOLINV is 596 in $SSDEF.
+ *
+ * SS__IVLOGNAM is what the executive returns for a malformed
+ * process-name string handed to VMS_IOCTL_SETPRN (unterminated buffer,
+ * or zero length). The CHOICE of IVLOGNAM for a bad process name is
+ * oracle-pinned too, behaviourally, on the same node:
+ *   $ SET PROCESS/NAME="THISNAMEISWAYTOOLONG"
+ *   %SET-E-NOTSET, error modifying process name
+ *   -SYSTEM-F-IVLOGNAM, invalid logical name
+ */
+#define SS__DUPLNAM     148         /* duplicate process name (ssdef.h SS$_DUPLNAM) */
+#define SS__NONEXPR     2280        /* nonexistent process (ssdef.h SS$_NONEXPR) */
+#define SS__IVLOGNAM    340         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
 #define SS__NOPRIV      0x00000024
 #define SS__ACCVIO      0x0000000C
 #define SS__INSFMEM     0x0000002C  /* insufficient memory (44 decimal, matches real VMS) */
@@ -136,6 +169,28 @@ struct vms_proc {
     pid_t               linux_pid;      /* Linux PID (key) */
     uint32_t            vms_pid;        /* VMS-style PID */
 
+    /*
+     * Executive-resident identity. This is the whole point of the
+     * process table: prcnam lives here, in the executive, so it is
+     * visible to every other process and survives execve() (the pid
+     * key does not change across image activation).
+     *
+     * uic is derived by the executive from the task's credentials at
+     * registration -- never supplied by the process, which must not be
+     * able to declare its own UIC. Protected by vms_proc_hash_lock.
+     */
+    char                prcnam[VMS_PRCNAM_SIZE];
+    uint32_t            uic;            /* (group << 16) | member */
+
+    /*
+     * Reference to the backing task's struct pid. The PCB belongs to
+     * the PROCESS, not to an open channel, so it is not destroyed when
+     * /dev/vms is closed (notably the implicit close at exec time).
+     * Liveness is tested through this reference and dead entries are
+     * reaped lazily -- see vms_proc_reap_dead().
+     */
+    struct pid          *pid_ref;
+
     /* Access mode (3a) */
     uint8_t             current_mode;   /* PSL_C_KERNEL..PSL_C_USER */
     uint64_t            cur_privs;      /* current (temporary) privileges */
@@ -187,6 +242,12 @@ struct vms_proc *vms_proc_find(pid_t pid);
 struct vms_proc *vms_proc_find_or_err(void);
 struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_privs);
 void vms_proc_free(struct vms_proc *proc);
+/* Tear down an entry the caller has ALREADY unlinked under
+ * vms_proc_hash_lock (the unlink is the ownership claim). */
+void vms_proc_free_claimed(struct vms_proc *proc);
+
+/* Drop table entries whose backing task no longer exists. */
+void vms_proc_reap_dead(void);
 
 /* ================================================================
  * Subsystem ioctl handlers
@@ -218,6 +279,11 @@ long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
+
+/* Process table (executive-resident PCB directory) */
+long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

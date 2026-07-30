@@ -651,7 +651,10 @@ failing to bind, exactly as suite 3 does one layer down: with no registration
 the child cannot report a process ID, so the creation handshake fails and
 $CREPRC reports the child lost. That suite then stops, by design, rather than
 asserting about a subject it knows was not created -- which is why exactly
-four of its assertions appear here and not the other fifty-six.
+four of its assertions appear here and none of the rest of the suite, however
+many it has grown to. (The count is deliberately not written down: it was, and
+adding an assertion to the suite silently rotted it. The require_fail set is
+the machine-checked statement; this paragraph is the reasoning.)
 EOF
                       ;;
         esac;;

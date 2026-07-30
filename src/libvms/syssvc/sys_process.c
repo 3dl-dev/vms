@@ -67,34 +67,64 @@ uint32_t sys$exit(uint32_t code) {
  * does not maintain its own CPU accounting, so there is nothing here to
  * read it from instead.
  *
- * Returns 0 (and leaves the item length set) when /proc cannot answer.
+ * WHAT THIS RETURNS WHEN IT CANNOT MEASURE, AND WHY IT IS NOT A ZERO
+ * (vms-8019 round 7).
+ *
+ * It used to return the literal 0, and sys$getjpi wrote that 0 into
+ * JPI$_CPUTIM with a 4-byte return length and SS$_NORMAL -- so a caller
+ * could not tell "consumed no CPU" from "OVMX could not measure it".
+ * That is the SAME defect the round-4 ruling removed from SHOW SYSTEM
+ * one layer above (dcl_cmd_show.c printed a fabricated "0 00:00:00.00"
+ * for a row it could not read), left standing here, so the two readers
+ * of one facility disagreed about one condition.
+ *
+ * It is reachable, not theoretical: the executive resolves the row and
+ * returns (vms_ioctl_getjpi reaps dead entries first, so the row was
+ * LIVE), and the target task can then exit before the /proc open below.
+ * The answer is then wrong rather than merely unknown.
+ *
+ * Rule 10 allows two answers and this is the first one -- MATCH VMS.
+ * Every failure path below is the target no longer existing:
+ *   fopen() fails            -- /proc/<pid> is gone, so the task is gone
+ *   fread() returns 0        -- the task was released between open and
+ *                               read; procfs returns ESRCH, not a line
+ *   no ')' / fields short    -- not a stat line for a live task
+ * and the condition VMS reports for a target that no longer exists is
+ * SS$_NONEXPR (%SYSTEM-W-NONEXPR, "process does not exist"; the value is
+ * oracle-pinned to 2280 on VAX1, see ssdef.h). VMS has no "the executive
+ * could not measure it" status, and inventing one -- or reporting a
+ * plausible zero -- is the illegal third answer.
+ *
+ * On success *out holds the figure and SS$_NORMAL is returned; on
+ * failure *out is NOT written and the caller must not report the item.
  */
-static uint32_t jpi_cputim(uint32_t linux_pid)
+static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
 {
     if (linux_pid == (uint32_t)getpid()) {
         struct rusage ru;
         getrusage(RUSAGE_SELF, &ru);
-        return (uint32_t)(
+        *out = (uint32_t)(
             (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 100 +
             (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 10000);
+        return SS$_NORMAL;
     }
 
     char path[64];
     snprintf(path, sizeof(path), "/proc/%u/stat", (unsigned)linux_pid);
     FILE *f = fopen(path, "r");
-    if (!f) return 0;
+    if (!f) return SS$_NONEXPR;
 
     char buf[1024];
     size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
-    if (n == 0) return 0;
+    if (n == 0) return SS$_NONEXPR;
     buf[n] = '\0';
 
     /* The comm field is parenthesised and may contain spaces, so field
      * splitting has to start after the LAST ')'. utime/stime are the
      * 12th and 13th fields after that point. */
     char *p = strrchr(buf, ')');
-    if (!p) return 0;
+    if (!p) return SS$_NONEXPR;
     p++;
 
     /* strtok_r, never strtok: this runs inside sys$getjpi, a PUBLIC sys$
@@ -104,17 +134,24 @@ static uint32_t jpi_cputim(uint32_t linux_pid)
      * independent of anything the tests reach. */
     unsigned long long utime = 0, stime = 0;
     int field = 0;
+    int have_both = 0;
     char *save = NULL;
     for (char *tok = strtok_r(p, " ", &save); tok;
          tok = strtok_r(NULL, " ", &save)) {
         field++;                        /* field 1 here == stat field 3 */
         if (field == 12) utime = strtoull(tok, NULL, 10);
-        else if (field == 13) { stime = strtoull(tok, NULL, 10); break; }
+        else if (field == 13) {
+            stime = strtoull(tok, NULL, 10);
+            have_both = 1;
+            break;
+        }
     }
+    if (!have_both) return SS$_NONEXPR;
 
     long hz = sysconf(_SC_CLK_TCK);
     if (hz <= 0) hz = 100;
-    return (uint32_t)(((utime + stime) * 100ULL) / (unsigned long long)hz);
+    *out = (uint32_t)(((utime + stime) * 100ULL) / (unsigned long long)hz);
+    return SS$_NORMAL;
 }
 
 /*
@@ -269,7 +306,23 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
                 break;
 
             case JPI$_CPUTIM: {
-                uint32_t cputim = jpi_cputim(info.linux_pid);
+                /*
+                 * THE WHOLE CALL FAILS IF THE TARGET HAS GONE.
+                 *
+                 * jpi_cputim() only fails when the process the executive
+                 * resolved no longer exists (see its comment), and
+                 * SS$_NONEXPR describes the TARGET, not this item -- the
+                 * items already written above describe a process that has
+                 * since ceased to exist, so reporting SS$_NORMAL over the
+                 * top of them would hand the caller a stale row and call
+                 * it current. Nothing is written for this item and no
+                 * return length is set: a caller must never receive a
+                 * measured-looking zero for an unmeasurable process.
+                 */
+                uint32_t cputim = 0;
+                uint32_t cpustat = jpi_cputim(info.linux_pid, &cputim);
+                if (!(cpustat & 1))
+                    return cpustat;
                 if (item->bufaddr && item->buflen >= sizeof(uint32_t))
                     *(uint32_t *)item->bufaddr = cputim;
                 if (item->retlen) *item->retlen = sizeof(uint32_t);

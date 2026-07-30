@@ -18,10 +18,11 @@
  *
  *   1 auto-bind        remove the vms_kif_register() call in kif_bind()
  *   2 $ENQ/$DEQ        (same mutation reaches it; see suite 2 note)
- *   3 fork re-bind     kif_bind(): `vms_bound_tid == tid` -> `!= 0`
+ *   3 fork re-bind     kif_bind(): `vms_bound_pid == pid` -> `!= 0`
  *   4 post-exec adopt  vms_module.c: adopt branch -> old 0x1C status
  *   5 adopt keeps privs vms_module.c: adopt branch -> re-apply init_privs
  *   6 errno mapping    vms_kif_kerr_to_ss(): any one arm
+ *   7 one PCB/process  vms_module.c: current->tgid -> current->pid
  *
  * Status values are ORACLE-PINNED on the reference lab node VAX1, OpenVMS
  * VAX V7.3 (2026-07-30), by two independent documented-tool observations:
@@ -52,7 +53,9 @@
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <sys/ioctl.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 
 #include "vms_kif.h"
@@ -74,6 +77,12 @@
 #define BIND_EFN        40
 #define BIND_RESNAM     "VMS$BINDPROBE"
 #define REEXEC_NAME     "VMS$REBOUND"
+
+/* Suite 7 uses its own flag, resource and name so that a failure there
+ * cannot be a leftover of an earlier suite's state. */
+#define THREAD_EFN      41
+#define THREAD_RESNAM   "VMS$THREADPROBE"
+#define THREAD_NAME     "VMS$THREADED"
 
 /*
  * A privilege mask with no meaning other than "not the default, and not
@@ -153,8 +162,9 @@ static int reexeced_image(int wfd)
  *
  * It inherited the parent's thread-local state wholesale: the parent's
  * /dev/vms descriptor number AND the parent's "bound" mark. The executive
- * keys its process table by task, so the child is NOT registered no matter
- * what its TLS claims. It calls ONE public entry point and nothing else.
+ * keys its process table by process, and a fork makes a new one, so the
+ * child is NOT registered no matter what its TLS claims. It calls ONE
+ * public entry point and nothing else.
  * ================================================================ */
 static void forked_child(int wfd)
 {
@@ -173,6 +183,51 @@ static void forked_child(int wfd)
         _exit(70);
     close(wfd);
     _exit(0);
+}
+
+/* ================================================================
+ * The sibling thread (suite 7)
+ *
+ * On OpenVMS a process has ONE PCB and its kernel threads SHARE it.
+ * That shared residency is the entire meaning of a process-wide event
+ * flag cluster, a process name and a process's lock ids -- two threads
+ * of one image cannot disagree about who they are.
+ *
+ * This thread therefore uses the public entry points and nothing else
+ * (no explicit open, no explicit register: kif_bind runs inside it) and
+ * reports what the executive tells it. Every value it reports was
+ * established by the MAIN thread before this one existed.
+ * ================================================================ */
+struct thread_report {
+    uint32_t tid;               /* this thread's own Linux task id */
+    uint32_t getjpi_status;
+    uint32_t linux_pid;         /* whose entry the executive handed back */
+    uint32_t readef_status;
+    uint32_t readef_state;
+    uint32_t deq_status;        /* releasing a lock the MAIN thread took */
+    char     prcnam[VMS_PRCNAM_SIZE];
+};
+
+static uint32_t thread_lkid;            /* lock id taken by the main thread */
+static struct thread_report trep;
+
+static void *sibling_thread(void *arg)
+{
+    struct vms_procinfo info;
+
+    (void)arg;
+
+    trep.tid = (uint32_t)syscall(SYS_gettid);
+
+    memset(&info, 0, sizeof(info));
+    trep.getjpi_status = vms_kif_getjpi_self(&info);
+    trep.linux_pid = info.linux_pid;
+    memcpy(trep.prcnam, info.prcnam, VMS_PRCNAM_SIZE);
+
+    trep.readef_status = vms_kif_readef(THREAD_EFN, &trep.readef_state);
+    trep.deq_status = vms_kif_deq(thread_lkid, NULL, 0);
+
+    return NULL;
 }
 
 /* ================================================================
@@ -482,12 +537,13 @@ int main(int argc, char **argv)
          * it is provoked here only to show what it maps to if the
          * executive ever loses a PCB it must hold.
          *
-         * It has to be provoked in a FRESH TASK. The executive keys its
-         * process table by task, not by channel, so a raw second
+         * It has to be provoked in a FRESH PROCESS. The executive keys
+         * its process table by process, not by channel, so a raw second
          * descriptor opened by THIS process reaches this process's entry
          * and the ioctl simply succeeds -- which is exactly what the
          * first version of this check measured, and why it read green on
-         * a claim it was not testing. */
+         * a claim it was not testing. A second THREAD would not do
+         * either: it shares this process's PCB by design (suite 7). */
         e = unregistered_task_errno();
         CHECK(e == ESRCH, "module rejects an unregistered task with -ESRCH");
         CHECK(vms_kif_kerr_to_ss(-e) == SS_BUGCHECK,
@@ -503,6 +559,70 @@ int main(int argc, char **argv)
          * a caller-reachable state -- so only the mapping is checked. */
         CHECK(vms_kif_kerr_to_ss(-ENOMEM) == SS_INSFMEM,
               "-ENOMEM -> SS$_INSFMEM (oracle 292), not SS$_BADPARAM");
+    }
+
+    /* ------------------------------------------------------------
+     * SUITE 7 -- ONE PCB PER PROCESS, SHARED BY ITS THREADS.
+     *
+     * On OpenVMS a process has exactly one PCB and its kernel threads
+     * share it; the process name, the local event flag clusters and the
+     * process's lock ids are all properties of the PROCESS. Keying the
+     * executive's table on the Linux TID instead of the thread-group id
+     * minted one VMS process per thread -- a sibling thread saw a
+     * different linux_pid from getpid(), an empty process name after the
+     * main thread had named the process, its event flags clear after the
+     * main thread had set them, and could not release the process's own
+     * lock. That is Rule 11's facade inverted: per-thread state
+     * pretending to be per-process, and NO single-threaded test can see
+     * it (suites 1-6 all pass either way, because tgid == pid for a
+     * single-threaded process).
+     *
+     * Minimal mutation for this property and no other:
+     *     vms_module.c: current->tgid -> current->pid
+     * ------------------------------------------------------------ */
+    printf("--- 7. threads of one image share ONE executive process ---\n");
+
+    {
+        pthread_t th;
+
+        status = vms_kif_setprn(THREAD_NAME);
+        CHECK(status == SS_NORMAL, "main thread names the process");
+
+        status = vms_kif_setef(THREAD_EFN);
+        CHECK(status == SS_WASCLR || status == SS_WASSET,
+              "main thread sets a local event flag");
+
+        thread_lkid = 0;
+        status = vms_kif_enq(0, 5 /* LCK$K_EXMODE */, 0, THREAD_RESNAM, 0,
+                             0, 0, 0, &thread_lkid, NULL);
+        CHECK(status == SS_NORMAL, "main thread takes a lock");
+        CHECK(thread_lkid != 0, "main thread holds a lock id");
+
+        memset(&trep, 0, sizeof(trep));
+        if (pthread_create(&th, NULL, sibling_thread, NULL) != 0) {
+            printf("  FAIL: pthread_create()\n");
+            fail++;
+        } else {
+            pthread_join(th, NULL);
+
+            /* Guard: if this were not really a second Linux task, every
+             * assertion below would be trivially true. */
+            CHECK(trep.tid != 0 && trep.tid != (uint32_t)getpid(),
+                  "the sibling really is a second Linux task");
+
+            CHECK(trep.getjpi_status == SS_NORMAL,
+                  "sibling thread resolves in the process table");
+            CHECK(trep.linux_pid == (uint32_t)getpid(),
+                  "sibling thread got the PROCESS's entry, not one of its own");
+            CHECK(strcmp(trep.prcnam, THREAD_NAME) == 0,
+                  "sibling thread sees the process name the main thread set");
+            CHECK(trep.readef_status == SS_WASSET,
+                  "sibling thread sees the event flag the main thread set");
+            CHECK((trep.readef_state & (1u << (THREAD_EFN % 32))) != 0,
+                  "sibling thread's cluster state carries the flag bit");
+            CHECK(trep.deq_status == SS_NORMAL,
+                  "sibling thread can $DEQ the lock the main thread took");
+        }
     }
 
 done:

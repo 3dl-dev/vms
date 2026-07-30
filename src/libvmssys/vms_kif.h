@@ -36,6 +36,12 @@ void vms_kif_close(void);
 
 /* Register this process with the kernel module.
  *
+ * The unit is the PROCESS, not the thread: the executive holds one PCB per
+ * process (keyed by the thread-group id) and every thread of an image
+ * shares it, exactly as VMS kernel threads share one PCB. So a second
+ * thread registering adopts the process's existing entry and sees the same
+ * process name, the same event flag clusters and the same lock ids.
+ *
  * Idempotent: registering a task the executive already knows ADOPTS the
  * existing entry and returns SS$_NORMAL, leaving its identity and its
  * privilege mask untouched. That is what VMS does -- activating an image

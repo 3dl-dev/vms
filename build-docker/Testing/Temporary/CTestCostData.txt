@@ -1,3 +1,0 @@
-dcl-integration 0 0
----
-dcl-integration

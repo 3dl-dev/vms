@@ -504,6 +504,132 @@ static struct peer_state *peer_find_or_add(struct peer_state *tbl, const uint8_t
     return &tbl[free_slot];
 }
 
+/*
+ * peer_node_number - the peer's DECnet node number, taken from the SCA logical
+ * address it advertises in its HELLO (abs 24-29, spec sec 4a). The DECnet
+ * address lives in the low two bytes, little-endian: aa:00:04:00:<lo>:<hi>,
+ * where the value is (area << 10) | node. VAX1 aa:00:04:00:01:04 -> 0x0401,
+ * VAX2 ...:02:04 -> 0x0402, VAX3 ...:03:04 -> 0x0403.
+ */
+static uint16_t peer_node_number(const struct peer_state *ps)
+{
+    return (uint16_t)(ps->logical[4] | ((uint16_t)ps->logical[5] << 8));
+}
+
+/*
+ * cm_pick_coordinator - vms-760: choose the ONE peer that receives our deferred
+ * op 0x02.
+ *
+ * GROUNDED (d94-e15, byte-verified): a NON-COORDINATOR peer silently DISCARDS
+ * op 0x02. In e15 all three members received a byte-identical op 0x02 within
+ * 400 ms; VAX1 and VAX2 answered only a cat-0x04 ack and did nothing further
+ * (VAX1 had a 383 ms head start), while VAX3 relayed op 0x12 to VAX1 1.0 ms
+ * later and drove the whole transition. The reference joiner behaves the same
+ * way: it sent its op 0x02 to VAX2, not VAX1, and VAX2 was the coordinator
+ * (vax3-2to3-established-join-20260730.pcap frame 285 -> 286 relay in 0.3 ms).
+ * So the reference picks THE COORDINATOR, not "one peer arbitrarily", and our
+ * old "first eligible peer" rule picked VAX1 -- exactly the wrong node (d94-e14:
+ * acked, then nothing, CSID 00000000).
+ *
+ * HOW the joiner identifies the coordinator is NOT grounded. No wire-visible
+ * coordinator flag was found: the byte-diff across both captures showed the
+ * coordinator is a ZERO-VOTE node in each, and the fields that distinguish VAX3
+ * from VAX1/VAX2 in our lab are all-zero on the reference's coordinator VAX2,
+ * so they are node-local properties, not a role marker. The only predicate that
+ * survives BOTH specimens is "highest DECnet node number", which is confounded
+ * with "highest SCSSYSTEMID" and "last to have joined the cluster" -- all three
+ * agree on VAX3 here and on VAX2 in the reference. We implement the observable
+ * one and say so; see spec 5(z).
+ *
+ * OVMX_CFG2_PEER=<n> forces a specific DECnet node number, for bisecting.
+ * Returns NULL if no peer has completed its config exchange yet.
+ */
+static struct peer_state *cm_pick_coordinator(struct peer_state *tbl)
+{
+    const char *force = getenv("OVMX_CFG2_PEER");
+    struct peer_state *best = NULL;
+    uint16_t best_nn = 0;
+
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &tbl[i];
+        if (!ps->in_use || !ps->cfg_sent) {
+            continue;
+        }
+        uint16_t nn = peer_node_number(ps);
+        if (force != NULL) {
+            if (nn == (uint16_t)strtoul(force, NULL, 0) ||
+                (nn & 0x03ff) == (uint16_t)strtoul(force, NULL, 0)) {
+                return ps;
+            }
+            continue;
+        }
+        if (best == NULL || nn > best_nn) {
+            best = ps;
+            best_nn = nn;
+        }
+    }
+    return best;
+}
+
+/* vms-760: what we are allowed to SEND back for a token-correlated request. */
+#define CM_RSP_NONE  0  /* not grounded -- answer NOTHING (see cm_response_shape) */
+#define CM_RSP_ECHO  1  /* full-body 0x81 echo + the three sec 4(p) mutations */
+#define CM_RSP_TOKEN 2  /* (txn,checksum) + OUR OWN node-parameter block only */
+
+/*
+ * cm_response_shape - decide how (and WHETHER) to answer a token-correlated
+ * member request, from an ALLOWLIST of (category, opcode) pairs we have actually
+ * grounded on the wire.
+ *
+ * WHY AN ALLOWLIST, AND WHY IT IS NOT OPTIONAL. The previous behaviour answered
+ * EVERY token-correlated request, choosing only the SHAPE from the category and
+ * defaulting to a full-body echo. The moment OVMX got the cluster-wide relay
+ * working, the two non-coordinator members opened their own transactions with us
+ * carrying opcodes we had never observed (0x12, 0x0f, 0x08, 0x00). We echoed all
+ * of them, and CRASHED TWO REAL VAXES: VAX3 took INCONSTATE (Inconsistent I/O
+ * data base) and VAX1 took INVEXCEPTN (exception above ASTDEL / on the interrupt
+ * stack). A request body of this class carries the PEER'S OWN live Con.IDs and
+ * cluster id; echoing it reflects that peer's own I/O structures back at it.
+ * This is the identical failure a previous session hit by generalising the
+ * category-0x01 echo to category 0x06.
+ *
+ * That is project Rule 10: never invent a handler for a condition we have not
+ * grounded. A response we cannot justify from the reference is not a guess with
+ * a small downside -- it is a fatal bugcheck on someone else's machine. When we
+ * do not know, we say NOTHING and log loudly, and the gap becomes work.
+ *
+ * NOTE the honest risk of silence: a joiner that fails to answer something the
+ * coordinator gates on can strand a cluster-wide transition, which times out and
+ * drops healthy members (spec 4p). Silence is the SAFER failure -- recoverable,
+ * and it leaves a log line naming exactly what we must ground next -- but it is
+ * not free, and an unanswered op here is a bug to close, not a resting state.
+ */
+static int cm_response_shape(uint8_t category, uint8_t opcode)
+{
+    switch (category) {
+    case SCS_MEMBER_CAT_CONFIG:
+        /* GROUNDED: 6/6 responses, 5 captures, 3 responder nodes (spec 4p). */
+        if (opcode == SCS_MEMBER_OP_COMMIT ||   /* 0x03 membership commit   */
+            opcode == SCS_MEMBER_OP_LOCKRB ||   /* 0x05 lock/resource rebuild */
+            opcode == SCS_MEMBER_OP_XITION) {   /* 0x09 transition open     */
+            return CM_RSP_ECHO;
+        }
+        return CM_RSP_NONE;
+    case SCS_MEMBER_CAT_DLM:
+        /* GROUNDED behaviourally: the coordinator gates the barrier on these
+         * being answered (five unanswered ones froze it at step 5). A joiner
+         * holds no locks, so acknowledging the record is all we can truthfully
+         * say; real grant/deny/block/remaster is NOT implemented (spec 4p). */
+        return CM_RSP_ECHO;
+    case SCS_MEMBER_CAT_MEMBERSHIP:
+        /* Closes the transaction. Token + our OWN parameter block, never an
+         * echo -- echoing this is what bugchecked VAX1 previously. */
+        return CM_RSP_TOKEN;
+    default:
+        return CM_RSP_NONE;
+    }
+}
+
 /* Send a fully-built Ethernet frame to a specific unicast MAC on ifindex. */
 static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
                              const uint8_t *frame, size_t len)
@@ -1454,18 +1580,13 @@ int main(int argc, char **argv)
     long dir_conn_resp_sent = 0; /* vms-246: SCS$DIRECTORY CONNECT-RESPONSEs sent */
     long dir_lookup_sent = 0;    /* vms-246: SCS$DIR_LOOKUP responses sent */
     long cm_config_frames = 0;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
-    /* vms-760: the deferred op 0x02 goes to EXACTLY ONE peer. Admission is a
-     * single-coordinator transaction: the joiner asks one member, and THAT member
-     * relays the new node to the rest (ref: VAX3 sends op 0x02 only to VAX2, which
-     * immediately opens its own transaction with VAX1 via op 0x12 and then runs a
-     * lockstep barrier across all members). Sending it to every peer starts N
-     * competing cluster-wide state transitions; the cluster aborted with
-     * "%CNXMAN, aborting VAXcluster state transition" and dropped its own members.
-     * WHICH peer a real joiner picks is NOT grounded -- "last to complete config",
-     * "last MSCP walk" and "highest SCSSYSTEMID" are mutually confounded in the one
-     * 3-node specimen we have -- so we take the first peer that becomes eligible
-     * and record the open question rather than inventing a rule. */
-    int cm_cfg2_peer_chosen = 0;
+    /* vms-760: the deferred op 0x02 goes to EXACTLY ONE peer -- THE COORDINATOR.
+     * Admission is a single-coordinator transaction: the joiner asks one member,
+     * and THAT member relays the new node to the rest via op 0x12 and then runs
+     * the sec 4(p) barrier across all members. A NON-coordinator peer silently
+     * DISCARDS the op 0x02 (d94-e15, byte-verified: all three members received a
+     * byte-identical op 0x02; only VAX3 acted on it). Peer choice is made by
+     * cm_pick_coordinator() -- see the grounding notes there. */
     long cm_response_sent = 0;   /* vms-224: 0x81 responses to member 0x03/0x05 txns */
     long padded_sent = 0;        /* vms-9f3: padded directed HELLOs sent (sec 4k channel verify) */
     long mscp_srv_accepts = 0;   /* vms-760: op=4 MSCP$DISK connect-ACCEPTs we sent (server-first) */
@@ -1983,7 +2104,20 @@ int main(int argc, char **argv)
                     /* Answer every token-correlated member-driven transaction by
                      * echoing its (txn,checksum) -- commit 0x03, lock rebuild
                      * 0x05, and 0x09 (spec sec 4j). */
-                    if (cm_token_req) {
+                    int cm_shape = cm_token_req
+                        ? cm_response_shape(mv.category, mv.opcode)
+                        : CM_RSP_NONE;
+                    if (cm_token_req && cm_shape == CM_RSP_NONE) {
+                        /* vms-760: NOT grounded -- stay silent rather than invent a
+                         * reply. Answering blindly here crashed VAX1 and VAX3. */
+                        log_ts(stdout);
+                        printf(" SCSD-W-CMUNGROUNDED, NO response sent to member"
+                               " cat 0x%02x op 0x%02x txn=0x%04x -- this (cat,op)"
+                               " pair is not grounded; ground it before answering\n",
+                               mv.category, mv.opcode, mv.txn);
+                        fflush(stdout);
+                    }
+                    if (cm_shape != CM_RSP_NONE) {
                         if (ps->sysap_send == 0) {
                             ps->sysap_send = 1;
                         }
@@ -2008,15 +2142,11 @@ int main(int argc, char **argv)
                         mp.send_seq = scs_seq_advance(&ps->vc.seq);
                         mp.sysap_send_msg = ps->sysap_send++;
                         mp.sysap_ack_msg = mv.sysap_send_msg; /* ack this request */
-                        /* The response SHAPE is per-category, not universal.
-                         * cat 0x01 (commit/lock-rebuild/0x09): echo the requester's
-                         *   whole SYSAP body with the response bit set (spec 4j).
-                         * cat 0x06 (closes the transaction): carry ONLY the token on
-                         *   an empty body -- echoing its payload reflects the peer's
-                         *   own I/O structures back at it and bugchecks it
-                         *   (INCONSTATE). See scs_member_build_token_response(). */
+                        /* The response SHAPE is per-category and comes from the
+                         * grounded allowlist in cm_response_shape() -- never from a
+                         * default. See that function for why. */
                         uint8_t rframe[SCS_MEMBER_FRAME_LEN];
-                        int rc_build = (mv.category == SCS_MEMBER_CAT_MEMBERSHIP)
+                        int rc_build = (cm_shape == CM_RSP_TOKEN)
                             ? scs_member_build_token_response(&mp, buf, (size_t)n, rframe)
                             : scs_member_build_response(&mp, buf, (size_t)n, rframe);
                         if (rc_build == 0 &&
@@ -2328,7 +2458,8 @@ int main(int argc, char **argv)
              * The ~5 s delay is taken from the reference; what the real joiner
              * actually waits on is NOT grounded (see spec 5(z)). */
             if (do_connect && ps->cfg_sent && !ps->joiner_cfg2_sent &&
-                (!cm_cfg2_peer_chosen || getenv("OVMX_CFG2_ALL") != NULL) &&
+                (getenv("OVMX_CFG2_ALL") != NULL ||
+                 cm_pick_coordinator(peers) == ps) &&
                 (monotonic_ms() - ps->cfg_ms) >= (long)JOIN_CFG2_DELAY_MS) {
                 struct scs_member_params mp;
                 memset(&mp, 0, sizeof(mp));
@@ -2349,12 +2480,12 @@ int main(int argc, char **argv)
                                   sizeof(c2frame)) > 0) {
                     scs_vc_record_sent(&ps->vc, mp.send_seq, monotonic_ms());
                     ps->joiner_cfg2_sent = 1;
-                    cm_cfg2_peer_chosen = 1; /* single coordinator -- see above */
                     cm_config_frames++;
                     log_ts(stdout);
                     printf(" SCSD-I-CMCONFIG2, sent DEFERRED op 0x02 config/topology"
-                           " on OUR joiner VC (send_msg=%u ack_msg=%u) -- expect the"
-                           " member's 0x04 ack then its op 0x03 COMMIT\n",
+                           " to node %u on OUR joiner VC (send_msg=%u ack_msg=%u)"
+                           " -- expect its 0x04 ack then its op 0x03 COMMIT\n",
+                           (unsigned)(peer_node_number(ps) & 0x03ff),
                            mp.sysap_send_msg, mp.sysap_ack_msg);
                     fflush(stdout);
                 }

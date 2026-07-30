@@ -498,6 +498,16 @@ static int send_joiner_connect_request(int sock, int ifindex, struct peer_state 
                                        const uint8_t our_hw_mac[6],
                                        const uint8_t our_src_logical[6])
 {
+    /* vms-760 server-first: when OVMX_PURE_SERVER is set, OVMX does NOT open its
+     * own VMS$VAXcluster VC. The established member DRIVES admission -- it opens
+     * the MSCP$DISK connect AND the VC itself (af2-firsttimer-established). OVMX's
+     * pre-emptive active-joiner VC (vms-d94) short-circuits that to status NEW and
+     * the member never opens the MSCP$DISK connect that leads to MEMBER. As a pure
+     * server OVMX answers the member's dir/lookups (serving MSCP$DISK + VMS$VAXcluster
+     * affirmative) and accepts the member-opened connects. */
+    if (getenv("OVMX_PURE_SERVER") != NULL) {
+        return 0;
+    }
     struct scs_connect_params cp;
     memset(&cp, 0, sizeof(cp));
     memcpy(cp.dst_mac, ps->eth_mac, 6);
@@ -1065,11 +1075,27 @@ int main(int argc, char **argv)
                         ps->sysap_recv = mv.sysap_send_msg;
                     }
 
-                    /* vms-d94: the add-member burst is NO LONGER triggered on
-                     * the member-opened connection -- it rides OUR joiner
-                     * connection (see the OVMX_JOINER_CONID bind branch). We keep
-                     * tracking the member's SYSAP send-msg# high-water above so
-                     * our joiner-side acks (sysap_ack_msg) stay correct. */
+                    /* vms-d94 (FORMATION): the burst rides OUR joiner connection,
+                     * not the member-opened one.
+                     *
+                     * vms-760 server-first (OVMX_PURE_SERVER, ESTABLISHED join): the
+                     * MEMBER sends its config FIRST on the VC it opened; OVMX answers
+                     * with ITS add-member burst on receipt (af2 143.759: member
+                     * config ss=12 -> joiner config ss=12). Fire once, on the first
+                     * member SYSAP config frame (not a commit/lock txn). */
+                    if (getenv("OVMX_PURE_SERVER") != NULL && !ps->cm_config_sent &&
+                        !mv.is_member_txn) {
+                        int c = cm_send_config_burst(sock, (int)ifindex, ps,
+                                                     our_hw_mac, our_src_logical,
+                                                     OVMX_LOCAL_CONID, ps->remote_conid);
+                        cm_config_frames += c;
+                        log_ts(stdout);
+                        printf(" SCSD-I-CMCONFIG, answered member config with add-member"
+                               " burst (%d frames) on the member VC local=0x%08X"
+                               " remote=0x%08X (server-first)\n",
+                               c, (unsigned)OVMX_LOCAL_CONID, ps->remote_conid);
+                        fflush(stdout);
+                    }
 
                     /* Answer the member-driven op 0x03 commit / op 0x05
                      * lock-rebuild transactions (echo the token, spec sec 4j). */
@@ -1947,6 +1973,30 @@ int main(int argc, char **argv)
                  * its request until it accepts our response, so RE-ANSWER each
                  * request (a new sequenced message with current counters) instead
                  * of going silent once bound -- a lost response then self-heals. */
+                int first = !ps->connected;
+                /* vms-760 server-first: the member-opened VC is accepted with an
+                 * op=1 CONNECT-ECHO *before* the op=2 CONNECT-RESPONSE (every accept
+                 * in this protocol echoes first; af2 VC 143.7586 op=1 -> 143.7587
+                 * op=2). Echo only on FIRST bind; re-answers below just re-send the
+                 * op=2. Skipping the echo is why the member never bound OVMX's VC
+                 * and withheld its config. */
+                if (first && getenv("OVMX_PURE_SERVER") != NULL) {
+                    struct scs_dir_params ep;
+                    memset(&ep, 0, sizeof(ep));
+                    memcpy(ep.dst_mac, ps->eth_mac, 6);
+                    memcpy(ep.src_mac, our_hw_mac, 6);
+                    memcpy(ep.src_logical, our_src_logical, 6);
+                    memcpy(ep.peer_logical, ps->logical, 6);
+                    ep.remote_conid = v.local_conid; /* member's VC handle (echoed) */
+                    ep.local_conid = 0;
+                    ep.incarnation = ps->incarnation;
+                    ep.recv_ack = ps->vc.seq.recv_seq;
+                    ep.send_seq = scs_seq_advance(&ps->vc.seq);
+                    uint8_t eframe[SCS_DIR_ECHO_FRAME_LEN];
+                    if (scs_dir_build_vc_echo(&ep, eframe) == 0) {
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, eframe, sizeof(eframe));
+                    }
+                }
                 struct scs_connect_params cp;
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
@@ -1963,7 +2013,6 @@ int main(int argc, char **argv)
                     send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe, sizeof(rframe)) > 0) {
                     ps->remote_conid = v.local_conid;
                     connect_resp_sent++;
-                    int first = !ps->connected;
                     ps->connected = 1;
                     log_ts(stdout);
                     printf(" SCSD-I-CONNRESP, %s peer VMS$VAXcluster CONNECT-REQUEST:"
@@ -1972,15 +2021,11 @@ int main(int argc, char **argv)
                            v.local_conid, OVMX_LOCAL_CONID, cp.recv_ack, cp.send_seq,
                            cp.incarnation ? cp.incarnation : 1);
                     fflush(stdout);
-                    /* vms-d94: do NOT send the add-member burst on this
-                     * member-opened connection. The clean-ref grounding
-                     * (formation-clean-2node.pcap) shows the joiner sends its
-                     * add-member config on the connection IT opens (idx52/59),
-                     * not on the member-opened one -- OVMX doing the latter is
-                     * exactly why VAX1 ignored the burst and looped START. We
-                     * still answer the member's CONNECT-REQUEST (above) to keep
-                     * that connection alive; the burst rides our own joiner
-                     * connection, bound in the OVMX_JOINER_CONID branch below. */
+                    /* vms-760 server-first: do NOT burst config here. The MEMBER
+                     * sends its 190-byte config FIRST (af2 t~143.759, member ss=12
+                     * before joiner responds ss=12); OVMX answers with its own burst
+                     * in the member-config handler on receipt. Bursting proactively
+                     * (before the member's config) left the member silent. */
                 }
             } else if (v.remote_conid == OVMX_JOINER_CONID && !ps->joiner_connected) {
                 /* vms-d94: the member's CONNECT-RESPONSE to OUR active-joiner

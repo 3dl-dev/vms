@@ -455,6 +455,26 @@ int scs_dir_build_mscp_echo(const struct scs_dir_params *p,
     return 0;
 }
 
+int scs_dir_build_vc_echo(const struct scs_dir_params *p,
+                          uint8_t out[SCS_DIR_ECHO_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    /* vms-760: the joiner's op=1 CONNECT-ECHO answering the MEMBER-opened
+     * VMS$VAXcluster VC (af2-firsttimer-established VC pair, ~143.7586). Same
+     * 66-byte SCA as the MSCP echo; the only delta is the truncated SYSAP-name
+     * tail [62:66] = 'VMS$' ("VMS$VAXcluster" clipped to the 66-byte window).
+     * Every accept in this protocol echoes op=1 before its op=2/op=4 response. */
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_echo_tmpl, SCS_DIR_ECHO_SCA_LEN, p->recv_ack, p->send_seq,
+                     p->incarnation, out);
+    put_le32(out + 14 + 50, p->remote_conid); /* member's VC handle (echoed) */
+    out[14 + 16] = SCS_MSGTYPE_SEQAPP;         /* opcode 0x4b (data-phase) */
+    memcpy(out + 14 + 62, "VMS$", 4);          /* GROUNDED name tail */
+    return 0;
+}
+
 int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
                               uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN])
 {

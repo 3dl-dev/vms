@@ -248,6 +248,15 @@ int scs_dir_build_mscp_echo(const struct scs_dir_params *p,
                             uint8_t out[SCS_DIR_ECHO_FRAME_LEN]);
 
 /*
+ * scs_dir_build_vc_echo - vms-760 SERVER-FIRST established-join: build the op=1
+ * CONNECT-ECHO answering the MEMBER-opened VMS$VAXcluster VC. Same 66-byte SCA as
+ * the MSCP echo; delta is the truncated name tail [62:66]='VMS$'. Sent before the
+ * op=2 CONNECT-RESPONSE (every accept echoes op=1 first).
+ */
+int scs_dir_build_vc_echo(const struct scs_dir_params *p,
+                          uint8_t out[SCS_DIR_ECHO_FRAME_LEN]);
+
+/*
  * scs_dir_build_mscp_accept - vms-760 SERVER-FIRST established-join: build the
  * op=4 CONNECT-ACCEPT that BINDS OVMX's MSCP$DISK server connection. Structurally
  * IDENTICAL to the op=3 dir CONNECT-CONFIRM (62-byte SCA, opcode 0x5b, marker

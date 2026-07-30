@@ -230,6 +230,23 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
 #define OFF_HELLO_SRCLOG 24  /* HELLO SCA src-logical addr (abs 24-29) */
 #define OFF_HELLO_DIRFLG 92  /* directed-HELLO flag (abs 92-93) */
 
+/* vms-760: NEW->MEMBER join sequencer states (stop-and-wait; one frame
+ * outstanding). Each WAIT state is advanced by the matching member frame in the
+ * receive path. See docs/design-cluster-join-choreography.md. */
+enum join_step {
+    JS_IDLE = 0,
+    JS_DIR_CONNECT,      /* sent own dir connect-req; await member echo(op1)+response(op2) */
+    JS_DIR_LOOKUP_TAPE,  /* sent confirm + MSCP$TAPE lookup; await member response (miss) */
+    JS_DIR_LOOKUP_DISK,  /* sent MSCP$DISK lookup; await member HIT */
+    JS_MSCP_CONNECT,     /* sent MSCP$DISK connect; await member accept (MSCPBOUND) */
+    JS_DIR_LOOKUP_VC,    /* sent VMS$VAXcluster lookup; await member HIT */
+    JS_VC_CONNECT,       /* sent VC connect; await member accept (JOINBOUND) */
+    JS_ADD_MEMBER,       /* sent add-member burst; await member reciprocation -> MEMBER */
+    JS_DONE
+};
+#define JOIN_RETX_TIMEOUT_MS 400u  /* stop-and-wait step retransmit (< member's ~1.4s START-reissue) */
+#define JOIN_RETX_MAX        6u
+
 struct peer_state {
     int      in_use;
     uint8_t  eth_mac[6];      /* peer's Ethernet source MAC (we reply here) */
@@ -295,6 +312,19 @@ struct peer_state {
     uint32_t mscp_remote_conid;    /* the member's MSCP handle on OUR connection (from its accept) */
     uint16_t mscp_req_seq;         /* send_seq of our MSCP CONNECT-REQUEST (retransmits REUSE it) */
     struct timespec last_mscp_req; /* CLOCK_MONOTONIC of our last MSCP CONNECT-REQUEST (retx) */
+    /* --- vms-760: the NEW->MEMBER join SEQUENCER. The joiner presents the FULL
+     * dir-CLIENT connection-set in strict stop-and-wait order on the ONE shared
+     * per-channel send_seq (docs/design-cluster-join-choreography.md): own dir
+     * connect -> confirm -> lookup MSCP$TAPE(miss) -> lookup MSCP$DISK(hit) ->
+     * MSCP$DISK connect -> lookup VMS$VAXcluster(hit) -> VC connect -> add-member
+     * burst. Each connect is issued ONLY after its lookup HIT, so no frame the
+     * member cannot process ever enters the shared sequence (the 760b/760mscp
+     * hole). Exactly one join-drive frame outstanding; retransmits REUSE seq. --- */
+    int      join_step;            /* enum join_step; current stop-and-wait state */
+    uint16_t js_lookup_seq;        /* send_seq of the outstanding lookup-request (retx REUSE) */
+    char     js_lookup_name[16];   /* SYSAP name of the outstanding lookup (for retx rebuild) */
+    struct timespec js_last_tx;    /* CLOCK_MONOTONIC of the outstanding join-drive frame */
+    unsigned js_retx;              /* retransmits of the current step (cap = JOIN_RETX_MAX) */
     /* --- vms-9f3: NISCA channel packet-size verification (padded directed
      * HELLO, spec sec 4k). An ESTABLISHED VAX1 zero-pads a directed HELLO up to
      * NISCS_MAX_PKTSZ and retransmits it (1500->1069->853->745, ~6s) until OVMX
@@ -552,13 +582,17 @@ static int send_own_dir_connect_request(int sock, int ifindex, struct peer_state
 }
 
 /*
- * send_own_dir_lookup - vms-760: query the member's directory for `name` on OUR
- * directory connection (idx32-style). Advances the shared VC send_seq (a new
- * sequenced message).
+ * send_own_dir_lookup - vms-760: query the member's directory for a SYSAP `name`
+ * on OUR directory connection. The FIRST send of a lookup (retx=0) allocates a new
+ * shared send_seq and stores it + the name in the sequencer (js_lookup_seq/
+ * js_lookup_name) for stop-and-wait retransmit; a retransmit (retx=1) REUSES that
+ * stored seq + name -- a retransmit is not a new message, and advancing the seq
+ * would open the 760mscp hole (spec sec 4L(4)). Returns 1 if a frame was sent.
  */
 static int send_own_dir_lookup(int sock, int ifindex, struct peer_state *ps,
                                const uint8_t our_hw_mac[6],
-                               const uint8_t our_src_logical[6], const char *name)
+                               const uint8_t our_src_logical[6],
+                               const char *name, int retx)
 {
     struct scs_dir_lookup_params lp;
     memset(&lp, 0, sizeof(lp));
@@ -569,13 +603,53 @@ static int send_own_dir_lookup(int sock, int ifindex, struct peer_state *ps,
     lp.remote_conid = ps->own_dir_remote_conid; /* member's handle on OUR dir connection */
     lp.local_conid = SCS_DIR_OVMX_JOINER_CONID;
     lp.recv_ack = ps->vc.seq.recv_seq;
-    lp.send_seq = scs_seq_advance(&ps->vc.seq);
+    if (retx) {
+        lp.send_seq = ps->js_lookup_seq;       /* REUSE the outstanding seq */
+        strncpy(lp.name, ps->js_lookup_name, SCS_DIR_NAME_LEN - 1);
+    } else {
+        lp.send_seq = scs_seq_advance(&ps->vc.seq);
+        ps->js_lookup_seq = lp.send_seq;       /* store for retransmit reuse */
+        memset(ps->js_lookup_name, 0, sizeof(ps->js_lookup_name));
+        strncpy(ps->js_lookup_name, name, SCS_DIR_NAME_LEN - 1);
+        strncpy(lp.name, name, SCS_DIR_NAME_LEN - 1);
+    }
     lp.incarnation = ps->incarnation;
-    strncpy(lp.name, name, SCS_DIR_NAME_LEN - 1);
     uint8_t f[SCS_DIR_LOOKUP_FRAME_LEN];
     if (scs_dir_build_lookup_request(&lp, f) == 0 &&
         send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
         scs_vc_record_sent(&ps->vc, lp.send_seq, monotonic_ms());
+        clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * send_own_dir_confirm - vms-760: send the op=3 dir CONNECT-CONFIRM on OUR
+ * directory connection, the third frame of the joiner's own SCS$DIRECTORY client
+ * handshake (clean-ref SCA idx26). Fire-and-forget: the member bare-ACKs it (0x48)
+ * but sends no response, so the sequencer does NOT wait on it. Advances the shared
+ * send_seq once. Returns 1 if a frame was sent.
+ */
+static int send_own_dir_confirm(int sock, int ifindex, struct peer_state *ps,
+                                const uint8_t our_hw_mac[6],
+                                const uint8_t our_src_logical[6])
+{
+    struct scs_dir_params dp;
+    memset(&dp, 0, sizeof(dp));
+    memcpy(dp.dst_mac, ps->eth_mac, 6);
+    memcpy(dp.src_mac, our_hw_mac, 6);
+    memcpy(dp.src_logical, our_src_logical, 6);
+    memcpy(dp.peer_logical, ps->logical, 6);
+    dp.remote_conid = ps->own_dir_remote_conid;
+    dp.local_conid = SCS_DIR_OVMX_JOINER_CONID;
+    dp.recv_ack = ps->vc.seq.recv_seq;
+    dp.send_seq = scs_seq_advance(&ps->vc.seq);
+    dp.incarnation = ps->incarnation;
+    uint8_t f[SCS_DIR_CONFIRM_FRAME_LEN];
+    if (scs_dir_build_connect_confirm(&dp, f) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        scs_vc_record_sent(&ps->vc, dp.send_seq, monotonic_ms());
         return 1;
     }
     return 0;
@@ -626,6 +700,18 @@ int main(int argc, char **argv)
             return 0;
         }
     }
+
+    /* vms-760: the NEW->MEMBER join SEQUENCER (full dir-CLIENT choreography) is
+     * gated behind OVMX_JOIN_SEQ, default OFF. It drives OVMX cleanly through 6 of
+     * 8 steps against the live lab (own dir connect -> confirm -> lookups ->
+     * MSCP$DISK connect) but STALLS at the MSCP$DISK connect on an ESTABLISHED
+     * cluster: the established member opens its own dir probe to resolve OVMX and
+     * does not process the (byte-perfect) MSCP connect -- its admission gating
+     * differs from the fresh-formation reference (formation-clean-2node.pcap),
+     * which needs an established-join MSCP capture to ground. With the flag OFF,
+     * OVMX keeps the proven VC-connect-first path that reaches SHOW CLUSTER status
+     * NEW (Rule 9: no regression). See docs/design-cluster-join-choreography.md. */
+    int join_seq_enabled = (getenv("OVMX_JOIN_SEQ") != NULL);
 
     /* --connect implies --respond implies --emit-hello (a beacon is what makes
      * the peer VAX send us the directed HELLO we reply to). */
@@ -1211,23 +1297,50 @@ int main(int argc, char **argv)
              * MEMBER-opened connection is exactly why VAX1 ignored the burst and
              * re-issued START round-0 forever.
              *
-             * The PROMPT send happens in the directory handler the moment the
-             * post-START directory phase begins (see SCSD-I-DIRCONN). Here we
-             * only RETRANSMIT it (reusing the same send_seq) every ~1s until the
-             * member accepts (joiner_connected), in case the first was lost. */
-            if (do_connect && ps->start_acked && ps->joiner_connect_sent &&
-                !ps->joiner_connected) {
+             * vms-760: the join SEQUENCER drives each step's PROMPT send from the
+             * receive path (SCSD-I-JOINSEQ). Here we only RETRANSMIT the current
+             * outstanding step (reusing its stored send_seq -- never advancing, or
+             * we reopen the 760mscp hole) if its response has not arrived, capped
+             * at JOIN_RETX_MAX. Coarsely HELLO-driven; the happy path advances
+             * receive-driven and never needs this. */
+            if (do_connect && ps->start_acked && ps->join_step != JS_IDLE &&
+                ps->join_step != JS_DONE && ps->join_step != JS_ADD_MEMBER &&
+                ps->js_retx < JOIN_RETX_MAX) {
                 long now_ms = monotonic_ms();
-                long last_ms = ps->last_joiner_req.tv_sec * 1000L +
-                               ps->last_joiner_req.tv_nsec / 1000000L;
-                if ((now_ms - last_ms) >= 1000) {
-                    if (send_joiner_connect_request(sock, (int)ifindex, ps,
-                                                    our_hw_mac, our_src_logical)) {
-                        connect_req_sent++;
+                long last_ms = ps->js_last_tx.tv_sec * 1000L +
+                               ps->js_last_tx.tv_nsec / 1000000L;
+                if ((now_ms - last_ms) >= (long)JOIN_RETX_TIMEOUT_MS) {
+                    int sent = 0;
+                    switch (ps->join_step) {
+                    case JS_DIR_CONNECT:
+                        sent = send_own_dir_connect_request(sock, (int)ifindex, ps,
+                                                            our_hw_mac, our_src_logical);
+                        clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                        break;
+                    case JS_DIR_LOOKUP_TAPE:
+                    case JS_DIR_LOOKUP_DISK:
+                    case JS_DIR_LOOKUP_VC:
+                        sent = send_own_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
+                                                   our_src_logical, NULL, 1);
+                        break;
+                    case JS_MSCP_CONNECT:
+                        sent = send_mscp_connect_request(sock, (int)ifindex, ps,
+                                                         our_hw_mac, our_src_logical);
+                        clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                        break;
+                    case JS_VC_CONNECT:
+                        sent = send_joiner_connect_request(sock, (int)ifindex, ps,
+                                                           our_hw_mac, our_src_logical);
+                        clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                        break;
+                    default:
+                        break;
+                    }
+                    if (sent) {
+                        ps->js_retx++;
                         log_ts(stdout);
-                        printf(" SCSD-I-CONNREQ, retransmit OUR VMS$VAXcluster"
-                               " CONNECT-REQUEST local_conid=0x%08X seq=%u\n",
-                               OVMX_JOINER_CONID, ps->joiner_req_seq);
+                        printf(" SCSD-I-JOINSEQ, retransmit join step %d (retx %u)\n",
+                               ps->join_step, ps->js_retx);
                         fflush(stdout);
                     }
                 }
@@ -1338,23 +1451,31 @@ int main(int argc, char **argv)
                                ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
                                ps->vc.seq.send_seq, ps->vc.seq.recv_seq);
                         fflush(stdout);
-                        /* vms-760: do NOT open OUR OWN SCS$DIRECTORY connection
-                         * here. Byte-verified against d94-760b.pcap: OVMX
-                         * preemptively opening its own directory connect
-                         * SUPPRESSES the member's own directory probe of OVMX,
-                         * which leaves the VMS$VAXcluster connect permanently
-                         * loc=0 (member never supplies its VC handle) -- OVMX
-                         * retransmits the connect forever and never reaches even
-                         * NEW. This is an OVMX drive bug, NOT a protocol
-                         * incompatibility (the clean member opens its OWN dir
-                         * probe regardless, formation-clean-2node SCA idx76, and
-                         * still reciprocates). Revert to the passive dir-RESPONDER
-                         * path (branch b2 below) that reaches NEW cleanly, and add
-                         * the joiner's missing MSCP$DISK client connection (fired
-                         * in the DIRCONN branch, before the VC connect) as the
-                         * NEW->MEMBER lever. The send_own_dir_* builders remain in
-                         * the tree for the grounded dir-client contingency (spec
-                         * sec 4L(7)) but are no longer driven from here. */
+                        /* vms-760: KICK OFF THE JOIN SEQUENCER. Open OUR OWN
+                         * SCS$DIRECTORY client connection as step 1 of the full
+                         * dir-client choreography (docs/design-cluster-join-
+                         * choreography.md). The earlier 760b failure -- opening our
+                         * own dir then jumping straight to the VC connect -- was an
+                         * OVMX DRIVE bug (VC issued before its SYSAP was resolved),
+                         * NOT a protocol block: the clean member opens its own dir
+                         * probe regardless (formation-clean-2node SCA idx76) while
+                         * the joiner is a dir-client. The sequencer now drives the
+                         * connects strictly IN ORDER, each gated on its lookup HIT,
+                         * so no unprocessable frame ever enters the shared seq. The
+                         * member-opened dir probe is still answered by branch b2
+                         * (dir-SERVER) on a distinct Con.ID pair. */
+                        if (join_seq_enabled &&
+                            ps->join_step == JS_IDLE && !ps->own_dir_sent &&
+                            send_own_dir_connect_request(sock, (int)ifindex, ps,
+                                                         our_hw_mac, our_src_logical)) {
+                            ps->join_step = JS_DIR_CONNECT;
+                            clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                            log_ts(stdout);
+                            printf(" SCSD-I-JOINSEQ, opened OUR SCS$DIRECTORY client"
+                                   " connect local=0x%08X seq=%u (join step 1/8)\n",
+                                   (unsigned)SCS_DIR_OVMX_JOINER_CONID, ps->own_dir_req_seq);
+                            fflush(stdout);
+                        }
                     }
                 }
             }
@@ -1378,16 +1499,17 @@ int main(int argc, char **argv)
                               ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
             uint32_t lconid = (uint32_t)buf[68] | ((uint32_t)buf[69] << 8) |
                               ((uint32_t)buf[70] << 16) | ((uint32_t)buf[71] << 24);
-            /* vms-760: the member ACCEPTS OUR MSCP$DISK client connect. Same
-             * Con.ID-signature acceptance as the VMS$VAXcluster case (opcode
-             * agnostic per spec sec 4L(3): the member's accept is msgtype 0x4b,
-             * NOT 0x5b; key on the handle pair, not the opcode). remote == our
-             * MSCP handle, local = the member's freshly-supplied MSCP handle
-             * (clean-ref SCA idx39, e.g. 0xE23A0009). Bind it; the existing 1-for-1
-             * 0x48 credit path already credited this sequenced frame. The bound
-             * MSCP$DISK connection is the joiner-connection-set element the member
-             * requires before it reciprocates the add-member config (NEW->MEMBER). */
-            if (rconid == OVMX_MSCP_CONID && lconid != 0) {
+            /* vms-760: op field [46:48] (abs 60) distinguishes the member's
+             * connect-RESPONSE (op=2, binds a connection) from its lookup-RESPONSE
+             * (op=0x0a, answers one of OUR dir-client lookups). Both echo OUR
+             * handle in rconid, so the sequencer keys on op, not just the pair. */
+            uint16_t dop = (n >= 62) ? ((uint16_t)buf[60] | ((uint16_t)buf[61] << 8)) : 0xffff;
+
+            /* vms-760: the member ACCEPTS OUR MSCP$DISK client connect (op=2,
+             * remote == our MSCP handle, local = member's fresh MSCP handle;
+             * clean-ref SCA idx40). Con.ID-signature, opcode-agnostic (spec sec
+             * 4L(3)). On bind, advance the sequencer: resolve VMS$VAXcluster next. */
+            if (rconid == OVMX_MSCP_CONID && lconid != 0 && dop == SCS_DIR_OP_RESPONSE) {
                 struct peer_state *ps = peer_find_or_add(peers, src_mac);
                 if (ps != NULL && !ps->mscp_connected) {
                     ps->mscp_remote_conid = lconid;
@@ -1397,10 +1519,20 @@ int main(int argc, char **argv)
                            " connect: local=0x%08X remote=0x%08X\n",
                            (unsigned)OVMX_MSCP_CONID, lconid);
                     fflush(stdout);
+                    if (ps->join_step == JS_MSCP_CONNECT) {
+                        ps->join_step = JS_DIR_LOOKUP_VC;
+                        ps->js_retx = 0;
+                        send_own_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
+                                            our_src_logical, "VMS$VAXcluster", 0);
+                        log_ts(stdout);
+                        printf(" SCSD-I-JOINSEQ, lookup VMS$VAXcluster seq=%u (step 6/8)\n",
+                               ps->js_lookup_seq);
+                        fflush(stdout);
+                    }
                 }
                 continue;
             }
-            if (rconid == OVMX_JOINER_CONID && lconid != 0) {
+            if (rconid == OVMX_JOINER_CONID && lconid != 0 && dop == SCS_DIR_OP_RESPONSE) {
                 struct peer_state *ps = peer_find_or_add(peers, src_mac);
                 if (ps != NULL && !ps->joiner_connected) {
                     ps->joiner_remote_conid = lconid;
@@ -1416,24 +1548,81 @@ int main(int argc, char **argv)
                                                      OVMX_JOINER_CONID, lconid);
                         cm_config_frames += c;
                         ps->joiner_cm_sent = 1;
+                        ps->join_step = JS_ADD_MEMBER; /* await the member's reciprocal config */
                         log_ts(stdout);
                         printf(" SCSD-I-CMCONFIG, sent add-member config burst"
                                " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"
-                               " on OUR joiner VC\n", c);
+                               " on OUR joiner VC (step 8/8)\n", c);
                         fflush(stdout);
                     }
                 }
                 continue;
             }
-            /* vms-760: the member ACCEPTS OUR OWN SCS$DIRECTORY connect (same
-             * Con.ID-signature acceptance as the VMS$VAXcluster case: remote ==
-             * our handle, local = the member's freshly-supplied handle). Bind it
-             * and query the member's directory for VMS$VAXcluster (idx32-style) --
-             * the active-joiner directory drive the member appears to require
-             * before it reciprocates the add-member config. */
+            /* vms-760: frames on OUR SCS$DIRECTORY client connection (rconid ==
+             * our dir handle). Two kinds, distinguished by op: */
             if (rconid == SCS_DIR_OVMX_JOINER_CONID && lconid != 0) {
                 struct peer_state *ps = peer_find_or_add(peers, src_mac);
-                if (ps != NULL && !ps->own_dir_connected) {
+                if (ps == NULL) {
+                    continue;
+                }
+                /* (A) the member's LOOKUP-RESPONSE (op=0x0a) to one of OUR
+                 * dir-client lookups: advance the stop-and-wait sequencer. HIT vs
+                 * MISS = result [78:94] (abs 92) != "NOT PRESENT HERE" (marker is 1
+                 * for both -- do NOT key on it). */
+                if (dop == SCS_DIR_OP_LOOKUP && n >= 108) {
+                    int affirmative =
+                        memcmp(buf + 92, SCS_DIR_NOT_PRESENT, SCS_DIR_RESULT_LEN) != 0;
+                    ps->js_retx = 0;
+                    if (ps->join_step == JS_DIR_LOOKUP_TAPE) {
+                        /* MSCP$TAPE expected MISS -> resolve MSCP$DISK next. */
+                        ps->join_step = JS_DIR_LOOKUP_DISK;
+                        send_own_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
+                                            our_src_logical, "MSCP$DISK", 0);
+                        log_ts(stdout);
+                        printf(" SCSD-I-JOINSEQ, MSCP$TAPE %s; lookup MSCP$DISK seq=%u"
+                               " (step 4/8)\n", affirmative ? "HIT" : "miss",
+                               ps->js_lookup_seq);
+                        fflush(stdout);
+                    } else if (ps->join_step == JS_DIR_LOOKUP_DISK && affirmative) {
+                        /* vms-760: the clean joiner sends a SECOND MSCP$DISK
+                         * lookup and THEN the connect, pipelined (clean-ref
+                         * sca34 seq5 lookup -> sca35 seq6 connect, back-to-back
+                         * without waiting for the 2nd response). The live member
+                         * accepts the MSCP$DISK connect only after TWO DISK lookup
+                         * exchanges -- with ONE, its recv_ack freezes and the
+                         * connect is never bound (observed d94-760seq.pcap). Send
+                         * lookup #2 (fire-and-forget), then the connect. */
+                        send_own_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
+                                            our_src_logical, "MSCP$DISK", 0);
+                        ps->join_step = JS_MSCP_CONNECT;
+                        send_mscp_connect_request(sock, (int)ifindex, ps, our_hw_mac,
+                                                  our_src_logical);
+                        clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                        log_ts(stdout);
+                        printf(" SCSD-I-JOINSEQ, MSCP$DISK HIT; 2nd lookup + MSCP$DISK"
+                               " connect local=0x%08X seq=%u (step 5/8)\n",
+                               (unsigned)OVMX_MSCP_CONID, ps->mscp_req_seq);
+                        fflush(stdout);
+                    } else if (ps->join_step == JS_DIR_LOOKUP_VC && affirmative) {
+                        /* VMS$VAXcluster resolved -> open the VC connect. */
+                        ps->join_step = JS_VC_CONNECT;
+                        send_joiner_connect_request(sock, (int)ifindex, ps, our_hw_mac,
+                                                    our_src_logical);
+                        clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                        connect_req_sent++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-JOINSEQ, VMS$VAXcluster HIT; VC connect"
+                               " local=0x%08X seq=%u (step 7/8)\n",
+                               OVMX_JOINER_CONID, ps->joiner_req_seq);
+                        fflush(stdout);
+                    }
+                    continue;
+                }
+                /* (B) the member's CONNECT-RESPONSE (op=2) binding OUR dir
+                 * connection: send the op=3 confirm and START the SYSAP lookups
+                 * (MSCP$TAPE first) -- the choreography the member requires before
+                 * it will accept the MSCP$DISK / VC connects (NEW->MEMBER). */
+                if (!ps->own_dir_connected && dop == SCS_DIR_OP_RESPONSE) {
                     ps->own_dir_remote_conid = lconid;
                     ps->own_dir_connected = 1;
                     log_ts(stdout);
@@ -1441,32 +1630,17 @@ int main(int argc, char **argv)
                            " connect: local=0x%08X remote=0x%08X\n",
                            (unsigned)SCS_DIR_OVMX_JOINER_CONID, lconid);
                     fflush(stdout);
-                    if (!ps->own_dir_lookup_sent &&
-                        send_own_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
-                                            our_src_logical, "VMS$VAXcluster")) {
-                        ps->own_dir_lookup_sent = 1;
-                        log_ts(stdout);
-                        printf(" SCSD-I-OWNDIRLOOKUP, queried member directory for"
-                               " VMS$VAXcluster\n");
-                        fflush(stdout);
-                    }
-                    /* vms-760: now that OUR directory connection is up + queried
-                     * (clean-ref order: directory THEN VMS$VAXcluster connect),
-                     * open OUR VMS$VAXcluster connection. The member no longer
-                     * opens its own directory connect to us once we opened ours,
-                     * so dir_connected may never fire -- drive the connect here
-                     * too (guarded by joiner_connect_sent so it fires once). */
-                    if (ps->start_acked && !ps->joiner_connected &&
-                        !ps->joiner_connect_sent &&
-                        send_joiner_connect_request(sock, (int)ifindex, ps,
-                                                    our_hw_mac, our_src_logical)) {
-                        connect_req_sent++;
-                        log_ts(stdout);
-                        printf(" SCSD-I-CONNREQ, sent OUR VMS$VAXcluster CONNECT-REQUEST"
-                               " local_conid=0x%08X seq=%u (after own-dir drive)\n",
-                               OVMX_JOINER_CONID, ps->joiner_req_seq);
-                        fflush(stdout);
-                    }
+                    /* op=3 confirm (fire-and-forget), then the first lookup. */
+                    send_own_dir_confirm(sock, (int)ifindex, ps, our_hw_mac,
+                                         our_src_logical);
+                    ps->join_step = JS_DIR_LOOKUP_TAPE;
+                    ps->js_retx = 0;
+                    send_own_dir_lookup(sock, (int)ifindex, ps, our_hw_mac,
+                                        our_src_logical, "MSCP$TAPE", 0);
+                    log_ts(stdout);
+                    printf(" SCSD-I-JOINSEQ, dir confirm + lookup MSCP$TAPE seq=%u"
+                           " (steps 2-3/8)\n", ps->js_lookup_seq);
+                    fflush(stdout);
                 }
                 continue;
             }
@@ -1545,27 +1719,19 @@ int main(int argc, char **argv)
                                ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
                                ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5]);
                         fflush(stdout);
-                        /* vms-760: do NOT fire the MSCP$DISK connect here. LIVE-
-                         * GROUNDED (d94-760mscp.pcap, 2026-07-29): a joiner MSCP
-                         * connect-request the member cannot yet process (because
-                         * OVMX never resolved MSCP$DISK as a directory CLIENT
-                         * first) is not accepted AND, riding the shared per-channel
-                         * send_seq, it creates an in-order HOLE that freezes the
-                         * member's recv_ack (observed ack=2 forever) so it NEVER
-                         * accepts the VMS$VAXcluster connect at the next seq --
-                         * regressing OVMX below NEW to blank status. The clean
-                         * joiner (formation-clean-2node SCA idx20/31/35/47) opens
-                         * its OWN dir-CLIENT connection, LOOKS UP MSCP$DISK +
-                         * VMS$VAXcluster on the member (affirmative) and ONLY THEN
-                         * connects each SYSAP, all on one shared monotonic seq.
-                         * The full dir-client resolution choreography is the next
-                         * deliverable (spec sec 4L(7)); the MSCP builder + accept
-                         * handler + peer_state stay in the tree for it. Until then
-                         * keep the clean NEW-reaching path: VC connect only. */
-                        /* vms-d94: PROMPTLY open OUR VMS$VAXcluster connection to
-                         * the member (clean-ref idx52) before its CM times out and
-                         * re-issues START. */
-                        if (ps->start_acked && !ps->joiner_connected &&
+                        /* vms-760: this is OVMX answering the MEMBER-opened
+                         * SCS$DIRECTORY probe as a dir-SERVER (a DISTINCT Con.ID
+                         * pair from OVMX's own dir-CLIENT connection). When the
+                         * join SEQUENCER is ENABLED it owns all joiner-initiated
+                         * connects (in strict lookup-gated order off OVMX's own dir
+                         * connection), so do NOT fire the VC connect here -- firing
+                         * it before its VMS$VAXcluster lookup resolves is the 760b
+                         * bug. When the sequencer is OFF (default), keep the proven
+                         * active-joiner path: PROMPTLY open OUR VMS$VAXcluster
+                         * connection here (clean-ref idx52) to reach NEW before the
+                         * member's CM times out (~1.4s) and re-issues START. */
+                        if (!join_seq_enabled && ps->start_acked &&
+                            !ps->joiner_connected &&
                             send_joiner_connect_request(sock, (int)ifindex, ps,
                                                         our_hw_mac, our_src_logical)) {
                             connect_req_sent++;
@@ -1697,6 +1863,7 @@ int main(int argc, char **argv)
                                                  OVMX_JOINER_CONID, ps->joiner_remote_conid);
                     cm_config_frames += c;
                     ps->joiner_cm_sent = 1;
+                    ps->join_step = JS_ADD_MEMBER; /* vms-760: await the reciprocal config */
                     log_ts(stdout);
                     printf(" SCSD-I-CMCONFIG, sent add-member config burst"
                            " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"

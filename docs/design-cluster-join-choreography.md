@@ -99,3 +99,38 @@ a dir-client AND the member still opens its own probe.
   timer; response handler keys on `rc==own-dir handle && op@60==10 && marker@72==1`,
   affirmative = `result != "NOT PRESENT HERE"`.
 - Keep the dir-SERVER responder (branch b2) and member-opened VC path unchanged.
+
+## Live results (2026-07-29) — sequencer works 6/8; stalls on the ESTABLISHED member
+
+Implemented as a stop-and-wait state machine gated behind `OVMX_JOIN_SEQ` (default
+OFF so the proven VC-first NEW path is preserved — Rule 9). Against the live golden
+2-node lab (`d94-760seq*.pcap`) the sequencer drove cleanly:
+
+1. own `SCS$DIRECTORY` connect → member echo+response (OWNDIRBOUND) ✓
+2. op=3 confirm ✓
+3. lookup `MSCP$TAPE` → member MISS ✓
+4. lookup `MSCP$DISK` → member HIT ✓ → lookup `MSCP$DISK` #2 (the clean joiner sends
+   two; the member's `recv_ack` advances per lookup as expected) ✓
+5. `MSCP$DISK` connect (seq 6, **byte-identical to clean sca35** outside identity/seq
+   — verified) → **STALL**: the member never accepts it. Its `recv_ack` freezes at 5
+   (the second DISK lookup), never acking the connect at seq 6.
+
+Root cause (grounded, live): this is an **ESTABLISHED** 2-node cluster, not the fresh
+1→2 **formation** of `formation-clean-2node.pcap`. The established member, right after
+receiving OVMX's MSCP connect, opens **its own** `SCS$DIRECTORY` probe to OVMX
+(`0x3566000d`) — i.e. it resolves the joiner before accepting its disk-client connect
+— whereas the fresh-formation member accepted the identical connect immediately (its
+own probe came much later, sca77). OVMX's answer to that probe (echo seq7 + response
+seq8) sits **behind the seq-6 hole** the un-accepted connect created, so neither side
+advances: a mutual-resolution deadlock specific to the established case.
+
+**Next deliverable (needs a lab capture the repo does not yet have):** an
+established-join trace where a real VAX joins the running 2-node cluster as a full
+disk client, to ground the established member's admission ordering (does it require
+the joiner's VC/NEW membership *before* the MSCP client connect? does it require the
+joiner to answer its dir probe on a path that isn't behind the connect?). Candidate
+fix directions to test once grounded: (a) fire the VC connect first (reach NEW), then
+the MSCP client set; (b) ensure OVMX's dir-SERVER answers to the member's probe do not
+share the sequence position blocked by the pending connect. The sequencer code, the
+MSCP + confirm builders, and this choreography are all in the tree and live-validated
+through step 5; only the established-member admission order remains open.

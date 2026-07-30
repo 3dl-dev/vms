@@ -963,24 +963,21 @@ int main(void)
         pid_t child = fork();
         if (child == 0) {
             /*
-             * STOPGAP -- FACADE, NOT VMS (vms-d0b). The console
-             * terminal device is _OPA0:, and as of vms-d0b that is a
-             * real device in the executive's device table
-             * (src/kernel/vms_devtab.c), created by the executive at
-             * module init and visible to every process on the node.
-             * Handing the name down in an environment variable is the
-             * rejected VMS_PRCNAM shape (CLAUDE.md rule 10, worked
-             * example 2): a process telling its own children what
-             * terminal they are on, which nothing else can see or
-             * contradict.
+             * DELETED, NOT REPLACED (vms-fb9): setenv("VMS_TERMINAL",
+             * "_OPA0:", 1) stood here. PID 1 told its login child what
+             * terminal it was on through the environment -- the rejected
+             * VMS_PRCNAM shape (CLAUDE.md rule 10, worked example 2). It
+             * was not even a claim anything could check: the child had no
+             * way to verify it and no other process could see it.
              *
-             * It is still here only because DCL cannot yet reach
-             * /dev/vms in the runtime the CI harness can drive -- see
-             * the vms-d0b escalation. The replacement is not "pass a
-             * better variable": it is $ASSIGN to OPA0: and $GETDVI on
-             * the resulting channel. Do not build on this line.
+             * OPA0: IS real -- the executive creates it at module init
+             * (src/kernel/vms_devtab.c) and every process on the node can
+             * read it. So the console terminal does not need to be
+             * announced; it needs to be LOOKED UP, with $ASSIGN and
+             * $GETDVI on the resulting channel. PID 1 has no business
+             * asserting it, and nothing downstream may be built on this
+             * line being here.
              */
-            setenv("VMS_TERMINAL", "_OPA0:", 1);
             /* Child: exec vms_login */
             execl(loginout_path, "vms_login", (char *)NULL);
             /* If vms_login not found, exec vmsdcl directly */

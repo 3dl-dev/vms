@@ -207,6 +207,25 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(runtime_target_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
+
+    # Rule 10/11 standing gate (vms-fb9): a process does not name its own
+    # terminal, and SHOW DEVICE does not invent device rows. Keeps the
+    # VMS_TERMINAL / VMS_DEVICE_TYPE environment handoff, the private _FTA
+    # name pool and SHOW DEVICE's /proc/mounts + process-local row sources
+    # deleted. Source scan, C comments stripped.
+    add_test(NAME terminal_identity_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_terminal_identity.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(terminal_identity_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # ...and the evasions, one minimal mutation per property, on a sandbox
+    # copy of the tree. A gate nobody tries to evade asserts nothing.
+    add_test(NAME terminal_identity_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_terminal_identity_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(terminal_identity_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

@@ -81,50 +81,34 @@ void dcl_context_init(struct dcl_context *ctx)
     vms_terminal_init(&ctx->terminal);
 
     /*
-     * STOPGAP -- FACADE, NOT VMS (vms-d0b). Everything in this block
-     * decides what terminal this process is on by reading its own
-     * environment and, failing that, by handing itself a name out of a
-     * private pool. On VMS the answer comes from the executive's
-     * device table: $ASSIGN to the device, $GETDVI on the channel. A
-     * process cannot name its own terminal, which is exactly why a VMS
-     * terminal name means something to anyone else.
+     * DELETED, NOT REPLACED (vms-fb9): the terminal-identity handoff.
      *
-     * As of vms-d0b the executive does have that table
-     * (src/kernel/vms_devtab.c: OPA0: exists at module init, carries an
-     * owner, a reference count and characteristics, and is readable by
-     * any process). This code has not been switched over to it because
-     * DCL is not yet built into the runtime where /dev/vms exists --
-     * see the vms-d0b escalation. When it is switched over, SHOW
-     * TERMINAL and SHOW DEVICE become readers of the executive and
-     * these getenv() calls go away entirely; they are not to be
-     * "improved" in place.
+     * Three lines used to stand here. getenv("VMS_DEVICE_TYPE") and
+     * getenv("VMS_TERMINAL") took this process's terminal identity out
+     * of its own environment -- set by src/ovmx_init/ovmx_init.c for the
+     * console and by src/vmsssh/vmssshd.c for a remote session -- and
+     * failing that, vms_term_allocate("_FTA", ...) handed this process a
+     * name out of a private pool file. All three are the VMS_PRCNAM
+     * shape the operator rejected on 2026-07-30 (CLAUDE.md rule 10,
+     * worked example 2): a process telling itself what it is, in a way
+     * no other process can see or contradict. They compiled, they
+     * tested green, and they were a lie.
+     *
+     * They are NOT replaced with a better guess. On VMS the answer comes
+     * from the executive -- the job's terminal is recorded in the
+     * executive's process database and the device itself lives in the
+     * executive's device table (src/kernel/vms_devtab.c has the device
+     * half as of vms-d0b; the process half does not exist yet). Until a
+     * process can ASK the executive which terminal it is on, DCL does
+     * not have that answer, so ctx->terminal.device_name stays empty and
+     * SHOW TERMINAL prints no name rather than an invented one (rule 10:
+     * hide what cannot be answered faithfully; never fabricate).
+     *
+     * Do not "fix" this by reintroducing an environment variable, a
+     * pool, an isatty() guess or a ttyname() translation. The fix is the
+     * executive-resident process/terminal binding; anything else is this
+     * same defect wearing a different name.
      */
-
-    /* Terminal device type: set from VMS_DEVICE_TYPE env var if present
-     * (set by vmssshd from SSH TERM negotiation) */
-    const char *env_devtype = getenv("VMS_DEVICE_TYPE");
-    if (env_devtype && env_devtype[0]) {
-        strncpy(ctx->terminal.device_type, env_devtype,
-                sizeof(ctx->terminal.device_type) - 1);
-        ctx->terminal.device_type[sizeof(ctx->terminal.device_type) - 1] = '\0';
-    }
-
-    /* Terminal device allocation:
-     * If VMS_TERMINAL env var is set, use it directly (e.g., _OPA0: for console).
-     * Otherwise, if running interactively, allocate from the _FTA pool. */
-    const char *env_term = getenv("VMS_TERMINAL");
-    if (env_term && env_term[0]) {
-        strncpy(ctx->terminal.device_name, env_term,
-                sizeof(ctx->terminal.device_name) - 1);
-        ctx->terminal.device_name[sizeof(ctx->terminal.device_name) - 1] = '\0';
-    } else if (isatty(STDIN_FILENO)) {
-        const char *allocated = vms_term_allocate("_FTA", getpid(), NULL);
-        if (allocated) {
-            strncpy(ctx->terminal.device_name, allocated,
-                    sizeof(ctx->terminal.device_name) - 1);
-            ctx->terminal.device_name[sizeof(ctx->terminal.device_name) - 1] = '\0';
-        }
-    }
 
     /* SET PROCESS defaults */
     ctx->process_priority = 4;   /* Default VMS base priority */
@@ -157,10 +141,16 @@ void dcl_context_init(struct dcl_context *ctx)
         strcpy(ctx->username, "SYSTEM");
     }
 
-    /* Set process name from allocated terminal device name */
-    strncpy(ctx->process_name, ctx->terminal.device_name,
-            sizeof(ctx->process_name) - 1);
-    ctx->process_name[sizeof(ctx->process_name) - 1] = '\0';
+    /*
+     * DELETED WITH ITS SOURCE (vms-fb9): this used to copy
+     * ctx->terminal.device_name into ctx->process_name -- deriving the
+     * process name from the terminal name the block above had just
+     * invented. With the handoff gone there is nothing to derive it
+     * from, and inventing a second name to stand in for the first would
+     * be the same defect twice. The process name is executive-owned
+     * state; see src/vmsprocess/vms_pcb.c, which is still a per-process
+     * block and is tracked separately.
+     */
 
     /* Read multi-user context from environment (set by vms_login) */
     const char *env_user = getenv("VMS_USERNAME");

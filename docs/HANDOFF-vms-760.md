@@ -154,11 +154,17 @@ Two readings, both testable, both kept live behind `OVMX_CFG2_ALL`:
 Live 3-node cluster: VAX1 + VAX2 + VAX3, all MEMBER.
 
 ```bash
-bash $JOBTMP/reset3.sh    # ~6.5 min -> pristine 3-node cluster, ZERO ghost CSBs
-bash $JOBTMP/login.sh     # robust console login (drives off actual console state)
-bash $JOBTMP/try.sh <tag> <NODE> <sysid> <duration> [ENV=V ...]
+T=~/vax/cluster/tools
+bash $T/reset3.sh    # ~6.5 min -> pristine 3-node cluster, ZERO ghost CSBs
+bash $T/login.sh     # robust console login (drives off actual console state)
+bash $T/try.sh <tag> <NODE> <sysid> <duration> [ENV=V ...]
 ```
-`$JOBTMP` = `/home/baron/.claude/jobs/678334fd/tmp` (scripts, captures, tools).
+**The tooling lives in `~/vax/cluster/tools/`** — scripts, `mk_sysgen`, and the
+capture-analysis tools (`pcap.py`, `tl.py`, `cm.py`, `cmp.py`, `body.py`,
+`fulldiff.py`, `seqchk.py`). Runs write to `~/vax/cluster/work/`, which also
+holds the reference OVMX captures `d94-e12/e14/e15.pcap`.
+(They were developed in a session job-tmp dir, which is deleted with the job —
+they were copied out deliberately. Do not point at a `.claude/jobs/...` path.)
 
 - **`reset3.sh` restores `data/d{0,1}.dsk.3node-golden.bak`** — a snapshot taken
   *with VAX3 installed*. **Never run the old `golden-reset.sh`**: it restores the
@@ -209,9 +215,9 @@ block / remaster are **not** implemented. Revisit when OVMX actually holds locks
   (VAX3 `08:00:2b:11:22:33`, VAX1 `aa:00:04:00:01:04`, VAX2 `08:00:2b:78:56:b9`).
   Every *other* join specimen is a 1→2 **formation** and has misled earlier
   sessions.
-- Our best runs to diff against it: `$JOBTMP/d94-e14.pcap` (single-coordinator,
-  clean cluster) and `d94-e15.pcap` (fan-out). Tools: `tl.py`, `cm.py`, `cmp.py`,
-  `body.py`, `fulldiff.py`, `seqchk.py`.
+- Our best runs to diff against it: `~/vax/cluster/work/d94-e14.pcap`
+  (single-coordinator, clean cluster) and `d94-e15.pcap` (fan-out). Tools are in
+  `~/vax/cluster/tools/`.
 - **Clean-room is a HARD invariant (Rule 8).** Wire observation + public docs
   only. Run `bash docs/clean-room/retain.sh <session-id>` at the end of every RE
   session and commit the refreshed `*.sha256`.

@@ -194,8 +194,9 @@ jobs:
           # stop depending on /dev/vms -- which is the whole thing this job
           # exists to detect. The brittleness IS the feature.
           # 8 failed as of vms-8019, which added test_kmod_procnam.
-          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 8 suites failed ===' \
-            || { echo "FAIL: did not see the expected 3-suites-passed/8-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+          # 9 failed as of vms-d0b, which added test_kmod_devtab.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 9 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/9-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
 
           # POSITIVE assertion paired with the two negative assertions above:
           # vmsfs.ko has no dependency on vms.ko/the executive, so it must

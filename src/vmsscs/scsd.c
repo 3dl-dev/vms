@@ -2058,6 +2058,24 @@ int main(int argc, char **argv)
                     int cm_token_req = cm_req && mv.txn != 0;
                     int cm_plain_req = cm_req && mv.txn == 0;
 
+                    /* vms-760: TRACE EVERY inbound CM message. This exists because
+                     * a run stalled at barrier step 1 and the logs could not say
+                     * whether the coordinator's op-0x0c release had arrived and
+                     * been dropped, or had never been sent -- two completely
+                     * different bugs that looked identical from here. We logged
+                     * only what we ACTED on, so anything we silently ignored was
+                     * invisible exactly when it mattered most.
+                     * Set OVMX_CM_QUIET to suppress (the DLM storm is ~216 lines). */
+                    if (getenv("OVMX_CM_QUIET") == NULL) {
+                        log_ts(stdout);
+                        printf(" SCSD-T-CMIN, cat 0x%02x op 0x%02x txn=0x%04x"
+                               " csum=0x%04x smsg=%u amsg=%u%s\n",
+                               mv.category, mv.opcode, mv.txn, mv.checksum,
+                               mv.sysap_send_msg, mv.sysap_ack_msg,
+                               mv.is_response ? " (RESPONSE)" : "");
+                        fflush(stdout);
+                    }
+
                     /* Remember which VC this dialogue rides so the poll-loop
                      * flush can answer on the same one. */
                     if (cm_on_joiner_vc) {
@@ -2109,10 +2127,22 @@ int main(int argc, char **argv)
                         }
                     }
                     if (cm_req && mv.opcode == SCS_MEMBER_OP_BARRIER_REL &&
-                        ps->barrier_step && (size_t)n >= 92) {
+                        (size_t)n >= 92) {
                         uint32_t rel = (uint32_t)buf[88] | ((uint32_t)buf[89] << 8) |
                                        ((uint32_t)buf[90] << 16) | ((uint32_t)buf[91] << 24);
-                        if ((int)rel == ps->barrier_step) {
+                        /* vms-760: a release that does NOT match our current step
+                         * used to be dropped in total silence -- so "the release
+                         * never came" and "the release came and we ignored it"
+                         * were indistinguishable in the logs. Say which. */
+                        if (!ps->barrier_step || (int)rel != ps->barrier_step) {
+                            log_ts(stdout);
+                            printf(" SCSD-W-XITREL, IGNORED op 0x0c release for step"
+                                   " %u -- our barrier_step is %d%s\n",
+                                   (unsigned)rel, ps->barrier_step,
+                                   ps->barrier_step ? "" : " (barrier not running)");
+                            fflush(stdout);
+                        }
+                        if (ps->barrier_step && (int)rel == ps->barrier_step) {
                             if (ps->barrier_step >= SCS_MEMBER_BARRIER_STEPS) {
                                 ps->barrier_done = 1;
                                 ps->barrier_step = 0;

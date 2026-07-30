@@ -198,6 +198,14 @@ Specimens: `ovmx-760-lockmgrerr-20260730.pcap` (echo → crash) and
 
 ### Also open, lower priority
 
+- **Do NOT expect `OVMX_NO_OWN_VC=1` to test the selection rule — measured, it
+  does not.** Run `coord5`: with it set, OVMX sends **no `op 0x02` at all** (no
+  `CMCONFIG2`, no barrier), so admission never starts. It also draws
+  `%PEA0, Inappropriate SCA Control Message — FLAGS/OPC/STATUS/PORT 00/22/00/DB`
+  and gets rendered in `SHOW CLUSTER` with a **blank** status column rather than
+  `NEW`. Cluster stayed healthy (no bugchecks, 3 MEMBER). The flag only
+  suppresses our own VC; **wiring the deferred `op 0x02` onto the
+  member-opened VC is code work**, not a flag flip.
 - **Peer selection is right but for a possibly-wrong reason.** The best-grounded
   rule is "the peer that opened a `VMS$VAXcluster` VC **to** the joiner" (3/3
   established joins). **We destroy that signal ourselves** by preemptively

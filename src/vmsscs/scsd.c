@@ -281,6 +281,11 @@ enum join_step {
 };
 #define JOIN_RETX_TIMEOUT_MS 400u  /* stop-and-wait step retransmit (< member's ~1.4s START-reissue) */
 #define JOIN_RETX_MAX        6u
+/* vms-760: delay before the joiner's DEFERRED op 0x02 config/topology message.
+ * The 2->3 reference joiner sends MODEL+PARAMS at +0.9394 and op 0x02 at
+ * +5.8774 -- ~4.9 s later. What it is really waiting on is not grounded; the
+ * delay is copied from the reference. */
+#define JOIN_CFG2_DELAY_MS   4900u
 
 struct peer_state {
     int      in_use;
@@ -325,6 +330,8 @@ struct peer_state {
     int      joiner_connected;     /* the member accepted it (Con.ID pair bound) */
     uint32_t joiner_remote_conid;  /* the member's Con.ID on OUR connection (from its response) */
     int      joiner_cm_sent;       /* we sent the add-member burst on our own connection */
+    long     joiner_cm_ms;         /* monotonic_ms() when that burst went out */
+    int      joiner_cfg2_sent;     /* vms-760: the DEFERRED op 0x02 config/topology went out */
     uint16_t joiner_req_seq;       /* the send_seq of our CONNECT-REQUEST (retransmits REUSE it) */
     struct timespec last_joiner_req; /* CLOCK_MONOTONIC of our last joiner CONNECT-REQUEST (retx) */
     /* --- vms-760: OVMX's OWN SCS$DIRECTORY connection to the member (the active
@@ -1592,12 +1599,24 @@ int main(int argc, char **argv)
          * block above already 0x48-acked this frame at the SCS layer. */
         if (do_connect && cls == SCS_CLASS_SCS_FIXED) {
             struct scs_member_view mv;
-            if (scs_member_parse(buf, (size_t)n, &mv) == 0 &&
+            /* vms-760: accept CM traffic on EITHER virtual circuit. The
+             * member-opened VC uses OVMX_LOCAL_CONID; in OVMX_JOIN_SEQ mode the
+             * whole membership dialogue instead rides the VC the JOINER opened
+             * (OVMX_JOINER_CONID). Gating on OVMX_LOCAL_CONID alone meant this
+             * handler never fired on the joiner-driven path, so the member's
+             * op 0x03 COMMIT / op 0x05 lock-rebuild transactions went
+             * unanswered. */
+            int cm_parsed = (scs_member_parse(buf, (size_t)n, &mv) == 0);
+            int cm_on_joiner_vc = cm_parsed &&
+                                  (mv.remote_conid == OVMX_JOINER_CONID ||
+                                   mv.local_conid == OVMX_JOINER_CONID);
+            if (cm_parsed &&
                 mv.msgtype == SCS_MEMBER_MSGTYPE &&
                 (mv.remote_conid == OVMX_LOCAL_CONID ||
-                 mv.local_conid == OVMX_LOCAL_CONID)) {
+                 mv.local_conid == OVMX_LOCAL_CONID ||
+                 cm_on_joiner_vc)) {
                 struct peer_state *ps = peer_find_or_add(peers, src_mac);
-                if (ps != NULL && ps->connected) {
+                if (ps != NULL && (ps->connected || (cm_on_joiner_vc && ps->joiner_connected))) {
                     /* Track the member's SYSAP send-msg# high-water (our ack
                      * target). Only category-0x01 config messages carry the
                      * membership dialogue; DLM (cat 0x02) rides here later. */
@@ -1660,8 +1679,16 @@ int main(int argc, char **argv)
                         memcpy(mp.src_mac, our_hw_mac, 6);
                         memcpy(mp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                         memcpy(mp.peer_logical, ps->logical, 6);
-                        mp.remote_conid = ps->remote_conid;
-                        mp.local_conid = OVMX_LOCAL_CONID;
+                        /* vms-760: answer on the SAME virtual circuit the request
+                         * arrived on -- the joiner-opened VC in OVMX_JOIN_SEQ mode,
+                         * the member-opened one otherwise. */
+                        if (cm_on_joiner_vc) {
+                            mp.remote_conid = ps->joiner_remote_conid;
+                            mp.local_conid = OVMX_JOINER_CONID;
+                        } else {
+                            mp.remote_conid = ps->remote_conid;
+                            mp.local_conid = OVMX_LOCAL_CONID;
+                        }
                         mp.incarnation = ps->incarnation;
                         mp.recv_ack = ps->vc.seq.recv_seq;
                         mp.send_seq = scs_seq_advance(&ps->vc.seq);
@@ -1948,6 +1975,53 @@ int main(int argc, char **argv)
                                ps->join_step, ps->js_retx);
                         fflush(stdout);
                     }
+                }
+            }
+
+            /* vms-760: send the DEFERRED third config message -- category 0x01
+             * opcode 0x02 (config/topology) -- on OUR joiner VC, a few seconds
+             * after the MODEL+PARAMS pair.
+             * GROUNDED, vax3-2to3-established-join-20260730.pcap: the joiner's
+             * initial burst is MODEL+PARAMS only (frames 142/143, +0.9394) and
+             * the peer reciprocates in kind; the joiner then sends op 0x02 LATER
+             * (frame 285, +5.8774, smsg=3 amsg=2) and THAT is what starts the
+             * admission transaction -- the peer answers 0x04/0x00 within 0.3 ms
+             * (287) and immediately drives op 0x03 COMMIT (291) -> op 0x05 lock
+             * rebuilds (293/294/297/299) -> MEMBER. Deferring it FOREVER (the
+             * previous behaviour) leaves the dialogue permanently half-finished.
+             * The ~5 s delay is taken from the reference; what the real joiner
+             * actually waits on is NOT grounded (see spec 5(z)). */
+            if (do_connect && ps->join_step == JS_ADD_MEMBER &&
+                ps->joiner_cm_sent && !ps->joiner_cfg2_sent &&
+                ps->joiner_connected &&
+                (monotonic_ms() - ps->joiner_cm_ms) >= (long)JOIN_CFG2_DELAY_MS) {
+                struct scs_member_params mp;
+                memset(&mp, 0, sizeof(mp));
+                memcpy(mp.dst_mac, ps->eth_mac, 6);
+                memcpy(mp.src_mac, our_hw_mac, 6);
+                memcpy(mp.src_logical, our_src_logical, 6);
+                memcpy(mp.peer_logical, ps->logical, 6);
+                mp.remote_conid = ps->joiner_remote_conid;
+                mp.local_conid = OVMX_JOINER_CONID;
+                mp.incarnation = ps->incarnation;
+                mp.recv_ack = ps->vc.seq.recv_seq;
+                mp.send_seq = scs_seq_advance(&ps->vc.seq);
+                mp.sysap_send_msg = ps->sysap_send++;
+                mp.sysap_ack_msg = ps->sysap_recv; /* ref frame 285: amsg=2 = peer's smsg */
+                mp.config_admission = 1;           /* the frame-285 admission variant */
+                uint8_t c2frame[SCS_MEMBER_FRAME_LEN];
+                if (scs_member_build_config(&mp, c2frame) == 0 &&
+                    send_frame_to(sock, (int)ifindex, ps->eth_mac, c2frame,
+                                  sizeof(c2frame)) > 0) {
+                    scs_vc_record_sent(&ps->vc, mp.send_seq, monotonic_ms());
+                    ps->joiner_cfg2_sent = 1;
+                    cm_config_frames++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-CMCONFIG2, sent DEFERRED op 0x02 config/topology"
+                           " on OUR joiner VC (send_msg=%u ack_msg=%u) -- expect the"
+                           " member's 0x04 ack then its op 0x03 COMMIT\n",
+                           mp.sysap_send_msg, mp.sysap_ack_msg);
+                    fflush(stdout);
                 }
             }
 
@@ -2456,6 +2530,7 @@ int main(int argc, char **argv)
                                                      OVMX_JOINER_CONID, lconid);
                         cm_config_frames += c;
                         ps->joiner_cm_sent = 1;
+                        ps->joiner_cm_ms = monotonic_ms();
                         ps->join_step = JS_ADD_MEMBER; /* await the member's reciprocal config */
                         log_ts(stdout);
                         printf(" SCSD-I-CMCONFIG, sent add-member config burst"

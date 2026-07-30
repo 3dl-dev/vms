@@ -105,6 +105,14 @@ struct scs_member_params {
     uint16_t sysap_ack_msg;   /* SYSAP body[2:4] (ack of member's highest send-msg#) */
     uint16_t votes;           /* op 0x01 only: SYSAP body[22:24] (0 = non-voting) */
     const char *model;        /* op 0x14 only: model string; NULL => OVMX default */
+    int      config_admission; /* op 0x02 only (vms-760). 0 (default) => reproduce the
+                                  FORMATION golden SCA#60 byte-exact. 1 => the variant the
+                                  2->3 established-join reference sends to TRIGGER admission
+                                  (frame 285): body[10:12]=0x5041 and twelve spaces at
+                                  body[40:52]. The two specimens genuinely differ, so this
+                                  is a selector between observed variants, not a fix to one
+                                  of them. Semantics of both fields are UNGROUNDED -- see
+                                  scs_member_build_config() and spec 5(z). */
 };
 
 /*

@@ -202,6 +202,50 @@ static void test_op02_byte_exact(void)
           "op 0x02 reproduces golden SCA#60 byte-exact");
 }
 
+/*
+ * vms-760: the ADMISSION variant of op 0x02 -- the message the 2->3 established-
+ * join reference sends to make the peer start the add-member transaction
+ * (vax3-2to3-established-join-20260730.pcap frame 285, +5.8774). It differs from
+ * the formation golden pinned above in exactly two places, and ONLY when the
+ * caller opts in, so both observed variants stay reproducible.
+ */
+static void test_op02_admission_variant(void)
+{
+    struct scs_member_params base, adm;
+    joiner_params(&base, 15, 16, 3, 2);
+    joiner_params(&adm, 15, 16, 3, 2);
+    adm.config_admission = 1;
+
+    uint8_t fb[SCS_MEMBER_FRAME_LEN], fa[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_config(&base, fb) == 0, "build_config (golden variant) ok");
+    CHECK(scs_member_build_config(&adm, fa) == 0, "build_config (admission variant) ok");
+
+    /* The opt-in fields, byte-exact to reference frame 285. */
+    CHECK(fa[82] == 0x41 && fa[83] == 0x50,
+          "admission op 0x02: body[10:12] == 0x5041 (ref frame 285)");
+    int spaces = 1;
+    for (int i = 112; i < 124; i++) {
+        if (fa[i] != 0x20) {
+            spaces = 0;
+        }
+    }
+    CHECK(spaces, "admission op 0x02: body[40:52] == twelve 0x20 spaces (ref frame 285)");
+
+    /* The default build must be untouched -- the formation golden keeps zeros. */
+    CHECK(fb[82] == 0x00 && fb[83] == 0x00,
+          "default op 0x02 keeps golden zeros at body[10:12]");
+
+    /* Nothing else moves: exactly 14 bytes differ between the two variants. */
+    int diffs = 0;
+    for (int i = 0; i < SCS_MEMBER_FRAME_LEN; i++) {
+        if (fa[i] != fb[i]) {
+            diffs++;
+        }
+    }
+    CHECK(diffs == 14,
+          "admission variant changes exactly 14 bytes (2 + 12) and nothing else");
+}
+
 static void test_default_model_is_ovmx(void)
 {
     struct scs_member_params mp;
@@ -355,6 +399,7 @@ int main(void)
     test_op14_byte_exact();
     test_op01_byte_exact_and_votes();
     test_op02_byte_exact();
+    test_op02_admission_variant();
     test_default_model_is_ovmx();
     test_parse_classification();
     test_response_echoes_real_checksum();

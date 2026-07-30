@@ -212,6 +212,35 @@ int scs_member_build_config(const struct scs_member_params *p,
     }
 
     build_common(p, member_config_tmpl, out);
+
+    /* vms-760: two fields the template left zero that the ADMISSION-triggering
+     * op-0x02 carries. REPLAYED from the single specimen we have of that
+     * message -- vax3-2to3-established-join-20260730.pcap frame 285 (+5.8774,
+     * VAX3->VAX2), the 0x02 whose arrival makes the peer answer 0x04/0x00 in
+     * 0.3 ms and then drive op 0x03 COMMIT -> op 0x05 lock rebuild -> MEMBER:
+     *
+     *   body[10:12] (abs 82-83) = 0x5041
+     *   body[40:52] (abs 112-123) = twelve 0x20 spaces (a blank fixed-width
+     *                               text field; VAX3 runs with no quorum disk)
+     *
+     * SEMANTICS NOT GROUNDED, and these are NOT constants: the reference's
+     * OTHER op-0x02 (frame 8658, +13.6761, the later fuller reconfiguration
+     * message) carries 0x0004 at body[10:12] and binary data across
+     * body[40:52]. This is a value replay from one specimen of one variant --
+     * the same standing as the join nonce in scs_hello.h, and it is recorded as
+     * an open RE gap in spec 5(z), not as a decoded field.
+     *
+     * Applied ONLY when the caller asks for the admission variant: the
+     * FORMATION golden's op 0x02 (SCA#60) has zeros at both offsets and is
+     * pinned byte-exact by test_op02_byte_exact. These are two different
+     * observed messages; the flag selects between them rather than declaring
+     * either one wrong. */
+    if (p->config_admission) {
+        out[82] = 0x41;
+        out[83] = 0x50;
+        memset(out + 112, 0x20, 12);
+    }
+
     return 0;
 }
 

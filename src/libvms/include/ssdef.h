@@ -74,7 +74,19 @@ extern "C" {
 
 #define SS$_INSFMEM         292     /* Insufficient dynamic memory */
 #define SS$_TIMEOUT         556     /* Device timeout */
-#define SS$_ILLIOFUNC       580     /* Illegal I/O function */
+/* ORACLE-PINNED (vms-9fc, 2026-07-30) on reference lab node VAX1, OpenVMS
+ * VAX V7.3, by the same two documented-tool observations used above:
+ *     $EQU  SS$_ILLIOFUNC   244        (LIBRARY/EXTRACT=$SSDEF ... STARLET.MLB)
+ *     F$MESSAGE(244) -> %SYSTEM-F-ILLIOFUNC, illegal I/O function code
+ * The previous value here, 580, is a DIFFERENT condition on the oracle:
+ *     F$MESSAGE(580) -> %SYSTEM-F-VASFULL, virtual address space is full
+ * so every sys$qio that rejected an unimplemented function code was
+ * reporting an address-space exhaustion. Consumers name the symbol
+ * (src/libvms/status.c, src/libvms/syssvc/sys_qio.c), so none breaks.
+ * SS$_BUGCHECK 676 below was pinned by the same run and was already correct
+ * ($EQU SS$_BUGCHECK 676; F$MESSAGE(676) -> %SYSTEM-F-BUGCHECK, internal
+ * consistency failure). */
+#define SS$_ILLIOFUNC       244     /* Illegal I/O function (%SYSTEM-F-ILLIOFUNC) */
 #define SS$_NOMORENODE      588     /* No more cluster nodes (VMS: 0x24C) */
 /* ================================================================
  * ORACLE-PINNED VALUES (vms-8019, 2026-07-30)

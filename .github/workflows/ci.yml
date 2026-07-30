@@ -398,8 +398,8 @@ jobs:
           # time this line was written. It is a MINIMUM, so adding suites
           # never requires touching it; only deliberately deleting one does,
           # which is the intended forcing function.
-          if [ "$N_EXPECTED" -lt 12 ]; then
-            echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 12) -- a suite source was deleted."
+          if [ "$N_EXPECTED" -lt 13 ]; then
+            echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 13) -- a suite source was deleted."
             echo "Deleting an executive suite is not a way to make this gate pass."
             exit 1
           fi

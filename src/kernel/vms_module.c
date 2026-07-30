@@ -257,12 +257,54 @@ static long vms_ioctl_register(unsigned long arg)
      */
     vms_proc_reap_dead();
 
-    proc = vms_proc_register(current->pid, args.vms_pid, args.init_privs);
-    if (IS_ERR(proc)) {
-        args.status = 0x0000001C;  /* SS$_DUPNAM (already registered) */
+    /*
+     * ADOPT, do not recreate, and do not report an error (vms-9fc).
+     *
+     * This used to answer 0x1C for a task that already had an entry, which
+     * made registration a once-per-image operation. It is not: the executive
+     * entry belongs to the PROCESS and survives execve(), so the very next
+     * image activated in the same process would be told "already registered"
+     * and, having nothing else to do with that, would carry on unregistered.
+     *
+     * ORACLE PIN (reference lab node VAX1, OpenVMS VAX V7.3, 2026-07-30):
+     * activating an image inside an existing process does not recreate the
+     * process and is not an error. SHOW PROCESS/ACCOUNTING before and after
+     * two further image activations reports
+     *     Process ID: 2020021D   Process name: "SYSTEM"   Images activated: 19
+     *     Process ID: 2020021D   Process name: "SYSTEM"   Images activated: 21
+     * -- same PCB, same identity, same connect time, images activated simply
+     * counts up. So the VMS-faithful answer to "register a process that
+     * already exists" is to hand back the process that already exists.
+     *
+     * Adopting deliberately does NOT re-apply args.init_privs. On VMS an
+     * image activation does not change the process's privilege mask, and a
+     * process that could reset its own privileges by registering a second
+     * time would be declaring its own privileges -- the exact facade shape
+     * this epic exists to remove.
+     */
+    proc = vms_proc_find_or_err();
+    if (proc) {
+        args.status = 0x00000001;  /* SS$_NORMAL */
         if (copy_to_user((void __user *)arg, &args, sizeof(args)))
             return -EFAULT;
         return 0;
+    }
+
+    proc = vms_proc_register(current->pid, args.vms_pid, args.init_privs);
+    if (IS_ERR(proc)) {
+        if (PTR_ERR(proc) != -EEXIST)
+            return PTR_ERR(proc);   /* -ENOMEM -> SS$_INSFMEM at the boundary */
+
+        /*
+         * Lost the insert race, or the hash holds an entry for this pid
+         * number that is NOT ours (a recycled pid the reaper missed).
+         * Re-resolve through the pid-identity check: adopting on the
+         * strength of a matching pid NUMBER would hand this task another
+         * process's entry, and its privileges with it.
+         */
+        proc = vms_proc_find_or_err();
+        if (!proc)
+            return -ESRCH;
     }
 
     args.status = 0x00000001;  /* SS$_NORMAL */

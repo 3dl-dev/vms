@@ -32,7 +32,6 @@
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
 
-#define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
 #define SYSDISK_DEV      "/dev/vda"
 #define INITRAMFS_BACKUP "/tmp/initramfs_vms"
 
@@ -465,7 +464,7 @@ static void provision_symlinks(void)
     /* [SYS0.SYSCOMMON.SYSEXE] executables */
     const char *exes[] = {
         "LOGINOUT.EXE", "DCL.EXE", "HELP.EXE", "AUTHORIZE.EXE",
-        "MAIL.EXE", "MONITOR.EXE", "VMSSSHD.EXE", "VMSLNMD.EXE",
+        "MAIL.EXE", "MONITOR.EXE", "VMSSSHD.EXE",
         "STARTUP.EXE", NULL
     };
     for (int i = 0; exes[i]; i++) {
@@ -565,47 +564,6 @@ static void install_system_blkdev(void)
 }
 
 /*
- * Try to start the logical name daemon.
- * Returns the child PID on success, -1 if vmslnmd not found.
- */
-static pid_t start_lnm_daemon(void)
-{
-    char lnmd_path[512];
-    vms_to_linux(VMS_LNMD_PATH, lnmd_path, sizeof(lnmd_path));
-    struct stat st;
-    if (stat(lnmd_path, &st) != 0) {
-        return -1;  /* vmslnmd not available */
-    }
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* Child: exec vmslnmd */
-        execl(lnmd_path, "vmslnmd", (char *)NULL);
-        _exit(1);
-    }
-    return pid;
-}
-
-/*
- * Wait for the LNM daemon socket to appear (up to timeout_ms).
- */
-static int wait_for_lnm_socket(int timeout_ms)
-{
-    struct stat st;
-    int elapsed = 0;
-    int interval = 50000; /* 50ms */
-
-    while (elapsed < timeout_ms * 1000) {
-        if (stat(LNM_SOCKET_PATH, &st) == 0) {
-            return 1;  /* Socket appeared */
-        }
-        usleep((useconds_t)interval);
-        elapsed += interval;
-    }
-    return 0;  /* Timed out */
-}
-
-/*
  * Try to start the SSH daemon for remote access.
  * Returns the child PID on success, -1 if sshd not found.
  */
@@ -664,7 +622,7 @@ static void run_startup(void)
 /*
  * Display VMS-style boot banner.
  */
-static void display_boot_banner(int lnm_started, int sshd_started)
+static void display_boot_banner(int sshd_started)
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -682,10 +640,6 @@ static void display_boot_banner(int lnm_started, int sshd_started)
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
-
-    if (lnm_started) {
-        printf("%%STDRV-I-LNMSTART, logical name daemon started\n");
-    }
 
     if (sshd_started) {
         printf("%%STDRV-I-SSHSTART, SSH remote access started on port 22\n");
@@ -765,29 +719,24 @@ int main(void)
      * without overwriting existing files. */
     provision_seed_files();
 
-    /* Step 3: Start logical name daemon */
-    int lnm_started = 0;
-    pid_t lnm_pid = start_lnm_daemon();
-    if (lnm_pid > 0) {
-        lnm_started = wait_for_lnm_socket(2000);
-    }
-
-    /* Step 4: Run STARTUP.COM */
+    /* Step 3: Run STARTUP.COM.
+     * There is no logical name daemon to start first: on VMS the logical name
+     * tables are executive-resident, not a service (vms-a4b). */
     run_startup();
 
-    /* Step 5: Start SSH daemon */
+    /* Step 4: Start SSH daemon */
     int sshd_started = 0;
     pid_t sshd_pid = start_sshd();
     if (sshd_pid > 0) {
         sshd_started = 1;
     }
 
-    /* Step 6: Boot banner */
-    display_boot_banner(lnm_started, sshd_started);
+    /* Step 5: Boot banner */
+    display_boot_banner(sshd_started);
     fflush(stdout);
     fflush(stderr);
 
-    /* Step 7: Login loop (only if stdin is a terminal) */
+    /* Step 6: Login loop (only if stdin is a terminal) */
     char loginout_path[512], dcl_path[512];
     vms_to_linux(VMS_LOGINOUT_PATH, loginout_path, sizeof(loginout_path));
     vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
@@ -892,10 +841,6 @@ int main(void)
     if (sshd_pid > 0) {
         kill(sshd_pid, SIGTERM);
         waitpid(sshd_pid, NULL, 0);
-    }
-    if (lnm_pid > 0) {
-        kill(lnm_pid, SIGTERM);
-        waitpid(lnm_pid, NULL, 0);
     }
 
     return 0;

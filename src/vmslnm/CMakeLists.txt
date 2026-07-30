@@ -33,18 +33,8 @@ if(OVMX_IMGACT)
     target_link_libraries(vmslnm_static PUBLIC pthread)
 endif()
 
-# Daemon executable
-add_executable(lnm_daemon_exe lnm_daemon.c)
-target_include_directories(lnm_daemon_exe PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${VMS_INCLUDE_DIR}
-    ${VMS_FS_INCLUDE_DIR}
-)
-target_link_libraries(lnm_daemon_exe PRIVATE vmslnm vmsfs pthread)
-target_compile_definitions(lnm_daemon_exe PRIVATE LNM_DAEMON_MAIN)
-set_target_properties(lnm_daemon_exe PROPERTIES
-    OUTPUT_NAME "VMSLNMD"
-    SUFFIX ".EXE"
-)
-
-install(TARGETS lnm_daemon_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+# There is no logical name daemon. On OpenVMS the logical name tables live in
+# the executive; there is no server process to start and no socket to connect
+# to. VMSLNMD.EXE was an OVMX invention with zero clients product-wide, so it
+# is gone rather than reduced (vms-a4b). The executive-resident tables that
+# replace it are tracked by vms-ln0 / vms-d37.

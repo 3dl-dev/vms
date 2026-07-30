@@ -73,9 +73,12 @@
 #define SS$_IVCHAN       602
 #define SS$_IVDEVNAM     608
 #define SS$_SSFAIL       636
-#define SS$_NONEXPR      2540
+/* ORACLE-PINNED (vms-8019): $SSDEF on the reference lab VAX V7.3 gives
+ * SS$_NONEXPR 2280 / SS$_DUPLNAM 148; F$MESSAGE round-trips both. The
+ * old 2540 / 434 are SS$_RIGHTSFULL / SS$_NOIOCHAN there. */
+#define SS$_NONEXPR      2280
 #define SS$_DEADLOCK     708
-#define SS$_DUPLNAM      434
+#define SS$_DUPLNAM      148
 #define SS$_FILALRACC    2736
 #define SS$_BUGCHECK     676
 #define SS$_CANCEL       2096

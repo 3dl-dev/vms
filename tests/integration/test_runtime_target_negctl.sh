@@ -57,15 +57,23 @@ cp -a "$SRC_ROOT/CLAUDE.md" "$ROOT/CLAUDE.md"
 [ -f "$SRC_ROOT/docker-compose.yml" ] && cp -a "$SRC_ROOT/docker-compose.yml" "$ROOT/docker-compose.yml"
 
 INIT_C="$ROOT/src/ovmx_init/ovmx_init.c"
-LOCK_C="$ROOT/src/libvms/syssvc/sys_lock.c"
+# Check 3c's fixture must be whatever function actually binds a caller to the
+# executive. That used to be sys_lock.c's bind_to_executive(); vms-9fc DELETED
+# it, because binding per facility was how four separate callers each forgot to
+# register. The sequence now lives once, in vms_kif.c's kif_bind(), and this
+# fixture MUST follow it: an injection anchored to a function that no longer
+# exists is a silent no-op -- the tree stays unmutated, the gate correctly goes
+# green, and every 3c control then reports "the evasion was CERTIFIED, not
+# caught". That is a broken control, not a broken gate.
+KIF_C="$ROOT/src/libvmssys/vms_kif.c"
 INIT_ORIG="$WORK/ovmx_init.c.orig"
-LOCK_ORIG="$WORK/sys_lock.c.orig"
+KIF_ORIG="$WORK/vms_kif.c.orig"
 cp "$INIT_C" "$INIT_ORIG"
-cp "$LOCK_C" "$LOCK_ORIG"
+cp "$KIF_C" "$KIF_ORIG"
 
 restore() {
     cp "$INIT_ORIG" "$INIT_C"
-    cp "$LOCK_ORIG" "$LOCK_C"
+    cp "$KIF_ORIG" "$KIF_C"
 }
 
 # ---------------------------------------------------------------------------
@@ -250,7 +258,7 @@ expect_red "3b(h) halt entry point redefined by a macro" \
 
 # (i) round 1's shape: capture, then `if (rc < 0)`.
 cat > "$WORK/bind.c" <<'EOF'
-static int bind_to_executive(void)
+static int kif_bind(void)
 {
     int rc = vms_kif_open();
     if (rc < 0)
@@ -261,11 +269,11 @@ EOF
 replace_bind() {
     awk -v repl="$1" '
         BEGIN { while ((getline line < repl) > 0) body = body line "\n"; close(repl) }
-        /^static void bind_to_executive\(void\)$/ { skip = 1; printf "%s", body; next }
+        /^static void kif_bind\(void\)$/ { skip = 1; printf "%s", body; next }
         skip && /^}$/ { skip = 0; next }
         skip { next }
         { print }
-    ' "$LOCK_C" > "$LOCK_C.new" && mv "$LOCK_C.new" "$LOCK_C"
+    ' "$KIF_C" > "$KIF_C.new" && mv "$KIF_C.new" "$KIF_C"
 }
 replace_bind "$WORK/bind.c"
 expect_red "3c(i) capture then if (rc < 0)" "$R_PROBE"
@@ -273,7 +281,7 @@ expect_red "3c(i) capture then if (rc < 0)" "$R_PROBE"
 # (ii) THE ROUND-2 ESCAPE: verbatim the ensure_kif_open() body Rule 9 deleted,
 # hoisted into a variable. `>=` was invisible to the old operator class.
 cat > "$WORK/bind.c" <<'EOF'
-static int bind_to_executive(void)
+static int kif_bind(void)
 {
     int rc = vms_kif_open();
     return rc >= 0 ? 0 : -1;
@@ -284,7 +292,7 @@ expect_red "3c(ii) capture then 'return rc >= 0 ? 0 : -1' (deleted fallback, hoi
 
 # (iii) THE OTHER ROUND-2 ESCAPE: switch was not a branch context.
 cat > "$WORK/bind.c" <<'EOF'
-static int bind_to_executive(void)
+static int kif_bind(void)
 {
     int rc = vms_kif_open();
     switch (rc) {
@@ -301,7 +309,7 @@ expect_red "3c(iii) capture then switch (rc)" "$R_PROBE"
 
 # (iv) inline shape, for completeness -- the one the direct pass always caught.
 cat > "$WORK/bind.c" <<'EOF'
-static int bind_to_executive(void)
+static int kif_bind(void)
 {
     return vms_kif_open() >= 0 ? 0 : -1;
 }
@@ -320,7 +328,7 @@ expect_red "3c(iv) inline 'return vms_kif_open() >= 0 ? 0 : -1'" "$R_PROBE"
 
 # (v) one-line form of (i).
 cat > "$WORK/bind.c" <<'EOF'
-static int bind_to_executive(void)
+static int kif_bind(void)
 {
     int rc = vms_kif_open(); if (rc < 0) { }
     return 0;
@@ -332,7 +340,7 @@ expect_red "3c(v) ONE LINE: 'int rc = vms_kif_open(); if (rc < 0) { }'" "$R_PROB
 # (vi) one-line form of (ii) -- this is the exact escape the round-2 challenge
 # text wrote, which round 3 then only closed in its multi-line spelling.
 cat > "$WORK/bind.c" <<'EOF'
-static int bind_to_executive(void)
+static int kif_bind(void)
 {
     int rc = vms_kif_open(); (void)(rc >= 0 ? 0 : -1);
     return 0;
@@ -343,7 +351,7 @@ expect_red "3c(vi) ONE LINE: 'int rc = vms_kif_open(); (void)(rc >= 0 ? 0 : -1);
 
 # (vii) one-line form of (iii).
 cat > "$WORK/bind.c" <<'EOF'
-static int bind_to_executive(void)
+static int kif_bind(void)
 {
     int rc = vms_kif_open(); switch (rc) { case -1: break; default: break; }
     return 0;

@@ -176,8 +176,18 @@ static void kif_bind(void)
         vms_dev_fd = -1;
     }
 
-    if (vms_kif_open() < 0)
-        return;
+    /*
+     * Opened unconditionally, and the result is deliberately NOT tested.
+     * The only way it can fail is for the executive to be absent, and
+     * OVMX is never in that state -- PID 1 refuses to bring the system up
+     * without /dev/vms and holds the descriptor for the life of the
+     * system. Branching on it would be handling a condition VMS never
+     * faces (Rule 10), which is why tests/integration/test_runtime_target.sh
+     * rejects the branch. If a descriptor somehow is not available the
+     * REGISTER below fails and vms_bound_tid stays 0, so nothing is ever
+     * told it is bound when it is not.
+     */
+    (void)vms_kif_open();
 
     /*
      * init_privs = 0. A process does not get to declare its own

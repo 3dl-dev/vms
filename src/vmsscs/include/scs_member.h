@@ -118,6 +118,8 @@ struct scs_member_params {
     uint16_t sysap_send_msg;  /* SYSAP body[0:2] (OVMX's own app counter) */
     uint16_t sysap_ack_msg;   /* SYSAP body[2:4] (ack of member's highest send-msg#) */
     uint16_t votes;           /* op 0x01 only: SYSAP body[22:24] (0 = non-voting) */
+    uint16_t txn;             /* body[4:6] on a transaction WE initiate (op 0x0b) */
+    uint16_t checksum;        /* body[6:8] on a transaction WE initiate (op 0x0b) */
     const char *model;        /* op 0x14 only: model string; NULL => OVMX default */
 };
 
@@ -240,6 +242,51 @@ int scs_member_build_ack(const struct scs_member_params *p,
 int scs_member_build_token_response(const struct scs_member_params *p,
                                     const uint8_t *req_frame, size_t req_len,
                                     uint8_t out[SCS_MEMBER_FRAME_LEN]);
+
+/* The cluster-wide state-transition barrier (vms-760). */
+#define SCS_MEMBER_OP_BARRIER      0x0b /* joiner-INITIATED barrier step */
+#define SCS_MEMBER_OP_BARRIER_REL  0x0c /* coordinator's release of step N */
+#define SCS_MEMBER_OP_XITION       0x09 /* coordinator opens the transition */
+#define SCS_MEMBER_OP_XITION_GO    0x0a /* coordinator says "start the barrier" */
+#define SCS_MEMBER_BARRIER_STEPS   12   /* invariant across 6 joins / 4 clusters */
+#define SCS_MEMBER_XITION_TAG      0x0240 /* body[16:18] on the op 0x09 */
+#define SCS_MEMBER_BARRIER_TAG     0x0260 /* body[16:18] on the op 0x0a that STARTS
+                                           * the barrier. An op 0x0a with any other
+                                           * tag (0x0460 seen on a running cluster)
+                                           * is NOT a barrier start -- ignore it. */
+#define SCS_MEMBER_EPOCH_BODYOFF   12   /* body[12:16] transition epoch (LE u32) */
+#define SCS_MEMBER_STEP_BODYOFF    16   /* body[16:20] barrier step index (LE u32) */
+
+/*
+ * scs_member_build_barrier - build one joiner-initiated barrier step,
+ * category 0x01 opcode 0x0b.
+ *
+ * THE BARRIER IS CLUSTER-WIDE AND THE JOINER IS A REQUIRED PARTICIPANT. The
+ * coordinator runs the same 12-step dialogue with EVERY member and releases
+ * step N to nobody until every member has sent its step-N request. Grounded in
+ * the reference: at step 5 it held our completed request for 89 ms and released
+ * 0x0c#5 to both members 0.8 ms after the last member caught up; 0x0c#N never
+ * precedes 0x0b#N anywhere (72 ordered pairs, 0 residuals). A joiner that never
+ * sends 0x0b leaves the barrier permanently one member short -- which is why
+ * omitting it does not merely fail to join, it makes the cluster time out,
+ * print "%CNXMAN, aborting VAXcluster state transition", and DROP its healthy
+ * members. Exactly 12 steps, indices 1..12, in 6 joins across 4 clusters and 3
+ * different joiner nodes.
+ *
+ * The body is minimal by design and that minimal form is proven acceptable: one
+ * real VMS joiner sends an entirely zero body apart from the four fields below
+ * and the coordinator answers normally. Other joiners leave lock-resource names
+ * and other stale text in body[20:132]; coordinator behaviour is identical, so
+ * that span is residue and we send zeros.
+ *
+ *   body[4:6]   our own per-VC transaction-context id
+ *   body[6:8]   our own per-VC counter, +1 per transaction we initiate
+ *   body[12:16] the transition EPOCH, copied from the coordinator's op 0x09
+ *   body[16:20] the step index N, LE u32, 1..12
+ */
+int scs_member_build_barrier(const struct scs_member_params *p,
+                             uint32_t epoch, uint32_t step,
+                             uint8_t out[SCS_MEMBER_FRAME_LEN]);
 
 #ifdef __cplusplus
 }

@@ -287,9 +287,25 @@ enum join_step {
  * delay is copied from the reference. */
 #define JOIN_CFG2_DELAY_MS   4900u
 /* vms-760: cat-0x04 ack cadence -- ack once per this many unacked coordinator
- * messages. GROUNDED: the reference joiner emits 85 acks for a 254-message
- * op-0x06 burst (frames 313/314/315 carry am=11/14/17). */
-#define SCS_CM_ACK_EVERY     3u
+ * messages. SET TO 1 DELIBERATELY. The reference joiner batches at one per three
+ * (85 acks for a 254-message burst), but our poll loop is HELLO-driven and far too
+ * coarse to carry the accompanying idle-flush: with a threshold of 3, a burst that
+ * arrives two messages at a time stalled waiting on a ~4-second poll tick and the
+ * whole transaction crawled (d94-e10: 96 messages over 118 s). Acking every message
+ * is legal -- an ack just names a watermark -- and keeps the burst at wire speed.
+ * Restoring the batch needs a millisecond-resolution timer, not the HELLO poll.
+ * Original note: the reference joiner BATCHES at one per three (85 acks for a
+ * 254-message burst; frames 313/314/315 carry am=11/14/17), but batching alone
+ * is not safe: it strands a trailing backlog below the threshold that nothing
+ * ever flushes, and the coordinator then waits forever for an ack of its last
+ * one or two messages (observed in d94-e6: it acked through 76, messages 77-78
+ * arrived, and the transaction stopped dead). Acking every message is legal --
+ * the ack simply names a watermark -- and cannot strand anything. Batching can
+ * be restored once an idle-flush exists to accompany it. */
+#define SCS_CM_ACK_EVERY     1u
+/* Flush any residual ack backlog this long after the last ack. Well under the
+ * cluster's own reconnection interval, so the coordinator never waits on us. */
+#define SCS_CM_ACK_FLUSH_MS  15u
 
 struct peer_state {
     int      in_use;
@@ -338,6 +354,15 @@ struct peer_state {
     int      joiner_cfg2_sent;     /* vms-760: the DEFERRED op 0x02 config/topology went out */
     uint16_t sysap_acked;          /* vms-760: highest peer send-msg# we have cat-0x04 acked */
     long     cm_acks;              /* cat-0x04 acks emitted to this peer */
+    long     cm_last_ack_ms;       /* monotonic_ms() of our last cat-0x04 ack */
+    /* vms-760: cluster-wide state-transition barrier (spec 4p). */
+    uint32_t barrier_epoch;        /* body[12:16] latched from the coordinator's op 0x09 */
+    int      barrier_step;         /* current step N, 1..12; 0 = barrier not running */
+    int      barrier_done;         /* step 12 released -- transition complete */
+    uint16_t own_txn;              /* our per-VC transaction-context id */
+    uint16_t own_cksum;            /* our per-VC counter, +1 per transaction we initiate */
+    uint32_t cm_local_conid;       /* our Con.ID on the VC the CM dialogue rides */
+    uint32_t cm_remote_conid;      /* the peer's Con.ID on that VC */
     /* vms-760: WHICH virtual circuit carried our config burst -- the VC we opened
      * (OVMX_JOINER_CONID) normally, or the one the MEMBER opened (OVMX_LOCAL_CONID)
      * under OVMX_NO_OWN_VC. The deferred op 0x02 must ride the SAME VC. */
@@ -1042,6 +1067,101 @@ static int ps_send_mscp_confirm(int sock, int ifindex, struct peer_state *ps,
     return 0;
 }
 
+/*
+ * cm_send_barrier_step - send our op-0x0b request for barrier step N on the VC
+ * the connection-manager dialogue is riding. See scs_member_build_barrier().
+ */
+static int cm_send_barrier_step(int sock, int ifindex, struct peer_state *ps,
+                                const uint8_t our_hw_mac[6],
+                                const uint8_t our_src_logical[6], int step)
+{
+    if (ps->cm_local_conid == 0) {
+        return 0;
+    }
+    struct scs_member_params bp;
+    memset(&bp, 0, sizeof(bp));
+    memcpy(bp.dst_mac, ps->eth_mac, 6);
+    memcpy(bp.src_mac, our_hw_mac, 6);
+    memcpy(bp.src_logical, our_src_logical, 6);
+    memcpy(bp.peer_logical, ps->logical, 6);
+    bp.remote_conid = ps->cm_remote_conid;
+    bp.local_conid = ps->cm_local_conid;
+    bp.incarnation = ps->incarnation;
+    bp.recv_ack = ps->vc.seq.recv_seq;
+    bp.send_seq = scs_seq_advance(&ps->vc.seq);
+    if (ps->sysap_send == 0) {
+        ps->sysap_send = 1;
+    }
+    bp.sysap_send_msg = ps->sysap_send++;
+    bp.sysap_ack_msg = ps->sysap_recv;
+    if (ps->own_txn == 0) {
+        ps->own_txn = 1;   /* our per-VC transaction context */
+    }
+    bp.txn = ps->own_txn;
+    bp.checksum = ++ps->own_cksum; /* one counter for every transaction we start */
+    uint8_t bframe[SCS_MEMBER_FRAME_LEN];
+    if (scs_member_build_barrier(&bp, ps->barrier_epoch, (uint32_t)step, bframe) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, bframe, sizeof(bframe)) > 0) {
+        scs_vc_record_sent(&ps->vc, bp.send_seq, monotonic_ms());
+        log_ts(stdout);
+        printf(" SCSD-I-BARRIER, state-transition barrier step %d/%d"
+               " (epoch=0x%08X txn=%u cksum=0x%04x)\n",
+               step, SCS_MEMBER_BARRIER_STEPS, (unsigned)ps->barrier_epoch,
+               bp.txn, bp.checksum);
+        fflush(stdout);
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * cm_send_ack - emit one category-0x04 SYSAP acknowledgement naming our current
+ * high-water mark on the VC the connection-manager dialogue is riding.
+ *
+ * Called from two places, which together reproduce what VMS does:
+ *   - the receive path, once every SCS_CM_ACK_EVERY unacked messages (the
+ *     reference joiner answers a 254-message burst with 85 acks); and
+ *   - the poll loop, to FLUSH a residual backlog that never reaches the
+ *     threshold. Batching without a flush strands the coordinator's last one or
+ *     two messages and the transaction stops dead (d94-e6).
+ * Acking every message instead is safe but starves our own response path: with
+ * 260 acks in flight, token-correlated requests waited 32 ms for their answer
+ * where a real VAX answers in well under 2 ms (d94-e8 frames 1378-1402).
+ */
+static int cm_send_ack(int sock, int ifindex, struct peer_state *ps,
+                       const uint8_t our_hw_mac[6], const uint8_t our_src_logical[6])
+{
+    if (ps->cm_local_conid == 0) {
+        return 0;
+    }
+    struct scs_member_params ap;
+    memset(&ap, 0, sizeof(ap));
+    memcpy(ap.dst_mac, ps->eth_mac, 6);
+    memcpy(ap.src_mac, our_hw_mac, 6);
+    memcpy(ap.src_logical, our_src_logical, 6);
+    memcpy(ap.peer_logical, ps->logical, 6);
+    ap.remote_conid = ps->cm_remote_conid;
+    ap.local_conid = ps->cm_local_conid;
+    ap.incarnation = ps->incarnation;
+    ap.recv_ack = ps->vc.seq.recv_seq;
+    ap.send_seq = scs_seq_advance(&ps->vc.seq);
+    if (ps->sysap_send == 0) {
+        ps->sysap_send = 1;
+    }
+    ap.sysap_send_msg = ps->sysap_send++;
+    ap.sysap_ack_msg = ps->sysap_recv;
+    uint8_t aframe[SCS_MEMBER_FRAME_LEN];
+    if (scs_member_build_ack(&ap, aframe) == 0 &&
+        send_frame_to(sock, ifindex, ps->eth_mac, aframe, sizeof(aframe)) > 0) {
+        scs_vc_record_sent(&ps->vc, ap.send_seq, monotonic_ms());
+        ps->sysap_acked = ps->sysap_recv;
+        ps->cm_last_ack_ms = monotonic_ms();
+        ps->cm_acks++;
+        return 1;
+    }
+    return 0;
+}
+
 /* vms-760: SCS connection-management credit/ready handshake. After a connection
  * binds (op0/1/2/3), VAX1 runs op8->op9 and op6->op7 control exchanges on it, and
  * GATES further admission (incl. accepting the joiner's own client connects) on the
@@ -1334,6 +1454,18 @@ int main(int argc, char **argv)
     long dir_conn_resp_sent = 0; /* vms-246: SCS$DIRECTORY CONNECT-RESPONSEs sent */
     long dir_lookup_sent = 0;    /* vms-246: SCS$DIR_LOOKUP responses sent */
     long cm_config_frames = 0;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
+    /* vms-760: the deferred op 0x02 goes to EXACTLY ONE peer. Admission is a
+     * single-coordinator transaction: the joiner asks one member, and THAT member
+     * relays the new node to the rest (ref: VAX3 sends op 0x02 only to VAX2, which
+     * immediately opens its own transaction with VAX1 via op 0x12 and then runs a
+     * lockstep barrier across all members). Sending it to every peer starts N
+     * competing cluster-wide state transitions; the cluster aborted with
+     * "%CNXMAN, aborting VAXcluster state transition" and dropped its own members.
+     * WHICH peer a real joiner picks is NOT grounded -- "last to complete config",
+     * "last MSCP walk" and "highest SCSSYSTEMID" are mutually confounded in the one
+     * 3-node specimen we have -- so we take the first peer that becomes eligible
+     * and record the open question rather than inventing a rule. */
+    int cm_cfg2_peer_chosen = 0;
     long cm_response_sent = 0;   /* vms-224: 0x81 responses to member 0x03/0x05 txns */
     long padded_sent = 0;        /* vms-9f3: padded directed HELLOs sent (sec 4k channel verify) */
     long mscp_srv_accepts = 0;   /* vms-760: op=4 MSCP$DISK connect-ACCEPTs we sent (server-first) */
@@ -1766,48 +1898,74 @@ int main(int argc, char **argv)
                     int cm_token_req = cm_req && mv.txn != 0;
                     int cm_plain_req = cm_req && mv.txn == 0;
 
-                    /* Ack CADENCE, grounded: the reference joiner answers a
-                     * 254-message op-0x06 burst with 85 cat-0x04 acks -- one per
-                     * three, each naming a higher watermark (frames 313/314/315:
-                     * am=11/14/17). Acking every single message tripled the frame
-                     * count against a real cluster for no benefit. A trailing
-                     * backlog of one or two is still conveyed, because every 0x81
-                     * response also carries our ack-msg#. */
-                    if (cm_plain_req &&
-                        (uint16_t)(ps->sysap_recv - ps->sysap_acked) >= SCS_CM_ACK_EVERY) {
-                        struct scs_member_params ap;
-                        memset(&ap, 0, sizeof(ap));
-                        memcpy(ap.dst_mac, ps->eth_mac, 6);
-                        memcpy(ap.src_mac, our_hw_mac, 6);
-                        memcpy(ap.src_logical, our_src_logical, 6);
-                        memcpy(ap.peer_logical, ps->logical, 6);
-                        if (cm_on_joiner_vc) {
-                            ap.remote_conid = ps->joiner_remote_conid;
-                            ap.local_conid = OVMX_JOINER_CONID;
-                        } else {
-                            ap.remote_conid = ps->remote_conid;
-                            ap.local_conid = OVMX_LOCAL_CONID;
+                    /* Remember which VC this dialogue rides so the poll-loop
+                     * flush can answer on the same one. */
+                    if (cm_on_joiner_vc) {
+                        ps->cm_local_conid = OVMX_JOINER_CONID;
+                        ps->cm_remote_conid = ps->joiner_remote_conid;
+                    } else {
+                        ps->cm_local_conid = OVMX_LOCAL_CONID;
+                        ps->cm_remote_conid = ps->remote_conid;
+                    }
+
+                    /* Ack cadence: batch, and let the poll loop flush the tail. */
+                    /* Only the op-0x06 burst is acknowledged. op 0x0a and op 0x0c
+                     * also carry txn=0 but are NOTIFICATIONS: no 0x8a/0x8c response
+                     * exists in any capture, and no cat-0x04 ack is attributable to
+                     * them. Consume them, advance our ack-msg#, emit nothing. */
+                    if (cm_plain_req && mv.opcode == SCS_MEMBER_OP_MEMBERSHIP &&
+                        (uint16_t)(ps->sysap_recv - ps->sysap_acked) >= SCS_CM_ACK_EVERY &&
+                        cm_send_ack(sock, (int)ifindex, ps, our_hw_mac, our_src_logical)) {
+                        log_ts(stdout);
+                        printf(" SCSD-I-CMACK, cat-0x04 ack (ack_msg=%u)\n",
+                               ps->sysap_acked);
+                        fflush(stdout);
+                    }
+
+                    /* vms-760: the cluster-wide state-transition BARRIER (spec 4p).
+                     *   op 0x09 (tag 0x0240) -> answer, and latch the epoch
+                     *   op 0x0a (tag 0x0260) -> no answer; start the barrier at N=1
+                     *   op 0x0c (step N)     -> no answer; advance to N+1, or finish
+                     * The joiner is a REQUIRED participant: the coordinator gates every
+                     * member at step N until all of them have sent their 0x0b. */
+                    if (cm_req && mv.opcode == SCS_MEMBER_OP_XITION &&
+                        (size_t)n >= 92) {
+                        ps->barrier_epoch = (uint32_t)buf[84] |
+                                            ((uint32_t)buf[85] << 8) |
+                                            ((uint32_t)buf[86] << 16) |
+                                            ((uint32_t)buf[87] << 24);
+                        log_ts(stdout);
+                        printf(" SCSD-I-XITION, coordinator opened a state transition"
+                               " (epoch=0x%08X)\n", (unsigned)ps->barrier_epoch);
+                        fflush(stdout);
+                    }
+                    if (cm_req && mv.opcode == SCS_MEMBER_OP_XITION_GO &&
+                        (size_t)n >= 90 && !ps->barrier_step && !ps->barrier_done) {
+                        uint16_t tag = (uint16_t)buf[88] | ((uint16_t)buf[89] << 8);
+                        if (tag == SCS_MEMBER_BARRIER_TAG) {
+                            ps->barrier_step = 1;
+                            cm_send_barrier_step(sock, (int)ifindex, ps, our_hw_mac,
+                                                 our_src_logical, ps->barrier_step);
                         }
-                        ap.incarnation = ps->incarnation;
-                        ap.recv_ack = ps->vc.seq.recv_seq;
-                        ap.send_seq = scs_seq_advance(&ps->vc.seq);
-                        if (ps->sysap_send == 0) {
-                            ps->sysap_send = 1;
-                        }
-                        ap.sysap_send_msg = ps->sysap_send++;
-                        ap.sysap_ack_msg = ps->sysap_recv;
-                        uint8_t aframe[SCS_MEMBER_FRAME_LEN];
-                        if (scs_member_build_ack(&ap, aframe) == 0 &&
-                            send_frame_to(sock, (int)ifindex, ps->eth_mac, aframe,
-                                          sizeof(aframe)) > 0) {
-                            scs_vc_record_sent(&ps->vc, ap.send_seq, monotonic_ms());
-                            ps->sysap_acked = ps->sysap_recv;
-                            ps->cm_acks++;
-                            log_ts(stdout);
-                            printf(" SCSD-I-CMACK, cat-0x04 ack of the coordinator's"
-                                   " op 0x06 burst (send_msg=%u ack_msg=%u)\n",
-                                   ap.sysap_send_msg, ap.sysap_ack_msg);
-                            fflush(stdout);
+                    }
+                    if (cm_req && mv.opcode == SCS_MEMBER_OP_BARRIER_REL &&
+                        ps->barrier_step && (size_t)n >= 92) {
+                        uint32_t rel = (uint32_t)buf[88] | ((uint32_t)buf[89] << 8) |
+                                       ((uint32_t)buf[90] << 16) | ((uint32_t)buf[91] << 24);
+                        if ((int)rel == ps->barrier_step) {
+                            if (ps->barrier_step >= SCS_MEMBER_BARRIER_STEPS) {
+                                ps->barrier_done = 1;
+                                ps->barrier_step = 0;
+                                log_ts(stdout);
+                                printf(" SCSD-I-XITDONE, state transition COMPLETE"
+                                       " (all %d barrier steps released)\n",
+                                       SCS_MEMBER_BARRIER_STEPS);
+                                fflush(stdout);
+                            } else {
+                                ps->barrier_step++;
+                                cm_send_barrier_step(sock, (int)ifindex, ps, our_hw_mac,
+                                                     our_src_logical, ps->barrier_step);
+                            }
                         }
                     }
 
@@ -2133,6 +2291,18 @@ int main(int argc, char **argv)
                 }
             }
 
+            /* vms-760: FLUSH a residual cat-0x04 ack backlog. The receive path
+             * batches at SCS_CM_ACK_EVERY, which by itself strands the last one or
+             * two messages of a burst below the threshold -- the coordinator then
+             * waits forever for an ack it will never get (d94-e6: acked through 76,
+             * messages 77-78 arrived, transaction stopped). Batching plus this
+             * flush gives the reference's frame economy without the stall. */
+            if (do_connect && ps->cm_local_conid != 0 &&
+                ps->sysap_recv != ps->sysap_acked &&
+                (monotonic_ms() - ps->cm_last_ack_ms) >= (long)SCS_CM_ACK_FLUSH_MS) {
+                cm_send_ack(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
+            }
+
             /* vms-760: send the DEFERRED third config message -- category 0x01
              * opcode 0x02 (config/topology) -- on OUR joiner VC, a few seconds
              * after the MODEL+PARAMS pair.
@@ -2147,6 +2317,7 @@ int main(int argc, char **argv)
              * The ~5 s delay is taken from the reference; what the real joiner
              * actually waits on is NOT grounded (see spec 5(z)). */
             if (do_connect && ps->cfg_sent && !ps->joiner_cfg2_sent &&
+                !cm_cfg2_peer_chosen &&
                 (monotonic_ms() - ps->cfg_ms) >= (long)JOIN_CFG2_DELAY_MS) {
                 struct scs_member_params mp;
                 memset(&mp, 0, sizeof(mp));
@@ -2167,6 +2338,7 @@ int main(int argc, char **argv)
                                   sizeof(c2frame)) > 0) {
                     scs_vc_record_sent(&ps->vc, mp.send_seq, monotonic_ms());
                     ps->joiner_cfg2_sent = 1;
+                    cm_cfg2_peer_chosen = 1; /* single coordinator -- see above */
                     cm_config_frames++;
                     log_ts(stdout);
                     printf(" SCSD-I-CMCONFIG2, sent DEFERRED op 0x02 config/topology"
@@ -2864,8 +3036,15 @@ int main(int argc, char **argv)
                     dp.local_conid = 0;
                     dp.recv_ack = ps->vc.seq.recv_seq;
                     dp.send_seq = ps->mscp_srv_echo_seq;
+                    /* vms-760: answer in the CONNECTION's phase (see the
+                     * SCS$DIRECTORY accept path). An established member opens this
+                     * MSCP$DISK connect with the data-phase msgtype; replying with
+                     * the builder's establishing-phase default made our ACCEPT4
+                     * arrive as 0x5b against a 0x4b request (d94-e6 frame 595). */
+                    uint8_t mscp_mt = buf[30];
                     uint8_t eframe[SCS_DIR_ECHO_FRAME_LEN];
                     if (scs_dir_build_mscp_echo(&dp, eframe) == 0) {
+                        eframe[30] = mscp_mt;
                         send_frame_to(sock, (int)ifindex, ps->eth_mac, eframe, sizeof(eframe));
                     }
 
@@ -2875,6 +3054,7 @@ int main(int argc, char **argv)
                     dp.send_seq = ps->mscp_srv_accept_seq;
                     uint8_t aframe[SCS_DIR_CONFIRM_FRAME_LEN];
                     if (scs_dir_build_mscp_accept(&dp, aframe) == 0 &&
+                        (aframe[30] = mscp_mt, 1) &&
                         send_frame_to(sock, (int)ifindex, ps->eth_mac, aframe,
                                       sizeof(aframe)) > 0) {
                         ps->mscp_srv_bound = 1;

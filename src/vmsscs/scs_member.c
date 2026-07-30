@@ -287,6 +287,29 @@ int scs_member_build_ack(const struct scs_member_params *p,
     return 0;
 }
 
+int scs_member_build_barrier(const struct scs_member_params *p,
+                             uint32_t epoch, uint32_t step,
+                             uint8_t out[SCS_MEMBER_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    build_common(p, member_config_tmpl, out);
+
+    uint8_t *body = out + 72;
+    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
+    put_le16(body + 0, p->sysap_send_msg);
+    put_le16(body + 2, p->sysap_ack_msg);
+    put_le16(body + 4, p->txn);
+    put_le16(body + 6, p->checksum);
+    body[8] = SCS_MEMBER_CAT_CONFIG;
+    body[9] = SCS_MEMBER_OP_BARRIER;
+    /* body[10:12] left zero -- residue in the specimens that carry anything. */
+    put_le32(body + SCS_MEMBER_EPOCH_BODYOFF, epoch);
+    put_le32(body + SCS_MEMBER_STEP_BODYOFF, step);
+    return 0;
+}
+
 int scs_member_build_token_response(const struct scs_member_params *p,
                                     const uint8_t *req_frame, size_t req_len,
                                     uint8_t out[SCS_MEMBER_FRAME_LEN])
@@ -302,13 +325,21 @@ int scs_member_build_token_response(const struct scs_member_params *p,
         return -1;
     }
 
-    build_common(p, member_config_tmpl, out);
+    /* vms-760: base this on the PARAMS template, not the config one. The real
+     * cat-0x86 response carries the responder's OWN node-parameter block, and
+     * that block is structurally the one we already send in our op-0x01 PARAMS
+     * message -- byte-for-byte the same shape at the same offsets:
+     *   body[72:76] = 0x00000010, body[76:80] = 0x00000001,
+     *   body[88:96] = "V7.3    "
+     * (ref frame 673 vs the golden op-0x01; the spans that differ, body[64:72]
+     * and body[80:88], are per-node/per-boot values, and ours are our own).
+     * Sending an EMPTY body here left the coordinator holding the barrier: it
+     * answered our step-5 request and then never released step 5 (d94-e11
+     * frames 1297 -> 1299/1301 -> nothing). */
+    build_common(p, member_params_tmpl, out);
 
     uint8_t *body = out + 72;
     const uint8_t *rbody = req_frame + 72;
-
-    /* Empty payload -- deliberately NOT the requester's body (see header). */
-    memset(body + 4, 0, SCS_MEMBER_SCA_LEN - SCS_MEMBER_BODY_OFF - 4);
     put_le16(body + 0, p->sysap_send_msg);
     put_le16(body + 2, p->sysap_ack_msg);
     body[4] = rbody[4]; body[5] = rbody[5]; /* txn      -- carried verbatim */
@@ -350,7 +381,13 @@ int scs_member_build_response(const struct scs_member_params *p,
     /* txn (body[4:6]) + checksum (body[6:8]) stay echoed from the request. */
     obody[8] = (uint8_t)(rbody[8] | SCS_MEMBER_RESPONSE_BIT); /* set response bit */
     /* opcode body[9] stays echoed. */
-    obody[SCS_MEMBER_RESP_MARK_BODYOFF] = 0x01; /* response marker (GROUNDED 0x03+0x05) */
+    obody[SCS_MEMBER_RESP_MARK_BODYOFF] = 0x01; /* response marker (GROUNDED 0x03+0x05+0x09) */
+    /* vms-760: the echo takes exactly THREE mutations, not two. body[55] is
+     * cleared as well -- GROUNDED on 6/6 responses across 5 captures and 3
+     * different responder nodes (rdiff: "differs at 3 offsets: b[8], b[18],
+     * b[55]", nothing else). In the requests it held 0x0e / 0x0a / 0x06, which
+     * tracks the member set; whatever it means, the responder zeroes it. */
+    obody[55] = 0x00;
 
     return 0;
 }

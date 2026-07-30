@@ -599,10 +599,13 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          *
          * THAT CLAIM IS TRUE ONLY BECAUSE OF creprc_read_all(): a bare
          * read() also came back short when the CALLER caught a signal
-         * under a handler without SA_RESTART, and the waitpid() below
-         * then blocked for the entire lifetime of a live, correctly
-         * created process. Both halves of this branch -- the status and
-         * the reap -- depend on a short transfer meaning the child died.
+         * under a handler without SA_RESTART, and this branch then ran
+         * against a live, correctly created process -- either killing it
+         * (the close() above turns its report into SIGPIPE) or blocking
+         * the waitpid() below for the whole life of the image it had
+         * just started, depending only on which of the two reached the
+         * pipe first. Both halves of this branch -- the status and the
+         * reap -- depend on a short transfer meaning the child died.
          * The child likewise refuses to activate its image if its own
          * report did not get through, so the two cannot disagree.
          *

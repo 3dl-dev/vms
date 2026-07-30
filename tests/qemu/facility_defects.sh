@@ -671,17 +671,25 @@ reads that as "the child died before reporting". This is the vms-8019 round-4
 defect exactly, and it is not a theoretical one: DCL installs its interactive
 SIGINT/SIGQUIT handlers with sa_flags = 0 (src/vmsdcl/dcl_main.c) and DCL is
 what calls $CREPRC, so a Ctrl-C in the handshake window is the production
-trigger. The consequence has two halves, both wrong in the same way -- the
-caller is told OVMX$_PRCLOST ("nothing was ever entered in the table") about a
-process that IS in the table and resolvable by name, and $CREPRC then reaps
-that live process, blocking for as long as the image it just started runs.
+trigger.
+THE DEFECT HAS TWO ENDINGS AND THE SCHEDULER PICKS ONE. Either the caller
+closes the pipe's read end first, so the child's report takes SIGPIPE, the
+child dies, and $CREPRC answers OVMX$_PRCLOST ("nothing was ever entered in
+the table") about a process that WAS created and registered; or the child
+reports first, activates its image, and $CREPRC's reap blocks for the lifetime
+of that image, so the call never comes back at all. BOTH were measured from
+this same mutation on this same commit -- the second on an aarch64 host under
+TCG, the FIRST on the x86_64 CI runner. They are one property (the caller's
+signal decided what $CREPRC said about the child) seen through two channels,
+so the suite asserts them as ONE assertion and prints which ending it saw;
+naming them separately is what made an earlier revision of this control flaky.
 Nothing else in the file is touched: with no signal delivered the mutated code
 and the correct code are byte-for-byte equivalent in behaviour, which is why
 the ONLY assertion it reddens is the one that arranges the signal.
 EOF
                       ;;
         require_fail) cat <<'EOF'
-sys$creprc RETURNED on every call while the caller caught signals
+sys$creprc returned, and reported no process lost, while the caller caught signals
 EOF
                       ;;
         knock_on_fail) echo "";;

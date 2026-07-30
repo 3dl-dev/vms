@@ -134,8 +134,11 @@ static int fail = 0;
  * made it return -1/EINTR -- which $CREPRC then read as "the child died
  * before reporting" and answered with OVMX$_PRCLOST, a SEVERE status
  * asserting that no process was created, for a process that WAS created
- * and IS in the executive's table. It then reaped that live process,
- * blocking for as long as the created image ran.
+ * and IS in the executive's table. It then reaped that process -- and
+ * whether the reap returned at once or blocked for the whole life of
+ * the created image came down to which of the two raced to the pipe
+ * first (see the detector note further down; both endings have been
+ * measured, on different architectures, from the same mutation).
  *
  * The production trigger is ordinary: DCL installs its interactive
  * SIGINT/SIGQUIT handlers with sa_flags = 0 (no SA_RESTART) in
@@ -1652,12 +1655,40 @@ int main(void)
      * must be in the table under the name it was given, and the call must
      * return.
      *
-     * WHICH ASSERTION IS THE DETECTOR: the bounded completion and
-     * `prclost == 0`. `arranged >= SIGPROBE_MIN_ARRANGED` is not a
-     * detector, it is the ARRANGEMENT CHECK -- it proves the caller really
-     * was interrupted mid-handshake, so a green result means the code
-     * survived the condition rather than never meeting it. Without it this
-     * block would pass on a run where the tracer never managed it.
+     * WHICH ASSERTION IS THE DETECTOR, AND WHY IT IS **ONE** ASSERTION
+     * AND NOT TWO. The defect has two possible observable endings, and
+     * WHICH ONE HAPPENS IS DECIDED BY THE SCHEDULER:
+     *
+     *   (a) the caller is released from the interrupted read and closes
+     *       the pipe's read end BEFORE the child gets to report; the
+     *       child's report then takes SIGPIPE, the child dies, the
+     *       creator's reap returns at once, and the call comes back
+     *       OVMX$_PRCLOST;
+     *   (b) the child reports FIRST; the report lands in the pipe the
+     *       caller has already stopped reading, the child activates its
+     *       image, and the creator's reap blocks for the lifetime of
+     *       that image -- so the call does not come back at all.
+     *
+     * MEASURED, BOTH: (b) on this aarch64 host under TCG, (a) on the
+     * x86_64 CI runner, from the SAME mutation on the SAME commit. Split
+     * across two named assertions -- "the call returned" and "prclost
+     * == 0" -- that makes the negative control FLAKY: it reddens a
+     * different name on different machines, so no manifest can name the
+     * red set correctly. Raising the bound or retrying would only pick a
+     * winner more often, which is masking, not fixing.
+     *
+     * They are ONE property observed through two channels -- the
+     * caller's signal decided what $CREPRC said about the child -- so
+     * they are ONE assertion, and the two endings are distinguished in
+     * the PRINTED output instead, where a diagnosis needs them and a
+     * gate does not. Nothing is dropped: (a) and (b) both still fail,
+     * and both still fail for the same stated reason.
+     *
+     * `arranged >= SIGPROBE_MIN_ARRANGED` is NOT a detector, it is the
+     * ARRANGEMENT CHECK -- it proves the caller really was interrupted
+     * mid-handshake, so a green result means the code survived the
+     * condition rather than never meeting it. Without it this block
+     * would pass on a run where the tracer never managed it.
      * --------------------------------------------------------------- */
     hs = fopen(HOLD_SCRIPT, "w");           /* P10 unlinked it */
     if (!hs) {
@@ -1708,10 +1739,21 @@ int main(void)
                     ;
             }
 
-            CHECK(prc == 0 && prp.ok == 1,
-                  "sys$creprc RETURNED on every call while the caller caught signals");
+            int returned = (prc == 0 && prp.ok == 1);
 
-            if (prc == 0 && prp.ok == 1) {
+            /* THE detector, and deliberately a single one: see the
+             * block comment above. Ending (b) leaves `returned` zero;
+             * ending (a) leaves prclost nonzero. Which of the two a
+             * given machine produces is the scheduler's choice, so
+             * naming them separately makes this control flaky. */
+            if (returned && prp.prclost > 0)
+                printf("  (P13: %u of %u calls came back OVMX$_PRCLOST for a "
+                       "process that WAS created)\n",
+                       (unsigned)prp.prclost, (unsigned)prp.iters);
+            CHECK(returned && prp.prclost == 0,
+                  "sys$creprc returned, and reported no process lost, while the caller caught signals");
+
+            if (returned) {
                 printf("  (P13: %u calls, %u interrupted mid-handshake, "
                        "%lld ms of the %d ms bound)\n",
                        (unsigned)prp.iters, (unsigned)prp.arranged,
@@ -1722,8 +1764,6 @@ int main(void)
                  * condition rather than never meeting it. */
                 CHECK(prp.arranged >= SIGPROBE_MIN_ARRANGED,
                       "the caller really was signalled while blocked in the creation handshake");
-                CHECK(prp.prclost == 0,
-                      "sys$creprc never reported OVMX$_PRCLOST for a process it created");
                 CHECK(prp.failed == 0,
                       "sys$creprc reported no other failure under a non-restarting handler");
                 CHECK(prp.unresolvable == 0,

@@ -50,6 +50,8 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <stdint.h>
+#include <ctype.h>
+#include <errno.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -186,6 +188,86 @@ static void reap(uint32_t pid)
     kill((pid_t)pid, SIGKILL);
     int st;
     waitpid((pid_t)pid, &st, 0);
+}
+
+/*
+ * run_show_system - run the REAL "SHOW SYSTEM" DCL command and capture it.
+ *
+ * DCL.EXE is staged into the initramfs at /bin by tests/qemu/Dockerfile
+ * (absence there is a FATAL image-build error, not a skip). This is the
+ * only place SHOW SYSTEM can be proven: it is a reader of the executive's
+ * process table, and ctest never runs anywhere a process table exists.
+ *
+ * Returns 0 on success with the command's stdout in out.
+ */
+static int run_show_system(char *out, size_t outsz)
+{
+    int in_pipe[2], out_pipe[2];
+
+    out[0] = '\0';
+    if (pipe(in_pipe) < 0) return -1;
+    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+
+    if (pid == 0) {
+        dup2(in_pipe[0], STDIN_FILENO);
+        dup2(out_pipe[1], STDOUT_FILENO);
+        dup2(out_pipe[1], STDERR_FILENO);
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        execl("/bin/DCL.EXE", "DCL.EXE", (char *)NULL);
+        _exit(127);
+    }
+
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    const char *script = "SHOW SYSTEM\nLOGOUT\n";
+    ssize_t w = write(in_pipe[1], script, strlen(script));
+    (void)w;
+    close(in_pipe[1]);
+
+    size_t used = 0;
+    for (;;) {
+        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
+        if (n <= 0) break;
+        used += (size_t)n;
+        if (used >= outsz - 1) break;
+    }
+    out[used] = '\0';
+    close(out_pipe[0]);
+
+    int st;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
+        ;
+    return 0;
+}
+
+/*
+ * count_process_rows - how many process rows SHOW SYSTEM printed.
+ *
+ * A row is a line beginning with a space and eight hex digits (the Pid
+ * column, " %08X "). The banner and the column headings do not match.
+ */
+static int count_process_rows(const char *text)
+{
+    int rows = 0;
+    const char *line = text;
+
+    while (line && *line) {
+        if (line[0] == ' ') {
+            int i;
+            for (i = 1; i < 9; i++)
+                if (!isxdigit((unsigned char)line[i]))
+                    break;
+            if (i == 9 && line[9] == ' ')
+                rows++;
+        }
+        line = strchr(line, '\n');
+        if (line) line++;
+    }
+    return rows;
 }
 
 /*
@@ -368,7 +450,32 @@ int main(void)
           "the scan names processes the caller is not (subject + 15-char subject)");
 
     /* ---------------------------------------------------------------
-     * P8. lib$getjpi -- the RTL wrapper -- reaches the same executive
+     * P8. THE USER-VISIBLE COMMAND. Run the real "SHOW SYSTEM" through
+     *     the real DCL.EXE against this real executive. It must list
+     *     MORE THAN THE CALLING PROCESS and must name the subject --
+     *     which is the outcome this item is actually about, and which
+     *     the old one-row-from-my-own-PCB implementation could not
+     *     produce no matter how many processes existed.
+     * --------------------------------------------------------------- */
+    static char sysout[65536];
+    if (run_show_system(sysout, sizeof(sysout)) != 0) {
+        CHECK(0, "SHOW SYSTEM ran under DCL.EXE");
+    } else {
+        CHECK(strstr(sysout, "Process Name") != NULL,
+              "SHOW SYSTEM printed its process table heading");
+        int rows = count_process_rows(sysout);
+        if (rows <= 1)
+            printf("  (SHOW SYSTEM printed %d row(s); output follows)\n%s\n",
+                   rows, sysout);
+        CHECK(rows > 1, "SHOW SYSTEM listed MORE THAN the calling process");
+        CHECK(strstr(sysout, SUBJECT_NAME) != NULL,
+              "SHOW SYSTEM named the subject process, which it did not create");
+        CHECK(strstr(sysout, LEN16_NAME) != NULL,
+              "SHOW SYSTEM named the second subject process too");
+    }
+
+    /* ---------------------------------------------------------------
+     * P9. lib$getjpi -- the RTL wrapper -- reaches the same executive
      *     row. This coverage was moved here from tests/libvms/
      *     test_lib_rtl.c, which asserted it on a host with no /dev/vms:
      *     an assertion that a VMS system service works with no executive
@@ -404,7 +511,7 @@ int main(void)
     reap(ok15_pid);
 
     /* ---------------------------------------------------------------
-     * P9. A name is released when its process dies, so it can be taken
+     * P10. A name is released when its process dies, so it can be taken
      *     again. Proves the table is live state, not an append-only log.
      * --------------------------------------------------------------- */
     uint32_t retaken = 0;

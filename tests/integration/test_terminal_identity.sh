@@ -35,6 +35,17 @@
 # check. tests/integration/test_terminal_identity_negctl.sh proves each
 # property below can actually go red, one minimal mutation at a time.
 #
+# WHAT THIS FILE DOES *NOT* ENFORCE, so nobody reads more into it than it
+# says (vms-fb9 round 2). Every check below is TOKEN ABSENCE: it keeps a
+# specific named fabrication deleted. It cannot see a NEW fabrication written
+# in a spelling it has never met, and that is not a hypothetical -- an
+# adversary reintroduced SHOW DEVICE's hardcoded stub row in the current
+# oracle format and all ten checks here passed. The invariant "no row reaches
+# the user that did not come from a /dev/vms read" is BEHAVIOURAL and is
+# enforced by tests/integration/test_show_device_rows.sh, which runs DCL and
+# requires stdout to be empty of rows. Do not add more token checks here in
+# the belief that they cover it; they do not.
+#
 # Usage: test_terminal_identity.sh [SRC_ROOT]
 
 set -u
@@ -42,7 +53,8 @@ set -u
 SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 status=0
 
-echo "vms-fb9 gate: devices are executive-resident; nothing names its own terminal"
+echo "vms-fb9 source gate: nothing names its own terminal (token absence only --"
+echo "  the no-fabricated-rows PROPERTY is enforced by test_show_device_rows.sh)"
 
 # Strip C comments (/* */ and //) so a token that appears only in prose is
 # not mistaken for code. String literals containing "/*" are not handled and
@@ -102,9 +114,18 @@ scan_absent "no code hands VMS_TERMINAL down through the environment" \
 scan_absent "no code hands VMS_DEVICE_TYPE down through the environment" \
     'setenv("VMS_DEVICE_TYPE"' $SRC_FILES
 
-# --- 3. DCL does not hand itself a terminal name from a private pool ----
-scan_absent "DCL does not allocate its own terminal name from a private pool" \
-    'vms_term_allocate(' "$SRC_ROOT/src/vmsdcl/dcl_main.c"
+# --- 3. Nothing hands itself a terminal name from a private pool --------
+# TREE-WIDE ON THE SYMBOL, not "this call site in this file" (vms-fb9 round
+# 2). The check used to name src/vmsdcl/dcl_main.c, and an adversary evaded
+# it in one line by moving the call into src/vmsdcl/dcl_lexical.c -- the gate
+# stayed green and the pool was still being used. A gate scoped to where a
+# defect happened to live last time is a gate against history.
+#
+# vms_term_allocate() is now DELETED outright (Rule 10: do not keep a
+# mechanism for a condition OVMX no longer has), so this scan covers its
+# DEFINITION as well as any call -- re-adding it anywhere is what goes red.
+scan_absent "no code allocates a terminal name from a private pool" \
+    'vms_term_allocate' $SRC_FILES
 
 # --- 3b. ...nor from a compiled-in default ------------------------------
 # The fabrication had THREE sources (env, pool, default). Deleting two and

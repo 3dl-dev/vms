@@ -157,24 +157,57 @@ interleaved cat-`0x02` DLM rebuild transactions.
 
 **`SHOW CLUSTER` still reads `NEW`.** That is the whole remaining gap.
 
-## 2. The frontier — the cat-`0x02` `op 0x0d` DLM response (2026-07-30g)
+## 2. The frontier (2026-07-30g, latest first)
 
-**Start here.** In run `coord3`, with the close fixed, the barrier reached 5/12
-and then **VAX1 and VAX3 bugchecked `LOCKMGRERR, Error detected by Lock Manager`**
-immediately after `completing VAXcluster state transition`. We had blind-echoed
-**eight cat-`0x02` `op 0x0d`** lock-resource rebuild records.
+### 2a. LIVE: barrier stalls at step 1, and it is NOT the DLM
 
-A joining node **holds no locks**, so echoing a rebuild record back asserts lock
-state we do not have — and the peer's lock manager checks it. This is the same
-defect class as the PARAMS-derived close, one category over: a shape inherited
-rather than grounded. The code says so at `cm_response_shape()`.
+**The cat-`0x02` `op 0x0d` shape is SOLVED and implemented** (§2b below — verbatim
+echo + `body[34]=0xf9`, 1367/1367 byte-exact, unit-tested). But the run that was
+meant to verify it never reached the DLM at all:
 
-> **The question to delegate first:** what does a real joiner — which also holds
-> no locks — send in response to cat `0x02` `op 0x0d`? Diff against
-> `vax3-2to3-established-join-20260730.pcap`, where this same phase completes and
-> nobody crashes. Specimen of the failure:
-> `captures/ovmx-760-lockmgrerr-20260730.pcap` (+ `~/vax/cluster/work/scsd-coord3.log`,
-> timestamps aligned).
+| run | build | barrier | cat-`0x02` seen | cluster |
+|---|---|---|---|---|
+| `coord3` | echo + cat-01 mutations | 5 | 8 (mangled) | **VAX1+VAX3 dead, LOCKMGRERR** |
+| `coord4` | refuse | **5** | 15 (7 distinct → retransmits) | healthy |
+| `coord6` | grounded DLM | 1 | **0** | healthy *(lab not reset — void)* |
+| `coord7` | grounded DLM | **1** | **0** | healthy *(lab verified `CN_3`)* |
+
+`coord7` completed the whole dialogue — `op 0x03` COMMIT, five `op 0x05` lock
+rebuilds, the `op 0x06` burst, `op 0x09`, barrier step 1 — and then the
+coordinator **never released step 1**. Response inventory is *identical* to
+`coord4` apart from the absent cat-`0x02`. **So the missing DLM traffic is a
+CONSEQUENCE of stalling at step 1, not its cause** — in `coord4` the DLM storm
+only began once step 5 was reached.
+
+> **Do not assume this is a regression from the DLM change** — it should not
+> affect step 1 — **and do not assume it is variance either.** Both readings are
+> open; an agent is diffing `coord4` vs `coord7`. The single most useful thing to
+> establish: **did an `op 0x0c` release for step 1 ever arrive in `coord7`**, in
+> any form or on any VC, that OVMX failed to recognise? Our log prints nothing
+> for unhandled ops — that instrumentation gap is worth closing.
+
+Specimens: `ovmx-760-barrier1-stall-20260730.pcap` (coord7) and
+`ovmx-760-barrier5-dlmrefused-20260730.pcap` (coord4), logs
+`~/vax/cluster/work/scsd-coord{4,7}.log`.
+
+### 2b. SOLVED — the cat-`0x02` `op 0x0d` DLM response
+
+GROUNDED and implemented. The response is a **verbatim echo + `body[34]=0xf9`**,
+a recipe that reconstructs **1367 of 1367** real responses byte-for-byte across
+four responder nodes and two captures. Derived independently by two agents.
+
+**The theory that was wrong, and cost three sessions:** "a joiner holds no locks,
+so echoing a rebuild record asserts lock state it does not have." False. The echo
+returns the **coordinator's own record** with a result code and claims nothing —
+which is why a lock-less joiner answers all 216 of them. What killed VAX1 and
+VAX3 was **corrupting** the record: we applied the cat-`0x01` mutations
+`body[18]=0x01` and `body[55]=0x00`, and for cat `0x02` those offsets land inside
+the L1 region and **the 8th byte of the lock resource name** —
+`"CACHE$cmSYSDSK1"` went out as `"CACHE$c\0SYSDSK1"`. The in-capture control is
+decisive: across the same milliseconds VAX1 and VAX3 exchanged the same records
+with each *other* correctly and neither crashed.
+
+Full rule in spec §4(p); regression test in `tests/vmsscs/test_scs_member.c`.
 
 ### The controlled pair, both measured on a pristine 3-node lab
 

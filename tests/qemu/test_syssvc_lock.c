@@ -58,6 +58,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <poll.h>
 #include <sys/wait.h>
 #include <stdint.h>
 
@@ -102,6 +103,15 @@ struct lksb_caller {
 
 #define EXIT_SKIP 77
 
+/*
+ * How long the parent waits for each of the child's two reports before
+ * declaring the child wedged. Must stay well under run_tests.sh's 120s QEMU
+ * TIMEOUT so the harness still reaches its own FINAL RESULTS accounting and
+ * CI can name WHICH suite broke rather than reporting an unattributable
+ * timeout. Both reports arrive in milliseconds on a healthy run.
+ */
+#define CHILD_REPORT_TIMEOUT_MS 20000
+
 static int pass = 0, fail = 0;
 
 #define CHECK(cond, msg) do { \
@@ -133,6 +143,47 @@ static int bootstrap(const char *who)
         return -1;
     }
     return 0;
+}
+
+/*
+ * read_bounded - read exactly `len` bytes from `fd`, giving up after
+ * `timeout_ms`. Returns 1 on success, 0 on timeout, -1 on EOF/error.
+ *
+ * WHY THE BOUND LIVES IN THE PARENT, NOT THE CHILD (do not "simplify" this
+ * back into an alarm in the child -- it was tried and it provably cannot
+ * work). The child's post-release sys$enqw blocks IN THE KERNEL: the lock
+ * manager's sync waiter (src/kernel/vms_lock.c, enq_wait_sync) loops on
+ * wait_event_interruptible_timeout and deliberately re-arms on a signal
+ * wake, and the ioctl never returns to user mode, so no userspace signal
+ * is ever delivered -- a SIGALRM in the child is swallowed. Verified by
+ * running it: with sys$deq stubbed to report success without reaching the
+ * executive, a child-side alarm(20) never fired and the whole VM sat until
+ * run_tests.sh's 120s QEMU timeout killed it. Every later suite then never
+ * ran, and CI saw a timeout indistinguishable from a boot panic instead of
+ * a named assertion failure. The parent is NOT blocked in the kernel, so
+ * it is the only process that can bound this.
+ *
+ * This is a FAILURE bound, not sleep-based pacing: the happy path still
+ * synchronises on the child's real output, and the timeout only converts
+ * "hang until QEMU dies" into a named FAIL line.
+ */
+static int read_bounded(int fd, void *buf, size_t len, int timeout_ms)
+{
+    struct pollfd pfd = { .fd = fd, .events = POLLIN };
+    size_t got = 0;
+
+    while (got < len) {
+        int pr = poll(&pfd, 1, timeout_ms);
+        if (pr == 0)
+            return 0;
+        if (pr < 0)
+            return -1;
+        ssize_t n = read(fd, (char *)buf + got, len - got);
+        if (n <= 0)
+            return -1;
+        got += (size_t)n;
+    }
+    return 1;
 }
 
 /* ================================================================
@@ -170,6 +221,14 @@ static int run_child(int c2p_write, int p2c_read)
     char go;
     if (read(p2c_read, &go, 1) != 1)
         fail++;
+
+    /*
+     * The sys$enqw below is a genuinely BLOCKING call -- $ENQW asks the
+     * kernel lock manager to sleep in-kernel until the request is granted.
+     * If the parent's sys$deq did not really release the lock, this child
+     * never returns and cannot be woken from userspace (see read_bounded's
+     * comment). The PARENT bounds this; nothing here can.
+     */
 
     /* --- Now that the parent released, the SAME resource must grant --- */
     struct lksb_caller lksb_retry = {0};
@@ -285,8 +344,11 @@ int main(void)
 
     /* --- Receive child's NOQUEUE-denial report --- */
     struct child_msg msg = {0};
-    ssize_t n = read(c2p[0], &msg, sizeof(msg));
-    CHECK(n == (ssize_t)sizeof(msg) && msg.stage == 1 && msg.fail == 0,
+    int r = read_bounded(c2p[0], &msg, sizeof(msg), CHILD_REPORT_TIMEOUT_MS);
+    if (r == 0)
+        printf("  (child produced no NOQUEUE-denial report within %d ms)\n",
+               CHILD_REPORT_TIMEOUT_MS);
+    CHECK(r == 1 && msg.stage == 1 && msg.fail == 0,
           "parent: child's NOQUEUE-denial checks reported via public API");
 
     /* Release the lock (public sys$deq), then let the child retry. */
@@ -298,12 +360,32 @@ int main(void)
         fail++;
 
     /* --- Receive child's final report (post-release retry) --- */
-    n = read(c2p[0], &msg, sizeof(msg));
-    CHECK(n == (ssize_t)sizeof(msg) && msg.stage == 2 && msg.fail == 0,
+    r = read_bounded(c2p[0], &msg, sizeof(msg), CHILD_REPORT_TIMEOUT_MS);
+    if (r == 0)
+        printf("  (child's post-release sys$enqw never returned within %d ms:"
+               " the resource is still held, so the parent's sys$deq reported"
+               " success without releasing it in the executive)\n",
+               CHILD_REPORT_TIMEOUT_MS);
+    CHECK(r == 1 && msg.stage == 2 && msg.fail == 0,
           "parent: child's post-release retry succeeded via public API");
 
+    /*
+     * Reap only if the child can be reaped. A child wedged in the kernel's
+     * sync lock wait is not merely slow, it is unkillable from userspace
+     * (enq_wait_sync re-arms on every signal wake), so a blocking waitpid
+     * here would hang the SUITE for the same reason the read above would
+     * have. Poll briefly, then give up and report -- the child is reaped by
+     * the VM's reboot at the end of the run either way, and this suite has
+     * already recorded its verdict.
+     */
     int wstatus = 0;
-    waitpid(child_pid, &wstatus, 0);
+    for (int i = 0; i < 20; i++) {
+        pid_t w = waitpid(child_pid, &wstatus, WNOHANG);
+        if (w == child_pid || w < 0)
+            break;
+        struct pollfd nothing = { .fd = -1, .events = 0 };
+        poll(&nothing, 1, 100);
+    }
 
     close(c2p[0]);
     close(p2c[1]);

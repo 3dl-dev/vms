@@ -17,9 +17,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # NEGATIVE_CONTROL=1 simulates the executive being absent: vms.ko is built
 # normally (so the module and vmsfs.ko are proven buildable) but init.sh's
 # insmod of vms.ko is skipped, so /dev/vms never appears and every test that
-# depends on it fails honestly with "cannot open /dev/vms" (the real
-# SS$_NOSUCHDEV path, not a fake). This build arg exists ONLY to prove the CI
-# gate can actually go red — it is never set for the real barrier job.
+# depends on it fails honestly with "cannot open /dev/vms" instead of
+# silently passing. (This comment used to call that "the real SS$_NOSUCHDEV
+# path"; vms-0ff DELETED that path -- OVMX has no executive-absent state,
+# PID 1 refuses to boot without one. This image is a test RIG deliberately
+# booted without an executive, which is why it can still reach a state the
+# product cannot.) This build arg exists ONLY to prove the CI gate can
+# actually go red — it is never set for the real barrier job.
 ARG NEGATIVE_CONTROL=0
 
 # Install: build tools, kernel packages, QEMU, busybox for initramfs.

@@ -115,6 +115,21 @@ static int fail = 0;
 #define CALLER_USERNAME "OVMXCALLER"
 #define HELPER_USERNAME "OVMXHELPER"
 
+/* ---- P12: SHOW SYSTEM run by a process that may NOT read every row ----
+ *
+ * The redaction path (src/kernel/vms_proctab.c proc_fill_info) had never
+ * been executed by any test, because every process in this rig is uid 0 /
+ * gid 0 with CAP_SYS_ADMIN, so vms_proc_may_read() always said yes. P12
+ * builds the one arrangement that reaches it through the USER-VISIBLE
+ * command: a SHOW SYSTEM whose caller is in its own UIC group and holds no
+ * WORLD privilege, looking at a process in a THIRD group. */
+#define XGRP_UIC_GROUP   302      /* the row the SHOW SYSTEM caller may not read */
+#define XGRP_NAME        "OVMX8019XGRP"
+#define SHOW_UIC_GROUP   301      /* the SHOW SYSTEM caller's own group */
+#define SHOW_NAME        "OVMX8019SHOW"
+#define SHOWER_USERNAME  "OVMXSHOWER"
+#define SETUP_FAIL_MARK  "OVMX8019SETUPFAIL"
+
 static struct dsc$descriptor_s str_dsc(const char *s)
 {
     struct dsc$descriptor_s d;
@@ -306,6 +321,58 @@ static void alt_group_helper(int cmdfd, int repfd)
 }
 
 /*
+ * xgrp_helper - the P12 subject. Never returns.
+ *
+ * A NAMED process in a UIC group of its own that has BURNED REAL CPU.
+ * Both properties matter:
+ *
+ *   - the name is how the parent finds its row in SHOW SYSTEM's output,
+ *     and enumeration is unprivileged on VMS (oracle-pinned, docs/oracle/
+ *     vax73-privileges.md Section 4: a process holding NO privileges still
+ *     saw EVERY process, with its name), so the row MUST appear even for a
+ *     caller that may not read its identity;
+ *   - the CPU is real, so the blank the redacted row prints is a value
+ *     that EXISTS and is being WITHHELD -- not a value that happens to be
+ *     zero. A test whose subject had burned nothing could not tell those
+ *     apart.
+ */
+static void xgrp_helper(int cmdfd, int repfd)
+{
+    struct helper_report rep;
+    struct vms_procinfo info;
+
+    memset(&rep, 0, sizeof(rep));
+
+    if (setgid(XGRP_UIC_GROUP) != 0) {
+        (void)write_full(repfd, &rep, sizeof(rep));   /* ok == 0 */
+        _exit(1);
+    }
+    if (!(vms_kif_getjpi_self(&info) & 1)) {          /* registers */
+        (void)write_full(repfd, &rep, sizeof(rep));
+        _exit(1);
+    }
+    if (!(vms_kif_setprn(XGRP_NAME) & 1)) {
+        (void)write_full(repfd, &rep, sizeof(rep));
+        _exit(1);
+    }
+
+    burn_cpu();
+
+    rep.ok      = 1;
+    rep.vms_pid = info.vms_pid;
+    rep.uic     = info.uic;
+    if (write_full(repfd, &rep, sizeof(rep)) != 0)
+        _exit(1);
+
+    /* Hold the row alive until the parent closes the command pipe. */
+    for (;;) {
+        char cmd;
+        if (read_full(cmdfd, &cmd, 1) != 0)
+            _exit(0);
+    }
+}
+
+/*
  * spawn_named - $CREPRC a long-lived subject process under a given name.
  * Returns the $CREPRC status; *out_pid is the child pid on success.
  */
@@ -435,6 +502,163 @@ static int run_show_system(char *out, size_t outsz)
 }
 
 /*
+ * run_show_system_unpriv - SHOW SYSTEM run by a process that may not read
+ * every row in the table.
+ *
+ * Same as run_show_system, except the child arranges, BEFORE exec'ing
+ * DCL.EXE, to be a process the executive will refuse identity reads for:
+ *
+ *   setgid(SHOW_UIC_GROUP)  -- the executive derives the UIC from the
+ *       task's credentials at registration, so this puts it in its own
+ *       UIC group, which is neither the parent's (0) nor XGRP's.
+ *   vms_kif_setprn(SHOW_NAME) -- so the parent can find THIS process's
+ *       own row in the output and compare it against the redacted one.
+ *   vms_kif_setident(..., privs & ~(WORLD|SETPRV)) -- drops WORLD, which
+ *       is the ONLY privilege that authorises a cross-UIC-group identity
+ *       read (oracle-pinned, docs/oracle/vax73-privileges.md Section 5),
+ *       and drops SETPRV with it so the drop is one-way.
+ *
+ * All three survive execve(): the executive's entry is keyed by the pid,
+ * which exec does not change. That is the same property the whole item
+ * rests on, used here to hand DCL.EXE an identity it could not have
+ * given itself.
+ *
+ * On any setup failure the child prints SETUP_FAIL_MARK on the captured
+ * stream instead of exec'ing, so a broken arrangement fails LOUDLY
+ * rather than quietly running SHOW SYSTEM with full privilege and
+ * passing for the wrong reason.
+ */
+static int run_show_system_unpriv(char *out, size_t outsz)
+{
+    int in_pipe[2], out_pipe[2];
+
+    out[0] = '\0';
+    if (pipe(in_pipe) < 0) return -1;
+    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+
+    pid_t pid = fork();
+    if (pid < 0) return -1;
+
+    if (pid == 0) {
+        struct vms_procinfo info;
+        uint32_t st;
+
+        dup2(in_pipe[0], STDIN_FILENO);
+        dup2(out_pipe[1], STDOUT_FILENO);
+        dup2(out_pipe[1], STDERR_FILENO);
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+
+        if (setgid(SHOW_UIC_GROUP) != 0) {
+            printf(SETUP_FAIL_MARK " setgid\n");
+            fflush(stdout);
+            _exit(126);
+        }
+        st = vms_kif_getjpi_self(&info);      /* first call: registers */
+        if (!(st & 1)) {
+            printf(SETUP_FAIL_MARK " register %08X\n", st);
+            fflush(stdout);
+            _exit(126);
+        }
+        st = vms_kif_setprn(SHOW_NAME);
+        if (!(st & 1)) {
+            printf(SETUP_FAIL_MARK " setprn %08X\n", st);
+            fflush(stdout);
+            _exit(126);
+        }
+        st = vms_kif_setident(SHOWER_USERNAME, info.uic,
+                              info.perm_privs &
+                              ~(uint64_t)(VMS_PRV_M_WORLD | VMS_PRV_M_SETPRV));
+        if (!(st & 1)) {
+            printf(SETUP_FAIL_MARK " setident %08X\n", st);
+            fflush(stdout);
+            _exit(126);
+        }
+        if (!(vms_kif_getjpi_self(&info) & 1) ||
+            (info.cur_privs & VMS_PRV_M_WORLD) != 0) {
+            printf(SETUP_FAIL_MARK " world-still-held\n");
+            fflush(stdout);
+            _exit(126);
+        }
+
+        execl("/bin/DCL.EXE", "DCL.EXE", (char *)NULL);
+        printf(SETUP_FAIL_MARK " exec\n");
+        fflush(stdout);
+        _exit(127);
+    }
+
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    const char *script = "SHOW SYSTEM\nLOGOUT\n";
+    ssize_t w = write(in_pipe[1], script, strlen(script));
+    (void)w;
+    close(in_pipe[1]);
+
+    size_t used = 0;
+    for (;;) {
+        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
+        if (n <= 0) break;
+        used += (size_t)n;
+        if (used >= outsz - 1) break;
+    }
+    out[used] = '\0';
+    close(out_pipe[0]);
+
+    int st;
+    while (waitpid(pid, &st, 0) < 0 && errno == EINTR)
+        ;
+    return 0;
+}
+
+/*
+ * row_for - the SHOW SYSTEM row naming `name`, or NULL.
+ *
+ * A row is " %08X %-15s  %s": pid, process name, CPU. Matching is
+ * anchored on the name column so a name appearing in the banner or in
+ * some other column cannot be mistaken for a row.
+ */
+static const char *row_for(const char *text, const char *name)
+{
+    const char *line = text;
+    size_t namelen = strlen(name);
+
+    while (line && *line) {
+        if (line[0] == ' ') {
+            int i;
+            for (i = 1; i < 9; i++)
+                if (!isxdigit((unsigned char)line[i]))
+                    break;
+            if (i == 9 && line[9] == ' ' &&
+                strncmp(line + 10, name, namelen) == 0)
+                return line;
+        }
+        line = strchr(line, '\n');
+        if (line) line++;
+    }
+    return NULL;
+}
+
+/*
+ * row_has_value_after_name - does anything but padding follow the process
+ * name on this row?
+ *
+ * This is the redaction detector. SHOW SYSTEM prints a CPU figure after
+ * the name column for a row it can source one for, and NOTHING for a row
+ * the executive redacted -- no zero, no marker. So "is there a non-space
+ * character after the name" is exactly the question, and it does not
+ * depend on the column widths this item deliberately did not pin.
+ */
+static int row_has_value_after_name(const char *row, const char *name)
+{
+    const char *p = row + 10 + strlen(name);
+
+    for (; *p && *p != '\n'; p++)
+        if (*p != ' ' && *p != '\r')
+            return 1;
+    return 0;
+}
+
+/*
  * count_process_rows - how many process rows SHOW SYSTEM printed.
  *
  * A row is a line beginning with a space and eight hex digits (the Pid
@@ -542,6 +766,13 @@ int main(void)
      * --------------------------------------------------------------- */
     st = spawn_named(SUBJECT_NAME, &subject);
     CHECK(st & 1, "sys$creprc created the subject process");
+    /* The pairing matters as much as either half. $CREPRC used to have a
+     * path that returned SS$_NORMAL with *pidadr left at zero -- success
+     * naming no process, a combination VMS does not produce -- when the
+     * forked child died before it could report. That path now returns
+     * OVMX$_PRCLOST (src/libvms/include/ovmx_status.h) and reaps the
+     * child, and the only success return left in sys$creprc is
+     * structurally downstream of a process ID the executive assigned. */
     CHECK(subject != 0, "sys$creprc returned the subject's pid");
 
     if (!(st & 1) || subject == 0) {
@@ -898,6 +1129,98 @@ int main(void)
             kill(helper, SIGKILL);
             int hst;
             while (waitpid(helper, &hst, 0) < 0 && errno == EINTR)
+                ;
+        }
+    }
+
+    /* ---------------------------------------------------------------
+     * P12. SHOW SYSTEM RUN BY A CALLER THAT MAY NOT READ EVERY ROW.
+     *
+     * WHY THIS BLOCK EXISTS. src/kernel/vms_proctab.c redacts any row
+     * the caller may not $GETJPI -- a process in another UIC group when
+     * the caller has no WORLD privilege -- zeroing linux_pid, uic, the
+     * privilege masks and the user name while KEEPING the process ID and
+     * the process name, because on the oracle enumeration is unprivileged
+     * and identity is not. Nothing had ever executed that path: every
+     * process in this rig is uid 0 / gid 0 with CAP_SYS_ADMIN, so
+     * vms_proc_may_read() always returned true.
+     *
+     * That gap shipped a defect. src/vmsdcl/dcl_cmd_show.c fed the
+     * redacted (zero) linux_pid to /proc, ignored the failure, and
+     * printed the caller's own buffer initialiser -- so a process whose
+     * accounting the caller is FORBIDDEN to read displayed a concrete
+     * "0 00:00:00.00". A fabricated accounting value, inside the very
+     * function this item converted.
+     *
+     * THE ARRANGEMENT, and why each piece is load-bearing:
+     *   XGRP  -- named, in UIC group 302, has burned REAL CPU.
+     *   SHOW  -- runs the real DCL.EXE, in UIC group 301, with WORLD
+     *            DROPPED, so the executive refuses it XGRP's identity.
+     * The two rows in one output are the discriminator: SHOW's OWN row
+     * must carry a CPU figure (it may read itself), and XGRP's must
+     * carry NOTHING. A test that looked only at the redacted row could
+     * be satisfied by SHOW SYSTEM never printing CPU at all.
+     * --------------------------------------------------------------- */
+    int xcmd[2] = { -1, -1 }, xrep[2] = { -1, -1 };
+    pid_t xproc = -1;
+
+    if (pipe(xcmd) != 0 || pipe(xrep) != 0) {
+        CHECK(0, "P12: pipes for the unreadable-row subject");
+    } else if ((xproc = fork()) < 0) {
+        CHECK(0, "P12: fork of the unreadable-row subject");
+    } else if (xproc == 0) {
+        close(xcmd[1]);
+        close(xrep[0]);
+        xgrp_helper(xcmd[0], xrep[1]);
+        _exit(0);                               /* not reached */
+    } else {
+        close(xcmd[0]);
+        close(xrep[1]);
+
+        struct helper_report xrp;
+        memset(&xrp, 0, sizeof(xrp));
+        int xgot = read_full(xrep[0], &xrp, sizeof(xrp));
+
+        CHECK(xgot == 0 && xrp.ok == 1 && xrp.vms_pid != 0,
+              "a named process in UIC group 302 registered and burned CPU");
+
+        if (xgot == 0 && xrp.ok == 1) {
+            static char unpriv_out[65536];
+            if (run_show_system_unpriv(unpriv_out, sizeof(unpriv_out)) != 0) {
+                CHECK(0, "P12: SHOW SYSTEM ran under a WORLD-less DCL.EXE");
+            } else {
+                CHECK(strstr(unpriv_out, SETUP_FAIL_MARK) == NULL,
+                      "the SHOW SYSTEM caller really did drop WORLD before exec");
+
+                const char *xrow = row_for(unpriv_out, XGRP_NAME);
+                const char *srow = row_for(unpriv_out, SHOW_NAME);
+
+                if (xrow == NULL || srow == NULL)
+                    printf("  (P12 rows not found; output follows)\n%s\n",
+                           unpriv_out);
+
+                /* Enumeration is not privileged on VMS. */
+                CHECK(xrow != NULL,
+                      "SHOW SYSTEM lists a process the caller may NOT read, by name");
+                /* The control: a row the caller MAY read carries CPU. */
+                CHECK(srow != NULL,
+                      "SHOW SYSTEM lists the calling process by its own name");
+                CHECK(srow != NULL &&
+                      row_has_value_after_name(srow, SHOW_NAME),
+                      "the readable row carries a CPU figure");
+                /* The detector: a row it may NOT read carries none. */
+                CHECK(xrow != NULL &&
+                      !row_has_value_after_name(xrow, XGRP_NAME),
+                      "the UNREADABLE row fabricates NO CPU figure at all");
+            }
+        }
+
+        close(xcmd[1]);             /* releases the subject */
+        close(xrep[0]);
+        if (xproc > 0) {
+            kill(xproc, SIGKILL);
+            int xst;
+            while (waitpid(xproc, &xst, 0) < 0 && errno == EINTR)
                 ;
         }
     }

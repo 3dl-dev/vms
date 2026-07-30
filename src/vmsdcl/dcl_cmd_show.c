@@ -292,8 +292,39 @@ static int cmd_show_system(struct dcl_command *cmd)
            ovmx_product_banner(), sysname, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000), uptime_str);
-    printf("  Pid    Process Name    State  Pri      I/O       CPU"
-           "       Page flts  Pages\n");
+    /*
+     * ================================================================
+     * THIS HEADER IS DELIBERATELY NARROWER THAN VMS's. OPERATOR RULING,
+     * vms-8019 round 4. DO NOT "RESTORE" THE MISSING COLUMNS.
+     * ================================================================
+     *
+     * OpenVMS SHOW SYSTEM also prints State, Pri, I/O, Page flts and
+     * Pages. OVMX cannot source any of those from the executive's
+     * process table, so it does not print them AT ALL.
+     *
+     * What stood here until this round printed "---" in each of them.
+     * Rule 10 allows exactly two answers -- reproduce what VMS prints,
+     * or do not expose the thing at all -- and a not-available marker
+     * is neither. It is a display for a condition VMS never faces,
+     * shipped in a user-visible VMS command, which is precisely the
+     * illegal third answer. An absent column is a visibly incomplete
+     * table; "---" in a VMS-shaped table is a fabricated
+     * not-available state dressed as VMS output.
+     *
+     * THE VERBATIM QUESTION FOR THE ORACLE, owned by vms-6a7 ("SHOW
+     * SYSTEM lists every process on the system", which explicitly owns
+     * the display: "Match the real VMS column set and header -- pin
+     * the format to the oracle"):
+     *
+     *   "What does OpenVMS VAX 7.3 SHOW SYSTEM print in the State,
+     *    Pri, I/O, Page flts and Pages columns -- what are the exact
+     *    column widths and header spelling -- and is any of it
+     *    sourceable from what the OVMX executive actually holds?"
+     *
+     * Until that is answered the columns stay absent. Widening this
+     * header without an oracle transcript re-commits the defect.
+     */
+    printf("  Pid    Process Name          CPU\n");
 
     /*
      * ENUMERATE THE EXECUTIVE'S PROCESS TABLE (vms-8019).
@@ -322,63 +353,49 @@ static int cmd_show_system(struct dcl_command *cmd)
     struct vms_procinfo info;
 
     while (vms_kif_procscan(&index, &info) & 1) {
-        char cpu_str[32] = "0 00:00:00.00";
-        read_proc_cpu((int)info.linux_pid, cpu_str, sizeof(cpu_str));
+        /*
+         * A REDACTED ROW GETS NO CPU FIGURE -- NOT A ZERO, NOT A MARKER.
+         *
+         * The executive returns rows the caller may not $GETJPI with
+         * every identity field withheld and info.redacted set (see
+         * src/kernel/vms_ioctl.h). linux_pid is one of the withheld
+         * fields, so there is nothing to read /proc with.
+         *
+         * What stood here read /proc/0/stat, ignored the failure, and
+         * printed the buffer's initialiser -- so a process whose
+         * accounting this caller is FORBIDDEN to read displayed a
+         * concrete, plausible "0 00:00:00.00". A fabricated accounting
+         * value is exactly what this item exists to delete, and it had
+         * survived inside the very function that was converted.
+         *
+         * OVMX cannot source the figure, so it prints no figure. Same
+         * Rule 10 answer as the absent columns above, applied per row
+         * instead of per table. What OpenVMS displays in the CPU column
+         * for a process the caller cannot read is NOT PINNED -- it goes
+         * with the rest of the column question to vms-6a7 -- and until
+         * it is pinned, nothing is the only honest width.
+         */
+        char cpu_str[32] = "";
+        if (!info.redacted &&
+            !read_proc_cpu((int)info.linux_pid, cpu_str, sizeof(cpu_str)))
+            cpu_str[0] = '\0';
 
         /*
-         * ============================================================
-         * UNPINNED, AND DELIBERATELY SO. THE ROW FORMAT IS vms-6a7's,
-         * NOT THIS ITEM'S. DO NOT SETTLE IT HERE.
-         * ============================================================
-         *
-         * State, Pri, I/O, Page flts and Pages print "---".
-         *
-         * Be clear about what that is: it is a STAND-IN, not an answer.
-         * Under Rule 10 there are two legal outcomes -- reproduce what
-         * VMS prints, or do not print the column at all -- and "---" is
-         * neither. It was chosen without the oracle, so it is a placeholder
-         * this item is knowingly leaving behind, not a decision.
-         *
-         * Why it is not settled here: vms-6a7 ("SHOW SYSTEM lists every
-         * process on the system") is BLOCKED BY vms-8019 and explicitly
-         * owns the display -- "Match the real VMS column set and header
-         * (pin the format to the oracle -- the ~/vax lab has VAX 7.3; do
-         * not invent a layout)". Pinning a layout inside vms-8019 would
-         * be inventing one in the item that was told not to.
-         *
-         * THE QUESTION vms-6a7 MUST PUT TO THE ORACLE, verbatim:
-         *   "What does OpenVMS VAX 7.3 SHOW SYSTEM print in the State,
-         *    Pri, I/O, Page flts and Pages columns -- and is any of it
-         *    sourceable from what the OVMX executive actually holds?"
-         * If the answer is that OVMX cannot source them, the Rule 10
-         * answer is to DROP the columns, not to keep this marker.
-         *
-         * What this item did settle, and what must not regress: the
-         * values that used to sit here ("CUR", 4, 0, 0, 340) were
-         * constants printed for the one row the old code could see.
-         * Repeating a constant once per enumerated process would turn a
-         * single decoration into a table of them, which is strictly
-         * worse than admitting the column is not sourced.
+         * The empty Process Name column for an unnamed row is a KNOWN
+         * DIVERGENCE with its own item: vms-d0e, "OVMX assigns no
+         * default process name at creation, so JPI$_PRCNAM is empty
+         * where VMS always has a name". See the JPI$_PRCNAM comment in
+         * src/libvms/syssvc/sys_process.c for why the invented
+         * "_%08X" name was deleted (it was a name only its owner could
+         * resolve) -- deleting a wrong answer did not produce a right
+         * one, and inventing a replacement here would just re-commit
+         * it one layer up. A blank is what OVMX prints until vms-d0e
+         * pins what the executive should assign.
          */
-        /*
-         * The empty Process Name column for an unnamed row is the SECOND
-         * unpinned choice here, and it belongs to vms-6a7 too. See the
-         * JPI$_PRCNAM comment in src/libvms/syssvc/sys_process.c for why
-         * the invented "_%08X" name was deleted (it was a name only its
-         * owner could resolve) -- but deleting a wrong answer did not
-         * produce a right one.
-         *
-         * THE QUESTION vms-6a7 MUST PUT TO THE ORACLE, verbatim:
-         *   "What does OpenVMS VAX 7.3 SHOW SYSTEM display in the Process
-         *    Name column for a process created with no process name, and
-         *    does the executive assign one at creation?"
-         * Until that is answered, a blank is what OVMX prints, and it is
-         * a placeholder, not a match.
-         */
-        printf(" %08X %-15s %-5s %3s %9s  %s  %9s  %5s\n",
+        printf(" %08X %-15s  %s\n",
                info.vms_pid,
                info.prcnam[0] ? info.prcnam : "",
-               "---", "---", "---", cpu_str, "---", "---");
+               cpu_str);
     }
 
     return SS$_NORMAL;

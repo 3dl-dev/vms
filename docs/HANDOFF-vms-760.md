@@ -176,9 +176,25 @@ rather than grounded. The code says so at `cm_response_shape()`.
 > `captures/ovmx-760-lockmgrerr-20260730.pcap` (+ `~/vax/cluster/work/scsd-coord3.log`,
 > timestamps aligned).
 
-Refusing these instead re-freezes the barrier at step 5 (grounded). **Both
-failures are recoverable; neither is correct.** Do not "fix" it by picking
-whichever failure looks tidier — ground the shape.
+### The controlled pair, both measured on a pristine 3-node lab
+
+| run | cat `0x02` `op 0x0d` | barrier | cluster after |
+|---|---|---|---|
+| `coord3` (`OVMX_DLM_ECHO=1`) | full-body echo | **advances past 5** | **VAX1 + VAX3 dead, `LOCKMGRERR`** |
+| `coord4` (default) | refused | **pins at 5** | **healthy, 3 MEMBER, zero bugchecks** |
+
+**`coord4` proves the records are REQUIRED, not optional.** 15 requests arrived
+carrying only **7 distinct `txn` values** — the coordinator **retransmits each
+unanswered record up to 3×** and the barrier never leaves step 5. So:
+
+> The answer is **a response**, not silence — and it must not assert lock state.
+> Silence is merely the *safe* failure, which is why it is now the default
+> (`OVMX_DLM_ECHO=1` restores the echo for bisecting). Neither is correct.
+> Do not "fix" this by picking whichever failure looks tidier — ground the shape.
+
+Specimens: `ovmx-760-lockmgrerr-20260730.pcap` (echo → crash) and
+`ovmx-760-dlm-refused-20260730.pcap` (refuse → freeze), with
+`~/vax/cluster/work/scsd-coord{3,4}.log` timestamp-aligned.
 
 ### Also open, lower priority
 

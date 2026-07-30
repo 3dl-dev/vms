@@ -1831,28 +1831,42 @@ addressing bug, §4a.0). OVMX now:
 - exchanges config with **all** members and sends the deferred `op 0x02`;
 - is answered `cat 0x04`, and driven through `op 0x03` COMMIT, `op 0x05` lock
   rebuilds, the `op 0x06` burst, `op 0x09`, `op 0x12`, and the cat-`0x06` close;
-- executes the §4(p) **barrier to step 5 of 12** with correct releases, and
-  answers the interleaved cat-`0x02` DLM rebuild transactions.
+- executes the §4(p) barrier with correct releases, and answers the interleaved
+  cat-`0x02` DLM rebuild transactions.
 
 VMS logs `%CNXMAN, received VAXcluster membership request`, `proposed addition of
 node OVMX…`, and `completing VAXcluster state transition`, and SDA shows a real
 CSB with an assigned CSID.
 
-**Where it stops.** The coordinator answers our `0x0b#5` and never sends
-`0x0c#5`. It is waiting for its **other members** to reach step 5, and they never
-join the transition: the capture contains **zero** VAX↔VAX 190-byte CM frames for
-the entire run, so the coordinator never relayed the new node to its peers. In
-the reference it relays within 0.3 ms of the `op 0x02` (`op 0x12`) and then
-barriers with everyone. Step 5 is exactly where the reference coordinator waits
-for its other member, so the mechanism matches — what is missing is whatever
-makes the coordinator propagate this transition cluster-wide.
+**Where it stops — the fan-out anomaly.** Measured as a controlled pair on a
+**pristine** 3-node cluster (`reset3.sh`; zero ghost CSBs; all three peers
+verified `MEMBER` before each run):
 
-Candidates, in order: (a) something in our `op 0x02` or `op 0x09` response that
-the coordinator needs before it will relay; (b) a message the joiner must send to
-the **non-coordinator** members (our VCs to them carry only cat-`0x04` traffic
-after config); (c) the coordinator relaying over a class we are not looking at.
-Note the destructive failure mode is now understood and no longer occurs: the
-cluster stays healthy at 3 members across these runs.
+| run | `op 0x02` sent to | result |
+|---|---|---|
+| `d94-e14` | **one** peer — what the reference does | acked cat-`0x04`, then **nothing**. No commit, no transition, CSID `00000000`, zero barrier steps. |
+| `d94-e15` | **all** peers (`OVMX_CFG2_ALL=1`) | `Node VAX3 (csid 00010003) proposed addition of node OVMX…`; the barrier starts. |
+
+So on our cluster the **fan-out** gates the transition — which **contradicts**
+the reference, where the joiner demonstrably sends `op 0x02` to exactly one peer
+and that peer relays (`op 0x12`) and barriers with everyone. Two readings, both
+testable and both kept live behind `OVMX_CFG2_ALL`:
+
+- **(a) the peer-*selection* rule matters** and our "first eligible" pick is
+  wrong. The candidate rules ("last to complete config", "last MSCP walk",
+  "highest SCSSYSTEMID") are mutually confounded in the single 3-node specimen.
+- **(b) something in our `op 0x02` or our `0x81`/`op 0x09` response** stops the
+  chosen peer from relaying.
+
+> ⚠ **"Barrier step 5 of 12" is NOT the baseline.** The earlier runs that reached
+> step 5 were on a cluster that was itself re-forming — their OPCOM carries
+> `%CNXMAN, proposing formation of a VAXcluster`. On a pristine cluster the
+> single-coordinator form does not open a transition at all. The §4(p) barrier
+> implementation is correct and grounded; it is simply not the current blocker.
+> Re-establish any baseline on a freshly reset lab.
+
+The destructive failure mode is understood and no longer occurs: the cluster
+stays healthy at 3 members across all of these runs.
 
 ## 6. Using the dissector
 

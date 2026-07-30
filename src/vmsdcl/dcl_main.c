@@ -13,7 +13,6 @@
 #include <signal.h>
 #include <ctype.h>
 #include <time.h>
-#include <pwd.h>
 #include <sys/utsname.h>
 #include <sys/stat.h>
 #include <termios.h>
@@ -36,6 +35,8 @@
 #include "vms/logical.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
+/* The executive process table: this process's identity is READ from it. */
+#include "vms_kif.h"
 
 /* Global DCL context */
 static struct dcl_context dcl_ctx;
@@ -145,18 +146,6 @@ void dcl_context_init(struct dcl_context *ctx)
         }
     }
 
-    /* Get user info */
-    struct passwd *pw = getpwuid(getuid());
-    if (pw) {
-        size_t i;
-        for (i = 0; i < sizeof(ctx->username) - 1 && pw->pw_name[i]; i++) {
-            ctx->username[i] = (char)toupper((unsigned char)pw->pw_name[i]);
-        }
-        ctx->username[i] = '\0';
-    } else {
-        strcpy(ctx->username, "SYSTEM");
-    }
-
     /* Set process name from allocated terminal device name */
     strncpy(ctx->process_name, ctx->terminal.device_name,
             sizeof(ctx->process_name) - 1);
@@ -164,48 +153,52 @@ void dcl_context_init(struct dcl_context *ctx)
 
     /*
      * ============================================================
-     * STOPGAP -- PRIVILEGE ESCALATION PATH, STILL OPEN (vms-2b8)
+     * IDENTITY COMES FROM THE EXECUTIVE (vms-2b8)
      * ============================================================
-     * The reads below take this process's USERNAME and PRIVILEGE MASK
-     * from ordinary environment variables. Any process can setenv()
-     * them, so any process can choose its own identity here. This is
-     * the env-var facade CLAUDE.md Rule 10 names as a worked example,
-     * and it is NOT an access control system.
+     * This process's USER NAME, UIC and PRIVILEGE MASK are read out of
+     * the executive's process table (src/kernel/vms_proctab.c, through
+     * vms_kif_getjpi_self). They are not asked for, and there is no
+     * other source for them.
      *
-     * The executive now owns identity for real: it derives the UIC and
-     * the authorized privilege mask from the task's credentials and
-     * refuses to let a process widen either (src/kernel/vms_proctab.c
-     * vms_ioctl_setident, proven by tests/qemu/test_kmod_ident.c
-     * against a real /dev/vms). The correct code here is a
-     * vms_kif_getjpi_self() read of that row.
+     * WHAT USED TO STAND HERE, so nobody puts it back: the user name,
+     * the UIC and the privilege mask were taken from the environment
+     * (VMS_USERNAME / VMS_UIC_GROUP / VMS_UIC_MEMBER / VMS_PRIVILEGES),
+     * with the user name falling back to getpwuid(getuid()) and then to
+     * the literal "SYSTEM". Every one of those is a value the process
+     * itself controls -- any process could setenv("VMS_PRIVILEGES",
+     * "ALL") and be believed. That is the env-var facade CLAUDE.md
+     * Rule 10 names as a worked example; it was never an access control
+     * system, it was an honor system.
      *
-     * IT IS NOT WIRED UP YET, AND THIS IS THE ONLY REASON WHY:
-     * vms_kif_register() still has no product caller (vms-9fc), so no
-     * DCL process is registered with the executive and $GETJPI would
-     * return -ESRCH for every one of them. Replacing these reads before
-     * vms-9fc lands would not harden DCL, it would break it.
+     * The executive derives the UIC from the task's real credentials and
+     * the authorized mask from capable(CAP_SYS_ADMIN) -- credentials a
+     * process cannot grant itself -- and the user name arrives only
+     * through VMS_IOCTL_SETIDENT, which refuses any caller without
+     * SETPRV an identity that is not a weakening of its own. So what is
+     * read here is what something privileged established for this
+     * process, which is the whole difference between an identity and a
+     * claim (CLAUDE.md Rule 11).
      *
-     * DO NOT "IMPROVE" THIS PATH. Delete it, once vms-9fc has landed,
-     * and read the executive instead. The UIC half of the same defect
-     * was already deleted from src/vmsrms/rms_core.c under this item,
-     * because there the real credentials were available locally; the
-     * user name and the privilege mask have no local honest source.
+     * THERE IS NO ABSENT-EXECUTIVE BRANCH AND MUST NOT BE ONE. The
+     * first vms_kif_* call opens and registers this process (kif_bind),
+     * and PID 1 refuses to bring OVMX up at all without /dev/vms
+     * (Rule 9, src/ovmx_init/ovmx_init.c executive_attach), so in the
+     * one OVMX runtime this read cannot fail. If it fails anyway -- on
+     * a developer host running the DCL binary outside OVMX -- the
+     * fields stay empty and every reader of them reports nothing.
+     * Substituting a local guess for a failed executive read is exactly
+     * the illegal third answer (Rule 10).
      * ============================================================
      */
-    const char *env_user = getenv("VMS_USERNAME");
-    if (env_user && env_user[0]) {
-        strncpy(ctx->username, env_user, sizeof(ctx->username) - 1);
+    struct vms_procinfo self;
+    memset(&self, 0, sizeof(self));
+    if (vms_kif_getjpi_self(&self) & 1) {
+        strncpy(ctx->username, self.username, sizeof(ctx->username) - 1);
         ctx->username[sizeof(ctx->username) - 1] = '\0';
+        ctx->uic_group  = (self.uic >> 16) & 0xFFFFu;
+        ctx->uic_member = self.uic & 0xFFFFu;
+        ctx->privileges = self.cur_privs;
     }
-
-    const char *env_group = getenv("VMS_UIC_GROUP");
-    if (env_group) ctx->uic_group = (uint32_t)strtoul(env_group, NULL, 10);
-
-    const char *env_member = getenv("VMS_UIC_MEMBER");
-    if (env_member) ctx->uic_member = (uint32_t)strtoul(env_member, NULL, 10);
-
-    const char *env_privs = getenv("VMS_PRIVILEGES");
-    if (env_privs) ctx->privileges = parse_privilege_string(env_privs);
 
     const char *env_defdir = getenv("VMS_DEFAULT_DIR");
     if (env_defdir && env_defdir[0]) {
@@ -216,18 +209,18 @@ void dcl_context_init(struct dcl_context *ctx)
     /* Default protection: S:RWED,O:RWED,G:RE,W: = 0xFF00 */
     ctx->default_protection = 0xFF00;
 
-    /* Initialize PCB from environment if not already done */
+    /*
+     * The userspace PCB is seeded from the executive's row -- it is a
+     * copy of what the executive decided, never a declaration of what
+     * this process would like to be. (The PCB itself is a per-process
+     * structure and therefore a facade for anything system-wide; it is
+     * vms-8019's to remove, not this item's. What this item removes is
+     * the process CHOOSING what goes in it.)
+     */
     if (!vms_pcb_get()) {
-        uint64_t privs = env_privs ? parse_privilege_string(env_privs) : 0;
-
-        struct vms_pcb *pcb = vms_pcb_init(privs);
+        struct vms_pcb *pcb = vms_pcb_init(self.cur_privs);
         if (pcb) {
-            uint32_t uic = 0;
-            if (env_group && env_member)
-                uic = ((uint32_t)strtoul(env_group, NULL, 10) << 16) |
-                       (uint32_t)strtoul(env_member, NULL, 10);
-
-            vms_pcb_set_identity((uint32_t)getpid(), uic,
+            vms_pcb_set_identity(self.vms_pid, self.uic,
                                  ctx->username, ctx->process_name);
             if (env_defdir && env_defdir[0])
                 vms_pcb_set_default_dir(env_defdir);
@@ -353,8 +346,13 @@ static void display_banner(void)
            (int)(ts.tv_nsec / 10000000));
     printf("\n");
 
-    /* Last login message — read from per-user lastlogin file if available */
-    const char *vms_user = getenv("VMS_USERNAME");
+    /* Last login message — read from per-user lastlogin file if available.
+     *
+     * Keyed on the user name the EXECUTIVE holds for this process (loaded
+     * in dcl_context_init), not on getenv("VMS_USERNAME") as it used to
+     * be: a process that could name itself here could read another user's
+     * last-login record (vms-2b8). */
+    const char *vms_user = dcl_get_context()->username;
     if (vms_user && vms_user[0]) {
         char lastlogin_dir_linux[1024];
         vmsfs_to_linux_path(VMS_LASTLOGIN_DIR, lastlogin_dir_linux, sizeof(lastlogin_dir_linux));

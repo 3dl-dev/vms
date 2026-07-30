@@ -100,41 +100,47 @@ If you need the full history, `rd show vms-760` locally. Consider closing
 `vms-760` once MEMBER lands and opening a fresh item for the follow-on work
 rather than continuing to append.
 
-## 1. Where it stands (rewritten 2026-07-30g)
+## 1. MEMBER ACHIEVED — 2026-07-30g
 
-**The fan-out anomaly is SOLVED, the relay works, and the failure has moved.**
+```
+View of Cluster from system ID 1025  node: VAX1
+|  NODE  | SOFTWARE |  STATUS |
+| VAX1   | VMS V7.3 | MEMBER  |
+| VAX2   | VMS V7.3 | MEMBER  |
+| VAX3   | VMS V7.3 | MEMBER  |
+| OVMXCA | VMX V0.1 | MEMBER  |
+```
 
-The `op 0x02` must go to **the coordinator**. A non-coordinator peer *silently
-discards it* — byte-verified: in `d94-e15` all three members received a
-byte-identical `op 0x02` within 400 ms, VAX1 and VAX2 only acked and did nothing
-(VAX1 had a **383 ms head start**), and only VAX3 relayed. The reference joiner
-picks the coordinator too (VAX2, not VAX1). Our "first eligible" rule picked
-VAX1 — the wrong node — which is the whole reason `d94-e14` was acked and then
-silent. `cm_pick_coordinator()` now picks by highest DECnet node number.
-**Fan-out never started competing transitions** — that §4(p) claim is withdrawn;
-fan-out only worked because it happened to include the coordinator.
+Run `coord10`, pristine 3-node lab, `SHOW CLUSTER` on a real VAX. **All 12/12
+barrier steps released** (`XITDONE`), 178 cat-`0x02` DLM records answered,
+`op 0x02` correctly aimed at the coordinator, the GO deferral fired once, and
+**zero bugchecks on any VAX**. Specimen:
+`captures/ovmx-760-MEMBER-achieved-20260730.pcap`.
 
-Our `op 0x02`, our `0x81`/`0x09` echo and our config frames are **byte-correct**.
-That line of investigation is closed.
+**Four fixes, in the order they were needed:**
 
-**Progress this session, measured on a pristine lab:** barrier `1 → 3 → 5` of 12,
-`INCONSTATE` eliminated, and VMS logs `proposed addition of node OVMXC3`.
+1. **Aim `op 0x02` at the COORDINATOR.** A non-coordinator silently discards it.
+2. **Rebuild the cat-`0x06` close** — it was the PARAMS body with a replayed
+   timestamp ~26 years off the era. Killed VAX3 (`INCONSTATE`) and VAX1
+   (`INVEXCEPTN`).
+3. **cat-`0x02` `op 0x0d` = verbatim echo + `body[34]=0xf9`**, and *not* the
+   cat-`0x01` mutations, which corrupt the lock resource name. Killed VAX1 and
+   VAX3 (`LOCKMGRERR`).
+4. **Stop answering the barrier GO faster than the coordinator can fan it out**,
+   and **let the candidate set settle before picking** the coordinator.
 
-### Two crashes, both instructive, both fixed or named
+**Caveats to carry, not to gloss:**
 
-Getting the relay working exposed a whole phase we had never reached: once the
-coordinator relays, **the non-coordinator members open their own transactions**
-carrying ops absent from the pre-relay dialogue.
-
-1. **`INCONSTATE` on VAX3 and `INVEXCEPTN` on VAX1 — FIXED.** The killer was our
-   cat-`0x06` **close**, built from the `op 0x01` PARAMS template, which made
-   `body[10:132]` byte-identical to our own PARAMS body. The real joiner's close
-   differs from its own PARAMS at **17 offsets**, and `body[64:72]` must be a
-   **live VMS time** — we shipped a replayed constant ~26 years off the era.
-   Now built fresh, with two variants (membership-close vs lock-resource), and
-   two regression tests. VAX2, which never received one, survived — a clean
-   control.
-2. **`LOCKMGRERR` on VAX1 and VAX3 — the CURRENT FRONTIER, see §2.**
+- `coord10` is **one run**. Two confirmation runs were launched immediately,
+  because this session established that a single barrier result can be luck.
+  Check §1a for their outcome before treating MEMBER as reproducible.
+- One `SCSD-W-CMUNGROUNDED` fired — cat `0x02` `op 0x01`, correctly refused,
+  and membership was reached anyway. It is still an ungrounded pair: ground it.
+- The SDA CSB dumped *after* the daemon exited reads
+  `State: 09 wait / Flags: …removed…`. That is the post-exit state; `SHOW
+  CLUSTER` during the run is the authority. OVMX does not yet *persist* as a
+  member across the daemon's lifetime — it joins, holds, and leaves when SCSD
+  exits. Staying joined is the next outcome, not a bug in this one.
 
 ## 1b. Where it stood before (kept for continuity)
 

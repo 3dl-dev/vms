@@ -447,6 +447,54 @@ struct vms_setmode_args {
 #define VMS_IOCTL_ALLOC     _IOWR(VMS_IOC_MAGIC, 0x55, struct vms_alloc_args)
 #define VMS_IOCTL_DALLOC    _IOWR(VMS_IOC_MAGIC, 0x56, struct vms_alloc_args)
 
+/*
+ * The kernel module and the userspace client compile these structures
+ * separately, from this one header, and then pass them across the
+ * /dev/vms boundary by raw address. If a field is ever reordered,
+ * widened or padded differently on one side, every ioctl above starts
+ * reading the wrong offsets -- silently, and only at runtime, and only
+ * for the fields past the change. Freeze the layouts here so that
+ * failure is a compile error on whichever side moved.
+ *
+ * The ioctl encodings are asserted for the same reason and one more:
+ * _IOWR folds sizeof(struct) into the request number, so a size change
+ * ALSO renumbers the request. The executive would then reject it with
+ * -ENOTTY rather than mis-decode it -- a different symptom, same root
+ * cause, and equally worth catching before it ships.
+ *
+ * These values are measured, not chosen: aarch64 and x86_64 agree,
+ * because every field is a fixed-width type.
+ */
+_Static_assert(sizeof(struct vms_devinfo) == 72,
+               "struct vms_devinfo changed size -- kernel and userspace would disagree on device attribute offsets");
+_Static_assert(sizeof(struct vms_assign_args) == 24,
+               "struct vms_assign_args changed size -- $ASSIGN would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_dassgn_args) == 8,
+               "struct vms_dassgn_args changed size -- $DASSGN would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_getdvi_args) == 88,
+               "struct vms_getdvi_args changed size -- $GETDVI would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_devscan_args) == 80,
+               "struct vms_devscan_args changed size -- $DEVICE_SCAN would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_setmode_args) == 40,
+               "struct vms_setmode_args changed size -- IO$_SETMODE would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_alloc_args) == 24,
+               "struct vms_alloc_args changed size -- $ALLOC/$DALLOC would decode at the wrong offsets");
+
+_Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
+               "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_DASSGN == 0xC0085651u,
+               "VMS_IOCTL_DASSGN encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETDVI == 0xC0585652u,
+               "VMS_IOCTL_GETDVI encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0505653u,
+               "VMS_IOCTL_DEVSCAN encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TTSETMODE == 0xC0285654u,
+               "VMS_IOCTL_TTSETMODE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_ALLOC == 0xC0185655u,
+               "VMS_IOCTL_ALLOC encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_DALLOC == 0xC0185656u,
+               "VMS_IOCTL_DALLOC encodes differently here than on the reference build");
+
 /* ================================================================
  * Process table (executive-resident PCB directory)
  *

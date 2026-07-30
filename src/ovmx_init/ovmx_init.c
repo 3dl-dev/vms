@@ -156,15 +156,29 @@ static void sigchld_handler(int sig)
  */
 #define OVMX_R0_NOSUCHFILE_ORACLE  0x00000910u
 
-static void execinit_halt(const char *image, const char *detail,
-                          int have_r0, unsigned int r0)
+static void halt_now(void)
 {
-    if (have_r0) {
-        fprintf(stderr, "%%EXECINIT, error loading system file - %s R0 = %08X\n",
-                image, r0);
-    } else {
-        fprintf(stderr, "%%EXECINIT, error loading system file - %s\n", image);
+    fflush(NULL);
+
+    if (getpid() == 1) {
+        sync();
+        reboot(RB_POWER_OFF);
+        /* Only reached without CAP_SYS_BOOT. */
     }
+    _exit(1);
+}
+
+/*
+ * The oracle-pinned path: reproduces the VAX 7.3 capture byte-exact
+ * ("%EXECINIT, error loading system file - <FILE> R0 = <status>"). Call
+ * this ONLY when the failure being reported is the exact oracle condition
+ * (a required executive image is missing, ENOENT) -- never for a condition
+ * VMS is never in (see ovmx_exec_halt below, and Rule 10).
+ */
+static void execinit_halt(const char *image, const char *detail, unsigned int r0)
+{
+    fprintf(stderr, "%%EXECINIT, error loading system file - %s R0 = %08X\n",
+            image, r0);
 
     /*
      * OVMX DESIGN CHOICE (Rule 8), labelled as such: VMS prints nothing more
@@ -175,14 +189,25 @@ static void execinit_halt(const char *image, const char *detail,
      */
     if (detail)
         fprintf(stderr, "%%OVMX-I-EXECINIT, %s\n", detail);
-    fflush(NULL);
+    halt_now();
+}
 
-    if (getpid() == 1) {
-        sync();
-        reboot(RB_POWER_OFF);
-        /* Only reached without CAP_SYS_BOOT. */
-    }
-    _exit(1);
+/*
+ * The NOT-oracle-pinned path: a fatal executive-attach failure for which VMS
+ * has no analogue at all -- either a module-load errno other than the
+ * oracle's ENOENT, or /dev/vms (a Linux device node; VMS has no such thing
+ * to open) refusing to open. Rule 10 is explicit that a plausible-looking
+ * VMS message may never be invented for a condition VMS never faces; the
+ * bare "%EXECINIT, error loading system file - <FILE>" shape (no R0) that
+ * used to come out of this function's other branch was exactly that
+ * invention. This path wears the OVMX facility instead of EXECINIT.
+ */
+static void ovmx_exec_halt(const char *what, const char *detail)
+{
+    fprintf(stderr, "%%OVMX-F-EXECINIT, %s\n", what);
+    if (detail)
+        fprintf(stderr, "%%OVMX-I-EXECINIT, %s\n", detail);
+    halt_now();
 }
 
 /*
@@ -251,23 +276,26 @@ static void executive_attach(void)
         return;                 /* already attached; idempotent by design */
 
     if (load_kernel_module("/lib/modules/vms.ko") != 0 && errno != EEXIST) {
-        /* The oracle's exact condition -- a required executive image that is
-         * not there -- so its exact status is reproduced. Other load errnos
-         * have no oracle-pinned VMS status, and one is not invented for them
-         * (see OVMX_R0_NOSUCHFILE_ORACLE); they carry the Linux detail line
-         * instead. */
-        execinit_halt("VMS.KO", strerror(errno),
-                      errno == ENOENT, OVMX_R0_NOSUCHFILE_ORACLE);
+        if (errno == ENOENT) {
+            /* The oracle's exact condition -- a required executive image
+             * that is not there -- so its exact status is reproduced. */
+            execinit_halt("VMS.KO", strerror(errno), OVMX_R0_NOSUCHFILE_ORACLE);
+        } else {
+            /* Other load errnos have no oracle-pinned VMS status, and one is
+             * not invented for them (see OVMX_R0_NOSUCHFILE_ORACLE). */
+            ovmx_exec_halt("error loading system file - VMS.KO", strerror(errno));
+        }
     }
 
     executive_fd = open("/dev/vms", O_RDWR | O_CLOEXEC);
     if (executive_fd < 0) {
         /* No oracle analogue: a VMS executive has no device node to open, so
-         * VMS is never in this state and prints no status for it. Report it
-         * in the same shape without fabricating an R0. */
-        execinit_halt("VMS.KO", strerror(errno), 0, 0);
+         * VMS is never in this state and prints no status for it. This is an
+         * OVMX event, not a VMS one -- it must not wear the EXECINIT
+         * facility (Rule 10). */
+        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));
     }
-    printf("%%STARTUP-I-EXEC, VMS executive attached on /dev/vms\n");
+    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
 }
 
 /*

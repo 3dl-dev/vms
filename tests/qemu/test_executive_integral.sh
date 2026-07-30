@@ -38,6 +38,7 @@ TIMEOUT=90
 KERNEL=/boot/vmlinuz
 INITRD_OK=/boot/initramfs-ovmx.cpio.gz
 INITRD_NOEXEC=/boot/initramfs-ovmx-noexec.cpio.gz
+INITRD_NODEV=/boot/initramfs-ovmx-nodev.cpio.gz
 ARCH=$(uname -m)
 
 PASS=0
@@ -97,15 +98,22 @@ if [ ! -f "$INITRD_NOEXEC" ]; then
     exit 1
 fi
 
+if [ ! -f "$INITRD_NODEV" ]; then
+    echo "FAIL: $INITRD_NODEV is missing — the NODEV negative control cannot run."
+    echo "  -> distro/Dockerfile.bootable must build the NODEV initramfs."
+    exit 1
+fi
+
 # --- Boot A: executive present → the system comes up --------------------
 echo "--- Boot A: executive present ---"
 DISK_A=/tmp/exec-integral-a.img
 rm -f "$DISK_A"; truncate -s 64M "$DISK_A"
 OUT_A=$(run_qemu "$INITRD_OK" "$DISK_A")
 
-check "Boot A: executive attached" "$OUT_A" '%STARTUP-I-EXEC'
+check "Boot A: executive attached" "$OUT_A" '%OVMX-I-EXEC'
 check "Boot A: system came up (boot banner)" "$OUT_A" 'OVMX V0.1'
 check "Boot A: no executive-image load error" "$OUT_A" '%EXECINIT, error loading system file' absent
+check "Boot A: no OVMX-facility exec halt" "$OUT_A" '%OVMX-F-EXECINIT' absent
 echo ""
 
 # --- Boot B (NEGATIVE CONTROL): no executive → the system must NOT come up ---
@@ -132,6 +140,28 @@ check "Boot B: NO login prompt"                         "$OUT_B" 'Username:'  ab
 check "Boot B: startup did not complete"                "$OUT_B" '%STDRV-I-STARTUP, OVMX startup completed' absent
 echo ""
 
+# --- Boot C (NEGATIVE CONTROL): module loads, /dev/vms never appears --------
+# Same kernel, same disk layout, same STARTUP.EXE. The ONLY difference from
+# Boot A is that /lib/modules/vms.ko is a DIFFERENT real, loadable kernel
+# module (vmsfs.ko's own binary, built by this same Dockerfile stage) that
+# registers no misc device -- so finit_module() succeeds but /dev/vms never
+# appears in devtmpfs. This is the second half of executive_attach's
+# guarantee: Boot B proves "module missing" is fatal, Boot C proves "module
+# loads but the device node never shows up" is *independently* fatal, and
+# that the diagnostic for it is an honest %OVMX- line, never a fabricated
+# %EXECINIT with no R0 (Rule 10 / vms-a35 round 2).
+echo "--- Boot C (negative control): module loads, /dev/vms absent ---"
+DISK_C=/tmp/exec-integral-c.img
+rm -f "$DISK_C"; truncate -s 64M "$DISK_C"
+OUT_C=$(run_qemu "$INITRD_NODEV" "$DISK_C")
+
+check "Boot C: reports the OVMX-facility exec halt" "$OUT_C" '%OVMX-F-EXECINIT, VMS executive device /dev/vms did not open'
+check "Boot C: NO fabricated bare EXECINIT (no R0)" "$OUT_C" '%EXECINIT, error loading system file' absent
+check "Boot C: NO boot banner (system did not come up)" "$OUT_C" 'OVMX V0.1' absent
+check "Boot C: NO login prompt"                          "$OUT_C" 'Username:' absent
+check "Boot C: startup did not complete"                 "$OUT_C" '%STDRV-I-STARTUP, OVMX startup completed' absent
+echo ""
+
 if [ "$FAIL" -eq 0 ]; then
     echo "=== RESULTS: $PASS checks passed, 0 failed ==="
     echo "ALL EXECUTIVE-INTEGRAL CHECKS PASSED"
@@ -142,4 +172,6 @@ echo "=== RESULTS: $PASS passed, $FAIL FAILED ==="
 echo ""
 echo "--- Boot B console output (executive absent) ---"
 echo "$OUT_B" | tail -40
+echo "--- Boot C console output (module loads, /dev/vms absent) ---"
+echo "$OUT_C" | tail -40
 exit 1

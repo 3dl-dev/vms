@@ -47,6 +47,14 @@ payload begins at offset 14 (after the 14-byte Ethernet header).
 
 ## 1. Specimens used
 
+**`vax3-2to3-established-join-20260730.pcap`** (17 705 frames, 83.7 s) — **the authority
+for an established join.** A third *real* VAX (VAX3, `SCSNODE=VAX3`,
+`SCSSYSTEMID=1027`, `VOTES=0`, root `[SYS2]`, MAC `08:00:2b:11:22:33`) built on the lab
+disk and booted into the **running 2-node cluster**, reaching MEMBER
+(`CLUSTER_NODES=3`). Every other join specimen in this library is a 1→2 *formation*;
+this is the only capture of a node being **admitted to an existing cluster**, which is
+the operation OVMX must reproduce. Grounds §4(m) and §4(n).
+
 | pcap | Frames (0x6007) | Used for |
 |---|---|---|
 | `scs-idle-baseline.pcap` | 36 | §4(b) HELLO baseline, §4(d) SCS envelope baseline |
@@ -1448,6 +1456,96 @@ Rule 8).
 
 ---
 
+### 4(m) SCS connection lifecycle — the `op` verb set at abs 60 (GROUNDED, `vax3-2to3-established-join-20260730.pcap`)
+
+Every SCS connection-control frame carries a little-endian verb at **abs 60**
+(`sca[46:48]`). Prior sections decoded individual frames; this is the complete verb
+set and state machine, grounded on a real VAX (VAX3, `08:00:2b:11:22:33`) joining the
+live 2-node cluster — the only capture in the library of an **established** join by a
+genuine VMS node, and therefore the authority for connection semantics.
+
+| op | name (inferred) | SCA len | sent by | meaning |
+|----|-----------------|---------|---------|---------|
+| 0 | CONNECT-REQUEST | 110 | initiator | opens a connection to a named SYSAP; `remote_conid`=0, `local_conid`=own handle; `name@76` = target SYSAP, `result@92` = offered local SYSAP |
+| 1 | CONNECT-ECHO | 66 | acceptor | "received"; echoes `remote_conid`=initiator's handle, `local_conid` still 0. **Every** accept emits this first |
+| 2 | CONNECT-RESPONSE | 110 | acceptor | the ACCEPT — supplies the acceptor's handle in `local_conid`; binds the Con.ID pair |
+| 3 | CONNECT-CONFIRM | 62 | initiator | initiator acknowledges the bind. **Load-bearing**: without it the connection stays half-open and the peer will not accept the initiator's *next* connect |
+| 4 | CONNECT-ACCEPT (alt) | 62 | acceptor | the accept form used when answering a **member-initiated `MSCP$DISK`** connect (in place of op 2) |
+| 5 | CONNECT-CONFIRM (alt) | 58 | initiator | confirm paired with op 4 |
+| 6 | DISCONNECT-REQUEST | 62 | either | tears the connection down. **Bidirectional**: each side sends its own op 6 and answers the peer's with op 7 |
+| 7 | DISCONNECT-RESPONSE | 58 | either | acks an op 6 |
+| 8 | CREDIT/READY-REQUEST | 58 | either | post-bind flow-control/ready exchange |
+| 9 | CREDIT/READY-RESPONSE | 58 | either | answers op 8 |
+| 10 | DATA / DIRECTORY-OP | 94/110/190 | either | directory lookup (§4h), MSCP command (§4e), and the 190-byte SYSAP config dialogue (§4j) all ride op 10 |
+
+**Response construction (ops 7/9):** a standard reflection — swap Ethernet src/dst,
+swap the cluster-logical addresses at abs 16 / abs 24, swap the Con.ID pair
+(`rc`↔`lc`), set `op = op+1`, `recv_ack` = the request's `send_seq`, and take a fresh
+`send_seq` from the shared counter.
+
+**Directory connections are TRANSIENT and serially reused.** A `SCS$DIRECTORY`
+connection is opened, used for lookups, then closed by the op8/9 + op6/7 sequence. A
+node opens a *new* directory connection later rather than keeping one alive. Do not
+model it as long-lived.
+
+#### The msgtype phase rule (abs 30) — supersedes the §4(d) note for connection frames
+
+`msgtype` tracks the **connection's** phase, not the node's:
+- **`0x5b`** while a connection is being established — the joiner's own `SCS$DIRECTORY`,
+  `MSCP$DISK` **and** `VMS$VAXcluster` CONNECT-REQUESTs are all `0x5b`, as are its
+  op 3 confirms and its first directory lookups.
+- **`0x4b`** once traffic is data-phase — later lookups on an established directory
+  connection, MSCP commands, and all 190-byte SYSAP config frames.
+
+The acceptor answers in the phase it has reached, so a `0x5b` request is commonly
+answered with a `0x4b` echo/response. Sending a connect as `0x4b` when the peer expects
+an establishing connection, or a post-establishment lookup as `0x5b`, causes the member
+to **echo (op 1) but never accept (op 2)** — the signature failure mode.
+
+#### Connect-class at abs 22 (`sca[8:10]`)
+
+Connection-control frames carry **`0x0001`** here. (`0x03e8` appears in some
+fresh-formation captures and is *not* accepted by an established member — a member that
+receives it echoes and stalls.) The same field carries the node-incarnation echo on
+`0x41` START frames (§4i); it is phase-dependent, not a single global constant.
+
+#### Ordering invariant
+
+The joiner's connects are **pipelined on one shared, contiguous `send_seq`** — it issues
+the next connect/lookup before earlier responses arrive. It is *not* stop-and-wait. What
+is strictly ordered is the **confirm**: a connection must be confirmed (op 3) before the
+initiator's next CONNECT-REQUEST will be accepted.
+
+### 4(n) MSCP disk-client command layer (GROUNDED, same capture)
+
+§4(e) decoded MSCP request/response *framing*; this is the client command sequence a
+joiner must execute, and the MSCP message layout carried in the op-10 body at **abs 72**.
+
+| body offset | field |
+|-------------|-------|
+| `[0:2]` | class token — `0x0002` SET CONTROLLER CHARACTERISTICS, `0x0001` GET UNIT STATUS |
+| `[2:4]` | message id — increments per command, **echoed verbatim** by the server |
+| `[4:6]` | unit word (GUS: the unit being queried; END: the unit returned) |
+| `[8]` | MSCP opcode — `0x04` SET CTLR CHAR, `0x03` GET UNIT STATUS; **END response = opcode \| 0x80** |
+| `[9]` | flags |
+| `[10:12]` | modifiers on a command (`0x0001` = NEXT-UNIT); **MSCP status** on an END |
+
+MSCP status majors observed: `0x0000` SUCCESS, `0x0004` UNIT AVAILABLE, `0x0003` UNIT
+OFFLINE.
+
+**The client sequence (complete — this is all a joiner does):**
+1. `SET CONTROLLER CHARACTERISTICS` **twice** → END `0x84`, status SUCCESS.
+2. `GET UNIT STATUS` walk with the NEXT-UNIT modifier. **The first command seeds unit
+   word `0x0001`**; each subsequent command uses *the previous END's returned unit word
+   + 1*. Each real disk answers status AVAILABLE; the walk ends when an END returns
+   status **OFFLINE**, which is the end-of-list terminator, not an error.
+3. Nothing else — there is **no MSCP INIT handshake** before it (the SCS
+   connect/accept/confirm subsumes it) and **no ONLINE or READ** after it. The joiner
+   never mounts or reads the disk during the join.
+
+Seeding the first GUS with unit `0x0000` makes the server answer OFFLINE immediately and
+the enumeration terminates after one exchange — a silent, plausible-looking failure.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:
@@ -1535,6 +1633,25 @@ For visibility, every field NOT marked GROUNDED above:
   the next deliverable** (the byte-exact `MSCP$DISK` connect builder is done).
 
 ---
+
+### 5(z) OPEN — cluster-manager admission predicate (the current frontier)
+
+An OVMX joiner can now reproduce the entire SCS layer byte-faithfully: it opens its own
+`SCS$DIRECTORY`, `MSCP$DISK` and `VMS$VAXcluster` connections and the established member
+**accepts all three**; it completes the MSCP disk-discovery enumeration identically to a
+real VAX; it sends the MODEL+PARAMS add-member burst on its own VC. Yet the member does
+**not reciprocate**: it never answers the 190-byte config burst and — the diagnostic
+tell — it never **opens its own connections back**, which it does to a real joiner within
+~15 ms.
+
+So admission is gated by a predicate **above** the SCS frame layer: the member's
+connection manager binds the connections but does not accept the node as a cluster peer.
+The unknown is what a real node *presents* that OVMX does not. Untested candidates, in
+order of promise: (a) the `0x41` START **body** content (OVMX's START completes, but
+fields inside it may carry CM-relevant identity/config); (b) HELLO / channel
+advertisement content (`0xb3`/`0xa0`) — a real node advertises a full VMS configuration;
+(c) SYSGEN-level identity a genuine node carries into the cluster. Diff VAX3's frames
+against OVMX's at these layers, **not** at the connection layer (that one is solved).
 
 ## 6. Using the dissector
 

@@ -811,8 +811,21 @@ uint32_t vms_kif_setident(const char *username, uint32_t uic,
     args.uic = uic;
     args.authorized_privs = authorized_privs;
 
-    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_SETIDENT, (unsigned long)&args) < 0)
-        return 0x00000014;
+    /*
+     * KIF_CALL, not a bare ioctl (vms-2b8, reader round).
+     *
+     * This was the one wrapper in the file that issued its ioctl directly,
+     * and it was the one wrapper that could not work: SETIDENT is by
+     * definition the FIRST executive call a process like LOGINOUT makes,
+     * so without kif_bind() the task is unregistered, vms_module.c answers
+     * -ESRCH, and every identity establishment in the product failed. It
+     * also collapsed every delivery failure to a literal SS$_BADPARAM,
+     * which described the caller's arguments for a condition that had
+     * nothing to do with them; vms_kif_kerr_to_ss() gives the real one.
+     * Caught by tests/qemu/test_syssvc_ident.c, which saw status 20 for a
+     * root process establishing a perfectly valid identity.
+     */
+    KIF_CALL(VMS_IOCTL_SETIDENT, &args);
 
     return args.status;
 }

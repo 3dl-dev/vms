@@ -252,6 +252,71 @@ vms/
      the correct behavior is to **fail honestly** (`SS$_NOSUCHDEV`, as `sys_lock.c` already does) —
      never to fake per-process success. A silent fallback is the exact LARP bug class the
      authenticity invariants exist to kill (INV-6).
+
+     > **Superseded in part by Rule 10 (operator ruling 2026-07-30).** Returning `SS$_NOSUCHDEV`
+     > per call was itself the wrong answer: VMS has no "executive absent" state, so the condition
+     > must be made **unreachable**, not handled. PID 1 refuses to boot without the executive
+     > (`%EXECINIT`, then halt), and the per-call fallbacks in `sys_lock.c` / `vms_kif.c` are
+     > **deleted**. Read Rule 10 before "fixing" an error path here — five waves of work went into
+     > polishing those paths before the rule revealed the paths were themselves the defect.
+
    - **An executive facility is not done until a test exercises it against a real `/dev/vms`.**
    - The standing gate `tests/integration/test_runtime_target.sh` enforces the mechanical parts of
      this rule. Do not add allowlist entries to it to make it pass.
+
+10. **Semantic fidelity: two legal answers, never three (HARD INVARIANT).** Operator ruling
+    2026-07-30. For any behavior, condition, or interface there are exactly **two** legal outcomes:
+
+    1. **MATCH VMS.** The behavior exists in OpenVMS — reproduce it as VMS does, including message
+       text, facility name, status values, and failure modes. Pin it to the oracle (the `~/vax` lab
+       or public OpenVMS documentation).
+    2. **HIDE IT.** VMS has no such thing — so do not expose it, and do not *handle* it. Make the
+       condition **unreachable** rather than writing a plausible-looking path for it.
+
+    **The illegal third answer is inventing a reasonable-looking handler for a condition VMS never
+    faces.** This is the defect class behind nearly every facade in this codebase. It always looks
+    like diligence — graceful degradation, a sensible default, a helpful fallback — and it always
+    ships a lie. Two worked examples, both already ruled on:
+
+    - **The `/dev/vms` fallbacks.** VMS has no "executive absent" state, so the condition is
+      unreachable, not handled: PID 1 refuses to boot. The fallbacks were **deleted**, not
+      corrected (see the note under Rule 9).
+    - **The process name across `exec`** (rejected 2026-07-30). `sys$creprc`'s `prcnam` is lost at
+      `exec` because the PCB is process-local. Carrying it in a `VMS_PRCNAM` environment variable —
+      following the existing `VMS_USERNAME`/`VMS_TERMINAL` convention — compiled and tested green,
+      and was a cheat: a process self-reporting a name nothing else can see. VMS never faces this
+      because the name lives in the executive's process table. Correct answer: do not offer the
+      name until the process table exists, and say so loudly (`%RUN-W-NOPRCNAM`).
+
+    **When you cannot find the VMS behavior, you are not authorized to invent one.** Pin it to the
+    oracle, or make it unreachable and report that you did, or escalate. Never self-certify a
+    constant value or a message — the operator signs those off. **Green CI is not evidence of VMS
+    correctness.**
+
+11. **VMS system facilities are executive-resident, not per-process (HARD INVARIANT).** A VMS
+    system facility is *shared state owned by the executive* (`vms.ko`, reached through
+    `/dev/vms`). If a facility lives in per-process memory it is a **facade**, no matter how correct
+    its output looks — it reports success while sharing nothing.
+
+    **The decisive test is A-writes / B-reads:** perform the operation in process A and observe it
+    from process B. A per-process fake passes every single-process test perfectly, which is exactly
+    how the known facades survived so long. Single-process coverage is not coverage for a system
+    facility.
+
+    Known facades of this class, all verified in code and tracked in rd — do not copy their pattern,
+    and do not treat any of them as a precedent to follow:
+
+    - **No executive process table.** `src/vmsprocess/vms_pcb.c` keeps the PCB in a static/`calloc`
+      block that does not survive `exec`, so `sys$creprc`'s `prcnam` never reaches the activated
+      image, and `SHOW SYSTEM` (`src/vmsdcl/dcl_cmd_show.c`) can only print the *calling* process.
+      Nothing can look a process up by name. (`vms-8019`)
+    - **Per-process logical name tables.** `src/vmslnm/lnm_client.c` `lnm_init()` `calloc`s private
+      system/group/job/process tables with no shared backing, so `DEFINE/SYSTEM` in one process is
+      invisible to every other. `VMSLNMD.EXE` listens on a socket with **zero clients**
+      product-wide. (`vms-a4b`)
+    - **An unwired executive.** `vms_kif_register()` has **zero callers** product-wide, so every
+      `/dev/vms` ioctl is rejected — including in `sys_lock.c`, the "already wired" precedent other
+      work was told to copy. (`vms-9fc`)
+
+    Corollary: a user-visible VMS command is a **reader** of an executive facility, never a thing
+    that fabricates its own answer.

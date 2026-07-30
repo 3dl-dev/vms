@@ -111,7 +111,7 @@ if [ ! -f "$init_c" ]; then
 else
     missing=""
     grep -q 'executive_attach' "$init_c" || missing="$missing executive_attach()"
-    grep -q 'boot_fatal' "$init_c"       || missing="$missing boot_fatal()"
+    grep -q 'execinit_halt' "$init_c"    || missing="$missing execinit_halt()"
     grep -q '"/dev/vms"' "$init_c"       || missing="$missing open(/dev/vms)"
     if [ -n "$missing" ]; then
         echo "FAIL: ovmx_init.c no longer establishes the executive guarantee:$missing"

@@ -73,9 +73,41 @@ exercises.
    lie as a per-process fake that reports success — it just fails more politely. Enforced by
    `tests/integration/test_runtime_target.sh`.
 
-   Where OVMX must still invent a representation because VMS has no analogue (the `%STARTUP-F-NOEXEC`
-   / `%STARTUP-F-NOBOOT` messages), it is **labelled an OVMX design choice** per CLAUDE.md Rule 8 —
-   never presented as VMS-authentic.
+   **The fail-stop boot turned out to be VMS-authentic, not an OVMX invention.** Pinned to the
+   oracle (`~/vax/cluster`, OpenVMS VAX V7.3, node VAX2, 2026-07-29): renaming
+   `SYS$COMMON:[SYS$LDR]EXCEPTION.EXE` aside and cold-booting `B/R5:10000000 DUA0` produces
+
+   ```
+   %EXECINIT, error loading system file - EXCEPTION.EXE R0 = 00000910
+   ?06 HLT INST
+           PC = 871306A6
+   >>>
+   ```
+
+   and **the machine halts** — no degraded boot, no bugcheck, no crash dump. Capture archived at
+   `~/vax/cluster/captures/vax2-execinit-missing-exception-2026-07-29.log`. Four properties are
+   reproduced deliberately, because they are the authenticity tells: the facility is **EXECINIT**,
+   not SYSBOOT; there is **no severity letter and no mnemonic**; the image is a **bare filename**;
+   and the status is printed raw as `R0 = ` + 8 hex digits.
+
+   This also **disproves an earlier wave's `%SYSBOOT-F-LDFAIL`** — the complete VAX 7.3 SYSBOOT
+   message set (`HELP/MESSAGE/FACILITY=SYSBOOT`, ~48 entries) contains no such mnemonic. The
+   independently useful corroboration is `SYSBOOT-E-I/O error reading file`, whose shipped Help
+   Message text states that if the error occurred reading a system loadable image, *"SYSBOOT
+   terminates the bootstrap operation"*.
+
+   Two things remain genuine **OVMX design choices**, labelled per CLAUDE.md Rule 8 and never
+   presented as VMS-authentic: the `%OVMX-I-EXECINIT` detail line carrying the underlying Linux
+   error (VMS prints nothing more — `?06 HLT INST` comes from the VAX console firmware, which OVMX
+   has no analogue of), and reporting `/dev/vms` failing to *open* in the same shape without an
+   `R0`, since a VMS executive has no device node and VMS is never in that state.
+
+   **Not silently "fixed" here:** the oracle's `R0 = 00000910` decodes via `F$MESSAGE` to
+   `%SYSTEM-W-NOSUCHFILE`, while in-tree `ssdef.h` defines `SS$_NOSUCHFILE` as 2696 (0xA88). That
+   drift is real and tracked (vms-556 / vms-c90, alongside `SS$_NOSUCHDEV` 2680 vs the oracle's
+   2312) and needs **operator sign-off** — a VMS constant is never self-certified. `ovmx_init.c`
+   uses the observed value only to reproduce an observed console line, and says so at the
+   definition.
 3. **Not done until proven against a real `/dev/vms`.** A userspace unit test that never loads
    `vms.ko` does not close an executive item.
 4. **Clean-room** (CLAUDE.md Rule 8) still applies to any VMS structure layout or constant.

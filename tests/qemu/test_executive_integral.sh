@@ -105,8 +105,7 @@ OUT_A=$(run_qemu "$INITRD_OK" "$DISK_A")
 
 check "Boot A: executive attached" "$OUT_A" '%STARTUP-I-EXEC'
 check "Boot A: system came up (boot banner)" "$OUT_A" 'OVMX V0.1'
-check "Boot A: no fatal executive error" "$OUT_A" '%STARTUP-F-NOEXEC' absent
-check "Boot A: startup not aborted" "$OUT_A" '%STARTUP-F-NOBOOT' absent
+check "Boot A: no executive-image load error" "$OUT_A" '%EXECINIT, error loading system file' absent
 echo ""
 
 # --- Boot B (NEGATIVE CONTROL): no executive → the system must NOT come up ---
@@ -118,8 +117,13 @@ DISK_B=/tmp/exec-integral-b.img
 rm -f "$DISK_B"; truncate -s 64M "$DISK_B"
 OUT_B=$(run_qemu "$INITRD_NOEXEC" "$DISK_B")
 
-check "Boot B: reports the executive could not be loaded" "$OUT_B" '%STARTUP-F-NOEXEC'
-check "Boot B: startup aborted"                           "$OUT_B" '%STARTUP-F-NOBOOT'
+# The message shape is pinned to the oracle, not chosen: OpenVMS VAX V7.3
+# prints "%EXECINIT, error loading system file - <FILE> R0 = <status>" and
+# halts (capture: ~/vax/cluster/captures/vax2-execinit-missing-exception-2026-07-29.log).
+# Asserting the facility AND the R0 status together is what keeps this from
+# passing on a lookalike message.
+check "Boot B: reports the executive image would not load" "$OUT_B" '%EXECINIT, error loading system file - VMS.KO'
+check "Boot B: carries the oracle's status for a missing file" "$OUT_B" 'R0 = 00000910'
 # The load-bearing assertions: the system genuinely did NOT come up. Before
 # vms-0ff, this boot printed a severity-W warning and proceeded to a full DCL
 # session with no executive at all.

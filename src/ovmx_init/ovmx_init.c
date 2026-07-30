@@ -108,28 +108,74 @@ static void sigchld_handler(int sig)
 /* ------------------------------------------------------------------ */
 
 /*
- * The system does not come up. Print the reason and halt.
+ * A required executive image would not load. Report it the way VMS does and
+ * halt -- the system does not come up.
  *
- * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): OpenVMS has no message for "the
- * executive vanished" because VMS is never in that state -- SYSBOOT loads
- * the executive before any process exists, so a running VMS system always
- * has one. The %STARTUP-F-* mnemonics below are OVMX's own, not VMS-
- * authentic, and must never be presented as such.
+ * PINNED TO THE ORACLE, NOT INVENTED. Observed on the reference lab's
+ * OpenVMS VAX V7.3 (~/vax/cluster, node VAX2) on 2026-07-29 by renaming
+ * SYS$COMMON:[SYS$LDR]EXCEPTION.EXE aside and cold-booting `B/R5:10000000
+ * DUA0`. Console capture archived at
+ * ~/vax/cluster/captures/vax2-execinit-missing-exception-2026-07-29.log:
+ *
+ *     %EXECINIT, error loading system file - EXCEPTION.EXE R0 = 00000910
+ *     ?06 HLT INST
+ *             PC = 871306A6
+ *     >>>
+ *
+ * Four properties of that message are deliberate here, because they are the
+ * authenticity tells:
+ *   - the facility is EXECINIT, not SYSBOOT (an earlier wave invented
+ *     "%SYSBOOT-F-LDFAIL"; the complete VAX 7.3 SYSBOOT message set was
+ *     dumped via HELP/MESSAGE/FACILITY=SYSBOOT and contains no such thing);
+ *   - there is NO severity letter and NO mnemonic -- it is a bare
+ *     "%EXECINIT," message, unlike almost every other VMS message;
+ *   - the image is named as a BARE FILENAME, not a full filespec;
+ *   - the status is printed raw as "R0 = " + 8 hex digits.
+ * The machine then halts to the console prompt. It does not continue, does
+ * not bugcheck, and produces no crash dump. So OVMX's fail-stop boot is not
+ * an OVMX invention after all -- it is what VMS actually does.
  *
  * As PID 1 we power the machine off rather than exit: an exiting PID 1
  * panics the kernel and leaves QEMU wedged, whereas a clean power-off ends
- * the boot with the diagnostic still on the console -- the closest analogue
- * to a VAX halting to the >>> console prompt. If reboot(2) is unavailable
- * (no CAP_SYS_BOOT, e.g. the dead-legacy container), exit nonzero instead.
+ * the boot with the diagnostic still on the console -- OVMX's analogue of
+ * the VAX halting to >>>. If reboot(2) is unavailable (no CAP_SYS_BOOT,
+ * e.g. the dead-legacy container), exit nonzero instead.
  */
-static void boot_fatal(const char *fmt, ...)
+
+/*
+ * SS$_NOSUCHFILE as the ORACLE reports it: R0 held 00000910 in the capture
+ * above, and F$MESSAGE(%X00000910) on the same system decodes to
+ * "%SYSTEM-W-NOSUCHFILE, no such file".
+ *
+ * DELIBERATELY NOT TAKEN FROM ssdef.h, which defines SS$_NOSUCHFILE as 2696
+ * (0xA88) and disagrees with the oracle. That drift is real and already
+ * tracked (vms-556 / vms-c90, alongside SS$_NOSUCHDEV 2680 vs the oracle's
+ * 2312) and needs OPERATOR SIGN-OFF -- a VMS constant is never
+ * self-certified, so this file does not "fix" ssdef.h in passing. The value
+ * below is used only to reproduce an observed console line, and is pinned to
+ * the observation that produced it.
+ */
+#define OVMX_R0_NOSUCHFILE_ORACLE  0x00000910u
+
+static void execinit_halt(const char *image, const char *detail,
+                          int have_r0, unsigned int r0)
 {
-    va_list ap;
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    fprintf(stderr, "%%STARTUP-F-NOBOOT, system startup aborted, "
-                    "OVMX is not running\n");
+    if (have_r0) {
+        fprintf(stderr, "%%EXECINIT, error loading system file - %s R0 = %08X\n",
+                image, r0);
+    } else {
+        fprintf(stderr, "%%EXECINIT, error loading system file - %s\n", image);
+    }
+
+    /*
+     * OVMX DESIGN CHOICE (Rule 8), labelled as such: VMS prints nothing more
+     * -- the "?06 HLT INST" line comes from the VAX console firmware, not
+     * from VMS. OVMX has no such firmware layer, and the underlying Linux
+     * error carries information a VMS status cannot, so it is emitted as an
+     * explicitly OVMX-facility line rather than dressed up as VMS output.
+     */
+    if (detail)
+        fprintf(stderr, "%%OVMX-I-EXECINIT, %s\n", detail);
     fflush(NULL);
 
     if (getpid() == 1) {
@@ -206,14 +252,21 @@ static void executive_attach(void)
         return;                 /* already attached; idempotent by design */
 
     if (load_kernel_module("/lib/modules/vms.ko") != 0 && errno != EEXIST) {
-        boot_fatal("%%STARTUP-F-NOEXEC, cannot load the VMS executive "
-                   "(vms.ko): %s\n", strerror(errno));
+        /* The oracle's exact condition -- a required executive image that is
+         * not there -- so its exact status is reproduced. Other load errnos
+         * have no oracle-pinned VMS status, and one is not invented for them
+         * (see OVMX_R0_NOSUCHFILE_ORACLE); they carry the Linux detail line
+         * instead. */
+        execinit_halt("VMS.KO", strerror(errno),
+                      errno == ENOENT, OVMX_R0_NOSUCHFILE_ORACLE);
     }
 
     executive_fd = open("/dev/vms", O_RDWR | O_CLOEXEC);
     if (executive_fd < 0) {
-        boot_fatal("%%STARTUP-F-NOEXEC, cannot attach to the VMS executive "
-                   "(/dev/vms): %s\n", strerror(errno));
+        /* No oracle analogue: a VMS executive has no device node to open, so
+         * VMS is never in this state and prints no status for it. Report it
+         * in the same shape without fabricating an R0. */
+        execinit_halt("VMS.KO", strerror(errno), 0, 0);
     }
     printf("%%STARTUP-I-EXEC, VMS executive attached on /dev/vms\n");
 }

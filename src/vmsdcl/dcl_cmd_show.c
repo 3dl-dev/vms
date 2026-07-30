@@ -1014,9 +1014,26 @@ static int cmd_show_protection(struct dcl_command *cmd)
  * bare "%SYSTEM-W-NOSUCHDEV" with no header above it, exactly as
  * section 6 of docs/oracle/vax73-terminal-device.md recorded it.
  *
- * Column geometry is taken character-for-character from section 4 of
- * that file: the name occupies columns 0-23, the status 24-29, and the
- * error count is right-aligned ending at column 45.
+ * Column geometry is taken character-for-character from sections 4 and
+ * 4.1 of that file: the name occupies columns 0-23, the status starts
+ * at column 24, and the error count's last digit lands on column 45
+ * (line length 46). "%-24s%-12s%10u" reproduces BOTH measured rows
+ * byte-for-byte -- the six-character "Online" and the twelve-character
+ * "Online alloc" -- which a "%-6s%16u" cannot.
+ *
+ * DEVICE STATUS, and why exactly two strings exist here. Section 4.1
+ * was captured for this function: VMS appends "alloc" to the status
+ * when the device is ALLOCATEd, and a second process that did not
+ * allocate it sees the word too (A-writes/B-reads, measured with a
+ * RUN/DETACHED probe) and stops seeing it when the allocation ends.
+ * Ownership does NOT show here -- in every capture the console was
+ * owned by the interactive job and the unallocated rows still read a
+ * plain "Online" -- so this must key on info->allocated and on nothing
+ * else. "Online" itself is not read from a field: the executive's
+ * table has no online/offline flag and a device absent from the table
+ * is not reported at all, so it is the only state a row can be in.
+ * Everything the oracle prints for devices OVMX does not have (a disk's
+ * "Mounted", an offline device) is deliberately not guessed at.
  */
 static void show_device_row(const struct vms_devinfo *info, int *rows)
 {
@@ -1024,8 +1041,44 @@ static void show_device_row(const struct vms_devinfo *info, int *rows)
         printf("Device                  Device           Error\n");
         printf(" Name                   Status           Count\n");
     }
-    printf("%-24s%-6s%16u\n", info->devnam, "Online", info->errcnt);
+    printf("%-24s%-12s%10u\n", info->devnam,
+           info->allocated ? "Online alloc" : "Online", info->errcnt);
     (*rows)++;
+}
+
+/*
+ * Report that the executive did not answer a device-table read.
+ *
+ * WHY THIS IS NOT A VMS MESSAGE (CLAUDE.md rule 10). VMS has no
+ * "the executive refused me" state: a process always has a PCB and the
+ * I/O database is always there, so there is no VMS condition value and
+ * no VMS message text for this, and there is no oracle to pin one to.
+ * The two legal answers are then "match VMS" -- impossible, VMS has no
+ * such thing -- and "do not have the thing": make the condition
+ * unreachable and, if it is somehow reached anyway, say so in OVMX's
+ * own voice rather than borrowing VMS's.
+ *
+ * The previous round DID borrow it: every executive failure printed the
+ * oracle-pinned "%SYSTEM-W-NOSUCHDEV, no such device available", so
+ * "the executive rejected us", "that device does not exist" and "the
+ * scan ended" were indistinguishable, and a live OPA0: could be
+ * reported nonexistent in VMS's own voice. A false statement wearing an
+ * oracle citation is worse than no answer.
+ *
+ * The facility is OVMX for the same reason src/ovmx_init/ovmx_init.c
+ * prints %OVMX-F-EXECINIT rather than a %SYSTEM- message: a condition
+ * that only exists because OVMX reaches its executive through a Linux
+ * device node is an OVMX condition. The status value is the executive's
+ * own (SS$_ACCVIO / SS$_INSFMEM / SS$_ILLIOFUNC / SS$_BUGCHECK, mapped
+ * by vms_kif_kerr_to_ss) and is printed, not swallowed, because it is
+ * the only thing that says WHICH failure this was.
+ */
+static int show_device_exec_failed(uint32_t status)
+{
+    dcl_error("OVMX", 4, "EXECDEV",
+              "the executive did not answer the device-table read (status %%X%08X)",
+              status);
+    return status;
 }
 
 /*
@@ -1050,24 +1103,37 @@ static void show_device_row(const struct vms_devinfo *info, int *rows)
  * stub row and no second source to fall back to.
  *
  * FORMAT, oracle-pinned (docs/oracle/vax73-terminal-device.md):
- *   section 4 -- the two header lines and the terminal row, verbatim
- *                from OpenVMS VAX V7.3 on the ~/vax lab.
- *   section 6 -- a device that does not exist prints ONLY
- *                "%SYSTEM-W-NOSUCHDEV, no such device available",
- *                with no column header above it. That is why the
- *                header is emitted lazily, before the first row,
- *                rather than unconditionally at the top.
+ *   section 4   -- the two header lines and the terminal row, verbatim
+ *                  from OpenVMS VAX V7.3 on the ~/vax lab.
+ *   section 4.1 -- the Device Status column: "Online", and
+ *                  "Online alloc" when the device is allocated, with
+ *                  the byte columns of both. See show_device_row().
+ *   section 6   -- a device that does not exist prints ONLY
+ *                  "%SYSTEM-W-NOSUCHDEV, no such device available",
+ *                  with no column header above it. That is why the
+ *                  header is emitted lazily, before the first row,
+ *                  rather than unconditionally at the top.
  *
- * DEVICE STATUS. The oracle prints "Online" for OPA0:. The executive's
- * device table carries no online/offline field, and a device that is
- * not in the table is not reported at all -- so "Online" is not a value
- * read from a field, it is the only state a row in this table can be
- * in. It is written as a constant rather than dressed up as a lookup
- * precisely so nobody reads it as a characteristic that was measured.
  * The oracle's /FULL form (section 5) additionally reports owner,
  * owner UIC, owner PID, reference count, device protection and default
  * buffer size; SHOW DEVICE/FULL is not implemented here, and no part
  * of it is half-printed into the brief form.
+ *
+ * THE THREE OUTCOMES ARE KEPT DISTINCT, and that is the point of the
+ * switch below. Until 2026-07-30 they were not: any failure at all
+ * collapsed to rows == 0 and printed the oracle's NOSUCHDEV, so an
+ * executive that rejected the caller was reported to the user as "that
+ * device does not exist" in VMS's own voice.
+ *
+ *   SS$_NOSUCHDEV     the executive answered, and there is no such
+ *                     device. Oracle section 6, verbatim.
+ *   SS$_IVDEVNAM      the executive answered, and the name is not a
+ *                     legal device name. Oracle section 9.
+ *   SS$_NOMOREDEV     $DEVICE_SCAN's end-of-scan. Not an error and
+ *                     never shown to the user -- it is how the cursor
+ *                     says it is done.
+ *   anything else     the executive did not answer at all. Reported as
+ *                     an OVMX condition; see show_device_exec_failed().
  *
  * DEVICE-NAME ARGUMENT. The name is handed to the executive as-is and
  * the executive resolves it -- including the physical-name folding
@@ -1090,49 +1156,77 @@ static int cmd_show_device(struct dcl_command *cmd)
     const char *want = (cmd && cmd->param_count >= 2) ? cmd->params[1] : NULL;
 
     /*
-     * Bind this thread to the executive. The result is deliberately NOT
-     * tested, for the same reason src/libvms/syssvc/sys_lock.c's
-     * bind_to_executive() does not test it: the condition it would test
-     * for -- an unreachable executive -- is one OVMX is never in, because
-     * PID 1 refuses to bring the system up without /dev/vms and pins it
-     * open for the life of the system (src/ovmx_init/ovmx_init.c,
-     * executive_attach). Adding an "if the executive is missing" branch
-     * here would be a handler for a state VMS cannot be in (rule 10), and
-     * the only thing such a branch could usefully do is fabricate rows --
-     * which is the defect this rewrite removes.
+     * Opening the executive channel here is now belt-and-braces: since
+     * vms-9fc, src/libvmssys/vms_kif.c's kif_bind() completes the
+     * documented open -> register sequence before EVERY ioctl, keyed on
+     * the process, so no caller has to remember it. The result is
+     * deliberately NOT tested, for the same reason
+     * src/libvms/syssvc/sys_lock.c's bind_to_executive() does not test
+     * it: the condition it would test for -- an unreachable executive --
+     * is one OVMX is never in, because PID 1 refuses to bring the system
+     * up without /dev/vms and pins it open for the life of the system
+     * (src/ovmx_init/ovmx_init.c, executive_attach). Adding an "if the
+     * executive is missing" branch here would be a handler for a state
+     * VMS cannot be in (rule 10), and the only thing such a branch could
+     * usefully do is fabricate rows -- the defect this rewrite removes.
+     * If the ioctl fails anyway the status says so and is reported as an
+     * OVMX condition; nothing is invented to cover it up.
      */
     (void)vms_kif_open();
 
     struct vms_devinfo info;
     int rows = 0;
+    uint32_t status;
 
     if (want) {
-        uint32_t status = vms_kif_getdvi_devnam(want, &info);
+        status = vms_kif_getdvi_devnam(want, &info);
 
-        if (status == SS$_IVDEVNAM) {
+        switch (status) {
+        case SS$_NORMAL:
+            info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+            show_device_row(&info, &rows);
+            return SS$_NORMAL;
+        case SS$_IVDEVNAM:
             /* Oracle section 9, from VMS's own message facility:
              * "%SYSTEM-W-IVDEVNAM, invalid device name". */
             dcl_error("SYSTEM", 0, "IVDEVNAM", "invalid device name");
             return SS$_IVDEVNAM;
-        }
-        if (status & 1) {
-            info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
-            show_device_row(&info, &rows);
-        }
-    } else {
-        uint32_t index = 0;
-
-        while (vms_kif_devscan(&index, &info) == SS$_NORMAL) {
-            info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
-            show_device_row(&info, &rows);
+        case SS$_NOSUCHDEV:
+            /* Oracle section 6, verbatim: SHOW DEVICE ZZA0: ->
+             * "%SYSTEM-W-NOSUCHDEV, no such device available". This is
+             * the ONE outcome that message was measured for. */
+            dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
+            return SS$_NOSUCHDEV;
+        default:
+            return show_device_exec_failed(status);
         }
     }
 
+    uint32_t index = 0;
+
+    while ((status = vms_kif_devscan(&index, &info)) == SS$_NORMAL) {
+        info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+        show_device_row(&info, &rows);
+    }
+
+    if (status != SS$_NOMOREDEV)
+        return show_device_exec_failed(status);
+
+    /*
+     * The scan ran to completion and the executive's device table was
+     * EMPTY. Not a VMS condition either: vms.ko creates the console at
+     * module init (src/kernel/vms_devtab.c, vms_devtab_init) and nothing
+     * can remove it, so a node whose I/O database has no devices is a
+     * broken executive, not a system with nothing attached. Reported the
+     * same way and for the same reason -- what it must NOT do is print
+     * NOSUCHDEV, which the oracle attached only to a NAMED device that
+     * does not exist (section 6). The empty-listing case is unrecorded
+     * there, and an unrecorded case may not be self-certified.
+     */
     if (rows == 0) {
-        /* Oracle section 6, verbatim: SHOW DEVICE ZZA0: ->
-         * "%SYSTEM-W-NOSUCHDEV, no such device available". */
-        dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
-        return SS$_NOSUCHDEV;
+        dcl_error("OVMX", 4, "NODEVTAB",
+                  "the executive's device table is empty");
+        return status;
     }
 
     return SS$_NORMAL;
@@ -1275,14 +1369,14 @@ static int cmd_show_status(struct dcl_command *cmd)
  *   defect just deleted. The fix is the executive-resident process/
  *   terminal binding.
  *
- * A SECOND, INDEPENDENT BLOCKER, verified in code this session: nothing
- * in production ever calls vms_kif_register(), and src/kernel/vms_module.c
- * rejects every ioctl from an unregistered process with -ESRCH ("All other
- * ioctls require a registered process"). So even the SHOW DEVICE reader
- * above cannot get a row out of a real /dev/vms yet. That is tracked
- * separately and is not fixable here -- registering DCL with a
- * self-chosen VMS PID and privilege mask would be exactly the identity
- * facade being deleted elsewhere.
+ * THE SECOND BLOCKER IS GONE, and this note records that so nobody
+ * re-derives it: an earlier round could not reach a real /dev/vms at all
+ * because nothing in production called vms_kif_register() and
+ * src/kernel/vms_module.c rejects every other ioctl from an unregistered
+ * task with -ESRCH. vms-9fc fixed that at the kernel-interface layer
+ * (src/libvmssys/vms_kif.c, kif_bind), so SHOW DEVICE above is now
+ * proven against a real executive inside QEMU. SHOW TERMINAL is still
+ * blocked, but only by the process/terminal binding described above.
  */
 static int cmd_show_terminal(struct dcl_command *cmd)
 {

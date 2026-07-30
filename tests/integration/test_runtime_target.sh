@@ -105,20 +105,34 @@ fi
 # necessary again -- so the gate holds the guarantee itself, not just its
 # consequences.
 #
-# BEHAVIOURAL, NOT TOKEN-PRESENCE (2026-07-30, vms-a35 round 2). The previous
+# BEHAVIOURAL, NOT TOKEN-PRESENCE (2026-07-30, vms-a35 round 2). The original
 # version of this check only asked whether the strings "executive_attach",
 # "execinit_halt" and "/dev/vms" appeared ANYWHERE in ovmx_init.c -- so
-# executive_attach() could be reduced to a no-op (e.g. open /dev/vms and
-# immediately close it again, or drop the halt-on-failure branch entirely)
-# and the check would still pass as long as those three tokens survived
-# somewhere else in the file, including in a comment. What actually has to
-# hold, checked structurally against the extracted body of
-# executive_attach() itself:
+# executive_attach() could be reduced to a no-op and the check would still
+# pass as long as those three tokens survived somewhere in the file.
+#
+# ROUND 3 CORRECTION, and the reason this comment is long. The round-2 rewrite
+# was STILL satisfiable by something other than the behaviour under test: it
+# asked whether a halt/exit/reboot token appeared anywhere in the FUNCTION, and
+# the module-load-ENOENT branch above contains one. So replacing the /dev/vms
+# halt with `fprintf("...continuing without executive..."); return;` -- verbatim
+# the silent fallback Rule 9 exists to forbid -- left this check printing
+# "OK: ... halts on failure" over code that boots straight past the missing
+# executive to a login prompt. A gate that certifies the regression it is
+# guarding against is worse than no gate. The halt must therefore be located
+# INSIDE THE FAILURE BRANCH FOR THE OPEN, not merely somewhere in the function.
+#
+# The properties, checked structurally against the extracted body of
+# executive_attach(). Each has its own minimal negative control in
+# tests/integration/test_runtime_target_negctl.sh that trips it AND NO OTHER --
+# a mutation that trips several properties at once proves nothing about any
+# single one of them, which is how the round-2 hole survived its own "proof".
 #   (a) it opens "/dev/vms" and captures the descriptor in a variable;
-#   (b) that variable is checked for failure;
-#   (c) a halt/exit/reboot call is reachable in the function (the response
-#       to that failure);
-#   (d) the descriptor is never closed again inside the function -- a
+#   (b) there is an `if (<that variable> < 0)` / `== -1` failure branch;
+#   (c) a halt/exit/reboot call appears INSIDE that failure branch;
+#   (d) no return/goto precedes the halt inside that branch -- a warn-then-
+#       return leaves the caller running, which is the whole defect;
+#   (e) the descriptor is never closed inside the function -- a
 #       probe-and-release is not a pin.
 init_c="$SRC_ROOT/src/ovmx_init/ovmx_init.c"
 if [ ! -f "$init_c" ]; then
@@ -144,28 +158,80 @@ else
     else
         reason=""
 
+        # (a) the descriptor is captured
         openvar=$(printf '%s\n' "$body" \
             | grep -oE '[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*open[[:space:]]*\([[:space:]]*"/dev/vms"' \
             | head -1 | sed -E 's/[[:space:]]*=.*//')
-        [ -n "$openvar" ] \
-            || reason="$reason
+
+        if [ -z "$openvar" ]; then
+            reason="$reason
     - no open(\"/dev/vms\") result is captured into a variable"
+        else
+            # (b) extract the FAILURE BRANCH for that variable: everything
+            # controlled by `if (<openvar> < 0)` / `== -1`, whether braced or a
+            # single statement. Character-level brace/semicolon tracking, so a
+            # halt sitting in an unrelated branch elsewhere in the function
+            # cannot satisfy (c).
+            branch=$(printf '%s\n' "$body" | awk -v v="$openvar" '
+                function feed(t,   i, ch) {
+                    for (i = 1; i <= length(t); i++) {
+                        ch = substr(t, i, 1)
+                        out = out ch
+                        if (ch == "{") { seen = 1; depth++ }
+                        else if (ch == "}") {
+                            depth--
+                            if (seen && depth <= 0) { done = 1; return }
+                        }
+                        else if (ch == ";" && seen == 0 && depth == 0) { done = 1; return }
+                    }
+                    out = out "\n"
+                }
+                BEGIN {
+                    re = "if[ \t]*\\([ \t]*" v "[ \t]*(<[ \t]*0|==[ \t]*-1)[ \t]*\\)"
+                    found = 0; done = 0; depth = 0; seen = 0; out = ""
+                }
+                done { next }
+                !found { if (match($0, re)) { found = 1; feed(substr($0, RSTART + RLENGTH)) } next }
+                { feed($0) }
+                END { if (found) print out }
+            ')
 
-        if [ -n "$openvar" ] && ! printf '%s\n' "$body" \
-                | grep -qE "\\b${openvar}\\b[[:space:]]*(<[[:space:]]*0|==[[:space:]]*-1)"; then
-            reason="$reason
-    - the open() result ($openvar) is never checked for failure"
-        fi
+            if [ -z "$branch" ]; then
+                reason="$reason
+    - the open() result ($openvar) has no \`if ($openvar < 0)\` failure branch"
+            else
+                # Strip comments before looking for control flow: prose about
+                # halting must not stand in for halting.
+                code=$(printf '%s\n' "$branch" | sed 's;//.*;;' | tr '\n' ' ' \
+                       | sed 's;/\*[^*]*\*\+\([^/*][^*]*\*\+\)*/; ;g')
+                offsets=$(printf '%s\n' "$code" | awk '{
+                    h = match($0, /[A-Za-z_]*halt[A-Za-z_]*[ \t]*\(|reboot[ \t]*\(|exit[ \t]*\(|abort[ \t]*\(/)
+                    e = match($0, /(^|[^A-Za-z0-9_])(return|goto)([^A-Za-z0-9_]|$)/)
+                    print h, e
+                }')
+                halt_at=$(printf '%s' "$offsets" | cut -d' ' -f1)
+                esc_at=$(printf '%s' "$offsets" | cut -d' ' -f2)
 
-        printf '%s\n' "$body" \
-            | grep -qE '\b[A-Za-z_]*halt[A-Za-z_]*[[:space:]]*\(|\breboot[[:space:]]*\(|\b_exit[[:space:]]*\(|\bexit[[:space:]]*\(|\babort[[:space:]]*\(' \
-            || reason="$reason
-    - no halt/exit/reboot call is reachable in the function"
+                # (c) the halt is in the failure branch
+                if [ "${halt_at:-0}" -eq 0 ]; then
+                    reason="$reason
+    - the /dev/vms failure branch does not halt: no halt/exit/reboot call
+      inside \`if ($openvar < 0)\`. Warn-and-continue is the silent fallback
+      Rule 9 forbids -- PID 1 must not survive a missing executive."
+                # (d) nothing escapes to the caller before it
+                elif [ "${esc_at:-0}" -ne 0 ] && [ "$esc_at" -lt "$halt_at" ]; then
+                    reason="$reason
+    - the /dev/vms failure branch returns to the caller before it halts, so
+      the halt is unreachable and PID 1 continues without an executive."
+                fi
+            fi
 
-        if [ -n "$openvar" ] && printf '%s\n' "$body" \
-                | grep -qE "\\bclose[[:space:]]*\\([[:space:]]*${openvar}[[:space:]]*\\)"; then
-            reason="$reason
+            # (e) the descriptor is pinned, not probed and released
+            if printf '%s\n' "$body" \
+                    | grep -qE "\\bclose[[:space:]]*\\([[:space:]]*${openvar}[[:space:]]*\\)"; then
+                reason="$reason
     - the /dev/vms descriptor ($openvar) is closed inside executive_attach() -- not pinned"
+            fi
         fi
 
         if [ -n "$reason" ]; then
@@ -174,7 +240,7 @@ else
             echo "     for the life of the system (pins vms.ko: rmmod -> EBUSY)."
             status=1
         else
-            echo "  OK: executive_attach() opens /dev/vms, halts on failure, holds it open"
+            echo "  OK: executive_attach() opens /dev/vms, halts inside the open-failure branch, holds it open"
         fi
     fi
 fi
@@ -182,19 +248,31 @@ fi
 # --- 3c. No per-call "is the executive there?" test --------------------
 # Opening /dev/vms is unconditional; branching on whether it succeeded is the
 # reintroduction of the deleted fallback, whatever status it returns and
-# however indirectly the branch is reached. Two shapes are checked:
-#   (i)  the return value is tested inline, e.g. `vms_kif_open() < 0` or
-#        `if (vms_kif_open())` -- the pre-existing check.
-#   (ii) the return value is captured into a variable first and THAT
-#        variable is branched on later:
-#            int rc = vms_kif_open();
-#            if (rc < 0) return SS$_NOSUCHDEV;
-#        which evades (i) because no operator sits directly after the call.
-#        (2026-07-30, vms-a35 round 2 adversary finding.) The precise shape
-#        removed from sys_lock.c's ensure_kif_open() was:
-#            return vms_kif_open() >= 0 ? 0 : -1;     <- flagged by (i)
-#            (void)vms_kif_open();                    <- fine (discarded)
-direct=$(grep -rnE 'vms_kif_open[[:space:]]*\([[:space:]]*\)[[:space:]]*(<|>|=|!|\?)|(if|while)[[:space:]]*\([^)]*vms_kif_open' \
+# however indirectly the branch is reached. Two passes:
+#   (i)  the return value is used inline, e.g. `vms_kif_open() < 0`,
+#        `if (vms_kif_open())`, `switch (vms_kif_open())`.
+#   (ii) the return value is captured into a variable first and THAT variable
+#        is consumed as a presence value anywhere later in the file.
+#
+# ROUND 3 CORRECTION. Pass (ii) previously recognised only `if`/`while` as
+# branch contexts, and its comparison alternative could not match `>=`/`<=` AT
+# ALL (the `>` matched, the space class matched empty, then the digit class was
+# asked to match the `=`). Two evasions went straight through it, both printing
+# "OK: no per-call executive-presence test":
+#     int rc = vms_kif_open(); return rc >= 0 ? 0 : -1;   /* the DELETED body */
+#     int rc = vms_kif_open(); switch (rc) { case -1: ... }
+# The first is verbatim the ensure_kif_open() body this check's own comment
+# cites as flagged, merely hoisted into a variable. So: the operator set is now
+# <, >, <=, >=, ==, !=, and the branch contexts are if/while/switch, the
+# ternary, &&, ||, ! and return. All three shapes (plus round 1's `if (rc < 0)`)
+# are recorded as negative controls in test_runtime_target_negctl.sh.
+#
+# Returning the captured value at all counts: handing a caller the executive's
+# open-status IS the fallback, one frame further out. The two shapes that
+# remain legal are the ones in the tree today:
+#     (void)vms_kif_open();      /* discard -- the result is not a decision */
+#     vms_kif_open();
+direct=$(grep -rnE 'vms_kif_open[[:space:]]*\([[:space:]]*\)[[:space:]]*(<|>|=|!|\?|&|\|)|[!][[:space:]]*vms_kif_open[[:space:]]*\(|(if|while|switch)[[:space:]]*\([^)]*vms_kif_open|\breturn\b[^;]*vms_kif_open[[:space:]]*\([[:space:]]*\)' \
          --include=*.c --include=*.h "$SRC_ROOT/src" 2>/dev/null \
         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*(\*|//|/\*)' || true)
 
@@ -204,12 +282,12 @@ for f in $(grep -rlE 'vms_kif_open[[:space:]]*\(' --include=*.c --include=*.h "$
             | sed -E 's/[[:space:]]*=.*//' | sort -u)
     for v in $vars; do
         [ -n "$v" ] || continue
-        hit=$(grep -nE "(if|while)[[:space:]]*\\([^)]*\\b${v}\\b|\\b${v}\\b[[:space:]]*(<|>|==|!=)[[:space:]]*[-0-9]" "$f" \
+        hit=$(grep -nE "(if|while|switch)[[:space:]]*\\([^)]*\\b${v}\\b|\\b${v}\\b[[:space:]]*(<=|>=|==|!=|<|>)|[0-9)][[:space:]]*(<=|>=|==|!=|<|>)[[:space:]]*\\b${v}\\b|\\b${v}\\b[[:space:]]*(&&|\\|\\||\\?)|(&&|\\|\\|)[[:space:]]*[!]?[[:space:]]*\\b${v}\\b|[!][[:space:]]*\\b${v}\\b|\\breturn\\b[^;]*\\b${v}\\b" "$f" \
                 | grep -vE '^[0-9]+:[[:space:]]*(\*|//|/\*)' \
                 | grep -vE '=[[:space:]]*vms_kif_open' || true)
         if [ -n "$hit" ]; then
             indirect="$indirect
-$f: variable '$v' captures vms_kif_open() and is branched on later:
+$f: variable '$v' captures vms_kif_open() and is consumed as a presence value later:
 $hit"
         fi
     done

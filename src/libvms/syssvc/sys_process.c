@@ -97,9 +97,16 @@ static uint32_t jpi_cputim(uint32_t linux_pid)
     if (!p) return 0;
     p++;
 
+    /* strtok_r, never strtok: this runs inside sys$getjpi, a PUBLIC sys$
+     * entry point, and strtok() keeps its cursor in a single static that
+     * belongs to whoever called us. Clobbering a caller's in-flight
+     * tokenisation from inside a system service is a defect on its own,
+     * independent of anything the tests reach. */
     unsigned long long utime = 0, stime = 0;
     int field = 0;
-    for (char *tok = strtok(p, " "); tok; tok = strtok(NULL, " ")) {
+    char *save = NULL;
+    for (char *tok = strtok_r(p, " ", &save); tok;
+         tok = strtok_r(NULL, " ", &save)) {
         field++;                        /* field 1 here == stat field 3 */
         if (field == 12) utime = strtoull(tok, NULL, 10);
         else if (field == 13) { stime = strtoull(tok, NULL, 10); break; }

@@ -23,6 +23,7 @@
 #include <time.h>
 #include <stdio.h>
 #include "starlet.h"
+#include "ovmx_status.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
 
@@ -506,28 +507,48 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     ssize_t r = read(namefd[0], &rep, sizeof(rep));
     close(namefd[0]);
 
-    if (r == (ssize_t)sizeof(rep) && !(rep.status & 1)) {
-        /* The executive refused the name (SS$_DUPLNAM within the UIC
-         * group, or SS$_IVLOGNAM for a malformed one). The child has
-         * already exited; reap it so the caller is not left with a
-         * zombie for a process that was never named, and hand the
-         * caller the executive's own status. */
+    if (r != (ssize_t)sizeof(rep) || !(rep.status & 1)) {
+        /*
+         * EITHER WAY, THE CHILD IS DEAD AND MUST BE REAPED HERE. Only
+         * the name-refusal case used to be reaped, so the short-read
+         * case leaked a zombie for a process the caller was
+         * simultaneously told had been created.
+         *
+         *  - r == sizeof(rep) with a failure status: the executive
+         *    refused the name (SS$_DUPLNAM within the UIC group, or
+         *    SS$_IVLOGNAM for a malformed one) and the child exited
+         *    itself. The caller gets the executive's OWN status.
+         *
+         *  - anything else: the child never got as far as reporting.
+         *    NO VMS PROCESS EXISTS -- the executive's table is keyed by
+         *    the child's tgid, so a child that died before registering
+         *    was never in it. The caller gets OVMX$_PRCLOST, an
+         *    OVMX-defined condition value (customer-defined bit set),
+         *    because OpenVMS has no condition for this: its executive
+         *    creates the process, so a process ID always exists by the
+         *    time $CREPRC returns. See the OVMX$_PRCLOST comment in
+         *    src/libvms/include/ovmx_status.h for why an OVMX-defined
+         *    code is legal here and why reporting it as a VMS status
+         *    would be a lie about VMS.
+         *
+         * WHAT THIS REPLACED: SS$_NORMAL with *pidadr left at zero --
+         * success paired with a process ID that names no process, a
+         * combination VMS does not produce.
+         */
         int wstatus;
         while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
             ;
-        return rep.status;
+        return (r == (ssize_t)sizeof(rep)) ? rep.status : OVMX$_PRCLOST;
     }
 
     /*
-     * Anything else means the child never got as far as reporting -- it
-     * died between fork() and the write. The PROCESS was still created,
-     * which is what $CREPRC's contract is about, and there is no VMS
-     * status for "the creator could not hear the child", so no status is
-     * invented for it (Rule 10). pidadr was zeroed on entry and stays
-     * zero: the caller is told no process ID rather than a Linux pid
-     * dressed up as one.
+     * The ONLY success return in this function, and it is structurally
+     * unreachable without a process ID the executive assigned: rep was
+     * read whole and rep.status is a success, so rep.vms_pid is the
+     * value the child read back out of its own executive row. There is
+     * no path here that reports success with a zero process ID.
      */
-    if (r == (ssize_t)sizeof(rep) && pidadr)
+    if (pidadr)
         *pidadr = rep.vms_pid;
     return SS$_NORMAL;
 }

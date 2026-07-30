@@ -346,6 +346,14 @@ struct peer_state {
     int      mscp_connected;       /* the member accepted it (Con.ID pair bound) */
     uint32_t mscp_remote_conid;    /* the member's MSCP handle on OUR connection (from its accept) */
     uint16_t mscp_req_seq;         /* send_seq of our MSCP CONNECT-REQUEST (retransmits REUSE it) */
+    /* vms-760: MSCP disk-discovery on OUR bound MSCP$DISK client connection. The
+     * reference joiner (vax3-2to3) runs SET CONTROLLER CHARACTERISTICS x2 then a
+     * GET UNIT STATUS walk (NEXT-UNIT modifier) until an END returns OFFLINE --
+     * VAX1 answers the add-member config only after this completes. */
+    int      mscp_scc_sent;        /* how many SCC commands we have issued (0..2) */
+    int      mscp_disc_done;       /* GUS walk hit the OFFLINE terminator */
+    uint16_t mscp_msg_id;          /* incrementing correlation msg-id (echoed by VAX1) */
+    uint16_t mscp_next_unit;       /* next GUS unit-word = last END's unit + 1 */
     struct timespec last_mscp_req; /* CLOCK_MONOTONIC of our last MSCP CONNECT-REQUEST (retx) */
     /* --- vms-760 SERVER-FIRST established-join: OVMX serves the MEMBER-OPENED
      * MSCP$DISK connect (member = VMS$DISK_CL_DRVR client, OVMX = MSCP$DISK
@@ -652,6 +660,63 @@ static int send_mscp_connect_request(int sock, int ifindex, struct peer_state *p
         ps->mscp_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_mscp_req);
         scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
+        return 1;
+    }
+    return 0;
+}
+
+/*
+ * ps_mscp_disc - vms-760: drive MSCP disk DISCOVERY on OUR bound MSCP$DISK client
+ * connection. GROUNDED on vax3-2to3-established-join: the joiner issues SET CONTROLLER
+ * CHARACTERISTICS (op 0x04) TWICE, then walks GET UNIT STATUS (op 0x03, NEXT-UNIT
+ * modifier) with unit = previous END's returned unit-word + 1, until an END returns
+ * MSCP status OFFLINE (0x0003) = end-of-list. VAX1 reciprocates the add-member config
+ * (-> op 0x03 COMMIT -> MEMBER) only after this completes. `which` selects the next
+ * command from peer state. Returns 1 if a frame was sent.
+ */
+static int ps_mscp_disc(int sock, int ifindex, struct peer_state *ps,
+                        const uint8_t our_hw_mac[6],
+                        const uint8_t our_src_logical[6])
+{
+    if (!ps->mscp_connected || ps->mscp_disc_done) {
+        return 0;
+    }
+    struct scs_mscp_params mp;
+    memset(&mp, 0, sizeof(mp));
+    memcpy(mp.dst_mac, ps->eth_mac, 6);
+    memcpy(mp.src_mac, our_hw_mac, 6);
+    memcpy(mp.src_logical, our_src_logical, 6);
+    memcpy(mp.peer_logical, ps->logical, 6);
+    mp.remote_conid = ps->mscp_remote_conid;
+    mp.local_conid = OVMX_MSCP_CONID;
+    mp.recv_ack = ps->vc.seq.recv_seq;
+    mp.send_seq = scs_seq_advance(&ps->vc.seq);
+    mp.incarnation = ps->incarnation;
+
+    uint8_t f[SCS_MSCP_FRAME_LEN];
+    int ok;
+    if (ps->mscp_scc_sent < 2) {
+        mp.class_token = SCS_MSCP_SCC_CLASS;
+        mp.msg_id = (uint16_t)(SCS_MSCP_SCC_MSGID0 + ps->mscp_scc_sent);
+        mp.unit = 0;
+        ok = (scs_mscp_build_scc(&mp, f) == 0);
+        if (ok && send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+            ps->mscp_scc_sent++;
+            scs_vc_record_sent(&ps->vc, mp.send_seq, monotonic_ms());
+            return 1;
+        }
+        return 0;
+    }
+    mp.class_token = SCS_MSCP_GUS_CLASS;
+    mp.msg_id = (uint16_t)(SCS_MSCP_GUS_MSGID0 + ps->mscp_msg_id);
+    /* GROUNDED (vax3-2to3): the FIRST GUS seeds unit-word 0x0001; each subsequent
+     * command uses the previous END's returned unit-word + 1. Seeding 0 makes VAX1
+     * answer OFFLINE immediately and the walk ends after one exchange. */
+    mp.unit = (ps->mscp_msg_id == 0) ? 0x0001 : ps->mscp_next_unit;
+    ok = (scs_mscp_build_gus(&mp, f) == 0);
+    if (ok && send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+        ps->mscp_msg_id++;
+        scs_vc_record_sent(&ps->vc, mp.send_seq, monotonic_ms());
         return 1;
     }
     return 0;
@@ -2238,6 +2303,36 @@ int main(int argc, char **argv)
              * remote == our MSCP handle, local = member's fresh MSCP handle;
              * clean-ref SCA idx40). Con.ID-signature, opcode-agnostic (spec sec
              * 4L(3)). On bind, advance the sequencer: resolve VMS$VAXcluster next. */
+            /* vms-760: MSCP END response on OUR bound MSCP$DISK connection -- advance
+             * the discovery walk. SCC-END (0x84) -> next SCC or first GUS; GUS-END
+             * (0x83) -> next unit = returned unit-word + 1, until status OFFLINE ends
+             * the list. GROUNDED on vax3-2to3. */
+            if (rconid == OVMX_MSCP_CONID && dop != SCS_DIR_OP_RESPONSE) {
+                struct scs_mscp_view mv2;
+                if (scs_mscp_parse(buf, (size_t)n, &mv2) == 0 && mv2.is_end) {
+                    struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                    if (ps != NULL && ps->mscp_connected && !ps->mscp_disc_done) {
+                        scs_vc_note_recv(&ps->vc, mv2.send_seq);
+                        if ((mv2.opcode & 0x7f) == SCS_MSCP_OP_GET_UNIT_STATUS) {
+                            if ((mv2.status & 0xff) == SCS_MSCP_ST_OFFLINE) {
+                                ps->mscp_disc_done = 1;
+                                log_ts(stdout);
+                                printf(" SCSD-I-MSCPDISC, disk discovery COMPLETE"
+                                       " (OFFLINE terminator after %u unit(s))\n",
+                                       (unsigned)ps->mscp_msg_id);
+                                fflush(stdout);
+                            } else {
+                                ps->mscp_next_unit = (uint16_t)(mv2.unit + 1);
+                            }
+                        }
+                        if (!ps->mscp_disc_done) {
+                            ps_mscp_disc(sock, (int)ifindex, ps, our_hw_mac,
+                                         our_src_logical);
+                        }
+                    }
+                    continue;
+                }
+            }
             if (rconid == OVMX_MSCP_CONID && lconid != 0 && dop == SCS_DIR_OP_RESPONSE) {
                 struct peer_state *ps = peer_find_or_add(peers, src_mac);
                 if (ps != NULL && !ps->mscp_connected) {
@@ -2270,6 +2365,15 @@ int main(int argc, char **argv)
                             send_frame_to(sock, (int)ifindex, ps->eth_mac, mf, sizeof(mf));
                             scs_vc_record_sent(&ps->vc, mc.send_seq, monotonic_ms());
                         }
+                    }
+                    /* vms-760: begin MSCP disk DISCOVERY on the freshly-bound MSCP
+                     * connection (SCC x2 -> GUS walk). VAX1 answers the add-member
+                     * config only after this completes (vax3-2to3 reference). */
+                    if (ps_mscp_disc(sock, (int)ifindex, ps, our_hw_mac, our_src_logical)) {
+                        log_ts(stdout);
+                        printf(" SCSD-I-MSCPDISC, started disk discovery (SCC #1)"
+                               " on MSCP conid 0x%08X\n", (unsigned)OVMX_MSCP_CONID);
+                        fflush(stdout);
                     }
                     if (ps->join_step == JS_MSCP_CONNECT) {
                         ps->join_step = JS_DIR_LOOKUP_VC;

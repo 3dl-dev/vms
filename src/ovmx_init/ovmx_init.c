@@ -818,7 +818,24 @@ int main(void)
 
         pid_t child = fork();
         if (child == 0) {
-            /* Console terminal device is _OPA0: */
+            /*
+             * STOPGAP -- FACADE, NOT VMS (vms-d0b). The console
+             * terminal device is _OPA0:, and as of vms-d0b that is a
+             * real device in the executive's device table
+             * (src/kernel/vms_devtab.c), created by the executive at
+             * module init and visible to every process on the node.
+             * Handing the name down in an environment variable is the
+             * rejected VMS_PRCNAM shape (CLAUDE.md rule 10, worked
+             * example 2): a process telling its own children what
+             * terminal they are on, which nothing else can see or
+             * contradict.
+             *
+             * It is still here only because DCL cannot yet reach
+             * /dev/vms in the runtime the CI harness can drive -- see
+             * the vms-d0b escalation. The replacement is not "pass a
+             * better variable": it is $ASSIGN to OPA0: and $GETDVI on
+             * the resulting channel. Do not build on this line.
+             */
             setenv("VMS_TERMINAL", "_OPA0:", 1);
             /* Child: exec vms_login */
             execl(loginout_path, "vms_login", (char *)NULL);

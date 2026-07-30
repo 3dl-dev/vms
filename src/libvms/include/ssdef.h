@@ -81,8 +81,16 @@ extern "C" {
  * The previous value here, 580, is a DIFFERENT condition on the oracle:
  *     F$MESSAGE(580) -> %SYSTEM-F-VASFULL, virtual address space is full
  * so every sys$qio that rejected an unimplemented function code was
- * reporting an address-space exhaustion. Consumers name the symbol
- * (src/libvms/status.c, src/libvms/syssvc/sys_qio.c), so none breaks.
+ * reporting an address-space exhaustion.
+ *
+ * Most consumers name the symbol (src/libvms/status.c,
+ * src/libvms/syssvc/sys_qio.c) and so follow this value automatically.
+ * ONE DID NOT: DCL's F$MESSAGE table in src/vmsdcl/dcl_lexical.c is a
+ * number->message table and hard-coded 580/'E'/ILLIOFUNC, so after this
+ * correction F$MESSAGE could not name the status sys$qio returns and
+ * still rendered "illegal I/O function" for VASFULL. Both rows are
+ * corrected there against the same oracle run; a status whose number no
+ * user-visible message table can name is a half-applied correction.
  * SS$_BUGCHECK 676 below was pinned by the same run and was already correct
  * ($EQU SS$_BUGCHECK 676; F$MESSAGE(676) -> %SYSTEM-F-BUGCHECK, internal
  * consistency failure). */

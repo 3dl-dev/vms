@@ -1,66 +1,38 @@
 /*
- * test_term_mapping.c - Unit tests for SSH TERM → VMS device type mapping
+ * test_term_mapping.c - Unit tests for SSH TERM -> OVMX device-type mapping
  *
- * Tests the map_term_to_vms_device_type() function from vmssshd.
- * Since the function is static in vmssshd.c, we include a copy here
- * for unit testing.
+ * Tests the REAL product function vmsssh_map_term_to_device_type()
+ * (src/vmsssh/term_map.c), linked directly into this test binary — not a
+ * copy. A drift in the product function now fails this test.
+ *
+ * RULE 8 / RULE 10 (do not remove): the expected strings below
+ * ("VT100"/"VT200"/"VT300"/"VT400") and the TERM->family rules are an
+ * OVMX design choice, NOT a reproduction of documented OpenVMS behavior.
+ * OpenVMS has no mechanism that infers a device type from a Unix TERM
+ * string (device type is set explicitly via SET TERMINAL/DEVICE_TYPE),
+ * and its real $TTDEF-derived SHOW TERMINAL output looks like
+ * "VT400_Series", not "VT400". This test asserts internal consistency of
+ * the OVMX heuristic only — it does NOT certify VMS correctness.
  */
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <strings.h>   /* strncasecmp, strcasecmp */
 
-/* ---- Copy of map_term_to_vms_device_type from vmssshd.c ---- */
-
-static const char *map_term_to_vms_device_type(const char *term)
-{
-    if (!term || !term[0])
-        return "VT100";
-
-    /* vt400/vt420 family */
-    if (strncasecmp(term, "vt4", 3) == 0)
-        return "VT400";
-
-    /* vt300/vt320 family */
-    if (strncasecmp(term, "vt3", 3) == 0)
-        return "VT300";
-
-    /* vt200/vt220 family */
-    if (strncasecmp(term, "vt2", 3) == 0)
-        return "VT200";
-
-    /* vt100 family */
-    if (strncasecmp(term, "vt1", 3) == 0)
-        return "VT100";
-
-    /* xterm-256color → VT300 (color capable) */
-    if (strcasecmp(term, "xterm-256color") == 0)
-        return "VT300";
-
-    /* xterm* → VT100 */
-    if (strncasecmp(term, "xterm", 5) == 0)
-        return "VT100";
-
-    /* Fallback: dumb, unknown, anything else → VT100 */
-    return "VT100";
-}
-
-/* ---- Test harness ---- */
+#include "term_map.h"
 
 static int pass_count = 0;
 static int fail_count = 0;
 
 static void check(const char *term_input, const char *expected)
 {
-    const char *result = map_term_to_vms_device_type(term_input);
+    const char *result = vmsssh_map_term_to_device_type(term_input);
     const char *display_input = term_input ? term_input : "(NULL)";
 
     if (strcmp(result, expected) == 0) {
-        printf("  PASS: %-20s → %s\n", display_input, result);
+        printf("  PASS: %-20s -> %s\n", display_input, result);
         pass_count++;
     } else {
-        printf("  FAIL: %-20s → %s (expected %s)\n",
+        printf("  FAIL: %-20s -> %s (expected %s)\n",
                display_input, result, expected);
         fail_count++;
     }
@@ -68,7 +40,8 @@ static void check(const char *term_input, const char *expected)
 
 int main(void)
 {
-    printf("Testing SSH TERM → VMS device type mapping:\n\n");
+    printf("Testing SSH TERM -> OVMX device-type mapping "
+           "(OVMX design choice, not VMS-authentic — see term_map.h):\n\n");
 
     /* xterm family */
     check("xterm",           "VT100");

@@ -105,11 +105,36 @@
 #define SS__DEVNOTALLOC 2136        /* device not allocated */
 
 /*
- * Default privilege set for non-CAP_SYS_ADMIN processes.
- * Allows basic operational use (mailboxes, networking) without
- * granting any mode-change or bypass privileges.
+ * SS__NOTALLPRIV -- ORACLE-PINNED (vms-2b8).
+ *
+ * MEASURED on the reference lab OpenVMS VAX V7.3 node VAX1, 2026-07-30,
+ * by the implementer of vms-2b8 (docs/oracle/vax73-privileges.md §1):
+ *   $ WRITE SYS$OUTPUT "1664="+F$MESSAGE(1664)
+ *   1664=%SYSTEM-W-NOTALLPRIV, not all requested privileges authorized
+ *
+ * This tree's src/libvms/include/ssdef.h carried 532, which the SAME
+ * oracle disproves in the same session:
+ *   $ WRITE SYS$OUTPUT "532="+F$MESSAGE(532)
+ *   532=%SYSTEM-F-RESULTOVF, resultant string overflow
+ * ssdef.h is corrected under this item to agree.
+ *
+ * SS__NOPRIV (36) was verified in the same session and already agreed:
+ *   36=%SYSTEM-F-NOPRIV, insufficient privilege or object protection violation
  */
-#define VMS_DEFAULT_PRIVS   ((1ULL << 7) | (1ULL << 8))  /* TMPMBX | NETMBX */
+#define SS__NOTALLPRIV  1664
+
+/*
+ * Default privilege set for processes with no elevated credential.
+ *
+ * These are the two privileges OpenVMS grants essentially every user, so
+ * they are what a process gets when the executive can prove nothing more
+ * about it. The BIT POSITIONS are oracle-pinned (TMPMBX 15, NETMBX 20 --
+ * docs/oracle/vax73-privileges.md §2), which is the correction: this
+ * constant previously read (1<<7)|(1<<8) with the comment
+ * "TMPMBX | NETMBX", and bits 7 and 8 are LOG_IO and GROUP. The
+ * executive was handing out two privileges while naming two others.
+ */
+#define VMS_DEFAULT_PRIVS   (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX)
 
 /* ================================================================
  * Per-process VMS state
@@ -215,6 +240,24 @@ struct vms_proc {
      */
     char                prcnam[VMS_PRCNAM_SIZE];
     uint32_t            uic;            /* (group << 16) | member */
+
+    /*
+     * Authenticated user name (vms-2b8). Empty until an identity is
+     * stamped by VMS_IOCTL_SETIDENT, which is the LOGINOUT path: a
+     * process does not choose its user name any more than it chooses
+     * its UIC. Read back by every other process through $GETJPI, which
+     * is what makes it an identity rather than a self-description.
+     *
+     * LOCKING: username and uic are read by proc_fill_info() and
+     * find_by_name() under vms_proc_hash_lock, and the privilege masks
+     * are read and written by vms_access.c under mode_lock. An identity
+     * is one indivisible fact -- a reader must never see this process's
+     * new user name beside its old privilege mask -- so
+     * vms_ioctl_setident() takes BOTH, hash_lock OUTER then mode_lock,
+     * and that is the only place the two are held together. Nothing
+     * takes them in the opposite order.
+     */
+    char                username[VMS_USERNAME_SIZE];
 
     /*
      * Reference to the backing PROCESS's struct pid -- task_tgid(), the
@@ -369,7 +412,14 @@ extern spinlock_t vms_common_ef_lock;
 
 struct vms_proc *vms_proc_find(pid_t pid);
 struct vms_proc *vms_proc_find_or_err(void);
-struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_privs);
+/*
+ * Register a process. Takes NO privilege argument (vms-2b8): the
+ * authorized mask is derived from the task's real credentials inside,
+ * never requested by the caller.
+ */
+/* The VMS process ID is assigned by the executive (vms-2b8), so there is
+ * no vms_pid parameter to pass: read proc->vms_pid afterwards. */
+struct vms_proc *vms_proc_register(pid_t pid);
 void vms_proc_free(struct vms_proc *proc);
 /* Tear down an entry the caller has ALREADY unlinked under
  * vms_proc_hash_lock (the unlink is the ownership claim). */
@@ -422,6 +472,12 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
+
+/* May `caller` read `target`'s identity? Oracle-pinned rule -- see the
+ * definition in vms_proctab.c and docs/oracle/vax73-privileges.md §5. */
+bool vms_proc_may_read(const struct vms_proc *caller,
+                       const struct vms_proc *target);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

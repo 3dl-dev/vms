@@ -162,7 +162,36 @@ void dcl_context_init(struct dcl_context *ctx)
             sizeof(ctx->process_name) - 1);
     ctx->process_name[sizeof(ctx->process_name) - 1] = '\0';
 
-    /* Read multi-user context from environment (set by vms_login) */
+    /*
+     * ============================================================
+     * STOPGAP -- PRIVILEGE ESCALATION PATH, STILL OPEN (vms-2b8)
+     * ============================================================
+     * The reads below take this process's USERNAME and PRIVILEGE MASK
+     * from ordinary environment variables. Any process can setenv()
+     * them, so any process can choose its own identity here. This is
+     * the env-var facade CLAUDE.md Rule 10 names as a worked example,
+     * and it is NOT an access control system.
+     *
+     * The executive now owns identity for real: it derives the UIC and
+     * the authorized privilege mask from the task's credentials and
+     * refuses to let a process widen either (src/kernel/vms_proctab.c
+     * vms_ioctl_setident, proven by tests/qemu/test_kmod_ident.c
+     * against a real /dev/vms). The correct code here is a
+     * vms_kif_getjpi_self() read of that row.
+     *
+     * IT IS NOT WIRED UP YET, AND THIS IS THE ONLY REASON WHY:
+     * vms_kif_register() still has no product caller (vms-9fc), so no
+     * DCL process is registered with the executive and $GETJPI would
+     * return -ESRCH for every one of them. Replacing these reads before
+     * vms-9fc lands would not harden DCL, it would break it.
+     *
+     * DO NOT "IMPROVE" THIS PATH. Delete it, once vms-9fc has landed,
+     * and read the executive instead. The UIC half of the same defect
+     * was already deleted from src/vmsrms/rms_core.c under this item,
+     * because there the real credentials were available locally; the
+     * user name and the privilege mask have no local honest source.
+     * ============================================================
+     */
     const char *env_user = getenv("VMS_USERNAME");
     if (env_user && env_user[0]) {
         strncpy(ctx->username, env_user, sizeof(ctx->username) - 1);

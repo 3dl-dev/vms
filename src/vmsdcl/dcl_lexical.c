@@ -1425,7 +1425,15 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 340,   "SYSTEM", 'F', "IVLOGNAM",      "invalid logical name" },
         { 388,   "SYSTEM", 'E', "IVTIME",        "invalid time" },
         { 444,   "SYSTEM", 'W', "NOLOGNAM",      "no logical name match" },
-        { 532,   "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges available" },
+        /* ORACLE-PINNED (vms-2b8), docs/oracle/vax73-privileges.md §1.
+         * MEASURED on OpenVMS VAX V7.3 node VAX1, 2026-07-30:
+         *   F$MESSAGE(532)  -> %SYSTEM-F-RESULTOVF, resultant string overflow
+         *   F$MESSAGE(1664) -> %SYSTEM-W-NOTALLPRIV, not all requested
+         *                      privileges authorized
+         * 532 was mapped to NOTALLPRIV here (and in ssdef.h), so OVMX's
+         * F$MESSAGE answered a different condition than VMS's for both
+         * codes. Note the text too: "authorized", not "available". */
+        { 532,   "SYSTEM", 'F', "RESULTOVF",     "resultant string overflow" },
         { 548,   "SYSTEM", 'E', "IVIDENT",       "invalid identifier" },
         { 556,   "SYSTEM", 'E', "TIMEOUT",       "device timeout" },
         /* ORACLE-PINNED (vms-9fc): $SSDEF SS$_VASFULL 580;
@@ -1449,6 +1457,9 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 716,   "SYSTEM", 'E', "PARNOTGRANT",   "parent lock not granted" },
         { 836,   "SYSTEM", 'S', "CREATED",       "object created" },
         { 844,   "SYSTEM", 'S', "SUPERSEDE",     "object superseded" },
+        /* ORACLE-PINNED (vms-2b8), docs/oracle/vax73-privileges.md §1 --
+         * the correct home for NOTALLPRIV, measured on VAX1 2026-07-30. */
+        { 1664,  "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges authorized" },
         { 2096,  "SYSTEM", 'W', "CANCEL",        "I/O operation canceled" },
         { 2160,  "SYSTEM", 'W', "ENDOFFILE",     "end of file" },
         { 2204,  "SYSTEM", 'W', "UNWIND",        "unwind in progress" },

@@ -343,6 +343,54 @@ static void test_incarnation_echo(void)
     check(le16(lout + 14 + 22) == 3, "lookup response [22:24] == 3 echoed");
 }
 
+static void test_build_connect_confirm(void)
+{
+    printf("[build dir op=3 CONNECT-CONFIRM (vms-760)]\n");
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, vax1_mac, 6);
+    memcpy(p.src_mac, ovmx_mac, 6);
+    memcpy(p.src_logical, ovmx_logical, 6);
+    memcpy(p.peer_logical, vax1_mac, 6);
+    p.remote_conid = 0xe2dc0008u;              /* member's dir handle */
+    p.local_conid = SCS_DIR_OVMX_JOINER_CONID; /* OVMX's own dir-client handle */
+    p.recv_ack = 2;
+    p.send_seq = 2;
+    p.incarnation = 0;
+
+    uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_connect_confirm(&p, out) == 0, "build_connect_confirm succeeds");
+
+    check(out[12] == 0x60 && out[13] == 0x07, "ethertype 0x6007");
+    check(out[14 + 0] == 0x3c && out[14 + 1] == 0x00, "SCA length word 0x003c (total 62)");
+    check(out[30] == 0x5b && out[31] == 0x13, "msgtype 0x5b, format 0x13 (abs 30/31)");
+    check(le16(out + 14 + 46) == SCS_DIR_OP_CONFIRM, "op [46:48] == 3 (connect-confirm)");
+    check(le32(out + 14 + 50) == 0xe2dc0008u, "remote Con.ID == member dir handle [50:54]");
+    check(le32(out + 14 + 54) == SCS_DIR_OVMX_JOINER_CONID, "local Con.ID == OVMX dir-client handle [54:58]");
+    /* marker 0x00010000 at [58:62] (baked in, not substituted). */
+    check(le16(out + 14 + 58) == 0x0000 && le16(out + 14 + 60) == 0x0001,
+          "marker [58:62] == 0x00010000");
+    /* live counters threaded. */
+    check(le16(out + 14 + 18) == 2 && le16(out + 14 + 20) == 2,
+          "recv_ack/send_seq threaded [18:20]/[20:22]");
+    check(le16(out + 14 + 30) == 2, "send_seq mirror [30:32] == 2");
+    /* No SYSAP names: the 62-byte SCA frame ends at the marker (abs 76). */
+    check(sizeof(out) == 76, "frame length 76 (62-byte SCA, no names)");
+
+    /* Con.ID substitution independent of the template. */
+    p.remote_conid = 0x12340008u;
+    p.local_conid = 0x4F580008u;
+    p.incarnation = 3;
+    check(scs_dir_build_connect_confirm(&p, out) == 0, "build_connect_confirm (2)");
+    check(le32(out + 14 + 50) == 0x12340008u, "remote Con.ID threaded");
+    check(le32(out + 14 + 54) == 0x4F580008u, "local Con.ID threaded");
+    check(le16(out + 14 + 22) == 3, "incarnation 3 echoed into [22:24]");
+
+    check(scs_dir_build_connect_confirm(NULL, out) == -1, "NULL params rejected");
+    check(scs_dir_build_connect_confirm(&p, NULL) == -1, "NULL out rejected");
+}
+
 int main(void)
 {
     printf("test_scs_dir: SCS$DIRECTORY connect + SCS$DIR_LOOKUP (vms-246)\n");
@@ -350,6 +398,7 @@ int main(void)
     test_build_connect_response();
     test_build_lookup_response();
     test_incarnation_echo();
+    test_build_connect_confirm();
     printf("test_scs_dir: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

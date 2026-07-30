@@ -98,6 +98,14 @@ extern "C" {
 #define SCS_DIR_RESP_FRAME_LEN   124 /* 14 + 110 */
 #define SCS_DIR_LOOKUP_SCA_LEN   94
 #define SCS_DIR_LOOKUP_FRAME_LEN 108 /* 14 + 94 */
+#define SCS_DIR_CONFIRM_SCA_LEN   62
+#define SCS_DIR_CONFIRM_FRAME_LEN 76  /* 14 + 62 */
+
+/* Directory-connection operation codes ([46:48], byte-verified on the clean
+ * 2-node formation dir-client dialogue, joiner handle 0x4e630007). */
+#define SCS_DIR_OP_CONNECT  0 /* connect-request / echo carries op=0 / op=1 */
+#define SCS_DIR_OP_RESPONSE 2 /* member connect-response supplies its handle */
+#define SCS_DIR_OP_CONFIRM  3 /* joiner connect-confirm (62-byte, no names) */
 
 /* Recognizable OVMX SCS$DIRECTORY Con.ID ("OX" base | 7). OVMX design choice,
  * opaque to the peer (see header note). Distinct from OVMX's VMS$VAXcluster
@@ -191,6 +199,20 @@ int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
  */
 int scs_dir_build_connect_request(const struct scs_dir_params *p,
                                   uint8_t out[SCS_DIR_RESP_FRAME_LEN]);
+
+/*
+ * scs_dir_build_connect_confirm - vms-760: build OVMX's directory op=3
+ * CONNECT-CONFIRM, the third frame of the joiner's own SCS$DIRECTORY client
+ * handshake (after the member's op=1 echo + op=2 response). 62-byte SCA /
+ * 76-byte frame, NO SYSAP names, both Con.IDs bound (remote = member's dir
+ * handle, local = OVMX's SCS_DIR_OVMX_JOINER_CONID), marker 0x00010000. Byte
+ * template = the clean 2-node formation joiner confirm (formation-clean-2node
+ * SCA idx26). Neither 760b nor 760mscp ever sent this; it is required to
+ * complete the dir-client bind before the SYSAP lookups. Returns 0, or -1 if
+ * p/out is NULL.
+ */
+int scs_dir_build_connect_confirm(const struct scs_dir_params *p,
+                                  uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN]);
 
 /*
  * scs_dir_build_lookup_request - vms-760: build OVMX's directory LOOKUP-REQUEST

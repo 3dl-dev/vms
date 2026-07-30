@@ -187,6 +187,40 @@ static const uint8_t dir_lookupreq_tmpl[SCS_DIR_LOOKUP_SCA_LEN] = {
     /* [78:94] */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0            /* result = zeros (request) */
 };
 
+/* vms-760: OVMX's directory op=3 CONNECT-CONFIRM (62-byte SCA). Byte-exact to
+ * the clean joiner's confirm (formation-clean-2node.pcap SCA idx26) EXCEPT
+ * [8:10] connect-flag = 0x0001 (golden, matching the other OVMX dir templates;
+ * the clean ref carried 0x03e8, a config artifact). Substituted at build time:
+ * dst/src logical, counters, remote Con.ID [50:54], local Con.ID [54:58].
+ * op[46:48]=3 and marker[58:62]=0x00010000 are baked in. NO SYSAP names (the
+ * frame ends at the marker). */
+static const uint8_t dir_confirm_tmpl[SCS_DIR_CONFIRM_SCA_LEN] = {
+    /* [0:2]   */ 0x3c, 0x00,
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,       /* dst logical (SUBST) */
+    /* [8:10]  */ 0x01, 0x00,                               /* connect flag (golden 0x0001) */
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x5b, 0x13,
+    /* [18:20] */ 0x02, 0x00,                               /* recv_ack (SUBST) */
+    /* [20:22] */ 0x02, 0x00,                               /* send_seq (SUBST) */
+    /* [22:24] */ 0x01, 0x00,                               /* incarnation (SUBST) */
+    /* [24:26] */ 0x12, 0x00,
+    /* [26:28] */ 0x02, 0x00,                               /* recv_ack mirror (SUBST) */
+    /* [28:30] */ 0x00, 0x00,
+    /* [30:32] */ 0x02, 0x00,                               /* send_seq mirror (SUBST) */
+    /* [32:34] */ 0x00, 0x00,
+    /* [34:36] */ 0x02, 0x00,                               /* recv_ack 3rd (SUBST) */
+    /* [36:38] */ 0x00, 0x00,
+    /* [38:40] */ 0x01, 0x00,
+    /* [40:42] */ 0x00, 0x02,
+    /* [42:44] */ 0x12, 0x00,                               /* inner length = 18 */
+    /* [44:46] */ 0x04, 0x00,
+    /* [46:48] */ 0x03, 0x00,                               /* op = 3 (connect-confirm) */
+    /* [48:50] */ 0x00, 0x00,                               /* flag = 0 */
+    /* [50:54] */ 0x08, 0x00, 0xdc, 0xe2,                   /* remote Con.ID (SUBST, member's) */
+    /* [54:58] */ 0x07, 0x00, 0x00, 0x00,                   /* local Con.ID (SUBST) */
+    /* [58:62] */ 0x00, 0x00, 0x01, 0x00                    /* marker = 0x00010000 */
+};
+
 static void put_le16(uint8_t *dst, uint16_t v)
 {
     dst[0] = (uint8_t)(v & 0xff);
@@ -343,6 +377,21 @@ int scs_dir_build_connect_request(const struct scs_dir_params *p,
                      p->incarnation, out);
     /* remote Con.ID stays 0 (member's not yet known); local = OVMX's own. */
     put_le32(out + 14 + 50, 0);
+    put_le32(out + 14 + 54, p->local_conid);
+    return 0;
+}
+
+int scs_dir_build_connect_confirm(const struct scs_dir_params *p,
+                                  uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_confirm_tmpl, SCS_DIR_CONFIRM_SCA_LEN, p->recv_ack,
+                     p->send_seq, p->incarnation, out);
+    /* Con.ID pair now bound: remote = member's dir handle, local = OVMX's own. */
+    put_le32(out + 14 + 50, p->remote_conid);
     put_le32(out + 14 + 54, p->local_conid);
     return 0;
 }

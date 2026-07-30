@@ -19,6 +19,7 @@
 #include <limits.h>
 #include <mntent.h>
 
+#include "prvdef.h"     /* PRV$M_* -- the single privilege bit table */
 #include "dcl/context.h"
 #include "dcl/terminal.h"
 #include "dcl/parser.h"
@@ -374,7 +375,16 @@ static int cmd_show_process(struct dcl_command *cmd)
     printf("Base priority:     4\n");
     printf("Default file spec: %s\n", ctx->default_dir);
 
-    /* Privileges — read from VMS_PRIVILEGES env var or PCB */
+    /*
+     * STOPGAP (vms-2b8): this prints a privilege list the PROCESS
+     * announced in its own environment, so SHOW PROCESS reports what
+     * the process claims rather than what the executive holds -- the
+     * exact inversion of the Rule 11 corollary that a VMS command is a
+     * READER of an executive facility. The executive now holds the real
+     * mask (vms_kif_getjpi_self -> info.cur_privs); wiring this to it
+     * is blocked only on vms-9fc (no product process is registered, so
+     * $GETJPI cannot resolve one). See the block in dcl_main.c.
+     */
     const char *privs = getenv("VMS_PRIVILEGES");
     if (privs && privs[0]) {
         printf("Privileges:        %s\n", privs);
@@ -786,45 +796,81 @@ static int cmd_show_terminal(struct dcl_command *cmd)
  */
 static int cmd_show_process_privileges(struct dcl_context *ctx)
 {
-    /* Known VMS privileges in approximate display order */
+    /*
+     * Privilege display table -- BITS FROM prvdef.h, TEXT FROM THE ORACLE.
+     *
+     * This table used to number the privileges 0,1,2,3... sequentially in
+     * display order, which is not any privilege encoding that has ever
+     * existed. The mask it decodes is built by parse_privilege_string()
+     * from prvdef.h's PRV$M_* bits, so the two disagreed on almost every
+     * privilege: a user authorized for TMPMBX (bit 15) was displayed as
+     * holding DETACH, one with NETMBX (bit 20) as holding EXQUOTA, and
+     * bits 0 and 1 -- CMKRNL and CMEXEC, the two most dangerous
+     * privileges in the system -- were printed as "TMPMBX" and "NETMBX"
+     * and handed out as the default. The table also listed SYSNAM twice.
+     *
+     * Bits now come from prvdef.h, which is static-asserted against the
+     * executive's copy. Descriptions are VERBATIM from the reference lab
+     * OpenVMS VAX V7.3 node VAX1 (docs/oracle/vax73-privileges.md §4),
+     * as is the " %-20s %s" line format.
+     *
+     * DELIBERATELY ABSENT: DETACH and SETPRI. The oracle's own
+     * SHOW PROCESS/PRIVILEGES did not print them, so OVMX has no
+     * measured display text for them and does not invent one
+     * (CLAUDE.md Rule 10). Likewise AUDIT, IMPORT and the other names
+     * the oracle showed that prvdef.h has no bit for -- they are
+     * omitted rather than assigned a guessed bit.
+     */
     static const struct {
         const char *name;
         uint64_t    bit;
         const char *desc;
     } privs[] = {
-        { "TMPMBX",  (1ULL << 0),  "may create temporary mailbox"   },
-        { "NETMBX",  (1ULL << 1),  "may create network device"      },
-        { "GRPNAM",  (1ULL << 2),  "may insert in group logical name table" },
-        { "SYSNAM",  (1ULL << 3),  "may insert in system logical name table" },
-        { "OPER",    (1ULL << 4),  "operator privilege"             },
-        { "SYSPRV",  (1ULL << 5),  "may access objects via system protection" },
-        { "BYPASS",  (1ULL << 6),  "may bypass object access control" },
-        { "CMKRNL",  (1ULL << 7),  "may change mode to kernel"      },
-        { "CMEXEC",  (1ULL << 8),  "may change mode to executive"   },
-        { "SYSNAM",  (1ULL << 9),  "may insert in system logical name table" },
-        { "MOUNT",   (1ULL << 10), "may execute mount volume QIO"   },
-        { "VOLPRO",  (1ULL << 11), "may override volume protection" },
-        { "PHY_IO",  (1ULL << 12), "may issue physical I/O"         },
-        { "LOG_IO",  (1ULL << 13), "may issue logical I/O"          },
-        { "PSWAPM",  (1ULL << 14), "may change process swap mode"   },
-        { "DETACH",  (1ULL << 15), "may create detached processes"  },
-        { "ACNT",    (1ULL << 16), "may disable accounting"         },
-        { "PRMCEB",  (1ULL << 17), "may create permanent common event flag" },
-        { "PRMGBL",  (1ULL << 18), "may create permanent global sections" },
-        { "PRMMBX",  (1ULL << 19), "may create permanent mailbox"   },
-        { "EXQUOTA", (1ULL << 20), "may exceed disk quota"          },
-        { "ALTPRI",  (1ULL << 21), "may set any base priority"      },
-        { "SETPRV",  (1ULL << 22), "may set any privilege"          },
-        { "WORLD",   (1ULL << 23), "may affect other processes in system" },
-        { "SHARE",   (1ULL << 24), "may assign channel to non-shared device" },
+        { "ACNT",     PRV$M_ACNT,     "may suppress accounting messages" },
+        { "ALLSPOOL", PRV$M_ALLSPOOL, "may allocate spooled device" },
+        { "ALTPRI",   PRV$M_ALTPRI,   "may set any priority value" },
+        { "BUGCHK",   PRV$M_BUGCHK,   "may make bug check log entries" },
+        { "BYPASS",   PRV$M_BYPASS,   "may bypass all object access controls" },
+        { "CMEXEC",   PRV$M_CMEXEC,   "may change mode to exec" },
+        { "CMKRNL",   PRV$M_CMKRNL,   "may change mode to kernel" },
+        { "IMPERSONATE", PRV$M_IMPERSONATE, "may impersonate another user" },
+        { "DIAGNOSE", PRV$M_DIAGNOSE, "may diagnose devices" },
+        { "DOWNGRADE",PRV$M_DOWNGRADE,"may downgrade object secrecy" },
+        { "EXQUOTA",  PRV$M_EXQUOTA,  "may exceed disk quota" },
+        { "GROUP",    PRV$M_GROUP,    "may affect other processes in same group" },
+        { "GRPNAM",   PRV$M_GRPNAM,   "may insert in group logical name table" },
+        { "GRPPRV",   PRV$M_GRPPRV,   "may access group objects via system protection" },
+        { "LOG_IO",   PRV$M_LOG_IO,   "may do logical i/o" },
+        { "MOUNT",    PRV$M_MOUNT,    "may execute mount acp function" },
+        { "NETMBX",   PRV$M_NETMBX,   "may create network device" },
+        { "OPER",     PRV$M_OPER,     "may perform operator functions" },
+        { "PFNMAP",   PRV$M_PFNMAP,   "may map to specific physical pages" },
+        { "PHY_IO",   PRV$M_PHY_IO,   "may do physical i/o" },
+        { "PRMCEB",   PRV$M_PRMCEB,   "may create permanent common event clusters" },
+        { "PRMGBL",   PRV$M_PRMGBL,   "may create permanent global sections" },
+        { "PRMMBX",   PRV$M_PRMMBX,   "may create permanent mailbox" },
+        { "PSWAPM",   PRV$M_PSWAPM,   "may change process swap mode" },
+        { "READALL",  PRV$M_READALL,  "may read anything as the owner" },
+        { "SECURITY", PRV$M_SECURITY, "may perform security administration functions" },
+        { "SETPRV",   PRV$M_SETPRV,   "may set any privilege bit" },
+        { "SHARE",    PRV$M_SHARE,    "may assign channels to non-shared devices" },
+        { "SHMEM",    PRV$M_SHMEM,    "may create/delete objects in shared memory" },
+        { "SYSGBL",   PRV$M_SYSGBL,   "may create system wide global sections" },
+        { "SYSLCK",   PRV$M_SYSLCK,   "may lock system wide resources" },
+        { "SYSNAM",   PRV$M_SYSNAM,   "may insert in system logical name table" },
+        { "SYSPRV",   PRV$M_SYSPRV,   "may access objects via system protection" },
+        { "TMPMBX",   PRV$M_TMPMBX,   "may create temporary mailbox" },
+        { "UPGRADE",  PRV$M_UPGRADE,  "may upgrade object integrity" },
+        { "VOLPRO",   PRV$M_VOLPRO,   "may override volume protection" },
+        { "WORLD",    PRV$M_WORLD,    "may affect other processes in the world" },
         { NULL, 0, NULL }
     };
 
-    /* Read privileges: from context (set via VMS_PRIVILEGES env var), else default */
     uint64_t privmask = ctx->privileges;
     if (privmask == 0) {
-        /* Default: give TMPMBX and NETMBX */
-        privmask = (1ULL << 0) | (1ULL << 1);
+        /* The two privileges OpenVMS grants essentially every user.
+         * Was (1<<0)|(1<<1) -- CMKRNL|CMEXEC in the real encoding. */
+        privmask = PRV$M_TMPMBX | PRV$M_NETMBX;
     }
 
     printf("Process privileges:\n");

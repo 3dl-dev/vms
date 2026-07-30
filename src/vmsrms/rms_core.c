@@ -269,15 +269,31 @@ static int rms_resolve_spec(const char *spec, const char *default_spec,
 }
 
 /*
- * rms_get_session_uic - Get the current session UIC from env vars.
- * Returns packed UIC: (group << 16) | member
+ * rms_get_session_uic - the UIC RMS checks file protection against.
+ *
+ * DERIVED FROM REAL CREDENTIALS, NOT ANNOUNCED BY THE PROCESS (vms-2b8).
+ *
+ * This used to prefer getenv("VMS_UIC_GROUP") / ("VMS_UIC_MEMBER") and
+ * only fall back to the task's gid/uid. Those are ordinary environment
+ * variables: any process could set them and choose the UIC that RMS
+ * then used to decide whether it was allowed to read a file. That is a
+ * privilege-escalation path in the shape of a convenience, and it made
+ * the file protection checks below decorative.
+ *
+ * The env-var reads are DELETED rather than deferred, because the
+ * fallback was already the right answer: [gid,uid] is exactly the
+ * mapping the executive itself uses to derive a process's UIC
+ * (src/kernel/vms_module.c vms_proc_register, and struct vms_proc.uic),
+ * so RMS and the executive now agree by construction on who a process
+ * is -- and neither of them asks the process.
+ *
+ * Returns packed UIC: (group << 16) | member.
  */
 static uint32_t rms_get_session_uic(void)
 {
-    const char *grp = getenv("VMS_UIC_GROUP");
-    const char *mem = getenv("VMS_UIC_MEMBER");
-    uint16_t group = grp ? (uint16_t)strtoul(grp, NULL, 10) : (uint16_t)(getgid() & 0xFFFF);
-    uint16_t member = mem ? (uint16_t)strtoul(mem, NULL, 10) : (uint16_t)(getuid() & 0xFFFF);
+    uint16_t group  = (uint16_t)(getgid() & 0xFFFF);
+    uint16_t member = (uint16_t)(getuid() & 0xFFFF);
+
     return ((uint32_t)group << 16) | (uint32_t)member;
 }
 

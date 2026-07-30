@@ -190,6 +190,7 @@ static struct vms_device *vms_devtab_create(const char *devnam,
     dev->devchar  = devchar;
     dev->width    = width;
     dev->page     = page;
+    INIT_LIST_HEAD(&dev->chanlist);
     spin_lock_init(&dev->lock);
 
     spin_lock(&vms_device_list_lock);
@@ -242,33 +243,50 @@ static struct vms_channel *chan_find_locked(struct vms_proc *proc, uint32_t chan
     return NULL;
 }
 
-/*
- * Drop one reference to a device.
- *
- * release_owner_pid, when non-zero, is a process that has just given
- * up its LAST channel to this device: if it was the owner, the device
- * becomes unowned even though other processes may still hold channels
- * to it. Ownership on VMS belongs to a process that has the device;
- * a process that has given it back -- or died -- does not still own
- * it just because somebody else is using it.
- */
-static void device_deref(struct vms_device *dev, pid_t release_owner_pid)
+/* Caller holds dev->lock. Clear an outstanding allocation. */
+static void device_dealloc_locked(struct vms_device *dev)
 {
-    spin_lock(&dev->lock);
+    if (!dev->allocated)
+        return;
+    dev->allocated = 0;
+    dev->owner_pid = 0;
+    dev->owner_linux_pid = 0;
+    dev->owner_uic = 0;
     if (dev->refcnt > 0)
         dev->refcnt--;
-    if (dev->refcnt == 0 ||
-        (release_owner_pid && dev->owner_linux_pid == release_owner_pid)) {
-        dev->owner_pid = 0;
-        dev->owner_linux_pid = 0;
-        dev->owner_uic = 0;
-    }
+}
+
+/*
+ * Give a channel back: unlink it from the device and drop the
+ * reference it held.
+ *
+ * Note what this does NOT do: it does not touch ownership. Ownership
+ * is allocation, and allocation is released by $DALLOC or by the
+ * owner's death -- not by handing back a channel. That split is the
+ * oracle's, not a convenience: on the lab a process holding an open
+ * channel never became the device's owner in the first place.
+ */
+static void device_release_channel(struct vms_channel *ch)
+{
+    struct vms_device *dev = ch->dev;
+
+    spin_lock(&dev->lock);
+    list_del(&ch->devlink);
+    if (dev->refcnt > 0)
+        dev->refcnt--;
     spin_unlock(&dev->lock);
 }
 
+/*
+ * Release everything a dying process held: its channels, and any
+ * device it had allocated. A device allocated by a process that no
+ * longer exists would be permanently unallocatable, which is not a
+ * state VMS has.
+ */
 void vms_proc_release_channels(struct vms_proc *proc)
 {
     struct vms_channel *ch, *tmp;
+    struct vms_device *dev;
     LIST_HEAD(doomed);
 
     spin_lock(&proc->chan_lock);
@@ -276,19 +294,52 @@ void vms_proc_release_channels(struct vms_proc *proc)
         list_move(&ch->list, &doomed);
     spin_unlock(&proc->chan_lock);
 
-    /* Every channel this process held is going, so its ownership of
-     * any device goes with them. */
     list_for_each_entry_safe(ch, tmp, &doomed, list) {
         list_del(&ch->list);
-        device_deref(ch->dev, proc->linux_pid);
+        device_release_channel(ch);
         kfree(ch);
     }
+
+    spin_lock(&vms_device_list_lock);
+    list_for_each_entry(dev, &vms_device_list, list) {
+        spin_lock(&dev->lock);
+        if (dev->allocated && dev->owner_linux_pid == proc->linux_pid)
+            device_dealloc_locked(dev);
+        spin_unlock(&dev->lock);
+    }
+    spin_unlock(&vms_device_list_lock);
 }
 
 /* ================================================================
  * ioctl handlers
  * ================================================================ */
 
+/*
+ * $ASSIGN - take a channel to a device.
+ *
+ * ORACLE-PINNED SEMANTICS (docs/oracle/vax73-terminal-device.md
+ * section 7), because the obvious guesses are both wrong:
+ *
+ *   - Assigning a channel does NOT make the caller the device's
+ *     owner. On the lab an open channel to NLA0: left "Owner process"
+ *     empty and "Owner process ID" 00000000 for as long as it was
+ *     held. Ownership is $ALLOC's job.
+ *
+ *   - $ASSIGN to a device another process owns SUCCEEDS. A detached
+ *     process on the lab assigned a channel to OPA0: -- the console,
+ *     owned by the interactive job -- and got
+ *     %SYSTEM-S-NORMAL. SS$_DEVALLOC is what $ALLOC returns in that
+ *     situation, not $ASSIGN; the same detached process got
+ *     %SYSTEM-W-DEVALLOC from ALLOCATE OPA0: seconds later.
+ *
+ * NOT MODELLED, deliberately (rule 10 -- do not invent a handler for
+ * a condition we cannot pin): the lab's OPA0: carries a device
+ * protection mask of S:RWPL,O:RWPL,G,W, so a process outside the
+ * system UIC group would be refused by protection, not by allocation.
+ * The probe ran as SYSTEM, so it pins the allocated-device case and
+ * says nothing about the unprivileged case. OVMX has no device
+ * protection to check yet and therefore does not check one.
+ */
 long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_assign_args args;
@@ -323,20 +374,14 @@ long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
+    ch->dev = dev;
+    ch->owner_linux_pid = proc->linux_pid;
+
     spin_lock(&dev->lock);
-    if (dev->owner_pid == 0) {
-        /* The first channel to an unowned device makes its holder the owner. */
-        dev->owner_pid = proc->vms_pid;
-        dev->owner_linux_pid = proc->linux_pid;
-        dev->owner_uic =
-            (((uint32_t)from_kgid(&init_user_ns, current_gid()) & 0xFFFFu) << 16) |
-            ((uint32_t)from_kuid(&init_user_ns, current_uid()) & 0xFFFFu);
-    }
     dev->refcnt++;
+    list_add_tail(&ch->devlink, &dev->chanlist);
     spin_unlock(&dev->lock);
     spin_unlock(&vms_device_list_lock);
-
-    ch->dev = dev;
 
     spin_lock(&proc->chan_lock);
     /*
@@ -362,7 +407,6 @@ long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_dassgn_args args;
     struct vms_channel *ch;
-    int last = 0;
 
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
@@ -370,30 +414,151 @@ long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg)
 
     spin_lock(&proc->chan_lock);
     ch = chan_find_locked(proc, args.chan);
-    if (ch) {
-        struct vms_channel *other;
-
+    if (ch)
         list_del(&ch->list);
-        /* Does this process still hold another channel to the device?
-         * If not, it is giving the device up entirely. */
-        last = 1;
-        list_for_each_entry(other, &proc->channels, list) {
-            if (other->dev == ch->dev) {
-                last = 0;
-                break;
-            }
-        }
-    }
     spin_unlock(&proc->chan_lock);
 
     if (!ch) {
         args.status = SS__IVCHAN;
     } else {
-        device_deref(ch->dev, last ? proc->linux_pid : 0);
+        device_release_channel(ch);
         kfree(ch);
         args.status = SS__NORMAL;
     }
 
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * $ALLOC - allocate a device to this process.
+ *
+ * This, not $ASSIGN, is what makes a process a device's owner. Every
+ * branch below is a case observed on the ~/vax OpenVMS VAX V7.3 lab
+ * (docs/oracle/vax73-terminal-device.md sections 7-9):
+ *
+ *   allocated to another process   -> %SYSTEM-W-DEVALLOC
+ *       ALLOCATE OPA0: from a detached process while the interactive
+ *       job held the console.
+ *   another process holds channels -> %SYSTEM-W-DEVALLOC
+ *       ALLOCATE NLA0: with "Owner process" empty and a reference
+ *       count of 2 -- foreign channels alone are enough.
+ *   already allocated to us        -> success, reference count unchanged
+ *       ALLOCATE OPA0: twice in a row: 2 -> 3 -> 3.
+ *   otherwise                      -> success, reference count + 1
+ *
+ * The caller's UIC is taken from its Linux credentials. That mapping
+ * is NOT oracle-pinned and is noted as such in vms-d0b's findings; it
+ * will have to agree with whatever replaces the VMS_UIC_* environment
+ * facade (vms-2b8).
+ */
+long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_alloc_args args;
+    struct vms_device *dev;
+    struct vms_channel *ch;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+    int foreign = 0;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    spin_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        spin_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+
+    spin_lock(&dev->lock);
+    if (dev->allocated && dev->owner_linux_pid == proc->linux_pid) {
+        args.status = SS__NORMAL;            /* already ours; idempotent */
+    } else if (dev->allocated) {
+        args.status = SS__DEVALLOC;
+    } else {
+        list_for_each_entry(ch, &dev->chanlist, devlink) {
+            if (ch->owner_linux_pid != proc->linux_pid) {
+                foreign = 1;
+                break;
+            }
+        }
+        if (foreign) {
+            args.status = SS__DEVALLOC;
+        } else {
+            dev->allocated = 1;
+            dev->owner_pid = proc->vms_pid;
+            dev->owner_linux_pid = proc->linux_pid;
+            dev->owner_uic =
+                (((uint32_t)from_kgid(&init_user_ns, current_gid()) & 0xFFFFu) << 16) |
+                ((uint32_t)from_kuid(&init_user_ns, current_uid()) & 0xFFFFu);
+            dev->refcnt++;
+            args.status = SS__NORMAL;
+        }
+    }
+    spin_unlock(&dev->lock);
+    spin_unlock(&vms_device_list_lock);
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * $DALLOC - give an allocated device back.
+ *
+ * Deallocating a device this process does not have allocated is
+ * %SYSTEM-W-DEVNOTALLOC on the lab (a second DEALLOCATE OPA0: right
+ * after the first).
+ */
+long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_alloc_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    spin_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        spin_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+
+    spin_lock(&dev->lock);
+    if (dev->allocated && dev->owner_linux_pid == proc->linux_pid) {
+        device_dealloc_locked(dev);
+        args.status = SS__NORMAL;
+    } else {
+        args.status = SS__DEVNOTALLOC;
+    }
+    spin_unlock(&dev->lock);
+    spin_unlock(&vms_device_list_lock);
+
+out:
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
@@ -410,6 +575,7 @@ static void devinfo_fill(struct vms_device *dev, struct vms_devinfo *info)
     info->devtype   = dev->devtype;
     info->owner_pid = dev->owner_pid;
     info->owner_uic = dev->owner_uic;
+    info->allocated = dev->allocated;
     info->refcnt    = dev->refcnt;
     info->errcnt    = dev->errcnt;
     info->opcnt     = dev->opcnt;

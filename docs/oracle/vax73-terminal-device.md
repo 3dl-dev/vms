@@ -139,6 +139,135 @@ $ SHOW DEVICE ZZA0:
 
 ---
 
+## 7. Ownership, `$ASSIGN` and `$ALLOC` (captured 30-JUL-2026, node VAX2)
+
+This section exists because the first cut of `src/kernel/vms_devtab.c` asserted an ownership rule as
+VMS fact with nothing behind it ("the first channel to an unowned device makes its holder the
+owner"). It was measured rather than argued. Method: a **second process** was created on VAX2 with
+
+```
+$ RUN/DETACHED/INPUT=...DET.COM/OUTPUT=...DET.LOG/PROCESS_NAME=DEVPROBE SYS$SYSTEM:LOGINOUT.EXE
+```
+
+while the interactive job held the console, and it issued `$ASSIGN` through a MACRO-32 program
+(`$ASSIGN_S DEVNAM=DEVDSC,CHAN=CHAN` followed by `LIB$SIGNAL` of R0, so VMS prints its own message).
+No VSI binary was examined; this is the running system answering through its documented interfaces.
+
+### 7.1 `$ASSIGN` to a terminal another process owns SUCCEEDS
+
+`SHOW DEVICE/FULL OPA0:` as seen from the detached process — the console is owned by the interactive
+job, PID `20400216`:
+
+```
+Terminal OPA0:, device type LA36, is online, record-oriented device, carriage
+    control, device is busy.
+
+    Error count                    0    Operations completed                293
+    Owner process           "SYSTEM"    Owner UIC                      [SYSTEM]
+    Owner process ID        20400216    Dev Prot              S:RWPL,O:RWPL,G,W
+    Reference count                2    Default buffer size                 132
+
+--- ASSIGN OPA0: FROM A SECOND PROCESS ---
+%SYSTEM-S-NORMAL, normal successful completion
+```
+
+An RMS `OPEN/WRITE X OPA0:` from the same process also succeeded (`OPEN-OK`).
+
+### 7.2 `$ALLOC` in the same situation returns `SS$_DEVALLOC`
+
+Immediately afterwards, from that same detached process:
+
+```
+--- ALLOCATE OPA0: ---
+%SYSTEM-W-DEVALLOC, device already allocated to another user
+```
+
+So `SS$_DEVALLOC` is `$ALLOC`'s condition, not `$ASSIGN`'s. **A terminal owned by another process is
+assignable but not allocatable.**
+
+*Caveat recorded honestly:* `OPA0:`'s protection is `S:RWPL,O:RWPL,G,W` and the probing process ran
+as `SYSTEM`. This capture therefore pins the *allocation* rule and says nothing about what an
+unprivileged process gets — device protection is a separate gate OVMX does not implement.
+
+### 7.3 A channel does NOT confer ownership
+
+`NLA0:` before, during and after a channel was held by the observing process:
+
+```
+$ SHOW DEVICE/FULL NLA0:            Owner process ""  Owner process ID 00000000  Reference count 2
+$ OPEN/WRITE X NLA0:
+$ SHOW DEVICE/FULL NLA0:            Owner process ""  Owner process ID 00000000  Reference count 3
+$ CLOSE X
+$ SHOW DEVICE/FULL NLA0:            Owner process ""  Owner process ID 00000000  Reference count 2
+```
+
+The owner fields never moved; only the reference count did. **Reference count is one per assigned
+channel.**
+
+### 7.4 Foreign channels alone are enough to refuse `$ALLOC`
+
+With `NLA0:` unowned but at reference count 2 (channels held by other processes):
+
+```
+$ ALLOCATE NLA0:
+%SYSTEM-W-DEVALLOC, device already allocated to another user
+```
+
+## 8. `ALLOCATE` sets the owner, adds a reference, and is idempotent
+
+On the interactive job, which already owned `OPA0:` but had not allocated it:
+
+```
+$ ALLOCATE OPA0:
+%DCL-I-ALLOC, _VAX2$OPA0: allocated
+$ SHOW DEVICE/FULL OPA0:
+Terminal OPA0:, device type LA36, is online, allocated, ... Reference count 3
+
+$ ALLOCATE OPA0:
+%DCL-I-ALLOC, _VAX2$OPA0: allocated
+$ SHOW DEVICE/FULL OPA0:
+Terminal OPA0:, device type LA36, is online, allocated, ... Reference count 3
+
+$ DEALLOCATE OPA0:
+$ SHOW DEVICE/FULL OPA0:
+Terminal OPA0:, device type LA36, is online, ...            Reference count 2
+
+$ DEALLOCATE OPA0:
+%SYSTEM-W-DEVNOTALLOC, device not allocated
+```
+
+Three things are pinned here: allocation adds the word **`allocated`** to the status clause;
+allocation is worth **one reference**; and re-allocating a device you already have allocated
+succeeds and changes nothing.
+
+## 9. Condition values, from VMS's own message facility
+
+Asked directly, by scanning `F$MESSAGE(n)` on the running V7.3 system:
+
+```
+   312 %SYSTEM-W-IVCHAN, invalid I/O channel
+   316 %SYSTEM-F-IVCHAN, invalid I/O channel
+   320 %SYSTEM-W-IVDEVNAM, invalid device name
+   324 %SYSTEM-F-IVDEVNAM, invalid device name
+  2112 %SYSTEM-W-DEVALLOC, device already allocated to another user
+  2116 %SYSTEM-F-DEVALLOC, device already allocated to another user
+  2120 %SYSTEM-W-DEVASSIGN, device has channels assigned
+  2136 %SYSTEM-W-DEVNOTALLOC, device not allocated
+  2312 %SYSTEM-W-NOSUCHDEV, no such device available
+  2316 %SYSTEM-F-NOSUCHDEV, no such device available
+  2648 %SYSTEM-W-NOMOREDEV, no more devices
+  2652 %SYSTEM-F-NOMOREDEV, no more devices
+```
+
+**This contradicts `src/libvms/include/ssdef.h` in several places.** The file's `SS$_NOMOREDEV`
+(2648) is right; its `SS$_DEVALLOC` (2316), `SS$_NOSUCHDEV` (2680), `SS$_IVCHAN` (602) and
+`SS$_IVDEVNAM` (608) are not. Only `SS$_DEVALLOC` was corrected as part of `vms-d0b` — it is the
+constant this work introduces a use for, and it had no other consumer to break. The rest have a
+blast radius across the kernel module, its client and its tests, and are tracked separately; do not
+"fix" them without running the whole QEMU suite.
+
+---
+
 ## What OVMX took from this, and what it deliberately did not
 
 | Oracle fact | OVMX (`src/kernel/vms_devtab.c`) |
@@ -148,7 +277,13 @@ $ SHOW DEVICE ZZA0:
 | Unidentified type displays `Unknown` | Console registers with device type 0 = Unknown |
 | Characteristic **names** and their two-state form | `VMS_TTC_*` in `src/kernel/vms_ioctl.h`, one bit per oracle name |
 | Absent device → `%SYSTEM-W-NOSUCHDEV` | `SS$_NOSUCHDEV` from `$ASSIGN`/`$GETDVI` |
-| Owner / reference count are device properties | `owner_pid` / `refcnt` in the executive, released when the owner's last channel goes |
+| `$ASSIGN` succeeds on a device another process owns (7.1) | `vms_ioctl_assign` returns `SS$_NORMAL` and does not touch ownership |
+| Ownership comes from `$ALLOC`, never `$ASSIGN` (7.3, 8) | `vms_ioctl_alloc` sets `owner_pid`/`allocated`; `$ASSIGN` does not |
+| `$ALLOC` of a device another process owns → `SS$_DEVALLOC` (7.2) | `vms_ioctl_alloc` returns `SS$_DEVALLOC` |
+| `$ALLOC` refused while another process holds channels (7.4) | `vms_ioctl_alloc` walks `dev->chanlist` for a foreign holder |
+| Re-`$ALLOC` by the owner succeeds, no extra reference (8) | idempotent branch in `vms_ioctl_alloc` |
+| `$DALLOC` of an unallocated device → `SS$_DEVNOTALLOC` (8) | `vms_ioctl_dalloc` |
+| Reference count = channels + allocation (7.3, 8) | `refcnt` in the executive |
 
 Deliberately **not** taken:
 

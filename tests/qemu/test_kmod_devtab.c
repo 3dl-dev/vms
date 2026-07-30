@@ -40,6 +40,8 @@
 #define SS_IVDEVNAM     608
 #define SS_NOMOREDEV    2648
 #define SS_NOSUCHDEV    2680
+#define SS_DEVALLOC     2112    /* oracle-measured; see ssdef.h provenance */
+#define SS_DEVNOTALLOC  2136
 
 #define DC_TERM         6
 
@@ -61,9 +63,14 @@ static int pass = 0, fail = 0;
 struct owner_report {
     uint32_t assign_status;
     uint32_t setmode_status;
+    uint32_t alloc_status;
+    uint32_t realloc_status;    /* allocating again, already ours */
     uint32_t chan;
-    uint32_t owner_pid;     /* owner the executive shows A after assign */
-    uint32_t refcnt;
+    uint32_t owner_after_assign;/* owner the executive shows after $ASSIGN alone */
+    uint32_t refcnt_after_assign;
+    uint32_t owner_pid;         /* owner after $ALLOC */
+    uint32_t refcnt;            /* reference count after $ALLOC */
+    uint32_t allocated;
 };
 
 static int open_and_register(void)
@@ -80,7 +87,8 @@ static int open_and_register(void)
 }
 
 /*
- * process_a - assigns a channel to the console, becomes its owner, and
+ * process_a - assigns a channel to the console, allocates it (which is
+ * what makes it the owner -- $ASSIGN does not, per the oracle), and
  * changes characteristics that it never tells anyone about except
  * through the executive.
  */
@@ -102,6 +110,18 @@ static int process_a(int wfd)
 
     rep.assign_status = vms_kif_assign(CONSOLE, &rep.chan);
     if (rep.assign_status == SS_NORMAL) {
+        /* After $ASSIGN alone: the oracle says we are NOT the owner. */
+        memset(&info, 0, sizeof(info));
+        if (vms_kif_getdvi_chan(rep.chan, &info) == SS_NORMAL) {
+            rep.owner_after_assign = info.owner_pid;
+            rep.refcnt_after_assign = info.refcnt;
+        }
+
+        rep.alloc_status = vms_kif_alloc(CONSOLE);
+        /* Allocating a device we already have is a no-op on the lab,
+         * including its reference count. */
+        rep.realloc_status = vms_kif_alloc(CONSOLE);
+
         rep.setmode_status = vms_kif_ttsetmode(
             rep.chan,
             VMS_TTSET_CHAR | VMS_TTSET_WIDTH | VMS_TTSET_PAGE,
@@ -113,6 +133,7 @@ static int process_a(int wfd)
         if (vms_kif_getdvi_chan(rep.chan, &info) == SS_NORMAL) {
             rep.owner_pid = info.owner_pid;
             rep.refcnt = info.refcnt;
+            rep.allocated = info.allocated;
         }
     }
 
@@ -231,15 +252,34 @@ int main(int argc, char **argv)
 
     CHECK(rep.assign_status == SS_NORMAL, "another process assigns a channel to OPA0:");
     CHECK(rep.setmode_status == SS_NORMAL, "owner sets terminal characteristics");
-    CHECK(rep.owner_pid == (uint32_t)child, "executive records the assigning process as owner");
-    CHECK(rep.refcnt == 1, "executive counts one channel to the device");
+
+    /* ORACLE (VAX 7.3, NLA0: held open by one process): a channel does
+     * not confer ownership. The owner field stayed empty and the
+     * process ID stayed 00000000 for as long as the channel was held;
+     * only the reference count moved. */
+    CHECK(rep.owner_after_assign == 0,
+          "$ASSIGN alone does not make the caller the device's owner");
+    CHECK(rep.refcnt_after_assign == 1,
+          "$ASSIGN alone adds one to the reference count");
+
+    /* ORACLE: ALLOCATE is what sets Owner process / Owner process ID
+     * and adds the word "allocated" to SHOW DEVICE/FULL, and doing it
+     * twice changes nothing further (OPA0: 2 -> 3 -> 3). */
+    CHECK(rep.alloc_status == SS_NORMAL, "$ALLOC of a free device succeeds");
+    CHECK(rep.realloc_status == SS_NORMAL,
+          "$ALLOC of a device we already have allocated succeeds");
+    CHECK(rep.owner_pid == (uint32_t)child, "executive records the allocating process as owner");
+    CHECK(rep.allocated == 1, "device reports itself allocated");
+    CHECK(rep.refcnt == 2,
+          "reference count is one channel plus the allocation, and re-allocating adds none");
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getdvi_devnam(CONSOLE, &info);
     CHECK(status == SS_NORMAL, "this process can still read the device");
     CHECK(info.owner_pid == (uint32_t)child,
           "B sees the owner A took (A writes, B reads)");
-    CHECK(info.refcnt == 1, "B sees A's reference count");
+    CHECK(info.allocated == 1, "B sees that A allocated the device");
+    CHECK(info.refcnt == 2, "B sees A's reference count");
     CHECK(info.width == A_WIDTH && info.page == A_PAGE,
           "B sees the width and page A set");
     CHECK((info.devchar & VMS_TTC_PASTHRU) != 0,
@@ -248,29 +288,56 @@ int main(int argc, char **argv)
           "B sees the characteristic A cleared (No Echo)");
 
     /* --------------------------------------------------------------
-     * 4. B assigns the same device: the device is shared, and B does
-     *    NOT displace A as its owner.
+     * 4. What a SECOND process may and may not do to a device another
+     *    process owns. Both answers are measured on the ~/vax OpenVMS
+     *    VAX V7.3 lab, not chosen (docs/oracle/vax73-terminal-device.md
+     *    section 7):
+     *
+     *      a detached process, $ASSIGN OPA0:  -> %SYSTEM-S-NORMAL
+     *      the same process,   ALLOCATE OPA0: -> %SYSTEM-W-DEVALLOC,
+     *                             device already allocated to another user
+     *
+     *    So a terminal owned by somebody else is assignable but not
+     *    allocatable. Neither line below is OVMX's opinion.
      * -------------------------------------------------------------- */
     status = vms_kif_assign(CONSOLE, &chan);
-    CHECK(status == SS_NORMAL && chan != 0, "B assigns its own channel to the same device");
+    CHECK(status == SS_NORMAL && chan != 0,
+          "oracle: $ASSIGN to a device another process owns returns SS$_NORMAL");
+
+    status = vms_kif_alloc(CONSOLE);
+    CHECK(status == SS_DEVALLOC,
+          "oracle: $ALLOC of a device another process owns returns SS$_DEVALLOC");
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getdvi_chan(chan, &info);
-    CHECK(status == SS_NORMAL && info.refcnt == 2,
-          "device reference count counts both processes");
+    CHECK(status == SS_NORMAL && info.refcnt == 3,
+          "device reference count counts both processes' channels and the allocation");
     CHECK(info.owner_pid == (uint32_t)child,
-          "a second assigner does not steal ownership");
+          "a refused $ALLOC leaves the existing owner in place");
+
+    /* Deallocating something we never allocated is DEVNOTALLOC, as it
+     * is on the lab for a second DEALLOCATE. */
+    status = vms_kif_dalloc(CONSOLE);
+    CHECK(status == SS_DEVNOTALLOC,
+          "oracle: $DALLOC of a device we do not have allocated returns SS$_DEVNOTALLOC");
+    memset(&info, 0, sizeof(info));
+    (void)vms_kif_getdvi_devnam(CONSOLE, &info);
+    CHECK(info.owner_pid == (uint32_t)child,
+          "a refused $DALLOC does not release somebody else's allocation");
 
     /* A failed $ASSIGN must not disturb the channel we already hold. */
     bogus_chan = chan;
     status = vms_kif_assign(ABSENT_DEV, &bogus_chan);
     CHECK(status == SS_NOSUCHDEV, "assigning an absent device fails with SS$_NOSUCHDEV");
     CHECK(bogus_chan == chan, "failed $ASSIGN leaves the caller's channel untouched");
+    status = vms_kif_alloc(ABSENT_DEV);
+    CHECK(status == SS_NOSUCHDEV, "allocating an absent device fails with SS$_NOSUCHDEV");
 
     /* --------------------------------------------------------------
      * 5. The device outlives its owner. When A dies the executive
-     *    takes the ownership back -- the device is the executive's,
-     *    not A's.
+     *    takes the allocation back -- the device is the executive's,
+     *    not A's. (A device left allocated to a process that no longer
+     *    exists is not a state VMS has.)
      * -------------------------------------------------------------- */
     kill(child, SIGKILL);
     waitpid(child, NULL, 0);
@@ -279,13 +346,27 @@ int main(int argc, char **argv)
     status = vms_kif_getdvi_devnam(CONSOLE, &info);
     CHECK(status == SS_NORMAL, "device still exists after its owner dies");
     CHECK(info.owner_pid == 0, "dead process no longer owns the device");
-    CHECK(info.refcnt == 1, "dead process's channel was released");
+    CHECK(info.allocated == 0, "dead process's allocation was released");
+    CHECK(info.refcnt == 1, "dead process's channel and allocation were both released");
     CHECK(info.width == A_WIDTH && info.page == A_PAGE,
           "characteristics set by the dead process persist in the executive");
 
+    /* Now that A is gone the device is free, so B can take it. */
+    status = vms_kif_alloc(CONSOLE);
+    CHECK(status == SS_NORMAL, "device is allocatable again once its owner is gone");
+    memset(&info, 0, sizeof(info));
+    (void)vms_kif_getdvi_devnam(CONSOLE, &info);
+    CHECK(info.owner_pid == (uint32_t)getpid() && info.allocated == 1,
+          "executive records the new owner");
+    status = vms_kif_dalloc(CONSOLE);
+    CHECK(status == SS_NORMAL, "$DALLOC gives the device back");
+    memset(&info, 0, sizeof(info));
+    (void)vms_kif_getdvi_devnam(CONSOLE, &info);
+    CHECK(info.owner_pid == 0 && info.allocated == 0 && info.refcnt == 1,
+          "$DALLOC clears the owner and drops its reference");
+
     /* --------------------------------------------------------------
-     * 6. Giving a channel back releases the reference and, with it,
-     *    ownership of the device.
+     * 6. Giving a channel back releases the reference.
      * -------------------------------------------------------------- */
     status = vms_kif_dassgn(chan);
     CHECK(status == SS_NORMAL, "channel deassigned");

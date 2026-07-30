@@ -128,6 +128,16 @@ uint32_t vms_kif_assign(const char *devnam, uint32_t *chan);
 /* $DASSGN the channel. SS$_IVCHAN if it is not one of ours. */
 uint32_t vms_kif_dassgn(uint32_t chan);
 
+/* $ALLOC the device to this process -- this, and not $ASSIGN, is what
+ * makes a process the device's owner. SS$_DEVALLOC when it is already
+ * allocated to another process or another process holds channels to
+ * it; SS$_NOSUCHDEV when there is no such device. */
+uint32_t vms_kif_alloc(const char *devnam);
+
+/* $DALLOC the device. SS$_DEVNOTALLOC if this process does not have it
+ * allocated. */
+uint32_t vms_kif_dalloc(const char *devnam);
+
 /* Read a device row by name. SS$_NOSUCHDEV if there is no such device. */
 uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info);
 

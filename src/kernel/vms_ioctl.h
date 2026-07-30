@@ -315,7 +315,14 @@ struct vms_register_args {
 /*
  * One row of the executive device table, as handed to userspace.
  *
- * owner_pid is 0 when the device is unowned. opcnt/errcnt are the
+ * owner_pid is 0 when the device is not allocated -- ownership comes
+ * from $ALLOC, never from $ASSIGN (measured on the oracle; see
+ * docs/oracle/vax73-terminal-device.md section 7). `allocated` is the
+ * flag behind the word "allocated" in SHOW DEVICE/FULL's status
+ * clause. refcnt is the "Reference count": one per assigned channel
+ * plus one for an outstanding allocation.
+ *
+ * opcnt/errcnt are the
  * "Operations completed" and "Error count" SHOW DEVICE/FULL reports.
  *
  * NOTE what is deliberately ABSENT (rule 10 -- hide what we cannot
@@ -329,14 +336,32 @@ struct vms_devinfo {
     char     devnam[VMS_DEVNAM_SIZE];   /* physical name, e.g. "OPA0:" */
     uint32_t devclass;                  /* DC$_ device class */
     uint32_t devtype;                   /* device type code; 0 = Unknown */
-    uint32_t owner_pid;                 /* VMS pid of the owner, 0 = unowned */
+    uint32_t owner_pid;                 /* VMS pid of the owner, 0 = not allocated */
     uint32_t owner_uic;                 /* (group << 16) | member */
-    uint32_t refcnt;                    /* channels currently assigned */
+    uint32_t refcnt;                    /* channels assigned + allocation */
     uint32_t errcnt;                    /* Error count */
     uint64_t opcnt;                     /* Operations completed */
     uint64_t devchar;                   /* VMS_TTC_* (terminals only) */
     uint32_t width;                     /* terminal width */
     uint32_t page;                      /* terminal page length */
+    uint32_t allocated;                 /* 1 = allocated to owner_pid */
+    uint32_t pad;
+};
+
+/*
+ * $ALLOC / $DALLOC: allocate a device to this process, and give it
+ * back. This is what makes a process the device's OWNER; $ASSIGN does
+ * not (oracle, docs/oracle/vax73-terminal-device.md section 7).
+ *
+ * $ALLOC returns SS$_DEVALLOC when the device is allocated to another
+ * process, or when another process merely holds channels to it -- both
+ * observed on the lab. $DALLOC returns SS$_DEVNOTALLOC when this
+ * process does not have it allocated.
+ */
+struct vms_alloc_args {
+    char     devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+    uint32_t pad;
 };
 
 /* $ASSIGN: take a channel to a device by name. */
@@ -403,5 +428,7 @@ struct vms_setmode_args {
 #define VMS_IOCTL_GETDVI    _IOWR(VMS_IOC_MAGIC, 0x52, struct vms_getdvi_args)
 #define VMS_IOCTL_DEVSCAN   _IOWR(VMS_IOC_MAGIC, 0x53, struct vms_devscan_args)
 #define VMS_IOCTL_TTSETMODE _IOWR(VMS_IOC_MAGIC, 0x54, struct vms_setmode_args)
+#define VMS_IOCTL_ALLOC     _IOWR(VMS_IOC_MAGIC, 0x55, struct vms_alloc_args)
+#define VMS_IOCTL_DALLOC    _IOWR(VMS_IOC_MAGIC, 0x56, struct vms_alloc_args)
 
 #endif /* _VMS_IOCTL_H */

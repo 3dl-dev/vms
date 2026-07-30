@@ -270,6 +270,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_devscan(proc, arg);
     case VMS_IOCTL_TTSETMODE:
         return vms_ioctl_ttsetmode(proc, arg);
+    case VMS_IOCTL_ALLOC:
+        return vms_ioctl_alloc(proc, arg);
+    case VMS_IOCTL_DALLOC:
+        return vms_ioctl_dalloc(proc, arg);
 
     default:
         return -ENOTTY;

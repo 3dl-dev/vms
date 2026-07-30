@@ -58,6 +58,18 @@
 #define SS__IVDEVNAM    608         /* invalid device name */
 #define SS__NOMOREDEV   2648        /* device scan exhausted */
 #define SS__NOSUCHDEV   2680        /* no such device available */
+/*
+ * Allocation statuses. Unlike the four above, these two were measured
+ * directly on the oracle rather than inherited: VMS's own message
+ * facility on the ~/vax OpenVMS VAX V7.3 lab reports
+ *   2112 %SYSTEM-W-DEVALLOC, device already allocated to another user
+ *   2136 %SYSTEM-W-DEVNOTALLOC, device not allocated
+ * and $ALLOC/$DALLOC were observed returning exactly those conditions
+ * (docs/oracle/vax73-terminal-device.md sections 7-9). ssdef.h carries
+ * the same values and the same citation.
+ */
+#define SS__DEVALLOC    2112        /* device already allocated to another user */
+#define SS__DEVNOTALLOC 2136        /* device not allocated */
 
 /*
  * Default privilege set for non-CAP_SYS_ADMIN processes.
@@ -199,12 +211,21 @@ struct vms_device {
     uint32_t            devtype;        /* device type code; 0 = Unknown */
 
     /*
-     * Ownership. owner_pid is the VMS pid of the process that first
-     * took a channel to the device and is held until the LAST channel
-     * is given back -- SHOW DEVICE/FULL's "Owner process ID" together
-     * with "Reference count".
+     * Ownership comes from ALLOCATION, not from assigning a channel.
+     * This is measured, not assumed: on the ~/vax OpenVMS VAX V7.3 lab
+     * a process that held an open channel to NLA0: left the device's
+     * "Owner process" empty and its "Owner process ID" 00000000, while
+     * ALLOCATE set both and added the word "allocated" to the
+     * SHOW DEVICE/FULL status clause
+     * (docs/oracle/vax73-terminal-device.md sections 7-9).
+     *
+     * refcnt is the device's "Reference count": one per assigned
+     * channel plus one for an outstanding allocation -- also measured
+     * (NLA0: 2 -> 3 -> 2 across an OPEN/CLOSE; OPA0: 2 -> 3 on
+     * ALLOCATE and back to 2 on DEALLOCATE).
      */
-    uint32_t            owner_pid;
+    uint32_t            allocated;      /* 1 while allocated to owner_* */
+    uint32_t            owner_pid;      /* VMS pid of the allocating process */
     pid_t               owner_linux_pid;
     uint32_t            owner_uic;
     uint32_t            refcnt;
@@ -217,13 +238,24 @@ struct vms_device {
     uint32_t            width;
     uint32_t            page;
 
+    /*
+     * Every channel currently assigned to this device, by any process.
+     * The device has to know this to answer $ALLOC: the oracle refuses
+     * to allocate a device that another process merely has channels to
+     * (ALLOCATE NLA0: -> %SYSTEM-W-DEVALLOC with the owner field still
+     * empty and a reference count of 2).
+     */
+    struct list_head    chanlist;       /* of vms_channel.devlink */
+
     spinlock_t          lock;
 };
 
 /* A process's handle on a device. */
 struct vms_channel {
     struct list_head    list;           /* in vms_proc->channels */
+    struct list_head    devlink;        /* in vms_device->chanlist */
     uint32_t            chan;
+    pid_t               owner_linux_pid;/* process holding this channel */
     struct vms_device   *dev;
 };
 
@@ -296,6 +328,8 @@ long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

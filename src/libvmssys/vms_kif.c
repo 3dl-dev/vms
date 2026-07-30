@@ -408,6 +408,35 @@ uint32_t vms_kif_assign(const char *devnam, uint32_t *chan)
     return args.status;
 }
 
+/* Shared body for $ALLOC and $DALLOC: both name a device and return a
+ * status, and neither writes anything back to the caller. */
+static uint32_t vms_kif_alloc_op(unsigned long req, const char *devnam)
+{
+    struct vms_alloc_args args;
+
+    if (!devnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    if (vms_sys_ioctl(vms_dev_fd, req, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    return args.status;
+}
+
+uint32_t vms_kif_alloc(const char *devnam)
+{
+    return vms_kif_alloc_op(VMS_IOCTL_ALLOC, devnam);
+}
+
+uint32_t vms_kif_dalloc(const char *devnam)
+{
+    return vms_kif_alloc_op(VMS_IOCTL_DALLOC, devnam);
+}
+
 uint32_t vms_kif_dassgn(uint32_t chan)
 {
     struct vms_dassgn_args args;

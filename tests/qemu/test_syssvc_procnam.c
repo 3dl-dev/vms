@@ -26,10 +26,11 @@
  *
  * P1-P10 cover JPI$_PID and JPI$_PRCNAM. Block P11 covers the other three
  * item codes this item rewrote -- JPI$_UIC, JPI$_CPUTIM and JPI$_USERNAME --
- * against a helper that sits in a DIFFERENT UIC GROUP and burns its OWN CPU,
- * because on a rig where every process is root and idle those three answers
- * read identically whether they come from the executive's row or from the
- * caller's own PCB. A test that cannot tell the two apart is not coverage.
+ * against a helper that sits in a DIFFERENT UIC GROUP, burns its OWN CPU and
+ * stamps its OWN authenticated user name, because on a rig where every
+ * process is root and idle and nameless those three answers read identically
+ * whether they come from the executive's row or from the caller itself. A
+ * test that cannot tell the two apart is not coverage.
  *
  * THE LONG-LIVED SUBJECT PROCESS. $CREPRC's image is exec'd with no
  * arguments, so the subject is /bin/sh with its stdin redirected (by
@@ -67,7 +68,6 @@
 #include "jpidef.h"
 #include "lib$routines.h"
 #include "vms_kif.h"
-#include "vms/pcb.h"
 
 #define EXIT_SKIP 77
 
@@ -109,10 +109,11 @@ static int fail = 0;
  * magnitude above the 10ms resolution the item code reports in. */
 #define BURN_CLOCKS   (CLOCKS_PER_SEC / 2)
 
-/* What the caller writes into its OWN pcb->username before block P11, so
- * that a username answered out of the caller's private PCB is recognisable
- * as such when it is returned for a DIFFERENT process. */
-#define CALLER_PCB_USER "P11CALLER"
+/* Authenticated user names stamped on the executive's rows (vms-2b8's
+ * vms_kif_setident). Two distinct names, one per process, so a reader
+ * that answers about the wrong row is caught by the name it returns. */
+#define CALLER_USERNAME "OVMXCALLER"
+#define HELPER_USERNAME "OVMXHELPER"
 
 static struct dsc$descriptor_s str_dsc(const char *s)
 {
@@ -277,6 +278,16 @@ static void alt_group_helper(int cmdfd, int repfd)
         _exit(1);
     }
 
+    /* Stamp an authenticated user name of its OWN on its OWN row. The
+     * parent must then read THIS name back for THIS process -- the whole
+     * A-writes/B-reads point of JPI$_USERNAME. Same UIC and same
+     * authorized mask it already holds, so nothing is being widened;
+     * only the name changes. */
+    if (!(vms_kif_setident(HELPER_USERNAME, info.uic, info.perm_privs) & 1)) {
+        (void)write_full(repfd, &rep, sizeof(rep));   /* ok == 0 */
+        _exit(1);
+    }
+
     rep.ok      = 1;
     rep.vms_pid = info.vms_pid;
     rep.uic     = info.uic;
@@ -307,6 +318,23 @@ static uint32_t spawn_named(const char *prcnam, uint32_t *out_pid)
     *out_pid = 0;
     return sys$creprc(out_pid, &img, &in, NULL, NULL, NULL, NULL, &nd,
                       0, 0, 0, 0);
+}
+
+/*
+ * linux_pid_of - the Linux pid backing a VMS process, from its row.
+ *
+ * The two namespaces are separate since vms-2b8: the executive assigns
+ * VMS process IDs, and only it knows which Linux task each one is. The
+ * test needs the Linux pid for kill()/waitpid()/proc and for nothing
+ * else. Returns 0 if the row does not resolve.
+ */
+static uint32_t linux_pid_of(uint32_t vms_pid)
+{
+    struct vms_procinfo info;
+
+    if (!(vms_kif_getjpi_pid(vms_pid, &info) & 1))
+        return 0;
+    return info.linux_pid;
 }
 
 /*
@@ -488,12 +516,31 @@ int main(void)
     chmod(HOLD_SCRIPT, 0644);
 
     uint32_t subject = 0, dup_pid = 0, long_pid = 0, ok15_pid = 0;
+    uint32_t subject_lpid = 0, ok15_lpid = 0;
+
+    /*
+     * THE CALLER'S OWN VMS PROCESS ID COMES FROM THE EXECUTIVE, never
+     * from getpid(). vms-2b8 made the executive ASSIGN process IDs from
+     * its own generator (src/kernel/vms_module.c assign_vms_pid) instead
+     * of adopting the Linux pid, so getpid() is no longer a VMS process
+     * ID and a test that used it would be asserting against a number
+     * that names no row. This whole suite therefore deals in two clearly
+     * separate namespaces: VMS process IDs, which only the executive
+     * issues and only $GETJPI resolves, and Linux pids, which are used
+     * for nothing but kill()/waitpid()/proc and are obtained from a row
+     * through linux_pid_of().
+     */
+    struct vms_procinfo selfinfo;
+    uint32_t st = vms_kif_getjpi_self(&selfinfo);
+    CHECK(st & 1, "the caller has a row in the executive's process table");
+    uint32_t selfpid = selfinfo.vms_pid;
+    CHECK(selfpid != 0, "the executive assigned the caller a VMS process ID");
 
     /* ---------------------------------------------------------------
      * P1. $CREPRC enters the child in the EXECUTIVE's table under the
      *     requested name, and the name survives image activation.
      * --------------------------------------------------------------- */
-    uint32_t st = spawn_named(SUBJECT_NAME, &subject);
+    st = spawn_named(SUBJECT_NAME, &subject);
     CHECK(st & 1, "sys$creprc created the subject process");
     CHECK(subject != 0, "sys$creprc returned the subject's pid");
 
@@ -502,7 +549,21 @@ int main(void)
         return 1;
     }
 
-    CHECK(wait_for_exec(subject, "sh") == 0,
+    /* $CREPRC hands back the EXECUTIVE's process ID (vms-2b8), so it must
+     * be one the executive can resolve -- and it must not be the caller's
+     * own.
+     *
+     * Mutation M-D ($CREPRC's *pidadr set to the fork() return, which is
+     * what it was before this round) was built and run in this harness:
+     * 49/0 -> 40/9. Nine assertions flip, because a Linux pid handed out
+     * as a VMS process ID poisons every later lookup that uses it. That
+     * is the measure of how load-bearing the distinction is. */
+    CHECK(subject != selfpid, "the subject's VMS process ID is not the caller's");
+    subject_lpid = linux_pid_of(subject);
+    CHECK(subject_lpid != 0,
+          "the VMS process ID $CREPRC returned resolves to a live row");
+
+    CHECK(wait_for_exec(subject_lpid, "sh") == 0,
           "the subject reached its post-exec image (/bin/sh)");
 
     /* ---------------------------------------------------------------
@@ -529,7 +590,6 @@ int main(void)
     /* And the same call for ourselves must NOT return the subject's name --
      * this is what fails if the reader collapses every query onto one row. */
     char selfname[64];
-    uint32_t selfpid = (uint32_t)getpid();
     st = getjpi_prcnam_of(selfpid, selfname, sizeof(selfname));
     CHECK(st & 1, "sys$getjpi resolved the caller by its own pid");
     CHECK(strcmp(selfname, SUBJECT_NAME) != 0,
@@ -570,6 +630,7 @@ int main(void)
      * --------------------------------------------------------------- */
     st = spawn_named(LEN16_NAME, &ok15_pid);
     CHECK(st & 1, "sys$creprc accepts a 15-character process name");
+    ok15_lpid = linux_pid_of(ok15_pid);
 
     st = spawn_named(LEN17_NAME, &long_pid);
     CHECK(st == SS$_IVLOGNAM,
@@ -650,6 +711,17 @@ int main(void)
     CHECK(st == SS$_NORMAL, "lib$getjpi(JPI$_PID) returns SS$_NORMAL");
     CHECK(lpid == selfpid, "lib$getjpi(JPI$_PID) returns the caller's own pid");
 
+    /*
+     * JPI$_USERNAME reads the AUTHENTICATED name in the executive's row
+     * (vms-2b8's vms_kif_setident), so the row must have one before the
+     * item means anything. The old assertion here was "returns a
+     * non-empty string", which the deleted getpwuid/"UNKNOWN" derivation
+     * satisfied without any identity existing anywhere -- it could not
+     * fail. Stamp a name, then require that exact name back.
+     */
+    st = vms_kif_setident(CALLER_USERNAME, selfinfo.uic, selfinfo.perm_privs);
+    CHECK(st & 1, "the caller stamped an authenticated identity on its row");
+
     char ubuf[32];
     memset(ubuf, 0, sizeof(ubuf));
     struct dsc$descriptor_s udesc = str_dsc(ubuf);
@@ -658,7 +730,9 @@ int main(void)
     item = JPI$_USERNAME;
     st = lib$getjpi(&item, NULL, NULL, NULL, &udesc, &ulen);
     CHECK(st == SS$_NORMAL, "lib$getjpi(JPI$_USERNAME) returns SS$_NORMAL");
-    CHECK(ulen > 0, "lib$getjpi(JPI$_USERNAME) returns a non-empty string");
+    CHECK(ulen == strlen(CALLER_USERNAME) &&
+          strncmp(ubuf, CALLER_USERNAME, ulen) == 0,
+          "lib$getjpi(JPI$_USERNAME) returns the name the EXECUTIVE holds");
 
     char pnbuf[32];
     memset(pnbuf, 0, sizeof(pnbuf));
@@ -669,8 +743,8 @@ int main(void)
     st = lib$getjpi(&item, NULL, NULL, NULL, &pndesc, &pnlen);
     CHECK(st == SS$_NORMAL, "lib$getjpi(JPI$_PRCNAM) returns SS$_NORMAL");
 
-    reap(subject);
-    reap(ok15_pid);
+    reap(subject_lpid);
+    reap(ok15_lpid);
 
     /* ---------------------------------------------------------------
      * P10. A name is released when its process dies, so it can be taken
@@ -679,7 +753,7 @@ int main(void)
     uint32_t retaken = 0;
     st = spawn_named(SUBJECT_NAME, &retaken);
     CHECK(st & 1, "the subject's name is available again once it has exited");
-    reap(retaken);
+    reap(linux_pid_of(retaken));
     unlink(HOLD_SCRIPT);
 
     /* ---------------------------------------------------------------
@@ -736,8 +810,8 @@ int main(void)
              * it becomes the caller's 0x00000000 and both checks fail.
              *
              * Mutation M-A (JPI$_UIC restored to the pre-item
-             * "pcb->uic, else (getgid()<<16)|getuid()") was built and run
-             * in this harness: 45/0 -> 43/2, and the two that flipped are
+             * "(getgid()<<16)|getuid()") was built and run in this
+             * harness: 49/0 -> 47/2, and the two that flipped are
              * exactly the two below. Both are detectors.
              */
             uint32_t helper_uic = 0, self_uic = 0;
@@ -758,16 +832,15 @@ int main(void)
              * getrusage(RUSAGE_SELF) -- what it did before this item --
              * both readings would be the CALLER's.
              *
-             * WHICH OF THESE ACTUALLY DISCRIMINATES, MEASURED, not
-             * assumed. Mutation M-B (jpi_cputim's "if (linux_pid ==
-             * getpid())" forced to "if (1)", so every answer is
-             * getrusage(RUSAGE_SELF)) was built and run in this harness:
-             * 45/0 -> 44/1, and the ONE assertion that flipped was
-             * "the CPU growth reported is the HELPER's". `t1 > 0` and
-             * `t2 > t1` both stayed GREEN under the mutation, because the
-             * caller is itself accumulating CPU between the two readings.
-             * They are companions, not detectors; the delta comparison is
-             * the detector. Do not delete it as redundant.
+             * MEASURED, not assumed. Mutation M-B (jpi_cputim's
+             * "if (linux_pid == getpid())" forced to "if (1)", so every
+             * answer is getrusage(RUSAGE_SELF)) was built and run in this
+             * harness: 49/0 -> 47/2, flipping both "tracks the TARGET's
+             * consumption over time" and "the CPU growth reported is the
+             * HELPER's". `t1 > 0` did NOT flip -- the caller has burned
+             * CPU of its own by this point -- so it is a companion, not a
+             * detector. The two that did flip are the detectors; do not
+             * delete either as redundant.
              */
             uint32_t t1 = 0, t2 = 0, s1 = 0, s2 = 0;
             st = getjpi_u32_of(rep.vms_pid, JPI$_CPUTIM, &t1);
@@ -789,46 +862,34 @@ int main(void)
                   "the CPU growth reported is the HELPER's, not the caller's");
 
             /* --- JPI$_USERNAME -------------------------------------
-             * The executive's row carries no username yet (vms-2b8 is
-             * adding identity to struct vms_proc), so for a non-self
-             * target sys$getjpi resolves the account database with the
-             * MEMBER half of the executive-reported UIC. Give the
-             * CALLER a recognisable self-declared PCB username first:
-             * if the non-self branch ever collapses back onto the
-             * caller's PCB -- which is exactly what the whole service
-             * did before this item -- that string comes back for the
-             * helper and the check fails.
+             * A-WRITES / B-READS on the authenticated identity. The
+             * helper stamped HELPER_USERNAME on its OWN row through
+             * vms_kif_setident (vms-2b8); the caller stamped
+             * CALLER_USERNAME on its own back in P9. Neither process can
+             * see the other's string except through the executive: they
+             * are separate address spaces, and the helper never tells
+             * the parent its name over the pipe.
              *
-             * HONEST LIMIT, stated rather than papered over: this does
-             * NOT discriminate "the UIC MEMBER the executive reported"
-             * from "getuid()". It cannot, on this rig or in the
-             * product: /dev/vms is a root-only misc device, so every
-             * process that can reach the executive has uid 0 and both
-             * expressions are 0. What IS discriminated is PCB-vs-row,
-             * which is the change this item made. The remaining gap
-             * closes when vms-2b8 puts a username in the executive's
-             * row and the derivation goes away entirely.
+             * So the pair below is the whole property. If sys$getjpi
+             * answers about the caller (the pre-item behaviour), or from
+             * any process-local source, the helper query returns
+             * CALLER_USERNAME and fails.
              *
-             * Mutation M-C (the `is_self ?` guard removed from BOTH the
-             * pcb binding and the username branch, i.e. the pre-item
-             * "always answer from my own PCB") was built and run in this
-             * harness: 45/0 -> 44/1, flipping exactly the
-             * "NOT the caller's own PCB username" check below.
+             * Mutation M-C (JPI$_USERNAME answered from a
+             * vms_kif_getjpi_self() row instead of the resolved one --
+             * "answer about me, whoever you asked about") was built and
+             * run in this harness: 49/0 -> 48/1, flipping exactly the
+             * helper check below.
              */
-            vms_pcb_init(0);
-            vms_pcb_set_identity(selfpid, self_uic, CALLER_PCB_USER, "");
-
             char huser[64], suser[64];
             st = getjpi_str_of(rep.vms_pid, JPI$_USERNAME, huser, sizeof(huser));
             CHECK(st & 1, "sys$getjpi read JPI$_USERNAME for another process");
-            CHECK(huser[0] != '\0',
-                  "JPI$_USERNAME for another process is not empty");
-            CHECK(strcmp(huser, CALLER_PCB_USER) != 0,
-                  "JPI$_USERNAME for another process is NOT the caller's own PCB username");
+            CHECK(strcmp(huser, HELPER_USERNAME) == 0,
+                  "JPI$_USERNAME returns the name the HELPER stamped on its own row");
 
             st = getjpi_str_of(selfpid, JPI$_USERNAME, suser, sizeof(suser));
-            CHECK((st & 1) && strcmp(suser, CALLER_PCB_USER) == 0,
-                  "JPI$_USERNAME for the CALLER still reads its own PCB (vms-2b8 owns that facade)");
+            CHECK((st & 1) && strcmp(suser, CALLER_USERNAME) == 0,
+                  "JPI$_USERNAME for the caller returns the caller's own stamped name");
         }
 
         close(cmdfd[1]);            /* releases the helper from its loop */

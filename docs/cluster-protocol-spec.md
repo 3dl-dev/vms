@@ -1723,14 +1723,54 @@ whose first two bytes were overwritten by the category and opcode. An
 implementation should send zeros; do not reproduce another implementation's
 uninitialised memory.
 
-#### Admission is single-coordinator
+#### Admission is single-coordinator — and the peer must be THE COORDINATOR
 
 The joiner sends its `op 0x02` to **exactly one** peer, which relays the new node
-to the rest (`op 0x12`) and then runs the barrier across all members. Sending it
-to every peer starts N competing cluster-wide transitions and the cluster aborts
-them. *Which* peer a real joiner picks is **not grounded** — "last to complete
-config", "last MSCP walk" and "highest SCSSYSTEMID" are mutually confounded in
-the only 3-node specimen available.
+to the rest (`op 0x12`) and then runs the barrier across all members.
+
+**A non-coordinator peer SILENTLY DISCARDS `op 0x02`.** GROUNDED, `d94-e15`
+byte-verified: all three members received a byte-identical `op 0x02` inside
+400 ms; VAX1 and VAX2 each answered only a cat-`0x04` ack and did nothing further
+— VAX1 had a **383 ms head start** — while VAX3 relayed `op 0x12` to VAX1 1.0 ms
+later and drove `0x03`/`0x05`/`0x09`/`0x0a` to **both** peers. The reference
+joiner behaves identically: it sent its `op 0x02` to **VAX2, not VAX1**
+(frame 285), and VAX2 relayed to VAX1 in 0.3 ms (286). So the reference picks
+**the coordinator**, not "one peer arbitrarily".
+
+> **CORRECTION to the previous text.** Fan-out does **not** start N competing
+> transitions. In `d94-e15` exactly **one** transition ran, started by VAX3;
+> the other two contributed only acks, and no abort occurred. The earlier
+> "competing transitions / cluster abort" reading is **not reproduced**. Fan-out
+> appeared to work only because it happened to include the coordinator.
+
+*How* a joiner identifies the coordinator is **NOT grounded**. No wire-visible
+coordinator flag was found: the coordinator is a **zero-vote** node in both
+specimens, and every field distinguishing VAX3 from VAX1/VAX2 in our lab is
+all-zero on the reference's coordinator VAX2 — so those are node-local
+properties, not a role marker. The only predicate surviving both specimens is
+**highest DECnet node number** (VAX2 of {VAX1,VAX2}; VAX3 of {VAX1,VAX2,VAX3}),
+which is confounded with "highest SCSSYSTEMID" and "last to have joined".
+OVMX implements that observable and labels it INFERRED (`cm_pick_coordinator`).
+
+#### Never answer a (category, opcode) pair you have not grounded
+
+Once the relay works, the **non-coordinator members open their own
+token-correlated transactions with the joiner**, carrying opcodes that never
+appear in the pre-relay dialogue — `0x12`, `0x0f`, `0x08`, `0x00` were all
+observed (`ovmx-760-relay-crash-20260730.pcap`).
+
+> ⚠ OVMX answered every one of them with the cat-`0x01` full-body echo and
+> **crashed two real VAXes**: VAX3 `INCONSTATE, Inconsistent I/O data base` and
+> VAX1 `INVEXCEPTN, Exception while above ASTDEL or on interrupt stack`. These
+> request bodies carry the **peer's own live Con.IDs and cluster id**; echoing
+> one reflects that peer's I/O structures back at it. It is the same failure as
+> generalising the cat-`0x01` echo to cat-`0x06`.
+
+The rule is an **allowlist, never a default**: answer only (category, opcode)
+pairs grounded in the reference; for anything else send **nothing** and log it.
+Silence is the safer failure — but not a free one. A joiner that fails to answer
+something the coordinator gates on strands the transition, which times out and
+drops healthy members. An unanswered pair is a gap to close, not a resting state.
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
 

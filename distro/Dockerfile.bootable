@@ -15,7 +15,7 @@
 #                                   Contains only: STARTUP.EXE (/init),
 #                                   INITIALIZE.EXE, kernel modules, config,
 #                                   and SYS$MANAGER files. All other binaries
-#                                   (DCL, LOGIN, HELP, LNMD) must be on the
+#                                   (DCL, LOGIN, HELP) must be on the
 #                                   system disk (/vms).
 #
 # STARTUP.EXE (ovmx_init) is /init — no busybox, no shell scripts.
@@ -94,7 +94,6 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
     cp build-static/bin/DCL.EXE        /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/LOGINOUT.EXE   /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/HELP.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-    cp build-static/bin/VMSLNMD.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ && \
     cp build-static/bin/AUTHORIZE.EXE  /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/MAIL.EXE       /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/MONITOR.EXE    /initramfs-fat/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
@@ -112,7 +111,7 @@ RUN mkdir -p /initramfs-fat/dev /initramfs-fat/proc /initramfs-fat/sys \
 
 # -- SLIM initramfs ------------------------------------------------------------
 # Bootstrap-only: STARTUP.EXE + INITIALIZE.EXE + kernel modules + config.
-# All other binaries (DCL, LOGIN, HELP, LNMD) must be on the system disk.
+# All other binaries (DCL, LOGIN, HELP) must be on the system disk.
 # Use this after the system disk has been installed via the fat initramfs.
 RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/tmp /initramfs-slim/var /initramfs-slim/mnt \
@@ -131,6 +130,37 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
     # Pack the slim initramfs
     cd /initramfs-slim && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx-slim.cpio.gz && \
     echo "SLIM initramfs: $(ls -lh /boot/initramfs-ovmx-slim.cpio.gz | awk '{print $5}')"
+
+# -- NOEXEC initramfs (negative control) ---------------------------------------
+# The FAT initramfs with vms.ko REMOVED -- i.e. a system whose executive cannot
+# be loaded. It exists so tests/qemu/test_executive_integral.sh can prove that
+# OVMX REFUSES TO BOOT without an executive, rather than coming up degraded.
+#
+# This is a test artifact, not a runtime: it is the only way to exercise the
+# fatal path, and building it here (where cpio lives) keeps the runner stage
+# minimal. Nothing boots it except that test. If you are tempted to ship it or
+# to "fix" a boot failure by using it -- don't; a system with no executive is
+# precisely the state OVMX exists to make unreachable (CLAUDE.md Rule 9).
+RUN cp -a /initramfs-fat /initramfs-noexec && \
+    rm -f /initramfs-noexec/lib/modules/vms.ko && \
+    cd /initramfs-noexec && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx-noexec.cpio.gz && \
+    echo "NOEXEC initramfs: $(ls -lh /boot/initramfs-ovmx-noexec.cpio.gz | awk '{print $5}')"
+
+# -- NODEV initramfs (negative control) -----------------------------------------
+# The FAT initramfs with /lib/modules/vms.ko REPLACED by a different, real,
+# loadable kernel module (vmsfs.ko's own binary) that registers no misc
+# device. finit_module() on it succeeds, but /dev/vms never appears in
+# devtmpfs -- the second reachable half of executive_attach()'s fatal path
+# (vms.ko itself is untouched; NOEXEC above already covers "module missing"
+# entirely). Exists so tests/qemu/test_executive_integral.sh Boot C can prove
+# that path is fatal too, and diagnosed honestly, rather than merely asserted
+# (vms-a35 round 2 / Rule 10).
+#
+# Test artifact, not a runtime -- same rule as NOEXEC above.
+RUN cp -a /initramfs-fat /initramfs-nodev && \
+    cp src/kernel/vmsfs/vmsfs.ko /initramfs-nodev/lib/modules/vms.ko && \
+    cd /initramfs-nodev && find . | cpio -o -H newc 2>/dev/null | gzip > /boot/initramfs-ovmx-nodev.cpio.gz && \
+    echo "NODEV initramfs: $(ls -lh /boot/initramfs-ovmx-nodev.cpio.gz | awk '{print $5}')"
 
 # Ensure vmlinuz symlink exists
 RUN KVER=$(cat /tmp/kver) && \
@@ -151,6 +181,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz
 COPY --from=builder /boot/initramfs-ovmx.cpio.gz /boot/initramfs-ovmx.cpio.gz
 COPY --from=builder /boot/initramfs-ovmx-slim.cpio.gz /boot/initramfs-ovmx-slim.cpio.gz
+# Negative controls for test_executive_integral.sh only — never a runtime.
+COPY --from=builder /boot/initramfs-ovmx-noexec.cpio.gz /boot/initramfs-ovmx-noexec.cpio.gz
+COPY --from=builder /boot/initramfs-ovmx-nodev.cpio.gz /boot/initramfs-ovmx-nodev.cpio.gz
 
 ENV MEMORY=512M
 

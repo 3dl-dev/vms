@@ -179,8 +179,10 @@ of *every file open*. An ioctl per translation is a syscall round trip. LNM may 
 mapping (the `MAP_SHARED` known-image DB is the in-tree precedent) or kernel-side storage with a
 per-process cache plus invalidation. Decide LNM separately from the rest.
 
-**Scope:** tracked as **`vms-6b8`**. The `lnm.sock` daemon (already loads `SYLOGICALS.CONF`; nothing
-connects to it) and the `MAP_SHARED` known-image DB are the two userspace precedents.
+**Scope:** tracked as **`vms-6b8`**. The `MAP_SHARED` known-image DB is the surviving userspace
+precedent. The other one, the `lnm.sock` daemon, was deleted by `vms-a4b`: it loaded
+`SYLOGICALS.CONF` into a private table that nothing connected to, and VMS has no logical name
+server process to model it on.
 
 ### 2.2 Re-tiering: rank by tell-probability, not by feature completeness
 
@@ -325,7 +327,8 @@ the logical rather than regressing to a compiled-in greeting.
 
 **Logical names are themselves an authenticity surface** (`vms-d37`, blocks A4). Wiring the banner to
 `SYS$WELCOME` exposed that OVMX logical-name tables are **per-process**: `lnm_get_manager()` builds an
-in-process table, and nothing but the daemon itself reads `SYLOGICALS.CONF`. Demonstrated across two
+in-process table, and nothing but the (since-deleted) daemon ever read `SYLOGICALS.CONF`.
+Demonstrated across two
 DCL processes:
 
 ```

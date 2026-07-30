@@ -21,6 +21,10 @@
 #include <linux/hashtable.h>
 #include <linux/rbtree.h>
 #include <linux/capability.h>
+#include <linux/cred.h>
+#include <linux/uidgid.h>
+#include <linux/pid.h>
+#include <linux/sched.h>
 
 #include "vms_internal.h"
 
@@ -60,6 +64,18 @@ struct vms_proc *vms_proc_find(pid_t pid)
 struct vms_proc *vms_proc_find_or_err(void)
 {
     struct vms_proc *proc = vms_proc_find(current->pid);
+
+    /*
+     * A table entry now outlives the /dev/vms channel (vms-8019), so an
+     * entry keyed by this pid number is not automatically OURS: if the
+     * pid has been recycled, the entry belongs to a process that no
+     * longer exists, and handing it over would hand over its
+     * privileges with it. Match on the pinned struct pid, which is
+     * unique per process instance, rather than on the reusable number.
+     */
+    if (proc && proc->pid_ref != task_pid(current))
+        return NULL;
+
     return proc;
 }
 
@@ -75,6 +91,27 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
     proc->linux_pid = pid;
     proc->vms_pid = vms_pid;
     proc->current_mode = PSL_C_USER;    /* start in user mode */
+
+    /*
+     * Executive-owned identity (vms-8019).
+     *
+     * The process starts unnamed; $SETPRN (VMS_IOCTL_SETPRN) names it.
+     * The UIC is derived here from the task's own credentials -- it is
+     * deliberately NOT taken from the register arguments, because a
+     * process that can declare its own UIC can forge the group that
+     * scopes process-name uniqueness and lookup. UIC [group,member] is
+     * packed as (group << 16) | member, the packing sys$getjpi's
+     * JPI$_UIC item returns, with OVMX's [gid,uid] mapping.
+     */
+    proc->prcnam[0] = '\0';
+    proc->uic = (((uint32_t)from_kgid(&init_user_ns, current_gid()) & 0xFFFFu) << 16) |
+                ((uint32_t)from_kuid(&init_user_ns, current_uid()) & 0xFFFFu);
+
+    /*
+     * Pin the backing task's pid so the entry's liveness can be tested
+     * without racing pid reuse. Released in vms_proc_free().
+     */
+    proc->pid_ref = get_pid(task_pid(current));
 
     /*
      * Privilege escalation guard: only CAP_SYS_ADMIN processes may request
@@ -110,11 +147,17 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
     proc->lock_count = 0;
     spin_lock_init(&proc->lock_list_lock);
 
+    /* Initialize the I/O channel list (device table, vms-d0b) */
+    INIT_LIST_HEAD(&proc->channels);
+    proc->next_chan = 0;
+    spin_lock_init(&proc->chan_lock);
+
     /* Atomically check-and-insert under spinlock to avoid TOCTOU race */
     spin_lock(&vms_proc_hash_lock);
     hash_for_each_possible_rcu(vms_proc_hash, existing, hash_node, pid) {
         if (existing->linux_pid == pid) {
             spin_unlock(&vms_proc_hash_lock);
+            put_pid(proc->pid_ref);
             kmem_cache_free(vms_proc_cache, proc);
             return ERR_PTR(-EEXIST);
         }
@@ -128,15 +171,18 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
     return proc;
 }
 
-void vms_proc_free(struct vms_proc *proc)
+/*
+ * vms_proc_free_claimed - tear down an entry already removed from the hash.
+ *
+ * The caller must have unlinked proc under vms_proc_hash_lock; that
+ * removal IS the ownership claim, so exactly one caller reaches here
+ * per entry. Callers that still need to claim go through
+ * vms_proc_free().
+ */
+void vms_proc_free_claimed(struct vms_proc *proc)
 {
     int i;
     struct vms_ast_entry *ast, *tmp;
-
-    /* Remove from hash table */
-    spin_lock(&vms_proc_hash_lock);
-    hash_del_rcu(&proc->hash_node);
-    spin_unlock(&vms_proc_hash_lock);
 
     /* Free AST queues */
     for (i = 0; i < 4; i++) {
@@ -154,8 +200,42 @@ void vms_proc_free(struct vms_proc *proc)
     /* Release common event flag associations */
     vms_proc_release_common_ef(proc);
 
+    /*
+     * Give back every I/O channel. The devices themselves belong to
+     * the executive and outlive the process; what dies here is this
+     * process's claim on them, which is what releases device
+     * ownership when the last channel goes.
+     */
+    vms_proc_release_channels(proc);
+
+    /* Drop the pinned pid reference taken at registration */
+    if (proc->pid_ref) {
+        put_pid(proc->pid_ref);
+        proc->pid_ref = NULL;
+    }
+
     /* RCU-deferred free — proc may still be accessed by RCU readers */
     kfree_rcu(proc, rcu);
+}
+
+void vms_proc_free(struct vms_proc *proc)
+{
+    /*
+     * Claim the entry: an entry can now be freed from three places
+     * (channel release of an exiting task, the lazy reaper, and module
+     * unload), so removal from the hash is what decides ownership.
+     * hash_del_rcu() leaves the node unhashed, so a second claimant
+     * bails out here instead of double-freeing.
+     */
+    spin_lock(&vms_proc_hash_lock);
+    if (hlist_unhashed(&proc->hash_node)) {
+        spin_unlock(&vms_proc_hash_lock);
+        return;
+    }
+    hash_del_rcu(&proc->hash_node);
+    spin_unlock(&vms_proc_hash_lock);
+
+    vms_proc_free_claimed(proc);
 }
 
 /* ================================================================
@@ -170,6 +250,12 @@ static long vms_ioctl_register(unsigned long arg)
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
+
+    /*
+     * Clear out entries whose process is gone before claiming a slot,
+     * so a recycled pid never collides with a dead predecessor.
+     */
+    vms_proc_reap_dead();
 
     proc = vms_proc_register(current->pid, args.vms_pid, args.init_privs);
     if (IS_ERR(proc)) {
@@ -246,6 +332,30 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     case VMS_IOCTL_GETLKI:
         return vms_ioctl_getlki(proc, arg);
 
+    /* Device table (executive-resident I/O database) */
+    case VMS_IOCTL_ASSIGN:
+        return vms_ioctl_assign(proc, arg);
+    case VMS_IOCTL_DASSGN:
+        return vms_ioctl_dassgn(proc, arg);
+    case VMS_IOCTL_GETDVI:
+        return vms_ioctl_getdvi(proc, arg);
+    case VMS_IOCTL_DEVSCAN:
+        return vms_ioctl_devscan(proc, arg);
+    case VMS_IOCTL_TTSETMODE:
+        return vms_ioctl_ttsetmode(proc, arg);
+    case VMS_IOCTL_ALLOC:
+        return vms_ioctl_alloc(proc, arg);
+    case VMS_IOCTL_DALLOC:
+        return vms_ioctl_dalloc(proc, arg);
+
+    /* Process table (executive-resident PCB directory) */
+    case VMS_IOCTL_SETPRN:
+        return vms_ioctl_setprn(proc, arg);
+    case VMS_IOCTL_GETJPI:
+        return vms_ioctl_getjpi(proc, arg);
+    case VMS_IOCTL_PROCSCAN:
+        return vms_ioctl_procscan(proc, arg);
+
     default:
         return -ENOTTY;
     }
@@ -258,8 +368,25 @@ static int vms_dev_open(struct inode *inode, struct file *filp)
 
 static int vms_dev_release(struct inode *inode, struct file *filp)
 {
-    struct vms_proc *proc = vms_proc_find(current->pid);
+    struct vms_proc *proc;
 
+    /*
+     * The executive PCB belongs to the PROCESS, not to the channel
+     * (vms-8019). Closing /dev/vms -- including the implicit close of
+     * an inherited descriptor at execve() time -- must not delete the
+     * process from the executive's process table, or the process name
+     * would not survive image activation and would once again be
+     * something only the current image can see.
+     *
+     * So the entry is destroyed here only when the task that owns it is
+     * actually going away. Entries whose task exits without ever
+     * reaching this path (a forked child sharing the parent's struct
+     * file, for instance) are reclaimed by vms_proc_reap_dead().
+     */
+    if (!(current->flags & PF_EXITING))
+        return 0;
+
+    proc = vms_proc_find_or_err();
     if (proc)
         vms_proc_free(proc);
 
@@ -308,10 +435,28 @@ static int __init vms_init(void)
     }
     vms_eflag_init();
 
+    /*
+     * Bring up the device table before /dev/vms exists, so that the
+     * console terminal is in the executive's I/O database before any
+     * process can possibly ask about it -- a device is never something
+     * a process introduces.
+     */
+    ret = vms_devtab_init();
+    if (ret) {
+        pr_err("vms: failed to initialize device table: %d\n", ret);
+        vms_lock_cleanup();
+        vms_eflag_cleanup();
+        kmem_cache_destroy(vms_proc_cache);
+        return ret;
+    }
+
     /* Register /dev/vms */
     ret = misc_register(&vms_misc);
     if (ret) {
         pr_err("vms: failed to register /dev/vms: %d\n", ret);
+        vms_devtab_cleanup();
+        vms_lock_cleanup();
+        vms_eflag_cleanup();
         kmem_cache_destroy(vms_proc_cache);
         return ret;
     }
@@ -341,6 +486,7 @@ static void __exit vms_exit(void)
     /* Cleanup subsystems */
     vms_lock_cleanup();
     vms_eflag_cleanup();
+    vms_devtab_cleanup();
 
     kmem_cache_destroy(vms_proc_cache);
 

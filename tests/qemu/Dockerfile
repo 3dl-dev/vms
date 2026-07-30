@@ -70,29 +70,68 @@ RUN KVER=$(cat /tmp/kver) && \
     ls -la /src/kernel/vmsfs/vmsfs.ko && \
     modinfo /src/kernel/vmsfs/vmsfs.ko
 
-# Copy test source and build statically-linked test programs. Only
-# test_kmod_* here -- those are raw-ioctl programs needing just
-# src/kernel/vms_ioctl.h. test_syssvc_* (vms-1d9) needs the real libvms
-# build graph instead and is built separately below, via cmake/musl, from
-# the full source tree copied in that stage.
-COPY tests/qemu/test_kmod_*.c /src/tests/qemu/
-RUN for f in /src/tests/qemu/test_kmod_*.c; do \
+# Copy test source and build statically-linked test programs.
+#
+# GLOB, NEVER A LITERAL NAME (vms-1d9). Every tests/qemu/test_*.c is copied
+# by pattern and dispatched to a build recipe by pattern, so a suite added by
+# a future item reaches the image with no Dockerfile edit. Three recipes:
+#
+#   test_syssvc_*.c            -> NOT built here; built by the cmake/musl
+#                                 stage below against the REAL src/libvms
+#                                 public sys$ API (vms-1d9).
+#   test_kmod_devtab/procnam.c -> NOT built here; built below against
+#                                 src/libvmssys (the real kernel-interface
+#                                 client), see that stage's comment.
+#   everything else            -> plain gcc -static against vms_ioctl.h.
+#
+# `|| exit 1` is load-bearing: without it a compile failure only breaks the
+# `&&` for that one iteration, the loop continues, and RUN exits with the
+# status of the LAST iteration -- so a suite that stops compiling would be
+# silently absent from the initramfs while the image build stayed green.
+COPY tests/qemu/test_*.c /src/tests/qemu/
+RUN for f in /src/tests/qemu/test_*.c; do \
+        case "$f" in \
+            */test_syssvc_*.c) continue;; \
+            */test_kmod_devtab.c|*/test_kmod_procnam.c) continue;; \
+        esac; \
         out="${f%.c}"; \
-        gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel && \
+        gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel || exit 1; \
         echo "Built: $(basename $out)"; \
     done
 
+# The device-table test (vms-d0b) and the process-table test (vms-8019) drive
+# the real userspace kernel-interface
+# client rather than a hand-rolled ioctl copy, so the client libvms will call is
+# the client under test. That needs libvmssys's freestanding syscall trampoline
+# and string helpers linked in -- it does NOT pull in libvms; the libvms build
+# graph arrives in the NEXT stage (vms-1d9), which is a heavier, separate build.
+COPY src/libvmssys/ /src/libvmssys/
+RUN ARCH=$(uname -m) && \
+    for t in test_kmod_devtab test_kmod_procnam; do \
+        gcc -static -O2 -Wall -o /src/tests/qemu/$t \
+            /src/tests/qemu/$t.c \
+            /src/libvmssys/vms_kif.c \
+            /src/libvmssys/vms_string.c \
+            /src/libvmssys/arch/${ARCH}/syscall.S \
+            -I/src/kernel -I/src/libvmssys && \
+        echo "Built: $t (linked against src/libvmssys/vms_kif.c)" || exit 1; \
+    done
+
 # --- Userspace system-service layer (vms-1d9) ---------------------------
-# Everything above proves the KERNEL lock manager (raw ioctls). This stage
-# builds the REAL src/libvms public sys$ API statically (musl, same
-# OVMX_STATIC mode distro/Dockerfile.bootable already uses to produce the
-# bootable distro) so tests/qemu/test_syssvc_lock.c can call sys$enq /
-# sys$enqw / sys$deq -- not raw ioctls -- against a real /dev/vms. A static
-# musl binary needs no separate C runtime staged into the initramfs: it
-# carries its own libc, identically to how STARTUP.EXE/DCL.EXE already
-# boot with no dynamic linker present. This is the initramfs's ONLY
-# consumer of the OVMX build graph; the raw-ioctl test_kmod_* programs
-# above stay plain "gcc -static" against vms_ioctl.h, unchanged.
+# Everything above proves the KERNEL side: raw ioctls (test_kmod_*) and the
+# freestanding kernel-interface client (devtab/procnam). NONE of it links
+# src/libvms, so the PUBLIC sys$ entry points -- the half of the system every
+# Phase 1/3 item actually delivers -- were invisible to this gate: an
+# adversary reverted src/libvms/syssvc/sys_event.c wholesale to its stub and
+# the harness produced byte-identical output.
+#
+# This stage builds the REAL src/libvms public sys$ API statically (musl,
+# the same OVMX_STATIC mode distro/Dockerfile.bootable uses to produce the
+# bootable distro) so tests/qemu/test_syssvc_*.c can call sys$enq / sys$enqw
+# / sys$deq -- not raw ioctls -- against a real /dev/vms. A static musl
+# binary needs no separate C runtime staged into the initramfs: it carries
+# its own libc, identically to how STARTUP.EXE/DCL.EXE already boot with no
+# dynamic linker present.
 #
 # musl doesn't ship linux/ or asm/ UAPI headers -- symlink from
 # linux-libc-dev (same trick as distro/Dockerfile.bootable).
@@ -105,6 +144,14 @@ RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
 # Full source tree needed: the OVMX CMake graph resolves libvms's
 # dependency chain (vmsprocess, vmsfs, vmslnm, vmssys) itself -- see
 # CMakeLists.txt's "Subdirectories (order matters for dependencies)".
+#
+# `--target qemu_syssvc_tests` is an AGGREGATE target defined in
+# tests/qemu/CMakeLists.txt over a file(GLOB) of test_syssvc_*.c -- NOT a
+# binary named here. Naming one binary was a real, adversary-proven defect
+# in an earlier round of this item: the next item to add
+# tests/qemu/test_syssvc_event.c would have built and ctest-SKIPped fine
+# locally while never entering the initramfs and never running in QEMU,
+# with the job staying green.
 COPY . /src/repo/
 RUN cd /src/repo && \
     cmake -B build-static \
@@ -163,8 +210,10 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     [ -f /tmp/loop.ko ] && cp /tmp/loop.ko /initramfs/lib/modules/ || true && \
     # Block-device test image
     [ -f /vmsfs_test.img ] && cp /vmsfs_test.img /initramfs/test_data/ || true && \
-    # Test programs (statically linked, no libc needed in VM)
-    for f in /src/tests/qemu/test_kmod_*; do \
+    # Test programs (statically linked, no libc needed in VM). GLOB over
+    # every test_* binary the gcc stages produced -- the .c sources sitting
+    # in the same directory are not executable, so [ -x ] filters them out.
+    for f in /src/tests/qemu/test_*; do \
         [ -x "$f" ] && cp "$f" /initramfs/tests/ || true; \
     done && \
     # Public sys$ API test(s), statically linked against real libvms
@@ -172,9 +221,17 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # EVERY test_syssvc_* binary the qemu_syssvc_tests target produced, by
     # glob -- not one binary by literal name -- so a future test_syssvc_*.c
     # (e.g. test_syssvc_event.c) needs no Dockerfile edit to reach QEMU.
+    n_syssvc=0 && \
     for f in /src/repo/build-static/bin/test_syssvc_*; do \
-        [ -x "$f" ] && cp "$f" /initramfs/tests/ || true; \
+        [ -x "$f" ] || continue; \
+        cp "$f" /initramfs/tests/; \
+        n_syssvc=$((n_syssvc+1)); \
     done && \
+    # Fail the IMAGE BUILD, loudly, if the userspace sys$ layer produced
+    # nothing to stage. Without this the initramfs silently reverts to the
+    # kernel-only harness this item exists to replace, and the QEMU job
+    # stays green while proving nothing about src/libvms.
+    { [ "$n_syssvc" -ge 1 ] || { echo "FATAL: no test_syssvc_* binary staged into the initramfs -- the userspace public-sys\$ layer would be untested"; exit 1; }; } && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

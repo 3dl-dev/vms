@@ -1390,16 +1390,28 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 28,    "SYSTEM", 'E', "EXQUOTA",       "exceeded quota" },
         { 36,    "SYSTEM", 'E', "NOPRIV",        "no privilege for attempted operation" },
         { 44,    "SYSTEM", 'E', "ABORT",         "abort" },
+        /* ORACLE-PINNED (vms-8019): value and severity taken from the
+         * reference lab OpenVMS VAX V7.3 node VAX1 -- $SSDEF in
+         * SYS$LIBRARY:STARLET.MLB gives SS$_DUPLNAM 148, and
+         * F$MESSAGE(148) renders "%SYSTEM-F-DUPLNAM, duplicate name".
+         * Replaces 434/'E', which the same oracle disproves. */
+        { 148,   "SYSTEM", 'F', "DUPLNAM",       "duplicate name" },
         { 292,   "SYSTEM", 'E', "INSFMEM",       "insufficient dynamic memory" },
+        /* ORACLE-PINNED (vms-8019): $SSDEF SS$_IVLOGNAM 340;
+         * F$MESSAGE(340) -> "%SYSTEM-F-IVLOGNAM, invalid logical name".
+         * Replaces 596/'E' -- 596 is SS$_VOLINV on the oracle. */
+        { 340,   "SYSTEM", 'F', "IVLOGNAM",      "invalid logical name" },
         { 388,   "SYSTEM", 'E', "IVTIME",        "invalid time" },
-        { 434,   "SYSTEM", 'E', "DUPLNAM",       "duplicate name" },
         { 444,   "SYSTEM", 'W', "NOLOGNAM",      "no logical name match" },
         { 532,   "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges available" },
         { 548,   "SYSTEM", 'E', "IVIDENT",       "invalid identifier" },
         { 556,   "SYSTEM", 'E', "TIMEOUT",       "device timeout" },
         { 580,   "SYSTEM", 'E', "ILLIOFUNC",     "illegal I/O function" },
         { 588,   "SYSTEM", 'E', "NOMORENODE",    "no more cluster nodes" },
-        { 596,   "SYSTEM", 'E', "IVLOGNAM",      "invalid logical name" },
+        /* ORACLE-PINNED (vms-8019): $SSDEF SS$_VOLINV 596;
+         * F$MESSAGE(596) -> "%SYSTEM-F-VOLINV, volume is not software
+         * enabled". This slot used to be mislabelled IVLOGNAM. */
+        { 596,   "SYSTEM", 'F', "VOLINV",        "volume is not software enabled" },
         { 602,   "SYSTEM", 'E', "IVCHAN",        "invalid channel" },
         { 608,   "SYSTEM", 'E', "IVDEVNAM",      "invalid device name" },
         { 620,   "SYSTEM", 'E', "IVSSRQ",        "invalid system service request" },
@@ -1414,9 +1426,13 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 2160,  "SYSTEM", 'W', "ENDOFFILE",     "end of file" },
         { 2204,  "SYSTEM", 'W', "UNWIND",        "unwind in progress" },
         { 2212,  "SYSTEM", 'E', "NOCMKRNL",      "no CMKRNL privilege" },
+        /* ORACLE-PINNED (vms-8019): $SSDEF SS$_NONEXPR 2280;
+         * F$MESSAGE(2280) -> "%SYSTEM-W-NONEXPR, nonexistent process".
+         * Replaces 2540/'E' -- F$MESSAGE(2540) on the oracle is
+         * "%SYSTEM-F-RIGHTSFULL, rights list is full". */
+        { 2280,  "SYSTEM", 'W', "NONEXPR",       "nonexistent process" },
         { 2328,  "SYSTEM", 'W', "RESIGNAL",      "resignal condition" },
         { 2340,  "SYSTEM", 'S', "CONTINUE",      "continue execution" },
-        { 2540,  "SYSTEM", 'E', "NONEXPR",       "nonexistent process" },
         { 2552,  "SYSTEM", 'W', "OPINCOMPL",     "operation incomplete" },
         { 2584,  "SYSTEM", 'W', "SUSPENDED",     "process suspended" },
         { 2588,  "SYSTEM", 'W', "NOTQUEUED",     "not queued" },

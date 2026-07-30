@@ -168,6 +168,11 @@ if(BUILD_TESTS)
     add_subdirectory(tests/dcl)
     add_subdirectory(tests/vmsscs)
 
+    # tests/vmsssh: term_mapping unit test only (vms-97d). No libssh
+    # dependency — unlike src/vmsssh (the daemon), this must build and run
+    # unconditionally so ctest never reports a skip here.
+    add_subdirectory(tests/vmsssh)
+
     # Public sys$ API tests for the QEMU kernel-executive harness (vms-1d9,
     # epic vms-6b8 Phase 0.5). Links real src/libvms against a real
     # /dev/vms when present; SKIP (ctest exit 77), never a fake PASS,
@@ -191,6 +196,17 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(runtime_target_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
+
+    # The Rule 9 gate is a lint, and twice it certified the very regression it
+    # exists to catch (see the file header). This runs the recorded evasions
+    # against it on a sandbox copy of the tree and requires each one to drive
+    # it RED for its own specific reason. A gate nobody tries to evade is an
+    # assertion about nothing.
+    add_test(NAME runtime_target_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_runtime_target_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(runtime_target_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
 endif()
 
 # vmssshd requires libssh — skip if headers not available
@@ -198,9 +214,6 @@ find_path(LIBSSH_INCLUDE_DIR NAMES libssh/libssh.h)
 find_library(LIBSSH_LIBRARY NAMES ssh)
 if(LIBSSH_INCLUDE_DIR AND LIBSSH_LIBRARY)
     add_subdirectory(src/vmsssh)
-    if(BUILD_TESTS)
-        add_subdirectory(tests/vmsssh)
-    endif()
 else()
     message(STATUS "libssh not found — vmssshd will not be built")
 endif()

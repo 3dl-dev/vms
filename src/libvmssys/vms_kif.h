@@ -110,4 +110,79 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
                           uint32_t *requested_mode, char *resnam,
                           uint8_t *valblk);
 
+/* ================================================================
+ * Device table (executive-resident I/O database)
+ *
+ * The executive owns the devices; a process owns only its channels to
+ * them. A device attribute read here is the attribute every process
+ * on the node sees, and a characteristic set here is seen by every
+ * process on the node -- which is the whole difference between a VMS
+ * device and a private notion of one.
+ * ================================================================ */
+
+/* $ASSIGN a channel to a device by name. SS$_NOSUCHDEV if the
+ * executive has no such device; SS$_IVDEVNAM if the name is not a
+ * device name at all. */
+uint32_t vms_kif_assign(const char *devnam, uint32_t *chan);
+
+/* $DASSGN the channel. SS$_IVCHAN if it is not one of ours. */
+uint32_t vms_kif_dassgn(uint32_t chan);
+
+/* $ALLOC the device to this process -- this, and not $ASSIGN, is what
+ * makes a process the device's owner. SS$_DEVALLOC when it is already
+ * allocated to another process or another process holds channels to
+ * it; SS$_NOSUCHDEV when there is no such device. */
+uint32_t vms_kif_alloc(const char *devnam);
+
+/* $DALLOC the device. SS$_DEVNOTALLOC if this process does not have it
+ * allocated. */
+uint32_t vms_kif_dalloc(const char *devnam);
+
+/* Read a device row by name. SS$_NOSUCHDEV if there is no such device. */
+uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info);
+
+/* Read the device row behind an assigned channel. SS$_IVCHAN if the
+ * channel is not ours. */
+uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo *info);
+
+/* Enumerate the device table. Pass *index = 0 for the first row; each
+ * call fills info and advances *index. Returns SS$_NOMOREDEV when the
+ * scan is exhausted. */
+uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info);
+
+/* Set terminal characteristics through an assigned channel (the
+ * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
+ * if the caller holds no such channel. */
+uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
+                           uint64_t setchar, uint64_t clrchar,
+                           uint32_t width, uint32_t page);
+
+/* ================================================================
+ * Process table (executive-resident PCB directory)
+ *
+ * The executive owns the process name, so these are readers and a
+ * single writer over shared state -- not accessors for anything this
+ * process keeps to itself. A name set here is visible to every other
+ * process and survives execve().
+ * ================================================================ */
+
+/* Set this process's name ($SETPRN). SS$_DUPLNAM if the name is
+ * already in use within this process's UIC group. */
+uint32_t vms_kif_setprn(const char *prcnam);
+
+/* Read this process's row from the executive process table. */
+uint32_t vms_kif_getjpi_self(struct vms_procinfo *info);
+
+/* Resolve a process by VMS PID. SS$_NONEXPR if no such process. */
+uint32_t vms_kif_getjpi_pid(uint32_t vms_pid, struct vms_procinfo *info);
+
+/* Resolve a process by name within this process's UIC group.
+ * SS$_NONEXPR if no process in the group holds that name. */
+uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info);
+
+/* Enumerate the process table. Pass *index = 0 for the first row; each
+ * call fills info and advances *index. Returns SS$_NONEXPR when the
+ * scan is exhausted. */
+uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info);
+
 #endif /* _VMS_KIF_H */

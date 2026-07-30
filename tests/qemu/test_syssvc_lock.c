@@ -32,20 +32,26 @@
  * BOOTSTRAP NOTE (documented, not a workaround): the kernel module
  * requires a process to VMS_IOCTL_REGISTER before any other ioctl
  * (src/kernel/vms_module.c: "All other ioctls require a registered
- * process"). src/libvms/syssvc/sys_lock.c's ensure_kif_open() only opens
- * /dev/vms lazily; nothing in production code calls vms_kif_register()
+ * process"). src/libvms/syssvc/sys_lock.c's bind_to_executive() only opens
+ * /dev/vms; nothing in production code calls vms_kif_register()
  * yet -- process registration at image-activation time is Phase 3 work
- * (vms-pt1, "executive owns a process table"), not built. vms_kif.h's own
- * doc comment says the same thing ("1. Call vms_kif_open() ... 2. Call
+ * (vms-9fc / vms-pt1, "executive owns a process table"), not built. vms_kif.h's
+ * own doc comment says the same thing ("1. Call vms_kif_open() ... 2. Call
  * vms_kif_register() ... 3. Use vms_kif_* functions"). This test performs
  * that bootstrap step directly via the real vms_kif_open()/vms_kif_register()
  * entry points (the same ones test_kmod_*.c's raw-ioctl tests use) before
  * calling the public sys$ API -- it does not touch or bypass sys_lock.c's
- * do_enq/do_deq, which still make the exact ioctl calls every caller uses.
+ * do_enq/sys$deq, which still make the exact ioctl calls every caller uses.
+ * CONSEQUENCE, stated plainly: this proves the lock plumbing works through
+ * the public API, NOT that a normally activated OVMX image can use it --
+ * a real image never registers, so vms_module.c would reject its ioctls.
+ * That gap is vms-9fc, which this item blocks.
  *
  * Requires a real, insmod'd vms.ko at /dev/vms. If /dev/vms cannot be
- * opened, exits with EXIT_SKIP (77) and an honest message -- never a fake
- * pass (CLAUDE.md Rule 9 / vms-6b8 constraint: no silent fallback).
+ * opened -- which happens ONLY in the CI negative-control rig, never in
+ * the product (vms-0ff: PID 1 refuses to boot without the executive) --
+ * it exercises the no-fabricated-success checks in main() and exits with
+ * EXIT_SKIP (77), never a fake pass.
  */
 
 #include <stdio.h>
@@ -57,20 +63,42 @@
 
 /* NOTE: deliberately do NOT include lckdef.h here. It duplicates the
  * LCK$K_ and LCK$M_ constants already declared in starlet.h with DIFFERENT
- * (stale/drifted) numeric values for the LCK$M_ flag bits -- e.g. its
- * LCK$M_NOQUEUE value is 0x00000008 vs. starlet.h's oracle-pinned 0x0004 (see
- * tests/conformance/vms_programs/test_lock_constants.c, which checks
- * starlet.h's values only). #include-ing both in one translation unit
- * silently lets the later one win via macro redefinition, which would
- * make this test pass the WRONG bit pattern to sys$enq/sys$enqw and
- * corrupt the very assertions it exists to make. Flagged as a separate
- * finding (see vms-1d9 return data) rather than fixed here -- lckdef.h
- * has other in-tree includers outside this item's scope. */
+ * numeric values for the LCK$M_ flag bits -- lckdef.h:44 has LCK$M_NOQUEUE
+ * 0x00000008, starlet.h:846 has 0x0004, and eight more disagree. Which
+ * header is right is NOT settled here and is not this file's call: the
+ * divergence is tracked as vms-5bd and needs the oracle plus operator
+ * sign-off. What matters for this test is that #include-ing both in one
+ * translation unit silently lets the later one win via macro redefinition,
+ * which would pass a bit pattern to sys$enq/sys$enqw that neither header
+ * intended and corrupt the very assertions this file exists to make.
+ * starlet.h alone is used because it is what src/libvms/syssvc/sys_lock.c
+ * itself compiles against -- caller and implementation therefore agree,
+ * whatever the eventual oracle ruling turns out to be. */
 #include "starlet.h"
 #include "descrip.h"
 #include "ssdef.h"
-#include "lksdef.h"
 #include "vms_kif.h"
+
+/*
+ * Lock Status Block. Declared BY THE CALLER, deliberately -- there is no
+ * OVMX public lksdef.h and this test does not create one. On OpenVMS the
+ * LKSB is caller-allocated storage (traditionally two longwords plus an
+ * optional 16-byte value block); SYS$LIBRARY:STARLET.MLB on the VAX 7.3
+ * oracle carries NO $LKSB macro at all (%LIBRAR-W-NOMTCHFOU), so there is
+ * no VMS-published byte layout to pin a shared header against. Per Rule 8
+ * an OVMX-invented representation must be labelled as such and not
+ * presented as VMS-authentic; promoting sys_lock.c's private struct to a
+ * public header is a separate change needing operator sign-off, so it is
+ * NOT done here. The field order below mirrors
+ * src/libvms/syssvc/sys_lock.c's private struct because that is what the
+ * implementation under test writes through this pointer.
+ */
+struct lksb_caller {
+    uint16_t lksb$w_status;
+    uint16_t lksb$w_reserved;
+    uint32_t lksb$l_lkid;
+    char     lksb$b_valblk[16];
+};
 
 #define EXIT_SKIP 77
 
@@ -121,14 +149,14 @@ static int run_child(int c2p_write, int p2c_read)
     $DESCRIPTOR(resnam, "SYSSVC_LOCK_TEST1");
 
     /* --- EX+NOQUEUE must be denied: parent holds EX --- */
-    struct lksb lksb_ex = {0};
+    struct lksb_caller lksb_ex = {0};
     uint32_t st = sys$enq(0, LCK$K_EXMODE, &lksb_ex, LCK$M_NOQUEUE,
                            &resnam, 0, NULL, 0, NULL, 0, 0);
     CHECK(st == SS$_NOTQUEUED,
           "child: sys$enq EX+NOQUEUE denied while parent holds EX (public API)");
 
     /* --- CR+NOQUEUE must also be denied: EX is incompatible with CR --- */
-    struct lksb lksb_cr = {0};
+    struct lksb_caller lksb_cr = {0};
     st = sys$enq(0, LCK$K_CRMODE, &lksb_cr, LCK$M_NOQUEUE,
                  &resnam, 0, NULL, 0, NULL, 0, 0);
     CHECK(st == SS$_NOTQUEUED,
@@ -144,7 +172,7 @@ static int run_child(int c2p_write, int p2c_read)
         fail++;
 
     /* --- Now that the parent released, the SAME resource must grant --- */
-    struct lksb lksb_retry = {0};
+    struct lksb_caller lksb_retry = {0};
     st = sys$enqw(0, LCK$K_EXMODE, &lksb_retry, 0,
                   &resnam, 0, NULL, 0, NULL, 0, 0);
     CHECK((st & 1) && lksb_retry.lksb$l_lkid != 0,
@@ -171,40 +199,53 @@ int main(void)
 
     if (bootstrap("parent") < 0) {
         /*
-         * NO-SILENT-FALLBACK PROOF (vms-1d9 round 3 -- adversarial review
-         * of round 2 found this path proved nothing: it printed a bootstrap
-         * message and exited SKIP without ever calling a public sys$ entry
-         * point, so CLAUDE.md Rule 9 / vms-6b8's "fail honestly, never fake
-         * success" constraint for sys_lock.c was satisfied by code reading,
-         * not by a running assertion).
+         * NO-FABRICATED-SUCCESS PROOF, executed against the running
+         * artifact rather than asserted by code reading.
          *
-         * bootstrap()'s own vms_kif_open() call already failed above, but
-         * vms_kif_open() is idempotent on failure (vms_kif.c: the
-         * thread-local fd stays -1 and every call retries the same open),
-         * so calling the PUBLIC sys$enqw/sys$deq entry points here drives
-         * the REAL production code path: sys_lock.c's do_enq()/sys$deq()
-         * each call ensure_kif_open() themselves, and when THAT fails
-         * (same failure, independently re-derived, not reused from above)
-         * return SS$_NOSUCHDEV -- both as the function's return value AND
-         * written into the caller's LKSB. Assert on that status, not on a
-         * string this program authored.
+         * This branch is reached ONLY inside the CI negative control, a rig
+         * deliberately booted without insmod'ing vms.ko. It is NOT a product
+         * state and there is no product code path being validated here:
+         * vms-0ff ruled that OVMX has no "executive absent" mode at all
+         * (PID 1 refuses to boot without /dev/vms and pins it open for the
+         * life of the system), and the per-call SS$_NOSUCHDEV returns
+         * sys_lock.c used to make for this case were DELETED as a fiction.
+         *
+         * So this asserts a PROPERTY, not a VMS behaviour, and deliberately
+         * pins NO status value: a public sys$ entry point must never report
+         * SUCCESS when it did not reach the executive. That is the one thing
+         * that stays true regardless of what an unreachable executive would
+         * "mean", and it is the epic's signature defect -- a per-process
+         * fake that returns SS$_NORMAL and a fabricated lock ID looks
+         * identical to a working lock manager from inside one process.
+         * Asserting a specific constant here would freeze the superseded
+         * contract into a gate; asserting the odd/even success bit does not.
+         *
+         * bootstrap()'s vms_kif_open() already failed above, but it is
+         * idempotent on failure (vms_kif.c keeps the thread-local fd at -1
+         * and retries), so these calls drive the REAL production path in
+         * sys_lock.c -- do_enq()/sys$deq() reaching an ioctl on a closed
+         * descriptor -- and report whatever that produces.
          */
         $DESCRIPTOR(resnam_absent, "SYSSVC_LOCK_TEST_ABSENT");
-        struct lksb lksb_absent = {0};
+        struct lksb_caller lksb_absent = {0};
         uint32_t st = sys$enqw(0, LCK$K_EXMODE, &lksb_absent, 0,
                                 &resnam_absent, 0, NULL, 0, NULL, 0, 0);
-        CHECK(st == SS$_NOSUCHDEV,
-              "parent: sys$enqw returns SS$_NOSUCHDEV when /dev/vms is absent (public API, real status, not a fake success)");
-        CHECK(lksb_absent.lksb$w_status == SS$_NOSUCHDEV,
-              "parent: sys$enqw's own LKSB records SS$_NOSUCHDEV when /dev/vms is absent");
+        printf("  INFO: sys$enqw with no executive returned status %u\n", st);
+        CHECK(!(st & 1),
+              "parent: sys$enqw does NOT report success when the executive was never reached (public API, real returned status)");
+        CHECK(!(lksb_absent.lksb$w_status & 1),
+              "parent: sys$enqw's own LKSB does NOT record a success status when the executive was never reached");
+        CHECK(lksb_absent.lksb$l_lkid == 0,
+              "parent: sys$enqw fabricates no lock ID when the executive was never reached");
 
         uint32_t dst = sys$deq(0xDEADBEEF, NULL, 0, 0);
-        CHECK(dst == SS$_NOSUCHDEV,
-              "parent: sys$deq returns SS$_NOSUCHDEV when /dev/vms is absent (public API, real status, not a fake success)");
+        printf("  INFO: sys$deq with no executive returned status %u\n", dst);
+        CHECK(!(dst & 1),
+              "parent: sys$deq does NOT report success when the executive was never reached (public API, real returned status)");
 
-        printf("=== test_syssvc_lock: %d passed, %d failed (SKIPPED: no /dev/vms -- cross-process scenario not exercised, but the no-silent-fallback path above WAS) ===\n",
+        printf("=== test_syssvc_lock: %d passed, %d failed (SKIPPED: no /dev/vms -- cross-process scenario not exercised, but the no-fabricated-success checks above WERE) ===\n",
                pass, fail);
-        /* A failed no-silent-fallback assertion is a real regression, not
+        /* A failed no-fabricated-success assertion is a real regression, not
          * an honest skip -- report it as FAIL (exit 1), never masked as 77. */
         return fail > 0 ? 1 : EXIT_SKIP;
     }
@@ -212,7 +253,7 @@ int main(void)
     $DESCRIPTOR(resnam, "SYSSVC_LOCK_TEST1");
 
     /* 1. Parent takes EX via the PUBLIC sys$enqw -- not a raw ioctl. */
-    struct lksb lksb = {0};
+    struct lksb_caller lksb = {0};
     uint32_t st = sys$enqw(0, LCK$K_EXMODE, &lksb, 0,
                             &resnam, 0, NULL, 0, NULL, 0, 0);
     CHECK((st & 1) && lksb.lksb$l_lkid != 0,

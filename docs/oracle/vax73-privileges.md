@@ -64,13 +64,26 @@ SDA> EVALUATE PRV$V_<name>
 | `PRV$V_BYPASS`    | `0000001D` |  29     |
 | `PRV$V_ALTPRI`    | `0000000D` |  13     |
 
-**Note on `ALTPRI`.** On this VAX 7.3 node `PRV$V_ALTPRI` and `PRV$V_SETPRI`
-are the SAME bit (13) — they are aliases on VAX. The in-tree
-`src/libvms/include/prvdef.h` gives `ALTPRI` bit 36 and states it carries
-*Alpha* values, where the two are distinct. OVMX does not enforce either
-privilege, so this item does not change `prvdef.h`; the divergence is
-recorded here so a later item that DOES enforce priority privileges pins
-it deliberately rather than inheriting an unexamined constant.
+**Note on `ALTPRI` — and on `IMPERSONATE`, which is the same defect.** On this
+VAX 7.3 node `PRV$V_ALTPRI` and `PRV$V_SETPRI` are the SAME bit (13) — they
+are aliases on VAX. The in-tree `src/libvms/include/prvdef.h` gives `ALTPRI`
+bit 36 and states it carries *Alpha* values, where the two are distinct.
+
+The identical alias exists for `DETACH`: on VAX `PRV$V_DETACH` is bit 5 and
+the oracle's own `SHOW PROCESS/PRIVILEGES` prints that bit under the name
+`IMPERSONATE`, while `prvdef.h` gives `IMPERSONATE` the Alpha bit 37.
+
+**Consequence, recorded so it is not mistaken for a decision.**
+`src/vmsdcl/dcl_cmd_show.c` maps `ALTPRI`→bit 36 and `IMPERSONATE`→bit 37, so
+against any VAX-encoded mask those two rows are unreachable and bits 5 and 13
+print as nothing at all. The comment in that file says `DETACH` and `SETPRI`
+are absent "because the oracle did not print them" — that is wrong in its
+reasoning: the oracle DID print those bits, under their VAX alias names. The
+display is wrong either way, and it is not fixed here: OVMX enforces neither
+privilege, and the whole function is a `getenv("VMS_PRIVILEGES")`-fed stopgap
+marked for deletion once the executive reader lands (vms-9fc). A later item
+that DOES enforce priority or impersonation privileges must pin BOTH aliases
+deliberately rather than inherit an unexamined constant.
 
 **Defects this disproves.** Three in-tree tables disagreed with the oracle:
 
@@ -144,6 +157,19 @@ provoke it here. The OVMX executive REFUSES the operation outright with
 `SS$_NOPRIV` (36), which is the "insufficient privilege" condition whose text
 matches, and applies no partial change. Flagged for operator sign-off: this is
 a CHOICE of status for a condition the oracle did not show us, not a pin.
+
+**Also flagged for operator sign-off, same class.** `VMS_IOCTL_SETIDENT` is an
+OVMX-only interface — OpenVMS has no `$SETIDENT`, so there is no behaviour to
+match for any of its failures. Two of its statuses are therefore CHOICES, not
+pins, and both are listed here so the list is complete rather than partial:
+
+| Condition | Status chosen | Why |
+|-----------|---------------|-----|
+| caller without `SETPRV` asks to widen its authorized mask or change its UIC | `SS$_NOPRIV` (36) | oracle-pinned *text* ("insufficient privilege"), applied to a condition the oracle did not show |
+| user name buffer is not NUL-terminated, or is empty | `SS$_IVLOGNAM` | nearest existing "the name you gave is not a usable name" condition; nothing was measured |
+
+Neither is presented as VMS-authentic. If the operator prefers different
+statuses, both are one-line changes in `vms_ioctl_setident`.
 
 ---
 

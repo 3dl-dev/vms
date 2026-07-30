@@ -814,12 +814,28 @@ static int cmd_show_process_privileges(struct dcl_context *ctx)
      * OpenVMS VAX V7.3 node VAX1 (docs/oracle/vax73-privileges.md §4),
      * as is the " %-20s %s" line format.
      *
-     * DELIBERATELY ABSENT: DETACH and SETPRI. The oracle's own
-     * SHOW PROCESS/PRIVILEGES did not print them, so OVMX has no
-     * measured display text for them and does not invent one
-     * (CLAUDE.md Rule 10). Likewise AUDIT, IMPORT and the other names
-     * the oracle showed that prvdef.h has no bit for -- they are
-     * omitted rather than assigned a guessed bit.
+     * DELIBERATELY ABSENT: DETACH and SETPRI, and AUDIT, IMPORT and the
+     * other names the oracle showed that prvdef.h has no bit for -- they
+     * are omitted rather than assigned a guessed bit (CLAUDE.md Rule 10).
+     *
+     * CORRECTION, and a KNOWN-WRONG DISPLAY recorded rather than papered
+     * over: the earlier claim here that "the oracle did not print DETACH
+     * or SETPRI" was wrong in its reasoning. The oracle DID print bits 5
+     * and 13 -- under their VAX alias names IMPERSONATE and ALTPRI, which
+     * on VAX 7.3 ARE DETACH and SETPRI (docs/oracle/vax73-privileges.md
+     * §2). The rows below give IMPERSONATE and ALTPRI their prvdef.h
+     * *Alpha* bits 37 and 36, which no VAX-encoded mask ever sets, so
+     * against a VAX-encoded mask both rows are unreachable and bits 5 and
+     * 13 print as nothing.
+     *
+     * NOT FIXED HERE, deliberately: OVMX enforces neither privilege, and
+     * this whole function is a getenv("VMS_PRIVILEGES")-fed stopgap that
+     * is to be DELETED (not improved) once the executive reader lands --
+     * see the block at the head of this function. Picking an encoding for
+     * a display that is scheduled for deletion, for privileges nothing
+     * enforces, would be choosing a constant without an oracle pin. The
+     * divergence is recorded in the oracle doc so the item that DOES
+     * enforce them pins both aliases deliberately.
      */
     static const struct {
         const char *name;

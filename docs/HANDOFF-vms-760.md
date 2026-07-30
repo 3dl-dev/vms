@@ -159,36 +159,47 @@ interleaved cat-`0x02` DLM rebuild transactions.
 
 ## 2. The frontier (2026-07-30g, latest first)
 
-### 2a. LIVE: barrier stalls at step 1, and it is NOT the DLM
+### 2a. SOLVED — the step-1 stall was a RACE, and OVMX was the fast one
 
-**The cat-`0x02` `op 0x0d` shape is SOLVED and implemented** (§2b below — verbatim
-echo + `body[34]=0xf9`, 1367/1367 byte-exact, unit-tested). But the run that was
-meant to verify it never reached the DLM at all:
+OVMX answers the coordinator's `op 0x0a` GO **from the receive path in ~20 µs**.
+The coordinator's own `0x0a` fan-out takes **20–214 µs per additional member**. A
+step-1 `op 0x0b` that lands *while the coordinator is still fanning out* is acked
+with tag **`0x0260`** and response marker `0x00` — "received in the go phase,
+**not counted**" — instead of `0x0210` / `0x01`. The step is never tallied, the
+barrier stays one member short, and the whole cluster's transition freezes. (In
+`coord7` the coordinator later ran a wind-down with VAX1 and VAX2 *without* us —
+precisely the §4(p) failure mode.)
 
-| run | build | barrier | cat-`0x02` seen | cluster |
+**GROUNDED 6/6 across every 3-member run:**
+
+| run | `0x0b#1` vs the last `0x0a` | ack tag | releases | reached |
 |---|---|---|---|---|
-| `coord3` | echo + cat-01 mutations | 5 | 8 (mangled) | **VAX1+VAX3 dead, LOCKMGRERR** |
-| `coord4` | refuse | **5** | 15 (7 distinct → retransmits) | healthy |
-| `coord6` | grounded DLM | 1 | **0** | healthy *(lab not reset — void)* |
-| `coord7` | grounded DLM | **1** | **0** | healthy *(lab verified `CN_3`)* |
+| `coord2` | **after** all 3 GOs | `0x0210` | 2 | step 3 |
+| `coord4` | **after** all 3 GOs | `0x0210` | 4 | step 5 |
+| `coord1` | before last GO (−20 µs) | `0x0260` | 0 | step 1 |
+| `coord6` | before last GO (−30 µs) | `0x0260` | 0 | step 1 |
+| `coord7` | before last GO (−214 µs) | `0x0260` | 0 | step 1 |
+| `e15` | before last GO (−75 µs) | `0x0260` | 0 | step 1 |
 
-`coord7` completed the whole dialogue — `op 0x03` COMMIT, five `op 0x05` lock
-rebuilds, the `op 0x06` burst, `op 0x09`, barrier step 1 — and then the
-coordinator **never released step 1**. Response inventory is *identical* to
-`coord4` apart from the absent cat-`0x02`. **So the missing DLM traffic is a
-CONSEQUENCE of stalling at step 1, not its cause** — in `coord4` the DLM storm
-only began once step 5 was reached.
+Epoch 5 produced **both** outcomes, and OVMX's step-1 `0x0b` is **byte-identical**
+between a good and a bad run — so it is timing, not cluster state and not content.
 
-> **Do not assume this is a regression from the DLM change** — it should not
-> affect step 1 — **and do not assume it is variance either.** Both readings are
-> open; an agent is diffing `coord4` vs `coord7`. The single most useful thing to
-> establish: **did an `op 0x0c` release for step 1 ever arrive in `coord7`**, in
-> any form or on any VC, that OVMX failed to recognise? Our log prints nothing
-> for unhandled ops — that instrumentation gap is worth closing.
+> ⚠ **CONSEQUENCE: "the barrier reached step N" was NEVER a baseline.** `coord4`'s
+> step 5 was luck on this race, and the cat-`0x02` DLM work only became visible
+> *because* of that luck. **Every barrier-depth number in the rd history before
+> commit `43527ea` is a coin flip, not a measurement.** The handoff already
+> warned not to trust "5/12" for a different reason; this is the real mechanism.
 
-Specimens: `ovmx-760-barrier1-stall-20260730.pcap` (coord7) and
-`ovmx-760-barrier5-dlmrefused-20260730.pcap` (coord4), logs
-`~/vax/cluster/work/scsd-coord{4,7}.log`.
+**Fix (`43527ea`):** the GO reply is held `JOIN_BARRIER_GO_DELAY_MS` (3 ms). The
+sleep is taken in the receive path deliberately — the loop otherwise wakes only
+on traffic or a 1 s `SO_RCVTIMEO`, which would make the interval anywhere from
+3 ms to 1 s, and controlling it precisely is the whole point.
+
+**This is a general lesson, not a one-off.** OVMX is a userspace program on
+modern hardware answering a 1980s minicomputer. *Being faster than the reference
+implementation is itself a compatibility bug* wherever a peer's protocol assumes
+it can finish a fan-out before anyone replies. Suspect it again at any other
+multi-target broadcast point.
 
 ### 2b. SOLVED — the cat-`0x02` `op 0x0d` DLM response
 

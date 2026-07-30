@@ -218,4 +218,158 @@ struct vms_register_args {
 
 #define VMS_IOCTL_REGISTER  _IOWR(VMS_IOC_MAGIC, 0x40, struct vms_register_args)
 
+/* ================================================================
+ * Process table (executive-resident PCB directory)
+ *
+ * On OpenVMS the process name lives in the executive's process
+ * database, not in the process's own address space: $SETPRN writes it,
+ * $GETJPI resolves a process by it, and SHOW SYSTEM enumerates the
+ * table. That is why a VMS process name means anything at all -- every
+ * other process can see it.
+ *
+ * These ioctls put the same property behind /dev/vms. The entry is
+ * keyed by the Linux pid, which is invariant across execve(), so the
+ * name survives image activation without any userspace carrier.
+ * ================================================================ */
+
+/*
+ * VMS process names are 1-15 characters (OpenVMS System Services
+ * Reference, $SETPRN / $CREPRC prcnam argument). 16 bytes = 15
+ * significant characters plus the NUL terminator, matching the
+ * in-tree struct vms_pcb prcnam[16].
+ */
+#define VMS_PRCNAM_SIZE 16
+
+/*
+ * Inbound name transfer buffer -- OVMX DESIGN CHOICE, not a VMS format.
+ *
+ * A name travelling FROM userspace INTO the executive is carried in a
+ * buffer strictly larger than the longest legal VMS process name, so an
+ * OVERSIZED name arrives INTACT and the executive is the thing that
+ * rejects it. Copying an inbound name into a VMS_PRCNAM_SIZE field in
+ * userspace would truncate it into a legal-looking name and convert a
+ * rejection into a success -- for $SETPRN, silently naming the process
+ * something the caller never asked for; for the $GETJPI prcnam
+ * selector, silently resolving a DIFFERENT process.
+ *
+ * Oracle (VAX1, OpenVMS VAX V7.3, 2026-07-30, documented tool output):
+ *   $ SET PROCESS/NAME="IMPL8019NAM15XY"     ! 15 chars -> accepted
+ *   $ SET PROCESS/NAME="IMPL8019NAM15XYZ"    ! 16 chars
+ *   %SET-E-NOTSET, error modifying process name
+ *   -SYSTEM-F-IVLOGNAM, invalid logical name
+ *   $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM") ! old name UNCHANGED
+ *   IMPL8019NAM15XY
+ * VMS rejects the oversized name outright and leaves the existing name
+ * in place. It does not truncate, and it does not partially apply.
+ *
+ * The userspace copy is still bounded (at VMS_PRCNAM_XFER - 1), but
+ * that bound cannot turn a rejection into an acceptance: every name too
+ * long to fit in VMS_PRCNAM_SIZE is illegal, and VMS_PRCNAM_XFER is far
+ * larger than VMS_PRCNAM_SIZE, so a clipped name still has no NUL
+ * within the executive's inspection window and is still rejected.
+ */
+#define VMS_PRCNAM_XFER 64
+
+/*
+ * One row of the executive process table.
+ *
+ * uic is [group,member] packed as (group << 16) | member -- the same
+ * packing sys$getjpi's JPI$_UIC item returns. The executive derives it
+ * from the task's credentials; it is never supplied by the process
+ * itself (a process must not be able to declare its own UIC).
+ */
+struct vms_procinfo {
+    uint32_t vms_pid;                   /* VMS-style process ID */
+    uint32_t linux_pid;                 /* Linux pid backing the process */
+    char     prcnam[VMS_PRCNAM_SIZE];   /* process name ("" if unnamed) */
+    uint32_t uic;                       /* (group << 16) | member */
+    uint8_t  current_mode;              /* PSL_C_KERNEL..PSL_C_USER */
+    uint8_t  pad[3];
+    uint64_t cur_privs;                 /* current privilege mask */
+};
+
+/* Selector for VMS_IOCTL_GETJPI: how the target process is named. */
+#define VMS_JPI_SEL_SELF    0   /* the calling process */
+#define VMS_JPI_SEL_PID     1   /* by vms_pid */
+#define VMS_JPI_SEL_PRCNAM  2   /* by prcnam, within the caller's UIC group */
+
+struct vms_getjpi_args {
+    uint32_t select;            /* VMS_JPI_SEL_* */
+    uint32_t status;            /* return: SS$_ status */
+    struct vms_procinfo info;   /* in: vms_pid selector; out: the row */
+    /*
+     * The name selector lives OUTSIDE info, in an inbound transfer
+     * buffer, so an oversized name reaches the executive untruncated.
+     * info.prcnam is output-only: it is the row's name, never the
+     * lookup key.
+     */
+    char     sel_prcnam[VMS_PRCNAM_XFER];
+};
+
+/*
+ * Cursor-driven enumeration of the process table (the reader behind
+ * SHOW SYSTEM). Set index to 0 for the first row; each call returns
+ * one row and advances index. SS$_NONEXPR terminates the scan, which
+ * is what $PROCESS_SCAN returns when the wildcard search is exhausted.
+ */
+struct vms_procscan_args {
+    uint32_t index;             /* in: cursor; out: cursor for next call */
+    uint32_t status;            /* return: SS$_ status */
+    struct vms_procinfo info;   /* out: the row at the incoming cursor */
+};
+
+struct vms_setprn_args {
+    char     prcnam[VMS_PRCNAM_XFER];   /* new process name, untruncated */
+    uint32_t status;                    /* return: SS$_ status */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_SETPRN    _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_setprn_args)
+#define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
+#define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
+
+/*
+ * ABI lock for the process-table ioctls (vms-8019).
+ *
+ * The kernel side of this header gets _IOWR from <linux/ioctl.h>; the
+ * userspace side may instead fall back to the hand-rolled macros at the
+ * top of this file, and OVMX builds on two architectures. Nothing
+ * previously checked that all four combinations produce the same
+ * numbers -- the executive proof has only ever been RUN on aarch64, so
+ * the x86_64 half of that agreement was an assumption.
+ *
+ * These assertions turn it into a build failure instead. They are
+ * evaluated by every translation unit that includes this header, kernel
+ * or userspace, on whatever architecture is compiling -- so the CI
+ * x86_64 build proves the layout even where the QEMU proof cannot run.
+ *
+ * The literals are the asm-generic _IOC encoding written out by hand:
+ *   (dir << 30) | (sizeof(struct) << 16) | ('V' << 8) | nr
+ * with dir == 3 (_IOC_READ|_IOC_WRITE). If a struct grows, these fail
+ * and the ioctl NUMBER has changed -- which is a wire break, not a
+ * cosmetic one, and must be handled deliberately.
+ */
+_Static_assert(sizeof(struct vms_procinfo) == 40,
+               "vms_procinfo layout changed: process-table ioctl ABI break");
+_Static_assert(sizeof(struct vms_setprn_args) == 72,
+               "vms_setprn_args layout changed: VMS_IOCTL_SETPRN ABI break");
+_Static_assert(sizeof(struct vms_getjpi_args) == 112,
+               "vms_getjpi_args layout changed: VMS_IOCTL_GETJPI ABI break");
+_Static_assert(sizeof(struct vms_procscan_args) == 48,
+               "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
+/*
+ * The inbound transfer buffer must be strictly larger than the
+ * executive's inspection window, or an oversized name would be clipped
+ * to exactly VMS_PRCNAM_SIZE-1 characters and pass name_is_valid() --
+ * reintroducing the silent truncation this split exists to kill.
+ */
+_Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
+               "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
+_Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,
+               "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_GETJPI == 0xC0705642u,
+               "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0305643u,
+               "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
+
 #endif /* _VMS_IOCTL_H */

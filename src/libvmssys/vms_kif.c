@@ -376,3 +376,110 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 
     return args.status;
 }
+
+/* ================================================================
+ * Process table (executive-resident PCB directory)
+ * ================================================================ */
+
+uint32_t vms_kif_setprn(const char *prcnam)
+{
+    struct vms_setprn_args args;
+
+    if (!prcnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    /*
+     * Copy into the inbound transfer buffer, NOT into a
+     * VMS_PRCNAM_SIZE field: the executive decides whether the name is
+     * legal, and it can only do that if it receives the name the caller
+     * actually passed. Clipping here at VMS_PRCNAM_SIZE would hand the
+     * executive a legal-looking name and return SS$_NORMAL for a name
+     * VMS rejects with SS$_IVLOGNAM.
+     */
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.prcnam, prcnam, VMS_PRCNAM_XFER - 1);
+    args.prcnam[VMS_PRCNAM_XFER - 1] = '\0';
+
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_SETPRN, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    return args.status;
+}
+
+/*
+ * getjpi_common - issue one VMS_IOCTL_GETJPI with a prepared selector.
+ */
+static uint32_t getjpi_common(struct vms_getjpi_args *args,
+                              struct vms_procinfo *info)
+{
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_GETJPI, (unsigned long)args) < 0)
+        return 0x00000014;
+
+    if (info)
+        vms_memcpy(info, &args->info, sizeof(*info));
+
+    return args->status;
+}
+
+uint32_t vms_kif_getjpi_self(struct vms_procinfo *info)
+{
+    struct vms_getjpi_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.select = VMS_JPI_SEL_SELF;
+
+    return getjpi_common(&args, info);
+}
+
+uint32_t vms_kif_getjpi_pid(uint32_t vms_pid, struct vms_procinfo *info)
+{
+    struct vms_getjpi_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.select = VMS_JPI_SEL_PID;
+    args.info.vms_pid = vms_pid;
+
+    return getjpi_common(&args, info);
+}
+
+uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info)
+{
+    struct vms_getjpi_args args;
+
+    if (!prcnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    /*
+     * Same rule as vms_kif_setprn: the lookup key travels untruncated,
+     * in sel_prcnam. Clipping an oversized key to VMS_PRCNAM_SIZE would
+     * make it resolve whatever process happens to hold the first 15
+     * characters -- answering for a DIFFERENT process instead of
+     * rejecting the illegal name.
+     */
+    vms_memset(&args, 0, sizeof(args));
+    args.select = VMS_JPI_SEL_PRCNAM;
+    vms_strncpy(args.sel_prcnam, prcnam, VMS_PRCNAM_XFER - 1);
+    args.sel_prcnam[VMS_PRCNAM_XFER - 1] = '\0';
+
+    return getjpi_common(&args, info);
+}
+
+uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info)
+{
+    struct vms_procscan_args args;
+
+    if (!index)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    args.index = *index;
+
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_PROCSCAN, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    *index = args.index;
+    if (info)
+        vms_memcpy(info, &args.info, sizeof(*info));
+
+    return args.status;
+}

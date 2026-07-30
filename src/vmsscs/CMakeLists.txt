@@ -66,12 +66,23 @@ target_include_directories(vmsscs_member PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-760 - MSCP-over-SCS disk-client command builders (SET CONTROLLER
+# CHARACTERISTICS 0x04 + GET UNIT STATUS 0x03, byte-exact vs the golden af2
+# joiner commands). What the joiner sends as a disk CLIENT after NEW, on its own
+# MSCP$DISK connection, so an established VAX1 promotes it to MEMBER. MSCP is a
+# publicly documented DEC protocol (Rule 8: public opcodes + lab-wire capture);
+# plain POSIX + stdint template builders, no other vmsscs dependency.
+add_library(vmsscs_mscp STATIC scs_mscp.c)
+target_include_directories(vmsscs_mscp PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_mscp)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

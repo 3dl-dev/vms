@@ -143,3 +143,22 @@ set_tests_properties(vmsscs_member_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-760 - MSCP-over-SCS disk-client command builders: SET CONTROLLER
+# CHARACTERISTICS (0x04) + GET UNIT STATUS (0x03) byte-exact vs the golden af2
+# joiner commands, plus the END-response parser (0x84/0x83, status + returned
+# unit-word that drives the NEXT-UNIT enumeration). The disk-discovery the
+# joiner must complete after NEW before an established VAX1 commits it to MEMBER.
+add_executable(test_scs_mscp test_scs_mscp.c)
+
+target_include_directories(test_scs_mscp PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_mscp PRIVATE vmsscs_mscp)
+
+add_test(NAME vmsscs_mscp_unit COMMAND test_scs_mscp)
+set_tests_properties(vmsscs_mscp_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

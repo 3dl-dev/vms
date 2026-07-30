@@ -25,6 +25,9 @@
 #include "dcl/dcl_cmd.h"
 #include "dcl/symbol.h"
 #include "ssdef.h"
+/* Kernel-interface client: F$DEVICE enumerates the executive's device
+ * table through it (vms-fb9). See the note above populate_device_list. */
+#include "vms_kif.h"
 #include <vms/privs.h>
 #include "vmsfs/filespec.h"
 #include "sysgen_params.h"
@@ -563,11 +566,13 @@ static int lex_process(struct dcl_context *ctx, const char *args,
                        char *result, size_t result_size)
 {
     (void)args;
-    if (ctx->process_name[0]) {
-        strncpy(result, ctx->process_name, result_size - 1);
-    } else {
-        strncpy(result, "_FTA0:", result_size - 1);
-    }
+    /* No "_FTA0:" fallback (vms-fb9): F$PROCESS() reports the process name
+     * as it is. Filling an empty one in with an invented VMS device name
+     * made every DCL process claim the same identity, which nothing else
+     * could see or contradict -- the shape the operator rejected in the
+     * VMS_PRCNAM ruling (CLAUDE.md rule 10). The real name is
+     * executive-owned state OVMX does not have yet. */
+    strncpy(result, ctx->process_name, result_size - 1);
     result[result_size - 1] = '\0';
     return 0;
 }
@@ -1940,52 +1945,50 @@ static char dev_list[MAX_DEV_LIST][64];
 static int dev_count = 0;
 static int dev_index = 0;
 
+/*
+ * Fill dev_list from the executive's device table (vms-fb9).
+ *
+ * WHAT THIS USED TO BE: a hardcoded array -- "_OPA0:", "_FTA0:",
+ * "SYS$SYSDEVICE:" -- unioned with /proc/mounts, where every line whose
+ * device began with "/dev/" was uppercased into "_SDA1:"-style VMS names.
+ * F$DEVICE therefore enumerated devices that did not exist, and could not
+ * enumerate one that did. Same defect as SHOW DEVICE had, one layer over:
+ * a reader with its own private idea of what the system contains.
+ *
+ * The device list is executive-resident (CLAUDE.md rule 11). $DEVICE_SCAN
+ * over it is the only source here, and the names are the executive's own
+ * physical form -- not re-decorated with a leading underscore, because
+ * whether F$DEVICE returns "OPA0:" or "_OPA0:" on real VMS is not recorded
+ * in anything this work has, and inventing the difference would be inventing
+ * VMS behaviour (rule 10).
+ *
+ * The executive binding is not error-checked, for the same reason
+ * src/libvms/syssvc/sys_lock.c's bind_to_executive() is not: the state it
+ * would test for is one OVMX is never in (src/ovmx_init/ovmx_init.c refuses
+ * to boot without /dev/vms), and the only thing such a branch could do here
+ * is put back a private list.
+ */
 static void populate_device_list(const char *pattern)
 {
+    uint32_t index = 0;
+    struct vms_devinfo info;
+
     dev_count = 0;
     dev_index = 0;
 
-    /* Always include standard VMS devices */
-    static const char *std_devs[] = {
-        "_OPA0:", "_FTA0:", "SYS$SYSDEVICE:", NULL
-    };
+    (void)vms_kif_open();
 
-    for (int i = 0; std_devs[i] && dev_count < MAX_DEV_LIST; i++) {
-        if (pattern[0] == '\0' || pattern[0] == '*' ||
-            fnmatch(pattern, std_devs[i], FNM_CASEFOLD) == 0) {
-            strncpy(dev_list[dev_count], std_devs[i], 63);
-            dev_list[dev_count][63] = '\0';
-            dev_count++;
-        }
-    }
+    while (dev_count < MAX_DEV_LIST &&
+           vms_kif_devscan(&index, &info) == SS$_NORMAL) {
+        info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
 
-    /* Add mounted filesystems from /proc/mounts */
-    FILE *f = fopen("/proc/mounts", "r");
-    if (f) {
-        char line[512];
-        while (fgets(line, sizeof(line), f) && dev_count < MAX_DEV_LIST) {
-            char devname[128], mntpoint[128];
-            if (sscanf(line, "%127s %127s", devname, mntpoint) == 2) {
-                /* Skip pseudo-filesystems */
-                if (strncmp(devname, "/dev/", 5) == 0) {
-                    char vms_name[64];
-                    /* Convert /dev/sda1 → _SDA1: */
-                    const char *base = devname + 5;
-                    snprintf(vms_name, sizeof(vms_name), "_%s:", base);
-                    /* Uppercase */
-                    for (size_t j = 0; vms_name[j]; j++)
-                        vms_name[j] = (char)toupper((unsigned char)vms_name[j]);
+        if (pattern[0] != '\0' && pattern[0] != '*' &&
+            fnmatch(pattern, info.devnam, FNM_CASEFOLD) != 0)
+            continue;
 
-                    if (pattern[0] == '\0' || pattern[0] == '*' ||
-                        fnmatch(pattern, vms_name, FNM_CASEFOLD) == 0) {
-                        strncpy(dev_list[dev_count], vms_name, 63);
-                        dev_list[dev_count][63] = '\0';
-                        dev_count++;
-                    }
-                }
-            }
-        }
-        fclose(f);
+        strncpy(dev_list[dev_count], info.devnam, 63);
+        dev_list[dev_count][63] = '\0';
+        dev_count++;
     }
 }
 

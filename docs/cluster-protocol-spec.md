@@ -198,6 +198,37 @@ multicast and directed) and `satellite-niscs-boot-solicit.pcap` frame 1100
 | 65 | 3 | zero | unknown |
 | 68 | 4 | **connect/join nonce** | **GROUNDED**: `0x00000000` on every multicast HELLO, and the identical non-zero shared token (e.g. `ee 05 39 5b`) on every directed HELLO between VAX1/VAX2 *and* on the VAX3 boot SOLICIT — the same cluster-wide token the initial RE-specimens doc flagged. Confirmed frame examples: `scs-idle-baseline.pcap` frame 1 (zero, multicast) vs. frame 2/3 (`ee05395b`, directed); `satellite-niscs-boot-solicit.pcap` frame 1100 (`ee05395b`). |
 
+#### 4(a).0 Directed-HELLO addressing: abs 16 is the peer's LOGICAL address, not its HW MAC (GROUNDED, `vms-760`)
+
+On a **directed** HELLO the Ethernet destination (abs 0–5) and the SCA
+destination-logical address (abs 16–21) are **two different addresses**:
+
+| field | value |
+|---|---|
+| abs 0–5 | the peer's **hardware** MAC (where the frame is delivered) |
+| abs 16–21 | the peer's **cluster-logical** LAVC address `aa:00:04:00:<LE16(sysid)>` |
+| abs 24–29 | the **sender's own** cluster-logical address (§4a) |
+
+**GROUNDED**, `vax3-2to3-established-join-20260730.pcap` **frame 182** — VAX3
+answering VAX2's channel probe carries eth-dst `08:00:2b:78:56:b9` (VAX2's HW
+MAC) and abs 16 `aa:00:04:00:02:04` (VAX2's logical address).
+
+> **This corrects an earlier reading.** The rule was previously recorded as "the
+> wire mirrors abs 0 into abs 16." That inference came from a **2-node** lab in
+> which VAX1's HW MAC *is* its logical address (`aa:00:04:00:01:04`), so the two
+> fields were indistinguishable in every specimen available at the time. It is
+> wrong for any node whose HW MAC is not a DECnet `aa:00:04:..` address.
+>
+> **Failure signature if you mirror instead.** The peer silently DROPS the
+> reply. It re-sends its `0xb2` probe indefinitely (51 times in a 100 s OVMX
+> run) and never sends the `0xb4` that finalises the channel; a correct
+> exchange is **one** `0xb2` → `0xb3` → `0xb4` and then steady `0xb3`/`0xb4`
+> keepalives. With the channel unverified that peer never opens SCS connections
+> to the joiner at all, so the cluster-wide reconfiguration cannot run and the
+> joiner is stuck at `NEW` no matter how correct its SCS layer is. Because a
+> 2-node lab cannot exhibit this, **a third node with a non-DECnet HW MAC is
+> required to observe it** — which is how it was found.
+
 #### 4(a).1 The directed-HELLO offset-30 per-frame word — the NISCA channel-verify handshake (GROUNDED, `vms-d94`)
 
 The abs-30 word (SCA payload `[16:18]`; the state lives in the **low byte** at
@@ -1469,7 +1500,7 @@ genuine VMS node, and therefore the authority for connection semantics.
 | 0 | CONNECT-REQUEST | 110 | initiator | opens a connection to a named SYSAP; `remote_conid`=0, `local_conid`=own handle; `name@76` = target SYSAP, `result@92` = offered local SYSAP |
 | 1 | CONNECT-ECHO | 66 | acceptor | "received"; echoes `remote_conid`=initiator's handle, `local_conid` still 0. **Every** accept emits this first |
 | 2 | CONNECT-RESPONSE | 110 | acceptor | the ACCEPT — supplies the acceptor's handle in `local_conid`; binds the Con.ID pair |
-| 3 | CONNECT-CONFIRM | 62 | initiator | initiator acknowledges the bind. **Load-bearing**: without it the connection stays half-open and the peer will not accept the initiator's *next* connect |
+| 3 | CONNECT-CONFIRM | 62 | initiator | initiator acknowledges the bind. **Load-bearing**: without it the connection stays half-open and the peer will not accept the initiator's *next* connect — and, on the `VMS$VAXcluster` VC specifically, will not run the add-member dialogue on it at all (see below) |
 | 4 | CONNECT-ACCEPT (alt) | 62 | acceptor | the accept form used when answering a **member-initiated `MSCP$DISK`** connect (in place of op 2) |
 | 5 | CONNECT-CONFIRM (alt) | 58 | initiator | confirm paired with op 4 |
 | 6 | DISCONNECT-REQUEST | 62 | either | tears the connection down. **Bidirectional**: each side sends its own op 6 and answers the peer's with op 7 |
@@ -1516,6 +1547,34 @@ the next connect/lookup before earlier responses arrive. It is *not* stop-and-wa
 is strictly ordered is the **confirm**: a connection must be confirmed (op 3) before the
 initiator's next CONNECT-REQUEST will be accepted.
 
+#### The VC confirm gates the ENTIRE membership dialogue (GROUNDED, `vms-760`)
+
+The op-3 confirm on the joiner's own `VMS$VAXcluster` VC is not merely
+housekeeping for the *next* connect — it is what makes the peer's connection
+manager treat the VC as usable at all. Reference ordering:
+
+```
+frame 132  ss=10  J->M  CONNECT-REQUEST  VMS$VAXcluster
+frame 136  ss=11  M->J  op 2 ACCEPT
+frame 139  ss=13  J->M  op 3 CONFIRM            <-- load-bearing
+frames 142/143 ss=14,15 J->M  the 190-byte MODEL+PARAMS config
+frames 145/146          M->J  the peer's reciprocal config      (+0.3 ms)
+frame 162  +0.9543      M->J  the peer opens its OWN SCS$DIRECTORY connect back
+```
+
+**Omit frame 139 and everything from 145 onward disappears.** Observed
+directly (`d94-disc2.pcap`, `d94-disc3.pcap`): a joiner that sent only op 10 on
+its VC Con.ID got its config burst **bound and silently discarded** — no
+reciprocal config, and — the diagnostic tell — **no member-initiated connections
+back**, which a real member opens to a real joiner within ~15 ms. Restoring the
+confirm restored both immediately.
+
+> This is worth stating plainly because the failure looks nothing like a missing
+> acknowledgement: every frame the joiner sends is accepted at the SCS layer,
+> the Con.ID pair binds, `SHOW CLUSTER` shows the node as `NEW`, and the peer
+> simply never speaks again. It is easy to misread as an admission policy
+> decision taken *above* SCS. It is not — it is a half-open connection.
+
 ### 4(n) MSCP disk-client command layer (GROUNDED, same capture)
 
 §4(e) decoded MSCP request/response *framing*; this is the client command sequence a
@@ -1545,6 +1604,45 @@ OFFLINE.
 
 Seeding the first GUS with unit `0x0000` makes the server answer OFFLINE immediately and
 the enumeration terminates after one exchange — a silent, plausible-looking failure.
+
+### 4(o) The joiner's category-0x01 membership dialogue, end to end (GROUNDED, `vms-760`)
+
+§4(j) grounded the SYSAP envelope and the field map. This is the **order of
+events** on an established join, and in particular *when* each of the joiner's
+three config messages goes out — the part that decides whether admission starts.
+
+| # | t (ref) | dir | cat | op | meaning |
+|---|---------|-----|-----|----|---------|
+| 1 | +0.9394 | J→M | `0x01` | `0x14` | model advertisement |
+| 2 | +0.9394 | J→M | `0x01` | `0x01` | cluster parameters (VOTES, `"V7.3"`) |
+| 3 | +0.9397 | M→J | `0x01` | `0x14`+`0x01` | the peer reciprocates in kind |
+| 4 | **+5.8774** | J→M | `0x01` | **`0x02`** | **config/topology — this starts admission** |
+| 5 | +5.8777 | M→J | `0x04` | `0x00` | peer ack (0.3 ms later) |
+| 6 | +5.8804 | M→J | `0x01` | `0x03` | membership **COMMIT** request (`txn`,`cksum`) |
+| 7 | +5.8806 | J→M | `0x81` | `0x03` | joiner echoes the token |
+| 8 | +5.8808… | M→J | `0x01` | `0x05` | lock/resource-database rebuild requests |
+| 9 | +5.8815… | J→M | `0x81` | `0x05` | joiner echoes each token |
+| 10 | +5.8827… | M→J | `0x01` | `0x06` | burst, acked by the joiner with `0x04/0x49`,`0x04/0x00`,`0x04/0x02` |
+
+**The initial burst is MODEL+PARAMS only — but `0x02` is deferred, not
+omitted.** Sending `0x02` inside the initial burst leaves the peer silent
+(grounded previously); never sending it leaves the dialogue permanently
+half-finished. The reference gap is **~4.9 s**. *What the joiner is actually
+waiting on during those seconds is NOT grounded* — the delay is a replayed
+observation, not a decoded rule.
+
+**Which VC carries it.** A member opens its own `VMS$VAXcluster` VC back to the
+joiner **only if the joiner has not already opened one to it**. In the reference
+VAX3 opened its own VC to VAX1 (so VAX1 reused it) but not to VAX2 (so VAX2
+opened one, frame 208, and the whole commit dialogue rode VAX2's). Either way
+the dialogue rides **one** VC per peer; answer on whichever the request arrived
+on.
+
+**Two body fields of the admission `0x02` are REPLAYED, not decoded** —
+`body[10:12]` = `0x5041` and twelve `0x20` spaces at `body[40:52]`
+(frame 285). They are **not constants**: the same node's later `0x02`
+(frame 8658) carries `0x0004` and binary data in those places. One specimen of
+one variant; see §5(z).
 
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
@@ -1634,24 +1732,48 @@ For visibility, every field NOT marked GROUNDED above:
 
 ---
 
-### 5(z) OPEN — cluster-manager admission predicate (the current frontier)
+### 5(z) OPEN — what still blocks `MEMBER` (the current frontier)
 
-An OVMX joiner can now reproduce the entire SCS layer byte-faithfully: it opens its own
-`SCS$DIRECTORY`, `MSCP$DISK` and `VMS$VAXcluster` connections and the established member
-**accepts all three**; it completes the MSCP disk-discovery enumeration identically to a
-real VAX; it sends the MODEL+PARAMS add-member burst on its own VC. Yet the member does
-**not reciprocate**: it never answers the 190-byte config burst and — the diagnostic
-tell — it never **opens its own connections back**, which it does to a real joiner within
-~15 ms.
+> **Supersedes the previous 5(z).** That entry concluded admission was gated by
+> a predicate **above** the SCS frame layer, because the member bound every
+> connection and then never spoke again. That conclusion was **wrong**, and the
+> reasoning behind it is worth keeping as a caution: the joiner's own
+> `VMS$VAXcluster` VC was **half-open** — it had never been sent its op-3
+> confirm (§4m). A half-open VC accepts frames, binds the Con.ID pair, and
+> silently discards the SYSAP dialogue, which is indistinguishable from a policy
+> refusal if you only look at what the member sends. A second defect
+> (§4a.0, directed-HELLO abs 16) independently prevented every peer whose HW MAC
+> is not a DECnet address from verifying its channel at all.
 
-So admission is gated by a predicate **above** the SCS frame layer: the member's
-connection manager binds the connections but does not accept the node as a cluster peer.
-The unknown is what a real node *presents* that OVMX does not. Untested candidates, in
-order of promise: (a) the `0x41` START **body** content (OVMX's START completes, but
-fields inside it may carry CM-relevant identity/config); (b) HELLO / channel
-advertisement content (`0xb3`/`0xa0`) — a real node advertises a full VMS configuration;
-(c) SYSGEN-level identity a genuine node carries into the cluster. Diff VAX3's frames
-against OVMX's at these layers, **not** at the connection layer (that one is solved).
+**Resolved since:** with both fixed, OVMX opens its `SCS$DIRECTORY`, `MSCP$DISK`
+and `VMS$VAXcluster` connections and all three are accepted; it completes the
+MSCP unit enumeration identically to a real VAX; **all three members** now
+complete the `0x14`/`0x01` config exchange with it and open connections back;
+and OVMX sends the deferred admission `0x02` byte-identical to reference
+frame 285 in the SYSAP body.
+
+**Still open — no member acks the `0x02`, and `SHOW CLUSTER` reads `NEW`.**
+Two candidates, in order:
+
+1. **The member stops mid-way through its reciprocal discovery.** On the
+   reference, after the joiner tears down the transient directory connection the
+   member answers the joiner's op 6 with op 7 and then opens `MSCP$DISK` **back**
+   to the joiner (frames 174 → 175 → 176). Against OVMX the member answers the
+   directory lookups, exchanges credits, sends its own op 6, receives OVMX's
+   op 6 — **and then goes silent**: no op 7, no `MSCP$DISK` connect. OVMX's op 6
+   is byte-identical to the reference's modulo identity/seq/Con.ID, so the
+   divergence is in *state*, not in that frame. Start here.
+2. **The replayed `0x02` body fields** (`body[10:12]`, `body[40:52]`) may be
+   node- or cluster-specific rather than reusable. Only one specimen of the
+   admission variant exists. A second established-join capture — ideally a
+   *different* joiner — would settle whether those bytes are portable.
+
+> **Lab hygiene is now part of the method, not a footnote.** Each failed attempt
+> leaves a stale `NEW`/`BRK_NEW` CSB in the member's cluster view. After ~16 of
+> them in one session, `SHOW CLUSTER` began rendering an **empty table** — the
+> oracle degrades before it errors. **Clear the member's stale CSBs before any
+> MEMBER attempt, and treat any negative result gathered after a long run of
+> tests as inconclusive until reproduced on a clean cluster.**
 
 ## 6. Using the dissector
 

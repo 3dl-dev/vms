@@ -10,6 +10,32 @@ re-derive it:
 - **`docs/cluster-protocol-spec.md` §5(z)** — the open frontier, stated precisely.
 - **`docs/design-cluster-join-choreography.md`** — the join choreography + live results.
 
+> ## ⚠ UPDATED 2026-07-30 (session e) — the "one open question" below is ANSWERED
+>
+> **It was not a CM-level admission predicate. It was two ordinary defects**, both
+> found by diffing OVMX against the reference instead of theorising about it:
+>
+> 1. **The joiner never sent the op-3 CONFIRM on its own `VMS$VAXcluster` VC.**
+>    A half-open VC binds the Con.ID pair and then *silently discards* the SYSAP
+>    dialogue — which looks exactly like a policy refusal from the outside. That
+>    is why it was misread. See spec §4(m).
+> 2. **Directed HELLOs put the peer's HW MAC in abs 16 instead of its
+>    cluster-logical address.** Invisible in a 2-node lab (VAX1's HW MAC *is* its
+>    logical address); fatal for VAX2/VAX3. See spec §4(a).0.
+>
+> With both fixed: all three members complete the config exchange with OVMX and
+> open connections back, and OVMX sends the deferred admission `0x02`
+> (spec §4(o)) byte-identical to the reference. **Still `NEW`** — no member acks
+> the `0x02`, and the next divergence is located precisely in §5(z).
+>
+> **Do not trust a negative gathered late in a test session.** Stale `NEW` CSBs
+> accumulate in the member; after ~16, `SHOW CLUSTER` rendered an *empty table*.
+> Clear them and re-run before believing a "no response" result.
+>
+> Read **spec §4(a).0, §4(m), §4(o), §5(z)** and the `vms-760` progress notes.
+> Everything below this box is the pre-session-e state, kept for the lab
+> procedures and pointers, which are still accurate.
+
 ## Where it stands
 
 `OVMX_JOIN_SEQ=1` drives the full joiner-side choreography against the live lab and the

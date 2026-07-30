@@ -35,7 +35,25 @@ void vms_terminal_init(struct vms_terminal *term)
 {
     memset(term, 0, sizeof(*term));
 
-    strncpy(term->device_name, "_FTA0:", sizeof(term->device_name) - 1);
+    /*
+     * NO DEFAULT DEVICE NAME (vms-fb9). This used to seed "_FTA0:", which
+     * meant every DCL process on the system claimed the same terminal, and
+     * meant the name survived deleting the VMS_TERMINAL handoff and the
+     * "_FTA" pool -- the fabrication would simply have moved here. A VMS
+     * terminal name identifies a device in the executive's device table
+     * (src/kernel/vms_devtab.c); it is looked up, never defaulted. Until
+     * DCL can ask the executive which terminal this job is on, there is no
+     * name, and device_name stays empty (rule 10: no answer beats a
+     * plausible one).
+     *
+     * device_type keeps its "VT100" default for now: SHOW TERMINAL as a
+     * whole is not yet a reader (see the note above cmd_show_terminal in
+     * dcl_cmd_show.c), and its characteristic list does not match the
+     * oracle either. Changing one field of a display that is wrong as a
+     * unit would only make it harder to see that it is wrong. The oracle's
+     * answer for an unidentified terminal is "Unknown"
+     * (docs/oracle/vax73-terminal-device.md section 3).
+     */
     strncpy(term->device_type, "VT100", sizeof(term->device_type) - 1);
     /* owner is set later from context */
 

@@ -32,6 +32,10 @@ target_include_directories(vmsdcl PRIVATE
     ${VMS_LNM_INCLUDE_DIR}
     ${VMS_RMS_INCLUDE_DIR}
     ${VMS_PROCESS_INCLUDE_DIR}
+    # SHOW DEVICE reads the executive device table through the
+    # kernel-interface client (vms-fb9): src/libvmssys/vms_kif.h, which
+    # pulls src/kernel/vms_ioctl.h for the shared ioctl structures.
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
 )
 
 # We need POSIX APIs (fork, sigaction, strncasecmp, realpath, etc.)

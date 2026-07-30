@@ -1554,22 +1554,20 @@
    SYS$SYSDEVICE:[USERS.SMITH]
 
 2 DEVICE
- Displays information about mounted devices.
+ Displays information about the devices in the system
+ I/O database.
 
  Format: SHOW DEVICE [device-name]
 
- Lists mounted filesystems and their characteristics,
- displayed as VMS device names. Without an argument,
- shows all mounted devices.
-
-3 /FULL
- Shows extended device characteristics including
- volume label, free space, and mount status.
+ Without an argument, lists every device the system
+ knows about. With a device name, lists that one device;
+ if there is no such device the command reports
+ %SYSTEM-W-NOSUCHDEV.
 
 3 Examples
 
  $ SHOW DEVICE
- $ SHOW DEVICE DKA0:
+ $ SHOW DEVICE OPA0:
 
 2 ENTRY
  Displays information about batch or print queue entries.

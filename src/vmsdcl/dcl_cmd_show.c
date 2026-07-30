@@ -245,7 +245,11 @@ static int cmd_show_system(struct dcl_command *cmd)
 {
     (void)cmd;
 
-    struct dcl_context *ctx = dcl_get_context();
+    /* No dcl_get_context() here any more: the only thing this function
+     * used the DCL context for was ctx->process_name, which it printed as
+     * a FABRICATED process row when the PCB was empty (vms-8019). The row
+     * source is now the executive's table, so the context is not a source
+     * of process identity at all. */
 
     struct utsname uts;
     uname(&uts);
@@ -322,18 +326,54 @@ static int cmd_show_system(struct dcl_command *cmd)
         read_proc_cpu((int)info.linux_pid, cpu_str, sizeof(cpu_str));
 
         /*
-         * State, Pri, I/O, Page flts and Pages are printed as "---".
+         * ============================================================
+         * UNPINNED, AND DELIBERATELY SO. THE ROW FORMAT IS vms-6a7's,
+         * NOT THIS ITEM'S. DO NOT SETTLE IT HERE.
+         * ============================================================
          *
-         * They are properties of the VMS SCHEDULER and of VMS process
-         * accounting, and the OVMX executive maintains neither -- the
-         * row carries identity, not scheduling state. The values that
-         * used to appear in these columns ("CUR", 4, 0, 0, 340) were
-         * constants, and repeating a constant once per enumerated
-         * process would turn one decoration into a table of them.
-         * Under Rule 10 the answer to "VMS reports something OVMX does
-         * not compute" is not a plausible-looking number; "---" is the
-         * same not-available marker this function already uses for
-         * uptime. Sourcing them for real is a separate item.
+         * State, Pri, I/O, Page flts and Pages print "---".
+         *
+         * Be clear about what that is: it is a STAND-IN, not an answer.
+         * Under Rule 10 there are two legal outcomes -- reproduce what
+         * VMS prints, or do not print the column at all -- and "---" is
+         * neither. It was chosen without the oracle, so it is a placeholder
+         * this item is knowingly leaving behind, not a decision.
+         *
+         * Why it is not settled here: vms-6a7 ("SHOW SYSTEM lists every
+         * process on the system") is BLOCKED BY vms-8019 and explicitly
+         * owns the display -- "Match the real VMS column set and header
+         * (pin the format to the oracle -- the ~/vax lab has VAX 7.3; do
+         * not invent a layout)". Pinning a layout inside vms-8019 would
+         * be inventing one in the item that was told not to.
+         *
+         * THE QUESTION vms-6a7 MUST PUT TO THE ORACLE, verbatim:
+         *   "What does OpenVMS VAX 7.3 SHOW SYSTEM print in the State,
+         *    Pri, I/O, Page flts and Pages columns -- and is any of it
+         *    sourceable from what the OVMX executive actually holds?"
+         * If the answer is that OVMX cannot source them, the Rule 10
+         * answer is to DROP the columns, not to keep this marker.
+         *
+         * What this item did settle, and what must not regress: the
+         * values that used to sit here ("CUR", 4, 0, 0, 340) were
+         * constants printed for the one row the old code could see.
+         * Repeating a constant once per enumerated process would turn a
+         * single decoration into a table of them, which is strictly
+         * worse than admitting the column is not sourced.
+         */
+        /*
+         * The empty Process Name column for an unnamed row is the SECOND
+         * unpinned choice here, and it belongs to vms-6a7 too. See the
+         * JPI$_PRCNAM comment in src/libvms/syssvc/sys_process.c for why
+         * the invented "_%08X" name was deleted (it was a name only its
+         * owner could resolve) -- but deleting a wrong answer did not
+         * produce a right one.
+         *
+         * THE QUESTION vms-6a7 MUST PUT TO THE ORACLE, verbatim:
+         *   "What does OpenVMS VAX 7.3 SHOW SYSTEM display in the Process
+         *    Name column for a process created with no process name, and
+         *    does the executive assign one at creation?"
+         * Until that is answered, a blank is what OVMX prints, and it is
+         * a placeholder, not a match.
          */
         printf(" %08X %-15s %-5s %3s %9s  %s  %9s  %5s\n",
                info.vms_pid,

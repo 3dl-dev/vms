@@ -197,10 +197,19 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
                  * facade this item exists to delete: nothing else could
                  * resolve it (the executive skips unnamed rows in
                  * find_by_name), so $GETJPI reported a name to its owner
-                 * that no other process could see. OVMX does not yet
-                 * assign a default name at process creation the way VMS
-                 * does; until it does, an unnamed process reports no
-                 * name rather than one only it believes in.
+                 * that no other process could see.
+                 *
+                 * UNPINNED, AND OWNED BY vms-6a7 (which is blocked by
+                 * this item). Deleting a wrong answer did not produce a
+                 * right one: the empty name is a PLACEHOLDER, chosen
+                 * without the oracle, not a match. The question vms-6a7
+                 * must put to the oracle, verbatim: "What does OpenVMS
+                 * VAX 7.3 report for JPI$_PRCNAM of a process created
+                 * with no process name, and does the executive assign one
+                 * at creation?" Until then OVMX reports no name rather
+                 * than one only its owner believes in. Do not settle it
+                 * here -- see the matching comment in
+                 * src/vmsdcl/dcl_cmd_show.c cmd_show_system().
                  */
                 if (item->bufaddr) {
                     uint16_t len = (uint16_t)strlen(info.prcnam);

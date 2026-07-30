@@ -26,6 +26,16 @@
 # without an executive; it is the statement that when the reader has
 # nothing to read, it invents nothing.
 #
+# WHY THIS IS CONSISTENT WITH DELETING THE HOST lib$getjpi BLOCK, which the
+# same change did on the stated ground that a host assertion about a VMS
+# service is an assertion about a system OVMX never runs as: the deleted
+# block asserted a SUCCESS that VMS could never produce with no executive
+# present, whereas this gate asserts an ABSENCE OF FABRICATION, which is a
+# property of dcl_cmd_show.c's own source and holds in every environment --
+# including the QEMU runtime, where P7/P8 of tests/qemu/test_syssvc_procnam.c
+# prove the same function printing REAL rows. One claims a VMS state; the
+# other claims the code has no invented-row branch left in it.
+#
 # The header line the rows would follow is:
 #   "  Pid    Process Name    State  Pri      I/O       CPU ..."
 # and a process row begins with a space and 8 hex digits (" 000004D2 ...").

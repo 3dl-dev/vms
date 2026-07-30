@@ -356,12 +356,22 @@ int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
         memcpy(out + 14 + 62, namebuf, SCS_DIR_NAME_LEN);
     }
 
-    /* Result field [78:94]: affirmative descriptor or the GROUNDED negative
-     * marker "NOT PRESENT HERE". */
-    if (p->affirmative) {
-        memcpy(out + 14 + 78, dir_affirmative_result, SCS_DIR_RESULT_LEN);
-    } else {
+    /* Result field [78:94]. Per-name selection (vms-760):
+     *   - negative (p->affirmative == 0): the GROUNDED literal "NOT PRESENT HERE"
+     *   - MSCP$DISK HIT: the queried NAME echoed, 16-byte blank-padded. GROUNDED
+     *     byte-exact (af2-firsttimer-established.pcap: OVMX's MSCP$DISK lookup
+     *     RESPONSE result@92 == 'MSCP$DISK       '). This DIFFERS from the
+     *     VMS$VAXcluster HIT, so the affirmative descriptor is NOT one-size.
+     *   - any other affirmative (VMS$VAXcluster): the SCA#38 descriptor blob.
+     * The MSCP$DISK-name test uses a 9-char prefix compare so the caller may pass
+     * either a NUL- or blank-terminated name. */
+    if (!p->affirmative) {
         memcpy(out + 14 + 78, SCS_DIR_NOT_PRESENT, SCS_DIR_RESULT_LEN);
+    } else if (memcmp(p->name, "MSCP$DISK", 9) == 0) {
+        /* result == the queried name, same 16-byte blank-padded form as [62:78]. */
+        memcpy(out + 14 + 78, out + 14 + 62, SCS_DIR_RESULT_LEN);
+    } else {
+        memcpy(out + 14 + 78, dir_affirmative_result, SCS_DIR_RESULT_LEN);
     }
     return 0;
 }
@@ -420,6 +430,48 @@ int scs_dir_build_lookup_request(const struct scs_dir_lookup_params *p,
         memcpy(out + 14 + 62, namebuf, SCS_DIR_NAME_LEN);
     }
     /* result [78:94] stays zeros (a request carries no result). */
+    return 0;
+}
+
+int scs_dir_build_mscp_echo(const struct scs_dir_params *p,
+                            uint8_t out[SCS_DIR_ECHO_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    /* Same 66-byte SCA class as the directory CONNECT-ECHO. */
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_echo_tmpl, SCS_DIR_ECHO_SCA_LEN, p->recv_ack, p->send_seq,
+                     p->incarnation, out);
+    /* remote = member's MSCP client handle (echoed); local stays 0 for the echo. */
+    put_le32(out + 14 + 50, p->remote_conid);
+    /* vms-760 delta (1): opcode [16] = 0x4b (data-phase; the VC to OVMX is up),
+     * NOT the 0x5b the directory-echo template carries. GROUNDED from the pcap. */
+    out[14 + 16] = SCS_MSGTYPE_SEQAPP;
+    /* vms-760 delta (2): the truncated SYSAP-name tail [62:66] = 'MSCP' (the
+     * 66-byte SCA window clips 'MSCP$DISK' after 4 bytes), NOT the template's
+     * 'SCS$'. GROUNDED from the pcap. */
+    memcpy(out + 14 + 62, "MSCP", 4);
+    return 0;
+}
+
+int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
+                              uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    /* Structurally the op=3 dir CONNECT-CONFIRM (same 62-byte SCA, opcode 0x5b,
+     * marker 0x00010000, no SYSAP names). */
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_confirm_tmpl, SCS_DIR_CONFIRM_SCA_LEN, p->recv_ack,
+                     p->send_seq, p->incarnation, out);
+    /* Con.ID pair bound: remote = member's MSCP client handle, local = OVMX's
+     * fresh MSCP server handle (the admission act for OUR server connection). */
+    put_le32(out + 14 + 50, p->remote_conid);
+    put_le32(out + 14 + 54, p->local_conid);
+    /* vms-760: the SINGLE fixed-byte delta vs the confirm -- op [46:48] = 4. */
+    put_le16(out + 14 + 46, SCS_DIR_OP_ACCEPT);
     return 0;
 }
 

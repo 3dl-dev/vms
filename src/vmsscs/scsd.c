@@ -222,6 +222,12 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
  * MSCP$DISK). Distinct from 0x0001 (local), 0x0002 (joiner VC), 0x0007 (dir),
  * 0x0008 (own dir). */
 #define OVMX_MSCP_CONID   (SCS_CONNECT_OVMX_CONID_BASE | 0x000Au)
+/* vms-760 SERVER-FIRST established-join: OVMX's MSCP$DISK SERVER connection
+ * handle -- the fresh local Con.ID OVMX supplies when it ACCEPTS the MEMBER's
+ * inbound MSCP$DISK connect (op=4 accept). Distinct from every other handle:
+ * 0x0001 VC(local)/0x0002 VC(joiner)/0x0007 dir-server/0x0008 dir-client/
+ * 0x000A MSCP-client. Opaque to the peer (OVMX design choice, scs_connect.h). */
+#define OVMX_MSCP_SERVER_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x000Bu)
 
 /* Absolute frame offsets used by the responder (spec byte-offset convention:
  * 0 = first byte of Ethernet dst). */
@@ -312,6 +318,17 @@ struct peer_state {
     uint32_t mscp_remote_conid;    /* the member's MSCP handle on OUR connection (from its accept) */
     uint16_t mscp_req_seq;         /* send_seq of our MSCP CONNECT-REQUEST (retransmits REUSE it) */
     struct timespec last_mscp_req; /* CLOCK_MONOTONIC of our last MSCP CONNECT-REQUEST (retx) */
+    /* --- vms-760 SERVER-FIRST established-join: OVMX serves the MEMBER-OPENED
+     * MSCP$DISK connect (member = VMS$DISK_CL_DRVR client, OVMX = MSCP$DISK
+     * server). DISTINCT from the mscp_* CLIENT fields above (that is OVMX's own
+     * outbound MSCP connect, driven only by the sequencer). This server path is
+     * additive and runs on the DEFAULT path. --- */
+    int      mscp_srv_bound;       /* we sent the op=4 accept binding OUR server handle */
+    int      mscp_srv_confirmed;   /* the member sent its op=5 confirm on this connection */
+    uint32_t mscp_srv_remote_conid;/* the member's MSCP CLIENT Con.ID (its local in its op=0 connect) */
+    long     mscp_srv_accepts;     /* op=4 accepts we sent this peer */
+    uint16_t mscp_srv_echo_seq;    /* send_seq allocated for the op=1 echo (reused on retransmit) */
+    uint16_t mscp_srv_accept_seq;  /* send_seq allocated for the op=4 accept (reused on retransmit) */
     /* --- vms-760: the NEW->MEMBER join SEQUENCER. The joiner presents the FULL
      * dir-CLIENT connection-set in strict stop-and-wait order on the ONE shared
      * per-channel send_seq (docs/design-cluster-join-choreography.md): own dir
@@ -777,6 +794,7 @@ int main(int argc, char **argv)
     long cm_config_frames = 0;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
     long cm_response_sent = 0;   /* vms-224: 0x81 responses to member 0x03/0x05 txns */
     long padded_sent = 0;        /* vms-9f3: padded directed HELLOs sent (sec 4k channel verify) */
+    long mscp_srv_accepts = 0;   /* vms-760: op=4 MSCP$DISK connect-ACCEPTs we sent (server-first) */
 
     /* OVMX identity for the phase-2 START/config body (vms-21e). Resolved once;
      * shared by every peer's START responder. */
@@ -1646,6 +1664,115 @@ int main(int argc, char **argv)
             }
         }
 
+        /* (b1.5) vms-760 SERVER-FIRST established-join: OVMX serves the
+         * MEMBER-OPENED MSCP$DISK connect. When an established member admits a
+         * first-timer joiner it OPENS an MSCP$DISK SCS connection TO the joiner
+         * (member = VMS$DISK_CL_DRVR client) and expects the joiner (OVMX, the
+         * MSCP$DISK server) to ACCEPT it. Reference af2-firsttimer-established
+         * pcap (cycle 1, rel~143.758): M->J op=0 connect (msgtype 0x4b, name@76
+         * 'MSCP$DISK', remote Con.ID 0, local Con.ID = member's MSCP CLIENT
+         * handle) -> OVMX replies op=1 echo then op=4 accept (binding a FRESH
+         * OVMX MSCP server handle) -> member sends op=5 confirm. This is additive
+         * server behavior and runs on the DEFAULT path (independent of the
+         * OVMX_JOIN_SEQ sequencer). Placed BEFORE the (c) SCS-envelope handler so
+         * the MSCP$DISK connect is not mis-answered as a VMS$VAXcluster connect
+         * (both carry remote Con.ID 0; the name@76 is the discriminator). */
+        if (do_connect && n >= 72 &&
+            (buf[30] == SCS_MSGTYPE_SEQAPP || buf[30] == SCS_DIR_OPCODE ||
+             buf[30] == SCS_DIR_OPCODE_RETX)) {
+            uint16_t mop = (uint16_t)buf[60] | ((uint16_t)buf[61] << 8);
+            uint32_t m_rconid = (uint32_t)buf[64] | ((uint32_t)buf[65] << 8) |
+                                ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
+            uint32_t m_lconid = (uint32_t)buf[68] | ((uint32_t)buf[69] << 8) |
+                                ((uint32_t)buf[70] << 16) | ((uint32_t)buf[71] << 24);
+            uint16_t m_seq = (uint16_t)buf[34] | ((uint16_t)buf[35] << 8);
+
+            /* op=0 CONNECT-REQUEST naming MSCP$DISK (remote handle not yet
+             * learned). n >= 92 so name@76 [76:92] is in-frame. */
+            if (mop == SCS_DIR_OP_CONNECT && m_rconid == 0 && n >= 92 &&
+                memcmp(buf + 76, "MSCP$DISK       ", 16) == 0) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps != NULL) {
+                    if (!ps->vc.initialized) {
+                        scs_vc_init(&ps->vc);
+                    }
+                    memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* member src-logical */
+                    scs_vc_note_recv(&ps->vc, m_seq);
+                    ps->mscp_srv_remote_conid = m_lconid; /* member's MSCP CLIENT handle */
+
+                    /* Idempotent stop-and-wait: allocate the echo/accept send_seq
+                     * ONCE on first connect and REUSE it on every retransmit of the
+                     * member's op=0 (never re-advance -- the shared per-channel
+                     * send_seq must stay contiguous; re-advancing on each retransmit
+                     * poisons the sequence exactly like the 760mscp hole). Mirrors
+                     * the "allocate once" pattern of joiner_req_seq/mscp_req_seq. */
+                    int retx = ps->mscp_srv_bound;
+                    if (!retx) {
+                        ps->mscp_srv_echo_seq   = scs_seq_advance(&ps->vc.seq);
+                        ps->mscp_srv_accept_seq = scs_seq_advance(&ps->vc.seq);
+                    }
+
+                    struct scs_dir_params dp;
+                    memset(&dp, 0, sizeof(dp));
+                    memcpy(dp.dst_mac, ps->eth_mac, 6);
+                    memcpy(dp.src_mac, our_hw_mac, 6);
+                    memcpy(dp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
+                    memcpy(dp.peer_logical, ps->logical, 6);
+                    dp.remote_conid = m_lconid; /* echo the member's client handle */
+                    dp.incarnation = ps->incarnation; /* §4i established-join echo */
+
+                    /* op=1 echo (local Con.ID stays 0). */
+                    dp.local_conid = 0;
+                    dp.recv_ack = ps->vc.seq.recv_seq;
+                    dp.send_seq = ps->mscp_srv_echo_seq;
+                    uint8_t eframe[SCS_DIR_ECHO_FRAME_LEN];
+                    if (scs_dir_build_mscp_echo(&dp, eframe) == 0) {
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, eframe, sizeof(eframe));
+                    }
+
+                    /* op=4 accept: bind OUR fresh MSCP server handle. */
+                    dp.local_conid = OVMX_MSCP_SERVER_CONID;
+                    dp.recv_ack = ps->vc.seq.recv_seq;
+                    dp.send_seq = ps->mscp_srv_accept_seq;
+                    uint8_t aframe[SCS_DIR_CONFIRM_FRAME_LEN];
+                    if (scs_dir_build_mscp_accept(&dp, aframe) == 0 &&
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, aframe,
+                                      sizeof(aframe)) > 0) {
+                        ps->mscp_srv_bound = 1;
+                        ps->mscp_srv_accepts++;
+                        mscp_srv_accepts++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-MSCPSRV, accepted member MSCP$DISK connect:"
+                               " local=0x%08X remote=0x%08X (server-first)\n",
+                               (unsigned)OVMX_MSCP_SERVER_CONID, m_lconid);
+                        fflush(stdout);
+                    }
+                }
+                continue;
+            }
+
+            /* op=5 CONFIRM binding OUR MSCP$DISK server connection: the member
+             * acks our op=4 accept (remote Con.ID == OUR server handle, local ==
+             * the member's MSCP client handle). Con.ID-signature, opcode-agnostic. */
+            if (mop == SCS_DIR_OP_MSCP_CONFIRM && m_rconid == OVMX_MSCP_SERVER_CONID) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps != NULL) {
+                    if (!ps->vc.initialized) {
+                        scs_vc_init(&ps->vc);
+                    }
+                    scs_vc_note_recv(&ps->vc, m_seq);
+                    ps->mscp_srv_confirmed = 1;
+                    ps->mscp_srv_remote_conid = m_lconid;
+                    log_ts(stdout);
+                    printf(" SCSD-I-MSCPSRVOK, member confirmed OUR MSCP$DISK server"
+                           " connection: local=0x%08X remote=0x%08X\n",
+                           (unsigned)OVMX_MSCP_SERVER_CONID, m_lconid);
+                    fflush(stdout);
+                }
+                continue;
+            }
+        }
+
         /* (b2) vms-246: SCS$DIRECTORY connect + SCS$DIR_LOOKUP responder. After
          * START, the ESTABLISHED node opens an SCS$DIRECTORY SCS connection to
          * the joiner (OVMX) and queries OVMX's directory for each SYSAP it wants
@@ -1761,7 +1888,16 @@ int main(int argc, char **argv)
                     lp.opcode = dv.opcode; /* echo the request opcode (0x5b/0x4b) */
                     lp.op = dv.op;
                     memcpy(lp.name, dv.name, SCS_DIR_NAME_LEN);
-                    lp.affirmative = (memcmp(dv.name, "VMS$VAXcluster", 14) == 0);
+                    /* vms-760 SERVER-FIRST: OVMX affirms BOTH the VMS$VAXcluster
+                     * connection manager AND MSCP$DISK (it serves a disk to the
+                     * cluster). The member's established-join choreography resolves
+                     * MSCP$DISK on OVMX (name-echo HIT) before it opens the
+                     * MSCP$DISK connect; without this HIT it never sends that
+                     * connect. The per-name result descriptor is selected inside
+                     * scs_dir_build_lookup_response (VMS$VAXcluster -> 011b0103
+                     * blob; MSCP$DISK -> the name echoed). MSCP$TAPE stays a miss. */
+                    lp.affirmative = (memcmp(dv.name, "VMS$VAXcluster", 14) == 0) ||
+                                     (memcmp(dv.name, "MSCP$DISK", 9) == 0);
                     uint8_t lframe[SCS_DIR_LOOKUP_FRAME_LEN];
                     if (scs_dir_build_lookup_response(&lp, lframe) == 0 &&
                         send_frame_to(sock, (int)ifindex, ps->eth_mac, lframe,
@@ -1894,6 +2030,7 @@ int main(int argc, char **argv)
                 dir_conn_resp_sent, dir_lookup_sent);
         fprintf(stderr, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld PADDED-HELLO-SENT=%ld\n",
                 cm_config_frames, cm_response_sent, padded_sent);
+        fprintf(stderr, "  MSCP-SERVER-ACCEPTS-SENT=%ld\n", mscp_srv_accepts);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (!peers[i].in_use) {
                 continue;

@@ -106,6 +106,8 @@ extern "C" {
 #define SCS_DIR_OP_CONNECT  0 /* connect-request / echo carries op=0 / op=1 */
 #define SCS_DIR_OP_RESPONSE 2 /* member connect-response supplies its handle */
 #define SCS_DIR_OP_CONFIRM  3 /* joiner connect-confirm (62-byte, no names) */
+#define SCS_DIR_OP_ACCEPT   4 /* vms-760 server-first: MSCP connect-ACCEPT (62-byte, binds our server handle) */
+#define SCS_DIR_OP_MSCP_CONFIRM 5 /* vms-760 server-first: the MEMBER's op=5 confirm of our MSCP accept (M->J) */
 
 /* Recognizable OVMX SCS$DIRECTORY Con.ID ("OX" base | 7). OVMX design choice,
  * opaque to the peer (see header note). Distinct from OVMX's VMS$VAXcluster
@@ -160,7 +162,7 @@ struct scs_dir_lookup_params {
     uint16_t op;              /* echo the request [46:48] directory-operation value */
     uint16_t incarnation;     /* [22:24] node-incarnation echo (0 => template 1) */
     char     name[SCS_DIR_NAME_LEN]; /* queried SYSAP name, echoed into [62:78] (blank-padded) */
-    int      affirmative;     /* 1 => VMS$VAXcluster descriptor into [78:94]; 0 => NOT PRESENT HERE */
+    int      affirmative;     /* 1 => affirmative HIT into [78:94] (per-name descriptor); 0 => NOT PRESENT HERE */
 };
 
 /*
@@ -181,9 +183,16 @@ int scs_dir_build_connect_response(const struct scs_dir_params *p,
 
 /*
  * scs_dir_build_lookup_response - Build a 94-byte directory lookup RESPONSE:
- * echoes p->name into [62:78] and writes [78:94] = the VMS$VAXcluster
- * affirmative descriptor (p->affirmative != 0) or the GROUNDED literal
- * "NOT PRESENT HERE" (p->affirmative == 0). Returns 0, or -1 if p/out is NULL.
+ * echoes p->name into [62:78] and writes the [78:94] result field:
+ *   - p->affirmative == 0            -> the GROUNDED literal "NOT PRESENT HERE"
+ *   - p->affirmative, name MSCP$DISK -> the queried NAME echoed (16-byte
+ *     blank-padded), GROUNDED byte-exact from af2-firsttimer-established.pcap
+ *     (OVMX's MSCP$DISK HIT result = 'MSCP$DISK       ')
+ *   - p->affirmative, other name     -> the VMS$VAXcluster affirmative
+ *     descriptor 01 1b 01 03 00*10 06 00 (SCA#38 replay, ungrounded semantics)
+ * The per-name selection is required because the member's established-join
+ * choreography resolves MSCP$DISK on OVMX (name-echo HIT) BEFORE it opens the
+ * MSCP$DISK connect. Returns 0, or -1 if p/out is NULL.
  */
 int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
                                   uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN]);
@@ -223,6 +232,33 @@ int scs_dir_build_connect_confirm(const struct scs_dir_params *p,
  */
 int scs_dir_build_lookup_request(const struct scs_dir_lookup_params *p,
                                  uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN]);
+
+/*
+ * scs_dir_build_mscp_echo - vms-760 SERVER-FIRST established-join: build the
+ * op=1 CONNECT-ECHO OVMX (as the MSCP$DISK SERVER) sends in reply to the
+ * MEMBER's inbound MSCP$DISK connect. Shares the 66-byte directory-echo SCA
+ * class, but with two byte deltas grounded from af2-firsttimer-established.pcap
+ * (J->M op=1, rel~143.758): opcode [16]=0x4b (the data-phase msgtype, the VC to
+ * OVMX is already running) and the truncated SYSAP-name tail [62:66]='MSCP'
+ * (the 66-byte window clips 'MSCP$DISK'). remote Con.ID [50:54]=p->remote_conid
+ * (the member's MSCP client handle, echoed); local Con.ID [54:58] stays 0 (our
+ * server handle is supplied by the op=4 ACCEPT, not the echo). Returns 0/-1.
+ */
+int scs_dir_build_mscp_echo(const struct scs_dir_params *p,
+                            uint8_t out[SCS_DIR_ECHO_FRAME_LEN]);
+
+/*
+ * scs_dir_build_mscp_accept - vms-760 SERVER-FIRST established-join: build the
+ * op=4 CONNECT-ACCEPT that BINDS OVMX's MSCP$DISK server connection. Structurally
+ * IDENTICAL to the op=3 dir CONNECT-CONFIRM (62-byte SCA, opcode 0x5b, marker
+ * 0x00010000, NO SYSAP names) with the SINGLE fixed-byte delta op [46:48]=4
+ * (vs 3). GROUNDED byte-exact from af2-firsttimer-established.pcap (J->M op=4,
+ * rel~143.758). remote Con.ID [50:54]=p->remote_conid (member's MSCP client
+ * handle), local Con.ID [54:58]=p->local_conid (OVMX's FRESH MSCP server handle,
+ * opaque to the peer -- OVMX design choice). Returns 0, or -1 if p/out is NULL.
+ */
+int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
+                              uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN]);
 
 /* Read-only view of a received directory (0x5b / 0x4b-directory) frame. */
 struct scs_dir_view {

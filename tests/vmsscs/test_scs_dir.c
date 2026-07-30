@@ -391,6 +391,136 @@ static void test_build_connect_confirm(void)
     check(scs_dir_build_connect_confirm(&p, NULL) == -1, "NULL out rejected");
 }
 
+/* --- vms-760 SERVER-FIRST established-join identity + golden frames ---
+ * af2-firsttimer-established.pcap, cycle 1 (rel~143.758): the ESTABLISHED
+ * member (VAX1) opens an MSCP$DISK connect TO the joiner (OVMX's role) and OVMX
+ * SERVES it. member eth+logical = aa:00:04:00:01:04; joiner HW MAC =
+ * 08:00:2b:78:56:b9, joiner cluster-logical = aa:00:04:00:1a:04. */
+static const uint8_t af2_member[6]        = { 0xaa,0x00,0x04,0x00,0x01,0x04 };
+static const uint8_t af2_joiner_hw[6]     = { 0x08,0x00,0x2b,0x78,0x56,0xb9 };
+static const uint8_t af2_joiner_logical[6]= { 0xaa,0x00,0x04,0x00,0x1a,0x04 };
+
+/* J->M op=1 CONNECT-ECHO (80-byte frame), byte-exact from the pcap. */
+static const uint8_t af2_echo_op1[80] = {
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x08,0x00,0x2b,0x78,0x56,0xb9, 0x60,0x07, 0x40,0x00,
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x01,0x00, 0xaa,0x00,0x04,0x00,0x1a,0x04, 0x4b,0x13,
+    0x07,0x00,0x07,0x00,0x01,0x00,0x12,0x00, 0x07,0x00,0x00,0x00,0x07,0x00,0x00,0x00,
+    0x07,0x00,0x00,0x00,0x01,0x00,0x00,0x02, 0x16,0x00,0x04,0x00,0x01,0x00,0x00,0x00,
+    0x0a,0x00,0x53,0x35, 0x00,0x00,0x00,0x00, 0x00,0x00,0x01,0x00, 0x4d,0x53,0x43,0x50
+};
+
+/* J->M op=4 CONNECT-ACCEPT (76-byte frame), byte-exact from the pcap. */
+static const uint8_t af2_accept_op4[76] = {
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x08,0x00,0x2b,0x78,0x56,0xb9, 0x60,0x07, 0x3c,0x00,
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x01,0x00, 0xaa,0x00,0x04,0x00,0x1a,0x04, 0x5b,0x13,
+    0x07,0x00,0x08,0x00,0x01,0x00,0x12,0x00, 0x07,0x00,0x00,0x00,0x08,0x00,0x00,0x00,
+    0x07,0x00,0x00,0x00,0x01,0x00,0x00,0x02, 0x12,0x00,0x04,0x00,0x04,0x00,0x00,0x00,
+    0x0a,0x00,0x53,0x35, 0x08,0x00,0xd1,0x8f, 0x00,0x00,0x01,0x00
+};
+
+static void test_mscp_server_builders(void)
+{
+    printf("[vms-760 SERVER-FIRST: op=1 echo + op=4 accept byte-exact]\n");
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, af2_member, 6);
+    memcpy(p.src_mac, af2_joiner_hw, 6);
+    memcpy(p.src_logical, af2_joiner_logical, 6);
+    memcpy(p.peer_logical, af2_member, 6);
+    p.remote_conid = 0x3553000au;               /* member MSCP CLIENT handle */
+    p.incarnation = 0;                          /* leaves the fresh template value 1 */
+
+    /* op=1 echo: local Con.ID stays 0, recv_ack=7 send_seq=7 (both ack member ss=7). */
+    p.local_conid = 0;                          /* ignored by the echo builder */
+    p.recv_ack = 7;
+    p.send_seq = 7;
+    uint8_t eout[SCS_DIR_ECHO_FRAME_LEN];
+    memset(eout, 0xAA, sizeof(eout));
+    check(scs_dir_build_mscp_echo(&p, eout) == 0, "build_mscp_echo succeeds");
+    check(sizeof(eout) == 80, "echo frame length 80 (66-byte SCA)");
+    check_bytes(eout, af2_echo_op1, 80, "op=1 echo byte-EXACT vs pcap (af2 rel~143.758)");
+    /* Spot the two deltas vs the directory-echo template (readable failures). */
+    check(eout[30] == 0x4b, "echo opcode [16] == 0x4b (data-phase, NOT 0x5b)");
+    check_bytes(eout + 76, (const uint8_t *)"MSCP", 4, "echo name-tail [62:66] == 'MSCP' (NOT 'SCS$')");
+    check(le32(eout + 64) == 0x3553000au, "echo remote Con.ID == member client handle (abs 64)");
+    check(le32(eout + 68) == 0u, "echo local Con.ID == 0 (server handle supplied by the accept)");
+
+    /* op=4 accept: local = OVMX server handle 0x8fd10008 (ref), recv_ack=7 send_seq=8. */
+    p.local_conid = 0x8fd10008u;
+    p.recv_ack = 7;
+    p.send_seq = 8;
+    uint8_t aout[SCS_DIR_CONFIRM_FRAME_LEN];
+    memset(aout, 0xAA, sizeof(aout));
+    check(scs_dir_build_mscp_accept(&p, aout) == 0, "build_mscp_accept succeeds");
+    check(sizeof(aout) == 76, "accept frame length 76 (62-byte SCA)");
+    check_bytes(aout, af2_accept_op4, 76, "op=4 accept byte-EXACT vs pcap (af2 rel~143.758)");
+    /* Spot the load-bearing fields. */
+    check(aout[30] == 0x5b, "accept opcode [16] == 0x5b (SAME as the op=3 confirm, NOT the data-phase 0x4b)");
+    check(le16(aout + 14 + 46) == SCS_DIR_OP_ACCEPT, "accept op [46:48] == 4 (the SINGLE delta vs confirm's 3)");
+    check(le32(aout + 64) == 0x3553000au, "accept remote Con.ID == member client handle (abs 64)");
+    check(le32(aout + 68) == 0x8fd10008u, "accept local Con.ID == OVMX server handle (abs 68)");
+    check(le16(aout + 14 + 58) == 0x0000 && le16(aout + 14 + 60) == 0x0001,
+          "accept marker [58:62] == 0x00010000");
+
+    /* Con.ID / handle substitution proven independent of the template: OVMX's
+     * live server handle 0x4F58000B reproduces everything except abs 68. */
+    p.local_conid = 0x4F58000Bu;
+    check(scs_dir_build_mscp_accept(&p, aout) == 0, "build_mscp_accept (live handle)");
+    check(le32(aout + 68) == 0x4F58000Bu, "accept local Con.ID threaded to OVMX's live server handle");
+    check(le32(aout + 64) == 0x3553000au, "accept remote Con.ID unaffected by local substitution");
+
+    check(scs_dir_build_mscp_echo(NULL, eout) == -1, "build_mscp_echo NULL params rejected");
+    check(scs_dir_build_mscp_accept(&p, NULL) == -1, "build_mscp_accept NULL out rejected");
+}
+
+static void test_mscp_disk_affirmative(void)
+{
+    printf("[vms-760 SERVER-FIRST: MSCP$DISK lookup HIT result == name echo]\n");
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, af2_member, 6);
+    memcpy(lp.src_mac, af2_joiner_hw, 6);
+    memcpy(lp.src_logical, af2_joiner_logical, 6);
+    memcpy(lp.peer_logical, af2_member, 6);
+    lp.remote_conid = 0x356b0009u;   /* member dir handle (ref) */
+    lp.local_conid = 0x8fd20007u;    /* OVMX dir-server handle (ref) */
+    lp.recv_ack = 4; lp.send_seq = 4; lp.opcode = 0x4b; lp.op = 0x0a;
+    memcpy(lp.name, "MSCP$DISK", 9);
+    lp.affirmative = 1;
+
+    uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_lookup_response(&lp, out) == 0, "build_lookup_response (MSCP$DISK HIT) succeeds");
+    check_bytes(out + 14 + 62, (const uint8_t *)"MSCP$DISK       ", 16, "name echoed into [62:78]");
+    /* THE vms-760 FIX: the MSCP$DISK HIT result == the queried NAME (blank-padded),
+     * GROUNDED byte-exact (af2 pcap result@92 == 'MSCP$DISK       '), NOT the
+     * VMS$VAXcluster 011b0103 descriptor. */
+    check_bytes(out + 14 + 78, (const uint8_t *)"MSCP$DISK       ", 16,
+                "result [78:94] == 'MSCP$DISK       ' (name echo HIT, GROUNDED af2)");
+    static const uint8_t vc_descr[16] = {
+        0x01,0x1b,0x01,0x03,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x06,0x00
+    };
+    check(memcmp(out + 14 + 78, vc_descr, 16) != 0,
+          "MSCP$DISK result is NOT the VMS$VAXcluster descriptor (per-name selection)");
+
+    /* Regression guard: VMS$VAXcluster still returns the 011b0103 descriptor. */
+    struct scs_dir_lookup_params vp = lp;
+    memset(vp.name, 0, sizeof(vp.name));
+    memcpy(vp.name, "VMS$VAXcluster", 14);
+    check(scs_dir_build_lookup_response(&vp, out) == 0, "build_lookup_response (VMS$VAXcluster HIT) succeeds");
+    check_bytes(out + 14 + 78, vc_descr, 16,
+                "VMS$VAXcluster result [78:94] still == 011b0103 descriptor (no regression)");
+
+    /* MSCP$TAPE stays a negative miss. */
+    struct scs_dir_lookup_params tp = lp;
+    memset(tp.name, 0, sizeof(tp.name));
+    memcpy(tp.name, "MSCP$TAPE", 9);
+    tp.affirmative = 0;
+    check(scs_dir_build_lookup_response(&tp, out) == 0, "build_lookup_response (MSCP$TAPE miss) succeeds");
+    check_bytes(out + 14 + 78, (const uint8_t *)"NOT PRESENT HERE", 16,
+                "MSCP$TAPE result [78:94] == 'NOT PRESENT HERE' (miss unchanged)");
+}
+
 int main(void)
 {
     printf("test_scs_dir: SCS$DIRECTORY connect + SCS$DIR_LOOKUP (vms-246)\n");
@@ -399,6 +529,8 @@ int main(void)
     test_build_lookup_response();
     test_incarnation_echo();
     test_build_connect_confirm();
+    test_mscp_server_builders();
+    test_mscp_disk_affirmative();
     printf("test_scs_dir: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

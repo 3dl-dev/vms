@@ -21,8 +21,7 @@
 # the simplest migration so far: no PT_TLS, no --use LIBVMSSYS$SHR (no vms$/vms_kif_
 # freestanding syscall imports), just a plain shareable over DECC$SHR.
 #
-# Composition: the 4 vmslnm library translation units (NOT lnm_daemon.c, which is a
-# separate VMSLNMD.EXE executable), compiled -fPIC musl:
+# Composition: the 4 vmslnm library translation units, compiled -fPIC musl:
 #   lnm_table.c lnm_translate.c lnm_client.c lnm_defaults.c
 # Compile flags mirror the proven lib-shareable pattern (mk_vmsprocess_shr.sh):
 #   -fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics

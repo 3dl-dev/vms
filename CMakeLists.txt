@@ -168,6 +168,11 @@ if(BUILD_TESTS)
     add_subdirectory(tests/dcl)
     add_subdirectory(tests/vmsscs)
 
+    # tests/vmsssh: term_mapping unit test only (vms-97d). No libssh
+    # dependency — unlike src/vmsssh (the daemon), this must build and run
+    # unconditionally so ctest never reports a skip here.
+    add_subdirectory(tests/vmsssh)
+
     # INV-1 standing gate (vms-e652): system identity has ONE owner, and the
     # login banner stays driven by SYS$WELCOME rather than a compiled-in
     # printf. Source scan — no build artifacts needed.
@@ -192,9 +197,6 @@ find_path(LIBSSH_INCLUDE_DIR NAMES libssh/libssh.h)
 find_library(LIBSSH_LIBRARY NAMES ssh)
 if(LIBSSH_INCLUDE_DIR AND LIBSSH_LIBRARY)
     add_subdirectory(src/vmsssh)
-    if(BUILD_TESTS)
-        add_subdirectory(tests/vmsssh)
-    endif()
 else()
     message(STATUS "libssh not found — vmssshd will not be built")
 endif()

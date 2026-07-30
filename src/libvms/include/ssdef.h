@@ -63,7 +63,10 @@ extern "C" {
 #define SS$_NOLOGNAM        444     /* No logical name match */
 #define SS$_NOTALLPRIV      532     /* Not all privileges available */
 #define SS$_IVIDENT         548     /* Invalid identifier */
-#define SS$_IVSECFLG        564     /* Invalid section flags */
+/* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM.
+ * 564 is SS$_UNASEFC; this collision was created by pinning UNASEFC,
+ * so it is that change's blast radius, not vms-c90's. */
+#define SS$_IVSECFLG        364     /* Invalid process or global section flags (%SYSTEM-F-IVSECFLG) */
 
 /* ================================================================
  * Error status codes (severity = 2)
@@ -81,23 +84,41 @@ extern "C" {
  *
  *   LIBRARY/EXTRACT=$SSDEF/OUTPUT=SYS$SCRATCH:SSDEF.MAR
  *       SYS$LIBRARY:STARLET.MLB
- *   SEARCH SYS$SCRATCH:SSDEF.MAR "IVLOGNAM","DUPLNAM","NONEXPR","VOLINV","POWERFAIL"
+ *   SEARCH SYS$SCRATCH:SSDEF.MAR "<symbol>"
  *       $EQU  SS$_DUPLNAM    148
  *       $EQU  SS$_IVLOGNAM   340
+ *       $EQU  SS$_IVSECFLG   364
+ *       $EQU  SS$_UNASEFC    564
  *       $EQU  SS$_VOLINV     596
  *       $EQU  SS$_POWERFAIL  868
+ *       $EQU  SS$_SYNCH      1673
  *       $EQU  SS$_NONEXPR    2280
  *
  *   F$MESSAGE(148)  -> %SYSTEM-F-DUPLNAM,   duplicate name
  *   F$MESSAGE(340)  -> %SYSTEM-F-IVLOGNAM,  invalid logical name
+ *   F$MESSAGE(364)  -> %SYSTEM-F-IVSECFLG,  invalid process or global section flags
+ *   F$MESSAGE(564)  -> %SYSTEM-F-UNASEFC,   unassociated event flag cluster
  *   F$MESSAGE(596)  -> %SYSTEM-F-VOLINV,    volume is not software enabled
  *   F$MESSAGE(868)  -> %SYSTEM-F-POWERFAIL, power failure occurred
+ *   F$MESSAGE(1673) -> %SYSTEM-S-SYNCH,     synchronous successful completion
  *   F$MESSAGE(2280) -> %SYSTEM-W-NONEXPR,   nonexistent process
  *
  * This retires the old note that "596 is taken by SS$_IVLOGNAM" and the
  * displaced SS$_POWERFAIL 598 that the note justified: 596 is VOLINV,
  * and 598 is VOLINV re-severitied, not a distinct condition at all.
- * The remaining unpinned constants in this header are vms-c90.
+ *
+ * SS$_SYNCH, SS$_UNASEFC and SS$_IVSECFLG are pinned here NOT because
+ * the process table uses them, but because pinning POWERFAIL/NONEXPR/
+ * UNASEFC made their previous placeholder values ALIAS a pinned one
+ * (868, 2280, 564 respectively). Two distinct VMS conditions cannot
+ * share a status value, so a header that lets them is asserting a
+ * contradiction -- and `status == SS$_SYNCH` would have matched
+ * SS$_POWERFAIL. That is this change's own blast radius, not vms-c90's.
+ *
+ * NOTE the section headings below are NOT reliable severity labels --
+ * several pinned values sit under a heading their real severity
+ * contradicts (SS$_DUPLNAM is -F- but sits under "warning"). Reconciling
+ * the headings, and the rest of the unpinned constants, is vms-c90.
  * ================================================================ */
 #define SS$_IVLOGNAM        340     /* Invalid logical name (%SYSTEM-F-IVLOGNAM) */
 #define SS$_VOLINV          596     /* Volume is not software enabled (%SYSTEM-F-VOLINV) */
@@ -165,7 +186,11 @@ extern "C" {
 #define SS$_SUPERSEDE       844     /* Object superseded */
 #define SS$_CONCEALED       852     /* Concealed device */
 #define SS$_REMOTE          860     /* Remote node */
-#define SS$_SYNCH           868     /* Synchronous completion */
+/* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM.
+ * 868 is SS$_POWERFAIL; SS$_SYNCH is 1673, and it really is a success
+ * status (1673 & 7 == 1 == STS$K_SUCCESS), so it belongs in this
+ * section on its own merits. */
+#define SS$_SYNCH           1673    /* Synchronous successful completion (%SYSTEM-S-SYNCH) */
 #define SS$_OPINCOMPL       2552    /* Operation incomplete */
 
 /* ================================================================
@@ -216,7 +241,9 @@ extern "C" {
 
 #define SS$_ASTFLT          2244    /* AST fault */
 #define SS$_ILLEFC          2260    /* Illegal event flag cluster */
-#define SS$_UNASEFC         2280    /* Unassociated event flag cluster */
+/* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM.
+ * 2280 is SS$_NONEXPR. */
+#define SS$_UNASEFC         564     /* Unassociated event flag cluster (%SYSTEM-F-UNASEFC) */
 
 /* ================================================================
  * I/O-related status codes

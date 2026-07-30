@@ -130,8 +130,11 @@ static void proc_fill_info(const struct vms_proc *proc,
     info->uic          = proc->uic;
     info->current_mode = proc->current_mode;
     info->cur_privs    = proc->cur_privs;
+    info->perm_privs   = proc->perm_privs;
     memcpy(info->prcnam, proc->prcnam, VMS_PRCNAM_SIZE);
     info->prcnam[VMS_PRCNAM_SIZE - 1] = '\0';
+    memcpy(info->username, proc->username, VMS_USERNAME_SIZE);
+    info->username[VMS_USERNAME_SIZE - 1] = '\0';
 }
 
 /*
@@ -295,6 +298,130 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
     }
 
     proc_fill_info(target, &args.info);
+    spin_unlock(&vms_proc_hash_lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * username_is_valid - trust-boundary check on an inbound name buffer.
+ *
+ * The executive must never index a string that is not NUL-terminated
+ * inside the buffer userspace handed it. A zero-length user name is
+ * also rejected: "no identity" is expressed by never calling SETIDENT,
+ * not by stamping the empty name -- otherwise a process could erase its
+ * user name and every reader would have to guess whether "" meant
+ * "never authenticated" or "authenticated as nobody".
+ *
+ * Nothing else is checked. OVMX does not invent a character-set or
+ * length rule for user names (CLAUDE.md Rule 10): SYSUAF is the
+ * authority on which names exist, and a name that is not in SYSUAF
+ * never reaches here because the caller could not authenticate it.
+ */
+static bool username_is_valid(const char *name)
+{
+    size_t i;
+
+    for (i = 0; i < VMS_USERNAME_SIZE; i++) {
+        if (name[i] == '\0')
+            return i > 0;
+    }
+    return false;
+}
+
+/*
+ * vms_ioctl_setident - stamp an authenticated identity on the caller.
+ *
+ * THE RULE THIS ENFORCES, and the reason the item exists: a process
+ * cannot grant itself a privilege it was not given.
+ *
+ * A caller holding SETPRV may establish any identity -- that is what
+ * SETPRV means on VMS, and it is what LOGINOUT holds while it turns
+ * itself into the user's process. A caller WITHOUT SETPRV may only
+ * establish an identity that is weaker than or equal to its own: the
+ * new authorized mask must be a subset of its current authorized mask,
+ * and its UIC may not change. So identity is a one-way drop for anyone
+ * who is not authorized to exceed their authorization, and no sequence
+ * of calls walks a process back up.
+ *
+ * SEMANTICS PIN (docs/oracle/vax73-privileges.md §3): SETPRV is what
+ * authorizes EXCEEDING the authorized mask, not what authorizes USING
+ * it. Measured on the oracle -- with SETPRV removed from the current
+ * mask, SET PROCESS/PRIVILEGE=SYSPRV still returned %X10000001 because
+ * SYSPRV was in the authorized mask. The subset test below is the same
+ * rule applied to establishing an identity rather than enabling a
+ * privilege.
+ *
+ * SS$_NOPRIV (36, %SYSTEM-F-NOPRIV, "insufficient privilege or object
+ * protection violation") is oracle-pinned in the same session.
+ */
+long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_ident_args args;
+    bool has_setprv;
+    uint64_t authorized;
+    uint32_t cur_uic;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    if (!username_is_valid(args.username)) {
+        args.status = SS__IVLOGNAM;
+        goto out;
+    }
+
+    /*
+     * Read the caller's CURRENT authorization before deciding, and hold
+     * the decision and the write under the same locks -- otherwise two
+     * concurrent SETIDENTs on the same process could each check against
+     * the mask the other is about to replace and both succeed.
+     *
+     * hash_lock OUTER, mode_lock INNER (see struct vms_proc). The pair
+     * is held together only here, so there is no ordering to violate.
+     */
+    spin_lock(&vms_proc_hash_lock);
+    spin_lock(&proc->mode_lock);
+
+    has_setprv = (proc->cur_privs & VMS_PRV_M_SETPRV) != 0;
+    authorized = proc->perm_privs;
+    cur_uic    = proc->uic;
+
+    if (!has_setprv) {
+        /*
+         * Subset test on the WHOLE mask, including bits the executive
+         * does not enforce. A stored-but-unenforced privilege is still
+         * reported to the user by SHOW PROCESS/PRIVILEGES, so letting a
+         * process add one would let it lie about itself to every reader
+         * -- which is the same defect in a quieter costume.
+         */
+        if ((args.authorized_privs & ~authorized) != 0 ||
+            args.uic != cur_uic) {
+            spin_unlock(&proc->mode_lock);
+            spin_unlock(&vms_proc_hash_lock);
+            args.status = SS__NOPRIV;
+            goto out;
+        }
+    }
+
+    memcpy(proc->username, args.username, VMS_USERNAME_SIZE);
+    proc->username[VMS_USERNAME_SIZE - 1] = '\0';
+    proc->uic        = args.uic;
+    proc->perm_privs = args.authorized_privs;
+    /*
+     * OVMX DESIGN CHOICE, labelled in vms_ioctl.h: current privileges
+     * are set equal to authorized. OpenVMS distinguishes AUTHORIZE's
+     * /PRIVILEGES from /DEFPRIVILEGES; the OVMX SYSUAF record carries a
+     * single uaf$q_priv quadword, so OVMX has one mask.
+     */
+    proc->cur_privs  = args.authorized_privs;
+
+    spin_unlock(&proc->mode_lock);
     spin_unlock(&vms_proc_hash_lock);
 
     args.status = SS__NORMAL;

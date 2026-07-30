@@ -27,8 +27,25 @@ int vms_kif_open(void);
 /* Close the /dev/vms fd */
 void vms_kif_close(void);
 
-/* Register this process with the kernel module */
-uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs);
+/* Register this process with the kernel module.
+ *
+ * Takes NO privilege mask (vms-2b8). Registration proves only that a
+ * task exists; the executive derives the authorized privilege mask and
+ * the UIC from the task's real credentials. A process that could name
+ * its own privileges here would be enforcing them against itself. */
+uint32_t vms_kif_register(uint32_t vms_pid);
+
+/* Stamp an AUTHENTICATED identity onto this process ($GETJPI reads it
+ * back, from any process). The caller must already hold SETPRV to
+ * establish an identity that is not a weakening of its own -- so this
+ * is LOGINOUT's call, made after SYSUAF authentication, and it is a
+ * one-way drop for anyone else. SS$_NOPRIV if the caller may not.
+ *
+ * uic is (group << 16) | member. authorized_privs is the SYSUAF
+ * uaf$q_priv quadword; the executive sets current privileges equal to
+ * it (an OVMX design choice -- see vms_ioctl.h). */
+uint32_t vms_kif_setident(const char *username, uint32_t uic,
+                          uint64_t authorized_privs);
 
 /* ================================================================
  * Access Mode (3a)

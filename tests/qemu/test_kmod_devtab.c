@@ -88,7 +88,7 @@ static int open_and_register(void)
         printf("  FAIL: cannot open /dev/vms (executive absent)\n");
         return -1;
     }
-    if (vms_kif_register((uint32_t)getpid(), 0) != SS_NORMAL) {
+    if (vms_kif_register((uint32_t)getpid()) != SS_NORMAL) {
         printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
         return -1;
     }
@@ -113,7 +113,7 @@ static int process_a(int wfd, int rfd)
         (void)!write(wfd, &rep, sizeof(rep));
         return 1;
     }
-    if (vms_kif_register((uint32_t)getpid(), 0) != SS_NORMAL) {
+    if (vms_kif_register((uint32_t)getpid()) != SS_NORMAL) {
         (void)!write(wfd, &rep, sizeof(rep));
         return 1;
     }

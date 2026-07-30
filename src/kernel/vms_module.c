@@ -79,7 +79,7 @@ struct vms_proc *vms_proc_find_or_err(void)
     return proc;
 }
 
-struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_privs)
+struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid)
 {
     struct vms_proc *existing, *proc;
     int i;
@@ -108,22 +108,48 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
                 ((uint32_t)from_kuid(&init_user_ns, current_uid()) & 0xFFFFu);
 
     /*
+     * No user name yet (vms-2b8). A registered process is not an
+     * AUTHENTICATED process: registration proves only that a task
+     * exists. The name arrives with VMS_IOCTL_SETIDENT, after something
+     * that holds privilege has checked SYSUAF -- which is why the
+     * executive can report it as an identity rather than a claim.
+     */
+    memset(proc->username, 0, sizeof(proc->username));
+
+    /*
      * Pin the backing task's pid so the entry's liveness can be tested
      * without racing pid reuse. Released in vms_proc_free().
      */
     proc->pid_ref = get_pid(task_pid(current));
 
     /*
-     * Privilege escalation guard: only CAP_SYS_ADMIN processes may request
-     * arbitrary privileges. Non-privileged processes are clamped to the safe
-     * default set (TMPMBX | NETMBX) regardless of what they pass in.
+     * THE AUTHORIZED MASK IS DERIVED, NOT REQUESTED (vms-2b8).
+     *
+     * This used to clamp a mask the PROCESS supplied. Clamping an
+     * attacker-supplied value is still trusting an attacker-supplied
+     * value in the unclamped case, and the unclamped case was "the
+     * process is CAP_SYS_ADMIN" -- so every privileged process got
+     * exactly the privileges it asked for, which is the honor system
+     * this item exists to remove. src/ovmx_init/ovmx_init.c asked for
+     * 0xFFFFFFFFFFFFFFFF and got it.
+     *
+     * Now nothing is supplied. capable(CAP_SYS_ADMIN) is a REAL kernel
+     * credential read from the task -- a process cannot grant itself
+     * CAP_SYS_ADMIN, exactly as it cannot grant itself the uid and gid
+     * the UIC above is derived from. That is the whole difference
+     * between a derived fact and an asserted one.
+     *
+     * The privileged case gets the enforced set rather than all 64 bits
+     * (CLAUDE.md Rule 10, and this item's constraint): the executive
+     * hands out only privileges it will actually refuse an operation
+     * over. Privileges beyond that arrive from SYSUAF through
+     * VMS_IOCTL_SETIDENT, where they are stored and reported because
+     * VMS reports them -- but they are never conjured at registration.
      */
-    if (!capable(CAP_SYS_ADMIN)) {
-        /* Non-root processes get a restricted default privilege set */
-        init_privs &= VMS_DEFAULT_PRIVS;
-    }
-    proc->cur_privs = init_privs;
-    proc->perm_privs = init_privs;
+    proc->perm_privs = capable(CAP_SYS_ADMIN)
+                     ? (VMS_PRV_M_ENFORCED | VMS_DEFAULT_PRIVS)
+                     : VMS_DEFAULT_PRIVS;
+    proc->cur_privs = proc->perm_privs;
     spin_lock_init(&proc->mode_lock);
 
     /* Initialize AST queues */
@@ -165,8 +191,9 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
     hash_add_rcu(vms_proc_hash, &proc->hash_node, pid);
     spin_unlock(&vms_proc_hash_lock);
 
-    pr_info("vms: registered process pid=%d vms_pid=0x%08x privs=0x%llx\n",
-            pid, vms_pid, init_privs);
+    pr_info("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] privs=0x%llx (derived)\n",
+            pid, vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
+            proc->perm_privs);
 
     return proc;
 }
@@ -257,7 +284,7 @@ static long vms_ioctl_register(unsigned long arg)
      */
     vms_proc_reap_dead();
 
-    proc = vms_proc_register(current->pid, args.vms_pid, args.init_privs);
+    proc = vms_proc_register(current->pid, args.vms_pid);
     if (IS_ERR(proc)) {
         args.status = 0x0000001C;  /* SS$_DUPNAM (already registered) */
         if (copy_to_user((void __user *)arg, &args, sizeof(args)))
@@ -355,6 +382,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_getjpi(proc, arg);
     case VMS_IOCTL_PROCSCAN:
         return vms_ioctl_procscan(proc, arg);
+    case VMS_IOCTL_SETIDENT:
+        return vms_ioctl_setident(proc, arg);
 
     default:
         return -ENOTTY;

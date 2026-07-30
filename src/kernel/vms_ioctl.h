@@ -47,6 +47,72 @@ struct vms_mode_args {
     uint32_t status;        /* return: SS$_ status */
 };
 
+/* ================================================================
+ * Privilege mask bits -- ONE definition, shared by the executive and
+ * by userspace (vms-2b8).
+ *
+ * ORACLE-PINNED. Source: the reference lab OpenVMS VAX V7.3 node VAX1
+ * (~/vax/cluster), via documented tool output --
+ *   $ ANALYZE/SYSTEM
+ *   SDA> READ SYS$SYSTEM:SYSDEF.STB
+ *   SDA> EVALUATE PRV$V_<name>
+ * PRV$V_ symbols live in SYSDEF.STB and evaluate to the BIT POSITION.
+ * See docs/oracle/vax73-privileges.md for the verbatim transcript.
+ *
+ * WHY THIS BLOCK EXISTS AT ALL. Before vms-2b8 this tree carried FOUR
+ * disagreeing privilege-bit tables, and three of them were wrong:
+ *
+ *   src/libvms/include/prvdef.h   correct (agrees with the oracle)
+ *   src/kernel/vms_access.c       PRV_M_SETPRV = bit 5   -> that is DETACH
+ *   src/kernel/vms_internal.h     "TMPMBX|NETMBX" = bits 7,8 -> LOG_IO|GROUP
+ *   src/vmsdcl/dcl_cmd_show.c     its own table, ~10 bits wrong
+ *
+ * A privilege mask that means different things in different files is
+ * not an access control system: the executive was checking DETACH and
+ * calling it SETPRV, and handing out LOG_IO|GROUP while reporting
+ * TMPMBX|NETMBX. Every one of those files now derives its bits from
+ * here, and prvdef.h static-asserts agreement with this header, so the
+ * disagreement cannot come back silently.
+ * ================================================================ */
+
+#define VMS_PRV_V_CMKRNL     0
+#define VMS_PRV_V_CMEXEC     1
+#define VMS_PRV_V_DETACH     5
+#define VMS_PRV_V_LOG_IO     7
+#define VMS_PRV_V_GROUP      8
+#define VMS_PRV_V_PSWAPM    12
+#define VMS_PRV_V_SETPRI    13
+#define VMS_PRV_V_SETPRV    14
+#define VMS_PRV_V_TMPMBX    15
+#define VMS_PRV_V_OPER      18
+#define VMS_PRV_V_NETMBX    20
+#define VMS_PRV_V_SYSPRV    28
+#define VMS_PRV_V_BYPASS    29
+
+#define VMS_PRV_M_CMKRNL    (1ULL << VMS_PRV_V_CMKRNL)
+#define VMS_PRV_M_CMEXEC    (1ULL << VMS_PRV_V_CMEXEC)
+#define VMS_PRV_M_SETPRV    (1ULL << VMS_PRV_V_SETPRV)
+#define VMS_PRV_M_TMPMBX    (1ULL << VMS_PRV_V_TMPMBX)
+#define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
+
+/*
+ * The privileges the OVMX executive actually ENFORCES today.
+ *
+ * CLAUDE.md Rule 10, and this item's own constraint: a privilege that
+ * is reported but unenforced is worse than an absent one, because it
+ * reads as a security control. This set is exactly the privileges some
+ * code path in vms.ko will refuse an operation over:
+ *   CMKRNL  vms_ioctl_setmode -> kernel mode; vms_ioctl_dclast at kernel
+ *   CMEXEC  vms_ioctl_setmode -> exec mode;   vms_ioctl_dclast at exec
+ *   SETPRV  vms_ioctl_setprv widening; vms_ioctl_setident granting
+ * Bits outside this set are STORED and REPORTED (they come from SYSUAF
+ * and VMS reports them) but nothing in this tree gates on them. Adding
+ * a privilege here without adding the check it names is the defect this
+ * constant exists to prevent.
+ */
+#define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
+                             VMS_PRV_M_SETPRV)
+
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */
     uint64_t prev;          /* return: previous privilege mask */
@@ -209,11 +275,24 @@ struct vms_getlki_args {
  * Process registration
  * ================================================================ */
 
+/*
+ * Registration carries NO privilege request (vms-2b8).
+ *
+ * It used to carry an init_privs quadword: the process told the
+ * executive which privileges it had. That is an honor system, not an
+ * access control system -- the thing being asked to enforce the mask
+ * was taking the mask from the party it was enforcing against. The
+ * field is GONE, not ignored, so no caller can keep passing it and no
+ * reader can be tempted to trust it.
+ *
+ * The executive now derives the authorized mask from the task's real
+ * credentials at registration (vms_proc_register), the same way it
+ * already derived the UIC. A process cannot change what it gets by
+ * asking differently, because it is no longer asked.
+ */
 struct vms_register_args {
     uint32_t vms_pid;           /* VMS-style process ID */
-    uint64_t init_privs;        /* initial privilege mask */
     uint32_t status;            /* return: SS$_ status */
-    uint32_t pad;
 };
 
 #define VMS_IOCTL_REGISTER  _IOWR(VMS_IOC_MAGIC, 0x40, struct vms_register_args)
@@ -555,6 +634,22 @@ _Static_assert(VMS_IOCTL_DALLOC == 0xC0185656u,
  * from the task's credentials; it is never supplied by the process
  * itself (a process must not be able to declare its own UIC).
  */
+/*
+ * Executive-resident username field width -- OVMX DESIGN CHOICE.
+ *
+ * OpenVMS user names are 1-12 characters (Guide to System Security),
+ * but OVMX's SYSUAF record already uses a 32-byte space-padded username
+ * as its primary key, and that width is itself declared an OVMX design
+ * choice in src/libvms/include/sysuaf.h. This field matches the SYSUAF
+ * key so an authenticated record can be stamped onto a process without
+ * a width conversion that could truncate a name into a different one.
+ * The executive enforces NUL-termination inside the buffer (a trust
+ * boundary check) and nothing else -- SYSUAF is the authority on which
+ * names exist, so the executive does not invent a rejection semantic
+ * VMS never showed us (CLAUDE.md Rule 10).
+ */
+#define VMS_USERNAME_SIZE 32
+
 struct vms_procinfo {
     uint32_t vms_pid;                   /* VMS-style process ID */
     uint32_t linux_pid;                 /* Linux pid backing the process */
@@ -562,7 +657,9 @@ struct vms_procinfo {
     uint32_t uic;                       /* (group << 16) | member */
     uint8_t  current_mode;              /* PSL_C_KERNEL..PSL_C_USER */
     uint8_t  pad[3];
-    uint64_t cur_privs;                 /* current privilege mask */
+    uint64_t cur_privs;                 /* current (process) privileges */
+    uint64_t perm_privs;                /* authorized (permanent) privileges */
+    char     username[VMS_USERNAME_SIZE]; /* "" until an identity is stamped */
 };
 
 /* Selector for VMS_IOCTL_GETJPI: how the target process is named. */
@@ -601,9 +698,52 @@ struct vms_setprn_args {
     uint32_t pad;
 };
 
+/*
+ * Stamp an AUTHENTICATED identity onto the calling process (vms-2b8).
+ *
+ * This is the LOGINOUT shape. On OpenVMS a process does not choose its
+ * user name, UIC or authorized privileges: LOGINOUT authenticates
+ * against SYSUAF while holding privilege, and the identity it proved is
+ * placed in the executive's process database, where it becomes what
+ * every other process sees. The image the user then runs inherits that
+ * identity and cannot widen it.
+ *
+ * The GRANT RULE the executive enforces, and the whole point of the
+ * ioctl: a caller WITHOUT SETPRV may only stamp an identity whose
+ * authorized privilege mask is a SUBSET of its own authorized mask, and
+ * may not change its UIC. So identity establishment is a one-way drop
+ * unless the caller holds the privilege VMS names for exceeding its own
+ * authorization. A process therefore cannot grant itself a privilege it
+ * was not given -- it can only give privileges away.
+ *
+ * (Self-targeted only. Stamping ANOTHER process's identity is not
+ * offered, because OVMX has no VMS behaviour pinned for it yet and
+ * Rule 10 forbids inventing one: what is not matched is hidden.)
+ *
+ * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the ioctl and its argument
+ * layout are ours. Public OpenVMS documentation describes LOGINOUT's
+ * EFFECT but publishes no byte-level interface for it, so this is not
+ * presented as a VMS-authentic mechanism -- only its semantics are
+ * pinned (SETPRV is what lets a process exceed its authorization).
+ *
+ * OVMX DESIGN CHOICE: cur_privs is set equal to authorized_privs.
+ * OpenVMS distinguishes AUTHORIZED privileges (AUTHORIZE /PRIVILEGES)
+ * from the DEFAULT privileges a process logs in with (/DEFPRIVILEGES).
+ * The OVMX SYSUAF record carries a single uaf$q_priv quadword, so OVMX
+ * has one mask and authorized == default. Labelled here rather than
+ * silently conflated.
+ */
+struct vms_ident_args {
+    char     username[VMS_USERNAME_SIZE]; /* authenticated user name */
+    uint32_t uic;                         /* (group << 16) | member */
+    uint32_t status;                      /* return: SS$_ status */
+    uint64_t authorized_privs;            /* SYSUAF uaf$q_priv */
+};
+
 #define VMS_IOCTL_SETPRN    _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_setprn_args)
 #define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
 #define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
+#define VMS_IOCTL_SETIDENT  _IOWR(VMS_IOC_MAGIC, 0x44, struct vms_ident_args)
 
 /*
  * ABI lock for the process-table ioctls (vms-8019).
@@ -626,14 +766,18 @@ struct vms_setprn_args {
  * and the ioctl NUMBER has changed -- which is a wire break, not a
  * cosmetic one, and must be handled deliberately.
  */
-_Static_assert(sizeof(struct vms_procinfo) == 40,
+_Static_assert(sizeof(struct vms_procinfo) == 80,
                "vms_procinfo layout changed: process-table ioctl ABI break");
 _Static_assert(sizeof(struct vms_setprn_args) == 72,
                "vms_setprn_args layout changed: VMS_IOCTL_SETPRN ABI break");
-_Static_assert(sizeof(struct vms_getjpi_args) == 112,
+_Static_assert(sizeof(struct vms_getjpi_args) == 152,
                "vms_getjpi_args layout changed: VMS_IOCTL_GETJPI ABI break");
-_Static_assert(sizeof(struct vms_procscan_args) == 48,
+_Static_assert(sizeof(struct vms_procscan_args) == 88,
                "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
+_Static_assert(sizeof(struct vms_ident_args) == 48,
+               "vms_ident_args layout changed: VMS_IOCTL_SETIDENT ABI break");
+_Static_assert(sizeof(struct vms_register_args) == 8,
+               "vms_register_args layout changed: VMS_IOCTL_REGISTER ABI break");
 /*
  * The inbound transfer buffer must be strictly larger than the
  * executive's inspection window, or an oversized name would be clipped
@@ -644,9 +788,13 @@ _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
                "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
 _Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,
                "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETJPI == 0xC0705642u,
+_Static_assert(VMS_IOCTL_GETJPI == 0xC0985642u,
                "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0305643u,
+_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0585643u,
                "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
+               "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
+               "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
 
 #endif /* _VMS_IOCTL_H */

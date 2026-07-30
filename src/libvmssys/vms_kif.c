@@ -35,7 +35,7 @@ void vms_kif_close(void)
     }
 }
 
-uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs)
+uint32_t vms_kif_register(uint32_t vms_pid)
 {
     struct vms_register_args args;
 
@@ -47,9 +47,11 @@ uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs)
      * described an unreachable state, and it did so with a status that means
      * something else entirely. See CLAUDE.md Rule 9. */
 
+    /* NO privilege argument (vms-2b8). The executive derives the
+     * authorized mask from this task's real credentials; there is
+     * nothing for the caller to ask for, and so nothing to forge. */
     vms_memset(&args, 0, sizeof(args));
     args.vms_pid = vms_pid;
-    args.init_privs = init_privs;
 
     if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_REGISTER, (unsigned long)&args) < 0)
         return 0x00000014;
@@ -618,6 +620,37 @@ uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info)
     args.sel_prcnam[VMS_PRCNAM_XFER - 1] = '\0';
 
     return getjpi_common(&args, info);
+}
+
+/*
+ * vms_kif_setident - hand the executive an AUTHENTICATED identity.
+ *
+ * The caller has just proved this identity (SYSUAF lookup + password
+ * check) while holding privilege. From here the identity belongs to the
+ * executive: this process cannot widen it again without SETPRV, and
+ * every other process reads it back through $GETJPI.
+ *
+ * SS$_NOPRIV if the caller lacks SETPRV and the identity is not a
+ * weakening of its own; SS$_IVLOGNAM if the user name is malformed.
+ */
+uint32_t vms_kif_setident(const char *username, uint32_t uic,
+                          uint64_t authorized_privs)
+{
+    struct vms_ident_args args;
+
+    if (!username)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.username, username, VMS_USERNAME_SIZE - 1);
+    args.username[VMS_USERNAME_SIZE - 1] = '\0';
+    args.uic = uic;
+    args.authorized_privs = authorized_privs;
+
+    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_SETIDENT, (unsigned long)&args) < 0)
+        return 0x00000014;
+
+    return args.status;
 }
 
 uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info)

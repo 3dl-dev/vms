@@ -102,7 +102,7 @@ static int open_and_register(void)
         printf("  FAIL: cannot open /dev/vms (executive absent)\n");
         return -1;
     }
-    if (vms_kif_register((uint32_t)getpid(), 0) != SS_NORMAL) {
+    if (vms_kif_register((uint32_t)getpid()) != SS_NORMAL) {
         printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
         return -1;
     }
@@ -181,7 +181,7 @@ static void alt_group_helper(int wfd)
     vms_kif_close();
     if (vms_kif_open() < 0)
         _exit(81);
-    if (vms_kif_register((uint32_t)getpid(), 0) != SS_NORMAL)
+    if (vms_kif_register((uint32_t)getpid()) != SS_NORMAL)
         _exit(82);
 
     memset(&info, 0, sizeof(info));
@@ -257,7 +257,7 @@ int main(int argc, char **argv)
         vms_kif_close();
         if (vms_kif_open() < 0)
             _exit(70);
-        if (vms_kif_register((uint32_t)getpid(), 0) != SS_NORMAL)
+        if (vms_kif_register((uint32_t)getpid()) != SS_NORMAL)
             _exit(71);
         if (vms_kif_setprn(CHILD_NAME) != SS_NORMAL)
             _exit(72);

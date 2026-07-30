@@ -247,6 +247,15 @@ extern "C" {
  * SS$_NOSUCHDEV above); correcting the rest has a blast radius across
  * the kernel module and its tests and is tracked separately, not done
  * here.
+ *
+ * SS$_DEVALLOC already had two consumers when this value was
+ * corrected -- src/vmsdcl/dcl_cmd_misc.c and src/vmsfs/vmsfs_device.c.
+ * Both name the symbol rather than the number, so neither breaks.
+ * Noted because an earlier version of this comment said the constant
+ * had no other consumer, which was simply false. Separately, and NOT
+ * fixed here because it is out of this change's scope:
+ * vmsfs_device.c returns SS$_DEVALLOC for a FULL DEVICE TABLE, which
+ * is the wrong condition entirely -- carried in vms-d0b's findings.
  */
 #define SS$_DEVALLOC        2112    /* Device already allocated to another user */
 #define SS$_DEVNOTALLOC     2136    /* Device not allocated */

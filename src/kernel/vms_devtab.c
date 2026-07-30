@@ -211,6 +211,13 @@ int vms_devtab_init(void)
      * "Terminal OPA0: ..." nor "Terminal TTA0: ..." carries the word
      * "shareable" in SHOW DEVICE/FULL's status clause, where NLA0: and
      * the MBAn: mailboxes do.
+     *
+     * DISCLOSED, not hidden: this is the ONLY device in the table, so
+     * the shareable = 1 side of the ownership rule -- measured on NLA0:,
+     * see section 7.3 -- has nothing to exercise it and no test asserts
+     * it. It is written because leaving it out would silently claim that
+     * every device confers ownership, which the oracle contradicts. The
+     * first shareable device added here owes the suite that assertion.
      */
     console = vms_devtab_create(VMS_CONSOLE_DEVNAM, DC__TERM, VMS_DT_UNKNOWN,
                                 0 /* shareable */,
@@ -541,7 +548,9 @@ long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg)
  * condition that was never measured): %SYSTEM-W-DEVASSIGN, "device has
  * channels assigned" (2120). VMS clearly has this condition -- its own
  * message facility printed the text -- but no probe ever provoked it,
- * so OVMX does not return it anywhere. Filed rather than guessed.
+ * so OVMX does not return it anywhere and no code here is shaped around
+ * it. Carried in vms-d0b's findings; the probe that would settle it has
+ * to find the operation that raises DEVASSIGN, not assume one.
  */
 long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg)
 {

@@ -279,7 +279,44 @@ extern "C" {
 
 /* Additional status codes */
 #define SS$_FILACCERR       2312    /* File access error */
-#define SS$_DEVALLOC        2316    /* Device already allocated */
+/*
+ * SS$_DEVALLOC / SS$_DEVNOTALLOC.
+ *
+ * PROVENANCE: measured on the ~/vax OpenVMS VAX V7.3 lab (node VAX2,
+ * 30-JUL-2026) by asking VMS's own message facility for the text of
+ * each condition value -- `WRITE SYS$OUTPUT F$MESSAGE(n)` -- and
+ * scanning for the name. VMS answered:
+ *     2112  %SYSTEM-W-DEVALLOC, device already allocated to another user
+ *     2116  %SYSTEM-F-DEVALLOC, device already allocated to another user
+ *     2136  %SYSTEM-W-DEVNOTALLOC, device not allocated
+ *     2140  %SYSTEM-F-DEVNOTALLOC, device not allocated
+ * and the behaviour was confirmed end to end: `ALLOCATE OPA0:` issued
+ * from a second (detached) process while the interactive job held the
+ * console printed exactly
+ *     %SYSTEM-W-DEVALLOC, device already allocated to another user
+ * and a second `DEALLOCATE` of an already-deallocated device printed
+ *     %SYSTEM-W-DEVNOTALLOC, device not allocated
+ * (docs/oracle/vax73-terminal-device.md sections 7-9). The warning
+ * form is the one $SSDEF carries, so that is the value used here.
+ *
+ * The previous value on this line, 2316, was wrong: the same probe
+ * shows 2316 is %SYSTEM-F-NOSUCHDEV. That measurement also disagrees
+ * with several OTHER values in this file (see the note on
+ * SS$_NOSUCHDEV above); correcting the rest has a blast radius across
+ * the kernel module and its tests and is tracked separately, not done
+ * here.
+ *
+ * SS$_DEVALLOC already had two consumers when this value was
+ * corrected -- src/vmsdcl/dcl_cmd_misc.c and src/vmsfs/vmsfs_device.c.
+ * Both name the symbol rather than the number, so neither breaks.
+ * Noted because an earlier version of this comment said the constant
+ * had no other consumer, which was simply false. Separately, and NOT
+ * fixed here because it is out of this change's scope:
+ * vmsfs_device.c returns SS$_DEVALLOC for a FULL DEVICE TABLE, which
+ * is the wrong condition entirely -- carried in vms-d0b's findings.
+ */
+#define SS$_DEVALLOC        2112    /* Device already allocated to another user */
+#define SS$_DEVNOTALLOC     2136    /* Device not allocated */
 #define SS$_IVLOGTAB        2320    /* Invalid logical name table */
 #define SS$_NOLOGTAB        2324    /* No such logical name table */
 

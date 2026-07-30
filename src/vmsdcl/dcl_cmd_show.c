@@ -537,6 +537,20 @@ static int cmd_show_protection(struct dcl_command *cmd)
 
 /*
  * SHOW DEVICE - List mounted filesystems as VMS devices.
+ *
+ * STOPGAP -- FACADE, NOT VMS (vms-d0b). This walks /proc/mounts and a
+ * process-local vms_device_table[], and where it finds nothing it
+ * prints a hardcoded stub row. On VMS, SHOW DEVICE is a READER of the
+ * executive's I/O database -- it cannot invent a device, and every
+ * process sees the same list.
+ *
+ * The executive now has that table (src/kernel/vms_devtab.c;
+ * $DEVICE_SCAN over it is vms_kif_devscan()). Converting this function
+ * to read it is blocked on DCL being buildable into the QEMU runtime --
+ * see the vms-d0b escalation. Note also that no terminal appears in
+ * this listing at all today, though OPA0: is in the executive's table:
+ * see docs/oracle/vax73-terminal-device.md for the format VMS uses for
+ * a terminal row.
  */
 static int cmd_show_device(struct dcl_command *cmd)
 {
@@ -737,8 +751,20 @@ static int cmd_show_status(struct dcl_command *cmd)
 /*
  * SHOW TERMINAL - Display terminal characteristics.
  *
- * Dynamically displays actual terminal state from the
- * vms_terminal characteristics model.
+ * STOPGAP -- FACADE, NOT VMS (vms-d0b). This prints the DCL context's
+ * own copy of a terminal, which nothing outside this process wrote and
+ * nothing outside this process can see. On VMS, SHOW TERMINAL is a
+ * READER of the executive's device table (CLAUDE.md rule 11
+ * corollary): it reports the characteristics the executive holds for
+ * the device, which is why what one process sets, another sees.
+ *
+ * The executive now has that table (src/kernel/vms_devtab.c, proven
+ * A-writes/B-reads by tests/qemu/test_kmod_devtab.c). Converting this
+ * function to read it is blocked on DCL being buildable into the QEMU
+ * runtime -- see the vms-d0b escalation. The characteristic list this
+ * prints also does not match the oracle: see
+ * docs/oracle/vax73-terminal-device.md for what VMS V7.3 actually
+ * displays.
  */
 static int cmd_show_terminal(struct dcl_command *cmd)
 {

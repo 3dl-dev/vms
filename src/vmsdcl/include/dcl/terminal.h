@@ -14,7 +14,32 @@
 #include <stdio.h>
 #include <sys/types.h>
 
-/* Terminal characteristic bits (matching VMS TT$ constants) */
+/*
+ * Terminal characteristic bits.
+ *
+ * THESE ARE OVMX-DEFINED VALUES, NOT VMS $TTDEF TT$ CONSTANTS. The
+ * line that used to be here claimed they matched VMS's; they do not.
+ * Neither the bit positions nor, in several cases, the characteristic
+ * NAMES correspond to OpenVMS: the display table in
+ * src/vmsdcl/dcl_terminal.c carries Scope, Holdscreen, Mechtab, Oper,
+ * Page, Runout and AltTypeAhd, none of which appear in the SHOW
+ * TERMINAL output of OpenVMS VAX V7.3, and it omits most of the names
+ * that do (docs/oracle/vax73-terminal-device.md section 2 has the real
+ * list, captured verbatim from the ~/vax lab).
+ *
+ * CLAUDE.md rule 8 permits OVMX to define its own representation where
+ * the public documentation publishes no byte-level layout -- which is
+ * the case for $TTDEF -- but requires it to be LABELLED as an OVMX
+ * design choice rather than presented as VMS-authentic. This comment
+ * is that label. Nothing may assume these values or names match VMS.
+ *
+ * The executive's own characteristic vector (VMS_TTC_* in
+ * src/kernel/vms_ioctl.h) is the oracle-pinned one: its NAMES are
+ * exactly the V7.3 set, with only the bit positions OVMX's own.
+ * Reconciling this header and dcl_terminal.c's char_display[] against
+ * that vector is tracked separately -- it is a change to user-visible
+ * SET/SHOW TERMINAL output, not a comment fix.
+ */
 #define TT_ECHO          (1U << 0)
 #define TT_WRAP          (1U << 1)
 #define TT_BROADCAST     (1U << 2)

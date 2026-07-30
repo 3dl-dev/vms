@@ -75,6 +75,36 @@
 #define SS__VALNOTVALID 120         /* value block not valid */
 
 /*
+ * Device-table statuses. Values are this tree's existing ssdef.h
+ * (src/libvms/include/ssdef.h) -- they are NOT independently
+ * re-derived here, so the executive and the runtime cannot drift
+ * apart. Note that ssdef.h already carries an operator-sign-off flag
+ * on SS$_NOSUCHDEV / SS$_NOMOREDEV (multi-source disagreement, see
+ * vms-fb3); this file inherits that caveat rather than papering over
+ * it. The CHOICE of status per condition is pinned to the oracle
+ * where observable: SHOW DEVICE of an absent device on the ~/vax
+ * OpenVMS VAX V7.3 lab reports
+ *   %SYSTEM-W-NOSUCHDEV, no such device available
+ * (docs/oracle/vax73-terminal-device.md).
+ */
+#define SS__IVCHAN      602         /* invalid I/O channel */
+#define SS__IVDEVNAM    608         /* invalid device name */
+#define SS__NOMOREDEV   2648        /* device scan exhausted */
+#define SS__NOSUCHDEV   2680        /* no such device available */
+/*
+ * Allocation statuses. Unlike the four above, these two were measured
+ * directly on the oracle rather than inherited: VMS's own message
+ * facility on the ~/vax OpenVMS VAX V7.3 lab reports
+ *   2112 %SYSTEM-W-DEVALLOC, device already allocated to another user
+ *   2136 %SYSTEM-W-DEVNOTALLOC, device not allocated
+ * and $ALLOC/$DALLOC were observed returning exactly those conditions
+ * (docs/oracle/vax73-terminal-device.md sections 7-9). ssdef.h carries
+ * the same values and the same citation.
+ */
+#define SS__DEVALLOC    2112        /* device already allocated to another user */
+#define SS__DEVNOTALLOC 2136        /* device not allocated */
+
+/*
  * Default privilege set for non-CAP_SYS_ADMIN processes.
  * Allows basic operational use (mailboxes, networking) without
  * granting any mode-change or bypass privileges.
@@ -208,7 +238,99 @@ struct vms_proc {
     int                 lock_count;
     spinlock_t          lock_list_lock;
 
+    /*
+     * I/O channels (device table, vms-d0b). A channel is this
+     * process's handle on a device that the EXECUTIVE owns -- the
+     * device itself is not per-process, only the channel to it is.
+     * Released when the process's executive state is torn down, which
+     * is what drops the device's reference count and its ownership.
+     */
+    struct list_head    channels;       /* struct vms_channel */
+    uint32_t            next_chan;      /* channel number allocator */
+    spinlock_t          chan_lock;
+
     struct rcu_head     rcu;
+};
+
+/* ================================================================
+ * Device table (executive-resident I/O database)
+ *
+ * One entry per device on the node, created by the executive and
+ * visible to every process. See vms_devtab.c.
+ * ================================================================ */
+
+struct vms_device {
+    struct list_head    list;           /* in vms_device_list */
+    char                devnam[VMS_DEVNAM_SIZE];
+    uint32_t            devclass;       /* DC$_ device class */
+    uint32_t            devtype;        /* device type code; 0 = Unknown */
+
+    /*
+     * shareable mirrors the word the oracle prints in SHOW DEVICE/FULL's
+     * status clause. It decides whether a channel confers ownership, so
+     * it is not decoration. MEASURED, ~/vax OpenVMS VAX V7.3, node VAX2
+     * (docs/oracle/vax73-terminal-device.md section 7):
+     *   "Device NLA0: ... record-oriented device, shareable, mailbox
+     *    device."                                  -> shareable
+     *   "Terminal TTA0: ... is online, record-oriented device, carriage
+     *    control."                                 -> not shareable
+     */
+    uint32_t            shareable;      /* 1 = "shareable" in the status clause */
+
+    /*
+     * OWNERSHIP AND ALLOCATION ARE TWO DIFFERENT THINGS, and both are
+     * measured (docs/oracle/vax73-terminal-device.md section 7):
+     *
+     *  - A channel to a NON-shareable device that nobody owns makes the
+     *    assigner the OWNER, with no allocation. TTA0: went from
+     *    Owner "" / refcount 0 to Owner "SYSTEM" / refcount 1 on a bare
+     *    OPEN/WRITE, and its status clause still said only "is online,
+     *    record-oriented device, carriage control" -- no "allocated".
+     *  - A channel to a SHAREABLE device confers nothing. The same DCL
+     *    sequence on NLA0: left Owner "" with the reference count
+     *    moving 2 -> 3 -> 2.
+     *  - $ALLOC sets `allocated`, and it is the only thing that does.
+     *  - Ownership without allocation ends when the owner returns its
+     *    last channel (CLOSE -> Owner "", refcount 0) or dies
+     *    (STOP CHANHOLD -> Owner "", refcount 0). An ALLOCATION outlives
+     *    the channel until $DALLOC or the owner's death.
+     *
+     * refcnt is the device's "Reference count": one per assigned channel
+     * plus one for an outstanding allocation. Implicit ownership costs
+     * no reference (TTA0: one channel -> refcount 1, owned).
+     */
+    uint32_t            allocated;      /* 1 while $ALLOC'd to owner_* */
+    uint32_t            owner_pid;      /* VMS pid of the owner, 0 = unowned */
+    pid_t               owner_linux_pid;
+    uint32_t            owner_uic;
+    uint32_t            refcnt;
+
+    uint32_t            errcnt;
+    uint64_t            opcnt;
+
+    /* Terminal state (devclass == DC$_TERM) */
+    uint64_t            devchar;        /* VMS_TTC_* */
+    uint32_t            width;
+    uint32_t            page;
+
+    /*
+     * Every channel currently assigned to this device, by any process.
+     * The device has to know this to decide when implicit ownership
+     * ends: it ends when the owner has no channel left, not when any
+     * channel is returned.
+     */
+    struct list_head    chanlist;       /* of vms_channel.devlink */
+
+    spinlock_t          lock;
+};
+
+/* A process's handle on a device. */
+struct vms_channel {
+    struct list_head    list;           /* in vms_proc->channels */
+    struct list_head    devlink;        /* in vms_device->chanlist */
+    uint32_t            chan;
+    pid_t               owner_linux_pid;/* process holding this channel */
+    struct vms_device   *dev;
 };
 
 /* ================================================================
@@ -280,6 +402,15 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 
+/* Device table (executive-resident I/O database) */
+long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
+
 /* Process table (executive-resident PCB directory) */
 long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
@@ -290,6 +421,11 @@ int vms_lock_init(void);
 void vms_lock_cleanup(void);
 void vms_eflag_init(void);
 void vms_eflag_cleanup(void);
+int vms_devtab_init(void);
+void vms_devtab_cleanup(void);
+
+/* Give back every channel a process holds (process teardown). */
+void vms_proc_release_channels(struct vms_proc *proc);
 
 /* Lock manager helpers */
 void vms_proc_release_locks(struct vms_proc *proc);

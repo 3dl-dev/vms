@@ -67,26 +67,29 @@ RUN KVER=$(cat /tmp/kver) && \
 # Copy test source and build statically-linked test programs
 COPY tests/qemu/test_*.c /src/tests/qemu/
 RUN for f in /src/tests/qemu/test_*.c; do \
-        case "$f" in */test_kmod_procnam.c) continue;; esac; \
+        case "$f" in */test_kmod_devtab.c|*/test_kmod_procnam.c) continue;; esac; \
         out="${f%.c}"; \
         gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel && \
         echo "Built: $(basename $out)"; \
     done
 
-# The process-table test (vms-8019) drives the real userspace kernel-interface
+# The device-table test (vms-d0b) and the process-table test (vms-8019) drive
+# the real userspace kernel-interface
 # client rather than a hand-rolled ioctl copy, so the client libvms will call is
 # the client under test. That needs libvmssys's freestanding syscall trampoline
 # and string helpers linked in -- it does NOT pull in libvms, which still cannot
 # be built into this initramfs (tracked separately).
 COPY src/libvmssys/ /src/libvmssys/
 RUN ARCH=$(uname -m) && \
-    gcc -static -O2 -Wall -o /src/tests/qemu/test_kmod_procnam \
-        /src/tests/qemu/test_kmod_procnam.c \
-        /src/libvmssys/vms_kif.c \
-        /src/libvmssys/vms_string.c \
-        /src/libvmssys/arch/${ARCH}/syscall.S \
-        -I/src/kernel -I/src/libvmssys && \
-    echo "Built: test_kmod_procnam (linked against src/libvmssys/vms_kif.c)"
+    for t in test_kmod_devtab test_kmod_procnam; do \
+        gcc -static -O2 -Wall -o /src/tests/qemu/$t \
+            /src/tests/qemu/$t.c \
+            /src/libvmssys/vms_kif.c \
+            /src/libvmssys/vms_string.c \
+            /src/libvmssys/arch/${ARCH}/syscall.S \
+            -I/src/kernel -I/src/libvmssys && \
+        echo "Built: $t (linked against src/libvmssys/vms_kif.c)" || exit 1; \
+    done
 
 # Build mkimage_vmsfs (host tool) and create test image
 COPY tests/qemu/mkimage_vmsfs.c /src/tests/qemu/

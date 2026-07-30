@@ -147,6 +147,11 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
     proc->lock_count = 0;
     spin_lock_init(&proc->lock_list_lock);
 
+    /* Initialize the I/O channel list (device table, vms-d0b) */
+    INIT_LIST_HEAD(&proc->channels);
+    proc->next_chan = 0;
+    spin_lock_init(&proc->chan_lock);
+
     /* Atomically check-and-insert under spinlock to avoid TOCTOU race */
     spin_lock(&vms_proc_hash_lock);
     hash_for_each_possible_rcu(vms_proc_hash, existing, hash_node, pid) {
@@ -194,6 +199,14 @@ void vms_proc_free_claimed(struct vms_proc *proc)
 
     /* Release common event flag associations */
     vms_proc_release_common_ef(proc);
+
+    /*
+     * Give back every I/O channel. The devices themselves belong to
+     * the executive and outlive the process; what dies here is this
+     * process's claim on them, which is what releases device
+     * ownership when the last channel goes.
+     */
+    vms_proc_release_channels(proc);
 
     /* Drop the pinned pid reference taken at registration */
     if (proc->pid_ref) {
@@ -319,6 +332,22 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     case VMS_IOCTL_GETLKI:
         return vms_ioctl_getlki(proc, arg);
 
+    /* Device table (executive-resident I/O database) */
+    case VMS_IOCTL_ASSIGN:
+        return vms_ioctl_assign(proc, arg);
+    case VMS_IOCTL_DASSGN:
+        return vms_ioctl_dassgn(proc, arg);
+    case VMS_IOCTL_GETDVI:
+        return vms_ioctl_getdvi(proc, arg);
+    case VMS_IOCTL_DEVSCAN:
+        return vms_ioctl_devscan(proc, arg);
+    case VMS_IOCTL_TTSETMODE:
+        return vms_ioctl_ttsetmode(proc, arg);
+    case VMS_IOCTL_ALLOC:
+        return vms_ioctl_alloc(proc, arg);
+    case VMS_IOCTL_DALLOC:
+        return vms_ioctl_dalloc(proc, arg);
+
     /* Process table (executive-resident PCB directory) */
     case VMS_IOCTL_SETPRN:
         return vms_ioctl_setprn(proc, arg);
@@ -406,10 +435,28 @@ static int __init vms_init(void)
     }
     vms_eflag_init();
 
+    /*
+     * Bring up the device table before /dev/vms exists, so that the
+     * console terminal is in the executive's I/O database before any
+     * process can possibly ask about it -- a device is never something
+     * a process introduces.
+     */
+    ret = vms_devtab_init();
+    if (ret) {
+        pr_err("vms: failed to initialize device table: %d\n", ret);
+        vms_lock_cleanup();
+        vms_eflag_cleanup();
+        kmem_cache_destroy(vms_proc_cache);
+        return ret;
+    }
+
     /* Register /dev/vms */
     ret = misc_register(&vms_misc);
     if (ret) {
         pr_err("vms: failed to register /dev/vms: %d\n", ret);
+        vms_devtab_cleanup();
+        vms_lock_cleanup();
+        vms_eflag_cleanup();
         kmem_cache_destroy(vms_proc_cache);
         return ret;
     }
@@ -439,6 +486,7 @@ static void __exit vms_exit(void)
     /* Cleanup subsystems */
     vms_lock_cleanup();
     vms_eflag_cleanup();
+    vms_devtab_cleanup();
 
     kmem_cache_destroy(vms_proc_cache);
 

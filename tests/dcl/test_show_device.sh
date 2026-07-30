@@ -1,6 +1,9 @@
 #!/bin/bash
 # TEST: SHOW DEVICE prints no device row it did not read from the executive
 # EXPECT: contains:%MOUNT-I-MOUNTED, TESTDISK mounted on _DUA0:
+# EXPECT: contains:%OVMX-F-EXECDEV
+# EXPECT_NOT: regex:^Device +Device +Error
+# EXPECT_NOT: contains:NOSUCHDEV
 # EXPECT_NOT: regex:^\$1\$DGA
 # EXPECT_NOT: contains:OVMXSYS
 # EXPECT_NOT: contains:Error    Volume
@@ -11,8 +14,19 @@
 # The invariant under test is the item's own: "no code path prints a device
 # row it did not read from /dev/vms". That is a NEGATIVE property, and it is
 # checkable anywhere -- including here, where ctest runs and no executive
-# exists. Every token below is one the deleted code emitted and the reader
-# cannot:
+# exists.
+#
+# THE FORMAT-INDEPENDENT CHECK IS THE FIRST EXPECT_NOT, and it is the one
+# that matters. `^Device +Device +Error` is the two-line column header, which
+# src/vmsdcl/dcl_cmd_show.c emits lazily -- only immediately before the first
+# row. With no executive there are no rows, so that header must never appear.
+# Unlike the token checks below it does not depend on knowing what the
+# fabricated row looked like: measured discrimination is `grep -c '^Device  '`
+# = 0 on the clean build and 1 on a build that fabricates a row.
+#
+# The remaining EXPECT_NOTs are HISTORY, kept because a deleted defect that
+# nobody checks for comes back. Each is a token the deleted code emitted and
+# the reader cannot:
 #
 #   ^$1$DGA           the invented name given to a Linux mount point
 #   OVMXSYS           the invented volume label for "/"
@@ -22,6 +36,14 @@
 #   ^NAME: Mounted    a row from the process-local table MOUNT keeps in this
 #                     process's memory, or the hardcoded stub row that was
 #                     printed when even /proc/mounts produced nothing
+#
+# NOSUCHDEV is forbidden here for a different reason -- Rule 10, not row
+# fabrication. The oracle measured "%SYSTEM-W-NOSUCHDEV, no such device
+# available" for ONE condition: a named device the executive says does not
+# exist (section 6). In this environment the executive answered nothing at
+# all, so printing that message would be a false statement in VMS's own
+# voice. The paired positive EXPECT on %OVMX-F-EXECDEV is what stops this
+# test being satisfied by SHOW DEVICE printing nothing whatsoever.
 #
 # MOUNT DUA0: runs FIRST on purpose. It populates that process-local table,
 # so SHOW DEVICE in the same process would print DUA0: from it if it still
@@ -39,10 +61,9 @@
 #
 # WHAT IS NOT ASSERTED HERE: that SHOW DEVICE shows OPA0: when an executive
 # IS present. That needs a real /dev/vms and cannot run under ctest at all
-# (CLAUDE.md Rule 9) -- and today it cannot run in the QEMU runtime either,
-# because nothing in production calls vms_kif_register() and vms.ko rejects
-# ioctls from unregistered processes. That is escalated, not papered over;
-# see the note in src/vmsdcl/dcl_cmd_show.c above cmd_show_terminal. This
-# file does not pretend to cover it.
+# (CLAUDE.md Rule 9). It is proven in the QEMU runtime instead --
+# tests/qemu/test_syssvc_showdev.c drives this same DCL binary against a real
+# executive, including the A-writes/B-reads case where another process
+# allocates the console and SHOW DEVICE observes it.
 VMSDCL="${VMSDCL:-vmsdcl}"
 printf 'MOUNT DUA0: TESTDISK\nSHOW DEVICE\nSHOW DEVICE DUA0:\n' | $VMSDCL 2>&1

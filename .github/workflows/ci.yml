@@ -512,17 +512,35 @@ jobs:
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------
-  # Job 7: User Acceptance Test — scripted VMS session over SSH
+  # Job 7: User Acceptance Test — scripted VMS session on the REAL runtime
   #
-  # Builds the Docker image (using GHA layer cache from docker-build),
-  # starts the OVMX container with SSH, runs a scripted VMS admin session,
-  # and validates output for VMS correctness and absence of Unix leaks.
+  # Boots the real kernel under QEMU, logs in over the console, drives a
+  # scripted VMS admin session, and validates the output for VMS correctness
+  # and the absence of Unix leaks.
+  #
+  # MIGRATED FROM DOCKER+SSH BY vms-0ff. This job used to `docker run` the
+  # dead-legacy container and SSH to port 2222. That container has no
+  # /dev/vms, so the session it certified was a full interactive VMS login
+  # running with NO EXECUTIVE — the exact state epic vms-6b8 exists to make
+  # unreachable. When PID 1 began refusing to boot without an executive, this
+  # job could no longer pass, and it should not have: it was
+  # user-acceptance-testing a system OVMX no longer claims to be.
+  #
+  # The tempting fix — exempt the container so the old harness keeps working —
+  # is the architecture drifting to fit the test harness, which is what Rule 9
+  # was written against. So the UAT moved to the runtime OVMX actually has.
+  # tests/uat/vms_session_qemu.sh runs the SAME command list and the SAME 13
+  # assertions as the SSH script; nothing was relaxed to make QEMU pass.
+  #
+  # KNOWN COVERAGE GAP, tracked not hidden: driving DCL over the console does
+  # not exercise vmssshd, so SSH login is no longer covered end-to-end (the
+  # old job was the only live coverage of it; tests/uat/vms_session_test.sh is
+  # retained for when the SSH path is brought up on QEMU with hostfwd).
   # -----------------------------------------------------------------------
   uat-session:
     name: VMS User Acceptance Test
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: docker-build
 
     steps:
       - name: Checkout
@@ -531,39 +549,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image (uses GHA layer cache)
+      - name: Build bootable image (uses GHA layer cache)
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: distro/Dockerfile.bootable
           push: false
           load: true
-          tags: ovmx-test:latest
+          tags: ovmx-boot:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Install sshpass
-        run: sudo apt-get update -qq && sudo apt-get install -y sshpass
-
-      - name: Start OVMX container
+      - name: Run UAT session on the real runtime (QEMU console)
+        timeout-minutes: 10
         run: |
-          docker run -d --name ovmx-uat -p 2222:22 ovmx-test:latest
-          sleep 5
-
-      - name: Run UAT session test
-        run: |
-          chmod +x tests/uat/vms_session_test.sh
-          tests/uat/vms_session_test.sh
-        timeout-minutes: 3
-
-      - name: Dump container logs (diagnostics)
-        if: always()
-        run: |
-          echo "=== ovmx-uat container logs (vmssshd/DCL stderr) ==="
-          docker logs ovmx-uat 2>&1 | tail -100 || echo "(no logs)"
-
-      - name: Cleanup
-        if: always()
-        run: docker rm -f ovmx-uat 2>/dev/null || true
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/uat/vms_session_qemu.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
 
   # -----------------------------------------------------------------------
   # Job 8: IMGACT.EXE activation proof (musl, aarch64)

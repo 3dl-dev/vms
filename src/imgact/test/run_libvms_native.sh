@@ -94,6 +94,17 @@ echo "== LIBVMSSYS\$SHR.EXE: real src/libvmssys, vector extended with vms_kif_* 
 # milestone vector exported only vms_strlen; extend it (append-only, vms_strlen
 # stays index 0) so libvms's lock-manager ioctl imports bind. Freestanding syscall
 # layer: no --use (no producer deps).
+#
+# APPENDED for vms-8019 (append-only, so every prior consumer's bound vector
+# index is unchanged — GSMATCH LEQUAL-compatible): the process-table client
+# calls. $CREPRC/$GETJPI in src/libvms/syssvc/sys_process.c became READERS of
+# the executive's process table, so libvms now cross-image-imports
+# vms_kif_setprn + vms_kif_getjpi_{self,pid,prcnam}; DCL's SHOW SYSTEM
+# enumerates the table, so DCL.EXE imports vms_kif_procscan (mk_dcl.sh --use's
+# LIBVMSSYS$SHR for exactly this). THE RULE THIS ENCODES: every /dev/vms entry
+# point a product library calls must be a universal of the image that DEFINES
+# it, or the VMS-native link fails — LIBVMSSYS$SHR is the producer of the
+# executive client, and nothing else may re-export it.
 SYSCFLAGS="-fPIC -O2 -ffreestanding -fno-stack-protector -fno-builtin -mno-outline-atomics -I$LIBVMSSYS_DIR"
 SYSOBJS=""
 for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif; do
@@ -103,7 +114,7 @@ done
 $CC -fPIC -mno-outline-atomics -c -o "$WORK/sys_syscall.o" "$LIBVMSSYS_DIR/arch/aarch64/syscall.S"
 SYSOBJS="$SYSOBJS $WORK/sys_syscall.o"
 "$WORK/LINK.EXE" --shareable \
-    --symbol-vector "vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE" \
+    --symbol-vector "vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE" \
     --gsmatch LEQUAL,1,0 -o "$SYSLIB/LIBVMSSYS\$SHR.EXE" $SYSOBJS
 readelf -SW "$SYSLIB/LIBVMSSYS\$SHR.EXE" | grep -q '\.vms\$sv' || { echo "FAIL: LIBVMSSYS\$SHR no symbol vector"; exit 1; }
 

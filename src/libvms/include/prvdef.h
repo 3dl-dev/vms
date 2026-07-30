@@ -145,6 +145,7 @@ _Static_assert(PRV$V_PSWAPM == VMS_PRV_V_PSWAPM, "PRV$V_PSWAPM disagrees with th
 _Static_assert(PRV$V_SETPRI == VMS_PRV_V_SETPRI, "PRV$V_SETPRI disagrees with the executive");
 _Static_assert(PRV$V_SETPRV == VMS_PRV_V_SETPRV, "PRV$V_SETPRV disagrees with the executive");
 _Static_assert(PRV$V_TMPMBX == VMS_PRV_V_TMPMBX, "PRV$V_TMPMBX disagrees with the executive");
+_Static_assert(PRV$V_WORLD  == VMS_PRV_V_WORLD,  "PRV$V_WORLD disagrees with the executive");
 _Static_assert(PRV$V_OPER   == VMS_PRV_V_OPER,   "PRV$V_OPER disagrees with the executive");
 _Static_assert(PRV$V_NETMBX == VMS_PRV_V_NETMBX, "PRV$V_NETMBX disagrees with the executive");
 _Static_assert(PRV$V_SYSPRV == VMS_PRV_V_SYSPRV, "PRV$V_SYSPRV disagrees with the executive");

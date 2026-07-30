@@ -29,11 +29,17 @@ void vms_kif_close(void);
 
 /* Register this process with the kernel module.
  *
- * Takes NO privilege mask (vms-2b8). Registration proves only that a
- * task exists; the executive derives the authorized privilege mask and
- * the UIC from the task's real credentials. A process that could name
- * its own privileges here would be enforcing them against itself. */
-uint32_t vms_kif_register(uint32_t vms_pid);
+ * Takes NO privilege mask and NO process ID (vms-2b8). Registration
+ * proves only that a task exists; the executive derives the authorized
+ * privilege mask and the UIC from the task's real credentials, and
+ * ASSIGNS the VMS process ID. A process that could name its own
+ * privileges here would be enforcing them against itself, and a process
+ * that could name its own VMS process ID could collide with a
+ * privileged process's row and be resolved in its place.
+ *
+ * vms_pid is OUT, and may be NULL: on success it receives the ID the
+ * executive assigned. */
+uint32_t vms_kif_register(uint32_t *vms_pid);
 
 /* Stamp an AUTHENTICATED identity onto this process ($GETJPI reads it
  * back, from any process). The caller must already hold SETPRV to

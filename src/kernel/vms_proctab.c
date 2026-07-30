@@ -116,23 +116,72 @@ void vms_proc_reap_dead(void)
 }
 
 /*
+ * vms_proc_may_read - may `caller` read `target`'s identity?
+ *
+ * ORACLE-PINNED (vms-2b8 round 3). The full transcript is in
+ * docs/oracle/vax73-privileges.md §5; measured on VAX1, OpenVMS
+ * VAX V7.3, by driving the caller's own privilege mask with
+ * SET PROCESS/PRIVILEGE and reading other processes with F$GETJPI:
+ *
+ *   NOALL, same UIC group  ($GETJPI AUDIT_SERVER [SYSTEM] USERNAME)
+ *                                              -> AUDIT$SERVER
+ *   NOALL, other UIC group ($GETJPI TCPIP$FTP_1 [TCPIP$AUX,..])
+ *                                              -> %SYSTEM-F-NOPRIV
+ *   GROUP only, other UIC group                -> %SYSTEM-F-NOPRIV
+ *   WORLD only, other UIC group                -> TCPIP$FTP
+ *
+ * THE OBVIOUS GUESS IS WRONG AND THE MEASUREMENT IS WHY THIS COMMENT
+ * EXISTS. "GROUP to read your own group, WORLD to read anyone" is the
+ * rule everybody expects, and this item was dispatched asserting it.
+ * The oracle says a same-group read needs NO privilege at all, and that
+ * GROUP does not help with a cross-group read -- only WORLD does.
+ * Enforcing the guess would have refused reads VMS allows and named the
+ * wrong privilege in the refusal message for the rest. CLAUDE.md
+ * Rule 10: pin it or do not write it.
+ *
+ * The privilege consulted is cur_privs (the ENABLED mask), which is what
+ * SET PROCESS/PRIVILEGE moved on the oracle -- the authorized mask was
+ * untouched throughout and the answers still changed.
+ */
+bool vms_proc_may_read(const struct vms_proc *caller,
+                       const struct vms_proc *target)
+{
+    if (caller == target)
+        return true;
+    if (uic_group(caller->uic) == uic_group(target->uic))
+        return true;
+    return (caller->cur_privs & VMS_PRV_M_WORLD) != 0;
+}
+
+/*
  * proc_fill_info - snapshot one table row.
  *
  * Called with vms_proc_hash_lock held: the caller copies to userspace
  * after dropping the lock, since copy_to_user() may sleep.
+ *
+ * `full` is the outcome of vms_proc_may_read(). When it is false the row
+ * is REDACTED down to what the oracle's SHOW SYSTEM displays of a
+ * process the caller cannot $GETJPI -- its process ID and its process
+ * name -- and nothing else. See the vms_procscan_args comment in
+ * vms_ioctl.h for why enumeration and identity have different rules on
+ * VMS, and why that is a measurement rather than a compromise.
  */
 static void proc_fill_info(const struct vms_proc *proc,
-                           struct vms_procinfo *info)
+                           struct vms_procinfo *info, bool full)
 {
     memset(info, 0, sizeof(*info));
     info->vms_pid      = proc->vms_pid;
+    memcpy(info->prcnam, proc->prcnam, VMS_PRCNAM_SIZE);
+    info->prcnam[VMS_PRCNAM_SIZE - 1] = '\0';
+
+    if (!full)
+        return;
+
     info->linux_pid    = (uint32_t)proc->linux_pid;
     info->uic          = proc->uic;
     info->current_mode = proc->current_mode;
     info->cur_privs    = proc->cur_privs;
     info->perm_privs   = proc->perm_privs;
-    memcpy(info->prcnam, proc->prcnam, VMS_PRCNAM_SIZE);
-    info->prcnam[VMS_PRCNAM_SIZE - 1] = '\0';
     memcpy(info->username, proc->username, VMS_USERNAME_SIZE);
     info->username[VMS_USERNAME_SIZE - 1] = '\0';
 }
@@ -253,6 +302,24 @@ out:
  * a process name mean anything -- a process by name within the
  * caller's UIC group. VMS returns SS$_NONEXPR when no such process
  * exists.
+ *
+ * READING ANOTHER PROCESS IS AUTHORIZED, NOT FREE (vms-2b8 round 3).
+ * Until this change the PID selector returned any row in the table to
+ * any caller, so an unprivileged process could read the user name, UIC
+ * and privilege mask of every process on the system -- and it was newly
+ * reachable, because the same round opened /dev/vms to unprivileged
+ * callers. vms_proc_may_read() decides, and its rule is oracle-measured
+ * (see the comment on that function). A refused read returns
+ * SS$_NOPRIV (36) and NO row at all, which is what the oracle does: on
+ * VAX 7.3 a privilege-less caller was refused every single JPI item on
+ * a cross-group process, so the refusal is on the process rather than
+ * on the item, and there is no partial answer to hand back.
+ *
+ * The NAME selector needs no separate check: find_by_name() searches
+ * only the caller's own UIC group, and a same-group read requires no
+ * privilege on the oracle. Whether WORLD should WIDEN that search to
+ * the whole system is NOT pinned -- OVMX therefore does not do it
+ * rather than guess (Rule 10).
  */
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
 {
@@ -297,7 +364,14 @@ long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    proc_fill_info(target, &args.info);
+    if (!vms_proc_may_read(proc, target)) {
+        spin_unlock(&vms_proc_hash_lock);
+        memset(&args.info, 0, sizeof(args.info));
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    proc_fill_info(target, &args.info, true);
     spin_unlock(&vms_proc_hash_lock);
 
     args.status = SS__NORMAL;
@@ -407,10 +481,40 @@ long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg)
             args.status = SS__NOPRIV;
             goto out;
         }
+        /*
+         * THE USER NAME IS UNDER THE SAME GUARD AS THE UIC (vms-2b8
+         * round 3). Without it this ioctl guarded the two fields nobody
+         * displays and left the one every reader shows completely
+         * unprotected: a process that had genuinely setuid()'d away from
+         * root could pass its OWN uic and its OWN mask -- satisfying
+         * both clauses above by construction -- with the name "SYSTEM",
+         * and be reported as SYSTEM by $GETJPI to every process from
+         * then on. A user name is not something a process may choose
+         * (CLAUDE.md Rule 10); it comes from SYSUAF through something
+         * holding SETPRV, or it does not come.
+         *
+         * strncmp rather than memcmp: both buffers are NUL-terminated
+         * inside VMS_USERNAME_SIZE (proc->username by construction,
+         * args.username by username_is_valid above), and bytes past the
+         * NUL are not part of the name -- comparing them would refuse a
+         * caller re-stamping its own name from a differently-padded
+         * buffer.
+         */
+        if (strncmp(proc->username, args.username, VMS_USERNAME_SIZE) != 0) {
+            spin_unlock(&proc->mode_lock);
+            spin_unlock(&vms_proc_hash_lock);
+            args.status = SS__NOPRIV;
+            goto out;
+        }
     }
 
-    memcpy(proc->username, args.username, VMS_USERNAME_SIZE);
-    proc->username[VMS_USERNAME_SIZE - 1] = '\0';
+    /*
+     * Store the name normalized: copy up to the NUL and leave the rest
+     * zero, so the field the comparison above reads is never a mixture
+     * of a name and whatever padding a caller happened to send.
+     */
+    memset(proc->username, 0, VMS_USERNAME_SIZE);
+    strncpy(proc->username, args.username, VMS_USERNAME_SIZE - 1);
     proc->uic        = args.uic;
     proc->perm_privs = args.authorized_privs;
     /*
@@ -442,6 +546,21 @@ out:
  * The cursor is an ordinal over the hash walk, so a row can be missed or
  * repeated if the table changes mid-scan. VMS has the same property --
  * SHOW SYSTEM is a sample of a live system, not a transaction.
+ *
+ * ROWS THE CALLER MAY NOT READ ARE REDACTED, NOT OMITTED (vms-2b8
+ * round 3). Before this change the scan handed every field of every row
+ * to every caller, which -- once /dev/vms was opened to unprivileged
+ * processes in the same round -- let any process enumerate the user
+ * name, UIC and privilege mask of the entire system. It was proven by
+ * execution against a real /dev/vms, not argued.
+ *
+ * The fix is shaped by two measurements taken on the oracle in the same
+ * privilege-less state (docs/oracle/vax73-privileges.md §5):
+ * SHOW SYSTEM listed EVERY process including a cross-group one, with
+ * its name; $GETJPI on that same process was refused every item. So
+ * enumeration is not privileged on VMS and identity is, and a row the
+ * caller cannot $GETJPI comes back carrying only what SHOW SYSTEM shows
+ * of it. Skipping it instead would hide a process VMS displays.
  */
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
 {
@@ -449,8 +568,6 @@ long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
     struct vms_proc *cur, *target = NULL;
     uint32_t ordinal = 0;
     int bkt;
-
-    (void)proc;
 
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
@@ -474,7 +591,7 @@ long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg)
         goto out;
     }
 
-    proc_fill_info(target, &args.info);
+    proc_fill_info(target, &args.info, vms_proc_may_read(proc, target));
     spin_unlock(&vms_proc_hash_lock);
 
     args.index++;

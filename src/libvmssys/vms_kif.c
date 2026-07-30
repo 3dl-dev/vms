@@ -35,7 +35,7 @@ void vms_kif_close(void)
     }
 }
 
-uint32_t vms_kif_register(uint32_t vms_pid)
+uint32_t vms_kif_register(uint32_t *vms_pid)
 {
     struct vms_register_args args;
 
@@ -47,14 +47,19 @@ uint32_t vms_kif_register(uint32_t vms_pid)
      * described an unreachable state, and it did so with a status that means
      * something else entirely. See CLAUDE.md Rule 9. */
 
-    /* NO privilege argument (vms-2b8). The executive derives the
-     * authorized mask from this task's real credentials; there is
-     * nothing for the caller to ask for, and so nothing to forge. */
+    /* NO privilege argument and NO process-ID argument (vms-2b8). The
+     * executive derives the authorized mask and the UIC from this task's
+     * real credentials and ASSIGNS the VMS process ID itself; there is
+     * nothing for the caller to ask for, and so nothing to forge. The
+     * assigned ID comes back out -- like $CREPRC's pidadr, the executive
+     * tells the caller what it decided. */
     vms_memset(&args, 0, sizeof(args));
-    args.vms_pid = vms_pid;
 
     if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_REGISTER, (unsigned long)&args) < 0)
         return 0x00000014;
+
+    if (vms_pid)
+        *vms_pid = args.vms_pid;
 
     return args.status;
 }

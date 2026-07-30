@@ -141,7 +141,7 @@ static int bootstrap(const char *who)
      * one. This call used to ask for all 64 bits, which is a process naming
      * its own privileges. The executive DERIVES the mask from the task's
      * real credentials now; $ENQ/$DEQ need no privilege either way. */
-    uint32_t st = vms_kif_register((uint32_t)getpid());
+    uint32_t st = vms_kif_register(NULL);
     if (!(st & 1)) {
         printf("  FAIL: %s: vms_kif_register status=%u\n", who, st);
         return -1;

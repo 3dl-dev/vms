@@ -96,7 +96,65 @@ struct vms_proc *vms_proc_find_or_err(void)
     return proc;
 }
 
-struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid)
+/*
+ * vms_pid_counter - the executive's process-ID generator (vms-2b8).
+ *
+ * OVMX DESIGN CHOICE, labelled in vms_ioctl.h: OpenVMS builds a process
+ * ID from a PCB-vector index plus a sequence number, and no public
+ * document publishes that layout byte for byte, so OVMX does not
+ * imitate it. What OVMX reproduces is the property that matters to
+ * every caller -- the ID is assigned by the executive, is unique among
+ * live processes, and is not handed straight back to the next process
+ * when one exits.
+ *
+ * The base is deliberately above any value a Linux pid can take under
+ * the kernel's own PID_MAX_LIMIT (2^22), so a VMS process ID is never
+ * mistakable for the Linux pid it used to be copied from.
+ */
+#define VMS_PID_BASE    0x10000000u
+static atomic_t vms_pid_counter = ATOMIC_INIT(0);
+
+/*
+ * assign_vms_pid - hand out an unused VMS process ID.
+ *
+ * MUST be called with vms_proc_hash_lock held, so that the uniqueness
+ * scan and the insertion that follows it cannot be separated: two
+ * concurrent registrations that each found "no clash" and then both
+ * inserted would recreate the very collision this exists to prevent.
+ *
+ * A duplicate is possible only after 2^32 registrations have wrapped
+ * the counter onto a still-live process, so the retry loop is a
+ * correctness backstop rather than a hot path -- but it is not
+ * optional: "unlikely" is not "unique", and a single collision lets
+ * $GETJPI resolve one process's identity to another's row.
+ */
+static uint32_t assign_vms_pid(void)
+{
+    struct vms_proc *cur;
+    uint32_t candidate;
+    int bkt, attempts;
+
+    for (attempts = 0; attempts < 1024; attempts++) {
+        bool taken = false;
+
+        candidate = VMS_PID_BASE +
+                    (uint32_t)atomic_inc_return(&vms_pid_counter);
+        if (candidate == 0)
+            continue;   /* 0 is "no process"; never hand it out */
+
+        hash_for_each(vms_proc_hash, bkt, cur, hash_node) {
+            if (cur->vms_pid == candidate) {
+                taken = true;
+                break;
+            }
+        }
+        if (!taken)
+            return candidate;
+    }
+    return 0;   /* table is pathologically full: refuse to register */
+}
+
+struct vms_proc *vms_proc_register(pid_t pid)
 {
     struct vms_proc *existing, *proc;
     int i;
@@ -106,7 +164,6 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid)
         return ERR_PTR(-ENOMEM);
 
     proc->linux_pid = pid;
-    proc->vms_pid = vms_pid;
     proc->current_mode = PSL_C_USER;    /* start in user mode */
 
     /*
@@ -205,11 +262,27 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid)
             return ERR_PTR(-EEXIST);
         }
     }
+    /*
+     * THE VMS PROCESS ID IS ASSIGNED HERE, UNDER THE SAME LOCK AS THE
+     * INSERTION (vms-2b8 round 3). It used to be copied from the
+     * register arguments -- i.e. chosen by the process -- with no
+     * uniqueness check at all, so two processes could share one VMS PID
+     * and $GETJPI by that PID returned whichever the hash walk reached
+     * first. Choosing it here, inside the critical section, is what
+     * makes "unique among live processes" true rather than likely.
+     */
+    proc->vms_pid = assign_vms_pid();
+    if (proc->vms_pid == 0) {
+        spin_unlock(&vms_proc_hash_lock);
+        put_pid(proc->pid_ref);
+        kmem_cache_free(vms_proc_cache, proc);
+        return ERR_PTR(-ENOSPC);
+    }
     hash_add_rcu(vms_proc_hash, &proc->hash_node, pid);
     spin_unlock(&vms_proc_hash_lock);
 
     pr_info("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] privs=0x%llx (derived)\n",
-            pid, vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
+            pid, proc->vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
             proc->perm_privs);
 
     return proc;
@@ -301,14 +374,22 @@ static long vms_ioctl_register(unsigned long arg)
      */
     vms_proc_reap_dead();
 
-    proc = vms_proc_register(current->tgid, args.vms_pid);
+    /*
+     * NOTHING FROM args IS READ. The struct is output-only now: the
+     * privilege mask went in the first round of this item, and the VMS
+     * process ID goes here. A registration that takes no input from the
+     * process cannot be steered by one.
+     */
+    proc = vms_proc_register(current->tgid);
     if (IS_ERR(proc)) {
+        args.vms_pid = 0;
         args.status = 0x0000001C;  /* SS$_DUPNAM (already registered) */
         if (copy_to_user((void __user *)arg, &args, sizeof(args)))
             return -EFAULT;
         return 0;
     }
 
+    args.vms_pid = proc->vms_pid;
     args.status = 0x00000001;  /* SS$_NORMAL */
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -473,6 +554,17 @@ static const struct file_operations vms_fops = {
  * exactly the shape this module already has (vms_ioctl_setident,
  * vms_ioctl_setprv, vms_access_check), so the door must be open for the
  * checks behind it to be the thing that decides.
+ *
+ * THE ANSWER TO THE QUESTION THIS COMMENT WAS ASKED (round 3): YES,
+ * unprivileged processes SHOULD be able to open /dev/vms, and therefore the
+ * per-service checks are load-bearing security, not defence in depth. That
+ * has a cost paid in this same change: when the door was opened in round 2,
+ * vms_ioctl_getjpi() and vms_ioctl_procscan() had NO caller check, so an
+ * unprivileged process could read the user name, UIC and privilege mask of
+ * every process on the system -- the premise that "access control lives
+ * inside each service" was false of the two services the open door newly
+ * exposed. vms_proc_may_read() is that missing check, and its rule is
+ * measured on the oracle rather than assumed (see vms_ioctl.h).
  *
  * OVMX DESIGN CHOICE, labelled as such (CLAUDE.md Rule 8): /dev/vms is an
  * OVMX construct with no VMS counterpart, so no public OpenVMS document

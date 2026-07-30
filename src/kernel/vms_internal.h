@@ -410,7 +410,9 @@ struct vms_proc *vms_proc_find_or_err(void);
  * authorized mask is derived from the task's real credentials inside,
  * never requested by the caller.
  */
-struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid);
+/* The VMS process ID is assigned by the executive (vms-2b8), so there is
+ * no vms_pid parameter to pass: read proc->vms_pid afterwards. */
+struct vms_proc *vms_proc_register(pid_t pid);
 void vms_proc_free(struct vms_proc *proc);
 /* Tear down an entry the caller has ALREADY unlinked under
  * vms_proc_hash_lock (the unlink is the ownership claim). */
@@ -464,6 +466,11 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
+
+/* May `caller` read `target`'s identity? Oracle-pinned rule -- see the
+ * definition in vms_proctab.c and docs/oracle/vax73-privileges.md §5. */
+bool vms_proc_may_read(const struct vms_proc *caller,
+                       const struct vms_proc *target);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

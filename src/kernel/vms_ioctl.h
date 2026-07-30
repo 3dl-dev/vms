@@ -84,6 +84,7 @@ struct vms_mode_args {
 #define VMS_PRV_V_SETPRI    13
 #define VMS_PRV_V_SETPRV    14
 #define VMS_PRV_V_TMPMBX    15
+#define VMS_PRV_V_WORLD     16
 #define VMS_PRV_V_OPER      18
 #define VMS_PRV_V_NETMBX    20
 #define VMS_PRV_V_SYSPRV    28
@@ -93,6 +94,7 @@ struct vms_mode_args {
 #define VMS_PRV_M_CMEXEC    (1ULL << VMS_PRV_V_CMEXEC)
 #define VMS_PRV_M_SETPRV    (1ULL << VMS_PRV_V_SETPRV)
 #define VMS_PRV_M_TMPMBX    (1ULL << VMS_PRV_V_TMPMBX)
+#define VMS_PRV_M_WORLD     (1ULL << VMS_PRV_V_WORLD)
 #define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
 
 /*
@@ -105,13 +107,24 @@ struct vms_mode_args {
  *   CMKRNL  vms_ioctl_setmode -> kernel mode; vms_ioctl_dclast at kernel
  *   CMEXEC  vms_ioctl_setmode -> exec mode;   vms_ioctl_dclast at exec
  *   SETPRV  vms_ioctl_setprv widening; vms_ioctl_setident granting
+ *   WORLD   vms_ioctl_getjpi / vms_ioctl_procscan reading a process
+ *           OUTSIDE the caller's UIC group (vms_proc_may_read)
  * Bits outside this set are STORED and REPORTED (they come from SYSUAF
  * and VMS reports them) but nothing in this tree gates on them. Adding
  * a privilege here without adding the check it names is the defect this
  * constant exists to prevent.
+ *
+ * GROUP IS DELIBERATELY ABSENT, and that is a measurement rather than an
+ * oversight. The obvious guess -- GROUP to read another process in your
+ * own group, WORLD to read any other -- is WRONG on the oracle: with
+ * SET PROCESS/PRIVILEGE=(NOALL) a VAX 7.3 process read a same-group
+ * process's USERNAME successfully, and with GROUP and nothing else it
+ * was still refused a cross-group read. WORLD alone lifted it. The
+ * transcript is docs/oracle/vax73-privileges.md §5. OVMX does not
+ * enforce GROUP anywhere, so it is not listed here.
  */
 #define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
-                             VMS_PRV_M_SETPRV)
+                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD)
 
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */
@@ -289,9 +302,31 @@ struct vms_getlki_args {
  * credentials at registration (vms_proc_register), the same way it
  * already derived the UIC. A process cannot change what it gets by
  * asking differently, because it is no longer asked.
+ *
+ * THE VMS PROCESS ID IS ASSIGNED BY THE EXECUTIVE, NOT REQUESTED
+ * (vms-2b8, round 3). vms_pid used to be an INPUT: the process told the
+ * executive which VMS process ID to file it under, and nothing checked
+ * that the value was not already in use. Two processes could therefore
+ * hold one VMS PID, and $GETJPI by that PID resolved to whichever row
+ * the hash walk reached first -- so an unprivileged process could make
+ * a privileged process's identity answer to a key it chose. That is the
+ * same defect shape as the deleted init_privs field, one field along:
+ * the process telling the executive what it is.
+ *
+ * The field is now OUTPUT-ONLY. Whatever userspace puts here is
+ * overwritten before the executive looks at anything.
+ *
+ * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the VALUE. OpenVMS composes a
+ * process ID from a PCB-vector index plus a sequence number so that a
+ * reused slot never yields a repeated PID, and the extended PID adds
+ * cluster node information; no public document publishes that layout
+ * byte for byte, so OVMX does not pretend to reproduce it. What OVMX
+ * reproduces is the PROPERTY: the ID is assigned by the executive,
+ * unique among live processes, and not immediately reused after a
+ * process exits. See assign_vms_pid() in vms_module.c.
  */
 struct vms_register_args {
-    uint32_t vms_pid;           /* VMS-style process ID */
+    uint32_t vms_pid;           /* return: the VMS process ID assigned */
     uint32_t status;            /* return: SS$_ status */
 };
 
@@ -662,6 +697,29 @@ struct vms_procinfo {
     char     username[VMS_USERNAME_SIZE]; /* "" until an identity is stamped */
 };
 
+/*
+ * WHO MAY READ WHOSE ROW -- ORACLE-PINNED (vms-2b8 round 3).
+ * Transcript: docs/oracle/vax73-privileges.md §5, measured on
+ * VAX1 (OpenVMS VAX V7.3) in one session with SET PROCESS/PRIVILEGE
+ * driving the caller's mask.
+ *
+ *   caller's own row                  -> allowed, no privilege
+ *   another process, SAME UIC group   -> allowed, no privilege
+ *   another process, OTHER UIC group  -> SS$_NOPRIV (36) unless WORLD
+ *
+ * Measured, in that order:
+ *   NOALL      + $GETJPI(AUDIT_SERVER [SYSTEM], "USERNAME") -> AUDIT$SERVER
+ *   NOALL      + $GETJPI(TCPIP$FTP_1 [TCPIP$AUX,..], "USERNAME")
+ *                                          -> %SYSTEM-F-NOPRIV
+ *   GROUP only + the same cross-group read -> %SYSTEM-F-NOPRIV
+ *   WORLD only + the same cross-group read -> TCPIP$FTP
+ * Every item tried on the cross-group process (USERNAME, PRCNAM, STATE,
+ * UIC, CURPRIV) was refused identically, so the refusal is on the
+ * PROCESS, not on the item.
+ *
+ * Enforced by vms_proc_may_read() in vms_proctab.c.
+ */
+
 /* Selector for VMS_IOCTL_GETJPI: how the target process is named. */
 #define VMS_JPI_SEL_SELF    0   /* the calling process */
 #define VMS_JPI_SEL_PID     1   /* by vms_pid */
@@ -685,6 +743,23 @@ struct vms_getjpi_args {
  * SHOW SYSTEM). Set index to 0 for the first row; each call returns
  * one row and advances index. SS$_NONEXPR terminates the scan, which
  * is what $PROCESS_SCAN returns when the wildcard search is exhausted.
+ *
+ * ROWS OUTSIDE THE CALLER'S REACH COME BACK REDACTED, NOT OMITTED, and
+ * that split is measured rather than chosen (docs/oracle/vax73-
+ * privileges.md Section 4). On the oracle, a process holding NO
+ * privileges at all still saw EVERY process in SHOW SYSTEM -- including
+ * one in another UIC group, with its process name -- while $GETJPI on
+ * that same process was refused SS$_NOPRIV for every item. Enumeration
+ * is not privileged on VMS; identity is.
+ *
+ * So a row the caller may not $GETJPI is returned carrying only what
+ * SHOW SYSTEM displays of it -- the process ID and the process name --
+ * with username, UIC, privilege masks and access mode zeroed. It is
+ * NOT skipped, because skipping it would hide a process VMS shows, and
+ * it is not returned whole, because that is the leak this exists to
+ * close. linux_pid is zeroed too: it is an OVMX implementation handle
+ * with no VMS counterpart, so there is no measurement making it
+ * visible.
  */
 struct vms_procscan_args {
     uint32_t index;             /* in: cursor; out: cursor for next call */
@@ -710,11 +785,29 @@ struct vms_setprn_args {
  *
  * The GRANT RULE the executive enforces, and the whole point of the
  * ioctl: a caller WITHOUT SETPRV may only stamp an identity whose
- * authorized privilege mask is a SUBSET of its own authorized mask, and
- * may not change its UIC. So identity establishment is a one-way drop
- * unless the caller holds the privilege VMS names for exceeding its own
- * authorization. A process therefore cannot grant itself a privilege it
- * was not given -- it can only give privileges away.
+ * authorized privilege mask is a SUBSET of its own authorized mask,
+ * may not change its UIC, AND MAY NOT CHANGE ITS USER NAME. So identity
+ * establishment is a one-way drop unless the caller holds the privilege
+ * VMS names for exceeding its own authorization. A process therefore
+ * cannot grant itself a privilege it was not given -- it can only give
+ * privileges away.
+ *
+ * THE USER NAME CLAUSE WAS MISSING UNTIL ROUND 3, and its absence made
+ * the whole ioctl decorative for the half of identity that every reader
+ * DISPLAYS. The mask and the UIC were guarded; the name was memcpy'd
+ * unconditionally. A process that had done a real setuid() off root
+ * could therefore call SETIDENT with its OWN uic and its OWN mask --
+ * satisfying both guards by construction -- and a username of "SYSTEM",
+ * and the executive would report it as SYSTEM to every other process
+ * from then on. VMS has no service by which a process names itself a
+ * user (CLAUDE.md Rule 10); the name arrives from SYSUAF, through
+ * something holding privilege, or it does not arrive.
+ *
+ * A consequence worth stating: a process that has never been given a
+ * user name has "" as its name, and "" is not a legal name to stamp, so
+ * an unauthenticated caller without SETPRV cannot use this ioctl at
+ * all. That is the intended shape. It can still drop privileges through
+ * $SETPRV; what it cannot do is acquire a name.
  *
  * (Self-targeted only. Stamping ANOTHER process's identity is not
  * offered, because OVMX has no VMS behaviour pinned for it yet and

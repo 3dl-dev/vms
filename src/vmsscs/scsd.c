@@ -506,7 +506,13 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
      * op 0x02 CONFIG initially (af2 sends CONFIG ~1.8s later as part of the
      * member-driven reconfiguration round). Sending CONFIG early + acking amsg!=0
      * left VAX1 acking with a bare cat-0x04 and never entering reconfiguration. */
-    int pure = (getenv("OVMX_PURE_SERVER") != NULL);
+    /* vms-760: the joiner's INITIAL add-member burst is MODEL + PARAMS ONLY, with
+     * sysap_ack_msg=0; op0x02 CONFIG is DEFERRED to the later reconfiguration round.
+     * GROUNDED twice: af2 143.759 and the 2->3 reference (VAX3 ss=14/15 -> VAX1
+     * reciprocates MODEL+PARAMS immediately). Sending CONFIG in the initial burst
+     * leaves the member silent. Applies to BOTH joiner-driven paths. */
+    int pure = (getenv("OVMX_PURE_SERVER") != NULL) ||
+               (getenv("OVMX_JOIN_SEQ") != NULL);
 
     /* op 0x14 node CPU/model advertisement (OVMX's own model string). */
     mp.recv_ack = ps->vc.seq.recv_seq;
@@ -588,7 +594,15 @@ static int send_joiner_connect_request(int sock, int ifindex, struct peer_state 
     cp.send_seq = ps->joiner_req_seq; /* retransmits reuse the same seq */
     cp.incarnation = ps->incarnation;
     uint8_t cframe[SCS_CONNECT_FRAME_LEN];
+    /* vms-760: match the 2->3 reference (vax3-2to3-established-join) byte-for-byte --
+     * a joiner-initiated VMS$VAXcluster connect is msgtype 0x5b (like its dir + MSCP
+     * connects; the VC is not up yet), and the 4 descriptor bytes at abs 112/114/116/118
+     * are ZERO. OVMX's vms-d94 path emitted 0x4b + 01s (grounded on a later-phase frame)
+     * which the established member does not accept. */
     if (scs_connect_build_request(&cp, cframe) == 0 &&
+        (cframe[30] = SCS_DIR_OPCODE,
+         cframe[112] = 0x00, cframe[114] = 0x00,
+         cframe[116] = 0x00, cframe[118] = 0x00, 1) &&
         send_frame_to(sock, ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
         ps->joiner_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
@@ -627,7 +641,13 @@ static int send_mscp_connect_request(int sock, int ifindex, struct peer_state *p
     cp.send_seq = ps->mscp_req_seq; /* retransmits reuse the same seq */
     cp.incarnation = ps->incarnation;
     uint8_t cframe[SCS_CONNECT_FRAME_LEN];
+    /* vms-760: connect-class [8:10] (abs22) = 0x0001, NOT the template's 0x03e8.
+     * GROUNDED on the definitive 2->3 reference (vax3-2to3-established-join): the real
+     * joiner's MSCP$DISK connect is byte-identical to ours EXCEPT this field. With
+     * 0x03e8 the established member echoes nothing and never op2-accepts, which is the
+     * long-standing "MSCP connect not accepted" stall. */
     if (scs_connect_build_mscp_request(&cp, cframe) == 0 &&
+        (cframe[22] = 0x01, cframe[23] = 0x00, 1) &&
         send_frame_to(sock, ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
         ps->mscp_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_mscp_req);
@@ -707,8 +727,20 @@ static int send_own_dir_lookup(int sock, int ifindex, struct peer_state *ps,
     }
     lp.incarnation = ps->incarnation;
     uint8_t f[SCS_DIR_LOOKUP_FRAME_LEN];
-    if (scs_dir_build_lookup_request(&lp, f) == 0 &&
-        send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
+    if (scs_dir_build_lookup_request(&lp, f) != 0) {
+        return 0;
+    }
+    /* vms-760: once the MSCP$DISK connection is bound the joiner's remaining dir
+     * lookups switch to DATA-PHASE framing -- msgtype 0x4b and flag[48] (abs62) = 1.
+     * GROUNDED on the 2->3 reference (vax3-2to3-established-join): VAX3's MSCP$TAPE /
+     * 1st MSCP$DISK lookups are 0x5b/flag0, then its 2nd MSCP$DISK and VMS$VAXcluster
+     * lookups are 0x4b/flag1. Sending the VMS$VAXcluster lookup as 0x5b/flag0 leaves
+     * the member silent (the step-6 stall). */
+    if (ps->mscp_connected) {
+        f[30] = SCS_MSGTYPE_SEQAPP;
+        f[62] = 0x01;
+    }
+    if (send_frame_to(sock, ifindex, ps->eth_mac, f, sizeof(f)) > 0) {
         scs_vc_record_sent(&ps->vc, lp.send_seq, monotonic_ms());
         clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
         return 1;
@@ -2216,6 +2248,29 @@ int main(int argc, char **argv)
                            " connect: local=0x%08X remote=0x%08X\n",
                            (unsigned)OVMX_MSCP_CONID, lconid);
                     fflush(stdout);
+                    /* vms-760: CONFIRM the MSCP connection (op=3) before proceeding.
+                     * GROUNDED on the 2->3 reference: VAX3 sends its MSCP op=3 confirm
+                     * (ss=8) BEFORE its VC connect (ss=10). Skipping it leaves the MSCP
+                     * connection half-open and the member then only ECHOES the next
+                     * connect (op=1) and never op2-accepts it -- the step-7 stall. */
+                    {
+                        struct scs_dir_params mc;
+                        memset(&mc, 0, sizeof(mc));
+                        memcpy(mc.dst_mac, ps->eth_mac, 6);
+                        memcpy(mc.src_mac, our_hw_mac, 6);
+                        memcpy(mc.src_logical, our_src_logical, 6);
+                        memcpy(mc.peer_logical, ps->logical, 6);
+                        mc.remote_conid = ps->mscp_remote_conid;
+                        mc.local_conid = OVMX_MSCP_CONID;
+                        mc.recv_ack = ps->vc.seq.recv_seq;
+                        mc.send_seq = scs_seq_advance(&ps->vc.seq);
+                        mc.incarnation = ps->incarnation;
+                        uint8_t mf[SCS_DIR_CONFIRM_FRAME_LEN];
+                        if (scs_dir_build_connect_confirm(&mc, mf) == 0) {
+                            send_frame_to(sock, (int)ifindex, ps->eth_mac, mf, sizeof(mf));
+                            scs_vc_record_sent(&ps->vc, mc.send_seq, monotonic_ms());
+                        }
+                    }
                     if (ps->join_step == JS_MSCP_CONNECT) {
                         ps->join_step = JS_DIR_LOOKUP_VC;
                         ps->js_retx = 0;

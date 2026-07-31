@@ -100,6 +100,7 @@ static int fail = 0;
 #define SYSTARTUP_COM   "/tmp/OVMX47B_SYSTARTUP.COM"
 #define UIC_COM         "/tmp/OVMX47B_UIC.COM"
 #define SUBP_COM        "/tmp/OVMX47B_SUBP.COM"
+#define PRIO_COM        "/tmp/OVMX47B_PRIO.COM"
 #define PLAIN_COM       "/tmp/OVMX47B_PLAIN.COM"
 /* A "did the image run at all?" witness: the script's only job is to
  * leave a file behind, so a refusal that still ran the image cannot hide
@@ -192,6 +193,17 @@ static int write_fixtures(void)
     if (write_file(SUBP_COM,
                    "$! subprocess-qualifier refusal (test fixture, vms-47b)\n"
                    "$ RUN/PROCESS_NAME=" SUBP_NAME
+                   " \"" TOUCH_SCRIPT "\"\n"
+                   "$ EXIT\n", 0644) != 0)
+        return -1;
+
+    /* P8, second case: a process qualifier that is NOT one of the four
+     * RUN/DETACHED honours. The oracle's rule is "any of the qualifiers
+     * except /UIC or /DETACHED", so refusing a list of four would leave
+     * this one silently discarded -- the same defect, narrower. */
+    if (write_file(PRIO_COM,
+                   "$! non-enumerated process qualifier (test fixture, vms-47b)\n"
+                   "$ RUN/PRIORITY=4"
                    " \"" TOUCH_SCRIPT "\"\n"
                    "$ EXIT\n", 0644) != 0)
         return -1;
@@ -835,6 +847,15 @@ int main(void)
         CHECK(!touched(),
               "the image was not run behind the subprocess refusal");
 
+        /* A qualifier outside the four RUN/DETACHED honours. The refusal
+         * is on "any qualifier", as the oracle states it, not on a list
+         * this code happened to enumerate. */
+        clear_touch();
+        run_dcl(PRIO_COM, out8, sizeof(out8), &exit_st);
+        printf("  (RUN/PRIORITY with no /DETACHED)\n%s\n", out8);
+        CHECK(strstr(out8, "-OVMX-F-NOSUBPRC,") != NULL && !touched(),
+              "a process qualifier outside the honoured four is refused too");
+
         /* Positive control. */
         clear_touch();
         run_dcl(PLAIN_COM, out8, sizeof(out8), &exit_st);
@@ -847,6 +868,7 @@ int main(void)
     unlink(TOUCH_SCRIPT);
     unlink(UIC_COM);
     unlink(SUBP_COM);
+    unlink(PRIO_COM);
     unlink(PLAIN_COM);
     unlink(SVC_STARTUP_COM);
     unlink(SYSTARTUP_COM);

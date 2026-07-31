@@ -656,10 +656,8 @@ static struct dsc$descriptor_s dsc_from_str(const char *s)
  * values (src/libvms/include/ovmx_status.h), print under the facility
  * name OVMX, and cannot be mistaken for VMS conditions.
  */
-static void run_creprc_failed(uint32_t status)
+static void run_print_condition(uint32_t status, int chained)
 {
-    dcl_error("RUN", 4, "CREPRC", "process creation failed");
-
     char sec[256];
     struct dsc$descriptor_s sec_d;
     uint16_t sec_len = 0;
@@ -670,19 +668,107 @@ static void run_creprc_failed(uint32_t status)
     if (sys$getmsg(status, &sec_len, &sec_d, MSG$M_ALL, NULL) & 1) {
         sec[sec_len] = '\0';
         /* A chained message is introduced by '-', not '%'. */
-        if (sec[0] == '%') sec[0] = '-';
+        if (chained && sec[0] == '%') sec[0] = '-';
         fprintf(stderr, "%s\n", sec);
     }
+}
+
+static void run_creprc_failed(uint32_t status)
+{
+    dcl_error("RUN", 4, "CREPRC", "process creation failed");
+    run_print_condition(status, 1);
+}
+
+/*
+ * The RUN (Process) qualifier set, VERBATIM from the oracle.
+ *
+ * Source: reference lab VAX1, OpenVMS VAX V7.3, 2026-07-31,
+ * `HELP/NOPROMPT RUN Process`, the "Qualifiers" index. Transcribed in
+ * the order HELP prints it, with nothing added and nothing dropped.
+ *
+ * WHY THE LIST IS WRITTEN OUT RATHER THAN INFERRED. The oracle sentence
+ * this table serves -- "A subprocess is created if any of the
+ * qualifiers except the /UIC or the /DETACHED qualifier is specified"
+ * -- appears under HELP RUN *Process*. The same HELP tree has a
+ * separate HELP RUN *Image* topic whose entire qualifier list is
+ * /DEBUG (/NODEBUG). Testing "does the command carry ANY qualifier?"
+ * silently promotes the Process topic's sentence into a statement
+ * about the Image topic's qualifiers, which the oracle does not
+ * support -- and OVMX shipped exactly that: RUN/NODEBUG <image> was
+ * refused as a subprocess request and the image did not run. Only the
+ * names below may raise OVMX$_NOSUBPRC.
+ *
+ * /UIC and /DETACHED are IN the table because they are in the oracle's
+ * index; the sentence excepts them, and run_refuse_unhonourable()
+ * excepts them, so the table stays a faithful copy of what HELP prints
+ * rather than a copy pre-filtered to this one use.
+ *
+ * A qualifier in NEITHER topic (RUN/NOSUCHQUAL) is not this code's
+ * business: on the oracle DCL itself rejects it before RUN is entered
+ * -- "%DCL-W-IVQUAL, unrecognized qualifier - check validity,
+ * spelling, and placement" (VAX1, same session). OVMX's DCL parser
+ * validates no qualifier against any command's table, for any command;
+ * that is a parser-wide gap, and inventing a RUN-only answer for it
+ * here would be a third answer to a question VMS answers elsewhere.
+ */
+static const char *const run_process_qualifiers[] = {
+    "ACCOUNTING", "AST_LIMIT", "AUTHORIZE", "BUFFER_LIMIT",
+    "DELAY", "DETACHED", "DUMP", "ENQUEUE_LIMIT",
+    "ERROR", "EXTENT", "FILE_LIMIT", "INPUT", "INTERVAL",
+    "IO_BUFFERED", "IO_DIRECT", "JOB_TABLE_QUOTA",
+    "MAILBOX", "MAXIMUM_WORKING_SET", "ON", "OUTPUT",
+    "PAGE_FILE", "PRIORITY", "PRIVILEGES", "PROCESS_NAME",
+    "QUEUE_LIMIT", "RESOURCE_WAIT", "SCHEDULE", "SERVICE_FAILURE",
+    "SUBPROCESS_LIMIT", "SWAPPING", "TIME_LIMIT", "TRUSTED",
+    "UIC", "WORKING_SET",
+};
+
+/*
+ * How many of the command's qualifiers are RUN (Process) qualifiers
+ * OTHER than the two the oracle's sentence excepts?
+ *
+ * The count is over the PARSED qualifier names, not over
+ * dcl_has_qualifier(), because a negated form (/NOACCOUNTING) is still
+ * a qualifier that was "specified" in the oracle's sense -- the parser
+ * records it as name "ACCOUNTING" with negated set.
+ */
+static int run_process_qualifier_count(const struct dcl_command *cmd)
+{
+    int n = 0;
+    for (int i = 0; i < cmd->qualifier_count; i++) {
+        const char *name = cmd->qualifiers[i].name;
+        if (strcasecmp(name, "UIC") == 0 || strcasecmp(name, "DETACHED") == 0)
+            continue;
+        for (size_t j = 0;
+             j < sizeof(run_process_qualifiers) / sizeof(run_process_qualifiers[0]);
+             j++) {
+            if (strcasecmp(name, run_process_qualifiers[j]) == 0) {
+                n++;
+                break;
+            }
+        }
+    }
+    return n;
 }
 
 /*
  * run_refuse_unhonourable - refuse a RUN that OVMX cannot carry out, at
  * the command layer, BEFORE anything is created.
  *
- * WHY THIS FUNCTION EXISTS AT ALL (CLAUDE.md Rule 10). RUN's process
- * qualifiers are documented OpenVMS syntax, and their documented
- * meaning is quoted verbatim in ovmx_status.h next to the two condition
- * values raised here. OVMX honours exactly one of the forms they select
+ * WHAT IT MAY AND MAY NOT REFUSE. Refusing a qualifier VMS accepts is
+ * not the cautious version of accepting one VMS cannot honour -- it is
+ * the mirror image of it, and both are Rule 10's illegal third answer.
+ * Discarding tells the user their instruction was taken when it was
+ * not; refusing tells them it was invalid when it was not. Every
+ * refusal below is therefore scoped by a captured HELP topic, not by a
+ * paraphrase of one.
+ *
+ * WHY THIS FUNCTION EXISTS AT ALL (CLAUDE.md Rule 10). RUN's
+ * qualifiers are documented OpenVMS syntax, and the HELP text that
+ * gives each of them its meaning -- and that says WHICH of RUN's two
+ * topics it belongs to -- is quoted verbatim in ovmx_status.h next to
+ * the three condition values raised here.
+ * OVMX honours exactly one of the forms they select
  * -- RUN/DETACHED, which $CREPRC implements. For the others, Rule 10
  * allows two answers and only two: reproduce what VMS does, or make the
  * condition unreachable. It cannot be made unreachable, because a user
@@ -720,18 +806,42 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
         return OVMX$_NOPRCUIC;
     }
 
-    /* ANY qualifier, not a list of four. The oracle draws the line
-     * itself -- HELP RUN Process (VAX2, OpenVMS VAX V7.3, 2026-07-31):
-     * "A subprocess is created if any of the qualifiers except the /UIC
-     * or the /DETACHED qualifier is specified." /UIC is already gone
-     * above, so what is left here, with no /DETACHED, is a request for
-     * a subprocess whichever of the thirty-odd documented qualifiers it
-     * was written with. Enumerating four of them would refuse
-     * /PROCESS_NAME and go on silently discarding /PRIORITY -- the same
-     * defect, narrower. */
-    if (!dcl_has_qualifier(cmd, "DETACHED") && cmd->qualifier_count > 0) {
+    /* A RUN (PROCESS) qualifier -- any of the thirty-two the oracle's
+     * index lists besides /UIC and /DETACHED -- asks OpenVMS for a
+     * SUBPROCESS when /DETACHED is absent. HELP RUN Process (VAX1,
+     * OpenVMS VAX V7.3, 2026-07-31): "A subprocess is created if any of
+     * the qualifiers except the /UIC or the /DETACHED qualifier is
+     * specified." Enumerating four of them (round 1) went on silently
+     * discarding /PRIORITY; testing cmd->qualifier_count (round 2) went
+     * the other way and refused /NODEBUG, which is not a process
+     * qualifier at all. The set the sentence is scoped to is
+     * run_process_qualifiers[], and that is the set tested here. */
+    if (!dcl_has_qualifier(cmd, "DETACHED") &&
+        run_process_qualifier_count(cmd) > 0) {
         run_creprc_failed(OVMX$_NOSUBPRC);
         return OVMX$_NOSUBPRC;
+    }
+
+    /* /DEBUG belongs to the OTHER RUN topic. `HELP/NOPROMPT RUN Image
+     * Qualifier` (VAX1, same session) lists /DEBUG and /NODEBUG and
+     * nothing else, and the topic itself says the image is executed
+     * "within the context of your process" -- no process is created,
+     * so nothing here may be reported as a process creation failing.
+     *
+     * /NODEBUG is not mentioned in this function at all, deliberately.
+     * It asks for the image to run without the debugger, which is what
+     * OVMX does; VMS is matched by doing nothing. (The parser records
+     * /NODEBUG as name "DEBUG" with negated set, so dcl_has_qualifier
+     * returns 0 for it and this branch is not taken.)
+     *
+     * /DEBUG asks for a debugger OVMX has not got, and no OpenVMS
+     * condition value means that (see OVMX$_NODEBUGGER in
+     * ovmx_status.h). It is reported as itself, as a PRIMARY message,
+     * because there is no VMS-side operation here that failed for it
+     * to be chained to. */
+    if (dcl_has_qualifier(cmd, "DEBUG")) {
+        run_print_condition(OVMX$_NODEBUGGER, 0);
+        return OVMX$_NODEBUGGER;
     }
 
     return 0;

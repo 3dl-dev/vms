@@ -85,15 +85,32 @@ int main(void) {
      * interface gap (reported in vms-290) -- but the kernel derives status
      * from prev_state in lockstep (src/kernel/vms_ast.c: `args.status =
      * args.prev_state ? SS__WASSET : SS__WASCLR;`), so `status == SS_WASSET`
-     * and `prev_state != 0` are the same fact under two names. Checking
-     * status under the original prev_state-worded message is therefore not
-     * a misdescription: it is still true, and it is what keeps this suite's
-     * red set under the AST-disable defect equal to what the manifest
-     * requires.
+     * and `prev_state != 0` are the same fact under two names.
+     *
+     * ROUND-3 FIX (vms-290 adversary finding): this originally left TWO
+     * pairs of CHECK() calls testing the byte-identical condition
+     * `setast_st == <value>` under two different messages -- reporting two
+     * properties while actually testing one, which is vacuous per the
+     * "an assertion satisfiable by something other than the behavior under
+     * test proves nothing" rule. Below:
+     *   - the DISABLE pair (WASSET / "previous state was enabled") is not
+     *     named by any facility_defects.sh require_fail/knock_on_fail entry
+     *     (grep confirms neither string appears there), so nothing outside
+     *     this file depends on it staying two lines. It is collapsed into
+     *     ONE check that states both facts honestly instead of two checks
+     *     of one fact.
+     *   - the ENABLE pair (WASCLR / "prev state was disabled") CANNOT be
+     *     collapsed the same way: both exact strings are required literal
+     *     text for the ast-setast-disable negative control (facility_defects.sh)
+     *     and for the facility_negctl_manifest selftest that checks they
+     *     exist verbatim in this source. Removing either line would MISS
+     *     that control's require_fail/knock_on_fail set. It stays two CHECK
+     *     lines, but is now explicitly disclosed here (not just in
+     *     facility_defects.sh's knock_on_why) as testing one fact.
      */
     uint32_t setast_st = vms_kif_setast(0);
-    CHECK(setast_st == SS_WASSET, "SETAST(disable) returns WASSET");
-    CHECK(setast_st == SS_WASSET, "previous state was enabled");
+    CHECK(setast_st == SS_WASSET,
+          "SETAST(disable) returns WASSET (== previous state was enabled)");
 
     /* 2. Disable again - should return WASCLR (already disabled) */
     setast_st = vms_kif_setast(0);
@@ -109,11 +126,52 @@ int main(void) {
 
     /* 5. Re-enable AST delivery */
     setast_st = vms_kif_setast(1);
+    /*
+     * DUPLICATE CONDITION, KEPT AND NOW EXPLICITLY DISCLOSED HERE (see the
+     * ROUND-3 FIX note above the disable pair): both CHECKs below read the
+     * SAME `setast_st` value. They stay two lines because both exact
+     * message strings are required literal text for the ast-setast-disable
+     * negative control's require_fail/knock_on_fail set in
+     * tests/qemu/facility_defects.sh -- collapsing them would make that
+     * control's require_fail entry go MISSING under its own mutation. They
+     * are not two independent properties; they are the single `status`
+     * value vms_kif_setast() returns, read under the two names the raw
+     * ioctl's separate `status`/`prev_state` fields used to carry
+     * (src/kernel/vms_ast.c derives status from prev_state in lockstep, so
+     * this was already true before the vms-290 conversion, not introduced
+     * by it).
+     */
     CHECK(setast_st == SS_WASCLR, "SETAST(enable) returns WASCLR");
     CHECK(setast_st == SS_WASCLR, "prev state was disabled");
 
     /*
-     * 6. Request delivery (the kernel will try to deliver via signal).
+     * 5b. NEW (vms-290 round 3): prove vms_kif_dclast()'s astprm marshalling
+     * against a real /dev/vms. Steps 3-4 above only ever checked the
+     * completion status (SS_NORMAL), which is identical whether or not
+     * vms_kif_dclast() actually carries the caller's astprm into the
+     * kernel queue -- a wrapper that silently dropped astprm (e.g. always
+     * sent 0) would leave both of those CHECKs green. VMS_IOCTL_DELIVERAST
+     * dequeues FIFO (src/kernel/vms_ast.c vms_ioctl_deliverast(): "Dequeue
+     * first entry" from a list the DCLAST handler appends to with
+     * list_add_tail()), so after steps 3-4 the pending queue for this
+     * process/mode is [astprm=42, astprm=99] in that order. Reading the
+     * head back here through vms_kif_deliverast() and checking astprm==42
+     * closes the gap: if vms_kif_dclast() mis-marshalled astprm, this is
+     * the only assertion in the suite that would catch it. (Verified by
+     * mutation -- see the round-3 commit message: dropping astprm in
+     * vms_kif_dclast() reddens exactly this assertion and nothing else.)
+     */
+    uint64_t dlv_astadr = 0, dlv_astprm = 0;
+    uint8_t dlv_acmode = 0xFF;
+    int dlv_rc = vms_kif_deliverast(&dlv_astadr, &dlv_astprm, &dlv_acmode);
+    CHECK(dlv_rc == 0, "DELIVERAST via wrapper returns the queued AST");
+    CHECK(dlv_astprm == 42,
+          "DELIVERAST astprm matches the value DCLAST declared (42)");
+
+    /*
+     * 6. Request delivery of the SECOND queued AST (astprm=99, left in the
+     * queue by step 5b above) via the kernel will try to deliver via
+     * signal.
      *
      * NOT CONVERTED (vms-290 finding): this call passes NULL as the ioctl
      * argument on purpose, to prove the kernel does not crash on a bad

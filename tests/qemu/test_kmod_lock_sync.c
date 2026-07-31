@@ -309,10 +309,24 @@ static void child_completion_ast(int c2p_w, int p2c_r)
      * SS_NORMAL` check: the kernel only ever writes SS__NORMAL on the
      * success path that returns 0 (src/kernel/vms_ast.c
      * vms_ioctl_deliverast(), `args.status = SS__NORMAL;` immediately
-     * before the 0 return, and the only other path returns -EAGAIN with
-     * args untouched) -- so `ar == 0` already IS "status == SS_NORMAL";
-     * vms_kif_deliverast()'s int return is that same fact, and it has no
-     * separate status out-parameter to check.
+     * before the 0 return) -- so `ar == 0` already IS "status ==
+     * SS_NORMAL"; vms_kif_deliverast()'s int return is that same fact, and
+     * it has no separate status out-parameter to check.
+     *
+     * CORRECTED (vms-290 round 3, false emphatic): a prior version of this
+     * comment claimed "the only other path returns -EAGAIN with args
+     * untouched". Read against src/kernel/vms_ioctl_deliverast() that is
+     * false -- there are TWO non-success returns, not one: -EAGAIN when no
+     * AST is pending for any enabled mode, and -EFAULT if copy_to_user()
+     * fails on the caller's buffer (reachable with a bad pointer, and
+     * test_kmod_ast.c's deliberately-raw NULL-arg DELIVERAST call, kept
+     * unconverted for exactly this reason, exercises it). Neither matters
+     * to `ar == 0` above: vms_kif_deliverast() only writes its out-params
+     * when the ioctl call returns >= 0 (src/libvmssys/vms_kif.c), so both
+     * non-success kernel returns are indistinguishable at this call site --
+     * this scenario's buffer is always the wrapper's own valid on-stack
+     * struct, so -EFAULT is not reachable HERE, but the general claim
+     * about the kernel function was still wrong and is removed.
      */
     uint32_t granted_mode = 0;
     uint32_t getlki_st = vms_kif_getlki(enq.lkid, &granted_mode, NULL, NULL, NULL);

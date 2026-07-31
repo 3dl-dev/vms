@@ -648,14 +648,24 @@ EOF
         case "$_f" in
         facility)     echo "kernel-interface binding in the PRODUCT (vms_kif kif_bind -> vms_kif_register)";;
         targets)      echo "libvmssys/vms_kif.c";;
-        # MEASURED: test_kmod_bind, and -- since vms-8019 -- test_syssvc_procnam.
+        # MEASURED: test_kmod_bind, and -- since vms-8019 -- test_syssvc_procnam,
+        # and -- since vms-6a7 -- test_syssvc_showproc.
         # Round 1 also listed the suites in blind_suites below, which permitted
         # four suite groups to redden while only one could; those are now
         # declared as what they are: BLIND. test_syssvc_procnam is the
         # opposite case and is here on measurement, not permission: it is the
         # FIRST public-API suite that does NOT hand-register, so it is the
         # first one that can see this defect at all.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam";;
+        # test_syssvc_showproc is the SECOND such suite, and it was added to
+        # this list the way the method requires: not predicted, but read off a
+        # run. It landed declaring only proctab-crossgroup-identity, and the
+        # first CI run after it merged reddened it here -- one suite outside
+        # the declared set, one assertion outside the named set. Both directions
+        # of the equality check firing at once is the check working, not a
+        # coarse mutation, and the honest fix is to DECLARE the dependency
+        # rather than narrow a suite whose whole value is that it drives the
+        # user-visible command through the entire stack.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
 These four drive the product's own vms_kif client, so restoring the vms-9fc
@@ -679,7 +689,7 @@ of driving vms_kif; it is a property of hand-registering first.
 EOF
                       ;;
         isolation)    echo "isolated";;
-        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Two suites detect it: test_kmod_bind, and test_syssvc_procnam through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
+        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Three suites detect it: test_kmod_bind, and test_syssvc_procnam and test_syssvc_showproc through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
         require_fail) cat <<'EOF'
 $SETEF reaches the executive with no explicit register
 $GETJPI(self) resolves the auto-bound process
@@ -700,6 +710,7 @@ child's executive entry is the CHILD's, not the parent's
 the executive assigned the caller a VMS process ID
 sys$creprc created the subject process
 sys$creprc returned the subject's pid
+sys$creprc returned the subject's VMS process ID
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -739,6 +750,38 @@ four of its assertions appear here and none of the rest of the suite, however
 many it has grown to. (The count is deliberately not written down: it was, and
 adding an assertion to the suite silently rotted it. The require_fail set is
 the machine-checked statement; this paragraph is the reasoning.)
+
+THE LAST ONE, "sys$creprc returned the subject's VMS process ID", is
+test_syssvc_showproc reaching the identical wall one suite later (vms-6a7).
+That suite exists to prove SHOW SYSTEM and SHOW PROCESS are READERS of the
+executive's process table, so its very first act is $GETJPI(self) and its
+second is a $CREPRC of the subject it will then go looking for. With the bind
+deleted, both fail for the reason suite 3 above already gives -- the child
+cannot register, so it cannot report a process ID, so the handshake fails --
+and the suite stops before it ever runs DCL. That is why it contributes only
+THREE reds and why two of the three are texts this manifest already names:
+"the caller has a row in the executive's process table" is the same assertion
+test_syssvc_procnam makes, word for word, and so is "sys$creprc created the
+subject process". Only the pid assertion is worded differently ("VMS process
+ID" rather than "pid"), which is the whole of the delta this entry gained.
+
+DECLARED, NOT NARROWED, AND THE REASON MATTERS. The alternative fix was to
+make test_syssvc_showproc insensitive to anything outside its own subject --
+to stop it touching registration, the process table and $CREPRC. That would
+mean not driving the real DCL.EXE end to end, which is the only thing that
+makes it evidence about a user-visible command at all (CLAUDE.md Rule 11's
+corollary: the command is a reader of the facility). A suite that drives the
+whole stack SHOULD be sensitive to the whole stack; the defect was that the
+manifest did not SAY so, and an undeclared red is indistinguishable from a
+non-minimal mutation. Saying so is the fix.
+
+MEASURED ON BOTH ARCHITECTURES, because the red set did not have to agree.
+The x86_64 CI runner (run 30598269086, SHA 5ef2b65) and an aarch64 host under
+pure TCG produced the SAME stray suite and the SAME single unnamed assertion,
+byte for byte. There is no ending-picks-itself race here of the kind
+creprc-handshake-eintr has: test_syssvc_showproc.c:574-582 evaluates both
+$CREPRC assertions before its early return, so the three reds are the same
+three whichever way the scheduler runs.
 EOF
                       ;;
         esac;;

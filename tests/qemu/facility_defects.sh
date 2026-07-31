@@ -285,14 +285,26 @@ EOF
         case "$_f" in
         facility)     echo "event flags (VMS_IOCTL_SETEF/CLREF/READEF/WAITFR/WFLOR/WFLAND/ASCEFC/DACEFC)";;
         targets)      echo "kernel/vms_eflag.c";;
-        suites_red)   echo "test_kmod_eflag";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
+        suites_red)   echo "test_kmod_eflag test_kmod_eflag_mproc";;
+        blind_suites) echo "test_syssvc_ef_mproc";;
+        blind_why)    cat <<'EOF'
+test_syssvc_ef_mproc asserts the SAME property as test_kmod_eflag_mproc -- a
+common event flag cluster is shared between processes -- but through the
+PUBLIC sys$ API. No defect injected into kernel/vms_eflag.c can redden it,
+because src/libvms/syssvc/sys_event.c never calls the executive at all: it
+implements all 128 flags in per-process PCB memory, and every event-flag
+vms_kif_* entry point has zero callers product-wide. That is the defect the
+suite exists to expose (vms-d7f), measured on this harness -- the raw-ioctl
+twin passes and the public-API suite fails 8 assertions in the same boot.
+Move this suite into suites_red once sys_event.c calls the executive.
+EOF
+                      ;;
         isolation)    echo "isolated";;
         why)          echo "\$CLREF stops clearing the bit. It still REPORTS the correct previous state, so only the assertions that read the flag back afterwards can see it -- which is exactly the shape of a facade that reports success while changing nothing.";;
         require_fail) cat <<'EOF'
 readef(5) after clear returns WASCLR
 cluster has flags 0,3,7,31 set
+child: a common flag CLEARED BY THE PARENT reads clear here (A clears, B reads)
 EOF
                       ;;
         knock_on_fail) echo "";;

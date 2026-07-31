@@ -1,7 +1,10 @@
 $! STARTUP.COM - OVMX System Startup Command Procedure
 $!
 $! Executed by STARTUP.EXE during boot from SYS$MANAGER:STARTUP.COM
-$! Runs after kernel modules, system disk mount, and LNM daemon start.
+$! Runs after kernel modules and system disk mount. There is no logical
+$! name daemon to wait for: on VMS the logical name tables are
+$! executive-resident, not a service (vms-a4b) -- see the NOTE ON
+$! SERVICES below and in src/ovmx_init/ovmx_init.c.
 $! Edits to this file on the system disk persist across reboots.
 $!
 $ SET NOON

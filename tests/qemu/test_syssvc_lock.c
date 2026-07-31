@@ -29,23 +29,23 @@
  *      the release is visible cross-process through the public API, not
  *      just within one process's private state).
  *
- * BOOTSTRAP NOTE (documented, not a workaround): the kernel module
- * requires a process to VMS_IOCTL_REGISTER before any other ioctl
- * (src/kernel/vms_module.c: "All other ioctls require a registered
- * process"). src/libvms/syssvc/sys_lock.c's bind_to_executive() only opens
- * /dev/vms; nothing in production code calls vms_kif_register()
- * yet -- process registration at image-activation time is Phase 3 work
- * (vms-9fc / vms-pt1, "executive owns a process table"), not built. vms_kif.h's
- * own doc comment says the same thing ("1. Call vms_kif_open() ... 2. Call
- * vms_kif_register() ... 3. Use vms_kif_* functions"). This test performs
- * that bootstrap step directly via the real vms_kif_open()/vms_kif_register()
- * entry points (the same ones test_kmod_*.c's raw-ioctl tests use) before
- * calling the public sys$ API -- it does not touch or bypass sys_lock.c's
- * do_enq/sys$deq, which still make the exact ioctl calls every caller uses.
- * CONSEQUENCE, stated plainly: this proves the lock plumbing works through
- * the public API, NOT that a normally activated OVMX image can use it --
- * a real image never registers, so vms_module.c would reject its ioctls.
- * That gap is vms-9fc, which this item blocks.
+ * BOOTSTRAP NOTE, REMEASURED (vms-47b round 5): vms-9fc has landed.
+ * sys_lock.c no longer has a bind_to_executive() -- it was deleted, not
+ * fixed in place -- and $ENQ/$DEQ now call vms_kif_enq()/vms_kif_deq(),
+ * which bind through kif_bind() (src/libvmssys/vms_kif.c) on their own
+ * first call, the same way every other vms_kif_* entry point does. A
+ * normally activated image reaching sys$enqw would register itself that
+ * way; it does not need the manual step below any more.
+ *
+ * This test still calls vms_kif_open()/vms_kif_register() explicitly,
+ * before touching sys$enqw, exactly as facility_defects.sh's
+ * bind-client-no-register control documents it (see that manifest entry's
+ * blind_why): that is what makes this suite BLIND to the kif_bind-removed
+ * defect the control restores -- if kif_bind() stopped calling
+ * vms_kif_register(), this program's own explicit call would still
+ * register it, and the suite would stay green. It does not touch or
+ * bypass sys_lock.c's do_enq/sys$deq, which still make the exact ioctl
+ * calls every caller uses.
  *
  * Requires a real, insmod'd vms.ko at /dev/vms. If /dev/vms cannot be
  * opened -- which happens ONLY in the CI negative-control rig, never in

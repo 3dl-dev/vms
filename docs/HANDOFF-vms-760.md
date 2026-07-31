@@ -7,6 +7,27 @@ vms-760`, then `docs/cluster-protocol-spec.md` §4(m), §4(n), §4(o), §4(p), �
 > limit — see §0b). Live notes go on **`vms-01c`**; `vms-760`'s local history is
 > still readable with `rd show vms-760`.
 
+> ## ⇒ WHERE THE WORK IS NOW (2026-07-30g)
+>
+> **`vms-760` is CLOSED — OVMX reaches and holds `SHOW CLUSTER` MEMBER.** So is
+> `vms-4f2` (the milestone proof-point), `vms-01c`, `vms-00d`, `vms-70b`.
+> *(Note: `vms-760`'s close did not sync — its rd event exceeds the relay size
+> limit. Locally closed; the reasoning lives in git.)*
+>
+> **Live work is the participation ladder:**
+> - **`vms-32b` = T1 — survive cluster life as a MEMBER.** ← current tier
+>   - **`vms-e81` = T1.1 bystander barrier** ← IN PROGRESS, claimed
+>   - `vms-ae5` node leaves/fails · `vms-b8a` explicit leave · `vms-c7d` VC
+>     breakage · `vms-405` cluster group+password · `vms-7d4` undecoded surface
+> - **`vms-d66` = T2 — contribute resources** (DLM `vms-7fa`, MSCP serving
+>   `vms-1cb`, shared Files-11 `vms-270`). Blocked by T1.
+> - **`vms-4ef` = T3 — full peer** (votes/quorum, be the coordinator, cluster
+>   services). Blocked by T2.
+> - `vms-70c` — derive the replayed constants (honesty debt from `vms-4f2`).
+>
+> **Read `rd show vms-e81` first** — it carries the live bystander state, the
+> grounded member-side obligations, and the failure it is chasing.
+
 The protocol knowledge is in the spec. This file is *state, procedure, and how to
 run the session so you don't die of context exhaustion halfway through.*
 

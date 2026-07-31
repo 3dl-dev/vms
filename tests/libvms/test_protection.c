@@ -71,14 +71,25 @@
  * comment describes).
  *
  * THE FIX: since sys$chkpro cannot be handed a synthetic caller UIC as an
- * argument, this test SYNTHESIZES ONE using an unprivileged Linux user
- * namespace (CLONE_NEWUSER + a single-line uid_map/gid_map, "deny" on
- * setgroups). That mapping requires no capability the test process does
- * not already have -- it is the same mechanism `unshare --user
- * --map-root-user` uses, and it works identically whether the outer
- * process is uid 0 or uid 1000, which is the whole point: the test now
- * drives the (1, MAXSYSGROUP] band ITSELF, in a forked child, regardless
- * of what account is running ctest.
+ * argument, this test SYNTHESIZES ONE in a forked child, regardless of what
+ * account is running ctest, using whichever of two mechanisms this host
+ * supports (see run_chkpro_as / synthesize_direct / synthesize_userns
+ * below): real setgid()+setuid() if the process holds CAP_SETGID/CAP_SETUID
+ * (root, or the file capabilities CI grants this binary), or else an
+ * unprivileged Linux user namespace (CLONE_NEWUSER + a single-line
+ * uid_map/gid_map, "deny" on setgroups -- the same mechanism `unshare
+ * --user --map-root-user` uses).
+ *
+ * BOTH ARE NEEDED, MEASURED (vms-2b8 round 12): the user-namespace path
+ * alone left this suite unable to run honestly at all on the GitHub Actions
+ * "Build & Test" job -- Ubuntu 24.04 restricts unprivileged CLONE_NEWUSER
+ * by AppArmor default, so all six discriminating assertions below failed
+ * with "CLONE_NEWUSER/uid_map/gid_map setup failed on this host", not
+ * skipped (per this suite's own rule that a skipped discriminating case is
+ * a failing one). Reproduced locally by disabling unprivileged user
+ * namespaces (`sysctl user.max_user_namespaces=0`) and confirmed fixed by
+ * granting the two capabilities to this test's binary instead of relying
+ * on the namespace.
  */
 
 #include <stdio.h>
@@ -168,19 +179,25 @@ static uint32_t chkpro(uint32_t owner_uic, uint16_t prot, uint16_t access)
 }
 
 /*
- * run_chkpro_as - fork a child, map it to a SYNTHETIC (gid, uid) via an
- * unprivileged user namespace, and have it call sys$chkpro() under that
- * identity. The status comes back through a pipe; the child's exit code
- * distinguishes a namespace-setup failure (skip) from a real answer.
+ * fork_and_chkpro_as - fork a child that runs `synthesize` to become
+ * (syn_gid, syn_uid) and, if it succeeds, calls sys$chkpro() under that
+ * identity and reports the status back through a pipe.
  *
- * Returns 1 and fills *out_status on success, 0 if the namespace could not
- * be created on this host (e.g. unprivileged CLONE_NEWUSER disabled by
- * sysctl) -- in which case the caller must not treat that as a boolean
- * chkpro answer.
+ * `synthesize` returns 1 if the child is now really running as
+ * (syn_gid, syn_uid) (verified by the caller via getuid()/getgid(), not
+ * trusted from the mechanism's own return code), 0 if this host does not
+ * support the mechanism it tried. Either way it must leave the CHILD
+ * process's own credentials as its only side effect -- it runs in a
+ * throwaway fork(), so there is nothing to undo.
+ *
+ * Returns 1 and fills *out_status on success, 0 if `synthesize` could not
+ * establish the identity on this host -- in which case the caller must not
+ * treat that as a boolean chkpro answer.
  */
-static int run_chkpro_as(gid_t syn_gid, uid_t syn_uid,
-                          uint32_t owner_uic, uint16_t prot, uint16_t access,
-                          uint32_t *out_status)
+static int fork_and_chkpro_as(int (*synthesize)(gid_t, uid_t),
+                               gid_t syn_gid, uid_t syn_uid,
+                               uint32_t owner_uic, uint16_t prot,
+                               uint16_t access, uint32_t *out_status)
 {
     int pipefd[2];
     if (pipe(pipefd) != 0) return 0;
@@ -191,43 +208,7 @@ static int run_chkpro_as(gid_t syn_gid, uid_t syn_uid,
     if (pid == 0) {
         close(pipefd[0]);
 
-        /*
-         * MUST be read BEFORE unshare(): once the calling thread is in a
-         * new, still-unmapped user namespace, getuid()/getgid() report the
-         * overflow id (65534, "nobody") rather than the outer real id --
-         * there is nothing to map back to yet. The uid_map/gid_map lines
-         * below translate FROM the outer real id TO the synthetic one, so
-         * the outer id has to be captured while it is still visible.
-         */
-        uid_t outer_uid = getuid();
-        gid_t outer_gid = getgid();
-
-        if (unshare(CLONE_NEWUSER) != 0) _exit(97);
-
-        int fd = open("/proc/self/setgroups", O_WRONLY);
-        if (fd >= 0) {
-            if (write(fd, "deny", 4) < 0) { close(fd); _exit(97); }
-            close(fd);
-        }
-
-        char line[64];
-        int n;
-
-        fd = open("/proc/self/uid_map", O_WRONLY);
-        if (fd < 0) _exit(97);
-        n = snprintf(line, sizeof(line), "%u %u 1",
-                     (unsigned)syn_uid, (unsigned)outer_uid);
-        if (write(fd, line, (size_t)n) < 0) { close(fd); _exit(97); }
-        close(fd);
-
-        fd = open("/proc/self/gid_map", O_WRONLY);
-        if (fd < 0) _exit(97);
-        n = snprintf(line, sizeof(line), "%u %u 1",
-                     (unsigned)syn_gid, (unsigned)outer_gid);
-        if (write(fd, line, (size_t)n) < 0) { close(fd); _exit(97); }
-        close(fd);
-
-        /* Prove the mapping actually landed before trusting the result. */
+        if (!synthesize(syn_gid, syn_uid)) _exit(97);
         if (getuid() != syn_uid || getgid() != syn_gid) _exit(98);
 
         uint32_t status = chkpro(owner_uic, prot, access);
@@ -252,13 +233,122 @@ static int run_chkpro_as(gid_t syn_gid, uid_t syn_uid,
     return 1;
 }
 
+/*
+ * synthesize_direct - become (syn_gid, syn_uid) with plain setgid()+setuid(),
+ * no namespace. Succeeds only if this process already holds CAP_SETGID and
+ * CAP_SETUID (root, or file capabilities -- see the "Grant..." step in
+ * .github/workflows/ci.yml, which sets exactly these two on this test's own
+ * binary so the GitHub-hosted runner can run this suite honestly). This is
+ * the SAME mechanism tests/qemu/test_syssvc_ident.c's run_dcl(drop=1) uses
+ * under QEMU (which runs as root); here it is reached by capability grant
+ * instead of by uid.
+ *
+ * On a process without those capabilities both calls fail EPERM and change
+ * nothing -- setgid()/setuid() are each atomic (all-or-nothing), so a failed
+ * attempt here never leaves the child in a half-changed state for the
+ * synthesize_userns fallback below to inherit. (It cannot inherit anything
+ * anyway: each mechanism gets its OWN fresh fork() from
+ * fork_and_chkpro_as(), which is the only reason this order-independence is
+ * true by construction rather than by care.)
+ */
+static int synthesize_direct(gid_t syn_gid, uid_t syn_uid)
+{
+    return setgid(syn_gid) == 0 && setuid(syn_uid) == 0;
+}
+
+/*
+ * synthesize_userns - become (syn_gid, syn_uid) via an unprivileged user
+ * namespace (CLONE_NEWUSER + a single-line uid_map/gid_map, "deny" on
+ * setgroups). That mapping requires no capability this process does not
+ * already have -- it is the same mechanism `unshare --user
+ * --map-root-user` uses. FALLBACK ONLY (vms-2b8 round 12): Ubuntu 24.04
+ * restricts unprivileged CLONE_NEWUSER via AppArmor by default, which is
+ * exactly the GitHub Actions ubuntu-latest runner this suite's "Build &
+ * Test" CI job uses -- MEASURED: this suite's six discriminating
+ * assertions failed there with "CLONE_NEWUSER/uid_map/gid_map setup
+ * failed on this host" while synthesize_direct's file-capability grant
+ * (below) reproduced the same failure locally (temporarily
+ * `sysctl user.max_user_namespaces=0`) and fixed it. synthesize_userns
+ * stays as the path for a host that has neither root nor the granted
+ * capabilities but does allow unprivileged user namespaces (many
+ * developer machines, by default kernel policy).
+ */
+static int synthesize_userns(gid_t syn_gid, uid_t syn_uid)
+{
+    /*
+     * MUST be read BEFORE unshare(): once the calling thread is in a
+     * new, still-unmapped user namespace, getuid()/getgid() report the
+     * overflow id (65534, "nobody") rather than the outer real id --
+     * there is nothing to map back to yet. The uid_map/gid_map lines
+     * below translate FROM the outer real id TO the synthetic one, so
+     * the outer id has to be captured while it is still visible. This
+     * child was JUST forked (fork_and_chkpro_as gives synthesize_direct
+     * and synthesize_userns each their own fork()), so these are the
+     * unmodified outer credentials, not anything a prior attempt in this
+     * same process could have touched.
+     */
+    uid_t outer_uid = getuid();
+    gid_t outer_gid = getgid();
+
+    if (unshare(CLONE_NEWUSER) != 0) return 0;
+
+    int fd = open("/proc/self/setgroups", O_WRONLY);
+    if (fd >= 0) {
+        if (write(fd, "deny", 4) < 0) { close(fd); return 0; }
+        close(fd);
+    }
+
+    char line[64];
+    int n;
+
+    fd = open("/proc/self/uid_map", O_WRONLY);
+    if (fd < 0) return 0;
+    n = snprintf(line, sizeof(line), "%u %u 1",
+                 (unsigned)syn_uid, (unsigned)outer_uid);
+    if (write(fd, line, (size_t)n) < 0) { close(fd); return 0; }
+    close(fd);
+
+    fd = open("/proc/self/gid_map", O_WRONLY);
+    if (fd < 0) return 0;
+    n = snprintf(line, sizeof(line), "%u %u 1",
+                 (unsigned)syn_gid, (unsigned)outer_gid);
+    if (write(fd, line, (size_t)n) < 0) { close(fd); return 0; }
+    close(fd);
+
+    return 1;
+}
+
+/*
+ * run_chkpro_as - synthesize a caller identity of (syn_gid, syn_uid) and
+ * call sys$chkpro() under it, trying synthesize_direct first and falling
+ * back to synthesize_userns. Each attempt is its own fork() (via
+ * fork_and_chkpro_as), so a mechanism that is unavailable on this host
+ * leaves nothing behind for the next one to react to.
+ *
+ * Returns 1 and fills *out_status if EITHER mechanism produced a verified
+ * (syn_gid, syn_uid) process, 0 if neither is available on this host -- in
+ * which case the caller must not treat that as a boolean chkpro answer.
+ */
+static int run_chkpro_as(gid_t syn_gid, uid_t syn_uid,
+                          uint32_t owner_uic, uint16_t prot, uint16_t access,
+                          uint32_t *out_status)
+{
+    if (fork_and_chkpro_as(synthesize_direct, syn_gid, syn_uid,
+                           owner_uic, prot, access, out_status))
+        return 1;
+
+    return fork_and_chkpro_as(synthesize_userns, syn_gid, syn_uid,
+                              owner_uic, prot, access, out_status);
+}
+
 int main(void)
 {
     printf("=== vms-2b8: SYSTEM protection category (sys$chkpro) ===\n");
 
     uint32_t me = vms$get_uic();
     printf("  outer process UIC [%o,%o] (informational only -- the "
-           "discriminating cases below run in synthesized namespaces)\n",
+           "discriminating cases below run under a synthesized identity, "
+           "see run_chkpro_as)\n",
            (unsigned)((me >> 16) & 0xFFFFu), (unsigned)(me & 0xFFFFu));
 
     /*

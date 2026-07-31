@@ -525,7 +525,35 @@ int main(void)
             return 1;
         }
         dump("SHOW PROCESS, no executive", outa);
-        CHECK(strstr(outa, "SYSTEM") == NULL,
+        /*
+         * FIXED (vms-2b8 round 12): this was a bare strstr(outa, "SYSTEM"),
+         * which is not a check for the planted identity -- it is a check
+         * for the SUBSTRING "SYSTEM", and VMS's own message format
+         * contains it in the facility name of unrelated status codes.
+         * MEASURED against a real negative-control run: with kif_bind()
+         * unable to reach the executive, vms_kif_kerr_to_ss() reports the
+         * honest SS$_BUGCHECK failure vms_kif.c documents for the case
+         * (the executive lost the PCB it is required to hold), and
+         * cmd_show_process prints that status verbatim:
+         *   %SYSTEM-F-BUGCHECK, internal consistency failure
+         * "%SYSTEM-F-BUGCHECK" is VMS's own facility-name prefix, not the
+         * planted VMS_USERNAME=SYSTEM claim -- but the old bare substring
+         * check could not tell them apart, so a HONEST failure status
+         * reddened an assertion meant to catch a FABRICATED success. An
+         * assertion satisfiable by something other than the behaviour
+         * under test is exactly as broken when it false-fails on honest
+         * output as when it false-passes on fabricated output.
+         *
+         * The real property -- "SHOW PROCESS does not report the user
+         * name planted in its environment" -- is that no "User: SYSTEM"
+         * line is ever printed. That is what the check now asks, tied to
+         * the exact field format cmd_show_process prints ("User: %-17s").
+         * The next assertion (no "User:" label at all) already proves the
+         * stronger fact that no identity block was printed in this
+         * failure path; this one stays as the direct, named check for the
+         * specific claim that was planted.
+         */
+        CHECK(strstr(outa, "User: SYSTEM") == NULL,
               "with no executive, SHOW PROCESS does NOT report the user name "
               "planted in its environment");
         CHECK(strstr(outa, "User:") == NULL,

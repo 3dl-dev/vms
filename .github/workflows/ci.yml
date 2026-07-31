@@ -35,7 +35,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            cmake gcc make libc6-dev libreadline-dev strace
+            cmake gcc make libc6-dev libreadline-dev strace libcap2-bin
 
       - name: Cache CMake build
         uses: actions/cache@v4
@@ -53,6 +53,24 @@ jobs:
 
       - name: Build
         run: cmake --build build -j$(nproc)
+
+      # tests/libvms/test_protection.c (vms-2b8) synthesizes a caller UIC in
+      # a forked child to drive sys$chkpro's SYSTEM-category discrimination
+      # (its own comment, "synthesize_direct", has the full account). Its
+      # PREFERRED mechanism is a plain setgid()+setuid() to a synthetic
+      # (gid, uid), which needs CAP_SETGID/CAP_SETUID -- granted here as file
+      # capabilities because this runner is not root. Its FALLBACK
+      # mechanism (an unprivileged user namespace) is what this grant works
+      # around: Ubuntu 24.04's ubuntu-latest image restricts unprivileged
+      # CLONE_NEWUSER via AppArmor by default, which reddened all six of
+      # this test's discriminating assertions (MEASURED, vms-2b8 round 12 --
+      # reproduced locally with `sysctl user.max_user_namespaces=0` and
+      # fixed by this same grant). Do not remove this step to "simplify" the
+      # job: without it the suite still runs (the fallback tries), but on
+      # THIS runner it fails honestly rather than skipping, per the suite's
+      # own rule that a skipped discriminating case is a failing one.
+      - name: Grant test_libvms_protection the two capabilities its synthetic-UIC mechanism needs
+        run: sudo setcap cap_setgid,cap_setuid+ep build/bin/test_libvms_protection
 
       - name: Test
         run: |

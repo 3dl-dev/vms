@@ -67,6 +67,60 @@ _Static_assert(PRV$M_WORLD  == VMS_PRV_M_WORLD,  "PRV$M_WORLD disagrees with the
 _Static_assert(PRV$M_NETMBX == VMS_PRV_M_NETMBX, "PRV$M_NETMBX disagrees with the executive");
 
 /*
+ * F$GETJPI CURPRIV/AUTHPRIV NAME COVERAGE (vms-2b8 round 9; supersedes a
+ * RUNTIME check rounds 7-8 put in src/vmsdcl/dcl_lexical.c's lex_getjpi()).
+ *
+ * lex_getjpi() renders CURPRIV/AUTHPRIV by walking VMS_PRV_M_ENFORCED bit
+ * by bit and looking each set bit up in vms_priv_names[] (dcl_cmd_show.c)
+ * -- deliberately, so a bit added to VMS_PRV_M_ENFORCED needs no second,
+ * hand-maintained name list (vms-2b8 round 6). Whether every bit
+ * VMS_PRV_M_ENFORCED can set has a row in vms_priv_names[] is decided
+ * entirely by two pieces of static, compile-time-constant data in the
+ * SAME binary -- there is no caller, no runtime state and no execution
+ * path that can make this vary. Rounds 7-8 nonetheless guarded it with a
+ * RUNTIME check (walk the mask at F$GETJPI time; abort() if a bit has no
+ * row) reached the moment a user ran F$GETJPI CURPRIV. That is Rule 10's
+ * forbidden third answer: a plausible-looking handler for a condition
+ * that is already settled before the program runs, not one that can
+ * arise while it is running. The corrected HIDE answer for a fact fixed
+ * at compile time is a compile-time proof, not a runtime abort -- so the
+ * runtime guard is DELETED (dcl_lexical.c, round 9) and this assert
+ * takes its place: a future edit that widens VMS_PRV_M_ENFORCED beyond
+ * the four privileges named below fails the BUILD here, before anything
+ * can boot or a user can trigger it, exactly like the bit-position
+ * asserts above.
+ *
+ * VMS_PRV_M_ENFORCED is, today, exactly
+ *   VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD
+ * (src/kernel/vms_ioctl.h), and vms_priv_names[] (dcl_cmd_show.c) has one
+ * row for each of PRV$M_CMKRNL, PRV$M_CMEXEC, PRV$M_SETPRV, PRV$M_WORLD --
+ * which the asserts above already pin equal to their VMS_PRV_M_* opposite
+ * numbers. This assert states the coverage claim directly, not by
+ * equality with VMS_PRV_M_ENFORCED's own definition (an assert that just
+ * restated the #define would pass no matter what the #define said):
+ * every bit VMS_PRV_M_ENFORCED can ever set is one of these four.
+ * Widening VMS_PRV_M_ENFORCED to a fifth privilege must add its row to
+ * vms_priv_names[] AND its PRV$M_ name to this assert's whitelist, or the
+ * build stops here.
+ *
+ * NEGATIVE CONTROL (run it if you touch either table, same convention as
+ * the bit-position asserts above): OR (1ULL << 40) into VMS_PRV_M_ENFORCED
+ * (src/kernel/vms_ioctl.h) and rebuild -- the build MUST fail here, not
+ * boot and abort at runtime. RUN (vms-2b8 round 9): it does --
+ *   prv_agreement.c:111:1: error: static assertion failed: "VMS_PRV_M_ENFORCED
+ *   (src/kernel/vms_ioctl.h) names a bit outside {CMKRNL,CMEXEC,SETPRV,WORLD}
+ *   -- add its row to vms_priv_names[] (src/vmsdcl/dcl_cmd_show.c) and to
+ *   this assert's whitelist before widening VMS_PRV_M_ENFORCED (vms-2b8)"
+ * Reverted after confirming.
+ */
+_Static_assert((VMS_PRV_M_ENFORCED &
+                ~(PRV$M_CMKRNL | PRV$M_CMEXEC | PRV$M_SETPRV | PRV$M_WORLD)) == 0,
+               "VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h) names a bit outside "
+               "{CMKRNL,CMEXEC,SETPRV,WORLD} -- add its row to vms_priv_names[] "
+               "(src/vmsdcl/dcl_cmd_show.c) and to this assert's whitelist "
+               "before widening VMS_PRV_M_ENFORCED (vms-2b8)");
+
+/*
  * A translation unit consisting only of static assertions produces an
  * object file with no symbols. Some archivers and some link steps treat
  * that as an empty member worth dropping; give the object one externally

@@ -786,32 +786,56 @@ int main(void)
     scenario_e_a_writes_b_reads();
 
     /* ----------------------------------------------------------------
-     * F. F$GETJPI CURPRIV's derived-name coverage check (vms-2b8 round
-     *    7, negative control added round 8). dcl_lexical.c's CURPRIV/
-     *    AUTHPRIV renderer walks VMS_PRV_M_ENFORCED (src/kernel/
-     *    vms_ioctl.h) bit by bit and looks each set bit up in
-     *    vms_priv_names[] (dcl_cmd_show.c); a bit with no row aborts
-     *    the session with an OVMX-facility diagnostic rather than
-     *    silently omitting the name. That guard had NO suite exercising
-     *    it before this scenario -- it was proven once, by hand, with a
-     *    temporary edit to VMS_PRV_M_ENFORCED, then reverted. This
-     *    scenario is that same edit, as a standing negative control:
-     *    tests/qemu/facility_defects.sh's getjpi-curpriv-name-coverage
-     *    defect ORs an unnamed bit (1ULL << 40) into VMS_PRV_M_ENFORCED,
-     *    which SYSTEM's SYSUAF ALL identity (cur_privs = ~0ULL) always
-     *    has set, so CURPRIV always reaches the guard for this identity.
+     * F. F$GETJPI CURPRIV renders the executive's ENFORCED privilege
+     *    names, not merely completes (vms-2b8 round 6 derivation; round
+     *    9 rewrite). dcl_lexical.c's CURPRIV renderer walks
+     *    VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h) bit by bit and
+     *    looks each set bit up in vms_priv_names[] (dcl_cmd_show.c).
+     *    Whether every enforced bit has a row is now a COMPILE-TIME
+     *    fact, pinned by a _Static_assert in src/libvms/prv_agreement.c
+     *    with its own negative control -- rounds 7-8's RUNTIME guard
+     *    for that same fact (walk the mask at F$GETJPI time, abort() if
+     *    a bit had no row) was deleted round 9: a runtime handler for a
+     *    condition already settled at compile time is Rule 10's
+     *    forbidden third answer, not its HIDE answer.
+     *
+     *    THE VACUITY THIS SCENARIO USED TO HAVE, AND WHY IT MATTERED
+     *    (round 9, found by the round-8 adversary review): the OLD
+     *    version of this scenario only checked that a marker printed
+     *    AFTER the F$GETJPI call, never that the call actually rendered
+     *    anything. A run where CURPRIV silently rendered "" -- which is
+     *    exactly what an unregistered process, or a build where the
+     *    identity never took, produces -- satisfied that assertion just
+     *    as well as a run where CURPRIV rendered real privilege names:
+     *    the marker prints either way. That is not testing the feature.
+     *    Fixed: the script now SHOWs the symbol CURPRIV was assigned
+     *    to, so its rendered value is in the captured output, and the
+     *    assertion requires the literal enforced-privilege string for
+     *    SYSTEM/SYSUAF-ALL (cur_privs = ~0ULL, so VMS_PRV_M_ENFORCED's
+     *    four bits -- CMKRNL, CMEXEC, SETPRV, WORLD, in that ascending
+     *    bit-position order -- are all set), not merely its presence.
+     *
+     *    PROVEN BY MUTATION (vms-2b8 round 9), real bootable image, real
+     *    QEMU: temporarily changing dcl_lexical.c's
+     *    `uint64_t enforced = raw & VMS_PRV_M_ENFORCED;` to
+     *    `uint64_t enforced = 0;` -- the one-line edit that makes
+     *    CURPRIV/AUTHPRIV always render "" regardless of identity, with
+     *    no abort and no other observable change -- and rebuilding the
+     *    static tree + bootable image reddened test_syssvc_ident alone
+     *    (rc=1, "37 passed, 1 failed") with the ONE failure being this
+     *    assertion, "F: F\$GETJPI CURPRIV renders...". Every other suite
+     *    in the run (test_kmod_*, the rest of test_syssvc_*) stayed
+     *    rc=0. Reverted after confirming.
      *
      *    ISOLATED ON PURPOSE: its own run_dcl() call, its own script,
-     *    its own marker -- not appended to script/outa/outb/outc above,
-     *    so this mutation cannot knock on any assertion that reads
-     *    those buffers. Under the unmutated build CURPRIV renders
-     *    normally and the marker after it prints; under the mutation
-     *    DCL aborts before the marker, so CURPRIV_DONE goes missing.
+     *    its own buffer -- not appended to script/outa/outb/outc above,
+     *    so nothing here can knock on scenarios A-E's assertions.
      * ---------------------------------------------------------------- */
     {
         static char outf[65536];
         const char *script_f =
             "IDENT_CURPRIV = F$GETJPI(\"\",\"CURPRIV\")\n"
+            "SHOW SYMBOL IDENT_CURPRIV\n"
             "WRITE SYS$OUTPUT \"CURPRIV_DONE\"\n";
         if (run_dcl("SYSTEM", (1u << 16) | 4u, ~0ULL, 0,
                     script_f, outf, sizeof(outf)) != 0) {
@@ -819,14 +843,14 @@ int main(void)
             printf("=== test_syssvc_ident: %d passed, %d failed ===\n", pass, fail + 1);
             return 1;
         }
-        dump("scenario F, CURPRIV coverage", outf);
+        dump("scenario F, CURPRIV content", outf);
         CHECK(strstr(outf, "SETIDENT_STATUS=1") != NULL,
               "F: the executive accepted the SYSTEM/ALL identity this scenario "
               "needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)");
-        CHECK(strstr(outf, "CURPRIV_DONE") != NULL,
-              "F: F$GETJPI CURPRIV renders a name for every bit VMS_PRV_M_ENFORCED "
-              "sets, without an internal-consistency abort (vms-2b8 round 7 "
-              "coverage check)");
+        CHECK(strstr(outf, "IDENT_CURPRIV = \"CMKRNL,CMEXEC,SETPRV,WORLD\"") != NULL,
+              "F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced "
+              "privilege names (CMKRNL,CMEXEC,SETPRV,WORLD), not merely "
+              "completes without rendering anything");
     }
 
     printf("=== test_syssvc_ident: %d passed, %d failed ===\n", pass, fail);

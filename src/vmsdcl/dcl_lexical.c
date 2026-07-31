@@ -1445,85 +1445,34 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
                 uint64_t b = (uint64_t)1 << bit;
                 if (!(enforced & b))
                     continue;
-                int found = 0;
+                /*
+                 * COVERAGE (vms-2b8 round 9; supersedes the runtime
+                 * abort() rounds 7-8 put here). Whether every bit
+                 * VMS_PRV_M_ENFORCED can set has a row in
+                 * vms_priv_names[] is a COMPILE-TIME fact -- both are
+                 * static, compile-time-constant data in this same
+                 * binary, so the answer cannot vary across runs or
+                 * callers the way a genuine runtime condition could.
+                 * Rounds 7-8 guarded it with a runtime abort() anyway,
+                 * which is Rule 10's forbidden third answer: a
+                 * plausible-looking handler for a condition that is
+                 * already settled before the program runs. The
+                 * corrected HIDE answer for a compile-time fact is a
+                 * compile-time proof, not a runtime check --
+                 * src/libvms/prv_agreement.c now static-asserts this
+                 * coverage, with its own negative control. A future
+                 * edit that adds an unnamed bit to VMS_PRV_M_ENFORCED
+                 * fails the BUILD there, before anything boots, so the
+                 * lookup below needs no fallback: every bit reaching
+                 * this loop is guaranteed to have a row.
+                 */
                 for (int i = 0; vms_priv_names[i].name; i++) {
                     if (vms_priv_names[i].bit != b)
                         continue;
                     rl += (size_t)snprintf(result + rl, result_size - rl,
                                            "%s%s", rl ? "," : "",
                                            vms_priv_names[i].name);
-                    found = 1;
                     break;
-                }
-                /*
-                 * COVERAGE CHECK (vms-2b8 round 7, message corrected
-                 * round 8). Names here are DERIVED from
-                 * VMS_PRV_M_ENFORCED by walking the mask and looking
-                 * each set bit up in vms_priv_names[] -- that
-                 * derivation was the round-6 fix, replacing a
-                 * hand-maintained second list that could drift out of
-                 * sync with the mask silently. But the lookup itself
-                 * had the same silent-drift shape one level down: if a
-                 * bit is ever added to VMS_PRV_M_ENFORCED (src/kernel/
-                 * vms_ioctl.h) with no matching row added to
-                 * vms_priv_names[] (dcl_cmd_show.c), the `found` guard
-                 * above stays false and the bit is just OMITTED from
-                 * the rendered string -- CURPRIV/AUTHPRIV would report
-                 * an incomplete privilege list with no diagnostic,
-                 * which is exactly the "reads as correct, isn't" shape
-                 * Rule 10 exists to kill, one layer down from the
-                 * defect the derivation itself fixed.
-                 *
-                 * RULE 10 CHOICE, MADE EXPLICIT (round 8): this is not
-                 * a condition VMS itself can ever face -- on VMS there
-                 * is exactly one privilege table, so "an enforced bit
-                 * has no name" cannot arise. It is not a "privilege
-                 * VMS grants but OVMX doesn't enforce" either (that is
-                 * the SET TIME/SET PROCESS PRIORITY case above, a
-                 * different defect with its own HIDE wording). It is a
-                 * two-C-files-disagreeing bug local to this build, so
-                 * there is no real "refused privileged operation"
-                 * status honestly describes it and nothing to MATCH.
-                 * That leaves HIDE, and the round-7 mistake was
-                 * choosing the "invent a plausible-looking VMS status"
-                 * shape of HIDE (SS$_BUGCHECK, rendered with the
-                 * SYSTEM facility and the same %FACILITY-S-IDENT shape
-                 * src/libvms/status.c uses for genuine VMS condition
-                 * values) for a condition that is not remotely a
-                 * bugcheck -- a bugcheck is the executive detecting it
-                 * cannot preserve system integrity; this is a build
-                 * defect DCL detected in its own static table. Round 8
-                 * takes the other HIDE option: report it as what it
-                 * is, an OVMX-facility diagnostic, not a VMS one --
-                 * same convention as %OVMX-I-NOSETPRV (dcl_cmd_set.c):
-                 * the facility name reads OVMX, not SYSTEM, so it is not
-                 * formatted as genuine VMS console output.
-                 *
-                 * PROVEN BY MUTATION, not by inspection (vms-2b8 round
-                 * 7, reproduced round 8): temporarily OR-ing an
-                 * unnamed bit (1ULL << 40) into VMS_PRV_M_ENFORCED
-                 * (src/kernel/vms_ioctl.h, no row for it in
-                 * vms_priv_names[]) and rebuilding vms.ko + vmsdcl,
-                 * then running F$GETJPI CURPRIV as SYSTEM
-                 * (SYSUAF-authorized ALL, so cur_privs has bit 40 set)
-                 * fires this check and aborts the session instead of
-                 * silently omitting the name. Reverted after
-                 * confirming each time. The same mutation is now also
-                 * a manifest entry in tests/qemu/facility_defects.sh
-                 * so the facility sweep exercises it without a human
-                 * remembering to run it by hand.
-                 */
-                if (!found) {
-                    dcl_error("OVMX", 4, "TABLEDESYNC",
-                              "internal build defect, not a VMS "
-                              "condition -- VMS_PRV_M_ENFORCED "
-                              "(src/kernel/vms_ioctl.h) bit %d has no "
-                              "row in vms_priv_names[] "
-                              "(src/vmsdcl/dcl_cmd_show.c); this is not "
-                              "a bugcheck and not a VMS status, it is "
-                              "OVMX's two privilege tables disagreeing "
-                              "(vms-2b8)", bit);
-                    abort();
                 }
             }
         }

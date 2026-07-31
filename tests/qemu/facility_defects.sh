@@ -167,8 +167,7 @@ run-detached-name-dropped
 creprc-detach-intermediate-reaped
 run-detached-not-detached
 run-image-qualifier-refused
-run-qualifier-not-abbreviated
-getjpi-curpriv-name-coverage"
+run-qualifier-not-abbreviated"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -909,6 +908,19 @@ EOF
         # test_syssvc_showdev and test_syssvc_startup_service do (real
         # product image, kif_bind()-mediated), so it was never a candidate
         # for the blind_suites set below either.
+        #
+        # ROUND 9 (vms-2b8): test_syssvc_ident.c's scenario F was rewritten
+        # (its old assertion only checked that a marker printed after
+        # F$GETJPI CURPRIV, not that CURPRIV rendered content -- see that
+        # scenario's own comment) and it drives the same DCL.EXE/kif_bind()
+        # path as the rest of this suite, so it was never a blind_suites
+        # candidate either. RE-MEASURED against real QEMU rather than
+        # assumed: the rewrite adds exactly two new reds here, both
+        # scenario F's own assertions ("F: the executive accepted the
+        # SYSTEM/ALL identity..." and "F: F\$GETJPI CURPRIV renders...").
+        # run_facility_negctl.sh bind-client-no-register named exactly
+        # these two as unnamed before this entry was corrected, and zero
+        # after -- nothing else in this suite or any other moved.
         suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_ident";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
@@ -1054,6 +1066,8 @@ C: SHOW PROCESS reports the UIC the executive derived from real credentials
 C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$_NOPRIV)
 C: the privilege display is EMPTY -- the two privileges the executive granted an unprivileged process (TMPMBX, NETMBX) are both outside VMS_PRV_M_ENFORCED
 D: the session established its authenticated identity
+F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
+F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SETPRV,WORLD), not merely completes without rendering anything
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -1489,45 +1503,24 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
-    getjpi-curpriv-name-coverage)
-        case "$_f" in
-        facility)     echo "F\$GETJPI CURPRIV/AUTHPRIV's derived privilege-name coverage check (DCL userspace, src/vmsdcl/dcl_lexical.c)";;
-        targets)      echo "kernel/vms_ioctl.h";;
-        suites_red)   echo "test_syssvc_ident";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          cat <<'EOF'
-F$GETJPI's CURPRIV/AUTHPRIV renderer (lex_getjpi() in dcl_lexical.c) walks
-VMS_PRV_M_ENFORCED bit by bit and looks each set bit up in vms_priv_names[]
-(dcl_cmd_show.c) to derive the name it prints -- deliberately, so a bit added
-to VMS_PRV_M_ENFORCED needs no second, hand-maintained name list (vms-2b8
-round 6). Round 7 added a guard for the coverage gap one layer down: a set
-bit with NO row in vms_priv_names[] used to be silently omitted from the
-rendered string. This defect is that exact gap, restored: VMS_PRV_M_ENFORCED
-gains one more bit (1ULL << 40) that names nothing.
-Proven once by hand (round 7, reverted before commit) and had NO suite
-exercising it until this defect: nothing in tests/qemu/ called F$GETJPI
-CURPRIV before test_syssvc_ident.c's scenario F was added alongside this
-manifest entry (vms-2b8 round 8). SYSTEM's SYSUAF ALL identity has
-cur_privs = ~0ULL, so bit 40 is always set for it and CURPRIV always reaches
-the guard.
-ISOLATION: scenario F runs its OWN run_dcl() call with its OWN script and OWN
-output buffer -- it shares no script, buffer or DCL session with scenarios
-A-E, so this mutation cannot reach their assertions. It also cannot reach
-SHOW PROCESS/PRIVILEGES (scenarios A/B/D use it): that display walks
-vms_priv_names[] FORWARD, from table row to mask bit, so an UNNAMED bit is
-just never visited -- there is no direction in that loop from which bit 40
-could be reached, unlike CURPRIV's reverse walk (mask bit -> table lookup).
-EOF
-                      ;;
-        require_fail) cat <<'EOF'
-F: F$GETJPI CURPRIV renders a name for every bit VMS_PRV_M_ENFORCED sets, without an internal-consistency abort (vms-2b8 round 7 coverage check)
-EOF
-                      ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
-        esac;;
+    # getjpi-curpriv-name-coverage EXISTED (rounds 7-8) as a QEMU negative
+    # control for a runtime abort() guard in dcl_lexical.c. That guard was
+    # deleted round 9 -- the fact it protected (every VMS_PRV_M_ENFORCED bit
+    # has a row in vms_priv_names[]) is compile-time-determinable, so it is
+    # now a _Static_assert in src/libvms/prv_agreement.c with its own
+    # negative control (documented there, run by hand the same way the
+    # bit-position asserts above it are). There is no longer a way to inject
+    # this defect and boot QEMU to observe it go red: the SAME sed this
+    # entry used to apply (OR (1ULL << 40) into VMS_PRV_M_ENFORCED) now
+    # fails the BUILD at src/libvms/prv_agreement.c, before the container
+    # rebuild step this harness depends on can produce a bootable image --
+    # which this control's own driver (run_facility_negctl.sh) treats as a
+    # BROKEN HARNESS (RUN_RC=4), not a verdict, for every defect in this
+    # file. Keeping the entry would make this control permanently "bad" on
+    # every run, which is worse than deleting it: an eternally-red gate
+    # trains readers to ignore it. test_syssvc_ident.c's scenario F is now a
+    # plain functional proof that CURPRIV renders real content (see its own
+    # comment), not a negative control for this manifest.
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
@@ -1641,13 +1634,6 @@ apply_edit() {
         # halves of RUN's qualifier table, and mutating one would leave
         # the rule half-applied rather than restored.
         sed -i 's|strncasecmp(given, full, glen) == 0|strcasecmp(given, full) == 0 /* NEGCTL run-qualifier-not-abbreviated */|' "$_file";;
-
-    getjpi-curpriv-name-coverage)
-        # The ONE edit: VMS_PRV_M_ENFORCED gains a bit no vms_priv_names[]
-        # row names (round 7's own hand-applied proof, now mechanical).
-        # Anchored on the WORLD line closing the macro's parenthesised OR,
-        # which appears once in the file.
-        sed -i 's@                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD)@                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | (1ULL << 40))  /* NEGCTL getjpi-curpriv-name-coverage */@' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

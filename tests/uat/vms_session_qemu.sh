@@ -708,7 +708,8 @@ check_known_divergence 'SHOW PROCESS' 'Process name: ""' \
 # privileges, is the literal string ALL, not a 4-privilege
 # list. The four names below are what SURVIVES THE VMS_PRV_M_ENFORCED
 # INTERSECTION of that ALL mask, which is a strict subset -- SYSPRV,
-# BYPASS, OPER, and 30-odd others are authorized by SYSUAF and correctly
+# BYPASS, OPER, and 30 others (37 named rows in vms_priv_names[], minus
+# the 4 shown, minus these 3 named here) are authorized by SYSUAF and correctly
 # do NOT appear here, because nothing in vms.ko enforces them (see that
 # constant's own comment). The old pattern would now silently pass on an
 # EMPTY privilege block too (TMPMBX/NETMBX/OPER can't appear, but neither

@@ -57,7 +57,11 @@
       "Bash(podman run *)",
       "Bash(gh run *)",
       "Bash(mkdir -p /home/baron/.claude/jobs/c7fdf35d/tmp)",
-      "Read(//home/baron/.claude/jobs/c7fdf35d/tmp/**)"
+      "Read(//home/baron/.claude/jobs/c7fdf35d/tmp/**)",
+      "Read(//home/baron/vax/cluster/tools/**)",
+      "Bash(mkdir -p /home/baron/.claude/jobs/678334fd/tmp)",
+      "Bash(cp /home/baron/vax/cluster/tools/*.py /home/baron/.claude/jobs/678334fd/tmp/)",
+      "Read(//home/baron/vax/cluster/work/**)"
     ]
   }
 }

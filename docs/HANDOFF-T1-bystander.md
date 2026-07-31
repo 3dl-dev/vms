@@ -22,8 +22,11 @@ front is still open.** Three grounded code changes landed and are verified live
 (commit `7254056`); four spec sections landed (`e20c1e2`); `vms-ae5`'s *fails*
 half was re-verified on today's binary; and the *leaves* half — a class-`0x04`
 graceful departure with OVMX as a bystander — is **still not demonstrated**, for
-reasons that turned out to be entirely about the lab harness rather than the
-protocol. A run chasing it (`dep10`) was left **running** at handoff.
+reasons that turned out to be entirely about the lab harness and the lab itself
+rather than the protocol. Two new defects were found and filed: **`vms-416`** (no
+node in this lab completes an orderly shutdown, which blocks the class-`0x04`
+evidence) and **`vms-2f3`** (OVMX cannot rejoin a cluster it was removed from).
+Nothing is left running.
 
 | | state | run |
 |---|---|---|
@@ -32,6 +35,7 @@ protocol. A run chasing it (`dep10`) was left **running** at handoff.
 | bystander of a **removal** (class `0x03`) | **PASSES on today's binary** | `rm2` |
 | bystander of a **departure** (class `0x04`) | **NOT YET PRODUCED** | `dep1`–`dep10` |
 | barrier when the removed node is *our* barrier peer | **FAILS — new finding** | `dep6` |
+| REJOIN after removal, same identity | **FAILS — new finding, `vms-2f3`** | `cyc1` |
 
 ## 1. What landed in the code (commit `7254056`, all 41 tests green)
 

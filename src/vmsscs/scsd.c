@@ -2307,32 +2307,40 @@ int main(int argc, char **argv)
                         }
                         if (rc_build == 0 && mv.category == SCS_MEMBER_CAT_CONFIG &&
                             mv.opcode == SCS_MEMBER_OP_RELAY) {
-                            /* op 0x12 is the ONE cat-0x01 op whose response is not a
-                             * pure echo: body[20:24] of the REQUEST holds the peer's
-                             * own live CSID/cluster id, and a real member overwrites
-                             * it with a small integer that tracks the post-transition
-                             * member count (ref f286->f288, f404->f406). Echoing it
-                             * hands the peer back its own handle. Also zero the
-                             * body[10:12] residue rather than reflect it. */
-                            unsigned members = 1; /* ourselves */
-                            for (int pi = 0; pi < OVMX_MAX_PEERS; pi++) {
-                                if (peers[pi].in_use && peers[pi].cfg_sent) {
-                                    members++;
-                                }
-                            }
+                            /* op 0x12's response is not a pure echo. CORRECTED by
+                             * vms-e81 against 6 request/response pairs in 4
+                             * captures at three DIFFERENT epoch values:
+                             *
+                             *   body[16:18] = 0x0210   UNCONDITIONAL rewrite
+                             *   body[20:24] = the request's body[12:16] -- a copy
+                             *                 of the TRANSITION EPOCH
+                             *
+                             * The previous code wrote a post-transition MEMBER
+                             * COUNT into body[20:24]. That was inferred from two
+                             * specimens in which the epoch and the member count
+                             * happened to coincide (3 and 4). Varying the epoch
+                             * across captures separates them, and it is the epoch.
+                             * A plausible reading that survives two samples and
+                             * dies on six is exactly the trap this project keeps
+                             * hitting.
+                             *
+                             * body[16:18] being a REWRITE was invisible in our own
+                             * capture because the request already carried 0x0210;
+                             * three other specimens carry 0x0410 in the request and
+                             * 0x0210 in the response. */
                             uint8_t *rb = rframe + 72;
-                            rb[20] = (uint8_t)(members & 0xff);
-                            rb[21] = (uint8_t)((members >> 8) & 0xff);
-                            rb[22] = 0;
-                            rb[23] = 0;
-                            rb[10] = 0;
-                            rb[11] = 0;
-                            /* op 0x12 is ALSO the exception to the three-mutation
-                             * rule: a real responder leaves body[55] ALONE (it is
-                             * 0x59 in both request and response -- it sits inside
-                             * the resource string the relay carries), where the
-                             * generic transform zeroes it. Put it back. */
-                            rb[55] = buf[72 + 55];
+                            const uint8_t *qb = buf + 72;
+                            rb[16] = 0x10;
+                            rb[17] = 0x02;
+                            rb[20] = qb[12];
+                            rb[21] = qb[13];
+                            rb[22] = qb[14];
+                            rb[23] = qb[15];
+                            /* body[55] stays echoed -- it sits inside the DLM
+                             * record residue the relay carries. The generic
+                             * transform no longer clears it for op 0x12 either
+                             * (that rule is op-0x09-specific), but be explicit. */
+                            rb[55] = qb[55];
                         }
                         if (rc_build == 0 &&
                             send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe,

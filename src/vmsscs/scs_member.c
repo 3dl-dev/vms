@@ -516,12 +516,20 @@ int scs_member_build_response(const struct scs_member_params *p,
     obody[8] = (uint8_t)(rbody[8] | SCS_MEMBER_RESPONSE_BIT); /* set response bit */
     /* opcode body[9] stays echoed. */
     obody[SCS_MEMBER_RESP_MARK_BODYOFF] = 0x01; /* response marker (GROUNDED 0x03+0x05+0x09) */
-    /* vms-760: the echo takes exactly THREE mutations, not two. body[55] is
-     * cleared as well -- GROUNDED on 6/6 responses across 5 captures and 3
-     * different responder nodes (rdiff: "differs at 3 offsets: b[8], b[18],
-     * b[55]", nothing else). In the requests it held 0x0e / 0x0a / 0x06, which
-     * tracks the member set; whatever it means, the responder zeroes it. */
-    obody[55] = 0x00;
+    /* vms-e81 CORRECTION: body[55]=0x00 is op-0x09-SPECIFIC, not a general
+     * cat-0x01 rule. A whole-capture census of every responder shows op 0x03 and
+     * op 0x05 responses ECHO body[55] verbatim (their requests carried 0x54 and
+     * the responses kept it); only op 0x09 clears it (0x0e -> 0x00, on both VAX1
+     * and VAX3). The earlier "exactly THREE mutations" reading came from a
+     * sample that happened to be op-0x09-heavy.
+     *
+     * Zeroing it on 0x03/0x05 was tolerated -- the coordinator accepted those
+     * responses and OVMX still reached MEMBER -- but "tolerated" is not
+     * "correct", and this is a byte we were overwriting in someone else's
+     * message for no grounded reason. */
+    if (rbody[9] == SCS_MEMBER_OP_XITION) {
+        obody[55] = 0x00;
+    }
 
     return 0;
 }

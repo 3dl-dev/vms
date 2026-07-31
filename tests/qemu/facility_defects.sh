@@ -157,6 +157,7 @@ lock-compat-cr-ex
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
 setterm-binding-not-recorded
+showterm-width-page-fabricated
 proctab-duplicate-name
 proctab-crossgroup-identity
 proctab-terminal-redaction-bypassed
@@ -634,6 +635,30 @@ still disappears when the job exits, and every other device-table and
 process-table suite is untouched.
 EOF
                       ;;
+        esac;;
+
+    showterm-width-page-fabricated)
+        case "$_f" in
+        facility)     echo "SHOW TERMINAL renderer, Width/Page absence (show_terminal_render(), vms-d0b)";;
+        # DCL, not vms.ko -- the absence is a DISPLAY choice, not an
+        # executive fact (Width/Page are already A-writes/B-reads proven
+        # at the kernel layer by test_kmod_devtab.c). This is the fourth
+        # entry whose property lives in the product half of the interface;
+        # see the "outside vms.ko" note near the top of this file.
+        targets)      echo "vmsdcl/dcl_cmd_show.c";;
+        suites_red)   echo "test_syssvc_showterm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "show_terminal_render() prints a fabricated Width/Page line -- exactly the one-line layout vms-d0b deleted because docs/oracle/vax73-terminal-device.md never shows it (section 2 puts Width and Page on separate lines, each sharing the line with fields OVMX cannot source). Nothing else in the renderer changes: the header, the characteristic grid and every other row print exactly as before, so only the three assertions that require the line's ABSENCE can see this.";;
+        require_fail) cat <<'EOF'
+SHOW TERMINAL prints no Width/Page line -- the oracle shows them only inside a block with Input/Output speed, LFfill/CRfill and Parity that OVMX cannot source, and a renderer that printed just the two fields it has would be the invented layout vms-d0b deleted (docs/oracle/vax73-terminal-device.md section 2)
+...still no Width/Page line while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
+...and still no Width/Page line once the width is back to 132 -- the absence does not track the value either
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     proctab-duplicate-name)
@@ -1143,6 +1168,11 @@ the cluster state word agrees with the status: flag 1's bit is SET
 the second process allocated OPA0: through the executive ($ALLOC)
 A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
 the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table
+the listing carries the oracle's column header (section 4)
+SHOW DEVICE OPA0: resolves the name through the executive and prints its row
+the console is still listed once the other process is gone
+...and refuses it with the oracle's own message (section 6)
 a second process put the console in a known state through the executive (IO$_SETMODE)
 SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
 the characteristics heading is printed (oracle section 2)
@@ -1275,21 +1305,23 @@ RE-RUN THIS ITEM WAS ASKED TO DO, NOT PREDICTED. test_syssvc_showdev.c
 exists to prove SHOW DEVICE is a READER of the executive device table
 (vms-fb9), so it $CREPRCs a second process and has it $ALLOC the console
 while the first process's SHOW DEVICE watches for the change (A-writes,
-B-reads, Rule 11). Three of its assertions went red that this manifest did
-not name; the other three ("the caller has a row in the executive's process
-table", "sys$creprc created the subject process", "sys$creprc returned the
-subject's VMS process ID") are the SAME missing-bind failure
-test_syssvc_showproc already declares, word for word, so they need no
-second entry --
-the equality check compares a SET, not a per-suite tally. The three that ARE
-new are downstream of the same handshake failure suite 3/showproc already
-explain: with the subject process unable to register, its $ALLOC of OPA0:
-never happens, so the parent's SHOW DEVICE never observes an allocated row
-("the second process allocated OPA0:", "A-WRITES/B-READS: ..."), and neither
-does the bare listing that cross-checks it against $DEVICE_SCAN ("the bare
-listing shows it too, ..."). Nothing about $DEVICE_SCAN or $GETDVI itself is
-being tested by this red set; it is the same registration wall, observed
-through a sixth door.
+B-reads, Rule 11). Its reds fall into three groups, none hand-recited as a
+count (see the set itself, above `knock_on_fail)`, not a tally here):
+  - "the caller has a row in the executive's process table", "sys$creprc
+    created the subject process" and "sys$creprc returned the subject's VMS
+    process ID" are the SAME missing-bind failure test_syssvc_showproc
+    already declares, word for word, so they need no second entry -- the
+    equality check compares a SET, not a per-suite tally;
+  - "the second process allocated OPA0: ...", "A-WRITES/B-READS: DCL's SHOW
+    DEVICE reports the console allocated ..." and "the bare listing shows it
+    too, ..." are downstream of that same handshake failure: with the
+    subject process unable to register, its $ALLOC of OPA0: never happens,
+    so the parent's SHOW DEVICE never observes an allocated row;
+  - "bare SHOW DEVICE lists OPA0: ...", "the listing carries the oracle's
+    column header ...", "SHOW DEVICE OPA0: resolves the name ...", "the
+    console is still listed once the other process is gone" and "...and
+    refuses it with the oracle's own message ..." are a THIRD mechanism,
+    found this round (vms-d0b r4) -- see below.
 
 WHY THIS WAS RED ON THE TREE BEFORE THIS ROUND, AND WHY THAT IS NOT AN
 EXCUSE. test_syssvc_showdev.c does not hand-register -- open /dev/vms only
@@ -1303,6 +1335,32 @@ and literal text), nothing had actually EXECUTED it end to end since
 test_syssvc_showdev landed. Declared here the moment that execution happened,
 per CLAUDE.md Rule 9 -- a pre-existing gap discovered while re-running the
 full proof set is still owned by whoever's push would otherwise carry it red.
+
+THE THIRD GROUP, AND A SEPARATE INFRASTRUCTURE DEFECT THIS ROUND FOUND AND
+FIXED (vms-d0b r4). tests/qemu/inject_and_run.sh re-stages the rebuilt
+DCL.EXE into the initramfs at ONE path, /initramfs/bin/DCL.EXE -- but
+tests/qemu/Dockerfile stages it at TWO, because test_syssvc_showdev.c and
+test_syssvc_showterm.c both default DCL_PATH to /tests/DCL.EXE (overridable
+via OVMX_DCL), not /bin/DCL.EXE. Every defect whose target is under
+src/vmsdcl, or reaches DCL.EXE through a library it links (as this one does,
+through libvmssys), was therefore driving a STALE, unmutated DCL.EXE at that
+second path -- a facility control with no teeth for exactly the assertions
+that read DCL's OWN output, discovered when showterm-width-page-fabricated
+(added this round, target src/vmsdcl/dcl_cmd_show.c) rebuilt and linked
+correctly (confirmed with `strings` on the fresh build-static/bin/DCL.EXE)
+but produced zero observable effect through /tests/DCL.EXE. Fixed by copying
+the same freshly-built binary to both paths. The fix makes DCL.EXE's OWN
+vms_kif calls (inside cmd_show_device(), reached through libvms) subject to
+this mutation for the FIRST time in a full sweep, which is why these five are
+new: they are the SHOW DEVICE READER path failing to bind, not the $ALLOC
+writer path the second group above already covers. Measured, not predicted --
+tests/qemu/run_facility_negctl.sh's own equality check named exactly these
+five as extra reds on the first full sweep run after the inject_and_run.sh
+fix, and they are added here rather than the harness fix being reverted,
+because the fix is a genuine coverage improvement (this control now proves
+more than it did before) and reverting it to keep this list short would be
+re-hiding a gap the file's own header calls the one thing it is not allowed
+to do.
 THE LAST NINE, in test_syssvc_startup_service, are the same missing bind
 arriving at the USER-VISIBLE COMMAND (vms-47b). DCL.EXE is a product image and
 binds like one -- through kif_bind() -- so with that call deleted RUN/DETACHED
@@ -1663,6 +1721,18 @@ apply_edit() {
         # caller is told the binding was made and only the SHARED RECORD of it
         # is missing. That is the facade shape exactly.
         sed -i 's|    strscpy(proc->terminal, devnam, sizeof(proc->terminal));|    /* NEGCTL setterm-binding-not-recorded: the binding is not recorded */|' "$_file";;
+    showterm-width-page-fabricated)
+        # The ONE edit: restore a Width/Page line ahead of the characteristic
+        # grid, exactly the one-line layout vms-d0b deleted as an invented
+        # oracle format. Anchored on the exact original statement
+        # (printf("Terminal Characteristics:\n");, the only occurrence in the
+        # file) and the replacement swaps that trailing printf() for a
+        # behaviourally identical puts() -- same bytes on stdout, since the
+        # format string carries no conversion and puts() supplies its own
+        # newline -- so the literal anchor text does not survive the edit and
+        # a second apply finds no match, which is the no-op the selftest
+        # requires.
+        sed -i 's|    printf("Terminal Characteristics:\\n");|    printf("   Width:%4u      Page:%5u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-fabricated: restores the deleted one-line layout */ puts("Terminal Characteristics:");|' "$_file";;
     proctab-duplicate-name)
         sed -i 's|if (clash \&\& clash != proc) {|if (0 \&\& clash != proc) { /* NEGCTL proctab-duplicate-name */|' "$_file";;
     proctab-crossgroup-identity)

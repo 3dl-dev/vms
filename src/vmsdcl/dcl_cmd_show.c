@@ -1587,23 +1587,25 @@ static void show_terminal_render(const struct vms_devinfo *info)
      * WIDTH AND PAGE ARE NOT PRINTED (vms-d0b), CORRECTING THE SAME
      * MISTAKE ONE FIELD LATER. The line this replaced put them on one
      * line, "   Width:%4u      Page:%5u\n\n" -- a layout the oracle has
-     * never shown. Section 2 of docs/oracle/vax73-terminal-device.md
-     * prints them on TWO SEPARATE lines, each one field among five
-     * (Input:/Output: speed, LFfill:/CRfill:, Width:/Page:, Parity:),
-     * and OVMX has no value for four of those five. Crushing the two
-     * fields we DO have onto a single line invents a layout VMS does
-     * not use -- the same charge that got the renderer THIS FUNCTION
-     * replaced deleted, just moved one field over.
+     * never shown. Read docs/oracle/vax73-terminal-device.md section 2
+     * (the verbatim capture, lines 33-34) rather than trusting a count
+     * here: VMS prints Width and Page on TWO SEPARATE lines, each
+     * sharing the line with other fields OVMX cannot source --
+     * Input:/Output: (line speed), LFfill:/CRfill: (fill counts) and
+     * Parity:. Crushing Width and Page onto a single line of their own
+     * invents a layout VMS does not use -- the same charge that got the
+     * renderer THIS FUNCTION replaced deleted, just moved one field
+     * over.
      *
      * The two candidate honest answers were "pin it" (reproduce the
-     * two-line form, leaving the four missing fields blank) or "print
-     * neither". Pinning was rejected: nobody has ever seen VMS print
-     * that block with Input/Output/LFfill/CRfill/Parity blank, so
-     * inventing the blanks' spacing would be exactly the same
-     * fabrication one field further in. Width and Page are
-     * A-writes/B-reads proven against the executive at the kernel
-     * layer instead (tests/qemu/test_kmod_devtab.c), which is where
-     * that property belongs when the display cannot show it honestly.
+     * two-line form, leaving Input/Output/LFfill/CRfill/Parity blank)
+     * or "print neither". Pinning was rejected: nobody has ever seen
+     * VMS print that block with those fields blank, so inventing their
+     * spacing would be exactly the same fabrication one field further
+     * in. Width and Page are A-writes/B-reads proven against the
+     * executive at the kernel layer instead
+     * (tests/qemu/test_kmod_devtab.c), which is where that property
+     * belongs when the display cannot show it honestly.
      */
 
     printf("Terminal Characteristics:\n");

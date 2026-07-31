@@ -13,7 +13,6 @@
 #include <signal.h>
 #include <ctype.h>
 #include <time.h>
-#include <pwd.h>
 #include <sys/utsname.h>
 #include <sys/stat.h>
 #include <termios.h>
@@ -36,6 +35,8 @@
 #include "vms/logical.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
+/* The executive process table: this process's identity is READ from it. */
+#include "vms_kif.h"
 
 /* Global DCL context */
 static struct dcl_context dcl_ctx;
@@ -129,18 +130,6 @@ void dcl_context_init(struct dcl_context *ctx)
         }
     }
 
-    /* Get user info */
-    struct passwd *pw = getpwuid(getuid());
-    if (pw) {
-        size_t i;
-        for (i = 0; i < sizeof(ctx->username) - 1 && pw->pw_name[i]; i++) {
-            ctx->username[i] = (char)toupper((unsigned char)pw->pw_name[i]);
-        }
-        ctx->username[i] = '\0';
-    } else {
-        strcpy(ctx->username, "SYSTEM");
-    }
-
     /*
      * DELETED WITH ITS SOURCE (vms-fb9): this used to copy
      * ctx->terminal.device_name into ctx->process_name -- deriving the
@@ -150,82 +139,64 @@ void dcl_context_init(struct dcl_context *ctx)
      * be the same defect twice. The process name is executive-owned
      * state; see src/vmsprocess/vms_pcb.c, which is still a per-process
      * block and is tracked separately.
+     *
+     * ALSO DELETED (vms-2b8, this round): the "Get user info" block that
+     * stood here, a getpwuid(getuid()) fallback for ctx->username used
+     * whenever VMS_USERNAME was unset. It is superseded below by the
+     * executive read -- a local Linux passwd lookup is exactly the kind
+     * of locally-invented identity Rule 10 forbids once an authoritative
+     * source (the executive) exists.
      */
+
 
     /*
      * ============================================================
-     * STOPGAP -- PRIVILEGE ESCALATION PATH, STILL OPEN (vms-2b8)
+     * IDENTITY COMES FROM THE EXECUTIVE (vms-2b8)
      * ============================================================
-     * The reads below take this process's USERNAME and PRIVILEGE MASK
-     * from ordinary environment variables. Any process can setenv()
-     * them, so any process can choose its own identity here. This is
-     * the env-var facade CLAUDE.md Rule 10 names as a worked example,
-     * and it is NOT an access control system.
+     * This process's USER NAME, UIC and PRIVILEGE MASK are read out of
+     * the executive's process table (src/kernel/vms_proctab.c, through
+     * vms_kif_getjpi_self). They are not asked for, and there is no
+     * other source for them.
      *
-     * The executive now owns identity for real: it derives the UIC and
-     * the authorized privilege mask from the task's credentials and
-     * refuses to let a process widen either (src/kernel/vms_proctab.c
-     * vms_ioctl_setident, proven by tests/qemu/test_kmod_ident.c
-     * against a real /dev/vms). The correct code here is a
-     * vms_kif_getjpi_self() read of that row.
+     * WHAT USED TO STAND HERE, so nobody puts it back: the user name,
+     * the UIC and the privilege mask were taken from the environment
+     * (VMS_USERNAME / VMS_UIC_GROUP / VMS_UIC_MEMBER / VMS_PRIVILEGES),
+     * with the user name falling back to getpwuid(getuid()) and then to
+     * the literal "SYSTEM". Every one of those is a value the process
+     * itself controls -- any process could setenv("VMS_PRIVILEGES",
+     * "ALL") and be believed. That is the env-var facade CLAUDE.md
+     * Rule 10 names as a worked example; it was never an access control
+     * system, it was an honor system.
      *
-     * STILL NOT WIRED UP -- BUT THE REASON PREVIOUSLY WRITTEN HERE IS
-     * NOW FALSE, RE-CHECKED 2026-07-31 (vms-fb9 r6) BY EXECUTION. The
-     * literal premise survives: vms_kif_register() still has zero
-     * product callers by that name. The CONCLUSION drawn from it --
-     * "no DCL process is registered with the executive and $GETJPI
-     * would return -ESRCH for every one of them" -- does not, because
-     * vms-9fc made the open -> register sequence automatic
-     * (src/libvmssys/vms_kif.h:7-18): kif_bind() in
-     * src/libvmssys/vms_kif.c completes it before a process's other
-     * vms_kif_* calls reach /dev/vms, keyed on that process, so a DCL
-     * process is registered on its FIRST such call with no explicit
-     * register call anywhere in its path. SHOW DEVICE proves the
-     * mechanism against a real /dev/vms today
-     * (src/vmsdcl/dcl_cmd_show.c, vms-fb9): it reads it inside QEMU with
-     * no vms_kif_register() call written anywhere near it.
+     * The executive derives the UIC from the task's real credentials and
+     * the authorized mask from capable(CAP_SYS_ADMIN) -- credentials a
+     * process cannot grant itself -- and the user name arrives only
+     * through VMS_IOCTL_SETIDENT, which refuses any caller without
+     * SETPRV an identity that is not a weakening of its own. So what is
+     * read here is what something privileged established for this
+     * process, which is the whole difference between an identity and a
+     * claim (CLAUDE.md Rule 11).
      *
-     * vms_kif_setident() was a second, ACCIDENTAL exception until r6 of
-     * this item -- r5's version of this comment did not know that, and
-     * that was CAUGHT BY MEASUREMENT: vms_kif_setident() issued a raw
-     * ioctl instead of going through kif_call()/KIF_CALL, so it reached
-     * the executive unbound. DCL does not call vms_kif_setident() on
-     * this path (it is out of scope here, per the note below), so the
-     * gap did not change what THIS file observes -- but it was a real
-     * gap in the mechanism regardless of who calls it, and is fixed at
-     * the source in r6 (src/libvmssys/vms_kif.c,
-     * tests/qemu/test_kmod_bind.c suite 0), not by narrowing this
-     * sentence.
-     *
-     * So the precondition this note told the next reader to wait for
-     * has been met. That does NOT mean this file should wire up
-     * vms_kif_getjpi_self() here -- replacing the identity/privilege
-     * stopgap is vms-2b8's call, is behind an operator ruling, and is
-     * out of scope for vms-fb9 (which owns the device-table readers,
-     * not process identity). DO NOT "IMPROVE" THIS PATH under this
-     * item. What is withdrawn is only the instruction to keep waiting
-     * "once vms-9fc lands" -- it has landed; the stopgap's disposition
-     * from here belongs to vms-2b8. The UIC half of the same defect was
-     * already deleted from src/vmsrms/rms_core.c under this item,
-     * because there the real credentials were available locally; the
-     * user name and the privilege mask still have no local honest
-     * source, which is exactly vms-2b8's territory to close.
+     * THERE IS NO ABSENT-EXECUTIVE BRANCH AND MUST NOT BE ONE. The
+     * first vms_kif_* call opens and registers this process (kif_bind),
+     * and PID 1 refuses to bring OVMX up at all without /dev/vms
+     * (Rule 9, src/ovmx_init/ovmx_init.c executive_attach), so in the
+     * one OVMX runtime this read cannot fail. If it fails anyway -- on
+     * a developer host running the DCL binary outside OVMX -- the
+     * fields stay empty and every reader of them reports nothing.
+     * Substituting a local guess for a failed executive read is exactly
+     * the illegal third answer (Rule 10).
      * ============================================================
      */
-    const char *env_user = getenv("VMS_USERNAME");
-    if (env_user && env_user[0]) {
-        strncpy(ctx->username, env_user, sizeof(ctx->username) - 1);
+    struct vms_procinfo self;
+    memset(&self, 0, sizeof(self));
+    if (vms_kif_getjpi_self(&self) & 1) {
+        strncpy(ctx->username, self.username, sizeof(ctx->username) - 1);
         ctx->username[sizeof(ctx->username) - 1] = '\0';
+        ctx->uic_group  = (self.uic >> 16) & 0xFFFFu;
+        ctx->uic_member = self.uic & 0xFFFFu;
+        ctx->privileges = self.cur_privs;
     }
-
-    const char *env_group = getenv("VMS_UIC_GROUP");
-    if (env_group) ctx->uic_group = (uint32_t)strtoul(env_group, NULL, 10);
-
-    const char *env_member = getenv("VMS_UIC_MEMBER");
-    if (env_member) ctx->uic_member = (uint32_t)strtoul(env_member, NULL, 10);
-
-    const char *env_privs = getenv("VMS_PRIVILEGES");
-    if (env_privs) ctx->privileges = parse_privilege_string(env_privs);
 
     const char *env_defdir = getenv("VMS_DEFAULT_DIR");
     if (env_defdir && env_defdir[0]) {
@@ -236,18 +207,18 @@ void dcl_context_init(struct dcl_context *ctx)
     /* Default protection: S:RWED,O:RWED,G:RE,W: = 0xFF00 */
     ctx->default_protection = 0xFF00;
 
-    /* Initialize PCB from environment if not already done */
+    /*
+     * The userspace PCB is seeded from the executive's row -- it is a
+     * copy of what the executive decided, never a declaration of what
+     * this process would like to be. (The PCB itself is a per-process
+     * structure and therefore a facade for anything system-wide; it is
+     * vms-8019's to remove, not this item's. What this item removes is
+     * the process CHOOSING what goes in it.)
+     */
     if (!vms_pcb_get()) {
-        uint64_t privs = env_privs ? parse_privilege_string(env_privs) : 0;
-
-        struct vms_pcb *pcb = vms_pcb_init(privs);
+        struct vms_pcb *pcb = vms_pcb_init(self.cur_privs);
         if (pcb) {
-            uint32_t uic = 0;
-            if (env_group && env_member)
-                uic = ((uint32_t)strtoul(env_group, NULL, 10) << 16) |
-                       (uint32_t)strtoul(env_member, NULL, 10);
-
-            vms_pcb_set_identity((uint32_t)getpid(), uic,
+            vms_pcb_set_identity(self.vms_pid, self.uic,
                                  ctx->username, ctx->process_name);
             if (env_defdir && env_defdir[0])
                 vms_pcb_set_default_dir(env_defdir);
@@ -373,8 +344,13 @@ static void display_banner(void)
            (int)(ts.tv_nsec / 10000000));
     printf("\n");
 
-    /* Last login message — read from per-user lastlogin file if available */
-    const char *vms_user = getenv("VMS_USERNAME");
+    /* Last login message — read from per-user lastlogin file if available.
+     *
+     * Keyed on the user name the EXECUTIVE holds for this process (loaded
+     * in dcl_context_init), not on getenv("VMS_USERNAME") as it used to
+     * be: a process that could name itself here could read another user's
+     * last-login record (vms-2b8). */
+    const char *vms_user = dcl_get_context()->username;
     if (vms_user && vms_user[0]) {
         char lastlogin_dir_linux[1024];
         vmsfs_to_linux_path(VMS_LASTLOGIN_DIR, lastlogin_dir_linux, sizeof(lastlogin_dir_linux));

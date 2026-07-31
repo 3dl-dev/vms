@@ -11,6 +11,8 @@ target_include_directories(ovmx_init PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
+    # vms_kif.h: PID 1's identity is established THROUGH the executive.
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
 )
 
 target_compile_definitions(ovmx_init PRIVATE
@@ -20,9 +22,9 @@ target_compile_definitions(ovmx_init PRIVATE
 
 if(OVMX_IMGACT)
     # Static PID-1 bootstrap: link the static twins, not the shareable images.
-    target_link_libraries(ovmx_init PRIVATE vmsprocess_static vmsfs_static vmslnm_static pthread)
+    target_link_libraries(ovmx_init PRIVATE vmsprocess_static vmsfs_static vmslnm_static vmssys pthread)
 else()
-    target_link_libraries(ovmx_init PRIVATE vmsprocess vmsfs vmslnm pthread)
+    target_link_libraries(ovmx_init PRIVATE vmsprocess vmsfs vmslnm vmssys pthread)
 endif()
 
 set_target_properties(ovmx_init PROPERTIES

@@ -91,10 +91,11 @@ uint32_t vms_kif_register(uint32_t *vms_pid);
  * uaf$q_priv quadword; the executive sets current privileges equal to
  * it (an OVMX design choice -- see vms_ioctl.h).
  *
- * OVMX-UNWIRED: vms_kif_setident (vms-2b8) -- LOGINOUT still does not call
- * it; src/vmsdcl/dcl_main.c reads VMS_USERNAME, VMS_UIC_GROUP,
- * VMS_UIC_MEMBER and VMS_PRIVILEGES from the environment, so a process
- * still names its own identity. */
+ * WIRED (vms-2b8): tools/vms_login.c (LOGINOUT) calls this after SYSUAF
+ * authentication, and src/ovmx_init/ovmx_init.c's establish_system_identity()
+ * calls it for PID 1's own SYSTEM identity. src/vmsdcl/dcl_main.c and
+ * dcl_cmd_show.c read the row back through vms_kif_getjpi_self() instead of
+ * the environment. */
 uint32_t vms_kif_setident(const char *username, uint32_t uic,
                           uint64_t authorized_privs);
 

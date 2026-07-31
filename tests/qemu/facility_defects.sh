@@ -702,8 +702,27 @@ EOF
         facility)     echo "authenticated identity (VMS_IOCTL_SETIDENT: user name, UIC and authorized mask)";;
         targets)      echo "kernel/vms_proctab.c";;
         suites_red)   echo "test_kmod_ident";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
+        blind_suites) echo "test_syssvc_ident";;
+        blind_why)    cat <<'EOF'
+test_syssvc_ident.c (vms-2b8) drives VMS_IOCTL_SETIDENT through DCL.EXE
+rather than raw ioctls, but MEASURED, not assumed, to stay green under this
+mutation (run_facility_negctl.sh ident-username-unguarded, coverage gap
+found and closed vms-2b8 this round): every one of its scenarios that
+attempts an identity a caller is NOT entitled to (C: unprivileged claimant,
+D: session subprocess) sets BOTH a UIC that is not its own AND a mask that
+is not a subset of its authorized one, so the UIC clause or the mask-subset
+clause -- both left intact by this mutation, which disables only the name
+clause -- still refuses the call and the suite's assertions do not move.
+Its two scenarios that DO succeed (A, B) run as a privileged writer holding
+SETPRV, which skips the whole guarded block (including the name clause)
+regardless of this mutation. So no scenario in this suite isolates the name
+clause alone; test_kmod_ident's own USER NAME CLAUSE ISOLATED cases
+(same UIC, same mask, different name) are what this defect actually
+exercises. Closing this gap means adding a test_syssvc_ident scenario that,
+like test_kmod_ident's, holds the UIC and mask clauses constant and varies
+only the name -- tracked under vms-2b8, not fixed here.
+EOF
+                      ;;
         isolation)    echo "isolated";;
         why)          echo "\$SETIDENT stops guarding the USER NAME for a caller without SETPRV: the name clause of the one-way-drop rule is short-circuited, while the UIC clause and the authorized-mask subset clause are left intact. This is the vms-2b8 round-3 defect exactly -- the version that guarded the two fields nobody displays and left the one every reader shows unprotected, so an unprivileged process could stamp itself \"SYSTEM\" and \$GETJPI would report it to everyone.";;
         require_fail) cat <<'EOF'
@@ -877,7 +896,19 @@ EOF
         # away from the executive. The two arrived on separate branches; this
         # list is the UNION, re-derived by running the control on the merged
         # tree rather than kept from either side of the rebase conflict.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service";;
+        # test_syssvc_ident is the SIXTH, added by vms-2b8 (this round) when
+        # SHOW PROCESS/SHOW PROCESS_PRIVILEGES became readers of the
+        # executive's identity row. Same arrival as the others -- NOT
+        # predicted, READ OFF A RUN of this dispatch's own
+        # run_facility_negctl.sh bind-client-no-register: it landed declaring
+        # only ident-username-unguarded (via blind_suites), and this is the
+        # first time this facility's control ran end-to-end since. Reddened
+        # here, one suite outside the declared set and 14 assertions outside
+        # the named set -- test_syssvc_ident.c drives DCL.EXE exactly as
+        # test_syssvc_showdev and test_syssvc_startup_service do (real
+        # product image, kif_bind()-mediated), so it was never a candidate
+        # for the blind_suites set below either.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_ident";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
 The suites named in blind_suites above drive the product's own vms_kif
@@ -1008,6 +1039,20 @@ the cluster state word agrees with the status: flag 1's bit is SET
 the second process allocated OPA0: through the executive ($ALLOC)
 A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
 the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
+A: SHOW PROCESS reports the UIC the EXECUTIVE holds
+A: SHOW PROCESS reports the user name the EXECUTIVE holds
+A: the authorized-privileges AND process-privileges blocks are both EMPTY -- none of A's granted mask (TMPMBX|NETMBX|OPER) is in VMS_PRV_M_ENFORCED
+A: the executive accepted the identity a privileged writer established
+B: SHOW PROCESS reports B's UIC
+B: SHOW PROCESS reports B's user name
+B: SHOW PROCESS/PRIVILEGES lists WORLD's description in the process-privileges block too
+B: the authorized-privileges grid shows EXACTLY WORLD -- the one bit of B's mask that is in VMS_PRV_M_ENFORCED -- not the whole mask and not nothing
+C: SHOW PROCESS does NOT report SYSTEM for a process that only claimed it -- through the ioctl AND through VMS_USERNAME
+C: SHOW PROCESS reports the UIC the executive derived from real credentials
+C: the executive refused an unprivileged process's attempt to become SYSTEM (SS$_NOPRIV)
+C: the privilege display is EMPTY -- the two privileges the executive granted an unprivileged process (TMPMBX, NETMBX) are both outside VMS_PRV_M_ENFORCED
+D: the session established its authenticated identity
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -1173,6 +1218,27 @@ suites, this branch gained test_syssvc_startup_service. Both sets are kept;
 neither is a substitute for the other, and the combined suites_red/knock_on_fail
 lists above were re-verified by running the mutation on the rebased tree (see
 the item's progress notes), not by picking a side of the git conflict.
+
+TEST_SYSSVC_IDENT, THE SEVENTH SUITE, ADDED vms-2b8 (this round) -- READ OFF A
+RUN, NOT PREDICTED. test_syssvc_ident.c exists to prove SHOW PROCESS and SHOW
+PROCESS/PRIVILEGES are READERS of the executive's identity row rather than of
+the process's own environment (vms-2b8), so every one of its scenarios execs a
+real DCL.EXE and reads its SHOW PROCESS output. DCL.EXE binds the way every
+product image binds -- through src/vmsdcl/dcl_main.c's dcl_context_init(),
+which now calls vms_kif_getjpi_self() unconditionally at startup (the reader
+half of this item) -- so with kif_bind()'s register call deleted, that startup
+read fails and every downstream assertion about what it returned fails with
+it. The 14 reds this manifest names span scenarios A through D: 5 in A (the
+harness's own vms_kif_setident() call, which ALSO binds through the same
+deleted register() step, plus the four SHOW PROCESS reads of what it should
+have established), 4 in B (SHOW PROCESS's user name/UIC plus the two
+privilege-grid assertions this round's VMS_PRV_M_ENFORCED filter added), 4 in
+C (the refusal status plus the three identity-not-claimed reads), and D's
+first assertion ("the session established its authenticated identity") --
+exactly the 14 lines above, observed by running this mutation once and
+capturing the delta; nothing past D's first line or in scenario E is claimed
+here, named, or reasoned about, because the run this entry is built from did
+not print anything further to reason from.
 EOF
                       ;;
         esac;;

@@ -400,7 +400,15 @@ expect_red "$H" \
 # ---------------------------------------------------------------------------
 add_probe_decl
 add_probe_def
-sed -i 's|^        (void)uname;$|        (void)uname;\n        /* vms_kif_negctl_probe(1); -- conversion is future work */|' "$SHOW"
+# Re-anchored (vms-2b8, this round): the previous anchor was
+# `(void)uname;`, a line inside cmd_show_process()'s /ALL branch that no
+# longer exists -- vms-6a7 rewrote cmd_show_process() to read a target's
+# identity through sys$getjpi instead of the caller's own ctx->username,
+# and vms-2b8 (this round) applied the same executive-read fix to the /ALL
+# row. Re-anchored to a line that still exists and is unique in this file,
+# not relaxed: the property under test (a call inside a comment is not a
+# caller) is unchanged.
+sed -i 's|^        return cmd_show_process_quotas(ctx);$|        return cmd_show_process_quotas(ctx);\n        /* vms_kif_negctl_probe(1); -- conversion is future work */|' "$SHOW"
 expect_red "$H $C $SHOW" \
     "a caller that exists only in a comment does not count" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"

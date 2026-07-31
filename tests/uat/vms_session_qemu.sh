@@ -77,11 +77,58 @@ BOOT_TIMEOUT=120     # budget for EACH of the two boot-phase waits below
                       # SESSION_TIMEOUT's comment for why it is counted twice
 STEP_TIMEOUT=60      # budget for each named login-flow wait (password/welcome/logout)
 COMMAND_TIMEOUT=10   # budget for the DCL prompt to return after one command
-                      # (observed on this host: whole 17-command session completes
+                      # (observed on this host: the whole session completes
                       # in well under 1s per command under TCG -- 10s is a >10x margin)
+
+# --- The two sessions this UAT drives ------------------------------------
+# Declared here rather than at the loops so SESSION_TIMEOUT below can be
+# computed from their real lengths instead of a hand-maintained count that
+# drifts every time a command is added.
+#
+# SESSION 1 is the SYSTEM account. SESSION 2 (vms-2b8 round 7) logs in AGAIN
+# as an ordinary user, because after LOGINOUT began dropping to the
+# authenticated user's real credentials there is a whole class of behaviour
+# that only a second, unprivileged account can show: what SYSTEM may do to
+# the VMS system tree, and what an ordinary user may not.
+SYSTEM_CMDS=(
+    'SHOW TIME'
+    'SHOW SYSTEM'
+    'SHOW MEMORY'
+    'SHOW DEFAULT'
+    'SET DEFAULT SYS$MANAGER:'
+    'SHOW DEFAULT'
+    'DIRECTORY'
+    'SHOW PROCESS'
+    'SHOW PROCESS /PRIVILEGES'
+    'SPAWN SHOW PROCESS'
+    'COPY LOGIN.COM UATWRITE.TXT'
+    'TYPE UATWRITE.TXT'
+    'COPY LOGIN.COM SYS$SYSTEM:UATSYS.TXT'
+    'TYPE SYS$SYSTEM:UATSYS.TXT'
+    'DELETE SYS$SYSTEM:UATSYS.TXT;1'
+    'DIRECTORY SYS$SYSTEM:'
+    'SHOW LOGICAL SYS$LOGIN'
+    'DEFINE UAT_TEST "session_test_passed"'
+    'SHOW LOGICAL UAT_TEST'
+    'DEASSIGN UAT_TEST'
+    'SHOW USERS'
+    'SHOW TERMINAL'
+    'SHOW DEVICE'
+    'HELP SHOW'
+)
+USER_CMDS=(
+    'TYPE SYS$MANAGER:LOGIN.COM'
+    'COPY SYS$MANAGER:LOGIN.COM UATUSER.TXT'
+    'TYPE UATUSER.TXT'
+    'COPY SYS$MANAGER:LOGIN.COM SYS$SYSTEM:UATDENY.TXT'
+    'TYPE SYS$SYSTEM:UATDENY.TXT'
+)
+CMD_COUNT=$(( ${#SYSTEM_CMDS[@]} + ${#USER_CMDS[@]} ))
+
 # Overall wall-clock kill switch for the whole QEMU process: two boot-phase
-# waits (executive attach, then login prompt -- each at BOOT_TIMEOUT) + 3
-# named steps + up to 17 commands, each at its own budget, plus slack. This
+# waits (executive attach, then login prompt -- each at BOOT_TIMEOUT) + the
+# named login/logout steps of BOTH sessions + every command, each at its own
+# budget, plus slack. This
 # is a safety net (the guest should return far faster than this in the normal
 # case, observed 11-14s end to end on this host) so a genuinely wedged QEMU
 # process cannot run forever -- it is NOT the pacing budget for any single
@@ -90,7 +137,7 @@ COMMAND_TIMEOUT=10   # budget for the DCL prompt to return after one command
 # under the CI step's `timeout-minutes: 10` (600s) in ci.yml's uat-session
 # job so THIS timeout fires first with a diagnosis, instead of GH Actions
 # SIGKILLing the job with no console log captured.
-SESSION_TIMEOUT=$((BOOT_TIMEOUT * 2 + STEP_TIMEOUT * 3 + COMMAND_TIMEOUT * 17))
+SESSION_TIMEOUT=$((BOOT_TIMEOUT * 2 + STEP_TIMEOUT * 6 + COMMAND_TIMEOUT * CMD_COUNT))
 
 ARCH=$(uname -m)
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -213,31 +260,53 @@ run_cmd() {
     CMD_OUTPUT["$cmd"]=$(printf '%s\n' "$segment" | tail -n +2)
 }
 
-for cmd in \
-    'SHOW TIME' \
-    'SHOW SYSTEM' \
-    'SHOW MEMORY' \
-    'SHOW DEFAULT' \
-    'SET DEFAULT SYS$MANAGER:' \
-    'SHOW DEFAULT' \
-    'DIRECTORY' \
-    'SHOW PROCESS' \
-    'SHOW PROCESS /PRIVILEGES' \
-    'SHOW LOGICAL SYS$LOGIN' \
-    'DEFINE UAT_TEST "session_test_passed"' \
-    'SHOW LOGICAL UAT_TEST' \
-    'DEASSIGN UAT_TEST' \
-    'SHOW USERS' \
-    'SHOW TERMINAL' \
-    'SHOW DEVICE' \
-    'HELP SHOW'
-do
+for cmd in "${SYSTEM_CMDS[@]}"; do
     run_cmd "$cmd"
 done
 
 LOGIN_OFFSET=$(wc -c <"$CONSOLE_LOG")
 send 'LOGOUT'
 wait_for 'logged out' "$STEP_TIMEOUT" "$LOGIN_OFFSET" || fail_with_console "ERROR: session never logged out"
+
+# --- Session 2: an ORDINARY user, on the same running system --------------
+#
+# WHY A SECOND LOGIN (vms-2b8 round 7). Session 1 proves what the SYSTEM
+# account can do; on its own that is not evidence of an access control
+# system, because a system where EVERYONE can write SYS$SYSTEM: passes every
+# assertion session 1 makes. The refusal has to be shown too, and it can
+# only be shown by an account that is not SYSTEM. GUEST is the least
+# privileged account SYSUAF ships (UIC [200,201], TMPMBX only).
+#
+# Every wait below is anchored to LOGIN_OFFSET -- the byte offset captured
+# immediately BEFORE 'LOGOUT' was sent -- because every string being waited
+# for ('Username:', 'Password:', 'Welcome to OVMX') already appears earlier
+# in the log from session 1, and an unanchored wait_for would return
+# instantly on session 1's output and then type GUEST's commands into a
+# dead session.
+#
+# BEFORE the LOGOUT and not after it, which is not a detail: PID 1 prints
+# the next 'Username:' in the same breath as the logout message, so an
+# offset taken after wait_for 'logged out' returns (it polls at 250ms) has
+# already skipped past the prompt being waited for, and the wait times out
+# with the prompt sitting in plain sight on the console. Measured, not
+# reasoned: that is exactly how this failed the first time it ran.
+wait_for 'Username:' "$STEP_TIMEOUT" "$LOGIN_OFFSET" \
+    || fail_with_console "ERROR: no second login prompt after LOGOUT"
+send 'GUEST'
+wait_for 'Password:' "$STEP_TIMEOUT" "$LOGIN_OFFSET" \
+    || fail_with_console "ERROR: no password prompt for GUEST"
+send 'GUEST'
+wait_for 'Welcome to OVMX' "$STEP_TIMEOUT" "$LOGIN_OFFSET" \
+    || fail_with_console "ERROR: GUEST login did not succeed"
+
+for cmd in "${USER_CMDS[@]}"; do
+    run_cmd "$cmd"
+done
+
+LOGOUT2_OFFSET=$(wc -c <"$CONSOLE_LOG")
+send 'LOGOUT'
+wait_for 'logged out' "$STEP_TIMEOUT" "$LOGOUT2_OFFSET" \
+    || fail_with_console "ERROR: GUEST session never logged out"
 
 # Whole-session output, for the human-readable transcript below and for the
 # negative Unix-leak checks (which are safe to scan broadly -- none of the
@@ -315,6 +384,20 @@ check_known_divergence() {
     else
         FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  FAIL: known divergence ($item) no longer reproduces in '$cmd': $what.\n        If $item has landed this is GOOD NEWS -- delete this tripwire and assert the VMS behaviour instead. Do NOT relax the pattern.\n        (got: $(printf '%s' "${CMD_OUTPUT[$cmd]}" | tr '\n' ' '))"
+    fi
+}
+
+# Anchored negative: asserts a pattern is ABSENT from ONE command's own
+# captured response. Same anchoring rationale as check_response -- a
+# whole-log negative would be defeated by any other command that happens
+# to print the string.
+check_not_response() {
+    local cmd="$1" pattern="$2"
+    if printf '%s' "${CMD_OUTPUT[$cmd]}" | grep -qiE "$pattern"; then
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  FAIL: response to '$cmd' should NOT contain '$pattern' (got: $(printf '%s' "${CMD_OUTPUT[$cmd]}" | tr '\n' ' '))"
+    else
+        PASS=$((PASS + 1))
     fi
 }
 
@@ -428,6 +511,122 @@ check_known_divergence 'SHOW PROCESS' 'Process name: ""' \
 # fail; the unmutated run still passes.
 check_response 'SHOW PROCESS /PRIVILEGES' '(TMPMBX|NETMBX|OPER)'
 
+# THE SESSION REALLY IS THE AUTHENTICATED USER AT THE OS LEVEL (vms-2b8
+# round 6). This is the only externally observable proof that
+# tools/vms_login.c's credential drop happened, and it is why the
+# assertion is on a SPAWNed subprocess rather than on the session itself.
+#
+# The session's own UIC comes from the row LOGINOUT stamped out of
+# SYSUAF, so SHOW PROCESS reports [001,004] whether or not the drop
+# occurred -- it cannot distinguish. A SUBPROCESS is different: it
+# registers with the executive on its own, and vms_proc_register() in
+# src/kernel/vms_module.c derives its UIC from the task's REAL Linux
+# credentials, inheriting nothing. So the subprocess's UIC is a direct
+# readout of what the session is running as:
+#   drop performed  -> [001,004]   (setgid(1), setuid(4) from SYSUAF)
+#   drop absent     -> [000,000]   (root, as every session used to be)
+#
+# That difference is not cosmetic. While sessions ran as root, every
+# subprocess also registered holding CMKRNL|CMEXEC|SETPRV|WORLD, and
+# SETPRV is what VMS_IOCTL_SETIDENT requires to claim any identity at
+# all -- an ordinary user's subprocess could stamp itself SYSTEM with
+# all 37 privileges (reproduced against a real /dev/vms; the refusal is
+# asserted in tests/qemu/test_syssvc_ident.c scenario D).
+#
+# Anchored to SPAWN's own response segment, not the whole log: '[001,004]'
+# also appears in the SHOW PROCESS response earlier in the same session.
+check_response 'SPAWN SHOW PROCESS' '\[001,004\]'
+check_not_response 'SPAWN SHOW PROCESS' '\[000,000\]'
+
+# KNOWN DIVERGENCE FROM VMS, ASSERTED OUT LOUD RATHER THAN STEPPED AROUND
+# (vms-afd).
+#
+# The display the two assertions above read is, on this line, WRONG: OVMX
+# prints 'User:' followed by nothing for a spawned subprocess. VMS has no
+# process without a user name -- measured on the oracle in this item's own
+# session (VAX1, OpenVMS VAX V7.3): SPAWN there answers '%DCL-S-SPAWNED,
+# process SYSTEM_1 spawned', a subprocess inheriting the creator's
+# username. OVMX's src/kernel/vms_module.c zeroes proc->username at
+# registration and inherits nothing, so every SPAWNed process in the
+# product reports blank. The credential drop this item lands does not
+# cause it, but it makes it reachable for every spawned process rather
+# than theoretical.
+#
+# The fix is $CREPRC identity propagation, filed as vms-afd and entangled
+# with vms-8019's in-flight work on the executive process table, so it is
+# not built here. What is NOT acceptable is asserting around it in silence
+# -- that is how a facade survives. This assertion PINS the blank, so the
+# day vms-afd makes SPAWN inherit a user name this line goes red and
+# whoever lands it has to come and delete it.
+check_response 'SPAWN SHOW PROCESS' 'User: +Process ID:'
+
+# THE AUTHENTICATED USER CAN ACTUALLY USE THE SYSTEM (vms-2b8 round 7).
+#
+# WHY THIS BLOCK EXISTS. Round 6 made LOGINOUT drop to the SYSUAF UIC, and
+# nothing in the suite wrote a file, so nobody noticed that a user could log
+# in and then not create one -- in their own login directory. `COPY LOGIN.COM
+# ADVPROBE.TXT` answered `%RMS-E-CRE, cannot create - ADVPROBE.TXT` on the
+# real bootable image. The cause was not the protection check: it was that
+# PID 1 installed the whole VMS tree as Linux root, so once a session
+# genuinely became UIC [1,4] there was nothing on the system that the SYSTEM
+# account owned. src/ovmx_init/ovmx_init.c provision_ownership() now gives
+# the tree to SYSTEM, which is what the oracle says VMS does
+# (DIRECTORY/OWNER SYS$COMMON:[000000]SYSEXE.DIR -> [SYSTEM]).
+#
+# EXISTENCE IS PROVEN BY READING THE FILE BACK (TYPE), not by DIRECTORY.
+# Measured on this runtime while writing these assertions: `DIRECTORY <one
+# named file>` answers 'Total of 0 files' even for a file that certainly
+# exists (`DIRECTORY SYS$MANAGER:LOGIN.COM` -> 0 files, while `TYPE
+# SYS$MANAGER:LOGIN.COM` prints it). That is a real DCL defect, reported
+# separately; it is not this item's, and a test that leaned on it would be
+# asserting against a broken observer.
+#
+# Nor are these assertions on an error message. OVMX's COPY prints
+# %RMS-E-CRE where VMS prints %COPY-E-OPENOUT with -RMS- and -SYSTEM-
+# secondaries; asserting the OVMX text would be certifying a message this
+# item never measured (CLAUDE.md Rule 10). Whether the bytes are THERE is
+# substrate-independent and is the thing that actually matters.
+check_not_response 'COPY LOGIN.COM UATWRITE.TXT' 'RMS-E'
+check_response 'TYPE UATWRITE.TXT' 'Per-user login command procedure'
+
+# ... including in SYS$SYSTEM:, which on VMS is owned by SYSTEM and gives
+# world R+E and no write (oracle: SYSEXE.DIR;1 [SYSTEM] (RWE,RWE,RE,RE)).
+check_not_response 'COPY LOGIN.COM SYS$SYSTEM:UATSYS.TXT' 'RMS-E'
+check_response 'TYPE SYS$SYSTEM:UATSYS.TXT' 'Per-user login command procedure'
+
+# ... and can delete what it created again. The listing assertion is paired
+# with a positive one on the same response so it cannot pass vacuously: if
+# `DIRECTORY SYS$SYSTEM:` listed nothing at all, the DCL.EXE check fails.
+check_not_response 'DELETE SYS$SYSTEM:UATSYS.TXT;1' 'RMS-E'
+check_response 'DIRECTORY SYS$SYSTEM:' 'DCL\.EXE'
+check_not_response 'DIRECTORY SYS$SYSTEM:' 'UATSYS\.TXT'
+
+# --- and the refusal, which is the half that makes it access control -----
+#
+# GUEST [200,201] is not in a system UIC group and does not own the system
+# tree. It must be able to read the system tree and write its OWN login
+# directory, and must NOT be able to write SYS$SYSTEM:. All three are
+# asserted, because any one alone is satisfied by a broken system: "GUEST
+# can write everywhere" passes the first two, "GUEST can do nothing" passes
+# the last.
+check_response 'TYPE SYS$MANAGER:LOGIN.COM' 'Per-user login command procedure'
+check_not_response 'COPY SYS$MANAGER:LOGIN.COM UATUSER.TXT' 'RMS-E'
+check_response 'TYPE UATUSER.TXT' 'Per-user login command procedure'
+check_response 'COPY SYS$MANAGER:LOGIN.COM SYS$SYSTEM:UATDENY.TXT' 'RMS-E-CRE'
+check_not_response 'TYPE SYS$SYSTEM:UATDENY.TXT' 'Per-user login command procedure'
+
+# The second session really is GUEST and not another SYSTEM login. Whole-log
+# grep and safe as one: this is DCL's OWN logout line ('  GUEST      logged
+# out at ...'), not the echo of the username we typed at the prompt -- the
+# echo is the bare word, and no command in this script ever sends the string
+# 'logged out'.
+if echo "$OUTPUT" | grep -qE 'GUEST +logged out at'; then
+    PASS=$((PASS + 1))
+else
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: the second session was not a GUEST session"
+fi
+
 # SHOW TERMINAL should show terminal info in its own response. Anchored, not
 # a whole-log scan: grep is case-insensitive, so 'Terminal' matches the echo
 # of the command 'SHOW TERMINAL' itself, and '_[A-Z]' matches the echoes of
@@ -460,6 +659,28 @@ check_response 'SHOW DEVICE' '^OPA0: +Online'
 # scan would pass on the echo alone regardless of whether HELP.EXE printed
 # anything real.
 check_response 'HELP SHOW' '(SHOW|Additional information)'
+
+# PID 1's identity is ESTABLISHED BY THE EXECUTIVE, not declared (vms-2b8).
+#
+# PID 1 used to call vms_pcb_init(0xFFFFFFFFFFFFFFFF) followed by
+# vms_pcb_set_identity(1, [1,4], "SYSTEM", "SYSTEM") -- a process writing
+# its own user name, UIC and every privilege bit into a private structure.
+# It now reads the SYSTEM record from SYSUAF and asks the executive to
+# stamp it (VMS_IOCTL_SETIDENT, which refuses any caller without SETPRV),
+# then prints the row the executive holds back to it.
+#
+# WHOLE-LOG grep, and safe as one: this is a BOOT-TIME diagnostic, printed
+# before the login prompt exists. The script cannot have typed it -- the
+# session has not started -- so unlike the command-response assertions
+# above it is not echo-satisfiable. The values are asserted, not just the
+# line: deleting the SETIDENT call leaves the user name empty and the UIC
+# [0,0] (root's derived credentials), and this goes red.
+if echo "$OUTPUT" | grep -qF 'system identity SYSTEM [1,4] established by the executive'; then
+    PASS=$((PASS + 1))
+else
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: PID 1's identity was not established by the executive from SYSUAF"
+fi
 
 # Unix leak checks -- scanned against the WHOLE log (including the boot log
 # and command echoes), which is a strictly BROADER surface than before.

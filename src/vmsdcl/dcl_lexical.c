@@ -1740,7 +1740,8 @@ static int lex_fao(struct dcl_context *ctx, const char *args,
  *
  * Privilege list is comma-separated: "SYSPRV,TMPMBX"
  * Returns "TRUE" if ALL listed privileges are held, "FALSE" otherwise.
- * Reads ctx->privileges (set from VMS_PRIVILEGES env at login).
+ * Reads ctx->privileges, which dcl_context_init() now reads from the
+ * executive (vms_kif_getjpi_self()), not from the environment (vms-2b8).
  */
 static int lex_privilege(struct dcl_context *ctx, const char *args,
                          char *result, size_t result_size)

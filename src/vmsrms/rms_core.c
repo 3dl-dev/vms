@@ -33,16 +33,6 @@ static uint16_t next_ifi = 1;
 extern uint16_t vmsfs_mode_to_protection(mode_t mode);
 extern mode_t   vmsfs_protection_to_mode(uint16_t vms_prot);
 
-/* Security check from libvms */
-extern int vms$check_access(uint32_t caller_uic, uint32_t owner_uic,
-                            uint32_t protection, int access_type);
-
-/* Protection access type flags (matching sys_security.c) */
-#define RMS_PROT_READ    0x08
-#define RMS_PROT_WRITE   0x04
-#define RMS_PROT_EXECUTE 0x02
-#define RMS_PROT_DELETE  0x01
-
 /* rms_read_exact / rms_write_exact now in rms_util.c */
 
 /* RMS metadata sidecar filename suffix */
@@ -269,52 +259,30 @@ static int rms_resolve_spec(const char *spec, const char *default_spec,
 }
 
 /*
- * rms_get_session_uic - the UIC RMS checks file protection against.
+ * rms_check_protection() -- DELETED, NOT REPLACED (vms-2b8, operator ruling
+ * 2026-07-31). It called vms$check_access(), a userspace second opinion on
+ * file protection computed from the same st_mode the real enforcer already
+ * decides from. It could only produce a FALSE denial (it has no notion of
+ * SYSPRV/BYPASS/READALL, so it could refuse what the executive would grant)
+ * and could never produce a false grant that mattered, because on the
+ * bootable runtime the actual decision is made by
+ * src/kernel/vmsfs/vmsfs_blkdev.c through the Linux DAC bits vmsfs derives
+ * from the VMS protection mask -- measured directly: rebuilding this
+ * function to return 1 unconditionally changed nothing about the failure it
+ * was thought to gate, and chmod 0777 over the whole [SYS0] tree at the
+ * Linux layer did not let an unprivileged account write SYS$SYSTEM: on the
+ * real runtime either. See sys_security.c's comment at the deleted
+ * vms$check_access() for the full account.
  *
- * DERIVED FROM REAL CREDENTIALS, NOT ANNOUNCED BY THE PROCESS (vms-2b8).
- *
- * This used to prefer getenv("VMS_UIC_GROUP") / ("VMS_UIC_MEMBER") and
- * only fall back to the task's gid/uid. Those are ordinary environment
- * variables: any process could set them and choose the UIC that RMS
- * then used to decide whether it was allowed to read a file. That is a
- * privilege-escalation path in the shape of a convenience, and it made
- * the file protection checks below decorative.
- *
- * The env-var reads are DELETED rather than deferred, because the
- * fallback was already the right answer: [gid,uid] is exactly the
- * mapping the executive itself uses to derive a process's UIC
- * (src/kernel/vms_module.c vms_proc_register, and struct vms_proc.uic),
- * so RMS and the executive now agree by construction on who a process
- * is -- and neither of them asks the process.
- *
- * Returns packed UIC: (group << 16) | member.
+ * The three call sites below (sys$open's read/write pre-check and sys$erase's
+ * delete pre-check) are removed with it. What enforces protection now is the
+ * open()/unlink() a few lines later in each function, exactly as it already
+ * did for every DCL command (COPY/TYPE/DELETE) that bypasses RMS via
+ * fopen()/unlink() directly -- RMS and DCL now share one enforcer instead of
+ * RMS adding a second, weaker one in front of it. EACCES/EPERM from that
+ * real syscall already maps to RMS$_PRV a few lines below in both functions;
+ * no new error path is needed.
  */
-static uint32_t rms_get_session_uic(void)
-{
-    uint16_t group  = (uint16_t)(getgid() & 0xFFFF);
-    uint16_t member = (uint16_t)(getuid() & 0xFFFF);
-
-    return ((uint32_t)group << 16) | (uint32_t)member;
-}
-
-/*
- * rms_check_protection - Check VMS-style protection for a file.
- * Returns 1 if access granted, 0 if denied.
- */
-static int rms_check_protection(const char *path, int access_type)
-{
-    struct stat st;
-    if (stat(path, &st) != 0) {
-        return 1;  /* Can't stat, let open() handle the error */
-    }
-
-    uint16_t vms_prot = vmsfs_mode_to_protection(st.st_mode);
-    uint32_t owner_uic = ((uint32_t)(st.st_gid & 0xFFFF) << 16) |
-                          (uint32_t)(st.st_uid & 0xFFFF);
-    uint32_t my_uic = rms_get_session_uic();
-
-    return vms$check_access(my_uic, owner_uic, (uint32_t)vms_prot, access_type);
-}
 
 /*
  * rms_get_default_protection - Get default protection for new files.
@@ -598,18 +566,11 @@ uint32_t sys$open(void *fab_ptr)
         need_write = 1;
     }
 
-    /* VMS protection check before open */
-    if (!rms_check_protection(fab->_resolved_path, RMS_PROT_READ)) {
-        fab->fab$l_sts = RMS$_PRV;
-        fab->fab$l_stv = 0;
-        return RMS$_PRV;
-    }
-    if (need_write && !rms_check_protection(fab->_resolved_path, RMS_PROT_WRITE)) {
-        fab->fab$l_sts = RMS$_PRV;
-        fab->fab$l_stv = 0;
-        return RMS$_PRV;
-    }
-
+    /*
+     * NO PRE-CHECK HERE (vms-2b8, operator ruling 2026-07-31): see the
+     * deleted rms_check_protection() above. open() below is the only
+     * protection decision now; EACCES/EPERM maps to RMS$_PRV just below.
+     */
     int fd = open(fab->_resolved_path, flags);
     if (fd < 0) {
         fab->fab$l_stv = (uint32_t)errno;
@@ -822,13 +783,11 @@ uint32_t sys$erase(void *fab_ptr)
         return RMS$_SYN;
     }
 
-    /* VMS protection check for delete access */
-    if (!rms_check_protection(fab->_resolved_path, RMS_PROT_DELETE)) {
-        fab->fab$l_sts = RMS$_PRV;
-        fab->fab$l_stv = 0;
-        return RMS$_PRV;
-    }
-
+    /*
+     * NO PRE-CHECK HERE (vms-2b8, operator ruling 2026-07-31): see the
+     * deleted rms_check_protection() above. unlink() below is the only
+     * protection decision now; EACCES/EPERM maps to RMS$_PRV just below.
+     */
     if (unlink(fab->_resolved_path) < 0) {
         fab->fab$l_stv = (uint32_t)errno;
         switch (errno) {

@@ -209,6 +209,67 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
 
 #define OVMX_MAX_PEERS 4
 
+/* vms-298 / vms-584 item 5: THE CON.ID HIGH WORD IS PER-BOOT, NOT COMPILE-TIME.
+ *
+ * Every OVMX Con.ID used to be a compile-time constant: SCS_CONNECT_OVMX_CONID_
+ * BASE (0x4F58) in the high word, a fixed slot index in the low word. That makes
+ * OVMX the only node on the wire whose connection identifiers are IDENTICAL on
+ * every boot.
+ *
+ * GROUNDED (capture census, vms-584): a real node's Con.IDs are a single
+ * monotonic counter shared across ALL service classes within one boot --
+ * formation-ci1, node 08:00:2b:78:56:b9: SCS$DIRECTORY 0x33590007,
+ * VMS$VAXcluster 0x33580008, MSCP$DISK 0x33580009 -- and the HIGH word RESEEDS
+ * non-arithmetically at each incarnation of the same node identity:
+ * af2-firsttimer shows 0x8fd20007 -> 0xe9950007 -> 0x5b050007 for the same
+ * class across three boots. A real node's Con.ID for a given class therefore
+ * NEVER repeats across incarnations.
+ *
+ * ALSO GROUNDED, and the reason this is safe to change at all: the peer binds
+ * whatever value is offered and never validates it. 30+ CONNECT sequences in
+ * formation-ci1 carry unpredictable values and every one is answered
+ * ECHO -> ACCEPT -> CONFIRM; no DISC-RSP is ever substituted, and no NAK in the
+ * library is tied to a Con.ID value.
+ *
+ * WHY IT MATTERS NOW: the join/exit cycling test (vms-584 item 5) is exactly
+ * the untested collision case -- OVMX leaves and rejoins under the same
+ * SCSNODE/SCSSYSTEMID, and with compile-time constants it would offer the peer
+ * a Con.ID identical to the one it had in the previous incarnation. No capture
+ * exercises that, because a real allocator can never produce it.
+ *
+ * WHAT IS OVMX'S OWN DESIGN CHOICE, LABELLED AS SUCH (Rule 8): the DERIVATION of
+ * the high word. The reference's reseed looks like an address or a clock, but
+ * nothing in the public documentation publishes it and no wire evidence pins it,
+ * so OVMX picks its own per-boot value and does not present it as VMS-authentic.
+ * The low-word slot indices below are unchanged -- they are already distinct
+ * within a boot, which is the property the reference's shared counter provides.
+ * OVMX_CONID_BASE may be pinned via the environment for a reproducible run.
+ */
+static uint32_t g_ovmx_conid_base;   /* 0 until first use; high word, <<16 */
+
+static uint32_t ovmx_conid_base(void)
+{
+    if (g_ovmx_conid_base == 0u) {
+        const char *env = getenv("OVMX_CONID_BASE");
+        if (env != NULL && *env != '\0') {
+            g_ovmx_conid_base = (uint32_t)(strtoul(env, NULL, 0) & 0xFFFFu) << 16;
+        }
+        if (g_ovmx_conid_base == 0u) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            /* Mix the clock with the pid so two OVMX incarnations started in
+             * the same second still differ -- the cycling test restarts SCSD
+             * within seconds, which is precisely when a coarse clock collides. */
+            uint32_t h = (uint32_t)ts.tv_nsec ^ ((uint32_t)ts.tv_sec << 11) ^
+                         ((uint32_t)getpid() << 3);
+            h &= 0xFFFFu;
+            if (h == 0u) h = 0x4F58u;   /* never zero -- 0 reads as "no handle" */
+            g_ovmx_conid_base = h << 16;
+        }
+    }
+    return g_ovmx_conid_base;
+}
+
 /* OVMX's own VMS$VAXcluster Con.ID for this run (OVMX design choice; opaque
  * to the peer -- see scs_connect.h). We use two distinct handles: one for the
  * connection the MEMBER opens to OVMX (answered with a CONNECT-RESPONSE), and a
@@ -217,18 +278,18 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
  * VMS$VAXcluster connection and sends the add-member burst on IT --
  * formation-clean-2node.pcap idx52/59). A single handle for both directions
  * would collide the two SCS connections. */
-#define OVMX_LOCAL_CONID  (SCS_CONNECT_OVMX_CONID_BASE | 0x0001u)
-#define OVMX_JOINER_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0002u)
+#define OVMX_LOCAL_CONID  (ovmx_conid_base() | 0x0001u)
+#define OVMX_JOINER_CONID (ovmx_conid_base() | 0x0002u)
 /* vms-760: OVMX's MSCP$DISK client connection handle (VMS$DISK_CL_DRVR ->
  * MSCP$DISK). Distinct from 0x0001 (local), 0x0002 (joiner VC), 0x0007 (dir),
  * 0x0008 (own dir). */
-#define OVMX_MSCP_CONID   (SCS_CONNECT_OVMX_CONID_BASE | 0x000Au)
+#define OVMX_MSCP_CONID   (ovmx_conid_base() | 0x000Au)
 /* vms-760 SERVER-FIRST established-join: OVMX's MSCP$DISK SERVER connection
  * handle -- the fresh local Con.ID OVMX supplies when it ACCEPTS the MEMBER's
  * inbound MSCP$DISK connect (op=4 accept). Distinct from every other handle:
  * 0x0001 VC(local)/0x0002 VC(joiner)/0x0007 dir-server/0x0008 dir-client/
  * 0x000A MSCP-client. Opaque to the peer (OVMX design choice, scs_connect.h). */
-#define OVMX_MSCP_SERVER_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x000Bu)
+#define OVMX_MSCP_SERVER_CONID (ovmx_conid_base() | 0x000Bu)
 
 /* vms-760 PURE-SERVER disk-CLIENT (established-join): after OVMX reaches NEW as a
  * pure server, a real joiner is ALSO a disk CLIENT -- it opens its OWN
@@ -240,8 +301,20 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
  * CONID 0x0008 / OVMX_MSCP_CONID 0x000A) -- so this pure-server client path is
  * fully isolated: the existing join-sequencer receive handlers key on those other
  * conids and never match these, and vice-versa (no cross-drive, Rule-9 clean). */
-#define OVMX_PS_DIR_CONID  (SCS_CONNECT_OVMX_CONID_BASE | 0x000Cu)
-#define OVMX_PS_MSCP_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x000Du)
+#define OVMX_PS_DIR_CONID  (ovmx_conid_base() | 0x000Cu)
+#define OVMX_PS_MSCP_CONID (ovmx_conid_base() | 0x000Du)
+
+/* scs_dir.h defines the two SCS$DIRECTORY handles against the COMPILE-TIME base,
+ * because the encoders take a Con.ID as a parameter and the unit tests need a
+ * fixed value to assert an echo against. The DAEMON must offer the per-boot base
+ * like every other handle, or these two would be the only Con.IDs OVMX repeats
+ * across incarnations -- which is the whole defect above. Override them here,
+ * keeping the low-word slot indices exactly as the header documents them, so
+ * every comparison site in this file continues to compare like with like. */
+#undef  SCS_DIR_OVMX_CONID
+#undef  SCS_DIR_OVMX_JOINER_CONID
+#define SCS_DIR_OVMX_CONID        (ovmx_conid_base() | 0x0007u)
+#define SCS_DIR_OVMX_JOINER_CONID (ovmx_conid_base() | 0x0008u)
 
 /* vms-760 pure-server disk-client state machine (stop-and-wait; one drive frame
  * outstanding). Advanced receive-driven by VAX1's echoes on OUR PS conids. NEVER
@@ -367,6 +440,17 @@ struct peer_state {
     int      cm_config_sent;       /* we sent our op 0x14/0x01/0x02 config burst */
     uint16_t sysap_send;           /* OVMX's next SYSAP send-msg# (body[0:2]; from 1) */
     uint16_t sysap_recv;           /* high-water of the member's SYSAP send-msg# (ack target) */
+    /* vms-584 stray-ack instrumentation: WHEN the high-water last advanced, and
+     * WHICH frame advanced it. Only ever read to describe an ack after the fact
+     * -- never to decide whether to send one (see cm_send_ack). */
+    long     cm_recv_advanced_ms;
+    uint8_t  cm_last_recv_cat;
+    uint8_t  cm_last_recv_op;
+    /* vms-584: cluster facts read out of a transition-OPEN, held until the
+     * transition is real (our barrier completes; immediately for class 0x04). */
+    int      pending_state;
+    uint16_t pending_members;
+    uint64_t pending_last_transition;
     long     cm_responses;         /* 0x81 responses we sent to member 0x03/0x05 txns */
     /* --- vms-d94: ACTIVE-JOINER VMS$VAXcluster connection (the connection OVMX
      * OPENS to the member, distinct from the member-opened one above). The
@@ -778,6 +862,69 @@ static struct {
     uint64_t last_transition;
     uint64_t own_admission;
 } ovmx_cluster;
+
+/*
+ * vms-584: RE-LEARN the cluster-wide facts from the TRANSITION-OPEN.
+ *
+ * COPY-ONCE WAS THE WRONG MODEL, AND op 0x01 WAS THE WRONG SOURCE. Run by13
+ * caught the defect live: OVMX copied member_count=2 from a peer BEFORE its own
+ * admission, nothing ever re-taught it 3, and at frame 2941 OVMX advertised
+ * "2 members" to VAX3 while VAX1 (frame 2869) and VAX2 had said "3" on the same
+ * wire seconds earlier.
+ *
+ * A member's op 0x01 is only a point-in-time REPLY to a newcomer's query. It is
+ * sent once per VC, and it may simply never arrive again before the next
+ * transition -- which is exactly how our copy went stale. GROUNDED alternative
+ * (26-capture census): the cat-0x01 TRANSITION-OPEN (op 0x09 add / 0x08 remove /
+ * 0x0d depart) is the bundle. Every node sees it, member or bystander, on every
+ * transition of every class, and it carries in one frame:
+ *
+ *   body[40:48]  the transition-time quadword -- the value that later shows up
+ *                as last_transition in a member's op 0x01. Matched to the
+ *                millisecond against OPCOM, and present 20 ms BEFORE OPCOM logs
+ *                "completed", so the fact is available at open time.
+ *   body[55]     the coordinator's MEMBERSHIP BITMAP. popcount == the
+ *                post-transition member count, 54/54 opens, zero residuals.
+ *
+ * Same encoding as `formed` (VMS quadword, 1858 epoch, 100 ns ticks).
+ * `formed` itself stays copy-once: it never changes in any capture.
+ *
+ * TWO DELIBERATE LIMITS. (1) We read the bitmap's POPCOUNT only. The bit-to-node
+ * mapping is NOT grounded -- both observed transitions set a contiguous run, which
+ * fits "bit k = CSID slot" and "bit k = join order" equally, and one byte cannot
+ * be the whole field (body[52:55] and body[56:60] are zero in every specimen, so
+ * the extent is undetermined). Counting bits needs no mapping; asserting the
+ * bitmap would, so we never assert it. (2) Class 0x04 has no barrier, so its
+ * facts apply at open; classes 0x02/0x03 apply when OUR barrier completes, which
+ * is when the transition they describe is actually real.
+ */
+static void ovmx_cluster_relearn(uint16_t members, uint64_t last_transition,
+                                 const char *when)
+{
+    if (members == 0) {
+        /* A zero popcount would mean "a cluster with no members", which is not
+         * a thing. Refuse it rather than advertise it -- staying stale is bad,
+         * but advertising an impossible cluster is worse. */
+        log_ts(stdout);
+        printf(" SCSD-W-CLUSTATE, transition-open carried an empty membership"
+               " bitmap -- REFUSING to re-learn a member count of 0 (%s)\n", when);
+        fflush(stdout);
+        return;
+    }
+    if (ovmx_cluster.member_count != members ||
+        ovmx_cluster.last_transition != last_transition) {
+        log_ts(stdout);
+        printf(" SCSD-I-CLUSTATE, re-learned from the transition-open (%s):"
+               " members %u -> %u, last_transition 0x%016llx -> 0x%016llx\n",
+               when, (unsigned)ovmx_cluster.member_count, (unsigned)members,
+               (unsigned long long)ovmx_cluster.last_transition,
+               (unsigned long long)last_transition);
+        fflush(stdout);
+    }
+    ovmx_cluster.known = 1;
+    ovmx_cluster.member_count = members;
+    ovmx_cluster.last_transition = last_transition;
+}
 
 /* Send a fully-built Ethernet frame to a specific unicast MAC on ifindex. */
 static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
@@ -1442,6 +1589,44 @@ static int cm_send_ack(int sock, int ifindex, struct peer_state *ps,
         ps->sysap_acked = ps->sysap_recv;
         ps->cm_last_ack_ms = monotonic_ms();
         ps->cm_acks++;
+        /* vms-584 STRAY-ACK INSTRUMENTATION. A 26-capture census of the
+         * reference gives a rule we do NOT currently match:
+         *
+         *   A member's cat-0x04 ack is PROMPT (0.30/0.53/0.39/0.45 ms after the
+         *   frame it names), OPPORTUNISTIC (no timer, no fixed N: idle captures
+         *   carry zero acks, busy links show 0 ms-2.3 s gaps with no period),
+         *   CUMULATIVE, and never keyed to an opcode -- it names whatever was
+         *   genuinely received last. An ack of an `op 0x01` occurs 0/4 times in
+         *   the reference; an ack-of-ack occurs once, as an amsg coincidence.
+         *
+         * OVMX emits two shapes the reference does not: an ack naming an
+         * `op 0x01` ~7.0 s after it arrived (by10 idx 255, by11 idx 2945,
+         * bystander idx 254 -- 7013/6754/7014 ms), and a genuine ack-of-ack ~4 s
+         * late (by11 idx 3006, bystander idx 4922). Both are provably INERT: no
+         * peer in any run reacted to either, and OVMX's own op 0x02 landed in the
+         * same instant and was acked normally 2.5 ms later.
+         *
+         * So this LOGS rather than GATES, deliberately. The emission rule above
+         * carries its own grounded claim -- that only the op-0x06 burst is
+         * acked, and that no cat-0x04 ack in the library is attributable to the
+         * op 0x0a / op 0x0c notifications -- and widening the trigger to "ack
+         * whatever advanced the high-water mark" would contradict it on the one
+         * path that is currently working. Guard 8: a guard that hides a bug is
+         * worse than no guard, and a change that silences an inert divergence
+         * while risking the join is worse than measuring it. The next capture
+         * now says WHICH frame each stray named and how stale it was. */
+        long age = monotonic_ms() - ps->cm_recv_advanced_ms;
+        if (ps->cm_recv_advanced_ms != 0 &&
+            (age >= 1000 || ps->cm_last_recv_cat == SCS_MEMBER_CAT_ACK)) {
+            log_ts(stdout);
+            printf(" SCSD-W-STRAYACK, cat-0x04 ack names msg#%u whose frame"
+                   " (cat 0x%02x op 0x%02x) arrived %ld ms ago -- the reference"
+                   " acks within ~1 ms and never acks an op 0x01%s\n",
+                   ps->sysap_recv, ps->cm_last_recv_cat, ps->cm_last_recv_op,
+                   age, ps->cm_last_recv_cat == SCS_MEMBER_CAT_ACK
+                        ? "; this one is an ACK-OF-ACK" : "");
+            fflush(stdout);
+        }
         return 1;
     }
     return 0;
@@ -1966,7 +2151,7 @@ int main(int argc, char **argv)
             uint32_t cm_rc = (uint32_t)buf[64] | ((uint32_t)buf[65] << 8) |
                              ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
             if ((cm_op == 6 || cm_op == 8) &&
-                (cm_rc & 0xFFFF0000u) == SCS_CONNECT_OVMX_CONID_BASE) {
+                (cm_rc & 0xFFFF0000u) == ovmx_conid_base()) {
                 struct peer_state *ps = peer_find_or_add(peers, src_mac);
                 if (ps != NULL) {
                     if (!ps->vc.initialized) {
@@ -2095,6 +2280,11 @@ int main(int argc, char **argv)
                      * membership dialogue; DLM (cat 0x02) rides here later. */
                     if (mv.sysap_send_msg > ps->sysap_recv) {
                         ps->sysap_recv = mv.sysap_send_msg;
+                        /* vms-584: remember what advanced it, so an ack can say
+                         * which frame it names and how stale that frame was. */
+                        ps->cm_recv_advanced_ms = monotonic_ms();
+                        ps->cm_last_recv_cat = mv.category;
+                        ps->cm_last_recv_op = mv.opcode;
                     }
 
                     /* vms-d94 (FORMATION): the burst rides OUR joiner connection,
@@ -2236,20 +2426,49 @@ int main(int argc, char **argv)
                         }
                         uint16_t mc = (uint16_t)buf[72 + 18] |
                                       ((uint16_t)buf[72 + 19] << 8);
-                        if (!ovmx_cluster.known || ovmx_cluster.member_count != mc ||
-                            ovmx_cluster.last_transition != lastx) {
+                        /* vms-584: this copy BOOTSTRAPS us -- it is how we learn
+                         * the cluster at all before we have witnessed any
+                         * transition. But it must never walk us BACKWARDS.
+                         *
+                         * A member's op 0x01 is a point-in-time reply, and it is
+                         * sent to a newcomer BEFORE that newcomer is counted:
+                         * VAX1 answered OVMX 6.7 s early and VAX3 4.1 s early,
+                         * and never advertised 4 at all. So a copy arriving
+                         * after we have re-learned from a completed transition
+                         * can easily carry an OLDER view than we already hold.
+                         *
+                         * last_transition is monotonic in time, which makes the
+                         * ordering test exact: accept the copy only if its
+                         * transition is at least as recent as ours. `formed`
+                         * never changes and is always safe to take. */
+                        if (lastx < ovmx_cluster.last_transition) {
                             log_ts(stdout);
-                            printf(" SCSD-I-CLUSTATE, learned member-form cluster state"
-                                   " from a peer: members=%u formed=0x%016llx"
-                                   " last_transition=0x%016llx\n",
-                                   (unsigned)mc, (unsigned long long)formed,
-                                   (unsigned long long)lastx);
+                            printf(" SCSD-I-CLUSTATE, IGNORED a peer's op 0x01"
+                                   " (members=%u last_transition=0x%016llx):"
+                                   " older than what we hold (0x%016llx) --"
+                                   " a member answers a newcomer before that"
+                                   " newcomer is counted\n",
+                                   (unsigned)mc, (unsigned long long)lastx,
+                                   (unsigned long long)ovmx_cluster.last_transition);
                             fflush(stdout);
+                            ovmx_cluster.formed = formed;
+                            ovmx_cluster.known = 1;
+                        } else {
+                            if (!ovmx_cluster.known || ovmx_cluster.member_count != mc ||
+                                ovmx_cluster.last_transition != lastx) {
+                                log_ts(stdout);
+                                printf(" SCSD-I-CLUSTATE, learned member-form cluster state"
+                                       " from a peer: members=%u formed=0x%016llx"
+                                       " last_transition=0x%016llx\n",
+                                       (unsigned)mc, (unsigned long long)formed,
+                                       (unsigned long long)lastx);
+                                fflush(stdout);
+                            }
+                            ovmx_cluster.known = 1;
+                            ovmx_cluster.member_count = mc;
+                            ovmx_cluster.formed = formed;
+                            ovmx_cluster.last_transition = lastx;
                         }
-                        ovmx_cluster.known = 1;
-                        ovmx_cluster.member_count = mc;
-                        ovmx_cluster.formed = formed;
-                        ovmx_cluster.last_transition = lastx;
                     }
 
                     /* vms-e81 ROOT CAUSE: A SITTING MEMBER MUST RECIPROCATE A
@@ -2352,6 +2571,39 @@ int main(int argc, char **argv)
                                             ((uint32_t)buf[86] << 16) |
                                             ((uint32_t)buf[87] << 24);
                         ps->xition_class = buf[72 + SCS_MEMBER_CLASS_BODYOFF];
+                        /* vms-584: the open carries the post-transition cluster
+                         * facts. Latch them now, apply them when the transition
+                         * is real (see ovmx_cluster_relearn). */
+                        /* The enclosing guard is n >= 92, which is enough for the
+                         * epoch but NOT for these: body[40:48] needs n >= 120 and
+                         * body[55] needs n >= 128. Reading them under the outer
+                         * guard alone would take whatever was left in the buffer
+                         * from a previous frame and turn it into an advertised
+                         * member count. Check the bytes we actually touch. */
+                        if ((size_t)n >= 72 + 56) {
+                            uint64_t xtime = 0;
+                            for (int k = 7; k >= 0; k--) {
+                                xtime = (xtime << 8) | buf[72 + 40 + k];
+                            }
+                            uint8_t bm = buf[72 + 55];
+                            uint16_t pop = 0;
+                            for (int k = 0; k < 8; k++) {
+                                if (bm & (1u << k)) pop++;
+                            }
+                            ps->pending_members = pop;
+                            ps->pending_last_transition = xtime;
+                            ps->pending_state = 1;
+                            /* Class 0x04 runs NO barrier -- there is no later
+                             * completion to wait for, so its facts are final at
+                             * the open. Classes 0x02/0x03 wait for our own
+                             * barrier so we never advertise a transition that
+                             * was proposed and then aborted. */
+                            if (ps->xition_class == SCS_MEMBER_CLASS_DEPART) {
+                                ovmx_cluster_relearn(pop, xtime,
+                                                     "class-0x04 departure, no barrier follows");
+                                ps->pending_state = 0;
+                            }
+                        }
                         /* The role slot is a CROSS-CHECK, never a gate. Gating the
                          * epoch latch on it would let one unexpected byte silently
                          * stop us tracking the transition -- the failure mode this
@@ -2510,6 +2762,17 @@ int main(int argc, char **argv)
                                         scs_member_vms_time_now();
                                 }
                                 ps->barrier_count++;
+                                /* vms-584: the transition this barrier belonged
+                                 * to is now REAL, so adopt the cluster facts its
+                                 * open carried. Doing it here rather than at the
+                                 * open means a proposal that never completes
+                                 * never becomes something we advertise. */
+                                if (ps->pending_state) {
+                                    ovmx_cluster_relearn(ps->pending_members,
+                                                         ps->pending_last_transition,
+                                                         "our barrier completed");
+                                    ps->pending_state = 0;
+                                }
                                 log_ts(stdout);
                                 printf(" SCSD-I-XITDONE, state transition COMPLETE"
                                        " (all %d barrier steps released; this is"

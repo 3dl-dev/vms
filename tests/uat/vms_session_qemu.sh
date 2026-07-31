@@ -245,7 +245,7 @@ SYSTEM_CMDS+=('SHOW SYMBOL IDENT_AUTHPRIV')
 # DEFECT-1 REGRESSION, DISCLOSED (vms-2b8 round 6): SET TIME's gate
 # (OPER||SYSPRV||BYPASS, none of which VMS_PRV_M_ENFORCED names) can no
 # longer be passed by ANY identity, including this SYSTEM session, whose
-# SYSUAF record authorizes ALL 37 privileges. This is the same shape as
+# SYSUAF record authorizes privilege ALL. This is the same shape as
 # the ALTPRI/PRIORITY proof above -- a capability that worked before round
 # 5's fix and cannot work now, for anyone, until vms-pv1 -- but SET TIME
 # had no dedicated assertion of its own until this round. It gets one now,
@@ -855,7 +855,7 @@ check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOPRIV'
 
 # DEFECT-1 REGRESSION PROOF, SET TIME (see the SYSTEM_CMDS block above for
 # the full account): OPER/SYSPRV/BYPASS are all outside VMS_PRV_M_ENFORCED,
-# so this SYSTEM session -- SYSUAF-authorized for ALL 37 privileges -- must
+# so this SYSTEM session -- SYSUAF-authorized for privilege ALL -- must
 # still be refused. 'SET TIME 1-JAN-2030:00:00:00' is unique text, so a
 # plain check_response is safe.
 #

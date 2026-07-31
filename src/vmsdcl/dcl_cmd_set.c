@@ -522,8 +522,15 @@ static int cmd_set_process(struct dcl_command *cmd)
         if (!(held & PRV$M_ALTPRI) &&
             !(held & PRV$M_SYSPRV) &&
             !(held & PRV$M_BYPASS)) {
+            /* Same HIDE wording as SET TIME's gate below, for the same
+             * reason (vms-2b8 round 7): this is true for every caller
+             * regardless of what its SYSUAF record authorizes, because
+             * ALTPRI is not in VMS_PRV_M_ENFORCED -- nothing this build
+             * enforces, not something a particular account lacks. */
             dcl_error("SET", 2, "NOPRIV",
-                      "no privilege for SET PROCESS /PRIORITY");
+                      "no privilege for SET PROCESS /PRIORITY -- this "
+                      "privilege is not enforced on this system (vms-pv1); "
+                      "no identity can pass this check until that lands");
             return SS$_NOPRIV;
         }
         char *endp;
@@ -876,7 +883,7 @@ static int cmd_set_time(struct dcl_command *cmd)
      * longer be passed by ANY identity, not just an unprivileged one --
      * a real change in behaviour from before round 5, when this read
      * the raw, unmasked ctx->privileges and SYSTEM's SYSUAF record
-     * (authorized for ALL 37 privileges, OPER included) let it through.
+     * (authorized for privilege ALL, OPER included) let it through.
      * MEASURED this round, real podman-built QEMU boot, SYSTEM session
      * (the maximal-privilege SYSUAF account): SET TIME is refused even
      * here, so no lesser-privileged identity can succeed either -- the
@@ -890,15 +897,30 @@ static int cmd_set_time(struct dcl_command *cmd)
      * %OVMX-I-NOSETPRV. Restoring real grantability is vms-pv1's job
      * (wiring vms_kif_setprv into VMS_PRV_M_ENFORCED); this round only
      * has to stop hiding that the capability disappeared.
+     *
+     * ROUND 7: the message this printed named SYSUAF ("OPER is
+     * authorized by SYSUAF but not yet enforced") -- true of SYSTEM and
+     * OPERATOR, whose SYSUAF records do hold OPER, and FALSE of the
+     * other four shipped accounts (GUEST, DEFAULT, USER1, USER2 hold no
+     * OPER at all -- GUEST is TMPMBX only, DEFAULT/USER1/USER2 add
+     * NETMBX, neither is OPER; see distro/rootfs/vms/SYS0/SYSCOMMON/
+     * SYSEXE/SYSUAF.DAT), because this code path never reads the
+     * caller's SYSUAF record at all -- it only reads the compile-time-
+     * fixed VMS_PRV_M_ENFORCED mask.
+     * A per-caller claim shipped to the console is either true for
+     * every caller that can see it or it does not appear (standing
+     * prose ruling, CLAUDE.md project rule 10). The corrected text
+     * below says only what is true regardless of who is asking: OVMX
+     * does not enforce this privilege yet, for anyone.
      */
     uint64_t held = enforced_privs_held();
     if (!(held & PRV$M_OPER) &&
         !(held & PRV$M_SYSPRV) &&
         !(held & PRV$M_BYPASS)) {
         dcl_error("SET", 2, "NOPRIV",
-                  "no privilege for SET TIME -- OPER is authorized by "
-                  "SYSUAF but not yet enforced on this system (vms-pv1); "
-                  "no identity can pass this check until that lands");
+                  "no privilege for SET TIME -- this privilege is not "
+                  "enforced on this system (vms-pv1); no identity can "
+                  "pass this check until that lands");
         return SS$_NOPRIV;
     }
 

@@ -1445,13 +1445,65 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
                 uint64_t b = (uint64_t)1 << bit;
                 if (!(enforced & b))
                     continue;
+                int found = 0;
                 for (int i = 0; vms_priv_names[i].name; i++) {
                     if (vms_priv_names[i].bit != b)
                         continue;
                     rl += (size_t)snprintf(result + rl, result_size - rl,
                                            "%s%s", rl ? "," : "",
                                            vms_priv_names[i].name);
+                    found = 1;
                     break;
+                }
+                /*
+                 * COVERAGE CHECK (vms-2b8 round 7). Names here are
+                 * DERIVED from VMS_PRV_M_ENFORCED by walking the mask
+                 * and looking each set bit up in vms_priv_names[] --
+                 * that derivation was the round-6 fix, replacing a
+                 * hand-maintained second list that could drift out of
+                 * sync with the mask silently. But the lookup itself
+                 * had the same silent-drift shape one level down: if a
+                 * bit is ever added to VMS_PRV_M_ENFORCED (src/kernel/
+                 * vms_ioctl.h) with no matching row added to
+                 * vms_priv_names[] (dcl_cmd_show.c), the `found` guard
+                 * above stays false and the bit is just OMITTED from
+                 * the rendered string -- CURPRIV/AUTHPRIV would report
+                 * an incomplete privilege list with no diagnostic,
+                 * which is exactly the "reads as correct, isn't" shape
+                 * Rule 10 exists to kill, one layer down from the
+                 * defect the derivation itself fixed.
+                 *
+                 * This is not a VMS-facing condition -- VMS never
+                 * reports a JPI$_CURPRIV/AUTHPRIV inconsistency,
+                 * because on VMS there is only one table. It is an
+                 * OVMX internal-consistency failure (two C sources
+                 * disagreeing at compile time), so it gets OVMX's own
+                 * fatal diagnostic and aborts rather than a plausible-
+                 * looking VMS status -- the same SS$_BUGCHECK class
+                 * (src/libvms/status.c) VMS itself reserves for
+                 * "internal consistency failure", but printed and
+                 * aborted here rather than returned, because a corrupt
+                 * privilege-name table is not a condition the caller
+                 * can recover from or should be told to retry.
+                 *
+                 * PROVEN BY MUTATION, not by inspection (vms-2b8 round
+                 * 7): temporarily OR-ing an unnamed bit (1ULL << 40)
+                 * into VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h,
+                 * no row for it in vms_priv_names[]) and rebuilding
+                 * vms.ko + vmsdcl, then running F$GETJPI CURPRIV as
+                 * SYSTEM (SYSUAF-authorized ALL, so cur_privs has bit
+                 * 40 set) fired this check and aborted the session
+                 * instead of silently omitting the name. Reverted
+                 * after confirming; see the round-7 report for the
+                 * exact console output.
+                 */
+                if (!found) {
+                    fprintf(stderr,
+                            "%%SYSTEM-F-BUGCHECK, internal consistency "
+                            "failure -- VMS_PRV_M_ENFORCED bit %d has no "
+                            "row in vms_priv_names[] (vms-2b8 round 7 "
+                            "coverage check)\n", bit);
+                    abort();
                 }
             }
         }

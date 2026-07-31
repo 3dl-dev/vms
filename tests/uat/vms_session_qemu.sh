@@ -294,6 +294,29 @@ check_response() {
     fi
 }
 
+# Assert a KNOWN DIVERGENCE from VMS, deliberately, so that it is visible in
+# the run rather than merely absent from it. It passes while the divergence
+# holds and goes RED the moment OVMX starts matching VMS -- at which point the
+# fix is to delete the tripwire and assert the VMS behaviour, not to relax it.
+#
+# WHY A TRIPWIRE AND NOT SILENCE (vms-6a7 round 2): the alternative was to keep
+# asserting the fields that happen to be right and say nothing about the field
+# that is wrong. That is "asserting around" the defect: the suite reports 14/14
+# green while the runtime prints something VMS never prints, and the only
+# record of it is a comment. Rule 10 allows two answers -- match VMS, or do not
+# expose the thing -- and a rendering of a state VMS never reaches is neither.
+# The condition is not vms-6a7's to fix, so it is DISCLOSED here instead, with
+# the owning item named in the failure message.
+check_known_divergence() {
+    local cmd="$1" pattern="$2" item="$3" what="$4"
+    if printf '%s' "${CMD_OUTPUT[$cmd]}" | grep -qiE "$pattern"; then
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  FAIL: known divergence ($item) no longer reproduces in '$cmd': $what.\n        If $item has landed this is GOOD NEWS -- delete this tripwire and assert the VMS behaviour instead. Do NOT relax the pattern.\n        (got: $(printf '%s' "${CMD_OUTPUT[$cmd]}" | tr '\n' ' '))"
+    fi
+}
+
 # SHOW TIME should print a VMS date (DD-MMM-YYYY) in its own response.
 # Anchored, not a whole-log scan: LOGOUT's own message ("logged out at
 # 1-JAN-1970 00:00:09.95") independently matches this exact date-format
@@ -343,8 +366,10 @@ check_response 'SHOW LOGICAL UAT_TEST' 'session_test_passed'
 # console boot path calls $SETPRN or the SYSUAF authentication that stamps one
 # (vms-2b8's vms_kif_setident). Those are REAL GAPS the fallback was hiding;
 # they are reported by vms-6a7 rather than papered over again, and they are not
-# vms-6a7's to fix (identity: vms-2b8/vms-d0b; the missing default process
-# name: vms-d0e).
+# vms-6a7's to fix (identity: vms-afd/vms-2b8/vms-d0b; the missing default
+# process name: vms-d0e). They are now ASSERTED as known divergences further
+# down this file (check_known_divergence), not merely described here -- a
+# defect that lives only in a comment is a defect the suite reports as green.
 #
 # The Process ID: field is the honest assertion available today: it is an
 # EXECUTIVE-ASSIGNED value (src/kernel/vms_module.c assign_vms_pid), not
@@ -360,6 +385,37 @@ check_response 'SHOW LOGICAL UAT_TEST' 'session_test_passed'
 # unmutated %08X still passes.
 check_response 'SHOW PROCESS' 'Process ID:   [0-9A-F]{8}[[:space:]]*$'
 check_response 'SHOW PROCESS' 'Node: +OVMX'
+
+# THE EMPTY IDENTITY IS A RULE 10 DIVERGENCE, NOT A COSMETIC GAP, AND IT IS
+# ASSERTED RATHER THAN LEFT UNMENTIONED.
+#
+# THE ORACLE SAYS VMS NEVER PRINTS THIS. docs/oracle/vax73-show-system-process.md
+# Section 1.3: across every VAX1 (OpenVMS VAX V7.3) capture in that session NO
+# process had an empty Process Name -- not even SWAPPER, which no user created
+# -- and Section 2's verbatim SHOW PROCESS has `User: SYSTEM` populated. So an
+# empty `User:` with `Process name: ""` is a rendering of a state VMS never
+# reaches. Rule 10's two legal answers are MATCH VMS or make the condition
+# UNREACHABLE; a plausible-looking rendering of an impossible state is the
+# illegal third, and it is the same shape as the VMS_PRCNAM cheat the rule was
+# written from.
+#
+# WHY IT IS STILL HERE: the cause is that $CREPRC does not propagate identity
+# to the executive, so the console session's row carries no user name and
+# nothing on the console boot path calls $SETPRN. That is vms-afd (blocked
+# architectural work, P1), with vms-2b8/vms-d0b on identity enforcement and
+# vms-d0e on the missing default process name. Fixing it is emphatically NOT
+# this item's scope -- vms-6a7 is the READER of the executive's row, and the
+# row is what is empty. What IS in scope is refusing to be quiet about it.
+#
+# WHEN vms-afd LANDS these two go red. That is the intended alarm: replace them
+# with the VMS-matching assertions (`User: SYSTEM`, `Process name: "SYSTEM"`)
+# and delete this block. Do not widen the patterns to keep them green.
+check_known_divergence 'SHOW PROCESS' 'User:[[:space:]]+Process ID:' \
+    'vms-afd' \
+    'the executive row still carries no user name, so SHOW PROCESS prints an empty User: field (VMS always populates it -- oracle Section 2)'
+check_known_divergence 'SHOW PROCESS' 'Process name: ""' \
+    'vms-d0e' \
+    'the executive row still carries no process name, so SHOW PROCESS prints Process name: "" (VMS has no nameless process -- oracle Section 1.3)'
 
 # Privilege names should appear in SHOW PROCESS /PRIVILEGES's own response.
 # Anchored, not a whole-log scan: the whole log also contains the echo of

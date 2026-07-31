@@ -409,3 +409,18 @@ which is the Rule 10 answer the `---` markers were not.
 | `Devices allocated:` | **absent**, which is what VMS prints for a process with none (§3.1) |
 | `Privileges:`        | never existed on VMS (§2.2); the invented OVMX line is **deleted** |
 | `Process quotas:`    | belongs to `/QUOTAS` (§2.2); the inline fabricated block is **deleted** from plain `SHOW PROCESS` |
+
+### 5.3 Divergences this oracle work EXPOSED but did not close
+
+Every row below is a place where OVMX does **not** match what §1–§4 measured.
+They are listed here, in the oracle document itself, because a divergence that
+lives only in a source comment is one the test suite reports as green. Each
+names its owning item; **none is owned by vms-6a7**, which is the *reader* of
+the executive's process row.
+
+| Divergence | What VMS does (measured) | What OVMX does | Owner |
+|---|---|---|---|
+| **Empty identity is RENDERED** | Never occurs. §1.3: across every VAX1 capture no process had an empty Process Name, not even `SWAPPER`; §2: `User:` is populated. | Prints `User:` blank and `Process name: ""`, because `$CREPRC` stamps no identity onto the executive row. This is a **Rule 10 illegal third answer** — a plausible rendering of a state VMS never reaches — and the correct fix is to make the state unreachable, not to render it better. | **vms-afd** (identity propagation), vms-d0e (default process name), vms-2b8/vms-d0b (identity enforcement) |
+| **`Terminal:` omitted** | Always printed (§2, §3.1). | Absent. The executive holds no terminal; OVMX's terminal is a per-process `VMS_TERMINAL` environment variable, which is not an executive facility to read (Rule 11). Removing the line whole is the vms-8019 round-4 ruling ("remove the unsourceable column WHOLE") applied to `SHOW PROCESS`'s body rather than `SHOW SYSTEM`'s table — an **extension of that ruling made by the implementer, and flagged for the operator rather than assumed**. | vms-d0b |
+| **`Base priority:` omitted** | Always printed (§2, §3.1). | Absent, same reason as the `Pri` column in §5.1: the executive holds no VMS priority. Same extension-of-ruling caveat as `Terminal:`. | unowned — file with vms-d0b's cascade |
+| **No CPU figure on a redacted row** | VMS prints the **complete** row including CPU for a process whose identity the caller may not read — measured in §1.2 with no privileges held. | The row is listed (enumeration is unprivileged, §1.2) but its CPU field is blank, because `procscan` zeroes `linux_pid` on a redacted row and `JPI$_CPUTIM` is derived from it. **Deliberately left blank**: carrying the accounting datum on a redacted row would widen what the executive discloses, and that belongs to the owner of the redaction rule. Operator ruling on vms-6a7 round 2: "I would rather ship a disclosed narrower row than quietly widen what a redacted row leaks." Guarded by `tests/qemu/test_syssvc_procnam.c` block P12. | redaction-rule owner (vms-2b8 cascade) |

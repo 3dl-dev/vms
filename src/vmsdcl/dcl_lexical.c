@@ -1469,9 +1469,38 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
                 for (int i = 0; vms_priv_names[i].name; i++) {
                     if (vms_priv_names[i].bit != b)
                         continue;
-                    rl += (size_t)snprintf(result + rl, result_size - rl,
-                                           "%s%s", rl ? "," : "",
-                                           vms_priv_names[i].name);
+                    /*
+                     * CodeQL cpp/unclear-buffer-write (round 13):
+                     * snprintf returns the length it WOULD have
+                     * written, not what fit, so accumulating it into
+                     * `rl` unguarded lets `rl` exceed `result_size` on
+                     * truncation -- the next iteration then computes
+                     * `result_size - rl` as a size_t underflow and
+                     * writes far past `result`. Every caller of
+                     * dcl_eval_lexical() today passes a DCL_MAX_VALUE
+                     * (4096-byte) buffer, and this table's full
+                     * comma-joined render is 267 bytes for all 37 rows
+                     * (measured: tests/libvms/test_priv_render_bounds.c)
+                     * -- this branch is not reachable through any call
+                     * site in this tree. But dcl_eval_lexical() is an `extern`
+                     * function whose contract is the result_size
+                     * parameter, not "callers happen to pass 4096", so
+                     * the accumulation must bound-check what it
+                     * actually wrote. On a would-be truncation, stop
+                     * appending further names rather than trust a
+                     * length it never measured.
+                     */
+                    if (rl >= result_size)
+                        break;
+                    int n = snprintf(result + rl, result_size - rl,
+                                     "%s%s", rl ? "," : "",
+                                     vms_priv_names[i].name);
+                    if (n < 0 || (size_t)n >= result_size - rl) {
+                        rl = result_size > 0 ? result_size - 1 : 0;
+                        bit = 64; /* stop the outer bit scan too */
+                        break;
+                    }
+                    rl += (size_t)n;
                     break;
                 }
             }

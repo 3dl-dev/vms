@@ -1594,8 +1594,33 @@ static int cmd_show_process_privileges(struct dcl_context *ctx)
         for (int i = 0; vms_priv_names[i].name; i++) {
             if (!(shown_authorized & vms_priv_names[i].bit))
                 continue;
-            len += (size_t)snprintf(line + len, sizeof(line) - len,
-                                    "%-10.10s", vms_priv_names[i].name);
+            /*
+             * CodeQL cpp/unclear-buffer-write (round 13): snprintf
+             * returns the length it WOULD have written, not what
+             * actually fit, so accumulating that return value into
+             * `len` unguarded lets `len` walk past `sizeof(line)` on
+             * truncation -- the next call then computes
+             * `sizeof(line) - len` as a size_t underflow and writes far
+             * past the buffer. The 8-cell-per-row reset keeps every row
+             * at <=81 of `line`'s 128 bytes today (measured:
+             * tests/libvms/test_priv_render_bounds.c), so this branch
+             * is not reachable by any name vms_priv_names[] carries --
+             * but the loop must bound-check what it actually wrote
+             * rather than trust a length it never measured. On a
+             * would-be truncation, flush the row built so far and stop
+             * (Rule 10: make the unreachable case an honest halt, not a
+             * silent trust).
+             */
+            int n = snprintf(line + len, sizeof(line) - len,
+                             "%-10.10s", vms_priv_names[i].name);
+            if (n < 0 || (size_t)n >= sizeof(line) - len) {
+                while (len > 1 && line[len - 1] == ' ')
+                    line[--len] = '\0';
+                printf("%s\n", line);
+                col = 0; len = 1; line[1] = '\0';
+                break;
+            }
+            len += (size_t)n;
             if (++col == 8) {
                 /* Trim the padding of the final cell before printing. */
                 while (len > 1 && line[len - 1] == ' ')

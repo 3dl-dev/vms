@@ -701,10 +701,16 @@ int main(void)
          * setsid() inside the created task before forking the process
          * that runs the image, so the service is in a session created
          * for it -- not the session this test and the creating DCL share.
-         * setsid() is called nowhere else in OVMX (grep: the only other
-         * occurrence is in that function's own comment), so a service
-         * outside this process's session can only have got there by
-         * PRC$M_DETACH being honoured. Under the mutation, this fails.
+         * setsid() has two other call sites in the tree, measured by grep,
+         * not assumed: src/vmsssh/vmssshd.c:383 and :754 (its own session
+         * detachment on startup and per-connection). Neither is reachable
+         * from this test: nothing in this harness starts VMSSSHD.EXE --
+         * SSH is cancelled (vms-02d) and no startup procedure ships one, so
+         * the process tree this test drives never execs it. Within THAT
+         * process tree, sys_process.c's PRC$M_DETACH path (below) is the
+         * only setsid() call site, so a service outside this process's
+         * session can only have got there by PRC$M_DETACH being honoured.
+         * Under the mutation, this fails.
          *
          * The other discriminator is P5: the creator cannot wait for it.
          */

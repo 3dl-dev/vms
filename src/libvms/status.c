@@ -121,6 +121,10 @@ static const struct status_entry known_codes[] = {
      */
     { OVMX$_PRCLOST,    "OVMX",   "PRCLOST",
       "process lost before it entered the executive's process table" },
+    { OVMX$_NOSUBPRC,   "OVMX",   "NOSUBPRC",
+      "subprocess creation is not implemented" },
+    { OVMX$_NOPRCUIC,   "OVMX",   "NOPRCUIC",
+      "a created process cannot be given a UIC of the caller's choosing" },
 
     /* Sentinel */
     { 0, NULL, NULL, NULL }

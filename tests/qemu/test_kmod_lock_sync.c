@@ -40,6 +40,7 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include "vms_ioctl.h"
+#include "vms_kif.h"
 
 #define SS_NORMAL       1
 #define SS_DEADLOCK     100
@@ -113,11 +114,14 @@ static void child_sync_block(int c2p_w)
     CHECK(enq.status == SS_NORMAL, "child: sync ENQ EX returned granted");
 
     /* Prove the request returned only after actually being granted at EX,
-     * not immediately-queued at NL. */
-    struct vms_getlki_args lki = {0};
-    lki.lkid = enq.lkid;
-    ioctl(fd, VMS_IOCTL_GETLKI, &lki);
-    CHECK(lki.status == SS_NORMAL && lki.granted_mode == LCK_K_EXMODE,
+     * not immediately-queued at NL.
+     *
+     * CONVERTED (vms-290): was raw ioctl(fd, VMS_IOCTL_GETLKI, &lki). Now
+     * exercises vms_kif_getlki() (src/libvmssys/vms_kif.c), which had zero
+     * callers anywhere in the checkout before this. */
+    uint32_t granted_mode = 0;
+    uint32_t getlki_st = vms_kif_getlki(enq.lkid, &granted_mode, NULL, NULL, NULL);
+    CHECK(getlki_st == SS_NORMAL && granted_mode == LCK_K_EXMODE,
           "child: sync ENQ blocked until granted at EX (GETLKI == EX)");
 
     struct vms_deq_args deq = {0};
@@ -294,17 +298,31 @@ static void child_completion_ast(int c2p_w, int p2c_r)
     char go = 0;
     if (read(p2c_r, &go, 1) != 1) _exit(2);
 
-    /* Now granted. Confirm the grant, then drain the completion AST. */
-    struct vms_getlki_args lki = {0};
-    lki.lkid = enq.lkid;
-    ioctl(fd, VMS_IOCTL_GETLKI, &lki);
-    CHECK(lki.status == SS_NORMAL && lki.granted_mode == LCK_K_CRMODE,
+    /*
+     * Now granted. Confirm the grant, then drain the completion AST.
+     *
+     * CONVERTED (vms-290): both calls below used to be raw ioctls
+     * (VMS_IOCTL_GETLKI, VMS_IOCTL_DELIVERAST) against `fd`. They now go
+     * through vms_kif_getlki()/vms_kif_deliverast() (src/libvmssys/
+     * vms_kif.c), which had zero callers anywhere in the checkout before
+     * this. The DELIVERAST assertion drops the explicit `status ==
+     * SS_NORMAL` check: the kernel only ever writes SS__NORMAL on the
+     * success path that returns 0 (src/kernel/vms_ast.c
+     * vms_ioctl_deliverast(), `args.status = SS__NORMAL;` immediately
+     * before the 0 return, and the only other path returns -EAGAIN with
+     * args untouched) -- so `ar == 0` already IS "status == SS_NORMAL";
+     * vms_kif_deliverast()'s int return is that same fact, and it has no
+     * separate status out-parameter to check.
+     */
+    uint32_t granted_mode = 0;
+    uint32_t getlki_st = vms_kif_getlki(enq.lkid, &granted_mode, NULL, NULL, NULL);
+    CHECK(getlki_st == SS_NORMAL && granted_mode == LCK_K_CRMODE,
           "child: async request granted at CR after parent release");
 
-    struct vms_ast_args ast = {0};
-    int ar = ioctl(fd, VMS_IOCTL_DELIVERAST, &ast);
-    CHECK(ar == 0 && ast.status == SS_NORMAL &&
-          ast.astadr == AST_ASTADR && ast.astprm == AST_ASTPRM,
+    uint64_t d_astadr = 0, d_astprm = 0;
+    uint8_t d_acmode = 0;
+    int ar = vms_kif_deliverast(&d_astadr, &d_astprm, &d_acmode);
+    CHECK(ar == 0 && d_astadr == AST_ASTADR && d_astprm == AST_ASTPRM,
           "child: DELIVERAST returned completion AST (astadr/astprm sentinels)");
 
     struct vms_deq_args deq = {0};

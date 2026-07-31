@@ -1,6 +1,8 @@
 #ifndef __DCL_CMD_H
 #define __DCL_CMD_H
 
+#include <stdint.h>
+
 /*
  * dcl_cmd.h - Internal header for split DCL command implementations.
  *
@@ -10,6 +12,23 @@
  */
 
 struct dcl_command;
+
+/*
+ * Full VMS privilege name/bit/description table (defined once, in
+ * dcl_cmd_show.c). Shared with dcl_lexical.c's F$GETJPI CURPRIV/AUTHPRIV
+ * so the list of enforced-privilege NAMES is a byproduct of filtering
+ * this ONE canonical table by VMS_PRV_M_ENFORCED (src/kernel/
+ * vms_ioctl.h), not a second, hand-maintained list that can silently
+ * fall out of step with it (vms-2b8 round 6 -- a value a human must
+ * remember to update WILL drift; the fix is to derive it, not to be
+ * careful).
+ */
+struct dcl_priv_name {
+    const char *name;
+    uint64_t    bit;
+    const char *desc;
+};
+extern const struct dcl_priv_name vms_priv_names[];
 
 /* ---- SHOW commands (dcl_cmd_show.c) ---- */
 int cmd_show(struct dcl_command *cmd);

@@ -223,9 +223,10 @@ static void test_open_close(void)
     resolved_open[sizeof(resolved_open) - 1] = '\0';
 
     /*
-     * Set mode to 0777 (all permissions allowed). When converted via
-     * vmsfs_mode_to_protection, this produces 0x0000 (no access denied),
-     * so vms$check_access grants access regardless of the calling UID.
+     * Set mode to 0777 (all permissions allowed) so the real open() below
+     * -- the only protection decision RMS makes (vms-2b8 deleted the
+     * userspace rms_check_protection() pre-check; see sys_security.c) --
+     * grants access regardless of the calling UID.
      */
     chmod(resolved_open, 0777);
     sys$close(&cfab);

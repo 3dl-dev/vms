@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include "starlet.h"
+#include "ovmx_secparam.h"
 
 /* Protection access type flags */
 #define PROT$M_READ    0x08
@@ -36,6 +37,63 @@
 #define PROT$V_OWNER   8
 #define PROT$V_GROUP   4
 #define PROT$V_WORLD   0
+
+/*
+ * OVMX_MAXSYSGROUP -- the SYSGEN parameter that decides which UIC groups
+ * get the SYSTEM protection category. Defined ONCE, in
+ * src/libvms/include/ovmx_secparam.h (see that file for the two-source
+ * pin and the provenance of the value) -- not here, and not re-declared
+ * by any test. vms-2b8 round 4 pinned the value in two independent
+ * places (this file's comment and tests/libvms/test_protection.c's own
+ * #define) that happened to agree; round 5 collapsed them into this one
+ * header specifically so they cannot drift apart the next time either
+ * side is edited without the other.
+ *
+ * THE BOUNDARY IS PROVEN BY MUTATION, NOT JUST STATED, through THREE
+ * independent checks in tests/libvms/test_protection.c (see its own
+ * comments): a `_Static_assert` pins the NUMBER at compile time; a
+ * group == OVMX_MAXSYSGROUP case pins the <= vs < OPERATOR at runtime;
+ * a hardcoded group-9 case independently pins the boundary is not above
+ * 8. Changing this header's value to anything but 8 fails the build via
+ * the static_assert before any of the runtime cases get a chance to run;
+ * changing sys_security.c's comparison operator instead (leaving the
+ * value at 8) is what the runtime cases catch.
+ */
+
+/*
+ * uic_is_system - does this UIC get the SYSTEM protection category?
+ *
+ * WHAT THIS REPLACES, so it does not come back: both checks below used to
+ * say `if (uic == 0) -> SYSTEM category`, commented "UID 0 (root) is
+ * treated as SYSTEM". OpenVMS has no root and no UIC [0,0]; that rule was
+ * invented for the OVMX substrate and, while every VMS session on OVMX ran
+ * as Linux root, it was also inert -- caller_uic 0 equalled the owner_uic 0
+ * of every root-created file, so the owner branch would have answered the
+ * same. The moment LOGINOUT started dropping to the authenticated user's
+ * credentials (vms-2b8), the SYSTEM account's real UIC [1,4] stopped
+ * matching it and fell through to the WORLD nibble on every file in the VMS
+ * tree -- OVMX denying what VMS grants.
+ *
+ * The documented VMS rule is a group comparison, not an equality test: the
+ * SYSTEM category covers every UIC whose GROUP number is less than or equal
+ * to MAXSYSGROUP (OpenVMS Guide to System Security, "System" access
+ * category). Group 0 is not a valid VMS UIC group at all, so root's [0,0]
+ * is covered incidentally by 0 <= 8 rather than by a rule of its own.
+ *
+ * NOT IMPLEMENTED HERE, AND DELIBERATELY: VMS also grants the SYSTEM
+ * category to a process holding SYSPRV, grants everything to BYPASS, and
+ * grants read to READALL. Those are privilege terms, and on OVMX the
+ * decision this function feeds is re-taken immediately afterwards by the
+ * Linux kernel's own DAC check on the same inode -- which has no notion of
+ * a VMS privilege and denies what this function would have granted. Adding
+ * them would produce a function that reports enforcement it does not have,
+ * which this item's own text calls out as worse than an absent one. The gap
+ * is reported (vms-2b8 round 7), not papered over.
+ */
+static int uic_is_system(uint32_t uic)
+{
+    return ((uic >> 16) & 0xFFFFu) <= OVMX_MAXSYSGROUP;
+}
 
 /*
  * get_uic - Get the current process UIC.
@@ -86,8 +144,8 @@ uint32_t sys$chkpro(void *objpro) {
     /* Determine the relevant category */
     uint16_t category_mask;
 
-    if (my_uic == 0) {
-        /* UID 0 (root) is treated as SYSTEM */
+    if (uic_is_system(my_uic)) {
+        /* UIC group <= MAXSYSGROUP -- see uic_is_system() */
         category_mask = (uint16_t)((prot >> PROT$V_SYSTEM) & 0x0F);
     } else if (my_uic == pro->owner_uic) {
         /* Owner access */
@@ -109,39 +167,38 @@ uint32_t sys$chkpro(void *objpro) {
 }
 
 /*
- * vms$check_access - Simplified access check (convenience wrapper).
+ * vms$check_access -- DELETED AS A DECISION POINT (vms-2b8, operator ruling
+ * 2026-07-31, Rule 10 applied to an internal interface).
  *
- * Compares caller_uic against owner_uic and the protection mask to
- * determine if the requested access_type is allowed.
+ * This used to be a second, parallel implementation of the same SOGW
+ * category logic as sys$chkpro above, called only from
+ * src/vmsrms/rms_core.c's rms_check_protection() to pre-check an RMS
+ * $OPEN/$CREATE/$ERASE before touching the filesystem.
  *
- * Returns 1 if access is granted, 0 if denied.
+ * IT COULD NOT ENFORCE ANYTHING. Rebuilding the bootable image with this
+ * function returning 1 UNCONDITIONALLY changed nothing about the failure
+ * it was thought to gate, because DCL's COPY/TYPE/DELETE call fopen()/
+ * unlink() directly and never enter RMS at all -- so the one path a real
+ * user takes was never reaching this check in the first place. Where RMS
+ * IS the path, the real enforcer is the executive: the bootable runtime's
+ * own file protection is decided by src/kernel/vmsfs/vmsfs_blkdev.c
+ * through the Linux DAC bits vmsfs derives from the VMS protection mask
+ * (measured: chmod 0777 over the entire [SYS0] tree at the Linux layer did
+ * NOT let GUEST write SYS$SYSTEM: on the real runtime). This function was
+ * a userspace SECOND OPINION computed from the same st_mode the kernel
+ * module already turns into the real decision, and it could only ever be
+ * WRONG in the same direction: a false denial, never a false grant, because
+ * it has no notion of SYSPRV/BYPASS/READALL/GRPPRV (see uic_is_system()'s
+ * own comment) and the executive's decision runs regardless of what this
+ * one returned.
+ *
+ * A second decision point that cannot enforce and can only add false
+ * denials is exactly where a future agent would "add SYSPRV support" and
+ * ship the reported-but-unenforced state Rule 10 forbids -- so it is
+ * deleted rather than fixed. The privilege overrides this function was
+ * missing belong in vmsfs.ko, where the mask already lives (tracked
+ * separately: vms-f15/vms-36d). rms_check_protection() and its callers in
+ * src/vmsrms/rms_core.c are deleted with it; RMS's $OPEN/$CREATE/$ERASE now
+ * let the real open()/unlink() -- and the executive behind it -- be the
+ * only enforcer, exactly as the DCL path already does.
  */
-int vms$check_access(uint32_t caller_uic, uint32_t owner_uic,
-                     uint32_t protection, int access_type) {
-    uint16_t prot = (uint16_t)protection;
-    uint16_t access = (uint16_t)access_type;
-
-    /* Determine the relevant category based on caller vs owner UIC */
-    uint16_t category_mask;
-
-    if (caller_uic == 0) {
-        /* UID 0 (root) is treated as SYSTEM */
-        category_mask = (uint16_t)((prot >> PROT$V_SYSTEM) & 0x0F);
-    } else if (caller_uic == owner_uic) {
-        /* Owner access */
-        category_mask = (uint16_t)((prot >> PROT$V_OWNER) & 0x0F);
-    } else if ((caller_uic >> 16) == (owner_uic >> 16)) {
-        /* Same group */
-        category_mask = (uint16_t)((prot >> PROT$V_GROUP) & 0x0F);
-    } else {
-        /* World */
-        category_mask = (uint16_t)((prot >> PROT$V_WORLD) & 0x0F);
-    }
-
-    /* In VMS, a SET bit means access is DENIED */
-    if (category_mask & access) {
-        return 0;
-    }
-
-    return 1;
-}

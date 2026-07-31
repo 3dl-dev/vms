@@ -152,7 +152,7 @@ expect_red() {
 
 R_ROW='put something other than the liveness marker on stdout'
 R_VERDICT='answered with a VMS device verdict the executive never gave'
-R_NOREAD='no openat("/dev/vms", ...) syscall was observed by strace'
+R_NOREAD='no VMS_IOCTL_DEVSCAN/GETDVI ioctl (0x56, 0x53 / 0x56, 0x52) was observed by strace'
 
 # --- A. THE ADVERSARY MUTANT, verbatim -----------------------------------
 # A hardcoded stub row emitted when the executive returns nothing, written
@@ -191,6 +191,16 @@ inject 'dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available"); return 
 # can catch this, so this control requires THAT property and no other --
 # not R_ROW, not R_VERDICT. If this ever passes with $R_NOREAD absent from
 # the gate's output, property 4 has been weakened back into vacuity.
+#
+# RE-ANCHORED (vms-2b8, 2026-07-31): property 4 itself moved from "any
+# openat(/dev/vms)" to "the VMS_IOCTL_DEVSCAN or VMS_IOCTL_GETDVI ioctl was
+# issued" -- see tests/integration/test_show_device_rows.sh's comment at
+# R_NOREAD. vms-2b8 made DCL's own startup (dcl_context_init) open
+# /dev/vms unconditionally to read this process's identity, so the openat
+# anchor stopped discriminating THIS mutation: it now fires during startup
+# regardless of what cmd_show_device() does, and case D was passing
+# silently (uncaught) until the re-anchor. $R_NOREAD's text changed to
+# match; the property this control exercises did not.
 inject 'return SS$_BUGCHECK;' \
     && expect_red "D: \$STATUS fabricated with no executive read at all (M3)" \
         "$R_NOREAD" "$R_ROW" "$R_VERDICT"

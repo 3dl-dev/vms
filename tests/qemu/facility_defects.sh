@@ -91,6 +91,13 @@
 #                            intermediate unreaped, so the creator of a
 #                            "detached" process still has a child to wait for
 #                            (vms-47b).
+#   run-image-qualifier-refused      RUN's subprocess refusal back to
+#                            "any qualifier at all", so a RUN (Image)
+#                            qualifier (/NODEBUG) is refused as a subprocess
+#                            request OpenVMS says it is not, and the image
+#                            does not run (vms-47b). The control against
+#                            OVER-refusing: every assertion that measures a
+#                            refusal stays green under it.
 #   run-detached-not-detached        $CREPRC back to accepting PRC$M_DETACH
 #                            and discarding it -- the pre-vms-47b behaviour.
 #                            This one exists because an adversary applied it
@@ -151,7 +158,8 @@ bind-client-no-register
 creprc-handshake-eintr
 run-detached-name-dropped
 creprc-detach-intermediate-reaped
-run-detached-not-detached"
+run-detached-not-detached
+run-image-qualifier-refused"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1212,6 +1220,40 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    run-image-qualifier-refused)
+        case "$_f" in
+        facility)     echo "the scope of RUN's subprocess refusal -- which qualifiers OpenVMS says ask for a subprocess (src/vmsdcl/dcl_cmd_process.c)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+RUN goes back to treating ANY qualifier as a subprocess request -- literally
+the shipped-and-reverted test, `cmd->qualifier_count > 0` in place of the
+oracle-scoped `run_process_qualifier_count(cmd) > 0`.
+THIS IS A CONTROL AGAINST OVER-REFUSING, WHICH IS THE HARDER DIRECTION TO
+NOTICE. Every "the qualifier was refused" and "the image did not run"
+assertion in P7 and P8 stays GREEN under it, because a wider refusal refuses
+those cases too; so does the P8 positive control, because plain RUN carries no
+qualifier at all. Nothing that measures the refusal can catch a refusal that
+is too big. Only a qualifier VMS scopes to the OTHER topic can, which is why
+P9 drives /NODEBUG and /DEBUG: `HELP/NOPROMPT RUN Image Qualifier` on the
+reference lab (VAX1, OpenVMS VAX V7.3, 2026-07-31) lists exactly those two and
+nothing else, and the RUN (Image) form creates no process at all.
+The mutation is one operand. It leaves the RUN (Process) set, the /UIC
+refusal, $CREPRC, the executive and every other suite untouched.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+RUN/NODEBUG runs the image: it is not a subprocess request
+RUN/DEBUG is refused naming the debugger, not process creation
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1307,6 +1349,13 @@ apply_edit() {
         # PRC$M_DETACH is read and thrown away. `(void)stsflg;` keeps the
         # parameter used so the mutation is about behaviour, not warnings.
         sed -i 's|^    const int detached = (stsflg & PRC\$M_DETACH) != 0;$|    const int detached = 0; (void)stsflg; /* NEGCTL run-detached-not-detached */|' "$_file";;
+
+    run-image-qualifier-refused)
+        # The ONE edit, and it is the shipped-and-reverted source line
+        # restored: the subprocess refusal stops asking WHICH qualifier and
+        # goes back to counting all of them, so a RUN (Image) qualifier is
+        # refused as a request OpenVMS says it is not.
+        sed -i 's|        run_process_qualifier_count(cmd) > 0) {|        cmd->qualifier_count > 0) { /* NEGCTL run-image-qualifier-refused */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

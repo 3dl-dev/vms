@@ -102,6 +102,8 @@ static int fail = 0;
 #define SUBP_COM        "/tmp/OVMX47B_SUBP.COM"
 #define PRIO_COM        "/tmp/OVMX47B_PRIO.COM"
 #define PLAIN_COM       "/tmp/OVMX47B_PLAIN.COM"
+#define NODBG_COM       "/tmp/OVMX47B_NODBG.COM"
+#define DEBUG_COM       "/tmp/OVMX47B_DEBUG.COM"
 /* A "did the image run at all?" witness: the script's only job is to
  * leave a file behind, so a refusal that still ran the image cannot hide
  * behind having produced no output. */
@@ -214,6 +216,24 @@ static int write_fixtures(void)
     if (write_file(PLAIN_COM,
                    "$! plain RUN still runs the image (test fixture, vms-47b)\n"
                    "$ RUN \"" TOUCH_SCRIPT "\"\n"
+                   "$ EXIT\n", 0644) != 0)
+        return -1;
+
+    /* P9's procedures: the OTHER RUN topic. /NODEBUG and /DEBUG are RUN
+     * (Image) qualifiers -- `HELP/NOPROMPT RUN Image Qualifier` on the
+     * reference lab (VAX1, OpenVMS VAX V7.3, 2026-07-31) lists those
+     * two and nothing else -- so neither of them asks for a subprocess,
+     * whatever the RUN (Process) topic says about "any of the
+     * qualifiers". */
+    if (write_file(NODBG_COM,
+                   "$! RUN (Image) /NODEBUG still runs the image (vms-47b)\n"
+                   "$ RUN/NODEBUG \"" TOUCH_SCRIPT "\"\n"
+                   "$ EXIT\n", 0644) != 0)
+        return -1;
+
+    if (write_file(DEBUG_COM,
+                   "$! RUN (Image) /DEBUG names the absent debugger (vms-47b)\n"
+                   "$ RUN/DEBUG \"" TOUCH_SCRIPT "\"\n"
                    "$ EXIT\n", 0644) != 0)
         return -1;
 
@@ -863,6 +883,50 @@ int main(void)
               "plain RUN, with no process qualifier, still runs the image");
     }
 
+    /* ---------------------------------------------------------------
+     * P9. THE SUBPROCESS REFUSAL IS SCOPED TO THE PROCESS QUALIFIERS.
+     *
+     * WHY THIS PHASE EXISTS. P8's refusal was first written over "any
+     * qualifier at all", on the strength of the RUN (Process) sentence
+     * "A subprocess is created if any of the qualifiers except the /UIC
+     * or the /DETACHED qualifier is specified". That sentence is
+     * scoped to its OWN topic. The oracle's HELP tree carries a
+     * SEPARATE RUN (Image) topic, and `HELP/NOPROMPT RUN Image
+     * Qualifier` (VAX1, OpenVMS VAX V7.3, 2026-07-31) lists exactly
+     * /DEBUG and /NODEBUG -- qualifiers of the form that "Executes an
+     * image within the context of your process", creating no process
+     * at all. The unscoped test refused RUN/NODEBUG as a subprocess
+     * request and the image did not run: a functional regression, and
+     * a message asserting a VMS semantic the oracle contradicts.
+     *
+     * Both P8 cases are genuine process qualifiers, so nothing in P8
+     * could catch it. That is what this phase is for.
+     *
+     * /NODEBUG matches VMS by doing what VMS does -- running the image.
+     * /DEBUG cannot: OVMX has no debugger. It is refused under its own
+     * OVMX condition value naming the debugger, and specifically NOT
+     * under the subprocess message, because the RUN (Image) form
+     * creates no process for a "process creation failed" to describe.
+     * --------------------------------------------------------------- */
+    {
+        char out9[65536];
+
+        clear_touch();
+        run_dcl(NODBG_COM, out9, sizeof(out9), &exit_st);
+        printf("  (RUN/NODEBUG -- a RUN (Image) qualifier)\n%s\n", out9);
+        CHECK(touched() && strstr(out9, "NOSUBPRC") == NULL,
+              "RUN/NODEBUG runs the image: it is not a subprocess request");
+
+        clear_touch();
+        run_dcl(DEBUG_COM, out9, sizeof(out9), &exit_st);
+        printf("  (RUN/DEBUG -- a debugger OVMX has not got)\n%s\n", out9);
+        CHECK(strstr(out9, "%OVMX-F-NODEBUGGER,") != NULL &&
+              strstr(out9, "NOSUBPRC") == NULL &&
+              strstr(out9, "CREPRC") == NULL &&
+              !touched(),
+              "RUN/DEBUG is refused naming the debugger, not process creation");
+    }
+
     clear_touch();
     unlink(HOLD_SCRIPT);
     unlink(TOUCH_SCRIPT);
@@ -870,6 +934,8 @@ int main(void)
     unlink(SUBP_COM);
     unlink(PRIO_COM);
     unlink(PLAIN_COM);
+    unlink(NODBG_COM);
+    unlink(DEBUG_COM);
     unlink(SVC_STARTUP_COM);
     unlink(SYSTARTUP_COM);
     unlink(SVC_LOG);

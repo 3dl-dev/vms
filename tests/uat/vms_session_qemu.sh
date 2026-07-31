@@ -321,7 +321,45 @@ check_response 'SHOW LOGICAL UAT_TEST' 'session_test_passed'
 # response -- the whole log also contains the echo of `send 'SYSTEM'` at the
 # login-username prompt, which would satisfy a plain substring scan on its
 # own regardless of what SHOW PROCESS printed.
-check_response 'SHOW PROCESS' 'SYSTEM'
+#
+# THE ASSERTION CHANGED FROM 'SYSTEM' TO THE PROCESS ID, AND IT IS STRONGER,
+# NOT WEAKER (vms-6a7). READ THIS BEFORE CHANGING IT BACK.
+#
+# 'SYSTEM' matched because SHOW PROCESS printed the STRING LITERAL "SYSTEM":
+#     const char *upper_user = ctx->username[0] ? ctx->username : "SYSTEM";
+# a hardcoded fallback in src/vmsdcl/dcl_cmd_show.c. The command now reads the
+# target's row out of the executive through $GETJPI and prints what that row
+# holds, and on this runtime the row holds NO user name at all -- so the old
+# assertion was satisfied by a constant in the source and nothing else. It
+# would have passed on a machine with no executive, no login and no process.
+#
+# WHAT THIS RUN ACTUALLY REVEALED, verbatim, once the literal was gone:
+#     1-JAN-1970 00:00:06.94   User:                  Process ID:   10000001
+#                              Node: OVMX             Process name: ""
+#     User Identifier:    [000,000]
+#     Default file spec:  SYS$MANAGER:
+# The console DCL session has no authenticated identity stamped on its
+# executive row (no user name), and no process name -- because nothing on the
+# console boot path calls $SETPRN or the SYSUAF authentication that stamps one
+# (vms-2b8's vms_kif_setident). Those are REAL GAPS the fallback was hiding;
+# they are reported by vms-6a7 rather than papered over again, and they are not
+# vms-6a7's to fix (identity: vms-2b8/vms-d0b; the missing default process
+# name: vms-d0e).
+#
+# The Process ID: field is the honest assertion available today: it is an
+# EXECUTIVE-ASSIGNED value (src/kernel/vms_module.c assign_vms_pid), not
+# getpid() and not a literal, so it cannot be produced without a working
+# /dev/vms round trip -- which is exactly what this UAT exists to certify.
+#
+# THE END ANCHOR IS LOAD-BEARING, measured not assumed. Without it the pattern
+# was 'Process ID:   [0-9A-F]{8}', and a mutation printing the pid as decimal
+# (%u instead of %08X) did NOT redden it -- 268435457 contains eight
+# consecutive hex-legal characters immediately after the label, so the
+# assertion could not see its own defect. It was rebuilt and rerun on this
+# runtime with the anchor in place: the decimal form is rejected and the
+# unmutated %08X still passes.
+check_response 'SHOW PROCESS' 'Process ID:   [0-9A-F]{8}[[:space:]]*$'
+check_response 'SHOW PROCESS' 'Node: +OVMX'
 
 # Privilege names should appear in SHOW PROCESS /PRIVILEGES's own response.
 # Anchored, not a whole-log scan: the whole log also contains the echo of

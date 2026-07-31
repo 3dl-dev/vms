@@ -90,9 +90,14 @@
 #     universe on the definition side is EVERY file-scope definition in
 #     vms_kif.c: that file IS the interface translation unit, and a function
 #     defined in it does not stop being part of the interface by being renamed
-#     out of the namespace. The three static helpers this admits -- kif_bind,
-#     kif_call, getjpi_common -- are all reached from wired wrappers and need no
-#     declaration.
+#     out of the namespace. The static helpers this admits -- kif_bind,
+#     kif_call, kif_wait_call, getjpi_common -- are all reached from wired
+#     wrappers and need no declaration. (kif_wait_call is PR #22's addition,
+#     the blocking-call counterpart to kif_call for the three blocking
+#     event-flag services; vms_kif_alloc_op is a fifth static but is NOT in
+#     this set -- its only two callers, vms_kif_alloc and vms_kif_dalloc, are
+#     themselves unwired today (vms-dv1), so it carries its own OVMX-UNWIRED
+#     declaration rather than being silently reached.)
 #     THE PRICE, stated rather than hidden: renaming an externally-linked entry
 #     point out of vms_kif_ is a RED even when it stays wired, because the header
 #     reading is still namespaced and the definition then has no prototype the
@@ -122,24 +127,37 @@
 #     from userspace. Where a selector names a distinct path through one opcode,
 #     it is an entry point in everything but name, and the floor counts it.
 #     The exact reach of the two grains together, MEASURED rather than asserted
-#     -- by deleting each of the 41 file-scope definitions in vms_kif.c in turn,
-#     with its prototype and its declaration, and running this gate:
+#     -- by deleting each of the file-scope definitions in vms_kif.c in turn,
+#     with its prototype and its declaration, and running this gate. THIS
+#     COUNT MOVES WHEN THE FILE DOES -- re-run the brute force, don't recite
+#     this number: at 43 file-scope definitions (vms-7fb, after PR #22 /
+#     e5cf411 wired the event-flag family and added the kif_wait_call static),
+#     37 go RED and SIX are a silent PASS: vms_kif_open, vms_kif_close,
+#     vms_kif_kerr_to_ss, the static vms_kif_alloc_op, and the statics
+#     kif_call and kif_wait_call.
 #
-#       37 of 41 go RED. FOUR are a silent PASS: vms_kif_open, vms_kif_close,
-#       vms_kif_kerr_to_ss and the static vms_kif_alloc_op.
-#
-#     Those four are exactly the definitions whose bodies issue no VMS_IOCTL_*
-#     opcode and name no VMS_*_SEL_* selector -- open/close manage the fd,
-#     kerr_to_ss maps an errno, and alloc_op takes its opcode as a PARAMETER --
-#     so there is nothing on the kernel side for their removal to strand. The
-#     claim this floor can support is therefore the narrow one, and it is the
-#     one to quote: NO WRAPPER THAT ISSUES AN OPCODE OR NAMES A SELECTOR can
-#     have its definition deleted without a RED. It is NOT "no wrapper".
+#     The first four are exactly the definitions whose bodies issue no
+#     VMS_IOCTL_* opcode and name no VMS_*_SEL_* selector -- open/close manage
+#     the fd, kerr_to_ss maps an errno, and alloc_op takes its opcode as a
+#     PARAMETER. kif_call and kif_wait_call fit the same shape (they take
+#     their opcode as a parameter too), but pre-merge kif_call was ALSO the
+#     sole path to kif_bind(), so deleting it went RED for a second, unrelated
+#     reason -- it broke the bind chain, not the floor. PR #22 added
+#     kif_wait_call as a second static that calls kif_bind() directly for the
+#     three blocking event-flag services, so the bind chain now survives
+#     kif_call's deletion too, and kif_call joined the silent-PASS set. That
+#     is a real, tree-shape-dependent fact, not a defect in this gate: it says
+#     the floor's claim is about OPCODES AND SELECTORS ONLY, never about
+#     plumbing helpers, and it is worth re-measuring after any change to the
+#     static call graph in vms_kif.c, not assumed to still read "four".
+#     The claim this floor can support is therefore the narrow one, and it is
+#     the one to quote: NO WRAPPER THAT ISSUES AN OPCODE OR NAMES A SELECTOR
+#     can have its definition deleted without a RED. It is NOT "no wrapper".
 #     (An earlier revision of this comment said "no wrapper", and the very next
 #     paragraph contradicted it. Execution settled it. In the one file whose
 #     declared subject is untested assertions, do not write an emphatic claim
 #     here you have not run.)
-#     The residual risk is low but it is REAL, not zero: all four are called
+#     The residual risk is low but it is REAL, not zero: all six are called
 #     today, so deleting any of them fails to compile rather than shipping.
 #     There is deliberately NO escape hatch for an orphaned opcode or selector.
 #     If you add an ioctl or a selector to vms.ko, land its wrapper in the same

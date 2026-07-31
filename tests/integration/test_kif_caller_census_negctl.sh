@@ -447,12 +447,22 @@ expect_red "$SHOW" \
 #     strand, so it cannot be this control's subject.)
 #     AN EARLIER REVISION OF THIS COMMENT SAID "the only entry point", and the
 #     gate header said no wrapper at all could be deleted without stranding
-#     something. Brute force over all 41 file-scope definitions in vms_kif.c
-#     contradicted both: 37 go RED, four are a silent PASS. The floor's real
-#     claim is narrower -- no wrapper THAT ISSUES AN OPCODE OR NAMES A SELECTOR
-#     can be deleted -- and it is stated that way in the gate now. In a pair of
-#     files whose whole subject is assertions nobody ever saw fail, an emphatic
-#     claim that has not been run is the defect, spelled.
+#     something. Brute force over all file-scope definitions in vms_kif.c
+#     contradicted both, and THIS COUNT MOVES WHEN THE FILE DOES -- at 43
+#     definitions (vms-7fb, after PR #22 / e5cf411 wired the event-flag
+#     family and added the kif_wait_call static), 37 go RED and SIX are a
+#     silent PASS: the three above plus the static vms_kif_alloc_op, plus the
+#     statics kif_call and kif_wait_call -- both take their opcode as a
+#     parameter the same way alloc_op does, so their removal strands nothing
+#     on the kernel side either; kif_call was NOT in this set before PR #22,
+#     because it was then the sole caller of kif_bind() and deleting it broke
+#     the bind chain (a different property, not this one) -- kif_wait_call now
+#     calls kif_bind() too, so that chain survives kif_call's deletion and it
+#     joined the silent-PASS set. The floor's real claim is narrower -- no
+#     wrapper THAT ISSUES AN OPCODE OR NAMES A SELECTOR can be deleted -- and
+#     it is stated that way in the gate now. In a pair of files whose whole
+#     subject is assertions nobody ever saw fail, an emphatic claim that has
+#     not been run is the defect, spelled.
 # ---------------------------------------------------------------------------
 
 PROTO_CHAN='^uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo \*info);$'

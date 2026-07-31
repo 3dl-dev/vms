@@ -271,6 +271,24 @@ static int has_line_prefix(const char *out, const char *want)
     return 0;
 }
 
+/*
+ * Does the literal appear ANYWHERE in the output, on any line, at any
+ * column? has_line_prefix() is not enough for the Width/Page absence
+ * checks below: it only catches a "   Width:" that opens its own line,
+ * which is the one-line layout vms-d0b deleted, but not the oracle's own
+ * two-line block ("   Input:     300     LFfill:  0      Width: 132 ...",
+ * docs/oracle/vax73-terminal-device.md section 2) where "Width:" and
+ * "Page:" sit mid-line after other fields. The property under test is
+ * that SHOW TERMINAL emits NO Width or Page VALUE, in either layout --
+ * not that it avoids one specific spelling of the line that carries them.
+ * A substring search over the whole capture is what makes both shapes
+ * equally visible to the same two assertions.
+ */
+static int has_substr(const char *out, const char *want)
+{
+    return strstr(out, want) != NULL;
+}
+
 static void show_capture(const char *label, const char *out)
 {
     printf("  INFO: %s stdout:\n", label);
@@ -478,12 +496,12 @@ int main(void)
           "grid row 10 is byte-for-byte the V7.3 capture");
     CHECK(has_line(out, ORACLE_ROW_13),
           "the last row carries the single remaining characteristic, unpadded");
-    CHECK(!has_line_prefix(out, "   Width:") && !has_line_prefix(out, "   Page:"),
-          "SHOW TERMINAL prints no Width/Page line -- the oracle shows them "
-          "only inside a block with Input/Output speed, LFfill/CRfill and "
-          "Parity that OVMX cannot source, and a renderer that printed just "
-          "the two fields it has would be the invented layout vms-d0b "
-          "deleted (docs/oracle/vax73-terminal-device.md section 2)");
+    CHECK(!has_substr(out, "Width:") && !has_substr(out, "Page:"),
+          "SHOW TERMINAL prints no Width or Page VALUE anywhere in its "
+          "output, in any layout -- not the one-line form vms-d0b deleted "
+          "and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity "
+          "block either, with its unsourceable fields left blank "
+          "(docs/oracle/vax73-terminal-device.md section 2)");
 
     /* ---- 4. A changes the device; DCL, a third process, sees it ------ */
     if (write(stopfd[1], "g", 1) != 1) {
@@ -495,8 +513,8 @@ int main(void)
 
     if (run_dcl("SHOW TERMINAL", 1, out, sizeof(out)) == 0) {
         show_capture("SHOW TERMINAL (while another process holds the change)", out);
-        CHECK(!has_line_prefix(out, "   Width:") && !has_line_prefix(out, "   Page:"),
-              "...still no Width/Page line while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost");
+        CHECK(!has_substr(out, "Width:") && !has_substr(out, "Page:"),
+              "...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost");
         CHECK(has_line(out,
               "   Interactive        No Echo            Type_ahead         No Escape"),
               "...and the cleared Echo bit, in the grid cell the oracle prints it in");
@@ -516,8 +534,8 @@ int main(void)
 
     if (run_dcl("SHOW TERMINAL", 1, out, sizeof(out)) == 0) {
         show_capture("SHOW TERMINAL (after the change was undone)", out);
-        CHECK(!has_line_prefix(out, "   Width:") && !has_line_prefix(out, "   Page:"),
-              "...and still no Width/Page line once the width is back to 132 -- the absence does not track the value either");
+        CHECK(!has_substr(out, "Width:") && !has_substr(out, "Page:"),
+              "...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either");
         CHECK(has_line(out, ORACLE_ROW_1),
               "...and grid row 1 is the oracle's bytes again, so neither is the grid");
     } else {

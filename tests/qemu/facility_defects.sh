@@ -158,6 +158,7 @@ devtab-owner-not-recorded
 devtab-alloc-not-recorded
 setterm-binding-not-recorded
 showterm-width-page-fabricated
+showterm-width-page-oracle-shaped
 proctab-duplicate-name
 proctab-crossgroup-identity
 proctab-terminal-redaction-bypassed
@@ -642,19 +643,55 @@ EOF
         facility)     echo "SHOW TERMINAL renderer, Width/Page absence (show_terminal_render(), vms-d0b)";;
         # DCL, not vms.ko -- the absence is a DISPLAY choice, not an
         # executive fact (Width/Page are already A-writes/B-reads proven
-        # at the kernel layer by test_kmod_devtab.c). This is the fourth
-        # entry whose property lives in the product half of the interface;
-        # see the "outside vms.ko" note near the top of this file.
+        # at the kernel layer by test_kmod_devtab.c). One of the entries
+        # whose property lives in the product half of the interface; see
+        # the "outside vms.ko" note near the top of this file for the set
+        # (not a position within it -- that note names them, it does not
+        # number them, and neither does this one).
         targets)      echo "vmsdcl/dcl_cmd_show.c";;
         suites_red)   echo "test_syssvc_showterm";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "show_terminal_render() prints a fabricated Width/Page line -- exactly the one-line layout vms-d0b deleted because docs/oracle/vax73-terminal-device.md never shows it (section 2 puts Width and Page on separate lines, each sharing the line with fields OVMX cannot source). Nothing else in the renderer changes: the header, the characteristic grid and every other row print exactly as before, so only the three assertions that require the line's ABSENCE can see this.";;
+        why)          echo "show_terminal_render() prints a fabricated Width/Page line -- exactly the ONE-LINE layout vms-d0b deleted because docs/oracle/vax73-terminal-device.md never shows it (section 2 puts Width and Page on separate lines, each sharing the line with fields OVMX cannot source). Nothing else in the renderer changes: the header, the characteristic grid and every other row print exactly as before, so only the three assertions that require a Width/Page VALUE'S absence -- not one particular line's absence, see showterm-width-page-oracle-shaped below for why that distinction has its own defect -- can see this.";;
         require_fail) cat <<'EOF'
-SHOW TERMINAL prints no Width/Page line -- the oracle shows them only inside a block with Input/Output speed, LFfill/CRfill and Parity that OVMX cannot source, and a renderer that printed just the two fields it has would be the invented layout vms-d0b deleted (docs/oracle/vax73-terminal-device.md section 2)
-...still no Width/Page line while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
-...and still no Width/Page line once the width is back to 132 -- the absence does not track the value either
+SHOW TERMINAL prints no Width or Page VALUE anywhere in its output, in any layout -- not the one-line form vms-d0b deleted and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity block either, with its unsourceable fields left blank (docs/oracle/vax73-terminal-device.md section 2)
+...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
+...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    showterm-width-page-oracle-shaped)
+        case "$_f" in
+        facility)     echo "SHOW TERMINAL renderer, Width/Page absence -- SECOND SHAPE (show_terminal_render(), vms-d0b)";;
+        # THE DEFECT showterm-width-page-fabricated'S TEETH WERE SPELLING-
+        # SPECIFIC, MEASURED. An adversary injected the ORACLE-SHAPED
+        # two-line Width/Page block instead of the invented one-line
+        # layout -- the exact "pin it, leave the unsourceable fields
+        # blank" option show_terminal_render()'s own comment names and
+        # rejects -- and the has_line_prefix()-based checks that existed
+        # at the time never saw it: "   Width:" and "   Page:" only open
+        # the ONE-LINE form; in the oracle's own layout they sit mid-line
+        # after "   Input:" / "   Output:", so a line-PREFIX check is
+        # blind to them. test_syssvc_showterm went 18/0 with the property
+        # it exists to forbid actively happening. The fix was at the
+        # ASSERTION (has_substr() over the whole capture, not
+        # has_line_prefix()), not here; this entry exists so that fixed
+        # assertion is PROVEN against the shape that defeated the old one,
+        # the same way its sibling proves it against the first shape.
+        targets)      echo "vmsdcl/dcl_cmd_show.c";;
+        suites_red)   echo "test_syssvc_showterm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "show_terminal_render() prints a fabricated Width/Page block in the OTHER shape vms-d0b considered and rejected -- the oracle's own two-line Input:/Output:/LFfill:/CRfill:/Width:/Page:/Parity: layout (docs/oracle/vax73-terminal-device.md section 2), with the fields OVMX cannot source (Input, Output, LFfill, CRfill, Parity) left blank rather than invented. That blank-field pinning was rejected in the renderer's own comment as 'the same fabrication one field further in', and this control is the proof: it must be caught by the same three assertions as its one-line sibling, not by a fourth assertion invented to notice this specific spelling.";;
+        require_fail) cat <<'EOF'
+SHOW TERMINAL prints no Width or Page VALUE anywhere in its output, in any layout -- not the one-line form vms-d0b deleted and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity block either, with its unsourceable fields left blank (docs/oracle/vax73-terminal-device.md section 2)
+...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
+...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -1733,6 +1770,16 @@ apply_edit() {
         # a second apply finds no match, which is the no-op the selftest
         # requires.
         sed -i 's|    printf("Terminal Characteristics:\\n");|    printf("   Width:%4u      Page:%5u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-fabricated: restores the deleted one-line layout */ puts("Terminal Characteristics:");|' "$_file";;
+    showterm-width-page-oracle-shaped)
+        # The ONE edit: restore the OTHER rejected layout -- the oracle's own
+        # two-line Input:/Output:/LFfill:/CRfill:/Width:/Page:/Parity: block,
+        # with the fields OVMX cannot source left blank -- ahead of the
+        # characteristic grid. Same anchor as its sibling
+        # (printf("Terminal Characteristics:\n");, the only occurrence in the
+        # file) and the same trailing printf()->puts() substitution, so the
+        # literal anchor text does not survive the edit and a second apply
+        # finds no match, which is the no-op the selftest requires.
+        sed -i 's|    printf("Terminal Characteristics:\\n");|    printf("   Input:            LFfill:         Width:%4u      Parity:\\n   Output:           CRfill:         Page: %4u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-oracle-shaped: restores the oracle-shaped two-line layout, unsourceable fields left blank */ puts("Terminal Characteristics:");|' "$_file";;
     proctab-duplicate-name)
         sed -i 's|if (clash \&\& clash != proc) {|if (0 \&\& clash != proc) { /* NEGCTL proctab-duplicate-name */|' "$_file";;
     proctab-crossgroup-identity)

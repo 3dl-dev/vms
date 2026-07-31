@@ -1093,6 +1093,14 @@ grid row 4 is byte-for-byte the V7.3 capture
 grid row 10 is byte-for-byte the V7.3 capture
 the last row carries the single remaining characteristic, unpadded
 A-WRITES/B-READS: width and page are the ones a DIFFERENT process set through the executive
+could not tell the second process to change the console
+could not tell the second process to restore the console
+A-WRITES/B-READS: DCL reports the width that other process set -- a per-process terminal could not show it
+...and the cleared Echo bit, in the grid cell the oracle prints it in
+...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
+the width goes back, so the reader is not printing a constant
+...and grid row 1 is the oracle's bytes again, so neither is the grid
+this process, which bound nothing, still has no terminal -- the bindings belonged to the DCL jobs, not to the device or to the system
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -1265,9 +1273,23 @@ reaches the same wall from a seventh door, and its nine reds split in two:
     entire SHOW TERMINAL output disappears and every assertion about its
     content goes with it: the header, the four pinned grid rows, the last
     row, and the width/page line.
+The remaining eight are the rest of that same collapse, and they are here
+because of a MEASUREMENT MISTAKE WORTH RECORDING RATHER THAN QUIETLY FIXING.
+The first sweep saw only nine reds from this suite -- because the suite DIED
+at that point. Its writer process could not register, exited, and the parent's
+next write to the gate pipe killed the program with SIGPIPE (rc=141), so the
+whole second half of the suite never ran and could not be observed. The fix
+for that (ignoring SIGPIPE so the writes fail into their checked branches)
+made the suite run to completion under the mutation and reveal eight further
+reds -- the two "could not tell the second process ..." pipe writes, the three
+A-writes/B-reads reads of a change that was never made, the two restore-side
+reads, and the final check, which is $GETJPI(self) and fails like every other
+bound call. So the DECLARED SET GREW BECAUSE THE OBSERVATION GOT BETTER, not
+because the defect changed. This is the shape the equality check exists to
+force: a truncated observation produces a truncated declaration, and only
+running it again catches that.
 What stays GREEN in that suite is what keeps this from looking like a
-blunderbuss: its unbound run still correctly names no terminal, and its final
-check that this process has no terminal of its own still holds.
+blunderbuss: its unbound run still correctly names no terminal.
 Its sibling test_kmod_setterm stays green entirely and is declared in
 blind_suites for the reason the paragraph above gives: it hand-registers.
 MERGED (vms-47b round 5, rebase onto main after vms-6a7/vms-2a8): this defect's

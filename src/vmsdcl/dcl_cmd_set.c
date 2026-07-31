@@ -28,10 +28,61 @@
 #include "vms/privs.h"
 #include "starlet.h"
 #include "vmsfs/filespec.h"
+#include "vms_kif.h"
 
 /* Forward declarations for queue subcommands (dcl_cmd_process.c) */
 extern int cmd_set_entry(struct dcl_command *cmd);
 extern int cmd_set_queue(struct dcl_command *cmd);
+
+/*
+ * enforced_privs_held - the SAME source and the SAME mask every reporting
+ * surface reads (dcl_lexical.c's F$PRIVILEGE, dcl_cmd_show.c's SHOW
+ * PROCESS/PRIVILEGES): a fresh executive read, intersected with
+ * VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h).
+ *
+ * WHY THIS EXISTS (vms-2b8 round 5). Every privilege GATE below used to
+ * read ctx->privileges directly -- the RAW, unmasked cur_privs this
+ * session's identity was given at VMS_IOCTL_SETIDENT time. For an
+ * identity established with SETPRV (e.g. the SYSTEM account, whose
+ * SYSUAF record authorizes ALL privileges and whose OVMX DESIGN CHOICE
+ * sets cur_privs = authorized_privs verbatim -- see vms_proctab.c's
+ * vms_ioctl_setident), that raw mask genuinely contains bits such as
+ * ALTPRI, SYSPRV and BYPASS that VMS_PRV_M_ENFORCED excludes because
+ * nothing in this tree actually gates on them yet (vms_kif_setprv is
+ * OVMX-UNWIRED pending vms-pv1).
+ *
+ * MEASURED on the real QEMU runtime: with that raw read, F$PRIVILEGE
+ * ("ALTPRI") answered FALSE (it already masks to VMS_PRV_M_ENFORCED, per
+ * the comment on lex_privilege()) while SET PROCESS/PRIORITY=6 in the
+ * SAME session, SAME instant, was AUTHORIZED -- the gate saw ALTPRI in
+ * the raw mask and granted the very operation the reporting surface had
+ * just said this process could not do. A process that checks
+ * F$PRIVILEGE before attempting the operation, exactly as VMS programs
+ * are written to, would have made the wrong decision.
+ *
+ * THE FIX IS ONE SOURCE OF TRUTH, not a gate-specific patch: every gate
+ * in this file now asks this same function, which asks the executive
+ * fresh (never a stale ctx->privileges snapshot) and applies the exact
+ * mask the reporting surfaces apply. A privilege absent from
+ * VMS_PRV_M_ENFORCED can no longer authorize anything here, no matter
+ * what the identity's raw authorized mask contains -- which is Rule 10's
+ * HIDE answer applied to the gates, not just the display: OVMX does not
+ * yet enforce ALTPRI/SYSPRV/BYPASS/OPER anywhere, so nothing may be
+ * granted on the strength of holding them until vms-pv1 wires real
+ * enforcement in.
+ *
+ * Fails closed: a read that cannot reach the executive returns 0 (holds
+ * nothing), the same fail-closed choice lex_privilege() makes.
+ */
+static uint64_t enforced_privs_held(void)
+{
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t jst = vms_kif_getjpi_self(&info);
+    if (!(jst & 1))
+        return 0;
+    return info.cur_privs & VMS_PRV_M_ENFORCED;
+}
 
 static int cmd_set_default(struct dcl_command *cmd)
 {
@@ -458,12 +509,19 @@ static int cmd_set_process(struct dcl_command *cmd)
             ctx->process_name[i] = (char)toupper((unsigned char)ctx->process_name[i]);
     }
 
-    /* /PRIORITY=n — requires ALTPRI */
+    /*
+     * /PRIORITY=n — requires ALTPRI. Gated on enforced_privs_held(), NOT
+     * ctx->privileges (vms-2b8 round 5: see that function's comment for
+     * the measured desync this replaces -- ALTPRI is not in
+     * VMS_PRV_M_ENFORCED, so this now refuses for every identity until
+     * vms-pv1 gives ALTPRI real enforcement to match).
+     */
     const char *pri_val = dcl_qualifier_value(cmd, "PRIORITY");
     if (pri_val && *pri_val) {
-        if (!(ctx->privileges & PRV$M_ALTPRI) &&
-            !(ctx->privileges & PRV$M_SYSPRV) &&
-            !(ctx->privileges & PRV$M_BYPASS)) {
+        uint64_t held = enforced_privs_held();
+        if (!(held & PRV$M_ALTPRI) &&
+            !(held & PRV$M_SYSPRV) &&
+            !(held & PRV$M_BYPASS)) {
             dcl_error("SET", 2, "NOPRIV",
                       "no privilege for SET PROCESS /PRIORITY");
             return SS$_NOPRIV;
@@ -483,12 +541,19 @@ static int cmd_set_process(struct dcl_command *cmd)
         setpriority(PRIO_PROCESS, 0, nice_val);
     }
 
-    /* /PRIVILEGES=(priv,...) — requires SETPRV or OPER */
+    /*
+     * /PRIVILEGES=(priv,...) — requires SETPRV or OPER. Gated on
+     * enforced_privs_held() (vms-2b8 round 5), the same source
+     * F$PRIVILEGE and SHOW PROCESS/PRIVILEGES read; SETPRV IS in
+     * VMS_PRV_M_ENFORCED, so a genuinely SETPRV-holding identity still
+     * passes this gate.
+     */
     const char *privs_val = dcl_qualifier_value(cmd, "PRIVILEGES");
     if (privs_val && *privs_val) {
-        if (!(ctx->privileges & PRV$M_SETPRV) &&
-            !(ctx->privileges & PRV$M_SYSPRV) &&
-            !(ctx->privileges & PRV$M_BYPASS)) {
+        uint64_t held = enforced_privs_held();
+        if (!(held & PRV$M_SETPRV) &&
+            !(held & PRV$M_SYSPRV) &&
+            !(held & PRV$M_BYPASS)) {
             dcl_error("SET", 2, "NOPRIV",
                       "no privilege for SET PROCESS /PRIVILEGES");
             return SS$_NOPRIV;
@@ -523,8 +588,25 @@ static int cmd_set_process(struct dcl_command *cmd)
          * on another branch). So this is HIDE, not MATCH, until vms-pv1
          * lands: no local mutation, and a loud, honest diagnostic instead
          * of silent success.
+         *
+         * SEVERITY LETTER FIXED TO I, round 5: this printed as a WARNING
+         * (%OVMX-W-) while the function falls through to `return
+         * SS$_NORMAL` below -- a success status. On VMS the severity
+         * field's low bit is the success/failure discriminator DCL's own
+         * $STATUS and ON-condition logic branch on: W and F are the
+         * "unsuccessful" side (bit clear), S and I are "successful" (bit
+         * set), so a W-severity message paired with a SS$_NORMAL return
+         * is not cosmetic -- it is an OVMX-invented message disagreeing
+         * with the OVMX-invented status it sits next to. This is an
+         * OVMX-facility diagnostic for a condition VMS does not have
+         * (Rule 10 allows that; it is not the VMS SETPRV facility's own
+         * voice), so there is no VMS wording to match -- only its own
+         * severity to make consistent with its own status, matching the
+         * I + SS$_NORMAL pairing this file already uses for other
+         * acknowledged-but-inert commands (cmd_set_host's
+         * %SET-I-NOTAVAIL, cmd_set_audit's %SET-I-INTSET).
          */
-        printf("%%OVMX-W-NOSETPRV, SET PROCESS/PRIVILEGES does not change "
+        printf("%%OVMX-I-NOSETPRV, SET PROCESS/PRIVILEGES does not change "
                "the executive's privilege state on this system yet "
                "(vms-pv1) -- no privileges were changed\n");
     }
@@ -673,13 +755,18 @@ static int cmd_set_uic(struct dcl_command *cmd)
 
     const char *uic_str = cmd->params[1];
 
-    /* Check privilege */
-    if (!(ctx->privileges & PRV$M_SETPRV) &&
-        !(ctx->privileges & PRV$M_SYSPRV) &&
-        !(ctx->privileges & PRV$M_BYPASS)) {
-        dcl_error("SET", 2, "NOPRIV",
-                  "no privilege for SET UIC");
-        return SS$_NOPRIV;
+    /* Check privilege — enforced_privs_held(), not ctx->privileges
+     * (vms-2b8 round 5; see that function's comment). SETPRV is
+     * enforced, so this still passes for a SETPRV-holding identity. */
+    {
+        uint64_t held = enforced_privs_held();
+        if (!(held & PRV$M_SETPRV) &&
+            !(held & PRV$M_SYSPRV) &&
+            !(held & PRV$M_BYPASS)) {
+            dcl_error("SET", 2, "NOPRIV",
+                      "no privilege for SET UIC");
+            return SS$_NOPRIV;
+        }
     }
 
     /* Parse [group,member] in octal — strip brackets */
@@ -761,8 +848,6 @@ static int cmd_set_working_set(struct dcl_command *cmd)
  */
 static int cmd_set_time(struct dcl_command *cmd)
 {
-    struct dcl_context *ctx = dcl_get_context();
-
     if (cmd->param_count < 2) {
         /* No argument: display current time (same as SHOW TIME).
          * Reading the clock requires no privilege on VMS or Linux. */
@@ -781,10 +866,16 @@ static int cmd_set_time(struct dcl_command *cmd)
         return SS$_NORMAL;
     }
 
-    /* Privilege check — required when actually setting the clock */
-    if (!(ctx->privileges & PRV$M_OPER) &&
-        !(ctx->privileges & PRV$M_SYSPRV) &&
-        !(ctx->privileges & PRV$M_BYPASS)) {
+    /* Privilege check — required when actually setting the clock.
+     * enforced_privs_held(), not ctx->privileges (vms-2b8 round 5; see
+     * that function's comment). OPER is not in VMS_PRV_M_ENFORCED, so
+     * this now refuses on the strength of OPER alone until vms-pv1
+     * gives it real enforcement; SYSPRV/BYPASS are equally unenforced
+     * and named here only because VMS names them for this operation. */
+    uint64_t held = enforced_privs_held();
+    if (!(held & PRV$M_OPER) &&
+        !(held & PRV$M_SYSPRV) &&
+        !(held & PRV$M_BYPASS)) {
         dcl_error("SET", 2, "NOPRIV",
                   "no privilege for SET TIME");
         return SS$_NOPRIV;

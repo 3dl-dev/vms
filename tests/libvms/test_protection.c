@@ -16,8 +16,9 @@
  * UIC whose GROUP is <= MAXSYSGROUP (OpenVMS Guide to System Security,
  * "System" access category). MAXSYSGROUP=8, pinned to TWO independent
  * sources (vms-2b8 round 4; round 3 had only the first, which was this
- * same branch attesting to its own capture -- see sys_security.c's
- * OVMX_MAXSYSGROUP comment for the full account):
+ * same branch attesting to its own capture -- see
+ * src/libvms/include/ovmx_secparam.h, the SINGLE definition both this
+ * file and sys_security.c include as of round 5, for the full account):
  *   1. Oracle transcript, VAX2, OpenVMS VAX V7.3, 30-JUL-2026,
  *      `MCR SYSGEN SHOW MAXSYSGROUP` -> Current 8, Default 8. Transcript:
  *      docs/oracle/vax73-privileges.md S7.
@@ -28,8 +29,12 @@
  * round-3 version of this test could not tell MAXSYSGROUP=8 apart from
  * MAXSYSGROUP=5, because its only two cases were group 5 (inside (0,8] AND
  * inside (0,5]) and group 9 (outside both). This version adds a case at
- * the boundary ITSELF (group == MAXSYSGROUP, defined below) that only a
- * boundary of exactly 8 grants -- see that test's own comment.
+ * the boundary ITSELF (group == MAXSYSGROUP, defined below) plus a
+ * compile-time `_Static_assert` on the shared constant; together with the
+ * group-9 negative control, the three now agree only when the boundary is
+ * exactly 8 -- see those tests' own comments (and the round-5 correction
+ * on the boundary case: round 4's claim that it alone proved "exactly 8"
+ * was a false "only" it had not tried to break by mutation).
  *
  * WHAT CHANGED FROM THE PREVIOUS VERSION OF THIS TEST (vms-2b8, operator
  * ruling 2026-07-31): it used to drive both sys$chkpro AND
@@ -86,6 +91,7 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <sys/types.h>
+#include "ovmx_secparam.h"
 
 extern uint32_t sys$chkpro(void *objpro);
 extern uint32_t vms$get_uic(void);
@@ -96,7 +102,48 @@ extern uint32_t vms$get_uic(void);
 #define PROT_WRITE     0x04
 
 #define UIC(g, m)      (((uint32_t)(g) << 16) | (uint32_t)(m))
-#define MAXSYSGROUP    8u
+
+/* MAXSYSGROUP is NOT redefined here (vms-2b8 round 5): it is the same
+ * OVMX_MAXSYSGROUP constant sys_security.c enforces, from the single
+ * pinned definition in src/libvms/include/ovmx_secparam.h. Round 4 had
+ * two hand-maintained copies of the literal 8 (this file and
+ * sys_security.c) that happened to agree by coincidence, not by
+ * construction -- an editor changing one had no way to know the other
+ * existed. This alias keeps the rest of the file's `MAXSYSGROUP` call
+ * sites unchanged while making the numeric value a byproduct of one
+ * #define instead of two.
+ *
+ * SELF-CAUGHT REGRESSION, same round: aliasing MAXSYSGROUP straight to
+ * OVMX_MAXSYSGROUP would make the "boundary itself" test below
+ * SELF-REFERENTIAL -- it drives run_chkpro_as(MAXSYSGROUP, ...), so
+ * whatever OVMX_MAXSYSGROUP is currently defined as, that call always
+ * probes exactly the production boundary and is granted by definition.
+ * That still catches a `<` vs `<=` regression in uic_is_system() (an
+ * off-by-one at the boundary), but it can NO LONGER catch OVMX_MAXSYSGROUP
+ * itself drifting away from the oracle-pinned value 8 -- exactly the
+ * hazard "derive it once" was supposed to close, reintroduced by closing
+ * it carelessly. Verified by mutation: with only the alias (no assertion
+ * below), changing ovmx_secparam.h's value to 9 left the boundary-itself
+ * case GREEN (7/8, only the independently-hardcoded group-9 negative
+ * control went red) -- proof the alias alone had silently stopped pinning
+ * the number.
+ *
+ * FIX: a compile-time pin, the same pattern this codebase already uses
+ * for other oracle-sourced constants (e.g. dcl_lexical.c's
+ * `_Static_assert(SS$_ILLIOFUNC == 244, ...)`, vms_ioctl.h's PRV$V_WORLD
+ * assert). If OVMX_MAXSYSGROUP is ever changed without updating this
+ * test's own literal probe values (5, 8's replacement via the alias, and
+ * 9), the BUILD fails here, loudly, instead of the runtime test silently
+ * tracking whatever the new value is.
+ */
+#define MAXSYSGROUP    OVMX_MAXSYSGROUP
+
+_Static_assert(OVMX_MAXSYSGROUP == 8,
+               "MAXSYSGROUP moved away from the oracle-pinned value 8 "
+               "(src/libvms/include/ovmx_secparam.h) -- this test's group "
+               "5/9 probe values were chosen around 8 specifically and "
+               "must be re-picked, not silently carried forward, if the "
+               "pin is ever legitimately re-derived");
 
 static int failures = 0;
 
@@ -261,30 +308,51 @@ int main(void)
           "file via SYSTEM, not WORLD");
 
     /*
-     * THE BOUNDARY ITSELF (round 4). Group 5 above is inside (0, MAXSYSGROUP]
-     * under ANY boundary from 5 to 8 inclusive, so it cannot tell those
-     * apart -- and neither can group 9 below, which is outside all of them.
-     * A caller at group == MAXSYSGROUP exactly is granted ONLY if the
-     * boundary is really 8: change OVMX_MAXSYSGROUP (sys_security.c) to
-     * anything less than 8 and this is the assertion that goes red, with
-     * groups 5 and 9 both unchanged. That is what makes "MAXSYSGROUP is 8,
-     * not merely some small number" a claim this suite can actually prove
-     * by mutation instead of one that is only ever stated.
+     * THE BOUNDARY ITSELF (round 4; corrected round 5). Group 5 above is
+     * inside (0, MAXSYSGROUP] under ANY boundary from 5 to 8 inclusive, so
+     * it cannot tell those apart -- and neither can group 9 below, taken
+     * by itself, which is outside all of them.
+     *
+     * TWO SEPARATE MECHANISMS NOW PIN "EXACTLY 8", NOT ONE, and each
+     * covers a failure the other cannot see:
+     *   1. The `_Static_assert(OVMX_MAXSYSGROUP == 8, ...)` above pins the
+     *      NUMBER, at compile time. If ovmx_secparam.h's constant ever
+     *      drifts from 8, the build fails before this test runs at all.
+     *   2. This runtime check pins the SEMANTICS: it proves uic_is_system()
+     *      uses `<=` at the boundary, not `<` -- a bug the static_assert
+     *      cannot see, because it is about sys_security.c's comparison
+     *      operator, not about the constant's value. Round 4's wording
+     *      ("granted ONLY if the boundary is really 8") OVERCLAIMED what
+     *      this runtime check alone shows: taken in isolation from the
+     *      static_assert, a caller at group == MAXSYSGROUP is granted
+     *      whichever value MAXSYSGROUP happens to hold, which pins nothing
+     *      about the NUMBER 8 by itself -- that was a false "only" round 4
+     *      did not try to break by mutation before writing it (round 5
+     *      reproduced the gap: with only the alias and no static_assert,
+     *      mutating OVMX_MAXSYSGROUP to 9 left this exact assertion GREEN).
+     * The group-9 negative control below is now a THIRD, independent
+     * check: since it drives a hardcoded literal 9, not the MAXSYSGROUP
+     * symbol, it fails if the true enforced boundary is ever 9 or above,
+     * regardless of what the constant claims.
      */
     ok = run_chkpro_as(MAXSYSGROUP, 8001, UIC(200, 201), prot_s_o_only,
                         PROT_READ, &st);
     check(ok && (st & 1) != 0,
           "UIC at group == MAXSYSGROUP exactly is granted SYSTEM access "
-          "(pins the boundary at 8, not merely 'some small group')");
+          "(the <= vs < half of the pin; the static_assert above pins the "
+          "number 8, this pins the operator)");
 
     /*
-     * NEGATIVE CONTROL, same mechanism: a group strictly above
-     * MAXSYSGROUP (9) must NOT get the SYSTEM category -- it falls to
-     * WORLD, which the mask above denies. Paired with the group ==
-     * MAXSYSGROUP case just above, this pins the boundary at exactly 8:
-     * that case proves the boundary is not BELOW 8, this one proves it is
-     * not ABOVE 8. Neither one alone does; a boundary anywhere in [5,8]
-     * still passes this case by itself, which is exactly the round-3 gap.
+     * NEGATIVE CONTROL, independent of the MAXSYSGROUP symbol (hardcoded
+     * literal 9, not an alias): a group strictly above the oracle-pinned
+     * boundary must NOT get the SYSTEM category -- it falls to WORLD,
+     * which the mask above denies. This is what actually catches
+     * uic_is_system() enforcing a boundary ABOVE 8 (the static_assert
+     * cannot: it checks the #define, not what sys_security.c does with
+     * it). Verified by mutation (round 4): changing OVMX_MAXSYSGROUP to 9
+     * turns exactly this assertion red, 7/8, with every other case
+     * (including the boundary-itself case above, which moves WITH the
+     * symbol) unchanged.
      */
     ok = run_chkpro_as(9, 9001, UIC(200, 201), prot_s_o_only, PROT_READ, &st);
     check(ok && (st & 1) == 0,

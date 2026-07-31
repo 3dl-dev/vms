@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include "starlet.h"
+#include "ovmx_secparam.h"
 
 /* Protection access type flags */
 #define PROT$M_READ    0x08
@@ -38,51 +39,26 @@
 #define PROT$V_WORLD   0
 
 /*
- * MAXSYSGROUP -- the SYSGEN parameter that decides which UIC groups get
- * the SYSTEM protection category.
+ * OVMX_MAXSYSGROUP -- the SYSGEN parameter that decides which UIC groups
+ * get the SYSTEM protection category. Defined ONCE, in
+ * src/libvms/include/ovmx_secparam.h (see that file for the two-source
+ * pin and the provenance of the value) -- not here, and not re-declared
+ * by any test. vms-2b8 round 4 pinned the value in two independent
+ * places (this file's comment and tests/libvms/test_protection.c's own
+ * #define) that happened to agree; round 5 collapsed them into this one
+ * header specifically so they cannot drift apart the next time either
+ * side is edited without the other.
  *
- * PINNED TO TWO INDEPENDENT SOURCES (vms-2b8 round 4; CLAUDE.md Rule 10 --
- * "pin it to the oracle or public documentation, or do not rely on the
- * value"). Round 3 had only one: a lab transcript introduced by the same
- * branch that depends on it, which is self-certification, not a pin.
- * This round could not get a second lab capture either -- `ps aux` still
- * showed VAX1/VAX2/VAX3 live under the vms-760 cluster-join experiment
- * (SCSD, tcpdump running), and driving a console by hand risks corrupting
- * that in-flight, non-reproducible run (the same risk the §7.3 note above
- * flags for two SIMH instances sharing one disk) -- so the lab was left
- * alone, read-only-probes-only, per standing instruction. Instead this
- * round corroborated the existing lab transcript against PUBLIC OpenVMS
- * documentation, independent of both this branch and the lab:
- *
- *   1. Lab transcript, VAX2, OpenVMS VAX V7.3, 30-JUL-2026 (docs/oracle/
- *      vax73-privileges.md S7):
- *        $ MCR SYSGEN SHOW MAXSYSGROUP
- *        Parameter Name  Current  Default   Min.    Max.     Unit    Dynamic
- *        MAXSYSGROUP           8        8      1   32768  UIC Group    D
- *
- *   2. VSI OpenVMS Wiki, "UIC Protection" (https://wiki.vmssoftware.com/
- *      UIC_Protection), fetched 31-JUL-2026: "System refers to users with
- *      the UIC group of 0 through the value of MAXSYSGROUP (10 by default;
- *      bear in mind that numbers in a UIC are octal)" -- octal 10 is
- *      decimal 8, the same value the lab measured, from a source that
- *      cannot be circular with either the lab capture or this tree.
- *
- * Two sources, neither derived from the other, agreeing on the same value:
- * that is a pin, not a disclosure. It is a settable SYSGEN parameter on
- * VMS and a compile-time constant here because OVMX has no SYSGEN
- * parameter store for it yet; when it gets one this becomes a read of it.
- *
- * THE BOUNDARY IS PROVEN BY MUTATION, NOT JUST STATED (the other half of
- * round 3's gap: "exactly 8" was asserted but tests/libvms/test_protection.c
- * could not distinguish 8 from a neighbouring value such as 5, because its
- * only two cases were group 5, inside (0,8], and group 9, outside it --
- * both still correct under a boundary of 5). test_protection.c now also
- * asserts group 8 itself (the boundary) is GRANTED SYSTEM-category access:
- * changing this constant to anything below 8 turns that assertion red
- * while leaving the group-5 and group-9 cases unchanged, which is what
- * makes "exactly 8" a provable claim instead of a decorative one.
+ * THE BOUNDARY IS PROVEN BY MUTATION, NOT JUST STATED, through THREE
+ * independent checks in tests/libvms/test_protection.c (see its own
+ * comments): a `_Static_assert` pins the NUMBER at compile time; a
+ * group == OVMX_MAXSYSGROUP case pins the <= vs < OPERATOR at runtime;
+ * a hardcoded group-9 case independently pins the boundary is not above
+ * 8. Changing this header's value to anything but 8 fails the build via
+ * the static_assert before any of the runtime cases get a chance to run;
+ * changing sys_security.c's comparison operator instead (leaving the
+ * value at 8) is what the runtime cases catch.
  */
-#define OVMX_MAXSYSGROUP 8
 
 /*
  * uic_is_system - does this UIC get the SYSTEM protection category?

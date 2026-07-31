@@ -2834,6 +2834,44 @@ int main(int argc, char **argv)
             if (ps == NULL) {
                 continue;
             }
+            /* vms-e81: A PEER MAY START US AGAIN. These were one-shot latches
+             * that nothing ever cleared, so a peer could complete the 0x41
+             * handshake with a given OVMX peer-slot exactly ONCE per process
+             * lifetime. VMS re-STARTs routinely -- when VAX3 decided our VC was
+             * dead it re-STARTed 55 times over four minutes and OVMX parsed,
+             * logged and SILENTLY DROPPED every one (105 STARTRX lines with no
+             * STARTTX). A silent drop of a message the peer is waiting on is the
+             * Rule 9 / INV-6 failure shape exactly: it reports nothing wrong
+             * while making the peer unreachable forever.
+             *
+             * A round-0 START from a peer we have already handshaked is a
+             * RESTART. Tear the slot's session state down and run the handshake
+             * again as if new. Do NOT gate this on the peer's send_seq being 1 --
+             * spec 4i.A grounds that an established peer's round-0 START
+             * legitimately carries a large residual send_seq (10 here, 11974 in
+             * the reference). */
+            if (!sv.is_ack && ps->start_replied) {
+                log_ts(stdout);
+                printf(" SCSD-I-RESTART, peer re-STARTed an established channel"
+                       " (peer_seq=%u) -- resetting this peer's session and"
+                       " re-running the handshake\n",
+                       (unsigned)sv.send_seq);
+                fflush(stdout);
+                ps->start_replied = 0;
+                ps->start_acked = 0;
+                ps->vc.initialized = 0;
+                /* Drop the SYSAP state bound to the dead VC; it is all invalid
+                 * now and stale handles are what a peer rejects. */
+                ps->dir_connected = 0; ps->dir_remote_conid = 0; ps->dir_seen = 0;
+                ps->own_dir_sent = 0; ps->own_dir_connected = 0;
+                ps->own_dir_lookup_sent = 0;
+                ps->mscp_connect_sent = 0; ps->mscp_connected = 0;
+                ps->connected = 0; ps->connect_sent = 0; ps->remote_conid = 0;
+                ps->joiner_connect_sent = 0; ps->joiner_connected = 0;
+                ps->cm_config_sent = 0; ps->cfg_sent = 0;
+                ps->join_step = JS_IDLE; ps->js_retx = 0;
+                ps->greet_due_ms = 0;
+            }
             if (!ps->vc.initialized) {
                 scs_vc_init(&ps->vc);
             }

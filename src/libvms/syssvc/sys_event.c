@@ -133,6 +133,15 @@ uint32_t sys$clref(uint32_t efn) {
  * genuinely asleep to the scheduler and can be woken by ANOTHER process's
  * $SETEF on a common flag. Returns immediately if the flag is already set.
  *
+ * IT CANNOT RETURN SS$_NORMAL WHILE THE FLAG IS CLEAR, and that is a
+ * guarantee, not an aspiration -- $SYNCH below depends on it. A host signal
+ * does not end the wait: the executive abandons the ioctl without writing a
+ * status and libvmssys' kif_wait_call() re-enters it. See the INTERRUPTED
+ * WAITS note in src/kernel/vms_eflag.c and the oracle transcript in
+ * docs/oracle/vax73-event-flags.md §4 -- VMS has no "your wait was
+ * interrupted" condition value, so under Rule 10 that condition is made
+ * unreachable rather than given a plausible-looking status.
+ *
  * Returns:
  *   SS$_NORMAL  - Flag is set
  *   SS$_UNASEFC - Common flag whose cluster is not associated
@@ -189,6 +198,15 @@ uint32_t sys$readef(uint32_t efn, uint32_t *state) {
  *   status = sys$qio(..., efn, ..., iosb, ...);
  *   if (status & 1) status = sys$synch(efn, iosb);
  *   if (status & 1) status = iosb[0];
+ *
+ * THIS ROUTINE READS THE IOSB ONLY BECAUSE $WAITFR CANNOT LIE ABOUT THE
+ * FLAG. It has no way to tell a real completion from a spurious wake, so
+ * every guarantee it makes about the IOSB is inherited from $WAITFR's:
+ * $WAITFR returns success only when the flag really is set, therefore the
+ * I/O really did complete, therefore the IOSB really was filled. When
+ * $WAITFR reported SS$_NORMAL for a signal-interrupted wait (fixed in
+ * vms-2a8 round 2) this handed the caller a status word the I/O never
+ * wrote, on the documented VMS async pattern and on the boot path.
  *
  * Parameters:
  *   efn  - Event flag number to wait on

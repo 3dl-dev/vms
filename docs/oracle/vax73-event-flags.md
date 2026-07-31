@@ -129,6 +129,111 @@ temporary-cluster lifetime", and it is implemented that way.
 
 ---
 
+## 4. What `$WAITFR` does when the wait is interrupted — session 2
+
+**Second session, same node.** Banner: `VAX/VMS V7.3  node VAX1`, login
+`30-JUL-2026 22:19`, run for `vms-2a8` round 2. Same clean-room method: online `HELP`
+plus the `$SSDEF` macro shipped with the OS. Nothing disassembled.
+
+### 4.1 `$WAITFR` has exactly two outcomes, and neither is "interrupted"
+
+```
+$ HELP/NOPROMPT SYSTEM_SERVICES $WAITFR
+
+SYSTEM_SERVICES
+
+  $WAITFR
+
+       Tests a specific event flag and returns immediately if the flag
+       is set; otherwise, the process is placed in a wait state until
+       the event flag is set.
+
+       Format
+
+         SYS$WAITFR  efn
+
+       C Prototype
+
+         int sys$waitfr  (unsigned int efn);
+
+    Additional information available:
+
+    Argument
+```
+
+Note what the "Additional information available" list contains: **`Argument`, and nothing
+else.** There is no `Condition Values Returned` topic for `$WAITFR` in the online help,
+which is consistent with the description — the service returns *when the flag is set*.
+
+`$WFLOR` and `$WFLAND` are the same shape:
+
+```
+$ HELP/NOPROMPT SYSTEM_SERVICES $WFLOR
+  $WFLOR
+       Allows a process to specify a set of event flags for which it
+       wants to wait.
+    Additional information available:
+    Arguments
+
+$ HELP/NOPROMPT SYSTEM_SERVICES $WFLAND
+  $WFLAND
+       Allows a process to specify a set of event flags for which it
+       wants to wait.
+    Additional information available:
+    Arguments
+```
+
+### 4.2 A wait state IS interruptible — and the process stays in it
+
+```
+$ HELP/NOPROMPT SYSTEM_SERVICES $HIBER
+
+  $HIBER
+
+       Allows a process to make itself inactive but to remain known to
+       the system so that it can be interrupted; for example, to receive
+       ASTs.
+```
+
+"remain known to the system so that it can be **interrupted**" — the interruption of a
+VMS wait is an **AST**, the AST executes, and the process is still waiting afterwards.
+Interruption is not an outcome the waiting service reports; it is not visible to the
+caller of the wait at all.
+
+### 4.3 The negative observation: there is no "wait interrupted" status
+
+```
+$ LIBRARY/MACRO/EXTRACT=$SSDEF/OUTPUT=SYS$SCRATCH:SSDEF_2A8B.MAR SYS$LIBRARY:STARLET.MLB
+$ SEARCH SYS$SCRATCH:SSDEF_2A8B.MAR "WAIT","INTERRUPT","ABORTED"
+$EQU    SS$_NOWAIT      10236
+$EQU    SS$_WAITUSRLBL  2384
+$EQU    SS$_WAIT_CALLERS_MODE   4018
+$EQU    SS$_AVRWAIT     11040
+```
+
+Four hits in the whole of `$SSDEF`, none of them a wait-was-interrupted condition
+(`SS$_NOWAIT` is the "would have blocked" answer of services that were asked not to wait,
+`SS$_WAITUSRLBL` is a magnetic-tape user-label condition, `SS$_WAIT_CALLERS_MODE` is an
+access-mode flag, `SS$_AVRWAIT` is an automatic-volume-recognition condition). No symbol
+containing `INTERRUPT` or `ABORTED` exists at all.
+
+### What this decides (`vms-2a8` round 2)
+
+`src/kernel/vms_eflag.c` treated a `wait_event_interruptible()` return as terminal and
+answered `SS$_NORMAL` — "the flag is set" — for a flag that was still clear. Under
+CLAUDE.md Rule 10 that is the illegal third answer: a plausible-looking handler for a
+condition VMS never faces. VMS offers no status to return here **and the oracle above is
+how that is known, not assumed**, so the condition is made UNREACHABLE instead:
+
+* the executive abandons the ioctl with `-ERESTARTSYS` and writes **no status at all**, and
+* `src/libvmssys/vms_kif.c`'s `kif_wait_call()` re-enters the wait,
+
+so `$WAITFR`/`$WFLOR`/`$WFLAND` cannot return while their predicate is false — which is
+exactly §4.1's "the process is placed in a wait state until the event flag is set", with
+§4.2's interruption running in between and leaving no trace in the caller's status.
+
+---
+
 ## Reproducing
 
 The lab console for VAX1 is reachable on the SIMH DZ mux at `127.0.0.1:2001`; log in

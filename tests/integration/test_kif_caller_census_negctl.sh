@@ -36,106 +36,27 @@
 # gate that can be disarmed by removing the thing it counts is worth nothing.
 # Every one of these was a PASS at some earlier revision of the gate.
 #
-# DELIBERATELY NO CARDINAL HERE, AND NOT BECAUSE THE NUMBER IS COMPUTED
-# INSTEAD -- round 6 tried exactly that and it was the same defect wearing a
-# disguise. Round 6 replaced the prose word "seven" with a shell variable,
-# $pin_total, incremented by a SEPARATE "pin_total=$((pin_total + 1))" line
-# next to each of controls 13-20. That is not tied to the call; it is a
-# second hand-maintained count with the identical human obligation the word
-# "seven" carried, and it drifted the same way: appending a genuine 21st
-# universe-pin control without also touching that separate line left the
-# printed total at 8 while 9 controls actually ran, and the run still
-# reported "PASS" throughout -- worse than the prose word it replaced,
-# because a printed, computed-looking number is trusted more than a comment,
-# and this one silently agreed with the drift. Demonstrated by running this
-# file after adding a control with no companion increment; see the item's
-# audit trail for the exact transcript.
+# round 9: this file used to carry a $pin_total tally over controls 13-21,
+# and a "category" argument to expect_red()/expect_green() to feed it.
+# $pin_total was only ever incremented or printed, never read in a
+# condition -- it gated nothing, and three rounds (6, 7, 8) each shipped a
+# false claim about how faithfully it was kept. The suite's real output is
+# which controls passed and which failed, printed by name below. Removed
+# rather than corrected a fourth time; see the item's audit trail for what
+# each round's false claim was.
 #
-# THE FIX (round 7): there is no separate increment left to forget FOR ANY
-# CONTROL THAT USES THE DISPATCHER. CATEGORY is now a required argument to
-# expect_red()/expect_green() -- "core" for controls 1-12, "pin" for 13
-# onward -- not a second statement written near it. The dispatcher tallies
-# $pin_total itself, once, as a byproduct of the one call that also runs the
-# mutation and prints its PASS/FAIL line, so a control that goes through it
-# cannot be silently uncounted the way $pin_total's old companion line could
-# be skipped. ROUND 7 CLAIMED (falsely, see below) this made every control's
-# outcome tamper-evident; it only closed the $pin_total hole, and the file
-# still hand-rolled $passed in exactly two places -- the positive control and
-# the meta-control below -- which were the in-file TEMPLATE for bypassing the
-# dispatcher altogether. Fixed in round 8: record_verdict() (defined above,
-# next to tally_category()) is now the only place in this file where a
-# CONTROL'S OUTCOME touches $passed/$failed/$status or prints a "  PASS:"
-# line. The positive control is now a plain expect_green() call with an
-# empty file list (its "for _f in $files" injection-landed loop iterates
-# zero times, which is exactly "run the gate, expect PASS, no mutation to
-# verify"). The meta-control cannot be expressed as an expect_red()/
-# expect_green() call -- it tests injection_landed() directly and never runs
-# the gate -- so it calls tally_category()/record_verdict() itself; it is
-# the one control in this file that reaches those two functions without
-# going through the dispatcher built on top of them. A THIRD, PRE-EXISTING
-# EXCEPTION WAS FOUND AND FIXED WHILE AUDITING THIS VERY PARAGRAPH (Part 3 of
-# this round's dispatch, Method 6: grep the file for the pattern before
-# claiming it can't occur): control 20's own fixture-integrity guard (below,
-# "control 20 needs a product function...") hand-rolled
-# "failed=$((failed + 1)); status=1" directly, skipping tally_category() too,
-# so a broken fixture on that one path would have both mis-recorded the
-# verdict and undercounted $pin_total. It now calls tally_category()/
-# record_verdict() the same as everything else. Grepped, not asserted, AFTER
-# that fix: `grep -c '^\s*\(expect_red\|expect_green\) ' <this file>` is 22
-# (the positive control plus the 21 numbered controls). THE FOLLOWING TWO
-# GREPS ARE ANCHORED TO A LEADING TAB/SPACE ON PURPOSE -- this file's own
-# prose repeatedly quotes "passed=$((passed" and "failed=$((failed" (as it
-# does two paragraphs up and does again below), so the unanchored patterns
-# match this comment text too and would UNDERSTATE nothing but overstate the
-# count; anchoring to code indentation is what excludes prose. Anchored:
-# `grep -c '^\s*passed=\$((passed' <this file>` is 1, inside
-# record_verdict()'s own definition; `grep -c '^\s*failed=\$((failed' <this
-# file>` is 2, one inside tally_category() (its own malformed-category path,
-# a fixture defect, not a control's outcome -- deliberately not folded into
-# record_verdict, see that function's comment) and one inside
-# record_verdict() itself. So: every one
-# of the 23 controls in this file funnels through tally_category() and, for
-# its own outcome, record_verdict(). ON A CLEAN RUN, where every fixture
-# precondition holds -- confirmed for THIS tree by "controls: 23 passed" with
-# no "BROKEN FIXTURE" line printed anywhere in a run's output -- 22 of the 23
-# also go through expect_red()/expect_green() on top of that, and the
-# meta-control is the one control whose SOURCE never calls expect_red/
-# expect_green on any path, because it never runs the gate. Control 20 has a
-# SECOND such bypass in its source (its own comment, below), but only on a
-# defensive fallback path that runs when its fixture precondition fails --
-# the same shape as the "BROKEN FIXTURE" branches already inside expect_red/
-# expect_green itself, which also skip $GATE -- and that path is not
-# exercised in this tree: control 20's collision target ($COLLIDE=lnm_init)
-# is a real, grepped-for product function today. An unrecognized category
-# passed to expect_red/expect_green/the meta-control/control 20's guard IS a
-# hard, immediate FAIL naming the control, not a default of zero -- that
-# part is enforced in code, see tally_category() below. See "universe-pin
-# controls run" in the summary this script prints when it
-# runs.
-#
-# TESTED, NOT ASSUMED, AND CORRECTED (round 8): round 7 tried exactly one
-# bypass shape -- a rogue block that printed its own "PASS:" line but touched
-# NEITHER $passed NOR $pin_total -- found a visible mismatch ("controls: 23
-# passed" under 24 "PASS:" lines), and generalized that to "what it CANNOT do
-# is hide". FALSE: this file's OWN pre-round-8 template (the positive and
-# meta-controls, before the fix above) was a hand-rolled if/then that DID
-# increment $passed by hand right next to its own "  PASS:" echo -- and a
-# rogue control copying THAT shape produces NO mismatch at all, because
-# $passed is a plain shell variable and the printed count is computed from it
-# after the fact, not compared against anything independent. Tried it (round
-# 8, after the fix above landed): a rogue pin control appended before the
-# summary, with `echo "  PASS: rogue pin control bypassing the dispatcher"`
-# followed by `passed=$((passed + 1))` on the next line and no call to
-# tally_category or record_verdict, produces 24 "PASS:" lines under "controls:
-# 24 passed" -- consistent, not mismatched -- and "universe-pin controls run:
-# 9", with no reciprocal check anywhere in the output for a reader to compare
-# that "9" against. rc=0, suite green, nothing caught it. THIS SHAPE IS NOT
-# DETECTED, by inspection or otherwise, and removing the two in-file
-# templates does not change that -- sh has no construct that stops a future
-# author writing raw `if`/`echo`/`passed=$((passed+1))` instead of calling a
-# function, template or no template. What round 8 actually fixes is narrower
-# and is stated precisely above: the file no longer DEMONSTRATES that shape
-# as its own established style. Do not read this paragraph as a stronger
+# NOT DETECTED, BY CONSTRUCTION (round 8, reconfirmed round 9). A control
+# that hand-rolls `echo "  PASS: ..."` and `passed=$((passed + 1))` instead
+# of calling record_verdict() produces an internally consistent summary --
+# $passed is a plain shell variable, and the printed count is computed from
+# it after the fact, not compared against anything independent. Tried
+# (round 8): a rogue control appended before the summary, printing its own
+# "  PASS:" line and incrementing $passed by hand with no call to
+# record_verdict, produced "controls: 24 passed" under 24 "PASS:" lines --
+# consistent, not mismatched. rc=0, suite green, nothing caught it. THIS
+# SHAPE IS NOT DETECTED, by inspection or otherwise: sh has no construct
+# that stops a future author writing raw `if`/`echo`/`passed=$((passed+1))`
+# instead of calling a function. Do not read this paragraph as a stronger
 # claim than that.
 #
 #   13 a PROTOTYPE is deleted (definition stays)                    -> RED
@@ -177,11 +98,6 @@ GATE="$SRC_ROOT/tests/integration/test_kif_caller_census.sh"
 status=0
 passed=0
 failed=0
-# Tallied by expect_red()/expect_green() themselves, once per call, keyed by
-# the "category" argument every call now carries ("core" for 1-12, "pin" for
-# 13 onward). There is no separate statement anywhere that increments this --
-# see the dispatcher below and the PROOF paragraph above the usage line.
-pin_total=0
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -259,45 +175,17 @@ F_ORPHAN_SEL="kernel selector(s) no wrapper in"
 # them into words that match nothing, and every "forbidden" check would pass
 # vacuously -- a control that cannot fail, which is this file's whole subject.
 
-# tally_category <name> <category>: the ONLY place $pin_total is touched.
-# Called from inside the dispatcher, once per invocation, so counting a
-# control is not a second action a caller can forget -- it is a side effect
-# of the one call that runs the mutation. An unrecognized category is a hard
-# FAIL naming the control, not a silent no-op that would undercount the same
-# way $pin_total's old companion line could be skipped.
-tally_category() {
-    case "$2" in
-        pin)  pin_total=$((pin_total + 1)) ;;
-        core) : ;;
-        *)
-            echo "  FAIL: BROKEN FIXTURE: control \"$1\" passed unknown category"
-            echo "        \"$2\" -- every call must say \"core\" or \"pin\" so the"
-            echo "        tally has somewhere to go; there is no default."
-            failed=$((failed + 1)); status=1
-            return 1
-            ;;
-    esac
-    return 0
-}
-
 # record_verdict <name> <ok>: the only place in this file where a CONTROL'S
-# OUTCOME touches $passed/$failed/$status or prints a "  PASS:" line (round
-# 8's fix; grepped, not assumed -- ANCHORED to a leading tab/space, because
-# this file's own prose quotes both patterns verbatim in several places,
+# OUTCOME touches $passed/$failed/$status or prints a "  PASS:" line
+# (grepped, not assumed -- ANCHORED to a leading tab/space, because this
+# file's own prose quotes both patterns verbatim in several places,
 # including this sentence, so an unanchored grep would count its own
 # commentary: `grep -c '^\s*passed=\$((passed'` and
 # `grep -c '^\s*echo "  PASS:'` each return 1, both inside this
 # function's own body). expect_red() and expect_green() call this instead of
-# incrementing $passed inline; so does the meta-control below, the one
-# control in the file that cannot use expect_red/expect_green because it
-# never runs the gate at all. The positive control goes through
-# expect_green() itself (see its own site) rather than being a third
-# exception. tally_category() (above) is a SEPARATE call, made once per
-# control regardless of outcome, that folds $pin_total in and has its OWN
-# distinct failure path for a malformed category (a fixture defect, not a
-# control's outcome) -- that path is the one place besides this function
-# that touches $failed/$status, and it is not folded in here because it is
-# not a verdict on what the control tests. Any FAIL diagnostic text for a
+# incrementing $passed inline; so do the positive control and the
+# meta-control below, neither of which runs through expect_red/expect_green
+# because neither exercises a mutation. Any FAIL diagnostic text for a
 # control's own outcome is the caller's job, printed before this is called;
 # this only prints the PASS line and does the counting.
 record_verdict() {
@@ -310,10 +198,15 @@ record_verdict() {
     fi
 }
 
-# expect_red <files> <name> <category> <required> [forbidden ...]
+# expect_red <files> <name> <required> [forbidden ...]
 expect_red() {
-    files="$1"; name="$2"; category="$3"; need="$4"; shift 4
-    if ! tally_category "$name" "$category"; then
+    files="$1"; name="$2"; need="$3"; shift 3
+    if [ -z "$files" ]; then
+        echo "  FAIL: BROKEN FIXTURE: $name"
+        echo "        called with no files to verify a mutation landed in --"
+        echo "        a control with nothing to check injection_landed() against"
+        echo "        cannot prove its mutation ran; it is not a dispatcher call."
+        record_verdict "$name" 0
         restore
         return
     fi
@@ -374,10 +267,15 @@ expect_red() {
     restore
 }
 
-# expect_green <files> <name> <category>
+# expect_green <files> <name>
 expect_green() {
-    files="$1"; name="$2"; category="$3"
-    if ! tally_category "$name" "$category"; then
+    files="$1"; name="$2"
+    if [ -z "$files" ]; then
+        echo "  FAIL: BROKEN FIXTURE: $name"
+        echo "        called with no files to verify a mutation landed in --"
+        echo "        a control with nothing to check injection_landed() against"
+        echo "        cannot prove its mutation ran; it is not a dispatcher call."
+        record_verdict "$name" 0
         restore
         return
     fi
@@ -423,19 +321,21 @@ add_probe_def() {
 
 # ---------------------------------------------------------------------------
 # POSITIVE CONTROL. Without it, every red below could be the sandbox itself.
-#
-# Routed through expect_green() itself (round 8) with an EMPTY file list: the
-# "for _f in $files" injection-landed loop iterates zero times over an empty
-# $files, so this is exactly "run the gate, expect PASS" with no mutation to
-# verify -- expect_green's own shape, not a lookalike. Before round 8 this
-# hand-rolled its own "PASS:"/passed++ instead of calling the dispatcher; that
-# was the in-file template a rogue bypass could copy undetected. See the
-# header's TESTED, NOT ASSUMED paragraph for what routing this control (and
-# the meta-control below) through the dispatcher does and does not fix.
+# There is no mutation for it to verify landed, so it does not go through
+# expect_green() (round 9: an empty file list through the dispatcher was a
+# fixture-integrity hole -- see expect_red/expect_green's own BROKEN FIXTURE
+# guard above) -- it runs the gate directly and records the verdict itself,
+# the same as the meta-control below.
 # ---------------------------------------------------------------------------
-expect_green "" \
-    "positive control - unmutated sandbox tree passes the census" \
-    "core"
+positive_name="positive control - unmutated sandbox tree passes the census"
+out=$(sh "$GATE" "$ROOT" 2>&1)
+if [ $? -eq 0 ]; then
+    record_verdict "$positive_name" 1
+else
+    echo "  FAIL: the census rejected a legitimate, unmutated tree: $positive_name"
+    printf '%s\n' "$out" | sed 's/^/          /'
+    record_verdict "$positive_name" 0
+fi
 
 # ---------------------------------------------------------------------------
 # META-CONTROL. The no-op detector must go red on a dead anchor. The anchor
@@ -444,28 +344,19 @@ expect_green "" \
 #
 # This does not run the gate at all -- it tests injection_landed() directly --
 # so it cannot be expressed as an expect_red()/expect_green() call the way the
-# positive control above was. It still calls tally_category() and
-# record_verdict() itself (round 8), the same two functions the dispatcher
-# calls, so this is an exception to "every control is invoked through
-# expect_red()/expect_green()" -- it shares the dispatcher's
-# verdict-recording, not its gate-running. This control's SOURCE is the only
-# one in the file with no expect_red/expect_green call on ANY path.
-# (Control 20's fixture-integrity guard, below, has a second bypass site in
-# its source, but only on a defensive fallback path that is not exercised in
-# this tree -- see the header paragraph this control's category call feeds,
-# which states the two precisely rather than as one count.)
+# other controls are. It calls record_verdict() itself, the same function the
+# dispatcher calls, so this and the positive control above are the two
+# controls in the file with no expect_red/expect_green call on any path.
 # ---------------------------------------------------------------------------
 meta_name="meta-control - an injection whose anchor no longer matches is caught as a no-op"
-if tally_category "$meta_name" "core"; then
-    sed -i 's|^static void bind_to_executive(void)$|static void bind_to_executive(void) /* evasion */|' "$C"
-    if injection_landed "$C"; then
-        echo "  FAIL: meta-control - an injection anchored to a function that does not"
-        echo "        exist was reported as having landed, so a future rename would"
-        echo "        silently disarm every control below"
-        record_verdict "$meta_name" 0
-    else
-        record_verdict "$meta_name" 1
-    fi
+sed -i 's|^static void bind_to_executive(void)$|static void bind_to_executive(void) /* evasion */|' "$C"
+if injection_landed "$C"; then
+    echo "  FAIL: meta-control - an injection anchored to a function that does not"
+    echo "        exist was reported as having landed, so a future rename would"
+    echo "        silently disarm every control below"
+    record_verdict "$meta_name" 0
+else
+    record_verdict "$meta_name" 1
 fi
 restore
 
@@ -477,7 +368,6 @@ add_probe_decl
 add_probe_def
 expect_red "$H $C" \
     "a new entry point with no caller and no declaration is caught by name" \
-    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -488,8 +378,7 @@ add_probe_decl
 add_probe_def
 add_decl_comment "OVMX-UNWIRED: vms_kif_negctl_probe (vms-7fb) -- negative control fixture"
 expect_green "$H $C" \
-    "a declared unwired entry point passes" \
-    "core"
+    "a declared unwired entry point passes"
 
 # ---------------------------------------------------------------------------
 # 3. A declaration with no item id. Declared against vms_kif_enq -- an entry
@@ -501,7 +390,6 @@ expect_green "$H $C" \
 add_decl_comment "OVMX-UNWIRED: vms_kif_enq -- will get to it later, honest"
 expect_red "$H" \
     "an unwired declaration with no item id is rejected" \
-    "core" \
     "$F_MALFORMED" "$F_UNDECL" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -515,7 +403,6 @@ add_probe_def
 sed -i 's|^        (void)uname;$|        (void)uname;\n        /* vms_kif_negctl_probe(1); -- conversion is future work */|' "$SHOW"
 expect_red "$H $C $SHOW" \
     "a caller that exists only in a comment does not count" \
-    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -529,7 +416,6 @@ add_probe_def
 sed -i 's|^    status = vms_kif_getdvi_devnam(ABSENT_DEV, \&info);$|    status = vms_kif_getdvi_devnam(ABSENT_DEV, \&info);\n    (void)vms_kif_negctl_probe(1);|' "$QTEST"
 expect_red "$H $C $QTEST" \
     "a caller that exists only in tests/ is not a product path" \
-    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -542,7 +428,6 @@ add_probe_def
 printf '\nstatic void kif_negctl_dead(void)\n{\n    (void)vms_kif_negctl_probe(1);\n}\n' >> "$C"
 expect_red "$H $C" \
     "a caller inside vms_kif.c that nothing reaches does not count" \
-    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -555,8 +440,7 @@ add_probe_decl
 add_probe_def
 sed -i 's|^    (void)vms_kif_register(NULL);$|    (void)vms_kif_register(NULL);\n    (void)vms_kif_negctl_probe(1);|' "$C"
 expect_green "$H $C" \
-    "a call from kif_bind() counts: the bind path is reachable from every wired wrapper" \
-    "core"
+    "a call from kif_bind() counts: the bind path is reachable from every wired wrapper"
 
 # ---------------------------------------------------------------------------
 # 8. A prototype at file scope is not a call. Re-declaring the entry point in
@@ -567,7 +451,6 @@ add_probe_def
 sed -i 's|^#include "prvdef.h"|uint32_t vms_kif_negctl_probe(uint32_t x);\n#include "prvdef.h"|' "$SHOW"
 expect_red "$H $C $SHOW" \
     "a prototype at file scope is not a caller" \
-    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -577,7 +460,6 @@ expect_red "$H $C $SHOW" \
 add_decl_comment "OVMX-UNWIRED: vms_kif_enq (vms-7fb) -- stale, it has been wired since"
 expect_red "$H" \
     "a stale declaration on a wired entry point is rejected" \
-    "core" \
     "$F_STALE" "$F_UNDECL" "$F_MALFORMED" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -587,7 +469,6 @@ expect_red "$H" \
 add_decl_comment "OVMX-UNWIRED: vms_kif_no_such_entry (vms-7fb) -- typo or ghost"
 expect_red "$H" \
     "a declaration naming a non-existent entry point is rejected" \
-    "core" \
     "$F_UNKNOWN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -600,7 +481,6 @@ add_decl_comment "OVMX-UNWIRED: vms_kif_negctl_probe (vms-7fb) -- fixture"
 add_decl_comment "OVMX-UNWIRED: vms_kif_negctl_probe (vms-2a8) -- fixture, second owner"
 expect_red "$H $C" \
     "the same entry point declared twice is rejected" \
-    "core" \
     "$F_DUP" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -612,7 +492,6 @@ expect_red "$H $C" \
 sed -i 's|^    while (vms_kif_procscan(&index, &info) & 1) {|    while (dcl_local_procscan(\&index, \&info) \& 1) {|' "$SHOW"
 expect_red "$SHOW" \
     "an existing wired facility that loses its product caller is caught" \
-    "core" \
     "vms_kif_procscan" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -677,7 +556,6 @@ DEF_CLOSE='^void vms_kif_close(void)$'
 sed -i "/$PROTO_CHAN/d" "$H"
 expect_red "$H" \
     "deleting a prototype is a RED naming what vanished, not a smaller pass" \
-    "pin" \
     "$F_ORPHAN_DEF" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
@@ -686,7 +564,6 @@ expect_red "$H" \
 sed -i "/$DEF_CLOSE/,/^}$/d" "$C"
 expect_red "$C" \
     "deleting a definition is a RED naming what vanished" \
-    "pin" \
     "$F_ORPHAN_PROTO" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
@@ -700,7 +577,6 @@ sed -i '/OVMX-UNWIRED: vms_kif_devscan/d' "$H"
 sed -i "/$DEF_DEVSCAN/,/^}$/d" "$C"
 expect_red "$H $C" \
     "deleting a wrapper outright strands its kernel opcode and is caught" \
-    "pin" \
     "VMS_IOCTL_DEVSCAN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_SEL"
 
@@ -713,7 +589,6 @@ sed -i '/OVMX-UNWIRED: vms_kif_getdvi_chan/d' "$H"
 sed -i "s|$DEF_CHAN|static &|" "$C"
 expect_red "$H $C" \
     "an entry point cannot leave the census by going static" \
-    "pin" \
     "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
@@ -740,7 +615,6 @@ sed -i 's/vms_kif_getdvi_chan/kif_getdvi_chan_impl/g' "$H"
 sed -i 's/vms_kif_getdvi_chan/kif_getdvi_chan_impl/g' "$C"
 expect_red "$H $C" \
     "renaming an entry point out of the vms_kif_ namespace does not remove it" \
-    "pin" \
     "kif_getdvi_chan_impl
 $F_ORPHAN_DEF
 $F_UNDECL" \
@@ -760,7 +634,6 @@ sed -i "s|$DEF_DEVSCAN|static &|" "$C"
 sed -i 's/vms_kif_devscan/kif_devscan_impl/g' "$C"
 expect_red "$H $C" \
     "renaming out of the namespace AND going static does not remove it either" \
-    "pin" \
     "kif_devscan_impl" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
@@ -777,7 +650,6 @@ sed -i '/OVMX-UNWIRED: vms_kif_getdvi_chan/d' "$H"
 sed -i "/$DEF_CHAN/,/^}$/d" "$C"
 expect_red "$H $C" \
     "deleting a shared-opcode wrapper strands its kernel selector and is caught" \
-    "pin" \
     "VMS_DVI_SEL_CHAN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
@@ -813,12 +685,6 @@ if ! grep -rl "[^A-Za-z0-9_]${COLLIDE}[ 	]*(" "$ROOT/src" --include='*.c' 2>/dev
     echo "        and there is none. Pick another real product function name;"
     echo "        do NOT drop the control -- without a real collision it tests"
     echo "        nothing and would report PASS anyway."
-    # Round 8: was a hand-rolled "failed=$((failed + 1)); status=1" here, found
-    # by grepping this file for exactly that pattern while auditing the claim
-    # below that record_verdict() is the only place it happens -- it was not,
-    # this predates round 8, and it also skipped tally_category(), so a broken
-    # fixture on this path undercounted $pin_total too. Routed through both.
-    tally_category "an unwired wrapper renamed onto a product function's name is NOT credited to it" "pin"
     record_verdict "an unwired wrapper renamed onto a product function's name is NOT credited to it" 0
 else
     sed -i "/$PROTO_DEVSCAN/d" "$H"
@@ -826,7 +692,6 @@ else
     sed -i "s|^uint32_t vms_kif_devscan(|static uint32_t ${COLLIDE}(|" "$C"
     expect_red "$H $C" \
         "an unwired wrapper renamed onto a product function's name is NOT credited to it" \
-        "pin" \
         "$COLLIDE
 $F_UNDECL" \
         "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
@@ -850,17 +715,6 @@ fi
 #     header -- an existing property (control 9's, "stale declaration on a
 #     wired entry point"), reached by a new route.
 #
-#     APPENDED LAST, AFTER EVERYTHING ELSE IN THIS FILE WAS ALREADY GREEN, AS
-#     THE REQUIRED PROOF THAT THE DISPATCHER NEEDS NO COMPANION EDIT. This is
-#     the one line added for it: the expect_red call below with category
-#     "pin". Nothing else in this file changed to make $pin_total follow --
-#     see RUN, NOT DESCRIBED at the end of this comment for the before/after.
-#     That is the property round 6's separate `pin_total=$((pin_total + 1))`
-#     line could not deliver: 1106d13 added control 20 as a real commit,
-#     mechanically the same size as this one, and the printed total stayed
-#     wrong for two rounds because bumping it was a second action nothing
-#     forced. Here there is nothing to skip.
-#
 #     A GAP THIS CONTROL EXPOSED, WHILE PROVING THE POINT, RECORDED HONESTLY
 #     RATHER THAN QUIETLY ROUTED AROUND. The reason 21 is caught is that the
 #     collision TARGET (vms_kif_setmode) happens to carry a declaration.
@@ -879,24 +733,11 @@ sed -i 's/vms_kif_kerr_to_ss/vms_kif_setmode/g' "$H"
 sed -i 's/vms_kif_kerr_to_ss/vms_kif_setmode/g' "$C"
 expect_red "$H $C" \
     "renamed onto a sibling's name, the sibling's own declaration goes stale" \
-    "pin" \
     "$F_STALE" \
     "$F_UNDECL" "$F_MALFORMED" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
-# ---------------------------------------------------------------------------
-# RUN, NOT DESCRIBED. Immediately before control 21 was appended above (only
-# the "expect_red ... category pin" call block, nothing else in this file
-# touched): "controls: 22 passed, 0 failed" / "universe-pin controls run: 8".
-# Immediately after, same command, same file otherwise unchanged:
-# "controls: 23 passed, 0 failed" / "universe-pin controls run: 9". The
-# summary line below is what printed both times; it was not hand-edited
-# between them.
-# ---------------------------------------------------------------------------
 echo "  controls: $passed passed, $failed failed"
-echo "  universe-pin controls run: $pin_total (13 onward -- see the header for what"
-echo "          each proves; tallied by expect_red()/expect_green() themselves as a"
-echo "          byproduct of running each control, not by a second statement here)"
 if [ "$status" -eq 0 ]; then
     echo "vms_kif census negative controls: PASS"
 else

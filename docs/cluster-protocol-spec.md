@@ -1873,6 +1873,84 @@ in the window are joiner-initiated and every resource is Files-11/MOUNT
 (`MOU$_`, `F11B$*`, `VCC$v`, `DMT$_`), never `CNX$`/quorum. A lock-less OVMX
 likely needs to emit **no** outbound DLM to reach or hold `MEMBER`.
 
+### 4(r) The connection-manager ROLE SLOT and TRANSITION CLASS — `body[16]`, `body[17]` (GROUNDED, `vms-e4b`)
+
+Census over 26 captures in both capture trees, all 204-byte `0x6007` frames.
+`body[0]` = abs 72, so `body[16:18]` = abs 88:90.
+
+**`body[16]` is a stable ROLE SLOT.** It partitions the category-`0x01`
+connection-manager opcodes with zero residuals:
+
+| role | opcodes | meaning |
+|---|---|---|
+| `0x10` | `0x12` (and the coordinator's `0x81/0x0b`) | announce / relay |
+| `0x20` | `0x03`, `0x05`, `0x06`, joiner's `0x02` | commit / lock push |
+| `0x30` | `0x0f` | the extra step of a class-`0x03` transition |
+| `0x40` | `0x09`, `0x08`, `0x0d` | **transition-open** |
+| `0x60` | `0x0a` | barrier GO |
+
+**`body[17]` is the TRANSITION CLASS — not a generation.** The epoch is
+`body[12:16]` (LE u32), where §4(j) and §4(p) already put it.
+
+| class | transition | has `0x05`/`0x06`? | has the 12-step barrier? | opened by |
+|---|---|---|---|---|
+| `0x02` | ADD a member | yes | **yes** | `op 0x09`, tag `0x0240` |
+| `0x03` | REMOVE a failed member | no | **yes** | `op 0x08`, tag `0x0340` |
+| `0x04` | a node announces its OWN departure | no | **no** | `op 0x0d`, tag `0x0440` |
+
+A class-`0x04` departure is `0x12` → `0x03` → `0x0d` → `0x0a` and then nothing;
+an `0x81/0x0b` carrying class `0x04` occurs in **no** capture.
+
+The `op 0x0a` tag is `(class << 8) | role`, i.e. `0x0260` / `0x0360` / `0x0460`.
+Two of the three start a barrier.
+
+**Two things this REFUTES, both of which had been believed:**
+
+1. *`body[16:18]` is `<generation><role>`* — no. `af2-firsttimer-established-20260728.pcap`
+   contains six successive transitions whose epoch runs **3, 4, 6, 7, 9, 11**
+   (monotone) while `body[17]` runs **`0x04, 0x04, 0x02, 0x04, 0x02, 0x02`** — it
+   goes *down*. Frames 1826/1828/1830/1832, 2638/2986/2989, 19431/19433/19435/19440,
+   20247/20595/20598, 33670/34018/34021.
+2. *The transition-open opcode varies with generation (`0x09` gen-2, `0x08` gen-3,
+   `0x0d` gen-4)* — no. That triple is the three **classes**, which merely look
+   like consecutive small integers. The same capture runs three successive ADD
+   transitions at epochs 6, 9 and 11 and opens every one with `op 0x09` / tag
+   `0x0240`; `0x81/0x09` is 54/54 library-wide.
+
+**The role slot must NOT be used as the response key.** Role `0x20` alone spans
+`op 0x03`/`0x05` (full-body echo), `op 0x06` (answered with a cat-`0x04` ack and
+**never** an echo — 7882 frames) and the joiner's own `op 0x02`. Keying on the
+role would fire a 132-byte echo at the entire `op 0x06` burst. Role tags do not
+exist at all on categories `0x02` and `0x06` — the two categories that have
+already bugchecked real VAXes. **The response key is `(SYSAP, category, opcode)`;
+the role slot is a corroborating cross-check and the place the class is read
+from.**
+
+**And an opcode alone is not an identifier either.** `op 0x0d` is the
+class-`0x04` transition-open in category `0x01` and the DLM lock-resource rebuild
+record in category `0x02`, and a single join carries **216** of the latter.
+
+**Response recipes by opcode** (cat `0x01`), each a verbatim body echo plus
+`body[8] |= 0x80` and then:
+
+| opcode | extra mutations |
+|---|---|
+| `0x03`, `0x05`, `0x08`, `0x09`, `0x0d` | `body[18] = 0x01`; `body[55] = 0x00` on `0x09` only (§4(p)) |
+| `0x0f` | **none** — `body[18]` is *echoed*, not forced |
+| `0x12` | `body[18] = 0x01`; `body[17]` = the responder's own current class; `body[20:24]` = LE u32 copy of the request's `body[12:16]` (the epoch) |
+| `0x06` | never `0x81` — answered with cat-`0x04` acks |
+| `0x0a`, `0x0c` | never answered (`txn = 0`) |
+
+> The `0x0f` row reconciles two censuses that looked contradictory. One found a
+> single real `0x0f` response with `body[18] == 1`; the other found six that leave
+> it `0`. The first specimen's **request** already carried `1` — so both are
+> echoes, and neither is a node setting the byte.
+
+**Not accounted for:** what `op 0x0f` (role `0x30`) *means*, and why one responder
+additionally flipped `body[20]` `0x0e`→`0x1e` where another answering the same
+byte did not. `scs-node-leave.pcap` contains no transition frames at all and is
+not usable as a departure specimen; the `af2-*` captures are.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

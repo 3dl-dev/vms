@@ -1235,11 +1235,14 @@ not a hang and not a clean suite failure -- traced, not guessed:
      which (with vms_kif_register() deleted from kif_bind()) never registers;
      the kernel's per-call check rejects the unbound task with -ESRCH, which
      vms_kif_kerr_to_ss() maps to SS$_BUGCHECK, not SS$_IVLOCKID -- so "sys$deq
-     on an unknown lock ID reports SS$_IVLOCKID" reddens. Same wall as
-     test_syssvc_lock's "sys$deq on an unknown lock ID reports SS$_IVLOCKID"
-     entry in lock-compat-cr-ex's knock_on -- a DIFFERENT defect reaching the
-     SAME assertion text is not a collision, it is two mutations exercising
-     the same call from different angles.
+     on an unknown lock ID reports SS$_IVLOCKID" reddens. That exact
+     assertion text is named twice in this manifest -- by this defect's
+     require_fail and by bind-client-no-register's knock_on_fail, both
+     against test_syssvc_lock_status. A DIFFERENT defect reaching the SAME
+     assertion text is not a collision; it is two mutations exercising the
+     same call from different angles. (Verify with: facility_defects.sh
+     field <defect> <list> | grep IVLOCKID -- do not take this from the
+     comment.)
   2. scenario_cvtungrant forks a child that also cannot register; the child's
      own sys$enqw(EX) fails, so it _exit(1)s WITHOUT writing to ready_pipe --
      the parent's read_bounded() sees EOF, not the expected byte, so "parent:

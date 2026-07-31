@@ -521,6 +521,60 @@ static void test_mscp_disk_affirmative(void)
                 "MSCP$TAPE result [78:94] == 'NOT PRESENT HERE' (miss unchanged)");
 }
 
+/*
+ * vms-e81: the op-5 CONFIRM5 must NOT be "the op-3 confirm with a different
+ * opcode". It is FOUR BYTES SHORTER -- the trailing marker word is absent and
+ * BOTH length words are re-derived. Building it the obvious way emits 62 bytes
+ * declaring 60, which a peer drops as a runt IN SILENCE (there is no NAK in this
+ * protocol), and the next frame then dies on the sequence gap. That is the exact
+ * failure that stalled the join for three sessions, so it is tested explicitly:
+ * every assertion below is a length or a length-derived field.
+ */
+static void test_build_mscp_confirm5(void)
+{
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, vax1_mac, 6);
+    memcpy(p.src_mac, ovmx_logical, 6);
+    memcpy(p.src_logical, ovmx_logical, 6);
+    memcpy(p.peer_logical, vax1_mac, 6);
+    p.remote_conid = 0xb018000dU; /* peer's handle, from its op-4 [54:58] */
+    p.local_conid  = 0x7462000bU; /* ours, the one we sent in our op-0 */
+    p.incarnation  = 1;
+    p.recv_ack = 9;
+    p.send_seq = 10;
+
+    uint8_t out[SCS_DIR_CONFIRM5_FRAME_LEN];
+    check(scs_dir_build_mscp_confirm5(&p, out) == 0, "build_mscp_confirm5 succeeds");
+
+    /* THE POINT: 72 wire / 58 SCA, four bytes shorter than the op-3 confirm. */
+    check(SCS_DIR_CONFIRM5_FRAME_LEN == 72 && SCS_DIR_CONFIRM5_SCA_LEN == 58,
+          "confirm5 is 72 wire / 58 SCA (NOT the confirm's 76/62)");
+    check(SCS_DIR_CONFIRM5_FRAME_LEN == SCS_DIR_CONFIRM_FRAME_LEN - 4,
+          "confirm5 is exactly 4 bytes shorter than the op-3 confirm");
+
+    /* Both length words DERIVED from what we emit, never inherited. */
+    check(le16(out + 14 + 0) == (uint16_t)(SCS_DIR_CONFIRM5_SCA_LEN - 2),
+          "outer length word [0:2] == 56, derived from the 58-byte SCA");
+    check(le16(out + 14 + 42) == 14, "inner length word [42:44] == 14 (not the confirm's 18)");
+
+    check(le16(out + 14 + 46) == 5, "op [46:48] == 5");
+    check(out[14 + 16] == 0x4b, "msgtype [16] == 0x4b SEQAPP (never mirrors the op-4)");
+    check(le16(out + 14 + 48) == 0, "flag [48:50] == 0 (336/336 on the wire)");
+
+    /* Con.ID convention: peer's handle first, ours second -- same as op 3. */
+    check(le32(out + 14 + 50) == 0xb018000dU, "remote Con.ID [50:54] == the peer's handle");
+    check(le32(out + 14 + 54) == 0x7462000bU, "local Con.ID [54:58] == our own handle");
+
+    /* Counters substituted in all three mirrors. */
+    check(le16(out + 14 + 18) == 9 && le16(out + 14 + 26) == 9 && le16(out + 14 + 34) == 9,
+          "recv_ack substituted at [18]/[26]/[34]");
+    check(le16(out + 14 + 20) == 10 && le16(out + 14 + 30) == 10,
+          "send_seq substituted at [20]/[30]");
+
+    check(scs_dir_build_mscp_confirm5(NULL, out) == -1, "confirm5 NULL params rejected");
+}
+
 int main(void)
 {
     printf("test_scs_dir: SCS$DIRECTORY connect + SCS$DIR_LOOKUP (vms-246)\n");
@@ -531,6 +585,7 @@ int main(void)
     test_build_connect_confirm();
     test_mscp_server_builders();
     test_mscp_disk_affirmative();
+    test_build_mscp_confirm5();
     printf("test_scs_dir: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

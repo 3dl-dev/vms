@@ -221,6 +221,57 @@ static const uint8_t dir_confirm_tmpl[SCS_DIR_CONFIRM_SCA_LEN] = {
     /* [58:62] */ 0x00, 0x00, 0x01, 0x00                    /* marker = 0x00010000 */
 };
 
+/*
+ * vms-e81: the op-5 CONFIRM5 template -- 58 SCA bytes, NOT 62.
+ *
+ * It is tempting to build this as "the op-3 confirm with the opcode changed",
+ * and that would have been wrong in the way this project keeps getting caught.
+ * A 336-frame census (every op 5 in the capture library, across 4 sender nodes
+ * and 15 captures) says op 5 differs from op 3 in FOUR places, not one:
+ *
+ *   [0:2]   0x003c -> 0x0038   outer length word   (SCA 62 -> 58)
+ *   [42:44] 0x0012 -> 0x000e   inner length word   (18 -> 14)
+ *   [46:48] 0x0003 -> 0x0005   opcode
+ *   [58:62] the trailing marker word is ABSENT -- the frame ENDS at 58
+ *
+ * Copying the op-3 template and patching only the opcode would have emitted 62
+ * bytes declaring 60, i.e. a frame four bytes longer than it claims. That is the
+ * exact shape of the malformed op-7 that stalled the whole join for three
+ * sessions: DERIVE LENGTH WORDS FROM WHAT YOU EMIT, NEVER INHERIT THEM. A peer
+ * drops the over-long frame as a runt and the next frame dies on the sequence
+ * gap -- in silence, because there is no NAK anywhere in this protocol.
+ *
+ * [16] is 0x4b (SEQAPP), NOT a mirror of the op-4 being answered: 86 of the
+ * observed pairs answer a 0x5b op-4 with a 0x4b op-5, and all three op-5s a real
+ * VAX has ever sent AT OVMX are 0x4b.
+ */
+static const uint8_t dir_confirm5_tmpl[SCS_DIR_CONFIRM5_SCA_LEN] = {
+    /* [0:2]   */ 0x38, 0x00,                               /* outer length = 56 (SCA 58) */
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,       /* dst logical (SUBST) */
+    /* [8:10]  */ 0x01, 0x00,                               /* connect flag (336/336) */
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x4b, 0x13,                               /* SEQAPP -- never mirrors the op-4 */
+    /* [18:20] */ 0x02, 0x00,                               /* recv_ack (SUBST) */
+    /* [20:22] */ 0x02, 0x00,                               /* send_seq (SUBST) */
+    /* [22:24] */ 0x01, 0x00,                               /* incarnation (SUBST) -- OUR OWN */
+    /* [24:26] */ 0x12, 0x00,
+    /* [26:28] */ 0x02, 0x00,                               /* recv_ack mirror (SUBST) */
+    /* [28:30] */ 0x00, 0x00,
+    /* [30:32] */ 0x02, 0x00,                               /* send_seq mirror (SUBST) */
+    /* [32:34] */ 0x00, 0x00,
+    /* [34:36] */ 0x02, 0x00,                               /* recv_ack 3rd (SUBST) */
+    /* [36:38] */ 0x00, 0x00,
+    /* [38:40] */ 0x01, 0x00,
+    /* [40:42] */ 0x00, 0x02,
+    /* [42:44] */ 0x0e, 0x00,                               /* inner length = 14 */
+    /* [44:46] */ 0x04, 0x00,
+    /* [46:48] */ 0x05, 0x00,                               /* op = 5 (MSCP connect-CONFIRM5) */
+    /* [48:50] */ 0x00, 0x00,                               /* flag = 0 (336/336) */
+    /* [50:54] */ 0x08, 0x00, 0xdc, 0xe2,                   /* remote Con.ID (SUBST, peer's) */
+    /* [54:58] */ 0x07, 0x00, 0x00, 0x00                    /* local Con.ID (SUBST, ours) */
+    /* NO marker word -- the frame ends here. */
+};
+
 static void put_le16(uint8_t *dst, uint16_t v)
 {
     dst[0] = (uint8_t)(v & 0xff);
@@ -557,5 +608,40 @@ int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v)
         v->is_lookup_request = 1;
     }
 
+    return 0;
+}
+
+/*
+ * scs_dir_build_mscp_confirm5 - answer a peer's op-4 ACCEPT4 with an op-5
+ * CONFIRM5, completing the "form B" accept of a connection WE opened.
+ *
+ * There are two accept forms on an MSCP$DISK connection and OVMX only ever
+ * implemented half of each:
+ *   form A: op 0 -> op 1 -> op 2 RESPONSE -> op 3 CONFIRM      (we handle this)
+ *   form B: op 0 -> op 1 -> op 4 ACCEPT4  -> op 5 CONFIRM5     (we EMIT op 4 as
+ *           a server, but could not CONSUME one as a client)
+ *
+ * The consequence was not a missing feature, it was a wedged node: when VAX3
+ * answered our connect with an op-4 we silently dropped it, then retransmitted
+ * the same request 60 times over 178 s with a frozen send_seq.
+ *
+ * Grounded on 336 op-5 frames from 4 sender nodes across 15 captures, including
+ * three a real VAX sent AT OVMX. Con.ID convention is identical to the op-3
+ * confirm: [50] = the peer's handle, taken from the op-4's [54]; [54] = our own,
+ * the handle we put in our op-0. Nothing follows an op-5 -- across all 336 the
+ * Con.ID pair never appears again (334 silent, 2 retransmits), so OVMX owes the
+ * peer nothing further on that connection.
+ */
+int scs_dir_build_mscp_confirm5(const struct scs_dir_params *p,
+                                uint8_t out[SCS_DIR_CONFIRM5_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_confirm5_tmpl, SCS_DIR_CONFIRM5_SCA_LEN, p->recv_ack,
+                     p->send_seq, p->incarnation, out);
+    put_le32(out + 14 + 50, p->remote_conid); /* peer's handle, from its op-4 [54] */
+    put_le32(out + 14 + 54, p->local_conid);  /* ours, the one we sent in our op-0 */
     return 0;
 }

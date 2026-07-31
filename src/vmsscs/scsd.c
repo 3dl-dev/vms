@@ -3473,6 +3473,56 @@ int main(int argc, char **argv)
                     continue;
                 }
             }
+            /* vms-e81: FORM B -- the peer accepts OUR MSCP$DISK connect with an
+             * op-4 ACCEPT4 instead of an op-2 RESPONSE, and it is answered with an
+             * op-5 CONFIRM5 instead of an op-3 CONFIRM.
+             *
+             * OVMX implemented exactly half of each form: it EMITS op 4 as a
+             * server but could not CONSUME one as a client. So when VAX3 answered
+             * our connect with an op-4 we dropped it in silence, never sent the
+             * op-5 it was waiting for, and then retransmitted the same request 60
+             * times over 178 s against a peer that had already accepted it.
+             *
+             * Both forms are reference-legal on this SYSAP; which one you get is
+             * the peer's choice, not a property of the request. Answering an op-4
+             * with an op-3 would be inventing a pairing the reference never
+             * emits -- across 336 op-5 frames the reply to an op-4 is an op-5,
+             * every time. Nothing follows it: the Con.ID pair never appears again
+             * (334 silent, 2 retransmits), so we owe the peer nothing more. */
+            if (rconid == OVMX_MSCP_CONID && lconid != 0 &&
+                dop == SCS_DIR_OP_ACCEPT) {
+                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                if (ps != NULL && !ps->mscp_connected) {
+                    /* recv accounting is done by the credit block earlier in the
+                     * receive path, exactly as for the op-2 sibling below. */
+                    ps->mscp_remote_conid = lconid;
+                    ps->mscp_connected = 1;
+                    struct scs_dir_params c5;
+                    memset(&c5, 0, sizeof(c5));
+                    memcpy(c5.dst_mac, ps->eth_mac, 6);
+                    memcpy(c5.src_mac, our_hw_mac, 6);
+                    memcpy(c5.src_logical, our_src_logical, 6);
+                    memcpy(c5.peer_logical, ps->logical, 6);
+                    c5.remote_conid = lconid;              /* peer's handle, its op-4 [54] */
+                    c5.local_conid = OVMX_MSCP_CONID;      /* ours, from our op-0 */
+                    c5.incarnation = ps->incarnation;
+                    c5.recv_ack = ps->vc.seq.recv_seq;
+                    c5.send_seq = scs_seq_advance(&ps->vc.seq);
+                    uint8_t f5[SCS_DIR_CONFIRM5_FRAME_LEN];
+                    if (scs_dir_build_mscp_confirm5(&c5, f5) == 0 &&
+                        send_frame_to(sock, (int)ifindex, ps->eth_mac, f5,
+                                      sizeof(f5)) > 0) {
+                        log_ts(stdout);
+                        printf(" SCSD-I-MSCPBOUND5, peer accepted OUR MSCP$DISK"
+                               " connect with op-4 ACCEPT4 -> sent op-5 CONFIRM5"
+                               " (local=0x%08X remote=0x%08X send_seq=%u)."
+                               " Nothing follows an op-5\n",
+                               (unsigned)OVMX_MSCP_CONID, lconid, c5.send_seq);
+                        fflush(stdout);
+                    }
+                }
+                continue;
+            }
             if (rconid == OVMX_MSCP_CONID && lconid != 0 && dop == SCS_DIR_OP_RESPONSE) {
                 struct peer_state *ps = peer_find_or_add(peers, src_mac);
                 if (ps != NULL && !ps->mscp_connected) {

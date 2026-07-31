@@ -100,6 +100,12 @@ extern "C" {
 #define SCS_DIR_LOOKUP_FRAME_LEN 108 /* 14 + 94 */
 #define SCS_DIR_CONFIRM_SCA_LEN   62
 #define SCS_DIR_CONFIRM_FRAME_LEN 76  /* 14 + 62 */
+/* vms-e81: the op-5 CONFIRM5 is FOUR BYTES SHORTER than the op-3 confirm -- the
+ * trailing marker word is absent and BOTH length words are re-derived. It is not
+ * "the confirm with a different opcode"; building it that way emits 62 bytes
+ * declaring 60. See dir_confirm5_tmpl in scs_dir.c. */
+#define SCS_DIR_CONFIRM5_SCA_LEN   58
+#define SCS_DIR_CONFIRM5_FRAME_LEN 72 /* 14 + 58 */
 
 /* Directory-connection operation codes ([46:48], byte-verified on the clean
  * 2-node formation dir-client dialogue, joiner handle 0x4e630007). */
@@ -304,5 +310,14 @@ int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v);
 #ifdef __cplusplus
 }
 #endif
+
+/*
+ * scs_dir_build_mscp_confirm5 - op-5 CONFIRM5 answering a peer's op-4 ACCEPT4 on
+ * a connection OVMX opened (the "form B" accept). remote_conid = the peer's
+ * handle from the op-4's [54:58]; local_conid = the handle OVMX sent in its
+ * op-0. incarnation is OUR OWN value, never an echo of the op-4's.
+ */
+int scs_dir_build_mscp_confirm5(const struct scs_dir_params *p,
+                                uint8_t out[SCS_DIR_CONFIRM5_FRAME_LEN]);
 
 #endif /* SCS_DIR_H */

@@ -65,9 +65,11 @@ struct lksb {
  * The kernel module (src/kernel/vms_internal.h, SS__xxx) uses a compact
  * internal numbering scheme that does NOT match the public ssdef.h
  * values for most lock-manager codes (e.g. "not queued" is 40 in the
- * kernel, SS$_NOTQUEUED is 2588 in ssdef.h). This is the boundary where
- * a raw kernel status crosses into the public sys$enq/sys$enqw/sys$deq
- * contract -- translate here, once, at the point a status is stored
+ * kernel; ssdef.h's SS$_NOTQUEUED is a different value -- see ssdef.h
+ * itself, not a number recited here to drift out of sync with it). This
+ * is the boundary where a raw kernel status crosses into the public
+ * sys$enq/sys$enqw/sys$deq contract -- translate here, once, at the
+ * point a status is stored
  * into the caller's LKSB or returned. Internal control flow in do_enq
  * (the wait-loop's success-bit and granted-mode checks) must keep using
  * the raw kernel value; only the value that actually leaves this file

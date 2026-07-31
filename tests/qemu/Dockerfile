@@ -84,8 +84,19 @@ RUN KVER=$(cat /tmp/kver) && \
 #                                 stage below against the REAL src/libvms
 #                                 public sys$ API (vms-1d9).
 #   test_kmod_devtab/procnam/  -> NOT built here; built below against
-#   test_kmod_ident/bind.c        src/libvmssys (the real kernel-interface
-#                                 client), see that stage's comment.
+#   test_kmod_ident/bind.c/       src/libvmssys (the real kernel-interface
+#   test_kmod_ast/access/lock/    client), see that stage's comment.
+#   lock_sync/lock_mproc.c        vms-290 added the last five: their
+#                                 DCLAST/SETAST/DELIVERAST/SETMODE/GETLKI
+#                                 call sites now go through vms_kif_* rather
+#                                 than a hand-rolled ioctl copy, but they
+#                                 still also drive the raw ioctl layer
+#                                 directly for the calls out of vms-290's
+#                                 scope (REGISTER, ENQ/DEQ/CONVERT, GETMODE,
+#                                 CHKPRIV/SETPRV, and one deliberate raw
+#                                 NULL-arg DELIVERAST -- see the comments in
+#                                 those sources), so they still need
+#                                 vms_ioctl.h on the include path too.
 #   everything else            -> plain gcc -static against vms_ioctl.h.
 #
 # `|| exit 1` is load-bearing: without it a compile failure only breaks the
@@ -97,21 +108,26 @@ RUN for f in /src/tests/qemu/test_*.c; do \
         case "$f" in \
             */test_syssvc_*.c) continue;; \
             */test_kmod_devtab.c|*/test_kmod_procnam.c|*/test_kmod_ident.c|*/test_kmod_bind.c) continue;; \
+            */test_kmod_ast.c|*/test_kmod_access.c|*/test_kmod_lock.c|*/test_kmod_lock_sync.c|*/test_kmod_lock_mproc.c) continue;; \
         esac; \
         out="${f%.c}"; \
         gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel || exit 1; \
         echo "Built: $(basename $out)"; \
     done
 
-# The device-table test (vms-d0b), the process-table test (vms-8019) and the
-# identity/privilege test (vms-2b8) drive the real userspace kernel-interface
-# client rather than a hand-rolled ioctl copy, so the client libvms will call is
-# the client under test. That needs libvmssys's freestanding syscall trampoline
-# and string helpers linked in -- it does NOT pull in libvms; the libvms build
-# graph arrives in the NEXT stage (vms-1d9), which is a heavier, separate build.
+# The device-table test (vms-d0b), the process-table test (vms-8019), the
+# identity/privilege test (vms-2b8) and the AST/access/lock-manager tests
+# (vms-290) drive the real userspace kernel-interface client rather than a
+# hand-rolled ioctl copy for at least part of their coverage, so the client
+# libvms will call is the client under test. That needs libvmssys's
+# freestanding syscall trampoline and string helpers linked in -- it does
+# not pull in libvms; the libvms build graph arrives in the NEXT stage
+# (vms-1d9), which is a heavier, separate build.
 COPY src/libvmssys/ /src/libvmssys/
 RUN ARCH=$(uname -m) && \
-    for t in test_kmod_devtab test_kmod_procnam test_kmod_ident test_kmod_bind; do \
+    for t in test_kmod_devtab test_kmod_procnam test_kmod_ident test_kmod_bind \
+             test_kmod_ast test_kmod_access test_kmod_lock test_kmod_lock_sync \
+             test_kmod_lock_mproc; do \
         gcc -static -O2 -Wall -pthread -o /src/tests/qemu/$t \
             /src/tests/qemu/$t.c \
             /src/libvmssys/vms_kif.c \

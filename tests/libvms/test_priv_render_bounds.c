@@ -45,15 +45,28 @@
  * THE DEFECT IS IN THE FUNCTION'S CONTRACT, NOT IN TODAY'S CALLERS.
  * dcl_eval_lexical() is `extern` and takes result_size as a caller-
  * supplied parameter -- its safety must not depend on "every caller
- * happens to pass 4096". Test 3/4 below demonstrate the defect directly:
- * render_csv_UNSAFE() is the pre-round-13 pattern, byte-for-byte, run
- * against the REAL privilege name table (generated from the same
- * VMS_PRIV_NAME_LIST X-macro dcl_cmd_show.c and dcl_lexical.c both read
- * -- not a hand-typed stand-in) with a buffer deliberately too small for
- * even the first two names. It corrupts a canary placed immediately
- * after the buffer. render_csv_SAFE() and render_grid_SAFE() mirror the
- * bound-checked pattern now at the two fixed call sites and leave the
- * same canary untouched under the same adversarial buffer size.
+ * happens to pass 4096". Test 3/4 below demonstrate the FIX directly:
+ * render_csv_SAFE() and render_grid_SAFE() mirror the bound-checked
+ * pattern now at the two fixed call sites, run against the REAL
+ * privilege name table (generated from the same VMS_PRIV_NAME_LIST
+ * X-macro dcl_cmd_show.c and dcl_lexical.c both read -- not a hand-typed
+ * stand-in) with a buffer deliberately too small for even the first two
+ * names, and leave a canary placed immediately after the buffer
+ * untouched.
+ *
+ * NOT REPRODUCED HERE: the pre-round-13 UNSAFE accumulation itself.
+ * An earlier version of this test included a byte-for-byte copy of it as
+ * a negative control (see git history/PR discussion) -- CodeQL correctly
+ * flagged that copy too (cpp/overflowing-snprintf, high), which is
+ * exactly the right behavior for a pattern that unconditionally
+ * corrupts memory: a scanner should not stop flagging a defect merely
+ * because the surrounding code calls it "intentional". Committing a
+ * live copy of the defect to prove the defect exists would leave the
+ * tree permanently carrying a real high-severity memory-safety alert,
+ * which is a worse outcome than the negative control it bought. Test 2
+ * below establishes the SAME property (the canary check can observe
+ * corruption, so its silence in Test 3/4 is signal and not a check that
+ * cannot fail) with an explicit, direct write instead.
  */
 
 #include <stdio.h>
@@ -115,29 +128,6 @@ static int fixture_canary_intact(const struct canary_fixture *f)
         if (f->canary[i] != 0xAA)
             return 0;
     return 1;
-}
-
-/*
- * render_csv_UNSAFE - byte-for-byte the pre-round-13 pattern that stood
- * at dcl_lexical.c:1472 before this round's fix. Kept ONLY to demonstrate
- * the defect; not used by product code.
- */
-static void render_csv_UNSAFE(char *out, size_t out_size, int n_names)
-{
-    size_t rl = 0;
-    for (int i = 0; i < n_names && test_priv_names[i].name; i++) {
-        /*
-         * INTENTIONAL. This is the negative control: it exists to
-         * reproduce the exact pre-round-13 defect (see the file header
-         * and the negative-control block in main()) so the test can
-         * prove the canary check is capable of catching it before
-         * trusting the same check's silence on the SAFE variants below.
-         * Never called with untrusted or unbounded input -- see
-         * main()'s only two call sites, both with a fixed
-         * UNSAFE_BUF_SIZE and a fixed name count.
-         */
-        rl += (size_t)snprintf(out + rl, out_size - rl, "%s%s", rl ? "," : "", test_priv_names[i].name); // codeql[cpp/overflowing-snprintf]
-    }
 }
 
 /*
@@ -213,24 +203,27 @@ int main(void)
           "4096-byte buffer every real caller supplies");
 
     /*
-     * Test 2 is the NEGATIVE CONTROL for Test 3/4 below, and runs
-     * FIRST so its result cannot be read as hindsight: it proves
+     * Test 2 is the NEGATIVE CONTROL for Test 3/4 below, and runs FIRST
+     * so its result cannot be read as hindsight: it proves
      * fixture_canary_intact() is capable of observing corruption at
-     * all, using the exact adversarial input (8-byte buffer, 4 real
-     * privilege names) Test 3/4 also use. Two real names already
-     * exceed 8 bytes -- test_priv_names[0] "ACNT" (4) + "," +
-     * test_priv_names[1] "ALLSPOOL" (8) = 13 bytes into an 8-byte
-     * buffer -- so this is the pre-round-13 defect CodeQL flagged,
-     * reproduced with real privilege names, not a synthetic string.
+     * all -- an explicit, direct out-of-declared-bounds write, not a
+     * reproduction of the CodeQL-flagged accumulation pattern (see the
+     * file header for why that reproduction was removed: CodeQL flags
+     * cpp/overflowing-snprintf on ANY copy of the unguarded pattern,
+     * intentional or not, and correctly so). This still proves what a
+     * negative control needs to prove: the SAME fixture and the SAME
+     * check function used by Test 3/4 DO detect corruption when it
+     * occurs, so their PASS below is signal, not a check that cannot
+     * fail.
      */
     {
         struct canary_fixture f;
         fixture_arm(&f);
-        render_csv_UNSAFE(f.buf, UNSAFE_BUF_SIZE, 4);
+        f.canary[0] = 0x00; /* direct corruption, not via snprintf */
         CHECK(!fixture_canary_intact(&f),
-              "negative control: UNSAFE pattern (pre-round-13) DOES "
-              "corrupt the canary past an undersized buffer, so the "
-              "PASS in Test 3/4 below is not a check that cannot fail");
+              "negative control: fixture_canary_intact() DOES detect a "
+              "corrupted canary byte, so the PASS in Test 3/4 below is "
+              "not a check that cannot fail");
     }
 
     /* Test 3: the SAME adversarial input against the SAFE (round-13)

@@ -199,42 +199,72 @@ on **VAX3 hangs at `%SHUTDOWN-I-STOPUSER`** and never completes (16+ min, twice)
 VAX3 is a diskless MOP-booted satellite. Both reference class-`0x04` specimens
 depart **VAX2**, a full member — which is why `dep10` targets VAX2.
 
+## 4b. `dep10` and `cyc1` — the two results that closed the session
+
+**`dep10` (class-0x04, VAX2 departing): UNATTRIBUTED, and the lab is the
+blocker.** VAX2's orderly shutdown answered all seven prompts and then stalled
+right after `N terminals have been notified`, never even reaching
+`%SHUTDOWN-I-STOPUSER`, for the full 15-minute grace. VAX3 stalled twice at
+`STOPUSER`. **No node in this lab completes an orderly `@SYS$SYSTEM:SHUTDOWN`**,
+so a class-`0x04` departure cannot currently be produced here at all. That is a
+lab property, not an OVMX one — OVMX joined and settled at four nodes in every
+one of these runs. Filed as **`vms-416`**, which now blocks `vms-ae5`. The
+harness refused to kill the node and marked the run unattributed rather than
+manufacturing a class-`0x03` and calling it a departure.
+
+**`cyc1` (join/exit cycling): a REAL DEFECT, and the best find of the session.**
+Cycle 1 joined normally (epoch `0x06`, `XITDONE=1`), OVMX was killed, the cluster
+removed it and settled back to three nodes in ~45 s. **Cycle 2 — the same
+`SCSNODE` and `SCSSYSTEMID`, ~15 s later — never reached four nodes**, for 240 s:
+`XITDONE=0`, `XITGO=0`, and *no transition of any class was opened by anybody*.
+
+OVMX is not silent and not obviously wrong. It established the VC with **both**
+peers, sent its own CONNECT-REQUEST, confirmed the VC, sent the full add-member
+burst (`op 0x14/0x01/0x02`), and correctly learned `members=3`. **The peers took
+the VC and then simply never proposed the addition**, eventually logging
+`lost connection` / `timed-out lost connection` for `OVMXCY`.
+
+**The constant Con.ID is RULED OUT as the cause** — this was the first run with
+the per-boot change and the log shows `local_conid=0x7C960002`, a fresh value.
+Filed as **`vms-2f3`** (P1), which blocks `vms-584`.
+
+*OVMX cannot come back.* "Survive cluster life as a MEMBER" has to include
+restarting, so this is a T1-level hole, and it would hit a real deployment on the
+first restart.
+
 ## 5. ⚠ WHERE TO START NEXT SESSION
 
-**A run is live at handoff.** `dep10` — graceful departure of **VAX2**, OVMX
-bystanding, 15-minute grace, tag `dep10`, node `OVMXDX`, sysid `1219`.
+Nothing is running and nothing is half-finished. Tree clean, 41/41 tests green,
+three commits landed. Take these in order:
 
-```bash
-tail -40 ~/vax/cluster/work/dep10.status          # the verdict
-L=~/vax/cluster/work/scsd-dep10.log
-grep -ac 'class=0x04' $L                          # >0 == the first bystander specimen
-grep -a 'XITION,\|CLUSTATE\|STRAYACK\|UNGROUNDED' $L | tail
-```
-
-**Read the status file before believing anything else.** If it says
-`PHASE2 WARNING ... UNATTRIBUTED`, VAX2 did not finish shutting down and the run
-says nothing about class `0x04` — it does *not* mean OVMX failed.
-
-Then, in the order I would take them:
-
-1. **Finish `vms-ae5`.** Its *fails* half is verified (`rm2`). If `dep10`
-   produced a class-`0x04` open with OVMX still MEMBER and no abort, the item
-   closes. If VAX2 also hangs at `STOPUSER`, then **no node in this lab can shut
-   down gracefully**, and that — not OVMX — is the blocker; file it and close
-   `vms-ae5` on the *fails* half with the *leaves* half moved to its own item.
+1. **`vms-2f3` — OVMX cannot rejoin.** Highest value, cheapest next step, and the
+   experiment is already written. Two hypotheses, both testable in one lab cycle:
+   - **Incarnation (prime).** Spec §4(i).B names the joiner-side incarnation
+     counter at `[22:24]` as **THE GATE** on admission. A peer still holding a CSB
+     for the previous incarnation of `OVMXCY` may require a value that differs
+     from the one it cached, and OVMX likely replays the same value every start.
+     **Cheap discriminator:** re-run `cycle.sh` giving cycle 2 a *different*
+     `SCSSYSTEMID`. If that rejoins, the gate is identity-scoped peer state and
+     the fix is our incarnation handling, not the join sequence.
+   - **Too soon.** `cycle.sh` waits ~15 s after the removal settles. Try a
+     60–120 s gap and see whether it rejoins on its own.
 2. **`vms-c7d`, now with a live reproducer** (§3). Removing OVMX's own barrier
-   peer stalls it at step 6/12. This is a genuine T1 hole and it is cheap to
-   reproduce.
-3. **The quorum experiment** (`tools/quorum.sh`, written and unrun). Grounded
+   peer stalls it at step 6/12 (`dep6`), while removing a third node completes
+   12/12 (`rm2`). Genuine T1 hole, cheap to reproduce.
+3. **The quorum experiment** (`tools/quorum.sh`, written and **unrun**). Grounded
    pre-flight: **quorum is 1 and VAX1 is the only voter**, so killing it
    *guarantees* quorum loss — the survivors are documented to block all process
-   and I/O activity and wait, recoverable without a reboot. The script therefore
-   reads OVMX's log and VAX2/VAX3's consoles rather than VAX1's, treats a hung
-   DCL as a *result*, and trips its watchdog only on bugcheck evidence from a
-   real VAX. **It depends on §4.1 being fixed**, which it now is.
-4. **`vms-584` item 5, join/exit cycling** (`tools/cycle.sh`, written and unrun).
-   Now unblocked by the per-boot Con.ID change — running it *before* that change
-   would have tested a defect we already knew about.
+   and I/O activity and wait, recoverable without a reboot. The script reads
+   OVMX's log and VAX2/VAX3's consoles rather than VAX1's, treats a hung DCL as a
+   *result*, and trips its watchdog only on bugcheck evidence from a real VAX.
+   It depended on §4.1, which is now fixed.
+4. **`vms-416` — make some node shut down cleanly**, which is the only way the
+   class-`0x04` evidence ever gets produced. Ideas are in the item: find what
+   SHUTDOWN is waiting on (`SHOW SYSTEM` on the departing node from VAX1), try
+   the `REMOVE_NODE` shutdown option, or check whether an absent queue manager /
+   audit server makes `SHUTDOWN.COM` wait on a step that never finishes.
+5. **Close `vms-ae5` on the *fails* half.** `rm2` verified it on today's binary;
+   the *leaves* half is now properly blocked behind `vms-416`.
 
 ## 6. Lab tooling added or fixed this session
 

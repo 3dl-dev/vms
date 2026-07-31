@@ -136,9 +136,7 @@ static void render_csv_UNSAFE(char *out, size_t out_size, int n_names)
          * main()'s only two call sites, both with a fixed
          * UNSAFE_BUF_SIZE and a fixed name count.
          */
-        // codeql[cpp/overflowing-snprintf]
-        rl += (size_t)snprintf(out + rl, out_size - rl, "%s%s",
-                               rl ? "," : "", test_priv_names[i].name);
+        rl += (size_t)snprintf(out + rl, out_size - rl, "%s%s", rl ? "," : "", test_priv_names[i].name); // codeql[cpp/overflowing-snprintf]
     }
 }
 

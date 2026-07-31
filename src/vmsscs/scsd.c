@@ -2917,19 +2917,40 @@ int main(int argc, char **argv)
                          * admission at it is not merely useless -- it is noise
                          * aimed at a node in the middle of its own join.
                          *
-                         * MEMBER-SIDE ORDERING (grounded, VAX1's side of
-                         * vax3-2to3): the member does NOT move first. VAX1
-                         * ACCEPTED VAX3's SCS$DIRECTORY (f107), MSCP$DISK (f122)
-                         * and VMS$VAXcluster (f132) connects, and only ~17 ms
-                         * later opened its OWN SCS$DIRECTORY to VAX3 (f162) and
-                         * then its MSCP$DISK client (f176). So for a newcomer we
-                         * wait until it has begun the directory exchange with us
-                         * (dir_seen) before initiating anything -- which is also
-                         * precisely what stops us shouting at a node that is busy
-                         * joining. The joiner path keeps its original behaviour of
-                         * moving first, because at startup nobody is expecting us. */
+                         * MEMBER-SIDE ORDERING -- CORRECTED, and the earlier
+                         * reading was BACKWARDS.
+                         *
+                         * I first concluded "the member does not move first",
+                         * from VAX1's leg of vax3-2to3 where VAX1 accepted VAX3's
+                         * connects and opened its own ~17 ms later. That leg is
+                         * joiner-first only because the joiner's scan happened to
+                         * fire first. THE SAME CAPTURE's VAX2 leg is MEMBER-FIRST
+                         * by 460 ms: VAX2 opened SCS$DIRECTORY (f190),
+                         * VMS$VAXcluster (f208) and MSCP$DISK (f223) to VAX3 when
+                         * VAX3 had sent it NOTHING but the HELLO/START handshake
+                         * -- no connect, no lookup, no config. Generalising from
+                         * one leg of one capture is the same error as reading
+                         * op 0x12's body[20:24] as a member count.
+                         *
+                         * A dedicated pure-VMS control settles it
+                         * (control-member-meets-late-node-20260730.pcap, VAX1+VAX2
+                         * live, then VAX3 boots in, no OVMX present): BOTH SIDES
+                         * INITIATE INDEPENDENTLY. Each node runs its own periodic
+                         * scan (~1 s) and opens whatever it lacks; the two
+                         * connection sets are separate Con.ID pairs and both are
+                         * expected to exist. The ONLY trigger is the completed
+                         * 0x41 START handshake -- in the reference the member's
+                         * connect follows its own START-ack with no intervening
+                         * frame in either direction.
+                         *
+                         * Waiting on dir_seen therefore DEADLOCKED us: a newcomer
+                         * whose own scan has not yet reached OVMX sees no
+                         * connection, so OVMX is correctly excluded from the
+                         * transition -- exactly what run by3 showed. We now
+                         * initiate once START is complete, symmetric with the
+                         * joiner. */
                         if (join_seq_enabled &&
-                            (!ps->appeared_after_join || ps->dir_seen) &&
+                            (!ps->appeared_after_join || ps->start_acked) &&
                             ps->join_step == JS_IDLE && !ps->own_dir_sent &&
                             send_own_dir_connect_request(sock, (int)ifindex, ps,
                                                          our_hw_mac, our_src_logical)) {
@@ -3356,7 +3377,7 @@ int main(int argc, char **argv)
                                " VC (OVMX_NO_OWN_VC) -- awaiting the member's VC connect\n");
                         fflush(stdout);
                     } else if (ps->join_step == JS_DIR_LOOKUP_VC && affirmative &&
-                               ps->appeared_after_join) {
+                               ps->appeared_after_join && ps->connected) {
                         /* vms-e81: a NEWCOMER we are meeting as a MEMBER. Our
                          * client half stops here. We must NOT open a
                          * VMS$VAXcluster VC to it and must NOT run admission at
@@ -3366,13 +3387,18 @@ int main(int argc, char **argv)
                          * opens its own VC only if the joiner has not). Admission
                          * is the newcomer's business with the coordinator; our job
                          * is to be reachable and to answer the barrier. */
+                        /* The newcomer has ALREADY opened a VC to us (ps->connected),
+                         * so we must not open a second one -- spec 4(o): a member
+                         * opens its own VC only if the joiner has not. Our client
+                         * half is done; we are reachable, and admission is the
+                         * newcomer's business with the coordinator. */
                         ps->join_step = JS_IDLE;
                         ps->js_retx = 0;
                         log_ts(stdout);
                         printf(" SCSD-I-MEMBGREET, newcomer client-half complete"
-                               " (dir + MSCP$DISK) -- NOT opening a VC and NOT"
-                               " running admission; awaiting its VC and the"
-                               " coordinator's barrier\n");
+                               " (dir + MSCP$DISK); it already opened a VC to us"
+                               " so we open none -- awaiting the coordinator's"
+                               " barrier\n");
                         fflush(stdout);
                     } else if (ps->join_step == JS_DIR_LOOKUP_VC && affirmative) {
                         /* VMS$VAXcluster resolved -> open the VC connect. */

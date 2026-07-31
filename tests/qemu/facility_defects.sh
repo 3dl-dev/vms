@@ -301,22 +301,11 @@ EOF
         why)          echo "\$SETAST(disable) stops disabling: the enable flag is written as 1 whatever the caller asked for. Queueing, quota and mode checks are untouched.";;
         require_fail) cat <<'EOF'
 disable again: prev state was disabled
-SETAST(enable) returns WASCLR
+SETAST(enable) returns WASCLR (== prev state was disabled)
 EOF
                       ;;
-        knock_on_fail) cat <<'EOF'
-prev state was disabled
-EOF
-                      ;;
-        knock_on_why) cat <<'EOF'
-test_kmod_ast.c:86-87 reads ONE ioctl result two ways: line 86 checks the
-returned status (SS$_WASCLR) and line 87 checks the prev_state field of the
-same struct. Both are the executive's answer to the same question -- "was AST
-delivery disabled before this call?" -- so a defect in the disable path
-necessarily shows up at both. Listing only the status assertion and calling
-the field assertion a stray would be arithmetic, not minimality.
-EOF
-                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why) echo "";;
         esac;;
 
     eflag-clref-noop)
@@ -488,7 +477,7 @@ immediately, so everything that depends on it having waited stops happening:
 No finer mutation exists: this is a single entry of a single matrix, the same
 shape as the vms-e4d precedent. Making it finer would mean not flipping it.
 NOTE, and it is a finding rather than a defect in this control:
-test_kmod_lock_sync.c:285 "child: async CR queued behind parent EX" STAYS GREEN
+test_kmod_lock_sync.c "child: async CR queued behind parent EX" STAYS GREEN
 under this mutation, because it checks only that the $ENQ returned SS$_NORMAL
 with a lock id -- which an immediate grant also satisfies. The assertion's text
 claims queueing; its condition does not test it. The three assertions that DO

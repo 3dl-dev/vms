@@ -915,7 +915,7 @@ all the same missing bind (the exact
 set is the require_fail/knock_on_fail arrays above, not a count restated
 here -- see METHOD 4: a tally a human must remember to update will drift):
   suite 0, setident (1)   -- (vms-fb9 r6) vms_kif_setident() now reaches
-                             kif_bind() like every other entry point, so the
+                             kif_bind(), so the
                              same deleted register() call leaves it unbound
                              too; named directly in require_fail because it
                              is its own minimal mutation's property, not a

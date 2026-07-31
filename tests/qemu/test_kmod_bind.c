@@ -36,8 +36,7 @@
  * vms_sys_ioctl(), not KIF_CALL) -- so restoring JUST that one bypass
  * (putting the raw ioctl back) turns suite 0 red while suites 1-7 stay
  * green, and restoring the vms-9fc defect in kif_bind() itself (suite 1's
- * mutation) turns suite 0 red TOO, because setident now reaches kif_bind()
- * exactly like every other entry point.
+ * mutation) turns suite 0 red TOO, because setident now reaches kif_bind().
  *
  * Status values are ORACLE-PINNED on the reference lab node VAX1, OpenVMS
  * VAX V7.3 (2026-07-30), by two independent documented-tool observations:

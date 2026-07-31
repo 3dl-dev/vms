@@ -1651,9 +1651,49 @@ joiner-private work: the coordinator runs the same dialogue with **every** membe
 and releases step *N* to nobody until **all** of them have sent their step-*N*
 request.
 
+#### Does the step count scale with membership? NO — the FRAME count does (GROUNDED, `vms-584`)
+
+This mattered enough to be measured rather than assumed: if the step count grew
+with cluster size, OVMX would strand the first larger cluster it met and nothing
+in the earlier evidence would have warned us. A census of **41 captures** finds
+**40 transitions, of which 30 ran a barrier to completion**, and:
+
+- **Every completed barrier tops out at exactly step 12** — indices 1…12, no
+  gaps, no 13. M=2 (16 barriers), M=3 (11), M=4 (3): **zero variance.** The four
+  partial barriers all stop at an OVMX defect, not at a protocol boundary.
+- **The frame count scales exactly: `#0x0b = #0x0c = 12 × (M−1)`, in 30 of 30.**
+- The topology is a **star**. Every member exchanges `0x0b`/`0x0c` only with the
+  coordinator; members never barrier with each other.
+- It is **one cluster-wide lock-stepped barrier**, not `M−1` independent runs:
+  `0x0c#N` never precedes the last `0x0b#N` — **0 violations out of 12 steps in
+  every transition**.
+- A class-`0x03` (remove-a-failed-node) transition runs the **same 12 steps and
+  the same `12 × (M−1)` law**; only its opening differs (§4(r)). A class-`0x04`
+  self-departure emits its `op 0x0a` and starts **no barrier at all**.
+
+> **Implementation consequence, and it is the reassuring one:** a joiner or an
+> ordinary member always sends exactly **12** `0x0b` frames and receives exactly
+> **12** `0x0c`, *regardless of cluster size*. Its cost is flat and it does not
+> need to know M. The `12 × (M−1)` scaling is entirely the **coordinator's**
+> obligation — which OVMX will inherit only at T3, when it can be elected.
+> The one member-side effect of a large cluster is **latency**: the coordinator
+> holds `0x0c#N` until the slowest member reports, so per-step wait grows with M.
+> **Do not time out on a step merely because it is slow.**
+
+> **No peer ever announces the step total.** An exhaustive scan of all 54 `op
+> 0x09` opens and all 65 class-`0x02` `op 0x0a` GOs finds no byte equal to 12 or
+> 13, and no LE u16 equal to 12, at any constant offset. **12 must be a
+> constant** — but instrument for a mismatch rather than trusting it, because…
+
+> **…the honest bound on this evidence is FOUR MEMBERS.** The largest cluster in
+> the entire library is VAX1+VAX2+VAX3+OVMX (bitmap `0x1e`), and OVMX is one of
+> the four; the largest all-reference-VAX cluster is **three**. Treat "12" as
+> GROUNDED-to-M=4. Nothing above 4 is grounded, and `vms-584` item 1 exists to
+> extend it.
+
 | step | dir | cat | op | note |
 |---|---|---|---|---|
-| open | M→J | `0x01` | `0x09` | `body[16:18]=0x0240`; carries the transition **epoch** at `body[12:16]` |
+| open | M→J | `0x01` | `0x09` | `body[16:18]=0x0240`; carries the transition **epoch** at `body[12:16]` and the membership **bitmap** at `body[55]` |
 | | J→M | `0x81` | `0x09` | echo + **three** mutations (below) |
 | go | M→J | `0x01` | `0x0a` | `body[16:18]=0x0260`. **Never answered.** Start the barrier at N=1 |
 | ×12 | J→M | `0x01` | `0x0b` | epoch at `body[12:16]`, step N (LE u32) at `body[16:20]` |
@@ -1690,9 +1730,40 @@ responses in 5 captures with 3 different responder nodes:
 
 ```
 body[8] |= 0x80        response bit
-body[18]  = 0x01       response marker
-body[55]  = 0x00       cleared (held 0x0e / 0x0a / 0x06 in the requests)
+body[18]  = 0x01       response marker    (NOT on op 0x0f -- see §4(r))
+body[55]  = 0x00       cleared            (op 0x09 only)
 ```
+
+> **`body[55]` is not a "mutation slot" — it is the coordinator's MEMBERSHIP
+> BITMAP, and the responder is refusing to assert it** (GROUNDED, `vms-584`).
+> `popcount(body[55])` of the `op 0x09` open **equals the post-transition member
+> count in 54 of 54 opens, zero residuals**; bit *k* is the member holding CSID
+> index *k*, and bit 0 is never set. The three values this section originally
+> recorded as "held `0x0e` / `0x0a` / `0x06`" are exactly the M=3, M=2 and M=2
+> bitmaps.
+>
+> | bmap | bits | M | context |
+> |---|---|---|---|
+> | `0x06` | 1,2 | 2 | fresh 2-node formation |
+> | `0x0a` | 1,3 | 2 | a node's 2nd incarnation (slot 3) |
+> | `0x0e` | 1,2,3 | 3 | 3-node |
+> | `0x12` | 1,4 | 2 | 3rd incarnation (slot 4) |
+> | `0x16` | 1,2,4 | 3 | a node joins after the slot-3 holder departed |
+> | `0x1e` | 1,2,3,4 | 4 | VAX1+VAX2+VAX3+OVMX |
+> | `0x22` | 1,5 | 2 | 4th incarnation (slot 5) |
+>
+> Slot allocation is self-consistent across independent runs: `af2-firsttimer`
+> shows `0x0a → 0x12 → 0x22` as one node rejoins three times taking slots 3, 4, 5,
+> and a vacated slot is **not** reused by the next joiner.
+>
+> **A joiner can therefore read the expected barrier-participant set out of the
+> open it receives.** Two cautions: a class-`0x03` removal has **no `op 0x09` at
+> all** (it starts directly at `op 0x0a` / tag `0x0360`) and so carries no bitmap;
+> and one byte holds only 8 slots while the library already reaches slot 5.
+> `body[52:55]` and `body[56:60]` are all-zero in every specimen, so the field is
+> certainly **wider than a byte**, but its extent and endianness are UNDETERMINED
+> — a BE u32 at `body[52:56]` fits the data as well as an LE map based at
+> `body[55]`. **Do not assume 8 slots.**
 
 #### Category is per-SYSAP, and the response SHAPE is per-category
 

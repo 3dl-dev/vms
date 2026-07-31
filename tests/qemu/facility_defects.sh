@@ -913,11 +913,22 @@ EOF
         # false. Computing _n/_list from suites_red here makes that specific
         # disagreement structurally impossible: change suites_red and this
         # sentence's count and list change with it, in the same run.
+        # SAME FIX APPLIED TO THE BLIND-SUITES CLAUSE (vms-47b round 4): the
+        # sentence used to hand-recite "The four client suites", read off
+        # blind_suites at the time it was written rather than derived from
+        # it -- a third instance of the identical drift class, just not yet
+        # tripped (blind_suites is still four entries, so it was true by
+        # coincidence, not by construction). _blind_n is now computed from
+        # defect_field "$_d" blind_suites the same way _n is computed from
+        # suites_red, so the count in the sentence and the field twenty
+        # lines above it cannot disagree.
         why)
             _suites_red=$(defect_field "$_d" suites_red)
             _n=$(set -- $_suites_red; echo $#)
             _list=$(echo "$_suites_red" | sed 's/ /, /g')
-            echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. $_n suites detect it (through the public sys\$ API, or test_kmod_bind directly): $_list. The client suites that ought to detect it and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer."
+            _blind_suites=$(defect_field "$_d" blind_suites)
+            _blind_n=$(set -- $_blind_suites; echo $#)
+            echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. $_n suites detect it (through the public sys\$ API, or test_kmod_bind directly): $_list. The $_blind_n client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer."
             ;;
         require_fail) cat <<'EOF'
 vms_kif_open() then a BARE vms_kif_setident() reaches the executive with no explicit register

@@ -620,10 +620,30 @@ int main(void)
               "the subject's row carries its pid at column 0");
         CHECK(row[8] == ' ' && row[SYS_COL_NAME] == SUBJECT_NAME[0],
               "the subject's Process Name field starts at column 9");
-        /* The name field is 15 wide, so a CPU figure (or nothing) begins
-         * at column 25 -- never at 24, which is the separator. */
-        CHECK(row[SYS_COL_NAME + SYS_NAME_WIDTH] == ' ',
-              "the Process Name field is 15 columns wide");
+        /*
+         * THE CPU FIELD LANDS AT COLUMN 25, WHICH IS WHAT PINS THE NAME
+         * FIELD'S WIDTH.
+         *
+         * The name field is 15 columns (9-23) and column 24 is the
+         * separator, so VMS's 16-column CPU field
+         * ("%4d %02d:%02d:%02d.%02d") occupies 25-40 and its "hh:mm:ss.cc"
+         * begins at 30.
+         *
+         * MEASURED, not assumed to be sufficient: the assertion that stood
+         * here checked only that column 24 was a space, and a mutation
+         * narrowing the name field to %-14s did not trip it -- with an
+         * 11-character subject name, column 24 fell inside the CPU field's
+         * leading padding and was a space either way. The check now pins
+         * the position of the field that MOVES when the one before it
+         * changes width, so a one-column drift anywhere left of it fails.
+         */
+        CHECK(row[25] == ' ' && row[26] == ' ' && row[27] == ' ' &&
+              isdigit((unsigned char)row[28]) && row[29] == ' ' &&
+              isdigit((unsigned char)row[30]) &&
+              isdigit((unsigned char)row[31]) && row[32] == ':' &&
+              row[35] == ':' && row[38] == '.',
+              "the CPU field starts at column 25, so the Process Name "
+              "field is 15 columns wide");
     }
 
     /* ---------------------------------------------------------------

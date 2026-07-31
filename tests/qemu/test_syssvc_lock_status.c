@@ -110,13 +110,22 @@ struct child_msg {
 
 static int bootstrap(const char *who)
 {
+    /* Opens /dev/vms ONLY to decide skip-vs-run, the same shape
+     * test_syssvc_showdev.c uses (see that suite and facility_defects.sh's
+     * bind-client-no-register blind_why). It deliberately does NOT also
+     * call vms_kif_register() here: this program drives sys$enq/enqw/deq,
+     * the PUBLIC API, and those wrappers reach kif_bind()
+     * (src/libvmssys/vms_kif.c) on their own, the same auto-bind path any
+     * real OVMX image goes through. A suite that hand-registers before
+     * ever calling the public API cannot see the bind-client-no-register
+     * defect (kif_bind() dropping its own vms_kif_register() call): the
+     * explicit call would still bind the process, and kif_bind()'s
+     * pid-match check would then skip re-registering, staying green under
+     * that mutation. Not calling it here is what makes this suite bind
+     * exactly the way a product image binds, and therefore able to go red
+     * for that defect instead of silently joining vms-f27's blind set. */
     if (vms_kif_open() < 0) {
         printf("  FAIL: %s: cannot open /dev/vms\n", who);
-        return -1;
-    }
-    uint32_t st = vms_kif_register(NULL);
-    if (!(st & 1)) {
-        printf("  FAIL: %s: vms_kif_register status=%u\n", who, st);
         return -1;
     }
     return 0;

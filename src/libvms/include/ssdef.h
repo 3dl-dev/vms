@@ -270,7 +270,33 @@ extern "C" {
                                      * per the ssdef.h lineage above. Neighbours
                                      * EXASTLM/EXBYTLM below are UNVERIFIED (see
                                      * the broader ssdef fidelity sweep). */
-#define SS$_EXASTLM         2756    /* Exceeded AST limit */
+/* SS$_EXASTLM's value below is UNCHANGED (2756) but its provenance is a
+ * DECLINE TO PIN, not a confirmation -- record this so the next reader does
+ * not mistake "value didn't move" for "value was verified" (vms-cd41,
+ * vms-2e5). The kernel's own SS__EXASTLM (src/kernel/vms_internal.h) is a
+ * DIFFERENT number (56/0x38). src/kernel/vms_ast.c's vms_ioctl_dclast
+ * REALLY DOES set that raw status when the AST quota is exceeded -- this is
+ * a live kernel condition, not a hypothetical one -- but nothing translates
+ * it to this public constant yet: src/libvmssys/vms_kif.c:vms_kif_dclast
+ * returns the raw kernel value unmapped, and it is OVMX-UNWIRED (vms-as1,
+ * declared in vms_kif.h) -- no product path calls it. sys_lock.c's
+ * kstat_to_ss() is the model for the translation this will eventually need;
+ * no equivalent exists yet for the AST family.
+ * docs/api-system-services.md was checked as a candidate oracle for 2756
+ * and REJECTED: on the same page (docs/api-system-services.md ~line 2498),
+ * it lists SS$_DEADLOCK as 708 and SS$_EXENQLM as 2748 -- both of which
+ * disagree with THIS file's own already oracle-pinned values for those two
+ * names (SS$_DEADLOCK 3594 above, SS$_EXENQLM 10820 immediately above this
+ * comment). A source shown wrong on two neighbours it disagrees with is not
+ * good corroboration for the one entry (EXASTLM) where it happens to agree
+ * with the number already here -- agreement with an unverified value proves
+ * nothing. Per Rule 10, do not self-certify: 2756 stays UNVERIFIED until
+ * confirmed from ~/vax/cluster (LIBRARY/EXTRACT=$SSDEF from STARLET.MLB) or
+ * a public OpenVMS doc source that does NOT already disagree with a pinned
+ * neighbour. Do not "fix" this by inventing a different number either --
+ * that is the same self-certification error in the other direction. */
+#define SS$_EXASTLM         2756    /* Exceeded AST limit -- UNVERIFIED, see
+                                     * the block above (vms-cd41) */
 #define SS$_EXBYTLM         2764    /* Exceeded byte count limit */
 
 /* ================================================================

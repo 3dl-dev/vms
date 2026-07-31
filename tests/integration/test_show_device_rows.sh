@@ -218,22 +218,35 @@ check_status_reports_failure() {
 # fabricated without touching it. See the file header (added vms-fb9 r6)
 # for why $STATUS alone (property 2b) is not enough.
 R_NOREAD='no openat("/dev/vms", ...) syscall was observed by strace'
-# BROKEN FIXTURE vs. real red (vms-fb9 r7): a container that denies ptrace
-# (common -- Docker's default seccomp profile blocks ptrace(2) without
-# --cap-add=SYS_PTRACE) makes strace's OWN PTRACE_TRACEME fail. That is fatal
-# to strace -- it never execs the tracee at all (verified against a real
-# denied-ptrace sandbox: podman with a seccomp profile that errno's ptrace(2)
+# BROKEN FIXTURE vs. real red (vms-fb9 r7, corrected r8): a container that
+# denies ptrace (common -- Docker's default seccomp profile blocks ptrace(2)
+# without --cap-add=SYS_PTRACE) makes strace's OWN PTRACE_TRACEME fail. That
+# is fatal to strace -- it never execs the tracee at all (verified against a
+# real denied-ptrace sandbox: a seccomp filter that errno's ptrace(2)
 # reproduces "strace: ptrace(PTRACE_TRACEME, ...): Operation not permitted",
-# strace exits nonzero, and the tracee's own stdout never appears). In that
-# state $WORK/strace.out contains no openat records for ANY file, not just
-# /dev/vms -- so it would satisfy the same "no /dev/vms observed" test the
-# real defect (mutation M3) produces, and this function used to report both
-# with the identical message. That is the same shape as a permanently-skipped
-# test reporting green (Rule 10): the fixture failed, not the property.
-# Two independent signals distinguish the two: strace's own exit status, and
-# whether the tracee ran far enough to write the liveness marker (it cannot
-# have opened /dev/vms if it never reached the WRITE SYS$OUTPUT that follows
-# it in the command script). Neither state is ever reported as a pass.
+# strace exits nonzero, and the tracee's own stdout never appears -- so
+# $WORK/strace_stdout has no liveness marker and $WORK/strace.out is empty).
+#
+# STRACE'S OWN EXIT STATUS IS NOT EVIDENCE OF THIS. When tracing succeeds,
+# strace exits with the TRACEE's own exit status (documented strace
+# behaviour), so `SHOW DEVICE` piped into a script that later does
+# `EXIT <nonzero>` makes a perfectly healthy trace exit nonzero too -- r7
+# read that single number as "strace itself failed" and reported BROKEN
+# FIXTURE for a trace that worked, inverting the property it exists to
+# protect. Measured directly (see the round 8 progress note for the pasted
+# commands): a real DCL run with `EXIT 44` appended exits 44 under strace
+# while still writing the liveness marker and still showing two
+# openat(.., "/dev/vms", ..) records in strace.out.
+#
+# So the two statuses are read SEPARATELY and neither one substitutes for
+# the other:
+#   - whether the tracee ran far enough to write the liveness marker is the
+#     ONLY signal for "did strace even trace anything" (it cannot have
+#     opened /dev/vms if it never reached the WRITE SYS$OUTPUT that follows
+#     it in the command script) -- this decides BROKEN FIXTURE.
+#   - the openat("/dev/vms", ...) record in strace.out, unconditional on the
+#     tracee's own exit code, decides the actual property.
+# Neither state is ever reported as a pass when it cannot be evaluated.
 R_BROKEN='strace could not trace the tracee at all (ptrace denied or unusable) -- BROKEN FIXTURE, not a property verdict'
 check_executive_read_attempted() {
     label="$1"; cmdline="$2"
@@ -247,11 +260,14 @@ check_executive_read_attempted() {
         | "$STRACE" -f -e trace=openat -o "$WORK/strace.out" "$DCL" \
               >"$WORK/strace_stdout" 2>"$WORK/strace_stderr"
     strace_rc=$?
-    if [ "$strace_rc" -ne 0 ] || ! grep -qF "$MARK" "$WORK/strace_stdout" 2>/dev/null; then
+    # strace_rc mirrors the TRACEE's own exit status once tracing succeeds
+    # (see the comment block above) -- it is deliberately NOT consulted to
+    # decide broken-vs-real below. The liveness marker is the only signal.
+    if ! grep -qF "$MARK" "$WORK/strace_stdout" 2>/dev/null; then
         fail "$label: $R_BROKEN" \
-             "strace exited $strace_rc; the tracee's liveness marker" \
-             "'$MARK' was $(grep -qF "$MARK" "$WORK/strace_stdout" 2>/dev/null && echo present || echo absent) in its stdout, so the tracee" \
-             "$(grep -qF "$MARK" "$WORK/strace_stdout" 2>/dev/null && echo "ran but strace still recorded nothing usable" || echo "may never have run under trace at all")." \
+             "strace exited $strace_rc and the tracee's liveness marker" \
+             "'$MARK' never appeared in its stdout, so the tracee did not" \
+             "run to completion under trace." \
              "This property CANNOT be evaluated in this state, so it is" \
              "reported as FAILED, never a silent pass (Rule 10; same" \
              "convention as tests/integration/test_runtime_target_negctl.sh's" \

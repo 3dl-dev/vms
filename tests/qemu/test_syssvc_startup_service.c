@@ -952,14 +952,22 @@ int main(void)
         CHECK(!touched(),
               "the image was not run behind the subprocess refusal");
 
-        /* A qualifier outside the four RUN/DETACHED honours. The refusal
-         * is on "any qualifier", as the oracle states it, not on a list
-         * this code happened to enumerate. */
+        /* A process qualifier RUN/DETACHED would not have read either.
+         * The refusal is on the oracle's set, as the oracle states it,
+         * not on a list this code happened to enumerate.
+         *
+         * NOTE WHAT THIS CASE IS NOT. It carries no /DETACHED, so it
+         * says nothing about what happens to /PRIORITY on the DETACHED
+         * path -- where it is still read by nobody. That is P10(e),
+         * and it is a different case; an adversary correctly pointed
+         * out that this assertion's old wording read as if it covered
+         * both. */
         clear_touch();
         run_dcl(PRIO_COM, out8, sizeof(out8), &exit_st);
         printf("  (RUN/PRIORITY with no /DETACHED)\n%s\n", out8);
         CHECK(strstr(out8, "-OVMX-F-NOSUBPRC,") != NULL && !touched(),
-              "a process qualifier outside the honoured four is refused too");
+              "RUN/PRIORITY without /DETACHED is refused too: the rule is the "
+              "oracle's set, not a list this code enumerated");
 
         /* Positive control. */
         clear_touch();

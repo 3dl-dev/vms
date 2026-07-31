@@ -291,6 +291,11 @@ enum join_step {
  * with a wide margin while staying far inside the transition's own timeout (the
  * reference holds step 5 for 89 ms without complaint). Tunable for bisecting. */
 #define JOIN_BARRIER_GO_DELAY_MS 3u
+/* vms-e81: how long after a newcomer's START completes before we open our own
+ * client half to it. The pure-VMS control shows a member acting 0.24-1.67 s
+ * after START, on a per-node ~1 s scan phase -- so this is a timer, not an
+ * event hook. 1000 ms sits inside the observed band. */
+#define JOIN_MEMBER_GREET_MS 1000u
 /* vms-760: cap on how long we hold the deferred op 0x02 waiting for a peer we
  * have a channel to but no config from. Beyond this we proceed with whoever has
  * configured, rather than let one silent peer block the join indefinitely. */
@@ -369,6 +374,12 @@ struct peer_state {
     int      barrier_step;         /* current step N, 1..12; 0 = barrier not running */
     int      barrier_done;         /* our OWN admission finished (record, NOT a gate) */
     unsigned barrier_count;        /* transitions completed; #1 = our join, 2+ = bystander */
+    long     greet_due_ms;         /* vms-e81: when to open OUR client half to a
+                                    * newcomer. The control shows a real member
+                                    * acts on a ~1 s periodic scan after START
+                                    * completes (observed 0.24-1.67 s), NOT
+                                    * instantly -- and firing from the receive
+                                    * path is how we lost the barrier race. */
     int      appeared_after_join;  /* vms-e81: first seen AFTER our own admission --
                                     * this peer is a NEWCOMER to a cluster we are
                                     * already in, so the MEMBER role applies, never
@@ -2639,6 +2650,27 @@ int main(int argc, char **argv)
                 }
             }
 
+            /* vms-e81: the newcomer greet timer. A member opens its OWN
+             * SCS$DIRECTORY (then MSCP$DISK) to a node that joined after us,
+             * driven by a periodic scan rather than by an inbound frame --
+             * grounded on control-member-meets-late-node-20260730.pcap, where
+             * each node opens whatever it lacks on its own ~1 s phase and the
+             * only prerequisite is a completed 0x41 START handshake. */
+            if (do_connect && ps->greet_due_ms != 0 &&
+                monotonic_ms() >= ps->greet_due_ms &&
+                ps->join_step == JS_IDLE && !ps->own_dir_sent) {
+                ps->greet_due_ms = 0;
+                if (send_own_dir_connect_request(sock, (int)ifindex, ps,
+                                                 our_hw_mac, our_src_logical)) {
+                    ps->join_step = JS_DIR_CONNECT;
+                    clock_gettime(CLOCK_MONOTONIC, &ps->js_last_tx);
+                    log_ts(stdout);
+                    printf(" SCSD-I-MEMBGREET, opened OUR SCS$DIRECTORY to the"
+                           " newcomer -- member client half begins\n");
+                    fflush(stdout);
+                }
+            }
+
             /* vms-760: emit the DEFERRED step-1 barrier request once the
              * coordinator has had time to finish fanning op 0x0a out to the
              * other members. Sending it from the receive path (~20 us) is what
@@ -2949,8 +2981,21 @@ int main(int argc, char **argv)
                          * transition -- exactly what run by3 showed. We now
                          * initiate once START is complete, symmetric with the
                          * joiner. */
-                        if (join_seq_enabled &&
-                            (!ps->appeared_after_join || ps->start_acked) &&
+                        if (join_seq_enabled && ps->appeared_after_join &&
+                            ps->greet_due_ms == 0) {
+                            /* NEWCOMER: arm the greet timer instead of sending
+                             * from here. We are inside the !start_acked branch,
+                             * so start_acked is still false at this point --
+                             * testing it here could never fire, which is exactly
+                             * why run by4 showed START complete and connect_sent=0. */
+                            ps->greet_due_ms = monotonic_ms() + JOIN_MEMBER_GREET_MS;
+                            log_ts(stdout);
+                            printf(" SCSD-I-MEMBGREET, newcomer START complete --"
+                                   " opening our client half in %u ms\n",
+                                   (unsigned)JOIN_MEMBER_GREET_MS);
+                            fflush(stdout);
+                        }
+                        if (join_seq_enabled && !ps->appeared_after_join &&
                             ps->join_step == JS_IDLE && !ps->own_dir_sent &&
                             send_own_dir_connect_request(sock, (int)ifindex, ps,
                                                          our_hw_mac, our_src_logical)) {

@@ -75,8 +75,8 @@ int main(void) {
      * end up bound to the one VMS process this test registered above.
      *
      * MESSAGE TEXT PRESERVED VERBATIM ON PURPOSE. tests/qemu/facility_defects.sh
-     * (ast-setast-disable) names "disable again: prev state was disabled",
-     * "SETAST(enable) returns WASCLR" and "prev state was disabled" as the
+     * (ast-setast-disable) names "disable again: prev state was disabled" and
+     * "SETAST(enable) returns WASCLR (== prev state was disabled)" as the
      * literal red-set text the per-facility negative control looks for, and
      * tests/qemu/CMakeLists.txt's facility_negctl_manifest selftest asserts
      * every such string exists literally in a suite source. The struct field
@@ -86,48 +86,6 @@ int main(void) {
      * from prev_state in lockstep (src/kernel/vms_ast.c: `args.status =
      * args.prev_state ? SS__WASSET : SS__WASCLR;`), so `status == SS_WASSET`
      * and `prev_state != 0` are the same fact under two names.
-     *
-     * ROUND-3 FIX (vms-290 adversary finding): this originally left TWO
-     * pairs of CHECK() calls testing the byte-identical condition
-     * `setast_st == <value>` under two different messages -- reporting two
-     * properties while actually testing one, which is vacuous per the
-     * "an assertion satisfiable by something other than the behavior under
-     * test proves nothing" rule. Below:
-     *   - the DISABLE pair (WASSET / "previous state was enabled") is not
-     *     named by any facility_defects.sh require_fail/knock_on_fail entry
-     *     (grep confirms neither string appears there), so nothing outside
-     *     this file depends on it staying two lines. It is collapsed into
-     *     ONE check that states both facts honestly instead of two checks
-     *     of one fact.
-     *   - the ENABLE pair (WASCLR / "prev state was disabled") CANNOT be
-     *     collapsed the same way. Proof, not assertion: `sh
-     *     facility_defects.sh field ast-setast-disable require_fail` prints
-     *     "disable again: prev state was disabled" and "SETAST(enable)
-     *     returns WASCLR"; `... knock_on_fail` prints "prev state was
-     *     disabled". run_facility_negctl.sh compares the observed
-     *     "  FAIL: <msg>" lines to those fields by EXACT LINE match (sorted
-     *     sets, `comm -23`/`comm -13`, run_facility_negctl.sh ~487-494) --
-     *     so collapsing the two CHECKs below into one combined message
-     *     would make both named lines register MISSING and the new
-     *     combined message register EXTRA, failing that control's red-set
-     *     equality.
-     *
-     *     ROUND-4 CORRECTION (false emphatic the adversary caught): an
-     *     earlier version of this comment also credited
-     *     "facility_negctl_manifest" with protecting this pair. It does
-     *     not: that selftest only checks each string exists SOMEWHERE as a
-     *     substring of the suite source (tests/qemu/CMakeLists.txt),
-     *     loosely normalised (quotes/backslashes stripped, whitespace
-     *     collapsed) -- checked directly by patching this file to the
-     *     collapsed, combined-message form in a scratch copy and running
-     *     `facility_defects.sh selftest`: it still printed "ok: every
-     *     require_fail/knock_on_fail text exists literally in a suite
-     *     source" and exited 0, because the combined message still
-     *     contains both substrings. The equality check above is the only
-     *     thing that actually breaks under collapse; the manifest selftest
-     *     does not. It stays two CHECK lines, explicitly disclosed here
-     *     (not just in facility_defects.sh's knock_on_why) as testing one
-     *     fact.
      */
     uint32_t setast_st = vms_kif_setast(0);
     CHECK(setast_st == SS_WASSET,
@@ -147,23 +105,8 @@ int main(void) {
 
     /* 5. Re-enable AST delivery */
     setast_st = vms_kif_setast(1);
-    /*
-     * DUPLICATE CONDITION, KEPT AND NOW EXPLICITLY DISCLOSED HERE (see the
-     * ROUND-3 FIX note above the disable pair): both CHECKs below read the
-     * SAME `setast_st` value. They stay two lines because both exact
-     * message strings are required literal text for the ast-setast-disable
-     * negative control's require_fail/knock_on_fail set in
-     * tests/qemu/facility_defects.sh -- collapsing them would make that
-     * control's require_fail entry go MISSING under its own mutation. They
-     * are not two independent properties; they are the single `status`
-     * value vms_kif_setast() returns, read under the two names the raw
-     * ioctl's separate `status`/`prev_state` fields used to carry
-     * (src/kernel/vms_ast.c derives status from prev_state in lockstep, so
-     * this was already true before the vms-290 conversion, not introduced
-     * by it).
-     */
-    CHECK(setast_st == SS_WASCLR, "SETAST(enable) returns WASCLR");
-    CHECK(setast_st == SS_WASCLR, "prev state was disabled");
+    CHECK(setast_st == SS_WASCLR,
+          "SETAST(enable) returns WASCLR (== prev state was disabled)");
 
     /*
      * 5b. NEW (vms-290 round 3): prove vms_kif_dclast()'s astprm marshalling

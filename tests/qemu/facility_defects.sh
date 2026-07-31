@@ -301,33 +301,11 @@ EOF
         why)          echo "\$SETAST(disable) stops disabling: the enable flag is written as 1 whatever the caller asked for. Queueing, quota and mode checks are untouched.";;
         require_fail) cat <<'EOF'
 disable again: prev state was disabled
-SETAST(enable) returns WASCLR
+SETAST(enable) returns WASCLR (== prev state was disabled)
 EOF
                       ;;
-        knock_on_fail) cat <<'EOF'
-prev state was disabled
-EOF
-                      ;;
-        knock_on_why) cat <<'EOF'
-test_kmod_ast.c's re-enable step ("5. Re-enable AST delivery") reads ONE
-result two ways under two messages: "SETAST(enable) returns WASCLR" and
-"prev state was disabled". Both are the executive's answer to the same
-question -- "was AST delivery disabled before this call?" -- so a defect in
-the disable path necessarily shows up at both. Listing only the status
-assertion and calling the field assertion a stray would be arithmetic, not
-minimality.
-
-CONVERTED (vms-290): this suite's SETAST/DCLAST call sites now go through
-vms_kif_setast()/vms_kif_dclast() (src/libvmssys/vms_kif.c) instead of a raw
-ioctl. vms_kif_setast() returns only the completion status -- it does not
-expose the kernel-internal prev_state field vms_setast_args also carries,
-which is a real interface gap (tracked in vms-290) -- so both of the
-messages above are now checks of the SAME returned status. That is not a
-weakening: src/kernel/vms_ast.c derives status from prev_state in lockstep
-(`args.status = args.prev_state ? SS__WASSET : SS__WASCLR;`), so status
-alone already carried both facts before the conversion too.
-EOF
-                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why) echo "";;
         esac;;
 
     eflag-clref-noop)

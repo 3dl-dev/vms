@@ -91,6 +91,14 @@
 #                            intermediate unreaped, so the creator of a
 #                            "detached" process still has a child to wait for
 #                            (vms-47b).
+#   run-detached-not-detached        $CREPRC back to accepting PRC$M_DETACH
+#                            and discarding it -- the pre-vms-47b behaviour.
+#                            This one exists because an adversary applied it
+#                            by hand and found that ONE assertion in the whole
+#                            suite caught it: "ppid == 1" survives the
+#                            mutation, because Linux reparents any orphan to
+#                            init. It is here so the discriminating
+#                            assertions are NAMED and stay named.
 # All are edits under src/, not src/kernel/, so cmd_selftest copies libvms,
 # libvmssys and vmsdcl alongside kernel/ when it checks that every anchor still
 # matches.
@@ -141,7 +149,8 @@ pcb-per-thread
 bind-client-no-register
 creprc-handshake-eintr
 run-detached-name-dropped
-creprc-detach-intermediate-reaped"
+creprc-detach-intermediate-reaped
+run-detached-not-detached"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1074,6 +1083,42 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    run-detached-not-detached)
+        case "$_f" in
+        facility)     echo "PRC\$M_DETACH itself in \$CREPRC (src/libvms/syssvc/sys_process.c)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+$CREPRC goes back to accepting PRC$M_DETACH and discarding it -- literally
+the pre-vms-47b line, `(void)stsflg;`. Nothing is created differently: the
+process is still created, still named in the executive, still announced with
+%RUN-S-PROC_ID, still outlives the DCL that created it, and SHOW SYSTEM in
+another process still lists it. It is simply a SUBPROCESS wearing the word
+"detached".
+THIS CONTROL EXISTS BECAUSE AN ADVERSARY APPLIED IT BY HAND AND THE SUITE
+ALMOST MISSED IT. Of thirteen assertions, exactly one went red. In particular
+"the service's parent is init, not the DCL that created it" stayed GREEN --
+the creating DCL exits before anything is observed, and Linux reparents any
+orphan to init whether or not it was ever detached. A reparent check is a
+necessary consequence of detachment and not a test of it, and it was being
+read as one.
+Naming this mutation forces the discriminating assertions to be listed below.
+Both are properties a subprocess cannot have: the created process is in a
+session of its own (setsid()), and the creator has nothing left to wait for.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+the service left the session its creator ran in
+the creator of a detached process has no child to wait for
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1157,6 +1202,12 @@ apply_edit() {
         # 4-space `if (detached) {` -- the child-side occurrences of the same
         # condition are indented 8, inside `if (pid == 0) {`.
         sed -i 's|^    if (detached) {$|    if (0) { /* NEGCTL creprc-detach-intermediate-reaped */|' "$_file";;
+
+    run-detached-not-detached)
+        # The ONE edit, and it is the pre-vms-47b source line restored:
+        # PRC$M_DETACH is read and thrown away. `(void)stsflg;` keeps the
+        # parameter used so the mutation is about behaviour, not warnings.
+        sed -i 's|^    const int detached = (stsflg & PRC\$M_DETACH) != 0;$|    const int detached = 0; (void)stsflg; /* NEGCTL run-detached-not-detached */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

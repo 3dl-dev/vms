@@ -124,6 +124,7 @@ lock-compat-ex-cr
 lock-compat-cr-ex
 devtab-owner-not-recorded
 proctab-duplicate-name
+proctab-crossgroup-identity
 ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
@@ -439,6 +440,89 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    proctab-crossgroup-identity)
+        case "$_f" in
+        facility)     echo "process table, cross-UIC-group identity read (VMS_IOCTL_GETJPI/PROCSCAN authorisation)";;
+        targets)      echo "kernel/vms_proctab.c";;
+        # All three layers of the same clause, MEASURED not guessed:
+        # test_syssvc_showproc names the property through the user-visible
+        # command (SHOW PROCESS/ID on an out-of-group process must be
+        # refused), test_syssvc_procnam sees it as a row that stops being
+        # redacted, and test_kmod_ident sees it at the raw ioctl. The first
+        # run of this control listed only the two syssvc suites and the
+        # driver's equality check rejected it, naming test_kmod_ident's five
+        # assertions -- which is the check doing exactly its job.
+        suites_red)   echo "test_syssvc_showproc test_syssvc_procnam test_kmod_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_may_read() stops requiring WORLD for a cross-UIC-group read: any caller may read any process's identity. ONE clause, and it is the one the oracle pinned -- docs/oracle/vax73-privileges.md Section 5.4 measured that GROUP does not lift a cross-group read and WORLD does. Storage, lookup, naming, scanning and the same-group rule are untouched.";;
+        require_fail) cat <<'EOF'
+SHOW PROCESS/ID on an out-of-group process reports %SYSTEM-F-NOPRIV verbatim
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the by-PID refusal printed no process header
+the UNREADABLE row fabricates NO CPU figure at all
+WORLD CLAUSE ISOLATED: the same cross-group read, now without WORLD -> SS$_NOPRIV
+an unprivileged process is REFUSED a process in another UIC group
+... and gets no part of that process's identity
+... and the refusal returns no part of the row
+... but WITHOUT its user name, UIC or privilege mask
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+EVERY EXTRA IS THE SAME REFUSAL SEEN FROM A DIFFERENT SIDE, not a second
+property. All seven were MEASURED by running this control, not predicted:
+the first run named only the two SHOW-PROCESS assertions and the driver's
+equality check rejected it and printed the rest.
+
+"the by-PID refusal printed no process header" is the paired negative of the
+require_fail assertion above: with the read wrongly ALLOWED, SHOW PROCESS/ID
+succeeds and prints a full header for the out-of-group process, so the
+same command that stopped being refused necessarily stopped being silent.
+Listing only the message assertion would describe half of one event.
+
+The by-NAME half of that block is deliberately absent from both lists, and
+that is the control doing its job: find_by_name() is group-scoped in its own
+right (src/kernel/vms_proctab.c:237) and never consults vms_proc_may_read(),
+so mutating the WORLD clause cannot touch it. SHOW PROCESS <name> keeps
+answering %SYSTEM-W-NONEXPR. Before vms-6a7 round 2 the two selectors shared
+one DCL session and one combined capture, so this distinction was invisible
+here -- the block could only say that both messages appeared somewhere.
+
+"the UNREADABLE row fabricates NO CPU figure at all" (test_syssvc_procnam
+block P12) is the enumeration side of the identical decision:
+vms_ioctl_procscan() calls proc_fill_info() with vms_proc_may_read()'s
+outcome as its `full` argument (src/kernel/vms_proctab.c:609), so a row that
+becomes readable stops being redacted, keeps its linux_pid, and SHOW SYSTEM
+can then source a CPU figure for it. One clause governs both the item read
+and the row redaction -- which is the design, not a coincidence: identity is
+privileged and enumeration is not (docs/oracle/vax73-privileges.md Section
+5.5), and this clause is where that split is decided.
+
+THE FIVE test_kmod_ident REDS are the SAME clause one layer down, at the raw
+ioctl rather than through the public sys$ API and DCL. That suite's own
+wording says so -- "WORLD CLAUSE ISOLATED: the same cross-group read, now
+without WORLD -> SS$_NOPRIV" is vms-2b8's isolation of exactly this
+condition. Its other four are that assertion's paired negatives (the refusal
+must return no part of the row) and the unprivileged-caller form of it. There
+is no finer edit available: vms_proc_may_read() IS the clause, and every
+suite that exercises a cross-group read reaches it. Splitting the mutation
+further would mean mutating a caller instead of the rule, which would test
+the caller.
+
+NOT reddened, and worth stating because it is the attribution: the
+SAME-GROUP reads stay green throughout (SHOW PROCESS <name> on the subject,
+SHOW PROCESS/ID=<subject>, the self case), as does every by-NAME lookup --
+find_by_name() is group-scoped independently of this clause, which is why
+"SHOW PROCESS <name> on an out-of-group process reports %SYSTEM-W-NONEXPR"
+survives the mutation. That is the measured evidence that this control names
+the cross-group AUTHORISATION and nothing else.
+EOF
+                      ;;
+        esac;;
+
     ident-username-unguarded)
         case "$_f" in
         facility)     echo "authenticated identity (VMS_IOCTL_SETIDENT: user name, UIC and authorized mask)";;
@@ -564,14 +648,24 @@ EOF
         case "$_f" in
         facility)     echo "kernel-interface binding in the PRODUCT (vms_kif kif_bind -> vms_kif_register)";;
         targets)      echo "libvmssys/vms_kif.c";;
-        # MEASURED: test_kmod_bind, and -- since vms-8019 -- test_syssvc_procnam.
+        # MEASURED: test_kmod_bind, and -- since vms-8019 -- test_syssvc_procnam,
+        # and -- since vms-6a7 -- test_syssvc_showproc.
         # Round 1 also listed the suites in blind_suites below, which permitted
         # four suite groups to redden while only one could; those are now
         # declared as what they are: BLIND. test_syssvc_procnam is the
         # opposite case and is here on measurement, not permission: it is the
         # FIRST public-API suite that does NOT hand-register, so it is the
         # first one that can see this defect at all.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam";;
+        # test_syssvc_showproc is the SECOND such suite, and it was added to
+        # this list the way the method requires: not predicted, but read off a
+        # run. It landed declaring only proctab-crossgroup-identity, and the
+        # first CI run after it merged reddened it here -- one suite outside
+        # the declared set, one assertion outside the named set. Both directions
+        # of the equality check firing at once is the check working, not a
+        # coarse mutation, and the honest fix is to DECLARE the dependency
+        # rather than narrow a suite whose whole value is that it drives the
+        # user-visible command through the entire stack.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
 These four drive the product's own vms_kif client, so restoring the vms-9fc
@@ -595,7 +689,7 @@ of driving vms_kif; it is a property of hand-registering first.
 EOF
                       ;;
         isolation)    echo "isolated";;
-        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Two suites detect it: test_kmod_bind, and test_syssvc_procnam through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
+        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Three suites detect it: test_kmod_bind, and test_syssvc_procnam and test_syssvc_showproc through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
         require_fail) cat <<'EOF'
 $SETEF reaches the executive with no explicit register
 $GETJPI(self) resolves the auto-bound process
@@ -616,6 +710,7 @@ child's executive entry is the CHILD's, not the parent's
 the executive assigned the caller a VMS process ID
 sys$creprc created the subject process
 sys$creprc returned the subject's pid
+sys$creprc returned the subject's VMS process ID
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -655,6 +750,38 @@ four of its assertions appear here and none of the rest of the suite, however
 many it has grown to. (The count is deliberately not written down: it was, and
 adding an assertion to the suite silently rotted it. The require_fail set is
 the machine-checked statement; this paragraph is the reasoning.)
+
+THE LAST ONE, "sys$creprc returned the subject's VMS process ID", is
+test_syssvc_showproc reaching the identical wall one suite later (vms-6a7).
+That suite exists to prove SHOW SYSTEM and SHOW PROCESS are READERS of the
+executive's process table, so its very first act is $GETJPI(self) and its
+second is a $CREPRC of the subject it will then go looking for. With the bind
+deleted, both fail for the reason suite 3 above already gives -- the child
+cannot register, so it cannot report a process ID, so the handshake fails --
+and the suite stops before it ever runs DCL. That is why it contributes only
+THREE reds and why two of the three are texts this manifest already names:
+"the caller has a row in the executive's process table" is the same assertion
+test_syssvc_procnam makes, word for word, and so is "sys$creprc created the
+subject process". Only the pid assertion is worded differently ("VMS process
+ID" rather than "pid"), which is the whole of the delta this entry gained.
+
+DECLARED, NOT NARROWED, AND THE REASON MATTERS. The alternative fix was to
+make test_syssvc_showproc insensitive to anything outside its own subject --
+to stop it touching registration, the process table and $CREPRC. That would
+mean not driving the real DCL.EXE end to end, which is the only thing that
+makes it evidence about a user-visible command at all (CLAUDE.md Rule 11's
+corollary: the command is a reader of the facility). A suite that drives the
+whole stack SHOULD be sensitive to the whole stack; the defect was that the
+manifest did not SAY so, and an undeclared red is indistinguishable from a
+non-minimal mutation. Saying so is the fix.
+
+MEASURED ON BOTH ARCHITECTURES, because the red set did not have to agree.
+The x86_64 CI runner (run 30598269086, SHA 5ef2b65) and an aarch64 host under
+pure TCG produced the SAME stray suite and the SAME single unnamed assertion,
+byte for byte. There is no ending-picks-itself race here of the kind
+creprc-handshake-eintr has: test_syssvc_showproc.c:574-582 evaluates both
+$CREPRC assertions before its early return, so the three reds are the same
+three whichever way the scheduler runs.
 EOF
                       ;;
         esac;;
@@ -734,6 +861,12 @@ apply_edit() {
         sed -i '/if (!dev->shareable && dev->owner_linux_pid == 0) {/,/^    spin_unlock(&dev->lock);$/ s|dev->owner_pid = proc->vms_pid;|/* NEGCTL devtab-owner-not-recorded */|' "$_file";;
     proctab-duplicate-name)
         sed -i 's|if (clash \&\& clash != proc) {|if (0 \&\& clash != proc) { /* NEGCTL proctab-duplicate-name */|' "$_file";;
+    proctab-crossgroup-identity)
+        # ONE clause of vms_proc_may_read(): the WORLD requirement for a
+        # cross-UIC-group read. caller==target and same-group are left
+        # exactly as they are, so the mutation cannot be mistaken for
+        # "authorisation removed".
+        sed -i 's|return (caller->cur_privs \& VMS_PRV_M_WORLD) != 0;|return true; /* NEGCTL proctab-crossgroup-identity */|' "$_file";;
     executive-not-pinned)
         sed -i 's|\.owner          = THIS_MODULE,|/* NEGCTL executive-not-pinned: no .owner, so nothing pins vms.ko */|' "$_file";;
     pcb-per-thread)

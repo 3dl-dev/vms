@@ -7,7 +7,9 @@ vms-760`, then `docs/cluster-protocol-spec.md` §4(m), §4(n), §4(o), §4(p), �
 > limit — see §0b). Live notes go on **`vms-01c`**; `vms-760`'s local history is
 > still readable with `rd show vms-760`.
 
-> ## ⇒ WHERE THE WORK IS NOW (2026-07-30g)
+> ## ⇒ SEE `docs/HANDOFF-T1-bystander.md` FIRST (2026-07-31)
+>
+> ## ⇒ WHERE THE WORK IS NOW
 >
 > **`vms-760` is CLOSED — OVMX reaches and holds `SHOW CLUSTER` MEMBER.** So is
 > `vms-4f2` (the milestone proof-point), `vms-01c`, `vms-00d`, `vms-70b`.

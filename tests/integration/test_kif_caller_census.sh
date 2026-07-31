@@ -64,6 +64,23 @@
 # The gate does NOT verify that the item is open (rd is nostr-backed and not
 # reachable from CI). It verifies that a human wrote an id down.
 #
+# WHAT THIS GATE DOES NOT SEE, stated so its PASS is never read as more than it
+# is. It is a SOURCE SCAN, not a build and not an execution:
+#
+#   - A call inside a preprocessor block that never compiles counts as a caller.
+#     That is not hypothetical -- vms-2b8's prvdef agreement lock was wrapped in
+#     an #ifdef nothing compiled, so an #error inside it never fired. Deciding
+#     which #ifdef is live needs the build configuration, and a census that
+#     GUESSED at it would be inventing a plausible answer. There is no #if 0 in
+#     src/ or tools/ today; if one appears around a vms_kif call, this gate will
+#     be satisfied by it and a human has to catch it.
+#   - A caller in a function nothing calls still counts. The census answers "is
+#     there a product path", not "is that path executed".
+#   - It says NOTHING about whether the facility behind the call is real. An
+#     entry point can be wired to a per-process fake and pass here. That is the
+#     A-writes/B-reads question (CLAUDE.md Rule 11) and it belongs to the QEMU
+#     suites and the veracity passes, not to a grep.
+#
 # If you are here because this failed: do NOT add a declaration to make it pass
 # unless the entry point genuinely has no product path yet AND you have an item
 # for it. The declaration says "this facility is not wired" out loud. Adding one

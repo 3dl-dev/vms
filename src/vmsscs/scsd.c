@@ -367,7 +367,8 @@ struct peer_state {
     /* vms-760: cluster-wide state-transition barrier (spec 4p). */
     uint32_t barrier_epoch;        /* body[12:16] latched from the coordinator's op 0x09 */
     int      barrier_step;         /* current step N, 1..12; 0 = barrier not running */
-    int      barrier_done;         /* step 12 released -- transition complete */
+    int      barrier_done;         /* our OWN admission finished (record, NOT a gate) */
+    unsigned barrier_count;        /* transitions completed; #1 = our join, 2+ = bystander */
     /* vms-760: WE ARE TOO FAST. OVMX answers the coordinator's op 0x0a GO in
      * ~20 us -- quicker than the coordinator's own fan-out loop, which takes
      * 20-214 us per additional member. A step-1 op 0x0b that lands while the
@@ -2158,8 +2159,27 @@ int main(int argc, char **argv)
                                " (epoch=0x%08X)\n", (unsigned)ps->barrier_epoch);
                         fflush(stdout);
                     }
+                    /* vms-e81 (T1.1): the barrier must arm for EVERY transition,
+                     * not just our own join.
+                     *
+                     * This used to require !ps->barrier_done, and barrier_done
+                     * latches when OUR join completes step 12 -- so once OVMX
+                     * became a member it could NEVER arm the barrier again.
+                     * Every later transition (any other node joining or leaving)
+                     * would have found OVMX silent, and spec 4(p) is explicit
+                     * about what that does: the coordinator gates every step on
+                     * EVERY member answering, so a silent member strands the
+                     * transition, it times out, '%CNXMAN, aborting VAXcluster
+                     * state transition' is logged, and HEALTHY MEMBERS ARE
+                     * DROPPED. OVMX would have been a hazard to any cluster it
+                     * sat in, triggered by a join it had nothing to do with.
+                     *
+                     * barrier_done is now a record that our OWN admission
+                     * finished, not a gate on future participation. Only
+                     * barrier_step (a barrier already running) suppresses a
+                     * re-arm. */
                     if (cm_req && mv.opcode == SCS_MEMBER_OP_XITION_GO &&
-                        (size_t)n >= 90 && !ps->barrier_step && !ps->barrier_done) {
+                        (size_t)n >= 90 && !ps->barrier_step) {
                         uint16_t tag = (uint16_t)buf[88] | ((uint16_t)buf[89] << 8);
                         if (tag == SCS_MEMBER_BARRIER_TAG) {
                             /* DO NOT answer from here -- see barrier_go_pending.
@@ -2211,10 +2231,15 @@ int main(int argc, char **argv)
                             if (ps->barrier_step >= SCS_MEMBER_BARRIER_STEPS) {
                                 ps->barrier_done = 1;
                                 ps->barrier_step = 0;
+                                ps->barrier_count++;
                                 log_ts(stdout);
                                 printf(" SCSD-I-XITDONE, state transition COMPLETE"
-                                       " (all %d barrier steps released)\n",
-                                       SCS_MEMBER_BARRIER_STEPS);
+                                       " (all %d barrier steps released; this is"
+                                       " transition #%u for this peer -- #1 is our"
+                                       " own admission, later ones are transitions"
+                                       " we participate in as a MEMBER)\n",
+                                       SCS_MEMBER_BARRIER_STEPS,
+                                       (unsigned)ps->barrier_count);
                                 fflush(stdout);
                             } else {
                                 ps->barrier_step++;

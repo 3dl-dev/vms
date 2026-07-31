@@ -227,9 +227,12 @@ echo "$EXPECTED" | sed 's/^/  /'
 echo ""
 
 # A FLOOR, not a pin: adding a suite must never turn this red, deleting one
-# always must. Raised 13 -> 14 when vms-2b8 landed test_kmod_ident.c.
-if [ "$N_EXPECTED" -lt 14 ]; then
-    echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 14)."
+# always must. Raised 13 -> 14 when vms-2b8 landed test_kmod_ident.c; raised
+# 14 -> 20 on vms-47b -- measured by running the derivation above against
+# this checkout (`ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c |
+# wc -l` = 20) and reading its output, not by adding to the old literal.
+if [ "$N_EXPECTED" -lt 20 ]; then
+    echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 20)."
     echo "A suite source was deleted. Deleting the test that would expose a defect is"
     echo "not a way to make this gate pass."
     exit 1

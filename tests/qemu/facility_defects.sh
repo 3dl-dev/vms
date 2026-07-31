@@ -855,7 +855,24 @@ of driving vms_kif; it is a property of hand-registering first.
 EOF
                       ;;
         isolation)    echo "isolated";;
-        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Five suites detect it: test_kmod_bind, and test_syssvc_procnam, test_syssvc_showproc, test_syssvc_ef_mproc and test_syssvc_ef_local through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
+        # `why`'s count and enumeration are DERIVED from suites_red, not
+        # hand-recited: a rebase (or any future edit) that changes suites_red
+        # without touching this line used to leave a sentence that quietly
+        # disagreed with the field beside it -- exactly what happened across
+        # the vms-47b/vms-6a7/vms-2a8 rebase, where suites_red was correctly
+        # re-derived to six suites but this text was kept from one side of
+        # the conflict and still said "Five suites" while naming only five.
+        # The equality check in run_facility_negctl.sh keys on suites_red, so
+        # that drift never weakened the gate -- but the printed evidence was
+        # false. Computing _n/_list from suites_red here makes that specific
+        # disagreement structurally impossible: change suites_red and this
+        # sentence's count and list change with it, in the same run.
+        why)
+            _suites_red=$(defect_field "$_d" suites_red)
+            _n=$(set -- $_suites_red; echo $#)
+            _list=$(echo "$_suites_red" | sed 's/ /, /g')
+            echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. $_n suites detect it (through the public sys\$ API, or test_kmod_bind directly): $_list. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer."
+            ;;
         require_fail) cat <<'EOF'
 $SETEF reaches the executive with no explicit register
 $GETJPI(self) resolves the auto-bound process

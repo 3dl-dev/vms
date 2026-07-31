@@ -17,10 +17,20 @@
 #include <sys/ioctl.h>
 #include "vms_ioctl.h"
 
+/* ORACLE-PINNED (vms-68c), docs/oracle/vax73-event-flags.md: $SSDEF in
+ * SYS$LIBRARY:STARLET.MLB on the reference lab VAX V7.3 gives SS$_WASCLR 1
+ * (the SAME value as SS$_NORMAL -- that alias is VMS) and SS$_ILLEFC 236.
+ * This file previously carried 5 and 44, matching src/kernel/vms_internal.h,
+ * which the same oracle disproves: F$MESSAGE(5) is %NONAME-?-NOMSG and
+ * F$MESSAGE(44) is %SYSTEM-F-ABORT. Both sides are corrected together.
+ *
+ * NOTE for the reader of the assertions below: since SS_WASCLR == SS_NORMAL,
+ * "status == SS_WASCLR" no longer discriminates against a bare success. The
+ * assertions that need to discriminate check SS_WASSET, which is distinct. */
 #define SS_NORMAL   1
 #define SS_WASSET   9
-#define SS_WASCLR   5
-#define SS_ILLEFC   44
+#define SS_WASCLR   1
+#define SS_ILLEFC   236
 
 static int pass = 0, fail = 0;
 

@@ -1426,7 +1426,27 @@ static int lex_message(struct dcl_context *ctx, const char *args,
          * F$MESSAGE could not name the status sys$qio actually returns
          * for an unimplemented function code. */
         { 244,   "SYSTEM", 'F', "ILLIOFUNC",     "illegal I/O function code" },
-        { 292,   "SYSTEM", 'E', "INSFMEM",       "insufficient dynamic memory" },
+        /* ORACLE-PINNED (vms-68c), docs/oracle/vax73-event-flags.md:
+         *   $EQU SS$_ILLEFC 236; F$MESSAGE(236) ->
+         *     "%SYSTEM-F-ILLEFC, illegal event flag cluster"
+         *   $EQU SS$_UNASEFC 564; F$MESSAGE(564) ->
+         *     "%SYSTEM-F-UNASEFC, unassociated event flag cluster"
+         * Neither row existed. Both statuses became reachable through the
+         * public API when sys$setef/$clref/$readef/$ascefc were wired to
+         * the executive (vms-2a8), and a status DCL's F$MESSAGE cannot name
+         * is a half-applied correction -- the ILLIOFUNC lesson above.
+         * There is deliberately NO row for SS$_WASCLR: it is 1 on VMS, the
+         * same value as SS$_NORMAL, which is already the first row. */
+        { 236,   "SYSTEM", 'F', "ILLEFC",        "illegal event flag cluster" },
+        { 564,   "SYSTEM", 'F', "UNASEFC",       "unassociated event flag cluster" },
+        /* ORACLE-PINNED (vms-2a8), docs/oracle/vax73-event-flags.md §1
+         * method 2: F$MESSAGE(292) -> "%SYSTEM-F-INSFMEM, insufficient
+         * dynamic memory". The severity here was 'E'; it is 'F'. The
+         * value itself was never in doubt -- the severity field of the
+         * status says so independently (292 & 7 == 4 == STS$K_SEVERE) --
+         * so OVMX was rendering a status whose own bits contradict the
+         * letter it printed. Same run that pinned ILLEFC/UNASEFC below. */
+        { 292,   "SYSTEM", 'F', "INSFMEM",       "insufficient dynamic memory" },
         /* ORACLE-PINNED (vms-8019): $SSDEF SS$_IVLOGNAM 340;
          * F$MESSAGE(340) -> "%SYSTEM-F-IVLOGNAM, invalid logical name".
          * Replaces 596/'E' -- 596 is SS$_VOLINV on the oracle. */

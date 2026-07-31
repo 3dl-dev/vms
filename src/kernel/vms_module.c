@@ -492,6 +492,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_ascefc(proc, arg);
     case VMS_IOCTL_DACEFC:
         return vms_ioctl_dacefc(proc, arg);
+    case VMS_IOCTL_DLCEFC:
+        return vms_ioctl_dlcefc(proc, arg);
 
     /* Lock manager (3d) */
     case VMS_IOCTL_ENQ:

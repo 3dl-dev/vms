@@ -184,6 +184,11 @@ uint32_t vms_kif_ascefc(uint32_t efn, const char *name, uint32_t prot, uint32_t 
 /* Disassociate from common event flag cluster */
 uint32_t vms_kif_dacefc(uint32_t efn);
 
+/* Mark a PERMANENT common event flag cluster for deletion. Named, not
+ * numbered: the caller need never have associated with it. SS$_UNASEFC if
+ * the executive has no cluster of that name. */
+uint32_t vms_kif_dlcefc(const char *name);
+
 /* ================================================================
  * Lock Manager (3d)
  * ================================================================ */

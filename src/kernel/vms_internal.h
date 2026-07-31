@@ -61,12 +61,48 @@
 #define SS__IVLOGNAM    340         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
 #define SS__NOPRIV      0x00000024
 #define SS__ACCVIO      0x0000000C
-#define SS__INSFMEM     0x0000002C  /* insufficient memory (44 decimal, matches real VMS) */
+/*
+ * Event-flag and memory statuses -- ORACLE-PINNED (vms-68c, 2026-07-30),
+ * full transcript in docs/oracle/vax73-event-flags.md. Same node and same
+ * two-method protocol as the block above (OpenVMS VAX V7.3, VAX1):
+ *
+ *   LIBRARY/EXTRACT=$SSDEF ... SYS$LIBRARY:STARLET.MLB + SEARCH
+ *     $EQU  SS$_WASCLR      1
+ *     $EQU  SS$_WASSET      9
+ *     $EQU  SS$_ILLEFC    236
+ *     $EQU  SS$_INSFMEM   292
+ *     $EQU  SS$_UNASEFC   564
+ *   F$MESSAGE round-trip
+ *     1   -> %SYSTEM-S-NORMAL,   normal successful completion
+ *     236 -> %SYSTEM-F-ILLEFC,   illegal event flag cluster
+ *     292 -> %SYSTEM-F-INSFMEM,  insufficient dynamic memory
+ *     564 -> %SYSTEM-F-UNASEFC,  unassociated event flag cluster
+ *
+ * FOUR VALUES HERE WERE WRONG, and the same oracle names what each of them
+ * actually is:
+ *     WASCLR  was 5   -> F$MESSAGE(5)  = %NONAME-?-NOMSG (not a status at all)
+ *     ILLEFC  was 44  -> F$MESSAGE(44) = %SYSTEM-F-ABORT
+ *     UNASEFC was 48  -> F$MESSAGE(48) = %SYSTEM-W-BADATTRIB
+ *     INSFMEM was 44  -> %SYSTEM-F-ABORT, under a comment asserting that 44
+ *                        "matches real VMS". It does not.
+ *
+ * This was latent only because NOTHING in the product called the event flag
+ * facility (vms-2a8): src/libvms/syssvc/sys_event.c kept all 128 flags in
+ * per-process memory, so no event-flag status ever crossed /dev/vms. Wiring
+ * it is what makes these values load-bearing, which is why they are pinned
+ * in the same branch.
+ *
+ * SS__WASCLR == SS__NORMAL == 1 IS VMS, NOT A COLLISION. $SSDEF gives both
+ * the value 1 and F$MESSAGE(1) has exactly one rendering. A caller
+ * distinguishes "was clear" from "was set" by testing SS$_WASSET, never by
+ * expecting a WASCLR value distinct from success. Do not "fix" this back.
+ */
+#define SS__INSFMEM     292         /* insufficient dynamic memory (ssdef.h SS$_INSFMEM) */
 #define SS__EXASTLM     0x00000038  /* AST quota exceeded */
-#define SS__WASSET      9           /* flag/AST was enabled/set */
-#define SS__WASCLR      5           /* flag/AST was disabled/clear */
-#define SS__ILLEFC      44          /* illegal event flag number */
-#define SS__UNASEFC     48          /* unassociated common EFC */
+#define SS__WASSET      9           /* flag/AST was enabled/set (ssdef.h SS$_WASSET) */
+#define SS__WASCLR      1           /* flag/AST was disabled/clear (ssdef.h SS$_WASCLR) */
+#define SS__ILLEFC      236         /* illegal event flag cluster (ssdef.h SS$_ILLEFC) */
+#define SS__UNASEFC     564         /* unassociated common EFC (ssdef.h SS$_UNASEFC) */
 #define SS__NOTQUEUED   40          /* lock not queued (NOQUEUE flag) */
 #define SS__DEADLOCK    100         /* deadlock detected */
 #define SS__IVLOCKID    108         /* invalid lock ID */
@@ -452,6 +488,7 @@ long vms_ioctl_wfland(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_readef(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dlcefc(struct vms_proc *proc, unsigned long arg);
 
 /* Lock manager (3d) */
 long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg);

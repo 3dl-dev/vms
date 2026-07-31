@@ -5,6 +5,36 @@
 # Runs VMS C programs from tests/conformance/vms_programs/ inside the ovmx-test
 # Docker container to verify VMS API compatibility.
 #
+# ---------------------------------------------------------------------------
+# WHAT THIS HARNESS CAN AND CANNOT ASSERT -- READ BEFORE ADDING A PROGRAM
+#
+# It runs on a plain Linux host in a tooling container. There is no /dev/vms
+# here and there never will be: the only OVMX runtime is the kernel/QEMU path
+# (CLAUDE.md Rule 9). So this harness can only assert VMS behaviour that is
+# EXECUTIVE-INDEPENDENT -- descriptors, FAO, $GETMSG, the math/string/time RTL,
+# constant values. A program here that calls a system service backed by the
+# executive is asserting that the service SUCCEEDS WITH NO EXECUTIVE PRESENT,
+# which is a state OpenVMS is never in and OVMX refuses to boot into (vms-0ff).
+#
+# MOVED OUT FOR EXACTLY THAT REASON (vms-2a8):
+#
+#   vms_programs/test_event_flags.c  ->  tests/qemu/test_syssvc_ef_local.c
+#
+# It exercised $SETEF/$CLREF/$READEF/$WAITFR and passed here for eight rounds
+# because src/libvms/syssvc/sys_event.c kept all 128 event flags in
+# per-process memory and never called the executive -- the facade vms-2a8
+# deleted (Rule 11). The moment sys_event.c became a reader of /dev/vms, all
+# eight of its checks failed with status 0x2a4 (SS$_BUGCHECK, what vms_kif
+# returns when /dev/vms is absent). Its green had been the facade's green.
+#
+# It was NOT weakened and NOT skipped -- under Rule 10 a permanently skipped
+# test is a failing test, and keeping it green where it stood would have
+# required giving $SETEF the per-process fallback the epic exists to delete.
+# All thirteen of its checks moved verbatim and three were added; see that
+# file's header. This is the same move vms-8019 made with the host lib$getjpi
+# block in tests/libvms/test_lib_rtl.c.
+# ---------------------------------------------------------------------------
+#
 
 set -e
 

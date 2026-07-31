@@ -762,7 +762,8 @@ EOF
         facility)     echo "kernel-interface binding in the PRODUCT (vms_kif kif_bind -> vms_kif_register)";;
         targets)      echo "libvmssys/vms_kif.c";;
         # MEASURED: test_kmod_bind, and -- since vms-8019 -- test_syssvc_procnam,
-        # and -- since vms-6a7 -- test_syssvc_showproc.
+        # and -- since vms-6a7 -- test_syssvc_showproc, and -- since vms-fb9 --
+        # test_syssvc_showdev.
         # Round 1 also listed the suites in blind_suites below, which permitted
         # four suite groups to redden while only one could; those are now
         # declared as what they are: BLIND. test_syssvc_procnam is the
@@ -788,11 +789,27 @@ EOF
         # function firing for the same reason as vms-6a7's: wiring a facility
         # to the executive makes its suites depend on the bind, and the
         # manifest has to SAY so.
-        # WHY THESE TWO ARE NOT A WIDENING OF THE BLIND SET BELOW: neither
-        # hand-registers. Both open /dev/vms only to decide skip-vs-run and
-        # then use the public sys$ API, which is what a product image does --
+        # test_syssvc_showdev is the FIFTH, added by vms-fb9 (this item) when
+        # SHOW DEVICE became a reader of the executive device table. Same
+        # arrival as the others -- NOT predicted, READ OFF A RUN of THIS
+        # dispatch's own tests/qemu/run_facility_negctl.sh
+        # bind-client-no-register (the full proof-set re-run vms-fb9 r6 was
+        # asked to do): it landed on an earlier round declaring only
+        # devtab-alloc-not-recorded/devtab-owner-not-recorded, and this run
+        # is the first time this facility's negative control was actually
+        # executed end-to-end since -- the cheap host-side
+        # facility_negctl_manifest ctest checks anchors and literal text, not
+        # which suites a mutation reaches, so it could not have caught a
+        # missing suite. Reddened here, one suite outside the declared set
+        # and 3 assertions outside the named set -- test_syssvc_showdev.c
+        # does not hand-register (it opens /dev/vms only to decide
+        # skip-vs-run, same counter-example shape as procnam/showproc), so it
+        # was never a candidate for the blind_suites set below.
+        # WHY THESE THREE ARE NOT A WIDENING OF THE BLIND SET BELOW: none
+        # hand-register. Each opens /dev/vms only to decide skip-vs-run and
+        # then uses the public sys$ API, which is what a product image does --
         # the counter-example property the blind_why paragraph names.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local";;
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
 These four drive the product's own vms_kif client, so restoring the vms-9fc
@@ -816,8 +833,9 @@ of driving vms_kif; it is a property of hand-registering first.
 EOF
                       ;;
         isolation)    echo "isolated";;
-        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Five suites detect it: test_kmod_bind, and test_syssvc_procnam, test_syssvc_showproc, test_syssvc_ef_mproc and test_syssvc_ef_local through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
+        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Six suites detect it: test_kmod_bind, and test_syssvc_procnam, test_syssvc_showproc, test_syssvc_ef_mproc, test_syssvc_ef_local and test_syssvc_showdev through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
         require_fail) cat <<'EOF'
+vms_kif_open() then a BARE vms_kif_setident() reaches the executive with no explicit register
 $SETEF reaches the executive with no explicit register
 $GETJPI(self) resolves the auto-bound process
 the caller has a row in the executive's process table
@@ -881,16 +899,25 @@ sys$waitfr(1) left the flag SET -- it is not a counting semaphore
 sys$waitfr(1) returned for the already-set flag
 the cluster state word agrees with the status: flag 1's bit is CLEAR
 the cluster state word agrees with the status: flag 1's bit is SET
+the second process allocated OPA0: through the executive ($ALLOC)
+A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
+the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-Assertions across five suites go red, and that IS the defect rather than
+Assertions across six suites go red, and that IS the defect rather than
 evidence against it: the mutation deletes the ONE call that binds a process to the executive,
-and a process with no PCB can use no facility. Round 1 named two of the twelve
+and a process with no PCB can use no facility. Round 1 named two of the sixteen
 and framed the result as narrow ("only test_kmod_bind goes red"), which is
 true at suite granularity and misleading at property granularity -- the exact
-thing the equality check exists to stop. The twelve are three groups, all the
+thing the equality check exists to stop. The sixteen are five groups, all the
 same missing bind:
+  suite 0, setident (1)   -- (vms-fb9 r6) vms_kif_setident() now reaches
+                             kif_bind() like every other entry point, so the
+                             same deleted register() call leaves it unbound
+                             too; named directly in require_fail because it
+                             is its own minimal mutation's property, not a
+                             downstream read of suite 1's;
   suite 1, auto-bind (5)  -- $SETEF/$READEF/$GETJPI from a process that never
                              registered; the two named in require_fail are the
                              property, the other three read back what those
@@ -985,6 +1012,40 @@ refuse to be satisfied by a facility that does nothing, and with the bind
 deleted the facility does nothing -- so it fails, exactly as designed. A
 manifest that named only the "succeeds" assertions and not this one would be
 describing a different, kinder defect.
+
+TEST_SYSSVC_SHOWDEV, THE SIXTH SUITE, ADDED vms-fb9 r6 -- READ OFF THE PROOF
+RE-RUN THIS ITEM WAS ASKED TO DO, NOT PREDICTED. test_syssvc_showdev.c
+exists to prove SHOW DEVICE is a READER of the executive device table
+(vms-fb9), so it $CREPRCs a second process and has it $ALLOC the console
+while the first process's SHOW DEVICE watches for the change (A-writes,
+B-reads, Rule 11). Three of its assertions went red that this manifest did
+not name; the other three ("the caller has a row in the executive's process
+table", "sys$creprc created the subject process", "sys$creprc returned the
+subject's VMS process ID") are the SAME missing-bind failure
+test_syssvc_showproc already declares, word for word, so they need no
+second entry --
+the equality check compares a SET, not a per-suite tally. The three that ARE
+new are downstream of the same handshake failure suite 3/showproc already
+explain: with the subject process unable to register, its $ALLOC of OPA0:
+never happens, so the parent's SHOW DEVICE never observes an allocated row
+("the second process allocated OPA0:", "A-WRITES/B-READS: ..."), and neither
+does the bare listing that cross-checks it against $DEVICE_SCAN ("the bare
+listing shows it too, ..."). Nothing about $DEVICE_SCAN or $GETDVI itself is
+being tested by this red set; it is the same registration wall, observed
+through a sixth door.
+
+WHY THIS WAS RED ON THE TREE BEFORE THIS ROUND, AND WHY THAT IS NOT AN
+EXCUSE. test_syssvc_showdev.c does not hand-register -- open /dev/vms only
+to decide skip-vs-run, then use the public sys$ API, the same counter-example
+shape as procnam/showproc -- so it was a client of this bind from the day it
+landed (vms-fb9, before this round). It stayed undeclared because
+tests/qemu/run_facility_negctl.sh's bind-client-no-register control is
+expensive (a full container rebuild and QEMU boot) and, unlike
+facility_negctl_manifest (the cheap host-side ctest that only checks anchors
+and literal text), nothing had actually EXECUTED it end to end since
+test_syssvc_showdev landed. Declared here the moment that execution happened,
+per CLAUDE.md Rule 9 -- a pre-existing gap discovered while re-running the
+full proof set is still owned by whoever's push would otherwise carry it red.
 EOF
                       ;;
         esac;;

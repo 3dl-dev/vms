@@ -170,20 +170,32 @@ void dcl_context_init(struct dcl_context *ctx)
      * vms_kif_getjpi_self() read of that row.
      *
      * STILL NOT WIRED UP -- BUT THE REASON PREVIOUSLY WRITTEN HERE IS
-     * NOW FALSE, RE-CHECKED 2026-07-31 (vms-fb9 r5) BY EXECUTION. The
+     * NOW FALSE, RE-CHECKED 2026-07-31 (vms-fb9 r6) BY EXECUTION. The
      * literal premise survives: vms_kif_register() still has zero
      * product callers by that name. The CONCLUSION drawn from it --
      * "no DCL process is registered with the executive and $GETJPI
      * would return -ESRCH for every one of them" -- does not, because
      * vms-9fc made the open -> register sequence automatic
      * (src/libvmssys/vms_kif.h:7-18): kif_bind() in
-     * src/libvmssys/vms_kif.c completes it before EVERY /dev/vms ioctl
-     * a process issues, keyed on that process, so a DCL process is
-     * registered on its FIRST vms_kif_* call with no explicit register
-     * call anywhere in its path. SHOW DEVICE proves this today
-     * (src/vmsdcl/dcl_cmd_show.c, vms-fb9): it reads a real /dev/vms
-     * inside QEMU with no vms_kif_register() call written anywhere near
-     * it.
+     * src/libvmssys/vms_kif.c completes it before every /dev/vms ioctl
+     * a process issues through vms_kif.c's public entry points, keyed
+     * on that process, so a DCL process is registered on its FIRST
+     * vms_kif_* call with no explicit register call anywhere in its
+     * path. SHOW DEVICE proves this today (src/vmsdcl/dcl_cmd_show.c,
+     * vms-fb9): it reads a real /dev/vms inside QEMU with no
+     * vms_kif_register() call written anywhere near it.
+     *
+     * "EVERY /dev/vms ioctl" was NOT true without exception until r6 of
+     * this item -- r5's version of this comment said it was, and that
+     * was CAUGHT BY MEASUREMENT: vms_kif_setident() issued a raw ioctl
+     * instead of going through kif_call()/KIF_CALL, so it alone reached
+     * the executive unbound. DCL does not call vms_kif_setident() on
+     * this path (it is out of scope here, per the note below), so the
+     * gap did not change what THIS file observes -- but the comment's
+     * "EVERY" claim about the mechanism was false regardless of who
+     * calls it, and is fixed at the source in r6
+     * (src/libvmssys/vms_kif.c, tests/qemu/test_kmod_bind.c suite 0),
+     * not by narrowing this sentence.
      *
      * So the precondition this note told the next reader to wait for
      * has been met. That does NOT mean this file should wire up

@@ -22,6 +22,14 @@
 # read" and must NOT trip the Rule 10 verdict check; case C targets the Rule
 # 10 verdict check and must NOT print a row.
 #
+# CASE D, ADDED vms-fb9 r6: a SECOND adversary found that round 5's own fix
+# for case A/B/C ($STATUS = 676, property 2b in the gate) was ITSELF
+# vacuous -- a bare `return SS$_BUGCHECK;` before any executive read also
+# sets that status and prints nothing, so it passed every check A/B/C
+# defend against. Case D is that mutant, verbatim, and it can only be
+# caught by property 4 (a real openat("/dev/vms", ...) syscall,
+# strace-observed) -- see the gate script's own header.
+#
 # Usage: test_show_device_rows_negctl.sh [SRC_ROOT]
 
 set -u
@@ -144,6 +152,7 @@ expect_red() {
 
 R_ROW='put something other than the liveness marker on stdout'
 R_VERDICT='answered with a VMS device verdict the executive never gave'
+R_NOREAD='no openat("/dev/vms", ...) syscall was observed by strace'
 
 # --- A. THE ADVERSARY MUTANT, verbatim -----------------------------------
 # A hardcoded stub row emitted when the executive returns nothing, written
@@ -170,6 +179,21 @@ inject 'puts("console device: opa0 [up]");' \
 inject 'dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available"); return SS$_NOSUCHDEV;' \
     && expect_red "C: an unanswered read reported as %SYSTEM-W-NOSUCHDEV" \
         "$R_VERDICT" "$R_ROW"
+
+# --- D. THE VACUITY MUTANT (vms-fb9 r6 adversary finding, verbatim) -------
+# Round 5 added property 2b ($STATUS = 676, SS$_BUGCHECK) to defeat A/B/C.
+# An adversary then found it was ITSELF satisfiable by something other than
+# the behaviour under test: this exact statement, dropped at the top of
+# cmd_show_device() before vms_kif_open() or any ioctl, ALSO sets
+# $STATUS = 676 and prints nothing -- so cases A/B/C's own anchors (R_ROW,
+# R_VERDICT) and the $STATUS check all stayed green. Property 4
+# (check_executive_read_attempted, strace-observed) is the ONLY one that
+# can catch this, so this control requires THAT property and no other --
+# not R_ROW, not R_VERDICT. If this ever passes with $R_NOREAD absent from
+# the gate's output, property 4 has been weakened back into vacuity.
+inject 'return SS$_BUGCHECK;' \
+    && expect_red "D: \$STATUS fabricated with no executive read at all (M3)" \
+        "$R_NOREAD" "$R_ROW" "$R_VERDICT"
 
 echo ""
 echo "vms-fb9 behavioural negative controls: $passed passed, $failed failed"

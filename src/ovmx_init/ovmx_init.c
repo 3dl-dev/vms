@@ -888,7 +888,7 @@ int main(void)
      * privilege mask into a USERSPACE PCB -- the shape this item exists
      * to remove.
      *
-     * WHY IT IS STILL LEFT IN PLACE, RE-CHECKED 2026-07-31 (vms-fb9 r5)
+     * WHY IT IS STILL LEFT IN PLACE, RE-CHECKED 2026-07-31 (vms-fb9 r6)
      * BY EXECUTION, NOT BY RE-READING THE OLD NOTE. This file itself
      * makes no vms_kif_* call anywhere -- grep the file, there is not
      * one -- so PID 1's own process genuinely has no row in the
@@ -899,11 +899,27 @@ int main(void)
      * event still to happen. It has happened. vms-9fc made the
      * open -> register sequence automatic (src/libvmssys/vms_kif.h:7-18,
      * kif_bind() in src/libvmssys/vms_kif.c): the FIRST vms_kif_* call
-     * any process makes, including a bare vms_kif_setident(), completes
-     * its own registration inline -- no separate explicit
-     * vms_kif_register() call is needed first, and none is missing here
-     * for lack of one existing elsewhere in the product. SHOW DEVICE
-     * proves the mechanism against a real /dev/vms today
+     * any process makes completes its own registration inline -- no
+     * separate explicit vms_kif_register() call is needed first, and
+     * none is missing here for lack of one existing elsewhere in the
+     * product.
+     *
+     * "ANY vms_kif_* call" was NOT true of vms_kif_setident() until r6
+     * of this item, and r5's version of this comment wrongly claimed it
+     * was -- CAUGHT BY MEASUREMENT, not by inspection. vms_kif_setident()
+     * was the one function in src/libvmssys/vms_kif.c that issued a raw
+     * ioctl instead of going through kif_call()/KIF_CALL, so it never
+     * ran kif_bind(). Measured against a real /dev/vms: vms_kif_open()
+     * then a BARE vms_kif_setident() returned status=20 (SS$_BADPARAM),
+     * not because the parameters were bad but because the unbound ioctl
+     * was rejected -ESRCH and the old failure path hard-coded
+     * SS$_BADPARAM for every failure. Fixed in r6 by routing
+     * vms_kif_setident() through KIF_CALL like every other entry point
+     * (src/libvmssys/vms_kif.c); the same probe now returns status=1
+     * (SS$_NORMAL). See tests/qemu/test_kmod_bind.c suite 0. With that
+     * fix landed, "the FIRST vms_kif_* call any process makes completes
+     * its own registration inline" is now true without exception. SHOW
+     * DEVICE proves the mechanism against a real /dev/vms today
      * (src/vmsdcl/dcl_cmd_show.c, vms-fb9): it calls vms_kif_devscan()
      * with no register call anywhere in DCL's path and reads a real
      * row back.

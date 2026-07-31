@@ -59,6 +59,39 @@
 # including the exact adversary mutant above -- and requires each to drive
 # this file RED.
 #
+# ADDED 2026-07-31 (vms-fb9 r6), PROPERTY 4: A STATUS ALONE IS NOT EVIDENCE.
+# An adversary found that property 2b ($STATUS = 676) is satisfiable by
+# something OTHER than the behaviour under test: `return SS$_BUGCHECK;` at
+# the very top of cmd_show_device(), before vms_kif_open() or any ioctl,
+# ALSO sets $STATUS = 676 and prints nothing -- so it passed every check in
+# this file (mutation M3, tests/integration/test_show_device_rows_negctl.sh
+# case D). "$STATUS carries the ioctl failure" was true of the REAL failure
+# path and also true of a status simply assigned by hand; the gate could
+# not tell them apart.
+#
+# check_executive_read_attempted() closes that gap with evidence a
+# fabricated status cannot produce: a real openat("/dev/vms", O_RDWR)
+# syscall, observed with strace. src/libvmssys/vms_kif.c's vms_kif_open()
+# is a RAW KERNEL SYSCALL (src/libvmssys/vms_syscall.h, no libc wrapper,
+# so LD_PRELOAD interposition could not see it -- strace attaches at the
+# kernel syscall boundary and sees it regardless), issued unconditionally
+# by kif_bind() before every /dev/vms ioctl, and RETRIED ON EVERY CALL
+# because a failed open leaves vms_dev_fd negative
+# (src/libvmssys/vms_kif.c vms_kif_open(): `if (vms_dev_fd >= 0) return
+# vms_dev_fd;` never fires when the previous attempt failed). Measured: a
+# real `SHOW DEVICE` against this build issues the syscall twice; mutation
+# M3 issues it zero times. If strace is not available this property CANNOT
+# be evaluated, so it is reported as FAILED, never silently skipped
+# (CLAUDE.md Rule 10 -- the same convention run_facility_negctl.sh already
+# uses for a missing cmake).
+#
+# NOT CLAIMED: that this is a complete defence against every possible
+# vacuous handler. It closes the ONE hole M3 demonstrated (a status
+# assigned without any executive interaction). A handler that DOES open
+# /dev/vms for some unrelated reason and then still fabricates a row or a
+# status would defeat this property too and would need a different anchor
+# again -- this comment does not claim otherwise.
+#
 # Usage: test_show_device_rows.sh [PATH_TO_DCL.EXE]
 
 set -u
@@ -75,6 +108,7 @@ status=0
 MARK='OVMX-PROBE-ALIVE'
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
+STRACE=$(command -v strace 2>/dev/null || true)
 
 echo "vms-fb9 behavioural gate: SHOW DEVICE prints only rows it read from /dev/vms"
 
@@ -172,6 +206,33 @@ check_status_reports_failure() {
     fi
 }
 
+# --- Property 4: the executive was ACTUALLY read, not merely a status ----
+# fabricated without touching it. See the file header (added vms-fb9 r6)
+# for why $STATUS alone (property 2b) is not enough.
+R_NOREAD='no openat("/dev/vms", ...) syscall was observed by strace'
+check_executive_read_attempted() {
+    label="$1"; cmdline="$2"
+    if [ -z "$STRACE" ]; then
+        fail "$label: strace is not available" \
+             "this property cannot be evaluated without it, so it is" \
+             "reported as FAILED, never silently skipped (Rule 10)"
+        return
+    fi
+    printf '%s\nWRITE SYS$OUTPUT "%s"\n' "$cmdline" "$MARK" \
+        | "$STRACE" -f -e trace=openat -o "$WORK/strace.out" "$DCL" \
+              >"$WORK/strace_stdout" 2>"$WORK/strace_stderr"
+    if grep -qF '"/dev/vms"' "$WORK/strace.out" 2>/dev/null; then
+        echo "  OK: $label really attempted to open /dev/vms (strace-observed)"
+    else
+        fail "$label did not prove the executive was actually read" \
+             "$R_NOREAD" \
+             "\$STATUS alone is not evidence -- a handler can fabricate it" \
+             "without touching /dev/vms at all (vms-fb9 r6, mutation M3)." \
+             "openat() calls strace saw (none were /dev/vms):" \
+             "$(grep -F 'openat(' "$WORK/strace.out" 2>/dev/null | tail -5 | sed 's/^/       | /')"
+    fi
+}
+
 # --- Property 3: with an executive, the console IS listed ----------------
 check_lists_console() {
     label="$1"; cmdline="$2"
@@ -193,6 +254,8 @@ if [ "$HAVE_EXEC" -eq 0 ]; then
     check_no_vms_verdict "SHOW DEVICE OPA0:" 'SHOW DEVICE OPA0:'
     check_status_reports_failure "bare SHOW DEVICE" 'SHOW DEVICE'
     check_status_reports_failure "SHOW DEVICE OPA0:" 'SHOW DEVICE OPA0:'
+    check_executive_read_attempted "bare SHOW DEVICE" 'SHOW DEVICE'
+    check_executive_read_attempted "SHOW DEVICE OPA0:" 'SHOW DEVICE OPA0:'
 else
     check_lists_console "bare SHOW DEVICE" 'SHOW DEVICE'
     check_lists_console "SHOW DEVICE OPA0:" 'SHOW DEVICE OPA0:'

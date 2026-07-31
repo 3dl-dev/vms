@@ -1,306 +1,265 @@
 # Handoff — T1: OVMX survives cluster life as a MEMBER
 
-**Rewritten 2026-07-31, end of session h. Read `docs/HANDOFF-vms-760.md` §0 FIRST
-for the orchestrator doctrine and the lab procedure — it still applies verbatim,
-and this session is more evidence for it: every substantive finding below came
-from a subagent reading a capture, and the orchestrator read none of them.**
+**Rewritten 2026-07-31, end of session i. Read `docs/HANDOFF-vms-760.md` §0 FIRST
+for the orchestrator doctrine — it still applies verbatim, and this session is
+more evidence for it: four capture agents produced every grounded finding below
+and the orchestrator read no packet bytes at all.**
 
-> **Start at §0 for state, then §3 for what to do.** §1 and §2 are the reasoning
-> and exist so you do not re-derive it; skim them, do not study them.
+> **Start at §0 for state, then §5 for what to do.** §1–§4 are the reasoning and
+> exist so you do not re-derive it.
 >
-> Companion documents: `docs/analysis-e81-by11.md` (the full field map for
-> `cat 0x01 op 0x01`, member vs joiner) and spec **§4(r)** (the CM role slot and
-> transition class) + **§4(p)** (barrier scaling and the `body[55]` membership
-> bitmap), both written this session.
+> Companion documents: spec **§4(s)** (where a member's advertised cluster state
+> comes from) · **§4(t)** (Con.ID allocation) · **§4(u)** (ack cadence) ·
+> **§4(v)** (a retired finding) — all written this session. Session h's
+> `docs/analysis-e81-by11.md`, spec §4(p) and §4(r) still stand.
 
 ---
 
 ## 0. Status in one paragraph
 
-**T1.1 (`vms-e81`) is DONE. Both bystander cases pass on the real lab.** OVMX
-sits as a MEMBER while another node joins *and* while another node fails, answers
-the cluster-wide barrier for both, and is still a MEMBER afterwards with zero
-aborts and nothing stranded.
-
-```
-View of Cluster from system ID 1025  node: VAX1
-| VAX1   | VMS V7.3 | MEMBER  |
-| VAX2   | VMS V7.3 | MEMBER  |
-| OVMXBD | VMX V0.1 | MEMBER  |     <- OVMX, a bystander to VAX3's join
-| VAX3   | VMS V7.3 | MEMBER  |
-```
+**T1.1 is closed; T1's remaining work moved forward on four fronts and one
+front is still open.** Three grounded code changes landed and are verified live
+(commit `7254056`); four spec sections landed (`e20c1e2`); `vms-ae5`'s *fails*
+half was re-verified on today's binary; and the *leaves* half — a class-`0x04`
+graceful departure with OVMX as a bystander — is **still not demonstrated**, for
+reasons that turned out to be entirely about the lab harness rather than the
+protocol. A run chasing it (`dep10`) was left **running** at handoff.
 
 | | state | run |
 |---|---|---|
-| plain join → MEMBER | **verified** | `v1` |
-| bystander of a **removal** (class `0x03`) | **PASSES** | `rm1` |
-| bystander of an **addition** (class `0x02`) | **PASSES** | `by13` |
+| plain join → MEMBER | verified | `v1`, and every run since |
+| bystander of an **addition** (class `0x02`) | **PASSES** | `by13`, re-confirmed `dep6`/`dep8`/`dep9` |
+| bystander of a **removal** (class `0x03`) | **PASSES on today's binary** | `rm2` |
+| bystander of a **departure** (class `0x04`) | **NOT YET PRODUCED** | `dep1`–`dep10` |
+| barrier when the removed node is *our* barrier peer | **FAILS — new finding** | `dep6` |
 
-`by13`: `transitions=2 xitgo=2 restarts=0`, `aborts=0`. Epoch 4 = OVMX's own
-admission, epoch 5 = VAX3's addition — **OVMX's second completed barrier, for a
-transition it had nothing to do with.**
+## 1. What landed in the code (commit `7254056`, all 41 tests green)
 
-## 1. What was settled, and what it cost to learn
+### 1.1 Re-learn the cluster from the TRANSITION-OPEN — the fix, and a corrected model
 
-### 1.1 `MEMBER` was never broken — the alarm was a measurement artefact
+The known defect was "our learned `member_count` can go stale". The census
+corrected something bigger: **`op 0x01` was the wrong source in the first place.**
 
-Session g ended flagging that run `by8` reported `PHASE1 transitions=0`. It is
-not a regression. `F$GETSYI("CLUSTER_NODES")` **counts a node as soon as its CSB
-is added, before the 12-step barrier completes**, so a count-based check can read
-3 while `XITDONE` is still 0. Reproduced deliberately in `by10`. Run `v1` on a
-pristine 3-node lab reached `| OVMXV1 | VMX V0.1 | MEMBER |` with
-`transitions=1 restarts=0`.
+It is a point-in-time *reply* to a newcomer's query, sent once per VC, and sent
+to a newcomer **before that newcomer is counted** — VAX1 answered OVMX 6.7 s
+early, VAX3 4.1 s early, and **never advertised 4 at all** anywhere in `by13`.
 
-`tools/bystander.sh` now waits for `XITDONE` **as well as** the count, so
-"PHASE1 OK" means settled, not merely counted.
+The transition-open (`op 0x09`/`0x08`/`0x0d`) is the bundle every node sees on
+every transition of every class: `body[40:48]` is the transition-time quadword
+(matches a member's later `last_transition` to the millisecond against OPCOM,
+and is present 20 ms *before* OPCOM logs "completed"), and `popcount(body[55])`
+is the post-transition member count (54/54 opens, zero residuals).
 
-### 1.2 The op-1 CONNECT-ECHO is correct unconditionally
-
-Grounded across 8 specimens: a member accepting a newcomer's connect and a
-**joiner** accepting a member's connect are byte-identical — `op 0` → `op 1` →
-`op 2` → `op 3`, with no membership-dependent difference. There is no condition
-in code that should distinguish them, and adding one would invent a distinction
-VMS does not make. `68f6e9e` stands as written.
-
-Sequence invariants grounded at the same time, worth not relearning:
-
-- **One `send_seq` per peer, shared across all Con.ID pairs**, +1 per emitted
-  frame. `accept_ss == echo_ss + 1`, always.
-- Peers do **not** key on an absolute `send_seq` (`op 0` was accepted at
-  `ss` = 7, 8, 10 and 11 across specimens) but they **do** require
-  **contiguity** — zero forward gaps in ~25 000 reference frames.
-- **The failure mode for a gap is SILENT DISCARD.** There is no NAK anywhere in
-  the corpus. A frame that "should have worked" and drew no reply is the shape
-  this bug class always takes.
-
-### 1.3 The bystander root cause: **a member must RECIPROCATE a newcomer's config**
-
-In the reference, a newcomer sends every member it holds a VC with an `op 0x14`
-then an `op 0x01`, and the member answers with its **own** `op 0x14` + `op 0x01`
-**within one millisecond** (VAX1 +0.9 ms, VAX2 +0.3 ms). The newcomer then emits
-its `cat 0x01 op 0x02` add-member request ~110 ms after the **last** member
-reciprocates, and its `amsg` literally acknowledges that reciprocal `op 0x01`.
-
-**The trigger is data-driven, not a timer** — which is exactly why every patience
-experiment this item ran came back negative.
-
-OVMX never reciprocated. VAX3 sent us its config and got one stray `cat 0x04`
-ack 6.6 s later. Result: **zero `op 0x02` from VAX3 for 678 s**, and it was never
-proposed for addition by anyone.
-
-**The proof is a natural experiment inside the same capture, and it is worth more
-than the fix.** OVMX's process exited at +702 s; VAX1/VAX2 ran the removal
-transition at +730 and each re-pushed their `op 0x01` to VAX3; at **+733.5 —
-three seconds after OVMX left the membership, with nothing else changed — VAX3
-sent its `op 0x02` and joined normally.** The only variable was our presence.
-
-> **This is the THIRD time on this item the premise has inverted the same way.**
-> The newcomer looked like it was ignoring us and was **blocked on us** — first
-> the missing op-1 CONNECT-ECHO, now the missing reciprocal config. Both are
-> things the reference does immediately and unconditionally. Both read from
-> outside as *the peer's* silence. When a peer goes quiet, suspect an obligation
-> we owe it before suspecting anything about the peer.
-
-Fixed in `e4568c8`, scoped to `appeared_after_join`. **Shipped alone, on purpose**,
-so `by11` attributes cleanly.
-
-### 1.4 The `vms-e4b` hypothesis was refuted — and the real P0 was next door
-
-The item proposed keying the CM allowlist on a role slot read as
-`<generation><role>`. A 26-capture census says:
-
-- `body[16]` **is** a stable role slot (`0x10` relay, `0x20` commit, `0x30` the
-  `op 0x0f` step, `0x40` transition-open, `0x60` barrier go), zero residuals.
-- `body[17]` is **not** a generation — it is the **transition class**: `0x02` add,
-  `0x03` remove-a-failed-node, `0x04` self-departure. One capture settles it: six
-  successive transitions with the epoch monotone at 3, 4, 6, 7, 9, 11 while
-  `body[17]` runs `0x04, 0x04, 0x02, 0x04, 0x02, 0x02` — it goes *down*.
-- So the transition-open opcode does **not** vary by generation. The
-  `0x09`/`0x08`/`0x0d` triple is the three **classes**, which merely look like
-  consecutive small integers.
-- And **role-keying would have been a bug**: role `0x20` alone spans the echo
-  opcodes *and* the 7882-frame `op 0x06` burst that must never be echoed, and
-  role tags do not exist at all on cat `0x02`/`0x06` — the two categories that
-  have already bugchecked real VAXes. **The key stays `(SYSAP, category, opcode)`.**
-
-**The real P0 the hypothesis was pointing at:** we armed the barrier only on tag
-`0x0260`. The tag is `(class << 8) | role`, so **`0x0360` — the barrier of a
-class-`0x03` REMOVE — fell through to silence.** A node *failing* is the likeliest
-thing to happen around a sitting member.
-
-**Proved live, run `rm1`:** VAX3's SIMH process killed outright while OVMX sat as
-a member. VAX1's own console:
+**Verified live, run `dep6`:**
 
 ```
-%CNXMAN, lost connection to system VAX3
-%CNXMAN, timed-out lost connection to system VAX3
-%CNXMAN, proposing reconfiguration of the VAXcluster
-%CNXMAN, removed from VAXcluster system VAX3
-%CNXMAN, completing VAXcluster state transition
+SCSD-I-CLUSTATE, re-learned from the transition-open (our barrier completed):
+members 3 -> 4, last_transition 0x00bc046f061936c0 -> 0x00bc046fc60fab80
 ```
 
-`completing`, not `aborting` — the coordinator gates every step on *every* member
-answering, so it could only complete because OVMX answered the class-`0x03`
-barrier it was previously blind to. `transitions=2`, `aborts=0`, cluster settled
-at VAX1+VAX2+OVMX. Detection latency ~37 s.
+Applied at *our barrier completing*, so a proposal that never completes is never
+advertised; class `0x04` has no barrier so it applies at the open. `formed` stays
+copy-once — it never changes in any capture. The `op 0x01` path remains the
+bootstrap but can no longer walk us backwards: `last_transition` is monotonic, so
+a copy carrying an older transition than the one we hold is stale by construction
+and is logged and ignored.
 
-### 1.5 The 12-step barrier does not scale with membership — the FRAME COUNT does
+**Two limits kept deliberately.** We read the bitmap's *popcount* only — the
+bit-to-node mapping is **not** grounded (both observed transitions set a
+contiguous run, fitting "bit k = CSID slot" and "bit k = join order" equally) and
+the field's extent is undetermined. Counting bits needs no mapping; asserting the
+bitmap would, so we never assert it.
 
-Measured, not assumed (41 captures, 40 transitions, 30 completed barriers):
+**And an explicit absence, which is a finding, not permission:** no peer anywhere
+in the library reacts to a wrong `member_count`. `by13` reached four nodes
+normally with OVMX advertising a stale `2`. This defect class is invisible on the
+wire and will never announce itself.
 
-- **Every** completed barrier tops out at exactly step 12. M=2 (16 barriers),
-  M=3 (11), M=4 (3): **zero variance**, and the same for a class-`0x03` removal.
-- What scales is `#0x0b = #0x0c = 12 × (M−1)`, exact in 30/30, in a **star** around
-  the coordinator, **one lock-stepped cluster-wide barrier** (`0x0c#N` never
-  precedes the last `0x0b#N` — 0 violations in every transition).
-- **An ordinary member's cost is flat**: always 12 out, 12 back, whatever the
-  cluster size. The fan-out is the *coordinator's* obligation, inherited only at T3.
-- The one member-side consequence is **latency** — the coordinator holds each
-  release until the slowest member reports. **Do not time out on a slow step.**
-- No peer announces the step total, so 12 stays a constant. **The honest bound is
-  FOUR members**, and OVMX is one of the four.
+### 1.2 Con.ID: the high word is now per-boot
 
-Also corrected a standing misreading: `body[55]` is not the "third mutation" of
-the `op 0x09` echo — it is the coordinator's **membership bitmap** (popcount ==
-member count, 54/54), and the responder zeroes it because it is not the
-responder's to assert. Spec §4(p) and the new §4(r) carry all of this.
+Every OVMX Con.ID was a compile-time constant, making OVMX the only node on the
+wire whose connection identifiers are identical on every boot. Real nodes use one
+monotonic counter shared across *all* service classes per boot
+(`0x33590007` dir, `0x33580008` VC, `0x33580009` MSCP) with the high word
+**reseeding non-arithmetically per incarnation** (`0x8fd20007 → 0xe9950007 →
+0x5b050007`). A real node never repeats a Con.ID across incarnations; OVMX always
+did.
 
-## 2. How the addition case was finally solved
+Safe to change because the peer **binds whatever is offered and never validates
+it** — 30+ CONNECT sequences with unpredictable values, all answered
+ECHO → ACCEPT → CONFIRM, no NAK anywhere tied to a value. The *derivation* of our
+high word is labelled an OVMX design choice (Rule 8). `OVMX_CONID_BASE` pins it
+for a reproducible run.
 
-`by11` shipped the reciprocal-config fix. It was **correct, necessary, and not
-sufficient** — the frames were right, at +0.1 ms against a reference 0.3–0.9 ms,
-with a byte-exact SYSAP header. Two independent capture analyses then converged
-on the real blocker:
+**This had to land before the cycling test** — that test is exactly the untested
+collision case, and no reference capture can answer it because a real allocator
+cannot produce a repeat.
 
-> **OVMX was advertising the JOINER form of `cat 0x01 op 0x01` while sitting in
-> the cluster as a MEMBER** — 131 of 132 body bytes identical to what a node
-> emits when it is in no cluster at all.
+### 1.3 A bounds bug the change introduced, found and fixed
 
-A newcomer asks every member *"what cluster are you in?"*. VAX1 and VAX2 answered
-"3 members, formed 02:02:11.14, last transition 02:05:31.79" — that transition
-being OVMX's own admission. OVMX answered **"no cluster, 0 members, admitted
-1-JAN-2001"**, i.e. 25 years before the cluster it was in was formed. The newcomer
-could not close its view of the membership and never issued its add-member
-request, to anyone, for 678 s.
+The transition-open latch sits under an `n >= 92` guard, but `body[40:48]` needs
+`n >= 120` and `body[55]` needs `n >= 128`. Under the outer guard alone, leftover
+buffer bytes would have become an advertised member count. Now checked at the
+bytes actually touched.
 
-It worked during OVMX's own join *because that is what OVMX was*. The encoding
-was simply never updated when OVMX became a member.
+### 1.4 Stray acks: instrumented, deliberately not "fixed"
 
-Seven fields, each grounded by a controlled variation **inside a single capture**
-— full map and provenance in `docs/analysis-e81-by11.md`. Fixed in `88c98a7`,
-with `cluster_formed` / `last_transition` **copied verbatim from a member's own
-`op 0x01` and never computed** (Rule 10 — they are facts about the cluster, not
-about us). `SCSD-I-CLUSTATE` logs the copy live. Also removed: OVMX was sending
-the **joiner's** `op 0x02` to the newcomer — an established member asking a
-non-member to admit *it*.
+The reference ack is prompt (0.30/0.53/0.39/0.45 ms), opportunistic (no timer, no
+fixed N — idle captures carry none), cumulative, and never keyed to an opcode. An
+`op 0x01` is never acked (0/4). OVMX emits an ack naming an `op 0x01` ~7.0 s late
+and a genuine ack-of-ack ~4 s late — **both provably inert**, no peer reacted in
+any run.
 
-**The discriminator, now answered.** The analysis left two readings open. In
-`by13`, VAX3 sent **no `cat 0x01 op 0x02` to OVMX** — it aimed its add-member
-request at a real VAX. So the gate was **cross-peer consistency**, not
-last-reciprocator selection: a newcomer requires *every* peer it holds a VC with
-to advertise a coherent member-form cluster state, but does not necessarily then
-choose that peer as its coordinator.
+Not silenced, on purpose: the emission rule carries its own grounded claim (only
+the `op 0x06` burst is acked; no ack is attributable to the `op 0x0a`/`0x0c`
+notifications), and widening the trigger would contradict it **on the one path
+that currently works**. Guard 8 — a guard that hides a bug is worse than no
+guard. `SCSD-W-STRAYACK` now names which frame each stray acked and how stale it
+was; 13 fired in `dep6`.
 
-**Third time the premise inverted the same way on this item** — the newcomer
-looked like it was ignoring us and was blocked on us. Missing op-1 CONNECT-ECHO,
-then missing reciprocal config, then a reciprocal that said the wrong thing.
+### 1.5 Connect-back timing: finding retired, no code change
 
-## 3. ⚠ WHERE TO START NEXT SESSION
+"~11 minutes early" was measured against the wrong anchor. The connect-back is
+sub-2 s in every reference specimen (9 events, 6 captures: 0.054–1.925 s) and
+OVMX measures 0.046–1.150 s — **inside the range**. The frame cited as evidence
+(`by11` 2980) is an `mt=0x4b` MSCP sub-channel renegotiation on a ~10 s cadence,
+reproduced byte-identically in `by10`. The ~660 s figures were capture *lengths*.
 
-**Nothing is broken and nothing is half-finished.** Tree clean, 10/10 vmsscs
-tests, lab healthy (3 VAXes up from `by13`'s `reset2` + `boot3`), every result
-above reproducible. `vms-e81` and `vms-e4b` are **closed**.
+## 2. `vms-ae5` — the *fails* half is re-verified; the *leaves* half is not
 
-The honest question for the next session is **which tier to work**, and that is a
-prioritisation call rather than a blocked one. Three candidates, in the order I
-would rank them:
+**`rm2` (today's binary):** VAX3's SIMH killed outright while OVMX sat as a
+member → class-`0x03` open seen, **barrier 12/12, `XITDONE=2`**, cluster settled
+at three nodes with OVMX among them, zero aborts. Identical to `rm1`, so today's
+three code changes are **not** a regression.
 
-1. **Finish T1 (`vms-32b`).** Its remaining children are `vms-ae5` (node
-   leaves/fails — *largely demonstrated already by `rm1`*, so this may be close to
-   free), `vms-b8a` (explicit leave), `vms-c7d` (VC breakage), `vms-405` (cluster
-   group + password), `vms-7d4` (undecoded surface). Closing T1 unblocks **T2
-   (`vms-d66`)**, which is where OVMX starts contributing resources.
-2. **Clear the polish list in §4.** All non-blocking, all grounded, all small.
-   Doing them together is one cheap commit and removes several authenticity tells.
-3. **`vms-584` item 5** (join/exit cycling to drive the epoch past the node count)
-   — ideal unattended work, and `tools/removal.sh` is most of the harness already.
-   Item 1 (4–5 nodes) dropped in priority once the barrier-scaling risk was
-   retired by census; it is now an *extension* of a retired risk, not a live one.
+**The *leaves* half is still open**, and the library cannot supply it: a
+44-capture census found class `0x04` in only **2 files, 3 instances, every one
+strictly 2-node** (VAX1↔VAX2). **There is no third-party-bystander specimen for a
+graceful departure anywhere.** Whatever run finally produces one is the first
+evidence that exists, which is why it is worth the trouble.
 
-**If you want a single next experiment rather than a decision:** run
-`tools/removal.sh` again but kill **VAX1** (the cluster founder and the only
-voting node) instead of VAX3. That is a quorum event, not just a membership one,
-and nothing in our evidence covers it. Expect it to be informative whether it
-succeeds or hangs.
+Grounded from those 2-node specimens, for whoever implements the response:
+`op 0x12` → reply `0x81/0x12` with `body[18]=1` and **`body[17]` = the
+responder's own current class, NOT an echo**; `op 0x03` and `op 0x0d` → standard
+full-body echo; `op 0x0a` → **send nothing**; and do not alter HELLO cadence or
+tear down any VC — real VMS just stops. OVMX's existing silence on tag `0x0460`
+is consistent with all of this.
 
-## 4. Grounded polish — all non-blocking, none shipped
+## 3. NEW FINDING — OVMX cannot barrier through the loss of its own barrier peer
 
-Held back deliberately so each run attributed to one change. None of these
-prevents membership.
+`dep6` removed **VAX2** and OVMX **stalled at barrier step 6/12**. `rm2` removed
+**VAX3** on the *same binary* and completed **12/12**. The variable is *which*
+node left: OVMX appears unable to complete a transition barrier when the node
+being removed is the peer it holds its CM dialogue with.
 
-1. **Our `op 0x14` model string is 17 bytes** (`"OVMX Cluster Node"`) where the
-   reference emits 21 (`"VAXserver 3900 Series"`). An **authenticity tell**, not a
-   blocker — VAX1 and VAX2 both accepted ours during OVMX's own join. Note the
-   tension with INV-0: announcing ourselves honestly is deliberate policy, so this
-   is a *decision* to take, not obviously a bug to fix.
-2. **Two stray poll-tick `cat 0x04` acks.** The reference member's first cat-`0x04`
-   acknowledges the peer's `op 0x02`, not its `op 0x01`, and it never acks an ack.
-   Ours come from the poll-loop ack-backlog flush, which is why they land ~6.6 s
-   late on a tick — the tick, not the protocol, is choosing when OVMX speaks.
-3. **Member-initiated connect-back timing — RE-DERIVE, do not assume.** This was
-   filed as "~11 minutes early", but `by11` frame 2980 shows **VAX1 doing the same
-   thing**, which contradicts that reading. Ground it before changing it.
-4. **The constant local Con.ID** (`vms-298`'s unfixed half). `OVMX_MSCP_SERVER_CONID`,
-   `SCS_DIR_OVMX_CONID`, `OVMX_JOINER_CONID`, `OVMX_MSCP_CONID` are all
-   compile-time constants. A Con.ID identifies a connection *endpoint* and real
-   nodes allocate a fresh pair per connection. Touches the working join path —
-   ground it first.
-5. **Our learned `member_count` can go stale.** In `by13` we copied `2` from a
-   peer before our own admission and nothing re-taught us `3`. It is *grounded*
-   that the value should become 3 (a member's `op 0x01` tracks live membership),
-   but we do not currently re-learn it. It did not stop VAX3 joining, which is
-   itself interesting — the newcomer may key on the member *form* rather than on
-   the count agreeing.
+That is not a regression and it is not the departure question — it is
+`vms-c7d` (VC breakage) showing up on its own. **Do not re-derive this from
+scratch; it is reproducible by pointing `departure.sh` or a kill at VAX2.**
 
-## 5. Lab tooling added this session
+## 4. THE HARNESS WAS THE ADVERSARY — four real bugs, all now fixed
+
+Runs `dep1`–`dep9` produced no class-`0x04` transition, and **not one failure was
+protocol**. Each was a lab-harness defect that reported success or looked like a
+peer problem. They are listed because each one is a trap the next session would
+otherwise re-enter.
+
+1. **Only VAX1 was ever logged in.** `reset3.sh` catches VAX1's `Username:`
+   prompt during boot; VAX2 and VAX3 boot unattended and nobody logs in. Their
+   consoles then answer a carriage return with a **bell** and nothing else.
+   Every experiment in this lab has silently depended on VAX1 being the only
+   oracle. **This also blocks the quorum run**, which kills VAX1 and needs
+   VAX2/VAX3 consoles afterwards. `tools/loginN.sh` now logs in any node, and
+   the prompt *is* re-offered later, so post-hoc login works.
+2. **SYSMAN's remote path is dead in this lab.** `SET ENVIRONMENT/NODE=VAX3`
+   succeeds and reports the environment, but `DO SHOW TIME` returns no output and
+   `SHUTDOWN NODE` is accepted with `%SYSMAN-I-SHUTDOWN, SHUTDOWN request sent to
+   node VAX3` and then **nothing happens** — VAX3's SMISERVER never answers. Do
+   not spend time on it again. (`/AUTOMATIC_REBOOT=NO` is also invalid — it is a
+   boolean qualifier, `/NOAUTOMATIC_REBOOT`.)
+3. **THE CONSOLE ECHOES INPUT, SO A LITERAL PROBE ALWAYS "SUCCEEDS".** Sending
+   `WRITE SYS$OUTPUT "V3_DCL_OK"` and grepping for `V3_DCL_OK` matches **our own
+   echo**, from any state — including a bare `Username:` prompt. `loginN.sh`
+   reported `LOGGED-IN` while VAX3 sat at the login prompt, and
+   `@SYS$SYSTEM:SHUTDOWN` was typed in **as the username** (it is in that console
+   log). **Every probe is now computed** — `F$STRING(6*7)` → `42` — because only
+   DCL can evaluate it. This is the same failure family as the `tee`-swallows-
+   exit-status bug from session h: *a check that cannot fail is not a check.*
+4. **Two premature kills, both of which replaced the experiment.** `dep6` waited
+   180 s for `SYSTEM SHUTDOWN COMPLETE` and then reaped VAX2 mid-shutdown; `dep8`
+   "detected" a halt in 4 s because it grepped the **whole** console log for
+   `>>>` and matched the node's own **boot** prompt. Both converted a graceful
+   departure into a node *failure* — `lost connection` → `timed-out` →
+   `proposing reconfiguration` → class `0x03`. Killing the node does not hurry
+   the announcement; **it replaces it.** Halt detection is now tail-only and the
+   grace period is 15 min, and if the node will not go down the run says
+   UNATTRIBUTED rather than manufacturing an ending.
+
+**And one lab fact that is not a harness bug:** an orderly `@SYS$SYSTEM:SHUTDOWN`
+on **VAX3 hangs at `%SHUTDOWN-I-STOPUSER`** and never completes (16+ min, twice).
+VAX3 is a diskless MOP-booted satellite. Both reference class-`0x04` specimens
+depart **VAX2**, a full member — which is why `dep10` targets VAX2.
+
+## 5. ⚠ WHERE TO START NEXT SESSION
+
+**A run is live at handoff.** `dep10` — graceful departure of **VAX2**, OVMX
+bystanding, 15-minute grace, tag `dep10`, node `OVMXDX`, sysid `1219`.
+
+```bash
+tail -40 ~/vax/cluster/work/dep10.status          # the verdict
+L=~/vax/cluster/work/scsd-dep10.log
+grep -ac 'class=0x04' $L                          # >0 == the first bystander specimen
+grep -a 'XITION,\|CLUSTATE\|STRAYACK\|UNGROUNDED' $L | tail
+```
+
+**Read the status file before believing anything else.** If it says
+`PHASE2 WARNING ... UNATTRIBUTED`, VAX2 did not finish shutting down and the run
+says nothing about class `0x04` — it does *not* mean OVMX failed.
+
+Then, in the order I would take them:
+
+1. **Finish `vms-ae5`.** Its *fails* half is verified (`rm2`). If `dep10`
+   produced a class-`0x04` open with OVMX still MEMBER and no abort, the item
+   closes. If VAX2 also hangs at `STOPUSER`, then **no node in this lab can shut
+   down gracefully**, and that — not OVMX — is the blocker; file it and close
+   `vms-ae5` on the *fails* half with the *leaves* half moved to its own item.
+2. **`vms-c7d`, now with a live reproducer** (§3). Removing OVMX's own barrier
+   peer stalls it at step 6/12. This is a genuine T1 hole and it is cheap to
+   reproduce.
+3. **The quorum experiment** (`tools/quorum.sh`, written and unrun). Grounded
+   pre-flight: **quorum is 1 and VAX1 is the only voter**, so killing it
+   *guarantees* quorum loss — the survivors are documented to block all process
+   and I/O activity and wait, recoverable without a reboot. The script therefore
+   reads OVMX's log and VAX2/VAX3's consoles rather than VAX1's, treats a hung
+   DCL as a *result*, and trips its watchdog only on bugcheck evidence from a
+   real VAX. **It depends on §4.1 being fixed**, which it now is.
+4. **`vms-584` item 5, join/exit cycling** (`tools/cycle.sh`, written and unrun).
+   Now unblocked by the per-boot Con.ID change — running it *before* that change
+   would have tested a defect we already knew about.
+
+## 6. Lab tooling added or fixed this session
 
 | script | what it does |
 |---|---|
-| `tools/bystander.sh` | reset2 → OVMX joins → **verified settled member** → boot VAX3 into the live cluster → verify 4 nodes. The class-`0x02` bystander test. |
-| `tools/removal.sh` | reset3 → OVMX joins (4 nodes) → **kill VAX3's SIMH outright** → verify 3 nodes with OVMX among them. The class-`0x03` bystander test. |
+| `tools/departure.sh` | class-`0x04` graceful departure. `DEPART_NODE=n` picks the departing node, `DEPART_GRACE_S` the patience, `SKIP_RESET=1` reuses a verified lab. |
+| `tools/quorum.sh` | kills VAX1, the only voter. Oracles moved off VAX1; bugcheck-only watchdog. **Unrun.** |
+| `tools/cycle.sh` | join/exit cycles to drive the epoch past the node count. **Unrun.** |
+| `tools/loginN.sh` | console login for *any* node. Computed probe, one prompt per pass. |
+| `tools/reset3all.sh` | `reset3.sh` plus concurrent logins on VAX2/VAX3. The concurrent watcher still misses the boot window — `loginN.sh` afterwards works, which is what `departure.sh` relies on. Worth fixing. |
 
-Both abort on an unverified precondition. **Both had to be fixed for a bug worth
-remembering:** `waitnodes.sh N | tee -a $STAT` returns *tee's* exit status, so
-`|| die` never fires — run `by10` printed `waitnodes: FAILED -- wanted 4` and the
-very next line claimed `*** FOUR NODES INCLUDING OVMX ***`. There is now a `wn()`
-wrapper that preserves the real status. **A pipeline that discards a verdict is
-the same failure as not checking at all**, and it is harder to see.
+Run naming: `dep1`–`dep10` (departure), `rm2` (removal). **Last SCSSYSTEMID used:
+1219.**
 
-Run naming so far: `v1` (plain join), `by9`–`by13` (bystander addition), `rm1`
-(removal). **Last SCSSYSTEMID used: 1209.**
+## 7. Guardrails
 
-## 6. Guardrails — earned, not assumed
+The nine from sessions g and h stand verbatim. Three more earned here:
 
-The five from session g still hold verbatim (never answer an ungrounded
-`(cat, op)`; being faster than the reference is a compatibility bug; a repair that
-fires during normal operation is worse than the fault; one reset one believable
-run; copy console logs out before the next reset; generalising from one leg of one
-capture is the recurring error). Three more earned this session:
-
-7. **An opcode is not an identifier — and knowing that is not the same as
-   applying it.** `op 0x0d` is the class-`0x04` transition-open in category `0x01`
-   and the DLM rebuild record in category `0x02`, and a single join carries 216 of
-   the latter. I wrote a commit message warning about exactly this collision and
-   then, two hundred lines away, matched on the opcode alone. Every lock record
-   latched as a transition open; the barrier carried a corrupted epoch into step 6
-   and stalled. **Qualify by category at every site.**
-8. **A cross-check must LOG, not GATE.** The above was caught in under a minute
-   because the role cross-check *warned* 223 times. My first version *gated* the
-   latch on `role == 0x40`, which looked more defensive — and would have silently
-   skipped the DLM records, made the code correct by accident, and shipped the real
-   defect invisibly. **A guard that hides a bug is worse than no guard.**
-9. **When a peer goes quiet, suspect what you owe it.** Three times on this item
-   the symptom read as "the newcomer ignores us" and three times it was blocked on
-   an obligation the reference discharges immediately and unconditionally. Before
-   theorising about the peer, diff what a real member emits toward it — as an
-   **ordered checklist** — and find your first MISSING row.
+10. **A check that cannot fail is not a check.** A literal console probe matches
+    its own echo; `tee` swallows the exit status of the command before it. Both
+    printed success over a failed check. Prefer a probe whose *output differs
+    from its input* — `F$STRING(6*7)`.
+11. **State-detection must consult current state, not history.** Grepping a
+    whole console log for `>>>` matches the boot prompt forever. Tail it.
+12. **When the experiment will not start, suspect the harness before the
+    protocol.** Nine runs, zero protocol failures, four harness bugs. Session h's
+    lesson was "when a peer goes quiet, suspect what you owe it"; this session's
+    is its sibling — when *nothing happens at all*, suspect the instrument.

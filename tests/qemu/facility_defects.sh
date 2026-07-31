@@ -907,10 +907,10 @@ EOF
         knock_on_why) cat <<'EOF'
 Assertions across six suites go red, and that IS the defect rather than
 evidence against it: the mutation deletes the ONE call that binds a process to the executive,
-and a process with no PCB can use no facility. Round 1 named only
-test_kmod_bind and framed the result as narrow ("only test_kmod_bind goes
-red"), which is true at suite granularity and misleading at property
-granularity -- the exact thing the equality check exists to stop. The
+and a process with no PCB can use no facility. Round 1's own framing of
+this ("only test_kmod_bind goes red") was narrow: true at suite
+granularity and misleading at property granularity -- the exact thing the
+equality check exists to stop. The
 reddened assertions fall into groups, all the same missing bind (the exact
 set is the require_fail/knock_on_fail arrays above, not a count restated
 here -- see METHOD 4: a tally a human must remember to update will drift):

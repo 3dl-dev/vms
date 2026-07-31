@@ -240,10 +240,8 @@ R_NOREAD='no openat("/dev/vms", ...) syscall was observed by strace'
 #
 # So the two statuses are read SEPARATELY and neither one substitutes for
 # the other:
-#   - whether the tracee ran far enough to write the liveness marker is the
-#     ONLY signal for "did strace even trace anything" (it cannot have
-#     opened /dev/vms if it never reached the WRITE SYS$OUTPUT that follows
-#     it in the command script) -- this decides BROKEN FIXTURE.
+#   - whether the tracee ran far enough to write the liveness marker decides
+#     BROKEN FIXTURE: a trace that never got that far recorded nothing usable.
 #   - the openat("/dev/vms", ...) record in strace.out, unconditional on the
 #     tracee's own exit code, decides the actual property.
 # Neither state is ever reported as a pass when it cannot be evaluated.

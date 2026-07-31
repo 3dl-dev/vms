@@ -866,10 +866,8 @@ uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info)
  * vms_kif_register(), no other vms_kif_* call first) returned status=20
  * (SS$_BADPARAM) -- not because the parameters were bad, but because the
  * unbound ioctl was rejected -ESRCH and the old failure path hard-coded
- * SS$_BADPARAM for every failure. Now routed through KIF_CALL, the same
- * as most other entry points (vms_kif_deliverast() above is the other
- * entry point in this file that does not, for an unrelated reason given
- * at its own definition); the same probe now returns status=1
+ * SS$_BADPARAM for every failure. Now routed through KIF_CALL like the
+ * rest of this file's entry points; the same probe now returns status=1
  * (SS$_NORMAL). See tests/qemu/test_kmod_bind.c suite 0.
  */
 uint32_t vms_kif_setident(const char *username, uint32_t uic,

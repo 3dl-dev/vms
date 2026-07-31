@@ -180,11 +180,8 @@ void dcl_context_init(struct dcl_context *ctx)
      * src/libvmssys/vms_kif.c completes it before a process's other
      * vms_kif_* calls reach /dev/vms, keyed on that process, so a DCL
      * process is registered on its FIRST such call with no explicit
-     * register call anywhere in its path. (vms_kif_register() itself is
-     * the one entry point kif_bind() does not sit in front of -- it IS
-     * the call kif_bind() makes, so a caller invoking it directly, as the
-     * kernel tests do, is doing the binding, not skipping it.) SHOW
-     * DEVICE proves the mechanism against a real /dev/vms today
+     * register call anywhere in its path. SHOW DEVICE proves the
+     * mechanism against a real /dev/vms today
      * (src/vmsdcl/dcl_cmd_show.c, vms-fb9): it reads it inside QEMU with
      * no vms_kif_register() call written anywhere near it.
      *

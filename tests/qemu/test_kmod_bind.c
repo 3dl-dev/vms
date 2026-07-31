@@ -16,8 +16,8 @@
  * by hand first to reach the facility under test -- except where the
  * manual call IS the subject (suite 0's bare-setident probe below, and
  * suites 4/5's post-exec register-adopt, each explained at its own
- * definition, not here). Each property has a minimal mutation that turns
- * it -- and only it -- red:
+ * definition, not here). Each property below has a minimal mutation
+ * described at its own definition:
  *
  *   0 setident binds   (vms-fb9 r6) src/libvmssys/vms_kif.c:
  *                      vms_kif_setident() -> KIF_CALL(...) back to a raw

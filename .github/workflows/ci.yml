@@ -23,6 +23,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
+          # Cache-key hygiene, not a correctness fix (vms-fb9 r7): strace was
+          # added to the install list below. restore-keys already falls back
+          # to any apt-${{ runner.os }}- prefix, so apt-get install would
+          # still succeed and fetch strace on a stale-key cache hit -- this
+          # bump only avoids re-downloading it every run.
           key: apt-${{ runner.os }}-cmake-gcc-readline-strace
           restore-keys: apt-${{ runner.os }}-
 

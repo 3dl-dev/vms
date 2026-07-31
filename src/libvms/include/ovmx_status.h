@@ -98,6 +98,173 @@ extern "C" {
  */
 #define OVMX$_PRCLOST   OVMX_STATUS(STS$K_SEVERE, 1)
 
+/*
+ * OVMX$_NOSUBPRC -- the command asked RUN to create a SUBPROCESS, and
+ * OVMX's RUN cannot create one.
+ *
+ * ORACLE-PINNED, so that what is being refused is not guesswork.
+ * HELP RUN Process on the reference lab (VAX2, OpenVMS VAX V7.3,
+ * 2026-07-31) reads, verbatim:
+ *
+ *   Creates a subprocess or a detached process to run an image
+ *   and deletes the process when the image completes execution. A
+ *   subprocess is created if any of the qualifiers except the /UIC
+ *   or the /DETACHED qualifier is specified. A detached process is
+ *   created if the /UIC or the /DETACHED qualifier is specified and
+ *   you have the IMPERSONATE user privilege.
+ *
+ * So on OpenVMS, RUN/PROCESS_NAME (or /INPUT, /OUTPUT, /ERROR, or any
+ * of the other twenty-odd process qualifiers) WITHOUT /DETACHED is a
+ * request to create a subprocess -- a real second process, named in the
+ * executive's table, that the command does not run in.
+ *
+ * "ANY OF THE QUALIFIERS" MEANS ANY OF *THESE* QUALIFIERS, AND THE
+ * DIFFERENCE IS THE WHOLE OF vms-47b ROUND 3. That sentence lives in
+ * HELP RUN *Process*, and the HELP tree has a SECOND, SEPARATE topic,
+ * HELP RUN *Image*, with its own qualifier list. Read without the
+ * topic, the sentence licenses refusing every qualifier RUN can be
+ * written with; read in its topic, it scopes to the process qualifiers
+ * and no further. The list below is the RUN (Process) "Qualifiers"
+ * index captured VERBATIM from the reference lab (VAX1, OpenVMS VAX
+ * V7.3, 2026-07-31, `HELP/NOPROMPT RUN Process`) and is mirrored, name
+ * for name, by run_process_qualifiers[] in src/vmsdcl/dcl_cmd_process.c:
+ *
+ *   /ACCOUNTING /AST_LIMIT /AUTHORIZE /BUFFER_LIMIT /DELAY /DETACHED
+ *   /DUMP /ENQUEUE_LIMIT /ERROR /EXTENT /FILE_LIMIT /INPUT /INTERVAL
+ *   /IO_BUFFERED /IO_DIRECT /JOB_TABLE_QUOTA /MAILBOX
+ *   /MAXIMUM_WORKING_SET /ON /OUTPUT /PAGE_FILE /PRIORITY /PRIVILEGES
+ *   /PROCESS_NAME /QUEUE_LIMIT /RESOURCE_WAIT /SCHEDULE
+ *   /SERVICE_FAILURE /SUBPROCESS_LIMIT /SWAPPING /TIME_LIMIT /TRUSTED
+ *   /UIC /WORKING_SET
+ *
+ * RAISING THIS CONDITION FOR A QUALIFIER OUTSIDE THAT LIST IS ITSELF A
+ * RULE 10 VIOLATION -- it tells the user they asked for a subprocess
+ * when OpenVMS says they asked for something else entirely. Refusing
+ * what VMS accepts is not the safe direction of the same mistake; it
+ * is the mirror of it, and it shipped as one: RUN/NODEBUG on an image
+ * ran nothing at all under the unscoped test.
+ *
+ * WHY THE STATE EXISTS IN OVMX: OVMX's RUN implements only the two
+ * forms it can honour -- RUN <image>, which runs the image and waits
+ * for it, and RUN/DETACHED, which creates a detached process through
+ * $CREPRC. There is no subprocess form. A process qualifier supplied
+ * without /DETACHED therefore has nothing to act on.
+ *
+ * WHY OPENVMS CANNOT REACH IT: on OpenVMS the subprocess form is not
+ * optional -- $CREPRC creates a subprocess by default, and RUN is a
+ * thin caller of it. A documented process qualifier is never
+ * unimplementable there, so OpenVMS has no condition value meaning "I
+ * will not create the subprocess you asked for".
+ *
+ * WHY THE ALTERNATIVE WAS WORSE: RUN used to accept these qualifiers
+ * and silently discard them, running the image in a plain fork()ed
+ * child and waiting for it. The user was told their /PROCESS_NAME was
+ * accepted; nothing was named, and no second process existed to name.
+ * That is CLAUDE.md Rule 10's illegal third answer -- a plausible
+ * handler for a condition VMS never faces -- so the qualifier is now
+ * refused instead of honoured-in-appearance.
+ */
+#define OVMX$_NOSUBPRC  OVMX_STATUS(STS$K_SEVERE, 2)
+
+/*
+ * OVMX$_NOPRCUIC -- the command asked for a created process to carry a
+ * UIC of the caller's choosing, and OVMX cannot give it one.
+ *
+ * ORACLE-PINNED. HELP RUN Process /UIC on the reference lab (VAX2,
+ * OpenVMS VAX V7.3, 2026-07-31) reads, verbatim:
+ *
+ *   Specifies that the created process be a detached process and
+ *   assigns it a user identification code (UIC). Specify the UIC by
+ *   using standard UIC format as described in the OpenVMS Guide to
+ *   System Security.
+ *
+ * and HELP RUN Process /PROCESS_NAME reads:
+ *
+ *   Specifies a name of 1 to 15 characters for the created process.
+ *   The process name is implicitly qualified by the group number of
+ *   the process's user identification code (UIC). By default, the
+ *   name is null.
+ *
+ * So /UIC is not decoration: it selects the UIC GROUP that scopes the
+ * created process's name, which is the whole subject of the lab
+ * transcript quoted in tests/qemu/test_kmod_procnam.c (two processes
+ * in different groups may hold the same name; a third in the same
+ * group is refused SS$_DUPLNAM).
+ *
+ * WHY THE STATE EXISTS IN OVMX: $CREPRC's uic argument reaches only the
+ * created process's OWN userspace PCB (vms_pcb_set_identity()). The
+ * executive derives a process's UIC from the Linux credentials the task
+ * is running under (src/kernel/vms_module.c), and scopes process names
+ * by the group of THAT UIC (src/kernel/vms_proctab.c). A caller-chosen
+ * UIC therefore changes nothing any other process can observe -- it is
+ * the per-process facade shape CLAUDE.md Rule 11 names. Propagating
+ * identity to the executive is tracked as vms-afd and is not done.
+ *
+ * WHY OPENVMS CANNOT REACH IT: on OpenVMS the executive creates the
+ * process and takes its UIC from $CREPRC's argument, subject to
+ * privilege. "The UIC you asked for cannot be given to the process" is
+ * not a state that exists there; the request either succeeds or is
+ * refused for want of IMPERSONATE privilege, and both of those are
+ * about the CALLER, not about the system's inability.
+ */
+#define OVMX$_NOPRCUIC  OVMX_STATUS(STS$K_SEVERE, 3)
+
+/*
+ * OVMX$_NODEBUGGER -- the command asked RUN to execute the image under
+ * the debugger, and OVMX has no debugger for it to run under.
+ *
+ * ORACLE-PINNED. /DEBUG is not a process qualifier: it belongs to the
+ * OTHER RUN topic. `HELP/NOPROMPT RUN Image` on the reference lab
+ * (VAX1, OpenVMS VAX V7.3, 2026-07-31) reads, verbatim:
+ *
+ *   Executes an image within the context of your process. You can
+ *   abbreviate the RUN command to a single letter, R.
+ *   ...
+ *   Additional information available:
+ *   Parameter  Qualifier
+ *   /DEBUG
+ *   Examples
+ *
+ * and `HELP/NOPROMPT RUN Image Qualifier` lists exactly one qualifier,
+ * /DEBUG (with its /NODEBUG negation) and nothing else:
+ *
+ *   /DEBUG
+ *   /NODEBUG
+ *   Executes the image under control of the debugger. The default is
+ *   the /DEBUG qualifier if the image is linked with the /DEBUG
+ *   qualifier and the /NODEBUG qualifier if the image is linked
+ *   without the /DEBUG qualifier. ...
+ *
+ * So the RUN (Image) form creates NO process at all -- it runs the
+ * image "within the context of your process" -- and its one qualifier
+ * selects whether the debugger is in the picture. /NODEBUG is
+ * therefore satisfied by OVMX exactly as VMS satisfies it, by running
+ * the image; it needs no condition value and gets none.
+ *
+ * WHY THE STATE EXISTS IN OVMX: /DEBUG asks for a debugger, and OVMX
+ * has no debugger image, no debugger shareable, and no image-header
+ * bit that would say whether the image was linked for one. There is
+ * nothing to run the image under.
+ *
+ * WHY OPENVMS CANNOT REACH IT: the debugger is part of OpenVMS. It was
+ * present on the oracle -- SYS$COMMON:[SYSLIB]DEBUG.EXE, DEBUGSHR.EXE,
+ * DEBUGSRVSHR.EXE and DEBUGUISHR.EXE all exist on VAX1 -- so "there is
+ * no debugger on this system" is not a state OpenVMS has a condition
+ * value for. The only /DEBUG failure OpenVMS documents is about the
+ * IMAGE ("the /DEBUG qualifier is invalid if the image is linked with
+ * the /NOTRACEBACK qualifier"), which is a different claim entirely
+ * and one OVMX has not measured about any image. Borrowing it would be
+ * asserting a fact about the user's image that OVMX never looked up.
+ *
+ * WHY NOT OVMX$_NOSUBPRC: because that message says "subprocess
+ * creation is not implemented", and the RUN (Image) form does not
+ * create a process. Reporting it here would tell the user OpenVMS
+ * read their command as a process creation when the oracle says it
+ * does not. That substitution is exactly what this constant exists to
+ * stop, and it was shipped once.
+ */
+#define OVMX$_NODEBUGGER  OVMX_STATUS(STS$K_SEVERE, 4)
+
 #ifdef __cplusplus
 }
 #endif

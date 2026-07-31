@@ -76,15 +76,46 @@
 # table, authenticated identity -- plus two properties of the binding itself:
 # that a caller's PCB is per-PROCESS (not per-thread), and that an open
 # descriptor pins the module.
-# TWO defects are outside vms.ko, both because the property they name lives in
+# FOUR defects are outside vms.ko, all because the property they name lives in
 # the PRODUCT half of the interface, where no kernel-side mutation can reach it:
 #   bind-client-no-register  the vms-9fc defect itself (kif_bind() not calling
 #                            vms_kif_register()).
 #   creprc-handshake-eintr   $CREPRC's report pipe read not retried on EINTR,
 #                            so a signal caught by the CALLER decided what the
 #                            service reported about the CHILD (vms-8019).
-# Both are edits under src/, not src/kernel/, so cmd_selftest copies libvms and
-# libvmssys alongside kernel/ when it checks that every anchor still matches.
+#   run-detached-name-dropped        DCL's RUN/DETACHED not passing
+#                            /PROCESS_NAME on to $CREPRC, so a service is
+#                            created NAMELESS while the command still reports
+#                            success (vms-47b).
+#   creprc-detach-intermediate-reaped  $CREPRC leaving the detach
+#                            intermediate unreaped, so the creator of a
+#                            "detached" process still has a child to wait for
+#                            (vms-47b).
+#   run-image-qualifier-refused      RUN's subprocess refusal back to
+#                            "any qualifier at all", so a RUN (Image)
+#                            qualifier (/NODEBUG) is refused as a subprocess
+#                            request OpenVMS says it is not, and the image
+#                            does not run (vms-47b). The control against
+#                            OVER-refusing: every assertion that measures a
+#                            refusal stays green under it.
+#   run-qualifier-not-abbreviated    RUN back to matching qualifier names
+#                            EXACTLY, so /PRIO is not /PRIORITY and /DETACH
+#                            is not /DETACHED (vms-47b). Every full spelling
+#                            behaves identically under it, which is precisely
+#                            why the suite could not see the defect until the
+#                            fixtures were written the way operators -- and
+#                            mx_start.com -- actually spell qualifiers.
+#   run-detached-not-detached        $CREPRC back to accepting PRC$M_DETACH
+#                            and discarding it -- the pre-vms-47b behaviour.
+#                            This one exists because an adversary applied it
+#                            by hand and found that ONE assertion in the whole
+#                            suite caught it: "ppid == 1" survives the
+#                            mutation, because Linux reparents any orphan to
+#                            init. It is here so the discriminating
+#                            assertions are NAMED and stay named.
+# All are edits under src/, not src/kernel/, so cmd_selftest copies libvms,
+# libvmssys and vmsdcl alongside kernel/ when it checks that every anchor still
+# matches.
 #
 # vmsfs.ko (src/kernel/vmsfs/, and the two suites that drive it) is NOT an
 # executive facility and is NOT covered here. See scope_* below: that exclusion
@@ -131,7 +162,12 @@ ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
 bind-client-no-register
-creprc-handshake-eintr"
+creprc-handshake-eintr
+run-detached-name-dropped
+creprc-detach-intermediate-reaped
+run-detached-not-detached
+run-image-qualifier-refused
+run-qualifier-not-abbreviated"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -539,18 +575,43 @@ EOF
         # visible through sys$creprc as well -- and MEASURED to be: with the
         # clash test short-circuited, test_syssvc_procnam reddens exactly one
         # assertion, its own name for the same property.
-        suites_red)   echo "test_kmod_procnam test_syssvc_procnam";;
+        # test_syssvc_startup_service is here as of vms-47b: that suite drives
+        # the SAME clash through the USER-VISIBLE command (a second
+        # RUN/DETACHED under a name already held), so the one kernel edit is
+        # now visible at a third layer. It was MEASURED, not assumed -- see
+        # knock_on_why. This entry was missing while the suite's DUPLNAM
+        # assertions existed, and the whole 17-defect sweep had not been run
+        # since they landed, so the control was quietly failing.
+        suites_red)   echo "test_kmod_procnam test_syssvc_procnam test_syssvc_startup_service";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "\$SETPRN stops rejecting a name already held in the UIC group: the SS\$_DUPLNAM clash test is short-circuited. Name storage, lookup, scan and validation are untouched. Both the raw-ioctl suite and the public sys\$ suite name it, one assertion each.";;
+        why)          echo "\$SETPRN stops rejecting a name already held in the UIC group: the SS\$_DUPLNAM clash test is short-circuited. Name storage, lookup, scan and validation are untouched. The raw-ioctl suite, the public sys\$ suite and the DCL command suite each name it.";;
         require_fail) cat <<'EOF'
 duplicate process name rejected with SS$_DUPLNAM
 sys$creprc refuses a duplicate process name with SS$_DUPLNAM
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
+the service's name is released when the service dies
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+Both are the SAME short-circuited clash test, seen from the command layer
+rather than from the ioctl, and both were measured rather than predicted.
+The first IS the property require_fail names, reached through DCL: with the
+clash test disabled, a second RUN/DETACHED under a name already held succeeds
+where it must print %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM.
+The second is the direct consequence of the first WITHIN THE SAME RUN: the
+duplicate start that should have been refused leaves a SECOND live process
+holding the name, so killing the first cannot release it, and the assertion
+that the name belongs to the live process goes red too. It is not a second
+defect and no finer mutation could separate them -- the mutation is already
+one condition, and the two assertions are the same clash observed before and
+after the duplicate exists.
+EOF
+                      ;;
         esac;;
 
     proctab-crossgroup-identity)
@@ -809,15 +870,23 @@ EOF
         # hand-register. Each opens /dev/vms only to decide skip-vs-run and
         # then uses the public sys$ API, which is what a product image does --
         # the counter-example property the blind_why paragraph names.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev";;
+        # test_syssvc_showdev (vms-fb9) and test_syssvc_startup_service
+        # (vms-47b) both join on the same basis: each drives the REAL DCL.EXE,
+        # a product image that binds the way a product image binds -- through
+        # kif_bind() -- so deleting that call takes the whole command layer
+        # away from the executive. The two arrived on separate branches; this
+        # list is the UNION, re-derived by running the control on the merged
+        # tree rather than kept from either side of the rebase conflict.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
-These four drive the product's own vms_kif client, so restoring the vms-9fc
-defect (kif_bind() no longer calling vms_kif_register()) SHOULD turn them red.
-It does not: each calls vms_kif_open() and vms_kif_register() BY HAND before
-using a facility (test_syssvc_lock.c:136-140, test_kmod_ident.c:306/364-367/
-541-544/588-593), supplying the exact product step kif_bind() exists to
-perform. MEASURED, not argued -- with the defect injected all four stay rc=0.
+The suites named in blind_suites above drive the product's own vms_kif
+client, so restoring the vms-9fc defect (kif_bind() no longer calling
+vms_kif_register()) SHOULD turn them red. It does not: each calls
+vms_kif_open() and vms_kif_register() BY HAND before using a facility
+(test_syssvc_lock.c:136-140, test_kmod_ident.c:306/364-367/541-544/588-593),
+supplying the exact product step kif_bind() exists to perform. MEASURED, not
+argued -- with the defect injected, every suite in blind_suites stays rc=0.
 They are therefore structurally blind to the entire auto-bind defect class,
 which is how vms-9fc survived to be found by inspection rather than by CI.
 test_kmod_ident is the newest of them (vms-2b8), which is the point of pinning
@@ -825,7 +894,7 @@ this as an asserted fact rather than a note: the pattern is still SPREADING,
 and the gate now says so on every run.
 Tracked as rd item vms-f27. Do NOT fix it by widening suites_red: that would
 re-hide the gap behind a set the control merely permits to redden.
-THE COUNTER-EXAMPLE, added by vms-8019 and worth keeping in view: the FIFTH
+THE COUNTER-EXAMPLE, added by vms-8019 and worth keeping in view: a further
 client suite, test_syssvc_procnam, does NOT hand-register -- it opens
 /dev/vms and then uses the public sys$ API, which is what a product image
 does -- and it goes red immediately. So the blindness above is not a property
@@ -833,7 +902,35 @@ of driving vms_kif; it is a property of hand-registering first.
 EOF
                       ;;
         isolation)    echo "isolated";;
-        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Six suites detect it: test_kmod_bind, and test_syssvc_procnam, test_syssvc_showproc, test_syssvc_ef_mproc, test_syssvc_ef_local and test_syssvc_showdev through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
+        # `why`'s count and enumeration are DERIVED from suites_red, not
+        # hand-recited: a rebase (or any future edit) that changes suites_red
+        # without touching this line used to leave a sentence that quietly
+        # disagreed with the field beside it -- exactly what happened across
+        # the vms-47b/vms-6a7/vms-2a8 rebase, where suites_red was correctly
+        # re-derived to six suites but this text was kept from one side of
+        # the conflict and still said "Five suites" while naming only five.
+        # The equality check in run_facility_negctl.sh keys on suites_red, so
+        # that drift never weakened the gate -- but the printed evidence was
+        # false. Computing _n/_list from suites_red here makes that specific
+        # disagreement structurally impossible: change suites_red and this
+        # sentence's count and list change with it, in the same run.
+        # SAME FIX APPLIED TO THE BLIND-SUITES CLAUSE (vms-47b round 4): the
+        # sentence used to hand-recite "The four client suites", read off
+        # blind_suites at the time it was written rather than derived from
+        # it -- a third instance of the identical drift class, just not yet
+        # tripped (blind_suites is still four entries, so it was true by
+        # coincidence, not by construction). _blind_n is now computed from
+        # defect_field "$_d" blind_suites the same way _n is computed from
+        # suites_red, so the count in the sentence and the blind_suites
+        # field above it cannot disagree.
+        why)
+            _suites_red=$(defect_field "$_d" suites_red)
+            _n=$(set -- $_suites_red; echo $#)
+            _list=$(echo "$_suites_red" | sed 's/ /, /g')
+            _blind_suites=$(defect_field "$_d" blind_suites)
+            _blind_n=$(set -- $_blind_suites; echo $#)
+            echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. $_n suites detect it (through the public sys\$ API, or test_kmod_bind directly): $_list. The $_blind_n client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer."
+            ;;
         require_fail) cat <<'EOF'
 vms_kif_open() then a BARE vms_kif_setident() reaches the executive with no explicit register
 $SETEF reaches the executive with no explicit register
@@ -859,6 +956,15 @@ the executive assigned the caller a VMS process ID
 sys$creprc created the subject process
 sys$creprc returned the subject's pid
 sys$creprc returned the subject's VMS process ID
+the startup procedure announced the created process with %RUN-S-PROC_ID
+the executive resolves the service BY NAME after its creator exited
+SHOW SYSTEM, in a different process, lists the service by its VMS process name
+starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
+sys$creprc PRC$M_DETACH created the probe's process
+RUN/DETACH/PROC= creates a detached process the executive knows by name
+the abbreviated form announces the process ID the executive assigned
+vms-69e: /DETACHED with /PRIORITY still creates the process and announces success
+vms-69e: and says NOTHING about the priority it discarded (this is the defect, asserted so it cannot be fixed silently)
 child: a LOCAL flag set by the parent is NOT visible here (local clusters stay per-process)
 child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
 child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads, public API)
@@ -1048,6 +1154,25 @@ and literal text), nothing had actually EXECUTED it end to end since
 test_syssvc_showdev landed. Declared here the moment that execution happened,
 per CLAUDE.md Rule 9 -- a pre-existing gap discovered while re-running the
 full proof set is still owned by whoever's push would otherwise carry it red.
+THE LAST NINE, in test_syssvc_startup_service, are the same missing bind
+arriving at the USER-VISIBLE COMMAND (vms-47b). DCL.EXE is a product image and
+binds like one -- through kif_bind() -- so with that call deleted RUN/DETACHED
+cannot create a named process, SHOW SYSTEM cannot read the table, the DUPLNAM
+clash never arises because the first creation never happened, and even the
+vms-69e pair goes red because RUN reports %RUN-F-CREPRC where the pinned
+behaviour is a silent success. Not one of them is a separate defect: they are
+what "the command layer has no executive" looks like from the command layer,
+which is exactly the property the require_fail entries name one and two layers
+down. This entry was ABSENT while that suite existed -- the branch that added
+the suite never ran the whole sweep -- so the control was failing on an
+unnamed red set rather than passing on a named one.
+MERGED (vms-47b round 5, rebase onto main after vms-6a7/vms-2a8): this defect's
+declaration forked into two branches that each added a suite without seeing
+the other's addition -- main gained test_syssvc_showproc and the two event-flag
+suites, this branch gained test_syssvc_startup_service. Both sets are kept;
+neither is a substitute for the other, and the combined suites_red/knock_on_fail
+lists above were re-verified by running the mutation on the rebased tree (see
+the item's progress notes), not by picking a side of the git conflict.
 EOF
                       ;;
         esac;;
@@ -1086,6 +1211,211 @@ EOF
                       ;;
         require_fail) cat <<'EOF'
 sys$creprc returned, and reported no process lost, while the caller caught signals
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    run-detached-name-dropped)
+        case "$_f" in
+        facility)     echo "the process NAME on the way from the user-visible command to the executive (DCL RUN/DETACHED -> \$CREPRC, src/vmsdcl/dcl_cmd_process.c)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+RUN/DETACHED stops passing /PROCESS_NAME to $CREPRC. The service is still
+created, still detached, still reparented, and the command still prints
+%RUN-S-PROC_ID with a real executive-assigned process ID -- it is simply
+NAMELESS in the executive's table.
+THIS IS THE EXACT FACADE SHAPE vms-47b EXISTS TO PREVENT, and the reason the
+mutation is a one-argument edit rather than a deleted feature: everything a
+single-process test can see stays true. The command succeeds, the process
+exists, the process ID resolves. Only the property that makes the name mean
+anything -- that ANOTHER process can find the service by it -- disappears. A
+suite that asserted "RUN/DETACHED reported success" would stay green through
+this, which is why it does not assert that.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+the executive resolves the service BY NAME after its creator exited
+SHOW SYSTEM, in a different process, lists the service by its VMS process name
+starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+RUN/DETACH/PROC= creates a detached process the executive knows by name
+the abbreviated form announces the process ID the executive assigned
+vms-69e: /DETACHED with /PRIORITY still creates the process and announces success
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+All three are P10 cases that create a NAMED detached process and then resolve
+it out of the executive by that name. They are the same defect seen again, one
+spelling further on: P10 exists to prove that an ABBREVIATED qualifier is the
+same qualifier, so it necessarily drives the same name-to-executive path this
+mutation cuts. There is nothing finer available -- the mutation is already a
+single argument, and the only way these could stay green would be for P10 to
+stop checking the executive, which is the property.
+EOF
+                      ;;
+        esac;;
+
+    creprc-detach-intermediate-reaped)
+        case "$_f" in
+        facility)     echo "detachment in \$CREPRC's PRC\$M_DETACH path (src/libvms/syssvc/sys_process.c)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+$CREPRC stops reaping the detach intermediate, so the creator of a "detached"
+process is left with a child it can wait for. The created process itself is
+untouched: it is still setsid'd, still reparented, still named, still visible
+to every other process. What is lost is the half of "detached" that only the
+CREATOR can observe -- that after $CREPRC returns there is nothing in its job
+tree belonging to that call.
+This is the finest available edit for that property. Removing the second
+fork() instead would be coarser AND unusable: $CREPRC's own reap would then
+wait on the service, and the call would not return for the lifetime of the
+image -- a hang is not a verdict, and a control that hangs is a flaky gate.
+Disabling only the reap leaves every other suite byte-identical in behaviour,
+because no other suite creates a process with PRC$M_DETACH at all, so the
+mutated block is one nothing else enters.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+the creator of a detached process has no child to wait for
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    run-detached-not-detached)
+        case "$_f" in
+        facility)     echo "PRC\$M_DETACH itself in \$CREPRC (src/libvms/syssvc/sys_process.c)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+$CREPRC goes back to accepting PRC$M_DETACH and discarding it -- literally
+the pre-vms-47b line, `(void)stsflg;`. Nothing is created differently: the
+process is still created, still named in the executive, still announced with
+%RUN-S-PROC_ID, still outlives the DCL that created it, and SHOW SYSTEM in
+another process still lists it. It is simply a SUBPROCESS wearing the word
+"detached".
+THIS CONTROL EXISTS BECAUSE AN ADVERSARY APPLIED IT BY HAND AND THE SUITE
+ALMOST MISSED IT. Of thirteen assertions, exactly one went red. In particular
+"the service's parent is init, not the DCL that created it" stayed GREEN --
+the creating DCL exits before anything is observed, and Linux reparents any
+orphan to init whether or not it was ever detached. A reparent check is a
+necessary consequence of detachment and not a test of it, and it was being
+read as one.
+Naming this mutation forces the discriminating assertions to be listed below.
+Both are properties a subprocess cannot have: the created process is in a
+session of its own (setsid()), and the creator has nothing left to wait for.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+the service left the session its creator ran in
+the creator of a detached process has no child to wait for
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    run-image-qualifier-refused)
+        case "$_f" in
+        facility)     echo "the scope of RUN's subprocess refusal -- which qualifiers OpenVMS says ask for a subprocess (src/vmsdcl/dcl_cmd_process.c)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+RUN goes back to treating ANY qualifier as a subprocess request -- literally
+the shipped-and-reverted test, `cmd->qualifier_count > 0` in place of the
+oracle-scoped `run_process_qualifier_count(cmd) > 0`.
+THIS IS A CONTROL AGAINST OVER-REFUSING, WHICH IS THE HARDER DIRECTION TO
+NOTICE. Every "the qualifier was refused" and "the image did not run"
+assertion in P7 and P8 stays GREEN under it, because a wider refusal refuses
+those cases too; so does the P8 positive control, because plain RUN carries no
+qualifier at all. Nothing that measures the refusal can catch a refusal that
+is too big. Only a qualifier VMS scopes to the OTHER topic can, which is why
+P9 drives /NODEBUG and /DEBUG: `HELP/NOPROMPT RUN Image Qualifier` on the
+reference lab (VAX1, OpenVMS VAX V7.3, 2026-07-31) lists exactly those two and
+nothing else, and the RUN (Image) form creates no process at all.
+The mutation is one operand. It leaves the RUN (Process) set, the /UIC
+refusal, $CREPRC, the executive and every other suite untouched.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+RUN/NODEBUG runs the image: it is not a subprocess request
+RUN/DEBUG is refused naming the debugger, not process creation
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+RUN/NODEB is not refused as a subprocess request: the image runs
+parser-wide gap: an ambiguous abbreviation is not resolved, and OVMX has no %DCL-W-ABKEYW to refuse it with
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+Both are P10 cases and both are this same over-refusal reaching one spelling
+further. The first is /NODEB, the abbreviation of the RUN (Image) qualifier
+require_fail names in full: a refusal keyed on "any qualifier at all" cannot
+distinguish them, so it swallows both. The second is /PR, which resolves to no
+single qualifier and therefore reaches RUN as a qualifier the command does not
+act on; counting qualifiers instead of identifying them refuses it as a
+subprocess request and the image does not run. Neither is a second defect --
+they are the same operand, and no finer mutation exists: the mutated
+expression is one comparison.
+EOF
+                      ;;
+        esac;;
+
+    run-qualifier-not-abbreviated)
+        case "$_f" in
+        facility)     echo "how RUN resolves a qualifier NAME -- DCL's shortest-unique-prefix rule (src/vmsdcl/dcl_cmd_process.c)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+RUN goes back to matching qualifier names EXACTLY -- literally the shipped-and-
+reverted comparison, strcasecmp() in place of the prefix compare in
+run_resolve_qualifier(). Every full spelling still behaves identically; only an
+ABBREVIATION changes meaning.
+THIS CONTROL EXISTS BECAUSE AN ADVERSARY MEASURED THE DEFECT ON A ROUND THAT
+HAD ALREADY "FIXED" THE FULL SPELLING. RUN/PRIORITY=4 was correctly refused
+while RUN/PRIO=4 ran the image, exit 0, no diagnostic, priority discarded --
+so the refusal was one keystroke wide, and the suite could not see it because
+every fixture spelled its qualifiers out in full. On the oracle (VAX1, OpenVMS
+VAX V7.3, 2026-07-31, captures/run-qualifier-abbrev-vax1-2026-07-31.txt) /PRIO
+uniquely identifies /PRIORITY and VMS acts on it; /DETACH is /DETACHED; and
+mx_start.com in this repo's own VMS corpus writes exactly those spellings.
+The mutation reddens BOTH halves of the property, which is why both are listed:
+the half where RUN must REFUSE (an abbreviated process qualifier is no longer
+recognised as one, so the image runs) and the half where RUN must OBEY (/DETACH
+is no longer /DETACHED and /PROC= no longer names, so the detached creation the
+same phase asks for is refused as a subprocess request instead and no process
+exists to find). One comparison, one property: what an abbreviation MEANS.
+It leaves P7, P8 and P9 -- which spell every qualifier in full -- untouched,
+and it leaves $CREPRC, the executive and every other suite untouched.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+RUN/PRIO is /PRIORITY: the abbreviation is refused and the image does not run
+RUN/PROC is /PROCESS_NAME: refused, image not run, nothing named in the executive
+RUN/DETACH/PROC= creates a detached process the executive knows by name
+the abbreviated form announces the process ID the executive assigned
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -1169,6 +1499,42 @@ apply_edit() {
         # changes nothing except what happens when a signal is delivered to
         # the CALLER while it waits -- which is the whole property.
         sed -i 's|ssize_t r = creprc_read_all(namefd\[0\], \&rep, sizeof(rep));|ssize_t r = read(namefd[0], \&rep, sizeof(rep)); /* NEGCTL creprc-handshake-eintr */|' "$_file";;
+
+    run-detached-name-dropped)
+        # The ONE edit: RUN/DETACHED hands $CREPRC no process name. Every
+        # other argument, and every other line of the command, is untouched.
+        sed -i 's|                                 prc_d.dsc\$a_pointer ? \&prc_d : NULL,|                                 NULL, /* NEGCTL run-detached-name-dropped */|' "$_file";;
+
+    creprc-detach-intermediate-reaped)
+        # The ONE edit: the parent-side reap of the detach intermediate is
+        # not entered, so the creator keeps a waitable child. Anchored on the
+        # 4-space `if (detached) {` -- the child-side occurrences of the same
+        # condition are indented 8, inside `if (pid == 0) {`.
+        sed -i 's|^    if (detached) {$|    if (0) { /* NEGCTL creprc-detach-intermediate-reaped */|' "$_file";;
+
+    run-detached-not-detached)
+        # The ONE edit, and it is the pre-vms-47b source line restored:
+        # PRC$M_DETACH is read and thrown away. `(void)stsflg;` keeps the
+        # parameter used so the mutation is about behaviour, not warnings.
+        sed -i 's|^    const int detached = (stsflg & PRC\$M_DETACH) != 0;$|    const int detached = 0; (void)stsflg; /* NEGCTL run-detached-not-detached */|' "$_file";;
+
+    run-image-qualifier-refused)
+        # The ONE edit, and it is the shipped-and-reverted source line
+        # restored: the subprocess refusal stops asking WHICH qualifier and
+        # goes back to counting all of them, so a RUN (Image) qualifier is
+        # refused as a request OpenVMS says it is not.
+        sed -i 's|        run_process_qualifier_count(cmd) > 0) {|        cmd->qualifier_count > 0) { /* NEGCTL run-image-qualifier-refused */|' "$_file";;
+
+    run-qualifier-not-abbreviated)
+        # The ONE edit, and it is the shipped-and-reverted comparison
+        # restored: qualifier names match exactly, so an abbreviation is
+        # not the qualifier it abbreviates. Both loops in
+        # run_resolve_qualifier() carry the same compare and both are
+        # mutated -- they are one comparison written twice, over the two
+        # halves of RUN's qualifier table, and mutating one would leave
+        # the rule half-applied rather than restored.
+        sed -i 's|strncasecmp(given, full, glen) == 0|strcasecmp(given, full) == 0 /* NEGCTL run-qualifier-not-abbreviated */|' "$_file";;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1458,12 +1824,14 @@ cmd_selftest() {
 
         rm -rf "$_st_tmp/tree"
         mkdir -p "$_st_tmp/tree"
-        # libvms is copied too: a defect may target the PRODUCT half of an
-        # interface (creprc-handshake-eintr does), and a target this function
-        # cannot see would be reported as a dead anchor on every run.
+        # libvms and vmsdcl are copied too: a defect may target the PRODUCT
+        # half of an interface (creprc-handshake-eintr and
+        # run-detached-name-dropped do), and a target this function cannot see
+        # would be reported as a dead anchor on every run.
         if ! cp -a "$_st_root/kernel" "$_st_root/libvmssys" "$_st_root/libvms" \
+                   "$_st_root/vmsdcl" \
                    "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms} for the self-test"
+            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms,vmsdcl} for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

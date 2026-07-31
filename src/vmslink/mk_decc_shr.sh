@@ -227,7 +227,9 @@ mprotect=PROCEDURE,remove=PROCEDURE,sem_init=PROCEDURE,sem_post=PROCEDURE,\
 sem_wait=PROCEDURE,setjmp=PROCEDURE,sigaddset=PROCEDURE,sigprocmask=PROCEDURE,\
 strpbrk=PROCEDURE,strtof=PROCEDURE,strtold=PROCEDURE,strtoull=PROCEDURE,\
 \
-fcntl=PROCEDURE"
+fcntl=PROCEDURE,\
+\
+setsid=PROCEDURE"
 
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
@@ -236,6 +238,13 @@ fcntl=PROCEDURE"
 # read() forever. pipe2(O_CLOEXEC) would need _GNU_SOURCE and is not in the
 # vector either; fcntl() is a plain C-RTL entry point (OpenVMS's own DECC$SHR
 # exports it) that musl's libc.a defines, so DECC$SHR is the right producer.
+#
+# setsid APPENDED for vms-47b (append-only -> prior consumers' vector indices
+# unchanged, GSMATCH LEQUAL-compatible). PRC$M_DETACH's double-fork idiom in
+# $CREPRC (sys_process.c) calls setsid() in the intermediate task to leave the
+# creator's session and controlling terminal before the grandchild registers
+# as a detached process. setsid() is a plain C-RTL entry point musl's libc.a
+# defines, so DECC$SHR is the right producer.
 #
 # THE GENERAL RULE, because this is the commonest way to break the VMS-native
 # toolchain jobs: EVERY libc call added to an OVMX library is a claim that

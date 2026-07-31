@@ -62,9 +62,12 @@
 #     knock_on_fail and justify it in knock_on_why -- so an over-broad mutation
 #     becomes a visible, argued fact instead of a silent pass.
 #   - "the declared blind suites stayed green" pins a KNOWN GAP as a fact in CI
-#     output: three suites hand-register and therefore cannot see the
-#     bind-client-no-register defect (rd vms-f27). Listing them as merely
-#     "allowed to redden" hid that behind a set the control only permits.
+#     output: the suites named in a defect's blind_suites field hand-register
+#     directly and therefore cannot see the bind-client-no-register defect
+#     (rd vms-f27; the count and names are derived from blind_suites at run
+#     time, not hand-recited here -- see facility_defects.sh). Listing them
+#     as merely "allowed to redden" hid that behind a set the control only
+#     permits.
 #   - "vms.ko still loaded" catches a mutation that merely broke the module,
 #     which would make this an expensive re-run of the executive-absent
 #     control rather than a facility control.
@@ -100,6 +103,25 @@ else
     exit 2
 fi
 
+# CONCURRENCY: $BASE_TAG is ONE fixed image tag, reused (not rebuilt) across
+# every defect in this run -- see the "ONE image, built ONCE" note below,
+# where per-defect tags were tried and REJECTED because `rmi -f` against a
+# shared-layer cache intermittently poisoned it ("getting top layer info:
+# layer not known" on a later build). That history rules out the usual fix
+# for two concurrent runs stepping on each other (give each its own tag) --
+# it would resurrect the exact flake this script already paid to remove. So:
+# serialize instead. An flock held for the whole script means at most one
+# instance ever builds or runs against $BASE_TAG at a time; a second instance
+# on the same host waits rather than racing it. Slower under concurrency
+# (multiple items in this dispatch run this same script), not wrong.
+LOCKFILE="${TMPDIR:-/tmp}/$(basename "$BASE_TAG" | tr ':/' '__').lock"
+exec 9>"$LOCKFILE"
+if ! flock -w 1800 9; then
+    echo "FATAL: could not acquire $LOCKFILE within 1800s -- another run of"
+    echo "       this script, sharing \$BASE_TAG=$BASE_TAG, is still using it."
+    exit 2
+fi
+
 pass_n=0
 fail_n=0
 FAILED_DEFECTS=""
@@ -125,8 +147,11 @@ trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$RUNLOG"' EXIT INT TERM
 
 # run_harness <defect|"">  -> normalised output in $OUTFILE
 # Returns the harness exit status, or:
-#   3   BROKEN FIXTURE (the injection did not land -- NOT a verdict)
-#   4   the in-container rebuild failed
+#   3     BROKEN FIXTURE (the injection did not land -- NOT a verdict)
+#   4     the in-container rebuild failed
+#   125   the container engine itself failed to start the container (registry
+#         pull / storage-layer flake -- NOT a verdict; see the negctl loop's
+#         handling of this code)
 run_harness() {
     _defect="$1"
     if [ -z "$_defect" ]; then
@@ -227,9 +252,12 @@ echo "$EXPECTED" | sed 's/^/  /'
 echo ""
 
 # A FLOOR, not a pin: adding a suite must never turn this red, deleting one
-# always must. Raised 13 -> 14 when vms-2b8 landed test_kmod_ident.c.
-if [ "$N_EXPECTED" -lt 14 ]; then
-    echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 14)."
+# always must. Raised 13 -> 14 when vms-2b8 landed test_kmod_ident.c; raised
+# 14 -> 20 on vms-47b -- measured by running the derivation above against
+# this checkout (`ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c |
+# wc -l` = 20) and reading its output, not by adding to the old literal.
+if [ "$N_EXPECTED" -lt 20 ]; then
+    echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 20)."
     echo "A suite source was deleted. Deleting the test that would expose a defect is"
     echo "not a way to make this gate pass."
     exit 1
@@ -338,6 +366,18 @@ for defect in $DEFECT_LIST; do
     fi
     if [ "$RUN_RC" -eq 4 ]; then
         bad "the in-container rebuild failed with '$defect' injected -- the mutation does not compile, or the harness image is broken. Last 30 lines:"
+        tail -30 "$OUTFILE" | sed 's/^/  | /'
+        fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
+    fi
+    # 125 is `podman`/`docker`'s own exit code for a failure to even start the
+    # container (this repo's transient registry-pull / "layer not known"
+    # storage flake -- see the note above run_harness). Check 1 below treats
+    # ANY nonzero RUN_RC as "the defect made the harness fail", which is true
+    # of a real defect but ALSO true of this flake -- accepting it there would
+    # let a control report a verdict about '$defect' having never actually
+    # run it. Caught here, before check 1, the same way 3/4 already are.
+    if [ "$RUN_RC" -eq 125 ]; then
+        bad "container engine exited 125 running the harness for '$defect' -- this is the transient registry/storage-layer failure, NOT a verdict about '$defect'. Re-run. Last 30 lines:"
         tail -30 "$OUTFILE" | sed 's/^/  | /'
         fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
     fi

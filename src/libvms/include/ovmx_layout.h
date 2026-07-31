@@ -57,6 +57,11 @@
 #define VMS_OPERATOR_LOG     "SYS$MANAGER:OPERATOR.LOG"
 #define VMS_SYLOGIN_PATH     "SYS$MANAGER:SYLOGIN.COM"
 #define VMS_STARTUP_PATH     "SYS$MANAGER:STARTUP.COM"
+/* Site-specific startup, invoked by STARTUP.COM. This is where services
+ * are started (RUN/DETACHED under a VMS process name); STARTUP.EXE
+ * starts none of its own -- see the NOTE ON SERVICES in
+ * src/ovmx_init/ovmx_init.c (vms-47b). */
+#define VMS_SYSTARTUP_PATH   "SYS$MANAGER:SYSTARTUP_VMS.COM"
 #define VMS_HELPLIB_PATH     "SYS$HELP:HELPLIB.HLP"
 /* Reserved: zero readers as of vms-a4b (its only reader, lnm_daemon.c,
  * was deleted). Not wired to anything until the executive-resident
@@ -71,6 +76,15 @@
 
 #define VMS_DCL_PATH         "SYS$SYSTEM:DCL.EXE"
 #define VMS_LOGINOUT_PATH    "SYS$SYSTEM:LOGINOUT.EXE"
+/* ZERO READERS as of vms-47b: its only reader was STARTUP.EXE's
+ * start_sshd(), deleted with the rest of PID 1's service starting. SSH is
+ * cancelled (vms-02d) as a startup-procedure target, and no startup
+ * procedure names this constant -- but src/vmsssh/CMakeLists.txt still
+ * builds VMSSSHD.EXE when libssh is present, so "no image of this name
+ * is built" is not a claim this file can make. A service is started from
+ * SYS$MANAGER:SYSTARTUP_VMS.COM with RUN/DETACHED, which takes its image
+ * as a filespec in the procedure -- so a new service needs no constant
+ * here. */
 #define VMS_SSHD_PATH        "SYS$SYSTEM:VMSSSHD.EXE"
 #define VMS_AUTHORIZE_PATH   "SYS$SYSTEM:AUTHORIZE.EXE"
 #define VMS_INITIALIZE_PATH  "SYS$SYSTEM:INITIALIZE.EXE"

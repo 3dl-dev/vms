@@ -133,10 +133,15 @@ scan_absent "no code allocates a terminal name from a private pool" \
 # survived: with no VMS_TERMINAL set and no pool file, vms_terminal_init()
 # seeded "_FTA0:" and every DCL process claimed the same terminal.
 #
-# Scoped to vms_terminal_init()'s BODY, not the whole file: the same file
-# legitimately READS term->device_name to print it (vms_terminal_show), and
-# a whole-file token check would be satisfied by that read -- an assertion
-# satisfiable by something other than the behaviour under test.
+# Scoped to vms_terminal_init()'s BODY, not the whole file. The reason has
+# CHANGED and the old one no longer applies: it used to be that the same file
+# legitimately READ term->device_name to print it (vms_terminal_show), so a
+# whole-file token check would have been satisfied by that read -- an
+# assertion satisfiable by something other than the behaviour under test.
+# vms-d0b deleted that renderer. The scoping is kept because the property
+# under test is what vms_terminal_init() SEEDS, and a whole-file check would
+# again mean something different from what this line claims the moment any
+# other function in the file touches the field.
 TERM_C="$SRC_ROOT/src/vmsdcl/dcl_terminal.c"
 if [ -f "$TERM_C" ]; then
     init_body=$(strip_comments "$TERM_C" |

@@ -23,17 +23,20 @@
  *   - prv_agreement.c's coverage mask (VMS_PRIV_NAMES_TABLE_MASK) is the
  *     OR of every mask in this SAME list, expanded through
  *     VMS_PRIV_MASK_TERM.
- * There is no longer a second, independently-typed enumeration of "which
- * rows exist" for a row deletion to leave behind. Deleting a line from
- * VMS_PRIV_NAME_LIST removes that privilege from the displayed table AND
- * from the coverage mask in the same edit, because both are textually
- * generated from the one line that was deleted -- there is nowhere else
- * for the row's mask term to still be reachable, so
- * VMS_PRIV_NAMES_TABLE_MASK cannot mention a bit the array does not also
- * carry a row for, and vice versa. That is what makes the
- * VMS_PRV_M_ENFORCED-vs-table-row desync a compile error in BOTH
- * directions rather than one: see prv_agreement.c for the assert and its
- * two negative controls.
+ * Deleting a line from VMS_PRIV_NAME_LIST removes that privilege from the
+ * displayed table AND from the coverage mask in the same edit, because
+ * both are generated from that one line. Measured: deleting the WORLD
+ * line fails the build at prv_agreement.c's assert, and so does OR-ing an
+ * uncovered bit into VMS_PRV_M_ENFORCED -- the desync is a compile error
+ * in both directions. See prv_agreement.c for the assert and its two
+ * negative controls.
+ *
+ * WHAT THIS DOES NOT COVER, measured rather than assumed: the guarantee
+ * holds while vms_priv_names[] is GENERATED from this list. Replacing the
+ * VMS_PRIV_NAME_LIST(VMS_PRIV_ROW_ENTRY) expansion in dcl_cmd_show.c with
+ * hand-typed rows that omit one privilege builds clean and passes ctest --
+ * the coverage mask still names the bit, the array no longer carries the
+ * row, and nothing stops it. Keep the array generated.
  *
  * CONTENT is unchanged from the array round 9 shipped: same 37 entries,
  * same order, same names, same masks, same description strings. DETACH

@@ -47,13 +47,16 @@ $! STARTUP.COM did not complain, which is the absence-of-evidence shape
 $! this project keeps getting burned by.
 $!
 $! NOT ORACLE-PINNED. An earlier version of this comment claimed the text
-$! below matched a reference-lab capture of a real OpenVMS boot; no such
-$! capture exists in ~/vax/cluster/captures, so that claim was unverifiable
-$! and has been removed rather than repeated (CLAUDE.md Rule 10 -- do not
-$! self-certify VMS message text). This line is OVMX's own announcement,
-$! not a reproduction of any OpenVMS message text, and makes no claim to
-$! be one. Pinning it to the oracle or to public OpenVMS documentation is
-$! open work, not done here.
+$! below matched a reference-lab capture of a real OpenVMS boot. No such
+$! capture exists: `grep -rl "STDRV\|site-specific" ~/vax/cluster/captures/`
+$! (re-run at round 6, 2026-07-31) returns nothing, so that claim was
+$! unverifiable and was removed rather than repeated. Whether this wording
+$! matches, should match, or should differ from what a real OpenVMS boot
+$! prints is UNVERIFIED IN EITHER DIRECTION -- neither claimed nor denied
+$! here (CLAUDE.md Rule 10: an authenticity claim about VMS message text is
+$! either oracle-pinned with the capture recorded, or it does not appear).
+$! Pinning it to the oracle or to public OpenVMS documentation is open
+$! work, not done here.
 $!
 $ WRITE SYS$OUTPUT "The OVMX system is now executing the site-specific startup commands."
 $!

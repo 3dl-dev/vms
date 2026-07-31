@@ -103,6 +103,25 @@ else
     exit 2
 fi
 
+# CONCURRENCY: $BASE_TAG is ONE fixed image tag, reused (not rebuilt) across
+# every defect in this run -- see the "ONE image, built ONCE" note below,
+# where per-defect tags were tried and REJECTED because `rmi -f` against a
+# shared-layer cache intermittently poisoned it ("getting top layer info:
+# layer not known" on a later build). That history rules out the usual fix
+# for two concurrent runs stepping on each other (give each its own tag) --
+# it would resurrect the exact flake this script already paid to remove. So:
+# serialize instead. An flock held for the whole script means at most one
+# instance ever builds or runs against $BASE_TAG at a time; a second instance
+# on the same host waits rather than racing it. Slower under concurrency
+# (multiple items in this dispatch run this same script), not wrong.
+LOCKFILE="${TMPDIR:-/tmp}/$(basename "$BASE_TAG" | tr ':/' '__').lock"
+exec 9>"$LOCKFILE"
+if ! flock -w 1800 9; then
+    echo "FATAL: could not acquire $LOCKFILE within 1800s -- another run of"
+    echo "       this script, sharing \$BASE_TAG=$BASE_TAG, is still using it."
+    exit 2
+fi
+
 pass_n=0
 fail_n=0
 FAILED_DEFECTS=""
@@ -128,8 +147,11 @@ trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$RUNLOG"' EXIT INT TERM
 
 # run_harness <defect|"">  -> normalised output in $OUTFILE
 # Returns the harness exit status, or:
-#   3   BROKEN FIXTURE (the injection did not land -- NOT a verdict)
-#   4   the in-container rebuild failed
+#   3     BROKEN FIXTURE (the injection did not land -- NOT a verdict)
+#   4     the in-container rebuild failed
+#   125   the container engine itself failed to start the container (registry
+#         pull / storage-layer flake -- NOT a verdict; see the negctl loop's
+#         handling of this code)
 run_harness() {
     _defect="$1"
     if [ -z "$_defect" ]; then
@@ -344,6 +366,18 @@ for defect in $DEFECT_LIST; do
     fi
     if [ "$RUN_RC" -eq 4 ]; then
         bad "the in-container rebuild failed with '$defect' injected -- the mutation does not compile, or the harness image is broken. Last 30 lines:"
+        tail -30 "$OUTFILE" | sed 's/^/  | /'
+        fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
+    fi
+    # 125 is `podman`/`docker`'s own exit code for a failure to even start the
+    # container (this repo's transient registry-pull / "layer not known"
+    # storage flake -- see the note above run_harness). Check 1 below treats
+    # ANY nonzero RUN_RC as "the defect made the harness fail", which is true
+    # of a real defect but ALSO true of this flake -- accepting it there would
+    # let a control report a verdict about '$defect' having never actually
+    # run it. Caught here, before check 1, the same way 3/4 already are.
+    if [ "$RUN_RC" -eq 125 ]; then
+        bad "container engine exited 125 running the harness for '$defect' -- this is the transient registry/storage-layer failure, NOT a verdict about '$defect'. Re-run. Last 30 lines:"
         tail -30 "$OUTFILE" | sed 's/^/  | /'
         fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
     fi

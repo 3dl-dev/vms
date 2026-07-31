@@ -880,12 +880,13 @@ EOF
         suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
-These four drive the product's own vms_kif client, so restoring the vms-9fc
-defect (kif_bind() no longer calling vms_kif_register()) SHOULD turn them red.
-It does not: each calls vms_kif_open() and vms_kif_register() BY HAND before
-using a facility (test_syssvc_lock.c:136-140, test_kmod_ident.c:306/364-367/
-541-544/588-593), supplying the exact product step kif_bind() exists to
-perform. MEASURED, not argued -- with the defect injected all four stay rc=0.
+The suites named in blind_suites above drive the product's own vms_kif
+client, so restoring the vms-9fc defect (kif_bind() no longer calling
+vms_kif_register()) SHOULD turn them red. It does not: each calls
+vms_kif_open() and vms_kif_register() BY HAND before using a facility
+(test_syssvc_lock.c:136-140, test_kmod_ident.c:306/364-367/541-544/588-593),
+supplying the exact product step kif_bind() exists to perform. MEASURED, not
+argued -- with the defect injected, every suite in blind_suites stays rc=0.
 They are therefore structurally blind to the entire auto-bind defect class,
 which is how vms-9fc survived to be found by inspection rather than by CI.
 test_kmod_ident is the newest of them (vms-2b8), which is the point of pinning
@@ -893,7 +894,7 @@ this as an asserted fact rather than a note: the pattern is still SPREADING,
 and the gate now says so on every run.
 Tracked as rd item vms-f27. Do NOT fix it by widening suites_red: that would
 re-hide the gap behind a set the control merely permits to redden.
-THE COUNTER-EXAMPLE, added by vms-8019 and worth keeping in view: the FIFTH
+THE COUNTER-EXAMPLE, added by vms-8019 and worth keeping in view: a further
 client suite, test_syssvc_procnam, does NOT hand-register -- it opens
 /dev/vms and then uses the public sys$ API, which is what a product image
 does -- and it goes red immediately. So the blindness above is not a property

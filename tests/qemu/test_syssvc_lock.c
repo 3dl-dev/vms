@@ -29,13 +29,13 @@
  *      the release is visible cross-process through the public API, not
  *      just within one process's private state).
  *
- * BOOTSTRAP NOTE, REMEASURED (vms-47b round 5): vms-9fc has landed.
+ * BOOTSTRAP NOTE, REMEASURED (vms-47b round 6): vms-9fc has landed.
  * sys_lock.c no longer has a bind_to_executive() -- it was deleted, not
  * fixed in place -- and $ENQ/$DEQ now call vms_kif_enq()/vms_kif_deq(),
  * which bind through kif_bind() (src/libvmssys/vms_kif.c) on their own
- * first call, the same way every other vms_kif_* entry point does. A
- * normally activated image reaching sys$enqw would register itself that
- * way; it does not need the manual step below any more.
+ * first call. A normally activated image reaching sys$enqw would
+ * register itself through kif_bind(); it does not need the manual step
+ * below any more.
  *
  * This test still calls vms_kif_open()/vms_kif_register() explicitly,
  * before touching sys$enqw, exactly as facility_defects.sh's

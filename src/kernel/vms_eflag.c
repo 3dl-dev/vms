@@ -19,6 +19,41 @@
  *   READEF  - Read cluster state without waiting
  *   ASCEFC  - Associate with a common event flag cluster
  *   DACEFC  - Disassociate from a common event flag cluster
+ *   DLCEFC  - Mark a permanent common event flag cluster for deletion
+ *
+ * INTERRUPTED WAITS: THERE IS NO SUCH OUTCOME (vms-2a8, CLAUDE.md Rule 10).
+ *
+ * WAITFR, WFLOR and WFLAND used to answer SS$_NORMAL when
+ * wait_event_interruptible() returned because a signal was pending:
+ *
+ *     ret = wait_event_interruptible(...);
+ *     if (ret) { args.status = SS__NORMAL;  <- "interrupted, but still
+ *                                               return normally"
+ *
+ * That reports "the flag is set" for a flag that is demonstrably still
+ * clear, and the caller gets rc=0/errno=0 so it cannot even detect it.
+ * It is the same fabricated-success class this whole facility was wired
+ * to delete, one layer down.
+ *
+ * ORACLE-PINNED, VAX1 OpenVMS VAX V7.3, transcripts in
+ * docs/oracle/vax73-event-flags.md §4:
+ *   - HELP SYSTEM_SERVICES $WAITFR: "Tests a specific event flag and
+ *     returns immediately if the flag is set; otherwise, the process is
+ *     placed in a wait state UNTIL THE EVENT FLAG IS SET." The online help
+ *     has no Condition Values Returned topic for it at all.
+ *   - HELP SYSTEM_SERVICES $HIBER: a process in a wait state remains "known
+ *     to the system so that it can be interrupted; for example, to receive
+ *     ASTs" -- so a VMS wait IS interruptible, by an AST, and the process is
+ *     still waiting when the AST finishes. The caller of the wait never sees
+ *     it happen.
+ *   - SEARCH of $SSDEF (STARLET.MLB) for WAIT/INTERRUPT/ABORTED returns four
+ *     unrelated symbols. VMS HAS NO "WAIT WAS INTERRUPTED" STATUS TO RETURN.
+ *
+ * So the condition is made UNREACHABLE rather than handled. These three
+ * handlers return -ERESTARTSYS and write NO status; libvmssys'
+ * kif_wait_call() re-enters the wait, so no sys$ caller can observe a wait
+ * that ended with its predicate false. Do not "improve" this by inventing a
+ * status here -- there is not one to invent.
  */
 
 #include <linux/kernel.h>
@@ -78,6 +113,30 @@ void vms_proc_release_common_ef(struct vms_proc *proc)
         }
     }
     spin_unlock(&proc->ef.lock);
+}
+
+/*
+ * common_idx - which common cluster a flag number names, or -1.
+ *
+ * ORACLE-PINNED (vms-2a8), docs/oracle/vax73-event-flags.md. HELP
+ * SYSTEM_SERVICES $ASCEFC Arguments on the reference lab VAX V7.3:
+ *
+ *   "To associate with common event flag cluster 2, specify any flag
+ *    number in the cluster (64 to 95); to associate with common event
+ *    flag cluster 3, specify any event flag number in the cluster (96
+ *    to 127)."
+ *
+ * ANY flag number in the range -- not only the base numbers. ASCEFC and
+ * DACEFC here used to accept exactly 64 or 96 and answer SS$_ILLEFC for
+ * 65..95 and 97..127, which are legal on VMS.
+ */
+static int common_idx(uint32_t efn)
+{
+    if (efn >= 64 && efn < 96)
+        return 0;
+    if (efn >= 96 && efn < 128)
+        return 1;
+    return -1;
 }
 
 /*
@@ -207,17 +266,31 @@ long vms_ioctl_waitfr(struct vms_proc *proc, unsigned long arg)
     spin_lock(&proc->ef.lock);
     if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
         spin_unlock(&proc->ef.lock);
-        args.status = (args.efn >= 64) ? SS__UNASEFC : SS__ILLEFC;
+        /* An out-of-range flag number is ILLEFC, not UNASEFC: 200 is not
+         * "a common cluster you have not associated with", it is not an
+         * event flag at all. Matches SETEF/CLREF above. */
+        args.status = (args.efn >= 128) ? SS__ILLEFC :
+                      (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
     spin_unlock(&proc->ef.lock);
 
-    /* Wait until the flag is set */
+    /*
+     * Wait until the flag is set.
+     *
+     * A SIGNAL DOES NOT END THE WAIT, AND IT PRODUCES NO STATUS. See the
+     * INTERRUPTED WAITS note at the top of this file. This used to be
+     *
+     *     if (ret) { args.status = SS__NORMAL;  <- interrupted, flag clear
+     *
+     * which told the caller "the flag is set" about a flag that was
+     * demonstrably still clear. -ERESTARTSYS is returned instead: no status
+     * is written back at all on this path, so there is nothing for a caller
+     * to misread, and libvmssys' vms_kif_waitfr() re-enters the wait.
+     */
     ret = wait_event_interruptible(*waitq, (READ_ONCE(*flags) & (1U << bit)));
-    if (ret) {
-        args.status = SS__NORMAL; /* interrupted, but still return normally */
-        goto out;
-    }
+    if (ret)
+        return ret;
 
     args.status = SS__NORMAL;
 
@@ -246,25 +319,31 @@ long vms_ioctl_wflor(struct vms_proc *proc, unsigned long arg)
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
-    /* EFN must be cluster base */
-    if (args.efn != 0 && args.efn != 32 && args.efn != 64 && args.efn != 96) {
-        args.status = SS__ILLEFC;
-        goto out;
-    }
-
+    /*
+     * NO "efn must be a cluster base" check. ORACLE-PINNED (vms-2a8):
+     * HELP SYSTEM_SERVICES $WFLOR Arguments on the reference lab VAX V7.3
+     * says the efn argument is the "Number of any event flag within the
+     * event flag cluster to be used ... Specifying the number of an event
+     * flag within the cluster serves to identify the event flag cluster."
+     * This rejected everything but 0/32/64/96 with SS$_ILLEFC, so a wait
+     * on cluster 1 expressed as $WFLOR(40, mask) -- legal VMS -- was an
+     * illegal event flag cluster. efn_resolve() already selects the
+     * cluster from any flag number in it.
+     */
     spin_lock(&proc->ef.lock);
     if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
         spin_unlock(&proc->ef.lock);
-        args.status = (args.efn >= 64) ? SS__UNASEFC : SS__ILLEFC;
+        args.status = (args.efn >= 128) ? SS__ILLEFC :
+                      (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
     spin_unlock(&proc->ef.lock);
 
+    /* No status on the interrupted path -- see vms_ioctl_waitfr above and
+     * the INTERRUPTED WAITS note at the top of this file. */
     ret = wait_event_interruptible(*waitq, (READ_ONCE(*flags) & args.mask));
-    if (ret) {
-        args.status = SS__NORMAL;
-        goto out;
-    }
+    if (ret)
+        return ret;
 
     args.status = SS__NORMAL;
 
@@ -289,25 +368,22 @@ long vms_ioctl_wfland(struct vms_proc *proc, unsigned long arg)
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
-    if (args.efn != 0 && args.efn != 32 && args.efn != 64 && args.efn != 96) {
-        args.status = SS__ILLEFC;
-        goto out;
-    }
-
+    /* No cluster-base check -- see the note in vms_ioctl_wflor above. */
     spin_lock(&proc->ef.lock);
     if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
         spin_unlock(&proc->ef.lock);
-        args.status = (args.efn >= 64) ? SS__UNASEFC : SS__ILLEFC;
+        args.status = (args.efn >= 128) ? SS__ILLEFC :
+                      (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
     spin_unlock(&proc->ef.lock);
 
+    /* No status on the interrupted path -- see vms_ioctl_waitfr above and
+     * the INTERRUPTED WAITS note at the top of this file. */
     ret = wait_event_interruptible(*waitq,
                                    ((READ_ONCE(*flags) & args.mask) == args.mask));
-    if (ret) {
-        args.status = SS__NORMAL;
-        goto out;
-    }
+    if (ret)
+        return ret;
 
     args.status = SS__NORMAL;
 
@@ -335,7 +411,8 @@ long vms_ioctl_readef(struct vms_proc *proc, unsigned long arg)
     if (efn_resolve(proc, args.efn, &flags, &waitq, &bit) < 0) {
         spin_unlock(&proc->ef.lock);
         args.state = 0;
-        args.status = (args.efn >= 64) ? SS__UNASEFC : SS__ILLEFC;
+        args.status = (args.efn >= 128) ? SS__ILLEFC :
+                      (args.efn >= 64)  ? SS__UNASEFC : SS__ILLEFC;
         goto out;
     }
 
@@ -368,11 +445,8 @@ long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg)
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
-    if (args.efn == 64)
-        idx = 0;
-    else if (args.efn == 96)
-        idx = 1;
-    else {
+    idx = common_idx(args.efn);
+    if (idx < 0) {
         args.status = SS__ILLEFC;
         goto out;
     }
@@ -451,11 +525,8 @@ long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg)
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
         return -EFAULT;
 
-    if (args.efn == 64)
-        idx = 0;
-    else if (args.efn == 96)
-        idx = 1;
-    else {
+    idx = common_idx(args.efn);
+    if (idx < 0) {
         args.status = SS__ILLEFC;
         goto out;
     }
@@ -482,6 +553,65 @@ long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg)
     args.status = SS__NORMAL;
 
 out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_dlcefc - Mark a permanent common event flag cluster for deletion
+ *
+ * ORACLE-PINNED (vms-2a8), docs/oracle/vax73-event-flags.md. HELP
+ * SYSTEM_SERVICES $DLCEFC on the reference lab VAX V7.3:
+ *
+ *   "Marks a permanent common event flag cluster for deletion."
+ *
+ * "Marks ... for deletion" is the whole semantic: the cluster is not torn
+ * out from under the processes still associated with it. Clearing the
+ * permanent bit puts it back under the ordinary temporary-cluster lifetime
+ * this file already implements -- freed by DACEFC (or by process teardown,
+ * vms_proc_release_common_ef) when the last association goes away -- and if
+ * nobody is associated any more it goes immediately.
+ *
+ * This ioctl did not exist. sys$dlcefc in src/libvms/syssvc/sys_event.c was
+ * `return SS$_NORMAL;` with no side effect: a caller was told its permanent
+ * cluster had been marked for deletion, and nothing had happened. That is
+ * the fabricated success Rule 10 forbids, and it is the same defect as
+ * sys$ascefc's, in the same file.
+ *
+ * The cluster is named, not numbered: $DLCEFC takes only a name, so it can
+ * delete a cluster this process never associated with.
+ */
+long vms_ioctl_dlcefc(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_ef_common_args args;
+    struct vms_common_ef_cluster *cluster, *tmp;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    args.name[31] = '\0';
+
+    args.status = SS__UNASEFC;
+
+    spin_lock(&vms_common_ef_lock);
+    list_for_each_entry_safe(cluster, tmp, &vms_common_ef_list, list) {
+        if (strncmp(cluster->name, args.name, 32) != 0)
+            continue;
+
+        cluster->perm = 0;
+        if (cluster->refcount <= 0) {
+            list_del(&cluster->list);
+            kfree(cluster);
+        }
+        args.status = SS__NORMAL;
+        break;
+    }
+    spin_unlock(&vms_common_ef_lock);
+
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;

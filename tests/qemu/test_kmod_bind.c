@@ -62,7 +62,9 @@
 
 /* Oracle-pinned; see the file header. */
 #define SS_NORMAL       1
-#define SS_WASCLR       5
+/* Was 5. ORACLE-PINNED to 1 (vms-68c), docs/oracle/vax73-event-flags.md --
+ * SS$_WASCLR and SS$_NORMAL are both 1 in $SSDEF on VAX V7.3. */
+#define SS_WASCLR       1
 #define SS_WASSET       9
 #define SS_ACCVIO       12
 #define SS_BADPARAM     20

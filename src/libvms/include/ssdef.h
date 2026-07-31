@@ -34,7 +34,20 @@ extern "C" {
  * ================================================================ */
 
 #define SS$_NORMAL          1       /* Normal successful completion */
-#define SS$_WASCLR          1       /* Previous state was clear (alternate) */
+/* ORACLE-PINNED (vms-68c, 2026-07-30), docs/oracle/vax73-event-flags.md.
+ * SS$_WASCLR REALLY IS SS$_NORMAL -- this is VMS, not an OVMX placeholder
+ * and not a collision to be resolved:
+ *     $EQU  SS$_NORMAL  1
+ *     $EQU  SS$_WASCLR  1      (both, from $SSDEF in STARLET.MLB)
+ *     F$MESSAGE(1) -> %SYSTEM-S-NORMAL, normal successful completion
+ * There is exactly one message at value 1, so nothing renders as "WASCLR".
+ * A caller of $SETEF/$CLREF/$READEF distinguishes the two outcomes by
+ * testing against SS$_WASSET (9); "not WASSET, and success" IS was-clear.
+ * vms-68c was filed on the premise that this alias was the defect. It is
+ * not -- the defect was src/kernel/vms_internal.h's SS__WASCLR 5, which the
+ * same oracle shows is not a status at all (F$MESSAGE(5) = %NONAME-?-NOMSG).
+ * Do not "disambiguate" these by inventing a distinct value. */
+#define SS$_WASCLR          1       /* Previous state was clear (== SS$_NORMAL on VMS) */
 #define SS$_WASSET          9       /* Previous state was set */
 #define SS$_BUFFEROVF       4       /* Buffer overflow (warning, sev=0) */
 
@@ -276,7 +289,26 @@ extern "C" {
  * ================================================================ */
 
 #define SS$_ASTFLT          2244    /* AST fault */
-#define SS$_ILLEFC          2260    /* Illegal event flag cluster */
+/* ORACLE-PINNED (vms-68c, 2026-07-30) on reference lab node VAX1, OpenVMS
+ * VAX V7.3, by the two documented-tool observations used throughout this
+ * header (full transcript: docs/oracle/vax73-event-flags.md):
+ *     $EQU  SS$_ILLEFC  236              (LIBRARY/EXTRACT=$SSDEF ... STARLET.MLB)
+ *     F$MESSAGE(236) -> %SYSTEM-F-ILLEFC, illegal event flag cluster
+ * The previous value here, 2260, is a DIFFERENT condition on the oracle:
+ *     F$MESSAGE(2260) -> %SYSTEM-F-IDXFILEFULL, index file is full
+ * so every $SETEF/$CLREF/$READEF that rejected an out-of-range event flag
+ * number was reporting a full index file. src/kernel/vms_internal.h carried
+ * a THIRD value for the same symbol (44 = %SYSTEM-F-ABORT); it is corrected
+ * to 236 in the same change, so the two sides of /dev/vms now agree.
+ *
+ * Every in-tree consumer names the symbol (src/libvms/syssvc/sys_event.c,
+ * src/vmsprocess/event_flags.c, src/libvms/status.c), so they follow this
+ * value automatically. DCL's F$MESSAGE table in src/vmsdcl/dcl_lexical.c is
+ * a number->message table and named neither ILLEFC nor UNASEFC at all; both
+ * rows are added there against this same oracle run, because a status whose
+ * number no user-visible message table can name is a half-applied
+ * correction (the lesson of the SS$_ILLIOFUNC pin above). */
+#define SS$_ILLEFC          236     /* Illegal event flag cluster (%SYSTEM-F-ILLEFC) */
 /* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM.
  * 2280 is SS$_NONEXPR. */
 #define SS$_UNASEFC         564     /* Unassociated event flag cluster (%SYSTEM-F-UNASEFC) */

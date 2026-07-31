@@ -20,9 +20,14 @@
 #include <sys/ioctl.h>
 #include "vms_ioctl.h"
 
+/* ORACLE-PINNED (vms-68c), docs/oracle/vax73-event-flags.md: $SSDEF gives
+ * SS$_WASCLR 1 on the reference lab VAX V7.3 -- the same value as
+ * SS$_NORMAL, which is VMS. Was 5 here, matching the kernel's old value,
+ * which the same oracle shows is not a status at all (F$MESSAGE(5) =
+ * %NONAME-?-NOMSG). */
 #define SS_NORMAL   1
 #define SS_WASSET   9
-#define SS_WASCLR   5
+#define SS_WASCLR   1
 
 static int pass = 0, fail = 0;
 

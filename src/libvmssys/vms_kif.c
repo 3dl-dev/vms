@@ -244,6 +244,54 @@ static uint32_t kif_call(unsigned long req, void *args)
             return _kif_st;                         \
     } while (0)
 
+/*
+ * kif_wait_call - kif_call for the three BLOCKING event-flag services
+ * ($WAITFR, $WFLOR, $WFLAND). It differs from kif_call in exactly one way:
+ * a signal does not end the wait.
+ *
+ * WHY THIS LOOP EXISTS, AND WHY IT IS NOT "SWALLOWING AN ERROR" (vms-2a8).
+ *
+ * $WAITFR has no "your wait was interrupted" condition value. The service
+ * returns when the flag is set, or it does not return; the only other
+ * outcomes are the two argument errors (SS$_ILLEFC, SS$_UNASEFC) which are
+ * decided before any waiting happens. On VMS the thing that interrupts a
+ * wait is an AST, and the documented behaviour is that the AST executes and
+ * then THE WAIT RESUMES -- $WAITFR does not report the interruption to its
+ * caller, because from the caller's point of view nothing happened.
+ *
+ * Linux signals are the host mechanism that lands in the same place: the
+ * executive's wait_event_interruptible() abandons the ioctl with
+ * -ERESTARTSYS so the handler can run. If the handler was installed without
+ * SA_RESTART, the kernel hands userspace -EINTR instead of restarting, and
+ * a wait service would then have to answer for a wait that did not finish.
+ * Under CLAUDE.md Rule 10 the answer to a condition VMS never faces is to
+ * make it UNREACHABLE, not to invent a plausible status for it -- so the
+ * wait is RE-ENTERED here and no caller can ever observe it.
+ *
+ * The executive writes NO status on that path (src/kernel/vms_eflag.c), so
+ * this cannot mask a real result: the only thing being retried is a wait
+ * whose predicate is still false. Every other errno still becomes a status
+ * through kif_call's mapping.
+ */
+static uint32_t kif_wait_call(unsigned long req, void *args)
+{
+    int rc;
+
+    kif_bind();
+
+    do {
+        rc = vms_sys_ioctl(vms_dev_fd, req, (unsigned long)args);
+    } while (rc == -VMS_EINTR);
+
+    return (rc < 0) ? vms_kif_kerr_to_ss(rc) : 0;
+}
+
+#define KIF_WAIT_CALL(req, argsp) do {                   \
+        uint32_t _kif_st = kif_wait_call((req), (argsp)); \
+        if (_kif_st)                                     \
+            return _kif_st;                              \
+    } while (0)
+
 /* ================================================================
  * Access Mode (3a)
  * ================================================================ */
@@ -391,7 +439,7 @@ uint32_t vms_kif_waitfr(uint32_t efn)
     vms_memset(&args, 0, sizeof(args));
     args.efn = efn;
 
-    KIF_CALL(VMS_IOCTL_WAITFR, &args);
+    KIF_WAIT_CALL(VMS_IOCTL_WAITFR, &args);
 
     return args.status;
 }
@@ -404,7 +452,7 @@ uint32_t vms_kif_wflor(uint32_t efn, uint32_t mask)
     args.efn = efn;
     args.mask = mask;
 
-    KIF_CALL(VMS_IOCTL_WFLOR, &args);
+    KIF_WAIT_CALL(VMS_IOCTL_WFLOR, &args);
 
     return args.status;
 }
@@ -417,7 +465,7 @@ uint32_t vms_kif_wfland(uint32_t efn, uint32_t mask)
     args.efn = efn;
     args.mask = mask;
 
-    KIF_CALL(VMS_IOCTL_WFLAND, &args);
+    KIF_WAIT_CALL(VMS_IOCTL_WFLAND, &args);
 
     return args.status;
 }
@@ -460,6 +508,20 @@ uint32_t vms_kif_dacefc(uint32_t efn)
     args.efn = efn;
 
     KIF_CALL(VMS_IOCTL_DACEFC, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_dlcefc(const char *name)
+{
+    struct vms_ef_common_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    if (name)
+        vms_strncpy(args.name, name, 31);
+    args.name[31] = '\0';
+
+    KIF_CALL(VMS_IOCTL_DLCEFC, &args);
 
     return args.status;
 }

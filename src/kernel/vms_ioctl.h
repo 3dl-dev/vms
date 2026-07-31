@@ -216,6 +216,10 @@ struct vms_ef_common_args {
 #define VMS_IOCTL_READEF    _IOWR(VMS_IOC_MAGIC, 0x25, struct vms_ef_read_args)
 #define VMS_IOCTL_ASCEFC    _IOWR(VMS_IOC_MAGIC, 0x26, struct vms_ef_common_args)
 #define VMS_IOCTL_DACEFC    _IOWR(VMS_IOC_MAGIC, 0x27, struct vms_ef_args)
+/* $DLCEFC takes a NAME and no flag number -- it can delete a permanent
+ * cluster this process never associated with -- so it reuses
+ * vms_ef_common_args and ignores efn/prot/perm. (vms-2a8) */
+#define VMS_IOCTL_DLCEFC    _IOWR(VMS_IOC_MAGIC, 0x28, struct vms_ef_common_args)
 
 /* ================================================================
  * Lock Manager (3d)

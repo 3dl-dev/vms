@@ -100,13 +100,34 @@ int main(void) {
      *     ONE check that states both facts honestly instead of two checks
      *     of one fact.
      *   - the ENABLE pair (WASCLR / "prev state was disabled") CANNOT be
-     *     collapsed the same way: both exact strings are required literal
-     *     text for the ast-setast-disable negative control (facility_defects.sh)
-     *     and for the facility_negctl_manifest selftest that checks they
-     *     exist verbatim in this source. Removing either line would MISS
-     *     that control's require_fail/knock_on_fail set. It stays two CHECK
-     *     lines, but is now explicitly disclosed here (not just in
-     *     facility_defects.sh's knock_on_why) as testing one fact.
+     *     collapsed the same way. Proof, not assertion: `sh
+     *     facility_defects.sh field ast-setast-disable require_fail` prints
+     *     "disable again: prev state was disabled" and "SETAST(enable)
+     *     returns WASCLR"; `... knock_on_fail` prints "prev state was
+     *     disabled". run_facility_negctl.sh compares the observed
+     *     "  FAIL: <msg>" lines to those fields by EXACT LINE match (sorted
+     *     sets, `comm -23`/`comm -13`, run_facility_negctl.sh ~487-494) --
+     *     so collapsing the two CHECKs below into one combined message
+     *     would make both named lines register MISSING and the new
+     *     combined message register EXTRA, failing that control's red-set
+     *     equality.
+     *
+     *     ROUND-4 CORRECTION (false emphatic the adversary caught): an
+     *     earlier version of this comment also credited
+     *     "facility_negctl_manifest" with protecting this pair. It does
+     *     not: that selftest only checks each string exists SOMEWHERE as a
+     *     substring of the suite source (tests/qemu/CMakeLists.txt),
+     *     loosely normalised (quotes/backslashes stripped, whitespace
+     *     collapsed) -- checked directly by patching this file to the
+     *     collapsed, combined-message form in a scratch copy and running
+     *     `facility_defects.sh selftest`: it still printed "ok: every
+     *     require_fail/knock_on_fail text exists literally in a suite
+     *     source" and exited 0, because the combined message still
+     *     contains both substrings. The equality check above is the only
+     *     thing that actually breaks under collapse; the manifest selftest
+     *     does not. It stays two CHECK lines, explicitly disclosed here
+     *     (not just in facility_defects.sh's knock_on_why) as testing one
+     *     fact.
      */
     uint32_t setast_st = vms_kif_setast(0);
     CHECK(setast_st == SS_WASSET,
@@ -182,9 +203,24 @@ int main(void) {
      * expressible through the wrapper and stays a raw ioctl deliberately.
      */
     int rc = ioctl(fd, VMS_IOCTL_DELIVERAST, NULL);
-    /* This may or may not produce visible effect since we're in initramfs
-     * without a proper signal handler. Just verify the ioctl doesn't crash. */
-    CHECK(rc == 0 || rc == -1, "DELIVERAST ioctl doesn't crash");
+    (void)rc;
+    /*
+     * ROUND-4 FIX (vms-290 adversary finding, hygiene): this used to end
+     * with `CHECK(rc == 0 || rc == -1, "DELIVERAST ioctl doesn't crash")`.
+     * ioctl(2) on Linux only ever returns a driver's non-negative success
+     * value or -1 (with errno set from the driver's negative return), and
+     * vms_ioctl_deliverast() (src/kernel/vms_ast.c) never returns anything
+     * outside {0, -EFAULT, -EAGAIN} -- so `rc == 0 || rc == -1` is true of
+     * every possible outcome of this call site and asserts nothing a bug
+     * could fail. It sat next to two real assertions above (the DELIVERAST
+     * wrapper checks added in round 3) and borrowed their credibility
+     * without earning it, which is exactly the "assertion satisfiable by
+     * something other than the behavior under test" failure mode this
+     * dispatch's method rules forbid. Deleted rather than restated: the
+     * actual property this call site exercises -- the kernel does not
+     * crash on a NULL VMS_IOCTL_DELIVERAST buffer -- is proven by
+     * execution reaching the "=== test_kmod_ast: N passed, M failed ==="
+     * print below at all, not by any comparison on `rc`. */
 
     close(fd);
 

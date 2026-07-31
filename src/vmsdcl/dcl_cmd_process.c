@@ -720,19 +720,18 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
         return OVMX$_NOPRCUIC;
     }
 
-    /* Everything else is meaningful only for a process RUN creates.
-     * With /DETACHED there is one; without it there is not, and on
-     * OpenVMS these qualifiers would have asked for a subprocess. */
-    if (!dcl_has_qualifier(cmd, "DETACHED")) {
-        static const char *const subprocess_quals[] = {
-            "PROCESS_NAME", "INPUT", "OUTPUT", "ERROR", NULL
-        };
-        for (int i = 0; subprocess_quals[i]; i++) {
-            if (dcl_has_qualifier(cmd, subprocess_quals[i])) {
-                run_creprc_failed(OVMX$_NOSUBPRC);
-                return OVMX$_NOSUBPRC;
-            }
-        }
+    /* ANY qualifier, not a list of four. The oracle draws the line
+     * itself -- HELP RUN Process (VAX2, OpenVMS VAX V7.3, 2026-07-31):
+     * "A subprocess is created if any of the qualifiers except the /UIC
+     * or the /DETACHED qualifier is specified." /UIC is already gone
+     * above, so what is left here, with no /DETACHED, is a request for
+     * a subprocess whichever of the thirty-odd documented qualifiers it
+     * was written with. Enumerating four of them would refuse
+     * /PROCESS_NAME and go on silently discarding /PRIORITY -- the same
+     * defect, narrower. */
+    if (!dcl_has_qualifier(cmd, "DETACHED") && cmd->qualifier_count > 0) {
+        run_creprc_failed(OVMX$_NOSUBPRC);
+        return OVMX$_NOSUBPRC;
     }
 
     return 0;

@@ -179,14 +179,20 @@ void dcl_context_init(struct dcl_context *ctx)
      * against a real /dev/vms). The correct code here is a
      * vms_kif_getjpi_self() read of that row.
      *
-     * IT IS NOT WIRED UP YET, AND THIS IS THE ONLY REASON WHY:
-     * vms_kif_register() still has no product caller (vms-9fc), so no
-     * DCL process is registered with the executive and $GETJPI would
-     * return -ESRCH for every one of them. Replacing these reads before
-     * vms-9fc lands would not harden DCL, it would break it.
+     * REMEASURED ON THIS TREE (vms-47b round 5): vms-9fc has landed.
+     * vms_kif_register() now has a product caller -- kif_bind()
+     * (src/libvmssys/vms_kif.c) registers the calling process on its
+     * first vms_kif_* or sys$ call, including a first-ever
+     * vms_kif_getjpi_self(). JPI$_USERNAME is implemented
+     * (src/libvms/syssvc/sys_process.c) and would resolve here. JPI$_CURPRIV
+     * and JPI$_PROCPRIV are declared (prcdef.h) but sys$getjpi's item
+     * switch has no case for either, so a read of the privilege mask
+     * still has nothing to resolve it. Swapping only the username read
+     * would leave this block asserting a single reason for two reads
+     * that no longer share it; that split, and deleting either half, is
+     * vms-2b8's decision, not this item's.
      *
-     * DO NOT "IMPROVE" THIS PATH. Delete it, once vms-9fc has landed,
-     * and read the executive instead. The UIC half of the same defect
+     * DO NOT "IMPROVE" THIS PATH. The UIC half of the same defect
      * was already deleted from src/vmsrms/rms_core.c under this item,
      * because there the real credentials were available locally; the
      * user name and the privilege mask have no local honest source.

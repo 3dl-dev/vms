@@ -891,10 +891,13 @@ int main(void)
      *
      * STOPGAP (vms-2b8). This is a process declaring its own full
      * privilege mask into a USERSPACE PCB -- the shape this item exists
-     * to remove. It is left in place for exactly one reason: nothing in
-     * the product calls vms_kif_register() yet (vms-9fc), so PID 1 has
-     * no row in the executive's process table to stamp an identity
-     * onto, and every reader below still reads this PCB.
+     * to remove. It is left in place because PID 1 specifically has no
+     * row in the executive's process table: vms_kif_register() now has
+     * a product caller elsewhere (kif_bind(), vms-9fc, invoked on a
+     * process's first vms_kif_* or sys$ call), but nothing in this file
+     * makes such a call -- PID 1 only opens /dev/vms (executive_attach)
+     * and never issues an ioctl through it -- so PID 1 itself is never
+     * registered, and every reader below still reads this PCB.
      *
      * PID 1 is the one process for which "SYSTEM, fully privileged" is
      * the right ANSWER -- the wrongness is entirely in WHO DECIDES it.

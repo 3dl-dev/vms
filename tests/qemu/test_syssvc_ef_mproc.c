@@ -3,30 +3,40 @@
  * sys$ API, A-writes / B-reads (vms-f1f).
  *
  * ============================================================
- * THIS SUITE IS EXPECTED TO FAIL ON THE TREE THAT INTRODUCED IT.
+ * WRITTEN RED (vms-f1f). MADE GREEN BY FIXING THE PRODUCT (vms-2a8).
+ * NOT ONE ASSERTION WAS CHANGED TO GET THERE.
  * ============================================================
  *
- * It is the reproduction of a defect, not a regression guard for working
- * code. Do not delete it, do not weaken it, and do not "fix" it by asserting
- * the behaviour OVMX currently has. What it reports is true:
+ * It was born as the reproduction of a defect and is now the regression
+ * guard for the fix. Do not delete it, do not weaken it, and do not "fix" a
+ * future failure of it by asserting the behaviour OVMX happens to have.
+ * What it reported when it was written was true:
  *
- *   src/libvms/syssvc/sys_event.c implements the ENTIRE event flag facility
- *   in per-process memory (struct vms_pcb's ef_clusters[]) and NEVER calls
+ *   src/libvms/syssvc/sys_event.c implemented the ENTIRE event flag facility
+ *   in per-process memory (struct vms_pcb's ef_clusters[]) and NEVER called
  *   the executive. Every vms_kif_* event-flag entry point --
  *   vms_kif_setef, vms_kif_clref, vms_kif_readef, vms_kif_waitfr,
- *   vms_kif_wflor, vms_kif_wfland, vms_kif_ascefc, vms_kif_dacefc -- has
+ *   vms_kif_wflor, vms_kif_wfland, vms_kif_ascefc, vms_kif_dacefc -- had
  *   ZERO callers product-wide, exactly like vms_kif_register() before
- *   vms-9fc. src/kernel/vms_eflag.c implements common clusters properly, on
+ *   vms-9fc. src/kernel/vms_eflag.c implemented common clusters properly, on
  *   a module-global list (vms_common_ef_list), and nothing in the product
- *   reaches it.
+ *   reached it.
  *
- *   sys$ascefc is worse than unwired: it is `return SS$_NORMAL;` with a TODO
- *   and no side effect at all. A process asks to join a named common
- *   cluster, is told it succeeded, and shares nothing. Under CLAUDE.md
+ *   sys$ascefc was worse than unwired: it was `return SS$_NORMAL;` with a
+ *   TODO and no side effect at all. A process asked to join a named common
+ *   cluster, was told it succeeded, and shared nothing. Under CLAUDE.md
  *   Rule 10 that is the illegal third answer -- a plausible-looking handler
  *   for a condition VMS never faces -- and under Rule 11 it is a facade: a
  *   system facility living in per-process memory that reports success while
  *   sharing nothing.
+ *
+ * vms-2a8 rewrote sys_event.c as a pure translation layer over the
+ * executive. The measurement that closed it, same boot, same harness:
+ *
+ *   before  test_kmod_eflag_mproc  13 passed,  0 failed   (executive: fine)
+ *           test_syssvc_ef_mproc    2 passed, 11 failed   (public API: facade)
+ *   after   test_kmod_eflag_mproc  13 passed,  0 failed
+ *           test_syssvc_ef_mproc   ALL passed
  *
  * WHY THE PROPERTY BELOW IS VMS BEHAVIOUR AND NOT AN OVMX INVENTION
  *
@@ -36,16 +46,17 @@
  * processes associate with BY NAME precisely in order to share them. Sharing
  * IS the facility. A $ASCEFC that shares nothing has not implemented it.
  *
- * NO STATUS CONSTANT IS PINNED. The tree carries two different values for
- * this facility's own statuses (src/kernel/vms_internal.h SS__WASCLR 5 vs
- * src/libvms/include/ssdef.h SS$_WASCLR 1) and neither is oracle-pinned, so
- * assertions here use the VMS odd/even success convention only. Pinning an
- * unverified number would be self-certifying it.
+ * STILL NO STATUS CONSTANT IS ASSERTED BY VALUE, and that is deliberate
+ * even though the constants are now oracle-pinned (vms-68c,
+ * docs/oracle/vax73-event-flags.md). Assertions here use the VMS odd/even
+ * success convention only, so this suite measures the SHARING property and
+ * cannot go red for a status-numbering reason that belongs to another item.
+ * The values themselves are pinned and tested where they are defined.
  *
  * The mirror-image suite tests/qemu/test_kmod_eflag_mproc.c asserts the SAME
- * property one layer down, through raw ioctls, and PASSES -- so the two
- * together locate the defect exactly: the executive shares correctly, and
- * the public system service never asks it to.
+ * property one layer down, through raw ioctls. Keeping both is what located
+ * the defect exactly -- the executive shared correctly and the public system
+ * service never asked it to -- and it is what will locate the next one.
  *
  * SYNCHRONISATION: pipes only, no sleeps; the parent bounds each wait so a
  * failure is a named FAIL line rather than a harness-wide QEMU timeout.
@@ -72,6 +83,13 @@
 #define CLUSTER_EFN_B   75
 #define LOCAL_EFN       5
 #define LOCAL_EFN_CHILD 9
+
+/* Common cluster 3 (flags 96-127), used only by the vms-2a8 lifetime block
+ * at the end of main() so it cannot collide with the cluster-2 flags the
+ * A-writes/B-reads measurement above uses. PERM_EFN is deliberately NOT the
+ * base number 96 -- see the oracle note at that block. */
+#define COMMON_BASE_3   96
+#define PERM_EFN        100
 
 static int pass = 0, fail = 0;
 
@@ -322,6 +340,102 @@ int main(void)
 
     int wstatus = 0;
     waitpid(pid, &wstatus, 0);
+
+    /* =====================================================================
+     * ADDED BY vms-2a8. Everything above is unchanged from the round that
+     * wrote this suite red; nothing above was relaxed to make it pass.
+     *
+     * These cover the three things the original suite could not: the
+     * lifetime half of the facility ($DACEFC / $DLCEFC), and the two
+     * oracle-pinned rules the executive was getting wrong underneath them.
+     * They run last, after the child is reaped, so they cannot perturb the
+     * A-writes/B-reads measurement above.
+     * ===================================================================== */
+
+    /* $DACEFC ON A NON-BASE FLAG NUMBER. ORACLE-PINNED (HELP
+     * SYSTEM_SERVICES $ASCEFC Arguments, docs/oracle/vax73-event-flags.md):
+     * "To associate with common event flag cluster 2, specify any flag
+     * number in the cluster (64 to 95)". CLUSTER_EFN_A is 70, not 64 --
+     * before vms-2a8 the executive accepted ONLY 64 and 96 here and
+     * answered SS$_ILLEFC for every other legal number. */
+    st = sys$dacefc(CLUSTER_EFN_A);
+    printf("  INFO: sys$dacefc(%d) [non-base flag number] returned status %u\n",
+           CLUSTER_EFN_A, st);
+    CHECK(st & 1,
+          "parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base");
+
+    /* And the disassociation was real, not reported: an unassociated common
+     * flag is refused again, exactly as it was before the first $ASCEFC. */
+    st = sys$setef(CLUSTER_EFN_A);
+    printf("  INFO: sys$setef(%d) after $DACEFC returned status %u\n",
+           CLUSTER_EFN_A, st);
+    CHECK(!(st & 1),
+          "parent: after sys$dacefc the common flag is refused again (the disassociation took effect, it was not merely reported)");
+
+    /* ---- $DLCEFC, and the permanence it is defined against ----
+     *
+     * ORACLE-PINNED (HELP SYSTEM_SERVICES $DLCEFC): "Marks a permanent
+     * common event flag cluster for deletion." So the property has two
+     * halves and each is asserted separately:
+     *   (a) a PERMANENT cluster outlives its last association -- without
+     *       that, $DLCEFC would have nothing to delete and a stub could
+     *       pass;
+     *   (b) after $DLCEFC the cluster really is gone, observed as a
+     *       re-association seeing FRESH (zero) flags rather than the ones
+     *       set before.
+     * sys$dlcefc used to be `return SS$_NORMAL;` -- it passed (a) and (b)
+     * would have caught it. */
+    {
+        $DESCRIPTOR(permnam, "OVMX$2A8_PERM");
+        $DESCRIPTOR(nonam,   "OVMX$2A8_NOSUCH");
+        uint32_t state = 0;
+
+        st = sys$ascefc(PERM_EFN, &permnam, 0, 1 /* perm */);
+        printf("  INFO: sys$ascefc(%d, \"OVMX$2A8_PERM\", perm=1) returned status %u\n",
+               PERM_EFN, st);
+        CHECK(st & 1, "parent: sys$ascefc created a PERMANENT common cluster");
+
+        st = sys$setef(PERM_EFN);
+        CHECK(st & 1, "parent: sys$setef on the permanent cluster reported success");
+
+        st = sys$dacefc(PERM_EFN);
+        CHECK(st & 1, "parent: sys$dacefc released the last association to the permanent cluster");
+
+        st = sys$ascefc(PERM_EFN, &permnam, 0, 0);
+        CHECK(st & 1, "parent: sys$ascefc re-joined the permanent cluster by name");
+        state = 0;
+        st = sys$readef(PERM_EFN, &state);
+        printf("  INFO: after re-join, sys$readef(%d) status=%u state=0x%08x\n",
+               PERM_EFN, st, state);
+        CHECK((st & 1) && (state & (1u << (PERM_EFN - COMMON_BASE_3))),
+              "parent: a PERMANENT cluster survived losing its last association (its flags are still set)");
+
+        st = sys$dlcefc(&permnam);
+        printf("  INFO: sys$dlcefc(\"OVMX$2A8_PERM\") returned status %u\n", st);
+        CHECK(st & 1, "parent: sys$dlcefc accepted the permanent cluster by name");
+
+        st = sys$dacefc(PERM_EFN);
+        CHECK(st & 1, "parent: sys$dacefc released the marked cluster");
+
+        st = sys$ascefc(PERM_EFN, &permnam, 0, 0);
+        CHECK(st & 1, "parent: sys$ascefc after the deletion created a cluster of that name again");
+        state = 0;
+        st = sys$readef(PERM_EFN, &state);
+        printf("  INFO: after $DLCEFC + re-create, sys$readef(%d) status=%u state=0x%08x (expect 0)\n",
+               PERM_EFN, st, state);
+        CHECK((st & 1) && !(state & (1u << (PERM_EFN - COMMON_BASE_3))),
+              "parent: sys$dlcefc really deleted the cluster (the re-created one is FRESH, not the old flags)");
+
+        /* Negative control for $DLCEFC: it must not report success for a
+         * cluster that does not exist. A `return SS$_NORMAL;` stub fails
+         * exactly here and nowhere else. */
+        st = sys$dlcefc(&nonam);
+        printf("  INFO: sys$dlcefc on a nonexistent name returned status %u\n", st);
+        CHECK(!(st & 1),
+              "parent: sys$dlcefc does NOT report success for a cluster name the executive does not have");
+
+        (void)sys$dacefc(PERM_EFN);
+    }
 
     printf("=== test_syssvc_ef_mproc: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

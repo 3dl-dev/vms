@@ -464,6 +464,20 @@ uint32_t vms_kif_dacefc(uint32_t efn)
     return args.status;
 }
 
+uint32_t vms_kif_dlcefc(const char *name)
+{
+    struct vms_ef_common_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    if (name)
+        vms_strncpy(args.name, name, 31);
+    args.name[31] = '\0';
+
+    KIF_CALL(VMS_IOCTL_DLCEFC, &args);
+
+    return args.status;
+}
+
 /* ================================================================
  * Lock Manager (3d)
  * ================================================================ */

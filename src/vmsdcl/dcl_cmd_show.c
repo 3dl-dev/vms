@@ -107,12 +107,15 @@ static int cmd_show_process_quotas(struct dcl_context *ctx);
  * choosing a constant without an oracle pin. The divergence is
  * recorded in the oracle doc so the item that DOES enforce them pins
  * both aliases deliberately.
+ *
+ * NOT static, and typed as struct dcl_priv_name (dcl/dcl_cmd.h) rather
+ * than an anonymous local struct (vms-2b8 round 6): dcl_lexical.c's
+ * F$GETJPI CURPRIV/AUTHPRIV filters this SAME table by
+ * VMS_PRV_M_ENFORCED to derive the names it may show, instead of
+ * carrying its own hand-maintained second list of just the enforced
+ * ones. One table, two readers.
  */
-static const struct {
-    const char *name;
-    uint64_t    bit;
-    const char *desc;
-} vms_priv_names[] = {
+const struct dcl_priv_name vms_priv_names[] = {
     { "ACNT",     PRV$M_ACNT,     "may suppress accounting messages" },
     { "ALLSPOOL", PRV$M_ALLSPOOL, "may allocate spooled device" },
     { "ALTPRI",   PRV$M_ALTPRI,   "may set any priority value" },

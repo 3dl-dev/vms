@@ -242,6 +242,23 @@ SYSTEM_CMDS+=('SHOW SYMBOL IDENT_CURPRIV')
 SYSTEM_CMDS+=('IDENT_AUTHPRIV = F$GETJPI("","AUTHPRIV")')
 SYSTEM_CMDS+=('SHOW SYMBOL IDENT_AUTHPRIV')
 
+# DEFECT-1 REGRESSION, DISCLOSED (vms-2b8 round 6): SET TIME's gate
+# (OPER||SYSPRV||BYPASS, none of which VMS_PRV_M_ENFORCED names) can no
+# longer be passed by ANY identity, including this SYSTEM session, whose
+# SYSUAF record authorizes ALL 37 privileges. This is the same shape as
+# the ALTPRI/PRIORITY proof above -- a capability that worked before round
+# 5's fix and cannot work now, for anyone, until vms-pv1 -- but SET TIME
+# had no dedicated assertion of its own until this round. It gets one now,
+# for the same reason PRIORITY did: an undisclosed behaviour change is not
+# the same defect as an unenforced privilege, and hiding it from the test
+# suite is exactly the silence Rule 10 forbids. The date is fictional and
+# far enough in the future to not collide with the host clock; if this
+# command somehow succeeded it would visibly jump SHOW TIME on the NEXT
+# command, which nothing here reads, so no side effect is exercised or
+# needed -- the check is purely on this command's own refusal.
+SYSTEM_CMDS+=('SET TIME 1-JAN-2030:00:00:00')
+IDX_TIME_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
+
 USER_CMDS=(
     'TYPE SYS$MANAGER:LOGIN.COM'
     'COPY SYS$MANAGER:LOGIN.COM UATUSER.TXT'
@@ -776,6 +793,87 @@ check_response_at "$IDX_PRIORITY_SET" 'NOPRIV'
 # SHOW PROCESS/PRIVILEGES's own, different, VMS display convention.
 check_response 'SHOW SYMBOL IDENT_CURPRIV' 'IDENT_CURPRIV = "CMKRNL,CMEXEC,SETPRV,WORLD"'
 check_response 'SHOW SYMBOL IDENT_AUTHPRIV' 'IDENT_AUTHPRIV = "CMKRNL,CMEXEC,SETPRV,WORLD"'
+
+# SEVERITY LETTER, ASSERTED (vms-2b8 round 5's own fix, uncovered until
+# round 6): %OVMX-W-NOSETPRV printed as a Warning next to a function that
+# falls through to `return SS$_NORMAL` -- a success status -- contradicted
+# itself (W is DCL's "unsuccessful" severity, SS$_NORMAL is success). Round
+# 5 changed the letter to I; nothing asserted it. 'SET
+# PROCESS/PRIVILEGES=(OPER)' is unique text in SYSTEM_CMDS (unlike 'SHOW
+# PROCESS /PRIVILEGES', it never repeats), so a plain check_response is
+# safe here without the by-position anchor the surrounding checks need.
+check_response 'SET PROCESS/PRIVILEGES=(OPER)' 'OVMX-I-NOSETPRV'
+check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'OVMX-W-NOSETPRV'
+
+# DEFECT-1 POSITIVE CONTROL (vms-2b8 round 6): the GRANT path, not just
+# the deny path. Every proof above this point (IDX_ALTPRI/IDX_PRIORITY_SET,
+# SET TIME below) shows enforced_privs_held() REFUSING an operation; none
+# shows it GRANTING one, and a gate that consults nothing and refuses
+# unconditionally would pass every deny assertion in this file exactly as
+# well as a correct gate does. This is the counterpart: SET
+# PROCESS/PRIVILEGES's own gate (src/vmsdcl/dcl_cmd_set.c,
+# cmd_set_process) reads the SAME enforced_privs_held() as SET
+# PROCESS/PRIORITY, requiring SETPRV||SYSPRV||BYPASS -- and SETPRV IS one
+# of the four bits VMS_PRV_M_ENFORCED names, so the SYSTEM session (which
+# holds it, proven above by IDENT_SETPRV/IDENT_SETPRV2) must be let past
+# this gate. The absence of %SET-E-NOPRIV here (checked negatively,
+# because a command that failed the gate would print NOPRIV and not
+# OVMX-I-NOSETPRV -- the two are mutually exclusive outcomes of the same
+# branch) is the grant: the gate was consulted and it said yes.
+#
+# VERIFIED NON-VACUOUS BY MUTATION, one property at a time
+# (src/vmsdcl/dcl_cmd_set.c's enforced_privs_held()), each rebuilt
+# (podman build -f distro/Dockerfile.bootable) and re-booted under QEMU
+# from a clean image, real runs, real counts:
+#   BASELINE (this file's own fix, unmodified): 47 passed / 0 failed.
+#   Body forced to `return 0;` (always-refuse): 45 passed / 2 failed --
+#     BOTH failures on 'SET PROCESS/PRIVILEGES=(OPER)': the
+#     'OVMX-I-NOSETPRV' presence check above and this grant check below
+#     ('should NOT contain NOPRIV') -- the command now printed
+#     %SET-E-NOPRIV instead. IDX_ALTPRI/IDX_PRIORITY_SET (the PRIORITY
+#     deny pair) and the SET TIME deny assertion below stayed GREEN,
+#     correctly: they were already refused, and still are.
+#   Body forced to `return ~(uint64_t)0;` (always-grant): 45 passed / 2
+#     failed -- IDX_PRIORITY_SET ('NOPRIV') went RED (SET
+#     PROCESS/PRIORITY=6 was silently authorized), AND the SET TIME deny
+#     assertion below went RED too (its gate passed on the strength of
+#     the forced OPER bit, so cmd_set_time fell through to the REAL
+#     settimeofday(2) call, which failed with a genuine OS-level EPERM --
+#     this session runs as UID 4/SYSTEM post-drop, not root -- printing a
+#     DIFFERENT message, "cannot set system time - insufficient OS
+#     privilege", that no longer matches the gate-refusal text the
+#     assertion looks for). Both grant checks on 'SET
+#     PROCESS/PRIVILEGES=(OPER)' stayed GREEN (unsurprising: SETPRV
+#     already granted this one before the mutation too; the point of
+#     this run is that the DENY side is not vacuous, not that the grant
+#     side moves).
+# Each mutation flips exactly the assertion class it should (deny-only or
+# grant-only) and no other -- the pairing is not satisfiable by a gate
+# that always refuses or always grants, only by one that actually
+# consults the mask.
+check_not_response 'SET PROCESS/PRIVILEGES=(OPER)' 'NOPRIV'
+
+# DEFECT-1 REGRESSION PROOF, SET TIME (see the SYSTEM_CMDS block above for
+# the full account): OPER/SYSPRV/BYPASS are all outside VMS_PRV_M_ENFORCED,
+# so this SYSTEM session -- SYSUAF-authorized for ALL 37 privileges -- must
+# still be refused. 'SET TIME 1-JAN-2030:00:00:00' is unique text, so a
+# plain check_response is safe.
+#
+# NOT matched on the bare substring 'NOPRIV': cmd_set_time has a SECOND,
+# unrelated failure path below the privilege gate (settimeofday(2)
+# returning EPERM, e.g. if this ever ran as a non-root OS user with the
+# gate somehow passed) that ALSO renders as "%SET-E-NOPRIV, ..." -- same
+# facility/severity/ident, different text. A bare 'NOPRIV' match would be
+# satisfied by either branch and could not tell "the executive-mask gate
+# refused" from "the gate passed and the OS syscall refused instead",
+# which is exactly the kind of assertion Method Requirement 3 rules out.
+# FOUND BY MUTATION, not by inspection: the always-grant mutation
+# described above (enforced_privs_held() forced to `return ~(uint64_t)0`)
+# initially showed this check passing for the wrong reason -- against a
+# bare 'NOPRIV' pattern it was satisfied by the OS EPERM message instead
+# of going red -- before the pattern was narrowed to the gate's own
+# disclosure text, which only the privilege-check branch prints.
+check_response 'SET TIME 1-JAN-2030:00:00:00' 'no privilege for SET TIME'
 
 # THE SESSION REALLY IS THE AUTHENTICATED USER AT THE OS LEVEL (vms-2b8
 # round 6). This is the only externally observable proof that

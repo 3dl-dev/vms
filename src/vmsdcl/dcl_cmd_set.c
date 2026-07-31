@@ -866,18 +866,39 @@ static int cmd_set_time(struct dcl_command *cmd)
         return SS$_NORMAL;
     }
 
-    /* Privilege check — required when actually setting the clock.
+    /*
+     * Privilege check — required when actually setting the clock.
      * enforced_privs_held(), not ctx->privileges (vms-2b8 round 5; see
-     * that function's comment). OPER is not in VMS_PRV_M_ENFORCED, so
-     * this now refuses on the strength of OPER alone until vms-pv1
-     * gives it real enforcement; SYSPRV/BYPASS are equally unenforced
-     * and named here only because VMS names them for this operation. */
+     * that function's comment).
+     *
+     * REGRESSION, DISCLOSED (vms-2b8 round 6). OPER, SYSPRV and BYPASS
+     * are ALL absent from VMS_PRV_M_ENFORCED, so this gate can no
+     * longer be passed by ANY identity, not just an unprivileged one --
+     * a real change in behaviour from before round 5, when this read
+     * the raw, unmasked ctx->privileges and SYSTEM's SYSUAF record
+     * (authorized for ALL 37 privileges, OPER included) let it through.
+     * MEASURED this round, real podman-built QEMU boot, SYSTEM session
+     * (the maximal-privilege SYSUAF account): SET TIME is refused even
+     * here, so no lesser-privileged identity can succeed either -- the
+     * mask VMS_PRV_M_ENFORCED applies is fixed at compile time, not a
+     * per-session grant a stronger identity could hold. This is Rule
+     * 10's HIDE answer, applied honestly rather than left implicit: a
+     * bare %SET-E-NOPRIV reads as "your account needs OPER, go get it",
+     * which is false on this build -- no account can. Say so in the
+     * message text instead of leaving the reader to infer it, exactly
+     * as the round-5 fix already does for SET PROCESS/PRIVILEGES's
+     * %OVMX-I-NOSETPRV. Restoring real grantability is vms-pv1's job
+     * (wiring vms_kif_setprv into VMS_PRV_M_ENFORCED); this round only
+     * has to stop hiding that the capability disappeared.
+     */
     uint64_t held = enforced_privs_held();
     if (!(held & PRV$M_OPER) &&
         !(held & PRV$M_SYSPRV) &&
         !(held & PRV$M_BYPASS)) {
         dcl_error("SET", 2, "NOPRIV",
-                  "no privilege for SET TIME");
+                  "no privilege for SET TIME -- OPER is authorized by "
+                  "SYSUAF but not yet enforced on this system (vms-pv1); "
+                  "no identity can pass this check until that lands");
         return SS$_NOPRIV;
     }
 

@@ -1374,24 +1374,40 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
          *
          * Reads the same live executive source as SHOW PROCESS/
          * PRIVILEGES and F$PRIVILEGE (vms_kif_getjpi_self(), masked to
-         * VMS_PRV_M_ENFORCED -- see enforced_priv_names[] below for why
-         * only 4 of the 37 real VMS names can ever appear here). CURPRIV
-         * reads cur_privs, AUTHPRIV reads perm_privs (the "authorized"
-         * mask SHOW PROCESS/PRIVILEGES's own Authorized: block reads) --
-         * two different executive fields, not one value under two names.
-         * VMS_IOCTL_SETIDENT sets them equal (vms_proctab.c: cur_privs =
-         * perm_privs = args.authorized_privs) and nothing DCL can reach
-         * moves them apart again -- $SETPRV is the operation that would
-         * (VMS lets CURPRIV differ from AUTHPRIV precisely by disabling
-         * an authorized privilege), and vms_kif_setprv() has no product
-         * caller (OVMX-UNWIRED in vms_kif.h, pending vms-pv1). That is a
-         * statement about which CALLERS exist today, not an invariant of
-         * the kernel module: VMS_IOCTL_SETPRV itself is real and already
-         * exercised directly by tests/qemu/test_kmod_access.c, so a
-         * caller that reached it WOULD diverge cur_privs from
-         * perm_privs -- DCL is simply not such a caller yet.
+         * VMS_PRV_M_ENFORCED). The NAMES themselves are not a second,
+         * hand-maintained list: the loop below walks bit positions 0..63
+         * in ascending order and looks each SET, enforced bit up in
+         * vms_priv_names[] (dcl_cmd_show.c, declared in dcl/dcl_cmd.h) --
+         * the SAME canonical name table SHOW PROCESS/PRIVILEGES reads.
+         * A bit added to VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h)
+         * therefore gets a name here with no second edit, and the walk
+         * order is ascending bit position for free, matching the
+         * oracle's own CURPRIV example order (CMKRNL before CMEXEC) --
+         * NOT the alphabetical order dcl_cmd_show.c uses for SHOW
+         * PROCESS/PRIVILEGES, a different VMS display convention for a
+         * different command (vms-2b8 round 6: a hand-maintained second
+         * list here, kept in sync with VMS_PRV_M_ENFORCED "by hand", is
+         * exactly the drift this program exists to kill).
          *
-         * NOT CLAIMED: that this string is never empty. A process
+         * CURPRIV reads cur_privs, AUTHPRIV reads perm_privs (the
+         * "authorized" mask SHOW PROCESS/PRIVILEGES's own Authorized:
+         * block reads) -- two different struct fields in the source.
+         * WHAT IS NOT CLAIMED: that this distinction is proven by any
+         * test on this runtime. VMS_IOCTL_SETIDENT sets cur_privs =
+         * perm_privs = args.authorized_privs (vms_proctab.c), and
+         * nothing DCL currently calls moves them apart again -- $SETPRV
+         * is the operation that would, and vms_kif_setprv() has no
+         * product caller (OVMX-UNWIRED in vms_kif.h, pending vms-pv1).
+         * So on THIS runtime cur_privs and perm_privs are always equal,
+         * and no UAT assertion that only checks CURPRIV and AUTHPRIV
+         * render the same string can tell "AUTHPRIV correctly reads
+         * perm_privs" apart from "AUTHPRIV reads cur_privs by mistake" --
+         * both produce an identical pass. A test that actually
+         * discriminates the two fields needs a session where they
+         * diverge, which needs vms-pv1's $SETPRV wiring; until then this
+         * is a true statement about the source, not a proven one.
+         *
+         * NOT CLAIMED either: that this string is never empty. A process
          * registered without CAP_SYS_ADMIN gets perm_privs = cur_privs =
          * 0 at vms_proc_register() (src/kernel/vms_module.c) -- nothing
          * in the enforced set, so both items would legitimately render
@@ -1405,23 +1421,17 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
          * MODE), the pid argument is parsed but not honored -- this
          * answers only for the calling process, consistent with every
          * existing item here, not a new restriction.
+         *
+         * VERIFIED BY MUTATION (vms-2b8 round 6), not by inspection:
+         * adding VMS_PRV_M_TMPMBX to VMS_PRV_M_ENFORCED
+         * (src/kernel/vms_ioctl.h) -- the ONLY edit made for this test,
+         * nothing in this file touched -- rebuilt vms.ko + vmsdcl and
+         * re-booted a real QEMU image; F$GETJPI CURPRIV/AUTHPRIV both
+         * came back "CMKRNL,CMEXEC,SETPRV,TMPMBX,WORLD", TMPMBX inserted
+         * in the correct ascending-bit-position slot (between SETPRV
+         * bit 14 and WORLD bit 16) with no second table to update.
+         * Reverted after confirming.
          */
-        static const struct {
-            const char *name;
-            uint64_t    bit;
-        } enforced_priv_names[] = {
-            /* Ascending bit position, matching the oracle's CURPRIV
-             * example order (see comment above) -- NOT the alphabetical
-             * order dcl_cmd_show.c uses for SHOW PROCESS/PRIVILEGES.
-             * Deliberately only the 4 names in VMS_PRV_M_ENFORCED
-             * (src/kernel/vms_ioctl.h): a name masked out of every
-             * reporting surface must not appear in this one either. */
-            { "CMKRNL", PRV$M_CMKRNL },
-            { "CMEXEC", PRV$M_CMEXEC },
-            { "SETPRV", PRV$M_SETPRV },
-            { "WORLD",  PRV$M_WORLD  },
-        };
-
         struct vms_procinfo info;
         memset(&info, 0, sizeof(info));
         uint32_t jst = vms_kif_getjpi_self(&info);
@@ -1431,14 +1441,18 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
                                                          : info.perm_privs;
             uint64_t enforced = raw & VMS_PRV_M_ENFORCED;
             size_t rl = 0;
-            for (size_t i = 0;
-                 i < sizeof(enforced_priv_names) / sizeof(enforced_priv_names[0]);
-                 i++) {
-                if (!(enforced & enforced_priv_names[i].bit))
+            for (int bit = 0; bit < 64; bit++) {
+                uint64_t b = (uint64_t)1 << bit;
+                if (!(enforced & b))
                     continue;
-                rl += (size_t)snprintf(result + rl, result_size - rl,
-                                       "%s%s", rl ? "," : "",
-                                       enforced_priv_names[i].name);
+                for (int i = 0; vms_priv_names[i].name; i++) {
+                    if (vms_priv_names[i].bit != b)
+                        continue;
+                    rl += (size_t)snprintf(result + rl, result_size - rl,
+                                           "%s%s", rl ? "," : "",
+                                           vms_priv_names[i].name);
+                    break;
+                }
             }
         }
     } else {

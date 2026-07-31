@@ -427,8 +427,15 @@ expect_red "$SHOW" \
 #
 # CHOOSING A SUBJECT IS ITSELF CONSTRAINED, and the constraint is the point:
 #   - vms_kif_getdvi_chan (13, 16, 17, 19) shares VMS_IOCTL_GETDVI with
-#     vms_kif_getdvi_devnam, so mutating it cannot strand the OPCODE. It is the
-#     only wrapper for which that is true -- which is exactly why 19 uses it.
+#     vms_kif_getdvi_devnam, so mutating it cannot strand the OPCODE -- which is
+#     exactly the property 19 needs. FIVE wrappers share an opcode this way, all
+#     confirmed by the same brute force: getdvi_chan and getdvi_devnam over
+#     VMS_IOCTL_GETDVI, and getjpi_self, getjpi_pid and getjpi_prcnam over
+#     VMS_IOCTL_GETJPI. Deleting ANY of the five goes red at SELECTOR grain and
+#     never at opcode grain, so any of them would serve as 19's subject; chan is
+#     used because 13/16/17 already anchor on it. (An earlier revision of this
+#     line called it "the only wrapper for which that is true". Also false, and
+#     from the same habit as the two claims corrected below.)
 #   - vms_kif_devscan (15, 18) is the sole issuer of VMS_IOCTL_DEVSCAN.
 #   - vms_kif_close (14) is ONE OF THREE prototyped entry points whose body
 #     issues no ioctl and names no selector -- the others are vms_kif_open and

@@ -169,17 +169,35 @@ void dcl_context_init(struct dcl_context *ctx)
      * against a real /dev/vms). The correct code here is a
      * vms_kif_getjpi_self() read of that row.
      *
-     * IT IS NOT WIRED UP YET, AND THIS IS THE ONLY REASON WHY:
-     * vms_kif_register() still has no product caller (vms-9fc), so no
-     * DCL process is registered with the executive and $GETJPI would
-     * return -ESRCH for every one of them. Replacing these reads before
-     * vms-9fc lands would not harden DCL, it would break it.
+     * STILL NOT WIRED UP -- BUT THE REASON PREVIOUSLY WRITTEN HERE IS
+     * NOW FALSE, RE-CHECKED 2026-07-31 (vms-fb9 r5) BY EXECUTION. The
+     * literal premise survives: vms_kif_register() still has zero
+     * product callers by that name. The CONCLUSION drawn from it --
+     * "no DCL process is registered with the executive and $GETJPI
+     * would return -ESRCH for every one of them" -- does not, because
+     * vms-9fc made the open -> register sequence automatic
+     * (src/libvmssys/vms_kif.h:7-18): kif_bind() in
+     * src/libvmssys/vms_kif.c completes it before EVERY /dev/vms ioctl
+     * a process issues, keyed on that process, so a DCL process is
+     * registered on its FIRST vms_kif_* call with no explicit register
+     * call anywhere in its path. SHOW DEVICE proves this today
+     * (src/vmsdcl/dcl_cmd_show.c, vms-fb9): it reads a real /dev/vms
+     * inside QEMU with no vms_kif_register() call written anywhere near
+     * it.
      *
-     * DO NOT "IMPROVE" THIS PATH. Delete it, once vms-9fc has landed,
-     * and read the executive instead. The UIC half of the same defect
-     * was already deleted from src/vmsrms/rms_core.c under this item,
+     * So the precondition this note told the next reader to wait for
+     * has been met. That does NOT mean this file should wire up
+     * vms_kif_getjpi_self() here -- replacing the identity/privilege
+     * stopgap is vms-2b8's call, is behind an operator ruling, and is
+     * out of scope for vms-fb9 (which owns the device-table readers,
+     * not process identity). DO NOT "IMPROVE" THIS PATH under this
+     * item. What is withdrawn is only the instruction to keep waiting
+     * "once vms-9fc lands" -- it has landed; the stopgap's disposition
+     * from here belongs to vms-2b8. The UIC half of the same defect was
+     * already deleted from src/vmsrms/rms_core.c under this item,
      * because there the real credentials were available locally; the
-     * user name and the privilege mask have no local honest source.
+     * user name and the privilege mask still have no local honest
+     * source, which is exactly vms-2b8's territory to close.
      * ============================================================
      */
     const char *env_user = getenv("VMS_USERNAME");

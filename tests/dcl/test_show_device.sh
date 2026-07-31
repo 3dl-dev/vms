@@ -1,13 +1,15 @@
 #!/bin/bash
 # TEST: SHOW DEVICE prints no device row it did not read from the executive
 # EXPECT: contains:%MOUNT-I-MOUNTED, TESTDISK mounted on _DUA0:
-# EXPECT: contains:%OVMX-F-EXECDEV
+# EXPECT: contains:$STATUS = 676
 # EXPECT_NOT: regex:^Device +Device +Error
 # EXPECT_NOT: contains:NOSUCHDEV
 # EXPECT_NOT: regex:^\$1\$DGA
 # EXPECT_NOT: contains:OVMXSYS
 # EXPECT_NOT: contains:Error    Volume
 # EXPECT_NOT: regex:^[A-Z0-9$_]+: +(Mounted|Dismounted)
+# EXPECT_NOT: contains:%OVMX-F-EXECDEV
+# EXPECT_NOT: contains:%OVMX-F-NODEVTAB
 #
 # WHAT THIS ASSERTS, and what it deliberately does not (vms-fb9).
 #
@@ -36,14 +38,42 @@
 #   ^NAME: Mounted    a row from the process-local table MOUNT keeps in this
 #                     process's memory, or the hardcoded stub row that was
 #                     printed when even /proc/mounts produced nothing
+#   %OVMX-F-EXECDEV   an invented message a PREVIOUS round of this item gave
+#                     "the executive did not answer" -- deleted (vms-fb9 r5)
+#                     because that condition is the same per-call
+#                     executive-absent facade vms-a35/vms-0ff deleted
+#                     product-wide (CLAUDE.md rule 10); see the deleted
+#                     show_device_exec_failed() comment in dcl_cmd_show.c
+#   %OVMX-F-NODEVTAB  same round's invented message for an empty device
+#                     table. Also deleted (rule 10): vms.ko creates OPA0: at
+#                     module init and no ioctl removes a device, so a booted
+#                     OVMX can never present an empty table -- MEASURED, not
+#                     reasoned, in tests/qemu/test_syssvc_showdev.c and
+#                     tests/uat/vms_session_qemu.sh, which both see OPA0: on
+#                     every run against a real /dev/vms
 #
 # NOSUCHDEV is forbidden here for a different reason -- Rule 10, not row
 # fabrication. The oracle measured "%SYSTEM-W-NOSUCHDEV, no such device
 # available" for ONE condition: a named device the executive says does not
 # exist (section 6). In this environment the executive answered nothing at
 # all, so printing that message would be a false statement in VMS's own
-# voice. The paired positive EXPECT on %OVMX-F-EXECDEV is what stops this
-# test being satisfied by SHOW DEVICE printing nothing whatsoever.
+# voice.
+#
+# THE POSITIVE ANCHOR IS NOW $STATUS, NOT A PRINTED MESSAGE (vms-fb9 r5).
+# With no /dev/vms, vms_kif_open() fails and every subsequent ioctl this
+# process issues fails too (EBADF on the resulting negative descriptor),
+# which src/libvmssys/vms_kif.c's vms_kif_kerr_to_ss() maps -- through its
+# closed, oracle-pinned errno set -- to SS$_BUGCHECK (676) by default. SHOW
+# DEVICE no longer renders that to the user (rule 10: "the executive did not
+# answer" is not a user-facing condition), but it still sets $STATUS, and
+# SHOW SYMBOL $STATUS reads it back. This is what stops the test passing
+# vacuously because SHOW DEVICE prints nothing whatsoever OR because DCL
+# never reached it: MOUNT alone leaves $STATUS = 1 (measured, see the MOUNT-
+# only case below), so 676 can ONLY appear if SHOW DEVICE itself ran the
+# devscan/getdvi call and hit the no-executive ioctl failure. Measured by
+# running `printf 'MOUNT DUA0: TESTDISK\nSHOW SYMBOL $STATUS\n' | DCL.EXE`
+# in isolation: $STATUS = 1, not 676, confirming MOUNT's own status is not
+# what this anchor is keying on.
 #
 # MOUNT DUA0: runs FIRST on purpose. It populates that process-local table,
 # so SHOW DEVICE in the same process would print DUA0: from it if it still
@@ -66,4 +96,4 @@
 # executive, including the A-writes/B-reads case where another process
 # allocates the console and SHOW DEVICE observes it.
 VMSDCL="${VMSDCL:-vmsdcl}"
-printf 'MOUNT DUA0: TESTDISK\nSHOW DEVICE\nSHOW DEVICE DUA0:\n' | $VMSDCL 2>&1
+printf 'MOUNT DUA0: TESTDISK\nSHOW DEVICE\nSHOW SYMBOL $STATUS\nSHOW DEVICE DUA0:\n' | $VMSDCL 2>&1

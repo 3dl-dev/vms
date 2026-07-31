@@ -886,20 +886,43 @@ int main(void)
      *
      * STOPGAP (vms-2b8). This is a process declaring its own full
      * privilege mask into a USERSPACE PCB -- the shape this item exists
-     * to remove. It is left in place for exactly one reason: nothing in
-     * the product calls vms_kif_register() yet (vms-9fc), so PID 1 has
-     * no row in the executive's process table to stamp an identity
-     * onto, and every reader below still reads this PCB.
+     * to remove.
+     *
+     * WHY IT IS STILL LEFT IN PLACE, RE-CHECKED 2026-07-31 (vms-fb9 r5)
+     * BY EXECUTION, NOT BY RE-READING THE OLD NOTE. This file itself
+     * makes no vms_kif_* call anywhere -- grep the file, there is not
+     * one -- so PID 1's own process genuinely has no row in the
+     * executive's process table today; that half of the old comment is
+     * still true. What is FALSE is the reason it gave for waiting: "the
+     * correct sequence once vms-9fc lands is: register, then
+     * vms_kif_setident(...)" treated a landed vms-9fc as a future
+     * event still to happen. It has happened. vms-9fc made the
+     * open -> register sequence automatic (src/libvmssys/vms_kif.h:7-18,
+     * kif_bind() in src/libvmssys/vms_kif.c): the FIRST vms_kif_* call
+     * any process makes, including a bare vms_kif_setident(), completes
+     * its own registration inline -- no separate explicit
+     * vms_kif_register() call is needed first, and none is missing here
+     * for lack of one existing elsewhere in the product. SHOW DEVICE
+     * proves the mechanism against a real /dev/vms today
+     * (src/vmsdcl/dcl_cmd_show.c, vms-fb9): it calls vms_kif_devscan()
+     * with no register call anywhere in DCL's path and reads a real
+     * row back.
+     *
+     * So the blocking precondition this note was waiting on has been
+     * met. Whether to now call vms_kif_setident("SYSTEM", (1<<16)|4,
+     * <SYSUAF mask>) here and delete the PCB call below is vms-2b8's
+     * decision, not vms-fb9's -- it is behind an operator ruling and
+     * this item's job is the device-table readers, not process
+     * identity. DO NOT wire it up under this item. What is corrected
+     * is only the stale instruction to keep waiting for something that
+     * already landed; the stopgap's disposition from here belongs to
+     * vms-2b8.
      *
      * PID 1 is the one process for which "SYSTEM, fully privileged" is
      * the right ANSWER -- the wrongness is entirely in WHO DECIDES it.
      * The executive already derives that verdict for itself from
      * capable(CAP_SYS_ADMIN) at registration, and PID 1 already holds
-     * /dev/vms open (executive_attach), so the correct sequence once
-     * vms-9fc lands is: register, then vms_kif_setident("SYSTEM",
-     * (1<<16)|4, <SYSUAF mask>), and delete the call below. Not done
-     * here because introducing a new fatal boot dependency is vms-9fc's
-     * decision to make, not this item's.
+     * /dev/vms open (executive_attach).
      */
     struct vms_pcb *pcb = vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
     if (pcb) {

@@ -1047,39 +1047,39 @@ static void show_device_row(const struct vms_devinfo *info, int *rows)
 }
 
 /*
- * Report that the executive did not answer a device-table read.
+ * DELETED (vms-fb9 r5): show_device_exec_failed() used to print an
+ * invented "%OVMX-F-EXECDEV, the executive did not answer" for this
+ * function's default: branches. That was the illegal third answer under
+ * CLAUDE.md rule 10 -- not because the reasoning in the deleted comment
+ * was sloppy (it correctly identified that VMS has no oracle-pinned
+ * message for "the executive refused me" and correctly avoided
+ * borrowing NOSUCHDEV's voice for it) but because the ruling that
+ * question needed had already been made, product-wide, by vms-a35/
+ * vms-0ff: "the executive did not answer" is the SAME per-call
+ * executive-absent condition those items deleted from
+ * src/libvms/syssvc/sys_lock.c and src/libvmssys/vms_kif.c
+ * (vms_kif_register(), kif_bind()) rather than handled, on the ground
+ * that PID 1 refuses to bring the system up without /dev/vms and holds
+ * it open for the life of the system (src/ovmx_init/ovmx_init.c,
+ * executive_attach). This function re-invented a handler for exactly
+ * that condition. It is now unreachable the same way, not handled: see
+ * the default: cases below.
  *
- * WHY THIS IS NOT A VMS MESSAGE (CLAUDE.md rule 10). VMS has no
- * "the executive refused me" state: a process always has a PCB and the
- * I/O database is always there, so there is no VMS condition value and
- * no VMS message text for this, and there is no oracle to pin one to.
- * The two legal answers are then "match VMS" -- impossible, VMS has no
- * such thing -- and "do not have the thing": make the condition
- * unreachable and, if it is somehow reached anyway, say so in OVMX's
- * own voice rather than borrowing VMS's.
- *
- * The previous round DID borrow it: every executive failure printed the
- * oracle-pinned "%SYSTEM-W-NOSUCHDEV, no such device available", so
- * "the executive rejected us", "that device does not exist" and "the
- * scan ended" were indistinguishable, and a live OPA0: could be
- * reported nonexistent in VMS's own voice. A false statement wearing an
- * oracle citation is worse than no answer.
- *
- * The facility is OVMX for the same reason src/ovmx_init/ovmx_init.c
- * prints %OVMX-F-EXECINIT rather than a %SYSTEM- message: a condition
- * that only exists because OVMX reaches its executive through a Linux
- * device node is an OVMX condition. The status value is the executive's
- * own (SS$_ACCVIO / SS$_INSFMEM / SS$_ILLIOFUNC / SS$_BUGCHECK, mapped
- * by vms_kif_kerr_to_ss) and is printed, not swallowed, because it is
- * the only thing that says WHICH failure this was.
+ * What is left in that default: case is a genuinely different thing --
+ * a raw ioctl failure the closed errno set in vms_kif_kerr_to_ss() can
+ * still produce (SS$_ACCVIO / SS$_INSFMEM / SS$_ILLIOFUNC / SS$_BUGCHECK)
+ * even with the executive present and the caller registered. Those ARE
+ * real VMS status values with real VMS meanings (oracle-pinned in
+ * src/libvmssys/vms_kif.c's own header comment), so inventing OVMX text
+ * for them would be the same defect a second time. They are returned to
+ * the caller as $STATUS, unprinted -- the same treatment kif_bind() gives
+ * a bind it cannot complete ("Nothing is reported if the bind cannot be
+ * completed... the only way to fail here is for the executive to be
+ * unreachable, and OVMX does not run without the executive"). Rendering
+ * them to the user is not this function's job to invent; $STATUS is
+ * there for the caller (or an ON ERROR handler) to see WHICH failure this
+ * was.
  */
-static int show_device_exec_failed(uint32_t status)
-{
-    dcl_error("OVMX", 4, "EXECDEV",
-              "the executive did not answer the device-table read (status %%X%08X)",
-              status);
-    return status;
-}
 
 /*
  * SHOW DEVICE - a READER of the executive's device table (vms-fb9).
@@ -1132,8 +1132,16 @@ static int show_device_exec_failed(uint32_t status)
  *   SS$_NOMOREDEV     $DEVICE_SCAN's end-of-scan. Not an error and
  *                     never shown to the user -- it is how the cursor
  *                     says it is done.
- *   anything else     the executive did not answer at all. Reported as
- *                     an OVMX condition; see show_device_exec_failed().
+ *   anything else     an ioctl-level failure (SS$_ACCVIO / SS$_INSFMEM /
+ *                     SS$_ILLIOFUNC / SS$_BUGCHECK from
+ *                     vms_kif_kerr_to_ss()), NOT "the executive did not
+ *                     answer" -- that state is unreachable, the same
+ *                     ruling and the same reason vms-a35/vms-0ff deleted
+ *                     it from src/libvms/syssvc/sys_lock.c and
+ *                     src/libvmssys/vms_kif.c. Returned as $STATUS,
+ *                     unprinted; see the deleted show_device_exec_failed()
+ *                     comment above for why no OVMX message is invented
+ *                     for it.
  *
  * DEVICE-NAME ARGUMENT. The name is handed to the executive as-is and
  * the executive resolves it -- including the physical-name folding
@@ -1169,8 +1177,11 @@ static int cmd_show_device(struct dcl_command *cmd)
      * executive is missing" branch here would be a handler for a state
      * VMS cannot be in (rule 10), and the only thing such a branch could
      * usefully do is fabricate rows -- the defect this rewrite removes.
-     * If the ioctl fails anyway the status says so and is reported as an
-     * OVMX condition; nothing is invented to cover it up.
+     * If the ioctl fails anyway for a real reason (SS$_ACCVIO /
+     * SS$_INSFMEM / SS$_ILLIOFUNC / SS$_BUGCHECK), $STATUS carries it and
+     * nothing is printed for it; nothing is invented to cover it up
+     * (vms-fb9 r5, see the deleted show_device_exec_failed() comment
+     * above).
      */
     (void)vms_kif_open();
 
@@ -1198,7 +1209,11 @@ static int cmd_show_device(struct dcl_command *cmd)
             dcl_error("SYSTEM", 0, "NOSUCHDEV", "no such device available");
             return SS$_NOSUCHDEV;
         default:
-            return show_device_exec_failed(status);
+            /* An ioctl-level failure, not "the executive did not
+             * answer" -- see the deleted show_device_exec_failed()
+             * comment above. Silent: $STATUS carries it, nothing is
+             * rendered. */
+            return status;
         }
     }
 
@@ -1209,25 +1224,40 @@ static int cmd_show_device(struct dcl_command *cmd)
         show_device_row(&info, &rows);
     }
 
-    if (status != SS$_NOMOREDEV)
-        return show_device_exec_failed(status);
-
     /*
-     * The scan ran to completion and the executive's device table was
-     * EMPTY. Not a VMS condition either: vms.ko creates the console at
-     * module init (src/kernel/vms_devtab.c, vms_devtab_init) and nothing
-     * can remove it, so a node whose I/O database has no devices is a
-     * broken executive, not a system with nothing attached. Reported the
-     * same way and for the same reason -- what it must NOT do is print
-     * NOSUCHDEV, which the oracle attached only to a NAMED device that
-     * does not exist (section 6). The empty-listing case is unrecorded
-     * there, and an unrecorded case may not be self-certified.
+     * status != SS$_NOMOREDEV here is the same ioctl-level-failure case
+     * as the switch's default: above -- silent, $STATUS carries it.
+     *
+     * rows == 0 with status == SS$_NOMOREDEV -- the scan ran to
+     * completion and the executive's device table was EMPTY -- is NOT
+     * handled as a distinct case, and that absence is deliberate, not an
+     * oversight (vms-fb9 r5). The previous round gave it its own invented
+     * "%OVMX-F-NODEVTAB" message; that was the identical rule-10 mistake
+     * as EXECDEV, and the round it was in did not check the one thing
+     * that would have settled it -- whether a booted OVMX can actually
+     * reach this state.
+     *
+     * MEASURED, not reasoned about: vms.ko creates the console OPA0: at
+     * module init (src/kernel/vms_devtab.c, vms_devtab_init()), and the
+     * seven device-table ioctls it implements ($ASSIGN, $DASSGN,
+     * $GETDVI, $DEVICE_SCAN, IO$_SETMODE, $ALLOC, $DALLOC --
+     * vms_ioctl_assign/dassgn/getdvi/devscan/ttsetmode/alloc/dalloc) do
+     * not include a remove. There is no code path, product or test, that
+     * takes a device back out of the table once the module is loaded.
+     * tests/qemu/test_syssvc_showdev.c and tests/uat/vms_session_qemu.sh
+     * both run a bare SHOW DEVICE against a real /dev/vms and both see
+     * OPA0: every time -- rerun as part of this fix, unchanged result.
+     * A table with zero devices is therefore not a state a booted OVMX
+     * can present to SHOW DEVICE; it is the same "condition VMS is never
+     * in" as the executive-absent case, made unreachable at the source
+     * (vms_devtab_init()) rather than handled here. If that ever stops
+     * being true -- a device-table entry becomes removable -- this
+     * comment is the place to add the case back, pinned to whatever the
+     * oracle says for an empty listing (which section 6 does not cover;
+     * it is a NAMED device that does not exist, not an empty scan).
      */
-    if (rows == 0) {
-        dcl_error("OVMX", 4, "NODEVTAB",
-                  "the executive's device table is empty");
+    if (status != SS$_NOMOREDEV)
         return status;
-    }
 
     return SS$_NORMAL;
 }

@@ -18,7 +18,7 @@ two forms**, and found the root cause of the other.
 |---|---|
 | plain join → MEMBER | **verified this session** (run `v1`) |
 | bystander of a **removal** (class `0x03`) | **WORKS, proved live** (run `rm1`) |
-| bystander of an **addition** (class `0x02`) | root cause found and fixed; **run `by11` was verifying it when the session ended** |
+| bystander of an **addition** (class `0x02`) | root cause found and fixed — **necessary but NOT sufficient**; see §2 |
 
 ## 1. What was settled, and what it cost to learn
 
@@ -145,21 +145,49 @@ the `op 0x09` echo — it is the coordinator's **membership bitmap** (popcount =
 member count, 54/54), and the responder zeroes it because it is not the
 responder's to assert. Spec §4(p) and the new §4(r) carry all of this.
 
-## 2. ⚠ FIRST THING TO DO — read `by11`
+## 2. ⚠ FIRST THING TO DO — read `docs/analysis-e81-by11.md`
 
-```
-tail -30 /home/baron/vax/cluster/work/by11.status
-grep -ac CMRECIP /home/baron/vax/cluster/work/scsd-by11.log
-```
+Run `by11` shipped the reciprocal-config fix and **it is correct, necessary, and
+not sufficient.**
 
-**Success oracle:** `SCSD-I-CMRECIP` appears for VAX3, then VAX3 emits
-`cat 0x01 op 0x02` (the reference does so ~110 ms after the last reciprocal),
-then VAX1's console names VAX3, then OVMX logs a **second `XITDONE`**. That is
-T1.1's done condition for the addition case.
+**What worked.** `SCSD-I-CMRECIP` fired in the *same millisecond* as VAX3's
+`cat 0x01 op 0x14` (`smsg=1 amsg=0`), on the VC VAX3 opened to us — the reference
+cadence. Our own join was unaffected (`PHASE1 transitions=1 restarts=0
+xitrole_warnings=0`). The dialogue measurably advanced:
 
-**If `CMRECIP` fires and VAX3 still does not propose**, the next defect is almost
-certainly #1 in §3 — OVMX freezes its `send_seq` to that peer and becomes unable
-to send it anything at all. Fix that and re-run before looking anywhere else.
+| peer-table field for VAX3 | `by10` (before) | `by11` (after) |
+|---|---|---|
+| `cm_config` | `no` | **`YES`** |
+| `sysap_send` / `sysap_recv` | 2 / 2 | **6 / 3** |
+
+**What still fails.** VAX3 did not join. The cluster stayed at 3 nodes
+(VAX1+VAX2+OVMX), `aborts=0`, OVMX remained MEMBER throughout. **We still break
+nothing — we are still a black hole one node sits behind.**
+
+So the reading "the newcomer requires the reciprocal config from every member it
+holds a VC with" is **necessary but incomplete**. Something further is owed.
+Do **not** re-run the patience or ordering experiments; those are already excluded.
+
+**The next experiment was dispatched before the session ended and writes its
+report to `docs/analysis-e81-by11.md`. Read that file first.** It asks: byte-diff
+OVMX's reciprocal `op 0x14`/`op 0x01` against VAX1's (control frames 3714/3715)
+and VAX2's (3774/3775), and enumerate **every** frame VAX3 receives between its
+own `op 0x14` and its `op 0x02` in the control, checking each against `by11`.
+**The first item present in the control and absent in `by11` is the answer.**
+
+Prime suspects, in order:
+
+1. **Our reciprocal's SYSAP header.** The reference member sends `smsg=1 amsg=0`
+   then `smsg=2 amsg=0`. OVMX's `sysap_send` counter for that peer may already be
+   non-zero when the config arrives, so ours may go out as `smsg=2,3`.
+2. **Defect #1 below** — OVMX freezes its shared `send_seq` to a peer and becomes
+   structurally unable to send it anything. In `by10` that happened ~6.6 s after
+   the config arrived.
+3. A **third** config message, or an obligation on another connection, that the
+   control shows and we do not send.
+
+Specimen: `captures/ovmx-e81-by11-reciprocated-still-no-join-20260731.pcap`.
+Last SCSSYSTEMID used: **1207**.
 
 ## 3. The four grounded defects deliberately NOT shipped this session
 

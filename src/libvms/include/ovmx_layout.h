@@ -57,6 +57,11 @@
 #define VMS_OPERATOR_LOG     "SYS$MANAGER:OPERATOR.LOG"
 #define VMS_SYLOGIN_PATH     "SYS$MANAGER:SYLOGIN.COM"
 #define VMS_STARTUP_PATH     "SYS$MANAGER:STARTUP.COM"
+/* Site-specific startup, invoked by STARTUP.COM. This is where services
+ * are started (RUN/DETACHED under a VMS process name); STARTUP.EXE
+ * starts none of its own -- see the NOTE ON SERVICES in
+ * src/ovmx_init/ovmx_init.c (vms-47b). */
+#define VMS_SYSTARTUP_PATH   "SYS$MANAGER:SYSTARTUP_VMS.COM"
 #define VMS_HELPLIB_PATH     "SYS$HELP:HELPLIB.HLP"
 /* Reserved: zero readers as of vms-a4b (its only reader, lnm_daemon.c,
  * was deleted). Not wired to anything until the executive-resident

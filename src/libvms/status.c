@@ -20,6 +20,7 @@
 #include "stsdef.h"
 #include "rmsdef.h"
 #include "descrip.h"
+#include "ovmx_status.h"
 
 /* Short severity letter for message formatting */
 static const char *severity_letter[] = {
@@ -81,6 +82,14 @@ static const struct status_entry known_codes[] = {
     { SS$_DEVNOTALLOC,  "SYSTEM", "DEVNOTALLOC",  "device not allocated" },
     { SS$_IVDEVNAM,     "SYSTEM", "IVDEVNAM",     "invalid device name" },
     { SS$_IVLOGNAM,     "SYSTEM", "IVLOGNAM",     "invalid logical name" },
+    /* ORACLE-PINNED: F$MESSAGE(148) on the reference lab VAX V7.3
+     * renders "%SYSTEM-F-DUPLNAM, duplicate name" -- the same text the
+     * lab's RUN/DETACHED transcript chains under %RUN-F-CREPRC when a
+     * process name is already held in the caller's UIC group (the
+     * transcript is quoted in tests/qemu/test_kmod_procnam.c). Until
+     * this entry existed, the condition the executive returns for a
+     * duplicate process name had no text at all. */
+    { SS$_DUPLNAM,      "SYSTEM", "DUPLNAM",      "duplicate name" },
     { SS$_IVLOGTAB,     "SYSTEM", "IVLOGTAB",     "invalid logical name table" },
     { SS$_NOLOGNAM,     "SYSTEM", "NOLOGNAM",     "no such logical name" },
     { SS$_NOLOGTAB,     "SYSTEM", "NOLOGTAB",     "no such logical name table" },
@@ -123,6 +132,21 @@ static const struct status_entry known_codes[] = {
     { RMS$_EOF,         "RMS",    "EOF",          "end of file" },
     { RMS$_RNF,         "RMS",    "RNF",          "record not found" },
     { RMS$_NMF,         "RMS",    "NMF",          "no more files" },
+
+    /*
+     * OVMX facility -- NOT VMS. These carry the customer-defined bit
+     * (see src/libvms/include/ovmx_status.h) and are rendered under the
+     * facility name OVMX so no reader can mistake one for a SYSTEM
+     * condition value. The text is OVMX's to define precisely because
+     * OpenVMS has no equivalent condition.
+     *
+     * Present because RUN/DETACHED chains whatever $CREPRC returns
+     * (src/vmsdcl/dcl_cmd_process.c): without an entry, the one OVMX
+     * condition $CREPRC can produce printed as "-NONAME-F-UNKNOWN",
+     * which reads like a VMS message and is not one.
+     */
+    { OVMX$_PRCLOST,    "OVMX",   "PRCLOST",
+      "process lost before it entered the executive's process table" },
 
     /* Sentinel */
     { 0, NULL, NULL, NULL }

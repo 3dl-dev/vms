@@ -30,6 +30,9 @@
 #include "vmsqueue.h"
 #include "opcdef.h"
 #include "starlet.h"
+#include "descrip.h"
+#include "prcdef.h"
+#include "msgdef.h"
 
 int cmd_wait(struct dcl_command *cmd)
 {
@@ -619,6 +622,135 @@ int cmd_show_intrusion(struct dcl_command *cmd)
 /* ================================================================== */
 
 /*
+ * Build a CLASS_S string descriptor over a runtime C string.
+ * The pointer is NULL for a NULL/empty string, which is how $CREPRC
+ * distinguishes "argument omitted" from "argument supplied".
+ */
+static struct dsc$descriptor_s dsc_from_str(const char *s)
+{
+    struct dsc$descriptor_s d;
+    d.dsc$w_length  = s ? (uint16_t)strlen(s) : 0;
+    d.dsc$b_dtype   = DSC$K_DTYPE_T;
+    d.dsc$b_class   = DSC$K_CLASS_S;
+    d.dsc$a_pointer = (s && *s) ? (char *)s : NULL;
+    return d;
+}
+
+/*
+ * Parse a VMS UIC specification "[group,member]" into a packed UIC.
+ * VMS UICs are octal. Returns 0 -- "inherit from the creator" -- when
+ * the spec is absent or does not parse.
+ */
+static uint32_t parse_uic(const char *spec)
+{
+    if (!spec || !*spec)
+        return 0;
+    while (*spec == '[')
+        spec++;
+    char *end = NULL;
+    unsigned long group = strtoul(spec, &end, 8);
+    if (!end || *end != ',')
+        return 0;
+    unsigned long member = strtoul(end + 1, NULL, 8);
+    return (uint32_t)(((group & 0xFFFF) << 16) | (member & 0xFFFF));
+}
+
+/*
+ * RUN/DETACHED - create a detached process.
+ *
+ * This is how a system startup procedure starts a service: the service
+ * is a detached process with a VMS process name, so SHOW SYSTEM lists
+ * it and $GETJPI resolves it BY NAME from any other process. DCL does
+ * not wait on it -- it outlives the DCL that created it.
+ *
+ * THE NAME IS NOT DCL'S TO ASSIGN. /PROCESS_NAME is handed straight to
+ * $CREPRC, which has the created process enter itself in the
+ * EXECUTIVE's process table under that name before it activates the
+ * image. DCL neither stores the name nor reports it back to anyone: it
+ * prints the process ID the EXECUTIVE assigned. A name a process tells
+ * only itself -- the rejected VMS_PRCNAM environment variable, CLAUDE.md
+ * Rule 10 worked example 2 -- would satisfy every single-process test
+ * and share nothing.
+ *
+ * Qualifiers: /PROCESS_NAME=, /INPUT=, /OUTPUT=, /ERROR=, /UIC=
+ */
+static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
+                        const char *image_path)
+{
+    char in_path[1024]  = {0};
+    char out_path[1024] = {0};
+    char err_path[1024] = {0};
+
+    const char *q;
+    if ((q = dcl_qualifier_value(cmd, "INPUT")) && *q)
+        dcl_resolve_path(ctx, q, in_path, sizeof(in_path));
+    if ((q = dcl_qualifier_value(cmd, "OUTPUT")) && *q)
+        dcl_resolve_path(ctx, q, out_path, sizeof(out_path));
+    if ((q = dcl_qualifier_value(cmd, "ERROR")) && *q)
+        dcl_resolve_path(ctx, q, err_path, sizeof(err_path));
+
+    const char *prcnam = dcl_qualifier_value(cmd, "PROCESS_NAME");
+    uint32_t uic = parse_uic(dcl_qualifier_value(cmd, "UIC"));
+
+    struct dsc$descriptor_s img_d  = dsc_from_str(image_path);
+    struct dsc$descriptor_s in_d   = dsc_from_str(in_path);
+    struct dsc$descriptor_s out_d  = dsc_from_str(out_path);
+    struct dsc$descriptor_s err_d  = dsc_from_str(err_path);
+    struct dsc$descriptor_s prc_d  = dsc_from_str(prcnam);
+
+    uint32_t pid = 0;
+    uint32_t status = sys$creprc(&pid, &img_d,
+                                 in_d.dsc$a_pointer  ? &in_d  : NULL,
+                                 out_d.dsc$a_pointer ? &out_d : NULL,
+                                 err_d.dsc$a_pointer ? &err_d : NULL,
+                                 NULL, NULL,
+                                 prc_d.dsc$a_pointer ? &prc_d : NULL,
+                                 0, uic, 0, PRC$M_DETACH);
+
+    if (!(status & 1)) {
+        /*
+         * ORACLE-PINNED (reference lab VAX1, OpenVMS VAX V7.3,
+         * 2026-07-30 -- the same transcript recorded in
+         * tests/qemu/test_kmod_procnam.c): a RUN/DETACHED whose
+         * /PROCESS_NAME is already held in the caller's UIC group
+         * prints TWO lines,
+         *
+         *   %RUN-F-CREPRC, process creation failed
+         *   -SYSTEM-F-DUPLNAM, duplicate name
+         *
+         * RUN reports its own failure and CHAINS the condition value
+         * the service returned. The secondary line is therefore
+         * rendered from that condition value by $GETMSG rather than
+         * chosen here, so a condition RUN has never seen is reported as
+         * itself instead of being mapped onto the one message this code
+         * happened to know.
+         */
+        dcl_error("RUN", 4, "CREPRC", "process creation failed");
+
+        char sec[256];
+        struct dsc$descriptor_s sec_d;
+        uint16_t sec_len = 0;
+        sec_d.dsc$w_length  = (uint16_t)(sizeof(sec) - 1);
+        sec_d.dsc$b_dtype   = DSC$K_DTYPE_T;
+        sec_d.dsc$b_class   = DSC$K_CLASS_D;   /* not S: no blank padding */
+        sec_d.dsc$a_pointer = sec;
+        if (sys$getmsg(status, &sec_len, &sec_d, MSG$M_ALL, NULL) & 1) {
+            sec[sec_len] = '\0';
+            /* A chained message is introduced by '-', not '%'. */
+            if (sec[0] == '%') sec[0] = '-';
+            fprintf(stderr, "%s\n", sec);
+        }
+        return status;
+    }
+
+    /* VMS reports the created process's ID, which is the EXECUTIVE's,
+     * not a Linux pid $GETJPI could not resolve. */
+    printf("%%RUN-S-PROC_ID, identification of created process is %08X\n",
+           pid);
+    return SS$_NORMAL;
+}
+
+/*
  * RUN - Execute a program.
  */
 int cmd_run(struct dcl_command *cmd)
@@ -646,6 +778,11 @@ int cmd_run(struct dcl_command *cmd)
             return SS$_NOSUCHFILE;
         }
     }
+
+    /* /DETACHED creates a detached process -- a service -- instead of
+     * running the image as a subprocess of this DCL. */
+    if (dcl_has_qualifier(cmd, "DETACHED"))
+        return run_detached(ctx, cmd, linux_path);
 
     pid_t pid = fork();
     if (pid == 0) {

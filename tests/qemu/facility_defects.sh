@@ -76,15 +76,24 @@
 # table, authenticated identity -- plus two properties of the binding itself:
 # that a caller's PCB is per-PROCESS (not per-thread), and that an open
 # descriptor pins the module.
-# TWO defects are outside vms.ko, both because the property they name lives in
+# FOUR defects are outside vms.ko, all because the property they name lives in
 # the PRODUCT half of the interface, where no kernel-side mutation can reach it:
 #   bind-client-no-register  the vms-9fc defect itself (kif_bind() not calling
 #                            vms_kif_register()).
 #   creprc-handshake-eintr   $CREPRC's report pipe read not retried on EINTR,
 #                            so a signal caught by the CALLER decided what the
 #                            service reported about the CHILD (vms-8019).
-# Both are edits under src/, not src/kernel/, so cmd_selftest copies libvms and
-# libvmssys alongside kernel/ when it checks that every anchor still matches.
+#   run-detached-name-dropped        DCL's RUN/DETACHED not passing
+#                            /PROCESS_NAME on to $CREPRC, so a service is
+#                            created NAMELESS while the command still reports
+#                            success (vms-47b).
+#   creprc-detach-intermediate-reaped  $CREPRC leaving the detach
+#                            intermediate unreaped, so the creator of a
+#                            "detached" process still has a child to wait for
+#                            (vms-47b).
+# All are edits under src/, not src/kernel/, so cmd_selftest copies libvms,
+# libvmssys and vmsdcl alongside kernel/ when it checks that every anchor still
+# matches.
 #
 # vmsfs.ko (src/kernel/vmsfs/, and the two suites that drive it) is NOT an
 # executive facility and is NOT covered here. See scope_* below: that exclusion
@@ -130,7 +139,9 @@ ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
 bind-client-no-register
-creprc-handshake-eintr"
+creprc-handshake-eintr
+run-detached-name-dropped
+creprc-detach-intermediate-reaped"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -999,6 +1010,70 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    run-detached-name-dropped)
+        case "$_f" in
+        facility)     echo "the process NAME on the way from the user-visible command to the executive (DCL RUN/DETACHED -> \$CREPRC, src/vmsdcl/dcl_cmd_process.c)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+RUN/DETACHED stops passing /PROCESS_NAME to $CREPRC. The service is still
+created, still detached, still reparented, and the command still prints
+%RUN-S-PROC_ID with a real executive-assigned process ID -- it is simply
+NAMELESS in the executive's table.
+THIS IS THE EXACT FACADE SHAPE vms-47b EXISTS TO PREVENT, and the reason the
+mutation is a one-argument edit rather than a deleted feature: everything a
+single-process test can see stays true. The command succeeds, the process
+exists, the process ID resolves. Only the property that makes the name mean
+anything -- that ANOTHER process can find the service by it -- disappears. A
+suite that asserted "RUN/DETACHED reported success" would stay green through
+this, which is why it does not assert that.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+the executive resolves the service BY NAME after its creator exited
+SHOW SYSTEM, in a different process, lists the service by its VMS process name
+starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    creprc-detach-intermediate-reaped)
+        case "$_f" in
+        facility)     echo "detachment in \$CREPRC's PRC\$M_DETACH path (src/libvms/syssvc/sys_process.c)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+$CREPRC stops reaping the detach intermediate, so the creator of a "detached"
+process is left with a child it can wait for. The created process itself is
+untouched: it is still setsid'd, still reparented, still named, still visible
+to every other process. What is lost is the half of "detached" that only the
+CREATOR can observe -- that after $CREPRC returns there is nothing in its job
+tree belonging to that call.
+This is the finest available edit for that property. Removing the second
+fork() instead would be coarser AND unusable: $CREPRC's own reap would then
+wait on the service, and the call would not return for the lifetime of the
+image -- a hang is not a verdict, and a control that hangs is a flaky gate.
+Disabling only the reap leaves every other suite byte-identical in behaviour,
+because no other suite creates a process with PRC$M_DETACH at all, so the
+mutated block is one nothing else enters.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+the creator of a detached process has no child to wait for
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1070,6 +1145,19 @@ apply_edit() {
         # changes nothing except what happens when a signal is delivered to
         # the CALLER while it waits -- which is the whole property.
         sed -i 's|ssize_t r = creprc_read_all(namefd\[0\], \&rep, sizeof(rep));|ssize_t r = read(namefd[0], \&rep, sizeof(rep)); /* NEGCTL creprc-handshake-eintr */|' "$_file";;
+
+    run-detached-name-dropped)
+        # The ONE edit: RUN/DETACHED hands $CREPRC no process name. Every
+        # other argument, and every other line of the command, is untouched.
+        sed -i 's|                                 prc_d.dsc\$a_pointer ? \&prc_d : NULL,|                                 NULL, /* NEGCTL run-detached-name-dropped */|' "$_file";;
+
+    creprc-detach-intermediate-reaped)
+        # The ONE edit: the parent-side reap of the detach intermediate is
+        # not entered, so the creator keeps a waitable child. Anchored on the
+        # 4-space `if (detached) {` -- the child-side occurrences of the same
+        # condition are indented 8, inside `if (pid == 0) {`.
+        sed -i 's|^    if (detached) {$|    if (0) { /* NEGCTL creprc-detach-intermediate-reaped */|' "$_file";;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1359,12 +1447,14 @@ cmd_selftest() {
 
         rm -rf "$_st_tmp/tree"
         mkdir -p "$_st_tmp/tree"
-        # libvms is copied too: a defect may target the PRODUCT half of an
-        # interface (creprc-handshake-eintr does), and a target this function
-        # cannot see would be reported as a dead anchor on every run.
+        # libvms and vmsdcl are copied too: a defect may target the PRODUCT
+        # half of an interface (creprc-handshake-eintr and
+        # run-detached-name-dropped do), and a target this function cannot see
+        # would be reported as a dead anchor on every run.
         if ! cp -a "$_st_root/kernel" "$_st_root/libvmssys" "$_st_root/libvms" \
+                   "$_st_root/vmsdcl" \
                    "$_st_tmp/tree/" 2>/dev/null; then
-            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms} for the self-test"
+            echo "FAIL: cannot copy $_st_root/{kernel,libvmssys,libvms,vmsdcl} for the self-test"
             rm -rf "$_st_tmp"
             return 2
         fi

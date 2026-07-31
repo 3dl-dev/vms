@@ -488,6 +488,7 @@ long vms_ioctl_wfland(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_readef(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ascefc(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dacefc(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_dlcefc(struct vms_proc *proc, unsigned long arg);
 
 /* Lock manager (3d) */
 long vms_ioctl_enq(struct vms_proc *proc, unsigned long arg);

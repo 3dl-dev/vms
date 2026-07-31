@@ -37,6 +37,7 @@
 
 #include "../kernel/vms_ioctl.h"
 #include "prvdef.h"
+#include "prv_names.h"
 
 _Static_assert(PRV$V_CMKRNL == VMS_PRV_V_CMKRNL, "PRV$V_CMKRNL disagrees with the executive");
 _Static_assert(PRV$V_CMEXEC == VMS_PRV_V_CMEXEC, "PRV$V_CMEXEC disagrees with the executive");
@@ -69,6 +70,8 @@ _Static_assert(PRV$M_NETMBX == VMS_PRV_M_NETMBX, "PRV$M_NETMBX disagrees with th
 /*
  * F$GETJPI CURPRIV/AUTHPRIV NAME COVERAGE (vms-2b8 round 9; supersedes a
  * RUNTIME check rounds 7-8 put in src/vmsdcl/dcl_lexical.c's lex_getjpi()).
+ * Round 10 widened WHAT this assert can catch -- read that part before
+ * relying on either direction below.
  *
  * lex_getjpi() renders CURPRIV/AUTHPRIV by walking VMS_PRV_M_ENFORCED bit
  * by bit and looking each set bit up in vms_priv_names[] (dcl_cmd_show.c)
@@ -84,41 +87,58 @@ _Static_assert(PRV$M_NETMBX == VMS_PRV_M_NETMBX, "PRV$M_NETMBX disagrees with th
  * that is already settled before the program runs, not one that can
  * arise while it is running. The corrected HIDE answer for a fact fixed
  * at compile time is a compile-time proof, not a runtime abort -- so the
- * runtime guard is DELETED (dcl_lexical.c, round 9) and this assert
- * takes its place: a future edit that widens VMS_PRV_M_ENFORCED beyond
- * the four privileges named below fails the BUILD here, before anything
- * can boot or a user can trigger it, exactly like the bit-position
- * asserts above.
+ * runtime guard is DELETED (dcl_lexical.c, round 9).
  *
- * VMS_PRV_M_ENFORCED is, today, exactly
- *   VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD
- * (src/kernel/vms_ioctl.h), and vms_priv_names[] (dcl_cmd_show.c) has one
- * row for each of PRV$M_CMKRNL, PRV$M_CMEXEC, PRV$M_SETPRV, PRV$M_WORLD --
- * which the asserts above already pin equal to their VMS_PRV_M_* opposite
- * numbers. This assert states the coverage claim directly, not by
- * equality with VMS_PRV_M_ENFORCED's own definition (an assert that just
- * restated the #define would pass no matter what the #define said):
- * every bit VMS_PRV_M_ENFORCED can ever set is one of these four.
- * Widening VMS_PRV_M_ENFORCED to a fifth privilege must add its row to
- * vms_priv_names[] AND its PRV$M_ name to this assert's whitelist, or the
- * build stops here.
+ * ROUND 9's ASSERT CHECKED VMS_PRV_M_ENFORCED AGAINST A HAND-TYPED
+ * WHITELIST, NOT AGAINST vms_priv_names[]'S ACTUAL CONTENT. Its body was
+ * `VMS_PRV_M_ENFORCED & ~(PRV$M_CMKRNL | PRV$M_CMEXEC | PRV$M_SETPRV |
+ * PRV$M_WORLD)`, four names typed by a person reading the array, not
+ * derived from it. Round 9's commit message called this "structurally
+ * impossible at compile time" for the coverage desync; that claim was
+ * false in the direction that matters. The whitelist and the array were
+ * two independent pieces of text that happened to agree -- deleting the
+ * WORLD row from vms_priv_names[] (dcl_cmd_show.c) left the whitelist
+ * untouched, so the build still succeeded with VMS_PRV_M_ENFORCED's WORLD
+ * bit reaching lex_getjpi()'s lookup loop with no row: the exact desync
+ * the assert claimed to prevent, arriving from the table side instead of
+ * the mask side. PROVEN (round 10): deleting the WORLD row from the
+ * round-9 tree left `ctest` and the full build green -- see the round-10
+ * commit message for the exact command and output.
  *
- * NEGATIVE CONTROL (run it if you touch either table, same convention as
- * the bit-position asserts above): OR (1ULL << 40) into VMS_PRV_M_ENFORCED
- * (src/kernel/vms_ioctl.h) and rebuild -- the build MUST fail here, not
- * boot and abort at runtime. RUN (vms-2b8 round 9): it does --
- *   prv_agreement.c:111:1: error: static assertion failed: "VMS_PRV_M_ENFORCED
- *   (src/kernel/vms_ioctl.h) names a bit outside {CMKRNL,CMEXEC,SETPRV,WORLD}
- *   -- add its row to vms_priv_names[] (src/vmsdcl/dcl_cmd_show.c) and to
- *   this assert's whitelist before widening VMS_PRV_M_ENFORCED (vms-2b8)"
- * Reverted after confirming.
+ * ROUND 10 FIX: vms_priv_names[] (dcl_cmd_show.c) is no longer hand-typed
+ * -- it is generated from VMS_PRIV_NAME_LIST (src/libvms/include/
+ * prv_names.h), and VMS_PRIV_NAMES_TABLE_MASK below is the OR of every
+ * mask term in that SAME list. Both are textually derived from one
+ * preprocessor list; there is no second, independently-maintained copy
+ * of "which rows exist" left for a row deletion to leave stale. Deleting
+ * a line from VMS_PRIV_NAME_LIST removes that privilege's row from
+ * vms_priv_names[] AND its mask term from VMS_PRIV_NAMES_TABLE_MASK in
+ * the same edit, so a row deleted while VMS_PRV_M_ENFORCED still sets
+ * that bit now fails THIS assert. This is what makes the check
+ * structural rather than a copy that happens to agree today: read
+ * prv_names.h's header comment for the mechanism, and see the two
+ * negative controls below for both directions proven by execution
+ * rather than asserted by comment.
+ *
+ * NEGATIVE CONTROL 1 -- bit added to VMS_PRV_M_ENFORCED with no table row
+ * (same direction round 9 covered; re-run after the round-10 refactor to
+ * confirm it survived): OR (1ULL << 40) into VMS_PRV_M_ENFORCED
+ * (src/kernel/vms_ioctl.h) and rebuild -- the build MUST fail here.
+ * RUN (vms-2b8 round 10): it does. Reverted after confirming.
+ *
+ * NEGATIVE CONTROL 2 -- row deleted from the table while VMS_PRV_M_ENFORCED
+ * still sets that bit (the direction round 9's assert missed and round 10
+ * exists to close): delete the `X(WORLD, PRV$M_WORLD, ...)` line from
+ * VMS_PRIV_NAME_LIST (src/libvms/include/prv_names.h) and rebuild -- the
+ * build MUST fail here. RUN (vms-2b8 round 10): it does. Reverted after
+ * confirming.
  */
-_Static_assert((VMS_PRV_M_ENFORCED &
-                ~(PRV$M_CMKRNL | PRV$M_CMEXEC | PRV$M_SETPRV | PRV$M_WORLD)) == 0,
-               "VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h) names a bit outside "
-               "{CMKRNL,CMEXEC,SETPRV,WORLD} -- add its row to vms_priv_names[] "
-               "(src/vmsdcl/dcl_cmd_show.c) and to this assert's whitelist "
-               "before widening VMS_PRV_M_ENFORCED (vms-2b8)");
+_Static_assert((VMS_PRV_M_ENFORCED & ~VMS_PRIV_NAMES_TABLE_MASK) == 0,
+               "VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h) sets a bit with no "
+               "row in VMS_PRIV_NAME_LIST (src/libvms/include/prv_names.h, "
+               "which also generates vms_priv_names[] in "
+               "src/vmsdcl/dcl_cmd_show.c) -- add a row for it there before "
+               "widening VMS_PRV_M_ENFORCED (vms-2b8)");
 
 /*
  * A translation unit consisting only of static assertions produces an

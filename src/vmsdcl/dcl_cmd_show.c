@@ -21,6 +21,8 @@
 #include <errno.h>
 
 #include "prvdef.h"     /* PRV$M_* -- the single privilege bit table */
+#include "prv_names.h"  /* VMS_PRIV_NAME_LIST -- single source for vms_priv_names[]
+                          * below AND for prv_agreement.c's coverage check (vms-2b8) */
 #include "dcl/context.h"
 #include "dcl/terminal.h"
 #include "dcl/parser.h"
@@ -114,45 +116,16 @@ static int cmd_show_process_quotas(struct dcl_context *ctx);
  * VMS_PRV_M_ENFORCED to derive the names it may show, instead of
  * carrying its own hand-maintained second list of just the enforced
  * ones. One table, two readers.
+ *
+ * GENERATED FROM src/libvms/include/prv_names.h's VMS_PRIV_NAME_LIST
+ * (vms-2b8 round 10), not hand-typed here: prv_agreement.c derives its
+ * VMS_PRV_M_ENFORCED coverage check from that SAME list, so a row deleted
+ * from this table is a row deleted from the coverage mask in the same
+ * edit -- see prv_names.h for why that closes the gap a hand-typed
+ * coverage whitelist could not.
  */
 const struct dcl_priv_name vms_priv_names[] = {
-    { "ACNT",     PRV$M_ACNT,     "may suppress accounting messages" },
-    { "ALLSPOOL", PRV$M_ALLSPOOL, "may allocate spooled device" },
-    { "ALTPRI",   PRV$M_ALTPRI,   "may set any priority value" },
-    { "BUGCHK",   PRV$M_BUGCHK,   "may make bug check log entries" },
-    { "BYPASS",   PRV$M_BYPASS,   "may bypass all object access controls" },
-    { "CMEXEC",   PRV$M_CMEXEC,   "may change mode to exec" },
-    { "CMKRNL",   PRV$M_CMKRNL,   "may change mode to kernel" },
-    { "IMPERSONATE", PRV$M_IMPERSONATE, "may impersonate another user" },
-    { "DIAGNOSE", PRV$M_DIAGNOSE, "may diagnose devices" },
-    { "DOWNGRADE",PRV$M_DOWNGRADE,"may downgrade object secrecy" },
-    { "EXQUOTA",  PRV$M_EXQUOTA,  "may exceed disk quota" },
-    { "GROUP",    PRV$M_GROUP,    "may affect other processes in same group" },
-    { "GRPNAM",   PRV$M_GRPNAM,   "may insert in group logical name table" },
-    { "GRPPRV",   PRV$M_GRPPRV,   "may access group objects via system protection" },
-    { "LOG_IO",   PRV$M_LOG_IO,   "may do logical i/o" },
-    { "MOUNT",    PRV$M_MOUNT,    "may execute mount acp function" },
-    { "NETMBX",   PRV$M_NETMBX,   "may create network device" },
-    { "OPER",     PRV$M_OPER,     "may perform operator functions" },
-    { "PFNMAP",   PRV$M_PFNMAP,   "may map to specific physical pages" },
-    { "PHY_IO",   PRV$M_PHY_IO,   "may do physical i/o" },
-    { "PRMCEB",   PRV$M_PRMCEB,   "may create permanent common event clusters" },
-    { "PRMGBL",   PRV$M_PRMGBL,   "may create permanent global sections" },
-    { "PRMMBX",   PRV$M_PRMMBX,   "may create permanent mailbox" },
-    { "PSWAPM",   PRV$M_PSWAPM,   "may change process swap mode" },
-    { "READALL",  PRV$M_READALL,  "may read anything as the owner" },
-    { "SECURITY", PRV$M_SECURITY, "may perform security administration functions" },
-    { "SETPRV",   PRV$M_SETPRV,   "may set any privilege bit" },
-    { "SHARE",    PRV$M_SHARE,    "may assign channels to non-shared devices" },
-    { "SHMEM",    PRV$M_SHMEM,    "may create/delete objects in shared memory" },
-    { "SYSGBL",   PRV$M_SYSGBL,   "may create system wide global sections" },
-    { "SYSLCK",   PRV$M_SYSLCK,   "may lock system wide resources" },
-    { "SYSNAM",   PRV$M_SYSNAM,   "may insert in system logical name table" },
-    { "SYSPRV",   PRV$M_SYSPRV,   "may access objects via system protection" },
-    { "TMPMBX",   PRV$M_TMPMBX,   "may create temporary mailbox" },
-    { "UPGRADE",  PRV$M_UPGRADE,  "may upgrade object integrity" },
-    { "VOLPRO",   PRV$M_VOLPRO,   "may override volume protection" },
-    { "WORLD",    PRV$M_WORLD,    "may affect other processes in the world" },
+    VMS_PRIV_NAME_LIST(VMS_PRIV_ROW_ENTRY)
     { NULL, 0, NULL }
 };
 

@@ -36,6 +36,13 @@ static char severity_char(uint32_t sev) {
 
 /* Get facility name from condition value */
 static const char *facility_name(uint32_t msgid) {
+    /* A customer-defined condition value is not a VMS one (bit 27,
+     * STS$V_CUST_DEF). In OVMX the only such values are OVMX's own, and
+     * naming them "NONAME" here made an OVMX condition print in the
+     * shape of a VMS system message. See src/libvms/include/ovmx_status.h. */
+    if ($VMS_STATUS_CUST_DEF(msgid))
+        return "OVMX";
+
     uint32_t fac = $VMS_STATUS_FAC_NO(msgid);
     switch (fac) {
         case 0:  return "SYSTEM";

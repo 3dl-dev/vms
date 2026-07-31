@@ -535,6 +535,15 @@ static void provision_seed_files(void)
     snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSMGR/STARTUP.COM",
              INITRAMFS_BACKUP);
     copy_seed_file(src, dst, 0644);
+
+    /* SYSTARTUP_VMS.COM → SYS$MANAGER (0644: command procedure).
+     * STARTUP.COM invokes it unconditionally, so a system disk installed
+     * before this file existed must gain it here or every boot after an
+     * upgrade would report it missing. */
+    vms_to_linux(VMS_SYSTARTUP_PATH, dst, sizeof(dst));
+    snprintf(src, sizeof(src), "%s/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM",
+             INITRAMFS_BACKUP);
+    copy_seed_file(src, dst, 0644);
 }
 
 /*
@@ -752,35 +761,30 @@ static void install_system_blkdev(void)
 }
 
 /*
- * Try to start the SSH daemon for remote access.
- * Returns the child PID on success, -1 if sshd not found.
+ * NOTE ON SERVICES: STARTUP.EXE STARTS NO SERVICES. DO NOT ADD ONE HERE.
+ *
+ * It used to fork the SSH daemon (and, before that, the logical name
+ * daemon) directly, which was wrong on three counts:
+ *
+ *   - the service was invisible to SYS$MANAGER, so it could not be
+ *     enabled or disabled the VMS way;
+ *   - it became an anonymous Linux child rather than a named detached
+ *     process, so nothing could find it, and SHOW SYSTEM could not list
+ *     it;
+ *   - a missing service image was skipped SILENTLY, by the
+ *     "if (stat(...) != 0) return -1;" this replaces. That is the bug
+ *     class that let VMSSSHD.EXE go missing from the initramfs while the
+ *     boot banner still announced SSH as running.
+ *
+ * Services start where VMS starts them:
+ *
+ *   STARTUP.COM -> SYSTARTUP_VMS.COM -> <service>_STARTUP.COM
+ *                                       -> RUN/DETACHED/PROCESS_NAME=...
+ *
+ * which reaches $CREPRC with PRC$M_DETACH, so the executive names the
+ * process and every other process can see it. Add a service to
+ * SYS$MANAGER:SYSTARTUP_VMS.COM, never to this file (vms-47b).
  */
-static pid_t start_sshd(void)
-{
-    char sshd_path[512];
-    vms_to_linux(VMS_SSHD_PATH, sshd_path, sizeof(sshd_path));
-    struct stat st;
-    if (stat(sshd_path, &st) != 0) {
-        return -1;  /* sshd not available */
-    }
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        /* Detach from console terminal so vmssshd gets its own session */
-        setsid();
-        int devnull = open("/dev/null", O_RDWR);
-        if (devnull >= 0) {
-            dup2(devnull, STDIN_FILENO);
-            if (devnull > STDERR_FILENO)
-                close(devnull);
-        }
-        /* Restore default signal handling */
-        signal(SIGHUP, SIG_DFL);
-        execl(sshd_path, "vmssshd", (char *)NULL);
-        _exit(1);
-    }
-    return pid;
-}
 
 /*
  * Run SYS$MANAGER:STARTUP.COM via DCL subprocess.
@@ -809,8 +813,13 @@ static void run_startup(void)
 
 /*
  * Display VMS-style boot banner.
+ *
+ * Announces only what STARTUP.EXE itself did. A service announces
+ * itself from its own startup procedure, as VMS does -- this banner
+ * must never claim a service is running, because STARTUP.EXE no longer
+ * starts any and could not know.
  */
-static void display_boot_banner(int sshd_started)
+static void display_boot_banner(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -828,10 +837,6 @@ static void display_boot_banner(int sshd_started)
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
-
-    if (sshd_started) {
-        printf("%%STDRV-I-SSHSTART, SSH remote access started on port 22\n");
-    }
 
     /* Re-read time for "completed" message */
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -935,22 +940,22 @@ int main(void)
 
     /* Step 3: Run STARTUP.COM.
      * There is no logical name daemon to start first: on VMS the logical name
-     * tables are executive-resident, not a service (vms-a4b). */
+     * tables are executive-resident, not a service (vms-a4b).
+     *
+     * This is ALSO where the system's services start, and the only place
+     * they do: STARTUP.COM invokes SYSTARTUP_VMS.COM, which invokes each
+     * service's own startup procedure, which creates it with
+     * RUN/DETACHED under a VMS process name (vms-47b). STARTUP.EXE
+     * deliberately starts none of its own -- see the NOTE ON SERVICES
+     * above. */
     run_startup();
 
-    /* Step 4: Start SSH daemon */
-    int sshd_started = 0;
-    pid_t sshd_pid = start_sshd();
-    if (sshd_pid > 0) {
-        sshd_started = 1;
-    }
-
-    /* Step 5: Boot banner */
-    display_boot_banner(sshd_started);
+    /* Step 4: Boot banner */
+    display_boot_banner();
     fflush(stdout);
     fflush(stderr);
 
-    /* Step 6: Login loop (only if stdin is a terminal) */
+    /* Step 5: Login loop (only if stdin is a terminal) */
     char loginout_path[512], dcl_path[512];
     vms_to_linux(VMS_LOGINOUT_PATH, loginout_path, sizeof(loginout_path));
     vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
@@ -958,17 +963,11 @@ int main(void)
     int console_interactive = isatty(STDIN_FILENO);
     int consecutive_failures = 0;
 
-    if (!console_interactive && sshd_started) {
-        /* Non-interactive with SSH running (e.g. docker run without -it).
-         * Skip console login loop — just wait for shutdown signal.
-         * SSH sessions still work normally. */
-        fprintf(stderr,
-            "%%STARTUP-I-NONCONSOLE, no interactive console, "
-            "serving SSH connections only\n");
-        fflush(stderr);
-        while (!shutdown_requested)
-            pause();
-    }
+    /* There is no "wait forever because a service is serving sessions"
+     * branch here any more. It existed for the SSH daemon STARTUP.EXE
+     * used to fork, and it could only ever be entered on the dead Docker
+     * runtime (CLAUDE.md Rule 9). With no console, the loop below exits
+     * on EOF exactly as it always did when no daemon was running. */
 
     while (!shutdown_requested) {
         /* Check if stdin is still open (avoid tight loop on EOF) */
@@ -1068,11 +1067,9 @@ int main(void)
         }
     }
 
-    /* Clean up: kill daemons if we started them */
-    if (sshd_pid > 0) {
-        kill(sshd_pid, SIGTERM);
-        waitpid(sshd_pid, NULL, 0);
-    }
-
+    /* No daemons to clean up: STARTUP.EXE started none. A detached
+     * process created by a startup procedure is NOT STARTUP.EXE's child
+     * and cannot be waited on by it -- shutting one down is $DELPRC by
+     * process name, which belongs to a shutdown procedure, not here. */
     return 0;
 }

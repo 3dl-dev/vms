@@ -1345,6 +1345,34 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
         snprintf(result, result_size, "%08X", (unsigned)getpid());
     } else if (strcmp(s, "MODE") == 0) {
         return lex_mode(ctx, NULL, result, result_size);
+    } else if (strcmp(s, "CURPRIV") == 0) {
+        /*
+         * ADDED vms-2b8 round 4, MEASURED not assumed. Before this, CURPRIV
+         * fell into the `else` branch below and silently returned "0" --
+         * indistinguishable from "the executive says this process holds no
+         * privileges", which is false for every session on this runtime
+         * (SYSTEM's enforced mask is CMEXEC|CMKRNL|SETPRV|WORLD, never
+         * empty). That is the illegal-third-answer shape: neither matching
+         * VMS (a real quadword mask) nor hiding the item (an honest
+         * "unimplemented" refusal), just a plausible-looking zero. Reads
+         * the same live executive source as SHOW PROCESS/PRIVILEGES and
+         * F$PRIVILEGE (vms_kif_getjpi_self(), masked to
+         * VMS_PRV_M_ENFORCED), so the three cannot disagree by
+         * construction. Like the other items in this function (USERNAME,
+         * PRCNAM, PID, MODE), the pid argument is parsed but not honored --
+         * this answers only for the calling process, consistent with
+         * every existing item here, not a new restriction.
+         */
+        struct vms_procinfo info;
+        memset(&info, 0, sizeof(info));
+        uint32_t jst = vms_kif_getjpi_self(&info);
+        if (!(jst & 1)) {
+            strncpy(result, "0", result_size - 1);
+        } else {
+            uint64_t enforced = info.cur_privs & VMS_PRV_M_ENFORCED;
+            snprintf(result, result_size, "%llu",
+                     (unsigned long long)enforced);
+        }
     } else {
         strncpy(result, "0", result_size - 1);
     }
@@ -1740,26 +1768,43 @@ static int lex_fao(struct dcl_context *ctx, const char *args,
  *
  * Privilege list is comma-separated: "SYSPRV,TMPMBX"
  * Returns "TRUE" if ALL listed privileges are held, "FALSE" otherwise.
- * Reads ctx->privileges, which dcl_context_init() now reads from the
- * executive (vms_kif_getjpi_self()), not from the environment (vms-2b8).
  *
- * MASKED TO VMS_PRV_M_ENFORCED (vms-2b8 round -- Rule 10 applied to this
- * surface too, not just SHOW PROCESS/PRIVILEGES). Before this, F$PRIVILEGE
- * answered from the RAW cur_privs the executive stores -- the same
- * SYSUAF-authorized bits SHOW PROCESS/PRIVILEGES deliberately does NOT
- * print, because nothing in vms.ko enforces them. That made the two
- * surfaces disagree about the SAME process in the SAME moment: measured,
- * a process authorized OPER by SYSUAF showed empty privilege blocks in
- * SHOW PROCESS/PRIVILEGES while F$PRIVILEGE("OPER") answered "TRUE" --
- * OVMX advertising a privilege it cannot enforce, through a surface DCL
- * scripts branch on (`IF F$PRIVILEGE("OPER") THEN ...`), which is a
- * sharper instance of the exact defect Rule 10 exists to stop than a
- * display line is. See src/kernel/vms_ioctl.h's VMS_PRV_M_ENFORCED
- * comment for what is actually enforced and why GROUP is absent from it.
+ * READS THE EXECUTIVE FRESH, EVERY CALL (vms-2b8 round 4) -- deliberately
+ * NOT ctx->privileges. This is the round-3 fix's own bug, found by
+ * measurement on a real QEMU boot, not by inspection:
+ *
+ *   $ SHOW PROCESS/PRIVILEGES        -> Authorized: CMEXEC CMKRNL SETPRV WORLD
+ *   $ BEFORE = F$PRIVILEGE("SETPRV") -> "TRUE"
+ *   $ SET PROCESS/PRIVILEGES=(OPER)
+ *   $ SHOW PROCESS/PRIVILEGES        -> UNCHANGED: still CMEXEC CMKRNL SETPRV WORLD
+ *   $ AFTER = F$PRIVILEGE("SETPRV")  -> "FALSE"   <-- same process, same moment
+ *
+ * Root cause: SET PROCESS/PRIVILEGES (src/vmsdcl/dcl_cmd_set.c,
+ * cmd_set_process()) REPLACES ctx->privileges outright with whatever
+ * string was asked for -- a local, unauthenticated self-assertion with no
+ * connection to the executive. Masking that value to VMS_PRV_M_ENFORCED
+ * (the round-3 fix) closed the OVER-claim direction (F$PRIVILEGE saying
+ * TRUE for something SHOW PROCESS/PRIVILEGES correctly omits) but left
+ * this UNDER-claim direction wide open: a single SET PROCESS/PRIVILEGES
+ * call for an unrelated, unenforced name (OPER) silently discarded every
+ * bit ctx->privileges used to carry, including SETPRV/WORLD/CMKRNL/CMEXEC
+ * -- privileges the executive still genuinely holds and SHOW
+ * PROCESS/PRIVILEGES still correctly reports. Two surfaces describing the
+ * same process at the same instant disagreed either way; masking a stale,
+ * mutable local copy cannot fix that, because the copy itself is the
+ * defect. The two surfaces can only be made to agree by construction: read
+ * the SAME live source SHOW PROCESS/PRIVILEGES reads
+ * (vms_kif_getjpi_self()), every call, so there is no local state left to
+ * desynchronize. See src/kernel/vms_ioctl.h's VMS_PRV_M_ENFORCED comment
+ * for what is actually enforced and why GROUP is absent from it.
+ *
+ * `ctx` is retained in the signature only because this function is called
+ * through a common lexical-function pointer table; it is otherwise unused.
  */
 static int lex_privilege(struct dcl_context *ctx, const char *args,
                          char *result, size_t result_size)
 {
+    (void)ctx;
     strncpy(result, "FALSE", result_size - 1);
     result[result_size - 1] = '\0';
     if (!args) return 0;
@@ -1784,7 +1829,18 @@ static int lex_privilege(struct dcl_context *ctx, const char *args,
         return 0;
     }
 
-    uint64_t enforced_held = ctx->privileges & VMS_PRV_M_ENFORCED;
+    /*
+     * Fail closed: a privilege check that cannot reach the executive has
+     * no basis to claim TRUE for anything. Leaves result at "FALSE" (the
+     * default set above).
+     */
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t jst = vms_kif_getjpi_self(&info);
+    if (!(jst & 1))
+        return 0;
+
+    uint64_t enforced_held = info.cur_privs & VMS_PRV_M_ENFORCED;
     if ((enforced_held & needed) == needed)
         strncpy(result, "TRUE", result_size - 1);
     else

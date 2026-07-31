@@ -14,9 +14,22 @@
  *
  * THE VMS RULE, pinned and not chosen: the SYSTEM category covers every
  * UIC whose GROUP is <= MAXSYSGROUP (OpenVMS Guide to System Security,
- * "System" access category). MAXSYSGROUP measured on the oracle -- VAX2,
- * OpenVMS VAX V7.3, 30-JUL-2026, `MCR SYSGEN SHOW MAXSYSGROUP` -> Current
- * 8, Default 8. Transcript: docs/oracle/vax73-privileges.md S7.
+ * "System" access category). MAXSYSGROUP=8, pinned to TWO independent
+ * sources (vms-2b8 round 4; round 3 had only the first, which was this
+ * same branch attesting to its own capture -- see sys_security.c's
+ * OVMX_MAXSYSGROUP comment for the full account):
+ *   1. Oracle transcript, VAX2, OpenVMS VAX V7.3, 30-JUL-2026,
+ *      `MCR SYSGEN SHOW MAXSYSGROUP` -> Current 8, Default 8. Transcript:
+ *      docs/oracle/vax73-privileges.md S7.
+ *   2. VSI OpenVMS Wiki, "UIC Protection", fetched 31-JUL-2026: MAXSYSGROUP
+ *      is octal 10 by default -- decimal 8 -- from a source independent of
+ *      both this tree and the lab.
+ * THE BOUNDARY IS ALSO PROVEN BY MUTATION, not just pinned by citation: the
+ * round-3 version of this test could not tell MAXSYSGROUP=8 apart from
+ * MAXSYSGROUP=5, because its only two cases were group 5 (inside (0,8] AND
+ * inside (0,5]) and group 9 (outside both). This version adds a case at
+ * the boundary ITSELF (group == MAXSYSGROUP, defined below) that only a
+ * boundary of exactly 8 grants -- see that test's own comment.
  *
  * WHAT CHANGED FROM THE PREVIOUS VERSION OF THIS TEST (vms-2b8, operator
  * ruling 2026-07-31): it used to drive both sys$chkpro AND
@@ -248,10 +261,30 @@ int main(void)
           "file via SYSTEM, not WORLD");
 
     /*
+     * THE BOUNDARY ITSELF (round 4). Group 5 above is inside (0, MAXSYSGROUP]
+     * under ANY boundary from 5 to 8 inclusive, so it cannot tell those
+     * apart -- and neither can group 9 below, which is outside all of them.
+     * A caller at group == MAXSYSGROUP exactly is granted ONLY if the
+     * boundary is really 8: change OVMX_MAXSYSGROUP (sys_security.c) to
+     * anything less than 8 and this is the assertion that goes red, with
+     * groups 5 and 9 both unchanged. That is what makes "MAXSYSGROUP is 8,
+     * not merely some small number" a claim this suite can actually prove
+     * by mutation instead of one that is only ever stated.
+     */
+    ok = run_chkpro_as(MAXSYSGROUP, 8001, UIC(200, 201), prot_s_o_only,
+                        PROT_READ, &st);
+    check(ok && (st & 1) != 0,
+          "UIC at group == MAXSYSGROUP exactly is granted SYSTEM access "
+          "(pins the boundary at 8, not merely 'some small group')");
+
+    /*
      * NEGATIVE CONTROL, same mechanism: a group strictly above
      * MAXSYSGROUP (9) must NOT get the SYSTEM category -- it falls to
-     * WORLD, which the mask above denies. Pins the boundary at exactly 8,
-     * not "any small group".
+     * WORLD, which the mask above denies. Paired with the group ==
+     * MAXSYSGROUP case just above, this pins the boundary at exactly 8:
+     * that case proves the boundary is not BELOW 8, this one proves it is
+     * not ABOVE 8. Neither one alone does; a boundary anywhere in [5,8]
+     * still passes this case by itself, which is exactly the round-3 gap.
      */
     ok = run_chkpro_as(9, 9001, UIC(200, 201), prot_s_o_only, PROT_READ, &st);
     check(ok && (st & 1) == 0,

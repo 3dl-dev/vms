@@ -593,6 +593,21 @@ SYSTEM"), which is not a VMS rule at all — VMS has no root and `[0,0]` is not 
 valid UIC. It is replaced by the group comparison; root falls inside it
 incidentally (`0 <= 8`).
 
+**CORROBORATED AGAINST AN INDEPENDENT SOURCE (vms-2b8 round 4, 31-JUL-2026).**
+The capture above was, until this round, the ONLY evidence for MAXSYSGROUP=8
+anywhere in the tree — one branch citing its own transcript, which is
+self-certification, not a pin (CLAUDE.md Rule 10). The lab was mid-experiment
+(vms-760's 3-node cluster join) and could not be driven again safely, so this
+round corroborated the value against the VSI OpenVMS Wiki instead
+(https://wiki.vmssoftware.com/UIC_Protection, fetched 31-JUL-2026): "System
+refers to users with the UIC group of 0 through the value of MAXSYSGROUP (10
+by default; bear in mind that numbers in a UIC are octal)" — octal 10 is
+decimal 8, matching this transcript, from a source independent of both this
+tree and the lab. See `src/libvms/syssvc/sys_security.c`'s `OVMX_MAXSYSGROUP`
+comment for the full account, and `tests/libvms/test_protection.c` for the
+mutation that now proves the boundary is 8 and not merely "some small
+number."
+
 ### 7.3 Session notes (so the next reader does not repeat them)
 
 - VAX1 was being driven concurrently by another agent's cluster run, so these

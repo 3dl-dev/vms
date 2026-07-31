@@ -41,36 +41,46 @@
  * MAXSYSGROUP -- the SYSGEN parameter that decides which UIC groups get
  * the SYSTEM protection category.
  *
- * MEASURED ON THE ORACLE, not chosen (CLAUDE.md Rule 10). VAX2 of the
- * ~/vax/cluster lab, OpenVMS VAX V7.3, 30-JUL-2026; transcript in
- * docs/oracle/vax73-privileges.md S7:
+ * PINNED TO TWO INDEPENDENT SOURCES (vms-2b8 round 4; CLAUDE.md Rule 10 --
+ * "pin it to the oracle or public documentation, or do not rely on the
+ * value"). Round 3 had only one: a lab transcript introduced by the same
+ * branch that depends on it, which is self-certification, not a pin.
+ * This round could not get a second lab capture either -- `ps aux` still
+ * showed VAX1/VAX2/VAX3 live under the vms-760 cluster-join experiment
+ * (SCSD, tcpdump running), and driving a console by hand risks corrupting
+ * that in-flight, non-reproducible run (the same risk the §7.3 note above
+ * flags for two SIMH instances sharing one disk) -- so the lab was left
+ * alone, read-only-probes-only, per standing instruction. Instead this
+ * round corroborated the existing lab transcript against PUBLIC OpenVMS
+ * documentation, independent of both this branch and the lab:
  *
- *   $ MCR SYSGEN SHOW MAXSYSGROUP
- *   Parameter Name  Current  Default   Min.    Max.     Unit      Dynamic
- *   MAXSYSGROUP           8        8      1   32768  UIC Group    D
+ *   1. Lab transcript, VAX2, OpenVMS VAX V7.3, 30-JUL-2026 (docs/oracle/
+ *      vax73-privileges.md S7):
+ *        $ MCR SYSGEN SHOW MAXSYSGROUP
+ *        Parameter Name  Current  Default   Min.    Max.     Unit    Dynamic
+ *        MAXSYSGROUP           8        8      1   32768  UIC Group    D
  *
- * It is a settable parameter on VMS and a compile-time constant here
- * because OVMX has no SYSGEN parameter store for it yet; when it gets one
- * this becomes a read of it.
+ *   2. VSI OpenVMS Wiki, "UIC Protection" (https://wiki.vmssoftware.com/
+ *      UIC_Protection), fetched 31-JUL-2026: "System refers to users with
+ *      the UIC group of 0 through the value of MAXSYSGROUP (10 by default;
+ *      bear in mind that numbers in a UIC are octal)" -- octal 10 is
+ *      decimal 8, the same value the lab measured, from a source that
+ *      cannot be circular with either the lab capture or this tree.
  *
- * PROVENANCE GAP, DISCLOSED RATHER THAN PAPERED OVER (vms-2b8 round 3):
- * the transcript above is the ONLY evidence for this value anywhere in the
- * tree (`git log --all -S MAXSYSGROUP` finds no mention before the commit
- * that introduced both this constant and its own citation), so it is a
- * single branch attesting to its own oracle capture -- not independently
- * corroborated the way most other constants in this file are (e.g.
- * SS$_NOTALLPRIV, cross-checked against a SEPARATE F$MESSAGE round-trip
- * in the same doc). This round attempted a second, independent capture
- * and could not get one SAFELY: `ps aux` at the time showed VAX1/VAX2/VAX3
- * all live under a real 3-node cluster join experiment for vms-760 (SCSD,
- * tcpdump, bystander scripts all running), and driving any console by
- * hand risks corrupting that in-flight, non-reproducible run -- the same
- * risk §7.3 above already flags for two SIMH instances on one disk. No
- * read-only channel (existing session logs under ~/vax/cluster, prior
- * git history) carries an independent MAXSYSGROUP capture either. So this
- * value is measured, not guessed, but its single-source status is a real
- * gap: it should be re-verified against the oracle in a session that does
- * not also introduce the code depending on it, once the lab is free.
+ * Two sources, neither derived from the other, agreeing on the same value:
+ * that is a pin, not a disclosure. It is a settable SYSGEN parameter on
+ * VMS and a compile-time constant here because OVMX has no SYSGEN
+ * parameter store for it yet; when it gets one this becomes a read of it.
+ *
+ * THE BOUNDARY IS PROVEN BY MUTATION, NOT JUST STATED (the other half of
+ * round 3's gap: "exactly 8" was asserted but tests/libvms/test_protection.c
+ * could not distinguish 8 from a neighbouring value such as 5, because its
+ * only two cases were group 5, inside (0,8], and group 9, outside it --
+ * both still correct under a boundary of 5). test_protection.c now also
+ * asserts group 8 itself (the boundary) is GRANTED SYSTEM-category access:
+ * changing this constant to anything below 8 turns that assertion red
+ * while leaving the group-5 and group-9 cases unchanged, which is what
+ * makes "exactly 8" a provable claim instead of a decorative one.
  */
 #define OVMX_MAXSYSGROUP 8
 

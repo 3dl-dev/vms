@@ -493,19 +493,40 @@ static int cmd_set_process(struct dcl_command *cmd)
                       "no privilege for SET PROCESS /PRIVILEGES");
             return SS$_NOPRIV;
         }
-        /* Strip outer parens if present */
-        char pv[512];
-        strncpy(pv, privs_val, sizeof(pv) - 1);
-        pv[sizeof(pv) - 1] = '\0';
-        size_t pvlen = strlen(pv);
-        if (pvlen > 0 && pv[0] == '(') {
-            memmove(pv, pv + 1, pvlen);
-            pvlen--;
-        }
-        if (pvlen > 0 && pv[pvlen - 1] == ')') {
-            pv[pvlen - 1] = '\0';
-        }
-        ctx->privileges = parse_privilege_string(pv);
+        /*
+         * DOES NOT REACH THE EXECUTIVE, AND SAYS SO (vms-2b8 round 4,
+         * Rule 10's HIDE answer). This used to overwrite ctx->privileges
+         * outright with parse_privilege_string(pv) -- a local,
+         * unauthenticated self-assertion with no connection to the
+         * executive's real mask. MEASURED, this was a live bug: it
+         * silently discarded whatever ctx->privileges held (including
+         * SETPRV/CMKRNL/CMEXEC/WORLD, the executive's real enforced set)
+         * and replaced it with only the newly-named privilege, so the
+         * VERY NEXT SET PROCESS/PRIVILEGES call on the same session could
+         * fail its own SETPRV gate above -- a session locking itself out
+         * of a command it was genuinely authorized for, purely because an
+         * unrelated prior call had clobbered the local cache. And because
+         * dcl_lexical.c's F$PRIVILEGE used to read that same
+         * ctx->privileges, this command could make F$PRIVILEGE and SHOW
+         * PROCESS/PRIVILEGES (which reads the executive directly) disagree
+         * about the SAME process at the SAME moment -- this item's whole
+         * subject. F$PRIVILEGE no longer reads ctx->privileges at all (it
+         * asks the executive fresh, every call), so that specific
+         * contradiction is now structurally impossible regardless of what
+         * this command does. But the command still cannot honestly claim
+         * to have changed anything the executive enforces: MATCH VMS would
+         * mean calling vms_kif_setprv() (src/libvmssys/vms_kif.c), which
+         * exists but is declared OVMX-UNWIRED in vms_kif.h pending vms-pv1
+         * ($SETPRV wiring is that item's job, not this one's, and this
+         * round is under an explicit instruction not to touch that
+         * declaration or the vms_kif caller census while it is mid-flight
+         * on another branch). So this is HIDE, not MATCH, until vms-pv1
+         * lands: no local mutation, and a loud, honest diagnostic instead
+         * of silent success.
+         */
+        printf("%%OVMX-W-NOSETPRV, SET PROCESS/PRIVILEGES does not change "
+               "the executive's privilege state on this system yet "
+               "(vms-pv1) -- no privileges were changed\n");
     }
 
     return SS$_NORMAL;

@@ -120,6 +120,55 @@ SYSTEM_CMDS=(
     'SHOW DEVICE'
     'HELP SHOW'
 )
+
+# Index of the ORIGINAL 'SHOW PROCESS /PRIVILEGES' occurrence above, found
+# programmatically (not hand-counted) BEFORE the round-4 block below adds a
+# SECOND occurrence of the same text. Needed for the SAME reason
+# check_response_at exists (see its own comment): once a second occurrence
+# of this exact command text exists anywhere in SYSTEM_CMDS,
+# CMD_OUTPUT['SHOW PROCESS /PRIVILEGES'] holds whichever one ran LAST, so
+# even the check against the ORIGINAL, pre-SET occurrence must stop relying
+# on the text-keyed lookup once a duplicate is introduced -- checking it by
+# text after this point would (silently, if the two happened to answer the
+# same way) or would not (if they diverged) be checking the right one by
+# accident, not by construction.
+IDX_PRIV_ORIGINAL=-1
+for __i in "${!SYSTEM_CMDS[@]}"; do
+    if [ "${SYSTEM_CMDS[$__i]}" = "SHOW PROCESS /PRIVILEGES" ]; then
+        IDX_PRIV_ORIGINAL=$__i
+        break
+    fi
+done
+unset __i
+
+# DEFECT-1 PROOF (vms-2b8 round 4): SET PROCESS/PRIVILEGES must not corrupt
+# what F$PRIVILEGE or SHOW PROCESS/PRIVILEGES report for privileges the
+# executive actually holds. MEASURED before this fix, on this exact runtime:
+#   $ SHOW PROCESS/PRIVILEGES        -> Authorized: CMEXEC CMKRNL SETPRV WORLD
+#   $ SET PROCESS/PRIVILEGES=(OPER)
+#   $ SHOW PROCESS/PRIVILEGES        -> unchanged (reads the executive)
+#   $ F$PRIVILEGE("SETPRV")          -> "FALSE"   <-- was "TRUE" before the SET
+# 'SHOW PROCESS /PRIVILEGES' and the F$PRIVILEGE pattern both already
+# appear earlier in SYSTEM_CMDS above, so CMD_OUTPUT (keyed by command
+# TEXT -- see run_cmd) cannot be used to check these SECOND occurrences:
+# the array slot for that text is already claimed by the FIRST
+# occurrence's answer, and a second run_cmd() for the same text would
+# silently take over the same slot with no signal either way. That
+# exact hazard is check_response_at()'s reason to exist (see its comment
+# below) -- these are checked BY POSITION, not by re-using the command
+# text as a key. Indices are computed from ${#SYSTEM_CMDS[@]} at append
+# time, not hand-counted, so inserting or removing an earlier command
+# cannot silently desynchronize them.
+SYSTEM_CMDS+=('SET PROCESS/PRIVILEGES=(OPER)')
+SYSTEM_CMDS+=('SHOW PROCESS /PRIVILEGES')
+IDX_PRIV_AFTER_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
+SYSTEM_CMDS+=('IDENT_SETPRV2 = F$PRIVILEGE("SETPRV")')
+SYSTEM_CMDS+=('SHOW SYMBOL IDENT_SETPRV2')
+IDX_SETPRV2_AFTER_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
+SYSTEM_CMDS+=('IDENT_WORLD2 = F$PRIVILEGE("WORLD")')
+SYSTEM_CMDS+=('SHOW SYMBOL IDENT_WORLD2')
+IDX_WORLD2_AFTER_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
+
 USER_CMDS=(
     'TYPE SYS$MANAGER:LOGIN.COM'
     'COPY SYS$MANAGER:LOGIN.COM UATUSER.TXT'
@@ -254,14 +303,34 @@ wait_for 'Welcome to OVMX' || fail_with_console "ERROR: login did not succeed"
 # string we're checking for.
 declare -A CMD_OUTPUT
 
+# PARALLEL, POSITION-INDEXED CAPTURE (vms-2b8 round 4), alongside
+# CMD_OUTPUT above. CMD_OUTPUT is keyed by command TEXT, so the SAME text
+# run twice -- in this session or the other one -- makes the SECOND run's
+# output silently take over the associative-array slot; a check written
+# against the FIRST occurrence would then read the SECOND run's answer
+# with no signal that it happened. That is exploited ONCE, deliberately
+# and with a comment ('SHOW DEFAULT' below, checked only at its second,
+# post-SET-DEFAULT occurrence -- nothing ever checks the first), but nothing
+# stops a future addition from doing it BY ACCIDENT. CMD_OUTPUT_SEQ /
+# CMD_SEQ_LABEL give every run_cmd() call its own permanent slot by call
+# order, so a check that must distinguish two occurrences of the same
+# command text (see check_response_at() below) can, without renaming the
+# command or restructuring CMD_OUTPUT's existing keyed-by-text callers,
+# all of which are left exactly as they were.
+CMD_OUTPUT_SEQ=()
+CMD_SEQ_LABEL=()
+
 run_cmd() {
-    local cmd="$1" offset segment
+    local cmd="$1" offset segment out
     offset=$(wc -c <"$CONSOLE_LOG")
     send "$cmd"
     wait_for '$ ' "$COMMAND_TIMEOUT" "$offset" \
         || fail_with_console "ERROR: no DCL prompt after '$cmd'"
     segment=$(tail -c "+$((offset + 1))" "$CONSOLE_LOG" | tr -d '\r')
-    CMD_OUTPUT["$cmd"]=$(printf '%s\n' "$segment" | tail -n +2)
+    out=$(printf '%s\n' "$segment" | tail -n +2)
+    CMD_OUTPUT["$cmd"]="$out"
+    CMD_OUTPUT_SEQ+=("$out")
+    CMD_SEQ_LABEL+=("$cmd")
 }
 
 for cmd in "${SYSTEM_CMDS[@]}"; do
@@ -405,6 +474,27 @@ check_not_response() {
     fi
 }
 
+# ANCHORED CHECK BY CALL POSITION, NOT BY COMMAND TEXT (vms-2b8 round 4).
+# For asserting on the SECOND (or Nth) time the same command text runs in
+# this script -- where check_response()'s CMD_OUTPUT[$cmd] lookup would
+# silently return whichever occurrence wrote last, not necessarily the one
+# the caller means. Takes the index run_cmd() assigned (CMD_OUTPUT_SEQ),
+# computed at the call site from ${#SYSTEM_CMDS[@]} rather than hand-counted,
+# so it tracks the command list even if entries are added or removed above
+# it. The label in failure output comes from CMD_SEQ_LABEL, so a failure
+# still names the actual command, not just a bare index.
+check_response_at() {
+    local idx="$1" pattern="$2" label out
+    label="${CMD_SEQ_LABEL[$idx]}"
+    out="${CMD_OUTPUT_SEQ[$idx]}"
+    if printf '%s' "$out" | grep -qiE "$pattern"; then
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  FAIL: response to command #$idx ('$label') should contain '$pattern' (got: $(printf '%s' "$out" | tr '\n' ' '))"
+    fi
+}
+
 # SHOW TIME should print a VMS date (DD-MMM-YYYY) in its own response.
 # Anchored, not a whole-log scan: LOGOUT's own message ("logged out at
 # 1-JAN-1970 00:00:09.95") independently matches this exact date-format
@@ -517,17 +607,28 @@ check_known_divergence 'SHOW PROCESS' 'Process name: ""' \
 # pattern here, '(TMPMBX|NETMBX|OPER)', predates the operator ruling that
 # masks this display to VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h) --
 # privileges OVMX stores but does not enforce are no longer printed at all
-# (see src/vmsdcl/dcl_cmd_show.c's cmd_show_process_privileges). The
-# SYSTEM session's authorized mask on this runtime is exactly the enforced
-# set: CMKRNL, CMEXEC, SETPRV, WORLD. The old pattern would now silently
-# pass on an EMPTY privilege block too (TMPMBX/NETMBX/OPER can't appear,
-# but neither can anything else, and grep -qE against an empty capture
-# only fails, which happens to be visible -- verified this round: the old
-# pattern really did go red against the corrected output, it was not a
-# silent pass). It is corrected here rather than widened to accept both,
-# because accepting both would hide a future regression back to the
-# unmasked display.
-check_response 'SHOW PROCESS /PRIVILEGES' '(CMKRNL|CMEXEC|SETPRV|WORLD)'
+# (see src/vmsdcl/dcl_cmd_show.c's cmd_show_process_privileges). SYSTEM's
+# DISPLAYED authorized mask on this runtime -- after masking -- is exactly
+# CMKRNL, CMEXEC, SETPRV, WORLD.
+#
+# THAT IS NOT THE SAME CLAIM AS "SYSUAF AUTHORIZES SYSTEM EXACTLY THAT SET",
+# and round 3's comment here said the latter -- false, corrected round 4.
+# MEASURED: distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT's SYSTEM row
+# reads `SYSTEM||1|4|SYS$SYSDEVICE:[SYSMGR]||ALL` -- the seventh field,
+# privileges, is the literal string ALL (37 privileges), not a 4-privilege
+# list. The four names below are what SURVIVES THE VMS_PRV_M_ENFORCED
+# INTERSECTION of that ALL mask, which is a strict subset -- SYSPRV,
+# BYPASS, OPER, and 30-odd others are authorized by SYSUAF and correctly
+# do NOT appear here, because nothing in vms.ko enforces them (see that
+# constant's own comment). The old pattern would now silently pass on an
+# EMPTY privilege block too (TMPMBX/NETMBX/OPER can't appear, but neither
+# can anything else, and grep -qE against an empty capture only fails,
+# which happens to be visible -- verified this round: the old pattern
+# really did go red against the corrected output, it was not a silent
+# pass). It is corrected here rather than widened to accept both, because
+# accepting both would hide a future regression back to the unmasked
+# display.
+check_response_at "$IDX_PRIV_ORIGINAL" '(CMKRNL|CMEXEC|SETPRV|WORLD)'
 
 # F$PRIVILEGE MUST AGREE WITH SHOW PROCESS/PRIVILEGES ABOUT THE SAME
 # PROCESS AT THE SAME MOMENT (vms-2b8 round 3).
@@ -547,6 +648,41 @@ check_response 'SHOW PROCESS /PRIVILEGES' '(CMKRNL|CMEXEC|SETPRV|WORLD)'
 # read TRUE for the identical session.
 check_response 'SHOW SYMBOL IDENT_OPER' 'IDENT_OPER = "FALSE"'
 check_response 'SHOW SYMBOL IDENT_SETPRV' 'IDENT_SETPRV = "TRUE"'
+
+# SET PROCESS/PRIVILEGES MUST NOT BE ABLE TO DESYNCHRONIZE F$PRIVILEGE FROM
+# SHOW PROCESS/PRIVILEGES (vms-2b8 round 4 -- the part of defect 1 round 3's
+# fix missed).
+#
+# WHY THIS EXISTS. Round 3 masked F$PRIVILEGE to VMS_PRV_M_ENFORCED, which
+# fixed the OVER-claim direction (F$PRIVILEGE saying TRUE for an unenforced
+# privilege SHOW PROCESS/PRIVILEGES correctly omits) but left an UNDER-claim
+# direction open: cmd_set_process() (src/vmsdcl/dcl_cmd_set.c) used to
+# REPLACE ctx->privileges outright with whatever SET PROCESS/PRIVILEGES was
+# asked for, and F$PRIVILEGE used to read that same ctx->privileges.
+# MEASURED, before this round's fix, on this exact runtime:
+#   $ SHOW PROCESS/PRIVILEGES        -> Authorized: CMEXEC CMKRNL SETPRV WORLD
+#   $ SET PROCESS/PRIVILEGES=(OPER)
+#   $ SHOW PROCESS/PRIVILEGES        -> UNCHANGED (reads the executive directly)
+#   $ F$PRIVILEGE("SETPRV")          -> "FALSE"  <-- was "TRUE" one command earlier
+# Same process, same moment, two surfaces disagreeing about a privilege
+# (SETPRV) the executive never stopped enforcing. The fix: F$PRIVILEGE
+# (dcl_lexical.c's lex_privilege()) now asks the executive fresh on every
+# call, the same source SHOW PROCESS/PRIVILEGES reads, instead of the local,
+# SET-PROCESS-mutable ctx->privileges -- so the two cannot disagree by
+# construction, regardless of what SET PROCESS/PRIVILEGES does locally. That
+# command itself no longer claims a success it cannot deliver either: it
+# prints %OVMX-W-NOSETPRV and leaves ctx->privileges untouched, because
+# actually reaching the executive is vms-pv1's job (vms_kif_setprv exists
+# but is deliberately left OVMX-UNWIRED pending that item), not this one's.
+#
+# Checked BY POSITION (check_response_at), not by command text: 'SHOW
+# PROCESS /PRIVILEGES' and the F$PRIVILEGE pattern both already ran once
+# above in this same session, so CMD_OUTPUT[$cmd] would return whichever
+# occurrence ran LAST, not necessarily the one meant -- see
+# check_response_at's own comment for why that is unsafe to rely on here.
+check_response_at "$IDX_PRIV_AFTER_SET" '(CMKRNL|CMEXEC|SETPRV|WORLD)'
+check_response_at "$IDX_SETPRV2_AFTER_SET" 'IDENT_SETPRV2 = "TRUE"'
+check_response_at "$IDX_WORLD2_AFTER_SET" 'IDENT_WORLD2 = "TRUE"'
 
 # THE SESSION REALLY IS THE AUTHENTICATED USER AT THE OS LEVEL (vms-2b8
 # round 6). This is the only externally observable proof that

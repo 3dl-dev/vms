@@ -181,9 +181,8 @@ void dcl_context_init(struct dcl_context *ctx)
      *
      * REMEASURED ON THIS TREE (vms-47b round 5): vms-9fc has landed.
      * vms_kif_register() now has a product caller -- kif_bind()
-     * (src/libvmssys/vms_kif.c) registers the calling process on its
-     * first vms_kif_* call, including a first-ever
-     * vms_kif_getjpi_self(). JPI$_USERNAME is implemented
+     * (src/libvmssys/vms_kif.c), which a first-ever
+     * vms_kif_getjpi_self() reaches. JPI$_USERNAME is implemented
      * (src/libvms/syssvc/sys_process.c) and would resolve here. JPI$_CURPRIV
      * and JPI$_PROCPRIV are declared (prcdef.h) but sys$getjpi's item
      * switch has no case for either, so a read of the privilege mask

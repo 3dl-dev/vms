@@ -317,6 +317,17 @@ Two readings, both testable, both kept live behind `OVMX_CFG2_ALL`:
 
 Live 3-node cluster: VAX1 + VAX2 + VAX3.
 
+> ⚠ **AN UNVERIFIED PRECONDITION MUST ABORT, NEVER FALL THROUGH.** This voided
+> three runs before I fixed it. The probe
+> `WRITE SYS$OUTPUT "PRE_" + F$STRING(F$GETSYI("CLUSTER_NODES"))` returns an
+> **empty string** when the console does not answer (it is often sitting at
+> `Username:` after a reset). A caller doing `[ "$N" = "3" ] && break` then just
+> ... doesn't break, the loop expires, and the run proceeds against whatever the
+> lab happens to be — producing a plausible smaller number rather than an error.
+> Use **`bash tools/waitnodes.sh <N> [max-checks]`**, which re-logs-in on an
+> empty read and **exits non-zero** if it never sees N; and have the caller
+> `|| exit 1` on it. Never hand-roll this check again.
+
 > ⚠ **2026-07-30g: I broke the reset rule and got a junk result — don't repeat
 > it.** Runs `coord5` and `coord6` went out back-to-back with no reset between
 > them. By `coord6` the transition epoch had drifted to `0x00000007`, the barrier

@@ -56,6 +56,29 @@ echo "Using: $(command -v "$VMSDCL")"
 echo "Timeout: ${TIMEOUT}s per test"
 echo ""
 
+# Match $output against a pattern.
+#
+# Every call MUST pass the pattern after `--`. Without it, a pattern that
+# begins with a dash is parsed by grep as an OPTION: grep prints
+# "unrecognized option" and exits 2, and because 2 is neither 0 nor 1 the
+# caller's plain `if grep ...` reads it as "did not match". For an EXPECT that
+# is a spurious failure; for an EXPECT_NOT it is far worse — the assertion
+# passes UNCONDITIONALLY and can never go red. That is exactly what happened to
+# `# EXPECT_NOT: contains:---` in test_show_system.sh, the guard that keeps
+# Rule 10 placeholder markers out of SHOW SYSTEM: it was inert from the day it
+# was written (vms-6a7 round 2).
+#
+# So callers must also distinguish grep's three exit codes rather than testing
+# for zero: 0 = matched, 1 = did not match, >=2 = grep could not evaluate the
+# pattern at all. The third is a harness error and must fail the test loudly,
+# never be folded into "did not match" — a pattern that cannot be evaluated is
+# an assertion that cannot fail.
+grep_match() {
+    local flags="$1"
+    local pattern="$2"
+    printf '%s\n' "$output" | grep "$flags" -- "$pattern"
+}
+
 run_test() {
     local test_file="$1"
     local test_name
@@ -100,21 +123,32 @@ run_test() {
 
     # Check EXPECT annotations
     local failed=0
+    local mrc
     for expect in "${expects[@]}"; do
         if [[ "$expect" == regex:* ]]; then
             local pattern="${expect#regex:}"
-            if ! echo "$output" | grep -qE "$pattern"; then
+            grep_match -qE "$pattern"; mrc=$?
+            if [ $mrc -ne 0 ]; then
                 echo "FAIL: $description"
-                echo "  Expected regex: $pattern"
+                if [ $mrc -gt 1 ]; then
+                    echo "  HARNESS ERROR: grep could not evaluate regex: $pattern"
+                else
+                    echo "  Expected regex: $pattern"
+                fi
                 echo "  Output: $(echo "$output" | head -5)"
                 failed=1
                 break
             fi
         elif [[ "$expect" == contains:* ]]; then
             local needle="${expect#contains:}"
-            if ! echo "$output" | grep -qF "$needle"; then
+            grep_match -qF "$needle"; mrc=$?
+            if [ $mrc -ne 0 ]; then
                 echo "FAIL: $description"
-                echo "  Expected to contain: $needle"
+                if [ $mrc -gt 1 ]; then
+                    echo "  HARNESS ERROR: grep could not evaluate needle: $needle"
+                else
+                    echo "  Expected to contain: $needle"
+                fi
                 echo "  Output: $(echo "$output" | head -5)"
                 failed=1
                 break
@@ -127,18 +161,28 @@ run_test() {
         for expect_not in "${expect_nots[@]}"; do
             if [[ "$expect_not" == regex:* ]]; then
                 local pattern="${expect_not#regex:}"
-                if echo "$output" | grep -qE "$pattern"; then
+                grep_match -qE "$pattern"; mrc=$?
+                if [ $mrc -ne 1 ]; then
                     echo "FAIL: $description"
-                    echo "  Should NOT match regex: $pattern"
+                    if [ $mrc -gt 1 ]; then
+                        echo "  HARNESS ERROR: grep could not evaluate regex: $pattern"
+                    else
+                        echo "  Should NOT match regex: $pattern"
+                    fi
                     echo "  Output: $(echo "$output" | head -5)"
                     failed=1
                     break
                 fi
             elif [[ "$expect_not" == contains:* ]]; then
                 local needle="${expect_not#contains:}"
-                if echo "$output" | grep -qF "$needle"; then
+                grep_match -qF "$needle"; mrc=$?
+                if [ $mrc -ne 1 ]; then
                     echo "FAIL: $description"
-                    echo "  Should NOT contain: $needle"
+                    if [ $mrc -gt 1 ]; then
+                        echo "  HARNESS ERROR: grep could not evaluate needle: $needle"
+                    else
+                        echo "  Should NOT contain: $needle"
+                    fi
                     echo "  Output: $(echo "$output" | head -5)"
                     failed=1
                     break

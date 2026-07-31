@@ -46,6 +46,17 @@
 # none covers the others.
 # EXPECT_NOT: contains:State
 # EXPECT_NOT: contains:Page flts
+#
+# THE `---` GUARD BELOW WAS INERT UNTIL vms-6a7 ROUND 2, AND THAT IS WORTH
+# KNOWING BEFORE YOU TRUST ANY EXPECT_NOT IN THIS TREE. run_dcl_tests.sh ran
+# `grep -qF "$needle"` with no `--`, so `---` was parsed as a grep OPTION:
+# grep exited 2, the harness read that as "did not match", and the assertion
+# passed unconditionally. A build printing "PLACEHOLDER      ---   ---   ---"
+# from cmd_show_system() reported 90 passed, 0 failed. The harness now passes
+# `--` and treats grep's exit >= 2 as a hard error, and tests/dcl/
+# selftest_harness.sh (ctest: dcl-harness-selftest) drives that fix against
+# synthetic cases so it cannot silently regress. Re-measured after the fix:
+# the same placeholder build reddens this file.
 # EXPECT_NOT: contains:---
 VMSDCL="${VMSDCL:-vmsdcl}"
 echo "SHOW SYSTEM" | $VMSDCL 2>&1

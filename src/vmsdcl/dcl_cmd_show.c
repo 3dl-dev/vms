@@ -1362,11 +1362,13 @@ static int cmd_show_status(struct dcl_command *cmd)
  *   rather than invented. Printing no name is the correct state: an
  *   unanswerable question gets no answer (rule 10).
  *
- *   CHECKED, 2026-07-30, so the next reader does not re-derive it: the
- *   executive process table that landed with vms-9fc DOES NOT CARRY A
- *   TERMINAL. struct vms_procinfo (src/kernel/vms_ioctl.h) holds
- *   vms_pid, linux_pid, prcnam, uic, current_mode and cur_privs and
- *   nothing else. So vms-8019, which converts the process-table READERS
+ *   RE-CHECKED, 2026-07-31, against main's current header so the next
+ *   reader does not re-derive it: the executive process table DOES NOT
+ *   CARRY A TERMINAL. struct vms_procinfo (src/kernel/vms_ioctl.h) holds
+ *   vms_pid, linux_pid, prcnam, uic, current_mode, redacted, cur_privs,
+ *   perm_privs and username (the last three added since the field was
+ *   first checked) -- still nothing that names a device. So vms-8019,
+ *   which converts the process-table READERS
  *   (SHOW SYSTEM, SHOW PROCESS), does not unblock this either -- there
  *   is no field for it to read. What SHOW TERMINAL needs is a
  *   job-to-terminal binding IN the executive, established where the

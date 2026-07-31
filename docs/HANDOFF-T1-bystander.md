@@ -9,16 +9,28 @@ came from a subagent reading a capture, and the orchestrator read none of them.*
 
 ## 0. Status in one paragraph
 
-`vms-760` and `vms-4f2` remain CLOSED — OVMX joins a real VMScluster and
-`SHOW CLUSTER` on a real VAX lists it as MEMBER. This session settled the open
-question from session g, **proved the T1 bystander property live in one of its
-two forms**, and found the root cause of the other.
+**T1.1 (`vms-e81`) is DONE. Both bystander cases pass on the real lab.** OVMX
+sits as a MEMBER while another node joins *and* while another node fails, answers
+the cluster-wide barrier for both, and is still a MEMBER afterwards with zero
+aborts and nothing stranded.
 
-| | state |
-|---|---|
-| plain join → MEMBER | **verified this session** (run `v1`) |
-| bystander of a **removal** (class `0x03`) | **WORKS, proved live** (run `rm1`) |
-| bystander of an **addition** (class `0x02`) | root cause found and fixed — **necessary but NOT sufficient**; see §2 |
+```
+View of Cluster from system ID 1025  node: VAX1
+| VAX1   | VMS V7.3 | MEMBER  |
+| VAX2   | VMS V7.3 | MEMBER  |
+| OVMXBD | VMX V0.1 | MEMBER  |     <- OVMX, a bystander to VAX3's join
+| VAX3   | VMS V7.3 | MEMBER  |
+```
+
+| | state | run |
+|---|---|---|
+| plain join → MEMBER | **verified** | `v1` |
+| bystander of a **removal** (class `0x03`) | **PASSES** | `rm1` |
+| bystander of an **addition** (class `0x02`) | **PASSES** | `by13` |
+
+`by13`: `transitions=2 xitgo=2 restarts=0`, `aborts=0`. Epoch 4 = OVMX's own
+admission, epoch 5 = VAX3's addition — **OVMX's second completed barrier, for a
+transition it had nothing to do with.**
 
 ## 1. What was settled, and what it cost to learn
 
@@ -145,49 +157,45 @@ the `op 0x09` echo — it is the coordinator's **membership bitmap** (popcount =
 member count, 54/54), and the responder zeroes it because it is not the
 responder's to assert. Spec §4(p) and the new §4(r) carry all of this.
 
-## 2. ⚠ FIRST THING TO DO — read `docs/analysis-e81-by11.md`
+## 2. How the addition case was finally solved
 
-Run `by11` shipped the reciprocal-config fix and **it is correct, necessary, and
-not sufficient.**
+`by11` shipped the reciprocal-config fix. It was **correct, necessary, and not
+sufficient** — the frames were right, at +0.1 ms against a reference 0.3–0.9 ms,
+with a byte-exact SYSAP header. Two independent capture analyses then converged
+on the real blocker:
 
-**What worked.** `SCSD-I-CMRECIP` fired in the *same millisecond* as VAX3's
-`cat 0x01 op 0x14` (`smsg=1 amsg=0`), on the VC VAX3 opened to us — the reference
-cadence. Our own join was unaffected (`PHASE1 transitions=1 restarts=0
-xitrole_warnings=0`). The dialogue measurably advanced:
+> **OVMX was advertising the JOINER form of `cat 0x01 op 0x01` while sitting in
+> the cluster as a MEMBER** — 131 of 132 body bytes identical to what a node
+> emits when it is in no cluster at all.
 
-| peer-table field for VAX3 | `by10` (before) | `by11` (after) |
-|---|---|---|
-| `cm_config` | `no` | **`YES`** |
-| `sysap_send` / `sysap_recv` | 2 / 2 | **6 / 3** |
+A newcomer asks every member *"what cluster are you in?"*. VAX1 and VAX2 answered
+"3 members, formed 02:02:11.14, last transition 02:05:31.79" — that transition
+being OVMX's own admission. OVMX answered **"no cluster, 0 members, admitted
+1-JAN-2001"**, i.e. 25 years before the cluster it was in was formed. The newcomer
+could not close its view of the membership and never issued its add-member
+request, to anyone, for 678 s.
 
-**What still fails.** VAX3 did not join. The cluster stayed at 3 nodes
-(VAX1+VAX2+OVMX), `aborts=0`, OVMX remained MEMBER throughout. **We still break
-nothing — we are still a black hole one node sits behind.**
+It worked during OVMX's own join *because that is what OVMX was*. The encoding
+was simply never updated when OVMX became a member.
 
-So the reading "the newcomer requires the reciprocal config from every member it
-holds a VC with" is **necessary but incomplete**. Something further is owed.
-Do **not** re-run the patience or ordering experiments; those are already excluded.
+Seven fields, each grounded by a controlled variation **inside a single capture**
+— full map and provenance in `docs/analysis-e81-by11.md`. Fixed in `88c98a7`,
+with `cluster_formed` / `last_transition` **copied verbatim from a member's own
+`op 0x01` and never computed** (Rule 10 — they are facts about the cluster, not
+about us). `SCSD-I-CLUSTATE` logs the copy live. Also removed: OVMX was sending
+the **joiner's** `op 0x02` to the newcomer — an established member asking a
+non-member to admit *it*.
 
-**The next experiment was dispatched before the session ended and writes its
-report to `docs/analysis-e81-by11.md`. Read that file first.** It asks: byte-diff
-OVMX's reciprocal `op 0x14`/`op 0x01` against VAX1's (control frames 3714/3715)
-and VAX2's (3774/3775), and enumerate **every** frame VAX3 receives between its
-own `op 0x14` and its `op 0x02` in the control, checking each against `by11`.
-**The first item present in the control and absent in `by11` is the answer.**
+**The discriminator, now answered.** The analysis left two readings open. In
+`by13`, VAX3 sent **no `cat 0x01 op 0x02` to OVMX** — it aimed its add-member
+request at a real VAX. So the gate was **cross-peer consistency**, not
+last-reciprocator selection: a newcomer requires *every* peer it holds a VC with
+to advertise a coherent member-form cluster state, but does not necessarily then
+choose that peer as its coordinator.
 
-Prime suspects, in order:
-
-1. **Our reciprocal's SYSAP header.** The reference member sends `smsg=1 amsg=0`
-   then `smsg=2 amsg=0`. OVMX's `sysap_send` counter for that peer may already be
-   non-zero when the config arrives, so ours may go out as `smsg=2,3`.
-2. **Defect #1 below** — OVMX freezes its shared `send_seq` to a peer and becomes
-   structurally unable to send it anything. In `by10` that happened ~6.6 s after
-   the config arrived.
-3. A **third** config message, or an obligation on another connection, that the
-   control shows and we do not send.
-
-Specimen: `captures/ovmx-e81-by11-reciprocated-still-no-join-20260731.pcap`.
-Last SCSSYSTEMID used: **1207**.
+**Third time the premise inverted the same way on this item** — the newcomer
+looked like it was ignoring us and was blocked on us. Missing op-1 CONNECT-ECHO,
+then missing reciprocal config, then a reciprocal that said the wrong thing.
 
 ## 3. The four grounded defects deliberately NOT shipped this session
 

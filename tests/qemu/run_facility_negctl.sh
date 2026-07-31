@@ -62,9 +62,12 @@
 #     knock_on_fail and justify it in knock_on_why -- so an over-broad mutation
 #     becomes a visible, argued fact instead of a silent pass.
 #   - "the declared blind suites stayed green" pins a KNOWN GAP as a fact in CI
-#     output: three suites hand-register and therefore cannot see the
-#     bind-client-no-register defect (rd vms-f27). Listing them as merely
-#     "allowed to redden" hid that behind a set the control only permits.
+#     output: the suites named in a defect's blind_suites field hand-register
+#     directly and therefore cannot see the bind-client-no-register defect
+#     (rd vms-f27; the count and names are derived from blind_suites at run
+#     time, not hand-recited here -- see facility_defects.sh). Listing them
+#     as merely "allowed to redden" hid that behind a set the control only
+#     permits.
 #   - "vms.ko still loaded" catches a mutation that merely broke the module,
 #     which would make this an expensive re-run of the executive-absent
 #     control rather than a facility control.

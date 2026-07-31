@@ -920,8 +920,8 @@ EOF
         # tripped (blind_suites is still four entries, so it was true by
         # coincidence, not by construction). _blind_n is now computed from
         # defect_field "$_d" blind_suites the same way _n is computed from
-        # suites_red, so the count in the sentence and the field twenty
-        # lines above it cannot disagree.
+        # suites_red, so the count in the sentence and the blind_suites
+        # field above it cannot disagree.
         why)
             _suites_red=$(defect_field "$_d" suites_red)
             _n=$(set -- $_suites_red; echo $#)

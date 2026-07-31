@@ -937,8 +937,24 @@ EOF
         # away from the executive. The two arrived on separate branches; this
         # list is the UNION, re-derived by running the control on the merged
         # tree rather than kept from either side of the rebase conflict.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service";;
-        blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
+        # test_syssvc_showterm is the SIXTH, added by vms-d0b, and it arrived
+        # the same way every one of the others did -- NOT PREDICTED, READ OFF
+        # A RUN. The full sweep this dispatch required reported it as one
+        # suite outside the declared set and 9 assertions outside the named
+        # set, which is both directions of the equality check firing at once,
+        # which is the check working. It belongs here for the same reason
+        # test_syssvc_showdev does: it drives the REAL DCL.EXE, a product
+        # image that binds the way a product image binds, so deleting
+        # kif_bind()'s registration takes the whole command away from the
+        # executive. It is not a candidate for the blind set below -- it
+        # hand-registers nothing.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm";;
+        # test_kmod_setterm (vms-d0b) joins the blind set, MEASURED in the
+        # same run: it stayed rc=0 with the defect injected, because
+        # open_and_register() hand-registers exactly like test_kmod_devtab
+        # and test_kmod_procnam beside it. That is the pattern the blind_why
+        # paragraph below says is still spreading -- and it spread again.
+        blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock test_kmod_setterm";;
         blind_why)    cat <<'EOF'
 The suites named in blind_suites above drive the product's own vms_kif
 client, so restoring the vms-9fc defect (kif_bind() no longer calling
@@ -1068,6 +1084,15 @@ the cluster state word agrees with the status: flag 1's bit is SET
 the second process allocated OPA0: through the executive ($ALLOC)
 A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
 the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+a second process put the console in a known state through the executive (IO$_SETMODE)
+SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
+the characteristics heading is printed (oracle section 2)
+grid row 1 is byte-for-byte the V7.3 capture
+grid row 2 is byte-for-byte the V7.3 capture
+grid row 4 is byte-for-byte the V7.3 capture
+grid row 10 is byte-for-byte the V7.3 capture
+the last row carries the single remaining characteristic, unpadded
+A-WRITES/B-READS: width and page are the ones a DIFFERENT process set through the executive
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -1226,6 +1251,25 @@ which is exactly the property the require_fail entries name one and two layers
 down. This entry was ABSENT while that suite existed -- the branch that added
 the suite never ran the whole sweep -- so the control was failing on an
 unnamed red set rather than passing on a named one.
+TEST_SYSSVC_SHOWTERM, THE SEVENTH SUITE (vms-d0b) -- READ OFF THE FULL SWEEP
+THAT ITEM WAS REQUIRED TO RUN, NOT PREDICTED, and it arrived on the very first
+execution after the suite was written. It drives the real DCL.EXE too, so it
+reaches the same wall from a seventh door, and its nine reds split in two:
+  - "a second process put the console in a known state through the executive
+    (IO$_SETMODE)" is the wall itself. That process cannot register, so its
+    $ASSIGN of the console fails and the IO$_SETMODE that follows has no
+    channel.
+  - the other eight are all one consequence of one line. cmd_show_terminal
+    asks the executive which terminal this job is on BEFORE anything else,
+    and prints nothing at all when it gets no answer -- so with no bind the
+    entire SHOW TERMINAL output disappears and every assertion about its
+    content goes with it: the header, the four pinned grid rows, the last
+    row, and the width/page line.
+What stays GREEN in that suite is what keeps this from looking like a
+blunderbuss: its unbound run still correctly names no terminal, and its final
+check that this process has no terminal of its own still holds.
+Its sibling test_kmod_setterm stays green entirely and is declared in
+blind_suites for the reason the paragraph above gives: it hand-registers.
 MERGED (vms-47b round 5, rebase onto main after vms-6a7/vms-2a8): this defect's
 declaration forked into two branches that each added a suite without seeing
 the other's addition -- main gained test_syssvc_showproc and the two event-flag

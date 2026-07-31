@@ -365,6 +365,21 @@ int main(void)
     pid_t child;
     struct stat st;
 
+    /*
+     * A BROKEN PIPE MUST BE A NAMED FAILURE, NOT A DEAD TEST, and this line
+     * is here because it was neither until the full negative-control sweep
+     * showed it. Under the bind-client-no-register control the writer child
+     * cannot register with the executive, so it reports its failure and
+     * exits -- and the parent's next write to the gate pipe then killed the
+     * whole program with SIGPIPE, rc=141. The suite's verdict became a
+     * signal number, which attributes nothing: the sweep could not tell a
+     * suite that FOUND the defect from one that fell over. With the signal
+     * ignored, every one of those writes falls into the checked
+     * `if (write(...) != 1)` branches below and prints a FAIL line naming
+     * what it was doing.
+     */
+    signal(SIGPIPE, SIG_IGN);
+
     printf("=== test_syssvc_showterm (DCL SHOW TERMINAL reads the executive) ===\n");
 
     if (stat(dcl_path(), &st) != 0) {

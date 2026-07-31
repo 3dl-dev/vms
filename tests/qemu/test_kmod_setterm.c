@@ -204,6 +204,17 @@ int main(int argc, char **argv)
         return 0;
     }
 
+    /*
+     * A broken pipe must be a NAMED failure, not a dead test. If process A
+     * exits early -- which it does the moment the executive refuses it
+     * anything -- the parent's write to the gate pipe would otherwise kill
+     * this program with SIGPIPE and the suite's verdict would be a signal
+     * number, attributing nothing. Its sibling test_syssvc_showterm was
+     * MEASURED doing exactly that under the bind-client-no-register control
+     * (rc=141) before this line was added to both.
+     */
+    signal(SIGPIPE, SIG_IGN);
+
     printf("=== test_kmod_setterm: job-to-terminal binding (vms-d0b) ===\n");
 
     if (open_and_register() < 0) {

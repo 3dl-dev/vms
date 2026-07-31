@@ -1584,22 +1584,27 @@ static void show_terminal_render(const struct vms_devinfo *info)
            owner);
 
     /*
-     * Width and page length, in the oracle's own spellings and field
-     * widths ("Width: 132" is Width: followed by %4d; "Page:   24" is
-     * Page: followed by %5d).
+     * WIDTH AND PAGE ARE NOT PRINTED (vms-d0b), CORRECTING THE SAME
+     * MISTAKE ONE FIELD LATER. The line this replaced put them on one
+     * line, "   Width:%4u      Page:%5u\n\n" -- a layout the oracle has
+     * never shown. Section 2 of docs/oracle/vax73-terminal-device.md
+     * prints them on TWO SEPARATE lines, each one field among five
+     * (Input:/Output: speed, LFfill:/CRfill:, Width:/Page:, Parity:),
+     * and OVMX has no value for four of those five. Crushing the two
+     * fields we DO have onto a single line invents a layout VMS does
+     * not use -- the same charge that got the renderer THIS FUNCTION
+     * replaced deleted, just moved one field over.
      *
-     * WHAT IS MISSING FROM THIS BLOCK IS MISSING ON PURPOSE. The
-     * oracle prints Width and Page inside a two-line block that also
-     * carries Input/Output speed, LFfill/CRfill and Parity. OVMX's
-     * console is a QEMU serial line with no such parameters, the
-     * executive carries no value for them (see struct vms_devinfo),
-     * and a reader cannot print a number it does not have. So those
-     * fields are absent rather than filled with a plausible value
-     * (rule 10) -- and because they are absent, the two-line block
-     * they belong to is not reproduced either: what is printed is the
-     * part that is true.
+     * The two candidate honest answers were "pin it" (reproduce the
+     * two-line form, leaving the four missing fields blank) or "print
+     * neither". Pinning was rejected: nobody has ever seen VMS print
+     * that block with Input/Output/LFfill/CRfill/Parity blank, so
+     * inventing the blanks' spacing would be exactly the same
+     * fabrication one field further in. Width and Page are
+     * A-writes/B-reads proven against the executive at the kernel
+     * layer instead (tests/qemu/test_kmod_devtab.c), which is where
+     * that property belongs when the display cannot show it honestly.
      */
-    printf("   Width:%4u      Page:%5u\n\n", info->width, info->page);
 
     printf("Terminal Characteristics:\n");
     for (i = 0; i < ncells; i++) {

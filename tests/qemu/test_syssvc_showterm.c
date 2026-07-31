@@ -31,13 +31,19 @@
  * that looks most like a reader -- "OPA0: is the only terminal in the device
  * table, so it must be mine". All of them answer identically in both runs.
  *
- * AND THE CHARACTERISTICS ARE A-WRITES / B-READS. A second process assigns the
- * console and changes its width and two characteristic bits through the
+ * AND THE CHARACTERISTIC BITS ARE A-WRITES / B-READS. A second process assigns
+ * the console and changes two characteristic bits (Echo, Pasthru) through the
  * executive (IO$_SETMODE); DCL -- a third process, which changed nothing --
  * must report the new values, and must report the old ones again once they are
  * put back. Both directions are asserted: a reader that always printed the new
  * value would pass the first, and one that always printed the default would
- * pass the second.
+ * pass the second. The same process also sets Width through the identical
+ * IO$_SETMODE call, but SHOW TERMINAL prints no Width/Page line at all
+ * (vms-d0b deleted an invented one-line layout for it -- see
+ * show_terminal_render() in src/vmsdcl/dcl_cmd_show.c), so what this suite
+ * asserts about Width is its ABSENCE, in every one of the three states below;
+ * its A-writes/B-reads proof lives at the kernel layer instead
+ * (tests/qemu/test_kmod_devtab.c).
  *
  * ORACLE-PINNED OUTPUT, docs/oracle/vax73-terminal-device.md:
  *   section 1  -- the physical name form "_OPA0:" in the header.
@@ -472,8 +478,12 @@ int main(void)
           "grid row 10 is byte-for-byte the V7.3 capture");
     CHECK(has_line(out, ORACLE_ROW_13),
           "the last row carries the single remaining characteristic, unpadded");
-    CHECK(has_line(out, "   Width: 132      Page:   24"),
-          "A-WRITES/B-READS: width and page are the ones a DIFFERENT process set through the executive");
+    CHECK(!has_line_prefix(out, "   Width:") && !has_line_prefix(out, "   Page:"),
+          "SHOW TERMINAL prints no Width/Page line -- the oracle shows them "
+          "only inside a block with Input/Output speed, LFfill/CRfill and "
+          "Parity that OVMX cannot source, and a renderer that printed just "
+          "the two fields it has would be the invented layout vms-d0b "
+          "deleted (docs/oracle/vax73-terminal-device.md section 2)");
 
     /* ---- 4. A changes the device; DCL, a third process, sees it ------ */
     if (write(stopfd[1], "g", 1) != 1) {
@@ -485,8 +495,8 @@ int main(void)
 
     if (run_dcl("SHOW TERMINAL", 1, out, sizeof(out)) == 0) {
         show_capture("SHOW TERMINAL (while another process holds the change)", out);
-        CHECK(has_line(out, "   Width:  80      Page:   24"),
-              "A-WRITES/B-READS: DCL reports the width that other process set -- a per-process terminal could not show it");
+        CHECK(!has_line_prefix(out, "   Width:") && !has_line_prefix(out, "   Page:"),
+              "...still no Width/Page line while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost");
         CHECK(has_line(out,
               "   Interactive        No Echo            Type_ahead         No Escape"),
               "...and the cleared Echo bit, in the grid cell the oracle prints it in");
@@ -506,8 +516,8 @@ int main(void)
 
     if (run_dcl("SHOW TERMINAL", 1, out, sizeof(out)) == 0) {
         show_capture("SHOW TERMINAL (after the change was undone)", out);
-        CHECK(has_line(out, "   Width: 132      Page:   24"),
-              "the width goes back, so the reader is not printing a constant");
+        CHECK(!has_line_prefix(out, "   Width:") && !has_line_prefix(out, "   Page:"),
+              "...and still no Width/Page line once the width is back to 132 -- the absence does not track the value either");
         CHECK(has_line(out, ORACLE_ROW_1),
               "...and grid row 1 is the oracle's bytes again, so neither is the grid");
     } else {

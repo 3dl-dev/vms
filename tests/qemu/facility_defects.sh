@@ -159,6 +159,7 @@ devtab-alloc-not-recorded
 setterm-binding-not-recorded
 proctab-duplicate-name
 proctab-crossgroup-identity
+proctab-terminal-redaction-bypassed
 ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
@@ -591,11 +592,8 @@ grid row 2 is byte-for-byte the V7.3 capture
 grid row 4 is byte-for-byte the V7.3 capture
 grid row 10 is byte-for-byte the V7.3 capture
 the last row carries the single remaining characteristic, unpadded
-A-WRITES/B-READS: width and page are the ones a DIFFERENT process set through the executive
-A-WRITES/B-READS: DCL reports the width that other process set -- a per-process terminal could not show it
 ...and the cleared Echo bit, in the grid cell the oracle prints it in
 ...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
-the width goes back, so the reader is not printing a constant
 ...and grid row 1 is the oracle's bytes again, so neither is the grid
 EOF
                       ;;
@@ -613,9 +611,22 @@ The rest are test_syssvc_showterm's, and they are all one consequence:
 cmd_show_terminal reads the binding FIRST and prints nothing at all when there
 is none, so with the write gone, the entire SHOW TERMINAL output disappears
 and every assertion about its content goes with it -- the header, each pinned
-grid row, the width/page line, and both directions of the A-writes/B-reads
-characteristic check. That is not a second defect: it is the reader behaving
-exactly as it must when the executive reports no terminal.
+grid row, and both directions of the A-writes/B-reads characteristic check.
+That is not a second defect: it is the reader behaving exactly as it must
+when the executive reports no terminal.
+
+NOT HERE, AND MEASURED RATHER THAN ASSUMED (vms-d0b): the three Width/Page
+assertions this list used to carry are gone, not just renamed. SHOW TERMINAL
+stopped printing a Width/Page line at all (this fix deleted the one-line
+layout that was never oracle-observed -- see
+show_terminal_render() in src/vmsdcl/dcl_cmd_show.c), so
+tests/qemu/test_syssvc_showterm.c now asserts Width/Page's ABSENCE in every
+state. An absence check is trivially satisfied when the whole binding
+disappears -- there being no Width/Page line either way -- so this mutation
+cannot make it red, and re-running the control after the round-3 edit
+confirmed exactly that: test_syssvc_showterm's contribution to the red set
+(require_fail's 1 plus this suite's share of knock_on_fail) shrank from 13 to
+10 without this manifest changing, until this entry was corrected to match.
 
 What stays GREEN is what makes this isolated rather than a blunderbuss: the
 unbound run still names nothing, the SS$_IVCHAN refusal still fires, the row
@@ -703,13 +714,17 @@ an unprivileged process is REFUSED a process in another UIC group
 ... and gets no part of that process's identity
 ... and the refusal returns no part of the row
 ... but WITHOUT its user name, UIC or privilege mask
+TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
 EVERY EXTRA IS THE SAME REFUSAL SEEN FROM A DIFFERENT SIDE, not a second
-property. All seven were MEASURED by running this control, not predicted:
+property. All eight were MEASURED by running this control, not predicted:
 the first run named only the two SHOW-PROCESS assertions and the driver's
-equality check rejected it and printed the rest.
+equality check rejected it and printed the rest. The eighth (the terminal
+one) arrived on a LATER run, the same way -- not predicted, READ OFF A RUN --
+after vms-d0b added a terminal field to the same redacted row this control
+already opens up (see below).
 
 "the by-PID refusal printed no process header" is the paired negative of the
 require_fail assertion above: with the read wrongly ALLOWED, SHOW PROCESS/ID
@@ -735,16 +750,31 @@ and the row redaction -- which is the design, not a coincidence: identity is
 privileged and enumeration is not (docs/oracle/vax73-privileges.md Section
 5.5), and this clause is where that split is decided.
 
-THE FIVE test_kmod_ident REDS are the SAME clause one layer down, at the raw
+THE SIX test_kmod_ident REDS are the SAME clause one layer down, at the raw
 ioctl rather than through the public sys$ API and DCL. That suite's own
 wording says so -- "WORLD CLAUSE ISOLATED: the same cross-group read, now
 without WORLD -> SS$_NOPRIV" is vms-2b8's isolation of exactly this
-condition. Its other four are that assertion's paired negatives (the refusal
-must return no part of the row) and the unprivileged-caller form of it. There
-is no finer edit available: vms_proc_may_read() IS the clause, and every
-suite that exercises a cross-group read reaches it. Splitting the mutation
-further would mean mutating a caller instead of the rule, which would test
-the caller.
+condition. Four more are that assertion's paired negatives (the refusal
+must return no part of the row) and the unprivileged-caller form of it.
+There is no finer edit available: vms_proc_may_read() IS the clause, and
+every suite that exercises a cross-group read reaches it. Splitting the
+mutation further would mean mutating a caller instead of the rule, which
+would test the caller.
+
+THE SIXTH, the terminal one, is the SAME clause reaching a field that did
+not exist when the other five were written. vms_ioctl_procscan() (src/
+kernel/vms_proctab.c) calls proc_fill_info() with vms_proc_may_read()'s
+outcome as `full`, and proc_fill_info() withholds proc->terminal on exactly
+that condition (vms-d0b) -- the identical decision "the UNREADABLE row
+fabricates NO CPU figure at all" names two paragraphs up, for a field
+added later. With the WORLD clause deleted, D's row stops being redacted
+altogether, so test_kmod_ident's D genuinely has a terminal to leak (it
+binds one, see process_d() in that file) and this control makes it leak.
+The check is proctab-terminal-redaction-bypassed's OWN concern from the
+other direction -- that control mutates proc_fill_info() directly and
+reddens only this one assertion; this control mutates the authorisation
+one layer up and reddens six, one of which happens to be the same
+assertion, MEASURED, not designed to overlap.
 
 NOT reddened, and worth stating because it is the attribution: the
 SAME-GROUP reads stay green throughout (SHOW PROCESS <name> on the subject,
@@ -755,6 +785,35 @@ survives the mutation. That is the measured evidence that this control names
 the cross-group AUTHORISATION and nothing else.
 EOF
                       ;;
+        esac;;
+
+    proctab-terminal-redaction-bypassed)
+        case "$_f" in
+        facility)     echo "process table, terminal field on a redacted row (proc_fill_info(), vms-d0b)";;
+        targets)      echo "kernel/vms_proctab.c";;
+        # This is proc_fill_info()'s OWN clause, not vms_proc_may_read()'s:
+        # the caller's authorisation is untouched, so vms_ioctl_getjpi()'s
+        # direct refusal (SS$_NOPRIV, no row at all) never calls
+        # proc_fill_info() with full=false in the first place and cannot
+        # observe this defect. Only vms_ioctl_procscan() calls it that way
+        # (SHOW SYSTEM / PROCSCAN enumeration), so test_kmod_ident's scan_d
+        # check -- the only assertion in the tree that binds a real terminal
+        # to a process it then reads back through a redacted PROCSCAN row --
+        # is the only place this can go red. MEASURED: the full 25-suite
+        # sweep with the mutation applied reddened exactly this one
+        # assertion, nothing in test_syssvc_showproc or test_syssvc_procnam
+        # (both drive $GETJPI, which never reaches the mutated line).
+        suites_red)   echo "test_kmod_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "proc_fill_info() copies proc->terminal into the redacted branch, BEFORE the early return that withholds the rest of the identity (linux_pid, uic, privileges, username). vms_pid and prcnam are legitimately copied before that return too (the oracle shows SHOW SYSTEM naming every process including cross-group ones), but terminal is identity data the oracle refused with everything else (docs/oracle/vax73-privileges.md §5) -- so copying it before the return, rather than after with username, hands an enumerating caller a fact about a process it may not \$GETJPI.";;
+        require_fail) cat <<'EOF'
+TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     ident-username-unguarded)
@@ -1092,13 +1151,10 @@ grid row 2 is byte-for-byte the V7.3 capture
 grid row 4 is byte-for-byte the V7.3 capture
 grid row 10 is byte-for-byte the V7.3 capture
 the last row carries the single remaining characteristic, unpadded
-A-WRITES/B-READS: width and page are the ones a DIFFERENT process set through the executive
 could not tell the second process to change the console
 could not tell the second process to restore the console
-A-WRITES/B-READS: DCL reports the width that other process set -- a per-process terminal could not show it
 ...and the cleared Echo bit, in the grid cell the oracle prints it in
 ...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
-the width goes back, so the reader is not printing a constant
 ...and grid row 1 is the oracle's bytes again, so neither is the grid
 this process, which bound nothing, still has no terminal -- the bindings belonged to the DCL jobs, not to the device or to the system
 EOF
@@ -1615,6 +1671,17 @@ apply_edit() {
         # exactly as they are, so the mutation cannot be mistaken for
         # "authorisation removed".
         sed -i 's|return (caller->cur_privs \& VMS_PRV_M_WORLD) != 0;|return true; /* NEGCTL proctab-crossgroup-identity */|' "$_file";;
+    proctab-terminal-redaction-bypassed)
+        # `info->redacted = 1;` is the only such statement in the file (the
+        # sole write to that field), so anchoring on it directly is
+        # unambiguous. The replacement (note: "1U;", not "1;" -- that is
+        # what makes the anchor disappear after one application, so a
+        # second apply finds no match and is the no-op the selftest
+        # requires) copies proc->terminal into the redacted branch, ahead
+        # of the early return -- exactly the hoist this control exists to
+        # catch -- while leaving the return itself, the redacted flag's
+        # value, and every other withheld field untouched.
+        sed -i "s|        info->redacted = 1;|        info->redacted = 1U; memcpy(info->terminal, proc->terminal, VMS_DEVNAM_SIZE); info->terminal[VMS_DEVNAM_SIZE - 1] = '\\\\0'; /* NEGCTL proctab-terminal-redaction-bypassed */|" "$_file";;
     executive-not-pinned)
         sed -i 's|\.owner          = THIS_MODULE,|/* NEGCTL executive-not-pinned: no .owner, so nothing pins vms.ko */|' "$_file";;
     pcb-per-thread)

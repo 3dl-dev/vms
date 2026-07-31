@@ -281,6 +281,14 @@ enum join_step {
 };
 #define JOIN_RETX_TIMEOUT_MS 400u  /* stop-and-wait step retransmit (< member's ~1.4s START-reissue) */
 #define JOIN_RETX_MAX        6u
+/* vms-e81: a NEWCOMER gets a far longer offer window than a settled peer.
+ * Run by5: OVMX correctly opened its SCS$DIRECTORY to VAX3, VAX3 never
+ * answered, and OVMX gave up after 6 retries / ~12 s -- WHILE VAX3 WAS STILL
+ * JOINING. A node in the middle of its own admission may simply not be
+ * accepting foreign connects yet, in which case the answer is patience, not
+ * protocol. 60 retries at 3 s covers a full VAX boot+join (~2-4 min). If it
+ * STILL refuses after this, the cause is membership propagation, not timing. */
+#define JOIN_GREET_RETX_MAX  60u
 /* vms-760: delay before the joiner's DEFERRED op 0x02 config/topology message.
  * The 2->3 reference joiner sends MODEL+PARAMS at +0.9394 and op 0x02 at
  * +5.8774 -- ~4.9 s later. What it is really waiting on is not grounded; the
@@ -2609,7 +2617,8 @@ int main(int argc, char **argv)
              * receive-driven and never needs this. */
             if (do_connect && ps->start_acked && ps->join_step != JS_IDLE &&
                 ps->join_step != JS_DONE && ps->join_step != JS_ADD_MEMBER &&
-                ps->js_retx < JOIN_RETX_MAX) {
+                ps->js_retx < (ps->appeared_after_join ? JOIN_GREET_RETX_MAX
+                                                       : JOIN_RETX_MAX)) {
                 long now_ms = monotonic_ms();
                 long last_ms = ps->js_last_tx.tv_sec * 1000L +
                                ps->js_last_tx.tv_nsec / 1000000L;

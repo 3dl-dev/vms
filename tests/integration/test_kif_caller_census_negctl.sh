@@ -51,6 +51,12 @@
 #   19 a SHARED-OPCODE wrapper deleted outright                     -> RED
 #      ... the route around 15: the opcode survives in its sibling wrapper, so
 #          an opcode-only floor certified it. Caught at selector grain.
+#   20 renamed onto a PRODUCT FUNCTION'S NAME, and marked static     -> RED
+#      ... the route the fix for 17 opened. Not a shrink: the census CERTIFIED
+#          the unwired wrapper as REACHED, moving the count UP, on the strength
+#          of an unrelated same-named function in src/vmslnm/. A gate that
+#          vouches for the thing it exists to catch is worse than one that
+#          loses it, so this control asserts the reason as well as the red.
 #
 # Usage: test_kif_caller_census_negctl.sh [SRC_ROOT]
 
@@ -424,12 +430,22 @@ expect_red "$SHOW" \
 #     vms_kif_getdvi_devnam, so mutating it cannot strand the OPCODE. It is the
 #     only wrapper for which that is true -- which is exactly why 19 uses it.
 #   - vms_kif_devscan (15, 18) is the sole issuer of VMS_IOCTL_DEVSCAN.
-#   - vms_kif_close (14) is the only entry point whose body issues no ioctl and
-#     names no selector, so deleting it strands nothing on the kernel side. With
-#     both floor grains in place there is NO wrapper whose definition can be
-#     deleted without stranding an opcode or a selector, so it is the only
-#     subject for which the orphaned-prototype property can fire ALONE. That is
-#     the floor having no slack, stated as a fixture constraint.
+#   - vms_kif_close (14) is ONE OF THREE prototyped entry points whose body
+#     issues no ioctl and names no selector -- the others are vms_kif_open and
+#     vms_kif_kerr_to_ss -- so deleting its definition strands nothing on the
+#     kernel side and the orphaned-prototype property can fire ALONE. All three
+#     were checked: each yields the orphaned-prototype FAIL by itself. Any of
+#     them would serve; close is used. (A fourth definition issues no opcode and
+#     names no selector, the static vms_kif_alloc_op, but it has no prototype to
+#     strand, so it cannot be this control's subject.)
+#     AN EARLIER REVISION OF THIS COMMENT SAID "the only entry point", and the
+#     gate header said no wrapper at all could be deleted without stranding
+#     something. Brute force over all 41 file-scope definitions in vms_kif.c
+#     contradicted both: 37 go RED, four are a silent PASS. The floor's real
+#     claim is narrower -- no wrapper THAT ISSUES AN OPCODE OR NAMES A SELECTOR
+#     can be deleted -- and it is stated that way in the gate now. In a pair of
+#     files whose whole subject is assertions nobody ever saw fail, an emphatic
+#     claim that has not been run is the defect, spelled.
 # ---------------------------------------------------------------------------
 
 PROTO_CHAN='^uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo \*info);$'
@@ -539,6 +555,51 @@ expect_red "$H $C" \
     "deleting a shared-opcode wrapper strands its kernel selector and is caught" \
     "VMS_DVI_SEL_CHAN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
+
+# 20. THE NAME COLLISION, and it is the worst of the routes in this file --
+#     because it does not make the census LOSE the unwired wrapper, it makes the
+#     census VOUCH FOR it. Rename the definition to a name a product file already
+#     calls AND mark it static, then drop the prototype and the declaration.
+#     Nothing dangles (a static needs no prototype), no opcode or selector is
+#     stranded (the renamed body still names VMS_IOCTL_DEVSCAN), and the entry
+#     point is now credited to an entirely unrelated function of the same name in
+#     src/vmslnm/. This was a clean PASS with the reached count moving UP -- 41
+#     entry points, 15 reached, rc=0 -- for exactly one revision of the gate: the
+#     revision that widened root seeding from the vms_kif_ prefix to the whole
+#     universe in order to close control 17. The fix does not undo that widening,
+#     which is right for externally-linked names; it removes from the SEEDABLE
+#     set the names for which an outside caller is semantically impossible.
+#
+#     The extern half of this evasion needs no control of its own: without the
+#     `static`, the definition has no vms_kif_ prototype and 1a fires first
+#     (F_ORPHAN_DEF), which control 17 already covers.
+COLLIDE=lnm_init
+
+# FIXTURE CONSTRAINT, CHECKED RATHER THAN ASSUMED. This control only tests the
+# seeding restriction if $COLLIDE is genuinely called by a product file the gate
+# scans. If src/vmslnm/ ever renames it, the mutation still goes RED -- for the
+# ordinary reason control 18 already covers -- and this control would silently
+# degrade into a duplicate while still reporting PASS. That is the same
+# silently-no-op shape injection_landed() exists to catch, one level up.
+if ! grep -rl "[^A-Za-z0-9_]${COLLIDE}[ 	]*(" "$ROOT/src" --include='*.c' 2>/dev/null \
+     | grep -qv 'libvmssys/vms_kif'; then
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): control 20 needs a product"
+    echo "        function named ${COLLIDE}() outside vms_kif.c to collide with,"
+    echo "        and there is none. Pick another real product function name;"
+    echo "        do NOT drop the control -- without a real collision it tests"
+    echo "        nothing and would report PASS anyway."
+    failed=$((failed + 1)); status=1
+else
+    sed -i "/$PROTO_DEVSCAN/d" "$H"
+    sed -i '/OVMX-UNWIRED: vms_kif_devscan/d' "$H"
+    sed -i "s|^uint32_t vms_kif_devscan(|static uint32_t ${COLLIDE}(|" "$C"
+    expect_red "$H $C" \
+        "an unwired wrapper renamed onto a product function's name is NOT credited to it" \
+        "$COLLIDE
+$F_UNDECL" \
+        "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+        "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
+fi
 
 # ---------------------------------------------------------------------------
 echo "  controls: $passed passed, $failed failed"

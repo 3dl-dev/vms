@@ -121,8 +121,26 @@
 #     the VMS_DVI_SEL_CHAN path inside the kernel handler became unreachable
 #     from userspace. Where a selector names a distinct path through one opcode,
 #     it is an entry point in everything but name, and the floor counts it.
-#     Together the two grains have NO SLACK today: there is no wrapper whose
-#     definition can be deleted without stranding an opcode or a selector.
+#     The exact reach of the two grains together, MEASURED rather than asserted
+#     -- by deleting each of the 41 file-scope definitions in vms_kif.c in turn,
+#     with its prototype and its declaration, and running this gate:
+#
+#       37 of 41 go RED. FOUR are a silent PASS: vms_kif_open, vms_kif_close,
+#       vms_kif_kerr_to_ss and the static vms_kif_alloc_op.
+#
+#     Those four are exactly the definitions whose bodies issue no VMS_IOCTL_*
+#     opcode and name no VMS_*_SEL_* selector -- open/close manage the fd,
+#     kerr_to_ss maps an errno, and alloc_op takes its opcode as a PARAMETER --
+#     so there is nothing on the kernel side for their removal to strand. The
+#     claim this floor can support is therefore the narrow one, and it is the
+#     one to quote: NO WRAPPER THAT ISSUES AN OPCODE OR NAMES A SELECTOR can
+#     have its definition deleted without a RED. It is NOT "no wrapper".
+#     (An earlier revision of this comment said "no wrapper", and the very next
+#     paragraph contradicted it. Execution settled it. In the one file whose
+#     declared subject is untested assertions, do not write an emphatic claim
+#     here you have not run.)
+#     The residual risk is low but it is REAL, not zero: all four are called
+#     today, so deleting any of them fails to compile rather than shipping.
 #     There is deliberately NO escape hatch for an orphaned opcode or selector.
 #     If you add an ioctl or a selector to vms.ko, land its wrapper in the same
 #     commit.
@@ -150,14 +168,28 @@
 #     guessed would be inventing an answer.
 #   - THE FLOOR'S GRAIN IS THE OPCODE AND THE SELECTOR, AND NOTHING FINER. It
 #     makes deleting a wrapper outright a RED whenever that wrapper is the last
-#     userspace mention of an opcode or of a selector -- which, today, is every
-#     wrapper that issues one. It is NOT a general proof that a wrapper cannot
-#     vanish: if two wrappers ever share an opcode AND its selector, deleting
-#     one of them strands nothing on the kernel side and this gate will not see
-#     it. No such pair exists in the tree right now, the census output prints
-#     both counts so the slack is visible if one appears, and this is a stated
-#     boundary rather than a claim: do not read a PASS as "no wrapper was
-#     deleted".
+#     userspace mention of an opcode or of a selector. It is NOT a general proof
+#     that a wrapper cannot vanish, in two measured ways:
+#       * A definition that issues NO opcode and names NO selector strands
+#         nothing, so deleting it is a silent PASS. Four exist today
+#         (vms_kif_open, vms_kif_close, vms_kif_kerr_to_ss, vms_kif_alloc_op);
+#         see the floor section above for the brute-force result.
+#       * If two wrappers ever share an opcode AND its selector, deleting one of
+#         them strands nothing either. No such pair exists in the tree right now.
+#     The census output prints both counts so the slack becomes visible if one
+#     appears. This is a stated boundary rather than a claim: do not read a PASS
+#     as "no wrapper was deleted".
+#   - A PRODUCT CALLER IS CREDITED BY NAME, not by resolved linkage. The seedable
+#     set (1' below) removes the case where that is semantically impossible -- a
+#     static defined only in vms_kif.c -- but for an EXTERNALLY-LINKED name the
+#     census still credits any same-named call in src/ or tools/. The namespaced
+#     readings are what make that hard to abuse rather than free: a name is
+#     externally linked here only if it is prototyped in vms_kif.h (which greps
+#     for vms_kif_*) or defined non-static in vms_kif.c, and a non-static
+#     definition with no vms_kif_ prototype is already a RED at 1a. So collision
+#     requires a product function actually named vms_kif_something, which is a
+#     duplicate-symbol problem of its own. Verified: the extern form of the
+#     control-20 evasion is caught at 1a.
 #
 # If you are here because this failed: do NOT add a declaration to make it pass
 # unless the entry point genuinely has no product path yet AND you have an item
@@ -328,6 +360,43 @@ awk -F'\t' '$1 == "extern" { print $2 }' "$WORK/defs_all" | sort -u > "$WORK/def
 
 sort -u "$WORK/protos" "$WORK/defs" > "$WORK/universe"
 
+# 1'. THE SEEDABLE SET: the universe MINUS the names that only C's linkage rules
+#     say are unreachable from outside this file.
+#
+# The universe is what must be ACCOUNTED FOR. The seedable set is what a product
+# file is allowed to VOUCH FOR, and they are not the same list. A name defined
+# `static` in vms_kif.c and prototyped nowhere cannot, by the meaning of `static`,
+# be called from another translation unit: an identical name in a product file is
+# a DIFFERENT function that merely spells the same. Crediting it would let an
+# unrelated product call mark an unwired entry point as REACHED -- and that is
+# strictly worse than the shrinks this gate already blocks, because the census
+# would not merely LOSE the wrapper, it would AFFIRMATIVELY CERTIFY it as wired
+# and move the reached count UP to do it.
+#
+# NOT HYPOTHETICAL, and it was a hole this gate opened itself. When the seeding
+# filter was widened from `^vms_kif_` to the whole universe, three mechanical
+# edits -- delete the OVMX-UNWIRED line, delete the prototype, and rename the
+# definition to `static uint32_t lnm_init(` -- took the census to 41 entry points
+# / 15 REACHED / PASS, crediting the entirely unrelated lnm_init() call in
+# src/vmslnm/lnm_client.c. The wrapper was still in the tree, still unwired,
+# still compiled. Negative control 20 is that evasion.
+#
+# The widening itself was right for EXTERNALLY-LINKED names -- an entry point
+# renamed out of the vms_kif_ namespace but genuinely called from the product
+# must still count as wired, or the gate would demand a false declaration. It was
+# only ever wrong for statics, where it is not a trade-off but a bug. So the
+# seeding list drops exactly the names for which an outside caller is
+# semantically impossible, and nothing else.
+#
+# A static is NOT thereby excused: it stays in the universe and it can still be
+# REACHED -- but only through the in-file reachability pass in step 3, which is
+# the only way a static can be reached in C. That is how kif_bind, kif_call and
+# getjpi_common pass today.
+awk -F'\t' '$1 == "static" { print $2 }' "$WORK/defs_all" | sort -u > "$WORK/statics"
+sort -u "$WORK/protos" "$WORK/defs_extern" > "$WORK/linkable"
+comm -23 "$WORK/statics" "$WORK/linkable" > "$WORK/static_only"
+comm -23 "$WORK/universe" "$WORK/static_only" > "$WORK/seedable"
+
 ENTRIES=$(cat "$WORK/universe")
 n_entries=$(grep -c . "$WORK/universe" || true)
 n_protos=$(grep -c . "$WORK/protos" || true)
@@ -449,12 +518,13 @@ for f in $(find "$SRC_ROOT/src" "$SRC_ROOT/tools" \
     case "$f" in
         */src/libvmssys/vms_kif.c|*/src/libvmssys/vms_kif.h) continue ;;
     esac
-    # Seeded from the UNIVERSE, not from the vms_kif_ prefix: the definition
-    # reading is unfiltered, so an entry point renamed out of the namespace is
-    # still counted, and a product caller of it must still count as a caller --
-    # otherwise the widened universe would demand a false declaration for a
-    # function that is genuinely wired.
-    strip_comments < "$f" | call_edges | cut -f2 | grep -Fx -f "$WORK/universe" \
+    # Seeded from the SEEDABLE set, not from the vms_kif_ prefix and NOT from
+    # the whole universe. The prefix is wrong because the definition reading is
+    # unfiltered, so a product caller of an entry point renamed out of the
+    # namespace must still count. The whole universe is wrong because it now
+    # contains un-namespaced static helper names, and a same-named product
+    # function would then certify an unwired wrapper as REACHED. See 1' above.
+    strip_comments < "$f" | call_edges | cut -f2 | grep -Fx -f "$WORK/seedable" \
         | sed "s|^|${f#$SRC_ROOT/} |" >> "$WORK/sites" || true
 done
 cut -d' ' -f2 "$WORK/sites" | sort -u > "$WORK/direct"

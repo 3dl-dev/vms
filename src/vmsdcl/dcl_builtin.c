@@ -161,7 +161,7 @@ static struct dcl_verb builtin_verbs[] = {
       "Send an operator reply or enable/disable operator terminal" },
     { "REQUEST",     cmd_request,     CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Send a request message to the operator" },
-    { "RUN",         cmd_run,         CDU_F_ABBREV | CDU_F_PARAM, 2,
+    { "RUN",         cmd_run,         CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 2,
       "Execute a program image" },
     { "SEARCH",      cmd_search,      CDU_F_ABBREV | CDU_F_PARAM | CDU_F_QUALIFIER, 3,
       "Search a file for a text string" },

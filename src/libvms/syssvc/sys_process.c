@@ -24,6 +24,7 @@
 #include <stdio.h>
 #include "starlet.h"
 #include "ovmx_status.h"
+#include "prcdef.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
 
@@ -448,13 +449,26 @@ static ssize_t creprc_read_all(int fd, void *buf, size_t len)
 }
 
 /*
- * sys$creprc - Create a subprocess.
+ * sys$creprc - Create a process.
+ *
+ * Two kinds of process, selected by the stsflg argument:
+ *
+ *   default        a SUBPROCESS. The creator stays its parent and is
+ *                  expected to wait on it.
+ *
+ *   PRC$M_DETACH   a DETACHED process. Not part of the creator's job
+ *                  tree, owns no controlling terminal, and outlives the
+ *                  creator -- the creator cannot wait on it at all.
+ *                  This is what RUN/DETACHED and the system startup
+ *                  procedures create for services.
  *
  * Uses fork()+exec() to create a new process running the specified image.
  * Inherits VMS context (privileges, UIC, username, quotas) from the
  * parent PCB when parameters are zero/NULL. I/O redirection is set up
  * from the input/output/error descriptors.
  * The new process PID is returned in *pidadr if non-NULL.
+ *
+ * Reference: OpenVMS System Services Reference Manual ($CREPRC).
  */
 uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                     const struct dsc$descriptor_s *input,
@@ -464,9 +478,11 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                     const struct dsc$descriptor_s *prcnam,
                     uint32_t baspri, uint32_t uic, uint32_t mbxunt,
                     uint32_t stsflg) {
-    (void)quota; (void)baspri; (void)mbxunt; (void)stsflg;
+    (void)quota; (void)baspri; (void)mbxunt;
 
     if (!image || !image->dsc$a_pointer) return SS$_BADPARAM;
+
+    const int detached = (stsflg & PRC$M_DETACH) != 0;
 
     char img_path[512];
     dsc$strncpy(img_path, image, sizeof(img_path));
@@ -568,6 +584,48 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
         struct vms_procinfo self_info;
 
         close(namefd[0]);
+
+        /*
+         * PRC$M_DETACH: BECOME A DETACHED PROCESS BEFORE REGISTERING.
+         *
+         * A VMS detached process is not in the creator's job tree and
+         * has no controlling terminal, so the creator cannot wait on it
+         * and it survives the creator exiting. Under fork() that is two
+         * steps and both must happen HERE, in the created task, before
+         * it enters the executive's table:
+         *
+         *   setsid()  leaves the creator's session and controlling
+         *             terminal, so a hangup on the creator's terminal
+         *             does not reach the service.
+         *   fork()    the process that actually runs the image is the
+         *             GRANDchild; this intermediate exits immediately,
+         *             so the grandchild is reparented away from the
+         *             creator and waitpid() from the creator fails with
+         *             ECHILD. That is the observable difference between
+         *             a detached process and a subprocess.
+         *
+         * The grandchild inherits namefd[1] and is therefore the task
+         * that reports back, so $CREPRC's pidadr is still the process ID
+         * the executive assigned to the process that RUNS THE IMAGE --
+         * never the intermediate's. The creation handshake is unchanged
+         * and unconditional: a detached process is a VMS process, so it
+         * has a PCB and a process ID from the moment it exists.
+         *
+         * The intermediate closes its copy of the write end before
+         * exiting, so if the grandchild dies before reporting, the
+         * creator's read still sees EOF (and answers OVMX$_PRCLOST)
+         * rather than blocking on a descriptor nothing will ever write.
+         */
+        if (detached) {
+            setsid();
+            pid_t svc = fork();
+            if (svc < 0)
+                _exit(1);           /* creator reads EOF -> OVMX$_PRCLOST */
+            if (svc > 0) {
+                close(namefd[1]);
+                _exit(0);           /* reparent the grandchild away */
+            }
+        }
         rep.status = child_prcnam[0] ? vms_kif_setprn(child_prcnam)
                                      : SS$_NORMAL;
         if (rep.status & 1) {
@@ -608,11 +666,27 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                        sizeof(child_pcb->quotas));
         }
 
-        /* Set up I/O redirection */
+        /*
+         * Set up I/O redirection.
+         *
+         * A stream the caller did not supply is INHERITED for a
+         * subprocess and attached to the null device for a DETACHED
+         * process. That is not a default this code picked out of the
+         * air: "no controlling terminal" is the defining property of a
+         * detached process, and a detached process that kept the
+         * creator's console fds would be holding the creator's terminal
+         * open -- contradicting the property in the one place it is
+         * observable. Mapping VMS's null device onto /dev/null here is
+         * an OVMX implementation detail (CLAUDE.md Rule 8), not a
+         * claimed byte-level VMS behaviour.
+         */
         if (input && input->dsc$a_pointer) {
             char path[256];
             dsc$strncpy(path, input, sizeof(path));
             int fd = open(path, O_RDONLY);
+            if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
+        } else if (detached) {
+            int fd = open("/dev/null", O_RDONLY);
             if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
         }
         if (output && output->dsc$a_pointer) {
@@ -620,11 +694,17 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             dsc$strncpy(path, output, sizeof(path));
             int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
+        } else if (detached) {
+            int fd = open("/dev/null", O_WRONLY);
+            if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
         }
         if (error && error->dsc$a_pointer) {
             char path[256];
             dsc$strncpy(path, error, sizeof(path));
             int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
+        } else if (detached) {
+            int fd = open("/dev/null", O_WRONLY);
             if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
         }
 
@@ -642,6 +722,25 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
      * return and the unconditional waitpid() below. */
     ssize_t r = creprc_read_all(namefd[0], &rep, sizeof(rep));
     close(namefd[0]);
+
+    /*
+     * DETACHED: `pid` is the INTERMEDIATE, which has already exited, and
+     * it is the only task the creator may ever wait for. Reaping it is
+     * unconditional -- it is not the process that was created, so it is a
+     * zombie on BOTH the success and the failure path. After this the
+     * creator has no children left from this call, which is the whole
+     * point: waitpid() for the service fails with ECHILD.
+     *
+     * The service itself is never reaped here and must not be. If the
+     * GRANDchild failed to register it exited on its own and init reaped
+     * it; if it registered, it is running the image and is no longer
+     * related to this process at all.
+     */
+    if (detached) {
+        int mstatus;
+        while (waitpid(pid, &mstatus, 0) < 0 && errno == EINTR)
+            ;
+    }
 
     if (r != (ssize_t)sizeof(rep) || !(rep.status & 1)) {
         /*
@@ -682,10 +781,17 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * WHAT THIS REPLACED: SS$_NORMAL with *pidadr left at zero --
          * success paired with a process ID that names no process, a
          * combination VMS does not produce.
+         *
+         * DETACHED: the reap already happened above, and `pid` named the
+         * intermediate rather than the created task in the first place.
+         * Waiting again here would either return ECHILD immediately or,
+         * worse, reap an unrelated child of the caller.
          */
-        int wstatus;
-        while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
-            ;
+        if (!detached) {
+            int wstatus;
+            while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
+                ;
+        }
         return (r == (ssize_t)sizeof(rep)) ? rep.status : OVMX$_PRCLOST;
     }
 

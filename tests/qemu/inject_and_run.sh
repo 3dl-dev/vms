@@ -29,6 +29,15 @@
 #                               sources, never listed -- see the loop below.
 #   qemu_syssvc_tests           the public sys$ suites, built through the
 #                               CMake graph against src/libvms
+#   DCL.EXE                     the user-visible command layer. A suite can
+#                               drive a real DCL COMMAND against the real
+#                               executive (test_syssvc_startup_service runs
+#                               RUN/DETACHED and SHOW SYSTEM), so a defect
+#                               under src/vmsdcl is reachable -- and before
+#                               this was added, such a defect would have been
+#                               injected into a source nobody recompiled and
+#                               a STALE DCL.EXE would have been re-staged,
+#                               reporting the gate as having caught nothing.
 #
 # All of them are rebuilt for EVERY defect, not just the ones whose sources
 # changed. That is deliberate: a conditional rebuild is one more thing that
@@ -111,8 +120,21 @@ echo "--- rebuilding the public sys\$ suites ---"
 ( cd /src/repo && cmake --build build-static --target qemu_syssvc_tests \
                         --parallel "$(nproc)" ) || exit 4
 
+# DCL.EXE is a SUBJECT the suites drive, not a suite, so nothing above builds
+# it -- and a suite that runs a real DCL command against the real executive
+# (test_syssvc_startup_service) is asserting about this binary. Rebuilt
+# unconditionally, for the same reason everything else here is: a conditional
+# rebuild is one more thing that can silently not happen.
+echo "--- rebuilding DCL.EXE (the user-visible command layer) ---"
+( cd /src/repo && cmake --build build-static --target vmsdcl \
+                        --parallel "$(nproc)" ) || exit 4
+
 echo "--- re-staging the initramfs ---"
 cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
+# Absence is FATAL, never skipped, exactly as in the image build: a missing
+# subject would turn the SHOW SYSTEM and RUN/DETACHED assertions into no-ops
+# with the job still green.
+cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || exit 4
 for f in /src/tests/qemu/test_*; do
     [ -x "$f" ] && cp "$f" /initramfs/tests/
 done

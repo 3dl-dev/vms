@@ -369,6 +369,10 @@ struct peer_state {
     int      barrier_step;         /* current step N, 1..12; 0 = barrier not running */
     int      barrier_done;         /* our OWN admission finished (record, NOT a gate) */
     unsigned barrier_count;        /* transitions completed; #1 = our join, 2+ = bystander */
+    int      appeared_after_join;  /* vms-e81: first seen AFTER our own admission --
+                                    * this peer is a NEWCOMER to a cluster we are
+                                    * already in, so the MEMBER role applies, never
+                                    * the joiner sequencer. */
     /* vms-760: WE ARE TOO FAST. OVMX answers the coordinator's op 0x0a GO in
      * ~20 us -- quicker than the coordinator's own fan-out loop, which takes
      * 20-214 us per additional member. A step-1 op 0x0b that lands while the
@@ -509,9 +513,16 @@ static int is_padded_hello(const uint8_t *buf, size_t n)
 static struct peer_state *peer_find_or_add(struct peer_state *tbl, const uint8_t mac[6])
 {
     int free_slot = -1;
+    int we_are_member = 0;
     for (int i = 0; i < OVMX_MAX_PEERS; i++) {
         if (tbl[i].in_use && mac_eq(tbl[i].eth_mac, mac)) {
             return &tbl[i];
+        }
+        /* vms-e81: have we already completed our OWN admission with anyone? If
+         * so, a peer we are meeting for the first time is a NEWCOMER joining a
+         * cluster we are already in -- the member role, not the joiner role. */
+        if (tbl[i].in_use && tbl[i].barrier_done) {
+            we_are_member = 1;
         }
         if (!tbl[i].in_use && free_slot < 0) {
             free_slot = i;
@@ -522,6 +533,7 @@ static struct peer_state *peer_find_or_add(struct peer_state *tbl, const uint8_t
     }
     memset(&tbl[free_slot], 0, sizeof(tbl[free_slot]));
     tbl[free_slot].in_use = 1;
+    tbl[free_slot].appeared_after_join = we_are_member;
     memcpy(tbl[free_slot].eth_mac, mac, 6);
     return &tbl[free_slot];
 }
@@ -2883,7 +2895,31 @@ int main(int argc, char **argv)
                          * so no unprocessable frame ever enters the shared seq. The
                          * member-opened dir probe is still answered by branch b2
                          * (dir-SERVER) on a distinct Con.ID pair. */
-                        if (join_seq_enabled &&
+                        /* vms-e81: DO NOT run the joiner sequence at a peer that
+                         * appeared AFTER we became a member.
+                         *
+                         * Live bystander test: OVMX joined a 2-node cluster, then
+                         * VAX3 booted into it. OVMX saw a new peer and started its
+                         * JOINER choreography AT VAX3 -- which was itself mid-join
+                         * and never answered -- retransmitting join step 4 at a
+                         * node that was in no position to reply. VAX3 stalled at
+                         * NEW, OVMX went BRK_NON, and OVMX was never invited into
+                         * the transition because it had formed no SCS connection
+                         * with the newcomer at all.
+                         *
+                         * Joining is something you do ONCE, to a cluster that
+                         * already exists. Meeting a node that arrives later is the
+                         * MEMBER role, and its obligations are different: accept
+                         * the newcomer's connects, open your own SCS$DIRECTORY and
+                         * MSCP$DISK client to it, and open a VMS$VAXcluster VC only
+                         * if it has not already opened one to you (grounded from
+                         * VAX1's side of vax3-2to3-established-join). Running
+                         * admission at it is not merely useless -- it is noise
+                         * aimed at a node in the middle of its own join.
+                         *
+                         * This guard stops the harm. The member-side choreography
+                         * is the remaining work on vms-e81. */
+                        if (join_seq_enabled && !ps->appeared_after_join &&
                             ps->join_step == JS_IDLE && !ps->own_dir_sent &&
                             send_own_dir_connect_request(sock, (int)ifindex, ps,
                                                          our_hw_mac, our_src_logical)) {

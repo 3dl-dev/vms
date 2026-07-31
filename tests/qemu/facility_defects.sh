@@ -76,8 +76,9 @@
 # table, authenticated identity -- plus two properties of the binding itself:
 # that a caller's PCB is per-PROCESS (not per-thread), and that an open
 # descriptor pins the module.
-# FOUR defects are outside vms.ko, all because the property they name lives in
-# the PRODUCT half of the interface, where no kernel-side mutation can reach it:
+# The defects below are outside vms.ko, all because the property they name
+# lives in the PRODUCT half of the interface, where no kernel-side mutation
+# can reach it:
 #   bind-client-no-register  the vms-9fc defect itself (kif_bind() not calling
 #                            vms_kif_register()).
 #   creprc-handshake-eintr   $CREPRC's report pipe read not retried on EINTR,
@@ -113,6 +114,17 @@
 #                            mutation, because Linux reparents any orphan to
 #                            init. It is here so the discriminating
 #                            assertions are NAMED and stay named.
+#   kstat-deadlock-mismapped, kstat-ivlockid-mismapped,
+#   kstat-cvtungrant-mismapped        src/libvms/syssvc/sys_lock.c's
+#                            kstat_to_ss(), the single point where a raw
+#                            kernel lock-manager status crosses into the
+#                            public ssdef.h SS$_xxx contract (vms-2e5). The
+#                            kernel's OWN decision to deadlock/reject is
+#                            unaffected by these mutations -- only which
+#                            PUBLIC constant a caller is told about it -- so
+#                            no kernel-side mutation could ever reach this
+#                            property; the defect is entirely in the
+#                            translation.
 # All are edits under src/, not src/kernel/, so cmd_selftest copies libvms,
 # libvmssys and vmsdcl alongside kernel/ when it checks that every anchor still
 # matches.
@@ -167,7 +179,10 @@ run-detached-name-dropped
 creprc-detach-intermediate-reaped
 run-detached-not-detached
 run-image-qualifier-refused
-run-qualifier-not-abbreviated"
+run-qualifier-not-abbreviated
+kstat-deadlock-mismapped
+kstat-ivlockid-mismapped
+kstat-cvtungrant-mismapped"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1422,6 +1437,57 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    kstat-deadlock-mismapped)
+        case "$_f" in
+        facility)     echo "kstat_to_ss()'s DEADLOCK mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
+        targets)      echo "libvms/syssvc/sys_lock.c";;
+        suites_red)   echo "test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "case 100 (kernel SS__DEADLOCK) returns SS\$_NOTQUEUED instead of SS\$_DEADLOCK -- the EXACT mutation vms-2e5 was found by (a request the executive rejected for deadlock is reported to the caller as merely 'not queued'). The kernel's own decision to abort the request for deadlock is untouched; only the public value crossing the boundary changes.";;
+        require_fail) cat <<'EOF'
+parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kstat-ivlockid-mismapped)
+        case "$_f" in
+        facility)     echo "kstat_to_ss()'s IVLOCKID mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
+        targets)      echo "libvms/syssvc/sys_lock.c";;
+        suites_red)   echo "test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "case 108 (kernel SS__IVLOCKID) returns SS\$_NOTQUEUED instead of SS\$_IVLOCKID -- a caller given a nonexistent lock ID is told the request was merely not queued rather than that the ID itself is invalid.";;
+        require_fail) cat <<'EOF'
+sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kstat-cvtungrant-mismapped)
+        case "$_f" in
+        facility)     echo "kstat_to_ss()'s CVTUNGRANT mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
+        targets)      echo "libvms/syssvc/sys_lock.c";;
+        suites_red)   echo "test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "case 116 (kernel SS__CANCELGRANT) returns SS\$_NOTQUEUED instead of SS\$_CVTUNGRANT -- a CONVERT that lands on a lock still queued from an earlier request is told the SAME thing a fresh NOQUEUE request would be told, collapsing two different conditions into one report.";;
+        require_fail) cat <<'EOF'
+sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1534,6 +1600,12 @@ apply_edit() {
         # halves of RUN's qualifier table, and mutating one would leave
         # the rule half-applied rather than restored.
         sed -i 's|strncasecmp(given, full, glen) == 0|strcasecmp(given, full) == 0 /* NEGCTL run-qualifier-not-abbreviated */|' "$_file";;
+    kstat-deadlock-mismapped)
+        sed -i 's|case 100: return SS\$_DEADLOCK;|case 100: return SS$_NOTQUEUED; /* NEGCTL kstat-deadlock-mismapped */|' "$_file";;
+    kstat-ivlockid-mismapped)
+        sed -i 's|case 108: return SS\$_IVLOCKID;|case 108: return SS$_NOTQUEUED; /* NEGCTL kstat-ivlockid-mismapped */|' "$_file";;
+    kstat-cvtungrant-mismapped)
+        sed -i 's|case 116: return SS\$_CVTUNGRANT;|case 116: return SS$_NOTQUEUED; /* NEGCTL kstat-cvtungrant-mismapped */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

@@ -403,15 +403,18 @@ static void handle_connection(ssh_session session)
         uint64_t user_privs = parse_privilege_string(sysuaf_rec.privileges);
         struct vms_pcb *pcb = vms_pcb_init(user_privs);
 
-        /* Allocate a terminal device from the shared table */
-        const char *term_dev = vms_term_allocate("_FTA", getpid(), sysuaf_rec.username);
-        if (!term_dev) term_dev = "_FTA0:";  /* fallback */
-
+        /*
+         * DELETED (vms-fb9): this took a name out of the private "_FTA"
+         * pool file -- falling back to the literal "_FTA0:" when even that
+         * failed -- and used it as the session's PROCESS name. A terminal
+         * device name is not a process name, the pool is not the executive,
+         * and the fallback was an invented VMS device name. The process
+         * name is executive-owned state OVMX does not have yet, so the
+         * session is created without one rather than with a fake one.
+         */
         if (pcb) {
             uint32_t uic = (sysuaf_rec.uic_group << 16) | sysuaf_rec.uic_member;
-            char prcnam[16];
-            snprintf(prcnam, sizeof(prcnam), "%s", term_dev);
-            vms_pcb_set_identity((uint32_t)getpid(), uic, sysuaf_rec.username, prcnam);
+            vms_pcb_set_identity((uint32_t)getpid(), uic, sysuaf_rec.username, "");
             vms_pcb_set_default_dir(sysuaf_rec.default_dir);
         }
 
@@ -420,21 +423,29 @@ static void handle_connection(ssh_session session)
         setenv("TERM", ssh_term[0] ? ssh_term : "vt100", 1);
 
         /*
-         * STOPGAP -- FACADE, NOT VMS (vms-d0b). VMS_DEVICE_TYPE and
-         * VMS_TERMINAL below hand a terminal identity to the session
-         * through the environment, which is the rejected VMS_PRCNAM
-         * shape (CLAUDE.md rule 10): the session ends up telling
-         * itself what terminal it is on. A VMS terminal is a device in
-         * the executive's device table (src/kernel/vms_devtab.c as of
-         * vms-d0b), assigned with $ASSIGN and read with $GETDVI.
-         * Remote terminals are explicitly out of scope for vms-d0b --
-         * this site is marked, not fixed.
+         * DELETED, NOT REPLACED (vms-fb9): setenv("VMS_DEVICE_TYPE", ...)
+         * and setenv("VMS_TERMINAL", term_dev, 1) stood here, handing a
+         * terminal identity down to the session through the environment.
+         * That is the rejected VMS_PRCNAM shape (CLAUDE.md rule 10,
+         * worked example 2) -- the session ended up telling itself what
+         * terminal it was on, and nothing else on the node could see or
+         * contradict it.
+         *
+         * A VMS terminal is a device in the executive's device table
+         * ($ASSIGN to it, $GETDVI on the channel). A REMOTE terminal is
+         * not in that table at all: the executive creates only the
+         * console OPA0: today, and how a network session's terminal gets
+         * created is not something this file may decide on its own. So
+         * nothing is passed, and the SSH session simply has no VMS
+         * terminal name until the executive can give it one.
+         *
+         * SIDE EFFECT, recorded so it is not discovered as a surprise:
+         * vmsssh_map_term_to_device_type() (src/vmsssh/term_map.c) has
+         * no production caller left. tests/vmsssh/test_term_mapping.c
+         * still exercises it, so the test now covers a function nothing
+         * calls. Neither the function nor the test is deleted here --
+         * deleting coverage is not this item's call.
          */
-
-        /* Map SSH TERM to VMS device type */
-        const char *vms_devtype = vmsssh_map_term_to_device_type(
-            ssh_term[0] ? ssh_term : NULL);
-        setenv("VMS_DEVICE_TYPE", vms_devtype, 1);
         setenv("HOME",        home_dir,               1);
         setenv("USER",        authed_user,            1);
         setenv("LOGNAME",     authed_user,            1);
@@ -451,7 +462,6 @@ static void handle_connection(ssh_session session)
         setenv("VMS_PRIVILEGES",  sysuaf_rec.privileges,  1);
         setenv("SYS$LOGIN",       sysuaf_rec.default_dir, 1);
         setenv("SYS$SCRATCH",     "/tmp",                 1);
-        setenv("VMS_TERMINAL",    term_dev,               1);
 
         /* ---- Step 3: Display VMS login banner ---- */
         static const char *months[] = {

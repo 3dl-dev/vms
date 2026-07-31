@@ -17,7 +17,7 @@
 #   3. DCL.EXE links as a VMS-native ET_DYN executable via
 #      `LINK.EXE --executable --use {DECC$SHR + the five OVMX shareables}` — a
 #      22-object, main()-entered program with a full intra-image reloc set
-#      (ADRP/ADD/ABS64/PREL32/LDST), 140 cross-image imports all bound, and its own
+#      (ADRP/ADD/ABS64/PREL32/LDST), its cross-image imports all bound, and its own
 #      single-object TLS (dcl_messages.o) carried as PT_TLS.
 #   4. IMGACT.EXE activates DCL.EXE (crt0 recovers argc/argv off the kernel stack,
 #      calls main(argv[1]=session.com)); DCL runs a scripted session (SHOW TIME +
@@ -77,7 +77,7 @@ done
 $CC -fPIC -mno-outline-atomics -c -o "$WORK/sys_syscall.o" "$LIBVMSSYS_DIR/arch/aarch64/syscall.S"
 SYSOBJS="$SYSOBJS $WORK/sys_syscall.o"
 "$WORK/LINK.EXE" --shareable \
-    --symbol-vector "vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE,vms_kif_setef=PROCEDURE,vms_kif_clref=PROCEDURE,vms_kif_readef=PROCEDURE,vms_kif_waitfr=PROCEDURE,vms_kif_wflor=PROCEDURE,vms_kif_wfland=PROCEDURE,vms_kif_ascefc=PROCEDURE,vms_kif_dacefc=PROCEDURE,vms_kif_dlcefc=PROCEDURE" \
+    --symbol-vector "vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE,vms_kif_setef=PROCEDURE,vms_kif_clref=PROCEDURE,vms_kif_readef=PROCEDURE,vms_kif_waitfr=PROCEDURE,vms_kif_wflor=PROCEDURE,vms_kif_wfland=PROCEDURE,vms_kif_ascefc=PROCEDURE,vms_kif_dacefc=PROCEDURE,vms_kif_dlcefc=PROCEDURE,vms_kif_devscan=PROCEDURE,vms_kif_getdvi_devnam=PROCEDURE" \
     --gsmatch LEQUAL,1,0 -o "$SYSLIB/LIBVMSSYS\$SHR.EXE" $SYSOBJS
 
 echo "== LIBVMSPROCESS\$SHR.EXE =="

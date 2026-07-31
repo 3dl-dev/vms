@@ -228,6 +228,47 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(kif_caller_census_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 300)
+
+    # Rule 10/11 standing gate (vms-fb9): a process does not name its own
+    # terminal, and SHOW DEVICE does not invent device rows. Keeps the
+    # VMS_TERMINAL / VMS_DEVICE_TYPE environment handoff, the private _FTA
+    # name pool and SHOW DEVICE's /proc/mounts + process-local row sources
+    # deleted. Source scan, C comments stripped.
+    add_test(NAME terminal_identity_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_terminal_identity.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(terminal_identity_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # ...and the evasions, one minimal mutation per property, on a sandbox
+    # copy of the tree. A gate nobody tries to evade asserts nothing.
+    add_test(NAME terminal_identity_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_terminal_identity_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(terminal_identity_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
+
+    # The BEHAVIOURAL half of the same rule (vms-fb9 round 2), and the one
+    # that actually carries the invariant. The two source scans above check
+    # that named tokens are absent; an adversary reintroduced SHOW DEVICE's
+    # hardcoded stub row written in the CURRENT oracle format and every one
+    # of those checks passed. This RUNS DCL and requires stdout to contain no
+    # device row at all when there is no executive to have read one from --
+    # which no re-spelling of the fabrication can satisfy.
+    add_test(NAME show_device_rows_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_device_rows.sh
+                $<TARGET_FILE:vmsdcl>)
+    set_tests_properties(show_device_rows_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # ...and its evasions, which BUILD mutant DCLs (including the exact
+    # adversary mutant) in a sandbox and require each to drive the gate red.
+    # A behavioural gate needs a behavioural proof that it can go red.
+    add_test(NAME show_device_rows_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_device_rows_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(show_device_rows_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 300)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

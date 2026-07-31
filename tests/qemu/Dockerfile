@@ -157,6 +157,15 @@ RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
 # locally while never entering the initramfs and never running in QEMU,
 # with the job staying green.
 COPY . /src/repo/
+#
+# `vmsdcl` is built alongside them (vms-fb9). tests/qemu/test_syssvc_showdev.c
+# does not call a sys$ entry point to make its assertions -- it EXECUTES the
+# shipped DCL.EXE and reads what a user would see, because the thing under
+# test is whether the user-visible SHOW DEVICE is a reader of the executive's
+# device table or is answering from somewhere else. Naming the target here is
+# correct and is NOT the "one binary by literal name" defect the comment
+# above warns about: that rule is about which TEST suites reach the image
+# (still a glob), not about which product image a suite needs.
 RUN cd /src/repo && \
     cmake -B build-static \
         -DCMAKE_C_COMPILER=musl-gcc \
@@ -164,17 +173,19 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=OFF \
-    && cmake --build build-static --target qemu_syssvc_tests --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests vmsdcl --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
-    # DCL.EXE, so a suite can run a real user-visible DCL COMMAND against a
-    # real executive (vms-8019). SHOW SYSTEM is a READER of the executive's
-    # process table, and the only way to prove it lists more than the
-    # calling process is to run the command itself where a process table
-    # exists -- ctest never has a /dev/vms (CLAUDE.md Rule 9), and asserting
-    # on the reader helper alone would leave dcl_cmd_show.c ungated in the
-    # one environment where it can actually work.
-    cmake --build build-static --target vmsdcl --parallel $(nproc) 2>&1 && \
+    # DCL.EXE (already built above in the qemu_syssvc_tests/vmsdcl target
+    # list), so a suite can run a real user-visible DCL COMMAND against a
+    # real executive. SHOW SYSTEM is a READER of the executive's process
+    # table (vms-8019) and SHOW DEVICE is a READER of the executive's device
+    # table (vms-fb9); the only way to prove either lists more than the
+    # calling process's own view is to run the command itself where the
+    # table exists -- ctest never has a /dev/vms (CLAUDE.md Rule 9), and
+    # asserting on the reader helper alone would leave dcl_cmd_show.c
+    # ungated in the one environment where it can actually work.
+    echo "--- DCL.EXE (the shipped image test_syssvc_showdev/procnam/showproc drive) ---" && \
     ls -la build-static/bin/DCL.EXE
 
 # Build mkimage_vmsfs (host tool) and create test image
@@ -245,14 +256,22 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # kernel-only harness this item exists to replace, and the QEMU job
     # stays green while proving nothing about src/libvms.
     { [ "$n_syssvc" -ge 1 ] || { echo "FATAL: no test_syssvc_* binary staged into the initramfs -- the userspace public-sys\$ layer would be untested"; exit 1; }; } && \
-    # DCL.EXE (vms-8019). Staged under /bin, NOT /tests: init.sh execs
-    # everything matching /tests/test_kmod_* or /tests/test_syssvc_*, and
-    # DCL is not a suite -- it is a subject that test_syssvc_procnam drives.
-    # Absence is FATAL rather than skipped, for the same reason the
+    # The shipped DCL image, staged at BOTH paths its two sets of consumers
+    # expect: /bin/DCL.EXE (vms-8019's test_syssvc_procnam.c and
+    # test_syssvc_showproc.c hard-code execl("/bin/DCL.EXE", ...)) and
+    # /tests/DCL.EXE (vms-fb9's test_syssvc_showdev.c defaults DCL_PATH to
+    # /tests/DCL.EXE, overridable via OVMX_DCL). init.sh execs everything
+    # matching /tests/test_kmod_* or /tests/test_syssvc_*; "DCL.EXE" matches
+    # neither glob, so staging it under /tests/ does not make init.sh try to
+    # run it as a suite. DCL is not a suite -- it is a subject the suites
+    # drive. Absence is FATAL rather than skipped, for the same reason the
     # n_syssvc check above is: a missing subject would silently turn the
-    # SHOW SYSTEM assertions into no-ops with the job still green.
+    # SHOW SYSTEM / SHOW DEVICE assertions into no-ops with the job still
+    # green.
     { cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || \
       { echo "FATAL: DCL.EXE was not built into the static tree -- SHOW SYSTEM would go unproven against a real executive"; exit 1; }; } && \
+    chmod +x /initramfs/bin/DCL.EXE && \
+    cp /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

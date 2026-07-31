@@ -886,20 +886,59 @@ int main(void)
      *
      * STOPGAP (vms-2b8). This is a process declaring its own full
      * privilege mask into a USERSPACE PCB -- the shape this item exists
-     * to remove. It is left in place for exactly one reason: nothing in
-     * the product calls vms_kif_register() yet (vms-9fc), so PID 1 has
-     * no row in the executive's process table to stamp an identity
-     * onto, and every reader below still reads this PCB.
+     * to remove.
+     *
+     * WHY IT IS STILL LEFT IN PLACE, RE-CHECKED 2026-07-31 (vms-fb9 r6)
+     * BY EXECUTION, NOT BY RE-READING THE OLD NOTE. This file itself
+     * makes no vms_kif_* call anywhere -- grep the file, there is not
+     * one -- so PID 1's own process genuinely has no row in the
+     * executive's process table today; that half of the old comment is
+     * still true. What is FALSE is the reason it gave for waiting: "the
+     * correct sequence once vms-9fc lands is: register, then
+     * vms_kif_setident(...)" treated a landed vms-9fc as a future
+     * event still to happen. It has happened. vms-9fc made the
+     * open -> register sequence automatic (src/libvmssys/vms_kif.h:7-18,
+     * kif_bind() in src/libvmssys/vms_kif.c): the FIRST vms_kif_* call
+     * any process makes completes its own registration inline -- no
+     * separate explicit vms_kif_register() call is needed first, and
+     * none is missing here for lack of one existing elsewhere in the
+     * product.
+     *
+     * "ANY vms_kif_* call" was NOT true of vms_kif_setident() until r6
+     * of this item, and r5's version of this comment wrongly claimed it
+     * was -- CAUGHT BY MEASUREMENT, not by inspection. vms_kif_setident()
+     * issued a raw ioctl instead of going through kif_call()/KIF_CALL, so
+     * it never ran kif_bind(). Measured against a real /dev/vms:
+     * vms_kif_open() then a BARE vms_kif_setident() returned status=20
+     * (SS$_BADPARAM), not because the parameters were bad but because the
+     * unbound ioctl was rejected -ESRCH and the old failure path
+     * hard-coded SS$_BADPARAM for every failure. Fixed in r6 by routing
+     * vms_kif_setident() through KIF_CALL (src/libvmssys/vms_kif.c); the
+     * same probe now returns status=1 (SS$_NORMAL). See
+     * tests/qemu/test_kmod_bind.c suite 0. With that fix landed,
+     * vms_kif_setident() completes its own registration inline like the
+     * rest of the vms_kif_* family (vms_kif_deliverast() binds by a
+     * different path for an unrelated reason, given at its own
+     * definition). SHOW DEVICE proves the mechanism against a real
+     * /dev/vms today (src/vmsdcl/dcl_cmd_show.c, vms-fb9): it calls
+     * vms_kif_devscan() with no register call anywhere in DCL's path and
+     * reads a real row back.
+     *
+     * So the blocking precondition this note was waiting on has been
+     * met. Whether to now call vms_kif_setident("SYSTEM", (1<<16)|4,
+     * <SYSUAF mask>) here and delete the PCB call below is vms-2b8's
+     * decision, not vms-fb9's -- it is behind an operator ruling and
+     * this item's job is the device-table readers, not process
+     * identity. DO NOT wire it up under this item. What is corrected
+     * is only the stale instruction to keep waiting for something that
+     * already landed; the stopgap's disposition from here belongs to
+     * vms-2b8.
      *
      * PID 1 is the one process for which "SYSTEM, fully privileged" is
      * the right ANSWER -- the wrongness is entirely in WHO DECIDES it.
      * The executive already derives that verdict for itself from
      * capable(CAP_SYS_ADMIN) at registration, and PID 1 already holds
-     * /dev/vms open (executive_attach), so the correct sequence once
-     * vms-9fc lands is: register, then vms_kif_setident("SYSTEM",
-     * (1<<16)|4, <SYSUAF mask>), and delete the call below. Not done
-     * here because introducing a new fatal boot dependency is vms-9fc's
-     * decision to make, not this item's.
+     * /dev/vms open (executive_attach).
      */
     struct vms_pcb *pcb = vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
     if (pcb) {
@@ -982,24 +1021,21 @@ int main(void)
         pid_t child = fork();
         if (child == 0) {
             /*
-             * STOPGAP -- FACADE, NOT VMS (vms-d0b). The console
-             * terminal device is _OPA0:, and as of vms-d0b that is a
-             * real device in the executive's device table
-             * (src/kernel/vms_devtab.c), created by the executive at
-             * module init and visible to every process on the node.
-             * Handing the name down in an environment variable is the
-             * rejected VMS_PRCNAM shape (CLAUDE.md rule 10, worked
-             * example 2): a process telling its own children what
-             * terminal they are on, which nothing else can see or
-             * contradict.
+             * DELETED, NOT REPLACED (vms-fb9): setenv("VMS_TERMINAL",
+             * "_OPA0:", 1) stood here. PID 1 told its login child what
+             * terminal it was on through the environment -- the rejected
+             * VMS_PRCNAM shape (CLAUDE.md rule 10, worked example 2). It
+             * was not even a claim anything could check: the child had no
+             * way to verify it and no other process could see it.
              *
-             * It is still here only because DCL cannot yet reach
-             * /dev/vms in the runtime the CI harness can drive -- see
-             * the vms-d0b escalation. The replacement is not "pass a
-             * better variable": it is $ASSIGN to OPA0: and $GETDVI on
-             * the resulting channel. Do not build on this line.
+             * OPA0: IS real -- the executive creates it at module init
+             * (src/kernel/vms_devtab.c) and every process on the node can
+             * read it. So the console terminal does not need to be
+             * announced; it needs to be LOOKED UP, with $ASSIGN and
+             * $GETDVI on the resulting channel. PID 1 has no business
+             * asserting it, and nothing downstream may be built on this
+             * line being here.
              */
-            setenv("VMS_TERMINAL", "_OPA0:", 1);
             /* Child: exec vms_login */
             execl(loginout_path, "vms_login", (char *)NULL);
             /* If vms_login not found, exec vmsdcl directly */

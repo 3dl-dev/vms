@@ -263,7 +263,7 @@ uint32_t vms_kif_dalloc(const char *devnam);
  * OVMX-UNWIRED: vms_kif_alloc_op (vms-dv1) -- shared body of the two above */
 
 /* Read a device row by name. SS$_NOSUCHDEV if there is no such device.
- * OVMX-UNWIRED: vms_kif_getdvi_devnam (vms-fb9) */
+ * Wired: the census gate is what proves it has a product caller. */
 uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info);
 
 /* Read the device row behind an assigned channel. SS$_IVCHAN if the
@@ -274,7 +274,7 @@ uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo *info);
 /* Enumerate the device table. Pass *index = 0 for the first row; each
  * call fills info and advances *index. Returns SS$_NOMOREDEV when the
  * scan is exhausted.
- * OVMX-UNWIRED: vms_kif_devscan (vms-fb9) -- SHOW DEVICE is the reader */
+ * Wired: the census gate is what proves it has a product caller. */
 uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info);
 
 /* Set terminal characteristics through an assigned channel (the

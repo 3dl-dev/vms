@@ -10,12 +10,18 @@
  * design named as "already wired" and told every implementer to copy.
  *
  * A test that opens and registers by hand cannot see that defect: it
- * supplies the very step the product forgets. So NOTHING in this file's
- * positive path calls vms_kif_open() or vms_kif_register() before using a
- * facility. It uses the public entry points exactly the way libvms uses
- * them, against a real /dev/vms, and each property has a minimal mutation
- * that turns it -- and only it -- red:
+ * supplies the very step the product forgets. This file's positive path
+ * uses the public entry points exactly the way libvms uses them, against
+ * a real /dev/vms, WITHOUT calling vms_kif_open() or vms_kif_register()
+ * by hand first to reach the facility under test -- except where the
+ * manual call IS the subject (suite 0's bare-setident probe below, and
+ * suites 4/5's post-exec register-adopt, each explained at its own
+ * definition, not here). Each property below has a minimal mutation
+ * described at its own definition:
  *
+ *   0 setident binds   (vms-fb9 r6) src/libvmssys/vms_kif.c:
+ *                      vms_kif_setident() -> KIF_CALL(...) back to a raw
+ *                      vms_sys_ioctl() with no kif_bind()
  *   1 auto-bind        remove the vms_kif_register() call in kif_bind()
  *   2 $ENQ/$DEQ        (same mutation reaches it; see suite 2 note)
  *   3 fork re-bind     kif_bind(): `vms_bound_pid == pid` -> `!= 0`
@@ -23,6 +29,14 @@
  *   5 adopt keeps privs vms_module.c: adopt branch -> re-apply init_privs
  *   6 errno mapping    vms_kif_kerr_to_ss(): any one arm
  *   7 one PCB/process  vms_module.c: current->tgid -> current->pid
+ *
+ * Suite 0 is a NARROWER property than suite 1: it exists because
+ * vms_kif_setident() was, until r6, the ONE entry point in
+ * src/libvmssys/vms_kif.c that bypassed kif_bind() entirely (a raw
+ * vms_sys_ioctl(), not KIF_CALL) -- so restoring JUST that one bypass
+ * (putting the raw ioctl back) turns suite 0 red while suites 1-7 stay
+ * green, and restoring the vms-9fc defect in kif_bind() itself (suite 1's
+ * mutation) turns suite 0 red TOO, because setident now reaches kif_bind().
  *
  * Status values are ORACLE-PINNED on the reference lab node VAX1, OpenVMS
  * VAX V7.3 (2026-07-30), by two independent documented-tool observations:
@@ -85,6 +99,15 @@
 #define THREAD_EFN      41
 #define THREAD_RESNAM   "VMS$THREADPROBE"
 #define THREAD_NAME     "VMS$THREADED"
+
+/* Suite 0's identity. This process is root under QEMU (PID 1 runs init.sh
+ * as uid 0), so it holds SETPRV from registration (VMS_PRV_M_ENFORCED) and
+ * VMS_IOCTL_SETIDENT does not refuse the stamp on privilege grounds -- the
+ * property under test is purely "did the ioctl reach a registered process
+ * at all", not identity authorization (that is test_kmod_ident.c's job). */
+#define BARE_SETIDENT_USER   "VMS$BAREID"
+#define BARE_SETIDENT_UIC    (((uint32_t)401 << 16) | 402u)
+#define BARE_SETIDENT_PRIVS  VMS_PRV_M_TMPMBX
 
 /*
  * The identity suite 5 establishes before the image is thrown away, and
@@ -357,6 +380,74 @@ int main(int argc, char **argv)
         printf("  FAIL: /dev/vms absent (executive not loaded)\n");
         printf("=== RESULTS: 0 passed, 1 failed ===\n");
         return 1;
+    }
+
+    /* ------------------------------------------------------------
+     * SUITE 0 -- vms_kif_setident() NOW BINDS TOO.
+     *
+     * Until vms-fb9 r6, vms_kif_setident() issued a raw vms_sys_ioctl()
+     * instead of going through kif_call()/KIF_CALL -- so it never ran
+     * kif_bind() and reached an unregistered process's entry, the same
+     * class of defect suite 1 below exists to prove fixed for the
+     * facilities it drives ($SETEF/$READEF/$GETJPI). Measured against a
+     * real /dev/vms before the r6 fix:
+     * vms_kif_open() followed by a BARE vms_kif_setident() (no
+     * vms_kif_register(), no other vms_kif_* call first) returned
+     * status=20 (SS$_BADPARAM) -- not because the parameters were bad,
+     * but because the unbound ioctl was rejected -ESRCH and the old
+     * failure path hard-coded SS$_BADPARAM for every failure.
+     *
+     * Run in a FORKED CHILD, and before suite 1: the probe has to be the
+     * FIRST vms_kif_* call this task ever makes, or the process would
+     * already be bound (by suite 1's own calls) and the defect would be
+     * invisible -- exactly the trap suite 1's own comment warns about.
+     * ------------------------------------------------------------ */
+    printf("--- 0. vms_kif_setident() binds with no prior register ---\n");
+
+    {
+        int p[2];
+        pid_t c;
+        uint32_t s = 0xFFFFFFFFu;
+        ssize_t n;
+
+        if (pipe(p) < 0) {
+            printf("  FAIL: pipe()\n");
+            fail++;
+            goto done;
+        }
+
+        c = fork();
+        if (c < 0) {
+            printf("  FAIL: fork()\n");
+            fail++;
+            close(p[0]);
+            close(p[1]);
+            goto done;
+        }
+        if (c == 0) {
+            uint32_t st;
+
+            close(p[0]);
+            if (vms_kif_open() < 0)
+                st = 0; /* 0 is not a VMS status: never got there */
+            else
+                st = vms_kif_setident(BARE_SETIDENT_USER, BARE_SETIDENT_UIC,
+                                       BARE_SETIDENT_PRIVS);
+            (void)!write(p[1], &st, sizeof(st));
+            _exit(0);
+        }
+        close(p[1]);
+        n = read(p[0], &s, sizeof(s));
+        close(p[0]);
+        waitpid(c, NULL, 0);
+
+        CHECK(n == (ssize_t)sizeof(s), "bare-setident child reported back");
+        CHECK(s == SS_NORMAL,
+              "vms_kif_open() then a BARE vms_kif_setident() reaches the "
+              "executive with no explicit register");
+        CHECK(s != SS_BADPARAM,
+              "... and is not rejected as the caller's own bad parameter "
+              "(the pre-r6 raw-ioctl failure path)");
     }
 
     /* ------------------------------------------------------------

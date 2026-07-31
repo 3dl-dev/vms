@@ -23,14 +23,19 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          key: apt-${{ runner.os }}-cmake-gcc-readline
+          # Cache-key hygiene, not a correctness fix (vms-fb9 r7): strace was
+          # added to the install list below. restore-keys already falls back
+          # to any apt-${{ runner.os }}- prefix, so apt-get install would
+          # still succeed and fetch strace on a stale-key cache hit -- this
+          # bump only avoids re-downloading it every run.
+          key: apt-${{ runner.os }}-cmake-gcc-readline-strace
           restore-keys: apt-${{ runner.os }}-
 
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            cmake gcc make libc6-dev libreadline-dev
+            cmake gcc make libc6-dev libreadline-dev strace
 
       - name: Cache CMake build
         uses: actions/cache@v4

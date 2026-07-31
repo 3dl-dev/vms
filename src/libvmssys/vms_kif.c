@@ -859,17 +859,18 @@ uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info)
  * SS$_NOPRIV if the caller lacks SETPRV and the identity is not a
  * weakening of its own; SS$_IVLOGNAM if the user name is malformed.
  *
- * FIXED (vms-fb9 r6): this was the one entry point in this file that
- * issued a raw vms_sys_ioctl() instead of going through KIF_CALL, so it
- * never called kif_bind() and reached an unregistered process's entry.
- * Measured against a real /dev/vms: vms_kif_open() followed by a BARE
- * vms_kif_setident() (no explicit vms_kif_register(), no other
- * vms_kif_* call first) returned status=20 (SS$_BADPARAM) -- not
- * because the parameters were bad, but because the unbound ioctl was
- * rejected -ESRCH and the old failure path hard-coded SS$_BADPARAM for
- * every failure. Now routed through KIF_CALL like every other entry
- * point; the same probe now returns status=1 (SS$_NORMAL). See
- * tests/qemu/test_kmod_bind.c suite 0.
+ * FIXED (vms-fb9 r6): this issued a raw vms_sys_ioctl() instead of going
+ * through KIF_CALL, so it never called kif_bind() and reached an
+ * unregistered process's entry. Measured against a real /dev/vms:
+ * vms_kif_open() followed by a BARE vms_kif_setident() (no explicit
+ * vms_kif_register(), no other vms_kif_* call first) returned status=20
+ * (SS$_BADPARAM) -- not because the parameters were bad, but because the
+ * unbound ioctl was rejected -ESRCH and the old failure path hard-coded
+ * SS$_BADPARAM for every failure. Now routed through KIF_CALL, the same
+ * as most other entry points (vms_kif_deliverast() above is the other
+ * entry point in this file that does not, for an unrelated reason given
+ * at its own definition); the same probe now returns status=1
+ * (SS$_NORMAL). See tests/qemu/test_kmod_bind.c suite 0.
  */
 uint32_t vms_kif_setident(const char *username, uint32_t uic,
                           uint64_t authorized_privs)

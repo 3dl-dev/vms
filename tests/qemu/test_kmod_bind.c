@@ -10,11 +10,14 @@
  * design named as "already wired" and told every implementer to copy.
  *
  * A test that opens and registers by hand cannot see that defect: it
- * supplies the very step the product forgets. So NOTHING in this file's
- * positive path calls vms_kif_open() or vms_kif_register() before using a
- * facility. It uses the public entry points exactly the way libvms uses
- * them, against a real /dev/vms, and each property has a minimal mutation
- * that turns it -- and only it -- red:
+ * supplies the very step the product forgets. This file's positive path
+ * uses the public entry points exactly the way libvms uses them, against
+ * a real /dev/vms, WITHOUT calling vms_kif_open() or vms_kif_register()
+ * by hand first to reach the facility under test -- except where the
+ * manual call IS the subject (suite 0's bare-setident probe below, and
+ * suites 4/5's post-exec register-adopt, each explained at its own
+ * definition, not here). Each property has a minimal mutation that turns
+ * it -- and only it -- red:
  *
  *   0 setident binds   (vms-fb9 r6) src/libvmssys/vms_kif.c:
  *                      vms_kif_setident() -> KIF_CALL(...) back to a raw
@@ -381,14 +384,14 @@ int main(int argc, char **argv)
     }
 
     /* ------------------------------------------------------------
-     * SUITE 0 -- vms_kif_setident() BINDS LIKE EVERY OTHER ENTRY POINT.
+     * SUITE 0 -- vms_kif_setident() NOW BINDS TOO.
      *
-     * Until vms-fb9 r6, vms_kif_setident() was the ONE function in
-     * src/libvmssys/vms_kif.c that issued a raw vms_sys_ioctl() instead
-     * of going through kif_call()/KIF_CALL -- so it never ran
-     * kif_bind() and reached an unregistered process's entry, the exact
-     * defect suite 1 below exists to prove fixed for every OTHER entry
-     * point. Measured against a real /dev/vms before the r6 fix:
+     * Until vms-fb9 r6, vms_kif_setident() issued a raw vms_sys_ioctl()
+     * instead of going through kif_call()/KIF_CALL -- so it never ran
+     * kif_bind() and reached an unregistered process's entry, the same
+     * class of defect suite 1 below exists to prove fixed for the
+     * facilities it drives ($SETEF/$READEF/$GETJPI). Measured against a
+     * real /dev/vms before the r6 fix:
      * vms_kif_open() followed by a BARE vms_kif_setident() (no
      * vms_kif_register(), no other vms_kif_* call first) returned
      * status=20 (SS$_BADPARAM) -- not because the parameters were bad,

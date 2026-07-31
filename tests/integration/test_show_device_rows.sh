@@ -92,6 +92,14 @@
 # status would defeat this property too and would need a different anchor
 # again -- this comment does not claim otherwise.
 #
+# UPDATED 2026-07-31 (vms-fb9 r7): check_executive_read_attempted() also
+# verifies strace itself actually traced the tracee (its own exit status,
+# plus the tracee's liveness marker in strace's captured stdout) before
+# trusting an absent "/dev/vms" match as the real M3-shaped red. A container
+# that denies ptrace produces the same "nothing observed" shape as M3 but is
+# a broken fixture, not a property verdict, and is reported as such -- never
+# as a pass.
+#
 # Usage: test_show_device_rows.sh [PATH_TO_DCL.EXE]
 
 set -u
@@ -210,6 +218,23 @@ check_status_reports_failure() {
 # fabricated without touching it. See the file header (added vms-fb9 r6)
 # for why $STATUS alone (property 2b) is not enough.
 R_NOREAD='no openat("/dev/vms", ...) syscall was observed by strace'
+# BROKEN FIXTURE vs. real red (vms-fb9 r7): a container that denies ptrace
+# (common -- Docker's default seccomp profile blocks ptrace(2) without
+# --cap-add=SYS_PTRACE) makes strace's OWN PTRACE_TRACEME fail. That is fatal
+# to strace -- it never execs the tracee at all (verified against a real
+# denied-ptrace sandbox: podman with a seccomp profile that errno's ptrace(2)
+# reproduces "strace: ptrace(PTRACE_TRACEME, ...): Operation not permitted",
+# strace exits nonzero, and the tracee's own stdout never appears). In that
+# state $WORK/strace.out contains no openat records for ANY file, not just
+# /dev/vms -- so it would satisfy the same "no /dev/vms observed" test the
+# real defect (mutation M3) produces, and this function used to report both
+# with the identical message. That is the same shape as a permanently-skipped
+# test reporting green (Rule 10): the fixture failed, not the property.
+# Two independent signals distinguish the two: strace's own exit status, and
+# whether the tracee ran far enough to write the liveness marker (it cannot
+# have opened /dev/vms if it never reached the WRITE SYS$OUTPUT that follows
+# it in the command script). Neither state is ever reported as a pass.
+R_BROKEN='strace could not trace the tracee at all (ptrace denied or unusable) -- BROKEN FIXTURE, not a property verdict'
 check_executive_read_attempted() {
     label="$1"; cmdline="$2"
     if [ -z "$STRACE" ]; then
@@ -221,6 +246,19 @@ check_executive_read_attempted() {
     printf '%s\nWRITE SYS$OUTPUT "%s"\n' "$cmdline" "$MARK" \
         | "$STRACE" -f -e trace=openat -o "$WORK/strace.out" "$DCL" \
               >"$WORK/strace_stdout" 2>"$WORK/strace_stderr"
+    strace_rc=$?
+    if [ "$strace_rc" -ne 0 ] || ! grep -qF "$MARK" "$WORK/strace_stdout" 2>/dev/null; then
+        fail "$label: $R_BROKEN" \
+             "strace exited $strace_rc; the tracee's liveness marker" \
+             "'$MARK' was $(grep -qF "$MARK" "$WORK/strace_stdout" 2>/dev/null && echo present || echo absent) in its stdout, so the tracee" \
+             "$(grep -qF "$MARK" "$WORK/strace_stdout" 2>/dev/null && echo "ran but strace still recorded nothing usable" || echo "may never have run under trace at all")." \
+             "This property CANNOT be evaluated in this state, so it is" \
+             "reported as FAILED, never a silent pass (Rule 10; same" \
+             "convention as tests/integration/test_runtime_target_negctl.sh's" \
+             "expect_red() and tests/qemu/run_facility_negctl.sh)." \
+             "strace stderr was:" "$(sed 's/^/       | /' "$WORK/strace_stderr" 2>/dev/null)"
+        return
+    fi
     if grep -qF '"/dev/vms"' "$WORK/strace.out" 2>/dev/null; then
         echo "  OK: $label really attempted to open /dev/vms (strace-observed)"
     else

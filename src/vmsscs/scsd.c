@@ -383,6 +383,11 @@ struct peer_state {
     long     cm_last_ack_ms;       /* monotonic_ms() of our last cat-0x04 ack */
     /* vms-760: cluster-wide state-transition barrier (spec 4p). */
     uint32_t barrier_epoch;        /* body[12:16] latched from the coordinator's op 0x09 */
+    uint8_t  xition_class;         /* vms-e4b: body[17] of the transition-open in
+                                    * flight -- 0x02 add, 0x03 remove-failed,
+                                    * 0x04 self-departure. 0 = none seen yet, and
+                                    * we then answer op 0x12 as class 0x02, which
+                                    * is exactly what the proven join path did. */
     int      barrier_step;         /* current step N, 1..12; 0 = barrier not running */
     int      barrier_done;         /* our OWN admission finished (record, NOT a gate) */
     unsigned barrier_count;        /* transitions completed; #1 = our join, 2+ = bystander */
@@ -679,10 +684,20 @@ static int cm_response_shape(uint8_t category, uint8_t opcode)
          * are the only grounding that exists for them. */
         if (opcode == SCS_MEMBER_OP_COMMIT ||   /* 0x03 membership commit     */
             opcode == SCS_MEMBER_OP_LOCKRB ||   /* 0x05 lock/resource rebuild */
-            opcode == SCS_MEMBER_OP_XITION ||   /* 0x09 transition open       */
+            opcode == SCS_MEMBER_OP_XITION ||   /* 0x09 class-0x02 open       */
             opcode == SCS_MEMBER_OP_RELAY  ||   /* 0x12 coordinator's relay   */
-            opcode == SCS_MEMBER_OP_0F     ||   /* 0x0f (meaning unknown)     */
-            opcode == SCS_MEMBER_OP_08) {       /* 0x08 (meaning unknown)     */
+            opcode == SCS_MEMBER_OP_0F     ||   /* 0x0f class-0x03 extra step */
+            opcode == SCS_MEMBER_OP_08     ||   /* 0x08 class-0x03 open       */
+            /* vms-e4b: 0x0d is the class-0x04 open -- the message a node sends
+             * when it is LEAVING of its own accord. GROUNDED 3/3 request/response
+             * pairs from two captures and two different initiators, answered with
+             * the identical echo recipe in ~0.5 ms. It was missing here, and a
+             * cluster whose member departs gracefully would have met silence.
+             *
+             * ONLY in category 0x01. The cat-0x02 op 0x0d is the DLM rebuild
+             * record and takes a completely different response (CM_RSP_DLM);
+             * that split is why this allowlist is keyed per category. */
+            opcode == SCS_MEMBER_OP_DEPART) {   /* 0x0d class-0x04 open       */
             return CM_RSP_ECHO;
         }
         return CM_RSP_NONE;
@@ -2188,15 +2203,48 @@ int main(int argc, char **argv)
                      *   op 0x0c (step N)     -> no answer; advance to N+1, or finish
                      * The joiner is a REQUIRED participant: the coordinator gates every
                      * member at step N until all of them have sent their 0x0b. */
-                    if (cm_req && mv.opcode == SCS_MEMBER_OP_XITION &&
-                        (size_t)n >= 92) {
+                    /* vms-e4b: ALL THREE transition-opens fill the same role slot
+                     * (body[16] = 0x40) and carry the epoch in the same place --
+                     * op 0x09 opens a class-0x02 add, op 0x08 a class-0x03 removal
+                     * of a failed node, op 0x0d a class-0x04 self-departure. We
+                     * previously latched the epoch only from op 0x09, so during
+                     * anyone else's removal or departure we carried a stale epoch.
+                     *
+                     * The opcode is still the key (see cm_response_shape); the role
+                     * slot is only a cross-check, and a mismatch is logged rather
+                     * than acted on -- we do not want to start trusting body[16] as
+                     * an identifier by the back door. */
+                    if (cm_req && (size_t)n >= 92 &&
+                        (mv.opcode == SCS_MEMBER_OP_XITION ||
+                         mv.opcode == SCS_MEMBER_OP_08 ||
+                         mv.opcode == SCS_MEMBER_OP_DEPART)) {
+                        uint8_t role = buf[72 + SCS_MEMBER_ROLE_BODYOFF];
                         ps->barrier_epoch = (uint32_t)buf[84] |
                                             ((uint32_t)buf[85] << 8) |
                                             ((uint32_t)buf[86] << 16) |
                                             ((uint32_t)buf[87] << 24);
+                        ps->xition_class = buf[72 + SCS_MEMBER_CLASS_BODYOFF];
+                        /* The role slot is a CROSS-CHECK, never a gate. Gating the
+                         * epoch latch on it would let one unexpected byte silently
+                         * stop us tracking the transition -- the failure mode this
+                         * whole item exists to remove. Log the mismatch instead. */
+                        if (role != SCS_MEMBER_ROLE_XITION) {
+                            log_ts(stdout);
+                            printf(" SCSD-W-XITROLE, op 0x%02x carries role slot 0x%02x,"
+                                   " expected 0x%02x -- latching anyway, but the role"
+                                   " model may be wrong\n",
+                                   mv.opcode, role, (unsigned)SCS_MEMBER_ROLE_XITION);
+                            fflush(stdout);
+                        }
                         log_ts(stdout);
-                        printf(" SCSD-I-XITION, coordinator opened a state transition"
-                               " (epoch=0x%08X)\n", (unsigned)ps->barrier_epoch);
+                        printf(" SCSD-I-XITION, state transition opened by op 0x%02x"
+                               " (epoch=0x%08X class=0x%02x %s)\n",
+                               mv.opcode, (unsigned)ps->barrier_epoch,
+                               ps->xition_class,
+                               ps->xition_class == SCS_MEMBER_CLASS_ADD ? "ADD" :
+                               ps->xition_class == SCS_MEMBER_CLASS_REMOVE ? "REMOVE-FAILED" :
+                               ps->xition_class == SCS_MEMBER_CLASS_DEPART ? "SELF-DEPARTURE" :
+                               "UNKNOWN-CLASS");
                         fflush(stdout);
                     }
                     /* vms-e81 (T1.1): the barrier must arm for EVERY transition,
@@ -2221,7 +2269,37 @@ int main(int argc, char **argv)
                     if (cm_req && mv.opcode == SCS_MEMBER_OP_XITION_GO &&
                         (size_t)n >= 90 && !ps->barrier_step) {
                         uint16_t tag = (uint16_t)buf[88] | ((uint16_t)buf[89] << 8);
-                        if (tag == SCS_MEMBER_BARRIER_TAG) {
+                        /* vms-e4b: the tag is (class << 8) | role, and the barrier
+                         * arms for TWO of the three classes.
+                         *
+                         *   0x0260 class-0x02 ADD    -> 12-step barrier. Armed.
+                         *   0x0360 class-0x03 REMOVE -> 12-step barrier. Armed.
+                         *                               THIS WAS THE HOLE. A node
+                         *                               failing is not exotic; it is
+                         *                               the single most likely event
+                         *                               to happen around a sitting
+                         *                               member, and we answered it
+                         *                               with silence -- which spec
+                         *                               4(p) says strands the
+                         *                               transition and drops healthy
+                         *                               members.
+                         *   0x0460 class-0x04 DEPART -> NO barrier exists. An
+                         *                               0x81/0x0b carrying class
+                         *                               0x04 does not occur in any
+                         *                               capture; the dialogue is
+                         *                               0x12, 0x03, 0x0d, 0x0a and
+                         *                               then nothing. Arming here
+                         *                               would make us send a step-1
+                         *                               request nobody ever asked
+                         *                               for -- inventing traffic for
+                         *                               a condition VMS does not
+                         *                               face. Stay quiet.
+                         *
+                         * Any other tag stays unhandled AND LOUD. It is not silence
+                         * we have chosen, it is a gap we have not grounded, and the
+                         * log line is what turns it into work. */
+                        if (tag == SCS_MEMBER_BARRIER_TAG ||
+                            tag == SCS_MEMBER_BARRIER_TAG_REM) {
                             /* DO NOT answer from here -- see barrier_go_pending.
                              * Replying at receive-path speed (~20 us) beats the
                              * coordinator's own 0x0a fan-out and gets our step
@@ -2249,6 +2327,21 @@ int main(int argc, char **argv)
                             ps->barrier_go_pending = 0;
                             cm_send_barrier_step(sock, (int)ifindex, ps, our_hw_mac,
                                                  our_src_logical, ps->barrier_step);
+                        } else if (tag == (uint16_t)((SCS_MEMBER_CLASS_DEPART << 8) |
+                                                     SCS_MEMBER_ROLE_GO)) {
+                            log_ts(stdout);
+                            printf(" SCSD-I-XITGO, op 0x0a tag 0x%04x is a class-0x04"
+                                   " SELF-DEPARTURE -- no barrier follows one, so we"
+                                   " correctly send nothing\n", tag);
+                            fflush(stdout);
+                        } else {
+                            log_ts(stdout);
+                            printf(" SCSD-W-XITGOUNGROUNDED, op 0x0a with tag 0x%04x"
+                                   " (role 0x%02x class 0x%02x) -- we have never"
+                                   " observed this class; NOT arming the barrier."
+                                   " Ground it before answering\n",
+                                   tag, (unsigned)(tag & 0xff), (unsigned)(tag >> 8));
+                            fflush(stdout);
                         }
                     }
                     if (cm_req && mv.opcode == SCS_MEMBER_OP_BARRIER_REL &&
@@ -2368,10 +2461,20 @@ int main(int argc, char **argv)
                              * capture because the request already carried 0x0210;
                              * three other specimens carry 0x0410 in the request and
                              * 0x0210 in the response. */
+                            /* vms-e4b REFINEMENT: body[17] is not the constant
+                             * 0x02, it is the CLASS of the transition the
+                             * responder is currently in. It read as a constant
+                             * because every specimen we had was a class-0x02 ADD
+                             * -- which is also the only class OVMX has ever been
+                             * in, so this is a no-op on the proven join path and
+                             * only differs once a removal or a departure happens
+                             * around us. Default 0x02 when we have latched
+                             * nothing, i.e. exactly the old behaviour. */
                             uint8_t *rb = rframe + 72;
                             const uint8_t *qb = buf + 72;
-                            rb[16] = 0x10;
-                            rb[17] = 0x02;
+                            rb[16] = SCS_MEMBER_ROLE_RELAY;
+                            rb[17] = ps->xition_class ? ps->xition_class
+                                                      : SCS_MEMBER_CLASS_ADD;
                             rb[20] = qb[12];
                             rb[21] = qb[13];
                             rb[22] = qb[14];

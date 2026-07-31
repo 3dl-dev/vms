@@ -283,11 +283,76 @@ int scs_member_close_is_resource(const uint8_t *rbody);
                                   * f404->f406 0x050007A2 -> 0x00000004). The
                                   * value tracks the post-transition member count
                                   * in both specimens -- INFERRED, 2 specimens. */
-#define SCS_MEMBER_OP_0F    0x0f /* meaning UNKNOWN. Answered with a plain echo
-                                  * by real members (crash capture f1367->f1368,
-                                  * where body[18] was already 1). */
-#define SCS_MEMBER_OP_08    0x08 /* meaning UNKNOWN. Plain echo + all three
-                                  * mutations (crash capture f1372->f1373). */
+#define SCS_MEMBER_OP_0F    0x0f /* meaning UNKNOWN. Role slot 0x30, and it occurs
+                                  * ONLY inside a class-0x03 (remove-a-failed-node)
+                                  * transition, one step before the op 0x08. The
+                                  * response is a plain echo + the response bit and
+                                  * NOTHING ELSE -- notably body[18] is ECHOED, not
+                                  * forced to 1. See scs_member_build_response(). */
+#define SCS_MEMBER_OP_08    0x08 /* the class-0x03 transition-open (role slot 0x40,
+                                  * tag 0x0340) -- the same slot op 0x09 fills for a
+                                  * class-0x02 add. Plain echo + all mutations
+                                  * (crash capture f1372->f1373; 6/6 genuine VMS
+                                  * responses across the capture library). */
+#define SCS_MEMBER_OP_DEPART 0x0d /* the class-0x04 transition-open (role slot 0x40,
+                                  * tag 0x0440), sent by the LEAVING node itself
+                                  * right after its op 0x12 announce and op 0x03
+                                  * commit, and answered in ~0.5 ms with the same
+                                  * echo recipe. GROUNDED 3/3 request/response pairs
+                                  * (af2-established-rejoin f1950->f1951,
+                                  * af2-firsttimer f1830->f1831 and f19435->f19437).
+                                  * NOTE the cat-0x02 op 0x0d is a completely
+                                  * different message (the DLM rebuild record) --
+                                  * the response shape is keyed per CATEGORY and
+                                  * these two must never be conflated. */
+
+/*
+ * vms-e4b: the ROLE SLOT and the TRANSITION CLASS -- body[16] and body[17].
+ *
+ * A whole-library census (26 captures) settles what these two bytes are, and
+ * refutes the working hypothesis they were introduced under.
+ *
+ * body[16] is a stable ROLE SLOT. 0x10 announce/relay, 0x20 commit, 0x30 the
+ * op-0x0f step, 0x40 transition-open, 0x60 barrier go. It partitions perfectly
+ * by role across every capture with zero residuals.
+ *
+ * body[17] is NOT a generation -- the transition EPOCH is where sec 4(j)/4(p)
+ * already put it, body[12:16] as an LE u32. Decisive: af2-firsttimer contains
+ * six successive transitions whose epoch runs 3,4,6,7,9,11 (monotone) while
+ * body[17] runs 0x04,0x04,0x02,0x04,0x02,0x02 -- it goes DOWN. body[17] is the
+ * CLASS of the transition:
+ *
+ *   0x02 ADD a member      -- has the op 0x05/0x06 lock-DB push AND the barrier
+ *   0x03 REMOVE a failed member -- has the extra op 0x0f step AND the barrier,
+ *                             but no 0x05/0x06
+ *   0x04 a node announces its OWN departure -- 0x12, 0x03, 0x0d, 0x0a and then
+ *                             nothing. NO barrier at all: an 0x81/0x0b carrying
+ *                             class 0x04 does not exist in any capture.
+ *
+ * And therefore the transition-open opcode does NOT vary by generation. The
+ * 0x09 -> 0x08 -> 0x0d triple that looked like a generation sequence is the
+ * three CLASSES, which merely happen to look like consecutive small integers.
+ * af2-firsttimer runs three successive ADD transitions at epochs 6, 9 and 11 and
+ * the open is op 0x09 / tag 0x0240 every single time (54/54 library-wide).
+ *
+ * DO NOT key the response allowlist on the role slot. Role 0x20 alone spans op
+ * 0x03 and 0x05 (echo), op 0x06 (cat-0x04 ack, NEVER an echo -- 7882 frames) and
+ * the joiner's own op 0x02; keying on it would fire a 132-byte echo at the whole
+ * op-0x06 burst. Role tags do not exist at all on cat 0x02 or cat 0x06 -- the
+ * categories that previously bugchecked real VAXes. The key stays
+ * (SYSAP, category, opcode); the role slot is a corroborating cross-check and
+ * the place we read the class from.
+ */
+#define SCS_MEMBER_ROLE_RELAY     0x10 /* body[16] on op 0x12 (and on 0x81/0x0b) */
+#define SCS_MEMBER_ROLE_COMMIT    0x20 /* body[16] on op 0x03 / 0x05 / 0x06      */
+#define SCS_MEMBER_ROLE_0F        0x30 /* body[16] on op 0x0f                    */
+#define SCS_MEMBER_ROLE_XITION    0x40 /* body[16] on op 0x09 / 0x08 / 0x0d      */
+#define SCS_MEMBER_ROLE_GO        0x60 /* body[16] on op 0x0a                    */
+#define SCS_MEMBER_CLASS_ADD      0x02 /* body[17]: add a member    (barrier)    */
+#define SCS_MEMBER_CLASS_REMOVE   0x03 /* body[17]: remove a failed one (barrier)*/
+#define SCS_MEMBER_CLASS_DEPART   0x04 /* body[17]: self-departure  (NO barrier) */
+#define SCS_MEMBER_ROLE_BODYOFF   16   /* body[16] role slot                     */
+#define SCS_MEMBER_CLASS_BODYOFF  17   /* body[17] transition class              */
 
 /* The cluster-wide state-transition barrier (vms-760). */
 #define SCS_MEMBER_OP_BARRIER      0x0b /* joiner-INITIATED barrier step */
@@ -297,9 +362,15 @@ int scs_member_close_is_resource(const uint8_t *rbody);
 #define SCS_MEMBER_BARRIER_STEPS   12   /* invariant across 6 joins / 4 clusters */
 #define SCS_MEMBER_XITION_TAG      0x0240 /* body[16:18] on the op 0x09 */
 #define SCS_MEMBER_BARRIER_TAG     0x0260 /* body[16:18] on the op 0x0a that STARTS
-                                           * the barrier. An op 0x0a with any other
-                                           * tag (0x0460 seen on a running cluster)
-                                           * is NOT a barrier start -- ignore it. */
+                                           * the barrier for a class-0x02 ADD. The
+                                           * tag is (class << 8) | role, so the
+                                           * class-0x03 REMOVE start is 0x0360 and
+                                           * the class-0x04 self-departure is 0x0460.
+                                           * vms-e4b: 0x0360 MUST arm the barrier
+                                           * too -- a removal runs the same 12 steps
+                                           * and a silent member strands it. 0x0460
+                                           * must NOT: a departure has no barrier. */
+#define SCS_MEMBER_BARRIER_TAG_REM 0x0360 /* class-0x03 barrier start (see above) */
 #define SCS_MEMBER_EPOCH_BODYOFF   12   /* body[12:16] transition epoch (LE u32) */
 #define SCS_MEMBER_STEP_BODYOFF    16   /* body[16:20] barrier step index (LE u32) */
 

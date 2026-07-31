@@ -355,6 +355,76 @@ static void test_response_echoes_real_checksum(void)
           "op05 response echoes the REAL captured checksum 0x554b");
 }
 
+/*
+ * vms-e4b: op 0x0f ECHOES body[18]; every other allowlisted cat-0x01 opcode
+ * FORCES it to 1.
+ *
+ * This is the only difference between the two recipes and it is invisible in
+ * most specimens, because the requests that reach us usually carry body[18]=0
+ * anyway -- forcing and echoing then produce the same bytes. It only separates
+ * when the request carries a 1, which is exactly the specimen that made an
+ * earlier session generalise the wrong way. So the test drives BOTH values
+ * through BOTH recipes; anything less cannot tell them apart.
+ */
+static void test_op0f_echoes_response_marker(void)
+{
+    struct scs_member_params mp;
+    memset(&mp, 0, sizeof(mp));
+    memcpy(mp.dst_mac, vax1_logical, 6);
+    memcpy(mp.src_mac, vax2_logical, 6);
+    memcpy(mp.src_logical, vax2_logical, 6);
+    memcpy(mp.peer_logical, vax1_logical, 6);
+    mp.remote_conid = VAX1_VC_CONID;
+    mp.local_conid = VAX2_VC_CONID;
+    mp.incarnation = 1;
+
+    static const uint8_t marker_values[2] = { 0x00, 0x01 };
+    for (int i = 0; i < 2; i++) {
+        uint8_t req[SCS_MEMBER_FRAME_LEN], out[SCS_MEMBER_FRAME_LEN];
+
+        /* op 0x0f: the marker is echoed, whatever it was. */
+        make_frame(req, golden_op03_req);
+        req[72 + 9] = SCS_MEMBER_OP_0F;
+        req[72 + SCS_MEMBER_RESP_MARK_BODYOFF] = marker_values[i];
+        CHECK(scs_member_build_response(&mp, req, sizeof(req), out) == 0,
+              "build_response op0f ok");
+        CHECK(out[72 + 9] == SCS_MEMBER_OP_0F, "op0f response echoes opcode 0x0f");
+        CHECK(out[72 + 8] == (SCS_MEMBER_CAT_CONFIG | SCS_MEMBER_RESPONSE_BIT),
+              "op0f response sets the response bit");
+        CHECK(out[72 + SCS_MEMBER_RESP_MARK_BODYOFF] == marker_values[i],
+              "op0f ECHOES body[18] -- never forces it to 1");
+
+        /* op 0x03, same input: the marker IS forced. */
+        make_frame(req, golden_op03_req);
+        req[72 + SCS_MEMBER_RESP_MARK_BODYOFF] = marker_values[i];
+        CHECK(scs_member_build_response(&mp, req, sizeof(req), out) == 0,
+              "build_response op03 ok (marker variant)");
+        CHECK(out[72 + SCS_MEMBER_RESP_MARK_BODYOFF] == 0x01,
+              "op03 FORCES body[18]=1 regardless of the request");
+    }
+
+    /* op 0x0d in category 0x01 is the class-0x04 self-departure open and takes
+     * the ordinary forcing recipe. The identically-numbered cat-0x02 op 0x0d is
+     * the DLM rebuild record and must NOT come through here -- it has its own
+     * builder, and applying this transform to it corrupts the lock resource
+     * name (that is the LOCKMGRERR bugcheck). Assert the cat-0x01 side; the DLM
+     * side is covered by test_dlm_rebuild_response(). */
+    uint8_t reqd[SCS_MEMBER_FRAME_LEN], outd[SCS_MEMBER_FRAME_LEN];
+    make_frame(reqd, golden_op03_req);
+    reqd[72 + 9] = SCS_MEMBER_OP_DEPART;
+    reqd[72 + SCS_MEMBER_RESP_MARK_BODYOFF] = 0x00;
+    reqd[72 + SCS_MEMBER_ROLE_BODYOFF] = SCS_MEMBER_ROLE_XITION;
+    reqd[72 + SCS_MEMBER_CLASS_BODYOFF] = SCS_MEMBER_CLASS_DEPART;
+    CHECK(scs_member_build_response(&mp, reqd, sizeof(reqd), outd) == 0,
+          "build_response cat-0x01 op0d ok");
+    CHECK(outd[72 + 9] == SCS_MEMBER_OP_DEPART, "op0d response echoes opcode 0x0d");
+    CHECK(outd[72 + SCS_MEMBER_RESP_MARK_BODYOFF] == 0x01,
+          "cat-0x01 op0d forces body[18]=1 (same recipe as 0x03/0x05/0x08/0x09)");
+    CHECK(outd[72 + SCS_MEMBER_ROLE_BODYOFF] == SCS_MEMBER_ROLE_XITION &&
+          outd[72 + SCS_MEMBER_CLASS_BODYOFF] == SCS_MEMBER_CLASS_DEPART,
+          "op0d response leaves the role slot and class untouched");
+}
+
 static void test_null_guards(void)
 {
     uint8_t out[SCS_MEMBER_FRAME_LEN];
@@ -549,6 +619,7 @@ int main(void)
     test_default_model_is_ovmx();
     test_parse_classification();
     test_response_echoes_real_checksum();
+    test_op0f_echoes_response_marker();
     test_null_guards();
 
     if (failures == 0) {

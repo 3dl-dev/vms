@@ -515,7 +515,25 @@ int scs_member_build_response(const struct scs_member_params *p,
     /* txn (body[4:6]) + checksum (body[6:8]) stay echoed from the request. */
     obody[8] = (uint8_t)(rbody[8] | SCS_MEMBER_RESPONSE_BIT); /* set response bit */
     /* opcode body[9] stays echoed. */
-    obody[SCS_MEMBER_RESP_MARK_BODYOFF] = 0x01; /* response marker (GROUNDED 0x03+0x05+0x09) */
+    /* vms-e4b: op 0x0f ECHOES body[18]; it does not force it to 1.
+     *
+     * Two independent censuses looked contradictory and are not. The first found
+     * one real 0x0f response with body[18] == 1 (crash capture f1367->f1368) and
+     * generalised "0x0f takes the marker". The second found six genuine VMS 0x0f
+     * responses that all leave body[18] == 0. The reconciliation is that f1367's
+     * REQUEST already carried body[18] == 1 -- so both samples are an echo, and
+     * neither is a node setting the byte.
+     *
+     * Which reading we adopt is not a coin toss. Echoing writes nothing of our
+     * own into someone else's message; forcing overwrites a byte we cannot
+     * justify. And the only frames in the entire capture library that set
+     * body[18] on an 0x0f response are OVMX's own, inside
+     * ovmx-760-relay-crash-20260730.pcap -- the capture where VAX3 took
+     * INCONSTATE and VAX1 took INVEXCEPTN. That is not proof it was the cause,
+     * but it is not evidence for keeping it either. */
+    if (rbody[9] != SCS_MEMBER_OP_0F) {
+        obody[SCS_MEMBER_RESP_MARK_BODYOFF] = 0x01; /* response marker (GROUNDED 0x03+0x05+0x09) */
+    }
     /* vms-e81 CORRECTION: body[55]=0x00 is op-0x09-SPECIFIC, not a general
      * cat-0x01 rule. A whole-capture census of every responder shows op 0x03 and
      * op 0x05 responses ECHO body[55] verbatim (their requests carried 0x54 and

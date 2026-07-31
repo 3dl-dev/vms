@@ -18,9 +18,11 @@
 #include <pthread.h>
 #include "starlet.h"
 #include "vms/pcb.h"
+#include "vms_kif.h"
 
 /* Import from sys_assign.c */
 extern int vms$$chan_to_fd(uint16_t chan);
+extern uint32_t vms$$chan_exec_chan(uint16_t chan);
 
 /* Import from sys_uring.c */
 extern int vms_uring_init(void);
@@ -163,6 +165,36 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
                                            int *out_fd, int *out_is_read) {
     int fd = vms$$chan_to_fd(chan);
     if (fd < 0) return SS$_IVCHAN;
+
+    /*
+     * vms-1c57: THE CHANNEL IS THE IDENTITY. If this channel was bound to a
+     * device through $ASSIGN (vms$$chan_exec_chan nonzero -- currently only
+     * true for the terminal, src/kernel/vms_devtab.c's OPA0:), $QIO must
+     * operate on THAT channel: reconfirm with the executive, on every call,
+     * that it still recognizes the channel before doing any local I/O. This
+     * is a READ (VMS_IOCTL_GETDVI by channel) -- $QIO does not write the
+     * device table as a side effect, which would make the table's contents
+     * agree with reality while leaving the I/O path free to diverge from it
+     * again the moment nobody was checking. A channel /dev/vms no longer
+     * has -- because the executive is unreachable, or (not currently
+     * possible from this API, but not assumed impossible either) because
+     * something else tore it down -- must not let bytes move on the strength
+     * of a local slot number alone.
+     */
+    uint32_t exec_chan = vms$$chan_exec_chan(chan);
+    if (exec_chan != 0) {
+        struct vms_devinfo info;
+        uint32_t dvi_st = vms_kif_getdvi_chan(exec_chan, &info);
+        if (!(dvi_st & 1)) {
+            struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+            if (iosb) {
+                iosb->iosb$w_status = (uint16_t)dvi_st;
+                iosb->iosb$w_bcnt = 0;
+                iosb->iosb$l_dev_depend = 0;
+            }
+            return dvi_st;
+        }
+    }
 
     uint32_t base_func = func & 0xFF;
 

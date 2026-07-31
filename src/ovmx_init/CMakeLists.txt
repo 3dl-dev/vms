@@ -11,6 +11,10 @@ target_include_directories(ovmx_init PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
+    # kernel-interface client (vms-d0b): the login child takes the
+    # session's channel to the console and asks the executive to record
+    # it as the job's terminal.
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
 )
 
 target_compile_definitions(ovmx_init PRIVATE
@@ -20,9 +24,9 @@ target_compile_definitions(ovmx_init PRIVATE
 
 if(OVMX_IMGACT)
     # Static PID-1 bootstrap: link the static twins, not the shareable images.
-    target_link_libraries(ovmx_init PRIVATE vmsprocess_static vmsfs_static vmslnm_static pthread)
+    target_link_libraries(ovmx_init PRIVATE vmsprocess_static vmsfs_static vmslnm_static vmssys pthread)
 else()
-    target_link_libraries(ovmx_init PRIVATE vmsprocess vmsfs vmslnm pthread)
+    target_link_libraries(ovmx_init PRIVATE vmsprocess vmsfs vmslnm vmssys pthread)
 endif()
 
 set_target_properties(ovmx_init PROPERTIES

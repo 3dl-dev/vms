@@ -83,10 +83,18 @@ RUN KVER=$(cat /tmp/kver) && \
 #   test_syssvc_*.c            -> NOT built here; built by the cmake/musl
 #                                 stage below against the REAL src/libvms
 #                                 public sys$ API (vms-1d9).
-#   test_kmod_devtab/procnam/  -> NOT built here; built below against
-#   test_kmod_ident/bind.c        src/libvmssys (the real kernel-interface
+#   test_kmod_*.c that include -> NOT built here; built below against
+#   "vms_kif.h"                   src/libvmssys (the real kernel-interface
 #                                 client), see that stage's comment.
 #   everything else            -> plain gcc -static against vms_ioctl.h.
+#
+# THE SECOND RECIPE IS SELECTED BY WHAT THE SOURCE INCLUDES, not by a list of
+# file names. It used to be the literal set
+# devtab/procnam/ident/bind -- a list a human had to remember to extend, which
+# is the drift shape this harness has been bitten by before. The include line
+# is the thing that actually decides which recipe a suite needs, so it is what
+# is asked. A new kernel-interface suite reaches the right recipe by being
+# written, not by being remembered.
 #
 # `|| exit 1` is load-bearing: without it a compile failure only breaks the
 # `&&` for that one iteration, the loop continues, and RUN exits with the
@@ -96,8 +104,8 @@ COPY tests/qemu/test_*.c /src/tests/qemu/
 RUN for f in /src/tests/qemu/test_*.c; do \
         case "$f" in \
             */test_syssvc_*.c) continue;; \
-            */test_kmod_devtab.c|*/test_kmod_procnam.c|*/test_kmod_ident.c|*/test_kmod_bind.c) continue;; \
         esac; \
+        if grep -q '#include "vms_kif.h"' "$f"; then continue; fi; \
         out="${f%.c}"; \
         gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel || exit 1; \
         echo "Built: $(basename $out)"; \
@@ -110,16 +118,25 @@ RUN for f in /src/tests/qemu/test_*.c; do \
 # and string helpers linked in -- it does NOT pull in libvms; the libvms build
 # graph arrives in the NEXT stage (vms-1d9), which is a heavier, separate build.
 COPY src/libvmssys/ /src/libvmssys/
-RUN ARCH=$(uname -m) && \
-    for t in test_kmod_devtab test_kmod_procnam test_kmod_ident test_kmod_bind; do \
+RUN ARCH=$(uname -m) && n_kif=0 && \
+    for f in /src/tests/qemu/test_kmod_*.c; do \
+        if ! grep -q '#include "vms_kif.h"' "$f"; then continue; fi; \
+        t=$(basename "$f" .c); \
         gcc -static -O2 -Wall -pthread -o /src/tests/qemu/$t \
-            /src/tests/qemu/$t.c \
+            "$f" \
             /src/libvmssys/vms_kif.c \
             /src/libvmssys/vms_string.c \
             /src/libvmssys/arch/${ARCH}/syscall.S \
-            -I/src/kernel -I/src/libvmssys && \
-        echo "Built: $t (linked against src/libvmssys/vms_kif.c)" || exit 1; \
-    done
+            -I/src/kernel -I/src/libvmssys || exit 1; \
+        n_kif=$((n_kif + 1)); \
+        echo "Built: $t (linked against src/libvmssys/vms_kif.c)"; \
+    done && \
+    # FLOOR, for the same reason the staging step below carries one: if the
+    # include-line probe above ever stops matching, this loop builds NOTHING
+    # and the previous stage has already skipped the same files -- so every
+    # kernel-interface suite would be absent from the initramfs with the image
+    # build still green. A zero here is a broken selector, not an empty tree.
+    { [ "$n_kif" -ge 1 ] || { echo "FATAL: no test_kmod_* suite was matched as a kernel-interface client -- the '#include \"vms_kif.h\"' selector no longer matches anything"; exit 1; }; }
 
 # --- Userspace system-service layer (vms-1d9) ---------------------------
 # Everything above proves the KERNEL side: raw ioctls (test_kmod_*) and the

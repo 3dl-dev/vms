@@ -33,6 +33,8 @@
 #include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
+#include "ssdef.h"
+#include "vms_kif.h"
 
 #define SYSDISK_DEV      "/dev/vda"
 #define INITRAMFS_BACKUP "/tmp/initramfs_vms"
@@ -1034,7 +1036,49 @@ int main(void)
              * $GETDVI on the resulting channel. PID 1 has no business
              * asserting it, and nothing downstream may be built on this
              * line being here.
+             *
+             * WHAT STANDS HERE INSTEAD (vms-d0b). The login session takes
+             * a real channel to the console and asks the executive to
+             * record that channel's device as this job's terminal. Three
+             * properties, and each is the reason the environment variable
+             * was not simply reinstated behind a function call:
+             *
+             *   - The name is not transmitted. $ASSIGN names the console
+             *     because PID 1 is CREATING A SESSION ON IT -- that is
+             *     system configuration, the same way DKA0: is named at
+             *     step 1b -- but VMS_IOCTL_SETTERM takes only the
+             *     CHANNEL. The executive reads the device off the channel
+             *     it issued and copies its own name. Nothing downstream
+             *     receives a string it must trust.
+             *   - The binding is in the executive, so a DIFFERENT process
+             *     can read which terminal this job is on ($GETJPI), which
+             *     is what makes it a fact rather than a self-description
+             *     (CLAUDE.md Rule 11).
+             *   - It survives the execl() below. The executive keys the
+             *     process table on the thread-group id, which execve()
+             *     does not change, so LOGINOUT.EXE and then DCL.EXE run
+             *     with the binding their process already has, carrying
+             *     nothing.
+             *
+             * Neither status is examined, deliberately, and this is the
+             * same reasoning as cmd_show_device()'s untested
+             * vms_kif_open(): the conditions they could report are ones
+             * OVMX is not in. The executive is pinned open for the life
+             * of the system (executive_attach, above, which halts if it
+             * is absent), OPA0: is created at module init and vms.ko
+             * implements no operation that removes a device, and the
+             * channel handed to SETTERM is the one $ASSIGN just returned.
+             * A branch here would be a handler for a state VMS is not in
+             * (Rule 10), and the only thing it could usefully do is
+             * fabricate a binding.
+             * If a call did fail, the executive records no terminal --
+             * and SHOW TERMINAL then names none, which is the honest
+             * outcome and the one the reader already renders.
              */
+            uint32_t console_chan = 0;
+            (void)vms_kif_assign(OVMX_CONSOLE_DEVICE, &console_chan);
+            (void)vms_kif_setterm(console_chan);
+
             /* Child: exec vms_login */
             execl(loginout_path, "vms_login", (char *)NULL);
             /* If vms_login not found, exec vmsdcl directly */

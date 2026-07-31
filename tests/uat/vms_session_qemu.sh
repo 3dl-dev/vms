@@ -428,15 +428,28 @@ check_known_divergence 'SHOW PROCESS' 'Process name: ""' \
 # fail; the unmutated run still passes.
 check_response 'SHOW PROCESS /PRIVILEGES' '(TMPMBX|NETMBX|OPER)'
 
-# SHOW TERMINAL should show terminal info in its own response. Anchored, not
-# a whole-log scan: grep is case-insensitive, so 'Terminal' matches the echo
-# of the command 'SHOW TERMINAL' itself, and '_[A-Z]' matches the echoes of
-# 'DEFINE UAT_TEST ...' / 'SHOW LOGICAL UAT_TEST' / 'DEASSIGN UAT_TEST' (the
-# '_T') as well as '_OPA0:' in SHOW PROCESS's output -- neither alternative
-# needs SHOW TERMINAL to have run at all. Verified by mutation: prefixing
-# the command with a bogus verb (%DCL-E-IVVERB, no terminal info printed)
-# makes this assertion fail; the unmutated run still passes.
-check_response 'SHOW TERMINAL' '(Terminal|Device|VT100)'
+# SHOW TERMINAL must name the terminal THIS LOGIN SESSION is on, read out of
+# the executive (vms-d0b).
+#
+# TIGHTENED, and the old pattern is worth recording because it was weak in a
+# way that mattered. It was '(Terminal|Device|VT100)', matched
+# case-insensitively against SHOW TERMINAL's own response -- so it was
+# satisfied by the string "Device_Type:" in a header, by the word "terminal"
+# in a diagnostic, and (before vms-fb9) by a terminal name DCL had invented
+# for itself out of a VMS_TERMINAL environment variable. Every one of those
+# satisfies "SHOW TERMINAL printed something", which is not the property.
+#
+# The property is that the name comes from the EXECUTIVE. On this runtime
+# PID 1's login child takes a channel to the console and records it
+# (src/ovmx_init/ovmx_init.c), so the executive's process row for this job
+# says OPA0: and SHOW TERMINAL reads it back with the physical-name
+# underscore the oracle prints (docs/oracle/vax73-terminal-device.md §1).
+# Nothing in DCL can produce that string on its own: the environment handoff
+# and the invented "_FTA0:" default are both deleted and gated
+# (tests/integration/test_terminal_identity.sh), and with no binding in the
+# executive this command prints nothing at all -- which is the case
+# tests/qemu/test_syssvc_showterm.c runs beside this one.
+check_response 'SHOW TERMINAL' '^Terminal: _OPA0:'
 
 # SHOW DEVICE must list the console the EXECUTIVE created (vms-fb9). This is
 # the one assertion in this file that cannot be satisfied by anything inside

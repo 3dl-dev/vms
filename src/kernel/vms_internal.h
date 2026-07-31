@@ -335,6 +335,19 @@ struct vms_proc {
     uint32_t            next_chan;      /* channel number allocator */
     spinlock_t          chan_lock;
 
+    /*
+     * The job's terminal (vms-d0b). "" until VMS_IOCTL_SETTERM records
+     * one, which the executive only does from a channel this process
+     * already holds to a device of class DC$_TERM -- so the name is a
+     * device name out of the executive's own table, never a string the
+     * process supplied.
+     *
+     * LOCKING: written and read under vms_proc_hash_lock, alongside
+     * prcnam, uic and username. It is read by proc_fill_info(), which
+     * every $GETJPI and $PROCSCAN row goes through.
+     */
+    char                terminal[VMS_DEVNAM_SIZE];
+
     struct rcu_head     rcu;
 };
 
@@ -504,6 +517,10 @@ long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
+/* The job-to-terminal binding. Lives with the channel machinery because
+ * its argument is a channel; the value it writes is process-table
+ * state (struct vms_proc::terminal). */
+long vms_ioctl_setterm(struct vms_proc *proc, unsigned long arg);
 
 /* Process table (executive-resident PCB directory) */
 long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);

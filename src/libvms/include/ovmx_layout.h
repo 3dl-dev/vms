@@ -35,6 +35,23 @@
  */
 #define SYSDISK_DEVICE   "DKA0"
 
+/*
+ * Console terminal device name (vms-d0b).
+ *
+ * ORACLE-PINNED: SHOW TERMINAL on the console of both ~/vax OpenVMS
+ * VAX V7.3 lab nodes prints the physical name "_OPA0:"
+ * (docs/oracle/vax73-terminal-device.md §1).
+ *
+ * This is a NAME, not a claim about which terminal any given process is
+ * on. The executive creates the unit under this name at module init
+ * (src/kernel/vms_devtab.c, VMS_CONSOLE_DEVNAM); PID 1 uses it only to
+ * $ASSIGN a channel when it creates the console login session. A
+ * process asking WHICH TERMINAL IT IS ON must read the executive
+ * ($GETJPI), never this constant -- picking the console because it is
+ * the only terminal in the table is the exact inference vms-fb9 deleted.
+ */
+#define OVMX_CONSOLE_DEVICE  "OPA0:"
+
 /* ------------------------------------------------------------------ */
 /* VMS directory filespecs                                            */
 /* ------------------------------------------------------------------ */

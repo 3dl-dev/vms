@@ -156,6 +156,7 @@ lock-compat-ex-cr
 lock-compat-cr-ex
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
+setterm-binding-not-recorded
 proctab-duplicate-name
 proctab-crossgroup-identity
 ident-username-unguarded
@@ -563,6 +564,65 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    setterm-binding-not-recorded)
+        case "$_f" in
+        facility)     echo "job-to-terminal binding (VMS_IOCTL_SETTERM, read back through GETJPI)";;
+        targets)      echo "kernel/vms_devtab.c";;
+        suites_red)   echo "test_kmod_setterm test_syssvc_showterm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "VMS_IOCTL_SETTERM still resolves the channel, still refuses a channel the caller does not hold, still checks the device class and still returns SS\$_NORMAL -- it just never writes the name into the executive's process row. The caller is told the binding was made and no other process can see it, which is the precise shape of the facade CLAUDE.md rule 11 exists to catch: correct-looking output, nothing shared. Everything else in the device table is untouched (SHOW DEVICE, \$ALLOC, IO\$_SETMODE and their suites all stay green), so this isolates the BINDING from the device table it is built on.";;
+        require_fail) cat <<'EOF'
+A-WRITES/B-READS: B reads OPA0: out of A's row -- a binding a different process made, which a per-process binding could not show
+SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+A's own row now names the console
+the freshly activated image still finds its terminal -- nothing was carried across execve() in userspace
+and B's row now names the console
+the bound name is the device table's name for that channel
+the characteristics heading is printed (oracle section 2)
+grid row 1 is byte-for-byte the V7.3 capture
+grid row 2 is byte-for-byte the V7.3 capture
+grid row 4 is byte-for-byte the V7.3 capture
+grid row 10 is byte-for-byte the V7.3 capture
+the last row carries the single remaining characteristic, unpadded
+A-WRITES/B-READS: width and page are the ones a DIFFERENT process set through the executive
+A-WRITES/B-READS: DCL reports the width that other process set -- a per-process terminal could not show it
+...and the cleared Echo bit, in the grid cell the oracle prints it in
+...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
+the width goes back, so the reader is not printing a constant
+...and grid row 1 is the oracle's bytes again, so neither is the grid
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+Every entry is the SAME missing write, observed further downstream, and the
+set was MEASURED by running the mutation rather than predicted.
+
+The first four are test_kmod_setterm's remaining reads of a binding that was
+never recorded: the binder's own row, the row the re-execed image reads, the
+second binder's row, and the cross-check that the recorded name is the device
+table's name for that channel. No finer mutation separates them -- there is
+exactly one write, and every one of these is a read of it.
+
+The rest are test_syssvc_showterm's, and they are all one consequence:
+cmd_show_terminal reads the binding FIRST and prints nothing at all when there
+is none, so with the write gone, the entire SHOW TERMINAL output disappears
+and every assertion about its content goes with it -- the header, each pinned
+grid row, the width/page line, and both directions of the A-writes/B-reads
+characteristic check. That is not a second defect: it is the reader behaving
+exactly as it must when the executive reports no terminal.
+
+What stays GREEN is what makes this isolated rather than a blunderbuss: the
+unbound run still names nothing, the SS$_IVCHAN refusal still fires, the row
+still disappears when the job exits, and every other device-table and
+process-table suite is untouched.
+EOF
+                      ;;
         esac;;
 
     proctab-duplicate-name)
@@ -1471,6 +1531,16 @@ apply_edit() {
         # assignment in the file, so a second apply finds no match and is the
         # no-op the selftest requires.
         sed -i 's|    info->allocated = dev->allocated;|    info->allocated = 0; /* NEGCTL devtab-alloc-not-recorded */|' "$_file";;
+    setterm-binding-not-recorded)
+        # vms_ioctl_setterm() has exactly one write to proc->terminal, and it
+        # is the only strscpy in the file whose destination is a proc field --
+        # so anchoring on it directly is unambiguous, and a second apply finds
+        # no match and is the no-op the selftest requires. Everything else in
+        # the ioctl still runs: the channel is still resolved, the device
+        # class is still checked, and SS$_NORMAL is still returned, so the
+        # caller is told the binding was made and only the SHARED RECORD of it
+        # is missing. That is the facade shape exactly.
+        sed -i 's|    strscpy(proc->terminal, devnam, sizeof(proc->terminal));|    /* NEGCTL setterm-binding-not-recorded: the binding is not recorded */|' "$_file";;
     proctab-duplicate-name)
         sed -i 's|if (clash \&\& clash != proc) {|if (0 \&\& clash != proc) { /* NEGCTL proctab-duplicate-name */|' "$_file";;
     proctab-crossgroup-identity)

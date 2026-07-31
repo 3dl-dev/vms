@@ -32,6 +32,24 @@
 # vax73-terminal-device.md section 6). Using it for "the executive rejected
 # us" is a false statement wearing an oracle citation.
 #
+# REVISED 2026-07-31 (vms-fb9 r5), applying the general Rule 10 ruling
+# already on the books for the identical condition, not a new local choice.
+# This file used to ALSO require stderr be non-empty for the
+# unanswered-read case ("an unanswered read must be reported, not
+# swallowed"), and src/vmsdcl/dcl_cmd_show.c satisfied that with an invented
+# "%OVMX-F-EXECDEV" message. That message was itself the illegal third
+# answer under Rule 10 (CLAUDE.md): "the executive did not answer" is the
+# SAME per-call executive-absent condition vms-a35/vms-0ff already deleted,
+# product-wide, from src/libvms/syssvc/sys_lock.c and
+# src/libvmssys/vms_kif.c -- made unreachable rather than handled, because
+# PID 1 refuses to bring the system up without /dev/vms. Re-inventing a
+# handler for it here was the identical mistake one level up. So the
+# property is now the OPPOSITE: stderr must be EMPTY for this case, and
+# "not swallowed" is satisfied a different way -- $STATUS still carries the
+# raw status (see check_status_reports_failure below), which is exactly the
+# treatment src/libvmssys/vms_kif.c's kif_bind() gives a bind it cannot
+# complete.
+#
 # stdout and stderr are captured SEPARATELY and never merged: rows go to
 # stdout via printf() and diagnostics to stderr via dcl_error(), and the two
 # streams are buffered differently, so a merged capture would interleave
@@ -117,11 +135,40 @@ check_no_vms_verdict() {
     else
         echo "  OK: $label did not borrow a VMS device verdict"
     fi
-    # ...and it must still say something. Silence would pass the check above
-    # while telling the user nothing, so the refusal is required too.
-    if [ ! -s "$WORK/err" ]; then
-        fail "$label reported nothing at all" \
-             "an unanswered read must be reported, not swallowed"
+    # vms-fb9 r5: the unanswered-read case is SILENT by design now, not an
+    # oversight -- see the file header. stderr must be EMPTY here; a
+    # non-empty stderr means something invented a message for a condition
+    # Rule 10 says must be unreachable, not handled (the deleted
+    # %OVMX-F-EXECDEV was exactly this).
+    if [ -s "$WORK/err" ]; then
+        fail "$label wrote to stderr for an unanswered read" \
+             "vms-fb9 r5: this is silent by design -- \$STATUS carries the" \
+             "failure instead (see check_status_reports_failure). stderr was:" \
+             "$(sed 's/^/       | /' "$WORK/err")"
+    else
+        echo "  OK: $label was silent (not swallowed -- \$STATUS still carries it)"
+    fi
+}
+
+# --- Property 2b: silent is not swallowed -- $STATUS still carries the
+# ioctl-level failure even though nothing is printed for it. -----------------
+check_status_reports_failure() {
+    label="$1"; cmdline="$2"
+    printf '%s\nSHOW SYMBOL $STATUS\n' "$cmdline" \
+        | "$DCL" >"$WORK/out2" 2>"$WORK/err2"
+    # 676 = SS$_BUGCHECK, the default of vms_kif_kerr_to_ss()'s closed
+    # errno-mapping switch (src/libvmssys/vms_kif.c) for the EBADF an ioctl
+    # on the never-opened /dev/vms descriptor produces. Measured, not
+    # assumed: with only 'MOUNT DUA0: TESTDISK' and no SHOW DEVICE at all,
+    # $STATUS reads 1 (SS$_NORMAL, MOUNT's own status) -- so 676 here can
+    # only come from this command's own executive read failing, not from
+    # something upstream.
+    if grep -qF '$STATUS = 676' "$WORK/out2"; then
+        echo "  OK: $label set \$STATUS = 676 (SS\$_BUGCHECK) though it printed nothing"
+    else
+        fail "$label did not leave \$STATUS carrying the ioctl failure" \
+             "expected '\$STATUS = 676' in SHOW SYMBOL \$STATUS output; got:" \
+             "$(sed 's/^/       | /' "$WORK/out2")"
     fi
 }
 
@@ -144,6 +191,8 @@ if [ "$HAVE_EXEC" -eq 0 ]; then
     check_no_rows "SHOW DEVICE DUA0:" 'SHOW DEVICE DUA0:'
     check_no_vms_verdict "bare SHOW DEVICE" 'SHOW DEVICE'
     check_no_vms_verdict "SHOW DEVICE OPA0:" 'SHOW DEVICE OPA0:'
+    check_status_reports_failure "bare SHOW DEVICE" 'SHOW DEVICE'
+    check_status_reports_failure "SHOW DEVICE OPA0:" 'SHOW DEVICE OPA0:'
 else
     check_lists_console "bare SHOW DEVICE" 'SHOW DEVICE'
     check_lists_console "SHOW DEVICE OPA0:" 'SHOW DEVICE OPA0:'

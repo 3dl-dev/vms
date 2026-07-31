@@ -440,7 +440,7 @@ static void handle_connection(ssh_session session)
          * terminal name until the executive can give it one.
          *
          * SIDE EFFECT, recorded so it is not discovered as a surprise:
-         * vmsssh_map_term_to_device_type() (src/vmsssh/vmsssh_term.c) has
+         * vmsssh_map_term_to_device_type() (src/vmsssh/term_map.c) has
          * no production caller left. tests/vmsssh/test_term_mapping.c
          * still exercises it, so the test now covers a function nothing
          * calls. Neither the function nor the test is deleted here --

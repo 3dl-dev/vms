@@ -74,12 +74,11 @@ int main(void) {
      * vms_proc_find_or_err() rather than erroring), so both descriptors
      * end up bound to the one VMS process this test registered above.
      *
-     * MESSAGE TEXT PRESERVED VERBATIM ON PURPOSE. tests/qemu/facility_defects.sh
-     * (ast-setast-disable) names "disable again: prev state was disabled" and
-     * "SETAST(enable) returns WASCLR (== prev state was disabled)" as the
-     * literal red-set text the per-facility negative control looks for, and
-     * tests/qemu/CMakeLists.txt's facility_negctl_manifest selftest asserts
-     * every such string exists literally in a suite source. The struct field
+     * The CHECK message text below is matched literally by the
+     * ast-setast-disable entry in tests/qemu/facility_defects.sh. It is not
+     * quoted here: the manifest selftest looks for those strings anywhere in a
+     * suite source, so a comment reciting them would satisfy the check on the
+     * CHECK's behalf. Read them from the CHECK lines. The struct field
      * those messages originally named (prev_state) is no longer readable
      * through vms_kif_setast(), which returns only status -- a genuine
      * interface gap (reported in vms-290) -- but the kernel derives status

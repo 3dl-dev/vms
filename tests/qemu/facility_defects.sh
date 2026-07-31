@@ -98,6 +98,13 @@
 #                            does not run (vms-47b). The control against
 #                            OVER-refusing: every assertion that measures a
 #                            refusal stays green under it.
+#   run-qualifier-not-abbreviated    RUN back to matching qualifier names
+#                            EXACTLY, so /PRIO is not /PRIORITY and /DETACH
+#                            is not /DETACHED (vms-47b). Every full spelling
+#                            behaves identically under it, which is precisely
+#                            why the suite could not see the defect until the
+#                            fixtures were written the way operators -- and
+#                            mx_start.com -- actually spell qualifiers.
 #   run-detached-not-detached        $CREPRC back to accepting PRC$M_DETACH
 #                            and discarding it -- the pre-vms-47b behaviour.
 #                            This one exists because an adversary applied it
@@ -159,7 +166,8 @@ creprc-handshake-eintr
 run-detached-name-dropped
 creprc-detach-intermediate-reaped
 run-detached-not-detached
-run-image-qualifier-refused"
+run-image-qualifier-refused
+run-qualifier-not-abbreviated"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1148,8 +1156,22 @@ SHOW SYSTEM, in a different process, lists the service by its VMS process name
 starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+RUN/DETACH/PROC= creates a detached process the executive knows by name
+the abbreviated form announces the process ID the executive assigned
+vms-69e: /DETACHED with /PRIORITY still creates the process and announces success
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+All three are P10 cases that create a NAMED detached process and then resolve
+it out of the executive by that name. They are the same defect seen again, one
+spelling further on: P10 exists to prove that an ABBREVIATED qualifier is the
+same qualifier, so it necessarily drives the same name-to-executive path this
+mutation cuts. There is nothing finer available -- the mutation is already a
+single argument, and the only way these could stay green would be for P10 to
+stop checking the executive, which is the property.
+EOF
+                      ;;
         esac;;
 
     creprc-detach-intermediate-reaped)
@@ -1248,6 +1270,63 @@ EOF
         require_fail) cat <<'EOF'
 RUN/NODEBUG runs the image: it is not a subprocess request
 RUN/DEBUG is refused naming the debugger, not process creation
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+RUN/NODEB is not refused as a subprocess request: the image runs
+parser-wide gap: an ambiguous abbreviation is not resolved, and OVMX has no %DCL-W-ABKEYW to refuse it with
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+Both are P10 cases and both are this same over-refusal reaching one spelling
+further. The first is /NODEB, the abbreviation of the RUN (Image) qualifier
+require_fail names in full: a refusal keyed on "any qualifier at all" cannot
+distinguish them, so it swallows both. The second is /PR, which resolves to no
+single qualifier and therefore reaches RUN as a qualifier the command does not
+act on; counting qualifiers instead of identifying them refuses it as a
+subprocess request and the image does not run. Neither is a second defect --
+they are the same operand, and no finer mutation exists: the mutated
+expression is one comparison.
+EOF
+                      ;;
+        esac;;
+
+    run-qualifier-not-abbreviated)
+        case "$_f" in
+        facility)     echo "how RUN resolves a qualifier NAME -- DCL's shortest-unique-prefix rule (src/vmsdcl/dcl_cmd_process.c)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_startup_service";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+RUN goes back to matching qualifier names EXACTLY -- literally the shipped-and-
+reverted comparison, strcasecmp() in place of the prefix compare in
+run_resolve_qualifier(). Every full spelling still behaves identically; only an
+ABBREVIATION changes meaning.
+THIS CONTROL EXISTS BECAUSE AN ADVERSARY MEASURED THE DEFECT ON A ROUND THAT
+HAD ALREADY "FIXED" THE FULL SPELLING. RUN/PRIORITY=4 was correctly refused
+while RUN/PRIO=4 ran the image, exit 0, no diagnostic, priority discarded --
+so the refusal was one keystroke wide, and the suite could not see it because
+every fixture spelled its qualifiers out in full. On the oracle (VAX1, OpenVMS
+VAX V7.3, 2026-07-31, captures/run-qualifier-abbrev-vax1-2026-07-31.txt) /PRIO
+uniquely identifies /PRIORITY and VMS acts on it; /DETACH is /DETACHED; and
+mx_start.com in this repo's own VMS corpus writes exactly those spellings.
+The mutation reddens BOTH halves of the property, which is why both are listed:
+the half where RUN must REFUSE (an abbreviated process qualifier is no longer
+recognised as one, so the image runs) and the half where RUN must OBEY (/DETACH
+is no longer /DETACHED and /PROC= no longer names, so the detached creation the
+same phase asks for is refused as a subprocess request instead and no process
+exists to find). One comparison, one property: what an abbreviation MEANS.
+It leaves P7, P8 and P9 -- which spell every qualifier in full -- untouched,
+and it leaves $CREPRC, the executive and every other suite untouched.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+RUN/PRIO is /PRIORITY: the abbreviation is refused and the image does not run
+RUN/PROC is /PROCESS_NAME: refused, image not run, nothing named in the executive
+RUN/DETACH/PROC= creates a detached process the executive knows by name
+the abbreviated form announces the process ID the executive assigned
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -1356,6 +1435,16 @@ apply_edit() {
         # goes back to counting all of them, so a RUN (Image) qualifier is
         # refused as a request OpenVMS says it is not.
         sed -i 's|        run_process_qualifier_count(cmd) > 0) {|        cmd->qualifier_count > 0) { /* NEGCTL run-image-qualifier-refused */|' "$_file";;
+
+    run-qualifier-not-abbreviated)
+        # The ONE edit, and it is the shipped-and-reverted comparison
+        # restored: qualifier names match exactly, so an abbreviation is
+        # not the qualifier it abbreviates. Both loops in
+        # run_resolve_qualifier() carry the same compare and both are
+        # mutated -- they are one comparison written twice, over the two
+        # halves of RUN's qualifier table, and mutating one would leave
+        # the rule half-applied rather than restored.
+        sed -i 's|strncasecmp(given, full, glen) == 0|strcasecmp(given, full) == 0 /* NEGCTL run-qualifier-not-abbreviated */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

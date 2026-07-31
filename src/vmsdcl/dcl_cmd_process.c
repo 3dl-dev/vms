@@ -33,6 +33,7 @@
 #include "descrip.h"
 #include "prcdef.h"
 #include "msgdef.h"
+#include "ovmx_status.h"
 
 int cmd_wait(struct dcl_command *cmd)
 {
@@ -637,22 +638,104 @@ static struct dsc$descriptor_s dsc_from_str(const char *s)
 }
 
 /*
- * Parse a VMS UIC specification "[group,member]" into a packed UIC.
- * VMS UICs are octal. Returns 0 -- "inherit from the creator" -- when
- * the spec is absent or does not parse.
+ * run_creprc_failed - report a process creation that did not happen.
+ *
+ * ORACLE-PINNED (reference lab VAX1, OpenVMS VAX V7.3, 2026-07-30 --
+ * the transcript recorded in tests/qemu/test_kmod_procnam.c): a
+ * RUN/DETACHED that cannot create the process prints TWO lines,
+ *
+ *   %RUN-F-CREPRC, process creation failed
+ *   -SYSTEM-F-DUPLNAM, duplicate name
+ *
+ * RUN reports its own failure and CHAINS the condition value it was
+ * given. The secondary line is rendered from that condition value by
+ * $GETMSG rather than chosen here, so a condition RUN has never seen is
+ * reported as itself instead of being mapped onto the one message this
+ * code happened to know. That is also what lets the OVMX-facility
+ * refusals below reach the user as themselves: they are OVMX condition
+ * values (src/libvms/include/ovmx_status.h), print under the facility
+ * name OVMX, and cannot be mistaken for VMS conditions.
  */
-static uint32_t parse_uic(const char *spec)
+static void run_creprc_failed(uint32_t status)
 {
-    if (!spec || !*spec)
-        return 0;
-    while (*spec == '[')
-        spec++;
-    char *end = NULL;
-    unsigned long group = strtoul(spec, &end, 8);
-    if (!end || *end != ',')
-        return 0;
-    unsigned long member = strtoul(end + 1, NULL, 8);
-    return (uint32_t)(((group & 0xFFFF) << 16) | (member & 0xFFFF));
+    dcl_error("RUN", 4, "CREPRC", "process creation failed");
+
+    char sec[256];
+    struct dsc$descriptor_s sec_d;
+    uint16_t sec_len = 0;
+    sec_d.dsc$w_length  = (uint16_t)(sizeof(sec) - 1);
+    sec_d.dsc$b_dtype   = DSC$K_DTYPE_T;
+    sec_d.dsc$b_class   = DSC$K_CLASS_D;   /* not S: no blank padding */
+    sec_d.dsc$a_pointer = sec;
+    if (sys$getmsg(status, &sec_len, &sec_d, MSG$M_ALL, NULL) & 1) {
+        sec[sec_len] = '\0';
+        /* A chained message is introduced by '-', not '%'. */
+        if (sec[0] == '%') sec[0] = '-';
+        fprintf(stderr, "%s\n", sec);
+    }
+}
+
+/*
+ * run_refuse_unhonourable - refuse a RUN that OVMX cannot carry out, at
+ * the command layer, BEFORE anything is created.
+ *
+ * WHY THIS FUNCTION EXISTS AT ALL (CLAUDE.md Rule 10). RUN's process
+ * qualifiers are documented OpenVMS syntax, and their documented
+ * meaning is quoted verbatim in ovmx_status.h next to the two condition
+ * values raised here. OVMX honours exactly one of the forms they select
+ * -- RUN/DETACHED, which $CREPRC implements. For the others, Rule 10
+ * allows two answers and only two: reproduce what VMS does, or make the
+ * condition unreachable. It cannot be made unreachable, because a user
+ * may type the qualifier; so it must be REFUSED, loudly, naming what
+ * could not be done. Accepting it and quietly doing something else is
+ * the illegal third answer, and it is what this code used to do:
+ *
+ *   - /PROCESS_NAME, /INPUT, /OUTPUT, /ERROR without /DETACHED were
+ *     read and discarded, and the image ran in a plain fork()ed child
+ *     that no one named. The oracle says those qualifiers ask for a
+ *     SUBPROCESS; OVMX has no subprocess form of RUN.
+ *   - /UIC was parsed into a packed UIC and passed to $CREPRC, which
+ *     stores it in the created process's private PCB. The executive
+ *     derives a process's UIC from Linux credentials and scopes process
+ *     NAMES by its group, so the requested UIC changed nothing any
+ *     other process could see (vms-afd). A qualifier whose whole
+ *     purpose is the name's scope, having no effect on the name's
+ *     scope, is a facade in VMS syntax.
+ *
+ * Returns 0 if the command may proceed, or the condition value that was
+ * reported -- which is even, so DCL's $STATUS is a failure and SET ON
+ * aborts the procedure, exactly as a refused creation does.
+ */
+static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
+{
+    /* /UIC is checked FIRST, and before the image parameter is even
+     * looked at. The DCL lexer splits on ',', so "/UIC=[300,1]" arrives
+     * as the qualifier value "[300" plus a stray parameter "1]"; if the
+     * image were resolved first, the user would be told "image not
+     * found - 1]" and never hear about the UIC at all. Refusing on the
+     * qualifier's PRESENCE also means OVMX never has to pretend it
+     * understood a UIC it cannot honour. */
+    if (dcl_has_qualifier(cmd, "UIC")) {
+        run_creprc_failed(OVMX$_NOPRCUIC);
+        return OVMX$_NOPRCUIC;
+    }
+
+    /* Everything else is meaningful only for a process RUN creates.
+     * With /DETACHED there is one; without it there is not, and on
+     * OpenVMS these qualifiers would have asked for a subprocess. */
+    if (!dcl_has_qualifier(cmd, "DETACHED")) {
+        static const char *const subprocess_quals[] = {
+            "PROCESS_NAME", "INPUT", "OUTPUT", "ERROR", NULL
+        };
+        for (int i = 0; subprocess_quals[i]; i++) {
+            if (dcl_has_qualifier(cmd, subprocess_quals[i])) {
+                run_creprc_failed(OVMX$_NOSUBPRC);
+                return OVMX$_NOSUBPRC;
+            }
+        }
+    }
+
+    return 0;
 }
 
 /*
@@ -672,7 +755,10 @@ static uint32_t parse_uic(const char *spec)
  * Rule 10 worked example 2 -- would satisfy every single-process test
  * and share nothing.
  *
- * Qualifiers: /PROCESS_NAME=, /INPUT=, /OUTPUT=, /ERROR=, /UIC=
+ * Qualifiers honoured here: /PROCESS_NAME=, /INPUT=, /OUTPUT=, /ERROR=.
+ * /UIC is NOT one of them -- it is refused before this is reached (see
+ * run_refuse_unhonourable), because the created process's UIC is the
+ * executive's to derive and nothing DCL passes can change it.
  */
 static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
                         const char *image_path)
@@ -690,7 +776,6 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
         dcl_resolve_path(ctx, q, err_path, sizeof(err_path));
 
     const char *prcnam = dcl_qualifier_value(cmd, "PROCESS_NAME");
-    uint32_t uic = parse_uic(dcl_qualifier_value(cmd, "UIC"));
 
     struct dsc$descriptor_s img_d  = dsc_from_str(image_path);
     struct dsc$descriptor_s in_d   = dsc_from_str(in_path);
@@ -705,41 +790,11 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
                                  err_d.dsc$a_pointer ? &err_d : NULL,
                                  NULL, NULL,
                                  prc_d.dsc$a_pointer ? &prc_d : NULL,
-                                 0, uic, 0, PRC$M_DETACH);
+                                 0, 0 /* uic: see run_refuse_unhonourable */,
+                                 0, PRC$M_DETACH);
 
     if (!(status & 1)) {
-        /*
-         * ORACLE-PINNED (reference lab VAX1, OpenVMS VAX V7.3,
-         * 2026-07-30 -- the same transcript recorded in
-         * tests/qemu/test_kmod_procnam.c): a RUN/DETACHED whose
-         * /PROCESS_NAME is already held in the caller's UIC group
-         * prints TWO lines,
-         *
-         *   %RUN-F-CREPRC, process creation failed
-         *   -SYSTEM-F-DUPLNAM, duplicate name
-         *
-         * RUN reports its own failure and CHAINS the condition value
-         * the service returned. The secondary line is therefore
-         * rendered from that condition value by $GETMSG rather than
-         * chosen here, so a condition RUN has never seen is reported as
-         * itself instead of being mapped onto the one message this code
-         * happened to know.
-         */
-        dcl_error("RUN", 4, "CREPRC", "process creation failed");
-
-        char sec[256];
-        struct dsc$descriptor_s sec_d;
-        uint16_t sec_len = 0;
-        sec_d.dsc$w_length  = (uint16_t)(sizeof(sec) - 1);
-        sec_d.dsc$b_dtype   = DSC$K_DTYPE_T;
-        sec_d.dsc$b_class   = DSC$K_CLASS_D;   /* not S: no blank padding */
-        sec_d.dsc$a_pointer = sec;
-        if (sys$getmsg(status, &sec_len, &sec_d, MSG$M_ALL, NULL) & 1) {
-            sec[sec_len] = '\0';
-            /* A chained message is introduced by '-', not '%'. */
-            if (sec[0] == '%') sec[0] = '-';
-            fprintf(stderr, "%s\n", sec);
-        }
+        run_creprc_failed(status);
         return status;
     }
 
@@ -756,6 +811,17 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
 int cmd_run(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
+
+    /* BEFORE the image parameter is examined: a qualifier OVMX cannot
+     * honour is refused, not silently dropped. This is first because
+     * "/UIC=[300,1]" is lexed into a qualifier plus a stray parameter,
+     * so resolving the image first would report a fragment of the UIC
+     * as a missing image and never mention the UIC. */
+    {
+        uint32_t refused = run_refuse_unhonourable(cmd);
+        if (refused)
+            return refused;
+    }
 
     if (cmd->param_count < 1 || cmd->params[0][0] == '\0') {
         dcl_error("DCL", 2, "NOFILE", "missing image specification");

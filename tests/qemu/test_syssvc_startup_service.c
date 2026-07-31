@@ -28,6 +28,18 @@
  * is /bin/sh -- busybox, which knows nothing about VMS and never opens
  * /dev/vms -- so a name B can see can only have come from the executive.
  *
+ * AND WHAT THE COMMAND REFUSES (P7, P8). RUN's process qualifiers are
+ * documented OpenVMS syntax with documented meanings -- quoted verbatim,
+ * from the reference lab's own HELP, in src/libvms/include/ovmx_status.h.
+ * OVMX honours the /DETACHED form and cannot honour /UIC (the executive
+ * derives a process's UIC from Linux credentials, vms-afd) or the
+ * subprocess form (OVMX's RUN has none). CLAUDE.md Rule 10 leaves two
+ * answers, and a qualifier a user can type cannot be made unreachable, so
+ * it must be REFUSED. Those phases assert the refusal is real: the
+ * diagnostic names what could not be done, no process is created, the
+ * image does not run behind it -- and, as the control that keeps the
+ * refusal honest, plain RUN still runs the image.
+ *
  * WHAT IS NOT ASSERTED HERE: that OVMX ships a service. It does not, and
  * SYS$MANAGER:SYSTARTUP_VMS.COM deliberately starts none (shipping a
  * procedure for an image that is never built would be its own facade). The
@@ -77,10 +89,23 @@ static int fail = 0;
  * confused for one another in the table. */
 #define PROBE_NAME      "OVMX47BPRB"
 
+/* The names used by the REFUSAL phases (P7, P8). Nothing may ever be
+ * created under either of them -- that is what those phases assert. */
+#define UIC_NAME        "OVMX47BUIC"
+#define SUBP_NAME       "OVMX47BSUB"
+
 #define HOLD_SCRIPT     "/tmp/ovmx47b_hold.sh"
 #define SVC_LOG         "/tmp/ovmx47b_svc.log"
 #define SVC_STARTUP_COM "/tmp/OVMX47B_SVC_STARTUP.COM"
 #define SYSTARTUP_COM   "/tmp/OVMX47B_SYSTARTUP.COM"
+#define UIC_COM         "/tmp/OVMX47B_UIC.COM"
+#define SUBP_COM        "/tmp/OVMX47B_SUBP.COM"
+#define PLAIN_COM       "/tmp/OVMX47B_PLAIN.COM"
+/* A "did the image run at all?" witness: the script's only job is to
+ * leave a file behind, so a refusal that still ran the image cannot hide
+ * behind having produced no output. */
+#define TOUCH_SCRIPT    "/tmp/ovmx47b_touch.sh"
+#define TOUCH_MARK      "/tmp/ovmx47b_touched"
 #define SUBJECT_IMAGE   "/bin/sh"
 #define DCL_IMAGE       "/bin/DCL.EXE"
 
@@ -142,7 +167,59 @@ static int write_fixtures(void)
                    "$ EXIT\n", 0644) != 0)
         return -1;
 
+    /* The witness image for the refusal phases: it does nothing but
+     * prove it ran. */
+    if (write_file(TOUCH_SCRIPT,
+                   "#!/bin/sh\n"
+                   "touch " TOUCH_MARK "\n", 0755) != 0)
+        return -1;
+
+    /* P7's procedure: RUN/DETACHED with a UIC the executive cannot be
+     * given. Written exactly as an operator would type it, INCLUDING the
+     * comma, because the comma is half the defect this refuses. */
+    if (write_file(UIC_COM,
+                   "$! /UIC refusal (test fixture, vms-47b)\n"
+                   "$ RUN/DETACHED/UIC=[300,1]"
+                   "/PROCESS_NAME=" UIC_NAME
+                   "/INPUT=\"" HOLD_SCRIPT "\""
+                   " \"" TOUCH_SCRIPT "\"\n"
+                   "$ EXIT\n", 0644) != 0)
+        return -1;
+
+    /* P8's procedure: process qualifiers WITHOUT /DETACHED. On OpenVMS
+     * this asks for a subprocess (HELP RUN Process, quoted in
+     * src/libvms/include/ovmx_status.h); OVMX has no subprocess form. */
+    if (write_file(SUBP_COM,
+                   "$! subprocess-qualifier refusal (test fixture, vms-47b)\n"
+                   "$ RUN/PROCESS_NAME=" SUBP_NAME
+                   " \"" TOUCH_SCRIPT "\"\n"
+                   "$ EXIT\n", 0644) != 0)
+        return -1;
+
+    /* P8's positive control: the SAME image, run by the SAME DCL, with
+     * no process qualifier at all. This must still work -- a refusal
+     * that swallowed plain RUN would pass every assertion above. */
+    if (write_file(PLAIN_COM,
+                   "$! plain RUN still runs the image (test fixture, vms-47b)\n"
+                   "$ RUN \"" TOUCH_SCRIPT "\"\n"
+                   "$ EXIT\n", 0644) != 0)
+        return -1;
+
     return 0;
+}
+
+/*
+ * touched - has the witness image run since the last clear_touch()?
+ */
+static int touched(void)
+{
+    struct stat st;
+    return stat(TOUCH_MARK, &st) == 0;
+}
+
+static void clear_touch(void)
+{
+    unlink(TOUCH_MARK);
 }
 
 /*
@@ -482,15 +559,49 @@ int main(void)
         CHECK(svc_lpid != 0 && kill((pid_t)svc_lpid, 0) == 0,
               "the service is still running after the procedure that created it exited");
 
-        /* Detached: reparented away from its creator. The creator is
-         * gone, so the parent must be init -- and in particular must NOT
-         * be the DCL that created it. */
+        /*
+         * DETACHED -- and which of these actually discriminates it.
+         *
+         * "ppid == 1" is a NECESSARY consequence of detachment and NOT a
+         * test of it. Linux reparents ANY orphan to init, and the
+         * creating DCL has already exited and been reaped above, so a
+         * $CREPRC that accepted PRC$M_DETACH and discarded it would show
+         * ppid 1 here too. That is measured, not argued: the
+         * run-detached-not-detached negative control in
+         * tests/qemu/facility_defects.sh is exactly that mutation, and
+         * this assertion stays green under it. It is kept because it
+         * would still catch a service left hanging off a live creator,
+         * but it must never be quoted as evidence of detachment.
+         *
+         * The SESSION is evidence. $CREPRC's PRC$M_DETACH path calls
+         * setsid() inside the created task before forking the process
+         * that runs the image, so the service is in a session created
+         * for it -- not the session this test and the creating DCL share.
+         * setsid() is called nowhere else in OVMX (grep: the only other
+         * occurrence is in that function's own comment), so a service
+         * outside this process's session can only have got there by
+         * PRC$M_DETACH being honoured. Under the mutation, this fails.
+         *
+         * The other discriminator is P5: the creator cannot wait for it.
+         */
         {
             long ppid = ppid_of(svc_lpid);
-            printf("  (service linux pid %u, ppid %ld; its creator was pid %ld)\n",
-                   (unsigned)svc_lpid, ppid, (long)creator);
+            long svc_sid  = (long)getsid((pid_t)svc_lpid);
+            long self_sid = (long)getsid(0);
+
+            printf("  (service linux pid %u, ppid %ld, session %ld; "
+                   "its creator was pid %ld, this process is in session %ld)\n",
+                   (unsigned)svc_lpid, ppid, svc_sid,
+                   (long)creator, self_sid);
+
+            /* self_sid is compared, not required to be positive: in this
+             * rig PID 1 is a shell the kernel started directly and never
+             * called setsid(), so the whole harness runs in session 0.
+             * That is the point -- the service must not be in it. */
+            CHECK(svc_sid > 0 && self_sid >= 0 && svc_sid != self_sid,
+                  "the service left the session its creator ran in");
             CHECK(ppid == 1 && ppid != (long)creator,
-                  "the service was reparented away from the DCL that created it");
+                  "the service's parent is init, not the DCL that created it");
         }
     }
 
@@ -636,7 +747,107 @@ int main(void)
               "the service's name is released when the service dies");
     }
 
+    /* ---------------------------------------------------------------
+     * P7. A QUALIFIER OVMX CANNOT HONOUR IS REFUSED, NOT DISCARDED.
+     *
+     * ORACLE-PINNED. HELP RUN Process /UIC on the reference lab (VAX2,
+     * OpenVMS VAX V7.3, 2026-07-31) says /UIC "Specifies that the
+     * created process be a detached process and assigns it a user
+     * identification code (UIC)", and HELP RUN Process /PROCESS_NAME
+     * says the process name "is implicitly qualified by the group
+     * number of the process's user identification code (UIC)". So /UIC
+     * chooses the scope in which the process NAME is unique -- the
+     * whole subject of the lab transcript in
+     * tests/qemu/test_kmod_procnam.c.
+     *
+     * OVMX cannot deliver that: the executive derives a process's UIC
+     * from Linux credentials, so a UIC handed to $CREPRC changes
+     * nothing another process can observe (vms-afd). CLAUDE.md Rule 10
+     * gives two answers and the qualifier cannot be made unreachable,
+     * so it is REFUSED. What is being tested is that the refusal
+     * happens -- that the user is not told a UIC was accepted.
+     *
+     * The procedure is written with the comma an operator would type.
+     * The DCL lexer splits on it, so before this refusal the command
+     * reported "%DCL-E-IVIMAGE, image not found - 1]" -- a fragment of
+     * the UIC named as a missing image, with the UIC itself never
+     * mentioned. That specific symptom is asserted absent.
+     * --------------------------------------------------------------- */
+    {
+        char out7[65536];
+        int n7 = 0;
+
+        clear_touch();
+        run_dcl(UIC_COM, out7, sizeof(out7), &exit_st);
+        printf("  (RUN/DETACHED/UIC=[300,1])\n%s\n", out7);
+
+        CHECK(strstr(out7, "%RUN-F-CREPRC, process creation failed") != NULL &&
+              strstr(out7, "-OVMX-F-NOPRCUIC,") != NULL,
+              "RUN refuses /UIC with %RUN-F-CREPRC / -OVMX-F-NOPRCUIC");
+        CHECK(strstr(out7, "IVIMAGE") == NULL,
+              "the refusal names the UIC, not a fragment of it mistaken for an image");
+
+        (void)proc_id_of(out7, &n7);
+        CHECK(n7 == 0, "the refused /UIC start announced no process");
+
+        memset(&info, 0, sizeof(info));
+        CHECK(vms_kif_getjpi_prcnam(UIC_NAME, &info) != SS$_NORMAL,
+              "no process exists in the executive under the refused name");
+        CHECK(!touched(),
+              "the image was not run behind the refusal");
+    }
+
+    /* ---------------------------------------------------------------
+     * P8. PROCESS QUALIFIERS WITHOUT /DETACHED ARE REFUSED TOO.
+     *
+     * ORACLE-PINNED. HELP RUN Process (VAX2, OpenVMS VAX V7.3,
+     * 2026-07-31): "A subprocess is created if any of the qualifiers
+     * except the /UIC or the /DETACHED qualifier is specified." So
+     * RUN/PROCESS_NAME without /DETACHED asks OpenVMS for a SUBPROCESS
+     * -- a second process, named in the executive's table. OVMX's RUN
+     * has no subprocess form; before this refusal it read the qualifier
+     * and threw it away, ran the image in a plain fork()ed child, and
+     * told the user nothing.
+     *
+     * The positive control matters as much as the refusal: the SAME
+     * image, run by the SAME DCL with no process qualifier, must still
+     * run. A refusal that had swallowed plain RUN would satisfy every
+     * "nothing was created" assertion here.
+     * --------------------------------------------------------------- */
+    {
+        char out8[65536];
+        int n8 = 0;
+
+        clear_touch();
+        run_dcl(SUBP_COM, out8, sizeof(out8), &exit_st);
+        printf("  (RUN/PROCESS_NAME with no /DETACHED)\n%s\n", out8);
+
+        CHECK(strstr(out8, "%RUN-F-CREPRC, process creation failed") != NULL &&
+              strstr(out8, "-OVMX-F-NOSUBPRC,") != NULL,
+              "RUN refuses /PROCESS_NAME without /DETACHED with %RUN-F-CREPRC / -OVMX-F-NOSUBPRC");
+
+        (void)proc_id_of(out8, &n8);
+        CHECK(n8 == 0, "the refused subprocess start announced no process");
+
+        memset(&info, 0, sizeof(info));
+        CHECK(vms_kif_getjpi_prcnam(SUBP_NAME, &info) != SS$_NORMAL,
+              "no process exists in the executive under the refused subprocess name");
+        CHECK(!touched(),
+              "the image was not run behind the subprocess refusal");
+
+        /* Positive control. */
+        clear_touch();
+        run_dcl(PLAIN_COM, out8, sizeof(out8), &exit_st);
+        CHECK(touched(),
+              "plain RUN, with no process qualifier, still runs the image");
+    }
+
+    clear_touch();
     unlink(HOLD_SCRIPT);
+    unlink(TOUCH_SCRIPT);
+    unlink(UIC_COM);
+    unlink(SUBP_COM);
+    unlink(PLAIN_COM);
     unlink(SVC_STARTUP_COM);
     unlink(SYSTARTUP_COM);
     unlink(SVC_LOG);

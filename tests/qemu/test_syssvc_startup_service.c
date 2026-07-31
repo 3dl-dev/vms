@@ -444,26 +444,33 @@ static int run_show_system(char *out, size_t outsz)
 /*
  * row_for - the SHOW SYSTEM row naming `name`, or NULL.
  *
- * A row is " %08X %-15s  %s": pid, process name, CPU. Matching is anchored
- * on the name column so a name appearing in a banner or in another column
- * cannot be mistaken for a row. Same reader as
- * tests/qemu/test_syssvc_procnam.c.
+ * ROW GEOMETRY, ORACLE-PINNED (vms-6a7): docs/oracle/vax73-show-system-process.md
+ * Section 1.1. A row is "%08X %-15s %s" -- the pid starts at COLUMN ZERO,
+ * because that is where OpenVMS VAX V7.3 puts it (counted through `cat -A`
+ * on VAX1). This helper used to expect " %08X ...", the one-column-indented
+ * format OVMX printed before the geometry was measured; landing vms-6a7 on
+ * main (this suite predates it) shifted the real output out from under this
+ * reader, which is why the rebase's positive control failed here: the row
+ * WAS present ("1000003D OVMX47BSVC ...") and this helper's leading-space
+ * anchor simply stopped matching column 0. Shifted, not loosened -- still
+ * anchors on an exact column, matching tests/qemu/test_syssvc_procnam.c's
+ * already-fixed reader.
  */
+#define ROW_COL_NAME 9          /* Process Name field start */
+
 static const char *row_for(const char *text, const char *name)
 {
     const char *line = text;
     size_t namelen = strlen(name);
 
     while (line && *line) {
-        if (line[0] == ' ') {
-            int i;
-            for (i = 1; i < 9; i++)
-                if (!isxdigit((unsigned char)line[i]))
-                    break;
-            if (i == 9 && line[9] == ' ' &&
-                strncmp(line + 10, name, namelen) == 0)
-                return line;
-        }
+        int i;
+        for (i = 0; i < 8; i++)
+            if (!isxdigit((unsigned char)line[i]))
+                break;
+        if (i == 8 && line[8] == ' ' &&
+            strncmp(line + ROW_COL_NAME, name, namelen) == 0)
+            return line;
         line = strchr(line, '\n');
         if (line) line++;
     }

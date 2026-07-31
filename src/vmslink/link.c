@@ -400,13 +400,32 @@ static void load_archive(const char *path, struct obj **objs, int *n, int *cap)
 /* --------------------------------------------------------------------------
  * Option parsing.
  * -------------------------------------------------------------------------- */
+/*
+ * SYMBOL_VECTOR= keywords.
+ *
+ * PRIVATE_PROCEDURE / PRIVATE_DATA are the RETIREMENT keywords, and they are
+ * the reason OVMX_SV_RETIRED exists. Public VMS upward-compatibility rules
+ * (VSI OpenVMS Linker Utility Manual; docs/design-link-native-toolchain.md
+ * §5.1/§5.3) are: preserve the order and placement of existing entries, NEVER
+ * delete an entry, add only at the end — and when a universal goes away,
+ * *retire it in place* with PRIVATE_PROCEDURE/PRIVATE_DATA rather than
+ * removing it, so that every later entry keeps its bound index and GSMATCH
+ * LEQUAL stays valid. There is no SPARE keyword in the public docs (§5.6).
+ *
+ * A retired slot is not publicly bound: find_universal() below, IMGACT's
+ * sv_find_named() and ovmx_sv_at() all skip OVMX_SV_RETIRED, and its `value`
+ * is left 0 because the symbol it named no longer exists in any input object.
+ */
 static uint32_t parse_kind(const char *k)
 {
-    if (strcmp(k, "PROCEDURE") == 0 || strcmp(k, "PRIVATE_PROCEDURE") == 0)
+    if (strcmp(k, "PROCEDURE") == 0)
         return OVMX_SV_PROCEDURE;
-    if (strcmp(k, "DATA") == 0 || strcmp(k, "PRIVATE_DATA") == 0)
+    if (strcmp(k, "DATA") == 0)
         return OVMX_SV_DATA;
-    die("unknown SYMBOL_VECTOR keyword (want PROCEDURE|DATA)");
+    if (strcmp(k, "PRIVATE_PROCEDURE") == 0 || strcmp(k, "PRIVATE_DATA") == 0)
+        return OVMX_SV_RETIRED;
+    die("unknown SYMBOL_VECTOR keyword "
+        "(want PROCEDURE|DATA|PRIVATE_PROCEDURE|PRIVATE_DATA)");
     return 0;
 }
 
@@ -1308,9 +1327,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     uint64_t off_sv = ALIGN_UP(cur, 8);
 
+    /* A RETIRED slot (PRIVATE_*) holds no address: the routine it named is gone
+     * from the image, which is why the slot was retired instead of deleted. Its
+     * value stays 0 and no reader ever dereferences it — find_universal(),
+     * ovmx_sv_at() and IMGACT's sv_find_named() all skip OVMX_SV_RETIRED. */
     for (int i = 0; i < nuniv; i++)
-        uv[i].value = resolve_named(objs, nobj, uv[i].name,
-                                    "universal symbol not defined in any input object");
+        uv[i].value = (uv[i].kind == OVMX_SV_RETIRED)
+            ? 0
+            : resolve_named(objs, nobj, uv[i].name,
+                            "universal symbol not defined in any input object");
 
     uint32_t names_size = 0;
     for (int i = 0; i < nuniv; i++) names_size += (uint32_t)strlen(uv[i].name) + 1;

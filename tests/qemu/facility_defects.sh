@@ -124,6 +124,7 @@ lock-compat-ex-cr
 lock-compat-cr-ex
 devtab-owner-not-recorded
 proctab-duplicate-name
+proctab-crossgroup-identity
 ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
@@ -439,6 +440,81 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    proctab-crossgroup-identity)
+        case "$_f" in
+        facility)     echo "process table, cross-UIC-group identity read (VMS_IOCTL_GETJPI/PROCSCAN authorisation)";;
+        targets)      echo "kernel/vms_proctab.c";;
+        # All three layers of the same clause, MEASURED not guessed:
+        # test_syssvc_showproc names the property through the user-visible
+        # command (SHOW PROCESS/ID on an out-of-group process must be
+        # refused), test_syssvc_procnam sees it as a row that stops being
+        # redacted, and test_kmod_ident sees it at the raw ioctl. The first
+        # run of this control listed only the two syssvc suites and the
+        # driver's equality check rejected it, naming test_kmod_ident's five
+        # assertions -- which is the check doing exactly its job.
+        suites_red)   echo "test_syssvc_showproc test_syssvc_procnam test_kmod_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_proc_may_read() stops requiring WORLD for a cross-UIC-group read: any caller may read any process's identity. ONE clause, and it is the one the oracle pinned -- docs/oracle/vax73-privileges.md Section 5.4 measured that GROUP does not lift a cross-group read and WORLD does. Storage, lookup, naming, scanning and the same-group rule are untouched.";;
+        require_fail) cat <<'EOF'
+SHOW PROCESS/ID on an out-of-group process reports %SYSTEM-F-NOPRIV verbatim
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+neither refusal printed a process header
+the UNREADABLE row fabricates NO CPU figure at all
+WORLD CLAUSE ISOLATED: the same cross-group read, now without WORLD -> SS$_NOPRIV
+an unprivileged process is REFUSED a process in another UIC group
+... and gets no part of that process's identity
+... and the refusal returns no part of the row
+... but WITHOUT its user name, UIC or privilege mask
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+EVERY EXTRA IS THE SAME REFUSAL SEEN FROM A DIFFERENT SIDE, not a second
+property. All seven were MEASURED by running this control, not predicted:
+the first run named only the two SHOW-PROCESS assertions and the driver's
+equality check rejected it and printed the rest.
+
+"neither refusal printed a process header" is the paired negative of the
+require_fail assertion above: with the read wrongly ALLOWED, SHOW PROCESS/ID
+succeeds and prints a full header for the out-of-group process, so the
+same command that stopped being refused necessarily stopped being silent.
+Listing only the message assertion would describe half of one event.
+
+"the UNREADABLE row fabricates NO CPU figure at all" (test_syssvc_procnam
+block P12) is the enumeration side of the identical decision:
+vms_ioctl_procscan() calls proc_fill_info() with vms_proc_may_read()'s
+outcome as its `full` argument (src/kernel/vms_proctab.c:609), so a row that
+becomes readable stops being redacted, keeps its linux_pid, and SHOW SYSTEM
+can then source a CPU figure for it. One clause governs both the item read
+and the row redaction -- which is the design, not a coincidence: identity is
+privileged and enumeration is not (docs/oracle/vax73-privileges.md Section
+5.5), and this clause is where that split is decided.
+
+THE FIVE test_kmod_ident REDS are the SAME clause one layer down, at the raw
+ioctl rather than through the public sys$ API and DCL. That suite's own
+wording says so -- "WORLD CLAUSE ISOLATED: the same cross-group read, now
+without WORLD -> SS$_NOPRIV" is vms-2b8's isolation of exactly this
+condition. Its other four are that assertion's paired negatives (the refusal
+must return no part of the row) and the unprivileged-caller form of it. There
+is no finer edit available: vms_proc_may_read() IS the clause, and every
+suite that exercises a cross-group read reaches it. Splitting the mutation
+further would mean mutating a caller instead of the rule, which would test
+the caller.
+
+NOT reddened, and worth stating because it is the attribution: the
+SAME-GROUP reads stay green throughout (SHOW PROCESS <name> on the subject,
+SHOW PROCESS/ID=<subject>, the self case), as does every by-NAME lookup --
+find_by_name() is group-scoped independently of this clause, which is why
+"SHOW PROCESS <name> on an out-of-group process reports %SYSTEM-W-NONEXPR"
+survives the mutation. That is the measured evidence that this control names
+the cross-group AUTHORISATION and nothing else.
+EOF
+                      ;;
+        esac;;
+
     ident-username-unguarded)
         case "$_f" in
         facility)     echo "authenticated identity (VMS_IOCTL_SETIDENT: user name, UIC and authorized mask)";;
@@ -734,6 +810,12 @@ apply_edit() {
         sed -i '/if (!dev->shareable && dev->owner_linux_pid == 0) {/,/^    spin_unlock(&dev->lock);$/ s|dev->owner_pid = proc->vms_pid;|/* NEGCTL devtab-owner-not-recorded */|' "$_file";;
     proctab-duplicate-name)
         sed -i 's|if (clash \&\& clash != proc) {|if (0 \&\& clash != proc) { /* NEGCTL proctab-duplicate-name */|' "$_file";;
+    proctab-crossgroup-identity)
+        # ONE clause of vms_proc_may_read(): the WORLD requirement for a
+        # cross-UIC-group read. caller==target and same-group are left
+        # exactly as they are, so the mutation cannot be mistaken for
+        # "authorisation removed".
+        sed -i 's|return (caller->cur_privs \& VMS_PRV_M_WORLD) != 0;|return true; /* NEGCTL proctab-crossgroup-identity */|' "$_file";;
     executive-not-pinned)
         sed -i 's|\.owner          = THIS_MODULE,|/* NEGCTL executive-not-pinned: no .owner, so nothing pins vms.ko */|' "$_file";;
     pcb-per-thread)

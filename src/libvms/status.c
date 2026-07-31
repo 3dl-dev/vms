@@ -50,7 +50,18 @@ static const struct status_entry known_codes[] = {
     { SS$_BADPARAM,     "SYSTEM", "BADPARAM",     "bad parameter value" },
     { SS$_EXQUOTA,      "SYSTEM", "EXQUOTA",      "exceeded quota" },
     { SS$_INSFMEM,      "SYSTEM", "INSFMEM",      "insufficient dynamic memory" },
-    { SS$_NOPRIV,       "SYSTEM", "NOPRIV",       "no privilege for attempted operation" },
+    /*
+     * ORACLE-PINNED (vms-6a7), and the text this replaced was wrong.
+     * docs/oracle/vax73-privileges.md Section 1, measured on VAX1
+     * (OpenVMS VAX V7.3) by F$MESSAGE round-trip:
+     *   %SYSTEM-F-NOPRIV, insufficient privilege or object protection violation
+     * "no privilege for attempted operation" was never VMS's wording.
+     * This matters beyond cosmetics: SHOW PROCESS on a process the caller
+     * may not read prints exactly this string, so an OVMX-invented
+     * sentence would be the user-visible answer to a pinned condition.
+     */
+    { SS$_NOPRIV,       "SYSTEM", "NOPRIV",
+      "insufficient privilege or object protection violation" },
     { SS$_NOSUCHDEV,    "SYSTEM", "NOSUCHDEV",    "no such device" },
     { SS$_NOSUCHFILE,   "SYSTEM", "NOSUCHFILE",   "no such file" },
     { SS$_BUGCHECK,     "SYSTEM", "BUGCHECK",     "internal consistency failure" },

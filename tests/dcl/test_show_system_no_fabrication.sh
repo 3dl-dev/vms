@@ -36,12 +36,18 @@
 # prove the same function printing REAL rows. One claims a VMS state; the
 # other claims the code has no invented-row branch left in it.
 #
-# The header line the rows would follow is:
-#   "  Pid    Process Name    State  Pri      I/O       CPU ..."
-# and a process row begins with a space and 8 hex digits (" 000004D2 ...").
+# A process row begins at COLUMN ZERO with 8 hex digits ("2020021C ..."), which
+# is where VMS puts it -- oracle-pinned by vms-6a7,
+# docs/oracle/vax73-show-system-process.md Section 1.1. The regex below used to
+# be "^ [0-9A-F]{8}" (leading space), matching the row format OVMX printed
+# before the geometry was pinned; left unchanged it would have gone on passing
+# whether or not a fabricated row appeared, because a restored fabrication
+# would now print at column 0 and the anchored space would never match. An
+# absence assertion that cannot see the thing it forbids is worse than no
+# assertion at all.
 #
 # EXPECT: contains:Process Name
 # EXPECT: contains:Uptime
-# EXPECT_NOT: regex:^ [0-9A-F]{8}
+# EXPECT_NOT: regex:^[0-9A-F]{8}
 VMSDCL="${VMSDCL:-vmsdcl}"
 echo "SHOW SYSTEM" | $VMSDCL 2>&1

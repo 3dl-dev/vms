@@ -462,7 +462,7 @@ SHOW PROCESS/ID on an out-of-group process reports %SYSTEM-F-NOPRIV verbatim
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-neither refusal printed a process header
+the by-PID refusal printed no process header
 the UNREADABLE row fabricates NO CPU figure at all
 WORLD CLAUSE ISOLATED: the same cross-group read, now without WORLD -> SS$_NOPRIV
 an unprivileged process is REFUSED a process in another UIC group
@@ -477,11 +477,19 @@ property. All seven were MEASURED by running this control, not predicted:
 the first run named only the two SHOW-PROCESS assertions and the driver's
 equality check rejected it and printed the rest.
 
-"neither refusal printed a process header" is the paired negative of the
+"the by-PID refusal printed no process header" is the paired negative of the
 require_fail assertion above: with the read wrongly ALLOWED, SHOW PROCESS/ID
 succeeds and prints a full header for the out-of-group process, so the
 same command that stopped being refused necessarily stopped being silent.
 Listing only the message assertion would describe half of one event.
+
+The by-NAME half of that block is deliberately absent from both lists, and
+that is the control doing its job: find_by_name() is group-scoped in its own
+right (src/kernel/vms_proctab.c:237) and never consults vms_proc_may_read(),
+so mutating the WORLD clause cannot touch it. SHOW PROCESS <name> keeps
+answering %SYSTEM-W-NONEXPR. Before vms-6a7 round 2 the two selectors shared
+one DCL session and one combined capture, so this distinction was invisible
+here -- the block could only say that both messages appeared somewhere.
 
 "the UNREADABLE row fabricates NO CPU figure at all" (test_syssvc_procnam
 block P12) is the enumeration side of the identical decision:

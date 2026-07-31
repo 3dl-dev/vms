@@ -136,20 +136,54 @@
 #     vms_kif_kerr_to_ss, the static vms_kif_alloc_op, and the statics
 #     kif_call and kif_wait_call.
 #
-#     The first four are exactly the definitions whose bodies issue no
-#     VMS_IOCTL_* opcode and name no VMS_*_SEL_* selector -- open/close manage
-#     the fd, kerr_to_ss maps an errno, and alloc_op takes its opcode as a
-#     PARAMETER. kif_call and kif_wait_call fit the same shape (they take
-#     their opcode as a parameter too), but pre-merge kif_call was ALSO the
-#     sole path to kif_bind(), so deleting it went RED for a second, unrelated
-#     reason -- it broke the bind chain, not the floor. PR #22 added
-#     kif_wait_call as a second static that calls kif_bind() directly for the
-#     three blocking event-flag services, so the bind chain now survives
-#     kif_call's deletion too, and kif_call joined the silent-PASS set. That
-#     is a real, tree-shape-dependent fact, not a defect in this gate: it says
-#     the floor's claim is about OPCODES AND SELECTORS ONLY, never about
-#     plumbing helpers, and it is worth re-measuring after any change to the
-#     static call graph in vms_kif.c, not assumed to still read "four".
+#     THE SEVEN, NOT FOUR. This gate now PRINTS, at every run, the set of
+#     definitions whose own body issues no VMS_IOCTL_* opcode and names no
+#     VMS_*_SEL_* selector -- see "floor-exempt" in the output below, computed
+#     by opcode_owners() rather than hand-counted here. That is the fix for
+#     THIS paragraph's own defect: an earlier revision said "the first four
+#     are exactly" that set -- open/close manage the fd, kerr_to_ss maps an
+#     errno, alloc_op takes its opcode as a PARAMETER -- and named kif_call
+#     and kif_wait_call as fitting "the same shape" without ever counting
+#     kif_bind, whose body also never spells an opcode or a selector (it only
+#     calls vms_kif_open()/vms_kif_register()). The true count is SEVEN, and
+#     "exactly" was false the moment kif_bind was checked. That is now a
+#     computed fact, not a recitation, so it cannot go stale THIS way again --
+#     though see below for the different, still-hand-measured fact it must
+#     not be confused with.
+#     THIS PARAGRAPH WAS DESCRIBING A NECESSARY CONDITION, NOT THE SUFFICIENT
+#     ONE, and the two are not the same list. "Issues no opcode, names no
+#     selector" is necessary for a definition's deletion to be uncaught by the
+#     floor, but kif_bind fails the SUFFICIENT test anyway: deleting its
+#     definition deletes the calls inside it, which strands vms_kif_open and
+#     vms_kif_register's only path to being REACHED -- a RED at the
+#     undeclared-entry-point property (section 5), not at the floor. NOT
+#     vms_kif_kerr_to_ss: it is ALSO called directly from inside kif_call and
+#     kif_wait_call (both reached independently, through KIF_CALL/KIF_WAIT_CALL
+#     in every wired wrapper), so it keeps a second path to REACHED and stays
+#     green when kif_bind is deleted -- MEASURED by actually deleting
+#     kif_bind's definition and running this gate: 42 entry points, 21
+#     reached, RED naming exactly vms_kif_open and vms_kif_register, nothing
+#     else -- vms_kif_kerr_to_ss's caller in kif_call/kif_wait_call is a
+#     second door, not a stale one, so it does not go undeclared alongside
+#     the other two.
+#     That is exactly why kif_bind is absent from the SIX-member silent-PASS
+#     set two paragraphs up: that set answers the sufficient question and is
+#     MEASURED, by actually deleting each definition in turn and running this
+#     gate -- there is no cheap static check for "does something else's
+#     reachability depend on me", so unlike the seven above, the six cannot
+#     be reduced to a runtime print without literally running
+#     the brute force on every invocation. Re-run it after any change to the
+#     static call graph in vms_kif.c; do not assume it still reads "six".
+#
+#     Of the seven, kif_call and kif_wait_call additionally fit a second
+#     shape (opcode taken as a parameter, like alloc_op): pre-merge kif_call
+#     was ALSO the sole path to kif_bind(), so deleting it went RED for a
+#     second, unrelated reason -- it broke the bind chain, not the floor.
+#     PR #22 added kif_wait_call as a second static that calls kif_bind()
+#     directly for the three blocking event-flag services, so the bind chain
+#     now survives kif_call's deletion too, and kif_call joined the
+#     silent-PASS set. That is a real, tree-shape-dependent fact, not a defect
+#     in this gate.
 #     The claim this floor can support is therefore the narrow one, and it is
 #     the one to quote: NO WRAPPER THAT ISSUES AN OPCODE OR NAMES A SELECTOR
 #     can have its definition deleted without a RED. It is NOT "no wrapper".
@@ -157,11 +191,22 @@
 #     paragraph contradicted it. Execution settled it. In the one file whose
 #     declared subject is untested assertions, do not write an emphatic claim
 #     here you have not run.)
-#     The residual risk is low but it is REAL, not zero: all six are called
-#     today, so deleting any of them fails to compile rather than shipping.
-#     There is deliberately NO escape hatch for an orphaned opcode or selector.
-#     If you add an ioctl or a selector to vms.ko, land its wrapper in the same
-#     commit.
+#     The residual risk is low but it is REAL, not zero, AND IT IS UNEVEN
+#     across the six -- an earlier revision of this sentence said "all six are
+#     called today, so deleting any of them fails to compile", stated as one
+#     uniform protection. It is not. FIVE of the six (vms_kif_open,
+#     vms_kif_kerr_to_ss, the static vms_kif_alloc_op, and the statics
+#     kif_call and kif_wait_call) are called from inside vms_kif.c itself,
+#     which the PRODUCT build always compiles, so deleting any of those five
+#     fails the PRODUCT build. vms_kif_close is NOT protected that way:
+#     `grep -rn vms_kif_close src/ tools/` finds nothing outside vms_kif.c/.h
+#     but its own definition, prototype and this comment -- its only real
+#     callers anywhere are six files under tests/qemu/. Deleting
+#     vms_kif_close's definition compiles the PRODUCT cleanly and breaks only
+#     the QEMU test harness, not the product build; re-run that grep if this
+#     drifts, do not recite "all six" again. There is deliberately NO escape
+#     hatch for an orphaned opcode or selector. If you add an ioctl or a
+#     selector to vms.ko, land its wrapper in the same commit.
 #
 # WHAT THIS GATE DOES NOT SEE, stated so its PASS is never read as more than it
 # is. It is a SOURCE SCAN, not a build and not an execution:
@@ -361,6 +406,76 @@ call_edges() {
 }
 
 # ---------------------------------------------------------------------------
+# opcode_owners: read comment-stripped C on stdin, print the enclosing
+# file-scope function name for every VMS_IOCTL_* / VMS_*_SEL_* TOKEN found
+# inside a function body (not just call targets -- an opcode is passed as a
+# macro ARGUMENT, e.g. `KIF_CALL(VMS_IOCTL_SETMODE, &args)`, so a call-target
+# reader would miss it).
+#
+# WHY THIS EXISTS: this gate's own comment used to claim, by hand and by
+# name, which definitions "issue no opcode and name no selector" -- and that
+# claim was wrong (it omitted kif_bind; see the floor-exempt paragraph
+# below). A count derived from the tree at every run cannot go stale the way
+# a hand-written sentence can, because there is nothing to keep in sync: this
+# is the same fix already applied to the universe itself in section 1,
+# applied to a narrower fact that was still being hand-maintained in prose.
+#
+# Deliberately independent of call_edges(): it shares the same character-
+# level depth/curfn tracking (so it agrees on what "the enclosing function"
+# means) but is not layered onto call_edges' shared code path, so a change
+# made for this informational reader cannot alter what call_edges reports for
+# the actual pass/fail universe, reachability or floor computations above.
+# ---------------------------------------------------------------------------
+opcode_owners() {
+    awk '
+        function scan(s,    n, i, j, k, c, id, q) {
+            n = length(s); i = 1
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "\"" || c == "'"'"'") {
+                    q = c; i++
+                    while (i <= n) {
+                        if (substr(s, i, 1) == "\\") { i += 2; continue }
+                        if (substr(s, i, 1) == q) { i++; break }
+                        i++
+                    }
+                    continue
+                }
+                if (c == "{") {
+                    if (depth == 0) { curfn = pending; pending = "" }
+                    depth++; i++; continue
+                }
+                if (c == "}") {
+                    depth--
+                    if (depth <= 0) { depth = 0; curfn = "" }
+                    i++; continue
+                }
+                if (c == ";" && depth == 0) { pending = ""; i++; continue }
+                if (c ~ /[A-Za-z_]/) {
+                    j = i
+                    while (j <= n && substr(s, j, 1) ~ /[A-Za-z0-9_]/) j++
+                    id = substr(s, i, j - i)
+                    if (depth >= 1 && curfn != "" &&
+                        (id ~ /^VMS_IOCTL_[A-Z0-9_]+$/ ||
+                         id ~ /^VMS_[A-Z0-9_]+_SEL_[A-Z0-9_]+$/))
+                        print curfn
+                    k = j
+                    while (k <= n && (substr(s, k, 1) == " " || substr(s, k, 1) == "\t")) k++
+                    if (depth == 0 && substr(s, k, 1) == "(") pending = id
+                    i = j; continue
+                }
+                i++
+            }
+        }
+        BEGIN { depth = 0; pending = ""; curfn = "" }
+        {
+            if ($0 ~ /^[ \t]*#/) next
+            scan($0)
+        }
+    '
+}
+
+# ---------------------------------------------------------------------------
 # 1. The universe, derived from the tree at check time and PINNED.
 #
 # Never a hardcoded list: main moves under this gate constantly, and a list is
@@ -522,6 +637,20 @@ else
         echo "     in vms.ko that dispatches on it."
         status=1
     fi
+
+    # 1d. INFORMATIONAL ONLY -- does not affect status. The floor-exempt set:
+    # definitions whose own body issues no VMS_IOCTL_* and names no
+    # VMS_*_SEL_* token, so their deletion CANNOT be caught by the floor
+    # above. This is a NECESSARY condition for a definition being safe to
+    # delete without any RED firing; it is not sufficient (a definition can
+    # still be the sole path that keeps some other entry point REACHABLE --
+    # see the comment above this gate's floor section for kif_bind, which is
+    # in this set but is not safe to delete for exactly that reason). Printed
+    # so the count is read from this run, not recited from a comment that
+    # cannot detect when it goes stale.
+    strip_comments < "$KIF_C" | opcode_owners | sort -u > "$WORK/opcode_owners"
+    comm -23 "$WORK/defs" "$WORK/opcode_owners" > "$WORK/floor_exempt"
+    n_floor_exempt=$(grep -c . "$WORK/floor_exempt" || true)
 fi
 
 # ---------------------------------------------------------------------------
@@ -655,6 +784,9 @@ echo "          so deleting either half, or renaming out of the namespace, is a"
 echo "          RED, not a smaller pass"
 echo "  floor:  ${n_issued:-0} of ${n_opcodes:-0} kernel opcode(s) issued by a wrapper,"
 echo "          ${n_sel_named:-0} of ${n_selectors:-0} selector(s) named by one"
+echo "  floor-exempt: ${n_floor_exempt:-0} definition(s) issue no opcode and name no"
+echo "          selector in their own body (necessary, not sufficient, for their"
+echo "          deletion to be uncaught by the floor):$(printf ' %s' $(cat "$WORK/floor_exempt" 2>/dev/null))"
 
 if [ "$status" -eq 0 ]; then
     echo "vms_kif caller census: PASS"

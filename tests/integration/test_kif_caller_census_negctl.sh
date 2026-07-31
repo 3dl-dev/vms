@@ -32,9 +32,24 @@
 #   11 the same entry point declared twice                          -> RED
 #   12 a REGRESSION: an existing wired facility loses its caller    -> RED
 #
-# And the seven that pin the UNIVERSE itself, because a gate that can be
-# disarmed by removing the thing it counts is worth nothing. Every one of these
-# was a PASS at some earlier revision of the gate:
+# And the controls below (13 onward) that pin the UNIVERSE itself, because a
+# gate that can be disarmed by removing the thing it counts is worth nothing.
+# Every one of these was a PASS at some earlier revision of the gate.
+#
+# DELIBERATELY NO CARDINAL HERE. An earlier revision of this sentence said
+# "the seven that pin the universe" while the list below already ran 13
+# through 20 -- eight, not seven -- because control 20 was added by a later
+# commit (1106d13, "a static cannot be vouched for from outside its file")
+# without the word being bumped. It went uncaught for two rounds because
+# nothing checked it: a count in prose is a claim with no test behind it.
+# This file now counts its OWN universe-pin controls at run time instead of
+# a prose adjective -- see "universe-pin controls run" in the summary this
+# script prints when it runs. That count is derived by incrementing
+# $pin_total at each of the numbered call sites below (13-20), not written
+# down here, so it cannot drift out of sync with the code the way the word
+# "seven" did. If you add a 21st universe-pin control, increment $pin_total
+# at its call site and the summary updates itself; there is nothing in this
+# header to remember to edit.
 #
 #   13 a PROTOTYPE is deleted (definition stays)                    -> RED
 #   14 a DEFINITION is deleted (prototype stays)                    -> RED
@@ -67,6 +82,11 @@ GATE="$SRC_ROOT/tests/integration/test_kif_caller_census.sh"
 status=0
 passed=0
 failed=0
+# Incremented once per universe-pin control (13 onward, see the header).
+# Printed in the summary rather than recited as a word in prose -- that word
+# ("seven") drifted out of sync with the actual list twice; a counter tied to
+# the call sites cannot.
+pin_total=0
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -474,6 +494,7 @@ DEF_CLOSE='^void vms_kif_close(void)$'
 # 13. The prototype is deleted; the definition stays. Under a header-only
 #     census this dropped the entry point out of the universe silently.
 sed -i "/$PROTO_CHAN/d" "$H"
+pin_total=$((pin_total + 1))
 expect_red "$H" \
     "deleting a prototype is a RED naming what vanished, not a smaller pass" \
     "$F_ORPHAN_DEF" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
@@ -482,6 +503,7 @@ expect_red "$H" \
 # 14. The definition is deleted; the prototype stays. The dangling half of the
 #     same shrink, and the reason the two readings are compared BOTH ways.
 sed -i "/$DEF_CLOSE/,/^}$/d" "$C"
+pin_total=$((pin_total + 1))
 expect_red "$C" \
     "deleting a definition is a RED naming what vanished" \
     "$F_ORPHAN_PROTO" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
@@ -495,6 +517,7 @@ expect_red "$C" \
 sed -i "/$PROTO_DEVSCAN/d" "$H"
 sed -i '/OVMX-UNWIRED: vms_kif_devscan/d' "$H"
 sed -i "/$DEF_DEVSCAN/,/^}$/d" "$C"
+pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "deleting a wrapper outright strands its kernel opcode and is caught" \
     "VMS_IOCTL_DEVSCAN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
@@ -507,6 +530,7 @@ expect_red "$H $C" \
 sed -i "/$PROTO_CHAN/d" "$H"
 sed -i '/OVMX-UNWIRED: vms_kif_getdvi_chan/d' "$H"
 sed -i "s|$DEF_CHAN|static &|" "$C"
+pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "an entry point cannot leave the census by going static" \
     "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
@@ -533,6 +557,7 @@ expect_red "$H $C" \
 sed -i '/OVMX-UNWIRED: vms_kif_getdvi_chan/d' "$H"
 sed -i 's/vms_kif_getdvi_chan/kif_getdvi_chan_impl/g' "$H"
 sed -i 's/vms_kif_getdvi_chan/kif_getdvi_chan_impl/g' "$C"
+pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "renaming an entry point out of the vms_kif_ namespace does not remove it" \
     "kif_getdvi_chan_impl
@@ -552,6 +577,7 @@ sed -i "/$PROTO_DEVSCAN/d" "$H"
 sed -i '/OVMX-UNWIRED: vms_kif_devscan/d' "$H"
 sed -i "s|$DEF_DEVSCAN|static &|" "$C"
 sed -i 's/vms_kif_devscan/kif_devscan_impl/g' "$C"
+pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "renaming out of the namespace AND going static does not remove it either" \
     "kif_devscan_impl" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
@@ -568,6 +594,7 @@ expect_red "$H $C" \
 sed -i "/$PROTO_CHAN/d" "$H"
 sed -i '/OVMX-UNWIRED: vms_kif_getdvi_chan/d' "$H"
 sed -i "/$DEF_CHAN/,/^}$/d" "$C"
+pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "deleting a shared-opcode wrapper strands its kernel selector and is caught" \
     "VMS_DVI_SEL_CHAN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
@@ -610,6 +637,7 @@ else
     sed -i "/$PROTO_DEVSCAN/d" "$H"
     sed -i '/OVMX-UNWIRED: vms_kif_devscan/d' "$H"
     sed -i "s|^uint32_t vms_kif_devscan(|static uint32_t ${COLLIDE}(|" "$C"
+    pin_total=$((pin_total + 1))
     expect_red "$H $C" \
         "an unwired wrapper renamed onto a product function's name is NOT credited to it" \
         "$COLLIDE
@@ -620,6 +648,9 @@ fi
 
 # ---------------------------------------------------------------------------
 echo "  controls: $passed passed, $failed failed"
+echo "  universe-pin controls run: $pin_total (13 onward -- see the header for what"
+echo "          each proves; this count is incremented at each call site, not"
+echo "          hand-recited, because the hand-recited word already drifted twice)"
 if [ "$status" -eq 0 ]; then
     echo "vms_kif census negative controls: PASS"
 else

@@ -154,43 +154,34 @@ int vms_kif_deliverast(uint64_t *astadr, uint64_t *astprm, uint8_t *acmode);
 /* ================================================================
  * Event Flags (3c)
  *
- * THE WHOLE FAMILY IS UNWIRED (vms-2a8): src/libvms/syssvc/sys_event.c
- * never calls the executive, and sys$ascefc fabricated SS$_NORMAL from a
- * TODO -- in its own public-API suite the only two assertions that passed
- * were the two fabricated successes. That is the census's founding example.
+ * THE WHOLE FAMILY IS WIRED (vms-2a8, vms-ef1): src/libvms/syssvc/sys_event.c
+ * calls vms_kif_setef, clref, waitfr, wflor, wfland, readef, ascefc, dacefc,
+ * and dlcefc -- every event-flag entry point in this header has a product
+ * caller. See PR #22 (vms-2a8, e5cf411).
  * ================================================================ */
 
-/* Set event flag. Returns SS$_WASSET or SS$_WASCLR
- * OVMX-UNWIRED: vms_kif_setef (vms-2a8) */
+/* Set event flag. Returns SS$_WASSET or SS$_WASCLR */
 uint32_t vms_kif_setef(uint32_t efn);
 
-/* Clear event flag. Returns SS$_WASSET or SS$_WASCLR
- * OVMX-UNWIRED: vms_kif_clref (vms-2a8) */
+/* Clear event flag. Returns SS$_WASSET or SS$_WASCLR */
 uint32_t vms_kif_clref(uint32_t efn);
 
-/* Wait for single event flag
- * OVMX-UNWIRED: vms_kif_waitfr (vms-2a8) */
+/* Wait for single event flag */
 uint32_t vms_kif_waitfr(uint32_t efn);
 
-/* Wait for any flag in mask (OR wait)
- * OVMX-UNWIRED: vms_kif_wflor (vms-2a8) */
+/* Wait for any flag in mask (OR wait) */
 uint32_t vms_kif_wflor(uint32_t efn, uint32_t mask);
 
-/* Wait for all flags in mask (AND wait)
- * OVMX-UNWIRED: vms_kif_wfland (vms-2a8) */
+/* Wait for all flags in mask (AND wait) */
 uint32_t vms_kif_wfland(uint32_t efn, uint32_t mask);
 
-/* Read event flag cluster state
- * OVMX-UNWIRED: vms_kif_readef (vms-2a8) */
+/* Read event flag cluster state */
 uint32_t vms_kif_readef(uint32_t efn, uint32_t *state);
 
-/* Associate with common event flag cluster
- * OVMX-UNWIRED: vms_kif_ascefc (vms-ef1) -- the item that makes two OVMX
- * processes share one cluster is what gives this a caller */
+/* Associate with common event flag cluster */
 uint32_t vms_kif_ascefc(uint32_t efn, const char *name, uint32_t prot, uint32_t perm);
 
-/* Disassociate from common event flag cluster
- * OVMX-UNWIRED: vms_kif_dacefc (vms-ef1) */
+/* Disassociate from common event flag cluster */
 uint32_t vms_kif_dacefc(uint32_t efn);
 
 /* ================================================================

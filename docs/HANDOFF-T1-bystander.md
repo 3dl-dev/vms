@@ -2,8 +2,16 @@
 
 **Rewritten 2026-07-31, end of session h. Read `docs/HANDOFF-vms-760.md` §0 FIRST
 for the orchestrator doctrine and the lab procedure — it still applies verbatim,
-and this session is more evidence for it: every one of the four results below
-came from a subagent reading a capture, and the orchestrator read none of them.**
+and this session is more evidence for it: every substantive finding below came
+from a subagent reading a capture, and the orchestrator read none of them.**
+
+> **Start at §0 for state, then §3 for what to do.** §1 and §2 are the reasoning
+> and exist so you do not re-derive it; skim them, do not study them.
+>
+> Companion documents: `docs/analysis-e81-by11.md` (the full field map for
+> `cat 0x01 op 0x01`, member vs joiner) and spec **§4(r)** (the CM role slot and
+> transition class) + **§4(p)** (barrier scaling and the `body[55]` membership
+> bitmap), both written this session.
 
 ---
 
@@ -197,40 +205,64 @@ choose that peer as its coordinator.
 looked like it was ignoring us and was blocked on us. Missing op-1 CONNECT-ECHO,
 then missing reciprocal config, then a reciprocal that said the wrong thing.
 
-## 3. The four grounded defects deliberately NOT shipped this session
+## 3. ⚠ WHERE TO START NEXT SESSION
 
-All found in `captures/ovmx-e81-by10-vc-bound-vax3-stalls-20260731.pcap`. Held
-back so `by11` would attribute to one change.
+**Nothing is broken and nothing is half-finished.** Tree clean, 10/10 vmsscs
+tests, lab healthy (3 VAXes up from `by13`'s `reset2` + `boot3`), every result
+above reproducible. `vms-e81` and `vms-e4b` are **closed**.
 
-1. **OVMX cannot consume an `op 4` ACCEPT4 — and the consequence is systemic.**
-   VAX3 answered our `MSCP$DISK` connect with `op 1` ECHO + **`op 4` ACCEPT4**;
-   we owed an `op 5` CONFIRM5 and never sent one. We *emit* `op 4` but cannot
-   *receive* one. We then retransmitted that connect **60 times over 178 s with a
-   frozen `send_seq = 20`** — which makes OVMX **structurally unable to send that
-   peer anything on any Con.ID thereafter**. Reference behaviour for a stalled
-   connect is a **new `local_conid` and a fresh `send_seq` every 10 s**. Fix this
-   next; it is the largest of the four.
-2. **A stray `cat 0x04 op 0x00` in reply to a peer's config.** The reference
-   member's first cat-`0x04` acknowledges the peer's `op 0x02`, not its `op 0x01`.
-   Ours comes from the poll-loop ack-backlog flush, which is why it lands 6.6 s
-   late on a tick. Present on the joiner path too (frame 255).
-3. **Member-initiated connects back to a newcomer fire ~11 minutes early.** The
-   reference opens its own `SCS$DIRECTORY`/`MSCP$DISK` back only *after* the
-   transition completes.
-4. **Our `op 0x14` model string is 17 bytes starting `'O'`** where the VAX emits
-   21 bytes `"VAXserver 3900 Series"`. Accepted during our own join, but it is a
-   length the reference never emits — an authenticity tell.
+The honest question for the next session is **which tier to work**, and that is a
+prioritisation call rather than a blocked one. Three candidates, in the order I
+would rank them:
 
-**Verified reference-correct, do not touch:** directory-lookup replies, the
-`MSCP$DISK` op-4 accept form, the START / padded-HELLO channel verify, and
-`send_seq`/`recv_ack` discipline (0 length mismatches, 0 true gaps over 102 frames).
+1. **Finish T1 (`vms-32b`).** Its remaining children are `vms-ae5` (node
+   leaves/fails — *largely demonstrated already by `rm1`*, so this may be close to
+   free), `vms-b8a` (explicit leave), `vms-c7d` (VC breakage), `vms-405` (cluster
+   group + password), `vms-7d4` (undecoded surface). Closing T1 unblocks **T2
+   (`vms-d66`)**, which is where OVMX starts contributing resources.
+2. **Clear the polish list in §4.** All non-blocking, all grounded, all small.
+   Doing them together is one cheap commit and removes several authenticity tells.
+3. **`vms-584` item 5** (join/exit cycling to drive the epoch past the node count)
+   — ideal unattended work, and `tools/removal.sh` is most of the harness already.
+   Item 1 (4–5 nodes) dropped in priority once the barrier-scaling risk was
+   retired by census; it is now an *extension* of a retired risk, not a live one.
 
-Separately, `vms-298` (P1, filed this session): on a peer's **second**
-`MSCP$DISK` connect OVMX replays the send_seq allocated for the first and
-re-offers the same local Con.ID; all three such frames were silently dropped. The
-gate keys on "have we ever bound" instead of on the peer's Con.ID.
+**If you want a single next experiment rather than a decision:** run
+`tools/removal.sh` again but kill **VAX1** (the cluster founder and the only
+voting node) instead of VAX3. That is a quorum event, not just a membership one,
+and nothing in our evidence covers it. Expect it to be informative whether it
+succeeds or hangs.
 
-## 4. Lab tooling added this session
+## 4. Grounded polish — all non-blocking, none shipped
+
+Held back deliberately so each run attributed to one change. None of these
+prevents membership.
+
+1. **Our `op 0x14` model string is 17 bytes** (`"OVMX Cluster Node"`) where the
+   reference emits 21 (`"VAXserver 3900 Series"`). An **authenticity tell**, not a
+   blocker — VAX1 and VAX2 both accepted ours during OVMX's own join. Note the
+   tension with INV-0: announcing ourselves honestly is deliberate policy, so this
+   is a *decision* to take, not obviously a bug to fix.
+2. **Two stray poll-tick `cat 0x04` acks.** The reference member's first cat-`0x04`
+   acknowledges the peer's `op 0x02`, not its `op 0x01`, and it never acks an ack.
+   Ours come from the poll-loop ack-backlog flush, which is why they land ~6.6 s
+   late on a tick — the tick, not the protocol, is choosing when OVMX speaks.
+3. **Member-initiated connect-back timing — RE-DERIVE, do not assume.** This was
+   filed as "~11 minutes early", but `by11` frame 2980 shows **VAX1 doing the same
+   thing**, which contradicts that reading. Ground it before changing it.
+4. **The constant local Con.ID** (`vms-298`'s unfixed half). `OVMX_MSCP_SERVER_CONID`,
+   `SCS_DIR_OVMX_CONID`, `OVMX_JOINER_CONID`, `OVMX_MSCP_CONID` are all
+   compile-time constants. A Con.ID identifies a connection *endpoint* and real
+   nodes allocate a fresh pair per connection. Touches the working join path —
+   ground it first.
+5. **Our learned `member_count` can go stale.** In `by13` we copied `2` from a
+   peer before our own admission and nothing re-taught us `3`. It is *grounded*
+   that the value should become 3 (a member's `op 0x01` tracks live membership),
+   but we do not currently re-learn it. It did not stop VAX3 joining, which is
+   itself interesting — the newcomer may key on the member *form* rather than on
+   the count agreeing.
+
+## 5. Lab tooling added this session
 
 | script | what it does |
 |---|---|
@@ -244,25 +276,8 @@ very next line claimed `*** FOUR NODES INCLUDING OVMX ***`. There is now a `wn()
 wrapper that preserves the real status. **A pipeline that discards a verdict is
 the same failure as not checking at all**, and it is harder to see.
 
-## 5. Queue after T1.1
-
-- **`vms-e81`** — finish the addition case (§2, then §3 defect 1).
-- **`vms-298` (P1)** — the second-connect Con.ID / send_seq replay.
-- **`vms-e4b`** — barrier now armed for classes `0x02` and `0x03`; deliberately
-  **not** for `0x04` (a departure runs no barrier — arming would invent traffic).
-  Remaining: nothing blocking; close it once `by11` lands.
-- **`vms-584` item 5** (join/exit cycling to drive the epoch past the node count)
-  — unblocked and cheap; `removal.sh` is most of the harness.
-- **`vms-584` item 1** (4–5 nodes) — **now an extension of a retired risk rather
-  than the retirement of a live one**, so it drops in priority. The full
-  implementation-ready procedure, recovered from the actual VAX3 build transcript,
-  is on the item: `CLUSTER_CONFIG_LAN` **option 5**, then `MC SYSGEN` into
-  `[SYSn.SYSEXE]VAXVMSSYS.PAR`, then page/swap files, then `B/R5:n0000000 DUA0`.
-  VAX4 = SYS3 / R5 `0x30000000` / SCSSYSTEMID 1028, VAX5 = SYS4 / `0x40000000` / 1029,
-  both `VOTES 0 EXPECTED_VOTES 1` so quorum never changes.
-- `vms-ae5` node leaves · `vms-b8a` explicit leave · `vms-c7d` VC breakage ·
-  `vms-405` cluster group+password · `vms-7d4` undecoded surface ·
-  `vms-70c` derive the replayed constants.
+Run naming so far: `v1` (plain join), `by9`–`by13` (bystander addition), `rm1`
+(removal). **Last SCSSYSTEMID used: 1209.**
 
 ## 6. Guardrails — earned, not assumed
 

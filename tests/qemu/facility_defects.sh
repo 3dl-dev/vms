@@ -124,6 +124,7 @@ eflag-waitfr-eintr-normal
 lock-compat-ex-cr
 lock-compat-cr-ex
 devtab-owner-not-recorded
+devtab-alloc-not-recorded
 proctab-duplicate-name
 proctab-crossgroup-identity
 ident-username-unguarded
@@ -497,6 +498,35 @@ suite reads owner_pid back. The alternative -- naming two of the four and
 calling the other two strays -- is the allowlist that was deleted.
 EOF
                       ;;
+        esac;;
+
+    devtab-alloc-not-recorded)
+        case "$_f" in
+        facility)     echo "device table (VMS_IOCTL_ASSIGN/DASSGN/GETDVI/DEVSCAN/TTSETMODE/ALLOC/DALLOC)";;
+        targets)      echo "kernel/vms_devtab.c";;
+        # test_syssvc_showdev.c (vms-fb9) is the derived suite that drives
+        # SHOW DEVICE through the real DCL.EXE -- landed after this manifest
+        # existed, and facility_negctl_manifest's own coverage check requires
+        # every derived suite to be reachable by a control. devinfo_fill() is
+        # the one place BOTH $GETDVI and $DEVICE_SCAN copy the flag out of,
+        # so this is the narrowest mutation that can redden the user-visible
+        # reader without disturbing $ALLOC/$DALLOC's own bookkeeping (which
+        # reads dev->allocated directly, never through this copy).
+        suites_red)   echo "test_kmod_devtab test_syssvc_showdev";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "devinfo_fill()'s copy-out of the allocation flag is pinned to 0, so a device that IS allocated is reported as though it were not -- to every reader, GETDVI and DEVSCAN alike, which is the shared snapshot function both ioctls funnel through. \$ALLOC/\$DALLOC still work correctly against dev->allocated itself (the DEVALLOC refusal, refcnt bookkeeping and release-on-exit are all untouched), so this isolates the DISPLAY from the STATE -- the same class of defect Rule 11 exists to catch, now on the read side.";;
+        require_fail) cat <<'EOF'
+device reports itself allocated
+B sees that A allocated the device
+oracle: allocating what we already own adds the allocation and one reference (OPA0: 2 -> 3, l.682)
+A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
+the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     proctab-duplicate-name)
@@ -1042,6 +1072,12 @@ apply_edit() {
         # ownership block makes the edit unrepeatable, so a second apply is
         # the no-op the self-test requires it to be.
         sed -i '/if (!dev->shareable && dev->owner_linux_pid == 0) {/,/^    spin_unlock(&dev->lock);$/ s|dev->owner_pid = proc->vms_pid;|/* NEGCTL devtab-owner-not-recorded */|' "$_file";;
+    devtab-alloc-not-recorded)
+        # devinfo_fill() has exactly one `info->allocated =` write; anchoring
+        # to it directly (not a range) is safe because it is the only such
+        # assignment in the file, so a second apply finds no match and is the
+        # no-op the selftest requires.
+        sed -i 's|    info->allocated = dev->allocated;|    info->allocated = 0; /* NEGCTL devtab-alloc-not-recorded */|' "$_file";;
     proctab-duplicate-name)
         sed -i 's|if (clash \&\& clash != proc) {|if (0 \&\& clash != proc) { /* NEGCTL proctab-duplicate-name */|' "$_file";;
     proctab-crossgroup-identity)

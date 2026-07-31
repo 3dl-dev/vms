@@ -3810,8 +3810,29 @@ int main(int argc, char **argv)
                  * in this protocol echoes first; af2 VC 143.7586 op=1 -> 143.7587
                  * op=2). Echo only on FIRST bind; re-answers below just re-send the
                  * op=2. Skipping the echo is why the member never bound OVMX's VC
-                 * and withheld its config. */
-                if (first && getenv("OVMX_PURE_SERVER") != NULL) {
+                 * and withheld its config.
+                 *
+                 * vms-e81: THE ENV GATE IS GONE, AND ITS ABSENCE COST A DAY. The
+                 * echo was correct, written, commented -- and reachable only with
+                 * OVMX_PURE_SERVER set, which no normal run sets. The comment
+                 * above even states the consequence of skipping it. Meanwhile the
+                 * bystander investigation chased ordering, patience, incarnation
+                 * and membership propagation, because from the outside the symptom
+                 * was 'the newcomer ignores us'.
+                 *
+                 * It does not ignore us -- it is BLOCKED ON US. When VAX3 opened
+                 * its VMS$VAXcluster connect to OVMX we answered op 0 -> op 2,
+                 * skipping op 1, so VAX3 withheld its op-3 CONFIRM, the VC stayed
+                 * half-open, VAX3 never ran the add-member dialogue with us and
+                 * therefore never sent op 0x02 to the coordinator AT ALL. It sat
+                 * at NEW for 280 s. Our own join path never exposed this because
+                 * there OVMX opens the VC and the member accepts -- the accept
+                 * side barely runs.
+                 *
+                 * Correct sequencing (control idx 3701/3703/3705): echo consumes
+                 * req_seq+1, accept consumes req_seq+2. Skipping the echo also
+                 * left our send_seq one short of what the peer expects. */
+                if (first) {
                     struct scs_dir_params ep;
                     memset(&ep, 0, sizeof(ep));
                     memcpy(ep.dst_mac, ps->eth_mac, 6);

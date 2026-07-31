@@ -52,6 +52,25 @@
  * It is a settable parameter on VMS and a compile-time constant here
  * because OVMX has no SYSGEN parameter store for it yet; when it gets one
  * this becomes a read of it.
+ *
+ * PROVENANCE GAP, DISCLOSED RATHER THAN PAPERED OVER (vms-2b8 round 3):
+ * the transcript above is the ONLY evidence for this value anywhere in the
+ * tree (`git log --all -S MAXSYSGROUP` finds no mention before the commit
+ * that introduced both this constant and its own citation), so it is a
+ * single branch attesting to its own oracle capture -- not independently
+ * corroborated the way most other constants in this file are (e.g.
+ * SS$_NOTALLPRIV, cross-checked against a SEPARATE F$MESSAGE round-trip
+ * in the same doc). This round attempted a second, independent capture
+ * and could not get one SAFELY: `ps aux` at the time showed VAX1/VAX2/VAX3
+ * all live under a real 3-node cluster join experiment for vms-760 (SCSD,
+ * tcpdump, bystander scripts all running), and driving any console by
+ * hand risks corrupting that in-flight, non-reproducible run -- the same
+ * risk §7.3 above already flags for two SIMH instances on one disk. No
+ * read-only channel (existing session logs under ~/vax/cluster, prior
+ * git history) carries an independent MAXSYSGROUP capture either. So this
+ * value is measured, not guessed, but its single-source status is a real
+ * gap: it should be re-verified against the oracle in a session that does
+ * not also introduce the code depending on it, once the lab is free.
  */
 #define OVMX_MAXSYSGROUP 8
 

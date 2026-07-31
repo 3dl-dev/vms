@@ -235,7 +235,10 @@ check_status_reports_failure() {
 # (_IOWR(..., 0x53, struct vms_devscan_args), pinned by its own
 # _Static_assert against 0xC0505653), issued by vms_kif_devscan() for a
 # BARE "SHOW DEVICE"; and VMS_IOCTL_GETDVI, cmd 0x52
-# (_Static_assert-pinned against 0xC0505752), issued by
+# (_Static_assert-pinned against 0xC0585652 -- vms_ioctl.h's own encoding
+# of _IOWR(0x56, 0x52, struct vms_getdvi_args); an earlier round of this
+# comment transposed two digits and cited 0xC0505752, a value with no
+# matching _Static_assert anywhere in the tree), issued by
 # vms_kif_getdvi_devnam() for a NAMED "SHOW DEVICE <dev>" -- measured
 # directly, the two forms do not share an ioctl. Neither is the identity
 # read dcl_context_init() now issues at startup (VMS_IOCTL_GETJPI, cmd

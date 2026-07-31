@@ -1742,6 +1742,20 @@ static int lex_fao(struct dcl_context *ctx, const char *args,
  * Returns "TRUE" if ALL listed privileges are held, "FALSE" otherwise.
  * Reads ctx->privileges, which dcl_context_init() now reads from the
  * executive (vms_kif_getjpi_self()), not from the environment (vms-2b8).
+ *
+ * MASKED TO VMS_PRV_M_ENFORCED (vms-2b8 round -- Rule 10 applied to this
+ * surface too, not just SHOW PROCESS/PRIVILEGES). Before this, F$PRIVILEGE
+ * answered from the RAW cur_privs the executive stores -- the same
+ * SYSUAF-authorized bits SHOW PROCESS/PRIVILEGES deliberately does NOT
+ * print, because nothing in vms.ko enforces them. That made the two
+ * surfaces disagree about the SAME process in the SAME moment: measured,
+ * a process authorized OPER by SYSUAF showed empty privilege blocks in
+ * SHOW PROCESS/PRIVILEGES while F$PRIVILEGE("OPER") answered "TRUE" --
+ * OVMX advertising a privilege it cannot enforce, through a surface DCL
+ * scripts branch on (`IF F$PRIVILEGE("OPER") THEN ...`), which is a
+ * sharper instance of the exact defect Rule 10 exists to stop than a
+ * display line is. See src/kernel/vms_ioctl.h's VMS_PRV_M_ENFORCED
+ * comment for what is actually enforced and why GROUP is absent from it.
  */
 static int lex_privilege(struct dcl_context *ctx, const char *args,
                          char *result, size_t result_size)
@@ -1770,7 +1784,8 @@ static int lex_privilege(struct dcl_context *ctx, const char *args,
         return 0;
     }
 
-    if ((ctx->privileges & needed) == needed)
+    uint64_t enforced_held = ctx->privileges & VMS_PRV_M_ENFORCED;
+    if ((enforced_held & needed) == needed)
         strncpy(result, "TRUE", result_size - 1);
     else
         strncpy(result, "FALSE", result_size - 1);

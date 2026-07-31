@@ -100,6 +100,10 @@ SYSTEM_CMDS=(
     'DIRECTORY'
     'SHOW PROCESS'
     'SHOW PROCESS /PRIVILEGES'
+    'IDENT_OPER = F$PRIVILEGE("OPER")'
+    'SHOW SYMBOL IDENT_OPER'
+    'IDENT_SETPRV = F$PRIVILEGE("SETPRV")'
+    'SHOW SYMBOL IDENT_SETPRV'
     'SPAWN SHOW PROCESS'
     'COPY LOGIN.COM UATWRITE.TXT'
     'TYPE UATWRITE.TXT'
@@ -470,33 +474,32 @@ check_response 'SHOW LOGICAL UAT_TEST' 'session_test_passed'
 check_response 'SHOW PROCESS' 'Process ID:   [0-9A-F]{8}[[:space:]]*$'
 check_response 'SHOW PROCESS' 'Node: +OVMX'
 
-# THE EMPTY IDENTITY IS A RULE 10 DIVERGENCE, NOT A COSMETIC GAP, AND IT IS
-# ASSERTED RATHER THAN LEFT UNMENTIONED.
+# THE USER FIELD IS NOW POPULATED FOR THE INTERACTIVE SESSION (vms-2b8
+# round 3), MEASURED, NOT ASSUMED FROM THE COMMENT THIS REPLACES.
 #
-# THE ORACLE SAYS VMS NEVER PRINTS THIS. docs/oracle/vax73-show-system-process.md
-# Section 1.3: across every VAX1 (OpenVMS VAX V7.3) capture in that session NO
-# process had an empty Process Name -- not even SWAPPER, which no user created
-# -- and Section 2's verbatim SHOW PROCESS has `User: SYSTEM` populated. So an
-# empty `User:` with `Process name: ""` is a rendering of a state VMS never
-# reaches. Rule 10's two legal answers are MATCH VMS or make the condition
-# UNREACHABLE; a plausible-looking rendering of an impossible state is the
-# illegal third, and it is the same shape as the VMS_PRCNAM cheat the rule was
-# written from.
-#
-# WHY IT IS STILL HERE: the cause is that $CREPRC does not propagate identity
-# to the executive, so the console session's row carries no user name and
-# nothing on the console boot path calls $SETPRN. That is vms-afd (blocked
-# architectural work, P1), with vms-2b8/vms-d0b on identity enforcement and
-# vms-d0e on the missing default process name. Fixing it is emphatically NOT
-# this item's scope -- vms-6a7 is the READER of the executive's row, and the
-# row is what is empty. What IS in scope is refusing to be quiet about it.
-#
-# WHEN vms-afd LANDS these two go red. That is the intended alarm: replace them
-# with the VMS-matching assertions (`User: SYSTEM`, `Process name: "SYSTEM"`)
-# and delete this block. Do not widen the patterns to keep them green.
-check_known_divergence 'SHOW PROCESS' 'User:[[:space:]]+Process ID:' \
-    'vms-afd' \
-    'the executive row still carries no user name, so SHOW PROCESS prints an empty User: field (VMS always populates it -- oracle Section 2)'
+# This used to be a check_known_divergence tripwire pinned to vms-afd. It
+# fired RED on a real QEMU run of this exact script (2026-07-31): the
+# session's SHOW PROCESS now prints `User: SYSTEM`, not an empty field. But
+# `rd show vms-afd` at the same moment shows it is STILL OPEN (status
+# inbox) -- so the tripwire's own causal story ("$CREPRC does not
+# propagate identity ... nothing on the console boot path calls $SETPRN")
+# was not what changed. What changed is narrower: tools/vms_login.c
+# (LOGINOUT) now calls vms_kif_setident() directly for ITS OWN session
+# (this item's central mechanism), which stamps the executive row before
+# DCL ever reads it -- independent of $CREPRC inheritance entirely.
+# vms-afd is about a DIFFERENT code path (sys$creprc-created subprocesses,
+# e.g. SPAWN), and that path is UNCHANGED: see the SPAWN assertions below,
+# which still correctly pin the empty-user state for a spawned subprocess
+# on this same run. So this is the VMS-matching assertion the old
+# tripwire's comment said to install once its pattern went red, but it is
+# NOT evidence vms-afd has landed -- do not close vms-afd from this.
+check_response 'SHOW PROCESS' 'User: +SYSTEM +Process ID:'
+
+# THE PROCESS NAME IS STILL A REAL DIVERGENCE (vms-d0e, confirmed still
+# open via `rd show vms-d0e` at the same 2026-07-31 measurement above).
+# OVMX assigns no default process name at creation; VMS always has one.
+# This is unrelated to the User: fix above -- LOGINOUT stamps a user name
+# and UIC, not a process name, and $SETPRN was never called on this path.
 check_known_divergence 'SHOW PROCESS' 'Process name: ""' \
     'vms-d0e' \
     'the executive row still carries no process name, so SHOW PROCESS prints Process name: "" (VMS has no nameless process -- oracle Section 1.3)'
@@ -509,7 +512,41 @@ check_known_divergence 'SHOW PROCESS' 'Process name: ""' \
 # mutation: prefixing the command with a bogus verb so DCL returns
 # %DCL-E-IVVERB and no privilege list is ever printed makes this assertion
 # fail; the unmutated run still passes.
-check_response 'SHOW PROCESS /PRIVILEGES' '(TMPMBX|NETMBX|OPER)'
+#
+# PATTERN CORRECTED (vms-2b8 round 3), measured on a real QEMU run: the old
+# pattern here, '(TMPMBX|NETMBX|OPER)', predates the operator ruling that
+# masks this display to VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h) --
+# privileges OVMX stores but does not enforce are no longer printed at all
+# (see src/vmsdcl/dcl_cmd_show.c's cmd_show_process_privileges). The
+# SYSTEM session's authorized mask on this runtime is exactly the enforced
+# set: CMKRNL, CMEXEC, SETPRV, WORLD. The old pattern would now silently
+# pass on an EMPTY privilege block too (TMPMBX/NETMBX/OPER can't appear,
+# but neither can anything else, and grep -qE against an empty capture
+# only fails, which happens to be visible -- verified this round: the old
+# pattern really did go red against the corrected output, it was not a
+# silent pass). It is corrected here rather than widened to accept both,
+# because accepting both would hide a future regression back to the
+# unmasked display.
+check_response 'SHOW PROCESS /PRIVILEGES' '(CMKRNL|CMEXEC|SETPRV|WORLD)'
+
+# F$PRIVILEGE MUST AGREE WITH SHOW PROCESS/PRIVILEGES ABOUT THE SAME
+# PROCESS AT THE SAME MOMENT (vms-2b8 round 3).
+#
+# WHY THIS EXISTS. Measured before this round's fix, on the real runtime:
+# SYSTEM's SYSUAF record authorizes OPER, so SHOW PROCESS /PRIVILEGES
+# above -- masked to VMS_PRV_M_ENFORCED -- correctly showed no OPER
+# anywhere, while `F$PRIVILEGE("OPER")` on the SAME session answered
+# "TRUE", because src/vmsdcl/dcl_lexical.c's lex_privilege() read the
+# executive's RAW cur_privs, unmasked. That is OVMX advertising a
+# privilege it cannot enforce -- Rule 10's illegal third answer -- through
+# a surface DCL scripts branch on (`IF F$PRIVILEGE(...) THEN`), which is
+# worse than a display line: code takes the wrong path, not just a human
+# reading the wrong text. lex_privilege() now masks to
+# VMS_PRV_M_ENFORCED, same as the display above, so OPER (authorized but
+# unenforced) must read FALSE and SETPRV (authorized AND enforced) must
+# read TRUE for the identical session.
+check_response 'SHOW SYMBOL IDENT_OPER' 'IDENT_OPER = "FALSE"'
+check_response 'SHOW SYMBOL IDENT_SETPRV' 'IDENT_SETPRV = "TRUE"'
 
 # THE SESSION REALLY IS THE AUTHENTICATED USER AT THE OS LEVEL (vms-2b8
 # round 6). This is the only externally observable proof that

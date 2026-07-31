@@ -120,6 +120,7 @@ set -u
 DEFECTS="access-mode-escalation
 ast-setast-disable
 eflag-clref-noop
+eflag-waitfr-eintr-normal
 lock-compat-ex-cr
 lock-compat-cr-ex
 devtab-owner-not-recorded
@@ -307,6 +308,61 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    eflag-waitfr-eintr-normal)
+        case "$_f" in
+        facility)     echo "event flag WAITS (VMS_IOCTL_WAITFR/WFLOR/WFLAND), interrupted-wait path";;
+        targets)      echo "kernel/vms_eflag.c";;
+        suites_red)   echo "test_syssvc_ef_mproc";;
+        blind_suites) echo "test_kmod_eflag test_kmod_eflag_mproc";;
+        blind_why)    cat <<'EOF'
+Neither raw-ioctl event flag suite arranges a signal, so neither can observe
+what a wait reports when one arrives. That is not a gap to close by adding a
+signal to them: the property is about what the PUBLIC service returns to its
+caller, and both halves of the fix live on that path (the executive writing no
+status, and libvmssys re-entering the wait). test_syssvc_ef_mproc is where a
+caller exists to be lied to.
+EOF
+                      ;;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+WAITFR answers SS$_NORMAL when wait_event_interruptible() returns because a
+signal was pending -- "the flag is set" about a flag that is still clear, with
+rc=0/errno=0 so the caller cannot detect it. This is the code as it actually
+shipped for one round of vms-2a8, restored verbatim.
+IT IS THE SAME DEFECT CLASS AS creprc-handshake-eintr BELOW, one layer down: a
+signal delivered to the CALLER decides what a system service reports about the
+world. VMS has no status for it to report -- HELP $WAITFR says the process
+waits "until the event flag is set" and has no Condition Values topic at all,
+HELP $HIBER says a wait is interrupted by ASTs and then continues, and a SEARCH
+of $SSDEF for WAIT/INTERRUPT/ABORTED finds no such condition
+(docs/oracle/vax73-event-flags.md §4). So the correct code makes the condition
+unreachable rather than handling it, and this mutation is exactly the illegal
+third answer put back.
+IT ALSO REDDENS IF ONLY HALF THE FIX IS PRESENT. With the executive corrected
+but libvmssys not re-entering the wait, the ioctl surfaces -EINTR, which
+vms_kif_kerr_to_ss maps to SS$_BUGCHECK -- an even status -- so the same
+assertion fails. One control, both halves.
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+Same single defect, seen one step earlier. The waiter's interval timer keeps
+firing for as long as it is genuinely waiting, so the parent counts three
+interrupts before releasing the flag. A WAITFR that returns on the first
+interrupt never gets interrupted a second time, so the interrupt count
+collapses to one and this assertion goes red as a direct consequence of the
+same return -- it is the cause, and the require_fail line is the effect.
+EOF
+                      ;;
         esac;;
 
     lock-compat-ex-cr)
@@ -854,6 +910,16 @@ apply_edit() {
         sed -i 's|ast_state->enabled = args.enable ? 1 : 0;|ast_state->enabled = 1; /* NEGCTL ast-setast-disable */|' "$_file";;
     eflag-clref-noop)
         sed -i 's|\*flags \&= ~(1U << bit);|/* NEGCTL eflag-clref-noop: the bit is not cleared */|' "$_file";;
+    eflag-waitfr-eintr-normal)
+        # RANGE-ANCHORED and therefore IDEMPOTENT. The `if (ret) return ret;`
+        # shape appears in all three wait handlers, so the range narrows it to
+        # WAITFR's: it opens at the only wait_event_interruptible() whose
+        # predicate is a single bit, and closes at that function's own `out:`
+        # label. A second apply finds no `return ret;` left inside the range
+        # -- the first one replaced it -- so it is the no-op `selftest`
+        # requires, instead of walking on to WFLOR's like a first-match
+        # address would.
+        sed -i '/wait_event_interruptible(\*waitq, (READ_ONCE(\*flags) \& (1U << bit)))/,/^out:$/ s|^        return ret;$|        { args.status = SS__NORMAL; goto out; } /* NEGCTL eflag-waitfr-eintr-normal */|' "$_file";;
     lock-compat-ex-cr)
         sed -i 's|/\* EX \*/ {  1,  0,  0,  0,  0,  0 },|/* EX */ {  1,  1,  0,  0,  0,  0 }, /* NEGCTL lock-compat-ex-cr */|' "$_file";;
     lock-compat-cr-ex)

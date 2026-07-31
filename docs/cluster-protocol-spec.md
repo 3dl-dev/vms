@@ -2167,6 +2167,116 @@ testable and both kept live behind `OVMX_CFG2_ALL`:
 The destructive failure mode is understood and no longer occurs: the cluster
 stays healthy at 3 members across all of these runs.
 
+### 4(s) Where a member's ADVERTISED cluster state comes from (GROUNDED, `vms-584`)
+
+A member advertises `member_count`, `cluster_formed` and `last_transition` in
+`cat 0x01 op 0x01`. The question this section answers is where a correct
+implementation *gets* those values — and the answer is **not** the place OVMX
+originally took them from.
+
+**`op 0x01` is a REPLY, not a broadcast.** It is a point-in-time answer to a
+newcomer's query, sent once per VC, and it is sent to a newcomer **before that
+newcomer is counted** — VAX1 answered OVMX 6.7 s early and VAX3 4.1 s early, and
+in the whole of `by13` **VAX1 never advertises 4 at all**. So a value copied from
+one goes stale the moment the next transition happens, and nothing re-teaches it.
+Observed live: `by13` frame 2941, OVMX advertising `member_count=2` to VAX3 while
+VAX1 (frame 2869) and VAX2 had both said `3` on the same wire seconds earlier.
+
+**The TRANSITION-OPEN is the bundle.** `op 0x09` (class `0x02` add), `op 0x08`
+(class `0x03` remove-failed) and `op 0x0d` (class `0x04` depart) all carry, in
+one frame that *every* node sees — member or bystander — on *every* transition:
+
+| body | abs | meaning | grounding |
+|---|---|---|---|
+| `body[40:48]` | 112:120 | the transition-time quadword | matches the `last_transition` a member later advertises, to the millisecond against OPCOM; present **20 ms before** OPCOM logs "completed" |
+| `body[55]` | 127 | coordinator's membership bitmap | `popcount == post-transition member count`, 54/54 opens, zero residuals |
+
+Same encoding as `cluster_formed` (VMS quadword, 1858 epoch, 100 ns ticks).
+`cluster_formed` itself never changes in any capture and is correctly copy-once.
+
+`last_transition` updates on **every class, including `0x04`**, which runs no
+barrier at all (`af2-firsttimer`: count 2→1 and the transition time set to the
+departure instant, twice). Neither `op 0x0c` (barrier release — epoch and step
+marker only) nor `op 0x12` carries any membership bundle.
+
+**Two limits, deliberately kept.** The bitmap's **bit-to-node mapping is NOT
+grounded** — both observed transitions set a contiguous run `bits[1..count]`,
+which fits "bit k = CSID slot" and "bit k = join order" equally, and one byte
+cannot be the whole field (`body[52:55]` and `body[56:60]` are zero in every
+specimen, so the extent is undetermined). Counting bits needs no mapping;
+*asserting* the bitmap would, so an implementation that is not the coordinator
+must never assert it. And a member should adopt the facts when the transition
+becomes **real** — when its own barrier completes — so that a proposal which
+never completes is never advertised; class `0x04`, having no barrier, applies at
+the open.
+
+**Consequence of getting it wrong: none observable.** Searched for any peer
+reaction to a wrong `member_count` across the whole library and found none — no
+refusal, no retransmit storm, no reset. `by13` reached four nodes normally with
+OVMX advertising a stale `2`. Recorded as an explicit absence, not as permission:
+it means this defect class is invisible on the wire and will not announce itself.
+
+### 4(t) Con.ID allocation (GROUNDED, `vms-584`)
+
+A Con.ID identifies a connection **endpoint**. Real nodes allocate from a single
+monotonic counter **shared across all service classes** within one boot —
+`formation-ci1`, node `08:00:2b:78:56:b9`: SCS$DIRECTORY `0x33590007`,
+VMS$VAXcluster `0x33580008`, MSCP$DISK `0x33580009`, continuing upward on later
+reopens, with the peer showing the same simultaneous pattern. The **high word
+reseeds non-arithmetically at each incarnation** of the same node identity:
+`af2-firsttimer` shows `0x8fd20007 → 0xe9950007 → 0x5b050007` for the same class
+across three boots. Consistent with a per-boot seed (address or clock), not a
+persisted counter. **A real node therefore never repeats a Con.ID across
+incarnations**, and `af2-established-rejoin` confirms a rejoin is always a fresh
+CONN-REQ with `remote_conid=0`, never a resumed handshake.
+
+**The peer binds whatever is offered and never validates the value**: 30+ CONNECT
+sequences with unpredictable values, every one answered ECHO → ACCEPT → CONFIRM,
+zero DISC-RSP substituted for an ECHO, and no NAK anywhere tied to a Con.ID
+value. That is what makes changing OVMX's allocation safe.
+
+**Not grounded, and untestable from passive capture:** whether a peer would
+reject a literal repeat after a full teardown. No reference capture contains one,
+because a real allocator cannot produce one. Only the join/exit cycling test can
+answer it.
+
+### 4(u) The cat-`0x04` SYSAP ack cadence (GROUNDED, `vms-584`)
+
+The reference ack is **prompt**, **opportunistic**, **cumulative**, and **never
+keyed to an opcode**:
+
+- It names whichever frame was genuinely received last — a member's first ack
+  targets the newcomer's `op 0x02` (Δ 0.30 ms), the newcomer's first targets the
+  member's `op 0x06` burst (Δ 0.53 ms), and on a link carrying neither it targets
+  the first `cat 0x02 op 0x0d` DLM response. Reproduced at 0.39/0.45 ms.
+- **No timer and no fixed N.** Idle captures carry zero acks; on busy links
+  inter-ack gaps run 0 ms–2.3 s with no period.
+- **An `op 0x01` is never acked** (0/4 reference link-checks). Ack-of-ack occurs
+  once in 4, as an `amsg` coincidence deep in steady state, not deliberately.
+
+OVMX diverges in two inert ways, both measured: an ack naming an `op 0x01`
+~7.0 s after it arrived (`by10` idx 255, `by11` idx 2945, `bystander` idx 254 —
+7013/6754/7014 ms), and a genuine ack-of-ack ~4 s late (`by11` idx 3006,
+`bystander` idx 4922). **No peer reacted to either in any run.** These are
+instrumented (`SCSD-W-STRAYACK`) rather than suppressed — see the commit message
+for why widening the emission trigger would contradict the grounded claim that
+the `op 0x0a`/`op 0x0c` notifications draw no ack.
+
+### 4(v) Member-initiated connect-back timing — a retired finding (`vms-584`)
+
+Previously filed as "OVMX connects back ~11 minutes early". **Refuted.** The
+connect-back is the member side's directed HELLO/channel-init fired off the
+newcomer's first multicast self-announce or SOLICIT, and it is **sub-2 s in every
+reference specimen** — 0.054 s, 0.183 s, 0.195 s, 0.501 s, 0.696 s, 1.77 s
+(×2), 1.925 s across 9 events in 6 captures. There is no 660 s interval anywhere
+in the library, and three of the reference captures are shorter than 660 s in
+total. OVMX measures 0.046–1.150 s across 5 captures — **inside the reference
+range**. The frame originally cited as evidence (`by11` 2980) is an `mt=0x4b`
+CONN-REQ — routine MSCP disk-class sub-channel renegotiation on a ~10 s cadence,
+reproduced byte-identically in `by10` — not the connect-back at all. The
+~660 s numbers were capture *lengths*, not protocol intervals. **No code change;
+the rule OVMX already follows is the grounded one.**
+
 ## 6. Using the dissector
 
 ```

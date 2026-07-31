@@ -2215,6 +2215,16 @@ int main(int argc, char **argv)
                      * than acted on -- we do not want to start trusting body[16] as
                      * an identifier by the back door. */
                     if (cm_req && (size_t)n >= 92 &&
+                        /* CATEGORY FIRST, ALWAYS. op 0x0d is the class-0x04
+                         * transition-open in category 0x01 and the DLM lock-resource
+                         * rebuild record in category 0x02, and a join carries 216 of
+                         * the latter. Matching on the opcode alone latched a lock
+                         * record's bytes as the transition epoch and class -- the
+                         * barrier then carried epoch 0x00030001 into step 6 and
+                         * stalled. Caught live by the role cross-check below firing
+                         * 223 times, which is precisely why that cross-check logs
+                         * instead of gating. */
+                        mv.category == SCS_MEMBER_CAT_CONFIG &&
                         (mv.opcode == SCS_MEMBER_OP_XITION ||
                          mv.opcode == SCS_MEMBER_OP_08 ||
                          mv.opcode == SCS_MEMBER_OP_DEPART)) {
@@ -2266,7 +2276,11 @@ int main(int argc, char **argv)
                      * finished, not a gate on future participation. Only
                      * barrier_step (a barrier already running) suppresses a
                      * re-arm. */
-                    if (cm_req && mv.opcode == SCS_MEMBER_OP_XITION_GO &&
+                    /* Category-qualified for the same reason as the open above:
+                     * cm_req spans categories 0x01, 0x02 and 0x06, so an opcode
+                     * alone is not an identifier. */
+                    if (cm_req && mv.category == SCS_MEMBER_CAT_CONFIG &&
+                        mv.opcode == SCS_MEMBER_OP_XITION_GO &&
                         (size_t)n >= 90 && !ps->barrier_step) {
                         uint16_t tag = (uint16_t)buf[88] | ((uint16_t)buf[89] << 8);
                         /* vms-e4b: the tag is (class << 8) | role, and the barrier
@@ -2344,7 +2358,8 @@ int main(int argc, char **argv)
                             fflush(stdout);
                         }
                     }
-                    if (cm_req && mv.opcode == SCS_MEMBER_OP_BARRIER_REL &&
+                    if (cm_req && mv.category == SCS_MEMBER_CAT_CONFIG &&
+                        mv.opcode == SCS_MEMBER_OP_BARRIER_REL &&
                         (size_t)n >= 92) {
                         uint32_t rel = (uint32_t)buf[88] | ((uint32_t)buf[89] << 8) |
                                        ((uint32_t)buf[90] << 16) | ((uint32_t)buf[91] << 24);

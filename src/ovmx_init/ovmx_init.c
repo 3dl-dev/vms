@@ -894,7 +894,7 @@ int main(void)
      * to remove. It is left in place because PID 1 specifically has no
      * row in the executive's process table: vms_kif_register() now has
      * a product caller elsewhere (kif_bind(), vms-9fc, invoked on a
-     * process's first vms_kif_* or sys$ call), but nothing in this file
+     * process's first vms_kif_* call), but nothing in this file
      * makes such a call -- PID 1 only opens /dev/vms (executive_attach)
      * and never issues an ioctl through it -- so PID 1 itself is never
      * registered, and every reader below still reads this PCB.

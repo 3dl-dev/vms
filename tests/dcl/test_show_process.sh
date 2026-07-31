@@ -23,11 +23,22 @@
 # selectors, and the two different refusals) lives in
 # tests/qemu/test_syssvc_showproc.c, against a real executive.
 #
-# What can be proven HERE, and only here, is the thing that used to be wrong:
-# with no executive row to read, SHOW PROCESS prints NONE of the fabricated
-# fields. Every EXPECT_NOT below names a line the deleted code printed
-# unconditionally, so restoring any of them turns this test red. That makes
-# this an assertion about dcl_cmd_show.c's own source, not a decoration.
+# What can be proven HERE, and only here, is that SHOW PROCESS HAS NO
+# FABRICATING FALLBACK: with no executive row to read it reports the VMS
+# condition it got and prints nothing else. Every EXPECT_NOT below names a line
+# the deleted code printed unconditionally.
+#
+# WHAT THESE ABSENCES DO AND DO NOT CATCH -- MEASURED, not assumed. Simply
+# re-adding a "Privileges:" line to the success path does NOT turn this test
+# red, because on a host with no /dev/vms the command returns on the $GETJPI
+# failure and never reaches it. That mutation is caught in QEMU
+# (tests/qemu/test_syssvc_showproc.c, against a real executive). What this test
+# catches is the mutation the QEMU suite CANNOT reach: adding a fallback that
+# prints those fields when the executive is unreachable, which is the silent
+# userspace fallback CLAUDE.md Rule 9 forbids and the exact defect class this
+# item deletes. Verified by injecting one: printing Terminal:/Base priority:/
+# Privileges: on the failure path turns this test red, and the unmutated run
+# still passes.
 #
 # EXPECT: regex:%SYSTEM-[A-Z]-
 # EXPECT_NOT: contains:Terminal:

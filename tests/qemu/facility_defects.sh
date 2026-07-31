@@ -294,7 +294,17 @@ EOF
         # injected into kernel/vms_eflag.c reaches the PUBLIC sys$ API too.
         # This suite is no longer blind to the executive, and the entry below
         # proves it by naming the assertion it loses.
-        suites_red)   echo "test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_mproc";;
+        #
+        # test_syssvc_ef_local arrives with vms-2a8's conformance MOVE (it is
+        # tests/conformance/vms_programs/test_event_flags.c, relocated off a
+        # host that has no /dev/vms). It is DERIVED FROM A RUN, not reasoned
+        # into place: with this defect injected it goes rc=1 on exactly one
+        # assertion, "sys$readef(1) reported WASCLR after the clear", which is
+        # the same read-back-after-clear property as test_kmod_eflag's
+        # "readef(5) after clear returns WASCLR" one layer down. Its other
+        # fifteen assertions stay green, which is what keeps this mutation
+        # minimal rather than a blunderbuss on the new suite.
+        suites_red)   echo "test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_mproc test_syssvc_ef_local";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -304,6 +314,7 @@ readef(5) after clear returns WASCLR
 cluster has flags 0,3,7,31 set
 child: a common flag CLEARED BY THE PARENT reads clear here (A clears, B reads)
 child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
+sys$readef(1) reported WASCLR after the clear
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -315,7 +326,7 @@ EOF
         facility)     echo "event flag WAITS (VMS_IOCTL_WAITFR/WFLOR/WFLAND), interrupted-wait path";;
         targets)      echo "kernel/vms_eflag.c";;
         suites_red)   echo "test_syssvc_ef_mproc";;
-        blind_suites) echo "test_kmod_eflag test_kmod_eflag_mproc";;
+        blind_suites) echo "test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_local";;
         blind_why)    cat <<'EOF'
 Neither raw-ioctl event flag suite arranges a signal, so neither can observe
 what a wait reports when one arrives. That is not a gap to close by adding a
@@ -323,6 +334,12 @@ signal to them: the property is about what the PUBLIC service returns to its
 caller, and both halves of the fix live on that path (the executive writing no
 status, and libvmssys re-entering the wait). test_syssvc_ef_mproc is where a
 caller exists to be lied to.
+test_syssvc_ef_local is blind for a second, different reason and is declared
+here rather than left silent: its $WAITFR call is on a flag that is ALREADY
+SET, so it returns without ever blocking and there is no wait for a signal to
+interrupt. It stays green with this defect injected -- MEASURED on this host,
+not assumed -- and the honest statement is that it drives $WAITFR without
+covering this property at all.
 EOF
                       ;;
         isolation)    echo "isolated";;
@@ -731,7 +748,21 @@ EOF
         # coarse mutation, and the honest fix is to DECLARE the dependency
         # rather than narrow a suite whose whole value is that it drives the
         # user-visible command through the entire stack.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc";;
+        # test_syssvc_ef_mproc and test_syssvc_ef_local are the THIRD and
+        # FOURTH, added by vms-2a8, and they arrive the same way: not
+        # predicted, READ OFF A RUN. The first CI run after sys_event.c became
+        # a reader of the executive reddened test_syssvc_ef_mproc here, one
+        # suite outside the declared set and 27 assertions outside the named
+        # set; the local rerun that produced the lists below reddened
+        # test_syssvc_ef_local too, for 16 more. That is the same forcing
+        # function firing for the same reason as vms-6a7's: wiring a facility
+        # to the executive makes its suites depend on the bind, and the
+        # manifest has to SAY so.
+        # WHY THESE TWO ARE NOT A WIDENING OF THE BLIND SET BELOW: neither
+        # hand-registers. Both open /dev/vms only to decide skip-vs-run and
+        # then use the public sys$ API, which is what a product image does --
+        # the counter-example property the blind_why paragraph names.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
 These four drive the product's own vms_kif client, so restoring the vms-9fc
@@ -755,11 +786,14 @@ of driving vms_kif; it is a property of hand-registering first.
 EOF
                       ;;
         isolation)    echo "isolated";;
-        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Three suites detect it: test_kmod_bind, and test_syssvc_procnam and test_syssvc_showproc through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
+        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Five suites detect it: test_kmod_bind, and test_syssvc_procnam, test_syssvc_showproc, test_syssvc_ef_mproc and test_syssvc_ef_local through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
         require_fail) cat <<'EOF'
 $SETEF reaches the executive with no explicit register
 $GETJPI(self) resolves the auto-bound process
 the caller has a row in the executive's process table
+parent: sys$setef on a LOCAL flag succeeds (baseline: the event flag facility is operative in this process at all)
+child: sys$setef on a LOCAL flag succeeds (baseline: the event flag facility is operative in this process at all)
+sys$setef(1) set the flag
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -777,10 +811,50 @@ the executive assigned the caller a VMS process ID
 sys$creprc created the subject process
 sys$creprc returned the subject's pid
 sys$creprc returned the subject's VMS process ID
+child: a LOCAL flag set by the parent is NOT visible here (local clusters stay per-process)
+child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
+child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads, public API)
+child: sys$ascefc joined the named common cluster
+child: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')
+child: sys$setef on the associated common cluster reported success
+parent: a PERMANENT cluster survived losing its last association (its flags are still set)
+parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, A reads, public API)
+parent: sys$ascefc after the deletion created a cluster of that name again
+parent: sys$ascefc created a PERMANENT common cluster
+parent: sys$ascefc created/joined the named common cluster
+parent: sys$ascefc joined the cluster the interrupted-wait measurement uses
+parent: sys$ascefc re-joined the permanent cluster by name
+parent: sys$clref on the associated common cluster reported success
+parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base
+parent: sys$dacefc released the last association to the permanent cluster
+parent: sys$dacefc released the marked cluster
+parent: sys$dlcefc accepted the permanent cluster by name
+parent: sys$dlcefc really deleted the cluster (the re-created one is FRESH, not the old flags)
+parent: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')
+parent: sys$setef on the associated common cluster reported success
+parent: sys$setef on the permanent cluster reported success
+parent: sys$setef released the waiter's flag
+parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
+parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
+sys$clref(1) cleared the flag
+sys$clref(1) reported WASSET for the previously-set flag
+sys$clref(1) succeeded on the set flag
+sys$readef(1) reported WASCLR after the clear
+sys$readef(1) reported WASCLR for the cleared flag
+sys$readef(1) reported WASSET after the flag was set
+sys$readef(1) succeeded after the flag was set
+sys$readef(1) succeeded on the cleared flag
+sys$setef(1) on an already-set flag reported WASSET
+sys$setef(1) reported a documented previous state (WASCLR or WASSET)
+sys$setef(1) succeeded on the already-set flag
+sys$waitfr(1) left the flag SET -- it is not a counting semaphore
+sys$waitfr(1) returned for the already-set flag
+the cluster state word agrees with the status: flag 1's bit is CLEAR
+the cluster state word agrees with the status: flag 1's bit is SET
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-Assertions across two suites go red, and that IS the defect rather than
+Assertions across five suites go red, and that IS the defect rather than
 evidence against it: the mutation deletes the ONE call that binds a process to the executive,
 and a process with no PCB can use no facility. Round 1 named two of the twelve
 and framed the result as narrow ("only test_kmod_bind goes red"), which is
@@ -848,6 +922,39 @@ byte for byte. There is no ending-picks-itself race here of the kind
 creprc-handshake-eintr has: test_syssvc_showproc.c:574-582 evaluates both
 $CREPRC assertions before its early return, so the three reds are the same
 three whichever way the scheduler runs.
+
+THE EVENT FLAG SUITES: 43 MORE, AND EVERY ONE OF THEM IS THE SAME MISSING
+BIND (vms-2a8). Until this item, src/libvms/syssvc/sys_event.c named no
+vms_kif_* symbol at all -- it kept 128 event flags in per-process memory --
+so test_syssvc_ef_mproc could not see this defect and there was nothing to
+declare. Wiring it to /dev/vms makes every sys$ event-flag call a bound call,
+and the equality check said so on the first CI run afterwards (27 unnamed
+assertions in test_syssvc_ef_mproc) and again locally once the conformance
+move added test_syssvc_ef_local (16 more). The lists above are that run's
+output, not a prediction.
+  test_syssvc_ef_mproc (27) -- the process never registers, so the FIRST
+    sys$setef fails, and every A-writes/B-reads assertion downstream of it is
+    reading back a write that never happened. Its one require_fail entry per
+    process, "sys$setef on a LOCAL flag succeeds (baseline: ...)", is the
+    property: a local flag needs no cluster association and no privilege, so
+    if even that fails the facility is not operative in this process AT ALL.
+    Every remaining red -- the $ASCEFC joins, the shared-flag reads, the
+    permanent-cluster lifetime round trip, the interrupted-wait block -- is
+    downstream of that one.
+  test_syssvc_ef_local (16) -- the whole suite, and it is the whole suite for
+    a structural reason worth stating: this suite has no early exit. It is
+    the relocated conformance program, sixteen straight-line checks with no
+    branch that skips the rest, so an unbound process fails all sixteen
+    rather than stopping at the first. "sys$setef(1) set the flag" is in
+    require_fail as its baseline; the other fifteen read back what that call
+    failed to do.
+NOTE WHICH ASSERTION IS *NOT* SILENT HERE: "sys$setef on an UNASSOCIATED
+common flag is refused WHILE a local flag succeeds (not merely 'every call
+fails')" goes red, in both processes. That assertion exists precisely to
+refuse to be satisfied by a facility that does nothing, and with the bind
+deleted the facility does nothing -- so it fails, exactly as designed. A
+manifest that named only the "succeeds" assertions and not this one would be
+describing a different, kinder defect.
 EOF
                       ;;
         esac;;

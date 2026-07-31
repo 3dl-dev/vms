@@ -39,7 +39,14 @@ struct status_entry {
 static const struct status_entry known_codes[] = {
     /* SYSTEM facility - success / informational */
     { SS$_NORMAL,       "SYSTEM", "NORMAL",       "normal successful completion" },
-    { SS$_WASCLR,       "SYSTEM", "WASCLR",       "flag was previously clear" },
+    /* NO "WASCLR" ROW, DELIBERATELY (vms-68c). SS$_WASCLR is 1 on VMS --
+     * the same value as SS$_NORMAL -- and F$MESSAGE(1) on the reference lab
+     * V7.3 has exactly one rendering, "%SYSTEM-S-NORMAL, normal successful
+     * completion" (docs/oracle/vax73-event-flags.md). The row that used to
+     * sit here claimed a distinct "flag was previously clear" message, and
+     * it was unreachable behind the NORMAL row above -- a plausible-looking
+     * entry for something VMS does not have. Rule 10: hide it, do not
+     * handle it. Callers distinguish clear-vs-set by testing SS$_WASSET. */
     { SS$_WASSET,       "SYSTEM", "WASSET",       "flag was previously set" },
     { SS$_SUPERSEDE,    "SYSTEM", "SUPERSEDE",    "logical name superseded" },
     { SS$_CREATED,      "SYSTEM", "CREATED",      "object created" },
@@ -86,7 +93,15 @@ static const struct status_entry known_codes[] = {
      * "code" included. */
     { SS$_ILLIOFUNC,    "SYSTEM", "ILLIOFUNC",    "illegal I/O function code" },
     { SS$_TIMEOUT,      "SYSTEM", "TIMEOUT",      "device timeout" },
+    /* ORACLE-PINNED (vms-68c): F$MESSAGE(236) and F$MESSAGE(564) on the
+     * reference lab VAX V7.3 render "%SYSTEM-F-ILLEFC, illegal event flag
+     * cluster" and "%SYSTEM-F-UNASEFC, unassociated event flag cluster".
+     * UNASEFC is added here because wiring $SETEF/$CLREF/$READEF to the
+     * executive (vms-2a8) makes it a status callers can now actually see --
+     * it is what the executive answers for a common flag whose cluster this
+     * process has not associated with. */
     { SS$_ILLEFC,       "SYSTEM", "ILLEFC",       "illegal event flag cluster" },
+    { SS$_UNASEFC,      "SYSTEM", "UNASEFC",      "unassociated event flag cluster" },
     { SS$_NONEXPR,      "SYSTEM", "NONEXPR",      "nonexistent process" },
     { SS$_SUSPENDED,    "SYSTEM", "SUSPENDED",    "process suspended" },
     { SS$_NOTQUEUED,    "SYSTEM", "NOTQUEUED",    "timer request not queued" },

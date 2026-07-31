@@ -2183,6 +2183,55 @@ int main(int argc, char **argv)
                         ps->cm_remote_conid = ps->remote_conid;
                     }
 
+                    /* vms-e81 ROOT CAUSE: A SITTING MEMBER MUST RECIPROCATE A
+                     * NEWCOMER'S CONFIG, IMMEDIATELY.
+                     *
+                     * This is what stopped VAX3 joining while OVMX sat there as a
+                     * member, and the capture contains its own control. In the
+                     * pure-VMS reference a newcomer sends each member it has a VC
+                     * with `op 0x14` then `op 0x01`, and the member answers with
+                     * its OWN `op 0x14` + `op 0x01` within ONE MILLISECOND (VAX1
+                     * +0.9 ms, VAX2 +0.3 ms). The newcomer then emits its
+                     * `cat 0x01 op 0x02` add-member request ~110 ms after the LAST
+                     * member reciprocates -- and its `amsg` literally acknowledges
+                     * that reciprocal `op 0x01`. The trigger is data-driven, not a
+                     * timer.
+                     *
+                     * OVMX never reciprocated. So VAX3 sent us its config, waited,
+                     * and never asked ANYONE for admission: zero `op 0x02` from it
+                     * for 678 s, and zero `op 0x12` naming it. It was not ignoring
+                     * us and it was not refusing us -- it was WAITING ON US, again.
+                     *
+                     * The proof is a natural experiment inside the same capture.
+                     * OVMX's process exited at +702 s; VAX1/VAX2 ran the removal
+                     * transition at +730; VAX1 and VAX2 each re-pushed their
+                     * `op 0x01` to VAX3 -- and at +733.5, THREE SECONDS after OVMX
+                     * left the membership and with nothing else changed, VAX3 sent
+                     * its `op 0x02` and joined normally. The only variable was us.
+                     *
+                     * Scoped to `appeared_after_join`, which is exactly the
+                     * grounded configuration: a node we met only AFTER our own
+                     * admission is a newcomer joining a cluster we are already in.
+                     * Our own join path is untouched -- there we are the joiner and
+                     * the burst rides the joiner-initiated VC. */
+                    if (cm_req && mv.category == SCS_MEMBER_CAT_CONFIG &&
+                        mv.opcode == SCS_MEMBER_OP_MODEL &&
+                        !cm_on_joiner_vc && ps->appeared_after_join &&
+                        !ps->cfg_sent && ps->connected) {
+                        int c = cm_send_config_burst(sock, (int)ifindex, ps,
+                                                     our_hw_mac, our_src_logical,
+                                                     OVMX_LOCAL_CONID,
+                                                     ps->remote_conid);
+                        cm_config_frames += c;
+                        log_ts(stdout);
+                        printf(" SCSD-I-CMRECIP, newcomer sent its config --"
+                               " reciprocated with our own op 0x14 + op 0x01"
+                               " (%d frames) on the VC it opened to us."
+                               " The reference does this within 1 ms; a newcomer"
+                               " that does not get it never asks to join\n", c);
+                        fflush(stdout);
+                    }
+
                     /* Ack cadence: batch, and let the poll loop flush the tail. */
                     /* Only the op-0x06 burst is acknowledged. op 0x0a and op 0x0c
                      * also carry txn=0 but are NOTIFICATIONS: no 0x8a/0x8c response

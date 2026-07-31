@@ -105,6 +105,16 @@ echo "== LIBVMSSYS\$SHR.EXE: real src/libvmssys, vector extended with vms_kif_* 
 # point a product library calls must be a universal of the image that DEFINES
 # it, or the VMS-native link fails — LIBVMSSYS$SHR is the producer of the
 # executive client, and nothing else may re-export it.
+#
+# APPENDED AGAIN for vms-2a8, same rule, same append-only discipline (every
+# index above is unchanged): event flags became executive-resident. $SETEF /
+# $CLREF / $READEF / $WAITFR / $WFLOR / $WFLAND / $ASCEFC / $DACEFC / $DLCEFC in
+# src/libvms/syssvc/sys_event.c are now READERS AND WRITERS of the executive's
+# flag clusters (src/kernel/vms_eflag.c) instead of a per-process PCB copy, so
+# libvms cross-image-imports the nine matching vms_kif_* calls. This is the
+# VMS-native link telling the truth about the wiring: before vms-2a8 sys_event.o
+# named no vms_kif_* symbol at all, which is exactly what "the facility was a
+# facade" looks like from the linker's side.
 SYSCFLAGS="-fPIC -O2 -ffreestanding -fno-stack-protector -fno-builtin -mno-outline-atomics -I$LIBVMSSYS_DIR"
 SYSOBJS=""
 for c in vms_string vms_snprintf vms_futex vms_stdio vms_math vms_runtime_init vms_kif; do
@@ -114,7 +124,7 @@ done
 $CC -fPIC -mno-outline-atomics -c -o "$WORK/sys_syscall.o" "$LIBVMSSYS_DIR/arch/aarch64/syscall.S"
 SYSOBJS="$SYSOBJS $WORK/sys_syscall.o"
 "$WORK/LINK.EXE" --shareable \
-    --symbol-vector "vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE" \
+    --symbol-vector "vms_strlen=PROCEDURE,vms_kif_open=PROCEDURE,vms_kif_enq=PROCEDURE,vms_kif_deq=PROCEDURE,vms_kif_convert=PROCEDURE,vms_kif_setprn=PROCEDURE,vms_kif_getjpi_self=PROCEDURE,vms_kif_getjpi_pid=PROCEDURE,vms_kif_getjpi_prcnam=PROCEDURE,vms_kif_procscan=PROCEDURE,vms_kif_setef=PROCEDURE,vms_kif_clref=PROCEDURE,vms_kif_readef=PROCEDURE,vms_kif_waitfr=PROCEDURE,vms_kif_wflor=PROCEDURE,vms_kif_wfland=PROCEDURE,vms_kif_ascefc=PROCEDURE,vms_kif_dacefc=PROCEDURE,vms_kif_dlcefc=PROCEDURE" \
     --gsmatch LEQUAL,1,0 -o "$SYSLIB/LIBVMSSYS\$SHR.EXE" $SYSOBJS
 readelf -SW "$SYSLIB/LIBVMSSYS\$SHR.EXE" | grep -q '\.vms\$sv' || { echo "FAIL: LIBVMSSYS\$SHR no symbol vector"; exit 1; }
 

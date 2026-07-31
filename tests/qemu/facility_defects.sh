@@ -167,7 +167,8 @@ run-detached-name-dropped
 creprc-detach-intermediate-reaped
 run-detached-not-detached
 run-image-qualifier-refused
-run-qualifier-not-abbreviated"
+run-qualifier-not-abbreviated
+getjpi-curpriv-name-coverage"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1488,6 +1489,46 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    getjpi-curpriv-name-coverage)
+        case "$_f" in
+        facility)     echo "F\$GETJPI CURPRIV/AUTHPRIV's derived privilege-name coverage check (DCL userspace, src/vmsdcl/dcl_lexical.c)";;
+        targets)      echo "kernel/vms_ioctl.h";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          cat <<'EOF'
+F$GETJPI's CURPRIV/AUTHPRIV renderer (lex_getjpi() in dcl_lexical.c) walks
+VMS_PRV_M_ENFORCED bit by bit and looks each set bit up in vms_priv_names[]
+(dcl_cmd_show.c) to derive the name it prints -- deliberately, so a bit added
+to VMS_PRV_M_ENFORCED needs no second, hand-maintained name list (vms-2b8
+round 6). Round 7 added a guard for the coverage gap one layer down: a set
+bit with NO row in vms_priv_names[] used to be silently omitted from the
+rendered string. This defect is that exact gap, restored: VMS_PRV_M_ENFORCED
+gains one more bit (1ULL << 40) that names nothing.
+Proven once by hand (round 7, reverted before commit) and had NO suite
+exercising it until this defect: nothing in tests/qemu/ called F$GETJPI
+CURPRIV before test_syssvc_ident.c's scenario F was added alongside this
+manifest entry (vms-2b8 round 8). SYSTEM's SYSUAF ALL identity has
+cur_privs = ~0ULL, so bit 40 is always set for it and CURPRIV always reaches
+the guard.
+ISOLATION: scenario F runs its OWN run_dcl() call with its OWN script and OWN
+output buffer -- it shares no script, buffer or DCL session with scenarios
+A-E, so this mutation cannot reach their assertions. It also cannot reach
+SHOW PROCESS/PRIVILEGES (scenarios A/B/D use it): that display walks
+vms_priv_names[] FORWARD, from table row to mask bit, so an UNNAMED bit is
+just never visited -- there is no direction in that loop from which bit 40
+could be reached, unlike CURPRIV's reverse walk (mask bit -> table lookup).
+EOF
+                      ;;
+        require_fail) cat <<'EOF'
+F: F$GETJPI CURPRIV renders a name for every bit VMS_PRV_M_ENFORCED sets, without an internal-consistency abort (vms-2b8 round 7 coverage check)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1600,6 +1641,13 @@ apply_edit() {
         # halves of RUN's qualifier table, and mutating one would leave
         # the rule half-applied rather than restored.
         sed -i 's|strncasecmp(given, full, glen) == 0|strcasecmp(given, full) == 0 /* NEGCTL run-qualifier-not-abbreviated */|' "$_file";;
+
+    getjpi-curpriv-name-coverage)
+        # The ONE edit: VMS_PRV_M_ENFORCED gains a bit no vms_priv_names[]
+        # row names (round 7's own hand-applied proof, now mechanical).
+        # Anchored on the WORLD line closing the macro's parenthesised OR,
+        # which appears once in the file.
+        sed -i 's@                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD)@                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD | (1ULL << 40))  /* NEGCTL getjpi-curpriv-name-coverage */@' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

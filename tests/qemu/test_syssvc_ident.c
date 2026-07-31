@@ -208,8 +208,8 @@ static void dump(const char *label, const char *text)
  * parent's row. So while LOGINOUT left the session running as Linux
  * root, a FIELD/[200,10] session could fork a child, the child
  * registered holding CMKRNL|CMEXEC|SETPRV|WORLD before executing an
- * instruction, and SETPRV let it stamp itself SYSTEM [1,4] with all 37
- * privileges. Measured, not argued: the child's DCL printed
+ * instruction, and SETPRV let it stamp itself SYSTEM [1,4] with SYSUAF's
+ * privilege ALL. Measured, not argued: the child's DCL printed
  * "User: SYSTEM ... [001,004] ... SETPRV ... WORLD".
  *
  * So the shape below is LOGINOUT's, step for step, and it must be:
@@ -727,7 +727,7 @@ int main(void)
      *    This is the scenario the veracity adversary used to break
      *    round 5: without the credential drop the subprocess got SETPRV
      *    back from CAP_SYS_ADMIN and its claim SUCCEEDED, so an
-     *    ordinary session's child became SYSTEM with all 37 privileges.
+     *    ordinary session's child became SYSTEM with SYSUAF's privilege ALL.
      * ---------------------------------------------------------------- */
     {
         static char outd[65536];
@@ -784,6 +784,50 @@ int main(void)
      * E. A-writes / B-reads in its true form (Rule 11).
      * ---------------------------------------------------------------- */
     scenario_e_a_writes_b_reads();
+
+    /* ----------------------------------------------------------------
+     * F. F$GETJPI CURPRIV's derived-name coverage check (vms-2b8 round
+     *    7, negative control added round 8). dcl_lexical.c's CURPRIV/
+     *    AUTHPRIV renderer walks VMS_PRV_M_ENFORCED (src/kernel/
+     *    vms_ioctl.h) bit by bit and looks each set bit up in
+     *    vms_priv_names[] (dcl_cmd_show.c); a bit with no row aborts
+     *    the session with an OVMX-facility diagnostic rather than
+     *    silently omitting the name. That guard had NO suite exercising
+     *    it before this scenario -- it was proven once, by hand, with a
+     *    temporary edit to VMS_PRV_M_ENFORCED, then reverted. This
+     *    scenario is that same edit, as a standing negative control:
+     *    tests/qemu/facility_defects.sh's getjpi-curpriv-name-coverage
+     *    defect ORs an unnamed bit (1ULL << 40) into VMS_PRV_M_ENFORCED,
+     *    which SYSTEM's SYSUAF ALL identity (cur_privs = ~0ULL) always
+     *    has set, so CURPRIV always reaches the guard for this identity.
+     *
+     *    ISOLATED ON PURPOSE: its own run_dcl() call, its own script,
+     *    its own marker -- not appended to script/outa/outb/outc above,
+     *    so this mutation cannot knock on any assertion that reads
+     *    those buffers. Under the unmutated build CURPRIV renders
+     *    normally and the marker after it prints; under the mutation
+     *    DCL aborts before the marker, so CURPRIV_DONE goes missing.
+     * ---------------------------------------------------------------- */
+    {
+        static char outf[65536];
+        const char *script_f =
+            "IDENT_CURPRIV = F$GETJPI(\"\",\"CURPRIV\")\n"
+            "WRITE SYS$OUTPUT \"CURPRIV_DONE\"\n";
+        if (run_dcl("SYSTEM", (1u << 16) | 4u, ~0ULL, 0,
+                    script_f, outf, sizeof(outf)) != 0) {
+            printf("  FAIL: could not run DCL for scenario F\n");
+            printf("=== test_syssvc_ident: %d passed, %d failed ===\n", pass, fail + 1);
+            return 1;
+        }
+        dump("scenario F, CURPRIV coverage", outf);
+        CHECK(strstr(outf, "SETIDENT_STATUS=1") != NULL,
+              "F: the executive accepted the SYSTEM/ALL identity this scenario "
+              "needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)");
+        CHECK(strstr(outf, "CURPRIV_DONE") != NULL,
+              "F: F$GETJPI CURPRIV renders a name for every bit VMS_PRV_M_ENFORCED "
+              "sets, without an internal-consistency abort (vms-2b8 round 7 "
+              "coverage check)");
+    }
 
     printf("=== test_syssvc_ident: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

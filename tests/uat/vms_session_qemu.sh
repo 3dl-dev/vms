@@ -705,7 +705,7 @@ check_known_divergence 'SHOW PROCESS' 'Process name: ""' \
 # and round 3's comment here said the latter -- false, corrected round 4.
 # MEASURED: distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT's SYSTEM row
 # reads `SYSTEM||1|4|SYS$SYSDEVICE:[SYSMGR]||ALL` -- the seventh field,
-# privileges, is the literal string ALL (37 privileges), not a 4-privilege
+# privileges, is the literal string ALL, not a 4-privilege
 # list. The four names below are what SURVIVES THE VMS_PRV_M_ENFORCED
 # INTERSECTION of that ALL mask, which is a strict subset -- SYSPRV,
 # BYPASS, OPER, and 30-odd others are authorized by SYSUAF and correctly
@@ -894,7 +894,7 @@ check_response 'SET TIME 1-JAN-2030:00:00:00' 'no privilege for SET TIME'
 # subprocess also registered holding CMKRNL|CMEXEC|SETPRV|WORLD, and
 # SETPRV is what VMS_IOCTL_SETIDENT requires to claim any identity at
 # all -- an ordinary user's subprocess could stamp itself SYSTEM with
-# all 37 privileges (reproduced against a real /dev/vms; the refusal is
+# SYSUAF's privilege ALL (reproduced against a real /dev/vms; the refusal is
 # asserted in tests/qemu/test_syssvc_ident.c scenario D).
 #
 # Anchored to SPAWN's own response segment, not the whole log: '[001,004]'

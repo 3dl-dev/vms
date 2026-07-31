@@ -240,7 +240,7 @@ static void start_session(const sysuaf_record_t *rec)
      * what VMS_IOCTL_SETIDENT requires to establish an arbitrary
      * identity. It was proven by execution, not argued: an ordinary
      * FIELD/[200,10] session forked a child, the child re-registered,
-     * and it stamped itself SYSTEM [1,4] with all 37 privileges. The
+     * and it stamped itself SYSTEM [1,4] with SYSUAF's privilege ALL. The
      * executive's refusal was real but it protected exactly one task,
      * and a privilege reduction survived only until the next fork.
      *

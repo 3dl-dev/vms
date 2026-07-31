@@ -904,9 +904,12 @@ static int cmd_set_time(struct dcl_command *cmd)
      * other four shipped accounts (GUEST, DEFAULT, USER1, USER2 hold no
      * OPER at all -- GUEST is TMPMBX only, DEFAULT/USER1/USER2 add
      * NETMBX, neither is OPER; see distro/rootfs/vms/SYS0/SYSCOMMON/
-     * SYSEXE/SYSUAF.DAT), because this code path never reads the
-     * caller's SYSUAF record at all -- it only reads the compile-time-
-     * fixed VMS_PRV_M_ENFORCED mask.
+     * SYSEXE/SYSUAF.DAT), because this code path (enforced_privs_held()
+     * above) reads the executive's live cur_privs and masks it with
+     * the compile-time-fixed VMS_PRV_M_ENFORCED -- it does not read
+     * the caller's SYSUAF-authorized mask anywhere in that computation,
+     * so nothing here can distinguish a SYSUAF that holds OPER from
+     * one that does not.
      * A per-caller claim shipped to the console is either true for
      * every caller that can see it or it does not appear (standing
      * prose ruling, CLAUDE.md project rule 10). The corrected text

@@ -126,6 +126,17 @@ static void render_csv_UNSAFE(char *out, size_t out_size, int n_names)
 {
     size_t rl = 0;
     for (int i = 0; i < n_names && test_priv_names[i].name; i++) {
+        /*
+         * INTENTIONAL. This is the negative control: it exists to
+         * reproduce the exact pre-round-13 defect (see the file header
+         * and the negative-control block in main()) so the test can
+         * prove the canary check is capable of catching it before
+         * trusting the same check's silence on the SAFE variants below.
+         * Never called with untrusted or unbounded input -- see
+         * main()'s only two call sites, both with a fixed
+         * UNSAFE_BUF_SIZE and a fixed name count.
+         */
+        // codeql[cpp/overflowing-snprintf]
         rl += (size_t)snprintf(out + rl, out_size - rl, "%s%s",
                                rl ? "," : "", test_priv_names[i].name);
     }

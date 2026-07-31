@@ -910,8 +910,8 @@ evidence against it: the mutation deletes the ONE call that binds a process to t
 and a process with no PCB can use no facility. Round 1's own framing of
 this ("only test_kmod_bind goes red") was narrow: true at suite
 granularity and misleading at property granularity -- the exact thing the
-equality check exists to stop. The
-reddened assertions fall into groups, all the same missing bind (the exact
+equality check exists to stop. The reddened assertions fall into groups,
+all the same missing bind (the exact
 set is the require_fail/knock_on_fail arrays above, not a count restated
 here -- see METHOD 4: a tally a human must remember to update will drift):
   suite 0, setident (1)   -- (vms-fb9 r6) vms_kif_setident() now reaches

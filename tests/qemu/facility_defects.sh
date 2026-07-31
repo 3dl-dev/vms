@@ -454,7 +454,7 @@ EOF
         case "$_f" in
         facility)     echo "distributed lock manager, the OTHER direction of the matrix, reached through the PUBLIC sys\$ API as well as raw ioctls";;
         targets)      echo "kernel/vms_lock.c";;
-        suites_red)   echo "test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock";;
+        suites_red)   echo "test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -473,13 +473,14 @@ parent: child (completion AST) exited clean
 child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
 parent: child's NOQUEUE-denial checks reported via public API
 parent: child's post-release retry succeeded via public API
+sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-ONE bit, three suites, ten assertions -- and every one of the eight extras is
-the same granted-instead-of-queued request seen further downstream. A CR that
-the executive should have QUEUED behind a held EX is instead GRANTED
-immediately, so everything that depends on it having waited stops happening:
+ONE bit, four suites, eleven assertions -- and every one of the extras is the
+same granted-instead-of-queued request seen further downstream. A CR that the
+executive should have QUEUED behind a held EX is instead GRANTED immediately,
+so everything that depends on it having waited stops happening:
   mproc  the queue is empty, so GETLKI reports no queued CR from either side
          and the parent's blocking AST is never fired (there is no conflict to
          notify about);
@@ -488,15 +489,25 @@ immediately, so everything that depends on it having waited stops happening:
          reddens the parent's "child exited clean";
   syssvc the child holds a CR it should not; compat[EX][CR] is UNTOUCHED, so
          the child's own CR now blocks its later EX request, and the parent's
-         two assertions are reads of the child's report.
+         two assertions are reads of the child's report;
+  status (test_syssvc_lock_status, vms-2e5) scenario_cvtungrant's own setup
+         queues a CR behind a held EX the same way test_syssvc_lock's does --
+         under this mutation the CR is granted immediately instead, so the
+         follow-up LCK$M_CONVERT lands on an ALREADY-GRANTED lock rather than
+         a waiting one and the kernel has no reason to reject it with
+         SS__CANCELGRANT, so kstat_to_ss() is never asked to translate
+         SS$_CVTUNGRANT at all. This is the SAME defect knocking on the SAME
+         setup pattern (CR queued behind EX) that test_syssvc_lock already
+         names above -- not a second, independent property of
+         test_syssvc_lock_status.
 No finer mutation exists: this is a single entry of a single matrix, the same
 shape as the vms-e4d precedent. Making it finer would mean not flipping it.
 NOTE, and it is a finding rather than a defect in this control:
 test_kmod_lock_sync.c "child: async CR queued behind parent EX" STAYS GREEN
 under this mutation, because it checks only that the $ENQ returned SS$_NORMAL
 with a lock id -- which an immediate grant also satisfies. The assertion's text
-claims queueing; its condition does not test it. The three assertions that DO
-catch it are the ones above.
+claims queueing; its condition does not test it. The assertions that DO catch
+it are the ones above.
 EOF
                       ;;
         esac;;

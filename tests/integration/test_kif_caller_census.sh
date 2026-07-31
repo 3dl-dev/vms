@@ -136,20 +136,19 @@
 #     vms_kif_kerr_to_ss, the static vms_kif_alloc_op, and the statics
 #     kif_call and kif_wait_call.
 #
-#     THE SEVEN, NOT FOUR. This gate now PRINTS, at every run, the set of
-#     definitions whose own body issues no VMS_IOCTL_* opcode and names no
-#     VMS_*_SEL_* selector -- see "floor-exempt" in the output below, computed
-#     by opcode_owners() rather than hand-counted here. That is the fix for
-#     THIS paragraph's own defect: an earlier revision said "the first four
-#     are exactly" that set -- open/close manage the fd, kerr_to_ss maps an
-#     errno, alloc_op takes its opcode as a PARAMETER -- and named kif_call
+#     FLOOR-EXEMPT, DERIVED NOT RECITED. This gate now PRINTS, at every run,
+#     the set of definitions whose own body issues no VMS_IOCTL_* opcode and
+#     names no VMS_*_SEL_* selector -- see "floor-exempt" in the output below,
+#     computed by opcode_owners() rather than hand-counted here. That is the
+#     fix for THIS paragraph's own defect: an earlier revision said "the first
+#     four are exactly" that set -- open/close manage the fd, kerr_to_ss maps
+#     an errno, alloc_op takes its opcode as a PARAMETER -- and named kif_call
 #     and kif_wait_call as fitting "the same shape" without ever counting
-#     kif_bind, whose body also never spells an opcode or a selector (it only
-#     calls vms_kif_open()/vms_kif_register()). The true count is SEVEN, and
-#     "exactly" was false the moment kif_bind was checked. That is now a
-#     computed fact, not a recitation, so it cannot go stale THIS way again --
-#     though see below for the different, still-hand-measured fact it must
-#     not be confused with.
+#     kif_bind, whose body also never spells an opcode or a selector. "Exactly"
+#     was false the moment kif_bind was checked -- read the count from the
+#     "floor-exempt" line this gate prints when it runs, not from a number
+#     recited here, which is exactly the different, still-hand-measured fact
+#     the next paragraph is about and must not be confused with this one.
 #     THIS PARAGRAPH WAS DESCRIBING A NECESSARY CONDITION, NOT THE SUFFICIENT
 #     ONE, and the two are not the same list. "Issues no opcode, names no
 #     selector" is necessary for a definition's deletion to be uncaught by the
@@ -170,13 +169,15 @@
 #     set two paragraphs up: that set answers the sufficient question and is
 #     MEASURED, by actually deleting each definition in turn and running this
 #     gate -- there is no cheap static check for "does something else's
-#     reachability depend on me", so unlike the seven above, the six cannot
-#     be reduced to a runtime print without literally running
-#     the brute force on every invocation. Re-run it after any change to the
-#     static call graph in vms_kif.c; do not assume it still reads "six".
+#     reachability depend on me", so unlike the floor-exempt set above -- which
+#     opcode_owners() derives and prints every run -- this one cannot be
+#     reduced to a runtime print without literally running the brute force on
+#     every invocation. Re-run it after any change to the static call graph
+#     in vms_kif.c; do not assume the silent-PASS set still reads the way the
+#     last brute force found it.
 #
-#     Of the seven, kif_call and kif_wait_call additionally fit a second
-#     shape (opcode taken as a parameter, like alloc_op): pre-merge kif_call
+#     Of the floor-exempt set, kif_call and kif_wait_call additionally fit a
+#     second shape (opcode taken as a parameter, like alloc_op): pre-merge kif_call
 #     was ALSO the sole path to kif_bind(), so deleting it went RED for a
 #     second, unrelated reason -- it broke the bind chain, not the floor.
 #     PR #22 added kif_wait_call as a second static that calls kif_bind()
@@ -253,6 +254,25 @@
 #     requires a product function actually named vms_kif_something, which is a
 #     duplicate-symbol problem of its own. Verified: the extern form of the
 #     control-20 evasion is caught at 1a.
+#   - A WITHIN-NAMESPACE COLLISION IS NOT CAUGHT WHEN THE SURVIVOR IS
+#     UNDECLARED. Renaming a wrapper's prototype AND definition onto the exact
+#     name of an existing vms_kif_ SIBLING is a route negative control 20 never
+#     tried (20 collides with a name OUTSIDE the namespace). sort -u collapses
+#     the two identically-named entries into one line in both $WORK/protos and
+#     $WORK/defs_extern, so the renamed-away entry point leaves the universe
+#     with no orphan and no floor violation -- the same silent shrink 13-20
+#     close by other doors. Whether it is CAUGHT depends entirely on the
+#     survivor: if the survivor carries an OVMX-UNWIRED declaration, the
+#     transferred caller makes it go STALE (control 9's property, reached by
+#     this new route -- see negative control 21). If the survivor has NO
+#     declaration, nothing fires. MEASURED, not asserted (vms-7fb r7):
+#     renaming vms_kif_kerr_to_ss onto vms_kif_open -- both reached today,
+#     neither declared -- drops this gate from 43 entries / 24 reached to 42
+#     entries / 23 reached with rc=0, reporting PASS having silently lost an
+#     entry point. This residual is recorded here, not fixed here: closing it
+#     changes this gate's pass/fail behaviour on trees that pass today, which
+#     is outside this round's authorization. Tracked for a follow-up item;
+#     see this round's report to the operator.
 #
 # If you are here because this failed: do NOT add a declaration to make it pass
 # unless the entry point genuinely has no product path yet AND you have an item

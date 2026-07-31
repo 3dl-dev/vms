@@ -36,20 +36,45 @@
 # gate that can be disarmed by removing the thing it counts is worth nothing.
 # Every one of these was a PASS at some earlier revision of the gate.
 #
-# DELIBERATELY NO CARDINAL HERE. An earlier revision of this sentence said
-# "the seven that pin the universe" while the list below already ran 13
-# through 20 -- eight, not seven -- because control 20 was added by a later
-# commit (1106d13, "a static cannot be vouched for from outside its file")
-# without the word being bumped. It went uncaught for two rounds because
-# nothing checked it: a count in prose is a claim with no test behind it.
-# This file now counts its OWN universe-pin controls at run time instead of
-# a prose adjective -- see "universe-pin controls run" in the summary this
-# script prints when it runs. That count is derived by incrementing
-# $pin_total at each of the numbered call sites below (13-20), not written
-# down here, so it cannot drift out of sync with the code the way the word
-# "seven" did. If you add a 21st universe-pin control, increment $pin_total
-# at its call site and the summary updates itself; there is nothing in this
-# header to remember to edit.
+# DELIBERATELY NO CARDINAL HERE, AND NOT BECAUSE THE NUMBER IS COMPUTED
+# INSTEAD -- round 6 tried exactly that and it was the same defect wearing a
+# disguise. Round 6 replaced the prose word "seven" with a shell variable,
+# $pin_total, incremented by a SEPARATE "pin_total=$((pin_total + 1))" line
+# next to each of controls 13-20. That is not tied to the call; it is a
+# second hand-maintained count with the identical human obligation the word
+# "seven" carried, and it drifted the same way: appending a genuine 21st
+# universe-pin control without also touching that separate line left the
+# printed total at 8 while 9 controls actually ran, and the run still
+# reported "PASS" throughout -- worse than the prose word it replaced,
+# because a printed, computed-looking number is trusted more than a comment,
+# and this one silently agreed with the drift. Demonstrated by running this
+# file after adding a control with no companion increment; see the item's
+# audit trail for the exact transcript.
+#
+# THE FIX (round 7): there is no separate increment left to forget FOR ANY
+# CONTROL THAT USES THE DISPATCHER. Every control below is invoked through
+# expect_red()/expect_green(), and CATEGORY is now a required argument to
+# that SAME call -- "core" for controls 1-12, "pin" for 13 onward -- not a
+# second statement written near it. The dispatcher tallies $pin_total itself,
+# once, as a byproduct of the one call that also runs the mutation and prints
+# its PASS/FAIL line, so a control that goes through it cannot be silently
+# uncounted the way $pin_total's old companion line could be skipped.
+#
+# TESTED, NOT ASSUMED: a control CAN still bypass the dispatcher entirely --
+# nothing in sh stops a future author writing their own "if ...; then echo
+# PASS; fi" instead of calling expect_red. Tried it (vms-7fb r7): a rogue
+# block appended before the summary, printing its own "PASS: rogue control
+# bypassing the dispatcher" without touching $passed or $pin_total, runs
+# clean and the suite still exits 0. What it CANNOT do is hide: the summary
+# prints "controls: 23 passed" directly below 24 lines that say "PASS:",
+# a count mismatch anyone reading the output would catch on sight, which is
+# the opposite of $pin_total's old failure mode -- there the printed number
+# agreed with the drift and looked authoritative. It is a visible discrepancy
+# to catch by inspection, not an unbreakable guarantee; do not read this
+# paragraph as one. An unrecognized category passed to expect_red/expect_green
+# IS a hard, immediate FAIL naming the control, not a default of zero -- that
+# part is enforced in code, see tally_category() below. See "universe-pin
+# controls run" in the summary this script prints when it runs.
 #
 #   13 a PROTOTYPE is deleted (definition stays)                    -> RED
 #   14 a DEFINITION is deleted (prototype stays)                    -> RED
@@ -72,6 +97,14 @@
 #          of an unrelated same-named function in src/vmslnm/. A gate that
 #          vouches for the thing it exists to catch is worse than one that
 #          loses it, so this control asserts the reason as well as the red.
+#   21 renamed onto a SIBLING vms_kif_* NAME that is declared unwired -> RED
+#      ... a route 13-20 never tried: collide two entry points WITHIN the
+#          namespace instead of leaving it. Added last, mechanically the way
+#          20 was (one control appended, nothing else edited) as the required
+#          proof that the dispatcher tallies a new control without help --
+#          see the comment at control 21's own definition below for the
+#          measured before/after and for a genuine gap this control exposed
+#          while proving the point.
 #
 # Usage: test_kif_caller_census_negctl.sh [SRC_ROOT]
 
@@ -82,10 +115,10 @@ GATE="$SRC_ROOT/tests/integration/test_kif_caller_census.sh"
 status=0
 passed=0
 failed=0
-# Incremented once per universe-pin control (13 onward, see the header).
-# Printed in the summary rather than recited as a word in prose -- that word
-# ("seven") drifted out of sync with the actual list twice; a counter tied to
-# the call sites cannot.
+# Tallied by expect_red()/expect_green() themselves, once per call, keyed by
+# the "category" argument every call now carries ("core" for 1-12, "pin" for
+# 13 onward). There is no separate statement anywhere that increments this --
+# see the dispatcher below and the PROOF paragraph above the usage line.
 pin_total=0
 
 WORK=$(mktemp -d)
@@ -164,9 +197,34 @@ F_ORPHAN_SEL="kernel selector(s) no wrapper in"
 # them into words that match nothing, and every "forbidden" check would pass
 # vacuously -- a control that cannot fail, which is this file's whole subject.
 
-# expect_red <files> <name> <required> [forbidden ...]
+# tally_category <name> <category>: the ONLY place $pin_total is touched.
+# Called from inside the dispatcher, once per invocation, so counting a
+# control is not a second action a caller can forget -- it is a side effect
+# of the one call that runs the mutation. An unrecognized category is a hard
+# FAIL naming the control, not a silent no-op that would undercount the same
+# way $pin_total's old companion line could be skipped.
+tally_category() {
+    case "$2" in
+        pin)  pin_total=$((pin_total + 1)) ;;
+        core) : ;;
+        *)
+            echo "  FAIL: BROKEN FIXTURE: control \"$1\" passed unknown category"
+            echo "        \"$2\" -- every call must say \"core\" or \"pin\" so the"
+            echo "        tally has somewhere to go; there is no default."
+            failed=$((failed + 1)); status=1
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# expect_red <files> <name> <category> <required> [forbidden ...]
 expect_red() {
-    files="$1"; name="$2"; need="$3"; shift 3
+    files="$1"; name="$2"; category="$3"; need="$4"; shift 4
+    if ! tally_category "$name" "$category"; then
+        restore
+        return
+    fi
     for _f in $files; do
         if ! injection_landed "$_f"; then
             echo "  FAIL: BROKEN FIXTURE (not a broken gate): $name"
@@ -225,9 +283,13 @@ expect_red() {
     restore
 }
 
-# expect_green <files> <name>
+# expect_green <files> <name> <category>
 expect_green() {
-    files="$1"; name="$2"
+    files="$1"; name="$2"; category="$3"
+    if ! tally_category "$name" "$category"; then
+        restore
+        return
+    fi
     for _f in $files; do
         if ! injection_landed "$_f"; then
             echo "  FAIL: BROKEN FIXTURE (not a broken gate): $name"
@@ -308,6 +370,7 @@ add_probe_decl
 add_probe_def
 expect_red "$H $C" \
     "a new entry point with no caller and no declaration is caught by name" \
+    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -318,7 +381,8 @@ add_probe_decl
 add_probe_def
 add_decl_comment "OVMX-UNWIRED: vms_kif_negctl_probe (vms-7fb) -- negative control fixture"
 expect_green "$H $C" \
-    "a declared unwired entry point passes"
+    "a declared unwired entry point passes" \
+    "core"
 
 # ---------------------------------------------------------------------------
 # 3. A declaration with no item id. Declared against vms_kif_enq -- an entry
@@ -330,6 +394,7 @@ expect_green "$H $C" \
 add_decl_comment "OVMX-UNWIRED: vms_kif_enq -- will get to it later, honest"
 expect_red "$H" \
     "an unwired declaration with no item id is rejected" \
+    "core" \
     "$F_MALFORMED" "$F_UNDECL" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -343,6 +408,7 @@ add_probe_def
 sed -i 's|^        (void)uname;$|        (void)uname;\n        /* vms_kif_negctl_probe(1); -- conversion is future work */|' "$SHOW"
 expect_red "$H $C $SHOW" \
     "a caller that exists only in a comment does not count" \
+    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -356,6 +422,7 @@ add_probe_def
 sed -i 's|^    status = vms_kif_getdvi_devnam(ABSENT_DEV, \&info);$|    status = vms_kif_getdvi_devnam(ABSENT_DEV, \&info);\n    (void)vms_kif_negctl_probe(1);|' "$QTEST"
 expect_red "$H $C $QTEST" \
     "a caller that exists only in tests/ is not a product path" \
+    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -368,6 +435,7 @@ add_probe_def
 printf '\nstatic void kif_negctl_dead(void)\n{\n    (void)vms_kif_negctl_probe(1);\n}\n' >> "$C"
 expect_red "$H $C" \
     "a caller inside vms_kif.c that nothing reaches does not count" \
+    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -380,7 +448,8 @@ add_probe_decl
 add_probe_def
 sed -i 's|^    (void)vms_kif_register(NULL);$|    (void)vms_kif_register(NULL);\n    (void)vms_kif_negctl_probe(1);|' "$C"
 expect_green "$H $C" \
-    "a call from kif_bind() counts: the bind path is reachable from every wired wrapper"
+    "a call from kif_bind() counts: the bind path is reachable from every wired wrapper" \
+    "core"
 
 # ---------------------------------------------------------------------------
 # 8. A prototype at file scope is not a call. Re-declaring the entry point in
@@ -391,6 +460,7 @@ add_probe_def
 sed -i 's|^#include "prvdef.h"|uint32_t vms_kif_negctl_probe(uint32_t x);\n#include "prvdef.h"|' "$SHOW"
 expect_red "$H $C $SHOW" \
     "a prototype at file scope is not a caller" \
+    "core" \
     "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -400,6 +470,7 @@ expect_red "$H $C $SHOW" \
 add_decl_comment "OVMX-UNWIRED: vms_kif_enq (vms-7fb) -- stale, it has been wired since"
 expect_red "$H" \
     "a stale declaration on a wired entry point is rejected" \
+    "core" \
     "$F_STALE" "$F_UNDECL" "$F_MALFORMED" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -409,6 +480,7 @@ expect_red "$H" \
 add_decl_comment "OVMX-UNWIRED: vms_kif_no_such_entry (vms-7fb) -- typo or ghost"
 expect_red "$H" \
     "a declaration naming a non-existent entry point is rejected" \
+    "core" \
     "$F_UNKNOWN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -421,6 +493,7 @@ add_decl_comment "OVMX-UNWIRED: vms_kif_negctl_probe (vms-7fb) -- fixture"
 add_decl_comment "OVMX-UNWIRED: vms_kif_negctl_probe (vms-2a8) -- fixture, second owner"
 expect_red "$H $C" \
     "the same entry point declared twice is rejected" \
+    "core" \
     "$F_DUP" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -432,6 +505,7 @@ expect_red "$H $C" \
 sed -i 's|^    while (vms_kif_procscan(&index, &info) & 1) {|    while (dcl_local_procscan(\&index, \&info) \& 1) {|' "$SHOW"
 expect_red "$SHOW" \
     "an existing wired facility that loses its product caller is caught" \
+    "core" \
     "vms_kif_procscan" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # ---------------------------------------------------------------------------
@@ -494,18 +568,18 @@ DEF_CLOSE='^void vms_kif_close(void)$'
 # 13. The prototype is deleted; the definition stays. Under a header-only
 #     census this dropped the entry point out of the universe silently.
 sed -i "/$PROTO_CHAN/d" "$H"
-pin_total=$((pin_total + 1))
 expect_red "$H" \
     "deleting a prototype is a RED naming what vanished, not a smaller pass" \
+    "pin" \
     "$F_ORPHAN_DEF" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
 # 14. The definition is deleted; the prototype stays. The dangling half of the
 #     same shrink, and the reason the two readings are compared BOTH ways.
 sed -i "/$DEF_CLOSE/,/^}$/d" "$C"
-pin_total=$((pin_total + 1))
 expect_red "$C" \
     "deleting a definition is a RED naming what vanished" \
+    "pin" \
     "$F_ORPHAN_PROTO" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
@@ -517,9 +591,9 @@ expect_red "$C" \
 sed -i "/$PROTO_DEVSCAN/d" "$H"
 sed -i '/OVMX-UNWIRED: vms_kif_devscan/d' "$H"
 sed -i "/$DEF_DEVSCAN/,/^}$/d" "$C"
-pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "deleting a wrapper outright strands its kernel opcode and is caught" \
+    "pin" \
     "VMS_IOCTL_DEVSCAN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_SEL"
 
@@ -530,9 +604,9 @@ expect_red "$H $C" \
 sed -i "/$PROTO_CHAN/d" "$H"
 sed -i '/OVMX-UNWIRED: vms_kif_getdvi_chan/d' "$H"
 sed -i "s|$DEF_CHAN|static &|" "$C"
-pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "an entry point cannot leave the census by going static" \
+    "pin" \
     "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
@@ -557,9 +631,9 @@ expect_red "$H $C" \
 sed -i '/OVMX-UNWIRED: vms_kif_getdvi_chan/d' "$H"
 sed -i 's/vms_kif_getdvi_chan/kif_getdvi_chan_impl/g' "$H"
 sed -i 's/vms_kif_getdvi_chan/kif_getdvi_chan_impl/g' "$C"
-pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "renaming an entry point out of the vms_kif_ namespace does not remove it" \
+    "pin" \
     "kif_getdvi_chan_impl
 $F_ORPHAN_DEF
 $F_UNDECL" \
@@ -577,9 +651,9 @@ sed -i "/$PROTO_DEVSCAN/d" "$H"
 sed -i '/OVMX-UNWIRED: vms_kif_devscan/d' "$H"
 sed -i "s|$DEF_DEVSCAN|static &|" "$C"
 sed -i 's/vms_kif_devscan/kif_devscan_impl/g' "$C"
-pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "renaming out of the namespace AND going static does not remove it either" \
+    "pin" \
     "kif_devscan_impl" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
 
@@ -594,9 +668,9 @@ expect_red "$H $C" \
 sed -i "/$PROTO_CHAN/d" "$H"
 sed -i '/OVMX-UNWIRED: vms_kif_getdvi_chan/d' "$H"
 sed -i "/$DEF_CHAN/,/^}$/d" "$C"
-pin_total=$((pin_total + 1))
 expect_red "$H $C" \
     "deleting a shared-opcode wrapper strands its kernel selector and is caught" \
+    "pin" \
     "VMS_DVI_SEL_CHAN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
@@ -637,9 +711,9 @@ else
     sed -i "/$PROTO_DEVSCAN/d" "$H"
     sed -i '/OVMX-UNWIRED: vms_kif_devscan/d' "$H"
     sed -i "s|^uint32_t vms_kif_devscan(|static uint32_t ${COLLIDE}(|" "$C"
-    pin_total=$((pin_total + 1))
     expect_red "$H $C" \
         "an unwired wrapper renamed onto a product function's name is NOT credited to it" \
+        "pin" \
         "$COLLIDE
 $F_UNDECL" \
         "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
@@ -647,10 +721,69 @@ $F_UNDECL" \
 fi
 
 # ---------------------------------------------------------------------------
+# 21. THE WITHIN-NAMESPACE COLLISION -- a route 13-20 never tried: instead of
+#     renaming a wrapper OUT of the vms_kif_ namespace (17-20), rename it onto
+#     a SIBLING that is still IN it. Take vms_kif_kerr_to_ss (reached today
+#     with no declaration, through kif_call/kif_wait_call) and rename its
+#     prototype and definition to vms_kif_setmode -- an existing, genuinely
+#     unwired entry point that already carries its own OVMX-UNWIRED
+#     declaration (vms-pv1). sort -u then collapses the two names into one
+#     line in both $WORK/protos and $WORK/defs_extern, so nothing orphans and
+#     the universe shrinks by exactly one with no disagreement between the two
+#     readings -- the same silent-shrink shape 13-20 all close by a different
+#     door. What catches THIS one is not a universe check at all: the
+#     kerr_to_ss call sites now name vms_kif_setmode, so vms_kif_setmode
+#     becomes REACHED while its own OVMX-UNWIRED line is still sitting in the
+#     header -- an existing property (control 9's, "stale declaration on a
+#     wired entry point"), reached by a new route.
+#
+#     APPENDED LAST, AFTER EVERYTHING ELSE IN THIS FILE WAS ALREADY GREEN, AS
+#     THE REQUIRED PROOF THAT THE DISPATCHER NEEDS NO COMPANION EDIT. This is
+#     the one line added for it: the expect_red call below with category
+#     "pin". Nothing else in this file changed to make $pin_total follow --
+#     see RUN, NOT DESCRIBED at the end of this comment for the before/after.
+#     That is the property round 6's separate `pin_total=$((pin_total + 1))`
+#     line could not deliver: 1106d13 added control 20 as a real commit,
+#     mechanically the same size as this one, and the printed total stayed
+#     wrong for two rounds because bumping it was a second action nothing
+#     forced. Here there is nothing to skip.
+#
+#     A GAP THIS CONTROL EXPOSED, WHILE PROVING THE POINT, RECORDED HONESTLY
+#     RATHER THAN QUIETLY ROUTED AROUND. The reason 21 is caught is that the
+#     collision TARGET (vms_kif_setmode) happens to carry a declaration.
+#     Colliding the identical way onto a sibling that has NO declaration is a
+#     silent PASS this file cannot turn into a passing control without
+#     changing the gate's pass/fail behaviour, which this round is not
+#     authorized to do. Measured directly (vms-7fb r7, not asserted):
+#     renaming vms_kif_kerr_to_ss onto vms_kif_open -- both reached today,
+#     neither declared -- drops the union from 43 entries / 24 reached to 42
+#     entries / 23 reached with rc=0, the census reporting PASS having
+#     silently lost an entry point. See test_kif_caller_census.sh's "WHAT
+#     THIS GATE DOES NOT SEE" section for the same finding recorded there,
+#     and this round's report to the operator for the follow-up.
+# ---------------------------------------------------------------------------
+sed -i 's/vms_kif_kerr_to_ss/vms_kif_setmode/g' "$H"
+sed -i 's/vms_kif_kerr_to_ss/vms_kif_setmode/g' "$C"
+expect_red "$H $C" \
+    "renamed onto a sibling's name, the sibling's own declaration goes stale" \
+    "pin" \
+    "$F_STALE" \
+    "$F_UNDECL" "$F_MALFORMED" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
+
+# ---------------------------------------------------------------------------
+# RUN, NOT DESCRIBED. Immediately before control 21 was appended above (only
+# the "expect_red ... category pin" call block, nothing else in this file
+# touched): "controls: 22 passed, 0 failed" / "universe-pin controls run: 8".
+# Immediately after, same command, same file otherwise unchanged:
+# "controls: 23 passed, 0 failed" / "universe-pin controls run: 9". The
+# summary line below is what printed both times; it was not hand-edited
+# between them.
+# ---------------------------------------------------------------------------
 echo "  controls: $passed passed, $failed failed"
 echo "  universe-pin controls run: $pin_total (13 onward -- see the header for what"
-echo "          each proves; this count is incremented at each call site, not"
-echo "          hand-recited, because the hand-recited word already drifted twice)"
+echo "          each proves; tallied by expect_red()/expect_green() themselves as a"
+echo "          byproduct of running each control, not by a second statement here)"
 if [ "$status" -eq 0 ]; then
     echo "vms_kif census negative controls: PASS"
 else

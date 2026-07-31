@@ -76,8 +76,9 @@
 # table, authenticated identity -- plus two properties of the binding itself:
 # that a caller's PCB is per-PROCESS (not per-thread), and that an open
 # descriptor pins the module.
-# FOUR defects are outside vms.ko, all because the property they name lives in
-# the PRODUCT half of the interface, where no kernel-side mutation can reach it:
+# The defects below are outside vms.ko, all because the property they name
+# lives in the PRODUCT half of the interface, where no kernel-side mutation
+# can reach it:
 #   bind-client-no-register  the vms-9fc defect itself (kif_bind() not calling
 #                            vms_kif_register()).
 #   creprc-handshake-eintr   $CREPRC's report pipe read not retried on EINTR,
@@ -113,6 +114,25 @@
 #                            mutation, because Linux reparents any orphan to
 #                            init. It is here so the discriminating
 #                            assertions are NAMED and stay named.
+#   kstat-deadlock-mismapped, kstat-ivlockid-mismapped,
+#   kstat-cvtungrant-mismapped        src/libvms/syssvc/sys_lock.c's
+#                            kstat_to_ss(), the single point where a raw
+#                            kernel lock-manager status crosses into the
+#                            public ssdef.h SS$_xxx contract (vms-2e5). Each
+#                            of these three mutations changes only the
+#                            PUBLIC constant kstat_to_ss() returns for a
+#                            fixed kernel-side status -- the kernel's own
+#                            decision to deadlock/reject is untouched by
+#                            THESE THREE mutations. That is not a claim
+#                            about kernel-side mutations in general: a pure
+#                            constant drift on the KERNEL side (e.g.
+#                            SS__DEADLOCK's numeric value in
+#                            src/kernel/vms_internal.h) also reddens
+#                            test_syssvc_lock_status, because kstat_to_ss()
+#                            switches on that same numeric literal. These
+#                            three are here because the translation itself
+#                            was UNASSERTED at every layer, not because the
+#                            kernel side is somehow unreachable.
 # All are edits under src/, not src/kernel/, so cmd_selftest copies libvms,
 # libvmssys and vmsdcl alongside kernel/ when it checks that every anchor still
 # matches.
@@ -167,7 +187,10 @@ run-detached-name-dropped
 creprc-detach-intermediate-reaped
 run-detached-not-detached
 run-image-qualifier-refused
-run-qualifier-not-abbreviated"
+run-qualifier-not-abbreviated
+kstat-deadlock-mismapped
+kstat-ivlockid-mismapped
+kstat-cvtungrant-mismapped"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -439,11 +462,11 @@ EOF
         case "$_f" in
         facility)     echo "distributed lock manager, the OTHER direction of the matrix, reached through the PUBLIC sys\$ API as well as raw ioctls";;
         targets)      echo "kernel/vms_lock.c";;
-        suites_red)   echo "test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock";;
+        suites_red)   echo "test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "compat[CR][EX] flipped 0 -> 1: a concurrent-read request is granted against a held EXCLUSIVE lock. The mirror of lock-compat-ex-cr, and it exists because the matrix is indexed compat[requested][granted] (vms_lock.c:288) -- so the EX-over-CR flip cannot reach the cross-process suites, which all assert the EX-held direction. WITHOUT THIS, test_kmod_lock_mproc, test_kmod_lock_sync and test_syssvc_lock were never proven capable of going red by ANYTHING in this manifest, and test_syssvc_lock is the ONLY suite that drives the executive through the public sys\$ entry points.";;
+        why)          echo "compat[CR][EX] flipped 0 -> 1: a concurrent-read request is granted against a held EXCLUSIVE lock. The mirror of lock-compat-ex-cr, and it exists because the matrix is indexed compat[requested][granted] (vms_lock.c:288) -- so the EX-over-CR flip cannot reach the cross-process suites, which all assert the EX-held direction. WITHOUT THIS, test_kmod_lock_mproc, test_kmod_lock_sync and test_syssvc_lock were never proven capable of going red by ANYTHING in this manifest, and test_syssvc_lock and test_syssvc_lock_status (vms-2e5) are the suites here that drive the executive through the public sys\$ entry points -- test_kmod_lock_mproc and test_kmod_lock_sync go through raw ioctls instead.";;
         require_fail) cat <<'EOF'
 child: CR+NOQUEUE denied while parent holds EX (EX blocks CR)
 child: sys$enq CR+NOQUEUE denied while parent holds EX (public API)
@@ -458,13 +481,27 @@ parent: child (completion AST) exited clean
 child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
 parent: child's NOQUEUE-denial checks reported via public API
 parent: child's post-release retry succeeded via public API
+sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
 EOF
                       ;;
-        knock_on_why) cat <<'EOF'
-ONE bit, three suites, ten assertions -- and every one of the eight extras is
-the same granted-instead-of-queued request seen further downstream. A CR that
-the executive should have QUEUED behind a held EX is instead GRANTED
-immediately, so everything that depends on it having waited stops happening:
+        knock_on_why)
+            # _n_suites/_n_assert are DERIVED from suites_red/require_fail/
+            # knock_on_fail above, not hand-recited -- this sentence already
+            # drifted once (three suites/ten assertions -> four/eleven) when
+            # test_syssvc_lock_status was added, the same class of drift the
+            # bind-client-no-register `why` field's _n/_list computation
+            # above exists to make structurally impossible. $() runs in a
+            # subshell, so the recursive defect_field calls below cannot
+            # clobber this call's own _d/_f.
+            _n_suites=$(set -- $(defect_field "$_d" suites_red); echo $#)
+            _n_req=$(defect_field "$_d" require_fail | grep -c .)
+            _n_knock=$(defect_field "$_d" knock_on_fail | grep -c .)
+            _n_assert=$((_n_req + _n_knock))
+            cat <<'EOF' | sed "s/@N_SUITES@/$_n_suites/; s/@N_ASSERT@/$_n_assert/"
+ONE bit, @N_SUITES@ suites, @N_ASSERT@ assertions -- and every one of the extras is the
+same granted-instead-of-queued request seen further downstream. A CR that the
+executive should have QUEUED behind a held EX is instead GRANTED immediately,
+so everything that depends on it having waited stops happening:
   mproc  the queue is empty, so GETLKI reports no queued CR from either side
          and the parent's blocking AST is never fired (there is no conflict to
          notify about);
@@ -473,15 +510,25 @@ immediately, so everything that depends on it having waited stops happening:
          reddens the parent's "child exited clean";
   syssvc the child holds a CR it should not; compat[EX][CR] is UNTOUCHED, so
          the child's own CR now blocks its later EX request, and the parent's
-         two assertions are reads of the child's report.
+         two assertions are reads of the child's report;
+  status (test_syssvc_lock_status, vms-2e5) scenario_cvtungrant's own setup
+         queues a CR behind a held EX the same way test_syssvc_lock's does --
+         under this mutation the CR is granted immediately instead, so the
+         follow-up LCK$M_CONVERT lands on an ALREADY-GRANTED lock rather than
+         a waiting one and the kernel has no reason to reject it with
+         SS__CANCELGRANT, so kstat_to_ss() is never asked to translate
+         SS$_CVTUNGRANT at all. This is the SAME defect knocking on the SAME
+         setup pattern (CR queued behind EX) that test_syssvc_lock already
+         names above -- not a second, independent property of
+         test_syssvc_lock_status.
 No finer mutation exists: this is a single entry of a single matrix, the same
 shape as the vms-e4d precedent. Making it finer would mean not flipping it.
 NOTE, and it is a finding rather than a defect in this control:
 test_kmod_lock_sync.c "child: async CR queued behind parent EX" STAYS GREEN
 under this mutation, because it checks only that the $ENQ returned SS$_NORMAL
 with a lock id -- which an immediate grant also satisfies. The assertion's text
-claims queueing; its condition does not test it. The three assertions that DO
-catch it are the ones above.
+claims queueing; its condition does not test it. The assertions that DO catch
+it are the ones above.
 EOF
                       ;;
         esac;;
@@ -866,7 +913,17 @@ EOF
         # away from the executive. The two arrived on separate branches; this
         # list is the UNION, re-derived by running the control on the merged
         # tree rather than kept from either side of the rebase conflict.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service";;
+        # test_syssvc_lock_status is the EIGHTH, added by vms-2e5 when the
+        # kstat_to_ss() public-status-mapping suite was written -- and it
+        # arrived the SAME way every other addition above did: NOT predicted,
+        # READ OFF the first full run of THIS control against the tree that
+        # added it. Like test_syssvc_procnam/showdev, it does not hand-register
+        # (see its bootstrap()'s own comment) -- it opens /dev/vms only to
+        # decide skip-vs-run, then drives sys$enq/enqw/deq, the public API --
+        # so it is a genuine detector of this defect, not a widening of the
+        # blind set below. See knock_on_why for what it reddens and why the
+        # suite EXITS BY SIGNAL (rc=141) rather than completing.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_lock_status";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
 The suites named in blind_suites above drive the product's own vms_kif
@@ -997,6 +1054,9 @@ the cluster state word agrees with the status: flag 1's bit is SET
 the second process allocated OPA0: through the executive ($ALLOC)
 A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
 the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
+parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
+sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -1162,6 +1222,52 @@ suites, this branch gained test_syssvc_startup_service. Both sets are kept;
 neither is a substitute for the other, and the combined suites_red/knock_on_fail
 lists above were re-verified by running the mutation on the rebased tree (see
 the item's progress notes), not by picking a side of the git conflict.
+
+THE EIGHTH SUITE, test_syssvc_lock_status, ADDED vms-2e5 -- READ OFF THE FIRST
+FULL RUN OF THIS CONTROL AGAINST THE TREE THAT ADDED IT, not predicted. Its
+bootstrap() does not hand-register (see the comment at its definition in
+tests/qemu/test_syssvc_lock_status.c) -- it opens /dev/vms only to decide
+skip-vs-run, exactly test_syssvc_procnam/showdev's shape, so it is a genuine
+new detector of the SAME missing bind, not a widening of blind_suites.
+Three assertions go red before the process DIES BY SIGNAL (rc=141, SIGPIPE),
+not a hang and not a clean suite failure -- traced, not guessed:
+  1. scenario_ivlockid's sys$deq(0xDEADBEEF) reaches kif_call() -> kif_bind(),
+     which (with vms_kif_register() deleted from kif_bind()) never registers;
+     the kernel's per-call check rejects the unbound task with -ESRCH, which
+     vms_kif_kerr_to_ss() maps to SS$_BUGCHECK, not SS$_IVLOCKID -- so "sys$deq
+     on an unknown lock ID reports SS$_IVLOCKID" reddens. That exact
+     assertion text is named twice in this manifest -- by this defect's
+     require_fail and by bind-client-no-register's knock_on_fail, both
+     against test_syssvc_lock_status. A DIFFERENT defect reaching the SAME
+     assertion text is not a collision; it is two mutations exercising the
+     same call from different angles. (Verify with: facility_defects.sh
+     field <defect> <list> | grep IVLOCKID -- do not take this from the
+     comment.)
+  2. scenario_cvtungrant forks a child that also cannot register; the child's
+     own sys$enqw(EX) fails, so it _exit(1)s WITHOUT writing to ready_pipe --
+     the parent's read_bounded() sees EOF, not the expected byte, so "parent:
+     child took EX before the CVTUNGRANT probe" reddens (this assertion is
+     explicitly labelled setup-not-property in its own text for exactly this
+     reason: a registration failure trips the SETUP check, not the CVTUNGRANT
+     mapping the scenario exists to probe).
+  3. The parent's own sys$enq(CR) in the same scenario also fails to register,
+     so lksb_q.lksb$l_lkid stays 0 and "parent: sys$enq CR queues behind the
+     child's EX and still returns a real lock ID" reddens too. Because that
+     CHECK's condition is false, the `if ((st & 1) && lkid != 0)` guard around
+     the CONVERT probe never executes, so SS$_CVTUNGRANT itself is never
+     asked about under THIS mutation -- consistent with vms-2e5's own point:
+     the registration wall is upstream of the mapping this suite exists to
+     assert, so a registration defect masks the mapping property rather than
+     exercising it.
+  4. THE CRASH IS DETERMINISTIC, NOT FLAKY, under this specific mutation:
+     the child in step 2 always exits before the parent reaches its own
+     `write(go_pipe[1], ...)` handshake byte (it dies on its FIRST failed
+     call, long before the parent could plausibly still be running), so the
+     write always lands on a pipe with no reader and always raises SIGPIPE.
+     scenario_deadlock, and the "parent: dequeued its still-queued CR lock"
+     / "parent: child (CVTUNGRANT holder) exited clean" checks later in
+     scenario_cvtungrant, never run -- there is no assertion text for them
+     to redden, and none is claimed.
 EOF
                       ;;
         esac;;
@@ -1411,6 +1517,57 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    kstat-deadlock-mismapped)
+        case "$_f" in
+        facility)     echo "kstat_to_ss()'s DEADLOCK mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
+        targets)      echo "libvms/syssvc/sys_lock.c";;
+        suites_red)   echo "test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "case 100 (kernel SS__DEADLOCK) returns SS\$_NOTQUEUED instead of SS\$_DEADLOCK -- the EXACT mutation vms-2e5 was found by (a request the executive rejected for deadlock is reported to the caller as merely 'not queued'). The kernel's own decision to abort the request for deadlock is untouched; only the public value crossing the boundary changes.";;
+        require_fail) cat <<'EOF'
+parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kstat-ivlockid-mismapped)
+        case "$_f" in
+        facility)     echo "kstat_to_ss()'s IVLOCKID mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
+        targets)      echo "libvms/syssvc/sys_lock.c";;
+        suites_red)   echo "test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "case 108 (kernel SS__IVLOCKID) returns SS\$_NOTQUEUED instead of SS\$_IVLOCKID -- a caller given a nonexistent lock ID is told the request was merely not queued rather than that the ID itself is invalid.";;
+        require_fail) cat <<'EOF'
+sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    kstat-cvtungrant-mismapped)
+        case "$_f" in
+        facility)     echo "kstat_to_ss()'s CVTUNGRANT mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
+        targets)      echo "libvms/syssvc/sys_lock.c";;
+        suites_red)   echo "test_syssvc_lock_status";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "case 116 (kernel SS__CANCELGRANT) returns SS\$_NOTQUEUED instead of SS\$_CVTUNGRANT -- a CONVERT that lands on a lock still queued from an earlier request is told the SAME thing a fresh NOQUEUE request would be told, collapsing two different conditions into one report.";;
+        require_fail) cat <<'EOF'
+sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1523,6 +1680,12 @@ apply_edit() {
         # halves of RUN's qualifier table, and mutating one would leave
         # the rule half-applied rather than restored.
         sed -i 's|strncasecmp(given, full, glen) == 0|strcasecmp(given, full) == 0 /* NEGCTL run-qualifier-not-abbreviated */|' "$_file";;
+    kstat-deadlock-mismapped)
+        sed -i 's|case 100: return SS\$_DEADLOCK;|case 100: return SS$_NOTQUEUED; /* NEGCTL kstat-deadlock-mismapped */|' "$_file";;
+    kstat-ivlockid-mismapped)
+        sed -i 's|case 108: return SS\$_IVLOCKID;|case 108: return SS$_NOTQUEUED; /* NEGCTL kstat-ivlockid-mismapped */|' "$_file";;
+    kstat-cvtungrant-mismapped)
+        sed -i 's|case 116: return SS\$_CVTUNGRANT;|case 116: return SS$_NOTQUEUED; /* NEGCTL kstat-cvtungrant-mismapped */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

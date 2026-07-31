@@ -17,7 +17,7 @@
 #   3. DCL.EXE links as a VMS-native ET_DYN executable via
 #      `LINK.EXE --executable --use {DECC$SHR + the five OVMX shareables}` — a
 #      22-object, main()-entered program with a full intra-image reloc set
-#      (ADRP/ADD/ABS64/PREL32/LDST), 140 cross-image imports all bound, and its own
+#      (ADRP/ADD/ABS64/PREL32/LDST), its cross-image imports all bound, and its own
 #      single-object TLS (dcl_messages.o) carried as PT_TLS.
 #   4. IMGACT.EXE activates DCL.EXE (crt0 recovers argc/argv off the kernel stack,
 #      calls main(argv[1]=session.com)); DCL runs a scripted session (SHOW TIME +

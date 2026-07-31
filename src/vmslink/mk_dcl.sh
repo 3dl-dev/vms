@@ -11,7 +11,8 @@
 # it statically absorbs). It is an ET_DYN EXECUTABLE (PT_INTERP=IMGACT.EXE, entry
 # via the C runtime) that:
 #   (a) has NO symbol vector (it exports nothing — it is the program, not a library);
-#   (b) imports 142 externals, bound at activation via .vms$imp across the producers:
+#   (b) imports its externals, bound at activation via .vms$imp across the producers
+#       (LINK.EXE prints the count for each build; it moves whenever DCL gains a call):
 #         - 114 libc/POSIX CALL + DATA imports (malloc/mem*/str*/printf/the stdio
 #           FILE ops, fork/execvp/waitpid/system, the terminal ioctl/tc[gs]etattr/
 #           isatty, pty pipe, inet_*/ntohl/socket, *rlimit, time/gettimeofday/

@@ -30,7 +30,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            cmake gcc make libc6-dev libreadline-dev
+            cmake gcc make libc6-dev libreadline-dev strace
 
       - name: Cache CMake build
         uses: actions/cache@v4

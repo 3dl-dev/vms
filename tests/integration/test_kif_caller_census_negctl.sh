@@ -32,6 +32,18 @@
 #   11 the same entry point declared twice                          -> RED
 #   12 a REGRESSION: an existing wired facility loses its caller    -> RED
 #
+# And the four that pin the UNIVERSE itself, because a gate that can be
+# disarmed by deleting the thing it counts is worth nothing. Every one of these
+# was a PASS before the universe was pinned to the union of the header and
+# vms_kif.c plus the kernel's opcode floor:
+#
+#   13 a PROTOTYPE is deleted (definition stays)                    -> RED
+#   14 a DEFINITION is deleted (prototype stays)                    -> RED
+#   15 prototype + definition + declaration deleted outright        -> RED
+#      ... caught on the kernel side: the opcode it issued is stranded.
+#   16 prototype deleted and the definition marked static           -> RED
+#      ... the route around 13; the union counts static definitions too.
+#
 # Usage: test_kif_caller_census_negctl.sh [SRC_ROOT]
 
 set -u
@@ -107,6 +119,15 @@ F_MALFORMED="malformed unwired declaration"
 F_STALE="is declared unwired but has a product caller"
 F_UNKNOWN="which is not an entry"
 F_DUP="declared unwired more than once"
+F_ORPHAN_DEF="with NO prototype in"
+F_ORPHAN_PROTO="with NO definition in"
+F_ORPHAN_OPCODE="kernel opcode(s) no wrapper in"
+
+# Every control forbids all three universe-pin fragments except the one it is
+# testing. They are spelled out at each call site rather than collected in a
+# variable: the fragments contain spaces, so an unquoted expansion would split
+# them into words that match nothing, and every "forbidden" check would pass
+# vacuously -- a control that cannot fail, which is this file's whole subject.
 
 # expect_red <files> <name> <required> [forbidden ...]
 expect_red() {
@@ -235,7 +256,7 @@ add_probe_decl
 add_probe_def
 expect_red "$H $C" \
     "a new entry point with no caller and no declaration is caught by name" \
-    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP"
+    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 # 2. GREEN CONTROL: the same entry point, declared. The escape hatch works,
@@ -257,7 +278,7 @@ expect_green "$H $C" \
 add_decl_comment "OVMX-UNWIRED: vms_kif_enq -- will get to it later, honest"
 expect_red "$H" \
     "an unwired declaration with no item id is rejected" \
-    "$F_MALFORMED" "$F_UNDECL" "$F_STALE" "$F_UNKNOWN" "$F_DUP"
+    "$F_MALFORMED" "$F_UNDECL" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 # 4. A caller that exists only inside a COMMENT. This is not hypothetical: the
@@ -270,7 +291,7 @@ add_probe_def
 sed -i 's|^        (void)uname;$|        (void)uname;\n        /* vms_kif_negctl_probe(1); -- conversion is future work */|' "$SHOW"
 expect_red "$H $C $SHOW" \
     "a caller that exists only in a comment does not count" \
-    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP"
+    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 # 5. A caller that exists only in tests/. "Kernel facility + wrapper + test
@@ -283,7 +304,7 @@ add_probe_def
 sed -i 's|^    status = vms_kif_getdvi_devnam(ABSENT_DEV, \&info);$|    status = vms_kif_getdvi_devnam(ABSENT_DEV, \&info);\n    (void)vms_kif_negctl_probe(1);|' "$QTEST"
 expect_red "$H $C $QTEST" \
     "a caller that exists only in tests/ is not a product path" \
-    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP"
+    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 # 6. A caller inside vms_kif.c that nothing reaches. Presence of a call inside
@@ -295,7 +316,7 @@ add_probe_def
 printf '\nstatic void kif_negctl_dead(void)\n{\n    (void)vms_kif_negctl_probe(1);\n}\n' >> "$C"
 expect_red "$H $C" \
     "a caller inside vms_kif.c that nothing reaches does not count" \
-    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP"
+    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 # 7. GREEN CONTROL, the other side of 6: a call from kif_bind(), which every
@@ -318,7 +339,7 @@ add_probe_def
 sed -i 's|^#include "prvdef.h"|uint32_t vms_kif_negctl_probe(uint32_t x);\n#include "prvdef.h"|' "$SHOW"
 expect_red "$H $C $SHOW" \
     "a prototype at file scope is not a caller" \
-    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP"
+    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 # 9. A declaration left behind on an entry point that IS wired. This is how a
@@ -327,7 +348,7 @@ expect_red "$H $C $SHOW" \
 add_decl_comment "OVMX-UNWIRED: vms_kif_enq (vms-7fb) -- stale, it has been wired since"
 expect_red "$H" \
     "a stale declaration on a wired entry point is rejected" \
-    "$F_STALE" "$F_UNDECL" "$F_MALFORMED" "$F_UNKNOWN" "$F_DUP"
+    "$F_STALE" "$F_UNDECL" "$F_MALFORMED" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 # 10. A declaration naming a function that does not exist protects nothing --
@@ -336,7 +357,7 @@ expect_red "$H" \
 add_decl_comment "OVMX-UNWIRED: vms_kif_no_such_entry (vms-7fb) -- typo or ghost"
 expect_red "$H" \
     "a declaration naming a non-existent entry point is rejected" \
-    "$F_UNKNOWN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_DUP"
+    "$F_UNKNOWN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 # 11. The same entry point declared twice: two items each believing the other
@@ -348,7 +369,7 @@ add_decl_comment "OVMX-UNWIRED: vms_kif_negctl_probe (vms-7fb) -- fixture"
 add_decl_comment "OVMX-UNWIRED: vms_kif_negctl_probe (vms-2a8) -- fixture, second owner"
 expect_red "$H $C" \
     "the same entry point declared twice is rejected" \
-    "$F_DUP" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN"
+    "$F_DUP" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 # 12. THE REGRESSION CASE, and the one with day-to-day value: an existing wired
@@ -359,7 +380,69 @@ expect_red "$H $C" \
 sed -i 's|^    while (vms_kif_procscan(&index, &info) & 1) {|    while (dcl_local_procscan(\&index, \&info) \& 1) {|' "$SHOW"
 expect_red "$SHOW" \
     "an existing wired facility that loses its product caller is caught" \
-    "vms_kif_procscan" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP"
+    "vms_kif_procscan" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
+
+# ---------------------------------------------------------------------------
+# THE UNIVERSE PINS (13-16). Everything above asks "is this entry point wired?".
+# These four ask the question that has to be settled first: CAN AN ENTRY POINT
+# LEAVE THE CENSUS AT ALL? An earlier revision derived the universe from
+# vms_kif.h alone, so deleting a prototype produced a smaller PASS -- the gate
+# could be disarmed by removing the thing it counts, which is the same family as
+# the guard compiled nowhere and the fixture that silently no-ops. All four
+# mutations below were GREEN then.
+#
+# vms_kif_getdvi_chan is the subject of 13, 14 and 16 because it shares
+# VMS_IOCTL_GETDVI with vms_kif_getdvi_devnam: removing it cannot strand the
+# opcode, so the pin under test fires ALONE and the mutation stays minimal.
+# 15 needs the opposite and uses vms_kif_devscan, the sole issuer of
+# VMS_IOCTL_DEVSCAN.
+# ---------------------------------------------------------------------------
+
+PROTO_CHAN='^uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo \*info);$'
+DEF_CHAN='^uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo \*info)$'
+PROTO_DEVSCAN='^uint32_t vms_kif_devscan(uint32_t \*index, struct vms_devinfo \*info);$'
+DEF_DEVSCAN='^uint32_t vms_kif_devscan(uint32_t \*index, struct vms_devinfo \*info)$'
+
+# 13. The prototype is deleted; the definition stays. Under a header-only
+#     census this dropped the entry point out of the universe silently.
+sed -i "/$PROTO_CHAN/d" "$H"
+expect_red "$H" \
+    "deleting a prototype is a RED naming what vanished, not a smaller pass" \
+    "$F_ORPHAN_DEF" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
+
+# 14. The definition is deleted; the prototype stays. The dangling half of the
+#     same shrink, and the reason the two readings are compared BOTH ways.
+sed -i "/$DEF_CHAN/,/^}$/d" "$C"
+expect_red "$C" \
+    "deleting a definition is a RED naming what vanished" \
+    "$F_ORPHAN_PROTO" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_OPCODE"
+
+# 15. THE HONEST-LOOKING DISARM: delete the prototype, the definition AND the
+#     declaration together. Nothing disagrees -- the union genuinely shrinks by
+#     one and every remaining entry point is still wired or declared. What it
+#     cannot do is take the kernel handler with it, so the floor catches it and
+#     names the stranded opcode. This is why the floor exists.
+sed -i "/$PROTO_DEVSCAN/d" "$H"
+sed -i '/OVMX-UNWIRED: vms_kif_devscan/d' "$H"
+sed -i "/$DEF_DEVSCAN/,/^}$/d" "$C"
+expect_red "$H $C" \
+    "deleting a wrapper outright strands its kernel opcode and is caught" \
+    "VMS_IOCTL_DEVSCAN" "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO"
+
+# 16. THE ROUTE AROUND 13: delete the prototype and mark the definition static,
+#     so the header/definition comparison has nothing to disagree about, then
+#     drop the declaration. The union counts static definitions precisely so
+#     this cannot work: the entry point is still in the census, now undeclared.
+sed -i "/$PROTO_CHAN/d" "$H"
+sed -i '/OVMX-UNWIRED: vms_kif_getdvi_chan/d' "$H"
+sed -i "s|$DEF_CHAN|static &|" "$C"
+expect_red "$H $C" \
+    "an entry point cannot leave the census by going static" \
+    "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE"
 
 # ---------------------------------------------------------------------------
 echo "  controls: $passed passed, $failed failed"

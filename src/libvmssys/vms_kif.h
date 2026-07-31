@@ -258,6 +258,14 @@ uint32_t vms_kif_alloc(const char *devnam);
  * OVMX-UNWIRED: vms_kif_dalloc (vms-dv1) */
 uint32_t vms_kif_dalloc(const char *devnam);
 
+/* vms_kif_alloc_op() is the static body those two share inside vms_kif.c.
+ * It has no prototype here and is not part of the interface, but the census
+ * universe is the union of what this header prototypes and what vms_kif.c
+ * defines -- static definitions included, so that marking a definition static
+ * cannot drop it out of the census. It is reached only from $ALLOC/$DALLOC,
+ * so while they are unwired it is unwired too, and it says so:
+ * OVMX-UNWIRED: vms_kif_alloc_op (vms-dv1) -- shared body of the two above */
+
 /* Read a device row by name. SS$_NOSUCHDEV if there is no such device.
  * OVMX-UNWIRED: vms_kif_getdvi_devnam (vms-fb9) */
 uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info);

@@ -64,6 +64,35 @@
 # The gate does NOT verify that the item is open (rd is nostr-backed and not
 # reachable from CI). It verifies that a human wrote an id down.
 #
+# WHY THE UNIVERSE IS PINNED, and this is the property that makes the escape
+# hatch safe. An earlier revision derived the list of entry points by grepping
+# vms_kif.h ALONE -- so DELETING A PROTOTYPE SILENTLY SHRANK THE UNIVERSE, and
+# the census reported a smaller PASS instead of a RED. A gate that can be
+# disarmed by removing the thing it counts is the same family as the defects
+# that made this dispatch necessary: a guard compiled nowhere, a fixture that
+# silently no-ops, an assertion satisfiable by something else. So the universe
+# is read from the tree TWICE, independently, and a third reading pins the floor:
+#
+#   - THE UNION, not the header. The universe is every vms_kif_* function the
+#     header PROTOTYPES *or* vms_kif.c DEFINES -- including static helpers, so
+#     that marking a definition static cannot drop it out either. Deleting a
+#     prototype therefore does not shrink the universe by one; the definition
+#     still holds the entry point in it, and the entry point still has to be
+#     wired or declared.
+#   - THE TWO READINGS MUST AGREE. A definition with no prototype, or a
+#     prototype with no definition, is itself a RED that NAMES what vanished.
+#     (A static helper is exempt from needing a prototype -- that is what static
+#     means -- but the union above still counts it.)
+#   - THE KERNEL OPCODE FLOOR. Deleting a prototype AND its definition AND its
+#     declaration would shrink the universe honestly -- except that it strands
+#     the kernel handler behind it. So every VMS_IOCTL_* opcode defined in
+#     src/kernel/vms_ioctl.h must be issued by at least one wrapper in
+#     vms_kif.c. That floor is derived from the tree, not written down here, and
+#     it is the item's own subject stated on the kernel side: an executive
+#     facility no userspace wrapper can reach is wired to nothing.
+#     There is deliberately NO escape hatch for an orphaned opcode. If you add
+#     an ioctl to vms.ko, land its wrapper in the same commit.
+#
 # WHAT THIS GATE DOES NOT SEE, stated so its PASS is never read as more than it
 # is. It is a SOURCE SCAN, not a build and not an execution:
 #
@@ -80,6 +109,12 @@
 #     entry point can be wired to a per-process fake and pass here. That is the
 #     A-writes/B-reads question (CLAUDE.md Rule 11) and it belongs to the QEMU
 #     suites and the veracity passes, not to a grep.
+#   - The kernel opcode floor counts a MENTION of VMS_IOCTL_* in vms_kif.c, not
+#     a proof that the opcode reaches an ioctl. A bare `(void)VMS_IOCTL_DEVSCAN;`
+#     would satisfy it. Deciding that a value actually flows to KIF_CALL is data
+#     flow, not a scan, and a census that guessed would be inventing an answer.
+#     The floor's job is narrower than that and it is enough for it: it makes
+#     DELETING a wrapper outright a RED instead of a smaller pass.
 #
 # If you are here because this failed: do NOT add a declaration to make it pass
 # unless the entry point genuinely has no product path yet AND you have an item
@@ -93,6 +128,7 @@ set -u
 SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 KIF_H="$SRC_ROOT/src/libvmssys/vms_kif.h"
 KIF_C="$SRC_ROOT/src/libvmssys/vms_kif.c"
+IOCTL_H="$SRC_ROOT/src/kernel/vms_ioctl.h"
 status=0
 
 WORK=$(mktemp -d)
@@ -134,8 +170,15 @@ strip_comments() {
 }
 
 # ---------------------------------------------------------------------------
-# call_edges: read comment-stripped C on stdin, print "ENCLOSING<TAB>CALLEE"
-# for every call expression, one per line.
+# call_edges [calls|defs]: read comment-stripped C on stdin.
+#
+#   calls (default) - print "ENCLOSING<TAB>CALLEE" for every call expression.
+#   defs            - print "static|extern<TAB>NAME" for every function
+#                     DEFINITION at file scope. Definitions, not prototypes:
+#                     the same depth-0 rule that stops a prototype counting as
+#                     a call is what distinguishes them, so both readings of
+#                     the tree come from one reader and cannot disagree about
+#                     what a definition is.
 #
 # It is a character-level reader, not a token search, for three reasons:
 #   - a call at brace depth 0 is a PROTOTYPE or a DEFINITION, not a call, so the
@@ -148,7 +191,7 @@ strip_comments() {
 #     bind path is dead and mark every entry point unwired.
 # ---------------------------------------------------------------------------
 call_edges() {
-    awk '
+    awk -v want="${1:-calls}" '
         function scan(s, node, ismac,    n, i, j, k, c, id) {
             n = length(s); i = 1
             while (i <= n) {
@@ -163,15 +206,25 @@ call_edges() {
                     continue
                 }
                 if (!ismac && c == "{") {
-                    if (depth == 0) { curfn = pending; pending = "" }
+                    if (depth == 0) {
+                        curfn = pending; pending = ""
+                        # A body opening at depth 0 behind a name that was
+                        # followed by "(" is a DEFINITION. A prototype never
+                        # gets here: its ";" clears pending below.
+                        if (want == "defs" && curfn != "")
+                            print (sawstatic ? "static" : "extern") "\t" curfn
+                        sawstatic = 0
+                    }
                     depth++; i++; continue
                 }
                 if (!ismac && c == "}") {
                     depth--
-                    if (depth <= 0) { depth = 0; curfn = "" }
+                    if (depth <= 0) { depth = 0; curfn = ""; sawstatic = 0 }
                     i++; continue
                 }
-                if (!ismac && c == ";" && depth == 0) { pending = ""; i++; continue }
+                if (!ismac && c == ";" && depth == 0) {
+                    pending = ""; sawstatic = 0; i++; continue
+                }
                 if (c ~ /[A-Za-z_]/) {
                     j = i
                     while (j <= n && substr(s, j, 1) ~ /[A-Za-z0-9_]/) j++
@@ -179,16 +232,18 @@ call_edges() {
                     k = j
                     while (k <= n && (substr(s, k, 1) == " " || substr(s, k, 1) == "\t")) k++
                     if (substr(s, k, 1) == "(") {
-                        if (ismac) print node "\t" id
-                        else if (depth >= 1) print curfn "\t" id
+                        if (ismac) { if (want == "calls") print node "\t" id }
+                        else if (depth >= 1) { if (want == "calls") print curfn "\t" id }
                         else pending = id
+                    } else if (!ismac && depth == 0 && id == "static") {
+                        sawstatic = 1
                     }
                     i = j; continue
                 }
                 i++
             }
         }
-        BEGIN { depth = 0; pending = ""; curfn = ""; inmac = 0; macnode = "" }
+        BEGIN { depth = 0; pending = ""; curfn = ""; inmac = 0; macnode = ""; sawstatic = 0 }
         {
             line = $0
             if (inmac) {
@@ -213,20 +268,99 @@ call_edges() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. The entry points, derived from the header at check time.
+# 1. The universe, derived from the tree at check time and PINNED.
 #
 # Never a hardcoded list: main moves under this gate constantly, and a list is
-# what the census exists to replace.
+# what the census exists to replace. But "derived from the header" alone let a
+# deleted prototype shrink the universe silently -- so the universe is the UNION
+# of two independent readings, and their disagreement is itself a RED.
 # ---------------------------------------------------------------------------
-ENTRIES=$(strip_comments < "$KIF_H" \
-          | grep -oE 'vms_kif_[A-Za-z0-9_]+[ \t]*\(' \
-          | sed -E 's/[ \t]*\($//' | sort -u)
-n_entries=$(printf '%s\n' "$ENTRIES" | grep -c . || true)
+strip_comments < "$KIF_H" \
+    | grep -oE 'vms_kif_[A-Za-z0-9_]+[ \t]*\(' \
+    | sed -E 's/[ \t]*\($//' | sort -u > "$WORK/protos"
 
-if [ "$n_entries" -eq 0 ]; then
-    echo "FAIL: no vms_kif_* entry points found in $(basename "$KIF_H")"
-    echo "  -> the census reader is broken, or the interface moved. Fix the gate."
+strip_comments < "$KIF_C" | call_edges defs \
+    | awk -F'\t' '$2 ~ /^vms_kif_/' | sort -u > "$WORK/defs_all"
+cut -f2 "$WORK/defs_all" | sort -u > "$WORK/defs"
+awk -F'\t' '$1 == "extern" { print $2 }' "$WORK/defs_all" | sort -u > "$WORK/defs_extern"
+
+sort -u "$WORK/protos" "$WORK/defs" > "$WORK/universe"
+
+ENTRIES=$(cat "$WORK/universe")
+n_entries=$(grep -c . "$WORK/universe" || true)
+n_protos=$(grep -c . "$WORK/protos" || true)
+n_defs=$(grep -c . "$WORK/defs" || true)
+
+if [ "$n_protos" -eq 0 ] || [ "$n_defs" -eq 0 ]; then
+    echo "FAIL: one of the two readings of the interface came back empty"
+    echo "        $n_protos prototype(s) in $(basename "$KIF_H")"
+    echo "        $n_defs definition(s) in $(basename "$KIF_C")"
+    echo "  -> the census reader is broken, or the interface moved. Fix the gate;"
+    echo "     an empty universe is a vacuous PASS, which is the whole defect."
     exit 1
+fi
+
+# 1a. A definition with no prototype. This is what a deleted prototype looks
+#     like from the other side, and it is why the universe is the union: the
+#     entry point is still counted, and this names what vanished.
+orphan_defs=$(comm -13 "$WORK/protos" "$WORK/defs_extern")
+if [ -n "$orphan_defs" ]; then
+    echo "FAIL: defined in $(basename "$KIF_C") with NO prototype in $(basename "$KIF_H"):"
+    printf '%s\n' "$orphan_defs" | sed 's/^/    /'
+    echo "  -> the prototype vanished. The census universe is the union of both"
+    echo "     readings, so this is a RED, not a smaller pass: an entry point"
+    echo "     cannot leave the census by having its declaration deleted."
+    status=1
+fi
+
+# 1b. A prototype with no definition. The dangling half of the same shrink.
+orphan_protos=$(comm -23 "$WORK/protos" "$WORK/defs")
+if [ -n "$orphan_protos" ]; then
+    echo "FAIL: prototyped in $(basename "$KIF_H") with NO definition in $(basename "$KIF_C"):"
+    printf '%s\n' "$orphan_protos" | sed 's/^/    /'
+    echo "  -> the implementation vanished, or it moved out of $(basename "$KIF_C")."
+    echo "     If the interface genuinely spans more files now, teach this gate to"
+    echo "     read them; do not delete the prototype to quiet it."
+    status=1
+fi
+
+# ---------------------------------------------------------------------------
+# 1c. THE FLOOR, derived from the kernel side.
+#
+# Deleting a prototype, its definition and its declaration together would shrink
+# the universe with no disagreement to detect -- but it strands the kernel
+# handler behind it. Every opcode vms.ko defines must be issued by a wrapper.
+# ---------------------------------------------------------------------------
+if [ ! -f "$IOCTL_H" ]; then
+    echo "FAIL: cannot find the kernel opcode header ($IOCTL_H)"
+    echo "  -> the census floor is read from it; if it moved, move this with it."
+    status=1
+else
+    strip_comments < "$IOCTL_H" \
+        | grep -oE '^[ \t]*#[ \t]*define[ \t]+VMS_IOCTL_[A-Z0-9_]+' \
+        | grep -oE 'VMS_IOCTL_[A-Z0-9_]+' | sort -u > "$WORK/opcodes"
+    strip_comments < "$KIF_C" \
+        | grep -oE 'VMS_IOCTL_[A-Z0-9_]+' | sort -u > "$WORK/opcodes_issued"
+
+    n_opcodes=$(grep -c . "$WORK/opcodes" || true)
+    if [ "$n_opcodes" -eq 0 ]; then
+        echo "FAIL: no VMS_IOCTL_* opcodes found in $(basename "$IOCTL_H")"
+        echo "  -> the floor reader is broken; without it the universe can be"
+        echo "     shrunk by deleting a wrapper outright."
+        status=1
+    fi
+
+    n_issued=$(comm -12 "$WORK/opcodes" "$WORK/opcodes_issued" | grep -c . || true)
+    orphan_opcodes=$(comm -23 "$WORK/opcodes" "$WORK/opcodes_issued")
+    if [ -n "$orphan_opcodes" ]; then
+        echo "FAIL: kernel opcode(s) no wrapper in $(basename "$KIF_C") ever issues:"
+        printf '%s\n' "$orphan_opcodes" | sed 's/^/    /'
+        echo "  -> an executive facility userspace cannot reach is wired to nothing,"
+        echo "     which is this gate's whole subject stated on the kernel side."
+        echo "     Land the wrapper, or delete the opcode and its handler. There is"
+        echo "     deliberately no declaration that excuses an orphaned opcode."
+        status=1
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -329,9 +463,9 @@ done
 # Declarations naming something that is not an entry point.
 while read -r name item; do
     [ -n "$name" ] || continue
-    if ! printf '%s\n' "$ENTRIES" | grep -qx "$name"; then
+    if ! grep -qx "$name" "$WORK/universe"; then
         echo "FAIL: unwired declaration names $name ($item), which is not an entry"
-        echo "      point of $(basename "$KIF_H")"
+        echo "      point of the interface (neither prototyped nor defined)"
         echo "  -> a declaration for a function that does not exist protects nothing."
         status=1
     fi
@@ -349,6 +483,9 @@ fi
 
 echo "  census: $n_entries entry points — $wired reached from the product,"
 echo "          $unwired with no product path"
+echo "  universe pinned: $n_protos prototype(s) + $n_defs definition(s) — the union,"
+echo "          so deleting either half is a RED, not a smaller pass"
+echo "  floor:  ${n_issued:-0} of ${n_opcodes:-0} kernel opcode(s) issued by a wrapper"
 
 if [ "$status" -eq 0 ]; then
     echo "vms_kif caller census: PASS"

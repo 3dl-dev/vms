@@ -607,6 +607,67 @@ static void test_dlm_rebuild_response(void)
           "dlm: short frame rejected");
 }
 
+/*
+ * vms-e81: op 0x01 has a JOINER form and a MEMBER form, and OVMX shipped the
+ * joiner form for both. The two differ in seven fields; a test that only checks
+ * VOTES cannot tell them apart, which is how this survived to a live cluster.
+ */
+static void test_params_member_vs_joiner_form(void)
+{
+    struct scs_member_params mp;
+    memset(&mp, 0, sizeof(mp));
+    memcpy(mp.dst_mac, vax1_logical, 6);
+    memcpy(mp.src_mac, vax2_logical, 6);
+    memcpy(mp.src_logical, vax2_logical, 6);
+    memcpy(mp.peer_logical, vax1_logical, 6);
+    mp.remote_conid = VAX1_VC_CONID;
+    mp.local_conid = VAX2_VC_CONID;
+    mp.votes = SCS_MEMBER_VOTES_NONVOTING;
+
+    /* JOINER form -- the default, and byte-for-byte the captured template. */
+    uint8_t j[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_params(&mp, j) == 0, "build_params (joiner form) ok");
+    const uint8_t *jb = j + 72;
+    CHECK(jb[12] == 0x00, "joiner: body[12] == 0x00");
+    CHECK(jb[82] == 0x2a, "joiner: body[82] == 0x2a");
+    CHECK(jb[18] == 0 && jb[19] == 0, "joiner: member count == 0");
+    CHECK(jb[28] == 0 && jb[35] == 0, "joiner: cluster-formation time is zero");
+    CHECK(jb[36] == 0 && jb[43] == 0, "joiner: last-transition time is zero");
+    /* The 2001-01-01 sentinel the captured joiner carries at body[64:72]. */
+    static const uint8_t sentinel[8] = {0x00,0x80,0x4a,0x3f,0x0e,0x57,0x9f,0x00};
+    CHECK(memcmp(jb + 64, sentinel, 8) == 0,
+          "joiner: body[64:72] is the captured 2001-01-01 sentinel");
+
+    /* MEMBER form. */
+    mp.is_member = 1;
+    mp.member_count = 3;
+    mp.cluster_formed  = 0x00bc0419100a3040ULL;
+    mp.last_transition = 0x00bc041987a2f2e0ULL;
+    mp.own_admission   = 0x00bc04198899aabbULL;
+    uint8_t m[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_params(&mp, m) == 0, "build_params (member form) ok");
+    const uint8_t *mb = m + 72;
+    CHECK(mb[12] == 0x21, "member: body[12] == 0x21");
+    CHECK(mb[82] == 0x2b, "member: body[82] == 0x2b");
+    CHECK((uint16_t)(mb[18] | (mb[19] << 8)) == 3, "member: member count == 3");
+    CHECK((uint32_t)(mb[44] | (mb[45] << 8) | (mb[46] << 16) | ((uint32_t)mb[47] << 24)) == 4,
+          "member: state-seq body[44:48] == member count + 1");
+    CHECK(mb[28] == 0x40 && mb[29] == 0x30 && mb[31] == 0x10 &&
+          mb[32] == 0x19 && mb[34] == 0xbc && mb[35] == 0x00,
+          "member: cluster-formation quadword laid down little-endian");
+    CHECK(mb[36] == 0xe0 && mb[43] == 0x00,
+          "member: last-transition quadword laid down little-endian");
+    CHECK(memcmp(mb + 64, sentinel, 8) != 0,
+          "member: body[64:72] is NOT the joiner sentinel any more");
+    CHECK(mb[64] == 0xbb && mb[71] == 0x00, "member: own-admission quadword laid down");
+
+    /* VOTES and the version token must survive both forms untouched. */
+    CHECK((uint16_t)(jb[22] | (jb[23] << 8)) == 0 &&
+          (uint16_t)(mb[22] | (mb[23] << 8)) == 0, "VOTES stays 0 in both forms");
+    CHECK(memcmp(jb + 88, "V7.3    ", 8) == 0 && memcmp(mb + 88, "V7.3    ", 8) == 0,
+          "version token 'V7.3    ' byte-exact in both forms");
+}
+
 int main(void)
 {
     test_dlm_rebuild_response();
@@ -620,6 +681,7 @@ int main(void)
     test_parse_classification();
     test_response_echoes_real_checksum();
     test_op0f_echoes_response_marker();
+    test_params_member_vs_joiner_form();
     test_null_guards();
 
     if (failures == 0) {

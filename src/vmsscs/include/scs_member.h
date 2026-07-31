@@ -122,6 +122,16 @@ struct scs_member_params {
     uint16_t sysap_send_msg;  /* SYSAP body[0:2] (OVMX's own app counter) */
     uint16_t sysap_ack_msg;   /* SYSAP body[2:4] (ack of member's highest send-msg#) */
     uint16_t votes;           /* op 0x01 only: SYSAP body[22:24] (0 = non-voting) */
+    /* vms-e81: MEMBER-STATE block for op 0x01. All zero => the JOINER form, which
+     * is what the baked template carries and what OVMX must send while it is
+     * still joining. Populated only once OVMX is admitted -- see
+     * scs_member_build_params() for why sending the joiner form as a member
+     * stalls a newcomer indefinitely. */
+    int      is_member;       /* body[12]=0x21 + body[82]=0x2b instead of 0x00/0x2a */
+    uint16_t member_count;    /* body[18:20]; body[44:48] is this + 1 */
+    uint64_t cluster_formed;  /* body[28:36]  VMS quadword, COPIED from a member */
+    uint64_t last_transition; /* body[36:44]  VMS quadword, COPIED from a member */
+    uint64_t own_admission;   /* body[64:72]  VMS quadword, OUR OWN admission */
     uint16_t txn;             /* body[4:6] on a transaction WE initiate (op 0x0b) */
     uint16_t checksum;        /* body[6:8] on a transaction WE initiate (op 0x0b) */
     const char *model;        /* op 0x14 only: model string; NULL => OVMX default */

@@ -755,6 +755,30 @@ static int cm_response_shape(uint8_t category, uint8_t opcode)
     }
 }
 
+/*
+ * vms-e81: OVMX's own MEMBER-STATE, as advertised in cat 0x01 op 0x01.
+ *
+ * While OVMX is joining it correctly emits the JOINER form of that message --
+ * that is what it is. The defect was that it never stopped: as a sitting MEMBER
+ * its op 0x01 stayed 131 of 132 bytes identical to what a node not in any
+ * cluster sends. A newcomer asks every member "what cluster are you in?" and
+ * OVMX answered "none, 0 members, admitted 1-JAN-2001" while the real members
+ * described a 3-node cluster whose last transition was OVMX's own admission.
+ * The newcomer could not close its view and never asked to join, for 678 s.
+ *
+ * RULE 10: `formed` and `last_transition` are CLUSTER-WIDE FACTS. They are
+ * COPIED verbatim out of a member's own op 0x01 and never computed here. If we
+ * have not heard them we stay in the joiner form, which is at least honest.
+ */
+static struct {
+    int      known;           /* have we copied a member's op 0x01 yet? */
+    int      admitted;        /* our own barrier completed -> we are a member */
+    uint16_t member_count;
+    uint64_t formed;
+    uint64_t last_transition;
+    uint64_t own_admission;
+} ovmx_cluster;
+
 /* Send a fully-built Ethernet frame to a specific unicast MAC on ifindex. */
 static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
                              const uint8_t *frame, size_t len)
@@ -836,6 +860,16 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.sysap_send_msg = ps->sysap_send++;
     mp.sysap_ack_msg = pure ? 0 : ps->sysap_recv;
     mp.votes = SCS_MEMBER_VOTES_NONVOTING; /* VOTES=1 tested (vms-d94), did NOT change NEW->MEMBER */
+    /* vms-e81: advertise the MEMBER form only once we actually are one AND we
+     * have a member's own values to copy. Anything less stays the joiner form,
+     * which is at least honest. */
+    if (ovmx_cluster.admitted && ovmx_cluster.known) {
+        mp.is_member = 1;
+        mp.member_count = ovmx_cluster.member_count;
+        mp.cluster_formed = ovmx_cluster.formed;
+        mp.last_transition = ovmx_cluster.last_transition;
+        mp.own_admission = ovmx_cluster.own_admission;
+    }
     if (scs_member_build_params(&mp, frame) == 0 &&
         send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
         sent++;
@@ -2183,6 +2217,41 @@ int main(int argc, char **argv)
                         ps->cm_remote_conid = ps->remote_conid;
                     }
 
+                    /* vms-e81: LEARN the cluster-wide facts from a MEMBER's own
+                     * op 0x01. body[12]==0x21 is the member form (joiner: 0x00),
+                     * and only a member's copy is worth anything -- a joiner's
+                     * carries zeros. We COPY formation and last-transition
+                     * verbatim and never compute them: they are facts about the
+                     * cluster, not about us, and inventing either would be the
+                     * Rule 10 failure this whole item keeps circling. The member
+                     * count comes from the same frame, so all three always agree
+                     * with each other and with whoever we heard them from. */
+                    if (cm_req && mv.category == SCS_MEMBER_CAT_CONFIG &&
+                        mv.opcode == SCS_MEMBER_OP_PARAMS && (size_t)n >= 204 &&
+                        buf[72 + 12] == 0x21) {
+                        uint64_t formed = 0, lastx = 0;
+                        for (int k = 7; k >= 0; k--) {
+                            formed = (formed << 8) | buf[72 + 28 + k];
+                            lastx  = (lastx  << 8) | buf[72 + 36 + k];
+                        }
+                        uint16_t mc = (uint16_t)buf[72 + 18] |
+                                      ((uint16_t)buf[72 + 19] << 8);
+                        if (!ovmx_cluster.known || ovmx_cluster.member_count != mc ||
+                            ovmx_cluster.last_transition != lastx) {
+                            log_ts(stdout);
+                            printf(" SCSD-I-CLUSTATE, learned member-form cluster state"
+                                   " from a peer: members=%u formed=0x%016llx"
+                                   " last_transition=0x%016llx\n",
+                                   (unsigned)mc, (unsigned long long)formed,
+                                   (unsigned long long)lastx);
+                            fflush(stdout);
+                        }
+                        ovmx_cluster.known = 1;
+                        ovmx_cluster.member_count = mc;
+                        ovmx_cluster.formed = formed;
+                        ovmx_cluster.last_transition = lastx;
+                    }
+
                     /* vms-e81 ROOT CAUSE: A SITTING MEMBER MUST RECIPROCATE A
                      * NEWCOMER'S CONFIG, IMMEDIATELY.
                      *
@@ -2428,6 +2497,18 @@ int main(int argc, char **argv)
                             if (ps->barrier_step >= SCS_MEMBER_BARRIER_STEPS) {
                                 ps->barrier_done = 1;
                                 ps->barrier_step = 0;
+                                /* vms-e81: our OWN admission time, stamped when
+                                 * our barrier completes. The joiner template
+                                 * carries the sentinel 00804a3f0e579f00, which
+                                 * decodes as exactly 2001-01-01 00:00:00 -- a
+                                 * node advertising that while claiming to be a
+                                 * member says it was admitted 25 years before
+                                 * the cluster it is in was formed. */
+                                if (!ovmx_cluster.admitted) {
+                                    ovmx_cluster.admitted = 1;
+                                    ovmx_cluster.own_admission =
+                                        scs_member_vms_time_now();
+                                }
                                 ps->barrier_count++;
                                 log_ts(stdout);
                                 printf(" SCSD-I-XITDONE, state transition COMPLETE"
@@ -2921,7 +3002,14 @@ int main(int argc, char **argv)
                 (monotonic_ms() - cfg_settle_ms) < (long)JOIN_CFG2_MAX_WAIT_MS) {
                 cfg_settle_ms = monotonic_ms(); /* hold the timer open */
             }
-            if (do_connect && ps->cfg_sent && !ps->joiner_cfg2_sent &&
+            /* vms-e81: op 0x02 is the JOINER's add-member request. A member never
+             * sends one -- in neither pure-VMS control does VAX1 or VAX2 ever send
+             * op 0x02 to the newcomer. We were sending it to a node that was not
+             * yet a member: an established member asking a newcomer to admit IT.
+             * Together with the joiner-form op 0x01 that told the newcomer twice,
+             * by two mechanisms, that we were trying to join. */
+            if (do_connect && !ps->appeared_after_join &&
+                ps->cfg_sent && !ps->joiner_cfg2_sent &&
                 (getenv("OVMX_CFG2_ALL") != NULL ||
                  cm_pick_coordinator(peers) == ps) &&
                 (monotonic_ms() - cfg_settle_ms) >= (long)JOIN_CFG2_DELAY_MS) {

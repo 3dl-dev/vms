@@ -243,6 +243,46 @@ int scs_member_build_params(const struct scs_member_params *p,
      * configurations (spec sec 4j). OVMX joins non-voting => 0. */
     put_le16(out + 14 + SCS_MEMBER_BODY_OFF + SCS_MEMBER_VOTES_BODYOFF, p->votes);
 
+    /*
+     * vms-e81: THE MEMBER FORM. Everything above this point is the JOINER form,
+     * and that is correct -- while OVMX is joining, it IS a joiner.
+     *
+     * The bug this fixes is that OVMX never stopped. Its op 0x01 as a sitting
+     * MEMBER was 131 of 132 bytes identical to the op 0x01 a node emits while it
+     * is not in a cluster at all, and the single differing byte is one sec 4(j)
+     * already classifies as per-boot noise. A census of both captures splits
+     * every op 0x01 in the corpus into 6 member frames and 6 joiner frames with
+     * ZERO residuals, and OVMX sent the joiner value in every distinguishing
+     * field.
+     *
+     * What that says on the wire is not a cosmetic difference. A newcomer asks
+     * each member "what cluster are you in?" and OVMX answered: no cluster, zero
+     * members, no formation time, no transition time, admitted 1-JAN-2001 --
+     * while VAX1 and VAX2, in the same second, answered "3 members, state-seq 4,
+     * formed 02:02:11.14, last transition 02:05:31.79", that last transition
+     * being OVMX's OWN admission. The newcomer could not close its view of the
+     * cluster and never issued its add-member request, to anyone, for 678 s.
+     *
+     * The grounding for each field is a controlled variation INSIDE one capture:
+     * VAX2 says member_count=2 at +2.5 s and 3 at +53.9 s, the only change being
+     * OVMX's admission at +9.5 s.
+     *
+     * RULE 10 -- cluster_formed and last_transition are CLUSTER-WIDE FACTS.
+     * They must be COPIED verbatim from a member's own op 0x01 and never
+     * computed here. This function does not know them; it only places them.
+     */
+    if (p->is_member) {
+        uint8_t *b = out + 14 + SCS_MEMBER_BODY_OFF;
+        b[12] = 0x21;                              /* member flag (joiner: 0x00) */
+        b[82] = 0x2b;                              /* tracks the same split (joiner: 0x2a) */
+        put_le16(b + 18, p->member_count);         /* live member count */
+        put_le32(b + 44, (uint32_t)p->member_count + 1u); /* state-seq = count + 1, 4/4 */
+        put_le64(b + 28, p->cluster_formed);       /* copied, never computed */
+        put_le64(b + 36, p->last_transition);      /* copied, never computed */
+        put_le64(b + 64, p->own_admission);        /* ours; the joiner sentinel is
+                                                    * exactly 2001-01-01 00:00:00 */
+    }
+
     return 0;
 }
 

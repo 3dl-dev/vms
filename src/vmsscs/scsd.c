@@ -3761,6 +3761,10 @@ int main(int argc, char **argv)
                     }
                     memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* member src-logical */
                     scs_vc_note_recv(&ps->vc, m_seq);
+                    /* vms-298: capture the PREVIOUS handle before overwriting it --
+                     * the retransmit test below compares against it, and assigning
+                     * first would make that test trivially true. */
+                    uint32_t prev_srv_remote_conid = ps->mscp_srv_remote_conid;
                     ps->mscp_srv_remote_conid = m_lconid; /* member's MSCP CLIENT handle */
 
                     /* Idempotent stop-and-wait: allocate the echo/accept send_seq
@@ -3769,8 +3773,44 @@ int main(int argc, char **argv)
                      * send_seq must stay contiguous; re-advancing on each retransmit
                      * poisons the sequence exactly like the 760mscp hole). Mirrors
                      * the "allocate once" pattern of joiner_req_seq/mscp_req_seq. */
-                    int retx = ps->mscp_srv_bound;
+                    /* vms-298: A RETRANSMIT AND A SECOND CONNECTION ARE NOT THE
+                     * SAME EVENT, AND THE Con.ID IS WHAT TELLS THEM APART.
+                     *
+                     * This gate used to read `ps->mscp_srv_bound` -- "have we ever
+                     * bound one of these?" -- so a genuinely NEW MSCP$DISK connect
+                     * from the same peer was treated as a retransmit of the first
+                     * and answered by replaying the send_seqs allocated minutes
+                     * earlier. GROUNDED in ovmx-760-MEMBER-achieved: ~10 s after
+                     * the first bind each VAX opens a SECOND MSCP$DISK connect
+                     * (frames 2890/2896/2920); OVMX answered with send_seq 27/28
+                     * while its live per-peer counters stood at 40/180/320. All
+                     * three were SILENTLY DROPPED -- no op-5 confirm ever arrived
+                     * and not one further frame flowed on those Con.IDs. The
+                     * identical op1/op4 pair at frame 188, same bytes, was
+                     * confirmed at 190; the only difference was a contiguous seq.
+                     *
+                     * A true retransmit carries the SAME peer Con.ID; a new
+                     * connection carries a different one. So key on that.
+                     *
+                     * NOT FIXED HERE, and it needs its own grounding: we still
+                     * offer the SAME local handle (OVMX_MSCP_SERVER_CONID is a
+                     * compile-time constant) for every such connection. A Con.ID
+                     * identifies a connection ENDPOINT and real nodes allocate a
+                     * fresh pair per connection. Both anomalies were present on
+                     * those three frames at once and the capture cannot separate
+                     * them, so this fixes the one that is unambiguously wrong and
+                     * leaves the other visible. */
+                    int retx = ps->mscp_srv_bound &&
+                               prev_srv_remote_conid == m_lconid;
                     if (!retx) {
+                        if (ps->mscp_srv_bound) {
+                            log_ts(stdout);
+                            printf(" SCSD-I-MSCPSRV, peer opened a SECOND MSCP$DISK"
+                                   " connect (remote 0x%08X -> 0x%08X) -- allocating"
+                                   " FRESH send_seqs, not replaying the first bind's\n",
+                                   prev_srv_remote_conid, m_lconid);
+                            fflush(stdout);
+                        }
                         ps->mscp_srv_echo_seq   = scs_seq_advance(&ps->vc.seq);
                         ps->mscp_srv_accept_seq = scs_seq_advance(&ps->vc.seq);
                     }

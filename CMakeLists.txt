@@ -207,6 +207,27 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(runtime_target_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
+
+    # vms_kif caller census (vms-7fb): every kernel-interface entry point is
+    # either reached from the product or declared unwired against an item.
+    # The Rule 9 gate is shaped to catch a FALLBACK; a facility implemented
+    # wholly in userspace never mentions /dev/vms at all, so nothing caught the
+    # ABSENCE — four interfaces shipped with zero callers and were therefore
+    # never once exercised. Source scan.
+    add_test(NAME kif_caller_census
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(kif_caller_census PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
+
+    # ... and the evasions, run against a sandbox copy of the tree. Each must
+    # drive the census RED for its own specific reason, and two GREEN controls
+    # pin the reachability rule from the other side.
+    add_test(NAME kif_caller_census_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(kif_caller_census_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 300)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

@@ -16,6 +16,20 @@
  * this header documented the two-step protocol from the day it was written,
  * vms_kif_register() had zero callers product-wide, and so every /dev/vms
  * ioctl issued by OVMX was rejected with -ESRCH by the executive (vms-9fc).
+ *
+ * UNWIRED DECLARATIONS (vms-7fb). An entry point below that has NO product
+ * caller carries a machine-checked declaration line naming itself and the
+ * item tracking it -- see any of the declarations below for the form, and
+ * tests/integration/test_kif_caller_census.sh for the reader that parses
+ * them. The census enforces the pair in both directions: an entry point
+ * with no product path and no declaration fails the build, and so does a
+ * declaration left behind on an entry point that has since been wired.
+ *
+ * The census exists because a kernel facility, a wrapper and a test suite
+ * were merged more than once WITH NO PRODUCT PATH -- most of this interface
+ * is in that state today, and every declaration below is a statement that
+ * OVMX does not yet use the facility, not a permission slip to leave it
+ * that way.
  */
 
 #ifndef _VMS_KIF_H
@@ -31,7 +45,12 @@
 /* Open /dev/vms, returns fd or -1 on error */
 int vms_kif_open(void);
 
-/* Close the /dev/vms fd */
+/* Close the /dev/vms fd.
+ *
+ * OVMX-UNWIRED: vms_kif_close (vms-a86) -- nothing in OVMX closes the
+ * executive channel; PID 1 pins it for the life of the system (Rule 9),
+ * and kif_bind() drops a fork-inherited descriptor with vms_sys_close()
+ * directly. Open question in vms-a86: should this exist at all? */
 void vms_kif_close(void);
 
 /* Register this process with the kernel module.
@@ -70,7 +89,12 @@ uint32_t vms_kif_register(uint32_t *vms_pid);
  *
  * uic is (group << 16) | member. authorized_privs is the SYSUAF
  * uaf$q_priv quadword; the executive sets current privileges equal to
- * it (an OVMX design choice -- see vms_ioctl.h). */
+ * it (an OVMX design choice -- see vms_ioctl.h).
+ *
+ * OVMX-UNWIRED: vms_kif_setident (vms-2b8) -- LOGINOUT still does not call
+ * it; src/vmsdcl/dcl_main.c reads VMS_USERNAME, VMS_UIC_GROUP,
+ * VMS_UIC_MEMBER and VMS_PRIVILEGES from the environment, so a process
+ * still names its own identity. */
 uint32_t vms_kif_setident(const char *username, uint32_t uic,
                           uint64_t authorized_privs);
 
@@ -84,59 +108,89 @@ uint32_t vms_kif_kerr_to_ss(int err);
 
 /* ================================================================
  * Access Mode (3a)
+ *
+ * THE WHOLE FAMILY IS UNWIRED: no product code calls any of it, so
+ * privileges and access modes are still whatever a process says they are
+ * (src/vmsdcl/dcl_main.c reads VMS_PRIVILEGES from the environment).
+ * vms-pv1 is the item that makes the executive the enforcer.
  * ================================================================ */
 
-/* Set access mode. Returns SS$_ status */
+/* Set access mode. Returns SS$_ status
+ * OVMX-UNWIRED: vms_kif_setmode (vms-pv1) */
 uint32_t vms_kif_setmode(uint8_t mode);
 
-/* Get current mode and privileges */
+/* Get current mode and privileges
+ * OVMX-UNWIRED: vms_kif_getmode (vms-pv1) */
 uint32_t vms_kif_getmode(uint8_t *mode, uint64_t *cur_privs, uint64_t *perm_privs);
 
-/* Set/clear privileges. Returns previous privilege mask in *prev */
+/* Set/clear privileges. Returns previous privilege mask in *prev
+ * OVMX-UNWIRED: vms_kif_setprv (vms-pv1) -- $SETPRV does not reach here yet */
 uint32_t vms_kif_setprv(uint64_t mask, int enable, int permanent, uint64_t *prev);
 
-/* Check if privileges are held. Returns SS$_NORMAL or SS$_NOPRIV */
+/* Check if privileges are held. Returns SS$_NORMAL or SS$_NOPRIV
+ * OVMX-UNWIRED: vms_kif_chkpriv (vms-pv1) -- no privilege check in OVMX asks
+ * the executive, which is why any process can still claim any privilege */
 uint32_t vms_kif_chkpriv(uint64_t mask);
 
 /* ================================================================
  * AST Delivery (3b)
+ *
+ * THE WHOLE FAMILY IS UNWIRED (vms-as1): src/vmsprocess delivers ASTs
+ * per-process, so an AST declared in one process is unknown to every other.
  * ================================================================ */
 
-/* Declare AST at specified access mode */
+/* Declare AST at specified access mode
+ * OVMX-UNWIRED: vms_kif_dclast (vms-as1) */
 uint32_t vms_kif_dclast(uint64_t astadr, uint64_t astprm, uint8_t acmode);
 
-/* Enable/disable AST delivery. Returns SS$_WASSET or SS$_WASCLR */
+/* Enable/disable AST delivery. Returns SS$_WASSET or SS$_WASCLR
+ * OVMX-UNWIRED: vms_kif_setast (vms-as1) */
 uint32_t vms_kif_setast(int enable);
 
-/* Deliver next pending AST. Returns 0 if AST delivered, -1 if none */
+/* Deliver next pending AST. Returns 0 if AST delivered, -1 if none
+ * OVMX-UNWIRED: vms_kif_deliverast (vms-as1) */
 int vms_kif_deliverast(uint64_t *astadr, uint64_t *astprm, uint8_t *acmode);
 
 /* ================================================================
  * Event Flags (3c)
+ *
+ * THE WHOLE FAMILY IS UNWIRED (vms-2a8): src/libvms/syssvc/sys_event.c
+ * never calls the executive, and sys$ascefc fabricated SS$_NORMAL from a
+ * TODO -- in its own public-API suite the only two assertions that passed
+ * were the two fabricated successes. That is the census's founding example.
  * ================================================================ */
 
-/* Set event flag. Returns SS$_WASSET or SS$_WASCLR */
+/* Set event flag. Returns SS$_WASSET or SS$_WASCLR
+ * OVMX-UNWIRED: vms_kif_setef (vms-2a8) */
 uint32_t vms_kif_setef(uint32_t efn);
 
-/* Clear event flag. Returns SS$_WASSET or SS$_WASCLR */
+/* Clear event flag. Returns SS$_WASSET or SS$_WASCLR
+ * OVMX-UNWIRED: vms_kif_clref (vms-2a8) */
 uint32_t vms_kif_clref(uint32_t efn);
 
-/* Wait for single event flag */
+/* Wait for single event flag
+ * OVMX-UNWIRED: vms_kif_waitfr (vms-2a8) */
 uint32_t vms_kif_waitfr(uint32_t efn);
 
-/* Wait for any flag in mask (OR wait) */
+/* Wait for any flag in mask (OR wait)
+ * OVMX-UNWIRED: vms_kif_wflor (vms-2a8) */
 uint32_t vms_kif_wflor(uint32_t efn, uint32_t mask);
 
-/* Wait for all flags in mask (AND wait) */
+/* Wait for all flags in mask (AND wait)
+ * OVMX-UNWIRED: vms_kif_wfland (vms-2a8) */
 uint32_t vms_kif_wfland(uint32_t efn, uint32_t mask);
 
-/* Read event flag cluster state */
+/* Read event flag cluster state
+ * OVMX-UNWIRED: vms_kif_readef (vms-2a8) */
 uint32_t vms_kif_readef(uint32_t efn, uint32_t *state);
 
-/* Associate with common event flag cluster */
+/* Associate with common event flag cluster
+ * OVMX-UNWIRED: vms_kif_ascefc (vms-ef1) -- the item that makes two OVMX
+ * processes share one cluster is what gives this a caller */
 uint32_t vms_kif_ascefc(uint32_t efn, const char *name, uint32_t prot, uint32_t perm);
 
-/* Disassociate from common event flag cluster */
+/* Disassociate from common event flag cluster
+ * OVMX-UNWIRED: vms_kif_dacefc (vms-ef1) */
 uint32_t vms_kif_dacefc(uint32_t efn);
 
 /* ================================================================
@@ -157,7 +211,11 @@ uint32_t vms_kif_deq(uint32_t lkid, uint8_t *valblk, uint32_t flags);
 uint32_t vms_kif_convert(uint32_t lkid, uint32_t lkmode, uint32_t flags,
                           uint64_t blkastadr, uint8_t *valblk);
 
-/* Get lock information */
+/* Get lock information
+ * OVMX-UNWIRED: vms_kif_getlki (vms-a86) -- there is no sys$getlki in
+ * src/libvms at all: lckdef.h and lkidef.h name the service and define its
+ * LKI$_ item codes, but nothing implements it, so the kernel handler, the
+ * ioctl and this wrapper serve a system service that does not exist. */
 uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
                           uint32_t *requested_mode, char *resnam,
                           uint8_t *valblk);
@@ -170,41 +228,55 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
  * on the node sees, and a characteristic set here is seen by every
  * process on the node -- which is the whole difference between a VMS
  * device and a private notion of one.
+ *
+ * THE WHOLE FAMILY IS UNWIRED. The kernel device table, these wrappers and
+ * their QEMU suite were merged with no product reader: SHOW DEVICE still
+ * prints the host Linux mount table and src/vmsdcl/dcl_cmd_show.c carries a
+ * COMMENT saying the conversion is future work. A comment is not a caller --
+ * that is exactly what this census exists to say out loud.
  * ================================================================ */
 
 /* $ASSIGN a channel to a device by name. SS$_NOSUCHDEV if the
  * executive has no such device; SS$_IVDEVNAM if the name is not a
- * device name at all. */
+ * device name at all.
+ * OVMX-UNWIRED: vms_kif_assign (vms-dv1) */
 uint32_t vms_kif_assign(const char *devnam, uint32_t *chan);
 
-/* $DASSGN the channel. SS$_IVCHAN if it is not one of ours. */
+/* $DASSGN the channel. SS$_IVCHAN if it is not one of ours.
+ * OVMX-UNWIRED: vms_kif_dassgn (vms-dv1) */
 uint32_t vms_kif_dassgn(uint32_t chan);
 
 /* $ALLOC the device to this process -- this, and not $ASSIGN, is what
  * makes a process the device's owner. SS$_DEVALLOC when it is already
  * allocated to another process or another process holds channels to
- * it; SS$_NOSUCHDEV when there is no such device. */
+ * it; SS$_NOSUCHDEV when there is no such device.
+ * OVMX-UNWIRED: vms_kif_alloc (vms-dv1) */
 uint32_t vms_kif_alloc(const char *devnam);
 
 /* $DALLOC the device. SS$_DEVNOTALLOC if this process does not have it
- * allocated. */
+ * allocated.
+ * OVMX-UNWIRED: vms_kif_dalloc (vms-dv1) */
 uint32_t vms_kif_dalloc(const char *devnam);
 
-/* Read a device row by name. SS$_NOSUCHDEV if there is no such device. */
+/* Read a device row by name. SS$_NOSUCHDEV if there is no such device.
+ * OVMX-UNWIRED: vms_kif_getdvi_devnam (vms-fb9) */
 uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info);
 
 /* Read the device row behind an assigned channel. SS$_IVCHAN if the
- * channel is not ours. */
+ * channel is not ours.
+ * OVMX-UNWIRED: vms_kif_getdvi_chan (vms-fb9) */
 uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo *info);
 
 /* Enumerate the device table. Pass *index = 0 for the first row; each
  * call fills info and advances *index. Returns SS$_NOMOREDEV when the
- * scan is exhausted. */
+ * scan is exhausted.
+ * OVMX-UNWIRED: vms_kif_devscan (vms-fb9) -- SHOW DEVICE is the reader */
 uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info);
 
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
- * if the caller holds no such channel. */
+ * if the caller holds no such channel.
+ * OVMX-UNWIRED: vms_kif_ttsetmode (vms-fb9) -- SET TERMINAL is the writer */
 uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
                            uint64_t setchar, uint64_t clrchar,
                            uint32_t width, uint32_t page);

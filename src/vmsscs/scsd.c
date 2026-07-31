@@ -304,6 +304,10 @@ enum join_step {
  * after START, on a per-node ~1 s scan phase -- so this is a timer, not an
  * event hook. 1000 ms sits inside the observed band. */
 #define JOIN_MEMBER_GREET_MS 1000u
+/* vms-e81: minimum quiet gap before a non-ack START counts as a RE-START rather
+ * than the ordinary round-1 of a handshake in progress. VAX3's re-STARTs were
+ * ~5 s apart; the normal round-0/round-1 pair is back-to-back (sub-millisecond). */
+#define START_RESTART_GAP_MS 4000u
 /* vms-760: cap on how long we hold the deferred op 0x02 waiting for a peer we
  * have a channel to but no config from. Beyond this we proceed with whoever has
  * configured, rather than let one silent peer block the join indefinitely. */
@@ -382,6 +386,11 @@ struct peer_state {
     int      barrier_step;         /* current step N, 1..12; 0 = barrier not running */
     int      barrier_done;         /* our OWN admission finished (record, NOT a gate) */
     unsigned barrier_count;        /* transitions completed; #1 = our join, 2+ = bystander */
+    long     last_start_ms;        /* vms-e81: monotonic_ms() of the last 0x41 START
+                                    * we processed from this peer -- a genuine
+                                    * re-START is separated by a QUIET GAP, not by
+                                    * its round number (rounds 0 and 1 are both
+                                    * non-ack and arrive back-to-back). */
     long     greet_due_ms;         /* vms-e81: when to open OUR client half to a
                                     * newcomer. The control shows a real member
                                     * acts on a ~1 s periodic scan after START
@@ -2850,7 +2859,22 @@ int main(int argc, char **argv)
              * spec 4i.A grounds that an established peer's round-0 START
              * legitimately carries a large residual send_seq (10 here, 11974 in
              * the reference). */
-            if (!sv.is_ack && ps->start_replied) {
+            /* REGRESSION GUARD, learned the hard way one run later: the normal
+             * handshake is MULTI-ROUND. VMS sends round-0 and round-1 START
+             * back-to-back and BOTH are non-ack, so 'non-ack START from a peer
+             * we have already replied to' matches the ordinary second round.
+             * The first version of this check fired on it, wiped the session,
+             * and looped -- 2883 'restarts' in one run and OVMX never completed
+             * even its own join. A repair that fires during normal operation is
+             * worse than the fault it repairs.
+             *
+             * A genuine restart is distinguished by TIME, not by round: the peer
+             * has been quiet on this channel, decided it was dead, and begun
+             * again. Require the handshake to have fully completed (start_acked)
+             * and a quiet gap since the last START we processed. */
+            long start_now_ms = monotonic_ms();
+            if (!sv.is_ack && ps->start_acked &&
+                (start_now_ms - ps->last_start_ms) >= (long)START_RESTART_GAP_MS) {
                 log_ts(stdout);
                 printf(" SCSD-I-RESTART, peer re-STARTed an established channel"
                        " (peer_seq=%u) -- resetting this peer's session and"
@@ -2872,6 +2896,7 @@ int main(int argc, char **argv)
                 ps->join_step = JS_IDLE; ps->js_retx = 0;
                 ps->greet_due_ms = 0;
             }
+            ps->last_start_ms = start_now_ms;
             if (!ps->vc.initialized) {
                 scs_vc_init(&ps->vc);
             }

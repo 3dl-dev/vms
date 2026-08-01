@@ -53,12 +53,12 @@
 #     A-writes/B-reads proof, not a source scan. Do not quote this gate as
 #     evidence that a service is fully wired.
 #   - It does NOT police the RTL. lib$, str$, mth$, ots$ and dsc$ routines are
-#     userspace in OVMX and are not candidates for executive residency here --
-#     they are not system services and
-#     are not candidates for executive residency, so they are outside the
-#     universe entirely. That is why adding pure computation to the tree does
-#     not redden this gate; the negative controls prove it rather than assert
-#     it.
+#     userspace in OVMX and are not candidates for executive residency here, so
+#     they are outside the universe entirely. That is why adding pure
+#     computation to the tree does not redden this gate -- and why the negative
+#     controls prove that with a green control instead of asserting it, twice:
+#     once with a pure routine and once with a STATEFUL one, so the first
+#     cannot be passing merely for want of state.
 #
 # THE UNIVERSE, AND WHY IT IS A UNION.
 #
@@ -355,8 +355,6 @@ awk -F'\t' \
     -v declf="$WORK/decl_ok" \
     -v protof="$WORK/protos" \
     -v out_universe="$WORK/universe" \
-    -v out_exec="$WORK/execset" \
-    -v out_state="$WORK/stateset" \
     -v out_err="$WORK/errors" \
     -v out_table="$WORK/table" '
 $1 == "D" {
@@ -382,6 +380,9 @@ $1 == "R" {
 END {
     while ((getline l < protof) > 0) {
         split(l, p, "\t")
+        # length(array) is a gawk extension; mawk is the default awk on the
+        # Ubuntu runner and would die on it. Count as we read instead.
+        if (p[1] == "P" && !(p[3] in protoname)) { nproto++ }
         if (p[1] == "P") { protoname[p[3]] = 1; protofile[p[3]] = p[2] }
     }
     close(protof)
@@ -485,7 +486,7 @@ END {
                universe[nm] > out_table
     }
     printf "universe %d\nexec %d\nstate %d\nexec+state %d\ndeclared %d\nprotos %d\nerrors %d\n",
-           nuni, nexec, nstate, nmix, ndecl, length(protoname), nerr > out_universe
+           nuni, nexec, nstate, nmix, ndecl, nproto, nerr > out_universe
 }' "$WORK/facts"
 
 # --------------------------------------------------------------- reporting --

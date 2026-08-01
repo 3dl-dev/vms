@@ -7,13 +7,18 @@
  *
  * vms-72c's claim is that SHOW USERS reads the executive's process table
  * instead of fabricating a row from the calling process's own DCL context and
- * getpid(). Before this suite, every proof of that claim was SINGLE-PROCESS:
+ * getpid(). Before this suite, the tests that assert anything about SHOW
+ * USERS were these, and both are SINGLE-PROCESS:
  *
  *   tests/dcl/test_show_users_terminal.sh  no executive at all -- asserts only
  *                                          that NO row is printed.
  *   tests/uat/vms_session_qemu.sh          one logged-in console session
  *                                          asserting its OWN pid and
  *                                          "Total number of users = 1".
+ *
+ * (tests/uat/vms_session_test.sh runs the command too, but its checks are
+ * whole-transcript greps for 'SYSTEM' and a Unix-leak blacklist, so nothing in
+ * it is an assertion about the table SHOW USERS printed.)
  *
  * A SHOW USERS that could only ever see its own process passes both of those
  * perfectly -- which is the exact facade shape CLAUDE.md Rule 11 names, and

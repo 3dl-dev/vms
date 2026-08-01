@@ -181,16 +181,8 @@ static void proc_fill_info(const struct vms_proc *proc,
     memcpy(info->prcnam, proc->prcnam, VMS_PRCNAM_SIZE);
     info->prcnam[VMS_PRCNAM_SIZE - 1] = '\0';
 
-    if (!full) {
-        /*
-         * Say so in the row. A reader must not have to deduce
-         * "withheld" from a zero it cannot distinguish from a real
-         * value -- see the `redacted` comment in vms_ioctl.h for the
-         * fabricated CPU time the first reader printed when it tried.
-         */
-        info->redacted = 1;
+    if (!full)
         return;
-    }
 
     info->linux_pid    = (uint32_t)proc->linux_pid;
     info->uic          = proc->uic;

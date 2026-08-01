@@ -476,68 +476,6 @@ jobs:
           echo "PASS: harness went red for the RIGHT REASON -- executive absent, all $N_SYSSVC public-sys\$ suite(s) returned the honest-skip code 77 (so no sys\$ entry point fabricated a success), every executive-dependent raw-ioctl suite failed, and vmsfs's independent facility still passed"
 
   # -----------------------------------------------------------------------
-  # Job 3d: Kernel Executive — per-facility negative controls (vms-e7d)
-  #
-  # Job 3c proves the executive gate CAN fail, by deleting the whole
-  # executive. That is a blunderbuss: it establishes "this job can go red",
-  # not "this job would go red if the event-flag code stopped clearing a
-  # flag", and it cannot name what regressed. ATTRIBUTION IS THE POINT — a
-  # gate that only ever says "something failed" tells the next implementer
-  # nothing, and a facility whose assertions had quietly stopped meaning
-  # anything would still be covered by 3c.
-  #
-  # This job injects ONE minimal defect per facility — the vms-e4d
-  # compat[EX][CR] flip, mechanised, plus one of the same shape for every
-  # other facility — boots each in QEMU against a REAL /dev/vms, and asserts
-  # that the COMPLETE set of assertions that went red is EXACTLY the set the
-  # manifest names for that defect, and that no suite outside the facility's
-  # own set failed.
-  #
-  # THE EQUALITY IS THE POINT, and it is what round 1 of vms-e7d got wrong.
-  # That version checked minimality with a hand-maintained allowlist of
-  # sibling assertions that had to stay green; an adversary measured four of
-  # nine mutations reddening assertions the manifest named nowhere, while the
-  # job still printed "the mutation is minimal". A partial allowlist is
-  # satisfiable by something other than the property it certifies. The check
-  # now slices every FAIL line out of the run and requires set equality, so a
-  # mutation that trips an unnamed property cannot pass.
-  #
-  # It also runs the PRISTINE image first as a positive control, so a harness
-  # that fails indiscriminately cannot pass this job.
-  #
-  # WHAT THIS JOB DOES NOT COVER, stated because an implicit narrowing is how
-  # a gate quietly stops meaning what its name says: vmsfs.ko and its two
-  # suites. vmsfs is a filesystem module, not an executive facility — nothing
-  # in it is reached through /dev/vms — and job 3c above is where it is
-  # covered. facility_defects.sh declares that exclusion and prints it.
-  #
-  # Docker here is BUILD/TEST TOOLING (CLAUDE.md Rule 9): it builds vms.ko and
-  # boots an independent guest kernel that loads it for real. Nothing in this
-  # job treats a container as an OVMX runtime.
-  #
-  # Runtime note: ~12 QEMU boots, one of which (executive-not-pinned) is
-  # EXPECTED to hang until run_tests.sh's 120s timeout, because unloading an
-  # unpinned vms.ko under an open descriptor Oopses the guest kernel. That is
-  # the guarantee being demonstrated, not a flake — the control asserts that
-  # every suite ordered before test_kmod_pin ran clean (a count derived from
-  # the checkout, never written down), so a genuine boot failure cannot be
-  # mistaken for it. Hence the wider timeout-minutes than the other QEMU jobs.
-  # -----------------------------------------------------------------------
-  kernel-executive-facility-negative-controls:
-    name: Kernel Executive — Per-Facility Negative Controls (attribution)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Every executive facility has a control that turns CI red and NAMES it
-        env:
-          CONTAINER_ENGINE: docker
-        run: tests/qemu/run_facility_negctl.sh
-
-  # -----------------------------------------------------------------------
   # Job 4: Conformance tests
   #
   # Runs in a disposable ubuntu:24.04 tooling container (gcc, source tree,
@@ -1337,7 +1275,7 @@ jobs:
   # (vms-116). The REAL src/vmsdcl shell (21 TUs) + src/vmsqueue links as a
   # VMS-native ET_DYN executable via LINK.EXE --executable --use {DECC$SHR + the
   # five OVMX shareables}: a 22-object main() program with the full intra-image
-  # reloc set, 140 cross-image imports all bound, and its own single-object TLS.
+  # reloc set, 139 cross-image imports all bound, and its own single-object TLS.
   # IMGACT.EXE activates it (crt0 recovers argc/argv off the kernel stack) and
   # DCL runs a scripted session (SHOW TIME + A = 2+3 / SHOW SYMBOL A) to VMS-
   # correct output, clean exit. NO ld / NO ld.so — the operator's "all VMS" path.

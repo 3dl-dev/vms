@@ -35,7 +35,8 @@ Nothing is left running.
 | bystander of a **removal** (class `0x03`) | **PASSES on today's binary** | `rm2` |
 | bystander of a **departure** (class `0x04`) | **NOT YET PRODUCED** | `dep1`–`dep10` |
 | barrier when the removed node is *our* barrier peer | **FAILS — new finding** | `dep6` |
-| REJOIN after removal, same identity | **FAILS — new finding, `vms-2f3`** | `cyc1` |
+| REJOIN after removal, same identity | **FAILS — mechanism found, `vms-2f3`** | `cyc1`, `cyc2` |
+| quorum loss (kill the only voter) | **ANSWERED — no reconfiguration at all, `vms-2d6`** | `q1` |
 
 ## 1. What landed in the code (commit `7254056`, all 41 tests green)
 
@@ -236,32 +237,82 @@ Filed as **`vms-2f3`** (P1), which blocks `vms-584`.
 restarting, so this is a T1-level hole, and it would hit a real deployment on the
 first restart.
 
+## 4c. The last two runs — quorum answered, and the rejoin mechanism found
+
+**`q1` — kill the only voting node. ANSWERED, and the answer is "nothing
+happens".** Grounded pre-flight: SDA reads `Quorum/Votes 1/1`, VAX2 and VAX3 are
+`VOTES=0`, so VAX1 is the only voter and killing it *guarantees* quorum loss.
+After the kill: **no class-`0x03` removal of VAX1 was ever proposed by anyone**
+(OVMX saw `0x02:1 0x03:0 0x04:0`), and VAX2's and VAX3's consoles carry **no
+post-kill CNXMAN traffic at all** — not even a `lost connection`. Compare `rm1`/
+`rm2`, where losing a *non-voting* node produces the full
+`lost connection → timed-out → proposing → removed → completing` chain in ~37 s.
+Zero bugchecks; the watchdog never tripped.
+
+**The consequence that matters: quorum loss gates the RECONFIGURATION ITSELF.** A
+member cannot be removed while quorum is lost, so OVMX's silence in that window
+is *correct*, not merely lucky — there is no transition to participate in. OVMX
+also declined 4 ungrounded requests (`cat 0x02 op 0x01`) rather than inventing a
+reply, which is the allowlist doctrine working on the exact path that has
+bugchecked real VAXes twice. Filed as **`vms-2d6`**. New surface named there:
+`cat 0x02 op 0x01` is a DLM request a member sends that we have never grounded.
+
+**`vms-2f3` — the rejoin. Two hypotheses killed, then SDA answered it.**
+
+- **Incarnation: REFUTED.** OVMX *does* bump the counter (`01 00` → `02 00`
+  across all 9 STARTs of each cycle), so the §4(i).B gate is satisfied. A
+  byte-diff of the deferred `op 0x02`, the fan-out burst and the CONNECT-REQUEST
+  against the *successful* cycle, to the same peer, shows **every byte from
+  abs 72 onward — the whole SYSAP body — identical**. OVMX sends correct content.
+- **Time-bounded quarantine: REFUTED.** `cyc2` waited 420 s instead of 10 s
+  between the kill and the rejoin. Still refused.
+- **MECHANISM, directly observed.** `ANALYZE/SYSTEM` → `SHOW CLUSTER` on VAX1,
+  taken live while the refusal was happening:
+
+```
+87A06040  OVMXC2  00000000    0     wait    long_break
+878F2380  VAX1    00010001    1     local   member,qf_same,qf_noaccess
+CLUB flags: 11080001 cluster,init,qf_failed_node,quorum
+```
+
+  The peers hold a **CSB for the dead incarnation in state `wait`, status
+  `long_break`**, and the cluster block carries `qf_failed_node`. And the rejoin
+  is **not ignored — it is ABORTED**: VAX3's console logs `timed-out lost
+  connection to node OVMXC2` immediately followed by **`aborted VAXcluster state
+  transition`**. A transition *is* proposed for our rejoin and then abandoned.
+
+  So this is neither an encoding bug nor a timing bug in anything OVMX sends. The
+  question is now specific: **what retires a `long_break` CSB, and what must a
+  returning node present so that CSB is reused rather than collided with?** A real
+  VAX reboots and rejoins routinely, so a mechanism exists and we do not have it.
+
+> **Method note worth keeping: SDA on a real member answered in one query what
+> two capture analyses could not.** Passive capture can show what a peer did; it
+> cannot show what a peer *declined* to do. When a peer goes quiet, ask it.
+
 ## 5. ⚠ WHERE TO START NEXT SESSION
 
 Nothing is running and nothing is half-finished. Tree clean, 41/41 tests green,
 three commits landed. Take these in order:
 
-1. **`vms-2f3` — OVMX cannot rejoin.** Highest value, cheapest next step, and the
-   experiment is already written. Two hypotheses, both testable in one lab cycle:
-   - **Incarnation (prime).** Spec §4(i).B names the joiner-side incarnation
-     counter at `[22:24]` as **THE GATE** on admission. A peer still holding a CSB
-     for the previous incarnation of `OVMXCY` may require a value that differs
-     from the one it cached, and OVMX likely replays the same value every start.
-     **Cheap discriminator:** re-run `cycle.sh` giving cycle 2 a *different*
-     `SCSSYSTEMID`. If that rejoins, the gate is identity-scoped peer state and
-     the fix is our incarnation handling, not the join sequence.
-   - **Too soon.** `cycle.sh` waits ~15 s after the removal settles. Try a
-     60–120 s gap and see whether it rejoins on its own.
+1. **`vms-2f3` — OVMX cannot rejoin.** Highest value. Both easy hypotheses are
+   already dead (§4c); the mechanism is a peer-side `long_break` CSB. Next steps,
+   cheapest first:
+   - **Rejoin under a DIFFERENT `SCSSYSTEMID`** and confirm it *is* admitted.
+     One cycle, and it isolates the collision to the identity rather than to
+     anything else about our restart.
+   - **Poll the `long_break` CSB** with repeated `SHOW CLUSTER` after a kill: does
+     it ever retire on its own, and after how long? `RECNXINTERVAL` is the obvious
+     candidate and is a documented SYSGEN parameter we can read and vary.
+   - Only then ask what a real rebooting VAX presents that we do not.
+   **Do not spend more effort on passive captures for this** — SDA answered in one
+   query what two capture analyses could not.
 2. **`vms-c7d`, now with a live reproducer** (§3). Removing OVMX's own barrier
    peer stalls it at step 6/12 (`dep6`), while removing a third node completes
    12/12 (`rm2`). Genuine T1 hole, cheap to reproduce.
-3. **The quorum experiment** (`tools/quorum.sh`, written and **unrun**). Grounded
-   pre-flight: **quorum is 1 and VAX1 is the only voter**, so killing it
-   *guarantees* quorum loss — the survivors are documented to block all process
-   and I/O activity and wait, recoverable without a reboot. The script reads
-   OVMX's log and VAX2/VAX3's consoles rather than VAX1's, treats a hung DCL as a
-   *result*, and trips its watchdog only on bugcheck evidence from a real VAX.
-   It depended on §4.1, which is now fixed.
+3. **`vms-2d6` — ground `cat 0x02 op 0x01`**, the DLM request the quorum run
+   showed a member sending and OVMX correctly declining. Silence is the right
+   default, so this is not urgent; it is named so it is not rediscovered.
 4. **`vms-416` — make some node shut down cleanly**, which is the only way the
    class-`0x04` evidence ever gets produced. Ideas are in the item: find what
    SHUTDOWN is waiting on (`SHOW SYSTEM` on the departing node from VAX1), try

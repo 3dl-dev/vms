@@ -1345,101 +1345,33 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
         snprintf(result, result_size, "%08X", (unsigned)getpid());
     } else if (strcmp(s, "MODE") == 0) {
         return lex_mode(ctx, NULL, result, result_size);
-    } else if (strcmp(s, "CURPRIV") == 0 || strcmp(s, "AUTHPRIV") == 0) {
+    } else if (strcmp(s, "CURPRIV") == 0) {
         /*
-         * ADDED vms-2b8 round 4 (CURPRIV only, and as a DECIMAL INTEGER);
-         * CORRECTED round 5 to a privilege-NAME string, and AUTHPRIV
-         * added alongside it. Before round 4, CURPRIV fell into the
-         * `else` branch below and silently returned "0" -- the
-         * illegal-third-answer shape: neither matching VMS nor hiding
-         * the item, just a plausible-looking zero.
-         *
-         * FORMAT PINNED TO PUBLIC DOCUMENTATION (round 5; round 4's
-         * commit carries no citation for the decimal-integer format it
-         * chose, and it was wrong): the HP/VSI OpenVMS DCL Dictionary entry for
-         * F$GETJPI documents CURPRIV and AUTHPRIV as returning a String,
-         * and the VSI OpenVMS Wiki's F$GETJPI page shows a live example
-         * of that string --
-         *   "CMKRNL,CMEXEC,SYSNAM,GRPNAM,ALLSPOOL,DETACH,DIAGNOSE,...,
-         *    SECURITY"
-         * -- a comma-separated list of privilege names in ASCENDING BIT
-         * POSITION (CMKRNL bit 0, CMEXEC bit 1, ... SETPRV bit 14,
-         * TMPMBX bit 15, WORLD bit 16, ...), NOT alphabetical -- the
-         * order dcl_cmd_show.c's SHOW PROCESS/PRIVILEGES table uses is a
-         * different VMS display convention for a different command, and
-         * copying it here would silently reproduce the wrong one. Two
-         * independent public sources (digiater.nl's mirror of the DCL
-         * Dictionary for the data type; the VSI Wiki for the format),
-         * neither derived from the other or from this tree.
-         *
-         * Reads the same live executive source as SHOW PROCESS/
-         * PRIVILEGES and F$PRIVILEGE (vms_kif_getjpi_self(), masked to
-         * VMS_PRV_M_ENFORCED -- see enforced_priv_names[] below for why
-         * only 4 of the 37 real VMS names can ever appear here). CURPRIV
-         * reads cur_privs, AUTHPRIV reads perm_privs (the "authorized"
-         * mask SHOW PROCESS/PRIVILEGES's own Authorized: block reads) --
-         * two different executive fields, not one value under two names.
-         * VMS_IOCTL_SETIDENT sets them equal (vms_proctab.c: cur_privs =
-         * perm_privs = args.authorized_privs) and nothing DCL can reach
-         * moves them apart again -- $SETPRV is the operation that would
-         * (VMS lets CURPRIV differ from AUTHPRIV precisely by disabling
-         * an authorized privilege), and vms_kif_setprv() has no product
-         * caller (OVMX-UNWIRED in vms_kif.h, pending vms-pv1). That is a
-         * statement about which CALLERS exist today, not an invariant of
-         * the kernel module: VMS_IOCTL_SETPRV itself is real and already
-         * exercised directly by tests/qemu/test_kmod_access.c, so a
-         * caller that reached it WOULD diverge cur_privs from
-         * perm_privs -- DCL is simply not such a caller yet.
-         *
-         * NOT CLAIMED: that this string is never empty. A process
-         * registered without CAP_SYS_ADMIN gets perm_privs = cur_privs =
-         * 0 at vms_proc_register() (src/kernel/vms_module.c) -- nothing
-         * in the enforced set, so both items would legitimately render
-         * as "". No session on the current UAT harness reaches that
-         * state (there is no credential-drop path into an interactive
-         * DCL session yet -- vms-475), so it is not exercised here; it
-         * is a consequence of the code this comment does not need to
-         * re-derive by mutation to state honestly.
-         *
-         * Like the other items in this function (USERNAME, PRCNAM, PID,
-         * MODE), the pid argument is parsed but not honored -- this
-         * answers only for the calling process, consistent with every
-         * existing item here, not a new restriction.
+         * ADDED vms-2b8 round 4, MEASURED not assumed. Before this, CURPRIV
+         * fell into the `else` branch below and silently returned "0" --
+         * indistinguishable from "the executive says this process holds no
+         * privileges", which is false for every session on this runtime
+         * (SYSTEM's enforced mask is CMEXEC|CMKRNL|SETPRV|WORLD, never
+         * empty). That is the illegal-third-answer shape: neither matching
+         * VMS (a real quadword mask) nor hiding the item (an honest
+         * "unimplemented" refusal), just a plausible-looking zero. Reads
+         * the same live executive source as SHOW PROCESS/PRIVILEGES and
+         * F$PRIVILEGE (vms_kif_getjpi_self(), masked to
+         * VMS_PRV_M_ENFORCED), so the three cannot disagree by
+         * construction. Like the other items in this function (USERNAME,
+         * PRCNAM, PID, MODE), the pid argument is parsed but not honored --
+         * this answers only for the calling process, consistent with
+         * every existing item here, not a new restriction.
          */
-        static const struct {
-            const char *name;
-            uint64_t    bit;
-        } enforced_priv_names[] = {
-            /* Ascending bit position, matching the oracle's CURPRIV
-             * example order (see comment above) -- NOT the alphabetical
-             * order dcl_cmd_show.c uses for SHOW PROCESS/PRIVILEGES.
-             * Deliberately only the 4 names in VMS_PRV_M_ENFORCED
-             * (src/kernel/vms_ioctl.h): a name masked out of every
-             * reporting surface must not appear in this one either. */
-            { "CMKRNL", PRV$M_CMKRNL },
-            { "CMEXEC", PRV$M_CMEXEC },
-            { "SETPRV", PRV$M_SETPRV },
-            { "WORLD",  PRV$M_WORLD  },
-        };
-
         struct vms_procinfo info;
         memset(&info, 0, sizeof(info));
         uint32_t jst = vms_kif_getjpi_self(&info);
-        result[0] = '\0';
-        if (jst & 1) {
-            uint64_t raw = (strcmp(s, "CURPRIV") == 0) ? info.cur_privs
-                                                         : info.perm_privs;
-            uint64_t enforced = raw & VMS_PRV_M_ENFORCED;
-            size_t rl = 0;
-            for (size_t i = 0;
-                 i < sizeof(enforced_priv_names) / sizeof(enforced_priv_names[0]);
-                 i++) {
-                if (!(enforced & enforced_priv_names[i].bit))
-                    continue;
-                rl += (size_t)snprintf(result + rl, result_size - rl,
-                                       "%s%s", rl ? "," : "",
-                                       enforced_priv_names[i].name);
-            }
+        if (!(jst & 1)) {
+            strncpy(result, "0", result_size - 1);
+        } else {
+            uint64_t enforced = info.cur_privs & VMS_PRV_M_ENFORCED;
+            snprintf(result, result_size, "%llu",
+                     (unsigned long long)enforced);
         }
     } else {
         strncpy(result, "0", result_size - 1);

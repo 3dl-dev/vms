@@ -81,6 +81,34 @@
 # can reach it:
 #   bind-client-no-register  the vms-9fc defect itself (kif_bind() not calling
 #                            vms_kif_register()).
+#   kif-setmode-always-kernel        vms_kif_setmode() marshalling the
+#                            caller's requested mode as a fixed PSL_C_KERNEL
+#                            (0) instead of forwarding it, so a caller asking
+#                            to DROP to USER has the ioctl sent asking for
+#                            KERNEL instead, and is told SS$_NORMAL (vms-0e4).
+#                            The KERNEL-direction sibling assertion ("... and
+#                            the mode really changed") already re-reads
+#                            VMS_IOCTL_GETMODE instead of trusting
+#                            vms_kif_setmode()'s returned SS$ status; MEASURED
+#                            (see require_fail's knock_on_why below): this
+#                            defect reddens exactly one assertion in
+#                            test_kmod_access.c, the USER-direction one
+#                            vms-0e4 added to match it.
+#   getmode-buffer-not-written       vms_ioctl_getmode() returning success
+#                            without ever writing the caller's buffer (a
+#                            no-op-that-reports-success, the same shape as
+#                            kif-setmode-always-kernel one layer down). Found
+#                            auditing kif-setmode-always-kernel's own sibling
+#                            assertion (vms-0e4 round 2): "... and the mode
+#                            really changed" checks gm.mode == PSL_C_KERNEL
+#                            without checking the ioctl's C return value, and
+#                            PSL_C_KERNEL is 0 -- numerically identical to the
+#                            test's own memset(0) default -- so a GETMODE that
+#                            wrote nothing at all still read as "KERNEL" and
+#                            passed. Fixed by checking the ioctl's return
+#                            value at every VMS_IOCTL_GETMODE call site in
+#                            test_kmod_access.c, not only the one this
+#                            mutation targets.
 #   creprc-handshake-eintr   $CREPRC's report pipe read not retried on EINTR,
 #                            so a signal caught by the CALLER decided what the
 #                            service reported about the CHILD (vms-8019).
@@ -169,6 +197,8 @@
 set -u
 
 DEFECTS="access-mode-escalation
+kif-setmode-always-kernel
+getmode-buffer-not-written
 ast-setast-disable
 eflag-clref-noop
 eflag-waitfr-eintr-normal
@@ -314,6 +344,83 @@ mode-derived authority. The equality check caught the change on the first run
 after the rebase and named both extras with their suite; the previous
 allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
+EOF
+                      ;;
+        esac;;
+
+    kif-setmode-always-kernel)
+        case "$_f" in
+        facility)     echo "access-mode marshalling in libvmssys (vms_kif_setmode, src/libvmssys/vms_kif.c) -- OVMX-UNWIRED (vms-pv1): this wrapper has NO product caller today, only this test suite";;
+        targets)      echo "libvmssys/vms_kif.c";;
+        suites_red)   echo "test_kmod_access";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_kif_setmode() writes args.mode as a fixed PSL_C_KERNEL (0) instead of the caller's requested mode, so a caller asking to drop to USER has the ioctl sent asking for KERNEL instead -- and it still reports SS\$_NORMAL, because a process already in KERNEL mode staying in KERNEL mode is unremarkable to the executive.";;
+        require_fail) echo "... and the mode really returned to USER";;
+        knock_on_fail) echo "";;
+        knock_on_why) cat <<'EOF'
+KNOWN NEGATIVE: this mutation is NOT a blunderbuss on top of
+access-mode-escalation even though both touch VMS_IOCTL_SETMODE. It forces
+args.mode to PSL_C_KERNEL (0) UNCONDITIONALLY, so the parent's first setmode
+call (already requesting PSL_C_KERNEL) is byte-for-byte unaffected -- "KERNEL
+mode ALLOWED with CMKRNL" and "... and the mode really changed" both stay
+green. The unprivileged child's escalation attempt (also requesting
+PSL_C_KERNEL) is likewise unaffected by this defect, so "KERNEL mode DENIED
+without CMKRNL (SS\$_NOPRIV)" and "... and the mode is still USER after the
+denied escalation" stay green too -- the child never calls setmode(USER), so
+this defect never reaches it. Only the parent's PSL_C_USER request is
+silently rewritten to PSL_C_KERNEL, and only "... and the mode really
+returned to USER" -- the GETMODE re-read added for vms-0e4 -- can see that
+the mode never moved; "returning to USER mode is always allowed" (the
+vms_kif_setmode() return-status check) cannot, because the callee reports
+SS$_NORMAL either way. The knock_on_fail set for THIS defect is MEASURED
+EMPTY: a run with this defect injected produces exactly one FAIL line in
+test_kmod_access, confirming the mutation is already as fine as it can be.
+EOF
+                      ;;
+        esac;;
+
+    getmode-buffer-not-written)
+        case "$_f" in
+        facility)     echo "access modes and privileges (VMS_IOCTL_SETMODE/GETMODE/SETPRV/CHKPRIV)";;
+        targets)      echo "kernel/vms_access.c";;
+        suites_red)   echo "test_kmod_access test_kmod_bind";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_getmode() returns before ever calling copy_to_user(), so the ioctl succeeds from the kernel's side (return 0) but the caller's struct vms_getmode_args is left exactly as the caller supplied it -- every call site memset()s that buffer to 0 first, and 0 is PSL_C_KERNEL, so a GETMODE that wrote nothing at all reads back as a process genuinely in KERNEL mode.";;
+        require_fail) cat <<'EOF'
+a process starts in USER mode
+... and the mode really changed
+... and the mode really returned to USER
+... and the mode is still USER after the denied escalation
+EOF
+                      ;;
+        knock_on_fail) echo "adoption preserved the privilege mask SETIDENT established";;
+        knock_on_why) cat <<'EOF'
+NOT a blunderbuss: this is ONE mutation to the ONE function (vms_ioctl_getmode)
+every one of these five assertions ultimately depends on -- four in
+test_kmod_access.c re-read VMS_IOCTL_GETMODE directly, and test_kmod_bind.c's
+"adoption preserved the privilege mask SETIDENT established" calls
+vms_kif_getmode() (src/libvmssys/vms_kif.c:207/577) to read cur_privs after
+SETIDENT/adoption. vms_kif_getmode()'s KIF_CALL macro returns the mapped
+error status the instant the ioctl fails, BEFORE the `*cur_privs = args.cur_privs`
+assignment runs -- so under this defect the caller's cur/perm variables are
+never updated, and the post-adoption comparison against the pre-adoption
+snapshot mismatches. Same single function, same single fault, one more
+consumer.
+MEASURED (vms-0e4 round 2): before this round's fix, "... and the mode really
+changed" alone did NOT appear in the test_kmod_access set -- it stayed green
+under this exact mutation, because it checked gm.mode == PSL_C_KERNEL (0)
+without checking the ioctl's own return value, and 0 is indistinguishable from
+the memset(0) default a totally silent GETMODE leaves behind. That was the
+audit gap this round closed: the KERNEL-direction sibling test_kmod_access.c's
+USER-direction fix (vms-0e4 round 1) was modelled on had the exact defect the
+round-1 fix was written to catch, just aimed at the ioctl's return value
+instead of the mode's numeric identity with the zeroed default. All four
+GETMODE re-reads in test_kmod_access.c now check the ioctl's return value;
+this defect is the regression control for that.
 EOF
                       ;;
         esac;;
@@ -1981,6 +2088,10 @@ apply_edit() {
     case "$_d" in
     access-mode-escalation)
         sed -i 's|if (!(proc->cur_privs \& PRV_M_CMKRNL)) {|if (0 /* NEGCTL access-mode-escalation */) {|' "$_file";;
+    kif-setmode-always-kernel)
+        sed -i 's|    args.mode = mode;|    args.mode = 0; /* NEGCTL kif-setmode-always-kernel */|' "$_file";;
+    getmode-buffer-not-written)
+        sed -i '/^long vms_ioctl_getmode/,/^}$/ s|if (copy_to_user(|if (1 \|\| copy_to_user(|' "$_file";;
     ast-setast-disable)
         sed -i 's|ast_state->enabled = args.enable ? 1 : 0;|ast_state->enabled = 1; /* NEGCTL ast-setast-disable */|' "$_file";;
     eflag-clref-noop)

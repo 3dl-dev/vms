@@ -134,12 +134,17 @@ struct terminal_device {
  * absent from the whole tree, definition included -- so re-adding it
  * anywhere is what goes red, not re-adding a call in one named file.
  *
- * What remains below is the table's READ and REMOVE halves, which still
- * have callers (SHOW USERS, DCL exit). With nothing left to add an entry
- * they can only ever observe an empty table; converting their callers to
- * the executive process table is vms-8019's scope, not this item's.
+ * What remained below used to be the table's READ and REMOVE halves,
+ * which had callers (SHOW USERS, DCL exit) that could only ever observe
+ * or clear an empty table. SHOW USERS's converted to the executive
+ * process table is vms-72c's, done: vms_term_list() -- the READ half --
+ * is deleted along with it, for the identical reason vms_term_allocate()
+ * above was: a mechanism whose one caller is gone and whose only
+ * possible answer was "nothing" is not kept behind a lint. Only the
+ * REMOVE half, vms_term_deallocate(), remains, because src/vmsdcl/
+ * dcl_main.c still calls it at logout; converting or deleting that
+ * caller is not this item's scope.
  */
 void vms_term_deallocate(const char *device_name);
-void vms_term_list(struct terminal_device *out_devs, int max, int *count);
 
 #endif /* __DCL_TERMINAL_H */

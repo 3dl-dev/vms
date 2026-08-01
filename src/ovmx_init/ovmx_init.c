@@ -1355,15 +1355,52 @@ int main(void)
             (void)vms_kif_assign(OVMX_CONSOLE_DEVICE, &console_chan);
             (void)vms_kif_setterm(console_chan);
 
-            /* Child: exec vms_login */
+            /* Child: exec vms_login (SYS$SYSTEM:LOGINOUT.EXE). */
             execl(loginout_path, "vms_login", (char *)NULL);
-            /* If vms_login not found, exec vmsdcl directly */
-            execl(dcl_path, "vmsdcl", (char *)NULL);
-            /* Both failed — report why (show VMS specs in diagnostics) */
-            fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
+
+            /*
+             * NO DCL FALLBACK (vms-72c). "exec vmsdcl directly" used to
+             * stand here if the LOGINOUT.EXE exec above failed -- an
+             * unauthenticated shell handed to whoever is at the console,
+             * reached by nothing more than a missing or unexecutable
+             * file. That is CLAUDE.md Rule 10's illegal third answer,
+             * named for exactly this shape in this item's own dispatch
+             * text: VMS has no state in which the console driver cannot
+             * run LOGINOUT and responds by starting an interactive
+             * session anyway with no username, no password and no
+             * SYSUAF check. It is also the same defect this item closes
+             * one line earlier for the empty-password-hash SYSUAF
+             * shipped by default (distro/rootfs/.../SYSUAF.DAT) --
+             * a second path to the identical outcome, "session reached
+             * with no real authentication", would have made that fix
+             * partial.
+             *
+             * MADE UNREACHABLE, NOT HANDLED, per Rule 10's other answer:
+             * LOGINOUT.EXE is a required system file, provisioned onto
+             * every system disk by provision_symlinks() (this file,
+             * "install once, boot forever" -- see is_system_installed())
+             * before the login loop below can ever run, so failing to
+             * exec it here is the same class of condition as vms.ko or
+             * /dev/vms being absent (executive_attach(), above) --
+             * OVMX's one runtime does not come up in that state. Unlike
+             * the executive gate, the response here is not to halt the
+             * whole boot: this is a per-login-attempt failure, not a
+             * per-system one, and the outer loop already retries with
+             * backoff (see "consecutive_failures" below) instead of
+             * surrendering the console -- NOT independently oracle-pinned
+             * here as "what VMS's console driver does on an image
+             * activation failure" (the ~/vax lab was unavailable for this
+             * item, mid-use for an unrelated experiment); it is the
+             * behavior this loop already had for every other login
+             * failure before this item touched it, kept unchanged. So the
+             * child reports why (OVMX facility, not a
+             * VMS one -- a Linux exec(2) failure has no VMS analogue,
+             * same reasoning as ovmx_exec_halt above) and exits, and the
+             * loop tries again; what it may not do is substitute an
+             * unauthenticated shell for the login it could not run.
+             */
+            fprintf(stderr, "%%OVMX-E-NOLOGIN, cannot exec %s: %s\n",
                     VMS_LOGINOUT_PATH, strerror(errno));
-            fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
-                    VMS_DCL_PATH, strerror(errno));
             _exit(1);
         } else if (child > 0) {
             /* Parent: wait for login session to end */

@@ -945,10 +945,56 @@ static int cmd_show_process(struct dcl_command *cmd)
 }
 
 /*
- * SHOW USERS - Show logged-in users from the terminal device table.
+ * SHOW USERS - Show logged-in users from the executive process table.
  *
  * Output matches OpenVMS format:
  *   Username     Process Name      PID        Terminal
+ *
+ * ================================================================
+ * A READER OF THE EXECUTIVE PROCESS TABLE (vms-72c, Rule 11 corollary).
+ * ================================================================
+ *
+ * WHAT STOOD HERE was vms_term_list(), a reader of a file-based terminal
+ * allocation table (src/vmsdcl/dcl_terminal.c) whose only WRITER,
+ * vms_term_allocate(), vms-fb9 deleted for being the same self-declared-
+ * name shape as the rejected VMS_PRCNAM environment cheat (CLAUDE.md
+ * Rule 10, worked example 2). With no writer left, that table can never
+ * hold an entry, so vms_term_list()'s `count` was always 0 and the
+ * "no entries" branch always ran -- for every call, not as a fallback.
+ * That branch fabricated a SINGLE row out of the CALLING process's own
+ * DCL context: ctx->username, ctx->process_name, and getpid(). Measured
+ * on a real QEMU boot before this fix: an authenticated SYSTEM console
+ * session's SHOW USERS reported PID `00000049` -- a LINUX pid -- while
+ * the SAME session's SHOW PROCESS, one command earlier in the same
+ * transcript, reported the executive-assigned VMS pid `10000003` for
+ * the identical process. A second login could never appear, because
+ * nothing here ever looked past the caller.
+ *
+ * THE ROWS NOW COME FROM src/kernel/vms_proctab.c THROUGH
+ * vms_kif_procscan(), the same source cmd_show_system() and
+ * cmd_show_process() already read (this file), filtered to rows the
+ * executive has bound to a terminal (VMS_IOCTL_SETTERM, vms-d0b) --
+ * that is the same "is this job on a terminal" fact SHOW TERMINAL reads
+ * for the caller, applied here to every row instead of just the
+ * caller's own.
+ *
+ * A CROSS-GROUP SESSION MAY BE INVISIBLE HERE WITHOUT WORLD, and that is
+ * a KNOWN, DISCLOSED divergence, not this item's to close: proc_fill_info()
+ * (src/kernel/vms_proctab.c) redacts terminal along with the rest of a
+ * row's identity when vms_proc_may_read() says no (oracle-pinned,
+ * vax73-privileges.md Section 5 -- same-group needs no privilege,
+ * cross-group needs WORLD), so a redacted row's terminal reads "" and is
+ * skipped below exactly like an unbound one. cmd_show_system()'s own
+ * comment above records the identical divergence for its CPU column and
+ * why fixing it belongs to the redaction POLICY vms-8019 landed, not to
+ * a display reader -- the same reasoning applies here without repeating
+ * the whole argument.
+ *
+ * "Total number of users" is COUNTED BY WALKING THE SCAN, not carried in
+ * a separate hand-maintained variable (Method Requirement 4): the header
+ * line needs the count before the rows print, so the table is walked
+ * once to count and once to print rather than accumulated into a
+ * fixed-size buffer sized to a guessed maximum.
  */
 static int cmd_show_users(struct dcl_command *cmd)
 {
@@ -962,45 +1008,33 @@ static int cmd_show_users(struct dcl_command *cmd)
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(ts.tv_nsec / 10000000));
 
-    struct terminal_device devs[100];
-    int count = 0;
-    vms_term_list(devs, 100, &count);
+    uint32_t index = 0;
+    struct vms_procinfo info;
+    int total = 0;
 
-    if (count == 0) {
-        /* No entries in device table — show at least the current user */
-        struct dcl_context *ctx = dcl_get_context();
-        char upper_name[64];
+    while (vms_kif_procscan(&index, &info) & 1) {
+        if (!info.redacted && info.terminal[0] != '\0')
+            total++;
+    }
+
+    printf("    Total number of users = %d, number of processes = %d\n\n",
+           total, total);
+    printf("      Username     Process Name      PID        Terminal\n");
+
+    index = 0;
+    while (vms_kif_procscan(&index, &info) & 1) {
+        if (info.redacted || info.terminal[0] == '\0')
+            continue;
+
+        char upper_name[VMS_USERNAME_SIZE];
         size_t i;
-        const char *src = ctx->username[0] ? ctx->username : "SYSTEM";
-        for (i = 0; i < sizeof(upper_name) - 1 && src[i]; i++)
-            upper_name[i] = (char)toupper((unsigned char)src[i]);
+        for (i = 0; i < sizeof(upper_name) - 1 && info.username[i]; i++)
+            upper_name[i] = (char)toupper((unsigned char)info.username[i]);
         upper_name[i] = '\0';
 
-        printf("    Total number of users = 1, number of processes = 1\n\n");
-        printf("      Username     Process Name      PID        Terminal\n");
         printf("      %-12s %-16s  %08X   %s\n",
-               upper_name, ctx->process_name[0] ? ctx->process_name : upper_name,
-               (unsigned)getpid(),
-               /* No "_FTA0:" fallback (vms-fb9) -- see the note in
-                * cmd_show_process. An unknown terminal is reported as
-                * unknown, never as an invented device name. */
-               ctx->terminal.device_name);
-    } else {
-        printf("    Total number of users = %d, number of processes = %d\n\n",
-               count, count);
-        printf("      Username     Process Name      PID        Terminal\n");
-
-        for (int j = 0; j < count; j++) {
-            char upper_name[64];
-            size_t i;
-            for (i = 0; i < sizeof(upper_name) - 1 && devs[j].owner_name[i]; i++)
-                upper_name[i] = (char)toupper((unsigned char)devs[j].owner_name[i]);
-            upper_name[i] = '\0';
-
-            printf("      %-12s %-16s  %08X   %s\n",
-                   upper_name, upper_name,
-                   (unsigned)devs[j].owner_pid, devs[j].name);
-        }
+               upper_name, info.prcnam, (unsigned)info.vms_pid,
+               info.terminal);
     }
 
     return SS$_NORMAL;

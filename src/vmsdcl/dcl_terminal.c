@@ -211,10 +211,24 @@ static void term_table_save(FILE *fp, const struct terminal_device *devs, int co
  * no user; under rule 10 a mechanism for a condition OVMX no longer has is
  * deleted, not kept behind a lint. See src/vmsdcl/include/dcl/terminal.h.
  *
- * The reader/remover below stay because they still have callers; with the
- * allocator gone the table can no longer gain an entry, so what they see
- * is always empty. That is the honest state, not a bug to "fix" by putting
- * the allocator back.
+ * The remover below stays because it still has a caller (dcl_main.c, at
+ * logout); with the allocator gone the table can no longer gain an entry,
+ * so what it removes is always nothing. That is the honest state, not a
+ * bug to "fix" by putting the allocator back.
+ *
+ * vms_term_list() -- THE READER -- WAS ALSO HERE AND IS ALSO DELETED
+ * (vms-72c). It had exactly the same "always sees an empty table" problem
+ * as the allocator's removal left behind, and its one caller
+ * (cmd_show_users() in src/vmsdcl/dcl_cmd_show.c) took that permanent
+ * emptiness as license to fabricate a single row about the CALLING
+ * process instead -- the same self-reporting shape Rule 10's worked
+ * examples reject, reproduced one layer up from where vms-fb9 already
+ * deleted it once. SHOW USERS now reads src/kernel/vms_proctab.c through
+ * vms_kif_procscan() directly, the same executive-resident source
+ * cmd_show_system() and cmd_show_process() already use, so this reader
+ * of a table that can never be written is deleted rather than kept
+ * behind a lint -- the same rule vms_term_allocate()'s deletion states
+ * above, applied to the half of the pair that survived it.
  */
 
 void vms_term_deallocate(const char *device_name)
@@ -244,22 +258,3 @@ void vms_term_deallocate(const char *device_name)
     fclose(fp);
 }
 
-void vms_term_list(struct terminal_device *out_devs, int max, int *count)
-{
-    *count = 0;
-
-    FILE *fp = fopen(TERM_TABLE_PATH, "rb");
-    if (!fp) return;
-    flock(fileno(fp), LOCK_SH);
-
-    struct terminal_device devs[TERM_TABLE_MAX];
-    int total = term_table_load(fp, devs, TERM_TABLE_MAX);
-
-    flock(fileno(fp), LOCK_UN);
-    fclose(fp);
-
-    int n = (total < max) ? total : max;
-    for (int i = 0; i < n; i++)
-        out_devs[i] = devs[i];
-    *count = n;
-}

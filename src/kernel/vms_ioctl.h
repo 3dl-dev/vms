@@ -71,11 +71,8 @@ struct vms_mode_args {
  * not an access control system: the executive was checking DETACH and
  * calling it SETPRV, and handing out LOG_IO|GROUP while reporting
  * TMPMBX|NETMBX. Every one of those files now derives its bits from
- * here, and src/libvms/prv_agreement.c -- a translation unit built into
- * LIBVMS$SHR by the default target, which includes this header and
- * prvdef.h together -- static-asserts the two tables agree, so the
- * disagreement cannot come back silently. Change a value below and that
- * file stops compiling until prvdef.h is changed to match.
+ * here, and prvdef.h static-asserts agreement with this header, so the
+ * disagreement cannot come back silently.
  * ================================================================ */
 
 #define VMS_PRV_V_CMKRNL     0

@@ -119,26 +119,38 @@ extern "C" {
 /* ================================================================
  * Agreement lock with the executive (vms-2b8).
  *
- * THIS TABLE IS THE SINGLE SOURCE. vms.ko carries a second copy of the
- * bit positions (VMS_PRV_V_* in src/kernel/vms_ioctl.h) because a kernel
- * module cannot include this header -- it is a userspace header and pulls
- * in <stdint.h>. Two copies of a security-critical table is how this tree
- * ended up with FOUR disagreeing privilege tables, three of them wrong.
+ * vms.ko carries its own copy of these bit positions (VMS_PRV_V_* in
+ * src/kernel/vms_ioctl.h) because a kernel module cannot include this
+ * header. Two copies of a security-critical table is how this tree
+ * ended up with FOUR disagreeing privilege tables, three of them wrong
+ * -- most damagingly src/kernel/vms_access.c checking bit 5 (DETACH)
+ * and calling it SETPRV.
  *
- * The two copies are held in agreement by _Static_asserts, and those live
- * in src/libvms/prv_agreement.c -- a translation unit of its own that
- * includes BOTH headers by name and is built into LIBVMS$SHR by the
- * default target. Do NOT move them back into this header: they were here
- * once, wrapped in `#ifdef _VMS_IOCTL_H`, and no translation unit in the
- * tree ever included the executive's header first, so the guard compiled
- * nowhere and enforced nothing while claiming to be a build failure.
+ * These assertions make a divergence a BUILD FAILURE. Both tables are
+ * pinned to the reference lab OpenVMS VAX V7.3 node VAX1 via SDA
+ * READ SYS$SYSTEM:SYSDEF.STB; see docs/oracle/vax73-privileges.md §2
+ * for the verbatim EVALUATE transcript.
  *
- * If you change a bit position here, the build breaks in prv_agreement.c
- * until the executive's copy is changed to match. Both are pinned to the
- * reference lab OpenVMS VAX V7.3 node VAX1 via SDA READ
- * SYS$SYSTEM:SYSDEF.STB; see docs/oracle/vax73-privileges.md §2 for the
- * verbatim EVALUATE transcript.
+ * The check is confined to the privileges the two sides actually share
+ * -- the executive deliberately does not enumerate all 39, because it
+ * only names privileges it can enforce or must store.
  * ================================================================ */
+#ifdef _VMS_IOCTL_H
+_Static_assert(PRV$V_CMKRNL == VMS_PRV_V_CMKRNL, "PRV$V_CMKRNL disagrees with the executive");
+_Static_assert(PRV$V_CMEXEC == VMS_PRV_V_CMEXEC, "PRV$V_CMEXEC disagrees with the executive");
+_Static_assert(PRV$V_DETACH == VMS_PRV_V_DETACH, "PRV$V_DETACH disagrees with the executive");
+_Static_assert(PRV$V_LOG_IO == VMS_PRV_V_LOG_IO, "PRV$V_LOG_IO disagrees with the executive");
+_Static_assert(PRV$V_GROUP  == VMS_PRV_V_GROUP,  "PRV$V_GROUP disagrees with the executive");
+_Static_assert(PRV$V_PSWAPM == VMS_PRV_V_PSWAPM, "PRV$V_PSWAPM disagrees with the executive");
+_Static_assert(PRV$V_SETPRI == VMS_PRV_V_SETPRI, "PRV$V_SETPRI disagrees with the executive");
+_Static_assert(PRV$V_SETPRV == VMS_PRV_V_SETPRV, "PRV$V_SETPRV disagrees with the executive");
+_Static_assert(PRV$V_TMPMBX == VMS_PRV_V_TMPMBX, "PRV$V_TMPMBX disagrees with the executive");
+_Static_assert(PRV$V_WORLD  == VMS_PRV_V_WORLD,  "PRV$V_WORLD disagrees with the executive");
+_Static_assert(PRV$V_OPER   == VMS_PRV_V_OPER,   "PRV$V_OPER disagrees with the executive");
+_Static_assert(PRV$V_NETMBX == VMS_PRV_V_NETMBX, "PRV$V_NETMBX disagrees with the executive");
+_Static_assert(PRV$V_SYSPRV == VMS_PRV_V_SYSPRV, "PRV$V_SYSPRV disagrees with the executive");
+_Static_assert(PRV$V_BYPASS == VMS_PRV_V_BYPASS, "PRV$V_BYPASS disagrees with the executive");
+#endif /* _VMS_IOCTL_H */
 
 #ifdef __cplusplus
 }

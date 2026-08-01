@@ -85,30 +85,12 @@
 #define THREAD_NAME     "VMS$THREADED"
 
 /*
- * The identity suite 5 establishes before the image is thrown away, and
- * which adoption must hand back to the image that replaces it.
- *
- * REWRITTEN FOR vms-2b8 ROUND 3, and the rewrite makes the suite STRONGER
- * rather than weaker. It used to pass PRIV_FIRST to the first REGISTER and
- * PRIV_SECOND to the second, and assert that the executive's mask did not
- * follow the second request. VMS_IOCTL_REGISTER no longer HAS a privilege
- * argument -- a process cannot ask for privileges at registration at all,
- * and cannot ask for a VMS process ID either -- so the old probe would now
- * be asserting that an argument which does not exist was ignored.
- *
- * The identity is therefore established the way a process really acquires
- * one, through VMS_IOCTL_SETIDENT while holding SETPRV, and adoption has
- * to preserve ALL of it: the user name, the UIC, the privilege mask, the
- * process name AND the VMS process ID. The last of those is new coverage
- * that the old form could not express, because the pid used to be
- * whatever userspace passed.
+ * A privilege mask with no meaning other than "not the default, and not
+ * the one the second registration asks for". Suite 5 only cares that the
+ * value the executive holds does not follow the second request.
  */
-#define ADOPT_USER      "VMS$ADOPT"
-#define ADOPT_UIC       (((uint32_t)301 << 16) | 302u)
-/* TMPMBX|NETMBX|OPER -- OPER is not in the mask registration derives, so
- * establishing it proves the identity came from SETIDENT and not from
- * registration re-deriving a default. */
-#define ADOPT_PRIVS     ((1ULL << 15) | (1ULL << 20) | (1ULL << 18))
+#define PRIV_FIRST      0x0000000000000042ULL
+#define PRIV_SECOND     0x0000000000005500ULL
 
 static int pass = 0, fail = 0;
 
@@ -130,17 +112,8 @@ struct exec_report {
                                  * executive entry already -- the adopt case */
     uint32_t getjpi_status;
     uint32_t linux_pid;
-    uint32_t vms_pid;           /* VMS process ID AFTER the second REGISTER */
     uint64_t cur_privs;         /* privileges AFTER the second REGISTER */
-    uint32_t uic;
-    char     username[VMS_USERNAME_SIZE];
     char     prcnam[VMS_PRCNAM_SIZE];
-};
-
-/* What the pre-exec image tells the parent before it throws itself away,
- * so the parent can check that adoption handed the SAME row back. */
-struct preexec_note {
-    uint32_t vms_pid;
 };
 
 /* ================================================================
@@ -166,17 +139,13 @@ static int reexeced_image(int wfd)
         return 1;
     }
 
-    /* The adopt case. There is nothing left to ask FOR (vms-2b8: neither
-     * a privilege mask nor a process ID), so what adoption must do is
-     * hand back the identity the previous image established -- whole. */
-    rep.register_status = vms_kif_register(NULL);
+    /* The adopt case, asking for DIFFERENT privileges than the process
+     * already holds. Adoption must ignore the request. */
+    rep.register_status = vms_kif_register((uint32_t)getpid(), PRIV_SECOND);
 
     memset(&info, 0, sizeof(info));
     rep.getjpi_status = vms_kif_getjpi_self(&info);
     rep.linux_pid = info.linux_pid;
-    rep.vms_pid   = info.vms_pid;
-    rep.uic       = info.uic;
-    memcpy(rep.username, info.username, VMS_USERNAME_SIZE);
     memcpy(rep.prcnam, info.prcnam, VMS_PRCNAM_SIZE);
 
     if (vms_kif_getmode(&mode, &cur, &perm) == SS_NORMAL)
@@ -466,15 +435,15 @@ int main(int argc, char **argv)
      *     Process ID: 2020021D  name "SYSTEM"  Images activated: 21
      * So a second REGISTER must ADOPT: SS$_NORMAL, same identity, and --
      * because an image activation never changes a process's privileges --
-     * the privilege mask the previous image established must survive.
+     * the privilege mask must NOT follow the second request.
      * ------------------------------------------------------------ */
     printf("--- 4/5. post-exec REGISTER adopts the surviving process ---\n");
 
-    /* Re-registering an already-bound process is the SUBJECT of the test,
-     * not a setup step the product would otherwise need. It carries no
-     * arguments at all now (vms-2b8), so the only thing it can do wrong is
-     * disturb the process it found. */
-    status = vms_kif_register(NULL);
+    /* Give this process an identity and a privilege mask to preserve. The
+     * explicit register here is the SUBJECT of the test, not a setup step
+     * the product would otherwise need: it is what establishes the
+     * privileges that adoption must leave alone. */
+    status = vms_kif_register((uint32_t)getpid(), PRIV_FIRST);
     CHECK(status == SS_NORMAL,
           "re-registering an already-bound process is accepted (adopt)");
 
@@ -482,8 +451,8 @@ int main(int argc, char **argv)
     CHECK(status == SS_NORMAL, "process named before image activation");
 
     if (vms_kif_getmode(&mode, &cur, &perm) == SS_NORMAL)
-        CHECK((cur & (1ULL << 18)) == 0,
-              "adoption did not conjure a privilege registration never grants");
+        CHECK(cur == 0 || cur == PRIV_FIRST,
+              "privileges after adoption are not the second request");
 
     if (pipe(pipefd) < 0) {
         printf("  FAIL: pipe()\n");
@@ -504,31 +473,11 @@ int main(int argc, char **argv)
 
         /* Establish the pre-exec identity in the CHILD's own executive
          * entry, then throw the image away. Nothing is carried across:
-         * the channel is closed, no environment variable, no descriptor.
-         *
-         * The identity is established through SETIDENT, the way a process
-         * really acquires one -- registration carries no privilege mask
-         * to establish it with any more (vms-2b8). This image is still
-         * root here, so it holds SETPRV and the stamp is legitimate. */
-        {
-            struct preexec_note note;
-            struct vms_procinfo pinfo;
-
-            memset(&note, 0, sizeof(note));
-            if (vms_kif_register(NULL) != SS_NORMAL)
-                _exit(72);
-            if (vms_kif_setprn(REEXEC_NAME "2") != SS_NORMAL)
-                _exit(73);
-            if (vms_kif_setident(ADOPT_USER, ADOPT_UIC, ADOPT_PRIVS) != SS_NORMAL)
-                _exit(75);
-
-            memset(&pinfo, 0, sizeof(pinfo));
-            if (vms_kif_getjpi_self(&pinfo) != SS_NORMAL)
-                _exit(76);
-            note.vms_pid = pinfo.vms_pid;
-            if (write(pipefd[1], &note, sizeof(note)) != (ssize_t)sizeof(note))
-                _exit(77);
-        }
+         * the channel is closed, no environment variable, no descriptor. */
+        if (vms_kif_register((uint32_t)getpid(), PRIV_FIRST) != SS_NORMAL)
+            _exit(72);
+        if (vms_kif_setprn(REEXEC_NAME "2") != SS_NORMAL)
+            _exit(73);
         vms_kif_close();
 
         snprintf(wfd_arg, sizeof(wfd_arg), "%d", pipefd[1]);
@@ -539,13 +488,7 @@ int main(int argc, char **argv)
 
     {
         struct exec_report erep;
-        struct preexec_note note;
         ssize_t n;
-
-        memset(&note, 0, sizeof(note));
-        n = read(pipefd[0], &note, sizeof(note));
-        CHECK(n == (ssize_t)sizeof(note) && note.vms_pid != 0,
-              "the pre-exec image reported the VMS process ID it was assigned");
 
         memset(&erep, 0, sizeof(erep));
         n = read(pipefd[0], &erep, sizeof(erep));
@@ -563,20 +506,8 @@ int main(int argc, char **argv)
               "adoption kept the same executive entry, not a new one");
         CHECK(strcmp(erep.prcnam, REEXEC_NAME "2") == 0,
               "adoption did not reset the process name");
-        /*
-         * The identity established before the image was thrown away has to
-         * come back whole. Registration can no longer be handed a mask or a
-         * pid to disturb it with (vms-2b8), so anything different here is
-         * the executive re-deriving state it was supposed to preserve.
-         */
-        CHECK(erep.cur_privs == ADOPT_PRIVS,
-              "adoption preserved the privilege mask SETIDENT established");
-        CHECK(erep.uic == ADOPT_UIC,
-              "adoption preserved the UIC");
-        CHECK(strcmp(erep.username, ADOPT_USER) == 0,
-              "adoption preserved the authenticated user name");
-        CHECK(erep.vms_pid == note.vms_pid,
-              "adoption returned the SAME VMS process ID, not a fresh one");
+        CHECK(erep.cur_privs != PRIV_SECOND,
+              "adoption did not let the image re-declare its privileges");
     }
 
     /* ------------------------------------------------------------

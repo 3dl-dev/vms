@@ -72,11 +72,7 @@ static int open_and_register(void)
 
     struct vms_register_args reg = {0};
     reg.vms_pid = (uint32_t)getpid();
-    /* NO init_privs (vms-2b8): VMS_IOCTL_REGISTER no longer carries a
-     * privilege mask. It used to, and this line asked for all 64 bits --
-     * a process declaring its own privileges, which is the honor system
-     * that item removed. The executive now DERIVES the mask from the
-     * task's real credentials, and nothing below needs a privilege. */
+    reg.init_privs = 0xFFFFFFFFFFFFFFFFULL;
     ioctl(fd, VMS_IOCTL_REGISTER, &reg);
     if (reg.status != SS_NORMAL) {
         close(fd);

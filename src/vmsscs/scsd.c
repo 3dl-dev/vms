@@ -803,6 +803,27 @@ static uint16_t peer_node_number(const struct peer_state *ps)
  *
  * OVMX_CFG2_PEER=<n> forces a specific DECnet node number, for bisecting.
  * Returns NULL if no peer has completed its config exchange yet.
+ *
+ * vms-2f3 2026-08-01 -- TWO CORRECTIONS, from SDA rather than from captures.
+ *
+ * (1) THE CLUSTER HAS A COORDINATOR FIELD AND IT ROTATES. SDA's Cluster Block
+ * carries `Curr. coord. CSID`, and it changes with every transition: VAX3
+ * (00010007) during run r1B, VAX1 (00010001) during s3B/s3C/s4A after VAX1
+ * coordinated a removal. So "the coordinator" is a real, readable role and the
+ * heuristic below cannot be tracking it -- it always answers VAX3.
+ *
+ * (2) AND IT IS A RESULT, NOT AN ADDRESS. Run s4A: a FRESH identity sent its
+ * op 0x02 to VAX3 while SDA said the coordinator was VAX1, and was admitted in
+ * 27 s -- with VAX3 proposing the addition and thereby BECOMING the
+ * coordinator of that transition. The node you ask is the node that runs it.
+ *
+ * So do NOT "fix" this by chasing `Curr. coord.`: run s3C forced the op 0x02 to
+ * VAX1, the actual coordinator, on an identity s3B had just been refused for,
+ * and it was refused identically. Routing is not the rejoin gate, in either
+ * direction. What d94-e15 saw (VAX1 and VAX2 acking a byte-identical op 0x02
+ * and doing nothing while VAX3 drove it) is real but is NOT explained by
+ * `Curr. coord.`, and the predicate behind it is still ungrounded -- see
+ * spec 5(z). This heuristic stays, still labeled as a heuristic.
  */
 static struct peer_state *cm_pick_coordinator(struct peer_state *tbl)
 {

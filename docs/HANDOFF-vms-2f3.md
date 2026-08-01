@@ -53,6 +53,9 @@ reset.**
 | the coordinator holds a stale CSB it compares us against | **REFUTED — VAX3 held none for us, allocated our CSID, aborted anyway** | §4d.1 |
 | …and `[22:24]`/`[28:36]` are inferred | **NO LONGER — SDA names them `Found Node SYSID` / `Founding Time`** | §4d.1 ⭐ |
 | **sending the rejoin form of `op 0x02` admits us** | **REFUTED — matched control, identical refusal with the form disabled** | §4d.2 ⭐⭐ |
+| every refusal is the same failure | **REFUTED — TWO shapes; one never opens a transition at all** | §4d.6 ⭐⭐ |
+| we address the wrong node (`Curr. coord.` rotates) | **REFUTED both ways — forcing the real coordinator still refused; a fresh identity joins via a non-coordinator** | §4d.7 ⭐ |
+| a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
 
 ## 1. The reproducer — four minutes, no reset
 
@@ -786,13 +789,90 @@ cheap run each.
 
 **And the shape of the question has changed.** Three sessions have now looked
 for a field we get wrong and found three real ones, none of which was the gate.
-The coordinator answers our `op 0x02` in 0.4 ms for a fresh identity and, for a
-returning one, either ignores it or runs the whole round and aborts — on state
-it already holds, in the same millisecond, with no objection from any peer.
-**Consider that the next thing to instrument is not a byte we send but the
-coordinator's own decision**: SDA on the *coordinator* polled during the stall
-(§4c.6 polled VAX1, which was not the coordinator in `r1B`), and the VMS
-connection-manager state its console exposes.
+**That suggestion — instrument the peer's decision rather than another byte we
+send — was then acted on in the same session, and §4d.6–§4d.8 are the result.
+Read those; they supersede this paragraph.**
+
+### 4d.6 ⭐⭐ THE REFUSAL HAS TWO SHAPES, and one of them is not a refusal
+
+**This is the most important thing in §4d and it was invisible until SDA was
+polled on the right node.** `tools/stallpoll.sh` (new) polls a **chosen** node
+during the stall — the node is an argument because session j's `neg.sh` only
+ever asked VAX1, and in `r1B` VAX1 was not the coordinator.
+
+| | `r1B` shape — "proposed and aborted" | `s3B` shape — "dropped on the floor" |
+|---|---|---|
+| our `op 0x02` | answered in 0.4 ms | **no response at all**, not even a cat-0x04 ack |
+| COMMIT / lock-rebuild | both run, everyone echoes | never happen |
+| transition opened | yes, then `op 0x04 role 0x50` ABORT | **never opened at all** |
+| peer console | `proposed addition` → `aborted` | **completely silent** |
+| our CSB on the peer | `wait` / `long_break` | **`open`, flags `00000000`** |
+| the CLUB | carries `transition` | **byte-frozen for 105 s** |
+
+The CLUB is identical at T+15, T+40, T+70 and T+105 s: `Last trans. number 24`,
+`Member State Seq. Num 0011`, `Index of next CSID 000B`, flags
+`cluster,tdf_valid,init,qf_failed_node,quorum` — **no `transition` bit**. And
+our CSB carries **zero flags**, not even `status_rcvd`, which every long-dead
+OVMX CSB on the same node does carry.
+
+**So `s1B`, `s1C`, `s3B` and `s3C` are not "the coordinator refused us". Nothing
+refused us — the add-member request was discarded and no machinery ever ran.**
+Re-read every earlier rejoin datum for which shape it was before comparing any
+two of them; §2's census already hints at it (`rej2` reaches COMMIT without
+`op 0x05`, `r1B` runs the whole round).
+
+### 4d.7 ⭐ `Curr. coord. CSID` is a RESULT, not an address — routing is not the gate
+
+SDA's Cluster Block carries `Curr. coord. CSID` and **it rotates**: VAX3
+(`00010007`) during `r1B`, VAX1 (`00010001`) during `s3B`/`s3C`/`s4A` after VAX1
+coordinated a removal. `cm_pick_coordinator`'s heuristic ("highest DECnet node
+number", ungrounded and confounded three ways by its own comment) always answers
+VAX3, so it demonstrably was **not** tracking that field.
+
+Tested in both directions, one variable each:
+
+| run | identity | `op 0x02` sent to | SDA says coordinator is | result |
+|---|---|---|---|---|
+| `s3B` | `OVMXS3` rejoin | VAX3 (default) | VAX1 | REFUSED, dropped |
+| `s3C` | `OVMXS3` rejoin | **VAX1** (`CFG2_PEER=1`) | VAX1 | **REFUSED, identical census** |
+| `s4A` | `OVMXS4`/1245 **fresh** | VAX3 (default) | VAX1 | **JOINED, 27 s** |
+
+`s4A` is the decisive one: a fresh identity asked a **non**-coordinator and was
+admitted — and VAX3 proposed the addition, *thereby becoming* the coordinator of
+that transition. **The node you ask is the node that runs it.**
+
+**Do not chase `Curr. coord.` as a routing fix.** The ungrounded heuristic is
+still owed (spec 5(z)) and d94-e15's observation is still real, but neither is
+this bug, and the "a joiner must address the coordinator" model the code carried
+is wrong in the direction SDA now shows. Comment corrected in `scsd.c`.
+
+### 4d.8 What that leaves: the drop is keyed on IDENTITY, and it happens on receipt
+
+Inside one 10-minute window on one lab, bracketed at both ends by fresh
+identities joining in 27 s (`s3A` 17:44, `s4A` 17:54, `s5A` 17:57):
+
+- the same identity was ignored by **VAX3** and, four minutes later, by **VAX1**;
+- with the rejoin form and without it (`s1B`/`s1C`);
+- while transmitting frames §4c.3 already proved byte-identical to ones that
+  succeeded.
+
+So the peer decides **before any transition machinery runs**, it is **not about
+which peer**, and it is **not in the frame**. Combined with §3.1 (no wait works,
+15 h tested) and §4c.2d (a pristine `BRK_NON` fails on its first attempt), what
+is left is per-identity state on **every** peer that survives our death and
+causes a returning identity's `op 0x02` to be dropped without a reply.
+
+**The next instrument should answer "why is this CSB in `open` with no flags".**
+A successful joiner's CSB must pass through states this one never reaches; the
+poll that would show it needs a node whose console is logged in and a snapshot
+inside the first 25 s (`s5A` attempted exactly this and returned empty because
+VAX3's console had logged out — re-run it, it is 4 minutes).
+
+**Also unrun and still cheap:** RECNXINTERVAL on the lab is **20 s** (read from
+SYSGEN; also `VAXCLUSTER=2`, `EXPECTED_VOTES=1`, `LOCKDIRWT=1`,
+`NISCS_MAX_PKTSZ=1498`). Every rejoin ever tested here is far beyond it, as is
+the real VAX3 crash-rejoin at ~90 s, so it is not a discriminator — recorded so
+nobody re-derives it.
 
 ---
 
@@ -907,9 +987,10 @@ connection-manager state its console exposes.
 | `tools/cycle2.sh` | `cycle.sh` plus an **SDA CSB oracle** before the first join, after every cycle, and at the end; `PER_CYCLE_SYSID=1` for per-cycle identity; `CYCLE<N>_ENV` for per-cycle env; `SKIP_RESET=1`. |
 |  `tools/oneshot.sh` | one join against the lab as it stands + SDA dump. **The four-minute loop.** Worth moving into `tools/`. |
 |  `tools/probe.sh` | drive any VAX console, capture between markers. |
+| `tools/stallpoll.sh` | **one join + SDA polled on a CHOSEN node DURING the stall.** The node is an argument on purpose: session j polled VAX1, which was not the coordinator in `r1B`, so the one node whose state decided the outcome was never asked. This is what separated the two refusal shapes (§4d.6). |
 
 Run tags session j (part 2): `r1A` `r2A` joined, `r1B` `r2B` refused, `vax3crash` = the real-VAX crash-rejoin specimen. **Last SCSSYSTEMID used: 1241.**
-Run tags session k: `s1A` `s2A` joined (fresh, pure); `s1B` refused (rejoin form); `s1C` refused (`OVMX_REJOIN_FORM=0`, matched control). **Last SCSSYSTEMID used: 1243.**
+Run tags session k: `s1A` `s2A` `s3A` `s4A` `s5A` joined (fresh, pure); `s1B` refused (rejoin form), `s1C` refused (`OVMX_REJOIN_FORM=0`); `s3B` refused (SDA-polled on VAX3), `s3C` refused (`OVMX_CFG2_PEER=1`, forced to the real coordinator). **Last SCSSYSTEMID used: 1246.**
 
 Run tags session i: `ctl1`, `inc1`, `inc2`, `fresh1`, `fresh2`, `keyB`, `keyC`,
 `rej2`, `rej3`. Session j: `g1A` (joined), `g1B` (refused, SDA-polled), `p1A`

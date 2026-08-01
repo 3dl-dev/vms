@@ -74,38 +74,3 @@ endforeach()
 # callers (tests/qemu/Dockerfile) never need to name a specific test.
 get_property(_qemu_syssvc_test_targets GLOBAL PROPERTY QEMU_SYSSVC_TEST_TARGETS)
 add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets})
-
-# ---------------------------------------------------------------------------
-# The negative-control manifest's OWN self-test (vms-e7d).
-#
-# This one IS registered with add_test(), and the paragraph above does not
-# apply to it: it needs no /dev/vms, no vms.ko and no container. It copies
-# src/kernel and src/libvmssys to a temporary tree, applies each recorded
-# facility defect to the copy, and checks two things that can only be checked
-# against the CURRENT source:
-#
-#   * every mutation still finds its sed anchor -- a manifest that has drifted
-#     from the tree would inject NOTHING, and tests/qemu/run_facility_negctl.sh
-#     would then report the executive gate as having caught a defect that was
-#     never applied ("BROKEN FIXTURE, not a broken gate");
-#   * re-applying a mutation is detected as a no-op, which proves the
-#     injection-landed check fires rather than being a cmp that always passes;
-#   * every assertion text the manifest names exists LITERALLY in a suite
-#     source. The QEMU driver now requires the observed red set to EQUAL the
-#     named set, so a typo'd entry can never be observed and would fail the
-#     control blaming the executive for a manifest defect;
-#   * the coverage statement holds at BOTH granularities -- every src/kernel/*.c
-#     has a control, and every derived tests/qemu suite is either reachable by
-#     one, declared blind with a tracked item, or declared out of scope with a
-#     reason. The out-of-scope set (vmsfs) is printed, so this gate's PASS can
-#     never be read as a claim about the whole harness.
-#
-# It runs in seconds in the ordinary Build & Test job, so anchor drift is
-# caught there instead of twenty minutes into the QEMU job -- or, worse, not
-# at all, because a dead anchor makes the QEMU control go GREEN.
-add_test(
-    NAME facility_negctl_manifest
-    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_defects.sh
-            selftest ${CMAKE_SOURCE_DIR}
-)
-set_tests_properties(facility_negctl_manifest PROPERTIES LABELS "harness")

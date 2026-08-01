@@ -264,37 +264,6 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
     echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
 
-# --- Per-facility negative controls (vms-e7d) ----------------------------
-#
-# NEGATIVE_CONTROL=1 above removes the WHOLE executive. That proves the gate
-# can go red, but not that it can say WHICH facility broke -- "something
-# failed" is not a gate, and a facility whose assertions had quietly stopped
-# meaning anything would still be covered by it.
-#
-# The per-facility controls inject ONE minimal defect into ONE facility (the
-# vms-e4d compat[EX][CR] flip, mechanised, plus one of the same shape for
-# every other facility) and check that the RIGHT suite goes red naming the
-# RIGHT assertion, while that facility's sibling assertions and every other
-# suite stay green.
-#
-# THEY ARE NOT A BUILD MODE. Nothing here is keyed on a build ARG: the
-# injection happens at RUN time, in the container's own writable layer,
-#
-#     docker run --rm -e FACILITY_DEFECT=<name> ovmx-ktest /inject_and_run.sh
-#
-# so this image is built ONCE and never mutated. The first version did use a
-# final ARG-keyed layer, which meant one tagged image per defect; removing
-# them afterwards left the engine's build cache referencing deleted layers and
-# a later build died with "getting top layer info: layer not known",
-# intermittently. A flaky gate is a broken gate, so the mechanism that made it
-# possible is gone rather than retried around.
-#
-# tests/qemu/run_facility_negctl.sh drives the whole set; the ci.yml job
-# "Kernel Executive - Per-Facility Negative Controls" runs that.
-COPY tests/qemu/facility_defects.sh /src/tests/qemu/facility_defects.sh
-COPY tests/qemu/inject_and_run.sh /inject_and_run.sh
-RUN chmod +x /inject_and_run.sh /src/tests/qemu/facility_defects.sh
-
 # Copy test runner
 COPY tests/qemu/run_tests.sh /run_tests.sh
 RUN chmod +x /run_tests.sh

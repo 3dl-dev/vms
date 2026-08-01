@@ -1,0 +1,22 @@
+a call from kif_bind() counts: the bind path is reachable from every wired wrapper
+a caller inside vms_kif.c that nothing reaches does not count
+a caller that exists only in a comment does not count
+a caller that exists only in tests/ is not a product path
+a declaration naming a non-existent entry point is rejected
+a declared unwired entry point passes
+a new entry point with no caller and no declaration is caught by name
+a prototype at file scope is not a caller
+a stale declaration on a wired entry point is rejected
+an entry point cannot leave the census by going static
+an existing wired facility that loses its product caller is caught
+an unwired declaration with no item id is rejected
+an unwired wrapper renamed onto a product function's name is NOT credited to it
+deleting a definition is a RED naming what vanished
+deleting a prototype is a RED naming what vanished, not a smaller pass
+deleting a shared-opcode wrapper strands its kernel selector and is caught
+deleting a wrapper outright strands its kernel opcode and is caught
+positive control - unmutated sandbox tree passes the census
+renamed onto a sibling's name, the sibling's own declaration goes stale
+renaming an entry point out of the vms_kif_ namespace does not remove it
+renaming out of the namespace AND going static does not remove it either
+the same entry point declared twice is rejected

@@ -1,0 +1,68 @@
+TRACE EG :: positive control - unmutated sandbox tree passes the census
+TRACE TC :: positive control - unmutated sandbox tree passes the census [cat=core]
+TRACE RV :: positive control - unmutated sandbox tree passes the census
+TRACE TC :: meta-control - an injection whose anchor no longer matches is caught as a no-op [cat=core]
+TRACE RV :: meta-control - an injection whose anchor no longer matches is caught as a no-op
+TRACE ER :: a new entry point with no caller and no declaration is caught by name
+TRACE TC :: a new entry point with no caller and no declaration is caught by name [cat=core]
+TRACE RV :: a new entry point with no caller and no declaration is caught by name
+TRACE EG :: a declared unwired entry point passes
+TRACE TC :: a declared unwired entry point passes [cat=core]
+TRACE RV :: a declared unwired entry point passes
+TRACE ER :: an unwired declaration with no item id is rejected
+TRACE TC :: an unwired declaration with no item id is rejected [cat=core]
+TRACE RV :: an unwired declaration with no item id is rejected
+TRACE ER :: a caller that exists only in a comment does not count
+TRACE TC :: a caller that exists only in a comment does not count [cat=core]
+TRACE RV :: a caller that exists only in a comment does not count
+TRACE ER :: a caller that exists only in tests/ is not a product path
+TRACE TC :: a caller that exists only in tests/ is not a product path [cat=core]
+TRACE RV :: a caller that exists only in tests/ is not a product path
+TRACE ER :: a caller inside vms_kif.c that nothing reaches does not count
+TRACE TC :: a caller inside vms_kif.c that nothing reaches does not count [cat=core]
+TRACE RV :: a caller inside vms_kif.c that nothing reaches does not count
+TRACE EG :: a call from kif_bind() counts: the bind path is reachable from every wired wrapper
+TRACE TC :: a call from kif_bind() counts: the bind path is reachable from every wired wrapper [cat=core]
+TRACE RV :: a call from kif_bind() counts: the bind path is reachable from every wired wrapper
+TRACE ER :: a prototype at file scope is not a caller
+TRACE TC :: a prototype at file scope is not a caller [cat=core]
+TRACE RV :: a prototype at file scope is not a caller
+TRACE ER :: a stale declaration on a wired entry point is rejected
+TRACE TC :: a stale declaration on a wired entry point is rejected [cat=core]
+TRACE RV :: a stale declaration on a wired entry point is rejected
+TRACE ER :: a declaration naming a non-existent entry point is rejected
+TRACE TC :: a declaration naming a non-existent entry point is rejected [cat=core]
+TRACE RV :: a declaration naming a non-existent entry point is rejected
+TRACE ER :: the same entry point declared twice is rejected
+TRACE TC :: the same entry point declared twice is rejected [cat=core]
+TRACE RV :: the same entry point declared twice is rejected
+TRACE ER :: an existing wired facility that loses its product caller is caught
+TRACE TC :: an existing wired facility that loses its product caller is caught [cat=core]
+TRACE RV :: an existing wired facility that loses its product caller is caught
+TRACE ER :: deleting a prototype is a RED naming what vanished, not a smaller pass
+TRACE TC :: deleting a prototype is a RED naming what vanished, not a smaller pass [cat=pin]
+TRACE RV :: deleting a prototype is a RED naming what vanished, not a smaller pass
+TRACE ER :: deleting a definition is a RED naming what vanished
+TRACE TC :: deleting a definition is a RED naming what vanished [cat=pin]
+TRACE RV :: deleting a definition is a RED naming what vanished
+TRACE ER :: deleting a wrapper outright strands its kernel opcode and is caught
+TRACE TC :: deleting a wrapper outright strands its kernel opcode and is caught [cat=pin]
+TRACE RV :: deleting a wrapper outright strands its kernel opcode and is caught
+TRACE ER :: an entry point cannot leave the census by going static
+TRACE TC :: an entry point cannot leave the census by going static [cat=pin]
+TRACE RV :: an entry point cannot leave the census by going static
+TRACE ER :: renaming an entry point out of the vms_kif_ namespace does not remove it
+TRACE TC :: renaming an entry point out of the vms_kif_ namespace does not remove it [cat=pin]
+TRACE RV :: renaming an entry point out of the vms_kif_ namespace does not remove it
+TRACE ER :: renaming out of the namespace AND going static does not remove it either
+TRACE TC :: renaming out of the namespace AND going static does not remove it either [cat=pin]
+TRACE RV :: renaming out of the namespace AND going static does not remove it either
+TRACE ER :: deleting a shared-opcode wrapper strands its kernel selector and is caught
+TRACE TC :: deleting a shared-opcode wrapper strands its kernel selector and is caught [cat=pin]
+TRACE RV :: deleting a shared-opcode wrapper strands its kernel selector and is caught
+TRACE ER :: an unwired wrapper renamed onto a product function's name is NOT credited to it
+TRACE TC :: an unwired wrapper renamed onto a product function's name is NOT credited to it [cat=pin]
+TRACE RV :: an unwired wrapper renamed onto a product function's name is NOT credited to it
+TRACE ER :: renamed onto a sibling's name, the sibling's own declaration goes stale
+TRACE TC :: renamed onto a sibling's name, the sibling's own declaration goes stale [cat=pin]
+TRACE RV :: renamed onto a sibling's name, the sibling's own declaration goes stale

@@ -1,0 +1,31 @@
+vms_kif census negative controls: every property must have an evasion that trips it
+  PASS: positive control - unmutated sandbox tree passes the census
+  FAIL: BROKEN FIXTURE: control "meta-control - an injection whose anchor no longer matches is caught as a no-op" passed unknown category
+        "bogus" -- every call must say "core" or "pin" so the
+        tally has somewhere to go; there is no default.
+  PASS: a new entry point with no caller and no declaration is caught by name
+  PASS: a declared unwired entry point passes
+  PASS: an unwired declaration with no item id is rejected
+  PASS: a caller that exists only in a comment does not count
+  PASS: a caller that exists only in tests/ is not a product path
+  PASS: a caller inside vms_kif.c that nothing reaches does not count
+  PASS: a call from kif_bind() counts: the bind path is reachable from every wired wrapper
+  PASS: a prototype at file scope is not a caller
+  PASS: a stale declaration on a wired entry point is rejected
+  PASS: a declaration naming a non-existent entry point is rejected
+  PASS: the same entry point declared twice is rejected
+  PASS: an existing wired facility that loses its product caller is caught
+  PASS: deleting a prototype is a RED naming what vanished, not a smaller pass
+  PASS: deleting a definition is a RED naming what vanished
+  PASS: deleting a wrapper outright strands its kernel opcode and is caught
+  PASS: an entry point cannot leave the census by going static
+  PASS: renaming an entry point out of the vms_kif_ namespace does not remove it
+  PASS: renaming out of the namespace AND going static does not remove it either
+  PASS: deleting a shared-opcode wrapper strands its kernel selector and is caught
+  PASS: an unwired wrapper renamed onto a product function's name is NOT credited to it
+  PASS: renamed onto a sibling's name, the sibling's own declaration goes stale
+  controls: 22 passed, 1 failed
+  universe-pin controls run: 9 (13 onward -- see the header for what
+          each proves; tallied by expect_red()/expect_green() themselves as a
+          byproduct of running each control, not by a second statement here)
+vms_kif census negative controls: FAIL

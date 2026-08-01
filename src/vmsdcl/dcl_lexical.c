@@ -596,20 +596,58 @@ static int lex_user(struct dcl_context *ctx, const char *args,
                     char *result, size_t result_size)
 {
     (void)args;
-    if (ctx->username[0]) {
+    /*
+     * THE FALLBACK IS DELETED, NOT CORRECTED (vms-cb5, CLAUDE.md Rule 10).
+     *
+     * Two fallbacks stood here, taken when the executive holds no user name
+     * for this process (ctx->username is seeded from the executive's process
+     * table in dcl_main.c and from nowhere else):
+     *
+     *     struct passwd *pw = getpwuid(getuid());
+     *     if (pw) result = upcase(pw->pw_name);
+     *     else    result = "SYSTEM";
+     *
+     * MEASURED, not reasoned (tests/qemu/test_syssvc_ident.c, scenario C, on
+     * a real /dev/vms under QEMU): an UNPRIVILEGED process whose attempt to
+     * become SYSTEM the executive had just REFUSED with SS$_NOPRIV, running
+     * in an initramfs with no /etc/passwd, got
+     *
+     *     $ IDENT_U = F$GETJPI("","USERNAME")
+     *     $ SHOW SYMBOL IDENT_U
+     *       IDENT_U = "SYSTEM"
+     *
+     * while SHOW PROCESS -- reading the SAME field of the SAME executive row
+     * in the SAME process at the SAME moment -- honestly printed `User:`
+     * blank. So the display told the truth and the programmatic path
+     * fabricated the most privileged name on the system, for the one process
+     * that had just been refused it. It degraded UPWARD, which is the
+     * signature of this defect class.
+     *
+     * Why deletion is the whole fix, and why no replacement value is chosen
+     * here: VMS has no process without a user name -- the name lives in the
+     * executive's process table and every process has a row -- so this is a
+     * condition VMS never faces, and Rule 10 forbids inventing a
+     * plausible-looking handler for one. The honest answer is the one the
+     * executive gave, which for an unnamed process is the empty string. That
+     * is not a value this file picks: it is what SHOW PROCESS already prints
+     * for this exact case (src/vmsdcl/dcl_cmd_show.c), so the fix makes the
+     * two readers of the fact agree instead of introducing a third answer.
+     *
+     * getpwuid() had to go with it and is not the lesser half. A Linux
+     * account name upcased is not a VMS user name; substituting one is the
+     * same fabrication wearing a more convincing costume, and it is the
+     * branch that would have been taken on any system that does have an
+     * /etc/passwd -- i.e. everywhere except the initramfs that exposed it.
+     *
+     * On the one runtime target this is unreachable rather than merely
+     * refused: PID 1 halts without the executive (vms-0ff), and LOGINOUT
+     * exits fatally if VMS_IOCTL_SETIDENT does not take (tools/vms_login.c),
+     * so no interactive session reaches DCL with an unnamed row.
+     */
+    if (ctx->username[0])
         strncpy(result, ctx->username, result_size - 1);
-    } else {
-        struct passwd *pw = getpwuid(getuid());
-        if (pw) {
-            size_t i;
-            for (i = 0; i < result_size - 1 && pw->pw_name[i]; i++) {
-                result[i] = (char)toupper((unsigned char)pw->pw_name[i]);
-            }
-            result[i] = '\0';
-        } else {
-            strncpy(result, "SYSTEM", result_size - 1);
-        }
-    }
+    else
+        result[0] = '\0';
     result[result_size - 1] = '\0';
     return 0;
 }

@@ -76,16 +76,26 @@ static int fail = 0;
 #define DCL_PATH "/bin/DCL.EXE"
 
 /*
- * The four variables the deleted readers took identity from, set to the
- * most privileged account on the system. Handed to every DCL process this
- * test starts. PATH is present only so exec'd utilities behave normally;
- * DCL itself does not consult it for the commands used here.
+ * The variables the deleted readers took identity from, set to the most
+ * privileged account on the system. Handed to every DCL process this test
+ * starts. PATH is present only so exec'd utilities behave normally; DCL
+ * itself does not consult it for the commands used here.
+ *
+ * VMS_TERMINAL ADDED (vms-cb5). It belongs to the same family and was the
+ * only member never planted here -- vms-fb9 deleted its reader and its
+ * writers, and tests/integration/test_terminal_identity.sh keeps them
+ * deleted by SOURCE SCAN. A source scan cannot see a reader written in a
+ * spelling it has never met (that file's own header says so), so the
+ * variable is planted here too and the behavioural checks below cover it
+ * the same way they cover the other four: whatever any future reader does
+ * with it, no identity OVMX reports may come from it.
  */
 static char *const poison_env[] = {
     (char *)"VMS_USERNAME=SYSTEM",
     (char *)"VMS_PRIVILEGES=ALL",
     (char *)"VMS_UIC_GROUP=1",
     (char *)"VMS_UIC_MEMBER=4",
+    (char *)"VMS_TERMINAL=_OPA0:",
     (char *)"PATH=/bin",
     NULL
 };
@@ -572,7 +582,20 @@ int main(void)
         return 1;
     }
 
-    const char *script = "SHOW PROCESS\nSHOW PROCESS/PRIVILEGES\n";
+    /*
+     * F$GETJPI ADDED (vms-cb5). SHOW PROCESS and SHOW PROCESS/PRIVILEGES are
+     * two DISPLAY paths through cmd_show_process; a caller that wants to know
+     * who it is programmatically uses $GETJPI, and until this round nothing
+     * proved THAT path reads the executive rather than the environment. It is
+     * a separate reader of the same fact, so it needs its own evidence: a
+     * display that has been fixed says nothing about a lexical function that
+     * has not.
+     */
+    const char *script =
+        "SHOW PROCESS\n"
+        "SHOW PROCESS/PRIVILEGES\n"
+        "IDENT_U = F$GETJPI(\"\",\"USERNAME\")\n"
+        "SHOW SYMBOL IDENT_U\n";
 
     /* ----------------------------------------------------------------
      * A. A privileged writer establishes an ordinary identity, then
@@ -597,6 +620,18 @@ int main(void)
           "A: SHOW PROCESS reports the UIC the EXECUTIVE holds");
     CHECK(strstr(outa, "[001,004]") == NULL,
           "A: SHOW PROCESS does NOT report the UIC planted in VMS_UIC_GROUP/MEMBER");
+    /*
+     * The POSITIVE half of the F$GETJPI check, and it has to be positive.
+     * "SYSTEM is absent from the output" is already asserted above and is
+     * satisfied by F$GETJPI returning NOTHING -- an unimplemented item, an
+     * empty string, an error. That would be a green check over a lexical
+     * function that answers no question at all. Requiring the executive's
+     * OWN name to be printed is the assertion that cannot be satisfied by
+     * silence. SHOW SYMBOL's format is dcl_cmd_show.c's own: `  %s = "%s"`.
+     */
+    CHECK(strstr(outa, "IDENT_U = \"" A_NAME "\"") != NULL,
+          "A: F$GETJPI(\"\",\"USERNAME\") returns the name the EXECUTIVE holds "
+          "-- the programmatic path reads the same source the display does");
     /*
      * The privilege assertions match SHOW PROCESS's one-line summary
      * EXACTLY, and the /PRIVILEGES list by each privilege's oracle
@@ -675,6 +710,16 @@ int main(void)
     CHECK(strstr(outb, "[001,006]") != NULL,
           "B: SHOW PROCESS reports B's UIC");
     /*
+     * A SECOND PROCESS, SAME IMAGE, SAME poison_env, DIFFERENT answer. This
+     * is the check that makes A's F$GETJPI result mean something: a function
+     * that returned a constant, or that read the environment both processes
+     * share, could not print two different names here.
+     */
+    CHECK(strstr(outb, "IDENT_U = \"" B_NAME "\"") != NULL,
+          "B: F$GETJPI returns B's name -- two processes with an IDENTICAL "
+          "environment get DIFFERENT answers, so the answer is not the "
+          "environment");
+    /*
      * B is the POSITIVE half of the ENFORCED-privileges test (vms-2b8,
      * operator ruling 2026-07-31): B_PRIVS holds WORLD, one of the four
      * bits VMS_PRV_M_ENFORCED names, alongside TMPMBX/NETMBX/SYSPRV,
@@ -725,6 +770,30 @@ int main(void)
     CHECK(strstr(outc, "SYSTEM") == NULL,
           "C: SHOW PROCESS does NOT report SYSTEM for a process that only "
           "claimed it -- through the ioctl AND through VMS_USERNAME");
+    /*
+     * THE CHECK THAT FOUND THE DEFECT, kept as the direct, named assertion
+     * for it (vms-cb5). The blanket "SYSTEM is absent" check above already
+     * goes red for this, but it goes red for a dozen unrelated reasons too,
+     * and a defect worth finding once is worth naming.
+     *
+     * MEASURED before the fix in src/vmsdcl/dcl_lexical.c (lex_user): this
+     * process -- refused SS$_NOPRIV by the executive two lines above, and so
+     * holding NO name in the process table -- answered F$GETJPI USERNAME
+     * with "SYSTEM", the most privileged account on the system, out of a
+     * hardcoded fallback. SHOW PROCESS, reading the same field of the same
+     * row, correctly printed nothing.
+     *
+     * The assertion is on the EXACT empty rendering, not on "SYSTEM is
+     * absent": absence is satisfied by any other invented name, including
+     * the getpwuid() one the same fallback would have produced on a system
+     * with an /etc/passwd -- which is every system except the initramfs this
+     * ran in. An assertion satisfiable by a different fabrication does not
+     * catch the fabrication.
+     */
+    CHECK(strstr(outc, "IDENT_U = \"\"") != NULL,
+          "C: F$GETJPI(\"\",\"USERNAME\") reports NO name for a process the "
+          "executive refused to name -- it does not fall back to a Linux "
+          "account name or to SYSTEM");
     /* [300,1001] octal: the UIC the executive derived from the credentials
      * the process really has, which is the one thing it could not forge. */
     CHECK(strstr(outc, "[454,1751]") != NULL,

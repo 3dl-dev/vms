@@ -270,6 +270,28 @@ if(BUILD_TESTS)
     set_tests_properties(terminal_identity_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
 
+    # Rule 10/11 standing gate (vms-cb5): the DERIVED census of every writer
+    # and reader of the identity environment variables, across src/ AND
+    # tools/. The gate above scans src/ only, and both the reachable writer
+    # (tools/vms_login.c) and the single surviving reader (tools/vms_mail.c)
+    # live in tools/ -- which is how a security review came to state, and
+    # nearly ship, "written ONLY by vmssshd". A prose census drifts silently;
+    # this one fails loudly, and prints itself either way.
+    add_test(NAME env_identity_census
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_env_identity_census.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(env_identity_census PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # ...and the evasions. Includes the two controls that matter most for a
+    # gate whose passing output is a LIST: that tools/ is genuinely scanned,
+    # and that a variable named only in a comment cannot enter the census.
+    add_test(NAME env_identity_census_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_env_identity_census_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(env_identity_census_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 180)
+
     # The BEHAVIOURAL half of the same rule (vms-fb9 round 2), and the one
     # that actually carries the invariant. The two source scans above check
     # that named tokens are absent; an adversary reintroduced SHOW DEVICE's

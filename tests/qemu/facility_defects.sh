@@ -619,8 +619,8 @@ sys$creprc returned the subject's pid
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-Assertions across two suites go red, and that IS the defect rather than
-evidence against it: the mutation deletes the ONE call that binds a process to the executive,
+FIFTEEN assertions go red, and that IS the defect rather than evidence against
+it: the mutation deletes the ONE call that binds a process to the executive,
 and a process with no PCB can use no facility. Round 1 named two of the twelve
 and framed the result as narrow ("only test_kmod_bind goes red"), which is
 true at suite granularity and misleading at property granularity -- the exact
@@ -651,10 +651,7 @@ failing to bind, exactly as suite 3 does one layer down: with no registration
 the child cannot report a process ID, so the creation handshake fails and
 $CREPRC reports the child lost. That suite then stops, by design, rather than
 asserting about a subject it knows was not created -- which is why exactly
-four of its assertions appear here and none of the rest of the suite, however
-many it has grown to. (The count is deliberately not written down: it was, and
-adding an assertion to the suite silently rotted it. The require_fail set is
-the machine-checked statement; this paragraph is the reasoning.)
+four of its assertions appear here and not the other fifty-six.
 EOF
                       ;;
         esac;;
@@ -674,25 +671,17 @@ reads that as "the child died before reporting". This is the vms-8019 round-4
 defect exactly, and it is not a theoretical one: DCL installs its interactive
 SIGINT/SIGQUIT handlers with sa_flags = 0 (src/vmsdcl/dcl_main.c) and DCL is
 what calls $CREPRC, so a Ctrl-C in the handshake window is the production
-trigger.
-THE DEFECT HAS TWO ENDINGS AND THE SCHEDULER PICKS ONE. Either the caller
-closes the pipe's read end first, so the child's report takes SIGPIPE, the
-child dies, and $CREPRC answers OVMX$_PRCLOST ("nothing was ever entered in
-the table") about a process that WAS created and registered; or the child
-reports first, activates its image, and $CREPRC's reap blocks for the lifetime
-of that image, so the call never comes back at all. BOTH were measured from
-this same mutation on this same commit -- the second on an aarch64 host under
-TCG, the FIRST on the x86_64 CI runner. They are one property (the caller's
-signal decided what $CREPRC said about the child) seen through two channels,
-so the suite asserts them as ONE assertion and prints which ending it saw;
-naming them separately is what made an earlier revision of this control flaky.
+trigger. The consequence has two halves, both wrong in the same way -- the
+caller is told OVMX$_PRCLOST ("nothing was ever entered in the table") about a
+process that IS in the table and resolvable by name, and $CREPRC then reaps
+that live process, blocking for as long as the image it just started runs.
 Nothing else in the file is touched: with no signal delivered the mutated code
 and the correct code are byte-for-byte equivalent in behaviour, which is why
 the ONLY assertion it reddens is the one that arranges the signal.
 EOF
                       ;;
         require_fail) cat <<'EOF'
-sys$creprc returned, and reported no process lost, while the caller caught signals
+sys$creprc RETURNED on every call while the caller caught signals
 EOF
                       ;;
         knock_on_fail) echo "";;

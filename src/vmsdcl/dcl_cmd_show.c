@@ -176,50 +176,54 @@ static int cmd_show_logical(struct dcl_command *cmd)
 }
 
 /*
- * cpu_time_of - the CPU time SHOW SYSTEM displays for one process row,
- * formatted as VMS "d hh:mm:ss.cc".
- *
- * THE FIGURE IS READ FROM THE SYSTEM SERVICE, NOT FROM /proc
- * (vms-8019 round 7). What stood here was a SECOND, independent
- * /proc/<pid>/stat parser living in the DCL layer -- a user-visible VMS
- * command sourcing its own answer for an item $GETJPI already answers
- * (JPI$_CPUTIM), which is the Rule 11 corollary inverted: a command is a
- * READER of an executive facility, never a thing that fabricates its own
- * answer. Two parsers of one quantity is also how the two layers came to
- * DISAGREE about one condition -- this one blanked the column when the
- * read failed while sys$getjpi invented a zero for the identical failure.
- * There is now one implementation and therefore one answer.
- *
- * Returns 1 with cpu_str filled, or 0 when the service will not report
- * the item -- which, for a row the scan has already established this
- * caller may read, means the process no longer exists (SS$_NONEXPR).
- * The caller then prints no figure and displays the row anyway -- the
- * same treatment as a redacted row; see cmd_show_system(), whose comment
- * records why dropping the row was written and backed out.
+ * Helper: read CPU time from /proc/pid/stat and format as VMS HH:MM:SS.CC.
+ * Fields 14 (utime) and 15 (stime) are in clock ticks.
+ * Returns 1 on success, 0 on failure.  cpu_str must be >= 14 bytes.
  */
-static int cpu_time_of(uint32_t vms_pid, char *cpu_str, size_t cpu_len)
+static int read_proc_cpu(int pid, char *cpu_str, size_t cpu_len)
 {
-    struct item_list_3 items[2];
-    uint32_t centisec_total = 0;
-    uint16_t retlen = 0;
+    char path[256];
+    snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
 
-    memset(items, 0, sizeof(items));
-    items[0].buflen    = sizeof(uint32_t);
-    items[0].item_code = JPI$_CPUTIM;
-    items[0].bufaddr   = &centisec_total;
-    items[0].retlen    = &retlen;
-
-    uint32_t st = sys$getjpi(0, &vms_pid, NULL, items, NULL, NULL, 0);
-
-    /* An unset item is as much a refusal as a failure status, and for the
-     * same reason: the service reports JPI$_CPUTIM or it reports nothing,
-     * never a zero standing in for a figure it could not obtain. */
-    if (!(st & 1) || retlen != sizeof(uint32_t))
+    /* /proc/pid/stat: pid (comm) state ppid ... utime stime ...
+     * We need to skip past the comm field (may contain spaces/parens) */
+    char line[1024];
+    if (!fgets(line, sizeof(line), fp)) {
+        fclose(fp);
         return 0;
+    }
+    fclose(fp);
 
-    /* JPI$_CPUTIM counts 10-millisecond units, i.e. centiseconds. */
-    unsigned long total_sec = centisec_total / 100UL;
-    unsigned long centisec  = centisec_total % 100UL;
+    /* Find closing ')' of comm field */
+    char *p = strrchr(line, ')');
+    if (!p) return 0;
+    p++; /* skip ')' */
+
+    /* Now parse: state ppid pgrp session tty_nr tpgid flags
+     * minflt cminflt majflt cmajflt utime stime
+     * That's 12 more fields after ')' */
+    unsigned long utime = 0, stime = 0;
+    char state;
+    long ppid, pgrp, session, tty_nr, tpgid;
+    unsigned long flags, minflt, cminflt, majflt, cmajflt;
+
+    if (sscanf(p, " %c %ld %ld %ld %ld %ld %lu %lu %lu %lu %lu %lu %lu",
+               &state, &ppid, &pgrp, &session, &tty_nr, &tpgid,
+               &flags, &minflt, &cminflt, &majflt, &cmajflt,
+               &utime, &stime) < 13) {
+        /* Fallback: scan as individual fields */
+        utime = 0; stime = 0;
+    }
+
+    long hz = sysconf(_SC_CLK_TCK);
+    if (hz <= 0) hz = 100;
+
+    unsigned long total_ticks = utime + stime;
+    unsigned long total_sec   = total_ticks / (unsigned long)hz;
+    unsigned long centisec    = (total_ticks % (unsigned long)hz) * 100UL /
+                                (unsigned long)hz;
     unsigned long hh = total_sec / 3600;
     unsigned long mm = (total_sec % 3600) / 60;
     unsigned long ss = total_sec % 60;
@@ -354,8 +358,8 @@ static int cmd_show_system(struct dcl_command *cmd)
          *
          * The executive returns rows the caller may not $GETJPI with
          * every identity field withheld and info.redacted set (see
-         * src/kernel/vms_ioctl.h), so $GETJPI on such a row would be
-         * refused SS$_NOPRIV -- there is no accounting to source.
+         * src/kernel/vms_ioctl.h). linux_pid is one of the withheld
+         * fields, so there is nothing to read /proc with.
          *
          * What stood here read /proc/0/stat, ignored the failure, and
          * printed the buffer's initialiser -- so a process whose
@@ -370,23 +374,10 @@ static int cmd_show_system(struct dcl_command *cmd)
          * for a process the caller cannot read is NOT PINNED -- it goes
          * with the rest of the column question to vms-6a7 -- and until
          * it is pinned, nothing is the only honest width.
-         *
-         * THE FIGURE IS THE SERVICE'S OR IT IS ABSENT (vms-8019 round 7).
-         * The scan is a snapshot walked one row at a time, so a process
-         * can also exit between being scanned and being read; the service
-         * then answers SS$_NONEXPR and, exactly as for a redacted row,
-         * this prints no figure. One rule covers both, because from the
-         * display's side they are one condition -- OVMX cannot source the
-         * figure -- and the alternative was to invent a second display
-         * rule (dropping the row) for a condition VMS's own SHOW SYSTEM
-         * never faces, which is the illegal third answer in the shape it
-         * always takes: reasonable-looking, and unpinned. What a VMS
-         * SHOW SYSTEM does with a process deleted mid-walk goes to
-         * vms-6a7 with the rest of the column question.
          */
         char cpu_str[32] = "";
         if (!info.redacted &&
-            !cpu_time_of(info.vms_pid, cpu_str, sizeof(cpu_str)))
+            !read_proc_cpu((int)info.linux_pid, cpu_str, sizeof(cpu_str)))
             cpu_str[0] = '\0';
 
         /*

@@ -235,11 +235,11 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
 /* $ASSIGN a channel to a device by name. SS$_NOSUCHDEV if the
  * executive has no such device; SS$_IVDEVNAM if the name is not a
  * device name at all.
- * OVMX-UNWIRED: vms_kif_assign (vms-dv1) */
+ * Wired: the census gate is what proves it has a product caller. */
 uint32_t vms_kif_assign(const char *devnam, uint32_t *chan);
 
 /* $DASSGN the channel. SS$_IVCHAN if it is not one of ours.
- * OVMX-UNWIRED: vms_kif_dassgn (vms-dv1) */
+ * Wired: the census gate is what proves it has a product caller. */
 uint32_t vms_kif_dassgn(uint32_t chan);
 
 /* $ALLOC the device to this process -- this, and not $ASSIGN, is what
@@ -268,7 +268,7 @@ uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info);
 
 /* Read the device row behind an assigned channel. SS$_IVCHAN if the
  * channel is not ours.
- * OVMX-UNWIRED: vms_kif_getdvi_chan (vms-fb9) */
+ * Wired: the census gate is what proves it has a product caller. */
 uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo *info);
 
 /* Enumerate the device table. Pass *index = 0 for the first row; each

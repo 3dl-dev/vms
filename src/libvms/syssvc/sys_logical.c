@@ -15,6 +15,23 @@
  * Logical names are stored case-insensitively (uppercased).
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * All three answer from logical_table[] in this file: a process-private array,
+ * one linked list per table name. LNM$SYSTEM_TABLE is therefore private too --
+ * a name defined in one process is invisible to every other, whatever table it
+ * was defined in. This is the same facade vms-a4b tracks in
+ * src/vmslnm/lnm_client.c, reached by a different door.
+ *
+ * OVMX-USERSPACE: sys$crelnm (vms-a4b) -- inserts into the process-private
+ *     logical_table[] under lnm_mutex; no daemon and no executive are told.
+ * OVMX-USERSPACE: sys$dellnm (vms-a4b) -- removes from the same private table.
+ * OVMX-USERSPACE: sys$trnlnm (vms-a4b) -- searches the same private table, so
+ *     it can only ever find names this process defined.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>

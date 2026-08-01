@@ -12,6 +12,21 @@
  * identified by a VMS device name (TT:, _FTAn:, _TTAn:).
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$sndopr (vms-5b4) -- appends to OPERATOR.LOG through
+ *     vmsfs path translation, tagged with the username read from the caller's
+ *     own PCB. There is no OPCOM process to request, so no operator is
+ *     notified and no reply can ever come back.
+ * OVMX-USERSPACE: sys$brkthruw (vms-5b4) -- open()s the resolved terminal
+ *     device and write()s to it directly, falling back to the caller's own
+ *     stdout when that open fails. No executive mediates the broadcast, so it
+ *     reaches a terminal only if this process can already open that device
+ *     itself, and sndtyp (the VMS target class) is discarded.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>

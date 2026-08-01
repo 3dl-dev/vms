@@ -14,6 +14,20 @@
  * For terminal devices, termios/ioctl provides terminal properties.
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$getdvi (vms-fb9) -- answers from classify_device() in
+ *     this file plus statvfs()/termios on the host, not from the executive
+ *     device table; the vms_kif_getdvi_* wrappers are declared OVMX-UNWIRED.
+ * OVMX-USERSPACE: sys$getdviw (vms-fb9) -- tail-calls sys$getdvi, so it
+ *     inherits that answer exactly.
+ * OVMX-USERSPACE: sys$device_scan (vms-fb9) -- enumerates the compiled-in
+ *     scan_devices[] table below, so it reports the same devices on every
+ *     system whatever is actually configured or mounted.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>

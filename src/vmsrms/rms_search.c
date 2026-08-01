@@ -11,6 +11,16 @@
  * $PARSE again.
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$search (vms-5b4) -- walks the host directory with
+ *     readdir(2) and matches in this process; the wildcard context lives in
+ *     nam$$l_context in the caller's own NAM block, so the enumeration is a
+ *     private snapshot with no executive file-system interlock behind it.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

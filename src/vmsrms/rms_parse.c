@@ -7,6 +7,16 @@
  * heavy lifting and applies defaults from fab$l_dna.
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$parse (vms-5b4) -- expands the caller's filespec into
+ *     the caller's NAM block using vmsfs_parse_filespec(). The device and
+ *     directory it resolves come from the vmsfs translation tables in this
+ *     process, not from an executive device or volume database.
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include "rms/rms.h"

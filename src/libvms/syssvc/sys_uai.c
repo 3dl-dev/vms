@@ -11,6 +11,20 @@
  * sys$setuai updates the record in place (requires SYSPRV privilege).
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$getuai (vms-5b4) -- opens and parses the SYSUAF file
+ *     itself through vmsfs path translation, in the calling process, with no
+ *     executive-mediated access and no interlock against a concurrent
+ *     sys$setuai in another process.
+ * OVMX-USERSPACE: sys$setuai (vms-5b4) -- rewrites that same file directly.
+ *     Its SYSPRV check reads pcb->cur_privs, the per-process word any process
+ *     can set for itself through sys$setprv (see src/libvms/syssvc/sys_misc.c),
+ *     so the authorization it enforces is the caller's own claim.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>

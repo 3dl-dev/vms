@@ -7,6 +7,25 @@
  * handler (sequential, relative, or indexed).
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * Each of the five validates the caller's RAB/FAB and dispatches to an
+ * organization handler (rms_seq.c / rms_rel.c / rms_idx.c) that reads and
+ * writes through fab->_linux_fd, this process's own descriptor. RAB$M_ options
+ * that request record locking have no executive lock manager behind them here,
+ * so two processes reading and writing the same file are not serialised by
+ * anything RMS does.
+ *
+ * OVMX-USERSPACE: sys$get (vms-5b4) -- read(2) through the caller's own fd.
+ * OVMX-USERSPACE: sys$put (vms-5b4) -- write(2) through the caller's own fd.
+ * OVMX-USERSPACE: sys$update (vms-5b4) -- rewrite in place through that fd.
+ * OVMX-USERSPACE: sys$delete (vms-5b4) -- marks the record through that fd.
+ * OVMX-USERSPACE: sys$find (vms-5b4) -- positions that fd without transferring
+ *     a record.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

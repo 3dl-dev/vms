@@ -21,6 +21,16 @@
  * Reference: OpenVMS System Services Reference Manual (SYS$CHECK_FEN)
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$check_fen (vms-5b4) -- returns compiled-in constants
+ *     (*flags = 0, return 1) without reading any hardware PCB, process or
+ *     executive state; the answer is the same on every system and every
+ *     process, whatever the FEN bit would say.
+ */
+
 #include <stdint.h>
 #include "ssdef.h"
 #include "starlet.h"

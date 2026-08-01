@@ -11,6 +11,27 @@
  * Offset: 3,506,716,800 seconds = 0x007C95674BEB4000 in 100ns ticks
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME)
+ *     converted to VMS 100ns ticks; the host clock, not an executive EXE$GQ_
+ *     system time cell, so no system-time base can be set or observed.
+ * OVMX-USERSPACE: sys$getutc (vms-5b4) -- the same host clock read.
+ * OVMX-USERSPACE: sys$numtim (vms-5b4) -- converts the caller's quadword (or
+ *     the host clock when timadr is NULL) into the caller's timbuf.
+ * OVMX-USERSPACE: sys$asctim (vms-5b4) -- formats into the caller's buffer
+ *     from the compiled-in months[] table in this file.
+ * OVMX-USERSPACE: sys$bintim (vms-5b4) -- parses the caller's string against
+ *     that same compiled-in table.
+ * OVMX-USERSPACE: sys$setimr (vms-5b4) -- arms a POSIX timer recorded in the
+ *     process-local timer_table[] in this file. There is no executive timer
+ *     queue, so the request dies with the process and nothing else can see it.
+ * OVMX-USERSPACE: sys$cantim (vms-5b4) -- cancels entries in that same
+ *     process-local table, so it can only ever cancel this process's timers.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <time.h>

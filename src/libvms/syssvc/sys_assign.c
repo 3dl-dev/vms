@@ -7,6 +7,12 @@
  * that channel. Channel state is stored in the Per-Process Control Block.
  */
 
+/*
+ * sys$assign and sys$dassgn reach the executive device table via
+ * vms_kif_assign()/vms_kif_dassgn() (vms-1c57) -- no OVMX-USERSPACE
+ * declaration here. See tests/integration/test_userspace_service_register.sh.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>

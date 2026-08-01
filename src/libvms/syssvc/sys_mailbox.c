@@ -11,6 +11,19 @@
  * pointing to the mailbox device name MBA<n>:.
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$crembx (vms-5b4) -- creates an AF_UNIX socketpair whose
+ *     two ends both stay in the caller's own pcb->channels[]; the MBA<n>: unit
+ *     number comes from the process-local counter mbx_next_unit, so two
+ *     processes each independently create a device they both call MBA1:, and
+ *     neither can open the other's.
+ * OVMX-USERSPACE: sys$delmbx (vms-5b4) -- closes the caller's own channel
+ *     entry; no executive device table learns the mailbox is gone.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>

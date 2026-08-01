@@ -10,6 +10,38 @@
  * invoked by sys$exit before the process terminates.
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * $CREPRC, $GETJPI and $GETJPIW reach the executive process table (vms-8019)
+ * and carry no declaration. The services below do not, and the recurring shape
+ * is the discarded prcnam: each one below that accepts a VMS process NAME
+ * opens with `(void)prcnam;`, so a caller that names its target rather than
+ * numbering it is silently redirected to itself or to a raw Linux pid.
+ *
+ * OVMX-USERSPACE: sys$exit (vms-8019) -- runs the exit handlers held in
+ *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.
+ * OVMX-USERSPACE: sys$dclexh (vms-8019) -- appends to that same per-process
+ *     array; no executive records that the process has an exit handler.
+ * OVMX-USERSPACE: sys$forcex (vms-8019) -- with no pidadr it degenerates to
+ *     sys$exit on the caller; otherwise kill() by Linux pid. prcnam discarded.
+ * OVMX-USERSPACE: sys$delprc (vms-8019) -- kill(SIGTERM) by Linux pid, or the
+ *     caller's own pid when pidadr is NULL. prcnam discarded.
+ * OVMX-USERSPACE: sys$hiber (vms-8019) -- pause() on the calling thread; the
+ *     executive has no record that this process is hibernating.
+ * OVMX-USERSPACE: sys$wake (vms-8019) -- kill(SIGCONT) by Linux pid, or the
+ *     caller's own pid when pidadr is NULL. prcnam discarded.
+ * OVMX-USERSPACE: sys$suspnd (vms-8019) -- kill(SIGSTOP), same shape.
+ * OVMX-USERSPACE: sys$suspend (vms-8019) -- tail-calls sys$suspnd.
+ * OVMX-USERSPACE: sys$resume (vms-8019) -- kill(SIGCONT), same shape.
+ * OVMX-USERSPACE: sys$setpri (vms-8019) -- getpriority/setpriority on the
+ *     CALLING process; pidadr as well as prcnam is discarded, so it cannot
+ *     change any other process's priority however it is invoked.
+ * OVMX-USERSPACE: sys$cancel (vms-8019) -- returns SS$_NORMAL without doing
+ *     anything; there is no executive I/O queue to cancel against.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>

@@ -8,6 +8,37 @@
  * companion .rms_meta sidecar files alongside the data files.
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * Each service below works on the caller's own FAB/RAB; where it touches a
+ * file it does so through a plain path or through the fd cached in
+ * fab->_linux_fd, in this process. There is no executive file or record layer,
+ * so there is no cross-process record locking and no shared file access
+ * arbitration behind any of them.
+ *
+ * OVMX-USERSPACE: sys$open (vms-5b4) -- open(2) on the translated path; the
+ *     FAB share/access fields do not reach any arbitrator.
+ * OVMX-USERSPACE: sys$create (vms-5b4) -- open(2) with O_CREAT, plus a
+ *     .rms_meta sidecar written by this process.
+ * OVMX-USERSPACE: sys$close (vms-5b4) -- close(2) of the caller's own fd.
+ * OVMX-USERSPACE: sys$erase (vms-5b4) -- unlink(2) with no interlock against
+ *     another process holding the file open.
+ * OVMX-USERSPACE: sys$connect (vms-5b4) -- initializes the stream-position
+ *     fields (_current_offset/_eof/_last_rec_offset/_last_rec_size/rab$w_isi)
+ *     directly inside the caller's own RAB. Measured: it never allocates;
+ *     the RAB's rab->_rms_stream pointer sys$disconnect frees is never set
+ *     by this function or anywhere else in the tree.
+ * OVMX-USERSPACE: sys$disconnect (vms-5b4) -- resets those same fields and
+ *     frees rab->_rms_stream if non-NULL, which measurement shows is always
+ *     NULL -- no code path in the tree ever assigns it.
+ * OVMX-USERSPACE: sys$display (vms-5b4) -- reloads the .rms_meta sidecar this
+ *     process wrote; the attributes are file content, not executive metadata.
+ * OVMX-USERSPACE: sys$rewind (vms-5b4) -- repositions the caller's own fd.
+ * OVMX-USERSPACE: sys$flush (vms-5b4) -- flushes the caller's own fd.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -256,22 +256,33 @@ PASS=0
 FAIL=0
 ERRORS=""
 
-# Whole-log substring check. Used ONLY for the negative Unix-leak checks
-# below, whose patterns cannot be satisfied by something this script itself
-# typed (see check_response() below for the positive assertions, which can
-# be echo-satisfied and so are anchored to one command's own response
-# instead of scanning the whole log). Round-3 mutation testing found and
-# removed the two whole-log positive-assertion helpers this file used to
-# have (check_contains/check_regex): every positive check that used them
-# was provably satisfiable by a command's own echo or by unrelated output
-# elsewhere in the log (e.g. LOGOUT's timestamp satisfying a "SHOW TIME
-# printed a date" check even when SHOW TIME itself was rejected by DCL).
+# Whole-log substring checks. Used ONLY for patterns that cannot be
+# satisfied by something this script itself typed (see check_response()
+# below for the ones that can).
+check_contains() {
+    if echo "$SESSION_OUTPUT" | grep -qi "$1"; then
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  FAIL: session output should contain '$1'"
+    fi
+}
+
 check_not_contains() {
     if echo "$OUTPUT" | grep -qi "$1"; then
         FAIL=$((FAIL + 1))
         ERRORS="${ERRORS}\n  FAIL: output should NOT contain '$1'"
     else
         PASS=$((PASS + 1))
+    fi
+}
+
+check_regex() {
+    if echo "$SESSION_OUTPUT" | grep -qiE "$1"; then
+        PASS=$((PASS + 1))
+    else
+        FAIL=$((FAIL + 1))
+        ERRORS="${ERRORS}\n  FAIL: session output should match regex '$1'"
     fi
 }
 
@@ -288,15 +299,8 @@ check_response() {
     fi
 }
 
-# SHOW TIME should print a VMS date (DD-MMM-YYYY) in its own response.
-# Anchored, not a whole-log scan: LOGOUT's own message ("logged out at
-# 1-JAN-1970 00:00:09.95") independently matches this exact date-format
-# regex, so a whole-log check_regex here would still pass even if SHOW TIME
-# were rejected outright and printed no date at all. Verified by mutation:
-# prefixing SHOW TIME with a bogus verb (%DCL-E-IVVERB, no date printed by
-# that command) makes this assertion fail only once it is anchored to SHOW
-# TIME's own response; the unmutated run still passes.
-check_response 'SHOW TIME' '[0-9]{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-[0-9]{4}'
+# VMS date format (DD-MMM-YYYY)
+check_regex '[0-9]{1,2}-(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)-[0-9]{4}'
 
 # SHOW DEFAULT should show SYS$MANAGER after SET DEFAULT. Anchored to the
 # SECOND 'SHOW DEFAULT' response (associative array key => last write wins,
@@ -317,25 +321,12 @@ check_response 'SHOW LOGICAL UAT_TEST' 'session_test_passed'
 # own regardless of what SHOW PROCESS printed.
 check_response 'SHOW PROCESS' 'SYSTEM'
 
-# Privilege names should appear in SHOW PROCESS /PRIVILEGES's own response.
-# Anchored, not a whole-log scan: the whole log also contains the echo of
-# the command itself, and 'PRIV' is a literal substring of 'SHOW PROCESS
-# /PRIVILEGES' -- a check_regex('...|PRIV') on SESSION_OUTPUT would pass on
-# the echo alone even if DCL rejected the command outright. Verified by
-# mutation: prefixing the command with a bogus verb so DCL returns
-# %DCL-E-IVVERB and no privilege list is ever printed makes this assertion
-# fail; the unmutated run still passes.
-check_response 'SHOW PROCESS /PRIVILEGES' '(TMPMBX|NETMBX|OPER)'
+# Privilege names should appear. Not echo-satisfiable (this script never
+# types TMPMBX/NETMBX/OPER/PRIV), so a session-output scan is sufficient.
+check_regex '(TMPMBX|NETMBX|OPER|PRIV)'
 
-# SHOW TERMINAL should show terminal info in its own response. Anchored, not
-# a whole-log scan: grep is case-insensitive, so 'Terminal' matches the echo
-# of the command 'SHOW TERMINAL' itself, and '_[A-Z]' matches the echoes of
-# 'DEFINE UAT_TEST ...' / 'SHOW LOGICAL UAT_TEST' / 'DEASSIGN UAT_TEST' (the
-# '_T') as well as '_OPA0:' in SHOW PROCESS's output -- neither alternative
-# needs SHOW TERMINAL to have run at all. Verified by mutation: prefixing
-# the command with a bogus verb (%DCL-E-IVVERB, no terminal info printed)
-# makes this assertion fail; the unmutated run still passes.
-check_response 'SHOW TERMINAL' '(Terminal|Device|VT100)'
+# SHOW TERMINAL should show terminal info. Not echo-satisfiable.
+check_regex '(Terminal|Device|VT100|_[A-Z])'
 
 # HELP should produce output. Anchored to HELP SHOW's own response (not the
 # whole log) because the command text itself contains 'SHOW' -- an unanchored

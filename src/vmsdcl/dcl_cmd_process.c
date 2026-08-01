@@ -171,7 +171,19 @@ int cmd_submit(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)bn[i]);
     upper_name[i] = '\0';
 
-    const char *user = ctx->username[0] ? ctx->username : "SYSTEM";
+    /*
+     * NO FABRICATED OWNER (vms-f42d, CLAUDE.md Rule 10). This read
+     * ": \"SYSTEM\"" -- so a process the executive holds no name for
+     * submitted its job under the most privileged account on the system.
+     * That state is reachable without privilege: vms_proc_register()
+     * gives each new task a row with a zeroed username and inherits
+     * nothing from its parent (src/kernel/vms_module.c), so any SPAWNed
+     * subprocess is in it. The fallback is DELETED, not replaced -- see
+     * the long form at lex_user() in src/vmsdcl/dcl_lexical.c. What goes
+     * in the queue entry is what the executive holds, including when
+     * that is nothing.
+     */
+    const char *user = ctx->username;
 
     uint32_t entry_id = 0;
     sts = vmsq_submit(queue_name, upper_name, user, &entry_id);
@@ -231,7 +243,9 @@ int cmd_print(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)bn[i]);
     upper_name[i] = '\0';
 
-    const char *user = ctx->username[0] ? ctx->username : "SYSTEM";
+    /* No fabricated owner -- same defect, same deletion, as SUBMIT above
+     * (vms-f42d). */
+    const char *user = ctx->username;
 
     uint32_t entry_id = 0;
     sts = vmsq_submit(queue_name, upper_name, user, &entry_id);
@@ -1483,7 +1497,10 @@ int cmd_logout(struct dcl_command *cmd)
 {
     (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
-    const char *upper_user = ctx->username[0] ? ctx->username : "SYSTEM";
+    /* No fabricated user name in the logout record or the OPCOM entry
+     * (vms-f42d) -- an operator log that names an unnamed process SYSTEM
+     * is worse than one that names it nothing. Same deletion as SUBMIT. */
+    const char *upper_user = ctx->username;
 
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);

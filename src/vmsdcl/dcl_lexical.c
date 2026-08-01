@@ -623,26 +623,36 @@ static int lex_user(struct dcl_context *ctx, const char *args,
      * that had just been refused it. It degraded UPWARD, which is the
      * signature of this defect class.
      *
-     * Why deletion is the whole fix, and why no replacement value is chosen
-     * here: VMS has no process without a user name -- the name lives in the
-     * executive's process table and every process has a row -- so this is a
-     * condition VMS never faces, and Rule 10 forbids inventing a
-     * plausible-looking handler for one. The honest answer is the one the
-     * executive gave, which for an unnamed process is the empty string. That
-     * is not a value this file picks: it is what SHOW PROCESS already prints
-     * for this exact case (src/vmsdcl/dcl_cmd_show.c), so the fix makes the
-     * two readers of the fact agree instead of introducing a third answer.
+     * Why no replacement value is chosen here: VMS has no process without a
+     * user name -- the name lives in the executive's process table, and on
+     * the oracle a subprocess carries its creator's (VAX1, OpenVMS VAX V7.3:
+     * SPAWN answers "%DCL-S-SPAWNED, process SYSTEM_1 spawned"; the capture
+     * is cited at tests/uat/vms_session_qemu.sh) -- so this is a condition
+     * VMS never faces, and Rule 10 forbids inventing a plausible-looking
+     * handler for one. The honest answer is the one the executive gave,
+     * which for an unnamed process is the empty string. That is not a value
+     * this file picks: it is what SHOW PROCESS already prints for this exact
+     * case (src/vmsdcl/dcl_cmd_show.c), so the fix makes the two readers of
+     * the fact agree instead of introducing a third answer.
      *
      * getpwuid() had to go with it and is not the lesser half. A Linux
      * account name upcased is not a VMS user name; substituting one is the
      * same fabrication wearing a more convincing costume, and it is the
-     * branch that would have been taken on any system that does have an
-     * /etc/passwd -- i.e. everywhere except the initramfs that exposed it.
+     * branch taken on a system that does have an /etc/passwd. Measured on
+     * this repo's own build host, with the branch restored: F$USER()
+     * answered "BARON", the developer's login name (vms-f39).
      *
-     * On the one runtime target this is unreachable rather than merely
-     * refused: PID 1 halts without the executive (vms-0ff), and LOGINOUT
-     * exits fatally if VMS_IOCTL_SETIDENT does not take (tools/vms_login.c),
-     * so no interactive session reaches DCL with an unnamed row.
+     * THE UNNAMED ROW IS REACHABLE ON THE ONE RUNTIME TARGET, and the repo
+     * says so elsewhere -- an earlier draft of this comment claimed the
+     * opposite ("no interactive session reaches DCL with an unnamed row")
+     * and it was false. vms_proc_register() in src/kernel/vms_module.c
+     * derives a fresh row for each new task and inherits nothing from the
+     * parent (src/kernel/vms_proctab.c), so a SPAWN from an ordinary console
+     * login yields a DCL whose row has no name. That blank is PINNED, not
+     * denied, by tests/uat/vms_session_qemu.sh ('User: +Process ID:') and it
+     * is $CREPRC identity propagation's to fix (vms-afd), not this
+     * function's. What this function owes that state is an honest answer,
+     * which is what is below.
      */
     if (ctx->username[0])
         strncpy(result, ctx->username, result_size - 1);

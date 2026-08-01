@@ -54,6 +54,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <grp.h>
+#include <pwd.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 
@@ -497,6 +498,363 @@ static void scenario_e_a_writes_b_reads(void)
               "E: process A exited normally, i.e. it was still blocked and "
               "alive while B read its row");
     }
+}
+
+/* ====================================================================
+ * G. THE COMMANDS THAT NAME THE USER, ASKED BY A SUBPROCESS THE
+ *    EXECUTIVE HAS NOT NAMED (vms-f39, vms-f42d, CLAUDE.md Rule 10).
+ *
+ * WHAT THIS EXISTS FOR. Scenario C proved ONE reader of the user name
+ * (F$GETJPI) stopped fabricating. It said nothing about the others, and
+ * there were five more, all the same one-liner:
+ *
+ *     const char *user = ctx->username[0] ? ctx->username : "SYSTEM";
+ *
+ * in cmd_submit / cmd_print / cmd_logout (src/vmsdcl/dcl_cmd_process.c)
+ * and cmd_reply / cmd_accounting (src/vmsdcl/dcl_cmd_misc.c), plus
+ * F$USER()'s getpwuid(getuid()) branch in dcl_lexical.c which answered
+ * with the HOST Linux login name, upcased. So a process the executive
+ * held no name for submitted print and batch jobs owned by SYSTEM, wrote
+ * SYSTEM into OPERATOR.LOG through REPLY, was logged out as SYSTEM, and
+ * reported SYSTEM's login history.
+ *
+ * THE STATE IS REACHABLE WITHOUT PRIVILEGE, and that is why this is a
+ * defect rather than a curiosity: vms_proc_register() (src/kernel/
+ * vms_module.c) zeroes the username of every newly registered task and
+ * inherits nothing from the parent's row (src/kernel/vms_proctab.c), so
+ * any SPAWNed subprocess of an ordinary login is in it. The repo already
+ * asserts that blank out loud at tests/uat/vms_session_qemu.sh
+ * ('User: +Process ID:'), where it is filed against $CREPRC identity
+ * propagation (vms-afd).
+ *
+ * CROSS-PROCESS BY CONSTRUCTION. The shape is LOGINOUT's, as scenario D:
+ * a session establishes an authenticated identity through the executive,
+ * DROPS its Linux credentials to that UIC, and only then forks the
+ * subprocess. The subprocess registers on its own -- so its row is the
+ * unnamed one -- execs the shipped DCL.EXE with the poisoned environment,
+ * and every assertion below is made by THIS process, which is neither the
+ * session nor the subprocess, over bytes the subprocess printed.
+ *
+ * WHAT THE ASSERTIONS ARE MADE ON. Each site gets a POSITIVE check that
+ * the command ran and rendered the name field EMPTY, in that command's own
+ * printf format, plus a NEGATIVE check naming the literal the fallback
+ * used to produce. "SYSTEM is absent" alone would be satisfied by the
+ * command failing outright, and by the getpwuid() fabrication that the
+ * same fallback produced on any system that has an /etc/passwd.
+ * ==================================================================== */
+#define G_NAME  "SHIPPING"
+#define G_GRP   210u
+#define G_MEM   11u
+#define G_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX)
+
+/* The queue manager's database. ensure_queue_init() defaults it to
+ * /tmp/QMAN_MASTER.DAT, which the initramfs's root-owned /tmp does not let
+ * an unprivileged subprocess create -- and a SUBMIT/PRINT that fails
+ * QMANERR would satisfy every "SYSTEM is absent" check while proving
+ * nothing. So the directory is made world-writable below and named here.
+ * This is the ONLY variable added to the poisoned set; the five identity
+ * variables are planted exactly as everywhere else in this file. */
+#define G_QDIR  "/tmp/ovmx_cb5_q"
+
+static char *const g_env[] = {
+    (char *)"VMS_USERNAME=SYSTEM",
+    (char *)"VMS_PRIVILEGES=ALL",
+    (char *)"VMS_UIC_GROUP=1",
+    (char *)"VMS_UIC_MEMBER=4",
+    (char *)"VMS_TERMINAL=_OPA0:",
+    (char *)"PATH=/bin",
+    (char *)"VMSQ_DB_PATH=" G_QDIR "/QMAN.DAT",
+    NULL
+};
+
+/* The files SUBMIT and PRINT queue. DCL's parser treats '/' as the start
+ * of a qualifier, so a Linux path cannot be handed to PRINT at all -- the
+ * spec has to be a VMS filespec, which dcl_resolve_path() maps through
+ * DKA0: -> SYSDISK_MOUNT. Measured, not assumed: 'PRINT ./x.txt' on the
+ * host build answers '%RMS-E-FNF, file not found - .'. */
+#define G_VMSDIR "DKA0:[OVMXCB5]"
+#define G_LNXDIR "/vms/OVMXCB5"
+
+/*
+ * THE /etc/passwd THIS SCENARIO STAGES, and why it is not decoration.
+ *
+ * F$USER()'s deleted fallback had TWO branches -- getpwuid(getuid()) first,
+ * the literal "SYSTEM" only if that returned NULL. This initramfs has no
+ * /etc/passwd, so getpwuid() returns NULL here and the getpwuid branch is
+ * UNREACHABLE: an assertion run without this file cannot tell the two
+ * branches apart, and restoring only the getpwuid half would produce no
+ * observable change at all. That is the vacuity Method Requirement 3 names.
+ *
+ * So the file is staged for the length of this scenario and removed after,
+ * giving uid G_MEM a Linux account name -- which is the state of EVERY
+ * system that is not this initramfs, and the state under which the defect
+ * was originally measured (F$USER() answering "BARON", the host login name
+ * upcased). The subprocess prints getpwuid(getuid())->pw_name on the
+ * captured stream, so "the Linux name is absent from the output" is backed
+ * by evidence that the Linux name EXISTED and was resolvable at the moment
+ * the question was asked.
+ */
+#define G_PWNAME "shipuser"
+
+static int g_stage_files(void)
+{
+    FILE *fp;
+
+    mkdir("/etc", 0777);
+    fp = fopen("/etc/passwd", "w");
+    if (!fp) return -1;
+    fprintf(fp, "%s:x:%u:%u:OVMX cb5 probe:/tmp:/bin/sh\n",
+            G_PWNAME, (unsigned)G_MEM, (unsigned)G_GRP);
+    fclose(fp);
+    chmod("/etc/passwd", 0644);
+
+    mkdir("/vms", 0777);
+    mkdir(G_LNXDIR, 0777);
+    chmod("/vms", 0777);
+    chmod(G_LNXDIR, 0777);
+    mkdir(G_QDIR, 0777);
+    chmod(G_QDIR, 0777);
+
+    fp = fopen(G_LNXDIR "/JOB.TXT", "w");
+    if (!fp) return -1;
+    fputs("ovmx cb5 print job\n", fp);
+    fclose(fp);
+    chmod(G_LNXDIR "/JOB.TXT", 0666);
+
+    fp = fopen(G_LNXDIR "/JOB.COM", "w");
+    if (!fp) return -1;
+    fputs("$ EXIT\n", fp);
+    fclose(fp);
+    chmod(G_LNXDIR "/JOB.COM", 0666);
+
+    return 0;
+}
+
+static int run_g_subprocess(const char *script, char *out, size_t outsz)
+{
+    int out_pipe[2], in_pipe[2];
+
+    out[0] = '\0';
+    if (pipe(in_pipe) < 0) return -1;
+    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
+
+    pid_t sess = fork();
+    if (sess < 0) {
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+        return -1;
+    }
+
+    if (sess == 0) {
+        struct vms_procinfo self;
+        dup2(in_pipe[0], STDIN_FILENO);
+        dup2(out_pipe[1], STDOUT_FILENO);
+        dup2(out_pipe[1], STDERR_FILENO);
+        close(in_pipe[0]); close(in_pipe[1]);
+        close(out_pipe[0]); close(out_pipe[1]);
+
+        /* 1. LOGINOUT stamps the authenticated identity. */
+        printf("G_SESSION_SETIDENT=%u\n",
+               (unsigned)vms_kif_setident(G_NAME, (G_GRP << 16) | G_MEM,
+                                          G_PRIVS));
+        /* Read it back out of the executive, so the run itself shows the
+         * table CAN hold a name -- otherwise the subprocess's blank could
+         * be explained by the executive naming nobody in this boot. */
+        memset(&self, 0, sizeof(self));
+        if (vms_kif_getjpi_self(&self) & 1)
+            printf("G_SESSION_SELF=%s\n", self.username);
+
+        /* 2. LOGINOUT becomes the user. */
+        if (setgroups(0, NULL) != 0 || setgid((gid_t)G_GRP) != 0 ||
+            setuid((uid_t)G_MEM) != 0) {
+            printf("G_SESSION_DROP_FAILED=%d\n", errno);
+            fflush(stdout);
+            _exit(126);
+        }
+        printf("G_SESSION_UID=%u\n", (unsigned)getuid());
+        fflush(stdout);
+
+        /* 3. The session SPAWNs. The child registers itself, which is
+         *    where the unnamed row comes from, and claims nothing. */
+        pid_t sub = fork();
+        if (sub == 0) {
+            uint32_t vpid = 0;
+            struct passwd *pw;
+            printf("G_SUB_REGISTER=%u\n",
+                   (unsigned)vms_kif_register(&vpid));
+            /* The Linux account name the deleted getpwuid() branch would
+             * have answered with, resolved in THIS process at THIS moment.
+             * Without it, "the Linux name is absent" is a claim about a
+             * name that may never have existed. */
+            pw = getpwuid(getuid());
+            printf("G_SUB_PWNAM=%s\n", pw && pw->pw_name ? pw->pw_name : "(none)");
+            fflush(stdout);
+            execle(DCL_PATH, "DCL.EXE", (char *)NULL, g_env);
+            printf("G_SUB_EXEC_FAILED=%d\n", errno);
+            fflush(stdout);
+            _exit(127);
+        }
+        int sst;
+        while (sub > 0 && waitpid(sub, &sst, 0) < 0 && errno == EINTR)
+            ;
+        fflush(stdout);
+        _exit(0);
+    }
+
+    close(in_pipe[0]);
+    close(out_pipe[1]);
+    {
+        ssize_t w = write(in_pipe[1], script, strlen(script));
+        (void)w;
+    }
+    close(in_pipe[1]);
+
+    size_t used = 0;
+    for (;;) {
+        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
+        if (n <= 0) break;
+        used += (size_t)n;
+        if (used >= outsz - 1) break;
+    }
+    out[used] = '\0';
+    close(out_pipe[0]);
+
+    int st;
+    while (waitpid(sess, &st, 0) < 0 && errno == EINTR)
+        ;
+    return 0;
+}
+
+static void scenario_g_unnamed_row_reports_nothing(void)
+{
+    static char outg[65536];
+    char want[160], nope[160];
+
+    printf("  ---- G: the name-printing commands, in an unnamed subprocess ----\n");
+
+    if (g_stage_files() != 0) {
+        CHECK(0, "G: could not stage the files SUBMIT and PRINT queue");
+        return;
+    }
+
+    const char *script_g =
+        "PRINT " G_VMSDIR "JOB.TXT\n"
+        "SUBMIT " G_VMSDIR "JOB.COM\n"
+        "SHOW QUEUE/ALL\n"
+        "ACCOUNTING\n"
+        "REPLY/ENABLE\n"
+        "IDENT_U = F$USER()\n"
+        "SHOW SYMBOL IDENT_U\n"
+        "SHOW PROCESS\n"
+        "LOGOUT\n";
+
+    int rc = run_g_subprocess(script_g, outg, sizeof(outg));
+    /* Staged for this scenario only -- every suite after this one runs in
+     * the same initramfs and none of them should meet a passwd database
+     * this scenario invented. */
+    unlink("/etc/passwd");
+    if (rc != 0) {
+        CHECK(0, "G: could not run the session/subprocess scenario");
+        return;
+    }
+    dump("G: unnamed subprocess", outg);
+
+    /* --- the run is what it claims to be ------------------------------ */
+    CHECK(strstr(outg, "G_SESSION_SETIDENT=1\n") != NULL,
+          "G: the session established an authenticated identity");
+    CHECK(strstr(outg, "G_SESSION_SELF=" G_NAME "\n") != NULL,
+          "G: the executive HOLDS that name and reads it back -- so the "
+          "subprocess's blank below is not the executive naming nobody");
+    {
+        char uid_want[64];
+        snprintf(uid_want, sizeof(uid_want), "G_SESSION_UID=%u\n",
+                 (unsigned)G_MEM);
+        CHECK(strstr(outg, uid_want) != NULL,
+              "G: the session dropped its Linux credentials, so the "
+              "subprocess is genuinely unprivileged");
+    }
+    CHECK(strstr(outg, "G_SUB_REGISTER=1\n") != NULL,
+          "G: the subprocess reached the executive and got a row of its own "
+          "(so its blank name is a real blank, not an absent executive)");
+    CHECK(strstr(outg, "G_SUB_EXEC_FAILED") == NULL,
+          "G: the subprocess actually exec'd the shipped DCL.EXE");
+    /* --- the unnamed row itself -------------------------------------- */
+    /* cmd_show_process's own field: "User: %-17sProcess ID:". */
+    snprintf(want, sizeof(want), "User: %-17sProcess ID:", "");
+    CHECK(strstr(outg, want) != NULL,
+          "G: SHOW PROCESS in the subprocess reports an EMPTY user name -- "
+          "the known state tests/uat/vms_session_qemu.sh already pins, filed "
+          "as vms-afd");
+    CHECK(strstr(outg, "User: " G_NAME) == NULL,
+          "G: the subprocess does NOT report the SESSION's name -- OVMX has "
+          "no $CREPRC identity propagation yet (vms-afd); when it lands this "
+          "line goes red and whoever lands it deletes it");
+
+    /* --- F$USER (vms-f39) -------------------------------------------- */
+    CHECK(strstr(outg, "G_SUB_PWNAM=" G_PWNAME "\n") != NULL,
+          "G/F$USER: getpwuid(getuid()) DOES resolve to a Linux account name "
+          "in this process -- so the next check is about a name that existed");
+    CHECK(strstr(outg, "IDENT_U = \"\"\n") != NULL,
+          "G/F$USER: reports NO name for a process the executive has not "
+          "named -- not the host Linux login name, not SYSTEM");
+    CHECK(strstr(outg, "IDENT_U = \"SYSTEM\"") == NULL,
+          "G/F$USER: does not answer with the literal SYSTEM");
+    /* Searched over DCL's OUTPUT ONLY -- everything after the harness's own
+     * G_SUB_PWNAM line, which necessarily contains the name and would make a
+     * whole-buffer search unfalsifiable. */
+    {
+        const char *dclout = strstr(outg, "G_SUB_PWNAM=");
+        if (dclout) dclout = strchr(dclout, '\n');
+        if (dclout) dclout++; else dclout = outg;
+        CHECK(strstr(dclout, G_PWNAME) == NULL &&
+              strstr(dclout, "SHIPUSER") == NULL,
+              "G/F$USER: DCL never answers with the Linux account name, "
+              "upcased or otherwise -- the vms-f39 defect exactly");
+    }
+
+    /* --- PRINT (vms-f42d) -------------------------------------------- */
+    CHECK(strstr(outg, "%PRINT-S-QUEUED, job JOB.TXT") != NULL,
+          "G/PRINT: the job really was queued (so the owner assertions below "
+          "are about a real queue entry)");
+    snprintf(want, sizeof(want), " %-20s %-12s %-10s\n", "JOB.TXT", "", "Pending");
+    snprintf(nope, sizeof(nope), " %-20s %-12s %-10s\n", "JOB.TXT", "SYSTEM", "Pending");
+    CHECK(strstr(outg, want) != NULL,
+          "G/PRINT: SHOW QUEUE shows the print job with an EMPTY owner, in "
+          "cmd_show_queue's own column format");
+    CHECK(strstr(outg, nope) == NULL,
+          "G/PRINT: the print job is NOT owned by SYSTEM");
+
+    /* --- SUBMIT (vms-f42d) ------------------------------------------- */
+    CHECK(strstr(outg, "%SUBMIT-S-SUBMITTED, job JOB ") != NULL,
+          "G/SUBMIT: the batch job really was queued");
+    snprintf(want, sizeof(want), " %-20s %-12s %-10s\n", "JOB", "", "Pending");
+    snprintf(nope, sizeof(nope), " %-20s %-12s %-10s\n", "JOB", "SYSTEM", "Pending");
+    CHECK(strstr(outg, want) != NULL,
+          "G/SUBMIT: SHOW QUEUE shows the batch job with an EMPTY owner");
+    CHECK(strstr(outg, nope) == NULL,
+          "G/SUBMIT: the batch job is NOT owned by SYSTEM");
+
+    /* --- ACCOUNTING (vms-f42d) --------------------------------------- */
+    CHECK(strstr(outg, "OVMX Accounting for user \n") != NULL,
+          "G/ACCOUNTING: names no account for an unnamed process");
+    CHECK(strstr(outg, "OVMX Accounting for user SYSTEM") == NULL,
+          "G/ACCOUNTING: does not report SYSTEM's login history to an "
+          "unnamed process");
+
+    /* --- REPLY (vms-f42d) -------------------------------------------- */
+    CHECK(strstr(outg, "%OPCOM-I-OPRENA, operator  enabled for CENTRAL class "
+                       "messages\n") != NULL,
+          "G/REPLY: the OPCOM enable message names no operator");
+    CHECK(strstr(outg, "operator SYSTEM enabled") == NULL,
+          "G/REPLY: OPERATOR.LOG is not told that SYSTEM enabled the "
+          "terminal");
+
+    /* --- LOGOUT (vms-f42d) ------------------------------------------- */
+    CHECK(strstr(outg, "\n        logged out at ") != NULL,
+          "G/LOGOUT: the logout line names no user, in cmd_logout's own "
+          "\"  %s      logged out at\" format");
+    CHECK(strstr(outg, "SYSTEM      logged out at") == NULL,
+          "G/LOGOUT: the session is not logged out as SYSTEM");
 }
 
 int main(void)
@@ -949,6 +1307,12 @@ int main(void)
               "privilege names (CMKRNL,CMEXEC,SETPRV,WORLD), not merely "
               "completes without rendering anything");
     }
+
+    /* ----------------------------------------------------------------
+     * G. Every remaining DCL reader of the user name, asked by a
+     *    subprocess the executive has not named (vms-f39, vms-f42d).
+     * ---------------------------------------------------------------- */
+    scenario_g_unnamed_row_reports_nothing();
 
     printf("=== test_syssvc_ident: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

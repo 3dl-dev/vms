@@ -1488,11 +1488,13 @@ could not tell the second process to restore the console
 ...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
 ...and grid row 1 is the oracle's bytes again, so neither is the grid
 this process, which bound nothing, still has no terminal -- the bindings belonged to the DCL jobs, not to the device or to the system
+A: F$GETJPI("","USERNAME") returns the name the EXECUTIVE holds -- the programmatic path reads the same source the display does
 A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
 A: SHOW PROCESS reports the UIC the EXECUTIVE holds
 A: SHOW PROCESS reports the user name the EXECUTIVE holds
 A: the authorized-privileges AND process-privileges blocks are both EMPTY -- none of A's granted mask (TMPMBX|NETMBX|OPER) is in VMS_PRV_M_ENFORCED
 A: the executive accepted the identity a privileged writer established
+B: F$GETJPI returns B's name -- two processes with an IDENTICAL environment get DIFFERENT answers, so the answer is not the environment
 B: SHOW PROCESS reports B's UIC
 B: SHOW PROCESS reports B's user name
 B: SHOW PROCESS/PRIVILEGES lists WORLD's description in the process-privileges block too
@@ -1756,20 +1758,29 @@ exactly the 14 lines above, observed by running this mutation once and
 capturing the delta; nothing past D's first line or in scenario E is claimed
 here, named, or reasoned about, because the run this entry is built from did
 not print anything further to reason from.
-SCENARIO G ADDED TWO MORE (vms-cb5/vms-f39/vms-f42d) -- MEASURED BY RUNNING
-THIS CONTROL AFTER THE SCENARIO LANDED, WHICH IS WHY IT IS HERE AT ALL. The
-first run with scenario G present FAILED this control on exactly two unnamed
-reds, both of them the scenario's own preconditions: "G: the session
-established an authenticated identity" is a vms_kif_setident() through the
-deleted register step (the same property as the require_fail entry, one
-scenario further on), and "G: the executive HOLDS that name and reads it back"
-is the vms_kif_getjpi_self() that reads it back. WHAT IS WORTH RECORDING IS
-WHAT STAYED GREEN: scenario G's twelve assertions about SUBMIT, PRINT,
-ACCOUNTING, REPLY, LOGOUT and F$USER all PASS under this mutation, because
+FOUR MORE ADDED (vms-cb5/vms-f39/vms-f42d) -- READ OFF THE DRIVER'S OWN
+"does NOT name them" LIST, TWICE, WHICH IS THE POINT OF THIS PARAGRAPH.
+  - Two are scenario G's preconditions: "G: the session established an
+    authenticated identity" is a vms_kif_setident() through the deleted
+    register step (the same property as the require_fail entry, one scenario
+    further on), and "G: the executive HOLDS that name and reads it back" is
+    the vms_kif_getjpi_self() that reads it back.
+  - Two are OLDER than scenario G and were red on this branch before it:
+    scenario A's and scenario B's F$GETJPI assertions, added when this suite
+    gained programmatic-reader coverage. They are the same startup read
+    failing, seen through the lexical function instead of through SHOW
+    PROCESS, and they had simply never been declared -- this control is
+    expensive, so nothing had executed it since that coverage landed.
+THE MISTAKE WORTH RECORDING: the first re-run named all four and only two were
+added, because the extra reds were INFERRED from a scrolled log rather than
+read off the driver's explicit list. The second run named the remaining two
+and refused to pass, which is exactly what the equality check is for.
+WHAT STAYED GREEN, and it matters: scenario G's assertions about SUBMIT,
+PRINT, ACCOUNTING, REPLY, LOGOUT and F$USER all PASS under this mutation --
 their property is that DCL prints NO user name when the executive holds none,
 and an unbound DCL holds none for a second reason. That is not a weakness of
-those assertions -- their own minimal mutations are the six fabrication
-restorals measured in vms-cb5 -- but it is why only these two appear here.
+those assertions; it is why each of them has its own minimal mutation, the
+dcl-*-fabricated controls below.
 THE EIGHTH SUITE, test_syssvc_lock_status, ADDED vms-2e5 -- READ OFF THE FIRST
 FULL RUN OF THIS CONTROL AGAINST THE TREE THAT ADDED IT, not predicted. Its
 bootstrap() does not hand-register (see the comment at its definition in
@@ -2234,7 +2245,7 @@ EOF
         why)          echo "REPLY/ENABLE goes back to naming the enabling operator \"SYSTEM\" when the executive holds no name for the process -- in the %OPCOM-I-OPRENA message and in the OPC record it sends to OPERATOR.LOG.";;
         require_fail) cat <<'EOF'
 G/REPLY: the OPCOM enable message names no operator
-G/REPLY: OPERATOR.LOG is not told that SYSTEM enabled the terminal
+G/REPLY: the console message does not name SYSTEM as the operator
 EOF
                       ;;
         knock_on_fail) echo "";;

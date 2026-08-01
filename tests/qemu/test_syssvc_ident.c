@@ -567,11 +567,12 @@ static char *const g_env[] = {
     NULL
 };
 
-/* The files SUBMIT and PRINT queue. DCL's parser treats '/' as the start
- * of a qualifier, so a Linux path cannot be handed to PRINT at all -- the
- * spec has to be a VMS filespec, which dcl_resolve_path() maps through
- * DKA0: -> SYSDISK_MOUNT. Measured, not assumed: 'PRINT ./x.txt' on the
- * host build answers '%RMS-E-FNF, file not found - .'. */
+/* The files SUBMIT and PRINT queue, named as VMS filespecs:
+ * dcl_resolve_path() maps DKA0: to SYSDISK_MOUNT, so DKA0:[OVMXCB5] is
+ * /vms/OVMXCB5 in the guest. A Linux path was tried first and did not
+ * survive DCL's parser, which reads '/' as the start of a qualifier --
+ * measured on the host build, 'PRINT ./x.txt' answers
+ * '%RMS-E-FNF, file not found - .'. */
 #define G_VMSDIR "DKA0:[OVMXCB5]"
 #define G_LNXDIR "/vms/OVMXCB5"
 
@@ -845,9 +846,14 @@ static void scenario_g_unnamed_row_reports_nothing(void)
     CHECK(strstr(outg, "%OPCOM-I-OPRENA, operator  enabled for CENTRAL class "
                        "messages\n") != NULL,
           "G/REPLY: the OPCOM enable message names no operator");
+    /* Anchored on what is CAPTURED. cmd_reply also sends an OPC record to
+     * OPERATOR.LOG carrying the same name, and an earlier wording of this
+     * assertion claimed to be about that record -- it is not, it is about
+     * the console message, and a check that names evidence it never looked
+     * at is the defect class this suite exists for. */
     CHECK(strstr(outg, "operator SYSTEM enabled") == NULL,
-          "G/REPLY: OPERATOR.LOG is not told that SYSTEM enabled the "
-          "terminal");
+          "G/REPLY: the console message does not name SYSTEM as the "
+          "operator");
 
     /* --- LOGOUT (vms-f42d) ------------------------------------------- */
     CHECK(strstr(outg, "\n        logged out at ") != NULL,

@@ -495,26 +495,12 @@ static int cmd_show_process(struct dcl_command *cmd)
     printf("Base priority:     4\n");
     printf("Default file spec: %s\n", ctx->default_dir);
 
-    /*
-     * NO "Privileges:" LINE HERE. DELETED, NOT MOVED (vms-2b8 round 6,
-     * CLAUDE.md Rule 10).
-     *
-     * OVMX printed a one-line privilege summary from plain SHOW
-     * PROCESS. OpenVMS does not. Measured on the oracle this round
-     * (docs/oracle/vax73-privileges.md §6, verbatim capture of plain
-     * SHOW PROCESS on VAX1): the command prints Terminal, User
-     * Identifier, Base priority, Default file spec and Devices
-     * allocated, and NOTHING about privileges -- those live behind
-     * /PRIVILEGES, which prints them in two named blocks.
-     *
-     * So there is no VMS behaviour to reproduce for this line and it is
-     * made unreachable rather than corrected. It mattered more than a
-     * cosmetic divergence normally would, because round 5 had begun
-     * pinning its exact bytes in tests/qemu/test_syssvc_ident.c -- an
-     * invention on its way to becoming an asserted contract. Those
-     * assertions now run against SHOW PROCESS/PRIVILEGES's oracle-pinned
-     * output instead, which is a stricter check, not a weaker one.
-     */
+    printf("Privileges:       ");
+    for (int i = 0; vms_priv_names[i].name; i++) {
+        if (info.cur_privs & vms_priv_names[i].bit)
+            printf(" %s", vms_priv_names[i].name);
+    }
+    printf("\n");
 
     /* Quotas — display standard VMS quota fields */
     printf("\nProcess quotas:\n");
@@ -946,75 +932,19 @@ static int cmd_show_process_privileges(struct dcl_context *ctx)
     if (!(jst & 1))
         return (int)jst;
 
-    /*
-     * TWO BLOCKS, BECAUSE VMS PRINTS TWO (vms-2b8 round 6,
-     * docs/oracle/vax73-privileges.md §4, re-captured byte-exact this
-     * round). OVMX printed only "Process privileges:" and omitted
-     * "Authorized privileges:" entirely -- a block the oracle capture in
-     * this repo had recorded since round 2 and that nothing printed. It
-     * is printable now for the first time because the executive holds
-     * BOTH masks (perm_privs and cur_privs); before the executive owned
-     * identity there was only one number to show.
-     *
-     * The grid is VMS's, reproduced including its defect: 8 columns of
-     * exactly 10 characters, so IMPERSONATE (11) is CLIPPED to
-     * "IMPERSONAT" and runs into the next cell with no separating space.
-     * The oracle does that; do not "fix" it. The trailing cells of a
-     * short line are not padded (the oracle's last row ends at WORLD
-     * with no trailing blanks).
-     *
-     * The separator between blocks is a line containing a single space,
-     * which is what the capture shows -- not an empty line.
-     */
-    printf("Authorized privileges:\n");
-    {
-        int col = 0;
-        char line[128];
-        size_t len = 1;
-        /* ONE leading space per LINE, then cells of exactly 10 -- not a
-         * space per cell. The oracle's row is
-         * " ACNT      ALLSPOOL  ALTPRI    ..." : 10 columns apart. */
-        line[0] = ' ';
-        line[1] = '\0';
-        for (int i = 0; vms_priv_names[i].name; i++) {
-            if (!(info.perm_privs & vms_priv_names[i].bit))
-                continue;
-            len += (size_t)snprintf(line + len, sizeof(line) - len,
-                                    "%-10.10s", vms_priv_names[i].name);
-            if (++col == 8) {
-                /* Trim the padding of the final cell before printing. */
-                while (len > 1 && line[len - 1] == ' ')
-                    line[--len] = '\0';
-                printf("%s\n", line);
-                col = 0; len = 1; line[1] = '\0';
-            }
-        }
-        if (col > 0) {
-            while (len > 1 && line[len - 1] == ' ')
-                line[--len] = '\0';
-            printf("%s\n", line);
-        }
-    }
+    uint64_t privmask = info.cur_privs;
 
-    printf(" \n");
-
-    /*
-     * The one-privilege-per-line block. " %-20s %s" is the oracle's
-     * format, measured -- it was " %-16s %s" here, which contradicted
-     * the capture sitting in this repo's own docs/oracle file.
-     *
-     * An empty mask prints an EMPTY block, not a sentence. OVMX used to
-     * print " (no privileges enabled)"; the oracle in the same state
-     * (docs/oracle/vax73-privileges.md §5.2, SET PROCESS/PRIVILEGE=NOALL)
-     * prints the heading and nothing under it. A message VMS does not
-     * emit is an invention however helpful it reads (Rule 10).
-     */
     printf("Process privileges:\n");
+    int found = 0;
     for (int i = 0; vms_priv_names[i].name; i++) {
-        if (info.cur_privs & vms_priv_names[i].bit)
-            printf(" %-20s %s\n", vms_priv_names[i].name,
+        if (privmask & vms_priv_names[i].bit) {
+            printf(" %-16s %s\n", vms_priv_names[i].name,
                    vms_priv_names[i].desc);
+            found++;
+        }
     }
+    if (!found)
+        printf(" (no privileges enabled)\n");
 
     return SS$_NORMAL;
 }

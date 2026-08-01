@@ -61,7 +61,17 @@
       "Read(//home/baron/vax/cluster/tools/**)",
       "Bash(mkdir -p /home/baron/.claude/jobs/678334fd/tmp)",
       "Bash(cp /home/baron/vax/cluster/tools/*.py /home/baron/.claude/jobs/678334fd/tmp/)",
-      "Read(//home/baron/vax/cluster/work/**)"
+      "Read(//home/baron/vax/cluster/work/**)",
+      "Bash(wait 1650879)",
+      "Bash(wait 1963570)",
+      "Bash(kill -0 2063986)",
+      "Bash(kill -0 3044107)",
+      "Bash(kill -0 3797988)",
+      "Bash(/tmp/poll_ci.sh)",
+      "Bash(kill -0 4026572)",
+      "Bash(kill -0 4150164)",
+      "Bash(kill -0 245718)",
+      "Skill(update-config)"
     ]
   }
 }

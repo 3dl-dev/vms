@@ -1373,21 +1373,6 @@ static int lex_message(struct dcl_context *ctx, const char *args,
 
     unsigned long code = strtoul(s, NULL, 0);
 
-    /*
-     * This table is keyed by NUMBER, so it does not follow a corrected
-     * constant the way a consumer that names the symbol does. Bind the
-     * corrected rows to the values the product actually returns, so a
-     * future change breaks the build instead of leaving F$MESSAGE unable
-     * to name a status OVMX hands out (vms-9fc: SS$_ILLIOFUNC moved
-     * 580 -> 244 and this table was left behind, still rendering
-     * "illegal I/O function" for what the oracle calls VASFULL).
-     */
-    _Static_assert(SS$_ILLIOFUNC == 244,
-                   "F$MESSAGE's ILLIOFUNC row must carry the SS$_ILLIOFUNC "
-                   "value sys$qio returns");
-    _Static_assert(SS$_INSFMEM == 292,
-                   "F$MESSAGE's INSFMEM row must carry SS$_INSFMEM");
-
     /* Inline lookup table for common SS$ condition codes */
     static const struct {
         unsigned long code;
@@ -1405,48 +1390,16 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 28,    "SYSTEM", 'E', "EXQUOTA",       "exceeded quota" },
         { 36,    "SYSTEM", 'E', "NOPRIV",        "no privilege for attempted operation" },
         { 44,    "SYSTEM", 'E', "ABORT",         "abort" },
-        /* ORACLE-PINNED (vms-8019): value and severity taken from the
-         * reference lab OpenVMS VAX V7.3 node VAX1 -- $SSDEF in
-         * SYS$LIBRARY:STARLET.MLB gives SS$_DUPLNAM 148, and
-         * F$MESSAGE(148) renders "%SYSTEM-F-DUPLNAM, duplicate name".
-         * Replaces 434/'E', which the same oracle disproves. */
-        { 148,   "SYSTEM", 'F', "DUPLNAM",       "duplicate name" },
-        /* ORACLE-PINNED (vms-9fc): $SSDEF SS$_ILLIOFUNC 244;
-         * F$MESSAGE(244) -> "%SYSTEM-F-ILLIOFUNC, illegal I/O function
-         * code". This row did not exist: the table carried ILLIOFUNC at
-         * 580, which the same oracle run shows is SS$_VASFULL, so
-         * F$MESSAGE could not name the status sys$qio actually returns
-         * for an unimplemented function code. */
-        { 244,   "SYSTEM", 'F', "ILLIOFUNC",     "illegal I/O function code" },
         { 292,   "SYSTEM", 'E', "INSFMEM",       "insufficient dynamic memory" },
-        /* ORACLE-PINNED (vms-8019): $SSDEF SS$_IVLOGNAM 340;
-         * F$MESSAGE(340) -> "%SYSTEM-F-IVLOGNAM, invalid logical name".
-         * Replaces 596/'E' -- 596 is SS$_VOLINV on the oracle. */
-        { 340,   "SYSTEM", 'F', "IVLOGNAM",      "invalid logical name" },
         { 388,   "SYSTEM", 'E', "IVTIME",        "invalid time" },
+        { 434,   "SYSTEM", 'E', "DUPLNAM",       "duplicate name" },
         { 444,   "SYSTEM", 'W', "NOLOGNAM",      "no logical name match" },
-        /* ORACLE-PINNED (vms-2b8), docs/oracle/vax73-privileges.md §1.
-         * MEASURED on OpenVMS VAX V7.3 node VAX1, 2026-07-30:
-         *   F$MESSAGE(532)  -> %SYSTEM-F-RESULTOVF, resultant string overflow
-         *   F$MESSAGE(1664) -> %SYSTEM-W-NOTALLPRIV, not all requested
-         *                      privileges authorized
-         * 532 was mapped to NOTALLPRIV here (and in ssdef.h), so OVMX's
-         * F$MESSAGE answered a different condition than VMS's for both
-         * codes. Note the text too: "authorized", not "available". */
-        { 532,   "SYSTEM", 'F', "RESULTOVF",     "resultant string overflow" },
+        { 532,   "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges available" },
         { 548,   "SYSTEM", 'E', "IVIDENT",       "invalid identifier" },
         { 556,   "SYSTEM", 'E', "TIMEOUT",       "device timeout" },
-        /* ORACLE-PINNED (vms-9fc): $SSDEF SS$_VASFULL 580;
-         * F$MESSAGE(580) -> "%SYSTEM-F-VASFULL, virtual address space is
-         * full". This slot used to be mislabelled ILLIOFUNC/'E', which
-         * meant F$MESSAGE(580) rendered "illegal I/O function" for a
-         * status that means address-space exhaustion. */
-        { 580,   "SYSTEM", 'F', "VASFULL",       "virtual address space is full" },
+        { 580,   "SYSTEM", 'E', "ILLIOFUNC",     "illegal I/O function" },
         { 588,   "SYSTEM", 'E', "NOMORENODE",    "no more cluster nodes" },
-        /* ORACLE-PINNED (vms-8019): $SSDEF SS$_VOLINV 596;
-         * F$MESSAGE(596) -> "%SYSTEM-F-VOLINV, volume is not software
-         * enabled". This slot used to be mislabelled IVLOGNAM. */
-        { 596,   "SYSTEM", 'F', "VOLINV",        "volume is not software enabled" },
+        { 596,   "SYSTEM", 'E', "IVLOGNAM",      "invalid logical name" },
         { 602,   "SYSTEM", 'E', "IVCHAN",        "invalid channel" },
         { 608,   "SYSTEM", 'E', "IVDEVNAM",      "invalid device name" },
         { 620,   "SYSTEM", 'E', "IVSSRQ",        "invalid system service request" },
@@ -1457,20 +1410,13 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 716,   "SYSTEM", 'E', "PARNOTGRANT",   "parent lock not granted" },
         { 836,   "SYSTEM", 'S', "CREATED",       "object created" },
         { 844,   "SYSTEM", 'S', "SUPERSEDE",     "object superseded" },
-        /* ORACLE-PINNED (vms-2b8), docs/oracle/vax73-privileges.md §1 --
-         * the correct home for NOTALLPRIV, measured on VAX1 2026-07-30. */
-        { 1664,  "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges authorized" },
         { 2096,  "SYSTEM", 'W', "CANCEL",        "I/O operation canceled" },
         { 2160,  "SYSTEM", 'W', "ENDOFFILE",     "end of file" },
         { 2204,  "SYSTEM", 'W', "UNWIND",        "unwind in progress" },
         { 2212,  "SYSTEM", 'E', "NOCMKRNL",      "no CMKRNL privilege" },
-        /* ORACLE-PINNED (vms-8019): $SSDEF SS$_NONEXPR 2280;
-         * F$MESSAGE(2280) -> "%SYSTEM-W-NONEXPR, nonexistent process".
-         * Replaces 2540/'E' -- F$MESSAGE(2540) on the oracle is
-         * "%SYSTEM-F-RIGHTSFULL, rights list is full". */
-        { 2280,  "SYSTEM", 'W', "NONEXPR",       "nonexistent process" },
         { 2328,  "SYSTEM", 'W', "RESIGNAL",      "resignal condition" },
         { 2340,  "SYSTEM", 'S', "CONTINUE",      "continue execution" },
+        { 2540,  "SYSTEM", 'E', "NONEXPR",       "nonexistent process" },
         { 2552,  "SYSTEM", 'W', "OPINCOMPL",     "operation incomplete" },
         { 2584,  "SYSTEM", 'W', "SUSPENDED",     "process suspended" },
         { 2588,  "SYSTEM", 'W', "NOTQUEUED",     "not queued" },

@@ -2489,7 +2489,7 @@ Common status codes returned by system services (from `<ssdef.h>`):
 | `SS$_NOLOGNAM` | 444 | No logical name match |
 | `SS$_IVCHAN` | 602 | Invalid channel |
 | `SS$_IVDEVNAM` | 608 | Invalid device name |
-| `SS$_ILLIOFUNC` | 244 | Illegal I/O function code |
+| `SS$_ILLIOFUNC` | 580 | Illegal I/O function |
 | `SS$_ENDOFFILE` | 2160 | End of file |
 | `SS$_NOSUCHDEV` | 2680 | No such device |
 | `SS$_NONEXPR` | 2540 | Nonexistent process |

@@ -26,39 +26,22 @@
 
 #define SS__NORMAL      0x00000001
 #define SS__BADPARAM    0x00000014
+#define SS__DUPLNAM     434         /* duplicate process name (ssdef.h SS$_DUPLNAM) */
+#define SS__NONEXPR     2540        /* nonexistent process (ssdef.h SS$_NONEXPR) */
 /*
- * Process-table statuses -- ORACLE-PINNED (vms-8019).
- *
- * SOURCE: the reference lab OpenVMS VAX V7.3 node VAX1 (~/vax/cluster),
- * 2026-07-30, by two independent documented-tool observations:
- *
- *   1. LIBRARY/EXTRACT=$SSDEF/OUTPUT=SYS$SCRATCH:SSDEF.MAR
- *          SYS$LIBRARY:STARLET.MLB
- *      SEARCH SYS$SCRATCH:SSDEF.MAR "IVLOGNAM","DUPLNAM","NONEXPR"
- *        $EQU  SS$_DUPLNAM    148
- *        $EQU  SS$_IVLOGNAM   340
- *        $EQU  SS$_NONEXPR    2280
- *
- *   2. round-trip through the message formatter:
- *        F$MESSAGE(148)  -> %SYSTEM-F-DUPLNAM,  duplicate name
- *        F$MESSAGE(340)  -> %SYSTEM-F-IVLOGNAM, invalid logical name
- *        F$MESSAGE(2280) -> %SYSTEM-W-NONEXPR,  nonexistent process
- *
- * These replace 434 / 596 / 2540, which this tree carried and which the
- * same oracle disproves: F$MESSAGE(596) is %SYSTEM-F-VOLINV, and
- * SS$_VOLINV is 596 in $SSDEF.
- *
- * SS__IVLOGNAM is what the executive returns for a malformed
+ * SS__IVLOGNAM is the status the executive returns for a malformed
  * process-name string handed to VMS_IOCTL_SETPRN (unterminated buffer,
- * or zero length). The CHOICE of IVLOGNAM for a bad process name is
- * oracle-pinned too, behaviourally, on the same node:
- *   $ SET PROCESS/NAME="THISNAMEISWAYTOOLONG"
- *   %SET-E-NOTSET, error modifying process name
- *   -SYSTEM-F-IVLOGNAM, invalid logical name
+ * or zero length). PROVENANCE: the value 596 is this tree's existing
+ * ssdef.h SS$_IVLOGNAM; the *choice* of SS$_IVLOGNAM as $SETPRN's
+ * invalid-name status comes from the OpenVMS System Services Reference
+ * condition-value list for $SETPRN and has NOT been re-verified against
+ * the ~/vax oracle in this session. Flagged for operator sign-off per
+ * the vms-purity-guardrail rule -- do not treat as authoritative.
+ * The kernel-side validation itself is a trust-boundary check on
+ * untrusted userspace input and is required regardless of which status
+ * VMS reports.
  */
-#define SS__DUPLNAM     148         /* duplicate process name (ssdef.h SS$_DUPLNAM) */
-#define SS__NONEXPR     2280        /* nonexistent process (ssdef.h SS$_NONEXPR) */
-#define SS__IVLOGNAM    340         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
+#define SS__IVLOGNAM    596         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
 #define SS__NOPRIV      0x00000024
 #define SS__ACCVIO      0x0000000C
 #define SS__INSFMEM     0x0000002C  /* insufficient memory (44 decimal, matches real VMS) */
@@ -75,66 +58,11 @@
 #define SS__VALNOTVALID 120         /* value block not valid */
 
 /*
- * Device-table statuses. Values are this tree's existing ssdef.h
- * (src/libvms/include/ssdef.h) -- they are NOT independently
- * re-derived here, so the executive and the runtime cannot drift
- * apart. Note that ssdef.h already carries an operator-sign-off flag
- * on SS$_NOSUCHDEV / SS$_NOMOREDEV (multi-source disagreement, see
- * vms-fb3); this file inherits that caveat rather than papering over
- * it. The CHOICE of status per condition is pinned to the oracle
- * where observable: SHOW DEVICE of an absent device on the ~/vax
- * OpenVMS VAX V7.3 lab reports
- *   %SYSTEM-W-NOSUCHDEV, no such device available
- * (docs/oracle/vax73-terminal-device.md).
+ * Default privilege set for non-CAP_SYS_ADMIN processes.
+ * Allows basic operational use (mailboxes, networking) without
+ * granting any mode-change or bypass privileges.
  */
-#define SS__IVCHAN      602         /* invalid I/O channel */
-#define SS__IVDEVNAM    608         /* invalid device name */
-#define SS__NOMOREDEV   2648        /* device scan exhausted */
-#define SS__NOSUCHDEV   2680        /* no such device available */
-/*
- * Allocation statuses. Unlike the four above, these two were measured
- * directly on the oracle rather than inherited: VMS's own message
- * facility on the ~/vax OpenVMS VAX V7.3 lab reports
- *   2112 %SYSTEM-W-DEVALLOC, device already allocated to another user
- *   2136 %SYSTEM-W-DEVNOTALLOC, device not allocated
- * and $ALLOC/$DALLOC were observed returning exactly those conditions
- * (docs/oracle/vax73-terminal-device.md sections 7-9). ssdef.h carries
- * the same values and the same citation.
- */
-#define SS__DEVALLOC    2112        /* device already allocated to another user */
-#define SS__DEVNOTALLOC 2136        /* device not allocated */
-
-/*
- * SS__NOTALLPRIV -- ORACLE-PINNED (vms-2b8).
- *
- * MEASURED on the reference lab OpenVMS VAX V7.3 node VAX1, 2026-07-30,
- * by the implementer of vms-2b8 (docs/oracle/vax73-privileges.md §1):
- *   $ WRITE SYS$OUTPUT "1664="+F$MESSAGE(1664)
- *   1664=%SYSTEM-W-NOTALLPRIV, not all requested privileges authorized
- *
- * This tree's src/libvms/include/ssdef.h carried 532, which the SAME
- * oracle disproves in the same session:
- *   $ WRITE SYS$OUTPUT "532="+F$MESSAGE(532)
- *   532=%SYSTEM-F-RESULTOVF, resultant string overflow
- * ssdef.h is corrected under this item to agree.
- *
- * SS__NOPRIV (36) was verified in the same session and already agreed:
- *   36=%SYSTEM-F-NOPRIV, insufficient privilege or object protection violation
- */
-#define SS__NOTALLPRIV  1664
-
-/*
- * Default privilege set for processes with no elevated credential.
- *
- * These are the two privileges OpenVMS grants essentially every user, so
- * they are what a process gets when the executive can prove nothing more
- * about it. The BIT POSITIONS are oracle-pinned (TMPMBX 15, NETMBX 20 --
- * docs/oracle/vax73-privileges.md §2), which is the correction: this
- * constant previously read (1<<7)|(1<<8) with the comment
- * "TMPMBX | NETMBX", and bits 7 and 8 are LOG_IO and GROUP. The
- * executive was handing out two privileges while naming two others.
- */
-#define VMS_DEFAULT_PRIVS   (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX)
+#define VMS_DEFAULT_PRIVS   ((1ULL << 7) | (1ULL << 8))  /* TMPMBX | NETMBX */
 
 /* ================================================================
  * Per-process VMS state
@@ -221,11 +149,7 @@ struct vms_lock_resource {
 /* Per-process VMS state */
 struct vms_proc {
     struct hlist_node   hash_node;      /* in global process hash */
-    pid_t               linux_pid;      /* Linux thread-group id == getpid(2)
-                                         * (key). NOT a thread id: one PCB
-                                         * per process, shared by its
-                                         * threads -- see
-                                         * vms_proc_find_or_err(). */
+    pid_t               linux_pid;      /* Linux PID (key) */
     uint32_t            vms_pid;        /* VMS-style PID */
 
     /*
@@ -242,32 +166,11 @@ struct vms_proc {
     uint32_t            uic;            /* (group << 16) | member */
 
     /*
-     * Authenticated user name (vms-2b8). Empty until an identity is
-     * stamped by VMS_IOCTL_SETIDENT, which is the LOGINOUT path: a
-     * process does not choose its user name any more than it chooses
-     * its UIC. Read back by every other process through $GETJPI, which
-     * is what makes it an identity rather than a self-description.
-     *
-     * LOCKING: username and uic are read by proc_fill_info() and
-     * find_by_name() under vms_proc_hash_lock, and the privilege masks
-     * are read and written by vms_access.c under mode_lock. An identity
-     * is one indivisible fact -- a reader must never see this process's
-     * new user name beside its old privilege mask -- so
-     * vms_ioctl_setident() takes BOTH, hash_lock OUTER then mode_lock,
-     * and that is the only place the two are held together. Nothing
-     * takes them in the opposite order.
-     */
-    char                username[VMS_USERNAME_SIZE];
-
-    /*
-     * Reference to the backing PROCESS's struct pid -- task_tgid(), the
-     * thread group's pid, NOT task_pid() (vms-9fc round 2). The PCB
-     * belongs to the PROCESS, not to an open channel and not to a
-     * thread, so it is not destroyed when /dev/vms is closed (notably
-     * the implicit close at exec time) and not destroyed when one
-     * thread of a multithreaded image exits. Liveness is tested through
-     * this reference and dead entries are reaped lazily -- see
-     * vms_proc_reap_dead().
+     * Reference to the backing task's struct pid. The PCB belongs to
+     * the PROCESS, not to an open channel, so it is not destroyed when
+     * /dev/vms is closed (notably the implicit close at exec time).
+     * Liveness is tested through this reference and dead entries are
+     * reaped lazily -- see vms_proc_reap_dead().
      */
     struct pid          *pid_ref;
 
@@ -288,99 +191,7 @@ struct vms_proc {
     int                 lock_count;
     spinlock_t          lock_list_lock;
 
-    /*
-     * I/O channels (device table, vms-d0b). A channel is this
-     * process's handle on a device that the EXECUTIVE owns -- the
-     * device itself is not per-process, only the channel to it is.
-     * Released when the process's executive state is torn down, which
-     * is what drops the device's reference count and its ownership.
-     */
-    struct list_head    channels;       /* struct vms_channel */
-    uint32_t            next_chan;      /* channel number allocator */
-    spinlock_t          chan_lock;
-
     struct rcu_head     rcu;
-};
-
-/* ================================================================
- * Device table (executive-resident I/O database)
- *
- * One entry per device on the node, created by the executive and
- * visible to every process. See vms_devtab.c.
- * ================================================================ */
-
-struct vms_device {
-    struct list_head    list;           /* in vms_device_list */
-    char                devnam[VMS_DEVNAM_SIZE];
-    uint32_t            devclass;       /* DC$_ device class */
-    uint32_t            devtype;        /* device type code; 0 = Unknown */
-
-    /*
-     * shareable mirrors the word the oracle prints in SHOW DEVICE/FULL's
-     * status clause. It decides whether a channel confers ownership, so
-     * it is not decoration. MEASURED, ~/vax OpenVMS VAX V7.3, node VAX2
-     * (docs/oracle/vax73-terminal-device.md section 7):
-     *   "Device NLA0: ... record-oriented device, shareable, mailbox
-     *    device."                                  -> shareable
-     *   "Terminal TTA0: ... is online, record-oriented device, carriage
-     *    control."                                 -> not shareable
-     */
-    uint32_t            shareable;      /* 1 = "shareable" in the status clause */
-
-    /*
-     * OWNERSHIP AND ALLOCATION ARE TWO DIFFERENT THINGS, and both are
-     * measured (docs/oracle/vax73-terminal-device.md section 7):
-     *
-     *  - A channel to a NON-shareable device that nobody owns makes the
-     *    assigner the OWNER, with no allocation. TTA0: went from
-     *    Owner "" / refcount 0 to Owner "SYSTEM" / refcount 1 on a bare
-     *    OPEN/WRITE, and its status clause still said only "is online,
-     *    record-oriented device, carriage control" -- no "allocated".
-     *  - A channel to a SHAREABLE device confers nothing. The same DCL
-     *    sequence on NLA0: left Owner "" with the reference count
-     *    moving 2 -> 3 -> 2.
-     *  - $ALLOC sets `allocated`, and it is the only thing that does.
-     *  - Ownership without allocation ends when the owner returns its
-     *    last channel (CLOSE -> Owner "", refcount 0) or dies
-     *    (STOP CHANHOLD -> Owner "", refcount 0). An ALLOCATION outlives
-     *    the channel until $DALLOC or the owner's death.
-     *
-     * refcnt is the device's "Reference count": one per assigned channel
-     * plus one for an outstanding allocation. Implicit ownership costs
-     * no reference (TTA0: one channel -> refcount 1, owned).
-     */
-    uint32_t            allocated;      /* 1 while $ALLOC'd to owner_* */
-    uint32_t            owner_pid;      /* VMS pid of the owner, 0 = unowned */
-    pid_t               owner_linux_pid;
-    uint32_t            owner_uic;
-    uint32_t            refcnt;
-
-    uint32_t            errcnt;
-    uint64_t            opcnt;
-
-    /* Terminal state (devclass == DC$_TERM) */
-    uint64_t            devchar;        /* VMS_TTC_* */
-    uint32_t            width;
-    uint32_t            page;
-
-    /*
-     * Every channel currently assigned to this device, by any process.
-     * The device has to know this to decide when implicit ownership
-     * ends: it ends when the owner has no channel left, not when any
-     * channel is returned.
-     */
-    struct list_head    chanlist;       /* of vms_channel.devlink */
-
-    spinlock_t          lock;
-};
-
-/* A process's handle on a device. */
-struct vms_channel {
-    struct list_head    list;           /* in vms_proc->channels */
-    struct list_head    devlink;        /* in vms_device->chanlist */
-    uint32_t            chan;
-    pid_t               owner_linux_pid;/* process holding this channel */
-    struct vms_device   *dev;
 };
 
 /* ================================================================
@@ -412,18 +223,8 @@ extern spinlock_t vms_common_ef_lock;
 
 struct vms_proc *vms_proc_find(pid_t pid);
 struct vms_proc *vms_proc_find_or_err(void);
-/*
- * Register a process. Takes NO privilege argument (vms-2b8): the
- * authorized mask is derived from the task's real credentials inside,
- * never requested by the caller.
- */
-/* The VMS process ID is assigned by the executive (vms-2b8), so there is
- * no vms_pid parameter to pass: read proc->vms_pid afterwards. */
-struct vms_proc *vms_proc_register(pid_t pid);
+struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_privs);
 void vms_proc_free(struct vms_proc *proc);
-/* Tear down an entry the caller has ALREADY unlinked under
- * vms_proc_hash_lock (the unlink is the ownership claim). */
-void vms_proc_free_claimed(struct vms_proc *proc);
 
 /* Drop table entries whose backing task no longer exists. */
 void vms_proc_reap_dead(void);
@@ -459,36 +260,16 @@ long vms_ioctl_deq(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getlki(struct vms_proc *proc, unsigned long arg);
 
-/* Device table (executive-resident I/O database) */
-long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_getdvi(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
-
 /* Process table (executive-resident PCB directory) */
 long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
-
-/* May `caller` read `target`'s identity? Oracle-pinned rule -- see the
- * definition in vms_proctab.c and docs/oracle/vax73-privileges.md §5. */
-bool vms_proc_may_read(const struct vms_proc *caller,
-                       const struct vms_proc *target);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);
 void vms_lock_cleanup(void);
 void vms_eflag_init(void);
 void vms_eflag_cleanup(void);
-int vms_devtab_init(void);
-void vms_devtab_cleanup(void);
-
-/* Give back every channel a process holds (process teardown). */
-void vms_proc_release_channels(struct vms_proc *proc);
 
 /* Lock manager helpers */
 void vms_proc_release_locks(struct vms_proc *proc);

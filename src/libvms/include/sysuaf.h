@@ -112,6 +112,27 @@ static inline struct XABKEY sysuaf_rms_primary_key(void)
 /* Look up a user in sysuaf.dat. Returns 0 on success, -1 if not found. */
 int sysuaf_lookup(const char *username, sysuaf_record_t *rec);
 
+/*
+ * Look up a user by UIC. Returns 0 on success, -1 if no account in
+ * sysuaf.dat carries that [group,member], or the file cannot be read.
+ *
+ * WHY THIS EXISTS (vms-cb5 / vms-f39). F$IDENTIFIER's NUMBER_TO_NAME
+ * direction needs the UIC -> name mapping. It used to get it from
+ * getpwuid(), i.e. from the HOST's /etc/passwd, so DCL answered
+ * F$IDENTIFIER(1000,"NUMBER_TO_NAME") with the Linux login name of
+ * whoever built the image, upcased. On OpenVMS the mapping comes from
+ * the rights database, which carries a UIC identifier per SYSUAF
+ * account; OVMX's authorization data is this file, and it is the same
+ * file LOGINOUT authenticates against, so it is the only source of a
+ * VMS user name OVMX has that a process cannot write.
+ *
+ * If two rows share a UIC the FIRST in file order wins. That is a
+ * property of this function, not a claim about SYSUAF.DAT: nothing
+ * enforces UIC uniqueness in the flat file OVMX ships today.
+ */
+int sysuaf_lookup_by_uic(uint32_t uic_group, uint32_t uic_member,
+                         sysuaf_record_t *rec);
+
 /* Authenticate: returns 1 if password matches, 0 if not.
    An empty/unset hash NEVER authenticates -- returns 0 for every password,
    including the empty string (vms-08f; see the Rule 10 disposition in

@@ -17,9 +17,10 @@
  * tests/integration/test_userspace_service_register.sh
  *
  * OVMX-USERSPACE: sys$sndopr (vms-5b4) -- appends to OPERATOR.LOG through
- *     vmsfs path translation, tagged with the username read from the caller's
- *     own PCB. There is no OPCOM process to request, so no operator is
- *     notified and no reply can ever come back.
+ *     vmsfs path translation, tagged with the username the EXECUTIVE holds
+ *     for the caller (vms-cb5; it used to read the caller's own PCB and then
+ *     the host passwd database). There is no OPCOM process to request, so no
+ *     operator is notified and no reply can ever come back.
  * OVMX-USERSPACE: sys$brkthruw (vms-5b4) -- open()s the resolved terminal
  *     device and write()s to it directly, falling back to the caller's own
  *     stdout when that open fails. No executive mediates the broadcast, so it
@@ -35,9 +36,13 @@
 #include <fcntl.h>
 #include <time.h>
 #include <errno.h>
-#include <pwd.h>
+/*
+ * <pwd.h> IS DELETED, DELIBERATELY (vms-cb5) -- see get_current_username
+ * below. The operator log's user name comes from the executive; the host
+ * passwd database is not an authority on who a VMS process is.
+ */
 #include "starlet.h"
-#include "vms/pcb.h"
+#include "vms_kif.h"
 
 /* Operator log file path */
 #include "ovmx_layout.h"
@@ -80,16 +85,52 @@ static void format_vms_timestamp(char *buf, size_t bufsz)
 }
 
 /*
- * Get the current VMS username from PCB or passwd database.
+ * The user name the executive holds for THIS process, or nothing.
+ *
+ * =====================================================================
+ * THE getpwuid() FALLBACK AND THE "UNKNOWN" LITERAL ARE DELETED
+ * (vms-cb5, vms-f39; CLAUDE.md Rules 10 and 11)
+ * =====================================================================
+ * This used to read the userspace PCB and, when that held no name, fall
+ * back to getpwuid(getuid()) and then to the literal "UNKNOWN". So the
+ * OPERATOR.LOG record -- a VMS-facing artifact -- named the HOST's Linux
+ * account. MEASURED on the host build before this change, by running
+ * `printf 'LOGOUT\n' | DCL.EXE` and reading the log it wrote:
+ *
+ *   %%OPCOM, 01-AUG-2026 19:09:28.24, request 1 from user baron on node OVMX
+ *
+ * "baron" is the Linux login of the machine, not any VMS account. The
+ * same record is written by REPLY/ENABLE.
+ *
+ * WHY THERE IS NO REPLACEMENT VALUE. OpenVMS has no state where a
+ * process has no user name -- the name lives in the executive's process
+ * table and every process is entered in it. So this is Rule 10's second
+ * candidate: the condition is not handled, and nothing is invented to
+ * stand in for it. What goes in the record is what the executive holds,
+ * INCLUDING NOTHING, which is the same disposition already applied to
+ * SHOW PROCESS, F$USER, PRINT, SUBMIT, ACCOUNTING, REPLY and LOGOUT.
+ * An OPCOM record naming no user is visibly wrong and points at the
+ * real gap (an unnamed row, vms-afd); a record naming "baron" or
+ * "UNKNOWN" looks right and hides it.
+ *
+ * WHY IT READS THE EXECUTIVE AND NOT THE PCB. The userspace PCB is
+ * per-process memory (Rule 11), a copy of what the executive decided.
+ * Reading the executive directly means this cannot report a name the
+ * executive does not have -- and on a process the executive has not
+ * named there is no second source to fall through to.
  */
 static const char *get_current_username(void)
 {
-    struct vms_pcb *pcb = vms_pcb_get();
-    if (pcb && pcb->username[0] != '\0')
-        return pcb->username;
+    static __thread char name[VMS_USERNAME_SIZE];
+    struct vms_procinfo self;
 
-    struct passwd *pw = getpwuid(getuid());
-    return pw ? pw->pw_name : "UNKNOWN";
+    name[0] = '\0';
+    memset(&self, 0, sizeof(self));
+    if (vms_kif_getjpi_self(&self) & 1) {
+        strncpy(name, self.username, sizeof(name) - 1);
+        name[sizeof(name) - 1] = '\0';
+    }
+    return name;
 }
 
 /*

@@ -550,6 +550,15 @@ int cmd_reply(struct dcl_command *cmd)
      * is reachable without privilege (any SPAWNed subprocess -- see
      * vms_proc_register() in src/kernel/vms_module.c). Deleted, not
      * replaced; long form at lex_user() in src/vmsdcl/dcl_lexical.c.
+     *
+     * WHAT THIS SITE DOES AND DOES NOT DECIDE. It decides the operator
+     * name in the console line and in the OPC message TEXT below. It
+     * does NOT decide the "from user ..." header sys$sndopr prefixes to
+     * the OPERATOR.LOG record -- that name is read separately in
+     * src/libvms/syssvc/sys_operator.c, and until vms-cb5 it came from
+     * getpwuid(getuid()), i.e. from the host's Linux login. Fixing one
+     * of the two and claiming the record was clean is the mistake this
+     * note exists to stop being repeated.
      */
     const char *username = ctx->username;
 

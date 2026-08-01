@@ -45,44 +45,34 @@
 #     SHOW PROCESS, SHOW PROCESS/PRIVILEGES and F$GETJPI to report the
 #     executive's answer instead, from two different processes.
 #
-#   - VMS_UIC_GROUP, VMS_UIC_MEMBER, VMS_PRIVILEGES and VMS_TERMINAL have
-#     ZERO readers in the trees this gate scans (src/ and tools/ -- see the
-#     scope note at the bottom before reading that as "anywhere"). They are
-#     write-only. Their sole writer, vmssshd, is not merely unlaunched --
-#     MEASURED: it is not in the runtime image at all (the fat initramfs
-#     contains exactly 8 executables and vmssshd is not one of them). Per
-#     Rule 10 those four setenv() calls should be DELETED rather than
-#     documented; that is filed, not done here, because src/vmsssh/ belongs
-#     to vms-475.
+#   - ALL FIVE VMS_* VARIABLES ARE NOW WRITE-ONLY in the trees this gate
+#     scans (src/ and tools/ -- see the scope note at the bottom before
+#     reading that as "anywhere"). Their sole writers are vmssshd and
+#     LOGINOUT; vmssshd is not merely unlaunched -- MEASURED: it is not in
+#     the runtime image at all (the fat initramfs contains exactly 8
+#     executables and vmssshd is not one of them). Per Rule 10 those
+#     setenv() calls should be DELETED rather than documented; that is
+#     filed, not done here, because src/vmsssh/ belongs to vms-475.
 #
-#   - VMS_USERNAME has exactly ONE reader, tools/vms_mail.c, which uses it to
-#     choose whose mailbox to open. That is a real identity decision, so it is
-#     the one entry below that could carry an escalation. It does not, for two
-#     independent measured reasons.
+#     THIS SAID SOMETHING DIFFERENT ONE ROUND AGO, and the difference is
+#     the point. It read: "VMS_USERNAME has exactly ONE reader,
+#     tools/vms_mail.c, which uses it to choose whose mailbox to open --
+#     a real identity decision, so it is the one entry that could carry
+#     an escalation", followed by two paragraphs of measurement arguing
+#     that it did not. That reader is DELETED (vms-cb5): MAIL reads the
+#     executive's process table, like DCL, and refuses to run when the
+#     executive holds no name for it. The paragraphs are deleted with it
+#     rather than reworded -- their subject no longer exists, and a
+#     careful argument about a deleted line is the kind of prose that
+#     rots into a false claim. The write-only property below is DERIVED,
+#     so it states this without anyone having to maintain the sentence.
 #
-#     (1) No way was found for a console user to write the process
-#         environment. DCL contains no setenv/putenv at all, and its exec
-#         paths (dcl_exec_utility's execv/execvp, cmd_run's execl, cmd_spawn's
-#         execl) hand the child environ verbatim. The mechanisms a user could
-#         actually reach were TRIED, on the runtime, not reasoned about:
-#         DEFINE, ASSIGN and a DCL symbol assignment, each in its own fresh
-#         login session, each followed by SPAWN of a fresh DCL -- and the
-#         subprocess reported the LOGINOUT-set value every time. The
-#         observation channel was proved live in the same run by moving the
-#         cwd with SET DEFAULT and watching the subprocess still report the
-#         environment's value over it. This is a "none found by these
-#         probes", not a proof of impossibility: a mechanism nobody thought
-#         to try is exactly what a gate is for, which is why the census
-#         below fails on a new READER as well as a new writer.
-#
-#     (2) MAIL opened no mailbox at all on this runtime -- not another
-#         user's, and not its own. It fails with "%MAIL-E-NOMAIL, cannot
-#         create mail directory: No such file or directory" because
-#         get_user_homedir() returns the raw VMS filespec from SYSUAF
-#         ("SYS$SYSDEVICE:[USERS.GUEST]") and build_maildir() then uses it
-#         as a Linux path. Measured for GUEST and for SYSTEM, which is both
-#         accounts rather than a sample: the other four SYSUAF rows carry no
-#         password hash and cannot authenticate at all (vms-08f).
+#   - USER is READ by tools/vms_authorize.c, which looks the name up in
+#     SYSUAF and checks it for SYSPRV. That IS an environment-supplied
+#     identity reaching a privilege decision, and it is declared, not
+#     excused: it is the one live entry in this census. It is out of
+#     scope for vms-cb5's identity-fabrication fix (it produces no user
+#     name, UIC or identifier in output) and is filed separately.
 #
 # IF YOU ARE HERE BECAUSE THIS FAILED: adding your new site to the declared
 # set below is the WRONG first move. Ask Rule 10's question first -- does VMS
@@ -141,10 +131,28 @@ WRITE src/vmsssh/vmssshd.c VMS_PRIVILEGES
 WRITE src/vmsssh/vmssshd.c VMS_UIC_GROUP
 WRITE src/vmsssh/vmssshd.c VMS_UIC_MEMBER
 WRITE src/vmsssh/vmssshd.c VMS_USERNAME
+WRITE src/vmsssh/vmssshd.c USER
+WRITE src/vmsssh/vmssshd.c LOGNAME
 WRITE tools/vms_login.c VMS_USERNAME
-READ tools/vms_mail.c VMS_USERNAME
+READ tools/vms_authorize.c USER
 EOF
 )
+# THE LAST THREE LINES ARE NEW AS OF vms-cb5's class enumeration, and the
+# first two of them were found BY WIDENING THIS GATE, not by reading code:
+# vmssshd sets USER and LOGNAME to the authenticated name alongside the
+# VMS_* facades, and no census in this repo had ever looked at USER or
+# LOGNAME. They are a live pair with the AUTHORIZE reader below --
+# vmssshd writes USER, AUTHORIZE reads USER and checks the named account
+# for SYSPRV -- which is exactly the shape a census is for: two sites in
+# different directories that only mean something together.
+#
+# They are NOT a live escalation on the one runtime target, for a reason
+# that is measured rather than argued: vmssshd is not in the runtime
+# image at all (see the note above), and AUTHORIZE's USER read is gated
+# behind a SYSUAF lookup that must yield SYSPRV or ALL. It is filed
+# rather than fixed here because src/vmsssh/ belongs to vms-475, whose
+# standing instruction is already that the whole env handoff is deleted
+# when SSH is wired.
 
 # Strip C comments (/* */ and //) so a variable named only in prose -- and
 # every one of them is named in prose somewhere, including in this repo's
@@ -172,7 +180,13 @@ strip_comments() {
     }' "$1"
 }
 
-VARS="VMS_USERNAME VMS_UIC_GROUP VMS_UIC_MEMBER VMS_PRIVILEGES VMS_TERMINAL"
+# USER and LOGNAME are here as of vms-cb5's class enumeration. The class
+# is "a host identity or a fabricated literal becoming a VMS identity",
+# and the environment half of it is not only OVMX's own VMS_* facades --
+# the POSIX login-name variables are the other half, and one of them is
+# genuinely read (tools/vms_authorize.c). Leaving them out would have
+# made this gate's own scope the next thing somebody discovered late.
+VARS="VMS_USERNAME VMS_UIC_GROUP VMS_UIC_MEMBER VMS_PRIVILEGES VMS_TERMINAL USER LOGNAME"
 
 # BOTH TREES. src/ alone is what let the refuted sentence stand.
 FILES=$(find "$SRC_ROOT/src" "$SRC_ROOT/tools" \( -name '*.c' -o -name '*.h' \) | sort)
@@ -241,14 +255,27 @@ fi
 # ---------------------------------------------------------------------------
 # THE ONE PROPERTY THE CENSUS IMPLIES THAT IS WORTH STATING SEPARATELY.
 #
-# Four of the five variables are WRITE-ONLY: nothing reads them. That is the
-# fact that makes the writer count harmless, and it is a stronger and more
+# Every VMS_* variable is WRITE-ONLY: nothing reads them. That is the fact
+# that makes the writer count harmless, and it is a stronger and more
 # durable claim than any statement about which writers exist -- it survives
 # any number of new writers. It is DERIVED from the census above, not
 # declared, so it cannot be true here and false in the tree.
+#
+# THE LIST IS DERIVED TOO, from $VARS filtered to the VMS_ prefix, rather
+# than typed out. It used to be a hand-written four-name list, which was
+# correct only because VMS_USERNAME then had a reader; when that reader
+# was deleted the list would have silently kept checking four of five and
+# nobody would have noticed the fifth had joined the property. USER and
+# LOGNAME are excluded because they are POSIX variables the host sets --
+# "nobody writes them" is not a property OVMX can hold, and one of them
+# is read on purpose.
 # ---------------------------------------------------------------------------
 echo ""
-for v in VMS_UIC_GROUP VMS_UIC_MEMBER VMS_PRIVILEGES VMS_TERMINAL; do
+WRITE_ONLY_VARS=""
+for v in $VARS; do
+    case "$v" in VMS_*) WRITE_ONLY_VARS="$WRITE_ONLY_VARS $v" ;; esac
+done
+for v in $WRITE_ONLY_VARS; do
     n=$(printf '%s\n' "$OBS_SORTED" | grep -c "^READ .* $v$")
     if [ "$n" -eq 0 ]; then
         echo "  OK: $v has no reader in src/ or tools/ -- writing it decides nothing"

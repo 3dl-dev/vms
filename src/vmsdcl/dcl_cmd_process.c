@@ -1497,9 +1497,29 @@ int cmd_logout(struct dcl_command *cmd)
 {
     (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
-    /* No fabricated user name in the logout record or the OPCOM entry
-     * (vms-f42d) -- an operator log that names an unnamed process SYSTEM
-     * is worse than one that names it nothing. Same deletion as SUBMIT. */
+    /*
+     * ctx->username, with no `: "SYSTEM"` behind it (vms-f42d). Same
+     * deletion as SUBMIT.
+     *
+     * SCOPE OF THIS COMMENT, narrowed after it was caught overclaiming.
+     * It used to read "No fabricated user name in the logout record or
+     * the OPCOM entry", which was FALSE about the OPCOM entry: the name
+     * in the record below is the one THIS site passes, but sys$sndopr
+     * stamps its own "from user ..." header, and that header came from
+     * getpwuid(getuid()) -- so the log read
+     *
+     *   %%OPCOM, 01-AUG-2026 18:50:05.30, request 1 from user baron on node OVMX
+     *
+     * on a machine whose Linux login was "baron". A per-site deletion
+     * carrying a claim about a different file is how every false
+     * emphatic in this item happened.
+     *
+     * That header is fixed at its own site now -- see
+     * get_current_username() in src/libvms/syssvc/sys_operator.c -- and
+     * the OPERATOR.LOG record is read back on the runtime by
+     * tests/qemu/test_syssvc_ident.c scenario G, which is the evidence
+     * this comment is not allowed to assert on its own.
+     */
     const char *upper_user = ctx->username;
 
     struct timespec ts;

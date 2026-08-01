@@ -29,7 +29,14 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
-#include <pwd.h>
+/*
+ * <pwd.h> IS DELETED, DELIBERATELY (vms-cb5). MAIL asks the executive who
+ * the caller is and SYSUAF who the recipient is; the host passwd database
+ * is not an authority on either. Re-adding this include is the first move
+ * of putting the defect back, and
+ * tests/integration/test_host_identity_census.sh fails on the getpw* call
+ * that would follow it.
+ */
 #include <dirent.h>
 #include <fcntl.h>
 
@@ -42,6 +49,9 @@
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "vms/logical.h"
+/* MAIL's own identity is read out of the executive's process table -- see
+ * the block comment in main(). */
+#include "vms_kif.h"
 #define SYSUAF_PATH     VMS_SYSUAF_PATH
 #define MAIL_SUBDIR     ".vmsmail"
 #define MAIL_INDEX      "MAIL.IDX"
@@ -142,13 +152,23 @@ static int user_exists(const char *username)
         fclose(fp);
     }
 
-    /* Fall back to /etc/passwd for Linux users */
-    char lower[MAX_USERNAME];
-    strncpy(lower, username, sizeof(lower) - 1);
-    lower[sizeof(lower) - 1] = '\0';
-    for (int i = 0; lower[i]; i++)
-        lower[i] = (char)tolower((unsigned char)lower[i]);
-    return (getpwnam(lower) != NULL);
+    /*
+     * NO /etc/passwd FALLBACK (vms-cb5, vms-f39; Rule 10).
+     *
+     * This used to lowercase the name and answer getpwnam() != NULL, so
+     * every LINUX account on the host was a valid VMS mail recipient.
+     * MEASURED on the host build before this change, with a host login
+     * "baron" that is in no OVMX SYSUAF:
+     *
+     *   MAIL> SEND / To: BARON  ->  %MAIL-S-SENT, message sent to BARON
+     *
+     * A VMS user is an account in the authorization file; the host's
+     * passwd database is not a second, parallel user registry, and
+     * treating it as one is how a Linux identity becomes a VMS one.
+     * A name SYSUAF does not carry is not a user, and MAIL says so
+     * (%MAIL-E-NOSUCHUSER) instead of inventing one.
+     */
+    return 0;
 }
 
 /* Get home directory for a VMS username */
@@ -192,18 +212,14 @@ static int get_user_homedir(const char *username, char *homedir, size_t sz)
         fclose(fp);
     }
 
-    /* Fall back to /etc/passwd */
-    char lower[MAX_USERNAME];
-    strncpy(lower, username, sizeof(lower) - 1);
-    lower[sizeof(lower) - 1] = '\0';
-    for (int i = 0; lower[i]; i++)
-        lower[i] = (char)tolower((unsigned char)lower[i]);
-    struct passwd *pw = getpwnam(lower);
-    if (pw) {
-        strncpy(homedir, pw->pw_dir, sz - 1);
-        homedir[sz - 1] = '\0';
-        return 0;
-    }
+    /*
+     * NO /etc/passwd FALLBACK (vms-cb5; Rule 10). This used to answer
+     * with the HOST account's home directory for any VMS name that
+     * lowercased to a Linux login -- so a VMS user's mail would live in
+     * a Linux user's home, chosen by a name collision. SYSUAF's
+     * default_dir field is where a VMS account's directory is recorded;
+     * an account it does not name has no directory here.
+     */
     return -1;
 }
 
@@ -863,20 +879,50 @@ int main(int argc, char *argv[])
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
 
-    /* Determine current username */
-    const char *env_user = getenv("VMS_USERNAME");
-    if (env_user && env_user[0]) {
-        strncpy(g_username, env_user, sizeof(g_username) - 1);
-        g_username[sizeof(g_username) - 1] = '\0';
-        str_upcase(g_username);
-    } else {
-        struct passwd *pw = getpwuid(getuid());
-        if (pw) {
-            strncpy(g_username, pw->pw_name, sizeof(g_username) - 1);
+    /*
+     * =================================================================
+     * WHO MAIL THINKS IT IS COMES FROM THE EXECUTIVE (vms-cb5)
+     * =================================================================
+     * g_username selects the mail file MAIL opens AND is stamped on
+     * every message it delivers as the sender (deliver_message()). It
+     * is therefore an identity decision, and it used to be made from
+     * three sources a process controls or a host supplies:
+     *
+     *   getenv("VMS_USERNAME")   -- the env facade; any process can set
+     *                               it, and it was the LAST remaining
+     *                               reader of that variable anywhere in
+     *                               src/ or tools/ (see
+     *                               tests/integration/test_env_identity_census.sh).
+     *   getpwuid(getuid())       -- the HOST's Linux login, upcased.
+     *   the literal "SYSTEM"     -- a fabricated privileged name.
+     *
+     * All three are deleted. The name comes from the executive's
+     * process table, the same read DCL does (src/vmsdcl/dcl_main.c),
+     * which a process cannot write for itself -- VMS_IOCTL_SETIDENT
+     * refuses any caller without SETPRV an identity that is not a
+     * weakening of its own (Rule 11).
+     *
+     * IF THE EXECUTIVE HOLDS NO NAME, MAIL DOES NOT RUN. There is no
+     * third answer: OpenVMS has no process without a user name, so
+     * there is no VMS behaviour to reproduce and nothing legal to
+     * substitute -- opening SYSTEM's mail file, or the host account's,
+     * would be exactly the fabrication this deletes. The refusal is
+     * labelled %OVMX- on purpose: it is an OVMX condition, not a VMS
+     * message, and must not be mistaken for one (CLAUDE.md Rule 10 --
+     * do not self-certify a VMS message; this one does not claim to be).
+     */
+    {
+        struct vms_procinfo self;
+        memset(&self, 0, sizeof(self));
+        if ((vms_kif_getjpi_self(&self) & 1) && self.username[0] != '\0') {
+            strncpy(g_username, self.username, sizeof(g_username) - 1);
             g_username[sizeof(g_username) - 1] = '\0';
             str_upcase(g_username);
         } else {
-            strncpy(g_username, "SYSTEM", sizeof(g_username) - 1);
+            fprintf(stderr,
+                    "%%OVMX-F-NOUSER, the executive holds no user name for "
+                    "this process; MAIL cannot select a mail file\n");
+            return 1;
         }
     }
 

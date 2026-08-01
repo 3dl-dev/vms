@@ -31,6 +31,58 @@
 /* ------------------------------------------------------------------ */
 
 /*
+ * Parse ONE SYSUAF.DAT line into *rec, in place (the line buffer is
+ * modified). Returns 0 on success, -1 for a comment, a blank, or a
+ * malformed row.
+ *
+ * Factored out of sysuaf_lookup() when sysuaf_lookup_by_uic() was added
+ * (vms-cb5), so the two searches cannot drift into disagreeing about
+ * what a row means -- a UIC->name lookup that parsed the file
+ * differently from the name->UIC lookup would be a way for the same
+ * account to have two identities.
+ */
+static int sysuaf_parse_line(char *line, sysuaf_record_t *rec)
+{
+    if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
+        return -1;
+
+    str_trim(line);
+
+    /* Parse: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
+     * Pipe delimiter avoids conflict with VMS device colons in DEFAULT_DIR. */
+    char *fields[7];
+    char *p = line;
+    int nf = 0;
+
+    for (nf = 0; nf < 7 && p; nf++) {
+        fields[nf] = p;
+        char *sep = strchr(p, '|');
+        if (sep) {
+            *sep = '\0';
+            p = sep + 1;
+        } else {
+            p = NULL;
+        }
+    }
+
+    if (nf < 5)
+        return -1;  /* malformed line */
+
+    memset(rec, 0, sizeof(*rec));
+    strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
+    str_upcase(rec->username);
+    strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
+    rec->uic_group  = (uint32_t)strtoul(fields[2], NULL, 10);
+    rec->uic_member = (uint32_t)strtoul(fields[3], NULL, 10);
+    strncpy(rec->default_dir, fields[4], sizeof(rec->default_dir) - 1);
+    if (nf > 5)
+        strncpy(rec->flags, fields[5], sizeof(rec->flags) - 1);
+    if (nf > 6)
+        strncpy(rec->privileges, fields[6], sizeof(rec->privileges) - 1);
+    return 0;
+}
+
+/*
  * Look up a user in SYSUAF_PATH.
  * The username comparison is case-insensitive.
  * On success the record is written to *rec and 0 is returned.
@@ -52,50 +104,12 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
 
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
-        /* Skip comments and blank lines */
-        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
+        sysuaf_record_t cand;
+        if (sysuaf_parse_line(line, &cand) != 0)
             continue;
-
-        str_trim(line);
-
-        /* Parse: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
-         * Pipe delimiter avoids conflict with VMS device colons in DEFAULT_DIR. */
-        char *fields[7];
-        char *p = line;
-        int nf = 0;
-
-        for (nf = 0; nf < 7 && p; nf++) {
-            fields[nf] = p;
-            char *sep = strchr(p, '|');
-            if (sep) {
-                *sep = '\0';
-                p = sep + 1;
-            } else {
-                p = NULL;
-            }
-        }
-
-        if (nf < 5)
-            continue;  /* malformed line */
-
-        /* Case-insensitive compare */
-        char uname_copy[64];
-        strncpy(uname_copy, fields[0], sizeof(uname_copy) - 1);
-        uname_copy[sizeof(uname_copy) - 1] = '\0';
-        str_upcase(uname_copy);
-
-        if (strcmp(uname_copy, search_copy) == 0) {
-            memset(rec, 0, sizeof(*rec));
-            strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
-            str_upcase(rec->username);
-            strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
-            rec->uic_group  = (uint32_t)strtoul(fields[2], NULL, 10);
-            rec->uic_member = (uint32_t)strtoul(fields[3], NULL, 10);
-            strncpy(rec->default_dir, fields[4], sizeof(rec->default_dir) - 1);
-            if (nf > 5)
-                strncpy(rec->flags, fields[5], sizeof(rec->flags) - 1);
-            if (nf > 6)
-                strncpy(rec->privileges, fields[6], sizeof(rec->privileges) - 1);
+        /* cand.username is already upcased by sysuaf_parse_line(). */
+        if (strcmp(cand.username, search_copy) == 0) {
+            *rec = cand;
             fclose(fp);
             return 0;
         }
@@ -103,6 +117,41 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
 
     fclose(fp);
     return -1;  /* User not found */
+}
+
+/* ------------------------------------------------------------------ */
+/* sysuaf_lookup_by_uic                                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Reverse of sysuaf_lookup(): find the account that owns a UIC.
+ * See the header comment on the declaration in sysuaf.h for why this
+ * exists (vms-cb5 / vms-f39) -- it replaces a getpwuid() call that let
+ * the HOST's /etc/passwd answer a VMS question.
+ */
+int sysuaf_lookup_by_uic(uint32_t uic_group, uint32_t uic_member,
+                         sysuaf_record_t *rec)
+{
+    char sysuaf_linux[1024];
+    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
+    FILE *fp = fopen(sysuaf_linux, "r");
+    if (!fp)
+        return -1;
+
+    char line[1024];
+    while (fgets(line, sizeof(line), fp)) {
+        sysuaf_record_t cand;
+        if (sysuaf_parse_line(line, &cand) != 0)
+            continue;
+        if (cand.uic_group == uic_group && cand.uic_member == uic_member) {
+            *rec = cand;
+            fclose(fp);
+            return 0;
+        }
+    }
+
+    fclose(fp);
+    return -1;  /* No account owns that UIC */
 }
 
 /* ------------------------------------------------------------------ */

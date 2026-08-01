@@ -575,6 +575,19 @@ static char *const g_env[] = {
  * '%RMS-E-FNF, file not found - .'. */
 #define G_VMSDIR "DKA0:[OVMXCB5]"
 #define G_LNXDIR "/vms/OVMXCB5"
+/*
+ * Where vmsfs_to_linux_path() lands SYS$SYSTEM:SYSUAF.DAT and
+ * SYS$MANAGER:OPERATOR.LOG under SYSDISK_MOUNT=/vms (ovmx_layout.h).
+ *
+ * DERIVED, NOT GUESSED: these two strings are what vmsfs_to_linux_path()
+ * returns for those filespecs once lnm_setup_defaults() has run, printed
+ * by a probe rather than read off the directory layout. Note the LOWERCASE
+ * basenames -- that is the translation's own output. (Both cases happen to
+ * open on the host, so a guess of "SYSUAF.DAT" would have worked here and
+ * would have been a guess. Use what the function returns.)
+ */
+#define G_SYSUAF "/vms/SYS0/SYSCOMMON/SYSEXE/sysuaf.dat"
+#define G_OPLOG  "/vms/SYS0/SYSCOMMON/SYSMGR/operator.log"
 
 /*
  * THE /etc/passwd THIS SCENARIO STAGES, and why it is not decoration.
@@ -599,6 +612,36 @@ static char *const g_env[] = {
  */
 #define G_PWNAME "shipuser"
 
+/*
+ * THE SYSUAF THIS SCENARIO STAGES, and why the F$IDENTIFIER checks below
+ * would be vacuous without it.
+ *
+ * F$IDENTIFIER used to answer out of the HOST's passwd database:
+ * getpwnam() for NAME_TO_NUMBER, getpwuid() for NUMBER_TO_NAME. It now
+ * answers out of OVMX's authorization file. This initramfs ships no
+ * SYSUAF, so with no file staged EVERY lookup misses and every answer is
+ * the null string or 0 -- which is also what a correct implementation
+ * returns for an unknown identifier, so "the Linux name is absent" would
+ * be satisfied by the file simply not being there. Staging a SYSUAF is
+ * what makes the two distinguishable: the POSITIVE checks require a real
+ * account to resolve, in the same run in which the NEGATIVE checks
+ * require the Linux account -- which /etc/passwd above makes resolvable
+ * at the same moment -- not to.
+ *
+ * THE VALUES ARE THE ORACLE'S. SYSTEM = [1,4] = 65540 was measured on the
+ * reference lab (real OpenVMS VAX V7.3, ~/vax/cluster VAX1) on
+ * 2026-08-01: F$IDENTIFIER("SYSTEM","NAME_TO_NUMBER") -> 65540 and
+ * F$IDENTIFIER(65540,"NUMBER_TO_NAME") -> "SYSTEM". OVMX's shipped
+ * SYSUAF.DAT already carries SYSTEM|...|1|4, so this row is that file's
+ * row, not a value chosen here.
+ *
+ * The second row is G_NAME at G_GRP/G_MEM -- the same identity the
+ * session stamps into the executive -- so the NUMBER_TO_NAME direction
+ * has an account to find that is NOT SYSTEM. A single SYSTEM hit could
+ * be explained by SYSTEM having been special-cased, which is exactly
+ * what the deleted code did.
+ */
+
 static int g_stage_files(void)
 {
     FILE *fp;
@@ -610,6 +653,29 @@ static int g_stage_files(void)
             G_PWNAME, (unsigned)G_MEM, (unsigned)G_GRP);
     fclose(fp);
     chmod("/etc/passwd", 0644);
+
+    mkdir("/vms", 0777);
+    mkdir("/vms/SYS0", 0777);
+    mkdir("/vms/SYS0/SYSCOMMON", 0777);
+    mkdir("/vms/SYS0/SYSCOMMON/SYSEXE", 0777);
+    mkdir("/vms/SYS0/SYSCOMMON/SYSMGR", 0777);
+    chmod("/vms/SYS0", 0777);
+    chmod("/vms/SYS0/SYSCOMMON", 0777);
+    chmod("/vms/SYS0/SYSCOMMON/SYSEXE", 0777);
+    chmod("/vms/SYS0/SYSCOMMON/SYSMGR", 0777);
+    fp = fopen(G_SYSUAF, "w");
+    if (!fp) return -1;
+    fprintf(fp, "SYSTEM|x|1|4|SYS$SYSDEVICE:[SYSMGR]||ALL\n");
+    fprintf(fp, "%s|x|%u|%u|SYS$SYSDEVICE:[USERS.%s]||TMPMBX\n",
+            G_NAME, (unsigned)G_GRP, (unsigned)G_MEM, G_NAME);
+    fclose(fp);
+    chmod(G_SYSUAF, 0644);
+
+    /* The operator log the OPCOM assertions read back. Truncated here so
+     * what the run finds in it is this run's, not an earlier suite's. */
+    fp = fopen(G_OPLOG, "w");
+    if (fp) fclose(fp);
+    chmod(G_OPLOG, 0666);
 
     mkdir("/vms", 0777);
     mkdir(G_LNXDIR, 0777);
@@ -740,7 +806,15 @@ static void scenario_g_unnamed_row_reports_nothing(void)
         return;
     }
 
-    const char *script_g =
+    /*
+     * The UIC values in the F$IDENTIFIER lines are COMPUTED from G_GRP /
+     * G_MEM rather than written out, so they cannot drift away from the
+     * identity the session actually stamps and the SYSUAF row actually
+     * carries. A hand-written 13762571 here would keep compiling and stop
+     * meaning anything the day G_GRP changed.
+     */
+    static char script_g[1024];
+    snprintf(script_g, sizeof(script_g),
         "PRINT " G_VMSDIR "JOB.TXT\n"
         "SUBMIT " G_VMSDIR "JOB.COM\n"
         "SHOW QUEUE/ALL\n"
@@ -748,8 +822,34 @@ static void scenario_g_unnamed_row_reports_nothing(void)
         "REPLY/ENABLE\n"
         "IDENT_U = F$USER()\n"
         "SHOW SYMBOL IDENT_U\n"
+        /* F$IDENTIFIER, both directions (vms-f39).
+         *
+         * POSITIVE half first -- accounts that ARE in the staged SYSUAF
+         * must resolve. Without these, every negative below is equally
+         * well explained by the lookup being dead, which is the exact
+         * vacuity this suite exists to avoid. Two positives, not one,
+         * because the deleted code SPECIAL-CASED SYSTEM: a run that only
+         * checked SYSTEM would pass on a reimplementation that hardcoded
+         * it again. SHIPPING is a second account at a different UIC.
+         *
+         * NEGATIVE half: the uid and the login name of the Linux account
+         * /etc/passwd gives this process -- the defect verbatim.
+         */
+        "IDENT_N = F$IDENTIFIER(\"SYSTEM\",\"NAME_TO_NUMBER\")\n"
+        "SHOW SYMBOL IDENT_N\n"
+        "IDENT_R = F$IDENTIFIER(65540,\"NUMBER_TO_NAME\")\n"
+        "SHOW SYMBOL IDENT_R\n"
+        "IDENT_S = F$IDENTIFIER(%u,\"NUMBER_TO_NAME\")\n"
+        "SHOW SYMBOL IDENT_S\n"
+        "IDENT_H = F$IDENTIFIER(\"" G_PWNAME "\",\"NAME_TO_NUMBER\")\n"
+        "SHOW SYMBOL IDENT_H\n"
+        "IDENT_P = F$IDENTIFIER(%u,\"NUMBER_TO_NAME\")\n"
+        "SHOW SYMBOL IDENT_P\n"
         "SHOW PROCESS\n"
-        "LOGOUT\n";
+        "LOGOUT\n",
+        (unsigned)((G_GRP << 16) | G_MEM),   /* SHIPPING's UIC */
+        (unsigned)G_MEM);                    /* [0,11] -- no account; the
+                                              * Linux uid getpwuid() used */
 
     int rc = run_g_subprocess(script_g, outg, sizeof(outg));
     /* Staged for this scenario only -- every suite after this one runs in

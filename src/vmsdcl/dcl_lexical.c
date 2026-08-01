@@ -14,7 +14,13 @@
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <dirent.h>
-#include <pwd.h>
+/*
+ * <pwd.h> IS DELETED, DELIBERATELY (vms-cb5). This file no longer asks
+ * the host who anybody is: F$USER reads the executive and F$IDENTIFIER
+ * reads SYSUAF. Re-adding this include is the first move of putting the
+ * defect back, and tests/integration/test_host_identity_census.sh fails
+ * on the getpwnam/getpwuid call that would follow it.
+ */
 #include <fnmatch.h>
 #include <sys/statvfs.h>
 
@@ -32,6 +38,9 @@
 #include "vmsfs/filespec.h"
 #include "sysgen_params.h"
 #include "ovmx_identity.h"
+/* F$IDENTIFIER reads OVMX's authorization file, which is what OpenVMS's
+ * rights database is here -- see the block comment on lex_identifier. */
+#include "sysuaf.h"
 
 /* External functions */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
@@ -2391,6 +2400,76 @@ static int lex_getdvi(struct dcl_context *ctx, const char *args,
 
 /*
  * F$IDENTIFIER(id, conversion) - Convert between UIC and identifier names.
+ *
+ * =====================================================================
+ * WHERE THE ANSWER COMES FROM, AND WHY IT IS NOT /etc/passwd
+ * (vms-cb5, vms-f39; CLAUDE.md Rules 10 and 11)
+ * =====================================================================
+ * On OpenVMS this reads the RIGHTS DATABASE, which carries a UIC
+ * identifier for every SYSUAF account. It used to read the HOST's
+ * passwd database here -- getpwnam() one way, getpwuid() the other --
+ * so a VMS lexical function answered with the Linux account names and
+ * uid/gid pairs of whatever machine the image happened to be built or
+ * run on. MEASURED on the host build before this change, with the host
+ * login "baron", uid 1000, gid 1000:
+ *
+ *   F$IDENTIFIER(1000,"NUMBER_TO_NAME")   -> "BARON"     (host login)
+ *   F$IDENTIFIER("baron","NAME_TO_NUMBER")-> 65537000    (gid<<16|uid)
+ *   F$IDENTIFIER(65539,"NUMBER_TO_NAME")  -> "SYS"       (host uid 3)
+ *
+ * OVMX's authorization data is SYSUAF.DAT -- the same file LOGINOUT
+ * authenticates against, root-owned, not writable by the process
+ * asking. That is the source used now, in both directions.
+ *
+ * WHAT VMS ANSWERS WHEN THE IDENTIFIER IS NOT THERE -- PINNED TO THE
+ * ORACLE, NOT SELF-CERTIFIED. Measured 2026-08-01 on the reference lab
+ * (real OpenVMS VAX V7.3 under SIMH, ~/vax/cluster node VAX1), read off
+ * that system's own console:
+ *
+ *   F$IDENTIFIER("SYSTEM","NAME_TO_NUMBER")        -> 65540  (%X00010004)
+ *   F$IDENTIFIER("system","NAME_TO_NUMBER")        -> 65540  (case-insensitive)
+ *   F$IDENTIFIER("FIELD","NAME_TO_NUMBER")         -> 65544  (%X00010008)
+ *   F$IDENTIFIER("NOSUCHUSERXYZ","NAME_TO_NUMBER") -> 0
+ *   F$IDENTIFIER("","NAME_TO_NUMBER")              -> 0
+ *   F$IDENTIFIER(65540,"NUMBER_TO_NAME")           -> "SYSTEM"
+ *   F$IDENTIFIER(65539,"NUMBER_TO_NAME")           -> ""     ([1,3]: no account)
+ *   F$IDENTIFIER(1000,"NUMBER_TO_NAME")            -> ""
+ *   F$IDENTIFIER(0,"NUMBER_TO_NAME")               -> ""
+ *
+ * So "not in the rights database" is a condition OpenVMS DOES face, and
+ * its answer is 0 / the null string. Returning that for an identifier
+ * OVMX's SYSUAF does not carry is candidate (1) of Rule 10 -- MATCH VMS
+ * -- not an invented third answer. The UIC is composed as
+ * (group << 16) | member, which is the layout the oracle's own values
+ * confirm: SYSTEM is [1,4] in the lab's SYSUAF and reads back 65540.
+ *
+ * TWO HARDCODED LITERALS ARE DELETED HERE, NOT MOVED:
+ *   - SYSTEM -> 65540. The oracle CONFIRMS this value, but OVMX's
+ *     SYSUAF.DAT already carries "SYSTEM|...|1|4|...", so the constant
+ *     was a second, self-certified copy of a fact the authorization
+ *     file states. It now comes from the file; the value is unchanged,
+ *     which is what the test asserts.
+ *   - DEFAULT -> (200<<16)|1 = 13107201. The oracle REFUTES this one:
+ *     the lab answers 8388736 (%X00800080) for DEFAULT, and OVMX's own
+ *     SYSUAF says DEFAULT is [200,200] = 13107400. The literal agreed
+ *     with neither. It is deleted rather than corrected -- picking a
+ *     new literal would be self-certifying a VMS constant, which this
+ *     project forbids; the file answers instead.
+ *     (Whether OVMX's SYSUAF should store VMS's octal [200,200] = 128
+ *     decimal rather than 200 decimal is a separate, unfixed question
+ *     about the shipped data -- vms-c90's orbit, not this function's.)
+ *
+ * THE "[group,member]" FALLBACK IS ALSO DELETED. When getpwuid() found
+ * nothing this used to answer with a rendered UIC string, which is not
+ * an identifier NAME and is not what VMS returns; the oracle returns
+ * the null string.
+ *
+ * IF SYSUAF.DAT CANNOT BE READ, every lookup misses and every answer is
+ * VMS's not-found answer. That is not a fallback path for an absent
+ * facility (Rule 9 / INV-6): on the one runtime target SYSUAF is
+ * present by construction, because LOGINOUT authenticates against it
+ * and PID 1 will not reach a login prompt without it. Nothing here
+ * detects its absence or behaves differently for it.
  */
 static int lex_identifier(struct dcl_context *ctx, const char *args,
                           char *result, size_t result_size)
@@ -2441,42 +2520,30 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
         id_upper[j] = (char)toupper((unsigned char)id_upper[j]);
 
     if (strcmp(conv, "NAME_TO_NUMBER") == 0) {
-        /* Convert username to UIC number */
-        /* Hardcoded well-known identities */
-        if (strcmp(id_upper, "SYSTEM") == 0) {
-            snprintf(result, result_size, "%d", (1 << 16) | 4); /* [1,4] */
-        } else if (strcmp(id_upper, "DEFAULT") == 0) {
-            snprintf(result, result_size, "%d", (200 << 16) | 1); /* [200,1] */
-        } else {
-            /* Try /etc/passwd lookup */
-            struct passwd *pw = getpwnam(id_str);
-            if (pw) {
-                /* Map uid,gid to VMS UIC format [group,member] */
-                snprintf(result, result_size, "%d",
-                         (int)((pw->pw_gid << 16) | (pw->pw_uid & 0xFFFF)));
-            } else {
-                snprintf(result, result_size, "0");
-            }
-        }
+        /* The account's UIC out of OVMX's authorization file, or VMS's
+         * not-found answer (0, oracle-measured). sysuaf_lookup()'s own
+         * comparison is case-insensitive, which is what the oracle does
+         * ("system" and "SYSTEM" both answer 65540). */
+        sysuaf_record_t rec;
+        if (sysuaf_lookup(id_str, &rec) == 0)
+            snprintf(result, result_size, "%u",
+                     (unsigned)((rec.uic_group << 16) | (rec.uic_member & 0xFFFFu)));
+        else
+            snprintf(result, result_size, "0");
     } else if (strcmp(conv, "NUMBER_TO_NAME") == 0) {
-        /* Convert UIC number to username */
-        long uic = strtol(id_str, NULL, 0);
-        int member = (int)(uic & 0xFFFF);
-        int group = (int)((uic >> 16) & 0xFFFF);
+        /* The account that owns that UIC, or VMS's not-found answer
+         * (the null string, oracle-measured). */
+        unsigned long uic = strtoul(id_str, NULL, 0);
+        uint32_t member = (uint32_t)(uic & 0xFFFFu);
+        uint32_t group  = (uint32_t)((uic >> 16) & 0xFFFFu);
+        sysuaf_record_t rec;
 
-        if (group == 1 && member == 4) {
-            snprintf(result, result_size, "SYSTEM");
+        if (sysuaf_lookup_by_uic(group, member, &rec) == 0) {
+            /* sysuaf_lookup_by_uic() upcases the name it returns. */
+            strncpy(result, rec.username, result_size - 1);
+            result[result_size - 1] = '\0';
         } else {
-            /* Try /etc/passwd lookup by uid */
-            struct passwd *pw = getpwuid((uid_t)member);
-            if (pw) {
-                strncpy(result, pw->pw_name, result_size - 1);
-                result[result_size - 1] = '\0';
-                for (size_t j = 0; result[j]; j++)
-                    result[j] = (char)toupper((unsigned char)result[j]);
-            } else {
-                snprintf(result, result_size, "[%d,%d]", group, member);
-            }
+            result[0] = '\0';
         }
     } else {
         result[0] = '\0';

@@ -292,6 +292,35 @@ if(BUILD_TESTS)
     set_tests_properties(env_identity_census_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 180)
 
+    # The OTHER half of the same class (vms-cb5): every call into the HOST's
+    # identity primitives, derived from the BUILT BINARIES rather than from
+    # the source. The env census above is a source scan and would never have
+    # seen the two getpwuid() fallbacks that survived three rounds of this
+    # item -- one in F$IDENTIFIER, one in the OPCOM record writer -- because
+    # neither touches an environment variable. Disassembly + DWARF cannot be
+    # fooled by a comment, a dead #ifdef, or a call reached through a macro,
+    # and reports only what actually links into the product.
+    #
+    # DEPENDS ON THE BUILD, unlike the source scans beside it: it is pointed
+    # at ${CMAKE_BINARY_DIR}, and it FAILS rather than skips if that tree is
+    # empty or if objdump/addr2line are missing. A census that cannot derive
+    # must not be reported as clean.
+    add_test(NAME host_identity_census
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_host_identity_census.sh
+                ${CMAKE_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(host_identity_census PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 600)
+
+    # ...and its evasions. This gate's passing output is a LIST derived by
+    # a toolchain pipeline, which is the shape most able to fail silently:
+    # a regex that matches nothing on another architecture would print an
+    # empty census and, without these, look identical to a clean tree.
+    add_test(NAME host_identity_census_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_host_identity_census_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_BINARY_DIR})
+    set_tests_properties(host_identity_census_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 600)
+
     # The BEHAVIOURAL half of the same rule (vms-fb9 round 2), and the one
     # that actually carries the invariant. The two source scans above check
     # that named tokens are absent; an adversary reintroduced SHOW DEVICE's

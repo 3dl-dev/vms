@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# test_userspace_service_register_negctl.sh - the evasions (rd vms-5b4).
+# test_userspace_service_register_negctl.sh - the evasions (rd vms-5b4, vms-d89).
 #
 # A gate nobody tries to evade asserts nothing. This runs one MINIMAL mutation
 # per property of tests/integration/test_userspace_service_register.sh against a
@@ -11,6 +11,15 @@
 # computation, and on the claim that Rule 10's second answer (delete the
 # service, so the condition is unreachable) stays green. Neither is worth
 # anything as prose.
+#
+# THE CONTROL THIS FILE EXISTS FOR NOW IS THE BUY-OFF (vms-d89). The gate used
+# to exempt any service that REACHED the executive from declaring anything, and
+# that exemption cost ONE IGNORED LINE: `(void)vms_kif_getmode(&x)` at the top
+# of sys$gettim -- a declared facade still answering from clock_gettime -- made
+# the gate demand the honest declaration be DELETED, and then passed the
+# undeclared facade. Both halves of that are controls below: the flip must be
+# red, AND the deletion that used to buy green must be red too. A fix that only
+# reddens the first half leaves the evasion intact one step further along.
 #
 # WHERE A MUTATION TRIPS TWO PROPERTIES, THIS FILE SAYS SO rather than pretending
 # the mutation is narrower than it is. A malformed declaration is also an ABSENT
@@ -44,13 +53,22 @@ ROOT="$WORK/tree"
 mkdir -p "$ROOT" "$WORK/orig"
 cp -a "$SRC_ROOT/src" "$ROOT/src"
 cp -a "$SRC_ROOT/tools" "$ROOT/tools"
+# tests/ IS PART OF THE SANDBOX NOW, and not for the harness's convenience: an
+# OVMX-EXECUTIVE declaration names a proof file, and the gate checks that the
+# file exists, lives under tests/qemu/, forks, and names the service. A sandbox
+# without tests/ would redden every executive declaration in the tree for the
+# wrong reason and drown every control below.
+cp -a "$SRC_ROOT/tests" "$ROOT/tests"
 
 AST="$ROOT/src/libvms/syssvc/sys_ast.c"
 EVENT="$ROOT/src/libvms/syssvc/sys_event.c"
+TIME="$ROOT/src/libvms/syssvc/sys_time.c"
+QIO="$ROOT/src/libvms/syssvc/sys_qio.c"
 STR="$ROOT/src/libvms/rtl/str_routines.c"
 STARLET="$ROOT/src/libvms/include/starlet.h"
+PROOF="$ROOT/tests/qemu/test_syssvc_ef_mproc.c"
 
-MUTABLE="$AST $EVENT $STR $STARLET"
+MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF"
 
 key_of() { printf '%s' "${1#"$ROOT"/}" | tr '/.' '__'; }
 
@@ -105,7 +123,7 @@ expect_red() {
     elif ! printf '%s\n' "$out" | grep -qF "$need"; then
         echo "  FAIL: went red for the WRONG reason: $name"
         echo "        expected output to contain: $need"
-        printf '%s\n' "$out" | grep -E 'FAIL|ANSWERS|DECLARE|PROTOTYPE|DEFINED' | sed 's/^/          /'
+        printf '%s\n' "$out" | grep -E 'FAIL|SAYS NOTHING|DECLARE|PROTOTYPE|DEFINED|LOCAL HALF|PARTIAL|EXECUTIVE DECL' | sed 's/^/          /'
         ok=0
     fi
     record_verdict "$name" $ok
@@ -128,7 +146,7 @@ expect_green() {
     ok=1
     if [ "$rc" -ne 0 ]; then
         echo "  FAIL: the register went RED on something it must tolerate: $name"
-        printf '%s\n' "$out" | grep -E 'FAIL|ANSWERS|DECLARE|PROTOTYPE|DEFINED' | sed 's/^/          /'
+        printf '%s\n' "$out" | grep -E 'FAIL|SAYS NOTHING|DECLARE|PROTOTYPE|DEFINED|LOCAL HALF|PARTIAL|EXECUTIVE DECL' | sed 's/^/          /'
         ok=0
     fi
     record_verdict "$name" $ok
@@ -146,6 +164,39 @@ fi
 echo "  PASS: positive control -- the pristine sandbox copy is green"
 passed=$((passed + 1))
 
+# ------------------------------------------------- THE BUY-OFF (vms-d89) --
+# One ignored call, exactly as measured on the merged gate. sys$gettim still
+# answers from clock_gettime(); nothing about where its answer comes from has
+# changed. Under the old rule this flipped it to "exec" and the gate demanded
+# its honest OVMX-USERSPACE line be deleted.
+sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_m = 0; (void)vms_kif_getmode(\&ovmx_negctl_m); }|' "$TIME"
+expect_red "$TIME" "an ignored vms_kif_* call added to a declared facade (the buy-off, step 1)" \
+    "DECLARED WHOLLY USERSPACE BUT REACHES THE EXECUTIVE: sys\$gettim"
+
+# ...AND THE STEP THAT USED TO BUY GREEN. Taking the gate's old advice --
+# delete the declaration the "reaches the executive" red complained about --
+# must NOT pass. This is the control the whole revision exists for: a fix that
+# only reddens step 1 leaves the evasion intact one move later.
+sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_m = 0; (void)vms_kif_getmode(\&ovmx_negctl_m); }|' "$TIME"
+sed -i '/OVMX-USERSPACE: sys\$gettim (vms-5b4)/d' "$TIME"
+expect_red "$TIME" "the buy-off completed: ignored call added AND the honest declaration deleted" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$gettim"
+
+# THE SAME HOLE FROM THE OTHER SIDE. A brand-new service that reaches the
+# executive and says nothing at all used to be exempt BY CONSTRUCTION -- this
+# control was a GREEN one before vms-d89, asserting the exemption. It is the
+# exemption that was wrong, so it is now a RED.
+{
+    echo ''
+    echo 'uint32_t sys$negctl_wired(uint32_t efn) {'
+    echo '    uint32_t st = 0;'
+    echo '    (void)vms_kif_readef(efn, &st);'
+    echo '    return st;'
+    echo '}'
+} >> "$EVENT"
+expect_red "$EVENT" "a new service that reaches the executive but declares nothing" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$negctl_wired"
+
 # ------------------------------------------------------------- RED controls --
 
 # THE PROPERTY ITSELF. A new public service that answers from a new file-scope
@@ -159,13 +210,22 @@ passed=$((passed + 1))
     echo '}'
 } >> "$EVENT"
 expect_red "$EVENT" "an undeclared impostor answering from a new file-scope static" \
-    "ANSWERS WITHOUT THE EXECUTIVE AND IS NOT DECLARED: sys\$negctl_impostor"
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$negctl_impostor"
 
-# THE ANTI-STALE DIRECTION. Declaring a service that DOES reach the executive
-# must fail, or the register decays into an allowlist of things already fixed.
-printf '/* OVMX-USERSPACE: sys$setef (vms-5b4) -- negctl stale declaration */\n' >> "$EVENT"
-expect_red "$EVENT" "a declaration on a service that already reaches the executive" \
-    "DECLARED USERSPACE BUT REACHES THE EXECUTIVE: sys\$setef"
+# THE HEADER-INLINE EVASION, which was a LIVE hole and not a theoretical one:
+# on the merged gate this exact injection gave rc=0, PASS, and a universe
+# unchanged in size. The whole definition hides in a header, so neither the
+# .c-definition reading nor the prototype reading saw it.
+{
+    echo ''
+    echo 'static int ovmx_negctl_hdr_state = 0;'
+    echo 'static inline uint32_t sys$negctl_hdrinline(uint32_t v) {'
+    echo '    ovmx_negctl_hdr_state += (int)v;'
+    echo '    return (uint32_t)ovmx_negctl_hdr_state;'
+    echo '}'
+} >> "$STARLET"
+expect_red "$STARLET" "a service whose entire body hides in a header as static inline" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$negctl_hdrinline"
 
 # A declaration naming something that is not a service at all: a typo, or the
 # leftover of a service that was deleted and whose register line was not.
@@ -190,18 +250,18 @@ expect_red "$AST" "one service declared twice" \
 # second red is a consequence of this one, not a separate defect.
 sed -i 's|OVMX-USERSPACE: sys\$setast (vms-as1) --|OVMX-USERSPACE: sys$setast --|' "$AST"
 expect_red "$AST" "a declaration with no item id" \
-    "malformed OVMX-USERSPACE declaration"
+    "malformed OVMX declaration"
 
 # The reason is the register's content: an id alone records that somebody
 # noticed, not what answers instead. Same consequential second red as above.
 sed -i 's|\(OVMX-USERSPACE: sys\$setast (vms-as1)\) --.*|\1|' "$AST"
 expect_red "$AST" "a declaration with an item id but no reason" \
-    "malformed OVMX-USERSPACE declaration"
+    "malformed OVMX declaration"
 
 # Deleting the declaration outright must not quietly re-hide the facade.
 sed -i '/OVMX-USERSPACE: sys\$setast (vms-as1)/d' "$AST"
 expect_red "$AST" "a declaration simply deleted" \
-    "ANSWERS WITHOUT THE EXECUTIVE AND IS NOT DECLARED: sys\$setast"
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$setast"
 
 # THE ANTI-SHRINK PROPERTY. Renaming the definition out of the sys$ namespace
 # (and taking its declaration with it) removes the service from the DEFINITION
@@ -219,7 +279,7 @@ expect_red "$AST" "a service renamed out of the sys\$ namespace to shrink the un
 sed -i '/^uint32_t sys\$setast(/d' "$STARLET"
 sed -i '/OVMX-USERSPACE: sys\$setast/d' "$AST"
 expect_red "$STARLET $AST" "a prototype deleted to shrink the universe, declaration dropped with it" \
-    "ANSWERS WITHOUT THE EXECUTIVE AND IS NOT DECLARED: sys\$setast"
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$setast"
 
 # One service, one owner: the register pairs a declaration with the DEFINING
 # translation unit, so two definitions leave it with no unambiguous home.
@@ -229,6 +289,90 @@ expect_red "$STARLET $AST" "a prototype deleted to shrink the universe, declarat
 } >> "$EVENT"
 expect_red "$EVENT" "a second definition of a service in another translation unit" \
     "DEFINED MORE THAN ONCE: sys\$setast"
+
+# ------------------------------- the consistency checks on what a human wrote --
+
+# A PARTIAL claims the executive supplies part of the answer. On a service with
+# no reachable vms_kif_* entry point at all, that claim contradicts the only
+# thing a source scan CAN see.
+{
+    echo ''
+    echo '/* OVMX-PARTIAL: sys$negctl_nothing (vms-5b4) -- exec: nothing, actually */'
+    echo '/* OVMX-LOCAL: sys$negctl_nothing -- all of it */'
+    echo 'uint32_t sys$negctl_nothing(uint32_t v) { return v + 1; }'
+} >> "$EVENT"
+expect_red "$EVENT" "a PARTIAL claim on a service that reaches no executive at all" \
+    "PARTIAL DECLARATION ON A SERVICE THAT REACHES NOTHING: sys\$negctl_nothing"
+
+# ...and the same contradiction in its strongest form: claiming the WHOLE
+# answer comes from the executive while reaching nothing.
+{
+    echo ''
+    echo '/* OVMX-EXECUTIVE: sys$negctl_nothing (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo 'uint32_t sys$negctl_nothing(uint32_t v) { return v + 1; }'
+} >> "$EVENT"
+expect_red "$EVENT" "an EXECUTIVE claim on a service that reaches no executive at all" \
+    "EXECUTIVE DECLARATION ON A SERVICE THAT REACHES NOTHING: sys\$negctl_nothing"
+
+# A mixture is only described when BOTH halves are named. Deleting the local
+# half leaves "the executive supplies part of it" with no statement of what
+# supplies the rest -- which is the whole content the 20 exempt services were
+# missing before vms-d89.
+sed -i '/OVMX-LOCAL: sys\$qio --/d' "$QIO"
+expect_red "$QIO" "a PARTIAL declaration whose local half was deleted" \
+    "PARTIAL DECLARATION WITH NO LOCAL HALF: sys\$qio"
+
+# ...and the reverse: a local half attached to a service that is not declared
+# PARTIAL means nothing on its own.
+printf '/* OVMX-LOCAL: sys$gettim -- negctl orphan local half */\n' >> "$TIME"
+expect_red "$TIME" "a local half with no PARTIAL declaration to be the other half of" \
+    "LOCAL HALF WITH NO PARTIAL DECLARATION: sys\$gettim"
+
+# Two local halves: which one is the live statement?
+printf '/* OVMX-LOCAL: sys$qio -- negctl duplicate local half */\n' >> "$QIO"
+expect_red "$QIO" "one service with two local halves" \
+    "LOCAL HALF DECLARED MORE THAN ONCE: sys\$qio"
+
+# Both halves describe one implementation, so both move with it.
+sed -i '/OVMX-LOCAL: sys\$qio --/d' "$QIO"
+printf '/* OVMX-LOCAL: sys$qio -- negctl local half parked elsewhere */\n' >> "$EVENT"
+expect_red "$QIO $EVENT" "a local half parked in a different translation unit from its PARTIAL" \
+    "LOCAL HALF IN A DIFFERENT TRANSLATION UNIT: sys\$qio"
+
+# ------------------------------------------- the price of the full exemption --
+# OVMX-EXECUTIVE is the ONLY declaration that exempts a service from naming a
+# process-local half, so it is the only one worth attacking. Four ways to claim
+# it cheaply, four reds.
+
+sed -i 's|proof=tests/qemu/test_syssvc_ef_mproc.c -- one-line$|proof=tests/qemu/test_negctl_nonexistent.c -- one-line|' "$EVENT"
+expect_red "$EVENT" "an EXECUTIVE claim citing a proof file that does not exist" \
+    "EXECUTIVE DECLARATION WHOSE PROOF DOES NOT EXIST: sys\$setef"
+
+# A test that never boots vms.ko cannot testify that an answer came from it.
+sed -i 's|proof=tests/qemu/test_syssvc_ef_mproc.c|proof=tests/integration/test_vms_hello.c|g' "$EVENT"
+expect_red "$EVENT" "an EXECUTIVE claim citing a proof outside the suite that boots the executive" \
+    "EXECUTIVE DECLARATION WHOSE PROOF DOES NOT RUN AGAINST THE EXECUTIVE: sys\$setef"
+
+# A single-process test passes perfectly against a per-process fake -- which is
+# exactly how the known facades survived. tests/qemu/test_syssvc_ef_local.c is
+# a real, passing, executive-resident test that never forks, so this control
+# uses a genuine file rather than a straw one.
+sed -i 's|proof=tests/qemu/test_syssvc_ef_mproc.c|proof=tests/qemu/test_syssvc_ef_local.c|g' "$EVENT"
+expect_red "$EVENT" "an EXECUTIVE claim citing a single-process proof" \
+    "EXECUTIVE DECLARATION WHOSE PROOF IS SINGLE-PROCESS: sys\$setef"
+
+# A proof that never mentions the service is a proof about something else.
+{
+    echo ''
+    echo '/* OVMX-EXECUTIVE: sys$negctl_unnamed (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo 'uint32_t sys$negctl_unnamed(uint32_t efn) {'
+    echo '    uint32_t st = 0;'
+    echo '    (void)vms_kif_readef(efn, &st);'
+    echo '    return st;'
+    echo '}'
+} >> "$EVENT"
+expect_red "$EVENT" "an EXECUTIVE claim whose proof never names the service" \
+    "EXECUTIVE DECLARATION WHOSE PROOF DOES NOT NAME THE SERVICE: sys\$negctl_unnamed"
 
 # ----------------------------------------------------------- GREEN controls --
 
@@ -257,19 +401,37 @@ expect_green "$STR" "pure computation added to the RTL stays green"
 } >> "$STR"
 expect_green "$STR" "a stateful RTL routine stays green -- the universe is sys\$, not statefulness"
 
-# A NEW SERVICE THAT REACHES THE EXECUTIVE NEEDS NO DECLARATION. This pins the
-# exemption to the executive path rather than to the name: without it, the RED
-# controls above would also pass a gate that simply demanded a declaration for
-# every new sys$ definition.
+# THE FULL EXEMPTION, PAID FOR. This is the control that keeps the four reds
+# above from being satisfiable by a gate that simply refuses every
+# OVMX-EXECUTIVE line: a new service that reaches the executive AND whose named
+# proof exists, lives under tests/qemu/, forks, and names it, is green. Note
+# what the mutation has to touch -- the proof file itself. That is the price.
 {
     echo ''
-    echo 'uint32_t sys$negctl_wired(uint32_t efn) {'
+    echo '/* OVMX-EXECUTIVE: sys$negctl_proven (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo 'uint32_t sys$negctl_proven(uint32_t efn) {'
     echo '    uint32_t st = 0;'
     echo '    (void)vms_kif_readef(efn, &st);'
     echo '    return st;'
     echo '}'
 } >> "$EVENT"
-expect_green "$EVENT" "a new service that reaches the executive needs no declaration"
+printf '/* negctl: this proof names sys$negctl_proven */\n' >> "$PROOF"
+expect_green "$EVENT $PROOF" "an EXECUTIVE claim whose proof exists, boots the executive, forks and names it"
+
+# ...and a mixture that names both halves is green too, so the PARTIAL reds
+# above are not satisfiable by a gate that rejects every PARTIAL line.
+{
+    echo ''
+    echo '/* OVMX-PARTIAL: sys$negctl_mixed (vms-5b4) -- exec: the flag word */'
+    echo '/* OVMX-LOCAL: sys$negctl_mixed -- the counter added to it */'
+    echo 'static int ovmx_negctl_mixed_state = 0;'
+    echo 'uint32_t sys$negctl_mixed(uint32_t efn) {'
+    echo '    uint32_t st = 0;'
+    echo '    (void)vms_kif_readef(efn, &st);'
+    echo '    return st + (uint32_t)(ovmx_negctl_mixed_state++);'
+    echo '}'
+} >> "$EVENT"
+expect_green "$EVENT" "a mixture that names both of its halves stays green"
 
 # RULE 10'S SECOND ANSWER MUST STAY OPEN. Deleting the service outright --
 # definition, prototype and declaration together -- is the honest fix, and the
@@ -331,12 +493,15 @@ guard "$NOSYS" "a tree with C code but zero sys\$ services in it" \
 # and this goes red -- the coverage cannot silently fall behind the gate.
 : > "$WORK/derived"
 sed -n 's/.*errors\[++nerr\] = "\([A-Z][^"]*: \).*/\1/p' "$GATE" | sort -u >> "$WORK/derived"
-grep -oE 'malformed OVMX-USERSPACE declaration' "$GATE" | sort -u >> "$WORK/derived"
-# The errors[] array and decl_bad cover the PER-SERVICE properties; the gate
-# also has three FAIL paths that are not about any one service -- it refusing
-# to run at all, and the floor. Pulled from the gate's own literal text the
-# same way, so a changed message desyncs this count instead of hiding behind
-# it.
+# The gate emits the OVMX-EXECUTIVE proof failures from shell printf rather
+# than from the awk errors[] array, because only the shell can stat and grep
+# the cited file. Pulled from the gate's own literal text the same way, so a
+# renamed message desyncs this check instead of slipping past it.
+sed -n "s/.*printf '\([A-Z][^:]*: \)%s.*/\1/p" "$GATE" | sort -u >> "$WORK/derived"
+grep -oE 'malformed OVMX declaration' "$GATE" | sort -u >> "$WORK/derived"
+# The errors[] array, the printf paths and decl_bad cover the PER-SERVICE
+# properties; the gate also has three FAIL paths that are not about any one
+# service -- it refusing to run at all, and the floor.
 grep -oE 'this gate scans the product tree\.' "$GATE" | sort -u >> "$WORK/derived"
 grep -oE 'the source scan produced no facts at all\.' "$GATE" | sort -u >> "$WORK/derived"
 # The gate's own source has to spell this one "sys\$" (escaped for the shell

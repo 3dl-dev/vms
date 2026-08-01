@@ -8,9 +8,24 @@
  */
 
 /*
- * sys$assign and sys$dassgn reach the executive device table via
- * vms_kif_assign()/vms_kif_dassgn() (vms-1c57) -- no OVMX-USERSPACE
- * declaration here. See tests/integration/test_userspace_service_register.sh.
+ * OVMX service register (rd vms-d89) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * These two used to be exempt for containing a vms_kif_* call. That exemption
+ * was wrong here in a way worth naming: the executive is reached for ONE device
+ * (the console terminal), and every other channel this file hands out is a
+ * private Linux fd. The register now has to say so.
+ *
+ * OVMX-PARTIAL: sys$assign (vms-1c57) -- exec: a channel for the executive's
+ *     registered console terminal comes from vms_kif_assign(), so the device
+ *     table and the I/O path agree on what "the terminal" is.
+ * OVMX-LOCAL: sys$assign -- every other channel is a Linux fd recorded in this
+ *     process's PCB. The channel number means nothing to any other process, and
+ *     nothing outside this image can see the assignment.
+ * OVMX-PARTIAL: sys$dassgn (vms-1c57) -- exec: deassigning a terminal channel
+ *     releases the executive's channel through vms_kif_dassgn().
+ * OVMX-LOCAL: sys$dassgn -- for every other channel it closes a process-local fd
+ *     and clears a process-local PCB slot.
  */
 
 #include <stdint.h>

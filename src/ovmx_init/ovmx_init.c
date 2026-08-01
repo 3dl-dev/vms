@@ -881,26 +881,7 @@ int main(void)
     /* Ignore SIGHUP so login children can terminate without killing us */
     signal(SIGHUP, SIG_IGN);
 
-    /*
-     * Step 1: SYSTEM process PCB.
-     *
-     * STOPGAP (vms-2b8). This is a process declaring its own full
-     * privilege mask into a USERSPACE PCB -- the shape this item exists
-     * to remove. It is left in place for exactly one reason: nothing in
-     * the product calls vms_kif_register() yet (vms-9fc), so PID 1 has
-     * no row in the executive's process table to stamp an identity
-     * onto, and every reader below still reads this PCB.
-     *
-     * PID 1 is the one process for which "SYSTEM, fully privileged" is
-     * the right ANSWER -- the wrongness is entirely in WHO DECIDES it.
-     * The executive already derives that verdict for itself from
-     * capable(CAP_SYS_ADMIN) at registration, and PID 1 already holds
-     * /dev/vms open (executive_attach), so the correct sequence once
-     * vms-9fc lands is: register, then vms_kif_setident("SYSTEM",
-     * (1<<16)|4, <SYSUAF mask>), and delete the call below. Not done
-     * here because introducing a new fatal boot dependency is vms-9fc's
-     * decision to make, not this item's.
-     */
+    /* Step 1: Initialize SYSTEM process PCB with full privileges */
     struct vms_pcb *pcb = vms_pcb_init(0xFFFFFFFFFFFFFFFFULL);
     if (pcb) {
         uint32_t system_uic = (1 << 16) | 4;  /* [1,4] SYSTEM */

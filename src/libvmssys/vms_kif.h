@@ -48,31 +48,8 @@ void vms_kif_close(void);
  * inside a process does not recreate the process (oracle pin: on the
  * reference lab VAX V7.3, SHOW PROCESS/ACCOUNTING across two image
  * activations reports the same Process ID 2020021D and the same process
- * name "SYSTEM" with "Images activated" going 19 -> 21).
- *
- * TAKES NO PRIVILEGE MASK AND NO PROCESS ID (vms-2b8). Registration
- * proves only that a task exists; the executive derives the authorized
- * privilege mask and the UIC from the task's real credentials, and
- * ASSIGNS the VMS process ID. A process that could name its own
- * privileges here would be enforcing them against itself, and a process
- * that could name its own VMS process ID could collide with a privileged
- * process's row and be resolved in its place.
- *
- * vms_pid is OUT, and may be NULL: on success it receives the ID the
- * executive assigned. */
-uint32_t vms_kif_register(uint32_t *vms_pid);
-
-/* Stamp an AUTHENTICATED identity onto this process ($GETJPI reads it
- * back, from any process). The caller must already hold SETPRV to
- * establish an identity that is not a weakening of its own -- so this
- * is LOGINOUT's call, made after SYSUAF authentication, and it is a
- * one-way drop for anyone else. SS$_NOPRIV if the caller may not.
- *
- * uic is (group << 16) | member. authorized_privs is the SYSUAF
- * uaf$q_priv quadword; the executive sets current privileges equal to
- * it (an OVMX design choice -- see vms_ioctl.h). */
-uint32_t vms_kif_setident(const char *username, uint32_t uic,
-                          uint64_t authorized_privs);
+ * name "SYSTEM" with "Images activated" going 19 -> 21). */
+uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs);
 
 /* Translate a failed ioctl's negative errno into a VMS status.
  *

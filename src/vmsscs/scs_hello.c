@@ -48,11 +48,8 @@ int scs_hello_build_frame(const struct scs_hello_params *p,
     out[22] = 0x01;
     out[23] = 0x00; /* connect flag, constant 0x0001 (observed constant) */
 
-    memcpy(out + 24, p->src_logical, 6); /* src-logical LAVC addr, sender's own (GROUNDED, sec 4a):
-                                           * the cluster-LOGICAL addr aa:00:04:00:<sysid>, NOT the
-                                           * raw HW MAC -- VAX1's PEDRIVER keys peer identity here
-                                           * (vms-9f3). eth-src (out+6) + HW-MAC-tail (out+120)
-                                           * keep the raw src_mac. */
+    memcpy(out + 24, p->src_mac, 6); /* src logical addr, sender's own (GROUNDED location;
+                                       * OVMX uses its real HW MAC here -- see scs_hello.h) */
 
     out[30] = 0xa0;
     out[31] = 0x00; /* per-frame word, multicast value (inferred-constant, sec 4a) */

@@ -92,9 +92,7 @@ extern "C" {
  */
 struct scs_member_params {
     uint8_t  dst_mac[6];      /* Ethernet dst = peer/member's Ethernet src MAC */
-    uint8_t  src_mac[6];      /* Ethernet src (abs 6) = OVMX HW MAC */
-    uint8_t  src_logical[6];  /* SCA src-logical [10:16] (abs 24) = aa:00:04:00:<LE16(sysid)>;
-                                 the cluster-LOGICAL addr, NOT the raw HW MAC (vms-9f3) */
+    uint8_t  src_mac[6];      /* Ethernet src + SCA src-logical = OVMX HW MAC */
     uint8_t  peer_logical[6]; /* SCA dest-logical [2:8] = member's advertised logical addr */
     uint32_t remote_conid;    /* member's VMS$VAXcluster Con.ID (abs 64 [50:54]) */
     uint32_t local_conid;     /* OVMX's VMS$VAXcluster Con.ID (abs 68 [54:58]) */

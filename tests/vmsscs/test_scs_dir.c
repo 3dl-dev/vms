@@ -47,8 +47,6 @@ static uint16_t le16(const uint8_t *p)
 
 /* OVMX test identity (matches test_scs_connect.c). */
 static const uint8_t ovmx_mac[6] = { 0x02, 0x00, 0x00, 0x4f, 0x56, 0x58 };
-/* vms-9f3: OVMX's cluster-LOGICAL addr (abs 24), DISTINCT from the raw HW MAC. */
-static const uint8_t ovmx_logical[6] = { 0xaa, 0x00, 0x04, 0x00, 0x06, 0x04 };
 static const uint8_t vax1_mac[6] = { 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04 };
 
 /* Assemble a full Ethernet+SCA frame: 14-byte header (contents irrelevant to
@@ -178,7 +176,6 @@ static void test_build_connect_response(void)
     memset(&p, 0, sizeof(p));
     memcpy(p.dst_mac, vax1_mac, 6);
     memcpy(p.src_mac, ovmx_mac, 6);
-    memcpy(p.src_logical, ovmx_logical, 6); /* vms-9f3: abs-24 cluster-logical addr */
     memcpy(p.peer_logical, vax1_mac, 6);
     p.remote_conid = 0x63050008u;      /* the VAX's SCS$DIRECTORY handle (learned) */
     p.local_conid = SCS_DIR_OVMX_CONID; /* OVMX's own handle (design choice) */
@@ -194,8 +191,7 @@ static void test_build_connect_response(void)
     check(out[12] == 0x60 && out[13] == 0x07, "ethertype 0x6007");
     check(out[14] == 0x6c && out[15] == 0x00, "SCA length 0x006c (total 110)");
     check_bytes(out + 16, vax1_mac, 6, "SCA dest logical == peer_logical (abs 16)");
-    check_bytes(out + 24, ovmx_logical, 6, "SCA src-logical == cluster-LOGICAL addr, NOT HW MAC (abs 24, vms-9f3)");
-    check(memcmp(out + 24, ovmx_mac, 6) != 0, "src-logical (abs 24) DISTINCT from raw HW MAC (vms-9f3)");
+    check_bytes(out + 24, ovmx_mac, 6, "SCA src logical == OVMX HW MAC (abs 24)");
     check(out[30] == 0x5b && out[31] == 0x13, "opcode 0x5b, format 0x13 (abs 30/31, GROUNDED)");
 
     /* THE ADMISSION ACT: Con.ID pair bound (spec sec 4h/4g). */
@@ -245,7 +241,6 @@ static void test_build_lookup_response(void)
     memset(&lp, 0, sizeof(lp));
     memcpy(lp.dst_mac, vax1_mac, 6);
     memcpy(lp.src_mac, ovmx_mac, 6);
-    memcpy(lp.src_logical, ovmx_logical, 6); /* vms-9f3: abs-24 cluster-logical addr */
     memcpy(lp.peer_logical, vax1_mac, 6);
     lp.remote_conid = 0x63050008u;
     lp.local_conid = SCS_DIR_OVMX_CONID;
@@ -296,7 +291,6 @@ static void test_incarnation_echo(void)
     memset(&p, 0, sizeof(p));
     memcpy(p.dst_mac, vax1_mac, 6);
     memcpy(p.src_mac, ovmx_mac, 6);
-    memcpy(p.src_logical, ovmx_logical, 6); /* vms-9f3: abs-24 cluster-logical addr */
     memcpy(p.peer_logical, vax1_mac, 6);
     p.remote_conid = 0x36f2000cu;
     p.local_conid = SCS_DIR_OVMX_CONID;
@@ -330,7 +324,6 @@ static void test_incarnation_echo(void)
     memset(&lp, 0, sizeof(lp));
     memcpy(lp.dst_mac, vax1_mac, 6);
     memcpy(lp.src_mac, ovmx_mac, 6);
-    memcpy(lp.src_logical, ovmx_logical, 6); /* vms-9f3: abs-24 cluster-logical addr */
     memcpy(lp.peer_logical, vax1_mac, 6);
     lp.remote_conid = 0x36f2000cu;
     lp.local_conid = SCS_DIR_OVMX_CONID;

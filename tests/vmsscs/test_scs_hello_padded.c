@@ -53,10 +53,8 @@ int main(void)
     memset(&p, 0, sizeof(p));
     static const uint8_t peer_mac[6]  = { 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04 }; /* VAX1 logical */
     static const uint8_t our_hw_mac[6] = { 0x02, 0x00, 0x00, 0x4f, 0x56, 0x58 }; /* OVMX HW MAC */
-    static const uint8_t our_logical[6] = { 0xaa, 0x00, 0x04, 0x00, 0x06, 0x04 }; /* cluster-logical (vms-9f3) */
     static const uint8_t nonce[4]      = { 0xee, 0x05, 0x39, 0x5b };             /* lab nonce */
     memcpy(p.src_mac, our_hw_mac, 6);
-    memcpy(p.src_logical, our_logical, 6);
     strncpy(p.node_name, "OVMX", sizeof(p.node_name) - 1);
     p.timer_tick = 0x11223344;
     const uint16_t incarnation = 1;

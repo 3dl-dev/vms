@@ -37,10 +37,8 @@ static void check_bytes(const uint8_t *got, const uint8_t *want, size_t n, const
 
 static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
 
-/* OVMX test identity. */
+/* OVMX test identity (non-DECnet: Ethernet src == SCA src-logical). */
 static const uint8_t ovmx_mac[6] = { 0x02, 0x00, 0x00, 0x4f, 0x56, 0x58 };
-/* vms-9f3: OVMX's cluster-LOGICAL addr (abs 24), DISTINCT from the raw HW MAC. */
-static const uint8_t ovmx_logical[6] = { 0xaa, 0x00, 0x04, 0x00, 0x06, 0x04 };
 /* VAX1 logical LAVC addr (a DECnet node: Eth src == its logical addr). */
 static const uint8_t vax1_log[6] = { 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04 };
 /* VAX2 logical LAVC addr + its real HW MAC (differ: not DECnet-remapped). */
@@ -65,8 +63,7 @@ static void test_credit_byte_exact(void)
     struct scs_credit_params p;
     memset(&p, 0, sizeof(p));
     memcpy(p.dst_mac, vax2_hw, 6);       /* Eth dst = VAX2 HW MAC */
-    memcpy(p.src_mac, vax1_log, 6);      /* Eth src = VAX1 logical (a DECnet node) */
-    memcpy(p.src_logical, vax1_log, 6);  /* SCA src-logical (abs 24) = VAX1 logical (vms-9f3) */
+    memcpy(p.src_mac, vax1_log, 6);      /* Eth src + src-logical = VAX1 logical */
     memcpy(p.peer_logical, vax2_log, 6); /* dst-logical = VAX2 logical */
     p.acked_seq = 2;
     p.secondary_seq = 1;
@@ -85,7 +82,6 @@ static void test_credit_fields(void)
     memset(&p, 0, sizeof(p));
     memcpy(p.dst_mac, vax1_log, 6);
     memcpy(p.src_mac, ovmx_mac, 6);
-    memcpy(p.src_logical, ovmx_logical, 6);
     memcpy(p.peer_logical, vax1_log, 6);
     p.acked_seq = 7;
     p.secondary_seq = 3;
@@ -100,8 +96,7 @@ static void test_credit_fields(void)
     check(out[14] == 0x27 && out[15] == 0x00, "SCA length 0x0027 (total 41, GROUNDED)");
     check_bytes(out + 16, vax1_log, 6, "SCA dst-logical [2:8] == peer_logical (abs 16)");
     check(le16(out + 22) == 0x0001, "connect flag [8:10]==0x0001 (abs 22, GROUNDED)");
-    check_bytes(out + 24, ovmx_logical, 6, "SCA src-logical [10:16] == cluster-LOGICAL addr, NOT HW MAC (abs 24, vms-9f3)");
-    check(memcmp(out + 24, ovmx_mac, 6) != 0, "src-logical (abs 24) DISTINCT from raw HW MAC (vms-9f3)");
+    check_bytes(out + 24, ovmx_mac, 6, "SCA src-logical [10:16] == OVMX MAC (abs 24)");
     check(out[30] == 0x48 && out[31] == 0x13, "opcode 0x48, format 0x13 (abs 30/31, GROUNDED)");
     check(le16(out + 32) == 7, "acked seq [18:20]==7 (abs 32, GROUNDED)");
     check(le16(out + 34) == 0, "send-seq [20:22]==0 (abs 34, GROUNDED 622/622)");
@@ -147,9 +142,8 @@ static void test_seq_ack(void)
     /* build_credit_for acks the current recv_seq and stamps our send_seq as
      * the secondary counter. */
     uint8_t out[SCS_CREDIT_FRAME_LEN];
-    check(scs_vc_build_credit_for(&vc, vax1_log, ovmx_mac, ovmx_logical, vax1_log, out) == 0,
+    check(scs_vc_build_credit_for(&vc, vax1_log, ovmx_mac, vax1_log, out) == 0,
           "build_credit_for succeeds");
-    check_bytes(out + 24, ovmx_logical, 6, "build_credit_for writes src-logical (abs 24), NOT HW MAC (vms-9f3)");
     check(le16(out + 32) == 4, "credit acks current recv_seq (4)");
     check(le16(out + 44) == vc.seq.send_seq, "secondary counter == OVMX send_seq");
     check(vc.credit_returns_sent == 1, "credit_returns_sent incremented");
@@ -157,7 +151,7 @@ static void test_seq_ack(void)
     /* NULL-safety. */
     scs_vc_init(NULL);
     scs_vc_note_recv(NULL, 1);
-    check(scs_vc_build_credit_for(NULL, vax1_log, ovmx_mac, ovmx_logical, vax1_log, out) == -1,
+    check(scs_vc_build_credit_for(NULL, vax1_log, ovmx_mac, vax1_log, out) == -1,
           "build_credit_for(NULL vc) rejected");
 }
 

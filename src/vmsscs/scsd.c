@@ -170,25 +170,6 @@ static uint16_t resolve_scssystemid(void)
     return OVMX_DEFAULT_SCSSYSTEMID;
 }
 
-/*
- * ovmx_cluster_logical - vms-9f3: compute OVMX's cluster-LOGICAL LAVC address
- * from its SCSSYSTEMID. GROUNDED convention (spec sec 3 decoder ring + README-lab):
- * a cluster node's logical addr is aa:00:04:00:<LE16(SCSSYSTEMID)>, e.g. VAX2
- * sysid 1026=0x0402 -> aa:00:04:00:02:04. This is the value a real member writes
- * in the SCA src-logical field (abs 24); OVMX's raw HW MAC there was why VAX1's
- * PEDRIVER never verified the channel (the old bug). No DECnet is needed to emit
- * it -- it is a cluster field that happens to use the LAVC address format.
- */
-static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
-{
-    out[0] = 0xaa;
-    out[1] = 0x00;
-    out[2] = 0x04;
-    out[3] = 0x00;
-    out[4] = (uint8_t)(sysid & 0xff);        /* LE16 low byte  */
-    out[5] = (uint8_t)((sysid >> 8) & 0xff); /* LE16 high byte */
-}
-
 /* --- vms-5fe: directed-HELLO / SCS-connect responder state --- */
 
 #define OVMX_MAX_PEERS 4
@@ -318,8 +299,7 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
  * full MEMBER. Returns the number of frames sent (0..3).
  */
 static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
-                                const uint8_t our_hw_mac[6],
-                                const uint8_t our_src_logical[6])
+                                const uint8_t our_hw_mac[6])
 {
     if (ps->sysap_send == 0) {
         ps->sysap_send = 1; /* SYSAP send-msg# starts at 1 (spec sec 4j) */
@@ -333,7 +313,6 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     memset(&mp, 0, sizeof(mp));
     memcpy(mp.dst_mac, ps->eth_mac, 6);
     memcpy(mp.src_mac, our_hw_mac, 6);
-    memcpy(mp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 cluster-logical addr */
     memcpy(mp.peer_logical, ps->logical, 6);
     mp.remote_conid = ps->remote_conid;
     mp.local_conid = OVMX_LOCAL_CONID;
@@ -472,8 +451,6 @@ int main(int argc, char **argv)
     static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
     uint8_t our_hw_mac[6];
     memset(our_hw_mac, 0, sizeof(our_hw_mac));
-    uint8_t our_src_logical[6]; /* vms-9f3: OVMX's cluster-LOGICAL LAVC addr (abs 24) */
-    memset(our_src_logical, 0, sizeof(our_src_logical));
     long directed_sent = 0;
     long connect_req_sent = 0;
     long connect_resp_sent = 0;
@@ -492,12 +469,6 @@ int main(int argc, char **argv)
     char ovmx_node[SYSGEN_STRVAL_LEN];
     resolve_node_identity(ovmx_node, sizeof(ovmx_node));
     uint16_t ovmx_scssystemid = resolve_scssystemid();
-    /* vms-9f3: OVMX's cluster-LOGICAL LAVC address, computed ONCE from its own
-     * SCSSYSTEMID (aa:00:04:00:<LE16(sysid)>). Written at the SCA src-logical
-     * field (abs 24) of every emitted frame; the raw HW MAC stays at eth-src
-     * and the HELLO HW-MAC tail. This is the fix that lets VAX1's PEDRIVER
-     * verify the channel and open an OVMX CSB. */
-    ovmx_cluster_logical(ovmx_scssystemid, our_src_logical);
 
     if (emit_hello) {
         uint8_t hw_mac[6];
@@ -515,7 +486,6 @@ int main(int argc, char **argv)
         memcpy(our_hw_mac, hw_mac, 6);
         scs_hello_multicast_addr(group, hello_params.dst_mac);
         memcpy(hello_params.src_mac, hw_mac, 6);
-        memcpy(hello_params.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
         strncpy(hello_params.node_name, node_name, SCS_HELLO_NODENAME_LEN);
         hello_params.node_name[SCS_HELLO_NODENAME_LEN] = '\0';
 
@@ -614,7 +584,6 @@ int main(int argc, char **argv)
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
                 memcpy(cp.src_mac, our_hw_mac, 6);
-                memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                 memcpy(cp.peer_logical, ps->logical, 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = 0;
@@ -715,7 +684,7 @@ int main(int argc, char **argv)
                     scs_vc_note_recv(&ps->vc, peer_send_seq);
                     uint8_t cframe[SCS_CREDIT_FRAME_LEN];
                     if (scs_vc_build_credit_for(&ps->vc, ps->eth_mac, our_hw_mac,
-                                                our_src_logical, ps->logical, cframe) == 0 &&
+                                                ps->logical, cframe) == 0 &&
                         send_frame_to(sock, (int)ifindex, ps->eth_mac, cframe,
                                       sizeof(cframe)) > 0) {
                         ps->credit_sent++;
@@ -762,7 +731,7 @@ int main(int argc, char **argv)
                      * talking membership on it). */
                     if (!ps->cm_config_sent &&
                         (mv.category & 0x7f) == SCS_MEMBER_CAT_CONFIG) {
-                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
+                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac);
                         cm_config_frames += c;
                         log_ts(stdout);
                         printf(" SCSD-I-CMCONFIG, sent add-member config burst"
@@ -783,7 +752,6 @@ int main(int argc, char **argv)
                         memset(&mp, 0, sizeof(mp));
                         memcpy(mp.dst_mac, ps->eth_mac, 6);
                         memcpy(mp.src_mac, our_hw_mac, 6);
-                        memcpy(mp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                         memcpy(mp.peer_logical, ps->logical, 6);
                         mp.remote_conid = ps->remote_conid;
                         mp.local_conid = OVMX_LOCAL_CONID;
@@ -1009,7 +977,6 @@ int main(int argc, char **argv)
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
                 memcpy(cp.src_mac, our_hw_mac, 6);
-                memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                 memcpy(cp.peer_logical, ps->logical, 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = 0;
@@ -1073,7 +1040,6 @@ int main(int argc, char **argv)
             memset(&sp, 0, sizeof(sp));
             memcpy(sp.dst_mac, ps->eth_mac, 6);
             memcpy(sp.src_mac, our_hw_mac, 6);
-            memcpy(sp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
             memcpy(sp.peer_logical, ps->logical, 6);
             sp.scssystemid = ovmx_scssystemid;
             strncpy(sp.node_name, ovmx_node, SCS_START_NODENAME_LEN);
@@ -1185,7 +1151,6 @@ int main(int argc, char **argv)
                     memset(&dp, 0, sizeof(dp));
                     memcpy(dp.dst_mac, ps->eth_mac, 6);
                     memcpy(dp.src_mac, our_hw_mac, 6);
-                    memcpy(dp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                     memcpy(dp.peer_logical, ps->logical, 6);
                     dp.remote_conid = ps->dir_remote_conid;
                     dp.local_conid = SCS_DIR_OVMX_CONID;
@@ -1227,7 +1192,6 @@ int main(int argc, char **argv)
                     memset(&lp, 0, sizeof(lp));
                     memcpy(lp.dst_mac, ps->eth_mac, 6);
                     memcpy(lp.src_mac, our_hw_mac, 6);
-                    memcpy(lp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                     memcpy(lp.peer_logical, ps->logical, 6);
                     lp.remote_conid = ps->dir_remote_conid ? ps->dir_remote_conid
                                                            : dv.local_conid;
@@ -1292,7 +1256,6 @@ int main(int argc, char **argv)
                 memset(&cp, 0, sizeof(cp));
                 memcpy(cp.dst_mac, ps->eth_mac, 6);
                 memcpy(cp.src_mac, our_hw_mac, 6);
-                memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
                 memcpy(cp.peer_logical, ps->logical, 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = v.local_conid;
@@ -1317,7 +1280,7 @@ int main(int argc, char **argv)
                      * config burst (op 0x14/0x01/0x02). The member RX block
                      * re-triggers it defensively if this send is lost. */
                     if (first && !ps->cm_config_sent) {
-                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
+                        int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac);
                         cm_config_frames += c;
                         log_ts(stdout);
                         printf(" SCSD-I-CMCONFIG, sent add-member config burst"
@@ -1336,7 +1299,7 @@ int main(int argc, char **argv)
                 fflush(stdout);
                 /* vms-224: VC bound -> drive the add-member config burst. */
                 if (!ps->cm_config_sent) {
-                    int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac, our_src_logical);
+                    int c = cm_send_config_burst(sock, (int)ifindex, ps, our_hw_mac);
                     cm_config_frames += c;
                     log_ts(stdout);
                     printf(" SCSD-I-CMCONFIG, sent add-member config burst"

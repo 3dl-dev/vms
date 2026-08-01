@@ -45,6 +45,13 @@ static void put_le16(uint8_t *dst, uint16_t v)
     dst[1] = (uint8_t)((v >> 8) & 0xff);
 }
 
+static void put_le64(uint8_t *dst, uint64_t v)
+{
+    for (int i = 0; i < 8; i++) {
+        dst[i] = (uint8_t)((v >> (8 * i)) & 0xff);
+    }
+}
+
 static uint16_t get_le16(const uint8_t *src)
 {
     return (uint16_t)((uint16_t)src[0] | ((uint16_t)src[1] << 8));
@@ -133,6 +140,51 @@ int scs_start_build(const struct scs_start_params *p,
      * member does not validate it -- live-verified OVMX reaches status NEW with
      * it. SCS_START_SW_VERSION is a fixed 8-byte string (no NUL on the wire). */
     memcpy(out + 14 + 58, SCS_START_SW_VERSION, SCS_START_NODENAME_LEN);
+
+    /* THIS SYSTEM'S INCARNATION [66:74] -- a VMS absolute-time quadword, live
+     * per boot (vms-2f3). The template replays the captured joiner's own value,
+     * 0x00bc00947a678ebb = 26-JUL-2026 14:35:33.59, and shipping it verbatim
+     * made OVMX the only node on the wire whose incarnation never changed.
+     *
+     * GROUNDED that this is the field: SDA on the real VAX1 renders OVMX's CSB
+     * as "Incarnation 26-JUL-2026 14:35:33" -- the template bytes to the second
+     * -- while every real peer's CSB carries its own boot time (VAX3:
+     * "Incarnation 1-AUG-2026 00:02:21"). OVMX transmits this quadword nowhere
+     * else.
+     *
+     * WHY IT IS LOAD-BEARING, not cosmetic: a peer distinguishes a REBOOTED
+     * system from one whose virtual circuit merely broke by the incarnation it
+     * advertises. Holding a CSB in state wait/long_break for a crash-removed
+     * OVMX and then seeing a returning OVMX present the IDENTICAL incarnation,
+     * VAX1 reused the SAME System Block (SDA: "SB address 87A0C580", byte-equal
+     * across the dead-CSB dump and the rejoin attempt) -- and with it the old
+     * VC sequence state ("Next seq. number 0003 / Last ack. seq num 0000",
+     * Resend queue non-empty) while OVMX had reset its own VC to send_seq=1.
+     * The transition it opened for us was then abandoned: "timed-out lost
+     * connection to node OVMXC2" on all three peers.
+     *
+     * A 0 leaves the replayed template bytes in place. That is the control arm
+     * for the experiment only -- the shipped default is live. */
+    if (p->incarnation_time != 0) {
+        put_le64(out + 14 + 66, p->incarnation_time);
+    }
+
+    /* MESSAGE TIMESTAMP [98:106] -- the OTHER quadword in this frame, and a
+     * different kind of field: not identity, but when this frame was composed.
+     * GROUNDED live-rolling on the reference wire (each real peer carries 2-3
+     * distinct values inside one capture; one of VAX3's matches to the second
+     * the OPCOM line it printed as it built the frame). The template's replayed
+     * value is 26-JUL-2026 14:48:50.66, exactly 13m17s after the template's
+     * incarnation -- the captured node's boot-to-this-frame gap, which is
+     * meaningless for us.
+     *
+     * Its ROLE is NOT grounded and OVMX does not claim one. What is grounded is
+     * the negative: no real node ever sends a stale one, and OVMX sent a
+     * six-day-old value on every frame of every run. 0 leaves the template
+     * bytes (control arm). */
+    if (p->message_time != 0) {
+        put_le64(out + 14 + 98, p->message_time);
+    }
     {
         /* Node name: fixed 8-byte, blank-padded, left-justified [90:98]
          * (GROUNDED distinct encoding vs. HELLO's length-prefixed form). */

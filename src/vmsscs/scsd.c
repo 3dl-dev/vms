@@ -270,6 +270,66 @@ static uint32_t ovmx_conid_base(void)
     return g_ovmx_conid_base;
 }
 
+/* vms-2f3: THIS SYSTEM'S INCARNATION IS A LIVE TIMESTAMP, NOT A REPLAYED ONE.
+ *
+ * The START/config (0x41) body carries a VMS absolute-time quadword at [66:74]
+ * that a peer stores as our "Incarnation" -- SDA on the real VAX1 renders it in
+ * OVMX's CSB, and every real peer's CSB carries that node's BOOT time. Ours
+ * shipped straight out of the captured template on every boot
+ * (0x00bc00947a678ebb = 26-JUL-2026 14:35:33.59), so OVMX was the only node on
+ * the wire whose incarnation never changed.
+ *
+ * That is what blocked the rejoin. A peer holding a crash-removed OVMX's CSB in
+ * state wait/long_break, seeing a returning OVMX advertise the IDENTICAL
+ * incarnation, has no reason to believe the node rebooted -- so it hands back
+ * the SAME System Block (observed: SB address 87A0C580 unchanged across the
+ * dead-CSB dump and the rejoin attempt) carrying the previous incarnation's VC
+ * sequence state, while OVMX has reset its own VC to send_seq=1. The peers open
+ * a transition for us, never get an ack on that circuit, and abandon it:
+ * "timed-out lost connection to node OVMXC2" on all three.
+ *
+ * ONE VALUE PER PROCESS, sampled once: this is our BOOT time, not "now". Every
+ * frame of one OVMX run must carry the same incarnation, or each START would
+ * look like a different system.
+ *
+ * OVMX DESIGN CHOICE, LABELLED (Rule 8): that OVMX's "boot" is its process
+ * start. The FORMAT (VMS 100 ns since 17-NOV-1858) is public and the field's
+ * ROLE is grounded on the wire + in SDA output; nothing about how a real VAX
+ * derives its own value is copied, because nothing needs to be.
+ *
+ * OVMX_INCARNATION_TIME=<n>  pins the quadword for a reproducible run.
+ * OVMX_INCARNATION_FROZEN=1  restores the replayed template bytes -- the
+ *                            control arm of the vms-2f3 experiment ONLY.
+ */
+static uint64_t g_ovmx_incarnation_time;   /* 0 until first use */
+
+static uint64_t ovmx_incarnation_time(void)
+{
+    if (g_ovmx_incarnation_time == 0u) {
+        const char *frozen = getenv("OVMX_INCARNATION_FROZEN");
+        if (frozen != NULL && *frozen == '1') {
+            return 0u;  /* leave the template bytes; never cached */
+        }
+        const char *env = getenv("OVMX_INCARNATION_TIME");
+        if (env != NULL && *env != '\0') {
+            g_ovmx_incarnation_time = (uint64_t)strtoull(env, NULL, 0);
+        }
+        if (g_ovmx_incarnation_time == 0u) {
+            /* Same epoch conversion as scs_member_vms_time_now(): the POSIX
+             * epoch is 3506716800 s after 17-NOV-1858. Nanosecond resolution so
+             * two OVMX incarnations started inside the same second still
+             * differ -- the cycling test restarts SCSD within seconds, which is
+             * exactly when a whole-second clock collides. */
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            g_ovmx_incarnation_time =
+                ((uint64_t)ts.tv_sec + 3506716800ULL) * 10000000ULL +
+                (uint64_t)(ts.tv_nsec / 100);
+        }
+    }
+    return g_ovmx_incarnation_time;
+}
+
 /* OVMX's own VMS$VAXcluster Con.ID for this run (OVMX design choice; opaque
  * to the peer -- see scs_connect.h). We use two distinct handles: one for the
  * connection the MEMBER opens to OVMX (answered with a CONNECT-RESPONSE), and a
@@ -3457,6 +3517,17 @@ int main(int argc, char **argv)
              * node-incarnation the member advertised in its directed-HELLO
              * [78:80]. Read off the wire above; 1 for a fresh contact. */
             sp.incarnation = ps->incarnation ? ps->incarnation : 1;
+            /* [66:74] OUR OWN incarnation -- a live per-boot VMS timestamp, and
+             * a DIFFERENT field from the [22:24] counter above. See
+             * ovmx_incarnation_time(): a frozen value here made every peer
+             * reuse the System Block from our previous incarnation (vms-2f3). */
+            sp.incarnation_time = ovmx_incarnation_time();
+            /* [98:106] when THIS frame was composed -- live per frame, not per
+             * boot. Same env kill-switch as the incarnation so the two can be
+             * bisected independently. */
+            sp.message_time = (getenv("OVMX_MSGTIME_FROZEN") != NULL &&
+                               getenv("OVMX_MSGTIME_FROZEN")[0] == '1')
+                              ? 0u : scs_member_vms_time_now();
 
             if (!sv.is_ack) {
                 if (!ps->start_replied) {
@@ -3474,8 +3545,10 @@ int main(int argc, char **argv)
                     ps->start_replied = 1;
                     log_ts(stdout);
                     printf(" SCSD-I-STARTTX, sent round-0+round-1 START"
-                           " (sysid=%u node='%s' send_seq=%u recv_ack=%u incarnation=%u)\n",
-                           ovmx_scssystemid, ovmx_node, sp.send_seq, sp.recv_ack, sp.incarnation);
+                           " (sysid=%u node='%s' send_seq=%u recv_ack=%u incarnation=%u"
+                           " sys_incarnation=0x%016llx)\n",
+                           ovmx_scssystemid, ovmx_node, sp.send_seq, sp.recv_ack, sp.incarnation,
+                           (unsigned long long)sp.incarnation_time);
                     fflush(stdout);
                 }
             } else {

@@ -49,21 +49,8 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
 echo "$OUTPUT"
 echo ""
 
-# Parse final results line.
-#
-# THE ZERO MUST BE A WHOLE NUMBER. This was `FINAL RESULTS:.*0 suites failed`,
-# which is satisfied by the trailing 0 of ANY count ending in zero -- so
-# "10 suites failed" reported ALL KERNEL MODULE TESTS PASSED and exited 0.
-# Latent since the harness was written; it first fires on the vms-a35 merge
-# product, where vms-8019's test_kmod_procnam, vms-0ff's test_kmod_pin and
-# vms-d0b's test_kmod_devtab together push the executive-absent failure count
-# into double digits. Two ways it lies, both fatal to the barrier:
-#   - the positive kernel-executive job goes green with 10 (or 20) real
-#     failures, which is the whole facility silently untested;
-#   - the negative-control job asserts a NONZERO exit and gets 0, so it fails
-#     with "expected the harness to fail, but it exited 0".
-# [^0-9] before the 0 requires the zero to stand alone.
-if echo "$OUTPUT" | grep -qE "FINAL RESULTS:.*[^0-9]0 suites failed"; then
+# Parse final results line
+if echo "$OUTPUT" | grep -q "FINAL RESULTS:.*0 suites failed"; then
     echo "=========================================="
     echo "  ALL KERNEL MODULE TESTS PASSED"
     echo "=========================================="

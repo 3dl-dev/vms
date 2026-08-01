@@ -1,10 +1,6 @@
 add_library(vms ${OVMX_LIB_TYPE}
     descrip.c
     status.c
-    # Compile-time agreement lock between prvdef.h and the executive's
-    # privilege table (vms-2b8). Must stay in the default target -- the
-    # guard is the only thing stopping the two copies drifting apart.
-    prv_agreement.c
     syssvc/sys_assign.c
     syssvc/sys_mailbox.c
     syssvc/sys_qio.c

@@ -61,15 +61,7 @@ extern "C" {
  * only because the section split predates the pinning. */
 #define SS$_DUPLNAM         148     /* Duplicate name (%SYSTEM-F-DUPLNAM) */
 #define SS$_NOLOGNAM        444     /* No logical name match */
-/* ORACLE-PINNED (vms-2b8). MEASURED on the reference lab OpenVMS VAX
- * V7.3 node VAX1, 2026-07-30 (docs/oracle/vax73-privileges.md §1):
- *   $ WRITE SYS$OUTPUT "1664="+F$MESSAGE(1664)
- *   1664=%SYSTEM-W-NOTALLPRIV, not all requested privileges authorized
- * This was 532, which the SAME oracle session disproves:
- *   $ WRITE SYS$OUTPUT "532="+F$MESSAGE(532)
- *   532=%SYSTEM-F-RESULTOVF, resultant string overflow
- * Severity is W, matching the partial-success condition it reports. */
-#define SS$_NOTALLPRIV      1664    /* Not all requested privileges authorized (%SYSTEM-W-NOTALLPRIV) */
+#define SS$_NOTALLPRIV      532     /* Not all privileges available */
 #define SS$_IVIDENT         548     /* Invalid identifier */
 /* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM.
  * 564 is SS$_UNASEFC; this collision was created by pinning UNASEFC,
@@ -82,27 +74,7 @@ extern "C" {
 
 #define SS$_INSFMEM         292     /* Insufficient dynamic memory */
 #define SS$_TIMEOUT         556     /* Device timeout */
-/* ORACLE-PINNED (vms-9fc, 2026-07-30) on reference lab node VAX1, OpenVMS
- * VAX V7.3, by the same two documented-tool observations used above:
- *     $EQU  SS$_ILLIOFUNC   244        (LIBRARY/EXTRACT=$SSDEF ... STARLET.MLB)
- *     F$MESSAGE(244) -> %SYSTEM-F-ILLIOFUNC, illegal I/O function code
- * The previous value here, 580, is a DIFFERENT condition on the oracle:
- *     F$MESSAGE(580) -> %SYSTEM-F-VASFULL, virtual address space is full
- * so every sys$qio that rejected an unimplemented function code was
- * reporting an address-space exhaustion.
- *
- * Most consumers name the symbol (src/libvms/status.c,
- * src/libvms/syssvc/sys_qio.c) and so follow this value automatically.
- * ONE DID NOT: DCL's F$MESSAGE table in src/vmsdcl/dcl_lexical.c is a
- * number->message table and hard-coded 580/'E'/ILLIOFUNC, so after this
- * correction F$MESSAGE could not name the status sys$qio returns and
- * still rendered "illegal I/O function" for VASFULL. Both rows are
- * corrected there against the same oracle run; a status whose number no
- * user-visible message table can name is a half-applied correction.
- * SS$_BUGCHECK 676 below was pinned by the same run and was already correct
- * ($EQU SS$_BUGCHECK 676; F$MESSAGE(676) -> %SYSTEM-F-BUGCHECK, internal
- * consistency failure). */
-#define SS$_ILLIOFUNC       244     /* Illegal I/O function (%SYSTEM-F-ILLIOFUNC) */
+#define SS$_ILLIOFUNC       580     /* Illegal I/O function */
 #define SS$_NOMORENODE      588     /* No more cluster nodes (VMS: 0x24C) */
 /* ================================================================
  * ORACLE-PINNED VALUES (vms-8019, 2026-07-30)
@@ -151,15 +123,7 @@ extern "C" {
 #define SS$_IVLOGNAM        340     /* Invalid logical name (%SYSTEM-F-IVLOGNAM) */
 #define SS$_VOLINV          596     /* Volume is not software enabled (%SYSTEM-F-VOLINV) */
 #define SS$_POWERFAIL       868     /* Power failure occurred (%SYSTEM-F-POWERFAIL) */
-/* ORACLE-PINNED (vms-2b8). MEASURED on OpenVMS VAX V7.3 node VAX1,
- * 2026-07-30 (docs/oracle/vax73-privileges.md §1):
- *   $ WRITE SYS$OUTPUT "532="+F$MESSAGE(532)
- *   532=%SYSTEM-F-RESULTOVF, resultant string overflow
- * Was 1364. Corrected here because leaving it would contradict the
- * SS$_NOTALLPRIV pin above, which vacated 532 in the same session.
- * Every in-tree consumer uses the SYMBOL, not the literal (vmsfs,
- * vmslnm, libvms/status.c), so the value change is transparent. */
-#define SS$_RESULTOVF       532     /* Resultant string overflow (%SYSTEM-F-RESULTOVF) */
+#define SS$_RESULTOVF       1364    /* Result overflow */
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */
 #define SS$_NOSUCHDEV       2680    /* No such device */
@@ -315,44 +279,7 @@ extern "C" {
 
 /* Additional status codes */
 #define SS$_FILACCERR       2312    /* File access error */
-/*
- * SS$_DEVALLOC / SS$_DEVNOTALLOC.
- *
- * PROVENANCE: measured on the ~/vax OpenVMS VAX V7.3 lab (node VAX2,
- * 30-JUL-2026) by asking VMS's own message facility for the text of
- * each condition value -- `WRITE SYS$OUTPUT F$MESSAGE(n)` -- and
- * scanning for the name. VMS answered:
- *     2112  %SYSTEM-W-DEVALLOC, device already allocated to another user
- *     2116  %SYSTEM-F-DEVALLOC, device already allocated to another user
- *     2136  %SYSTEM-W-DEVNOTALLOC, device not allocated
- *     2140  %SYSTEM-F-DEVNOTALLOC, device not allocated
- * and the behaviour was confirmed end to end: `ALLOCATE OPA0:` issued
- * from a second (detached) process while the interactive job held the
- * console printed exactly
- *     %SYSTEM-W-DEVALLOC, device already allocated to another user
- * and a second `DEALLOCATE` of an already-deallocated device printed
- *     %SYSTEM-W-DEVNOTALLOC, device not allocated
- * (docs/oracle/vax73-terminal-device.md sections 7-9). The warning
- * form is the one $SSDEF carries, so that is the value used here.
- *
- * The previous value on this line, 2316, was wrong: the same probe
- * shows 2316 is %SYSTEM-F-NOSUCHDEV. That measurement also disagrees
- * with several OTHER values in this file (see the note on
- * SS$_NOSUCHDEV above); correcting the rest has a blast radius across
- * the kernel module and its tests and is tracked separately, not done
- * here.
- *
- * SS$_DEVALLOC already had two consumers when this value was
- * corrected -- src/vmsdcl/dcl_cmd_misc.c and src/vmsfs/vmsfs_device.c.
- * Both name the symbol rather than the number, so neither breaks.
- * Noted because an earlier version of this comment said the constant
- * had no other consumer, which was simply false. Separately, and NOT
- * fixed here because it is out of this change's scope:
- * vmsfs_device.c returns SS$_DEVALLOC for a FULL DEVICE TABLE, which
- * is the wrong condition entirely -- carried in vms-d0b's findings.
- */
-#define SS$_DEVALLOC        2112    /* Device already allocated to another user */
-#define SS$_DEVNOTALLOC     2136    /* Device not allocated */
+#define SS$_DEVALLOC        2316    /* Device already allocated */
 #define SS$_IVLOGTAB        2320    /* Invalid logical name table */
 #define SS$_NOLOGTAB        2324    /* No such logical name table */
 

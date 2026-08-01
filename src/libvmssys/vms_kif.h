@@ -5,17 +5,10 @@
  * These functions abstract the ioctl calls behind VMS-style APIs.
  *
  * Usage:
- *   Just call the vms_kif_* function you want. Every one of them completes
- *   the open -> register sequence for the calling task first, once, and the
- *   registration is re-established automatically after fork(), in a new
- *   thread, and in a freshly activated image after execve().
- *
- * vms_kif_open() and vms_kif_register() remain available for callers that
- * want to drive the sequence explicitly (and to observe REGISTER's status),
- * but NO caller is required to remember them. Requiring it was the bug:
- * this header documented the two-step protocol from the day it was written,
- * vms_kif_register() had zero callers product-wide, and so every /dev/vms
- * ioctl issued by OVMX was rejected with -ESRCH by the executive (vms-9fc).
+ *   1. Call vms_kif_open() at process startup
+ *   2. Call vms_kif_register() to register with the kernel module
+ *   3. Use vms_kif_* functions for VMS operations
+ *   4. Call vms_kif_close() at process exit
  */
 
 #ifndef _VMS_KIF_H
@@ -34,53 +27,8 @@ int vms_kif_open(void);
 /* Close the /dev/vms fd */
 void vms_kif_close(void);
 
-/* Register this process with the kernel module.
- *
- * The unit is the PROCESS, not the thread: the executive holds one PCB per
- * process (keyed by the thread-group id) and every thread of an image
- * shares it, exactly as VMS kernel threads share one PCB. So a second
- * thread registering adopts the process's existing entry and sees the same
- * process name, the same event flag clusters and the same lock ids.
- *
- * Idempotent: registering a task the executive already knows ADOPTS the
- * existing entry and returns SS$_NORMAL, leaving its identity and its
- * privilege mask untouched. That is what VMS does -- activating an image
- * inside a process does not recreate the process (oracle pin: on the
- * reference lab VAX V7.3, SHOW PROCESS/ACCOUNTING across two image
- * activations reports the same Process ID 2020021D and the same process
- * name "SYSTEM" with "Images activated" going 19 -> 21).
- *
- * TAKES NO PRIVILEGE MASK AND NO PROCESS ID (vms-2b8). Registration
- * proves only that a task exists; the executive derives the authorized
- * privilege mask and the UIC from the task's real credentials, and
- * ASSIGNS the VMS process ID. A process that could name its own
- * privileges here would be enforcing them against itself, and a process
- * that could name its own VMS process ID could collide with a privileged
- * process's row and be resolved in its place.
- *
- * vms_pid is OUT, and may be NULL: on success it receives the ID the
- * executive assigned. */
-uint32_t vms_kif_register(uint32_t *vms_pid);
-
-/* Stamp an AUTHENTICATED identity onto this process ($GETJPI reads it
- * back, from any process). The caller must already hold SETPRV to
- * establish an identity that is not a weakening of its own -- so this
- * is LOGINOUT's call, made after SYSUAF authentication, and it is a
- * one-way drop for anyone else. SS$_NOPRIV if the caller may not.
- *
- * uic is (group << 16) | member. authorized_privs is the SYSUAF
- * uaf$q_priv quadword; the executive sets current privileges equal to
- * it (an OVMX design choice -- see vms_ioctl.h). */
-uint32_t vms_kif_setident(const char *username, uint32_t uic,
-                          uint64_t authorized_privs);
-
-/* Translate a failed ioctl's negative errno into a VMS status.
- *
- * Exposed because it is a boundary translation with a testable contract,
- * the same shape as sys_lock.c's kstat_to_ss: the errno set vms.ko can
- * produce is closed, and each status it maps to is oracle-pinned. See the
- * definition in vms_kif.c for the pins. */
-uint32_t vms_kif_kerr_to_ss(int err);
+/* Register this process with the kernel module */
+uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs);
 
 /* ================================================================
  * Access Mode (3a)
@@ -161,53 +109,6 @@ uint32_t vms_kif_convert(uint32_t lkid, uint32_t lkmode, uint32_t flags,
 uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
                           uint32_t *requested_mode, char *resnam,
                           uint8_t *valblk);
-
-/* ================================================================
- * Device table (executive-resident I/O database)
- *
- * The executive owns the devices; a process owns only its channels to
- * them. A device attribute read here is the attribute every process
- * on the node sees, and a characteristic set here is seen by every
- * process on the node -- which is the whole difference between a VMS
- * device and a private notion of one.
- * ================================================================ */
-
-/* $ASSIGN a channel to a device by name. SS$_NOSUCHDEV if the
- * executive has no such device; SS$_IVDEVNAM if the name is not a
- * device name at all. */
-uint32_t vms_kif_assign(const char *devnam, uint32_t *chan);
-
-/* $DASSGN the channel. SS$_IVCHAN if it is not one of ours. */
-uint32_t vms_kif_dassgn(uint32_t chan);
-
-/* $ALLOC the device to this process -- this, and not $ASSIGN, is what
- * makes a process the device's owner. SS$_DEVALLOC when it is already
- * allocated to another process or another process holds channels to
- * it; SS$_NOSUCHDEV when there is no such device. */
-uint32_t vms_kif_alloc(const char *devnam);
-
-/* $DALLOC the device. SS$_DEVNOTALLOC if this process does not have it
- * allocated. */
-uint32_t vms_kif_dalloc(const char *devnam);
-
-/* Read a device row by name. SS$_NOSUCHDEV if there is no such device. */
-uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info);
-
-/* Read the device row behind an assigned channel. SS$_IVCHAN if the
- * channel is not ours. */
-uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo *info);
-
-/* Enumerate the device table. Pass *index = 0 for the first row; each
- * call fills info and advances *index. Returns SS$_NOMOREDEV when the
- * scan is exhausted. */
-uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info);
-
-/* Set terminal characteristics through an assigned channel (the
- * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
- * if the caller holds no such channel. */
-uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
-                           uint64_t setchar, uint64_t clrchar,
-                           uint32_t width, uint32_t page);
 
 /* ================================================================
  * Process table (executive-resident PCB directory)

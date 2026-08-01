@@ -17,26 +17,16 @@
 
 #include "vms_internal.h"
 
-/*
- * Privilege bits and status codes come from vms_internal.h /
- * vms_ioctl.h (vms-2b8). This file used to define its own:
- *
- *   #define PRV_M_SETPRV    (1ULL << 5)
- *
- * Bit 5 is DETACH. SETPRV is bit 14 -- measured on the reference lab
- * OpenVMS VAX V7.3 node VAX1 via SDA READ SYS$SYSTEM:SYSDEF.STB
- * (docs/oracle/vax73-privileges.md §2). So the privilege gate below
- * was checking DETACH and calling it SETPRV: a process authorized to
- * create detached processes could set any privilege, and a process
- * genuinely authorized for SETPRV could not.
- *
- * The redefinitions are gone rather than corrected in place, so this
- * cannot drift from the executive's and userspace's shared definition
- * again.
- */
-#define PRV_M_CMKRNL    VMS_PRV_M_CMKRNL
-#define PRV_M_CMEXEC    VMS_PRV_M_CMEXEC
-#define PRV_M_SETPRV    VMS_PRV_M_SETPRV
+/* VMS privilege bits (matching PRV$M_* in starlet.h) */
+#define PRV_M_CMKRNL    (1ULL << 0)
+#define PRV_M_CMEXEC    (1ULL << 1)
+#define PRV_M_SETPRV    (1ULL << 5)
+
+/* VMS status codes */
+#define SS__NORMAL      0x00000001
+#define SS__NOPRIV      0x00000024
+#define SS__BADPARAM    0x00000014
+#define SS__ACCVIO      0x0000000C
 
 /*
  * vms_ioctl_setmode - Set access mode (VMS $SETMOD equivalent)
@@ -123,38 +113,15 @@ long vms_ioctl_getmode(struct vms_proc *proc, unsigned long arg)
 /*
  * vms_ioctl_setprv - Set/clear privileges ($SETPRV equivalent)
  *
- * VMS semantics, ORACLE-PINNED on the reference lab OpenVMS VAX V7.3
- * node VAX1 (docs/oracle/vax73-privileges.md §3):
- *
- *   - Disabling a privilege is ALWAYS allowed.
- *   - The CURRENT (process) mask and the AUTHORIZED (permanent) mask are
- *     distinct; SHOW PROCESS/PRIVILEGES prints them separately and
- *     dropping from the current mask does not touch the authorized one.
- *   - Enabling a privilege that is ALREADY IN THE AUTHORIZED MASK needs
- *     no SETPRV. Measured: with SETPRV removed from the current mask,
- *     SET PROCESS/PRIVILEGE=SYSPRV returned %X10000001 and SYSPRV came
- *     back. SETPRV authorizes EXCEEDING your authorization, not USING
- *     it.
- *   - A request that reaches outside the authorized mask without SETPRV
- *     enables the authorized subset and reports SS$_NOTALLPRIV (1664,
- *     %SYSTEM-W-NOTALLPRIV, "not all requested privileges authorized").
- *     This tree previously returned SS$_NOPRIV here, which says the
- *     caller had no privilege at all when in fact part of the request
- *     was granted -- a false statement about what just happened.
- *
- * NOT PINNED, FLAGGED FOR OPERATOR SIGN-OFF: the status for widening
- * the PERMANENT mask without SETPRV. SET PROCESS/PRIVILEGE cannot write
- * the authorized mask (that is AUTHORIZE's job), so DCL gave no way to
- * provoke it on the oracle. OVMX refuses outright with SS$_NOPRIV and
- * applies NO partial change. The refusal itself is not a choice -- the
- * previous code widened perm_privs unconditionally, so any process
- * could permanently authorize itself for anything it could momentarily
- * enable. Only the STATUS is the unpinned part.
+ * VMS semantics:
+ *   - Enabling privileges requires SETPRV or being in kernel mode
+ *   - Disabling privileges is always allowed
+ *   - If 'permanent' flag is set, changes permanent mask too
+ *   - Returns previous privilege mask
  */
 long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_priv_args args;
-    bool may_exceed;
 
     memset(&args, 0, sizeof(args));
     if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
@@ -165,33 +132,16 @@ long vms_ioctl_setprv(struct vms_proc *proc, unsigned long arg)
     /* Save previous state */
     args.prev = proc->cur_privs;
 
-    may_exceed = (proc->current_mode == PSL_C_KERNEL) ||
-                 (proc->cur_privs & PRV_M_SETPRV) != 0;
-
     if (args.enable) {
-        /*
-         * Widening the AUTHORIZED mask is refused BEFORE anything is
-         * applied, so a rejected request leaves the process exactly as
-         * it was. Checking it first also closes the escalation the old
-         * ordering left open: the old code applied the authorized
-         * subset to cur_privs and only then decided, so a caller could
-         * observe a partial effect from a call that failed.
-         */
-        if (args.permanent && !may_exceed &&
-            (args.mask & ~proc->perm_privs) != 0) {
-            spin_unlock(&proc->mode_lock);
-            args.status = SS__NOPRIV;
-            goto out;
-        }
-
-        if (!may_exceed) {
-            /* Enable only what this process is authorized to hold. */
+        /* Enabling privileges requires SETPRV or kernel mode */
+        if (proc->current_mode != PSL_C_KERNEL &&
+            !(proc->cur_privs & PRV_M_SETPRV)) {
+            /* Can only re-enable permanent privileges */
             uint64_t allowed = args.mask & proc->perm_privs;
-
             proc->cur_privs |= allowed;
             if (allowed != args.mask) {
                 spin_unlock(&proc->mode_lock);
-                args.status = SS__NOTALLPRIV;
+                args.status = SS__NOPRIV;
                 goto out;
             }
         } else {

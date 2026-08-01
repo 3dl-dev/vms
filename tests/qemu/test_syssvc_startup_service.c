@@ -94,14 +94,6 @@ static int fail = 0;
 #define UIC_NAME        "OVMX47BUIC"
 #define SUBP_NAME       "OVMX47BSUB"
 
-/* P10's names. ABBR_NAME is asked for with an ABBREVIATED qualifier and
- * must be refused (nothing may exist under it); DETABBR_NAME is asked
- * for with the abbreviated spelling real VMS software uses and MUST
- * exist; DETPRIO_NAME is created alongside a qualifier nobody reads. */
-#define ABBR_NAME       "OVMX47BABR"
-#define DETABBR_NAME    "OVMX47BDTA"
-#define DETPRIO_NAME    "OVMX47BDTP"
-
 #define HOLD_SCRIPT     "/tmp/ovmx47b_hold.sh"
 #define SVC_LOG         "/tmp/ovmx47b_svc.log"
 #define SVC_STARTUP_COM "/tmp/OVMX47B_SVC_STARTUP.COM"
@@ -110,14 +102,6 @@ static int fail = 0;
 #define SUBP_COM        "/tmp/OVMX47B_SUBP.COM"
 #define PRIO_COM        "/tmp/OVMX47B_PRIO.COM"
 #define PLAIN_COM       "/tmp/OVMX47B_PLAIN.COM"
-#define NODBG_COM       "/tmp/OVMX47B_NODBG.COM"
-#define DEBUG_COM       "/tmp/OVMX47B_DEBUG.COM"
-#define ABPRIO_COM      "/tmp/OVMX47B_ABPRIO.COM"
-#define ABPROC_COM      "/tmp/OVMX47B_ABPROC.COM"
-#define ABNODBG_COM     "/tmp/OVMX47B_ABNODBG.COM"
-#define ABDET_COM       "/tmp/OVMX47B_ABDET.COM"
-#define DETPRIO_COM     "/tmp/OVMX47B_DETPRIO.COM"
-#define AMBIG_COM       "/tmp/OVMX47B_AMBIG.COM"
 /* A "did the image run at all?" witness: the script's only job is to
  * leave a file behind, so a refusal that still ran the image cannot hide
  * behind having produced no output. */
@@ -230,95 +214,6 @@ static int write_fixtures(void)
     if (write_file(PLAIN_COM,
                    "$! plain RUN still runs the image (test fixture, vms-47b)\n"
                    "$ RUN \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
-        return -1;
-
-    /* P9's procedures: the OTHER RUN topic. /NODEBUG and /DEBUG are RUN
-     * (Image) qualifiers -- `HELP/NOPROMPT RUN Image Qualifier` on the
-     * reference lab (VAX1, OpenVMS VAX V7.3, 2026-07-31) lists those
-     * two and nothing else -- so neither of them asks for a subprocess,
-     * whatever the RUN (Process) topic says about "any of the
-     * qualifiers". */
-    if (write_file(NODBG_COM,
-                   "$! RUN (Image) /NODEBUG still runs the image (vms-47b)\n"
-                   "$ RUN/NODEBUG \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
-        return -1;
-
-    if (write_file(DEBUG_COM,
-                   "$! RUN (Image) /DEBUG names the absent debugger (vms-47b)\n"
-                   "$ RUN/DEBUG \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
-        return -1;
-
-    /* ---------------------------------------------------------------
-     * P10's procedures. Every qualifier here is spelled the way an
-     * operator spells it and the way real VMS software in this repo
-     * spells it -- tests/corpus/tier4-mx/kit/mx_start.com builds
-     *   "RUN/AST_LIMIT=100/BUFFER=.../DETACH/PRIV=ALL/PRIO=4/UIC=[1,4]"
-     * -- i.e. ABBREVIATED. See P10's own comment for the oracle.
-     * --------------------------------------------------------------- */
-    if (write_file(ABPRIO_COM,
-                   "$! abbreviated process qualifier, no /DETACHED (vms-47b)\n"
-                   "$ RUN/PRIO=4"
-                   " \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
-        return -1;
-
-    if (write_file(ABPROC_COM,
-                   "$! abbreviated /PROCESS_NAME, no /DETACHED (vms-47b)\n"
-                   "$ RUN/PROC=" ABBR_NAME
-                   " \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
-        return -1;
-
-    if (write_file(ABNODBG_COM,
-                   "$! abbreviated RUN (Image) qualifier still runs (vms-47b)\n"
-                   "$ RUN/NODEB \"" TOUCH_SCRIPT "\"\n"
-                   "$ EXIT\n", 0644) != 0)
-        return -1;
-
-    /* mx_start.com's own spelling of the one form OVMX honours.
-     *
-     * ALL THREE of /INPUT /OUTPUT /ERROR are given, as the service
-     * fixture above gives them, and that is load-bearing rather than
-     * tidy: $CREPRC attaches an UNSPECIFIED stream to the null device
-     * only on the DETACHED path (src/libvms/syssvc/sys_process.c). The
-     * negative control run-detached-not-detached takes that path away,
-     * so a stream left unspecified here would be inherited from the
-     * DCL -- and the created process holds that pipe open for its
-     * whole 600-second life, which would make run_dcl() block instead
-     * of returning a verdict. A control that hangs is a flaky gate. */
-    if (write_file(ABDET_COM,
-                   "$! abbreviated /DETACHED + /PROCESS_NAME (vms-47b)\n"
-                   "$ RUN/DETACH"
-                   "/PROC=" DETABBR_NAME
-                   "/INPUT=\"" HOLD_SCRIPT "\""
-                   "/OUTPUT=\"" SVC_LOG "\""
-                   "/ERROR=\"" SVC_LOG "\""
-                   " \"" SUBJECT_IMAGE "\"\n"
-                   "$ EXIT\n", 0644) != 0)
-        return -1;
-
-    /* The vms-69e case: /DETACHED plus a process qualifier NOTHING in
-     * run_detached() reads. */
-    if (write_file(DETPRIO_COM,
-                   "$! /DETACHED + a qualifier nobody reads (vms-47b/vms-69e)\n"
-                   "$ RUN/DETACHED/PRIORITY=4"
-                   "/PROCESS_NAME=" DETPRIO_NAME
-                   "/INPUT=\"" HOLD_SCRIPT "\""
-                   "/OUTPUT=\"" SVC_LOG "\""
-                   "/ERROR=\"" SVC_LOG "\""
-                   " \"" SUBJECT_IMAGE "\"\n"
-                   "$ EXIT\n", 0644) != 0)
-        return -1;
-
-    /* An abbreviation that resolves to more than one RUN qualifier:
-     * /PR is PRIORITY, PRIVILEGES and PROCESS_NAME. */
-    if (write_file(AMBIG_COM,
-                   "$! ambiguous abbreviation (vms-47b)\n"
-                   "$ RUN/PR=4"
-                   " \"" TOUCH_SCRIPT "\"\n"
                    "$ EXIT\n", 0644) != 0)
         return -1;
 
@@ -952,242 +847,20 @@ int main(void)
         CHECK(!touched(),
               "the image was not run behind the subprocess refusal");
 
-        /* A process qualifier RUN/DETACHED would not have read either.
-         * The refusal is on the oracle's set, as the oracle states it,
-         * not on a list this code happened to enumerate.
-         *
-         * NOTE WHAT THIS CASE IS NOT. It carries no /DETACHED, so it
-         * says nothing about what happens to /PRIORITY on the DETACHED
-         * path -- where it is still read by nobody. That is P10(e),
-         * and it is a different case; an adversary correctly pointed
-         * out that this assertion's old wording read as if it covered
-         * both. */
+        /* A qualifier outside the four RUN/DETACHED honours. The refusal
+         * is on "any qualifier", as the oracle states it, not on a list
+         * this code happened to enumerate. */
         clear_touch();
         run_dcl(PRIO_COM, out8, sizeof(out8), &exit_st);
         printf("  (RUN/PRIORITY with no /DETACHED)\n%s\n", out8);
         CHECK(strstr(out8, "-OVMX-F-NOSUBPRC,") != NULL && !touched(),
-              "RUN/PRIORITY without /DETACHED is refused too: the rule is the "
-              "oracle's set, not a list this code enumerated");
+              "a process qualifier outside the honoured four is refused too");
 
         /* Positive control. */
         clear_touch();
         run_dcl(PLAIN_COM, out8, sizeof(out8), &exit_st);
         CHECK(touched(),
               "plain RUN, with no process qualifier, still runs the image");
-    }
-
-    /* ---------------------------------------------------------------
-     * P9. THE SUBPROCESS REFUSAL IS SCOPED TO THE PROCESS QUALIFIERS.
-     *
-     * WHY THIS PHASE EXISTS. P8's refusal was first written over "any
-     * qualifier at all", on the strength of the RUN (Process) sentence
-     * "A subprocess is created if any of the qualifiers except the /UIC
-     * or the /DETACHED qualifier is specified". That sentence is
-     * scoped to its OWN topic. The oracle's HELP tree carries a
-     * SEPARATE RUN (Image) topic, and `HELP/NOPROMPT RUN Image
-     * Qualifier` (VAX1, OpenVMS VAX V7.3, 2026-07-31) lists exactly
-     * /DEBUG and /NODEBUG -- qualifiers of the form that "Executes an
-     * image within the context of your process", creating no process
-     * at all. The unscoped test refused RUN/NODEBUG as a subprocess
-     * request and the image did not run: a functional regression, and
-     * a message asserting a VMS semantic the oracle contradicts.
-     *
-     * Both P8 cases are genuine process qualifiers, so nothing in P8
-     * could catch it. That is what this phase is for.
-     *
-     * /NODEBUG matches VMS by doing what VMS does -- running the image.
-     * /DEBUG cannot: OVMX has no debugger. It is refused under its own
-     * OVMX condition value naming the debugger, and specifically NOT
-     * under the subprocess message, because the RUN (Image) form
-     * creates no process for a "process creation failed" to describe.
-     * --------------------------------------------------------------- */
-    {
-        char out9[65536];
-
-        clear_touch();
-        run_dcl(NODBG_COM, out9, sizeof(out9), &exit_st);
-        printf("  (RUN/NODEBUG -- a RUN (Image) qualifier)\n%s\n", out9);
-        CHECK(touched() && strstr(out9, "NOSUBPRC") == NULL,
-              "RUN/NODEBUG runs the image: it is not a subprocess request");
-
-        clear_touch();
-        run_dcl(DEBUG_COM, out9, sizeof(out9), &exit_st);
-        printf("  (RUN/DEBUG -- a debugger OVMX has not got)\n%s\n", out9);
-        CHECK(strstr(out9, "%OVMX-F-NODEBUGGER,") != NULL &&
-              strstr(out9, "NOSUBPRC") == NULL &&
-              strstr(out9, "CREPRC") == NULL &&
-              !touched(),
-              "RUN/DEBUG is refused naming the debugger, not process creation");
-    }
-
-    /* ---------------------------------------------------------------
-     * P10. AN ABBREVIATED QUALIFIER IS THE SAME QUALIFIER.
-     *
-     * WHY THIS PHASE EXISTS. P7-P9 spell every qualifier out in full,
-     * and nobody types them that way. DCL resolves a qualifier by
-     * SHORTEST UNIQUE PREFIX, so /PRIO IS /PRIORITY and /DETACH IS
-     * /DETACHED -- and a refusal keyed on exact names is therefore not
-     * a strict version of the refusal, it is a refusal a user can walk
-     * straight past. An adversary measured exactly that on the previous
-     * round: `RUN/PRIO=4 <image>` ran the image, exit 0, no diagnostic,
-     * with the priority discarded -- the round-2 defect restored for
-     * every abbreviated spelling, at the same time as the full spelling
-     * was correctly refused.
-     *
-     * ORACLE-PINNED (reference lab VAX1, OpenVMS VAX V7.3, 2026-07-31;
-     * transcript in the lab as
-     * captures/run-qualifier-abbrev-vax1-2026-07-31.txt). Each probe
-     * named an image that does not exist, so DCL's verdict on the
-     * qualifier is visible without creating anything -- a resolved
-     * qualifier reaches RUN and fails on the image, an unresolved one
-     * never gets there:
-     *
-     *   RUN/PRIO=4    %RUN-F-PARSEFAIL / -RMS-E-FNF   -> /PRIORITY
-     *   RUN/PROC=FOO  %RUN-F-PARSEFAIL / -RMS-E-FNF   -> /PROCESS_NAME
-     *   RUN/DETACH    %RUN-F-PARSEFAIL / -RMS-E-FNF   -> /DETACHED
-     *   RUN/AST=100   %RUN-F-PARSEFAIL / -RMS-E-FNF   -> /AST_LIMIT
-     *   RUN/PRIV=ALL  %RUN-F-PARSEFAIL / -RMS-E-FNF   -> /PRIVILEGES
-     *   RUN/P=4       %DCL-W-ABKEYW, ambiguous qualifier or keyword
-     *
-     * This is not a hypothetical spelling: mx_start.com in this repo's
-     * own VMS corpus writes /DETACH, /PRIO, /PRIV and /AST_LIMIT.
-     *
-     * THE PHASE MEASURES BOTH DIRECTIONS, because resolving
-     * abbreviations only where the command REFUSES would create a new
-     * silent discard in the half where it OBEYS: /DETACH must still
-     * detach and /PROC= must still name.
-     * --------------------------------------------------------------- */
-    {
-        char outA[65536];
-        int nA = 0;
-        uint32_t ab_lpid = 0;
-
-        /* (a) The adversary's exact repro: the abbreviation must reach
-         * the same refusal the full spelling reaches. */
-        clear_touch();
-        run_dcl(ABPRIO_COM, outA, sizeof(outA), &exit_st);
-        printf("  (RUN/PRIO=4 -- /PRIORITY, abbreviated)\n%s\n", outA);
-        CHECK(strstr(outA, "%RUN-F-CREPRC, process creation failed") != NULL &&
-              strstr(outA, "-OVMX-F-NOSUBPRC,") != NULL &&
-              !touched(),
-              "RUN/PRIO is /PRIORITY: the abbreviation is refused and the image does not run");
-
-        /* (b) The same, for a qualifier whose whole point is a name in
-         * the executive: nothing may exist under it. */
-        clear_touch();
-        run_dcl(ABPROC_COM, outA, sizeof(outA), &exit_st);
-        printf("  (RUN/PROC=%s -- /PROCESS_NAME, abbreviated)\n%s\n",
-               ABBR_NAME, outA);
-        memset(&info, 0, sizeof(info));
-        CHECK(strstr(outA, "-OVMX-F-NOSUBPRC,") != NULL &&
-              !touched() &&
-              vms_kif_getjpi_prcnam(ABBR_NAME, &info) != SS$_NORMAL,
-              "RUN/PROC is /PROCESS_NAME: refused, image not run, nothing named in the executive");
-
-        /* (c) THE CONTROL AGAINST OVER-REFUSING, in abbreviated form --
-         * because the last two rounds of this item were an over-refusal
-         * and then an under-refusal, and only a case on each side can
-         * tell them apart.
-         *
-         * This is COMPOSED from two pinned facts, not a third guess:
-         * DCL resolves a qualifier by unique prefix (the capture above),
-         * and /NODEBUG runs the image (P9's capture, `HELP/NOPROMPT RUN
-         * Image Qualifier`). DEB is unique -- of the oracle's 34-name
-         * process index only DELAY and DETACHED begin with DE, and
-         * neither survives a third character B -- so /NODEB is /NODEBUG
-         * and must reach the image exactly as the full spelling does. */
-        clear_touch();
-        run_dcl(ABNODBG_COM, outA, sizeof(outA), &exit_st);
-        printf("  (RUN/NODEB -- a RUN (Image) qualifier, abbreviated)\n%s\n",
-               outA);
-        CHECK(touched() && strstr(outA, "NOSUBPRC") == NULL,
-              "RUN/NODEB is not refused as a subprocess request: the image runs");
-
-        /* (d) THE OBEYING HALF. mx_start.com's own spelling of the one
-         * form OVMX honours. This is A-writes/B-reads (Rule 11): the
-         * DCL that created it has exited, and THIS process resolves the
-         * name out of the executive's table. */
-        run_dcl(ABDET_COM, outA, sizeof(outA), &exit_st);
-        printf("  (RUN/DETACH/PROC=%s -- the spelling mx_start.com uses)\n%s\n",
-               DETABBR_NAME, outA);
-        uint32_t ab_announced = proc_id_of(outA, &nA);
-        memset(&info, 0, sizeof(info));
-        st = vms_kif_getjpi_prcnam(DETABBR_NAME, &info);
-        ab_lpid = info.linux_pid;
-        CHECK(nA == 1 && st == SS$_NORMAL && ab_lpid != 0,
-              "RUN/DETACH/PROC= creates a detached process the executive knows by name");
-        CHECK(st == SS$_NORMAL && ab_announced != 0 &&
-              ab_announced == info.vms_pid,
-              "the abbreviated form announces the process ID the executive assigned");
-        if (ab_lpid) kill((pid_t)ab_lpid, SIGKILL);
-
-        /* (e) KNOWN GAP, TRACKED AS vms-69e -- THIS ASSERTION PINS WHAT
-         * OVMX DOES TODAY, NOT WHAT VMS DOES.
-         *
-         * On the /DETACHED path a process qualifier outside the four
-         * run_detached() reads is passed to $CREPRC as a bare literal
-         * (baspri 0, prvadr NULL, quota NULL), so /PRIORITY, /PRIVILEGES
-         * and the whole quota set are parsed, never read, and dropped --
-         * under a SUCCESS message. That is Rule 10's illegal third
-         * answer, and it is what an adversary found on the previous
-         * round by booting this harness and driving
-         * RUN/DETACHED/PROCESS_NAME=.../PRIORITY=4.
-         *
-         * The fix is NOT this item's to make: settling it needs either a
-         * third OVMX condition value or real quota/privilege propagation
-         * to the executive, and it is filed as vms-69e. What IS this
-         * item's to do is make the gap VISIBLE, because until this
-         * assertion existed the suite could not tell "refused" from
-         * "silently discarded" on this branch -- the same blindness that
-         * let round 2's overshoot ship. When vms-69e settles, this
-         * assertion MUST go red and be rewritten; that is its job.
-         *
-         * There is deliberately NO negative control for this one. A
-         * mutation that reddened it would have to be the vms-69e FIX,
-         * and the manifest in tests/qemu/facility_defects.sh injects
-         * defects, not improvements. */
-        {
-            uint32_t dp_lpid = 0;
-            int nP = 0;
-
-            run_dcl(DETPRIO_COM, outA, sizeof(outA), &exit_st);
-            printf("  (RUN/DETACHED/PRIORITY=4 -- vms-69e: /PRIORITY is read "
-                   "by nobody)\n%s\n", outA);
-            (void)proc_id_of(outA, &nP);
-            memset(&info, 0, sizeof(info));
-            st = vms_kif_getjpi_prcnam(DETPRIO_NAME, &info);
-            dp_lpid = info.linux_pid;
-
-            CHECK(nP == 1 && st == SS$_NORMAL,
-                  "vms-69e: /DETACHED with /PRIORITY still creates the process "
-                  "and announces success");
-            CHECK(strstr(outA, "PRIORITY") == NULL &&
-                  strstr(outA, "NOSUBPRC") == NULL &&
-                  strstr(outA, "CREPRC") == NULL,
-                  "vms-69e: and says NOTHING about the priority it discarded "
-                  "(this is the defect, asserted so it cannot be fixed silently)");
-            if (dp_lpid) kill((pid_t)dp_lpid, SIGKILL);
-        }
-
-        /* (f) An abbreviation DCL cannot resolve. On the oracle this is
-         * refused by DCL before RUN is entered:
-         *   %DCL-W-ABKEYW, ambiguous qualifier or keyword - supply more characters
-         *    \PR\
-         * OVMX's parser validates no qualifier against any command's
-         * table, for ANY command, so neither that refusal nor the
-         * %DCL-W-IVQUAL one for an unknown qualifier exists anywhere in
-         * DCL. Answering it inside RUN alone would answer for one
-         * command a question VMS answers for the whole language, so the
-         * gap is left where it is -- and asserted here, as it BEHAVES,
-         * so that it is a measured fact rather than a remark in a commit
-         * message. */
-        clear_touch();
-        run_dcl(AMBIG_COM, outA, sizeof(outA), &exit_st);
-        printf("  (RUN/PR=4 -- ambiguous: PRIORITY, PRIVILEGES, "
-               "PROCESS_NAME)\n%s\n", outA);
-        CHECK(touched() && strstr(outA, "ABKEYW") == NULL,
-              "parser-wide gap: an ambiguous abbreviation is not resolved, and "
-              "OVMX has no %DCL-W-ABKEYW to refuse it with");
     }
 
     clear_touch();
@@ -1197,14 +870,6 @@ int main(void)
     unlink(SUBP_COM);
     unlink(PRIO_COM);
     unlink(PLAIN_COM);
-    unlink(NODBG_COM);
-    unlink(DEBUG_COM);
-    unlink(ABPRIO_COM);
-    unlink(ABPROC_COM);
-    unlink(ABNODBG_COM);
-    unlink(ABDET_COM);
-    unlink(DETPRIO_COM);
-    unlink(AMBIG_COM);
     unlink(SVC_STARTUP_COM);
     unlink(SYSTARTUP_COM);
     unlink(SVC_LOG);

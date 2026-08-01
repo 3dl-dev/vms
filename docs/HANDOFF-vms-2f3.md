@@ -47,6 +47,8 @@ reset.**
 | …and is the cause **of the rejoin refusal** | **REFUTED — pure mode joins clean and STILL cannot rejoin** | `r2A`/`r2B`, §4c.2b |
 | which peer completes START first | **REFUTED — both orderings in successes and failures** | §4c.5 |
 | a class-0x03 crash removal quarantines the identity | **REFUTED — a real VAX3 crash-rejoins in ~90 s** | §4c.2c ⭐ |
+| a rejoin's `op 0x02` looks like a first join's | **REFUTED — 4 fields differ, 0 residuals; OVMX always sends the first-join form** | §4c.2e ⭐⭐ |
+| the abort is a timeout | **REFUTED — `op 0x04 role 0x50` fires 1.2 ms after our last correct echo** | §4c.2f |
 
 ## 1. The reproducer — four minutes, no reset
 

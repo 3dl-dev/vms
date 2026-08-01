@@ -279,6 +279,49 @@ sed -i 's|^uint32_t sys\$setast(uint32_t enbflg) {|static uint32_t ovmx_negctl_r
 sed -i '/^uint32_t sys\$setast(/d' "$STARLET"
 expect_green "$AST $STARLET" "deleting a service outright (definition + prototype + declaration) stays green"
 
+# --------------------------------------------------------- structural guards --
+# Three of the gate's FAIL paths are not properties of an individual service:
+# they are the gate refusing to certify anything because it could not read
+# the tree, or because the tree it read holds no sys$ services at all. Each
+# needs its own throwaway fixture -- removing src/ or emptying it out of
+# $ROOT would invalidate every RED/GREEN control above, which depend on it
+# staying a real copy of the product tree.
+guard() {
+    fixture="$1"; name="$2"; need="$3"
+    printf '%s\n' "$need" >> "$WORK/needs"
+    out=$(sh "$GATE" "$fixture" 2>&1)
+    rc=$?
+    ok=1
+    if [ "$rc" -eq 0 ]; then
+        echo "  FAIL: the register CERTIFIED the evasion: $name"
+        ok=0
+    elif ! printf '%s\n' "$out" | grep -qF "$need"; then
+        echo "  FAIL: went red for the WRONG reason: $name"
+        echo "        expected output to contain: $need"
+        ok=0
+    fi
+    record_verdict "$name" $ok
+}
+
+NOSRC="$WORK/fixture-no-src"
+mkdir -p "$NOSRC"
+guard "$NOSRC" "a tree with no src/ directory at all" \
+    "this gate scans the product tree."
+
+NOFACTS="$WORK/fixture-empty-src"
+mkdir -p "$NOFACTS/src" "$NOFACTS/tools"
+guard "$NOFACTS" "a tree with a src/ directory but zero .c files anywhere" \
+    "the source scan produced no facts at all."
+
+# THE FLOOR. C code exists (so the "no facts" guard above does not fire) but
+# none of it is a sys$ service -- every property the gate checks would pass
+# vacuously because the universe it checks them against is empty.
+NOSYS="$WORK/fixture-no-sys-services"
+mkdir -p "$NOSYS/src" "$NOSYS/tools"
+printf 'int ovmx_negctl_not_a_service(void) { return 0; }\n' > "$NOSYS/src/plain.c"
+guard "$NOSYS" "a tree with C code but zero sys\$ services in it" \
+    "THE FLOOR: zero sys\$ services found under src/ and tools/."
+
 # ---------------------------------------------------------------- coverage --
 # "EVERY property has an evasion" is a claim this file used to make in its own
 # closing line while the enumeration behind it lived only in the author's head.
@@ -289,6 +332,20 @@ expect_green "$AST $STARLET" "deleting a service outright (definition + prototyp
 : > "$WORK/derived"
 sed -n 's/.*errors\[++nerr\] = "\([A-Z][^"]*: \).*/\1/p' "$GATE" | sort -u >> "$WORK/derived"
 grep -oE 'malformed OVMX-USERSPACE declaration' "$GATE" | sort -u >> "$WORK/derived"
+# The errors[] array and decl_bad cover the PER-SERVICE properties; the gate
+# also has three FAIL paths that are not about any one service -- it refusing
+# to run at all, and the floor. Pulled from the gate's own literal text the
+# same way, so a changed message desyncs this count instead of hiding behind
+# it.
+grep -oE 'this gate scans the product tree\.' "$GATE" | sort -u >> "$WORK/derived"
+grep -oE 'the source scan produced no facts at all\.' "$GATE" | sort -u >> "$WORK/derived"
+# The gate's own source has to spell this one "sys\$" (escaped for the shell
+# double-quote it lives in); what actually prints at runtime is "sys$", with
+# no backslash. Normalize the same way so this line matches the fixture's
+# real output below instead of failing on a backslash that only exists on
+# disk.
+grep -oF 'THE FLOOR: zero sys\$ services found under src/ and tools/.' "$GATE" \
+    | sed 's/\\\$/$/' | sort -u >> "$WORK/derived"
 : > "$WORK/uncovered"
 ncov=0
 while IFS= read -r msg; do

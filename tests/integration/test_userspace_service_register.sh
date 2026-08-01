@@ -52,13 +52,32 @@
 #     deciding which PART of an answer came from there needs the per-facility
 #     A-writes/B-reads proof, not a source scan. Do not quote this gate as
 #     evidence that a service is fully wired.
-#   - It does NOT police the RTL. lib$, str$, mth$, ots$ and dsc$ routines are
-#     userspace in OVMX and are not candidates for executive residency here, so
-#     they are outside the universe entirely. That is why adding pure
-#     computation to the tree does not redden this gate -- and why the negative
-#     controls prove that with a green control instead of asserting it, twice:
-#     once with a pure routine and once with a STATEFUL one, so the first
-#     cannot be passing merely for want of state.
+#   - It does NOT police the RTL, and this is a scope decision, not an
+#     oversight: lib$, str$, mth$, ots$ and dsc$ routines are userspace in
+#     OVMX and are not candidates for executive residency here, so they are
+#     OUT OF SCOPE and outside the universe entirely -- ZERO of them are
+#     measured, on purpose (measured: 55 lib$ file-scope definitions alone
+#     exist under src/ today, none of them in this gate's table). That is why
+#     adding pure computation to the tree does not redden this gate -- and why
+#     the negative controls prove that with a green control instead of
+#     asserting it, twice: once with a pure routine and once with a STATEFUL
+#     one (both in str$, the sibling namespace, to keep the fixture small),
+#     so the first cannot be passing merely for want of state. If lib$ is
+#     ever brought into this gate's scope, that is a design decision needing
+#     its own item -- it does not fall out of this file changing quietly.
+#   - It does NOT see a sys$* function whose ENTIRE definition -- body and
+#     all -- lives inside a header as `static inline`. The universe is built
+#     from two readings (file-scope definitions in .c files, prototypes
+#     terminated by `;` in headers) and an inline function defined in a
+#     header is neither: not a .c definition, and not a prototype, because
+#     its declarator is closed by `}` and never reaches the top-level `;`
+#     the prototype reader requires. Nothing in this codebase currently
+#     defines a sys$ service this way (measured: no header under src/
+#     contains `sys$<name>(...) {` -- a function body opened directly in
+#     the header, comment-stripped or not), so this is a known gap in the
+#     scan, not a live evasion -- if that ever changes, the service it
+#     hides is a silent hole in the universe until this gate is taught to
+#     read header-inline bodies too.
 #
 # THE UNIVERSE, AND WHY IT IS A UNION.
 #
@@ -506,9 +525,10 @@ echo "    name                   exec     state    proto   item       defined in
 sort "$WORK/table" | sed 's/^/    /'
 
 echo
+nuniverse=0
 while IFS=' ' read -r k v; do
     case "$k" in
-        universe)   echo "  $v sys\$ services defined under src/ and tools/" ;;
+        universe)   echo "  $v sys\$ services defined under src/ and tools/"; nuniverse=$v ;;
         protos)     echo "  $v sys\$ prototypes declared in headers under src/" ;;
         exec)       echo "  $v reach the executive (transitive call to a vms_kif_* entry point)" ;;
         state)      echo "  $v touch retained per-process state (file-scope object, transitively)" ;;
@@ -517,6 +537,23 @@ while IFS=' ' read -r k v; do
         errors)     [ "$v" = "0" ] || status=1 ;;
     esac
 done < "$WORK/universe"
+
+# THE FLOOR. A tree with facts (so the "no facts at all" guard above did not
+# fire) but ZERO sys$-prefixed definitions passes every check above
+# vacuously -- there is nothing in the universe for any of them to fail on.
+# That is the same shrink-into-a-smaller-pass shape the kif caller census
+# (vms-7fb) gained a floor for. The floor is deliberately just ">0", not a
+# recited count: this gate's claim is "every sys$ service is accounted for",
+# and that claim is vacuous, not narrowly-true, at zero services -- no larger
+# threshold is defensible without becoming a magic number that drifts as the
+# product grows. If OVMX genuinely ships no sys$ services this gate has
+# nothing left to prove and should be retired, not left green by accident.
+if [ "$nuniverse" -eq 0 ]; then
+    echo
+    echo "  FAIL: THE FLOOR: zero sys\$ services found under src/ and tools/."
+    echo "  -> a scan that finds nothing certifies everything else vacuously."
+    status=1
+fi
 
 if [ -s "$WORK/errors" ]; then
     echo

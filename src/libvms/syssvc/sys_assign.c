@@ -8,17 +8,9 @@
  */
 
 /*
- * OVMX userspace service register (rd vms-5b4) -- gate:
- * tests/integration/test_userspace_service_register.sh
- *
- * OVMX-USERSPACE: sys$assign (vms-dv1) -- allocates a slot in
- *     pcb->channels[] in the per-process PCB and stores a Linux fd in it. No
- *     executive device or channel database is consulted; the channel table is
- *     process-local memory, so no other process can name the channel and it
- *     does not survive exec.
- * OVMX-USERSPACE: sys$dassgn (vms-dv1) -- closes the fd in the caller's own
- *     pcb->channels[chan]; a channel assigned by another process cannot be
- *     named, let alone deassigned.
+ * sys$assign and sys$dassgn reach the executive device table via
+ * vms_kif_assign()/vms_kif_dassgn() (vms-1c57) -- no OVMX-USERSPACE
+ * declaration here. See tests/integration/test_userspace_service_register.sh.
  */
 
 #include <stdint.h>

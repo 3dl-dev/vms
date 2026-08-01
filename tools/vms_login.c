@@ -182,34 +182,25 @@ static void start_session(const sysuaf_record_t *rec)
     setenv("SYS$LOGIN",   rec->default_dir, 1);
     setenv("SYS$SCRATCH", "SYS$SYSDEVICE:[SYSTMP]", 1);
 
-    /*
-     * chdir into the VMS tree so DCL inherits a VMS-rooted cwd.
-     * Translate the VMS directory spec to Linux for the syscall.
-     *
-     * LOGINOUT DOES NOT CREATE OR RE-OWN SYS$LOGIN (vms-2b8 round 7).
-     * Round 6 had it mkdir() the directory and chown() it to the SYSUAF
-     * UIC, printing %OVMX-W-LOGINOWN and carrying on if that failed --
-     * which is CLAUDE.md Rule 10's illegal third answer, added forty
-     * lines below where the identical shape (%LOGINOUT-W-NOIDENT) was
-     * being deleted for being it. VMS has no state in which LOGINOUT
-     * authenticates a user and then hands them a SYS$LOGIN they do not
-     * own; under the [gid,uid] protection the credential drop below
-     * activates, such a session cannot write its own login directory.
-     * A warning for that is a plausible-looking handler for a condition
-     * VMS never faces.
-     *
-     * So the condition is made UNREACHABLE rather than handled: the
-     * directory is created and owned when the ACCOUNT is provisioned,
-     * by PID 1, before any other process exists
-     * (provision_sysuaf_users() and provision_ownership() in
-     * src/ovmx_init/ovmx_init.c). That is also what OpenVMS does -- the
-     * System Manager's Manual add-user procedure is AUTHORIZE ADD
-     * followed by CREATE/DIRECTORY .../OWNER=[g,m]; LOGINOUT is not in
-     * that sequence and has no fixup step of its own.
-     */
+    /* chdir into the VMS tree so DCL inherits a VMS-rooted cwd.
+     * Translate the VMS directory spec to Linux for the syscall. */
     char home_linux[512];
-    if (vmsfs_to_linux_path(rec->default_dir, home_linux, sizeof(home_linux)) == 1)
+    if (vmsfs_to_linux_path(rec->default_dir, home_linux, sizeof(home_linux)) == 1) {
+        /* Ensure home directory exists */
+        mkdir(home_linux, 0755);
+        /* SYS$LOGIN is owned by the user's UIC on VMS, and the UIC is
+         * [gid,uid] here (the same mapping the executive derives and
+         * that src/vmsrms/rms_core.c enforces protection against). This
+         * must happen while LOGINOUT still has the privilege to do it,
+         * i.e. before the credential drop below. */
+        if (chown(home_linux, (uid_t)rec->uic_member,
+                  (gid_t)rec->uic_group) != 0)
+            printf("%%OVMX-W-LOGINOWN, %s could not be given to UIC "
+                   "[%o,%o]: %s\n", rec->default_dir,
+                   (unsigned)rec->uic_group, (unsigned)rec->uic_member,
+                   strerror(errno));
         chdir(home_linux);
+    }
 
     /* Initialize user PCB (lives until exec replaces address space).
      * Seeded from the row the executive just stamped -- a copy of the

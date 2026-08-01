@@ -12,14 +12,18 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 
 ## 0. Status in one paragraph
 
-**The rejoin is still refused, but it is no longer mysterious — it is one step
-wide.** A returning OVMX gets the full START handshake, the directory phase, the
-VC bind, the config exchange, the coordinator's **`op 0x03` COMMIT** and its
-**`op 0x05` lock-rebuild** — and then the coordinator never opens the barrier.
-No `op 0x09`, no `op 0x0b`/`0x0c`, no `op 0x06` steady state, for as long as we
-care to wait (measured to 420 s). All three peers then log `timed-out lost
-connection`. Two genuinely frozen wire fields were found and fixed on the way
-(commit `c302b7d`, verified live, no regression), and four attractive
+**The rejoin is still refused — but the session ended somewhere better than a
+narrower version of the same question. Read §4b first: OVMX's join has been
+limping all along, and the rejoin is just the case where the limp stops
+working.** A returning OVMX gets the full START handshake, the directory phase,
+the VC bind, the config exchange, the coordinator's **`op 0x03` COMMIT** and its
+**`op 0x05` lock-rebuild** — and then the coordinator never opens the barrier,
+for as long as we care to wait (measured to 420 s), and all three peers log
+`timed-out lost connection`. The decisive finding is that **the coordinator
+stalls on OVMX in successful joins too**, and what rescues those is OVMX
+retransmitting its own `op 0x02` at ~+8 s — something no real node ever does. A
+real transition is over in 42–132 ms. Two genuinely frozen wire fields were
+found and fixed on the way (`c302b7d`, verified live, no regression), and nine
 hypotheses were killed. **A four-minute reproducer now exists that needs no lab
 reset.**
 
@@ -31,7 +35,9 @@ reset.**
 | frozen incarnation is the cause | **REFUTED** — fixed, still refused | `inc1` |
 | frozen message-time is the cause | **REFUTED** — fixed, still refused | `inc2` |
 | `cat 0x01 op 0x04` is the cause | **REFUTED** — present in successes | log census |
-| our window was too short | **REFUTED** — 420 s changes nothing | `rej3` |
+| our window was too short | **REFUTED** — a real transition takes 42–132 ms | `rej3`, af2 |
+| the bug is in the commit→barrier window | **REFUTED** — a real node sends *nothing* there | af2 |
+| **OVMX's successful joins are healthy** | **REFUTED — they are rescued by our own retry** | `fresh1` vs af2 |
 
 ## 1. The reproducer — four minutes, no reset
 
@@ -166,23 +172,77 @@ Kill-switches so the failing case stays reproducible:
 `OVMX_INCARNATION_FROZEN=1`, `OVMX_MSGTIME_FROZEN=1`; `OVMX_INCARNATION_TIME`
 pins the quadword. 41/41 tests green, with byte-exact assertions on both fields.
 
+## 4b. THE REFRAME — OVMX's join has been limping all along
+
+This landed last and it changes the shape of the problem. The af2 rejoin
+specimens were decoded end to end (real identity `VX3`/1050, first join at SCA
+2558, rejoins at 20170 and 33591), and compared against OVMX's own captures.
+
+**A real transition is over in milliseconds.** From add-member request to the
+last finalize frame: first join **42 ms**, rejoin-1 **132 ms**, rejoin-2
+**88 ms**. From first HELLO to full barrier completion, all three are under
+**2 seconds**. There is no "minutes" regime anywhere in the reference — our
+130–420 s windows are 100–1000× longer than a transition ever needs.
+
+**A real node sends `op 0x02` exactly once**, in all three transactions, and is
+answered in **1–20 ms**. There is no retry cycle in the reference at all, and no
+retransmission in either direction anywhere between commit and barrier-open —
+every `op 0x06` in the coordinator's 257-frame lock-directory burst has a unique,
+strictly increasing `smsg`, with zero gaps or repeats.
+
+**What the returning node sends in the commit→barrier window: nothing.** All 341
+frames in that window are coordinator→node, 204 bytes, `cat 0x01 op 0x06`. Flow
+control is carried in-band in `smsg`/`amsg`; there is no separate ACK frame. The
+returning node's only job there is to receive. So the §0 framing — "what does a
+returning node owe the coordinator in that window" — has an answer, and the
+answer is *nothing*. **The bug is not in that window.**
+
+**And here is the reframe.** OVMX *always* stalls, including on joins that
+succeed:
+
+- `d94-fresh1` (**succeeded**): OVMX sends `op 0x02` once at +1.46 s → commit +
+  lock-rebuild → coordinator sends `op 0x04` and a re-sent `op 0x01` → **goes
+  silent for ~6.5 s**. OVMX answers neither. At **+8.0 s OVMX retransmits its
+  own `op 0x02`** — the coordinator answers *that* in 2.2 ms, redoes commit and
+  lock-rebuild, and this time proceeds into the 253-frame burst → barrier →
+  MEMBER.
+- `d94-inc1` (**failed rejoin**): identical through commit, lock-rebuild,
+  `op 0x04`, re-sent `op 0x01`, silence. OVMX retries `op 0x02` at +7.76 s —
+  **the coordinator never answers.**
+- `d94-rej2` (**failed rejoin**): fails earlier still — commit arrives, the
+  lock-rebuild round never does, retry at +7.18 s unanswered.
+
+So OVMX's successful join is **rescued by its own retransmit** — a step no real
+node ever performs. The rejoin does not introduce a new defect; it removes the
+accident that was papering over an existing one. **Something OVMX does at or
+before commit makes the coordinator stall, and a fresh identity forgives it
+while a returning identity does not.**
+
+This also re-frames `op 0x04` a third time. It is **not** rejoin-specific — a
+full sweep of all 103 pcaps found 89 occurrences, all in 3-node captures, all
+coordinator-to-all-peers broadcasts, zero in any 2-node capture. But it and the
+re-sent `op 0x01` are exactly what the coordinator emits **immediately before it
+stalls on us**, and a real coordinator never sends either to a real joiner. They
+are plausibly the coordinator *asking us something because we already confused
+it*. Grounding them is now interesting again — as a symptom, not as the gate.
+
 ## 5. ⚠ WHERE TO START NEXT SESSION
 
-The question is now exactly one step wide: **what does a returning node owe the
-coordinator between `op 0x03`/`op 0x05` and the barrier open?** Take these in
-order.
+**The question is no longer "why can't we rejoin" — it is "why does the
+coordinator stall on us at all, when it never stalls on a real node".** Fix
+that and the rejoin should follow, because the rejoin is just the case where our
+retry no longer rescues us.
 
-1. **Decode that window in the af2 rejoin specimens.** This was dispatched at
-   the end of this session and its answer is the deliverable.
-   `af2-firsttimer-established-20260728.pcap` contains **three incarnations of
-   one real identity** (SCSNODE `VX3`, SCSSYSTEMID 1050, MAC
-   `08:00:2b:78:56:b9`) — START bursts near SCA 2558 (first join), 20170
-   (rejoin 1), 33591 (rejoin 2). It is the rejoin reference we spent two
-   sessions believing did not exist. Ask: what does the returning node **send**
-   between the coordinator's commit/lock-rebuild and the barrier open; does the
-   coordinator retransmit anything in that window; and how long does a real
-   rejoin take end to end versus a first join.
-2. **Make `Ref. time` live** (§4, `own_admission`). It is the last known frozen
+1. **Find what OVMX does at or before `op 0x02` that a real joiner does not.**
+   Diff OVMX's pre-commit exchange against `VX3`'s in af2, frame by frame, in
+   both directions — the two paths already differ in *coordinator behaviour* by
+   the time commit lands, so the cause is upstream of it. Concretely: what does
+   the coordinator have from `VX3` at the moment it answers `op 0x02` in 1–20 ms
+   that it does not have from OVMX, given it instead emits `op 0x04` + a re-sent
+   `op 0x01` and waits? A re-sent `op 0x01` reads like *"answer the cluster-
+   parameters question again"* — which points at our `op 0x01` reply being
+   unsatisfying, and note that `Ref. time` in that very reply is `1-JAN-2001`.
+2. **Make `Ref. time` live** (§4, `own_admission`) (§4, `own_admission`). It is the last known frozen
    field, it is what a peer reads as *"when did this node join this cluster"*,
    and a returning node advertising `1-JAN-2001` is claiming to have joined 25
    years ago — plausibly enough for a coordinator to decline to promote it. One

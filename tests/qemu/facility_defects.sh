@@ -619,8 +619,8 @@ sys$creprc returned the subject's pid
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-Assertions across two suites go red, and that IS the defect rather than
-evidence against it: the mutation deletes the ONE call that binds a process to the executive,
+FIFTEEN assertions go red, and that IS the defect rather than evidence against
+it: the mutation deletes the ONE call that binds a process to the executive,
 and a process with no PCB can use no facility. Round 1 named two of the twelve
 and framed the result as narrow ("only test_kmod_bind goes red"), which is
 true at suite granularity and misleading at property granularity -- the exact
@@ -651,10 +651,7 @@ failing to bind, exactly as suite 3 does one layer down: with no registration
 the child cannot report a process ID, so the creation handshake fails and
 $CREPRC reports the child lost. That suite then stops, by design, rather than
 asserting about a subject it knows was not created -- which is why exactly
-four of its assertions appear here and none of the rest of the suite, however
-many it has grown to. (The count is deliberately not written down: it was, and
-adding an assertion to the suite silently rotted it. The require_fail set is
-the machine-checked statement; this paragraph is the reasoning.)
+four of its assertions appear here and not the other fifty-six.
 EOF
                       ;;
         esac;;

@@ -96,22 +96,11 @@ exercises.
    Message text states that if the error occurred reading a system loadable image, *"SYSBOOT
    terminates the bootstrap operation"*.
 
-   One thing remains a genuine **OVMX design choice**, labelled per CLAUDE.md Rule 8 and never
+   Two things remain genuine **OVMX design choices**, labelled per CLAUDE.md Rule 8 and never
    presented as VMS-authentic: the `%OVMX-I-EXECINIT` detail line carrying the underlying Linux
    error (VMS prints nothing more — `?06 HLT INST` comes from the VAX console firmware, which OVMX
-   has no analogue of).
-
-   **Correction (vms-a35 round 2, Rule 10):** the original wave of this work reported `/dev/vms`
-   failing to *open*, and any module-load errno other than the oracle's `ENOENT`, in the SAME
-   `%EXECINIT, error loading system file - <FILE>` shape as the oracle-pinned case, just without an
-   `R0`. That was itself an invented VMS message — the oracle's `%EXECINIT` line always carries
-   `R0 = `, so a bare `%EXECINIT` with no `R0` does not exist in VMS, and wearing the facility name
-   for a condition VMS is never in is Rule 10's illegal third answer. Both non-oracle-pinned
-   failures now report through a distinct `%OVMX-F-EXECINIT` line (`ovmx_exec_halt()` in
-   `ovmx_init.c`) instead, and the executive-attached success line moved from `%STARTUP-I-EXEC` to
-   `%OVMX-I-EXEC` for the same reason — a message naming a Linux device node is an OVMX event, not
-   a VMS one. `tests/qemu/test_executive_integral.sh` Boot C is the negative control for the
-   `/dev/vms`-absent path (vms.ko loads via a substitute module that registers no device node).
+   has no analogue of), and reporting `/dev/vms` failing to *open* in the same shape without an
+   `R0`, since a VMS executive has no device node and VMS is never in that state.
 
    **Not silently "fixed" here:** the oracle's `R0 = 00000910` decodes via `F$MESSAGE` to
    `%SYSTEM-W-NOSUCHFILE`, while in-tree `ssdef.h` defines `SS$_NOSUCHFILE` as 2696 (0xA88). That

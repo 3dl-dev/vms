@@ -58,10 +58,6 @@
 #define VMS_SYLOGIN_PATH     "SYS$MANAGER:SYLOGIN.COM"
 #define VMS_STARTUP_PATH     "SYS$MANAGER:STARTUP.COM"
 #define VMS_HELPLIB_PATH     "SYS$HELP:HELPLIB.HLP"
-/* Reserved: zero readers as of vms-a4b (its only reader, lnm_daemon.c,
- * was deleted). Not wired to anything until the executive-resident
- * logical name work lands — see vms-ln0 (gated, operator sign-off
- * pending) and vms-d37. Do not add a reader without that ruling. */
 #define VMS_LNM_CONF_PATH    "SYS$MANAGER:SYLOGICALS.CONF"
 #define VMS_SSH_HOST_KEY     "SYS$MANAGER:SSH_HOST_RSA_KEY"
 
@@ -71,6 +67,7 @@
 
 #define VMS_DCL_PATH         "SYS$SYSTEM:DCL.EXE"
 #define VMS_LOGINOUT_PATH    "SYS$SYSTEM:LOGINOUT.EXE"
+#define VMS_LNMD_PATH        "SYS$SYSTEM:VMSLNMD.EXE"
 #define VMS_SSHD_PATH        "SYS$SYSTEM:VMSSSHD.EXE"
 #define VMS_AUTHORIZE_PATH   "SYS$SYSTEM:AUTHORIZE.EXE"
 #define VMS_INITIALIZE_PATH  "SYS$SYSTEM:INITIALIZE.EXE"

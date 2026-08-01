@@ -22,16 +22,10 @@
 # `wait_for '%STARTUP-I-EXEC'` assertion that branch has deliberately NOT
 # ported (main's src/ovmx_init/ovmx_init.c did not print that string yet, so
 # waiting for it would have hung forever). vms-0ff has since merged, so
-# ovmx_init.c prints an executive-attached line once the kernel executive
-# attaches, and the wait is ported below (see "Boot and log in"). Everything
-# else in the harness (assertion anchoring, prompt sync, timeout split) is
-# unique to this file and was never present on vms-0ff-executive-fatal.
-#
-# vms-a35 round 2: the string itself moved from `%STARTUP-I-EXEC` to
-# `%OVMX-I-EXEC` (see src/ovmx_init/ovmx_init.c, executive_attach) --
-# a message that names a Linux device node (/dev/vms) is an OVMX event,
-# not a VMS one, and may not wear the STARTUP facility (Rule 10). This
-# wait was updated to match.
+# ovmx_init.c now prints `%STARTUP-I-EXEC` once the kernel executive attaches,
+# and the wait is ported below (see "Boot and log in"). Everything else in
+# the harness (assertion anchoring, prompt sync, timeout split) is unique to
+# this file and was never present on vms-0ff-executive-fatal.
 #
 # NEARLY THE SAME COMMANDS as tests/uat/vms_session_test.sh (the retired SSH
 # UAT), with ONE deliberate change: `SET DEFAULT SYS$MANAGER` (no trailing
@@ -178,7 +172,7 @@ fail_with_console() {
 # there is no session to test. Asserting it here (vms-0ff, ported by the
 # vms-a35 PR #6 rebase) keeps a silent regression in the boot guarantee from
 # surfacing as a confusing login timeout instead of a clear one.
-wait_for '%OVMX-I-EXEC' "$BOOT_TIMEOUT" \
+wait_for '%STARTUP-I-EXEC' "$BOOT_TIMEOUT" \
     || fail_with_console "ERROR: the executive never attached — the system did not come up"
 
 wait_for 'Username:' "$BOOT_TIMEOUT" || fail_with_console "ERROR: no login prompt"

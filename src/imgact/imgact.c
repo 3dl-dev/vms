@@ -619,9 +619,9 @@ static void known_db_shutdown(void)
  *   Priority 1: Known Image Database -- O(1) mmap'd hash lookup, no
  *               filesystem search at all on a hit (bead vms-30d).
  *   Priority 2: hardcoded SYS$SHARE fallback (vms-913.2; always available,
- *               even before the Known Image DB exists).
- * Priorities 3 (SYS$SHARE logical name, once the logical name tables are
- * executive-resident -- vms-a4b) and 4 (ELF RPATH) are not yet implemented. */
+ *               even before the Known Image DB exists or VMSLNMD starts).
+ * Priorities 3 (SYS$SHARE logical name via VMSLNMD) and 4 (ELF RPATH) are
+ * not yet implemented. */
 static struct obj *load_needed(const char *soname)
 {
 	struct obj *existing = find_loaded(soname);

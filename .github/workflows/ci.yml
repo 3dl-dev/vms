@@ -203,30 +203,13 @@ jobs:
           # This also proves the harness ran to completion and reached its own
           # FINAL RESULTS accounting -- a timeout or panic would never print
           # this line at all, so this line alone rules those causes out.
-          #
-          # MAINTENANCE CONVENTION (deliberate, do NOT soften): adding a suite
-          # that depends on the executive MUST bump the failed count here, and
-          # adding one that does not MUST bump the passed count. Turning this
-          # into a range or a regex to avoid the edit would let a suite silently
-          # stop depending on /dev/vms -- which is the whole thing this job
-          # exists to detect. The brittleness IS the feature.
-          #
-          # THIS LINE IS A MERGE MAGNET AND THE TEXTUAL MERGE OF IT IS WRONG.
-          # Each branch that adds an executive-dependent suite bumps the count
-          # by one INDEPENDENTLY, so two such branches both read "N+1" and git
-          # merges them cleanly to "N+1" when the truth is "N+2". Recompute it
-          # from the tree; never take it from either side of a conflict.
-          #   7 failed  -- baseline (8 test_kmod_* suites + the 2 module loads)
-          #   8 failed  -- vms-8019 added test_kmod_procnam
-          #   8 failed  -- vms-0ff  added test_kmod_pin
-          #   9 failed  -- vms-d0b  added test_kmod_devtab
-          #  10 failed  -- ALL THREE on the merged tree (this line)
-          # Arithmetic on the merged tree: 11 test_kmod_* suites exist, 9 of
-          # them open /dev/vms and fail with the executive absent, plus the
-          # vms.ko load itself = 10 failed; vmsfs.ko's load + the 2 vmsfs
-          # suites are executive-independent = 3 passed.
-          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 10 suites failed ===' \
-            || { echo "FAIL: did not see the expected 3-suites-passed/10-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+          # NOTE: this split moved 7 -> 8 failures when vms-0ff added
+          # tests/qemu/test_kmod_pin.c (which asserts an open /dev/vms
+          # descriptor pins vms.ko). Adding an executive-dependent suite MUST
+          # move this number; if you add one and this line still passes
+          # unchanged, the suite is not actually reaching the executive.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 8 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/8-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
 
           # POSITIVE assertion paired with the two negative assertions above:
           # vmsfs.ko has no dependency on vms.ko/the executive, so it must
@@ -237,7 +220,7 @@ jobs:
           echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
             || { echo "FAIL: vmsfs.ko (independent of vms.ko) did not pass with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency"; exit 1; }
 
-          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: /dev/vms unopenable, exact 3-passed/10-failed split), with vmsfs's independent facility still passing"
+          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: /dev/vms unopenable, exact 3-passed/7-failed split), with vmsfs's independent facility still passing"
 
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests

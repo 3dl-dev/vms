@@ -34,6 +34,7 @@
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
 
+#define LNM_SOCKET_PATH  "/tmp/ovmx/lnm.sock"
 #define SYSDISK_DEV      "/dev/vda"
 #define INITRAMFS_BACKUP "/tmp/initramfs_vms"
 
@@ -156,29 +157,15 @@ static void sigchld_handler(int sig)
  */
 #define OVMX_R0_NOSUCHFILE_ORACLE  0x00000910u
 
-static void halt_now(void)
+static void execinit_halt(const char *image, const char *detail,
+                          int have_r0, unsigned int r0)
 {
-    fflush(NULL);
-
-    if (getpid() == 1) {
-        sync();
-        reboot(RB_POWER_OFF);
-        /* Only reached without CAP_SYS_BOOT. */
+    if (have_r0) {
+        fprintf(stderr, "%%EXECINIT, error loading system file - %s R0 = %08X\n",
+                image, r0);
+    } else {
+        fprintf(stderr, "%%EXECINIT, error loading system file - %s\n", image);
     }
-    _exit(1);
-}
-
-/*
- * The oracle-pinned path: reproduces the VAX 7.3 capture byte-exact
- * ("%EXECINIT, error loading system file - <FILE> R0 = <status>"). Call
- * this ONLY when the failure being reported is the exact oracle condition
- * (a required executive image is missing, ENOENT) -- never for a condition
- * VMS is never in (see ovmx_exec_halt below, and Rule 10).
- */
-static void execinit_halt(const char *image, const char *detail, unsigned int r0)
-{
-    fprintf(stderr, "%%EXECINIT, error loading system file - %s R0 = %08X\n",
-            image, r0);
 
     /*
      * OVMX DESIGN CHOICE (Rule 8), labelled as such: VMS prints nothing more
@@ -189,25 +176,14 @@ static void execinit_halt(const char *image, const char *detail, unsigned int r0
      */
     if (detail)
         fprintf(stderr, "%%OVMX-I-EXECINIT, %s\n", detail);
-    halt_now();
-}
+    fflush(NULL);
 
-/*
- * The NOT-oracle-pinned path: a fatal executive-attach failure for which VMS
- * has no analogue at all -- either a module-load errno other than the
- * oracle's ENOENT, or /dev/vms (a Linux device node; VMS has no such thing
- * to open) refusing to open. Rule 10 is explicit that a plausible-looking
- * VMS message may never be invented for a condition VMS never faces; the
- * bare "%EXECINIT, error loading system file - <FILE>" shape (no R0) that
- * used to come out of this function's other branch was exactly that
- * invention. This path wears the OVMX facility instead of EXECINIT.
- */
-static void ovmx_exec_halt(const char *what, const char *detail)
-{
-    fprintf(stderr, "%%OVMX-F-EXECINIT, %s\n", what);
-    if (detail)
-        fprintf(stderr, "%%OVMX-I-EXECINIT, %s\n", detail);
-    halt_now();
+    if (getpid() == 1) {
+        sync();
+        reboot(RB_POWER_OFF);
+        /* Only reached without CAP_SYS_BOOT. */
+    }
+    _exit(1);
 }
 
 /*
@@ -276,26 +252,23 @@ static void executive_attach(void)
         return;                 /* already attached; idempotent by design */
 
     if (load_kernel_module("/lib/modules/vms.ko") != 0 && errno != EEXIST) {
-        if (errno == ENOENT) {
-            /* The oracle's exact condition -- a required executive image
-             * that is not there -- so its exact status is reproduced. */
-            execinit_halt("VMS.KO", strerror(errno), OVMX_R0_NOSUCHFILE_ORACLE);
-        } else {
-            /* Other load errnos have no oracle-pinned VMS status, and one is
-             * not invented for them (see OVMX_R0_NOSUCHFILE_ORACLE). */
-            ovmx_exec_halt("error loading system file - VMS.KO", strerror(errno));
-        }
+        /* The oracle's exact condition -- a required executive image that is
+         * not there -- so its exact status is reproduced. Other load errnos
+         * have no oracle-pinned VMS status, and one is not invented for them
+         * (see OVMX_R0_NOSUCHFILE_ORACLE); they carry the Linux detail line
+         * instead. */
+        execinit_halt("VMS.KO", strerror(errno),
+                      errno == ENOENT, OVMX_R0_NOSUCHFILE_ORACLE);
     }
 
     executive_fd = open("/dev/vms", O_RDWR | O_CLOEXEC);
     if (executive_fd < 0) {
         /* No oracle analogue: a VMS executive has no device node to open, so
-         * VMS is never in this state and prints no status for it. This is an
-         * OVMX event, not a VMS one -- it must not wear the EXECINIT
-         * facility (Rule 10). */
-        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));
+         * VMS is never in this state and prints no status for it. Report it
+         * in the same shape without fabricating an R0. */
+        execinit_halt("VMS.KO", strerror(errno), 0, 0);
     }
-    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\n");
+    printf("%%STARTUP-I-EXEC, VMS executive attached on /dev/vms\n");
 }
 
 /*
@@ -652,7 +625,7 @@ static void provision_symlinks(void)
     /* [SYS0.SYSCOMMON.SYSEXE] executables */
     const char *exes[] = {
         "LOGINOUT.EXE", "DCL.EXE", "HELP.EXE", "AUTHORIZE.EXE",
-        "MAIL.EXE", "MONITOR.EXE", "VMSSSHD.EXE",
+        "MAIL.EXE", "MONITOR.EXE", "VMSSSHD.EXE", "VMSLNMD.EXE",
         "STARTUP.EXE", NULL
     };
     for (int i = 0; exes[i]; i++) {
@@ -752,6 +725,47 @@ static void install_system_blkdev(void)
 }
 
 /*
+ * Try to start the logical name daemon.
+ * Returns the child PID on success, -1 if vmslnmd not found.
+ */
+static pid_t start_lnm_daemon(void)
+{
+    char lnmd_path[512];
+    vms_to_linux(VMS_LNMD_PATH, lnmd_path, sizeof(lnmd_path));
+    struct stat st;
+    if (stat(lnmd_path, &st) != 0) {
+        return -1;  /* vmslnmd not available */
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* Child: exec vmslnmd */
+        execl(lnmd_path, "vmslnmd", (char *)NULL);
+        _exit(1);
+    }
+    return pid;
+}
+
+/*
+ * Wait for the LNM daemon socket to appear (up to timeout_ms).
+ */
+static int wait_for_lnm_socket(int timeout_ms)
+{
+    struct stat st;
+    int elapsed = 0;
+    int interval = 50000; /* 50ms */
+
+    while (elapsed < timeout_ms * 1000) {
+        if (stat(LNM_SOCKET_PATH, &st) == 0) {
+            return 1;  /* Socket appeared */
+        }
+        usleep((useconds_t)interval);
+        elapsed += interval;
+    }
+    return 0;  /* Timed out */
+}
+
+/*
  * Try to start the SSH daemon for remote access.
  * Returns the child PID on success, -1 if sshd not found.
  */
@@ -810,7 +824,7 @@ static void run_startup(void)
 /*
  * Display VMS-style boot banner.
  */
-static void display_boot_banner(int sshd_started)
+static void display_boot_banner(int lnm_started, int sshd_started)
 {
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
@@ -828,6 +842,10 @@ static void display_boot_banner(int sshd_started)
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000));
+
+    if (lnm_started) {
+        printf("%%STDRV-I-LNMSTART, logical name daemon started\n");
+    }
 
     if (sshd_started) {
         printf("%%STDRV-I-SSHSTART, SSH remote access started on port 22\n");
@@ -914,24 +932,29 @@ int main(void)
      * without overwriting existing files. */
     provision_seed_files();
 
-    /* Step 3: Run STARTUP.COM.
-     * There is no logical name daemon to start first: on VMS the logical name
-     * tables are executive-resident, not a service (vms-a4b). */
+    /* Step 3: Start logical name daemon */
+    int lnm_started = 0;
+    pid_t lnm_pid = start_lnm_daemon();
+    if (lnm_pid > 0) {
+        lnm_started = wait_for_lnm_socket(2000);
+    }
+
+    /* Step 4: Run STARTUP.COM */
     run_startup();
 
-    /* Step 4: Start SSH daemon */
+    /* Step 5: Start SSH daemon */
     int sshd_started = 0;
     pid_t sshd_pid = start_sshd();
     if (sshd_pid > 0) {
         sshd_started = 1;
     }
 
-    /* Step 5: Boot banner */
-    display_boot_banner(sshd_started);
+    /* Step 6: Boot banner */
+    display_boot_banner(lnm_started, sshd_started);
     fflush(stdout);
     fflush(stderr);
 
-    /* Step 6: Login loop (only if stdin is a terminal) */
+    /* Step 7: Login loop (only if stdin is a terminal) */
     char loginout_path[512], dcl_path[512];
     vms_to_linux(VMS_LOGINOUT_PATH, loginout_path, sizeof(loginout_path));
     vms_to_linux(VMS_DCL_PATH, dcl_path, sizeof(dcl_path));
@@ -962,24 +985,7 @@ int main(void)
 
         pid_t child = fork();
         if (child == 0) {
-            /*
-             * STOPGAP -- FACADE, NOT VMS (vms-d0b). The console
-             * terminal device is _OPA0:, and as of vms-d0b that is a
-             * real device in the executive's device table
-             * (src/kernel/vms_devtab.c), created by the executive at
-             * module init and visible to every process on the node.
-             * Handing the name down in an environment variable is the
-             * rejected VMS_PRCNAM shape (CLAUDE.md rule 10, worked
-             * example 2): a process telling its own children what
-             * terminal they are on, which nothing else can see or
-             * contradict.
-             *
-             * It is still here only because DCL cannot yet reach
-             * /dev/vms in the runtime the CI harness can drive -- see
-             * the vms-d0b escalation. The replacement is not "pass a
-             * better variable": it is $ASSIGN to OPA0: and $GETDVI on
-             * the resulting channel. Do not build on this line.
-             */
+            /* Console terminal device is _OPA0: */
             setenv("VMS_TERMINAL", "_OPA0:", 1);
             /* Child: exec vms_login */
             execl(loginout_path, "vms_login", (char *)NULL);
@@ -1053,6 +1059,10 @@ int main(void)
     if (sshd_pid > 0) {
         kill(sshd_pid, SIGTERM);
         waitpid(sshd_pid, NULL, 0);
+    }
+    if (lnm_pid > 0) {
+        kill(lnm_pid, SIGTERM);
+        waitpid(lnm_pid, NULL, 0);
     }
 
     return 0;

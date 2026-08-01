@@ -157,32 +157,4 @@ uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
                            uint64_t setchar, uint64_t clrchar,
                            uint32_t width, uint32_t page);
 
-/* ================================================================
- * Process table (executive-resident PCB directory)
- *
- * The executive owns the process name, so these are readers and a
- * single writer over shared state -- not accessors for anything this
- * process keeps to itself. A name set here is visible to every other
- * process and survives execve().
- * ================================================================ */
-
-/* Set this process's name ($SETPRN). SS$_DUPLNAM if the name is
- * already in use within this process's UIC group. */
-uint32_t vms_kif_setprn(const char *prcnam);
-
-/* Read this process's row from the executive process table. */
-uint32_t vms_kif_getjpi_self(struct vms_procinfo *info);
-
-/* Resolve a process by VMS PID. SS$_NONEXPR if no such process. */
-uint32_t vms_kif_getjpi_pid(uint32_t vms_pid, struct vms_procinfo *info);
-
-/* Resolve a process by name within this process's UIC group.
- * SS$_NONEXPR if no process in the group holds that name. */
-uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info);
-
-/* Enumerate the process table. Pass *index = 0 for the first row; each
- * call fills info and advances *index. Returns SS$_NONEXPR when the
- * scan is exhausted. */
-uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info);
-
 #endif /* _VMS_KIF_H */

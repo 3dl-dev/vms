@@ -26,39 +26,6 @@
 
 #define SS__NORMAL      0x00000001
 #define SS__BADPARAM    0x00000014
-/*
- * Process-table statuses -- ORACLE-PINNED (vms-8019).
- *
- * SOURCE: the reference lab OpenVMS VAX V7.3 node VAX1 (~/vax/cluster),
- * 2026-07-30, by two independent documented-tool observations:
- *
- *   1. LIBRARY/EXTRACT=$SSDEF/OUTPUT=SYS$SCRATCH:SSDEF.MAR
- *          SYS$LIBRARY:STARLET.MLB
- *      SEARCH SYS$SCRATCH:SSDEF.MAR "IVLOGNAM","DUPLNAM","NONEXPR"
- *        $EQU  SS$_DUPLNAM    148
- *        $EQU  SS$_IVLOGNAM   340
- *        $EQU  SS$_NONEXPR    2280
- *
- *   2. round-trip through the message formatter:
- *        F$MESSAGE(148)  -> %SYSTEM-F-DUPLNAM,  duplicate name
- *        F$MESSAGE(340)  -> %SYSTEM-F-IVLOGNAM, invalid logical name
- *        F$MESSAGE(2280) -> %SYSTEM-W-NONEXPR,  nonexistent process
- *
- * These replace 434 / 596 / 2540, which this tree carried and which the
- * same oracle disproves: F$MESSAGE(596) is %SYSTEM-F-VOLINV, and
- * SS$_VOLINV is 596 in $SSDEF.
- *
- * SS__IVLOGNAM is what the executive returns for a malformed
- * process-name string handed to VMS_IOCTL_SETPRN (unterminated buffer,
- * or zero length). The CHOICE of IVLOGNAM for a bad process name is
- * oracle-pinned too, behaviourally, on the same node:
- *   $ SET PROCESS/NAME="THISNAMEISWAYTOOLONG"
- *   %SET-E-NOTSET, error modifying process name
- *   -SYSTEM-F-IVLOGNAM, invalid logical name
- */
-#define SS__DUPLNAM     148         /* duplicate process name (ssdef.h SS$_DUPLNAM) */
-#define SS__NONEXPR     2280        /* nonexistent process (ssdef.h SS$_NONEXPR) */
-#define SS__IVLOGNAM    340         /* invalid name string (ssdef.h SS$_IVLOGNAM) */
 #define SS__NOPRIV      0x00000024
 #define SS__ACCVIO      0x0000000C
 #define SS__INSFMEM     0x0000002C  /* insufficient memory (44 decimal, matches real VMS) */
@@ -199,28 +166,6 @@ struct vms_proc {
     pid_t               linux_pid;      /* Linux PID (key) */
     uint32_t            vms_pid;        /* VMS-style PID */
 
-    /*
-     * Executive-resident identity. This is the whole point of the
-     * process table: prcnam lives here, in the executive, so it is
-     * visible to every other process and survives execve() (the pid
-     * key does not change across image activation).
-     *
-     * uic is derived by the executive from the task's credentials at
-     * registration -- never supplied by the process, which must not be
-     * able to declare its own UIC. Protected by vms_proc_hash_lock.
-     */
-    char                prcnam[VMS_PRCNAM_SIZE];
-    uint32_t            uic;            /* (group << 16) | member */
-
-    /*
-     * Reference to the backing task's struct pid. The PCB belongs to
-     * the PROCESS, not to an open channel, so it is not destroyed when
-     * /dev/vms is closed (notably the implicit close at exec time).
-     * Liveness is tested through this reference and dead entries are
-     * reaped lazily -- see vms_proc_reap_dead().
-     */
-    struct pid          *pid_ref;
-
     /* Access mode (3a) */
     uint8_t             current_mode;   /* PSL_C_KERNEL..PSL_C_USER */
     uint64_t            cur_privs;      /* current (temporary) privileges */
@@ -266,41 +211,21 @@ struct vms_device {
     uint32_t            devtype;        /* device type code; 0 = Unknown */
 
     /*
-     * shareable mirrors the word the oracle prints in SHOW DEVICE/FULL's
-     * status clause. It decides whether a channel confers ownership, so
-     * it is not decoration. MEASURED, ~/vax OpenVMS VAX V7.3, node VAX2
-     * (docs/oracle/vax73-terminal-device.md section 7):
-     *   "Device NLA0: ... record-oriented device, shareable, mailbox
-     *    device."                                  -> shareable
-     *   "Terminal TTA0: ... is online, record-oriented device, carriage
-     *    control."                                 -> not shareable
-     */
-    uint32_t            shareable;      /* 1 = "shareable" in the status clause */
-
-    /*
-     * OWNERSHIP AND ALLOCATION ARE TWO DIFFERENT THINGS, and both are
-     * measured (docs/oracle/vax73-terminal-device.md section 7):
+     * Ownership comes from ALLOCATION, not from assigning a channel.
+     * This is measured, not assumed: on the ~/vax OpenVMS VAX V7.3 lab
+     * a process that held an open channel to NLA0: left the device's
+     * "Owner process" empty and its "Owner process ID" 00000000, while
+     * ALLOCATE set both and added the word "allocated" to the
+     * SHOW DEVICE/FULL status clause
+     * (docs/oracle/vax73-terminal-device.md sections 7-9).
      *
-     *  - A channel to a NON-shareable device that nobody owns makes the
-     *    assigner the OWNER, with no allocation. TTA0: went from
-     *    Owner "" / refcount 0 to Owner "SYSTEM" / refcount 1 on a bare
-     *    OPEN/WRITE, and its status clause still said only "is online,
-     *    record-oriented device, carriage control" -- no "allocated".
-     *  - A channel to a SHAREABLE device confers nothing. The same DCL
-     *    sequence on NLA0: left Owner "" with the reference count
-     *    moving 2 -> 3 -> 2.
-     *  - $ALLOC sets `allocated`, and it is the only thing that does.
-     *  - Ownership without allocation ends when the owner returns its
-     *    last channel (CLOSE -> Owner "", refcount 0) or dies
-     *    (STOP CHANHOLD -> Owner "", refcount 0). An ALLOCATION outlives
-     *    the channel until $DALLOC or the owner's death.
-     *
-     * refcnt is the device's "Reference count": one per assigned channel
-     * plus one for an outstanding allocation. Implicit ownership costs
-     * no reference (TTA0: one channel -> refcount 1, owned).
+     * refcnt is the device's "Reference count": one per assigned
+     * channel plus one for an outstanding allocation -- also measured
+     * (NLA0: 2 -> 3 -> 2 across an OPEN/CLOSE; OPA0: 2 -> 3 on
+     * ALLOCATE and back to 2 on DEALLOCATE).
      */
-    uint32_t            allocated;      /* 1 while $ALLOC'd to owner_* */
-    uint32_t            owner_pid;      /* VMS pid of the owner, 0 = unowned */
+    uint32_t            allocated;      /* 1 while allocated to owner_* */
+    uint32_t            owner_pid;      /* VMS pid of the allocating process */
     pid_t               owner_linux_pid;
     uint32_t            owner_uic;
     uint32_t            refcnt;
@@ -315,9 +240,10 @@ struct vms_device {
 
     /*
      * Every channel currently assigned to this device, by any process.
-     * The device has to know this to decide when implicit ownership
-     * ends: it ends when the owner has no channel left, not when any
-     * channel is returned.
+     * The device has to know this to answer $ALLOC: the oracle refuses
+     * to allocate a device that another process merely has channels to
+     * (ALLOCATE NLA0: -> %SYSTEM-W-DEVALLOC with the owner field still
+     * empty and a reference count of 2).
      */
     struct list_head    chanlist;       /* of vms_channel.devlink */
 
@@ -364,12 +290,6 @@ struct vms_proc *vms_proc_find(pid_t pid);
 struct vms_proc *vms_proc_find_or_err(void);
 struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_privs);
 void vms_proc_free(struct vms_proc *proc);
-/* Tear down an entry the caller has ALREADY unlinked under
- * vms_proc_hash_lock (the unlink is the ownership claim). */
-void vms_proc_free_claimed(struct vms_proc *proc);
-
-/* Drop table entries whose backing task no longer exists. */
-void vms_proc_reap_dead(void);
 
 /* ================================================================
  * Subsystem ioctl handlers
@@ -410,11 +330,6 @@ long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_alloc(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
-
-/* Process table (executive-resident PCB directory) */
-long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
-long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

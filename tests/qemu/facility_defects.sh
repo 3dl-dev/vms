@@ -190,7 +190,8 @@ run-image-qualifier-refused
 run-qualifier-not-abbreviated
 kstat-deadlock-mismapped
 kstat-ivlockid-mismapped
-kstat-cvtungrant-mismapped"
+kstat-cvtungrant-mismapped
+assign-terminal-bypasses-executive"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1666,6 +1667,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    assign-terminal-bypasses-executive)
+        case "$_f" in
+        facility)     echo "\$ASSIGN to a terminal (src/libvms/syssvc/sys_assign.c), the channel-is-the-identity boundary between the public sys\$ API and the executive's device table (vms-1c57)";;
+        targets)      echo "libvms/syssvc/sys_assign.c";;
+        suites_red)   echo "test_syssvc_qio_terminal";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$assign(\"TT:\") stops calling vms_kif_assign(): the whole executive-registration block is unconditionally skipped, so a terminal channel is granted locally (the real /dev/tty still opens) with no counterpart in the executive's device table at all. This is the exact facade vms-1c57 exists to kill -- a channel obtained through \$ASSIGN that is not the channel the executive issued -- restored verbatim to prove the control can see it.";;
+        require_fail) cat <<'EOF'
+A-WRITES/B-READS: a fresh child sees the reference sys$assign("TT:") added to OPA0: in the executive (public API, cross-process)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1784,6 +1802,9 @@ apply_edit() {
         sed -i 's|case 108: return SS\$_IVLOCKID;|case 108: return SS$_NOTQUEUED; /* NEGCTL kstat-ivlockid-mismapped */|' "$_file";;
     kstat-cvtungrant-mismapped)
         sed -i 's|case 116: return SS\$_CVTUNGRANT;|case 116: return SS$_NOTQUEUED; /* NEGCTL kstat-cvtungrant-mismapped */|' "$_file";;
+
+    assign-terminal-bypasses-executive)
+        sed -i 's|        if (devres.is_terminal) {|        if (0 \&\& devres.is_terminal) { /* NEGCTL assign-terminal-bypasses-executive */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

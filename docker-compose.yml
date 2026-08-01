@@ -1,0 +1,39 @@
+# ============================================================================
+# DEAD LEGACY — NOT AN OVMX RUNTIME TARGET.
+#
+# Operator ruling 2026-07-28 (CLAUDE.md Project-Specific Rule 9): the Docker
+# RUNTIME layer is dead. OVMX has exactly one runtime: the real-kernel / QEMU
+# path, where vms.ko provides the VMS executive via /dev/vms.
+#
+# This image is glibc, has NO /dev/vms, and bypasses IMGACT.EXE + LINK.EXE. It
+# is retained ONLY because CI still depends on it, and is pending removal once
+# those jobs migrate to the musl/QEMU path.
+#
+# DO NOT: add features here, document this as a way to "run OVMX", add new CI
+# jobs on it, or design executive behavior around its lack of /dev/vms (never
+# add a silent per-process fallback -- fail honestly with SS$_NOSUCHDEV).
+#
+# Build/test tooling in Docker is fine and expected: distro/Dockerfile.bootable,
+# src/kernel/Dockerfile, tests/qemu/Dockerfile all produce/test the REAL runtime.
+# ============================================================================
+services:
+  ovmx:
+    build: .
+    image: ovmx:latest
+    ports:
+      - "127.0.0.1:2222:22"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  build:
+    build:
+      context: .
+      target: builder
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - .:/src
+    working_dir: /src
+    entrypoint: ["bash", "-c"]
+    command: ["cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON -DBUILD_TOOLS=ON && cmake --build build -j$(nproc) && cd build && ctest --output-on-failure"]
+    profiles: ["dev"]

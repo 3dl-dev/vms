@@ -454,6 +454,22 @@ admitted-and-stranded. Consistent with §4c.6's SDA reading (`open`, CSID
 `00000000`, no status flags, a numbered transition that never advances).
 Cheaper than SDA and needs no `ANALYZE/SYSTEM`.
 
+**And the state transition is causally confirmed, and the refusal is NOT
+cumulative.** Run `r1B`: `OVMXR1` had been dead ~95 minutes and sat in a clean
+`BRK_NON` — the state a freshly crash-removed node occupies, with no failed
+attempt against it. Its **first** rejoin attempt was refused identically, and the
+CSB moved `BRK_NON → BRK_NEW` as a direct result:
+
+```
+before r1B:  OVMXR1  BRK_NON      after r1B:  OVMXR1  BRK_NEW
+```
+
+So `BRK_NEW` is **not** a self-inflicted trap left by an earlier failed retry —
+a first attempt against a pristine `BRK_NON` fails the same way, and the poison
+is a consequence of the refusal rather than its cause. Two hypotheses die here:
+"our first failed rejoin poisons subsequent ones" and (again, at 95 min) "the
+gap was too short".
+
 ### 4c.3 The refusal is coordinator-side state — proven, not inferred
 
 The agent byte-diffed OVMX's retry `op 0x02` in the run that **succeeded**
@@ -621,6 +637,8 @@ strongest remaining lead — see §5.**
 | `tools/cycle2.sh` | `cycle.sh` plus an **SDA CSB oracle** before the first join, after every cycle, and at the end; `PER_CYCLE_SYSID=1` for per-cycle identity; `CYCLE<N>_ENV` for per-cycle env; `SKIP_RESET=1`. |
 |  `tools/oneshot.sh` | one join against the lab as it stands + SDA dump. **The four-minute loop.** Worth moving into `tools/`. |
 |  `tools/probe.sh` | drive any VAX console, capture between markers. |
+
+Run tags session j (part 2): `r1A` `r2A` joined, `r1B` `r2B` refused, `vax3crash` = the real-VAX crash-rejoin specimen. **Last SCSSYSTEMID used: 1241.**
 
 Run tags session i: `ctl1`, `inc1`, `inc2`, `fresh1`, `fresh2`, `keyB`, `keyC`,
 `rej2`, `rej3`. Session j: `g1A` (joined), `g1B` (refused, SDA-polled), `p1A`

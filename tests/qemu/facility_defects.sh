@@ -1294,7 +1294,17 @@ EOF
         # All three (showterm, ident, lock_status) arrived on separate
         # branches; this list is the UNION, re-derived by running the control
         # on the merged tree rather than kept from one side of the merge.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status";;
+        #
+        # test_syssvc_showusers is the NINTH, added by vms-150, and it arrived
+        # exactly the way every entry above it did: NOT PREDICTED, READ OFF A
+        # RUN. It landed declaring only setterm-binding-not-recorded, and the
+        # full sweep of this manifest on the tree that added it reported it as
+        # one suite outside the declared set and six assertions outside the
+        # named set. It is not a candidate for the blind set below -- its
+        # OBSERVER is the real DCL.EXE, a product image that binds the way a
+        # product image binds, and the subject process it observes is not what
+        # the reds come from.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_showusers";;
         # test_kmod_setterm (vms-d0b) joins the blind set, MEASURED in the
         # same run: it stayed rc=0 with the defect injected, because
         # open_and_register() hand-registers exactly like test_kmod_devtab
@@ -1468,10 +1478,17 @@ F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL
 parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
 parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
 sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
+A-WRITES/B-READS: DCL's SHOW USERS lists a process it did not create and which is not the caller -- a row only the executive's process table could supply
+that row's Username is the name the SUBJECT stamped on itself in the executive -- identity read across a process boundary, through DCL
+that row's PID is the VMS process ID the executive assigned the subject
+...and is NOT the subject's Linux pid, which is what the fabricated row printed before vms-72c
+that row's Terminal is the binding the SUBJECT made (VMS_IOCTL_SETTERM) -- a job-to-terminal binding read by a process that did not make it
+the "Total number of users" figure went up by exactly one when the subject appeared
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-Assertions across six suites go red, and that IS the defect rather than
+Assertions across every suite that binds the way a product image binds go red,
+and that IS the defect rather than
 evidence against it: the mutation deletes the ONE call that binds a process to the executive,
 and a process with no PCB can use no facility. Round 1's own framing of
 this ("only test_kmod_bind goes red") was narrow: true at suite
@@ -1539,6 +1556,19 @@ corollary: the command is a reader of the facility). A suite that drives the
 whole stack SHOULD be sensitive to the whole stack; the defect was that the
 manifest did not SAY so, and an undeclared red is indistinguishable from a
 non-minimal mutation. Saying so is the fix.
+
+test_syssvc_showusers (vms-150) contributes six, and they are ONE consequence
+of the same missing bind arriving at the OBSERVER rather than at the subject.
+Its subject process hand-registers, so the subject is fine; DCL.EXE does not
+-- it binds the way every product image binds, through kif_bind() -- so with
+the registration deleted DCL's vms_kif_procscan() is refused and SHOW USERS
+prints an empty table. Every assertion about the subject's row therefore goes
+with the row, plus the count. What stays GREEN is what makes this attributable
+rather than indiscriminate: the suite's before/after checks assert the row's
+ABSENCE and are satisfied either way, and "the subject established a real
+session in the executive" passes, because the subject's own hand-registered
+calls all still reach the executive. MEASURED with the defect injected, not
+predicted: exactly these six, and nothing else in that suite.
 
 MEASURED ON BOTH ARCHITECTURES, because the red set did not have to agree.
 The x86_64 CI runner (run 30598269086, SHA 5ef2b65) and an aarch64 host under

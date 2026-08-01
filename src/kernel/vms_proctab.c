@@ -199,6 +199,18 @@ static void proc_fill_info(const struct vms_proc *proc,
     info->perm_privs   = proc->perm_privs;
     memcpy(info->username, proc->username, VMS_USERNAME_SIZE);
     info->username[VMS_USERNAME_SIZE - 1] = '\0';
+    /*
+     * The job's terminal is copied out with the rest of the identity --
+     * below the early return above, so a row that hit it never reaches
+     * this line at all. The oracle refused every $GETJPI item on a
+     * cross-group process without WORLD rather than a subset (docs/
+     * oracle/vax73-privileges.md §5), so a caller that may not read the
+     * row's user name may not read which terminal it is on either.
+     * Enforced by tests/qemu/test_kmod_ident.c's scan_d_terminal check
+     * (vms-d0b): it fails if this line is ever hoisted above the return.
+     */
+    memcpy(info->terminal, proc->terminal, VMS_DEVNAM_SIZE);
+    info->terminal[VMS_DEVNAM_SIZE - 1] = '\0';
 }
 
 /*

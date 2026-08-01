@@ -134,7 +134,21 @@ cp /src/kernel/vms.ko /initramfs/lib/modules/ || exit 4
 # Absence is FATAL, never skipped, exactly as in the image build: a missing
 # subject would turn the SHOW SYSTEM and RUN/DETACHED assertions into no-ops
 # with the job still green.
+#
+# TWO COPIES, NOT ONE (found this round, vms-d0b): tests/qemu/Dockerfile
+# stages DCL.EXE at BOTH /initramfs/bin/DCL.EXE (test_syssvc_procnam.c,
+# test_syssvc_showproc.c and test_syssvc_startup_service.c's DCL_IMAGE all
+# execl() this path) AND /initramfs/tests/DCL.EXE (test_syssvc_showdev.c and
+# test_syssvc_showterm.c's DCL_PATH_DEFAULT, overridable via OVMX_DCL). This
+# script used to refresh only the first, so any defect targeting src/vmsdcl
+# whose suite drives DCL through the SECOND path ran against the STALE
+# image-build binary and could never go red -- a facility control with no
+# teeth, discovered when showterm-width-page-fabricated (vmsdcl/dcl_cmd_show.c)
+# rebuilt and linked correctly (confirmed with `strings` on the fresh
+# build-static/bin/DCL.EXE) but produced zero effect on test_syssvc_showterm's
+# output. Both copies must be the SAME freshly rebuilt binary.
 cp /src/repo/build-static/bin/DCL.EXE /initramfs/bin/DCL.EXE || exit 4
+cp /src/repo/build-static/bin/DCL.EXE /initramfs/tests/DCL.EXE || exit 4
 for f in /src/tests/qemu/test_*; do
     [ -x "$f" ] && cp "$f" /initramfs/tests/
 done

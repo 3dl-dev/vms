@@ -164,6 +164,68 @@ static void start_session(const sysuaf_record_t *rec)
         }
     }
 
+    /*
+     * NAME THE SESSION IN THE EXECUTIVE (vms-72c).
+     *
+     * WHY THIS WAS MISSING. vms_kif_setprn() already existed and already
+     * had a product caller (src/libvms/syssvc/sys_process.c, for a
+     * $CREPRC caller that supplies an explicit prcnam) -- but nothing on
+     * the interactive console login path ever called it, so a real,
+     * authenticated, terminal-owning login session sat in the executive's
+     * process table with prcnam == "" forever. Measured on a real QEMU
+     * boot before this change: SHOW PROCESS on the SYSTEM console session
+     * printed `Process name: ""`, and SHOW USERS (once vms-72c also fixed
+     * it to read the process table instead of fabricating a row) could
+     * name every OTHER field of the session but not this one.
+     *
+     * WHAT THE NAME IS, AND WHY: the SYSUAF username, unmodified.
+     * ORACLE-PINNED, not chosen -- VAX1, OpenVMS VAX V7.3, docs/oracle/
+     * vax73-show-system-process.md Section 1: the interactive SYSTEM
+     * session in that capture's own SHOW SYSTEM table is named literally
+     * `SYSTEM` (row "2020021C SYSTEM CUR ..."), i.e. its process name IS
+     * its username, with no decoration. rec->username is already the
+     * upcased SYSUAF key (sysuaf_lookup(), tools/vms_login.c above), so
+     * no separate uppercasing is needed here.
+     *
+     * NOT vms-d0e. vms-d0e asks what the executive should name a process
+     * created with NO explicit prcnam at all (e.g. a bare $CREPRC/RUN
+     * with no /PROCESS_NAME) -- a question that oracle session explicitly
+     * left unpinned (Section 1.3: the detached-process probe died before
+     * answering it). This is a narrower, already-answered question:
+     * LOGINOUT itself, on VMS, supplies an explicit name -- the
+     * account's username -- to $SETPRN as part of establishing the
+     * session, before $CREPRC's own "what if nobody names it" default
+     * ever comes into play. Closing this does not touch vms-d0e's
+     * question, and vms-d0e's tripwire in tests/uat/vms_session_qemu.sh
+     * for an UNNAMED $CREPRC subprocess (SPAWN) is deliberately left in
+     * place below, unchanged, because SPAWN still passes no explicit
+     * prcnam.
+     *
+     * FAILURE IS NOT FATAL, and this is a narrower claim than the block
+     * above it, not the same one reapplied. VMS_IOCTL_SETIDENT failing
+     * means the account this password just authenticated has NO
+     * identity the rest of the system can see -- an unreachable state on
+     * VMS, so login must not hand over a session in it. A name collision
+     * (SS$_DUPLNAM: this exact username is already logged in elsewhere
+     * in the same UIC group) is a different, genuinely reachable VMS
+     * state -- OpenVMS handles it by uniquifying the name
+     * (SMITH, SMITH_1, ...), which OVMX does not implement here (no
+     * concurrent-same-user login is exercised by any test on this
+     * runtime, and inventing the suffix format without an oracle
+     * transcript to pin it against would be exactly Rule 10's illegal
+     * third answer). So on DUPLNAM the session proceeds unnamed rather
+     * than refused outright: a nameless interactive session is a real,
+     * already-disclosed OVMX divergence (vms-d0e) and strictly better
+     * than refusing a login the password legitimately authenticated.
+     * The failure is still reported, not swallowed silently.
+     */
+    {
+        uint32_t nst = vms_kif_setprn(rec->username);
+        if (!(nst & 1))
+            printf("%%OVMX-I-NOPRCNAM, the executive did not name this "
+                   "session (status %u)\n", (unsigned)nst);
+    }
+
     /* Set up environment for session.
      * VMS_DEFAULT_DIR is a VMS directory spec from SYSUAF.
      *
@@ -335,6 +397,38 @@ static int console_login(void)
         if (read_password(password, sizeof(password)) < 0)
             return 1;
 
+        /*
+         * "User authorization failure" -- SAME TEXT for an unknown
+         * username and a wrong password, DELIBERATELY, on both branches
+         * below. That is not this file's invention: VMS uses one
+         * message for both causes precisely so a failed login cannot be
+         * used to learn which half was wrong (username enumeration).
+         *
+         * PINNED, per Rule 10 ("do not invent ... verify it" -- this
+         * item's own scope note), not carried over unexamined from
+         * whoever wrote it first. The ~/vax/cluster lab was mid-use for
+         * an unrelated cluster experiment for the whole of this item
+         * (reset3.sh/nodedrv.py running against all three nodes,
+         * `ps aux` checked before touching anything) and Rule 10
+         * explicitly allows citing public documentation instead of
+         * taking it. Verbatim Example 6 of the VMS Help "Login"
+         * reference (a mirrored HP/Compaq OpenVMS documentation page,
+         * https://marc.vos.net/books/vms/help/login/ -- OpenVMS Alpha
+         * V6.2, node LSR), console transcript:
+         *
+         *     Username: JONES
+         *     Password: <PASSWORD>
+         *     User authorization failure
+         *      <Return>
+         *     Username: JONES
+         *
+         * -- the exact text, lowercase after the first letter, one line,
+         * immediately after the failed Password: entry and before the
+         * next Username: prompt. This is a WEB-SOURCED public-doc pin,
+         * not a lab capture; if the lab is later free, re-verifying
+         * against a live ~/vax console transcript is still worth doing
+         * and would supersede this citation, not contradict it.
+         */
         /* Look up user */
         memset(&user_rec, 0, sizeof(user_rec));
         if (sysuaf_lookup(username, &user_rec) < 0) {

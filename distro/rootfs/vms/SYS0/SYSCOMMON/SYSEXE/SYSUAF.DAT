@@ -1,9 +1,21 @@
 # System User Authorization File
 # Format: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
 # Password hash is SHA256 hex. Empty = no password required.
-SYSTEM||1|4|SYS$SYSDEVICE:[SYSMGR]||ALL
+# SYSTEM/GUEST carry REAL hashes (vms-72c) -- the plaintext passwords
+# tests/uat/vms_session_qemu.sh and this comment both name are MANAGER and
+# GUEST respectively. Before this item every account here shipped an EMPTY
+# hash, so sysuaf_authenticate() (src/libvms/rtl/sysuaf.c) accepted ANY
+# password for ANY account -- measured directly against a real QEMU boot:
+# 'SYSTEM' + a deliberately wrong password reached the DCL prompt. That is
+# the exact veracity gap vms-72c's DONE CONDITION names ("a bad password is
+# refused"), so it is closed here rather than only in the login code path.
+# OPERATOR/DEFAULT/USER1/USER2 are UNCHANGED and remain passwordless --
+# not exercised by any login test, and giving every shipped account a real
+# password is a broader security hardening pass this item did not measure
+# or scope; reported, not silently fixed.
+SYSTEM|36a708df24b4751520ee64bba2d92167294acbb8f8fbfc3a120fb75323e9739b|1|4|SYS$SYSDEVICE:[SYSMGR]||ALL
 OPERATOR||1|6|SYS$SYSDEVICE:[SYSMGR]||OPER,SYSPRV,TMPMBX,NETMBX
 DEFAULT||200|200|SYS$SYSDEVICE:[USERS.DEFAULT]||TMPMBX,NETMBX
-GUEST||200|201|SYS$SYSDEVICE:[USERS.GUEST]||TMPMBX
+GUEST|16ceb2796ccd9d52d4f2a92134ef9ecfeb8f016150a82d36b299d09d5b9963f0|200|201|SYS$SYSDEVICE:[USERS.GUEST]||TMPMBX
 USER1||200|202|SYS$SYSDEVICE:[USERS.USER1]||TMPMBX,NETMBX
 USER2||200|203|SYS$SYSDEVICE:[USERS.USER2]||TMPMBX,NETMBX

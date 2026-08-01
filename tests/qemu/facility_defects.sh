@@ -176,8 +176,12 @@ lock-compat-ex-cr
 lock-compat-cr-ex
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
+setterm-binding-not-recorded
+showterm-width-page-fabricated
+showterm-width-page-oracle-shaped
 proctab-duplicate-name
 proctab-crossgroup-identity
+proctab-terminal-redaction-bypassed
 ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
@@ -190,7 +194,8 @@ run-image-qualifier-refused
 run-qualifier-not-abbreviated
 kstat-deadlock-mismapped
 kstat-ivlockid-mismapped
-kstat-cvtungrant-mismapped"
+kstat-cvtungrant-mismapped
+assign-terminal-bypasses-executive"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -601,6 +606,135 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    setterm-binding-not-recorded)
+        case "$_f" in
+        facility)     echo "job-to-terminal binding (VMS_IOCTL_SETTERM, read back through GETJPI)";;
+        targets)      echo "kernel/vms_devtab.c";;
+        suites_red)   echo "test_kmod_setterm test_syssvc_showterm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "VMS_IOCTL_SETTERM still resolves the channel, still refuses a channel the caller does not hold, still checks the device class and still returns SS\$_NORMAL -- it just never writes the name into the executive's process row. The caller is told the binding was made and no other process can see it, which is the precise shape of the facade CLAUDE.md rule 11 exists to catch: correct-looking output, nothing shared. Everything else in the device table is untouched (SHOW DEVICE, \$ALLOC, IO\$_SETMODE and their suites all stay green), so this isolates the BINDING from the device table it is built on.";;
+        require_fail) cat <<'EOF'
+A-WRITES/B-READS: B reads OPA0: out of A's row -- a binding a different process made, which a per-process binding could not show
+SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+A's own row now names the console
+the freshly activated image still finds its terminal -- nothing was carried across execve() in userspace
+and B's row now names the console
+the bound name is the device table's name for that channel
+the characteristics heading is printed (oracle section 2)
+grid row 1 is byte-for-byte the V7.3 capture
+grid row 2 is byte-for-byte the V7.3 capture
+grid row 4 is byte-for-byte the V7.3 capture
+grid row 10 is byte-for-byte the V7.3 capture
+the last row carries the single remaining characteristic, unpadded
+...and the cleared Echo bit, in the grid cell the oracle prints it in
+...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
+...and grid row 1 is the oracle's bytes again, so neither is the grid
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+Every entry is the SAME missing write, observed further downstream, and the
+set was MEASURED by running the mutation rather than predicted.
+
+The first four are test_kmod_setterm's remaining reads of a binding that was
+never recorded: the binder's own row, the row the re-execed image reads, the
+second binder's row, and the cross-check that the recorded name is the device
+table's name for that channel. No finer mutation separates them -- there is
+exactly one write, and every one of these is a read of it.
+
+The rest are test_syssvc_showterm's, and they are all one consequence:
+cmd_show_terminal reads the binding FIRST and prints nothing at all when there
+is none, so with the write gone, the entire SHOW TERMINAL output disappears
+and every assertion about its content goes with it -- the header, each pinned
+grid row, and both directions of the A-writes/B-reads characteristic check.
+That is not a second defect: it is the reader behaving exactly as it must
+when the executive reports no terminal.
+
+NOT HERE, AND MEASURED RATHER THAN ASSUMED (vms-d0b): the three Width/Page
+assertions this list used to carry are gone, not just renamed. SHOW TERMINAL
+stopped printing a Width/Page line at all (this fix deleted the one-line
+layout that was never oracle-observed -- see
+show_terminal_render() in src/vmsdcl/dcl_cmd_show.c), so
+tests/qemu/test_syssvc_showterm.c now asserts Width/Page's ABSENCE in every
+state. An absence check is trivially satisfied when the whole binding
+disappears -- there being no Width/Page line either way -- so this mutation
+cannot make it red, and re-running the control after the round-3 edit
+confirmed exactly that: test_syssvc_showterm's contribution to the red set
+(require_fail's 1 plus this suite's share of knock_on_fail) shrank from 13 to
+10 without this manifest changing, until this entry was corrected to match.
+
+What stays GREEN is what makes this isolated rather than a blunderbuss: the
+unbound run still names nothing, the SS$_IVCHAN refusal still fires, the row
+still disappears when the job exits, and every other device-table and
+process-table suite is untouched.
+EOF
+                      ;;
+        esac;;
+
+    showterm-width-page-fabricated)
+        case "$_f" in
+        facility)     echo "SHOW TERMINAL renderer, Width/Page absence (show_terminal_render(), vms-d0b)";;
+        # DCL, not vms.ko -- the absence is a DISPLAY choice, not an
+        # executive fact (Width/Page are already A-writes/B-reads proven
+        # at the kernel layer by test_kmod_devtab.c). One of the entries
+        # whose property lives in the product half of the interface; see
+        # the "outside vms.ko" note near the top of this file for the set
+        # (not a position within it -- that note names them, it does not
+        # number them, and neither does this one).
+        targets)      echo "vmsdcl/dcl_cmd_show.c";;
+        suites_red)   echo "test_syssvc_showterm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "show_terminal_render() prints a fabricated Width/Page line -- exactly the ONE-LINE layout vms-d0b deleted because docs/oracle/vax73-terminal-device.md never shows it (section 2 puts Width and Page on separate lines, each sharing the line with fields OVMX cannot source). Nothing else in the renderer changes: the header, the characteristic grid and every other row print exactly as before, so only the three assertions that require a Width/Page VALUE'S absence -- not one particular line's absence, see showterm-width-page-oracle-shaped below for why that distinction has its own defect -- can see this.";;
+        require_fail) cat <<'EOF'
+SHOW TERMINAL prints no Width or Page VALUE anywhere in its output, in any layout -- not the one-line form vms-d0b deleted and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity block either, with its unsourceable fields left blank (docs/oracle/vax73-terminal-device.md section 2)
+...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
+...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    showterm-width-page-oracle-shaped)
+        case "$_f" in
+        facility)     echo "SHOW TERMINAL renderer, Width/Page absence -- SECOND SHAPE (show_terminal_render(), vms-d0b)";;
+        # THE DEFECT showterm-width-page-fabricated'S TEETH WERE SPELLING-
+        # SPECIFIC, MEASURED. An adversary injected the ORACLE-SHAPED
+        # two-line Width/Page block instead of the invented one-line
+        # layout -- the exact "pin it, leave the unsourceable fields
+        # blank" option show_terminal_render()'s own comment names and
+        # rejects -- and the has_line_prefix()-based checks that existed
+        # at the time never saw it: "   Width:" and "   Page:" only open
+        # the ONE-LINE form; in the oracle's own layout they sit mid-line
+        # after "   Input:" / "   Output:", so a line-PREFIX check is
+        # blind to them. test_syssvc_showterm went 18/0 with the property
+        # it exists to forbid actively happening. The fix was at the
+        # ASSERTION (has_substr() over the whole capture, not
+        # has_line_prefix()), not here; this entry exists so that fixed
+        # assertion is PROVEN against the shape that defeated the old one,
+        # the same way its sibling proves it against the first shape.
+        targets)      echo "vmsdcl/dcl_cmd_show.c";;
+        suites_red)   echo "test_syssvc_showterm";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "show_terminal_render() prints a fabricated Width/Page block in the OTHER shape vms-d0b considered and rejected -- the oracle's own two-line Input:/Output:/LFfill:/CRfill:/Width:/Page:/Parity: layout (docs/oracle/vax73-terminal-device.md section 2), with the fields OVMX cannot source (Input, Output, LFfill, CRfill, Parity) left blank rather than invented. That blank-field pinning was rejected in the renderer's own comment as 'the same fabrication one field further in', and this control is the proof: it must be caught by the same three assertions as its one-line sibling, not by a fourth assertion invented to notice this specific spelling.";;
+        require_fail) cat <<'EOF'
+SHOW TERMINAL prints no Width or Page VALUE anywhere in its output, in any layout -- not the one-line form vms-d0b deleted and not the oracle's own two-line Input/Output/LFfill/CRfill/Width/Page/Parity block either, with its unsourceable fields left blank (docs/oracle/vax73-terminal-device.md section 2)
+...still no Width or Page value anywhere in the output while the width IS 80 at the executive -- not printing it is a display choice, not a value the reader lost
+...and still no Width or Page value anywhere in the output once the width is back to 132 -- the absence does not track the value either
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     proctab-duplicate-name)
         case "$_f" in
         facility)     echo "process table (VMS_IOCTL_SETPRN/GETJPI/PROCSCAN)";;
@@ -679,13 +813,17 @@ an unprivileged process is REFUSED a process in another UIC group
 ... and gets no part of that process's identity
 ... and the refusal returns no part of the row
 ... but WITHOUT its user name, UIC or privilege mask
+TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
 EVERY EXTRA IS THE SAME REFUSAL SEEN FROM A DIFFERENT SIDE, not a second
-property. All seven were MEASURED by running this control, not predicted:
+property. All eight were MEASURED by running this control, not predicted:
 the first run named only the two SHOW-PROCESS assertions and the driver's
-equality check rejected it and printed the rest.
+equality check rejected it and printed the rest. The eighth (the terminal
+one) arrived on a LATER run, the same way -- not predicted, READ OFF A RUN --
+after vms-d0b added a terminal field to the same redacted row this control
+already opens up (see below).
 
 "the by-PID refusal printed no process header" is the paired negative of the
 require_fail assertion above: with the read wrongly ALLOWED, SHOW PROCESS/ID
@@ -711,16 +849,31 @@ and the row redaction -- which is the design, not a coincidence: identity is
 privileged and enumeration is not (docs/oracle/vax73-privileges.md Section
 5.5), and this clause is where that split is decided.
 
-THE FIVE test_kmod_ident REDS are the SAME clause one layer down, at the raw
+THE SIX test_kmod_ident REDS are the SAME clause one layer down, at the raw
 ioctl rather than through the public sys$ API and DCL. That suite's own
 wording says so -- "WORLD CLAUSE ISOLATED: the same cross-group read, now
 without WORLD -> SS$_NOPRIV" is vms-2b8's isolation of exactly this
-condition. Its other four are that assertion's paired negatives (the refusal
-must return no part of the row) and the unprivileged-caller form of it. There
-is no finer edit available: vms_proc_may_read() IS the clause, and every
-suite that exercises a cross-group read reaches it. Splitting the mutation
-further would mean mutating a caller instead of the rule, which would test
-the caller.
+condition. Four more are that assertion's paired negatives (the refusal
+must return no part of the row) and the unprivileged-caller form of it.
+There is no finer edit available: vms_proc_may_read() IS the clause, and
+every suite that exercises a cross-group read reaches it. Splitting the
+mutation further would mean mutating a caller instead of the rule, which
+would test the caller.
+
+THE SIXTH, the terminal one, is the SAME clause reaching a field that did
+not exist when the other five were written. vms_ioctl_procscan() (src/
+kernel/vms_proctab.c) calls proc_fill_info() with vms_proc_may_read()'s
+outcome as `full`, and proc_fill_info() withholds proc->terminal on exactly
+that condition (vms-d0b) -- the identical decision "the UNREADABLE row
+fabricates NO CPU figure at all" names two paragraphs up, for a field
+added later. With the WORLD clause deleted, D's row stops being redacted
+altogether, so test_kmod_ident's D genuinely has a terminal to leak (it
+binds one, see process_d() in that file) and this control makes it leak.
+The check is proctab-terminal-redaction-bypassed's OWN concern from the
+other direction -- that control mutates proc_fill_info() directly and
+reddens only this one assertion; this control mutates the authorisation
+one layer up and reddens six, one of which happens to be the same
+assertion, MEASURED, not designed to overlap.
 
 NOT reddened, and worth stating because it is the attribution: the
 SAME-GROUP reads stay green throughout (SHOW PROCESS <name> on the subject,
@@ -731,6 +884,35 @@ survives the mutation. That is the measured evidence that this control names
 the cross-group AUTHORISATION and nothing else.
 EOF
                       ;;
+        esac;;
+
+    proctab-terminal-redaction-bypassed)
+        case "$_f" in
+        facility)     echo "process table, terminal field on a redacted row (proc_fill_info(), vms-d0b)";;
+        targets)      echo "kernel/vms_proctab.c";;
+        # This is proc_fill_info()'s OWN clause, not vms_proc_may_read()'s:
+        # the caller's authorisation is untouched, so vms_ioctl_getjpi()'s
+        # direct refusal (SS$_NOPRIV, no row at all) never calls
+        # proc_fill_info() with full=false in the first place and cannot
+        # observe this defect. Only vms_ioctl_procscan() calls it that way
+        # (SHOW SYSTEM / PROCSCAN enumeration), so test_kmod_ident's scan_d
+        # check -- the only assertion in the tree that binds a real terminal
+        # to a process it then reads back through a redacted PROCSCAN row --
+        # is the only place this can go red. MEASURED: the full 25-suite
+        # sweep with the mutation applied reddened exactly this one
+        # assertion, nothing in test_syssvc_showproc or test_syssvc_procnam
+        # (both drive $GETJPI, which never reaches the mutated line).
+        suites_red)   echo "test_kmod_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "proc_fill_info() copies proc->terminal into the redacted branch, BEFORE the early return that withholds the rest of the identity (linux_pid, uic, privileges, username). vms_pid and prcnam are legitimately copied before that return too (the oracle shows SHOW SYSTEM naming every process including cross-group ones), but terminal is identity data the oracle refused with everything else (docs/oracle/vax73-privileges.md §5) -- so copying it before the return, rather than after with username, hands an enumerating caller a fact about a process it may not \$GETJPI.";;
+        require_fail) cat <<'EOF'
+TERMINAL REDACTION: the scan withholds D's terminal too, even though D genuinely bound one -- a caller that may not read D's identity may not read which terminal D is on either
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     ident-username-unguarded)
@@ -932,15 +1114,27 @@ EOF
         # away from the executive. The two arrived on separate branches; this
         # list is the UNION, re-derived by running the control on the merged
         # tree rather than kept from either side of the rebase conflict.
-        # test_syssvc_ident is the SIXTH, added by vms-2b8 (this round) when
-        # SHOW PROCESS/SHOW PROCESS_PRIVILEGES became readers of the
-        # executive's identity row. Same arrival as the others -- NOT
-        # predicted, READ OFF A RUN of this dispatch's own
-        # run_facility_negctl.sh bind-client-no-register: it landed declaring
-        # only ident-username-unguarded (via blind_suites), and this is the
-        # first time this facility's control ran end-to-end since. Reddened
-        # here, one suite outside the declared set and 14 assertions outside
-        # the named set -- test_syssvc_ident.c drives DCL.EXE exactly as
+        # test_syssvc_showterm is the SIXTH, added by vms-d0b, and it arrived
+        # the same way every one of the others did -- NOT PREDICTED, READ OFF
+        # A RUN. The full sweep this dispatch required reported it as one
+        # suite outside the declared set and 9 assertions outside the named
+        # set, which is both directions of the equality check firing at once,
+        # which is the check working. It belongs here for the same reason
+        # test_syssvc_showdev does: it drives the REAL DCL.EXE, a product
+        # image that binds the way a product image binds, so deleting
+        # kif_bind()'s registration takes the whole command away from the
+        # executive. It is not a candidate for the blind set below -- it
+        # hand-registers nothing.
+        #
+        # test_syssvc_ident is the SEVENTH, added by vms-2b8 when SHOW
+        # PROCESS/SHOW PROCESS_PRIVILEGES became readers of the executive's
+        # identity row. Same arrival as the others -- NOT predicted, READ OFF
+        # A RUN of this dispatch's own run_facility_negctl.sh
+        # bind-client-no-register: it landed declaring only
+        # ident-username-unguarded (via blind_suites), and this is the first
+        # time this facility's control ran end-to-end since. Reddened here,
+        # one suite outside the declared set and 14 assertions outside the
+        # named set -- test_syssvc_ident.c drives DCL.EXE exactly as
         # test_syssvc_showdev and test_syssvc_startup_service do (real
         # product image, kif_bind()-mediated), so it was never a candidate
         # for the blind_suites set below either.
@@ -957,6 +1151,7 @@ EOF
         # run_facility_negctl.sh bind-client-no-register named exactly
         # these two as unnamed before this entry was corrected, and zero
         # after -- nothing else in this suite or any other moved.
+        #
         # test_syssvc_lock_status is the EIGHTH, added by vms-2e5 when the
         # kstat_to_ss() public-status-mapping suite was written -- and it
         # arrived the SAME way every other addition above did: NOT predicted,
@@ -967,8 +1162,17 @@ EOF
         # so it is a genuine detector of this defect, not a widening of the
         # blind set below. See knock_on_why for what it reddens and why the
         # suite EXITS BY SIGNAL (rc=141) rather than completing.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_ident test_syssvc_lock_status";;
-        blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
+        #
+        # All three (showterm, ident, lock_status) arrived on separate
+        # branches; this list is the UNION, re-derived by running the control
+        # on the merged tree rather than kept from one side of the merge.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status";;
+        # test_kmod_setterm (vms-d0b) joins the blind set, MEASURED in the
+        # same run: it stayed rc=0 with the defect injected, because
+        # open_and_register() hand-registers exactly like test_kmod_devtab
+        # and test_kmod_procnam beside it. That is the pattern the blind_why
+        # paragraph below says is still spreading -- and it spread again.
+        blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock test_kmod_setterm";;
         blind_why)    cat <<'EOF'
 The suites named in blind_suites above drive the product's own vms_kif
 client, so restoring the vms-9fc defect (kif_bind() no longer calling
@@ -1098,6 +1302,25 @@ the cluster state word agrees with the status: flag 1's bit is SET
 the second process allocated OPA0: through the executive ($ALLOC)
 A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show
 the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table
+bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table
+the listing carries the oracle's column header (section 4)
+SHOW DEVICE OPA0: resolves the name through the executive and prints its row
+the console is still listed once the other process is gone
+...and refuses it with the oracle's own message (section 6)
+a second process put the console in a known state through the executive (IO$_SETMODE)
+SHOW TERMINAL names _OPA0: once the executive holds the binding -- the SAME BINARY that named nothing a moment ago
+the characteristics heading is printed (oracle section 2)
+grid row 1 is byte-for-byte the V7.3 capture
+grid row 2 is byte-for-byte the V7.3 capture
+grid row 4 is byte-for-byte the V7.3 capture
+grid row 10 is byte-for-byte the V7.3 capture
+the last row carries the single remaining characteristic, unpadded
+could not tell the second process to change the console
+could not tell the second process to restore the console
+...and the cleared Echo bit, in the grid cell the oracle prints it in
+...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
+...and grid row 1 is the oracle's bytes again, so neither is the grid
+this process, which bound nothing, still has no terminal -- the bindings belonged to the DCL jobs, not to the device or to the system
 A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
 A: SHOW PROCESS reports the UIC the EXECUTIVE holds
 A: SHOW PROCESS reports the user name the EXECUTIVE holds
@@ -1235,21 +1458,23 @@ RE-RUN THIS ITEM WAS ASKED TO DO, NOT PREDICTED. test_syssvc_showdev.c
 exists to prove SHOW DEVICE is a READER of the executive device table
 (vms-fb9), so it $CREPRCs a second process and has it $ALLOC the console
 while the first process's SHOW DEVICE watches for the change (A-writes,
-B-reads, Rule 11). Three of its assertions went red that this manifest did
-not name; the other three ("the caller has a row in the executive's process
-table", "sys$creprc created the subject process", "sys$creprc returned the
-subject's VMS process ID") are the SAME missing-bind failure
-test_syssvc_showproc already declares, word for word, so they need no
-second entry --
-the equality check compares a SET, not a per-suite tally. The three that ARE
-new are downstream of the same handshake failure suite 3/showproc already
-explain: with the subject process unable to register, its $ALLOC of OPA0:
-never happens, so the parent's SHOW DEVICE never observes an allocated row
-("the second process allocated OPA0:", "A-WRITES/B-READS: ..."), and neither
-does the bare listing that cross-checks it against $DEVICE_SCAN ("the bare
-listing shows it too, ..."). Nothing about $DEVICE_SCAN or $GETDVI itself is
-being tested by this red set; it is the same registration wall, observed
-through a sixth door.
+B-reads, Rule 11). Its reds fall into three groups, none hand-recited as a
+count (see the set itself, above `knock_on_fail)`, not a tally here):
+  - "the caller has a row in the executive's process table", "sys$creprc
+    created the subject process" and "sys$creprc returned the subject's VMS
+    process ID" are the SAME missing-bind failure test_syssvc_showproc
+    already declares, word for word, so they need no second entry -- the
+    equality check compares a SET, not a per-suite tally;
+  - "the second process allocated OPA0: ...", "A-WRITES/B-READS: DCL's SHOW
+    DEVICE reports the console allocated ..." and "the bare listing shows it
+    too, ..." are downstream of that same handshake failure: with the
+    subject process unable to register, its $ALLOC of OPA0: never happens,
+    so the parent's SHOW DEVICE never observes an allocated row;
+  - "bare SHOW DEVICE lists OPA0: ...", "the listing carries the oracle's
+    column header ...", "SHOW DEVICE OPA0: resolves the name ...", "the
+    console is still listed once the other process is gone" and "...and
+    refuses it with the oracle's own message ..." are a THIRD mechanism,
+    found this round (vms-d0b r4) -- see below.
 
 WHY THIS WAS RED ON THE TREE BEFORE THIS ROUND, AND WHY THAT IS NOT AN
 EXCUSE. test_syssvc_showdev.c does not hand-register -- open /dev/vms only
@@ -1263,6 +1488,32 @@ and literal text), nothing had actually EXECUTED it end to end since
 test_syssvc_showdev landed. Declared here the moment that execution happened,
 per CLAUDE.md Rule 9 -- a pre-existing gap discovered while re-running the
 full proof set is still owned by whoever's push would otherwise carry it red.
+
+THE THIRD GROUP, AND A SEPARATE INFRASTRUCTURE DEFECT THIS ROUND FOUND AND
+FIXED (vms-d0b r4). tests/qemu/inject_and_run.sh re-stages the rebuilt
+DCL.EXE into the initramfs at ONE path, /initramfs/bin/DCL.EXE -- but
+tests/qemu/Dockerfile stages it at TWO, because test_syssvc_showdev.c and
+test_syssvc_showterm.c both default DCL_PATH to /tests/DCL.EXE (overridable
+via OVMX_DCL), not /bin/DCL.EXE. Every defect whose target is under
+src/vmsdcl, or reaches DCL.EXE through a library it links (as this one does,
+through libvmssys), was therefore driving a STALE, unmutated DCL.EXE at that
+second path -- a facility control with no teeth for exactly the assertions
+that read DCL's OWN output, discovered when showterm-width-page-fabricated
+(added this round, target src/vmsdcl/dcl_cmd_show.c) rebuilt and linked
+correctly (confirmed with `strings` on the fresh build-static/bin/DCL.EXE)
+but produced zero observable effect through /tests/DCL.EXE. Fixed by copying
+the same freshly-built binary to both paths. The fix makes DCL.EXE's OWN
+vms_kif calls (inside cmd_show_device(), reached through libvms) subject to
+this mutation for the FIRST time in a full sweep, which is why these five are
+new: they are the SHOW DEVICE READER path failing to bind, not the $ALLOC
+writer path the second group above already covers. Measured, not predicted --
+tests/qemu/run_facility_negctl.sh's own equality check named exactly these
+five as extra reds on the first full sweep run after the inject_and_run.sh
+fix, and they are added here rather than the harness fix being reverted,
+because the fix is a genuine coverage improvement (this control now proves
+more than it did before) and reverting it to keep this list short would be
+re-hiding a gap the file's own header calls the one thing it is not allowed
+to do.
 THE LAST NINE, in test_syssvc_startup_service, are the same missing bind
 arriving at the USER-VISIBLE COMMAND (vms-47b). DCL.EXE is a product image and
 binds like one -- through kif_bind() -- so with that call deleted RUN/DETACHED
@@ -1275,6 +1526,39 @@ which is exactly the property the require_fail entries name one and two layers
 down. This entry was ABSENT while that suite existed -- the branch that added
 the suite never ran the whole sweep -- so the control was failing on an
 unnamed red set rather than passing on a named one.
+TEST_SYSSVC_SHOWTERM, THE SEVENTH SUITE (vms-d0b) -- READ OFF THE FULL SWEEP
+THAT ITEM WAS REQUIRED TO RUN, NOT PREDICTED, and it arrived on the very first
+execution after the suite was written. It drives the real DCL.EXE too, so it
+reaches the same wall from a seventh door, and its nine reds split in two:
+  - "a second process put the console in a known state through the executive
+    (IO$_SETMODE)" is the wall itself. That process cannot register, so its
+    $ASSIGN of the console fails and the IO$_SETMODE that follows has no
+    channel.
+  - the other eight are all one consequence of one line. cmd_show_terminal
+    asks the executive which terminal this job is on BEFORE anything else,
+    and prints nothing at all when it gets no answer -- so with no bind the
+    entire SHOW TERMINAL output disappears and every assertion about its
+    content goes with it: the header, the four pinned grid rows, the last
+    row, and the width/page line.
+The remaining eight are the rest of that same collapse, and they are here
+because of a MEASUREMENT MISTAKE WORTH RECORDING RATHER THAN QUIETLY FIXING.
+The first sweep saw only nine reds from this suite -- because the suite DIED
+at that point. Its writer process could not register, exited, and the parent's
+next write to the gate pipe killed the program with SIGPIPE (rc=141), so the
+whole second half of the suite never ran and could not be observed. The fix
+for that (ignoring SIGPIPE so the writes fail into their checked branches)
+made the suite run to completion under the mutation and reveal eight further
+reds -- the two "could not tell the second process ..." pipe writes, the three
+A-writes/B-reads reads of a change that was never made, the two restore-side
+reads, and the final check, which is $GETJPI(self) and fails like every other
+bound call. So the DECLARED SET GREW BECAUSE THE OBSERVATION GOT BETTER, not
+because the defect changed. This is the shape the equality check exists to
+force: a truncated observation produces a truncated declaration, and only
+running it again catches that.
+What stays GREEN in that suite is what keeps this from looking like a
+blunderbuss: its unbound run still correctly names no terminal.
+Its sibling test_kmod_setterm stays green entirely and is declared in
+blind_suites for the reason the paragraph above gives: it hand-registers.
 MERGED (vms-47b round 5, rebase onto main after vms-6a7/vms-2a8): this defect's
 declaration forked into two branches that each added a suite without seeing
 the other's addition -- main gained test_syssvc_showproc and the two event-flag
@@ -1666,6 +1950,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    assign-terminal-bypasses-executive)
+        case "$_f" in
+        facility)     echo "\$ASSIGN to a terminal (src/libvms/syssvc/sys_assign.c), the channel-is-the-identity boundary between the public sys\$ API and the executive's device table (vms-1c57)";;
+        targets)      echo "libvms/syssvc/sys_assign.c";;
+        suites_red)   echo "test_syssvc_qio_terminal";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$assign(\"TT:\") stops calling vms_kif_assign(): the whole executive-registration block is unconditionally skipped, so a terminal channel is granted locally (the real /dev/tty still opens) with no counterpart in the executive's device table at all. This is the exact facade vms-1c57 exists to kill -- a channel obtained through \$ASSIGN that is not the channel the executive issued -- restored verbatim to prove the control can see it.";;
+        require_fail) cat <<'EOF'
+A-WRITES/B-READS: a fresh child sees the reference sys$assign("TT:") added to OPA0: in the executive (public API, cross-process)
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -1715,6 +2016,38 @@ apply_edit() {
         # assignment in the file, so a second apply finds no match and is the
         # no-op the selftest requires.
         sed -i 's|    info->allocated = dev->allocated;|    info->allocated = 0; /* NEGCTL devtab-alloc-not-recorded */|' "$_file";;
+    setterm-binding-not-recorded)
+        # vms_ioctl_setterm() has exactly one write to proc->terminal, and it
+        # is the only strscpy in the file whose destination is a proc field --
+        # so anchoring on it directly is unambiguous, and a second apply finds
+        # no match and is the no-op the selftest requires. Everything else in
+        # the ioctl still runs: the channel is still resolved, the device
+        # class is still checked, and SS$_NORMAL is still returned, so the
+        # caller is told the binding was made and only the SHARED RECORD of it
+        # is missing. That is the facade shape exactly.
+        sed -i 's|    strscpy(proc->terminal, devnam, sizeof(proc->terminal));|    /* NEGCTL setterm-binding-not-recorded: the binding is not recorded */|' "$_file";;
+    showterm-width-page-fabricated)
+        # The ONE edit: restore a Width/Page line ahead of the characteristic
+        # grid, exactly the one-line layout vms-d0b deleted as an invented
+        # oracle format. Anchored on the exact original statement
+        # (printf("Terminal Characteristics:\n");, the only occurrence in the
+        # file) and the replacement swaps that trailing printf() for a
+        # behaviourally identical puts() -- same bytes on stdout, since the
+        # format string carries no conversion and puts() supplies its own
+        # newline -- so the literal anchor text does not survive the edit and
+        # a second apply finds no match, which is the no-op the selftest
+        # requires.
+        sed -i 's|    printf("Terminal Characteristics:\\n");|    printf("   Width:%4u      Page:%5u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-fabricated: restores the deleted one-line layout */ puts("Terminal Characteristics:");|' "$_file";;
+    showterm-width-page-oracle-shaped)
+        # The ONE edit: restore the OTHER rejected layout -- the oracle's own
+        # two-line Input:/Output:/LFfill:/CRfill:/Width:/Page:/Parity: block,
+        # with the fields OVMX cannot source left blank -- ahead of the
+        # characteristic grid. Same anchor as its sibling
+        # (printf("Terminal Characteristics:\n");, the only occurrence in the
+        # file) and the same trailing printf()->puts() substitution, so the
+        # literal anchor text does not survive the edit and a second apply
+        # finds no match, which is the no-op the selftest requires.
+        sed -i 's|    printf("Terminal Characteristics:\\n");|    printf("   Input:            LFfill:         Width:%4u      Parity:\\n   Output:           CRfill:         Page: %4u\\n\\n", info->width, info->page); /* NEGCTL showterm-width-page-oracle-shaped: restores the oracle-shaped two-line layout, unsourceable fields left blank */ puts("Terminal Characteristics:");|' "$_file";;
     proctab-duplicate-name)
         sed -i 's|if (clash \&\& clash != proc) {|if (0 \&\& clash != proc) { /* NEGCTL proctab-duplicate-name */|' "$_file";;
     proctab-crossgroup-identity)
@@ -1723,6 +2056,17 @@ apply_edit() {
         # exactly as they are, so the mutation cannot be mistaken for
         # "authorisation removed".
         sed -i 's|return (caller->cur_privs \& VMS_PRV_M_WORLD) != 0;|return true; /* NEGCTL proctab-crossgroup-identity */|' "$_file";;
+    proctab-terminal-redaction-bypassed)
+        # `info->redacted = 1;` is the only such statement in the file (the
+        # sole write to that field), so anchoring on it directly is
+        # unambiguous. The replacement (note: "1U;", not "1;" -- that is
+        # what makes the anchor disappear after one application, so a
+        # second apply finds no match and is the no-op the selftest
+        # requires) copies proc->terminal into the redacted branch, ahead
+        # of the early return -- exactly the hoist this control exists to
+        # catch -- while leaving the return itself, the redacted flag's
+        # value, and every other withheld field untouched.
+        sed -i "s|        info->redacted = 1;|        info->redacted = 1U; memcpy(info->terminal, proc->terminal, VMS_DEVNAM_SIZE); info->terminal[VMS_DEVNAM_SIZE - 1] = '\\\\0'; /* NEGCTL proctab-terminal-redaction-bypassed */|" "$_file";;
     executive-not-pinned)
         sed -i 's|\.owner          = THIS_MODULE,|/* NEGCTL executive-not-pinned: no .owner, so nothing pins vms.ko */|' "$_file";;
     pcb-per-thread)
@@ -1784,6 +2128,9 @@ apply_edit() {
         sed -i 's|case 108: return SS\$_IVLOCKID;|case 108: return SS$_NOTQUEUED; /* NEGCTL kstat-ivlockid-mismapped */|' "$_file";;
     kstat-cvtungrant-mismapped)
         sed -i 's|case 116: return SS\$_CVTUNGRANT;|case 116: return SS$_NOTQUEUED; /* NEGCTL kstat-cvtungrant-mismapped */|' "$_file";;
+
+    assign-terminal-bypasses-executive)
+        sed -i 's|        if (devres.is_terminal) {|        if (0 \&\& devres.is_terminal) { /* NEGCTL assign-terminal-bypasses-executive */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

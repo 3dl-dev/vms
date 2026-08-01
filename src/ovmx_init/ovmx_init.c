@@ -34,6 +34,7 @@
 #include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
 #include "ovmx_identity.h"
+#include "ssdef.h"
 /* PID 1's identity is established THROUGH the executive, not declared. */
 #include "vms_kif.h"
 
@@ -1311,16 +1312,95 @@ int main(void)
              * $GETDVI on the resulting channel. PID 1 has no business
              * asserting it, and nothing downstream may be built on this
              * line being here.
+             *
+             * WHAT STANDS HERE INSTEAD (vms-d0b). The login session takes
+             * a real channel to the console and asks the executive to
+             * record that channel's device as this job's terminal. Three
+             * properties, and each is the reason the environment variable
+             * was not simply reinstated behind a function call:
+             *
+             *   - The name is not transmitted. $ASSIGN names the console
+             *     because PID 1 is CREATING A SESSION ON IT -- that is
+             *     system configuration, the same way DKA0: is named at
+             *     step 1b -- but VMS_IOCTL_SETTERM takes only the
+             *     CHANNEL. The executive reads the device off the channel
+             *     it issued and copies its own name. Nothing downstream
+             *     receives a string it must trust.
+             *   - The binding is in the executive, so a DIFFERENT process
+             *     can read which terminal this job is on ($GETJPI), which
+             *     is what makes it a fact rather than a self-description
+             *     (CLAUDE.md Rule 11).
+             *   - It survives the execl() below. The executive keys the
+             *     process table on the thread-group id, which execve()
+             *     does not change, so LOGINOUT.EXE and then DCL.EXE run
+             *     with the binding their process already has, carrying
+             *     nothing.
+             *
+             * Neither status is examined, deliberately, and this is the
+             * same reasoning as cmd_show_device()'s untested
+             * vms_kif_open(): the conditions they could report are ones
+             * OVMX is not in. The executive is pinned open for the life
+             * of the system (executive_attach, above, which halts if it
+             * is absent), OPA0: is created at module init and vms.ko
+             * implements no operation that removes a device, and the
+             * channel handed to SETTERM is the one $ASSIGN just returned.
+             * A branch here would be a handler for a state VMS is not in
+             * (Rule 10), and the only thing it could usefully do is
+             * fabricate a binding.
+             * If a call did fail, the executive records no terminal --
+             * and SHOW TERMINAL then names none, which is the honest
+             * outcome and the one the reader already renders.
              */
-            /* Child: exec vms_login */
+            uint32_t console_chan = 0;
+            (void)vms_kif_assign(OVMX_CONSOLE_DEVICE, &console_chan);
+            (void)vms_kif_setterm(console_chan);
+
+            /* Child: exec vms_login (SYS$SYSTEM:LOGINOUT.EXE). */
             execl(loginout_path, "vms_login", (char *)NULL);
-            /* If vms_login not found, exec vmsdcl directly */
-            execl(dcl_path, "vmsdcl", (char *)NULL);
-            /* Both failed — report why (show VMS specs in diagnostics) */
-            fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
+
+            /*
+             * NO DCL FALLBACK (vms-72c). "exec vmsdcl directly" used to
+             * stand here if the LOGINOUT.EXE exec above failed -- an
+             * unauthenticated shell handed to whoever is at the console,
+             * reached by nothing more than a missing or unexecutable
+             * file. That is CLAUDE.md Rule 10's illegal third answer,
+             * named for exactly this shape in this item's own dispatch
+             * text: VMS has no state in which the console driver cannot
+             * run LOGINOUT and responds by starting an interactive
+             * session anyway with no username, no password and no
+             * SYSUAF check. It is also the same defect this item closes
+             * one line earlier for the empty-password-hash SYSUAF
+             * shipped by default (distro/rootfs/.../SYSUAF.DAT) --
+             * a second path to the identical outcome, "session reached
+             * with no real authentication", would have made that fix
+             * partial.
+             *
+             * MADE UNREACHABLE, NOT HANDLED, per Rule 10's other answer:
+             * LOGINOUT.EXE is a required system file, provisioned onto
+             * every system disk by provision_symlinks() (this file,
+             * "install once, boot forever" -- see is_system_installed())
+             * before the login loop below can ever run, so failing to
+             * exec it here is the same class of condition as vms.ko or
+             * /dev/vms being absent (executive_attach(), above) --
+             * OVMX's one runtime does not come up in that state. Unlike
+             * the executive gate, the response here is not to halt the
+             * whole boot: this is a per-login-attempt failure, not a
+             * per-system one, and the outer loop already retries with
+             * backoff (see "consecutive_failures" below) instead of
+             * surrendering the console -- NOT independently oracle-pinned
+             * here as "what VMS's console driver does on an image
+             * activation failure" (the ~/vax lab was unavailable for this
+             * item, mid-use for an unrelated experiment); it is the
+             * behavior this loop already had for every other login
+             * failure before this item touched it, kept unchanged. So the
+             * child reports why (OVMX facility, not a
+             * VMS one -- a Linux exec(2) failure has no VMS analogue,
+             * same reasoning as ovmx_exec_halt above) and exits, and the
+             * loop tries again; what it may not do is substitute an
+             * unauthenticated shell for the login it could not run.
+             */
+            fprintf(stderr, "%%OVMX-E-NOLOGIN, cannot exec %s: %s\n",
                     VMS_LOGINOUT_PATH, strerror(errno));
-            fprintf(stderr, "%%STARTUP-F-NOLOGIN, cannot exec %s: %s\n",
-                    VMS_DCL_PATH, strerror(errno));
             _exit(1);
         } else if (child > 0) {
             /* Parent: wait for login session to end */

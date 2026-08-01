@@ -226,21 +226,27 @@ uint32_t vms_kif_getlki(uint32_t lkid, uint32_t *granted_mode,
  * process on the node -- which is the whole difference between a VMS
  * device and a private notion of one.
  *
- * THE WHOLE FAMILY IS UNWIRED. The kernel device table, these wrappers and
- * their QEMU suite were merged with no product reader: SHOW DEVICE still
- * prints the host Linux mount table and src/vmsdcl/dcl_cmd_show.c carries a
- * COMMENT saying the conversion is future work. A comment is not a caller --
- * that is exactly what this census exists to say out loud.
+ * THE FAMILY WAS ONCE WHOLLY UNWIRED, and the paragraph that said so is
+ * replaced rather than deleted, because what remains unwired is the point.
+ * The kernel device table, these wrappers and their QEMU suite were merged
+ * with no product reader at all: SHOW DEVICE printed the host Linux mount
+ * table, and src/vmsdcl/dcl_cmd_show.c carried a COMMENT saying the
+ * conversion was future work. A comment is not a caller -- that is exactly
+ * what this census exists to say out loud. vms-fb9 wired the two readers
+ * ($GETDVI by name, $DEVICE_SCAN) and vms-d0b wires $ASSIGN, so what is
+ * still declared below is what OVMX still does not do.
  * ================================================================ */
 
 /* $ASSIGN a channel to a device by name. SS$_NOSUCHDEV if the
  * executive has no such device; SS$_IVDEVNAM if the name is not a
  * device name at all.
- * OVMX-UNWIRED: vms_kif_assign (vms-dv1) */
+ * Wired: the census gate is what proves it has a product caller.
+ * (src/ovmx_init/ovmx_init.c takes the login session's channel to the
+ * console with it, which is what the terminal binding is built on.) */
 uint32_t vms_kif_assign(const char *devnam, uint32_t *chan);
 
 /* $DASSGN the channel. SS$_IVCHAN if it is not one of ours.
- * OVMX-UNWIRED: vms_kif_dassgn (vms-dv1) */
+ * Wired: the census gate is what proves it has a product caller. */
 uint32_t vms_kif_dassgn(uint32_t chan);
 
 /* $ALLOC the device to this process -- this, and not $ASSIGN, is what
@@ -269,7 +275,7 @@ uint32_t vms_kif_getdvi_devnam(const char *devnam, struct vms_devinfo *info);
 
 /* Read the device row behind an assigned channel. SS$_IVCHAN if the
  * channel is not ours.
- * OVMX-UNWIRED: vms_kif_getdvi_chan (vms-fb9) */
+ * Wired: the census gate is what proves it has a product caller. */
 uint32_t vms_kif_getdvi_chan(uint32_t chan, struct vms_devinfo *info);
 
 /* Enumerate the device table. Pass *index = 0 for the first row; each
@@ -285,6 +291,20 @@ uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info);
 uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
                            uint64_t setchar, uint64_t clrchar,
                            uint32_t width, uint32_t page);
+
+/* Record this process's TERMINAL in the executive's process table, from
+ * a channel it already holds to a terminal device (vms-d0b). The
+ * executive copies the name off that channel's device; the caller
+ * supplies no name. SS$_IVCHAN if the channel is not ours, SS$_IVDEVNAM
+ * if it is not to a terminal.
+ *
+ * This is the writer behind $GETJPI's terminal and SHOW TERMINAL's
+ * "Terminal: _OPA0:" header. It is made where the session's channel to
+ * the console is -- src/ovmx_init/ovmx_init.c's login child, before the
+ * image is activated -- so the terminal a job is on is a fact other
+ * processes can read, not a claim the job makes about itself.
+ * Wired: the census gate is what proves it has a product caller. */
+uint32_t vms_kif_setterm(uint32_t chan);
 
 /* ================================================================
  * Process table (executive-resident PCB directory)

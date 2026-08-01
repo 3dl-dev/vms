@@ -11,7 +11,10 @@ target_include_directories(ovmx_init PRIVATE
     ${VMS_INCLUDE_DIR}
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
-    # vms_kif.h: PID 1's identity is established THROUGH the executive.
+    # vms_kif.h: PID 1's identity is established THROUGH the executive
+    # (vms-2b8), and the login child takes the session's channel to the
+    # console and asks the executive to record it as the job's terminal
+    # (vms-d0b).
     ${CMAKE_SOURCE_DIR}/src/libvmssys
 )
 

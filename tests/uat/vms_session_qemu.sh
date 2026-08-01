@@ -363,6 +363,20 @@ fail_with_console() {
     exit 1
 }
 
+# --- Validation counters (vms-72c) -----------------------------------------
+# Declared HERE, not down at "Validation" below where they used to live,
+# because the bad-password probe immediately below this comment is a real
+# assertion (PASS/FAIL/ERRORS-mutating) that runs during the boot/login
+# phase, before the "Drive the session" block. `set -u` (nounset, top of
+# this file) turns a reference to an undeclared PASS/FAIL/ERRORS into a hard
+# script error, not a silent 0 -- which is what caught this the first time:
+# moving the assertion up without moving the declaration failed the whole
+# run with "PASS: unbound variable" before a single check_response() below
+# ever got a chance to run.
+PASS=0
+FAIL=0
+ERRORS=""
+
 # --- Boot and log in -----------------------------------------------------
 # The executive must come up first; if it does not, PID 1 aborts the boot and
 # there is no session to test. Asserting it here (vms-0ff, ported by the
@@ -372,10 +386,71 @@ wait_for '%OVMX-I-EXEC' "$BOOT_TIMEOUT" \
     || fail_with_console "ERROR: the executive never attached — the system did not come up"
 
 wait_for 'Username:' "$BOOT_TIMEOUT" || fail_with_console "ERROR: no login prompt"
+
+# --- NEGATIVE LOGIN: a wrong password is refused (vms-72c) -----------------
+#
+# WHY THIS IS HERE AND WHY IT WAS NOT PROVABLE BEFORE THIS ITEM. Every
+# account in distro/rootfs/.../SYSUAF.DAT used to ship with an EMPTY
+# password hash, and sysuaf_authenticate() (src/libvms/rtl/sysuaf.c)
+# treats an empty hash as "no password required" -- so ANY string typed at
+# Password: authenticated successfully, including a deliberately wrong
+# one. MEASURED directly against a real QEMU boot of this exact image,
+# before SYSTEM's SYSUAF row gained a real hash: sending SYSTEM /
+# TOTALLY_WRONG_PASSWORD reached "Welcome to OVMX" and a DCL prompt. That
+# is precisely the veracity gap this item's DONE CONDITION names ("a bad
+# password is refused") and precisely what "a login that prints a banner
+# and reaches a DCL prompt... passes today against the facade" (this
+# item's own dispatch text) warns against accepting as proof. SYSTEM now
+# carries SHA256("MANAGER") in SYSUAF.DAT, so this is a REAL refusal, not
+# a string this script types being echoed back.
+#
+# Anchored to BADPW_OFFSET, captured before 'SYSTEM' is sent a second
+# time: 'Username:' and 'Password:' both already appear earlier in the
+# log (the executive-attach boot messages do not contain them, but this
+# is the FIRST login attempt of the whole run, so there is nothing
+# upstream to collide with here -- the anchor is taken anyway, on
+# principle, for the same reason every other wait_for in this script that
+# can run more than once takes one).
+BADPW_OFFSET=$(wc -c <"$CONSOLE_LOG")
 send 'SYSTEM'
-wait_for 'Password:' || fail_with_console "ERROR: no password prompt"
+wait_for 'Password:' "$STEP_TIMEOUT" "$BADPW_OFFSET" \
+    || fail_with_console "ERROR: no password prompt for the bad-password probe"
+send 'TOTALLY_WRONG_PASSWORD'
+wait_for 'Username:' "$STEP_TIMEOUT" "$BADPW_OFFSET" \
+    || fail_with_console "ERROR: no reprompt after a wrong password -- did it succeed?"
+BADPW_SEGMENT=$(tail -c "+$((BADPW_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
+
+if printf '%s' "$BADPW_SEGMENT" | grep -qF 'User authorization failure'; then
+    PASS=$((PASS + 1))
+else
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: a wrong password was not refused with 'User authorization failure' (got: $(printf '%s' "$BADPW_SEGMENT" | tr '\n' ' '))"
+fi
+# The refusal must be a REFUSAL, not incidental text alongside a session
+# that was granted anyway -- checked on the SAME segment as the positive
+# check above so this cannot pass by printing both.
+if printf '%s' "$BADPW_SEGMENT" | grep -qF 'Welcome to OVMX'; then
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: a wrong password reached a session anyway ('Welcome to OVMX' present)"
+else
+    PASS=$((PASS + 1))
+fi
+
+# --- Real login --------------------------------------------------------
+# A FRESH OFFSET, NOT $BADPW_OFFSET: the bad-password attempt's own
+# "Password:" prompt already sits in the log after $BADPW_OFFSET, so
+# reusing it here would let wait_for's byte-offset scan match that STALE
+# prompt instantly instead of waiting for the real one below -- 'MANAGER'
+# would then be sent before the second Username:/Password: exchange had
+# even happened. MEASURED, not merely reasoned: this exact reuse produced
+# "Username: SYSTEM\nMANAGER\nPassword:" in a real run (MANAGER landing
+# between the two prompts, not after either of them) before this offset
+# was split from BADPW_OFFSET.
+REALLOGIN_OFFSET=$(wc -c <"$CONSOLE_LOG")
+send 'SYSTEM'
+wait_for 'Password:' "$STEP_TIMEOUT" "$REALLOGIN_OFFSET" || fail_with_console "ERROR: no password prompt"
 send 'MANAGER'
-wait_for 'Welcome to OVMX' || fail_with_console "ERROR: login did not succeed"
+wait_for 'Welcome to OVMX' "$STEP_TIMEOUT" "$REALLOGIN_OFFSET" || fail_with_console "ERROR: login did not succeed"
 
 # --- Drive the session -----------------------------------------------------
 # Same command list as the SSH UAT, except SET DEFAULT SYS$MANAGER: (see the
@@ -491,9 +566,9 @@ echo "$OUTPUT"
 echo "=== End Session Output ==="
 
 # --- Validation --------------------------------------------------------
-PASS=0
-FAIL=0
-ERRORS=""
+# PASS/FAIL/ERRORS are declared ABOVE, before the boot/login section, not
+# here -- see the comment at their declaration for why (vms-72c: the
+# bad-password probe needs them before this point in the script runs).
 
 # Whole-log substring check. Used ONLY for the negative Unix-leak checks
 # below, whose patterns cannot be satisfied by something this script itself
@@ -675,14 +750,28 @@ check_response 'SHOW PROCESS' 'Node: +OVMX'
 # NOT evidence vms-afd has landed -- do not close vms-afd from this.
 check_response 'SHOW PROCESS' 'User: +SYSTEM +Process ID:'
 
-# THE PROCESS NAME IS STILL A REAL DIVERGENCE (vms-d0e, confirmed still
-# open via `rd show vms-d0e` at the same 2026-07-31 measurement above).
-# OVMX assigns no default process name at creation; VMS always has one.
-# This is unrelated to the User: fix above -- LOGINOUT stamps a user name
-# and UIC, not a process name, and $SETPRN was never called on this path.
-check_known_divergence 'SHOW PROCESS' 'Process name: ""' \
-    'vms-d0e' \
-    'the executive row still carries no process name, so SHOW PROCESS prints Process name: "" (VMS has no nameless process -- oracle Section 1.3)'
+# THE PROCESS NAME IS NOW POPULATED FOR THE LOGIN SESSION (vms-72c),
+# MEASURED, NOT ASSUMED FROM THE COMMENT THIS REPLACES.
+#
+# This used to be a check_known_divergence tripwire pinned to vms-d0e
+# ("OVMX assigns no default process name at creation"). It fired RED on a
+# real QEMU run of this exact script the moment vms-72c wired
+# tools/vms_login.c to call vms_kif_setprn(rec->username) after
+# authentication -- exactly the outcome the tripwire's own comment named as
+# the condition to delete it under ("If vms-d0e has landed this is GOOD
+# NEWS -- delete this tripwire and assert the VMS behaviour instead").
+#
+# NOT EVIDENCE vms-d0e HAS LANDED, and the distinction matters: vms-d0e asks
+# what the executive should name a process created with NO explicit prcnam
+# at all (e.g. a bare $CREPRC/RUN with no /PROCESS_NAME -- SPAWN's own
+# subprocess below is exactly that case, and it is STILL unnamed, on
+# purpose, unchanged by this item). vms-72c answers a narrower, already-
+# oracle-pinned question: LOGINOUT itself supplies an EXPLICIT name (the
+# SYSUAF username -- VAX1, OpenVMS VAX V7.3, docs/oracle/
+# vax73-show-system-process.md Section 1: the interactive SYSTEM session's
+# own SHOW SYSTEM row is named literally SYSTEM). Do not close vms-d0e from
+# this passing.
+check_response 'SHOW PROCESS' 'Process name: "SYSTEM"'
 
 # Privilege names should appear in SHOW PROCESS /PRIVILEGES's own response.
 # Anchored, not a whole-log scan: the whole log also contains the echo of
@@ -925,6 +1014,44 @@ check_not_response 'SPAWN SHOW PROCESS' '\[000,000\]'
 # whoever lands it has to come and delete it.
 check_response 'SPAWN SHOW PROCESS' 'User: +Process ID:'
 
+# A-WRITES / B-READS FOR THE LOGIN SESSION'S PROCESS NAME -- WHERE THE
+# PROOF ACTUALLY LIVES, AND WHY NOT HERE (vms-72c).
+#
+# The natural second assertion here would be a SECOND spawned subprocess
+# doing 'SHOW PROCESS SYSTEM' (a bare name parameter -- src/vmsdcl/
+# dcl_cmd_show.c's cmd_show_process() resolves it via sys$getjpi with a
+# name descriptor, cross-process) to prove that A DIFFERENT, independently
+# registered process can look up the login session BY THE NAME THIS ITEM
+# gives it. That assertion was written, built, and run against a real QEMU
+# boot -- and found a PRE-EXISTING, UNRELATED DCL DEFECT instead: the
+# SECOND 'SPAWN' in one session, ANY command, fails outright with
+# '%DCL-E-CREPRC, cannot create subprocess' (cmd_spawn(), src/vmsdcl/
+# dcl_cmd_process.c -- its execl() of vmsdcl's own /proc/self/exe returns
+# instead of replacing the image). REPRODUCED THREE WAYS: (1) 'SPAWN SHOW
+# PROCESS SYSTEM' immediately after the existing 'SPAWN SHOW PROCESS' above,
+# twice, deterministically; (2) a minimal standalone probe running 'SPAWN
+# SHOW TIME' three times in a row -- attempt 1 succeeds, attempts 2 and 3
+# both fail identically, proving the argument content is irrelevant and the
+# SECOND spawn in a session is what fails. Not this item's to fix (SPAWN's
+# re-exec mechanism, not console login), and forcing an assertion through a
+# bug in an unrelated command would itself violate Method Requirement 3 (an
+# assertion whose failure is explained by something OTHER than the property
+# under test is vacuous either way it goes). Reported as a finding instead.
+#
+# THE PROOF THIS ITEM RELIES ON INSTEAD:
+#   - cross-process $GETJPI-BY-NAME, generically, at the executive layer,
+#     with NO DCL/SPAWN involved: tests/qemu/test_syssvc_procnam.c forks a
+#     real second process and asserts "sys$getjpi resolved another process
+#     BY NAME" against a real /dev/vms (pre-existing, vms-8019's proof, not
+#     re-derived here).
+#   - THIS ITEM'S OWN CONTRIBUTION -- that the login session specifically
+#     HAS a resolvable name at all -- is what 'SHOW PROCESS' above already
+#     proves ('Process name: "SYSTEM"', oracle-pinned) and what SHOW USERS
+#     below proves a SECOND TIME over, from the executive's terminal-binding
+#     table rather than the process table: two independent executive-backed
+#     readers naming the SAME session the SAME way is itself evidence
+#     neither one is a per-reader fabrication.
+
 # THE AUTHENTICATED USER CAN ACTUALLY USE THE SYSTEM (vms-2b8 round 7).
 #
 # WHY THIS BLOCK EXISTS. Round 6 made LOGINOUT drop to the SYSUAF UIC, and
@@ -992,15 +1119,60 @@ else
     ERRORS="${ERRORS}\n  FAIL: the second session was not a GUEST session"
 fi
 
-# SHOW TERMINAL should show terminal info in its own response. Anchored, not
-# a whole-log scan: grep is case-insensitive, so 'Terminal' matches the echo
-# of the command 'SHOW TERMINAL' itself, and '_[A-Z]' matches the echoes of
-# 'DEFINE UAT_TEST ...' / 'SHOW LOGICAL UAT_TEST' / 'DEASSIGN UAT_TEST' (the
-# '_T') as well as '_OPA0:' in SHOW PROCESS's output -- neither alternative
-# needs SHOW TERMINAL to have run at all. Verified by mutation: prefixing
-# the command with a bogus verb (%DCL-E-IVVERB, no terminal info printed)
-# makes this assertion fail; the unmutated run still passes.
-check_response 'SHOW TERMINAL' '(Terminal|Device|VT100)'
+# SHOW USERS MUST NAME THE REAL, EXECUTIVE-ASSIGNED SESSION (vms-72c, Rule
+# 11 corollary) -- NOT A FABRICATED ROW ABOUT ITSELF.
+#
+# cmd_show_users() used to read a file-based terminal-allocation table whose
+# only writer vms-fb9 had already deleted, so the table was permanently
+# empty and its "no entries" branch fabricated a single row out of the
+# CALLING process's own context -- ctx->username, getpid() (a LINUX pid),
+# and whatever the caller's own environment happened to hold for a
+# terminal. MEASURED on a real QEMU boot of this exact image before
+# vms-72c: SHOW USERS reported PID 00000049 for the SAME session whose
+# SHOW PROCESS, one command earlier in the identical transcript, reported
+# the executive-assigned VMS pid 10000003 -- two different numbers for one
+# process, because SHOW USERS was never actually looking at it.
+#
+# THE DISCRIMINATING CHECK: the PID in SHOW USERS's row must equal SYSPID,
+# the SAME executive-assigned pid this session's own 'SHOW PROCESS' response
+# already printed earlier in the transcript (extracted here, straight out of
+# CMD_OUTPUT -- not re-typed as a literal, which would just be trusting this
+# script's own arithmetic instead of the product's). A fabricated
+# getpid()-based row could still coincidentally print 8 hex digits in the
+# right column; it could not print the SAME 8 hex digits SHOW PROCESS
+# already proved were the VMS pid.
+SYSPID=$(printf '%s' "${CMD_OUTPUT['SHOW PROCESS']}" | grep -oE 'Process ID:   [0-9A-F]{8}' | grep -oE '[0-9A-F]{8}$')
+if [ -n "$SYSPID" ]; then
+    check_response 'SHOW USERS' "$SYSPID"
+else
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: could not extract A's own VMS pid to check SHOW USERS against"
+fi
+check_response 'SHOW USERS' 'SYSTEM +SYSTEM'
+check_response 'SHOW USERS' 'Total number of users = 1'
+
+# SHOW TERMINAL must name the terminal THIS LOGIN SESSION is on, read out of
+# the executive (vms-d0b).
+#
+# TIGHTENED, and the old pattern is worth recording because it was weak in a
+# way that mattered. It was '(Terminal|Device|VT100)', matched
+# case-insensitively against SHOW TERMINAL's own response -- so it was
+# satisfied by the string "Device_Type:" in a header, by the word "terminal"
+# in a diagnostic, and (before vms-fb9) by a terminal name DCL had invented
+# for itself out of a VMS_TERMINAL environment variable. Every one of those
+# satisfies "SHOW TERMINAL printed something", which is not the property.
+#
+# The property is that the name comes from the EXECUTIVE. On this runtime
+# PID 1's login child takes a channel to the console and records it
+# (src/ovmx_init/ovmx_init.c), so the executive's process row for this job
+# says OPA0: and SHOW TERMINAL reads it back with the physical-name
+# underscore the oracle prints (docs/oracle/vax73-terminal-device.md §1).
+# Nothing in DCL can produce that string on its own: the environment handoff
+# and the invented "_FTA0:" default are both deleted and gated
+# (tests/integration/test_terminal_identity.sh), and with no binding in the
+# executive this command prints nothing at all -- which is the case
+# tests/qemu/test_syssvc_showterm.c runs beside this one.
+check_response 'SHOW TERMINAL' '^Terminal: _OPA0:'
 
 # SHOW DEVICE must list the console the EXECUTIVE created (vms-fb9). This is
 # the one assertion in this file that cannot be satisfied by anything inside

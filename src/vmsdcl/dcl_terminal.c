@@ -127,88 +127,27 @@ void vms_terminal_apply(const struct vms_terminal *term)
 }
 
 /*
- * Characteristic display table — maps bit flags to VMS display names.
+ * DELETED, NOT REPLACED (vms-d0b): char_display[] and vms_terminal_show().
  *
- * Each entry has an "active" name (shown when bit is set) and
- * an "inactive" name (shown when bit is clear).
+ * They were the renderer behind SHOW TERMINAL, and SHOW TERMINAL is now a
+ * reader of the executive (src/vmsdcl/dcl_cmd_show.c: $GETJPI for which
+ * terminal this job is on, then $GETDVI for that device's row). That left
+ * this pair with no caller at all, and a caller-less renderer would not have
+ * been harmless: char_display[] invented seven characteristics VMS V7.3 does
+ * not print (Scope, Holdscreen, Mechtab, Oper, Page, Runout, AltTypeAhd)
+ * while omitting most of the names it does, and printed Width and Page in a
+ * layout the oracle does not use. Keeping a second, wrong renderer of VMS
+ * output in the tree is how it comes back. The oracle's real list, and the
+ * only renderer of it, live at the reader -- see terminal_chars[] in
+ * dcl_cmd_show.c and docs/oracle/vax73-terminal-device.md section 2.
+ *
+ * What is NOT deleted, because it is still used: struct vms_terminal, the
+ * TT_* bits, vms_terminal_init(), vms_terminal_set_char(),
+ * vms_terminal_get_char() and vms_terminal_apply(). SET TERMINAL still writes
+ * them and vms_terminal_apply() still reaches the real termios. The TT_* bits
+ * remain OVMX-defined and are still labelled as such in
+ * src/vmsdcl/include/dcl/terminal.h (vms-2cb).
  */
-static const struct {
-    uint32_t    bit;
-    const char *active_name;
-    const char *inactive_name;
-} char_display[] = {
-    { TT_SCOPE,        "Scope",           "No Scope"          },
-    { TT_ECHO,         "Echo",            "No Echo"           },
-    { TT_TYPEAHEAD,    "Type_ahead",      "No Type_ahead"     },
-    { TT_HOSTSYNC,     "Hostsync",        "No Hostsync"       },
-    { TT_TTSYNC,       "TTsync",          "No TTsync"         },
-    { TT_LOWERCASE,    "Lowercase",       "Uppercase"         },
-    { TT_TAB,          "Tab",             "No Tab"            },
-    { TT_WRAP,         "Wrap",            "No Wrap"           },
-    { TT_LINE_EDITING, "Line_Editing",    "No Line_Editing"   },
-    { TT_INSERT,       "Insert",          "Overstrike"        },
-    { TT_BROADCAST,    "Broadcast",       "No Broadcast"      },
-    { TT_EIGHTBIT,     "Eightbit",        "No Eightbit"       },
-    { TT_HOLDSCREEN,   "Holdscreen",      "No Holdscreen"     },
-    { TT_MECHTAB,      "Mechtab",         "No Mechtab"        },
-    { TT_READSYNC,     "Readsync",        "No Readsync"       },
-    { TT_PASTHRU,      "Pasthru",         "No Pasthru"        },
-    { TT_ESCAPE,       "Escape",          "No Escape"         },
-    { TT_FORM,         "Form",            "No Form"           },
-    { TT_FULLDUP,      "Fulldup",         "Halfdup"           },
-    { TT_MODEM,        "Modem",           "No Modem"          },
-    { TT_PAGE,         "Page",            "No Page"           },
-    { TT_RUNOUT,       "Runout",          "No Runout"         },
-    { TT_FALLBACK,     "Fallback",        "No Fallback"       },
-    { TT_DIALUP,       "Dialup",          "No Dialup"         },
-    { TT_SECURE,       "Secure",          "No Secure"         },
-    { TT_OPER,         "Oper",            "No Oper"           },
-    { TT_ALTYPEAHD,    "AltTypeAhd",      "No AltTypeAhd"     },
-};
-
-#define CHAR_DISPLAY_COUNT (sizeof(char_display) / sizeof(char_display[0]))
-
-/*
- * vms_terminal_show - Display terminal characteristics in VMS format.
- *
- * Output matches OpenVMS SHOW TERMINAL format:
- *   Terminal: _FTA0:     Device_Type: VT100         Owner: BARON
- *
- *   Terminal Characteristics:
- *     Interactive         Echo               Type_ahead          Hostsync
- *     ...
- *     Width: 132          Page:  48
- */
-void vms_terminal_show(const struct vms_terminal *term, FILE *out)
-{
-    const char *owner = term->owner[0] ? term->owner : "SYSTEM";
-
-    fprintf(out, "Terminal: %-12s Device_Type: %-14s Owner: %s\n\n",
-            term->device_name, term->device_type, owner);
-    fprintf(out, "Terminal Characteristics:\n");
-
-    /* Always show "Interactive" first (we are always interactive) */
-    fprintf(out, "  %-20s", "Interactive");
-    int col = 1;
-
-    for (unsigned i = 0; i < CHAR_DISPLAY_COUNT; i++) {
-        int set = (term->characteristics & char_display[i].bit) ? 1 : 0;
-        const char *name = set ? char_display[i].active_name
-                               : char_display[i].inactive_name;
-        fprintf(out, "%-20s", name);
-        col++;
-        if (col >= 4) {
-            fprintf(out, "\n  ");
-            col = 0;
-        }
-    }
-
-    /* Finish the line if needed */
-    if (col > 0)
-        fprintf(out, "\n");
-
-    fprintf(out, "\n  Width: %3d          Page: %3d\n", term->width, term->page);
-}
 
 /* ------------------------------------------------------------------ */
 /* Terminal Device Allocation Table                                    */
@@ -272,10 +211,24 @@ static void term_table_save(FILE *fp, const struct terminal_device *devs, int co
  * no user; under rule 10 a mechanism for a condition OVMX no longer has is
  * deleted, not kept behind a lint. See src/vmsdcl/include/dcl/terminal.h.
  *
- * The reader/remover below stay because they still have callers; with the
- * allocator gone the table can no longer gain an entry, so what they see
- * is always empty. That is the honest state, not a bug to "fix" by putting
- * the allocator back.
+ * The remover below stays because it still has a caller (dcl_main.c, at
+ * logout); with the allocator gone the table can no longer gain an entry,
+ * so what it removes is always nothing. That is the honest state, not a
+ * bug to "fix" by putting the allocator back.
+ *
+ * vms_term_list() -- THE READER -- WAS ALSO HERE AND IS ALSO DELETED
+ * (vms-72c). It had exactly the same "always sees an empty table" problem
+ * as the allocator's removal left behind, and its one caller
+ * (cmd_show_users() in src/vmsdcl/dcl_cmd_show.c) took that permanent
+ * emptiness as license to fabricate a single row about the CALLING
+ * process instead -- the same self-reporting shape Rule 10's worked
+ * examples reject, reproduced one layer up from where vms-fb9 already
+ * deleted it once. SHOW USERS now reads src/kernel/vms_proctab.c through
+ * vms_kif_procscan() directly, the same executive-resident source
+ * cmd_show_system() and cmd_show_process() already use, so this reader
+ * of a table that can never be written is deleted rather than kept
+ * behind a lint -- the same rule vms_term_allocate()'s deletion states
+ * above, applied to the half of the pair that survived it.
  */
 
 void vms_term_deallocate(const char *device_name)
@@ -305,22 +258,3 @@ void vms_term_deallocate(const char *device_name)
     fclose(fp);
 }
 
-void vms_term_list(struct terminal_device *out_devs, int max, int *count)
-{
-    *count = 0;
-
-    FILE *fp = fopen(TERM_TABLE_PATH, "rb");
-    if (!fp) return;
-    flock(fileno(fp), LOCK_SH);
-
-    struct terminal_device devs[TERM_TABLE_MAX];
-    int total = term_table_load(fp, devs, TERM_TABLE_MAX);
-
-    flock(fileno(fp), LOCK_UN);
-    fclose(fp);
-
-    int n = (total < max) ? total : max;
-    for (int i = 0; i < n; i++)
-        out_devs[i] = devs[i];
-    *count = n;
-}

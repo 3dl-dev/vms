@@ -29,6 +29,7 @@
 #include <ctype.h>
 #include "starlet.h"
 #include "vms/pcb.h"
+#include "vms_kif.h"
 
 /*
  * VMS device resolution result.
@@ -44,6 +45,15 @@ struct vms_device_result {
     char resolved_path[256];    /* Linux path to open ("" if not applicable) */
     int  is_mailbox;            /* nonzero if MBA<n>: device */
     int  mbx_unit;              /* mailbox unit number (if is_mailbox) */
+    /*
+     * vms-1c57: nonzero if this name identifies the executive's console
+     * terminal (src/kernel/vms_devtab.c's ONE registered device, OPA0:).
+     * $ASSIGN must obtain a channel FROM THE EXECUTIVE for this case --
+     * see the call to vms_kif_assign() below -- so that the device table
+     * and the I/O path agree on what "the terminal" is, instead of $QIO
+     * running against a raw /dev/tty the executive never heard about.
+     */
+    int  is_terminal;
 };
 
 /*
@@ -63,6 +73,7 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
     result->resolved_path[0] = '\0';
     result->is_mailbox = 0;
     result->mbx_unit = 0;
+    result->is_terminal = 0;
 
     if (!name || !name[0])
         return 0;
@@ -82,10 +93,37 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
     /* Strip the trailing ':' for matching */
     upper[len - 1] = '\0';
 
-    /* Terminal device */
-    if (strcmp(upper, "TT") == 0 || strcmp(upper, "TT0") == 0) {
-        strncpy(result->resolved_path, "/dev/tty", sizeof(result->resolved_path) - 1);
+    /*
+     * Terminal device. TT:/TT0: is the generic job-terminal alias; OPA0:
+     * and its physical form _OPA0: name the executive's console device
+     * directly (src/kernel/vms_devtab.c). OVMX has exactly one terminal
+     * registered in the device table, so all four spellings name the same
+     * executive row -- see is_terminal below and vms-1c57.
+     *
+     * /dev/console, NOT /dev/tty (measured, vms-1c57): /dev/tty resolves
+     * to the CALLING PROCESS's own controlling terminal, and nothing in
+     * OVMX ever establishes one -- not tests/qemu/init.sh, and grepping
+     * src/ovmx_init/ for setsid/TIOCSCTTY/"/dev/console" finds nothing
+     * either. Every process here inherits whatever fds PID 1 started
+     * with, but inheriting a descriptor is not the same as HOLDING a
+     * controlling terminal, and open("/dev/tty", ...) needs the latter.
+     * The result was measured directly: sys$assign("TT:") against a real
+     * /dev/vms returned SS$_NOSUCHDEV with errno ENXIO ("no such device
+     * or address") -- the executive channel was granted (vms_kif_assign
+     * succeeded and was cleaned back up), only the LOCAL open() failed.
+     * OPA0: is, by the device table's own comment, OVMX's one physical
+     * console -- so the Linux-side path for it should be the physical
+     * console device, not a session-relative indirection this codebase
+     * never sets up. This does not extend to a real terminal-session
+     * facility (TIOCSCTTY, job/process login binding a real ctty): that
+     * is out of vms-d0b's own stated scope ("console terminal only") and
+     * out of this item's, and is not invented here.
+     */
+    if (strcmp(upper, "TT") == 0 || strcmp(upper, "TT0") == 0 ||
+        strcmp(upper, "OPA0") == 0 || strcmp(upper, "_OPA0") == 0) {
+        strncpy(result->resolved_path, "/dev/console", sizeof(result->resolved_path) - 1);
         result->resolved_path[sizeof(result->resolved_path) - 1] = '\0';
+        result->is_terminal = 1;
         return 1;
     }
 
@@ -194,6 +232,7 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
     /* Attempt VMS device name resolution */
     struct vms_device_result devres;
     int fd = -1;
+    uint32_t exec_chan = 0;
 
     if (resolve_vms_device(name, &devres)) {
         if (devres.is_mailbox) {
@@ -201,7 +240,30 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
              * For now, return an error; the user should use sys$crembx. */
             pthread_mutex_unlock(&pcb->chan_lock);
             return SS$_IVDEVNAM;
-        } else if (devres.resolved_fd >= 0) {
+        }
+
+        if (devres.is_terminal) {
+            /*
+             * vms-1c57: THE CHANNEL IS THE IDENTITY. A terminal is a row in
+             * the executive's device table (src/kernel/vms_devtab.c), not a
+             * fact this process is entitled to decide on its own -- so the
+             * channel comes FROM the executive before anything is opened
+             * locally. "OPA0:" is passed literally: it is the one terminal
+             * OVMX's device table carries (see resolve_vms_device's is_terminal
+             * comment), so every alias a program can spell (TT:, TT0:, OPA0:,
+             * _OPA0:) resolves to the same executive row. If the executive
+             * refuses (no such device, no free channel, ...) $ASSIGN refuses
+             * too -- there is no per-process fallback identity for a terminal
+             * (CLAUDE.md Rule 11).
+             */
+            uint32_t st = vms_kif_assign("OPA0:", &exec_chan);
+            if (!(st & 1)) {
+                pthread_mutex_unlock(&pcb->chan_lock);
+                return st;
+            }
+        }
+
+        if (devres.resolved_fd >= 0) {
             /* SYS$INPUT/SYS$OUTPUT/SYS$ERROR: dup the standard fd */
             fd = dup(devres.resolved_fd);
         } else if (devres.resolved_path[0]) {
@@ -220,6 +282,14 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
     }
 
     if (fd < 0) {
+        /*
+         * The executive channel was granted but there is no local byte-I/O
+         * path to go with it (e.g. no /dev/tty in this process's controlling
+         * terminal). Give the executive channel back rather than leaking it
+         * -- $ASSIGN as a whole failed, so nothing should remain assigned.
+         */
+        if (exec_chan != 0)
+            (void)vms_kif_dassgn(exec_chan);
         pthread_mutex_unlock(&pcb->chan_lock);
         return SS$_NOSUCHDEV;
     }
@@ -230,6 +300,7 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
     pcb->channels[slot].ref_count = 1;
     pcb->channels[slot].flags = 0;
     pcb->channels[slot].mbx_peer_fd = -1;
+    pcb->channels[slot].exec_chan = exec_chan;
     strncpy(pcb->channels[slot].devnam, name,
             sizeof(pcb->channels[slot].devnam) - 1);
     pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
@@ -263,6 +334,22 @@ uint32_t sys$dassgn(uint16_t chan) {
         return SS$_IVCHAN;
     }
 
+    /*
+     * vms-1c57: give the executive's channel back FIRST. If it refuses --
+     * which should not happen, since this process is the only one that
+     * could have obtained this exec_chan -- leave the whole channel
+     * assigned rather than tearing down the local half only: the channel
+     * is the identity, so a channel the executive still holds is still
+     * assigned, whatever the local bookkeeping believes.
+     */
+    if (pcb->channels[chan].exec_chan != 0) {
+        uint32_t st = vms_kif_dassgn(pcb->channels[chan].exec_chan);
+        if (!(st & 1)) {
+            pthread_mutex_unlock(&pcb->chan_lock);
+            return st;
+        }
+    }
+
     /* Close the underlying fd */
     if (pcb->channels[chan].fd >= 0) {
         close(pcb->channels[chan].fd);
@@ -280,6 +367,7 @@ uint32_t sys$dassgn(uint16_t chan) {
     pcb->channels[chan].ref_count = 0;
     pcb->channels[chan].flags = 0;
     pcb->channels[chan].mbx_peer_fd = -1;
+    pcb->channels[chan].exec_chan = 0;
     pcb->channels[chan].devnam[0] = '\0';
 
     pthread_mutex_unlock(&pcb->chan_lock);
@@ -301,4 +389,23 @@ int vms$$chan_to_fd(uint16_t chan) {
     if (!pcb) return -1;
     if (!pcb->channels[chan].in_use) return -1;
     return pcb->channels[chan].fd;
+}
+
+/*
+ * vms$$chan_exec_chan - Internal helper: the EXECUTIVE channel number this
+ * PCB slot was bound to by $ASSIGN, or 0 if it was never bound to one (a
+ * plain file, a mailbox, or one of SYS$INPUT/SYS$OUTPUT/SYS$ERROR -- none
+ * of those are device-table rows).
+ *
+ * vms-1c57: used by sys$qio to revalidate a terminal channel against the
+ * executive before doing real I/O on it, instead of trusting a local slot
+ * number the executive never saw.
+ */
+uint32_t vms$$chan_exec_chan(uint16_t chan) {
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
+
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb) return 0;
+    if (!pcb->channels[chan].in_use) return 0;
+    return pcb->channels[chan].exec_chan;
 }

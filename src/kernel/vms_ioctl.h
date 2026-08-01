@@ -722,6 +722,35 @@ struct vms_procinfo {
     uint64_t cur_privs;                 /* current (process) privileges */
     uint64_t perm_privs;                /* authorized (permanent) privileges */
     char     username[VMS_USERNAME_SIZE]; /* "" until an identity is stamped */
+    /*
+     * The job's terminal (vms-d0b). "" when this process has none.
+     *
+     * WHY IT IS HERE AND NOT IN THE PROCESS'S OWN MEMORY. SHOW TERMINAL
+     * names the terminal THIS JOB is on, and to be a reader of anything
+     * it must first be able to READ that name from somewhere every
+     * other process can see. Before this field the tree had no such
+     * place: PID 1 handed the name to its login child in a
+     * VMS_TERMINAL environment variable, which vms-fb9 deleted as the
+     * rejected VMS_PRCNAM shape -- a process telling itself what it is,
+     * in a way nothing can see or contradict (CLAUDE.md Rule 10,
+     * worked example 2). The name now lives in the executive's process
+     * table beside prcnam, uic and username, which is what makes
+     * "process 20400216 is on OPA0:" a fact about the system rather
+     * than a claim by one process.
+     *
+     * WITHHELD WITH THE REST OF THE IDENTITY on a row the caller may
+     * not $GETJPI. The oracle refused EVERY $GETJPI item on a
+     * cross-UIC-group process without WORLD, not a subset of them
+     * (docs/oracle/vax73-privileges.md §5), so this field follows
+     * username and uic rather than vms_pid and prcnam.
+     *
+     * The value is a device name out of the executive's OWN device
+     * table -- VMS_IOCTL_SETTERM takes a CHANNEL, never a name, and
+     * the executive copies the name off the device that channel is
+     * assigned to. A process therefore cannot name a terminal it has
+     * no channel to, and cannot name a device that does not exist.
+     */
+    char     terminal[VMS_DEVNAM_SIZE];   /* "" when the job has no terminal */
 };
 
 /*
@@ -863,10 +892,46 @@ struct vms_ident_args {
     uint64_t authorized_privs;            /* SYSUAF uaf$q_priv */
 };
 
+/*
+ * Record the calling process's TERMINAL in the executive (vms-d0b).
+ *
+ * OVMX DESIGN CHOICE (CLAUDE.md Rule 8), stated rather than implied:
+ * OpenVMS publishes no system service by this name. What it publishes
+ * is the RESULT -- $GETJPI's JPI$_TERMINAL item, and SHOW TERMINAL's
+ * "Terminal: _OPA0:" header -- and the fact that the answer comes out
+ * of the executive's process database rather than out of the asking
+ * process. On VMS the binding is made by the terminal driver and
+ * LOGINOUT when the interactive job is created; in OVMX it is made by
+ * PID 1's login child, in the same place and for the same reason, and
+ * it is this ioctl that puts it where every other process can read it.
+ *
+ * THE ARGUMENT IS A CHANNEL, NOT A NAME, and that is the whole guard.
+ * A name would let a process declare itself to be on any terminal it
+ * liked, including one it has never opened and one that does not
+ * exist -- the environment-variable facade with an ioctl in front of
+ * it. A channel is a thing the executive itself issued, to this
+ * process, for a device in its own table: the executive reads the
+ * device off the channel and copies ITS name. The caller supplies no
+ * text at all.
+ *
+ *   SS$_IVCHAN    the channel is not one this process holds. Same
+ *                 condition and same status as IO$_SETMODE above,
+ *                 which is the other operation that reaches a device
+ *                 through a channel.
+ *   SS$_IVDEVNAM  the channel is to a device that is not a terminal
+ *                 (device class DC$_TERM). Same status IO$_SETMODE's
+ *                 terminal function returns for the same mistake.
+ */
+struct vms_setterm_args {
+    uint32_t chan;              /* channel assigned to the terminal */
+    uint32_t status;            /* return: SS$_ status */
+};
+
 #define VMS_IOCTL_SETPRN    _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_setprn_args)
 #define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
 #define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
 #define VMS_IOCTL_SETIDENT  _IOWR(VMS_IOC_MAGIC, 0x44, struct vms_ident_args)
+#define VMS_IOCTL_SETTERM   _IOWR(VMS_IOC_MAGIC, 0x45, struct vms_setterm_args)
 
 /*
  * ABI lock for the process-table ioctls (vms-8019).
@@ -889,14 +954,26 @@ struct vms_ident_args {
  * and the ioctl NUMBER has changed -- which is a wire break, not a
  * cosmetic one, and must be handled deliberately.
  */
-_Static_assert(sizeof(struct vms_procinfo) == 80,
+/*
+ * THESE THREE LITERALS MOVED WHEN THE TERMINAL FIELD WAS ADDED
+ * (vms-d0b): procinfo 80 -> 96, getjpi_args 152 -> 168,
+ * procscan_args 88 -> 104, and with them the GETJPI and PROCSCAN
+ * request numbers, which fold sizeof into the encoding. That is
+ * exactly the deliberate handling these assertions exist to force --
+ * the kernel module and every userspace client are rebuilt together
+ * from this one header, so the break is a compile-time event, not a
+ * runtime mis-decode.
+ */
+_Static_assert(sizeof(struct vms_procinfo) == 96,
                "vms_procinfo layout changed: process-table ioctl ABI break");
 _Static_assert(sizeof(struct vms_setprn_args) == 72,
                "vms_setprn_args layout changed: VMS_IOCTL_SETPRN ABI break");
-_Static_assert(sizeof(struct vms_getjpi_args) == 152,
+_Static_assert(sizeof(struct vms_getjpi_args) == 168,
                "vms_getjpi_args layout changed: VMS_IOCTL_GETJPI ABI break");
-_Static_assert(sizeof(struct vms_procscan_args) == 88,
+_Static_assert(sizeof(struct vms_procscan_args) == 104,
                "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
+_Static_assert(sizeof(struct vms_setterm_args) == 8,
+               "vms_setterm_args layout changed: VMS_IOCTL_SETTERM ABI break");
 _Static_assert(sizeof(struct vms_ident_args) == 48,
                "vms_ident_args layout changed: VMS_IOCTL_SETIDENT ABI break");
 _Static_assert(sizeof(struct vms_register_args) == 8,
@@ -911,12 +988,14 @@ _Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
                "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
 _Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,
                "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETJPI == 0xC0985642u,
+_Static_assert(VMS_IOCTL_GETJPI == 0xC0A85642u,
                "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0585643u,
+_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0685643u,
                "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
                "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_SETTERM == 0xC0085645u,
+               "VMS_IOCTL_SETTERM encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
                "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
 

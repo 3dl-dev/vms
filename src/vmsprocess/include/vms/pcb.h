@@ -90,6 +90,19 @@ struct pcb_channel {
     uint32_t    flags;
     int         in_use;
     int         mbx_peer_fd;/* other end of mailbox socketpair (-1 if not mbx) */
+    /*
+     * The $ASSIGN channel this PCB slot was bound to in the EXECUTIVE's
+     * device table (src/kernel/vms_devtab.c, VMS_IOCTL_ASSIGN), or 0 if
+     * this slot was never established with the executive (a plain file,
+     * SYS$INPUT/OUTPUT/ERROR, NLA0:, or a mailbox -- none of those are
+     * rows in the device table, so nothing to assign there). 0 is a safe
+     * sentinel: the executive hands out channel numbers starting at 1
+     * (src/kernel/vms_devtab.c's vms_ioctl_assign, ++proc->next_chan).
+     * vms-1c57: sys$qio uses this to make the channel the identity -- it
+     * revalidates against the executive before doing real I/O, rather
+     * than trusting a local slot number the executive never saw.
+     */
+    uint32_t    exec_chan;
 };
 
 /* ================================================================

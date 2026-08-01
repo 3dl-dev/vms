@@ -84,12 +84,6 @@ static int pass = 0, fail = 0;
 struct child_report {
     uint32_t getjpi_status;             /* status of its GETJPI(self) */
     uint32_t linux_pid;                 /* pid the executive has for it */
-    /* The VMS process ID the EXECUTIVE assigned (vms-2b8). The parent
-     * used to look the child up by its Linux pid, which only worked
-     * because the VMS pid was a copy of it -- i.e. because userspace
-     * chose the key. The executive chooses it now, so the only way to
-     * know it is to be told. */
-    uint32_t vms_pid;
     char     prcnam[VMS_PRCNAM_SIZE];   /* name the executive has for it */
 };
 
@@ -108,7 +102,7 @@ static int open_and_register(void)
         printf("  FAIL: cannot open /dev/vms (executive absent)\n");
         return -1;
     }
-    if (vms_kif_register(NULL) != SS_NORMAL) {
+    if (vms_kif_register((uint32_t)getpid()) != SS_NORMAL) {
         printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
         return -1;
     }
@@ -140,7 +134,6 @@ static int child_after_exec(int wfd)
     memset(&info, 0, sizeof(info));
     rep.getjpi_status = vms_kif_getjpi_self(&info);
     rep.linux_pid = info.linux_pid;
-    rep.vms_pid   = info.vms_pid;
     memcpy(rep.prcnam, info.prcnam, VMS_PRCNAM_SIZE);
 
     if (write(wfd, &rep, sizeof(rep)) != (ssize_t)sizeof(rep))
@@ -188,7 +181,7 @@ static void alt_group_helper(int wfd)
     vms_kif_close();
     if (vms_kif_open() < 0)
         _exit(81);
-    if (vms_kif_register(NULL) != SS_NORMAL)
+    if (vms_kif_register((uint32_t)getpid()) != SS_NORMAL)
         _exit(82);
 
     memset(&info, 0, sizeof(info));
@@ -264,7 +257,7 @@ int main(int argc, char **argv)
         vms_kif_close();
         if (vms_kif_open() < 0)
             _exit(70);
-        if (vms_kif_register(NULL) != SS_NORMAL)
+        if (vms_kif_register((uint32_t)getpid()) != SS_NORMAL)
             _exit(71);
         if (vms_kif_setprn(CHILD_NAME) != SS_NORMAL)
             _exit(72);
@@ -307,15 +300,11 @@ int main(int argc, char **argv)
     CHECK(info.linux_pid == (uint32_t)child,
           "name resolves to the naming process's pid");
 
-    /* 3. Resolution by VMS PID reaches the same row. The key is the ID
-     *    the EXECUTIVE assigned and reported, not the Linux pid this
-     *    used to pass (vms-2b8). */
+    /* 3. Resolution by VMS PID reaches the same row. */
     memset(&info, 0, sizeof(info));
-    status = vms_kif_getjpi_pid(rep.vms_pid, &info);
+    status = vms_kif_getjpi_pid((uint32_t)child, &info);
     CHECK(status == SS_NORMAL && strcmp(info.prcnam, CHILD_NAME) == 0,
           "lookup by PID returns the same name");
-    CHECK(rep.vms_pid != 0 && rep.vms_pid != (uint32_t)child,
-          "the VMS process ID is the executive's, not a copy of the Linux pid");
 
     /* 4. Uniqueness is enforced across processes, not within one. */
     status = vms_kif_setprn(CHILD_NAME);

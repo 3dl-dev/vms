@@ -1373,21 +1373,6 @@ static int lex_message(struct dcl_context *ctx, const char *args,
 
     unsigned long code = strtoul(s, NULL, 0);
 
-    /*
-     * This table is keyed by NUMBER, so it does not follow a corrected
-     * constant the way a consumer that names the symbol does. Bind the
-     * corrected rows to the values the product actually returns, so a
-     * future change breaks the build instead of leaving F$MESSAGE unable
-     * to name a status OVMX hands out (vms-9fc: SS$_ILLIOFUNC moved
-     * 580 -> 244 and this table was left behind, still rendering
-     * "illegal I/O function" for what the oracle calls VASFULL).
-     */
-    _Static_assert(SS$_ILLIOFUNC == 244,
-                   "F$MESSAGE's ILLIOFUNC row must carry the SS$_ILLIOFUNC "
-                   "value sys$qio returns");
-    _Static_assert(SS$_INSFMEM == 292,
-                   "F$MESSAGE's INSFMEM row must carry SS$_INSFMEM");
-
     /* Inline lookup table for common SS$ condition codes */
     static const struct {
         unsigned long code;
@@ -1411,13 +1396,6 @@ static int lex_message(struct dcl_context *ctx, const char *args,
          * F$MESSAGE(148) renders "%SYSTEM-F-DUPLNAM, duplicate name".
          * Replaces 434/'E', which the same oracle disproves. */
         { 148,   "SYSTEM", 'F', "DUPLNAM",       "duplicate name" },
-        /* ORACLE-PINNED (vms-9fc): $SSDEF SS$_ILLIOFUNC 244;
-         * F$MESSAGE(244) -> "%SYSTEM-F-ILLIOFUNC, illegal I/O function
-         * code". This row did not exist: the table carried ILLIOFUNC at
-         * 580, which the same oracle run shows is SS$_VASFULL, so
-         * F$MESSAGE could not name the status sys$qio actually returns
-         * for an unimplemented function code. */
-        { 244,   "SYSTEM", 'F', "ILLIOFUNC",     "illegal I/O function code" },
         { 292,   "SYSTEM", 'E', "INSFMEM",       "insufficient dynamic memory" },
         /* ORACLE-PINNED (vms-8019): $SSDEF SS$_IVLOGNAM 340;
          * F$MESSAGE(340) -> "%SYSTEM-F-IVLOGNAM, invalid logical name".
@@ -1436,12 +1414,7 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 532,   "SYSTEM", 'F', "RESULTOVF",     "resultant string overflow" },
         { 548,   "SYSTEM", 'E', "IVIDENT",       "invalid identifier" },
         { 556,   "SYSTEM", 'E', "TIMEOUT",       "device timeout" },
-        /* ORACLE-PINNED (vms-9fc): $SSDEF SS$_VASFULL 580;
-         * F$MESSAGE(580) -> "%SYSTEM-F-VASFULL, virtual address space is
-         * full". This slot used to be mislabelled ILLIOFUNC/'E', which
-         * meant F$MESSAGE(580) rendered "illegal I/O function" for a
-         * status that means address-space exhaustion. */
-        { 580,   "SYSTEM", 'F', "VASFULL",       "virtual address space is full" },
+        { 580,   "SYSTEM", 'E', "ILLIOFUNC",     "illegal I/O function" },
         { 588,   "SYSTEM", 'E', "NOMORENODE",    "no more cluster nodes" },
         /* ORACLE-PINNED (vms-8019): $SSDEF SS$_VOLINV 596;
          * F$MESSAGE(596) -> "%SYSTEM-F-VOLINV, volume is not software

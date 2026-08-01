@@ -327,6 +327,65 @@ int scs_member_build_config(const struct scs_member_params *p,
      * both places and are acked identically, and the 3 outliers hold printable
      * digraphs ("AP", "IS") and ASCII spaces -- stale buffer contents, not data.
      * We do not reproduce another implementation's uninitialised memory. */
+
+    /*
+     * vms-2f3: THE REJOIN FORM. A returning node's op 0x02 is a DIFFERENT SHAPE
+     * from a first-timer's, and OVMX has always sent the first-timer's.
+     *
+     * Census, `cat 0x01 op 0x02` admission requests, body offsets:
+     *
+     *   capture                             [20:22] [22:24]  [28:36]
+     *   vax3-2to3 #285      VAX3 FIRST join    0       0      zero
+     *   formation-ci1 #67   VAX2 FIRST join    0       0      zero
+     *   crash-rejoin #1297  VAX3 REJOIN        1     1025     004af82e3605bc00
+     *   af2-established-rejoin #2923           1     1025     c01f673a9400bc00
+     *   af2-firsttimer x3 rejoins              1     1025     (same)
+     *   e81-bystander-ADDITION #2969           1     1025     e05a627a4b03bc00
+     *   OVMX, every run ever                   0       0      zero
+     *
+     * Zero residuals: 6 captures, 2 real joiner nodes, 3 lab generations.
+     *
+     * WHAT THE FIELDS ARE -- grounded against the peer's own oracle, not
+     * inferred. SDA `ANALYZE/SYSTEM` -> `SHOW CLUSTER` on VAX1 and on VAX3
+     * renders the Cluster Block (CLUB) as:
+     *
+     *     Found Node SYSID     000000000401        <- 0x0401 = 1025 = [22:24]
+     *     Founding Time          1-AUG-2026
+     *                              12:03:09        <- = [28:36] decoded
+     *
+     * and `004af82e3605bc00` decodes as a VMS absolute-time quadword to exactly
+     * 1-AUG-2026 12:03:09.60. So [22:24] is the CLUB's founding-node SCSSYSTEMID
+     * and [28:36] is the CLUB's founding time -- a CLUSTER-scoped fact, NOT this
+     * node's incarnation. (The same quadword appears in every member's own
+     * op 0x01 body[28:36] and in the class-0x03 removal op 0x08 that removed a
+     * node with a completely different incarnation. One value per cluster.)
+     *
+     * RULE 10 APPLIES, exactly as it does to op 0x01: both values are CLUSTER
+     * facts and are COPIED from what the members told us. This function does not
+     * know them and never computes them; it only places them. The caller learns
+     * `cluster_formed` from a member's op 0x01 body[28:36] (we already parse it
+     * and have been discarding it here) and `founding_sysid` by identifying the
+     * founding node -- the one member whose own admission time body[64:72]
+     * EQUALS the founding time, VAX1 and only VAX1 in the corpus, matching SDA's
+     * Found Node SYSID with zero residuals.
+     *
+     * [36:40] reads 9 / 3 / 2 across the real rejoin specimens and is NOT
+     * determined -- not the epoch, not a CSID. It stays zero rather than
+     * carrying a guess. Real rejoins also put twelve 0x20 spaces at [40:52];
+     * 9 of 12 genuine specimens carry zeros there and are acked identically
+     * (see above), so that stays zero too. Both are one-line variables for a
+     * later run, deliberately not moved in the same experiment as this.
+     *
+     * MUST STAY CONDITIONAL. A genuinely fresh identity has to keep sending
+     * zeros, because every real FIRST join does.
+     */
+    if (p->rejoin) {
+        uint8_t *b = out + 14 + SCS_MEMBER_BODY_OFF;
+        put_le16(b + 20, 1);
+        put_le16(b + 22, p->founding_sysid);
+        put_le64(b + 28, p->cluster_formed);
+    }
+
     return 0;
 }
 

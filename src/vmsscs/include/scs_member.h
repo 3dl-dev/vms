@@ -135,6 +135,12 @@ struct scs_member_params {
     uint16_t txn;             /* body[4:6] on a transaction WE initiate (op 0x0b) */
     uint16_t checksum;        /* body[6:8] on a transaction WE initiate (op 0x0b) */
     const char *model;        /* op 0x14 only: model string; NULL => OVMX default */
+    /* vms-2f3: op 0x02 REJOIN form. Zero => the FIRST-JOIN form, which is what
+     * the baked template carries and what a genuinely new identity must send.
+     * See scs_member_build_config() for the census that separates the two. */
+    int      rejoin;          /* body[20:22]=1 -- "I hold prior cluster state" */
+    uint16_t founding_sysid;  /* body[22:24]  the founding node's SCSSYSTEMID */
+    /* body[28:36] reuses cluster_formed above -- the same COPIED quadword. */
 };
 
 /*
@@ -358,6 +364,23 @@ int scs_member_close_is_resource(const uint8_t *rbody);
 #define SCS_MEMBER_ROLE_0F        0x30 /* body[16] on op 0x0f                    */
 #define SCS_MEMBER_ROLE_XITION    0x40 /* body[16] on op 0x09 / 0x08 / 0x0d      */
 #define SCS_MEMBER_ROLE_GO        0x60 /* body[16] on op 0x0a                    */
+/* vms-2f3: the coordinator's transition ABORT, broadcast to every participant
+ * as `cat 0x01 op 0x04` with body[16]=0x50 and body[17]=the class it is
+ * abandoning. GROUNDED to the millisecond in d94-r1B: three copies leave the
+ * coordinator 1.2 ms after the last op-0x05 lock-rebuild echo -- one to each
+ * participant, on each one's own Con.ID pair -- and the VMS console prints
+ * `Node VAX3 (csid 00010007) aborted VAXcluster state transition` in the same
+ * hundredth of a second. It is NOT a timeout: it replaces the op 0x09
+ * transition-open that a SUCCESSFUL join receives ~27 ms after the identical
+ * round (d94-r2A #1248).
+ *
+ * DISTINCT FROM the op 0x04 that §3.4 of the handoff warns about: that one is
+ * role 0x00 / class 0x00 on a NON-VMS$VAXcluster Con.ID -- a different SYSAP's
+ * opcode 4 -- and it appears in successful joins. Match on the role slot, and
+ * never on the opcode alone. txn=0, so per spec sec 4(r) it takes no response;
+ * this is a notification we must LOG, not answer. */
+#define SCS_MEMBER_ROLE_ABORT     0x50 /* body[16] on the cat-0x01 op 0x04 abort */
+#define SCS_MEMBER_OP_ABORT       0x04 /* transition ABORT (with ROLE_ABORT only) */
 #define SCS_MEMBER_CLASS_ADD      0x02 /* body[17]: add a member    (barrier)    */
 #define SCS_MEMBER_CLASS_REMOVE   0x03 /* body[17]: remove a failed one (barrier)*/
 #define SCS_MEMBER_CLASS_DEPART   0x04 /* body[17]: self-departure  (NO barrier) */

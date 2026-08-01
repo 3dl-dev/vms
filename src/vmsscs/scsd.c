@@ -970,7 +970,169 @@ static struct {
     uint64_t formed;
     uint64_t last_transition;
     uint64_t own_admission;
+    /* vms-2f3: the FOUNDING NODE's SCSSYSTEMID -- SDA's `Found Node SYSID` in
+     * the Cluster Block. Not carried in any field a member sends us under its
+     * own name, but IDENTIFIABLE from what they do send: the founding node is
+     * the member whose own admission time (op 0x01 body[64:72], SDA's CSB
+     * `Ref. time`) equals the cluster's founding time (body[28:36], SDA's CLUB
+     * `Founding Time`) -- because founding the cluster IS its admission.
+     * Verified in d94-r1B: of three members, exactly VAX1/1025 matches, and
+     * SDA on both VAX1 and VAX3 reports `Found Node SYSID 000000000401` = 1025.
+     * Learned, never computed (Rule 10). */
+    uint16_t founding_sysid;
 } ovmx_cluster;
+
+/*
+ * vms-2f3: PRIOR-ADMISSION STATE -- the one thing a rebooted VAX has that a
+ * restarted OVMX does not.
+ *
+ * A real VAX3 that is `kill -9`'d, crash-removed by the cluster (class 0x03)
+ * and rebooted under an unchanged SCSNODE/SCSSYSTEMID rejoins in ~90 s
+ * (captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap), and its op 0x02
+ * says "I have prior cluster state" -- it REMEMBERS having been in this cluster
+ * across the reboot. OVMX restarts amnesiac and claims to be a first-timer
+ * while three peers hold a CSB for it, and the coordinator aborts the
+ * transition 1.2 ms after collecting everyone's lock-rebuild echo.
+ *
+ * Persisted beside the SYSGEN store, because that store IS the identity
+ * (SCSNODE + SCSSYSTEMID) this claim is about -- a different store is a
+ * different node and must not inherit it.
+ *
+ * DELIBERATE SCOPE, and its relation to vms-e6c. e6c says: do not keep claiming
+ * MEMBERSHIP you have lost. This keeps something strictly weaker and different
+ * -- the fact that we were ONCE admitted to the cluster with this founding
+ * time. We never replay a member count, a transition or a CSID from it, and it
+ * gates exactly one boolean plus two values we re-learn live off the wire on
+ * every run. If the cluster we meet has a different founding time, this is a
+ * different cluster and the state does not apply.
+ */
+static struct {
+    int      valid;
+    uint64_t formed;          /* the cluster we were admitted to */
+    uint16_t founding_sysid;  /* its founding node, as we knew it then */
+} ovmx_prior;
+
+/*
+ * Where the prior-admission record lives: "<sysgen store>.cluster". Keyed on
+ * the store because the store IS the identity the record is about -- a
+ * different store is a different node and must not inherit it. With no named
+ * store there is no stable identity to key on and no record is kept: an
+ * unconfigured SCSD is a first-timer every time, which is at least honest.
+ */
+static int prior_admission_path(char *out, size_t out_len)
+{
+    const char *named = getenv("OVMX_SYSGEN_PATH");
+    if (named == NULL || named[0] == '\0') {
+        return -1;
+    }
+    int n = snprintf(out, out_len, "%s.cluster", named);
+    return (n > 0 && (size_t)n < out_len) ? 0 : -1;
+}
+
+static void prior_admission_load(void)
+{
+    char path[1024];
+    memset(&ovmx_prior, 0, sizeof(ovmx_prior));
+    if (prior_admission_path(path, sizeof(path)) != 0) {
+        return;
+    }
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        return;
+    }
+    unsigned long long formed = 0;
+    unsigned sysid = 0;
+    if (fscanf(f, "formed=%llx founding_sysid=%u", &formed, &sysid) == 2 &&
+        formed != 0) {
+        ovmx_prior.valid = 1;
+        ovmx_prior.formed = (uint64_t)formed;
+        ovmx_prior.founding_sysid = (uint16_t)sysid;
+    }
+    fclose(f);
+    if (ovmx_prior.valid) {
+        log_ts(stdout);
+        printf(" SCSD-I-PRIORCLU, this identity has been admitted before:"
+               " cluster formed=0x%016llx, founding node SCSSYSTEMID %u (%s)."
+               " If the cluster we meet carries that founding time, our"
+               " op 0x02 will take the REJOIN form\n",
+               (unsigned long long)ovmx_prior.formed,
+               (unsigned)ovmx_prior.founding_sysid, path);
+        fflush(stdout);
+    }
+}
+
+static void prior_admission_save(void)
+{
+    char path[1024];
+    if (prior_admission_path(path, sizeof(path)) != 0 ||
+        ovmx_cluster.formed == 0) {
+        return;
+    }
+    FILE *f = fopen(path, "w");
+    if (f == NULL) {
+        return;
+    }
+    fprintf(f, "formed=%016llx founding_sysid=%u\n",
+            (unsigned long long)ovmx_cluster.formed,
+            (unsigned)ovmx_cluster.founding_sysid);
+    fclose(f);
+    log_ts(stdout);
+    printf(" SCSD-I-PRIORCLU, recorded our admission to cluster"
+           " formed=0x%016llx (founding node %u) in %s -- a rebooted VAX"
+           " carries this across a crash and a restarted OVMX must too\n",
+           (unsigned long long)ovmx_cluster.formed,
+           (unsigned)ovmx_cluster.founding_sysid, path);
+    fflush(stdout);
+}
+
+/*
+ * vms-2f3: decide whether this op 0x02 takes the REJOIN form, and fill it.
+ *
+ * Every condition here is a fact we can check, not a preference:
+ *   - we have a prior-admission record for THIS identity, and
+ *   - we have heard a member's op 0x01 this run, and
+ *   - the cluster we are meeting has the SAME founding time we were admitted
+ *     to. A different founding time is a different cluster and we are a
+ *     first-timer to it, no matter what we remember.
+ *   - and we know who founded it -- learned live this run if a member told us,
+ *     falling back to the value we recorded at our own admission.
+ *
+ * OVMX_REJOIN_FORM=0 forces the first-join form, so the refusal stays
+ * reproducible and the change stays bisectable.
+ */
+static void cm_apply_rejoin_form(struct scs_member_params *mp)
+{
+    static int announced;
+    const char *off = getenv("OVMX_REJOIN_FORM");
+    if (off != NULL && off[0] == '0') {
+        return;
+    }
+    if (!ovmx_prior.valid || !ovmx_cluster.known || ovmx_cluster.formed == 0 ||
+        ovmx_cluster.formed != ovmx_prior.formed) {
+        return;
+    }
+    uint16_t fs = ovmx_cluster.founding_sysid;
+    if (fs == 0) {
+        fs = ovmx_prior.founding_sysid;
+    }
+    if (fs == 0) {
+        return;
+    }
+    mp->rejoin = 1;
+    mp->founding_sysid = fs;
+    mp->cluster_formed = ovmx_cluster.formed;
+    if (!announced) {
+        announced = 1;
+        log_ts(stdout);
+        printf(" SCSD-I-CMREJOIN, op 0x02 takes the REJOIN form: prior"
+               " state=1, founding node %u, founding time 0x%016llx."
+               " We were admitted to this same cluster before, and a real VAX"
+               " that crash-rejoins says so (crash-rejoin #1297); OVMX has"
+               " always sent the first-join form here\n",
+               (unsigned)fs, (unsigned long long)ovmx_cluster.formed);
+        fflush(stdout);
+    }
+}
 
 /*
  * vms-584: RE-LEARN the cluster-wide facts from the TRANSITION-OPEN.
@@ -1138,6 +1300,7 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
         mp.send_seq = scs_seq_advance(&ps->vc.seq);
         mp.sysap_send_msg = ps->sysap_send++;
         mp.sysap_ack_msg = ps->sysap_recv;
+        cm_apply_rejoin_form(&mp); /* vms-2f3 */
         if (scs_member_build_config(&mp, frame) == 0 &&
             send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
             sent++;
@@ -2033,6 +2196,7 @@ int main(int argc, char **argv)
     long dir_conn_resp_sent = 0; /* vms-246: SCS$DIRECTORY CONNECT-RESPONSEs sent */
     long dir_lookup_sent = 0;    /* vms-246: SCS$DIR_LOOKUP responses sent */
     long cm_config_frames = 0;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
+    long cm_abort_seen = 0;      /* vms-2f3: cat-0x01 op-0x04 role-0x50 aborts received */
     /* vms-760: the deferred op 0x02 goes to EXACTLY ONE peer -- THE COORDINATOR.
      * Admission is a single-coordinator transaction: the joiner asks one member,
      * and THAT member relays the new node to the rest via op 0x12 and then runs
@@ -2052,6 +2216,8 @@ int main(int argc, char **argv)
         return 1;
     }
     uint16_t ovmx_scssystemid = resolve_scssystemid();
+    /* vms-2f3: have we been admitted to a cluster before under this identity? */
+    prior_admission_load();
     /* vms-9f3: OVMX's cluster-LOGICAL LAVC address, computed ONCE from its own
      * SCSSYSTEMID (aa:00:04:00:<LE16(sysid)>). Written at the SCA src-logical
      * field (abs 24) of every emitted frame; the raw HW MAC stays at eth-src
@@ -2512,6 +2678,37 @@ int main(int argc, char **argv)
                         fflush(stdout);
                     }
 
+                    /* vms-2f3: THE TRANSITION ABORT. Until this existed, a
+                     * refused rejoin was indistinguishable from a hang: the
+                     * coordinator broadcast `aborted VAXcluster state
+                     * transition` to its console and to every participant --
+                     * including us -- and OVMX logged nothing at all, so every
+                     * failed run "just looked stuck" and we measured timeouts
+                     * that were never timeouts.
+                     *
+                     * It is not answered (txn=0, spec sec 4(r)) and it must not
+                     * be: real participants send nothing back. What it buys is
+                     * a run that fails HONESTLY and legibly. Matched on the
+                     * ROLE SLOT, never the opcode alone -- op 0x04 role 0x00 is
+                     * a different SYSAP's opcode 4 and appears in SUCCESSFUL
+                     * joins (handoff sec 3.4). */
+                    if (cm_req && mv.category == SCS_MEMBER_CAT_CONFIG &&
+                        mv.opcode == SCS_MEMBER_OP_ABORT && (size_t)n >= 92 &&
+                        buf[72 + SCS_MEMBER_ROLE_BODYOFF] == SCS_MEMBER_ROLE_ABORT) {
+                        uint8_t cls = buf[72 + SCS_MEMBER_CLASS_BODYOFF];
+                        cm_abort_seen++;
+                        log_ts(stdout);
+                        printf(" SCSD-E-XITABORT, node %u ABORTED the class-0x%02x"
+                               " state transition (cat 0x01 op 0x04 role 0x50)."
+                               " This is a DECISION, not a timeout -- the"
+                               " coordinator sends it instead of the op 0x09"
+                               " transition-open, on state it already holds."
+                               " We are not being ignored; we are being refused\n",
+                               (unsigned)(peer_node_number(ps) & 0x03ff),
+                               (unsigned)cls);
+                        fflush(stdout);
+                    }
+
                     /* Remember which VC this dialogue rides so the poll-loop
                      * flush can answer on the same one. */
                     if (cm_on_joiner_vc) {
@@ -2541,6 +2738,36 @@ int main(int argc, char **argv)
                         }
                         uint16_t mc = (uint16_t)buf[72 + 18] |
                                       ((uint16_t)buf[72 + 19] << 8);
+                        /* vms-2f3: IDENTIFY THE FOUNDING NODE while we have its
+                         * own frame in hand. body[64:72] is the sender's own
+                         * admission time (SDA CSB `Ref. time`) and body[28:36]
+                         * is the cluster's founding time (SDA CLUB `Founding
+                         * Time`). They are equal for exactly one member -- the
+                         * node that founded the cluster, whose admission IS the
+                         * founding. Its SCSSYSTEMID is the LE16 in its own
+                         * source-logical address aa:00:04:00:<sysid> at abs 24.
+                         * d94-r1B: 3 members, 1 match (VAX1/1025); SDA on VAX1
+                         * and on VAX3 both report Found Node SYSID 0x0401. */
+                        uint64_t sender_admission = 0;
+                        for (int k = 7; k >= 0; k--) {
+                            sender_admission = (sender_admission << 8) | buf[72 + 64 + k];
+                        }
+                        if (formed != 0 && sender_admission == formed) {
+                            uint16_t fs = (uint16_t)buf[24 + 4] |
+                                          ((uint16_t)buf[24 + 5] << 8);
+                            if (fs != 0 && ovmx_cluster.founding_sysid != fs) {
+                                ovmx_cluster.founding_sysid = fs;
+                                log_ts(stdout);
+                                printf(" SCSD-I-CLUFOUND, node %u FOUNDED this"
+                                       " cluster: its own admission time equals"
+                                       " the cluster founding time"
+                                       " (0x%016llx) -- SDA calls this the"
+                                       " CLUB's Found Node SYSID\n",
+                                       (unsigned)fs,
+                                       (unsigned long long)formed);
+                                fflush(stdout);
+                            }
+                        }
                         /* vms-584: this copy BOOTSTRAPS us -- it is how we learn
                          * the cluster at all before we have witnessed any
                          * transition. But it must never walk us BACKWARDS.
@@ -2875,6 +3102,11 @@ int main(int argc, char **argv)
                                     ovmx_cluster.admitted = 1;
                                     ovmx_cluster.own_admission =
                                         scs_member_vms_time_now();
+                                    /* vms-2f3: this is the moment a rebooted VAX
+                                     * would have something to remember. Record
+                                     * it now, while it is a fact and not a
+                                     * prediction. */
+                                    prior_admission_save();
                                 }
                                 ps->barrier_count++;
                                 /* vms-584: the transition this barrier belonged
@@ -3404,6 +3636,7 @@ int main(int argc, char **argv)
                 mp.send_seq = scs_seq_advance(&ps->vc.seq);
                 mp.sysap_send_msg = ps->sysap_send++;
                 mp.sysap_ack_msg = ps->sysap_recv; /* ref frame 285: amsg=2 = peer's smsg */
+                cm_apply_rejoin_form(&mp); /* vms-2f3 */
                 uint8_t c2frame[SCS_MEMBER_FRAME_LEN];
                 if (scs_member_build_config(&mp, c2frame) == 0 &&
                     send_frame_to(sock, (int)ifindex, ps->eth_mac, c2frame,
@@ -4726,6 +4959,10 @@ int main(int argc, char **argv)
                 dir_conn_resp_sent, dir_lookup_sent);
         fprintf(stderr, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld PADDED-HELLO-SENT=%ld\n",
                 cm_config_frames, cm_response_sent, padded_sent);
+        /* vms-2f3: a run that was REFUSED must say so in its summary, not just
+         * fail to say XITDONE. XITABORT>0 is the difference between "the
+         * coordinator declined us" and "nothing happened". */
+        fprintf(stderr, "  CM-XITABORT-RECEIVED=%ld\n", cm_abort_seen);
         fprintf(stderr, "  MSCP-SERVER-ACCEPTS-SENT=%ld\n", mscp_srv_accepts);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (!peers[i].in_use) {

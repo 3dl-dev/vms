@@ -229,6 +229,88 @@ static void test_op02_residue_fields_are_zero(void)
     CHECK(zeros, "op 0x02 body[40:52] is zero, not twelve ASCII spaces");
 }
 
+/*
+ * vms-2f3: the op-0x02 REJOIN form. A returning node's admission request is a
+ * DIFFERENT SHAPE from a first-timer's, and OVMX sent the first-timer's on
+ * every rejoin it ever attempted.
+ *
+ * Pinned to the real crash-rejoin specimen
+ * (captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap frame #1297, a real
+ * VAX3 that was kill -9'd, class-0x03 crash-removed, and rebooted under an
+ * unchanged SCSNODE/SCSSYSTEMID): body[20:22]=1, body[22:24]=1025 (the founding
+ * node's SCSSYSTEMID, = SDA's CLUB `Found Node SYSID 000000000401`) and
+ * body[28:36]=004af82e3605bc00 (the cluster founding time, = SDA's CLUB
+ * `Founding Time 1-AUG-2026 12:03:09`, which that quadword decodes to exactly).
+ *
+ * The FIRST-JOIN form must be preserved: two real first joins (vax3-2to3 #285,
+ * formation-ci1 #67) carry zeros in all three, so a genuinely fresh identity
+ * has to keep sending zeros. Both directions are asserted here because the
+ * conditional is the whole point -- always sending the rejoin form would be as
+ * wrong as never sending it.
+ */
+static void test_op02_rejoin_form(void)
+{
+    struct scs_member_params mp;
+    joiner_params(&mp, 15, 16, 3, 2);
+    uint8_t first[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_config(&mp, first) == 0, "build_config first-join ok");
+
+    const int B = 14 + 58; /* body[0] absolute */
+    CHECK(first[B + 20] == 0 && first[B + 21] == 0 &&
+          first[B + 22] == 0 && first[B + 23] == 0,
+          "first-join op 0x02 keeps body[20:24] zero");
+    int ft_zero = 1;
+    for (int i = 0; i < 8; i++) {
+        if (first[B + 28 + i] != 0) {
+            ft_zero = 0;
+        }
+    }
+    CHECK(ft_zero, "first-join op 0x02 keeps body[28:36] zero");
+
+    /* The rejoin form, with the crash-rejoin specimen's own values. */
+    static const uint8_t founding_time[8] = {
+        0x00, 0x4a, 0xf8, 0x2e, 0x36, 0x05, 0xbc, 0x00
+    };
+    uint64_t formed = 0;
+    for (int k = 7; k >= 0; k--) {
+        formed = (formed << 8) | founding_time[k];
+    }
+    mp.rejoin = 1;
+    mp.founding_sysid = 1025;
+    mp.cluster_formed = formed;
+    uint8_t rej[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_config(&mp, rej) == 0, "build_config rejoin ok");
+    CHECK(rej[B + 20] == 0x01 && rej[B + 21] == 0x00,
+          "rejoin op 0x02 body[20:22] = 1 (prior cluster state)");
+    CHECK(rej[B + 22] == 0x01 && rej[B + 23] == 0x04,
+          "rejoin op 0x02 body[22:24] = 1025, the founding node's SCSSYSTEMID");
+    CHECK(memcmp(rej + B + 28, founding_time, 8) == 0,
+          "rejoin op 0x02 body[28:36] = the cluster founding time, verbatim");
+
+    /* [36:40] is NOT determined (9/3/2 across specimens) and [40:52] stays
+     * zero -- neither moves in this experiment. */
+    CHECK(rej[B + 36] == 0 && rej[B + 37] == 0 &&
+          rej[B + 38] == 0 && rej[B + 39] == 0,
+          "rejoin op 0x02 leaves the undetermined body[36:40] zero");
+
+    /* Nothing else may move. Assert the changed OFFSETS, not a count: the
+     * specimen's own values happen to contain zero bytes (body[21], body[28]
+     * and body[35] are 0x00 in the reference), so a count would silently
+     * depend on which cluster the founding time came from. */
+    int outside = 0;
+    for (int i = 14; i < SCS_MEMBER_FRAME_LEN; i++) {
+        if (first[i] == rej[i]) {
+            continue;
+        }
+        int off = i - B;
+        if (!((off >= 20 && off < 24) || (off >= 28 && off < 36))) {
+            outside = 1;
+        }
+    }
+    CHECK(!outside,
+          "rejoin form touches ONLY body[20:24] and body[28:36]");
+}
+
 static void test_default_model_is_ovmx(void)
 {
     struct scs_member_params mp;
@@ -677,6 +759,7 @@ int main(void)
     test_op01_byte_exact_and_votes();
     test_op02_byte_exact();
     test_op02_residue_fields_are_zero();
+    test_op02_rejoin_form();
     test_default_model_is_ovmx();
     test_parse_classification();
     test_response_echoes_real_checksum();

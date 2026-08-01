@@ -102,8 +102,8 @@ int vms_terminal_get_char(const struct vms_terminal *term, uint32_t bit);
 /* Apply characteristics that map to real termios (echo, etc.) */
 void vms_terminal_apply(const struct vms_terminal *term);
 
-/* Format SHOW TERMINAL output to FILE stream */
-void vms_terminal_show(const struct vms_terminal *term, FILE *out);
+/* vms_terminal_show() was here and is DELETED (vms-d0b). SHOW TERMINAL reads
+ * the executive now; see the note at the deletion site in dcl_terminal.c. */
 
 /* ---- Terminal Device Allocation Table ---- */
 

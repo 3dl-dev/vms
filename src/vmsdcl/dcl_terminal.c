@@ -127,88 +127,27 @@ void vms_terminal_apply(const struct vms_terminal *term)
 }
 
 /*
- * Characteristic display table — maps bit flags to VMS display names.
+ * DELETED, NOT REPLACED (vms-d0b): char_display[] and vms_terminal_show().
  *
- * Each entry has an "active" name (shown when bit is set) and
- * an "inactive" name (shown when bit is clear).
+ * They were the renderer behind SHOW TERMINAL, and SHOW TERMINAL is now a
+ * reader of the executive (src/vmsdcl/dcl_cmd_show.c: $GETJPI for which
+ * terminal this job is on, then $GETDVI for that device's row). That left
+ * this pair with no caller at all, and a caller-less renderer would not have
+ * been harmless: char_display[] invented seven characteristics VMS V7.3 does
+ * not print (Scope, Holdscreen, Mechtab, Oper, Page, Runout, AltTypeAhd)
+ * while omitting most of the names it does, and printed Width and Page in a
+ * layout the oracle does not use. Keeping a second, wrong renderer of VMS
+ * output in the tree is how it comes back. The oracle's real list, and the
+ * only renderer of it, live at the reader -- see terminal_chars[] in
+ * dcl_cmd_show.c and docs/oracle/vax73-terminal-device.md section 2.
+ *
+ * What is NOT deleted, because it is still used: struct vms_terminal, the
+ * TT_* bits, vms_terminal_init(), vms_terminal_set_char(),
+ * vms_terminal_get_char() and vms_terminal_apply(). SET TERMINAL still writes
+ * them and vms_terminal_apply() still reaches the real termios. The TT_* bits
+ * remain OVMX-defined and are still labelled as such in
+ * src/vmsdcl/include/dcl/terminal.h (vms-2cb).
  */
-static const struct {
-    uint32_t    bit;
-    const char *active_name;
-    const char *inactive_name;
-} char_display[] = {
-    { TT_SCOPE,        "Scope",           "No Scope"          },
-    { TT_ECHO,         "Echo",            "No Echo"           },
-    { TT_TYPEAHEAD,    "Type_ahead",      "No Type_ahead"     },
-    { TT_HOSTSYNC,     "Hostsync",        "No Hostsync"       },
-    { TT_TTSYNC,       "TTsync",          "No TTsync"         },
-    { TT_LOWERCASE,    "Lowercase",       "Uppercase"         },
-    { TT_TAB,          "Tab",             "No Tab"            },
-    { TT_WRAP,         "Wrap",            "No Wrap"           },
-    { TT_LINE_EDITING, "Line_Editing",    "No Line_Editing"   },
-    { TT_INSERT,       "Insert",          "Overstrike"        },
-    { TT_BROADCAST,    "Broadcast",       "No Broadcast"      },
-    { TT_EIGHTBIT,     "Eightbit",        "No Eightbit"       },
-    { TT_HOLDSCREEN,   "Holdscreen",      "No Holdscreen"     },
-    { TT_MECHTAB,      "Mechtab",         "No Mechtab"        },
-    { TT_READSYNC,     "Readsync",        "No Readsync"       },
-    { TT_PASTHRU,      "Pasthru",         "No Pasthru"        },
-    { TT_ESCAPE,       "Escape",          "No Escape"         },
-    { TT_FORM,         "Form",            "No Form"           },
-    { TT_FULLDUP,      "Fulldup",         "Halfdup"           },
-    { TT_MODEM,        "Modem",           "No Modem"          },
-    { TT_PAGE,         "Page",            "No Page"           },
-    { TT_RUNOUT,       "Runout",          "No Runout"         },
-    { TT_FALLBACK,     "Fallback",        "No Fallback"       },
-    { TT_DIALUP,       "Dialup",          "No Dialup"         },
-    { TT_SECURE,       "Secure",          "No Secure"         },
-    { TT_OPER,         "Oper",            "No Oper"           },
-    { TT_ALTYPEAHD,    "AltTypeAhd",      "No AltTypeAhd"     },
-};
-
-#define CHAR_DISPLAY_COUNT (sizeof(char_display) / sizeof(char_display[0]))
-
-/*
- * vms_terminal_show - Display terminal characteristics in VMS format.
- *
- * Output matches OpenVMS SHOW TERMINAL format:
- *   Terminal: _FTA0:     Device_Type: VT100         Owner: BARON
- *
- *   Terminal Characteristics:
- *     Interactive         Echo               Type_ahead          Hostsync
- *     ...
- *     Width: 132          Page:  48
- */
-void vms_terminal_show(const struct vms_terminal *term, FILE *out)
-{
-    const char *owner = term->owner[0] ? term->owner : "SYSTEM";
-
-    fprintf(out, "Terminal: %-12s Device_Type: %-14s Owner: %s\n\n",
-            term->device_name, term->device_type, owner);
-    fprintf(out, "Terminal Characteristics:\n");
-
-    /* Always show "Interactive" first (we are always interactive) */
-    fprintf(out, "  %-20s", "Interactive");
-    int col = 1;
-
-    for (unsigned i = 0; i < CHAR_DISPLAY_COUNT; i++) {
-        int set = (term->characteristics & char_display[i].bit) ? 1 : 0;
-        const char *name = set ? char_display[i].active_name
-                               : char_display[i].inactive_name;
-        fprintf(out, "%-20s", name);
-        col++;
-        if (col >= 4) {
-            fprintf(out, "\n  ");
-            col = 0;
-        }
-    }
-
-    /* Finish the line if needed */
-    if (col > 0)
-        fprintf(out, "\n");
-
-    fprintf(out, "\n  Width: %3d          Page: %3d\n", term->width, term->page);
-}
 
 /* ------------------------------------------------------------------ */
 /* Terminal Device Allocation Table                                    */

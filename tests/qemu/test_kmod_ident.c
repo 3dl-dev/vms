@@ -253,6 +253,12 @@ struct b_report2 {
     uint32_t scan_d_uic;
     uint64_t scan_d_perm_privs;
     uint32_t scan_d_vms_pid;
+    /*
+     * D's terminal, as B's unprivileged scan sees it (vms-d0b). D binds
+     * a real one (see process_d()) so this cell has something to leak;
+     * the redaction check below only means something because of that.
+     */
+    char     scan_d_terminal[VMS_DEVNAM_SIZE];
 };
 
 /* What process D reports once it is registered, named, identified and
@@ -264,6 +270,11 @@ struct d_report {
     uint32_t vms_pid;
     uint32_t uic;
     char     username[VMS_USERNAME_SIZE];
+    /* D's own binding, so the parent can tell "D bound OPA0:" apart
+     * from "D bound nothing" before trusting an empty scan cell as a
+     * redaction rather than a vacuous check (vms-d0b). */
+    uint32_t assign_status;
+    uint32_t setterm_status;
 };
 
 /* What A tells B once it has stamped itself. */
@@ -504,6 +515,7 @@ static int process_b(int rfd, int wfd)
                 r2.scan_d_uic = info.uic;
                 r2.scan_d_perm_privs = info.perm_privs;
                 r2.scan_d_vms_pid = info.vms_pid;
+                memcpy(r2.scan_d_terminal, info.terminal, VMS_DEVNAM_SIZE);
             }
             if (r2.scan_rows > 64)
                 break;
@@ -544,6 +556,21 @@ static int process_d(int rfd, int wfd)
     rd.registered     = vms_kif_register(NULL);
     rd.setprn_status  = vms_kif_setprn(D_PRCNAM);
     rd.setident_status = vms_kif_setident(D_USERNAME, D_UIC, D_PRIVS);
+
+    /*
+     * D binds a REAL terminal through the executive (vms-d0b), so its
+     * row genuinely has something in the terminal field for the
+     * redaction check in main() to catch leaking. Without this, D's
+     * terminal cell would be empty regardless of whether redaction
+     * works, and the check below would be satisfiable by either the
+     * correct behaviour or the defect it exists to catch.
+     */
+    {
+        uint32_t chan = 0;
+
+        rd.assign_status = vms_kif_assign("OPA0:", &chan);
+        rd.setterm_status = vms_kif_setterm(chan);
+    }
 
     /* Now become genuinely unprivileged at the Linux level too, so no
      * reader is being refused by a capability check somewhere else. */
@@ -1038,6 +1065,23 @@ int main(void)
         CHECK(r2.scan_d_username[0] == '\0' && r2.scan_d_uic == 0 &&
               r2.scan_d_perm_privs == 0,
               "... but WITHOUT its user name, UIC or privilege mask");
+
+        /*
+         * TERMINAL REDACTION (vms-d0b). D's terminal field joined the
+         * same redacted row as username/uic/perm_privs above
+         * (src/kernel/vms_proctab.c, proc_fill_info()) -- until this
+         * check, nothing asserted that it actually stayed off a row B
+         * may not $GETJPI. The precondition first: D must have
+         * genuinely bound OPA0:, or an empty scan_d_terminal proves
+         * nothing about redaction at all.
+         */
+        CHECK(rd.assign_status == SS_NORMAL && rd.setterm_status == SS_NORMAL,
+              "D genuinely bound OPA0: as its terminal (precondition -- "
+              "an unbound D would make the next check vacuous)");
+        CHECK(r2.scan_d_terminal[0] == '\0',
+              "TERMINAL REDACTION: the scan withholds D's terminal too, "
+              "even though D genuinely bound one -- a caller that may not "
+              "read D's identity may not read which terminal D is on either");
     }
 
     waitpid(child, NULL, 0);

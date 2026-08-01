@@ -776,6 +776,83 @@ long vms_ioctl_devscan(struct vms_proc *proc, unsigned long arg)
     return 0;
 }
 
+/*
+ * Record the calling process's TERMINAL in the executive's process
+ * table (vms-d0b).
+ *
+ * WHAT THIS REPLACES, and why the shape matters more than the code.
+ * Until this existed the job's terminal was carried in a VMS_TERMINAL
+ * environment variable that PID 1 set on its login child -- deleted by
+ * vms-fb9 as the rejected VMS_PRCNAM cheat (CLAUDE.md Rule 10, worked
+ * example 2). Deleting it left SHOW TERMINAL with nothing to read,
+ * which was the honest state but not the finished one. The binding now
+ * lives where prcnam and username live, so a SECOND process can see
+ * which terminal a job is on, which is the whole difference between a
+ * system facility and a self-description (Rule 11).
+ *
+ * THE CALLER SUPPLIES A CHANNEL AND NO TEXT. The executive resolves
+ * the channel in the calling process's own channel list, takes the
+ * device it is assigned to, and copies THAT device's name. So the set
+ * of names a process can bind itself to is exactly the set of devices
+ * the executive issued it a channel for -- it cannot name a terminal
+ * it never opened, and it cannot name a device that does not exist.
+ * An "OVMX-set-my-terminal-by-name" ioctl would have been the
+ * environment variable with more ceremony.
+ *
+ * The two refusals are the two IO$_SETMODE already returns for the
+ * same two mistakes, one function up: a channel this process does not
+ * hold is SS$_IVCHAN, and a channel to something that is not a
+ * terminal is SS$_IVDEVNAM.
+ */
+long vms_ioctl_setterm(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_setterm_args args;
+    struct vms_channel *ch;
+    struct vms_device *dev = NULL;
+    char devnam[VMS_DEVNAM_SIZE];
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    spin_lock(&proc->chan_lock);
+    ch = chan_find_locked(proc, args.chan);
+    if (ch)
+        dev = ch->dev;
+    spin_unlock(&proc->chan_lock);
+
+    if (!dev) {
+        args.status = SS__IVCHAN;
+        goto out;
+    }
+
+    if (dev->devclass != DC__TERM) {
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+
+    spin_lock(&dev->lock);
+    strscpy(devnam, dev->devnam, sizeof(devnam));
+    spin_unlock(&dev->lock);
+
+    /*
+     * Written under vms_proc_hash_lock -- the process table's lock, and
+     * the one proc_fill_info() holds while it reads this field for a
+     * $GETJPI or $PROCSCAN row. The name is stored under the same lock
+     * every reader takes.
+     */
+    spin_lock(&vms_proc_hash_lock);
+    strscpy(proc->terminal, devnam, sizeof(proc->terminal));
+    spin_unlock(&vms_proc_hash_lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 long vms_ioctl_ttsetmode(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_setmode_args args;

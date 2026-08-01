@@ -1442,74 +1442,293 @@ static int cmd_show_status(struct dcl_command *cmd)
 }
 
 /*
- * SHOW TERMINAL - Display terminal characteristics.
+ * SHOW TERMINAL - the characteristics of the terminal THIS JOB is on,
+ * read out of the executive (vms-d0b).
  *
- * STOPGAP -- FACADE, NOT VMS (vms-d0b). This prints the DCL context's
- * own copy of a terminal, which nothing outside this process wrote and
- * nothing outside this process can see. On VMS, SHOW TERMINAL is a
- * READER of the executive's device table (CLAUDE.md rule 11
- * corollary): it reports the characteristics the executive holds for
- * the device, which is why what one process sets, another sees.
+ * WHAT IT USED TO BE. It printed struct dcl_context's own copy of a
+ * terminal: a name that arrived in the VMS_TERMINAL environment
+ * variable, characteristics this process had set on itself, and an
+ * owner it copied out of its own username field. Nothing outside the
+ * process wrote any of it and nothing outside the process could see it
+ * -- a facade that passed every single-process test perfectly
+ * (CLAUDE.md rule 11). vms-fb9 deleted the environment handoff, which
+ * left the name EMPTY, which was honest and unfinished: to read a
+ * device you must first be able to name one, and naming the terminal a
+ * job is on is executive knowledge.
  *
- * The executive now has that table (src/kernel/vms_devtab.c, proven
- * A-writes/B-reads by tests/qemu/test_kmod_devtab.c). The characteristic
- * list this prints also does not match the oracle: see
- * docs/oracle/vax73-terminal-device.md section 2 for what VMS V7.3
- * actually displays.
+ * WHAT IT IS NOW. Two reads, both of the executive, in the order VMS
+ * asks the same two questions:
  *
- * STILL NOT CONVERTED, AND WHY -- restated 2026-07-30 (vms-fb9), because
- * the reason changed and the old one no longer applies. SHOW DEVICE
- * above IS now a reader; this is not, and the blocker is NOT the test
- * harness any more:
+ *   1. $GETJPI on this process -> which terminal is this job on. The
+ *      answer comes from the executive's process table
+ *      (src/kernel/vms_proctab.c, struct vms_proc::terminal), where
+ *      PID 1's login child recorded it from the channel it holds to
+ *      the console -- so another process can read it too, which is
+ *      what makes it a binding rather than a self-description.
+ *   2. $GETDVI on that name -> the device's characteristics, out of
+ *      the executive's device table (src/kernel/vms_devtab.c). Width,
+ *      page length, the characteristic bits and the owner are
+ *      properties of the DEVICE. What another process changes through
+ *      IO$_SETMODE, this command reports.
  *
- *   To read a device you must name one. SHOW TERMINAL names the terminal
- *   THIS JOB is on, and on VMS that binding lives in the executive --
- *   the job's terminal is recorded in the executive's process database.
- *   vms-fb9 DELETED the three fakes that used to answer the question
- *   (VMS_TERMINAL, VMS_DEVICE_TYPE, the private _FTA pool -- see
- *   src/vmsdcl/dcl_main.c), so ctx->terminal.device_name is now EMPTY
- *   rather than invented. Printing no name is the correct state: an
- *   unanswerable question gets no answer (rule 10).
+ * NOT ONE FIELD IS DECIDED HERE. There is no getenv, no ttyname(), no
+ * isatty(), and in particular no "OPA0: is the only terminal in the
+ * table so it must be mine" -- that inference is the same defect one
+ * level up, and it is the reason the name is not simply looked up by
+ * the constant OVMX_CONSOLE_DEVICE.
  *
- *   RE-CHECKED, 2026-07-31, against main's current header so the next
- *   reader does not re-derive it: the executive process table DOES NOT
- *   CARRY A TERMINAL. struct vms_procinfo (src/kernel/vms_ioctl.h) holds
- *   vms_pid, linux_pid, prcnam, uic, current_mode, redacted, cur_privs,
- *   perm_privs and username (the last three added since the field was
- *   first checked) -- still nothing that names a device. So vms-8019,
- *   which converts the process-table READERS
- *   (SHOW SYSTEM, SHOW PROCESS), does not unblock this either -- there
- *   is no field for it to read. What SHOW TERMINAL needs is a
- *   job-to-terminal binding IN the executive, established where the
- *   session's channel to the device is, and that does not exist yet.
+ * WHEN THE EXECUTIVE REPORTS NO TERMINAL, NOTHING IS PRINTED. That is
+ * the ruling vms-fb9 recorded at this site and it is unchanged: an
+ * unanswerable question gets no answer rather than a plausible one
+ * (rule 10). It is not a state a console login can be in -- PID 1
+ * binds the terminal before it activates the image -- so there is no
+ * message for it, invented or otherwise.
  *
- *   Do NOT close this gap by picking a device -- not OPA0: because it is
- *   the only terminal in the table, not ttyname(), not isatty(). Any of
- *   those is this process deciding what it is on, which is the exact
- *   defect just deleted. The fix is the executive-resident process/
- *   terminal binding.
- *
- * THE SECOND BLOCKER IS GONE, and this note records that so nobody
- * re-derives it: an earlier round could not reach a real /dev/vms at all
- * because nothing in production called vms_kif_register() and
- * src/kernel/vms_module.c rejects every other ioctl from an unregistered
- * task with -ESRCH. vms-9fc fixed that at the kernel-interface layer
- * (src/libvmssys/vms_kif.c, kif_bind), so SHOW DEVICE above is now
- * proven against a real executive inside QEMU. SHOW TERMINAL is still
- * blocked, but only by the process/terminal binding described above.
+ * FORMAT, ORACLE-PINNED, docs/oracle/vax73-terminal-device.md:
+ *   section 1  -- the header prints the PHYSICAL name, with its leading
+ *                 underscore: "Terminal: _OPA0:".
+ *   section 2  -- the header's three fields and their column widths,
+ *                 the "Terminal Characteristics:" heading, and the
+ *                 four-column characteristic grid: three-space indent,
+ *                 19-character cells, last cell of a row unpadded.
+ *   section 3  -- "Unknown" (capital U) is what VMS displays for a
+ *                 terminal whose device type is not identified.
  */
+
+/*
+ * The characteristic grid.
+ *
+ * ORDER IS THE ORACLE'S ORDER. The rows in section 2 read
+ * Interactive, Echo, Type_ahead, No Escape, No Hostsync, TTsync, ...
+ * left to right and top to bottom, and that is exactly the order of
+ * VMS_TTC_INTERACTIVE, VMS_TTC_ECHO, VMS_TTC_TYPEAHEAD,
+ * VMS_TTC_ESCAPE, VMS_TTC_HOSTSYNC ... in src/kernel/vms_ioctl.h. The
+ * table below therefore walks the bits in numeric order and does not
+ * carry an order of its own to drift from.
+ *
+ * SPELLINGS ARE THE ORACLE'S SPELLINGS. Every `set` name below appears
+ * verbatim in the section 2 capture. The `clear` names are the same
+ * capture's own two-state rule, recorded in the notes under it: the
+ * inactive form is "No <name>", with the exceptions the capture itself
+ * names -- Lowercase/Uppercase and Fulldup/Halfdup.
+ *
+ * TWO CELLS HAVE NO CLEAR SPELLING AND CARRY NULL RATHER THAN A GUESS.
+ * The captures show Interactive and Insert editing in one state each --
+ * both set -- and the section 2 note says plainly that Insert editing's
+ * pair "is a different word" without recording which word. Inventing
+ * "No Insert editing" would be a statement about VMS this work cannot
+ * support (rule 10), so a NULL cell prints as blank -- visibly absent
+ * instead of plausibly wrong.
+ *
+ * (Line Editing is NOT one of them, and an earlier draft of this
+ * comment wrongly said it was: section 3 shows "No Line Editing"
+ * directly, on the device type OVMX's console has.)
+ *
+ * A blank cell is not something a booted OVMX displays. Its console
+ * comes up with both bits SET (src/kernel/vms_devtab.c,
+ * VMS_CONSOLE_DEVCHAR), and the only operation that can clear a
+ * characteristic is IO$_SETMODE, which no product code calls:
+ * src/libvmssys/vms_kif.h declares vms_kif_ttsetmode unwired and
+ * tests/integration/test_kif_caller_census.sh fails the build if that
+ * declaration and reality disagree. The NULLs exist so the renderer
+ * cannot fabricate a name if that ever changes.
+ */
+static const struct {
+    uint64_t    bit;
+    const char *set;
+    const char *clear;      /* NULL when the oracle never showed it */
+} terminal_chars[] = {
+    { VMS_TTC_INTERACTIVE,     "Interactive",        NULL                   },
+    { VMS_TTC_ECHO,            "Echo",               "No Echo"              },
+    { VMS_TTC_TYPEAHEAD,       "Type_ahead",         "No Type_ahead"        },
+    { VMS_TTC_ESCAPE,          "Escape",             "No Escape"            },
+    { VMS_TTC_HOSTSYNC,        "Hostsync",           "No Hostsync"          },
+    { VMS_TTC_TTSYNC,          "TTsync",             "No TTsync"            },
+    { VMS_TTC_LOWERCASE,       "Lowercase",          "Uppercase"            },
+    { VMS_TTC_TAB,             "Tab",                "No Tab"               },
+    { VMS_TTC_WRAP,            "Wrap",               "No Wrap"              },
+    { VMS_TTC_HARDCOPY,        "Hardcopy",           "No Hardcopy"          },
+    { VMS_TTC_REMOTE,          "Remote",             "No Remote"            },
+    { VMS_TTC_EIGHTBIT,        "Eightbit",           "No Eightbit"          },
+    { VMS_TTC_BROADCAST,       "Broadcast",          "No Broadcast"         },
+    { VMS_TTC_READSYNC,        "Readsync",           "No Readsync"          },
+    { VMS_TTC_FORM,            "Form",               "No Form"              },
+    { VMS_TTC_FULLDUP,         "Fulldup",            "Halfdup"              },
+    { VMS_TTC_MODEM,           "Modem",              "No Modem"             },
+    { VMS_TTC_LOCAL_ECHO,      "Local_echo",         "No Local_echo"        },
+    { VMS_TTC_AUTOBAUD,        "Autobaud",           "No Autobaud"          },
+    { VMS_TTC_HANGUP,          "Hangup",             "No Hangup"            },
+    { VMS_TTC_BRDCSTMBX,       "Brdcstmbx",          "No Brdcstmbx"         },
+    { VMS_TTC_DMA,             "DMA",                "No DMA"               },
+    { VMS_TTC_ALTYPEAHD,       "Altypeahd",          "No Altypeahd"         },
+    { VMS_TTC_SET_SPEED,       "Set_speed",          "No Set_speed"         },
+    { VMS_TTC_COMMSYNC,        "Commsync",           "No Commsync"          },
+    { VMS_TTC_LINE_EDITING,    "Line Editing",       "No Line Editing"      },
+    { VMS_TTC_INSERT_EDITING,  "Insert editing",     NULL                   },
+    { VMS_TTC_FALLBACK,        "Fallback",           "No Fallback"          },
+    { VMS_TTC_DIALUP,          "Dialup",             "No Dialup"            },
+    { VMS_TTC_SECURE_SERVER,   "Secure server",      "No Secure server"     },
+    { VMS_TTC_DISCONNECT,      "Disconnect",         "No Disconnect"        },
+    { VMS_TTC_PASTHRU,         "Pasthru",            "No Pasthru"           },
+    { VMS_TTC_SYSPASSWORD,     "Syspassword",        "No Syspassword"       },
+    { VMS_TTC_SIXEL,           "SIXEL Graphics",     "No SIXEL Graphics"    },
+    { VMS_TTC_SOFT_CHARACTERS, "Soft Characters",    "No Soft Characters"   },
+    { VMS_TTC_PRINTER_PORT,    "Printer Port",       "No Printer Port"      },
+    { VMS_TTC_NUMERIC_KEYPAD,  "Numeric Keypad",     "No Numeric Keypad"    },
+    { VMS_TTC_ANSI_CRT,        "ANSI_CRT",           "No ANSI_CRT"          },
+    { VMS_TTC_REGIS,           "Regis",              "No Regis"             },
+    { VMS_TTC_BLOCK_MODE,      "Block_mode",         "No Block_mode"        },
+    { VMS_TTC_ADVANCED_VIDEO,  "Advanced_video",     "No Advanced_video"    },
+    { VMS_TTC_EDIT_MODE,       "Edit_mode",          "No Edit_mode"         },
+    { VMS_TTC_DEC_CRT,         "DEC_CRT",            "No DEC_CRT"           },
+    { VMS_TTC_DEC_CRT2,        "DEC_CRT2",           "No DEC_CRT2"          },
+    { VMS_TTC_DEC_CRT3,        "DEC_CRT3",           "No DEC_CRT3"          },
+    { VMS_TTC_DEC_CRT4,        "DEC_CRT4",           "No DEC_CRT4"          },
+    { VMS_TTC_DEC_CRT5,        "DEC_CRT5",           "No DEC_CRT5"          },
+    { VMS_TTC_ANSI_COLOR,      "Ansi_Color",         "No Ansi_Color"        },
+    { VMS_TTC_VMS_STYLE_INPUT, "VMS Style Input",    "No VMS Style Input"   },
+};
+
+/*
+ * The owner's user name, out of the executive's process table.
+ *
+ * The oracle's header reads "Owner: SYSTEM" -- a USER NAME, not a
+ * process id. The device table records the owner as a VMS process id,
+ * so the name is a second executive read ($GETJPI on that process),
+ * not something this process substitutes from its own idea of who it
+ * is. The old code put ctx->username there, which made the field a
+ * restatement of the asking process rather than a fact about the
+ * device.
+ *
+ * An empty result is printed as empty. The executive has a user name
+ * for a process only once an identity has been stamped on it
+ * (VMS_IOCTL_SETIDENT), and OVMX's LOGINOUT does not do that yet
+ * (vms-2b8), so today this field is normally blank -- which is what is
+ * true. It is not filled in from anywhere else.
+ */
+static void terminal_owner_name(uint32_t owner_pid, char *out, size_t outsz)
+{
+    struct vms_procinfo pinfo;
+
+    out[0] = '\0';
+    if (owner_pid == 0)
+        return;
+    if (vms_kif_getjpi_pid(owner_pid, &pinfo) != SS$_NORMAL)
+        return;
+    pinfo.username[VMS_USERNAME_SIZE - 1] = '\0';
+    snprintf(out, outsz, "%s", pinfo.username);
+}
+
+static void show_terminal_render(const struct vms_devinfo *info)
+{
+    const unsigned ncells =
+        sizeof(terminal_chars) / sizeof(terminal_chars[0]);
+    char owner[VMS_USERNAME_SIZE];
+    char phys[VMS_DEVNAM_SIZE + 2];
+    unsigned i;
+    int col = 0;
+
+    terminal_owner_name(info->owner_pid, owner, sizeof(owner));
+    snprintf(phys, sizeof(phys), "_%s", info->devnam);
+
+    /*
+     * Header. The leading underscore is the physical-name form the
+     * oracle prints (section 1); the executive keys its table on the
+     * form without it. "Unknown" is the oracle's spelling for a
+     * terminal whose type is not identified (section 3), and it is the
+     * only device type the executive's table can report -- vms.ko
+     * creates the console with type 0 and has no operation that sets
+     * another, so no other spelling is reachable and none is written
+     * down here.
+     */
+    /*
+     * FIELD WIDTHS MEASURED OFF THE CAPTURE, NOT COPIED FROM THE OLD
+     * CODE, and the old code was wrong by one column: it read
+     * "Terminal: %-12s Device_Type: %-14s Owner: %s" -- a %-12s AND a
+     * literal space, which puts Device_Type at column 23. The oracle
+     * has it at 22 ("Terminal: " is 10, "_OPA0:" is 6, and section 2
+     * shows exactly six spaces between them), and Owner at 49. So the
+     * padding IS the separator here; there is no literal space after
+     * either field.
+     */
+    printf("Terminal: %-12sDevice_Type: %-14sOwner: %s\n\n",
+           phys,
+           /* "Unknown" is pinned (section 3) and 0 is the only device
+            * type the executive's table can hold: vms.ko creates the
+            * console with type 0 and implements no operation that sets
+            * another. A type the oracle has not shown us gets NO
+            * spelling rather than a plausible one -- the first device
+            * with a real type owes this line its pin. */
+           info->devtype == 0 ? "Unknown" : "",
+           owner);
+
+    /*
+     * WIDTH AND PAGE ARE NOT PRINTED (vms-d0b), CORRECTING THE SAME
+     * MISTAKE ONE FIELD LATER. The line this replaced put them on one
+     * line, "   Width:%4u      Page:%5u\n\n" -- a layout the oracle has
+     * never shown. Read docs/oracle/vax73-terminal-device.md section 2
+     * (the verbatim capture, lines 33-34) rather than trusting a count
+     * here: VMS prints Width and Page on TWO SEPARATE lines, each
+     * sharing the line with other fields OVMX cannot source --
+     * Input:/Output: (line speed), LFfill:/CRfill: (fill counts) and
+     * Parity:. Crushing Width and Page onto a single line of their own
+     * invents a layout VMS does not use -- the same charge that got the
+     * renderer THIS FUNCTION replaced deleted, just moved one field
+     * over.
+     *
+     * The two candidate honest answers were "pin it" (reproduce the
+     * two-line form, leaving Input/Output/LFfill/CRfill/Parity blank)
+     * or "print neither". Pinning was rejected: nobody has ever seen
+     * VMS print that block with those fields blank, so inventing their
+     * spacing would be exactly the same fabrication one field further
+     * in. Width and Page are A-writes/B-reads proven against the
+     * executive at the kernel layer instead
+     * (tests/qemu/test_kmod_devtab.c), which is where that property
+     * belongs when the display cannot show it honestly.
+     */
+
+    printf("Terminal Characteristics:\n");
+    for (i = 0; i < ncells; i++) {
+        const char *name = (info->devchar & terminal_chars[i].bit)
+                           ? terminal_chars[i].set
+                           : terminal_chars[i].clear;
+
+        if (col == 0)
+            printf("   ");
+        if (col == 3 || i + 1 == ncells) {
+            /* The last cell of a row is unpadded: the oracle's rows
+             * carry no trailing whitespace (section 2, read byte for
+             * byte with cat -A). */
+            printf("%s\n", name ? name : "");
+            col = 0;
+        } else {
+            printf("%-19s", name ? name : "");
+            col++;
+        }
+    }
+}
+
 static int cmd_show_terminal(struct dcl_command *cmd)
 {
     (void)cmd;
-    struct dcl_context *ctx = dcl_get_context();
+    struct vms_procinfo pinfo;
+    struct vms_devinfo info;
+    uint32_t status;
 
-    /* Ensure owner is current */
-    if (ctx->username[0] && !ctx->terminal.owner[0]) {
-        strncpy(ctx->terminal.owner, ctx->username,
-                sizeof(ctx->terminal.owner) - 1);
-    }
+    status = vms_kif_getjpi_self(&pinfo);
+    if (status != SS$_NORMAL)
+        return status;
 
-    vms_terminal_show(&ctx->terminal, stdout);
+    pinfo.terminal[VMS_DEVNAM_SIZE - 1] = '\0';
+    if (pinfo.terminal[0] == '\0')
+        return status;      /* no terminal: nothing to report, nothing invented */
+
+    status = vms_kif_getdvi_devnam(pinfo.terminal, &info);
+    if (status != SS$_NORMAL)
+        return status;
+
+    info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    show_terminal_render(&info);
     return SS$_NORMAL;
 }
 

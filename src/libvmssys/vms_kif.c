@@ -763,6 +763,18 @@ uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
     return args.status;
 }
 
+uint32_t vms_kif_setterm(uint32_t chan)
+{
+    struct vms_setterm_args args;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.chan = chan;
+
+    KIF_CALL(VMS_IOCTL_SETTERM, &args);
+
+    return args.status;
+}
+
 /* ================================================================
  * Process table (executive-resident PCB directory)
  * ================================================================ */

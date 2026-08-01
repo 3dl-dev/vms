@@ -83,21 +83,30 @@ RUN KVER=$(cat /tmp/kver) && \
 #   test_syssvc_*.c            -> NOT built here; built by the cmake/musl
 #                                 stage below against the REAL src/libvms
 #                                 public sys$ API (vms-1d9).
-#   test_kmod_devtab/procnam/  -> NOT built here; built below against
-#   test_kmod_ident/bind.c/       src/libvmssys (the real kernel-interface
-#   test_kmod_ast/access/lock/    client), see that stage's comment.
-#   lock_sync/lock_mproc.c        vms-290 added the last five: their
-#                                 DCLAST/SETAST/DELIVERAST/SETMODE/GETLKI
-#                                 call sites now go through vms_kif_* rather
-#                                 than a hand-rolled ioctl copy, but they
-#                                 still also drive the raw ioctl layer
-#                                 directly for the calls out of vms-290's
-#                                 scope (REGISTER, ENQ/DEQ/CONVERT, GETMODE,
-#                                 CHKPRIV/SETPRV, and one deliberate raw
-#                                 NULL-arg DELIVERAST -- see the comments in
-#                                 those sources), so they still need
-#                                 vms_ioctl.h on the include path too.
+#   test_kmod_*.c that include -> NOT built here; built below against
+#   "vms_kif.h"                   src/libvmssys (the real kernel-interface
+#                                 client), see that stage's comment. This
+#                                 currently covers devtab/procnam (vms-d0b/
+#                                 vms-8019), ident/bind (vms-2b8/vms-fb9), and
+#                                 ast/access/lock/lock_sync/lock_mproc
+#                                 (vms-290) -- vms-290's five also still drive
+#                                 the raw ioctl layer directly for calls out
+#                                 of its scope (REGISTER, ENQ/DEQ/CONVERT,
+#                                 GETMODE, CHKPRIV/SETPRV, and one deliberate
+#                                 raw NULL-arg DELIVERAST -- see the comments
+#                                 in those sources), so they still need
+#                                 vms_ioctl.h on the include path too. None of
+#                                 this is a list to remember: see the
+#                                 grep-driven selector below.
 #   everything else            -> plain gcc -static against vms_ioctl.h.
+#
+# THE SECOND RECIPE IS SELECTED BY WHAT THE SOURCE INCLUDES, not by a list of
+# file names. It used to be the literal set
+# devtab/procnam/ident/bind -- a list a human had to remember to extend, which
+# is the drift shape this harness has been bitten by before. The include line
+# is the thing that actually decides which recipe a suite needs, so it is what
+# is asked. A new kernel-interface suite reaches the right recipe by being
+# written, not by being remembered.
 #
 # `|| exit 1` is load-bearing: without it a compile failure only breaks the
 # `&&` for that one iteration, the loop continues, and RUN exits with the
@@ -107,9 +116,8 @@ COPY tests/qemu/test_*.c /src/tests/qemu/
 RUN for f in /src/tests/qemu/test_*.c; do \
         case "$f" in \
             */test_syssvc_*.c) continue;; \
-            */test_kmod_devtab.c|*/test_kmod_procnam.c|*/test_kmod_ident.c|*/test_kmod_bind.c) continue;; \
-            */test_kmod_ast.c|*/test_kmod_access.c|*/test_kmod_lock.c|*/test_kmod_lock_sync.c|*/test_kmod_lock_mproc.c) continue;; \
         esac; \
+        if grep -q '#include "vms_kif.h"' "$f"; then continue; fi; \
         out="${f%.c}"; \
         gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel || exit 1; \
         echo "Built: $(basename $out)"; \
@@ -124,18 +132,25 @@ RUN for f in /src/tests/qemu/test_*.c; do \
 # not pull in libvms; the libvms build graph arrives in the NEXT stage
 # (vms-1d9), which is a heavier, separate build.
 COPY src/libvmssys/ /src/libvmssys/
-RUN ARCH=$(uname -m) && \
-    for t in test_kmod_devtab test_kmod_procnam test_kmod_ident test_kmod_bind \
-             test_kmod_ast test_kmod_access test_kmod_lock test_kmod_lock_sync \
-             test_kmod_lock_mproc; do \
+RUN ARCH=$(uname -m) && n_kif=0 && \
+    for f in /src/tests/qemu/test_kmod_*.c; do \
+        if ! grep -q '#include "vms_kif.h"' "$f"; then continue; fi; \
+        t=$(basename "$f" .c); \
         gcc -static -O2 -Wall -pthread -o /src/tests/qemu/$t \
-            /src/tests/qemu/$t.c \
+            "$f" \
             /src/libvmssys/vms_kif.c \
             /src/libvmssys/vms_string.c \
             /src/libvmssys/arch/${ARCH}/syscall.S \
-            -I/src/kernel -I/src/libvmssys && \
-        echo "Built: $t (linked against src/libvmssys/vms_kif.c)" || exit 1; \
-    done
+            -I/src/kernel -I/src/libvmssys || exit 1; \
+        n_kif=$((n_kif + 1)); \
+        echo "Built: $t (linked against src/libvmssys/vms_kif.c)"; \
+    done && \
+    # FLOOR, for the same reason the staging step below carries one: if the
+    # include-line probe above ever stops matching, this loop builds NOTHING
+    # and the previous stage has already skipped the same files -- so every
+    # kernel-interface suite would be absent from the initramfs with the image
+    # build still green. A zero here is a broken selector, not an empty tree.
+    { [ "$n_kif" -ge 1 ] || { echo "FATAL: no test_kmod_* suite was matched as a kernel-interface client -- the '#include \"vms_kif.h\"' selector no longer matches anything"; exit 1; }; }
 
 # --- Userspace system-service layer (vms-1d9) ---------------------------
 # Everything above proves the KERNEL side: raw ioctls (test_kmod_*) and the

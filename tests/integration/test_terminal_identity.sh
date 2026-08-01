@@ -133,10 +133,15 @@ scan_absent "no code allocates a terminal name from a private pool" \
 # survived: with no VMS_TERMINAL set and no pool file, vms_terminal_init()
 # seeded "_FTA0:" and every DCL process claimed the same terminal.
 #
-# Scoped to vms_terminal_init()'s BODY, not the whole file: the same file
-# legitimately READS term->device_name to print it (vms_terminal_show), and
-# a whole-file token check would be satisfied by that read -- an assertion
-# satisfiable by something other than the behaviour under test.
+# Scoped to vms_terminal_init()'s BODY, not the whole file. The reason has
+# CHANGED and the old one no longer applies: it used to be that the same file
+# legitimately READ term->device_name to print it (vms_terminal_show), so a
+# whole-file token check would have been satisfied by that read -- an
+# assertion satisfiable by something other than the behaviour under test.
+# vms-d0b deleted that renderer. The scoping is kept because the property
+# under test is what vms_terminal_init() SEEDS, and a whole-file check would
+# again mean something different from what this line claims the moment any
+# other function in the file touches the field.
 TERM_C="$SRC_ROOT/src/vmsdcl/dcl_terminal.c"
 if [ -f "$TERM_C" ]; then
     init_body=$(strip_comments "$TERM_C" |
@@ -186,6 +191,59 @@ else
     echo "     and not find another source. See src/kernel/vms_devtab.c."
     status=1
 fi
+
+# --- 6. SHOW TERMINAL reads the executive too (vms-d0b) -----------------
+# The absence checks above kept the terminal name from being fabricated, and
+# the honest consequence was that SHOW TERMINAL named nothing at all. vms-d0b
+# gave it something to read -- the job-to-terminal binding in the executive's
+# process table -- so the command must now be a READER of the same two tables
+# SHOW DEVICE reads, and this is the paired positive that says so.
+#
+# BOTH calls are required, and they are different properties. $GETJPI is
+# WHICH terminal (the binding, which is the half that used to come from the
+# environment); $GETDVI is WHAT IT IS (the device row, which is the half that
+# used to come from this process's own struct). A reader with only the first
+# would know the name and invent the characteristics; one with only the second
+# would have to pick a device to ask about, and picking is the defect.
+#
+# Scoped to cmd_show_terminal()'s BODY, not the whole file: dcl_cmd_show.c
+# legitimately calls both functions elsewhere (SHOW SYSTEM, SHOW DEVICE), so a
+# whole-file check would be satisfied by those -- an assertion satisfiable by
+# something other than the behaviour under test.
+if [ -f "$SHOW_C" ]; then
+    show_term_body=$(strip_comments "$SHOW_C" |
+        awk '/^static int cmd_show_terminal/ { inf = 1 } inf { print } inf && /^}/ { exit }')
+    if [ -z "$show_term_body" ]; then
+        echo "FAIL: SHOW TERMINAL does not read the executive"
+        echo "  -> cmd_show_terminal() not found in $SHOW_C; the check cannot"
+        echo "     have been evaluated, so it is reported as failed"
+        status=1
+    elif ! printf '%s\n' "$show_term_body" | grep -qF 'vms_kif_getjpi_self('; then
+        echo "FAIL: SHOW TERMINAL does not read the executive"
+        echo "  -> it must ask the executive which terminal this job is on"
+        echo "     (\$GETJPI), never decide for itself. See src/kernel/vms_proctab.c."
+        status=1
+    elif ! printf '%s\n' "$show_term_body" | grep -qF 'vms_kif_getdvi_devnam('; then
+        echo "FAIL: SHOW TERMINAL does not read the executive"
+        echo "  -> it must read the device row for that terminal (\$GETDVI) rather"
+        echo "     than report characteristics it holds itself."
+        status=1
+    else
+        echo "  OK: SHOW TERMINAL reads the executive (\$GETJPI then \$GETDVI)"
+    fi
+fi
+
+# --- 6b. ...and does not pick a terminal instead of reading one ---------
+# A fabrication that survives every check above -- case M of the negative
+# controls measures that it does: naming the console because it happens to be
+# the only terminal in the executive's table. That produces a
+# perfectly real device row, read from the executive, for a terminal this job
+# may not be on -- and it is indistinguishable from a reader in any
+# single-process test. OVMX_CONSOLE_DEVICE is the constant PID 1 legitimately
+# uses to $ASSIGN the console when it CREATES a session; a DCL reader has no
+# business naming it.
+scan_absent "SHOW DEVICE/TERMINAL do not name the console themselves" \
+    'OVMX_CONSOLE_DEVICE' "$SHOW_C"
 
 if [ "$status" -eq 0 ]; then
     echo "vms-fb9 gate: PASS"

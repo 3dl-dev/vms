@@ -465,11 +465,11 @@ EOF
         case "$_f" in
         facility)     echo "distributed lock manager, the OTHER direction of the matrix, reached through the PUBLIC sys\$ API as well as raw ioctls";;
         targets)      echo "kernel/vms_lock.c";;
-        suites_red)   echo "test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock";;
+        suites_red)   echo "test_kmod_lock_mproc test_kmod_lock_sync test_syssvc_lock test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "compat[CR][EX] flipped 0 -> 1: a concurrent-read request is granted against a held EXCLUSIVE lock. The mirror of lock-compat-ex-cr, and it exists because the matrix is indexed compat[requested][granted] (vms_lock.c:288) -- so the EX-over-CR flip cannot reach the cross-process suites, which all assert the EX-held direction. WITHOUT THIS, test_kmod_lock_mproc, test_kmod_lock_sync and test_syssvc_lock were never proven capable of going red by ANYTHING in this manifest, and test_syssvc_lock is the ONLY suite that drives the executive through the public sys\$ entry points.";;
+        why)          echo "compat[CR][EX] flipped 0 -> 1: a concurrent-read request is granted against a held EXCLUSIVE lock. The mirror of lock-compat-ex-cr, and it exists because the matrix is indexed compat[requested][granted] (vms_lock.c:288) -- so the EX-over-CR flip cannot reach the cross-process suites, which all assert the EX-held direction. WITHOUT THIS, test_kmod_lock_mproc, test_kmod_lock_sync, test_syssvc_lock and test_syssvc_lock_status were never proven capable of going red by ANYTHING in this manifest, and the two test_syssvc_* suites are the only ones that drive the executive through the public sys\$ entry points.";;
         require_fail) cat <<'EOF'
 child: CR+NOQUEUE denied while parent holds EX (EX blocks CR)
 child: sys$enq CR+NOQUEUE denied while parent holds EX (public API)
@@ -484,13 +484,14 @@ parent: child (completion AST) exited clean
 child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)
 parent: child's NOQUEUE-denial checks reported via public API
 parent: child's post-release retry succeeded via public API
+sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-ONE bit, three suites, ten assertions -- and every one of the eight extras is
-the same granted-instead-of-queued request seen further downstream. A CR that
-the executive should have QUEUED behind a held EX is instead GRANTED
-immediately, so everything that depends on it having waited stops happening:
+ONE bit, four suites, eleven assertions -- and every one of the extras is the
+same granted-instead-of-queued request seen further downstream. A CR that the
+executive should have QUEUED behind a held EX is instead GRANTED immediately,
+so everything that depends on it having waited stops happening:
   mproc  the queue is empty, so GETLKI reports no queued CR from either side
          and the parent's blocking AST is never fired (there is no conflict to
          notify about);
@@ -499,7 +500,20 @@ immediately, so everything that depends on it having waited stops happening:
          reddens the parent's "child exited clean";
   syssvc the child holds a CR it should not; compat[EX][CR] is UNTOUCHED, so
          the child's own CR now blocks its later EX request, and the parent's
-         two assertions are reads of the child's report.
+         two assertions are reads of the child's report;
+  lock_status  test_syssvc_lock_status's CVTUNGRANT scenario (vms-2e5) relies
+         on this SAME precondition as its setup, not as its own property: a
+         holder has EX, the probe's own sys$enq CR is expected to QUEUE so a
+         later LCK$M_CONVERT on it lands on a still-waiting lock and the
+         kernel rejects with SS__CANCELGRANT/SS$_CVTUNGRANT. With CR wrongly
+         granted immediately, the lock is never `waiting`, so the convert
+         takes the ORDINARY compatibility path instead -- against nothing
+         else held, PR converts cleanly -- and the CVTUNGRANT assertion
+         reports the successful convert's real (odd) status instead. This is
+         kstat_to_ss()'s CVTUNGRANT mapping's OWN suite going red for a
+         precondition failure in a DIFFERENT facility, not evidence the
+         translation itself is wrong -- exactly the same shape as the other
+         three suites above, one layer higher in the stack.
 No finer mutation exists: this is a single entry of a single matrix, the same
 shape as the vms-e4d precedent. Making it finer would mean not flipping it.
 NOTE, and it is a finding rather than a defect in this control:

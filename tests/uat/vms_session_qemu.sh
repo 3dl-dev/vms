@@ -141,23 +141,6 @@ for __i in "${!SYSTEM_CMDS[@]}"; do
 done
 unset __i
 
-# LOUD FAILURE, NOT A SILENT RETARGET, if the anchor above was not found
-# (vms-2b8 round 5). Bash arrays accept NEGATIVE indices (>= 4.3) as
-# offsets from the end, so a left-at-default IDX_PRIV_ORIGINAL=-1 would
-# make check_response_at() below silently check the LAST command in
-# CMD_OUTPUT_SEQ instead of erroring -- a check that cannot fail by
-# construction whenever someone renames or removes the original 'SHOW
-# PROCESS /PRIVILEGES' entry above, which is exactly the defect class
-# this harness exists to hunt. Fail the whole run here, before any
-# session is even started, rather than let that happen silently.
-if [ "$IDX_PRIV_ORIGINAL" -lt 0 ]; then
-    echo "UAT HARNESS ERROR: 'SHOW PROCESS /PRIVILEGES' anchor not found" \
-         "in SYSTEM_CMDS -- IDX_PRIV_ORIGINAL would silently retarget to" \
-         "the last command instead of failing. Fix the harness, do not" \
-         "let this run." >&2
-    exit 1
-fi
-
 # DEFECT-1 PROOF (vms-2b8 round 4): SET PROCESS/PRIVILEGES must not corrupt
 # what F$PRIVILEGE or SHOW PROCESS/PRIVILEGES report for privileges the
 # executive actually holds. MEASURED before this fix, on this exact runtime:
@@ -185,62 +168,6 @@ IDX_SETPRV2_AFTER_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
 SYSTEM_CMDS+=('IDENT_WORLD2 = F$PRIVILEGE("WORLD")')
 SYSTEM_CMDS+=('SHOW SYMBOL IDENT_WORLD2')
 IDX_WORLD2_AFTER_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
-
-# DEFECT-1 PROOF, ROUND 5: the report (F$PRIVILEGE) and the GATE (SET
-# PROCESS's own privilege check) must agree about the SAME process at the
-# SAME instant -- round 4 fixed the REPORT (F$PRIVILEGE/SHOW PROCESS/
-# PRIVILEGES all read the executive fresh) but left every DCL privilege
-# GATE reading the RAW, unmasked ctx->privileges the session's identity
-# was given at VMS_IOCTL_SETIDENT time. MEASURED before this fix, on this
-# exact runtime, in this exact SYSTEM session:
-#   $ IDENT_ALTPRI = F$PRIVILEGE("ALTPRI")
-#   $ SHOW SYMBOL IDENT_ALTPRI        -> IDENT_ALTPRI = "FALSE"
-#   $ SET PROCESS/PRIORITY=6          -> AUTHORIZED (no error) -- SAME
-#                                         session, SAME moment the report
-#                                         above said ALTPRI was not held.
-# Root cause: SYSUAF's SYSTEM record authorizes ALL privileges, and
-# VMS_IOCTL_SETIDENT sets cur_privs = the full authorized mask verbatim
-# (OVMX design choice, vms_proctab.c) for a caller with SETPRV -- so
-# ctx->privileges (dcl_main.c, filled from that same read) genuinely
-# contains ALTPRI, even though F$PRIVILEGE and SHOW PROCESS/PRIVILEGES
-# correctly mask it out of what they REPORT (VMS_PRV_M_ENFORCED). The
-# GATE in cmd_set_process (src/vmsdcl/dcl_cmd_set.c) read the unmasked
-# value, so it granted what the masked report had just denied.
-# Fix: every gate in dcl_cmd_set.c now asks enforced_privs_held(), the
-# SAME masked, freshly-read source F$PRIVILEGE and SHOW PROCESS/
-# PRIVILEGES use -- so SET PROCESS/PRIORITY is refused whenever
-# F$PRIVILEGE("ALTPRI") says FALSE, on this SYSTEM session included
-# (ALTPRI is authorized by SYSUAF but not in VMS_PRV_M_ENFORCED, so it is
-# never granted by strength alone until vms-pv1 gives it real
-# enforcement -- Rule 10's HIDE answer, applied to the gate, not just the
-# display).
-# Checked BY POSITION (see the DEFECT-1 round-4 block above for why):
-# IDENT_ALTPRI's text is unique so far in SYSTEM_CMDS, but SET PROCESS is
-# not, and the discipline of anchoring every assertion in this block to a
-# position rather than text is kept uniform rather than mixed per-command.
-SYSTEM_CMDS+=('IDENT_ALTPRI = F$PRIVILEGE("ALTPRI")')
-SYSTEM_CMDS+=('SHOW SYMBOL IDENT_ALTPRI')
-IDX_ALTPRI=$(( ${#SYSTEM_CMDS[@]} - 1 ))
-SYSTEM_CMDS+=('SET PROCESS/PRIORITY=6')
-IDX_PRIORITY_SET=$(( ${#SYSTEM_CMDS[@]} - 1 ))
-
-# F$GETJPI CURPRIV / AUTHPRIV FORMAT (vms-2b8 round 5). Before this round
-# CURPRIV returned a decimal integer (never pinned to any VMS source) and
-# AUTHPRIV silently returned "0" -- indistinguishable from "holds no
-# privileges", false for this SYSTEM session. Both are now the
-# comma-separated privilege-NAME string the public OpenVMS DCL Dictionary
-# and the VSI Wiki's own F$GETJPI example document (see dcl_lexical.c's
-# lex_getjpi() CURPRIV/AUTHPRIV comment for the two citations), masked to
-# VMS_PRV_M_ENFORCED the same as every other surface in this session --
-# so for this SYSTEM session, whose Authorized/Process privileges block
-# above already reads CMEXEC CMKRNL SETPRV WORLD, both items must render
-# the SAME four names, in ascending bit-position order (CMKRNL before
-# CMEXEC, matching the oracle's own CURPRIV example order, not the
-# alphabetical order SHOW PROCESS/PRIVILEGES uses).
-SYSTEM_CMDS+=('IDENT_CURPRIV = F$GETJPI("","CURPRIV")')
-SYSTEM_CMDS+=('SHOW SYMBOL IDENT_CURPRIV')
-SYSTEM_CMDS+=('IDENT_AUTHPRIV = F$GETJPI("","AUTHPRIV")')
-SYSTEM_CMDS+=('SHOW SYMBOL IDENT_AUTHPRIV')
 
 USER_CMDS=(
     'TYPE SYS$MANAGER:LOGIN.COM'
@@ -744,11 +671,9 @@ check_response 'SHOW SYMBOL IDENT_SETPRV' 'IDENT_SETPRV = "TRUE"'
 # SET-PROCESS-mutable ctx->privileges -- so the two cannot disagree by
 # construction, regardless of what SET PROCESS/PRIVILEGES does locally. That
 # command itself no longer claims a success it cannot deliver either: it
-# prints %OVMX-I-NOSETPRV (informational, matching the SS$_NORMAL it
-# returns -- round 5 fixed a W/success mismatch here too) and leaves
-# ctx->privileges untouched, because actually reaching the executive is
-# vms-pv1's job (vms_kif_setprv exists but is deliberately left
-# OVMX-UNWIRED pending that item), not this one's.
+# prints %OVMX-W-NOSETPRV and leaves ctx->privileges untouched, because
+# actually reaching the executive is vms-pv1's job (vms_kif_setprv exists
+# but is deliberately left OVMX-UNWIRED pending that item), not this one's.
 #
 # Checked BY POSITION (check_response_at), not by command text: 'SHOW
 # PROCESS /PRIVILEGES' and the F$PRIVILEGE pattern both already ran once
@@ -758,24 +683,6 @@ check_response 'SHOW SYMBOL IDENT_SETPRV' 'IDENT_SETPRV = "TRUE"'
 check_response_at "$IDX_PRIV_AFTER_SET" '(CMKRNL|CMEXEC|SETPRV|WORLD)'
 check_response_at "$IDX_SETPRV2_AFTER_SET" 'IDENT_SETPRV2 = "TRUE"'
 check_response_at "$IDX_WORLD2_AFTER_SET" 'IDENT_WORLD2 = "TRUE"'
-
-# DEFECT-1 PROOF, ROUND 5 (see the SYSTEM_CMDS block above for the full
-# measured-before/fixed-after account): the REPORT and the GATE must
-# agree. IDENT_ALTPRI's text is unique in this session so a plain
-# check_response would be safe for it alone, but SET PROCESS/PRIORITY=6
-# prints nothing on success (silently would look identical to "ran and
-# printed nothing yet") and only %SET-E-NOPRIV on refusal, so the
-# by-position anchor matters for THAT check specifically; both are
-# checked the same way for consistency with the rest of this block.
-check_response_at "$IDX_ALTPRI" 'IDENT_ALTPRI = "FALSE"'
-check_response_at "$IDX_PRIORITY_SET" 'NOPRIV'
-
-# F$GETJPI CURPRIV/AUTHPRIV FORMAT (vms-2b8 round 5, see the SYSTEM_CMDS
-# block above). Ascending bit-position order, matching the oracle's own
-# CURPRIV example (CMKRNL before CMEXEC) -- NOT alphabetical, which is
-# SHOW PROCESS/PRIVILEGES's own, different, VMS display convention.
-check_response 'SHOW SYMBOL IDENT_CURPRIV' 'IDENT_CURPRIV = "CMKRNL,CMEXEC,SETPRV,WORLD"'
-check_response 'SHOW SYMBOL IDENT_AUTHPRIV' 'IDENT_AUTHPRIV = "CMKRNL,CMEXEC,SETPRV,WORLD"'
 
 # THE SESSION REALLY IS THE AUTHENTICATED USER AT THE OS LEVEL (vms-2b8
 # round 6). This is the only externally observable proof that

@@ -27,18 +27,15 @@ You are a code implementer. You receive one bead per session and execute it to c
 
 ## Build & Test
 
-The root Dockerfile + docker-compose.yml (the glibc product container) were
-deleted by vms-71a (CLAUDE.md Rule 9 — Docker is never an OVMX runtime).
-Build natively:
+cmake is not available on the host. **All builds run in containers.**
 
-- **Build + test**: `cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON -DBUILD_TOOLS=ON && cmake --build build -j$(nproc) && cd build && ctest --output-on-failure`
-- **Bootable QEMU runtime**: `docker build -f distro/Dockerfile.bootable -o dist .` (build/test TOOLING, not a runtime target itself) then `./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz`
-- **Kernel modules**: `tests/qemu/run_tests.sh` (QEMU-based; never load untested modules on host)
-- **NEVER raw `docker run -v` without `--user`**: Creates root-owned build artifacts that need sudo to clean. Always pass `--user $(id -u):$(id -g)` when bind-mounting the workspace.
+- **Build + test**: `docker compose --profile dev run --rm build` — builds with cmake, runs ctest, maps UID so artifacts are owned by you
+- **Compile-only check**: `docker build -t ovmx-test:latest .` — multi-stage Dockerfile, builds from committed code (no local artifacts)
+- **NEVER raw `docker run -v` without `--user`**: Creates root-owned build artifacts that need sudo to clean. Always use the compose `build` service or pass `--user $(id -u):$(id -g)`.
 
 ## Quality Checks
 
-- All code builds: verify via the native `cmake -B build && cmake --build build` above
+- All code builds: verify via `docker compose --profile dev run --rm build` or `docker build`
 - All tests pass: `ctest --output-on-failure` (or domain-specific test suite)
 - Follow VMS naming: `sys$`, `lib$`, `str$` for syscalls and RTL functions
 - No gold-plating: implement what's asked, nothing more

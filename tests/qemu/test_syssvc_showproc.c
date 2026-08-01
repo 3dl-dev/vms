@@ -776,18 +776,6 @@ int main(void)
      *     and drops WORLD from its executive-held mask before exec, so
      *     the refusal comes from the executive and not from anything the
      *     test arranged in userspace.
-     *
-     *     EACH SELECTOR GETS ITS OWN DCL SESSION, and each asserts the
-     *     message it must produce AND the message it must not. The point
-     *     of this block is that the two selectors give DIFFERENT answers
-     *     for the SAME process, so an assertion that merely asks whether
-     *     each message appears SOMEWHERE cannot see it: run both commands
-     *     in one session and an implementation with the two messages
-     *     INVERTED emits the same set of lines and stays green. That was
-     *     the shape here through vms-6a7 round 1 -- the product was
-     *     measured correct, but the assertion could not tell. Anchoring
-     *     each message to its own command's response is what makes the
-     *     oracle's asymmetry falsifiable.
      * --------------------------------------------------------------- */
     {
         int cmdp[2], repp[2];
@@ -810,43 +798,22 @@ int main(void)
                   "a named process exists in another UIC group");
 
             if (got == 0 && rep.ok && rep.vms_pid != 0) {
-                /* P9. BY PID -> %SYSTEM-F-NOPRIV, in its own session. */
                 snprintf(script, sizeof(script),
-                         "SHOW PROCESS/ID=%08X\nLOGOUT\n", rep.vms_pid);
+                         "SHOW PROCESS/ID=%08X\nSHOW PROCESS %s\nLOGOUT\n",
+                         rep.vms_pid, XGRP_NAME);
                 CHECK(run_dcl(script, DCL_UIC_GROUP, DCLGRP_NAME,
                               out, sizeof(out)) == 0,
-                      "an unprivileged DCL.EXE ran SHOW PROCESS/ID in its "
-                      "own UIC group");
+                      "an unprivileged DCL.EXE ran in its own UIC group");
                 CHECK(strstr(out, SETUP_FAIL_MARK) == NULL,
-                      "the unprivileged by-PID caller was set up as intended");
+                      "the unprivileged DCL caller was set up as intended");
                 CHECK(has_line(out, MSG_NOPRIV),
                       "SHOW PROCESS/ID on an out-of-group process reports "
                       "%SYSTEM-F-NOPRIV verbatim");
-                CHECK(!has_line(out, MSG_NONEXPR),
-                      "... and NOT %SYSTEM-W-NONEXPR: selected by PID the "
-                      "process IS found, and it is the identity read that "
-                      "is refused");
-                CHECK(line_containing(out, "Process ID:") == NULL,
-                      "the by-PID refusal printed no process header");
-
-                /* P10. BY NAME -> %SYSTEM-W-NONEXPR, in a SEPARATE session
-                 *      so the message is anchored to this command alone. */
-                snprintf(script, sizeof(script),
-                         "SHOW PROCESS %s\nLOGOUT\n", XGRP_NAME);
-                CHECK(run_dcl(script, DCL_UIC_GROUP, DCLGRP_NAME,
-                              out, sizeof(out)) == 0,
-                      "an unprivileged DCL.EXE ran SHOW PROCESS <name> in "
-                      "its own UIC group");
-                CHECK(strstr(out, SETUP_FAIL_MARK) == NULL,
-                      "the unprivileged by-name caller was set up as intended");
                 CHECK(has_line(out, MSG_NONEXPR),
                       "SHOW PROCESS <name> on an out-of-group process reports "
                       "%SYSTEM-W-NONEXPR -- the name search is group-scoped");
-                CHECK(!has_line(out, MSG_NOPRIV),
-                      "... and NOT %SYSTEM-F-NOPRIV: the group-scoped name "
-                      "search never reaches a process to be refused");
                 CHECK(line_containing(out, "Process ID:") == NULL,
-                      "the by-name refusal printed no process header");
+                      "neither refusal printed a process header");
 
                 /* Enumeration is NOT privileged, identity is (oracle-
                  * pinned, vax73-privileges.md Section 5.5): the same

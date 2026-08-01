@@ -104,68 +104,6 @@ OPA0:                   Online               0
 
 `SHOW DEVICE TT` (class prefix) returns the same single row on these nodes.
 
-### 4.1 The brief listing's `Device Status` column, and the one thing that changes it
-
-**Captured 30-JUL-2026, node VAX1, for `vms-fb9`.** Section 4 above records only the idle row, so
-"what else can that column say" was unrecorded — and a reader that prints a constant `Online` for
-every row is a self-certified generalization, not a measurement. It is measured here.
-
-Column geometry, byte-exact (`OPA0:` at 0-4, the status at 24, the error count's last digit at 45,
-line length 46 in both cases):
-
-```
-$ SHOW DEVICE OPA0:                       ! nobody has ALLOCATEd it
-
-Device                  Device           Error
- Name                   Status           Count
-OPA0:                   Online               0
-
-$ ALLOCATE OPA0:
-%DCL-I-ALLOC, _VAX1$OPA0: allocated
-$ SHOW DEVICE OPA0:
-
-Device                  Device           Error
- Name                   Status           Count
-OPA0:                   Online alloc         0
-```
-
-**`alloc` is a property of the DEVICE, not of the asking process — measured A-writes/B-reads.** A
-second process was created while the interactive job held the allocation, exactly as in section 7:
-
-```
-$ RUN/DETACHED/INPUT=SYS$SYSROOT:[SYSMGR]DEVPROBE.COM -
-       /OUTPUT=SYS$SYSROOT:[SYSMGR]DEVPROBE.LOG/PROCESS_NAME=DEVPROBE SYS$SYSTEM:LOGINOUT.EXE
-```
-
-`DEVPROBE.COM` is three lines (`$ SET NOON`, `$ SHOW DEVICE OPA0:`, `$ LOGOUT`). Its log, while
-the *other* process holds the allocation:
-
-```
-OPA0:                   Online alloc         0
-```
-
-and after that other process issued `DEALLOCATE OPA0:`, a fresh detached process printed:
-
-```
-OPA0:                   Online               0
-```
-
-Three facts, all from those four captures:
-
-1. The status column reads **`Online`** for an idle terminal and **`Online alloc`** when the device
-   is allocated. `alloc` is appended, not substituted.
-2. The word is visible to a process that did **not** allocate the device, and disappears for it when
-   the allocation ends. This is the brief listing behaving as a reader of shared executive state.
-3. **Ownership alone does not show here.** In *every* capture above the console was owned by the
-   interactive job (by channel, section 7.4 — `SHOW DEVICE/FULL` reports `Owner process "SYSTEM"`
-   throughout), yet the unallocated rows read plain `Online`. So the brief column distinguishes
-   allocation, not ownership. A reader must not print `alloc` for a merely-owned device.
-
-**Not measured, so not claimed:** what this column reads for any device that is not a terminal (the
-oracle's disks report `Mounted`), for an offline device, or for a status string longer than
-`Online alloc`. OVMX's device table contains exactly one device, a terminal, and it is never
-offline — so those are conditions OVMX does not have, and it prints nothing for them (rule 10).
-
 ## 5. `SHOW DEVICE/FULL` for a terminal
 
 VAX1 (its console is enabled as an operator terminal):

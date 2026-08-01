@@ -111,34 +111,14 @@ void vms_terminal_show(const struct vms_terminal *term, FILE *out);
 #define VMS_TERM_TABLE_PATH "/tmp/vms_terminals.dat"
 
 struct terminal_device {
-    char     name[16];
+    char     name[16];        /* e.g. "_FTA0:" */
     pid_t    owner_pid;
     char     owner_name[64];
     uint32_t characteristics;
     int      allocated;       /* 1 = in use */
 };
 
-/*
- * THE ALLOCATOR IS DELETED (vms-fb9, round 2). vms_term_allocate() minted
- * a device name for a process out of a private /tmp file -- "_FTA0:",
- * "_FTA1:", ... -- and handed it back as if it were the terminal that
- * process was on. That is a process naming its own device, which is the
- * facade this item exists to remove (CLAUDE.md rule 11: a device is
- * executive-resident, and a user-visible command READS it). Its last
- * production caller went with the environment handoff; keeping the
- * mechanism afterwards would be keeping a machine for a condition OVMX no
- * longer has (rule 10), and a lint that merely forbade CALLING it from one
- * file was proven evadable by moving the call to another file.
- *
- * tests/integration/test_terminal_identity.sh now asserts the SYMBOL is
- * absent from the whole tree, definition included -- so re-adding it
- * anywhere is what goes red, not re-adding a call in one named file.
- *
- * What remains below is the table's READ and REMOVE halves, which still
- * have callers (SHOW USERS, DCL exit). With nothing left to add an entry
- * they can only ever observe an empty table; converting their callers to
- * the executive process table is vms-8019's scope, not this item's.
- */
+const char *vms_term_allocate(const char *prefix, pid_t pid, const char *owner);
 void vms_term_deallocate(const char *device_name);
 void vms_term_list(struct terminal_device *out_devs, int max, int *count);
 

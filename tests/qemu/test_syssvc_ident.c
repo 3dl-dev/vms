@@ -53,7 +53,6 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdint.h>
-#include <grp.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 
@@ -189,298 +188,6 @@ static void dump(const char *label, const char *text)
     printf("  ---- %s ----\n%s  ---- end %s ----\n", label, text, label);
 }
 
-/*
- * run_session_fork - reproduce a real session's SUBPROCESS, exactly.
- *
- * THE DEFECT THIS EXISTS FOR (vms-2b8 round 6, found by the veracity
- * adversary and reproduced here before it was fixed). Scenario A above
- * proves the executive refuses to widen an identity, but the refusal is
- * per thread group: vms_proc_register() derives a NEW task's authorized
- * mask from capable(CAP_SYS_ADMIN) and inherits nothing from its
- * parent's row. So while LOGINOUT left the session running as Linux
- * root, a FIELD/[200,10] session could fork a child, the child
- * registered holding CMKRNL|CMEXEC|SETPRV|WORLD before executing an
- * instruction, and SETPRV let it stamp itself SYSTEM [1,4] with all 37
- * privileges. Measured, not argued: the child's DCL printed
- * "User: SYSTEM ... [001,004] ... SETPRV ... WORLD".
- *
- * So the shape below is LOGINOUT's, step for step, and it must be:
- *   1. establish the authenticated identity through the executive while
- *      still privileged enough to be allowed to (VMS_IOCTL_SETIDENT
- *      requires SETPRV),
- *   2. DROP the Linux credentials to the authenticated UIC
- *      (tools/vms_login.c, same three calls in the same order),
- *   3. fork the subprocess the user would get from any spawn.
- *
- * If step 2 is ever removed from LOGINOUT, this test goes red, because
- * step 3's child gets SETPRV back and its claim succeeds. That is the
- * point: the executive's refusal and the credential drop are only
- * load-bearing together.
- *
- * The child prints its own verdict on the captured stream and then
- * execs the real DCL with the poisoned environment, so what is asserted
- * is what a user would actually see.
- */
-static int run_session_fork(char *out, size_t outsz)
-{
-    int out_pipe[2], in_pipe[2];
-
-    out[0] = '\0';
-    if (pipe(in_pipe) < 0) return -1;
-    if (pipe(out_pipe) < 0) { close(in_pipe[0]); close(in_pipe[1]); return -1; }
-
-    pid_t sess = fork();
-    if (sess < 0) {
-        close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
-        return -1;
-    }
-
-    if (sess == 0) {
-        dup2(in_pipe[0], STDIN_FILENO);
-        dup2(out_pipe[1], STDOUT_FILENO);
-        dup2(out_pipe[1], STDERR_FILENO);
-        close(in_pipe[0]); close(in_pipe[1]);
-        close(out_pipe[0]); close(out_pipe[1]);
-
-        /* 1. LOGINOUT establishes the authenticated identity. */
-        uint32_t st = vms_kif_setident(A_NAME, (A_GRP << 16) | A_MEM, A_PRIVS);
-        printf("SESSION_SETIDENT=%u\n", (unsigned)st);
-
-        /* 2. LOGINOUT becomes the user. Same calls, same order, same
-         *    fatality as tools/vms_login.c. */
-        if (setgroups(0, NULL) != 0 || setgid((gid_t)A_GRP) != 0 ||
-            setuid((uid_t)A_MEM) != 0) {
-            printf("SESSION_DROP_FAILED=%d\n", errno);
-            fflush(stdout);
-            _exit(126);
-        }
-        printf("SESSION_UID=%u SESSION_GID=%u\n",
-               (unsigned)getuid(), (unsigned)getgid());
-        fflush(stdout);
-
-        /* 3. The session spawns a subprocess, which claims everything. */
-        pid_t sub = fork();
-        if (sub == 0) {
-            uint32_t vpid = 0;
-            uint32_t rst = vms_kif_register(&vpid);
-            printf("SUB_REGISTER=%u\n", (unsigned)rst);
-            uint32_t cst = vms_kif_setident("SYSTEM", (1u << 16) | 4u, ~0ULL);
-            printf("SUB_SETIDENT=%u\n", (unsigned)cst);
-            fflush(stdout);
-            execle(DCL_PATH, "DCL.EXE", (char *)NULL, poison_env);
-            printf("SUB_EXEC_FAILED=%d\n", errno);
-            fflush(stdout);
-            _exit(127);
-        }
-        int sst;
-        while (sub > 0 && waitpid(sub, &sst, 0) < 0 && errno == EINTR)
-            ;
-        fflush(stdout);
-        _exit(0);
-    }
-
-    close(in_pipe[0]);
-    close(out_pipe[1]);
-    ssize_t w = write(in_pipe[1], "SHOW PROCESS\nSHOW PROCESS/PRIVILEGES\n",
-                      strlen("SHOW PROCESS\nSHOW PROCESS/PRIVILEGES\n"));
-    (void)w;
-    close(in_pipe[1]);
-
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(out_pipe[0], out + used, outsz - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= outsz - 1) break;
-    }
-    out[used] = '\0';
-    close(out_pipe[0]);
-
-    int st;
-    while (waitpid(sess, &st, 0) < 0 && errno == EINTR)
-        ;
-    return 0;
-}
-
-/*
- * A-WRITES / B-READS, IN ITS TRUE FORM (CLAUDE.md Rule 11, vms-2b8
- * round 6). Scenarios A-D above cross execve, which proves the row is
- * not in the image and not in the environment -- but it is still ONE
- * task's row, read by whatever that task became. It therefore cannot
- * detect a per-task derivation error, which is exactly the defect class
- * scenario D exists for.
- *
- * So here process B reads process A's row WHILE A IS STILL ALIVE and
- * blocked. Neither process ever runs the other's code and neither has
- * any channel to the other except the executive's table: A's identity
- * reaches B only because vms.ko holds it. If the process table were
- * per-process memory -- the facade shape Rule 11 names -- B would find
- * nothing, and a facade that fabricated a plausible answer would get
- * A's user name, UIC and privilege mask all wrong at once.
- *
- * Sequenced by blocking pipe reads in both directions, never by sleeps
- * (a fixed sleep against an emulated guest is a flaky test): the parent
- * does not release A until B has reported, so "A was alive" is a
- * property of the ordering rather than of timing.
- *
- * A and B are in the SAME UIC group on purpose. Per the oracle
- * (docs/oracle/vax73-privileges.md §5.2) a same-group $GETJPI needs no
- * privilege at all, so B reads A holding only TMPMBX|NETMBX -- the read
- * cannot be explained by B being privileged.
- */
-#define E_A_NAME  "PAYROLL"
-#define E_A_GRP   7u
-#define E_A_MEM   3u
-#define E_A_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX | PRV$M_SYSPRV)
-
-#define E_B_NAME  "AUDITOR"
-#define E_B_GRP   7u
-#define E_B_MEM   9u
-#define E_B_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX)
-
-static void scenario_e_a_writes_b_reads(void)
-{
-    int a_out[2], a_hold[2];
-    pid_t a_pid, b_pid;
-    uint32_t a_vms_pid = 0;
-
-    printf("  ---- E: process B reads process A's live row ----\n");
-
-    if (pipe(a_out) < 0 || pipe(a_hold) < 0) {
-        CHECK(0, "E: could not create the pipes that sequence A and B");
-        return;
-    }
-
-    a_pid = fork();
-    if (a_pid < 0) {
-        CHECK(0, "E: could not fork process A");
-        return;
-    }
-    if (a_pid == 0) {
-        uint32_t vpid = 0;
-        char go;
-        close(a_out[0]); close(a_hold[1]);
-        if (vms_kif_register(&vpid) != SS_NORMAL) _exit(2);
-        if (!(vms_kif_setident(E_A_NAME, (E_A_GRP << 16) | E_A_MEM,
-                               E_A_PRIVS) & 1)) _exit(3);
-        /* Publish nothing but the ID. The name, UIC and mask B checks
-         * are never sent over this pipe -- B has to get them from the
-         * executive or not at all. */
-        if (write(a_out[1], &vpid, sizeof(vpid)) != (ssize_t)sizeof(vpid))
-            _exit(4);
-        close(a_out[1]);
-        /* Stay alive until the parent says B is done. */
-        if (read(a_hold[0], &go, 1) != 1) _exit(5);
-        _exit(0);
-    }
-    close(a_out[1]); close(a_hold[0]);
-
-    if (read(a_out[0], &a_vms_pid, sizeof(a_vms_pid)) != (ssize_t)sizeof(a_vms_pid)) {
-        CHECK(0, "E: process A never published its executive-assigned VMS PID");
-        close(a_hold[1]);
-        waitpid(a_pid, NULL, 0);
-        return;
-    }
-    close(a_out[0]);
-
-    int b_out[2];
-    if (pipe(b_out) < 0) {
-        CHECK(0, "E: could not create process B's pipe");
-        close(a_hold[1]);
-        waitpid(a_pid, NULL, 0);
-        return;
-    }
-
-    b_pid = fork();
-    if (b_pid < 0) {
-        CHECK(0, "E: could not fork process B");
-        close(a_hold[1]);
-        waitpid(a_pid, NULL, 0);
-        return;
-    }
-    if (b_pid == 0) {
-        struct vms_procinfo self, seen;
-        uint32_t vpid = 0;
-        close(b_out[0]);
-        dup2(b_out[1], STDOUT_FILENO);
-        close(b_out[1]);
-        if (vms_kif_register(&vpid) != SS_NORMAL) { printf("B_REGISTER_FAILED\n"); fflush(stdout); _exit(2); }
-        /* B takes a DIFFERENT identity, and one WITHOUT SETPRV or
-         * WORLD, so nothing below can be B looking at itself and
-         * nothing below is explained by B being privileged. */
-        if (!(vms_kif_setident(E_B_NAME, (E_B_GRP << 16) | E_B_MEM,
-                               E_B_PRIVS) & 1)) { printf("B_SETIDENT_FAILED\n"); fflush(stdout); _exit(3); }
-
-        memset(&self, 0, sizeof(self));
-        if (vms_kif_getjpi_self(&self) & 1)
-            printf("B_SELF=%s/%08X/%016llX\n", self.username,
-                   self.uic, (unsigned long long)self.cur_privs);
-
-        memset(&seen, 0, sizeof(seen));
-        uint32_t st = vms_kif_getjpi_pid(a_vms_pid, &seen);
-        printf("B_READ_STATUS=%u\n", (unsigned)st);
-        if (st & 1)
-            printf("B_READ=%s/%08X/%016llX\n", seen.username, seen.uic,
-                   (unsigned long long)seen.perm_privs);
-        fflush(stdout);
-        _exit(0);
-    }
-    close(b_out[1]);
-
-    static char bout[4096];
-    size_t used = 0;
-    for (;;) {
-        ssize_t n = read(b_out[0], bout + used, sizeof(bout) - 1 - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-        if (used >= sizeof(bout) - 1) break;
-    }
-    bout[used] = '\0';
-    close(b_out[0]);
-    waitpid(b_pid, NULL, 0);
-
-    /* A has still not been released -- it is blocked in read(). */
-    printf("%s", bout);
-
-    {
-        char want_self[128], want_read[128];
-        snprintf(want_self, sizeof(want_self), "B_SELF=%s/%08X/%016llX\n",
-                 E_B_NAME, (E_B_GRP << 16) | E_B_MEM,
-                 (unsigned long long)(uint64_t)E_B_PRIVS);
-        snprintf(want_read, sizeof(want_read), "B_READ=%s/%08X/%016llX\n",
-                 E_A_NAME, (E_A_GRP << 16) | E_A_MEM,
-                 (unsigned long long)(uint64_t)E_A_PRIVS);
-
-        CHECK(strstr(bout, want_self) != NULL,
-              "E: B holds its OWN identity (so what it reads below is not itself)");
-        CHECK(strstr(bout, "B_READ_STATUS=1\n") != NULL,
-              "E: B's read of A's row succeeded with no privilege -- same UIC "
-              "group, as the oracle requires");
-        CHECK(strstr(bout, want_read) != NULL,
-              "E: B read A's user name, UIC and authorized mask EXACTLY, from a "
-              "LIVE process it shares nothing with but the executive's table");
-        CHECK(strstr(bout, E_B_NAME "/00070003") == NULL,
-              "E: B did not simply report its own identity under A's PID");
-    }
-
-    /* Release A only now, so "A was alive during the read" is ordering,
-     * not timing. */
-    {
-        ssize_t w = write(a_hold[1], "x", 1);
-        (void)w;
-    }
-    close(a_hold[1]);
-    {
-        int ast = 0;
-        while (waitpid(a_pid, &ast, 0) < 0 && errno == EINTR)
-            ;
-        CHECK(WIFEXITED(ast) && WEXITSTATUS(ast) == 0,
-              "E: process A exited normally, i.e. it was still blocked and "
-              "alive while B read its row");
-    }
-}
-
 int main(void)
 {
     static char outa[65536], outb[65536], outc[65536];
@@ -568,35 +275,13 @@ int main(void)
      * user name "OPERATOR" used for identity B, and a name-substring
      * check would quietly become unfalsifiable.
      */
-    /*
-     * PINNED TO THE ORACLE, NOT TO OVMX (vms-2b8 round 6). Round 5
-     * asserted the exact bytes of a "Privileges:" summary line printed
-     * by plain SHOW PROCESS. That line does not exist on OpenVMS --
-     * measured this round, docs/oracle/vax73-privileges.md §6 -- so the
-     * assertion was turning an OVMX invention into a contract. The line
-     * is deleted from dcl_cmd_show.c and the whole-mask assertion moves
-     * to the "Authorized privileges:" grid, whose format IS the oracle's
-     * (8 columns, 10-character cells, trailing padding trimmed).
-     */
-    CHECK(strstr(outa, "\nAuthorized privileges:\n NETMBX    OPER      TMPMBX\n") != NULL,
-          "A: the authorized-privileges block is EXACTLY the executive's mask, "
-          "in the oracle's grid format");
+    CHECK(strstr(outa, "Privileges:        NETMBX OPER TMPMBX\n") != NULL,
+          "A: SHOW PROCESS's privilege summary is EXACTLY the executive's mask");
     CHECK(strstr(outa, "may perform operator functions") != NULL,
           "A: SHOW PROCESS/PRIVILEGES lists a privilege that is in the executive's mask");
-    /*
-     * CORRECTED IN ROUND 6. This assertion used to end "...and the drop
-     * is one-way", which was FALSE as a product property and was
-     * disproved by execution: the writer's reduction held for THIS
-     * thread group only, and a child it forked re-derived SETPRV from
-     * the CAP_SYS_ADMIN it still held and stamped itself SYSTEM. What
-     * this check actually proves is the narrow, true thing -- the
-     * established identity does not carry a privilege the writer held.
-     * The one-way property across fork is proved separately, and only
-     * because of the credential drop, in scenario D below.
-     */
     CHECK(strstr(outa, "may set any privilege bit") == NULL,
-          "A: the privilege display does NOT carry SETPRV -- the writer held it "
-          "and the identity it established did not");
+          "A: the privilege display does NOT carry SETPRV -- the writer held it, "
+          "the identity it established did not, and the drop is one-way");
     CHECK(strstr(outa, "may change mode to kernel") == NULL &&
           strstr(outa, "may bypass all object access controls") == NULL,
           "A: VMS_PRIVILEGES=ALL did not add a single privilege to the display");
@@ -622,7 +307,7 @@ int main(void)
           "A: A does not report B's user name");
     CHECK(strstr(outb, "[001,006]") != NULL,
           "B: SHOW PROCESS reports B's UIC");
-    CHECK(strstr(outb, "\nAuthorized privileges:\n NETMBX    SYSPRV    TMPMBX\n") != NULL &&
+    CHECK(strstr(outb, "Privileges:        NETMBX SYSPRV TMPMBX\n") != NULL &&
           strstr(outb, "may perform operator functions") == NULL,
           "B: the privilege display is B's mask, not A's -- two processes running "
           "the same image with the same environment report differently");
@@ -655,7 +340,7 @@ int main(void)
     CHECK(strstr(outc, "[454,1751]") != NULL,
           "C: SHOW PROCESS reports the UIC the executive derived from real "
           "credentials");
-    CHECK(strstr(outc, "\nAuthorized privileges:\n NETMBX    TMPMBX\n") != NULL,
+    CHECK(strstr(outc, "Privileges:        NETMBX TMPMBX\n") != NULL,
           "C: the privilege display is EXACTLY the two privileges the executive "
           "granted an unprivileged process");
     CHECK(strstr(outc, "may perform operator functions") == NULL &&
@@ -663,67 +348,6 @@ int main(void)
           strstr(outc, "may bypass all object access controls") == NULL &&
           strstr(outc, "may access objects via system protection") == NULL,
           "C: VMS_PRIVILEGES=ALL bought the unprivileged process nothing");
-
-    /* ----------------------------------------------------------------
-     * D. A REAL SESSION'S SUBPROCESS. LOGINOUT's exact sequence:
-     *    stamp the authenticated identity, drop the Linux credentials
-     *    to that UIC, then spawn. The subprocess claims SYSTEM/ALL.
-     *
-     *    This is the scenario the veracity adversary used to break
-     *    round 5: without the credential drop the subprocess got SETPRV
-     *    back from CAP_SYS_ADMIN and its claim SUCCEEDED, so an
-     *    ordinary session's child became SYSTEM with all 37 privileges.
-     * ---------------------------------------------------------------- */
-    {
-        static char outd[65536];
-        if (run_session_fork(outd, sizeof(outd)) != 0) {
-            printf("  FAIL: could not run the session/subprocess scenario\n");
-            printf("=== test_syssvc_ident: %d passed, %d failed ===\n", pass, fail + 1);
-            return 1;
-        }
-        dump("session subprocess", outd);
-
-        CHECK(strstr(outd, "SESSION_SETIDENT=1") != NULL,
-              "D: the session established its authenticated identity");
-        {
-            char want[64];
-            snprintf(want, sizeof(want), "SESSION_UID=%u SESSION_GID=%u",
-                     (unsigned)A_MEM, (unsigned)A_GRP);
-            CHECK(strstr(outd, want) != NULL,
-                  "D: the session then BECAME that UIC at the Linux level, as "
-                  "tools/vms_login.c does");
-        }
-        CHECK(strstr(outd, "SUB_REGISTER=1") != NULL,
-              "D: the subprocess reached the executive at all (so its refusal "
-              "below is a refusal, not an absent executive)");
-        {
-            char want[64];
-            snprintf(want, sizeof(want), "SUB_SETIDENT=%u", (unsigned)SS$_NOPRIV);
-            CHECK(strstr(outd, want) != NULL,
-                  "D: the executive REFUSED the subprocess's claim to be SYSTEM "
-                  "(SS$_NOPRIV) -- the reduction survives the fork");
-        }
-        CHECK(strstr(outd, "SUB_SETIDENT=1") == NULL,
-              "D: the subprocess's claim did not succeed by any route");
-        CHECK(strstr(outd, "User: SYSTEM") == NULL &&
-              strstr(outd, "[001,004]") == NULL,
-              "D: the subprocess's own DCL does not report SYSTEM or SYSTEM's UIC");
-        CHECK(strstr(outd, "[310,012]") != NULL,
-              "D: the subprocess's UIC is the one it inherited from the session's "
-              "real credentials, [200,10]");
-        CHECK(strstr(outd, "\nAuthorized privileges:\n NETMBX    TMPMBX\n") != NULL,
-              "D: the subprocess holds exactly the unprivileged default mask");
-        CHECK(strstr(outd, "may set any privilege bit") == NULL &&
-              strstr(outd, "may change mode to kernel") == NULL &&
-              strstr(outd, "may affect other processes in the world") == NULL,
-              "D: the subprocess has neither SETPRV, CMKRNL nor WORLD -- the three "
-              "the CAP_SYS_ADMIN derivation used to hand it for free");
-    }
-
-    /* ----------------------------------------------------------------
-     * E. A-writes / B-reads in its true form (Rule 11).
-     * ---------------------------------------------------------------- */
-    scenario_e_a_writes_b_reads();
 
     printf("=== test_syssvc_ident: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

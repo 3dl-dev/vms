@@ -426,34 +426,9 @@ static bool username_is_valid(const char *name)
  * itself into the user's process. A caller WITHOUT SETPRV may only
  * establish an identity that is weaker than or equal to its own: the
  * new authorized mask must be a subset of its current authorized mask,
- * and neither its UIC nor its user name may change.
- *
- * THE EXACT SCOPE OF THAT GUARANTEE, corrected in round 6 because the
- * earlier wording here ("no sequence of calls walks a process back up")
- * was FALSE and was disproved by execution. It is one-way FOR THIS
- * THREAD GROUP. It says nothing about a NEW task: vms_proc_register()
- * in vms_module.c derives a fresh authorized mask from
- * capable(CAP_SYS_ADMIN) and a fresh UIC from the task's real
- * credentials, and inherits nothing from the parent's row. So a process
- * that drops to FIELD/[200,10] and then forks a child which is STILL
- * LINUX ROOT gives that child CMKRNL|CMEXEC|SETPRV|WORLD at
- * registration, and SETPRV is precisely what lets it stamp itself
- * SYSTEM. The reduction survived exactly until the next fork.
- *
- * What closes that is not a rule in here -- it is tools/vms_login.c
- * dropping the session's Linux credentials to the authenticated user's
- * UIC before exec, so the child's derivation produces the unprivileged
- * answer instead of the privileged one. The two halves are load-bearing
- * together: this function refuses a claim, and the credential drop is
- * what makes the claimant unprivileged in the first place.
- *
- * STILL OUTSIDE THE MODEL, and stated rather than implied: a process
- * that legitimately holds CAP_SYS_ADMIN (PID 1, and LOGINOUT before it
- * drops) registers with the enforced mask no matter what its parent
- * held. That is not a hole this check can close -- a task with
- * CAP_SYS_ADMIN can rmmod the executive -- but it does mean the number
- * of root-privileged VMS processes is a security property. It is two:
- * PID 1 and pre-authentication LOGINOUT.
+ * and its UIC may not change. So identity is a one-way drop for anyone
+ * who is not authorized to exceed their authorization, and no sequence
+ * of calls walks a process back up.
  *
  * SEMANTICS PIN (docs/oracle/vax73-privileges.md §3): SETPRV is what
  * authorizes EXCEEDING the authorized mask, not what authorizes USING

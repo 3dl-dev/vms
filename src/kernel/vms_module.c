@@ -25,7 +25,6 @@
 #include <linux/uidgid.h>
 #include <linux/pid.h>
 #include <linux/sched.h>
-#include <linux/sched/signal.h>     /* thread_group_empty() */
 
 #include "vms_internal.h"
 
@@ -62,28 +61,9 @@ struct vms_proc *vms_proc_find(pid_t pid)
     return NULL;
 }
 
-/*
- * vms_proc_find_or_err - this TASK'S process entry.
- *
- * KEYED ON THE THREAD GROUP, NOT THE THREAD (vms-9fc round 2).
- *
- * On OpenVMS a process has exactly ONE PCB and its kernel threads SHARE
- * it -- that shared residency is the entire meaning of a process-wide
- * event flag cluster, a process logical name table, a process name and a
- * process's lock ids. Keying this table on current->pid (the Linux TID)
- * minted one VMS process per THREAD: two threads of one image disagreed
- * about their own identity, could not see each other's event flags, and
- * could not release each other's locks. That is Rule 11's facade shape
- * inverted -- per-thread state pretending to be per-process -- and it is
- * not something VMS can be in.
- *
- * Linux's process-wide identifier is the thread-group id: current->tgid,
- * which is what getpid(2) returns, while current->pid is what gettid(2)
- * returns. So tgid is the key, and task_tgid() is the pinned identity.
- */
 struct vms_proc *vms_proc_find_or_err(void)
 {
-    struct vms_proc *proc = vms_proc_find(current->tgid);
+    struct vms_proc *proc = vms_proc_find(current->pid);
 
     /*
      * A table entry now outlives the /dev/vms channel (vms-8019), so an
@@ -93,71 +73,13 @@ struct vms_proc *vms_proc_find_or_err(void)
      * privileges with it. Match on the pinned struct pid, which is
      * unique per process instance, rather than on the reusable number.
      */
-    if (proc && proc->pid_ref != task_tgid(current))
+    if (proc && proc->pid_ref != task_pid(current))
         return NULL;
 
     return proc;
 }
 
-/*
- * vms_pid_counter - the executive's process-ID generator (vms-2b8).
- *
- * OVMX DESIGN CHOICE, labelled in vms_ioctl.h: OpenVMS builds a process
- * ID from a PCB-vector index plus a sequence number, and no public
- * document publishes that layout byte for byte, so OVMX does not
- * imitate it. What OVMX reproduces is the property that matters to
- * every caller -- the ID is assigned by the executive, is unique among
- * live processes, and is not handed straight back to the next process
- * when one exits.
- *
- * The base is deliberately above any value a Linux pid can take under
- * the kernel's own PID_MAX_LIMIT (2^22), so a VMS process ID is never
- * mistakable for the Linux pid it used to be copied from.
- */
-#define VMS_PID_BASE    0x10000000u
-static atomic_t vms_pid_counter = ATOMIC_INIT(0);
-
-/*
- * assign_vms_pid - hand out an unused VMS process ID.
- *
- * MUST be called with vms_proc_hash_lock held, so that the uniqueness
- * scan and the insertion that follows it cannot be separated: two
- * concurrent registrations that each found "no clash" and then both
- * inserted would recreate the very collision this exists to prevent.
- *
- * A duplicate is possible only after 2^32 registrations have wrapped
- * the counter onto a still-live process, so the retry loop is a
- * correctness backstop rather than a hot path -- but it is not
- * optional: "unlikely" is not "unique", and a single collision lets
- * $GETJPI resolve one process's identity to another's row.
- */
-static uint32_t assign_vms_pid(void)
-{
-    struct vms_proc *cur;
-    uint32_t candidate;
-    int bkt, attempts;
-
-    for (attempts = 0; attempts < 1024; attempts++) {
-        bool taken = false;
-
-        candidate = VMS_PID_BASE +
-                    (uint32_t)atomic_inc_return(&vms_pid_counter);
-        if (candidate == 0)
-            continue;   /* 0 is "no process"; never hand it out */
-
-        hash_for_each(vms_proc_hash, bkt, cur, hash_node) {
-            if (cur->vms_pid == candidate) {
-                taken = true;
-                break;
-            }
-        }
-        if (!taken)
-            return candidate;
-    }
-    return 0;   /* table is pathologically full: refuse to register */
-}
-
-struct vms_proc *vms_proc_register(pid_t pid)
+struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid)
 {
     struct vms_proc *existing, *proc;
     int i;
@@ -167,6 +89,7 @@ struct vms_proc *vms_proc_register(pid_t pid)
         return ERR_PTR(-ENOMEM);
 
     proc->linux_pid = pid;
+    proc->vms_pid = vms_pid;
     proc->current_mode = PSL_C_USER;    /* start in user mode */
 
     /*
@@ -194,12 +117,10 @@ struct vms_proc *vms_proc_register(pid_t pid)
     memset(proc->username, 0, sizeof(proc->username));
 
     /*
-     * Pin the backing PROCESS's pid so the entry's liveness can be tested
-     * without racing pid reuse. task_tgid(), not task_pid(): the entry
-     * belongs to the whole thread group and must outlive any one thread
-     * in it (see vms_proc_find_or_err). Released in vms_proc_free().
+     * Pin the backing task's pid so the entry's liveness can be tested
+     * without racing pid reuse. Released in vms_proc_free().
      */
-    proc->pid_ref = get_pid(task_tgid(current));
+    proc->pid_ref = get_pid(task_pid(current));
 
     /*
      * THE AUTHORIZED MASK IS DERIVED, NOT REQUESTED (vms-2b8).
@@ -267,27 +188,11 @@ struct vms_proc *vms_proc_register(pid_t pid)
             return ERR_PTR(-EEXIST);
         }
     }
-    /*
-     * THE VMS PROCESS ID IS ASSIGNED HERE, UNDER THE SAME LOCK AS THE
-     * INSERTION (vms-2b8 round 3). It used to be copied from the
-     * register arguments -- i.e. chosen by the process -- with no
-     * uniqueness check at all, so two processes could share one VMS PID
-     * and $GETJPI by that PID returned whichever the hash walk reached
-     * first. Choosing it here, inside the critical section, is what
-     * makes "unique among live processes" true rather than likely.
-     */
-    proc->vms_pid = assign_vms_pid();
-    if (proc->vms_pid == 0) {
-        spin_unlock(&vms_proc_hash_lock);
-        put_pid(proc->pid_ref);
-        kmem_cache_free(vms_proc_cache, proc);
-        return ERR_PTR(-ENOSPC);
-    }
     hash_add_rcu(vms_proc_hash, &proc->hash_node, pid);
     spin_unlock(&vms_proc_hash_lock);
 
     pr_info("vms: registered process pid=%d vms_pid=0x%08x uic=[%o,%o] privs=0x%llx (derived)\n",
-            pid, proc->vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
+            pid, vms_pid, proc->uic >> 16, proc->uic & 0xFFFFu,
             proc->perm_privs);
 
     return proc;
@@ -379,63 +284,14 @@ static long vms_ioctl_register(unsigned long arg)
      */
     vms_proc_reap_dead();
 
-    /*
-     * NOTHING FROM args IS READ. The struct is output-only: the privilege
-     * mask went in the first round of vms-2b8 and the VMS process ID went
-     * in the third. A registration that takes no input from the process
-     * cannot be steered by one.
-     *
-     * ADOPT, do not recreate, and do not report an error (vms-9fc).
-     *
-     * This used to answer 0x1C for a task that already had an entry, which
-     * made registration a once-per-image operation. It is not: the executive
-     * entry belongs to the PROCESS and survives execve(), so the very next
-     * image activated in the same process would be told "already registered"
-     * and, having nothing else to do with that, would carry on unregistered.
-     *
-     * ORACLE PIN (reference lab node VAX1, OpenVMS VAX V7.3, 2026-07-30):
-     * activating an image inside an existing process does not recreate the
-     * process and is not an error. SHOW PROCESS/ACCOUNTING before and after
-     * two further image activations reports
-     *     Process ID: 2020021D   Process name: "SYSTEM"   Images activated: 19
-     *     Process ID: 2020021D   Process name: "SYSTEM"   Images activated: 21
-     * -- same PCB, same identity, same connect time, images activated simply
-     * counts up. So the VMS-faithful answer to "register a process that
-     * already exists" is to hand back the process that already exists --
-     * INCLUDING the VMS process ID it was already assigned. Minting a second
-     * ID for the same process would make one process answer to two, which is
-     * the collision defect vms-2b8 round 3 removed, arriving from the other
-     * direction.
-     */
-    proc = vms_proc_find_or_err();
-    if (proc) {
-        args.vms_pid = proc->vms_pid;
-        args.status = 0x00000001;  /* SS$_NORMAL */
+    proc = vms_proc_register(current->pid, args.vms_pid);
+    if (IS_ERR(proc)) {
+        args.status = 0x0000001C;  /* SS$_DUPNAM (already registered) */
         if (copy_to_user((void __user *)arg, &args, sizeof(args)))
             return -EFAULT;
         return 0;
     }
 
-    /* current->tgid, not current->pid: one PCB per process, shared by
-     * every thread in it (see vms_proc_find_or_err). */
-    proc = vms_proc_register(current->tgid);
-    if (IS_ERR(proc)) {
-        if (PTR_ERR(proc) != -EEXIST)
-            return PTR_ERR(proc);   /* -ENOMEM -> SS$_INSFMEM at the boundary */
-
-        /*
-         * Lost the insert race, or the hash holds an entry for this pid
-         * number that is NOT ours (a recycled pid the reaper missed).
-         * Re-resolve through the pid-identity check: adopting on the
-         * strength of a matching pid NUMBER would hand this task another
-         * process's entry, and its privileges with it.
-         */
-        proc = vms_proc_find_or_err();
-        if (!proc)
-            return -ESRCH;
-    }
-
-    args.vms_pid = proc->vms_pid;
     args.status = 0x00000001;  /* SS$_NORMAL */
     if (copy_to_user((void __user *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -555,16 +411,8 @@ static int vms_dev_release(struct inode *inode, struct file *filp)
      * actually going away. Entries whose task exits without ever
      * reaching this path (a forked child sharing the parent's struct
      * file, for instance) are reclaimed by vms_proc_reap_dead().
-     *
-     * AND ONLY WHEN THE WHOLE THREAD GROUP IS GOING AWAY (vms-2b8). The
-     * entry is keyed by tgid and shared by every thread, so an exiting
-     * worker thread that happens to hold a channel must not delete the
-     * PCB out from under the threads still running: on VMS a thread
-     * terminating does not delete the process. thread_group_empty() is
-     * true only for the last thread standing, which is the point at
-     * which the VMS process really is ending.
      */
-    if (!(current->flags & PF_EXITING) || !thread_group_empty(current))
+    if (!(current->flags & PF_EXITING))
         return 0;
 
     proc = vms_proc_find_or_err();
@@ -581,57 +429,10 @@ static const struct file_operations vms_fops = {
     .release        = vms_dev_release,
 };
 
-/*
- * THE EXECUTIVE ENTRY POINT IS NOT PRIVILEGE-GATED (vms-2b8).
- *
- * miscdevice with no .mode creates the node 0600 root:root, which meant NO
- * UNPRIVILEGED PROCESS COULD REACH THE EXECUTIVE AT ALL. That is not a
- * conservative default here, it is a different system: with a 0600 door,
- * every reachable caller is root, multi-user OVMX cannot exist, and the
- * per-service privilege checks this module enforces are unreachable in the
- * product even though they are demonstrable in a test.
- *
- * VMS SEMANTICS THIS MATCHES (CLAUDE.md Rule 10, answer 1). On OpenVMS the
- * system-service entry sequence -- the change-mode-to-kernel/exec instruction
- * that the $-service jackets execute -- is an UNPRIVILEGED instruction
- * available to every process at every access mode. There is no permission on
- * "may I call the executive". Access control lives INSIDE each service, which
- * validates the caller's privilege mask and returns SS$_NOPRIV. That is
- * exactly the shape this module already has (vms_ioctl_setident,
- * vms_ioctl_setprv, vms_access_check), so the door must be open for the
- * checks behind it to be the thing that decides.
- *
- * THE ANSWER TO THE QUESTION THIS COMMENT WAS ASKED (round 3): YES,
- * unprivileged processes SHOULD be able to open /dev/vms, and therefore the
- * per-service checks are load-bearing security, not defence in depth. That
- * has a cost paid in this same change: when the door was opened in round 2,
- * vms_ioctl_getjpi() and vms_ioctl_procscan() had NO caller check, so an
- * unprivileged process could read the user name, UIC and privilege mask of
- * every process on the system -- the premise that "access control lives
- * inside each service" was false of the two services the open door newly
- * exposed. vms_proc_may_read() is that missing check, and its rule is
- * measured on the oracle rather than assumed (see vms_ioctl.h).
- *
- * OVMX DESIGN CHOICE, labelled as such (CLAUDE.md Rule 8): /dev/vms is an
- * OVMX construct with no VMS counterpart, so no public OpenVMS document
- * publishes a mode for it. 0666 is chosen as the closest Linux expression of
- * "every process may enter the executive"; it is not presented as
- * VMS-authentic.
- *
- * KNOWN CONSEQUENCE, deliberately not handled here and reported to the
- * security review (vms-cb5): an unprivileged process may now consume
- * executive memory -- process entries, locks, event flags, queued ASTs --
- * with no bound. VMS bounds exactly this with per-process quotas (BYTLM,
- * ENQLM, ASTLM) charged from SYSUAF. OVMX has no quota system yet, so this
- * enlarges a local denial-of-service surface. Adding an arbitrary in-module
- * cap would be the illegal third answer (Rule 10): VMS's answer is quotas,
- * and quotas are the item to write, not a limit invented here.
- */
 static struct miscdevice vms_misc = {
     .minor  = MISC_DYNAMIC_MINOR,
     .name   = "vms",
     .fops   = &vms_fops,
-    .mode   = 0666,
 };
 
 /* ================================================================

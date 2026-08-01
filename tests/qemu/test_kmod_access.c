@@ -59,6 +59,7 @@ struct child_report {
     uint32_t chkpriv_cmkrnl;    /* does it hold CMKRNL? */
     uint32_t setmode_kernel;    /* status of the escalation attempt */
     uint8_t  mode_after;        /* mode after the refused attempt */
+    uint32_t getmode_ok;        /* did the GETMODE re-read itself succeed? */
     uint32_t setprv_cmkrnl;     /* can it grant itself CMKRNL? */
     uint32_t chkpriv_after;     /* ... and did that leave it holding CMKRNL? */
 };
@@ -104,7 +105,12 @@ static int child_main(int wfd)
     r.setmode_kernel = vms_kif_setmode(PSL_C_KERNEL);
 
     memset(&gm, 0, sizeof(gm));
-    ioctl(fd, VMS_IOCTL_GETMODE, &gm);
+    /* vms-0e4 (audit round 2): the ioctl's own return was previously
+     * ignored here. PSL_C_USER happens to be nonzero (3), so the
+     * memset(0) default alone did not make this vacuous by accident --
+     * but "did not happen to" is not "cannot", so this is now checked
+     * the same way the KERNEL-direction re-read below is. */
+    r.getmode_ok = (ioctl(fd, VMS_IOCTL_GETMODE, &gm) == 0);
     r.mode_after = gm.mode;
 
     /* And it cannot talk its way into the privilege either. */
@@ -166,9 +172,19 @@ int main(void)
     uint32_t setmode_st = vms_kif_setmode(PSL_C_KERNEL);
     CHECK(setmode_st == SS_NORMAL, "KERNEL mode ALLOWED with CMKRNL");
 
+    /* vms-0e4 (audit round 2): this re-read did not check the ioctl's own
+     * return value. PSL_C_KERNEL is 0 -- numerically identical to the
+     * memset(0) default below -- so if VMS_IOCTL_GETMODE ever failed
+     * outright (returned an error without writing gm), this assertion
+     * would read the LEFTOVER zeroed buffer, see mode==0, and report PASS
+     * for a GETMODE that told it nothing. MEASURED: injecting exactly
+     * that fault into vms_ioctl_getmode() (return before copy_to_user)
+     * left this one line green while "a process starts in USER mode" and
+     * "... and the mode really returned to USER" both correctly went red
+     * -- the defect this rewrite closes. */
     memset(&gm, 0, sizeof(gm));
-    ioctl(fd, VMS_IOCTL_GETMODE, &gm);
-    CHECK(gm.mode == PSL_C_KERNEL, "... and the mode really changed");
+    CHECK(ioctl(fd, VMS_IOCTL_GETMODE, &gm) == 0 && gm.mode == PSL_C_KERNEL,
+          "... and the mode really changed");
 
     /* Back to USER: a less privileged move is always allowed, and the
      * child below must not be compared against a parent left in kernel
@@ -182,9 +198,13 @@ int main(void)
      * actually leaving the process in a MORE PRIVILEGED mode is a
      * privilege escalation reported as success -- the status alone cannot
      * tell the two apart, only the observed mode can. */
+    /* Same ioctl-return check added to the KERNEL-direction re-read above,
+     * applied here too: PSL_C_USER (3) happens to differ from the
+     * memset(0) default, so this one was not vacuous by the same route --
+     * but not being exploitable by luck is not the same as being correct. */
     memset(&gm, 0, sizeof(gm));
-    ioctl(fd, VMS_IOCTL_GETMODE, &gm);
-    CHECK(gm.mode == PSL_C_USER, "... and the mode really returned to USER");
+    CHECK(ioctl(fd, VMS_IOCTL_GETMODE, &gm) == 0 && gm.mode == PSL_C_USER,
+          "... and the mode really returned to USER");
 
     /* ---- the UNPRIVILEGED half ---- */
     if (pipe(c2p) < 0) {
@@ -223,7 +243,7 @@ int main(void)
           "an unprivileged process is NOT derived CMKRNL");
     CHECK(cr.setmode_kernel == SS_NOPRIV,
           "KERNEL mode DENIED without CMKRNL (SS$_NOPRIV)");
-    CHECK(cr.mode_after == PSL_C_USER,
+    CHECK(cr.getmode_ok && cr.mode_after == PSL_C_USER,
           "... and the mode is still USER after the denied escalation");
     CHECK(cr.setprv_cmkrnl != SS_NORMAL,
           "an unprivileged process cannot $SETPRV itself CMKRNL");

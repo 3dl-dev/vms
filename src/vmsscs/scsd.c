@@ -2569,9 +2569,20 @@ int main(int argc, char **argv)
              * DISCARDED it before any handler ran, so the coordinator waited forever
              * for a response it was never going to get and the CSB stayed 'open'.
              * The reference does the same thing (frame 217). Accept both phases. */
+            /* vms-2f3: ...AND ITS RETRANSMIT FORM, 0x7b. Same defect as the 0x5b
+             * one above, one msgtype further along, and it is what makes the
+             * rejoin asymmetric: a fresh identity never provokes a
+             * retransmission, so it never meets 0x7b, while a returning one is
+             * deaf to every retransmission from the first onward. The peer then
+             * retransmits on a timer that backs off to its 3 s ceiling and its
+             * VC transmit window collapses to 2 (SCACP, run s3E) -- measurably
+             * BEFORE our op 0x02 is even sent. OVMX_CM_NO_RETX=1 restores the
+             * old deaf behaviour so the failure stays reproducible. */
             if (cm_parsed &&
                 (mv.msgtype == SCS_MEMBER_MSGTYPE ||
-                 mv.msgtype == SCS_MEMBER_MSGTYPE_ALT) &&
+                 mv.msgtype == SCS_MEMBER_MSGTYPE_ALT ||
+                 (mv.msgtype == SCS_MEMBER_MSGTYPE_RETX &&
+                  getenv("OVMX_CM_NO_RETX") == NULL)) &&
                 (mv.remote_conid == OVMX_LOCAL_CONID ||
                  mv.local_conid == OVMX_LOCAL_CONID ||
                  cm_on_joiner_vc)) {
@@ -2692,10 +2703,15 @@ int main(int argc, char **argv)
                     if (getenv("OVMX_CM_QUIET") == NULL) {
                         log_ts(stdout);
                         printf(" SCSD-T-CMIN, cat 0x%02x op 0x%02x txn=0x%04x"
-                               " csum=0x%04x smsg=%u amsg=%u%s\n",
+                               " csum=0x%04x smsg=%u amsg=%u%s%s\n",
                                mv.category, mv.opcode, mv.txn, mv.checksum,
                                mv.sysap_send_msg, mv.sysap_ack_msg,
-                               mv.is_response ? " (RESPONSE)" : "");
+                               mv.is_response ? " (RESPONSE)" : "",
+                               /* vms-2f3: mark the retransmit form. A peer only
+                                * sends it when it did not get an answer, so a
+                                * run full of these is a run we were deaf in. */
+                               mv.msgtype == SCS_MEMBER_MSGTYPE_RETX
+                                   ? " (RETRANSMIT 0x7b)" : "");
                         fflush(stdout);
                     }
 

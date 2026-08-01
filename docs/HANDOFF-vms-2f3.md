@@ -58,6 +58,8 @@ reset.**
 | a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
 | the VAXes have no oracle for their non-decisions | **REFUTED — SCACP, ANALYZE/ERROR_LOG and SDA SHOW CONNECTIONS all exist and were never used** | §4d.9 ⭐⭐⭐ |
 | the two outcomes look alike below the CM layer | **REFUTED — a refused rejoin's VC is in congestion collapse; a successful one is indistinguishable from a real VAX** | §4d.9 ⭐⭐⭐ |
+| the PEDRIVER collapse is an effect of the CM stall | **REFUTED — it precedes our `op 0x02` by ≥3 s; a fresh identity never degrades at all** | §4d.10 ⭐⭐⭐ |
+| OVMX hears the peers' CM retransmissions | **REFUTED — `msgtype 0x7b` was discarded before any handler ran. FIXED, and it did NOT admit us** | §4d.10 ⭐⭐⭐ |
 
 ## 1. The reproducer — four minutes, no reset
 
@@ -805,15 +807,16 @@ when each VC opened so everything below accrued *within the run*:
 |---|---|---|---|
 | VC state / channels open / ECS | Open / 1 / 1 | Open / 1 / 1 | Open / 1 / 1 |
 | **VC Total Errors** | **0** | **21** | 2 |
-| **Xmt:TMO** (transmit timeouts) | **Infinite** *(none)* | **29** | Infinite |
+| **Xmt:TMO** (transmit:timeout RATIO — `Infinite` = no timeouts at all) | **Infinite** | **26–31** *(one timeout per ~26 transmits)* | Infinite |
 | **XmtWindow Cur/Max** | **24 / 24** | **2** / 24 | 24 / 24 |
 | **ReXmt TMO** | **663 ms** | **3 000 ms — the maximum** | 678 ms |
 | Channel Total Errors | **2** | **62** | 6 |
 
 **A successful OVMX join is indistinguishable from a real VAX at this layer.**
-A refused rejoin is a VC in **congestion collapse**: 29 transmit timeouts in
-~20 s, the transmit window backed off from 24 to **2**, and the retransmit timer
-pinned at its 3-second ceiling. And the VC's `Total Pkts` reads **686 at T+20
+A refused rejoin is a VC in **congestion collapse**: a transmit timeout every
+~26 transmits, the window backed off from 24 to **2**, and the retransmit timer
+pinned at its 3-second ceiling. (`Xmt:TMO` is a RATIO, not a count — an earlier
+revision of this section read it as a count of 29. The count is not given.) And the VC's `Total Pkts` reads **686 at T+20
 and 686 at T+60** — *zero VC-level traffic in forty seconds* — while the channel
 counter keeps climbing on HELLOs alone.
 
@@ -846,6 +849,70 @@ promote it to a root cause without a run that shows the timeouts starting BEFORE
 the `op 0x02` goes unanswered.** `scacppoll.sh` polls at T+20/T+60; poll at
 T+5/T+8/T+12 with a packet capture running (it does not capture yet — add it)
 and the ordering falls out.
+
+### 4d.10 ⭐⭐⭐ ORDER ESTABLISHED, AND A REAL DEAFNESS BUG FOUND AND FIXED — which did NOT admit us
+
+§4d.9 left cause-vs-effect open. `tools/scacptrace.sh` (new) closes it: it stays
+*inside* SCACP and fires bare `SHOW VC` on a timer, so a sample costs one
+console round-trip instead of ~23 s, and **SCACP's output header timestamps
+itself** (`VAX1 PEA0 VC Summary 1-AUG-2026 18:39:27.41:`), so no markers are
+needed. VAX1's clock runs **~7.5 s behind the host** (measured directly, `SHOW
+TIME` against `date`) — that offset is what puts SCACP, tcpdump and the SCSD log
+on one timeline.
+
+Aligned on the moment we send `op 0x02`:
+
+| relative to our `op 0x02` | `s3E` rejoin — REFUSED | `s7A` fresh — JOINED |
+|---|---|---|
+| **−3.0 s** | errors 22, **window already 8**, ReXmt **2.84 s** | 0 errors, no timeouts, window 24 |
+| **+1.0 s** | **window 1, ReXmt 3.0 s (ceiling)** | window 24, ReXmt falling to 0.68 s |
+| +5 → +81 s | frozen: window 2, ReXmt at ceiling | 0 errors, window 24, ReXmt settling to 0.60 s |
+
+**The collapse precedes the add-member request by at least three seconds, and a
+fresh identity never has a single transmit timeout.** So it is NOT a consequence
+of `op 0x02` going unanswered. §4d.9's open question is closed.
+
+**AND THE CAPTURE NAMED THE CAUSE OF THE TIMEOUTS.** A message-type census of the
+first 12 s, refused vs joined, differs in exactly one entry: **`msgtype 0x7b`,
+204 bytes, three copies — present in the rejoin, ZERO in the fresh join.**
+Decoded: all three peers sending `cat 0x01 op 0x01` in **member form**
+(`body[12]=0x21`), **retransmitted ~3 s apart — exactly the collapsed ReXmt
+interval** — and never acknowledged by us.
+
+**`0x7b` is the RETRANSMIT form of `0x5b`, and this codebase already knew that**
+— `scs_dir.h:SCS_DIR_OPCODE_RETX`, *"its retransmit form (spec sec 4h)"*, and
+the directory path accepts it. **The connection-manager path did not.** It gated
+on `0x4b || 0x5b` and discarded `0x7b` before any handler ran.
+
+That is the *same bug already fixed once*, one msgtype further along — and the
+comment sitting directly above that gate names its own symptom:
+
+> *"Gating on 0x4b alone silently DISCARDED it … so the coordinator waited
+> forever for a response it was never going to get and **the CSB stayed
+> 'open'**."*
+
+**Which is exactly what SDA reported for every refused rejoin in §4d.6: state
+`open`, flags `00000000`.**
+
+**Fixed** (`SCS_MEMBER_MSGTYPE_RETX`, kill-switch `OVMX_CM_NO_RETX=1`, and the
+CMIN trace now marks `(RETRANSMIT 0x7b)`). It works — run `s3F` **sees and
+processes six** `0x7b` frames that every previous run was deaf to.
+
+> ### ⚠ AND IT DID NOT ADMIT US. `s3F` was still refused.
+> Fresh control `s8B` still joins in 27 s, so the change is safe and it is kept:
+> we were provably deaf to every CM retransmission, on every path, and that was
+> wrong regardless of what it explains (guardrail 15, for the fifth time on this
+> item). **Do not record this as the fix for `vms-2f3`.**
+>
+> What it buys is that the peer's retransmissions are now *visible and answered*,
+> and the next question is why it retransmits at all. First lead, unproven: on
+> the **member's** VC our reciprocal `op 0x14`/`op 0x01` both carry `rack=10`
+> while the peer's `op 0x01` is `sseq=11` — we do not acknowledge the very frame
+> we are replying to, and only reach `rack=11` some 6 s later via a `cat 0x04`
+> ack, after two retransmits. **Caveat that kills the easy version of this
+> story:** the *joiner* CM VC's sequence/ack progression is byte-for-byte
+> identical in the refused and successful runs for the first fourteen frames, so
+> whatever differs is on the member VC or later. Chase it there.
 
 ### 4d.5 What is left of the ordered plan
 
@@ -1058,9 +1125,10 @@ nobody re-derives it.
 |  `tools/probe.sh` | drive any VAX console, capture between markers. |
 | `tools/stallpoll.sh` | **one join + SDA polled on a CHOSEN node DURING the stall.** The node is an argument on purpose: session j polled VAX1, which was not the coordinator in `r1B`, so the one node whose state decided the outcome was never asked. This is what separated the two refusal shapes (§4d.6). |
 | `tools/scacppoll.sh` | **one join + SCACP (`SHOW VC` / `SHOW CHANNEL`) polled on a chosen node DURING the run.** This is PEDRIVER's own view, a layer below everything §1–§4c examined, and it is what separated a refused rejoin from a successful join on live counters (§4d.9). **Does not capture packets yet — add tcpdump before using it to establish ordering.** |
+| `tools/scacptrace.sh` | **high-cadence SCACP + packet capture.** Stays INSIDE SCACP and fires bare `SHOW VC` on a timer (one console round-trip per sample instead of ~23 s), and relies on SCACP's self-timestamping header instead of markers. This is what established ORDER (§4d.10). VAX1's clock runs ~7.5 s behind the host — measure it with `SHOW TIME` vs `date` before correlating. |
 
 Run tags session j (part 2): `r1A` `r2A` joined, `r1B` `r2B` refused, `vax3crash` = the real-VAX crash-rejoin specimen. **Last SCSSYSTEMID used: 1241.**
-Run tags session k: `s1A` `s2A` `s3A` `s4A` `s5A` joined (fresh, pure); `s1B` refused (rejoin form), `s1C` refused (`OVMX_REJOIN_FORM=0`); `s3B` refused (SDA-polled on VAX3), `s3C` refused (`OVMX_CFG2_PEER=1`, forced to the real coordinator); `s3D` refused / `s6A` joined = the matched SCACP pair (§4d.9). **Last SCSSYSTEMID used: 1247.**
+Run tags session k: `s1A` `s2A` `s3A` `s4A` `s5A` joined (fresh, pure); `s1B` refused (rejoin form), `s1C` refused (`OVMX_REJOIN_FORM=0`); `s3B` refused (SDA-polled on VAX3), `s3C` refused (`OVMX_CFG2_PEER=1`, forced to the real coordinator); `s3D` refused / `s6A` joined = the matched SCACP pair (§4d.9); `s3E` refused / `s7A` joined = the high-cadence ORDERING pair (§4d.10); `s3F` refused WITH the 0x7b fix, `s8B` fresh joined with it. **Last SCSSYSTEMID used: 1249.**
 
 Run tags session i: `ctl1`, `inc1`, `inc2`, `fresh1`, `fresh2`, `keyB`, `keyC`,
 `rej2`, `rej3`. Session j: `g1A` (joined), `g1B` (refused, SDA-polled), `p1A`

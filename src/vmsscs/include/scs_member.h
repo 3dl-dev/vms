@@ -65,6 +65,33 @@ extern "C" {
 
 /* SCS envelope (shared with sec 4d/4g/4h) -- SCA-content offsets. */
 #define SCS_MEMBER_MSGTYPE    0x4b /* sequenced-application (VC data) [16] */
+/*
+ * vms-2f3: THE RETRANSMIT FORM. 0x7b is 0x5b with the retransmit bit set, and
+ * this file's sibling already grounded it for another SYSAP --
+ * scs_dir.h:SCS_DIR_OPCODE_RETX, "its retransmit form (spec sec 4h)".
+ *
+ * WHY IT MATTERS HERE, AND WHY IT IS REJOIN-SHAPED. When a peer's connection
+ * manager does not get a response it expects, PEDRIVER retransmits the message
+ * with this msgtype. OVMX's CM gate accepted 0x4b and 0x5b and DISCARDED 0x7b
+ * before any handler ran -- so every retransmission of a CM message was
+ * invisible to us, the peer never got its answer, and it retransmitted again on
+ * a timer that backs off to its ceiling.
+ *
+ * Measured, run d94-s3E (a refused rejoin): all three peers send
+ * `cat 0x01 op 0x01` in MEMBER form (body[12]=0x21) as msgtype 0x7b, twice
+ * each, ~3 s apart -- exactly the collapsed retransmit interval SCACP reports.
+ * The matched fresh join d94-s7A contains ZERO 0x7b frames, because nothing
+ * needed retransmitting there. That is the whole rejoin asymmetry: a fresh
+ * identity never triggers a retransmission, and a returning one is deaf to
+ * every retransmission from the first one onward.
+ *
+ * This is the SAME BUG the 0x5b comment below describes, one msgtype further
+ * along, and it produces the same signature the peer side already showed us:
+ * "the coordinator waited forever for a response it was never going to get and
+ * the CSB stayed 'open'" -- SDA reported exactly that, state `open` with zero
+ * flags, for every refused rejoin in session k.
+ */
+#define SCS_MEMBER_MSGTYPE_RETX 0x7b
 #define SCS_MEMBER_MSGTYPE_ALT 0x5b /* vms-760: the SAME 190-byte CM class is also sent
                                      * with the establishing-phase msgtype, even on a
                                      * long-established VC (ref frame 217; the op 0x09

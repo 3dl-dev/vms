@@ -67,64 +67,34 @@ uint32_t sys$exit(uint32_t code) {
  * does not maintain its own CPU accounting, so there is nothing here to
  * read it from instead.
  *
- * WHAT THIS RETURNS WHEN IT CANNOT MEASURE, AND WHY IT IS NOT A ZERO
- * (vms-8019 round 7).
- *
- * It used to return the literal 0, and sys$getjpi wrote that 0 into
- * JPI$_CPUTIM with a 4-byte return length and SS$_NORMAL -- so a caller
- * could not tell "consumed no CPU" from "OVMX could not measure it".
- * That is the SAME defect the round-4 ruling removed from SHOW SYSTEM
- * one layer above (dcl_cmd_show.c printed a fabricated "0 00:00:00.00"
- * for a row it could not read), left standing here, so the two readers
- * of one facility disagreed about one condition.
- *
- * It is reachable, not theoretical: the executive resolves the row and
- * returns (vms_ioctl_getjpi reaps dead entries first, so the row was
- * LIVE), and the target task can then exit before the /proc open below.
- * The answer is then wrong rather than merely unknown.
- *
- * Rule 10 allows two answers and this is the first one -- MATCH VMS.
- * Every failure path below is the target no longer existing:
- *   fopen() fails            -- /proc/<pid> is gone, so the task is gone
- *   fread() returns 0        -- the task was released between open and
- *                               read; procfs returns ESRCH, not a line
- *   no ')' / fields short    -- not a stat line for a live task
- * and the condition VMS reports for a target that no longer exists is
- * SS$_NONEXPR (%SYSTEM-W-NONEXPR, "process does not exist"; the value is
- * oracle-pinned to 2280 on VAX1, see ssdef.h). VMS has no "the executive
- * could not measure it" status, and inventing one -- or reporting a
- * plausible zero -- is the illegal third answer.
- *
- * On success *out holds the figure and SS$_NORMAL is returned; on
- * failure *out is NOT written and the caller must not report the item.
+ * Returns 0 (and leaves the item length set) when /proc cannot answer.
  */
-static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
+static uint32_t jpi_cputim(uint32_t linux_pid)
 {
     if (linux_pid == (uint32_t)getpid()) {
         struct rusage ru;
         getrusage(RUSAGE_SELF, &ru);
-        *out = (uint32_t)(
+        return (uint32_t)(
             (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 100 +
             (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 10000);
-        return SS$_NORMAL;
     }
 
     char path[64];
     snprintf(path, sizeof(path), "/proc/%u/stat", (unsigned)linux_pid);
     FILE *f = fopen(path, "r");
-    if (!f) return SS$_NONEXPR;
+    if (!f) return 0;
 
     char buf[1024];
     size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
-    if (n == 0) return SS$_NONEXPR;
+    if (n == 0) return 0;
     buf[n] = '\0';
 
     /* The comm field is parenthesised and may contain spaces, so field
      * splitting has to start after the LAST ')'. utime/stime are the
      * 12th and 13th fields after that point. */
     char *p = strrchr(buf, ')');
-    if (!p) return SS$_NONEXPR;
+    if (!p) return 0;
     p++;
 
     /* strtok_r, never strtok: this runs inside sys$getjpi, a PUBLIC sys$
@@ -134,24 +104,17 @@ static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
      * independent of anything the tests reach. */
     unsigned long long utime = 0, stime = 0;
     int field = 0;
-    int have_both = 0;
     char *save = NULL;
     for (char *tok = strtok_r(p, " ", &save); tok;
          tok = strtok_r(NULL, " ", &save)) {
         field++;                        /* field 1 here == stat field 3 */
         if (field == 12) utime = strtoull(tok, NULL, 10);
-        else if (field == 13) {
-            stime = strtoull(tok, NULL, 10);
-            have_both = 1;
-            break;
-        }
+        else if (field == 13) { stime = strtoull(tok, NULL, 10); break; }
     }
-    if (!have_both) return SS$_NONEXPR;
 
     long hz = sysconf(_SC_CLK_TCK);
     if (hz <= 0) hz = 100;
-    *out = (uint32_t)(((utime + stime) * 100ULL) / (unsigned long long)hz);
-    return SS$_NORMAL;
+    return (uint32_t)(((utime + stime) * 100ULL) / (unsigned long long)hz);
 }
 
 /*
@@ -306,23 +269,7 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
                 break;
 
             case JPI$_CPUTIM: {
-                /*
-                 * THE WHOLE CALL FAILS IF THE TARGET HAS GONE.
-                 *
-                 * jpi_cputim() only fails when the process the executive
-                 * resolved no longer exists (see its comment), and
-                 * SS$_NONEXPR describes the TARGET, not this item -- the
-                 * items already written above describe a process that has
-                 * since ceased to exist, so reporting SS$_NORMAL over the
-                 * top of them would hand the caller a stale row and call
-                 * it current. Nothing is written for this item and no
-                 * return length is set: a caller must never receive a
-                 * measured-looking zero for an unmeasurable process.
-                 */
-                uint32_t cputim = 0;
-                uint32_t cpustat = jpi_cputim(info.linux_pid, &cputim);
-                if (!(cpustat & 1))
-                    return cpustat;
+                uint32_t cputim = jpi_cputim(info.linux_pid);
                 if (item->bufaddr && item->buflen >= sizeof(uint32_t))
                     *(uint32_t *)item->bufaddr = cputim;
                 if (item->retlen) *item->retlen = sizeof(uint32_t);
@@ -378,73 +325,6 @@ uint32_t sys$wake(const uint32_t *pidadr,
     }
     if (kill(pid, SIGCONT) < 0) return SS$_NONEXPR;
     return SS$_NORMAL;
-}
-
-/*
- * creprc_write_all / creprc_read_all -- the $CREPRC creation handshake's
- * transfers, made SIGNAL-PROOF.
- *
- * WHY THESE EXIST (the defect they delete): a bare read() on the pipe
- * returns -1/EINTR whenever a signal is delivered to the CALLER through a
- * handler installed without SA_RESTART. That is not an exotic condition --
- * src/vmsdcl/dcl_main.c installs DCL's interactive SIGINT and SIGQUIT
- * handlers with sa_flags = 0, and DCL is the process that calls $CREPRC
- * (RUN, RUN/DETACHED). A Ctrl-C landing in the handshake window made the
- * short-read branch fire with the child PERFECTLY HEALTHY: $CREPRC reported
- * OVMX$_PRCLOST -- "no VMS process was created, nothing was ever entered in
- * the table" -- for a process that WAS created, IS in the executive's table
- * and IS enumerable by SHOW SYSTEM, and then reaped it. Measured on a
- * NATIVE host against this branch's own LIBVMS$SHR.EXE and recorded on
- * vms-8019: 788 of 4000 calls under a DCL-shaped handler, 0 of 4000 without
- * one. (Under QEMU the same window is a fraction of a millisecond wide,
- * which is why tests/qemu/test_syssvc_procnam.c's P13 holds the forked
- * child still with ptrace instead of trying to catch it.)
- *
- * The signal disposition of the caller is not a fact about the child, so it
- * must not be able to change what $CREPRC says about the child. With these
- * loops in place a short read really does mean "the child died before
- * reporting", which is the only condition OVMX$_PRCLOST is documented to
- * name, and is what makes the unconditional waitpid() below correct rather
- * than an indefinite block on a live process.
- *
- * The child's write needs the same treatment for the same reason with the
- * roles swapped: a child that reported successfully but was interrupted
- * mid-write still exec's its image, and the parent would see a short read
- * and declare a running process lost.
- *
- * A genuine EOF (read returns 0) and a genuine error other than EINTR both
- * stop the loop and are reported as a short transfer.
- */
-static ssize_t creprc_write_all(int fd, const void *buf, size_t len)
-{
-    const char *p = (const char *)buf;
-    size_t done = 0;
-    while (done < len) {
-        ssize_t w = write(fd, p + done, len - done);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (w == 0) break;
-        done += (size_t)w;
-    }
-    return (ssize_t)done;
-}
-
-static ssize_t creprc_read_all(int fd, void *buf, size_t len)
-{
-    char *p = (char *)buf;
-    size_t done = 0;
-    while (done < len) {
-        ssize_t r = read(fd, p + done, len - done);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (r == 0) break;      /* genuine EOF: the writer is gone */
-        done += (size_t)r;
-    }
-    return (ssize_t)done;
 }
 
 /*
@@ -577,21 +457,10 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
             else
                 rep.status = gst;
         }
-        /* Retried on EINTR and on a short write: an interrupted report
-         * from a child that is about to exec its image would reach the
-         * creator as a short read, i.e. as OVMX$_PRCLOST for a running
-         * process. */
-        ssize_t w = creprc_write_all(namefd[1], &rep, sizeof(rep));
+        ssize_t w = write(namefd[1], &rep, sizeof(rep));
         (void)w;
         close(namefd[1]);
-        /* A report the creator never received describes a process the
-         * creator does not know exists. The creator reads a short transfer
-         * as OVMX$_PRCLOST -- "nothing was created" -- so the child must
-         * not go on to activate the image and make that statement false.
-         * Only a genuine write error can end the loop short, and this
-         * keeps "short transfer" and "no process" the same fact rather
-         * than two facts that can disagree. */
-        if (!(rep.status & 1) || w != (ssize_t)sizeof(rep))
+        if (!(rep.status & 1))
             _exit(1);
 
         /* Child: Initialize PCB with inherited context */
@@ -635,12 +504,7 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     /* Parent process */
     close(namefd[1]);
     struct creprc_report rep = { 0, 0 };
-    /* Retried on EINTR: see creprc_read_all. A signal caught by the
-     * CALLER must not be able to change what $CREPRC says about the
-     * CHILD, and it is what makes r < sizeof(rep) mean "the child died
-     * before reporting" -- the precondition of both the OVMX$_PRCLOST
-     * return and the unconditional waitpid() below. */
-    ssize_t r = creprc_read_all(namefd[0], &rep, sizeof(rep));
+    ssize_t r = read(namefd[0], &rep, sizeof(rep));
     close(namefd[0]);
 
     if (r != (ssize_t)sizeof(rep) || !(rep.status & 1)) {
@@ -649,18 +513,6 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * the name-refusal case used to be reaped, so the short-read
          * case leaked a zombie for a process the caller was
          * simultaneously told had been created.
-         *
-         * THAT CLAIM IS TRUE ONLY BECAUSE OF creprc_read_all(): a bare
-         * read() also came back short when the CALLER caught a signal
-         * under a handler without SA_RESTART, and this branch then ran
-         * against a live, correctly created process -- either killing it
-         * (the close() above turns its report into SIGPIPE) or blocking
-         * the waitpid() below for the whole life of the image it had
-         * just started, depending only on which of the two reached the
-         * pipe first. Both halves of this branch -- the status and the
-         * reap -- depend on a short transfer meaning the child died.
-         * The child likewise refuses to activate its image if its own
-         * report did not get through, so the two cannot disagree.
          *
          *  - r == sizeof(rep) with a failure status: the executive
          *    refused the name (SS$_DUPLNAM within the UIC group, or

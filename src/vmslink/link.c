@@ -831,22 +831,8 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
         }
         if (weak_has(nm)) return 0;   /* weak-undef resolves to 0 (ELF semantics) */
         if (g_allow_undef) { g_deferred++; return 0; }
-        /* NAME THE SYMBOL. Without it this diagnostic says only that *a*
-         * symbol did not bind, which turns "one libc call was added to an
-         * OVMX library whose producer image does not export it" -- the
-         * single commonest way to break the VMS-native toolchain jobs --
-         * into a manual nm/comm hunt across 40 objects and five producer
-         * vectors. The name is the whole content of the report. */
-        {
-            char buf[256];
-            snprintf(buf, sizeof(buf),
-                     "unresolved external symbol '%s' (no --use'd shareable "
-                     "exports it as a universal; if it is a C RTL entry point "
-                     "it must be appended to DECC$SHR's symbol vector -- "
-                     "vms-61f; pass --allow-undefined to record it as a "
-                     "deferred import)", nm);
-            die(buf);
-        }
+        die("unresolved external symbol (needs the C RTL -- vms-61f; "
+            "pass --allow-undefined to record it as a deferred import)");
     }
     (void)nobj;
     /* Defined, but in a section this linker doesn't place flat (TLS, or an

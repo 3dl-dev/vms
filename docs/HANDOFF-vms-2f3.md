@@ -470,6 +470,90 @@ is a consequence of the refusal rather than its cause. Two hypotheses die here:
 "our first failed rejoin poisons subsequent ones" and (again, at 95 min) "the
 gap was too short".
 
+### 4c.2e ⭐⭐ THE DISCRIMINATOR — a rejoin's `op 0x02` is a different shape
+
+**This is the strongest candidate this item has ever had. It came out of the new
+crash-rejoin specimen, and I verified it independently of the agent that found
+it, with my own byte scan.** Admission-frame `cat 0x01 op 0x02`, SYSAP body
+offsets (`body[n]` = absolute frame offset `72+n`):
+
+| capture | sender | `[20:22]` | `[22:24]` | `[28:36]` | `[36:40]` |
+|---|---|---|---|---|---|
+| `vax3-2to3` #285 — VAX3 **first join** | real | 0 | 0 | zero | 0 |
+| `formation-ci1` #67 — VAX2 **first join** | real | 0 | 0 | zero | 0 |
+| **crash-rejoin #1297 — VAX3 rejoin** ⭐ | real | **1** | **1025** | `004af82e3605bc00` | **9** |
+| `af2-established-rejoin` #2923 | real | **1** | **1025** | `c01f673a9400bc00` | **2** |
+| `af2-firsttimer` ×3 rejoins | real | **1** | **1025** | same | **2** |
+| `e81-bystander-ADDITION` #2969 | real | **1** | **1025** | `e05a627a4b03bc00` | **3** |
+| `r2A`, `r2B`, `r1B`, `760-MEMBER`, `e4b` | **OVMX** | **0** | **0** | **zero** | **0** |
+
+**Zero residuals: 6 captures, 2 real joiner nodes, 3 lab generations. OVMX sends
+the first-join form on every rejoin.**
+
+What the fields are (grounded except where noted):
+
+- **`[28:36]` is a CLUSTER-scoped founding timestamp, not our incarnation.** The
+  same quadword `004af82e3605bc00` appears in the members' own `op 0x01`
+  `body[28:36]`, and in the class-0x03 removal `op 0x08` that removed
+  **OVMXR2** 90 minutes earlier — a node with a completely different
+  incarnation. One value per lab generation. *(The agent's first reading was
+  "VAX3's previous incarnation"; its own cross-check refuted that. Good.)*
+- **`[22:24]` = `0x0401` = 1025 = VAX1's SCSSYSTEMID**, in both labs, where VAX1
+  is CSID `00010001`. INFERRED: the founding node's system ID.
+- **`[20:22]` = 1** — a boolean "I have prior cluster state".
+- **`[36:40]`** — 9 / 3 / 2 across specimens. **Not determined.** Not the epoch,
+  not a CSID.
+- Real `op 0x02` also carries twelve `0x20` spaces at `[40:52]`; we send zeros.
+
+**We already receive everything we need.** `r2B` #55 (VAX3 → OVMX `op 0x01`)
+carries `body[28:36] = 00 4a f8 2e 36 05 bc 00` — the exact quadword the real
+VAX3 quotes back. We are handed the founding time and discard it.
+
+**Why this survives every refuted hypothesis.** The coordinator gets an
+`op 0x02` claiming "no prior cluster state" while holding a CSB that says
+otherwise. That one rule covers the whole corpus: fresh identity + first-join
+form + no CSB → admitted; returning identity + first-join form + CSB → abort;
+real node's rejoin + rejoin form + CSB → admitted in 50 ms. It also explains
+§4c.3 (byte-identical frames, opposite outcomes — the deciding input is our
+*constant* claim measured against the peer's *varying* state) and §3.1 (no wait
+works — nothing decays).
+
+**NOT PROVEN.** Passive capture cannot show what the coordinator evaluates. What
+is proven is that the fields exist, that they separate first-join from rejoin in
+every real specimen with no exceptions, and that OVMX gets them wrong every
+time. **It is a candidate with a four-minute test, not a demonstrated gate — and
+this item has burned three confident root causes already. Run the test.**
+
+**Counter-evidence owed:** in `r1B` the coordinator was VAX3, booted 5 minutes
+earlier, with no first-hand memory of OVMXR1 (removed at 15:04) — and it aborted
+anyway. Either it inherited the dead CSB during its own admission, or the
+mechanism is elsewhere. **SDA on VAX3 immediately after it rejoins, listing its
+CSBs, decides this and costs nothing. Do that before building on the story.**
+
+### 4c.2f GROUNDED — the abort message, located to the millisecond
+
+`cat 0x01 op 0x04` **`role 0x50 class 0x02`** is the transition ABORT, broadcast
+to all participants. In `d94-r1B` it fires **1.2 ms after our last correct
+`op 0x05` echo** — not a timeout; the coordinator decides on state it already
+holds, right after the lock rebuild and *instead of* the `op 0x06` burst. Console
+confirms: `16:40:35.29 Node VAX3 aborted VAXcluster state transition`.
+
+Census: **zero occurrences in any other capture in the corpus.** Role `0x50` is
+not in spec §4(r)'s role table.
+
+**This does NOT contradict §3.4.** The `op 0x04` that appears in successful joins
+is `role 0x00 class 0x00` on a *non-`VMS$VAXcluster`* Con.ID — a different
+SYSAP's opcode 4. §3.4's "do not write a handler for `op 0x04`" is correct for
+that one and does not apply to role `0x50`. **We are currently blind to the
+abort**: the run just looks stuck. Logging it is free and makes every future run
+legible — do it first.
+
+Bonus, and it clears a suspect: **`op 0x05` names its subject node** —
+`body[20:24]` = SCSSYSTEMID, `body[28:36]` = that node's incarnation. OVMX's echo
+(`r1B` #318 = `d8 04` = 1240 = OVMXR1, plus OVMXR1's live incarnation, exact) is
+**byte-correct**, differing from the request only at `body[0:4]` and `body[18]`
+`00→01` — the identical mutation the real VAX3 applies. Not a suspect.
+
 ### 4c.3 The refusal is coordinator-side state — proven, not inferred
 
 The agent byte-diffed OVMX's retry `op 0x02` in the run that **succeeded**
@@ -593,6 +677,41 @@ strongest remaining lead — see §5.**
 >    the matched OVMX pair `d94-r2A` (joined) / `d94-r2B` (same identity, refused,
 >    both pure mode). The question is no longer open-ended — there is a reference
 >    answer on this exact path for the first time.
+>
+> ### ⭐ THE ORDERED PLAN — change ONE thing per run, control immediately before each
+>
+> 0. **SDA on VAX3 right after it rejoins**, listing its CSBs. Free, and it
+>    decides §4c.2e's counter-evidence before you write any code.
+> 1. **Log `cat 0x01 op 0x04 role 0x50 class 0x02` as ABORT** (§4c.2f). `txn=0`
+>    so per §4(r) it is not answered — but fail the join honestly instead of
+>    hanging. Pure observability, costs nothing, makes every later run legible.
+> 2. **Send the rejoin form of `op 0x02`** (§4c.2e): `[20:22]=1`,
+>    `[22:24]`=founding node's SCSSYSTEMID, `[28:36]`=**copy verbatim** from any
+>    member's `op 0x01` `body[28:36]` (we already parse it), `[40:52]`=twelve
+>    `0x20` spaces. `[36:40]` unknown — leave 0 and vary it second.
+>    **MUST be conditional**: a genuinely fresh identity has to keep sending
+>    zeros, because real first joins do.
+> 3. **Persist "I have been admitted to cluster `<founding-time>`" across a
+>    restart**, keyed on the sysgen store — a rebooted VAX3 has it and a
+>    restarted OVMX does not. Without this, step 2 cannot fire on the run that
+>    matters. *(Note this is the same statefulness `vms-e6c` is about, from the
+>    opposite direction: e6c says don't keep membership state you've lost; this
+>    says do keep the fact that you once had it. Reconcile them deliberately.)*
+> 4. **Ungate the disk-discovery run** from the member's DISC-REQ
+>    (`scsd.c:2280–2305` requires an inbound `op 6` on `SCS_DIR_OVMX_CONID`,
+>    which **never arrives on a rejoin** — `r2B`: 0 of 3 peers, `PSCLIENT`=0).
+> 5. **Do NOT chase**: the incarnation (VAX3's moved 162 ms and it still
+>    rejoined — an SIMH stored-clock artifact, which is itself the proof that
+>    "the incarnation moved" is not the key), `[36:38]` (already correct),
+>    the `op 0x05` echo (byte-correct), the HELLO (identical before and after),
+>    `Ref. time` (§4c.4), or `op 0x04 role 0x00` (a different SYSAP).
+>
+> **Spec debt owed:** §4(r) role table gains `0x50` = transition ABORT;
+> §4(j)/§4(o) gain the `op 0x02` rejoin field map and the `op 0x05` subject-node
+> decode; §4(g) must state the offset convention — **the START is 120 bytes
+> absolute / 106 payload, and `body[n]` = absolute `72+n`.** §4's `[66:74]` and
+> `[98:106]` are PAYLOAD-relative; absolute they are `[80:88]` and `[112:120]`.
+> That ambiguity has already cost one agent a wrong turn.
 >
 > **A note on method, since this item keeps punishing the same mistake.** Three
 > agent analyses on `vms-2f3` produced confident, well-evidenced root causes.

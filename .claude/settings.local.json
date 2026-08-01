@@ -1,6 +1,14 @@
 {
   "permissions": {
+    "defaultMode": "bypassPermissions",
     "allow": [
+      "Bash",
+      "Bash(*)",
+      "Read",
+      "Edit",
+      "Write",
+      "WebFetch",
+      "Workflow",
       "WebSearch",
       "Bash(gcc:*)",
       "Bash(cmake:*)",

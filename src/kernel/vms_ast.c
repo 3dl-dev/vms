@@ -33,11 +33,8 @@
 #include "vms_internal.h"
 
 /* Privilege bits */
-/* Bits come from vms_ioctl.h's single oracle-pinned table (vms-2b8);
- * these two happened to be right, but a local copy is how the wrong
- * ones in vms_access.c survived. */
-#define PRV_M_CMKRNL    VMS_PRV_M_CMKRNL
-#define PRV_M_CMEXEC    VMS_PRV_M_CMEXEC
+#define PRV_M_CMKRNL    (1ULL << 0)
+#define PRV_M_CMEXEC    (1ULL << 1)
 
 /*
  * vms_ioctl_dclast - Declare AST ($DCLAST equivalent)

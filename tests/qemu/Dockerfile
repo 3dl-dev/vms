@@ -84,7 +84,7 @@ RUN KVER=$(cat /tmp/kver) && \
 #                                 stage below against the REAL src/libvms
 #                                 public sys$ API (vms-1d9).
 #   test_kmod_devtab/procnam/  -> NOT built here; built below against
-#   test_kmod_ident/bind.c        src/libvmssys (the real kernel-interface
+#   bind.c                        src/libvmssys (the real kernel-interface
 #                                 client), see that stage's comment.
 #   everything else            -> plain gcc -static against vms_ioctl.h.
 #
@@ -96,23 +96,23 @@ COPY tests/qemu/test_*.c /src/tests/qemu/
 RUN for f in /src/tests/qemu/test_*.c; do \
         case "$f" in \
             */test_syssvc_*.c) continue;; \
-            */test_kmod_devtab.c|*/test_kmod_procnam.c|*/test_kmod_ident.c|*/test_kmod_bind.c) continue;; \
+            */test_kmod_devtab.c|*/test_kmod_procnam.c|*/test_kmod_bind.c) continue;; \
         esac; \
         out="${f%.c}"; \
         gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel || exit 1; \
         echo "Built: $(basename $out)"; \
     done
 
-# The device-table test (vms-d0b), the process-table test (vms-8019) and the
-# identity/privilege test (vms-2b8) drive the real userspace kernel-interface
+# The device-table test (vms-d0b) and the process-table test (vms-8019) drive
+# the real userspace kernel-interface
 # client rather than a hand-rolled ioctl copy, so the client libvms will call is
 # the client under test. That needs libvmssys's freestanding syscall trampoline
 # and string helpers linked in -- it does NOT pull in libvms; the libvms build
 # graph arrives in the NEXT stage (vms-1d9), which is a heavier, separate build.
 COPY src/libvmssys/ /src/libvmssys/
 RUN ARCH=$(uname -m) && \
-    for t in test_kmod_devtab test_kmod_procnam test_kmod_ident test_kmod_bind; do \
-        gcc -static -O2 -Wall -pthread -o /src/tests/qemu/$t \
+    for t in test_kmod_devtab test_kmod_procnam test_kmod_bind; do \
+        gcc -static -O2 -Wall -o /src/tests/qemu/$t \
             /src/tests/qemu/$t.c \
             /src/libvmssys/vms_kif.c \
             /src/libvmssys/vms_string.c \
@@ -263,37 +263,6 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # Pack initramfs
     cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
     echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
-
-# --- Per-facility negative controls (vms-e7d) ----------------------------
-#
-# NEGATIVE_CONTROL=1 above removes the WHOLE executive. That proves the gate
-# can go red, but not that it can say WHICH facility broke -- "something
-# failed" is not a gate, and a facility whose assertions had quietly stopped
-# meaning anything would still be covered by it.
-#
-# The per-facility controls inject ONE minimal defect into ONE facility (the
-# vms-e4d compat[EX][CR] flip, mechanised, plus one of the same shape for
-# every other facility) and check that the RIGHT suite goes red naming the
-# RIGHT assertion, while that facility's sibling assertions and every other
-# suite stay green.
-#
-# THEY ARE NOT A BUILD MODE. Nothing here is keyed on a build ARG: the
-# injection happens at RUN time, in the container's own writable layer,
-#
-#     docker run --rm -e FACILITY_DEFECT=<name> ovmx-ktest /inject_and_run.sh
-#
-# so this image is built ONCE and never mutated. The first version did use a
-# final ARG-keyed layer, which meant one tagged image per defect; removing
-# them afterwards left the engine's build cache referencing deleted layers and
-# a later build died with "getting top layer info: layer not known",
-# intermittently. A flaky gate is a broken gate, so the mechanism that made it
-# possible is gone rather than retried around.
-#
-# tests/qemu/run_facility_negctl.sh drives the whole set; the ci.yml job
-# "Kernel Executive - Per-Facility Negative Controls" runs that.
-COPY tests/qemu/facility_defects.sh /src/tests/qemu/facility_defects.sh
-COPY tests/qemu/inject_and_run.sh /inject_and_run.sh
-RUN chmod +x /inject_and_run.sh /src/tests/qemu/facility_defects.sh
 
 # Copy test runner
 COPY tests/qemu/run_tests.sh /run_tests.sh

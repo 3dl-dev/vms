@@ -111,7 +111,7 @@ void vms_kif_close(void)
     vms_bound_pid = 0;
 }
 
-uint32_t vms_kif_register(uint32_t *vms_pid)
+uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs)
 {
     struct vms_register_args args;
     int rc;
@@ -124,13 +124,9 @@ uint32_t vms_kif_register(uint32_t *vms_pid)
      * described an unreachable state, and it did so with a status that means
      * something else entirely. See CLAUDE.md Rule 9. */
 
-    /* NO privilege argument and NO process-ID argument (vms-2b8). The
-     * executive derives the authorized mask and the UIC from this task's
-     * real credentials and ASSIGNS the VMS process ID itself; there is
-     * nothing for the caller to ask for, and so nothing to forge. The
-     * assigned ID comes back out -- like $CREPRC's pidadr, the executive
-     * tells the caller what it decided. */
     vms_memset(&args, 0, sizeof(args));
+    args.vms_pid = vms_pid;
+    args.init_privs = init_privs;
 
     rc = vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_REGISTER, (unsigned long)&args);
     if (rc < 0)
@@ -141,9 +137,6 @@ uint32_t vms_kif_register(uint32_t *vms_pid)
      * kernel tests drive) satisfies kif_bind() without a second round trip. */
     if (args.status & 1)
         vms_bound_pid = vms_sys_getpid();
-
-    if (vms_pid)
-        *vms_pid = args.vms_pid;
 
     return args.status;
 }
@@ -208,16 +201,13 @@ static void kif_bind(void)
     (void)vms_kif_open();
 
     /*
-     * NOTHING IS PASSED. A process does not get to declare its own
-     * privileges or its own process ID: on VMS both come from the
-     * executive (the authorization record and $SETPRV for one, the
-     * process database for the other), never from the image asking. This
-     * call used to hand over getpid() and an init_privs quadword, and the
-     * arguments are gone rather than zeroed (vms-2b8), so no caller can
-     * reintroduce the self-declared-identity facade the VMS_PRIVILEGES
-     * environment variable already is.
+     * init_privs = 0. A process does not get to declare its own
+     * privileges: on VMS the privilege mask comes from the executive
+     * (authorization record + $SETPRV), never from the image asking for
+     * it. Passing anything else here would be the same self-declared-
+     * identity facade the VMS_PRIVILEGES environment variable already is.
      */
-    (void)vms_kif_register(NULL);
+    (void)vms_kif_register((uint32_t)vms_sys_getpid(), 0);
 }
 
 /*
@@ -784,37 +774,6 @@ uint32_t vms_kif_getjpi_prcnam(const char *prcnam, struct vms_procinfo *info)
     args.sel_prcnam[VMS_PRCNAM_XFER - 1] = '\0';
 
     return getjpi_common(&args, info);
-}
-
-/*
- * vms_kif_setident - hand the executive an AUTHENTICATED identity.
- *
- * The caller has just proved this identity (SYSUAF lookup + password
- * check) while holding privilege. From here the identity belongs to the
- * executive: this process cannot widen it again without SETPRV, and
- * every other process reads it back through $GETJPI.
- *
- * SS$_NOPRIV if the caller lacks SETPRV and the identity is not a
- * weakening of its own; SS$_IVLOGNAM if the user name is malformed.
- */
-uint32_t vms_kif_setident(const char *username, uint32_t uic,
-                          uint64_t authorized_privs)
-{
-    struct vms_ident_args args;
-
-    if (!username)
-        return 0x00000014; /* SS$_BADPARAM */
-
-    vms_memset(&args, 0, sizeof(args));
-    vms_strncpy(args.username, username, VMS_USERNAME_SIZE - 1);
-    args.username[VMS_USERNAME_SIZE - 1] = '\0';
-    args.uic = uic;
-    args.authorized_privs = authorized_privs;
-
-    if (vms_sys_ioctl(vms_dev_fd, VMS_IOCTL_SETIDENT, (unsigned long)&args) < 0)
-        return 0x00000014;
-
-    return args.status;
 }
 
 uint32_t vms_kif_procscan(uint32_t *index, struct vms_procinfo *info)

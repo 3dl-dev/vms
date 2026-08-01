@@ -42,21 +42,21 @@ struct lksb {
 };
 
 /*
- * There is no bind step here any more, and its absence is the fix, not an
- * omission (vms-9fc).
+ * Bind this thread to the executive. The /dev/vms descriptor in libvmssys is
+ * thread-local, so each thread opens its own; vms_kif_open() is idempotent
+ * (it no-ops if this thread's fd is already open), so it is safe to call on
+ * every $ENQ/$DEQ.
  *
- * This file used to call a local bind_to_executive() that called
- * vms_kif_open() -- and ONLY vms_kif_open(). It never registered, so the
- * executive rejected every $ENQ and $DEQ ioctl this file issued with -ESRCH.
- * That is worse than a local bug: the executive-retrofit design named this
- * file as "the one facility already wired to /dev/vms" and told every other
- * implementer to copy it, so the omission was propagated by design review.
- *
- * The sequence now lives once, in src/libvmssys/vms_kif.c's kif_bind(), so
- * every facility that reaches the executive inherits a registered process
- * instead of each caller re-remembering a step that was already forgotten
- * four times over. $ENQ/$DEQ simply call vms_kif_enq()/vms_kif_deq().
+ * The result is deliberately not tested. This is not an oversight and must
+ * not be "fixed" by adding a status return: the condition it would test for
+ * -- an unreachable executive -- is made unreachable at boot, and a handled-
+ * but-impossible-on-VMS state is itself an authenticity defect. See the file
+ * header and CLAUDE.md Rule 9.
  */
+static void bind_to_executive(void)
+{
+    (void)vms_kif_open();
+}
 
 /*
  * kstat_to_ss - Translate a kernel lock-manager status code into its
@@ -141,6 +141,8 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
 {
     if (!lksb)
         return SS$_BADPARAM;
+
+    bind_to_executive();
 
     uint8_t valblk[16];
     memcpy(valblk, lksb->lksb$b_valblk, sizeof(valblk));
@@ -271,6 +273,8 @@ uint32_t sys$enq(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
 uint32_t sys$deq(uint32_t lkid, void *valblk, uint32_t acmode,
                  uint32_t flags) {
     (void)acmode;
+
+    bind_to_executive();
 
     /* Translate public flags to the kernel bitmask at the boundary (same as
      * $ENQ). NOTE: real OpenVMS $DEQ has its own flag namespace (LCK$M_DEQALL

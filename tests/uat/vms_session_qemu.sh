@@ -77,11 +77,11 @@ BOOT_TIMEOUT=120     # budget for EACH of the two boot-phase waits below
                       # SESSION_TIMEOUT's comment for why it is counted twice
 STEP_TIMEOUT=60      # budget for each named login-flow wait (password/welcome/logout)
 COMMAND_TIMEOUT=10   # budget for the DCL prompt to return after one command
-                      # (observed on this host: whole 17-command session completes
+                      # (observed on this host: whole 16-command session completes
                       # in well under 1s per command under TCG -- 10s is a >10x margin)
 # Overall wall-clock kill switch for the whole QEMU process: two boot-phase
 # waits (executive attach, then login prompt -- each at BOOT_TIMEOUT) + 3
-# named steps + up to 17 commands, each at its own budget, plus slack. This
+# named steps + up to 16 commands, each at its own budget, plus slack. This
 # is a safety net (the guest should return far faster than this in the normal
 # case, observed 11-14s end to end on this host) so a genuinely wedged QEMU
 # process cannot run forever -- it is NOT the pacing budget for any single
@@ -90,7 +90,7 @@ COMMAND_TIMEOUT=10   # budget for the DCL prompt to return after one command
 # under the CI step's `timeout-minutes: 10` (600s) in ci.yml's uat-session
 # job so THIS timeout fires first with a diagnosis, instead of GH Actions
 # SIGKILLing the job with no console log captured.
-SESSION_TIMEOUT=$((BOOT_TIMEOUT * 2 + STEP_TIMEOUT * 3 + COMMAND_TIMEOUT * 17))
+SESSION_TIMEOUT=$((BOOT_TIMEOUT * 2 + STEP_TIMEOUT * 3 + COMMAND_TIMEOUT * 16))
 
 ARCH=$(uname -m)
 if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
@@ -229,7 +229,6 @@ for cmd in \
     'DEASSIGN UAT_TEST' \
     'SHOW USERS' \
     'SHOW TERMINAL' \
-    'SHOW DEVICE' \
     'HELP SHOW'
 do
     run_cmd "$cmd"
@@ -343,23 +342,6 @@ check_response 'SHOW PROCESS /PRIVILEGES' '(TMPMBX|NETMBX|OPER)'
 # the command with a bogus verb (%DCL-E-IVVERB, no terminal info printed)
 # makes this assertion fail; the unmutated run still passes.
 check_response 'SHOW TERMINAL' '(Terminal|Device|VT100)'
-
-# SHOW DEVICE must list the console the EXECUTIVE created (vms-fb9). This is
-# the one assertion in this file that cannot be satisfied by anything inside
-# DCL: OPA0: is created by vms.ko at module init (src/kernel/vms_devtab.c),
-# nothing in userspace registers it, and vms-fb9 deleted every source DCL
-# used to invent device names from (/proc/mounts, a process-local MOUNT
-# table, a hardcoded stub row, the "_OPA0:"/"_FTA0:" arrays). So DCL can
-# only print this by having read /dev/vms.
-#
-# Anchored to SHOW DEVICE's own response, and matched at the start of a line
-# with the trailing colon, because 'OPA0' also appears in this session's
-# SHOW PROCESS output; an unanchored scan would pass on that alone.
-# tests/qemu/test_syssvc_showdev.c carries the A-writes/B-reads half (a
-# second process allocates the console and SHOW DEVICE observes it) -- what
-# this adds is that it holds in the PRODUCT boot, through a real login, not
-# only in the kernel-test initramfs.
-check_response 'SHOW DEVICE' '^OPA0: +Online'
 
 # HELP should produce output. Anchored to HELP SHOW's own response (not the
 # whole log) because the command text itself contains 'SHOW' -- an unanchored

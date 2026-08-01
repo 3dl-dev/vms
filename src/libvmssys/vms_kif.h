@@ -5,17 +5,10 @@
  * These functions abstract the ioctl calls behind VMS-style APIs.
  *
  * Usage:
- *   Just call the vms_kif_* function you want. Every one of them completes
- *   the open -> register sequence for the calling task first, once, and the
- *   registration is re-established automatically after fork(), in a new
- *   thread, and in a freshly activated image after execve().
- *
- * vms_kif_open() and vms_kif_register() remain available for callers that
- * want to drive the sequence explicitly (and to observe REGISTER's status),
- * but NO caller is required to remember them. Requiring it was the bug:
- * this header documented the two-step protocol from the day it was written,
- * vms_kif_register() had zero callers product-wide, and so every /dev/vms
- * ioctl issued by OVMX was rejected with -ESRCH by the executive (vms-9fc).
+ *   1. Call vms_kif_open() at process startup
+ *   2. Call vms_kif_register() to register with the kernel module
+ *   3. Use vms_kif_* functions for VMS operations
+ *   4. Call vms_kif_close() at process exit
  */
 
 #ifndef _VMS_KIF_H
@@ -34,30 +27,8 @@ int vms_kif_open(void);
 /* Close the /dev/vms fd */
 void vms_kif_close(void);
 
-/* Register this process with the kernel module.
- *
- * The unit is the PROCESS, not the thread: the executive holds one PCB per
- * process (keyed by the thread-group id) and every thread of an image
- * shares it, exactly as VMS kernel threads share one PCB. So a second
- * thread registering adopts the process's existing entry and sees the same
- * process name, the same event flag clusters and the same lock ids.
- *
- * Idempotent: registering a task the executive already knows ADOPTS the
- * existing entry and returns SS$_NORMAL, leaving its identity and its
- * privilege mask untouched. That is what VMS does -- activating an image
- * inside a process does not recreate the process (oracle pin: on the
- * reference lab VAX V7.3, SHOW PROCESS/ACCOUNTING across two image
- * activations reports the same Process ID 2020021D and the same process
- * name "SYSTEM" with "Images activated" going 19 -> 21). */
+/* Register this process with the kernel module */
 uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs);
-
-/* Translate a failed ioctl's negative errno into a VMS status.
- *
- * Exposed because it is a boundary translation with a testable contract,
- * the same shape as sys_lock.c's kstat_to_ss: the errno set vms.ko can
- * produce is closed, and each status it maps to is oracle-pinned. See the
- * definition in vms_kif.c for the pins. */
-uint32_t vms_kif_kerr_to_ss(int err);
 
 /* ================================================================
  * Access Mode (3a)

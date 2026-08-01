@@ -259,24 +259,62 @@ static void term_table_save(FILE *fp, const struct terminal_device *devs, int co
     fflush(fp);
 }
 
-/*
- * vms_term_allocate() WAS HERE AND IS DELETED (vms-fb9, round 2).
- *
- * It minted this process a terminal-device name out of the /tmp table
- * above -- "_FTA0:", then "_FTA1:", ... -- and every reader that wanted to
- * know "what terminal am I on" was answered from it. A process choosing
- * its own device name is the same shape as the VMS_PRCNAM environment
- * cheat the operator rejected on 2026-07-30: a name nothing else in the
- * system agrees with. Its last production caller (src/vmsdcl/dcl_main.c)
- * went when the VMS_TERMINAL handoff went, leaving a name generator with
- * no user; under rule 10 a mechanism for a condition OVMX no longer has is
- * deleted, not kept behind a lint. See src/vmsdcl/include/dcl/terminal.h.
- *
- * The reader/remover below stay because they still have callers; with the
- * allocator gone the table can no longer gain an entry, so what they see
- * is always empty. That is the honest state, not a bug to "fix" by putting
- * the allocator back.
- */
+const char *vms_term_allocate(const char *prefix, pid_t pid, const char *owner)
+{
+    static char result[16];
+
+    /* Ensure table directory exists */
+    FILE *fp = fopen(TERM_TABLE_PATH, "r+b");
+    if (!fp) {
+        fp = fopen(TERM_TABLE_PATH, "w+b");
+        if (!fp) return NULL;
+    }
+    flock(fileno(fp), LOCK_EX);
+
+    struct terminal_device devs[TERM_TABLE_MAX];
+    int count = term_table_load(fp, devs, TERM_TABLE_MAX);
+
+    /* Find next available unit number for the prefix */
+    int next_unit = 0;
+    for (int i = 0; i < count; i++) {
+        /* Extract unit number from existing entries with same prefix */
+        if (strncmp(devs[i].name, prefix, strlen(prefix)) == 0) {
+            int unit = (int)strtol(devs[i].name + strlen(prefix), NULL, 10);
+            if (unit >= next_unit)
+                next_unit = unit + 1;
+        }
+    }
+
+    /* Build the new entry */
+    if (count >= TERM_TABLE_MAX) {
+        flock(fileno(fp), LOCK_UN);
+        fclose(fp);
+        return NULL;
+    }
+
+    struct terminal_device *nd = &devs[count];
+    memset(nd, 0, sizeof(*nd));
+    snprintf(nd->name, sizeof(nd->name), "%s%d:", prefix, next_unit);
+    nd->owner_pid = pid;
+    if (owner) {
+        /* Store uppercased owner name */
+        size_t i;
+        for (i = 0; i < sizeof(nd->owner_name) - 1 && owner[i]; i++)
+            nd->owner_name[i] = (char)toupper((unsigned char)owner[i]);
+        nd->owner_name[i] = '\0';
+    }
+    nd->characteristics = TT_DEFAULT_CHARS;
+    nd->allocated = 1;
+    count++;
+
+    term_table_save(fp, devs, count);
+
+    flock(fileno(fp), LOCK_UN);
+    fclose(fp);
+
+    snprintf(result, sizeof(result), "%s", nd->name);
+    return result;
+}
 
 void vms_term_deallocate(const char *device_name)
 {

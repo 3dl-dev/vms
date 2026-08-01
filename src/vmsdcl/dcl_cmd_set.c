@@ -499,14 +499,76 @@ static int cmd_set_process(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
 
-    /* /NAME=name */
+    /*
+     * /NAME=name (vms-fbe) -- MATCH VMS: the name is executive-resident
+     * state ($SETPRN writes the PCB directory, not process-local memory),
+     * so this now calls vms_kif_setprn() and lets the executive decide
+     * legality and uniqueness, the same VMS_IOCTL_SETPRN path $CREPRC
+     * already uses (src/libvms/syssvc/sys_process.c). Before this change
+     * the qualifier only wrote ctx->process_name, a per-DCL-process
+     * struct: SET PROCESS/NAME=X then F$PROCESS() read the value back out
+     * of the SAME struct it had just written, so no other process --
+     * SHOW SYSTEM, $GETJPI by name or pid -- could ever see it (Rule 11:
+     * the A-writes/B-reads test). vms_kif_procscan() (SHOW SYSTEM) and
+     * vms_kif_getjpi_prcnam() ($GETJPI) already read prcnam out of the
+     * executive's struct vms_proc row, so writing that row is sufficient
+     * to make this real -- no new reader needed.
+     *
+     * ctx->process_name is still updated on success, because
+     * dcl_lexical.c's F$PROCESS() and the prompt formatter read it (that
+     * file is out of scope this round -- see the item's scope-discipline
+     * note) and it should not go stale relative to what was actually set.
+     * On a REFUSAL (SS$_DUPLNAM / SS$_IVLOGNAM) it is deliberately left
+     * untouched, so a rejected rename does not locally claim a name the
+     * executive refused to record -- that would recreate the same
+     * facade for the failure path this fix closes for the success path.
+     */
     const char *name_val = dcl_qualifier_value(cmd, "NAME");
     if (name_val && *name_val) {
-        strncpy(ctx->process_name, name_val, sizeof(ctx->process_name) - 1);
+        char upname[sizeof(ctx->process_name)];
+        strncpy(upname, name_val, sizeof(upname) - 1);
+        upname[sizeof(upname) - 1] = '\0';
+        /* Upper-case the name, VMS style, before it goes on the wire --
+         * the executive validates and stores exactly what it is given. */
+        for (size_t i = 0; upname[i]; i++)
+            upname[i] = (char)toupper((unsigned char)upname[i]);
+
+        uint32_t st = vms_kif_setprn(upname);
+        if (!(st & 1)) {
+            /* SS$_DUPLNAM (148) and SS$_IVLOGNAM (340) are ORACLE-PINNED
+             * (vms-8019, see ssdef.h) against real OpenVMS VAX V7.3:
+             * F$MESSAGE(148)  -> %SYSTEM-F-DUPLNAM,  duplicate name
+             * F$MESSAGE(340)  -> %SYSTEM-F-IVLOGNAM, invalid logical name
+             * Both are severity F (index 4 in vms_severity_char's table)
+             * regardless of the pinning comment's stale section heading.
+             * These are the ONLY two failure statuses
+             * src/kernel/vms_proctab.c's vms_ioctl_setprn() sets in
+             * args.status -- read there before assuming a third belongs
+             * here (Method 5: this is a checked "only", not an assumed
+             * one). A status OTHER than these two means vms_kif_setprn's
+             * KIF_CALL never reached the kernel handler at all (the
+             * device could not be opened or the ioctl itself failed) --
+             * a condition Rule 9 makes unreachable in the product (PID 1
+             * refuses to boot without the executive, and this DCL
+             * session already proved /dev/vms open at startup via
+             * vms_kif_getjpi_self). It is reported honestly, with NO
+             * invented VMS message text and NO "%SYSTEM-" facility
+             * (Rule 10: that would self-certify a fake VMS message for a
+             * condition VMS never shows), and the raw status is printed
+             * as the only fact known. */
+            if (st == SS$_DUPLNAM)
+                dcl_error("SYSTEM", 4, "DUPLNAM", "duplicate name");
+            else if (st == SS$_IVLOGNAM)
+                dcl_error("SYSTEM", 4, "IVLOGNAM", "invalid logical name");
+            else
+                dcl_error("OVMX", 2, "SETPRNFAIL",
+                          "SET PROCESS/NAME could not reach the executive "
+                          "(status %%X%08X)", st);
+            return (int)st;
+        }
+
+        strncpy(ctx->process_name, upname, sizeof(ctx->process_name) - 1);
         ctx->process_name[sizeof(ctx->process_name) - 1] = '\0';
-        /* Upper-case the name, VMS style */
-        for (size_t i = 0; ctx->process_name[i]; i++)
-            ctx->process_name[i] = (char)toupper((unsigned char)ctx->process_name[i]);
     }
 
     /*

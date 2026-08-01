@@ -912,11 +912,22 @@ EOF
         # knock_on_why. This entry was missing while the suite's DUPLNAM
         # assertions existed, and the whole 17-defect sweep had not been run
         # since they landed, so the control was quietly failing.
-        suites_red)   echo "test_kmod_procnam test_syssvc_procnam test_syssvc_startup_service";;
+        # test_syssvc_setname is here as of vms-fbe: SET PROCESS/NAME
+        # (src/vmsdcl/dcl_cmd_set.c) did not call vms_kif_setprn AT ALL
+        # before that item -- it only wrote a per-DCL-process struct nothing
+        # else could read (Rule 11). Now that it calls through, the SAME
+        # short-circuited clash is visible at a FOURTH layer: a second
+        # DCL.EXE's own SET PROCESS/NAME for a name a live process already
+        # holds must be refused with %SYSTEM-F-DUPLNAM. MEASURED (not
+        # assumed) with the live mutation: this reddens exactly ONE
+        # assertion in test_syssvc_setname, its own name for the same
+        # property, listed below in knock_on_fail (a fourth observation of
+        # the SAME defect, not a distinct one -- see knock_on_why).
+        suites_red)   echo "test_kmod_procnam test_syssvc_procnam test_syssvc_startup_service test_syssvc_setname";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "\$SETPRN stops rejecting a name already held in the UIC group: the SS\$_DUPLNAM clash test is short-circuited. Name storage, lookup, scan and validation are untouched. The raw-ioctl suite, the public sys\$ suite and the DCL command suite each name it.";;
+        why)          echo "\$SETPRN stops rejecting a name already held in the UIC group: the SS\$_DUPLNAM clash test is short-circuited. Name storage, lookup, scan and validation are untouched. The raw-ioctl suite, the public sys\$ suite, and BOTH DCL command suites (RUN/DETACHED's startup service and SET PROCESS/NAME) each name it.";;
         require_fail) cat <<'EOF'
 duplicate process name rejected with SS$_DUPLNAM
 sys$creprc refuses a duplicate process name with SS$_DUPLNAM
@@ -925,6 +936,7 @@ EOF
         knock_on_fail) cat <<'EOF'
 starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
 the service's name is released when the service dies
+SET PROCESS/NAME for a name already held refuses with the oracle-pinned %SYSTEM-F-DUPLNAM message
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -940,6 +952,18 @@ that the name belongs to the live process goes red too. It is not a second
 defect and no finer mutation could separate them -- the mutation is already
 one condition, and the two assertions are the same clash observed before and
 after the duplicate exists.
+The third (vms-fbe) is the SAME clash test again, seen through a FOURTH
+reader: test_syssvc_setname's holder DCL.EXE (started before the mutated
+image even boots the mutation-affected suites) already holds HOLDER_NAME
+when this defect's mutated vms_ioctl_setprn() is asked, by a second DCL.EXE
+running SET PROCESS/NAME=HOLDER_NAME, whether that name clashes. The
+short-circuited check answers "no clash" regardless, so the second DCL.EXE's
+SET PROCESS/NAME succeeds where OpenVMS refuses it, and the assertion that
+checks for the refusal goes red. It is the identical condition
+require_fail's two lines already name, observed a fourth time because a
+fourth caller now reaches vms_ioctl_setprn() at all (vms-fbe: before it,
+DCL's SET PROCESS/NAME never called it, so this suite could not have existed
+to observe anything here).
 EOF
                       ;;
         esac;;

@@ -675,109 +675,8 @@ static void provision_symlinks(void)
 }
 
 /*
- * Split one SYSUAF record into the fields this file cares about.
- *
- * SYSUAF format (pipe-delimited, 0-indexed):
- *   0 USERNAME | 1 HASH | 2 UIC_GROUP | 3 UIC_MEMBER
- *   4 DEFAULT_DIR | 5 FLAGS | 6 PRIVILEGES
- *
- * `line` is modified in place. Returns 0 if the record parsed, -1 if it
- * is a comment, blank, or malformed.
- */
-static int sysuaf_split(char *line, char **user, uint32_t *grp, uint32_t *mem,
-                        char **defdir)
-{
-    if (line[0] == '#' || line[0] == '\n' || line[0] == '\r' || line[0] == '\0')
-        return -1;
-
-    char *f[7];
-    int n = 0;
-    f[n++] = line;
-    for (char *p = line; *p && n < 7; p++) {
-        if (*p == '|') { *p = '\0'; f[n++] = p + 1; }
-    }
-    if (n < 5)
-        return -1;
-    for (char *p = f[n - 1]; *p; p++) {
-        if (*p == '\n' || *p == '\r') { *p = '\0'; break; }
-    }
-
-    *user   = f[0];
-    *grp    = (uint32_t)strtoul(f[2], NULL, 10);
-    *mem    = (uint32_t)strtoul(f[3], NULL, 10);
-    *defdir = f[4];
-    return 0;
-}
-
-/*
- * Give one filesystem object to a UIC, without following symlinks.
- *
- * lchown() and not chown(): in overlay mode SYS$SYSTEM holds symlinks to
- * /usr/local/bin, and re-owning a symlink must not re-own the Linux
- * binary it points at.
- */
-static void own_object(const char *path, uint32_t uic_group, uint32_t uic_member)
-{
-    if (lchown(path, (uid_t)uic_member, (gid_t)uic_group) != 0 &&
-        errno != ENOENT)
-        fprintf(stderr, "%%STARTUP-W-OWNER, cannot set owner of %s: %s\n",
-                path, strerror(errno));
-}
-
-/*
- * Give a directory and everything beneath it to a UIC.
- */
-static void own_tree(const char *path, uint32_t uic_group, uint32_t uic_member)
-{
-    own_object(path, uic_group, uic_member);
-
-    DIR *d = opendir(path);
-    if (!d)
-        return;
-
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
-        if (ent->d_name[0] == '.' &&
-            (ent->d_name[1] == '\0' ||
-             (ent->d_name[1] == '.' && ent->d_name[2] == '\0')))
-            continue;
-
-        char child[512];
-        int len = snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
-        if (len < 0 || len >= (int)sizeof(child))
-            continue;
-
-        struct stat es;
-        if (lstat(child, &es) != 0)
-            continue;
-
-        if (S_ISDIR(es.st_mode))
-            own_tree(child, uic_group, uic_member);
-        else
-            own_object(child, uic_group, uic_member);
-    }
-    closedir(d);
-}
-
-/*
- * Read SYSUAF and create home directories for each user, OWNED BY THAT
- * USER'S UIC.
- *
- * WHY THE OWNERSHIP IS PART OF PROVISIONING AND NOT PART OF LOGIN
- * (vms-2b8 round 7). Until LOGINOUT started dropping to the
- * authenticated user's credentials, every VMS session on OVMX ran as
- * Linux root, so it did not matter who owned anything: root passes
- * every DAC check. The moment a session really becomes UIC [1,4], a
- * tree installed as root:root is a tree that VMS's own SYSTEM account
- * cannot write -- and that is not a VMS state.
- *
- * On OpenVMS the account's directory is created BY THE ACCOUNT
- * PROVISIONING (the System Manager's Manual add-user procedure is
- * AUTHORIZE ADD followed by CREATE/DIRECTORY .../OWNER=[g,m]); LOGINOUT
- * does not create it and does not re-own it. OVMX does the same here,
- * in PID 1, before any other process exists.
- *
- * SYSUAF format: USERNAME|HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVS
+ * Read SYSUAF and create home directories for each user.
+ * SYSUAF format: USERNAME:HASH:UIC_GROUP:UIC_MEMBER:DEFAULT_DIR:FLAGS:PRIVS
  * No /etc/passwd — SYSUAF is the user database.
  */
 static void provision_sysuaf_users(void)
@@ -790,108 +689,40 @@ static void provision_sysuaf_users(void)
 
     char line[512];
     while (fgets(line, sizeof(line), fp)) {
-        char *user, *defdir;
-        uint32_t grp, mem;
-        if (sysuaf_split(line, &user, &grp, &mem, &defdir) != 0)
-            continue;
-        if (defdir[0] == '\0')
+        /* Skip comments and blank lines */
+        if (line[0] == '#' || line[0] == '\n' || line[0] == '\0')
             continue;
 
-        /* default_dir may be a VMS spec (DKA0:[USERS.name]) — translate. */
-        char home_linux[512];
-        if (strchr(defdir, '[') || strchr(defdir, ':')) {
-            vms_to_linux(defdir, home_linux, sizeof(home_linux));
-        } else {
-            /* Legacy Linux path — use directly */
-            snprintf(home_linux, sizeof(home_linux), "%s", defdir);
+        /* Extract default_dir (field 4, 0-indexed, pipe-delimited) */
+        char *field = line;
+        for (int i = 0; i < 4; i++) {
+            field = strchr(field, '|');
+            if (!field) break;
+            field++;
         }
-        mkdir(home_linux, 0755);
-        own_object(home_linux, grp, mem);
-    }
-    fclose(fp);
-}
-
-/*
- * Give the system root ([SYS0] and everything under it) to the UIC that
- * OWNS the OpenVMS system tree: the SYSTEM account's.
- *
- * PINNED TO THE ORACLE, not chosen (CLAUDE.md Rule 10). Measured on VAX2
- * of the ~/vax/cluster lab, OpenVMS VAX V7.3, 30-JUL-2026 -- verbatim
- * transcripts in docs/oracle/vax73-privileges.md S7:
- *
- *   $ DIRECTORY/OWNER/PROTECTION SYS$COMMON:[000000]SYSEXE.DIR,SYSLIB.DIR
- *   SYSEXE.DIR;1         [SYSTEM]                         (RWE,RWE,RE,RE)
- *   SYSLIB.DIR;1         [SYSTEM]                         (RWE,RWE,RE,RE)
- *   $ DIRECTORY/OWNER/PROTECTION SYS$SYSTEM:LOGINOUT.EXE,AUTHORIZE.EXE
- *   LOGINOUT.EXE;1       [SYSTEM]                         (RWED,RWED,RWED,RE)
- *   $ DIRECTORY/OWNER/PROTECTION SYS$SYSDEVICE:[000000]*.DIR
- *   SYS0.DIR;1           [SYSTEM]                         (RWE,RWE,RE,RE)
- *
- * So on VMS the system tree is owned by SYSTEM and world gets R+E and no
- * write -- which is exactly the pair of facts OVMX has to reproduce: the
- * SYSTEM account can create and delete in SYS$SYSTEM: and SYS$MANAGER:,
- * and an ordinary user cannot.
- *
- * WHICH UIC IS NOT HARDCODED HERE. It is read out of SYSUAF's SYSTEM
- * record, the same record LOGINOUT authenticates against and the same one
- * establish_system_identity() below hands to the executive. If those two
- * ever disagreed, the file protection would be enforced against a
- * different identity than the executive holds -- which is the defect this
- * whole item exists to delete.
- *
- * WHY IT RUNS ON EVERY BOOT, not just at install: provision_seed_files()
- * adds files to the tree after the install step is skipped, and a file
- * seeded by root that SYSTEM cannot write is the same regression in a
- * smaller box.
- *
- * DISCLOSED DIVERGENCE (not a handler, a substrate limit): VMS grants the
- * SYSTEM protection category to every UIC whose group is <= MAXSYSGROUP
- * (measured 8, see S7). A Linux inode carries exactly one owning group, so
- * OVMX can express "UIC group 1 is the owner's group" but not "UIC groups
- * 1 through 8 are all system". Accounts in groups 2..8 would therefore get
- * VMS's GROUP nibble where VMS gives them the SYSTEM one. OVMX's SYSUAF
- * ships no such account, and inventing a second enforcement layer to paper
- * over it would be worse than the gap (Rule 10).
- */
-static void provision_ownership(void)
-{
-    char sysuaf_path[512];
-    vms_to_linux(VMS_SYSUAF_PATH, sysuaf_path, sizeof(sysuaf_path));
-    FILE *fp = fopen(sysuaf_path, "r");
-    if (!fp)
-        return;
-
-    uint32_t sys_grp = 0, sys_mem = 0;
-    int found = 0;
-    char line[512];
-    while (fgets(line, sizeof(line), fp)) {
-        char *user, *defdir;
-        uint32_t grp, mem;
-        if (sysuaf_split(line, &user, &grp, &mem, &defdir) != 0)
+        if (!field)
             continue;
-        if (strcmp(user, "SYSTEM") == 0) {
-            sys_grp = grp;
-            sys_mem = mem;
-            found = 1;
-            break;
+
+        /* Terminate at next pipe or newline */
+        char *end = field;
+        while (*end && *end != '|' && *end != '\n' && *end != '\r')
+            end++;
+        *end = '\0';
+
+        /* Create the home directory if non-empty.
+         * default_dir may be a VMS spec (DKA0:[USERS.name]) — translate. */
+        if (field[0] != '\0') {
+            char home_linux[512];
+            if (strchr(field, '[') || strchr(field, ':')) {
+                vms_to_linux(field, home_linux, sizeof(home_linux));
+            } else {
+                /* Legacy Linux path — use directly */
+                snprintf(home_linux, sizeof(home_linux), "%s", field);
+            }
+            mkdir(home_linux, 0755);
         }
     }
     fclose(fp);
-
-    /* No SYSTEM record means no authorized identity for the system
-     * process at all; establish_system_identity() halts the boot on the
-     * same condition a few steps later. Nothing to own here. */
-    if (!found)
-        return;
-
-    /* [SYS0] -- the parent of VMS_SYSROOT ([SYS0.SYSCOMMON]) -- and
-     * everything beneath it. */
-    char path[512];
-    vms_to_linux(VMS_SYSROOT, path, sizeof(path));
-    char *last_slash = strrchr(path, '/');
-    if (last_slash && last_slash != path)
-        *last_slash = '\0';
-    own_tree(path, sys_grp, sys_mem);
 }
 
 /*
@@ -1214,15 +1045,6 @@ int main(void)
      * (e.g., RIGHTSLIST.DAT, STARTUP.COM) are provisioned here
      * without overwriting existing files. */
     provision_seed_files();
-
-    /* Step 2b': Give the VMS tree the ownership VMS gives it, so that the
-     * identity the executive enforces and the identity the filesystem
-     * enforces are the same one (vms-2b8). Runs after the seed files
-     * exist and after any install, and is the LAST writer of ownership so
-     * that accounts sharing a directory (SYSUAF ships SYSTEM and OPERATOR
-     * both defaulted to [SYSMGR]) cannot leave the system tree owned by
-     * whichever record was read last. */
-    provision_ownership();
 
     /* Step 2c: Establish PID 1's identity — from SYSUAF, through the
      * executive. Must run after provision_seed_files(): SYSUAF.DAT is

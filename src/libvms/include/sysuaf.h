@@ -113,7 +113,12 @@ static inline struct XABKEY sysuaf_rms_primary_key(void)
 int sysuaf_lookup(const char *username, sysuaf_record_t *rec);
 
 /* Authenticate: returns 1 if password matches, 0 if not.
-   Empty hash = no password required (returns 1). */
+   An empty/unset hash NEVER authenticates -- returns 0 for every password,
+   including the empty string (vms-08f; see the Rule 10 disposition in
+   sysuaf.c). OpenVMS has no state where an absent password field is a
+   green light; the one documented passwordless state (UAI$M_AUTOLOGIN)
+   is an explicit per-account flag OVMX does not implement, so an unset
+   hash must mean "cannot authenticate", not "no password required". */
 int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password);
 
 /* Parse VMS privilege string (e.g. "TMPMBX,NETMBX,OPER") into bitmask */

@@ -1,18 +1,44 @@
 # System User Authorization File
 # Format: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|DEFAULT_DIR|FLAGS|PRIVILEGES
-# Password hash is SHA256 hex. Empty = no password required.
-# SYSTEM/GUEST carry REAL hashes (vms-72c) -- the plaintext passwords
-# tests/uat/vms_session_qemu.sh and this comment both name are MANAGER and
-# GUEST respectively. Before this item every account here shipped an EMPTY
-# hash, so sysuaf_authenticate() (src/libvms/rtl/sysuaf.c) accepted ANY
-# password for ANY account -- measured directly against a real QEMU boot:
-# 'SYSTEM' + a deliberately wrong password reached the DCL prompt. That is
-# the exact veracity gap vms-72c's DONE CONDITION names ("a bad password is
-# refused"), so it is closed here rather than only in the login code path.
-# OPERATOR/DEFAULT/USER1/USER2 are UNCHANGED and remain passwordless --
-# not exercised by any login test, and giving every shipped account a real
-# password is a broader security hardening pass this item did not measure
-# or scope; reported, not silently fixed.
+#
+# Password hash is SHA256 hex. An EMPTY hash means the account CANNOT
+# AUTHENTICATE -- no password, right or wrong, is accepted (vms-08f).
+#
+# THIS WAS NOT ALWAYS TRUE. Every account here originally shipped with an
+# empty hash, and sysuaf_authenticate() (src/libvms/rtl/sysuaf.c) treated
+# an empty hash as "no password required" -- an auth bypass, not a
+# feature. vms-72c measured it directly against a real QEMU boot ('SYSTEM'
+# + a deliberately wrong password reached a DCL prompt) and closed it for
+# the two accounts its own UAT drove: SYSTEM (real hash below) and GUEST
+# (real hash below). vms-08f is the follow-up that found the SAME bypass
+# still live for the other four rows -- OPERATOR, DEFAULT, USER1, USER2 --
+# because the first fix scoped itself to the accounts a test happened to
+# exercise rather than to the rule an empty hash obeys everywhere.
+#
+# THE FIX IS IN THE RULE, NOT IN THIS DATA. sysuaf_authenticate() no
+# longer special-cases an empty hash as a green light; every account row
+# below, present or future, is bound by the same refusal. Per Rule 10
+# (OVMX CLAUDE.md), the disposition is pinned to public OpenVMS
+# documentation, not self-certified:
+#   - OpenVMS Guide to System Security, S7.3.1 "Types of Passwords":
+#     "With the exception of an automatic login account, all users must
+#     have at least one password to log in."
+#   - The one documented passwordless state is UAI$M_AUTOLOGIN, an
+#     EXPLICIT per-account flag scoped to a bound terminal/batch/network
+#     path -- not the default meaning of an absent password field, and
+#     not implemented by OVMX. See the disposition comment on
+#     sysuaf_authenticate() in src/libvms/rtl/sysuaf.c for the full pin.
+#
+# CONSEQUENCE FOR THIS FILE: OPERATOR/DEFAULT/USER1/USER2 below still
+# carry no hash. That used to mean "logs in as anyone"; it now means
+# "cannot log in interactively at all" until an operator assigns each a
+# real password via AUTHORIZE -- a deliberate, visible lockout, which is
+# the safe failure mode Rule 10 requires, not a silent hole. Assigning
+# those four accounts real passwords is unstarted follow-up work this
+# item does not scope (see rd vms-08f); this file only had to stop being
+# an open door, and per the rule change above it now cannot be one again
+# by omission -- a new row added here with no hash is refused the same
+# way, not silently trusted.
 SYSTEM|36a708df24b4751520ee64bba2d92167294acbb8f8fbfc3a120fb75323e9739b|1|4|SYS$SYSDEVICE:[SYSMGR]||ALL
 OPERATOR||1|6|SYS$SYSDEVICE:[SYSMGR]||OPER,SYSPRV,TMPMBX,NETMBX
 DEFAULT||200|200|SYS$SYSDEVICE:[USERS.DEFAULT]||TMPMBX,NETMBX

@@ -105,3 +105,22 @@ target_include_directories(test_libvms_priv_render_bounds PRIVATE
 )
 add_test(NAME test_libvms_priv_render_bounds
          COMMAND test_libvms_priv_render_bounds)
+
+# Test 14: vms-08f — every SYSUAF row with an unset password hash refuses
+# EVERY password, derived from the actual shipped SYSUAF.DAT rather than a
+# hand-enumerated account list (see the file's own header comment). Takes
+# the real shipped file as argv[1] so the assertion always runs against
+# what actually boots, not a fixture that can drift from it.
+add_executable(test_libvms_sysuaf_auth
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_auth.c)
+target_include_directories(test_libvms_sysuaf_auth PRIVATE
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_sysuaf_auth PRIVATE
+    vms
+    pthread
+    m
+)
+add_test(NAME test_libvms_sysuaf_auth
+         COMMAND test_libvms_sysuaf_auth
+         "${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT")

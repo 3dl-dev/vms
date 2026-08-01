@@ -530,11 +530,78 @@ wait_for 'logged out' "$STEP_TIMEOUT" "$LOGIN_OFFSET" || fail_with_console "ERRO
 # reasoned: that is exactly how this failed the first time it ran.
 wait_for 'Username:' "$STEP_TIMEOUT" "$LOGIN_OFFSET" \
     || fail_with_console "ERROR: no second login prompt after LOGOUT"
+
+# --- NEGATIVE LOGIN: OPERATOR refuses a wrong password too (vms-08f) -------
+#
+# vms-72c's probe above only drove SYSTEM. vms-08f found the SAME bypass
+# vms-72c fixed for SYSTEM/GUEST still live for OPERATOR/DEFAULT/USER1/
+# USER2 -- SYSUAF rows that shipped (and, after vms-08f, still ship) with
+# NO password hash on file. sysuaf_authenticate() no longer treats an
+# unset hash as "no password required"; it refuses every password for
+# that account, which is the correct MATCH-VMS behaviour for an account
+# with no password on record (see the Rule 10 disposition comment on
+# sysuaf_authenticate() in src/libvms/rtl/sysuaf.c) -- not a passable
+# login, and not the account-specific SYSTEM/GUEST fix vms-72c shipped.
+# This probes OPERATOR specifically because it is the one of the four
+# still-empty-hash accounts with real privileges (OPER,SYSPRV) -- the
+# highest-value account vms-72c's own account-shaped scope note named as
+# still open.
+#
+# WHY IT RUNS HERE AND NOT NEXT TO THE SYSTEM PROBE ABOVE (moved in this
+# round). tools/vms_login.c gives every LOGINOUT instance its own budget
+# of MAX_ATTEMPTS (3) failed password attempts before it disconnects the
+# line without reprompting -- confirmed by reading console_login() there,
+# not assumed. Stacking both negative probes (SYSTEM bad, OPERATOR bad) in
+# front of the FIRST real login already spends 2 of that instance's 3
+# attempts, leaving zero headroom for anything added later in this same
+# session; a third negative probe placed there would push attempts to 3,
+# and the instance disconnects instead of reprompting 'Username:', which
+# is a different, untested code path this script does not drive. PID 1
+# execs a BRAND NEW vms_login per console session (see the fork+execl of
+# LOGINOUT.EXE in src/ovmx_init/ovmx_init.c, run once per login prompt),
+# so the 'Username:' just reached above -- printed by the fresh instance
+# LOGOUT caused PID 1 to spawn -- carries its own fresh budget of 3, none
+# of it spent yet. Probing OPERATOR here instead spends 1 of THIS
+# instance's 3 (GUEST's real login below spends 0, since only failures
+# count), leaving 2 free in this instance and 2 free in the first one:
+# headroom in both, not zero in one.
+OPBADPW_OFFSET=$(wc -c <"$CONSOLE_LOG")
+send 'OPERATOR'
+wait_for 'Password:' "$STEP_TIMEOUT" "$OPBADPW_OFFSET" \
+    || fail_with_console "ERROR: no password prompt for the OPERATOR bad-password probe"
+send 'TOTALLY_WRONG_PASSWORD'
+wait_for 'Username:' "$STEP_TIMEOUT" "$OPBADPW_OFFSET" \
+    || fail_with_console "ERROR: no reprompt after OPERATOR + a wrong password -- did it succeed?"
+OPBADPW_SEGMENT=$(tail -c "+$((OPBADPW_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
+
+if printf '%s' "$OPBADPW_SEGMENT" | grep -qF 'User authorization failure'; then
+    PASS=$((PASS + 1))
+else
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: OPERATOR + a wrong password was not refused with 'User authorization failure' (got: $(printf '%s' "$OPBADPW_SEGMENT" | tr '\n' ' '))"
+fi
+# Same shape as the SYSTEM check above: the refusal must be a REFUSAL, not
+# incidental text alongside a session granted anyway -- checked on the
+# SAME segment so this cannot pass by printing both.
+if printf '%s' "$OPBADPW_SEGMENT" | grep -qF 'Welcome to OVMX'; then
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: OPERATOR + a wrong password reached a session anyway ('Welcome to OVMX' present)"
+else
+    PASS=$((PASS + 1))
+fi
+
+# A FRESH OFFSET, NOT $LOGIN_OFFSET: the OPERATOR probe just above already
+# put its own 'Password:' text after $LOGIN_OFFSET, so reusing that anchor
+# here would let wait_for's byte-offset scan match THAT stale prompt
+# instantly instead of waiting for the real one GUEST's send triggers --
+# the identical hazard, and identical fix, already called out above for
+# $BADPW_OFFSET vs. $REALLOGIN_OFFSET on the SYSTEM login.
+GUEST_OFFSET=$(wc -c <"$CONSOLE_LOG")
 send 'GUEST'
-wait_for 'Password:' "$STEP_TIMEOUT" "$LOGIN_OFFSET" \
+wait_for 'Password:' "$STEP_TIMEOUT" "$GUEST_OFFSET" \
     || fail_with_console "ERROR: no password prompt for GUEST"
 send 'GUEST'
-wait_for 'Welcome to OVMX' "$STEP_TIMEOUT" "$LOGIN_OFFSET" \
+wait_for 'Welcome to OVMX' "$STEP_TIMEOUT" "$GUEST_OFFSET" \
     || fail_with_console "ERROR: GUEST login did not succeed"
 
 for cmd in "${USER_CMDS[@]}"; do

@@ -191,7 +191,9 @@ static int save_sysuaf(void)
     fprintf(fp, "# System User Authorization File\n");
     fprintf(fp, "# Format: USERNAME|PASSWORD_HASH|UIC_GROUP|UIC_MEMBER|"
                 "DEFAULT_DIR|FLAGS|PRIVILEGES\n");
-    fprintf(fp, "# Password hash is SHA256 hex. Empty = no password required.\n");
+    fprintf(fp, "# Password hash is SHA256 hex. Empty = account CANNOT AUTHENTICATE\n");
+    fprintf(fp, "# (no password, right or wrong, is accepted) -- see vms-08f and the\n");
+    fprintf(fp, "# disposition comment on sysuaf_authenticate() in src/libvms/rtl/sysuaf.c.\n");
 
     for (int i = 0; i < g_nusers; i++) {
         const sysuaf_record_t *r = &g_users[i];
@@ -614,7 +616,8 @@ static void cmd_show(const char *args)
     else
         printf("  (none)\n");
     printf("Password hash: %s\n",
-           r->password_hash[0] ? r->password_hash : "(none — no password)");
+           r->password_hash[0] ? r->password_hash
+                                : "(none — account cannot authenticate)");
     printf("\n");
 }
 

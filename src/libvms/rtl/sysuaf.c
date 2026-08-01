@@ -111,15 +111,51 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
 
 /*
  * Check that 'password' matches the stored hash in 'rec'.
- * An empty hash means no password is required — returns 1.
+ *
+ * An empty/unset hash NEVER authenticates (vms-08f). This was previously
+ * "empty hash = no password required" -- an AUTH BYPASS, not a feature: it
+ * let any string typed at the Password: prompt succeed for every account
+ * whose SYSUAF row had not yet been given a real hash. Measured directly
+ * against a real QEMU boot before the fix (vms-72c): SYSTEM + a
+ * deliberately wrong password reached a DCL prompt. vms-08f found the same
+ * bypass still live for OPERATOR/DEFAULT/USER1/USER2 -- vms-72c had closed
+ * it only for the two accounts its own UAT drove (SYSTEM/GUEST).
+ *
+ * RULE 10 DISPOSITION (two legal answers, never three): does OpenVMS have
+ * a state where an account authenticates with no password check at all?
+ * Yes, but it is an EXPLICIT, DECLARED per-account flag, not the default
+ * meaning of an absent password field:
+ *
+ *   - UAI$M_AUTOLOGIN (uaidef.h) -- OpenVMS Guide to System Security,
+ *     "Automatic Login Accounts": "To protect automatic login accounts,
+ *     set the AUTOLOGIN flag in the account's UAF record. This flag makes
+ *     the account available only by autologin, batch, and network proxy."
+ *     (https://www0.mi.infn.it/~calcolo/OpenVMS/ssb71/6015/6017p017.htm)
+ *   - Same manual, S7.3.1 "Types of Passwords": "With the exception of an
+ *     automatic login account, all users must have at least one password
+ *     to log in."
+ *     (https://www0.mi.infn.it/~calcolo/OpenVMS/ssb71/6346/6346p011.htm)
+ *
+ * So a SYSUAF row with no password on file is not a state OpenVMS treats
+ * as "no password required" -- it is not a state OpenVMS reaches at all:
+ * the only account that can skip the password prompt is one explicitly
+ * flagged AUTOLOGIN (and even then only from its bound terminal/batch/
+ * proxy path, which OVMX does not implement). This is candidate (a):
+ * MATCH VMS by making "no hash on file" mean the account cannot
+ * authenticate at all. It is also the HIDE
+ * IT half of Rule 10 for OVMX specifically -- until AUTOLOGIN gating
+ * exists, "authenticate with an unset hash" is not a condition this
+ * function may handle; it must be unreachable, so every unset-hash
+ * account refuses every password, with no exception carved out here.
+ *
  * A non-empty hash is compared as a SHA256 hex string (case-insensitive).
- * Returns 1 on match, 0 on mismatch.
+ * Returns 1 on match, 0 on mismatch (including every unset-hash case).
  */
 int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password)
 {
-    /* Empty hash = no password required */
+    /* An unset hash can never authenticate -- see the Rule 10 note above. */
     if (rec->password_hash[0] == '\0')
-        return 1;
+        return 0;
 
     /* Hash the supplied password with SHA256 */
     char hex[65];

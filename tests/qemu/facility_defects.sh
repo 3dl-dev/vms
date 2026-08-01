@@ -81,6 +81,18 @@
 # can reach it:
 #   bind-client-no-register  the vms-9fc defect itself (kif_bind() not calling
 #                            vms_kif_register()).
+#   kif-setmode-always-kernel        vms_kif_setmode() marshalling the
+#                            caller's requested mode as a fixed PSL_C_KERNEL
+#                            (0) instead of forwarding it, so a caller asking
+#                            to DROP to USER has the ioctl sent asking for
+#                            KERNEL instead, and is told SS$_NORMAL (vms-0e4).
+#                            The KERNEL-direction sibling assertion ("... and
+#                            the mode really changed") already re-reads
+#                            VMS_IOCTL_GETMODE instead of trusting the
+#                            returned status; MEASURED (see require_fail's
+#                            knock_on_why below): this defect reddens exactly
+#                            one assertion in test_kmod_access.c, the
+#                            USER-direction one vms-0e4 added to match it.
 #   creprc-handshake-eintr   $CREPRC's report pipe read not retried on EINTR,
 #                            so a signal caught by the CALLER decided what the
 #                            service reported about the CHILD (vms-8019).
@@ -169,6 +181,7 @@
 set -u
 
 DEFECTS="access-mode-escalation
+kif-setmode-always-kernel
 ast-setast-disable
 eflag-clref-noop
 eflag-waitfr-eintr-normal
@@ -309,6 +322,37 @@ mode-derived authority. The equality check caught the change on the first run
 after the rebase and named both extras with their suite; the previous
 allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
+EOF
+                      ;;
+        esac;;
+
+    kif-setmode-always-kernel)
+        case "$_f" in
+        facility)     echo "access-mode marshalling in the PRODUCT (vms_kif_setmode, src/libvmssys/vms_kif.c)";;
+        targets)      echo "libvmssys/vms_kif.c";;
+        suites_red)   echo "test_kmod_access";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_kif_setmode() writes args.mode as a fixed PSL_C_KERNEL (0) instead of the caller's requested mode, so a caller asking to drop to USER has the ioctl sent asking for KERNEL instead -- and it still reports SS\$_NORMAL, because a process already in KERNEL mode staying in KERNEL mode is unremarkable to the executive.";;
+        require_fail) echo "... and the mode really returned to USER";;
+        knock_on_fail) echo "";;
+        knock_on_why) cat <<'EOF'
+KNOWN NEGATIVE: this mutation is NOT a blunderbuss on top of
+access-mode-escalation even though both touch VMS_IOCTL_SETMODE. It forces
+args.mode to PSL_C_KERNEL (0) UNCONDITIONALLY, so the parent's first setmode
+call (already requesting PSL_C_KERNEL) is byte-for-byte unaffected -- "KERNEL
+mode ALLOWED with CMKRNL" and "... and the mode really changed" both stay
+green. The unprivileged child's escalation attempt (also requesting
+PSL_C_KERNEL) is likewise unaffected by this defect, so "KERNEL mode DENIED
+without CMKRNL (SS\$_NOPRIV)" and "... and the mode is still USER after the
+denied escalation" stay green too -- the child never calls setmode(USER), so
+this defect never reaches it. Only the parent's PSL_C_USER request is
+silently rewritten to PSL_C_KERNEL, and only the assertion that re-reads
+VMS_IOCTL_GETMODE afterwards -- not the one that reads the returned status --
+can see that the mode never moved. MEASURED empty: a run with this defect
+injected produces exactly one FAIL line in test_kmod_access, confirming the
+mutation is already as fine as it can be.
 EOF
                       ;;
         esac;;
@@ -1680,6 +1724,8 @@ apply_edit() {
     case "$_d" in
     access-mode-escalation)
         sed -i 's|if (!(proc->cur_privs \& PRV_M_CMKRNL)) {|if (0 /* NEGCTL access-mode-escalation */) {|' "$_file";;
+    kif-setmode-always-kernel)
+        sed -i 's|    args.mode = mode;|    args.mode = 0; /* NEGCTL kif-setmode-always-kernel */|' "$_file";;
     ast-setast-disable)
         sed -i 's|ast_state->enabled = args.enable ? 1 : 0;|ast_state->enabled = 1; /* NEGCTL ast-setast-disable */|' "$_file";;
     eflag-clref-noop)

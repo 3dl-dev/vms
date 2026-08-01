@@ -177,6 +177,15 @@ int main(void)
     setmode_st = vms_kif_setmode(PSL_C_USER);
     CHECK(setmode_st == SS_NORMAL, "returning to USER mode is always allowed");
 
+    /* vms-0e4: the sibling of "... and the mode really changed" above. A
+     * service that reports SS$_NORMAL for a drop-to-USER request while
+     * actually leaving the process in a MORE PRIVILEGED mode is a
+     * privilege escalation reported as success -- the status alone cannot
+     * tell the two apart, only the observed mode can. */
+    memset(&gm, 0, sizeof(gm));
+    ioctl(fd, VMS_IOCTL_GETMODE, &gm);
+    CHECK(gm.mode == PSL_C_USER, "... and the mode really returned to USER");
+
     /* ---- the UNPRIVILEGED half ---- */
     if (pipe(c2p) < 0) {
         printf("  FAIL: pipe()\n");

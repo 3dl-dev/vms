@@ -47,88 +47,6 @@ struct vms_mode_args {
     uint32_t status;        /* return: SS$_ status */
 };
 
-/* ================================================================
- * Privilege mask bits -- ONE definition, shared by the executive and
- * by userspace (vms-2b8).
- *
- * ORACLE-PINNED. Source: the reference lab OpenVMS VAX V7.3 node VAX1
- * (~/vax/cluster), via documented tool output --
- *   $ ANALYZE/SYSTEM
- *   SDA> READ SYS$SYSTEM:SYSDEF.STB
- *   SDA> EVALUATE PRV$V_<name>
- * PRV$V_ symbols live in SYSDEF.STB and evaluate to the BIT POSITION.
- * See docs/oracle/vax73-privileges.md for the verbatim transcript.
- *
- * WHY THIS BLOCK EXISTS AT ALL. Before vms-2b8 this tree carried FOUR
- * disagreeing privilege-bit tables, and three of them were wrong:
- *
- *   src/libvms/include/prvdef.h   correct (agrees with the oracle)
- *   src/kernel/vms_access.c       PRV_M_SETPRV = bit 5   -> that is DETACH
- *   src/kernel/vms_internal.h     "TMPMBX|NETMBX" = bits 7,8 -> LOG_IO|GROUP
- *   src/vmsdcl/dcl_cmd_show.c     its own table, ~10 bits wrong
- *
- * A privilege mask that means different things in different files is
- * not an access control system: the executive was checking DETACH and
- * calling it SETPRV, and handing out LOG_IO|GROUP while reporting
- * TMPMBX|NETMBX. Every one of those files now derives its bits from
- * here, and src/libvms/prv_agreement.c -- a translation unit built into
- * LIBVMS$SHR by the default target, which includes this header and
- * prvdef.h together -- static-asserts the two tables agree, so the
- * disagreement cannot come back silently. Change a value below and that
- * file stops compiling until prvdef.h is changed to match.
- * ================================================================ */
-
-#define VMS_PRV_V_CMKRNL     0
-#define VMS_PRV_V_CMEXEC     1
-#define VMS_PRV_V_DETACH     5
-#define VMS_PRV_V_LOG_IO     7
-#define VMS_PRV_V_GROUP      8
-#define VMS_PRV_V_PSWAPM    12
-#define VMS_PRV_V_SETPRI    13
-#define VMS_PRV_V_SETPRV    14
-#define VMS_PRV_V_TMPMBX    15
-#define VMS_PRV_V_WORLD     16
-#define VMS_PRV_V_OPER      18
-#define VMS_PRV_V_NETMBX    20
-#define VMS_PRV_V_SYSPRV    28
-#define VMS_PRV_V_BYPASS    29
-
-#define VMS_PRV_M_CMKRNL    (1ULL << VMS_PRV_V_CMKRNL)
-#define VMS_PRV_M_CMEXEC    (1ULL << VMS_PRV_V_CMEXEC)
-#define VMS_PRV_M_SETPRV    (1ULL << VMS_PRV_V_SETPRV)
-#define VMS_PRV_M_TMPMBX    (1ULL << VMS_PRV_V_TMPMBX)
-#define VMS_PRV_M_WORLD     (1ULL << VMS_PRV_V_WORLD)
-#define VMS_PRV_M_NETMBX    (1ULL << VMS_PRV_V_NETMBX)
-
-/*
- * The privileges the OVMX executive actually ENFORCES today.
- *
- * CLAUDE.md Rule 10, and this item's own constraint: a privilege that
- * is reported but unenforced is worse than an absent one, because it
- * reads as a security control. This set is exactly the privileges some
- * code path in vms.ko will refuse an operation over:
- *   CMKRNL  vms_ioctl_setmode -> kernel mode; vms_ioctl_dclast at kernel
- *   CMEXEC  vms_ioctl_setmode -> exec mode;   vms_ioctl_dclast at exec
- *   SETPRV  vms_ioctl_setprv widening; vms_ioctl_setident granting
- *   WORLD   vms_ioctl_getjpi / vms_ioctl_procscan reading a process
- *           OUTSIDE the caller's UIC group (vms_proc_may_read)
- * Bits outside this set are STORED and REPORTED (they come from SYSUAF
- * and VMS reports them) but nothing in this tree gates on them. Adding
- * a privilege here without adding the check it names is the defect this
- * constant exists to prevent.
- *
- * GROUP IS DELIBERATELY ABSENT, and that is a measurement rather than an
- * oversight. The obvious guess -- GROUP to read another process in your
- * own group, WORLD to read any other -- is WRONG on the oracle: with
- * SET PROCESS/PRIVILEGE=(NOALL) a VAX 7.3 process read a same-group
- * process's USERNAME successfully, and with GROUP and nothing else it
- * was still refused a cross-group read. WORLD alone lifted it. The
- * transcript is docs/oracle/vax73-privileges.md §5. OVMX does not
- * enforce GROUP anywhere, so it is not listed here.
- */
-#define VMS_PRV_M_ENFORCED  (VMS_PRV_M_CMKRNL | VMS_PRV_M_CMEXEC | \
-                             VMS_PRV_M_SETPRV | VMS_PRV_M_WORLD)
-
 struct vms_priv_args {
     uint64_t mask;          /* privilege mask to set/clear/check */
     uint64_t prev;          /* return: previous privilege mask */
@@ -291,326 +209,14 @@ struct vms_getlki_args {
  * Process registration
  * ================================================================ */
 
-/*
- * Registration carries NO privilege request (vms-2b8).
- *
- * It used to carry an init_privs quadword: the process told the
- * executive which privileges it had. That is an honor system, not an
- * access control system -- the thing being asked to enforce the mask
- * was taking the mask from the party it was enforcing against. The
- * field is GONE, not ignored, so no caller can keep passing it and no
- * reader can be tempted to trust it.
- *
- * The executive now derives the authorized mask from the task's real
- * credentials at registration (vms_proc_register), the same way it
- * already derived the UIC. A process cannot change what it gets by
- * asking differently, because it is no longer asked.
- *
- * THE VMS PROCESS ID IS ASSIGNED BY THE EXECUTIVE, NOT REQUESTED
- * (vms-2b8, round 3). vms_pid used to be an INPUT: the process told the
- * executive which VMS process ID to file it under, and nothing checked
- * that the value was not already in use. Two processes could therefore
- * hold one VMS PID, and $GETJPI by that PID resolved to whichever row
- * the hash walk reached first -- so an unprivileged process could make
- * a privileged process's identity answer to a key it chose. That is the
- * same defect shape as the deleted init_privs field, one field along:
- * the process telling the executive what it is.
- *
- * The field is now OUTPUT-ONLY. Whatever userspace puts here is
- * overwritten before the executive looks at anything.
- *
- * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the VALUE. OpenVMS composes a
- * process ID from a PCB-vector index plus a sequence number so that a
- * reused slot never yields a repeated PID, and the extended PID adds
- * cluster node information; no public document publishes that layout
- * byte for byte, so OVMX does not pretend to reproduce it. What OVMX
- * reproduces is the PROPERTY: the ID is assigned by the executive,
- * unique among live processes, and not immediately reused after a
- * process exits. See assign_vms_pid() in vms_module.c.
- */
 struct vms_register_args {
-    uint32_t vms_pid;           /* return: the VMS process ID assigned */
+    uint32_t vms_pid;           /* VMS-style process ID */
+    uint64_t init_privs;        /* initial privilege mask */
     uint32_t status;            /* return: SS$_ status */
+    uint32_t pad;
 };
 
 #define VMS_IOCTL_REGISTER  _IOWR(VMS_IOC_MAGIC, 0x40, struct vms_register_args)
-
-/* ================================================================
- * Device table (executive-resident I/O database)
- *
- * On OpenVMS a device is not something a process owns a private idea
- * of: the driver enters a Unit Control Block in the executive's I/O
- * database at boot, and from then on the device EXISTS for every
- * process on the node. $ASSIGN takes a channel to it, $GETDVI reads
- * its attributes, $DEVICE_SCAN enumerates it, and SHOW DEVICE /
- * SHOW TERMINAL are readers of that one table. The owner, the
- * reference count and the terminal characteristics are properties of
- * the device, not of whoever happens to be asking.
- *
- * These ioctls put the same property behind /dev/vms (vms-d0b). The
- * console terminal OPA0: is created by the executive at module init,
- * exactly as the terminal driver creates it at VMS boot -- no process
- * registers it, and no process can be the only one that sees it.
- * ================================================================ */
-
-/*
- * VMS device names: at most 15 significant characters plus the
- * terminating NUL (OpenVMS I/O User's Reference Manual; the physical
- * name form is ddcu:, e.g. OPA0:).
- */
-#define VMS_DEVNAM_SIZE 16
-
-/*
- * Terminal characteristics.
- *
- * PROVENANCE (CLAUDE.md rules 8 and 10): the NAMES below and the fact
- * that each is a two-state characteristic are pinned to the oracle --
- * SHOW TERMINAL on the ~/vax OpenVMS VAX V7.3 lab console (nodes VAX1
- * and VAX2, 30-JUL-2026), captured verbatim in
- * docs/oracle/vax73-terminal-device.md. Every name here appears in
- * that output; no name was invented, and no characteristic VMS does
- * not display was added.
- *
- * The BIT POSITIONS are an OVMX design choice and are NOT VMS's
- * $TTDEF layout. The public OpenVMS documentation available to this
- * work does not publish the byte-level TT$M_ layout, so rather than
- * guess at it OVMX defines its own vector and labels it as its own
- * (rule 8: define our representation, never present it as
- * VMS-authentic). Nothing outside the executive and its client may
- * assume these values match VMS.
- */
-#define VMS_TTC_INTERACTIVE     (1ULL << 0)
-#define VMS_TTC_ECHO            (1ULL << 1)
-#define VMS_TTC_TYPEAHEAD       (1ULL << 2)
-#define VMS_TTC_ESCAPE          (1ULL << 3)
-#define VMS_TTC_HOSTSYNC        (1ULL << 4)
-#define VMS_TTC_TTSYNC          (1ULL << 5)
-#define VMS_TTC_LOWERCASE       (1ULL << 6)
-#define VMS_TTC_TAB             (1ULL << 7)
-#define VMS_TTC_WRAP            (1ULL << 8)
-#define VMS_TTC_HARDCOPY        (1ULL << 9)
-#define VMS_TTC_REMOTE          (1ULL << 10)
-#define VMS_TTC_EIGHTBIT        (1ULL << 11)
-#define VMS_TTC_BROADCAST       (1ULL << 12)
-#define VMS_TTC_READSYNC        (1ULL << 13)
-#define VMS_TTC_FORM            (1ULL << 14)
-#define VMS_TTC_FULLDUP         (1ULL << 15)
-#define VMS_TTC_MODEM           (1ULL << 16)
-#define VMS_TTC_LOCAL_ECHO      (1ULL << 17)
-#define VMS_TTC_AUTOBAUD        (1ULL << 18)
-#define VMS_TTC_HANGUP          (1ULL << 19)
-#define VMS_TTC_BRDCSTMBX       (1ULL << 20)
-#define VMS_TTC_DMA             (1ULL << 21)
-#define VMS_TTC_ALTYPEAHD       (1ULL << 22)
-#define VMS_TTC_SET_SPEED       (1ULL << 23)
-#define VMS_TTC_COMMSYNC        (1ULL << 24)
-#define VMS_TTC_LINE_EDITING    (1ULL << 25)
-#define VMS_TTC_INSERT_EDITING  (1ULL << 26)
-#define VMS_TTC_FALLBACK        (1ULL << 27)
-#define VMS_TTC_DIALUP          (1ULL << 28)
-#define VMS_TTC_SECURE_SERVER   (1ULL << 29)
-#define VMS_TTC_DISCONNECT      (1ULL << 30)
-#define VMS_TTC_PASTHRU         (1ULL << 31)
-#define VMS_TTC_SYSPASSWORD     (1ULL << 32)
-#define VMS_TTC_SIXEL           (1ULL << 33)
-#define VMS_TTC_SOFT_CHARACTERS (1ULL << 34)
-#define VMS_TTC_PRINTER_PORT    (1ULL << 35)
-#define VMS_TTC_NUMERIC_KEYPAD  (1ULL << 36)
-#define VMS_TTC_ANSI_CRT        (1ULL << 37)
-#define VMS_TTC_REGIS           (1ULL << 38)
-#define VMS_TTC_BLOCK_MODE      (1ULL << 39)
-#define VMS_TTC_ADVANCED_VIDEO  (1ULL << 40)
-#define VMS_TTC_EDIT_MODE       (1ULL << 41)
-#define VMS_TTC_DEC_CRT         (1ULL << 42)
-#define VMS_TTC_DEC_CRT2        (1ULL << 43)
-#define VMS_TTC_DEC_CRT3        (1ULL << 44)
-#define VMS_TTC_DEC_CRT4        (1ULL << 45)
-#define VMS_TTC_DEC_CRT5        (1ULL << 46)
-#define VMS_TTC_ANSI_COLOR      (1ULL << 47)
-#define VMS_TTC_VMS_STYLE_INPUT (1ULL << 48)
-
-/*
- * One row of the executive device table, as handed to userspace.
- *
- * owner_pid and `allocated` are TWO DIFFERENT THINGS, exactly as the
- * oracle prints them as two different things (measured; see
- * docs/oracle/vax73-terminal-device.md section 7):
- *
- *   - owner_pid is "Owner process ID". A device can be owned with no
- *     allocation at all: on the lab a bare OPEN/WRITE to the
- *     non-shareable terminal TTA0: moved it from Owner "" to
- *     Owner "SYSTEM" / 20400216 with no "allocated" in its status
- *     clause, and the console OPA0: shows Owner "SYSTEM" on a system
- *     where nobody has run ALLOCATE. A channel to a SHAREABLE device
- *     (NLA0:) confers nothing.
- *   - `allocated` is the flag behind the word "allocated" in SHOW
- *     DEVICE/FULL's status clause, and only $ALLOC sets it.
- *
- * refcnt is the "Reference count": one per assigned channel plus one
- * for an outstanding allocation. Ownership itself costs no reference.
- *
- * opcnt/errcnt are the
- * "Operations completed" and "Error count" SHOW DEVICE/FULL reports.
- *
- * NOTE what is deliberately ABSENT (rule 10 -- hide what we cannot
- * answer faithfully rather than reporting a plausible value): the
- * oracle's SHOW TERMINAL also prints Input/Output speed, Parity, and
- * LFfill/CRfill. OVMX's console is a QEMU serial line with no such
- * physical parameters to report, so the executive does not carry a
- * value for them and no reader can print one.
- */
-struct vms_devinfo {
-    char     devnam[VMS_DEVNAM_SIZE];   /* physical name, e.g. "OPA0:" */
-    uint32_t devclass;                  /* DC$_ device class */
-    uint32_t devtype;                   /* device type code; 0 = Unknown */
-    uint32_t owner_pid;                 /* VMS pid of the owner, 0 = unowned */
-    uint32_t owner_uic;                 /* (group << 16) | member */
-    uint32_t refcnt;                    /* channels assigned + allocation */
-    uint32_t errcnt;                    /* Error count */
-    uint64_t opcnt;                     /* Operations completed */
-    uint64_t devchar;                   /* VMS_TTC_* (terminals only) */
-    uint32_t width;                     /* terminal width */
-    uint32_t page;                      /* terminal page length */
-    uint32_t allocated;                 /* 1 = allocated to owner_pid */
-    uint32_t pad;
-};
-
-/*
- * $ALLOC / $DALLOC: allocate a device to this process, and give it
- * back. Allocation is not the only route to ownership -- see
- * struct vms_devinfo -- but it is the only thing that makes a device
- * "allocated", and it holds the device after the last channel is gone.
- *
- * $ALLOC returns SS$_DEVALLOC when the device is OWNED by another
- * process, whether that owner allocated it (ALLOCATE OPA0: from a
- * detached process while the interactive job held the console) or
- * merely assigned a channel to it (ALLOCATE TTA0: while the detached
- * CHANHOLD process held one channel and no allocation). Both are
- * measured; see docs/oracle/vax73-terminal-device.md section 7.
- *
- * $DALLOC returns SS$_DEVNOTALLOC when this process does not have the
- * device ALLOCATED -- including when it owns the device by channel.
- */
-struct vms_alloc_args {
-    char     devnam[VMS_DEVNAM_SIZE];
-    uint32_t status;
-    uint32_t pad;
-};
-
-/* $ASSIGN: take a channel to a device by name. */
-struct vms_assign_args {
-    char     devnam[VMS_DEVNAM_SIZE];   /* in: device name (with or without ':') */
-    uint32_t chan;                      /* out: channel number */
-    uint32_t status;                    /* return: SS$_ status */
-};
-
-/* $DASSGN: give a channel back. */
-struct vms_dassgn_args {
-    uint32_t chan;
-    uint32_t status;
-};
-
-/* Selector for VMS_IOCTL_GETDVI: how the device is named. */
-#define VMS_DVI_SEL_DEVNAM  0   /* by info.devnam */
-#define VMS_DVI_SEL_CHAN    1   /* by an assigned channel */
-
-struct vms_getdvi_args {
-    uint32_t select;            /* VMS_DVI_SEL_* */
-    uint32_t chan;              /* in: channel, for VMS_DVI_SEL_CHAN */
-    uint32_t status;            /* return: SS$_ status */
-    uint32_t pad;
-    struct vms_devinfo info;    /* in: name for SEL_DEVNAM; out: the row */
-};
-
-/*
- * Cursor-driven enumeration of the device table (the reader behind
- * SHOW DEVICE). Set index to 0 for the first row; each call returns
- * one row and advances index. SS$_NOMOREDEV terminates the scan,
- * which is what $DEVICE_SCAN returns when the search is exhausted.
- */
-struct vms_devscan_args {
-    uint32_t index;             /* in: cursor; out: cursor for next call */
-    uint32_t status;            /* return: SS$_ status */
-    struct vms_devinfo info;    /* out: the row at the incoming cursor */
-};
-
-/*
- * Modify terminal characteristics THROUGH AN ASSIGNED CHANNEL, the
- * way VMS does it: SET TERMINAL is $QIO IO$_SETMODE on a channel, not
- * an operation that names a device out of nowhere. A caller with no
- * channel to the device gets SS$_IVCHAN, which is why a process
- * cannot quietly redefine a terminal it never opened.
- */
-#define VMS_TTSET_CHAR      0x1     /* apply setchar/clrchar */
-#define VMS_TTSET_WIDTH     0x2     /* apply width */
-#define VMS_TTSET_PAGE      0x4     /* apply page */
-
-struct vms_setmode_args {
-    uint32_t chan;              /* channel assigned to the terminal */
-    uint32_t flags;             /* VMS_TTSET_* : which fields are being set */
-    uint64_t setchar;           /* VMS_TTC_* bits to set */
-    uint64_t clrchar;           /* VMS_TTC_* bits to clear */
-    uint32_t width;
-    uint32_t page;
-    uint32_t status;            /* return: SS$_ status */
-    uint32_t pad;
-};
-
-#define VMS_IOCTL_ASSIGN    _IOWR(VMS_IOC_MAGIC, 0x50, struct vms_assign_args)
-#define VMS_IOCTL_DASSGN    _IOWR(VMS_IOC_MAGIC, 0x51, struct vms_dassgn_args)
-#define VMS_IOCTL_GETDVI    _IOWR(VMS_IOC_MAGIC, 0x52, struct vms_getdvi_args)
-#define VMS_IOCTL_DEVSCAN   _IOWR(VMS_IOC_MAGIC, 0x53, struct vms_devscan_args)
-#define VMS_IOCTL_TTSETMODE _IOWR(VMS_IOC_MAGIC, 0x54, struct vms_setmode_args)
-#define VMS_IOCTL_ALLOC     _IOWR(VMS_IOC_MAGIC, 0x55, struct vms_alloc_args)
-#define VMS_IOCTL_DALLOC    _IOWR(VMS_IOC_MAGIC, 0x56, struct vms_alloc_args)
-
-/*
- * The kernel module and the userspace client compile these structures
- * separately, from this one header, and then pass them across the
- * /dev/vms boundary by raw address. If a field is ever reordered,
- * widened or padded differently on one side, every ioctl above starts
- * reading the wrong offsets -- silently, and only at runtime, and only
- * for the fields past the change. Freeze the layouts here so that
- * failure is a compile error on whichever side moved.
- *
- * The ioctl encodings are asserted for the same reason and one more:
- * _IOWR folds sizeof(struct) into the request number, so a size change
- * ALSO renumbers the request. The executive would then reject it with
- * -ENOTTY rather than mis-decode it -- a different symptom, same root
- * cause, and equally worth catching before it ships.
- *
- * These values are measured, not chosen: aarch64 and x86_64 agree,
- * because every field is a fixed-width type.
- */
-_Static_assert(sizeof(struct vms_devinfo) == 72,
-               "struct vms_devinfo changed size -- kernel and userspace would disagree on device attribute offsets");
-_Static_assert(sizeof(struct vms_assign_args) == 24,
-               "struct vms_assign_args changed size -- $ASSIGN would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_dassgn_args) == 8,
-               "struct vms_dassgn_args changed size -- $DASSGN would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_getdvi_args) == 88,
-               "struct vms_getdvi_args changed size -- $GETDVI would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_devscan_args) == 80,
-               "struct vms_devscan_args changed size -- $DEVICE_SCAN would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_setmode_args) == 40,
-               "struct vms_setmode_args changed size -- IO$_SETMODE would decode at the wrong offsets");
-_Static_assert(sizeof(struct vms_alloc_args) == 24,
-               "struct vms_alloc_args changed size -- $ALLOC/$DALLOC would decode at the wrong offsets");
-
-_Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
-               "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_DASSGN == 0xC0085651u,
-               "VMS_IOCTL_DASSGN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETDVI == 0xC0585652u,
-               "VMS_IOCTL_GETDVI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_DEVSCAN == 0xC0505653u,
-               "VMS_IOCTL_DEVSCAN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_TTSETMODE == 0xC0285654u,
-               "VMS_IOCTL_TTSETMODE encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_ALLOC == 0xC0185655u,
-               "VMS_IOCTL_ALLOC encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_DALLOC == 0xC0185656u,
-               "VMS_IOCTL_DALLOC encodes differently here than on the reference build");
 
 /* ================================================================
  * Process table (executive-resident PCB directory)
@@ -635,36 +241,6 @@ _Static_assert(VMS_IOCTL_DALLOC == 0xC0185656u,
 #define VMS_PRCNAM_SIZE 16
 
 /*
- * Inbound name transfer buffer -- OVMX DESIGN CHOICE, not a VMS format.
- *
- * A name travelling FROM userspace INTO the executive is carried in a
- * buffer strictly larger than the longest legal VMS process name, so an
- * OVERSIZED name arrives INTACT and the executive is the thing that
- * rejects it. Copying an inbound name into a VMS_PRCNAM_SIZE field in
- * userspace would truncate it into a legal-looking name and convert a
- * rejection into a success -- for $SETPRN, silently naming the process
- * something the caller never asked for; for the $GETJPI prcnam
- * selector, silently resolving a DIFFERENT process.
- *
- * Oracle (VAX1, OpenVMS VAX V7.3, 2026-07-30, documented tool output):
- *   $ SET PROCESS/NAME="IMPL8019NAM15XY"     ! 15 chars -> accepted
- *   $ SET PROCESS/NAME="IMPL8019NAM15XYZ"    ! 16 chars
- *   %SET-E-NOTSET, error modifying process name
- *   -SYSTEM-F-IVLOGNAM, invalid logical name
- *   $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM") ! old name UNCHANGED
- *   IMPL8019NAM15XY
- * VMS rejects the oversized name outright and leaves the existing name
- * in place. It does not truncate, and it does not partially apply.
- *
- * The userspace copy is still bounded (at VMS_PRCNAM_XFER - 1), but
- * that bound cannot turn a rejection into an acceptance: every name too
- * long to fit in VMS_PRCNAM_SIZE is illegal, and VMS_PRCNAM_XFER is far
- * larger than VMS_PRCNAM_SIZE, so a clipped name still has no NUL
- * within the executive's inspection window and is still rejected.
- */
-#define VMS_PRCNAM_XFER 64
-
-/*
  * One row of the executive process table.
  *
  * uic is [group,member] packed as (group << 16) | member -- the same
@@ -672,76 +248,15 @@ _Static_assert(VMS_IOCTL_DALLOC == 0xC0185656u,
  * from the task's credentials; it is never supplied by the process
  * itself (a process must not be able to declare its own UIC).
  */
-/*
- * Executive-resident username field width -- OVMX DESIGN CHOICE.
- *
- * OpenVMS user names are 1-12 characters (Guide to System Security),
- * but OVMX's SYSUAF record already uses a 32-byte space-padded username
- * as its primary key, and that width is itself declared an OVMX design
- * choice in src/libvms/include/sysuaf.h. This field matches the SYSUAF
- * key so an authenticated record can be stamped onto a process without
- * a width conversion that could truncate a name into a different one.
- * The executive enforces NUL-termination inside the buffer (a trust
- * boundary check) and nothing else -- SYSUAF is the authority on which
- * names exist, so the executive does not invent a rejection semantic
- * VMS never showed us (CLAUDE.md Rule 10).
- */
-#define VMS_USERNAME_SIZE 32
-
 struct vms_procinfo {
     uint32_t vms_pid;                   /* VMS-style process ID */
     uint32_t linux_pid;                 /* Linux pid backing the process */
     char     prcnam[VMS_PRCNAM_SIZE];   /* process name ("" if unnamed) */
     uint32_t uic;                       /* (group << 16) | member */
     uint8_t  current_mode;              /* PSL_C_KERNEL..PSL_C_USER */
-    /*
-     * REDACTION IS DECLARED, NOT INFERRED (vms-8019 round 4).
-     *
-     * A row the caller may not $GETJPI comes back with every identity
-     * field zeroed (see the vms_procscan_args comment below). A reader
-     * that has to GUESS whether a zero means "withheld" or "genuinely
-     * zero" will eventually guess wrong, and the first reader already
-     * did: src/vmsdcl/dcl_cmd_show.c passed the zeroed linux_pid to
-     * /proc, got a failure it did not check, and printed the CPU time
-     * its own buffer happened to be initialised with -- a fabricated
-     * accounting value for a process whose accounting the caller is
-     * FORBIDDEN to read. That is the fabrication class this item
-     * exists to delete, so the executive now says so in the row.
-     *
-     * 1 = identity fields (linux_pid, uic, current_mode, privilege
-     * masks, username) were withheld; only vms_pid and prcnam are
-     * present. Occupies a byte of the existing padding, so the ioctl
-     * ABI is unchanged -- the _Static_asserts below still hold.
-     */
-    uint8_t  redacted;
-    uint8_t  pad[2];
-    uint64_t cur_privs;                 /* current (process) privileges */
-    uint64_t perm_privs;                /* authorized (permanent) privileges */
-    char     username[VMS_USERNAME_SIZE]; /* "" until an identity is stamped */
+    uint8_t  pad[3];
+    uint64_t cur_privs;                 /* current privilege mask */
 };
-
-/*
- * WHO MAY READ WHOSE ROW -- ORACLE-PINNED (vms-2b8 round 3).
- * Transcript: docs/oracle/vax73-privileges.md §5, measured on
- * VAX1 (OpenVMS VAX V7.3) in one session with SET PROCESS/PRIVILEGE
- * driving the caller's mask.
- *
- *   caller's own row                  -> allowed, no privilege
- *   another process, SAME UIC group   -> allowed, no privilege
- *   another process, OTHER UIC group  -> SS$_NOPRIV (36) unless WORLD
- *
- * Measured, in that order:
- *   NOALL      + $GETJPI(AUDIT_SERVER [SYSTEM], "USERNAME") -> AUDIT$SERVER
- *   NOALL      + $GETJPI(TCPIP$FTP_1 [TCPIP$AUX,..], "USERNAME")
- *                                          -> %SYSTEM-F-NOPRIV
- *   GROUP only + the same cross-group read -> %SYSTEM-F-NOPRIV
- *   WORLD only + the same cross-group read -> TCPIP$FTP
- * Every item tried on the cross-group process (USERNAME, PRCNAM, STATE,
- * UIC, CURPRIV) was refused identically, so the refusal is on the
- * PROCESS, not on the item.
- *
- * Enforced by vms_proc_may_read() in vms_proctab.c.
- */
 
 /* Selector for VMS_IOCTL_GETJPI: how the target process is named. */
 #define VMS_JPI_SEL_SELF    0   /* the calling process */
@@ -751,14 +266,7 @@ struct vms_procinfo {
 struct vms_getjpi_args {
     uint32_t select;            /* VMS_JPI_SEL_* */
     uint32_t status;            /* return: SS$_ status */
-    struct vms_procinfo info;   /* in: vms_pid selector; out: the row */
-    /*
-     * The name selector lives OUTSIDE info, in an inbound transfer
-     * buffer, so an oversized name reaches the executive untruncated.
-     * info.prcnam is output-only: it is the row's name, never the
-     * lookup key.
-     */
-    char     sel_prcnam[VMS_PRCNAM_XFER];
+    struct vms_procinfo info;   /* in: selector value; out: the row */
 };
 
 /*
@@ -766,26 +274,6 @@ struct vms_getjpi_args {
  * SHOW SYSTEM). Set index to 0 for the first row; each call returns
  * one row and advances index. SS$_NONEXPR terminates the scan, which
  * is what $PROCESS_SCAN returns when the wildcard search is exhausted.
- *
- * ROWS OUTSIDE THE CALLER'S REACH COME BACK REDACTED, NOT OMITTED, and
- * that split is measured rather than chosen (docs/oracle/vax73-
- * privileges.md Section 4). On the oracle, a process holding NO
- * privileges at all still saw EVERY process in SHOW SYSTEM -- including
- * one in another UIC group, with its process name -- while $GETJPI on
- * that same process was refused SS$_NOPRIV for every item. Enumeration
- * is not privileged on VMS; identity is.
- *
- * So a row the caller may not $GETJPI is returned carrying only what
- * SHOW SYSTEM displays of it -- the process ID and the process name --
- * with username, UIC, privilege masks and access mode zeroed. It is
- * NOT skipped, because skipping it would hide a process VMS shows, and
- * it is not returned whole, because that is the leak this exists to
- * close. linux_pid is zeroed too: it is an OVMX implementation handle
- * with no VMS counterpart, so there is no measurement making it
- * visible.
- *
- * info.redacted is set to 1 on such a row so the reader KNOWS the
- * fields are withheld rather than inferring it from a zero.
  */
 struct vms_procscan_args {
     uint32_t index;             /* in: cursor; out: cursor for next call */
@@ -794,75 +282,14 @@ struct vms_procscan_args {
 };
 
 struct vms_setprn_args {
-    char     prcnam[VMS_PRCNAM_XFER];   /* new process name, untruncated */
+    char     prcnam[VMS_PRCNAM_SIZE];   /* new process name */
     uint32_t status;                    /* return: SS$_ status */
     uint32_t pad;
-};
-
-/*
- * Stamp an AUTHENTICATED identity onto the calling process (vms-2b8).
- *
- * This is the LOGINOUT shape. On OpenVMS a process does not choose its
- * user name, UIC or authorized privileges: LOGINOUT authenticates
- * against SYSUAF while holding privilege, and the identity it proved is
- * placed in the executive's process database, where it becomes what
- * every other process sees. The image the user then runs inherits that
- * identity and cannot widen it.
- *
- * The GRANT RULE the executive enforces, and the whole point of the
- * ioctl: a caller WITHOUT SETPRV may only stamp an identity whose
- * authorized privilege mask is a SUBSET of its own authorized mask,
- * may not change its UIC, AND MAY NOT CHANGE ITS USER NAME. So identity
- * establishment is a one-way drop unless the caller holds the privilege
- * VMS names for exceeding its own authorization. A process therefore
- * cannot grant itself a privilege it was not given -- it can only give
- * privileges away.
- *
- * THE USER NAME CLAUSE WAS MISSING UNTIL ROUND 3, and its absence made
- * the whole ioctl decorative for the half of identity that every reader
- * DISPLAYS. The mask and the UIC were guarded; the name was memcpy'd
- * unconditionally. A process that had done a real setuid() off root
- * could therefore call SETIDENT with its OWN uic and its OWN mask --
- * satisfying both guards by construction -- and a username of "SYSTEM",
- * and the executive would report it as SYSTEM to every other process
- * from then on. VMS has no service by which a process names itself a
- * user (CLAUDE.md Rule 10); the name arrives from SYSUAF, through
- * something holding privilege, or it does not arrive.
- *
- * A consequence worth stating: a process that has never been given a
- * user name has "" as its name, and "" is not a legal name to stamp, so
- * an unauthenticated caller without SETPRV cannot use this ioctl at
- * all. That is the intended shape. It can still drop privileges through
- * $SETPRV; what it cannot do is acquire a name.
- *
- * (Self-targeted only. Stamping ANOTHER process's identity is not
- * offered, because OVMX has no VMS behaviour pinned for it yet and
- * Rule 10 forbids inventing one: what is not matched is hidden.)
- *
- * OVMX DESIGN CHOICE (CLAUDE.md Rule 8): the ioctl and its argument
- * layout are ours. Public OpenVMS documentation describes LOGINOUT's
- * EFFECT but publishes no byte-level interface for it, so this is not
- * presented as a VMS-authentic mechanism -- only its semantics are
- * pinned (SETPRV is what lets a process exceed its authorization).
- *
- * OVMX DESIGN CHOICE: cur_privs is set equal to authorized_privs.
- * OpenVMS distinguishes AUTHORIZED privileges (AUTHORIZE /PRIVILEGES)
- * from the DEFAULT privileges a process logs in with (/DEFPRIVILEGES).
- * The OVMX SYSUAF record carries a single uaf$q_priv quadword, so OVMX
- * has one mask and authorized == default. Labelled here rather than
- * silently conflated.
- */
-struct vms_ident_args {
-    char     username[VMS_USERNAME_SIZE]; /* authenticated user name */
-    uint32_t uic;                         /* (group << 16) | member */
-    uint32_t status;                      /* return: SS$_ status */
-    uint64_t authorized_privs;            /* SYSUAF uaf$q_priv */
 };
 
 #define VMS_IOCTL_SETPRN    _IOWR(VMS_IOC_MAGIC, 0x41, struct vms_setprn_args)
 #define VMS_IOCTL_GETJPI    _IOWR(VMS_IOC_MAGIC, 0x42, struct vms_getjpi_args)
 #define VMS_IOCTL_PROCSCAN  _IOWR(VMS_IOC_MAGIC, 0x43, struct vms_procscan_args)
-#define VMS_IOCTL_SETIDENT  _IOWR(VMS_IOC_MAGIC, 0x44, struct vms_ident_args)
 
 /*
  * ABI lock for the process-table ioctls (vms-8019).
@@ -885,35 +312,19 @@ struct vms_ident_args {
  * and the ioctl NUMBER has changed -- which is a wire break, not a
  * cosmetic one, and must be handled deliberately.
  */
-_Static_assert(sizeof(struct vms_procinfo) == 80,
+_Static_assert(sizeof(struct vms_procinfo) == 40,
                "vms_procinfo layout changed: process-table ioctl ABI break");
-_Static_assert(sizeof(struct vms_setprn_args) == 72,
+_Static_assert(sizeof(struct vms_setprn_args) == 24,
                "vms_setprn_args layout changed: VMS_IOCTL_SETPRN ABI break");
-_Static_assert(sizeof(struct vms_getjpi_args) == 152,
+_Static_assert(sizeof(struct vms_getjpi_args) == 48,
                "vms_getjpi_args layout changed: VMS_IOCTL_GETJPI ABI break");
-_Static_assert(sizeof(struct vms_procscan_args) == 88,
+_Static_assert(sizeof(struct vms_procscan_args) == 48,
                "vms_procscan_args layout changed: VMS_IOCTL_PROCSCAN ABI break");
-_Static_assert(sizeof(struct vms_ident_args) == 48,
-               "vms_ident_args layout changed: VMS_IOCTL_SETIDENT ABI break");
-_Static_assert(sizeof(struct vms_register_args) == 8,
-               "vms_register_args layout changed: VMS_IOCTL_REGISTER ABI break");
-/*
- * The inbound transfer buffer must be strictly larger than the
- * executive's inspection window, or an oversized name would be clipped
- * to exactly VMS_PRCNAM_SIZE-1 characters and pass name_is_valid() --
- * reintroducing the silent truncation this split exists to kill.
- */
-_Static_assert(VMS_PRCNAM_XFER > VMS_PRCNAM_SIZE,
-               "VMS_PRCNAM_XFER must exceed VMS_PRCNAM_SIZE or oversized names get truncated into valid ones");
-_Static_assert(VMS_IOCTL_SETPRN == 0xC0485641u,
+_Static_assert(VMS_IOCTL_SETPRN == 0xC0185641u,
                "VMS_IOCTL_SETPRN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_GETJPI == 0xC0985642u,
+_Static_assert(VMS_IOCTL_GETJPI == 0xC0305642u,
                "VMS_IOCTL_GETJPI encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0585643u,
+_Static_assert(VMS_IOCTL_PROCSCAN == 0xC0305643u,
                "VMS_IOCTL_PROCSCAN encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_SETIDENT == 0xC0305644u,
-               "VMS_IOCTL_SETIDENT encodes differently here than on the reference build");
-_Static_assert(VMS_IOCTL_REGISTER == 0xC0085640u,
-               "VMS_IOCTL_REGISTER encodes differently here than on the reference build");
 
 #endif /* _VMS_IOCTL_H */

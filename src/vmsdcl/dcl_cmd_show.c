@@ -19,7 +19,6 @@
 #include <limits.h>
 #include <mntent.h>
 
-#include "prvdef.h"     /* PRV$M_* -- the single privilege bit table */
 #include "dcl/context.h"
 #include "dcl/terminal.h"
 #include "dcl/parser.h"
@@ -34,8 +33,6 @@
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
 #include "vmsqueue.h"
-/* The executive process table's reader (SHOW SYSTEM enumerates it). */
-#include "vms_kif.h"
 
 /* Forward declarations for queue/intrusion subcommands (dcl_cmd_process.c) */
 extern int cmd_show_queue(struct dcl_command *cmd);
@@ -176,50 +173,54 @@ static int cmd_show_logical(struct dcl_command *cmd)
 }
 
 /*
- * cpu_time_of - the CPU time SHOW SYSTEM displays for one process row,
- * formatted as VMS "d hh:mm:ss.cc".
- *
- * THE FIGURE IS READ FROM THE SYSTEM SERVICE, NOT FROM /proc
- * (vms-8019 round 7). What stood here was a SECOND, independent
- * /proc/<pid>/stat parser living in the DCL layer -- a user-visible VMS
- * command sourcing its own answer for an item $GETJPI already answers
- * (JPI$_CPUTIM), which is the Rule 11 corollary inverted: a command is a
- * READER of an executive facility, never a thing that fabricates its own
- * answer. Two parsers of one quantity is also how the two layers came to
- * DISAGREE about one condition -- this one blanked the column when the
- * read failed while sys$getjpi invented a zero for the identical failure.
- * There is now one implementation and therefore one answer.
- *
- * Returns 1 with cpu_str filled, or 0 when the service will not report
- * the item -- which, for a row the scan has already established this
- * caller may read, means the process no longer exists (SS$_NONEXPR).
- * The caller then prints no figure and displays the row anyway -- the
- * same treatment as a redacted row; see cmd_show_system(), whose comment
- * records why dropping the row was written and backed out.
+ * Helper: read CPU time from /proc/pid/stat and format as VMS HH:MM:SS.CC.
+ * Fields 14 (utime) and 15 (stime) are in clock ticks.
+ * Returns 1 on success, 0 on failure.  cpu_str must be >= 14 bytes.
  */
-static int cpu_time_of(uint32_t vms_pid, char *cpu_str, size_t cpu_len)
+static int read_proc_cpu(int pid, char *cpu_str, size_t cpu_len)
 {
-    struct item_list_3 items[2];
-    uint32_t centisec_total = 0;
-    uint16_t retlen = 0;
+    char path[256];
+    snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+    FILE *fp = fopen(path, "r");
+    if (!fp) return 0;
 
-    memset(items, 0, sizeof(items));
-    items[0].buflen    = sizeof(uint32_t);
-    items[0].item_code = JPI$_CPUTIM;
-    items[0].bufaddr   = &centisec_total;
-    items[0].retlen    = &retlen;
-
-    uint32_t st = sys$getjpi(0, &vms_pid, NULL, items, NULL, NULL, 0);
-
-    /* An unset item is as much a refusal as a failure status, and for the
-     * same reason: the service reports JPI$_CPUTIM or it reports nothing,
-     * never a zero standing in for a figure it could not obtain. */
-    if (!(st & 1) || retlen != sizeof(uint32_t))
+    /* /proc/pid/stat: pid (comm) state ppid ... utime stime ...
+     * We need to skip past the comm field (may contain spaces/parens) */
+    char line[1024];
+    if (!fgets(line, sizeof(line), fp)) {
+        fclose(fp);
         return 0;
+    }
+    fclose(fp);
 
-    /* JPI$_CPUTIM counts 10-millisecond units, i.e. centiseconds. */
-    unsigned long total_sec = centisec_total / 100UL;
-    unsigned long centisec  = centisec_total % 100UL;
+    /* Find closing ')' of comm field */
+    char *p = strrchr(line, ')');
+    if (!p) return 0;
+    p++; /* skip ')' */
+
+    /* Now parse: state ppid pgrp session tty_nr tpgid flags
+     * minflt cminflt majflt cmajflt utime stime
+     * That's 12 more fields after ')' */
+    unsigned long utime = 0, stime = 0;
+    char state;
+    long ppid, pgrp, session, tty_nr, tpgid;
+    unsigned long flags, minflt, cminflt, majflt, cmajflt;
+
+    if (sscanf(p, " %c %ld %ld %ld %ld %ld %lu %lu %lu %lu %lu %lu %lu",
+               &state, &ppid, &pgrp, &session, &tty_nr, &tpgid,
+               &flags, &minflt, &cminflt, &majflt, &cmajflt,
+               &utime, &stime) < 13) {
+        /* Fallback: scan as individual fields */
+        utime = 0; stime = 0;
+    }
+
+    long hz = sysconf(_SC_CLK_TCK);
+    if (hz <= 0) hz = 100;
+
+    unsigned long total_ticks = utime + stime;
+    unsigned long total_sec   = total_ticks / (unsigned long)hz;
+    unsigned long centisec    = (total_ticks % (unsigned long)hz) * 100UL /
+                                (unsigned long)hz;
     unsigned long hh = total_sec / 3600;
     unsigned long mm = (total_sec % 3600) / 60;
     unsigned long ss = total_sec % 60;
@@ -241,11 +242,7 @@ static int cmd_show_system(struct dcl_command *cmd)
 {
     (void)cmd;
 
-    /* No dcl_get_context() here any more: the only thing this function
-     * used the DCL context for was ctx->process_name, which it printed as
-     * a FABRICATED process row when the PCB was empty (vms-8019). The row
-     * source is now the executive's table, so the context is not a source
-     * of process identity at all. */
+    struct dcl_context *ctx = dcl_get_context();
 
     struct utsname uts;
     uname(&uts);
@@ -288,123 +285,28 @@ static int cmd_show_system(struct dcl_command *cmd)
            ovmx_product_banner(), sysname, tm.tm_mday, vms_months[tm.tm_mon],
            1900 + tm.tm_year, tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000), uptime_str);
-    /*
-     * ================================================================
-     * THIS HEADER IS DELIBERATELY NARROWER THAN VMS's. OPERATOR RULING,
-     * vms-8019 round 4. DO NOT "RESTORE" THE MISSING COLUMNS.
-     * ================================================================
-     *
-     * OpenVMS SHOW SYSTEM also prints State, Pri, I/O, Page flts and
-     * Pages. OVMX cannot source any of those from the executive's
-     * process table, so it does not print them AT ALL.
-     *
-     * What stood here until this round printed "---" in each of them.
-     * Rule 10 allows exactly two answers -- reproduce what VMS prints,
-     * or do not expose the thing at all -- and a not-available marker
-     * is neither. It is a display for a condition VMS never faces,
-     * shipped in a user-visible VMS command, which is precisely the
-     * illegal third answer. An absent column is a visibly incomplete
-     * table; "---" in a VMS-shaped table is a fabricated
-     * not-available state dressed as VMS output.
-     *
-     * THE VERBATIM QUESTION FOR THE ORACLE, owned by vms-6a7 ("SHOW
-     * SYSTEM lists every process on the system", which explicitly owns
-     * the display: "Match the real VMS column set and header -- pin
-     * the format to the oracle"):
-     *
-     *   "What does OpenVMS VAX 7.3 SHOW SYSTEM print in the State,
-     *    Pri, I/O, Page flts and Pages columns -- what are the exact
-     *    column widths and header spelling -- and is any of it
-     *    sourceable from what the OVMX executive actually holds?"
-     *
-     * Until that is answered the columns stay absent. Widening this
-     * header without an oracle transcript re-commits the defect.
-     */
-    printf("  Pid    Process Name          CPU\n");
+    printf("  Pid    Process Name    State  Pri      I/O       CPU"
+           "       Page flts  Pages\n");
 
-    /*
-     * ENUMERATE THE EXECUTIVE'S PROCESS TABLE (vms-8019).
-     *
-     * SHOW SYSTEM is a READER of an executive facility, never a thing
-     * that fabricates its own answer (CLAUDE.md Rule 11 corollary). What
-     * stood here did the opposite: it printed exactly ONE row -- the
-     * CALLING process -- out of that process's own private PCB, and if
-     * the PCB was empty it FABRICATED a row from getpid() and the DCL
-     * context's self-declared process name. A system display that can
-     * only ever see the process running it is not a system display.
-     *
-     * The rows now come from src/kernel/vms_proctab.c through
-     * vms_kif_procscan(), so every process the executive knows about is
-     * listed, named as the executive knows it -- which is the only sense
-     * in which a VMS process name means anything.
-     *
-     * There is no absent-executive branch and must not be one: the first
-     * vms_kif_* call binds and registers this process (kif_bind), so the
-     * table always holds at least the caller. If the scan yields nothing
-     * at all, the executive is unreachable -- a state OVMX does not run
-     * in (Rule 9: PID 1 refuses to boot without it) -- and printing a
-     * fabricated row to cover it is the illegal third answer (Rule 10).
-     */
-    uint32_t index = 0;
-    struct vms_procinfo info;
+    /* Show VMS processes from PCB table only — no /proc scanning */
+    struct vms_pcb *pcb = vms_pcb_get();
 
-    while (vms_kif_procscan(&index, &info) & 1) {
-        /*
-         * A REDACTED ROW GETS NO CPU FIGURE -- NOT A ZERO, NOT A MARKER.
-         *
-         * The executive returns rows the caller may not $GETJPI with
-         * every identity field withheld and info.redacted set (see
-         * src/kernel/vms_ioctl.h), so $GETJPI on such a row would be
-         * refused SS$_NOPRIV -- there is no accounting to source.
-         *
-         * What stood here read /proc/0/stat, ignored the failure, and
-         * printed the buffer's initialiser -- so a process whose
-         * accounting this caller is FORBIDDEN to read displayed a
-         * concrete, plausible "0 00:00:00.00". A fabricated accounting
-         * value is exactly what this item exists to delete, and it had
-         * survived inside the very function that was converted.
-         *
-         * OVMX cannot source the figure, so it prints no figure. Same
-         * Rule 10 answer as the absent columns above, applied per row
-         * instead of per table. What OpenVMS displays in the CPU column
-         * for a process the caller cannot read is NOT PINNED -- it goes
-         * with the rest of the column question to vms-6a7 -- and until
-         * it is pinned, nothing is the only honest width.
-         *
-         * THE FIGURE IS THE SERVICE'S OR IT IS ABSENT (vms-8019 round 7).
-         * The scan is a snapshot walked one row at a time, so a process
-         * can also exit between being scanned and being read; the service
-         * then answers SS$_NONEXPR and, exactly as for a redacted row,
-         * this prints no figure. One rule covers both, because from the
-         * display's side they are one condition -- OVMX cannot source the
-         * figure -- and the alternative was to invent a second display
-         * rule (dropping the row) for a condition VMS's own SHOW SYSTEM
-         * never faces, which is the illegal third answer in the shape it
-         * always takes: reasonable-looking, and unpinned. What a VMS
-         * SHOW SYSTEM does with a process deleted mid-walk goes to
-         * vms-6a7 with the rest of the column question.
-         */
-        char cpu_str[32] = "";
-        if (!info.redacted &&
-            !cpu_time_of(info.vms_pid, cpu_str, sizeof(cpu_str)))
-            cpu_str[0] = '\0';
-
-        /*
-         * The empty Process Name column for an unnamed row is a KNOWN
-         * DIVERGENCE with its own item: vms-d0e, "OVMX assigns no
-         * default process name at creation, so JPI$_PRCNAM is empty
-         * where VMS always has a name". See the JPI$_PRCNAM comment in
-         * src/libvms/syssvc/sys_process.c for why the invented
-         * "_%08X" name was deleted (it was a name only its owner could
-         * resolve) -- deleting a wrong answer did not produce a right
-         * one, and inventing a replacement here would just re-commit
-         * it one layer up. A blank is what OVMX prints until vms-d0e
-         * pins what the executive should assign.
-         */
-        printf(" %08X %-15s  %s\n",
-               info.vms_pid,
-               info.prcnam[0] ? info.prcnam : "",
-               cpu_str);
+    if (pcb && pcb->vms_pid != 0) {
+        /* Use PCB identity */
+        const char *pname = pcb->prcnam[0] ? pcb->prcnam : "OVMX";
+        char cpu_str[32] = "0 00:00:00.00";
+        read_proc_cpu((int)getpid(), cpu_str, sizeof(cpu_str));
+        printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
+               pcb->vms_pid, pname, "CUR", 4, 0, cpu_str, 0, 340);
+    } else {
+        /* PCB not initialized — fabricate current process entry */
+        const char *pname = (ctx && ctx->process_name[0])
+                            ? ctx->process_name : "OVMX";
+        uint32_t vpid = (uint32_t)getpid();
+        char cpu_str[32] = "0 00:00:00.00";
+        read_proc_cpu((int)getpid(), cpu_str, sizeof(cpu_str));
+        printf(" %08X %-15s %s %3d %9d  %s  %9d  %5d\n",
+               vpid, pname, "CUR", 4, 0, cpu_str, 0, 340);
     }
 
     return SS$_NORMAL;
@@ -472,16 +374,7 @@ static int cmd_show_process(struct dcl_command *cmd)
     printf("Base priority:     4\n");
     printf("Default file spec: %s\n", ctx->default_dir);
 
-    /*
-     * STOPGAP (vms-2b8): this prints a privilege list the PROCESS
-     * announced in its own environment, so SHOW PROCESS reports what
-     * the process claims rather than what the executive holds -- the
-     * exact inversion of the Rule 11 corollary that a VMS command is a
-     * READER of an executive facility. The executive now holds the real
-     * mask (vms_kif_getjpi_self -> info.cur_privs); wiring this to it
-     * is blocked only on vms-9fc (no product process is registered, so
-     * $GETJPI cannot resolve one). See the block in dcl_main.c.
-     */
+    /* Privileges — read from VMS_PRIVILEGES env var or PCB */
     const char *privs = getenv("VMS_PRIVILEGES");
     if (privs && privs[0]) {
         printf("Privileges:        %s\n", privs);
@@ -644,20 +537,6 @@ static int cmd_show_protection(struct dcl_command *cmd)
 
 /*
  * SHOW DEVICE - List mounted filesystems as VMS devices.
- *
- * STOPGAP -- FACADE, NOT VMS (vms-d0b). This walks /proc/mounts and a
- * process-local vms_device_table[], and where it finds nothing it
- * prints a hardcoded stub row. On VMS, SHOW DEVICE is a READER of the
- * executive's I/O database -- it cannot invent a device, and every
- * process sees the same list.
- *
- * The executive now has that table (src/kernel/vms_devtab.c;
- * $DEVICE_SCAN over it is vms_kif_devscan()). Converting this function
- * to read it is blocked on DCL being buildable into the QEMU runtime --
- * see the vms-d0b escalation. Note also that no terminal appears in
- * this listing at all today, though OPA0: is in the executive's table:
- * see docs/oracle/vax73-terminal-device.md for the format VMS uses for
- * a terminal row.
  */
 static int cmd_show_device(struct dcl_command *cmd)
 {
@@ -858,20 +737,8 @@ static int cmd_show_status(struct dcl_command *cmd)
 /*
  * SHOW TERMINAL - Display terminal characteristics.
  *
- * STOPGAP -- FACADE, NOT VMS (vms-d0b). This prints the DCL context's
- * own copy of a terminal, which nothing outside this process wrote and
- * nothing outside this process can see. On VMS, SHOW TERMINAL is a
- * READER of the executive's device table (CLAUDE.md rule 11
- * corollary): it reports the characteristics the executive holds for
- * the device, which is why what one process sets, another sees.
- *
- * The executive now has that table (src/kernel/vms_devtab.c, proven
- * A-writes/B-reads by tests/qemu/test_kmod_devtab.c). Converting this
- * function to read it is blocked on DCL being buildable into the QEMU
- * runtime -- see the vms-d0b escalation. The characteristic list this
- * prints also does not match the oracle: see
- * docs/oracle/vax73-terminal-device.md for what VMS V7.3 actually
- * displays.
+ * Dynamically displays actual terminal state from the
+ * vms_terminal characteristics model.
  */
 static int cmd_show_terminal(struct dcl_command *cmd)
 {
@@ -893,97 +760,45 @@ static int cmd_show_terminal(struct dcl_command *cmd)
  */
 static int cmd_show_process_privileges(struct dcl_context *ctx)
 {
-    /*
-     * Privilege display table -- BITS FROM prvdef.h, TEXT FROM THE ORACLE.
-     *
-     * This table used to number the privileges 0,1,2,3... sequentially in
-     * display order, which is not any privilege encoding that has ever
-     * existed. The mask it decodes is built by parse_privilege_string()
-     * from prvdef.h's PRV$M_* bits, so the two disagreed on almost every
-     * privilege: a user authorized for TMPMBX (bit 15) was displayed as
-     * holding DETACH, one with NETMBX (bit 20) as holding EXQUOTA, and
-     * bits 0 and 1 -- CMKRNL and CMEXEC, the two most dangerous
-     * privileges in the system -- were printed as "TMPMBX" and "NETMBX"
-     * and handed out as the default. The table also listed SYSNAM twice.
-     *
-     * Bits now come from prvdef.h, which is static-asserted against the
-     * executive's copy. Descriptions are VERBATIM from the reference lab
-     * OpenVMS VAX V7.3 node VAX1 (docs/oracle/vax73-privileges.md §4),
-     * as is the " %-20s %s" line format.
-     *
-     * DELIBERATELY ABSENT: DETACH and SETPRI, and AUDIT, IMPORT and the
-     * other names the oracle showed that prvdef.h has no bit for -- they
-     * are omitted rather than assigned a guessed bit (CLAUDE.md Rule 10).
-     *
-     * CORRECTION, and a KNOWN-WRONG DISPLAY recorded rather than papered
-     * over: the earlier claim here that "the oracle did not print DETACH
-     * or SETPRI" was wrong in its reasoning. The oracle DID print bits 5
-     * and 13 -- under their VAX alias names IMPERSONATE and ALTPRI, which
-     * on VAX 7.3 ARE DETACH and SETPRI (docs/oracle/vax73-privileges.md
-     * §2). The rows below give IMPERSONATE and ALTPRI their prvdef.h
-     * *Alpha* bits 37 and 36, which no VAX-encoded mask ever sets, so
-     * against a VAX-encoded mask both rows are unreachable and bits 5 and
-     * 13 print as nothing.
-     *
-     * NOT FIXED HERE, deliberately: OVMX enforces neither privilege, and
-     * this whole function is a getenv("VMS_PRIVILEGES")-fed stopgap that
-     * is to be DELETED (not improved) once the executive reader lands --
-     * see the block at the head of this function. Picking an encoding for
-     * a display that is scheduled for deletion, for privileges nothing
-     * enforces, would be choosing a constant without an oracle pin. The
-     * divergence is recorded in the oracle doc so the item that DOES
-     * enforce them pins both aliases deliberately.
-     */
+    /* Known VMS privileges in approximate display order */
     static const struct {
         const char *name;
         uint64_t    bit;
         const char *desc;
     } privs[] = {
-        { "ACNT",     PRV$M_ACNT,     "may suppress accounting messages" },
-        { "ALLSPOOL", PRV$M_ALLSPOOL, "may allocate spooled device" },
-        { "ALTPRI",   PRV$M_ALTPRI,   "may set any priority value" },
-        { "BUGCHK",   PRV$M_BUGCHK,   "may make bug check log entries" },
-        { "BYPASS",   PRV$M_BYPASS,   "may bypass all object access controls" },
-        { "CMEXEC",   PRV$M_CMEXEC,   "may change mode to exec" },
-        { "CMKRNL",   PRV$M_CMKRNL,   "may change mode to kernel" },
-        { "IMPERSONATE", PRV$M_IMPERSONATE, "may impersonate another user" },
-        { "DIAGNOSE", PRV$M_DIAGNOSE, "may diagnose devices" },
-        { "DOWNGRADE",PRV$M_DOWNGRADE,"may downgrade object secrecy" },
-        { "EXQUOTA",  PRV$M_EXQUOTA,  "may exceed disk quota" },
-        { "GROUP",    PRV$M_GROUP,    "may affect other processes in same group" },
-        { "GRPNAM",   PRV$M_GRPNAM,   "may insert in group logical name table" },
-        { "GRPPRV",   PRV$M_GRPPRV,   "may access group objects via system protection" },
-        { "LOG_IO",   PRV$M_LOG_IO,   "may do logical i/o" },
-        { "MOUNT",    PRV$M_MOUNT,    "may execute mount acp function" },
-        { "NETMBX",   PRV$M_NETMBX,   "may create network device" },
-        { "OPER",     PRV$M_OPER,     "may perform operator functions" },
-        { "PFNMAP",   PRV$M_PFNMAP,   "may map to specific physical pages" },
-        { "PHY_IO",   PRV$M_PHY_IO,   "may do physical i/o" },
-        { "PRMCEB",   PRV$M_PRMCEB,   "may create permanent common event clusters" },
-        { "PRMGBL",   PRV$M_PRMGBL,   "may create permanent global sections" },
-        { "PRMMBX",   PRV$M_PRMMBX,   "may create permanent mailbox" },
-        { "PSWAPM",   PRV$M_PSWAPM,   "may change process swap mode" },
-        { "READALL",  PRV$M_READALL,  "may read anything as the owner" },
-        { "SECURITY", PRV$M_SECURITY, "may perform security administration functions" },
-        { "SETPRV",   PRV$M_SETPRV,   "may set any privilege bit" },
-        { "SHARE",    PRV$M_SHARE,    "may assign channels to non-shared devices" },
-        { "SHMEM",    PRV$M_SHMEM,    "may create/delete objects in shared memory" },
-        { "SYSGBL",   PRV$M_SYSGBL,   "may create system wide global sections" },
-        { "SYSLCK",   PRV$M_SYSLCK,   "may lock system wide resources" },
-        { "SYSNAM",   PRV$M_SYSNAM,   "may insert in system logical name table" },
-        { "SYSPRV",   PRV$M_SYSPRV,   "may access objects via system protection" },
-        { "TMPMBX",   PRV$M_TMPMBX,   "may create temporary mailbox" },
-        { "UPGRADE",  PRV$M_UPGRADE,  "may upgrade object integrity" },
-        { "VOLPRO",   PRV$M_VOLPRO,   "may override volume protection" },
-        { "WORLD",    PRV$M_WORLD,    "may affect other processes in the world" },
+        { "TMPMBX",  (1ULL << 0),  "may create temporary mailbox"   },
+        { "NETMBX",  (1ULL << 1),  "may create network device"      },
+        { "GRPNAM",  (1ULL << 2),  "may insert in group logical name table" },
+        { "SYSNAM",  (1ULL << 3),  "may insert in system logical name table" },
+        { "OPER",    (1ULL << 4),  "operator privilege"             },
+        { "SYSPRV",  (1ULL << 5),  "may access objects via system protection" },
+        { "BYPASS",  (1ULL << 6),  "may bypass object access control" },
+        { "CMKRNL",  (1ULL << 7),  "may change mode to kernel"      },
+        { "CMEXEC",  (1ULL << 8),  "may change mode to executive"   },
+        { "SYSNAM",  (1ULL << 9),  "may insert in system logical name table" },
+        { "MOUNT",   (1ULL << 10), "may execute mount volume QIO"   },
+        { "VOLPRO",  (1ULL << 11), "may override volume protection" },
+        { "PHY_IO",  (1ULL << 12), "may issue physical I/O"         },
+        { "LOG_IO",  (1ULL << 13), "may issue logical I/O"          },
+        { "PSWAPM",  (1ULL << 14), "may change process swap mode"   },
+        { "DETACH",  (1ULL << 15), "may create detached processes"  },
+        { "ACNT",    (1ULL << 16), "may disable accounting"         },
+        { "PRMCEB",  (1ULL << 17), "may create permanent common event flag" },
+        { "PRMGBL",  (1ULL << 18), "may create permanent global sections" },
+        { "PRMMBX",  (1ULL << 19), "may create permanent mailbox"   },
+        { "EXQUOTA", (1ULL << 20), "may exceed disk quota"          },
+        { "ALTPRI",  (1ULL << 21), "may set any base priority"      },
+        { "SETPRV",  (1ULL << 22), "may set any privilege"          },
+        { "WORLD",   (1ULL << 23), "may affect other processes in system" },
+        { "SHARE",   (1ULL << 24), "may assign channel to non-shared device" },
         { NULL, 0, NULL }
     };
 
+    /* Read privileges: from context (set via VMS_PRIVILEGES env var), else default */
     uint64_t privmask = ctx->privileges;
     if (privmask == 0) {
-        /* The two privileges OpenVMS grants essentially every user.
-         * Was (1<<0)|(1<<1) -- CMKRNL|CMEXEC in the real encoding. */
-        privmask = PRV$M_TMPMBX | PRV$M_NETMBX;
+        /* Default: give TMPMBX and NETMBX */
+        privmask = (1ULL << 0) | (1ULL << 1);
     }
 
     printf("Process privileges:\n");

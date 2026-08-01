@@ -63,60 +63,18 @@ fi
 # Create directories needed by vmsfs tests
 mkdir -p /tmp/vmsfs_backing /mnt/vmsfs
 
-# Run each test program. test_kmod_* drive /dev/vms with raw ioctls
-# (kernel lock manager, ASTs, event flags, access modes, vmsfs). test_syssvc_*
-# drive the same /dev/vms through the PUBLIC sys$ API in src/libvms instead
-# (vms-1d9) -- exercising the userspace system-service layer the ioctl tests
-# cannot see at all.
-#
-# PER-SUITE VERDICT LINE (vms-1d9). After each suite we print
-#
-#     === SUITE <name> rc=<exit code> ===
-#
-# and .github/workflows/ci.yml asserts on THAT, per suite, instead of on the
-# aggregate "FINAL RESULTS" tally below. Two real defects made this necessary,
-# both proven against running artifacts, not argued:
-#
-#  1. The aggregate tally cannot distinguish an honest skip (rc 77) from a
-#     failed assertion (rc 1) -- the two branches below both increment
-#     TOTAL_FAIL. Injecting a FABRICATED SUCCESS into
-#     src/libvms/syssvc/sys_lock.c (do_enq and sys$deq returning SS$_NORMAL
-#     with an invented lock ID when the executive was never reached) makes
-#     every one of test_syssvc_lock's device-absent assertions FAIL and its
-#     exit code change 77 -> 1 -- while the negative-control run's FINAL
-#     RESULTS line stays BYTE-IDENTICAL to the clean tree
-#     ("3 suites passed, 11 suites failed"). Measured, both ways, on this
-#     harness. A per-process fake reporting success is invisible to any
-#     gate that pins the tally; the per-suite rc catches it.
-#
-#  2. Any assertion on the aggregate count is either a pin that turns CI red
-#     when a legitimate new suite is ADDED, or a floor that stops protecting
-#     every suite added after it was written. Per-suite lines let CI derive
-#     the expected set from the checkout (`ls tests/qemu/test_*.c`), which is
-#     addition-tolerant AND drop-detecting with nothing maintained by hand.
-#
-# The TOTAL_PASS/TOTAL_FAIL tally is kept for human readers and for
-# run_tests.sh's exit code; it is no longer the thing CI pins.
-for test in /tests/test_kmod_* /tests/test_syssvc_*; do
+# Run each test program
+for test in /tests/test_kmod_*; do
     [ -x "$test" ] || continue
-    name=$(basename "$test")
     echo ""
-    echo "--- $name ---"
+    echo "--- $(basename $test) ---"
     "$test"
     rc=$?
     if [ $rc -eq 0 ]; then
         TOTAL_PASS=$((TOTAL_PASS+1))
-    elif [ $rc -eq 77 ]; then
-        # Honest skip (e.g. /dev/vms absent) -- should never happen in this
-        # job, since vms.ko was just insmod'd above. Count as a FAIL: if it
-        # ever fires here, the executive is not actually present, which is
-        # exactly what this job exists to catch.
-        echo "  SKIP reported inside the kernel-executive job -- treating as FAIL"
-        TOTAL_FAIL=$((TOTAL_FAIL+1))
     else
         TOTAL_FAIL=$((TOTAL_FAIL+1))
     fi
-    echo "=== SUITE $name rc=$rc ==="
 done
 
 echo ""

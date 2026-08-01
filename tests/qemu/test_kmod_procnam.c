@@ -47,7 +47,6 @@
  */
 #define SS_NORMAL       1
 #define SS_DUPLNAM      148
-#define SS_IVLOGNAM     340
 #define SS_NONEXPR      2280
 
 #define CHILD_NAME      "VMS$WORKER"
@@ -55,14 +54,6 @@
 #define ABSENT_NAME     "VMS$NOSUCH"
 #define ZERO_NAME       "VMS$GRP0"
 #define G300_NAME       "VMS$GRP300"
-
-/*
- * Name-length boundary pair. LEN16_NAME is LEN15_NAME plus one
- * character, so a truncating implementation turns the illegal name into
- * the legal one and answers SS$_NORMAL for both.
- */
-#define LEN15_NAME      "VMS$TRUNCBAIT12"     /* 15 chars: the VMS maximum */
-#define LEN16_NAME      "VMS$TRUNCBAIT123"    /* 16 chars: one too many */
 
 /*
  * UIC group used by the cross-group case. OVMX maps UIC [group,member]
@@ -84,12 +75,6 @@ static int pass = 0, fail = 0;
 struct child_report {
     uint32_t getjpi_status;             /* status of its GETJPI(self) */
     uint32_t linux_pid;                 /* pid the executive has for it */
-    /* The VMS process ID the EXECUTIVE assigned (vms-2b8). The parent
-     * used to look the child up by its Linux pid, which only worked
-     * because the VMS pid was a copy of it -- i.e. because userspace
-     * chose the key. The executive chooses it now, so the only way to
-     * know it is to be told. */
-    uint32_t vms_pid;
     char     prcnam[VMS_PRCNAM_SIZE];   /* name the executive has for it */
 };
 
@@ -108,7 +93,7 @@ static int open_and_register(void)
         printf("  FAIL: cannot open /dev/vms (executive absent)\n");
         return -1;
     }
-    if (vms_kif_register(NULL) != SS_NORMAL) {
+    if (vms_kif_register((uint32_t)getpid(), 0) != SS_NORMAL) {
         printf("  FAIL: VMS_IOCTL_REGISTER rejected\n");
         return -1;
     }
@@ -140,7 +125,6 @@ static int child_after_exec(int wfd)
     memset(&info, 0, sizeof(info));
     rep.getjpi_status = vms_kif_getjpi_self(&info);
     rep.linux_pid = info.linux_pid;
-    rep.vms_pid   = info.vms_pid;
     memcpy(rep.prcnam, info.prcnam, VMS_PRCNAM_SIZE);
 
     if (write(wfd, &rep, sizeof(rep)) != (ssize_t)sizeof(rep))
@@ -188,7 +172,7 @@ static void alt_group_helper(int wfd)
     vms_kif_close();
     if (vms_kif_open() < 0)
         _exit(81);
-    if (vms_kif_register(NULL) != SS_NORMAL)
+    if (vms_kif_register((uint32_t)getpid(), 0) != SS_NORMAL)
         _exit(82);
 
     memset(&info, 0, sizeof(info));
@@ -264,7 +248,7 @@ int main(int argc, char **argv)
         vms_kif_close();
         if (vms_kif_open() < 0)
             _exit(70);
-        if (vms_kif_register(NULL) != SS_NORMAL)
+        if (vms_kif_register((uint32_t)getpid(), 0) != SS_NORMAL)
             _exit(71);
         if (vms_kif_setprn(CHILD_NAME) != SS_NORMAL)
             _exit(72);
@@ -307,15 +291,11 @@ int main(int argc, char **argv)
     CHECK(info.linux_pid == (uint32_t)child,
           "name resolves to the naming process's pid");
 
-    /* 3. Resolution by VMS PID reaches the same row. The key is the ID
-     *    the EXECUTIVE assigned and reported, not the Linux pid this
-     *    used to pass (vms-2b8). */
+    /* 3. Resolution by VMS PID reaches the same row. */
     memset(&info, 0, sizeof(info));
-    status = vms_kif_getjpi_pid(rep.vms_pid, &info);
+    status = vms_kif_getjpi_pid((uint32_t)child, &info);
     CHECK(status == SS_NORMAL && strcmp(info.prcnam, CHILD_NAME) == 0,
           "lookup by PID returns the same name");
-    CHECK(rep.vms_pid != 0 && rep.vms_pid != (uint32_t)child,
-          "the VMS process ID is the executive's, not a copy of the Linux pid");
 
     /* 4. Uniqueness is enforced across processes, not within one. */
     status = vms_kif_setprn(CHILD_NAME);
@@ -458,83 +438,6 @@ int main(int argc, char **argv)
         kill(helper, SIGKILL);
         waitpid(helper, NULL, 0);
         close(gpipe[0]);
-    }
-
-    /* --------------------------------------------------------------
-     * 8. THE NAME-LENGTH RULE IS THE EXECUTIVE'S, AND IT REJECTS --
-     *    IT DOES NOT TRUNCATE.
-     *
-     * ORACLE-PINNED on the reference lab, OpenVMS VAX V7.3 node VAX1,
-     * 2026-07-30:
-     *
-     *   $ SET PROCESS/NAME="IMPL8019NAM15X"      ! 14 chars
-     *   $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM")
-     *   IMPL8019NAM15X
-     *   $ SET PROCESS/NAME="IMPL8019NAM15XY"     ! 15 chars
-     *   $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM")
-     *   IMPL8019NAM15XY
-     *   $ SET PROCESS/NAME="IMPL8019NAM15XYZ"    ! 16 chars
-     *   %SET-E-NOTSET, error modifying process name
-     *   -SYSTEM-F-IVLOGNAM, invalid logical name
-     *   $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM")
-     *   IMPL8019NAM15XY                          ! UNCHANGED
-     *
-     * VMS refuses the oversized name outright and leaves the existing
-     * name in place: it neither truncates it into a legal name nor
-     * applies it partially. Truncating in the userspace client would
-     * have produced SS$_NORMAL for the 16-character case and named the
-     * process something the caller never asked for -- and, worse, made
-     * an oversized LOOKUP key resolve a DIFFERENT process. These
-     * assertions are what tell those two implementations apart.
-     * -------------------------------------------------------------- */
-    {
-        char toolong[256];
-
-        status = vms_kif_setprn(LEN15_NAME);
-        CHECK(status == SS_NORMAL,
-              "a 15-character name (the VMS maximum) is accepted");
-
-        /* DISCRIMINATOR: with a truncating client this returns
-         * SS$_NORMAL, because the clipped name is the one we already
-         * hold and therefore clashes with nobody. */
-        status = vms_kif_setprn(LEN16_NAME);
-        CHECK(status == SS_IVLOGNAM,
-              "a 16-character name is rejected with SS$_IVLOGNAM");
-
-        memset(&info, 0, sizeof(info));
-        status = vms_kif_getjpi_self(&info);
-        CHECK(status == SS_NORMAL && strcmp(info.prcnam, LEN15_NAME) == 0,
-              "the rejected name was not applied, not even truncated");
-
-        /* Far past the userspace transfer buffer: clipping there must
-         * still not manufacture a legal name. */
-        memset(toolong, 'X', sizeof(toolong) - 1);
-        toolong[sizeof(toolong) - 1] = '\0';
-        status = vms_kif_setprn(toolong);
-        CHECK(status == SS_IVLOGNAM,
-              "a name longer than the transfer buffer is also rejected");
-
-        memset(&info, 0, sizeof(info));
-        status = vms_kif_getjpi_self(&info);
-        CHECK(status == SS_NORMAL && strcmp(info.prcnam, LEN15_NAME) == 0,
-              "our name survived both rejections intact");
-
-        /* DISCRIMINATOR: an oversized LOOKUP key must be refused, not
-         * clipped into a key that resolves the process holding its
-         * first 15 characters -- which is us. */
-        memset(&info, 0, sizeof(info));
-        status = vms_kif_getjpi_prcnam(LEN16_NAME, &info);
-        CHECK(status == SS_IVLOGNAM,
-              "an oversized lookup key is rejected, not truncated into a match");
-        CHECK(info.linux_pid == 0,
-              "the rejected lookup returned no row");
-
-        /* Control: the legal 15-character key does resolve, so the two
-         * rejections above are the length rule and not a dead lookup. */
-        memset(&info, 0, sizeof(info));
-        status = vms_kif_getjpi_prcnam(LEN15_NAME, &info);
-        CHECK(status == SS_NORMAL && info.linux_pid == (uint32_t)getpid(),
-              "the legal 15-character key still resolves to us");
     }
 
 done:

@@ -1,6 +1,5 @@
 add_executable(vmssshd
     vmssshd.c
-    term_map.c
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/dcl_terminal.c
 )
 

@@ -98,8 +98,7 @@ static void build_common(const struct scs_start_params *p, const uint8_t *tmpl,
 
     /* Identity + counter substitutions (payload-relative offset + 14). */
     memcpy(out + 14 + 2, p->peer_logical, 6);  /* dest logical  [2:8]  (abs 16) */
-    memcpy(out + 14 + 10, p->src_logical, 6);   /* src-logical [10:16](abs 24) = aa:00:04:00:<sysid>
-                                                 * cluster-LOGICAL addr, NOT raw HW MAC (vms-9f3) */
+    memcpy(out + 14 + 10, p->src_mac, 6);       /* src logical   [10:16](abs 24) = OVMX HW MAC */
     put_le16(out + 14 + 18, p->recv_ack);       /* leading counter [18:20] (0 during START) */
     put_le16(out + 14 + 20, p->send_seq);       /* SCS send-seq    [20:22] */
     put_le16(out + 14 + 22, p->incarnation);    /* node-incarnation [22:24] -- echoes the member's

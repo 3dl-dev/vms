@@ -50,12 +50,7 @@ int main(void)
     memset(&p, 0, sizeof(p));
     memcpy(p.dst_mac, mcast, 6);
     static const uint8_t test_hw_mac[6] = { 0x02, 0x00, 0x00, 0x4f, 0x56, 0x58 }; /* "OVX", locally-admin bit set */
-    /* vms-9f3: the cluster-LOGICAL addr aa:00:04:00:<LE16(sysid)> that a real node
-     * writes at abs 24 -- deliberately DISTINCT from the raw HW MAC so the test
-     * proves abs 24 carries the logical addr while eth-src/tail carry the HW MAC. */
-    static const uint8_t test_src_logical[6] = { 0xaa, 0x00, 0x04, 0x00, 0x06, 0x04 }; /* sysid 1030 */
     memcpy(p.src_mac, test_hw_mac, 6);
-    memcpy(p.src_logical, test_src_logical, 6);
     strncpy(p.node_name, "OVMX", sizeof(p.node_name) - 1);
     p.timer_tick = 0x11223344;
 
@@ -76,8 +71,7 @@ int main(void)
     check_bytes(out + 16, mcast, 6, "dest/group logical addr == cluster multicast addr (GROUNDED)");
     static const uint8_t connect_flag[2] = { 0x01, 0x00 };
     check_bytes(out + 22, connect_flag, 2, "connect flag == 0x0001 (observed constant)");
-    check_bytes(out + 24, test_src_logical, 6, "src-logical addr == cluster-LOGICAL aa:00:04:00:<sysid>, NOT HW MAC (vms-9f3)");
-    check(memcmp(out + 24, test_hw_mac, 6) != 0, "src-logical (abs 24) is DISTINCT from the raw HW MAC (vms-9f3)");
+    check_bytes(out + 24, test_hw_mac, 6, "src logical addr == OVMX HW MAC (GROUNDED location)");
     static const uint8_t perframe_word[2] = { 0xa0, 0x00 };
     check_bytes(out + 30, perframe_word, 2, "per-frame word == 0xa000 (multicast, inferred-constant)");
     static const uint8_t const_prefix[4] = { 0x08, 0x00, 0x00, 0x80 };

@@ -62,11 +62,8 @@ extern "C" {
 struct scs_hello_params {
     uint8_t  dst_mac[6];      /* Ethernet dst + SCA dest/group logical addr;
                                   the cluster multicast address (GROUNDED for group 1) */
-    uint8_t  src_mac[6];      /* Ethernet src (abs 6) + HELLO-tail HW MAC (abs 120);
+    uint8_t  src_mac[6];      /* Ethernet src + SCA src-logical-addr + HELLO-tail HW MAC;
                                   OVMX's real emitting-interface HW MAC (see header note) */
-    uint8_t  src_logical[6];  /* SCA src-logical LAVC addr (abs 24) = aa:00:04:00:<LE16(sysid)>;
-                                  a real cluster node writes its LOGICAL addr here, NOT its raw
-                                  HW MAC (vms-9f3 -- VAX1's PEDRIVER keys peer identity on abs 24) */
     char     node_name[SCS_HELLO_NODENAME_LEN + 1]; /* NUL-terminated, <=6 chars, SCSNODE */
     uint32_t timer_tick;      /* caller-supplied per-emission counter, abs offset 96-99 */
 };

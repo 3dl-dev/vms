@@ -202,6 +202,7 @@ getmode-buffer-not-written
 ast-setast-disable
 eflag-clref-noop
 eflag-waitfr-eintr-normal
+efsvc-readef-state-dropped
 lock-compat-ex-cr
 lock-compat-cr-ex
 lock-valblk-grant-not-delivered
@@ -540,6 +541,67 @@ interrupts before releasing the flag. A WAITFR that returns on the first
 interrupt never gets interrupted a second time, so the interrupt count
 collapses to one and this assertion goes red as a direct consequence of the
 same return -- it is the cause, and the require_fail line is the effect.
+EOF
+                      ;;
+        esac;;
+
+    efsvc-readef-state-dropped)
+        case "$_f" in
+        facility)     echo "the event-flag SERVICE layer (src/libvms/syssvc/sys_event.c) -- the userspace half of \$SETEF/\$CLREF/\$WAITFR/\$READEF/\$ASCEFC/\$DACEFC/\$DLCEFC";;
+        targets)      echo "libvms/syssvc/sys_event.c";;
+        # WHY THIS DEFECT EXISTS AT ALL, which is not the usual reason (vms-ecf).
+        # Every other entry here was written to prove a FACILITY can go red.
+        # This one exists because tests/integration/test_userspace_service_
+        # register.sh prices its only full exemption on a mutation of the
+        # declaring service's OWN translation unit, and src/libvms/syssvc/
+        # sys_event.c -- which defines seven OVMX-EXECUTIVE services -- was
+        # named by no defect at all. Every event-flag control in this file
+        # mutates kernel/vms_eflag.c, one layer below. A userspace marshaller
+        # that no mutation ever touches is a marshaller whose suite has never
+        # been shown to notice it.
+        suites_red)   echo "test_syssvc_ef_mproc test_syssvc_ef_local";;
+        # MEASURED GREEN, and a reader would reasonably expect otherwise: both
+        # raw-ioctl event-flag suites exercise READEF hard, and both stay green
+        # here. They are not linked against src/libvms at all -- they call
+        # vms_kif_readef() directly -- so a defect in the SERVICE layer above
+        # them is structurally invisible, in the same way kernel/vms_eflag.c
+        # defects ARE visible to them. This is a property of the layering, not
+        # a gap to close: adding a sys$ call to a raw-ioctl suite would make it
+        # a different suite.
+        blind_suites) echo "test_kmod_eflag test_kmod_eflag_mproc";;
+        blind_why)    cat <<'EOF'
+test_kmod_eflag and test_kmod_eflag_mproc are raw-ioctl programs. They link
+src/libvmssys (vms_kif_*) and never link src/libvms, so src/libvms/syssvc/
+sys_event.c is not in their images and no mutation of it can reach them. They
+are declared here rather than left silent because they are the suites whose
+names most look like they should have caught this.
+EOF
+                      ;;
+        isolation)    echo "isolated";;
+        why)          echo "\$READEF hands the caller a cluster word this image invented. The ioctl still runs and the STATUS it returns is still the executive's, so every assertion that reads only the status stays green; only an assertion that reads the returned cluster word can see it. That is the marshaller-side facade shape exactly -- report the executive's success, deliver process-local data.";;
+        require_fail) cat <<'EOF'
+child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads via sys$readef, public API)
+parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, A reads via sys$readef, public API)
+parent: a PERMANENT cluster survived losing its last association (its flags are still set)
+the cluster state word agrees with the status: flag 1's bit is SET
+EOF
+                      ;;
+        knock_on_fail) echo "parent: sys\$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS\$_NORMAL over a clear flag";;
+        knock_on_why) cat <<'EOF'
+ONE EXTRA RED, AND IT IS $READEF OBSERVED AGAIN, NOT $WAITFR BREAKING. The
+waiter child (test_syssvc_ef_mproc.c run_wait_child) does not report what
+$WAITFR returned. It computes its verdict byte as
+    verdict = ((st & 1) && (state & (1u << (WAIT_EFN - COMMON_BASE)))) ? 'S' : 'X';
+where `state` is the word the very next sys$readef() call wrote -- so a
+$WAITFR that behaved perfectly is reported to the parent as 'X' the moment
+$READEF stops delivering the executive's word, and the parent's assertion on
+that byte goes red. Same single defect, one more consumer, one layer of
+indirection away.
+It is NOT evidence that the mutation is coarse: $WAITFR's own return status is
+untouched here, and MEASURED, the whole run reddens exactly these five
+assertions in exactly two suites -- every other suite in the harness, including
+both raw-ioctl event-flag suites and every lock, device, process and identity
+suite, returned rc=0.
 EOF
                       ;;
         esac;;
@@ -2159,6 +2221,13 @@ apply_edit() {
         # requires, instead of walking on to WFLOR's like a first-match
         # address would.
         sed -i '/wait_event_interruptible(\*waitq, (READ_ONCE(\*flags) \& (1U << bit)))/,/^out:$/ s|^        return ret;$|        { args.status = SS__NORMAL; goto out; } /* NEGCTL eflag-waitfr-eintr-normal */|' "$_file";;
+    efsvc-readef-state-dropped)
+        # sys$readef is the ONLY caller of vms_kif_readef() in this file, so
+        # the anchor is unambiguous without a range. The replacement does not
+        # contain the anchor text (the line no longer starts `    return
+        # vms_kif_readef`), so a second apply finds no match and is the no-op
+        # the selftest requires.
+        sed -i 's|    return vms_kif_readef(efn, state);|    { uint32_t _r = vms_kif_readef(efn, state); if (state) *state = 0; return _r; } /* NEGCTL efsvc-readef-state-dropped */|' "$_file";;
     lock-compat-ex-cr)
         sed -i 's|/\* EX \*/ {  1,  0,  0,  0,  0,  0 },|/* EX */ {  1,  1,  0,  0,  0,  0 }, /* NEGCTL lock-compat-ex-cr */|' "$_file";;
     lock-compat-cr-ex)

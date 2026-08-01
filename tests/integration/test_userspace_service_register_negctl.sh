@@ -30,6 +30,15 @@
 #     a comment satisfies: one ignored vms_kif_readef() in sys$gettim plus the
 #     single line `/* also covers sys$gettim */` appended to an untouched proof
 #     took both this gate and the kif caller census to rc=0.
+#   - THE PRICE PAID BY RE-WORDING AN ASSERTION. Replacing the comment grep
+#     with "an assertion that NAMES this service and that the manifest proves
+#     reddenable" moved the buy up one line and no further: append ", clock via
+#     sys$gettim" to an already-proven assertion, in the suite and the manifest
+#     together, and the gate printed sys$gettim as a paid claim. It is the same
+#     instrument that had just taken sys$readef from 0 backed assertions to 3.
+#     So NO STRING THAT NAMES A SERVICE takes part in the price any more: it is
+#     computed from which FILE a proven-reddening defect mutates, matched
+#     against the file this gate's own scan says defines the service.
 #   - THE UNIVERSE DERIVED FROM SOURCE SPELLING. Renaming the definition, the
 #     prototype and the declaration together behind `__asm__("sys$gettim")`
 #     took the universe from 88 services to 87 with rc=0 and PASS, leaving the
@@ -175,6 +184,36 @@ expect_green() {
         ok=0
     fi
     record_verdict "$name" $ok
+    restore
+}
+
+# expect_paid_residual <files-that-must-have-changed> <name>
+#
+# A MEASURED, DELIBERATELY UNCLOSED HOLE, pinned as a fact instead of left in a
+# comment. Same contract as facility_defects.sh's blind_suites: the gate is
+# ASSERTED to still certify this evasion, so nobody can claim the residual is
+# closed without this control failing and forcing the claim to be re-measured.
+# A green here is NOT an endorsement -- it is the residual, printed every run.
+expect_paid_residual() {
+    files="$1"; name="$2"
+    for _f in $files; do
+        if ! injection_landed "$_f"; then
+            echo "  FAIL: BROKEN FIXTURE (not a broken gate): $name"
+            echo "        the injection did not change ${_f#"$ROOT"/}, so nothing was measured."
+            record_verdict "$name" 0; restore; return
+        fi
+    done
+    out=$(sh "$GATE" "$ROOT" 2>&1)
+    rc=$?
+    ok=1
+    if [ "$rc" -ne 0 ]; then
+        echo "  FAIL: PINNED RESIDUAL HAS CHANGED -- the gate now REJECTS this evasion: $name"
+        echo "        That is GOOD NEWS and it is not a silent pass: re-measure the residual,"
+        echo "        move this control to expect_red with the message the gate now prints,"
+        echo "        and update the header. Do NOT delete the control."
+        ok=0
+    fi
+    record_verdict "PINNED RESIDUAL (still paid): $name" $ok
     restore
 }
 
@@ -430,7 +469,87 @@ sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (vms-5b4) -- clock_gettime(CLOCK_REAL
 sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_s = 0; (void)vms_kif_readef(0u, \&ovmx_negctl_s); }|' "$TIME"
 printf '/* also covers sys$gettim */\n' >> "$PROOF"
 expect_red "$TIME $PROOF" "an EXECUTIVE claim whose proof names it only in a COMMENT (the price paid in a comment)" \
-    "EXECUTIVE DECLARATION WHOSE PROOF NAMES NO ASSERTION ANY MUTATION HAS REDDENED: sys\$gettim"
+    "EXECUTIVE DECLARATION NO MUTATION OF ITS OWN CODE IS KNOWN TO REDDEN: sys\$gettim"
+
+# ...AND THE PRICE PAID BY EDITING AN ASSERTION'S WORDS (vms-ecf round 3). This
+# is the control this round exists for, and it too was a LIVE evasion measured
+# end-to-end on the round-2 gate, one line dearer than the comment: take an
+# assertion tests/qemu/facility_defects.sh ALREADY proves reddenable, append
+# ", clock via sys$gettim" to it in the suite AND in the manifest together, add
+# the same ignored call -- and the gate printed "sys$gettim x1" as a paid
+# claim, rc=0. It is the same instrument that took sys$readef from 0 backed
+# assertions to 3 in that round. If editing an assertion's WORDS is how a
+# service comes to be covered, coverage is a naming convention and not a
+# measurement -- so no string that names the service takes part in the price
+# any more, and this control is what holds that.
+_a_old='child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads via sys$readef, public API)'
+sed -i "s|$_a_old|$_a_old, clock via sys\$gettim|" "$PROOF" "$FDMAN"
+sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME)| * OVMX-EXECUTIVE: sys$gettim (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- bought|' "$TIME"
+sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_s = 0; (void)vms_kif_readef(0u, \&ovmx_negctl_s); }|' "$TIME"
+expect_red "$TIME $PROOF $FDMAN" "an EXECUTIVE claim bought by RE-WORDING an already-proven assertion to name the service" \
+    "EXECUTIVE DECLARATION NO MUTATION OF ITS OWN CODE IS KNOWN TO REDDEN: sys\$gettim"
+
+# THE OTHER HALF OF THE PRICE, on its own. 5a says a mutation of the service's
+# own code reddens the proof; 5b says a mutation of THE EXECUTIVE does. Without
+# this control, 5b could be deleted and every test above would still pass --
+# which is how a gate's implementation drifts narrower than its claim. The
+# fixture points a real, fully-backed claim at a proof that IS forking, IS
+# under tests/qemu/, DOES name the service and IS reddened by a mutation of
+# sys_lock.c's own code (the kstat trio) -- but which no kernel mutation is
+# known to redden.
+sed -i '/^        targets)      echo "kernel\/vms_lock.c";;$/d' "$FDMAN"
+expect_red "$FDMAN" "an EXECUTIVE claim whose proof no mutation of the EXECUTIVE is known to redden" \
+    "EXECUTIVE DECLARATION WHOSE PROOF NO MUTATION OF THE EXECUTIVE IS KNOWN TO REDDEN: sys\$enq"
+
+# THE PRICE MUST NOT BE PAYABLE BY THE MANIFEST'S OTHER FIELD EITHER. A defect
+# whose assertions the proof holds but which mutates a file that is NOT the
+# service's defining translation unit pays nothing: this points every kstat
+# defect at a foreign file and the lock trio -- otherwise fully backed -- goes
+# red. Without it, "targets is what binds a defect to a service" is an untested
+# claim about this gate's own implementation.
+sed -i 's|^        targets)      echo "libvms/syssvc/sys_lock.c";;$|        targets)      echo "libvms/syssvc/sys_time.c";;|' "$FDMAN"
+expect_red "$FDMAN" "the paying defect re-pointed at a file that is not the service's defining unit" \
+    "EXECUTIVE DECLARATION NO MUTATION OF ITS OWN CODE IS KNOWN TO REDDEN: sys\$enq"
+
+# THE SURVIVING BUY, MEASURED AND PINNED (vms-ecf round 3). 5a binds a defect to
+# a service by TRANSLATION UNIT, so a facade whose definition is MOVED into a
+# unit some defect already mutates inherits that unit's coverage. Measured on a
+# clean copy of this tree: cut the nine-line sys$gettim out of sys_time.c, paste
+# it into sys_event.c, declare it OVMX-EXECUTIVE against the event-flag proof,
+# add the same ignored call and one comment line -- and the gate returns 0 and
+# prints sys$gettim as paid by efsvc-readef-state-dropped. Its answer is still
+# 100% clock_gettime().
+#
+# IT IS NOT CLOSED, AND THE REASON IS NOT LAZINESS -- it was costed. Per-service
+# attribution means deriving the mutation's ENCLOSING FUNCTION and requiring it
+# to be the service or something the service calls. sys_event.c's seven
+# services are seven independent one-line pass-throughs that share no code at
+# all, so that rule needs SEVEN QEMU-verified defects there instead of one --
+# and it still would not close this: adding `(void)sys$readef(0, &s);` to the
+# relocated body makes the mutated function reachable again for ONE MORE LINE.
+# Reachability is exactly what an ignored call buys, which is the finding
+# vms-d89 already paid for once. What this round bought is the difference
+# between a buy that is seven words appended to a string and a buy that
+# RELOCATES AN IMPLEMENTATION INTO ANOTHER FACILITY'S FILE and shows up in this
+# gate's own "defined in" column.
+python3 - "$TIME" "$EVENT" "$PROOF" <<'RELOC_EOF'
+import re, sys
+tp, ep, pp = sys.argv[1], sys.argv[2], sys.argv[3]
+t = open(tp).read()
+m = re.search(r'^uint32_t sys\$gettim\(uint64_t \*timadr\) \{.*?^\}\n', t, re.M | re.S)
+body = m.group(0)
+open(tp, "w").write(re.sub(r'^.*OVMX-USERSPACE: sys\$gettim .*\n', '',
+                           t[:m.start()] + t[m.end():], flags=re.M))
+body = body.replace("uint32_t sys$gettim(uint64_t *timadr) {",
+                    "uint32_t sys$gettim(uint64_t *timadr) {\n"
+                    "    { uint32_t ovmx_negctl_s = 0; (void)vms_kif_readef(0u, &ovmx_negctl_s); }")
+open(ep, "a").write("\n/*\n"
+                    " * OVMX-EXECUTIVE: sys$gettim (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- bought\n"
+                    " */\n#include <time.h>\n" + body)
+open(pp, "a").write("/* also covers sys$gettim */\n")
+RELOC_EOF
+expect_paid_residual "$TIME $EVENT $PROOF" \
+    "a facade RELOCATED into a translation unit a defect already mutates still pays 5a"
 
 # THE PRICE MUST BE COMPUTABLE, or every EXECUTIVE claim is exempt for want of
 # a check. With the manifest of proven-reddenable assertions emptied out, the
@@ -473,18 +592,28 @@ expect_green "$STR" "a stateful RTL routine stays green -- the universe is sys\$
 # lives under tests/qemu/, forks, names it, AND holds an assertion that
 # tests/qemu/facility_defects.sh names as proven-reddenable, is green.
 #
-# NOTE WHAT THE MUTATION HAS TO TOUCH, because that IS the price: the manifest.
-# The line appended to the proof is still one line -- it is the MANIFEST ENTRY
-# that costs, and this file only checks that the entry exists. What makes an
-# entry real is tests/qemu/run_facility_negctl.sh, which injects the defect in
-# QEMU and requires the complete set of assertions that go red to EQUAL
-# require_fail + knock_on_fail exactly. A fabricated entry naming an assertion
-# no defect reddens fails THAT control. This one deliberately fabricates it, to
-# show the shape the register accepts -- it is not evidence that the assertion
-# is real.
+# NOTE WHAT THE MUTATION HAS TO TOUCH, because that IS the price: the manifest,
+# in BOTH of the fields the price reads -- an assertion text that occurs in the
+# proof, AND a `targets` naming the file the service is defined in. The line
+# appended to the proof is still one line; it is the MANIFEST ENTRY that costs,
+# and this file only checks that the entry exists. What makes an entry real is
+# tests/qemu/run_facility_negctl.sh, which injects the defect in QEMU and
+# requires the complete set of assertions that go red to EQUAL require_fail +
+# knock_on_fail exactly. A fabricated entry naming an assertion no defect
+# reddens fails THAT control. This one deliberately fabricates it, to show the
+# shape the register accepts -- it is not evidence that the assertion is real.
+# THE FIXTURE LIVES IN sys_time.c, NOT sys_event.c, and that is load-bearing
+# (vms-ecf round 3). sys_event.c is now mutated by a real defect
+# (efsvc-readef-state-dropped), so a fixture service appended THERE inherits
+# that file's 5a coverage and this control would pass whether or not the
+# fabricated entry below existed -- an assertion satisfiable by something other
+# than the property under test. sys_time.c is named by no defect in the
+# manifest, so the fabricated entry is the only thing that can pay, which is
+# exactly what makes the RED twin next door meaningful.
 cat > "$WORK/negctl_branch" <<'BRANCH_EOF'
     negctl-paid)
         case "$_f" in
+        targets)      echo "libvms/syssvc/sys_time.c";;
         require_fail) echo 'negctl: sys$negctl_proven answers from the executive';;
         *)            echo "";;
         esac;;
@@ -502,13 +631,14 @@ awk 'NR == FNR { b = b $0 ORS; next }
     echo '    (void)vms_kif_readef(efn, &st);'
     echo '    return st;'
     echo '}'
-} >> "$EVENT"
+} >> "$TIME"
 printf '/* negctl: sys$negctl_proven answers from the executive */\n' >> "$PROOF"
-expect_green "$EVENT $PROOF $FDMAN" "an EXECUTIVE claim whose proof forks, names it, and holds a proven-reddenable assertion"
+expect_green "$TIME $PROOF $FDMAN" "an EXECUTIVE claim whose proof forks, names it, and holds a proven-reddenable assertion"
 
-# ...and the SAME claim with the manifest entry withheld is a RED. Without this
-# the control above proves only that the gate tolerates the shape; it is the
-# pair that shows which half is load-bearing.
+# ...and the SAME claim, in the SAME file, with the manifest entry withheld is
+# a RED. Without this the control above proves only that the gate tolerates the
+# shape; it is the pair that shows which half is load-bearing, and both halves
+# now sit in sys_time.c so the only difference between them is the entry.
 {
     echo ''
     echo '/* OVMX-EXECUTIVE: sys$negctl_unproven (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
@@ -517,10 +647,10 @@ expect_green "$EVENT $PROOF $FDMAN" "an EXECUTIVE claim whose proof forks, names
     echo '    (void)vms_kif_readef(efn, &st);'
     echo '    return st;'
     echo '}'
-} >> "$EVENT"
+} >> "$TIME"
 printf '/* negctl: this proof names sys$negctl_unproven */\n' >> "$PROOF"
-expect_red "$EVENT $PROOF" "an EXECUTIVE claim whose proof names it but which no mutation has ever reddened" \
-    "EXECUTIVE DECLARATION WHOSE PROOF NAMES NO ASSERTION ANY MUTATION HAS REDDENED: sys\$negctl_unproven"
+expect_red "$TIME $PROOF" "an EXECUTIVE claim whose proof names it but which no mutation has ever reddened" \
+    "EXECUTIVE DECLARATION NO MUTATION OF ITS OWN CODE IS KNOWN TO REDDEN: sys\$negctl_unproven"
 
 # ...and a mixture that names both halves is green too, so the PARTIAL reds
 # above are not satisfiable by a gate that rejects every PARTIAL line.

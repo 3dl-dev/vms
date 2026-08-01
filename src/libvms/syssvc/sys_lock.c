@@ -31,12 +31,24 @@
  * OVMX service register (rd vms-d89) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-EXECUTIVE: sys$enq (vms-ci.7) proof=tests/qemu/test_syssvc_lock.c -- there is
- *     no userspace lock table and no flock() fallback; the grant decision, the lock
+ * WHICH PROOF THESE CITE, AND WHY IT MOVED (vms-ecf). Both
+ * tests/qemu/test_syssvc_lock.c and tests/qemu/test_syssvc_lock_status.c drive
+ * these three PUBLIC entry points across a real fork() against a real
+ * /dev/vms, and the first is still the mutual-exclusion proof -- read it for
+ * the NOQUEUE denial and the cross-process release. What decided the proof=
+ * pointer is the register's price: it is paid only where a mutation of THIS
+ * FILE is known to redden an assertion in the cited proof, and the three
+ * kstat_to_ss() defects in tests/qemu/facility_defects.sh redden
+ * test_syssvc_lock_status.c. No mutation of sys_lock.c's own code is currently
+ * known to redden test_syssvc_lock.c, so citing it would have been a claim
+ * this file cannot back.
+ *
+ * OVMX-EXECUTIVE: sys$enq (vms-ci.7) proof=tests/qemu/test_syssvc_lock_status.c -- there
+ *     is no userspace lock table and no flock() fallback; the grant decision, the lock
  *     id and the value block all come back from the kernel lock manager.
- * OVMX-EXECUTIVE: sys$enqw (vms-ci.7) proof=tests/qemu/test_syssvc_lock.c -- the same
- *     request as $ENQ with the wait taken in the executive.
- * OVMX-EXECUTIVE: sys$deq (vms-ci.7) proof=tests/qemu/test_syssvc_lock.c -- one-line
+ * OVMX-EXECUTIVE: sys$enqw (vms-ci.7) proof=tests/qemu/test_syssvc_lock_status.c -- the
+ *     same request as $ENQ with the wait taken in the executive.
+ * OVMX-EXECUTIVE: sys$deq (vms-ci.7) proof=tests/qemu/test_syssvc_lock_status.c -- one-line
  *     pass-through to vms_kif_deq.
  *
  * kstat_to_ss() below translates the kernel's status numbering into the public

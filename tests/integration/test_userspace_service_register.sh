@@ -626,6 +626,7 @@ awk -F'\t' \
     -v out_err="$WORK/errors" \
     -v out_items="$WORK/items" \
     -v out_symonly="$WORK/symonly" \
+    -v out_deffile="$WORK/deffile" \
     -v out_table="$WORK/table" '
 $1 == "D" {
     if ($3 == "static" || $3 == "macro") { local[$2 SUBSEP $4] = 1; node = $2 ":" $4 }
@@ -832,6 +833,11 @@ END {
         if (k == "USERSPACE") nkind_u++
         else if (k == "PARTIAL") nkind_p++
         else if (k == "EXECUTIVE") nkind_e++
+        # WHERE THE PRODUCT DEFINES THIS SERVICE, for the price below. It is
+        # the same file the table prints, taken from the same scan -- the
+        # binding between a service and a defect is FILE IDENTITY, never a
+        # string that names the service (vms-ecf).
+        printf "%s\t%s\n", nm, universe[nm] > out_deffile
         printf "%-22s %-8s %-8s %-7s %-10s %-10s %s\n", nm,
                (isexec[nm] ? "exec" : "-"),
                (isstate[nm] ? "state" : "-"),
@@ -869,52 +875,101 @@ END {
 #      costs a second process is not purchasable with one line;
 #   4. it NAMES the service, so it is a proof ABOUT this service and not some
 #      other file that happened to satisfy 1-3;
-#   5. AND -- the one that costs something a comment cannot pay -- the proof
-#      contains an assertion that NAMES THIS SERVICE and that
-#      tests/qemu/facility_defects.sh has proven REDDENABLE: the exact text
-#      appears in some defect's require_fail or knock_on_fail set.
+#   5. AND -- the one no edit to a comment or a message can pay -- TWO
+#      MUTATIONS must be known to turn an assertion IN THAT PROOF red:
 #
-# WHY 5 EXISTS, MEASURED (vms-ecf). Checks 1-4 are all source greps, and check
-# 4 is `grep -qF "$pname" "$proof"` -- WHICH A COMMENT SATISFIES. The whole
-# exemption was buyable for two lines: one ignored `(void)vms_kif_readef(...)`
-# in sys$gettim (whose answer is still 100% clock_gettime) plus the single
-# comment line `/* also covers sys$gettim */` appended to an otherwise
-# untouched proof. Both this gate and the kif caller census returned rc=0 and
-# the register printed 11 EXECUTIVE claims.
+#        5a. one that mutates THE TRANSLATION UNIT THE PRODUCT DEFINES THIS
+#            SERVICE IN. This is the attribution half: it is what makes the
+#            proof a proof ABOUT this service's code rather than about the
+#            facility next to it.
+#        5b. one that mutates src/kernel/ -- THE EXECUTIVE ITSELF. This is the
+#            residency half: the proof is known to notice when the executive
+#            stops working.
 #
-# WHY IT IS NOT PRICED IN RUNTIME PASS LINES, which was the obvious answer and
-# is wrong: a PASS-line price is buyable for one more line -- a vacuous
-# CHECK(1, "sys$gettim ..."). A manifest entry is dearer, and the reason is in
-# the OTHER gate, not this one: tests/qemu/run_facility_negctl.sh injects each
-# defect in QEMU and requires the COMPLETE set of assertions that go red to
-# EQUAL require_fail + knock_on_fail EXACTLY (its header states that check; run
-# it, do not take this comment's word for it). A vacuous assertion cannot go
-# red, so naming one there fails that control rather than buying anything here.
+#      "Known to" means tests/qemu/facility_defects.sh names the assertion in
+#      that defect's require_fail or knock_on_fail set, and the defect's
+#      `targets` field names the file. BOTH BINDINGS ARE FILE IDENTITY. No
+#      string that names the service takes part in the computation at any
+#      point, which is the whole of what changed in vms-ecf round 3.
 #
-# WHAT 5 STILL DOES NOT BUY, and this is a residual, not a boast: this gate
-# reads the manifest, it does not run it -- the QEMU driver does, in the
-# kernel-executive-facility-negative-controls job. And the binding between an
-# assertion and a service is that the assertion's TEXT names it, so re-wording
-# an already-proven assertion to mention a second service would pay here. That
-# costs a lockstep edit in the manifest and a message CI prints on every run,
-# not a comment. It is not a claim that the price cannot be gamed.
+# WHY IT IS NOT A STRING, MEASURED TWICE (vms-ecf). Round 1 of check 5 asked
+# for "an assertion that NAMES this service and that the manifest has proven
+# reddenable". Both halves of that were bought:
+#
+#   - checks 1-4 are source greps and check 4 is `grep -qF "$pname" "$proof"`,
+#     which A COMMENT SATISFIES. One ignored `(void)vms_kif_readef(...)` in
+#     sys$gettim (whose answer is still 100% clock_gettime) plus the line
+#     `/* also covers sys$gettim */` appended to an otherwise untouched proof
+#     took this gate AND the kif caller census to rc=0 with 11 EXECUTIVE
+#     claims printed.
+#   - and then the naming requirement itself: APPEND ", clock via sys$gettim"
+#     to an assertion the manifest already proves reddenable, in the suite and
+#     in the manifest together, add the same ignored call, and the gate prints
+#     `sys$gettim x1` as a paid claim. Measured on a clean archive, rc=0. If
+#     editing an assertion's WORDS is how a service comes to be covered, then
+#     coverage is a naming convention and not a measurement.
+#
+# Under 5a neither buys anything: no defect in the manifest mutates
+# src/libvms/syssvc/sys_time.c, and no edit to a proof, a comment or an
+# assertion's wording creates one.
+#
+# WHY 5a IS "THE DEFINING TRANSLATION UNIT" AND NOT "ANY FILE ON THE PATH",
+# which was the obvious reading and is MEASURED WRONG: bind-client-no-register
+# mutates src/libvmssys/vms_kif.c and its assertions appear in ELEVEN suites,
+# test_syssvc_ef_mproc.c among them. Every service that reaches any vms_kif_*
+# entry point at all reaches that file -- so a path-shaped 5a would have been
+# satisfied by the SAME ONE IGNORED CALL that bought the exemption in the first
+# place, and the kernel-side reading is no better (the ignored call also
+# reaches kernel/vms_eflag.c through VMS_IOCTL_READEF). Reachability is exactly
+# what an ignored call buys; the defining translation unit is not.
+#
+# WHY IT IS NOT PRICED IN RUNTIME PASS LINES, which was the other obvious
+# answer and is also wrong: a PASS-line price is buyable for one more line, a
+# vacuous CHECK(1, "sys$gettim ..."). A manifest entry is dearer, and the
+# reason is in the OTHER gate, not this one: tests/qemu/run_facility_negctl.sh
+# injects each defect in QEMU and requires the COMPLETE set of assertions that
+# go red to EQUAL require_fail + knock_on_fail EXACTLY (its header states that
+# check; run it, do not take this comment's word for it). A vacuous assertion
+# cannot go red, so naming one there fails that control rather than buying
+# anything here.
+#
+# WHAT THIS STILL DOES NOT BUY, and it is a residual, not a boast:
+#
+#   - THIS GATE READS THE MANIFEST; IT DOES NOT RUN IT. A fabricated defect
+#     entry -- targets naming the facade's own file, require_fail naming an
+#     assertion already in the proof -- would pay here. It would then have to
+#     survive run_facility_negctl.sh, which injects it in QEMU and requires the
+#     observed red set to EQUAL what it claims; a mutation of sys_time.c does
+#     not redden an event-flag assertion, so that entry fails there. The price
+#     is deliberately split across a source gate and a runtime gate, and CI
+#     runs both. What is bought here in a source edit is not bought there.
+#   - 5a IS AT TRANSLATION-UNIT GRANULARITY. One defect in sys_event.c pays for
+#     every service sys_event.c defines. Per-service attribution would need one
+#     QEMU-verified defect per service; the run prints WHICH defect pays for
+#     each claim, so the sharing is visible rather than implied.
 FDMANIFEST="$SRC_ROOT/tests/qemu/facility_defects.sh"
-: > "$WORK/proven"
+: > "$WORK/fd_assert"
+: > "$WORK/fd_target"
 if [ -f "$FDMANIFEST" ]; then
     for _d in $(sh "$FDMANIFEST" list 2>/dev/null); do
-        sh "$FDMANIFEST" field "$_d" require_fail 2>/dev/null
-        sh "$FDMANIFEST" field "$_d" knock_on_fail 2>/dev/null
-    done | grep -v '^[[:space:]]*$' | sort -u > "$WORK/proven"
+        { sh "$FDMANIFEST" field "$_d" require_fail 2>/dev/null
+          sh "$FDMANIFEST" field "$_d" knock_on_fail 2>/dev/null
+        } | grep -v '^[[:space:]]*$' | sed "s|^|$_d	|" >> "$WORK/fd_assert"
+        for _t in $(sh "$FDMANIFEST" field "$_d" targets 2>/dev/null); do
+            printf '%s\tsrc/%s\n' "$_d" "$_t" >> "$WORK/fd_target"
+        done
+    done
 fi
 
 : > "$WORK/backed"
 while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
     [ "$pkind" = "EXECUTIVE" ] || continue
-    if [ ! -s "$WORK/proven" ]; then
+    if [ ! -s "$WORK/fd_assert" ] || [ ! -s "$WORK/fd_target" ]; then
         printf 'BROKEN PRICE CHECK: %s (%s) cannot be priced\n' "$pname" "$pfile" >> "$WORK/errors"
-        printf '  -> tests/qemu/facility_defects.sh named no proven-reddenable assertion\n' >> "$WORK/errors"
-        printf '     at all, so every OVMX-EXECUTIVE claim here would be exempt for want\n' >> "$WORK/errors"
-        printf '     of a check. A price that cannot be computed is not a price.\n' >> "$WORK/errors"
+        printf '  -> tests/qemu/facility_defects.sh named no proven-reddenable assertion,\n' >> "$WORK/errors"
+        printf '     or no mutated file, at all -- so every OVMX-EXECUTIVE claim here would\n' >> "$WORK/errors"
+        printf '     be exempt for want of a check. A price that cannot be computed is not\n' >> "$WORK/errors"
+        printf '     a price.\n' >> "$WORK/errors"
         continue
     fi
     if [ ! -f "$SRC_ROOT/$pproof" ]; then
@@ -942,24 +997,59 @@ while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
         printf '  -> proof=%s never mentions %s, so it is not a proof about it.\n' "$pproof" "$pname" >> "$WORK/errors"
         continue
     fi
-    # (5) the mutation-backed assertion. The proof is read ONCE and matched in
-    # the shell, because the alternative is (every manifest text) x (every
-    # EXECUTIVE claim) subprocesses, and this gate already compiles the tree.
-    pcontent=$(cat "$SRC_ROOT/$pproof" 2>/dev/null)
-    nbacked=0
-    while IFS= read -r _a; do
-        case "$_a" in *"$pname"*) ;; *) continue ;; esac
-        case "$pcontent" in *"$_a"*) nbacked=$((nbacked + 1)) ;; esac
-    done < "$WORK/proven"
-    printf '%s %s %d\n' "$pname" "$pproof" "$nbacked" >> "$WORK/backed"
-    if [ "$nbacked" -eq 0 ]; then
-        printf 'EXECUTIVE DECLARATION WHOSE PROOF NAMES NO ASSERTION ANY MUTATION HAS REDDENED: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
-        printf '  -> proof=%s mentions %s, but not in any assertion that\n' "$pproof" "$pname" >> "$WORK/errors"
-        printf '     tests/qemu/facility_defects.sh names in a require_fail or knock_on_fail\n' >> "$WORK/errors"
-        printf '     set. A mention can be a comment; this gate measured that exact buy-off\n' >> "$WORK/errors"
-        printf '     (vms-ecf). Claiming the whole answer comes from the executive costs an\n' >> "$WORK/errors"
-        printf '     assertion in that proof which an injected defect is known to redden --\n' >> "$WORK/errors"
-        printf '     or say OVMX-PARTIAL and name the half that is not the executive'"'"'s.\n' >> "$WORK/errors"
+    # (5) THE MUTATION-BACKED PRICE. Two questions, both answered by file
+    # identity and neither by any string that names the service:
+    #
+    #   which defects are known to redden an assertion in THIS proof?
+    #     -> the defect's assertion text occurs in the proof's source.
+    #   of those, which mutate THIS SERVICE'S defining file, and which mutate
+    #   the executive?
+    #     -> the defect's `targets` field, compared against the defining file
+    #        this gate's own scan recorded, and against src/kernel/.
+    #
+    # One awk per claim: it reads the proof once, the (defect, assertion)
+    # stream once and the (defect, file) stream once.
+    sdeffile=$(awk -F'\t' -v n="$pname" '$1 == n { print $2; exit }' "$WORK/deffile")
+    read -r nown nkern ownby kernby <<EOF
+$(awk -F'\t' -v proof="$SRC_ROOT/$pproof" -v deff="$sdeffile" -v tgt="$WORK/fd_target" '
+BEGIN {
+    content = ""
+    while ((getline l < proof) > 0) content = content l "\n"
+    close(proof)
+}
+{ if (index(content, $2) > 0) reddens[$1] = 1 }
+END {
+    nown = 0; nkern = 0; own = ""; kern = ""
+    while ((getline t < tgt) > 0) {
+        split(t, f, "\t")
+        if (!(f[1] in reddens)) continue
+        if (f[2] == deff && !(f[1] in seenown)) { seenown[f[1]] = 1; nown++; own = own "," f[1] }
+        if (f[2] ~ /^src\/kernel\// && !(f[1] in seenk)) { seenk[f[1]] = 1; nkern++; kern = kern "," f[1] }
+    }
+    close(tgt)
+    printf "%d %d %s %s\n", nown, nkern, (nown ? substr(own, 2) : "-"), (nkern ? substr(kern, 2) : "-")
+}' "$WORK/fd_assert")
+EOF
+    printf '%s %s %s %s\n' "$pname" "$pproof" "$ownby" "$kernby" >> "$WORK/backed"
+    if [ "$nown" -eq 0 ]; then
+        printf 'EXECUTIVE DECLARATION NO MUTATION OF ITS OWN CODE IS KNOWN TO REDDEN: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
+        printf '  -> the product defines %s in %s, and NO defect in\n' "$pname" "${sdeffile:--nowhere-}" >> "$WORK/errors"
+        printf '     tests/qemu/facility_defects.sh both mutates that file and names an\n' >> "$WORK/errors"
+        printf '     assertion that occurs in proof=%s.\n' "$pproof" >> "$WORK/errors"
+        printf '     A proof is a proof ABOUT this service only if breaking this service'"'"'s\n' >> "$WORK/errors"
+        printf '     own code is known to turn something in it red. Naming the service in a\n' >> "$WORK/errors"
+        printf '     comment bought this once, and re-wording an already-proven assertion to\n' >> "$WORK/errors"
+        printf '     mention the service bought it again (vms-ecf) -- so no string that names\n' >> "$WORK/errors"
+        printf '     the service takes part in this check any more. Add a QEMU-verified defect\n' >> "$WORK/errors"
+        printf '     for that file, or say OVMX-PARTIAL and name the half that is not the\n' >> "$WORK/errors"
+        printf '     executive'"'"'s.\n' >> "$WORK/errors"
+    fi
+    if [ "$nkern" -eq 0 ]; then
+        printf 'EXECUTIVE DECLARATION WHOSE PROOF NO MUTATION OF THE EXECUTIVE IS KNOWN TO REDDEN: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
+        printf '  -> no defect that mutates src/kernel/ names an assertion occurring in\n' >> "$WORK/errors"
+        printf '     proof=%s. The claim is that the WHOLE answer comes from\n' "$pproof" >> "$WORK/errors"
+        printf '     the executive; a proof that is not known to notice the executive being\n' >> "$WORK/errors"
+        printf '     broken cannot settle that, however many times it forks.\n' >> "$WORK/errors"
     fi
 done < "$WORK/decl_ok"
 
@@ -1027,15 +1117,18 @@ if [ -s "$WORK/symonly" ]; then
     sed 's/^/      /' "$WORK/symonly"
 fi
 
-# WHAT EACH FULL EXEMPTION IS ACTUALLY PAYING, derived per run. A claim resting
-# on ONE mutation-backed assertion is a claim resting on one assertion; the
-# number says so without anybody maintaining it.
+# WHAT EACH FULL EXEMPTION IS ACTUALLY PAYING, derived per run and NAMED. The
+# defect names are printed, not counted, because the sharing is the finding: a
+# whole file's worth of EXECUTIVE claims resting on ONE defect is a fact a
+# reader should see, and 5a is at translation-unit granularity so that is
+# exactly what it looks like today.
 if [ -s "$WORK/backed" ]; then
     echo
-    echo "  the OVMX-EXECUTIVE claims, and how many assertions in the proof they name"
-    echo "  are BOTH about that service and known-reddenable by an injected defect:"
-    sort -k3,3nr -k1,1 "$WORK/backed" | while read -r bn bp bc; do
-        printf '      %-22s x%-3s %s\n' "$bn" "$bc" "$bp"
+    echo "  the OVMX-EXECUTIVE claims, and the mutations that pay for them:"
+    echo "    service                own code (5a)                   executive (5b)"
+    sort -k1,1 "$WORK/backed" | while read -r bn bp bo bk; do
+        printf '      %-22s %-31s %s\n' "$bn" "$bo" "$bk"
+        printf '        proof=%s\n' "$bp"
     done
 fi
 

@@ -717,7 +717,7 @@ EOF
         case "$_f" in
         facility)     echo "job-to-terminal binding (VMS_IOCTL_SETTERM, read back through GETJPI)";;
         targets)      echo "kernel/vms_devtab.c";;
-        suites_red)   echo "test_kmod_setterm test_syssvc_showterm";;
+        suites_red)   echo "test_kmod_setterm test_syssvc_showterm test_syssvc_showusers";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -741,6 +741,12 @@ the last row carries the single remaining characteristic, unpadded
 ...and the cleared Echo bit, in the grid cell the oracle prints it in
 ...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
 ...and grid row 1 is the oracle's bytes again, so neither is the grid
+A-WRITES/B-READS: DCL's SHOW USERS lists a process it did not create and which is not the caller -- a row only the executive's process table could supply
+that row's Username is the name the SUBJECT stamped on itself in the executive -- identity read across a process boundary, through DCL
+that row's PID is the VMS process ID the executive assigned the subject
+...and is NOT the subject's Linux pid, which is what the fabricated row printed before vms-72c
+that row's Terminal is the binding the SUBJECT made (VMS_IOCTL_SETTERM) -- a job-to-terminal binding read by a process that did not make it
+the "Total number of users" figure went up by exactly one when the subject appeared
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
@@ -773,6 +779,21 @@ cannot make it red, and re-running the control after the round-3 edit
 confirmed exactly that: test_syssvc_showterm's contribution to the red set
 (require_fail's 1 plus this suite's share of knock_on_fail) shrank from 13 to
 10 without this manifest changing, until this entry was corrected to match.
+
+The last six are test_syssvc_showusers's, added with that suite (vms-150), and
+they are ONE consequence as well: cmd_show_users() lists only rows the
+executive has bound to a terminal, so with the write gone the subject's row is
+filtered out entirely and every assertion about that row's contents -- its
+user name, its VMS process ID, that the ID is not a Linux pid, its terminal --
+goes with the row, along with the "one more user" count. MEASURED, not
+predicted: injecting this defect with that suite present produces exactly
+these six extra FAIL lines and no others in it. The suite's own preconditions
+stay GREEN and that is what keeps this attributable -- SETTERM still returns
+SS$_NORMAL, so "the subject established a real session in the executive"
+passes, and so do the before/after checks, which assert the row's ABSENCE and
+are satisfied either way. A suite that went entirely red would be evidence the
+mutation is a blunderbuss; this one loses exactly the six assertions that
+require a binding a DIFFERENT process made to be visible.
 
 What stays GREEN is what makes this isolated rather than a blunderbuss: the
 unbound run still names nothing, the SS$_IVCHAN refusal still fires, the row

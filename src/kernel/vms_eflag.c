@@ -20,40 +20,6 @@
  *   ASCEFC  - Associate with a common event flag cluster
  *   DACEFC  - Disassociate from a common event flag cluster
  *   DLCEFC  - Mark a permanent common event flag cluster for deletion
- *
- * INTERRUPTED WAITS: THERE IS NO SUCH OUTCOME (vms-2a8, CLAUDE.md Rule 10).
- *
- * WAITFR, WFLOR and WFLAND used to answer SS$_NORMAL when
- * wait_event_interruptible() returned because a signal was pending:
- *
- *     ret = wait_event_interruptible(...);
- *     if (ret) { args.status = SS__NORMAL;  <- "interrupted, but still
- *                                               return normally"
- *
- * That reports "the flag is set" for a flag that is demonstrably still
- * clear, and the caller gets rc=0/errno=0 so it cannot even detect it.
- * It is the same fabricated-success class this whole facility was wired
- * to delete, one layer down.
- *
- * ORACLE-PINNED, VAX1 OpenVMS VAX V7.3, transcripts in
- * docs/oracle/vax73-event-flags.md §4:
- *   - HELP SYSTEM_SERVICES $WAITFR: "Tests a specific event flag and
- *     returns immediately if the flag is set; otherwise, the process is
- *     placed in a wait state UNTIL THE EVENT FLAG IS SET." The online help
- *     has no Condition Values Returned topic for it at all.
- *   - HELP SYSTEM_SERVICES $HIBER: a process in a wait state remains "known
- *     to the system so that it can be interrupted; for example, to receive
- *     ASTs" -- so a VMS wait IS interruptible, by an AST, and the process is
- *     still waiting when the AST finishes. The caller of the wait never sees
- *     it happen.
- *   - SEARCH of $SSDEF (STARLET.MLB) for WAIT/INTERRUPT/ABORTED returns four
- *     unrelated symbols. VMS HAS NO "WAIT WAS INTERRUPTED" STATUS TO RETURN.
- *
- * So the condition is made UNREACHABLE rather than handled. These three
- * handlers return -ERESTARTSYS and write NO status; libvmssys'
- * kif_wait_call() re-enters the wait, so no sys$ caller can observe a wait
- * that ended with its predicate false. Do not "improve" this by inventing a
- * status here -- there is not one to invent.
  */
 
 #include <linux/kernel.h>
@@ -275,22 +241,12 @@ long vms_ioctl_waitfr(struct vms_proc *proc, unsigned long arg)
     }
     spin_unlock(&proc->ef.lock);
 
-    /*
-     * Wait until the flag is set.
-     *
-     * A SIGNAL DOES NOT END THE WAIT, AND IT PRODUCES NO STATUS. See the
-     * INTERRUPTED WAITS note at the top of this file. This used to be
-     *
-     *     if (ret) { args.status = SS__NORMAL;  <- interrupted, flag clear
-     *
-     * which told the caller "the flag is set" about a flag that was
-     * demonstrably still clear. -ERESTARTSYS is returned instead: no status
-     * is written back at all on this path, so there is nothing for a caller
-     * to misread, and libvmssys' vms_kif_waitfr() re-enters the wait.
-     */
+    /* Wait until the flag is set */
     ret = wait_event_interruptible(*waitq, (READ_ONCE(*flags) & (1U << bit)));
-    if (ret)
-        return ret;
+    if (ret) {
+        args.status = SS__NORMAL; /* interrupted, but still return normally */
+        goto out;
+    }
 
     args.status = SS__NORMAL;
 
@@ -339,11 +295,11 @@ long vms_ioctl_wflor(struct vms_proc *proc, unsigned long arg)
     }
     spin_unlock(&proc->ef.lock);
 
-    /* No status on the interrupted path -- see vms_ioctl_waitfr above and
-     * the INTERRUPTED WAITS note at the top of this file. */
     ret = wait_event_interruptible(*waitq, (READ_ONCE(*flags) & args.mask));
-    if (ret)
-        return ret;
+    if (ret) {
+        args.status = SS__NORMAL;
+        goto out;
+    }
 
     args.status = SS__NORMAL;
 
@@ -378,12 +334,12 @@ long vms_ioctl_wfland(struct vms_proc *proc, unsigned long arg)
     }
     spin_unlock(&proc->ef.lock);
 
-    /* No status on the interrupted path -- see vms_ioctl_waitfr above and
-     * the INTERRUPTED WAITS note at the top of this file. */
     ret = wait_event_interruptible(*waitq,
                                    ((READ_ONCE(*flags) & args.mask) == args.mask));
-    if (ret)
-        return ret;
+    if (ret) {
+        args.status = SS__NORMAL;
+        goto out;
+    }
 
     args.status = SS__NORMAL;
 

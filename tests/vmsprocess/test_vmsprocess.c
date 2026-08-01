@@ -5,26 +5,17 @@
  *   - PCB creation (vms_pcb_init) and cleanup
  *   - Privilege string parsing (parse_privilege_string from privs.h)
  *   - AST queue operations (ast_queue, ast_pending_count)
- *
- * NO EVENT FLAG COVERAGE, DELIBERATELY (vms-2a8). This file used to certify
- * src/vmsprocess/event_flags.c -- a SECOND, per-process implementation of the
- * whole event flag facility living in the PCB. It passed every assertion, and
- * that was the problem: under CLAUDE.md Rule 11 a system facility is
- * executive-resident, and a per-process fake passes every single-process test
- * perfectly. Both the implementation and this coverage of it are deleted; the
- * facility is tested where it now lives, across a REAL process boundary,
- * against a real /dev/vms, in tests/qemu/test_syssvc_ef_mproc.c
- * (A-writes/B-reads) and tests/qemu/test_kmod_eflag_mproc.c.
+ *   - Event flag local operations (eflag_set, eflag_clear, eflag_read)
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>     /* getpid() -- was implicitly declared (vms-2a8) */
 
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "vms/ast.h"
+#include "vms/eflag.h"
 #include "vms/process.h"
 #include "ssdef.h"
 
@@ -68,6 +59,12 @@ static void test_pcb(void)
     /* Initial privileges */
     check(pcb->cur_privs == 0, "initial cur_privs is 0");
     check(pcb->perm_privs == 0, "initial perm_privs is 0");
+
+    /* Event flags should be clear */
+    for (int i = 0; i < PCB_EF_CLUSTERS; i++) {
+        check(pcb->ef_clusters[i] == 0, "event flag cluster initially clear");
+        if (pcb->ef_clusters[i] != 0) break;  /* Don't spam failures */
+    }
 
     /* AST queues should be empty and enabled */
     for (int i = 0; i < 4; i++) {
@@ -167,6 +164,69 @@ static void test_privs(void)
     check(parse_privilege_string("GROUP")  == PRV$M_GROUP,  "GROUP");
     check(parse_privilege_string("LOG_IO") == PRV$M_LOG_IO, "LOG_IO");
     check(parse_privilege_string("PHY_IO") == PRV$M_PHY_IO, "PHY_IO");
+}
+
+/* ------------------------------------------------------------------ */
+/* Test: event flag operations                                         */
+/* ------------------------------------------------------------------ */
+static void test_event_flags(void)
+{
+    printf("\n--- event flag operations ---\n");
+
+    /* Need a PCB for event flags */
+    struct vms_pcb *pcb = vms_pcb_init(0);
+    if (!pcb) { check(0, "vms_pcb_init for event flags"); return; }
+
+    eflag_init();
+
+    /* Initial state: all flags clear */
+    check(eflag_read(0) == 0, "flag 0 initially clear");
+    check(eflag_read(1) == 0, "flag 1 initially clear");
+    check(eflag_read(31) == 0, "flag 31 initially clear");
+
+    /* Set flag 0 */
+    int prev = eflag_set(0);
+    check(prev == SS$_WASCLR, "set flag 0: was clear");
+    check(eflag_read(0) == 1, "flag 0 is set after eflag_set");
+
+    /* Set flag 0 again (was already set) */
+    prev = eflag_set(0);
+    check(prev == SS$_WASSET, "set flag 0 again: was set");
+
+    /* Clear flag 0 */
+    prev = eflag_clear(0);
+    check(prev == SS$_WASSET, "clear flag 0: was set");
+    check(eflag_read(0) == 0, "flag 0 is clear after eflag_clear");
+
+    /* Set multiple flags, check cluster */
+    eflag_set(0);
+    eflag_set(1);
+    eflag_set(5);
+    uint32_t cluster = eflag_read_cluster(0);
+    check(cluster & (1u << 0), "flag 0 set in cluster");
+    check(cluster & (1u << 1), "flag 1 set in cluster");
+    check(cluster & (1u << 5), "flag 5 set in cluster");
+    check(!(cluster & (1u << 2)), "flag 2 clear in cluster");
+
+    /* Clear all and verify */
+    eflag_clear(0);
+    eflag_clear(1);
+    eflag_clear(5);
+    cluster = eflag_read_cluster(0);
+    check(cluster == 0, "cluster 0 is all-zero after clearing");
+
+    /* Second cluster (flags 32-63) */
+    eflag_set(32);
+    check(eflag_read(32) == 1, "flag 32 (cluster 1, bit 0) is set");
+    check(eflag_read(0) == 0, "flag 0 (cluster 0) unaffected");
+    eflag_clear(32);
+    check(eflag_read(32) == 0, "flag 32 cleared");
+
+    /* Out-of-range flag */
+    prev = eflag_set(200);  /* > EFN_MAX_TOTAL (128) */
+    check(prev == SS$_ILLEFC, "eflag_set out-of-range returns SS$_ILLEFC");
+
+    vms_pcb_cleanup();
 }
 
 /* ------------------------------------------------------------------ */
@@ -322,6 +382,7 @@ int main(void)
     test_pid_from_linux();
 
     /* Re-init PCB for subsequent tests that need it */
+    test_event_flags();
     test_ast();
     test_current_process();
 

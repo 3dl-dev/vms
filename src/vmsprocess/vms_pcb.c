@@ -61,8 +61,10 @@ struct vms_pcb *vms_pcb_init(uint64_t initial_privs)
     pcb->perm_privs = initial_privs;
     pthread_mutex_init(&pcb->priv_lock, NULL);
 
-    /* NO EVENT FLAGS ARE INITIALISED HERE, and none may be added: the
-     * executive owns them (vms-2a8, CLAUDE.md Rule 11). See vms/pcb.h. */
+    /* Event flags: all clear */
+    memset(pcb->ef_clusters, 0, sizeof(pcb->ef_clusters));
+    pthread_mutex_init(&pcb->ef_lock, NULL);
+    pthread_cond_init(&pcb->ef_cond, NULL);
 
     /* AST queues: all empty, all enabled */
     for (int i = 0; i < 4; i++) {
@@ -150,6 +152,8 @@ void vms_pcb_cleanup(void)
 
     /* Destroy mutexes */
     pthread_mutex_destroy(&pcb->priv_lock);
+    pthread_mutex_destroy(&pcb->ef_lock);
+    pthread_cond_destroy(&pcb->ef_cond);
     pthread_mutex_destroy(&pcb->ast_lock);
     pthread_mutex_destroy(&pcb->chan_lock);
 

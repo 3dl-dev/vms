@@ -2,6 +2,7 @@ set(VMSPROCESS_SOURCES
     vms_pcb.c
     vms_process.c
     ast.c
+    event_flags.c
     access_modes.c
 )
 add_library(vmsprocess ${OVMX_LIB_TYPE} ${VMSPROCESS_SOURCES})

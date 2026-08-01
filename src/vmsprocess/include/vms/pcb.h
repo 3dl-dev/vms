@@ -41,26 +41,7 @@
 #define PCB_MAX_CHANNELS    256
 #define PCB_MAX_AST_QUEUE   64
 #define PCB_MAX_EXIT_HANDLERS 32
-
-/*
- * NO EVENT FLAGS IN THE PCB. There is no PCB_EF_CLUSTERS, no ef_clusters[],
- * no ef_lock and no ef_cond, and none of them may come back (vms-2a8).
- *
- * Event flags are a VMS SYSTEM FACILITY, and under CLAUDE.md Rule 11 a
- * system facility is shared state owned by the executive -- all 128 flags
- * live in src/kernel/vms_eflag.c and are reached through /dev/vms by
- * src/libvms/syssvc/sys_event.c. This structure held a second, private copy
- * of the whole facility (four 32-bit clusters behind a pthread mutex and
- * condvar, with eflag_set/eflag_clear/eflag_wait in event_flags.c on top of
- * it). Its only remaining caller was its own single-process unit test, and
- * that is precisely the coverage shape Rule 11 says proves nothing: a
- * per-process fake passes every single-process test perfectly.
- *
- * It was deleted rather than left orphaned because a facade with green
- * coverage argues for itself -- the next author to need event flags would
- * have found a linked, tested, one-#include-away implementation of the
- * facility that shares nothing.
- */
+#define PCB_EF_CLUSTERS     4       /* 4 clusters x 32 bits = 128 flags */
 
 /* Quota indices */
 #define PCB_QUOTA_ASTLM     0   /* AST limit */
@@ -155,7 +136,10 @@ struct vms_pcb {
     uint64_t        perm_privs;         /* permanent privileges */
     pthread_mutex_t priv_lock;
 
-    /* NO EVENT FLAGS HERE -- see the note above PCB_QUOTA_ASTLM. */
+    /* Event flags: 4 clusters x 32 bits = 128 flags */
+    uint32_t        ef_clusters[PCB_EF_CLUSTERS];
+    pthread_mutex_t ef_lock;
+    pthread_cond_t  ef_cond;
 
     /* AST queues: one per access mode (0=kernel .. 3=user) */
     struct pcb_ast_queue ast[4];

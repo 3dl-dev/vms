@@ -100,14 +100,11 @@ per-process — and the fake reports success.
   `Total number of users = 1, number of processes = 1` — permanently. (No live rd item: the
   `vms-901`/`904` children named by `vms-898.11` predate the nostr board and were never migrated —
   worth re-creating when M1 is worked.)
-- **Event flags.** ~~The *userspace* path stores them in the PCB (`pcb->ef_clusters`), so they are
-  per-process there.~~ **CORRECTION (2026-07-28): this is a wiring gap, not an absence** — `vms.ko`
+- **Event flags.** The *userspace* path stores them in the PCB (`pcb->ef_clusters`), so they are
+  per-process there. **CORRECTION (2026-07-28): this is a wiring gap, not an absence** — `vms.ko`
   already implements event flags *including* VMS common clusters (`vms_eflag.c`,
   `vms_common_ef_lock`, ioctls `VMS_IOCTL_SETEF`/`ASCEFC`/`DACEFC`). `event_flags.c` simply never
-  calls them. **CLOSED (2026-07-31, `vms-2a8`)**: `src/libvms/syssvc/sys_event.c` now calls the
-  executive for all nine services, `event_flags.c` and `pcb->ef_clusters` are deleted, and the
-  A-writes/B-reads proof is `tests/qemu/test_syssvc_ef_mproc.c`. ASTs (`0x10-0x12`) and access
-  modes/privileges (`0x01-0x04`) are still unwired.
+  calls them. Same for ASTs (`0x10-0x12`) and access modes/privileges (`0x01-0x04`).
 - **Mailboxes.** `$CREMBX` is implemented as a Unix **socketpair**, and the mailbox's logical name is
   created in **`LNM$PROCESS_TABLE`**. A socketpair cannot be joined by an unrelated process and the
   name cannot be resolved outside the creator, so the canonical VMS IPC pattern — proc A creates
@@ -137,7 +134,7 @@ greenfield than "build a substrate" implies.
 | Facility | Kernel ioctls in `vms_ioctl.h` | Userspace calls it? |
 |---|---|---|
 | Lock manager (`$ENQ`/`$DEQ`) | `0x30+` | **Yes** — `sys_lock.c` via `vms_kif` |
-| Event flags, incl. common clusters | `0x20`–`0x28` | **Yes** (since `vms-2a8`) — `sys_event.c` via `vms_kif` |
+| Event flags, incl. common clusters | `0x20`–`0x27` | **No** — `event_flags.c` uses the PCB |
 | ASTs | `0x10`–`0x12` | **No** |
 | Access modes / privileges | `0x01`–`0x04` | **No** |
 | Logical names, process table, device table, mailboxes | *none* | — |

@@ -56,6 +56,8 @@ reset.**
 | every refusal is the same failure | **REFUTED — TWO shapes; one never opens a transition at all** | §4d.6 ⭐⭐ |
 | we address the wrong node (`Curr. coord.` rotates) | **REFUTED both ways — forcing the real coordinator still refused; a fresh identity joins via a non-coordinator** | §4d.7 ⭐ |
 | a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
+| the VAXes have no oracle for their non-decisions | **REFUTED — SCACP, ANALYZE/ERROR_LOG and SDA SHOW CONNECTIONS all exist and were never used** | §4d.9 ⭐⭐⭐ |
+| the two outcomes look alike below the CM layer | **REFUTED — a refused rejoin's VC is in congestion collapse; a successful one is indistinguishable from a real VAX** | §4d.9 ⭐⭐⭐ |
 
 ## 1. The reproducer — four minutes, no reset
 
@@ -778,6 +780,73 @@ incarnation: three VAXes in the 12:05 era and OVMX alone at 20:40.
 were admitted normally. It is `vms-70c`-class honesty debt. Note it would be
 invisible on a UTC host, so "cannot reproduce" is expected there.
 
+### 4d.9 ⭐⭐⭐ THE VAXes DO HAVE DIAGNOSTIC LOGGING, AND IT NAMES A NEW LAYER
+
+**Every peer-side oracle this investigation had used — OPCOM, SDA `SHOW
+CLUSTER`, DCL `SHOW CLUSTER` — reports connection-manager STATE. None of them
+reports a DECISION, and nobody had checked what else VAX/VMS 7.3 offers.** It
+offers three things, all present in this lab and all previously untouched:
+
+| oracle | what it gives | how |
+|---|---|---|
+| **`SCACP`** (SCA Control Program) | **PEDRIVER's own view of the VC and its channels** — state, channels open, ECS membership, transmit window, retransmit timeout, transmit-timeout count, per-VC error count | `MC SCACP` → `SHOW VC`, `SHOW CHANNEL` |
+| **`ANALYZE/ERROR_LOG`** | `NI-SCS SUB-SYSTEM, _VAX1$PEA0: PORT HAS CLOSED VIRTUAL CIRCUIT` entries, timestamped; `/FULL` carries the entry body | `ANALYZE/ERROR_LOG/INCLUDE=PEA0/SINCE=…` |
+| **SDA `SHOW CONNECTIONS`** | the CDT table per SYSAP, including a **`Rej/Disconn Reason`** field | `ANALYZE/SYSTEM` → `SHOW CONNECTIONS` |
+
+*(There is no `PE` SDA extension on VAX 7.3, and SCACP here has only
+`SET/SHOW/START/STOP` — no trace facility. `SHOW ERROR` at DCL gives the PEA0
+error count, 19 at the time of writing.)*
+
+**SCACP polled LIVE splits the rejoin from the fresh join cleanly** — new tool
+`tools/scacppoll.sh`, two runs 90 seconds apart on the same lab, counters reset
+when each VC opened so everything below accrued *within the run*:
+
+| SCACP `SHOW VC`, at T+20 s | `OVMXS6` fresh — **JOINED** | `OVMXS3` rejoin — **REFUSED** | real VAX3 |
+|---|---|---|---|
+| VC state / channels open / ECS | Open / 1 / 1 | Open / 1 / 1 | Open / 1 / 1 |
+| **VC Total Errors** | **0** | **21** | 2 |
+| **Xmt:TMO** (transmit timeouts) | **Infinite** *(none)* | **29** | Infinite |
+| **XmtWindow Cur/Max** | **24 / 24** | **2** / 24 | 24 / 24 |
+| **ReXmt TMO** | **663 ms** | **3 000 ms — the maximum** | 678 ms |
+| Channel Total Errors | **2** | **62** | 6 |
+
+**A successful OVMX join is indistinguishable from a real VAX at this layer.**
+A refused rejoin is a VC in **congestion collapse**: 29 transmit timeouts in
+~20 s, the transmit window backed off from 24 to **2**, and the retransmit timer
+pinned at its 3-second ceiling. And the VC's `Total Pkts` reads **686 at T+20
+and 686 at T+60** — *zero VC-level traffic in forty seconds* — while the channel
+counter keeps climbing on HELLOs alone.
+
+**What a transmit timeout means is that VAX1 sent us VC messages we never
+acknowledged.** Not that we sent something wrong: the peer is retransmitting
+into silence and backing off. And OVMX cannot see it — `s3D` logged *fewer*
+warnings than the successful `s6A` (3 `STRAYACK` vs 9 `STRAYACK` + 2
+`CMUNGROUNDED`), and its setup counters are identical to the successful run's
+(`START-SENT=6`, `CONNECT-RESP-SENT=3`, `DIR-LOOKUP-RESP-SENT=12`,
+`CM-CONFIG-FRAMES=7` in both). Everything that diverges — `CM-RESPONSES-SENT`
+0 vs 190, `CREDIT-SENT` 36 vs 656, `MSCP-SERVER-ACCEPTS` 0 vs 27 — is
+downstream of not being admitted.
+
+**THE LEAD THIS OPENS, and it was explicitly dismissed once from the wrong
+side.** §3.6 retired SCS sequence numbers because *"the member's stale round-0
+`send_seq` is receive-tolerated as spec §4(i).A requires. Not the failure."*
+That judgment was made from OUR logs. From the peer's side SCACP now says the
+opposite is happening: **the peer is retransmitting to a returning identity and
+timing out.** A mechanism that fits every fact in this document is that VAX1
+carries unacknowledged VC state for that identity across our death, replays it
+when the VC reopens, receives no acknowledgement it accepts, and collapses the
+window — so our `op 0x02` is queued behind a jammed VC and is never processed.
+A fresh identity has no such state, which is why it never happens to one.
+
+**⚠ CAUSE OR EFFECT IS NOT ESTABLISHED.** Backoff is also what you would expect
+*as a consequence* of a stalled dialogue. What is established is that the two
+outcomes are separable at the PEDRIVER layer, live, on a counter nobody was
+reading — and that this is a layer BELOW everything §1–§4c examined. **Do not
+promote it to a root cause without a run that shows the timeouts starting BEFORE
+the `op 0x02` goes unanswered.** `scacppoll.sh` polls at T+20/T+60; poll at
+T+5/T+8/T+12 with a packet capture running (it does not capture yet — add it)
+and the ordering falls out.
+
 ### 4d.5 What is left of the ordered plan
 
 Step 4 — **ungate the disk-discovery run** (§4c.8, `scsd.c` requires an inbound
@@ -988,9 +1057,10 @@ nobody re-derives it.
 |  `tools/oneshot.sh` | one join against the lab as it stands + SDA dump. **The four-minute loop.** Worth moving into `tools/`. |
 |  `tools/probe.sh` | drive any VAX console, capture between markers. |
 | `tools/stallpoll.sh` | **one join + SDA polled on a CHOSEN node DURING the stall.** The node is an argument on purpose: session j polled VAX1, which was not the coordinator in `r1B`, so the one node whose state decided the outcome was never asked. This is what separated the two refusal shapes (§4d.6). |
+| `tools/scacppoll.sh` | **one join + SCACP (`SHOW VC` / `SHOW CHANNEL`) polled on a chosen node DURING the run.** This is PEDRIVER's own view, a layer below everything §1–§4c examined, and it is what separated a refused rejoin from a successful join on live counters (§4d.9). **Does not capture packets yet — add tcpdump before using it to establish ordering.** |
 
 Run tags session j (part 2): `r1A` `r2A` joined, `r1B` `r2B` refused, `vax3crash` = the real-VAX crash-rejoin specimen. **Last SCSSYSTEMID used: 1241.**
-Run tags session k: `s1A` `s2A` `s3A` `s4A` `s5A` joined (fresh, pure); `s1B` refused (rejoin form), `s1C` refused (`OVMX_REJOIN_FORM=0`); `s3B` refused (SDA-polled on VAX3), `s3C` refused (`OVMX_CFG2_PEER=1`, forced to the real coordinator). **Last SCSSYSTEMID used: 1246.**
+Run tags session k: `s1A` `s2A` `s3A` `s4A` `s5A` joined (fresh, pure); `s1B` refused (rejoin form), `s1C` refused (`OVMX_REJOIN_FORM=0`); `s3B` refused (SDA-polled on VAX3), `s3C` refused (`OVMX_CFG2_PEER=1`, forced to the real coordinator); `s3D` refused / `s6A` joined = the matched SCACP pair (§4d.9). **Last SCSSYSTEMID used: 1247.**
 
 Run tags session i: `ctl1`, `inc1`, `inc2`, `fresh1`, `fresh2`, `keyB`, `keyC`,
 `rej2`, `rej3`. Session j: `g1A` (joined), `g1B` (refused, SDA-polled), `p1A`

@@ -137,19 +137,51 @@ static int get_iface_hwaddr(const char *ifname, uint8_t mac_out[6])
 /*
  * resolve_node_identity - Read SCSNODE from the SYSGEN store (vms-ci.8;
  * sysgen_read_string honors OVMX_SYSGEN_PATH). Falls back to "OVMX" if
- * unconfigured or the store is missing -- matches the pre-vms-ci.8
- * hardcoded default noted in docs/design-cluster-node.md sec 6.
+ * NOTHING is configured -- the documented default in
+ * docs/design-cluster-node.md sec 6.
+ *
+ * vms-2f3 2026-08-01 -- BUT NEVER WHEN A STORE WAS EXPLICITLY NAMED.
+ * This used to fall back silently in every failure mode, and it cost a
+ * session. `oneshot.sh` cd's to the repo root before exec'ing SCSD, so a
+ * RELATIVE OVMX_SYSGEN_PATH silently resolved to nothing -- and five lab runs
+ * that were supposed to be five distinct fresh identities all went on the wire
+ * as the SAME node "OVMX". The "fresh identity" positive controls were
+ * therefore rejoins of one identity, the refusals they were meant to validate
+ * proved nothing, and a whole hypothesis was refuted on the strength of them.
+ * The peers were never confused: they read exactly what we sent.
+ *
+ * A wrong identity on the wire is the INV-6 silent-fallback bug class that
+ * CLAUDE.md rule 9 exists to kill, one layer up from /dev/vms: if the operator
+ * pointed us at a store and we could not read it, the honest answer is to die,
+ * not to invent a name and advertise it to a live cluster.
+ *
+ * Returns 0 on success, -1 if a named store could not be read (fatal).
  */
-static void resolve_node_identity(char *node_out, size_t node_out_len)
+static int resolve_node_identity(char *node_out, size_t node_out_len)
 {
     char configured[SYSGEN_STRVAL_LEN];
     if (sysgen_read_string("SCSNODE", configured, sizeof(configured)) == 0 && configured[0] != '\0') {
         strncpy(node_out, configured, node_out_len - 1);
         node_out[node_out_len - 1] = '\0';
-    } else {
-        strncpy(node_out, "OVMX", node_out_len - 1);
-        node_out[node_out_len - 1] = '\0';
+        return 0;
     }
+    const char *named = getenv("OVMX_SYSGEN_PATH");
+    if (named != NULL && named[0] != '\0') {
+        fprintf(stderr,
+                "SCSD-F-NOIDENT, OVMX_SYSGEN_PATH='%s' names a SYSGEN store but"
+                " SCSNODE could not be read from it.\n"
+                "                Refusing to fall back to the default node name"
+                " -- advertising a node identity the operator did not configure\n"
+                "                puts a false name on a live cluster wire."
+                " Check the path (it is resolved from the CURRENT WORKING\n"
+                "                DIRECTORY, and SCSD may not share yours -- use an"
+                " absolute path) and that the store carries SCSNODE.\n",
+                named);
+        return -1;
+    }
+    strncpy(node_out, "OVMX", node_out_len - 1);
+    node_out[node_out_len - 1] = '\0';
+    return 0;
 }
 
 /*
@@ -182,6 +214,23 @@ static uint16_t resolve_scssystemid(void)
     uint32_t v = 0;
     if (sysgen_read_param("SCSSYSTEMID", &v) == 0 && v != 0) {
         return (uint16_t)(v & 0xffffu);
+    }
+    /* vms-2f3: same silent-fallback trap as resolve_node_identity -- see the
+     * comment there. The identity pair must fail together: VSI OpenVMS Cluster
+     * Systems App. A documents that SCSNODE and SCSSYSTEMID may not be changed
+     * independently without rebooting the whole cluster, so silently defaulting
+     * ONE half while the other is configured is worse than defaulting both.
+     * resolve_node_identity() has already made this fatal for a named store, so
+     * reaching here with OVMX_SYSGEN_PATH set means SCSNODE read fine and only
+     * SCSSYSTEMID is missing -- still an incoherent identity. */
+    const char *named = getenv("OVMX_SYSGEN_PATH");
+    if (named != NULL && named[0] != '\0') {
+        fprintf(stderr,
+                "SCSD-W-NOSYSID, OVMX_SYSGEN_PATH='%s' carries SCSNODE but no"
+                " usable SCSSYSTEMID; using the default %u.\n"
+                "                The identity pair is now half-configured --"
+                " peers key their CSBs on BOTH halves.\n",
+                named, (unsigned)OVMX_DEFAULT_SCSSYSTEMID);
     }
     return OVMX_DEFAULT_SCSSYSTEMID;
 }
@@ -1998,7 +2047,10 @@ int main(int argc, char **argv)
     /* OVMX identity for the phase-2 START/config body (vms-21e). Resolved once;
      * shared by every peer's START responder. */
     char ovmx_node[SYSGEN_STRVAL_LEN];
-    resolve_node_identity(ovmx_node, sizeof(ovmx_node));
+    if (resolve_node_identity(ovmx_node, sizeof(ovmx_node)) != 0) {
+        close(sock);
+        return 1;
+    }
     uint16_t ovmx_scssystemid = resolve_scssystemid();
     /* vms-9f3: OVMX's cluster-LOGICAL LAVC address, computed ONCE from its own
      * SCSSYSTEMID (aa:00:04:00:<LE16(sysid)>). Written at the SCA src-logical
@@ -2017,7 +2069,10 @@ int main(int argc, char **argv)
         }
 
         char node_name[SYSGEN_STRVAL_LEN];
-        resolve_node_identity(node_name, sizeof(node_name));
+        if (resolve_node_identity(node_name, sizeof(node_name)) != 0) {
+            close(sock);
+            return 1;
+        }
         uint16_t group = resolve_cluster_group();
 
         memcpy(our_hw_mac, hw_mac, 6);

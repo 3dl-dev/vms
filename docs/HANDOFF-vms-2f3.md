@@ -4,9 +4,12 @@
 doctrine — it held again this session: every finding below came from agents or
 from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 
-> **Start at §0. §5 is what to do next.** §1–§4 exist so you do not re-derive
-> them — in particular §3, which is a list of things that look like the answer
-> and are not.
+> **START AT §4c.2b — it is the newest and it supersedes §0, §4b and §5 items
+> 1–2.** §1–§4 exist so you do not re-derive them, in particular §3 (things that
+> look like the answer and are not). §0 and §4b below are kept as written on
+> 2026-08-01 morning and are **partly superseded**: the join limp they describe
+> is real but is now FIXED by `OVMX_PURE_SERVER=1`, and the rejoin survives that
+> fix. §7 guardrails 18–19 are the most transferable thing here.
 
 ---
 
@@ -40,7 +43,8 @@ reset.**
 | **OVMX's successful joins are healthy** | **REFUTED — they are rescued by our own retry** | `fresh1` vs af2 |
 | the coordinator stalls before commit | **REFUTED — it acks in 0.4-0.7 ms. The silence is OURS** | `g1A`/`g1B`, §4c.1 |
 | `Ref. time` (`own_admission`) is the cause | **REFUTED — real joiners send the same sentinel** | census, §4c.4 |
-| the `amsg=0` / bundled `op 0x02` is the cause | **REFUTED BY EXPERIMENT — the correct shape draws NO reply** | `p1A`, §4c.2 |
+| the `amsg=0` / bundled `op 0x02` is the cause **of the limp** | **CONFIRMED — pure mode removes it; first reference-shaped join** | `r1A` vs `r2A`, §4c.2b |
+| …and is the cause **of the rejoin refusal** | **REFUTED — pure mode joins clean and STILL cannot rejoin** | `r2A`/`r2B`, §4c.2b |
 | which peer completes START first | **REFUTED — both orderings in successes and failures** | §4c.5 |
 
 ## 1. The reproducer — four minutes, no reset
@@ -66,9 +70,26 @@ bash $ONE ctlB $CL/work/sysgen-X.dat 130     # expect: waitnodes FAILED, XITDONE
 `SHOW CLUSTER` dump into `work/<tag>.status`. Every fresh identity still joins
 no matter how many dead CSBs have piled up, so the lab does not saturate the way
 the 2026-07-30 session feared — but do reset before a run you intend to publish.
+(Re-confirmed 2026-08-01 pm: `OVMXR1` and `OVMXR2` both joined in <35 s on a lab
+carrying several days of dead CSBs. **If a fresh identity is refused, suspect
+your harness, not the lab** — see §4c.2b.)
 
-**Always run the positive control in the same session as the negative one.** Two
-of this session's four hypotheses would have survived without it.
+> ### ⚠ PASS AN ABSOLUTE STORE PATH
+> `oneshot.sh` `cd`s to the OVMX repo root, so a **relative** `sysgen` path
+> silently resolved to nothing and SCSD fell back to the default node name
+> `"OVMX"` — five "distinct fresh identities" all went on the wire as one node
+> and three results were invalid before a failing control exposed it (§4c.2b).
+> Both holes are now fixed (SCSD is fatal on an unreadable named store;
+> `oneshot.sh` refuses to run without a readable one), but **verify the identity
+> reached the wire anyway**:
+> ```bash
+> strings -a work/d94-<tag>.pcap | grep -oE 'OVMX[A-Z0-9]{2}' | sort -u
+> ```
+
+**Run the positive control immediately BEFORE each negative — not once per
+session — and confirm which identity it controlled for.** Three of this
+session's hypotheses would have survived without controls, and one *survived
+wrongly* because the control was stale.
 
 ## 2. The one instrument that mattered
 
@@ -259,7 +280,85 @@ a retry timer fires. Our own instrumentation has been saying so all along —
 **Do not describe this as a coordinator stall again.** The window to explain is
 `op 0x04` + re-sent `op 0x01` → our reply, and we are the one who is late.
 
-### 4c.2 REFUTED BY EXPERIMENT: the `amsg=0` / bundled-burst ordering
+### 4c.2 ⚠ RETRACTED — this section was wrong, and the reason matters more than the claim
+
+> **An earlier revision of §4c.2 claimed `OVMX_PURE_SERVER=1` was refuted by
+> experiment. THAT WAS AN ARTIFACT OF A BROKEN HARNESS. The opposite is true:
+> pure mode produces the first reference-shaped join OVMX has ever made.** The
+> original text is kept below, struck, because the failure mode is instructive.
+>
+> **The harness bug.** `oneshot.sh` `cd`s to the OVMX repo root before exec'ing
+> SCSD, and I passed **relative** store paths. `OVMX_SYSGEN_PATH` never resolved,
+> and `resolve_node_identity()` **silently fell back to the hardcoded default
+> `"OVMX"`**. Five runs meant to be five distinct fresh identities all went on
+> the wire as **one node**. `grep -c OVMXC9 d94-c9A.pcap` = **0**. So every
+> "fresh identity positive control" after the first was really a *rejoin of the
+> same identity* — i.e. it was reproducing `vms-2f3` exactly while I read it as
+> "pure mode fails" and then as "the lab has saturated". Both readings were
+> wrong. The peers were never confused; they read precisely what we sent.
+>
+> **Both defects are now fixed** (this commit): `resolve_node_identity()` is
+> fatal when `OVMX_SYSGEN_PATH` names a store it cannot read — a wrong node name
+> on a live cluster wire is the INV-6 silent-fallback class that CLAUDE.md rule 9
+> exists to kill, one layer up from `/dev/vms` — and `oneshot.sh` resolves the
+> store to an absolute path and refuses to run without it.
+>
+> **Guardrail 14 caught this, and only just.** The rule says run the positive
+> control in the same session as the negative one. I ran one at the *start* and
+> not after, so three invalid runs accumulated before the failing control exposed
+> it. **Strengthened: run the positive control immediately BEFORE each negative,
+> and verify the identity actually reached the wire** —
+> `strings -a work/d94-<tag>.pcap | grep -oE 'OVMX[A-Z0-9]{2}' | sort -u`.
+> A control that does not prove *which node* it controlled for is not a control.
+
+### 4c.2b THE VALIDATED RESULT — pure mode fixes the join, and not the rejoin
+
+Re-run with absolute paths, controls verified on the wire, all within 8 minutes
+on one lab:
+
+| run | identity | mode | result |
+|---|---|---|---|
+| `r1A` | `OVMXR1` (fresh) | default | **joined**, 32 s |
+| `r2A` | `OVMXR2` (fresh) | `OVMX_PURE_SERVER=1` | **joined**, 27 s |
+| `r2B` | `OVMXR2` **again**, +3 min | `OVMX_PURE_SERVER=1` | **REFUSED** |
+
+And pure mode's join is **shaped like a real node's for the first time**:
+
+| | `r1A` default | `r2A` pure |
+|---|---|---|
+| coordinator's `cat 0x01 op 0x04` re-advertisement | **present** | **absent** |
+| peer console `proposed addition of node …` | **twice**, 9.5 s apart | **once** |
+| joiner directory + MSCP disk-discovery run (`PSCLIENT`) | **0** | **33** |
+| `SCSD-W-STRAYACK` 6-second-late replies | 9 | 7 |
+
+**§4b's reframe is therefore CONFIRMED and simultaneously ANSWERED.** The join
+*was* limping — the coordinator re-advertised and we replied on a retry timer —
+and the limp is gone in a mode that has existed in the tree all along. The
+coordinator proposes our addition **once** and it sticks, exactly as it does for
+a real node. Agent A's §4c.8 checklist was right on every point; what was wrong
+was my test of it.
+
+**And the rejoin is still refused, with a valid control.** That is now a clean
+separation rather than a caveat: **making the join reference-correct does not
+make the rejoin work.** `vms-2f3` is not "our join is malformed". It is
+coordinator-side state keyed on our identity, and §4c.3's byte-identical retry
+frames say the same thing from the other direction.
+
+**Consequences for the next session:**
+1. **`OVMX_PURE_SERVER` should become the default path** — it is the grounded
+   one, it removes the retry-rescue accident, and it runs the disk discovery a
+   real joiner runs. That is a design change and owes the CLAUDE.md cascade; it
+   is filed rather than flipped here, because `vms-2f3` should not be the item
+   that silently changes the join path. See `vms-785`.
+2. **§4c.8 is no longer an unexplored lead — it is implemented and it runs.**
+   `PSCLIENT` fires 33 times in pure mode and the sequence completes. What is
+   *not* established is whether the disk-discovery run is what removed the
+   `op 0x04` re-advertisement, or whether the `op 0x02` shape did. Two variables
+   moved together. Bisecting them is one cheap run each.
+3. **Re-test the rejoin against the pure-mode baseline**, not the default one.
+   Every earlier rejoin datum was taken on the limping path.
+
+<details><summary>Original (wrong) §4c.2 text, kept for the reasoning</summary>
 
 The pre-commit diff agent produced a well-evidenced root cause: OVMX bundles
 `op 0x02` into the opening burst (three frames in one microsecond, leaving the
@@ -289,6 +388,8 @@ only) is **already implemented and already tested and does not work**.
 Caveat kept honest: pure mode changes several things at once, so this refutes
 "the pure-server shape fixes the stall", not the narrower claim "`amsg` matters".
 But the narrower claim now has no path to a fix that we have not already run.
+
+</details>
 
 ### 4c.3 The refusal is coordinator-side state — proven, not inferred
 
@@ -394,16 +495,20 @@ strongest remaining lead — see §5.**
 > stall") is wrong — the silence is ours. Item 3 has been executed; its result is
 > §4c.6. **Start from §4c.8, then item 4.**
 >
-> **The live question: what does OVMX owe the coordinator in reply to `op 0x04` +
-> the re-sent `op 0x01`, that a real joiner has already done by then?** The
-> leading candidate is the directory + MSCP client run (§4c.8) — the only real
-> joiner behaviour we have grounded and never implemented. Implementing it is a
-> real piece of work, not a byte fix, and it is testable in four minutes.
+> **UPDATE — the join half is DONE and the two outcomes are now separated by
+> experiment, not by guess (§4c.2b).** `OVMX_PURE_SERVER=1` produces a
+> reference-shaped join: the coordinator proposes our addition **once**, never
+> re-advertises with `cat 0x01 op 0x04`, and the disk-discovery run executes. The
+> same identity, three minutes later, is **still refused**. So:
 >
-> **And keep the two outcomes separate.** Byte-identical frames get opposite
-> answers (§4c.3), so making our join *healthy* and making the *rejoin* work may
-> be two different fixes. Fix the join first — it is the one we can still observe
-> going right.
+> 1. **Baseline everything on pure mode from now on.** Every rejoin datum in this
+>    document older than `r2B` was taken on the limping default path.
+> 2. **`vms-785`** — promote pure mode to the default, with the design cascade.
+> 3. **Bisect what actually fixed the join** — the `op 0x02` shape or the
+>    disk-discovery run. They moved together. One cheap run each.
+> 4. **Then attack the rejoin as its own defect**: coordinator-side CSB state
+>    keyed on our identity. The question is what makes a peer RETIRE or REUSE a
+>    `long_break` CSB, and SDA is the instrument (§4c.6), not the wire.
 
 **Historical framing, kept for the reasoning only:**
 
@@ -472,6 +577,17 @@ takes cannot show that nothing moves.
     before you write it, and run the experiment before you commit it.** This is
     guardrail 13 with the cost inverted: cheap oracles beat expensive analysis
     not only for *refuting* claims but for *acting* on them.
+18. **A positive control must prove WHICH identity it controlled for.** Guardrail
+    14 said run the control in the same session. Not enough: I ran one at the
+    start, then three runs whose "fresh identities" never reached the wire at all
+    because a relative `OVMX_SYSGEN_PATH` silently fell back to the default node
+    name. Three invalid results accumulated, and I wrote a refutation on them.
+    **Run the control immediately before each negative, and verify the identity
+    on the wire** — `strings -a work/d94-<tag>.pcap | grep -oE 'OVMX[A-Z0-9]{2}'`.
+19. **Suspect the harness before the theory when a control fails.** A failing
+    positive control means *the experiment is broken*, and "the lab saturated" is
+    the seductive wrong answer because it explains the data and requires nothing
+    of you. The lab was fine. Check what you actually put on the wire first.
 17. **Measure the window you are actually naming.** §4b asserted a coordinator
     stall for a whole session. The coordinator's response latency was 0.4 ms and
     had been in our own logs the entire time; the 6.5 s belonged to the next

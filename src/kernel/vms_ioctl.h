@@ -694,27 +694,7 @@ struct vms_procinfo {
     char     prcnam[VMS_PRCNAM_SIZE];   /* process name ("" if unnamed) */
     uint32_t uic;                       /* (group << 16) | member */
     uint8_t  current_mode;              /* PSL_C_KERNEL..PSL_C_USER */
-    /*
-     * REDACTION IS DECLARED, NOT INFERRED (vms-8019 round 4).
-     *
-     * A row the caller may not $GETJPI comes back with every identity
-     * field zeroed (see the vms_procscan_args comment below). A reader
-     * that has to GUESS whether a zero means "withheld" or "genuinely
-     * zero" will eventually guess wrong, and the first reader already
-     * did: src/vmsdcl/dcl_cmd_show.c passed the zeroed linux_pid to
-     * /proc, got a failure it did not check, and printed the CPU time
-     * its own buffer happened to be initialised with -- a fabricated
-     * accounting value for a process whose accounting the caller is
-     * FORBIDDEN to read. That is the fabrication class this item
-     * exists to delete, so the executive now says so in the row.
-     *
-     * 1 = identity fields (linux_pid, uic, current_mode, privilege
-     * masks, username) were withheld; only vms_pid and prcnam are
-     * present. Occupies a byte of the existing padding, so the ioctl
-     * ABI is unchanged -- the _Static_asserts below still hold.
-     */
-    uint8_t  redacted;
-    uint8_t  pad[2];
+    uint8_t  pad[3];
     uint64_t cur_privs;                 /* current (process) privileges */
     uint64_t perm_privs;                /* authorized (permanent) privileges */
     char     username[VMS_USERNAME_SIZE]; /* "" until an identity is stamped */
@@ -783,9 +763,6 @@ struct vms_getjpi_args {
  * close. linux_pid is zeroed too: it is an OVMX implementation handle
  * with no VMS counterpart, so there is no measurement making it
  * visible.
- *
- * info.redacted is set to 1 on such a row so the reader KNOWS the
- * fields are withheld rather than inferring it from a zero.
  */
 struct vms_procscan_args {
     uint32_t index;             /* in: cursor; out: cursor for next call */

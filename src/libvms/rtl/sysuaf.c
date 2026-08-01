@@ -138,12 +138,11 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
  *
  * So a SYSUAF row with no password on file is not a state OpenVMS treats
  * as "no password required" -- it is not a state OpenVMS reaches at all:
- * AUTHORIZE ADD without /PASSWORD generates and prints a random password
- * rather than leaving the field blank, and the only account that can skip
- * the password prompt is one explicitly flagged AUTOLOGIN (and even then
- * only from its bound terminal/batch/proxy path, which OVMX does not
- * implement). This is candidate (a): MATCH VMS by making "no hash on
- * file" mean the account cannot authenticate at all. It is also the HIDE
+ * the only account that can skip the password prompt is one explicitly
+ * flagged AUTOLOGIN (and even then only from its bound terminal/batch/
+ * proxy path, which OVMX does not implement). This is candidate (a):
+ * MATCH VMS by making "no hash on file" mean the account cannot
+ * authenticate at all. It is also the HIDE
  * IT half of Rule 10 for OVMX specifically -- until AUTOLOGIN gating
  * exists, "authenticate with an unset hash" is not a condition this
  * function may handle; it must be unreachable, so every unset-hash

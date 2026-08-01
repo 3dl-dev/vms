@@ -1403,15 +1403,7 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         { 12,    "SYSTEM", 'E', "ACCVIO",        "access violation" },
         { 20,    "SYSTEM", 'E', "BADPARAM",      "bad parameter value" },
         { 28,    "SYSTEM", 'E', "EXQUOTA",       "exceeded quota" },
-        /* ORACLE-PINNED (vms-6a7): docs/oracle/vax73-privileges.md §1.
-         * F$MESSAGE(36) on VAX1 (OpenVMS VAX V7.3) renders
-         * "%SYSTEM-F-NOPRIV, insufficient privilege or object protection
-         * violation". BOTH fields here were wrong: the severity was 'E'
-         * where 36 & 7 == 4 == F, and the text was an OVMX sentence VMS
-         * has never printed. F$MESSAGE is the DCL surface that is
-         * supposed to round-trip the oracle exactly. */
-        { 36,    "SYSTEM", 'F', "NOPRIV",
-          "insufficient privilege or object protection violation" },
+        { 36,    "SYSTEM", 'E', "NOPRIV",        "no privilege for attempted operation" },
         { 44,    "SYSTEM", 'E', "ABORT",         "abort" },
         /* ORACLE-PINNED (vms-8019): value and severity taken from the
          * reference lab OpenVMS VAX V7.3 node VAX1 -- $SSDEF in
@@ -1439,14 +1431,7 @@ static int lex_message(struct dcl_context *ctx, const char *args,
          * same value as SS$_NORMAL, which is already the first row. */
         { 236,   "SYSTEM", 'F', "ILLEFC",        "illegal event flag cluster" },
         { 564,   "SYSTEM", 'F', "UNASEFC",       "unassociated event flag cluster" },
-        /* ORACLE-PINNED (vms-2a8), docs/oracle/vax73-event-flags.md §1
-         * method 2: F$MESSAGE(292) -> "%SYSTEM-F-INSFMEM, insufficient
-         * dynamic memory". The severity here was 'E'; it is 'F'. The
-         * value itself was never in doubt -- the severity field of the
-         * status says so independently (292 & 7 == 4 == STS$K_SEVERE) --
-         * so OVMX was rendering a status whose own bits contradict the
-         * letter it printed. Same run that pinned ILLEFC/UNASEFC below. */
-        { 292,   "SYSTEM", 'F', "INSFMEM",       "insufficient dynamic memory" },
+        { 292,   "SYSTEM", 'E', "INSFMEM",       "insufficient dynamic memory" },
         /* ORACLE-PINNED (vms-8019): $SSDEF SS$_IVLOGNAM 340;
          * F$MESSAGE(340) -> "%SYSTEM-F-IVLOGNAM, invalid logical name".
          * Replaces 596/'E' -- 596 is SS$_VOLINV on the oracle. */

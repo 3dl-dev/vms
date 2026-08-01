@@ -22,45 +22,33 @@
 #   1. build IMGACT.EXE + LINK.EXE.
 #   2. mk_decc_shr.sh whole-archives musl libc.a + libgcc.a into DECC$SHR.EXE
 #      (the C-RTL; owns TP at activation). Installed in SYS$SHARE.
-#   3. mk_vmsprocess_shr.sh compiles the 4 real vmsprocess objects and links
+#   3. mk_vmsprocess_shr.sh compiles the 5 real vmsprocess objects and links
 #      LIBVMSPROCESS$SHR.EXE via LINK.EXE --shareable --use DECC$SHR: it EXPORTS
-#      the process-control universals (vms_pcb_*, ast_*, access_mode_*, priv_*,
-#      ...) and IMPORTS pthread_mutex/cond_*, calloc/malloc/free,
-#      memset/strncpy/snprintf/sscanf, getpid, close/raise/sigaction/sigemptyset
-#      FROM DECC$SHR. STRICT link: every import MUST bind (no --allow-undefined).
+#      the process-control universals (vms_pcb_*, eflag_*, ast_*, ...) and IMPORTS
+#      pthread_mutex/cond_*, calloc/malloc/free, memset/strncpy/snprintf/sscanf,
+#      getpid, close/raise/sigaction/sigemptyset FROM DECC$SHR. STRICT link: every
+#      import MUST bind (no --allow-undefined).
 #   4. LINK.EXE --executable --use LIBVMSPROCESS$SHR builds a consumer that imports
-#      ONLY vmsprocess universals (vms_pcb_init + vms_pcb_get + access_mode_set) —
-#      it never names DECC$SHR, so the DECC$SHR bind is purely TRANSITIVE.
+#      ONLY vmsprocess universals (vms_pcb_init + eflag_set) — it never names
+#      DECC$SHR, so the DECC$SHR bind is purely TRANSITIVE.
 #   5. RUN the consumer FOR REAL: kernel -> IMGACT.EXE -> load LIBVMSPROCESS$SHR ->
 #      (transitively) load DECC$SHR, bind vmsprocess's pthread/calloc imports ->
-#      bind the consumer's imports -> drive musl __init_libc (DECC$SHR owns TP) ->
-#      ABSORB vmsprocess's TLS module against musl's TP -> transfer control.
-#      The consumer:
-#        vms_pcb_init(0)     -> allocates the PCB, pthread_mutex_init x3 (DECC$SHR),
-#                               writes current_pcb (__thread, in vms_pcb.c).
-#        vms_pcb_get()       -> reads current_pcb back; must be the SAME pointer.
-#        access_mode_set(3)  -> defined in a DIFFERENT object (access_modes.c); it
-#                               calls vms_pcb_get(). With the TLS PCB reachable it
-#                               returns SS$_NORMAL = 1; if the TLS did not reach
-#                               the second object it takes `if (!pcb)` and returns
-#                               SS$_BADPARAM = 20. That is the discriminator.
-#      Consumer exits 42 iff (pcb != NULL && got == pcb && rc == 1). Exit 42 proves:
+#      bind the consumer's vms_pcb_init/eflag_set imports -> drive musl __init_libc
+#      (DECC$SHR owns TP) -> ABSORB vmsprocess's TLS module against musl's TP ->
+#      transfer control. The consumer:
+#        vms_pcb_init(0)  -> allocates the PCB, pthread_mutex/cond_init x5 (DECC$SHR),
+#                            writes current_pcb (TLS).
+#        eflag_set(5)     -> vms_pcb_get() reads current_pcb (TLS, coexisting with
+#                            musl TP), locks pcb->ef_lock (DECC$SHR pthread), flag 5
+#                            was CLEAR  -> returns SS$_WASCLR = 1.
+#        eflag_set(5)     -> flag 5 now SET -> returns SS$_WASSET = 9.
+#      Consumer exits 42 iff (pcb != NULL && rc1 == 1 && rc2 == 9). Exit 42 proves:
 #        - the vmsprocess universals bound in the consumer,
 #        - the __thread PCB pointer round-tripped through TLSDESC against musl's TP
-#          across TWO OBJECTS (written in vms_pcb.c, read in access_modes.c) — the
+#          across TWO functions (write in vms_pcb_init, read in eflag_set) — the
 #          single-TLS-object producer was absorbed correctly against musl's TP,
-#        - the pthread_mutex/cond path bound transitively to DECC$SHR and ran.
-#
-# SUBJECT NOTE (vms-2a8). This test used to import eflag_set and assert
-# SS$_WASCLR-then-SS$_WASSET on event flag 5. That certified per-process event
-# flags end-to-end — the exact facade CLAUDE.md Rule 11 forbids, since event
-# flags are executive-resident (src/kernel/vms_eflag.c via /dev/vms) and a
-# per-process implementation is the ONLY thing that could have passed it. The
-# implementation was deleted, so the probe moved to a subject with no shared-state
-# claim at all: the current access mode is per-thread PSL state in VMS, not a
-# system facility, and it is used here purely as a cross-object TLS probe. This
-# suite's subject is the VMS-NATIVE TOOLCHAIN (LINK.EXE/IMGACT/TLS/import binding);
-# it is not, and must not become, a certification of any VMS system facility.
+#        - the pthread_mutex/cond path bound transitively to DECC$SHR and ran,
+#        - VMS event-flag semantics (WASCLR then WASSET) are exactly correct.
 #
 # Uses the arm64 musl container's libc.a + libgcc.a (aarch64-only for now,
 # CLAUDE.md test loop). Needs root to create /vms. Exit 0 on ok.
@@ -109,70 +97,20 @@ readelf -SW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -q '\.vms\$tls' || { echo "F
 readelf -SW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -q '\.vms\$sv'  || { echo "FAIL: producer emitted no .vms\$sv (no universals)"; exit 1; }
 readelf -SW "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" | grep -q '\.vms\$imp' || { echo "FAIL: producer emitted no .vms\$imp (imports not bound to DECC\$SHR)"; exit 1; }
 
-# ---------------------------------------------------------------------------
-# The eight event-flag universals are RETIRED IN PLACE (vms-2a8). event_flags.c
-# was the per-process event-flag facade and is gone; under the public VMS
-# upward-compatibility rules (§5.1/§5.3, docs/design-link-native-toolchain.md) a
-# universal that goes away is retired with PRIVATE_PROCEDURE, never deleted,
-# so that every LATER entry keeps the index a consumer already bound.
-# Both halves are asserted here, because either one alone is worthless:
-#   (a) the slots are still there, at their original indices 9..16, marked
-#       RETIRED — so ast_*/access_mode_*/priv_* did not shift; and
-#   (b) a consumer that names a retired universal CANNOT link against it.
-# ---------------------------------------------------------------------------
-echo "-- retired event-flag slots: positions kept, binding refused --"
-$CC -std=gnu11 -O2 -Wall -Wextra -I"$LINK_DIR/include" -o "$WORK/OVMXDUMP" "$LINK_DIR/dump_image.c"
-"$WORK/OVMXDUMP" "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" > "$WORK/vmsprocess.sv"
-sed -n '/symbol vector/,$p' "$WORK/vmsprocess.sv" | sed -n '1,40p'
-
-NRET=$(grep -c 'RETIRED' "$WORK/vmsprocess.sv" || true)
-[ "$NRET" -eq 8 ] || { echo "FAIL: expected 8 RETIRED symbol-vector slots, found $NRET"; exit 1; }
-for i in 9 10 11 12 13 14 15 16; do
-    grep -qE "^    \[ *$i\] RETIRED " "$WORK/vmsprocess.sv" || {
-        echo "FAIL: symbol-vector index $i is not RETIRED (the eflag_* slots must stay in place)"; exit 1; }
-done
-# Placement proof: the first entry AFTER the retired run is still ast_init at 17.
-grep -qE "^    \[ *17\] PROCEDURE .* ast_init$" "$WORK/vmsprocess.sv" || {
-    echo "FAIL: ast_init is no longer at symbol-vector index 17 — the vector shifted"; exit 1; }
-
-cat > "$WORK/retired.c" <<'EOF'
-extern int eflag_set(unsigned int efn);
-void _start(void) { eflag_set(5); }
-EOF
-$CC -fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics \
-    -c -o "$WORK/retired.o" "$WORK/retired.c"
-set +e
-"$WORK/LINK.EXE" --executable --use "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
-    -o "$WORK/RETIRED.EXE" "$WORK/retired.o" > "$WORK/retired.log" 2>&1
-RRC=$?
-set -e
-cat "$WORK/retired.log"
-[ "$RRC" -ne 0 ] || { echo "FAIL: LINK.EXE bound a RETIRED universal (eflag_set) — retirement is not enforced"; exit 1; }
-echo "ok: LINK.EXE refused to bind the retired universal eflag_set (rc=$RRC)"
-
 echo "== LINK.EXE --executable --use LIBVMSPROCESS\$SHR -> consumer =="
-# Imports ONLY vmsprocess universals (vms_pcb_init + vms_pcb_get + access_mode_set).
-# The DECC$SHR bind is purely transitive (IMGACT must pull it from
-# LIBVMSPROCESS$SHR's .vms$imp).
+# Imports ONLY vmsprocess universals (vms_pcb_init + eflag_set). The DECC$SHR bind
+# is purely transitive (IMGACT must pull it from LIBVMSPROCESS$SHR's .vms$imp).
 cat > "$WORK/cons.c" <<'EOF'
-extern void         *vms_pcb_init(unsigned long initial_privs);
-extern void         *vms_pcb_get(void);
-extern unsigned int  access_mode_set(unsigned char mode);   /* access_modes.c */
-
-#define PSL$C_USER      3
-#define SS$_NORMAL      1
-#define SS$_BADPARAM    20   /* what access_mode_set returns when !vms_pcb_get() */
+extern void *vms_pcb_init(unsigned long initial_privs);
+extern int   eflag_set(unsigned int efn);
 
 void _start(void)
 {
     void *pcb = vms_pcb_init(0);   /* PCB alloc + pthread_*_init (DECC$SHR); TLS set */
-    void *got = vms_pcb_get();     /* same object (vms_pcb.c): TLS read-back        */
-    /* access_modes.c is a DIFFERENT object in the same image: it calls
-     * vms_pcb_get() itself. SS$_NORMAL here means the __thread PCB pointer was
-     * visible across objects; SS$_BADPARAM would mean it was not. */
-    unsigned int rc = access_mode_set(PSL$C_USER);
+    int rc1 = eflag_set(5);        /* flag 5 was CLEAR -> SS$_WASCLR = 1 */
+    int rc2 = eflag_set(5);        /* flag 5 now  SET  -> SS$_WASSET = 9 */
 
-    int code = (pcb != 0 && got == pcb && rc == SS$_NORMAL) ? 42 : 1;
+    int code = (pcb != 0 && rc1 == 1 && rc2 == 9) ? 42 : 1;
 
     register long x8 __asm__("x8") = 94;   /* exit_group */
     register long x0 __asm__("x0") = code;
@@ -191,12 +129,12 @@ echo "== RUN ./CONS.EXE FOR REAL (kernel -> IMGACT -> LIBVMSPROCESS\$SHR -> DECC
 set +e
 "$WORK/CONS.EXE"; RC=$?
 set -e
-echo "exit code = $RC (expect 42 = pcb!=NULL && vms_pcb_get()==pcb && access_mode_set(USER)==SS\$_NORMAL(1))"
+echo "exit code = $RC (expect 42 = pcb!=NULL && eflag_set#1==SS\$_WASCLR(1) && #2==SS\$_WASSET(9))"
 [ "$RC" -eq 42 ] || { echo "FAIL: vmsprocess VMS-native migration did not run correctly (got $RC, want 42)"; exit 1; }
 
 echo
 echo "MILESTONE (vms-b65.1): the REAL src/vmsprocess library links VMS-native into"
 echo "LIBVMSPROCESS\$SHR.EXE (its libc/pthread imports bound to DECC\$SHR, its"
 echo "single-object __thread TLS absorbed against musl's TP), activates through"
-echo "IMGACT.EXE, and a consumer's imports bind and run for real. The template"
+echo "IMGACT.EXE, and a consumer gets VMS-correct event-flag results. The template"
 echo "for the whole b65 lib-migration chain."

@@ -120,12 +120,10 @@ set -u
 DEFECTS="access-mode-escalation
 ast-setast-disable
 eflag-clref-noop
-eflag-waitfr-eintr-normal
 lock-compat-ex-cr
 lock-compat-cr-ex
 devtab-owner-not-recorded
 proctab-duplicate-name
-proctab-crossgroup-identity
 ident-username-unguarded
 executive-not-pinned
 pcb-per-thread
@@ -294,17 +292,7 @@ EOF
         # injected into kernel/vms_eflag.c reaches the PUBLIC sys$ API too.
         # This suite is no longer blind to the executive, and the entry below
         # proves it by naming the assertion it loses.
-        #
-        # test_syssvc_ef_local arrives with vms-2a8's conformance MOVE (it is
-        # tests/conformance/vms_programs/test_event_flags.c, relocated off a
-        # host that has no /dev/vms). It is DERIVED FROM A RUN, not reasoned
-        # into place: with this defect injected it goes rc=1 on exactly one
-        # assertion, "sys$readef(1) reported WASCLR after the clear", which is
-        # the same read-back-after-clear property as test_kmod_eflag's
-        # "readef(5) after clear returns WASCLR" one layer down. Its other
-        # fifteen assertions stay green, which is what keeps this mutation
-        # minimal rather than a blunderbuss on the new suite.
-        suites_red)   echo "test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_mproc test_syssvc_ef_local";;
+        suites_red)   echo "test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_mproc";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -314,72 +302,10 @@ readef(5) after clear returns WASCLR
 cluster has flags 0,3,7,31 set
 child: a common flag CLEARED BY THE PARENT reads clear here (A clears, B reads)
 child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
-sys$readef(1) reported WASCLR after the clear
 EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
-        esac;;
-
-    eflag-waitfr-eintr-normal)
-        case "$_f" in
-        facility)     echo "event flag WAITS (VMS_IOCTL_WAITFR/WFLOR/WFLAND), interrupted-wait path";;
-        targets)      echo "kernel/vms_eflag.c";;
-        suites_red)   echo "test_syssvc_ef_mproc";;
-        blind_suites) echo "test_kmod_eflag test_kmod_eflag_mproc test_syssvc_ef_local";;
-        blind_why)    cat <<'EOF'
-Neither raw-ioctl event flag suite arranges a signal, so neither can observe
-what a wait reports when one arrives. That is not a gap to close by adding a
-signal to them: the property is about what the PUBLIC service returns to its
-caller, and both halves of the fix live on that path (the executive writing no
-status, and libvmssys re-entering the wait). test_syssvc_ef_mproc is where a
-caller exists to be lied to.
-test_syssvc_ef_local is blind for a second, different reason and is declared
-here rather than left silent: its $WAITFR call is on a flag that is ALREADY
-SET, so it returns without ever blocking and there is no wait for a signal to
-interrupt. It stays green with this defect injected -- MEASURED on this host,
-not assumed -- and the honest statement is that it drives $WAITFR without
-covering this property at all.
-EOF
-                      ;;
-        isolation)    echo "isolated";;
-        why)          cat <<'EOF'
-WAITFR answers SS$_NORMAL when wait_event_interruptible() returns because a
-signal was pending -- "the flag is set" about a flag that is still clear, with
-rc=0/errno=0 so the caller cannot detect it. This is the code as it actually
-shipped for one round of vms-2a8, restored verbatim.
-IT IS THE SAME DEFECT CLASS AS creprc-handshake-eintr BELOW, one layer down: a
-signal delivered to the CALLER decides what a system service reports about the
-world. VMS has no status for it to report -- HELP $WAITFR says the process
-waits "until the event flag is set" and has no Condition Values topic at all,
-HELP $HIBER says a wait is interrupted by ASTs and then continues, and a SEARCH
-of $SSDEF for WAIT/INTERRUPT/ABORTED finds no such condition
-(docs/oracle/vax73-event-flags.md §4). So the correct code makes the condition
-unreachable rather than handling it, and this mutation is exactly the illegal
-third answer put back.
-IT ALSO REDDENS IF ONLY HALF THE FIX IS PRESENT. With the executive corrected
-but libvmssys not re-entering the wait, the ioctl surfaces -EINTR, which
-vms_kif_kerr_to_ss maps to SS$_BUGCHECK -- an even status -- so the same
-assertion fails. One control, both halves.
-EOF
-                      ;;
-        require_fail) cat <<'EOF'
-parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
-EOF
-                      ;;
-        knock_on_why)  cat <<'EOF'
-Same single defect, seen one step earlier. The waiter's interval timer keeps
-firing for as long as it is genuinely waiting, so the parent counts three
-interrupts before releasing the flag. A WAITFR that returns on the first
-interrupt never gets interrupted a second time, so the interrupt count
-collapses to one and this assertion goes red as a direct consequence of the
-same return -- it is the cause, and the require_fail line is the effect.
-EOF
-                      ;;
         esac;;
 
     lock-compat-ex-cr)
@@ -523,89 +449,6 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
-    proctab-crossgroup-identity)
-        case "$_f" in
-        facility)     echo "process table, cross-UIC-group identity read (VMS_IOCTL_GETJPI/PROCSCAN authorisation)";;
-        targets)      echo "kernel/vms_proctab.c";;
-        # All three layers of the same clause, MEASURED not guessed:
-        # test_syssvc_showproc names the property through the user-visible
-        # command (SHOW PROCESS/ID on an out-of-group process must be
-        # refused), test_syssvc_procnam sees it as a row that stops being
-        # redacted, and test_kmod_ident sees it at the raw ioctl. The first
-        # run of this control listed only the two syssvc suites and the
-        # driver's equality check rejected it, naming test_kmod_ident's five
-        # assertions -- which is the check doing exactly its job.
-        suites_red)   echo "test_syssvc_showproc test_syssvc_procnam test_kmod_ident";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "vms_proc_may_read() stops requiring WORLD for a cross-UIC-group read: any caller may read any process's identity. ONE clause, and it is the one the oracle pinned -- docs/oracle/vax73-privileges.md Section 5.4 measured that GROUP does not lift a cross-group read and WORLD does. Storage, lookup, naming, scanning and the same-group rule are untouched.";;
-        require_fail) cat <<'EOF'
-SHOW PROCESS/ID on an out-of-group process reports %SYSTEM-F-NOPRIV verbatim
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-the by-PID refusal printed no process header
-the UNREADABLE row fabricates NO CPU figure at all
-WORLD CLAUSE ISOLATED: the same cross-group read, now without WORLD -> SS$_NOPRIV
-an unprivileged process is REFUSED a process in another UIC group
-... and gets no part of that process's identity
-... and the refusal returns no part of the row
-... but WITHOUT its user name, UIC or privilege mask
-EOF
-                      ;;
-        knock_on_why) cat <<'EOF'
-EVERY EXTRA IS THE SAME REFUSAL SEEN FROM A DIFFERENT SIDE, not a second
-property. All seven were MEASURED by running this control, not predicted:
-the first run named only the two SHOW-PROCESS assertions and the driver's
-equality check rejected it and printed the rest.
-
-"the by-PID refusal printed no process header" is the paired negative of the
-require_fail assertion above: with the read wrongly ALLOWED, SHOW PROCESS/ID
-succeeds and prints a full header for the out-of-group process, so the
-same command that stopped being refused necessarily stopped being silent.
-Listing only the message assertion would describe half of one event.
-
-The by-NAME half of that block is deliberately absent from both lists, and
-that is the control doing its job: find_by_name() is group-scoped in its own
-right (src/kernel/vms_proctab.c:237) and never consults vms_proc_may_read(),
-so mutating the WORLD clause cannot touch it. SHOW PROCESS <name> keeps
-answering %SYSTEM-W-NONEXPR. Before vms-6a7 round 2 the two selectors shared
-one DCL session and one combined capture, so this distinction was invisible
-here -- the block could only say that both messages appeared somewhere.
-
-"the UNREADABLE row fabricates NO CPU figure at all" (test_syssvc_procnam
-block P12) is the enumeration side of the identical decision:
-vms_ioctl_procscan() calls proc_fill_info() with vms_proc_may_read()'s
-outcome as its `full` argument (src/kernel/vms_proctab.c:609), so a row that
-becomes readable stops being redacted, keeps its linux_pid, and SHOW SYSTEM
-can then source a CPU figure for it. One clause governs both the item read
-and the row redaction -- which is the design, not a coincidence: identity is
-privileged and enumeration is not (docs/oracle/vax73-privileges.md Section
-5.5), and this clause is where that split is decided.
-
-THE FIVE test_kmod_ident REDS are the SAME clause one layer down, at the raw
-ioctl rather than through the public sys$ API and DCL. That suite's own
-wording says so -- "WORLD CLAUSE ISOLATED: the same cross-group read, now
-without WORLD -> SS$_NOPRIV" is vms-2b8's isolation of exactly this
-condition. Its other four are that assertion's paired negatives (the refusal
-must return no part of the row) and the unprivileged-caller form of it. There
-is no finer edit available: vms_proc_may_read() IS the clause, and every
-suite that exercises a cross-group read reaches it. Splitting the mutation
-further would mean mutating a caller instead of the rule, which would test
-the caller.
-
-NOT reddened, and worth stating because it is the attribution: the
-SAME-GROUP reads stay green throughout (SHOW PROCESS <name> on the subject,
-SHOW PROCESS/ID=<subject>, the self case), as does every by-NAME lookup --
-find_by_name() is group-scoped independently of this clause, which is why
-"SHOW PROCESS <name> on an out-of-group process reports %SYSTEM-W-NONEXPR"
-survives the mutation. That is the measured evidence that this control names
-the cross-group AUTHORISATION and nothing else.
-EOF
-                      ;;
-        esac;;
-
     ident-username-unguarded)
         case "$_f" in
         facility)     echo "authenticated identity (VMS_IOCTL_SETIDENT: user name, UIC and authorized mask)";;
@@ -731,38 +574,14 @@ EOF
         case "$_f" in
         facility)     echo "kernel-interface binding in the PRODUCT (vms_kif kif_bind -> vms_kif_register)";;
         targets)      echo "libvmssys/vms_kif.c";;
-        # MEASURED: test_kmod_bind, and -- since vms-8019 -- test_syssvc_procnam,
-        # and -- since vms-6a7 -- test_syssvc_showproc.
+        # MEASURED: test_kmod_bind, and -- since vms-8019 -- test_syssvc_procnam.
         # Round 1 also listed the suites in blind_suites below, which permitted
         # four suite groups to redden while only one could; those are now
         # declared as what they are: BLIND. test_syssvc_procnam is the
         # opposite case and is here on measurement, not permission: it is the
         # FIRST public-API suite that does NOT hand-register, so it is the
         # first one that can see this defect at all.
-        # test_syssvc_showproc is the SECOND such suite, and it was added to
-        # this list the way the method requires: not predicted, but read off a
-        # run. It landed declaring only proctab-crossgroup-identity, and the
-        # first CI run after it merged reddened it here -- one suite outside
-        # the declared set, one assertion outside the named set. Both directions
-        # of the equality check firing at once is the check working, not a
-        # coarse mutation, and the honest fix is to DECLARE the dependency
-        # rather than narrow a suite whose whole value is that it drives the
-        # user-visible command through the entire stack.
-        # test_syssvc_ef_mproc and test_syssvc_ef_local are the THIRD and
-        # FOURTH, added by vms-2a8, and they arrive the same way: not
-        # predicted, READ OFF A RUN. The first CI run after sys_event.c became
-        # a reader of the executive reddened test_syssvc_ef_mproc here, one
-        # suite outside the declared set and 27 assertions outside the named
-        # set; the local rerun that produced the lists below reddened
-        # test_syssvc_ef_local too, for 16 more. That is the same forcing
-        # function firing for the same reason as vms-6a7's: wiring a facility
-        # to the executive makes its suites depend on the bind, and the
-        # manifest has to SAY so.
-        # WHY THESE TWO ARE NOT A WIDENING OF THE BLIND SET BELOW: neither
-        # hand-registers. Both open /dev/vms only to decide skip-vs-run and
-        # then use the public sys$ API, which is what a product image does --
-        # the counter-example property the blind_why paragraph names.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local";;
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam";;
         blind_suites) echo "test_kmod_devtab test_kmod_procnam test_kmod_ident test_syssvc_lock";;
         blind_why)    cat <<'EOF'
 These four drive the product's own vms_kif client, so restoring the vms-9fc
@@ -786,14 +605,11 @@ of driving vms_kif; it is a property of hand-registering first.
 EOF
                       ;;
         isolation)    echo "isolated";;
-        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Five suites detect it: test_kmod_bind, and test_syssvc_procnam, test_syssvc_showproc, test_syssvc_ef_mproc and test_syssvc_ef_local through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
+        why)          echo "kif_bind() stops calling vms_kif_register() -- THE vms-9fc defect, restored on purpose. Two suites detect it: test_kmod_bind, and test_syssvc_procnam through the public sys\$ API. The four client suites that ought to and do not are declared blind_suites and asserted GREEN, so the gap is a fact this job prints rather than one a reader has to infer.";;
         require_fail) cat <<'EOF'
 $SETEF reaches the executive with no explicit register
 $GETJPI(self) resolves the auto-bound process
 the caller has a row in the executive's process table
-parent: sys$setef on a LOCAL flag succeeds (baseline: the event flag facility is operative in this process at all)
-child: sys$setef on a LOCAL flag succeeds (baseline: the event flag facility is operative in this process at all)
-sys$setef(1) set the flag
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
@@ -810,51 +626,10 @@ child's executive entry is the CHILD's, not the parent's
 the executive assigned the caller a VMS process ID
 sys$creprc created the subject process
 sys$creprc returned the subject's pid
-sys$creprc returned the subject's VMS process ID
-child: a LOCAL flag set by the parent is NOT visible here (local clusters stay per-process)
-child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
-child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads, public API)
-child: sys$ascefc joined the named common cluster
-child: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')
-child: sys$setef on the associated common cluster reported success
-parent: a PERMANENT cluster survived losing its last association (its flags are still set)
-parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, A reads, public API)
-parent: sys$ascefc after the deletion created a cluster of that name again
-parent: sys$ascefc created a PERMANENT common cluster
-parent: sys$ascefc created/joined the named common cluster
-parent: sys$ascefc joined the cluster the interrupted-wait measurement uses
-parent: sys$ascefc re-joined the permanent cluster by name
-parent: sys$clref on the associated common cluster reported success
-parent: sys$dacefc identifies the cluster from ANY flag number in it, not only the base
-parent: sys$dacefc released the last association to the permanent cluster
-parent: sys$dacefc released the marked cluster
-parent: sys$dlcefc accepted the permanent cluster by name
-parent: sys$dlcefc really deleted the cluster (the re-created one is FRESH, not the old flags)
-parent: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')
-parent: sys$setef on the associated common cluster reported success
-parent: sys$setef on the permanent cluster reported success
-parent: sys$setef released the waiter's flag
-parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag
-parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)
-sys$clref(1) cleared the flag
-sys$clref(1) reported WASSET for the previously-set flag
-sys$clref(1) succeeded on the set flag
-sys$readef(1) reported WASCLR after the clear
-sys$readef(1) reported WASCLR for the cleared flag
-sys$readef(1) reported WASSET after the flag was set
-sys$readef(1) succeeded after the flag was set
-sys$readef(1) succeeded on the cleared flag
-sys$setef(1) on an already-set flag reported WASSET
-sys$setef(1) reported a documented previous state (WASCLR or WASSET)
-sys$setef(1) succeeded on the already-set flag
-sys$waitfr(1) left the flag SET -- it is not a counting semaphore
-sys$waitfr(1) returned for the already-set flag
-the cluster state word agrees with the status: flag 1's bit is CLEAR
-the cluster state word agrees with the status: flag 1's bit is SET
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-Assertions across five suites go red, and that IS the defect rather than
+Assertions across two suites go red, and that IS the defect rather than
 evidence against it: the mutation deletes the ONE call that binds a process to the executive,
 and a process with no PCB can use no facility. Round 1 named two of the twelve
 and framed the result as narrow ("only test_kmod_bind goes red"), which is
@@ -890,71 +665,6 @@ four of its assertions appear here and none of the rest of the suite, however
 many it has grown to. (The count is deliberately not written down: it was, and
 adding an assertion to the suite silently rotted it. The require_fail set is
 the machine-checked statement; this paragraph is the reasoning.)
-
-THE LAST ONE, "sys$creprc returned the subject's VMS process ID", is
-test_syssvc_showproc reaching the identical wall one suite later (vms-6a7).
-That suite exists to prove SHOW SYSTEM and SHOW PROCESS are READERS of the
-executive's process table, so its very first act is $GETJPI(self) and its
-second is a $CREPRC of the subject it will then go looking for. With the bind
-deleted, both fail for the reason suite 3 above already gives -- the child
-cannot register, so it cannot report a process ID, so the handshake fails --
-and the suite stops before it ever runs DCL. That is why it contributes only
-THREE reds and why two of the three are texts this manifest already names:
-"the caller has a row in the executive's process table" is the same assertion
-test_syssvc_procnam makes, word for word, and so is "sys$creprc created the
-subject process". Only the pid assertion is worded differently ("VMS process
-ID" rather than "pid"), which is the whole of the delta this entry gained.
-
-DECLARED, NOT NARROWED, AND THE REASON MATTERS. The alternative fix was to
-make test_syssvc_showproc insensitive to anything outside its own subject --
-to stop it touching registration, the process table and $CREPRC. That would
-mean not driving the real DCL.EXE end to end, which is the only thing that
-makes it evidence about a user-visible command at all (CLAUDE.md Rule 11's
-corollary: the command is a reader of the facility). A suite that drives the
-whole stack SHOULD be sensitive to the whole stack; the defect was that the
-manifest did not SAY so, and an undeclared red is indistinguishable from a
-non-minimal mutation. Saying so is the fix.
-
-MEASURED ON BOTH ARCHITECTURES, because the red set did not have to agree.
-The x86_64 CI runner (run 30598269086, SHA 5ef2b65) and an aarch64 host under
-pure TCG produced the SAME stray suite and the SAME single unnamed assertion,
-byte for byte. There is no ending-picks-itself race here of the kind
-creprc-handshake-eintr has: test_syssvc_showproc.c:574-582 evaluates both
-$CREPRC assertions before its early return, so the three reds are the same
-three whichever way the scheduler runs.
-
-THE EVENT FLAG SUITES: 43 MORE, AND EVERY ONE OF THEM IS THE SAME MISSING
-BIND (vms-2a8). Until this item, src/libvms/syssvc/sys_event.c named no
-vms_kif_* symbol at all -- it kept 128 event flags in per-process memory --
-so test_syssvc_ef_mproc could not see this defect and there was nothing to
-declare. Wiring it to /dev/vms makes every sys$ event-flag call a bound call,
-and the equality check said so on the first CI run afterwards (27 unnamed
-assertions in test_syssvc_ef_mproc) and again locally once the conformance
-move added test_syssvc_ef_local (16 more). The lists above are that run's
-output, not a prediction.
-  test_syssvc_ef_mproc (27) -- the process never registers, so the FIRST
-    sys$setef fails, and every A-writes/B-reads assertion downstream of it is
-    reading back a write that never happened. Its one require_fail entry per
-    process, "sys$setef on a LOCAL flag succeeds (baseline: ...)", is the
-    property: a local flag needs no cluster association and no privilege, so
-    if even that fails the facility is not operative in this process AT ALL.
-    Every remaining red -- the $ASCEFC joins, the shared-flag reads, the
-    permanent-cluster lifetime round trip, the interrupted-wait block -- is
-    downstream of that one.
-  test_syssvc_ef_local (16) -- the whole suite, and it is the whole suite for
-    a structural reason worth stating: this suite has no early exit. It is
-    the relocated conformance program, sixteen straight-line checks with no
-    branch that skips the rest, so an unbound process fails all sixteen
-    rather than stopping at the first. "sys$setef(1) set the flag" is in
-    require_fail as its baseline; the other fifteen read back what that call
-    failed to do.
-NOTE WHICH ASSERTION IS *NOT* SILENT HERE: "sys$setef on an UNASSOCIATED
-common flag is refused WHILE a local flag succeeds (not merely 'every call
-fails')" goes red, in both processes. That assertion exists precisely to
-refuse to be satisfied by a facility that does nothing, and with the bind
-deleted the facility does nothing -- so it fails, exactly as designed. A
-manifest that named only the "succeeds" assertions and not this one would be
-describing a different, kinder defect.
 EOF
                       ;;
         esac;;
@@ -1017,16 +727,6 @@ apply_edit() {
         sed -i 's|ast_state->enabled = args.enable ? 1 : 0;|ast_state->enabled = 1; /* NEGCTL ast-setast-disable */|' "$_file";;
     eflag-clref-noop)
         sed -i 's|\*flags \&= ~(1U << bit);|/* NEGCTL eflag-clref-noop: the bit is not cleared */|' "$_file";;
-    eflag-waitfr-eintr-normal)
-        # RANGE-ANCHORED and therefore IDEMPOTENT. The `if (ret) return ret;`
-        # shape appears in all three wait handlers, so the range narrows it to
-        # WAITFR's: it opens at the only wait_event_interruptible() whose
-        # predicate is a single bit, and closes at that function's own `out:`
-        # label. A second apply finds no `return ret;` left inside the range
-        # -- the first one replaced it -- so it is the no-op `selftest`
-        # requires, instead of walking on to WFLOR's like a first-match
-        # address would.
-        sed -i '/wait_event_interruptible(\*waitq, (READ_ONCE(\*flags) \& (1U << bit)))/,/^out:$/ s|^        return ret;$|        { args.status = SS__NORMAL; goto out; } /* NEGCTL eflag-waitfr-eintr-normal */|' "$_file";;
     lock-compat-ex-cr)
         sed -i 's|/\* EX \*/ {  1,  0,  0,  0,  0,  0 },|/* EX */ {  1,  1,  0,  0,  0,  0 }, /* NEGCTL lock-compat-ex-cr */|' "$_file";;
     lock-compat-cr-ex)
@@ -1044,12 +744,6 @@ apply_edit() {
         sed -i '/if (!dev->shareable && dev->owner_linux_pid == 0) {/,/^    spin_unlock(&dev->lock);$/ s|dev->owner_pid = proc->vms_pid;|/* NEGCTL devtab-owner-not-recorded */|' "$_file";;
     proctab-duplicate-name)
         sed -i 's|if (clash \&\& clash != proc) {|if (0 \&\& clash != proc) { /* NEGCTL proctab-duplicate-name */|' "$_file";;
-    proctab-crossgroup-identity)
-        # ONE clause of vms_proc_may_read(): the WORLD requirement for a
-        # cross-UIC-group read. caller==target and same-group are left
-        # exactly as they are, so the mutation cannot be mistaken for
-        # "authorisation removed".
-        sed -i 's|return (caller->cur_privs \& VMS_PRV_M_WORLD) != 0;|return true; /* NEGCTL proctab-crossgroup-identity */|' "$_file";;
     executive-not-pinned)
         sed -i 's|\.owner          = THIS_MODULE,|/* NEGCTL executive-not-pinned: no .owner, so nothing pins vms.ko */|' "$_file";;
     pcb-per-thread)

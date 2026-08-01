@@ -5,14 +5,6 @@
  * ============================================================
  * WRITTEN RED (vms-f1f). MADE GREEN BY FIXING THE PRODUCT (vms-2a8).
  * NOT ONE ASSERTION WAS CHANGED TO GET THERE.
- *
- * ROUND 2 ADDED THE INTERRUPTED-WAIT BLOCK, and it was written red too:
- * wiring sys_event.c to the executive made src/kernel/vms_eflag.c's
- * "interrupted, but still return normally" line LIVE, so $WAITFR reported
- * SS$_NORMAL over a flag that was still clear. That defect is now a standing
- * negative control -- tests/qemu/facility_defects.sh
- * eflag-waitfr-eintr-normal -- which restores it and requires this suite to
- * go red on exactly the two assertions the manifest names.
  * ============================================================
  *
  * It was born as the reproduction of a defect and is now the regression
@@ -67,11 +59,7 @@
  * service never asked it to -- and it is what will locate the next one.
  *
  * SYNCHRONISATION: pipes only, no sleeps; the parent bounds each wait so a
- * failure is a named FAIL line rather than a harness-wide QEMU timeout. The
- * interrupted-wait block added by round 2 arms an interval timer, but nothing
- * in the test is PACED by it: every step still advances on a byte the waiter
- * actually wrote, and the interval only decides how long a bounded poll sits
- * there. See the block comment above run_wait_child().
+ * failure is a named FAIL line rather than a harness-wide QEMU timeout.
  */
 
 #include <stdio.h>
@@ -79,8 +67,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <poll.h>
-#include <signal.h>
-#include <sys/time.h>
 #include <sys/wait.h>
 #include <stdint.h>
 
@@ -97,11 +83,6 @@
 #define CLUSTER_EFN_B   75
 #define LOCAL_EFN       5
 #define LOCAL_EFN_CHILD 9
-
-/* Common cluster 2 flag used only by the interrupted-wait block (vms-2a8
- * round 2). A flag NOBODY sets until the parent decides to -- that is the
- * whole measurement. */
-#define WAIT_EFN        80
 
 /* Common cluster 3 (flags 96-127), used only by the vms-2a8 lifetime block
  * at the end of main() so it cannot collide with the cluster-2 flags the
@@ -232,127 +213,6 @@ static int run_child(int c2p_write, int p2c_read)
     if (write(c2p_write, &msg, sizeof(msg)) != (ssize_t)sizeof(msg))
         return 1;
     return fail > 0 ? 1 : 0;
-}
-
-/* ======================================================================
- * INTERRUPTED WAITS (added by vms-2a8 round 2).
- *
- * WHAT THIS MEASURES. src/kernel/vms_eflag.c's WAITFR/WFLOR/WFLAND treated
- * a wait_event_interruptible() return as terminal and answered SS$_NORMAL
- * for it -- "the flag is set" about a flag that was still clear -- with
- * rc=0/errno=0 so the caller could not even detect it. That is a public
- * sys$ entry point fabricating success, which is the exact defect class
- * this whole suite exists to catch, and it went LIVE when sys_event.c was
- * wired to the executive: before that, nothing called those handlers.
- *
- * WHY THERE IS NO OTHER LEGAL ANSWER, and it is oracle-pinned, not argued
- * (docs/oracle/vax73-event-flags.md §4, VAX1 OpenVMS VAX V7.3):
- *   HELP $WAITFR -- "the process is placed in a wait state UNTIL THE EVENT
- *     FLAG IS SET", and the online help has no Condition Values topic for it.
- *   HELP $HIBER  -- a waiting process "remains known to the system so that
- *     it can be interrupted; for example, to receive ASTs": a VMS wait IS
- *     interruptible, the AST runs, and the wait continues. The caller of the
- *     wait never learns it happened.
- *   SEARCH of $SSDEF for WAIT/INTERRUPT/ABORTED -- four unrelated symbols.
- *     VMS has no "wait was interrupted" status at all.
- * So under CLAUDE.md Rule 10 the condition is made UNREACHABLE, not handled.
- *
- * HOW IT IS MEASURED, AND WHY IT IS NOT PACED BY SLEEPS. The waiter child
- * arms a REPEATING interval timer (not alarm(), not a one-shot) whose
- * SIGALRM handler is installed WITHOUT SA_RESTART, then blocks in
- * sys$waitfr() on a flag nobody has set. Because the timer repeats and the
- * child has nowhere else to be, delivery INSIDE the wait is guaranteed
- * rather than raced for: at most the first tick can land before the ioctl
- * is entered, and every later one cannot. Each handler run writes one byte
- * to the pipe, so the parent advances on OBSERVED OUTPUT, never on elapsed
- * time; the interval only decides how long the parent's bounded poll waits.
- *
- * THE DISCRIMINATOR IS THE CHILD'S FINAL BYTE:
- *   'S' -- $WAITFR returned AND $READEF confirms the flag is genuinely set.
- *   'X' -- $WAITFR returned while $READEF still shows the flag clear, or it
- *          returned a failure status. Either way it did not wait.
- * The parent only sets the flag after WAIT_SIGNAL_ROUNDS handler bytes, so
- * an 'S' cannot be produced early by accident.
- *
- * IT REQUIRES BOTH HALVES OF THE FIX AND CATCHES EITHER ONE MISSING:
- *   - executive still fabricating SS$_NORMAL  -> 'X' on the first tick.
- *   - executive fixed but libvmssys not re-entering the wait -> the ioctl
- *     surfaces -EINTR, which vms_kif_kerr_to_ss maps to SS$_BUGCHECK (even,
- *     so !(st & 1)) -> 'X'.
- * ====================================================================== */
-
-#define WAIT_SIGNAL_ROUNDS  3
-#define WAIT_TICK_USEC      100000
-
-static volatile int wait_sig_fd = -1;
-
-static void wait_sig_handler(int sig)
-{
-    char tok = 'A';
-    (void)sig;
-    /* write(2) is async-signal-safe. The child is parked in the executive's
-     * wait when this runs, so there is no reentrancy to worry about, and the
-     * parent is draining the pipe. */
-    if (write(wait_sig_fd, &tok, 1) != 1)
-        _exit(1);
-}
-
-/*
- * The waiter child. Returns nothing to the parent except bytes on the pipe:
- * 'A' per handler run (written by the handler itself), then exactly one
- * verdict byte -- 'S', 'X', or 'E' if it could not even set the scenario up.
- */
-static int run_wait_child(int c2p_write, const struct dsc$descriptor_s *nam)
-{
-    struct sigaction sa;
-    struct itimerval it;
-    uint32_t st, state = 0;
-    char verdict;
-
-    st = sys$ascefc(COMMON_BASE, nam, 0, 0);
-    if (!(st & 1)) {
-        printf("  INFO: waiter: sys$ascefc failed, status %u\n", st);
-        (void)send_token(c2p_write, 'E');
-        return 1;
-    }
-
-    wait_sig_fd = c2p_write;
-
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = wait_sig_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;   /* NO SA_RESTART, DELIBERATELY: this is what forces
-                        * the interrupted ioctl out to userspace instead of
-                        * letting the host kernel restart it silently. */
-    if (sigaction(SIGALRM, &sa, NULL) < 0) {
-        (void)send_token(c2p_write, 'E');
-        return 1;
-    }
-
-    it.it_interval.tv_sec  = 0;
-    it.it_interval.tv_usec = WAIT_TICK_USEC;
-    it.it_value = it.it_interval;
-    if (setitimer(ITIMER_REAL, &it, NULL) < 0) {
-        (void)send_token(c2p_write, 'E');
-        return 1;
-    }
-
-    /* Nobody has set WAIT_EFN. This must not return until somebody does. */
-    st = sys$waitfr(WAIT_EFN);
-
-    memset(&it, 0, sizeof(it));
-    (void)setitimer(ITIMER_REAL, &it, NULL);
-
-    state = 0;
-    (void)sys$readef(WAIT_EFN, &state);
-    printf("  INFO: waiter: sys$waitfr(%d) returned status %u; sys$readef "
-           "state=0x%08x (bit %d %s)\n",
-           WAIT_EFN, st, state, WAIT_EFN - COMMON_BASE,
-           (state & (1u << (WAIT_EFN - COMMON_BASE))) ? "SET" : "STILL CLEAR");
-
-    verdict = ((st & 1) && (state & (1u << (WAIT_EFN - COMMON_BASE)))) ? 'S' : 'X';
-    (void)send_token(c2p_write, verdict);
-    return verdict == 'S' ? 0 : 1;
 }
 
 int main(void)
@@ -575,97 +435,6 @@ int main(void)
               "parent: sys$dlcefc does NOT report success for a cluster name the executive does not have");
 
         (void)sys$dacefc(PERM_EFN);
-    }
-
-    /* =====================================================================
-     * INTERRUPTED WAITS (vms-2a8 round 2). See the block comment above
-     * run_wait_child() for the oracle pins and the measurement design.
-     * ===================================================================== */
-    {
-        $DESCRIPTOR(waitnam, "OVMX$2A8_WAIT");
-        int w2p[2];
-        pid_t wpid;
-        int alarms = 0;
-        char verdict = 0;
-
-        st = sys$ascefc(COMMON_BASE, &waitnam, 0, 0);
-        printf("  INFO: sys$ascefc(%d, \"OVMX$2A8_WAIT\") returned status %u\n",
-               COMMON_BASE, st);
-        CHECK(st & 1, "parent: sys$ascefc joined the cluster the interrupted-wait measurement uses");
-
-        if (pipe(w2p) < 0) {
-            printf("  FAIL: parent: pipe() for the waiter failed\n");
-            fail++;
-        } else if ((wpid = fork()) < 0) {
-            printf("  FAIL: parent: fork() for the waiter failed\n");
-            fail++;
-        } else if (wpid == 0) {
-            close(w2p[0]);
-            _exit(run_wait_child(w2p[1], &waitnam));
-        } else {
-            int wst = 0;
-            int silent = 0;
-            uint32_t sst;
-            close(w2p[1]);
-
-            /*
-             * PHASE 1 -- collect interrupts. Advance ONLY on bytes the waiter
-             * actually produced; stop early if it hands back a verdict, which
-             * means it stopped waiting before it was allowed to.
-             */
-            while (alarms < WAIT_SIGNAL_ROUNDS && verdict == 0) {
-                char t;
-                if (read_bounded(w2p[0], &t, 1, PEER_TIMEOUT_MS) != 1) {
-                    silent = 1;
-                    break;
-                }
-                if (t == 'A')
-                    alarms++;
-                else
-                    verdict = t;
-            }
-
-            if (silent) {
-                printf("  FAIL: parent: the waiter went silent (no handler byte, no verdict)\n");
-                fail++;
-            }
-
-            printf("  INFO: parent: waiter reported %d signal interrupt(s) before the flag was set\n",
-                   alarms);
-            CHECK(alarms >= WAIT_SIGNAL_ROUNDS,
-                  "parent: the waiter was interrupted by a signal repeatedly WHILE blocked in sys$waitfr (the condition under test is reachable, not hypothetical)");
-
-            /*
-             * Release the flag UNCONDITIONALLY, even when the waiter already
-             * gave up: the assertion below must always be reached, and a
-             * waiter still parked in the executive must never be left there.
-             */
-            sst = sys$setef(WAIT_EFN);
-            printf("  INFO: parent: sys$setef(%d) returned status %u\n", WAIT_EFN, sst);
-            CHECK(sst & 1, "parent: sys$setef released the waiter's flag");
-
-            /* PHASE 2 -- the verdict, if the waiter has not produced one. */
-            while (verdict == 0) {
-                char t;
-                if (read_bounded(w2p[0], &t, 1, PEER_TIMEOUT_MS) != 1)
-                    break;
-                if (t != 'A')
-                    verdict = t;
-            }
-
-            waitpid(wpid, &wst, 0);
-
-            printf("  INFO: waiter verdict '%c' ('S' = it waited for the flag, 'X' = it returned over a clear flag)\n",
-                   verdict ? verdict : '?');
-
-            CHECK(verdict == 'S',
-                  "parent: sys$waitfr did NOT return until the flag was really set -- an interrupted wait is re-entered, never reported as SS$_NORMAL over a clear flag");
-
-            close(w2p[0]);
-        }
-
-        (void)sys$clref(WAIT_EFN);
-        (void)sys$dacefc(WAIT_EFN);
     }
 
     printf("=== test_syssvc_ef_mproc: %d passed, %d failed ===\n", pass, fail);

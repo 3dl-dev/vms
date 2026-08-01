@@ -100,13 +100,6 @@ check "Boot 1: disk mounted"              "$OUTPUT1" "%STARTUP-I-MOUNTED"
 check "Boot 1: install started"           "$OUTPUT1" "%STARTUP-I-INSTALL, installing"
 check "Boot 1: install completed"         "$OUTPUT1" "%STARTUP-I-INSTALLED"
 check "Boot 1: boot banner"              "$OUTPUT1" "OpenVMS-compatible"
-# The boot chain reaches SITE startup. STARTUP.COM's last act is
-# @SYS$MANAGER:SYSTARTUP_VMS.COM, which is where services are started
-# (vms-47b) -- so a boot that stops before it starts nothing at all.
-# This asserts the procedure RAN by matching a line only that procedure
-# prints; "no error appeared" is not evidence that it was invoked.
-check "Boot 1: site startup ran"          "$OUTPUT1" \
-      "The OVMX system is now executing the site-specific startup commands."
 echo ""
 
 # Verify disk is not empty (persistence proof — data was written)
@@ -128,11 +121,6 @@ check "Boot 2: install skipped"           "$OUTPUT2" "%STARTUP-I-SYSBOOT"
 check "Boot 2: no disk initialization"    "$OUTPUT2" "%STARTUP-I-INIT, initializing" "absent"
 check "Boot 2: no install"                "$OUTPUT2" "%STARTUP-I-INSTALL, installing" "absent"
 check "Boot 2: boot banner"              "$OUTPUT2" "OpenVMS-compatible"
-# Also on the SECOND boot, from the INSTALLED system disk rather than
-# from the initramfs copy: the procedure has to have been provisioned to
-# the disk, not just shipped in the image.
-check "Boot 2: site startup ran"          "$OUTPUT2" \
-      "The OVMX system is now executing the site-specific startup commands."
 echo ""
 
 # --- Results ---

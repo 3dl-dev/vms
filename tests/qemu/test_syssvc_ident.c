@@ -580,20 +580,22 @@ static char *const g_env[] = {
  * THE /etc/passwd THIS SCENARIO STAGES, and why it is not decoration.
  *
  * F$USER()'s deleted fallback had TWO branches -- getpwuid(getuid()) first,
- * the literal "SYSTEM" only if that returned NULL. This initramfs has no
- * /etc/passwd, so getpwuid() returns NULL here and the getpwuid branch is
- * UNREACHABLE: an assertion run without this file cannot tell the two
- * branches apart, and restoring only the getpwuid half would produce no
- * observable change at all. That is the vacuity Method Requirement 3 names.
+ * the literal "SYSTEM" only if that returned NULL. This initramfs ships no
+ * /etc/passwd, so getpwuid() finds nothing here and the getpwuid branch is
+ * not taken: an assertion run without this file could not tell the two
+ * branches apart. MEASURED, not assumed -- with only the getpwuid half
+ * restored (tests/qemu/facility_defects.sh dcl-fuser-host-login-name),
+ * scenario C, which runs before this file is staged, stays GREEN, and the
+ * whole red set is this scenario's.
  *
  * So the file is staged for the length of this scenario and removed after,
- * giving uid G_MEM a Linux account name -- which is the state of EVERY
- * system that is not this initramfs, and the state under which the defect
- * was originally measured (F$USER() answering "BARON", the host login name
- * upcased). The subprocess prints getpwuid(getuid())->pw_name on the
- * captured stream, so "the Linux name is absent from the output" is backed
- * by evidence that the Linux name EXISTED and was resolvable at the moment
- * the question was asked.
+ * giving uid G_MEM a Linux account name -- the state a system with a passwd
+ * database is in, and the state under which the defect was originally
+ * measured (F$USER() answering "BARON", the host login name upcased). The
+ * subprocess prints getpwuid(getuid())->pw_name on the captured stream, so
+ * "the Linux name is absent from the output" is backed by evidence that the
+ * Linux name EXISTED and was resolvable at the moment the question was
+ * asked.
  */
 #define G_PWNAME "shipuser"
 
@@ -809,7 +811,7 @@ static void scenario_g_unnamed_row_reports_nothing(void)
         if (dclout) dclout++; else dclout = outg;
         CHECK(strstr(dclout, G_PWNAME) == NULL &&
               strstr(dclout, "SHIPUSER") == NULL,
-              "G/F$USER: DCL never answers with the Linux account name, "
+              "G/F$USER: DCL does NOT answer with the Linux account name, "
               "upcased or otherwise -- the vms-f39 defect exactly");
     }
 

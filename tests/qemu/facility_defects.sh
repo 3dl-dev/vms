@@ -2315,7 +2315,7 @@ EOF
         why)          echo "lex_user() goes back to answering with the HOST Linux account name for getuid(), upcased -- the vms-f39 defect verbatim, where F\$USER() answered \"BARON\" because that was the developer's login. A Linux account name is not a VMS user name, and this is the branch that would be taken on any system that HAS an /etc/passwd. It is a SEPARATE control from dcl-fuser-system-fabricated because it is a separate branch that was reachable in a separate population of systems: restoring only the SYSTEM half leaves this one deleted and vice versa.";;
         require_fail) cat <<'EOF'
 G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
-G/F$USER: DCL never answers with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
+G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
 EOF
                       ;;
         knock_on_fail) echo "";;

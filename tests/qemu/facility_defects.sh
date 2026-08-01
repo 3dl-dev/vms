@@ -475,7 +475,7 @@ EOF
 readef(5) after clear returns WASCLR
 cluster has flags 0,3,7,31 set
 child: a common flag CLEARED BY THE PARENT reads clear here (A clears, B reads)
-child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
+child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads via sys$readef, public API)
 sys$readef(1) reported WASCLR after the clear
 EOF
                       ;;
@@ -1420,13 +1420,13 @@ the abbreviated form announces the process ID the executive assigned
 vms-69e: /DETACHED with /PRIORITY still creates the process and announces success
 vms-69e: and says NOTHING about the priority it discarded (this is the defect, asserted so it cannot be fixed silently)
 child: a LOCAL flag set by the parent is NOT visible here (local clusters stay per-process)
-child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)
-child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads, public API)
+child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads via sys$readef, public API)
+child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads via sys$readef, public API)
 child: sys$ascefc joined the named common cluster
 child: sys$setef on an UNASSOCIATED common flag is refused WHILE a local flag succeeds (not merely 'every call fails')
 child: sys$setef on the associated common cluster reported success
 parent: a PERMANENT cluster survived losing its last association (its flags are still set)
-parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, A reads, public API)
+parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, A reads via sys$readef, public API)
 parent: sys$ascefc after the deletion created a cluster of that name again
 parent: sys$ascefc created a PERMANENT common cluster
 parent: sys$ascefc created/joined the named common cluster

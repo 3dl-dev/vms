@@ -21,6 +21,26 @@
 # red, AND the deletion that used to buy green must be red too. A fix that only
 # reddens the first half leaves the evasion intact one step further along.
 #
+# AND THE TWO THAT SURVIVED THAT FIX, both measured end-to-end on the merged
+# gate before they were controls (vms-ecf, vms-f26). Both are here because a
+# closed hole that nobody re-runs is a claim, not a check:
+#
+#   - THE PRICE PAID IN A COMMENT. All four checks on an OVMX-EXECUTIVE claim
+#     were source greps and the last was `grep -qF "$service" "$proof"`, which
+#     a comment satisfies: one ignored vms_kif_readef() in sys$gettim plus the
+#     single line `/* also covers sys$gettim */` appended to an untouched proof
+#     took both this gate and the kif caller census to rc=0.
+#   - THE UNIVERSE DERIVED FROM SOURCE SPELLING. Renaming the definition, the
+#     prototype and the declaration together behind `__asm__("sys$gettim")`
+#     took the universe from 88 services to 87 with rc=0 and PASS, leaving the
+#     object symbol-identical to pristine. Every existing check saw a
+#     consistent, smaller tree -- indistinguishable from an honest deletion.
+#
+# Two of the controls below are therefore about the GATE'S OWN MACHINERY rather
+# than about a service: the manifest it prices claims against, and the compiler
+# it derives the universe with. A gate that cannot compute its check must say
+# so, not certify.
+#
 # WHERE A MUTATION TRIPS TWO PROPERTIES, THIS FILE SAYS SO rather than pretending
 # the mutation is narrower than it is. A malformed declaration is also an ABSENT
 # one, because the gate parses the register out of the same line it validates:
@@ -67,8 +87,13 @@ QIO="$ROOT/src/libvms/syssvc/sys_qio.c"
 STR="$ROOT/src/libvms/rtl/str_routines.c"
 STARLET="$ROOT/src/libvms/include/starlet.h"
 PROOF="$ROOT/tests/qemu/test_syssvc_ef_mproc.c"
+# The manifest of proven-reddenable assertions. It is MUTABLE because the
+# OVMX-EXECUTIVE price is now paid in one of its entries (vms-ecf): the control
+# that shows a full exemption CAN still be paid for has to add an entry, and
+# the control that shows the price cannot be skipped has to take them away.
+FDMAN="$ROOT/tests/qemu/facility_defects.sh"
 
-MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF"
+MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $FDMAN"
 
 key_of() { printf '%s' "${1#"$ROOT"/}" | tr '/.' '__'; }
 
@@ -281,6 +306,27 @@ sed -i '/OVMX-USERSPACE: sys\$setast/d' "$AST"
 expect_red "$STARLET $AST" "a prototype deleted to shrink the universe, declaration dropped with it" \
     "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$setast"
 
+# THE ANTI-SHRINK PROPERTY FROM THE SIDE THAT USED TO WORK (vms-f26). The two
+# controls above rename the definition OR delete the prototype; each is caught
+# because the OTHER source reading still holds the name. Do BOTH IN LOCKSTEP
+# and restore the exported symbol with an asm label, and every source reading
+# loses the service together: measured on the merged gate, the universe went
+# 88 -> 87 services / 87 declared / 86 prototypes with rc=0 and PASS, while the
+# object stayed symbol-identical to pristine (nm shows `T sys$gettim` in both)
+# and every caller linked unchanged. Nothing downstream could tell.
+sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr);|uint32_t ovmx_negctl_gettim(uint64_t *timadr) __asm__("sys$gettim");\n#define sys$gettim ovmx_negctl_gettim|' "$STARLET"
+sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t ovmx_negctl_gettim(uint64_t *timadr) {|' "$TIME"
+sed -i '/OVMX-USERSPACE: sys\$gettim (vms-5b4)/d' "$TIME"
+expect_red "$STARLET $TIME" "a service renamed behind an asm label, definition, prototype and declaration together" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$gettim"
+
+# ...and the scan that makes that possible has to be able to say it BROKE. A
+# product file that does not compile contributes no symbols, so "it compiled to
+# nothing" must not read the same as "it exports nothing".
+printf '#error negctl: this file deliberately does not compile\n' >> "$EVENT"
+expect_red "$EVENT" "a product source file that does not compile at all" \
+    "BROKEN SYMBOL SCAN: "
+
 # One service, one owner: the register pairs a declaration with the DEFINING
 # translation unit, so two definitions leave it with no unambiguous home.
 {
@@ -374,6 +420,26 @@ expect_red "$EVENT" "an EXECUTIVE claim citing a single-process proof" \
 expect_red "$EVENT" "an EXECUTIVE claim whose proof never names the service" \
     "EXECUTIVE DECLARATION WHOSE PROOF DOES NOT NAME THE SERVICE: sys\$negctl_unnamed"
 
+# ...AND THE MENTION PAID FOR IN A COMMENT (vms-ecf). This is the control the
+# fifth check exists for, and it was a LIVE evasion measured end-to-end on the
+# merged gate: `grep -qF "$pname" "$proof"` is satisfied by a comment, so the
+# only full exemption the register grants cost ONE IGNORED CALL plus ONE
+# COMMENT LINE in an otherwise untouched proof -- and the gate printed PASS
+# with 11 EXECUTIVE claims. sys$gettim's answer is still 100% clock_gettime().
+sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME)| * OVMX-EXECUTIVE: sys$gettim (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- bought|' "$TIME"
+sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_s = 0; (void)vms_kif_readef(0u, \&ovmx_negctl_s); }|' "$TIME"
+printf '/* also covers sys$gettim */\n' >> "$PROOF"
+expect_red "$TIME $PROOF" "an EXECUTIVE claim whose proof names it only in a COMMENT (the price paid in a comment)" \
+    "EXECUTIVE DECLARATION WHOSE PROOF NAMES NO ASSERTION ANY MUTATION HAS REDDENED: sys\$gettim"
+
+# THE PRICE MUST BE COMPUTABLE, or every EXECUTIVE claim is exempt for want of
+# a check. With the manifest of proven-reddenable assertions emptied out, the
+# gate has nothing to price against -- and the honest answer is to refuse, not
+# to wave the claims through.
+: > "$FDMAN"
+expect_red "$FDMAN" "the manifest of proven-reddenable assertions emptied out" \
+    "BROKEN PRICE CHECK: "
+
 # ----------------------------------------------------------- GREEN controls --
 
 # THE CLAIM THIS GATE MAKES ABOUT ITS OWN SCOPE. Pure computation added to the
@@ -401,11 +467,33 @@ expect_green "$STR" "pure computation added to the RTL stays green"
 } >> "$STR"
 expect_green "$STR" "a stateful RTL routine stays green -- the universe is sys\$, not statefulness"
 
-# THE FULL EXEMPTION, PAID FOR. This is the control that keeps the four reds
-# above from being satisfiable by a gate that simply refuses every
-# OVMX-EXECUTIVE line: a new service that reaches the executive AND whose named
-# proof exists, lives under tests/qemu/, forks, and names it, is green. Note
-# what the mutation has to touch -- the proof file itself. That is the price.
+# THE FULL EXEMPTION, PAID FOR. This is the control that keeps the reds above
+# from being satisfiable by a gate that simply refuses every OVMX-EXECUTIVE
+# line: a new service that reaches the executive AND whose named proof exists,
+# lives under tests/qemu/, forks, names it, AND holds an assertion that
+# tests/qemu/facility_defects.sh names as proven-reddenable, is green.
+#
+# NOTE WHAT THE MUTATION HAS TO TOUCH, because that IS the price: the manifest.
+# The line appended to the proof is still one line -- it is the MANIFEST ENTRY
+# that costs, and this file only checks that the entry exists. What makes an
+# entry real is tests/qemu/run_facility_negctl.sh, which injects the defect in
+# QEMU and requires the complete set of assertions that go red to EQUAL
+# require_fail + knock_on_fail exactly. A fabricated entry naming an assertion
+# no defect reddens fails THAT control. This one deliberately fabricates it, to
+# show the shape the register accepts -- it is not evidence that the assertion
+# is real.
+cat > "$WORK/negctl_branch" <<'BRANCH_EOF'
+    negctl-paid)
+        case "$_f" in
+        require_fail) echo 'negctl: sys$negctl_proven answers from the executive';;
+        *)            echo "";;
+        esac;;
+BRANCH_EOF
+sed -i 's|^DEFECTS="|DEFECTS="negctl-paid\n|' "$FDMAN"
+awk 'NR == FNR { b = b $0 ORS; next }
+     { print }
+     !ins && /^    case "\$_d" in$/ { printf "%s", b; ins = 1 }' \
+    "$WORK/negctl_branch" "$FDMAN" > "$WORK/fdman.new" && mv "$WORK/fdman.new" "$FDMAN"
 {
     echo ''
     echo '/* OVMX-EXECUTIVE: sys$negctl_proven (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
@@ -415,8 +503,24 @@ expect_green "$STR" "a stateful RTL routine stays green -- the universe is sys\$
     echo '    return st;'
     echo '}'
 } >> "$EVENT"
-printf '/* negctl: this proof names sys$negctl_proven */\n' >> "$PROOF"
-expect_green "$EVENT $PROOF" "an EXECUTIVE claim whose proof exists, boots the executive, forks and names it"
+printf '/* negctl: sys$negctl_proven answers from the executive */\n' >> "$PROOF"
+expect_green "$EVENT $PROOF $FDMAN" "an EXECUTIVE claim whose proof forks, names it, and holds a proven-reddenable assertion"
+
+# ...and the SAME claim with the manifest entry withheld is a RED. Without this
+# the control above proves only that the gate tolerates the shape; it is the
+# pair that shows which half is load-bearing.
+{
+    echo ''
+    echo '/* OVMX-EXECUTIVE: sys$negctl_unproven (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo 'uint32_t sys$negctl_unproven(uint32_t efn) {'
+    echo '    uint32_t st = 0;'
+    echo '    (void)vms_kif_readef(efn, &st);'
+    echo '    return st;'
+    echo '}'
+} >> "$EVENT"
+printf '/* negctl: this proof names sys$negctl_unproven */\n' >> "$PROOF"
+expect_red "$EVENT $PROOF" "an EXECUTIVE claim whose proof names it but which no mutation has ever reddened" \
+    "EXECUTIVE DECLARATION WHOSE PROOF NAMES NO ASSERTION ANY MUTATION HAS REDDENED: sys\$negctl_unproven"
 
 # ...and a mixture that names both halves is green too, so the PARTIAL reds
 # above are not satisfiable by a gate that rejects every PARTIAL line.
@@ -504,6 +608,18 @@ grep -oE 'malformed OVMX declaration' "$GATE" | sort -u >> "$WORK/derived"
 # service -- it refusing to run at all, and the floor.
 grep -oE 'this gate scans the product tree\.' "$GATE" | sort -u >> "$WORK/derived"
 grep -oE 'the source scan produced no facts at all\.' "$GATE" | sort -u >> "$WORK/derived"
+# The exported-symbol scan's own broken-scan path (vms-f26). Like the two
+# above it is an echo, not an errors[] entry, because it aborts the run rather
+# than accusing a service.
+#
+# STATED PLAINLY BECAUSE THE PREFIX IS SHARED: the gate spells "BROKEN SYMBOL
+# SCAN: " twice -- once when a product file will not compile (provoked by a
+# control above) and once when there is no compiler or no nm at all. This
+# extraction cannot tell them apart, so the coverage PASS below covers the
+# first and NOT the second. That is deliberate: "no compiler" is a
+# PREREQUISITE failure, the same class as this file's own `command -v cmp`
+# check, and no mutation of the TREE provokes it.
+grep -oE 'BROKEN SYMBOL SCAN: ' "$GATE" | sort -u >> "$WORK/derived"
 # The gate's own source has to spell this one "sys\$" (escaped for the shell
 # double-quote it lives in); what actually prints at runtime is "sys$", with
 # no backslash. Normalize the same way so this line matches the fixture's

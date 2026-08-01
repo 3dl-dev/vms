@@ -198,12 +198,22 @@ static int run_child(int c2p_write, int p2c_read)
         printf("  FAIL: child: never saw the parent's post-$SETEF token\n");
         fail++;
     } else {
+        /* THE READBACK ASSERTIONS NAME BOTH PUBLIC SERVICES, not only the
+         * writer (vms-ecf). Each of the three cross-process readbacks in this
+         * file is asserted on the status AND the state word sys$readef
+         * returned -- if sys$readef answered from process-local memory the
+         * child could not see the parent's flag at all -- so the text used to
+         * omit the one service the assertion actually measures. The userspace
+         * service register prices sys$readef's OVMX-EXECUTIVE claim on an
+         * assertion in this file that facility_defects.sh has proven
+         * reddenable; naming the reader is what makes that price findable.
+         * The manifest carries these texts verbatim: change one, change both. */
         state = 0;
         st = sys$readef(CLUSTER_EFN_A, &state);
         printf("  INFO: child: sys$readef(%d) status=%u cluster-state=0x%08x (expect bit %d set)\n",
                CLUSTER_EFN_A, st, state, CLUSTER_EFN_A - COMMON_BASE);
         CHECK((st & 1) && (state & (1u << (CLUSTER_EFN_A - COMMON_BASE))),
-              "child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads, public API)");
+              "child: a common flag SET BY THE PARENT via sys$setef is visible here (A writes, B reads via sys$readef, public API)");
     }
 
     st = sys$setef(CLUSTER_EFN_B);
@@ -218,7 +228,7 @@ static int run_child(int c2p_write, int p2c_read)
         state = 0;
         st = sys$readef(CLUSTER_EFN_A, &state);
         CHECK((st & 1) && !(state & (1u << (CLUSTER_EFN_A - COMMON_BASE))),
-              "child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads, public API)");
+              "child: a common flag CLEARED BY THE PARENT via sys$clref reads clear here (A clears, B reads via sys$readef, public API)");
 
         /* Discriminator: local clusters are per-process on VMS too. */
         state = 0;
@@ -456,7 +466,7 @@ int main(void)
         uint32_t state = 0;
         st = sys$readef(CLUSTER_EFN_B, &state);
         CHECK((st & 1) && (state & (1u << (CLUSTER_EFN_B - COMMON_BASE))),
-              "parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, A reads, public API)");
+              "parent: a common flag SET BY THE CHILD via sys$setef is visible here (B writes, A reads via sys$readef, public API)");
     }
 
     st = sys$clref(CLUSTER_EFN_A);

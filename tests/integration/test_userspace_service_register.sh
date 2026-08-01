@@ -113,9 +113,11 @@
 # The universe is every sys$* file-scope function DEFINITION under src/ and
 # tools/ -- in .c files AND in headers, comment-stripped, product only (a
 # definition in tests/ is not a product service) -- UNIONED with every sys$*
-# PROTOTYPE declared in any header under src/. The union is the anti-shrink
-# property, and it is the lesson the census paid for: a gate whose universe is
-# read from ONE place can be disarmed by deleting the thing it counts. Here:
+# PROTOTYPE declared in any header under src/, UNIONED with every sys$* symbol
+# THE COMPILED PRODUCT ACTUALLY EXPORTS (nm, below). The union is the
+# anti-shrink property, and it is the lesson the census paid for: a gate whose
+# universe is read from ONE place can be disarmed by deleting the thing it
+# counts. Here:
 #
 #   - Deleting a prototype does not shrink the universe: the definition still
 #     holds the service in it, and it still needs a declaration.
@@ -126,6 +128,56 @@
 #     That is Rule 10's second answer (the service is gone, so the condition is
 #     unreachable), and it is meant to be green. It cannot be done quietly,
 #     because the now-orphaned declaration is a RED until it is deleted too.
+#
+# THE THIRD MEMBER OF THE UNION IS NOT SOURCE TEXT, and it is here because the
+# first two were both source text and both were escaped by ONE construct
+# (vms-f26). Measured on a clean archive of the tree: rename the definition
+# `sys$gettim` -> `ovmx_gettim`, rename its prototype in lockstep, and restore
+# the public name with
+#
+#     uint32_t ovmx_gettim(uint64_t *timadr) __asm__("sys$gettim");
+#     #define sys$gettim ovmx_gettim
+#
+# The service leaves the definition reading AND the prototype reading TOGETHER,
+# so the mismatch checks -- which is all the union could see -- stay silent: the
+# universe went 88 -> 87 services / 87 declared / 86 prototypes and the gate
+# printed PASS. The object file is symbol-identical to pristine (`nm` shows
+# `T sys$gettim` in both), so nothing downstream can tell, and every caller
+# links unchanged. A shrinking universe was indistinguishable, to every check
+# here, from a service that was legitimately deleted.
+#
+# The asm label is one such construct and there is no reason to believe it is
+# the only one, so the fix is not to recognise it. THE UNIVERSE IS DERIVED FROM
+# WHAT THE PRODUCT EXPORTS: this gate compiles every product .c file it scans
+# and reads the defined, global sys$* symbols out of the objects with nm. That
+# is a byproduct of the build, not a spelling, so it does not care how the
+# source names the definition.
+#
+# WHAT THAT DOES AND DOES NOT BUY, stated so nobody quotes it as more:
+#   - it buys that a C-defined service does not leave the universe while the
+#     product still exports it. Whatever the source calls it, it is in the
+#     table under its EXPORTED name and it needs a declaration. Measured: the
+#     rename above is now a RED naming sys$gettim, and the universe stays 88.
+#   - it does NOT read ASSEMBLY. A .globl sys$foo in a .S file would define an
+#     exported service this scan never compiles and the C source scan never
+#     sees; the prototype half of the union is all that would hold it. That
+#     costs nothing to say and is measured, not assumed: `grep -rn 'sys\$'
+#     --include='*.S' --include='*.s' src tools` finds NOTHING today, so no
+#     service is defined that way in this tree. If one ever is, this scan has
+#     to grow an assembler pass -- it will not fall out of the C compile.
+#   - it does NOT make the call graph follow an alias. The exec/state columns
+#     are keyed on the SOURCE name, so a service exported under a name its
+#     source does not spell shows "-" in both, and the consistency checks
+#     (USERSPACE-but-reaches-the-executive, PARTIAL/EXECUTIVE-reaching-nothing)
+#     go quiet for it. That is a real residual, tracked rather than papered
+#     over; it is not a REGRESSION, because before this scan the service was
+#     not in the universe at all.
+#   - src/kernel/ is EXCLUDED from the object scan and the exclusion is
+#     declared below, not glob-shaped: those files are a separate binary built
+#     against kernel headers and cannot be compiled here. They are still read
+#     by the SOURCE scan, so a sys$ definition there is still in the universe;
+#     what the exclusion costs is alias detection inside the kernel module,
+#     which links nothing into libvms and exports no sys$ symbol today.
 #
 # A definition with no prototype is NOT a red. It is still in the universe and
 # still needs a declaration; sys$fao_count_args is the live example -- an
@@ -393,6 +445,123 @@ if [ ! -s "$WORK/facts" ]; then
     exit 1
 fi
 
+# --------------------------------------------------- exported-symbol scan --
+# THE UNIVERSE'S THIRD MEMBER, and the only one that is not source text. Every
+# product .c file outside the declared exclusion is compiled here and its
+# defined, global sys$* symbols are read out with nm. See the header: the two
+# source readings were escaped TOGETHER by an asm-label rename that kept the
+# exported symbol byte-identical.
+#
+# Emits into the fact stream:
+#   S <file> <symbol>   a sys$ symbol the compiled product exports
+SYMSCAN_EXCLUDE_DIR="src/kernel"
+
+SYMCC=""
+for _c in cc gcc; do
+    if command -v "$_c" >/dev/null 2>&1; then SYMCC="$_c"; break; fi
+done
+if [ -z "$SYMCC" ] || ! command -v nm >/dev/null 2>&1; then
+    echo "FAIL: BROKEN SYMBOL SCAN: no C compiler (cc/gcc) or no nm(1) available."
+    echo "  -> the universe is derived from the symbols the product EXPORTS, because"
+    echo "     the source-text readings were both escaped by one asm-label rename"
+    echo "     (vms-f26). Without a compiler this gate cannot see a service exported"
+    echo "     under a name its source does not spell, so it does not get to certify"
+    echo "     that every service is accounted for. Install a compiler; do not add a"
+    echo "     skip."
+    exit 1
+fi
+
+SYMINC=""
+for _d in $(find "$SRC_ROOT/src" -name '*.h' -exec dirname {} \; 2>/dev/null | sort -u); do
+    SYMINC="$SYMINC -I$_d"
+done
+for _d in "$SRC_ROOT"/src/*/include; do
+    [ -d "$_d" ] && SYMINC="$SYMINC -I$_d"
+done
+
+OBJDIR="$WORK/obj"
+FAILLIST="$WORK/ccfail"
+mkdir -p "$OBJDIR"
+: > "$FAILLIST"
+export OBJDIR FAILLIST SYMCC SYMINC
+
+# -w plus the -Wno-error= forms: this is a SYMBOL scan, not a build gate. It
+# must read the symbols out of code that a stricter compiler would reject --
+# the negative controls next door deliberately delete prototypes and rename
+# definitions, and a gcc that promotes an implicit declaration to an error
+# (gcc 14 and later do) would turn those controls into "the scan broke"
+# instead of the reds they are testing for.
+#
+# EACH FLAG IS PROBED, because the first draft of this file assumed unknown
+# -Wno-* forms were ignored and MEASURED OTHERWISE: gcc 13.3 rejects
+# -Wno-error=return-mismatch (the warning arrives in gcc 14) with a cc1 error,
+# and all 127 files failed to compile. An empty translation unit is enough to
+# provoke it, so the probe is one compile per candidate.
+: > "$WORK/probe.c"
+SYMFLAGS="-w"
+for _fl in -Wno-implicit-function-declaration \
+           -Wno-error=implicit-function-declaration \
+           -Wno-error=implicit-int -Wno-error=int-conversion \
+           -Wno-error=incompatible-pointer-types \
+           -Wno-error=return-mismatch; do
+    if $SYMCC $_fl -c "$WORK/probe.c" -o "$WORK/probe.o" >/dev/null 2>&1; then
+        SYMFLAGS="$SYMFLAGS $_fl"
+    fi
+done
+rm -f "$WORK/probe.o"
+export SYMFLAGS
+
+cat > "$WORK/cc1.sh" <<'CC_EOF'
+#!/bin/sh
+o="$OBJDIR/$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_').o"
+e="$o.err"
+if ! $SYMCC -c -std=gnu11 -D_GNU_SOURCE $SYMINC $SYMFLAGS "$1" -o "$o" 2>"$e"; then
+    { printf '%s\n' "$1"; head -2 "$e" | sed 's/^/        /'; } >> "$FAILLIST"
+fi
+rm -f "$e"
+CC_EOF
+chmod +x "$WORK/cc1.sh"
+
+# -path/-prune, not a grep on the path: SRC_ROOT is an arbitrary directory and
+# a regexp match on it would be at the mercy of whatever punctuation it holds.
+find "$SRC_ROOT/src" "$SRC_ROOT/tools" \
+     -path "$SRC_ROOT/$SYMSCAN_EXCLUDE_DIR/*" -prune -o \
+     -name '*.c' -print 2>/dev/null | sort > "$WORK/csrc"
+
+njobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+if [ -s "$WORK/csrc" ]; then
+    if echo x | xargs -P 2 -n 1 true >/dev/null 2>&1; then
+        xargs -P "$njobs" -n 1 "$WORK/cc1.sh" < "$WORK/csrc"
+    else
+        while IFS= read -r _f; do "$WORK/cc1.sh" "$_f"; done < "$WORK/csrc"
+    fi
+fi
+
+nsrc=$(wc -l < "$WORK/csrc")
+nobj=$(find "$OBJDIR" -name '*.o' 2>/dev/null | wc -l)
+if [ -s "$FAILLIST" ] || [ "$nobj" -ne "$nsrc" ]; then
+    echo "FAIL: BROKEN SYMBOL SCAN: $nobj of $nsrc product source file(s) compiled."
+    [ -s "$FAILLIST" ] && sed 's/^/    /' "$FAILLIST"
+    echo "  -> the universe of services is derived from the symbols the compiled"
+    echo "     product EXPORTS. A file that does not compile contributes no symbols,"
+    echo "     so a service could hide behind a build error. Fix the file, or -- if it"
+    echo "     genuinely cannot be compiled here -- extend SYMSCAN_EXCLUDE_DIR and say"
+    echo "     why in the header. Do NOT let a compile failure pass silently."
+    echo "     (A short count with NO failing file above means two source paths"
+    echo "     mangled to the same object name -- also a lost file, also not a pass.)"
+    exit 1
+fi
+
+: > "$WORK/symbols"
+while IFS= read -r _f; do
+    _o="$OBJDIR/$(printf '%s' "$_f" | tr -c 'A-Za-z0-9' '_').o"
+    nm "$_o" 2>/dev/null | awk -v SRC="${_f#"$SRC_ROOT"/}" '
+        NF == 3 && $2 ~ /^[A-Z]$/ && $2 != "U" && $3 ~ /^sys\$/ {
+            print "S\t" SRC "\t" $3
+        }'
+done < "$WORK/csrc" | sort -u >> "$WORK/symbols"
+cat "$WORK/symbols" >> "$WORK/facts"
+
 # ------------------------------------------------------------ declarations --
 # Read from the RAW files: the declaration lives in a comment by design.
 # Headers are read too, because a header-inline definition's declaration has
@@ -456,6 +625,7 @@ awk -F'\t' \
     -v out_universe="$WORK/universe" \
     -v out_err="$WORK/errors" \
     -v out_items="$WORK/items" \
+    -v out_symonly="$WORK/symonly" \
     -v out_table="$WORK/table" '
 $1 == "D" {
     if ($3 == "static" || $3 == "macro") { local[$2 SUBSEP $4] = 1; node = $2 ":" $4 }
@@ -467,6 +637,7 @@ $1 == "D" {
     }
     next
 }
+$1 == "S" { exported[$3] = $2; next }
 $1 == "V" { if ($3 == "static") vstatic[$2 SUBSEP $4] = 1; else vglobal[$4] = 1; next }
 $1 == "C" { ncall++; cf[ncall] = $2; cc[ncall] = $3; ce[ncall] = $4; next }
 $1 == "R" {
@@ -542,6 +713,22 @@ END {
             if (_w[1] == "vms_dev_fd") nfdonly++
         }
         isexec[nm] = e; isstate[nm] = s; whystate[nm] = statewhy[n]
+    }
+
+    # THE UNIVERSE ABSORBS WHAT THE PRODUCT EXPORTS. A symbol nm found that no
+    # source reading saw is a service exported under a name its source does not
+    # spell -- the asm-label rename (vms-f26). It joins the universe under its
+    # EXPORTED name, which is the name every caller and every other image sees,
+    # and from there it needs a declaration like anything else. Its exec/state
+    # columns stay "-": the call graph is keyed on the source spelling and
+    # cannot follow the alias (stated in the header, not silently absorbed).
+    nexported = 0; nsymonly = 0
+    for (s in exported) {
+        nexported++
+        if (s in universe) continue
+        universe[s] = exported[s]
+        nuni++; nsymonly++
+        printf "%s %s\n", s, exported[s] > out_symonly
     }
 
     # (1) a prototyped service with no definition NAMES what vanished
@@ -657,13 +844,13 @@ END {
     # Derived and printed, never recited: the concentration IS the finding.
     nitems = 0
     for (it in itemuse) { nitems++; printf "item %s %d\n", it, itemuse[it] > out_items }
-    printf "universe %d\nexec %d\nstate %d\nexec+state %d\nfd-only %d\ndeclared %d\nuserspace %d\npartial %d\nexecutive %d\nprotos %d\nitems %d\nerrors %d\n",
-           nuni, nexec, nstate, nmix, nfdonly, ndecl, nkind_u, nkind_p, nkind_e, nproto, nitems, nerr > out_universe
+    printf "universe %d\nexec %d\nstate %d\nexec+state %d\nfd-only %d\ndeclared %d\nuserspace %d\npartial %d\nexecutive %d\nprotos %d\nexported %d\nsymonly %d\nitems %d\nerrors %d\n",
+           nuni, nexec, nstate, nmix, nfdonly, ndecl, nkind_u, nkind_p, nkind_e, nproto, nexported, nsymonly, nitems, nerr > out_universe
 }' "$WORK/facts"
 
 # ------------------------------------------------- the price of exemption --
 # An OVMX-EXECUTIVE line is the ONLY full exemption this gate grants, so it is
-# the only place worth attacking, and it is priced accordingly. Four checks,
+# the only place worth attacking, and it is priced accordingly. FIVE checks,
 # each buying back something the old "contains a vms_kif_* call" exemption gave
 # away for a token call:
 #
@@ -681,16 +868,55 @@ END {
 #      proxy for "more than one process is involved", and a coarse proxy that
 #      costs a second process is not purchasable with one line;
 #   4. it NAMES the service, so it is a proof ABOUT this service and not some
-#      other file that happened to satisfy 1-3.
+#      other file that happened to satisfy 1-3;
+#   5. AND -- the one that costs something a comment cannot pay -- the proof
+#      contains an assertion that NAMES THIS SERVICE and that
+#      tests/qemu/facility_defects.sh has proven REDDENABLE: the exact text
+#      appears in some defect's require_fail or knock_on_fail set.
 #
-# WHAT THIS DOES NOT DO, stated so nobody quotes it as more than it is: it does
-# NOT check that the named test ASSERTS anything about the service, still less
-# that the assertion is right. It checks that a specific, multi-process,
-# executive-resident, service-naming artifact was produced. The point is not
-# that the artifact cannot be gamed -- it is that gaming it costs a test in the
-# suite that boots the executive, instead of one ignored function call.
+# WHY 5 EXISTS, MEASURED (vms-ecf). Checks 1-4 are all source greps, and check
+# 4 is `grep -qF "$pname" "$proof"` -- WHICH A COMMENT SATISFIES. The whole
+# exemption was buyable for two lines: one ignored `(void)vms_kif_readef(...)`
+# in sys$gettim (whose answer is still 100% clock_gettime) plus the single
+# comment line `/* also covers sys$gettim */` appended to an otherwise
+# untouched proof. Both this gate and the kif caller census returned rc=0 and
+# the register printed 11 EXECUTIVE claims.
+#
+# WHY IT IS NOT PRICED IN RUNTIME PASS LINES, which was the obvious answer and
+# is wrong: a PASS-line price is buyable for one more line -- a vacuous
+# CHECK(1, "sys$gettim ..."). A manifest entry is dearer, and the reason is in
+# the OTHER gate, not this one: tests/qemu/run_facility_negctl.sh injects each
+# defect in QEMU and requires the COMPLETE set of assertions that go red to
+# EQUAL require_fail + knock_on_fail EXACTLY (its header states that check; run
+# it, do not take this comment's word for it). A vacuous assertion cannot go
+# red, so naming one there fails that control rather than buying anything here.
+#
+# WHAT 5 STILL DOES NOT BUY, and this is a residual, not a boast: this gate
+# reads the manifest, it does not run it -- the QEMU driver does, in the
+# kernel-executive-facility-negative-controls job. And the binding between an
+# assertion and a service is that the assertion's TEXT names it, so re-wording
+# an already-proven assertion to mention a second service would pay here. That
+# costs a lockstep edit in the manifest and a message CI prints on every run,
+# not a comment. It is not a claim that the price cannot be gamed.
+FDMANIFEST="$SRC_ROOT/tests/qemu/facility_defects.sh"
+: > "$WORK/proven"
+if [ -f "$FDMANIFEST" ]; then
+    for _d in $(sh "$FDMANIFEST" list 2>/dev/null); do
+        sh "$FDMANIFEST" field "$_d" require_fail 2>/dev/null
+        sh "$FDMANIFEST" field "$_d" knock_on_fail 2>/dev/null
+    done | grep -v '^[[:space:]]*$' | sort -u > "$WORK/proven"
+fi
+
+: > "$WORK/backed"
 while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
     [ "$pkind" = "EXECUTIVE" ] || continue
+    if [ ! -s "$WORK/proven" ]; then
+        printf 'BROKEN PRICE CHECK: %s (%s) cannot be priced\n' "$pname" "$pfile" >> "$WORK/errors"
+        printf '  -> tests/qemu/facility_defects.sh named no proven-reddenable assertion\n' >> "$WORK/errors"
+        printf '     at all, so every OVMX-EXECUTIVE claim here would be exempt for want\n' >> "$WORK/errors"
+        printf '     of a check. A price that cannot be computed is not a price.\n' >> "$WORK/errors"
+        continue
+    fi
     if [ ! -f "$SRC_ROOT/$pproof" ]; then
         printf 'EXECUTIVE DECLARATION WHOSE PROOF DOES NOT EXIST: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
         printf '  -> proof=%s is not a file in this tree.\n' "$pproof" >> "$WORK/errors"
@@ -714,6 +940,26 @@ while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
     if ! grep -qF "$pname" "$SRC_ROOT/$pproof" 2>/dev/null; then
         printf 'EXECUTIVE DECLARATION WHOSE PROOF DOES NOT NAME THE SERVICE: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
         printf '  -> proof=%s never mentions %s, so it is not a proof about it.\n' "$pproof" "$pname" >> "$WORK/errors"
+        continue
+    fi
+    # (5) the mutation-backed assertion. The proof is read ONCE and matched in
+    # the shell, because the alternative is (every manifest text) x (every
+    # EXECUTIVE claim) subprocesses, and this gate already compiles the tree.
+    pcontent=$(cat "$SRC_ROOT/$pproof" 2>/dev/null)
+    nbacked=0
+    while IFS= read -r _a; do
+        case "$_a" in *"$pname"*) ;; *) continue ;; esac
+        case "$pcontent" in *"$_a"*) nbacked=$((nbacked + 1)) ;; esac
+    done < "$WORK/proven"
+    printf '%s %s %d\n' "$pname" "$pproof" "$nbacked" >> "$WORK/backed"
+    if [ "$nbacked" -eq 0 ]; then
+        printf 'EXECUTIVE DECLARATION WHOSE PROOF NAMES NO ASSERTION ANY MUTATION HAS REDDENED: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
+        printf '  -> proof=%s mentions %s, but not in any assertion that\n' "$pproof" "$pname" >> "$WORK/errors"
+        printf '     tests/qemu/facility_defects.sh names in a require_fail or knock_on_fail\n' >> "$WORK/errors"
+        printf '     set. A mention can be a comment; this gate measured that exact buy-off\n' >> "$WORK/errors"
+        printf '     (vms-ecf). Claiming the whole answer comes from the executive costs an\n' >> "$WORK/errors"
+        printf '     assertion in that proof which an injected defect is known to redden --\n' >> "$WORK/errors"
+        printf '     or say OVMX-PARTIAL and name the half that is not the executive'"'"'s.\n' >> "$WORK/errors"
     fi
 done < "$WORK/decl_ok"
 
@@ -754,6 +1000,10 @@ while IFS=' ' read -r k v; do
         userspace)  echo "    $v say OVMX-USERSPACE -- no part of the answer is the executive's" ;;
         partial)    echo "    $v say OVMX-PARTIAL   -- a named part is, a named part is not" ;;
         executive)  echo "    $v say OVMX-EXECUTIVE -- all of it is, and name a proof that names them" ;;
+        exported)   echo "  $v sys\$ symbol(s) are EXPORTED by the compiled product (nm, $nobj object file(s))" ;;
+        symonly)    echo "    $v of those the source scan never saw -- exported under a name the source" ;
+                    echo "       does not spell (asm label / alias). They are in the universe under their" ;
+                    echo "       EXPORTED name; their exec/state columns cannot follow the alias." ;;
         items)      echo "  $v distinct rd item(s) carry those declarations:" ;;
         errors)     [ "$v" = "0" ] || status=1 ;;
     esac
@@ -768,6 +1018,24 @@ done < "$WORK/universe"
 if [ -s "$WORK/items" ]; then
     sort -k3,3nr -k2,2 "$WORK/items" | while read -r _ it n; do
         printf '      %-10s x%s\n' "$it" "$n"
+    done
+fi
+
+if [ -s "$WORK/symonly" ]; then
+    echo
+    echo "  exported under a name the source does not spell:"
+    sed 's/^/      /' "$WORK/symonly"
+fi
+
+# WHAT EACH FULL EXEMPTION IS ACTUALLY PAYING, derived per run. A claim resting
+# on ONE mutation-backed assertion is a claim resting on one assertion; the
+# number says so without anybody maintaining it.
+if [ -s "$WORK/backed" ]; then
+    echo
+    echo "  the OVMX-EXECUTIVE claims, and how many assertions in the proof they name"
+    echo "  are BOTH about that service and known-reddenable by an injected defect:"
+    sort -k3,3nr -k1,1 "$WORK/backed" | while read -r bn bp bc; do
+        printf '      %-22s x%-3s %s\n' "$bn" "$bc" "$bp"
     done
 fi
 

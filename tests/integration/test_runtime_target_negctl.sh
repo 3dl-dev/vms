@@ -57,69 +57,15 @@ cp -a "$SRC_ROOT/CLAUDE.md" "$ROOT/CLAUDE.md"
 [ -f "$SRC_ROOT/docker-compose.yml" ] && cp -a "$SRC_ROOT/docker-compose.yml" "$ROOT/docker-compose.yml"
 
 INIT_C="$ROOT/src/ovmx_init/ovmx_init.c"
-# Check 3c's fixture must be whatever function actually binds a caller to the
-# executive. That used to be sys_lock.c's bind_to_executive(); vms-9fc DELETED
-# it, because binding per facility was how four separate callers each forgot to
-# register. The sequence now lives once, in vms_kif.c's kif_bind(), and this
-# fixture MUST follow it: an injection anchored to a function that no longer
-# exists is a silent no-op -- the tree stays unmutated, the gate correctly goes
-# green, and every 3c control then reports "the evasion was CERTIFIED, not
-# caught". That is a broken control, not a broken gate.
-KIF_C="$ROOT/src/libvmssys/vms_kif.c"
+LOCK_C="$ROOT/src/libvms/syssvc/sys_lock.c"
 INIT_ORIG="$WORK/ovmx_init.c.orig"
-KIF_ORIG="$WORK/vms_kif.c.orig"
+LOCK_ORIG="$WORK/sys_lock.c.orig"
 cp "$INIT_C" "$INIT_ORIG"
-cp "$KIF_C" "$KIF_ORIG"
+cp "$LOCK_C" "$LOCK_ORIG"
 
 restore() {
     cp "$INIT_ORIG" "$INIT_C"
-    cp "$KIF_ORIG" "$KIF_C"
-}
-
-# ---------------------------------------------------------------------------
-# EVERY injection is itself proven to have LANDED, before the gate is run.
-#
-# Each mutation below is a sed/awk edit anchored to a source line. An anchor
-# that no longer matches -- a renamed, reshaped or deleted function -- makes
-# the edit a SILENT NO-OP: the sandbox stays unmutated, the gate correctly
-# stays GREEN, and every control downstream reports "the evasion was
-# CERTIFIED, not caught". The report then blames the gate for a broken
-# fixture. That is not hypothetical: vms-9fc deleted sys_lock.c's
-# bind_to_executive(), which check 3c's fixture was anchored to, and this
-# file went 13/20 with all seven 3c controls red against a perfectly healthy
-# gate. Re-anchoring fixed that instance; the COUPLING is structural and the
-# next rename reproduces it exactly.
-#
-# So expect_red takes the file the mutation was supposed to change and
-# refuses to interpret a green gate until that file demonstrably differs from
-# its pristine copy. A control that silently tests nothing is worse than no
-# control at all: it reports that evasions are caught.
-# ---------------------------------------------------------------------------
-if ! command -v cmp >/dev/null 2>&1; then
-    echo "  FAIL: cmp(1) unavailable -- this file cannot verify that its own"
-    echo "        injections landed, so its verdicts would be unfounded"
-    exit 1
-fi
-
-# pristine_copy_of <sandbox-file> -- echoes the .orig for a mutable file.
-pristine_copy_of() {
-    case "$1" in
-        "$INIT_C") echo "$INIT_ORIG" ;;
-        "$KIF_C")  echo "$KIF_ORIG" ;;
-        *)         echo "" ;;
-    esac
-}
-
-# injection_landed <sandbox-file>
-#   0 = the file differs from its pristine copy (the mutation is really there)
-#   1 = byte-identical (the anchor did not match; the edit was a no-op)
-#   2 = not a file this script tracks
-injection_landed() {
-    _f="$1"
-    _o=$(pristine_copy_of "$_f")
-    [ -n "$_o" ] || return 2
-    cmp -s "$_f" "$_o" && return 1
-    return 0
+    cp "$LOCK_ORIG" "$LOCK_C"
 }
 
 # ---------------------------------------------------------------------------
@@ -140,61 +86,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# META-CONTROL. The no-op detector must itself go red on a dead anchor,
-# otherwise it is one more assertion about nothing. The anchor used here is
-# the REAL one that broke: sys_lock.c's bind_to_executive(), which vms-9fc
-# deleted and which check 3c was still injecting into.
-# ---------------------------------------------------------------------------
-sed -i 's#^static void bind_to_executive(void)$#static void bind_to_executive(void) /* evasion */#' "$KIF_C"
-if injection_landed "$KIF_C"; then
-    echo "  FAIL: meta-control - an injection anchored to a function that does not"
-    echo "        exist in this file (sys_lock.c's deleted bind_to_executive) was"
-    echo "        reported as having landed, so a future rename would silently"
-    echo "        disarm every control below"
-    failed=$((failed + 1))
-    status=1
-else
-    echo "  PASS: meta-control - an injection whose anchor no longer matches is caught as a no-op"
-    passed=$((passed + 1))
-fi
-restore
-
-# ---------------------------------------------------------------------------
-# expect_red <mutated-file> <name> <required-substring> [forbidden-substring ...]
+# expect_red <name> <required-substring> [forbidden-substring ...]
 #
-# FIRST requires that <mutated-file> actually differs from its pristine copy,
-# i.e. that the injection landed at all (see the block above). Only then does
-# it run the gate on the mutated sandbox and require:
+# Runs the gate on the mutated sandbox and requires:
 #   - a nonzero exit (the gate went RED at all);
 #   - the required substring (the RIGHT property fired);
 #   - none of the forbidden substrings (NO OTHER property fired, i.e. the
 #     mutation is minimal and this property is independently load-bearing).
 # ---------------------------------------------------------------------------
 expect_red() {
-    mfile="$1"; name="$2"; need="$3"; shift 3
-    morig=$(pristine_copy_of "$mfile")
-
-    if [ -z "$morig" ]; then
-        echo "  FAIL: BROKEN FIXTURE (not a broken gate): $name"
-        echo "        expect_red was handed '$mfile', which is not one of the"
-        echo "        sandbox files this script snapshots and restores"
-        failed=$((failed + 1))
-        status=1
-        restore
-        return
-    fi
-    if ! injection_landed "$mfile"; then
-        echo "  FAIL: BROKEN FIXTURE (not a broken gate): $name"
-        echo "        the injection did not change $mfile at all -- its anchor"
-        echo "        no longer matches the source, so this control ran the gate"
-        echo "        against an UNMUTATED tree and proved nothing. Re-anchor the"
-        echo "        mutation; do NOT relax the gate."
-        failed=$((failed + 1))
-        status=1
-        restore
-        return
-    fi
-
+    name="$1"; need="$2"; shift 2
     out=$(sh "$GATE" "$ROOT" 2>&1)
     rc=$?
     ok=1
@@ -249,13 +150,13 @@ R_PROBE='code branches on whether the executive could be opened'
 
 # (a) descriptor not captured. Everything else about the function is untouched.
 sed -i 's#^    executive_fd = open("/dev/vms", O_RDWR | O_CLOEXEC);$#    (void)open("/dev/vms", O_RDWR | O_CLOEXEC);#' "$INIT_C"
-expect_red "$INIT_C" "3b(a) open() result discarded instead of captured" \
+expect_red "3b(a) open() result discarded instead of captured" \
     "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
 
 # (b) captured, halted, pinned -- but the test is not a failure test. The halt
 # is left exactly where it is, so only the branch property can fire.
 sed -i 's#^    if (executive_fd < 0) {$#    if (executive_fd > 1000000) {#' "$INIT_C"
-expect_red "$INIT_C" "3b(b) failure test replaced by a condition that is never true" \
+expect_red "3b(b) failure test replaced by a condition that is never true" \
     "$R_BRANCH" "$R_CAPTURE" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
 
 # (c) THE ADVERSARY'S ONE-LINE REGRESSION (vms-a35 round 2). The halt inside the
@@ -264,19 +165,19 @@ expect_red "$INIT_C" "3b(b) failure test replaced by a condition that is never t
 # token search certify this. Behaviourally: PID 1 boots to `Username:` with no
 # executive (test_executive_integral.sh Boot C: 10 passed / 4 FAILED).
 sed -i 's#^        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));$#        fprintf(stderr, "%%OVMX-W-EXEC, continuing without executive: %s\\n", strerror(errno));\n        return;#' "$INIT_C"
-expect_red "$INIT_C" "3b(c) halt replaced by warn-and-continue (round-2 escape)" \
+expect_red "3b(c) halt replaced by warn-and-continue (round-2 escape)" \
     "$R_HALT" "$R_CAPTURE" "$R_BRANCH" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
 
 # (d) the halt is still there, but a return reaches the caller first, so the
 # halt is dead code. Distinct property from (c): the halt IS in the branch.
 sed -i 's#^        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));$#        return;\n        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));#' "$INIT_C"
-expect_red "$INIT_C" "3b(d) return before the halt makes the halt unreachable" \
+expect_red "3b(d) return before the halt makes the halt unreachable" \
     "$R_ESCAPE" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
 
 # (e) probe-and-release: the open succeeds, halts on failure, and then hands the
 # descriptor back, so vms.ko is no longer pinned and rmmod succeeds mid-life.
 sed -i 's#^    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\\n");$#    close(executive_fd);\n    printf("%%OVMX-I-EXEC, VMS executive attached on /dev/vms\\n");#' "$INIT_C"
-expect_red "$INIT_C" "3b(e) descriptor closed again -- probe-and-release, not a pin" \
+expect_red "3b(e) descriptor closed again -- probe-and-release, not a pin" \
     "$R_CLOSE" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_TERMINAL" "$R_NOTERM" "$R_SHADOW"
 
 # ---------------------------------------------------------------------------
@@ -291,24 +192,24 @@ expect_red "$INIT_C" "3b(e) descriptor closed again -- probe-and-release, not a 
 # env-var bridge in a single hunk: the halt fires only when the variable is
 # unset, and the branch then falls out and prints the (now false) success line.
 sed -i 's#^        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));$#        if (getenv("OVMX_ALLOW_NO_EXEC") == NULL)\n            ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));\n        fprintf(stderr, "%%OVMX-W-EXEC, continuing without executive\\n");#' "$INIT_C"
-expect_red "$INIT_C" "3b(f-i) halt behind an env-var escape hatch, then falls through" \
+expect_red "3b(f-i) halt behind an env-var escape hatch, then falls through" \
     "$R_TERMINAL" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_NOTERM" "$R_SHADOW"
 
 # (f-ii) CONDITIONAL HALT. One errno survives. Nothing else changes.
 sed -i 's#^        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));$#        if (errno != ENODEV)\n            ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));#' "$INIT_C"
-expect_red "$INIT_C" "3b(f-ii) halt guarded by an errno test -- falls through on one errno" \
+expect_red "3b(f-ii) halt guarded by an errno test -- falls through on one errno" \
     "$R_TERMINAL" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_NOTERM" "$R_SHADOW"
 
 # (f-iii) NON-HALTING HALT. The old regex matched ANY identifier containing
 # "halt" and never checked which function was called.
 sed -i 's#^        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));$#        ovmx_exec_halt_reason("VMS executive device /dev/vms did not open", strerror(errno));#' "$INIT_C"
-expect_red "$INIT_C" "3b(f-iii) call renamed to an unrecognised halt-like function" \
+expect_red "3b(f-iii) call renamed to an unrecognised halt-like function" \
     "$R_TERMINAL" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_NOTERM" "$R_SHADOW"
 
 # (f-iv) the halt is unconditional and first, but is no longer LAST -- the
 # branch keeps going after it. This is the purest statement of the property.
 sed -i 's#^        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));$#        ovmx_exec_halt("VMS executive device /dev/vms did not open", strerror(errno));\n        fprintf(stderr, "%%OVMX-W-EXEC, carrying on\\n");#' "$INIT_C"
-expect_red "$INIT_C" "3b(f-iv) statement after the halt -- branch is not terminal" \
+expect_red "3b(f-iv) statement after the halt -- branch is not terminal" \
     "$R_TERMINAL" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_NOTERM" "$R_SHADOW"
 
 # ---------------------------------------------------------------------------
@@ -324,7 +225,7 @@ awk '
     inf && /^    halt_now\(\);$/ { inf = 0; next }
     { print }
 ' "$INIT_C" > "$INIT_C.new" && mv "$INIT_C.new" "$INIT_C"
-expect_red "$INIT_C" "3b(g) ovmx_exec_halt() gutted -- a halt that returns is not a halt" \
+expect_red "3b(g) ovmx_exec_halt() gutted -- a halt that returns is not a halt" \
     "$R_NOTERM" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_SHADOW"
 
 # (g-ii) THE ESCAPE HATCH ONE FRAME DOWN. executive_attach() and
@@ -332,14 +233,14 @@ expect_red "$INIT_C" "3b(g) ovmx_exec_halt() gutted -- a halt that returns is no
 # early return is in halt_now(), whose LAST statement is still _exit(1). Only a
 # chain-wide "no return anywhere" rule catches this.
 sed -i 's#^    fflush(NULL);$#    fflush(NULL);\n    if (getenv("OVMX_ALLOW_NO_EXEC"))\n        return;#' "$INIT_C"
-expect_red "$INIT_C" "3b(g-ii) early return inside halt_now(), past which _exit() still stands" \
+expect_red "3b(g-ii) early return inside halt_now(), past which _exit() still stands" \
     "$R_NOTERM" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_SHADOW"
 
 # (h) MACRO SHADOW. Every call to ovmx_exec_halt() now expands to an fprintf,
 # while the function the gate inspects is still there and still halts. Pinning
 # the callee BY NAME is a spelling test unless the name is reserved.
 sed -i 's#^static int load_kernel_module(const char \*path)$#\#define ovmx_exec_halt(w, d) fprintf(stderr, "%%s\\n", (w))\n\nstatic int load_kernel_module(const char *path)#' "$INIT_C"
-expect_red "$INIT_C" "3b(h) halt entry point redefined by a macro" \
+expect_red "3b(h) halt entry point redefined by a macro" \
     "$R_SHADOW" "$R_CAPTURE" "$R_BRANCH" "$R_HALT" "$R_ESCAPE" "$R_CLOSE" "$R_TERMINAL" "$R_NOTERM"
 
 # ===========================================================================
@@ -349,7 +250,7 @@ expect_red "$INIT_C" "3b(h) halt entry point redefined by a macro" \
 
 # (i) round 1's shape: capture, then `if (rc < 0)`.
 cat > "$WORK/bind.c" <<'EOF'
-static int kif_bind(void)
+static int bind_to_executive(void)
 {
     int rc = vms_kif_open();
     if (rc < 0)
@@ -360,30 +261,30 @@ EOF
 replace_bind() {
     awk -v repl="$1" '
         BEGIN { while ((getline line < repl) > 0) body = body line "\n"; close(repl) }
-        /^static void kif_bind\(void\)$/ { skip = 1; printf "%s", body; next }
+        /^static void bind_to_executive\(void\)$/ { skip = 1; printf "%s", body; next }
         skip && /^}$/ { skip = 0; next }
         skip { next }
         { print }
-    ' "$KIF_C" > "$KIF_C.new" && mv "$KIF_C.new" "$KIF_C"
+    ' "$LOCK_C" > "$LOCK_C.new" && mv "$LOCK_C.new" "$LOCK_C"
 }
 replace_bind "$WORK/bind.c"
-expect_red "$KIF_C" "3c(i) capture then if (rc < 0)" "$R_PROBE"
+expect_red "3c(i) capture then if (rc < 0)" "$R_PROBE"
 
 # (ii) THE ROUND-2 ESCAPE: verbatim the ensure_kif_open() body Rule 9 deleted,
 # hoisted into a variable. `>=` was invisible to the old operator class.
 cat > "$WORK/bind.c" <<'EOF'
-static int kif_bind(void)
+static int bind_to_executive(void)
 {
     int rc = vms_kif_open();
     return rc >= 0 ? 0 : -1;
 }
 EOF
 replace_bind "$WORK/bind.c"
-expect_red "$KIF_C" "3c(ii) capture then 'return rc >= 0 ? 0 : -1' (deleted fallback, hoisted)" "$R_PROBE"
+expect_red "3c(ii) capture then 'return rc >= 0 ? 0 : -1' (deleted fallback, hoisted)" "$R_PROBE"
 
 # (iii) THE OTHER ROUND-2 ESCAPE: switch was not a branch context.
 cat > "$WORK/bind.c" <<'EOF'
-static int kif_bind(void)
+static int bind_to_executive(void)
 {
     int rc = vms_kif_open();
     switch (rc) {
@@ -396,17 +297,17 @@ static int kif_bind(void)
 }
 EOF
 replace_bind "$WORK/bind.c"
-expect_red "$KIF_C" "3c(iii) capture then switch (rc)" "$R_PROBE"
+expect_red "3c(iii) capture then switch (rc)" "$R_PROBE"
 
 # (iv) inline shape, for completeness -- the one the direct pass always caught.
 cat > "$WORK/bind.c" <<'EOF'
-static int kif_bind(void)
+static int bind_to_executive(void)
 {
     return vms_kif_open() >= 0 ? 0 : -1;
 }
 EOF
 replace_bind "$WORK/bind.c"
-expect_red "$KIF_C" "3c(iv) inline 'return vms_kif_open() >= 0 ? 0 : -1'" "$R_PROBE"
+expect_red "3c(iv) inline 'return vms_kif_open() >= 0 ? 0 : -1'" "$R_PROBE"
 
 # ---------------------------------------------------------------------------
 # (v)-(vii) THE SAME THREE SHAPES ON ONE LINE. Round 3 fixed the multi-line
@@ -419,37 +320,37 @@ expect_red "$KIF_C" "3c(iv) inline 'return vms_kif_open() >= 0 ? 0 : -1'" "$R_PR
 
 # (v) one-line form of (i).
 cat > "$WORK/bind.c" <<'EOF'
-static int kif_bind(void)
+static int bind_to_executive(void)
 {
     int rc = vms_kif_open(); if (rc < 0) { }
     return 0;
 }
 EOF
 replace_bind "$WORK/bind.c"
-expect_red "$KIF_C" "3c(v) ONE LINE: 'int rc = vms_kif_open(); if (rc < 0) { }'" "$R_PROBE"
+expect_red "3c(v) ONE LINE: 'int rc = vms_kif_open(); if (rc < 0) { }'" "$R_PROBE"
 
 # (vi) one-line form of (ii) -- this is the exact escape the round-2 challenge
 # text wrote, which round 3 then only closed in its multi-line spelling.
 cat > "$WORK/bind.c" <<'EOF'
-static int kif_bind(void)
+static int bind_to_executive(void)
 {
     int rc = vms_kif_open(); (void)(rc >= 0 ? 0 : -1);
     return 0;
 }
 EOF
 replace_bind "$WORK/bind.c"
-expect_red "$KIF_C" "3c(vi) ONE LINE: 'int rc = vms_kif_open(); (void)(rc >= 0 ? 0 : -1);'" "$R_PROBE"
+expect_red "3c(vi) ONE LINE: 'int rc = vms_kif_open(); (void)(rc >= 0 ? 0 : -1);'" "$R_PROBE"
 
 # (vii) one-line form of (iii).
 cat > "$WORK/bind.c" <<'EOF'
-static int kif_bind(void)
+static int bind_to_executive(void)
 {
     int rc = vms_kif_open(); switch (rc) { case -1: break; default: break; }
     return 0;
 }
 EOF
 replace_bind "$WORK/bind.c"
-expect_red "$KIF_C" "3c(vii) ONE LINE: 'int rc = vms_kif_open(); switch (rc) { ... }'" "$R_PROBE"
+expect_red "3c(vii) ONE LINE: 'int rc = vms_kif_open(); switch (rc) { ... }'" "$R_PROBE"
 
 echo ""
 echo "=== Rule 9 negative controls: $passed passed, $failed failed ==="

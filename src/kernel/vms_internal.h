@@ -221,11 +221,7 @@ struct vms_lock_resource {
 /* Per-process VMS state */
 struct vms_proc {
     struct hlist_node   hash_node;      /* in global process hash */
-    pid_t               linux_pid;      /* Linux thread-group id == getpid(2)
-                                         * (key). NOT a thread id: one PCB
-                                         * per process, shared by its
-                                         * threads -- see
-                                         * vms_proc_find_or_err(). */
+    pid_t               linux_pid;      /* Linux PID (key) */
     uint32_t            vms_pid;        /* VMS-style PID */
 
     /*
@@ -260,14 +256,11 @@ struct vms_proc {
     char                username[VMS_USERNAME_SIZE];
 
     /*
-     * Reference to the backing PROCESS's struct pid -- task_tgid(), the
-     * thread group's pid, NOT task_pid() (vms-9fc round 2). The PCB
-     * belongs to the PROCESS, not to an open channel and not to a
-     * thread, so it is not destroyed when /dev/vms is closed (notably
-     * the implicit close at exec time) and not destroyed when one
-     * thread of a multithreaded image exits. Liveness is tested through
-     * this reference and dead entries are reaped lazily -- see
-     * vms_proc_reap_dead().
+     * Reference to the backing task's struct pid. The PCB belongs to
+     * the PROCESS, not to an open channel, so it is not destroyed when
+     * /dev/vms is closed (notably the implicit close at exec time).
+     * Liveness is tested through this reference and dead entries are
+     * reaped lazily -- see vms_proc_reap_dead().
      */
     struct pid          *pid_ref;
 
@@ -417,9 +410,7 @@ struct vms_proc *vms_proc_find_or_err(void);
  * authorized mask is derived from the task's real credentials inside,
  * never requested by the caller.
  */
-/* The VMS process ID is assigned by the executive (vms-2b8), so there is
- * no vms_pid parameter to pass: read proc->vms_pid afterwards. */
-struct vms_proc *vms_proc_register(pid_t pid);
+struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid);
 void vms_proc_free(struct vms_proc *proc);
 /* Tear down an entry the caller has ALREADY unlinked under
  * vms_proc_hash_lock (the unlink is the ownership claim). */
@@ -473,11 +464,6 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
-
-/* May `caller` read `target`'s identity? Oracle-pinned rule -- see the
- * definition in vms_proctab.c and docs/oracle/vax73-privileges.md §5. */
-bool vms_proc_may_read(const struct vms_proc *caller,
-                       const struct vms_proc *target);
 
 /* Subsystem init/cleanup */
 int vms_lock_init(void);

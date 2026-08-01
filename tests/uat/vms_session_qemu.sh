@@ -436,6 +436,51 @@ else
     PASS=$((PASS + 1))
 fi
 
+# --- NEGATIVE LOGIN: OPERATOR refuses a wrong password too (vms-08f) -------
+#
+# vms-72c's probe above only drove SYSTEM. vms-08f found the SAME bypass
+# vms-72c fixed for SYSTEM/GUEST still live for OPERATOR/DEFAULT/USER1/
+# USER2 -- SYSUAF rows that shipped (and, after vms-08f, still ship) with
+# NO password hash on file. sysuaf_authenticate() no longer treats an
+# unset hash as "no password required"; it refuses every password for
+# that account, which is the correct MATCH-VMS behaviour for an account
+# with no password on record (see the Rule 10 disposition comment on
+# sysuaf_authenticate() in src/libvms/rtl/sysuaf.c) -- not a passable
+# login, and not the account-specific SYSTEM/GUEST fix vms-72c shipped.
+# This probes OPERATOR specifically because it is the one of the four
+# still-empty-hash accounts with real privileges (OPER,SYSPRV) -- the
+# highest-value account vms-72c's own account-shaped scope note named as
+# still open.
+#
+# A FRESH OFFSET: the prompt reached by the SYSTEM probe above is already
+# a fresh 'Username:' (that IS the wait_for this probe's own send answers
+# below), but the offset is retaken anyway, on the same principle noted
+# above every other wait_for in this script that can run more than once.
+OPBADPW_OFFSET=$(wc -c <"$CONSOLE_LOG")
+send 'OPERATOR'
+wait_for 'Password:' "$STEP_TIMEOUT" "$OPBADPW_OFFSET" \
+    || fail_with_console "ERROR: no password prompt for the OPERATOR bad-password probe"
+send 'TOTALLY_WRONG_PASSWORD'
+wait_for 'Username:' "$STEP_TIMEOUT" "$OPBADPW_OFFSET" \
+    || fail_with_console "ERROR: no reprompt after OPERATOR + a wrong password -- did it succeed?"
+OPBADPW_SEGMENT=$(tail -c "+$((OPBADPW_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
+
+if printf '%s' "$OPBADPW_SEGMENT" | grep -qF 'User authorization failure'; then
+    PASS=$((PASS + 1))
+else
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: OPERATOR + a wrong password was not refused with 'User authorization failure' (got: $(printf '%s' "$OPBADPW_SEGMENT" | tr '\n' ' '))"
+fi
+# Same shape as the SYSTEM check above: the refusal must be a REFUSAL, not
+# incidental text alongside a session granted anyway -- checked on the
+# SAME segment so this cannot pass by printing both.
+if printf '%s' "$OPBADPW_SEGMENT" | grep -qF 'Welcome to OVMX'; then
+    FAIL=$((FAIL + 1))
+    ERRORS="${ERRORS}\n  FAIL: OPERATOR + a wrong password reached a session anyway ('Welcome to OVMX' present)"
+else
+    PASS=$((PASS + 1))
+fi
+
 # --- Real login --------------------------------------------------------
 # A FRESH OFFSET, NOT $BADPW_OFFSET: the bad-password attempt's own
 # "Password:" prompt already sits in the log after $BADPW_OFFSET, so

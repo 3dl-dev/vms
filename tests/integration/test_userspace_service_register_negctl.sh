@@ -86,6 +86,7 @@ record_verdict() {
 # expect_red <files-that-must-have-changed> <name> <required-output-fragment>
 expect_red() {
     files="$1"; name="$2"; need="$3"
+    printf '%s\n' "$need" >> "$WORK/needs"
     for _f in $files; do
         if ! injection_landed "$_f"; then
             echo "  FAIL: BROKEN FIXTURE (not a broken gate): $name"
@@ -277,6 +278,38 @@ sed -i '/OVMX-USERSPACE: sys\$setast/d' "$AST"
 sed -i 's|^uint32_t sys\$setast(uint32_t enbflg) {|static uint32_t ovmx_negctl_removed(uint32_t enbflg) {|' "$AST"
 sed -i '/^uint32_t sys\$setast(/d' "$STARLET"
 expect_green "$AST $STARLET" "deleting a service outright (definition + prototype + declaration) stays green"
+
+# ---------------------------------------------------------------- coverage --
+# "EVERY property has an evasion" is a claim this file used to make in its own
+# closing line while the enumeration behind it lived only in the author's head.
+# So it is DERIVED instead: every distinct failure message the gate can emit is
+# read out of the gate itself, and each one must be named by some control's
+# required fragment above. Add a new failure mode to the gate without a control
+# and this goes red -- the coverage cannot silently fall behind the gate.
+: > "$WORK/derived"
+sed -n 's/.*errors\[++nerr\] = "\([A-Z][^"]*: \).*/\1/p' "$GATE" | sort -u >> "$WORK/derived"
+grep -oE 'malformed OVMX-USERSPACE declaration' "$GATE" | sort -u >> "$WORK/derived"
+: > "$WORK/uncovered"
+ncov=0
+while IFS= read -r msg; do
+    [ -n "$msg" ] || continue
+    ncov=$((ncov + 1))
+    grep -qF "$msg" "$WORK/needs" || printf '%s\n' "$msg" >> "$WORK/uncovered"
+done < "$WORK/derived"
+
+if [ "$ncov" -eq 0 ]; then
+    echo "  FAIL: BROKEN COVERAGE CHECK: no failure message was extracted from the gate,"
+    echo "        so 'every property has an evasion' would be vacuously true."
+    status=1; failed=$((failed + 1))
+elif [ -s "$WORK/uncovered" ]; then
+    echo "  FAIL: the gate can fail in ways no control here provokes:"
+    sed 's/^/    /' "$WORK/uncovered"
+    echo "  -> add a control for each, or the closing line below is a boast."
+    status=1; failed=$((failed + 1))
+else
+    echo "  PASS: coverage -- all $ncov failure message(s) the gate can emit are provoked by a control above"
+    passed=$((passed + 1))
+fi
 
 # ------------------------------------------------------------------ verdict --
 echo

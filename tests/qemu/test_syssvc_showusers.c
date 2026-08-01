@@ -394,6 +394,12 @@ static int table_rows(const struct table *t)
         char c_name[64];
 
         cell(t, line, len, 1, c_name, sizeof(c_name));
+        /* The liveness marker run_dcl appends is printed at column 0 and is
+         * shorter than the Process Name column's offset, so today it yields
+         * an empty cell and is already skipped by the emptiness test. The
+         * explicit exclusion is here so that a WIDER future layout, which
+         * would put the marker inside the column, cannot silently start
+         * counting it as a user. */
         if (c_name[0] != '\0' && strcmp(c_name, "OVMX-PROBE-ALIVE") != 0)
             n++;
         line = nl ? nl + 1 : NULL;

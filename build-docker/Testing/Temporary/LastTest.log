@@ -1,0 +1,107 @@
+Start testing: Mar 05 02:50 UTC
+----------------------------------------------------------
+19/20 Testing: dcl-integration
+19/20 Test: dcl-integration
+Command: "/usr/bin/bash" "/src/tests/dcl/run_dcl_tests.sh"
+Directory: /src/build-docker/tests/dcl
+"dcl-integration" start time: Mar 05 02:50 UTC
+Output:
+----------------------------------------------------------
+=== DCL Integration Test Suite ===
+Using: /src/build-docker/bin/DCL.EXE
+Timeout: 10s per test
+
+FAIL: BACKUP creates, lists, and restores savesets
+  Expected to contain: %BACKUP-S-COPIED
+  Output: %BACKUP-E-OPENIN, error opening *.txt - No such file or directory
+%BACKUP-E-OPENIN, error opening .BCK - No such file or directory
+%BACKUP-E-NOFILE, missing input and/or output specification
+PASS: DEFINE creates logical name and DEASSIGN removes it
+PASS: $STATUS symbol reflects last command status
+PASS: RENAME command renames a file successfully
+PASS: SET VERIFY and SET NOVERIFY change verification state
+PASS: WRITE SYS$OUTPUT with string, symbol, and comma concatenation
+PASS: Command procedures (@file) execute DCL scripts
+PASS: COPY and DELETE work on files
+PASS: CREATE/DIRECTORY creates a new directory
+PASS: DCL exits cleanly on EOF after executing commands
+PASS: DIFFERENCES command compares two files
+PASS: DIRECTORY command lists files
+PASS: IF/THEN conditional execution works
+PASS: DCL string literal parsing including embedded quotes
+PASS: Symbol substitution with apostrophe syntax
+PASS: F$LENGTH lexical function returns string length
+PASS: F$EDIT performs string transformations
+PASS: F$ELEMENT extracts delimited elements
+PASS: F$EXTRACT returns correct substrings
+PASS: F$GETJPI returns process information
+PASS: F$GETSYI returns system information
+PASS: F$INTEGER converts string to integer
+PASS: F$LENGTH returns string length
+PASS: F$LOCATE finds substring position
+PASS: F$SEARCH finds files
+PASS: F$STRING converts integer to string
+PASS: F$TRNLNM translates logical names
+PASS: F$TYPE returns symbol type
+PASS: F$VERIFY returns verification state
+PASS: LIBRARY command creates, inserts, lists, and extracts modules
+PASS: MOUNT/DISMOUNT commands create and remove VMS device mappings
+PASS: Error messages must not contain Unix strerror text
+PASS: Error messages and output must not leak Unix paths or terminology
+PASS: OPEN/READ/CLOSE file I/O operations work
+PASS: Comment handling with ! and ; markers
+PASS: Line continuation with dash at end of line
+PASS: Error recovery for invalid command verb
+PASS: GOTO label branching in command procedure
+PASS: IF/THEN/ELSE control flow with string and numeric comparisons
+PASS: Qualifier parsing with /QUALIFIER syntax
+PASS: PIPE command chains DCL commands
+PASS: PIPE with multiple segments
+PASS: Queue commands (SUBMIT, PRINT, SHOW QUEUE, DELETE/ENTRY, SET ENTRY) work end-to-end
+PASS: RECALL/ALL displays command history
+PASS: Script GOTO skips to label, code before label not executed
+PASS: Script parameter substitution with P1 and P2
+PASS: SEARCH command finds text in files
+PASS: SET DEFAULT changes working directory
+PASS: SET quick-win subcommands produce correct VMS-format output
+PASS: SET TERMINAL /OVERSTRIKE changes Insert to Overstrike in SHOW output
+PASS: SET TERMINAL /WIDTH=132 updates width in SHOW TERMINAL output
+PASS: SHOW DEFAULT displays current default directory
+PASS: DEFINE and SHOW LOGICAL work together
+PASS: SHOW MEMORY displays memory information in VMS format
+PASS: SHOW PROCESS displays VMS-style process information
+PASS: SHOW quick-win subcommands produce correct VMS-format output
+PASS: SHOW SYSTEM displays VMS-style system information without Linux processes
+PASS: SHOW TIME displays VMS date format (DD-MMM-YYYY HH:MM:SS)
+PASS: SPAWN executes DCL command in subprocess
+PASS: SPAWN does not invoke Unix shell
+PASS: Symbol assignment and SHOW SYMBOL work
+PASS: DELETE/SYMBOL removes a symbol from the table
+PASS: Global symbol assignment with == and SHOW SYMBOL
+PASS: Local symbol assignment and substitution in WRITE
+PASS: TCPIP SHOW INTERFACE displays VMS device names
+PASS: TCPIP SHOW ROUTE displays routing table with VMS device names
+PASS: TCPIP SHOW VERSION displays version string
+PASS: SHOW TERMINAL displays VMS-style terminal characteristics
+PASS: TYPE command displays file contents
+PASS: Error messages use VMS %FAC-SEV-IDENT format
+PASS: WAIT command pauses briefly without error
+PASS: WRITE SYS$OUTPUT sends text to stdout
+
+=== Results: 71 passed, 1 failed, 0 skipped ===
+Failures:
+  FAIL: test_backup — BACKUP creates, lists, and restores savesets
+<end of output>
+Test time =   3.78 sec
+----------------------------------------------------------
+Test Failed.
+"dcl-integration" end time: Mar 05 02:50 UTC
+"dcl-integration" time elapsed: 00:00:03
+----------------------------------------------------------
+
+End testing: Mar 05 02:50 UTC
+
+dcl =   3.78 sec*proc
+
+integration =   3.78 sec*proc
+

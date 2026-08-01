@@ -1,0 +1,18 @@
+test_vmssys_syscall 1 0.00106665
+test_vmssys_string 1 0.000903491
+test_vmssys_snprintf 1 0.000751189
+test_vmssys_futex 1 0.00338825
+test_vmssys_stdio 1 0.000919721
+test_vmssys_math 1 0.000595771
+test_vmssys_crt 1 0.00120917
+test_libvms_fao 1 0.0013331
+test_libvms_lib_vm 1 0.000862433
+test_libvms_lib_bitops 1 0.00132761
+test_libvms_str_routines 1 0.00112351
+test_libvms_mth_routines 1 0.00142456
+vmsprocess_unit 1 0.00137684
+vmslnm_unit 1 0.00118832
+vmsfs_unit 1 0.00226969
+vmsrms_unit 1 0.0111678
+vmsssh_integration 0 0
+---

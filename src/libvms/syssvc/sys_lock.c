@@ -6,17 +6,9 @@
  * vms_kif_enq/deq/convert wrappers in libvmssys). There is no userspace
  * lock table and no POSIX flock() fallback -- the kernel module is the
  * single authoritative lock manager, matching the cluster-interop design
- * (docs/design-cluster-node.md).
- *
- * There is no absent-executive case here. The executive is INTEGRAL: PID 1
- * refuses to bring the system up unless /dev/vms is open, and holds it open
- * for the life of the system (src/ovmx_init/ovmx_init.c, executive_attach).
- * So by the time any image calls $ENQ, a reachable executive is guaranteed.
- * This file used to return SS$_NOSUCHDEV when /dev/vms would not open; that
- * was itself a fiction -- it encoded "OVMX runs, minus the executive", and
- * no such system exists. On OpenVMS the executive IS the operating system.
- * SS$_NOSUCHDEV keeps its real meaning elsewhere (a caller named a VMS
- * device that does not exist), which is a genuinely different condition.
+ * (docs/design-cluster-node.md): real lock semantics require the
+ * QEMU/kernel target. Docker containers have no /dev/vms, so $ENQ/$DEQ
+ * return SS$_NOSUCHDEV there -- that is accepted, by design, not a bug.
  *
  * Lock modes (VMS compatible), from starlet.h:
  *   LCK$K_NLMODE (0) - Null lock (no access)
@@ -32,30 +24,19 @@
 #include <unistd.h>
 #include "starlet.h"
 #include "vms_kif.h"
-
-/* Lock Status Block (VMS-compatible layout) */
-struct lksb {
-    uint16_t lksb$w_status;
-    uint16_t lksb$w_reserved;
-    uint32_t lksb$l_lkid;
-    char     lksb$b_valblk[16];  /* Lock value block */
-};
+#include "lksdef.h"  /* struct lksb — now a public header (vms-1d9); same
+                      * field layout this file always used, just no longer
+                      * a private duplicate only sys_lock.c could see. */
 
 /*
- * Bind this thread to the executive. The /dev/vms descriptor in libvmssys is
- * thread-local, so each thread opens its own; vms_kif_open() is idempotent
- * (it no-ops if this thread's fd is already open), so it is safe to call on
- * every $ENQ/$DEQ.
- *
- * The result is deliberately not tested. This is not an oversight and must
- * not be "fixed" by adding a status return: the condition it would test for
- * -- an unreachable executive -- is made unreachable at boot, and a handled-
- * but-impossible-on-VMS state is itself an authenticity defect. See the file
- * header and CLAUDE.md Rule 9.
+ * Lazily open /dev/vms for this thread. vms_kif_open() is idempotent
+ * (it no-ops if the thread-local fd is already open), so it is safe to
+ * call on every $ENQ/$DEQ. Returns 0 if the kernel device is available,
+ * -1 otherwise (e.g. Docker mode, which has no /dev/vms).
  */
-static void bind_to_executive(void)
+static int ensure_kif_open(void)
 {
-    (void)vms_kif_open();
+    return vms_kif_open() >= 0 ? 0 : -1;
 }
 
 /*
@@ -142,7 +123,10 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
     if (!lksb)
         return SS$_BADPARAM;
 
-    bind_to_executive();
+    if (ensure_kif_open() < 0) {
+        lksb->lksb$w_status = (uint16_t)SS$_NOSUCHDEV;
+        return SS$_NOSUCHDEV;
+    }
 
     uint8_t valblk[16];
     memcpy(valblk, lksb->lksb$b_valblk, sizeof(valblk));
@@ -274,7 +258,8 @@ uint32_t sys$deq(uint32_t lkid, void *valblk, uint32_t acmode,
                  uint32_t flags) {
     (void)acmode;
 
-    bind_to_executive();
+    if (ensure_kif_open() < 0)
+        return SS$_NOSUCHDEV;
 
     /* Translate public flags to the kernel bitmask at the boundary (same as
      * $ENQ). NOTE: real OpenVMS $DEQ has its own flag namespace (LCK$M_DEQALL

@@ -328,10 +328,10 @@ Priority 1: Known Image Database (VMS$KNOWN_IMAGES.DAT)
     |
 Priority 2: Hardcoded SYS$SHARE fallback
     |  /vms/SYS0/SYSCOMMON/SYSLIB/<SONAME>
-    |  Always available, even before the Known Image DB exists
+    |  Always available, even before VMSLNMD starts
     |  This is the chicken-and-egg breaker
     |
-Priority 3: SYS$SHARE logical name (once the tables are executive-resident)
+Priority 3: SYS$SHARE logical name (after VMSLNMD)
     |  Translate SYS$SHARE via vmslnm API
     |  Search result directory for SONAME
     |  Only available after logical name daemon is running
@@ -345,13 +345,6 @@ Not found: %IMGACT-F-IMGNOTFND error
 ```
 
 ### Chicken-and-Egg: VMSLNMD Bootstrap
-
-> **SUPERSEDED (`vms-a4b`, 2026-07-30).** `VMSLNMD.EXE` no longer exists. OpenVMS has no logical
-> name server process — the tables are executive-resident — so the daemon was deleted rather than
-> kept as a bootstrap step. Everything below describing VMSLNMD's place in the boot sequence is
-> **historical**. The resolution it describes still holds and is now the *whole* story: IMGACT.EXE
-> breaks the circularity with its hardcoded `SYS$SHARE` fallback path, and no daemon is involved.
-> Where the executive-resident tables end up living is ruled by `vms-ln0` / built by `vms-d37`.
 
 The logical name daemon (`VMSLNMD.EXE`) is itself a dynamically linked binary
 that requires image activation. But IMGACT.EXE normally uses logical names

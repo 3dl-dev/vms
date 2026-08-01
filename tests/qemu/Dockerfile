@@ -84,7 +84,7 @@ RUN KVER=$(cat /tmp/kver) && \
 #                                 stage below against the REAL src/libvms
 #                                 public sys$ API (vms-1d9).
 #   test_kmod_devtab/procnam/  -> NOT built here; built below against
-#   test_kmod_ident/bind.c        src/libvmssys (the real kernel-interface
+#   bind.c                        src/libvmssys (the real kernel-interface
 #                                 client), see that stage's comment.
 #   everything else            -> plain gcc -static against vms_ioctl.h.
 #
@@ -96,23 +96,23 @@ COPY tests/qemu/test_*.c /src/tests/qemu/
 RUN for f in /src/tests/qemu/test_*.c; do \
         case "$f" in \
             */test_syssvc_*.c) continue;; \
-            */test_kmod_devtab.c|*/test_kmod_procnam.c|*/test_kmod_ident.c|*/test_kmod_bind.c) continue;; \
+            */test_kmod_devtab.c|*/test_kmod_procnam.c|*/test_kmod_bind.c) continue;; \
         esac; \
         out="${f%.c}"; \
         gcc -static -O2 -Wall -o "$out" "$f" -I/src/kernel || exit 1; \
         echo "Built: $(basename $out)"; \
     done
 
-# The device-table test (vms-d0b), the process-table test (vms-8019) and the
-# identity/privilege test (vms-2b8) drive the real userspace kernel-interface
+# The device-table test (vms-d0b) and the process-table test (vms-8019) drive
+# the real userspace kernel-interface
 # client rather than a hand-rolled ioctl copy, so the client libvms will call is
 # the client under test. That needs libvmssys's freestanding syscall trampoline
 # and string helpers linked in -- it does NOT pull in libvms; the libvms build
 # graph arrives in the NEXT stage (vms-1d9), which is a heavier, separate build.
 COPY src/libvmssys/ /src/libvmssys/
 RUN ARCH=$(uname -m) && \
-    for t in test_kmod_devtab test_kmod_procnam test_kmod_ident test_kmod_bind; do \
-        gcc -static -O2 -Wall -pthread -o /src/tests/qemu/$t \
+    for t in test_kmod_devtab test_kmod_procnam test_kmod_bind; do \
+        gcc -static -O2 -Wall -o /src/tests/qemu/$t \
             /src/tests/qemu/$t.c \
             /src/libvmssys/vms_kif.c \
             /src/libvmssys/vms_string.c \

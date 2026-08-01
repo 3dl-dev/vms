@@ -46,6 +46,7 @@ reset.**
 | the `amsg=0` / bundled `op 0x02` is the cause **of the limp** | **CONFIRMED — pure mode removes it; first reference-shaped join** | `r1A` vs `r2A`, §4c.2b |
 | …and is the cause **of the rejoin refusal** | **REFUTED — pure mode joins clean and STILL cannot rejoin** | `r2A`/`r2B`, §4c.2b |
 | which peer completes START first | **REFUTED — both orderings in successes and failures** | §4c.5 |
+| a class-0x03 crash removal quarantines the identity | **REFUTED — a real VAX3 crash-rejoins in ~90 s** | §4c.2c ⭐ |
 
 ## 1. The reproducer — four minutes, no reset
 
@@ -391,6 +392,68 @@ But the narrower claim now has no path to a fix that we have not already run.
 
 </details>
 
+### 4c.2c ⭐ THE MISSING SPECIMEN NOW EXISTS — a real VAX rejoins after a crash
+
+The `vms-2f3` rd notes have said since 2026-07-31 that **no reference specimen
+anywhere models a crash-detected (class-0x03) removal followed by a rejoin** —
+`af2`'s departure was a *graceful* `REMOVE_NODE` (class 0x04, which runs no
+barrier at all). That was the single biggest RE gap on this item. **It is closed.**
+
+Made 2026-08-01 16:33–16:37, captured end to end:
+
+```
+16:33:42  kill -9 on VAX3's SIMH process  -- a HARD CRASH, no shutdown, no
+          REMOVE_NODE message. EXACTLY how OVMX dies.
+16:34:05  VAX1: timed-out lost connection to system VAX3
+          VAX1: proposing reconfiguration of the VAXcluster
+          VAX1: removed from VAXcluster system VAX3
+          VAX1: completed VAXcluster state transition      <- class 0x03 removal
+~16:35:0x VAX3 rebooted -- SAME SCSNODE "VAX3", SAME SCSSYSTEMID 1027
+16:35:36  VAX3 speaking again (OPCOM traffic reaching VAX1)
+16:37:39  SHOW CLUSTER on VAX1: VAX3 MEMBER
+```
+
+**A real VMS node crash-removed under an unchanged identity rejoins in ~90 s.**
+
+Three things this settles at once:
+
+1. **The lab is not the problem** and the CSB residue is not a permanent poison.
+   The peers retire or reuse a crashed node's state as a matter of course.
+2. **"Crash removal quarantines the identity" is DEAD** as an explanation. It is
+   the ordinary VMS path, and it works — for a real node.
+3. **The gap is ours**, and for the first time we can see what the correct
+   behaviour looks like on this exact path rather than inferring it from a
+   graceful-departure specimen that runs different code.
+
+**The specimen:** `captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`
+(4.2 MB). Compare against `work/d94-r2A.pcap` (OVMX `OVMXR2` joins, pure mode)
+and `work/d94-r2B.pcap` (**same identity, 3 min later, refused**, pure mode) —
+a matched success/failure pair on the good join path, which no earlier rejoin
+evidence had.
+
+**This is where the next session's effort belongs.** The question is now
+concrete and has a reference answer in hand: *what does VAX3 do across a crash
+and reboot that OVMX does not?*
+
+### 4c.2d A free peer-side oracle: plain DCL renders the CSB state
+
+Once several dead OVMX identities exist, DCL `SHOW CLUSTER` on VAX1 stops
+rendering an empty table and starts naming them with their CSB states:
+
+```
+| VAX1   | VMS V7.3 | MEMBER  |
+| VAX3   | VMS V7.3 | MEMBER  |
+| OVMXR1 | VMX V0.1 | BRK_NON |   <- joined, killed, never retried
+| OVMXR2 | VMX V0.1 | BRK_NEW |   <- joined, killed, rejoin ATTEMPTED and refused
+```
+
+**`BRK_NON` vs `BRK_NEW` is a real signal, not noise.** A refused rejoin moves
+the CSB from `BRK_NON` to `BRK_NEW`: the peer **did** re-accept us into the NEW
+state and we then broke while there — we are not being ignored, we are being
+admitted-and-stranded. Consistent with §4c.6's SDA reading (`open`, CSID
+`00000000`, no status flags, a numbered transition that never advances).
+Cheaper than SDA and needs no `ANALYZE/SYSTEM`.
+
 ### 4c.3 The refusal is coordinator-side state — proven, not inferred
 
 The agent byte-diffed OVMX's retry `op 0x02` in the run that **succeeded**
@@ -506,9 +569,21 @@ strongest remaining lead — see §5.**
 > 2. **`vms-785`** — promote pure mode to the default, with the design cascade.
 > 3. **Bisect what actually fixed the join** — the `op 0x02` shape or the
 >    disk-discovery run. They moved together. One cheap run each.
-> 4. **Then attack the rejoin as its own defect**: coordinator-side CSB state
->    keyed on our identity. The question is what makes a peer RETIRE or REUSE a
->    `long_break` CSB, and SDA is the instrument (§4c.6), not the wire.
+> 4. **Then attack the rejoin as its own defect — and START FROM §4c.2c.** The
+>    missing reference specimen now exists: a real VAX3, `kill -9`'d exactly as
+>    OVMX dies, crash-removed class-0x03, rebooted under an unchanged
+>    SCSNODE/SCSSYSTEMID, **rejoined in ~90 s**
+>    (`captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap`). Diff it against
+>    the matched OVMX pair `d94-r2A` (joined) / `d94-r2B` (same identity, refused,
+>    both pure mode). The question is no longer open-ended — there is a reference
+>    answer on this exact path for the first time.
+>
+> **A note on method, since this item keeps punishing the same mistake.** Three
+> agent analyses on `vms-2f3` produced confident, well-evidenced root causes.
+> One was refuted by a `grep`, one by a four-minute run, and one turned out to be
+> right after a four-minute run refuted my refutation. Every time, the resolution
+> came from the lab or from a peer-side oracle, not from more bytes. **Get the
+> oracle to answer before you get the agent to explain.**
 
 **Historical framing, kept for the reasoning only:**
 

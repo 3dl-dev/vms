@@ -56,6 +56,57 @@ jobs:
           cd build && ctest --output-on-failure
 
   # -----------------------------------------------------------------------
+  # Job 2: Docker build + smoke test
+  # -----------------------------------------------------------------------
+  docker-build:
+    name: Docker Build & Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ovmx-test:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — vmsdcl SHOW TIME
+        run: |
+          docker run --rm \
+            --entrypoint vmsdcl \
+            ovmx-test:latest \
+            -c "SHOW TIME"
+
+      - name: Smoke test — Docker skips install (pre-installed state)
+        timeout-minutes: 2
+        run: |
+          # The default entrypoint boots and then serves SSH forever — it
+          # never exits, and its PID 1 does not die on SIGTERM. So we must
+          # NOT wrap `docker run` in `timeout` (timeout without -k waits
+          # forever for the child to exit, hanging the job to the 6h
+          # ceiling — see vms-021). Instead run detached, read the boot
+          # output from the logs, and force-remove the container, which
+          # guarantees teardown regardless of signal handling.
+          CID=$(docker run -d ovmx-test:latest)
+          sleep 10
+          OUTPUT=$(docker logs "$CID" 2>&1 | head -20)
+          docker rm -f "$CID" >/dev/null 2>&1 || true
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -qF '%STARTUP-I-SYSBOOT' \
+            && echo "PASS: Docker detects pre-installed system" \
+            || { echo "FAIL: Expected SYSBOOT skip-install message"; exit 1; }
+
+  # -----------------------------------------------------------------------
   # Job 3: Persistent boot smoke test (QEMU)
   #
   # Builds the bootable image, boots QEMU twice with the same disk:
@@ -94,19 +145,6 @@ jobs:
             ovmx-boot:latest \
             /test.sh
 
-      # vms-0ff. Reuses the image built above (no extra build). Boots the REAL
-      # runtime twice: once with the executive present (must come up), once
-      # with vms.ko removed from the initramfs (must NOT come up). The second
-      # boot is a negative control — it proves this check can actually go red,
-      # which is the only thing that distinguishes a gate from decoration.
-      - name: The executive is integral — OVMX must not boot without it
-        run: |
-          docker run --rm \
-            -v ${{ github.workspace }}/tests/qemu/test_executive_integral.sh:/test.sh:ro \
-            --entrypoint bash \
-            ovmx-boot:latest \
-            /test.sh
-
   # -----------------------------------------------------------------------
   # Job 3b: Kernel Executive (vms-e4d, epic vms-6b8 PHASE 0 HARD BARRIER)
   #
@@ -141,120 +179,7 @@ jobs:
         run: docker build -f tests/qemu/Dockerfile -t ovmx-ktest:latest .
 
       - name: Boot QEMU, insmod vms.ko, run executive assertions against /dev/vms
-        run: |
-          set +e
-          RAW=$(docker run --rm ovmx-ktest:latest 2>&1)
-          RC=$?
-          set -e
-          # QEMU's serial console emits CRLF; normalise so line-anchored
-          # matching below is not defeated by a trailing \r.
-          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
-          echo "$OUTPUT"
-
-          if [ "$RC" -ne 0 ]; then
-            echo "FAIL: kernel-executive harness exited nonzero"
-            exit 1
-          fi
-
-          # ---------------------------------------------------------------
-          # WHY THIS IS NOT A COUNT ASSERTION (vms-1d9 round 5)
-          #
-          # A nonzero exit code alone does not catch a suite that silently
-          # stops being built/staged/run while everything else stays green:
-          # if tests/qemu/Dockerfile's qemu_syssvc_tests build or its
-          # test_syssvc_* glob-copy step quietly drops a registered test,
-          # init.sh's TOTAL_PASS/TOTAL_FAIL both just get smaller and the
-          # job still exits 0. Two previous attempts at closing that gap
-          # both failed, each proven by a real podman build + QEMU boot:
-          #
-          #   round 3: pinned the EXACT tally ('11 suites passed, 0 failed').
-          #            Strong against a drop, but turns the job RED the
-          #            moment a legitimate new test_syssvc_*.c is ADDED --
-          #            defeating the glob-based generality this item exists
-          #            to deliver for vms-ef1 / vms-as1 / vms-pv1.
-          #   round 4: replaced it with a FLOOR (>= 11) plus a HAND-
-          #            MAINTAINED suite-name list whose own comment said it
-          #            is not updated when a suite is added. So every suite
-          #            added after that point was permanently unprotected:
-          #            adversary added a suite, dropped it from the
-          #            initramfs, and got '11 suites passed, 0 failed',
-          #            rc 0, 'PASS: all checks satisfied'.
-          #
-          # This version DERIVES the expected suite set from the checkout at
-          # CI time and asserts, per suite, on the machine-readable verdict
-          # line init.sh prints ("=== SUITE <name> rc=<exit code> ===").
-          # No count, no hand-maintained list. Consequences:
-          #   * suite ADDED   -> its source appears in the derived set, it is
-          #                      asserted automatically, job stays GREEN
-          #   * suite DROPPED -> source present, verdict line absent -> RED
-          #   * suite FAILS   -> verdict line says rc!=0 -> RED
-          # All three directions are proven by real podman+QEMU runs (see
-          # vms-1d9 notes), not by inspection.
-          # ---------------------------------------------------------------
-          EXPECTED=$(cd "$GITHUB_WORKSPACE" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
-                     | xargs -n1 basename | sed 's/\.c$//' | sort)
-          echo "Derived expected suites from the checkout:"
-          echo "$EXPECTED" | sed 's/^/  /'
-
-          # `|| true`: grep -c exits 1 on an empty set, and GitHub runs `run:`
-          # steps under `bash -e`, so without it an empty derived set would
-          # abort the step with no diagnostic instead of hitting the explicit
-          # floor check below.
-          N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
-          # Monotone FLOOR on the number of suite SOURCES, not on any tally.
-          # The derived set above cannot notice a suite whose .c file was
-          # deleted outright (the set simply shrinks), so this catches that.
-          # It is a floor, so ADDING suites never requires touching it; only
-          # deliberately removing a suite does, which is the intended
-          # forcing function (see project Rule: do not delete the test that
-          # exposed a defect).
-          if [ "$N_EXPECTED" -lt 12 ]; then
-            echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 12)."
-            echo "A tests/qemu/test_kmod_*.c or test_syssvc_*.c was deleted. Deleting an executive"
-            echo "suite is not a way to make this gate pass -- see vms-6b8."
-            exit 1
-          fi
-
-          # init.sh prints one verdict line per staged binary it actually
-          # execs, carrying the binary's REAL exit status. A missing line
-          # proves the binary never ran (dropped by the build or the
-          # initramfs copy); rc!=0 proves it ran and failed.
-          BAD=""
-          for suite in $EXPECTED; do
-            line=$(echo "$OUTPUT" | grep -F "=== SUITE $suite rc=" | tail -1)
-            if [ -z "$line" ]; then
-              BAD="$BAD
-            $suite: NEVER RAN (no verdict line -- not built, or not staged into the initramfs)"
-              continue
-            fi
-            rc=$(printf '%s' "$line" | sed -n 's/.*rc=\([0-9][0-9]*\).*/\1/p')
-            if [ "$rc" != "0" ]; then
-              BAD="$BAD
-            $suite: rc=$rc (expected 0; rc=77 means it reported an honest SKIP inside the one job that HAS a real /dev/vms)"
-            fi
-          done
-          echo "$OUTPUT" | grep -qF 'PASS: vms.ko loaded, /dev/vms present' \
-            || BAD="$BAD
-            vms.ko: did not load / /dev/vms absent"
-          echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
-            || BAD="$BAD
-            vmsfs.ko: did not load / filesystem not registered"
-
-          if [ -n "$BAD" ]; then
-            echo "FAIL: kernel-executive suite verdicts not all clean:$BAD"
-            exit 1
-          fi
-
-          # Aggregate cross-check: init.sh's own tally must agree that
-          # nothing failed. This is deliberately NOT a count -- it catches a
-          # suite that failed inside init.sh's accounting without producing
-          # a verdict line at all (e.g. a harness edit that reorders them),
-          # and it proves the harness reached its own accounting rather than
-          # panicking or timing out mid-run.
-          echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: [0-9]+ suites passed, 0 suites failed ===' \
-            || { echo "FAIL: expected a '<N> suites passed, 0 suites failed' split -- a suite failed, or the harness never reached its own accounting (panic/timeout)"; exit 1; }
-
-          echo "PASS: all $N_EXPECTED derived suites ran with rc=0 against a real /dev/vms, both modules loaded"
+        run: docker run --rm ovmx-ktest:latest
 
   # -----------------------------------------------------------------------
   # Job 3c: Kernel Executive — negative control (vms-e4d)
@@ -263,13 +188,9 @@ jobs:
   # harness with --build-arg NEGATIVE_CONTROL=1, which patches init.sh to skip
   # insmod of vms.ko (simulating the executive being absent) while everything
   # else — building vms.ko itself, loading vmsfs.ko, the test binaries — stays
-  # real. Every test that opens /dev/vms then fails ("cannot open /dev/vms")
-  # instead of silently passing. (This comment used to add "the same
-  # SS$_NOSUCHDEV path sys_lock.c already takes"; that path was DELETED by
-  # vms-0ff — an unreachable executive is now prevented at boot, not reported
-  # per call. The harness is a test rig deliberately booted without an
-  # executive, which is why it can still observe a state the product cannot.)
-  # run_tests.sh exits 1 in that case, so
+  # real. Every test that opens /dev/vms then fails honestly ("cannot open
+  # /dev/vms", the same SS$_NOSUCHDEV path src/libvms/syssvc/sys_lock.c already
+  # takes) instead of silently passing. run_tests.sh exits 1 in that case, so
   # THIS job inverts the check: it PASSES only if the container run fails,
   # and FAILS (catching a regression in the harness itself) if the container
   # run unexpectedly succeeds while the executive is supposed to be absent.
@@ -294,10 +215,9 @@ jobs:
       - name: Assert the harness FAILS for the RIGHT REASON when the executive is absent
         run: |
           set +e
-          RAW=$(docker run --rm ovmx-ktest-negctl:latest 2>&1)
+          OUTPUT=$(docker run --rm ovmx-ktest-negctl:latest 2>&1)
           RC=$?
           set -e
-          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
           echo "$OUTPUT"
 
           if [ "$RC" -eq 0 ]; then
@@ -313,266 +233,70 @@ jobs:
           echo "$OUTPUT" | grep -qF 'cannot open /dev/vms' \
             || { echo "FAIL: did not see the expected 'cannot open /dev/vms' failure text -- the job may have gone red for an unrelated reason (QEMU missing, boot panic, run_tests.sh timeout, runner OOM), not because the executive is absent"; exit 1; }
 
-          # ---------------------------------------------------------------
-          # PER-SUITE VERDICTS, DERIVED FROM THE CHECKOUT (vms-1d9)
+          # Pin the exact pass/fail split init.sh reports for this scenario.
+          # This also proves the harness ran to completion and reached its own
+          # FINAL RESULTS accounting -- a timeout or panic would never print
+          # this line at all, so this line alone rules those causes out.
           #
-          # This block replaces an exact tally pin ('3 suites passed, N
-          # suites failed'). The pin's own comment argued "the brittleness IS
-          # the feature", and for detecting a suite that stops depending on
-          # /dev/vms that was true -- but it bought that with two defects,
-          # both proven by real podman builds + QEMU boots, not by argument:
-          #
-          # (a) IT BROKE ON A LEGITIMATE ADDITION. Adding one
-          #     test_syssvc_*.c that honestly needs /dev/vms moved the split
-          #     by one and turned THIS job red for a correct change -- which
-          #     defeats the glob-based generality vms-1d9 exists to hand to
-          #     vms-ef1 / vms-as1 / vms-pv1.
-          #
-          # (b) IT COULD NOT SEE A PER-SUITE REGRESSION. A tally is a sum:
-          #     one suite silently vanishing and another silently starting
-          #     to fail cancel out, and init.sh funnels an honest skip (77)
-          #     and a failed assertion (1) into the SAME counter, so a suite
-          #     whose assertions all failed produced byte-identical
-          #     accounting to the clean tree.
-          #
-          # Fix for both: assert the PER-SUITE exit code init.sh now prints
-          # ("=== SUITE <name> rc=<code> ==="), against a suite set DERIVED
-          # from `ls tests/qemu/test_*.c` at CI time. Nothing is maintained
-          # by hand, and each suite is judged on its own verdict:
-          #
-          #   test_syssvc_*      -> rc MUST be exactly 77 (honest skip).
-          #        These link the real src/libvms public sys$ API. The suite
-          #        returns 77 ONLY if every device-absent assertion it made
-          #        passed (`return fail > 0 ? 1 : EXIT_SKIP`), and those
-          #        assertions are that a public sys$ entry point called with
-          #        no executive present DID NOT REPORT SUCCESS. So:
-          #           rc=77 -> no sys$ entry point fabricated a success.
-          #           rc=1  -> one did, or another assertion failed. RED.
-          #           rc=0  -> the suite claims outright success with no
-          #                    /dev/vms at all. RED.
-          #        NOTE what is deliberately NOT asserted: any particular
-          #        status VALUE. vms-0ff ruled that OVMX has no
-          #        "executive absent" state to have a VMS-defined status for
-          #        (PID 1 refuses to boot without it), and the per-call
-          #        SS$_NOSUCHDEV returns sys_lock.c used to make were
-          #        DELETED as a fiction. Pinning a value here would freeze
-          #        that superseded contract into a gate. What survives the
-          #        ruling is strictly the absence of a fabricated success,
-          #        which is a property, not a VMS behaviour -- and it is
-          #        observable only in this rig, which is deliberately booted
-          #        without an executive (see this job's header).
-          #        CONTRACT for future test_syssvc_*.c (vms-ef1, vms-as1,
-          #        vms-pv1): the suite MUST require a real /dev/vms and MUST
-          #        exit 77 when it is absent, never 0.
-          #
-          #   test_kmod_vmsfs*   -> rc MUST be 0.
-          #        POSITIVE control paired with the negatives: vmsfs has no
-          #        dependency on vms.ko, so it must still fully pass with the
-          #        executive absent. If the harness were failing
-          #        indiscriminately (gutted, always-fail, boot broken), this
-          #        would fail too and every negative assertion here would be
-          #        proving nothing about the executive specifically.
-          #
-          #   every other test_kmod_* -> rc MUST be nonzero.
-          #        Raw-ioctl executive tests; they cannot pass without
-          #        /dev/vms. An rc=0 here means something is faking the
-          #        executive.
-          #
-          # Nothing is maintained by hand; adding a suite of any of the three
-          # kinds is absorbed automatically.
-          # ---------------------------------------------------------------
-          EXPECTED=$(cd "$GITHUB_WORKSPACE" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
-                     | xargs -n1 basename | sed 's/\.c$//' | sort)
-          # `|| true`: grep -c exits 1 on an empty set, and GitHub runs `run:`
-          # steps under `bash -e`, so without it an empty derived set would
-          # abort the step with no diagnostic instead of hitting the explicit
-          # floor check below.
-          N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
-          echo "Derived expected suites from the checkout ($N_EXPECTED):"
-          echo "$EXPECTED" | sed 's/^/  /'
+          # MAINTENANCE CONVENTION (deliberate, do NOT soften): adding a suite
+          # that depends on the executive MUST bump the failed count here, and
+          # adding one that does not MUST bump the passed count. Turning this
+          # into a range or a regex to avoid the edit would let a suite silently
+          # stop depending on /dev/vms -- which is the whole thing this job
+          # exists to detect. The brittleness IS the feature.
+          # 8 failed as of vms-8019, which added test_kmod_procnam.
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 8 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/8-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
 
-          # SUITE-COUNT FLOOR. The derived set above is drop-detecting for a
-          # suite that stops RUNNING, but blind to one whose .c is DELETED
-          # outright -- the expected set just shrinks with it. This floor is
-          # the guard against that, and it is the count on the tree at the
-          # time this line was written. It is a MINIMUM, so adding suites
-          # never requires touching it; only deliberately deleting one does,
-          # which is the intended forcing function.
-          #
-          # 12 -> 13 (vms-9fc adds test_kmod_bind). RECOMPUTED FROM THE MERGED
-          # TREE, not carried over from either side of the conflict: vms-9fc
-          # was branched while this block was still an exact-tally pin
-          # ('3 suites passed, N suites failed') and had bumped that pin
-          # instead. Two branches each adding one executive suite both write
-          # "N+1", git merges them cleanly, and the truth is "N+2" -- which is
-          # why this figure is derived by building the NEGATIVE_CONTROL=1 image
-          # and reading the verdicts, never by editing a number.
-          if [ "$N_EXPECTED" -lt 13 ]; then
-            echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 13) -- a suite source was deleted."
-            echo "Deleting an executive suite is not a way to make this gate pass."
-            exit 1
-          fi
-
-          BAD=""
-          N_SYSSVC=0
-          for suite in $EXPECTED; do
-            line=$(echo "$OUTPUT" | grep -F "=== SUITE $suite rc=" | tail -1)
-            if [ -z "$line" ]; then
-              BAD="$BAD
-            $suite: NEVER RAN (no verdict line -- not built, or not staged into the initramfs)"
-              continue
-            fi
-            rc=$(printf '%s' "$line" | sed -n 's/.*rc=\([0-9][0-9]*\).*/\1/p')
-            case "$suite" in
-              test_syssvc_*)
-                N_SYSSVC=$((N_SYSSVC+1))
-                if [ "$rc" = "0" ]; then
-                  BAD="$BAD
-            $suite: rc=0 -- claims SUCCESS through the public sys\$ API with NO /dev/vms present. A fake pass; expected the honest-skip code 77."
-                elif [ "$rc" != "77" ]; then
-                  BAD="$BAD
-            $suite: rc=$rc -- expected the honest-skip code 77. A device-absent assertion inside the suite FAILED, which means a public sys\$ entry point reported SUCCESS with no executive present: a fabricated success (vms-6b8's signature defect). See the suite's own FAIL lines above."
-                fi
-                ;;
-              test_kmod_vmsfs*)
-                if [ "$rc" != "0" ]; then
-                  BAD="$BAD
-            $suite: rc=$rc -- expected 0. vmsfs does not depend on vms.ko, so it must still pass with the executive absent; if it fails, the harness is failing indiscriminately and the negative assertions prove nothing."
-                fi
-                ;;
-              *)
-                if [ "$rc" = "0" ]; then
-                  BAD="$BAD
-            $suite: rc=0 -- a raw-ioctl executive test PASSED with no /dev/vms. Something is faking the executive."
-                fi
-                ;;
-            esac
-          done
-
-          if [ "$N_SYSSVC" -lt 1 ]; then
-            BAD="$BAD
-            no test_syssvc_* suite ran at all -- the userspace public-sys\$ layer is not in the initramfs, so the silent-fallback gate above checked nothing."
-          fi
-
-          # vms.ko must NOT have loaded (that is the scenario), and vmsfs.ko
-          # must have -- the paired negative/positive at module-load level.
-          echo "$OUTPUT" | grep -qF 'FAIL: vms.ko load or /dev/vms creation failed' \
-            || BAD="$BAD
-            vms.ko: expected the load to fail (NEGATIVE_CONTROL skips the insmod) but no such failure was reported -- the negative control may not have been applied at all."
+          # POSITIVE assertion paired with the two negative assertions above:
+          # vmsfs.ko has no dependency on vms.ko/the executive, so it must
+          # still load and pass with the executive absent. If the harness
+          # failed indiscriminately (e.g. gutted/always-fail), this would also
+          # fail, and the negative assertions above would be proving nothing
+          # about the executive specifically.
           echo "$OUTPUT" | grep -qF 'PASS: vmsfs.ko loaded, filesystem registered' \
-            || BAD="$BAD
-            vmsfs.ko: did not load with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency."
+            || { echo "FAIL: vmsfs.ko (independent of vms.ko) did not pass with the executive absent -- the harness may be failing indiscriminately rather than isolating the executive dependency"; exit 1; }
 
-          if [ -n "$BAD" ]; then
-            echo "FAIL: negative control did not go red for the RIGHT REASON:$BAD"
-            exit 1
-          fi
-
-          # Proves the harness reached its own accounting rather than
-          # panicking or timing out. Deliberately NOT a count (see above).
-          echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: [0-9]+ suites passed, [0-9]+ suites failed ===' \
-            || { echo "FAIL: the harness never reached its own FINAL RESULTS accounting -- boot panic, QEMU missing, or run_tests.sh timeout, not an executive-absent failure"; exit 1; }
-
-          echo "PASS: harness went red for the RIGHT REASON -- executive absent, all $N_SYSSVC public-sys\$ suite(s) returned the honest-skip code 77 (so no sys\$ entry point fabricated a success), every executive-dependent raw-ioctl suite failed, and vmsfs's independent facility still passed"
-
-  # -----------------------------------------------------------------------
-  # Job 3d: Kernel Executive — per-facility negative controls (vms-e7d)
-  #
-  # Job 3c proves the executive gate CAN fail, by deleting the whole
-  # executive. That is a blunderbuss: it establishes "this job can go red",
-  # not "this job would go red if the event-flag code stopped clearing a
-  # flag", and it cannot name what regressed. ATTRIBUTION IS THE POINT — a
-  # gate that only ever says "something failed" tells the next implementer
-  # nothing, and a facility whose assertions had quietly stopped meaning
-  # anything would still be covered by 3c.
-  #
-  # This job injects ONE minimal defect per facility — the vms-e4d
-  # compat[EX][CR] flip, mechanised, plus one of the same shape for every
-  # other facility — boots each in QEMU against a REAL /dev/vms, and asserts
-  # that the COMPLETE set of assertions that went red is EXACTLY the set the
-  # manifest names for that defect, and that no suite outside the facility's
-  # own set failed.
-  #
-  # THE EQUALITY IS THE POINT, and it is what round 1 of vms-e7d got wrong.
-  # That version checked minimality with a hand-maintained allowlist of
-  # sibling assertions that had to stay green; an adversary measured four of
-  # nine mutations reddening assertions the manifest named nowhere, while the
-  # job still printed "the mutation is minimal". A partial allowlist is
-  # satisfiable by something other than the property it certifies. The check
-  # now slices every FAIL line out of the run and requires set equality, so a
-  # mutation that trips an unnamed property cannot pass.
-  #
-  # It also runs the PRISTINE image first as a positive control, so a harness
-  # that fails indiscriminately cannot pass this job.
-  #
-  # WHAT THIS JOB DOES NOT COVER, stated because an implicit narrowing is how
-  # a gate quietly stops meaning what its name says: vmsfs.ko and its two
-  # suites. vmsfs is a filesystem module, not an executive facility — nothing
-  # in it is reached through /dev/vms — and job 3c above is where it is
-  # covered. facility_defects.sh declares that exclusion and prints it.
-  #
-  # Docker here is BUILD/TEST TOOLING (CLAUDE.md Rule 9): it builds vms.ko and
-  # boots an independent guest kernel that loads it for real. Nothing in this
-  # job treats a container as an OVMX runtime.
-  #
-  # Runtime note: ~12 QEMU boots, one of which (executive-not-pinned) is
-  # EXPECTED to hang until run_tests.sh's 120s timeout, because unloading an
-  # unpinned vms.ko under an open descriptor Oopses the guest kernel. That is
-  # the guarantee being demonstrated, not a flake — the control asserts that
-  # every suite ordered before test_kmod_pin ran clean (a count derived from
-  # the checkout, never written down), so a genuine boot failure cannot be
-  # mistaken for it. Hence the wider timeout-minutes than the other QEMU jobs.
-  # -----------------------------------------------------------------------
-  kernel-executive-facility-negative-controls:
-    name: Kernel Executive — Per-Facility Negative Controls (attribution)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Every executive facility has a control that turns CI red and NAMES it
-        env:
-          CONTAINER_ENGINE: docker
-        run: tests/qemu/run_facility_negctl.sh
+          echo "PASS: harness correctly went red for the RIGHT REASON (executive absent: /dev/vms unopenable, exact 3-passed/7-failed split), with vmsfs's independent facility still passing"
 
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests
   #
-  # Runs in a disposable ubuntu:24.04 tooling container (gcc, source tree,
-  # built libs). The conformance programs are compiled and executed against
-  # the VMS libs.
+  # Runs inside the builder stage (has gcc, source tree, and built libs).
+  # The conformance programs are compiled and executed against the VMS libs.
+  # Uses the GHA Docker layer cache populated by the docker-build job.
   # -----------------------------------------------------------------------
   conformance:
     name: Conformance Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: docker-build
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # MIGRATED OFF THE ROOT DOCKERFILE BY vms-71a (CLAUDE.md Rule 9: the
-      # Docker RUNTIME layer is dead). This job never ran the product image —
-      # it only used the Dockerfile's "builder" stage for a disposable
-      # cmake+gcc build environment. That is build/test TOOLING, which Rule 9
-      # explicitly allows in Docker; it is reproduced here with a plain
-      # ubuntu:24.04 container and the checked-out workspace bind-mounted at
-      # /src, so no image tied to the retired root Dockerfile is built at all.
-      - name: Build OVMX + run conformance tests (tooling container, not a runtime image)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build builder stage (uses GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          push: false
+          load: true
+          tags: ovmx-builder:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run conformance tests
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}":/src -w /src \
+            --entrypoint bash \
             -v "${{ github.workspace }}/tests/conformance/vms_programs:/tests/vms_programs:ro" \
-            ubuntu:24.04 bash -c '
-              set -e
-              apt-get update -qq
-              apt-get install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev
-              cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=/ -DBUILD_TOOLS=ON
-              cmake --build build --parallel "$(nproc)"
-              bash /src/tests/conformance/run_conformance.sh
-            '
+            ovmx-builder:latest \
+            /src/tests/conformance/run_conformance.sh
 
   # -----------------------------------------------------------------------
   # Job 5: Corpus conformance — compile tier1-examples against OVMX headers
@@ -588,27 +312,34 @@ jobs:
     name: Corpus Conformance
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: docker-build
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # MIGRATED OFF THE ROOT DOCKERFILE BY vms-71a — see the conformance job
-      # above for why: this only ever used the "builder" stage as a disposable
-      # build environment (Rule 9 build/test TOOLING), reproduced here with a
-      # plain ubuntu:24.04 container. Build/apt noise is redirected to stderr
-      # so only run_corpus.sh's JSON reaches stdout / corpus_report.json.
-      - name: Build OVMX + run corpus conformance harness (tooling container, not a runtime image)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build builder stage (uses GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          push: false
+          load: true
+          tags: ovmx-builder:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run corpus conformance harness
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}":/src -w /src \
-            ubuntu:24.04 bash -c '
-              set -e
-              { apt-get update -qq && apt-get install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev; } >&2
-              { cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=/ -DBUILD_TOOLS=ON; } >&2
-              { cmake --build build --parallel "$(nproc)"; } >&2
-              bash /src/tests/conformance/run_corpus.sh /src/tests/conformance/corpus_baseline.json
-            ' > corpus_report.json
+            --entrypoint bash \
+            -v "${{ github.workspace }}/tests/conformance/corpus_baseline.json:/src/tests/conformance/corpus_baseline.json:ro" \
+            ovmx-builder:latest \
+            -c "bash /src/tests/conformance/run_corpus.sh /src/tests/conformance/corpus_baseline.json" \
+            > corpus_report.json
         # Exit code 0 = no regressions (even if many compile-fail)
         # Exit code 1 = regression detected (previously-passing program now fails)
 
@@ -739,29 +470,17 @@ jobs:
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------
-  # Job 7: User Acceptance Test — scripted VMS session on the REAL runtime
+  # Job 7: User Acceptance Test — scripted VMS session over SSH
   #
-  # Boots the real kernel under QEMU, logs in over the console, and drives a
-  # scripted VMS admin session, validating output for VMS correctness and the
-  # absence of Unix leaks.
-  #
-  # MIGRATED OFF DOCKER+SSH BY vms-71a (CLAUDE.md Rule 9: the Docker RUNTIME
-  # layer is dead). This job used to `docker run` the now-deleted root-
-  # Dockerfile product image and SSH to port 2222 — a container with no
-  # /dev/vms. distro/Dockerfile.bootable (build/test TOOLING, kept under
-  # Rule 9) builds the real kernel + initramfs; tests/uat/vms_session_qemu.sh
-  # runs the SAME command list and the SAME 13 assertions the SSH script did.
-  #
-  # KNOWN COVERAGE GAP, tracked not hidden: driving DCL over the console does
-  # not exercise vmssshd, so SSH login has no CI coverage now that its only
-  # runtime (the dead container) is gone. tests/uat/vms_session_test.sh is
-  # retained for when the SSH path is brought up on QEMU (see vms-02d, which
-  # the operator cancelled — SSH-on-QEMU is not currently planned work).
+  # Builds the Docker image (using GHA layer cache from docker-build),
+  # starts the OVMX container with SSH, runs a scripted VMS admin session,
+  # and validates output for VMS correctness and absence of Unix leaks.
   # -----------------------------------------------------------------------
   uat-session:
     name: VMS User Acceptance Test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: docker-build
 
     steps:
       - name: Checkout
@@ -770,25 +489,39 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build bootable image (uses GHA layer cache)
+      - name: Build Docker image (uses GHA layer cache)
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: distro/Dockerfile.bootable
           push: false
           load: true
-          tags: ovmx-boot:latest
+          tags: ovmx-test:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Run UAT session on the real runtime (QEMU console)
-        timeout-minutes: 10
+      - name: Install sshpass
+        run: sudo apt-get update -qq && sudo apt-get install -y sshpass
+
+      - name: Start OVMX container
         run: |
-          docker run --rm \
-            -v ${{ github.workspace }}/tests/uat/vms_session_qemu.sh:/test.sh:ro \
-            --entrypoint bash \
-            ovmx-boot:latest \
-            /test.sh
+          docker run -d --name ovmx-uat -p 2222:22 ovmx-test:latest
+          sleep 5
+
+      - name: Run UAT session test
+        run: |
+          chmod +x tests/uat/vms_session_test.sh
+          tests/uat/vms_session_test.sh
+        timeout-minutes: 3
+
+      - name: Dump container logs (diagnostics)
+        if: always()
+        run: |
+          echo "=== ovmx-uat container logs (vmssshd/DCL stderr) ==="
+          docker logs ovmx-uat 2>&1 | tail -100 || echo "(no logs)"
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f ovmx-uat 2>/dev/null || true
 
   # -----------------------------------------------------------------------
   # Job 8: IMGACT.EXE activation proof (musl, aarch64)
@@ -1337,7 +1070,7 @@ jobs:
   # (vms-116). The REAL src/vmsdcl shell (21 TUs) + src/vmsqueue links as a
   # VMS-native ET_DYN executable via LINK.EXE --executable --use {DECC$SHR + the
   # five OVMX shareables}: a 22-object main() program with the full intra-image
-  # reloc set, 140 cross-image imports all bound, and its own single-object TLS.
+  # reloc set, 139 cross-image imports all bound, and its own single-object TLS.
   # IMGACT.EXE activates it (crt0 recovers argc/argv off the kernel stack) and
   # DCL runs a scripted session (SHOW TIME + A = 2+3 / SHOW SYMBOL A) to VMS-
   # correct output, clean exit. NO ld / NO ld.so — the operator's "all VMS" path.

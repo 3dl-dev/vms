@@ -116,30 +116,6 @@ extern "C" {
 #define PRV$V_IMPERSONATE   37
 #define PRV$V_SECURITY      38
 
-/* ================================================================
- * Agreement lock with the executive (vms-2b8).
- *
- * THIS TABLE IS THE SINGLE SOURCE. vms.ko carries a second copy of the
- * bit positions (VMS_PRV_V_* in src/kernel/vms_ioctl.h) because a kernel
- * module cannot include this header -- it is a userspace header and pulls
- * in <stdint.h>. Two copies of a security-critical table is how this tree
- * ended up with FOUR disagreeing privilege tables, three of them wrong.
- *
- * The two copies are held in agreement by _Static_asserts, and those live
- * in src/libvms/prv_agreement.c -- a translation unit of its own that
- * includes BOTH headers by name and is built into LIBVMS$SHR by the
- * default target. Do NOT move them back into this header: they were here
- * once, wrapped in `#ifdef _VMS_IOCTL_H`, and no translation unit in the
- * tree ever included the executive's header first, so the guard compiled
- * nowhere and enforced nothing while claiming to be a build failure.
- *
- * If you change a bit position here, the build breaks in prv_agreement.c
- * until the executive's copy is changed to match. Both are pinned to the
- * reference lab OpenVMS VAX V7.3 node VAX1 via SDA READ
- * SYS$SYSTEM:SYSDEF.STB; see docs/oracle/vax73-privileges.md §2 for the
- * verbatim EVALUATE transcript.
- * ================================================================ */
-
 #ifdef __cplusplus
 }
 #endif

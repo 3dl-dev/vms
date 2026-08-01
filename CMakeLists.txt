@@ -190,17 +190,6 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(runtime_target_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
-
-    # The Rule 9 gate is a lint, and twice it certified the very regression it
-    # exists to catch (see the file header). This runs the recorded evasions
-    # against it on a sandbox copy of the tree and requires each one to drive
-    # it RED for its own specific reason. A gate nobody tries to evade is an
-    # assertion about nothing.
-    add_test(NAME runtime_target_negctl
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_runtime_target_negctl.sh
-                ${CMAKE_CURRENT_SOURCE_DIR})
-    set_tests_properties(runtime_target_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 120)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

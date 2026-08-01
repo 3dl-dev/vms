@@ -176,29 +176,46 @@ static void test_lib_put_output(void)
 /* ------------------------------------------------------------------ */
 /* lib$getjpi - process information                                   */
 /* ------------------------------------------------------------------ */
-/*
- * MOVED, NOT DELETED (vms-8019). The lib$getjpi assertions that stood here
- * -- JPI$_PID, JPI$_USERNAME and JPI$_PRCNAM all returning SS$_NORMAL --
- * now live in tests/qemu/test_syssvc_procnam.c (block P8), verbatim and
- * with two assertions ADDED (that the pid returned really is the caller's,
- * and the cross-process cases this file could never reach at all).
- *
- * They could not stay. lib$getjpi calls sys$getjpiw -> sys$getjpi, which is
- * now a READER OF THE EXECUTIVE process table behind /dev/vms, as a VMS
- * system service must be (CLAUDE.md Rule 11). ctest runs on a host where
- * /dev/vms does not exist and never will -- the only OVMX runtime is the
- * kernel/QEMU path (Rule 9) -- so what this block actually asserted after
- * the conversion was that a VMS system service succeeds with NO EXECUTIVE
- * PRESENT. That is a state OpenVMS is never in and OVMX refuses to boot
- * into (vms-0ff), so the assertion could only be kept green by giving
- * $GETJPI a per-process fallback: precisely the facade this item exists to
- * delete, reintroduced to satisfy a test.
- *
- * Weakening it to a skip was also not open: under Rule 10 a permanently
- * skipped test is a failing test. Relocating it to the one harness where
- * the service can actually run is the only answer that keeps the coverage
- * real. Everything else in this file is executive-independent and stays.
- */
+static void test_lib_getjpi(void)
+{
+    printf("Testing lib$getjpi...\n");
+
+    /* Get PID (numeric item) */
+    uint32_t item = JPI$_PID;
+    uint32_t pid = 0;
+    uint32_t st = lib$getjpi(&item, NULL, NULL, &pid, NULL, NULL);
+    check(st == SS$_NORMAL, "lib$getjpi(JPI$_PID) returns SS$_NORMAL");
+    check(pid != 0, "lib$getjpi(JPI$_PID) returns non-zero PID");
+
+    /* Get USERNAME (string item) */
+    char ubuf[32];
+    memset(ubuf, 0, sizeof(ubuf));
+    struct dsc$descriptor_s udesc;
+    udesc.dsc$w_length = sizeof(ubuf) - 1;
+    udesc.dsc$b_dtype = DSC$K_DTYPE_T;
+    udesc.dsc$b_class = DSC$K_CLASS_S;
+    udesc.dsc$a_pointer = ubuf;
+    uint16_t ulen = 0;
+
+    item = JPI$_USERNAME;
+    st = lib$getjpi(&item, NULL, NULL, NULL, &udesc, &ulen);
+    check(st == SS$_NORMAL, "lib$getjpi(JPI$_USERNAME) returns SS$_NORMAL");
+    check(ulen > 0, "lib$getjpi(JPI$_USERNAME) returns non-empty string");
+
+    /* Get PRCNAM (string item) */
+    char pnbuf[32];
+    memset(pnbuf, 0, sizeof(pnbuf));
+    struct dsc$descriptor_s pndesc;
+    pndesc.dsc$w_length = sizeof(pnbuf) - 1;
+    pndesc.dsc$b_dtype = DSC$K_DTYPE_T;
+    pndesc.dsc$b_class = DSC$K_CLASS_S;
+    pndesc.dsc$a_pointer = pnbuf;
+    uint16_t pnlen = 0;
+
+    item = JPI$_PRCNAM;
+    st = lib$getjpi(&item, NULL, NULL, NULL, &pndesc, &pnlen);
+    check(st == SS$_NORMAL, "lib$getjpi(JPI$_PRCNAM) returns SS$_NORMAL");
+}
 
 /* ------------------------------------------------------------------ */
 /* lib$getsyi - system information                                    */
@@ -421,8 +438,7 @@ int main(void)
     test_lib_day_of_week();
     test_lib_cvt();
     test_lib_put_output();
-    /* test_lib_getjpi() moved to tests/qemu/test_syssvc_procnam.c -- see
-     * the block comment where it used to be defined. */
+    test_lib_getjpi();
     test_lib_getsyi();
     test_mth_power_ji();
     test_mth_sincos();

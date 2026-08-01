@@ -80,26 +80,6 @@ void dcl_context_init(struct dcl_context *ctx)
     /* SET TERMINAL defaults — full characteristics model */
     vms_terminal_init(&ctx->terminal);
 
-    /*
-     * STOPGAP -- FACADE, NOT VMS (vms-d0b). Everything in this block
-     * decides what terminal this process is on by reading its own
-     * environment and, failing that, by handing itself a name out of a
-     * private pool. On VMS the answer comes from the executive's
-     * device table: $ASSIGN to the device, $GETDVI on the channel. A
-     * process cannot name its own terminal, which is exactly why a VMS
-     * terminal name means something to anyone else.
-     *
-     * As of vms-d0b the executive does have that table
-     * (src/kernel/vms_devtab.c: OPA0: exists at module init, carries an
-     * owner, a reference count and characteristics, and is readable by
-     * any process). This code has not been switched over to it because
-     * DCL is not yet built into the runtime where /dev/vms exists --
-     * see the vms-d0b escalation. When it is switched over, SHOW
-     * TERMINAL and SHOW DEVICE become readers of the executive and
-     * these getenv() calls go away entirely; they are not to be
-     * "improved" in place.
-     */
-
     /* Terminal device type: set from VMS_DEVICE_TYPE env var if present
      * (set by vmssshd from SSH TERM negotiation) */
     const char *env_devtype = getenv("VMS_DEVICE_TYPE");
@@ -162,36 +142,7 @@ void dcl_context_init(struct dcl_context *ctx)
             sizeof(ctx->process_name) - 1);
     ctx->process_name[sizeof(ctx->process_name) - 1] = '\0';
 
-    /*
-     * ============================================================
-     * STOPGAP -- PRIVILEGE ESCALATION PATH, STILL OPEN (vms-2b8)
-     * ============================================================
-     * The reads below take this process's USERNAME and PRIVILEGE MASK
-     * from ordinary environment variables. Any process can setenv()
-     * them, so any process can choose its own identity here. This is
-     * the env-var facade CLAUDE.md Rule 10 names as a worked example,
-     * and it is NOT an access control system.
-     *
-     * The executive now owns identity for real: it derives the UIC and
-     * the authorized privilege mask from the task's credentials and
-     * refuses to let a process widen either (src/kernel/vms_proctab.c
-     * vms_ioctl_setident, proven by tests/qemu/test_kmod_ident.c
-     * against a real /dev/vms). The correct code here is a
-     * vms_kif_getjpi_self() read of that row.
-     *
-     * IT IS NOT WIRED UP YET, AND THIS IS THE ONLY REASON WHY:
-     * vms_kif_register() still has no product caller (vms-9fc), so no
-     * DCL process is registered with the executive and $GETJPI would
-     * return -ESRCH for every one of them. Replacing these reads before
-     * vms-9fc lands would not harden DCL, it would break it.
-     *
-     * DO NOT "IMPROVE" THIS PATH. Delete it, once vms-9fc has landed,
-     * and read the executive instead. The UIC half of the same defect
-     * was already deleted from src/vmsrms/rms_core.c under this item,
-     * because there the real credentials were available locally; the
-     * user name and the privilege mask have no local honest source.
-     * ============================================================
-     */
+    /* Read multi-user context from environment (set by vms_login) */
     const char *env_user = getenv("VMS_USERNAME");
     if (env_user && env_user[0]) {
         strncpy(ctx->username, env_user, sizeof(ctx->username) - 1);

@@ -21,11 +21,10 @@
 #include <sys/resource.h>
 #include <signal.h>
 #include <time.h>
+#include <pwd.h>
 #include <stdio.h>
 #include "starlet.h"
-#include "ovmx_status.h"
 #include "vms/pcb.h"
-#include "vms_kif.h"
 
 /*
  * sys$exit - Terminate process with a VMS status code.
@@ -54,275 +53,93 @@ uint32_t sys$exit(uint32_t code) {
 }
 
 /*
- * jpi_cputim - CPU time of a process, in the 10-millisecond units
- * JPI$_CPUTIM reports.
- *
- * Self is answered from getrusage(RUSAGE_SELF). Another process is
- * answered from /proc/<pid>/stat fields 14 and 15 (utime, stime, in
- * clock ticks). That is not a fabrication and not a way around the
- * executive: the linux_pid it reads came OUT of the executive's row for
- * the resolved process, and CPU time consumed is a real property of a
- * real process, measured by the kernel that ran it -- the same quantity
- * VMS reports, from the only accounting that exists. The OVMX executive
- * does not maintain its own CPU accounting, so there is nothing here to
- * read it from instead.
- *
- * WHAT THIS RETURNS WHEN IT CANNOT MEASURE, AND WHY IT IS NOT A ZERO
- * (vms-8019 round 7).
- *
- * It used to return the literal 0, and sys$getjpi wrote that 0 into
- * JPI$_CPUTIM with a 4-byte return length and SS$_NORMAL -- so a caller
- * could not tell "consumed no CPU" from "OVMX could not measure it".
- * That is the SAME defect the round-4 ruling removed from SHOW SYSTEM
- * one layer above (dcl_cmd_show.c printed a fabricated "0 00:00:00.00"
- * for a row it could not read), left standing here, so the two readers
- * of one facility disagreed about one condition.
- *
- * It is reachable, not theoretical: the executive resolves the row and
- * returns (vms_ioctl_getjpi reaps dead entries first, so the row was
- * LIVE), and the target task can then exit before the /proc open below.
- * The answer is then wrong rather than merely unknown.
- *
- * Rule 10 allows two answers and this is the first one -- MATCH VMS.
- * Every failure path below is the target no longer existing:
- *   fopen() fails            -- /proc/<pid> is gone, so the task is gone
- *   fread() returns 0        -- the task was released between open and
- *                               read; procfs returns ESRCH, not a line
- *   no ')' / fields short    -- not a stat line for a live task
- * and the condition VMS reports for a target that no longer exists is
- * SS$_NONEXPR (%SYSTEM-W-NONEXPR, "process does not exist"; the value is
- * oracle-pinned to 2280 on VAX1, see ssdef.h). VMS has no "the executive
- * could not measure it" status, and inventing one -- or reporting a
- * plausible zero -- is the illegal third answer.
- *
- * On success *out holds the figure and SS$_NORMAL is returned; on
- * failure *out is NOT written and the caller must not report the item.
- */
-static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
-{
-    if (linux_pid == (uint32_t)getpid()) {
-        struct rusage ru;
-        getrusage(RUSAGE_SELF, &ru);
-        *out = (uint32_t)(
-            (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 100 +
-            (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 10000);
-        return SS$_NORMAL;
-    }
-
-    char path[64];
-    snprintf(path, sizeof(path), "/proc/%u/stat", (unsigned)linux_pid);
-    FILE *f = fopen(path, "r");
-    if (!f) return SS$_NONEXPR;
-
-    char buf[1024];
-    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-    fclose(f);
-    if (n == 0) return SS$_NONEXPR;
-    buf[n] = '\0';
-
-    /* The comm field is parenthesised and may contain spaces, so field
-     * splitting has to start after the LAST ')'. utime/stime are the
-     * 12th and 13th fields after that point. */
-    char *p = strrchr(buf, ')');
-    if (!p) return SS$_NONEXPR;
-    p++;
-
-    /* strtok_r, never strtok: this runs inside sys$getjpi, a PUBLIC sys$
-     * entry point, and strtok() keeps its cursor in a single static that
-     * belongs to whoever called us. Clobbering a caller's in-flight
-     * tokenisation from inside a system service is a defect on its own,
-     * independent of anything the tests reach. */
-    unsigned long long utime = 0, stime = 0;
-    int field = 0;
-    int have_both = 0;
-    char *save = NULL;
-    for (char *tok = strtok_r(p, " ", &save); tok;
-         tok = strtok_r(NULL, " ", &save)) {
-        field++;                        /* field 1 here == stat field 3 */
-        if (field == 12) utime = strtoull(tok, NULL, 10);
-        else if (field == 13) {
-            stime = strtoull(tok, NULL, 10);
-            have_both = 1;
-            break;
-        }
-    }
-    if (!have_both) return SS$_NONEXPR;
-
-    long hz = sysconf(_SC_CLK_TCK);
-    if (hz <= 0) hz = 100;
-    *out = (uint32_t)(((utime + stime) * 100ULL) / (unsigned long long)hz);
-    return SS$_NORMAL;
-}
-
-/*
  * sys$getjpi - Get Job/Process Information.
  *
- * A READER OF THE EXECUTIVE PROCESS TABLE (vms-8019, CLAUDE.md Rule 11).
- *
- * This service used to ignore both pidadr and prcnam entirely and answer
- * every question out of the CALLER's own per-process PCB -- so $GETJPI on
- * another process returned the asker's own name, uic and cpu time, and
- * resolving a process BY NAME was not implemented at all. That is the
- * defect this item exists to remove: a process name that only its owner
- * can see is not a VMS process name, it is a variable.
- *
- * The target is now resolved in the executive (src/kernel/vms_proctab.c,
- * behind /dev/vms) and every item that the executive's row carries is
- * answered FROM that row:
- *   JPI$_PID      - the row's VMS process ID
- *   JPI$_PRCNAM   - the row's process name, as set by $SETPRN / $CREPRC
- *   JPI$_UIC      - the row's UIC, derived by the executive from the
- *                   task's real credentials (a process cannot declare it)
- *   JPI$_CPUTIM   - see jpi_cputim() above
- *   JPI$_USERNAME - the row's authenticated username (vms-2b8), empty
- *                   until an identity is stamped; see the item's comment
- *
- * Selection follows the VMS argument rules: prcnam names a process,
- * otherwise a non-zero *pidadr names one, otherwise the caller. There is
- * NO fallback to local state when the executive cannot resolve the
- * target -- the honest answer is SS$_NONEXPR, which is what VMS returns
- * for a process that does not exist.
+ * Returns information about a process via an item list. Supported items:
+ *   JPI$_PID      - Process ID (getpid)
+ *   JPI$_PRCNAM   - Process name (from PCB)
+ *   JPI$_USERNAME - Username (from PCB or passwd database)
+ *   JPI$_UIC      - User Identification Code (from PCB or [gid,uid])
+ *   JPI$_CPUTIM   - CPU time in 10-millisecond units
  */
 uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
                     const struct dsc$descriptor_s *prcnam,
                     const struct item_list_3 *itmlst,
                     void *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm) {
-    (void)efn; (void)iosb; (void)astadr; (void)astprm;
+    (void)efn; (void)prcnam; (void)iosb; (void)astadr; (void)astprm;
+
+    pid_t pid = pidadr ? (pid_t)*pidadr : getpid();
 
     if (!itmlst) return SS$_BADPARAM;
 
-    struct vms_procinfo info;
-    uint32_t status;
+    struct vms_pcb *pcb = vms_pcb_get();
 
-    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
-        /* The key travels untruncated: VMS_PRCNAM_XFER is deliberately
-         * larger than any legal process name so that an oversized name
-         * is REJECTED by the executive (SS$_IVLOGNAM) instead of being
-         * clipped into a valid one that resolves a different process.
-         * See the VMS_PRCNAM_XFER comment in src/kernel/vms_ioctl.h. */
-        char key[VMS_PRCNAM_XFER];
-        dsc$strncpy(key, prcnam, sizeof(key));
-        status = vms_kif_getjpi_prcnam(key, &info);
-    } else if (pidadr && *pidadr != 0) {
-        status = vms_kif_getjpi_pid(*pidadr, &info);
-    } else {
-        status = vms_kif_getjpi_self(&info);
-    }
-
-    if (!(status & 1))
-        return status;
-
-    /*
-     * NO PCB IS CONSULTED. Every item below is answered from the row the
-     * executive resolved. The caller's own vms_pcb_get() used to supply
-     * the name, the username and the UIC -- values the process had
-     * written about itself -- which is why $GETJPI could only ever
-     * describe its caller. Reintroducing a PCB read here reintroduces
-     * that facade (CLAUDE.md Rule 11).
-     */
     for (const struct item_list_3 *item = itmlst;
          item->buflen != 0 || item->item_code != 0; item++) {
         switch (item->item_code) {
             case JPI$_PID:
                 if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)item->bufaddr = info.vms_pid;
+                    *(uint32_t *)item->bufaddr = (uint32_t)pid;
                 if (item->retlen) *item->retlen = sizeof(uint32_t);
                 break;
 
             case JPI$_PRCNAM:
-                /*
-                 * The row's name, verbatim -- including the empty string
-                 * for a process that has never been named.
-                 *
-                 * This used to invent "_%08X" from the pid when the PCB
-                 * carried no name. That invented name was exactly the
-                 * facade this item exists to delete: nothing else could
-                 * resolve it (the executive skips unnamed rows in
-                 * find_by_name), so $GETJPI reported a name to its owner
-                 * that no other process could see.
-                 *
-                 * UNPINNED, AND OWNED BY vms-6a7 (which is blocked by
-                 * this item). Deleting a wrong answer did not produce a
-                 * right one: the empty name is a PLACEHOLDER, chosen
-                 * without the oracle, not a match. The question vms-6a7
-                 * must put to the oracle, verbatim: "What does OpenVMS
-                 * VAX 7.3 report for JPI$_PRCNAM of a process created
-                 * with no process name, and does the executive assign one
-                 * at creation?" Until then OVMX reports no name rather
-                 * than one only its owner believes in. Do not settle it
-                 * here -- see the matching comment in
-                 * src/vmsdcl/dcl_cmd_show.c cmd_show_system().
-                 */
                 if (item->bufaddr) {
-                    uint16_t len = (uint16_t)strlen(info.prcnam);
+                    const char *name = "";
+                    char default_name[16];
+
+                    if (pcb && pcb->prcnam[0] != '\0') {
+                        name = pcb->prcnam;
+                    } else {
+                        /* Generate a default process name from PID */
+                        snprintf(default_name, sizeof(default_name),
+                                 "_%08X", (uint32_t)pid);
+                        name = default_name;
+                    }
+
+                    uint16_t len = (uint16_t)strlen(name);
                     if (len > item->buflen) len = item->buflen;
-                    memcpy(item->bufaddr, info.prcnam, len);
+                    memcpy(item->bufaddr, name, len);
                     if (item->retlen) *item->retlen = len;
                 }
                 break;
 
             case JPI$_USERNAME: {
-                /*
-                 * THE ROW'S USERNAME, AND NOTHING ELSE.
-                 *
-                 * vms-2b8 put an authenticated username in the
-                 * executive's row (struct vms_procinfo.username, stamped
-                 * by vms_kif_setident after SYSUAF authentication and
-                 * refused to any caller that would be widening its own
-                 * identity). That makes this a straight read, from the
-                 * only place a VMS username has ever lived.
-                 *
-                 * TWO SOURCES WERE DELETED HERE, not kept as fallbacks:
-                 *  - pcb->username, a value the process wrote about
-                 *    itself, so $GETJPI reported to a process what that
-                 *    process had already told it (and, before this item,
-                 *    reported it for OTHER processes too);
-                 *  - getpwuid(UIC member), a passwd-database derivation
-                 *    this item's earlier round introduced when the row
-                 *    had no username. It looked reasonable and it was
-                 *    the illegal third answer (Rule 10): OVMX's runtime
-                 *    ships no passwd database at all, so in the product
-                 *    it always failed and always returned the literal
-                 *    "UNKNOWN" -- a made-up name reported with
-                 *    SS$_NORMAL.
-                 *
-                 * A row with no identity stamped reports an EMPTY name
-                 * with a zero return length. That is what the executive
-                 * holds, so that is what is reported; a name is not
-                 * invented to fill the field.
-                 */
-                uint16_t len = (uint16_t)strlen(info.username);
+                const char *name = NULL;
+                if (pcb && pcb->username[0] != '\0') {
+                    name = pcb->username;
+                } else {
+                    struct passwd *pw = getpwuid(getuid());
+                    name = pw ? pw->pw_name : "UNKNOWN";
+                }
+                uint16_t len = (uint16_t)strlen(name);
                 if (len > item->buflen) len = item->buflen;
-                if (item->bufaddr) memcpy(item->bufaddr, info.username, len);
+                if (item->bufaddr) memcpy(item->bufaddr, name, len);
                 if (item->retlen) *item->retlen = len;
                 break;
             }
 
             case JPI$_UIC:
-                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                    *(uint32_t *)item->bufaddr = info.uic;
+                if (item->bufaddr && item->buflen >= sizeof(uint32_t)) {
+                    if (pcb && pcb->uic != 0) {
+                        *(uint32_t *)item->bufaddr = pcb->uic;
+                    } else {
+                        /* UIC: [group,member] packed as (gid << 16) | uid */
+                        *(uint32_t *)item->bufaddr =
+                            ((uint32_t)getgid() << 16) | (uint32_t)getuid();
+                    }
+                }
                 if (item->retlen) *item->retlen = sizeof(uint32_t);
                 break;
 
             case JPI$_CPUTIM: {
-                /*
-                 * THE WHOLE CALL FAILS IF THE TARGET HAS GONE.
-                 *
-                 * jpi_cputim() only fails when the process the executive
-                 * resolved no longer exists (see its comment), and
-                 * SS$_NONEXPR describes the TARGET, not this item -- the
-                 * items already written above describe a process that has
-                 * since ceased to exist, so reporting SS$_NORMAL over the
-                 * top of them would hand the caller a stale row and call
-                 * it current. Nothing is written for this item and no
-                 * return length is set: a caller must never receive a
-                 * measured-looking zero for an unmeasurable process.
-                 */
-                uint32_t cputim = 0;
-                uint32_t cpustat = jpi_cputim(info.linux_pid, &cputim);
-                if (!(cpustat & 1))
-                    return cpustat;
+                /* CPU time in 10ms units */
+                struct rusage ru;
+                getrusage(RUSAGE_SELF, &ru);
+                uint32_t cputim = (uint32_t)(
+                    (ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) * 100 +
+                    (ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) / 10000);
                 if (item->bufaddr && item->buflen >= sizeof(uint32_t))
                     *(uint32_t *)item->bufaddr = cputim;
                 if (item->retlen) *item->retlen = sizeof(uint32_t);
@@ -381,73 +198,6 @@ uint32_t sys$wake(const uint32_t *pidadr,
 }
 
 /*
- * creprc_write_all / creprc_read_all -- the $CREPRC creation handshake's
- * transfers, made SIGNAL-PROOF.
- *
- * WHY THESE EXIST (the defect they delete): a bare read() on the pipe
- * returns -1/EINTR whenever a signal is delivered to the CALLER through a
- * handler installed without SA_RESTART. That is not an exotic condition --
- * src/vmsdcl/dcl_main.c installs DCL's interactive SIGINT and SIGQUIT
- * handlers with sa_flags = 0, and DCL is the process that calls $CREPRC
- * (RUN, RUN/DETACHED). A Ctrl-C landing in the handshake window made the
- * short-read branch fire with the child PERFECTLY HEALTHY: $CREPRC reported
- * OVMX$_PRCLOST -- "no VMS process was created, nothing was ever entered in
- * the table" -- for a process that WAS created, IS in the executive's table
- * and IS enumerable by SHOW SYSTEM, and then reaped it. Measured on a
- * NATIVE host against this branch's own LIBVMS$SHR.EXE and recorded on
- * vms-8019: 788 of 4000 calls under a DCL-shaped handler, 0 of 4000 without
- * one. (Under QEMU the same window is a fraction of a millisecond wide,
- * which is why tests/qemu/test_syssvc_procnam.c's P13 holds the forked
- * child still with ptrace instead of trying to catch it.)
- *
- * The signal disposition of the caller is not a fact about the child, so it
- * must not be able to change what $CREPRC says about the child. With these
- * loops in place a short read really does mean "the child died before
- * reporting", which is the only condition OVMX$_PRCLOST is documented to
- * name, and is what makes the unconditional waitpid() below correct rather
- * than an indefinite block on a live process.
- *
- * The child's write needs the same treatment for the same reason with the
- * roles swapped: a child that reported successfully but was interrupted
- * mid-write still exec's its image, and the parent would see a short read
- * and declare a running process lost.
- *
- * A genuine EOF (read returns 0) and a genuine error other than EINTR both
- * stop the loop and are reported as a short transfer.
- */
-static ssize_t creprc_write_all(int fd, const void *buf, size_t len)
-{
-    const char *p = (const char *)buf;
-    size_t done = 0;
-    while (done < len) {
-        ssize_t w = write(fd, p + done, len - done);
-        if (w < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (w == 0) break;
-        done += (size_t)w;
-    }
-    return (ssize_t)done;
-}
-
-static ssize_t creprc_read_all(int fd, void *buf, size_t len)
-{
-    char *p = (char *)buf;
-    size_t done = 0;
-    while (done < len) {
-        ssize_t r = read(fd, p + done, len - done);
-        if (r < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
-        if (r == 0) break;      /* genuine EOF: the writer is gone */
-        done += (size_t)r;
-    }
-    return (ssize_t)done;
-}
-
-/*
  * sys$creprc - Create a subprocess.
  *
  * Uses fork()+exec() to create a new process running the specified image.
@@ -487,117 +237,21 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     if (child_uic == 0 && parent_pcb)
         child_uic = parent_pcb->uic;
 
-    /*
-     * Process name.
-     *
-     * Held in an inbound transfer buffer, not a VMS_PRCNAM_SIZE field:
-     * an oversized name must reach the EXECUTIVE intact so the executive
-     * rejects it (SS$_IVLOGNAM), exactly as VMS does. Clipping it here
-     * would create a process under a name the caller never asked for.
-     */
-    char child_prcnam[VMS_PRCNAM_XFER] = {0};
-    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0)
+    /* Process name */
+    char child_prcnam[16] = {0};
+    if (prcnam && prcnam->dsc$a_pointer)
         dsc$strncpy(child_prcnam, prcnam, sizeof(child_prcnam));
 
-    /*
-     * CREATION HANDSHAKE -- OVMX design choice, matching VMS's OBSERVABLE
-     * semantics (CLAUDE.md Rule 8: labelled as OVMX's own mechanism).
-     *
-     * On VMS the EXECUTIVE creates the process: it assigns the process ID
-     * that $CREPRC hands back in pidadr, and it names the process as it
-     * creates it, so a name clash is reported to the CREATOR:
-     *   Oracle (VAX1, OpenVMS VAX V7.3, recorded on this item): a third
-     *   detached process taking a PROCESS_NAME already held in the same
-     *   UIC group is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM.
-     *
-     * OVMX creates the process with fork(), and only the child can enter
-     * itself in the executive's table (the entry is keyed by ITS tgid).
-     * So the child registers with the executive, performs $SETPRN if a
-     * name was asked for, and reports BOTH the status AND the process ID
-     * the executive assigned it back over a pipe. $CREPRC returns that
-     * status, and that process ID, to its caller. The pipe is O_CLOEXEC,
-     * so it costs the activated image nothing.
-     *
-     * WHY pidadr CANNOT BE THE fork() RETURN (vms-2b8 changed this): the
-     * executive now ASSIGNS VMS process IDs from its own generator
-     * (src/kernel/vms_module.c assign_vms_pid) instead of adopting
-     * getpid(). Handing the caller a Linux pid would hand it a number
-     * $GETJPI cannot resolve -- a process ID that names no process, which
-     * is precisely the "reports success while sharing nothing" shape this
-     * item exists to delete. The handshake therefore runs for EVERY
-     * created process, named or not: a VMS process has a PCB from the
-     * moment it exists, and pidadr must mean the same thing in both
-     * cases.
-     *
-     * Naming happens BEFORE the exec and before the I/O redirection: the
-     * executive entry is keyed by the pid, which execve() does not
-     * change, so the name survives image activation with no userspace
-     * carrier of any kind. That is the whole point -- the rejected
-     * VMS_PRCNAM environment-variable "fix" carried a name the image
-     * could only tell itself.
-     */
-    struct creprc_report {
-        uint32_t status;
-        uint32_t vms_pid;
-    };
-
-    if (pidadr) *pidadr = 0;
-
-    int namefd[2] = { -1, -1 };
-    if (pipe(namefd) < 0)
-        return SS$_INSFMEM;
-    /* Not pipe2(O_CLOEXEC): that needs _GNU_SOURCE, and this file is
-     * built against both glibc and musl. */
-    fcntl(namefd[0], F_SETFD, FD_CLOEXEC);
-    fcntl(namefd[1], F_SETFD, FD_CLOEXEC);
-
     pid_t pid = fork();
-    if (pid < 0) {
-        close(namefd[0]);
-        close(namefd[1]);
-        return SS$_INSFMEM;
-    }
+    if (pid < 0) return SS$_INSFMEM;
 
     if (pid == 0) {
-        /* Child: enter the executive's process table -- under the
-         * requested name, if one was requested -- before anything else
-         * can fail, and tell the creator how it went and what process ID
-         * the executive gave it. An unnamed process is expressed by never
-         * calling $SETPRN, never by naming it something invented. */
-        struct creprc_report rep = { 0, 0 };
-        struct vms_procinfo self_info;
-
-        close(namefd[0]);
-        rep.status = child_prcnam[0] ? vms_kif_setprn(child_prcnam)
-                                     : SS$_NORMAL;
-        if (rep.status & 1) {
-            uint32_t gst = vms_kif_getjpi_self(&self_info);
-            if (gst & 1)
-                rep.vms_pid = self_info.vms_pid;
-            else
-                rep.status = gst;
-        }
-        /* Retried on EINTR and on a short write: an interrupted report
-         * from a child that is about to exec its image would reach the
-         * creator as a short read, i.e. as OVMX$_PRCLOST for a running
-         * process. */
-        ssize_t w = creprc_write_all(namefd[1], &rep, sizeof(rep));
-        (void)w;
-        close(namefd[1]);
-        /* A report the creator never received describes a process the
-         * creator does not know exists. The creator reads a short transfer
-         * as OVMX$_PRCLOST -- "nothing was created" -- so the child must
-         * not go on to activate the image and make that statement false.
-         * Only a genuine write error can end the loop short, and this
-         * keeps "short transfer" and "no process" the same fact rather
-         * than two facts that can disagree. */
-        if (!(rep.status & 1) || w != (ssize_t)sizeof(rep))
-            _exit(1);
-
         /* Child: Initialize PCB with inherited context */
         struct vms_pcb *child_pcb = vms_pcb_init(child_privs);
         if (child_pcb) {
             const char *username = parent_pcb ? parent_pcb->username : "UNKNOWN";
+            if (!child_prcnam[0])
+                snprintf(child_prcnam, sizeof(child_prcnam), "_%08X", getpid());
             vms_pcb_set_identity((uint32_t)getpid(), child_uic,
                                  username, child_prcnam);
             if (parent_pcb && parent_pcb->default_dir[0])
@@ -633,71 +287,7 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
     }
 
     /* Parent process */
-    close(namefd[1]);
-    struct creprc_report rep = { 0, 0 };
-    /* Retried on EINTR: see creprc_read_all. A signal caught by the
-     * CALLER must not be able to change what $CREPRC says about the
-     * CHILD, and it is what makes r < sizeof(rep) mean "the child died
-     * before reporting" -- the precondition of both the OVMX$_PRCLOST
-     * return and the unconditional waitpid() below. */
-    ssize_t r = creprc_read_all(namefd[0], &rep, sizeof(rep));
-    close(namefd[0]);
-
-    if (r != (ssize_t)sizeof(rep) || !(rep.status & 1)) {
-        /*
-         * EITHER WAY, THE CHILD IS DEAD AND MUST BE REAPED HERE. Only
-         * the name-refusal case used to be reaped, so the short-read
-         * case leaked a zombie for a process the caller was
-         * simultaneously told had been created.
-         *
-         * THAT CLAIM IS TRUE ONLY BECAUSE OF creprc_read_all(): a bare
-         * read() also came back short when the CALLER caught a signal
-         * under a handler without SA_RESTART, and this branch then ran
-         * against a live, correctly created process -- either killing it
-         * (the close() above turns its report into SIGPIPE) or blocking
-         * the waitpid() below for the whole life of the image it had
-         * just started, depending only on which of the two reached the
-         * pipe first. Both halves of this branch -- the status and the
-         * reap -- depend on a short transfer meaning the child died.
-         * The child likewise refuses to activate its image if its own
-         * report did not get through, so the two cannot disagree.
-         *
-         *  - r == sizeof(rep) with a failure status: the executive
-         *    refused the name (SS$_DUPLNAM within the UIC group, or
-         *    SS$_IVLOGNAM for a malformed one) and the child exited
-         *    itself. The caller gets the executive's OWN status.
-         *
-         *  - anything else: the child never got as far as reporting.
-         *    NO VMS PROCESS EXISTS -- the executive's table is keyed by
-         *    the child's tgid, so a child that died before registering
-         *    was never in it. The caller gets OVMX$_PRCLOST, an
-         *    OVMX-defined condition value (customer-defined bit set),
-         *    because OpenVMS has no condition for this: its executive
-         *    creates the process, so a process ID always exists by the
-         *    time $CREPRC returns. See the OVMX$_PRCLOST comment in
-         *    src/libvms/include/ovmx_status.h for why an OVMX-defined
-         *    code is legal here and why reporting it as a VMS status
-         *    would be a lie about VMS.
-         *
-         * WHAT THIS REPLACED: SS$_NORMAL with *pidadr left at zero --
-         * success paired with a process ID that names no process, a
-         * combination VMS does not produce.
-         */
-        int wstatus;
-        while (waitpid(pid, &wstatus, 0) < 0 && errno == EINTR)
-            ;
-        return (r == (ssize_t)sizeof(rep)) ? rep.status : OVMX$_PRCLOST;
-    }
-
-    /*
-     * The ONLY success return in this function, and it is structurally
-     * unreachable without a process ID the executive assigned: rep was
-     * read whole and rep.status is a success, so rep.vms_pid is the
-     * value the child read back out of its own executive row. There is
-     * no path here that reports success with a zero process ID.
-     */
-    if (pidadr)
-        *pidadr = rep.vms_pid;
+    if (pidadr) *pidadr = (uint32_t)pid;
     return SS$_NORMAL;
 }
 

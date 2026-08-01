@@ -8,7 +8,7 @@
 
 ## Project Status
 
-Phases 1-7 are complete. OVMX runs as a bootable QEMU VM — the single runtime target (Rule 9). (The root Dockerfile + docker-compose.yml, the dead-legacy glibc product container, were deleted by vms-71a; CI runs entirely on the QEMU path or plain build tooling now.) See `tracking/roadmap.md` for phase history and `docs/product-vision.md` for scope.
+Phases 1-7 are complete. OVMX runs as a bootable QEMU VM — the single runtime target (Rule 9). (The Docker product container is dead legacy, retained only until CI migrates off it.) See `tracking/roadmap.md` for phase history and `docs/product-vision.md` for scope.
 
 ## Quick Reference
 
@@ -154,7 +154,7 @@ When artifacts disagree, resolve conflicts in this order:
 - **Specs and plans**: Structured markdown in `docs/`
 - **Tracking**: Beads for active work. `tracking/` files are historical reference — do not delete, but create new work as beads
 - **Tests**: Integration in `tests/integration/`, QEMU kernel tests in `tests/qemu/`, unit tests in `tests/libvmssys/`
-- **Build configs**: CMakeLists.txt hierarchy, Dockerfile.bootable (builds the runtime), src/kernel/Dockerfile + tests/qemu/Dockerfile (build/test tooling). The root Dockerfile + docker-compose.yml (glibc product container, Rule 9) are deleted.
+- **Build configs**: CMakeLists.txt hierarchy, Dockerfile.bootable (builds the runtime), src/kernel/Dockerfile + tests/qemu/Dockerfile (build/test tooling). Root Dockerfile + docker-compose.yml are dead legacy (Rule 9).
 
 ## Library Build Order (Dependency Graph)
 
@@ -175,6 +175,8 @@ vms/
 ├── CLAUDE.md              # This file — project instructions
 ├── README.md              # User-facing project overview
 ├── CMakeLists.txt         # Top-level build configuration
+├── docker-compose.yml     # DEAD LEGACY — not a runtime (Rule 9); pending removal
+├── Dockerfile             # DEAD LEGACY — glibc product container (Rule 9); pending removal
 ├── Dockerfile.bootable    # Bootable distro builder (QEMU mode)
 ├── boot.sh                # QEMU boot wrapper
 ├── src/                   # Source code
@@ -232,9 +234,9 @@ vms/
 
    **This distinction is load-bearing — do not collapse it:**
    - **Docker as a RUNTIME target — FORBIDDEN.** The root `Dockerfile` and `docker-compose.yml`
-     (glibc product container, SSH on 2222) were **deleted by vms-71a** — CI no longer builds or
-     runs them. Do not recreate them, do not document them as a way to run OVMX, do not add new CI
-     jobs on them.
+     (glibc product container, SSH on 2222) are **deprecated legacy**, retained only because CI
+     still depends on them. They are being removed — see the migration item in rd. Do not add
+     features to them, do not document them as a way to run OVMX, do not add new CI jobs on them.
    - **Docker/podman as BUILD or TEST tooling — FINE and expected.** `distro/Dockerfile.bootable`
      (builds the bootable QEMU image), `src/kernel/Dockerfile` (builds `vms.ko`), and
      `tests/qemu/Dockerfile` (QEMU test harness) *produce and test the real runtime*. Rule: "ALL

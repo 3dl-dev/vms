@@ -40,7 +40,6 @@
 
 #include "sysuaf.h"
 #include "str_util.h"
-#include "term_map.h"
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "vms/logical.h"
@@ -124,11 +123,42 @@ static int channel_pty_window_change(ssh_session session,
     return 0;
 }
 
-/* map_term_to_vms_device_type: SSH TERM -> OVMX device-type label.
- * Moved to term_map.c/term_map.h (vms-97d) so the mapping is unit-tested
- * against the real product function instead of a copy. See term_map.h
- * for the Rule 8/Rule 10 label: this is an OVMX design choice, not
- * VMS-authentic behavior. */
+/* ------------------------------------------------------------------ */
+/* map_term_to_vms_device_type: SSH TERM → VMS device type           */
+/* ------------------------------------------------------------------ */
+
+static const char *map_term_to_vms_device_type(const char *term)
+{
+    if (!term || !term[0])
+        return "VT100";
+
+    /* vt400/vt420 family */
+    if (strncasecmp(term, "vt4", 3) == 0)
+        return "VT400";
+
+    /* vt300/vt320 family */
+    if (strncasecmp(term, "vt3", 3) == 0)
+        return "VT300";
+
+    /* vt200/vt220 family */
+    if (strncasecmp(term, "vt2", 3) == 0)
+        return "VT200";
+
+    /* vt100 family */
+    if (strncasecmp(term, "vt1", 3) == 0)
+        return "VT100";
+
+    /* xterm-256color → VT300 (color capable) */
+    if (strcasecmp(term, "xterm-256color") == 0)
+        return "VT300";
+
+    /* xterm* → VT100 */
+    if (strncasecmp(term, "xterm", 5) == 0)
+        return "VT100";
+
+    /* Fallback: dumb, unknown, anything else → VT100 */
+    return "VT100";
+}
 
 /* ------------------------------------------------------------------ */
 /* generate_host_key: auto-generate RSA key if missing               */
@@ -419,20 +449,8 @@ static void handle_connection(ssh_session session)
         /* Use SSH client's TERM value if provided, else default to vt100 */
         setenv("TERM", ssh_term[0] ? ssh_term : "vt100", 1);
 
-        /*
-         * STOPGAP -- FACADE, NOT VMS (vms-d0b). VMS_DEVICE_TYPE and
-         * VMS_TERMINAL below hand a terminal identity to the session
-         * through the environment, which is the rejected VMS_PRCNAM
-         * shape (CLAUDE.md rule 10): the session ends up telling
-         * itself what terminal it is on. A VMS terminal is a device in
-         * the executive's device table (src/kernel/vms_devtab.c as of
-         * vms-d0b), assigned with $ASSIGN and read with $GETDVI.
-         * Remote terminals are explicitly out of scope for vms-d0b --
-         * this site is marked, not fixed.
-         */
-
         /* Map SSH TERM to VMS device type */
-        const char *vms_devtype = vmsssh_map_term_to_device_type(
+        const char *vms_devtype = map_term_to_vms_device_type(
             ssh_term[0] ? ssh_term : NULL);
         setenv("VMS_DEVICE_TYPE", vms_devtype, 1);
         setenv("HOME",        home_dir,               1);

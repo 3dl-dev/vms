@@ -8,6 +8,25 @@
  *            OpenVMS Programming Concepts Manual, Chapter 26
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * These three read no state at all -- they transform the caller's control
+ * string and arguments into the caller's output buffer. Whether OpenVMS
+ * dispatches $FAO into the executive is NOT settled here; the register records
+ * only where OVMX's answer comes from. Pin it to the oracle before quoting
+ * these lines as a VMS match.
+ *
+ * OVMX-USERSPACE: sys$fao (vms-5b4) -- formats into the caller's outbuf from
+ *     the caller's varargs; reads no process, system or device state.
+ * OVMX-USERSPACE: sys$faol (vms-5b4) -- same, from a caller-supplied
+ *     parameter list rather than varargs.
+ * OVMX-USERSPACE: sys$fao_count_args (vms-5b4) -- counts directives in the
+ *     caller's control string. An OVMX-internal helper that took a sys$ name;
+ *     the gate prints a "proto" column saying whether a header declares it.
+ */
+
 #include <stdint.h>
 #include <stdarg.h>
 #include <stdio.h>

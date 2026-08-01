@@ -17,6 +17,22 @@
  *   - sys$dclexh registers exit handlers called by sys$exit
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4). These services answer without
+ * consulting the executive; the gate is
+ * tests/integration/test_userspace_service_register.sh. The item on each line
+ * carries the Rule 10 decision -- route it to the executive, or delete it so
+ * the service is honestly absent. The register records WHERE THE ANSWER COMES
+ * FROM; it does not by itself say the answer is wrong.
+ *
+ * OVMX-USERSPACE: sys$setast (vms-as1) -- reads and writes the enable flag in
+ *     pcb->ast[mode] in the per-process PCB (src/vmsprocess/vms_pcb.c), which
+ *     does not survive exec and is not visible to any other process.
+ * OVMX-USERSPACE: sys$dclast (vms-as1) -- queues the AST onto pcb->ast[mode]
+ *     and delivers it with raise(SIGUSR1) to the caller itself, so nothing
+ *     outside this process can declare an AST into it or observe the queue.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>

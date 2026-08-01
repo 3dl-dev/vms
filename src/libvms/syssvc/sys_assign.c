@@ -7,6 +7,20 @@
  * that channel. Channel state is stored in the Per-Process Control Block.
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$assign (vms-dv1) -- allocates a slot in
+ *     pcb->channels[] in the per-process PCB and stores a Linux fd in it. No
+ *     executive device or channel database is consulted; the channel table is
+ *     process-local memory, so no other process can name the channel and it
+ *     does not survive exec.
+ * OVMX-USERSPACE: sys$dassgn (vms-dv1) -- closes the fd in the caller's own
+ *     pcb->channels[chan]; a channel assigned by another process cannot be
+ *     named, let alone deassigned.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>

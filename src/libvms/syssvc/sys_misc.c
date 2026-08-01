@@ -8,6 +8,24 @@
  * SYI$_ and JPI$_ item code constants are defined in prcdef.h.
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$setprv (vms-pv1) -- sets pcb->cur_privs/perm_privs in
+ *     the per-process PCB and returns SS$_NORMAL. Nothing validates the grant
+ *     and nothing outside the process reads pcb->cur_privs, so a process can
+ *     award itself any privilege and the grant binds nothing but its own
+ *     later in-process checks (sys$setuai's SYSPRV test is one of them). The
+ *     executive's vms_kif_setprv is declared OVMX-UNWIRED against this item.
+ * OVMX-USERSPACE: sys$getsyi (vms-5b4) -- answers from uname() and host
+ *     sysconf() values, not from an executive system block. csidadr and
+ *     nodename are both discarded ((void)csidadr; (void)nodename;), so a
+ *     request aimed at another cluster node is answered with this machine's
+ *     numbers as though it had been aimed here.
+ * OVMX-USERSPACE: sys$getsyiw (vms-5b4) -- the wait form of the same answer.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>

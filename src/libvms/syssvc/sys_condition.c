@@ -16,6 +16,16 @@
  * by lib_signal.c down to the target depth.
  */
 
+/*
+ * OVMX userspace service register (rd vms-5b4) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-USERSPACE: sys$unwind (vms-5b4) -- unwinds the process-local handler
+ *     stack kept in handler_count/handler_stack in src/libvms/rtl/lib_signal.c;
+ *     there is no executive condition-dispatch frame, so nothing outside this
+ *     process participates in or observes the unwind.
+ */
+
 #include <stdint.h>
 #include "starlet.h"
 

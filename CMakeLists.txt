@@ -229,6 +229,28 @@ if(BUILD_TESTS)
     set_tests_properties(kif_caller_census_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 300)
 
+    # Userspace service register (vms-5b4): every sys$ service either reaches
+    # the executive or is declared, against an item, as answering from
+    # userspace. The census asks "is this vms_kif wrapper called?" and cannot
+    # ask "is there another implementation of the same public service the
+    # product reaches INSTEAD" — a facade is invisible to a gate that only
+    # counts calls to the real thing. Source scan.
+    add_test(NAME userspace_service_register
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(userspace_service_register PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
+
+    # ...and the evasions, on a sandbox copy of the tree. The GREEN controls
+    # carry as much weight as the RED ones here: the register's design rests on
+    # firing for an undeclared impostor and NOT for legitimate pure computation,
+    # and on leaving Rule 10's second answer (delete the service outright) open.
+    add_test(NAME userspace_service_register_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(userspace_service_register_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 300)
+
     # Rule 10/11 standing gate (vms-fb9): a process does not name its own
     # terminal, and SHOW DEVICE does not invent device rows. Keeps the
     # VMS_TERMINAL / VMS_DEVICE_TYPE environment handoff, the private _FTA

@@ -525,7 +525,22 @@ static int cmd_set_process(struct dcl_command *cmd)
      */
     const char *name_val = dcl_qualifier_value(cmd, "NAME");
     if (name_val && *name_val) {
-        char upname[sizeof(ctx->process_name)];
+        /*
+         * upname MUST be sized VMS_PRCNAM_XFER (64), not
+         * sizeof(ctx->process_name) (16) -- see the VMS_PRCNAM_XFER
+         * comment in src/kernel/vms_ioctl.h. A 16-byte local buffer
+         * truncates an oversized name to 15 significant characters
+         * BEFORE it ever reaches vms_kif_setprn(), handing the
+         * executive an already-legal-looking name and never giving it
+         * the chance to refuse it -- the exact defect that comment
+         * exists to prevent (vms-fbe round 1: a 16-char name silently
+         * "succeeded", truncated, with no message, where real VMS
+         * refuses it outright). Sizing this at VMS_PRCNAM_XFER lets an
+         * oversized name arrive intact so name_is_valid() in
+         * vms_proctab.c can see it is not NUL-terminated within
+         * VMS_PRCNAM_SIZE and return SS$_IVLOGNAM.
+         */
+        char upname[VMS_PRCNAM_XFER];
         strncpy(upname, name_val, sizeof(upname) - 1);
         upname[sizeof(upname) - 1] = '\0';
         /* Upper-case the name, VMS style, before it goes on the wire --
@@ -555,12 +570,30 @@ static int cmd_set_process(struct dcl_command *cmd)
              * invented VMS message text and NO "%SYSTEM-" facility
              * (Rule 10: that would self-certify a fake VMS message for a
              * condition VMS never shows), and the raw status is printed
-             * as the only fact known. */
-            if (st == SS$_DUPLNAM)
-                dcl_error("SYSTEM", 4, "DUPLNAM", "duplicate name");
-            else if (st == SS$_IVLOGNAM)
-                dcl_error("SYSTEM", 4, "IVLOGNAM", "invalid logical name");
-            else
+             * as the only fact known.
+             *
+             * The DUPLNAM/IVLOGNAM report below is ORACLE-PINNED to
+             * src/kernel/vms_ioctl.h:653-658 (VAX1, OpenVMS VAX V7.3):
+             * SET PROCESS/NAME wraps the underlying system-service
+             * failure in the command's own generic
+             * "%SET-E-NOTSET, error modifying process name" and reports
+             * the specific status on a CONTINUATION line
+             * ("-SYSTEM-F-<ident>, <text>") -- NOT the bare
+             * "%SYSTEM-F-<ident>" round 1 pinned, which was this
+             * round's own guess and not anything observed on VAX1; this
+             * round corrects it to match the transcript already in this
+             * repo. The unreachable-executive branch below stays OUT of
+             * this wrapper -- it is not a status $SETPRN can ever
+             * return, so it keeps its own non-VMS-branded single-line
+             * report per Rule 10. */
+            if (st == SS$_DUPLNAM) {
+                dcl_error("SET", 2, "NOTSET", "error modifying process name");
+                fprintf(stderr, "-SYSTEM-F-DUPLNAM, duplicate name\n");
+            } else if (st == SS$_IVLOGNAM) {
+                dcl_error("SET", 2, "NOTSET", "error modifying process name");
+                fprintf(stderr,
+                        "-SYSTEM-F-IVLOGNAM, invalid logical name\n");
+            } else
                 dcl_error("OVMX", 2, "SETPRNFAIL",
                           "SET PROCESS/NAME could not reach the executive "
                           "(status %%X%08X)", st);

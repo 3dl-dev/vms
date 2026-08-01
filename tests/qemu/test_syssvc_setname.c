@@ -32,18 +32,29 @@
  *        is the property the item is actually about.
  * P4:    a THIRD DCL.EXE's SET PROCESS/NAME=<same name>, while the first is
  *        still alive, is refused through the DCL command layer with the
- *        oracle-pinned %SYSTEM-F-DUPLNAM message (F$MESSAGE(148) on real
- *        OpenVMS VAX V7.3, ssdef.h SS$_DUPLNAM -- see the ORACLE-PINNED
- *        block in src/libvms/include/ssdef.h). The kernel's own DUPLNAM
- *        refusal is already proven at the ioctl and sys$ layers
+ *        oracle-pinned two-line %SET-E-NOTSET / -SYSTEM-F-DUPLNAM shape
+ *        (src/kernel/vms_ioctl.h:653-658, F$MESSAGE(148) on real OpenVMS
+ *        VAX V7.3, ssdef.h SS$_DUPLNAM -- see the ORACLE-PINNED block in
+ *        src/libvms/include/ssdef.h). The kernel's own DUPLNAM refusal is
+ *        already proven at the ioctl and sys$ layers
  *        (tests/qemu/test_kmod_procnam.c, test_syssvc_procnam.c); this is
  *        the first proof that DCL's OWN error path surfaces it, since
  *        before this item DCL's SET PROCESS/NAME never called the
  *        executive at all and so could never be refused by it.
- * P5:    once the first DCL.EXE exits, the name is free again -- a FOURTH
- *        DCL.EXE's SET PROCESS/NAME=<same name> succeeds. Proves the
- *        lifecycle (vms_proc_reap_dead()) is reached from the DCL layer
- *        too, not just from raw ioctl callers.
+ * P5:    once the first DCL.EXE exits, the name is free again -- a FOURTH,
+ *        independent DCL.EXE's SET PROCESS/NAME=<same name> ACTUALLY SETS
+ *        the name in the executive's own row (verified by this test
+ *        process's own vms_kif_procscan(), not just by the absence of a
+ *        DUPLNAM message). Proves the lifecycle (vms_proc_reap_dead()) is
+ *        reached from the DCL layer too, not just from raw ioctl callers.
+ * P6:    a 15-char (VMS_PRCNAM_SIZE-1) name is accepted at the boundary;
+ *        a 16-char name is REFUSED with SS$_IVLOGNAM in the oracle's
+ *        two-line shape, and the process's pre-existing name is left
+ *        UNCHANGED by the refusal -- not silently truncated into a
+ *        different, legal-looking name (the round-1 defect: upname was
+ *        sized sizeof(ctx->process_name)==16, clipping the oversized name
+ *        before the executive ever saw it, so it "succeeded" truncated
+ *        with no message).
  *
  * SCOPE: this suite is SET PROCESS/NAME only. It does not touch F$USER,
  * SHOW SYSTEM's other columns (test_syssvc_showproc.c owns those), or
@@ -91,9 +102,19 @@ static int fail = 0;
 #define HOLDER_NAME    "OVMXFBEHOLD"
 #define SETUP_FAIL_MARK "OVMXFBESETUPFAIL"
 
-/* Oracle-pinned (vms-8019, src/libvms/include/ssdef.h): F$MESSAGE(148) on
- * real OpenVMS VAX V7.3 -> "%SYSTEM-F-DUPLNAM, duplicate name". */
-#define MSG_DUPLNAM "%SYSTEM-F-DUPLNAM, duplicate name"
+/* Oracle-pinned TWO-LINE shape (vms-fbe round 2, src/kernel/vms_ioctl.h:
+ * 653-658, VAX1, OpenVMS VAX V7.3): SET PROCESS/NAME wraps the underlying
+ * system-service failure in the command's own generic
+ * "%SET-E-NOTSET, error modifying process name", then reports the specific
+ * status on a CONTINUATION line ("-SYSTEM-F-<ident>, <text>"). Round 1 of
+ * this suite pinned a bare "%SYSTEM-F-DUPLNAM, duplicate name" single line
+ * -- that shape was never observed on VAX1; it was this suite's own guess,
+ * and the item that opened round 2 named it explicitly as the wrong shape
+ * to correct. F$MESSAGE(148)/F$MESSAGE(340) (vms-8019, ssdef.h) still
+ * supply the ident/text pinning for DUPLNAM/IVLOGNAM themselves. */
+#define MSG_NOTSET "%SET-E-NOTSET, error modifying process name"
+#define MSG_DUPLNAM MSG_NOTSET "\n-SYSTEM-F-DUPLNAM, duplicate name"
+#define MSG_IVLOGNAM MSG_NOTSET "\n-SYSTEM-F-IVLOGNAM, invalid logical name"
 
 /* ---------------------------------------------------------------------
  * Small helpers.
@@ -425,15 +446,144 @@ int main(void)
 
     /* ---------------------------------------------------------------
      * P5. Once the holder is gone, the name is free again: a FOURTH,
-     *     independent DCL.EXE's SET PROCESS/NAME=<same name> succeeds
-     *     (no DUPLNAM). Proves vms_proc_reap_dead() is reached from the
-     *     DCL layer, not just from a raw ioctl caller.
+     *     independent DCL.EXE's SET PROCESS/NAME=<same name> succeeds.
+     *     Proves vms_proc_reap_dead() is reached from the DCL layer,
+     *     not just from a raw ioctl caller.
+     *
+     *     STRENGTHENED (vms-fbe round 2): the round-1 version only
+     *     checked that the SET command's output did not contain the
+     *     DUPLNAM message -- an ABSENCE-only assertion, satisfiable by
+     *     SET PROCESS/NAME doing NOTHING AT ALL (no output, no call,
+     *     no executive write). This version spawns a SECOND holder
+     *     (reusing spawn_holder(), which blocks alive after setting
+     *     HOLDER_NAME) and reads ITS executive row back through THIS
+     *     process's own vms_kif_procscan() -- the same A-writes/B-reads
+     *     shape as P1-P2 -- so the assertion is that the name was
+     *     ACTUALLY SET, not merely that no error text was seen.
      * --------------------------------------------------------------- */
-    CHECK(run_dcl("SET PROCESS/NAME=" HOLDER_NAME "\nLOGOUT\n",
+    int holder2_stdin = -1;
+    pid_t holder2_pid = spawn_holder(&holder2_stdin);
+    CHECK(holder2_pid > 0,
+          "a fourth, independent DCL.EXE ran SET PROCESS/NAME after the holder exited");
+    if (holder2_pid > 0) {
+        struct vms_procinfo hinfo2;
+        memset(&hinfo2, 0, sizeof(hinfo2));
+        int found2 = wait_for_named_row((uint32_t)holder2_pid, &hinfo2, 15000) == 0;
+        CHECK(found2,
+              "the executive's process table row for the second holder became named");
+        if (found2) {
+            CHECK(strcmp(hinfo2.prcnam, HOLDER_NAME) == 0,
+                  "the name freed by the first holder's exit was ACTUALLY SET for the "
+                  "second holder (not just DUPLNAM-absent)");
+        }
+        (void)write_full(holder2_stdin, "LOGOUT\n", 7);
+        close(holder2_stdin);
+        int h2st = 0;
+        while (waitpid(holder2_pid, &h2st, 0) < 0 && errno == EINTR)
+            ;
+    }
+
+    /* ---------------------------------------------------------------
+     * P6. THE BLOCKER THIS ROUND FIXES: an oversized (16-char) name
+     *     must be REFUSED by the executive with SS$_IVLOGNAM, in the
+     *     oracle's two-line shape, AND the process's PRE-EXISTING name
+     *     must be LEFT UNCHANGED -- not truncated into a different,
+     *     legal-looking name. Oracle: src/kernel/vms_ioctl.h:653-658
+     *     (VAX1, OpenVMS VAX V7.3):
+     *       $ SET PROCESS/NAME="IMPL8019NAM15XY"   ! 15 chars -> accepted
+     *       $ SET PROCESS/NAME="IMPL8019NAM15XYZ"  ! 16 chars
+     *       %SET-E-NOTSET, error modifying process name
+     *       -SYSTEM-F-IVLOGNAM, invalid logical name
+     *       $ WRITE SYS$OUTPUT F$GETJPI("","PRCNAM") ! old name UNCHANGED
+     *       IMPL8019NAM15XY
+     *
+     *     BOUND_NAME is exactly VMS_PRCNAM_SIZE-1 = 15 characters (a
+     *     legal boundary name, mirroring the oracle's first line).
+     *     OVER_NAME is exactly 16 characters, and its first 15 bytes
+     *     ("OVMXFBELEN16ABC") are DELIBERATELY DIFFERENT from
+     *     BOUND_NAME's 15 bytes ("OVMXFBELEN15ABC") -- so a truncation
+     *     regression (round 1's actual bug: upname sized at 16 instead
+     *     of VMS_PRCNAM_XFER) would show up as a DIFFERENT string in
+     *     SHOW SYSTEM, not one that happens to equal BOUND_NAME by
+     *     construction. The lengths are asserted at compile time so
+     *     the boundary claim cannot silently drift out of sync with
+     *     the string literals (Method 4).
+     * --------------------------------------------------------------- */
+#define BOUND_NAME "OVMXFBELEN15ABC"
+#define OVER_NAME  "OVMXFBELEN16ABCD"
+    _Static_assert(sizeof(BOUND_NAME) - 1 == 15,
+                   "BOUND_NAME must be exactly VMS_PRCNAM_SIZE-1 characters");
+    _Static_assert(sizeof(OVER_NAME) - 1 == 16,
+                   "OVER_NAME must be exactly one character over the legal limit");
+
+    CHECK(run_dcl("SET PROCESS/NAME=" BOUND_NAME "\n"
+                  "SHOW SYSTEM\n"
+                  "SET PROCESS/NAME=" OVER_NAME "\n"
+                  "SHOW SYSTEM\n"
+                  "LOGOUT\n",
                   out, sizeof(out)) == 0,
-          "a fourth DCL.EXE ran SET PROCESS/NAME after the holder exited");
-    CHECK(strstr(out, MSG_DUPLNAM) == NULL,
-          "the name is available again once the process that held it exited");
+          "a fifth DCL.EXE ran the boundary/oversized SET PROCESS/NAME script");
+
+    CHECK(strstr(out, BOUND_NAME) != NULL,
+          "the 15-char boundary-legal name (VMS_PRCNAM_SIZE-1) was accepted");
+    CHECK(strstr(out, MSG_IVLOGNAM) != NULL,
+          "the 16-char oversized name is refused with the oracle's two-line "
+          "%SET-E-NOTSET / -SYSTEM-F-IVLOGNAM shape, now that upname is sized "
+          "VMS_PRCNAM_XFER and reaches the executive intact");
+    CHECK(strstr(out, "OVMXFBELEN16ABC") == NULL,
+          "the truncated form of the oversized name (round 1's actual bug) "
+          "never appears anywhere in the output -- the executive was never "
+          "handed a clipped, legal-looking name to silently accept");
+
+    const char *row2 = sys_row_for(out, BOUND_NAME);
+    CHECK(row2 != NULL,
+          "after the refused rename, SHOW SYSTEM still names this process "
+          "with its PRE-EXISTING boundary name -- left UNCHANGED by the "
+          "refusal, exactly as the oracle transcript shows");
+    if (!row2)
+        printf("  (P6 SHOW SYSTEM output follows)\n%s\n  (end)\n", out);
+#undef BOUND_NAME
+#undef OVER_NAME
+
+    /* ---------------------------------------------------------------
+     * METHOD 5 (investigative -- OBSERVATIONS, not oracle-pinned
+     * verdicts). The item asked whether the upname-truncation defect
+     * could have been hiding any OTHER input besides the 16-char case.
+     * These two are NOT part of what round 1 broke or what the three
+     * required changes above fix, and NEITHER has an oracle transcript
+     * in this repo -- so per Rule 10 ("never self-certify a constant
+     * value or a message") they are printed as OBSERVED FACTS, not
+     * asserted as VMS-correct or -incorrect with CHECK(). Only that
+     * the probe script itself ran is a CHECK() -- that part IS a
+     * verifiable fact regardless of which behavior VMS turns out to
+     * want.
+     * --------------------------------------------------------------- */
+    CHECK(run_dcl("SET PROCESS/NAME=\"\"\nSHOW SYSTEM\nLOGOUT\n",
+                  out, sizeof(out)) == 0,
+          "a DCL.EXE ran the empty-name (METHOD 5) investigative probe");
+    printf("  OBSERVED (SET PROCESS/NAME=\"\", no oracle pin in this repo -- "
+           "NOT asserted right or wrong): %s\n",
+           (strstr(out, "NOTSET") || strstr(out, "IVLOGNAM"))
+               ? "refused by the executive"
+               : "SILENT NO-OP -- dcl_cmd_set.c's "
+                 "\"if (name_val && *name_val)\" guard skips the whole "
+                 "block before vms_kif_setprn() is ever called, so an "
+                 "empty name never reaches the executive to be refused "
+                 "or accepted. This guard predates this round and is a "
+                 "DIFFERENT code path from the upname buffer this item "
+                 "fixes -- flagged, not fixed, here.");
+
+    CHECK(run_dcl("SET PROCESS/NAME=\"OVMXFBE!BAD\"\nSHOW SYSTEM\nLOGOUT\n",
+                  out, sizeof(out)) == 0,
+          "a DCL.EXE ran the non-alnum-character (METHOD 5) investigative probe");
+    printf("  OBSERVED (SET PROCESS/NAME=\"OVMXFBE!BAD\", no oracle pin in "
+           "this repo -- NOT asserted right or wrong): %s\n",
+           (strstr(out, "NOTSET") || strstr(out, "IVLOGNAM"))
+               ? "refused by the executive"
+               : "ACCEPTED -- vms_proctab.c's name_is_valid() only checks "
+                 "for a NUL within VMS_PRCNAM_SIZE bytes; it does not "
+                 "validate character set at all, so '!' and any other "
+                 "byte a legal-length name contains is stored as given.");
 
     printf("=== test_syssvc_setname: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;

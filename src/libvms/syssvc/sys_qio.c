@@ -11,6 +11,22 @@
  * and byte count after each operation, just as on real VMS.
  */
 
+/*
+ * OVMX service register (rd vms-d89) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-PARTIAL: sys$qio (vms-1c57) -- exec: a request on a channel the executive
+ *     issued (the console terminal) is routed to the executive's device, so the
+ *     I/O goes where the device table says it goes.
+ * OVMX-LOCAL: sys$qio -- the channel-to-fd mapping comes from this process's PCB,
+ *     and the io_uring ring (and its read()/write() fallback) is this process's.
+ *     There is no executive I/O queue, so no other process can see the request.
+ * OVMX-PARTIAL: sys$qiow (vms-1c57) -- exec: the same executive-issued terminal
+ *     channel path as $QIO.
+ * OVMX-LOCAL: sys$qiow -- the same process-local PCB channel table and io_uring
+ *     ring, plus a completion wait taken inside this process.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>

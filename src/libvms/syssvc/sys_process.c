@@ -14,11 +14,34 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * $CREPRC, $GETJPI and $GETJPIW reach the executive process table (vms-8019)
- * and carry no declaration. The services below do not, and the recurring shape
- * is the discarded prcnam: each one below that accepts a VMS process NAME
- * opens with `(void)prcnam;`, so a caller that names its target rather than
- * numbering it is silently redirected to itself or to a raw Linux pid.
+ * $CREPRC, $GETJPI and $GETJPIW reach the executive process table (vms-8019).
+ * That used to exempt them from saying anything at all; it no longer does
+ * (vms-d89), because reaching the executive is not the same as answering from
+ * it, and all three of them answer from both places:
+ *
+ * OVMX-PARTIAL: sys$creprc (vms-8019) -- exec: the created process's NAME is
+ *     registered with vms_kif_setprn() and the VMS process id reported back
+ *     through pidadr is the one the executive assigned, read with
+ *     vms_kif_getjpi_self(). Those are the parts another process can see.
+ * OVMX-LOCAL: sys$creprc -- the child's privileges, UIC, username, default
+ *     directory and quotas are copied out of the PARENT'S process-local PCB
+ *     into the child's process-local PCB. No executive row records any of them,
+ *     so nothing outside the child can read back what it was created with.
+ * OVMX-PARTIAL: sys$getjpi (vms-8019) -- exec: JPI$_PID, JPI$_PRCNAM,
+ *     JPI$_USERNAME and JPI$_UIC are read from the row the executive resolved,
+ *     by name or by pid, with no PCB consulted -- which is what lets $GETJPI
+ *     describe a process other than its caller at all.
+ * OVMX-LOCAL: sys$getjpi -- JPI$_CPUTIM is not the executive's: it comes from
+ *     getrusage(RUSAGE_SELF) for the caller and from /proc/<pid>/stat otherwise.
+ *     The executive keeps no accounting for a process it has a row for.
+ * OVMX-PARTIAL: sys$getjpiw (vms-8019) -- exec: tail-calls sys$getjpi, so the
+ *     same executive-resolved row answers the same items.
+ * OVMX-LOCAL: sys$getjpiw -- and inherits the same /proc-derived JPI$_CPUTIM.
+ *
+ * The services below reach nothing at all, and the recurring shape is the
+ * discarded prcnam: each one that accepts a VMS process NAME opens with
+ * `(void)prcnam;`, so a caller that names its target rather than numbering it
+ * is silently redirected to itself or to a raw Linux pid.
  *
  * OVMX-USERSPACE: sys$exit (vms-8019) -- runs the exit handlers held in
  *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.

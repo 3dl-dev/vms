@@ -27,6 +27,23 @@
  *   LCK$K_EXMODE (5) - Exclusive
  */
 
+/*
+ * OVMX service register (rd vms-d89) -- gate:
+ * tests/integration/test_userspace_service_register.sh
+ *
+ * OVMX-EXECUTIVE: sys$enq (vms-ci.7) proof=tests/qemu/test_syssvc_lock.c -- there is
+ *     no userspace lock table and no flock() fallback; the grant decision, the lock
+ *     id and the value block all come back from the kernel lock manager.
+ * OVMX-EXECUTIVE: sys$enqw (vms-ci.7) proof=tests/qemu/test_syssvc_lock.c -- the same
+ *     request as $ENQ with the wait taken in the executive.
+ * OVMX-EXECUTIVE: sys$deq (vms-ci.7) proof=tests/qemu/test_syssvc_lock.c -- one-line
+ *     pass-through to vms_kif_deq.
+ *
+ * kstat_to_ss() below translates the kernel's status numbering into the public
+ * ssdef.h values. That is a translation of the executive's answer, not a
+ * substitute for it: it changes how the answer is spelled, never what it says.
+ */
+
 #include <stdint.h>
 #include <string.h>
 #include <unistd.h>

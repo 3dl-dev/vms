@@ -70,10 +70,7 @@ static const struct status_entry known_codes[] = {
     { SS$_CANCEL,       "SYSTEM", "CANCEL",       "I/O operation cancelled" },
     { SS$_IVCHAN,       "SYSTEM", "IVCHAN",       "invalid I/O channel" },
     { SS$_IVMODE,       "SYSTEM", "IVMODE",       "invalid access mode" },
-    /* ORACLE-PINNED (vms-9fc): F$MESSAGE(244) on the reference lab VAX
-     * V7.3 renders "%SYSTEM-F-ILLIOFUNC, illegal I/O function code" --
-     * "code" included. */
-    { SS$_ILLIOFUNC,    "SYSTEM", "ILLIOFUNC",    "illegal I/O function code" },
+    { SS$_ILLIOFUNC,    "SYSTEM", "ILLIOFUNC",    "illegal I/O function" },
     { SS$_TIMEOUT,      "SYSTEM", "TIMEOUT",      "device timeout" },
     { SS$_ILLEFC,       "SYSTEM", "ILLEFC",       "illegal event flag cluster" },
     { SS$_NONEXPR,      "SYSTEM", "NONEXPR",      "nonexistent process" },

@@ -16,31 +16,23 @@
 static __thread int vms_dev_fd = -1;
 
 /*
- * The PROCESS this thread's executive registration belongs to, or 0 for
- * "not bound". Not a bare boolean, and that is the whole point (vms-9fc):
+ * The task this thread's executive registration belongs to, or 0 for
+ * "this thread has no registration". Not a bare boolean, and that is the
+ * whole point (vms-9fc):
  *
  *   fork() copies thread-local storage wholesale. A child therefore
  *   inherits BOTH the parent's descriptor number and the parent's
  *   "already bound" mark, while the executive keys its process table by
- *   process -- so the child is NOT registered no matter what its TLS
- *   says. A boolean flag makes the child skip registration forever and
- *   every ioctl it issues is rejected. Recording WHICH process the mark
- *   belongs to is what makes the stale inherited mark detectable.
+ *   task -- so the child is NOT registered no matter what its TLS says.
+ *   A boolean flag makes the child skip registration forever and every
+ *   ioctl it issues is rejected. Recording WHICH task the mark belongs
+ *   to is what makes the stale inherited mark detectable.
  *
- * It records a PROCESS id (getpid, the thread-group id) and not a thread
- * id (gettid), because that is what the registration is a property of:
- * on VMS a process has one PCB and its kernel threads share it, and the
- * executive keys struct vms_proc by current->tgid to match. Recording a
- * thread id here would be storing thread identity for a process-scoped
- * fact -- the same category error that, on the kernel side, minted one
- * VMS process per Linux thread (vms-9fc round 2).
- *
- * The comparison covers all three ways a thread can arrive here
- * unbound: a forked child (stale inherited mark, pid mismatch), a newly
- * created thread (fresh TLS, mark 0), and a freshly activated image
- * after execve() (TLS wiped, mark 0).
+ * The same comparison covers the two other ways a thread can arrive here
+ * unregistered: a newly created thread (fresh TLS, tid mismatch) and a
+ * freshly activated image after execve() (TLS wiped, mark 0).
  */
-static __thread vms_pid_t vms_bound_pid = 0;
+static __thread vms_pid_t vms_bound_tid = 0;
 
 /* ================================================================
  * Connection management
@@ -108,7 +100,7 @@ void vms_kif_close(void)
         vms_sys_close(vms_dev_fd);
         vms_dev_fd = -1;
     }
-    vms_bound_pid = 0;
+    vms_bound_tid = 0;
 }
 
 uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs)
@@ -132,11 +124,11 @@ uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs)
     if (rc < 0)
         return vms_kif_kerr_to_ss(rc);
 
-    /* Remember which process this registration belongs to, so an explicit
+    /* Remember which task this registration belongs to, so an explicit
      * open+register (the sequence vms_kif.h documents, and the one the
      * kernel tests drive) satisfies kif_bind() without a second round trip. */
     if (args.status & 1)
-        vms_bound_pid = vms_sys_getpid();
+        vms_bound_tid = vms_sys_gettid();
 
     return args.status;
 }
@@ -168,19 +160,16 @@ uint32_t vms_kif_register(uint32_t vms_pid, uint64_t init_privs)
  */
 static void kif_bind(void)
 {
-    vms_pid_t pid = vms_sys_getpid();
+    vms_pid_t tid = vms_sys_gettid();
 
-    if (vms_bound_pid == pid)
+    if (vms_bound_tid == tid)
         return;
 
     /*
-     * Any descriptor found here belongs to another PROCESS -- this
-     * thread's TLS was inherited across fork(). It is a dup of that
-     * process's channel, so drop it and take our own rather than sharing
-     * a lifetime with a process the executive accounts for separately.
-     * (A sibling thread of the SAME process never gets here with a
-     * descriptor: TLS starts fresh at -1, and the register below is
-     * adopted onto the process's existing PCB.)
+     * Any descriptor found here belongs to another task -- this thread's
+     * TLS was inherited across fork(). It is a dup of that task's channel,
+     * so drop it and take our own rather than sharing a lifetime with a
+     * process the executive accounts for separately.
      */
     if (vms_dev_fd >= 0) {
         vms_sys_close(vms_dev_fd);
@@ -195,7 +184,7 @@ static void kif_bind(void)
      * system. Branching on it would be handling a condition VMS never
      * faces (Rule 10), which is why tests/integration/test_runtime_target.sh
      * rejects the branch. If a descriptor somehow is not available the
-     * REGISTER below fails and vms_bound_pid stays 0, so nothing is ever
+     * REGISTER below fails and vms_bound_tid stays 0, so nothing is ever
      * told it is bound when it is not.
      */
     (void)vms_kif_open();

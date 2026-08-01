@@ -25,7 +25,6 @@
 #include <linux/uidgid.h>
 #include <linux/pid.h>
 #include <linux/sched.h>
-#include <linux/sched/signal.h>
 
 #include "vms_internal.h"
 
@@ -62,28 +61,9 @@ struct vms_proc *vms_proc_find(pid_t pid)
     return NULL;
 }
 
-/*
- * vms_proc_find_or_err - this TASK'S process entry.
- *
- * KEYED ON THE THREAD GROUP, NOT THE THREAD (vms-9fc round 2).
- *
- * On OpenVMS a process has exactly ONE PCB and its kernel threads SHARE
- * it -- that shared residency is the entire meaning of a process-wide
- * event flag cluster, a process logical name table, a process name and a
- * process's lock ids. Keying this table on current->pid (the Linux TID)
- * minted one VMS process per THREAD: two threads of one image disagreed
- * about their own identity, could not see each other's event flags, and
- * could not release each other's locks. That is Rule 11's facade shape
- * inverted -- per-thread state pretending to be per-process -- and it is
- * not something VMS can be in.
- *
- * Linux's process-wide identifier is the thread-group id: current->tgid,
- * which is what getpid(2) returns, while current->pid is what gettid(2)
- * returns. So tgid is the key, and task_tgid() is the pinned identity.
- */
 struct vms_proc *vms_proc_find_or_err(void)
 {
-    struct vms_proc *proc = vms_proc_find(current->tgid);
+    struct vms_proc *proc = vms_proc_find(current->pid);
 
     /*
      * A table entry now outlives the /dev/vms channel (vms-8019), so an
@@ -93,7 +73,7 @@ struct vms_proc *vms_proc_find_or_err(void)
      * privileges with it. Match on the pinned struct pid, which is
      * unique per process instance, rather than on the reusable number.
      */
-    if (proc && proc->pid_ref != task_tgid(current))
+    if (proc && proc->pid_ref != task_pid(current))
         return NULL;
 
     return proc;
@@ -128,12 +108,10 @@ struct vms_proc *vms_proc_register(pid_t pid, uint32_t vms_pid, uint64_t init_pr
                 ((uint32_t)from_kuid(&init_user_ns, current_uid()) & 0xFFFFu);
 
     /*
-     * Pin the backing PROCESS's pid so the entry's liveness can be tested
-     * without racing pid reuse. task_tgid(), not task_pid(): the entry
-     * belongs to the whole thread group and must outlive any one thread
-     * in it (see vms_proc_find_or_err). Released in vms_proc_free().
+     * Pin the backing task's pid so the entry's liveness can be tested
+     * without racing pid reuse. Released in vms_proc_free().
      */
-    proc->pid_ref = get_pid(task_tgid(current));
+    proc->pid_ref = get_pid(task_pid(current));
 
     /*
      * Privilege escalation guard: only CAP_SYS_ADMIN processes may request
@@ -312,9 +290,7 @@ static long vms_ioctl_register(unsigned long arg)
         return 0;
     }
 
-    /* current->tgid, not current->pid: one PCB per process, shared by
-     * every thread in it (see vms_proc_find_or_err). */
-    proc = vms_proc_register(current->tgid, args.vms_pid, args.init_privs);
+    proc = vms_proc_register(current->pid, args.vms_pid, args.init_privs);
     if (IS_ERR(proc)) {
         if (PTR_ERR(proc) != -EEXIST)
             return PTR_ERR(proc);   /* -ENOMEM -> SS$_INSFMEM at the boundary */
@@ -448,18 +424,8 @@ static int vms_dev_release(struct inode *inode, struct file *filp)
      * actually going away. Entries whose task exits without ever
      * reaching this path (a forked child sharing the parent's struct
      * file, for instance) are reclaimed by vms_proc_reap_dead().
-     *
-     * "Going away" means the PROCESS, not one of its threads (vms-9fc
-     * round 2). The entry is now keyed by thread group, so a thread
-     * exiting out of a still-running multithreaded image must not take
-     * the image's PCB with it -- that would delete a live VMS process.
-     * thread_group_empty() is true only for the last member of the
-     * group; anything it misses (threads reaped in an order where no
-     * exit sees an empty group) is picked up lazily by
-     * vms_proc_reap_dead(), whose liveness test is the pinned thread
-     * group.
      */
-    if (!(current->flags & PF_EXITING) || !thread_group_empty(current))
+    if (!(current->flags & PF_EXITING))
         return 0;
 
     proc = vms_proc_find_or_err();

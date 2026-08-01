@@ -217,7 +217,41 @@ check_status_reports_failure() {
 # --- Property 4: the executive was ACTUALLY read, not merely a status ----
 # fabricated without touching it. See the file header (added vms-fb9 r6)
 # for why $STATUS alone (property 2b) is not enough.
-R_NOREAD='no openat("/dev/vms", ...) syscall was observed by strace'
+#
+# RE-ANCHORED (vms-2b8, 2026-07-31): this used to check for ANY
+# openat("/dev/vms", ...) syscall. vms-2b8 made src/vmsdcl/dcl_main.c's
+# dcl_context_init() call vms_kif_getjpi_self() UNCONDITIONALLY at DCL
+# startup (reading the executive's identity row instead of the
+# environment) -- so as of that change EVERY DCL invocation opens
+# /dev/vms before cmd_show_device() ever runs, mutation or not. Measured
+# directly (strace -e trace=openat,ioctl over a real `SHOW DEVICE`, no
+# executive present): the openat("/dev/vms", ...) attempt now appears in
+# BOTH the mutated (M3) and unmutated runs, so it stopped discriminating
+# the property it exists to catch -- it would have passed mutation D
+# silently, exactly the vacuity class this property was added to close.
+#
+# The re-anchor is one of the two device-read ioctls src/kernel/vms_ioctl.h
+# defines (VMS_IOC_MAGIC='V'=0x56): VMS_IOCTL_DEVSCAN, cmd 0x53
+# (_IOWR(..., 0x53, struct vms_devscan_args), pinned by its own
+# _Static_assert against 0xC0505653), issued by vms_kif_devscan() for a
+# BARE "SHOW DEVICE"; and VMS_IOCTL_GETDVI, cmd 0x52
+# (_Static_assert-pinned against 0xC0585652 -- vms_ioctl.h's own encoding
+# of _IOWR(0x56, 0x52, struct vms_getdvi_args); an earlier round of this
+# comment transposed two digits and cited 0xC0505752, a value with no
+# matching _Static_assert anywhere in the tree), issued by
+# vms_kif_getdvi_devnam() for a NAMED "SHOW DEVICE <dev>" -- measured
+# directly, the two forms do not share an ioctl. Neither is the identity
+# read dcl_context_init() now issues at startup (VMS_IOCTL_GETJPI, cmd
+# 0x42), so either one is proof that cmd_show_device() itself, not merely
+# DCL's startup, reached the executive. kif_call() issues its ioctl
+# UNCONDITIONALLY, on whatever descriptor kif_bind() produced (even -1/-2
+# when /dev/vms could not be opened), so it is observable by strace
+# whether or not the executive answers -- exactly the same "issued
+# regardless of success" property the openat anchor used to provide, one
+# door further in. Measured: strace shows a `0x56, 0x53` (bare) or
+# `0x56, 0x52` (named) ioctl for a real SHOW DEVICE and NEITHER for
+# mutation D (which returns before either vms_kif_* call is made).
+R_NOREAD='no VMS_IOCTL_DEVSCAN/GETDVI ioctl (0x56, 0x53 / 0x56, 0x52) was observed by strace'
 # BROKEN FIXTURE vs. real red (vms-fb9 r7, corrected r8): a container that
 # denies ptrace (common -- Docker's default seccomp profile blocks ptrace(2)
 # without --cap-add=SYS_PTRACE) makes strace's OWN PTRACE_TRACEME fail. That
@@ -255,7 +289,7 @@ check_executive_read_attempted() {
         return
     fi
     printf '%s\nWRITE SYS$OUTPUT "%s"\n' "$cmdline" "$MARK" \
-        | "$STRACE" -f -e trace=openat -o "$WORK/strace.out" "$DCL" \
+        | "$STRACE" -f -e trace=openat,ioctl -o "$WORK/strace.out" "$DCL" \
               >"$WORK/strace_stdout" 2>"$WORK/strace_stderr"
     strace_rc=$?
     # strace_rc mirrors the TRACEE's own exit status once tracing succeeds
@@ -273,15 +307,20 @@ check_executive_read_attempted() {
              "strace stderr was:" "$(sed 's/^/       | /' "$WORK/strace_stderr" 2>/dev/null)"
         return
     fi
-    if grep -qF '"/dev/vms"' "$WORK/strace.out" 2>/dev/null; then
-        echo "  OK: $label really attempted to open /dev/vms (strace-observed)"
+    if grep -E 'ioctl\(.*0x56, 0x5[23]' "$WORK/strace.out" >/dev/null 2>&1 \
+        || grep -iE '0xc0585652|0xc0505653' "$WORK/strace.out" >/dev/null 2>&1; then
+        echo "  OK: $label really issued a device-read ioctl (strace-observed)"
     else
         fail "$label did not prove the executive was actually read" \
              "$R_NOREAD" \
              "\$STATUS alone is not evidence -- a handler can fabricate it" \
-             "without touching /dev/vms at all (vms-fb9 r6, mutation M3)." \
-             "openat() calls strace saw (none were /dev/vms):" \
-             "$(grep -F 'openat(' "$WORK/strace.out" 2>/dev/null | tail -5 | sed 's/^/       | /')"
+             "without ever calling vms_kif_devscan()/vms_kif_getdvi_devnam()" \
+             "(vms-fb9 r6 mutation M3; re-anchored from openat to these ioctls" \
+             "under vms-2b8, see the comment above -- DCL's own startup now" \
+             "opens /dev/vms unconditionally, so openat alone no longer" \
+             "discriminates)." \
+             "ioctl() calls strace saw:" \
+             "$(grep -F 'ioctl(' "$WORK/strace.out" 2>/dev/null | tail -8 | sed 's/^/       | /')"
     fi
 }
 

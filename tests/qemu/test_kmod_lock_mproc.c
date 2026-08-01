@@ -42,6 +42,7 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include "vms_ioctl.h"
+#include "vms_kif.h"
 
 #define SS_NORMAL       1
 #define SS_NOTQUEUED    40
@@ -117,10 +118,12 @@ static int run_child(int cfd, int c2p_write, int p2c_read)
     CHECK(enq_cr.status == SS_NORMAL && enq_cr.lkid != 0,
           "child: CR request queued behind parent's EX");
 
-    struct vms_getlki_args lki = {0};
-    lki.lkid = enq_cr.lkid;
-    ioctl(cfd, VMS_IOCTL_GETLKI, &lki);
-    CHECK(lki.status == SS_NORMAL && lki.granted_mode == LCK_K_NLMODE,
+    /* CONVERTED (vms-290): was raw ioctl(cfd, VMS_IOCTL_GETLKI, &lki). Now
+     * exercises vms_kif_getlki() (src/libvmssys/vms_kif.c), which had zero
+     * callers anywhere in the checkout before this. */
+    uint32_t granted_mode = 0;
+    uint32_t getlki_st = vms_kif_getlki(enq_cr.lkid, &granted_mode, NULL, NULL, NULL);
+    CHECK(getlki_st == SS_NORMAL && granted_mode == LCK_K_NLMODE,
           "child: queued CR request still ungranted (NL) per GETLKI");
 
     /* Report the queued lock to the parent so it can verify the
@@ -234,20 +237,29 @@ int main(void)
     CHECK(n == (ssize_t)sizeof(msg) && msg.stage == 1 && msg.lkid != 0,
           "parent: received child's queued-lock report");
 
-    /* Cross-process GETLKI: parent can query the child's lock ID. */
-    struct vms_getlki_args lki = {0};
-    lki.lkid = msg.lkid;
-    ioctl(pfd, VMS_IOCTL_GETLKI, &lki);
-    CHECK(lki.status == SS_NORMAL && lki.granted_mode == LCK_K_NLMODE
-              && lki.requested_mode == LCK_K_CRMODE,
+    /*
+     * Cross-process GETLKI: parent can query the child's lock ID.
+     *
+     * CONVERTED (vms-290): both calls below used to be raw ioctls
+     * (VMS_IOCTL_GETLKI, VMS_IOCTL_DELIVERAST) against `pfd`. They now go
+     * through vms_kif_getlki()/vms_kif_deliverast() (src/libvmssys/
+     * vms_kif.c), which had zero callers anywhere in the checkout before
+     * this.
+     */
+    uint32_t p_granted_mode = 0, p_requested_mode = 0;
+    uint32_t getlki_st = vms_kif_getlki(msg.lkid, &p_granted_mode,
+                                         &p_requested_mode, NULL, NULL);
+    CHECK(getlki_st == SS_NORMAL && p_granted_mode == LCK_K_NLMODE
+              && p_requested_mode == LCK_K_CRMODE,
           "parent: cross-process GETLKI sees child's queued CR request");
 
     /* --- Blocking AST: parent should now have a queued AST from the
      * kernel notifying it that child's request is blocked on its EX
      * lock. --- */
-    struct vms_ast_args ast = {0};
-    int ar = ioctl(pfd, VMS_IOCTL_DELIVERAST, &ast);
-    CHECK(ar == 0 && ast.astadr == AST_SENTINEL && ast.astprm == parent_lkid,
+    uint64_t d_astadr = 0, d_astprm = 0;
+    uint8_t d_acmode = 0;
+    int ar = vms_kif_deliverast(&d_astadr, &d_astprm, &d_acmode);
+    CHECK(ar == 0 && d_astadr == AST_SENTINEL && d_astprm == parent_lkid,
           "parent: received blocking AST (astadr=sentinel, astprm=own lkid)");
 
     /* Let the child dequeue its blocked request. */

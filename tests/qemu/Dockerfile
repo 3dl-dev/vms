@@ -85,7 +85,19 @@ RUN KVER=$(cat /tmp/kver) && \
 #                                 public sys$ API (vms-1d9).
 #   test_kmod_*.c that include -> NOT built here; built below against
 #   "vms_kif.h"                   src/libvmssys (the real kernel-interface
-#                                 client), see that stage's comment.
+#                                 client), see that stage's comment. This
+#                                 currently covers devtab/procnam (vms-d0b/
+#                                 vms-8019), ident/bind (vms-2b8/vms-fb9), and
+#                                 ast/access/lock/lock_sync/lock_mproc
+#                                 (vms-290) -- vms-290's five also still drive
+#                                 the raw ioctl layer directly for calls out
+#                                 of its scope (REGISTER, ENQ/DEQ/CONVERT,
+#                                 GETMODE, CHKPRIV/SETPRV, and one deliberate
+#                                 raw NULL-arg DELIVERAST -- see the comments
+#                                 in those sources), so they still need
+#                                 vms_ioctl.h on the include path too. None of
+#                                 this is a list to remember: see the
+#                                 grep-driven selector below.
 #   everything else            -> plain gcc -static against vms_ioctl.h.
 #
 # THE SECOND RECIPE IS SELECTED BY WHAT THE SOURCE INCLUDES, not by a list of
@@ -111,12 +123,14 @@ RUN for f in /src/tests/qemu/test_*.c; do \
         echo "Built: $(basename $out)"; \
     done
 
-# The device-table test (vms-d0b), the process-table test (vms-8019) and the
-# identity/privilege test (vms-2b8) drive the real userspace kernel-interface
-# client rather than a hand-rolled ioctl copy, so the client libvms will call is
-# the client under test. That needs libvmssys's freestanding syscall trampoline
-# and string helpers linked in -- it does NOT pull in libvms; the libvms build
-# graph arrives in the NEXT stage (vms-1d9), which is a heavier, separate build.
+# The device-table test (vms-d0b), the process-table test (vms-8019), the
+# identity/privilege test (vms-2b8) and the AST/access/lock-manager tests
+# (vms-290) drive the real userspace kernel-interface client rather than a
+# hand-rolled ioctl copy for at least part of their coverage, so the client
+# libvms will call is the client under test. That needs libvmssys's
+# freestanding syscall trampoline and string helpers linked in -- it does
+# not pull in libvms; the libvms build graph arrives in the NEXT stage
+# (vms-1d9), which is a heavier, separate build.
 COPY src/libvmssys/ /src/libvmssys/
 RUN ARCH=$(uname -m) && n_kif=0 && \
     for f in /src/tests/qemu/test_kmod_*.c; do \

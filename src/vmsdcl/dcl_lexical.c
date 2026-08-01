@@ -1345,6 +1345,166 @@ static int lex_getjpi(struct dcl_context *ctx, const char *args,
         snprintf(result, result_size, "%08X", (unsigned)getpid());
     } else if (strcmp(s, "MODE") == 0) {
         return lex_mode(ctx, NULL, result, result_size);
+    } else if (strcmp(s, "CURPRIV") == 0 || strcmp(s, "AUTHPRIV") == 0) {
+        /*
+         * ADDED vms-2b8 round 4 (CURPRIV only, and as a DECIMAL INTEGER);
+         * CORRECTED round 5 to a privilege-NAME string, and AUTHPRIV
+         * added alongside it. Before round 4, CURPRIV fell into the
+         * `else` branch below and silently returned "0" -- the
+         * illegal-third-answer shape: neither matching VMS nor hiding
+         * the item, just a plausible-looking zero.
+         *
+         * FORMAT PINNED TO PUBLIC DOCUMENTATION (round 5; round 4's
+         * commit carries no citation for the decimal-integer format it
+         * chose, and it was wrong): the HP/VSI OpenVMS DCL Dictionary entry for
+         * F$GETJPI documents CURPRIV and AUTHPRIV as returning a String,
+         * and the VSI OpenVMS Wiki's F$GETJPI page shows a live example
+         * of that string --
+         *   "CMKRNL,CMEXEC,SYSNAM,GRPNAM,ALLSPOOL,DETACH,DIAGNOSE,...,
+         *    SECURITY"
+         * -- a comma-separated list of privilege names in ASCENDING BIT
+         * POSITION (CMKRNL bit 0, CMEXEC bit 1, ... SETPRV bit 14,
+         * TMPMBX bit 15, WORLD bit 16, ...), NOT alphabetical -- the
+         * order dcl_cmd_show.c's SHOW PROCESS/PRIVILEGES table uses is a
+         * different VMS display convention for a different command, and
+         * copying it here would silently reproduce the wrong one. Two
+         * independent public sources (digiater.nl's mirror of the DCL
+         * Dictionary for the data type; the VSI Wiki for the format),
+         * neither derived from the other or from this tree.
+         *
+         * Reads the same live executive source as SHOW PROCESS/
+         * PRIVILEGES and F$PRIVILEGE (vms_kif_getjpi_self(), masked to
+         * VMS_PRV_M_ENFORCED). The NAMES themselves are not a second,
+         * hand-maintained list: the loop below walks bit positions 0..63
+         * in ascending order and looks each SET, enforced bit up in
+         * vms_priv_names[] (dcl_cmd_show.c, declared in dcl/dcl_cmd.h) --
+         * the SAME canonical name table SHOW PROCESS/PRIVILEGES reads.
+         * A bit added to VMS_PRV_M_ENFORCED (src/kernel/vms_ioctl.h)
+         * therefore gets a name here with no second edit, and the walk
+         * order is ascending bit position for free, matching the
+         * oracle's own CURPRIV example order (CMKRNL before CMEXEC) --
+         * NOT the alphabetical order dcl_cmd_show.c uses for SHOW
+         * PROCESS/PRIVILEGES, a different VMS display convention for a
+         * different command (vms-2b8 round 6: a hand-maintained second
+         * list here, kept in sync with VMS_PRV_M_ENFORCED "by hand", is
+         * exactly the drift this program exists to kill).
+         *
+         * CURPRIV reads cur_privs, AUTHPRIV reads perm_privs (the
+         * "authorized" mask SHOW PROCESS/PRIVILEGES's own Authorized:
+         * block reads) -- two different struct fields in the source.
+         * WHAT IS NOT CLAIMED: that this distinction is proven by any
+         * test on this runtime. VMS_IOCTL_SETIDENT sets cur_privs =
+         * perm_privs = args.authorized_privs (vms_proctab.c), and
+         * nothing DCL currently calls moves them apart again -- $SETPRV
+         * is the operation that would, and vms_kif_setprv() has no
+         * product caller (OVMX-UNWIRED in vms_kif.h, pending vms-pv1).
+         * So on THIS runtime cur_privs and perm_privs are always equal,
+         * and no UAT assertion that only checks CURPRIV and AUTHPRIV
+         * render the same string can tell "AUTHPRIV correctly reads
+         * perm_privs" apart from "AUTHPRIV reads cur_privs by mistake" --
+         * both produce an identical pass. A test that actually
+         * discriminates the two fields needs a session where they
+         * diverge, which needs vms-pv1's $SETPRV wiring; until then this
+         * is a true statement about the source, not a proven one.
+         *
+         * NOT CLAIMED either: that this string is never empty. A process
+         * registered without CAP_SYS_ADMIN gets perm_privs = cur_privs =
+         * 0 at vms_proc_register() (src/kernel/vms_module.c) -- nothing
+         * in the enforced set, so both items would legitimately render
+         * as "". No session on the current UAT harness reaches that
+         * state (there is no credential-drop path into an interactive
+         * DCL session yet -- vms-475), so it is not exercised here; it
+         * is a consequence of the code this comment does not need to
+         * re-derive by mutation to state honestly.
+         *
+         * Like the other items in this function (USERNAME, PRCNAM, PID,
+         * MODE), the pid argument is parsed but not honored -- this
+         * answers only for the calling process, consistent with every
+         * existing item here, not a new restriction.
+         *
+         * VERIFIED BY MUTATION (vms-2b8 round 6), not by inspection:
+         * adding VMS_PRV_M_TMPMBX to VMS_PRV_M_ENFORCED
+         * (src/kernel/vms_ioctl.h) -- the ONLY edit made for this test,
+         * nothing in this file touched -- rebuilt vms.ko + vmsdcl and
+         * re-booted a real QEMU image; F$GETJPI CURPRIV/AUTHPRIV both
+         * came back "CMKRNL,CMEXEC,SETPRV,TMPMBX,WORLD", TMPMBX inserted
+         * in the correct ascending-bit-position slot (between SETPRV
+         * bit 14 and WORLD bit 16) with no second table to update.
+         * Reverted after confirming.
+         */
+        struct vms_procinfo info;
+        memset(&info, 0, sizeof(info));
+        uint32_t jst = vms_kif_getjpi_self(&info);
+        result[0] = '\0';
+        if (jst & 1) {
+            uint64_t raw = (strcmp(s, "CURPRIV") == 0) ? info.cur_privs
+                                                         : info.perm_privs;
+            uint64_t enforced = raw & VMS_PRV_M_ENFORCED;
+            size_t rl = 0;
+            for (int bit = 0; bit < 64; bit++) {
+                uint64_t b = (uint64_t)1 << bit;
+                if (!(enforced & b))
+                    continue;
+                /*
+                 * COVERAGE (vms-2b8 round 9; supersedes the runtime
+                 * abort() rounds 7-8 put here). Whether every bit
+                 * VMS_PRV_M_ENFORCED can set has a row in
+                 * vms_priv_names[] is a COMPILE-TIME fact -- both are
+                 * static, compile-time-constant data in this same
+                 * binary, so the answer cannot vary across runs or
+                 * callers the way a genuine runtime condition could.
+                 * Rounds 7-8 guarded it with a runtime abort() anyway,
+                 * which is Rule 10's forbidden third answer: a
+                 * plausible-looking handler for a condition that is
+                 * already settled before the program runs. The
+                 * corrected HIDE answer for a compile-time fact is a
+                 * compile-time proof, not a runtime check --
+                 * src/libvms/prv_agreement.c now static-asserts this
+                 * coverage, with its own negative control. A future
+                 * edit that adds an unnamed bit to VMS_PRV_M_ENFORCED
+                 * fails the BUILD there, before anything boots, so the
+                 * lookup below needs no fallback: every bit reaching
+                 * this loop is guaranteed to have a row.
+                 */
+                for (int i = 0; vms_priv_names[i].name; i++) {
+                    if (vms_priv_names[i].bit != b)
+                        continue;
+                    /*
+                     * CodeQL cpp/unclear-buffer-write (round 13):
+                     * snprintf returns the length it WOULD have
+                     * written, not what fit, so accumulating it into
+                     * `rl` unguarded lets `rl` exceed `result_size` on
+                     * truncation -- the next iteration then computes
+                     * `result_size - rl` as a size_t underflow and
+                     * writes far past `result`. Every caller of
+                     * dcl_eval_lexical() today passes a DCL_MAX_VALUE
+                     * (4096-byte) buffer, and this table's full
+                     * comma-joined render is 267 bytes for all 37 rows
+                     * (measured: tests/libvms/test_priv_render_bounds.c)
+                     * -- this branch is not reachable through any call
+                     * site in this tree. But dcl_eval_lexical() is an `extern`
+                     * function whose contract is the result_size
+                     * parameter, not "callers happen to pass 4096", so
+                     * the accumulation must bound-check what it
+                     * actually wrote. On a would-be truncation, stop
+                     * appending further names rather than trust a
+                     * length it never measured.
+                     */
+                    if (rl >= result_size)
+                        break;
+                    int n = snprintf(result + rl, result_size - rl,
+                                     "%s%s", rl ? "," : "",
+                                     vms_priv_names[i].name);
+                    if (n < 0 || (size_t)n >= result_size - rl) {
+                        rl = result_size > 0 ? result_size - 1 : 0;
+                        bit = 64; /* stop the outer bit scan too */
+                        break;
+                    }
+                    rl += (size_t)n;
+                    break;
+                }
+            }
+        }
     } else {
         strncpy(result, "0", result_size - 1);
     }
@@ -1740,11 +1900,43 @@ static int lex_fao(struct dcl_context *ctx, const char *args,
  *
  * Privilege list is comma-separated: "SYSPRV,TMPMBX"
  * Returns "TRUE" if ALL listed privileges are held, "FALSE" otherwise.
- * Reads ctx->privileges (set from VMS_PRIVILEGES env at login).
+ *
+ * READS THE EXECUTIVE FRESH, EVERY CALL (vms-2b8 round 4) -- deliberately
+ * NOT ctx->privileges. This is the round-3 fix's own bug, found by
+ * measurement on a real QEMU boot, not by inspection:
+ *
+ *   $ SHOW PROCESS/PRIVILEGES        -> Authorized: CMEXEC CMKRNL SETPRV WORLD
+ *   $ BEFORE = F$PRIVILEGE("SETPRV") -> "TRUE"
+ *   $ SET PROCESS/PRIVILEGES=(OPER)
+ *   $ SHOW PROCESS/PRIVILEGES        -> UNCHANGED: still CMEXEC CMKRNL SETPRV WORLD
+ *   $ AFTER = F$PRIVILEGE("SETPRV")  -> "FALSE"   <-- same process, same moment
+ *
+ * Root cause: SET PROCESS/PRIVILEGES (src/vmsdcl/dcl_cmd_set.c,
+ * cmd_set_process()) REPLACES ctx->privileges outright with whatever
+ * string was asked for -- a local, unauthenticated self-assertion with no
+ * connection to the executive. Masking that value to VMS_PRV_M_ENFORCED
+ * (the round-3 fix) closed the OVER-claim direction (F$PRIVILEGE saying
+ * TRUE for something SHOW PROCESS/PRIVILEGES correctly omits) but left
+ * this UNDER-claim direction wide open: a single SET PROCESS/PRIVILEGES
+ * call for an unrelated, unenforced name (OPER) silently discarded every
+ * bit ctx->privileges used to carry, including SETPRV/WORLD/CMKRNL/CMEXEC
+ * -- privileges the executive still genuinely holds and SHOW
+ * PROCESS/PRIVILEGES still correctly reports. Two surfaces describing the
+ * same process at the same instant disagreed either way; masking a stale,
+ * mutable local copy cannot fix that, because the copy itself is the
+ * defect. The two surfaces can only be made to agree by construction: read
+ * the SAME live source SHOW PROCESS/PRIVILEGES reads
+ * (vms_kif_getjpi_self()), every call, so there is no local state left to
+ * desynchronize. See src/kernel/vms_ioctl.h's VMS_PRV_M_ENFORCED comment
+ * for what is actually enforced and why GROUP is absent from it.
+ *
+ * `ctx` is retained in the signature only because this function is called
+ * through a common lexical-function pointer table; it is otherwise unused.
  */
 static int lex_privilege(struct dcl_context *ctx, const char *args,
                          char *result, size_t result_size)
 {
+    (void)ctx;
     strncpy(result, "FALSE", result_size - 1);
     result[result_size - 1] = '\0';
     if (!args) return 0;
@@ -1769,7 +1961,19 @@ static int lex_privilege(struct dcl_context *ctx, const char *args,
         return 0;
     }
 
-    if ((ctx->privileges & needed) == needed)
+    /*
+     * Fail closed: a privilege check that cannot reach the executive has
+     * no basis to claim TRUE for anything. Leaves result at "FALSE" (the
+     * default set above).
+     */
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t jst = vms_kif_getjpi_self(&info);
+    if (!(jst & 1))
+        return 0;
+
+    uint64_t enforced_held = info.cur_privs & VMS_PRV_M_ENFORCED;
+    if ((enforced_held & needed) == needed)
         strncpy(result, "TRUE", result_size - 1);
     else
         strncpy(result, "FALSE", result_size - 1);

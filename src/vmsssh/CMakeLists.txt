@@ -10,6 +10,9 @@ target_include_directories(vmssshd PRIVATE
     ${VMS_FS_INCLUDE_DIR}
     ${VMS_LNM_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+    # kernel-interface client (vms-2b8): src/libvmssys/vms_kif.h, for
+    # vms_kif_setident() -- see the comment at its call site in vmssshd.c.
+    ${CMAKE_SOURCE_DIR}/src/libvmssys
 )
 
 target_link_libraries(vmssshd PRIVATE

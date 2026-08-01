@@ -21,6 +21,8 @@
 #include <errno.h>
 
 #include "prvdef.h"     /* PRV$M_* -- the single privilege bit table */
+#include "prv_names.h"  /* VMS_PRIV_NAME_LIST -- single source for vms_priv_names[]
+                          * below AND for prv_agreement.c's coverage check (vms-2b8) */
 #include "dcl/context.h"
 #include "dcl/terminal.h"
 #include "dcl/parser.h"
@@ -65,6 +67,67 @@ extern int cmd_show_intrusion(struct dcl_command *cmd);
 /* Forward declarations for helper functions used by cmd_show_process */
 static int cmd_show_process_privileges(struct dcl_context *ctx);
 static int cmd_show_process_quotas(struct dcl_context *ctx);
+
+/*
+ * Privilege display table -- BITS FROM prvdef.h, TEXT FROM THE ORACLE.
+ *
+ * File scope because two commands decode the same executive-held mask:
+ * SHOW PROCESS's "Privileges:" line and SHOW PROCESS/PRIVILEGES's list.
+ * They used to disagree, because only one of them had a table.
+ *
+ * This table used to number the privileges 0,1,2,3... sequentially in
+ * display order, which is not any privilege encoding that has ever
+ * existed. The mask it decodes is built by parse_privilege_string()
+ * from prvdef.h's PRV$M_* bits, so the two disagreed on almost every
+ * privilege: a user authorized for TMPMBX (bit 15) was displayed as
+ * holding DETACH, one with NETMBX (bit 20) as holding EXQUOTA, and
+ * bits 0 and 1 -- CMKRNL and CMEXEC, the two most dangerous
+ * privileges in the system -- were printed as "TMPMBX" and "NETMBX"
+ * and handed out as the default. The table also listed SYSNAM twice.
+ *
+ * Bits now come from prvdef.h, which is static-asserted against the
+ * executive's copy. Descriptions are VERBATIM from the reference lab
+ * OpenVMS VAX V7.3 node VAX1 (docs/oracle/vax73-privileges.md §4),
+ * as is the " %-20s %s" line format.
+ *
+ * DELIBERATELY ABSENT: DETACH and SETPRI, and AUDIT, IMPORT and the
+ * other names the oracle showed that prvdef.h has no bit for -- they
+ * are omitted rather than assigned a guessed bit (CLAUDE.md Rule 10).
+ *
+ * CORRECTION, and a KNOWN-WRONG DISPLAY recorded rather than papered
+ * over: the earlier claim here that "the oracle did not print DETACH
+ * or SETPRI" was wrong in its reasoning. The oracle DID print bits 5
+ * and 13 -- under their VAX alias names IMPERSONATE and ALTPRI, which
+ * on VAX 7.3 ARE DETACH and SETPRI (docs/oracle/vax73-privileges.md
+ * §2). The rows below give IMPERSONATE and ALTPRI their prvdef.h
+ * *Alpha* bits 37 and 36, which no VAX-encoded mask ever sets, so
+ * against a VAX-encoded mask both rows are unreachable and bits 5 and
+ * 13 print as nothing.
+ *
+ * STILL NOT FIXED, deliberately: OVMX enforces neither privilege, and
+ * picking an encoding for privileges nothing enforces would be
+ * choosing a constant without an oracle pin. The divergence is
+ * recorded in the oracle doc so the item that DOES enforce them pins
+ * both aliases deliberately.
+ *
+ * NOT static, and typed as struct dcl_priv_name (dcl/dcl_cmd.h) rather
+ * than an anonymous local struct (vms-2b8 round 6): dcl_lexical.c's
+ * F$GETJPI CURPRIV/AUTHPRIV filters this SAME table by
+ * VMS_PRV_M_ENFORCED to derive the names it may show, instead of
+ * carrying its own hand-maintained second list of just the enforced
+ * ones. One table, two readers.
+ *
+ * GENERATED FROM src/libvms/include/prv_names.h's VMS_PRIV_NAME_LIST
+ * (vms-2b8 round 10), not hand-typed here: prv_agreement.c derives its
+ * VMS_PRV_M_ENFORCED coverage check from that SAME list, so a row deleted
+ * from this table is a row deleted from the coverage mask in the same
+ * edit -- see prv_names.h for why that closes the gap a hand-typed
+ * coverage whitelist could not.
+ */
+const struct dcl_priv_name vms_priv_names[] = {
+    VMS_PRIV_NAME_LIST(VMS_PRIV_ROW_ENTRY)
+    { NULL, 0, NULL }
+};
 
 static int cmd_show_time(struct dcl_command *cmd)
 {
@@ -618,23 +681,37 @@ static int cmd_show_process(struct dcl_command *cmd)
         return cmd_show_process_quotas(ctx);
 
     /*
-     * /ALL: LEFT ALONE ON PURPOSE, AND IT IS WRONG TWICE (vms-70eb).
+     * /ALL: STILL WRONG ABOUT "ALL" (vms-70eb), FIXED ABOUT IDENTITY
+     * (vms-2b8).
      *
      * On VMS /ALL means "all information about THIS process" -- the plain
      * display plus Process Quotas, Accounting information, both privilege
      * blocks, rights, and the job's process list. It does NOT mean "all
-     * processes". The block below prints a Process Name/PID/UIC/State
-     * table containing ONE row fabricated from getpid() and the literals
-     * "_FTA0:" / "SYSTEM" / "LEF" -- the same defect this item deleted
-     * from SHOW SYSTEM, in the same file.
-     *
-     * It is not fixed here because it is a different outcome with its own
-     * item (vms-70eb) and its own test surface
-     * (tests/dcl/test_parser_qualifiers.sh drives SHOW PROCESS/ALL to
-     * exercise the PARSER, not this display). The verbatim VMS /ALL
+     * processes". The block below still prints a Process Name/PID/UIC/State
+     * table containing only ONE row -- that half of the defect belongs to
+     * a different outcome with its own item (vms-70eb) and its own test
+     * surface (tests/dcl/test_parser_qualifiers.sh drives SHOW PROCESS/ALL
+     * to exercise the PARSER, not this display). The verbatim VMS /ALL
      * output is captured in docs/oracle/vax73-show-system-process.md
-     * Section 4 so vms-70eb starts from a measurement rather than a
-     * guess -- that is what vms-6a7 contributes to it.
+     * Section 4 so vms-70eb starts from a measurement rather than a guess.
+     *
+     * WHAT IS THIS ITEM'S: the one row printed no longer comes from
+     * getpid() and the literals "SYSTEM" / a caller-claimed UIC -- the
+     * exact defect this item deleted from plain SHOW PROCESS and SHOW
+     * SYSTEM, in the same file (CLAUDE.md Rule 11 corollary: a VMS command
+     * is a reader of an executive facility, never a thing that fabricates
+     * its own answer). It is read HERE, at display time, not out of a
+     * copy taken when DCL started, for the same reason cmd_show_process
+     * gives below: a cached mask is a mask this process could have
+     * overwritten in the meantime.
+     *
+     * NO FALLBACK ON FAILURE, deliberately: the first vms_kif_* call
+     * registers this process with the executive (kif_bind), and OVMX does
+     * not run without an executive (Rule 9), so a failure here is a state
+     * the one OVMX runtime cannot be in. The command returns the
+     * executive's own status and prints no row (Rule 10: no
+     * plausible-looking identity for a process whose identity could not
+     * be read).
      */
     if (dcl_has_qualifier(cmd, "ALL")) {
         struct timespec ats;
@@ -646,16 +723,18 @@ static int cmd_show_process(struct dcl_command *cmd)
                atm.tm_hour, atm.tm_min, atm.tm_sec,
                (int)(ats.tv_nsec / 10000000));
         printf("    %-20s %-10s %-8s %s\n", "Process Name", "PID", "UIC", "State");
-        /* Show at least the current process */
-        /* No "_FTA0:" fallback (vms-fb9): an empty process name is reported
-         * empty, not filled in with an invented VMS device name. */
-        const char *pname = ctx->process_name;
-        const char *uname = ctx->username[0] ? ctx->username : "SYSTEM";
+        struct vms_procinfo info;
+        memset(&info, 0, sizeof(info));
+        uint32_t jst = vms_kif_getjpi_self(&info);
+        if (!(jst & 1))
+            return (int)jst;        /* headings, and no invented row */
+        /* No "_FTA0:" fallback (vms-fb9): an empty process name is
+         * reported empty, not filled in with an invented VMS device name. */
         printf("    %-20s %08X   [%03o,%03o] LEF\n",
-               pname, (unsigned)getpid(),
-               ctx->uic_group ? (unsigned)ctx->uic_group : (unsigned)(getgid() & 0377),
-               ctx->uic_member ? (unsigned)ctx->uic_member : (unsigned)(getuid() & 0377));
-        (void)uname;
+               ctx->process_name,
+               info.vms_pid,
+               (unsigned)((info.uic >> 16) & 0xFFFFu),
+               (unsigned)(info.uic & 0xFFFFu));
         return SS$_NORMAL;
     }
 
@@ -1658,122 +1737,168 @@ static int cmd_show_terminal(struct dcl_command *cmd)
  */
 static int cmd_show_process_privileges(struct dcl_context *ctx)
 {
+    (void)ctx;
+
     /*
-     * Privilege display table -- BITS FROM prvdef.h, TEXT FROM THE ORACLE.
+     * READ THE MASK THE EXECUTIVE HOLDS (vms-2b8).
      *
-     * This table used to number the privileges 0,1,2,3... sequentially in
-     * display order, which is not any privilege encoding that has ever
-     * existed. The mask it decodes is built by parse_privilege_string()
-     * from prvdef.h's PRV$M_* bits, so the two disagreed on almost every
-     * privilege: a user authorized for TMPMBX (bit 15) was displayed as
-     * holding DETACH, one with NETMBX (bit 20) as holding EXQUOTA, and
-     * bits 0 and 1 -- CMKRNL and CMEXEC, the two most dangerous
-     * privileges in the system -- were printed as "TMPMBX" and "NETMBX"
-     * and handed out as the default. The table also listed SYSNAM twice.
+     * This used to decode ctx->privileges, which dcl_main.c filled from
+     * getenv("VMS_PRIVILEGES") and which SET PROCESS/PRIVILEGES could
+     * overwrite -- so SHOW PROCESS/PRIVILEGES reported what the process
+     * had told itself, and any process could tell itself "ALL". It also
+     * substituted TMPMBX|NETMBX whenever the mask was empty, which
+     * turned "this process has no privileges" into a display of two it
+     * had not been given.
      *
-     * Bits now come from prvdef.h, which is static-asserted against the
-     * executive's copy. Descriptions are VERBATIM from the reference lab
-     * OpenVMS VAX V7.3 node VAX1 (docs/oracle/vax73-privileges.md §4),
-     * as is the " %-20s %s" line format.
+     * cur_privs comes from src/kernel/vms_proctab.c: derived from the
+     * task's real credentials at registration, and changeable only
+     * through $SETPRV and VMS_IOCTL_SETIDENT, both of which refuse to
+     * widen it past the authorized mask without SETPRV. On failure the
+     * command returns the executive's status and prints no list -- see
+     * the block in cmd_show_process for why there is no fallback.
      *
-     * DELIBERATELY ABSENT: DETACH and SETPRI, and AUDIT, IMPORT and the
-     * other names the oracle showed that prvdef.h has no bit for -- they
-     * are omitted rather than assigned a guessed bit (CLAUDE.md Rule 10).
-     *
-     * CORRECTION, and a KNOWN-WRONG DISPLAY recorded rather than papered
-     * over: the earlier claim here that "the oracle did not print DETACH
-     * or SETPRI" was wrong in its reasoning. The oracle DID print bits 5
-     * and 13 -- under their VAX alias names IMPERSONATE and ALTPRI, which
-     * on VAX 7.3 ARE DETACH and SETPRI (docs/oracle/vax73-privileges.md
-     * §2). The rows below give IMPERSONATE and ALTPRI their prvdef.h
-     * *Alpha* bits 37 and 36, which no VAX-encoded mask ever sets, so
-     * against a VAX-encoded mask both rows are unreachable and bits 5 and
-     * 13 print as nothing.
-     *
-     * NOT FIXED HERE, deliberately: OVMX enforces neither privilege, and
-     * this whole function is a getenv("VMS_PRIVILEGES")-fed stopgap that
-     * is to be DELETED (not improved) once the executive reader lands --
-     * see the block at the head of this function. Picking an encoding for
-     * a display that is scheduled for deletion, for privileges nothing
-     * enforces, would be choosing a constant without an oracle pin. The
-     * divergence is recorded in the oracle doc so the item that DOES
-     * enforce them pins both aliases deliberately.
+     * MASKED TO VMS_PRV_M_ENFORCED, operator ruling 2026-07-31 (Rule 10,
+     * applied a second time to the reporting side): VMS_IOCTL_SETIDENT
+     * stores and reports whatever SYSUAF authorizes, including bits
+     * nothing in OVMX checks (e.g. SYSPRV -- an access-control override
+     * that would have to live in vmsfs.ko, tracked separately as
+     * vms-f15/vms-36d, NOT this item's job). A privilege that is
+     * displayed but unenforced reads as a security control while being
+     * none -- worse than an absent one. So the two blocks below show
+     * only the intersection with VMS_PRV_M_ENFORCED
+     * (src/kernel/vms_ioctl.h): exactly the privileges some vms.ko code
+     * path will actually refuse an operation over today. This narrows
+     * the display, not the stored mask -- info.perm_privs/cur_privs
+     * still carry the full SYSUAF-authorized bits for anything that
+     * later needs them (e.g. $GETJPI callers).
      */
-    static const struct {
-        const char *name;
-        uint64_t    bit;
-        const char *desc;
-    } privs[] = {
-        { "ACNT",     PRV$M_ACNT,     "may suppress accounting messages" },
-        { "ALLSPOOL", PRV$M_ALLSPOOL, "may allocate spooled device" },
-        { "ALTPRI",   PRV$M_ALTPRI,   "may set any priority value" },
-        { "BUGCHK",   PRV$M_BUGCHK,   "may make bug check log entries" },
-        { "BYPASS",   PRV$M_BYPASS,   "may bypass all object access controls" },
-        { "CMEXEC",   PRV$M_CMEXEC,   "may change mode to exec" },
-        { "CMKRNL",   PRV$M_CMKRNL,   "may change mode to kernel" },
-        { "IMPERSONATE", PRV$M_IMPERSONATE, "may impersonate another user" },
-        { "DIAGNOSE", PRV$M_DIAGNOSE, "may diagnose devices" },
-        { "DOWNGRADE",PRV$M_DOWNGRADE,"may downgrade object secrecy" },
-        { "EXQUOTA",  PRV$M_EXQUOTA,  "may exceed disk quota" },
-        { "GROUP",    PRV$M_GROUP,    "may affect other processes in same group" },
-        { "GRPNAM",   PRV$M_GRPNAM,   "may insert in group logical name table" },
-        { "GRPPRV",   PRV$M_GRPPRV,   "may access group objects via system protection" },
-        { "LOG_IO",   PRV$M_LOG_IO,   "may do logical i/o" },
-        { "MOUNT",    PRV$M_MOUNT,    "may execute mount acp function" },
-        { "NETMBX",   PRV$M_NETMBX,   "may create network device" },
-        { "OPER",     PRV$M_OPER,     "may perform operator functions" },
-        { "PFNMAP",   PRV$M_PFNMAP,   "may map to specific physical pages" },
-        { "PHY_IO",   PRV$M_PHY_IO,   "may do physical i/o" },
-        { "PRMCEB",   PRV$M_PRMCEB,   "may create permanent common event clusters" },
-        { "PRMGBL",   PRV$M_PRMGBL,   "may create permanent global sections" },
-        { "PRMMBX",   PRV$M_PRMMBX,   "may create permanent mailbox" },
-        { "PSWAPM",   PRV$M_PSWAPM,   "may change process swap mode" },
-        { "READALL",  PRV$M_READALL,  "may read anything as the owner" },
-        { "SECURITY", PRV$M_SECURITY, "may perform security administration functions" },
-        { "SETPRV",   PRV$M_SETPRV,   "may set any privilege bit" },
-        { "SHARE",    PRV$M_SHARE,    "may assign channels to non-shared devices" },
-        { "SHMEM",    PRV$M_SHMEM,    "may create/delete objects in shared memory" },
-        { "SYSGBL",   PRV$M_SYSGBL,   "may create system wide global sections" },
-        { "SYSLCK",   PRV$M_SYSLCK,   "may lock system wide resources" },
-        { "SYSNAM",   PRV$M_SYSNAM,   "may insert in system logical name table" },
-        { "SYSPRV",   PRV$M_SYSPRV,   "may access objects via system protection" },
-        { "TMPMBX",   PRV$M_TMPMBX,   "may create temporary mailbox" },
-        { "UPGRADE",  PRV$M_UPGRADE,  "may upgrade object integrity" },
-        { "VOLPRO",   PRV$M_VOLPRO,   "may override volume protection" },
-        { "WORLD",    PRV$M_WORLD,    "may affect other processes in the world" },
-        { NULL, 0, NULL }
-    };
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t jst = vms_kif_getjpi_self(&info);
+    if (!(jst & 1))
+        return (int)jst;
+    uint64_t shown_authorized = info.perm_privs & VMS_PRV_M_ENFORCED;
+    uint64_t shown_current    = info.cur_privs  & VMS_PRV_M_ENFORCED;
 
-    uint64_t privmask = ctx->privileges;
-    if (privmask == 0) {
-        /* The two privileges OpenVMS grants essentially every user.
-         * Was (1<<0)|(1<<1) -- CMKRNL|CMEXEC in the real encoding. */
-        privmask = PRV$M_TMPMBX | PRV$M_NETMBX;
-    }
-
-    printf("Process privileges:\n");
-    int found = 0;
-    for (int i = 0; privs[i].name; i++) {
-        if (privmask & privs[i].bit) {
-            printf(" %-16s %s\n", privs[i].name, privs[i].desc);
-            found++;
+    /*
+     * TWO BLOCKS, BECAUSE VMS PRINTS TWO (vms-2b8 round 6,
+     * docs/oracle/vax73-privileges.md §4, re-captured byte-exact this
+     * round). OVMX printed only "Process privileges:" and omitted
+     * "Authorized privileges:" entirely -- a block the oracle capture in
+     * this repo had recorded since round 2 and that nothing printed. It
+     * is printable now for the first time because the executive holds
+     * BOTH masks (perm_privs and cur_privs); before the executive owned
+     * identity there was only one number to show.
+     *
+     * The grid is VMS's, reproduced including its defect: 8 columns of
+     * exactly 10 characters, so IMPERSONATE (11) is CLIPPED to
+     * "IMPERSONAT" and runs into the next cell with no separating space.
+     * The oracle does that; do not "fix" it. The trailing cells of a
+     * short line are not padded (the oracle's last row ends at WORLD
+     * with no trailing blanks).
+     *
+     * The separator between blocks is a line containing a single space,
+     * which is what the capture shows -- not an empty line.
+     */
+    printf("Authorized privileges:\n");
+    {
+        int col = 0;
+        char line[128];
+        size_t len = 1;
+        /* ONE leading space per LINE, then cells of exactly 10 -- not a
+         * space per cell. The oracle's row is
+         * " ACNT      ALLSPOOL  ALTPRI    ..." : 10 columns apart. */
+        line[0] = ' ';
+        line[1] = '\0';
+        for (int i = 0; vms_priv_names[i].name; i++) {
+            if (!(shown_authorized & vms_priv_names[i].bit))
+                continue;
+            /*
+             * CodeQL cpp/unclear-buffer-write (round 13): snprintf
+             * returns the length it WOULD have written, not what
+             * actually fit, so accumulating that return value into
+             * `len` unguarded lets `len` walk past `sizeof(line)` on
+             * truncation -- the next call then computes
+             * `sizeof(line) - len` as a size_t underflow and writes far
+             * past the buffer. The 8-cell-per-row reset keeps every row
+             * at <=81 of `line`'s 128 bytes today (measured:
+             * tests/libvms/test_priv_render_bounds.c), so this branch
+             * is not reachable by any name vms_priv_names[] carries --
+             * but the loop must bound-check what it actually wrote
+             * rather than trust a length it never measured. On a
+             * would-be truncation, flush the row built so far and stop
+             * (Rule 10: make the unreachable case an honest halt, not a
+             * silent trust).
+             */
+            int n = snprintf(line + len, sizeof(line) - len,
+                             "%-10.10s", vms_priv_names[i].name);
+            if (n < 0 || (size_t)n >= sizeof(line) - len) {
+                while (len > 1 && line[len - 1] == ' ')
+                    line[--len] = '\0';
+                printf("%s\n", line);
+                col = 0; len = 1; line[1] = '\0';
+                break;
+            }
+            len += (size_t)n;
+            if (++col == 8) {
+                /* Trim the padding of the final cell before printing. */
+                while (len > 1 && line[len - 1] == ' ')
+                    line[--len] = '\0';
+                printf("%s\n", line);
+                col = 0; len = 1; line[1] = '\0';
+            }
+        }
+        if (col > 0) {
+            while (len > 1 && line[len - 1] == ' ')
+                line[--len] = '\0';
+            printf("%s\n", line);
         }
     }
-    if (!found)
-        printf(" (no privileges enabled)\n");
+
+    printf(" \n");
+
+    /*
+     * The one-privilege-per-line block. " %-20s %s" is the oracle's
+     * format, measured -- it was " %-16s %s" here, which contradicted
+     * the capture sitting in this repo's own docs/oracle file.
+     *
+     * An empty mask prints an EMPTY block, not a sentence. OVMX used to
+     * print " (no privileges enabled)"; the oracle in the same state
+     * (docs/oracle/vax73-privileges.md §5.2, SET PROCESS/PRIVILEGE=NOALL)
+     * prints the heading and nothing under it. A message VMS does not
+     * emit is an invention however helpful it reads (Rule 10).
+     */
+    printf("Process privileges:\n");
+    for (int i = 0; vms_priv_names[i].name; i++) {
+        if (shown_current & vms_priv_names[i].bit)
+            printf(" %-20s %s\n", vms_priv_names[i].name,
+                   vms_priv_names[i].desc);
+    }
 
     return SS$_NORMAL;
 }
+
 
 /*
  * SHOW PROCESS /QUOTAS - Display process quotas.
  */
 static int cmd_show_process_quotas(struct dcl_context *ctx)
 {
-    const char *acct = ctx->username[0] ? ctx->username : "SYSTEM";
+    (void)ctx;
+
+    /* The account name is identity, so it comes from the executive and
+     * has no fallback -- it used to print the literal "SYSTEM" for any
+     * process whose (environment-supplied) user name was empty, which
+     * named every anonymous process after the most privileged account
+     * on the system (vms-2b8). */
+    struct vms_procinfo info;
+    memset(&info, 0, sizeof(info));
+    uint32_t jst = vms_kif_getjpi_self(&info);
+    if (!(jst & 1))
+        return (int)jst;
 
     printf("Process Quotas:\n");
-    printf(" Account name: %s\n", acct);
+    printf(" Account name: %s\n", info.username);
     printf(" CPU limit:                      Infinite"
            "  Direct I/O limit:        40\n");
     printf(" Buffered I/O byte count quota:    32768"

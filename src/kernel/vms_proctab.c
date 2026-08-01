@@ -446,9 +446,40 @@ static bool username_is_valid(const char *name)
  * itself into the user's process. A caller WITHOUT SETPRV may only
  * establish an identity that is weaker than or equal to its own: the
  * new authorized mask must be a subset of its current authorized mask,
- * and its UIC may not change. So identity is a one-way drop for anyone
- * who is not authorized to exceed their authorization, and no sequence
- * of calls walks a process back up.
+ * and neither its UIC nor its user name may change.
+ *
+ * THE EXACT SCOPE OF THAT GUARANTEE, corrected in round 6 because the
+ * earlier wording here ("no sequence of calls walks a process back up")
+ * was FALSE and was disproved by execution. It is one-way FOR THIS
+ * THREAD GROUP. It says nothing about a NEW task: vms_proc_register()
+ * in vms_module.c derives a fresh authorized mask from
+ * capable(CAP_SYS_ADMIN) and a fresh UIC from the task's real
+ * credentials, and inherits nothing from the parent's row. So a process
+ * that drops to FIELD/[200,10] and then forks a child which is STILL
+ * LINUX ROOT gives that child CMKRNL|CMEXEC|SETPRV|WORLD at
+ * registration, and SETPRV is precisely what lets it stamp itself
+ * SYSTEM. The reduction survived exactly until the next fork.
+ *
+ * What closes that is not a rule in here -- it is tools/vms_login.c
+ * dropping the session's Linux credentials to the authenticated user's
+ * UIC before exec, so the child's derivation produces the unprivileged
+ * answer instead of the privileged one. The two halves are load-bearing
+ * together: this function refuses a claim, and the credential drop is
+ * what makes the claimant unprivileged in the first place.
+ *
+ * STILL OUTSIDE THE MODEL, and stated rather than implied: a process
+ * that legitimately holds CAP_SYS_ADMIN (PID 1, and any not-yet-dropped
+ * pre-authentication session -- LOGINOUT, VMSSSHD -- before it drops)
+ * registers with the enforced mask no matter what its parent held. That
+ * is not a hole this check can close -- a task with CAP_SYS_ADMIN can
+ * rmmod the executive -- but it does mean the SET of root-privileged VMS
+ * processes at any moment is itself a security property: every entry
+ * point that establishes identity before dropping Linux credentials
+ * belongs in it, and NOT WRITING A COUNT here is deliberate -- a number
+ * in a comment is a claim nothing forces to stay true when a new
+ * pre-authentication entry point (this round adds VMSSSHD) is added
+ * beside it. Grep for CAP_SYS_ADMIN-holding callers of
+ * vms_kif_setident() to get the current membership, not this comment.
  *
  * SEMANTICS PIN (docs/oracle/vax73-privileges.md §3): SETPRV is what
  * authorizes EXCEEDING the authorized mask, not what authorizes USING

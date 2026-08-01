@@ -82,3 +82,26 @@ target_link_libraries(test_libvms_identity PRIVATE
     m
 )
 add_test(NAME test_libvms_identity COMMAND test_libvms_identity)
+
+# Test 12: vms-2b8 — the SYSTEM protection category is "UIC group <=
+# MAXSYSGROUP", not "UID 0". Guards the rule RMS enforces file protection
+# with once a session really runs as the authenticated user's UIC.
+libvms_add_test(test_libvms_protection
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_protection.c)
+
+# Test 13: vms-2b8 round 13 — CodeQL cpp/unclear-buffer-write on the
+# snprintf-return accumulation at dcl_cmd_show.c:1597 (Authorized
+# privileges grid) and dcl_lexical.c:1472 (CURPRIV/AUTHPRIV renderer).
+# Host-buildable: reproduces the pre-fix and post-fix patterns against
+# the REAL privilege name table (generated from the same
+# VMS_PRIV_NAME_LIST X-macro both fixed files read) with a canary-guarded
+# undersized buffer neither renderer's real callers can reach today
+# (see the file's own header comment for the reachability measurement).
+add_executable(test_libvms_priv_render_bounds
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_priv_render_bounds.c)
+target_include_directories(test_libvms_priv_render_bounds PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/vmsdcl/include
+)
+add_test(NAME test_libvms_priv_render_bounds
+         COMMAND test_libvms_priv_render_bounds)

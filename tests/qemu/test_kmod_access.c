@@ -35,6 +35,7 @@
 #include <sys/ioctl.h>
 #include <sys/wait.h>
 #include "vms_ioctl.h"
+#include "vms_kif.h"
 
 /* SS$_ status codes (matching kernel module) */
 #define SS_NORMAL   1
@@ -67,7 +68,6 @@ static int child_main(int wfd)
     struct child_report r;
     struct vms_register_args reg;
     struct vms_priv_args pv;
-    struct vms_mode_args sm;
     struct vms_getmode_args gm;
     int fd;
 
@@ -98,10 +98,10 @@ static int child_main(int wfd)
     ioctl(fd, VMS_IOCTL_CHKPRIV, &pv);
     r.chkpriv_cmkrnl = pv.status;
 
-    memset(&sm, 0, sizeof(sm));
-    sm.mode = PSL_C_KERNEL;
-    ioctl(fd, VMS_IOCTL_SETMODE, &sm);
-    r.setmode_kernel = sm.status;
+    /* CONVERTED (vms-290): was raw ioctl(fd, VMS_IOCTL_SETMODE, &sm). Now
+     * exercises vms_kif_setmode() (src/libvmssys/vms_kif.c), which had
+     * zero callers anywhere in the checkout before this. */
+    r.setmode_kernel = vms_kif_setmode(PSL_C_KERNEL);
 
     memset(&gm, 0, sizeof(gm));
     ioctl(fd, VMS_IOCTL_GETMODE, &gm);
@@ -131,7 +131,6 @@ int main(void)
 {
     struct vms_register_args reg;
     struct vms_getmode_args gm;
-    struct vms_mode_args sm;
     struct vms_priv_args pv;
     struct child_report cr;
     int c2p[2];
@@ -163,10 +162,9 @@ int main(void)
     CHECK(pv.status == SS_NORMAL,
           "a CAP_SYS_ADMIN process is DERIVED CMKRNL, not granted it on request");
 
-    memset(&sm, 0, sizeof(sm));
-    sm.mode = PSL_C_KERNEL;
-    ioctl(fd, VMS_IOCTL_SETMODE, &sm);
-    CHECK(sm.status == SS_NORMAL, "KERNEL mode ALLOWED with CMKRNL");
+    /* CONVERTED (vms-290): was raw ioctl(fd, VMS_IOCTL_SETMODE, &sm). */
+    uint32_t setmode_st = vms_kif_setmode(PSL_C_KERNEL);
+    CHECK(setmode_st == SS_NORMAL, "KERNEL mode ALLOWED with CMKRNL");
 
     memset(&gm, 0, sizeof(gm));
     ioctl(fd, VMS_IOCTL_GETMODE, &gm);
@@ -175,10 +173,9 @@ int main(void)
     /* Back to USER: a less privileged move is always allowed, and the
      * child below must not be compared against a parent left in kernel
      * mode. */
-    memset(&sm, 0, sizeof(sm));
-    sm.mode = PSL_C_USER;
-    ioctl(fd, VMS_IOCTL_SETMODE, &sm);
-    CHECK(sm.status == SS_NORMAL, "returning to USER mode is always allowed");
+    /* CONVERTED (vms-290): was raw ioctl(fd, VMS_IOCTL_SETMODE, &sm). */
+    setmode_st = vms_kif_setmode(PSL_C_USER);
+    CHECK(setmode_st == SS_NORMAL, "returning to USER mode is always allowed");
 
     /* ---- the UNPRIVILEGED half ---- */
     if (pipe(c2p) < 0) {

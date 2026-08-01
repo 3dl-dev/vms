@@ -44,6 +44,9 @@
 #include "vms/pcb.h"
 #include "vms/privs.h"
 #include "vms/logical.h"
+/* LOGINOUT-equivalent identity establishment (vms-2b8): see the comment at
+ * the vms_kif_setident() call below. */
+#include "vms_kif.h"
 #include "ovmx_accounting.h"
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
@@ -401,6 +404,40 @@ static void handle_connection(ssh_session session)
 
         /* ---- Step 1: Initialize PCB with user identity ---- */
         uint64_t user_privs = parse_privilege_string(sysuaf_rec.privileges);
+
+        /*
+         * ESTABLISH THE AUTHENTICATED IDENTITY IN THE EXECUTIVE (vms-2b8),
+         * mirroring tools/vms_login.c (LOGINOUT) exactly: same call, same
+         * reasoning. src/vmsdcl/dcl_main.c and dcl_cmd_show.c stopped
+         * reading VMS_USERNAME/VMS_UIC_GROUP/VMS_UIC_MEMBER/VMS_PRIVILEGES
+         * from the environment under this item -- without this call, the
+         * setenv() calls a few lines below become dead writes and every
+         * SSH session's SHOW PROCESS reports no identity at all, the same
+         * "with nothing to read, DCL reports nothing" behaviour the
+         * negative-control rig exercises deliberately for an absent
+         * executive, but here for a session that DID authenticate.
+         *
+         * NOT DONE HERE, AND FLAGGED RATHER THAN SILENTLY OMITTED: LOGINOUT
+         * (tools/vms_login.c) also drops this process's Linux credentials
+         * to the SYSUAF UIC after this call, which is what makes the
+         * executive's enforcement (vms_ioctl_setident's one-way-drop rule)
+         * load-bearing rather than cosmetic for the session that follows.
+         * vmssshd's process/session model (PTY, fork-per-connection,
+         * libssh callbacks) is different enough from LOGINOUT's that
+         * porting the drop needs its own verification against a live SSH
+         * session, which this change does not have -- there is no
+         * automated SSH login test in this tree to prove it against. This
+         * is reported as a known gap, not fixed here.
+         */
+        {
+            uint32_t ssh_uic = (sysuaf_rec.uic_group << 16) | sysuaf_rec.uic_member;
+            uint32_t ist = vms_kif_setident(sysuaf_rec.username, ssh_uic, user_privs);
+            if (!(ist & 1)) {
+                printf("%%OVMX-W-NOIDENT, the executive did not accept this "
+                       "session's identity (status %u)\n", (unsigned)ist);
+            }
+        }
+
         struct vms_pcb *pcb = vms_pcb_init(user_privs);
 
         /*

@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include "vms_ioctl.h"
+#include "vms_kif.h"
 
 #define SS_NORMAL       1
 #define SS_NOTQUEUED    40
@@ -70,13 +71,18 @@ int main(void) {
     ioctl(fd, VMS_IOCTL_CONVERT, &enq);
     CHECK(enq.status == SS_NORMAL, "convert NL -> CR");
 
-    /* 3. GETLKI to verify */
-    struct vms_getlki_args lki = {0};
-    lki.lkid = lkid1;
-    ioctl(fd, VMS_IOCTL_GETLKI, &lki);
-    CHECK(lki.status == SS_NORMAL, "GETLKI succeeds");
-    CHECK(lki.granted_mode == LCK_K_CRMODE, "granted mode is CR");
-    CHECK(strncmp(lki.resnam, "TESTRES1", 8) == 0, "resource name matches");
+    /* 3. GETLKI to verify.
+     *
+     * CONVERTED (vms-290): was raw ioctl(fd, VMS_IOCTL_GETLKI, &lki). Now
+     * exercises vms_kif_getlki() (src/libvmssys/vms_kif.c), which had zero
+     * callers anywhere in the checkout before this. */
+    uint32_t granted_mode = 0, requested_mode = 0;
+    char resnam[33] = {0};
+    uint32_t getlki_st = vms_kif_getlki(lkid1, &granted_mode, &requested_mode,
+                                         resnam, NULL);
+    CHECK(getlki_st == SS_NORMAL, "GETLKI succeeds");
+    CHECK(granted_mode == LCK_K_CRMODE, "granted mode is CR");
+    CHECK(strncmp(resnam, "TESTRES1", 8) == 0, "resource name matches");
 
     /* 4. Convert CR -> EX */
     memset(&enq, 0, sizeof(enq));

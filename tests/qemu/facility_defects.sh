@@ -619,8 +619,8 @@ sys$creprc returned the subject's pid
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-Assertions across two suites go red, and that IS the defect rather than
-evidence against it: the mutation deletes the ONE call that binds a process to the executive,
+FIFTEEN assertions go red, and that IS the defect rather than evidence against
+it: the mutation deletes the ONE call that binds a process to the executive,
 and a process with no PCB can use no facility. Round 1 named two of the twelve
 and framed the result as narrow ("only test_kmod_bind goes red"), which is
 true at suite granularity and misleading at property granularity -- the exact

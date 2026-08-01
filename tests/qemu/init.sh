@@ -69,25 +69,25 @@ mkdir -p /tmp/vmsfs_backing /mnt/vmsfs
 # (vms-1d9) -- exercising the userspace system-service layer the ioctl tests
 # cannot see at all.
 #
-# PER-SUITE VERDICT LINE (vms-1d9). After each suite we print
+# PER-SUITE VERDICT LINE (vms-1d9 round 5). After each suite we print
 #
 #     === SUITE <name> rc=<exit code> ===
 #
 # and .github/workflows/ci.yml asserts on THAT, per suite, instead of on the
 # aggregate "FINAL RESULTS" tally below. Two real defects made this necessary,
-# both proven against running artifacts, not argued:
+# both proven by adversarial review against running artifacts:
 #
 #  1. The aggregate tally cannot distinguish an honest skip (rc 77) from a
 #     failed assertion (rc 1) -- the two branches below both increment
-#     TOTAL_FAIL. Injecting a FABRICATED SUCCESS into
-#     src/libvms/syssvc/sys_lock.c (do_enq and sys$deq returning SS$_NORMAL
-#     with an invented lock ID when the executive was never reached) makes
-#     every one of test_syssvc_lock's device-absent assertions FAIL and its
-#     exit code change 77 -> 1 -- while the negative-control run's FINAL
-#     RESULTS line stays BYTE-IDENTICAL to the clean tree
-#     ("3 suites passed, 11 suites failed"). Measured, both ways, on this
-#     harness. A per-process fake reporting success is invisible to any
-#     gate that pins the tally; the per-suite rc catches it.
+#     TOTAL_FAIL. An adversary injected a real silent fallback into
+#     src/libvms/syssvc/sys_lock.c (returning SS$_NORMAL instead of
+#     SS$_NOSUCHDEV with /dev/vms absent, in both do_enq and sys$deq); the
+#     test's SS$_NOSUCHDEV assertions all FAILED and its exit code changed
+#     77 -> 1, yet the negative-control job's FINAL RESULTS accounting was
+#     BYTE-IDENTICAL to the clean tree and every CI assertion still passed.
+#     A per-process fake reporting success was invisible to the whole gate.
+#     rc is the test binary's real exit status, derived from real production
+#     status codes -- not a message the harness prints unconditionally.
 #
 #  2. Any assertion on the aggregate count is either a pin that turns CI red
 #     when a legitimate new suite is ADDED, or a floor that stops protecting

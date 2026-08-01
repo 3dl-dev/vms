@@ -57,10 +57,7 @@ static const struct status_entry known_codes[] = {
     { SS$_FILACCERR,    "SYSTEM", "FILACCERR",    "file access error" },
     { SS$_DEVMOUNT,     "SYSTEM", "DEVMOUNT",     "device already mounted" },
     { SS$_DEVNOTMOUNT,  "SYSTEM", "DEVNOTMOUNT",  "device not mounted" },
-    /* Message text measured on the ~/vax OpenVMS VAX V7.3 lab via
-     * F$MESSAGE -- see the provenance note in ssdef.h. */
-    { SS$_DEVALLOC,     "SYSTEM", "DEVALLOC",     "device already allocated to another user" },
-    { SS$_DEVNOTALLOC,  "SYSTEM", "DEVNOTALLOC",  "device not allocated" },
+    { SS$_DEVALLOC,     "SYSTEM", "DEVALLOC",     "device already allocated" },
     { SS$_IVDEVNAM,     "SYSTEM", "IVDEVNAM",     "invalid device name" },
     { SS$_IVLOGNAM,     "SYSTEM", "IVLOGNAM",     "invalid logical name" },
     { SS$_IVLOGTAB,     "SYSTEM", "IVLOGTAB",     "invalid logical name table" },

@@ -2,14 +2,9 @@
  * lnm_client.c - Logical Name Client Library
  *
  * Provides the public API for logical name operations.
- * Currently uses in-process tables with a global static manager, so
- * SYSTEM/GROUP/JOB tables are per-process, not per-system — a process
- * cannot see a logical name DEFINE/SYSTEM'd by another process. On real
- * OpenVMS these tables are executive-resident (LNM$SYSTEM_TABLE); there
- * is no daemon to talk to. Placement (ioctl-per-translation vs. a
- * mmap'd shared arena behind /dev/vms) is an open operator ruling —
- * see vms-ln0 (gated) and vms-d37 (blocked twin). Do not add a
- * socket/daemon client here; that architecture was deleted (vms-a4b).
+ * Currently uses in-process tables with a global static manager.
+ * Will be extended to talk to the daemon via Unix domain socket
+ * for system-wide logicals in a future iteration.
  */
 
 #include <stdio.h>

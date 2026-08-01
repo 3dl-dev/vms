@@ -7,41 +7,35 @@
 # sys$ API and are built through the normal OVMX CMake graph, so that
 # reverting production code under src/libvms/syssvc/ is visible to them.
 #
-# WHY THERE IS NO add_test() HERE -- read before adding one.
-# These binaries need a real, insmod'd vms.ko at /dev/vms. `ctest` never
-# runs anywhere that has one: not on a dev machine, not in the host build
-# job, not in any container (Docker/podman is not the OVMX runtime --
-# CLAUDE.md Rule 9). An earlier round of this item DID register them with
-# SKIP_RETURN_CODE 77, and the result was an entry that reported "Skipped"
-# in 100% of environments where ctest exists, while in the ONE environment
-# where the binary can actually pass -- the QEMU initramfs -- ctest is not
-# present at all and tests/qemu/init.sh execs the binary directly. So the
-# ctest entry never executed as a passing assertion anywhere, ever. Under
-# project Rule 10 a permanently-skipped test is a failing test, and an
-# honest comment does not discharge that; the fix is to not expose a test
-# that cannot run, not to disclose it more loudly.
+# Requires a real, insmod'd vms.ko at /dev/vms to do anything beyond prove
+# buildability. When /dev/vms is absent (e.g. every dev/CI container build,
+# which is NOT the OVMX runtime -- CLAUDE.md Rule 9), each test exits 77 and
+# ctest reports SKIPPED, never a fake PASS.
 #
-# What actually gates these binaries, and where to look when one fails:
-#   * BUILD:  add_executable below is part of the default `all` target, so a
-#             test_syssvc_*.c that stops compiling breaks every build,
-#             including the plain host CI build job.
-#   * RUN:    tests/qemu/init.sh execs every /tests/test_syssvc_* in the
-#             initramfs and prints "=== SUITE <name> rc=<code> ===".
-#   * ASSERT: .github/workflows/ci.yml (jobs kernel-executive and
-#             kernel-executive-negative-control) derives the expected suite
-#             set from `ls tests/qemu/test_*.c` and asserts each suite's
-#             verdict line individually.
+# HONESTY NOTE on what this ctest registration actually buys: in every
+# environment where `ctest` itself runs (dev machine, the regular CI build
+# job -- none of which has /dev/vms, since Docker/podman is not the OVMX
+# runtime), this add_test() entry SKIPs (exit 77) -- it never PASSes
+# anywhere ctest runs. Inside the one environment where /dev/vms IS real
+# (the QEMU kernel-executive job), the binary is invoked directly by
+# tests/qemu/init.sh (see the test_kmod_*/test_syssvc_* loop there), NOT
+# through ctest -- ctest is not present in that initramfs at all. So this
+# ctest entry never executes as a PASSing assertion anywhere: it reports
+# Skipped everywhere it can run, and where it would matter it isn't the one
+# running. What it buys is build-graph inclusion (qemu_syssvc_tests below
+# fails to configure/build if the source doesn't compile) and an honest,
+# visible SKIP rather than a silent gap in `ctest` output -- it is NOT
+# coverage, despite appearing in the ctest listing next to tests that are.
 #
-# GENERALITY (do not regress this): every test_syssvc_*.c in this directory
-# is discovered by glob and built automatically -- there is no per-file list
-# to update. That is the fix for a real, adversary-proven defect: the
-# harness build/initramfs steps once named exactly ONE binary
-# (test_syssvc_lock) by literal string in tests/qemu/Dockerfile, so the next
-# test_syssvc_*.c a future item added would build fine locally and then
-# silently never enter the initramfs and never run in QEMU CI, with both
-# jobs staying green. tests/qemu/Dockerfile now builds the aggregate
-# qemu_syssvc_tests target below (not any one test by name) and copies
-# build-static/bin/test_syssvc_* by glob.
+# GENERALITY (vms-1d9 round 3): every test_syssvc_*.c source under this
+# directory is discovered by glob and registered automatically -- there is
+# no per-file list to remember to update. This is the fix for a real defect
+# found by adversarial review of round 2: the harness build/initramfs steps
+# named exactly ONE binary (test_syssvc_lock) by literal string in
+# tests/qemu/Dockerfile, so the next test_syssvc_*.c a future item adds
+# would build and SKIP fine locally, then silently never run in QEMU CI.
+# tests/qemu/Dockerfile builds the qemu_syssvc_tests target below (not any
+# one test by name) and copies build-static/bin/test_syssvc_* by glob.
 
 function(qemu_syssvc_add_test name source)
     add_executable(${name} ${source})
@@ -53,6 +47,12 @@ function(qemu_syssvc_add_test name source)
         vms
         pthread
         m
+    )
+    add_test(NAME ${name} COMMAND ${name})
+    set_tests_properties(${name} PROPERTIES
+        LABELS "integration;authenticity;executive"
+        SKIP_RETURN_CODE 77
+        TIMEOUT 60
     )
     set_property(GLOBAL APPEND PROPERTY QEMU_SYSSVC_TEST_TARGETS ${name})
 endfunction()

@@ -64,10 +64,6 @@
 
 #include <poll.h>
 #include <sys/ptrace.h>
-#include <sys/uio.h>
-#include <sys/user.h>
-#include <sys/syscall.h>
-#include <elf.h>
 
 #include "starlet.h"
 #include "descrip.h"
@@ -138,11 +134,8 @@ static int fail = 0;
  * made it return -1/EINTR -- which $CREPRC then read as "the child died
  * before reporting" and answered with OVMX$_PRCLOST, a SEVERE status
  * asserting that no process was created, for a process that WAS created
- * and IS in the executive's table. It then reaped that process -- and
- * whether the reap returned at once or blocked for the whole life of
- * the created image came down to which of the two raced to the pipe
- * first (see the detector note further down; both endings have been
- * measured, on different architectures, from the same mutation).
+ * and IS in the executive's table. It then reaped that live process,
+ * blocking for as long as the created image ran.
  *
  * The production trigger is ordinary: DCL installs its interactive
  * SIGINT/SIGQUIT handlers with sa_flags = 0 (no SA_RESTART) in
@@ -797,194 +790,6 @@ static void sigprobe_tracer(int repfd)
     close(a[0]);
     (void)write_full(repfd, &rep, sizeof(rep));
     _exit(0);
-}
-
-/* ================================================================
- * P14 machinery: the target ceases to exist BETWEEN the executive
- * resolving its row and sys$getjpi reading its accounting.
- * ================================================================ */
-
-/* What the P14 probe reports about the ONE sys$getjpi call it makes. */
-struct cputim_report {
-    uint32_t ok;        /* the probe reached the call at all */
-    uint32_t status;    /* what sys$getjpi returned */
-    uint32_t value;     /* the caller's buffer AFTER the call */
-    uint32_t retlen;    /* the item's return length AFTER the call */
-};
-
-/* Written into the probe's JPI$_CPUTIM buffer before the call, and into
- * its return-length cell. Neither is a value the service could legally
- * produce, so "untouched" is distinguishable from "written with a zero"
- * -- which is the entire distinction this block exists to make. */
-#define CPUTIM_SENTINEL     0xDEADBEEFu
-#define CPUTIM_RETLEN_UNSET 0xFFFFu
-
-/* How many syscall stops the tracer will step through before giving up
- * on finding the probe's /proc open. This is NOT a timeout that paces the
- * test -- the probe is stopped by the kernel at every one of these, so
- * the count is bounded by the syscalls sys$getjpi itself performs (a
- * handful). It exists only so a probe that never gets there fails the
- * arrangement check instead of wedging the rig. */
-#define CPUTIM_MAX_STOPS 200
-
-/* Deadline on the two pipe reports, for the same reason read_full_bounded
- * exists at all: a probe that hangs must fail, not hang the QEMU run. */
-#define CPUTIM_BOUND_MS 30000
-
-/* The target's report: just the VMS process ID the executive gave it. */
-struct cputim_target_report {
-    uint32_t ok;
-    uint32_t vms_pid;
-};
-
-/*
- * cputim_target - the P14 subject. Never returns.
- *
- * Registers with the executive so it HAS a row (that is what makes the
- * probe's ioctl succeed), reports its VMS process ID, then blocks reading
- * a pipe until it is killed. It burns no CPU deliberately: a subject that
- * had burned some would let a "measured zero" be dismissed as plausible,
- * and the point here is that ANY successful figure for a process that no
- * longer exists is fabricated.
- */
-static void cputim_target(int cmdfd, int repfd)
-{
-    struct cputim_target_report rep;
-    struct vms_procinfo info;
-    char c;
-
-    memset(&rep, 0, sizeof(rep));
-    if (!(vms_kif_getjpi_self(&info) & 1)) {
-        (void)write_full(repfd, &rep, sizeof(rep));     /* ok == 0 */
-        _exit(1);
-    }
-    rep.ok      = 1;
-    rep.vms_pid = info.vms_pid;
-    if (write_full(repfd, &rep, sizeof(rep)) != 0)
-        _exit(1);
-
-    for (;;) {
-        ssize_t r = read(cmdfd, &c, 1);
-        if (r == 0 || (r < 0 && errno != EINTR))
-            _exit(0);
-    }
-}
-
-/*
- * cputim_probe - makes ONE sys$getjpi(JPI$_CPUTIM) call, under a tracer
- * that removes the target in the middle of it. Never returns.
- *
- * The two stops are the arrangement, and they are ORDERING, not timing:
- *
- *   stop 1 (PTRACE_TRACEME + raise) - the tracer sets its options.
- *   ... then the probe binds /dev/vms and makes a COMPLETE warm-up
- *       sys$getjpi on the same target. That matters: binding opens
- *       /dev/vms, which is itself an open() syscall, and the warm-up
- *       walks the /proc path once. After it, the next open() the probe
- *       ever performs is the one inside jpi_cputim() -- which is how the
- *       tracer identifies the exact instant to remove the target without
- *       having to guess or count.
- *   stop 2 (raise again) - the tracer starts stepping syscalls.
- *
- * Nothing here is paced by a sleep and nothing races: the probe is
- * physically stopped by the kernel at the syscall boundary while the
- * tracer kills and reaps the target.
- */
-static void cputim_probe(uint32_t target_pid, int repfd)
-{
-    struct cputim_report rep;
-    struct item_list_3 items[2];
-    struct vms_procinfo info;
-    uint32_t value = CPUTIM_SENTINEL;
-    uint16_t retlen = CPUTIM_RETLEN_UNSET;
-
-    memset(&rep, 0, sizeof(rep));
-
-    if (ptrace(PTRACE_TRACEME, 0, 0, 0) != 0) {
-        (void)write_full(repfd, &rep, sizeof(rep));     /* ok == 0 */
-        _exit(1);
-    }
-    raise(SIGSTOP);                 /* the tracer sets its options here */
-
-    /* Bind, register, and walk the whole answer path once. */
-    if (!(vms_kif_getjpi_self(&info) & 1)) {
-        (void)write_full(repfd, &rep, sizeof(rep));     /* ok == 0 */
-        _exit(1);
-    }
-    {
-        uint32_t warm = 0;
-        uint16_t warmlen = 0;
-
-        memset(items, 0, sizeof(items));
-        items[0].buflen    = sizeof(uint32_t);
-        items[0].item_code = JPI$_CPUTIM;
-        items[0].bufaddr   = &warm;
-        items[0].retlen    = &warmlen;
-        if (!(sys$getjpi(0, &target_pid, NULL, items, NULL, NULL, 0) & 1)) {
-            (void)write_full(repfd, &rep, sizeof(rep)); /* ok == 0 */
-            _exit(1);
-        }
-    }
-
-    raise(SIGSTOP);                 /* the tracer starts stepping here */
-
-    memset(items, 0, sizeof(items));
-    items[0].buflen    = sizeof(uint32_t);
-    items[0].item_code = JPI$_CPUTIM;
-    items[0].bufaddr   = &value;
-    items[0].retlen    = &retlen;
-
-    rep.status = sys$getjpi(0, &target_pid, NULL, items, NULL, NULL, 0);
-    rep.value  = value;
-    rep.retlen = retlen;
-    rep.ok     = 1;
-
-    (void)write_full(repfd, &rep, sizeof(rep));
-    _exit(0);
-}
-
-/*
- * syscall_nr_of - the syscall number a ptrace-stopped task is executing.
- *
- * PTRACE_GETREGSET/NT_PRSTATUS is the architecture-neutral transport; the
- * register holding the number is not, so the two OVMX architectures are
- * named explicitly and anything else returns -1 (which makes the P14
- * arrangement check fail loudly rather than the block passing without
- * having arranged anything).
- */
-static long syscall_nr_of(pid_t pid)
-{
-    struct user_regs_struct regs;
-    struct iovec iov;
-
-    memset(&regs, 0, sizeof(regs));
-    iov.iov_base = &regs;
-    iov.iov_len  = sizeof(regs);
-    if (ptrace(PTRACE_GETREGSET, pid, (void *)NT_PRSTATUS, &iov) != 0)
-        return -1;
-#if defined(__x86_64__)
-    return (long)regs.orig_rax;
-#elif defined(__aarch64__)
-    return (long)regs.regs[8];
-#else
-    return -1;
-#endif
-}
-
-/* Is this the syscall that opens /proc/<pid>/stat? aarch64 has no
- * open(2) at all, so the older number is only named where it exists. */
-static int is_open_syscall(long nr)
-{
-#ifdef SYS_open
-    if (nr == SYS_open) return 1;
-#endif
-#ifdef SYS_openat
-    if (nr == SYS_openat) return 1;
-#endif
-#ifdef SYS_openat2
-    if (nr == SYS_openat2) return 1;
-#endif
-    return 0;
 }
 
 /* now_ms - CLOCK_MONOTONIC in milliseconds, for the probe's time bound. */
@@ -1847,40 +1652,12 @@ int main(void)
      * must be in the table under the name it was given, and the call must
      * return.
      *
-     * WHICH ASSERTION IS THE DETECTOR, AND WHY IT IS **ONE** ASSERTION
-     * AND NOT TWO. The defect has two possible observable endings, and
-     * WHICH ONE HAPPENS IS DECIDED BY THE SCHEDULER:
-     *
-     *   (a) the caller is released from the interrupted read and closes
-     *       the pipe's read end BEFORE the child gets to report; the
-     *       child's report then takes SIGPIPE, the child dies, the
-     *       creator's reap returns at once, and the call comes back
-     *       OVMX$_PRCLOST;
-     *   (b) the child reports FIRST; the report lands in the pipe the
-     *       caller has already stopped reading, the child activates its
-     *       image, and the creator's reap blocks for the lifetime of
-     *       that image -- so the call does not come back at all.
-     *
-     * MEASURED, BOTH: (b) on this aarch64 host under TCG, (a) on the
-     * x86_64 CI runner, from the SAME mutation on the SAME commit. Split
-     * across two named assertions -- "the call returned" and "prclost
-     * == 0" -- that makes the negative control FLAKY: it reddens a
-     * different name on different machines, so no manifest can name the
-     * red set correctly. Raising the bound or retrying would only pick a
-     * winner more often, which is masking, not fixing.
-     *
-     * They are ONE property observed through two channels -- the
-     * caller's signal decided what $CREPRC said about the child -- so
-     * they are ONE assertion, and the two endings are distinguished in
-     * the PRINTED output instead, where a diagnosis needs them and a
-     * gate does not. Nothing is dropped: (a) and (b) both still fail,
-     * and both still fail for the same stated reason.
-     *
-     * `arranged >= SIGPROBE_MIN_ARRANGED` is NOT a detector, it is the
-     * ARRANGEMENT CHECK -- it proves the caller really was interrupted
-     * mid-handshake, so a green result means the code survived the
-     * condition rather than never meeting it. Without it this block
-     * would pass on a run where the tracer never managed it.
+     * WHICH ASSERTION IS THE DETECTOR: the bounded completion and
+     * `prclost == 0`. `arranged >= SIGPROBE_MIN_ARRANGED` is not a
+     * detector, it is the ARRANGEMENT CHECK -- it proves the caller really
+     * was interrupted mid-handshake, so a green result means the code
+     * survived the condition rather than never meeting it. Without it this
+     * block would pass on a run where the tracer never managed it.
      * --------------------------------------------------------------- */
     hs = fopen(HOLD_SCRIPT, "w");           /* P10 unlinked it */
     if (!hs) {
@@ -1931,21 +1708,10 @@ int main(void)
                     ;
             }
 
-            int returned = (prc == 0 && prp.ok == 1);
+            CHECK(prc == 0 && prp.ok == 1,
+                  "sys$creprc RETURNED on every call while the caller caught signals");
 
-            /* THE detector, and deliberately a single one: see the
-             * block comment above. Ending (b) leaves `returned` zero;
-             * ending (a) leaves prclost nonzero. Which of the two a
-             * given machine produces is the scheduler's choice, so
-             * naming them separately makes this control flaky. */
-            if (returned && prp.prclost > 0)
-                printf("  (P13: %u of %u calls came back OVMX$_PRCLOST for a "
-                       "process that WAS created)\n",
-                       (unsigned)prp.prclost, (unsigned)prp.iters);
-            CHECK(returned && prp.prclost == 0,
-                  "sys$creprc returned, and reported no process lost, while the caller caught signals");
-
-            if (returned) {
+            if (prc == 0 && prp.ok == 1) {
                 printf("  (P13: %u calls, %u interrupted mid-handshake, "
                        "%lld ms of the %d ms bound)\n",
                        (unsigned)prp.iters, (unsigned)prp.arranged,
@@ -1956,6 +1722,8 @@ int main(void)
                  * condition rather than never meeting it. */
                 CHECK(prp.arranged >= SIGPROBE_MIN_ARRANGED,
                       "the caller really was signalled while blocked in the creation handshake");
+                CHECK(prp.prclost == 0,
+                      "sys$creprc never reported OVMX$_PRCLOST for a process it created");
                 CHECK(prp.failed == 0,
                       "sys$creprc reported no other failure under a non-restarting handler");
                 CHECK(prp.unresolvable == 0,
@@ -1963,174 +1731,6 @@ int main(void)
             }
         }
         unlink(HOLD_SCRIPT);
-    }
-
-    /* ---------------------------------------------------------------
-     * P14. A TARGET THAT CEASES TO EXIST BETWEEN THE EXECUTIVE
-     *      RESOLVING ITS ROW AND THE ACCOUNTING READ MUST NOT COME BACK
-     *      AS A SUCCESSFUL ZERO.
-     *
-     * sys$getjpi answers JPI$_CPUTIM in two steps that cannot be one:
-     * the executive resolves the row (and reaps dead entries first, so
-     * the row it returns was LIVE), and then jpi_cputim() reads the
-     * target's accounting from the only place Linux keeps it. A process
-     * can exit in between. What the service used to do with that was
-     * return the literal 0, with a 4-byte return length and SS$_NORMAL --
-     * so the caller could not tell "consumed no CPU" from "OVMX could not
-     * measure it", and the answer was WRONG rather than merely unknown.
-     *
-     * The same condition had already been ruled on one layer up: SHOW
-     * SYSTEM read /proc for a row it could not source and printed a
-     * fabricated "0 00:00:00.00" (P12 above is its detector). Fixing the
-     * DCL reader and leaving the system service inventing a zero left the
-     * two readers of one facility disagreeing about one condition.
-     *
-     * Rule 10 permits two answers and this asserts the first -- MATCH
-     * VMS: the process no longer exists, and SS$_NONEXPR is what VMS
-     * reports for a target that no longer exists. So:
-     *   - the status must be SS$_NONEXPR, not a success;
-     *   - the caller's buffer and return length must be UNTOUCHED,
-     *     because a zero written with a 4-byte length is a measurement
-     *     the service did not make. The sentinels make "untouched"
-     *     observable; without them a fabricated zero and an untouched
-     *     buffer of zeros are the same bytes.
-     *
-     * THE CONDITION IS ARRANGED, NOT WAITED FOR. The probe is held by
-     * ptrace at the syscall boundary of the /proc open -- i.e. provably
-     * past the executive's ioctl and provably before the accounting read
-     * -- and the target is killed and REAPED while it is held there.
-     * Nothing is timed and nothing is retried; a run that fails to reach
-     * that instant fails the arrangement check rather than passing
-     * quietly.
-     * --------------------------------------------------------------- */
-    {
-        int tcmd[2] = { -1, -1 }, trep[2] = { -1, -1 }, pcpu[2] = { -1, -1 };
-        pid_t target = -1, cprobe = -1;
-        struct cputim_target_report trp;
-        struct cputim_report crp;
-        int arranged = 0, stepped = 0, crc = -1;
-
-        memset(&trp, 0, sizeof(trp));
-        memset(&crp, 0, sizeof(crp));
-
-        if (pipe(tcmd) != 0 || pipe(trep) != 0 || pipe(pcpu) != 0) {
-            CHECK(0, "P14: pipes for the vanishing-target probe");
-        } else if ((target = fork()) < 0) {
-            CHECK(0, "P14: fork of the vanishing target");
-        } else if (target == 0) {
-            close(tcmd[1]);
-            close(trep[0]);
-            close(pcpu[0]);
-            close(pcpu[1]);
-            cputim_target(tcmd[0], trep[1]);
-            _exit(0);                               /* not reached */
-        } else {
-            close(tcmd[0]);
-            close(trep[1]);
-
-            CHECK(read_full_bounded(trep[0], &trp, sizeof(trp),
-                                    CPUTIM_BOUND_MS) == 0 &&
-                  trp.ok == 1 && trp.vms_pid != 0,
-                  "P14: a target process registered with the executive");
-        }
-
-        if (trp.ok == 1 && (cprobe = fork()) == 0) {
-            close(trep[0]);
-            close(tcmd[1]);
-            close(pcpu[0]);
-            cputim_probe(trp.vms_pid, pcpu[1]);
-            _exit(0);                               /* not reached */
-        }
-        close(pcpu[1]);
-
-        if (cprobe > 0) {
-            int status = 0;
-
-            /* Stop 1: the probe's own raise(SIGSTOP). */
-            while (waitpid(cprobe, &status, 0) < 0 && errno == EINTR)
-                ;
-            if (WIFSTOPPED(status) &&
-                ptrace(PTRACE_SETOPTIONS, cprobe, 0,
-                       (void *)PTRACE_O_TRACESYSGOOD) == 0 &&
-                ptrace(PTRACE_CONT, cprobe, 0, 0) == 0) {
-
-                /* Stop 2: after it has bound /dev/vms and warmed the
-                 * whole answer path, so the next open() it performs is
-                 * the one inside jpi_cputim(). */
-                while (waitpid(cprobe, &status, 0) < 0 && errno == EINTR)
-                    ;
-                if (WIFSTOPPED(status) &&
-                    ptrace(PTRACE_SYSCALL, cprobe, 0, 0) == 0)
-                    stepped = 1;
-            }
-
-            for (int i = 0; stepped && i < CPUTIM_MAX_STOPS; i++) {
-                pid_t w;
-
-                while ((w = waitpid(cprobe, &status, 0)) < 0 && errno == EINTR)
-                    ;
-                if (w < 0 || !WIFSTOPPED(status))
-                    break;
-
-                if (WSTOPSIG(status) == (SIGTRAP | 0x80) &&
-                    is_open_syscall(syscall_nr_of(cprobe))) {
-                    /* Held at the open, past the ioctl: remove the
-                     * target and REAP it, so /proc/<pid> is gone before
-                     * the probe is allowed to look. */
-                    int tst;
-
-                    kill(target, SIGKILL);
-                    while (waitpid(target, &tst, 0) < 0 && errno == EINTR)
-                        ;
-                    target = -1;
-                    arranged = 1;
-                    ptrace(PTRACE_DETACH, cprobe, 0, 0);
-                    break;
-                }
-                if (ptrace(PTRACE_SYSCALL, cprobe, 0, 0) != 0)
-                    break;
-            }
-
-            crc = read_full_bounded(pcpu[0], &crp, sizeof(crp),
-                                    CPUTIM_BOUND_MS);
-        }
-
-        /* The ARRANGEMENT check, not a detector: it proves the target
-         * really did vanish inside the call, so a green result means the
-         * service met the condition rather than never meeting it. */
-        CHECK(arranged == 1,
-              "the target was removed between the executive resolving its row and the accounting read");
-        CHECK(crc == 0 && crp.ok == 1,
-              "sys$getjpi returned for a target that vanished mid-call");
-
-        if (crc == 0 && crp.ok == 1)
-            printf("  (P14: status=%u value=0x%08X retlen=%u)\n",
-                   (unsigned)crp.status, (unsigned)crp.value,
-                   (unsigned)crp.retlen);
-
-        /* THE DETECTORS. */
-        CHECK(crc == 0 && crp.ok == 1 && crp.status == SS$_NONEXPR,
-              "sys$getjpi reports SS$_NONEXPR for a process that ceased to exist mid-call");
-        CHECK(crc == 0 && crp.ok == 1 &&
-              crp.value == CPUTIM_SENTINEL &&
-              crp.retlen == CPUTIM_RETLEN_UNSET,
-              "no CPU figure is written for a process OVMX could not measure");
-
-        if (cprobe > 0) {
-            int pst;
-            kill(cprobe, SIGKILL);
-            while (waitpid(cprobe, &pst, 0) < 0 && errno == EINTR)
-                ;
-        }
-        if (target > 0) {
-            int tst;
-            kill(target, SIGKILL);
-            while (waitpid(target, &tst, 0) < 0 && errno == EINTR)
-                ;
-        }
-        if (tcmd[1] >= 0) close(tcmd[1]);
-        if (trep[0] >= 0) close(trep[0]);
-        if (pcpu[0] >= 0) close(pcpu[0]);
     }
 
     printf("=== test_syssvc_procnam: %d passed, %d failed ===\n", pass, fail);

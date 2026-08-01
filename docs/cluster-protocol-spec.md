@@ -559,25 +559,36 @@ offset 14; add 14 for the absolute offset). The 106-byte START body:
 | 54 | 2 | constant `0x0240` = 576 | 28/28; inferred (SCS transport param, no tunable match) |
 | 56 | 2 | constant `0x00d8` = 216 | 28/28; inferred |
 | **58** | **8** | **software version string** `"VMS V7.3"` (ASCII) | **GROUNDED**: byte-exact `56 4d 53 20 56 37 2e 33` in **28/28** frames. *Correction to the earlier §4g note:* the field is `"VMS V7.3"` for **all** nodes; the previously-reported `"VMS V7.3f"` was a misread — the `f` (`0x66`) is the first byte of the per-boot token at [66:], which happened to be printable in the golden VAX1 frame (it is `0xd8`/`0x5d`/`0xae` in other boots). |
-| 66 | 5 | per-boot token (version-side) | inferred: incarnation/timestamp, **not identity** — changes across reboots of the *same* node (see below) |
-| 71 | 1 | token/flag (`0x00`/`0x01` observed) | unknown |
-| 72 | 2 | constant `0x00bc` = 188 | observed constant |
+| **66** | **8** | **THIS SYSTEM'S INCARNATION** — a single VMS absolute-time quadword (LE, 100 ns units since 17-NOV-1858), = the time this system was booted | **GROUNDED** (`vms-2f3`, 2026-08-01) four ways: (1) SDA on VAX1 rendered OVMX's CSB as `Incarnation 26-JUL-2026 14:35:33` — decoding our replayed template bytes `bb 8e 67 7a 94 00 bc 00` to the second; (2) the same dump gives real peers their own boot times (VAX3 `1-AUG-2026 00:02:21`, VAX1 `30-JUL 08:54:26`, which had not rebooted); (3) after OVMX started emitting a live value, VAX1 read back `Incarnation 1-AUG-2026 15:25:12`, matching the `0x00bc05526906b4a1` we emitted; (4) **public doc** — VSI *System Management Utilities Ref. Vol. II*, SHOW CLUSTER SYSTEMS class: *"INCARNATION: Unique 16-digit hexadecimal number established when the system is booted."* Sixteen hex digits **is** this quadword. |
 | **74** | **4** | **hardware-type string** `"VAX "` (ASCII) | **GROUNDED**: 28/28 frames |
 | 78 | 2 | constant `0x0006` | 28/28 |
 | 80 | 2 | `0x0a` = 10 = SYSGEN `CLUSTER_CREDITS` at [81] | GROUNDED numeric match (as §4g credit) |
 | 82 | 6 | zero | constant observed |
 | 88 | 2 | constant `0x0077` | 28/28 |
 | **90** | **8** | **node name** (ASCII, **fixed 8-byte, blank-padded, left-justified**) | **GROUNDED**: `"VAX1    "`, `"VAX2    "`, and `"ZK      "` — the 2-char `"ZK"` name occupies the same 8-byte field with 6 trailing spaces and **the following bytes do not shift** (28/28), proving a fixed-width blank-filled field, *not* the length-prefixed encoding HELLO uses (§4a). Distinct encoding from §4a. |
-| 98 | 6 | per-boot token (name-side) | inferred: incarnation/timestamp, not identity |
-| 104 | 2 | constant `0x00bc` = 188 | observed constant |
+| **98** | **8** | **frame-composition time** — a second VMS absolute-time quadword, distinct from [66:74] | **GROUNDED as a live timestamp** (`vms-2f3`): real peers carry two or three *different* values here inside a single capture, and one of VAX3's matches — to the second — the OPCOM line it printed as it built the frame. Its precise *role* is **not** grounded and OVMX does not claim one. What **is** grounded is the negative: **no real node ever sends a stale one.** |
 
-**The per-boot tokens ([66:71] and [98:104]) are NOT node identity.** They
-change across reboots of the *same* node: VAX1's tokens differ between the
-days-old golden capture and the fresh `cd0-boot*` captures although VAX1's
-name/SCSSYSTEMID are unchanged. Within a single join both nodes share sub-spans
-(e.g. `51 7b`, `e8 fb 01`), consistent with a cluster-wide time/incarnation
-component with per-node low bytes. Best label: **inferred incarnation/timestamp
-token**; not derivable further from passive capture.
+> ### ⚠ CORRECTION (2026-08-01, `vms-2f3`) — this table previously split
+> **[66:74]** into three fields (a 5-byte token at 66, a flag at 71, a "constant
+> `0x00bc`" at 72) and **[98:106]** into two. **Both are single 8-byte VMS
+> absolute-time quadwords.** The upper bytes only *look* constant because every
+> 2026-era VMS timestamp ends `bc 00`. The old "per-boot token, not derivable
+> from passive capture" reading was wrong in a way that mattered: OVMX replayed
+> the captured template's [66:74] on **every** boot, forever, advertising a
+> 26-JUL-2026 boot time for six days. Per VSI *OpenVMS Cluster Systems* App.
+> C.7.1, a connection reestablished after `RECNXINTERVAL` *without the node
+> having rebooted* earns a **CLUEXIT bugcheck** on the surviving side — a node
+> whose incarnation never changes is exactly that node. Fixed in `c302b7d`.
+>
+> **Method note for the rest of this spec:** any remaining "observed constant"
+> in a replayed template that decodes as a plausible 2020s VMS quadword should
+> be re-audited the same way before it is trusted. The honesty debt (`vms-70c`)
+> and this bug turned out to be the same defect class.
+
+**These quadwords are NOT node identity.** They change across reboots of the
+*same* node: VAX1's values differ between the days-old golden capture and the
+fresh `cd0-boot*` captures although VAX1's name/SCSSYSTEMID are unchanged. That
+observation was always correct — it is *why* they are timestamps.
 
 **SCS counters in the START phase.** Region [18:32] carries the same
 sequenced-message counters as §4d: a 16-bit counter at [20:22] mirrored at
@@ -1627,9 +1638,39 @@ three config messages goes out — the part that decides whether admission start
 **The initial burst is MODEL+PARAMS only — but `0x02` is deferred, not
 omitted.** Sending `0x02` inside the initial burst leaves the peer silent
 (grounded previously); never sending it leaves the dialogue permanently
-half-finished. The reference gap is **~4.9 s**. *What the joiner is actually
-waiting on during those seconds is NOT grounded* — the delay is a replayed
-observation, not a decoded rule.
+half-finished.
+
+**⚠ UPDATE 2026-08-01 (`vms-2f3`): the gap is not a fixed delay and it is not
+idle.** It measures **1.44 s** (`af2-firsttimer`, VX3's rejoin at SCA 20170) and
+**4.4 s** (`vax3-2to3`), so "~4.9 s" was one specimen, not a constant. **GROUNDED:
+what the real joiner does in that window** (`af2-firsttimer` frames 20212–20243,
+32 frames) is a complete **client run of its own**:
+
+1. opens **its own** `SCS$DIRECTORY` connection — it does **not** reuse the
+   member's — and confirms it;
+2. looks up `MSCP$TAPE` and `MSCP$DISK` on it;
+3. opens an `MSCP$DISK` connection (op 0/1/2/3);
+4. runs 2× SET CONTROLLER CHARACTERISTICS, then the full GET-UNIT-STATUS
+   NEXT-UNIT walk (10 command/END pairs);
+5. tears the directory connection down;
+6. *then* sends `op 0x02`.
+
+So the rule is not "wait N seconds" — the joiner sends `op 0x02` when its own
+disk-client discovery is finished. **OVMX implements none of steps 1–5** and
+substitutes a `JOIN_CFG2_DELAY_MS` timer. Whether the run is a *gate* on
+admission is **not** decidable from passive capture — `vax3-2to3#285` carries an
+all-zero topology body and is acked in 0.3 ms, so the MSCP walk is not *encoded*
+into `op 0x02`. But it is the largest ungrounded behavioural gap left between
+OVMX and a real joiner.
+
+**Do NOT "fix" this by matching the `op 0x02` ack-msg alone.** A real joiner's
+admission `op 0x02` is `(smsg=3, amsg=2)` and OVMX's bundled one is
+`(smsg=3, amsg=0)` — a shape that occurs 104× from OVMX and **0× in 196 real
+specimens**, so the observation is correct. But `OVMX_PURE_SERVER=1` already
+emits the reference shape (2-frame burst, deferred, coordinator-only, correct
+`amsg`) and **the coordinator answers it not at all** — no ack, no COMMIT — where
+the malformed bundled form draws an ack in 0.4 ms. Tested 2026-08-01, run `p1A`,
+fresh identity, no code change. See `docs/HANDOFF-vms-2f3.md` §4c.2.
 
 **Which VC carries it.** A member opens its own `VMS$VAXcluster` VC back to the
 joiner **only if the joiner has not already opened one to it**. In the reference

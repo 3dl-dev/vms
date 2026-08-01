@@ -281,6 +281,31 @@ int scs_member_build_params(const struct scs_member_params *p,
         put_le64(b + 36, p->last_transition);      /* copied, never computed */
         put_le64(b + 64, p->own_admission);        /* ours; the joiner sentinel is
                                                     * exactly 2001-01-01 00:00:00 */
+        /* vms-2f3 2026-08-01 -- DO NOT "FIX" THE JOINER SENTINEL. It is not a
+         * placeholder we invented and it is not honesty debt.
+         *
+         * body[64:72] is the REPORTING NODE'S OWN ADMISSION TIME, and while a
+         * node is itself being admitted the value real VMS puts there is
+         * literally 00 80 4a 3f 0e 57 9f 00 = 0x009f570e3f4a8000 = 1-JAN-2001
+         * 00:00:00.00. Census over every op 0x01 in the capture library splits
+         * by ROLE, not by vendor: real VAX3 sends the sentinel 69x and real
+         * VAX2/VX3 20x -- as joiners -- and live 2026 values as established
+         * members; VAX1, which is never a joiner in this library, never sends
+         * it. VX3/1050 sends the sentinel on its first join AND on both of its
+         * rejoins and is admitted every time. The flip to a live value is
+         * exactly simultaneous with body[12] 0x00 -> 0x21. No specimen anywhere
+         * shows a member-form frame with the sentinel or a joiner-form frame
+         * with a live value.
+         *
+         * Corroborated independently by SDA (captures/sda-scs-extract-vax1.txt):
+         * VAX1's CSB Ref. time == the CLUB's Founding Time; VAX2's == the CLUB's
+         * Last time stamp -- i.e. each node's own admission instant.
+         *
+         * So the sentinel is correct as a joiner, this live value is correct as
+         * a member, and this field is NOT a suspect in the rejoin refusal. A
+         * full 8-byte-window scan of the 132-byte body found no OTHER
+         * timestamp-shaped value: only [28:36], [36:44] and [64:72] exist, and
+         * all three are handled. That closes the op 0x01 half of vms-70c. */
     }
 
     return 0;

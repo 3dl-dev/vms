@@ -656,8 +656,10 @@ static struct dsc$descriptor_s dsc_from_str(const char *s)
  * values (src/libvms/include/ovmx_status.h), print under the facility
  * name OVMX, and cannot be mistaken for VMS conditions.
  */
-static void run_print_condition(uint32_t status, int chained)
+static void run_creprc_failed(uint32_t status)
 {
+    dcl_error("RUN", 4, "CREPRC", "process creation failed");
+
     char sec[256];
     struct dsc$descriptor_s sec_d;
     uint16_t sec_len = 0;
@@ -668,234 +670,19 @@ static void run_print_condition(uint32_t status, int chained)
     if (sys$getmsg(status, &sec_len, &sec_d, MSG$M_ALL, NULL) & 1) {
         sec[sec_len] = '\0';
         /* A chained message is introduced by '-', not '%'. */
-        if (chained && sec[0] == '%') sec[0] = '-';
+        if (sec[0] == '%') sec[0] = '-';
         fprintf(stderr, "%s\n", sec);
     }
-}
-
-static void run_creprc_failed(uint32_t status)
-{
-    dcl_error("RUN", 4, "CREPRC", "process creation failed");
-    run_print_condition(status, 1);
-}
-
-/*
- * The RUN (Process) qualifier set, VERBATIM from the oracle.
- *
- * Source: reference lab VAX1, OpenVMS VAX V7.3, 2026-07-31,
- * `HELP/NOPROMPT RUN Process`, the "Qualifiers" index. Transcribed in
- * the order HELP prints it, with nothing added and nothing dropped.
- *
- * WHY THE LIST IS WRITTEN OUT RATHER THAN INFERRED. The oracle sentence
- * this table serves -- "A subprocess is created if any of the
- * qualifiers except the /UIC or the /DETACHED qualifier is specified"
- * -- appears under HELP RUN *Process*. The same HELP tree has a
- * separate HELP RUN *Image* topic whose entire qualifier list is
- * /DEBUG (/NODEBUG). Testing "does the command carry ANY qualifier?"
- * silently promotes the Process topic's sentence into a statement
- * about the Image topic's qualifiers, which the oracle does not
- * support -- and OVMX shipped exactly that: RUN/NODEBUG <image> was
- * refused as a subprocess request and the image did not run. Only the
- * names below may raise OVMX$_NOSUBPRC.
- *
- * /UIC and /DETACHED are IN the table because they are in the oracle's
- * index; the sentence excepts them, and run_refuse_unhonourable()
- * excepts them, so the table stays a faithful copy of what HELP prints
- * rather than a copy pre-filtered to this one use.
- *
- * A qualifier in NEITHER topic (RUN/NOSUCHQUAL) is not this code's
- * business: on the oracle DCL itself rejects it before RUN is entered
- * -- "%DCL-W-IVQUAL, unrecognized qualifier - check validity,
- * spelling, and placement" (VAX1, same session). The same is true of an
- * abbreviation that resolves to more than one of these names --
- * "%DCL-W-ABKEYW, ambiguous qualifier or keyword - supply more
- * characters" for RUN/P (VAX1, 2026-07-31, captures/
- * run-qualifier-abbrev-vax1-2026-07-31.txt). OVMX's DCL parser
- * validates no qualifier against any command's table, for any command;
- * that is a parser-wide gap, and inventing a RUN-only answer for it
- * here would be a third answer to a question VMS answers elsewhere.
- */
-static const char *const run_process_qualifiers[] = {
-    "ACCOUNTING", "AST_LIMIT", "AUTHORIZE", "BUFFER_LIMIT",
-    "DELAY", "DETACHED", "DUMP", "ENQUEUE_LIMIT",
-    "ERROR", "EXTENT", "FILE_LIMIT", "INPUT", "INTERVAL",
-    "IO_BUFFERED", "IO_DIRECT", "JOB_TABLE_QUOTA",
-    "MAILBOX", "MAXIMUM_WORKING_SET", "ON", "OUTPUT",
-    "PAGE_FILE", "PRIORITY", "PRIVILEGES", "PROCESS_NAME",
-    "QUEUE_LIMIT", "RESOURCE_WAIT", "SCHEDULE", "SERVICE_FAILURE",
-    "SUBPROCESS_LIMIT", "SWAPPING", "TIME_LIMIT", "TRUSTED",
-    "UIC", "WORKING_SET",
-};
-
-/*
- * The RUN (Image) qualifier set, VERBATIM from the oracle.
- *
- * Source: reference lab VAX1, OpenVMS VAX V7.3, 2026-07-31,
- * `HELP/NOPROMPT RUN Image Qualifier` -- which lists /DEBUG and /NODEBUG
- * and nothing else. One entry covers both spellings: the parser records
- * /NODEBUG as name "DEBUG" with negated set.
- *
- * It is here so that abbreviation resolution below runs over the
- * COMMAND's whole qualifier table, which is what DCL resolves against.
- * RUN is one command with one table; HELP splits it into two topics for
- * documentation, and only the SCOPE of the subprocess sentence follows
- * that split.
- */
-static const char *const run_image_qualifiers[] = {
-    "DEBUG",
-};
-
-/*
- * run_resolve_qualifier - resolve one qualifier name AS DCL RESOLVES IT.
- *
- * ORACLE-PINNED (reference lab VAX1, OpenVMS VAX V7.3, 2026-07-31;
- * transcript in the lab as captures/run-qualifier-abbrev-vax1-2026-07-31.txt).
- * Each probe named an image that does not exist, so DCL's verdict on the
- * qualifier is visible without creating anything: a resolved qualifier
- * reaches RUN and fails on the image, an unresolved one never gets there.
- *
- *   RUN/PRIO=4    -> %RUN-F-PARSEFAIL / -RMS-E-FNF   (resolved: /PRIORITY)
- *   RUN/PROC=FOO  -> %RUN-F-PARSEFAIL / -RMS-E-FNF   (resolved: /PROCESS_NAME)
- *   RUN/DETACH    -> %RUN-F-PARSEFAIL / -RMS-E-FNF   (resolved: /DETACHED)
- *   RUN/AST=100   -> %RUN-F-PARSEFAIL / -RMS-E-FNF   (resolved: /AST_LIMIT)
- *   RUN/PRIV=ALL  -> %RUN-F-PARSEFAIL / -RMS-E-FNF   (resolved: /PRIVILEGES)
- *   RUN/P=4       -> %DCL-W-ABKEYW, ambiguous qualifier or keyword
- *
- * So the rule is SHORTEST UNIQUE PREFIX, with no minimum length -- the
- * same rule dcl_match_command() already implements for verbs -- and
- * uniqueness, not length, is what /P fails.
- *
- * WHY THIS FUNCTION HAD TO EXIST. Matching qualifier names exactly is
- * not a stricter version of matching them the way DCL does; it is a
- * DIFFERENT command language. RUN/PRIO=4 is what an operator types and
- * what real VMS software ships -- tests/corpus/tier4-mx/kit/mx_start.com
- * builds "RUN/AST_LIMIT=100/BUFFER=.../DETACH/PRIV=ALL/PRIO=4/UIC=[1,4]"
- * -- and under exact matching every one of those spellings walked past
- * the refusal below and past run_detached()'s reads, so the image ran
- * with the whole instruction discarded and nothing said. That is Rule
- * 10's illegal third answer, reached by a route the full spellings never
- * take.
- *
- * Returns the full RUN qualifier name, or NULL if the given name matches
- * none of them or matches more than one. UNRESOLVED IS NOT DECIDED HERE:
- * on the oracle DCL refuses the command outright, with %DCL-W-IVQUAL for
- * an unknown qualifier and %DCL-W-ABKEYW for an ambiguous abbreviation,
- * BEFORE RUN is entered. OVMX's parser validates no qualifier against
- * any command's table, for any command, so neither refusal exists
- * anywhere in DCL; producing one here for RUN alone would answer for one
- * command a question VMS answers for the whole language. The gap is
- * reported, not patched over.
- */
-static const char *run_resolve_qualifier(const char *given)
-{
-    const char *hit = NULL;
-    size_t glen = strlen(given);
-
-    if (glen == 0) return NULL;
-
-    for (size_t j = 0;
-         j < sizeof(run_process_qualifiers) / sizeof(run_process_qualifiers[0]);
-         j++) {
-        const char *full = run_process_qualifiers[j];
-        if (strncasecmp(given, full, glen) == 0) {
-            if (hit) return NULL;          /* ambiguous */
-            hit = full;
-        }
-    }
-    for (size_t j = 0;
-         j < sizeof(run_image_qualifiers) / sizeof(run_image_qualifiers[0]);
-         j++) {
-        const char *full = run_image_qualifiers[j];
-        if (strncasecmp(given, full, glen) == 0) {
-            if (hit) return NULL;          /* ambiguous */
-            hit = full;
-        }
-    }
-    return hit;
-}
-
-/*
- * run_has_qualifier / run_qualifier_value - dcl_has_qualifier() and
- * dcl_qualifier_value() with DCL's abbreviation rule applied.
- *
- * RUN uses these EVERYWHERE it looks at a qualifier, and that is the
- * point: resolving abbreviations only where the command REFUSES, while
- * reading only exact names where it OBEYS, would refuse /DETACH and drop
- * /PROC=NAME -- a new silent discard created by the fix for the old one.
- *
- * These are RUN-local by intent. dcl_has_qualifier() is used by commands
- * that have no qualifier table at all; giving it a prefix rule with
- * nothing to be unique against would make every command's qualifier
- * matching depend on which literals its handler happened to test for.
- */
-static int run_has_qualifier(const struct dcl_command *cmd, const char *full)
-{
-    for (int i = 0; i < cmd->qualifier_count; i++) {
-        const char *r = run_resolve_qualifier(cmd->qualifiers[i].name);
-        if (r && strcasecmp(r, full) == 0)
-            return cmd->qualifiers[i].negated ? 0 : 1;
-    }
-    return 0;
-}
-
-static const char *run_qualifier_value(const struct dcl_command *cmd,
-                                       const char *full)
-{
-    for (int i = 0; i < cmd->qualifier_count; i++) {
-        const char *r = run_resolve_qualifier(cmd->qualifiers[i].name);
-        if (r && strcasecmp(r, full) == 0)
-            return cmd->qualifiers[i].value[0] ? cmd->qualifiers[i].value : NULL;
-    }
-    return NULL;
-}
-
-/*
- * How many of the command's qualifiers are RUN (Process) qualifiers
- * OTHER than the two the oracle's sentence excepts?
- *
- * The count is over the PARSED qualifier names, not over
- * run_has_qualifier(), because a negated form (/NOACCOUNTING) is still
- * a qualifier that was "specified" in the oracle's sense -- the parser
- * records it as name "ACCOUNTING" with negated set.
- */
-static int run_process_qualifier_count(const struct dcl_command *cmd)
-{
-    int n = 0;
-    for (int i = 0; i < cmd->qualifier_count; i++) {
-        const char *name = run_resolve_qualifier(cmd->qualifiers[i].name);
-        if (!name) continue;
-        if (strcasecmp(name, "UIC") == 0 || strcasecmp(name, "DETACHED") == 0)
-            continue;
-        for (size_t j = 0;
-             j < sizeof(run_process_qualifiers) / sizeof(run_process_qualifiers[0]);
-             j++) {
-            if (strcasecmp(name, run_process_qualifiers[j]) == 0) {
-                n++;
-                break;
-            }
-        }
-    }
-    return n;
 }
 
 /*
  * run_refuse_unhonourable - refuse a RUN that OVMX cannot carry out, at
  * the command layer, BEFORE anything is created.
  *
- * WHAT IT MAY AND MAY NOT REFUSE. Refusing a qualifier VMS accepts is
- * not the cautious version of accepting one VMS cannot honour -- it is
- * the mirror image of it, and both are Rule 10's illegal third answer.
- * Discarding tells the user their instruction was taken when it was
- * not; refusing tells them it was invalid when it was not. Every
- * refusal below is therefore scoped by a captured HELP topic, not by a
- * paraphrase of one.
- *
- * WHY THIS FUNCTION EXISTS AT ALL (CLAUDE.md Rule 10). RUN's
- * qualifiers are documented OpenVMS syntax, and the HELP text that
- * gives each of them its meaning -- and that says WHICH of RUN's two
- * topics it belongs to -- is quoted verbatim in ovmx_status.h next to
- * the three condition values raised here.
- * OVMX honours exactly one of the forms they select
+ * WHY THIS FUNCTION EXISTS AT ALL (CLAUDE.md Rule 10). RUN's process
+ * qualifiers are documented OpenVMS syntax, and their documented
+ * meaning is quoted verbatim in ovmx_status.h next to the two condition
+ * values raised here. OVMX honours exactly one of the forms they select
  * -- RUN/DETACHED, which $CREPRC implements. For the others, Rule 10
  * allows two answers and only two: reproduce what VMS does, or make the
  * condition unreachable. It cannot be made unreachable, because a user
@@ -928,53 +715,23 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
      * found - 1]" and never hear about the UIC at all. Refusing on the
      * qualifier's PRESENCE also means OVMX never has to pretend it
      * understood a UIC it cannot honour. */
-    if (run_has_qualifier(cmd, "UIC")) {
+    if (dcl_has_qualifier(cmd, "UIC")) {
         run_creprc_failed(OVMX$_NOPRCUIC);
         return OVMX$_NOPRCUIC;
     }
 
-    /* A RUN (PROCESS) qualifier -- any of the thirty-two the oracle's
-     * index lists besides /UIC and /DETACHED -- asks OpenVMS for a
-     * SUBPROCESS when /DETACHED is absent. HELP RUN Process (VAX1,
-     * OpenVMS VAX V7.3, 2026-07-31): "A subprocess is created if any of
-     * the qualifiers except the /UIC or the /DETACHED qualifier is
-     * specified." Enumerating four of them (round 1) went on silently
-     * discarding /PRIORITY; testing cmd->qualifier_count (round 2) went
-     * the other way and refused /NODEBUG, which is not a process
-     * qualifier at all. The set the sentence is scoped to is
-     * run_process_qualifiers[], and that is the set tested here.
-     *
-     * Both halves go through run_resolve_qualifier(), so the set is the
-     * set of qualifiers the user ASKED FOR, not the set they spelled out
-     * in full: RUN/PRIO=4 is /PRIORITY (oracle-pinned, see that
-     * function), and keying the membership test on exact names left it
-     * running the image with the priority thrown away. */
-    if (!run_has_qualifier(cmd, "DETACHED") &&
-        run_process_qualifier_count(cmd) > 0) {
+    /* ANY qualifier, not a list of four. The oracle draws the line
+     * itself -- HELP RUN Process (VAX2, OpenVMS VAX V7.3, 2026-07-31):
+     * "A subprocess is created if any of the qualifiers except the /UIC
+     * or the /DETACHED qualifier is specified." /UIC is already gone
+     * above, so what is left here, with no /DETACHED, is a request for
+     * a subprocess whichever of the thirty-odd documented qualifiers it
+     * was written with. Enumerating four of them would refuse
+     * /PROCESS_NAME and go on silently discarding /PRIORITY -- the same
+     * defect, narrower. */
+    if (!dcl_has_qualifier(cmd, "DETACHED") && cmd->qualifier_count > 0) {
         run_creprc_failed(OVMX$_NOSUBPRC);
         return OVMX$_NOSUBPRC;
-    }
-
-    /* /DEBUG belongs to the OTHER RUN topic. `HELP/NOPROMPT RUN Image
-     * Qualifier` (VAX1, same session) lists /DEBUG and /NODEBUG and
-     * nothing else, and the topic itself says the image is executed
-     * "within the context of your process" -- no process is created,
-     * so nothing here may be reported as a process creation failing.
-     *
-     * /NODEBUG is not mentioned in this function at all, deliberately.
-     * It asks for the image to run without the debugger, which is what
-     * OVMX does; VMS is matched by doing nothing. (The parser records
-     * /NODEBUG as name "DEBUG" with negated set, so run_has_qualifier
-     * returns 0 for it and this branch is not taken.)
-     *
-     * /DEBUG asks for a debugger OVMX has not got, and no OpenVMS
-     * condition value means that (see OVMX$_NODEBUGGER in
-     * ovmx_status.h). It is reported as itself, as a PRIMARY message,
-     * because there is no VMS-side operation here that failed for it
-     * to be chained to. */
-    if (run_has_qualifier(cmd, "DEBUG")) {
-        run_print_condition(OVMX$_NODEBUGGER, 0);
-        return OVMX$_NODEBUGGER;
     }
 
     return 0;
@@ -1001,20 +758,6 @@ static uint32_t run_refuse_unhonourable(struct dcl_command *cmd)
  * /UIC is NOT one of them -- it is refused before this is reached (see
  * run_refuse_unhonourable), because the created process's UIC is the
  * executive's to derive and nothing DCL passes can change it.
- *
- * KNOWN GAP, TRACKED AS vms-69e -- READ THIS BEFORE ADDING A QUALIFIER.
- * Every OTHER RUN (Process) qualifier reaching this function is READ BY
- * NOBODY: baspri, prvadr and the whole quota set are passed to $CREPRC
- * as bare literals below, so RUN/DETACHED/PRIORITY=4 creates the process
- * and announces %RUN-S-PROC_ID while the priority is discarded in
- * silence. That is the same Rule 10 illegal third answer this file
- * refuses one layer up, and it is reachable from real VMS software in
- * this repo (tests/corpus/tier4-mx/kit/mx_start.com). It is asserted --
- * as it BEHAVES, not as it should behave -- in P10 of
- * tests/qemu/test_syssvc_startup_service.c, so that the day vms-69e
- * settles the question (refuse with a condition value, or propagate
- * quota and privilege to the executive) the change cannot land without
- * that assertion being rewritten.
  */
 static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
                         const char *image_path)
@@ -1024,14 +767,14 @@ static int run_detached(struct dcl_context *ctx, struct dcl_command *cmd,
     char err_path[1024] = {0};
 
     const char *q;
-    if ((q = run_qualifier_value(cmd, "INPUT")) && *q)
+    if ((q = dcl_qualifier_value(cmd, "INPUT")) && *q)
         dcl_resolve_path(ctx, q, in_path, sizeof(in_path));
-    if ((q = run_qualifier_value(cmd, "OUTPUT")) && *q)
+    if ((q = dcl_qualifier_value(cmd, "OUTPUT")) && *q)
         dcl_resolve_path(ctx, q, out_path, sizeof(out_path));
-    if ((q = run_qualifier_value(cmd, "ERROR")) && *q)
+    if ((q = dcl_qualifier_value(cmd, "ERROR")) && *q)
         dcl_resolve_path(ctx, q, err_path, sizeof(err_path));
 
-    const char *prcnam = run_qualifier_value(cmd, "PROCESS_NAME");
+    const char *prcnam = dcl_qualifier_value(cmd, "PROCESS_NAME");
 
     struct dsc$descriptor_s img_d  = dsc_from_str(image_path);
     struct dsc$descriptor_s in_d   = dsc_from_str(in_path);
@@ -1103,7 +846,7 @@ int cmd_run(struct dcl_command *cmd)
 
     /* /DETACHED creates a detached process -- a service -- instead of
      * running the image as a subprocess of this DCL. */
-    if (run_has_qualifier(cmd, "DETACHED"))
+    if (dcl_has_qualifier(cmd, "DETACHED"))
         return run_detached(ctx, cmd, linux_path);
 
     pid_t pid = fork();

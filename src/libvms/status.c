@@ -125,8 +125,6 @@ static const struct status_entry known_codes[] = {
       "subprocess creation is not implemented" },
     { OVMX$_NOPRCUIC,   "OVMX",   "NOPRCUIC",
       "a created process cannot be given a UIC of the caller's choosing" },
-    { OVMX$_NODEBUGGER, "OVMX",   "NODEBUGGER",
-      "no debugger is present to run the image under" },
 
     /* Sentinel */
     { 0, NULL, NULL, NULL }

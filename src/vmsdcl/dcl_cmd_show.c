@@ -18,7 +18,6 @@
 #include <grp.h>
 #include <limits.h>
 #include <mntent.h>
-#include <errno.h>
 
 #include "prvdef.h"     /* PRV$M_* -- the single privilege bit table */
 #include "dcl/context.h"
@@ -35,18 +34,8 @@
 #include "vms/pcb.h"
 #include "ovmx_identity.h"
 #include "vmsqueue.h"
-#include "descrip.h"
-#include "jpidef.h"
 /* The executive process table's reader (SHOW SYSTEM enumerates it). */
 #include "vms_kif.h"
-
-/*
- * The VMS condition-value renderer ("%FACILITY-S-IDENT, text"), from
- * src/libvms/status.c. SHOW PROCESS prints the status $GETJPI returned
- * for a target it could not read rather than choosing its own words for
- * it -- see the comment at the failure branch in cmd_show_process().
- */
-extern int vms_status_string(uint32_t status, char *buf, size_t bufsize);
 
 /* Forward declarations for queue/intrusion subcommands (dcl_cmd_process.c) */
 extern int cmd_show_queue(struct dcl_command *cmd);
@@ -235,15 +224,7 @@ static int cpu_time_of(uint32_t vms_pid, char *cpu_str, size_t cpu_len)
     unsigned long mm = (total_sec % 3600) / 60;
     unsigned long ss = total_sec % 60;
 
-    /*
-     * VMS's OWN CPU field, byte for byte: a 4-column right-justified day
-     * count, one space, then hh:mm:ss.cc -- 16 columns in all
-     * ("   0 00:00:00.05"). Counted through `cat -A` on VAX1, OpenVMS VAX
-     * V7.3; docs/oracle/vax73-show-system-process.md Section 1.1. The
-     * "%lu " that stood here produced a 13-column field, which put every
-     * digit of the CPU column three places left of where VMS puts it.
-     */
-    snprintf(cpu_str, cpu_len, "%4lu %02lu:%02lu:%02lu.%02lu",
+    snprintf(cpu_str, cpu_len, "%lu %02lu:%02lu:%02lu.%02lu",
              hh / 24,          /* days (usually 0) */
              hh % 24, mm, ss, centisec);
 
@@ -309,51 +290,37 @@ static int cmd_show_system(struct dcl_command *cmd)
            (int)(ts.tv_nsec / 10000000), uptime_str);
     /*
      * ================================================================
-     * THE COLUMN SET IS NOW ORACLE-PINNED (vms-6a7).
-     * docs/oracle/vax73-show-system-process.md Sections 1 and 5.1.
+     * THIS HEADER IS DELIBERATELY NARROWER THAN VMS's. OPERATOR RULING,
+     * vms-8019 round 4. DO NOT "RESTORE" THE MISSING COLUMNS.
      * ================================================================
      *
-     * vms-8019 round 4 deleted "---" placeholders from five columns and
-     * left the verbatim question for this item. VAX1 (OpenVMS VAX V7.3)
-     * was booted and SHOW SYSTEM captured through `cat -A`, so the
-     * geometry below is COUNTED, not eyeballed. VMS prints, at these
-     * 0-based columns:
+     * OpenVMS SHOW SYSTEM also prints State, Pri, I/O, Page flts and
+     * Pages. OVMX cannot source any of those from the executive's
+     * process table, so it does not print them AT ALL.
      *
-     *   Pid           0-7    %08X, uppercase, NO LEADING SPACE
-     *   (separator)   8
-     *   Process Name  9-23   %-15s
-     *   (separator)   24
-     *   State        25-29   %-5s
-     *   Pri          30-34   %5d
-     *   I/O          35-43   %9d
-     *   CPU          44-59   "%4d %02d:%02d:%02d.%02d"
-     *   Page flts    60-69   %10d
-     *   Pages        70-76   %7d
-     *   type         77-79   "   " or "  N" -- and it has NO heading
+     * What stood here until this round printed "---" in each of them.
+     * Rule 10 allows exactly two answers -- reproduce what VMS prints,
+     * or do not expose the thing at all -- and a not-available marker
+     * is neither. It is a display for a condition VMS never faces,
+     * shipped in a user-visible VMS command, which is precisely the
+     * illegal third answer. An absent column is a visibly incomplete
+     * table; "---" in a VMS-shaped table is a fabricated
+     * not-available state dressed as VMS output.
      *
-     *   "  Pid    Process Name    State  Pri      I/O       CPU       Page flts  Pages"
+     * THE VERBATIM QUESTION FOR THE ORACLE, owned by vms-6a7 ("SHOW
+     * SYSTEM lists every process on the system", which explicitly owns
+     * the display: "Match the real VMS column set and header -- pin
+     * the format to the oracle"):
      *
-     * OVMX's executive row (struct vms_procinfo) holds vms_pid, prcnam
-     * and -- through JPI$_CPUTIM -- CPU time. It holds NO VMS scheduler
-     * state, NO VMS priority, no I/O count and no page accounting, and
-     * a VMS command is a READER of an executive facility rather than a
-     * second source (Rule 11), so a /proc-derived page-fault figure
-     * would be a fabrication wearing a VMS column heading.
+     *   "What does OpenVMS VAX 7.3 SHOW SYSTEM print in the State,
+     *    Pri, I/O, Page flts and Pages columns -- what are the exact
+     *    column widths and header spelling -- and is any of it
+     *    sourceable from what the OVMX executive actually holds?"
      *
-     * THE RULE APPLIED HERE, which is the answer the "---" markers were
-     * not: a column OVMX can source keeps VMS's OWN width, justification
-     * and spelling; a column it cannot source is removed WHOLE -- heading
-     * text and field together -- and the survivors close up. Removing
-     * State..I/O deletes columns 25-43, so the CPU field moves 44-59 ->
-     * 25-40 and the centred "CPU" heading moves 51 -> 32. The result is a
-     * table that is VISIBLY narrower than VMS's rather than a VMS-shaped
-     * table with invented content in it.
-     *
-     * DO NOT "RESTORE" THE MISSING COLUMNS by deriving them from Linux.
-     * The way to widen this header is to make the executive hold the
-     * quantity, and then read it.
+     * Until that is answered the columns stay absent. Widening this
+     * header without an oracle transcript re-commits the defect.
      */
-    printf("  Pid    Process Name           CPU\n");
+    printf("  Pid    Process Name          CPU\n");
 
     /*
      * ENUMERATE THE EXECUTIVE'S PROCESS TABLE (vms-8019).
@@ -399,25 +366,10 @@ static int cmd_show_system(struct dcl_command *cmd)
          *
          * OVMX cannot source the figure, so it prints no figure. Same
          * Rule 10 answer as the absent columns above, applied per row
-         * instead of per table.
-         *
-         * NOW PINNED, AND OVMX DIVERGES -- READ THIS BEFORE "FIXING" IT
-         * HERE (vms-6a7). VAX1 was booted and SHOW SYSTEM captured with
-         * the caller holding NO privileges at all
-         * (docs/oracle/vax73-show-system-process.md Section 1.2). VMS
-         * printed the COMPLETE row for a process in another UIC group --
-         * State, Pri, I/O, CPU, Page flts, Pages -- one command after
-         * $GETJPI on that same process was refused every item. NOTHING
-         * in a SHOW SYSTEM row is privileged on VMS.
-         *
-         * That is a divergence OVMX cannot close at the display: the
-         * executive zeroes linux_pid on a redacted row, so there is no
-         * accounting datum to read. The fix belongs in
-         * vms_ioctl_procscan() -- carry the accounting on a redacted row
-         * -- which changes the redaction policy vms-8019 landed, so it is
-         * NOT this item's to make. Until then, printing nothing remains
-         * the only honest width; printing a zero would fabricate exactly
-         * the value this comment records the deletion of.
+         * instead of per table. What OpenVMS displays in the CPU column
+         * for a process the caller cannot read is NOT PINNED -- it goes
+         * with the rest of the column question to vms-6a7 -- and until
+         * it is pinned, nothing is the only honest width.
          *
          * THE FIGURE IS THE SERVICE'S OR IT IS ABSENT (vms-8019 round 7).
          * The scan is a snapshot walked one row at a time, so a process
@@ -429,9 +381,8 @@ static int cmd_show_system(struct dcl_command *cmd)
          * rule (dropping the row) for a condition VMS's own SHOW SYSTEM
          * never faces, which is the illegal third answer in the shape it
          * always takes: reasonable-looking, and unpinned. What a VMS
-         * SHOW SYSTEM does with a process deleted mid-walk is STILL not
-         * pinned -- vms-6a7 could not stage the race on the oracle, and
-         * did not invent an answer for it.
+         * SHOW SYSTEM does with a process deleted mid-walk goes to
+         * vms-6a7 with the rest of the column question.
          */
         char cpu_str[32] = "";
         if (!info.redacted &&
@@ -449,28 +400,8 @@ static int cmd_show_system(struct dcl_command *cmd)
          * one, and inventing a replacement here would just re-commit
          * it one layer up. A blank is what OVMX prints until vms-d0e
          * pins what the executive should assign.
-         *
-         * WHAT vms-6a7 ADDED TO vms-d0e's EVIDENCE, having booted the
-         * oracle: across every SHOW SYSTEM capture on VAX1 NO row had an
-         * empty Process Name -- not even SWAPPER, which no user created
-         * (docs/oracle/vax73-show-system-process.md Section 1.3). The
-         * blank-name condition does not occur on VMS, so there is no VMS
-         * rendering of it to copy, and the blank stays a placeholder
-         * rather than a match. What the executive assigns to a process
-         * created with no prcnam was NOT established -- the detached-
-         * process attempt and why it failed are recorded in Section 1.3
-         * so the next agent does not repeat it.
          */
-        /*
-         * VMS geometry (oracle-pinned, Section 1.1): the pid starts at
-         * column ZERO -- there is no leading space -- the name is a
-         * 15-column left-justified field at 9-23, and column 24 is the
-         * single separator before the next column. What stood here
-         * printed " %08X %-15s  %s", which shifted the whole row one
-         * column right of VMS and put the CPU figure two columns further
-         * out again.
-         */
-        printf("%08X %-15s %s\n",
+        printf(" %08X %-15s  %s\n",
                info.vms_pid,
                info.prcnam[0] ? info.prcnam : "",
                cpu_str);
@@ -480,121 +411,8 @@ static int cmd_show_system(struct dcl_command *cmd)
 }
 
 /*
- * SHOW$_INVQUAVAL - "%SHOW-E-INVQUAVAL, value '<x>' invalid for
- * /IDENTIFICATION qualifier".
- *
- * ORACLE-PINNED (vms-6a7), docs/oracle/vax73-show-system-process.md
- * Section 3.2.2. On VAX1 (OpenVMS VAX V7.3):
- *
- *   $ SHOW PROCESS/ID=ZZZZ
- *   %SHOW-E-INVQUAVAL, value 'ZZZZ' invalid for /IDENTIFICATION qualifier
- *   $ WRITE SYS$OUTPUT "ST="+F$STRING(F$INTEGER($STATUS))
- *   ST=276304682
- *
- * 276304682 = 0x1078802A. The 0x10000000 is DCL's own STS$M_INHIB_MSG
- * control bit, set AFTER the message was printed; the condition value
- * itself is 0x0078802A -- facility 0x078, severity 2 (E). The value is
- * used here rather than a self-chosen status because CLAUDE.md Rule 10
- * forbids self-certifying a constant: this one was measured.
- *
- * Local to this file on purpose. Promoting it to a public header would
- * imply OVMX carries the whole SHOW message facility, which it does not.
- */
-#define SHOW$_INVQUAVAL  0x0078802Au
-
-/*
- * show_process_target_qual - the value of /IDENTIFICATION, given by any
- * abbreviation of two characters or more.
- *
- * dcl_qualifier_value() matches the qualifier name EXACTLY, so it cannot
- * see /ID -- which is how the qualifier is actually written, and how the
- * oracle transcript exercises it. VMS accepts any unambiguous
- * abbreviation; dcl_match_command() is the parser's existing
- * minimum-uniqueness matcher, so this is that rule applied to one
- * qualifier rather than a new mechanism.
- *
- * Returns NULL when the qualifier is absent (or negated), otherwise its
- * value -- which may be the empty string for a bare /IDENTIFICATION.
- */
-static const char *show_process_target_qual(const struct dcl_command *cmd)
-{
-    if (!cmd) return NULL;
-
-    for (int i = 0; i < cmd->qualifier_count; i++) {
-        if (cmd->qualifiers[i].negated) continue;
-        if (dcl_match_command(cmd->qualifiers[i].name, "IDENTIFICATION", 2))
-            return cmd->qualifiers[i].value;
-    }
-    return NULL;
-}
-
-/*
- * SHOW PROCESS - report a process, WHICH NEED NOT BE THE CALLER.
- *
- * ================================================================
- * A READER OF THE EXECUTIVE PROCESS TABLE (vms-6a7, Rule 11).
- * ================================================================
- *
- * What stood here could only ever describe the process running it, and
- * described it out of values that process had written about ITSELF: the
- * DCL context's process_name, getpid(), getgid()/getuid(), and a
- * privilege list read from the VMS_PRIVILEGES environment variable. It
- * accepted no target at all -- "SHOW PROCESS AUDIT_SERVER" printed the
- * caller. That is the facade shape CLAUDE.md Rule 11 names: a command
- * that fabricates its own answer instead of reading an executive
- * facility, and one that passes every single-process test perfectly.
- *
- * The target is now resolved through $GETJPI, which resolves BY NAME and
- * BY PID in the executive (src/kernel/vms_proctab.c), and every field
- * printed comes from the row it returns.
- *
- * THE LAYOUT IS ORACLE-PINNED, NOT CARRIED OVER FROM THE OLD CODE.
- * VAX1 (OpenVMS VAX V7.3) was booted and every form below captured
- * through `cat -A` so columns were counted:
- * docs/oracle/vax73-show-system-process.md Sections 2 and 3. In
- * particular the header is a PAIR of lines carrying Node: and
- * Process name: at column 26/49, and body labels sit in a 20-column
- * field (the old code used 19 and put Process name: on its own line).
- *
- * WHAT IS DELIBERATELY NOT PRINTED, AND WHY (Rule 10 -- match VMS, or do
- * not expose it; never invent a plausible handler):
- *
- *   Terminal:          VMS prints it. The executive holds no terminal
- *                      for a process; OVMX's terminal is still a
- *                      per-process VMS_TERMINAL environment variable,
- *                      which is a facade with its own item (vms-d0b),
- *                      not a facility to read. Printing the caller's own
- *                      environment under a VMS label -- for a row that
- *                      may belong to another process entirely -- is the
- *                      defect, not the fix.
- *   Base priority:     VMS prints it. The executive holds no VMS
- *                      priority; the old code printed the literal 4 for
- *                      every process. Same answer as SHOW SYSTEM's Pri
- *                      column above.
- *   Devices allocated: absent, which is exactly what VMS prints for a
- *                      process with none (Section 3.1 -- AUDIT_SERVER
- *                      has no such section). OVMX allocates no devices
- *                      to a process in the executive.
- *   Privileges:        VMS PRINTS NO SUCH LINE. Plain SHOW PROCESS says
- *                      nothing whatever about privileges; they live
- *                      behind /PRIVILEGES (Section 2.2, and
- *                      vax73-privileges.md Section 6 (1)). The line was
- *                      an OVMX invention fed by getenv("VMS_PRIVILEGES")
- *                      -- a process reporting privileges it declared
- *                      about itself -- so it is DELETED rather than
- *                      rewired. /PRIVILEGES is untouched.
- *   Process quotas:    VMS prints no quota block here either; that is
- *                      /QUOTAS (Section 2.2). The inline block was seven
- *                      hardcoded lines of invented numbers, identical
- *                      for every process on every system. DELETED.
- *                      cmd_show_process_quotas() is untouched.
- *
- * User Identifier: IS printed, from JPI$_UIC, as the octal
- * [group,member]. VMS shows the RIGHTS IDENTIFIER ([SYSTEM]) when the
- * UIC has one; OVMX has no RIGHTSLIST. That divergence pre-dates this
- * item, is recorded in vax73-privileges.md Section 6 (4), and is not
- * vms-6a7's -- what IS vms-6a7's is that the numbers now come from the
- * TARGET's executive row instead of the caller's getgid()/getuid().
+ * SHOW PROCESS - Show current process information.
+ * Supports /PRIVILEGES and /QUOTAS qualifiers.
  */
 static int cmd_show_process(struct dcl_command *cmd)
 {
@@ -608,25 +426,7 @@ static int cmd_show_process(struct dcl_command *cmd)
     if (dcl_has_qualifier(cmd, "QUOTAS"))
         return cmd_show_process_quotas(ctx);
 
-    /*
-     * /ALL: LEFT ALONE ON PURPOSE, AND IT IS WRONG TWICE (vms-70eb).
-     *
-     * On VMS /ALL means "all information about THIS process" -- the plain
-     * display plus Process Quotas, Accounting information, both privilege
-     * blocks, rights, and the job's process list. It does NOT mean "all
-     * processes". The block below prints a Process Name/PID/UIC/State
-     * table containing ONE row fabricated from getpid() and the literals
-     * "_FTA0:" / "SYSTEM" / "LEF" -- the same defect this item deleted
-     * from SHOW SYSTEM, in the same file.
-     *
-     * It is not fixed here because it is a different outcome with its own
-     * item (vms-70eb) and its own test surface
-     * (tests/dcl/test_parser_qualifiers.sh drives SHOW PROCESS/ALL to
-     * exercise the PARSER, not this display). The verbatim VMS /ALL
-     * output is captured in docs/oracle/vax73-show-system-process.md
-     * Section 4 so vms-70eb starts from a measurement rather than a
-     * guess -- that is what vms-6a7 contributes to it.
-     */
+    /* /ALL qualifier: show all processes (list from /proc) */
     if (dcl_has_qualifier(cmd, "ALL")) {
         struct timespec ats;
         clock_gettime(CLOCK_REALTIME, &ats);
@@ -648,208 +448,56 @@ static int cmd_show_process(struct dcl_command *cmd)
         return SS$_NORMAL;
     }
 
-    /*
-     * ---- SELECT THE TARGET ----
-     *
-     * ORACLE-PINNED SELECTION RULES (Section 3):
-     *   /IDENTIFICATION=<hex pid>  wins over a name parameter --
-     *       "SHOW PROCESS/ID=2020020E SYSTEM" reported 2020020E.
-     *   /IDENTIFICATION=0          selects the CALLER, the same rule
-     *       $GETJPI documents for a pidadr of 0.
-     *   a name parameter is UPCASED -- "SHOW PROCESS audit_server"
-     *       resolved AUDIT_SERVER.
-     *   neither                    selects the caller.
-     *
-     * The two selectors are mutually exclusive here because sys$getjpi
-     * tests prcnam FIRST: passing both would silently invert the pinned
-     * precedence.
-     */
-    const char *idval = show_process_target_qual(cmd);
-    char     sel_name[VMS_PRCNAM_XFER];
-    uint32_t sel_pid = 0;
-    int      by_pid = 0, by_name = 0;
-
-    sel_name[0] = '\0';
-
-    if (idval) {
-        char *end = NULL;
-        unsigned long v;
-
-        errno = 0;
-        v = strtoul(idval, &end, 16);
-        if (idval[0] == '\0' || !end || *end != '\0' ||
-            errno == ERANGE || v > 0xFFFFFFFFUL) {
-            /*
-             * Message text and quoting are verbatim from the oracle
-             * (Section 3.2.2). A malformed value is rejected at the DCL
-             * layer and never reaches $GETJPI -- which is also why it
-             * cannot be reported as NONEXPR: "ZZZZ" is not a process
-             * that does not exist, it is not a process ID.
-             */
-            printf("%%SHOW-E-INVQUAVAL, value '%s' invalid for "
-                   "/IDENTIFICATION qualifier\n", idval);
-            return SHOW$_INVQUAVAL;
-        }
-        sel_pid = (uint32_t)v;
-        by_pid  = (sel_pid != 0);       /* 0 means "the caller" */
-    } else if (cmd->param_count > 1 && cmd->params[1][0]) {
-        /*
-         * params[1], NOT params[0]: cmd_show() dispatches on params[0],
-         * which is the SHOW keyword itself ("PROCESS"). Reading params[0]
-         * here made every "SHOW PROCESS" -- with or without a target --
-         * look up a process literally named PROCESS, so both the self
-         * case and the targeted case answered NONEXPR. Caught by
-         * tests/qemu/test_syssvc_showproc.c against the real DCL.EXE;
-         * every host-side ctest passed over it, because the host has no
-         * executive and cannot tell "no such process" apart from
-         * "no executive to ask".
-         */
-        size_t i;
-        for (i = 0; i + 1 < sizeof(sel_name) && cmd->params[1][i]; i++)
-            sel_name[i] = (char)toupper((unsigned char)cmd->params[1][i]);
-        sel_name[i] = '\0';
-        by_name = 1;
-    }
-
-    /*
-     * ---- READ THE TARGET'S ROW ----
-     *
-     * JPI$_CPUTIM is deliberately NOT requested: SHOW PROCESS displays no
-     * CPU figure, and sys$getjpi fails the WHOLE call with SS$_NONEXPR
-     * when the target has exited between resolution and the accounting
-     * read. Asking for an item this display does not print would let a
-     * process that vanished mid-command turn a complete answer into an
-     * error.
-     */
-    struct dsc$descriptor_s namdsc;
-    struct item_list_3 items[5];
-    uint32_t tgt_pid = 0, tgt_uic = 0;
-    char     tgt_prcnam[VMS_PRCNAM_SIZE + 1];
-    char     tgt_user[VMS_USERNAME_SIZE + 1];
-    uint16_t rl_pid = 0, rl_nam = 0, rl_uic = 0, rl_user = 0;
-
-    memset(tgt_prcnam, 0, sizeof(tgt_prcnam));
-    memset(tgt_user, 0, sizeof(tgt_user));
-    memset(items, 0, sizeof(items));
-
-    items[0].buflen = sizeof(uint32_t);
-    items[0].item_code = JPI$_PID;
-    items[0].bufaddr = &tgt_pid;
-    items[0].retlen = &rl_pid;
-
-    items[1].buflen = (uint16_t)(sizeof(tgt_prcnam) - 1);
-    items[1].item_code = JPI$_PRCNAM;
-    items[1].bufaddr = tgt_prcnam;
-    items[1].retlen = &rl_nam;
-
-    items[2].buflen = sizeof(uint32_t);
-    items[2].item_code = JPI$_UIC;
-    items[2].bufaddr = &tgt_uic;
-    items[2].retlen = &rl_uic;
-
-    items[3].buflen = (uint16_t)(sizeof(tgt_user) - 1);
-    items[3].item_code = JPI$_USERNAME;
-    items[3].bufaddr = tgt_user;
-    items[3].retlen = &rl_user;
-
-    memset(&namdsc, 0, sizeof(namdsc));
-    namdsc.dsc$w_length  = (uint16_t)strlen(sel_name);
-    namdsc.dsc$b_dtype   = DSC$K_DTYPE_T;
-    namdsc.dsc$b_class   = DSC$K_CLASS_S;
-    namdsc.dsc$a_pointer = sel_name;
-
-    uint32_t st = sys$getjpi(0,
-                             by_pid ? &sel_pid : NULL,
-                             by_name ? &namdsc : NULL,
-                             items, NULL, NULL, 0);
-
-    if (!(st & 1)) {
-        /*
-         * THE STATUS IS RENDERED, NOT INTERPRETED. The two failures a
-         * target read produces are both oracle-pinned (Section 3.2/3.3),
-         * and they are DIFFERENT answers for the same process:
-         *
-         *   by NAME, out of the caller's UIC group
-         *       -> %SYSTEM-W-NONEXPR, nonexistent process
-         *          (the name search is group-scoped -- the process is not
-         *           found at all, exactly as for a name never created)
-         *   by PID, out of the caller's UIC group
-         *       -> %SYSTEM-F-NOPRIV, insufficient privilege or object
-         *          protection violation
-         *
-         * The executive already returns exactly those two statuses, so
-         * this prints the one it got and adds no rule of its own. Do NOT
-         * "normalise" the two into one message: the difference is the
-         * measured behaviour.
-         */
-        char msg[160];
-        vms_status_string(st, msg, sizeof(msg));
-        printf("%s\n", msg);
-        return (int)st;
-    }
-
-    /*
-     * Is this the caller's own row? VMS gives its own process the full
-     * display (real Default file spec) and any other process the
-     * "Not available" rendering -- and it does so however the process was
-     * named, including /ID=0 and /ID=<own pid> (Section 3.2.1). So the
-     * question is decided on the RESOLVED pid, never on which selector
-     * was used.
-     */
-    uint32_t self_pid = 0;
-    uint16_t rl_self = 0;
-    struct item_list_3 selfitems[2];
-    memset(selfitems, 0, sizeof(selfitems));
-    selfitems[0].buflen = sizeof(uint32_t);
-    selfitems[0].item_code = JPI$_PID;
-    selfitems[0].bufaddr = &self_pid;
-    selfitems[0].retlen = &rl_self;
-    int is_self = (sys$getjpi(0, NULL, NULL, selfitems, NULL, NULL, 0) & 1) &&
-                  rl_self == sizeof(uint32_t) && self_pid == tgt_pid;
-
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     struct tm tm;
     localtime_r(&ts.tv_sec, &tm);
 
-    char node[OVMX_IDENTITY_MAXLEN];
-    ovmx_node_name(node, sizeof(node));
+    const char *upper_user = ctx->username[0] ? ctx->username : "SYSTEM";
 
-    /*
-     * Geometry counted through `cat -A` on the oracle (Section 2.1):
-     * date/time in columns 0-22, three spaces, "User:" at 26 with its
-     * value in a 17-column field starting at 32, "Process ID:" at 49,
-     * three spaces, the pid at 63. Line two is 26 spaces then the same
-     * two-column arrangement carrying Node: and Process name:. A blank
-     * line precedes the pair and another follows it.
-     */
-    printf("\n");
-    printf("%2d-%s-%04d %02d:%02d:%02d.%02d   User: %-17sProcess ID:   %08X\n",
+    printf("%2d-%s-%04d %02d:%02d:%02d.%02d   User: %-12s"
+           "  Process ID:   %08X\n",
            tm.tm_mday, vms_months[tm.tm_mon], 1900 + tm.tm_year,
            tm.tm_hour, tm.tm_min, tm.tm_sec,
            (int)(ts.tv_nsec / 10000000),
-           tgt_user, tgt_pid);
-    printf("                          Node: %-17sProcess name: \"%s\"\n",
-           node, tgt_prcnam);
-    printf("\n");
-
-    /* Body labels sit in a 20-column field -- values start at column 20. */
-    char uicbuf[32];
-    snprintf(uicbuf, sizeof(uicbuf), "[%03o,%03o]",
-             (unsigned)((tgt_uic >> 16) & 0xFFFFu),
-             (unsigned)(tgt_uic & 0xFFFFu));
-    printf("%-20s%s\n", "User Identifier:", uicbuf);
+           upper_user, (unsigned)getpid());
+    printf("                          Process name: \"%s\"\n\n",
+           ctx->process_name[0] ? ctx->process_name : "_FTA0:");
+    /* Show VMS-style terminal name; fall back to _FTA0: */
+    const char *prcnam = ctx->process_name[0] ? ctx->process_name : "_FTA0:";
+    printf("Terminal:          %s\n", prcnam);
+    printf("User Identifier:   [%03o,%03o]\n",
+           ctx->uic_group ? (unsigned)ctx->uic_group : (unsigned)(getgid() & 0377),
+           ctx->uic_member ? (unsigned)ctx->uic_member : (unsigned)(getuid() & 0377));
+    printf("Base priority:     4\n");
+    printf("Default file spec: %s\n", ctx->default_dir);
 
     /*
-     * "Not available" is VMS's OWN literal for a default directory it
-     * cannot read (Section 3.1, AUDIT_SERVER). It is not an OVMX
-     * placeholder standing in for a value we failed to fetch: OVMX is in
-     * exactly the condition VMS renders that way, because a process's
-     * default directory is RMS state private to that process and the
-     * executive row does not carry it.
+     * STOPGAP (vms-2b8): this prints a privilege list the PROCESS
+     * announced in its own environment, so SHOW PROCESS reports what
+     * the process claims rather than what the executive holds -- the
+     * exact inversion of the Rule 11 corollary that a VMS command is a
+     * READER of an executive facility. The executive now holds the real
+     * mask (vms_kif_getjpi_self -> info.cur_privs); wiring this to it
+     * is blocked only on vms-9fc (no product process is registered, so
+     * $GETJPI cannot resolve one). See the block in dcl_main.c.
      */
-    printf("%-20s%s\n", "Default file spec:",
-           is_self ? ctx->default_dir : "Not available");
+    const char *privs = getenv("VMS_PRIVILEGES");
+    if (privs && privs[0]) {
+        printf("Privileges:        %s\n", privs);
+    } else {
+        printf("Privileges:        TMPMBX NETMBX\n");
+    }
+
+    /* Quotas — display standard VMS quota fields */
+    printf("\nProcess quotas:\n");
+    printf(" CPU limit:                    (none)  Direct I/O limit:          18\n");
+    printf(" Buffered I/O byte count quota: 20480  Buffered I/O limit:        18\n");
+    printf(" Timer queue entry quota:           10  Open file quota:           28\n");
+    printf(" Paging file quota:              65536  Subprocess quota:          8\n");
+    printf(" Default page fault cluster:        64  AST limit:                 23\n");
+    printf(" Enqueue quota:                    100  Shared file limit:          0\n");
+    printf(" Max detached processes:             0  Max active jobs:            0\n");
 
     return SS$_NORMAL;
 }

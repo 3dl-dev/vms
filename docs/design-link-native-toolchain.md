@@ -149,15 +149,6 @@ documented AS an OVMX choice (not a VMS fact):
 - ⚠️ Whether the EIHI binary-ident record (§5.5) applies on x86 ELF — OVMX chooses
   its ident carrier (likely the ELF NOTE, per §5.5) explicitly.
 - ⚠️ `NEVER`/`SPARE` keywords — treated as nonexistent unless later grounded.
-- ⚠️ **What a `PRIVATE_*` slot holds once the routine is gone.** The public docs
-  ground the *rule* (retire in place, never delete — §5.1/§5.3) and the *effect*
-  (a vector entry that is not in the GST), but they describe `PRIVATE_*` on a
-  symbol that still exists in the image; they do not say what the entry carries
-  when the routine has actually been removed. OVMX chooses: the slot keeps its
-  index and its name (diagnostics only), takes kind `OVMX_SV_RETIRED`, and has
-  `value = 0`, and every reader — `LINK.EXE find_universal()`, `ovmx_sv_at()`,
-  IMGACT `sv_find_named()` — skips it, so the 0 can never be called. Labelled
-  OVMX-original. First used for vmsprocess indices 9–16 (§7.6).
 
 ### 5.7 Activation resolution algorithm (OVMX, built on grounded pieces)
 map image → locate each referenced shareable image → check **GSMATCH** (§5.4) →
@@ -319,7 +310,7 @@ toolchain, and the worked template for the rest of the chain (`libvms` → `vmsl
    bindings arrive transitively through the lib's `.vms$imp` (§7.4).
 
 **vmsprocess concretely**: `LIBVMSPROCESS$SHR.EXE` exports the process-control
-universals (`vms_pcb_*`, `ast_*`, `access_mode_*`, `priv_*`,
+universals (`vms_pcb_*`, `eflag_*`, `ast_*`, `access_mode_*`, `priv_*`,
 `vms_get_current_process`/`vms_pid_from_linux`/`vms_format_uic`/`vms_parse_uic`)
 and imports `pthread_mutex_*`/`pthread_cond_*`, `malloc`/`calloc`/`free`,
 `memset`/`strncpy`/`snprintf`/`sscanf`, `getpid`, `close`/`raise`/`sigaction`/
@@ -333,27 +324,6 @@ LINK.EXE supports only one TLS-defining object per image (§7.7) — vmsprocess 
 shaped to fit that constraint rather than the constraint being lifted.
 Test: `src/imgact/test/run_vmsprocess_native.sh` (CI job `vmsprocess-native`,
 `vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)`).
-
-**First retirement in the tree — vector indices 9–16 (vms-2a8).** The vector
-originally exported eight `eflag_*` universals from `event_flags.c`, a
-*per-process* event-flag implementation. Event flags are executive-resident
-(CLAUDE.md Rule 11): they live in `src/kernel/vms_eflag.c` and are reached
-through `/dev/vms` by `src/libvms/syssvc/sys_event.c`, so `event_flags.c` was a
-facade and was deleted. Deleting its eight vector entries outright would have
-shifted every `ast_*`/`access_mode_*`/`priv_*` index below them — the one change
-the upward-compatibility rules forbid (§5.3). The grounded VMS answer is to
-**retire in place** (§5.1): the eight names became `PRIVATE_PROCEDURE`, keeping
-their positions as `OVMX_SV_RETIRED` slots with `value = 0`. `GSMATCH` stays
-`LEQUAL,1,0`, because nothing moved.
-
-This is what made the `PRIVATE_*` keywords real: `parse_kind()` previously
-folded them onto `PROCEDURE`, so `OVMX_SV_RETIRED` — already honoured by
-`find_universal()`, `ovmx_sv_at()`, IMGACT's `sv_find_named()` and
-`dump_image` — could not be produced from the command line at all. Both halves
-are asserted by `run_vmsprocess_native.sh`: the retired slots are still at
-indices 9–16 with `ast_init` still at 17, **and** a consumer object naming
-`eflag_set` fails to link (`%LINK-F-ERROR, unresolved external symbol
-'eflag_set'`). A retired slot is not a slot that still works quietly.
 
 ### 7.7 Known limitations (as-built, tracked)
 - **Multi-module TLS unsupported** — `emit_shareable` accepts only **one**

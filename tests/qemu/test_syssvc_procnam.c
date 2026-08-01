@@ -1197,21 +1197,11 @@ static int run_show_system_unpriv(char *out, size_t outsz)
 }
 
 /*
- * ROW GEOMETRY, ORACLE-PINNED (vms-6a7):
- * docs/oracle/vax73-show-system-process.md Section 1.1. A row is
- * "%08X %-15s %s" -- the pid starts at COLUMN ZERO, because that is where
- * OpenVMS VAX V7.3 puts it (counted through `cat -A` on VAX1). The three
- * helpers below used to expect " %08X ...", the one-column-indented format
- * OVMX printed before the geometry was measured; they are shifted, not
- * loosened -- every one still anchors on an exact column.
- */
-#define ROW_COL_NAME 9          /* Process Name field start */
-
-/*
  * row_for - the SHOW SYSTEM row naming `name`, or NULL.
  *
- * Matching is anchored on the name column so a name appearing in the
- * banner or in some other column cannot be mistaken for a row.
+ * A row is " %08X %-15s  %s": pid, process name, CPU. Matching is
+ * anchored on the name column so a name appearing in the banner or in
+ * some other column cannot be mistaken for a row.
  */
 static const char *row_for(const char *text, const char *name)
 {
@@ -1219,13 +1209,15 @@ static const char *row_for(const char *text, const char *name)
     size_t namelen = strlen(name);
 
     while (line && *line) {
-        int i;
-        for (i = 0; i < 8; i++)
-            if (!isxdigit((unsigned char)line[i]))
-                break;
-        if (i == 8 && line[8] == ' ' &&
-            strncmp(line + ROW_COL_NAME, name, namelen) == 0)
-            return line;
+        if (line[0] == ' ') {
+            int i;
+            for (i = 1; i < 9; i++)
+                if (!isxdigit((unsigned char)line[i]))
+                    break;
+            if (i == 9 && line[9] == ' ' &&
+                strncmp(line + 10, name, namelen) == 0)
+                return line;
+        }
         line = strchr(line, '\n');
         if (line) line++;
     }
@@ -1244,7 +1236,7 @@ static const char *row_for(const char *text, const char *name)
  */
 static int row_has_value_after_name(const char *row, const char *name)
 {
-    const char *p = row + ROW_COL_NAME + strlen(name);
+    const char *p = row + 10 + strlen(name);
 
     for (; *p && *p != '\n'; p++)
         if (*p != ' ' && *p != '\r')
@@ -1255,8 +1247,8 @@ static int row_has_value_after_name(const char *row, const char *name)
 /*
  * count_process_rows - how many process rows SHOW SYSTEM printed.
  *
- * A row is a line beginning at column 0 with eight hex digits (the Pid
- * column, "%08X "). The banner and the column headings do not match.
+ * A row is a line beginning with a space and eight hex digits (the Pid
+ * column, " %08X "). The banner and the column headings do not match.
  */
 static int count_process_rows(const char *text)
 {
@@ -1264,12 +1256,14 @@ static int count_process_rows(const char *text)
     const char *line = text;
 
     while (line && *line) {
-        int i;
-        for (i = 0; i < 8; i++)
-            if (!isxdigit((unsigned char)line[i]))
-                break;
-        if (i == 8 && line[8] == ' ')
-            rows++;
+        if (line[0] == ' ') {
+            int i;
+            for (i = 1; i < 9; i++)
+                if (!isxdigit((unsigned char)line[i]))
+                    break;
+            if (i == 9 && line[9] == ' ')
+                rows++;
+        }
         line = strchr(line, '\n');
         if (line) line++;
     }

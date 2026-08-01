@@ -1,5 +1,15 @@
 # Handoff — T1: OVMX survives cluster life as a MEMBER
 
+> ## ⇒ `vms-2f3` HAS ITS OWN HANDOFF NOW — read `docs/HANDOFF-vms-2f3.md`
+>
+> Item 1 of §5 below ("OVMX cannot rejoin") was worked on 2026-08-01 and moved a
+> long way: a **four-minute reproducer that needs no lab reset**, two frozen wire
+> fields found and fixed (`c302b7d`), and the failure narrowed to a single step —
+> the coordinator commits and rebuilds locks for a returning node and then never
+> opens the barrier. Nine hypotheses are killed there; check that list before
+> spending anything. The rest of §5 (`vms-c7d`, `vms-2d6`, `vms-416`, `vms-ae5`)
+> still stands as written.
+
 **Rewritten 2026-07-31, end of session i. Read `docs/HANDOFF-vms-760.md` §0 FIRST
 for the orchestrator doctrine — it still applies verbatim, and this session is
 more evidence for it: four capture agents produced every grounded finding below

@@ -58,7 +58,7 @@ $READELF -dW "$BIN/STARTUP.EXE" 2>/dev/null | grep -q NEEDED && fail "STARTUP.EX
 echo "  ok"
 
 echo "== executables: PT_INTERP=IMGACT.EXE, DT_HASH =="
-for exe in DCL.EXE LOGINOUT.EXE HELP.EXE; do
+for exe in DCL.EXE LOGINOUT.EXE VMSLNMD.EXE; do
     [ -f "$BIN/$exe" ] || fail "$exe not built"
     $READELF -lW "$BIN/$exe" | grep -q "$IMGACT_PATH" \
         || fail "$exe PT_INTERP != $IMGACT_PATH"

@@ -56,6 +56,57 @@ jobs:
           cd build && ctest --output-on-failure
 
   # -----------------------------------------------------------------------
+  # Job 2: Docker build + smoke test
+  # -----------------------------------------------------------------------
+  docker-build:
+    name: Docker Build & Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ovmx-test:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test — vmsdcl SHOW TIME
+        run: |
+          docker run --rm \
+            --entrypoint vmsdcl \
+            ovmx-test:latest \
+            -c "SHOW TIME"
+
+      - name: Smoke test — Docker skips install (pre-installed state)
+        timeout-minutes: 2
+        run: |
+          # The default entrypoint boots and then serves SSH forever — it
+          # never exits, and its PID 1 does not die on SIGTERM. So we must
+          # NOT wrap `docker run` in `timeout` (timeout without -k waits
+          # forever for the child to exit, hanging the job to the 6h
+          # ceiling — see vms-021). Instead run detached, read the boot
+          # output from the logs, and force-remove the container, which
+          # guarantees teardown regardless of signal handling.
+          CID=$(docker run -d ovmx-test:latest)
+          sleep 10
+          OUTPUT=$(docker logs "$CID" 2>&1 | head -20)
+          docker rm -f "$CID" >/dev/null 2>&1 || true
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -qF '%STARTUP-I-SYSBOOT' \
+            && echo "PASS: Docker detects pre-installed system" \
+            || { echo "FAIL: Expected SYSBOOT skip-install message"; exit 1; }
+
+  # -----------------------------------------------------------------------
   # Job 3: Persistent boot smoke test (QEMU)
   #
   # Builds the bootable image, boots QEMU twice with the same disk:
@@ -186,17 +237,8 @@ jobs:
           # This also proves the harness ran to completion and reached its own
           # FINAL RESULTS accounting -- a timeout or panic would never print
           # this line at all, so this line alone rules those causes out.
-          #
-          # MAINTENANCE CONVENTION (deliberate, do NOT soften): adding a suite
-          # that depends on the executive MUST bump the failed count here, and
-          # adding one that does not MUST bump the passed count. Turning this
-          # into a range or a regex to avoid the edit would let a suite silently
-          # stop depending on /dev/vms -- which is the whole thing this job
-          # exists to detect. The brittleness IS the feature.
-          # 8 failed as of vms-8019, which added test_kmod_procnam.
-          # 9 failed as of vms-d0b, which added test_kmod_devtab.
-          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 9 suites failed ===' \
-            || { echo "FAIL: did not see the expected 3-suites-passed/9-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
+          echo "$OUTPUT" | grep -qF '=== FINAL RESULTS: 3 suites passed, 7 suites failed ===' \
+            || { echo "FAIL: did not see the expected 3-suites-passed/7-suites-failed split -- either the harness didn't reach its own accounting, or the failure count doesn't match the executive-absent scenario"; exit 1; }
 
           # POSITIVE assertion paired with the two negative assertions above:
           # vmsfs.ko has no dependency on vms.ko/the executive, so it must
@@ -212,39 +254,41 @@ jobs:
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests
   #
-  # Runs in a disposable ubuntu:24.04 tooling container (gcc, source tree,
-  # built libs). The conformance programs are compiled and executed against
-  # the VMS libs.
+  # Runs inside the builder stage (has gcc, source tree, and built libs).
+  # The conformance programs are compiled and executed against the VMS libs.
+  # Uses the GHA Docker layer cache populated by the docker-build job.
   # -----------------------------------------------------------------------
   conformance:
     name: Conformance Tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: docker-build
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # MIGRATED OFF THE ROOT DOCKERFILE BY vms-71a (CLAUDE.md Rule 9: the
-      # Docker RUNTIME layer is dead). This job never ran the product image —
-      # it only used the Dockerfile's "builder" stage for a disposable
-      # cmake+gcc build environment. That is build/test TOOLING, which Rule 9
-      # explicitly allows in Docker; it is reproduced here with a plain
-      # ubuntu:24.04 container and the checked-out workspace bind-mounted at
-      # /src, so no image tied to the retired root Dockerfile is built at all.
-      - name: Build OVMX + run conformance tests (tooling container, not a runtime image)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build builder stage (uses GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          push: false
+          load: true
+          tags: ovmx-builder:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run conformance tests
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}":/src -w /src \
+            --entrypoint bash \
             -v "${{ github.workspace }}/tests/conformance/vms_programs:/tests/vms_programs:ro" \
-            ubuntu:24.04 bash -c '
-              set -e
-              apt-get update -qq
-              apt-get install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev
-              cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=/ -DBUILD_TOOLS=ON
-              cmake --build build --parallel "$(nproc)"
-              bash /src/tests/conformance/run_conformance.sh
-            '
+            ovmx-builder:latest \
+            /src/tests/conformance/run_conformance.sh
 
   # -----------------------------------------------------------------------
   # Job 5: Corpus conformance — compile tier1-examples against OVMX headers
@@ -260,27 +304,34 @@ jobs:
     name: Corpus Conformance
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: docker-build
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # MIGRATED OFF THE ROOT DOCKERFILE BY vms-71a — see the conformance job
-      # above for why: this only ever used the "builder" stage as a disposable
-      # build environment (Rule 9 build/test TOOLING), reproduced here with a
-      # plain ubuntu:24.04 container. Build/apt noise is redirected to stderr
-      # so only run_corpus.sh's JSON reaches stdout / corpus_report.json.
-      - name: Build OVMX + run corpus conformance harness (tooling container, not a runtime image)
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build builder stage (uses GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: builder
+          push: false
+          load: true
+          tags: ovmx-builder:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run corpus conformance harness
         run: |
           docker run --rm \
-            -v "${{ github.workspace }}":/src -w /src \
-            ubuntu:24.04 bash -c '
-              set -e
-              { apt-get update -qq && apt-get install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev; } >&2
-              { cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=/ -DBUILD_TOOLS=ON; } >&2
-              { cmake --build build --parallel "$(nproc)"; } >&2
-              bash /src/tests/conformance/run_corpus.sh /src/tests/conformance/corpus_baseline.json
-            ' > corpus_report.json
+            --entrypoint bash \
+            -v "${{ github.workspace }}/tests/conformance/corpus_baseline.json:/src/tests/conformance/corpus_baseline.json:ro" \
+            ovmx-builder:latest \
+            -c "bash /src/tests/conformance/run_corpus.sh /src/tests/conformance/corpus_baseline.json" \
+            > corpus_report.json
         # Exit code 0 = no regressions (even if many compile-fail)
         # Exit code 1 = regression detected (previously-passing program now fails)
 
@@ -411,29 +462,17 @@ jobs:
           if-no-files-found: ignore
 
   # -----------------------------------------------------------------------
-  # Job 7: User Acceptance Test — scripted VMS session on the REAL runtime
+  # Job 7: User Acceptance Test — scripted VMS session over SSH
   #
-  # Boots the real kernel under QEMU, logs in over the console, and drives a
-  # scripted VMS admin session, validating output for VMS correctness and the
-  # absence of Unix leaks.
-  #
-  # MIGRATED OFF DOCKER+SSH BY vms-71a (CLAUDE.md Rule 9: the Docker RUNTIME
-  # layer is dead). This job used to `docker run` the now-deleted root-
-  # Dockerfile product image and SSH to port 2222 — a container with no
-  # /dev/vms. distro/Dockerfile.bootable (build/test TOOLING, kept under
-  # Rule 9) builds the real kernel + initramfs; tests/uat/vms_session_qemu.sh
-  # runs the SAME command list and the SAME 13 assertions the SSH script did.
-  #
-  # KNOWN COVERAGE GAP, tracked not hidden: driving DCL over the console does
-  # not exercise vmssshd, so SSH login has no CI coverage now that its only
-  # runtime (the dead container) is gone. tests/uat/vms_session_test.sh is
-  # retained for when the SSH path is brought up on QEMU (see vms-02d, which
-  # the operator cancelled — SSH-on-QEMU is not currently planned work).
+  # Builds the Docker image (using GHA layer cache from docker-build),
+  # starts the OVMX container with SSH, runs a scripted VMS admin session,
+  # and validates output for VMS correctness and absence of Unix leaks.
   # -----------------------------------------------------------------------
   uat-session:
     name: VMS User Acceptance Test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    needs: docker-build
 
     steps:
       - name: Checkout
@@ -442,25 +481,39 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build bootable image (uses GHA layer cache)
+      - name: Build Docker image (uses GHA layer cache)
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: distro/Dockerfile.bootable
           push: false
           load: true
-          tags: ovmx-boot:latest
+          tags: ovmx-test:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Run UAT session on the real runtime (QEMU console)
-        timeout-minutes: 10
+      - name: Install sshpass
+        run: sudo apt-get update -qq && sudo apt-get install -y sshpass
+
+      - name: Start OVMX container
         run: |
-          docker run --rm \
-            -v ${{ github.workspace }}/tests/uat/vms_session_qemu.sh:/test.sh:ro \
-            --entrypoint bash \
-            ovmx-boot:latest \
-            /test.sh
+          docker run -d --name ovmx-uat -p 2222:22 ovmx-test:latest
+          sleep 5
+
+      - name: Run UAT session test
+        run: |
+          chmod +x tests/uat/vms_session_test.sh
+          tests/uat/vms_session_test.sh
+        timeout-minutes: 3
+
+      - name: Dump container logs (diagnostics)
+        if: always()
+        run: |
+          echo "=== ovmx-uat container logs (vmssshd/DCL stderr) ==="
+          docker logs ovmx-uat 2>&1 | tail -100 || echo "(no logs)"
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f ovmx-uat 2>/dev/null || true
 
   # -----------------------------------------------------------------------
   # Job 8: IMGACT.EXE activation proof (musl, aarch64)

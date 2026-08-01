@@ -80,26 +80,6 @@ void dcl_context_init(struct dcl_context *ctx)
     /* SET TERMINAL defaults — full characteristics model */
     vms_terminal_init(&ctx->terminal);
 
-    /*
-     * STOPGAP -- FACADE, NOT VMS (vms-d0b). Everything in this block
-     * decides what terminal this process is on by reading its own
-     * environment and, failing that, by handing itself a name out of a
-     * private pool. On VMS the answer comes from the executive's
-     * device table: $ASSIGN to the device, $GETDVI on the channel. A
-     * process cannot name its own terminal, which is exactly why a VMS
-     * terminal name means something to anyone else.
-     *
-     * As of vms-d0b the executive does have that table
-     * (src/kernel/vms_devtab.c: OPA0: exists at module init, carries an
-     * owner, a reference count and characteristics, and is readable by
-     * any process). This code has not been switched over to it because
-     * DCL is not yet built into the runtime where /dev/vms exists --
-     * see the vms-d0b escalation. When it is switched over, SHOW
-     * TERMINAL and SHOW DEVICE become readers of the executive and
-     * these getenv() calls go away entirely; they are not to be
-     * "improved" in place.
-     */
-
     /* Terminal device type: set from VMS_DEVICE_TYPE env var if present
      * (set by vmssshd from SSH TERM negotiation) */
     const char *env_devtype = getenv("VMS_DEVICE_TYPE");

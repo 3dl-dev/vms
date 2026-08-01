@@ -419,18 +419,6 @@ static void handle_connection(ssh_session session)
         /* Use SSH client's TERM value if provided, else default to vt100 */
         setenv("TERM", ssh_term[0] ? ssh_term : "vt100", 1);
 
-        /*
-         * STOPGAP -- FACADE, NOT VMS (vms-d0b). VMS_DEVICE_TYPE and
-         * VMS_TERMINAL below hand a terminal identity to the session
-         * through the environment, which is the rejected VMS_PRCNAM
-         * shape (CLAUDE.md rule 10): the session ends up telling
-         * itself what terminal it is on. A VMS terminal is a device in
-         * the executive's device table (src/kernel/vms_devtab.c as of
-         * vms-d0b), assigned with $ASSIGN and read with $GETDVI.
-         * Remote terminals are explicitly out of scope for vms-d0b --
-         * this site is marked, not fixed.
-         */
-
         /* Map SSH TERM to VMS device type */
         const char *vms_devtype = vmsssh_map_term_to_device_type(
             ssh_term[0] ? ssh_term : NULL);

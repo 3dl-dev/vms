@@ -204,6 +204,7 @@ eflag-clref-noop
 eflag-waitfr-eintr-normal
 lock-compat-ex-cr
 lock-compat-cr-ex
+lock-valblk-grant-not-delivered
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
 setterm-binding-not-recorded
@@ -641,6 +642,58 @@ under this mutation, because it checks only that the $ENQ returned SS$_NORMAL
 with a lock id -- which an immediate grant also satisfies. The assertion's text
 claims queueing; its condition does not test it. The assertions that DO catch
 it are the ones above.
+EOF
+                      ;;
+        esac;;
+
+    lock-valblk-grant-not-delivered)
+        case "$_f" in
+        facility)     echo "distributed lock manager -- value block delivery to a waiter that BLOCKED and was later granted (VMS_IOCTL_ENQ/DEQ/GETLKI), vms-413";;
+        targets)      echo "kernel/vms_lock.c";;
+        # MEASURED. try_grant_waiters() (vms_lock.c:412) is the SOLE call
+        # site that runs the mutated copy -- it fires from vms_ioctl_deq and
+        # from vms_proc_release_locks, never from the immediate-grant branch
+        # of vms_ioctl_enq (vms_lock.c:664-680) or from vms_ioctl_convert's
+        # immediate-conversion branch (vms_lock.c:876-899), both of which
+        # have their OWN, untouched, valblk copies. test_kmod_lock.c's
+        # "value block preserved across DEQ/ENQ" re-acquires UNCONTENDED and
+        # never reaches try_grant_waiters() at all; test_kmod_lock_mproc and
+        # test_syssvc_lock/test_syssvc_lock_status exercise cross-process
+        # contention but never set LCK_M_VALBLK on the request that blocks.
+        # test_kmod_lock_sync's scenario 4 (this control's reason for
+        # existing) is the only assertion anywhere in the tree that sets
+        # LCK_M_VALBLK on a request that is forced to queue and then reads
+        # the value back after grant.
+        suites_red)   echo "test_kmod_lock_sync";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "try_grant_waiters() stops copying res->valblk into a waiter's own lock->valblk at grant time (vms_lock.c:425-426, the memcpy's guard forced always-false). A process that blocked on a held resource and is later granted it now reads a stale or empty value block with a GOOD status -- the lock succeeded, the data is wrong. Every other valblk assertion in the tree re-acquires uncontended and never reaches this line, so nothing else can see it (vms-413).";;
+        require_fail) cat <<'EOF'
+child: GETLKI value block equals the PARENT's, not this lock's own pre-grant value (blocked-then-granted valblk delivery)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+parent: child (valblk grant) exited clean
+EOF
+                      ;;
+        knock_on_why) cat <<'EOF'
+ONE knock-on, and it is the child's own exit code, not a second property.
+child_valblk_grant()'s _exit() at the end of test_kmod_lock_sync.c's scenario
+4 is `_exit((fail - fail_at_entry) > 0 ? 1 : 0)` -- a DELTA against the
+per-process `fail` counter every CHECK() in that child increments, snapshotted
+at function entry precisely so an EARLIER scenario's already-failed state
+(inherited across fork(), see that snapshot's own comment) cannot be blamed on
+this child. Under this mutation exactly one CHECK in this child goes red (the
+valblk-equality assertion named in require_fail above); every other CHECK the
+child makes (the async ENQ queuing, the GETLKI granted_mode, its own DEQ) is
+untouched by a defect that only deletes a memcpy, so the delta is exactly 1
+and the child exits 1. The parent's WIFEXITED(ws) && WEXITSTATUS(ws) == 0
+check on that same child process then necessarily goes red too -- the same
+single defect, observed a second time through the child's exit status,
+exactly as lock-compat-cr-ex's "parent: child (completion AST) exited clean"
+knock-on above already establishes the pattern for a sibling scenario in this
+same file.
 EOF
                       ;;
         esac;;
@@ -2110,6 +2163,28 @@ apply_edit() {
         sed -i 's|/\* EX \*/ {  1,  0,  0,  0,  0,  0 },|/* EX */ {  1,  1,  0,  0,  0,  0 }, /* NEGCTL lock-compat-ex-cr */|' "$_file";;
     lock-compat-cr-ex)
         sed -i 's|/\* CR \*/ {  1,  1,  1,  1,  1,  0 },|/* CR */ {  1,  1,  1,  1,  1,  1 }, /* NEGCTL lock-compat-cr-ex */|' "$_file";;
+    lock-valblk-grant-not-delivered)
+        # The `if` guard, NOT the memcpy alone. ROUND 1 of this mutation
+        # replaced only the memcpy line, leaving
+        #     if (waiter->flags & LCK_M_VALBLK)
+        #         /* NEGCTL ... */
+        # -- a dangling `if` with no statement, so C's single-statement-body
+        # rule silently pulled the NEXT line (queue_completion_ast(waiter);)
+        # into the condition. That is a WORSE blunderbuss than deleting the
+        # whole function: it broke completion-AST delivery for every waiter
+        # WITHOUT LCK_M_VALBLK set too, corroborated live -- MEASURED, a run
+        # with that first form reddened test_kmod_lock_sync's scenario 3
+        # ("child: DELIVERAST returned completion AST", "parent: child
+        # (completion AST) exited clean"), a property this defect does not
+        # name and scenario 3 never sets LCK_M_VALBLK at all. Anchoring on
+        # the `if` line and forcing its condition to always-false with
+        # `0 &&` (the same idiom access-mode-escalation and
+        # ident-username-unguarded already use in this file) keeps the
+        # memcpy as the `if`'s only body statement, structurally inert, so
+        # nothing after it is affected. The anchor is the only occurrence of
+        # this exact `if` in the file, so a second apply finds no match --
+        # the no-op the selftest requires.
+        sed -i 's|            if (waiter->flags & LCK_M_VALBLK)|            if (0 \&\& (waiter->flags \& LCK_M_VALBLK)) /* NEGCTL lock-valblk-grant-not-delivered: no delivery */|' "$_file";;
     devtab-owner-not-recorded)
         # Range-anchored, NOT `0,/re/` (first-match). There are two
         # `dev->owner_pid =` writes -- $ASSIGN's implicit ownership and

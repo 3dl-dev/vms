@@ -4,12 +4,13 @@
 doctrine — it held again this session: every finding below came from agents or
 from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 
-> **START AT §4c.2b — it is the newest and it supersedes §0, §4b and §5 items
-> 1–2.** §1–§4 exist so you do not re-derive them, in particular §3 (things that
-> look like the answer and are not). §0 and §4b below are kept as written on
-> 2026-08-01 morning and are **partly superseded**: the join limp they describe
-> is real but is now FIXED by `OVMX_PURE_SERVER=1`, and the rejoin survives that
-> fix. §7 guardrails 18–19 are the most transferable thing here.
+> **START AT §4d — it is the newest and it supersedes §5's ordered plan, which
+> has now been executed through step 3.** §1–§4c exist so you do not re-derive
+> them, in particular §3 (things that look like the answer and are not). §0 and
+> §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
+> the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
+> and the rejoin survives that fix. §7 guardrails 18–19 are the most
+> transferable thing here.
 
 ---
 
@@ -49,6 +50,9 @@ reset.**
 | a class-0x03 crash removal quarantines the identity | **REFUTED — a real VAX3 crash-rejoins in ~90 s** | §4c.2c ⭐ |
 | a rejoin's `op 0x02` looks like a first join's | **REFUTED — 4 fields differ, 0 residuals; OVMX always sends the first-join form** | §4c.2e ⭐⭐ |
 | the abort is a timeout | **REFUTED — `op 0x04 role 0x50` fires 1.2 ms after our last correct echo** | §4c.2f |
+| the coordinator holds a stale CSB it compares us against | **REFUTED — VAX3 held none for us, allocated our CSID, aborted anyway** | §4d.1 |
+| …and `[22:24]`/`[28:36]` are inferred | **NO LONGER — SDA names them `Found Node SYSID` / `Founding Time`** | §4d.1 ⭐ |
+| **sending the rejoin form of `op 0x02` admits us** | **REFUTED — matched control, identical refusal with the form disabled** | §4d.2 ⭐⭐ |
 
 ## 1. The reproducer — four minutes, no reset
 
@@ -653,8 +657,153 @@ strongest remaining lead — see §5.**
 
 ---
 
+## 4d. SESSION k (2026-08-01 evening) — the ordered plan, executed steps 0–3
+
+**Read this before §5. §5's ordered plan is now DONE through step 3; what
+survives it is step 4 and the new material below.** Commit `e687c6b`.
+Five lab runs, one variable each, a verified control immediately before and
+after. No agents were used and no packet bytes were read by anything but the
+decoder scripts.
+
+### 4d.1 ⭐ Step 0 paid off twice — and VMS names the fields itself
+
+SDA `ANALYZE/SYSTEM` → `SHOW CLUSTER` on VAX3, taken 28 minutes after its
+crash-rejoin, and on VAX1 for comparison. Both render the Cluster Block as:
+
+```
+Found Node SYSID     000000000401
+Founding Time          1-AUG-2026
+                         12:03:09
+```
+
+and `004af82e3605bc00` — §4c.2e's `op 0x02` `body[28:36]` from the crash-rejoin
+specimen — decodes as a VMS absolute-time quadword to **exactly 1-AUG-2026
+12:03:09.60**. `0x0401` = 1025 = `[22:24]`.
+
+**So §4c.2e's two "INFERRED" fields are grounded against the peer's own oracle:
+`[22:24]` is the CLUB's founding-node SCSSYSTEMID and `[28:36]` is the CLUB's
+founding time.** That also kills the alternative reading (a node incarnation)
+for good: it is a cluster-scoped fact with one value per lab generation.
+
+**And we can identify the founding node from what members already send us.**
+No frame names it, but the founding node is the one member whose *own admission
+time* (`op 0x01 body[64:72]`, SDA's CSB `Ref. time`) **equals** the founding
+time — because founding the cluster is its admission. Over `d94-r1B`: three
+members, exactly one match (VAX1/1025), zero residuals, and SDA on two separate
+nodes independently says `Found Node SYSID 0x0401`. This is now implemented and
+it fired live in run `s1A`:
+`SCSD-I-CLUFOUND, node 1025 FOUNDED this cluster`. Learned, never computed.
+
+**The counter-evidence §4c.2e owed is settled, and it goes against the story.**
+VAX3 booted at 16:35 and coordinated `r1B`'s refusal at 16:40. Its CSB list
+holds `OVMXR1` (created *by* that attempt, CSID `00010008`, its `Index of next
+CSID` advanced to `0009`) and **no CSB at all for `OVMXR2`**, which died before
+VAX3 booted. VAX1 holds both, plus `OVMX`, all `CSID 00000000`. So VAX3 did not
+inherit dead CSBs at its own admission, held nothing about OVMXR1, **allocated
+us a CSID, and aborted anyway** — and all three consoles log the same three
+lines in the same hundredth of a second, with no objection from VAX1 or VAX2.
+The coordinator was not comparing our claim against its own memory of us.
+
+**The decision point is now exact.** Same round in, opposite verdict out:
+
+| | after the `op 0x05` lock-rebuild round | |
+|---|---|---|
+| `r2A` (**joined**) | `op 0x09` transition-open | **+27 ms** |
+| `r1B` (**refused**) | `op 0x04` role 0x50 ABORT | **+1.2 ms** |
+
+In `r1B` the coordinator sends OVMX five `op 0x05` — one naming each of the four
+nodes plus the newcomer again — and VAX1/VAX2 one each naming only the newcomer.
+**Every participant echoes correctly, OVMX included.** Then it aborts.
+
+### 4d.2 ⭐⭐ Steps 2–3 shipped, and a matched control refuted them
+
+`op 0x02` now takes the rejoin form when we hold a prior-admission record for
+this identity *and* the cluster we meet carries the founding time we were
+admitted to. Persisted beside the SYSGEN store (that store IS the identity the
+claim is about). `OVMX_REJOIN_FORM=0` forces the old shape.
+
+| run | identity | mode | result |
+|---|---|---|---|
+| `s1A` | `OVMXS1`/1242 **fresh** | pure | **JOINED, 27 s**; record written; no abort |
+| `s1B` | `OVMXS1` again, +95 s | pure, **rejoin form** | **REFUSED** |
+| `s1C` | `OVMXS1` again, +6 min | pure, **`REJOIN_FORM=0`** | **REFUSED, identical census** |
+| `s2A` | `OVMXS2`/1243 **fresh** | pure | **JOINED, 27 s** (closing control) |
+
+`s1B`'s `op 0x02` is byte-correct on the wire — `[20:22]=1 [22:24]=1025
+[28:36]=1-AUG-2026 12:03:09` — and **drew no answer at all**. So did `s1C`'s
+first-join form. Both stop at `op 0x14 ×3 | op 0x01 ×3`.
+
+**Sending the shape a real crash-rejoining VAX sends does not get us admitted.**
+That is the fourth confident root cause this item has killed, and §4c.2e called
+it in advance: *a candidate with a four-minute test, not a demonstrated gate.*
+The test was run. The answer is no.
+
+**Kept anyway** (guardrail 15). Real rejoins send this form, OVMX sent the
+first-join form on every rejoin it ever attempted, and that was wrong
+independent of what it explains. Conditional, kill-switched, and pinned by
+byte-exact tests in both directions.
+
+> **⚠ Note what `s1B`/`s1C` do NOT license.** Both refusals died *earlier* than
+> `r1B` did — no COMMIT, no lock-rebuild, no abort, so `CM-XITABORT-RECEIVED=0`
+> and the new instrument had nothing to log. Do not read that as "the refusal
+> moved earlier"; read it as *the refusal has more than one shape* (§2 already
+> shows `rej2` without `op 0x05` and `r1B` with it). The **only** claim these two
+> runs support is the one they were designed for: with one variable moved
+> between them, the form makes no difference.
+
+### 4d.3 Step 1 shipped, unexercised
+
+`SCSD-E-XITABORT` logs `cat 0x01 op 0x04` **role 0x50** (matched on the role
+slot — role 0x00 is a different SYSAP's opcode 4 and appears in successful
+joins, §3.4), and the run summary reports `CM-XITABORT-RECEIVED=N`. It did not
+fire in `s1B`/`s1C` because no abort was sent. **It is still worth having**: it
+is the difference between "the coordinator declined us" and "nothing happened",
+and until now those were indistinguishable in our logs.
+
+### 4d.4 A new honesty bug, grounded and filed — `vms-c9f`
+
+Every VMS quadword OVMX emits is **UTC**, and VMS absolute time is **local**.
+`scs_member_vms_time_now()` adds the 1858→1970 offset to `time(NULL)` and never
+converts. Peers render our incarnation exactly TZ-offset hours in the future:
+`r1B` started at host 16:40:33 EDT and both VAX1 and VAX3 hold
+`Incarnation 1-AUG-2026 20:40:33`, while the real nodes in the same dump sit at
+08:54 / 12:05 and the CLUB's founding time is 12:03 — all cluster-local. Visible
+independently in the `op 0x05` round, which names each subject and its
+incarnation: three VAXes in the 12:05 era and OVMX alone at 20:40.
+
+**Not the gate** — five first joins carrying the same 4-hour-future incarnation
+were admitted normally. It is `vms-70c`-class honesty debt. Note it would be
+invisible on a UTC host, so "cannot reproduce" is expected there.
+
+### 4d.5 What is left of the ordered plan
+
+Step 4 — **ungate the disk-discovery run** (§4c.8, `scsd.c` requires an inbound
+`op 6` on `SCS_DIR_OVMX_CONID` that never arrives on a rejoin) — is the only
+step not executed, and it is now the largest remaining behavioural difference
+between OVMX and a real joiner. §4c.2b item 3's bisect (was it the `op 0x02`
+shape or the disk-discovery run that fixed the join?) is still unrun and is one
+cheap run each.
+
+**And the shape of the question has changed.** Three sessions have now looked
+for a field we get wrong and found three real ones, none of which was the gate.
+The coordinator answers our `op 0x02` in 0.4 ms for a fresh identity and, for a
+returning one, either ignores it or runs the whole round and aborts — on state
+it already holds, in the same millisecond, with no objection from any peer.
+**Consider that the next thing to instrument is not a byte we send but the
+coordinator's own decision**: SDA on the *coordinator* polled during the stall
+(§4c.6 polled VAX1, which was not the coordinator in `r1B`), and the VMS
+connection-manager state its console exposes.
+
+---
+
 ## 5. ⚠ WHERE TO START NEXT SESSION
 
+> **⚠ THE ORDERED PLAN BELOW HAS BEEN EXECUTED THROUGH STEP 3 — see §4d.**
+> Step 0 grounded two fields and settled its own counter-evidence; steps 1–3
+> shipped in `e687c6b`; step 2 was then REFUTED as the gate by a matched
+> control. **Only step 4 (ungate the disk-discovery run) is unrun.** The rest of
+> this section is kept for its reasoning, not as instructions.
+>
 > **§5 items 1 and 2 below are SUPERSEDED by §4c.** Item 2 (`Ref. time`) is dead
 > — do not spend a commit on it. Item 1's framing ("why does the coordinator
 > stall") is wrong — the silence is ours. Item 3 has been executed; its result is
@@ -760,6 +909,7 @@ strongest remaining lead — see §5.**
 |  `tools/probe.sh` | drive any VAX console, capture between markers. |
 
 Run tags session j (part 2): `r1A` `r2A` joined, `r1B` `r2B` refused, `vax3crash` = the real-VAX crash-rejoin specimen. **Last SCSSYSTEMID used: 1241.**
+Run tags session k: `s1A` `s2A` joined (fresh, pure); `s1B` refused (rejoin form); `s1C` refused (`OVMX_REJOIN_FORM=0`, matched control). **Last SCSSYSTEMID used: 1243.**
 
 Run tags session i: `ctl1`, `inc1`, `inc2`, `fresh1`, `fresh2`, `keyB`, `keyC`,
 `rej2`, `rej3`. Session j: `g1A` (joined), `g1B` (refused, SDA-polled), `p1A`
@@ -802,6 +952,18 @@ takes cannot show that nothing moves.
     positive control means *the experiment is broken*, and "the lab saturated" is
     the seductive wrong answer because it explains the data and requires nothing
     of you. The lab was fine. Check what you actually put on the wire first.
+20. **A control that runs AFTER the negative is worth as much as one before.**
+    §4d's four runs bracket the experiment: a fresh identity joined 95 s before
+    `s1B` and again 4 minutes after `s1C`. Without the closing one, "both
+    refusals look the same" could still have meant "the lab stopped admitting
+    anyone halfway through". Bracket the experiment, do not merely precede it.
+21. **When a change you believe in fails, run it against its own kill-switch
+    before you interpret the failure.** `s1B` refused, and the tempting reading
+    was the same one that was wrong in §4c.2 — *the reference-correct shape
+    draws less response*. `s1C` (`OVMX_REJOIN_FORM=0`, same identity, same lab,
+    one variable) produced an identical census and reduced that to nothing. Ship
+    every wire change with the switch that turns it off, and use it in the same
+    session.
 17. **Measure the window you are actually naming.** §4b asserted a coordinator
     stall for a whole session. The coordinator's response latency was 0.4 ms and
     had been in our own logs the entire time; the 6.5 s belonged to the next

@@ -918,7 +918,8 @@ EOF
         # else could read (Rule 11). Now that it calls through, the SAME
         # short-circuited clash is visible at a FOURTH layer: a second
         # DCL.EXE's own SET PROCESS/NAME for a name a live process already
-        # holds must be refused with %SYSTEM-F-DUPLNAM. MEASURED (not
+        # holds must be refused with the two-line %SET-E-NOTSET /
+        # -SYSTEM-F-DUPLNAM shape. MEASURED (not
         # assumed) with the live mutation: this reddens exactly ONE
         # assertion in test_syssvc_setname, its own name for the same
         # property, listed below in knock_on_fail (a fourth observation of
@@ -936,7 +937,7 @@ EOF
         knock_on_fail) cat <<'EOF'
 starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM
 the service's name is released when the service dies
-SET PROCESS/NAME for a name already held refuses with the oracle-pinned %SYSTEM-F-DUPLNAM message
+SET PROCESS/NAME for a name already held refuses with the oracle-pinned two-line %SET-E-NOTSET / -SYSTEM-F-DUPLNAM shape
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'

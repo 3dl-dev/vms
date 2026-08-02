@@ -432,7 +432,7 @@ int main(void)
           "a third DCL.EXE ran SET PROCESS/NAME for the already-held name");
     CHECK(strstr(out, MSG_DUPLNAM) != NULL,
           "SET PROCESS/NAME for a name already held refuses with the "
-          "oracle-pinned %SYSTEM-F-DUPLNAM message");
+          "oracle-pinned two-line %SET-E-NOTSET / -SYSTEM-F-DUPLNAM shape");
 
     /* ---------------------------------------------------------------
      * Release the holder: LOGOUT it and wait for it to actually exit,
@@ -535,7 +535,16 @@ int main(void)
           "never appears anywhere in the output -- the executive was never "
           "handed a clipped, legal-looking name to silently accept");
 
-    const char *row2 = sys_row_for(out, BOUND_NAME);
+    /* The capture holds BOTH SHOW SYSTEM outputs. sys_row_for() scans from
+     * byte 0, so searching the whole capture would match the row printed
+     * BEFORE the refused rename -- and an implementation whose refusal WIPED
+     * the name would still pass. Cut the capture at the refusal message and
+     * search only what follows, so the POST-refusal SHOW SYSTEM is the only
+     * thing that can satisfy the assertion. */
+    const char *post_refusal = strstr(out, MSG_IVLOGNAM);
+    if (post_refusal)
+        post_refusal += strlen(MSG_IVLOGNAM);
+    const char *row2 = post_refusal ? sys_row_for(post_refusal, BOUND_NAME) : NULL;
     CHECK(row2 != NULL,
           "after the refused rename, SHOW SYSTEM still names this process "
           "with its PRE-EXISTING boundary name -- left UNCHANGED by the "

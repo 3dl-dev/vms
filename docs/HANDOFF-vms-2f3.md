@@ -274,9 +274,15 @@ oracle degrades before it errors.
     msgtype onto its lookup response; a real VAX always answers `0x4b` (336-frame
     census). Real bug, fixed and kept — **and not the gate.** `N1B`/`N1C`/`N1D`
     answer `0x4b` and are refused three times, between two joining controls.
-    The *observation* that the peer asks with `0x5b` only on a rejoin is
-    confirmed 7/7 and remains a useful free oracle; the *causal* reading of it
-    is dead.
+    The surviving observation, corrected in §4M.9, is a **transition**: in a
+    refused rejoin the peer's `MSCP$DISK` lookups stay `0x5b` for all four,
+    while every join reaches `0x4b` by the second. A join CAN carry a leading
+    `0x5b` (`N3A`). Useful free oracle; the causal reading is dead.
+14. **The peer's `cat 0x04` ack opcode (§4M.7).** Claimed as `op 0x00` on a
+    join vs `op 0x04`/`op 0x06` on a rejoin, from one run. **Refuted the same
+    session:** `N3A` JOINED with `op 0x04`; `N1D`/`N1E` were REFUSED with
+    `op 0x00`. Varies freely across both outcomes. This is §3 item 4's mistake
+    one category over, and `scsd.c:2804` warns about exactly it.
 
 ## 4. What DID land — two frozen fields, and the spec was wrong about one
 
@@ -2975,7 +2981,29 @@ the peer still asks the next one with `0x5b` and still refuses us.
 reports that the peer's directory connection to us is still establishing; it is
 not the peer reacting to what we put in the response.
 
-### 4M.7 ⭐⭐⭐ AND THE FIX MOVED THE DIALOGUE — the peer's ack carries a DIFFERENT OPCODE on a rejoin
+### 4M.7 ⛔⛔ RETRACTED IN FULL — BOTH CLAIMS REFUTED BY MY OWN KILL-SWITCH RUN
+
+> **Everything in this section as originally written is WRONG. It is kept, with
+> the heading, so nobody re-derives it.** It was written from ONE refused run
+> (`N1B`) without checking the two refused runs I already had on disk, and
+> without running the kill-switch. §4M.9 has the refutation and the guardrail.
+>
+> - **"The fix advanced the dialogue (inbound CM 4 → 7)" — REFUTED.** `N1E`, the
+>   same identity with `OVMX_DIR_MIRROR_MSGTYPE=1` (fix OFF), scores an
+>   identical `CMIN`=7 / `CMRESP`=1 / `CLUSTATE`=1. The 4-vs-7 gap is between the
+>   morning `M` session and the afternoon `N` session, **not** between fix-off
+>   and fix-on.
+> - **"On a rejoin the peers ack `cat 0x04 op 0x04`/`op 0x06`; on a join
+>   `op 0x00`" — REFUTED.** `N3A` **JOINED** with a leading `cat 0x04 op 0x04`.
+>   `N1D` and `N1E` were **REFUSED** with `op 0x00`. The opcode varies freely
+>   across both outcomes and discriminates nothing.
+>
+> **`scsd.c:2804` warned me in the source I had already read:** *"Matched on the
+> ROLE SLOT, never the opcode alone — op 0x04 role 0x00 is a different SYSAP's
+> opcode 4 and appears in SUCCESSFUL joins (handoff §3.4)."* This is §3 item 4's
+> mistake, repeated verbatim, one category over.
+
+### 4M.7-original (RETRACTED) — the peer's ack carries a DIFFERENT OPCODE on a rejoin
 
 Unlike §4e.4's ambiguous "we answered / it gave up sooner", this is
 unambiguous: the refused run gets **more**, not less.
@@ -3017,13 +3045,18 @@ This is the same bug class as the `0x7b` deafness of §4d.10 if OVMX ignores
 these: `cm_req` at `scsd.c:2764` covers only `CAT_CONFIG`/`CAT_MEMBERSHIP`/
 `CAT_DLM` — **`CAT_ACK` is not in the set.**
 
-### 4M.8 ⭐⭐⭐ §4L's ENTIRE DISCRIMINATOR IS GONE — the peer now populates the CSB, and STILL refuses
+### 4M.8 ⚠ THE CSB IS POPULATED IN A REFUSED REJOIN — but the ATTRIBUTION TO THE FIX IS RETRACTED
 
-**This is the largest single movement on this item, and it retires §4L's
-framing.** The peer's CSB for our identity, sampled live through `N1B` with
-`csbwatch.sh` — OVMX RUNNING at every sample (guardrail 22):
+> **⛔ THE ORIGINAL HEADLINE — "the peer NOW populates the CSB", crediting the
+> §4M fix — IS REFUTED BY `N1E` (§4M.9).** With the fix switched OFF the CSB is
+> populated identically. The *measurement* below is real and reproducible across
+> four refused runs; the *causal claim* was wrong and is withdrawn. Read the
+> "pre-fix" column as **"the morning `M` session"**, not as "without the fix".
 
-| field at T+5 s | §4L refused (**pre-fix**) | **`N1B` refused (post-fix)** | `N1A` admitted |
+**The peer's CSB for our identity, sampled live with `csbwatch.sh` — OVMX
+RUNNING at every sample (guardrail 22):**
+
+| field at T+5 s | §4L refused (**`M` session, am**) | **refused (`N` session, pm)** | `N1A` admitted |
 |---|---|---|---|
 | **Flags** | **`00000000` — NOTHING SET** | **`02040000 status_rcvd,vcc`** | `02060002 member,selected,status_rcvd` |
 | `Cpblty` | `00000008 ext_status` | **`00000A98 ext_status,cwcreprc,ipc_demult_conn`** | same |
@@ -3042,10 +3075,19 @@ recorded for the two ADMITTED controls at T+5 s.** The peer has received our
 status, applied it, and connected the VC.
 
 > **So §4L.3's single question — "why does the peer never set `vcc` and
-> `status_rcvd`" — is ANSWERED and RETIRED. It now sets both. And the rejoin is
-> still refused.** §4L was measuring a real symptom of the mirroring bug, not
-> the gate. Read §4L.1–§4L.9h as history: its *observations* stand, its framing
-> of the flag word as "the whole bug in one flag word" does not.
+> `status_rcvd`" — is NOT UNIVERSAL. In the `N` session the peer sets both on a
+> refused rejoin, and refuses anyway.** §4L's framing of the flag word as "the
+> whole bug in one flag word" therefore does not hold. **What caused the `M`/`N`
+> difference is UNKNOWN** — it is not the fix (§4M.9), and the two sessions are
+> 8 hours apart on the same pod.
+>
+> **This is almost certainly §4d.6's TWO REFUSAL SHAPES, and I walked straight
+> into the error the method rules warn about**: *"Establish which of the two
+> refusal shapes a run is before comparing it to any other run."* The `M`
+> refusals are the `s3B` "dropped on the floor" shape (`open`, `00000000`); the
+> `N` refusals are the other shape (`open`, fully populated, never selected).
+> **§4L.1 and §4M.8 are measurements of two DIFFERENT failure modes and must not
+> be diffed against each other.**
 
 **What is left is exactly two bits.** `02040000` → `02060002`: the peer never
 sets **`member`** and **`selected`**. Flat for the full 108 s across `N1B`,
@@ -3063,6 +3105,55 @@ Its wire correlates, both new and both grounded (§4M.7): the peer acks with
 `cat 0x04 op 0x04`/`op 0x06` instead of `op 0x00`, and never sends the
 `cat 0x01 op 0x05` lock/resource-rebuild step that immediately follows
 `op 0x03` on every join.
+
+### 4M.9 ⛔⭐ THE KILL-SWITCH RUN — it refuted two of my own claims in one run
+
+**`N1E` = `OVMXN1` rejoin with `OVMX_DIR_MIRROR_MSGTYPE=1` (the §4M fix OFF),
+same identity, same pod, same session, ONE variable. `N3A` = fresh `OVMXN3`
+(1310), closing control — JOINED.** The switch demonstrably worked: every `N1E`
+lookup logs `our resp msgtype=0x5b`, the pre-fix echo.
+
+| | `N1B` fix ON | **`N1E` fix OFF** | `M1B` (am) |
+|---|---|---|---|
+| verdict | REFUSED | REFUSED | REFUSED |
+| CSB flags @T+5 s | `02040000 status_rcvd,vcc` | **`02040000` — IDENTICAL** | `00000000` |
+| `CMIN` / `CMRESP` / `CLUSTATE` | 7 / 1 / 1 | **7 / 1 / 1 — IDENTICAL** | 4 / 0 / 1 |
+
+**With the fix switched off, everything I had credited to the fix is still
+there.** So §4M.7's "dialogue advance" and §4M.8's "the peer now populates the
+CSB" are both **withdrawn**. The `M`→`N` difference is a session/shape
+difference of unknown cause, not a fix effect.
+
+**What still stands after the kill-switch:** the mirroring bug is real and
+grounded (§4M.1/§4M.2, 336-frame census), the fix is reference-correct and
+kept, and it is **not the gate** (§4M.6 — three refusals bracketed by joins).
+
+**And the `0x5b` observation, CORRECTED.** §4M.1 claimed "zero `0x5b` in any
+join". That is **wrong** — `N3A` **joined** with a leading `0x5b`. The real
+pattern, 9/9 over every `N`-session run, is a **transition**, not a presence:
+
+| | `MSCP$DISK` lookup request msgtypes |
+|---|---|
+| **joins** (`N1A`,`N2A`,`N3A` +`M1A`,`M2A`,`M3A`) | reach `0x4b` by the 2nd lookup at the latest |
+| **refusals** (`N1B`,`N1C`,`N1D`,`N1E`) | **`5b 5b 5b 5b` — never reach the data phase** |
+
+Per `scs_dir.h:33` (`0x4b` = "once the SCS$DIRECTORY connection is up"), that
+says: **in a refused rejoin the peer's directory connection to us never comes
+up, and answering it correctly does not bring it up.** That remains a solid,
+cheap, free oracle. It is a symptom, not the cause — `N1E` proves our response
+does not drive it.
+
+> ### Guardrail 23 — earned expensively, twice in one session
+> **Run the kill-switch BEFORE you write down what your fix achieved, not
+> after.** Guardrail 21 said ship the switch and use it in the same session; I
+> shipped it, wrote two sections crediting the fix, and only then ran it. Both
+> sections were wrong. A fix and a session change landed together and I
+> attributed the session change to the fix.
+>
+> **And: check every run you ALREADY HAVE before naming a discriminator from
+> one.** §4M.7's `cat 0x04` claim died to `N1D`/`N1E`/`N3A`, all of which were
+> either already on disk or one command away. Cost: zero lab time to check,
+> two retracted sections for not checking.
 
 ### 4M.5 The test, and its kill-switch
 
@@ -3291,6 +3382,15 @@ takes cannot show that nothing moves.
     RUNNING at the moment of every CSB/CDT sample**; §4e.3, §4f.3, §4g and §4j all
     mix the two, and any claim of the form "the peer never allocates X for us"
     taken from a dead-OVMX sample must be re-taken live before it is trusted.
+23. **Run the kill-switch BEFORE you write down what your fix achieved.**
+    Guardrail 21 said ship the switch and use it in the same session. Not
+    enough: I shipped it, wrote two sections crediting the fix with a CSB
+    advance and a dialogue advance, and only then ran `N1E` with the fix off —
+    which showed both were there anyway. A code change and a lab-session change
+    landed together and I attributed the session change to the code. **Also:
+    check every run you already have before naming a discriminator from one.**
+    §4M.7's `cat 0x04` claim died to three runs that were already on disk or one
+    command away.
 17. **Measure the window you are actually naming.** §4b asserted a coordinator
     stall for a whole session. The coordinator's response latency was 0.4 ms and
     had been in our own logs the entire time; the 6.5 s belonged to the next

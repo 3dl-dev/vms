@@ -2374,7 +2374,14 @@ independent identity.
 > joined and refused runs (0 differing bytes of 132 across 4 frames). The bit is
 > unset for some other reason; §4h.2 made exactly this mistake and was refuted.
 
-### 4L.5 ⭐⭐⭐ THE PEER RECEIVED **ZERO** SEQUENCED MESSAGES FROM US — `Last seq num rcvd 0000`
+### 4L.5 ⭐⭐ THE STATUS-DERIVED CSB FIELDS ARE BLANK — and a counter reading that is NOT safe
+
+> **⚠ THIS SECTION'S ORIGINAL HEADLINE — "the peer received ZERO sequenced
+> messages from us" — OVERSTATES WHAT WAS MEASURED. See §4L.9c.** The wire shows
+> OVMX delivering `msgseq 1,2` to both peers in the refused run, and the mapping
+> from SDA's `Last seq num rcvd` to any wire counter is **not established**. The
+> flag word and the blank status-derived fields below are solid; the
+> zero-messages *interpretation* is not.
 
 Diffing the **whole** CSB block at T+5 s, not just the flag line. **The two
 admitted runs are identical to each other on every field**; the refused run
@@ -2399,14 +2406,19 @@ in *from our node-status message*:
 messages in every run. `Last seq num rcvd` is `0002` in both admitted runs and
 `0000` in the refused one.**
 
-> **The peer received ZERO sequenced messages from us across the entire 108 s of
-> the refused rejoin.**
+> **⚠ The plain reading — "the peer received ZERO sequenced messages from us" —
+> is REFUTED by the wire (§4L.9c). Treat the counter columns above as an
+> unexplained oracle disagreement, not as a measurement of delivery.**
 
-Everything else follows from that one fact: `status_rcvd` is unset because our
-status never arrived; `SWVers`/`HWName`/`Cpblty`/`Quorum/Votes`/`Lock mgr dir wgt`
-are blank or minimal because **those fields are populated FROM that message**;
-`vcc` is unset; §4k.5's `DISC-REQ` never comes because the peer is still waiting.
-One cause, not five symptoms.
+**What IS safe** is the cluster of blank fields. `SWVers`, `HWName`, `Cpblty`,
+`Quorum/Votes` and `Lock mgr dir wgt` are all populated from the joiner's
+node-status message, and in the refused run every one of them is blank or
+minimal while `status_rcvd` and `vcc` are unset — with two matched controls
+showing the fully-populated form. **The peer has not APPLIED our status to this
+CSB.** Whether that is because it never received it, received it and rejected it,
+or applied it to a block it then discarded, is *not* settled by this section —
+§4L.8 shows the frames are delivered, correctly enveloped and byte-identical, so
+"never received" is the least likely of the three.
 
 ### 4L.6 ⛔ SUPERSEDED — the hypothesis this created, and why it is NOT simply `vms-950`
 
@@ -2624,6 +2636,67 @@ anything sequenced.
 > restarts at `1` (§4k.3/§4k.8, grounded across three captures). If our `1` is
 > being rejected, the bug is that we answer into a context that should have been
 > torn down first — not the value.
+
+### 4L.9b ⛔⛔ THE SEQUENCE-CONTEXT HYPOTHESIS IS DEAD — refuted twice, independently
+
+**Refutation 1 — behavioural (`M3C`, a third attempt).** §4L.9a's premise was that
+the peer's surviving context expects `0023` while we send `1`. After `M3B` the
+peer's CSB was **already** in a fresh context — `Next seq. number 0002`,
+`Last seq num rcvd 0000`. So a third attempt sending `send_seq = 1` should have
+matched. **It was refused identically:**
+
+| `M3C` | CSB | flags | `nxt` | `rcvd` |
+|---|---|---|---|---|
+| T-PRE / T+0 | `879EC440` (M3B's, decayed) | `00000001 long_break` | `0002` | `0000` |
+| **T+2 s → end** | **NEW `879FD6C0`** | **`00000000`** | `0002` | `0000` |
+
+`XITDONE=0`, identity proven on the wire. **Refused from a fresh context, exactly
+as from a `removed` one.**
+
+**Refutation 2 — byte-level (`d94-M3B.pcap`).** Both sides carry `msgseq = 1` from
+their very first frame, on **both** peer connections. Peer→OVMX: VAX1 idx 146/147
+`msgseq 1,2`; VAX2 idx 194/195 `msgseq 1,2`. OVMX→peer: `msgseq 1,2` likewise.
+**A whole-capture scan for any frame in either direction carrying `msgseq > 20`
+returns ZERO hits.** The value `0022`–`0025` never appears on the wire at all,
+and there is no observable restart-to-1 transition because it starts at 1.
+
+**So the premise was false.** Do not revive it.
+
+### 4L.9c ⚠ AND THIS UNDERMINES §4L.5's HEADLINE — read that section with care
+
+The wire shows OVMX delivering `msgseq 1,2` to both peers in the refused run.
+SDA shows the peer's CSB reading `Last seq num rcvd 0000`. **The mapping between
+SDA's CSB sequence fields and the wire counters is NOT established** — the decode
+could not identify which wire field SDA renders, and its one candidate
+(magnitude-matching OVMX→VAX2's msgseq ending at 34 = `0x22`) is explicitly
+inference.
+
+**Therefore:**
+- **Still solid in §4L.5** — the flag word (`02040000 status_rcvd,vcc` vs
+  `00000000`) and the blank `SWVers` / `HWName` / `Cpblty` / votes /
+  `Lock mgr dir wgt`. Those are rendered values, not interpretations, and both
+  controls agree.
+- **NOT solid** — "the peer received ZERO sequenced messages from us." That is an
+  *interpretation* of `Last seq num rcvd`, and the wire contradicts the plain
+  reading of it. **§4L.5's headline overstates what was measured.**
+- The old CSB's `0022`/`0025` is most likely peer-internal residue attached to a
+  stale CSB object, since nothing on the wire continues those numbers.
+
+**What to do about it:** establish the SDA-field ↔ wire-field mapping before any
+further argument rests on those counters. That is its own small task and it makes
+every future CSB reading trustworthy.
+
+### 4L.9d ⭐ A clean result that survives all of this
+
+`M1B`, `M3B` and `M3C` all refuse, starting from **different** prior CSB states —
+`06040005 long_break,removed,status_rcvd,send_status` in the first two,
+`00000001 long_break` in the third. Every one of them gets a **new CSB with zero
+flags** and stalls there.
+
+> **The refusal does not depend on which decayed state the prior CSB is in, and
+> repeats indefinitely for the same identity.** That is consistent with §4c.2d's
+> pristine-`BRK_NON` result and extends it: not only is the first attempt refused,
+> every subsequent one is, from any prior state.
 
 ### 4L.10 Two further grounded results from the same decode
 

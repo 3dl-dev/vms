@@ -89,6 +89,18 @@
 #          measured before/after and for a genuine gap this control exposed
 #          while proving the point.
 #
+# And the controls (22 onward) that pin what 1-21 all take for granted: that
+# the text being read is PART OF THE PRODUCT. Every one of these was a clean
+# PASS on the revision of the gate that scanned raw source under src/ and
+# tools/ -- see their own definitions below for the measured numbers.
+#
+#   22 a caller in a file that is in NO CMakeLists                  -> RED
+#   23 a caller inside `#if 0`, in a file that IS built             -> RED
+#   24 a body and prototype exfiltrated into #included files        -> RED
+#   25 a tree that does not configure                               -> REFUSE
+#   26 an interface translation unit the build does not compile     -> REFUSE
+#   27 an exfiltrated body in a .inc that is NOT interface-private   -> RED
+#
 # Usage: test_kif_caller_census_negctl.sh [SRC_ROOT]
 
 set -u
@@ -112,20 +124,35 @@ fi
 
 # ---------------------------------------------------------------------------
 # A sandbox copy of exactly what the gate reads, plus tests/ -- which the gate
-# deliberately does NOT read, and case 5 exists to prove it.
+# deliberately does NOT credit, and case 5 exists to prove it.
+#
+# THE TOP-LEVEL CMakeLists.txt IS PART OF WHAT THE GATE READS NOW (rd vms-e2b).
+# The census no longer globs source text: it configures cmake and reads
+# compile_commands.json, so the sandbox has to be a configurable tree or every
+# control below would meet a refusal instead of the property it is testing.
+# Controls 25 and 26 are the ones that deliberately break that and require the
+# refusal.
 # ---------------------------------------------------------------------------
 ROOT="$WORK/tree"
 mkdir -p "$ROOT" "$WORK/orig"
 cp -a "$SRC_ROOT/src" "$ROOT/src"
 cp -a "$SRC_ROOT/tools" "$ROOT/tools"
 cp -a "$SRC_ROOT/tests" "$ROOT/tests"
+cp "$SRC_ROOT/CMakeLists.txt" "$ROOT/CMakeLists.txt"
 
 H="$ROOT/src/libvmssys/vms_kif.h"
 C="$ROOT/src/libvmssys/vms_kif.c"
 SHOW="$ROOT/src/vmsdcl/dcl_cmd_show.c"
 QTEST="$ROOT/tests/qemu/test_kmod_devtab.c"
+TOPCM="$ROOT/CMakeLists.txt"
+SYSCM="$ROOT/src/libvmssys/CMakeLists.txt"
+STRC="$ROOT/src/libvmssys/vms_string.c"
 
-MUTABLE="$H $C $SHOW $QTEST"
+MUTABLE="$H $C $SHOW $QTEST $TOPCM $SYSCM $STRC"
+
+# Files a control CREATES rather than edits. restore() removes them, because
+# a leftover fabricated caller would silently contaminate every later control.
+CREATED="$ROOT/src/libvmssys/kif_negctl_orphan.c $ROOT/src/libvmssys/vms_kif_close.inc $ROOT/src/libvmssys/vms_kif_close_proto.h $ROOT/src/libvmssys/vms_kif_ttsetmode.inc"
 
 key_of() { printf '%s' "${1#$ROOT/}" | tr '/.' '__'; }
 
@@ -142,6 +169,17 @@ restore() {
     for _f in $MUTABLE; do
         cp "$WORK/orig/$(key_of "$_f")" "$_f"
     done
+    for _f in $CREATED; do
+        rm -f "$_f"
+    done
+}
+
+# created_landed <file>: 0 if a control that CREATES a file really created it.
+# The counterpart of injection_landed() for the controls whose mutation is a
+# new file rather than an edit -- without it, a control whose creation silently
+# failed would run against an unmutated tree and blame the gate.
+created_landed() {
+    [ -s "$1" ]
 }
 
 # injection_landed <file>: 0 if it really differs from its pristine copy.
@@ -168,6 +206,10 @@ F_ORPHAN_DEF="with NO prototype in"
 F_ORPHAN_PROTO="with NO definition in"
 F_ORPHAN_OPCODE="kernel opcode(s) no wrapper in"
 F_ORPHAN_SEL="kernel selector(s) no wrapper in"
+# The two refusals the build-set reading added (rd vms-e2b). They are not
+# "properties fired"; they are the gate declining to measure at all.
+F_NO_BUILD="so there is no build set"
+F_NO_IFACE="is not in the product build set"
 
 # Every control forbids all three universe-pin fragments except the one it is
 # testing. They are spelled out at each call site rather than collected in a
@@ -744,6 +786,187 @@ expect_red "$H $C" \
     "$F_STALE" \
     "$F_UNDECL" "$F_MALFORMED" "$F_UNKNOWN" "$F_DUP" \
     "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL"
+
+# ---------------------------------------------------------------------------
+# 22-26. THE BUILD-SET AND PREPROCESSOR PROPERTIES (rd vms-e2b).
+#
+# 1-21 all ask a question about the SOURCE TEXT. 22-24 ask the question that
+# has to be settled before any of them mean anything: IS THIS TEXT PART OF THE
+# PRODUCT AT ALL? Each of the three was bought against the previous revision of
+# this gate, cheaply, and MEASURED -- the numbers below are what the gate
+# printed, not what it was expected to print:
+#
+#   22 a caller in a file that is in NO CMakeLists          -> RED
+#      ... 13 additive edits, one new file under src/libvmssys/ in no build
+#          and #included by nothing, plus retiring the declarations it
+#          "wires": rc=0, and the reached count went 31/44 -> 44/44. The
+#          number this gate hands the Phase 2 verdict, bought outright.
+#   23 a caller inside `#if 0` in a file that IS built     -> RED
+#      ... two lines appended to src/vmsdcl/dcl_cmd_show.c: rc=0, 44/32/12.
+#          The old reader was a text scan and was not preprocessor-aware.
+#   24 an entry point whose body and prototype are moved
+#      into #included files, and its declaration retired   -> RED
+#      ... EXFILTRATION: the entry point left the UNIVERSE rather than
+#          gaining a caller. rc=0 and the census printed 43 entry points
+#          instead of 44, with `cc -E -P` output byte-identical to pristine.
+#          Doing it to all 13 unwired wrappers at once printed "31 entry
+#          points -- 31 reached, 0 unwired" with all 13 still compiled.
+#   25 the tree cannot be configured at all                 -> REFUSE
+#   26 the interface TU is in no CMakeLists                 -> REFUSE
+#      ... 25 and 26 are not evasions, they are the NO-SILENT-FALLBACK rule.
+#          A census that quietly reverted to the old glob when the build set
+#          was unavailable would report the same PASS from a strictly worse
+#          measurement. Both assert the refusal AND forbid every property
+#          fragment, so a refusal that also claimed to have measured
+#          something would fail these.
+# ---------------------------------------------------------------------------
+
+ORPHAN="$ROOT/src/libvmssys/kif_negctl_orphan.c"
+
+# 22. FIXTURE CONSTRAINT, CHECKED RATHER THAN ASSUMED: the file must be in no
+#     CMakeLists. If some CMakeLists ever globs src/libvmssys/*.c, this file
+#     WOULD be compiled, it WOULD be a real product caller, and the control
+#     would be testing nothing while still reporting PASS.
+if grep -rq 'kif_negctl_orphan' "$ROOT" --include=CMakeLists.txt 2>/dev/null \
+   || grep -rq 'file(GLOB' "$ROOT/src/libvmssys" --include=CMakeLists.txt 2>/dev/null; then
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): control 22 needs a source"
+    echo "        file that the build does NOT compile, and src/libvmssys is"
+    echo "        globbed or already names it. Pick a directory that lists its"
+    echo "        sources; do NOT drop the control."
+    record_verdict "a caller in a file that is in no CMakeLists is not a product path" 0
+else
+    add_probe_decl
+    add_probe_def
+    printf '#include "vms_kif.h"\nvoid kif_negctl_orphan(void);\nvoid kif_negctl_orphan(void)\n{\n    (void)vms_kif_negctl_probe(1);\n}\n' > "$ORPHAN"
+    if ! created_landed "$ORPHAN"; then
+        echo "  FAIL: BROKEN FIXTURE (not a broken gate): control 22 could not"
+        echo "        create ${ORPHAN#$ROOT/}, so it ran against a tree with no"
+        echo "        fabricated caller in it and proved nothing."
+        record_verdict "a caller in a file that is in no CMakeLists is not a product path" 0
+        restore
+    else
+        expect_red "$H $C" \
+            "a caller in a file that is in no CMakeLists is not a product path" \
+            "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+            "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+            "$F_NO_BUILD" "$F_NO_IFACE"
+    fi
+fi
+
+# 23. The same call, in a file the build DOES compile, inside `#if 0`. The
+#     subject is src/vmsdcl/dcl_cmd_show.c because it is a real product
+#     translation unit with real vms_kif callers in it -- so the only thing
+#     distinguishing this call from its neighbours is the dead preprocessor
+#     block around it.
+add_probe_decl
+add_probe_def
+printf '\n#if 0\nvoid kif_negctl_dead_block(void);\nvoid kif_negctl_dead_block(void)\n{\n    (void)vms_kif_negctl_probe(1);\n}\n#endif\n' >> "$SHOW"
+expect_red "$H $C $SHOW" \
+    "a caller inside #if 0 does not count, even in a file that is built" \
+    "vms_kif_negctl_probe" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_BUILD" "$F_NO_IFACE"
+
+# 24. EXFILTRATION. vms_kif_close is the subject for the same reason control 14
+#     uses it: its body issues no opcode and names no selector, so nothing on
+#     the kernel side fires and the undeclared property can be asserted alone.
+#     Body -> vms_kif_close.inc, prototype -> vms_kif_close_proto.h, both
+#     #included straight back, declaration retired. Nothing is deleted and
+#     nothing dangles; the entry point simply stops being visible to a reader
+#     that looks at two files instead of at the translation unit.
+sed -n '/^void vms_kif_close(void)$/,/^}$/p' "$C" > "$ROOT/src/libvmssys/vms_kif_close.inc"
+sed -i '/^void vms_kif_close(void)$/,/^}$/c\
+#include "vms_kif_close.inc"' "$C"
+echo 'void vms_kif_close(void);' > "$ROOT/src/libvmssys/vms_kif_close_proto.h"
+sed -i 's|^void vms_kif_close(void);$|#include "vms_kif_close_proto.h"|' "$H"
+# Retire the declaration by replacing the token, so the enclosing comment stays
+# terminated -- deleting the line would swallow the prototype below it.
+sed -i 's|OVMX-UNWIRED: vms_kif_close (vms-a86)|(retired by negctl 24)|' "$H"
+if ! created_landed "$ROOT/src/libvmssys/vms_kif_close.inc" \
+   || ! created_landed "$ROOT/src/libvmssys/vms_kif_close_proto.h"; then
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): control 24 extracted an"
+    echo "        empty body or prototype -- its anchor no longer matches, so"
+    echo "        the tree it ran against was not the evasion. Re-anchor it."
+    record_verdict "a body moved into an #included .inc does not leave the census" 0
+    restore
+else
+    expect_red "$H $C" \
+        "a body moved into an #included .inc does not leave the census" \
+        "vms_kif_close
+$F_UNDECL" \
+        "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+        "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+        "$F_NO_BUILD" "$F_NO_IFACE"
+fi
+
+# 25. NO SILENT FALLBACK, part one: the tree does not configure. The gate must
+#     REFUSE, not quietly read source text instead.
+# A parse error rather than an empty file: MEASURED, an EMPTY CMakeLists.txt
+# still configures successfully (cmake rc=0) and the gate then refuses one step
+# later, at "configured but produced no compile_commands.json" -- a different
+# refusal, and this control is about the configure failing.
+printf 'this_is_not_a_cmake_command(\n' > "$TOPCM"
+expect_red "$TOPCM" \
+    "a tree that does not configure is a REFUSAL, not a fallback to a glob" \
+    "$F_NO_BUILD" \
+    "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_IFACE"
+
+# 26. NO SILENT FALLBACK, part two, and the sharper half: the tree configures
+#     fine, but the INTERFACE ITSELF is compiled by nothing. Every reading in
+#     the census would then be describing dead source, and a PASS would mean
+#     the opposite of what it says.
+sed -i '/^    vms_kif\.c$/d' "$SYSCM"
+expect_red "$SYSCM" \
+    "an interface translation unit the build does not compile is a REFUSAL" \
+    "$F_NO_IFACE" \
+    "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_BUILD"
+
+# ---------------------------------------------------------------------------
+# 27. THE ROUTE AROUND 24, and the one that made section 1 grow a third
+#     definition reading. 24 relies on the exfiltrated .inc being PRIVATE to
+#     the interface translation unit -- so make it not private: mark the
+#     function `static`, so two translation units can each hold a copy and the
+#     product still LINKS, and #include the .inc from vms_kif.c AND from one
+#     other product file. Then delete the prototype, retire the declaration,
+#     and add a floor reference so the raw opcode floor stays satisfied.
+#     Nothing dangles, nothing is stranded, and the entry point is gone.
+#
+#     MEASURED (vms-e2b): this took the census from 44 entry points to 43 with
+#     rc=0 -- on the previous gate AND on this one, until the namespaced third
+#     reading of the interface TU landed. It is caught now because the function
+#     KEEPS ITS NAME. The same evasion composed with a rename out of the
+#     vms_kif_ namespace is a residual this suite does NOT close; it is written
+#     up, with its recipe and its measured numbers, in the gate's own
+#     "WHAT THIS GATE DOES NOT SEE" section, and it is not silently absent.
+# ---------------------------------------------------------------------------
+TTINC="$ROOT/src/libvmssys/vms_kif_ttsetmode.inc"
+sed -n '/^uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,$/,/^}$/p' "$C" > "$TTINC"
+sed -i 's|^uint32_t vms_kif_ttsetmode(|static uint32_t vms_kif_ttsetmode(|' "$TTINC"
+sed -i '/^uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,$/,/^}$/c\
+#include "vms_kif_ttsetmode.inc"' "$C"
+printf '\n#include "vms_kif_ttsetmode.inc"\n' >> "$STRC"
+sed -i '/^uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,$/,/uint32_t width, uint32_t page);$/d' "$H"
+sed -i 's|OVMX-UNWIRED: vms_kif_ttsetmode (vms-a36)|(retired by negctl 27)|' "$H"
+printf '\nenum { kif_negctl_floor_ref = (int)VMS_IOCTL_TTSETMODE };\n' >> "$C"
+if ! created_landed "$TTINC"; then
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): control 27 extracted an"
+    echo "        empty body -- its anchor no longer matches vms_kif.c, so the"
+    echo "        tree it ran against was not the evasion. Re-anchor it."
+    record_verdict "an exfiltrated body in a NON-private .inc does not leave the census" 0
+    restore
+else
+    expect_red "$H $C $STRC" \
+        "an exfiltrated body in a NON-private .inc does not leave the census" \
+        "vms_kif_ttsetmode
+$F_UNDECL" \
+        "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+        "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+        "$F_NO_BUILD" "$F_NO_IFACE"
+fi
 
 echo "  controls: $passed passed, $failed failed"
 if [ "$status" -eq 0 ]; then

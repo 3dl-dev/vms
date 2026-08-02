@@ -179,6 +179,20 @@
 #     by the SOURCE scan, so a sys$ definition there is still in the universe;
 #     what the exclusion costs is alias detection inside the kernel module,
 #     which links nothing into libvms and exports no sys$ symbol today.
+#   - IT MAKES THIS GATE'S DEPENDENCIES THE WHOLE PRODUCT'S DEPENDENCIES, and
+#     that is a real cost, paid on purpose. Every product .c file is compiled
+#     here whether or not CMake would configure it, so a source guarded by an
+#     OPTIONAL third-party library still has to build: src/vmsssh/vmssshd.c
+#     includes <libssh/libssh.h>, so an environment without libssh-dev
+#     compiles 126 of 127 files and this gate REFUSES rather than certifying a
+#     universe with a hole in it (measured, vms-ecf r5 -- it reddened the CI
+#     Build & Test job, correctly). The fix taken was to install the
+#     dependency in the job that runs this gate, NOT to tolerate the short
+#     count; see the comment on that step in .github/workflows/ci.yml. If a
+#     future source genuinely cannot be compiled in any environment that runs
+#     this gate, the second legal answer is to extend SYMSCAN_EXCLUDE_DIR and
+#     say why HERE -- visibly, with what the exclusion costs -- never to skip
+#     the file quietly.
 #
 # A definition with no prototype is NOT a red. It is still in the universe and
 # still needs a declaration; sys$fao_count_args is the live example -- an

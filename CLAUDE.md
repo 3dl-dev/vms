@@ -222,7 +222,25 @@ vms/
    - **Cluster wire protocols** (SCS/NISCA/NISCS/MSCP/DLM) — from lab observation + the Cluster Systems manual, IDSM, `$SSDEF`/`$LCKDEF`, etc.
    - **The link/image toolchain** (object/image/symbol-vector/GSMATCH/ident formats for LINK.EXE + IMGACT) — from the VSI OpenVMS Linker Utility Manual, the I64/x86 porting guides, and other public docs. Where the public docs do NOT publish a byte-level layout, OVMX defines its **own** representation and LABELS it as an OVMX design choice — never presented as VMS-authentic (see `docs/design-link-native-toolchain.md`).
 
-   NEVER disassemble, decompile, or copy VSI/HPE source or binaries; never paste leaked VMS source. This is what makes the interop RE legally protected (DMCA 1201(f), EU SW Directive Art. 6) — it is not optional. The reference lab lives at `~/vax/cluster/` (see its `README-lab.md`).
+   NEVER disassemble, decompile, or copy VSI/HPE source or binaries; never paste leaked VMS source. This is what makes the interop RE legally protected (DMCA 1201(f), EU SW Directive Art. 6) — it is not optional.
+
+   **Where the reference lab is (updated 2026-08-02 — the old `~/vax/cluster/` path is dead):**
+
+   - **Lab-1, the hand-run lab: `/data/training/vax/cluster/`** (see its `README-lab.md`). Dev moved
+     to the `workshop` VM on 2026-08-01 and the lab dataset moved to ZFS `tank/vax`, surfacing there
+     via virtiofs. Every lab path in older docs and handoffs still says `~/vax` — swap the prefix.
+     **Lab-1 is single-instance and is usually held by whatever investigation is live** (as of this
+     writing, `vms-2f3`). Do not disturb a running lab-1 session.
+   - **Lab-2, labs on demand: `tests/lab/`** (`vms-a5c`). A k3s StatefulSet where **one pod is one
+     complete, isolated 2-node VMScluster** — each replica clones its own disks and builds its own
+     `br0`+taps inside its own pod netns, so replicas cannot see each other or the cluster LAN and
+     all of them reuse SCSSYSTEMID 1025/1026/1027 by design. `kubectl -n ovmx-lab scale sts/vaxlab
+     --replicas=N` is the whole capacity story. **If you need a lab and lab-1 is busy, take a lab-2
+     replica — do not queue.** Read `tests/lab/README.md` before driving one; it carries the console
+     protocol, the four traps, and the wire comparison against lab-1 *including what that comparison
+     does not prove*.
+
+   Both labs are observation oracles under this rule, and neither changes what it permits.
 
 9. **One runtime target: the kernel/QEMU path (HARD INVARIANT)**. Operator ruling 2026-07-28 — the
    Docker *runtime* layer is **dead**. OVMX has exactly **one** runtime: the real-kernel / QEMU path,

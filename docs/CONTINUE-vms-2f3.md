@@ -77,12 +77,30 @@ diffed against each other.** What makes a run take one shape or the other is
 **unknown and is now the most valuable open question** — it is the difference
 between "the peer never hears us" and "the peer hears us and declines".
 
-**The question, re-posed for the `N` shape (§4M.8):**
+**⭐ THE FRONTIER — §4M.11, a 90-MILLISECOND WINDOW NAMED BY THE PEER ITSELF.**
+VAX2's console is never touched by `csbwatch` (which parks VAX1 in SDA), and
+VMS prints the whole membership dialogue to OPCOM. Both outcomes are identical
+up to and including `proposed addition of node X`:
 
-> The peer has our status, capabilities, votes, incarnation and an open VC, and
-> has allocated every structure. **What SELECTS a node for membership, and what
-> does the peer check there that a returning identity fails and a fresh one
-> passes?**
+| | fresh join (`N3A`) | **returning identity** (`N1B`–`N1E`) |
+|---|---|---|
+| `received membership request` | yes | yes |
+| `proposed addition of node X` | yes | **yes, every time** |
+| `completed VAXcluster state transition` | **+0.09 s** | **NEVER** |
+| what ends it | — | our process exits 115 s later → `lost connection` → `aborted` |
+
+> **Between `proposed addition` and `completed state transition` a real VMS
+> cluster does something that takes 90 ms for a fresh identity and never
+> finishes for a returning one. WHAT IS THAT STEP?**
+
+Prime suspect: the **barrier round**. `SCSD-I-BARRIER` is 12 in every join and
+**0** in every refusal — the coordinator never opens a barrier step with us.
+
+**Next experiment:** matched pair with VAX2's console AND a pcap, aligned on the
+`proposed addition` OPCOM timestamp, and identify the first frame the join has
+that the rejoin does not. The console anchor is what every previous attempt at
+this comparison lacked. **Use only the timestamped `Node X (csid …)` OPCOM
+lines — the bare `%CNXMAN,` echoes interleave out of order (guardrail 24).**
 
 **The one surviving wire correlate (§4M.9), a symptom not a cause:**
 

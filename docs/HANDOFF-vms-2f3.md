@@ -2783,9 +2783,29 @@ anything wrong with OVMX generally would break the fresh join too, and anything
 inherent to the rejoin path would break the real node too. **The answer must be
 something the peer checks only on a rejoin, whose value differs only for us.**
 
-The `[22:24]` incarnation echo was the obvious candidate of exactly that shape
-and is dead (§4k.9 — we emit the reference value). Finding the next field of that
-shape is the work.
+**Two candidates of exactly that shape are already dead — do not re-propose
+either:**
+
+1. **The `[22:24]` incarnation echo** (§4k.9). We emit the reference value; the
+   field reads identically on a real rejoin and ours.
+2. **OVMX's own rejoin-mode behaviour, driven by the prior-admission sidecar.**
+   `cm_apply_rejoin_form()` (`scsd.c:1129`) changes our `op 0x02` shape only when
+   we hold a prior-admission record for the *same* cluster — the single largest
+   OVMX-side "only on a rejoin" difference there is. **`OVMX_REJOIN_FORM=0`
+   forces the first-join form and was run as `s1C` in session k: still refused**,
+   matching `s1B` with the form on. Deleting the sidecar amounts to the same
+   test, so it is not worth a run.
+
+So the answer is most likely **not** something OVMX does differently on a rejoin
+— we have now switched off the main one and nothing changed. It is more likely
+something the peer checks against state it holds, whose value a real returning
+node satisfies and we do not. Finding the next field of that shape is the work.
+
+> **Method reminder before the next hypothesis:** §3 now holds 12 killed
+> entries and §4L alone killed seven more. **Read both lists before proposing
+> anything**, and prefer a check against our own source or run logs over a
+> capture — this session refuted four hypotheses that way in minutes each, and
+> wrote no code for any of them.
 
 ### 4L.10 Two further grounded results from the same decode
 

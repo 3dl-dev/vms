@@ -33,10 +33,19 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > **§5's ordered plan is now FULLY EXECUTED — step 4 was run in §4e.4 and is
 > refuted as the gate. Do not re-propose it.** **§4f–§4g are newer still: §4f proves the
 > deciding state is the CLUSTER's, not ours; §4g shows the peer asks for our disk
-> server, is told yes, and declines to connect. START AT §4h then §4i. The CDT layer is
+> server, is told yes, and declines to connect. **START AT §4j — it is the newest and
+> it CORRECTS §4h.** Then §4h and §4i for background. The CDT layer is
 > excluded for everyone; the peer's CSB shows the rejoin attempt itself clearing
 > `removed`/`status_rcvd` and zeroing the CSID; and §4i found a real ack bug that
-> explains the PEDRIVER collapse but is NOT the gate.** §1–§4c exist so you do not re-derive
+> explains the PEDRIVER collapse but is NOT the gate.
+>
+> **§4j is the real-node control and it moves the target.** A SIGKILLed real VAX
+> leaves a CSB *identical* to a dead OVMX identity's — so our surviving CSB is
+> not the asymmetry (§3 item 10), and CSID zeroing is normal readmission, not
+> damage. What a real node gets and OVMX never does is a **brand-new CSB at a new
+> address with a freshly allocated CDT**; OVMX's old CSB is mutated in place and
+> stays in `09 wait`. The failure is therefore EARLIER than the membership
+> protocol.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and
 > §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
 > the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
@@ -209,6 +218,14 @@ oracle degrades before it errors.
    both fail in a **different place** (never reach `STARTDONE`; 80 `STARTRX`).
    These are documented-illegal configurations, not discriminators. Do not cite
    them as evidence about the rejoin.
+10. **OVMX's surviving CSB on the peer is the asymmetry.** Killed by the
+    real-node control (§4j.1): a SIGKILLed real VAX2 leaves a CSB whose state,
+    flag word (`06040005 long_break,removed,status_rcvd,send_status` `vcc`),
+    absent CDT and retained CSID are **identical** to a dead OVMX identity's, in
+    the same dump from the same peer — and it rejoins anyway. Holding a CSB is
+    normal. Related and also dead: **CSID zeroing at the rejoin attempt is
+    damage** — the real node's readmitted CSB carries `CSID 00000000` too
+    (§4j.3, which corrects §4h).
 
 ## 4. What DID land — two frozen fields, and the spec was wrong about one
 
@@ -1726,6 +1743,144 @@ for correctness (guardrail 15), not as an attempt at the rejoin.**
 
 ---
 
+## 4j. ⭐⭐⭐ THE REAL-NODE CONTROL — a dead real node's CSB is IDENTICAL to ours, and readmission REPLACES it
+
+**Run `C1`, `tools/csbcycle.sh vaxlab-0 C1`, lab-2 pod `vaxlab-0`.** SIGKILL the
+real VAX2, sample SDA `SHOW CLUSTER` on VAX1 every 14 s across kill → removal →
+reboot → readmission. The pod also carried two OVMX identities, so **all three
+histories appear in the SAME dump, from the same peer, in the same run** — the
+in-frame control set §4h could not have.
+
+**Identity provenance, proven from the run logs, not assumed:**
+
+| identity | runs | verdict |
+|---|---|---|
+| `OVMXL3` | `L3` 02:02 (virgin) → `L3b` 02:07 (same identity) | `JOINED` → **`NOT JOINED`** = refused rejoin |
+| `OVMXL4` | `L4` 02:07 (virgin), never returned | `JOINED`, then died |
+| `VAX2` | real node, SIGKILLed 02:10:59, rebooted 02:12:24 | readmitted 02:12:52 |
+
+Both OVMX runs logged `identity on the wire: OVMXL3`/`OVMXL4`, so each reached
+the wire under the name it claims.
+
+### 4j.1 ⭐⭐⭐ The answer: a dead real node keeps a CSB, and it is OUR CSB exactly
+
+For the 85 s it was dead, VAX2's CSB was **byte-identical in flags to a dead
+OVMX identity's**:
+
+| identity | state | CSID | Flags | CDT |
+|---|---|---|---|---|
+| `VAX2` dead (T+28s…T+99s) | `09 wait` | `00010002` | `06040005 long_break,removed,status_rcvd,send_status` `vcc` | `00000000` |
+| `OVMXL4` joined, died | `09 wait` | `00010004` | `06040005 long_break,removed,status_rcvd,send_status` `vcc` | `00000000` |
+
+**Identical.** Same state, same flag word, same absent CDT, CSID retained by both.
+
+**So: DOES a dead real node keep a CSB? YES. Does it pass through `send_status`?
+YES — the entire time it is dead. Does it LEAVE it? YES.** Per the decision rule
+this run was built on: **holding a CSB is not the problem, and what the peer does
+with it is.** Every theory in which OVMX's surviving CSB is itself the asymmetry
+is now dead — a real node's is indistinguishable from ours.
+
+### 4j.2 ⭐⭐⭐ Readmission ALLOCATES A NEW CSB — it does not repair the old one
+
+At `T+113s` VAX2 returns, and the CSB **address changes**:
+
+| sample | VAX2 CSB address |
+|---|---|
+| `T-PRE` … `T+99s` (9 consecutive samples) | `87935140` |
+| `T+113s` | **`879F4080`** |
+
+The old block is *gone from the dump entirely* — not present in the CSB list nor
+as a block. `OVMXL3`/`OVMXL4`/`VAX1` addresses never move across any sample, so
+this is not renumbering. The new block is visibly fresh: `CSID 00000000`,
+`LNM Seqnum 0000000000000000`, `Ref. time 1-JAN-2001 00:00:00` (uninitialised),
+`Ref. count 1`, a **new CDT `8794B0C0`** and a new SB `8794C940`.
+
+**And that is exactly what OVMX never gets.** The three-way contrast, one dump:
+
+| | dead (both) | **real** rejoin `T+113s` | **OVMX** rejoin `OVMXL3` |
+|---|---|---|---|
+| CSB | — | **NEW address** `879F4080` | same address `879F2780`, degraded in place |
+| State | `09 wait` | **`01 open`** | `09 wait` |
+| `long_break` | set | **CLEARED** | **set** |
+| `status_rcvd` | set | **retained** | **CLEARED** |
+| `removed` | set | cleared | cleared |
+| CSID | retained | `00000000` | `00000000` |
+| CDT | `00000000` | **`8794B0C0` allocated** | `00000000` |
+| Flags | `06040005` | `02040000 status_rcvd,vcc` | `04000001 long_break,send_status` |
+
+The discriminator pair is **inverted**: a real return clears `long_break` and
+keeps `status_rcvd`; an OVMX return keeps `long_break` and clears `status_rcvd`.
+
+### 4j.3 ⚠ This CORRECTS §4h — CSID zeroing is normal, not damage
+
+§4h read the rejoin attempt's zeroing of the CSID as part of a degradation.
+**It is not.** The real node's readmitted CSB also carries `CSID 00000000`.
+Zeroing the CSID is the ordinary start of readmission, and it must be struck
+from the list of things that look wrong. What survives from §4h is narrower and
+still exact: the OVMX rejoin clears `status_rcvd`, retains `long_break`, stays
+in `09 wait`, and gets no CDT and no new CSB.
+
+### 4j.4 The ordering, and where the OVMX rejoin actually dies
+
+VAX1's console for the same window:
+
+```
+%CNXMAN,  received VAXcluster membership request from system VAX2
+%CNXMAN,  proposing addition of system VAX2
+%CNXMAN,  completing VAXcluster state transition
+OPCOM 02:12:52.94  Node VAX1 (csid 00010001) completed VAXcluster state transition
+```
+
+The `T+113s` dump — rendered at ~02:12:52, with `CLUB Nodes 1` and VAX2 not yet
+a member — **already shows the new CSB and its CDT**. So the new CSB + CDT are in
+place at or before the membership request, and the membership protocol runs
+*after* them.
+
+> **⚠ Sub-second ordering is NOT resolved at this cadence.** The 14 s sample and
+> the console line fall within the same second. "New CSB and CDT exist no later
+> than the membership request" is what is grounded; "they strictly precede it"
+> is not. Re-run at 2–3 s cadence if that distinction is ever load-bearing.
+
+**This places the failure earlier than the membership protocol.** OVMX's rejoin
+gets no new CSB and no CDT, so it never reaches the stage VAX2 reaches in this
+run. That is consistent with §4g.2 — the peer asks about our MSCP disk server, is
+told affirmative, and **declines to connect** — and "declines to connect" and "no
+CDT allocated" are plausibly the same event seen from two oracles. It is also
+consistent with §4i.4: the ack bug is real and downstream of this, which is why
+fixing it does not admit us.
+
+### 4j.5 The next experiment
+
+The question is now sharp and singular: **what makes the peer allocate a fresh
+CSB+CDT for a returning identity, and why does an OVMX rejoin get its old CSB
+mutated instead?** Both nodes were `removed` before returning, so `removed`
+alone is not the trigger. The most likely reading — untested — is that the new
+CSB is created off a newly *accepted* VC/connection, and OVMX's rejoin never
+gets one accepted, so the peer has nothing to hang a new CSB on and touches the
+old one instead. Test it by watching the peer's CSB **and** its VC/CDT state
+together through both a real reboot and an OVMX rejoin (`scacppoll.sh` +
+`csbcycle.sh` cadence, one pod each).
+
+**Do not re-run §4h's poll.** It is answered.
+
+### 4j.6 ⚠ Two tooling defects in `csbcycle.sh`, both real
+
+1. **Console input died at the reboot.** Samples `T+127s` onward are EMPTY — 17
+   `SHOW CLUSTER` sends, no echo, no output. The last console byte is the
+   transition line at `T+113s`. VAX1 was still wedged afterwards
+   (`lab2login.sh` timed out at 120 s), so the pod is spent. The backgrounded
+   `kubectl exec … nodedrv.py &` that reboots VAX2 is the prime suspect for
+   disrupting VAX1's console input path. **The run survived only because the
+   event completed inside the first 113 s.** Fix before reusing.
+2. **Markers glue to the previous sample.** `tail -c +$start` output need not end
+   in a newline, so the next `########## T+Ns ##########` lands on the same line
+   and `grep '^#####'` finds one marker in 26. Split unanchored
+   (`re.split(r'#{10} (T[^#]*?) #{10}', raw)`) or `echo` a newline first. This is
+   the "markers looked wrong" symptom flagged at handoff — the markers are all
+   present and correct; only the anchoring was wrong.
+
+---
+
 ## 5. ⚠ WHERE TO START NEXT SESSION
 
 > **⚠ THE ORDERED PLAN BELOW IS NOW FULLY EXECUTED — steps 0–3 in §4d, step 4
@@ -1844,10 +1999,13 @@ for correctness (guardrail 15), not as an attempt at the rejoin.**
 | `tools/mk_sysgen.py` | **x86_64 replacement for the aarch64 `mk_sysgen` binary**, whose source is lost. Patches SCSNODE/SCSSYSTEMID into a known-good template store (the one from `s8A`/`s8B`, both of which joined) rather than regenerating, so every other field is byte-identical to a store proven to work. Rejects names >6 chars and deletes any stale `.cluster` prior-admission sidecar, so a "fresh" identity is really fresh. |
 | `tools/connpoll.sh` | **SDA `SHOW CONNECTIONS/NODE=<id>` sampled on a chosen peer THROUGHOUT a run** — the CDTs that peer holds for our identity, and their `Rej/Disconn Reason`. The only oracle here that can name a rejection rather than describe a silence (§4e.3). Stays INSIDE SDA and uses `/NODE=` to keep a sample small; the first version drove `ANALYZE/SYSTEM…EXIT` per sample and overran the console input buffer during the OPCOM flood, losing 3 of 4 snapshots. |
 | `tools/scacptrace.sh` | **high-cadence SCACP + packet capture.** Stays INSIDE SCACP and fires bare `SHOW VC` on a timer (one console round-trip per sample instead of ~23 s), and relies on SCACP's self-timestamping header instead of markers. This is what established ORDER (§4d.10). VAX1's clock runs ~7.5 s behind the host — measure it with `SHOW TIME` vs `date` before correlating. |
+| `tools/csbcycle.sh` | **SIGKILL a REAL node and sample the peer's SDA `SHOW CLUSTER` across kill → removal → reboot → readmission**, on a pod that also carries dead/refused OVMX identities so all histories land in ONE dump. This is what produced the real-node control (§4j) and killed "our surviving CSB is the asymmetry". Stays parked inside SDA and slices the console INCREMENTALLY per sample. **⚠ Two live defects — see §4j.6: console input dies at the reboot (everything after is empty), and markers glue to the previous sample so `grep '^#####'` under-counts. Fix both before reusing.** |
 
 Run tags session j (part 2): `r1A` `r2A` joined, `r1B` `r2B` refused, `vax3crash` = the real-VAX crash-rejoin specimen. **Last SCSSYSTEMID used: 1241.**
 Run tags session k: `s1A` `s2A` `s3A` `s4A` `s5A` joined (fresh, pure); `s1B` refused (rejoin form), `s1C` refused (`OVMX_REJOIN_FORM=0`); `s3B` refused (SDA-polled on VAX3), `s3C` refused (`OVMX_CFG2_PEER=1`, forced to the real coordinator); `s3D` refused / `s6A` joined = the matched SCACP pair (§4d.9); `s3E` refused / `s7A` joined = the high-cadence ORDERING pair (§4d.10); `s3F` refused WITH the 0x7b fix, `s8B` fresh joined with it. **Last SCSSYSTEMID used: 1249.**
 Run tags session L (workshop): `w1A` `w2A` `w3A` joined (fresh, pure); `w1B` `w1C` refused (`OVMXW1` rejoin). `w1C`/`w3A` are the matched CDT pair (§4e.3); `w2A` is VOID as an instrumented run — its console overran (§4e.1) — but valid as a join. **Last SCSSYSTEMID used: 1252.**
+
+Run tags session L part 3 (lab-2 `vaxlab-0`): `L3` joined (fresh) / `L3b` refused (`OVMXL3` rejoin) — the matched pair; `L4` joined (fresh, `OVMXL4`, then died, never returned); `C1` = the **real-node CSB cycle** (§4j), which carried `OVMXL3` and `OVMXL4` in-frame as the refused and died controls. `vaxlab-0` is now SPENT — VAX1's console wedged after `C1` (§4j.6). **Last SCSSYSTEMID used: 1304.**
 
 Run tags session i: `ctl1`, `inc1`, `inc2`, `fresh1`, `fresh2`, `keyB`, `keyC`,
 `rej2`, `rej3`. Session j: `g1A` (joined), `g1B` (refused, SDA-polled), `p1A`

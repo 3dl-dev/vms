@@ -2408,7 +2408,11 @@ are blank or minimal because **those fields are populated FROM that message**;
 `vcc` is unset; §4k.5's `DISC-REQ` never comes because the peer is still waiting.
 One cause, not five symptoms.
 
-### 4L.6 The hypothesis this creates — and why it is NOT simply `vms-950`
+### 4L.6 ⛔ SUPERSEDED — the hypothesis this created, and why it is NOT simply `vms-950`
+
+> **Its conclusion ("the discriminator is the envelope") is REFUTED by §4L.8** —
+> the envelope is clean. Kept for the `vms-950` distinction at the end, which
+> still holds, and so the dead branch is not re-walked.
 
 **Grounded facts, all with matched controls:**
 1. The peer sends 2 sequenced messages and receives 0 back (§4L.5, this session).
@@ -2543,7 +2547,7 @@ So the stall is **the peer's non-response to a byte-identical, correctly
 sequenced, correctly enveloped membership request.** Nothing is wrong with what
 we transmit.
 
-### 4L.9 ⚠ AN UNRESOLVED TENSION BETWEEN THE TWO ORACLES — do not paper over it
+### 4L.9 ⚠ THE TWO ORACLES DISAGREED — and the obvious explanation is refuted
 
 The wire says OVMX delivered msgseq 1–2 on the CM connection at **+0.02 s**.
 SDA says that at **T+4/5 s** the peer's CSB for us reads `Last seq num rcvd

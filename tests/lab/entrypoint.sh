@@ -127,9 +127,27 @@ for n in ${NODES}; do
   # 'kubectl logs' would show no console output at all.
   touch "${logf}"
   log "booting ${n} (console FIFO ${logf}.in, DZ mux :$(node_dz "${n}"))"
-  python3 /usr/local/bin/nodedrv.py "${LAB_DIR}/${n}" "${logf}" \
+  # --no-detach is REQUIRED in a pod. nodedrv.py self-detaches with setsid by
+  # default (vms-af2: it must survive an agent harness reaping its background
+  # tasks). Here that would orphan the driver away from PID 1, 'wait -n' below
+  # would return immediately, the container would exit, and the pod would
+  # CrashLoop. Nothing reaps us inside the pod, so detaching buys nothing.
+  python3 /usr/local/bin/nodedrv.py "${LAB_DIR}/${n}" "${logf}" --no-detach \
       --date "${VMS_DATE}" --boot "$(node_boot "${n}")" &
 done
+
+# vms-d3a: the driver types the boot command char-by-char and verifies the ROM's
+# echo before sending CR. If every attempt fails it leaves the node halted at
+# '>>>' and writes <log>.bootfail rather than booting an unverified system root
+# — a corrupted 'B/R5:10000000 DUA0' boots root SYS0 and gives you a second
+# VAX1 on the shared disk. Surface that instead of letting it look like a boot.
+( sleep 90
+  for n in ${NODES}; do
+    if [ -f "${LAB_DIR}/logs/${n}.bootfail" ]; then
+      echo "[lab:${LAB_NAME}] *** ${n} BOOT NOT TRUSTED: $(cat "${LAB_DIR}/logs/${n}.bootfail")"
+      echo "[lab:${LAB_NAME}] *** node is halted at >>> on purpose. Do NOT use this lab as an oracle."
+    fi
+  done ) &
 
 cat <<EOF
 [lab:${LAB_NAME}] up. SIMH: $(cat /etc/simh-version.txt 2>/dev/null | head -1)

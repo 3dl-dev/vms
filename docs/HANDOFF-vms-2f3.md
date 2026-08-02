@@ -31,7 +31,9 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > `tests/lab/README.md` — it is not a byte-level fidelity proof.
 >
 > **§5's ordered plan is now FULLY EXECUTED — step 4 was run in §4e.4 and is
-> refuted as the gate. Do not re-propose it.** §1–§4c exist so you do not re-derive
+> refuted as the gate. Do not re-propose it.** **§4f is newer still: it proves
+> the deciding state is the CLUSTER's, not ours, and carries the first peer-side
+> view of a REAL node rejoining. Read §4f.4 for the named next experiment.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and
 > §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
 > the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
@@ -83,6 +85,9 @@ reset.**
 | we address the wrong node (`Curr. coord.` rotates) | **REFUTED both ways — forcing the real coordinator still refused; a fresh identity joins via a non-coordinator** | §4d.7 ⭐ |
 | a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
 | the VAXes have no oracle for their non-decisions | **REFUTED — SCACP, ANALYZE/ERROR_LOG and SDA SHOW CONNECTIONS all exist and were never used** | §4d.9 ⭐⭐⭐ |
+| **OVMX's own persisted state causes the refusal** | **REFUTED — the same identity + sidecar joins a virgin cluster in 15 s** | §4f.2 ⭐⭐⭐ |
+| the deciding state might be in the peer's CDT table | **REFUTED — a departed REAL node leaves zero CDTs; nine empty samples** | §4f.3 ⭐⭐⭐ |
+| **the refusal is per-cluster, peer-side state** | **CONFIRMED — positively, for the first time; one cluster refuses while another admits** | §4f.2 ⭐⭐⭐ |
 | **the disk-discovery run is the gate (§5 step 4)** | **REFUTED — ungated, it fires on a rejoin and is IGNORED; matched kill-switch control** | §4e.4 ⭐⭐⭐ |
 | we fail to INITIATE the joiner's disk run | **REFUTED — we now initiate it; the peer discards our SCS$DIRECTORY connect exactly like our `op 0x02`** | §4e.4 ⭐⭐⭐ |
 | **the peer's SDA can name why it refused us** | **REFUTED — `Rej/Disconn Reason` is 0 on every CDT, on the refusal too** | §4e.3 ⭐⭐ |
@@ -1228,6 +1233,156 @@ Conditional, kill-switched, additive, and proven not to regress a fresh join by
 two controls in the same session.
 
 **The ordered plan of §5 is now fully executed.** Nothing in it remains unrun.
+
+---
+
+## 4f. SESSION L part 2 — LAB-2, and the two experiments lab-1 could never run
+
+**`vms-a5c`'s k3s lab (`tests/lab/`, one pod = one isolated 2-node VMScluster)
+made two experiments cheap that were previously impossible: presenting a refused
+identity to a cluster that has never seen it, and killing a real VAX to watch it
+rejoin. Both were run. Both answered.**
+
+Every comparison below is **lab-2 only**, per the mixing rule at the top of this
+file and in `tests/lab/README.md`. Nothing here is compared against a lab-1 run.
+
+### 4f.1 Lab-2 reproduces the bug — so the reproducer is now disposable
+
+| run | identity | pod | result |
+|---|---|---|---|
+| `L1` | `OVMXL1`/1301 **fresh** | A (`vaxlab-0`) | **JOINED**, `CLUSTER_NODES=3`, 15 s |
+| `L1b` | `OVMXL1` again, +3 min | A | **REFUSED** |
+
+A lab-2 cluster is two nodes, so an OVMX join is `CLUSTER_NODES=3`. The refusal
+reproduces on a completely independent cluster running a *different* SIMH binary.
+**Each pod is now both a reproducer and a virgin cluster**, which is what makes
+§4f.2 possible.
+
+> **⚠ The prior-admission sidecar is part of the identity and it lives beside the
+> store INSIDE the pod.** `lab2run.sh` re-copies the store per run, so without
+> explicitly pulling `<store>.cluster` back to the host afterwards, every run is
+> a first join and the rejoin can never be tested. The runner does this now, and
+> logs the byte count each way. If a "rejoin" on lab-2 joins cleanly, check this
+> before believing it.
+
+### 4f.2 ⭐⭐⭐ THE DISCRIMINATOR — the refusal is the CLUSTER's state, not ours
+
+`OVMXL1` was refused by pod A at 01:23. Three minutes later the **same store, the
+same binary, and the same prior-admission sidecar carried across** were presented
+to pod B — a cluster that had never seen this identity.
+
+| run | identity | cluster | result |
+|---|---|---|---|
+| `L1b` | `OVMXL1` (has been admitted before) | pod A | **REFUSED** |
+| `L1c` | `OVMXL1`, **sidecar carried** | **pod B — virgin** | **JOINED, 15 s** |
+| `L2` | `OVMXL2`/1302 **fresh** | pod A | **JOINED** — pod A still admits anyone |
+
+**This is the first POSITIVE proof of §4d.8.** Until now "per-identity state on
+every peer, surviving our death" was inferred from absences — not in the frame,
+not about which peer, no wait works. It is now demonstrated directly: identical
+binary, identical identity, identical persisted state, and one cluster refuses
+while another admits within three minutes of each other.
+
+**Two things are killed by this.**
+
+1. **OVMX's own persisted state is NOT the cause.** The `.cluster` prior-admission
+   record travelled with the identity and pod B admitted it anyway. Any theory of
+   the form "we behave differently once we know we have joined before" is dead.
+2. **`L2` closes the obvious escape.** Pod A had not simply stopped admitting
+   nodes; it admitted a fresh identity immediately after refusing `OVMXL1`.
+
+### 4f.3 ⭐⭐⭐ WHAT A REAL REJOIN LOOKS LIKE FROM THE PEER — the missing reference
+
+The archive's one real-rejoin specimen (§4c.2c) is **wire-only**. Nobody had ever
+watched a real node rejoin through SDA's CDT table — the exact layer where §4e.3
+characterised OVMX's refusal. `tools/lab2rejoin.sh` (new) does it on a disposable
+pod: VAX2 is **SIGKILLed** (not shut down — that would be a class-0x04 graceful
+departure, a different case), left dead 81 s, then rebooted under an unchanged
+SCSNODE/SCSSYSTEMID while VAX1 stays parked inside SDA sampling
+`SHOW CONNECTIONS/NODE=VAX2`.
+
+The whole cycle, from VAX1's console (`R1`, no console overrun):
+
+```
+VAX2 healthy      CDTs: VMS$DISK_CL_DRVR, MSCP$DISK, SCA$TRANSPORT,
+                        VMS$VAXcluster            -- all open
+%CNXMAN, lost connection to system VAX2
+%CNXMAN, timed-out lost connection to system VAX2
+%CNXMAN, proposing reconfiguration of the VAXcluster
+%CNXMAN, removed from VAXcluster system VAX2
+%CNXMAN, completing VAXcluster state transition
+Node VAX2 (csid 00010002) has been removed from the VAXcluster
+
+  >>> nine consecutive SHOW CONNECTIONS/NODE=VAX2 samples: NOTHING AT ALL <<<
+
+                  CDTs: MSCP$DISK (rem B01A0009)  -- open
+                        VMS$VAXcluster (rem B01A0008) -- open
+%CNXMAN, received VAXcluster membership request from system VAX2
+%CNXMAN, proposing addition of system VAX2
+%CNXMAN, completing VAXcluster state transition       <-- ADMITTED
+```
+
+**Two findings, and the second is the one to chase.**
+
+1. **The peer holds NO CDTs at all for a departed node.** Nine samples across the
+   dead window return empty. So whatever per-cluster state §4f.2 just proved
+   exists, **it is not in the CDT table** — it is in the cluster block / CSB
+   layer, which is where §4d.6 and §4d.8 already pointed. The CDT table is a
+   *symptom* surface, not the state itself.
+2. **A real returning node has `MSCP$DISK` OPEN at the moment its membership
+   request is processed.** Side by side at the same instant:
+
+| CDTs the peer holds for the returning node | real VAX2 — **ADMITTED** | OVMX — **DROPPED** (§4e.3) |
+|---|---|---|
+| `VMS$VAXcluster` | **open** | open |
+| disk connection | **`MSCP$DISK` open** | **`VMS$DISK_CL_DRVR` `con_sent`, remote con ID `00000000`** |
+| directory | — | `SCS$DIR_LOOKUP` `disc_sent` |
+
+The real node's disk connection is **established**; OVMX's is a connect request
+from the peer that we never answered. §4e.4 showed that *initiating* our own disk
+run does not fix this — the peer ignores our `SCS$DIRECTORY` connect. **The
+unanswered direction is the peer connecting to US**, and that is now the sharpest
+remaining difference between an admitted rejoin and a dropped one.
+
+> **⚠ LAB-2 PROVENANCE.** §4f.3 is lab-2 only, on the x86_64 SIMH build. It does
+> not contradict any lab-1 result — it agrees with §4c.2c, which independently
+> shows a real VAX rejoining — so the "reproduce a contradicting lab-2 result on
+> lab-1" rule is not triggered. But the CDT detail has never been seen on lab-1,
+> and if it ever becomes load-bearing for a fix, take it there first.
+>
+> **⚠ `lab2rejoin.sh` has a known flaw.** Its `### T+<n>s` markers are written to
+> the `.conn` file as the run proceeds, but the console slice is appended *in one
+> block at the end*, so the markers do not interleave with the samples and every
+> line appears to carry the last timestamp. The console log is still strictly
+> sequential, so ORDER is trustworthy and absolute TIMING is not. Fix it by
+> slicing the console incrementally per sample, the way `connpoll.sh` does.
+
+### 4f.4 Where this leaves the investigation
+
+The target has moved from "which byte do we get wrong" to a much narrower place,
+and every one of these is now grounded rather than inferred:
+
+- the deciding state is **per-cluster and peer-side** (§4f.2, positive proof);
+- it is **not in the CDT table** (§4f.3, a departed real node leaves none);
+- it **is not cleared by time** (§3.1, 15 h) and not by which peer we ask (§4d.7);
+- the observable difference at the decision point is that a real returning node
+  has its **disk connection open** and OVMX has an **unanswered inbound connect**
+  (§4f.3 vs §4e.3);
+- and OVMX **initiating** that traffic itself does not help (§4e.4).
+
+**The next experiment is named: find out why OVMX never answers the peer's
+`VMS$DISK_CL_DRVR` CONNECT-REQUEST on a rejoin.** It is inbound, so it is in our
+capture and possibly in `SCSD-T-CMIN`; the question is whether it arrives and we
+discard it (a fifth deafness bug, cf. §4d.10's `0x7b`) or never arrives at all.
+
+> **A dead end already eliminated, so nobody repeats it.** The cheap version of
+> this — `strings -a <pcap> | grep -c 'MSCP$DISK'` to see whether the peer ever
+> names that SYSAP toward us — **does not work**: it returns **0 on the JOINED
+> capture too** (`w3A`), where those connections demonstrably happen. SYSAP names
+> are not recoverable as plain ASCII from these captures. This needs the lab
+> decoder (`tools/cm.py`, `docs/clean-room/tools/af2scan.py`) and is therefore a
+> **delegated capture-agent task**, not a grep — dispatch it per §0's doctrine
+> rather than reading the bytes in the orchestrator.
 
 ---
 

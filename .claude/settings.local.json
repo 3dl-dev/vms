@@ -63,5 +63,8 @@
       "Bash(cp /home/baron/vax/cluster/tools/*.py /home/baron/.claude/jobs/678334fd/tmp/)",
       "Read(//home/baron/vax/cluster/work/**)"
     ]
+  },
+  "worktree": {
+    "bgIsolation": "none"
   }
 }

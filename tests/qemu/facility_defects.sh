@@ -226,7 +226,18 @@ run-qualifier-not-abbreviated
 kstat-deadlock-mismapped
 kstat-ivlockid-mismapped
 kstat-cvtungrant-mismapped
-assign-terminal-bypasses-executive"
+assign-terminal-bypasses-executive
+dcl-submit-owner-fabricated
+dcl-print-owner-fabricated
+dcl-logout-user-fabricated
+dcl-reply-operator-fabricated
+dcl-accounting-user-fabricated
+dcl-fuser-system-fabricated
+dcl-fuser-host-login-name
+dcl-fident-num2name-host-passwd
+dcl-fident-num2name-bracketed-uic
+dcl-fident-name2num-host-passwd
+opcom-header-host-login-name"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1519,11 +1530,13 @@ could not tell the second process to restore the console
 ...and the set Pasthru bit, so both directions of one IO$_SETMODE are read back
 ...and grid row 1 is the oracle's bytes again, so neither is the grid
 this process, which bound nothing, still has no terminal -- the bindings belonged to the DCL jobs, not to the device or to the system
+A: F$GETJPI("","USERNAME") returns the name the EXECUTIVE holds -- the programmatic path reads the same source the display does
 A: SHOW PROCESS does NOT report the user name planted in VMS_USERNAME
 A: SHOW PROCESS reports the UIC the EXECUTIVE holds
 A: SHOW PROCESS reports the user name the EXECUTIVE holds
 A: the authorized-privileges AND process-privileges blocks are both EMPTY -- none of A's granted mask (TMPMBX|NETMBX|OPER) is in VMS_PRV_M_ENFORCED
 A: the executive accepted the identity a privileged writer established
+B: F$GETJPI returns B's name -- two processes with an IDENTICAL environment get DIFFERENT answers, so the answer is not the environment
 B: SHOW PROCESS reports B's UIC
 B: SHOW PROCESS reports B's user name
 B: SHOW PROCESS/PRIVILEGES lists WORLD's description in the process-privileges block too
@@ -1535,6 +1548,10 @@ C: the privilege display is EMPTY -- the two privileges the executive granted an
 D: the session established its authenticated identity
 F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs = ~0ULL, so every VMS_PRV_M_ENFORCED bit is set)
 F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SETPRV,WORLD), not merely completes without rendering anything
+G: the session established an authenticated identity
+G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
+G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
+G/OPCOM+: EVERY header names SHIPPING -- the executive's row DOES reach sys$sndopr's user field, so the empty field above is this process being unnamed and not the field being dead
 parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
 parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
 sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
@@ -1792,6 +1809,57 @@ exactly the 14 lines above, observed by running this mutation once and
 capturing the delta; nothing past D's first line or in scenario E is claimed
 here, named, or reasoned about, because the run this entry is built from did
 not print anything further to reason from.
+FOUR MORE ADDED (vms-cb5/vms-f39/vms-f42d) -- READ OFF THE DRIVER'S OWN
+"does NOT name them" LIST, TWICE, WHICH IS THE POINT OF THIS PARAGRAPH.
+  - Two are scenario G's preconditions: "G: the session established an
+    authenticated identity" is a vms_kif_setident() through the deleted
+    register step (the same property as the require_fail entry, one scenario
+    further on), and "G: the executive HOLDS that name and reads it back" is
+    the vms_kif_getjpi_self() that reads it back.
+  - Two are OLDER than scenario G and were red on this branch before it:
+    scenario A's and scenario B's F$GETJPI assertions, added when this suite
+    gained programmatic-reader coverage. They are the same startup read
+    failing, seen through the lexical function instead of through SHOW
+    PROCESS, and they had simply never been declared -- this control is
+    expensive, so nothing had executed it since that coverage landed.
+THE MISTAKE WORTH RECORDING: the first re-run named all four and only two were
+added, because the extra reds were INFERRED from a scrolled log rather than
+read off the driver's explicit list. The second run named the remaining two
+and refused to pass, which is exactly what the equality check is for.
+TWO MORE, AND THE SAME MISTAKE A THIRD TIME (vms-cb5 r4). Scenario G grew an
+OPCOM+ half -- the same command sequence re-run in a process the executive HAS
+named, which exists to prove sys$sndopr's user field is populated at all and
+not merely always-empty -- and its two executive-dependent assertions were not
+declared here. CI's attribution job read them off its own "does NOT name them"
+list:
+  - "G/OPCOM+: the named run established its identity through the executive" is
+    a vms_kif_setident() through the deleted register step. It is the SAME
+    property as scenario G's own precondition two lines above, and as the
+    require_fail entry, observed once more in the scenario's second run.
+  - "G/OPCOM+: EVERY header names SHIPPING ..." reads back, out of the operator
+    log, the name that setident never recorded. It is a read of the write the
+    line above failed to make -- the identical shape as every other pair in
+    this manifest.
+This is the third arrival of the same lesson in this one entry, which is why it
+is written down rather than quietly appended: an assertion added to a suite
+already in suites_red still has to be declared, because the equality check is
+at PROPERTY granularity and the suite list is not what it compares.
+WHAT STAYED GREEN IN THE OPCOM+ HALF, and it is what keeps this from being a
+blunderbuss: the other TWO assertions of the same block pass. "the named
+process's REPLY and LOGOUT records reached the operator log" stays green
+because writing the record is OVMX-LOCAL -- sys$sndopr appends the line itself,
+so an unbound process still logs, and only the user FIELD goes empty. "and it
+is not SYSTEM" stays green because the empty field is empty, not fabricated --
+the vms-f42d property this round landed is untouched by the missing bind. So
+the mutation reddens exactly the two assertions that depend on the executive
+and neither of the two that do not, which is the attribution this control
+exists to make.
+WHAT STAYED GREEN, and it matters: scenario G's assertions about SUBMIT,
+PRINT, ACCOUNTING, REPLY, LOGOUT and F$USER all PASS under this mutation --
+their property is that DCL prints NO user name when the executive holds none,
+and an unbound DCL holds none for a second reason. That is not a weakness of
+those assertions; it is why each of them has its own minimal mutation, the
+dcl-*-fabricated controls below.
 THE EIGHTH SUITE, test_syssvc_lock_status, ADDED vms-2e5 -- READ OFF THE FIRST
 FULL RUN OF THIS CONTROL AGAINST THE TREE THAT ADDED IT, not predicted. Its
 bootstrap() does not hand-register (see the comment at its definition in
@@ -2226,6 +2294,272 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    # -----------------------------------------------------------------------
+    # THE SIX USER-NAME FABRICATIONS (vms-cb5 / vms-f39 / vms-f42d)
+    #
+    # These are NOT executive facilities. They are the READER half of one
+    # (CLAUDE.md Rule 11's corollary: a user-visible VMS command is a reader of
+    # an executive facility, never a thing that fabricates its own answer), and
+    # each restores ONE deleted fallback verbatim:
+    #
+    #     const char *user = ctx->username[0] ? ctx->username : "SYSTEM";
+    #
+    # ctx->username is seeded in src/vmsdcl/dcl_main.c from the executive's
+    # process table and from nowhere else, so the `else` branch is taken
+    # exactly when the executive holds no name for this process -- the state
+    # any SPAWNed subprocess is in (vms_proc_register() zeroes the username of
+    # every new task and inherits nothing from the parent). Restored, the
+    # command names that process after the most privileged account on the
+    # system. Each defect is one line in one command, so each names exactly
+    # its own site's assertions.
+    # -----------------------------------------------------------------------
+    dcl-submit-owner-fabricated)
+        case "$_f" in
+        facility)     echo "SUBMIT's job OWNER, on the way from the executive's process table to the queue entry (src/vmsdcl/dcl_cmd_process.c cmd_submit)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "SUBMIT goes back to writing the literal \"SYSTEM\" into the queue entry for any process the executive has not named. The submission still succeeds, the entry still exists, SHOW QUEUE still lists it -- only its OWNER is a fabrication, and it is a fabrication that degrades UPWARD: the batch job of a process that holds no identity at all is recorded as belonging to the system account.";;
+        require_fail) cat <<'EOF'
+G/SUBMIT: SHOW QUEUE shows the batch job with an EMPTY owner
+G/SUBMIT: the batch job is NOT owned by SYSTEM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    dcl-print-owner-fabricated)
+        case "$_f" in
+        facility)     echo "PRINT's job OWNER, the same executive-to-queue-entry path SUBMIT uses (src/vmsdcl/dcl_cmd_process.c cmd_print)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "PRINT goes back to writing the literal \"SYSTEM\" as the print job's owner. It is a SEPARATE control from SUBMIT's, in the same file and the same shape, because they are separate call sites: fixing one and leaving the other is exactly how five of these six survived the round that deleted the sixth.";;
+        require_fail) cat <<'EOF'
+G/PRINT: SHOW QUEUE shows the print job with an EMPTY owner, in cmd_show_queue's own column format
+G/PRINT: the print job is NOT owned by SYSTEM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    dcl-logout-user-fabricated)
+        case "$_f" in
+        facility)     echo "the user name in LOGOUT's console line and its OPCOM record (src/vmsdcl/dcl_cmd_process.c cmd_logout)";;
+        targets)      echo "vmsdcl/dcl_cmd_process.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "LOGOUT goes back to announcing \"SYSTEM logged out\" -- on the console AND in the operator log -- for any process the executive has not named. An operator log that records a nameless process as SYSTEM is worse than one that records it as nothing: it is a false audit record, not a missing one.";;
+        require_fail) cat <<'EOF'
+G/LOGOUT: the logout line names no user, in cmd_logout's own "  %s      logged out at" format
+G/LOGOUT: the session is not logged out as SYSTEM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    dcl-reply-operator-fabricated)
+        case "$_f" in
+        facility)     echo "the operator name REPLY/ENABLE reports and logs (src/vmsdcl/dcl_cmd_misc.c cmd_reply)";;
+        targets)      echo "vmsdcl/dcl_cmd_misc.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "REPLY/ENABLE goes back to naming the enabling operator \"SYSTEM\" when the executive holds no name for the process -- in the %OPCOM-I-OPRENA message and in the OPC record it sends to OPERATOR.LOG.";;
+        require_fail) cat <<'EOF'
+G/REPLY: the OPCOM enable message names no operator
+G/REPLY: the console message does not name SYSTEM as the operator
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    dcl-accounting-user-fabricated)
+        case "$_f" in
+        facility)     echo "the account ACCOUNTING reports on, which also selects the last-login record it reads (src/vmsdcl/dcl_cmd_misc.c cmd_accounting)";;
+        targets)      echo "vmsdcl/dcl_cmd_misc.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ACCOUNTING goes back to reporting on \"SYSTEM\" for an unnamed process. This one is not only a wrong label: the same string picks the FILE the login history is read from (ovmx_accounting_get_lastlogin), so an unnamed process is shown SYSTEM's login history under SYSTEM's name.";;
+        require_fail) cat <<'EOF'
+G/ACCOUNTING: names no account for an unnamed process
+G/ACCOUNTING: does not report SYSTEM's login history to an unnamed process
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    dcl-fuser-system-fabricated)
+        case "$_f" in
+        facility)     echo "F\$USER() / F\$GETJPI(\"\",\"USERNAME\"), the PROGRAMMATIC reader of the executive's user name (src/vmsdcl/dcl_lexical.c lex_user) -- its literal-SYSTEM branch";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lex_user() goes back to answering the literal \"SYSTEM\" when the executive holds no name -- the vms-cb5 defect verbatim, found because SHOW PROCESS (a display) and F\$GETJPI (a lexical function) read the SAME field of the SAME row and disagreed: the display printed nothing and the programmatic path invented the most privileged name on the system for the one process that had just been REFUSED it.";;
+        require_fail) cat <<'EOF'
+G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
+G/F$USER: does not answer with the literal SYSTEM
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+C: F$GETJPI("","USERNAME") reports NO name for a process the executive refused to name -- it does not fall back to a Linux account name or to SYSTEM
+C: SHOW PROCESS does NOT report SYSTEM for a process that only claimed it -- through the ioctl AND through VMS_USERNAME
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+Scenario C is the SAME function answering the same question one scenario
+earlier, and it is where this defect was originally measured: an unprivileged
+process whose bid to become SYSTEM the executive had just refused with
+SS$_NOPRIV. Its two reds are one property seen twice -- the first is C's own
+direct check on lex_user's answer, and the second is C's blanket "SYSTEM
+appears nowhere in this scenario's output", which the first one's fabricated
+value necessarily also trips. There is nothing finer available: the mutation
+is already a single branch of a single function, and C and G both exist
+deliberately, because C exercises the EXECUTIVE-REFUSED unnamed process and G
+exercises the NEVER-NAMED subprocess -- different routes into the one state.
+EOF
+                      ;;
+        esac;;
+
+    dcl-fuser-host-login-name)
+        case "$_f" in
+        facility)     echo "F\$USER() / F\$GETJPI(\"\",\"USERNAME\") (src/vmsdcl/dcl_lexical.c lex_user) -- its getpwuid(getuid()) branch, the HOST Linux account name";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "lex_user() goes back to answering with the HOST Linux account name for getuid(), upcased -- the vms-f39 defect verbatim, where F\$USER() answered \"BARON\" because that was the developer's login. A Linux account name is not a VMS user name, and this is the branch that would be taken on any system that HAS an /etc/passwd. It is a SEPARATE control from dcl-fuser-system-fabricated because it is a separate branch that was reachable in a separate population of systems: restoring only the SYSTEM half leaves this one deleted and vice versa.";;
+        require_fail) cat <<'EOF'
+G/F$USER: reports NO name for a process the executive has not named -- not the host Linux login name, not SYSTEM
+G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    # -----------------------------------------------------------------------
+    # THE THREE HOST-IDENTITY LEAKS THE PER-SITE ROUND MISSED (vms-cb5 round 3,
+    # vms-f39).
+    #
+    # The two controls above cover lex_user(). They were written, and the class
+    # was declared settled, while the SAME host-passwd derivation was still
+    # live in lex_identifier() 1840 lines below it IN THE SAME FILE, and in
+    # sys$sndopr's OPCOM header in a different library. Neither was found by
+    # reading the five call sites the round was handed; both were found by
+    # running the product:
+    #
+    #   printf 'X = F$IDENTIFIER(1000,"NUMBER_TO_NAME")\nSHOW SYMBOL X\n' \
+    #       | ./build/bin/DCL.EXE                    ->  X = "BARON"
+    #   printf 'LOGOUT\n' | ./build/bin/DCL.EXE  then read the operator log
+    #       ->  %%OPCOM, ..., request 1 from user baron on node OVMX
+    #
+    # So these three exist to make the CLASS falsifiable rather than the site:
+    # one control per host derivation, per direction, per function, each naming
+    # only its own assertions.
+    # -----------------------------------------------------------------------
+    dcl-fident-num2name-host-passwd)
+        case "$_f" in
+        facility)     echo "F\$IDENTIFIER(n,\"NUMBER_TO_NAME\"), the UIC-to-identifier conversion (src/vmsdcl/dcl_lexical.c lex_identifier) -- its getpwuid(member) branch";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "F\$IDENTIFIER goes back to resolving a VMS UIC through the HOST passwd database and answering with the Linux account name, upcased -- measured as X = \"BARON\" on the build host. On VMS this conversion is a RIGHTSLIST lookup, and a Linux account is not a VMS rights identifier. It is a SEPARATE control from the two lex_user() ones because it is a separate FUNCTION, which the round that fixed lex_user() left untouched while reporting the class settled.";;
+        require_fail) cat <<'EOF'
+G/F$IDENTIFIER: NUMBER_TO_NAME does NOT answer with the HOST Linux account name for that uid, upcased -- the vms-f39 defect exactly
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+G/F$IDENTIFIER: NUMBER_TO_NAME answers the NULL STRING for a UIC OVMX holds no identifier for -- what real VMS answers, for every input shape the oracle was asked
+G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
+EOF
+                      ;;
+        knock_on_why)  echo "BOTH MEASURED, not reasoned -- this control's red set was 3, not the 1 round 3 declared, and the second extra was there before round 4 touched anything. (1) The mutation restores the passwd lookup AT the miss, which is the only place it ever was, so the miss stops being the null string and becomes the account name: one behaviour seen from both ends, the require_fail line naming the host leak and this line the oracle-pinned check next to it failing on the same answer. (2) The F\$USER check is a WHOLE-OUTPUT scan for the Linux account name across everything DCL printed after G_SUB_PWNAM -- deliberately, so a leak in any command is caught, not just in lex_user(). F\$IDENTIFIER printing SHIPUSER puts that name in DCL's output, so the scan fires. That is the scan working: the name genuinely IS in the output, from a different function. Making it not fire would mean narrowing it to lex_user()'s line, which is exactly the per-site scoping that let this class survive three rounds.";;
+        esac;;
+
+    # THE REFUTED VALUE ITSELF, made falsifiable (vms-cb5 round 4, vms-2f8).
+    # The control above restores a leak. This one restores a WRONG ANSWER that
+    # leaks nothing: the bracketed UIC round 3 kept because it was "already
+    # there". The oracle says real VMS answers the null string for every miss
+    # shape tried and emits no bracketed UIC from F$IDENTIFIER at all, so
+    # without this control the assertion that OVMX now answers "" would be
+    # green against a build that echoes the caller's UIC back, and nothing in
+    # the suite would notice.
+    dcl-fident-num2name-bracketed-uic)
+        case "$_f" in
+        facility)     echo "F\$IDENTIFIER(n,\"NUMBER_TO_NAME\") (src/vmsdcl/dcl_lexical.c lex_identifier) -- the value it answers for a UIC no identifier matches";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The miss goes back to rendering the caller's own UIC in brackets -- \"[210,11]\" for the UIC it was handed. REFUTED against OpenVMS VAX V7.3 on lab node vax3: F\$IDENTIFIER answers the NULL STRING for every miss shape asked (plain, general-identifier range, UIC-format with bit 31 set, and zero), and the public HP/VSI DCL Dictionary says the same. Real VMS never emits a bracketed UIC from this function, so the rendering was a plausible-looking answer to a condition VMS never answers that way -- Rule 10's illegal third answer. This control exists because that value was invented, not leaked: no host database is involved, so none of the passwd controls can see it.";;
+        require_fail) cat <<'EOF'
+G/F$IDENTIFIER: NUMBER_TO_NAME answers the NULL STRING for a UIC OVMX holds no identifier for -- what real VMS answers, for every input shape the oracle was asked
+G/F$IDENTIFIER: NUMBER_TO_NAME does NOT echo the caller's UIC back in brackets -- real VMS emits no bracketed UIC from F$IDENTIFIER for any input, so that was Rule 10's illegal third answer
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    dcl-fident-name2num-host-passwd)
+        case "$_f" in
+        facility)     echo "F\$IDENTIFIER(name,\"NAME_TO_NUMBER\"), the identifier-to-UIC conversion (src/vmsdcl/dcl_lexical.c lex_identifier) -- its getpwnam() branch";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The reverse direction goes back to building a VMS UIC out of a passwd entry's uid and gid, so F\$IDENTIFIER(\"baron\",\"NAME_TO_NUMBER\") answers with the developer's Linux account expressed as a UIC. Separate from the NUMBER_TO_NAME control because it is a separate branch: deleting one leaves the other, which is exactly how this class kept surviving rounds that fixed it.";;
+        require_fail) cat <<'EOF'
+G/F$IDENTIFIER: NAME_TO_NUMBER does NOT build a UIC out of the host passwd entry's uid/gid for that account
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+G/F$IDENTIFIER: NAME_TO_NUMBER answers 0 for a name OVMX holds no identifier for, in SHOW SYMBOL's own integer format
+EOF
+                      ;;
+        knock_on_why)  echo "MEASURED: this control's red set is 2, not the 1 round 3 declared, and it was 2 before round 4 touched anything -- the omission is round 3's, found by running the control rather than reasoning about it. The mutation restores the passwd lookup AT the miss, the only place it ever was, so the miss stops being 0 and becomes the UIC built from the passwd entry. The require_fail line names that fabricated UIC; this line is the oracle-pinned miss value failing on the same answer. One behaviour, both ends -- there is no finer mutation, because the deleted lookup and the miss value are the same branch.";;
+        esac;;
+
+    opcom-header-host-login-name)
+        case "$_f" in
+        facility)     echo "the user field of sys\$sndopr's OPCOM header -- i.e. of every record OVMX writes to OPERATOR.LOG (src/libvms/syssvc/sys_operator.c get_current_username)";;
+        targets)      echo "libvms/syssvc/sys_operator.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$sndopr goes back to naming the requester from getpwuid(getuid()) when the executive's row holds no name, so the operator log records the HOST Linux account as the VMS user who made the request -- measured as 'request 1 from user baron on node OVMX' after a plain LOGOUT. This is the AUDIT half of the class and it lives in a different library from the DCL sites, which is what a per-site round cannot reach: LOGOUT's own user name was fixed in dcl_cmd_process.c while this field, in the same record, stayed host-derived.";;
+        require_fail) cat <<'EOF'
+G/OPCOM: EVERY header's user field is empty for a process the executive has not named -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database (goes RED, not vacuous, when vms-afd propagates identity to SPAWN)
+G/OPCOM: the operator record does NOT name the HOST Linux account -- the vms-f39 leak that survived in sys_operator.c
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -2416,6 +2750,39 @@ apply_edit() {
 
     assign-terminal-bypasses-executive)
         sed -i 's|        if (devres.is_terminal) {|        if (0 \&\& devres.is_terminal) { /* NEGCTL assign-terminal-bypasses-executive */|' "$_file";;
+
+    # The six user-name fabrications. Each restores ONE deleted fallback.
+    # RANGE-ANCHORED to the function that owns the site: `const char *user =
+    # ctx->username;` appears in cmd_submit AND cmd_print, and `const char
+    # *username = ctx->username;` in cmd_reply AND cmd_accounting, so a
+    # first-match address would silently mutate whichever came first and both
+    # controls would name the same site. The ranges open on the function's own
+    # definition line and close on its closing brace in column 0.
+    # IDEMPOTENT BY CONSTRUCTION: the replacement no longer ends in
+    # `ctx->username;`, so a second apply matches nothing and cmd_apply
+    # reports BROKEN FIXTURE, which is what selftest requires.
+    dcl-submit-owner-fabricated)
+        sed -i '/^int cmd_submit(/,/^}$/ s|^    const char \*user = ctx->username;$|    const char *user = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-submit-owner-fabricated */|' "$_file";;
+    dcl-print-owner-fabricated)
+        sed -i '/^int cmd_print(/,/^}$/ s|^    const char \*user = ctx->username;$|    const char *user = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-print-owner-fabricated */|' "$_file";;
+    dcl-logout-user-fabricated)
+        sed -i 's|^    const char \*upper_user = ctx->username;$|    const char *upper_user = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-logout-user-fabricated */|' "$_file";;
+    dcl-reply-operator-fabricated)
+        sed -i '/^int cmd_reply(/,/^}$/ s|^    const char \*username = ctx->username;$|    const char *username = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-reply-operator-fabricated */|' "$_file";;
+    dcl-accounting-user-fabricated)
+        sed -i '/^int cmd_accounting(/,/^}$/ s|^    const char \*username = ctx->username;$|    const char *username = ctx->username[0] ? ctx->username : "SYSTEM"; /* NEGCTL dcl-accounting-user-fabricated */|' "$_file";;
+    dcl-fuser-system-fabricated)
+        sed -i '/^static int lex_user(/,/^}$/ s|^        result\[0\] = .\\0.;$|        strncpy(result, "SYSTEM", result_size - 1); /* NEGCTL dcl-fuser-system-fabricated */|' "$_file";;
+    dcl-fuser-host-login-name)
+        sed -i '/^static int lex_user(/,/^}$/ s|^        result\[0\] = .\\0.;$|        { struct passwd *pw_ = getpwuid(getuid()); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fuser-host-login-name */|' "$_file";;
+    dcl-fident-num2name-host-passwd)
+        sed -i '/^static int lex_identifier(/,/^}$/ s|^            result\[0\] = .\\0.;$|            { struct passwd *pw_ = getpwuid((uid_t)member); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fident-num2name-host-passwd */|' "$_file";;
+    dcl-fident-num2name-bracketed-uic)
+        sed -i '/^static int lex_identifier(/,/^}$/ s|^            result\[0\] = .\\0.;$|            snprintf(result, result_size, "[%d,%d]", group, member); /* NEGCTL dcl-fident-num2name-bracketed-uic */|' "$_file";;
+    dcl-fident-name2num-host-passwd)
+        sed -i '/^static int lex_identifier(/,/^}$/ s|^            snprintf(result, result_size, "0");$|            { struct passwd *pw_ = getpwnam(id_str); if (pw_) { snprintf(result, result_size, "%d", (int)((pw_->pw_gid << 16) \| (pw_->pw_uid \& 0xFFFF))); } else { snprintf(result, result_size, "0"); } } /* NEGCTL dcl-fident-name2num-host-passwd */|' "$_file";;
+    opcom-header-host-login-name)
+        sed -i '/^static void get_current_username(/,/^}$/ s|^    strncpy(buf, info.username, bufsz - 1);$|    if (!info.username[0]) { struct passwd *pw_ = getpwuid(getuid()); if (pw_) { strncpy(buf, pw_->pw_name, bufsz - 1); buf[bufsz - 1] = 0; return; } } strncpy(buf, info.username, bufsz - 1); /* NEGCTL opcom-header-host-login-name */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

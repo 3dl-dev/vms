@@ -16,10 +16,16 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$sndopr (vms-5b4) -- appends to OPERATOR.LOG through
- *     vmsfs path translation, tagged with the username read from the caller's
- *     own PCB. There is no OPCOM process to request, so no operator is
- *     notified and no reply can ever come back.
+ * OVMX-PARTIAL: sys$sndopr (vms-5b4) -- exec: the user name in the OPCOM
+ *     header is the one the EXECUTIVE holds for the caller, read back through
+ *     vms_kif_getjpi_self(). It used to come from the caller's own PCB and
+ *     then from the host passwd database, which is why this line is an upgrade
+ *     rather than a correction -- see get_current_username below
+ *     (vms-cb5 / vms-f39).
+ * OVMX-LOCAL: sys$sndopr -- everything else. The record is appended to
+ *     OPERATOR.LOG by this process through vmsfs path translation, the request
+ *     number is a counter private to this image, and there is no OPCOM process
+ *     to request, so no operator is notified and no reply can ever come back.
  * OVMX-USERSPACE: sys$brkthruw (vms-5b4) -- open()s the resolved terminal
  *     device and write()s to it directly, falling back to the caller's own
  *     stdout when that open fails. No executive mediates the broadcast, so it
@@ -35,9 +41,15 @@
 #include <fcntl.h>
 #include <time.h>
 #include <errno.h>
+/* <pwd.h> is no longer used by this file -- get_current_username() below
+ * reads the executive, not the passwd database. It stays because
+ * tests/qemu/facility_defects.sh's opcom-header-host-login-name control
+ * restores the getpwuid() call verbatim to prove the assertions can see it,
+ * and a mutation that will not compile is a broken fixture, not a gate. */
 #include <pwd.h>
 #include "starlet.h"
 #include "vms/pcb.h"
+#include "vms_kif.h"
 
 /* Operator log file path */
 #include "ovmx_layout.h"
@@ -80,16 +92,61 @@ static void format_vms_timestamp(char *buf, size_t bufsz)
 }
 
 /*
- * Get the current VMS username from PCB or passwd database.
+ * THE USER NAME IN THE OPCOM HEADER, READ FROM THE EXECUTIVE'S ROW
+ * (vms-cb5 / vms-f39; CLAUDE.md Rules 9, 10 and 11).
+ *
+ * TWO SOURCES WERE DELETED HERE, not demoted to fallbacks -- the same pair
+ * $GETJPI deleted at src/libvms/syssvc/sys_process.c (JPI$_USERNAME):
+ *
+ *  - vms_pcb_get()->username, a value THIS process wrote about itself. The
+ *    PCB is process-private memory and its setter is a plain strncpy of the
+ *    caller's own argument (src/vmsprocess/vms_pcb.c), with no executive
+ *    anywhere in the path -- so the operator log recorded whatever the
+ *    requesting process had told itself it was called (Rule 11).
+ *  - getpwuid(getuid())->pw_name, the HOST Linux account name, with the
+ *    literal "UNKNOWN" behind it. MEASURED on this repo's build host, before
+ *    this change:
+ *
+ *        $ printf 'LOGOUT\n' | ./build/bin/DCL.EXE
+ *        (in the operator log)
+ *        %%OPCOM, 01-AUG-2026 18:50:05.30, request 1 from user baron on node OVMX
+ *
+ *    -- the developer's Linux login name, written into a VMS operator record
+ *    for a process the executive had never named. That is vms-f39's defect in
+ *    a second file, and it outlived the round that deleted the DCL half
+ *    because that round fixed the call sites it was handed and called the
+ *    class settled.
+ *
+ * What is left is the row the executive holds, read back through
+ * vms_kif_getjpi_self(). A row with no name yields the empty string, and the
+ * header is then written with that field empty: no name is invented to fill
+ * it, and no name is taken from anywhere this process can set. That is the
+ * same answer $GETJPI, F$USER() and SHOW PROCESS already give for the same
+ * row, so it is not a third answer (Rule 10) -- VMS has no process without a
+ * user name, so there is no VMS rendering of this state to match and nothing
+ * legal to invent for it.
+ *
+ * WITH NO /dev/vms THERE IS NO ROW TO READ, and then this reports no name
+ * rather than substituting one (Rule 9). It does not fail the request:
+ * the record itself is not the executive's to write on OVMX (see the
+ * OVMX-PARTIAL / OVMX-LOCAL declaration at the top of this file), the message
+ * is still the caller's to log, and an empty user field is the honest
+ * rendering of "nothing holds a name for the requester".
  */
-static const char *get_current_username(void)
+static void get_current_username(char *buf, size_t bufsz)
 {
-    struct vms_pcb *pcb = vms_pcb_get();
-    if (pcb && pcb->username[0] != '\0')
-        return pcb->username;
+    struct vms_procinfo info;
 
-    struct passwd *pw = getpwuid(getuid());
-    return pw ? pw->pw_name : "UNKNOWN";
+    if (!buf || bufsz == 0)
+        return;
+    buf[0] = '\0';
+
+    memset(&info, 0, sizeof(info));
+    if (!(vms_kif_getjpi_self(&info) & 1))
+        return;
+
+    strncpy(buf, info.username, bufsz - 1);
+    buf[bufsz - 1] = '\0';
 }
 
 /*
@@ -133,8 +190,10 @@ uint32_t sys$sndopr(const struct dsc$descriptor_s *msgbuf, uint16_t chan)
     char timestamp[32];
     format_vms_timestamp(timestamp, sizeof(timestamp));
 
-    /* Get username */
-    const char *username = get_current_username();
+    /* The user name the executive holds for this process -- empty when it
+     * holds none, and empty is then what the header carries. */
+    char username[VMS_USERNAME_SIZE];
+    get_current_username(username, sizeof(username));
 
     /* Thread-safe static request counter */
     static volatile unsigned int req_count = 0;

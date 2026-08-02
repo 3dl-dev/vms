@@ -171,7 +171,19 @@ int cmd_submit(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)bn[i]);
     upper_name[i] = '\0';
 
-    const char *user = ctx->username[0] ? ctx->username : "SYSTEM";
+    /*
+     * NO FABRICATED OWNER (vms-f42d, CLAUDE.md Rule 10). This read
+     * ": \"SYSTEM\"" -- so a process the executive holds no name for
+     * submitted its job under the most privileged account on the system.
+     * That state is reachable without privilege: vms_proc_register()
+     * gives each new task a row with a zeroed username and inherits
+     * nothing from its parent (src/kernel/vms_module.c), so any SPAWNed
+     * subprocess is in it. The fallback is DELETED, not replaced -- see
+     * the long form at lex_user() in src/vmsdcl/dcl_lexical.c. What goes
+     * in the queue entry is what the executive holds, including when
+     * that is nothing.
+     */
+    const char *user = ctx->username;
 
     uint32_t entry_id = 0;
     sts = vmsq_submit(queue_name, upper_name, user, &entry_id);
@@ -231,7 +243,9 @@ int cmd_print(struct dcl_command *cmd)
         upper_name[i] = (char)toupper((unsigned char)bn[i]);
     upper_name[i] = '\0';
 
-    const char *user = ctx->username[0] ? ctx->username : "SYSTEM";
+    /* No fabricated owner -- same defect, same deletion, as SUBMIT above
+     * (vms-f42d). */
+    const char *user = ctx->username;
 
     uint32_t entry_id = 0;
     sts = vmsq_submit(queue_name, upper_name, user, &entry_id);
@@ -1483,7 +1497,22 @@ int cmd_logout(struct dcl_command *cmd)
 {
     (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
-    const char *upper_user = ctx->username[0] ? ctx->username : "SYSTEM";
+    /*
+     * The name the console line and the OPC record text carry is whatever
+     * ctx->username holds, including nothing: the
+     * `ctx->username[0] ? ctx->username : "SYSTEM"` fallback that stood here
+     * is deleted, not replaced (vms-f42d). Long form at lex_user() in
+     * src/vmsdcl/dcl_lexical.c.
+     *
+     * SCOPE, because the wording here got it wrong once: this variable is the
+     * console line and the OPC message TEXT. The user field of the OPCOM
+     * HEADER is a different value from a different file -- sys$sndopr builds
+     * it in src/libvms/syssvc/sys_operator.c -- and an earlier draft of this
+     * comment claimed the deletion covered "the logout record or the OPCOM
+     * entry" while that header was still being filled from getpwuid(getuid()).
+     * It was falsified by running LOGOUT and reading the log.
+     */
+    const char *upper_user = ctx->username;
 
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);

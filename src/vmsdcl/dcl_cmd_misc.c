@@ -543,7 +543,15 @@ int cmd_sysman(struct dcl_command *cmd)
 int cmd_reply(struct dcl_command *cmd)
 {
     struct dcl_context *ctx = dcl_get_context();
-    const char *username = ctx->username[0] ? ctx->username : "SYSTEM";
+    /*
+     * NO FABRICATED OPERATOR NAME (vms-f42d, CLAUDE.md Rule 10). This
+     * read ": \"SYSTEM\"", so an unnamed process enabling itself as an
+     * operator terminal wrote SYSTEM into OPERATOR.LOG. The unnamed row
+     * is reachable without privilege (any SPAWNed subprocess -- see
+     * vms_proc_register() in src/kernel/vms_module.c). Deleted, not
+     * replaced; long form at lex_user() in src/vmsdcl/dcl_lexical.c.
+     */
+    const char *username = ctx->username;
 
     /* Build a minimal OPC message for the log */
     struct {
@@ -674,7 +682,11 @@ int cmd_accounting(struct dcl_command *cmd)
     (void)cmd;
 
     struct dcl_context *ctx = dcl_get_context();
-    const char *username = ctx->username[0] ? ctx->username : "SYSTEM";
+    /* No fabricated account name -- this one also picked the FILE whose
+     * login record is reported (ovmx_accounting_get_lastlogin below), so
+     * the fallback showed an unnamed process SYSTEM's login history.
+     * Same deletion as REPLY above (vms-f42d). */
+    const char *username = ctx->username;
 
     static const char *months[] = {
         "JAN", "FEB", "MAR", "APR", "MAY", "JUN",

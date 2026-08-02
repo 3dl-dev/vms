@@ -1,0 +1,26 @@
+# OVMX rd citation ledger -- DERIVED ARTIFACT. Do NOT hand-edit.
+#
+# Every gate that sells an exemption for a cited rd item id checks that id
+# against this file. rd is nostr-backed and unreachable from CI, so the
+# resolution happens on a host that has rd and the answer is committed.
+#
+# regenerate:   tools/gen_rd_citations.py
+# freshness:    tests/integration/test_rd_citations_fresh.sh (needs rd)
+# scanned:      src/, tools/ -- lines carrying an OVMX-<TOKEN>: marker
+# open means:   the id appears in `rd list` (rd's own open set), not a
+#               status name matched against a list kept in a gate.
+# generated-at: 2026-08-02T17:29:55Z
+#
+# <rd id>	<open|closed|absent>	<rd status>	<title>
+vms-1c57	closed	done	$QIO to a terminal never touches the executive device table: the public $ASSIGN/$QIO path byp...
+vms-2a8	closed	done	Event flags are a per-process facade: sys_event.c never calls the executive and sys$ascefc fa...
+vms-5b4	closed	done	The unwired families have LIVE per-process userspace impostors: the census declares the wrapp...
+vms-8019	closed	done	VMS process names are unobservable: no executive-resident process table, so prcnam dies at ex...
+vms-a36	open	inbox	SET TERMINAL has no observable effect: it writes ctx->terminal, never IO$_SETMODE
+vms-a4b	closed	done	Logical name tables are per-process fakes and VMSLNMD.EXE has zero clients
+vms-a86	open	inbox	vms_kif_close and vms_kif_getlki have no product path and no owning item (no sys$getlki exists)
+vms-as1	open	active	ASTs are delivered by the executive, not per-process
+vms-ci.7	closed	done	Rewire $ENQ/$DEQ to the kernel lock manager (single authoritative lock manager)
+vms-dv1	open	inbox	Executive owns the device table — SHOW DEVICE reflects real VMS devices
+vms-fb9	closed	done	SHOW DEVICE / SHOW TERMINAL read the executive device table; VMS_TERMINAL env handoff deleted
+vms-pv1	open	active	Privileges and access modes are enforced by the executive

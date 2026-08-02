@@ -31,17 +31,32 @@
  * OVMX service register (rd vms-d89) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-EXECUTIVE: sys$enq (vms-ci.7) proof=tests/qemu/test_syssvc_lock.c -- there is
- *     no userspace lock table and no flock() fallback; the grant decision, the lock
- *     id and the value block all come back from the kernel lock manager.
- * OVMX-EXECUTIVE: sys$enqw (vms-ci.7) proof=tests/qemu/test_syssvc_lock.c -- the same
- *     request as $ENQ with the wait taken in the executive.
- * OVMX-EXECUTIVE: sys$deq (vms-ci.7) proof=tests/qemu/test_syssvc_lock.c -- one-line
- *     pass-through to vms_kif_deq.
+ * OVMX-PARTIAL: sys$enq (vms-ci.7) -- exec: the grant decision, the lock id and the
+ *     value block all come back from the kernel lock manager. There is no userspace
+ *     lock table and no flock() fallback; tests/qemu/test_syssvc_lock.c is the
+ *     A-writes/B-reads proof, and lock-compat-cr-ex mutates the executive code that
+ *     answers it.
+ * OVMX-LOCAL: sys$enq -- the ssdef.h SPELLING of the status. kstat_to_ss() below runs
+ *     in the calling process and maps the kernel numbering onto the public SS$_xxx
+ *     constants; the executive never sees an ssdef.h value.
+ * OVMX-PARTIAL: sys$enqw (vms-ci.7) -- exec: the same request as $ENQ with the wait
+ *     taken in the executive.
+ * OVMX-LOCAL: sys$enqw -- the same userspace status mapping as $ENQ.
+ * OVMX-PARTIAL: sys$deq (vms-ci.7) -- exec: a pass-through to vms_kif_deq; the release
+ *     decision is entirely the kernel lock manager's.
+ * OVMX-LOCAL: sys$deq -- the same userspace status mapping as $ENQ.
  *
- * kstat_to_ss() below translates the kernel's status numbering into the public
- * ssdef.h values. That is a translation of the executive's answer, not a
- * substitute for it: it changes how the answer is spelled, never what it says.
+ * THESE THREE WERE OVMX-EXECUTIVE UNTIL vms-ecf ROUND 4, AND THE DOWNGRADE IS A
+ * MEASUREMENT, NOT A LOSS OF CONFIDENCE IN THE LOCK MANAGER. What sat here was the
+ * hand-written defence "kstat_to_ss() is a translation of the executive's answer, not
+ * a substitute for it: it changes how the answer is spelled, never what it says."
+ * That is exactly the kind of prose the register is not allowed to read, and the
+ * manifest contradicts it: kstat-deadlock-mismapped, kstat-ivlockid-mismapped and
+ * kstat-cvtungrant-mismapped each mutate THIS FILE ONLY -- no executive code at all --
+ * and each changes what a public-API caller observes (SS$_DEADLOCK, SS$_IVLOCKID,
+ * SS$_CVTUNGRANT). A part of the answer a caller receives is therefore computed in
+ * the calling process, which is what OVMX-PARTIAL + OVMX-LOCAL is for. The executive
+ * facts the old lines asserted are all still asserted above, under exec:.
  */
 
 #include <stdint.h>

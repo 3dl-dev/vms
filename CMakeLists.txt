@@ -235,21 +235,32 @@ if(BUILD_TESTS)
     # ask "is there another implementation of the same public service the
     # product reaches INSTEAD" — a facade is invisible to a gate that only
     # counts calls to the real thing. Source scan.
+    #
+    # NOT a pure source scan any more (vms-f26): it COMPILES every product .c
+    # file it scans and reads the exported sys$ symbols out of the objects with
+    # nm, because the source-text readings of the universe were all escaped
+    # together by an asm-label rename that left the object symbol-identical.
+    # One compile per product .c file per run, hence the raised timeout.
     add_test(NAME userspace_service_register
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(userspace_service_register PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 120)
+        LABELS "integration;authenticity" TIMEOUT 300)
 
     # ...and the evasions, on a sandbox copy of the tree. The GREEN controls
     # carry as much weight as the RED ones here: the register's design rests on
     # firing for an undeclared impostor and NOT for legitimate pure computation,
     # and on leaving Rule 10's second answer (delete the service outright) open.
+    # Each control runs the whole gate, and the gate now compiles the tree for
+    # its symbol scan, so the wall clock is (controls x compiles). Measured on
+    # an 8-core box: 99s for 34 controls before the symbol scan, 180s for 39
+    # after. The timeout is set well clear of that because a CI runner has
+    # fewer cores and the compiles are what parallelise.
     add_test(NAME userspace_service_register_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(userspace_service_register_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 300)
+        LABELS "integration;authenticity" TIMEOUT 900)
 
     # Rule 10/11 standing gate (vms-fb9): a process does not name its own
     # terminal, and SHOW DEVICE does not invent device rows. Keeps the

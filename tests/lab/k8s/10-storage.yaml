@@ -1,0 +1,61 @@
+# Static hostPath PV over the VAX lab volume (vms-a5c).
+#
+# WHY NO NEW STORAGE PLUMBING IS NEEDED: mainframe's scripts/mk-k3s-worker.sh
+# already attaches the tank "training" virtiofs share to k3s-worker
+# (--virtiofs2 dirid=training), and the lab dataset tank/vax is nested INSIDE
+# that share at /tank/training/vax. So /data/training/vax is already mounted on
+# the node — verified 2026-08-02 with a read-only probe pod. No new ZFS dataset,
+# no pvesh mapping, and NO worker rebuild.
+#
+#   *** DO NOT RUN mainframe's scripts/mk-k3s-worker.sh TO "SET THIS UP". ***
+#   It destroys and recreates VM 214, and nine bound local-path PVCs belonging
+#   to the enterprise-ai stack live on that node's disk. See mainframe-769.
+#
+# Follows the pattern in mainframe k8s/tank-pvs.yaml: static hostPath, Retain,
+# nodeAffinity pinned to k3s-worker, and a storageClassName that is a plain
+# string with no matching StorageClass object — deliberately keeping this out of
+# local-path-provisioner's dynamic path so only a PVC naming it exactly binds.
+#
+# ReadWriteMany is safe here only because every consumer is pinned to the one
+# node that has the mount. Isolation between labs is enforced by each replica
+# writing under its own k8s-labs/<pod>/ subtree, never by the volume.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: vax-lab-pv
+  labels:
+    app.kubernetes.io/part-of: ovmx
+    ovmx.io/item: vms-a5c
+spec:
+  capacity:
+    storage: 40Gi          # the tank/vax dataset quota
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: vax-lab
+  hostPath:
+    path: /data/training/vax
+    type: Directory
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - k3s-worker
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vax-lab-pvc
+  namespace: ovmx-lab
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: vax-lab
+  volumeName: vax-lab-pv
+  resources:
+    requests:
+      storage: 40Gi

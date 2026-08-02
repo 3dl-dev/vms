@@ -3155,6 +3155,59 @@ does not drive it.
 > either already on disk or one command away. Cost: zero lab time to check,
 > two retracted sections for not checking.
 
+### 4M.10 ⭐⭐⭐ THE CLUSTER OPENS A TRANSITION FOR US AND HANGS IN IT — 6/6, and it survives the kill-switch
+
+**The best-conditioned discriminator this item has produced.** It is a *state*
+of the cluster, not a message; it has matched controls on both sides; and unlike
+everything in §4M.7/§4M.8 it is **unaffected by the fix** (`N1E`, fix OFF, shows
+it), so it is a property of the refusal itself.
+
+SDA `SHOW CLUSTER`'s cluster block (the CLUB), sampled before the attempt and at
+the end of the run:
+
+| run | verdict | CLUB flags at T-PRE | **CLUB flags at T-END** |
+|---|---|---|---|
+| `N1A` | JOINED | `11082001 …quorum` | `11082041 …quorum,`**`lnm_resynch`** |
+| `N3A` | JOINED | `11082001 …quorum` | `11082041 …quorum,`**`lnm_resynch`** |
+| `N1B` | REFUSED | `11082001 …quorum` | **`31082001 …quorum,transition`** |
+| `N1C` | REFUSED | `11082001 …quorum` | **`31082001 …quorum,transition`** |
+| `N1D` | REFUSED | `11082001 …quorum` | **`31082001 …quorum,transition`** |
+| `N1E` | REFUSED (fix OFF) | `11082001 …quorum` | **`31082001 …quorum,transition`** |
+
+**Every join ends with the transition COMPLETE and the cluster in lock-manager
+resynch. Every refusal ends with the cluster STILL IN THE TRANSITION**, 110 s
+after it opened, on all four rejoins, from three different prior CSB states.
+
+> **The returning node is NOT being ignored and NOT being rejected. The cluster
+> COMMITS to a transition to add it, and then hangs in that transition
+> indefinitely.** That is a third shape, distinct from both of §4d.6's: it is not
+> `s3B`'s silent drop (a transition is opened) and it is not `r1B`'s
+> propose-then-abort (no abort ever arrives — `CM-XITABORT-RECEIVED=0` in every
+> run, and OVMX's `cat 0x01 op 0x04 role 0x50` detector is live and quiet).
+
+**And OVMX is never brought into the barrier.** `SCSD-I-BARRIER` is **12** in
+every join and **0** in every refusal — the coordinator opens the transition and
+never sends us a barrier step. That is consistent with the CSB never reaching
+`member,selected` (§4M.8): we are the subject of the transition, not a
+participant in it.
+
+**This is where the next iteration goes.** The question is no longer "why does
+the peer ignore us" but:
+
+> **The cluster has opened a transition to add this identity. What is that
+> transition waiting for, which node owes it, and why does the same transition
+> complete in ~10 s for a fresh identity?**
+
+**Oracles, cheapest first — none of them yet run against this framing:**
+1. **The peer's OPCOM console during the stall.** §4d.6 records `proposed
+   addition` / `aborted` lines existing. `csbwatch.sh` cannot see them — it parks
+   VAX1 inside SDA — so this needs `stallpoll.sh`/`probe.sh` or a plain
+   `lab2run.sh` with console capture. **A stuck transition is exactly the thing
+   VMS complains about on the console.**
+2. **SDA `SHOW CLUSTER` FULL during the stall**, not just at T-END — per-node
+   state will name which node has not completed its part.
+3. `Member State Seq. Num` / `Last trans. number` across the stall.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

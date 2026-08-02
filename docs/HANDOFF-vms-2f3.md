@@ -3419,6 +3419,65 @@ frames with each other. The cluster stays live; only OVMX is cut off.
 > responses, and naive scans produce false `cat 0x04` hits where ordinary data
 > lands at abs 80/81.
 
+### 4M.14 ⭐⭐⭐ A THIRD INSTANCE OF THE 0x7b DEAFNESS — on the gate that the source itself says GATES ADMISSION
+
+**Found by following §4M.13's anomaly with a 7-run scan, then reading our own
+source.** No lab time, no capture agent.
+
+**The measurement, 7/7 with bracketing controls** — every `mt=0x7b` frame in
+every `N`-series capture:
+
+| runs | verdict | `0x7b` frames |
+|---|---|---|
+| `N1A`,`N2A`,`N3A` | **JOINED** | 9, all **124** bytes, `op=0`, `dstCID=0` (unbound connect-requests at t≈85 s, long after admission — unrelated) |
+| `N1B`,`N1C`,`N1D`,`N1E` | **REFUSED** | **2, both 72 bytes, `op=8`, `dstCID = SCS_DIR_OVMX_CONID`**, from VAX1 only, **3.0 s apart** |
+
+Completely disjoint. And scanning for `op=8` in *any* msgtype shows the
+originals arrive in **every** run:
+
+| run | `op=8` originals (`0x4b`) | **retransmits (`0x7b`)** |
+|---|---|---|
+| the three joins | 2 — one per peer | **0 — answered first time** |
+| the four refusals | 2 — one per peer | **2, from VAX1** |
+
+> **So VAX1 asks the same thing in both cases. On a join we satisfy it. On a
+> rejoin we do not, and it retransmits on the 3.0 s ceiling of §4d.9.**
+
+**And our own source says why.** `scsd.c:2525`, the gate on the op6/op8
+credit/ready handshake — whose own comment reads *"VAX1 runs this after a
+connection binds and **GATES admission** (incl. accepting the joiner's own client
+connects) on it"*:
+
+```c
+if (do_connect && n >= 72 &&
+    (buf[30] == SCS_MSGTYPE_SEQAPP || buf[30] == SCS_DIR_OPCODE)) {   /* 0x4b || 0x5b */
+```
+
+**`0x7b` is not in the set, so every retransmission is discarded before any
+handler runs.**
+
+**This is the THIRD instance of one defect.** The `0x5b` comment a hundred lines
+below fixed it once; §4d.10 fixed it again for `0x7b` on the connection-manager
+path; **this site was missed both times** — and it is the one the source labels
+as gating admission. §4d.10's own comment predicted this exact asymmetry:
+
+> *"a fresh identity never provokes a retransmission, so it never meets `0x7b`,
+> while a returning one is deaf to every retransmission from the first onward."*
+
+**It has §4L.9h's shape exactly:** joins never retransmit op=8, so the deafness
+is **unreachable** on the path we test; rejoins always retransmit, so it is hit
+every time; and a real node answers.
+
+**Fixed**, with `OVMX_NO_CREDIT_RETX=1` restoring the deaf behaviour, and a new
+`SCSD-I-CREDITRETX` trace plus a `CREDIT-RETX-ANSWERED` summary counter so the
+run reports it directly. 39/39 ctest green.
+
+> **⚠ VERDICT PENDING — do not record this as the fix until the bracketed series
+> lands.** Guardrail 23: run the kill-switch before writing down what it
+> achieved. Three real bugs on this item have already been "obviously it" and
+> were not (§3 items 2, 3, 13). Series `P1A`/`N1F`/`P1B`/`P1C`/`P2A` is running;
+> `N1F` is `OVMXN1`, which has been refused **four** times.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

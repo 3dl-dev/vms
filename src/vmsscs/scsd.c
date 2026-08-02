@@ -2225,6 +2225,9 @@ int main(int argc, char **argv)
     long dir_lookup_sent = 0;    /* vms-246: SCS$DIR_LOOKUP responses sent */
     long cm_config_frames = 0;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
     long cm_abort_seen = 0;      /* vms-2f3: cat-0x01 op-0x04 role-0x50 aborts received */
+    long credit_retx_seen = 0;   /* vms-2f3 sec 4M.14: RETRANSMITTED (0x7b) op6/op8 credit
+                                  * handshakes answered. 0 in every join, 2 in every
+                                  * refused rejoin measured -- see the gate at ~2525. */
     /* vms-760: the deferred op 0x02 goes to EXACTLY ONE peer -- THE COORDINATOR.
      * Admission is a single-coordinator transaction: the joiner asks one member,
      * and THAT member relays the new node to the rest via op 0x12 and then runs
@@ -2522,8 +2525,25 @@ int main(int argc, char **argv)
          * PROTOCOL requirement on every path, not a pure-server nicety -- the real
          * joiner (VAX3) answers them while driving its own connects. Previously gated
          * to pure-server, so the sequencer path left them unanswered. */
+        /* vms-2f3 sec 4M.14: ...AND ITS RETRANSMIT FORM, 0x7b. THIRD instance of
+         * the same defect -- sec 4d.10 fixed it on the connection-manager path and
+         * the 0x5b comment below fixed it once before that, but THIS site, the one
+         * whose own comment says VAX1 "GATES admission" on the handshake, still
+         * gated on 0x4b||0x5b and silently discarded every retransmission.
+         *
+         * Measured 7/7 on lab-2 with bracketing controls: VAX1 sends op=8 to us in
+         * EVERY run, and only in the four REFUSED rejoins does it retransmit --
+         * twice, 3.0 s apart (the collapsed ReXmt interval of sec 4d.9), as 72-byte
+         * mt=0x7b addressed to SCS_DIR_OVMX_CONID. The three joins are answered
+         * first time and never retransmit, so a fresh identity never meets 0x7b
+         * here and the deafness is unreachable on the path we test. That is exactly
+         * the sec 4L.9h shape.
+         *
+         * OVMX_NO_CREDIT_RETX=1 restores the deaf behaviour (guardrail 21). */
         if (do_connect && n >= 72 &&
-            (buf[30] == SCS_MSGTYPE_SEQAPP || buf[30] == SCS_DIR_OPCODE)) {
+            (buf[30] == SCS_MSGTYPE_SEQAPP || buf[30] == SCS_DIR_OPCODE ||
+             (buf[30] == SCS_DIR_OPCODE_RETX &&
+              getenv("OVMX_NO_CREDIT_RETX") == NULL))) {
             uint16_t cm_op = (uint16_t)buf[60] | ((uint16_t)buf[61] << 8);
             uint32_t cm_rc = (uint32_t)buf[64] | ((uint32_t)buf[65] << 8) |
                              ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
@@ -2538,6 +2558,18 @@ int main(int argc, char **argv)
                         (uint16_t)buf[34] | ((uint16_t)buf[35] << 8));
                     scs_reflect_credit(sock, (int)ifindex, ps, our_hw_mac,
                                        our_src_logical, buf, (size_t)n);
+                    /* vms-2f3 sec 4M.14: make the retransmit case visible. Every
+                     * refused rejoin measured so far carries exactly two of these
+                     * and every join carries none. */
+                    if (buf[30] == SCS_DIR_OPCODE_RETX) {
+                        credit_retx_seen++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-CREDITRETX, answered a RETRANSMITTED (0x7b)"
+                               " op%u credit/ready handshake on conid=0x%08X --"
+                               " every previous build silently discarded this\n",
+                               (unsigned)cm_op, cm_rc);
+                        fflush(stdout);
+                    }
                     /* vms-760: op6 on OUR server dir connection (SCS_DIR_OVMX_CONID)
                      * is the LAST credit frame -- af2's joiner opens its own client
                      * dir connect only AFTER this settles. Mark it done and kick off
@@ -5092,6 +5124,7 @@ int main(int argc, char **argv)
          * fail to say XITDONE. XITABORT>0 is the difference between "the
          * coordinator declined us" and "nothing happened". */
         fprintf(stderr, "  CM-XITABORT-RECEIVED=%ld\n", cm_abort_seen);
+        fprintf(stderr, "  CREDIT-RETX-ANSWERED=%ld\n", credit_retx_seen);
         fprintf(stderr, "  MSCP-SERVER-ACCEPTS-SENT=%ld\n", mscp_srv_accepts);
         fprintf(stderr, "  PSC-UNGATED=%ld\n", psc_ungated); /* vms-2f3 step 4 */
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {

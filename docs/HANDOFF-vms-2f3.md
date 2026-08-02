@@ -270,6 +270,14 @@ oracle degrades before it errors.
     client walk *to the peer's* `MSCP$DISK` does precede `op 0x02`, and that one
     is real. The two are constantly confused; §4k.6 has the table.
 
+13. **The directory-response msgtype mirror (§4M).** OVMX echoed the request's
+    msgtype onto its lookup response; a real VAX always answers `0x4b` (336-frame
+    census). Real bug, fixed and kept — **and not the gate.** `N1B`/`N1C`/`N1D`
+    answer `0x4b` and are refused three times, between two joining controls.
+    The *observation* that the peer asks with `0x5b` only on a rejoin is
+    confirmed 7/7 and remains a useful free oracle; the *causal* reading of it
+    is dead.
+
 ## 4. What DID land — two frozen fields, and the spec was wrong about one
 
 Commit `c302b7d`. Neither fixes the rejoin; both are real bugs, both are now
@@ -2925,6 +2933,90 @@ source. What is NOT yet grounded is that the peer *discards* a mirrored `0x5b`
 lookup response — and whether the peer's choice of `0x5b` on a rejoin is itself
 downstream of something earlier. The test below decides it.
 
+### 4M.6 ⛔ RUN — THE MIRRORING FIX IS NOT THE GATE. The observation REPLICATED; the hypothesis is DEAD.
+
+**Bracketed series `N1A`/`N1B`/`N1C`/`N1D`/`N2A` on `vaxlab-2`, fresh identities
+`OVMXN1` (1308) and `OVMXN2` (1309), binary built from the §4M commit.**
+
+| run | identity | sidecar | verdict |
+|---|---|---|---|
+| `N1A` | `OVMXN1`, fresh | none | **JOINED** (`XITDONE=1`) |
+| **`N1B`** | **same `OVMXN1`** | carried, 41 B | **REFUSED** |
+| **`N1C`** | same, 2nd rejoin | carried | **REFUSED** |
+| **`N1D`** | same, 3rd rejoin | carried | **REFUSED** |
+| `N2A` | `OVMXN2`, fresh | none | **JOINED** |
+
+Controls join on **both** sides (guardrail 20), all five logged `identity on the
+wire`. The experiment is valid and **the answer is no.**
+
+**The fix was live** — guardrail 19, checked before interpreting. Every `N1B`
+lookup logs `our resp msgtype=0x4b`, in the new two-field log format that only
+exists in the fixed binary.
+
+**But §4M.1's OBSERVATION replicated exactly, on a brand-new identity:**
+
+| run | `MSCP$DISK` **request** msgtypes |
+|---|---|
+| `N1A` fresh | `4b 4b` · `4b 4b` |
+| **`N1B` rejoin** | **`5b 5b`** · **`5b 5b`** |
+
+So "the peer asks with `0x5b` only on a rejoin" is now **7/7 and reproducible on
+demand** — a reliable free oracle for *"the peer does not consider its
+SCS$DIRECTORY connection to us to be up"* (`scs_dir.h:33`). What is dead is that
+**our** mirroring caused it. We answer `0x4b`, exactly as the reference does, and
+the peer still asks the next one with `0x5b` and still refuses us.
+
+> **Guardrail 15, for the sixth time on this item: a fix that is right can leave
+> the bug unfixed.** The mirroring was wrong against a 336-frame census and is
+> **kept** — it is now reference-correct. It is not the rejoin gate. Do not
+> relabel it as noise, and do not re-propose it.
+
+**Cause vs effect, settled the right way round:** the `0x5b` is an *effect*. It
+reports that the peer's directory connection to us is still establishing; it is
+not the peer reacting to what we put in the response.
+
+### 4M.7 ⭐⭐⭐ AND THE FIX MOVED THE DIALOGUE — the peer's ack carries a DIFFERENT OPCODE on a rejoin
+
+Unlike §4e.4's ambiguous "we answered / it gave up sooner", this is
+unambiguous: the refused run gets **more**, not less.
+
+| | `M1B` refused (pre-fix) | **`N1B` refused (post-fix)** | `N1A` joined |
+|---|---|---|---|
+| `SCSD-T-CMIN` inbound CM | 4 | **7** | 576 |
+| `SCSD-I-CMRESP` | 0 | **1** | 235 |
+| `SCSD-I-CLUSTATE` | 0 | **1** | 2 |
+
+`N1B` now receives the peer's `cat 0x01 op 0x03` and **answers it** — a
+transaction step no refused run had ever reached. It still stalls immediately
+after.
+
+**And the whole setup phase is IDENTICAL between `N1A` and `N1B`** — `DIRCONN`
+2/2, `DIRLOOKUP` 8/8, `CONNREQ` 2/2, `JOINBOUND` 2/2, `JOINCONFIRM` 2/2,
+`STARTDONE` 2/2, `STARTRX` 6/6, `INCARN` 2/2, `PADINIT`/`PADACK` 2/2,
+`CMCONFIG` 3/3. OVMX's side of the handshake is complete and equal.
+
+**THE NEW DISCRIMINATOR, and it is of §4L.9h's exact shape:**
+
+| after the node-status pair, the peer sends | `N1A` **join** | `N1B` **rejoin** |
+|---|---|---|
+| peer A | `cat 0x04 op 0x00` | **`cat 0x04 op 0x04`** |
+| peer B | `cat 0x04 op 0x00` | **`cat 0x04 op 0x06`** |
+| then | `op 0x03` → **`op 0x05`** → 570 more | `op 0x03` → answered → **silence** |
+
+`cat 0x04` is `SCS_MEMBER_CAT_ACK` (`scs_member.h:105`), "member commit/credit
+ack". **On a fresh join both peers ack with `op 0x00`. On a rejoin they ack with
+`op 0x04` and `op 0x06` — and the two peers disagree with each other.**
+
+`scs_member.h:410` defines `SCS_MEMBER_OP_ABORT 0x04` — *"transition ABORT"* —
+which would fit §4d.6's answered-then-aborted shape. **That mapping is for the
+`cat 0x01` opcode space and is NOT established for `cat 0x04`. Do not cite it as
+an abort until it is grounded.** What IS grounded is that the opcode differs,
+only on a rejoin, from both peers, with a matched control.
+
+This is the same bug class as the `0x7b` deafness of §4d.10 if OVMX ignores
+these: `cm_req` at `scsd.c:2764` covers only `CAT_CONFIG`/`CAT_MEMBERSHIP`/
+`CAT_DLM` — **`CAT_ACK` is not in the set.**
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-
@@ -3074,6 +3166,14 @@ Run tags session L part 4 (lab-2 `vaxlab-2`, the §4L bracketed triples, all via
 (same identity) / `M2A` joined (`OVMXM2`, 1306, fresh) — the bracketed triple.
 Then `M3A` joined (`OVMXM3`, 1307, fresh) / **`M3B` refused** / **`M3C` refused**
 (third attempt) at `CAD=1..2`. **Last SCSSYSTEMID used: 1307.**
+
+Run tags session m (lab-2 `vaxlab-2`, the §4M fix under test, all via
+`tools/csbwatch.sh`): `N1A` fresh (`OVMXN1`, 1308) = opening control ·
+**`N1B`/`N1C`/`N1D` = three consecutive same-identity rejoins**, the test of
+`scs_dir_response_msgtype()` (done-criteria 1 and 3) · `N2A` fresh (`OVMXN2`,
+1309) = closing control (guardrail 20). Binary: `build-d94/bin/SCSD.EXE` built
+from the commit that lands §4M. Kill-switch for the whole change:
+`OVMX_DIR_MIRROR_MSGTYPE=1`. **Last SCSSYSTEMID used: 1309.**
 
 **Pod state after this session:** `vaxlab-0` SPENT (console wedged). `vaxlab-1`
 DEGRADED — its VAX2 was SIGKILLed by the `SMOKE` tool test and never rebooted.

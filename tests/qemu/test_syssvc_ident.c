@@ -547,6 +547,20 @@ static void scenario_e_a_writes_b_reads(void)
 #define G_MEM   11u
 #define G_PRIVS (PRV$M_TMPMBX | PRV$M_NETMBX)
 
+/* One G/OPCOM+ assertion below spells this name LITERALLY in its label,
+ * because that label is named in facility_defects.sh's
+ * bind-client-no-register manifest and the manifest selftest greps this
+ * source for it without expanding macros (the long form is at that
+ * assertion). Renaming G_NAME would leave that label saying SHIPPING while
+ * the run used something else -- not a wrong verdict, since the CHECK still
+ * compares against G_NAME, but a lying label. This catches the rename at
+ * compile time so the label gets updated with it, in this file AND in the
+ * manifest entry that must match it word for word. */
+_Static_assert(sizeof(G_NAME) == sizeof("SHIPPING"),
+               "G_NAME changed: update the literal 'SHIPPING' in the G/OPCOM+ "
+               "assertion label below AND the matching bind-client-no-register "
+               "knock_on_fail entry in tests/qemu/facility_defects.sh");
+
 /* The queue manager's database. ensure_queue_init() defaults it to
  * /tmp/QMAN_MASTER.DAT, which the initramfs's root-owned /tmp does not let
  * an unprivileged subprocess create -- and a SUBMIT/PRINT that fails
@@ -1195,8 +1209,21 @@ static void scenario_g_unnamed_row_reports_nothing(void)
         CHECK(total > 0,
               "G/OPCOM+: the named process's REPLY and LOGOUT records reached "
               "the operator log");
+        /* The LABEL spells SHIPPING literally rather than interpolating
+         * G_NAME, while the CHECK above still compares against G_NAME -- so
+         * the assertion's meaning is unchanged and only its printed text is
+         * affected. It has to be literal because this assertion is named in
+         * tests/qemu/facility_defects.sh's bind-client-no-register manifest,
+         * and the two consumers of that name read it from different places:
+         * run_facility_negctl.sh compares it to the RUNTIME output (where the
+         * macro is already substituted), while facility_defects.sh selftest
+         * greps the SUITE SOURCE, which sees the token G_NAME and cannot
+         * expand it. An interpolated label satisfies the first and is
+         * reported absent by the second. Every other manifest-declared
+         * assertion in this file already avoids macros in its text for the
+         * same reason; this one was the exception and the selftest said so. */
         CHECK(total > 0 && named == total,
-              "G/OPCOM+: EVERY header names " G_NAME " -- the executive's row "
+              "G/OPCOM+: EVERY header names SHIPPING -- the executive's row "
               "DOES reach sys$sndopr's user field, so the empty field above "
               "is this process being unnamed and not the field being dead");
         {

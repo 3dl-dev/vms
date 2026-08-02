@@ -1550,6 +1550,8 @@ F: the executive accepted the SYSTEM/ALL identity this scenario needs (cur_privs
 F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL,CMEXEC,SETPRV,WORLD), not merely completes without rendering anything
 G: the session established an authenticated identity
 G: the executive HOLDS that name and reads it back -- so the subprocess's blank below is not the executive naming nobody
+G/OPCOM+: the named run established its identity through the executive (without this the header check below is about a process that is also unnamed)
+G/OPCOM+: EVERY header names SHIPPING -- the executive's row DOES reach sys$sndopr's user field, so the empty field above is this process being unnamed and not the field being dead
 parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
 parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
 sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
@@ -1824,6 +1826,34 @@ THE MISTAKE WORTH RECORDING: the first re-run named all four and only two were
 added, because the extra reds were INFERRED from a scrolled log rather than
 read off the driver's explicit list. The second run named the remaining two
 and refused to pass, which is exactly what the equality check is for.
+TWO MORE, AND THE SAME MISTAKE A THIRD TIME (vms-cb5 r4). Scenario G grew an
+OPCOM+ half -- the same command sequence re-run in a process the executive HAS
+named, which exists to prove sys$sndopr's user field is populated at all and
+not merely always-empty -- and its two executive-dependent assertions were not
+declared here. CI's attribution job read them off its own "does NOT name them"
+list:
+  - "G/OPCOM+: the named run established its identity through the executive" is
+    a vms_kif_setident() through the deleted register step. It is the SAME
+    property as scenario G's own precondition two lines above, and as the
+    require_fail entry, observed once more in the scenario's second run.
+  - "G/OPCOM+: EVERY header names SHIPPING ..." reads back, out of the operator
+    log, the name that setident never recorded. It is a read of the write the
+    line above failed to make -- the identical shape as every other pair in
+    this manifest.
+This is the third arrival of the same lesson in this one entry, which is why it
+is written down rather than quietly appended: an assertion added to a suite
+already in suites_red still has to be declared, because the equality check is
+at PROPERTY granularity and the suite list is not what it compares.
+WHAT STAYED GREEN IN THE OPCOM+ HALF, and it is what keeps this from being a
+blunderbuss: the other TWO assertions of the same block pass. "the named
+process's REPLY and LOGOUT records reached the operator log" stays green
+because writing the record is OVMX-LOCAL -- sys$sndopr appends the line itself,
+so an unbound process still logs, and only the user FIELD goes empty. "and it
+is not SYSTEM" stays green because the empty field is empty, not fabricated --
+the vms-f42d property this round landed is untouched by the missing bind. So
+the mutation reddens exactly the two assertions that depend on the executive
+and neither of the two that do not, which is the attribution this control
+exists to make.
 WHAT STAYED GREEN, and it matters: scenario G's assertions about SUBMIT,
 PRINT, ACCOUNTING, REPLY, LOGOUT and F$USER all PASS under this mutation --
 their property is that DCL prints NO user name when the executive holds none,

@@ -33,10 +33,10 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > **§5's ordered plan is now FULLY EXECUTED — step 4 was run in §4e.4 and is
 > refuted as the gate. Do not re-propose it.** **§4f–§4g are newer still: §4f proves the
 > deciding state is the CLUSTER's, not ours; §4g shows the peer asks for our disk
-> server, is told yes, and declines to connect. START AT §4h — the CDT layer is
-> excluded for everyone, and the peer's CSB now shows the rejoin attempt itself
-> clearing `removed`/`status_rcvd` and zeroing the CSID. §4h.3 names the next
-> three steps.** §1–§4c exist so you do not re-derive
+> server, is told yes, and declines to connect. START AT §4h then §4i. The CDT layer is
+> excluded for everyone; the peer's CSB shows the rejoin attempt itself clearing
+> `removed`/`status_rcvd` and zeroing the CSID; and §4i found a real ack bug that
+> explains the PEDRIVER collapse but is NOT the gate.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and
 > §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
 > the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
@@ -88,6 +88,9 @@ reset.**
 | we address the wrong node (`Curr. coord.` rotates) | **REFUTED both ways — forcing the real coordinator still refused; a fresh identity joins via a non-coordinator** | §4d.7 ⭐ |
 | a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
 | the VAXes have no oracle for their non-decisions | **REFUTED — SCACP, ANALYZE/ERROR_LOG and SDA SHOW CONNECTIONS all exist and were never used** | §4d.9 ⭐⭐⭐ |
+| our node-status reply differs on a rejoin | **REFUTED — byte-identical, 0 of 132 bytes across 4 frames** | §4i.1 ⭐⭐ |
+| the `0x48` credit-return is enough to stop the peers retransmitting | **REFUTED — OVMX sent `acked_seq=11` three times and they retransmitted anyway; only a SEQUENCED `recv_ack` stops them** | §4i.2 ⭐⭐ |
+| §4e.4's RETX 6→0 might be the peers giving up sooner | **RESOLVED — it is progress; the ungate supplies the sequenced frames that carry `recv_ack`** | §4i.3 ⭐ |
 | **the refusal is a stale quarantine CSB predating the attempt** | **REFUTED — a died-and-never-returned identity's CSB looks NORMAL (`removed,status_rcvd`, CSID intact)** | §4h ⭐⭐⭐ |
 | **the rejoin attempt itself degrades the peer's CSB** | **GROUNDED — it clears `removed`+`status_rcvd`, zeroes the CSID, and sticks in `wait`; exact 2/3 split, no exceptions** | §4h ⭐⭐⭐ |
 | the peer holds a stale `VMS$DISK_CL_DRVR` CDT across our death | **REFUTED — 3 dead OVMX identities leave ZERO CDTs; live control shows 4** | §4g.6 ⭐⭐ |
@@ -1624,6 +1627,102 @@ status" and our reply does not satisfy it.
 its first attempt) and **do not assume a stale CSB is required** (§4d.1: VAX3
 held none for the identity it aborted). Both remain true and both constrain any
 story built on this section.
+
+---
+
+## 4i. ⭐⭐ A REAL ACK BUG, GROUNDED — and it explains §4d.10 and §4e.4, but is not the gate
+
+Second delegated decode of the same matched pair (`d94-w3A` joined / `d94-w1C`
+refused). Three results, in decreasing order of certainty.
+
+### 4i.1 §4h.2's association is DEAD — our status reply is byte-identical
+
+The node-status exchange is the `cat 0x01 op 0x14` + `cat 0x01 op 0x01` pair
+(the peer's `op 0x01` body carries the member marker `body[12]=0x21`, member
+count, votes, cluster-formed / last-transition quadwords, `"V7.3    "`).
+
+**OVMX answers it in ~4 ms in BOTH runs, and the reply is byte-for-byte
+identical: 0 differing bytes out of 132, across 4 frames, two peers.** So the
+status reply is *not* the discriminator, and §4h.2's suggestion that the
+`send_status`/`status_rcvd` flags point at a reply we get wrong is refuted.
+
+> **Also explicitly NOT grounded:** no wire evidence binds a CSB flag to any
+> message. §4h.2 called that an association and it stays one — the flag names
+> where the peer is stuck, not which frame would unstick it.
+
+### 4i.2 ⭐ The bug: OVMX never advances `recv_ack` on a SEQUENCED frame
+
+**GROUNDED, with a matched control.** In `w1C` OVMX *did* send `0x48`
+credit-returns carrying `acked_seq=11` at t=19.64/22.63/25.63 — **and the peers
+retransmitted anyway.** What it never sent in time was `recv_ack ≥ 11` on a
+*sequenced* (`0x4b`/`0x5b`) frame: its last such frame was `f194` with `ra=10`,
+and the next was `f368` at **t=26.844 with `ra=11`**. The peers' retransmits sit
+at 22.63/25.63, 23.29/26.32, 23.41/26.43 — exactly 3.0 s apart — and **each
+peer's third retransmit never happens, terminating 0.4–1.1 s after that
+`ra=11`.**
+
+**The control eliminates the SYSAP-level alternative.** In `w3A` OVMX's SYSAP
+`am` stayed 0 for 7.0 s — the peer's `smsg=2` unacknowledged just as long — and
+**no retransmit occurred**, because OVMX's *sequenced* `recv_ack` reached 14 at
+t=18.776, piggybacked on the disk-discovery round. So the driver is the SCS-layer
+`recv_ack` on a sequenced frame; **the `0x48` credit-return is necessary but not
+sufficient.**
+
+**This is the mechanism §4d.9 and §4d.10 were missing.** Those sections
+established that a refused rejoin's VC is in congestion collapse, that the
+collapse precedes our `op 0x02`, and that the peers retransmit `msgtype 0x7b`
+into silence — but not *why*. It is because a successful join advances the
+sequenced `recv_ack` as a side effect of the disk-discovery round, and a rejoin,
+which never runs that round, has no sequenced frame to carry it.
+
+### 4i.3 ⭐ This retro-explains §4e.4's open question — RETX 6 → 0
+
+§4e.4 recorded that with the disk-discovery ungate ON the peers stopped
+retransmitting (`0x7b` 6 → 0, one variable, matched kill-switch control) and
+explicitly refused to call it progress: *"we finally answered" and "it gave up
+sooner" both fit.*
+
+**§4i.2 decides it — it is progress.** The ungate makes OVMX emit sequenced
+`PSC_DIR_CONNECT` frames it otherwise never sends (first at +2.9 s, then
+retransmitted six times across the run), and those frames carry the advancing
+`recv_ack` whose absence drives the retransmits. Confirmed on the runs:
+
+| run | ungate | first `PSCUNGATE` | `0x7b` retransmits |
+|---|---|---|---|
+| `w4B` | **ON** | +2.9 s | **0** |
+| `w4C` | off | — | **6** |
+
+> **Corroboration, not proof.** The ungate changes more than the ack — it opens a
+> whole connection. But an independently derived mechanism predicting an already
+> measured matched-control result is strong, and it is the best reading available.
+
+### 4i.4 ⚠ AND IT IS STILL NOT THE GATE
+
+The agent's own caveat, and it is correct: **the refusal survives the fix.** The
+peers stop retransmitting at t=26.9 s and OVMX's `op 0x02` at t=27.5 s is *still*
+answered by nothing at all. `w4B` had `RETX=0` and was refused. So the ack
+starvation explains the PEDRIVER collapse and the retransmit storm — real
+defects, worth fixing — and does not explain the admission decision.
+
+Nothing else is missing OVMX→peer, either: enumerated by (msgtype, cat, op),
+every pre-decision absence sits on the already-known disk-discovery round, and
+counts are identical (3/3) for `op 0x14`, `op 0x01`, `op 0x02` and both
+`VMS$VAXcluster` connect frames.
+
+### 4i.5 The fix, specified and deliberately NOT yet written
+
+**Implementation-ready:** in response to a sequenced `0x4b`/`0x5b`/`0x7b` frame
+whose `send_seq` exceeds the last `recv_ack` OVMX has placed on a *sequenced*
+frame to that peer, OVMX must emit a sequenced pure-ack — reference shape a
+72/76-byte `0x4b` with `ra=recv_seq`, consuming one `send_seq` (`w1C` VAX1
+`f185`/`f187`). Site: `scsd.c:2596`, the `scs_vc_owes_credit` block.
+
+**Deferred on purpose.** No such builder exists — every OVMX 72/76/80-byte frame
+today comes from the directory/connect paths — so this means introducing a new
+wire frame shape. Under Rule 8 that must be derived from the reference frames on
+the wire, carefully, with byte-exact tests in both directions; it is not a
+five-minute edit, and §4i.4 says it will not admit us. **Do it as its own item,
+for correctness (guardrail 15), not as an attempt at the rejoin.**
 
 ---
 

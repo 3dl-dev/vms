@@ -2566,7 +2566,16 @@ Then it is replaced by a fresh block that sends two more (`0002`) and again
 receives nothing. The peer tried twice, on two different CSBs, and counted zero
 both times.
 
-### 4L.9a ⭐⭐⭐ THE LIKELY MECHANISM — a sequence-context race, and we answer 30× too fast
+### 4L.9a ⭐⭐ A CANDIDATE MECHANISM — a sequence-context mismatch
+
+> **⚠ ONE LEG OF THIS WAS WRONG AND IS RETRACTED.** The first version claimed
+> OVMX answers "~30× too fast" on a rejoin (+0.02 s vs +0.60/+0.92 s), taken from
+> the capture agent's relative timings. **Those timings do not share an anchor
+> with the daemon clock.** Measured against `SCSD started` in our own run logs the
+> first `CMCONFIG` lands at **M1A +2.27 s, M1B +1.30 s, M2A +2.31 s, M3A +2.47 s,
+> M3B +2.54 s** — the refused runs are **not** systematically earlier, and `M3B`
+> is *later* than its own control. **There is no timing anomaly. Do not cite one.**
+> The rest of this section does not depend on it.
 
 Put the counters beside the wire timings and a mechanism falls out.
 
@@ -2575,25 +2584,28 @@ Put the counters beside the wire timings and a mechanism falls out.
   is what a real returning node does.
 - The peer's **old** CSB is at `Last seq num rcvd 0022`, so the next sequenced
   message it will accept on that VC is **`0023`**, not `1`.
-- OVMX fires its config burst at **+0.02 s** in the refused run, against
-  **+0.60 s** (`M1A`) and **+0.92 s** (`M2A`) in the joins — **~30× earlier.**
-- The peer replaces the CSB at ~T+4 s, resetting its expectation to `1`.
-- By then OVMX has already consumed msgseq 1–2 and does not re-send them; its
-  next CM message is `op 0x02` at +9.00 s, carrying a `send_seq` well past `1`.
+- The peer replaces the CSB at ~T+4 s, resetting its expectation to `1`
+  (`Next seq. number 0002`, `Last seq num rcvd 0000`).
+- OVMX's CM traffic straddles that replacement: msgseq 1–2 early, then `op 0x02`
+  later, and it does not re-send the earlier pair.
 
 **The inference (NOT established):** on a rejoin the peer still holds a live VC
-context from our previous incarnation and immediately sends config on it, so
-OVMX answers **into the old context** with `send_seq = 1` — which that context
-rejects, because it wants `0023`. The peer then tears the CSB down and rebuilds
-it expecting `1`, but OVMX has moved on. Both sides are permanently one context
-apart, which is exactly what "peer sent 2, received 0, twice" looks like.
+context from our previous incarnation whose next expected receive sequence is
+`0023`, so OVMX's `send_seq = 1` frames are not acceptable to it. The peer then
+tears the CSB down and rebuilds it expecting `1`, but OVMX has already spent
+msgseq 1–2. Both sides end up one context apart, which is what "peer sent 2,
+received 0 — twice, on two different CSBs" looks like.
 
-**This is the first hypothesis of the session that explains every grounded fact
-at once** — the frozen `0022`, the doubled send-with-no-receive, the zero flags,
-the blank status-derived fields, the unanswered `op 0x02`, and §4L.10's
-`DISC-REQ` never running. It also explains why a real node succeeds: §4k.1 shows
-the peer driving the whole rejoin handshake, which would establish the fresh
-context *before* the returning node sends anything sequenced.
+**It is consistent with every grounded fact** — the frozen `0022`, the doubled
+send-with-no-receive, the zero flags, the blank status-derived fields, the
+unanswered `op 0x02`, and §4L.10's `DISC-REQ` never running. It would also
+explain why a real node succeeds: §4k.1 shows the peer driving the entire rejoin
+handshake, which establishes a fresh context before the returning node sends
+anything sequenced.
+
+> **Consistency is not evidence.** Every hypothesis this session was consistent
+> with the facts known when it was written, and four have died. The byte-level
+> test below is what decides it.
 
 **How to test it — one variable, cheap:**
 1. **Delay our burst.** Make OVMX wait before answering the member's config on a

@@ -89,12 +89,11 @@ extern "C" {
 
 #define SCS_DIR_OPCODE        0x5b /* SCS$DIRECTORY connect / lookup (spec sec 4h) */
 #define SCS_DIR_OPCODE_RETX   0x7b /* its retransmit form (spec sec 4h) */
-/* vms-2f3 sec 4M: the SEQAPP / data-phase msgtype. A real VAX answers a
- * directory request with this REGARDLESS of whether the request arrived as
- * 0x5b (establishing) or 0x4b (data-phase) -- grounded by the 336-frame op-5
- * census in scs_dir.c and never violated in the capture library. The response
- * is what ADVANCES the requester's directory connection to the data phase, so
- * mirroring a 0x5b back leaves it establishing forever. */
+/* vms-2f3 sec 4M: the SEQAPP / data-phase msgtype. scs_dir.h:33 records that a
+ * directory frame carries 0x5b while the SCS$DIRECTORY connection is
+ * establishing and 0x4b "once the connection is up". ⚠ What selects it on a
+ * LOOKUP RESPONSE is NOT established -- see the census and the live candidate
+ * in scs_dir.c above scs_dir_response_msgtype(). */
 #define SCS_DIR_OPCODE_SEQAPP 0x4b
 #define SCS_DIR_OP_LOOKUP     0x0a /* [46:48] operation value seen on every name lookup (inferred) */
 
@@ -191,10 +190,11 @@ int scs_dir_build_connect_echo(const struct scs_dir_params *p,
  * (SCA#25): remote [50:54] = peer's handle, local [54:58] = OVMX's own handle
  * (the admission act binds the pair). Returns 0, or -1 if p/out is NULL.
  */
-/* vms-2f3 sec 4M: the msgtype to answer a directory request with. Returns the
- * SEQAPP data-phase form 0x4b for any request msgtype -- a real VAX never
- * mirrors (336-frame census, scs_dir.c). `mirror` non-zero restores OVMX's
- * pre-fix echo for the OVMX_DIR_MIRROR_MSGTYPE kill-switch. */
+/* vms-2f3 sec 4M/4M.12: the msgtype to answer a directory request with. Returns
+ * the SEQAPP data-phase form 0x4b for any request msgtype. ⚠ THIS IS AN OVMX
+ * DESIGN CHOICE, NOT A REFERENCE-DERIVED RULE -- a real VAX mirrors a 0x5b
+ * lookup about half the time; see the census in scs_dir.c. `mirror` non-zero
+ * restores OVMX's pre-fix echo for the OVMX_DIR_MIRROR_MSGTYPE kill-switch. */
 uint8_t scs_dir_response_msgtype(uint8_t request_msgtype, int mirror);
 
 int scs_dir_build_connect_response(const struct scs_dir_params *p,

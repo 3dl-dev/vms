@@ -4879,19 +4879,14 @@ int main(int argc, char **argv)
                     lp.recv_ack = ps->vc.seq.recv_seq;
                     lp.send_seq = scs_seq_advance(&ps->vc.seq);
                     lp.incarnation = ps->incarnation; /* §4i established-join echo (see connect branch) */
-                    /* vms-2f3 sec 4M: DO NOT MIRROR THE REQUEST MSGTYPE.
-                     * A real VAX answers a directory request with the SEQAPP
-                     * data-phase form 0x4b whether it was asked with 0x5b
-                     * (establishing) or 0x4b -- grounded by the 336-frame op-5
-                     * census recorded at scs_dir.c:244. Mirroring is correct by
-                     * luck on a FRESH JOIN, where the peer always asks 0x4b, and
-                     * wrong on a REJOIN, where the peer asks its first MSCP$DISK
-                     * lookup with 0x5b (6/6 across bracketed lab-2 runs: zero
-                     * 0x5b in three joins, one in every refusal). The response is
-                     * what advances the requester's directory connection to the
-                     * data phase; echoing 0x5b leaves it establishing, so the peer
-                     * never tears its round-1 directory connection down (the
-                     * missing op 6 DISC-REQ of sec 4k.5) and the rejoin stalls.
+                    /* vms-2f3 sec 4M: do not mirror the request msgtype.
+                     * ⚠ AN OVMX DESIGN CHOICE, NOT A REFERENCE RULE -- sec 4M.12
+                     * refuted the "a real VAX never mirrors" justification this
+                     * originally carried, and the live candidate keys on the
+                     * RESULT (present -> 0x4b, absent -> 0x5b) rather than on the
+                     * request. See scs_dir_response_msgtype() for the census.
+                     * It is NOT the rejoin gate either: four rejoins were refused
+                     * with it on, between joining controls (sec 4M.6/4M.9).
                      * OVMX_DIR_MIRROR_MSGTYPE=1 restores the old mirror so the
                      * failing case stays reproducible (guardrail 21). */
                     lp.opcode = scs_dir_response_msgtype(

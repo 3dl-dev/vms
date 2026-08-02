@@ -271,8 +271,10 @@ oracle degrades before it errors.
     is real. The two are constantly confused; §4k.6 has the table.
 
 13. **The directory-response msgtype mirror (§4M).** OVMX echoed the request's
-    msgtype onto its lookup response; a real VAX always answers `0x4b` (336-frame
-    census). Real bug, fixed and kept — **and not the gate.** `N1B`/`N1C`/`N1D`
+    msgtype onto its lookup response. **Not the gate** — and note §4M.12: the
+    "a real VAX always answers `0x4b`" justification is REFUTED for this frame
+    (a real VAX mirrors `0x5b` about half the time); the live candidate is
+    `0x4b` if present / `0x5b` if not. `N1B`/`N1C`/`N1D`
     answer `0x4b` and are refused three times, between two joining controls.
     The surviving observation, corrected in §4M.9, is a **transition**: in a
     refused rejoin the peer's `MSCP$DISK` lookups stay `0x5b` for all four,
@@ -3268,6 +3270,58 @@ with us. **Next: capture VAX2's console AND a pcap across that 90 ms window on
 a matched pair, and identify the first frame the join has that the rejoin does
 not.** The console gives the anchor timestamps to align them, which is what
 every previous attempt at this comparison lacked.
+
+### 4M.12 ⛔ §4M.2's GROUNDING IS OVERSTATED — "never mirror" is REFUTED for lookup responses
+
+**A delegated byte census over the whole capture library refutes the rule I
+extrapolated.** §4M.2 took `scs_dir.c:244`'s 336-frame census — which is about
+the **op-5 confirm** frame — and generalised it to the **lookup response**. That
+generalisation is wrong.
+
+Real-VAX → real-VAX lookup request/response pairs, 5 captures, OVMX excluded as
+responder:
+
+| | count |
+|---|---|
+| req `0x5b` → resp **`0x5b`** | **10** |
+| req `0x5b` → resp `0x4b` | 11 |
+| req `0x4b` → resp `0x4b` | 50 |
+| req `0x4b` → resp `0x5b` | 1 |
+
+**A real VAX answers a `0x5b` lookup with `0x5b` about half the time.** So
+neither "always mirror" (OVMX's old behaviour, 60/72) nor "never mirror" (my
+change, 61/72) is the rule, and both are a coin-flip against the corpus.
+
+> **This is the exact failure mode CLAUDE.md Rule 8 and the purity guardrail
+> exist to prevent: I presented an OVMX design choice as reference-derived.**
+> The census I cited is real and is correctly recorded in `scs_dir.c` — it is
+> just about a different frame. **Grounding a rule for message A does not ground
+> it for message B.** Sibling of §4k.9's "grounding a byte is not grounding a
+> claim".
+
+**But the same data hands over a much better candidate**, visible in two matched
+reference pairs where the *same* responder, on the *same* connection, 1.6 ms
+apart, answers the same request msgtype two different ways:
+
+| ref frames | SYSAP | req | **resp** | result in the body |
+|---|---|---|---|---|
+| 1191→1193 | `MSCP$TAPE` | `0x5b` | **`0x5b`** | `NOT PRESENT HERE` |
+| 1195→1197 | `MSCP$DISK` | `0x5b` | **`0x4b`** | name echoed (AFFIRMATIVE) |
+| 1237→1239 | `MSCP$TAPE` | `0x5b` | **`0x5b`** | `NOT PRESENT HERE` |
+| 1241→1243 | `MSCP$DISK` | `0x5b` | **`0x4b`** | name echoed (AFFIRMATIVE) |
+
+> **CANDIDATE RULE: the response msgtype is set by the RESULT, not the request —
+> `0x4b` when the SYSAP is present, `0x5b` when it is not.** OVMX already
+> computes exactly that predicate (`lp.affirmative`, `scsd.c:4899`). Under it,
+> **both** OVMX behaviours are wrong: the old mirror answered an affirmative
+> `MSCP$DISK` with `0x5b`, and my change answers a negative `MSCP$TAPE` with
+> `0x4b`. **Test dispatched; do not implement until the 2×2 comes back clean.**
+
+**Status of the code meanwhile:** the change is committed, kill-switched
+(`OVMX_DIR_MIRROR_MSGTYPE=1`) and **behaviourally neutral in the lab** — three
+fresh identities joined with it on and the rejoin is refused either way
+(§4M.9). It is not urgent to revert, and it must not be described as grounded
+until this is settled.
 
 ### 4M.5 The test, and its kill-switch
 

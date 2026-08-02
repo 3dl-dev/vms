@@ -361,17 +361,32 @@ int scs_dir_build_connect_echo(const struct scs_dir_params *p,
 /* vms-2f3 sec 4M. The msgtype OVMX must put on a directory response, given the
  * msgtype the request arrived with.
  *
- * GROUNDED: a real VAX answers with the SEQAPP data-phase form 0x4b regardless
- * of how it was asked. The 336-frame op-5 census at the head of this file (4
- * sender nodes, 15 captures) found 86 pairs answering a 0x5b request with a
- * 0x4b response, and every op-5 a real VAX has sent AT OVMX is 0x4b. No frame
- * in the capture library mirrors a 0x5b request with a 0x5b response.
+ * ⚠ NOT GROUNDED -- THIS IS AN OVMX DESIGN CHOICE (vms-2f3 sec 4M.12).
+ * The first version of this comment claimed the 336-frame op-5 census at the
+ * head of this file proved "a real VAX never mirrors". THAT CENSUS IS ABOUT THE
+ * op-5 CONFIRM FRAME, NOT ABOUT LOOKUP RESPONSES, and generalising it was wrong.
+ * A byte census of every real-VAX lookup pair in the capture library (5
+ * captures, OVMX excluded as responder) says:
  *
- * WHY IT IS LOAD-BEARING: the response is what advances the requester's
- * SCS$DIRECTORY connection from establishing (0x5b) to data phase (0x4b).
- * Mirroring leaves the peer establishing forever. OVMX mirrored until now, which
- * is correct BY LUCK on a fresh join -- where the peer always asks 0x4b -- and
- * wrong on a rejoin, where the peer asks its first MSCP$DISK lookup with 0x5b.
+ *     req 0x5b -> resp 0x5b : 10      req 0x4b -> resp 0x4b : 50
+ *     req 0x5b -> resp 0x4b : 11      req 0x4b -> resp 0x5b :  1
+ *
+ * So a real VAX mirrors a 0x5b lookup about half the time, and NEITHER
+ * "always mirror" (OVMX's old behaviour, 60/72) nor "always 0x4b" (this
+ * function, 61/72) is the rule. Both are a coin-flip against the corpus.
+ *
+ * LIVE CANDIDATE, under test: the response msgtype tracks the RESULT, not the
+ * request -- 0x4b when the SYSAP is present, 0x5b when it is not. Two matched
+ * reference pairs show the same responder, same connection, 1.6 ms apart,
+ * answering the same request msgtype two different ways, split exactly on
+ * affirmative-vs-"NOT PRESENT HERE". OVMX already computes that predicate
+ * (lp.affirmative). If it holds, this function should key on it and BOTH of
+ * OVMX's behaviours to date are wrong.
+ *
+ * Kept as-is meanwhile because it is behaviourally neutral in the lab (three
+ * fresh identities joined with it on; the rejoin is refused either way) and it
+ * is kill-switched. DO NOT describe it as reference-derived until sec 4M.12
+ * closes.
  *
  * `mirror` restores the pre-fix behaviour for the OVMX_DIR_MIRROR_MSGTYPE
  * kill-switch, so the failing case stays reproducible (guardrail 21). */

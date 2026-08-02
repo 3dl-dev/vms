@@ -575,16 +575,19 @@ static void test_build_mscp_confirm5(void)
     check(scs_dir_build_mscp_confirm5(NULL, out) == -1, "confirm5 NULL params rejected");
 }
 
-/* vms-2f3 sec 4M: OVMX must NEVER mirror the request msgtype onto a directory
- * response. GROUNDED by the 336-frame op-5 census (scs_dir.c head): 86 observed
- * pairs answer a 0x5b request with a 0x4b response, and no frame anywhere in the
- * capture library mirrors 0x5b with 0x5b.
+/* vms-2f3 sec 4M: OVMX does not mirror the request msgtype onto a directory
+ * response -- it answers with the SEQAPP data-phase form 0x4b.
  *
- * This is a REJOIN regression. OVMX mirrored until sec 4M, which is correct by
- * luck on a fresh join -- the peer always asks 0x4b there -- and wrong on a
- * rejoin, where the peer asks its first MSCP$DISK lookup with 0x5b. Measured
- * 6/6 across bracketed identity-proven lab-2 runs: zero 0x5b requests in three
- * joins, one in every one of three refusals. */
+ * ⚠ THIS PINS AN OVMX DESIGN CHOICE, NOT A REFERENCE RULE (sec 4M.12). The
+ * original justification -- "a real VAX never mirrors, per the 336-frame op-5
+ * census" -- was REFUTED: that census is about the op-5 confirm frame, and a
+ * byte census of real-VAX LOOKUP pairs shows 10 genuine 0x5b->0x5b mirrors
+ * against 11 0x5b->0x4b. The live candidate is that the response tracks the
+ * RESULT (present -> 0x4b, absent -> 0x5b), which would make this assertion
+ * wrong for the MSCP$TAPE (negative) case. Update this test when 4M.12 closes.
+ *
+ * What the test is for meanwhile: the selection is made in ONE place, is
+ * kill-switchable, and cannot drift silently. */
 static void test_response_msgtype_never_mirrors(void)
 {
     printf("[directory response msgtype never mirrors the request -- vms-2f3 sec 4M]\n");

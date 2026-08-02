@@ -62,31 +62,42 @@ real VAX always answers `0x4b` (336-frame census, `scs_dir.c:244`). Mirroring is
 correct by luck on a fresh join and wrong on a rejoin, where the peer asks with
 `0x5b`. Fixed, kept, tested, **and not the gate.**
 
-**Where the refusal now sits.** The peer's CSB for a refused rejoin is now
+**Where the refusal now sits — and READ §4M.9 BEFORE TRUSTING ANY OF IT.** In
+the `N` session (2026-08-02 pm) the peer's CSB for a **refused** rejoin is
 populated exactly as an admitted one — `02040000 status_rcvd,vcc`, `Cpblty
 00000A98`, `SWVers V7.3`, `HWName`, `Quorum/Votes 1/0`, `Lock mgr dir wgt 1`,
 live incarnation, CDT/SB/PDT all allocated. **Two bits are missing and nothing
-else: `member` and `selected`** (`02040000` vs the admitted `02060002`), flat
-for 108 s across three consecutive rejoins from three different prior states.
+else: `member` and `selected`**, flat for 108 s across four refused rejoins.
 
-**The question, re-posed (§4M.8):**
+**⚠ That is NOT the fix's doing, and it is NOT the same failure as §4L's.** The
+kill-switch run `N1E` shows the identical populated CSB with the fix OFF. The
+morning `M` session refused with `00000000`; the afternoon `N` session refuses
+fully populated. **These are §4d.6's two refusal shapes and they must not be
+diffed against each other.** What makes a run take one shape or the other is
+**unknown and is now the most valuable open question** — it is the difference
+between "the peer never hears us" and "the peer hears us and declines".
+
+**The question, re-posed for the `N` shape (§4M.8):**
 
 > The peer has our status, capabilities, votes, incarnation and an open VC, and
 > has allocated every structure. **What SELECTS a node for membership, and what
 > does the peer check there that a returning identity fails and a fresh one
 > passes?**
 
-**Two grounded wire correlates to chase (§4M.7):**
+**The one surviving wire correlate (§4M.9), a symptom not a cause:**
 
-| after the node-status pair | fresh join | **rejoin** |
-|---|---|---|
-| the peers' `cat 0x04` ack opcode | `op 0x00` (both) | **`op 0x04`** and **`op 0x06`** |
-| next step | `op 0x03` → **`op 0x05`** → 570 more | `op 0x03` → answered → **silence** |
+| | `MSCP$DISK` lookup request msgtypes |
+|---|---|
+| **joins** (6/6) | reach `0x4b` by the 2nd lookup |
+| **refusals** (4/4) | **`5b 5b 5b 5b` — never reach the data phase** |
 
-`cat 0x04` is `SCS_MEMBER_CAT_ACK`. **OVMX never dispatches on a `cat 0x04`
-opcode at all** — `CAT_ACK` appears twice in `scsd.c`, both in a timing
-heuristic, and `cm_req` (`scsd.c:2764`) does not cover it. That is the same bug
-class as the `0x7b` deafness of §4d.10.
+`0x4b` means "the SCS$DIRECTORY connection is up" (`scs_dir.h:33`), so in a
+refused rejoin the peer's directory connection to us never comes up — **and
+answering it correctly does not bring it up** (`N1E`). A join CAN carry a
+leading `0x5b` (`N3A`), so it is the transition that matters, never the presence.
+
+**⛔ Do NOT re-propose the `cat 0x04` ack opcode** (§3 item 14): `N3A` JOINED
+with `op 0x04`, `N1D`/`N1E` were REFUSED with `op 0x00`.
 
 **The §4L.9h exclusion test still applies and is still the best filter:**
 anything wrong with OVMX generally would break the fresh join too; anything
@@ -162,7 +173,7 @@ green by SHA.
 - Lab volume is ZFS, 40G quota; `rsync --sparse` for disk images.
 - `tools/mk_sysgen` is an aarch64 binary with no source — **use
   `tools/mk_sysgen.py`**.
-- **Last SCSSYSTEMID used: 1309.** Take the next one and update §6.
+- **Last SCSSYSTEMID used: 1310.** Take the next one and update §6.
 - **Pods:** `vaxlab-0` SPENT (console wedged), `vaxlab-1` DEGRADED (its VAX2 was
   SIGKILLed and never rebooted), **`vaxlab-2` healthy** and carrying residual
   state for `OVMXM1/M2/M3` — a ready-made rejoin reproducer. Fresh pods:

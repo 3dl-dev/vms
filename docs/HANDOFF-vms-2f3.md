@@ -3309,9 +3309,13 @@ Run tags session m (lab-2 `vaxlab-2`, the §4M fix under test, all via
 `tools/csbwatch.sh`): `N1A` fresh (`OVMXN1`, 1308) = opening control ·
 **`N1B`/`N1C`/`N1D` = three consecutive same-identity rejoins**, the test of
 `scs_dir_response_msgtype()` (done-criteria 1 and 3) · `N2A` fresh (`OVMXN2`,
-1309) = closing control (guardrail 20). Binary: `build-d94/bin/SCSD.EXE` built
-from the commit that lands §4M. Kill-switch for the whole change:
-`OVMX_DIR_MIRROR_MSGTYPE=1`. **Last SCSSYSTEMID used: 1309.**
+1309) = closing control (guardrail 20). Then **`N1E` = the guardrail-21
+kill-switch run** (`OVMXN1` rejoin, `OVMX_DIR_MIRROR_MSGTYPE=1`, fix OFF —
+REFUSED, and it refuted §4M.7 and §4M.8's attribution) and `N3A` fresh
+(`OVMXN3`, 1310) = its closing control, JOINED. Binary:
+`build-d94/bin/SCSD.EXE` built from the commit that lands §4M.
+**All four `N1*` rejoins were refused; all three fresh identities joined.**
+**Last SCSSYSTEMID used: 1310.**
 
 **Pod state after this session:** `vaxlab-0` SPENT (console wedged). `vaxlab-1`
 DEGRADED — its VAX2 was SIGKILLed by the `SMOKE` tool test and never rebooted.

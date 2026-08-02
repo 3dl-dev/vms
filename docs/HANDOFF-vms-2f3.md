@@ -2961,6 +2961,18 @@ Run tags session L (workshop): `w1A` `w2A` `w3A` joined (fresh, pure); `w1B` `w1
 
 Run tags session L part 3 (lab-2 `vaxlab-0`): `L3` joined (fresh) / `L3b` refused (`OVMXL3` rejoin) — the matched pair; `L4` joined (fresh, `OVMXL4`, then died, never returned); `C1` = the **real-node CSB cycle** (§4j), which carried `OVMXL3` and `OVMXL4` in-frame as the refused and died controls. `vaxlab-0` is now SPENT — VAX1's console wedged after `C1` (§4j.6). **Last SCSSYSTEMID used: 1304.**
 
+Run tags session L part 4 (lab-2 `vaxlab-2`, the §4L bracketed triples, all via
+`tools/csbwatch.sh`): `M1A` joined (`OVMXM1`, 1305, fresh) / **`M1B` refused**
+(same identity) / `M2A` joined (`OVMXM2`, 1306, fresh) — the bracketed triple.
+Then `M3A` joined (`OVMXM3`, 1307, fresh) / **`M3B` refused** / **`M3C` refused**
+(third attempt) at `CAD=1..2`. **Last SCSSYSTEMID used: 1307.**
+
+**Pod state after this session:** `vaxlab-0` SPENT (console wedged). `vaxlab-1`
+DEGRADED — its VAX2 was SIGKILLed by the `SMOKE` tool test and never rebooted.
+**`vaxlab-2` is healthy** and carries residual state for `OVMXM1`/`OVMXM2`/
+`OVMXM3`, which makes it a ready-made rejoin reproducer. Scale fresh pods with
+`kubectl -n ovmx-lab scale sts/vaxlab --replicas=N`.
+
 Run tags session i: `ctl1`, `inc1`, `inc2`, `fresh1`, `fresh2`, `keyB`, `keyC`,
 `rej2`, `rej3`. Session j: `g1A` (joined), `g1B` (refused, SDA-polled), `p1A`
 (pure-server, refused). **Last SCSSYSTEMID used: 1232.**

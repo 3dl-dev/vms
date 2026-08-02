@@ -29,9 +29,11 @@ RUN git init . \
  && git fetch --depth 1 origin "${SIMH_REF}" \
  && git checkout FETCH_HEAD
 # Only the VAX target — the lab is a MicroVAX 3900 (KA655) cluster.
+# SIMH has no --version switch; record the pinned commit as the provenance
+# string instead (entrypoint.sh prints it at lab start).
 RUN make vax -j"$(nproc)" \
  && install -D BIN/vax /out/vax \
- && /out/vax --version > /out/simh-version.txt 2>&1 || true
+ && echo "open-simh ${SIMH_REF} ($(uname -m))" > /out/simh-version.txt
 
 FROM ubuntu:24.04
 RUN apt-get update && apt-get install -y --no-install-recommends \

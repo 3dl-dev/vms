@@ -704,6 +704,74 @@ static size_t g_read_operator_log(char *out, size_t outsz)
     return used;
 }
 
+/*
+ * Empty both candidate operator logs. Used between the unnamed run and the
+ * named one below, so each set of header assertions is made about records
+ * that run wrote and no other.
+ */
+static void g_truncate_operator_logs(void)
+{
+    FILE *fp;
+
+    fp = fopen(G_OPLOG_PRIM, "w");
+    if (fp) { fclose(fp); chmod(G_OPLOG_PRIM, 0666); }
+    fp = fopen(G_OPLOG_FALL, "w");
+    if (fp) { fclose(fp); chmod(G_OPLOG_FALL, 0666); }
+}
+
+/*
+ * How many OPCOM headers this log holds (*total), and how many of them carry
+ * exactly `want` in the header's USER FIELD.
+ *
+ * THE FIELD IS CUT OUT, NOT MATCHED AS A LITERAL, and that is the point.
+ * src/libvms/syssvc/sys_operator.c formats the header with
+ *
+ *     "... request %u from user %s on node OVMX"
+ *
+ * so an EMPTY user name renders as a doubled space -- "from user  on node".
+ * That doubling is a plain %s artefact, not a rendering anyone chose, and the
+ * header's authenticity is separately unpinned (vms-2d37: the record BODY is
+ * written as text when it is a binary opcdef block, so this whole line is not
+ * yet oracle-matched). An earlier wording of these checks matched the two
+ * spaces as a string literal, which pins the accident as though it were the
+ * decision. What is under test is WHICH NAME THE FIELD CARRIES, so the field
+ * is extracted between "from user " and " on node" and compared as a value;
+ * whitespace between them is not asserted either way.
+ */
+static int g_opcom_headers_naming(const char *log, const char *want, int *total)
+{
+    const char *p = log;
+    int hits = 0;
+
+    *total = 0;
+    for (;;) {
+        const char *h = strstr(p, "%%OPCOM, ");
+        const char *u, *e, *eol;
+        char field[128];
+        size_t n;
+
+        if (!h) break;
+        p = h + 9;
+        (*total)++;
+
+        /* Both delimiters must lie on THIS header's own line, or a header
+         * missing the field would silently borrow the next record's. */
+        eol = strchr(h, '\n');
+        u = strstr(h, "from user ");
+        if (!u || (eol && u > eol)) continue;
+        u += strlen("from user ");
+        e = strstr(u, " on node");
+        if (!e || (eol && e > eol)) continue;
+
+        n = (size_t)(e - u);
+        if (n >= sizeof(field)) n = sizeof(field) - 1;
+        memcpy(field, u, n);
+        field[n] = '\0';
+        if (strcmp(field, want) == 0) hits++;
+    }
+    return hits;
+}
+
 static int run_g_subprocess(const char *script, char *out, size_t outsz)
 {
     int out_pipe[2], in_pipe[2];
@@ -819,8 +887,14 @@ static void scenario_g_unnamed_row_reports_nothing(void)
         "REPLY/ENABLE\n"
         "IDENT_U = F$USER()\n"
         "SHOW SYMBOL IDENT_U\n"
+        "IDENT_S = F$IDENTIFIER(65540,\"NUMBER_TO_NAME\")\n"
+        "SHOW SYMBOL IDENT_S\n"
         "IDENT_N = F$IDENTIFIER(" G_UIC_STR ",\"NUMBER_TO_NAME\")\n"
         "SHOW SYMBOL IDENT_N\n"
+        "IDENT_W = F$IDENTIFIER(\"SYSTEM\",\"NAME_TO_NUMBER\")\n"
+        "SHOW SYMBOL IDENT_W\n"
+        "IDENT_D = F$IDENTIFIER(\"DEFAULT\",\"NAME_TO_NUMBER\")\n"
+        "SHOW SYMBOL IDENT_D\n"
         "IDENT_V = F$IDENTIFIER(\"" G_PWNAME "\",\"NAME_TO_NUMBER\")\n"
         "SHOW SYMBOL IDENT_V\n"
         "SHOW PROCESS\n"
@@ -903,17 +977,59 @@ static void scenario_g_unnamed_row_reports_nothing(void)
      * G_SUB_PWNAM above already established that getpwuid(G_MEM) resolves in
      * this process, so the negatives are about a name that existed and was
      * reachable at the moment the question was asked.
+     *
+     * THE MISS VALUES ARE ORACLE-PINNED AS OF ROUND 4 (vms-2f8). Round 3 left
+     * NUMBER_TO_NAME's miss rendering the caller's UIC back in brackets and
+     * declared it unpinned; asked of OpenVMS VAX V7.3 on lab node vax3, and
+     * corroborated by the public HP/VSI DCL Dictionary, both directions are
+     * settled:
+     *
+     *     F$IDENTIFIER(1000,"NUMBER_TO_NAME")           ->  ""     (null string)
+     *     F$IDENTIFIER("NOSUCHIDENT","NAME_TO_NUMBER")  ->  0
+     *     F$IDENTIFIER(65540,"NUMBER_TO_NAME")          ->  "SYSTEM"
+     *     F$IDENTIFIER("SYSTEM","NAME_TO_NUMBER")       ->  65540
+     *     F$IDENTIFIER("DEFAULT","NAME_TO_NUMBER")      ->  8388736
+     *
+     * THE LIVENESS ANCHOR MOVED WITH IT, and that is why this block is not a
+     * one-line edit. The old positive -- "NUMBER_TO_NAME renders the UIC it
+     * was given" -- was what proved the conversion RAN, and it asserted the
+     * invented format. A bare `IDENT_N = ""` cannot replace it: an empty
+     * result is also what an unparsed argument, an unknown conversion keyword
+     * and a failed call produce. So the anchor is now an oracle-confirmed
+     * POSITIVE in the same function, same conversion keyword, same DCL run --
+     * 65540 -> "SYSTEM" -- with the same for the reverse direction. If
+     * lex_identifier stops answering at all, the anchors go red and the two
+     * miss checks below become claims about a dead path rather than silently
+     * passing.
      */
     CHECK(G_UIC_NUM == (unsigned)strtoul(G_UIC_STR, NULL, 10),
           "G/F$IDENTIFIER: the UIC the script asks about is this scenario's "
           "own [G_GRP,G_MEM] (fixture integrity -- the literal in the DCL "
           "command and the staged passwd entry must be the same UIC)");
-    snprintf(want, sizeof(want), "IDENT_N = \"[%u,%u]\"\n",
+    /* --- the anchors: the conversion runs, and answers, in both directions */
+    CHECK(strstr(outg, "IDENT_S = \"SYSTEM\"\n") != NULL,
+          "G/F$IDENTIFIER: NUMBER_TO_NAME resolves 65540 to \"SYSTEM\" -- the "
+          "oracle's own answer, and the LIVENESS ANCHOR for the miss check "
+          "below: the conversion ran and produced a name");
+    CHECK(strstr(outg, "IDENT_W = 65540   Hex = 00010004") != NULL,
+          "G/F$IDENTIFIER: NAME_TO_NUMBER resolves \"SYSTEM\" to 65540, the "
+          "oracle's own answer -- the liveness anchor for the reverse "
+          "direction's miss check");
+    CHECK(strstr(outg, "IDENT_D = 8388736   Hex = 00800080") != NULL,
+          "G/F$IDENTIFIER: NAME_TO_NUMBER resolves \"DEFAULT\" to 8388736 "
+          "(%X00800080, UIC [200,200] OCTAL) -- OVMX answered 13107201, "
+          "having read VMS's octal UIC as decimal group 200 member 1");
+    /* --- the misses, both oracle-pinned ------------------------------ */
+    CHECK(strstr(outg, "IDENT_N = \"\"\n") != NULL,
+          "G/F$IDENTIFIER: NUMBER_TO_NAME answers the NULL STRING for a UIC "
+          "OVMX holds no identifier for -- what real VMS answers, for every "
+          "input shape the oracle was asked");
+    snprintf(nope, sizeof(nope), "IDENT_N = \"[%u,%u]\"",
              (unsigned)G_GRP, (unsigned)G_MEM);
-    CHECK(strstr(outg, want) != NULL,
-          "G/F$IDENTIFIER: NUMBER_TO_NAME renders the UIC it was given, in "
-          "lex_identifier's own \"[%d,%d]\" format -- so the conversion ran "
-          "and answered, it did not fail out");
+    CHECK(strstr(outg, nope) == NULL,
+          "G/F$IDENTIFIER: NUMBER_TO_NAME does NOT echo the caller's UIC back "
+          "in brackets -- real VMS emits no bracketed UIC from F$IDENTIFIER "
+          "for any input, so that was Rule 10's illegal third answer");
     CHECK(strstr(outg, "IDENT_N = \"SHIPUSER\"") == NULL,
           "G/F$IDENTIFIER: NUMBER_TO_NAME does NOT answer with the HOST Linux "
           "account name for that uid, upcased -- the vms-f39 defect exactly");
@@ -988,30 +1104,108 @@ static void scenario_g_unnamed_row_reports_nothing(void)
      *
      * These assertions are made HERE, in the test process -- neither the
      * session that owns the name nor the subprocess that wrote the record --
-     * over bytes that reached the filesystem. */
+     * over bytes that reached the filesystem.
+     *
+     * WHY THE EMPTY FIELD IS THE RIGHT ANSWER HERE AND NOT A DEFECT BEING
+     * BLESSED. The unnamed row is a REACHABLE PRODUCT STATE, not a test
+     * artefact: vms_proc_register() zeroes the username of every newly
+     * registered task and $CREPRC propagates no identity, so every SPAWNed
+     * process on the real runtime is in it -- tests/uat/vms_session_qemu.sh
+     * pins that blank for SPAWN and it is filed as vms-afd. VMS has no
+     * process without a user name, so there is no VMS rendering of this state
+     * to match; reporting nothing is the honest leg of Rule 10 and inventing
+     * a name is the illegal third answer.
+     *
+     * THESE ARE A TRIPWIRE ON vms-afd, DELIBERATELY. When $CREPRC identity
+     * propagation lands, this subprocess inherits the session's name, the
+     * header carries SHIPPING, and the "names NO user" check below goes RED
+     * -- it does not go quietly vacuous. Whoever lands vms-afd moves it to
+     * the named form, which is exactly what the block after this one already
+     * asserts for a process the executive HAS named. */
     {
         static char oplog[16384];
         size_t oplen = g_read_operator_log(oplog, sizeof(oplog));
+        int total = 0, unnamed;
+
+        unnamed = g_opcom_headers_naming(oplog, "", &total);
 
         CHECK(oplen > 0,
               "G/OPCOM: the subprocess's REPLY and LOGOUT records reached an "
               "operator log at all (without this the name checks below would "
               "pass by reading an empty file)");
-        CHECK(strstr(oplog, "%%OPCOM, ") != NULL &&
-              strstr(oplog, " on node OVMX") != NULL,
+        CHECK(total > 0 && strstr(oplog, " on node OVMX") != NULL,
               "G/OPCOM: what landed is sys$sndopr's OPCOM header, in its own "
               "format");
-        CHECK(strstr(oplog, " from user  on node OVMX") != NULL,
-              "G/OPCOM: the header names NO user for a process the executive "
-              "has not named -- sys$sndopr reads the executive's row, not the "
-              "caller's PCB and not the passwd database");
+        CHECK(total > 0 && unnamed == total,
+              "G/OPCOM: EVERY header's user field is empty for a process the "
+              "executive has not named -- sys$sndopr reads the executive's "
+              "row, not the caller's PCB and not the passwd database (goes "
+              "RED, not vacuous, when vms-afd propagates identity to SPAWN)");
         CHECK(strstr(oplog, G_PWNAME) == NULL &&
               strstr(oplog, "SHIPUSER") == NULL,
               "G/OPCOM: the operator record does NOT name the HOST Linux "
               "account -- the vms-f39 leak that survived in sys_operator.c");
-        CHECK(strstr(oplog, "from user SYSTEM") == NULL,
-              "G/OPCOM: the operator record does not name SYSTEM, which is "
-              "what VMS_USERNAME in this subprocess's environment says it is");
+        {
+            int t2 = 0;
+            CHECK(g_opcom_headers_naming(oplog, "SYSTEM", &t2) == 0,
+                  "G/OPCOM: the operator record does not name SYSTEM, which "
+                  "is what VMS_USERNAME in this subprocess's environment says "
+                  "it is");
+        }
+    }
+
+    /* --- THE SAME HEADER, FOR A PROCESS THE EXECUTIVE HAS NAMED --------
+     *
+     * THE GAP THIS CLOSES. Everything above exercises the UNNAMED row, so
+     * every OPCOM assertion in this suite could be satisfied by the user
+     * field never being populated at all -- by sys$sndopr writing an empty
+     * name unconditionally, or by get_current_username() being dead code.
+     * Nothing proved a name ever reaches that header.
+     *
+     * So the same command sequence is run again in a process the executive
+     * HAS named. The shape is scenario A's, not G's: run_dcl() establishes
+     * the identity through the executive and execs the real DCL directly, so
+     * DCL runs in the process that owns the named row -- no intermediate
+     * fork, which is what produced the unnamed row above. Same poisoned
+     * environment (VMS_USERNAME=SYSTEM), same binary, same log file. The
+     * logs are emptied first so what is read is this run's records only.
+     *
+     * A-WRITES / B-READS (Rule 11) holds here too: the name is written by
+     * this test's child before execve and read by THIS process out of a file
+     * a third program (LIBVMS$SHR's sys$sndopr, inside DCL) wrote. */
+    {
+        static char outn[65536];
+        static char oplog2[16384];
+        int total = 0, named;
+        int rcn;
+
+        g_truncate_operator_logs();
+        rcn = run_dcl(G_NAME, (G_GRP << 16) | G_MEM, G_PRIVS, 0,
+                      "REPLY/ENABLE\nLOGOUT\n", outn, sizeof(outn));
+        dump("G: named process, OPCOM header", outn);
+
+        CHECK(rcn == 0 && strstr(outn, "SETIDENT_STATUS=1\n") != NULL,
+              "G/OPCOM+: the named run established its identity through the "
+              "executive (without this the header check below is about a "
+              "process that is also unnamed)");
+
+        g_read_operator_log(oplog2, sizeof(oplog2));
+        named = g_opcom_headers_naming(oplog2, G_NAME, &total);
+
+        CHECK(total > 0,
+              "G/OPCOM+: the named process's REPLY and LOGOUT records reached "
+              "the operator log");
+        CHECK(total > 0 && named == total,
+              "G/OPCOM+: EVERY header names " G_NAME " -- the executive's row "
+              "DOES reach sys$sndopr's user field, so the empty field above "
+              "is this process being unnamed and not the field being dead");
+        {
+            int t3 = 0;
+            CHECK(g_opcom_headers_naming(oplog2, "SYSTEM", &t3) == 0,
+                  "G/OPCOM+: and it is not SYSTEM, which is what "
+                  "VMS_USERNAME in that run's environment claimed");
+        }
+        g_truncate_operator_logs();
     }
 }
 

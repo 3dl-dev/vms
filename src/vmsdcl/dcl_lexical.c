@@ -16,11 +16,13 @@
 #include <dirent.h>
 /* <pwd.h> is no longer used by any live code in this file: lex_user() reads
  * the executive's row and lex_identifier() reads neither the executive nor
- * the host (it has nothing to read -- see vms-2f8). The include stays because
- * tests/qemu/facility_defects.sh's dcl-fuser-host-login-name,
- * dcl-fident-num2name-host-passwd and dcl-fident-name2num-host-passwd
- * controls restore the getpwuid()/getpwnam() calls verbatim, and a mutation
- * that will not compile is a broken fixture rather than a gate that bites. */
+ * the host. The include stays because tests/qemu/facility_defects.sh's
+ * dcl-fuser-host-login-name, dcl-fident-num2name-host-passwd and
+ * dcl-fident-name2num-host-passwd controls restore the getpwuid()/getpwnam()
+ * calls verbatim, and a mutation that will not compile is a broken fixture
+ * rather than a gate that bites. (A fourth control on this file,
+ * dcl-fident-num2name-bracketed-uic, needs no passwd call: it restores an
+ * INVENTED value rather than a leaked one.) */
 #include <pwd.h>
 #include <fnmatch.h>
 #include <sys/statvfs.h>
@@ -2448,12 +2450,30 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
         id_upper[j] = (char)toupper((unsigned char)id_upper[j]);
 
     if (strcmp(conv, "NAME_TO_NUMBER") == 0) {
-        /* Convert username to UIC number */
-        /* Hardcoded well-known identities */
+        /*
+         * THE TWO WELL-KNOWN IDENTIFIERS, BOTH NOW PINNED TO THE ORACLE
+         * (vms-2f8). Asked of OpenVMS VAX V7.3 on lab node vax3:
+         *
+         *     F$IDENTIFIER("SYSTEM","NAME_TO_NUMBER")  -> 65540   (%X00010004)
+         *     F$IDENTIFIER("DEFAULT","NAME_TO_NUMBER") -> 8388736 (%X00800080)
+         *
+         * SYSTEM already matched. DEFAULT DID NOT: this returned
+         * (200 << 16) | 1, i.e. OVMX had read VMS's UIC [200,200] -- which is
+         * OCTAL, as every VMS UIC is written -- as decimal group 200 with
+         * member 1. Corrected below, and written in octal so the literal
+         * reads as the UIC it is.
+         *
+         * These stay hardcoded here. On VMS the conversion is a lookup in the
+         * RIGHTS DATABASE; OVMX ships a populated
+         * SYS$SYSTEM:RIGHTSLIST.DAT (INTERACTIVE/BATCH/NETWORK/LOCAL/REMOTE,
+         * provisioned by src/ovmx_init/ovmx_init.c) that no code reads, so
+         * making this function read it is a real change and it is vms-2f8's,
+         * not this round's.
+         */
         if (strcmp(id_upper, "SYSTEM") == 0) {
             snprintf(result, result_size, "%d", (1 << 16) | 4); /* [1,4] */
         } else if (strcmp(id_upper, "DEFAULT") == 0) {
-            snprintf(result, result_size, "%d", (200 << 16) | 1); /* [200,1] */
+            snprintf(result, result_size, "%d", (0200 << 16) | 0200); /* [200,200] octal */
         } else {
             /*
              * NO HOST PASSWD LOOKUP (vms-f39, CLAUDE.md Rule 10). This read:
@@ -2464,15 +2484,18 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
              * so F$IDENTIFIER("baron","NAME_TO_NUMBER") answered with the
              * developer's Linux account dressed as a VMS UIC. A Linux account
              * is not a VMS rights identifier and its uid/gid pair is not a
-             * UIC; on VMS this conversion is a lookup in the RIGHTS DATABASE,
-             * which OVMX does not have. Deleted, not replaced.
+             * UIC. Deleted, not replaced.
              *
-             * THE MISS VALUE BELOW IS NOT SETTLED HERE. "0" is what this
-             * function already returned when the passwd lookup missed; it is
-             * KEPT, not re-chosen, and it is not pinned to the oracle. What
-             * VMS returns for an identifier absent from RIGHTSLIST, and
-             * whether OVMX should read SYSUAF's UIC field instead, are both
-             * vms-2f8's -- do not settle either by picking a value here.
+             * THE MISS VALUE IS ZERO, AND IT IS PINNED (vms-2f8). Asked of
+             * OpenVMS VAX V7.3 on lab node vax3:
+             *
+             *     F$IDENTIFIER("NOSUCHIDENT","NAME_TO_NUMBER")  ->  0
+             *
+             * and the public HP/VSI DCL Dictionary says the same for this
+             * direction: an identifier that is not valid converts to a zero.
+             * "0" is what this function already returned when the passwd
+             * lookup missed, so nothing changes here -- what changed is that
+             * it is now the measured answer rather than a kept one.
              */
             snprintf(result, result_size, "0");
         }
@@ -2483,6 +2506,12 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
         int group = (int)((uic >> 16) & 0xFFFF);
 
         if (group == 1 && member == 4) {
+            /* [1,4] -> SYSTEM, pinned: the oracle answers
+             * F$IDENTIFIER(65540,"NUMBER_TO_NAME") -> "SYSTEM" (vms-2f8).
+             * The reverse of DEFAULT's 8388736 is NOT mapped here: the oracle
+             * was asked that pair only in the NAME_TO_NUMBER direction, and an
+             * unmeasured mapping is not something to add on the strength of
+             * symmetry. It therefore falls to the miss below. */
             snprintf(result, result_size, "SYSTEM");
         } else {
             /*
@@ -2499,11 +2528,26 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
              * It sat 1840 lines below lex_user()'s comment declaring the
              * class removed, in the same file, and was reported settled.
              *
-             * The bracketed rendering below is what this function already
-             * produced when that lookup missed: kept, not chosen, and not
-             * pinned to the oracle (vms-2f8).
+             * THE MISS VALUE IS THE NULL STRING, AND IT IS PINNED (vms-2f8).
+             * What stood here after that deletion was "[%d,%d]" -- the UIC the
+             * caller passed in, echoed back in brackets. REFUTED against
+             * OpenVMS VAX V7.3 on lab node vax3, every input shape tried:
+             *
+             *     F$IDENTIFIER(1000,"NUMBER_TO_NAME")        ->  ""
+             *     F$IDENTIFIER(0,"NUMBER_TO_NAME")           ->  ""
+             *     F$IDENTIFIER(77777,"NUMBER_TO_NAME")       ->  ""
+             *     F$IDENTIFIER(196609,"NUMBER_TO_NAME")      ->  ""
+             *     F$IDENTIFIER(%X80010004,"NUMBER_TO_NAME")  ->  ""
+             *
+             * and the public HP/VSI DCL Dictionary agrees: an identifier that
+             * is not valid converts to a null string in this direction. Real
+             * VMS emits no bracketed UIC from F$IDENTIFIER for any input, so
+             * the bracketed rendering was a plausible-looking answer to a
+             * condition VMS never gives that answer to -- CLAUDE.md Rule 10's
+             * illegal third answer. It is not kept and not re-chosen: it is
+             * replaced by the measured one.
              */
-            snprintf(result, result_size, "[%d,%d]", group, member);
+            result[0] = '\0';
         }
     } else {
         result[0] = '\0';

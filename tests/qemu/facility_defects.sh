@@ -235,6 +235,7 @@ dcl-accounting-user-fabricated
 dcl-fuser-system-fabricated
 dcl-fuser-host-login-name
 dcl-fident-num2name-host-passwd
+dcl-fident-num2name-bracketed-uic
 dcl-fident-name2num-host-passwd
 opcom-header-host-login-name"
 
@@ -2358,6 +2359,36 @@ EOF
 G/F$IDENTIFIER: NUMBER_TO_NAME does NOT answer with the HOST Linux account name for that uid, upcased -- the vms-f39 defect exactly
 EOF
                       ;;
+        knock_on_fail) cat <<'EOF'
+G/F$IDENTIFIER: NUMBER_TO_NAME answers the NULL STRING for a UIC OVMX holds no identifier for -- what real VMS answers, for every input shape the oracle was asked
+G/F$USER: DCL does NOT answer with the Linux account name, upcased or otherwise -- the vms-f39 defect exactly
+EOF
+                      ;;
+        knock_on_why)  echo "BOTH MEASURED, not reasoned -- this control's red set was 3, not the 1 round 3 declared, and the second extra was there before round 4 touched anything. (1) The mutation restores the passwd lookup AT the miss, which is the only place it ever was, so the miss stops being the null string and becomes the account name: one behaviour seen from both ends, the require_fail line naming the host leak and this line the oracle-pinned check next to it failing on the same answer. (2) The F\$USER check is a WHOLE-OUTPUT scan for the Linux account name across everything DCL printed after G_SUB_PWNAM -- deliberately, so a leak in any command is caught, not just in lex_user(). F\$IDENTIFIER printing SHIPUSER puts that name in DCL's output, so the scan fires. That is the scan working: the name genuinely IS in the output, from a different function. Making it not fire would mean narrowing it to lex_user()'s line, which is exactly the per-site scoping that let this class survive three rounds.";;
+        esac;;
+
+    # THE REFUTED VALUE ITSELF, made falsifiable (vms-cb5 round 4, vms-2f8).
+    # The control above restores a leak. This one restores a WRONG ANSWER that
+    # leaks nothing: the bracketed UIC round 3 kept because it was "already
+    # there". The oracle says real VMS answers the null string for every miss
+    # shape tried and emits no bracketed UIC from F$IDENTIFIER at all, so
+    # without this control the assertion that OVMX now answers "" would be
+    # green against a build that echoes the caller's UIC back, and nothing in
+    # the suite would notice.
+    dcl-fident-num2name-bracketed-uic)
+        case "$_f" in
+        facility)     echo "F\$IDENTIFIER(n,\"NUMBER_TO_NAME\") (src/vmsdcl/dcl_lexical.c lex_identifier) -- the value it answers for a UIC no identifier matches";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The miss goes back to rendering the caller's own UIC in brackets -- \"[210,11]\" for the UIC it was handed. REFUTED against OpenVMS VAX V7.3 on lab node vax3: F\$IDENTIFIER answers the NULL STRING for every miss shape asked (plain, general-identifier range, UIC-format with bit 31 set, and zero), and the public HP/VSI DCL Dictionary says the same. Real VMS never emits a bracketed UIC from this function, so the rendering was a plausible-looking answer to a condition VMS never answers that way -- Rule 10's illegal third answer. This control exists because that value was invented, not leaked: no host database is involved, so none of the passwd controls can see it.";;
+        require_fail) cat <<'EOF'
+G/F$IDENTIFIER: NUMBER_TO_NAME answers the NULL STRING for a UIC OVMX holds no identifier for -- what real VMS answers, for every input shape the oracle was asked
+G/F$IDENTIFIER: NUMBER_TO_NAME does NOT echo the caller's UIC back in brackets -- real VMS emits no bracketed UIC from F$IDENTIFIER for any input, so that was Rule 10's illegal third answer
+EOF
+                      ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
         esac;;
@@ -2375,8 +2406,11 @@ EOF
 G/F$IDENTIFIER: NAME_TO_NUMBER does NOT build a UIC out of the host passwd entry's uid/gid for that account
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+G/F$IDENTIFIER: NAME_TO_NUMBER answers 0 for a name OVMX holds no identifier for, in SHOW SYMBOL's own integer format
+EOF
+                      ;;
+        knock_on_why)  echo "MEASURED: this control's red set is 2, not the 1 round 3 declared, and it was 2 before round 4 touched anything -- the omission is round 3's, found by running the control rather than reasoning about it. The mutation restores the passwd lookup AT the miss, the only place it ever was, so the miss stops being 0 and becomes the UIC built from the passwd entry. The require_fail line names that fabricated UIC; this line is the oracle-pinned miss value failing on the same answer. One behaviour, both ends -- there is no finer mutation, because the deleted lookup and the miss value are the same branch.";;
         esac;;
 
     opcom-header-host-login-name)
@@ -2389,7 +2423,7 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "sys\$sndopr goes back to naming the requester from getpwuid(getuid()) when the executive's row holds no name, so the operator log records the HOST Linux account as the VMS user who made the request -- measured as 'request 1 from user baron on node OVMX' after a plain LOGOUT. This is the AUDIT half of the class and it lives in a different library from the DCL sites, which is what a per-site round cannot reach: LOGOUT's own user name was fixed in dcl_cmd_process.c while this field, in the same record, stayed host-derived.";;
         require_fail) cat <<'EOF'
-G/OPCOM: the header names NO user for a process the executive has not named -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database
+G/OPCOM: EVERY header's user field is empty for a process the executive has not named -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database (goes RED, not vacuous, when vms-afd propagates identity to SPAWN)
 G/OPCOM: the operator record does NOT name the HOST Linux account -- the vms-f39 leak that survived in sys_operator.c
 EOF
                       ;;
@@ -2613,7 +2647,9 @@ apply_edit() {
     dcl-fuser-host-login-name)
         sed -i '/^static int lex_user(/,/^}$/ s|^        result\[0\] = .\\0.;$|        { struct passwd *pw_ = getpwuid(getuid()); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fuser-host-login-name */|' "$_file";;
     dcl-fident-num2name-host-passwd)
-        sed -i '/^static int lex_identifier(/,/^}$/ s|^            snprintf(result, result_size, "\[%d,%d\]", group, member);$|            { struct passwd *pw_ = getpwuid((uid_t)member); if (pw_) { size_t i_ = 0; for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); result[i_] = 0; } else { snprintf(result, result_size, "[%d,%d]", group, member); } } /* NEGCTL dcl-fident-num2name-host-passwd */|' "$_file";;
+        sed -i '/^static int lex_identifier(/,/^}$/ s|^            result\[0\] = .\\0.;$|            { struct passwd *pw_ = getpwuid((uid_t)member); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fident-num2name-host-passwd */|' "$_file";;
+    dcl-fident-num2name-bracketed-uic)
+        sed -i '/^static int lex_identifier(/,/^}$/ s|^            result\[0\] = .\\0.;$|            snprintf(result, result_size, "[%d,%d]", group, member); /* NEGCTL dcl-fident-num2name-bracketed-uic */|' "$_file";;
     dcl-fident-name2num-host-passwd)
         sed -i '/^static int lex_identifier(/,/^}$/ s|^            snprintf(result, result_size, "0");$|            { struct passwd *pw_ = getpwnam(id_str); if (pw_) { snprintf(result, result_size, "%d", (int)((pw_->pw_gid << 16) \| (pw_->pw_uid \& 0xFFFF))); } else { snprintf(result, result_size, "0"); } } /* NEGCTL dcl-fident-name2num-host-passwd */|' "$_file";;
     opcom-header-host-login-name)

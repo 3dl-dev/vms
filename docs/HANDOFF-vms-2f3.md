@@ -33,8 +33,9 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > **§5's ordered plan is now FULLY EXECUTED — step 4 was run in §4e.4 and is
 > refuted as the gate. Do not re-propose it.** **§4f–§4g are newer still: §4f proves the
 > deciding state is the CLUSTER's, not ours; §4g shows the peer asks for our disk
-> server, is told yes, and declines to connect. **START AT §4j — it is the newest and
-> it CORRECTS §4h.** Then §4h and §4i for background. The CDT layer is
+> server, is told yes, and declines to connect. **START AT §4k, then §4j — they are
+> the newest, and between them they correct §4h, §4c.8, §4(i).B and the reading of
+> §4g.** Then §4h and §4i for background. The CDT layer is
 > excluded for everyone; the peer's CSB shows the rejoin attempt itself clearing
 > `removed`/`status_rcvd` and zeroing the CSID; and §4i found a real ack bug that
 > explains the PEDRIVER collapse but is NOT the gate.
@@ -45,7 +46,14 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > damage. What a real node gets and OVMX never does is a **brand-new CSB at a new
 > address with a freshly allocated CDT**; OVMX's old CSB is mutated in place and
 > stays in `09 wait`. The failure is therefore EARLIER than the membership
-> protocol.** §1–§4c exist so you do not re-derive
+> protocol.
+>
+> **§4k decodes the reference rejoin nobody had decoded, and it reverses the
+> frame.** On a REJOIN the peer initiates everything — the VC, the directory, the
+> `VMS$VAXcluster` connect, the first config message — and the returning node only
+> answers. The refused OVMX rejoin completes that whole round-1 exchange and then
+> the peer **never tears down its directory connection**, so round 2 never opens.
+> That teardown is the divergence point, and it is peer-side.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and
 > §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
 > the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
@@ -226,6 +234,18 @@ oracle degrades before it errors.
     normal. Related and also dead: **CSID zeroing at the rejoin attempt is
     damage** — the real node's readmitted CSB carries `CSID 00000000` too
     (§4j.3, which corrects §4h).
+11. **The START `[22:24]` incarnation counter is how a peer recognises a new
+    incarnation.** Killed by the real crash-rejoin specimen (§4k.3): it is
+    `0x0001` on all 12 STARTs in that capture and all 4 in `vax3-2to3` — a
+    crash-rebooted node under an unchanged identity presents exactly what a
+    first boot presents. The adjacent quadword at abs 80..87 is not a boot stamp
+    either (4.5 h stale across the reboot). Do not build a fix on either field.
+12. **The peer's connect to OUR `MSCP$DISK` is a precondition for admission.**
+    Killed by §4k.6: in the reference rejoin that connect arrives 7.47 s *after*
+    the membership request and is refused 9 times over 90 s while the node is
+    already a member. **But mind the direction** — the returning node's own
+    client walk *to the peer's* `MSCP$DISK` does precede `op 0x02`, and that one
+    is real. The two are constantly confused; §4k.6 has the table.
 
 ## 4. What DID land — two frozen fields, and the spec was wrong about one
 
@@ -1905,6 +1925,193 @@ together through both a real reboot and an OVMX rejoin (`scacppoll.sh` +
    (`re.split(r'#{10} (T[^#]*?) #{10}', raw)`) or `echo` a newline first. This is
    the "markers looked wrong" symptom flagged at handoff — the markers are all
    present and correct; only the anchoring was wrong.
+
+> **⚠ DEFECT 1's DIAGNOSIS IS PROBABLY WRONG — see §4k.7.** `lab2rejoin.sh`
+> reboots VAX2 with the *identical* backgrounded `kubectl exec … nodedrv.py &`
+> and its console survived. The difference is output volume:
+> `SHOW CLUSTER` is ~6.3 KB per sample against `SHOW CONNECTIONS/NODE=`'s few
+> hundred bytes, and the death coincides with the OPCOM flood at readmission —
+> the documented console-overrun mode (§4e.1, and `connpoll.sh`'s first version).
+
+---
+
+## 4k. ⭐⭐⭐ THE ROLE REVERSAL — on a REJOIN the peer initiates everything, and we still behave like a first-time joiner
+
+**Two delegated decodes, run in parallel, against specimens that already
+existed.** §4c.2c named this comparison as where effort belonged and it was never
+run; §4d–§4j went elsewhere. It is now run.
+
+- **Reference:** `captures/vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap` —
+  a real VAX3, `kill -9`'d, crash-removed class `0x03`, rebooted under an
+  unchanged `SCSNODE`/`SCSSYSTEMID`, readmitted. 19,930 frames.
+- **Matched OVMX pair:** `work/d94-r2A.pcap` (`OVMXR2` joins, pure mode) /
+  `work/d94-r2B.pcap` (same identity ~2.8 min later, refused).
+- Both lab-1, so the comparison is lab-consistent.
+
+### 4k.1 ⭐⭐⭐ The structural finding
+
+**On a rejoin the PEER is the initiator of everything and the returning node is
+merely the acceptor. On a first-time join the joiner initiates.** Grounded
+frame-by-frame, with a first-join control from a third capture:
+
+| step | first-time join (`vax3-2to3`) | **crash-rejoin** (this specimen) |
+|---|---|---|
+| `0x41` START opens the VC | **VAX3** (the joiner) | **VAX1 (the peer)**, idx 1176 |
+| `SCS$DIRECTORY` connect first by | **VAX3** | **VAX1 (the peer)**, idx 1184 |
+| `VMS$VAXcluster` connect by | **VAX3** | **VAX1** idx 1202 **and VAX2** idx 1248 |
+| first `cat 0x01 op 0x14`+`op 0x01` config | **joiner** | **peer** idx 1207/1208; node reciprocates |
+| node's own directory + `MSCP$DISK` client walk | yes | yes, idx 1264–1295 |
+| `op 0x02` membership request | joiner → one peer | joiner → **one** peer (VAX2) |
+
+The returning node's *entire* job before `op 0x02` is: emit one multicast HELLO,
+answer `0xb2` with `0xb3`, **answer** the peer's START, **accept** the peer's
+directory and `VMS$VAXcluster` connects, answer the directory lookups honestly,
+**reciprocate** the config, then run its own directory + `MSCP$DISK` client walk
+and send `op 0x02`. Total elapsed, first post-reboot frame → transition
+complete: **2.512 s.**
+
+### 4k.2 ⭐⭐ The peer's decision to re-probe is NOT content-driven
+
+VAX3's post-reboot HELLO (idx 1172) is **byte-identical to its last pre-crash
+HELLO except bytes 96..103**, which is a VMS absolute-time quadword (all three
+nodes advance it at ~1.000 s per wall second and it decodes to the right
+calendar date — *inferred*, not oracle-confirmed).
+
+So the HELLO carries **no incarnation counter, no "I am new" flag, no boot
+marker.** The peer re-probes because it hears a node it holds no verified
+channel to. Nothing in the returning node's first frame announces the return.
+
+### 4k.3 ⭐⭐ NEGATIVE RESULT — the START `[22:24]` incarnation counter does NOT distinguish incarnations
+
+§4(i).B puts a joiner incarnation counter at START `[22:24]`. In this specimen it
+is **`0x0001` on all 12 START frames, both directions, both peers** — a
+crash-rebooted VAX3 under an unchanged identity presents exactly what a first
+boot presents (`0x0001` on all 4 STARTs in `vax3-2to3` too).
+
+The other START quadword, abs 80..87, is **not** a boot stamp either: VAX3's
+reads 2026-08-01 12:05:21 — 4.5 h *before* this reboot — and sits 0.163 s from
+VAX2's. A persistent, disk-resident value. Undecoded.
+
+**The only candidate incarnation signal left on the wire** is the `send_seq`
+restart: VAX3's START carries `send_seq = 1` while VAX1's carries a *continuing*
+`11509` (VAX2's `8990`). A sequence restart on a VC to a node the peer already
+holds a CSB for is the natural "different incarnation" tell. **This is an
+inference, explicitly not observed on the peer** — a decode of which frame frees
+the old CSB is not possible from passive capture, and §4j brackets it only to
+`[idx 1172, idx 1202]`.
+
+### 4k.4 ⚠ §4c.8 IS STALE — byte-verified, and it was load-bearing
+
+§4c.8 states: *"OVMX does none of it, ever — its only outbound CONN-REQ to the
+coordinator is the `VMS$VAXcluster` one."* **Both halves are wrong for `r2A`.**
+
+Challenged and re-verified from raw Ethernet bytes (source MAC read at offset
+6..11, SYSAP name pair at offset 76..111, not from any labelling logic):
+
+| idx | t | dst | target SYSAP | requestor |
+|---|---|---|---|---|
+| 79 | +2.1378 | VAX2 | `SCS$DIRECTORY` | `SCS$DIR_LOOKUP` |
+| 94 | +2.1390 | VAX2 | `MSCP$DISK` | `VMS$DISK_CL_DRVRV5.0` |
+| 160 | +2.3796 | VAX3 | `SCS$DIRECTORY` | `SCS$DIR_LOOKUP` |
+| 178 | +2.3803 | VAX3 | `MSCP$DISK` | `VMS$DISK_CL_DRVRV5.0` |
+| 282 | +3.9376 | VAX1 | `SCS$DIRECTORY` | `SCS$DIR_LOOKUP` |
+| 296 | +3.9387 | VAX1 | `MSCP$DISK` | `VMS$DISK_CL_DRVRV5.0` |
+
+**6 outbound CONN-REQ, all sourced from OVMX's MAC: 3× `SCS$DIRECTORY` + 3×
+`MSCP$DISK`, and ZERO `VMS$VAXcluster`** (every `VMS$VAXcluster` connect in
+`r2A` is peer-initiated). So OVMX in pure mode *does* run the joiner's directory
++ MSCP client walk — against **all three** peers, where a real node runs it
+against **one**.
+
+**And in `r2B` (refused) OVMX sends ZERO outbound CONN-REQ, to any peer, at any
+point.** That is the cleanest arithmetic-checkable divergence in the dataset.
+
+> **⚠ Do not read that as "so make OVMX run the walk on a rejoin".** §4e.4 already
+> ungated exactly that and it did **not** admit us, and §4f.3 records the peer
+> *ignoring* our `SCS$DIRECTORY` connect on a rejoin. The interesting question is
+> the inverse: why does the peer accept that same connect on a fresh join and
+> ignore it on a rejoin?
+
+### 4k.5 ⭐⭐ THE DIVERGENCE POINT — the peer's directory teardown never comes
+
+Last identical event in both OVMX runs: OVMX's second outbound `VMS$VAXcluster`
+DATA frame with `ra=10` (`r2A` frame 277 @ +2.0297, `r2B` frame 174 @ +2.6993).
+
+- **`r2A`:** 0.0003 s later VAX1 sends `DISC-REQ`, tearing down its round-1
+  directory connection. Round 2 opens; OVMX runs its client walk; admitted.
+- **`r2B`:** no `DISC-REQ` from any peer, ever, for the remaining 158.6 s. Round 2
+  never opens. `DISC-REQ`/`DISC-RSP` counts are 3/3 in `r2A` and **0/0** in `r2B`.
+
+The real rejoin does the same thing `r2A` does: VAX1 tears its directory
+connection down (`op 6`/`op 7`, idx 1213–1217) immediately after the config
+exchange, and only then does VAX3 open its own.
+
+**So the gate is the peer's directory teardown after the config exchange.** In a
+refused rejoin the peer completes round 1 — opens the VC, opens the directory,
+asks whether we have `MSCP$DISK`, is told yes, opens `VMS$VAXcluster`, exchanges
+config — and then simply stops, holding its directory connection open forever.
+Capture integrity was checked (`seqchk.py`: zero sequence gaps, zero truncated
+frames in either pcap), so the absence is protocol, not capture loss.
+
+This is peer-side, which agrees with §4f.2 (the deciding state is the
+CLUSTER's), §4d.6's "dropped on the floor" shape, and §4j (the peer never builds
+a new CSB).
+
+### 4k.6 ⚠ THE DISK QUESTION — DIRECTION MATTERS, and a near-miss correction
+
+The wire decode found the peer's connect to VAX3's `MSCP$DISK` arriving **7.47 s
+AFTER** the membership request and being **refused 9 times on a 10.0 s ladder for
+90 s while VAX3 was already a member**, flipping to `ACCEPT` only once VAX3's own
+disk server came up. That looks like it refutes §4f.3/§4g.1's "a real returning
+node has `MSCP$DISK` open at the moment its membership request is processed — a
+PRECONDITION".
+
+**It does not, and I nearly recorded a false correction.** Checked against
+§4f.3's own `R1.conn` — whose *order* is trustworthy even though its absolute
+timing is not — the console is unambiguous: `MSCP$DISK` open (line 216) →
+`VMS$VAXcluster` open (233) → `received VAXcluster membership request` (250).
+
+**Both are true because they are different directions:**
+
+| direction | when | outcome |
+|---|---|---|
+| returning node → **peer's** `MSCP$DISK` (node is client, `VMS$DISK_CL_DRVR`) | **BEFORE** `op 0x02`, by 102 ms | accepted; full SET-CTLR-CHAR + GET-UNIT-STATUS walk |
+| peer → **returning node's** `MSCP$DISK` (peer is client) | **AFTER** admission, +7.47 s | refused 9× for 90 s, then accepted. **NOT a precondition** |
+
+**Always state the direction when citing the disk connection.** The
+before-`op 0x02` one is the node's own client walk (§4c.8's subject, and absent
+in `r2B`); the post-admission one is the peer mounting our served disks and is
+not a gate on anything.
+
+> **⚠ One flagged inference, deliberately NOT acted on.** The decode argues
+> `op 4`/`op 5` is a **REFUSAL** pair rather than the "CONNECT-ACCEPT (alt) /
+> confirm" that §4(m) currently records as grounded — on the evidence that no
+> `op 10` ever rides that Con.ID pair, each retry mints a fresh Con.ID on a fixed
+> 10 s cadence, the ladder stops the instant an `op 2` ACCEPT arrives, and
+> `vax3-2to3` carries 24 corroborating `op 4` frames with the same shape.
+> **Plausible and important, but it contradicts a grounded spec line. Re-check it
+> against SDA `SHOW CONNECTIONS` on a live refusal before editing the spec.**
+
+### 4k.7 What this makes the next experiment
+
+The question is now singular and peer-side: **after the config exchange, what
+does the peer need in order to tear down its directory connection and let the
+joiner proceed — and what per-identity state stops it doing so for a returning
+OVMX identity?**
+
+That lines up exactly with §4j's unanswered half (what makes the peer allocate a
+fresh CSB+CDT). They are plausibly the same decision seen from two oracles.
+
+**The experiment:** poll the peer's CSB at 2–3 s cadence *through* the window
+between the config exchange and the expected directory teardown, on a refused
+OVMX rejoin AND on a real-node readmission, and place the CSB free/realloc
+against the `DISC-REQ`. §4j bracketed that transition only to `[HELLO, VMS$VAXcluster
+connect]` and the wire cannot narrow it further — this needs SDA, not another pcap.
+
+**Prerequisite:** fix `csbcycle.sh` first. Use `SHOW CLUSTER/NODE=<name>` —
+**verified supported on this VMS** (`/NODE=` and `/CSID=` both return semantic
+errors, not `%CLI-W-SYNTAX`; `/CSB` is a syntax error). Per-node output is a
+fraction of the ~6.3 KB full dump, which is what killed the console in §4j.6.
 
 ---
 

@@ -240,6 +240,9 @@ oracle degrades before it errors.
     crash-rebooted node under an unchanged identity presents exactly what a
     first boot presents. The adjacent quadword at abs 80..87 is not a boot stamp
     either (4.5 h stale across the reboot). Do not build a fix on either field.
+    **But do not dismiss the field — see §4k.9:** it is the incarnation the
+    *member* attributes to *us*, so it is a free wire-readable ORACLE for whether
+    the peer still holds our residual CSB. It is a readout, never a lever.
 12. **The peer's connect to OUR `MSCP$DISK` is a precondition for admission.**
     Killed by §4k.6: in the reference rejoin that connect arrives 7.47 s *after*
     the membership request and is refused 9 times over 90 s while the node is
@@ -2112,6 +2115,101 @@ connect]` and the wire cannot narrow it further — this needs SDA, not another 
 **verified supported on this VMS** (`/NODE=` and `/CSID=` both return semantic
 errors, not `%CLI-W-SYNTAX`; `/CSB` is a syntax error). Per-node output is a
 fraction of the ~6.3 KB full dump, which is what killed the console in §4j.6.
+
+### 4k.8 ⚠ NULL RESULT — the role reversal is NOT where OVMX diverges
+
+§4k.1's role reversal is real *for a real node* (first-time join = joiner
+initiates; rejoin = peer initiates). It is **not** the OVMX discriminator.
+Checked on both OVMX runs, all three peer relationships, 18 `0x41` frames each:
+
+**The peer sends the first `0x41` START in every single instance, in both `r2A`
+(join) and `r2B` (refused rejoin). Same for the `0xb2`→`0xb3`→`0xb4` probe
+order.** There is no case where OVMX initiates.
+
+Two consequences, and they point in opposite directions:
+
+1. **Against the theory:** the join/rejoin initiation-role axis does not separate
+   `r2A` from `r2B`. Drop it as a discriminator.
+2. **A separate observation worth keeping:** OVMX is peer-initiated even on its
+   *first-time* join (`r2A`), where a real first-timer initiates. OVMX is passive
+   at VC setup in both cases — and is admitted anyway in `r2A`, so being passive
+   there is evidently not fatal.
+
+**Also null: the `send_seq` restart.** §4k.3 floated it as the only remaining
+incarnation signal. OVMX already does it correctly:
+
+| | peer's START `send_seq` | node's own START `send_seq` |
+|---|---|---|
+| real crash-rejoin | **11509 / 8990** (continuing) | **1** (restart) |
+| OVMX `r2B` rejoin | **200 / 56 / 387** (continuing) | **1** (restart) |
+| OVMX `r2A` join | 1 (fresh, all peers) | 1 |
+
+`r2B` reproduces the real rejoin's signature exactly, and the peer's continuing
+value confirms the peer *knows* it already holds state for us. **We already send
+the right thing. Do not spend a commit on `send_seq`.**
+
+### 4k.9 ⭐⭐⭐ THE PEER TELLS US, ON THE WIRE, THAT IT STILL HOLDS OUR OLD CSB
+
+> **⚠ THIS SECTION WAS FIRST WRITTEN WRONG AND IS CORRECTED HERE.** The initial
+> reading — "OVMX increments an incarnation field that a real node never
+> changes" — is **false**, and the cheaper oracle that refuted it was our own
+> source, not another capture. `scs_start.c:112` and `scs_start.h:51` are
+> explicit and already GROUNDED byte-exact across 6 `vms-af2` specimens spanning
+> values `{1,2,3}`: `[22:24]` is **not** ours to choose. It is the incarnation
+> the **member attributes to us**, advertised in the member's directed-HELLO at
+> payload `[78:80]` (abs 92) and *echoed* by the joiner. OVMX reads it off the
+> wire and never hard-codes it. **OVMX sending `2` is correct behaviour.**
+> Guardrail: check an agent's *semantic* claim against the source before
+> treating a byte value as a divergence.
+
+Same offset table, payload `[22:24]` (abs `[36:38]`), the field §4(i).B calls the
+incarnation counter:
+
+| | value in that field |
+|---|---|
+| real VAX3, **all 12 STARTs** of a crash-rejoin, both directions | **`0x0001`** |
+| real VAX3, all 4 STARTs of `vax3-2to3` first-time join | **`0x0001`** |
+| peers' own STARTs in `r2A` **and** `r2B` | **1** |
+| **OVMX's own START, `r2A` (first join)** | **1** |
+| **OVMX's own START, `r2B` (rejoin)** | **2**, all three peers |
+
+**Read through the documented semantics, the table says something much better
+than a divergence.** The advertised value is `1` for a first contact and
+increments *"each time this node re-forms its channel against a member holding a
+residual CSB for it"*. So:
+
+- Peers advertise **`2` to OVMX** on its rejoin → **the peer still holds our
+  residual CSB.**
+- VAX3 echoes **`1`** on its crash-rejoin → **the peers held NO residual CSB for
+  VAX3 by the time it re-formed its channel.**
+
+**That is the same fact §4j measured through SDA, visible for free on the wire.**
+§4j: a returning real node gets a **brand-new CSB at a new address** (old one
+freed) while OVMX's old CSB is **mutated in place**. Two independent oracles, two
+labs, same conclusion — and the wire one is a single field readable in any
+capture, with no SDA console to overrun.
+
+**This makes the peer's advertised incarnation a free oracle for the CSB
+decision**, and it collapses the investigation to one question:
+
+> **Why does the peer retire a returning real node's CSB and treat it as a fresh
+> first contact, while retaining ours and calling us incarnation 2?**
+
+> **⚠ NOT YET CONFIRMED, and it is the load-bearing step.** VAX3 echoing `1` only
+> *implies* the peers advertised `1` **if** VAX3 echoes at all. That must be read
+> off the peers' directed HELLOs to VAX3 — before the crash and in the rejoin
+> window — not inferred from VAX3's echo. **Dispatched; do not build on this
+> until the advertised bytes are in hand.** If the peers never send VAX3 a
+> directed HELLO in that window, the interpretation changes entirely.
+>
+> Also reconcile against §3 item 5, which records peers advertising `3, 4, 5, 6`
+> across session-i attempts — consistent with "increments per re-formation
+> against residual state", but those were different runs and should be checked
+> rather than assumed to line up.
+
+**Do NOT "fix" this by pinning `[22:24]` to 1.** The field is an echo; sending a
+value the member did not advertise is the `vms-691` stall this code already
+fixed. The value is a *readout* of the peer's state, not a lever on it.
 
 ---
 

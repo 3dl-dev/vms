@@ -71,6 +71,33 @@ $K sh -c "tcpdump -i br0 -w $L/formation.pcap -U -s 0 &"     # capture inside th
 Captures and logs land on the tank volume under `k8s-labs/<pod>/logs/`, readable
 from workshop at `/data/training/vax/k8s-labs/`.
 
+## Verification (2026-08-02, image `:2`)
+
+`vaxlab-0` boots vax1 + vax2 to `SHOW CLUSTER` MEMBER/MEMBER under the x86_64
+SIMH build. A 130 s steady-state capture on the pod's `br0`, decoded with
+`docs/clean-room/tools/af2scan.py`, was compared against lab-1's 2-node baseline
+`cluster/captures/cd0-baseline-current-20260728.pcap`:
+
+| signature | lab-1 baseline | lab-2 (`vaxlab-0`) | |
+|---|---|---|---|
+| HELLO multicast dst | `ab0004010101` | `ab0004010101` | same — cluster group 1 |
+| node MAC | `aa0004000104` | `aa0004000104` | same — carried by the disk image |
+| peer MAC | `08002b7856b9` | `08002b8eb785` | differs; both DEC OUI, SIMH per-instance |
+| `0xa0` HELLO rate | 0.98/s | 0.89/s | ≈1/s aggregate for 2 nodes |
+| `0xb3`/`0xb4` | 8 / 8 | 57 / 57 | exactly paired in both |
+| type vocabulary | — | subset of lab-1's | no type appears that lab-1 never emits |
+
+The `0x4b` rate differs (0.63/s vs 1.47/s) but the baseline sample is 9 frames
+over 14 s — too small to read anything into. Everything with a usable sample
+agrees.
+
+**What this does and does not establish.** The lab-2 wire carries the same
+message vocabulary, the same multicast and node addressing, and the same HELLO
+cadence and `0xb3`/`0xb4` pairing as the reference lab. It is **not** a
+byte-level fidelity proof — no field-level diff was run. The arch-difference
+caveat below still governs: reproduce a *contradicting* lab-2 result on lab-1
+before trusting it.
+
 ## Things that will bite you
 
 - **`dep bdr 0` stays commented on every node.** Depositing 0 into the KA655

@@ -9,6 +9,14 @@
 > opens the barrier. Nine hypotheses are killed there; check that list before
 > spending anything. The rest of §5 (`vms-c7d`, `vms-2d6`, `vms-416`, `vms-ae5`)
 > still stands as written.
+>
+> **⇒ LAB CAPACITY IS NO LONGER ONE (2026-08-02, `vms-a5c`).** The rest of §5 no
+> longer has to queue behind `vms-2f3` for the lab. `tests/lab/` on main runs
+> isolated 2-node VMSclusters on k3s — one pod each, three replicas up,
+> `kubectl -n ovmx-lab scale sts/vaxlab --replicas=N` for more. Read
+> `tests/lab/README.md` first. Build a lab-2 line of attack's controls on lab-2
+> from the start; never carry a lab-1 control into a lab-2 comparison (different
+> SIMH binary — same source commit, different arch).
 
 **Rewritten 2026-07-31, end of session i. Read `docs/HANDOFF-vms-760.md` §0 FIRST
 for the orchestrator doctrine — it still applies verbatim, and this session is

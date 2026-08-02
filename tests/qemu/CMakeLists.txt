@@ -94,11 +94,21 @@ add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets})
 #     source. The QEMU driver now requires the observed red set to EQUAL the
 #     named set, so a typo'd entry can never be observed and would fail the
 #     control blaming the executive for a manifest defect;
-#   * the coverage statement holds at BOTH granularities -- every src/kernel/*.c
-#     has a control, and every derived tests/qemu suite is either reachable by
-#     one, declared blind with a tracked item, or declared out of scope with a
-#     reason. The out-of-scope set (vmsfs) is printed, so this gate's PASS can
-#     never be read as a claim about the whole harness.
+#   * the coverage statement holds at every granularity -- every src/kernel/*.c
+#     has a control; every derived tests/qemu suite is either reachable by one
+#     or declared out of scope with a reason (being declared blind no longer
+#     counts as coverage -- vms-279); every defect is ANCHORED by a
+#     /* negctl: ... */ comment at the assertion it names, and every anchor
+#     names a live defect; and every defect has exactly two case arms here.
+#     The out-of-scope set (vmsfs) is printed, so this gate's PASS can never be
+#     read as a claim about the whole harness.
+#
+#     The anchor check is the floor under the SIZE of the manifest, and it is
+#     why this ctest matters more than it used to: MEASURED on the checkout
+#     that closed vms-b33, 37 of the 42 entries could be deleted one at a time
+#     with this test still green, and an exact set cover deleted 32 of 42 in
+#     one edit. Both are now caught. What is still possible, stated rather than
+#     claimed closed, is in facility_defects.sh's header.
 #
 # It runs in seconds in the ordinary Build & Test job, so anchor drift is
 # caught there instead of twenty minutes into the QEMU job -- or, worse, not

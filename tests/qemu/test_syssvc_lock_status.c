@@ -162,6 +162,8 @@ static void scenario_ivlockid(void)
 
     uint32_t st = sys$deq(0xDEADBEEF, NULL, 0, 0);
     printf("  INFO: sys$deq(0xDEADBEEF) returned status %u\n", st);
+    /* negctl: kstat-ivlockid-mismapped */
+    /* negctl-knockon: bind-client-no-register */
     CHECK(st == SS$_IVLOCKID,
           "sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)");
 }
@@ -232,11 +234,13 @@ static void scenario_cvtungrant(void)
 
     char r = 0;
     int rr = read_bounded(ready_pipe[0], &r, 1, REPORT_TIMEOUT_MS);
+    /* negctl-knockon: bind-client-no-register */
     CHECK(rr == 1, "parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)");
 
     $DESCRIPTOR(resnam, "SYSSVC_STATUS_CVT");
     struct lksb_caller lksb_q = {0};
     uint32_t st = sys$enq(0, LCK$K_CRMODE, &lksb_q, 0, &resnam, 0, NULL, 0, NULL, 0, 0);
+    /* negctl-knockon: bind-client-no-register */
     CHECK((st & 1) && lksb_q.lksb$l_lkid != 0,
           "parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)");
 
@@ -246,6 +250,8 @@ static void scenario_cvtungrant(void)
         uint32_t cst = sys$enq(0, LCK$K_PRMODE, &lksb_cvt, LCK$M_CONVERT,
                                 &resnam, 0, NULL, 0, NULL, 0, 0);
         printf("  INFO: sys$enq(CONVERT) on the still-queued lock returned status %u\n", cst);
+        /* negctl: kstat-cvtungrant-mismapped */
+        /* negctl-knockon: lock-compat-cr-ex */
         CHECK(cst == SS$_CVTUNGRANT,
               "sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)");
 
@@ -371,6 +377,7 @@ static void scenario_deadlock(void)
     struct lksb_caller lksb_y = {0};
     uint32_t sty = sys$enqw(0, LCK$K_EXMODE, &lksb_y, 0, &resy, 0, NULL, 0, NULL, 0, 0);
     printf("  INFO: parent's closing sys$enqw returned status %u\n", sty);
+    /* negctl: kstat-deadlock-mismapped */
     CHECK(sty == SS$_DEADLOCK,
           "parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)");
 

@@ -371,6 +371,7 @@ static void child_completion_ast(int c2p_w, int p2c_r)
     uint64_t d_astadr = 0, d_astprm = 0;
     uint8_t d_acmode = 0;
     int ar = vms_kif_deliverast(&d_astadr, &d_astprm, &d_acmode);
+    /* negctl-knockon: lock-compat-cr-ex */
     CHECK(ar == 0 && d_astadr == AST_ASTADR && d_astprm == AST_ASTPRM,
           "child: DELIVERAST returned completion AST (astadr/astprm sentinels)");
 
@@ -429,6 +430,7 @@ static void run_completion_ast(int pfd, int *tot_pass, int *tot_fail)
 
     int ws = 0;
     waitpid(pid, &ws, 0);
+    /* negctl-knockon: lock-compat-cr-ex */
     CHECK(WIFEXITED(ws) && WEXITSTATUS(ws) == 0, "parent: child (completion AST) exited clean");
     close(c2p[0]);
     close(p2c[1]);
@@ -503,6 +505,7 @@ static void child_valblk_grant(int c2p_w, int p2c_r)
                                          resnam_out, valblk_out);
     CHECK(getlki_st == SS_NORMAL && granted_mode == LCK_K_EXMODE,
           "child: async EX request granted after parent released VALBLKRES");
+    /* negctl: lock-valblk-grant-not-delivered */
     CHECK(memcmp(valblk_out, VALBLK_SEED, sizeof(VALBLK_SEED)) == 0,
           "child: GETLKI value block equals the PARENT's, not this lock's own pre-grant value (blocked-then-granted valblk delivery)");
 
@@ -571,6 +574,7 @@ static void run_valblk_grant(int pfd, int *tot_pass, int *tot_fail)
 
     int ws = 0;
     waitpid(pid, &ws, 0);
+    /* negctl-knockon: lock-valblk-grant-not-delivered */
     CHECK(WIFEXITED(ws) && WEXITSTATUS(ws) == 0, "parent: child (valblk grant) exited clean");
     close(c2p[0]);
     close(p2c[1]);

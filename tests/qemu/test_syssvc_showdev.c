@@ -287,8 +287,10 @@ int main(void)
         return 1;
     }
     show_capture("SHOW DEVICE (before)", out);
+    /* negctl-knockon: bind-client-no-register */
     CHECK(console_row(out) != NULL,
           "bare SHOW DEVICE lists OPA0: -- a device DCL has no other way to know about, read from the executive's table");
+    /* negctl-knockon: bind-client-no-register */
     CHECK(strstr(out, "Device                  Device           Error") != NULL,
           "the listing carries the oracle's column header (section 4)");
     CHECK(!row_says_alloc(out),
@@ -296,6 +298,7 @@ int main(void)
 
     if (run_dcl("SHOW DEVICE OPA0:", out, sizeof(out)) == 0) {
         show_capture("SHOW DEVICE OPA0: (before)", out);
+        /* negctl-knockon: bind-client-no-register */
         CHECK(console_row(out) != NULL,
               "SHOW DEVICE OPA0: resolves the name through the executive and prints its row");
     } else {
@@ -353,6 +356,7 @@ int main(void)
         char verdict = '?';
         int pr = poll(&pfd, 1, DCL_TIMEOUT_MS);
 
+        /* negctl-knockon: bind-client-no-register */
         if (pr > 0 && read(pipefd[0], &verdict, 1) == 1)
             CHECK(verdict == 'Y',
                   "the second process allocated OPA0: through the executive ($ALLOC)");
@@ -363,12 +367,16 @@ int main(void)
     /* ---- 3. DURING: DCL, a third process, observes the change -------- */
     if (run_dcl("SHOW DEVICE OPA0:", out, sizeof(out)) == 0) {
         show_capture("SHOW DEVICE OPA0: (while another process holds it)", out);
+        /* negctl: devtab-alloc-not-recorded */
+        /* negctl-knockon: bind-client-no-register */
         CHECK(row_says_alloc(out),
               "A-WRITES/B-READS: DCL's SHOW DEVICE reports the console allocated -- a change made by a DIFFERENT process, which a per-process device view could not show");
     } else {
         CHECK(0, "SHOW DEVICE OPA0: could not be run while the console was allocated");
     }
 
+    /* negctl: devtab-alloc-not-recorded */
+    /* negctl-knockon: bind-client-no-register */
     if (run_dcl("SHOW DEVICE", out, sizeof(out)) == 0)
         CHECK(row_says_alloc(out),
               "the bare listing shows it too, so both row sources ($DEVICE_SCAN and $GETDVI) read the same shared table");
@@ -380,6 +388,7 @@ int main(void)
 
     if (run_dcl("SHOW DEVICE OPA0:", out, sizeof(out)) == 0) {
         show_capture("SHOW DEVICE OPA0: (after the holder exited)", out);
+        /* negctl-knockon: bind-client-no-register */
         CHECK(console_row(out) != NULL,
               "the console is still listed once the other process is gone");
         CHECK(!row_says_alloc(out),
@@ -392,6 +401,7 @@ int main(void)
     if (run_dcl("SHOW DEVICE ZZA0:", out, sizeof(out)) == 0)
         CHECK(strcmp(out, "OVMX-PROBE-ALIVE\n") == 0,
               "SHOW DEVICE ZZA0: prints no row for a device that does not exist");
+    /* negctl-knockon: bind-client-no-register */
     if (run_dcl_err("SHOW DEVICE ZZA0:", out, sizeof(out)) == 0)
         CHECK(strstr(out, "NOSUCHDEV, no such device available") != NULL,
               "...and refuses it with the oracle's own message (section 6)");

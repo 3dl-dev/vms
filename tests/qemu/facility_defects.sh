@@ -171,8 +171,60 @@
 # implicit narrowing is how a gate quietly stops meaning what its title says.
 #
 # `coverage` turns "every facility has a control" into a mechanical check at
-# BOTH granularities -- translation unit and suite -- so neither a new
-# executive source file nor a new suite can arrive uncovered and unnoticed.
+# THREE granularities -- translation unit, suite, and individual defect -- so
+# neither a new executive source file nor a new suite can arrive uncovered and
+# unnoticed, and no existing control can leave without saying so.
+#
+# THE FLOOR UNDER THIS FILE'S OWN LENGTH (vms-279), AND WHAT IT DOES NOT CLAIM
+#
+# vms-b33's closing condition is "a deliberately injected defect in each wired
+# facility turns CI red", and THIS LIST is the list of those defects. So the
+# list's own size is load-bearing, and until vms-279 nothing measured it.
+# MEASURED, on the checkout that closed vms-b33: 37 of the 42 entries could be
+# deleted one at a time with `selftest` still exiting 0, and an exact set-cover
+# over the seven kernel translation units and the twenty-five in-scope suites
+# deleted 32 OF 42 IN A SINGLE EDIT -- selftest 0, "every src/kernel/*.c
+# translation unit is named" still PASS, and the coverage drop from 25 suites
+# to 23 printed as a `NOTE:`. A NOTE IS NOT A GATE.
+#
+# The obvious repair -- a hand-written expected count in this same file -- is
+# bought by editing both halves of one file, and a cardinal that is
+# hand-maintained is drift wearing a number. So the floor is DERIVED FROM
+# SOMETHING OUTSIDE THIS FILE: the suite sources themselves.
+#
+#   EVERY DEFECT IS ANCHORED, AT THE ASSERTION IT NAMES, IN THE SUITE SOURCE
+#   THAT PRINTS IT.
+#
+# Each assertion named by a `require_fail` carries, on the line above it:
+#
+#       /* negctl: <defect> */
+#
+# and each `knock_on_fail` assertion carries
+#
+#       /* negctl-knockon: <defect> */
+#
+# `coverage` then requires the anchor set and the manifest to AGREE BOTH WAYS:
+# every defect must have at least one `negctl:` anchor, and every anchor must
+# name a live defect. Deleting an entry from DEFECTS therefore orphans its
+# anchors and turns the check red -- so cutting coverage now requires editing
+# the tests/qemu suite sources too, in the same change, under a reviewer's
+# nose. That is the whole of the claim.
+#
+# WHAT THIS FLOOR DOES **NOT** CLAIM:
+#   * It is NOT tamper-proof. An adversary who deletes a defect AND its anchor
+#     lines still passes. The claim is only that the edit is no longer confined
+#     to this file, and no longer one line per entry.
+#   * It does NOT floor the number 42 against a rewrite of the suites. Nothing
+#     outside this repository enumerates the properties, so no check here can.
+#   * It does NOT say the 42 defects cover the executive. MEASURED (vms-279):
+#     of the 33 `vms_ioctl_*` handlers defined in src/kernel/*.c, exactly 9 are
+#     inside a hunk any of these mutations edits. The translation-unit check
+#     below is satisfied by 7 files; the executive's ioctl surface is nearly
+#     five times wider. That gap is a finding, not something this file hides.
+#   * The anchor placement check is DELIBERATELY LOOSE. It requires the text
+#     following an anchor, up to the first `;`, to contain one of that defect's
+#     named assertion texts. It exists to catch an anchor parked in a comment
+#     block, not to parse C.
 #
 # USAGE
 #   facility_defects.sh list
@@ -195,6 +247,10 @@
 # renamed, and reported the evasions as CERTIFIED.
 
 set -u
+
+# This script's own path. `coverage` reads it back to check that the DEFECTS
+# list and the two `case` blocks below agree -- see section 5 there.
+SELF="$0"
 
 DEFECTS="access-mode-escalation
 kif-setmode-always-kernel
@@ -2864,14 +2920,31 @@ cmd_apply() {
 #      must be named by at least one defect's targets. Adding a facility file
 #      without a control turns this red.
 #   2. SUITE. Every derived tests/qemu/test_{kmod,syssvc}_*.c suite must be
-#      either (a) in some defect's suites_red, (b) in some defect's
-#      blind_suites -- i.e. declared and pinned as a known gap -- or (c) in
-#      SCOPE_OUT_SUITES with a stated reason. A suite covered by nothing is
-#      never proven capable of going red, and round 1 shipped two of those
-#      (the vmsfs pair) without saying so.
+#      either (a) in some defect's suites_red, or (b) in SCOPE_OUT_SUITES with
+#      a stated reason. A suite covered by nothing is never proven capable of
+#      going red, and round 1 shipped two of those (the vmsfs pair) without
+#      saying so.
+#      A suite that appears ONLY in some defect's blind_suites USED TO satisfy
+#      this and print a `NOTE:`. It no longer does. Being declared blind is a
+#      record that nothing reddens the suite -- that is the definition of
+#      uncovered, and printing it as a note is how the set-cover deletion
+#      measured in the header dropped two suites out of the proven set while
+#      exiting 0. blind_suites keeps its other job (pinning a named suite GREEN
+#      under one defect); it is no longer a substitute for coverage.
 #   3. SCOPE CONSISTENCY. Nothing under SCOPE_OUT_UNIT_DIRS may be named by a
 #      defect: if it is, the scope statement is wrong and must be corrected
 #      rather than quietly outvoted by a control.
+#   4. ANCHORS. Every defect must be anchored, by a `/* negctl: <defect> */`
+#      comment, at an assertion in a suite source it is allowed to redden; and
+#      every anchor found in a suite source must name a live defect. This is
+#      the floor under the SIZE of the DEFECTS list, and it is the only check
+#      here whose universe comes from outside this file. See the header for
+#      exactly what it claims and what it does not.
+#   5. ARM AGREEMENT. Every defect must have exactly two `case` arms in this
+#      script (defect_field and apply_edit) and every arm must name a live
+#      defect. Deleting one line from DEFECTS and leaving forty lines of
+#      documented metadata behind is not a legitimate edit; neither is an arm
+#      for a defect nobody runs.
 #
 # The PASS lines below name the exclusions explicitly, so a reader cannot take
 # them as a claim about the whole harness.
@@ -2967,19 +3040,147 @@ cmd_coverage() {
     if [ -n "$_uncovered" ]; then
         echo "FAIL: derived suite(s) that NO negative control can turn red:$_uncovered"
         echo "  A suite nothing can redden is never proven to assert anything. Give it a"
-        echo "  facility control, declare it blind_suites with a tracked item, or add it"
-        echo "  to SCOPE_OUT_SUITES with a reason -- but do not leave it silent."
+        echo "  facility control, or add it to SCOPE_OUT_SUITES with a reason -- but do"
+        echo "  not leave it silent."
         _cov_rc=1
     else
         echo "PASS: $_n_proven derived suite(s) are PROVEN able to go red by a control"
     fi
     # A suite that appears ONLY as somebody's blind_suites is declared and
     # tracked, but nothing in this manifest has ever turned it red -- so its
-    # assertions are still unproven. Say so; do not let it count as coverage.
+    # assertions are still unproven. That is not coverage, and until vms-279 it
+    # was printed as a NOTE and passed.
     if [ -n "$_blind_only" ]; then
-        echo "NOTE: suite(s) declared blind but never reddened by any control:$_blind_only"
-        echo "  These are tracked gaps, not coverage. Nothing here proves their"
-        echo "  assertions can fail."
+        echo "FAIL: suite(s) declared blind but never reddened by ANY control:$_blind_only"
+        echo "  A blind declaration records that a suite does not catch one defect. A"
+        echo "  suite that no defect catches is UNCOVERED, however many defects declare"
+        echo "  it blind. Give it a control that names an assertion in it, or move it to"
+        echo "  SCOPE_OUT_SUITES with a reason. Do NOT widen some existing defect's"
+        echo "  suites_red to swallow it: that glob is an attribution claim, and it is"
+        echo "  supposed to be as narrow as the measurement."
+        _cov_rc=1
+    fi
+
+    # --- 4. anchors: the floor under the SIZE of the DEFECTS list ---------
+    # Universe derived from the suite sources, not from this file. See header.
+    _anch_tmp=$(mktemp -d) || { echo "FAIL: coverage: mktemp -d failed" >&2; return 2; }
+    : >"$_anch_tmp/fail"; : >"$_anch_tmp/named"; : >"$_anch_tmp/suites"
+    _defs_sp=$(echo $DEFECTS)
+
+    _anch_raw=$( (cd "$_cov_tests" && grep -Hno \
+        '/\* negctl\(-knockon\)\{0,1\}: [a-z0-9][a-z0-9-]* \*/' \
+        test_kmod_*.c test_syssvc_*.c) 2>/dev/null )
+
+    printf '%s\n' "$_anch_raw" | while IFS= read -r _anch; do
+        [ -n "$_anch" ] || continue
+        _af=${_anch%%:*}; _arest=${_anch#*:}
+        _aln=${_arest%%:*}; _atxt=${_arest#*:}
+        _akind=${_atxt#/\* }; _akind=${_akind%%:*}
+        _aname=${_atxt#*: }; _aname=${_aname% \*/}
+        _abase=${_af%.c}
+
+        case " $_defs_sp " in
+            *" $_aname "*) ;;
+            *) echo "$_af:$_aln anchors '$_aname', which is not in DEFECTS." \
+                    "Either the defect was deleted (put it back) or the anchor is a typo." \
+                    >>"$_anch_tmp/fail"; continue;;
+        esac
+        case " $SCOPE_OUT_SUITES " in
+            *" $_abase "*) echo "$_af:$_aln anchors '$_aname' in a suite declared OUT OF SCOPE." \
+                                "The manifest says two things." >>"$_anch_tmp/fail"; continue;;
+        esac
+
+        _ahit=0
+        for _ag in $(defect_field "$_aname" suites_red); do
+            # shellcheck disable=SC2254
+            case "$_abase" in $_ag) _ahit=1; break;; esac
+        done
+        [ "$_ahit" -eq 1 ] || echo "$_af:$_aln anchors '$_aname', but that defect's suites_red" \
+            "does not match $_abase -- the anchor and the attribution claim disagree." \
+            >>"$_anch_tmp/fail"
+
+        if [ ! -f "$_anch_tmp/txt.$_aname" ]; then
+            { defect_field "$_aname" require_fail; defect_field "$_aname" knock_on_fail; } \
+                | tr -d '"\\' | tr -s ' ' | grep -v '^ *$' >"$_anch_tmp/txt.$_aname"
+        fi
+        _aseg=$(sed -n "$((_aln + 1)),$((_aln + 12))p" "$_cov_tests/$_af" \
+                | tr '\n\t' '  ' | sed 's/;.*//' | tr -d '"\\' | tr -s ' ')
+        printf '%s\n' "$_aseg" | grep -qF -f "$_anch_tmp/txt.$_aname" \
+            || echo "$_af:$_aln anchors '$_aname' but the statement under it names none of" \
+                    "that defect's require_fail/knock_on_fail texts." >>"$_anch_tmp/fail"
+
+        echo "$_abase" >>"$_anch_tmp/suites"
+        [ "$_akind" = "negctl" ] && echo "$_aname" >>"$_anch_tmp/named"
+        true
+    done
+
+    _anch_bad=$(cat "$_anch_tmp/fail")
+    _unanchored=""
+    for _cov_d in $DEFECTS; do
+        grep -qx "$_cov_d" "$_anch_tmp/named" 2>/dev/null || _unanchored="$_unanchored $_cov_d"
+    done
+    _unanch_suites=""
+    for _cov_s in $_cov_derived; do
+        case " $SCOPE_OUT_SUITES " in *" $_cov_s "*) continue;; esac
+        grep -qx "$_cov_s" "$_anch_tmp/suites" 2>/dev/null || _unanch_suites="$_unanch_suites $_cov_s"
+    done
+    _n_anch=$(printf '%s\n' "$_anch_raw" | grep -c . || true)
+    _n_anch_suites=$(sort -u "$_anch_tmp/suites" 2>/dev/null | grep -c . || true)
+    rm -rf "$_anch_tmp"
+
+    _anch_rc=0
+    if [ -n "$_anch_bad" ]; then
+        echo "FAIL: anchor(s) that disagree with the manifest:"
+        echo "$_anch_bad" | sed 's/^/      /'
+        _cov_rc=1; _anch_rc=1
+    fi
+    if [ -n "$_unanchored" ]; then
+        echo "FAIL: defect(s) with NO /* negctl: ... */ anchor in any suite source:$_unanchored"
+        echo "  Every control has to be findable AT the assertion it names, so that the"
+        echo "  size of this list is floored by the suite sources rather than by nothing."
+        echo "  Add the anchor above the CHECK() its require_fail names."
+        _cov_rc=1; _anch_rc=1
+    fi
+    if [ -n "$_unanch_suites" ]; then
+        echo "FAIL: in-scope suite(s) with NO anchor at all:$_unanch_suites"
+        echo "  No control names an assertion in these, so nothing here proves they can"
+        echo "  fail -- being matched by somebody's suites_red glob is a permission, not"
+        echo "  a measurement."
+        _cov_rc=1; _anch_rc=1
+    fi
+    if [ "$_anch_rc" -eq 0 ]; then
+        echo "PASS: all $(echo $DEFECTS | wc -w) defect(s) anchored by $_n_anch marker(s)" \
+             "across $_n_anch_suites in-scope suite source(s)"
+        echo "  (this floors the LIST AGAINST A ONE-FILE EDIT ONLY -- deleting a defect"
+        echo "   and its anchors together still passes. See the header.)"
+    fi
+
+    # --- 5. the two case blocks must agree with the list -----------------
+    if [ -f "$SELF" ]; then
+        _arms=$(grep -E '^    [a-z0-9][a-z0-9-]*\)$' "$SELF" | tr -d ' )')
+        _orphan_arm=""
+        for _l in $(printf '%s\n' "$_arms" | sort -u); do
+            case " $_defs_sp " in *" $_l "*) ;; *) _orphan_arm="$_orphan_arm $_l";; esac
+        done
+        _short_arm=""
+        for _cov_d in $DEFECTS; do
+            _n_arm=$(printf '%s\n' "$_arms" | grep -cx "$_cov_d" || true)
+            [ "$_n_arm" -eq 2 ] || _short_arm="$_short_arm $_cov_d($_n_arm/2)"
+        done
+        if [ -n "$_orphan_arm" ]; then
+            echo "FAIL: case arm(s) for defect(s) not in DEFECTS:$_orphan_arm"
+            echo "  A name was removed from the list and its metadata left behind. Metadata"
+            echo "  nothing runs is not a control; put the name back or delete both arms in"
+            echo "  the same change, where a reviewer can see the size of it."
+            _cov_rc=1
+        fi
+        if [ -n "$_short_arm" ]; then
+            echo "FAIL: defect(s) without exactly two case arms (defect_field, apply_edit):$_short_arm"
+            _cov_rc=1
+        fi
+    else
+        echo "FAIL: cannot read \$SELF ($SELF) to check the case arms against DEFECTS."
+        _cov_rc=1
     fi
 
     # --- the exclusions, stated, never implied ---------------------------

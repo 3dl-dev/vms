@@ -61,8 +61,34 @@
 # declaration to be deleted in the same commit and the census can never drift
 # into a stale allowlist.
 #
-# The gate does NOT verify that the item is open (rd is nostr-backed and not
-# reachable from CI). It verifies that a human wrote an id down.
+# THE CITED ITEM IS CHECKED AGAINST A LEDGER, NOT AGAINST rd (rd vms-8cc), and
+# the difference is the whole contract of this paragraph. This gate used to say
+# "it verifies that a human wrote an id down", and that was exact: the id was
+# SHAPE-checked. MEASURED against that revision -- `sed -i s/(vms-a86)/(vms-q9z9)/`
+# on one declaration, an id that has never existed, left the gate rc=0 at
+# 44/31/13; another pointed at vms-fb9, whose status is `done`, did the same.
+# ONE TOKEN bought the exemption, so "13 unwired" was a floor on how many were
+# genuinely tracked, not a bound.
+#
+# rd is nostr-backed and is not reachable from CI, so this gate still does not
+# ask it. tools/gen_rd_citations.py resolves every id cited under src/ and
+# tools/ on a host that HAS rd and commits the answer as
+# tracking/rd-citations.tsv; this gate reads that file. What each half claims:
+#
+#   THE GATE CLAIMS - every id in an OVMX-UNWIRED line appears in that ledger
+#                     and is recorded open. A fabricated id is red (no row, or
+#                     a row saying rd has no such item); a closed id is red; a
+#                     missing or malformed ledger is a REFUSAL, not a skip.
+#   IT DOES NOT     - the ledger is a snapshot with a printed timestamp. An
+#     CLAIM           item closed in rd since that stamp still reads open here,
+#                     and a row edited by hand instead of regenerated reads as
+#                     true. Neither is detectable without rd.
+#                     tests/integration/test_rd_citations_fresh.sh re-derives
+#                     the ledger from live rd and reds on any disagreement --
+#                     it needs rd, so it SKIPS in CI and closes both residuals
+#                     on the dev host and nowhere else. The census prints the
+#                     ledger's stamp and age at every run so the size of that
+#                     window is visible rather than assumed.
 #
 # WHY THE UNIVERSE IS PINNED, and this is the property that makes the escape
 # hatch safe. An earlier revision derived the list of entry points by grepping
@@ -210,15 +236,10 @@
 #     selector to vms.ko, land its wrapper in the same commit.
 #
 # WHAT THIS GATE DOES NOT SEE, stated so its PASS is never read as more than it
-# is. It is a SOURCE SCAN, not a build and not an execution:
+# is. Since vms-e2b it is a CONFIGURE AND A PREPROCESS -- it asks cmake what the
+# product compiles and asks the compiler what survives the preprocessor -- but
+# it is still not a compile, not a link and not an execution:
 #
-#   - A call inside a preprocessor block that never compiles counts as a caller.
-#     That is not hypothetical -- vms-2b8's prvdef agreement lock was wrapped in
-#     an #ifdef nothing compiled, so an #error inside it never fired. Deciding
-#     which #ifdef is live needs the build configuration, and a census that
-#     GUESSED at it would be inventing a plausible answer. There is no #if 0 in
-#     src/ or tools/ today; if one appears around a vms_kif call, this gate will
-#     be satisfied by it and a human has to catch it.
 #   - A caller in a function nothing calls still counts. The census answers "is
 #     there a product path", not "is that path executed".
 #   - It says NOTHING about whether the facility behind the call is real. An
@@ -229,7 +250,22 @@
 #     vms_kif.c, not a proof that the value reaches an ioctl. A bare
 #     `(void)VMS_IOCTL_DEVSCAN;` would satisfy it. Deciding that a value
 #     actually flows to KIF_CALL is data flow, not a scan, and a census that
-#     guessed would be inventing an answer.
+#     guessed would be inventing an answer. That hole is unchanged by vms-e2b
+#     and was USED to close a control: an exfiltrated wrapper plus
+#     `enum { kif_floor_ref = (int)VMS_IOCTL_TTSETMODE };` restored the floor to
+#     33/33 while the wrapper's body had left the file.
+#   - THE FLOOR IS READ FROM RAW vms_kif.c TEXT, DELIBERATELY NOT PREPROCESSED,
+#     and this is the one reading vms-e2b left alone. The universe no longer
+#     needs the floor to notice exfiltration -- the entry point simply does not
+#     leave -- but keeping the floor raw preserves an independent, cheaper red:
+#     an opcode-issuing wrapper whose body moves out of vms_kif.c strands its
+#     opcode HERE even when the universe survives it. THE PRICE, stated rather
+#     than hidden and it is the same shape as the naming-convention price
+#     above: legitimately reorganising vms_kif.c into #included pieces is a
+#     floor RED, because an opcode must be spelled in the interface source file
+#     itself. If that reorganisation is ever wanted, teach the floor the
+#     private-origin reading section 0' already computes -- and re-run the
+#     negative controls, because at least one of them turns on this rule.
 #   - THE FLOOR'S GRAIN IS THE OPCODE AND THE SELECTOR, AND NOTHING FINER. It
 #     makes deleting a wrapper outright a RED whenever that wrapper is the last
 #     userspace mention of an opcode or of a selector. It is NOT a general proof
@@ -273,6 +309,34 @@
 #     changes this gate's pass/fail behaviour on trees that pass today, which
 #     is outside this round's authorization. Tracked for a follow-up item;
 #     see this round's report to the operator.
+#   - A FABRICATED CALLER THAT IS GENUINELY IN THE BUILD STILL COUNTS, and
+#     this is the residual of the vms-e2b fix, MEASURED rather than reasoned
+#     about. Adding the fabricated file to src/libvmssys/CMakeLists.txt --
+#     one more edit than the version this gate now catches -- takes the census
+#     to 44 entry points / 32 reached / 12 unwired with rc=0. The build set
+#     raises the PRICE of the evasion (a build-system edit, in a file a
+#     reviewer reads, producing an object nothing links against) and it does
+#     not abolish it. This gate asks "is there a product path", never "is that
+#     path executed", and a compiled-but-never-called function is a product
+#     path by that definition. Do not read a PASS as "these callers run": that
+#     question belongs to the QEMU suites.
+#   - EXFILTRATION COMPOSED WITH A RENAME STILL LEAVES THE UNIVERSE, and the
+#     recipe is written down here because a residual nobody can reproduce is
+#     not a disclosure. Move a wrapper's body into a .inc; mark it `static`
+#     AND rename it out of the vms_kif_ namespace; #include that .inc from
+#     vms_kif.c AND from one other product file, so it is neither
+#     interface-private nor namespaced and every one of section 1's three
+#     definition readings drops it; delete the prototype; retire the
+#     declaration; add `enum { r = (int)VMS_IOCTL_TTSETMODE };` to vms_kif.c so
+#     the raw floor stays satisfied. Seven edits across three files, and the
+#     product still LINKS because the function is static in both units.
+#     MEASURED: 44 entry points -> 43, rc=0, PASS. Uncomposed -- keeping the
+#     name -- the same evasion is a RED at 44 entries; the name filter on the
+#     third reading is what makes the rename necessary. NOT CLOSED HERE. What
+#     would close it is reading the definition side of the universe from the
+#     interface TU with no name filter and no private-origin restriction, which
+#     needs a way to tell vms_syscall.h's 47 static inlines from an interface
+#     wrapper that this round did not find.
 #
 # If you are here because this failed: do NOT add a declaration to make it pass
 # unless the entry point genuinely has no product path yet AND you have an item
@@ -284,10 +348,33 @@
 set -u
 
 SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
+# CANONICAL, and this is load-bearing rather than tidy: the compile database
+# names every file by the absolute, symlink-resolved path cmake used, and the
+# build set is matched against it by string equality. A relative or symlinked
+# SRC_ROOT would match nothing and the census would read an empty tree.
+if ! SRC_ROOT=$(cd "$SRC_ROOT" 2>/dev/null && pwd -P); then
+    echo "FAIL: cannot enter the source root given on the command line"
+    exit 1
+fi
 KIF_H="$SRC_ROOT/src/libvmssys/vms_kif.h"
 KIF_C="$SRC_ROOT/src/libvmssys/vms_kif.c"
 IOCTL_H="$SRC_ROOT/src/kernel/vms_ioctl.h"
 status=0
+
+# The citation checker (rd vms-8cc), shared with the userspace service register.
+# Resolved from THIS FILE's directory, not from SRC_ROOT: it is gate code, not
+# tree data. SRC_ROOT is the tree under measurement -- the negative controls
+# hand it a sandbox copy, and a gate that loaded its own checker out of the
+# thing it is measuring could be disarmed by editing that copy.
+CITE_LIB="$(cd "$(dirname "$0")" && pwd)/lib/rd_citations.sh"
+if [ ! -f "$CITE_LIB" ]; then
+    echo "FAIL: cannot find the citation checker at $CITE_LIB"
+    echo "  -> without it the item ids in OVMX-UNWIRED declarations would be"
+    echo "     shape-checked only, which is the vms-8cc defect. Restore it;"
+    echo "     do not drop the check."
+    exit 1
+fi
+. "$CITE_LIB"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -496,19 +583,471 @@ opcode_owners() {
 }
 
 # ---------------------------------------------------------------------------
+# norm_path: canonicalise "a/b/../c" and "a//b" on stdin, one path per line.
+#
+# Pure awk, so the census adds no dependency on realpath(1)/readlink(1), and
+# deterministic, so the SAME header reached through two different -I paths
+# collapses to one origin. That matters: vms_kif.c reaches the opcode header as
+# src/libvmssys/../kernel/vms_ioctl.h and every other product file reaches it as
+# src/kernel/vms_ioctl.h, and an un-normalised comparison would call them two
+# different files -- which would put vms_ioctl.h in the interface-private set
+# below and drag every macro in it into the universe.
+# ---------------------------------------------------------------------------
+norm_path() {
+    awk '{
+        n = split($0, p, "/"); top = 0
+        for (i = 1; i <= n; i++) {
+            if (p[i] == "" && i > 1) continue
+            if (p[i] == ".") continue
+            if (p[i] == "..") { if (top > 1) top--; continue }
+            st[++top] = p[i]
+        }
+        out = ""
+        for (i = 1; i <= top; i++) out = out (i > 1 ? "/" : "") st[i]
+        print out
+    }'
+}
+
+# ---------------------------------------------------------------------------
+# pp_origins: read `cc -E` output on stdin, print the normalised absolute path
+# named by every `# <line> "<file>"` linemarker. Unsorted; the caller sorts.
+# ---------------------------------------------------------------------------
+pp_origins() {
+    grep -oE '^# [0-9]+ "[^"]*"' | sed -e 's/^# [0-9]* "//' -e 's/"$//' | norm_path
+}
+
+# ---------------------------------------------------------------------------
+# pp_regions <mode> <root> <listfile>: read `cc -E` output on stdin and emit
+# only the lines whose ORIGIN FILE (the last linemarker seen) is selected.
+#
+#   mode=keep  - origin must be under <root>, its path relative to <root> must
+#                start with src/ or tools/, and must NOT be listed in
+#                <listfile>. Emits "REL<TAB>SEQ<TAB>LINE" so the caller can
+#                attribute a call site to a file and still reassemble each
+#                file's text in order.
+#   mode=only  - origin must be listed (verbatim, absolute) in <listfile>.
+#                Emits the bare line.
+#
+# Linemarker lines themselves are dropped, so the `^#` rule in call_edges()
+# never has to see them. THE SPLIT IS BRACE-SAFE: what is dropped is always a
+# WHOLE included file's expansion, and a C header is brace-balanced at file
+# scope, so the retained regions of one origin file concatenate back into
+# balanced text and the depth counter cannot desynchronise.
+# ---------------------------------------------------------------------------
+pp_regions() {
+    awk -v mode="$1" -v root="$2" -v listfile="$3" '
+        function norm(s,   n, i, p, st, top, out) {
+            n = split(s, p, "/"); top = 0
+            for (i = 1; i <= n; i++) {
+                if (p[i] == "" && i > 1) continue
+                if (p[i] == ".") continue
+                if (p[i] == "..") { if (top > 1) top--; continue }
+                st[++top] = p[i]
+            }
+            out = ""
+            for (i = 1; i <= top; i++) out = out (i > 1 ? "/" : "") st[i]
+            return out
+        }
+        BEGIN {
+            while ((getline l < listfile) > 0) if (l != "") listed[l] = 1
+            rl = length(root)
+            seq = 0
+        }
+        /^# [0-9]+ "/ {
+            f = $0
+            sub(/^# [0-9]+ "/, "", f); sub(/".*$/, "", f)
+            f = norm(f)
+            keep = 0
+            if (mode == "only") {
+                if (f in listed) { keep = 1; rel = f }
+            } else {
+                if (substr(f, 1, rl) == root) {
+                    r = substr(f, rl + 1)
+                    if (r ~ /^(src|tools)\// && !(f in listed)) { keep = 1; rel = r }
+                }
+            }
+            next
+        }
+        keep {
+            seq++
+            if (mode == "only") print
+            else print rel "\t" seq "\t" $0
+        }
+    '
+}
+
+# ---------------------------------------------------------------------------
+# 0. THE BUILD SET. What the product actually COMPILES, and the flags it
+#    compiles it with, read from CMake -- not from a path glob over source text.
+#
+# WHY THIS REPLACED A GLOB (rd vms-e2b). Every reading below used to be a scan
+# of raw source TEXT under src/ and tools/, and text cannot tell a product path
+# from something merely shaped like one. Two mechanisms were bought cheaply and
+# MEASURED BY EXECUTION against the previous revision of this gate:
+#
+#   - A FABRICATED CALLER THAT CAN NEVER RUN. One new file under
+#     src/libvmssys/, in NO CMakeLists and #included by NOTHING, containing
+#     callers for 12 of the 13 unwired wrappers, with each declaration retired:
+#     rc=0, and the census printed 44 entry points / 43 reached / 1 unwired.
+#     The number this gate hands the Phase 2 verdict went 31/44 -> 43/44 with
+#     NOTHING WIRED. Cheaper still, with no new file at all: put the call inside
+#     an `#if 0` appended to a genuinely built file (src/vmsdcl/dcl_cmd_show.c)
+#     and the scan, which is not preprocessor-aware, counted it -- 44/32/12,
+#     rc=0. Two lines.
+#   - EXFILTRATION: the entry point LEAVES THE UNIVERSE. Move vms_kif_close's
+#     body to vms_kif_close.inc and its prototype to a header, #include both
+#     back: rc=0 and the universe shrank 44 -> 43, with `gcc -E -P` output
+#     BYTE-IDENTICAL to pristine. Doing that to all 13 unwired wrappers printed
+#     "31 entry points -- 31 reached, 0 unwired" while all 13 were still
+#     compiled into the same translation unit.
+#
+# Both die at the same root. Reachability is now derived from WHAT THE BUILD
+# COMPILES, read AFTER PREPROCESSING:
+#
+#   - THE SOURCE SET IS THE BUILD SET. cmake is configured here, with
+#     CMAKE_EXPORT_COMPILE_COMMANDS, and the census reads compile_commands.json.
+#     A file in no CMakeLists contributes nothing, because the compiler is never
+#     asked to look at it. A file that moved out of any path glob still counts,
+#     because the build still compiles it.
+#   - CALL SITES ARE READ FROM `cc -E` OUTPUT, with the build's own flags and
+#     include paths. An `#if 0` is gone before the reader sees it. An
+#     exfiltrated .inc body reappears exactly where it was, at file scope in the
+#     same translation unit -- which is why the same change that kills the
+#     fabricated caller kills exfiltration too.
+#
+# THE SPLIT THAT MAKES THIS WORK, and getting it backwards breaks the gate: the
+# OVMX-UNWIRED declarations are COMMENTS, and the preprocessor STRIPS COMMENTS.
+# So section 4 still reads the declarations from RAW header text. Preprocessing
+# is used for CODE -- call sites, reachability, and the definition side of the
+# universe -- and never for the declarations.
+#
+# NO SILENT FALLBACK. If cmake is missing, the configure fails, the compile
+# database is absent or in a shape this reader does not implement, or ANY
+# product translation unit fails to preprocess, this gate REFUSES and exits
+# non-zero. It does not fall back to the glob. A census that quietly downgraded
+# to a weaker reading would report the same PASS from a strictly worse
+# measurement, which is the defect class this file exists to kill; the sibling
+# service register already refuses when its compile step is incomplete
+# ("BROKEN SYMBOL SCAN: 127 of 128 product source file(s) compiled") and this
+# follows that precedent.
+#
+# WHAT THE BUILD SET DOES NOT COVER, stated rather than discovered later:
+#   - Only what THIS cmake configuration compiles. The kernel modules under
+#     src/kernel/ are built by their own Makefiles and are NOT in the compile
+#     database, so a vms_kif call landing there would not be credited. That
+#     direction is safe -- it produces a RED (an entry point with no product
+#     path), never a silent PASS -- but it is a RED for the wrong reason, so
+#     teach this gate to read that build rather than relaxing it.
+#   - The configure is pinned to BUILD_TESTS=ON, BUILD_TOOLS=ON below. TOOLS is
+#     load-bearing: src/ovmx_init/ovmx_init.c is the only product caller of
+#     vms_kif_setterm, and it is behind BUILD_TOOLS. TESTS is on so that tests/
+#     translation units are genuinely IN the database and the product-only rule
+#     is enforced by an explicit src/|tools/ filter -- a deliberate exclusion,
+#     not an accident of how the tree was configured.
+#   - An optional component that is not installed drops out of the build set.
+#     src/vmsssh/vmssshd.c needs libssh; on a host without it the census loses
+#     that file's call sites. MEASURED on this tree: vmssshd.c's only credit is
+#     vms_kif_setident, which tools/vms_login.c and src/ovmx_init/ovmx_init.c
+#     also credit, so the census verdict is unchanged either way TODAY. Re-run
+#     the per-file attribution rather than trusting that sentence after a
+#     change; there is no mechanism keeping it true.
+# ---------------------------------------------------------------------------
+case "$SRC_ROOT$WORK" in
+    *[!-a-zA-Z0-9_/.]*)
+        echo "FAIL: the source root or the scratch dir contains a character this"
+        echo "      reader cannot word-split safely:"
+        echo "        SRC_ROOT=$SRC_ROOT"
+        echo "        WORK=$WORK"
+        echo "  -> the compile database's command lines are split on whitespace."
+        echo "     Teach this reader to quote, or run it from a plain path; do"
+        echo "     NOT let it guess where one argument ends."
+        exit 1 ;;
+esac
+
+if ! command -v cmake >/dev/null 2>&1; then
+    echo "FAIL: cmake(1) is not available, so the build set cannot be derived."
+    echo "  -> this gate REFUSES rather than falling back to a path glob over"
+    echo "     source text. The glob is what let a file in no CMakeLists, and a"
+    echo "     call inside #if 0, both count as product callers (vms-e2b)."
+    exit 1
+fi
+
+CCDB_BUILD="$WORK/build"
+if ! cmake -S "$SRC_ROOT" -B "$CCDB_BUILD" \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+        -DBUILD_TESTS=ON -DBUILD_TOOLS=ON > "$WORK/cmake.log" 2>&1; then
+    echo "FAIL: cmake could not configure $SRC_ROOT, so there is no build set."
+    sed 's/^/    /' "$WORK/cmake.log" | tail -20
+    echo "  -> this gate REFUSES rather than guessing which files the product"
+    echo "     compiles. Fix the configure; do not relax the census."
+    exit 1
+fi
+
+CCJ="$CCDB_BUILD/compile_commands.json"
+if [ ! -f "$CCJ" ]; then
+    echo "FAIL: cmake configured but produced no compile_commands.json"
+    echo "  -> the build set is the census's source of truth for what compiles."
+    exit 1
+fi
+
+# The reader below is a line reader, not a JSON parser. Both assumptions it
+# makes are CHECKED, and a violation is a refusal rather than a guess.
+if grep -q '\\' "$CCJ"; then
+    echo "FAIL: compile_commands.json contains backslash escapes, which this"
+    echo "      reader does not implement"
+    echo "  -> teach the reader to unescape; do NOT let it mis-split a command."
+    exit 1
+fi
+if grep -q '"arguments"' "$CCJ"; then
+    echo "FAIL: compile_commands.json uses the \"arguments\" array form, which"
+    echo "      this reader does not implement"
+    echo "  -> teach the reader that form; do NOT let it silently read nothing."
+    exit 1
+fi
+
+awk '
+    /^[ \t]*"directory":/ { v = $0; sub(/^[^:]*:[ \t]*"/, "", v); sub(/",?[ \t]*$/, "", v); dir = v; next }
+    /^[ \t]*"command":/   { v = $0; sub(/^[^:]*:[ \t]*"/, "", v); sub(/",?[ \t]*$/, "", v); cmd = v; next }
+    /^[ \t]*"file":/ {
+        v = $0; sub(/^[^:]*:[ \t]*"/, "", v); sub(/",?[ \t]*$/, "", v)
+        if (dir == "" || cmd == "") { print "INCOMPLETE\t" v; bad = 1 }
+        else print dir "\t" cmd "\t" v
+        dir = ""; cmd = ""; next
+    }
+' "$CCJ" | sort -u > "$WORK/ccdb"
+
+if grep -q '^INCOMPLETE	' "$WORK/ccdb"; then
+    echo "FAIL: compile_commands.json has entries with no directory or command:"
+    grep '^INCOMPLETE	' "$WORK/ccdb" | cut -f2 | sed 's/^/    /' | head -5
+    echo "  -> the reader would have to invent the flags. It refuses instead."
+    exit 1
+fi
+
+n_ccdb=$(grep -c . "$WORK/ccdb" || true)
+if [ "$n_ccdb" -eq 0 ]; then
+    echo "FAIL: compile_commands.json parsed to zero translation units"
+    echo "  -> an empty build set is a vacuous PASS, which is the whole defect."
+    exit 1
+fi
+
+# PRODUCT ONLY: src/ and tools/. tests/ translation units ARE in the database
+# -- BUILD_TESTS is on -- and are excluded here, deliberately and by one
+# explicit rule. "Kernel facility + wrapper + test suite, and nothing else" is
+# the precise shape of the defect, so a test caller must not satisfy the gate.
+awk -F'\t' -v root="$SRC_ROOT/" '{
+    if (index($3, root) != 1) next
+    r = substr($3, length(root) + 1)
+    if (r ~ /^(src|tools)\//) print
+}' "$WORK/ccdb" > "$WORK/product_tus"
+
+n_product_tus=$(grep -c . "$WORK/product_tus" || true)
+if [ "$n_product_tus" -eq 0 ]; then
+    echo "FAIL: the build set contains no product translation unit under"
+    echo "      $SRC_ROOT/src or $SRC_ROOT/tools"
+    echo "  -> with nothing to scan every entry point reads as unwired; the"
+    echo "     census refuses rather than reporting that as a measurement."
+    exit 1
+fi
+
+# THE INTERFACE TU MUST ITSELF BE IN THE BUILD. If vms_kif.c is not compiled by
+# the product build, the universe, the reachability pass and the floor are all
+# reading a file that ships in nothing.
+if ! cut -f3 "$WORK/product_tus" | grep -qx "$KIF_C"; then
+    echo "FAIL: $KIF_C is not in the product build set"
+    echo "  -> the kernel interface itself is compiled by nothing, so every"
+    echo "     reading below would describe dead source. Put it back in a"
+    echo "     CMakeLists; do not measure a translation unit that never builds."
+    exit 1
+fi
+
+# Preprocess every product translation unit once, with its own build flags.
+# -o and -c are dropped and -E inserted; everything else the build passes --
+# -D, -I, -std, -ffreestanding -- is kept exactly as the build has it, because
+# those are what decide which lines survive the preprocessor.
+mkdir -p "$WORK/pp"
+tu_n=0
+tu_ok=0
+while IFS='	' read -r ccdir cccmd ccfile; do
+    [ -n "$ccfile" ] || continue
+    tu_n=$((tu_n + 1))
+    ppargs=""
+    skipnext=0
+    first=1
+    for a in $cccmd; do
+        if [ "$skipnext" -eq 1 ]; then skipnext=0; continue; fi
+        case "$a" in
+            -o) skipnext=1; continue ;;
+            -c) continue ;;
+        esac
+        if [ "$first" -eq 1 ]; then ppargs="$a -E"; first=0
+        else ppargs="$ppargs $a"; fi
+    done
+    if ( cd "$ccdir" && $ppargs ) > "$WORK/pp/$tu_n.i" 2> "$WORK/pp/$tu_n.err"; then
+        tu_ok=$((tu_ok + 1))
+        printf '%s\n' "$ccfile" > "$WORK/pp/$tu_n.f"
+    else
+        echo "FAIL: could not preprocess a product translation unit:"
+        echo "    ${ccfile#$SRC_ROOT/}"
+        sed 's/^/      /' "$WORK/pp/$tu_n.err" | tail -10
+        echo "  -> the census REFUSES on a partial build set. A reading that"
+        echo "     silently skipped a file would report a smaller, weaker"
+        echo "     census as though it were the same measurement."
+        exit 1
+    fi
+done < "$WORK/product_tus"
+
+if [ "$tu_ok" -ne "$tu_n" ] || [ "$tu_n" -eq 0 ]; then
+    echo "FAIL: preprocessed $tu_ok of $tu_n product translation unit(s)"
+    exit 1
+fi
+
+# 0'. THE INTERFACE-PRIVATE ORIGIN SET: the files that the interface
+#     translation unit compiles and NO OTHER product translation unit does.
+#
+# This is what makes "read the definitions after preprocessing" safe. Naively,
+# every file-scope definition in the preprocessed vms_kif.c TU would join the
+# universe -- including the 47 static inline functions vms_syscall.h declares,
+# which are not the kernel interface and would flood the census with entry
+# points nobody can wire. A file compiled into OTHER product TUs is a shared
+# header and is dropped; a file compiled ONLY into vms_kif.c's TU is part of the
+# interface's own implementation by construction, and that is exactly where an
+# exfiltrated .inc body lands. MEASURED on this tree: the private set is exactly
+# { src/libvmssys/vms_kif.c }, and the preprocessed reading of it yields the
+# same 44 definitions, with the same static/extern split, as the raw reading.
+: > "$WORK/origins_other"
+: > "$WORK/origins_iface"
+i=1
+while [ "$i" -le "$tu_n" ]; do
+    if [ "$(cat "$WORK/pp/$i.f")" = "$KIF_C" ]; then
+        pp_origins < "$WORK/pp/$i.i" >> "$WORK/origins_iface"
+    else
+        pp_origins < "$WORK/pp/$i.i" >> "$WORK/origins_other"
+    fi
+    i=$((i + 1))
+done
+sort -u "$WORK/origins_iface" -o "$WORK/origins_iface"
+sort -u "$WORK/origins_other" -o "$WORK/origins_other"
+comm -23 "$WORK/origins_iface" "$WORK/origins_other" > "$WORK/origins_private"
+n_private=$(grep -c . "$WORK/origins_private" || true)
+
+if ! grep -qx "$KIF_C" "$WORK/origins_private"; then
+    echo "FAIL: $KIF_C is not private to its own translation unit"
+    echo "  -> some other product file #includes the interface's .c. The"
+    echo "     private-origin rule cannot separate the interface from the"
+    echo "     shared headers under that condition; fix the include, or teach"
+    echo "     this gate a different rule -- do not let it read nothing."
+    exit 1
+fi
+
+# Everything the product's own call-site scan must NOT credit: the interface's
+# own translation unit (a call inside vms_kif.c is not a PRODUCT path -- that is
+# what the reachability pass in section 3 is for) and vms_kif.h.
+cp "$WORK/origins_private" "$WORK/origins_excluded"
+printf '%s\n' "$KIF_H" >> "$WORK/origins_excluded"
+sort -u "$WORK/origins_excluded" -o "$WORK/origins_excluded"
+
+# The preprocessed interface: every private-origin region of vms_kif.c's TU,
+# and separately EVERY product-origin region of it -- see the third union term
+# in section 1 for what the wider reading is for and why it is namespaced.
+: > "$WORK/kif_pp"
+: > "$WORK/kif_pp_all"
+i=1
+while [ "$i" -le "$tu_n" ]; do
+    if [ "$(cat "$WORK/pp/$i.f")" = "$KIF_C" ]; then
+        pp_regions only "$SRC_ROOT/" "$WORK/origins_private" < "$WORK/pp/$i.i" \
+            >> "$WORK/kif_pp"
+        pp_regions keep "$SRC_ROOT/" /dev/null < "$WORK/pp/$i.i" | cut -f3- \
+            >> "$WORK/kif_pp_all"
+    fi
+    i=$((i + 1))
+done
+
+# The preprocessed vms_kif.h include closure, for the prototype reading. It is
+# not a translation unit, so it is preprocessed with the interface TU's own
+# flags, taken from the build set rather than written down here.
+kif_cmd=$(awk -F'\t' -v f="$KIF_C" '$3 == f { print $2; exit }' "$WORK/product_tus")
+kif_dir=$(awk -F'\t' -v f="$KIF_C" '$3 == f { print $1; exit }' "$WORK/product_tus")
+ppargs=""
+skipnext=0
+first=1
+for a in $kif_cmd; do
+    if [ "$skipnext" -eq 1 ]; then skipnext=0; continue; fi
+    case "$a" in
+        -o) skipnext=1; continue ;;
+        -c) continue ;;
+        "$KIF_C") continue ;;
+    esac
+    if [ "$first" -eq 1 ]; then ppargs="$a -E -x c"; first=0
+    else ppargs="$ppargs $a"; fi
+done
+if ! ( cd "$kif_dir" && $ppargs "$KIF_H" ) > "$WORK/kifh.i" 2> "$WORK/kifh.err"; then
+    echo "FAIL: could not preprocess $KIF_H with the build's own flags:"
+    sed 's/^/    /' "$WORK/kifh.err" | tail -10
+    echo "  -> the prototype reading refuses rather than falling back to raw"
+    echo "     text, which an exfiltrated prototype walks straight out of."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # 1. The universe, derived from the tree at check time and PINNED.
 #
 # Never a hardcoded list: main moves under this gate constantly, and a list is
 # what the census exists to replace. But "derived from the header" alone let a
 # deleted prototype shrink the universe silently -- so the universe is the UNION
-# of two independent readings, and their disagreement is itself a RED.
+# of independent readings, and their disagreement is itself a RED.
+#
+# EACH SIDE IS NOW READ TWICE, RAW AND PREPROCESSED, AND UNIONED. The raw
+# reading is the one this gate has always had. The preprocessed reading is what
+# closes exfiltration: a body moved to a .inc, or a prototype moved to another
+# header, is still there after `cc -E`, at file scope in the same translation
+# unit. A union can only ADD entry points that must be accounted for, never
+# remove one, so adding it cannot turn an existing RED green.
+#
+# THE PRICE, stated rather than hidden: a definition that exists only in the RAW
+# text -- one inside an `#if 0` or a dead `#ifdef` in vms_kif.c -- is in the
+# universe but has no compiled call graph, so it is unreachable and must be
+# declared or deleted. That is a deliberate lint on dead code in the interface
+# file. There is no such block in vms_kif.c today.
 # ---------------------------------------------------------------------------
-strip_comments < "$KIF_H" \
-    | grep -oE 'vms_kif_[A-Za-z0-9_]+[ \t]*\(' \
-    | sed -E 's/[ \t]*\($//' | sort -u > "$WORK/protos"
+{
+    strip_comments < "$KIF_H" \
+        | grep -oE 'vms_kif_[A-Za-z0-9_]+[ \t]*\(' \
+        | sed -E 's/[ \t]*\($//'
+    # The preprocessed closure. Namespaced, like the raw reading it joins:
+    # a prototype is a vms_kif_ name here or it is not a prototype of this
+    # interface. Comments are gone before this reads, which is why the
+    # closure reading needs no strip_comments of its own.
+    pp_regions keep "$SRC_ROOT/" /dev/null < "$WORK/kifh.i" | cut -f3- \
+        | grep -oE 'vms_kif_[A-Za-z0-9_]+[ \t]*\(' \
+        | sed -E 's/[ \t]*\($//'
+} | sort -u > "$WORK/protos"
 
-strip_comments < "$KIF_C" | call_edges defs | sort -u > "$WORK/defs_all"
+{
+    strip_comments < "$KIF_C" | call_edges defs
+    # UNFILTERED on the definition side, in both of the first two readings --
+    # see the rename paragraph above. The private-origin restriction is what
+    # keeps the shared headers out; it is not a name filter.
+    call_edges defs < "$WORK/kif_pp"
+    # THE THIRD TERM, and it is NAMESPACED where the other two are not, because
+    # it reads regions the private-origin rule deliberately drops. MEASURED
+    # residual it exists to close (vms-e2b): move a wrapper's body into a .inc,
+    # mark it `static` so two translation units can each hold a copy and the
+    # product still LINKS, #include that .inc from vms_kif.c AND from one other
+    # product file so it is no longer interface-private, delete the prototype,
+    # retire the declaration, and add `enum { r = (int)VMS_IOCTL_TTSETMODE };`
+    # to keep the raw floor satisfied. Six edits across three files took the
+    # census from 44 entry points to 43 with rc=0 -- on the previous gate AND
+    # on this one before this term existed. A vms_kif_-named function defined
+    # at file scope in the interface translation unit is an entry point
+    # wherever its text lives, so it is counted from anywhere in that TU.
+    # The name filter is the price of reading regions this gate cannot
+    # otherwise distinguish from vms_syscall.h's 47 static inlines; what it
+    # leaves open is that same evasion COMPOSED with a rename out of the
+    # namespace, which is recorded under "WHAT THIS GATE DOES NOT SEE".
+    call_edges defs < "$WORK/kif_pp_all" | grep -E '	vms_kif_' || true
+} | sort -u > "$WORK/defs_all"
 cut -f2 "$WORK/defs_all" | sort -u > "$WORK/defs"
+# A name is externally linked if EITHER reading saw it defined non-static.
 awk -F'\t' '$1 == "extern" { print $2 }' "$WORK/defs_all" | sort -u > "$WORK/defs_extern"
 
 sort -u "$WORK/protos" "$WORK/defs" > "$WORK/universe"
@@ -676,24 +1215,53 @@ fi
 # ---------------------------------------------------------------------------
 # 2. Direct product callers, outside vms_kif.c: these are the census roots.
 #
-# src/ and tools/ only. tests/ is deliberately NOT scanned -- see the header.
+# READ FROM THE BUILD, AFTER PREPROCESSING (section 0). Every product
+# translation unit's `cc -E` output is split back apart by linemarker, so a call
+# is credited to the file it was WRITTEN in -- but only if some translation unit
+# the build actually compiles pulled that file in, and only if the preprocessor
+# left the call standing. A file in no CMakeLists is never preprocessed at all;
+# a call inside `#if 0` is gone before this reader runs.
+#
+# src/ and tools/ only. tests/ is in the build set and is deliberately excluded
+# here -- see the header.
 # ---------------------------------------------------------------------------
-: > "$WORK/direct"
+: > "$WORK/prodtext"
+i=1
+while [ "$i" -le "$tu_n" ]; do
+    if [ "$(cat "$WORK/pp/$i.f")" != "$KIF_C" ]; then
+        pp_regions keep "$SRC_ROOT/" "$WORK/origins_excluded" < "$WORK/pp/$i.i" \
+            >> "$WORK/prodtext"
+    fi
+    i=$((i + 1))
+done
+
+# Group by origin file, preserving the order the lines were emitted in, so each
+# file's contribution to each translation unit stays contiguous and balanced.
+sort -s -t'	' -k1,1 "$WORK/prodtext" > "$WORK/prodtext_sorted"
+
 : > "$WORK/sites"
-for f in $(find "$SRC_ROOT/src" "$SRC_ROOT/tools" \
-             \( -name '*.c' -o -name '*.h' \) -print 2>/dev/null | sort); do
-    case "$f" in
-        */src/libvmssys/vms_kif.c|*/src/libvmssys/vms_kif.h) continue ;;
-    esac
+mkdir -p "$WORK/byfile"
+awk -F'\t' -v dir="$WORK/byfile" '
+    { if ($1 != cur) { if (cur != "") close(out); cur = $1; n++; out = dir "/" n
+                       print cur > (dir "/" n ".name"); close(dir "/" n ".name") }
+      line = $0; sub(/^[^\t]*\t[^\t]*\t/, "", line); print line > out }
+' "$WORK/prodtext_sorted"
+
+for chunk in "$WORK/byfile"/[0-9]*; do
+    case "$chunk" in *.name) continue ;; esac
+    [ -f "$chunk" ] || continue
+    rel=$(cat "$chunk.name")
     # Seeded from the SEEDABLE set, not from the vms_kif_ prefix and NOT from
     # the whole universe. The prefix is wrong because the definition reading is
     # unfiltered, so a product caller of an entry point renamed out of the
     # namespace must still count. The whole universe is wrong because it now
     # contains un-namespaced static helper names, and a same-named product
     # function would then certify an unwired wrapper as REACHED. See 1' above.
-    strip_comments < "$f" | call_edges | cut -f2 | grep -Fx -f "$WORK/seedable" \
-        | sed "s|^|${f#$SRC_ROOT/} |" >> "$WORK/sites" || true
+    call_edges < "$chunk" | cut -f2 | grep -Fx -f "$WORK/seedable" \
+        | sed "s|^|$rel |" >> "$WORK/sites" || true
 done
+sort -u "$WORK/sites" -o "$WORK/sites"
+n_site_files=$(cut -d' ' -f1 "$WORK/sites" | sort -u | grep -c . || true)
 cut -d' ' -f2 "$WORK/sites" | sort -u > "$WORK/direct"
 
 # ---------------------------------------------------------------------------
@@ -703,8 +1271,17 @@ cut -d' ' -f2 "$WORK/sites" | sort -u > "$WORK/direct"
 # names it can be reached from a root. kif_bind() calls vms_kif_open() and
 # vms_kif_register(); KIF_CALL -> kif_call -> kif_bind is what connects it to
 # every wired wrapper. A wrapper family that only calls itself never joins.
+#
+# READ FROM THE PREPROCESSED INTERFACE (section 0'), not the raw file, and this
+# side is deliberately NOT unioned with a raw reading. Reachability has to
+# describe the call graph that COMPILES: a call inside a dead #ifdef in
+# vms_kif.c is not a path to anything, and unioning the raw reading back in
+# would reopen inside the interface the exact `#if 0` hole section 0 closes on
+# the product side. KIF_CALL is already expanded here, so the macro-as-a-node
+# rule in call_edges() has nothing left to do -- each wrapper names kif_call()
+# directly, and kif_call() names kif_bind() as it always did.
 # ---------------------------------------------------------------------------
-strip_comments < "$KIF_C" | call_edges | sort -u > "$WORK/edges"
+call_edges < "$WORK/kif_pp" | sort -u > "$WORK/edges"
 
 awk -F'\t' -v seedfile="$WORK/direct" '
     BEGIN {
@@ -753,6 +1330,29 @@ if [ -n "$dups" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 4a. THE CITED ITEM MUST EXIST AND BE OPEN (rd vms-8cc).
+#
+# Until this ran, the id was SHAPE-checked and nothing more, and the file said
+# so: "it verifies that a human wrote an id down". Measured against that
+# revision: `sed -i s/(vms-a86)/(vms-q9z9)/` on one declaration -- an id that
+# has never existed -- left this gate rc=0 at 44/31/13; pointing another at
+# vms-fb9, whose status is `done`, did the same. One token bought the
+# exemption, so the 13 unwired entries were a floor on how many were untracked,
+# not a bound.
+#
+# rd is nostr-backed and unreachable from CI, so the resolution happens on a
+# host that has rd (tools/gen_rd_citations.py) and is committed as
+# tracking/rd-citations.tsv. See tests/integration/lib/rd_citations.sh for what
+# that buys and, at equal length, what it does not.
+# ---------------------------------------------------------------------------
+n_decl_sites=$(grep -c . "$WORK/decl_lines" || true)
+cut -d' ' -f2 "$WORK/declared" | sort -u > "$WORK/cited_ids"
+if ! rd_cite_check "$SRC_ROOT" "$WORK/cited_ids" "$WORK" \
+                   "$n_decl_sites" "an OVMX-UNWIRED declaration"; then
+    status=1
+fi
+
+# ---------------------------------------------------------------------------
 # 5. The census.
 # ---------------------------------------------------------------------------
 wired=0
@@ -797,8 +1397,15 @@ if [ -n "$undeclared" ]; then
     status=1
 fi
 
+cat "$WORK/cite_summary" 2>/dev/null || true
 echo "  census: $n_entries entry points — $wired reached from the product,"
 echo "          $unwired with no product path"
+echo "  build set: $n_product_tus product translation unit(s) of $n_ccdb in the compile"
+echo "          database, all preprocessed; call sites read from $n_site_files of them."
+echo "          A file in no CMakeLists is not in this set and credits nothing."
+echo "  interface: $n_private origin file(s) private to the vms_kif.c translation unit —"
+echo "          the definition universe is read from those, after preprocessing, so a"
+echo "          body moved to an #included .inc does not leave the census"
 echo "  universe pinned: $n_protos prototype(s) + $n_defs definition(s) — the union,"
 echo "          so deleting either half, or renaming out of the namespace, is a"
 echo "          RED, not a smaller pass"

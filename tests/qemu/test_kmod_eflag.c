@@ -88,6 +88,7 @@ int main(void) {
     memset(&rd, 0, sizeof(rd));
     rd.efn = 5;
     ioctl(fd, VMS_IOCTL_READEF, &rd);
+    /* negctl: eflag-clref-noop */
     CHECK(rd.status == SS_WASCLR, "readef(5) after clear returns WASCLR");
 
     /* 6. Set multiple flags and verify cluster */
@@ -100,6 +101,7 @@ int main(void) {
     rd.efn = 0;
     ioctl(fd, VMS_IOCTL_READEF, &rd);
     uint32_t expected = (1 << 0) | (1 << 3) | (1 << 7) | (1 << 31);
+    /* negctl: eflag-clref-noop */
     CHECK(rd.state == expected, "cluster has flags 0,3,7,31 set");
 
     /* 7. Test out-of-range flag */

@@ -654,6 +654,7 @@ int main(void)
         printf("  (startup procedure output)\n%s\n", out);
 
     announced = proc_id_of(out, &announced_n);
+    /* negctl-knockon: bind-client-no-register */
     CHECK(announced_n == 1 && announced != 0,
           "the startup procedure announced the created process with %RUN-S-PROC_ID");
 
@@ -666,6 +667,8 @@ int main(void)
      * --------------------------------------------------------------- */
     memset(&info, 0, sizeof(info));
     st = vms_kif_getjpi_prcnam(SVC_NAME, &info);
+    /* negctl: run-detached-name-dropped */
+    /* negctl-knockon: bind-client-no-register */
     CHECK(st == SS$_NORMAL,
           "the executive resolves the service BY NAME after its creator exited");
 
@@ -728,6 +731,7 @@ int main(void)
              * rig PID 1 is a shell the kernel started directly and never
              * called setsid(), so the whole harness runs in session 0.
              * That is the point -- the service must not be in it. */
+            /* negctl: run-detached-not-detached */
             CHECK(svc_sid > 0 && self_sid >= 0 && svc_sid != self_sid,
                   "the service left the session its creator ran in");
             CHECK(ppid == 1 && ppid != (long)creator,
@@ -750,6 +754,8 @@ int main(void)
         row_found = (row != NULL);
         if (!row_found)
             printf("  (SHOW SYSTEM output follows)\n%s\n", show);
+        /* negctl: run-detached-name-dropped */
+        /* negctl-knockon: bind-client-no-register */
         CHECK(row_found,
               "SHOW SYSTEM, in a different process, lists the service by its VMS process name");
     }
@@ -779,6 +785,9 @@ int main(void)
                        != NULL) &&
                       (strstr(out2, "-SYSTEM-F-DUPLNAM, duplicate name")
                        != NULL);
+        /* negctl: run-detached-name-dropped */
+        /* negctl-knockon: bind-client-no-register */
+        /* negctl-knockon: proctab-duplicate-name */
         CHECK(refused,
               "starting the same named service twice is refused with %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM");
 
@@ -828,6 +837,7 @@ int main(void)
                 while (waitpid(probe, &pst, 0) < 0 && errno == EINTR)
                     ;
 
+                /* negctl-knockon: bind-client-no-register */
                 CHECK(r == (ssize_t)sizeof(rep) && (rep.status & 1),
                       "sys$creprc PRC$M_DETACH created the probe's process");
 
@@ -835,6 +845,8 @@ int main(void)
                     printf("  (probe: wait() = %d, errno = %d; vms pid %08X)\n",
                            rep.wait_rc, rep.wait_errno,
                            (unsigned)rep.vms_pid);
+                    /* negctl: creprc-detach-intermediate-reaped */
+                    /* negctl: run-detached-not-detached */
                     CHECK(rep.wait_rc == -1 && rep.wait_errno == ECHILD,
                           "the creator of a detached process has no child to wait for");
 
@@ -873,6 +885,7 @@ int main(void)
             }
             usleep(1000);
         }
+        /* negctl-knockon: proctab-duplicate-name */
         CHECK(gone,
               "the service's name is released when the service dies");
     }
@@ -1020,12 +1033,14 @@ int main(void)
         clear_touch();
         run_dcl(NODBG_COM, out9, sizeof(out9), &exit_st);
         printf("  (RUN/NODEBUG -- a RUN (Image) qualifier)\n%s\n", out9);
+        /* negctl: run-image-qualifier-refused */
         CHECK(touched() && strstr(out9, "NOSUBPRC") == NULL,
               "RUN/NODEBUG runs the image: it is not a subprocess request");
 
         clear_touch();
         run_dcl(DEBUG_COM, out9, sizeof(out9), &exit_st);
         printf("  (RUN/DEBUG -- a debugger OVMX has not got)\n%s\n", out9);
+        /* negctl: run-image-qualifier-refused */
         CHECK(strstr(out9, "%OVMX-F-NODEBUGGER,") != NULL &&
               strstr(out9, "NOSUBPRC") == NULL &&
               strstr(out9, "CREPRC") == NULL &&
@@ -1080,6 +1095,7 @@ int main(void)
         clear_touch();
         run_dcl(ABPRIO_COM, outA, sizeof(outA), &exit_st);
         printf("  (RUN/PRIO=4 -- /PRIORITY, abbreviated)\n%s\n", outA);
+        /* negctl: run-qualifier-not-abbreviated */
         CHECK(strstr(outA, "%RUN-F-CREPRC, process creation failed") != NULL &&
               strstr(outA, "-OVMX-F-NOSUBPRC,") != NULL &&
               !touched(),
@@ -1092,6 +1108,7 @@ int main(void)
         printf("  (RUN/PROC=%s -- /PROCESS_NAME, abbreviated)\n%s\n",
                ABBR_NAME, outA);
         memset(&info, 0, sizeof(info));
+        /* negctl: run-qualifier-not-abbreviated */
         CHECK(strstr(outA, "-OVMX-F-NOSUBPRC,") != NULL &&
               !touched() &&
               vms_kif_getjpi_prcnam(ABBR_NAME, &info) != SS$_NORMAL,
@@ -1113,6 +1130,7 @@ int main(void)
         run_dcl(ABNODBG_COM, outA, sizeof(outA), &exit_st);
         printf("  (RUN/NODEB -- a RUN (Image) qualifier, abbreviated)\n%s\n",
                outA);
+        /* negctl-knockon: run-image-qualifier-refused */
         CHECK(touched() && strstr(outA, "NOSUBPRC") == NULL,
               "RUN/NODEB is not refused as a subprocess request: the image runs");
 
@@ -1127,8 +1145,14 @@ int main(void)
         memset(&info, 0, sizeof(info));
         st = vms_kif_getjpi_prcnam(DETABBR_NAME, &info);
         ab_lpid = info.linux_pid;
+        /* negctl: run-qualifier-not-abbreviated */
+        /* negctl-knockon: bind-client-no-register */
+        /* negctl-knockon: run-detached-name-dropped */
         CHECK(nA == 1 && st == SS$_NORMAL && ab_lpid != 0,
               "RUN/DETACH/PROC= creates a detached process the executive knows by name");
+        /* negctl: run-qualifier-not-abbreviated */
+        /* negctl-knockon: bind-client-no-register */
+        /* negctl-knockon: run-detached-name-dropped */
         CHECK(st == SS$_NORMAL && ab_announced != 0 &&
               ab_announced == info.vms_pid,
               "the abbreviated form announces the process ID the executive assigned");
@@ -1171,9 +1195,12 @@ int main(void)
             st = vms_kif_getjpi_prcnam(DETPRIO_NAME, &info);
             dp_lpid = info.linux_pid;
 
+            /* negctl-knockon: bind-client-no-register */
+            /* negctl-knockon: run-detached-name-dropped */
             CHECK(nP == 1 && st == SS$_NORMAL,
                   "vms-69e: /DETACHED with /PRIORITY still creates the process "
                   "and announces success");
+            /* negctl-knockon: bind-client-no-register */
             CHECK(strstr(outA, "PRIORITY") == NULL &&
                   strstr(outA, "NOSUBPRC") == NULL &&
                   strstr(outA, "CREPRC") == NULL,
@@ -1198,6 +1225,7 @@ int main(void)
         run_dcl(AMBIG_COM, outA, sizeof(outA), &exit_st);
         printf("  (RUN/PR=4 -- ambiguous: PRIORITY, PRIVILEGES, "
                "PROCESS_NAME)\n%s\n", outA);
+        /* negctl-knockon: run-image-qualifier-refused */
         CHECK(touched() && strstr(outA, "ABKEYW") == NULL,
               "parser-wide gap: an ambiguous abbreviation is not resolved, and "
               "OVMX has no %DCL-W-ABKEYW to refuse it with");

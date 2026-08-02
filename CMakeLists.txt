@@ -217,8 +217,11 @@ if(BUILD_TESTS)
     add_test(NAME kif_caller_census
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
+    # TIMEOUT raised from 120 (vms-e2b): the census now configures cmake and
+    # preprocesses every product translation unit instead of globbing source
+    # text. ~9s on workshop; the headroom is for slower CI runners.
     set_tests_properties(kif_caller_census PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 120)
+        LABELS "integration;authenticity" TIMEOUT 600)
 
     # ... and the evasions, run against a sandbox copy of the tree. Each must
     # drive the census RED for its own specific reason, and two GREEN controls
@@ -226,8 +229,28 @@ if(BUILD_TESTS)
     add_test(NAME kif_caller_census_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
+    # TIMEOUT raised from 300 (vms-e2b): 29 controls x a gate that now
+    # configures and preprocesses. MEASURED 3m29s on workshop; 37 controls
+    # after vms-8cc added the eight citation controls.
     set_tests_properties(kif_caller_census_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 300)
+        LABELS "integration;authenticity" TIMEOUT 1800)
+
+    # The citation ledger is fresh (vms-8cc). tracking/rd-citations.tsv is what
+    # lets the gates above check that an exemption's cited rd item EXISTS and is
+    # OPEN without reaching rd -- rd is nostr-backed and unavailable in CI,
+    # which is why those gates shape-checked the id and nothing more until now.
+    # Committed derived state has one failure mode and it is the whole defect
+    # one level up: the ledger goes stale and the gate then certifies a closed
+    # item as open. Only this test can see that, and only where rd is
+    # reachable, so it EXITS 77 and ctest reports SKIPPED -- never PASSED -- on
+    # a host without rd. Its self-controls run either way, so a skip still
+    # proves the comparator is not stuck at green.
+    add_test(NAME rd_citations_fresh
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_rd_citations_fresh.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(rd_citations_fresh PROPERTIES
+        LABELS "integration;authenticity;needs-rd"
+        SKIP_RETURN_CODE 77 TIMEOUT 300)
 
     # Userspace service register (vms-5b4): every sys$ service either reaches
     # the executive or is declared, against an item, as answering from

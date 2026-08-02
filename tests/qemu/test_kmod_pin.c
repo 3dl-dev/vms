@@ -83,6 +83,7 @@ int main(void)
 
     /* 1. The open descriptor must hold a module reference. */
     long held = read_refcnt();
+    /* negctl: executive-not-pinned */
     CHECK(held > base,
           "an open /dev/vms descriptor holds a reference on vms.ko");
 
@@ -98,6 +99,7 @@ int main(void)
     errno = 0;
     long rc = syscall(SYS_delete_module, "vms", O_NONBLOCK);
     int err = errno;
+    /* negctl: executive-not-pinned */
     CHECK(rc != 0,
           "rmmod vms is REFUSED while a descriptor is open (executive pinned)");
 
@@ -115,6 +117,7 @@ int main(void)
      * loaded because it was in use. Anything else means the unload was
      * refused for an unrelated reason and this test is not measuring the pin.
      */
+    /* negctl: executive-not-pinned */
     CHECK(rc != 0 && (err == EWOULDBLOCK || err == EBUSY),
           "the refusal is specifically 'module is in use'");
     if (rc == 0) {

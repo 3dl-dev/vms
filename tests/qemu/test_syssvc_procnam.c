@@ -1348,8 +1348,10 @@ int main(void)
      */
     struct vms_procinfo selfinfo;
     uint32_t st = vms_kif_getjpi_self(&selfinfo);
+    /* negctl: bind-client-no-register */
     CHECK(st & 1, "the caller has a row in the executive's process table");
     uint32_t selfpid = selfinfo.vms_pid;
+    /* negctl-knockon: bind-client-no-register */
     CHECK(selfpid != 0, "the executive assigned the caller a VMS process ID");
 
     /* ---------------------------------------------------------------
@@ -1357,6 +1359,7 @@ int main(void)
      *     requested name, and the name survives image activation.
      * --------------------------------------------------------------- */
     st = spawn_named(SUBJECT_NAME, &subject);
+    /* negctl-knockon: bind-client-no-register */
     CHECK(st & 1, "sys$creprc created the subject process");
     /* The pairing matters as much as either half. $CREPRC used to have a
      * path that returned SS$_NORMAL with *pidadr left at zero -- success
@@ -1365,6 +1368,7 @@ int main(void)
      * OVMX$_PRCLOST (src/libvms/include/ovmx_status.h) and reaps the
      * child, and the only success return left in sys$creprc is
      * structurally downstream of a process ID the executive assigned. */
+    /* negctl-knockon: bind-client-no-register */
     CHECK(subject != 0, "sys$creprc returned the subject's pid");
 
     if (!(st & 1) || subject == 0) {
@@ -1435,6 +1439,7 @@ int main(void)
      *     UIC group is refused %RUN-F-CREPRC / -SYSTEM-F-DUPLNAM.
      * --------------------------------------------------------------- */
     st = spawn_named(SUBJECT_NAME, &dup_pid);
+    /* negctl: proctab-duplicate-name */
     CHECK(st == SS$_DUPLNAM,
           "sys$creprc refuses a duplicate process name with SS$_DUPLNAM");
 
@@ -1813,6 +1818,7 @@ int main(void)
                       row_has_value_after_name(srow, SHOW_NAME),
                       "the readable row carries a CPU figure");
                 /* The detector: a row it may NOT read carries none. */
+                /* negctl-knockon: proctab-crossgroup-identity */
                 CHECK(xrow != NULL &&
                       !row_has_value_after_name(xrow, XGRP_NAME),
                       "the UNREADABLE row fabricates NO CPU figure at all");
@@ -1948,6 +1954,7 @@ int main(void)
                 printf("  (P13: %u of %u calls came back OVMX$_PRCLOST for a "
                        "process that WAS created)\n",
                        (unsigned)prp.prclost, (unsigned)prp.iters);
+            /* negctl: creprc-handshake-eintr */
             CHECK(returned && prp.prclost == 0,
                   "sys$creprc returned, and reported no process lost, while the caller caught signals");
 

@@ -442,6 +442,7 @@ int main(int argc, char **argv)
         waitpid(c, NULL, 0);
 
         CHECK(n == (ssize_t)sizeof(s), "bare-setident child reported back");
+        /* negctl: bind-client-no-register */
         CHECK(s == SS_NORMAL,
               "vms_kif_open() then a BARE vms_kif_setident() reaches the "
               "executive with no explicit register");
@@ -462,6 +463,7 @@ int main(int argc, char **argv)
     printf("--- 1. auto-bind: a facility used with no explicit register ---\n");
 
     status = vms_kif_setef(BIND_EFN);
+    /* negctl: bind-client-no-register */
     CHECK(status == SS_WASCLR || status == SS_WASSET,
           "$SETEF reaches the executive with no explicit register");
     CHECK(status != SS_BADPARAM,
@@ -469,13 +471,17 @@ int main(int argc, char **argv)
 
     state = 0;
     status = vms_kif_readef(BIND_EFN, &state);
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS_WASSET, "$READEF sees the flag this process just set");
+    /* negctl-knockon: bind-client-no-register */
     CHECK((state & (1u << (BIND_EFN % 32))) != 0,
           "cluster state carries the flag bit");
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getjpi_self(&info);
+    /* negctl: bind-client-no-register */
     CHECK(status == SS_NORMAL, "$GETJPI(self) resolves the auto-bound process");
+    /* negctl-knockon: bind-client-no-register */
     CHECK(info.linux_pid == (uint32_t)getpid(),
           "the executive entry is this process's own");
 
@@ -492,10 +498,13 @@ int main(int argc, char **argv)
 
     status = vms_kif_enq(0, 5 /* LCK$K_EXMODE */, 0, BIND_RESNAM, 0,
                          0, 0, 0, &lkid, NULL);
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS_NORMAL, "$ENQ EX granted through /dev/vms");
+    /* negctl-knockon: bind-client-no-register */
     CHECK(lkid != 0, "$ENQ returned a lock id");
 
     status = vms_kif_deq(lkid, NULL, 0);
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS_NORMAL, "$DEQ released the lock");
 
     /* ------------------------------------------------------------
@@ -539,12 +548,16 @@ int main(int argc, char **argv)
         waitpid(child, NULL, 0);
 
         CHECK(n == (ssize_t)sizeof(frep), "forked child reported back");
+        /* negctl-knockon: bind-client-no-register */
         CHECK(frep.setef_status == SS_WASCLR || frep.setef_status == SS_WASSET,
               "forked child's $SETEF reaches the executive");
+        /* negctl-knockon: bind-client-no-register */
         CHECK(frep.setef_status != SS_BUGCHECK,
               "forked child is not rejected as an unregistered task");
+        /* negctl-knockon: bind-client-no-register */
         CHECK(frep.getjpi_status == SS_NORMAL,
               "forked child resolves itself in the process table");
+        /* negctl-knockon: bind-client-no-register */
         CHECK(frep.linux_pid == (uint32_t)child,
               "child's executive entry is the CHILD's, not the parent's");
     }
@@ -662,6 +675,7 @@ int main(int argc, char **argv)
          * pid to disturb it with (vms-2b8), so anything different here is
          * the executive re-deriving state it was supposed to preserve.
          */
+        /* negctl-knockon: getmode-buffer-not-written */
         CHECK(erep.cur_privs == ADOPT_PRIVS,
               "adoption preserved the privilege mask SETIDENT established");
         CHECK(erep.uic == ADOPT_UIC,
@@ -772,16 +786,23 @@ int main(int argc, char **argv)
             CHECK(trep.tid != 0 && trep.tid != (uint32_t)getpid(),
                   "the sibling really is a second Linux task");
 
+            /* negctl: pcb-per-thread */
             CHECK(trep.getjpi_status == SS_NORMAL,
                   "sibling thread resolves in the process table");
+            /* negctl-knockon: pcb-per-thread */
             CHECK(trep.linux_pid == (uint32_t)getpid(),
                   "sibling thread got the PROCESS's entry, not one of its own");
+            /* negctl: pcb-per-thread */
             CHECK(strcmp(trep.prcnam, THREAD_NAME) == 0,
                   "sibling thread sees the process name the main thread set");
+            /* negctl: pcb-per-thread */
             CHECK(trep.readef_status == SS_WASSET,
                   "sibling thread sees the event flag the main thread set");
+            /* negctl-knockon: bind-client-no-register */
+            /* negctl-knockon: pcb-per-thread */
             CHECK((trep.readef_state & (1u << (THREAD_EFN % 32))) != 0,
                   "sibling thread's cluster state carries the flag bit");
+            /* negctl: pcb-per-thread */
             CHECK(trep.deq_status == SS_NORMAL,
                   "sibling thread can $DEQ the lock the main thread took");
         }

@@ -29,8 +29,9 @@ round by SHA, never by branch name.**
 The objective is **`vms-14f`**: *OVMX runs unmodified VMS software: executive-resident system
 facilities, no facades.*
 
-**State (re-derived 2026-08-02):** closure = **17 open** by DAG walk from `vms-14f`. Main is at
-`ce11330`.
+**State (re-derived 2026-08-02, after triage):** closure = **26 open** by DAG walk from `vms-14f`,
+no cycles. Main is at `ce11330`. It was 17 before the eight items filed this round were triaged into
+the graph — see §3; that growth is a deliberate PM decision and is reversible.
 
 **The frontier is still three branches, and they are no longer symmetric — that is the news.**
 
@@ -89,17 +90,34 @@ Seventeen open items are four layers, not seventeen waves:
 revision said otherwise. `MAIL.EXE` picks whose mailbox to open from `getenv(VMS_USERNAME)`; it is a
 live member of the same identity class `vms-cb5` is fixing, deliberately left open there.
 
-Filed 2026-08-02, **deliberately not wired into the closure** (real defects, not blockers):
+### The eight items filed 2026-08-02, and where triage put them
 
-| Item | | |
-|---|---|---|
-| `vms-b1f` | **p1** | `run_tests.sh` exit status is host-sensitive — see §7 |
-| `vms-c9c` | p2 | the negative-control diagnostic names one cause for a two-cause condition |
-| `vms-38c` | p1 | the `OVMX-EXECUTIVE` residual, disclosed by `vms-ecf` rather than claimed closed |
-| `vms-82a` | p2 | the executive returns private lock status numbers, never `ssdef.h` values |
-| `vms-2f8` | | `F$IDENTIFIER` miss values — **now partly settled, see §4** |
-| `vms-2d37` | | `sys$sndopr` writes the OPC block as text |
-| `vms-008` | | `terminal_identity_negctl` exceeds ctest's 120 s budget (16/16 in 3m26s run directly) |
+Eight defects were found *in passing* while settling the three branches. They were filed unwired, then
+triaged into the graph. **This is what took the closure from 17 to 26.**
+
+| Item | Pri | Wired to | Rationale |
+|---|---|---|---|
+| **`vms-95f`** | **p1** | **blocks `vms-150`** | NEW parent — "the harness cannot be trusted to report its own results" |
+| ├ `vms-b1f` | p1 | child of `vms-95f` | exit status host-sensitive; **makes `run_facility_negctl.sh` dark on workshop** |
+| ├ `vms-c9c` | p2 | child of `vms-95f` | negative-control diagnostic names one cause for a two-cause condition |
+| ├ `vms-215` | p2 | child of `vms-95f` | three disagreeing inventories (pre-existing) |
+| └ `vms-008` | p3 | child of `vms-95f` | ctest `TIMEOUT 120` vs 3m26s actual |
+| `vms-38c` | p1 | blocks `vms-150` | the `OVMX-EXECUTIVE` residual — "is the gate real" is a veracity question |
+| `vms-82a` | **p1** | blocks `vms-042` | executive returns private lock status numbers, never `ssdef.h` values |
+| `vms-e60` | **p1** | blocks `vms-042` | two UICs for one account, both reachable |
+| `vms-2f8` | p2 | blocks `vms-042` | `RIGHTSLIST.DAT` ships and nothing reads it |
+| `vms-2d37` | p2 | blocks `vms-898` | `sys$sndopr` writes the OPC block as text — an authenticity tell |
+
+**Why the harness parent blocks `vms-150` and NOT `vms-b33`.** `vms-b33` (Phase 2) rests on
+*per-suite* evidence — individual `=== SUITE <name> rc= ===` banners and named assertions — which
+these defects do not corrupt. It is the near-term unblock and must not be burdened. `vms-150`
+(Phase 3 **veracity**) is precisely the claim that our measurements mean what they say: a veracity
+verdict quoting an aggregate would quote a number already known to be wrong, and one citing a
+per-facility negative control would cite a driver that cannot run on the dev host at all.
+
+**This is a sequencing decision, not a scope decision, and it is reversible.** Un-wiring `vms-95f`,
+`vms-38c`, `vms-82a`, `vms-e60` and `vms-2f8` returns the closure to 17 and ships the epic sooner on
+softer evidence. That trade is the operator's to make, not an agent's — `rd dep remove` is the undo.
 
 ---
 
@@ -378,9 +396,14 @@ other projects.
 
 ## 8. Honest accounting
 
-The closure was 44 items / 27 terminal / 17 open on 2026-08-01. It is **still 17 open** on 2026-08-02
-after a full round on all three frontier branches — one is CI-green, one is one fix from it, one is
-mid-verification — and **seven new items were filed**, none of them wired into the closure.
+The closure was 17 open on 2026-08-01. After a full round on all three frontier branches — all three
+now sit in **PRs #46, #47, #48, marked ready for review** — it is **26 open**, because **eight new
+defects were found in passing and nine items were triaged into the graph** (§3).
+
+**The count went the wrong way and that is the honest outcome, not a failure.** Every one of the
+three branches passed local verification and was then refused by something nobody had run: two CI
+gates, an adversary's lab measurement, and the register's own price. **The work of this round was
+finding out that the measurements were softer than they looked.**
 
 That is the same pattern the previous revision recorded and it should still not be read as stalling:
 **measuring properly finds more than it closes.** What did move is the quality of the measurement.

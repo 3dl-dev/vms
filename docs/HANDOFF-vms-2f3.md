@@ -41,13 +41,29 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > `removed`/`status_rcvd` and zeroing the CSID; and §4i found a real ack bug that
 > explains the PEDRIVER collapse but is NOT the gate.
 >
-> **§4j is the real-node control and it moves the target.** A SIGKILLed real VAX
-> leaves a CSB *identical* to a dead OVMX identity's — so our surviving CSB is
-> not the asymmetry (§3 item 10), and CSID zeroing is normal readmission, not
-> damage. What a real node gets and OVMX never does is a **brand-new CSB at a new
-> address with a freshly allocated CDT**; OVMX's old CSB is mutated in place and
-> stays in `09 wait`. The failure is therefore EARLIER than the membership
-> protocol.
+> ## ⭐⭐⭐ START AT §4L — IT IS THE NEWEST AND THE SHARPEST
+>
+> **A bracketed triple on one lab-2 pod (fresh join → same-identity rejoin →
+> fresh join), with the peer's CSB sampled every 5 s DURING each attempt, reduces
+> the whole bug to one flag word.** At T+5 s all three runs are identical on the
+> peer — new CSB, `01 open`, `CSID 00000000`, **the same CDT address** — and the
+> only difference is:
+>
+> | | admitted | **refused** |
+> |---|---|---|
+> | CSB flags | `02040000 status_rcvd,vcc` | **`00000000` — nothing set** |
+>
+> **The peer builds the same structures for a refused rejoin as for a successful
+> join, then never sets `vcc` or `status_rcvd`.** That is the single question now.
+>
+> **§4L.2 also REFUTES §4j.2's OVMX column**: a refused rejoin DOES get a new CSB
+> and DOES get a CDT. §4j reached the opposite conclusion by comparing a live
+> real-node readmission against OVMX identities sampled *after their processes had
+> exited* — see guardrail 22. §4j's real-node half still stands.
+>
+> **§4j is the real-node control.** A SIGKILLed real VAX leaves a CSB *identical*
+> to a dead OVMX identity's — so our surviving CSB is not the asymmetry (§3 item
+> 10), and CSID zeroing is normal readmission, not damage.
 >
 > **§4k decodes the reference rejoin nobody had decoded, and it reverses the
 > frame.** On a REJOIN the peer initiates everything — the VC, the directory, the
@@ -1834,7 +1850,15 @@ this run was built on: **holding a CSB is not the problem, and what the peer doe
 with it is.** Every theory in which OVMX's surviving CSB is itself the asymmetry
 is now dead — a real node's is indistinguishable from ours.
 
-### 4j.2 ⭐⭐⭐ Readmission ALLOCATES A NEW CSB — it does not repair the old one
+### 4j.2 ⚠ PARTLY REFUTED — readmission allocates a new CSB, but so does a REFUSED OVMX rejoin
+
+> **⛔ THE OVMX COLUMN OF THE TABLE BELOW IS WRONG — see §4L.2.** A refused OVMX
+> rejoin **also** gets a brand-new CSB at a new address **and** a CDT; watching it
+> live shows `879EB040` freed and `879EDFC0` allocated. The claim "OVMX's is
+> mutated in place, no new CSB, no CDT" came from sampling `OVMXL3`/`OVMXL4`
+> **after their processes had exited** and comparing that corpse against a LIVE
+> real-node readmission. The real-node half of this section is unaffected and
+> still holds.
 
 At `T+113s` VAX2 returns, and the CSB **address changes**:
 
@@ -2249,6 +2273,94 @@ the member did not advertise is the `vms-691` stall this code already fixed.
 
 ---
 
+## 4L. ⭐⭐⭐ THE DISCRIMINATOR IS ONE FLAG WORD — and §4j.2's OVMX column was measured wrong
+
+**A bracketed triple, one lab-2 pod (`vaxlab-2`), one tool, minutes apart, with
+the peer's CSB for OUR identity sampled every 5 s THROUGH each attempt.** This is
+what §4h.3 item 2 asked for and never got; `tools/csbwatch.sh` (new, §6) does it.
+
+| run | identity | sidecar | verdict |
+|---|---|---|---|
+| `M1A` | `OVMXM1`, fresh | none — never admitted anywhere | **JOINED** (`XITDONE=1`) |
+| `M1B` | **same `OVMXM1`**, ~6 s later | **carried, 41 bytes** | **REFUSED** (`XITDONE=0`), 108 s |
+| `M2A` | `OVMXM2`, fresh | none | **JOINED** (`XITDONE=1`) |
+
+All three logged `identity on the wire`. **Controls bracket the negative on both
+sides**, as doctrine requires.
+
+### 4L.1 ⭐⭐⭐ The result — everything is identical except the flags
+
+| at T+5 s | `M1A` → **admitted** | `M1B` → **REFUSED** | `M2A` → **admitted** |
+|---|---|---|---|
+| CSB before the attempt | **none** (`SCSNODE not found`) | `879EB040` `09 wait` `06040005 long_break,removed,status_rcvd,send_status` | **none** |
+| CSB during the attempt | **NEW `879EB040`** | **NEW `879EDFC0`** | **NEW `879EC300`** |
+| State | `01 open` | `01 open` | `01 open` |
+| CSID | `00000000` | `00000000` | `00000000` |
+| CDT address | **`87957700`** | **`87957700`** | **`87957700`** |
+| **Flags** | **`02040000 status_rcvd,vcc`** | **`00000000` — NOTHING SET** | **`02040000 status_rcvd,vcc`** |
+| next sample | `member,selected` @T+10 s | **unchanged for 108 s** | `member,selected` @T+11 s |
+
+**The peer builds the identical structure for a refused rejoin as for a
+successful join — same state, same CSID, literally the same CDT address — and
+then never sets `vcc` or `status_rcvd`, and never advances.**
+
+That is the `s3B` "dropped on the floor" shape of §4d.6 (`open`, flags
+`00000000`), now with the matched control that names exactly which bits are
+missing.
+
+### 4L.2 ⛔ §4j.2's OVMX COLUMN IS REFUTED — and the mistake was methodological
+
+§4j.2 claimed a returning real node gets a **new CSB with a fresh CDT** while
+**"OVMX's old CSB is mutated in place"** and gets **no CDT**. The first half
+stands. **The second half is false.**
+
+- The old CSB `879EB040` was **freed** and a **new one allocated at `879EDFC0`** —
+  verified in the full `CSB list`, which shows exactly **one** `OVMXM1` entry at
+  each point (`879EB040` before, `879EDFC0` after). No duplicate, no mutation.
+- A **CDT was allocated**, at the same address the successful joins got.
+
+**Why §4j got it wrong: it compared a LIVE real-node readmission against DEAD
+OVMX identities.** `OVMXL3`/`OVMXL4` were sampled minutes after their OVMX
+processes had exited, so their CSBs showed post-mortem decay (`09 wait`,
+`long_break`, `cdt=00000000`) — not what the peer does *during* a rejoin. §4j
+never held a pre-attempt CSB address for `OVMXL3`, so "mutated in place" was an
+inference across two different identities, not an observation.
+
+> **Guardrail 22: a peer-side sample taken after our process exits measures our
+> corpse, not our attempt.** Every CSB/CDT claim must state whether OVMX was
+> RUNNING at the sample. §4e.3, §4f.3, §4g and §4j all mix the two.
+
+**Consequently §4j.4's inference is dead too** — "declines to connect" (§4g.2)
+and "no CDT allocated" are **not** the same event, because a CDT *is* allocated.
+And §4k's framing of the failure as "earlier than the membership protocol"
+survives, but the reason is not a missing CSB or CDT.
+
+### 4L.3 What is now the single question
+
+**Why does the peer never set `vcc` and `status_rcvd` on the new CSB for a
+returning identity, when it sets both within 5 s for a fresh one — given that it
+allocated the same CSB and the same CDT in both cases?**
+
+Everything still standing points at the same instant: §4k.5's missing `DISC-REQ`
+(the peer never tears down its round-1 directory connection) and these two unset
+bits are almost certainly the same stall seen from wire and from SDA. A wire
+correlation across these exact three captures is **dispatched**.
+
+### 4L.4 The next experiment, and it is cheap
+
+**Separate the two bits.** At 5 s cadence `vcc` and `status_rcvd` appear
+*together* in both joins, so their order is unknown. Re-run the triple with
+`CAD=2` and a shorter horizon (the decision is over by T+11 s in every admitted
+run) to find out which bit lands first and therefore which one is actually
+missing on a rejoin. `csbwatch.sh` already takes `CAD` from the environment.
+
+> **⚠ Do not read `status_rcvd` as "our status reply is wrong".** §4i.1 already
+> established that OVMX's node-status reply is **byte-for-byte identical** in
+> joined and refused runs (0 differing bytes of 132 across 4 frames). The bit is
+> unset for some other reason; §4h.2 made exactly this mistake and was refuted.
+
+---
+
 ## 5. ⚠ WHERE TO START NEXT SESSION
 
 > **⚠ THE ORDERED PLAN BELOW IS NOW FULLY EXECUTED — steps 0–3 in §4d, step 4
@@ -2368,6 +2480,7 @@ the member did not advertise is the `vms-691` stall this code already fixed.
 | `tools/connpoll.sh` | **SDA `SHOW CONNECTIONS/NODE=<id>` sampled on a chosen peer THROUGHOUT a run** — the CDTs that peer holds for our identity, and their `Rej/Disconn Reason`. The only oracle here that can name a rejection rather than describe a silence (§4e.3). Stays INSIDE SDA and uses `/NODE=` to keep a sample small; the first version drove `ANALYZE/SYSTEM…EXIT` per sample and overran the console input buffer during the OPCOM flood, losing 3 of 4 snapshots. |
 | `tools/scacptrace.sh` | **high-cadence SCACP + packet capture.** Stays INSIDE SCACP and fires bare `SHOW VC` on a timer (one console round-trip per sample instead of ~23 s), and relies on SCACP's self-timestamping header instead of markers. This is what established ORDER (§4d.10). VAX1's clock runs ~7.5 s behind the host — measure it with `SHOW TIME` vs `date` before correlating. |
 | `tools/csbcycle.sh` | **SIGKILL a REAL node and sample the peer's SDA `SHOW CLUSTER` across kill → removal → reboot → readmission**, on a pod that also carries dead/refused OVMX identities so all histories land in ONE dump. This is what produced the real-node control (§4j) and killed "our surviving CSB is the asymmetry". Stays parked inside SDA and slices the console INCREMENTALLY per sample. **Both of its original defects are FIXED and verified** (§4j.6): per-node `SHOW CLUSTER/NODE=` sampling instead of the 6.3 KB full dump, leading newline before each marker, and a loud abort on consecutive empty samples. Usage: `csbcycle.sh <pod> <tag> [node ...]`, `CAD`/`DEAD`/`TOTAL`/`MAXEMPTY` env. |
+| `tools/csbwatch.sh` | **one OVMX attempt on lab-2 with the peer's CSB for OUR identity sampled THROUGH it.** `lab2run.sh`'s runner (staging, sidecar carry/pull, tcpdump, identity-on-the-wire proof) with `csbcycle.sh`'s narrow `SHOW CLUSTER/NODE=<identity>` sampling replacing the `CLUSTER_NODES` console poll. This is what §4h.3 item 2 asked for and never got. The `CLUSTER_NODES` verdict is lost — the console is inside SDA — and is not missed, because the CSB names the state directly and **`SCSNODE … not found` is itself a datum**: it says the peer holds no CSB for us at all. Usage: `csbwatch.sh <pod> <tag> <store> <duration> <identity> [ENV=V …]`, `CAD`/`MAXEMPTY` env. |
 
 > **⚠ THE LAB TOOLING IS NOT VERSION CONTROLLED.** `/data/training/vax/cluster/`
 > is not a git repo, so every script in this table exists only on `workshop`'s ZFS
@@ -2434,6 +2547,16 @@ takes cannot show that nothing moves.
     one variable) produced an identical census and reduced that to nothing. Ship
     every wire change with the switch that turns it off, and use it in the same
     session.
+22. **A peer-side sample taken after our process exits measures our corpse, not
+    our attempt.** §4j compared a LIVE real-node readmission against `OVMXL3`/
+    `OVMXL4` CSBs sampled minutes after those OVMX processes had exited, and
+    concluded OVMX gets no new CSB and no CDT. Watching a rejoin *live* (§4L)
+    shows it gets both — the old CSB freed, a new one allocated, the same CDT
+    address the successful joins get. The post-mortem state (`09 wait`,
+    `long_break`, `cdt=00000000`) is decay, not refusal. **State whether OVMX was
+    RUNNING at the moment of every CSB/CDT sample**; §4e.3, §4f.3, §4g and §4j all
+    mix the two, and any claim of the form "the peer never allocates X for us"
+    taken from a dead-OVMX sample must be re-taken live before it is trusted.
 17. **Measure the window you are actually naming.** §4b asserted a coordinator
     stall for a whole session. The coordinator's response latency was 0.4 ms and
     had been in our own logs the entire time; the 6.5 s belonged to the next

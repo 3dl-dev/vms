@@ -3017,6 +3017,53 @@ This is the same bug class as the `0x7b` deafness of §4d.10 if OVMX ignores
 these: `cm_req` at `scsd.c:2764` covers only `CAT_CONFIG`/`CAT_MEMBERSHIP`/
 `CAT_DLM` — **`CAT_ACK` is not in the set.**
 
+### 4M.8 ⭐⭐⭐ §4L's ENTIRE DISCRIMINATOR IS GONE — the peer now populates the CSB, and STILL refuses
+
+**This is the largest single movement on this item, and it retires §4L's
+framing.** The peer's CSB for our identity, sampled live through `N1B` with
+`csbwatch.sh` — OVMX RUNNING at every sample (guardrail 22):
+
+| field at T+5 s | §4L refused (**pre-fix**) | **`N1B` refused (post-fix)** | `N1A` admitted |
+|---|---|---|---|
+| **Flags** | **`00000000` — NOTHING SET** | **`02040000 status_rcvd,vcc`** | `02060002 member,selected,status_rcvd` |
+| `Cpblty` | `00000008 ext_status` | **`00000A98 ext_status,cwcreprc,ipc_demult_conn`** | same |
+| `SWVers` | `........` | **`V7.3`** | `V7.3` |
+| `HWName` | empty | **`OVMX Cluster Node`** | same |
+| `Quorum/Votes` | `0/0` | **`1/0`** | `1/0` |
+| `Quor. Disk Vote` | 0 | **1** | 1 |
+| `Lock mgr dir wgt` | 0 | **1** | 1 |
+| `Last seq num rcvd` | `0000` | **`0003`** | — |
+| `Incarnation` | — | **`2-AUG-2026 16:27:28`** (live) | live |
+| CDT / SB / PDT | — | all allocated | all allocated |
+
+**Every single field §4L.5 listed as blank in a refused run is now populated,
+and the flag word `02040000 status_rcvd,vcc` is EXACTLY the value §4L.1
+recorded for the two ADMITTED controls at T+5 s.** The peer has received our
+status, applied it, and connected the VC.
+
+> **So §4L.3's single question — "why does the peer never set `vcc` and
+> `status_rcvd`" — is ANSWERED and RETIRED. It now sets both. And the rejoin is
+> still refused.** §4L was measuring a real symptom of the mirroring bug, not
+> the gate. Read §4L.1–§4L.9h as history: its *observations* stand, its framing
+> of the flag word as "the whole bug in one flag word" does not.
+
+**What is left is exactly two bits.** `02040000` → `02060002`: the peer never
+sets **`member`** and **`selected`**. Flat for the full 108 s across `N1B`,
+`N1C` and `N1D`, from three different prior CSB states.
+
+**The question, re-posed for the next iteration:**
+
+> The peer has our status, capabilities, votes, incarnation, lock-manager
+> directory weight and an open VC. It has allocated the CSB, the CDT and the
+> PDT, and it agrees we are who we say we are. **What SELECTS a node for
+> membership, and what does the peer check there that a returning identity
+> fails and a fresh one passes?**
+
+Its wire correlates, both new and both grounded (§4M.7): the peer acks with
+`cat 0x04 op 0x04`/`op 0x06` instead of `op 0x00`, and never sends the
+`cat 0x01 op 0x05` lock/resource-rebuild step that immediately follows
+`op 0x03` on every join.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

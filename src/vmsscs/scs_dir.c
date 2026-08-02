@@ -358,6 +358,28 @@ int scs_dir_build_connect_echo(const struct scs_dir_params *p,
     return 0;
 }
 
+/* vms-2f3 sec 4M. The msgtype OVMX must put on a directory response, given the
+ * msgtype the request arrived with.
+ *
+ * GROUNDED: a real VAX answers with the SEQAPP data-phase form 0x4b regardless
+ * of how it was asked. The 336-frame op-5 census at the head of this file (4
+ * sender nodes, 15 captures) found 86 pairs answering a 0x5b request with a
+ * 0x4b response, and every op-5 a real VAX has sent AT OVMX is 0x4b. No frame
+ * in the capture library mirrors a 0x5b request with a 0x5b response.
+ *
+ * WHY IT IS LOAD-BEARING: the response is what advances the requester's
+ * SCS$DIRECTORY connection from establishing (0x5b) to data phase (0x4b).
+ * Mirroring leaves the peer establishing forever. OVMX mirrored until now, which
+ * is correct BY LUCK on a fresh join -- where the peer always asks 0x4b -- and
+ * wrong on a rejoin, where the peer asks its first MSCP$DISK lookup with 0x5b.
+ *
+ * `mirror` restores the pre-fix behaviour for the OVMX_DIR_MIRROR_MSGTYPE
+ * kill-switch, so the failing case stays reproducible (guardrail 21). */
+uint8_t scs_dir_response_msgtype(uint8_t request_msgtype, int mirror)
+{
+    return mirror ? request_msgtype : (uint8_t)SCS_DIR_OPCODE_SEQAPP;
+}
+
 int scs_dir_build_connect_response(const struct scs_dir_params *p,
                                    uint8_t out[SCS_DIR_RESP_FRAME_LEN])
 {

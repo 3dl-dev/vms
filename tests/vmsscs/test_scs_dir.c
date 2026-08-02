@@ -575,9 +575,66 @@ static void test_build_mscp_confirm5(void)
     check(scs_dir_build_mscp_confirm5(NULL, out) == -1, "confirm5 NULL params rejected");
 }
 
+/* vms-2f3 sec 4M: OVMX must NEVER mirror the request msgtype onto a directory
+ * response. GROUNDED by the 336-frame op-5 census (scs_dir.c head): 86 observed
+ * pairs answer a 0x5b request with a 0x4b response, and no frame anywhere in the
+ * capture library mirrors 0x5b with 0x5b.
+ *
+ * This is a REJOIN regression. OVMX mirrored until sec 4M, which is correct by
+ * luck on a fresh join -- the peer always asks 0x4b there -- and wrong on a
+ * rejoin, where the peer asks its first MSCP$DISK lookup with 0x5b. Measured
+ * 6/6 across bracketed identity-proven lab-2 runs: zero 0x5b requests in three
+ * joins, one in every one of three refusals. */
+static void test_response_msgtype_never_mirrors(void)
+{
+    printf("[directory response msgtype never mirrors the request -- vms-2f3 sec 4M]\n");
+
+    /* The rule, over every request msgtype OVMX can be asked with. */
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE, 0) == SCS_DIR_OPCODE_SEQAPP,
+          "0x5b establishing request -> 0x4b response (THE rejoin case)");
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE_SEQAPP, 0) == SCS_DIR_OPCODE_SEQAPP,
+          "0x4b data-phase request -> 0x4b response (the fresh-join case)");
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE_RETX, 0) == SCS_DIR_OPCODE_SEQAPP,
+          "0x7b retransmit request -> 0x4b response");
+
+    /* The kill-switch restores the pre-fix echo, so the failing case stays
+     * reproducible on the lab (guardrail 21). */
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE, 1) == SCS_DIR_OPCODE,
+          "OVMX_DIR_MIRROR_MSGTYPE restores the 0x5b echo");
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE_SEQAPP, 1) == SCS_DIR_OPCODE_SEQAPP,
+          "kill-switch is a no-op for a 0x4b request");
+
+    /* End-to-end: the byte OVMX actually puts on the wire at [16], built the
+     * same way scsd.c builds it, for a 0x5b MSCP$DISK lookup -- the exact frame
+     * that stalled every rejoin. */
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, vax1_mac, 6);
+    memcpy(lp.src_mac, ovmx_mac, 6);
+    memcpy(lp.src_logical, ovmx_logical, 6);
+    memcpy(lp.peer_logical, vax1_mac, 6);
+    lp.remote_conid = 0x63050008u;
+    lp.local_conid = SCS_DIR_OVMX_CONID;
+    lp.recv_ack = 6;
+    lp.send_seq = 6;
+    lp.op = 0x0a;
+    memcpy(lp.name, "MSCP$DISK", 9);
+    lp.affirmative = 1;
+    lp.opcode = scs_dir_response_msgtype(SCS_DIR_OPCODE, 0);
+
+    uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_lookup_response(&lp, out) == 0,
+          "build_lookup_response for a 0x5b-asked MSCP$DISK lookup succeeds");
+    check(out[30] == SCS_DIR_OPCODE_SEQAPP,
+          "wire msgtype [16] (abs 30) == 0x4b even though the request was 0x5b");
+    check(out[31] == 0x13, "format [17] (abs 31) == 0x13, unchanged");
+}
+
 int main(void)
 {
     printf("test_scs_dir: SCS$DIRECTORY connect + SCS$DIR_LOOKUP (vms-246)\n");
+    test_response_msgtype_never_mirrors();
     test_parse_real();
     test_build_connect_response();
     test_build_lookup_response();

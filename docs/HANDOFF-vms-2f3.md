@@ -33,9 +33,10 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > **§5's ordered plan is now FULLY EXECUTED — step 4 was run in §4e.4 and is
 > refuted as the gate. Do not re-propose it.** **§4f–§4g are newer still: §4f proves the
 > deciding state is the CLUSTER's, not ours; §4g shows the peer asks for our disk
-> server, is told yes, and declines to connect. START AT §4g.7 — the CDT layer is
-> now excluded for BOTH a real node and OVMX, and the next probe is aimed at the
-> CSB layer.** §1–§4c exist so you do not re-derive
+> server, is told yes, and declines to connect. START AT §4h — the CDT layer is
+> excluded for everyone, and the peer's CSB now shows the rejoin attempt itself
+> clearing `removed`/`status_rcvd` and zeroing the CSID. §4h.3 names the next
+> three steps.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and
 > §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
 > the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
@@ -87,6 +88,8 @@ reset.**
 | we address the wrong node (`Curr. coord.` rotates) | **REFUTED both ways — forcing the real coordinator still refused; a fresh identity joins via a non-coordinator** | §4d.7 ⭐ |
 | a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
 | the VAXes have no oracle for their non-decisions | **REFUTED — SCACP, ANALYZE/ERROR_LOG and SDA SHOW CONNECTIONS all exist and were never used** | §4d.9 ⭐⭐⭐ |
+| **the refusal is a stale quarantine CSB predating the attempt** | **REFUTED — a died-and-never-returned identity's CSB looks NORMAL (`removed,status_rcvd`, CSID intact)** | §4h ⭐⭐⭐ |
+| **the rejoin attempt itself degrades the peer's CSB** | **GROUNDED — it clears `removed`+`status_rcvd`, zeroes the CSID, and sticks in `wait`; exact 2/3 split, no exceptions** | §4h ⭐⭐⭐ |
 | the peer holds a stale `VMS$DISK_CL_DRVR` CDT across our death | **REFUTED — 3 dead OVMX identities leave ZERO CDTs; live control shows 4** | §4g.6 ⭐⭐ |
 | the peer's `MSCP$DISK` connect arrives and we discard it (5th deafness bug) | **REFUTED — it never arrives; the gate at scsd.c:4617 already accepts 0x4b/0x5b/0x7b** | §4g.3 ⭐⭐⭐ |
 | **the peer declines to connect to a disk server it just confirmed exists** | **GROUNDED — absent from the peer's OWN send_seq numbering, so nothing was dropped** | §4g.2 ⭐⭐⭐ |
@@ -1544,6 +1547,83 @@ all `CSID 00000000`).
 > is not a free win — check it. And §4d.1 found VAX3 holding **no** CSB for the
 > identity it then aborted, so a stale CSB cannot be the whole story either.
 > Both shapes of the refusal (§4d.6) must be classified before comparing runs.
+
+---
+
+## 4h. ⭐⭐⭐ THE CSB, AND WHAT THE REJOIN ATTEMPT DOES TO IT
+
+**§4g.7's probe, run immediately, free — the identities were already on lab-1.**
+SDA `SHOW CLUSTER` on VAX3, one dump, six OVMX CSBs and two real ones. The flags
+split the identities **exactly** by whether a rejoin was ever attempted:
+
+| identity | history | `Flags` | `CSID` |
+|---|---|---|---|
+| `OVMXW2` | joined, died | `06040005 long_break,removed,status_rcvd,send_status` | `00010005` |
+| `OVMXW3` | joined, died | `06040005 long_break,removed,status_rcvd,send_status` | `00010006` |
+| `OVMXW5` | joined, died | `06040005 long_break,removed,status_rcvd,send_status` | `00010008` |
+| `OVMXW1` | joined, died, **rejoined ×2 (refused)** | `04000001 long_break,send_status` | **`00000000`** |
+| `OVMXW4` | joined, died, **rejoined ×2 (refused)** | `04000001 long_break,send_status` | **`00000000`** |
+| `VAX1` | live member | `02060102 member,cluster,selected,status_rcvd` | `00010001` |
+| `VAX2` | live member | `02060102 member,cluster,selected,status_rcvd` | live |
+
+All six OVMX CSBs are `State: 09 wait`. **The 2/3 split is exact and has no
+exceptions** — `W2`/`W3`/`W5` were fresh joins only, `W1`/`W4` are precisely the
+two identities this session rejoined.
+
+### 4h.1 What that means
+
+**The refusal is not a stale quarantine CSB that pre-exists the attempt.** A
+died-and-never-returned OVMX identity leaves a CSB that looks *correct*:
+`removed`, `status_rcvd`, CSID intact — the ordinary record of a departed node.
+
+**The rejoin attempt itself degrades it.** `removed` and `status_rcvd` are
+CLEARED and the CSID is zeroed, leaving `wait` + `long_break,send_status` — and
+it never leaves that state. So the peer does react to a returning identity; it
+starts something and never finishes it.
+
+**This supplies the "before" that §4d.6 was missing.** §4d.6 noted our CSB after
+a refusal carries "zero flags, not even `status_rcvd`, which every long-dead OVMX
+CSB on the same node does carry", and could not say when that difference
+appeared. It appears **at the rejoin attempt**, and the pre-attempt state is now
+recorded above.
+
+### 4h.2 ⭐ `send_status` set, `status_rcvd` cleared — and a message we already know is unanswered
+
+The surviving flag pair names the stall directly: the peer intends to **send**
+status and has **not received** ours.
+
+That lines up with §4d.10, which found the peers retransmitting `cat 0x01 op 0x01`
+in **member form** (`body[12]=0x21`), `msgtype 0x7b`, ~3 s apart, unanswered — the
+retransmit form OVMX was deaf to until `9f98dbf`. **We now hear those frames and
+are still refused**, which §4d.10 recorded and could not explain. The CSB flags
+give the missing half: the peer is in "send this node its status, await its
+status" and our reply does not satisfy it.
+
+> **⚠ Not yet established:** that `cat 0x01 op 0x01` member-form IS the status
+> exchange the flags refer to. That is an association between two grounded
+> observations, not a decode. Confirm it before building on it.
+
+### 4h.3 The next experiment — and it is now a decode, not a poll
+
+1. **Confirm the pairing.** Take the matched pair `d94-w3A` (joined) / `d94-w1C`
+   (refused) and decode what OVMX sends in response to the member-form
+   `cat 0x01 op 0x01`, in both runs. In the joined run the peer's CSB reaches
+   `member,cluster,selected,status_rcvd`; in the refused run it never sets
+   `status_rcvd`. **The difference in our reply is the target.** Delegate this —
+   it is byte work (§0 doctrine).
+2. **Watch the transition live.** Poll the peer's CSB for one identity at 3–5 s
+   cadence *through* a refused rejoin, so the exact moment `removed`/`status_rcvd`
+   clear can be placed against our frames. `connpoll.sh` already does the SDA
+   parking; point it at `SHOW CLUSTER` instead of `SHOW CONNECTIONS`.
+3. **Get the real-node control.** Run the identical CSB poll across
+   `lab2rejoin.sh`'s kill/reboot cycle. A real VAX2 goes `removed` → readmitted;
+   the question is whether its CSB passes through the same `send_status` state
+   and *leaves* it, and what it sends that we do not.
+
+**Do not assume `BRK_*` is a quarantine** (§4c.2d: a pristine `BRK_NON` fails on
+its first attempt) and **do not assume a stale CSB is required** (§4d.1: VAX3
+held none for the identity it aborted). Both remain true and both constrain any
+story built on this section.
 
 ---
 

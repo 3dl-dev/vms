@@ -217,8 +217,11 @@ if(BUILD_TESTS)
     add_test(NAME kif_caller_census
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
+    # TIMEOUT raised from 120 (vms-e2b): the census now configures cmake and
+    # preprocesses every product translation unit instead of globbing source
+    # text. ~9s on workshop; the headroom is for slower CI runners.
     set_tests_properties(kif_caller_census PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 120)
+        LABELS "integration;authenticity" TIMEOUT 600)
 
     # ... and the evasions, run against a sandbox copy of the tree. Each must
     # drive the census RED for its own specific reason, and two GREEN controls
@@ -226,8 +229,10 @@ if(BUILD_TESTS)
     add_test(NAME kif_caller_census_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
+    # TIMEOUT raised from 300 (vms-e2b): 29 controls x a gate that now
+    # configures and preprocesses. MEASURED 3m29s on workshop.
     set_tests_properties(kif_caller_census_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 300)
+        LABELS "integration;authenticity" TIMEOUT 1800)
 
     # Userspace service register (vms-5b4): every sys$ service either reaches
     # the executive or is declared, against an item, as answering from

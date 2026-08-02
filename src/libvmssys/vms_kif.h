@@ -287,7 +287,11 @@ uint32_t vms_kif_devscan(uint32_t *index, struct vms_devinfo *info);
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
  * if the caller holds no such channel.
- * OVMX-UNWIRED: vms_kif_ttsetmode (vms-fb9) -- SET TERMINAL is the writer */
+ * OVMX-UNWIRED: vms_kif_ttsetmode (vms-a36) -- SET TERMINAL is the writer, and
+ * what it writes is ctx->terminal, a per-process DCL-local model no other
+ * process (and no later image in this one) can observe. Re-pointed from
+ * vms-fb9, which is CLOSED: an item that is done tracks nothing, and the whole
+ * price of this declaration is that a LIVE item owns the gap. */
 uint32_t vms_kif_ttsetmode(uint32_t chan, uint32_t flags,
                            uint64_t setchar, uint64_t clrchar,
                            uint32_t width, uint32_t page);

@@ -578,16 +578,16 @@ static void test_build_mscp_confirm5(void)
 /* vms-2f3 sec 4M: OVMX does not mirror the request msgtype onto a directory
  * response -- it answers with the SEQAPP data-phase form 0x4b.
  *
- * ⚠ THIS PINS AN OVMX DESIGN CHOICE, NOT A REFERENCE RULE (sec 4M.12). The
- * original justification -- "a real VAX never mirrors, per the 336-frame op-5
- * census" -- was REFUTED: that census is about the op-5 confirm frame, and a
- * byte census of real-VAX LOOKUP pairs shows 10 genuine 0x5b->0x5b mirrors
- * against 11 0x5b->0x4b. The live candidate is that the response tracks the
- * RESULT (present -> 0x4b, absent -> 0x5b), which would make this assertion
- * wrong for the MSCP$TAPE (negative) case. Update this test when 4M.12 closes.
+ * ⚠ THIS PINS AN OVMX DESIGN CHOICE, NOT A REFERENCE RULE (sec 4M.12, and it
+ * is an unresolved RE gap -- see the item filed against it). Two candidate
+ * rules were tested against the capture library and BOTH were refuted:
+ * "a real VAX never mirrors" (10 genuine 0x5b->0x5b mirrors exist) and "the
+ * response tracks the result" (18 of 63 land off-diagonal). No header byte in
+ * 129,084 real-VAX frames separates 0x4b from 0x5b.
  *
- * What the test is for meanwhile: the selection is made in ONE place, is
- * kill-switchable, and cannot drift silently. */
+ * So this asserts what OVMX CHOOSES, not what VMS requires. Its value is that
+ * the choice is made in ONE place, is kill-switchable, and cannot drift
+ * silently. If the selector is ever grounded, this test changes with it. */
 static void test_response_msgtype_never_mirrors(void)
 {
     printf("[directory response msgtype never mirrors the request -- vms-2f3 sec 4M]\n");

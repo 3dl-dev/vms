@@ -375,18 +375,23 @@ int scs_dir_build_connect_echo(const struct scs_dir_params *p,
  * "always mirror" (OVMX's old behaviour, 60/72) nor "always 0x4b" (this
  * function, 61/72) is the rule. Both are a coin-flip against the corpus.
  *
- * LIVE CANDIDATE, under test: the response msgtype tracks the RESULT, not the
- * request -- 0x4b when the SYSAP is present, 0x5b when it is not. Two matched
- * reference pairs show the same responder, same connection, 1.6 ms apart,
- * answering the same request msgtype two different ways, split exactly on
- * affirmative-vs-"NOT PRESENT HERE". OVMX already computes that predicate
- * (lp.affirmative). If it holds, this function should key on it and BOTH of
- * OVMX's behaviours to date are wrong.
+ * "the response tracks the RESULT (present -> 0x4b, absent -> 0x5b)" was tested
+ * next and is ALSO REFUTED: 18 of 63 real-VAX responses land off-diagonal.
+ * Reference frame 8994 is the clean kill -- VAX1 answers a 0x5b MSCP$TAPE
+ * request "NOT PRESENT HERE" (the same result value as frames 1193/1239, which
+ * carried 0x5b) and puts 0x4b on the wire.
  *
- * Kept as-is meanwhile because it is behaviourally neutral in the lab (three
- * fresh identities joined with it on; the rejoin is refused either way) and it
- * is kill-switched. DO NOT describe it as reference-derived until sec 4M.12
- * closes.
+ * NOTHING KNOWN PREDICTS IT. Over 72 real-VAX matched pairs, result, SYSAP name,
+ * responder MAC and request msgtype all tie at 11 classification errors, and a
+ * brute-force scan of every header byte at abs 14-29 and 31-59 over 129,084
+ * real-VAX 0x4b/0x5b frames found no byte that separates them.
+ *
+ * THE RULING (vms-2f3 sec 4M.12, under CLAUDE.md Rule 8): this is an unresolved
+ * RE gap. OVMX emits a fixed 0x4b as a LABELLED OVMX DESIGN CHOICE -- 0x4b is
+ * the dominant form on the wire (18,785 vs 92 in the reference capture), it is
+ * the best single fixed choice against the corpus (61/72 against the mirror's
+ * 60/72), it is behaviourally neutral in the lab, and it is kill-switched.
+ * It is NOT VMS-authentic and must never be described as such.
  *
  * `mirror` restores the pre-fix behaviour for the OVMX_DIR_MIRROR_MSGTYPE
  * kill-switch, so the failing case stays reproducible (guardrail 21). */

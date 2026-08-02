@@ -3310,12 +3310,36 @@ apart, answers the same request msgtype two different ways:
 | 1237→1239 | `MSCP$TAPE` | `0x5b` | **`0x5b`** | `NOT PRESENT HERE` |
 | 1241→1243 | `MSCP$DISK` | `0x5b` | **`0x4b`** | name echoed (AFFIRMATIVE) |
 
-> **CANDIDATE RULE: the response msgtype is set by the RESULT, not the request —
-> `0x4b` when the SYSAP is present, `0x5b` when it is not.** OVMX already
-> computes exactly that predicate (`lp.affirmative`, `scsd.c:4899`). Under it,
-> **both** OVMX behaviours are wrong: the old mirror answered an affirmative
-> `MSCP$DISK` with `0x5b`, and my change answers a negative `MSCP$TAPE` with
-> `0x4b`. **Test dispatched; do not implement until the 2×2 comes back clean.**
+**⛔ AND THAT CANDIDATE IS REFUTED TOO — the rule is UNDETERMINED. This is an RE
+gap, not a bug.** The 2×2 over every real-VAX lookup response (n=63, OVMX
+excluded as responder):
+
+| | AFFIRMATIVE (name echoed) | `NOT PRESENT HERE` |
+|---|---|---|
+| resp `0x4b` | 35 | **17** |
+| resp `0x5b` | **1** | 10 |
+
+**18 of 63 land off-diagonal.** The cleanest kill is reference frame 8994: VAX1
+answers a `0x5b` `MSCP$TAPE` request `NOT PRESENT HERE` — the *same result
+value* as frames 1193/1239, which carried `0x5b` — and puts **`0x4b`** on the
+wire. VAX1 never serves a tape anywhere in the corpus, so the result is not in
+doubt.
+
+**Nothing else predicts it either.** Over all 72 real-VAX matched pairs, result,
+SYSAP name, responder MAC and request msgtype **all tie at 11 classification
+errors**. A brute-force scan of every header byte at abs 14–29 and 31–59 across
+**129,084** real-VAX `0x4b`/`0x5b` frames found **no single byte that separates
+them**. Two corpus limits worth carrying: result and SYSAP name are perfectly
+collinear here (`MSCP$DISK` always affirmative, `MSCP$TAPE` always absent), and
+all three VAXes emit both msgtypes, so responder identity carries no signal.
+
+> **RULING (mine, CLAUDE.md Rule 8): the lookup-response msgtype selector is an
+> unresolved RE gap. OVMX keeps the fixed `0x4b`, LABELLED AS AN OVMX DESIGN
+> CHOICE — not as VMS-authentic.** Rationale: `0x4b` is the overwhelmingly
+> dominant form on the wire (18,785 vs 92 in the reference capture), it is the
+> best single fixed choice against the corpus (61/72 vs the mirror's 60/72), it
+> is behaviourally neutral in the lab, and it is kill-switched. Filed as its own
+> item; **not** to be re-litigated inside `vms-2f3`.
 
 **Status of the code meanwhile:** the change is committed, kill-switched
 (`OVMX_DIR_MIRROR_MSGTYPE=1`) and **behaviourally neutral in the lab** — three

@@ -1951,7 +1951,13 @@ together through both a real reboot and an OVMX rejoin (`scacppoll.sh` +
 
 ---
 
-## 4k. ⭐⭐⭐ THE ROLE REVERSAL — on a REJOIN the peer initiates everything, and we still behave like a first-time joiner
+## 4k. ⭐⭐⭐ THE REFERENCE REJOIN, DECODED — the peer initiates everything, and it stops at one exact step
+
+> **Read §4k.5 first if you read nothing else** — it is the divergence point.
+> §4k.1's role reversal is real for a *real* node but is **not** the OVMX
+> discriminator (§4k.8 is the null result). §4k.3 and the first two drafts of
+> §4k.9 are retracted in place; the surviving conclusions are §4k.4, §4k.5,
+> §4k.6 and the two null results.
 
 **Two delegated decodes, run in parallel, against specimens that already
 existed.** §4c.2c named this comparison as where effort belonged and it was never
@@ -2162,7 +2168,7 @@ incarnation signal. OVMX already does it correctly:
 value confirms the peer *knows* it already holds state for us. **We already send
 the right thing. Do not spend a commit on `send_seq`.**
 
-### 4k.9 ⭐⭐⭐ THE PEER TELLS US, ON THE WIRE, THAT IT STILL HOLDS OUR OLD CSB
+### 4k.9 ⛔ THE INCARNATION FIELD, SETTLED — OVMX already emits the reference value
 
 > **⚠ THIS SECTION WAS FIRST WRITTEN WRONG AND IS CORRECTED HERE.** The initial
 > reading — "OVMX increments an incarnation field that a real node never

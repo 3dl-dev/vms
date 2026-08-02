@@ -310,6 +310,7 @@ int main(int argc, char **argv)
      *    which is why the assertions below are about OPA0:, a terminal,
      *    and not about the null device.
      * -------------------------------------------------------------- */
+    /* negctl: devtab-owner-not-recorded */
     CHECK(rep.owner_after_assign == rep.own_vms_pid,
           "oracle: $ASSIGN to a non-shareable device nobody owns makes the caller its owner");
     CHECK(rep.alloc_after_assign == 0,
@@ -319,6 +320,7 @@ int main(int argc, char **argv)
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getdvi_devnam(CONSOLE, &info);
+    /* negctl: devtab-owner-not-recorded */
     CHECK(status == SS_NORMAL && info.owner_pid == rep.own_vms_pid,
           "B sees the ownership A took with a channel alone (A writes, B reads)");
     CHECK(info.allocated == 0, "B sees that nothing is allocated");
@@ -339,6 +341,7 @@ int main(int argc, char **argv)
           "oracle: $ALLOC is refused while another process owns the device by channel alone");
     memset(&info, 0, sizeof(info));
     (void)vms_kif_getdvi_devnam(CONSOLE, &info);
+    /* negctl-knockon: devtab-owner-not-recorded */
     CHECK(info.owner_pid == rep.own_vms_pid && info.allocated == 0,
           "the refused $ALLOC neither took ownership nor allocated anything");
 
@@ -375,6 +378,7 @@ int main(int argc, char **argv)
     CHECK(rep.realloc_status == SS_NORMAL,
           "$ALLOC of a device we already have allocated succeeds");
     CHECK(rep.owner_pid == rep.own_vms_pid, "executive records the allocating process as owner");
+    /* negctl: devtab-alloc-not-recorded */
     CHECK(rep.allocated == 1, "device reports itself allocated");
     CHECK(rep.refcnt == 2,
           "reference count is one channel plus the allocation, and re-allocating adds none");
@@ -384,6 +388,7 @@ int main(int argc, char **argv)
     CHECK(status == SS_NORMAL, "this process can still read the device");
     CHECK(info.owner_pid == rep.own_vms_pid,
           "B sees the owner A took (A writes, B reads)");
+    /* negctl: devtab-alloc-not-recorded */
     CHECK(info.allocated == 1, "B sees that A allocated the device");
     CHECK(info.refcnt == 2, "B sees A's reference count");
     CHECK(info.width == A_WIDTH && info.page == A_PAGE,
@@ -487,6 +492,7 @@ int main(int argc, char **argv)
     CHECK(status == SS_NORMAL, "console is assignable again once its owner is gone");
     memset(&info, 0, sizeof(info));
     (void)vms_kif_getdvi_devnam(CONSOLE, &info);
+    /* negctl-knockon: devtab-owner-not-recorded */
     CHECK(info.owner_pid == self_vms_pid && info.allocated == 0 && info.refcnt == 1,
           "oracle: a channel to the free console makes us its owner, unallocated (TTA0: l.1136-1138)");
 
@@ -494,6 +500,7 @@ int main(int argc, char **argv)
     CHECK(status == SS_NORMAL, "device is allocatable once its owner is gone");
     memset(&info, 0, sizeof(info));
     (void)vms_kif_getdvi_devnam(CONSOLE, &info);
+    /* negctl: devtab-alloc-not-recorded */
     CHECK(info.owner_pid == self_vms_pid && info.allocated == 1 && info.refcnt == 2,
           "oracle: allocating what we already own adds the allocation and one reference (OPA0: 2 -> 3, l.682)");
 

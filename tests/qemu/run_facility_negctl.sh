@@ -253,11 +253,22 @@ echo ""
 
 # A FLOOR, not a pin: adding a suite must never turn this red, deleting one
 # always must. Raised 13 -> 14 when vms-2b8 landed test_kmod_ident.c; raised
-# 14 -> 20 on vms-47b -- measured by running the derivation above against
-# this checkout (`ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c |
-# wc -l` = 20) and reading its output, not by adding to the old literal.
-if [ "$N_EXPECTED" -lt 20 ]; then
-    echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 20)."
+# 14 -> 20 on vms-47b; raised 20 -> 27 on vms-279 -- each time measured by
+# running the derivation above against the checkout (`ls
+# tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c | wc -l` = 27 here) and
+# reading its output, not by adding to the old literal. At 20 the floor had
+# gone stale by SEVEN suites, so seven could have been deleted under it.
+#
+# THIS LITERAL IS NO LONGER THE ONLY FLOOR, and it is the weaker one: it runs
+# only in QEMU, and per vms-b1f this driver does not run on the dev host at
+# all. The floor that binds everywhere is in facility_defects.sh's `coverage`
+# (invoked below, and from the ctest-time `selftest`), which requires every
+# in-scope suite source to carry at least one /* negctl: ... */ anchor --
+# derived from the sources, so deleting a suite source orphans the anchors and
+# reddens the STATIC gate too. Keep both: this one names the failure in the
+# terms the QEMU run understands.
+if [ "$N_EXPECTED" -lt 27 ]; then
+    echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 27)."
     echo "A suite source was deleted. Deleting the test that would expose a defect is"
     echo "not a way to make this gate pass."
     exit 1

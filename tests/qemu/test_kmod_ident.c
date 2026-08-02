@@ -839,8 +839,10 @@ int main(void)
           r1.username_after_priv_only[0] == '\0',
           "... and the refused privilege grant applied nothing at all");
 
+    /* negctl: ident-username-unguarded */
     CHECK(r1.setident_name_only == SS_NOPRIV,
           "USER NAME CLAUSE ISOLATED: own UIC, own mask, name \"SYSTEM\" -> SS$_NOPRIV");
+    /* negctl-knockon: ident-username-unguarded */
     CHECK(r1.username_after_name_only[0] == '\0' &&
           r1.uic_after_name_only == B_UIC &&
           r1.perm_after_name_only == (VMS_PRV_M_TMPMBX | VMS_PRV_M_NETMBX),
@@ -859,6 +861,7 @@ int main(void)
      * refusing everything, which proves nothing about enforcement. */
     CHECK(r1.setprv_authorized == SS_NORMAL,
           "$SETPRV WITHIN the authorized mask needs no SETPRV (oracle-pinned)");
+    /* negctl-knockon: ident-username-unguarded */
     CHECK(r1.setident_weaken == SS_NOPRIV,
           "an UNNAMED process cannot stamp an identity at all -- there is no "
           "name it is allowed to hold constant");
@@ -905,10 +908,13 @@ int main(void)
         } else {
             pthread_join(th, NULL);
 
+            /* negctl: pcb-per-thread */
             CHECK(obs.status == SS_NORMAL,
                   "a second thread of the process is known to the executive");
+            /* negctl: pcb-per-thread */
             CHECK(obs.vms_pid == a_vms_pid,
                   "... as the SAME process, not a second one (one PCB per process)");
+            /* negctl: pcb-per-thread */
             CHECK(strcmp(obs.username, A_USERNAME) == 0 &&
                   obs.uic == A_UIC && obs.perm_privs == A_PRIVS,
                   "... and sees the identity the other thread stamped");
@@ -937,12 +943,14 @@ int main(void)
           "a process WITHOUT SETPRV may re-stamp the identity it already has");
 
     status = vms_kif_setident("SYSTEM", A_UIC, A_PRIVS);
+    /* negctl: ident-username-unguarded */
     CHECK(status == SS_NOPRIV,
           "USER NAME CLAUSE ISOLATED: same UIC, same mask, different name "
           "-> SS$_NOPRIV");
 
     memset(&info, 0, sizeof(info));
     (void)vms_kif_getjpi_self(&info);
+    /* negctl-knockon: ident-username-unguarded */
     CHECK(strcmp(info.username, A_USERNAME) == 0 &&
           info.uic == A_UIC && info.perm_privs == A_PRIVS,
           "... and the executive still holds the name it authenticated");
@@ -966,9 +974,11 @@ int main(void)
 
     memset(&info, 0, sizeof(info));
     status = vms_kif_getjpi_pid(rd.vms_pid, &info);
+    /* negctl-knockon: proctab-crossgroup-identity */
     CHECK(status == SS_NOPRIV,
           "WORLD CLAUSE ISOLATED: the same cross-group read, now without "
           "WORLD -> SS$_NOPRIV");
+    /* negctl-knockon: proctab-crossgroup-identity */
     CHECK(info.username[0] == '\0' && info.uic == 0 && info.perm_privs == 0,
           "... and the refusal returns no part of the row");
 
@@ -992,6 +1002,7 @@ int main(void)
 
     memset(&info, 0, sizeof(info));
     (void)vms_kif_getjpi_self(&info);
+    /* negctl-knockon: ident-username-unguarded */
     CHECK(strcmp(info.username, A_USERNAME) == 0 && info.perm_privs == A_PRIVS,
           "the refused climb-back changed nothing");
 
@@ -1015,12 +1026,14 @@ int main(void)
     } else {
         CHECK(r2.bypid_status == SS_NORMAL,
               "another process resolves A's row in the executive");
+        /* negctl-knockon: ident-username-unguarded */
         CHECK(strcmp(r2.bypid_username, A_USERNAME) == 0,
               "A WRITES the user name, B READS it (identity is executive-resident)");
         CHECK(r2.bypid_uic == A_UIC,
               "B sees the UIC A established, not the one A registered with");
         CHECK(r2.bypid_perm_privs == A_PRIVS,
               "B sees A's authorized privilege mask");
+        /* negctl-knockon: ident-username-unguarded */
         CHECK(r2.byname_status == SS_NORMAL &&
               strcmp(r2.byname_username, A_USERNAME) == 0,
               "B resolves A BY NAME within the UIC group and sees the same identity");
@@ -1032,8 +1045,10 @@ int main(void)
          * This is the adversary's round-2 probe: it read a row outside
          * its own group and got uic and user name out of it.
          * ------------------------------------------------------------ */
+        /* negctl-knockon: proctab-crossgroup-identity */
         CHECK(r2.outgrp_bypid_status == SS_NOPRIV,
               "an unprivileged process is REFUSED a process in another UIC group");
+        /* negctl-knockon: proctab-crossgroup-identity */
         CHECK(r2.outgrp_bypid_username[0] == '\0' && r2.outgrp_bypid_uic == 0,
               "... and gets no part of that process's identity");
 
@@ -1055,6 +1070,7 @@ int main(void)
          * ------------------------------------------------------------ */
         CHECK(r2.scan_terminator == SS_NONEXPR,
               "the unprivileged scan terminates with SS$_NONEXPR");
+        /* negctl-knockon: ident-username-unguarded */
         CHECK(r2.scan_saw_a && strcmp(r2.scan_a_username, A_USERNAME) == 0 &&
               r2.scan_a_uic == A_UIC,
               "the scan returns a SAME-GROUP row in full (no privilege needed)");
@@ -1062,6 +1078,7 @@ int main(void)
               "the scan still LISTS the out-of-group process (VMS shows it)");
         CHECK(r2.scan_d_vms_pid == rd.vms_pid,
               "... under its real VMS process ID");
+        /* negctl-knockon: proctab-crossgroup-identity */
         CHECK(r2.scan_d_username[0] == '\0' && r2.scan_d_uic == 0 &&
               r2.scan_d_perm_privs == 0,
               "... but WITHOUT its user name, UIC or privilege mask");
@@ -1078,6 +1095,8 @@ int main(void)
         CHECK(rd.assign_status == SS_NORMAL && rd.setterm_status == SS_NORMAL,
               "D genuinely bound OPA0: as its terminal (precondition -- "
               "an unbound D would make the next check vacuous)");
+        /* negctl: proctab-terminal-redaction-bypassed */
+        /* negctl-knockon: proctab-crossgroup-identity */
         CHECK(r2.scan_d_terminal[0] == '\0',
               "TERMINAL REDACTION: the scan withholds D's terminal too, "
               "even though D genuinely bound one -- a caller that may not "

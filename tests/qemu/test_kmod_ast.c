@@ -92,6 +92,7 @@ int main(void) {
 
     /* 2. Disable again - should return WASCLR (already disabled) */
     setast_st = vms_kif_setast(0);
+    /* negctl: ast-setast-disable */
     CHECK(setast_st == SS_WASCLR, "disable again: prev state was disabled");
 
     /* 3. Declare an AST while delivery is disabled */
@@ -104,6 +105,7 @@ int main(void) {
 
     /* 5. Re-enable AST delivery */
     setast_st = vms_kif_setast(1);
+    /* negctl: ast-setast-disable */
     CHECK(setast_st == SS_WASCLR,
           "SETAST(enable) returns WASCLR (== prev state was disabled)");
 

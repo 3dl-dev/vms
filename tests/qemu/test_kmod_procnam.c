@@ -319,6 +319,7 @@ int main(int argc, char **argv)
 
     /* 4. Uniqueness is enforced across processes, not within one. */
     status = vms_kif_setprn(CHILD_NAME);
+    /* negctl: proctab-duplicate-name */
     CHECK(status == SS_DUPLNAM,
           "duplicate process name rejected with SS$_DUPLNAM");
 

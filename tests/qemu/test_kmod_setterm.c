@@ -305,12 +305,14 @@ int main(int argc, char **argv)
           "A took a channel to the console");
     CHECK(post.setterm_status == SS_NORMAL,
           "A recorded that channel's device as its terminal");
+    /* negctl-knockon: setterm-binding-not-recorded */
     CHECK(strcmp(post.terminal, CONSOLE_DEVNAM) == 0,
           "A's own row now names the console");
 
     /* THE ASSERTION THE WHOLE FILE EXISTS FOR. */
     memset(&info, 0, sizeof(info));
     status = vms_kif_getjpi_pid(pre.vms_pid, &info);
+    /* negctl: setterm-binding-not-recorded */
     CHECK(status == SS_NORMAL && strcmp(info.terminal, CONSOLE_DEVNAM) == 0,
           "A-WRITES/B-READS: B reads OPA0: out of A's row -- a binding a "
           "different process made, which a per-process binding could not show");
@@ -329,6 +331,7 @@ int main(int argc, char **argv)
     n = read(pipefd[0], &execed, sizeof(execed));
     CHECK(n == (ssize_t)sizeof(execed) && execed.phase == 1,
           "the re-execed image reported in");
+    /* negctl-knockon: setterm-binding-not-recorded */
     CHECK(strcmp(execed.terminal, CONSOLE_DEVNAM) == 0,
           "the freshly activated image still finds its terminal -- nothing "
           "was carried across execve() in userspace");
@@ -355,6 +358,7 @@ int main(int argc, char **argv)
     CHECK(vms_kif_setterm(chan) == SS_NORMAL,
           "B can bind it");
     memset(&info, 0, sizeof(info));
+    /* negctl-knockon: setterm-binding-not-recorded */
     CHECK(vms_kif_getjpi_self(&info) == SS_NORMAL &&
           strcmp(info.terminal, CONSOLE_DEVNAM) == 0,
           "and B's row now names the console");
@@ -370,6 +374,7 @@ int main(int argc, char **argv)
         struct vms_devinfo dinfo;
         memset(&dinfo, 0, sizeof(dinfo));
         status = vms_kif_getdvi_chan(chan, &dinfo);
+        /* negctl-knockon: setterm-binding-not-recorded */
         CHECK(status == SS_NORMAL && strcmp(dinfo.devnam, info.terminal) == 0,
               "the bound name is the device table's name for that channel");
     }

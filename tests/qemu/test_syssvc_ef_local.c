@@ -138,18 +138,23 @@ int main(void)
 
     /* C1: sys$clref - clear the flag. */
     status = sys$clref(TEST_EFN);
+    /* negctl-knockon: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$clref(1) cleared the flag");
 
     /* C2: sys$readef on the cleared flag reports WASCLR. */
     status = sys$readef(TEST_EFN, &ef_state);
+    /* negctl-knockon: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$readef(1) succeeded on the cleared flag");
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS$_WASCLR, "sys$readef(1) reported WASCLR for the cleared flag");
     /* ADDED (vms-2a8): the old program read ef_state and never checked it. */
+    /* negctl-knockon: bind-client-no-register */
     CHECK((status == SS$_WASCLR) && !(ef_state & (1u << TEST_EFN)),
           "the cluster state word agrees with the status: flag 1's bit is CLEAR");
 
     /* C3: sys$setef - set the flag. */
     status = sys$setef(TEST_EFN);
+    /* negctl: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$setef(1) set the flag");
     /*
      * Written exactly as the conformance program wrote it: SS$_WASCLR is 1
@@ -157,24 +162,31 @@ int main(void)
      * service reported one of the two documented previous states. C4/C5
      * below are what actually discriminate.
      */
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS$_WASCLR || status == SS$_WASSET,
           "sys$setef(1) reported a documented previous state (WASCLR or WASSET)");
 
     /* C4: sys$readef on the set flag reports WASSET -- the discriminator. */
     status = sys$readef(TEST_EFN, &ef_state);
+    /* negctl-knockon: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$readef(1) succeeded after the flag was set");
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS$_WASSET, "sys$readef(1) reported WASSET after the flag was set");
     /* ADDED (vms-2a8): the state word must move with the flag. */
+    /* negctl-knockon: bind-client-no-register */
     CHECK(ef_state & (1u << TEST_EFN),
           "the cluster state word agrees with the status: flag 1's bit is SET");
 
     /* C5: sys$setef on an already-set flag reports WASSET. */
     status = sys$setef(TEST_EFN);
+    /* negctl-knockon: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$setef(1) succeeded on the already-set flag");
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS$_WASSET, "sys$setef(1) on an already-set flag reported WASSET");
 
     /* C6: sys$waitfr on a set flag returns immediately. */
     status = sys$waitfr(TEST_EFN);
+    /* negctl-knockon: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$waitfr(1) returned for the already-set flag");
     /*
      * ADDED (vms-2a8): $WAITFR must not consume the flag. VMS event flags are
@@ -183,15 +195,20 @@ int main(void)
      * was set, the flag is still set.
      */
     status = sys$readef(TEST_EFN, &ef_state);
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS$_WASSET, "sys$waitfr(1) left the flag SET -- it is not a counting semaphore");
 
     /* C7: sys$clref on the set flag reports WASSET. */
     status = sys$clref(TEST_EFN);
+    /* negctl-knockon: bind-client-no-register */
     CHECK($VMS_STATUS_SUCCESS(status), "sys$clref(1) succeeded on the set flag");
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS$_WASSET, "sys$clref(1) reported WASSET for the previously-set flag");
 
     /* C8: and the flag really is clear afterwards. */
     status = sys$readef(TEST_EFN, &ef_state);
+    /* negctl: eflag-clref-noop */
+    /* negctl-knockon: bind-client-no-register */
     CHECK(status == SS$_WASCLR, "sys$readef(1) reported WASCLR after the clear");
 
     printf("=== test_syssvc_ef_local: %d passed, %d failed ===\n", pass, fail);

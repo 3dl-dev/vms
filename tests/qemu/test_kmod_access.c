@@ -159,6 +159,7 @@ int main(void)
           "register process");
 
     memset(&gm, 0, sizeof(gm));
+    /* negctl: getmode-buffer-not-written */
     CHECK(ioctl(fd, VMS_IOCTL_GETMODE, &gm) == 0 && gm.mode == PSL_C_USER,
           "a process starts in USER mode");
 
@@ -183,6 +184,7 @@ int main(void)
      * "... and the mode really returned to USER" both correctly went red
      * -- the defect this rewrite closes. */
     memset(&gm, 0, sizeof(gm));
+    /* negctl: getmode-buffer-not-written */
     CHECK(ioctl(fd, VMS_IOCTL_GETMODE, &gm) == 0 && gm.mode == PSL_C_KERNEL,
           "... and the mode really changed");
 
@@ -203,6 +205,8 @@ int main(void)
      * memset(0) default, so this one was not vacuous by the same route --
      * but not being exploitable by luck is not the same as being correct. */
     memset(&gm, 0, sizeof(gm));
+    /* negctl: getmode-buffer-not-written */
+    /* negctl: kif-setmode-always-kernel */
     CHECK(ioctl(fd, VMS_IOCTL_GETMODE, &gm) == 0 && gm.mode == PSL_C_USER,
           "... and the mode really returned to USER");
 
@@ -241,12 +245,17 @@ int main(void)
           "an unprivileged process may register with the executive");
     CHECK(cr.chkpriv_cmkrnl == SS_NOPRIV,
           "an unprivileged process is NOT derived CMKRNL");
+    /* negctl: access-mode-escalation */
     CHECK(cr.setmode_kernel == SS_NOPRIV,
           "KERNEL mode DENIED without CMKRNL (SS$_NOPRIV)");
+    /* negctl: access-mode-escalation */
+    /* negctl: getmode-buffer-not-written */
     CHECK(cr.getmode_ok && cr.mode_after == PSL_C_USER,
           "... and the mode is still USER after the denied escalation");
+    /* negctl-knockon: access-mode-escalation */
     CHECK(cr.setprv_cmkrnl != SS_NORMAL,
           "an unprivileged process cannot $SETPRV itself CMKRNL");
+    /* negctl-knockon: access-mode-escalation */
     CHECK(cr.chkpriv_after == SS_NOPRIV,
           "... and still does not hold CMKRNL afterwards");
 

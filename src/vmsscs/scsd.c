@@ -688,6 +688,12 @@ struct peer_state {
     long     psc_gus_avail;        /* UNIT AVAILABLE (status 4) responses seen */
     char     psc_lookup_name[16];  /* SYSAP name of the outstanding PS lookup (for retx rebuild) */
     struct timespec psc_last_tx;   /* CLOCK_MONOTONIC of the outstanding PS drive frame */
+    /* vms-2f3 step 4: monotonic ms at which the CM config exchange completed.
+     * The disk-discovery ungate times out against this -- see the PSCUNGATE
+     * block in the main loop. Set unconditionally next to cm_config_sent,
+     * NOT reusing cfg_ms, which is only stamped when a frame actually went
+     * out and is therefore 0 on the pure-server path. */
+    uint64_t psc_gate_ms;
     unsigned psc_retx;             /* retransmits of the current PS step (cap = JOIN_RETX_MAX) */
     /* --- vms-760: the NEW->MEMBER join SEQUENCER. The joiner presents the FULL
      * dir-CLIENT connection-set in strict stop-and-wait order on the ONE shared
@@ -1329,6 +1335,7 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     }
 
     ps->cm_config_sent = 1;
+    ps->psc_gate_ms = monotonic_ms(); /* vms-2f3: disk-discovery ungate timeout base */
     /* vms-760: remember which VC carried it so the deferred op 0x02 rides the same one. */
     if (sent > 0) {
         ps->cfg_sent = 1;
@@ -2318,6 +2325,20 @@ int main(int argc, char **argv)
      * the wire) -- static to keep it off the loop's stack frame. */
     static uint8_t pframe[SCS_HELLO_PADDED_MAX_FRAME];
     struct timespec last_hello = {0, 0};
+    /* vms-2f3 step 4: how long to wait for the member's op 6 before starting the
+     * disk-discovery run anyway. Default 2000 ms sits inside the 1.4-4.4 s window
+     * a real joiner uses between op 0x01 and op 0x02 (sec 4c.8). */
+    unsigned long diskrun_gate_ms = 2000UL;
+    {
+        const char *e = getenv("OVMX_DISKRUN_GATE_MS");
+        if (e != NULL && *e != '\0') {
+            unsigned long v = strtoul(e, NULL, 10);
+            if (v > 0UL) {
+                diskrun_gate_ms = v;
+            }
+        }
+    }
+    long psc_ungated = 0;
 
     while (!g_stop) {
         if (emit_hello) {
@@ -2385,6 +2406,60 @@ int main(int argc, char **argv)
                            ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
                            ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
                            ps->vc.retransmit_count);
+                    fflush(stdout);
+                }
+            }
+        }
+
+        /* --- vms-2f3 step 4: UNGATE the disk-discovery run from the member's op 6.
+         *
+         * The pure-server disk-CLIENT machine (OUR SCS$DIRECTORY connect ->
+         * MSCP$DISK lookup -> SCC/GUS walk) is started in exactly two places and
+         * BOTH require ps->psc_credit_done, which is set ONLY by an inbound op 6
+         * addressed to SCS_DIR_OVMX_CONID. On a REJOIN that op 6 never arrives --
+         * 0 of 3 peers send it (spec/handoff sec 4d.5) -- so a returning identity
+         * never performs the disk discovery that sec 4c.8 shows every real joiner
+         * runs in the 1.4-4.4 s between its op 0x01 and its op 0x02. Measured on
+         * this lab: PSCLIENT fires 33 times on a join and 0 times on a rejoin.
+         *
+         * Sec 4e.3 added peer-side evidence that this window matters: during a
+         * refused rejoin the peer holds VMS$DISK_CL_DRVR in `con_sent` with a
+         * zero Remote Con. ID -- a connect request to us we never answered --
+         * where a successful join leaves MSCP$DISK `open`.
+         *
+         * So if the config exchange has completed and the op 6 has still not
+         * arrived after OVMX_DISKRUN_GATE_MS, start the run anyway. ADDITIVE:
+         * on every path where the op 6 does arrive (all fresh joins) the original
+         * trigger fires first and this block never runs.
+         *
+         * Kill-switch OVMX_NO_DISKRUN_UNGATE=1 restores the gated behaviour so
+         * this can be refuted by a matched control in the same session
+         * (guardrail 21). */
+        if (do_connect && getenv("OVMX_PURE_SERVER") != NULL &&
+            getenv("OVMX_NO_DISKRUN_UNGATE") == NULL) {
+            uint64_t now_ms = monotonic_ms();
+            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+                struct peer_state *ps = &peers[i];
+                if (!ps->in_use || !ps->cm_config_sent || ps->psc_gate_ms == 0) {
+                    continue;
+                }
+                if (ps->psc_credit_done || ps->psc_step != PSC_IDLE || ps->psc_dir_sent) {
+                    continue; /* the op 6 came, or the run is already going */
+                }
+                if (now_ms - ps->psc_gate_ms < (uint64_t)diskrun_gate_ms) {
+                    continue;
+                }
+                if (ps_send_dir_connect(sock, (int)ifindex, ps,
+                                        our_hw_mac, our_src_logical)) {
+                    ps->psc_step = PSC_DIR_CONNECT;
+                    ps->psc_retx = 0;
+                    psc_ungated++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-PSCUNGATE, no op 6 on our server dir connection"
+                           " after %lums -- opened OUR SCS$DIRECTORY client connect"
+                           " local=0x%08X seq=%u (disk-discovery step 1, UNGATED)\n",
+                           (unsigned long)diskrun_gate_ms,
+                           (unsigned)OVMX_PS_DIR_CONID, ps->psc_dir_req_seq);
                     fflush(stdout);
                 }
             }
@@ -5001,6 +5076,7 @@ int main(int argc, char **argv)
          * coordinator declined us" and "nothing happened". */
         fprintf(stderr, "  CM-XITABORT-RECEIVED=%ld\n", cm_abort_seen);
         fprintf(stderr, "  MSCP-SERVER-ACCEPTS-SENT=%ld\n", mscp_srv_accepts);
+        fprintf(stderr, "  PSC-UNGATED=%ld\n", psc_ungated); /* vms-2f3 step 4 */
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (!peers[i].in_use) {
                 continue;

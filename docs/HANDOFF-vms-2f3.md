@@ -13,8 +13,8 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > symlink makes every hardcoded path in the 23 lab scripts resolve, so do not
 > edit them.
 >
-> **§5's step 4 (ungate the disk-discovery run) is still the only unrun step,
-> and §4e.3 gives it independent peer-side motivation.** §1–§4c exist so you do not re-derive
+> **§5's ordered plan is now FULLY EXECUTED — step 4 was run in §4e.4 and is
+> refuted as the gate. Do not re-propose it.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and
 > §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
 > the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
@@ -66,6 +66,8 @@ reset.**
 | we address the wrong node (`Curr. coord.` rotates) | **REFUTED both ways — forcing the real coordinator still refused; a fresh identity joins via a non-coordinator** | §4d.7 ⭐ |
 | a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
 | the VAXes have no oracle for their non-decisions | **REFUTED — SCACP, ANALYZE/ERROR_LOG and SDA SHOW CONNECTIONS all exist and were never used** | §4d.9 ⭐⭐⭐ |
+| **the disk-discovery run is the gate (§5 step 4)** | **REFUTED — ungated, it fires on a rejoin and is IGNORED; matched kill-switch control** | §4e.4 ⭐⭐⭐ |
+| we fail to INITIATE the joiner's disk run | **REFUTED — we now initiate it; the peer discards our SCS$DIRECTORY connect exactly like our `op 0x02`** | §4e.4 ⭐⭐⭐ |
 | **the peer's SDA can name why it refused us** | **REFUTED — `Rej/Disconn Reason` is 0 on every CDT, on the refusal too** | §4e.3 ⭐⭐ |
 | the peer holds the same connections either way | **REFUTED — a refused rejoin leaves `VMS$DISK_CL_DRVR` in `con_sent` and `SCS$DIR_LOOKUP` in `disc_sent`; a join has `MSCP$DISK` + `SCS$DIRECTORY` OPEN** | §4e.3 ⭐⭐ |
 | the bug is host- or arch-specific | **REFUTED — reproduces identically on x86_64 `workshop`, bracketed 3 joins / 2 refusals** | §4e.2 |
@@ -1142,9 +1144,80 @@ enough) so `con_sent`'s arrival can be timed against our `op 0x02`.
 
 ---
 
+### 4e.4 ⭐⭐⭐ STEP 4 IS EXECUTED — the disk-discovery run is ungated, and it does NOT admit us
+
+**The last unrun step of §5's ordered plan has been run. It is refuted as the
+gate — the fifth confident candidate this item has killed — and the way it fails
+says more than the change itself.**
+
+**Where the gate actually was.** §4d.5 cites `scsd.c:2280–2305`; line numbers have
+drifted, and it is at **`scsd.c:2466–2484`**. The pure-server disk-CLIENT machine
+(our own `SCS$DIRECTORY` connect → `MSCP$DISK` lookup → SCC/GUS walk) has exactly
+**two** entry points, and both require `ps->psc_credit_done`, which is set in
+exactly **one** place: an inbound `op 6` addressed to `SCS_DIR_OVMX_CONID`.
+Grounded on this host before changing anything — `SCSD-I-PSCLIENT` fires **33
+times on a join and 0 times on a rejoin**.
+
+**The change.** A timer-driven fallback in the main loop: once the CM config
+exchange has completed and the `op 6` still has not arrived after
+`OVMX_DISKRUN_GATE_MS` (default 2000 ms, inside the 1.4–4.4 s window §4c.8 shows
+a real joiner using), open our own `SCS$DIRECTORY` client connect anyway. New
+counter `PSC-UNGATED`, new log line `SCSD-I-PSCUNGATE`, kill-switch
+**`OVMX_NO_DISKRUN_UNGATE=1`**.
+
+**It is genuinely additive.** On both fresh joins in the bracket, `PSC-UNGATED=0`
+— the `op 6` arrives and the original trigger wins the race, so the new path
+never executes on a working join.
+
+| run | identity | ungate | result | `PSC-UNGATED` | inbound `op 0x01` | `0x7b` retx |
+|---|---|---|---|---|---|---|
+| `w4A` | `OVMXW4`/1253 **fresh** | on | **JOINED** | 0 | — | — |
+| `w4B` | `OVMXW4` rejoin | **on** | **REFUSED** | **3** | **3** | **0** |
+| `w4C` | `OVMXW4` rejoin | **off** (kill-switch) | **REFUSED** | 0 | **9** | **6** |
+| `w5A` | `OVMXW5`/1254 **fresh** | on | **JOINED** (closing control) | 0 | — | — |
+
+**HOW it fails is the finding.** The run *starts* — three `PSCUNGATE`, one per
+peer, the first time OVMX has ever opened its own directory connection on a
+rejoin — and then **never advances past step 1**. `PSC_DIR_CONNECT` is
+retransmitted six times and is never accepted by anybody. The peer's CDT table
+is **unchanged** from §4e.3's refusal: `VMS$DISK_CL_DRVR` still `con_sent` with
+`Remote Con. ID 00000000`, `SCS$DIR_LOOKUP` still `disc_sent`,
+`Rej/Disconn Reason` still 0.
+
+**So the defect is not that OVMX fails to INITIATE the disk-discovery run.** We
+now initiate it and the peer ignores it. Our `SCS$DIRECTORY` CONNECT-REQUEST is
+dropped exactly the way our `op 0x02` is dropped. **This strengthens §4d.8 rather
+than competing with it:** a returning identity is not being declined at the
+connection manager — *every* new connection it attempts, to any SYSAP, is
+discarded on receipt.
+
+> ### ⭐ One real, matched-control-attributable behaviour change — and do not overread it
+> `w4B` vs `w4C` is one variable, same identity, same lab, back to back: with the
+> disk run started the peers **stop retransmitting** their `op 0x01`
+> (`0x7b` retransmits 6 → 0, inbound `op 0x01` 9 → 3). That is attributable to
+> the ungate and to nothing else, and §4d.10 established those retransmits exist
+> because the peer is transmitting into silence.
+>
+> **What it does NOT establish is that this is progress.** "The peer stopped
+> retransmitting because we finally answered" and "the peer stopped
+> retransmitting because it gave up sooner" both fit. Deciding it needs SCACP
+> (`tools/scacptrace.sh`) across the same matched pair — if the ungate is real
+> improvement the transmit window should stop collapsing.
+
+**KEPT** (guardrail 15, for the sixth time on this item). OVMX skipping the
+joiner's disk-discovery run was a real behavioural divergence from every real
+joiner, documented since §4c.8, and it was wrong independent of what it explains.
+Conditional, kill-switched, additive, and proven not to regress a fresh join by
+two controls in the same session.
+
+**The ordered plan of §5 is now fully executed.** Nothing in it remains unrun.
+
+---
+
 ## 5. ⚠ WHERE TO START NEXT SESSION
 
-> **⚠ THE ORDERED PLAN BELOW HAS BEEN EXECUTED THROUGH STEP 3 — see §4d.**
+> **⚠ THE ORDERED PLAN BELOW IS NOW FULLY EXECUTED — steps 0–3 in §4d, step 4
+> in §4e.4. Every step has been run and none was the gate.**
 > Step 0 grounded two fields and settled its own counter-evidence; steps 1–3
 > shipped in `e687c6b`; step 2 was then REFUTED as the gate by a matched
 > control. **Only step 4 (ungate the disk-discovery run) is unrun.** The rest of

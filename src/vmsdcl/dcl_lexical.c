@@ -14,6 +14,13 @@
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <dirent.h>
+/* <pwd.h> is no longer used by any live code in this file: lex_user() reads
+ * the executive's row and lex_identifier() reads neither the executive nor
+ * the host (it has nothing to read -- see vms-2f8). The include stays because
+ * tests/qemu/facility_defects.sh's dcl-fuser-host-login-name,
+ * dcl-fident-num2name-host-passwd and dcl-fident-name2num-host-passwd
+ * controls restore the getpwuid()/getpwnam() calls verbatim, and a mutation
+ * that will not compile is a broken fixture rather than a gate that bites. */
 #include <pwd.h>
 #include <fnmatch.h>
 #include <sys/statvfs.h>
@@ -2448,15 +2455,26 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
         } else if (strcmp(id_upper, "DEFAULT") == 0) {
             snprintf(result, result_size, "%d", (200 << 16) | 1); /* [200,1] */
         } else {
-            /* Try /etc/passwd lookup */
-            struct passwd *pw = getpwnam(id_str);
-            if (pw) {
-                /* Map uid,gid to VMS UIC format [group,member] */
-                snprintf(result, result_size, "%d",
-                         (int)((pw->pw_gid << 16) | (pw->pw_uid & 0xFFFF)));
-            } else {
-                snprintf(result, result_size, "0");
-            }
+            /*
+             * NO HOST PASSWD LOOKUP (vms-f39, CLAUDE.md Rule 10). This read:
+             *
+             *     struct passwd *pw = getpwnam(id_str);
+             *     if (pw) result = (pw->pw_gid << 16) | (pw->pw_uid & 0xFFFF);
+             *
+             * so F$IDENTIFIER("baron","NAME_TO_NUMBER") answered with the
+             * developer's Linux account dressed as a VMS UIC. A Linux account
+             * is not a VMS rights identifier and its uid/gid pair is not a
+             * UIC; on VMS this conversion is a lookup in the RIGHTS DATABASE,
+             * which OVMX does not have. Deleted, not replaced.
+             *
+             * THE MISS VALUE BELOW IS NOT SETTLED HERE. "0" is what this
+             * function already returned when the passwd lookup missed; it is
+             * KEPT, not re-chosen, and it is not pinned to the oracle. What
+             * VMS returns for an identifier absent from RIGHTSLIST, and
+             * whether OVMX should read SYSUAF's UIC field instead, are both
+             * vms-2f8's -- do not settle either by picking a value here.
+             */
+            snprintf(result, result_size, "0");
         }
     } else if (strcmp(conv, "NUMBER_TO_NAME") == 0) {
         /* Convert UIC number to username */
@@ -2467,16 +2485,25 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
         if (group == 1 && member == 4) {
             snprintf(result, result_size, "SYSTEM");
         } else {
-            /* Try /etc/passwd lookup by uid */
-            struct passwd *pw = getpwuid((uid_t)member);
-            if (pw) {
-                strncpy(result, pw->pw_name, result_size - 1);
-                result[result_size - 1] = '\0';
-                for (size_t j = 0; result[j]; j++)
-                    result[j] = (char)toupper((unsigned char)result[j]);
-            } else {
-                snprintf(result, result_size, "[%d,%d]", group, member);
-            }
+            /*
+             * The same deletion as NAME_TO_NUMBER above, and the site that
+             * kept vms-f39 alive through round 2: this ran
+             * getpwuid((uid_t)member) and answered with the HOST Linux
+             * account name, upcased. MEASURED on this repo's build host,
+             * before this change:
+             *
+             *   $ printf 'X = F$IDENTIFIER(1000,"NUMBER_TO_NAME")\nSHOW SYMBOL X\n' |
+             *       ./build/bin/DCL.EXE
+             *     X = "BARON"
+             *
+             * It sat 1840 lines below lex_user()'s comment declaring the
+             * class removed, in the same file, and was reported settled.
+             *
+             * The bracketed rendering below is what this function already
+             * produced when that lookup missed: kept, not chosen, and not
+             * pinned to the oracle (vms-2f8).
+             */
+            snprintf(result, result_size, "[%d,%d]", group, member);
         }
     } else {
         result[0] = '\0';

@@ -1497,9 +1497,21 @@ int cmd_logout(struct dcl_command *cmd)
 {
     (void)cmd;
     struct dcl_context *ctx = dcl_get_context();
-    /* No fabricated user name in the logout record or the OPCOM entry
-     * (vms-f42d) -- an operator log that names an unnamed process SYSTEM
-     * is worse than one that names it nothing. Same deletion as SUBMIT. */
+    /*
+     * The name the console line and the OPC record text carry is whatever
+     * ctx->username holds, including nothing: the
+     * `ctx->username[0] ? ctx->username : "SYSTEM"` fallback that stood here
+     * is deleted, not replaced (vms-f42d). Long form at lex_user() in
+     * src/vmsdcl/dcl_lexical.c.
+     *
+     * SCOPE, because the wording here got it wrong once: this variable is the
+     * console line and the OPC message TEXT. The user field of the OPCOM
+     * HEADER is a different value from a different file -- sys$sndopr builds
+     * it in src/libvms/syssvc/sys_operator.c -- and an earlier draft of this
+     * comment claimed the deletion covered "the logout record or the OPCOM
+     * entry" while that header was still being filled from getpwuid(getuid()).
+     * It was falsified by running LOGOUT and reading the log.
+     */
     const char *upper_user = ctx->username;
 
     struct timespec ts;

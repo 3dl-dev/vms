@@ -599,6 +599,31 @@ static char *const g_env[] = {
  */
 #define G_PWNAME "shipuser"
 
+/*
+ * THE UIC F$IDENTIFIER IS ASKED ABOUT, in both directions, and it is this
+ * scenario's own [G_GRP,G_MEM] -- so the staged passwd entry above is exactly
+ * what the deleted lookups would have found: getpwuid(G_MEM) resolves to
+ * G_PWNAME, and getpwnam(G_PWNAME) resolves to (G_GRP << 16) | G_MEM.
+ * G_UIC_STR is spelled out because it goes into a DCL command line; the two
+ * are checked against each other at run time rather than trusted to stay in
+ * step.
+ */
+#define G_UIC_NUM  (((unsigned)G_GRP << 16) | (unsigned)G_MEM)
+#define G_UIC_STR  "13762571"
+
+/*
+ * WHERE sys$sndopr'S RECORD LANDS. src/libvms/syssvc/sys_operator.c writes
+ * SYS$MANAGER:OPERATOR.LOG and falls back to /tmp/OPERATOR.LOG when that
+ * cannot be opened. SYS$MANAGER is SYS$SYSDEVICE:[SYS0.SYSCOMMON.SYSMGR]
+ * (src/vmslnm/lnm_defaults.c) and DKA0: is SYSDISK_MOUNT, so the primary is
+ * the path below. BOTH are staged and BOTH are read: which one wins is a
+ * property of the image, and a check that guessed wrong would pass by looking
+ * at an empty file.
+ */
+#define G_OPLOG_DIR   "/vms/SYS0/SYSCOMMON/SYSMGR"
+#define G_OPLOG_PRIM  G_OPLOG_DIR "/OPERATOR.LOG"
+#define G_OPLOG_FALL  "/tmp/OPERATOR.LOG"
+
 static int g_stage_files(void)
 {
     FILE *fp;
@@ -618,6 +643,21 @@ static int g_stage_files(void)
     mkdir(G_QDIR, 0777);
     chmod(G_QDIR, 0777);
 
+    /* Both candidate operator logs, emptied and made writable by an
+     * unprivileged process. Emptied because a record left by an earlier
+     * scenario would make the header assertions below true of somebody
+     * else's request. */
+    mkdir("/vms/SYS0", 0777);
+    mkdir("/vms/SYS0/SYSCOMMON", 0777);
+    mkdir(G_OPLOG_DIR, 0777);
+    chmod("/vms/SYS0", 0777);
+    chmod("/vms/SYS0/SYSCOMMON", 0777);
+    chmod(G_OPLOG_DIR, 0777);
+    fp = fopen(G_OPLOG_PRIM, "w");
+    if (fp) { fclose(fp); chmod(G_OPLOG_PRIM, 0666); }
+    fp = fopen(G_OPLOG_FALL, "w");
+    if (fp) { fclose(fp); chmod(G_OPLOG_FALL, 0666); }
+
     fp = fopen(G_LNXDIR "/JOB.TXT", "w");
     if (!fp) return -1;
     fputs("ovmx cb5 print job\n", fp);
@@ -631,6 +671,37 @@ static int g_stage_files(void)
     chmod(G_LNXDIR "/JOB.COM", 0666);
 
     return 0;
+}
+
+/*
+ * Read both candidate operator logs into one buffer. NUL bytes are turned
+ * into spaces: the OPC record body sys$sndopr copies is a binary opcdef
+ * struct, and a NUL landing in the buffer would end every strstr() below
+ * early -- i.e. would make the negative checks pass by seeing nothing.
+ */
+static size_t g_read_operator_log(char *out, size_t outsz)
+{
+    static const char *paths[2] = { G_OPLOG_PRIM, G_OPLOG_FALL };
+    size_t used = 0;
+    int i;
+
+    out[0] = '\0';
+    for (i = 0; i < 2; i++) {
+        FILE *fp = fopen(paths[i], "r");
+        size_t n;
+        if (!fp) continue;
+        n = fread(out + used, 1, outsz - 1 - used, fp);
+        fclose(fp);
+        used += n;
+        if (used >= outsz - 1) break;
+    }
+    out[used] = '\0';
+    {
+        size_t j;
+        for (j = 0; j < used; j++)
+            if (out[j] == '\0') out[j] = ' ';
+    }
+    return used;
 }
 
 static int run_g_subprocess(const char *script, char *out, size_t outsz)
@@ -748,6 +819,10 @@ static void scenario_g_unnamed_row_reports_nothing(void)
         "REPLY/ENABLE\n"
         "IDENT_U = F$USER()\n"
         "SHOW SYMBOL IDENT_U\n"
+        "IDENT_N = F$IDENTIFIER(" G_UIC_STR ",\"NUMBER_TO_NAME\")\n"
+        "SHOW SYMBOL IDENT_N\n"
+        "IDENT_V = F$IDENTIFIER(\"" G_PWNAME "\",\"NAME_TO_NUMBER\")\n"
+        "SHOW SYMBOL IDENT_V\n"
         "SHOW PROCESS\n"
         "LOGOUT\n";
 
@@ -815,6 +890,41 @@ static void scenario_g_unnamed_row_reports_nothing(void)
               "upcased or otherwise -- the vms-f39 defect exactly");
     }
 
+    /* --- F$IDENTIFIER (vms-f39, the site round 2 left alive) ---------- */
+    /*
+     * SAME DEFECT, SECOND FUNCTION, SAME FILE. lex_user() stopped answering
+     * with the host account name and lex_identifier() 1840 lines below it did
+     * not, and the round that fixed the first reported the class settled. The
+     * settling command, run on a clean archive of that branch:
+     *
+     *     printf 'X = F$IDENTIFIER(1000,"NUMBER_TO_NAME")\nSHOW SYMBOL X\n' \
+     *         | ./build/bin/DCL.EXE   ->   X = "BARON"
+     *
+     * G_SUB_PWNAM above already established that getpwuid(G_MEM) resolves in
+     * this process, so the negatives are about a name that existed and was
+     * reachable at the moment the question was asked.
+     */
+    CHECK(G_UIC_NUM == (unsigned)strtoul(G_UIC_STR, NULL, 10),
+          "G/F$IDENTIFIER: the UIC the script asks about is this scenario's "
+          "own [G_GRP,G_MEM] (fixture integrity -- the literal in the DCL "
+          "command and the staged passwd entry must be the same UIC)");
+    snprintf(want, sizeof(want), "IDENT_N = \"[%u,%u]\"\n",
+             (unsigned)G_GRP, (unsigned)G_MEM);
+    CHECK(strstr(outg, want) != NULL,
+          "G/F$IDENTIFIER: NUMBER_TO_NAME renders the UIC it was given, in "
+          "lex_identifier's own \"[%d,%d]\" format -- so the conversion ran "
+          "and answered, it did not fail out");
+    CHECK(strstr(outg, "IDENT_N = \"SHIPUSER\"") == NULL,
+          "G/F$IDENTIFIER: NUMBER_TO_NAME does NOT answer with the HOST Linux "
+          "account name for that uid, upcased -- the vms-f39 defect exactly");
+    CHECK(strstr(outg, "IDENT_V = 0   Hex = 00000000") != NULL,
+          "G/F$IDENTIFIER: NAME_TO_NUMBER answers 0 for a name OVMX holds no "
+          "identifier for, in SHOW SYMBOL's own integer format");
+    snprintf(nope, sizeof(nope), "IDENT_V = %u", G_UIC_NUM);
+    CHECK(strstr(outg, nope) == NULL,
+          "G/F$IDENTIFIER: NAME_TO_NUMBER does NOT build a UIC out of the "
+          "host passwd entry's uid/gid for that account");
+
     /* --- PRINT (vms-f42d) -------------------------------------------- */
     CHECK(strstr(outg, "%PRINT-S-QUEUED, job JOB.TXT") != NULL,
           "G/PRINT: the job really was queued (so the owner assertions below "
@@ -863,6 +973,46 @@ static void scenario_g_unnamed_row_reports_nothing(void)
           "\"  %s      logged out at\" format");
     CHECK(strstr(outg, "SYSTEM      logged out at") == NULL,
           "G/LOGOUT: the session is not logged out as SYSTEM");
+
+    /* --- THE OPCOM RECORD, read out of the log by a THIRD process ------
+     *
+     * The half round 2's cmd_logout comment CLAIMED and never looked at.
+     * REPLY/ENABLE and LOGOUT each send an OPC record through sys$sndopr,
+     * which stamps the header's user field itself in
+     * src/libvms/syssvc/sys_operator.c -- a different value, in a different
+     * file, from the ctx->username the DCL sites were fixed at. On a clean
+     * archive of work/vms-cb5-env2 that field still came from
+     * getpwuid(getuid()):
+     *
+     *     %%OPCOM, 01-AUG-2026 18:50:05.30, request 1 from user baron on node OVMX
+     *
+     * These assertions are made HERE, in the test process -- neither the
+     * session that owns the name nor the subprocess that wrote the record --
+     * over bytes that reached the filesystem. */
+    {
+        static char oplog[16384];
+        size_t oplen = g_read_operator_log(oplog, sizeof(oplog));
+
+        CHECK(oplen > 0,
+              "G/OPCOM: the subprocess's REPLY and LOGOUT records reached an "
+              "operator log at all (without this the name checks below would "
+              "pass by reading an empty file)");
+        CHECK(strstr(oplog, "%%OPCOM, ") != NULL &&
+              strstr(oplog, " on node OVMX") != NULL,
+              "G/OPCOM: what landed is sys$sndopr's OPCOM header, in its own "
+              "format");
+        CHECK(strstr(oplog, " from user  on node OVMX") != NULL,
+              "G/OPCOM: the header names NO user for a process the executive "
+              "has not named -- sys$sndopr reads the executive's row, not the "
+              "caller's PCB and not the passwd database");
+        CHECK(strstr(oplog, G_PWNAME) == NULL &&
+              strstr(oplog, "SHIPUSER") == NULL,
+              "G/OPCOM: the operator record does NOT name the HOST Linux "
+              "account -- the vms-f39 leak that survived in sys_operator.c");
+        CHECK(strstr(oplog, "from user SYSTEM") == NULL,
+              "G/OPCOM: the operator record does not name SYSTEM, which is "
+              "what VMS_USERNAME in this subprocess's environment says it is");
+    }
 }
 
 int main(void)

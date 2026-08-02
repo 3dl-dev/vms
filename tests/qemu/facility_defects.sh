@@ -233,7 +233,10 @@ dcl-logout-user-fabricated
 dcl-reply-operator-fabricated
 dcl-accounting-user-fabricated
 dcl-fuser-system-fabricated
-dcl-fuser-host-login-name"
+dcl-fuser-host-login-name
+dcl-fident-num2name-host-passwd
+dcl-fident-name2num-host-passwd
+opcom-header-host-login-name"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -2322,6 +2325,78 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    # -----------------------------------------------------------------------
+    # THE THREE HOST-IDENTITY LEAKS THE PER-SITE ROUND MISSED (vms-cb5 round 3,
+    # vms-f39).
+    #
+    # The two controls above cover lex_user(). They were written, and the class
+    # was declared settled, while the SAME host-passwd derivation was still
+    # live in lex_identifier() 1840 lines below it IN THE SAME FILE, and in
+    # sys$sndopr's OPCOM header in a different library. Neither was found by
+    # reading the five call sites the round was handed; both were found by
+    # running the product:
+    #
+    #   printf 'X = F$IDENTIFIER(1000,"NUMBER_TO_NAME")\nSHOW SYMBOL X\n' \
+    #       | ./build/bin/DCL.EXE                    ->  X = "BARON"
+    #   printf 'LOGOUT\n' | ./build/bin/DCL.EXE  then read the operator log
+    #       ->  %%OPCOM, ..., request 1 from user baron on node OVMX
+    #
+    # So these three exist to make the CLASS falsifiable rather than the site:
+    # one control per host derivation, per direction, per function, each naming
+    # only its own assertions.
+    # -----------------------------------------------------------------------
+    dcl-fident-num2name-host-passwd)
+        case "$_f" in
+        facility)     echo "F\$IDENTIFIER(n,\"NUMBER_TO_NAME\"), the UIC-to-identifier conversion (src/vmsdcl/dcl_lexical.c lex_identifier) -- its getpwuid(member) branch";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "F\$IDENTIFIER goes back to resolving a VMS UIC through the HOST passwd database and answering with the Linux account name, upcased -- measured as X = \"BARON\" on the build host. On VMS this conversion is a RIGHTSLIST lookup, and a Linux account is not a VMS rights identifier. It is a SEPARATE control from the two lex_user() ones because it is a separate FUNCTION, which the round that fixed lex_user() left untouched while reporting the class settled.";;
+        require_fail) cat <<'EOF'
+G/F$IDENTIFIER: NUMBER_TO_NAME does NOT answer with the HOST Linux account name for that uid, upcased -- the vms-f39 defect exactly
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    dcl-fident-name2num-host-passwd)
+        case "$_f" in
+        facility)     echo "F\$IDENTIFIER(name,\"NAME_TO_NUMBER\"), the identifier-to-UIC conversion (src/vmsdcl/dcl_lexical.c lex_identifier) -- its getpwnam() branch";;
+        targets)      echo "vmsdcl/dcl_lexical.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The reverse direction goes back to building a VMS UIC out of a passwd entry's uid and gid, so F\$IDENTIFIER(\"baron\",\"NAME_TO_NUMBER\") answers with the developer's Linux account expressed as a UIC. Separate from the NUMBER_TO_NAME control because it is a separate branch: deleting one leaves the other, which is exactly how this class kept surviving rounds that fixed it.";;
+        require_fail) cat <<'EOF'
+G/F$IDENTIFIER: NAME_TO_NUMBER does NOT build a UIC out of the host passwd entry's uid/gid for that account
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    opcom-header-host-login-name)
+        case "$_f" in
+        facility)     echo "the user field of sys\$sndopr's OPCOM header -- i.e. of every record OVMX writes to OPERATOR.LOG (src/libvms/syssvc/sys_operator.c get_current_username)";;
+        targets)      echo "libvms/syssvc/sys_operator.c";;
+        suites_red)   echo "test_syssvc_ident";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$sndopr goes back to naming the requester from getpwuid(getuid()) when the executive's row holds no name, so the operator log records the HOST Linux account as the VMS user who made the request -- measured as 'request 1 from user baron on node OVMX' after a plain LOGOUT. This is the AUDIT half of the class and it lives in a different library from the DCL sites, which is what a per-site round cannot reach: LOGOUT's own user name was fixed in dcl_cmd_process.c while this field, in the same record, stayed host-derived.";;
+        require_fail) cat <<'EOF'
+G/OPCOM: the header names NO user for a process the executive has not named -- sys$sndopr reads the executive's row, not the caller's PCB and not the passwd database
+G/OPCOM: the operator record does NOT name the HOST Linux account -- the vms-f39 leak that survived in sys_operator.c
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac
 }
@@ -2537,6 +2612,12 @@ apply_edit() {
         sed -i '/^static int lex_user(/,/^}$/ s|^        result\[0\] = .\\0.;$|        strncpy(result, "SYSTEM", result_size - 1); /* NEGCTL dcl-fuser-system-fabricated */|' "$_file";;
     dcl-fuser-host-login-name)
         sed -i '/^static int lex_user(/,/^}$/ s|^        result\[0\] = .\\0.;$|        { struct passwd *pw_ = getpwuid(getuid()); size_t i_ = 0; if (pw_) { for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); } result[i_] = 0; } /* NEGCTL dcl-fuser-host-login-name */|' "$_file";;
+    dcl-fident-num2name-host-passwd)
+        sed -i '/^static int lex_identifier(/,/^}$/ s|^            snprintf(result, result_size, "\[%d,%d\]", group, member);$|            { struct passwd *pw_ = getpwuid((uid_t)member); if (pw_) { size_t i_ = 0; for (; i_ < result_size - 1 \&\& pw_->pw_name[i_]; i_++) result[i_] = (char)toupper((unsigned char)pw_->pw_name[i_]); result[i_] = 0; } else { snprintf(result, result_size, "[%d,%d]", group, member); } } /* NEGCTL dcl-fident-num2name-host-passwd */|' "$_file";;
+    dcl-fident-name2num-host-passwd)
+        sed -i '/^static int lex_identifier(/,/^}$/ s|^            snprintf(result, result_size, "0");$|            { struct passwd *pw_ = getpwnam(id_str); if (pw_) { snprintf(result, result_size, "%d", (int)((pw_->pw_gid << 16) \| (pw_->pw_uid \& 0xFFFF))); } else { snprintf(result, result_size, "0"); } } /* NEGCTL dcl-fident-name2num-host-passwd */|' "$_file";;
+    opcom-header-host-login-name)
+        sed -i '/^static void get_current_username(/,/^}$/ s|^    strncpy(buf, info.username, bufsz - 1);$|    if (!info.username[0]) { struct passwd *pw_ = getpwuid(getuid()); if (pw_) { strncpy(buf, pw_->pw_name, bufsz - 1); buf[bufsz - 1] = 0; return; } } strncpy(buf, info.username, bufsz - 1); /* NEGCTL opcom-header-host-login-name */|' "$_file";;
 
     *)  echo "facility_defects.sh: unknown defect '$_d'" >&2; return 2;;
     esac

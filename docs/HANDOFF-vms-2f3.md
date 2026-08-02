@@ -31,9 +31,10 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > `tests/lab/README.md` — it is not a byte-level fidelity proof.
 >
 > **§5's ordered plan is now FULLY EXECUTED — step 4 was run in §4e.4 and is
-> refuted as the gate. Do not re-propose it.** **§4f is newer still: it proves
-> the deciding state is the CLUSTER's, not ours, and carries the first peer-side
-> view of a REAL node rejoining. Read §4f.4 for the named next experiment.** §1–§4c exist so you do not re-derive
+> refuted as the gate. Do not re-propose it.** **§4f–§4g are newer still: §4f proves the
+> deciding state is the CLUSTER's, not ours; §4g shows the peer asks for our disk
+> server, is told yes, and declines to connect. START AT §4g.5 — it names a
+> 4-minute experiment that needs no code.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and
 > §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
 > the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
@@ -85,6 +86,10 @@ reset.**
 | we address the wrong node (`Curr. coord.` rotates) | **REFUTED both ways — forcing the real coordinator still refused; a fresh identity joins via a non-coordinator** | §4d.7 ⭐ |
 | a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
 | the VAXes have no oracle for their non-decisions | **REFUTED — SCACP, ANALYZE/ERROR_LOG and SDA SHOW CONNECTIONS all exist and were never used** | §4d.9 ⭐⭐⭐ |
+| the peer's `MSCP$DISK` connect arrives and we discard it (5th deafness bug) | **REFUTED — it never arrives; the gate at scsd.c:4617 already accepts 0x4b/0x5b/0x7b** | §4g.3 ⭐⭐⭐ |
+| **the peer declines to connect to a disk server it just confirmed exists** | **GROUNDED — absent from the peer's OWN send_seq numbering, so nothing was dropped** | §4g.2 ⭐⭐⭐ |
+| the disk connection is downstream of admission | **REFUTED — it precedes `XITDONE` in all 5 joined runs measured** | §4g.1 ⭐⭐ |
+| OVMX-directed traffic collapse shows targeted silence | **REFUTED — peer↔peer traffic falls MORE (9.5x vs 8.6x)** | §4g.4 |
 | **OVMX's own persisted state causes the refusal** | **REFUTED — the same identity + sidecar joins a virgin cluster in 15 s** | §4f.2 ⭐⭐⭐ |
 | the deciding state might be in the peer's CDT table | **REFUTED — a departed REAL node leaves zero CDTs; nine empty samples** | §4f.3 ⭐⭐⭐ |
 | **the refusal is per-cluster, peer-side state** | **CONFIRMED — positively, for the first time; one cluster refuses while another admits** | §4f.2 ⭐⭐⭐ |
@@ -1383,6 +1388,121 @@ discard it (a fifth deafness bug, cf. §4d.10's `0x7b`) or never arrives at all.
 > decoder (`tools/cm.py`, `docs/clean-room/tools/af2scan.py`) and is therefore a
 > **delegated capture-agent task**, not a grep — dispatch it per §0's doctrine
 > rather than reading the bytes in the orchestrator.
+
+---
+
+## 4g. ⭐⭐⭐ THE PEER ASKS FOR OUR DISK SERVER, IS TOLD YES, AND DECLINES TO CONNECT
+
+**Delegated capture analysis (§0 doctrine — the orchestrator read no packet
+bytes) against the matched lab-1 pair `d94-w3A` (JOINED) and `d94-w1C`
+(REFUSED).** This closes the question §4f.4 named and it does not close it the
+way that section guessed.
+
+### 4g.1 The reference signature, and the fact that it is a PRECONDITION
+
+The frame that produces `SCSD-I-MSCPSRV` is an inbound CONNECT-REQUEST:
+`msgtype@30 = 0x5b`, `len 124`, `fmt@31 = 0x13`, `op@60 = 0`, `rcid@64 = 0`,
+**`bytes[76:92] = "MSCP$DISK       "`** (the target SYSAP — our MSCP server) and
+**`bytes[92:108] = "VMS$DISK_CL_DRVR"`** (the peer's local process). In `w3A`
+three arrive, one per peer, at +0.23 / +0.93 / +1.03 s, and OVMX answers each
+within 5–12 ms.
+
+**It precedes admission in every successful run measured** — not just `w3A`:
+
+| joined run | MSCP$DISK accepts BEFORE `XITDONE` | first accept, relative to admission |
+|---|---|---|
+| `w1A` | 6 | −14.5 s |
+| `w2A` | 3 | −8.2 s |
+| `w3A` | 3 | −8.4 s |
+| `w4A` | 3 | −7.0 s |
+| `w5A` | 6 | −13.5 s |
+
+Three or six — one or two per peer. **Every refused run has zero.** Together with
+§4f.3 (a real returning VAX has `MSCP$DISK` *open* at the moment its membership
+request is processed) the disk connection is a **precondition of admission**, not
+a consequence of it. This is the §4d.9 cause-or-effect question, resolved the
+other way for this particular counter.
+
+### 4g.2 ⭐⭐⭐ On a rejoin the frame NEVER ARRIVES — and it is not our deafness
+
+Searched over all 1626 `0x6007` frames / 169 s of `d94-w1C`:
+
+- frames carrying `"VMS$DISK_CL_DRVR"`: **0** (`w3A`: 56)
+- connect-requests (`op@60 == 0 && rcid@64 == 0`) of ANY msgtype: only
+  `SCS$DIRECTORY`×3 and `VMS$VAXcluster`×3. **Zero `MSCP$DISK`.** (`w3A`: 56)
+
+**The negative is trustworthy, and this is the part that matters.** Each peer's
+`send_seq` stream to OVMX in `w1C` runs **1..11 with no gaps**. Where `w3A`'s
+peer spends `ss=6` on the `MSCP$DISK` CONNECT-REQUEST, `w1C`'s peer spends `ss=6`
+on the `VMS$VAXcluster` lookup. **The step is absent from the peer's own
+numbering** — so nothing was lost on the wire, dropped by the capture, or
+discarded by us.
+
+**And the peer had already been told the server was there.** In `w1C` the peer
+runs the identical directory dialogue minus that one message: `ss=3`
+`MSCP$TAPE` lookup, `ss=4` and `ss=5` `MSCP$DISK` lookups — **and OVMX answered
+both AFFIRMATIVE** (frames 174/178). A byte-diff of OVMX's affirmative response
+against the successful run's differs **only** in Con.IDs, one datagram-ID byte at
+`@28`, and the incarnation at `@36`.
+
+> **The peer asked whether we have an MSCP$DISK server, we said yes, and it
+> declined to connect anyway.**
+
+### 4g.3 The "fifth deafness bug" is REFUTED — there is no gate to fix
+
+`scsd.c:4617–4629` already accepts all three msgtypes
+(`buf[30] ∈ {0x4b, 0x5b, 0x7b}`) and matches
+`memcmp(buf+76, "MSCP$DISK       ", 16) == 0`. It fired 39× in `w3A`. **Nothing
+reaches it in `w1C`.** §4f.4 expected a `0x7b`-style deaf gate (§4d.10); there
+isn't one. Do not go looking for it again.
+
+Downstream and consistent: OVMX's own client-side disk discovery is gated on the
+peer's `op=6` (§4e.4), which rides the peer's `ss=14` — and `w1C`'s peers stop at
+`ss=11`, so it never arrives either. Both the inbound and outbound halves of the
+disk phase are missing for the same upstream reason.
+
+### 4g.4 ⚠ ONE AGENT CLAIM CHECKED AND CORRECTED
+
+The analysis reported inbound frame counts and concluded the OVMX-directed
+traffic collapse was "far steeper" than the lab's:
+
+| | JOINED `w3A` | REFUSED `w1C` | ratio |
+|---|---|---|---|
+| inbound to OVMX | 651 | 76 | **8.6×** |
+| peer↔peer (neither endpoint OVMX) | 993 | 105 | **9.5×** |
+
+**Its own numbers say the opposite** — peer↔peer fell slightly *more*. The whole
+lab is quieter during a refused run because no cluster state transition happens,
+and the OVMX-directed drop is unremarkable against that background. **Do not cite
+the traffic collapse as evidence of targeted silence.** (Guardrail 13: verify an
+agent's claim against a cheaper oracle — here, arithmetic — before building on
+it.)
+
+### 4g.5 Where this leaves it — and the exact next experiment
+
+The decision is made **by the peer, before it would connect to our disk server**,
+and is visible as a missing step in the peer's own send sequence. It is not in a
+frame we send, not a byte we get wrong, and not something we fail to answer.
+
+**The agent's one INFERRED explanation is testable and it is the next
+experiment.** It proposes that the peer's disk class driver still holds a CDT for
+this identity from the prior membership, believes a connect is already
+outstanding, and therefore never issues a new one — which is exactly the
+`VMS$DISK_CL_DRVR` / `con_sent` / `Remote Con. ID 00000000` CDT §4e.3 observed.
+
+**§4f.3 already supplies the control, and the asymmetry is the whole finding:**
+after a REAL node dies, the peer holds **zero** CDTs for it — nine consecutive
+empty samples across the dead window. If OVMX's identity instead leaves a
+`VMS$DISK_CL_DRVR` CDT stranded in `con_sent` across our death, **that is the
+per-identity state §4f.2 proved must exist**, in a form we can see and name.
+
+> **RUN THIS FIRST NEXT SESSION — it is ~4 minutes and needs no code.** Poll
+> `SHOW CONNECTIONS/NODE=<ovmx-id>` on a peer during the window when OVMX is
+> DEAD, between a successful join and the refused rejoin — the exact poll
+> `lab2rejoin.sh` already performs for VAX2. Two outcomes, both decisive:
+> **CDTs present** → the state is named, and the question becomes what clears a
+> real node's and not ours. **CDTs absent** → the agent's inference is dead and
+> the state is in the cluster block, per §4f.3.
 
 ---
 

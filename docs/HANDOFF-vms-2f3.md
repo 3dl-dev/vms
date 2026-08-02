@@ -33,8 +33,9 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > **§5's ordered plan is now FULLY EXECUTED — step 4 was run in §4e.4 and is
 > refuted as the gate. Do not re-propose it.** **§4f–§4g are newer still: §4f proves the
 > deciding state is the CLUSTER's, not ours; §4g shows the peer asks for our disk
-> server, is told yes, and declines to connect. START AT §4g.5 — it names a
-> 4-minute experiment that needs no code.** §1–§4c exist so you do not re-derive
+> server, is told yes, and declines to connect. START AT §4g.7 — the CDT layer is
+> now excluded for BOTH a real node and OVMX, and the next probe is aimed at the
+> CSB layer.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and
 > §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
 > the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
@@ -86,6 +87,7 @@ reset.**
 | we address the wrong node (`Curr. coord.` rotates) | **REFUTED both ways — forcing the real coordinator still refused; a fresh identity joins via a non-coordinator** | §4d.7 ⭐ |
 | a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
 | the VAXes have no oracle for their non-decisions | **REFUTED — SCACP, ANALYZE/ERROR_LOG and SDA SHOW CONNECTIONS all exist and were never used** | §4d.9 ⭐⭐⭐ |
+| the peer holds a stale `VMS$DISK_CL_DRVR` CDT across our death | **REFUTED — 3 dead OVMX identities leave ZERO CDTs; live control shows 4** | §4g.6 ⭐⭐ |
 | the peer's `MSCP$DISK` connect arrives and we discard it (5th deafness bug) | **REFUTED — it never arrives; the gate at scsd.c:4617 already accepts 0x4b/0x5b/0x7b** | §4g.3 ⭐⭐⭐ |
 | **the peer declines to connect to a disk server it just confirmed exists** | **GROUNDED — absent from the peer's OWN send_seq numbering, so nothing was dropped** | §4g.2 ⭐⭐⭐ |
 | the disk connection is downstream of admission | **REFUTED — it precedes `XITDONE` in all 5 joined runs measured** | §4g.1 ⭐⭐ |
@@ -1496,13 +1498,52 @@ empty samples across the dead window. If OVMX's identity instead leaves a
 `VMS$DISK_CL_DRVR` CDT stranded in `con_sent` across our death, **that is the
 per-identity state §4f.2 proved must exist**, in a form we can see and name.
 
-> **RUN THIS FIRST NEXT SESSION — it is ~4 minutes and needs no code.** Poll
-> `SHOW CONNECTIONS/NODE=<ovmx-id>` on a peer during the window when OVMX is
-> DEAD, between a successful join and the refused rejoin — the exact poll
-> `lab2rejoin.sh` already performs for VAX2. Two outcomes, both decisive:
-> **CDTs present** → the state is named, and the question becomes what clears a
-> real node's and not ours. **CDTs absent** → the agent's inference is dead and
-> the state is in the cluster block, per §4f.3.
+### 4g.6 ⭐⭐ THAT EXPERIMENT WAS RUN IMMEDIATELY — and the inference is DEAD
+
+It needed no lab run at all: lab-1's VAXes were up and three OVMX identities had
+already joined and died. `SHOW CONNECTIONS/NODE=` on VAX3 for each:
+
+| subject | state | CDTs held by VAX3 |
+|---|---|---|
+| `OVMXW5` | joined, then died | **none** |
+| `OVMXW3` | joined, then died | **none** |
+| `OVMXW1` | joined, died, then refused twice | **none** |
+| `VAX1` | live member (positive control) | 4 — `MSCP$DISK`, `SCA$TRANSPORT`, `VMS$DISK_CL_DRVR`, `VMS$VAXcluster`, all `open` |
+
+**The peer holds no stranded CDT for a dead OVMX identity — exactly as it holds
+none for a dead real node (§4f.3).** So the agent's INFERRED explanation ("the
+peer's disk class driver still believes a connect is outstanding") is refuted,
+and the `VMS$DISK_CL_DRVR`/`con_sent` CDT of §4e.3 is **created during the
+attempt, not inherited across our death**.
+
+**What survives is sharper for it.** §4f.2 proved positively that the deciding
+state is per-cluster and identity-keyed. §4f.3 and §4g.6 now jointly establish
+that it is **not in the CDT table for anyone** — real node or OVMX. It is in the
+cluster-block / CSB layer, which is where §4d.6 and §4d.8 pointed all along.
+
+### 4g.7 The next experiment, re-aimed at the CSB layer
+
+There is a visible asymmetry already sitting in `SHOW CLUSTER` and nobody has
+tested it as the mechanism. After a real VAX2 dies it is **removed** — `%CNXMAN,
+removed from VAXcluster system VAX2`, and its CSB goes with it (§4f.3). After an
+OVMX daemon dies, lab-1's cluster table still lists **`OVMXW1 | VMX V0.1 |
+BRK_NEW`** and **`OVMXW2 | VMX V0.1 | BRK_NON`** — stale CSBs for dead identities
+that never clear. §4d.1 saw the same thing on VAX1 (`OVMXR1`, `OVMXR2`, `OVMX`,
+all `CSID 00000000`).
+
+> **RUN THIS NEXT — it is a poll, not a code change.** For one identity, capture
+> the peer's CSB (`ANALYZE/SYSTEM` → `SHOW CLUSTER`, the per-CSB detail) at four
+> points: while joined, immediately after the daemon dies, during the refused
+> rejoin, and after. Do the identical four-point capture for a real node across
+> `lab2rejoin.sh`'s kill/reboot cycle. **The question is precise: does a dead
+> OVMX identity leave a CSB in a state a dead real node does not, and is a
+> returning identity matched against it?**
+>
+> **⚠ Two things must not be assumed here.** §4c.2d already recorded that a
+> pristine `BRK_NON` fails on its FIRST attempt, so "`BRK_*` is the quarantine"
+> is not a free win — check it. And §4d.1 found VAX3 holding **no** CSB for the
+> identity it then aborted, so a stale CSB cannot be the whole story either.
+> Both shapes of the refusal (§4d.6) must be classified before comparing runs.
 
 ---
 

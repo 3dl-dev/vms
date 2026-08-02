@@ -61,8 +61,34 @@
 # declaration to be deleted in the same commit and the census can never drift
 # into a stale allowlist.
 #
-# The gate does NOT verify that the item is open (rd is nostr-backed and not
-# reachable from CI). It verifies that a human wrote an id down.
+# THE CITED ITEM IS CHECKED AGAINST A LEDGER, NOT AGAINST rd (rd vms-8cc), and
+# the difference is the whole contract of this paragraph. This gate used to say
+# "it verifies that a human wrote an id down", and that was exact: the id was
+# SHAPE-checked. MEASURED against that revision -- `sed -i s/(vms-a86)/(vms-q9z9)/`
+# on one declaration, an id that has never existed, left the gate rc=0 at
+# 44/31/13; another pointed at vms-fb9, whose status is `done`, did the same.
+# ONE TOKEN bought the exemption, so "13 unwired" was a floor on how many were
+# genuinely tracked, not a bound.
+#
+# rd is nostr-backed and is not reachable from CI, so this gate still does not
+# ask it. tools/gen_rd_citations.py resolves every id cited under src/ and
+# tools/ on a host that HAS rd and commits the answer as
+# tracking/rd-citations.tsv; this gate reads that file. What each half claims:
+#
+#   THE GATE CLAIMS - every id in an OVMX-UNWIRED line appears in that ledger
+#                     and is recorded open. A fabricated id is red (no row, or
+#                     a row saying rd has no such item); a closed id is red; a
+#                     missing or malformed ledger is a REFUSAL, not a skip.
+#   IT DOES NOT     - the ledger is a snapshot with a printed timestamp. An
+#     CLAIM           item closed in rd since that stamp still reads open here,
+#                     and a row edited by hand instead of regenerated reads as
+#                     true. Neither is detectable without rd.
+#                     tests/integration/test_rd_citations_fresh.sh re-derives
+#                     the ledger from live rd and reds on any disagreement --
+#                     it needs rd, so it SKIPS in CI and closes both residuals
+#                     on the dev host and nowhere else. The census prints the
+#                     ledger's stamp and age at every run so the size of that
+#                     window is visible rather than assumed.
 #
 # WHY THE UNIVERSE IS PINNED, and this is the property that makes the escape
 # hatch safe. An earlier revision derived the list of entry points by grepping
@@ -334,6 +360,21 @@ KIF_H="$SRC_ROOT/src/libvmssys/vms_kif.h"
 KIF_C="$SRC_ROOT/src/libvmssys/vms_kif.c"
 IOCTL_H="$SRC_ROOT/src/kernel/vms_ioctl.h"
 status=0
+
+# The citation checker (rd vms-8cc), shared with the userspace service register.
+# Resolved from THIS FILE's directory, not from SRC_ROOT: it is gate code, not
+# tree data. SRC_ROOT is the tree under measurement -- the negative controls
+# hand it a sandbox copy, and a gate that loaded its own checker out of the
+# thing it is measuring could be disarmed by editing that copy.
+CITE_LIB="$(cd "$(dirname "$0")" && pwd)/lib/rd_citations.sh"
+if [ ! -f "$CITE_LIB" ]; then
+    echo "FAIL: cannot find the citation checker at $CITE_LIB"
+    echo "  -> without it the item ids in OVMX-UNWIRED declarations would be"
+    echo "     shape-checked only, which is the vms-8cc defect. Restore it;"
+    echo "     do not drop the check."
+    exit 1
+fi
+. "$CITE_LIB"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
@@ -1289,6 +1330,29 @@ if [ -n "$dups" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 4a. THE CITED ITEM MUST EXIST AND BE OPEN (rd vms-8cc).
+#
+# Until this ran, the id was SHAPE-checked and nothing more, and the file said
+# so: "it verifies that a human wrote an id down". Measured against that
+# revision: `sed -i s/(vms-a86)/(vms-q9z9)/` on one declaration -- an id that
+# has never existed -- left this gate rc=0 at 44/31/13; pointing another at
+# vms-fb9, whose status is `done`, did the same. One token bought the
+# exemption, so the 13 unwired entries were a floor on how many were untracked,
+# not a bound.
+#
+# rd is nostr-backed and unreachable from CI, so the resolution happens on a
+# host that has rd (tools/gen_rd_citations.py) and is committed as
+# tracking/rd-citations.tsv. See tests/integration/lib/rd_citations.sh for what
+# that buys and, at equal length, what it does not.
+# ---------------------------------------------------------------------------
+n_decl_sites=$(grep -c . "$WORK/decl_lines" || true)
+cut -d' ' -f2 "$WORK/declared" | sort -u > "$WORK/cited_ids"
+if ! rd_cite_check "$SRC_ROOT" "$WORK/cited_ids" "$WORK" \
+                   "$n_decl_sites" "an OVMX-UNWIRED declaration"; then
+    status=1
+fi
+
+# ---------------------------------------------------------------------------
 # 5. The census.
 # ---------------------------------------------------------------------------
 wired=0
@@ -1333,6 +1397,7 @@ if [ -n "$undeclared" ]; then
     status=1
 fi
 
+cat "$WORK/cite_summary" 2>/dev/null || true
 echo "  census: $n_entries entry points — $wired reached from the product,"
 echo "          $unwired with no product path"
 echo "  build set: $n_product_tus product translation unit(s) of $n_ccdb in the compile"

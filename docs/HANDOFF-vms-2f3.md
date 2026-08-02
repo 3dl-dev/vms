@@ -4,8 +4,17 @@
 doctrine — it held again this session: every finding below came from agents or
 from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 
-> **START AT §4d — it is the newest and it supersedes §5's ordered plan, which
-> has now been executed through step 3.** §1–§4c exist so you do not re-derive
+> **START AT §4e — it is the newest. §4d is the session before it and is still
+> current; together they supersede §5's ordered plan, which has been executed
+> through step 3.** §4e also records the `workshop` host bring-up: the lab did
+> not exist there, and five blockers had to be cleared before a single run.
+>
+> **⚠ THE LAB IS AT `/data/training/vax`, NOT `~/vax`** — a compatibility
+> symlink makes every hardcoded path in the 23 lab scripts resolve, so do not
+> edit them.
+>
+> **§5's step 4 (ungate the disk-discovery run) is still the only unrun step,
+> and §4e.3 gives it independent peer-side motivation.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and
 > §4b are kept as written on 2026-08-01 morning and are **partly superseded**:
 > the join limp they describe is real but is now FIXED by `OVMX_PURE_SERVER=1`,
@@ -57,6 +66,9 @@ reset.**
 | we address the wrong node (`Curr. coord.` rotates) | **REFUTED both ways — forcing the real coordinator still refused; a fresh identity joins via a non-coordinator** | §4d.7 ⭐ |
 | a returning identity is refused | **SHARPENED — it is DROPPED, by every peer, on receipt, before any machinery runs** | §4d.8 |
 | the VAXes have no oracle for their non-decisions | **REFUTED — SCACP, ANALYZE/ERROR_LOG and SDA SHOW CONNECTIONS all exist and were never used** | §4d.9 ⭐⭐⭐ |
+| **the peer's SDA can name why it refused us** | **REFUTED — `Rej/Disconn Reason` is 0 on every CDT, on the refusal too** | §4e.3 ⭐⭐ |
+| the peer holds the same connections either way | **REFUTED — a refused rejoin leaves `VMS$DISK_CL_DRVR` in `con_sent` and `SCS$DIR_LOOKUP` in `disc_sent`; a join has `MSCP$DISK` + `SCS$DIRECTORY` OPEN** | §4e.3 ⭐⭐ |
+| the bug is host- or arch-specific | **REFUTED — reproduces identically on x86_64 `workshop`, bracketed 3 joins / 2 refusals** | §4e.2 |
 | the two outcomes look alike below the CM layer | **REFUTED — a refused rejoin's VC is in congestion collapse; a successful one is indistinguishable from a real VAX** | §4d.9 ⭐⭐⭐ |
 | the PEDRIVER collapse is an effect of the CM stall | **REFUTED — it precedes our `op 0x02` by ≥3 s; a fresh identity never degrades at all** | §4d.10 ⭐⭐⭐ |
 | OVMX hears the peers' CM retransmissions | **REFUTED — `msgtype 0x7b` was discarded before any handler ran. FIXED, and it did NOT admit us** | §4d.10 ⭐⭐⭐ |
@@ -1012,6 +1024,124 @@ nobody re-derives it.
 
 ---
 
+## 4e. SESSION L (2026-08-02) — new host, and the first oracle that shows the peer's CDTs
+
+**The dev seat moved to `workshop` (x86_64) and the lab had never been run
+there. Most of this session was bring-up; the science at the end is one matched
+pair, and it points straight at step 4 — the one step of §5's plan still unrun.**
+
+### 4e.1 The lab did not exist on this host — five blockers, all cleared
+
+Nothing was running: no `br0`, no SIMH, no `/tmp/clean-vax1-test`. Recorded so
+nobody re-derives it on the next machine.
+
+| blocker | resolution |
+|---|---|
+| `build/simh/BIN/vax` is an **aarch64** ELF | rebuilt x86_64 in a container (`ubuntu:24.04` + `libpcap-dev`), host left clean. Old binary kept as `BIN/vax.aarch64.bak`. |
+| `~/projects/pcjs-vax/open-simh/BIN/vax` is x86_64 and looks like a free win | **it is not** — that build reports `no Ethernet`. Useless for this lab. Do not reach for it again. |
+| SIMH rejects `USE_NETWORK=1` on Linux | that flag means *static* pcap, which upstream removed. Build with **no** flag: it picks `USE_SHARED` (dlopen) + `HAVE_TAP_NETWORK`, which is what the lab wants. |
+| 23 lab scripts hardcode `/home/baron/vax` | one symlink `/home/baron/vax → /data/training/vax`. **Do not edit the scripts** — the prefix appears 29 times and every edit is a chance to desync a tool from its doc. |
+| `tools/mk_sysgen` is an **aarch64 binary with no surviving source** | replaced by `tools/mk_sysgen.py` (below). |
+
+`libpcap` matters less than it looks: the nodes attach with `at xq tap:tap1`, so
+the **TAP** transport carries everything and SIMH's `libpcap not installed`
+banner is cosmetic.
+
+`reset3.sh` / `reset2.sh` need `data/d{0,1}.dsk.3node-golden.bak`, which did not
+survive the migration; they were re-copied from the laptop mid-session and are
+in place again. `tools/bootlab.sh` (new) brings the lab up from the **live**
+disks with no golden restore, for when they are absent.
+
+> **⚠ Two console-harness traps bit again, both already documented, both costing
+> a run.** `bootlab.sh`'s first version copied `reset3.sh`'s login loop, which
+> (a) greps for `Username:` — a string that also appears as a **padded field
+> inside an OPCOM security-audit record**, and (b) confirms DCL by grepping for
+> a **literal** it just typed, which the console echoes, so it reports success
+> from a bare login prompt. Both are exactly what `tools/loginN.sh`'s header
+> warns about. **Use `loginN.sh`. Never hand-roll a console login.**
+
+### 4e.2 The bug reproduces on the new host, unchanged
+
+Bracketed, pure mode throughout, fresh store per identity:
+
+| run | identity | result |
+|---|---|---|
+| `w1A` | `OVMXW1`/1250 **fresh** | **JOINED**, `CLUSTER_NODES=4`, `XITDONE=1`, ~27 s |
+| `w1B` | `OVMXW1` again, +2 min | **REFUSED** |
+| `w2A` | `OVMXW2`/1251 **fresh** | **JOINED**, 27 s |
+| `w1C` | `OVMXW1` again | **REFUSED**, census identical to `w1B` |
+| `w3A` | `OVMXW3`/1252 **fresh** | **JOINED**, 27 s (closing control) |
+
+Every refusal is the **"dropped on the floor"** shape of §4d.6: inbound census is
+`op 0x14 ×3 | op 0x01 ×9` and *nothing else* — no COMMIT, no `op 0x05`,
+`XITABORT=0`. Six of those nine `op 0x01` are the `0x7b` retransmits the
+`9f98dbf` fix now hears (`RETX=6`), confirming that fix works on this host and
+still does not admit us.
+
+One CSB reading to record, because it matches **neither** shape in §4d.6's table:
+`w1B`'s CSB on VAX1 was `State: 09 wait`, `Flags: 00000000`, `CSID 00000000`.
+§4d.6 has `wait`/`long_break` for the aborted shape and `open`/`00000000` for the
+dropped shape. This is `wait` with zero flags. Do not treat §4d.6's CSB row as a
+reliable discriminator on its own — the *census* is the reliable one.
+
+### 4e.3 ⭐⭐ THE PEER'S CDT TABLE, AND IT IS STRUCTURALLY DIFFERENT
+
+§4d.9 listed SDA `SHOW CONNECTIONS` — with its **`Rej/Disconn Reason`** field —
+as an oracle that "exists and was never used". It has now been used.
+
+`SHOW CONNECTIONS` takes **`/NODE=name`** on VAX 7.3 (also `/SYSAP=`,
+`/ADDRESS=`; verified with `HELP` on the lab). That narrows a sample to a few
+lines, which is what makes it safe to poll. New tool: `tools/connpoll.sh`.
+
+Same peer (VAX3), same instrument, one variable — the CDTs VAX3 holds **for the
+joiner's identity**, sampled every 12 s through the run:
+
+| VAX3's CDTs for the joiner | `w3A` fresh — **JOINED** | `w1C` rejoin — **REFUSED** |
+|---|---|---|
+| `VMS$VAXcluster` | **open** | **open** |
+| `SCS$DIRECTORY` | **open** | *absent* — instead `SCS$DIR_LOOKUP` **`disc_sent`** |
+| `MSCP$DISK` | **open** | *absent* — instead `VMS$DISK_CL_DRVR` **`con_sent`**, `Remote Con. ID 00000000` |
+| `Rej/Disconn Reason` | 0 on every CDT | **0 on every CDT** |
+
+Both runs show **no** CDTs in the pre-run samples and their first CDTs at the
+same sample, so these were created by the run under test, not inherited.
+
+**Two things follow, and they are different in kind.**
+
+1. **`Rej/Disconn Reason` is zero even on the refusal.** The one oracle in this
+   lab that can name a rejection says *nothing rejected us*. That is a third,
+   independent confirmation of §4d.8: we are **dropped**, not declined.
+2. **`con_sent` with `Remote Con. ID 00000000` is an unanswered connect
+   request.** VAX3's `VMS$DISK_CL_DRVR` sent us a CONNECT and sat in `con_sent`
+   for the rest of the run. On the successful join that SYSAP pairing does not
+   hang — VAX3 instead ends up with `MSCP$DISK` **open**.
+
+Our own counters agree, and the agreement is sharp because everything *else* is
+identical: `START-SENT=6`, `CONNECT-RESP-SENT=3`, `DIR-LOOKUP-RESP-SENT=12`,
+`CM-CONFIG-FRAMES=7`, `HELLO-SENT=66` in **both** runs — while
+**`MSCP-SERVER-ACCEPTS-SENT` is 39 when joined and 0 when refused**.
+
+> ### ⚠ CAUSE OR EFFECT IS NOT ESTABLISHED — this is §4d.9's trap, again
+> §4d.9 already saw `MSCP-SERVER-ACCEPTS 0 vs 27` and correctly filed it as
+> "downstream of not being admitted", and nothing here refutes that reading: in
+> `w3A` the MSCP traffic happens **after** admission. The 12 s sampling cadence
+> is far too coarse to order `con_sent` against our `op 0x02`. **Do not promote
+> this to the root cause.** What is new is only that the peer holds a
+> *structurally different CDT set*, with a connect request to us left unanswered
+> — which is the same behavioural gap §4c.8 identified from the wire, now seen
+> from the peer's own tables.
+
+**Why this still matters: it is independent motivation for step 4**, the only
+step of §5's ordered plan never executed. §4c.8 said OVMX never does the
+joiner's directory + MSCP run and called it "the largest single behavioural
+difference left"; §4d.5 says `scsd.c` gates it on an inbound `op 6` that never
+arrives on a rejoin. The peer's CDT table now shows a disk-class connection
+hanging on us during exactly that window. **Run step 4 next**, and settle the
+ordering while doing it: sample at 2–3 s cadence (the `/NODE=` query is cheap
+enough) so `con_sent`'s arrival can be timed against our `op 0x02`.
+
+---
+
 ## 5. ⚠ WHERE TO START NEXT SESSION
 
 > **⚠ THE ORDERED PLAN BELOW HAS BEEN EXECUTED THROUGH STEP 3 — see §4d.**
@@ -1125,10 +1255,14 @@ nobody re-derives it.
 |  `tools/probe.sh` | drive any VAX console, capture between markers. |
 | `tools/stallpoll.sh` | **one join + SDA polled on a CHOSEN node DURING the stall.** The node is an argument on purpose: session j polled VAX1, which was not the coordinator in `r1B`, so the one node whose state decided the outcome was never asked. This is what separated the two refusal shapes (§4d.6). |
 | `tools/scacppoll.sh` | **one join + SCACP (`SHOW VC` / `SHOW CHANNEL`) polled on a chosen node DURING the run.** This is PEDRIVER's own view, a layer below everything §1–§4c examined, and it is what separated a refused rejoin from a successful join on live counters (§4d.9). **Does not capture packets yet — add tcpdump before using it to establish ordering.** |
+| `tools/bootlab.sh` | **boot the 3-node lab from the LIVE disks, no golden restore.** For a host where `d{0,1}.dsk.3node-golden.bak` is absent (they did not survive the 2026-08-01 migration and were re-copied later). Uses `loginN.sh`, deliberately — see §4e.1. |
+| `tools/mk_sysgen.py` | **x86_64 replacement for the aarch64 `mk_sysgen` binary**, whose source is lost. Patches SCSNODE/SCSSYSTEMID into a known-good template store (the one from `s8A`/`s8B`, both of which joined) rather than regenerating, so every other field is byte-identical to a store proven to work. Rejects names >6 chars and deletes any stale `.cluster` prior-admission sidecar, so a "fresh" identity is really fresh. |
+| `tools/connpoll.sh` | **SDA `SHOW CONNECTIONS/NODE=<id>` sampled on a chosen peer THROUGHOUT a run** — the CDTs that peer holds for our identity, and their `Rej/Disconn Reason`. The only oracle here that can name a rejection rather than describe a silence (§4e.3). Stays INSIDE SDA and uses `/NODE=` to keep a sample small; the first version drove `ANALYZE/SYSTEM…EXIT` per sample and overran the console input buffer during the OPCOM flood, losing 3 of 4 snapshots. |
 | `tools/scacptrace.sh` | **high-cadence SCACP + packet capture.** Stays INSIDE SCACP and fires bare `SHOW VC` on a timer (one console round-trip per sample instead of ~23 s), and relies on SCACP's self-timestamping header instead of markers. This is what established ORDER (§4d.10). VAX1's clock runs ~7.5 s behind the host — measure it with `SHOW TIME` vs `date` before correlating. |
 
 Run tags session j (part 2): `r1A` `r2A` joined, `r1B` `r2B` refused, `vax3crash` = the real-VAX crash-rejoin specimen. **Last SCSSYSTEMID used: 1241.**
 Run tags session k: `s1A` `s2A` `s3A` `s4A` `s5A` joined (fresh, pure); `s1B` refused (rejoin form), `s1C` refused (`OVMX_REJOIN_FORM=0`); `s3B` refused (SDA-polled on VAX3), `s3C` refused (`OVMX_CFG2_PEER=1`, forced to the real coordinator); `s3D` refused / `s6A` joined = the matched SCACP pair (§4d.9); `s3E` refused / `s7A` joined = the high-cadence ORDERING pair (§4d.10); `s3F` refused WITH the 0x7b fix, `s8B` fresh joined with it. **Last SCSSYSTEMID used: 1249.**
+Run tags session L (workshop): `w1A` `w2A` `w3A` joined (fresh, pure); `w1B` `w1C` refused (`OVMXW1` rejoin). `w1C`/`w3A` are the matched CDT pair (§4e.3); `w2A` is VOID as an instrumented run — its console overran (§4e.1) — but valid as a join. **Last SCSSYSTEMID used: 1252.**
 
 Run tags session i: `ctl1`, `inc1`, `inc2`, `fresh1`, `fresh2`, `keyB`, `keyC`,
 `rej2`, `rej3`. Session j: `g1A` (joined), `g1B` (refused, SDA-polled), `p1A`

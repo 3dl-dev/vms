@@ -2507,7 +2507,128 @@ peer's `Last seq num rcvd 0000`.
 > only `{0x03, 0x05}`), then "OVMX never emits a sequenced frame on a rejoin"
 > (refuted by its own log). **Both were refuted by our own source and logs, for
 > free, before any capture work.** Check the source and the run log before
-> dispatching a capture agent.
+> dispatching a capture agent. §4L.8 then killed a third.
+
+### 4L.8 ⛔⭐⭐⭐ THE ENVELOPE IS FINE — the peer simply never answers our `op 0x02`
+
+Wire decode of the same three lab-2 captures. **It refutes §4L.6 and §4L.7's
+conclusion and replaces it with something much sharper.**
+
+**Refuted: "the discriminator is in the envelope."** OVMX's CM messages in the
+refused run are byte-identical in *content* to both joined runs (payload from
+abs 72 on; only the known incarnation echo at abs 36 and transport checksums
+differ), **and their envelopes are well-formed and gaplessly incrementing exactly
+as in the joins** — `send_seq` abs 34, `recv_ack` abs 32, mirror abs 44 (which is
+a pure echo of `send_seq` in all runs and carries no information).
+**No envelope anomaly exists.** OVMX also sends plenty of sequenced frames:
+20 to VAX1 and 21 to VAX2 in the refused run.
+
+**What actually happens, on the CM connection, msg by msg:**
+
+| msgseq | cat/op | `M1A` join | **`M1B` REFUSED** | `M2A` join |
+|---|---|---|---|---|
+| 1 | `01/14` node-status | +0.60 s | +0.02 s | +0.92 s |
+| 2 | `01/01` node-status | +0.60 s | +0.02 s | +0.92 s |
+| 3 | `04/00` | +7.06 s | +9.00 s | +7.12 s |
+| **4** | **`01/02` membership request** | **+7.06 s** | **+9.00 s** | **+7.12 s** |
+| 5 | `81/03` **response from the peer** | **+7.065 s** | **ABSENT** | +7.12 s |
+
+> **In both joins the peer's response follows our `op 0x02` within 2–6
+> MILLISECONDS, then 20+ more messages fire immediately. In the refused run
+> msgseq 4 is the last thing OVMX ever sends on that connection, and VAX1 sends
+> ZERO frames back on ANY connection for the remaining ~100 s** — only periodic
+> multicast HELLO beacons.
+
+So the stall is **the peer's non-response to a byte-identical, correctly
+sequenced, correctly enveloped membership request.** Nothing is wrong with what
+we transmit.
+
+### 4L.9 ⚠ AN UNRESOLVED TENSION BETWEEN THE TWO ORACLES — do not paper over it
+
+The wire says OVMX delivered msgseq 1–2 on the CM connection at **+0.02 s**.
+SDA says that at **T+4/5 s** the peer's CSB for us reads `Last seq num rcvd
+0000`. Both are directly observed. They disagree.
+
+**I hypothesised the CSB-replacement explained it — that OVMX's messages were
+counted against the old CSB, which was then freed. THE `M3` DATA REFUTES THAT**,
+and points somewhere better. Sequence counters across the replacement, `CAD=1`:
+
+| sample | CSB | flags | `Next seq. number` | `Last seq num rcvd` | `Last ack. seq num` |
+|---|---|---|---|---|---|
+| `M3A` end (admitted, live) | `879FBB80` | `02060002` | `0023` | `0022` | `0023` |
+| `M3B` T-PRE … T+3 s | **`879FBB80` (old, residual)** | `06040005` | **`0025`** | **`0022`** | `0023` |
+| `M3B` T+4 s … end | **`879EC440` (new)** | `00000000` | **`0002`** | **`0000`** | `0000` |
+
+**The old CSB did not count our messages either.** Its `Last seq num rcvd` sits
+frozen at `0022` — exactly where `M3A` left it — while its `Next seq. number`
+advances `0023 → 0025`, i.e. **the peer sent two more and received nothing.**
+Then it is replaced by a fresh block that sends two more (`0002`) and again
+receives nothing. The peer tried twice, on two different CSBs, and counted zero
+both times.
+
+### 4L.9a ⭐⭐⭐ THE LIKELY MECHANISM — a sequence-context race, and we answer 30× too fast
+
+Put the counters beside the wire timings and a mechanism falls out.
+
+**Grounded:**
+- OVMX's `send_seq` **starts at 1** on every run (`scs_seq_init`, §4k.8) — which
+  is what a real returning node does.
+- The peer's **old** CSB is at `Last seq num rcvd 0022`, so the next sequenced
+  message it will accept on that VC is **`0023`**, not `1`.
+- OVMX fires its config burst at **+0.02 s** in the refused run, against
+  **+0.60 s** (`M1A`) and **+0.92 s** (`M2A`) in the joins — **~30× earlier.**
+- The peer replaces the CSB at ~T+4 s, resetting its expectation to `1`.
+- By then OVMX has already consumed msgseq 1–2 and does not re-send them; its
+  next CM message is `op 0x02` at +9.00 s, carrying a `send_seq` well past `1`.
+
+**The inference (NOT established):** on a rejoin the peer still holds a live VC
+context from our previous incarnation and immediately sends config on it, so
+OVMX answers **into the old context** with `send_seq = 1` — which that context
+rejects, because it wants `0023`. The peer then tears the CSB down and rebuilds
+it expecting `1`, but OVMX has moved on. Both sides are permanently one context
+apart, which is exactly what "peer sent 2, received 0, twice" looks like.
+
+**This is the first hypothesis of the session that explains every grounded fact
+at once** — the frozen `0022`, the doubled send-with-no-receive, the zero flags,
+the blank status-derived fields, the unanswered `op 0x02`, and §4L.10's
+`DISC-REQ` never running. It also explains why a real node succeeds: §4k.1 shows
+the peer driving the whole rejoin handshake, which would establish the fresh
+context *before* the returning node sends anything sequenced.
+
+**How to test it — one variable, cheap:**
+1. **Delay our burst.** Make OVMX wait before answering the member's config on a
+   rejoin (an env-gated delay, with the kill-switch guardrail 21 requires), so
+   the peer's CSB replacement lands first. If the refusal turns into an
+   admission, the race is real.
+2. **Or check the wire directly** for whether the peer's pre-replacement frames
+   carry `send_seq ≈ 0023` while ours carry `1`. That is a decisive byte-level
+   read on `d94-M3B.pcap` and needs no lab time.
+
+> **⚠ Do NOT "fix" this by starting `send_seq` at `0023`.** A real returning node
+> restarts at `1` (§4k.3/§4k.8, grounded across three captures). If our `1` is
+> being rejected, the bug is that we answer into a context that should have been
+> torn down first — not the value.
+
+### 4L.10 Two further grounded results from the same decode
+
+1. **`DISC-REQ` reproduces on lab-2**: 2/2 in both joins, **0/0** in the refused
+   run (lab-1 was 3/3 vs 0/0 on a 3-peer cluster). **New and important precision:
+   in both joins the peer's `DISC-REQ` arrives immediately after *its own*
+   node-status pair — before or concurrent with our reply going out.** So the
+   peer's `DISC-REQ` is **not** a reaction to anything we send. It is part of the
+   peer's own sequence, and on a rejoin that sequence simply does not run. This
+   weakens any theory in which our reply triggers the peer's progress.
+2. **⚠ §4k.4's "zero outbound CONN-REQ on a rejoin" does NOT hold on lab-2.**
+   Here the refused run sends **14** — `7 × SCS$DIRECTORY` per peer on a ~3 s
+   cadence from +2.1 s to +24.1 s, then it gives up for the remaining ~84 s — and
+   **0 `MSCP$DISK`, 0 `VMS$VAXcluster`**. OVMX *does* try its own client walk on a
+   rejoin here and **is never accepted past step 1**. Against lab-1's `r2B` zero.
+   **Do not merge the two numbers** (different SIMH binary). Which behaviour is
+   the real one needs settling on one lab.
+
+Capture integrity checked: `seqchk.py` clean on all three, no truncation, full
+~148 s spans. The only gap flags are OVMX correctly retransmitting an unacked
+`CONN-REQ` with its original sequence number.
 
 ## 5. ⚠ WHERE TO START NEXT SESSION
 

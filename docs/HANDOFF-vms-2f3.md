@@ -1762,6 +1762,33 @@ in-frame control set §4h could not have.
 Both OVMX runs logged `identity on the wire: OVMXL3`/`OVMXL4`, so each reached
 the wire under the name it claims.
 
+**Refusal shape, established before comparing anything (§4d.6 requires it).**
+VAX1's console across the whole pod history gives all three events side by side:
+
+| event | window | peer console |
+|---|---|---|
+| `OVMXL3` **fresh join** | 02:02:31 | `received VAXcluster membership request from node OVMXL3` → `proposed addition` → transition |
+| `OVMXL3` **refused rejoin** | 02:05–02:07 | **NO membership request, NO proposed addition, NO transition** — only `lost connection to node OVMXL3` at 02:07:00 when OVMX exits |
+| `OVMXL4` fresh join | 02:08:08 | full machinery: request → `proposed addition` → transition |
+| `VAX2` readmission | 02:12:52 | full machinery: request → `proposed addition` → transition |
+
+So **`L3b` is the `s3B` "dropped on the floor" shape**, not the `r1B`
+"proposed and aborted" shape: nothing refused it, the add-member request never
+produced any machinery. Every comparison in §4j is therefore
+*dropped-on-the-floor rejoin* vs *real readmission*.
+
+> **⚠ One thing the console adds that §4d.6 did not have:** the peer logs
+> `lost connection to node OVMXL3` at 02:07:00 for the *rejoin* attempt, so a
+> connection existed at some level and was torn down when OVMX exited — even
+> though no membership machinery ever ran and no CDT was ever allocated. Worth
+> reconciling against §4g.2's "declines to connect"; it is not obviously the
+> same layer. Not resolved here.
+>
+> Note also that §4d.6 recorded the `s3B`-shape CSB as `open` with flags
+> `00000000` **during** the stall, while §4j sees `09 wait` /
+> `04000001 long_break,send_status` **after** OVMX exits. Different times, not a
+> contradiction — but do not quote one as the other.
+
 ### 4j.1 ⭐⭐⭐ The answer: a dead real node keeps a CSB, and it is OUR CSB exactly
 
 For the 85 s it was dead, VAX2's CSB was **byte-identical in flags to a dead

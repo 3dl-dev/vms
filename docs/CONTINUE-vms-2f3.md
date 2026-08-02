@@ -38,10 +38,11 @@ operator ruling, that is a **gate**, not a completion — see the reserved list.
 
 1. `cd ~/projects/vms`, branch `worktree-760-active-directory`. Re-derive the
    SHA; do not trust any SHA written down anywhere.
-2. **Read `docs/HANDOFF-vms-2f3.md` §4L first** — it is the newest and the
-   sharpest. Then §4k, then §4j. Then **§3's killed list (12 entries) and §4L's
-   seven more.** Then §7 guardrails (22 entries) — they are the most transferable
-   part of the whole document.
+2. **Read `docs/HANDOFF-vms-2f3.md` §4M first** — it is the newest and it
+   supersedes §4L's framing. Then §4L (for its observations, not its
+   conclusion), then §4k. Then **§3's killed list (13 entries) and §4L's seven
+   more.** Then §7 guardrails (22 entries) — they are the most transferable part
+   of the whole document.
 3. Read `docs/HANDOFF-vms-760.md` §0 for the orchestrator doctrine. It still
    applies verbatim.
 4. `rd show vms-2f3`. Also open: `vms-da1` (SDA↔wire counter mapping — blocking
@@ -50,38 +51,53 @@ operator ruling, that is a **gate**, not a completion — see the reserved list.
 
 ## Where the investigation actually stands
 
-**The bug is reduced to one flag word.** During a rejoin the peer allocates the
-same new CSB and the same CDT it allocates for a successful join, and then never
-sets `vcc`/`status_rcvd` and never advances:
+> **⚠ §4L's framing is SUPERSEDED. Start at §4M, not §4L.** §4L reduced the bug
+> to "one flag word" (`00000000` vs `02040000 status_rcvd,vcc`). §4M fixed the
+> cause of that flag word and **the rejoin is still refused**. §4L's
+> observations stand; its framing does not. Do not re-open §4L.3.
 
-| at T+5 s | admitted | **refused** |
+**§4M landed a real bug and moved the failure a long way down the dialogue.**
+OVMX mirrored the request's msgtype onto its SCS$DIRECTORY lookup responses; a
+real VAX always answers `0x4b` (336-frame census, `scs_dir.c:244`). Mirroring is
+correct by luck on a fresh join and wrong on a rejoin, where the peer asks with
+`0x5b`. Fixed, kept, tested, **and not the gate.**
+
+**Where the refusal now sits.** The peer's CSB for a refused rejoin is now
+populated exactly as an admitted one — `02040000 status_rcvd,vcc`, `Cpblty
+00000A98`, `SWVers V7.3`, `HWName`, `Quorum/Votes 1/0`, `Lock mgr dir wgt 1`,
+live incarnation, CDT/SB/PDT all allocated. **Two bits are missing and nothing
+else: `member` and `selected`** (`02040000` vs the admitted `02060002`), flat
+for 108 s across three consecutive rejoins from three different prior states.
+
+**The question, re-posed (§4M.8):**
+
+> The peer has our status, capabilities, votes, incarnation and an open VC, and
+> has allocated every structure. **What SELECTS a node for membership, and what
+> does the peer check there that a returning identity fails and a fresh one
+> passes?**
+
+**Two grounded wire correlates to chase (§4M.7):**
+
+| after the node-status pair | fresh join | **rejoin** |
 |---|---|---|
-| CSB flags | `02040000 status_rcvd,vcc` | **`00000000`** |
+| the peers' `cat 0x04` ack opcode | `op 0x00` (both) | **`op 0x04`** and **`op 0x06`** |
+| next step | `op 0x03` → **`op 0x05`** → 570 more | `op 0x03` → answered → **silence** |
 
-Against a matched real-node control the peer builds **structurally identical**
-state for a returning real VAX and a returning OVMX identity — SB persists, CSB
-freed and reallocated, CDT allocated, PDT unchanged. **Only population differs.**
+`cat 0x04` is `SCS_MEMBER_CAT_ACK`. **OVMX never dispatches on a `cat 0x04`
+opcode at all** — `CAT_ACK` appears twice in `scsd.c`, both in a timing
+heuristic, and `cm_req` (`scsd.c:2764`) does not cover it. That is the same bug
+class as the `0x7b` deafness of §4d.10.
 
-**The question, posed sharply (§4L.9h):**
-
-| peer + | fresh join | rejoin |
-|---|---|---|
-| **OVMX** | `DISC-REQ` runs → admitted | **no `DISC-REQ` → refused** |
-| **real node** | runs → admitted | runs → admitted |
-
-> What differs for OVMX-on-a-rejoin that does **not** differ for
-> OVMX-on-a-fresh-join and **not** for a real-node-on-a-rejoin?
-
-That excludes a large class of answers: anything wrong with OVMX generally would
-break the fresh join too; anything inherent to the rejoin path would break the
-real node too.
+**The §4L.9h exclusion test still applies and is still the best filter:**
+anything wrong with OVMX generally would break the fresh join too; anything
+inherent to the rejoin path would break the real node too.
 
 **Already dead, of exactly that shape — do not re-propose:** the `[22:24]`
-incarnation echo (we emit the reference value), and OVMX's own rejoin-mode
-behaviour (`OVMX_REJOIN_FORM=0` forces the first-join form and was refused as
-`s1C`). Also dead: initiation role, `send_seq` restart, the SCS envelope, the
-sequence-context race, SB persistence, the `cm_config_sent` resend gate, and
-everything in §3.
+incarnation echo (we emit the reference value); OVMX's own rejoin-mode behaviour
+(`OVMX_REJOIN_FORM=0` refused as `s1C`); and now the directory-response msgtype
+mirror (§3 item 13). Also dead: initiation role, `send_seq` restart, the SCS
+envelope, the sequence-context race, SB persistence, the `cm_config_sent` resend
+gate, and everything in §3.
 
 ## The loop — run this until done
 
@@ -146,7 +162,7 @@ green by SHA.
 - Lab volume is ZFS, 40G quota; `rsync --sparse` for disk images.
 - `tools/mk_sysgen` is an aarch64 binary with no source — **use
   `tools/mk_sysgen.py`**.
-- **Last SCSSYSTEMID used: 1307.** Take the next one and update §6.
+- **Last SCSSYSTEMID used: 1309.** Take the next one and update §6.
 - **Pods:** `vaxlab-0` SPENT (console wedged), `vaxlab-1` DEGRADED (its VAX2 was
   SIGKILLed and never rebooted), **`vaxlab-2` healthy** and carrying residual
   state for `OVMXM1/M2/M3` — a ready-made rejoin reproducer. Fresh pods:

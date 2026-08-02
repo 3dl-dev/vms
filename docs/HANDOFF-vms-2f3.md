@@ -2478,6 +2478,29 @@ burst frames between `d94-M1A.pcap` (counted) and `d94-M1B.pcap` (not counted).
 The body is known identical; the envelope is where the difference must be.
 **Dispatched.**
 
+**And the peer goes silent immediately afterwards.** Census of OVMX's own log
+message types, same three runs:
+
+| tag | `M1A` admitted | **`M1B` REFUSED** |
+|---|---|---|
+| `SCSD-T-CMIN` (inbound CM messages) | **575** | **4** |
+| `SCSD-I-CMACK` | 254 | **0** |
+| `SCSD-I-CMRESP` | 234 | **0** |
+| `SCSD-I-BARRIER` | 12 | **0** |
+| `SCSD-I-CMCONFIG` (our burst) | 2 | **2 — same** |
+
+**We send the burst; the peer sends back nothing at all.** Four inbound CM
+messages against 575, no acks, no responses, no barrier — the transaction
+machinery never starts. That is §4d.6's `s3B` "dropped on the floor" shape
+measured from our own side for the first time, and it agrees exactly with the
+peer's `Last seq num rcvd 0000`.
+
+> Note `SCSD-I-PSCUNGATE` appears in `M1B` (2) and **not** in `M1A`, alongside
+> `DIRCONN` and `CONNRESP`. So OVMX *did* attempt directory/connect work on this
+> rejoin — unlike lab-1's `r2B` (§4k.4, zero outbound `CONN-REQ`). **Do not treat
+> §4k.4's zero as universal**; it may be lab- or build-specific. Worth pinning
+> down before any claim of the form "OVMX never initiates on a rejoin".
+
 > **⚠ Method note.** Between §4L.6 and here I proposed and killed my own
 > hypothesis twice inside ten minutes — first "the member-form `op 0x01` trips
 > the `!is_member_txn` gate" (refuted by reading the definition: that gate is

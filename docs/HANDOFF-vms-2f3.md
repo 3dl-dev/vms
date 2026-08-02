@@ -2746,6 +2746,47 @@ Every structural theory — stale CSB, missing CDT, residual SB, per-identity
 poison — is now excluded by a matched control. What is left is not a missing
 object but a validation the peer performs and we fail.
 
+### 4L.9g ⛔ ALSO DEAD — "the peer re-sends its config and our once-only gate ignores it"
+
+Tempting, because `cm_send_config_burst` is gated on `!ps->cm_config_sent` (fires
+once per peer) and the SDA counters look like the peer sent config twice (old CSB
+`0023 → 0025`, new CSB `0002`).
+
+**Refuted from our own log in under a minute, no code written.** The four inbound
+CM messages in `M3B` are **two from each of the two peers** — distinct remote
+Con.IDs `0xED83000F` and `0x64BE000E` — and OVMX **answered both**, one
+`CMCONFIG` per peer. The gate is per-peer (`ps->cm_config_sent`) and fired
+correctly. The peer never re-sends its config after replacing the CSB.
+
+> **And this reinforces `vms-da1`.** The CSB's `Next seq. number` cannot be a
+> count of CM messages: SDA polls VAX1 only, yet VAX1's old + new CSBs together
+> account for 4 sends while the log shows VAX1 sending 2. Those counters count
+> something else — most likely all sequenced SCS traffic on the VC. **Until
+> `vms-da1` lands, do not read them as message counts.**
+
+### 4L.9h ⭐ THE QUESTION, POSED SHARPLY
+
+Every structural theory is now excluded by a matched control (§4L.9f), and the
+peer's `DISC-REQ` is known not to be a reaction to anything we send (§4L.10).
+So the peer's own progression diverges, and the three-cell truth table is:
+
+| peer + | fresh join | **rejoin** |
+|---|---|---|
+| **OVMX** | `DISC-REQ` runs → **admitted** | **no `DISC-REQ` → refused** |
+| **real node** | `DISC-REQ` runs → admitted | **`DISC-REQ` runs → admitted** |
+
+> **What is different about OVMX-on-a-rejoin that is NOT different about
+> OVMX-on-a-fresh-join, and NOT different about a real-node-on-a-rejoin?**
+
+That is the whole bug in one sentence, and it excludes a large class of answers:
+anything wrong with OVMX generally would break the fresh join too, and anything
+inherent to the rejoin path would break the real node too. **The answer must be
+something the peer checks only on a rejoin, whose value differs only for us.**
+
+The `[22:24]` incarnation echo was the obvious candidate of exactly that shape
+and is dead (§4k.9 — we emit the reference value). Finding the next field of that
+shape is the work.
+
 ### 4L.10 Two further grounded results from the same decode
 
 1. **`DISC-REQ` reproduces on lab-2**: 2/2 in both joins, **0/0** in the refused

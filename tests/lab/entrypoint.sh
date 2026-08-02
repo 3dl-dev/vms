@@ -122,6 +122,10 @@ done
 mkdir -p "${LAB_DIR}/logs"
 for n in ${NODES}; do
   logf="${LAB_DIR}/logs/${n}.log"
+  # Create the log BEFORE the tail below globs for it — nodedrv.py opens it only
+  # after its pty fork, and the glob would otherwise resolve to nothing and
+  # 'kubectl logs' would show no console output at all.
+  touch "${logf}"
   log "booting ${n} (console FIFO ${logf}.in, DZ mux :$(node_dz "${n}"))"
   python3 /usr/local/bin/nodedrv.py "${LAB_DIR}/${n}" "${logf}" \
       --date "${VMS_DATE}" --boot "$(node_boot "${n}")" &

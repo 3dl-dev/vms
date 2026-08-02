@@ -2434,11 +2434,57 @@ re-checking — it may have been derived only from fresh-join captures.
 > independent. §4i.4 showed the refusal survives with `RETX=0`, so `vms-950` alone
 > is not it — but "our sequenced frames are not accepted" was never tested.
 
-**The experiment that decides it:** in `d94-M1B.pcap`, does OVMX actually transmit
-sequenced (`0x4b`/`0x5b`) frames, and what `send_seq`/`recv_ack` do they carry
-relative to the peer's continuing sequence? If OVMX transmits them and the peer's
-`Last seq num rcvd` still reads `0000`, the peer is **discarding** them, and the
-discriminator is the numbering. **Dispatched.**
+### 4L.7 ⭐⭐⭐ WE DO SEND THEM — OVMX's own log settles it, and the peer discards them
+
+The cheapest oracle in the building, and it was sitting in the run logs the whole
+time. `grep CMCONFIG` on `scsd-M1A/M1B/M2A.log`:
+
+| run | config burst | outcome |
+|---|---|---|
+| `M1A` admitted | `answered member config with add-member burst (2 frames)` **×2 peers**, 08:18:25 | + deferred `op 0x02` |
+| **`M1B` REFUSED** | **`… burst (2 frames)` ×2 peers, 08:21:01 — IDENTICAL** | + deferred `op 0x02` |
+| `M2A` admitted | `… burst (2 frames)` ×2 peers, 08:23:38 | + deferred `op 0x02` |
+
+`cm_send_config_burst()`'s own contract (`scsd.c:1243`) is that each frame *"is a
+sequenced SCS message — it advances the VC `send_seq` (SCS layer)"*.
+
+> **So OVMX emits its two sequenced config frames per peer in the REFUSED run
+> exactly as it does in both admitted runs — and the peer's `Last seq num rcvd`
+> still reads `0000`. The peer is receiving them and NOT COUNTING them.**
+
+This **refutes** the obvious reading of §4L.6 (that OVMX's sequenced-frame
+builders live on a path it never runs during a rejoin — §4k.4 shows zero outbound
+`CONN-REQ`, which made that tempting). We send. They are discarded.
+
+It also **narrows the target to the envelope**. §4i.1 established the config
+reply's *body* is byte-for-byte identical between joined and refused runs. If the
+body is identical and the burst is sent in both, then whatever makes the peer
+discard it must be in the SCS envelope — `send_seq` `[20:22]`, its mirror
+`[30:32]`, `recv_ack` `[18:20]`, the Con.ID pair — or in peer-side state that
+makes an otherwise-valid frame unacceptable.
+
+**Two candidate mechanisms, neither yet grounded:**
+1. **Sequence numbering.** On a rejoin the peer's VC sequence *continues*
+   (§4k.8) while ours restarts at 1. `scs_seq_init()` sets `send_seq = 1` and
+   `scs_seq_note_recv()` takes the max of the peer's `send_seq`, so OVMX should
+   ack the peer's continuing value — but whether the peer accepts *our* frames
+   numbered from 1 against its own continuing window is untested.
+2. **Connection identity.** The burst rides `local=0x…0001` with a per-run remote
+   Con.ID. If the peer expects the burst on a different connection than the one
+   we send it on, it would ignore it without ever counting it.
+
+**The experiment that decides it:** compare the ENVELOPE fields of the config
+burst frames between `d94-M1A.pcap` (counted) and `d94-M1B.pcap` (not counted).
+The body is known identical; the envelope is where the difference must be.
+**Dispatched.**
+
+> **⚠ Method note.** Between §4L.6 and here I proposed and killed my own
+> hypothesis twice inside ten minutes — first "the member-form `op 0x01` trips
+> the `!is_member_txn` gate" (refuted by reading the definition: that gate is
+> only `{0x03, 0x05}`), then "OVMX never emits a sequenced frame on a rejoin"
+> (refuted by its own log). **Both were refuted by our own source and logs, for
+> free, before any capture work.** Check the source and the run log before
+> dispatching a capture agent.
 
 ## 5. ⚠ WHERE TO START NEXT SESSION
 

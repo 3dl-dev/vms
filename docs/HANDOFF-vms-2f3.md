@@ -2698,6 +2698,54 @@ flags** and stalls there.
 > pristine-`BRK_NON` result and extends it: not only is the first attempt refused,
 > every subsequent one is, from any prior state.
 
+### 4L.9e ⛔ THE SYSTEM BLOCK (SB) PERSISTS PER IDENTITY — and that is NORMAL, not the bug
+
+Worth recording because it looks like the answer for about five minutes.
+
+**The SB address is per-identity and survives every attempt**, while the CSB is
+rebuilt each time:
+
+| identity | SB address | across |
+|---|---|---|
+| `OVMXM1` | `8799A980` | `M1A` join **and** `M1B` refusal |
+| `OVMXM2` | `879A3080` | its own, distinct |
+| `OVMXM3` | `87999B00` | **all three** attempts (`M3A`/`M3B`/`M3C`) |
+
+Three identities, three distinct stable SBs — not slot recycling. That is exactly
+the shape §4d.8 predicted ("the drop is keyed on IDENTITY") and §4f.2 proved
+(per-identity cluster-side state surviving our death), so it is tempting.
+
+**The real-node control kills it.** Re-reading `C1` (§4j), VAX2's SB across its
+own crash and readmission:
+
+| sample | CSB | **SB** | CDT | flags |
+|---|---|---|---|---|
+| T-PRE healthy | `87935140` | **`8794C940`** | `8794D780` | `02060002` |
+| T+28 … T+99 s dead | `87935140` | **`8794C940`** | `00000000` | `06040005` |
+| **T+113 s readmitted** | **`879F4080`** | **`8794C940`** | `8794B0C0` | `02040000` |
+
+**A real VAX's SB persists across a crash and a rejoin too — and it is
+readmitted.** SB persistence is ordinary VMS behaviour, not a poison.
+
+### 4L.9f ⭐ WHAT THIS CONSOLIDATES — every structure matches; only the flags differ
+
+Stacking the real-node control against OVMX, at every level SDA exposes:
+
+| | real VAX2 rejoin | OVMX rejoin |
+|---|---|---|
+| SB | **persists** | **persists** |
+| CSB | **freed, new one allocated** | **freed, new one allocated** |
+| CDT | zero while dead, **new one on return** | zero while dead, **new one on return** |
+| PDT | unchanged | unchanged |
+| **CSB flags on return** | **`02040000 status_rcvd,vcc`** | **`00000000`** |
+| outcome | **admitted** | refused |
+
+**The peer builds structurally identical state for a returning real node and a
+returning OVMX identity, and diverges only in whether it POPULATES that state.**
+Every structural theory — stale CSB, missing CDT, residual SB, per-identity
+poison — is now excluded by a matched control. What is left is not a missing
+object but a validation the peer performs and we fail.
+
 ### 4L.10 Two further grounded results from the same decode
 
 1. **`DISC-REQ` reproduces on lab-2**: 2/2 in both joins, **0/0** in the refused

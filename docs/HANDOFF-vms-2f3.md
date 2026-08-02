@@ -34,8 +34,9 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > refuted as the gate. Do not re-propose it.** **§4f–§4g are newer still: §4f proves the
 > deciding state is the CLUSTER's, not ours; §4g shows the peer asks for our disk
 > server, is told yes, and declines to connect. **START AT §4k, then §4j — they are
-> the newest, and between them they correct §4h, §4c.8, §4(i).B and the reading of
-> §4g.** Then §4h and §4i for background. The CDT layer is
+> the newest, and between them they correct §4h, §4c.8 and the reading of §4g.
+> §4(i).B's incarnation semantics are CONFIRMED, not corrected — see §4k.9, and
+> note that §4k.3's first version of that result was retracted as an offset error.** Then §4h and §4i for background. The CDT layer is
 > excluded for everyone; the peer's CSB shows the rejoin attempt itself clearing
 > `removed`/`status_rcvd` and zeroing the CSID; and §4i found a real ack bug that
 > explains the PEDRIVER collapse but is NOT the gate.
@@ -234,15 +235,18 @@ oracle degrades before it errors.
     normal. Related and also dead: **CSID zeroing at the rejoin attempt is
     damage** — the real node's readmitted CSB carries `CSID 00000000` too
     (§4j.3, which corrects §4h).
-11. **The START `[22:24]` incarnation counter is how a peer recognises a new
-    incarnation.** Killed by the real crash-rejoin specimen (§4k.3): it is
-    `0x0001` on all 12 STARTs in that capture and all 4 in `vax3-2to3` — a
-    crash-rebooted node under an unchanged identity presents exactly what a
-    first boot presents. The adjacent quadword at abs 80..87 is not a boot stamp
-    either (4.5 h stale across the reboot). Do not build a fix on either field.
-    **But do not dismiss the field — see §4k.9:** it is the incarnation the
-    *member* attributes to *us*, so it is a free wire-readable ORACLE for whether
-    the peer still holds our residual CSB. It is a readout, never a lever.
+11. **Anything at all about the START `[22:24]` incarnation counter.** Settled
+    against the reference for the first time in §4k.9, after two wrong readings:
+    peers advertise `2` to a returning real VAX3 (abs 92, directed HELLOs only)
+    and `2` to a returning OVMX identity, and **both echo `2`**. OVMX already
+    emits the reference value on the failing path — the field is **identical**
+    in the successful real rejoin and the refused OVMX one. It is neither a
+    candidate delta nor an oracle for the CSB decision, and the counter is
+    incremented at channel re-formation, upstream of the admission decision.
+    The adjacent quadword at abs 80..87 is not a boot stamp either (4.5 h stale
+    across the reboot). **Do not touch this field.** Note `[22:24]` is
+    payload-relative = **abs 36**; reading it at abs 22 produces a constant `1`
+    and a wrong conclusion, which is exactly what happened once already.
 12. **The peer's connect to OUR `MSCP$DISK` is a precondition for admission.**
     Killed by §4k.6: in the reference rejoin that connect arrives 7.47 s *after*
     the membership request and is refused 9 times over 90 s while the node is
@@ -1935,6 +1939,15 @@ together through both a real reboot and an OVMX rejoin (`scacppoll.sh` +
 > `SHOW CLUSTER` is ~6.3 KB per sample against `SHOW CONNECTIONS/NODE=`'s few
 > hundred bytes, and the death coincides with the OPCOM flood at readmission —
 > the documented console-overrun mode (§4e.1, and `connpoll.sh`'s first version).
+>
+> **✅ BOTH DEFECTS ARE NOW FIXED AND THE FIX IS VERIFIED** (smoke run `SMOKE` on
+> `vaxlab-1`). `csbcycle.sh` now samples `SHOW CLUSTER/NODE=<node>` per tracked
+> node — **1087 bytes/sample against the full dump's 3078–6269** — takes the full
+> `SHOW CLUSTER` only at start and end where no OPCOM flood is running, emits a
+> leading newline before every marker (**anchored marker count 6/6, previously 1
+> of 26**), and aborts loudly after `MAXEMPTY` consecutive empty samples instead
+> of writing 17 worthless ones. Default cadence tightened 14 s → 6 s, which §4k.7
+> needs anyway.
 
 ---
 
@@ -1984,24 +1997,25 @@ So the HELLO carries **no incarnation counter, no "I am new" flag, no boot
 marker.** The peer re-probes because it hears a node it holds no verified
 channel to. Nothing in the returning node's first frame announces the return.
 
-### 4k.3 ⭐⭐ NEGATIVE RESULT — the START `[22:24]` incarnation counter does NOT distinguish incarnations
+### 4k.3 ⚠ RETRACTED — the "incarnation counter is always 1" result was an OFFSET ERROR
 
-§4(i).B puts a joiner incarnation counter at START `[22:24]`. In this specimen it
-is **`0x0001` on all 12 START frames, both directions, both peers** — a
-crash-rebooted VAX3 under an unchanged identity presents exactly what a first
-boot presents (`0x0001` on all 4 STARTs in `vax3-2to3` too).
+> **This section first reported `[22:24]` as `0x0001` on all 12 STARTs of the
+> crash-rejoin, and concluded the field does not distinguish incarnations. THAT
+> WAS WRONG.** `[22:24]` is **payload-relative**; the payload starts at abs 14,
+> so the field is at **abs 36**. Abs 22 — what was actually read — is the §4(a)
+> connect flag, constant everywhere. The agent caught and retracted this itself
+> when pushed for raw bytes. **See §4k.9 for the corrected result, which reverses
+> the conclusion.** Keep this heading so nobody re-derives the retracted version.
 
-The other START quadword, abs 80..87, is **not** a boot stamp either: VAX3's
-reads 2026-08-01 12:05:21 — 4.5 h *before* this reboot — and sits 0.163 s from
-VAX2's. A persistent, disk-resident value. Undecoded.
+What survives from the original section, unaffected by the offset error:
 
-**The only candidate incarnation signal left on the wire** is the `send_seq`
-restart: VAX3's START carries `send_seq = 1` while VAX1's carries a *continuing*
-`11509` (VAX2's `8990`). A sequence restart on a VC to a node the peer already
-holds a CSB for is the natural "different incarnation" tell. **This is an
-inference, explicitly not observed on the peer** — a decode of which frame frees
-the old CSB is not possible from passive capture, and §4j brackets it only to
-`[idx 1172, idx 1202]`.
+The other START quadword, abs 80..87, is **not** a boot stamp: VAX3's reads
+2026-08-01 12:05:21 — 4.5 h *before* this reboot — and sits 0.163 s from VAX2's.
+A persistent, disk-resident value. Undecoded.
+
+VAX3's START carries `send_seq = 1` while VAX1's carries a *continuing* `11509`
+(VAX2's `8990`) — but §4k.8 shows OVMX already reproduces that exactly, so it is
+not a candidate delta either.
 
 ### 4k.4 ⚠ §4c.8 IS STALE — byte-verified, and it was load-bearing
 
@@ -2173,43 +2187,59 @@ incarnation counter:
 | **OVMX's own START, `r2A` (first join)** | **1** |
 | **OVMX's own START, `r2B` (rejoin)** | **2**, all three peers |
 
-**Read through the documented semantics, the table says something much better
-than a divergence.** The advertised value is `1` for a first contact and
-increments *"each time this node re-forms its channel against a member holding a
-residual CSB for it"*. So:
+**The corrected bytes, at abs 36 / abs 92, with a full-capture census and zero
+residuals — and they say OVMX is already correct.**
 
-- Peers advertise **`2` to OVMX** on its rejoin → **the peer still holds our
-  residual CSB.**
-- VAX3 echoes **`1`** on its crash-rejoin → **the peers held NO residual CSB for
-  VAX3 by the time it re-formed its channel.**
+| capture | direction | `[22:24]` echoed |
+|---|---|---|
+| `vax3-2to3` first-time join | VAX3→VAX1/VAX2 | **1** |
+| **this crash-rejoin** | **VAX3→VAX1, VAX3→VAX2** | **2** |
+| `af2-firsttimer` 1st / 2nd / 3rd incarnation | VX3→VAX1 | **1 / 2 / 3** |
+| members' own STARTs (never rebooted) | VAX1→VAX3, VAX2→VAX3 | 1 |
 
-**That is the same fact §4j measured through SDA, visible for free on the wire.**
-§4j: a returning real node gets a **brand-new CSB at a new address** (old one
-freed) while OVMX's old CSB is **mutated in place**. Two independent oracles, two
-labs, same conclusion — and the wire one is a single field readable in any
-capture, with no SDA console to overrun.
+And the advertisement that drives it, at payload `[78:80]` = **abs 92**, carried
+**only in directed HELLOs `0xb2`/`0xb3`/`0xb4`** (multicast `0xa0` is `0x0000` in
+all 309 frames; the `0x41` START's abs 92 is a different field entirely):
 
-**This makes the peer's advertised incarnation a free oracle for the CSB
-decision**, and it collapses the investigation to one question:
+| sender→dest | before crash | after reboot |
+|---|---|---|
+| VAX1→VAX3 | **1** (4 frames) | **2** (all 63 frames, from `+109.7701` on) |
+| VAX2→VAX3 | **1** (3 frames) | **2** (all 57 frames) |
+| VAX3→peers | 1 | 1 — unchanged, VAX3 lost its state |
+| VAX1↔VAX2 (channel never dropped) | 1 | 1 — never moves |
 
-> **Why does the peer retire a returning real node's CSB and treat it as a fresh
-> first contact, while retaining ours and calling us incarnation 2?**
+**Member advertises N → joiner echoes N**, chain grounded end to end across three
+captures.
 
-> **⚠ NOT YET CONFIRMED, and it is the load-bearing step.** VAX3 echoing `1` only
-> *implies* the peers advertised `1` **if** VAX3 echoes at all. That must be read
-> off the peers' directed HELLOs to VAX3 — before the crash and in the rejoin
-> window — not inferred from VAX3's echo. **Dispatched; do not build on this
-> until the advertised bytes are in hand.** If the peers never send VAX3 a
-> directed HELLO in that window, the interpretation changes entirely.
->
-> Also reconcile against §3 item 5, which records peers advertising `3, 4, 5, 6`
-> across session-i attempts — consistent with "increments per re-formation
-> against residual state", but those were different runs and should be checked
-> rather than assumed to line up.
+### ⛔ AND THAT KILLS THE ORACLE IDEA — the two cases are IDENTICAL here
 
-**Do NOT "fix" this by pinning `[22:24]` to 1.** The field is an echo; sending a
-value the member did not advertise is the `vms-691` stall this code already
-fixed. The value is a *readout* of the peer's state, not a lever on it.
+Peers advertise **2** to a returning real VAX3 and **2** to a returning OVMX
+identity; both echo **2**. **The field reads the same on the successful real
+rejoin and the refused OVMX one.** It is therefore *not* a readout of whether the
+peer freed the old CSB, and the "free wire oracle for the CSB decision" idea
+written in the first draft of this section is dead.
+
+Two things do survive, and both are useful:
+
+1. **`[22:24]` is removed from the candidate-delta list for good.** OVMX already
+   emits the reference value on the failing path. This independently confirms §3
+   item 5 against the reference for the first time.
+2. **The increment happens at PEDRIVER channel re-formation, upstream of any
+   connection-manager decision** — VAX1's very first post-reboot frame to VAX3
+   (idx 1173, `+109.7701`) already carries `2`, before any VC exists and before
+   VAX3 has sent anything but one multicast HELLO. *(Inference, but a tight one.)*
+   So this counter is channel-layer bookkeeping, not a consequence of the
+   admission decision, and it cannot be used to observe that decision.
+
+**Do NOT "fix" this by pinning `[22:24]`.** The field is an echo; sending a value
+the member did not advertise is the `vms-691` stall this code already fixed.
+
+> **Method note, worth more than the result.** This section was written wrong
+> **twice** — first "OVMX invents a value a real node never changes" (refuted by
+> our own source in 2 minutes), then "the advertised value is a CSB oracle"
+> (refuted by the agent's own retraction under a request for raw bytes). Both
+> survived initial plausibility because a *value* was grounded while its
+> *meaning* was not. **Grounding a byte is not grounding a claim.**
 
 ---
 
@@ -2331,7 +2361,13 @@ fixed. The value is a *readout* of the peer's state, not a lever on it.
 | `tools/mk_sysgen.py` | **x86_64 replacement for the aarch64 `mk_sysgen` binary**, whose source is lost. Patches SCSNODE/SCSSYSTEMID into a known-good template store (the one from `s8A`/`s8B`, both of which joined) rather than regenerating, so every other field is byte-identical to a store proven to work. Rejects names >6 chars and deletes any stale `.cluster` prior-admission sidecar, so a "fresh" identity is really fresh. |
 | `tools/connpoll.sh` | **SDA `SHOW CONNECTIONS/NODE=<id>` sampled on a chosen peer THROUGHOUT a run** — the CDTs that peer holds for our identity, and their `Rej/Disconn Reason`. The only oracle here that can name a rejection rather than describe a silence (§4e.3). Stays INSIDE SDA and uses `/NODE=` to keep a sample small; the first version drove `ANALYZE/SYSTEM…EXIT` per sample and overran the console input buffer during the OPCOM flood, losing 3 of 4 snapshots. |
 | `tools/scacptrace.sh` | **high-cadence SCACP + packet capture.** Stays INSIDE SCACP and fires bare `SHOW VC` on a timer (one console round-trip per sample instead of ~23 s), and relies on SCACP's self-timestamping header instead of markers. This is what established ORDER (§4d.10). VAX1's clock runs ~7.5 s behind the host — measure it with `SHOW TIME` vs `date` before correlating. |
-| `tools/csbcycle.sh` | **SIGKILL a REAL node and sample the peer's SDA `SHOW CLUSTER` across kill → removal → reboot → readmission**, on a pod that also carries dead/refused OVMX identities so all histories land in ONE dump. This is what produced the real-node control (§4j) and killed "our surviving CSB is the asymmetry". Stays parked inside SDA and slices the console INCREMENTALLY per sample. **⚠ Two live defects — see §4j.6: console input dies at the reboot (everything after is empty), and markers glue to the previous sample so `grep '^#####'` under-counts. Fix both before reusing.** |
+| `tools/csbcycle.sh` | **SIGKILL a REAL node and sample the peer's SDA `SHOW CLUSTER` across kill → removal → reboot → readmission**, on a pod that also carries dead/refused OVMX identities so all histories land in ONE dump. This is what produced the real-node control (§4j) and killed "our surviving CSB is the asymmetry". Stays parked inside SDA and slices the console INCREMENTALLY per sample. **Both of its original defects are FIXED and verified** (§4j.6): per-node `SHOW CLUSTER/NODE=` sampling instead of the 6.3 KB full dump, leading newline before each marker, and a loud abort on consecutive empty samples. Usage: `csbcycle.sh <pod> <tag> [node ...]`, `CAD`/`DEAD`/`TOTAL`/`MAXEMPTY` env. |
+
+> **⚠ THE LAB TOOLING IS NOT VERSION CONTROLLED.** `/data/training/vax/cluster/`
+> is not a git repo, so every script in this table exists only on `workshop`'s ZFS
+> volume. This has already cost the project once — `mk_sysgen`'s source is lost
+> and had to be reimplemented as `mk_sysgen.py` (§4e.1). `tests/lab/` on main is
+> now a natural home for them. **Worth a small item; not done here.**
 
 Run tags session j (part 2): `r1A` `r2A` joined, `r1B` `r2B` refused, `vax3crash` = the real-VAX crash-rejoin specimen. **Last SCSSYSTEMID used: 1241.**
 Run tags session k: `s1A` `s2A` `s3A` `s4A` `s5A` joined (fresh, pure); `s1B` refused (rejoin form), `s1C` refused (`OVMX_REJOIN_FORM=0`); `s3B` refused (SDA-polled on VAX3), `s3C` refused (`OVMX_CFG2_PEER=1`, forced to the real coordinator); `s3D` refused / `s6A` joined = the matched SCACP pair (§4d.9); `s3E` refused / `s7A` joined = the high-cadence ORDERING pair (§4d.10); `s3F` refused WITH the 0x7b fix, `s8B` fresh joined with it. **Last SCSSYSTEMID used: 1249.**

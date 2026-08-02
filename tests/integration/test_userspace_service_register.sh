@@ -683,6 +683,7 @@ cat "$WORK/symbols" >> "$WORK/facts"
 
 # ---------------------------------------------------------------- analysis --
 : > "$WORK/answerpath"
+: > "$WORK/usremainder"
 awk -F'\t' \
     -v declf="$WORK/decl_ok" \
     -v protof="$WORK/protos" \
@@ -692,6 +693,7 @@ awk -F'\t' \
     -v out_symonly="$WORK/symonly" \
     -v ioctlf="$WORK/ioctlmap" \
     -v out_apath="$WORK/answerpath" \
+    -v out_upath="$WORK/usremainder" \
     -v out_table="$WORK/table" '
 $1 == "D" {
     if ($3 == "static" || $3 == "macro") { local[$2 SUBSEP $4] = 1; node = $2 ":" $4 }
@@ -809,18 +811,51 @@ END {
     }
 
     # ------------------------------------------------ THE ANSWER PATH ------
-    # For each service claiming OVMX-EXECUTIVE, the set of SOURCE FILES its
-    # answer can come from: the file that defines it, plus -- for every
-    # function reachable from it -- the executive file holding the handler for
-    # every ioctl that function issues. Every hop is read out of code -- the
-    # call edges from the scanner, the ioctl references from the wrapper
-    # bodies, the ioctl->handler pairing from the dispatch switch itself, and
-    # the handler->file mapping from the definition scan of src/kernel/. No
-    # part of this set is read from a manifest.
+    # For each service claiming OVMX-EXECUTIVE, its answer path is split into
+    # TWO DISJOINT HALVES, and the split is the whole point: an OVMX-EXECUTIVE
+    # line claims that ALL of the answer comes from the executive, so evidence
+    # about the two halves does OPPOSITE things to it.
     #
-    # This is what the OVMX-EXECUTIVE price is charged against (see "the price
-    # of exemption" below): a claim is paid by a defect that MUTATES CODE IN
-    # THIS SET, not by an assertion whose wording mentions the service.
+    #   THE EXECUTIVE HALF -- the executive files that answer it: for every
+    #   function reachable from the service, the file holding the handler for
+    #   every ioctl that function issues. A defect mutating this half and
+    #   reddening the named proof PAYS for the claim.
+    #
+    #   THE USERSPACE REMAINDER -- the translation unit that DEFINES the
+    #   service, which is product code running in the CALLING PROCESS. A defect
+    #   mutating THIS half DISQUALIFIES the claim -- see "the price of
+    #   exemption" below.
+    #
+    # Every hop of the executive half is read out of code -- the call edges from
+    # the scanner, the ioctl references from the wrapper bodies, the
+    # ioctl->handler pairing from the dispatch switch itself, and the
+    # handler->file mapping from the definition scan of src/kernel/. No part of
+    # either set is read from a manifest.
+    #
+    # WHY THE REMAINDER IS THE DEFINING UNIT AND NOT "EVERY REACHABLE USERSPACE
+    # FILE", which was written first and MEASURED WORSE. The call graph is
+    # keyed on function NAMES across the whole product, so its transitive
+    # closure over-reaches: the first draft put src/imgact/imgact.c and
+    # src/libvms/syssvc/sys_event.c into the remainder of sys$enq, neither of
+    # which its answer can come from. An over-broad remainder does not merely
+    # look wrong, it MANUFACTURES REFUTATIONS -- a defect entered against
+    # imgact.c would have withdrawn the lock manager exemptions for no
+    # reason. It would also have caught src/libvmssys/vms_kif.c, the transport
+    # that CARRIES the request to the executive: bind-client-no-register edits
+    # it and reddens assertions in tests/qemu/test_syssvc_ef_mproc.c, so every
+    # event-flag claim would have been disqualified by the wire being cut,
+    # which is not the same fact as the answer being computed locally.
+    #
+    # The defining unit is the principled boundary rather than a convenient
+    # one: this register already REQUIRES both halves of a mixture to live in
+    # the translation unit that defines the service (LOCAL HALF IN A DIFFERENT
+    # TRANSLATION UNIT is a red above). So the defining unit is exactly the
+    # code whose remainder a declaration here is able to describe at all.
+    #
+    # WHAT THAT LEAVES OPEN, stated rather than discovered later: a service
+    # that delegates its userspace half to a DIFFERENT file is not refuted by a
+    # defect in that file. The register cannot express such a remainder either,
+    # so this is a limit of the declaration form, not of this check alone.
     for (i = 1; i <= ne; i++) adj[ef[i]] = adj[ef[i]] " " et[i]
     while ((getline l < ioctlf) > 0) {
         split(l, x, "\t")
@@ -831,7 +866,7 @@ END {
     for (nm in declfile) {
         if (declkind[nm] != "EXECUTIVE") continue
         if (!(nm in deffile)) continue
-        delete reach; delete q; delete apf
+        delete reach; delete q; delete apf; delete upf
         qh = 0; qt = 1; q[1] = nm; reach[nm] = 1
         while (qh < qt) {
             qh++
@@ -839,7 +874,6 @@ END {
             for (j = 1; j <= k; j++)
                 if (nb[j] != "" && !(nb[j] in reach)) { reach[nb[j]] = 1; qt++; q[qt] = nb[j] }
         }
-        apf[deffile[nm]] = 1
         for (cur in reach) {
             k = split(ioctlrefs[cur], ir, " ")
             for (j = 1; j <= k; j++) {
@@ -849,7 +883,9 @@ END {
                     if (hs[hi] != "" && (hs[hi] in deffile)) apf[deffile[hs[hi]]] = 1
             }
         }
+        upf[deffile[nm]] = 1
         for (f in apf) printf "%s %s\n", nm, f > out_apath
+        for (f in upf) printf "%s %s\n", nm, f > out_upath
     }
 
     # (1) a prototyped service with no definition NAMES what vanished
@@ -972,7 +1008,7 @@ END {
 
 # ------------------------------------------------- the price of exemption --
 # An OVMX-EXECUTIVE line is the ONLY full exemption this gate grants, so it is
-# the only place worth attacking, and it is priced accordingly. FIVE checks:
+# the only place worth attacking, and it is priced accordingly. SIX checks:
 #
 #   1. the proof EXISTS in this tree;
 #   2. it lives under tests/qemu/ -- the suite whose programs are booted into
@@ -988,8 +1024,61 @@ END {
 #   4. it CALLS the service, in code, with comments stripped by the same
 #      scanner that reads the product. Not "mentions": CALLS;
 #   5. some defect in tests/qemu/facility_defects.sh MUTATES A FILE IN THE
-#      SERVICE'S ANSWER PATH and names an assertion that appears verbatim in
-#      that proof.
+#      EXECUTIVE HALF of the service's answer path and names an assertion that
+#      appears verbatim in that proof;
+#   6. and NO defect in that manifest mutates the service's USERSPACE
+#      REMAINDER. Check 6 is a DISQUALIFIER, not another thing to buy, and it
+#      is check 5's mirror image -- see below.
+#
+# WHY 6 EXISTS AND WHY IT IS A DISQUALIFIER (vms-ecf round 4).
+#
+# The three declaration kinds say different things and the difference is the
+# only reason the register is worth reading:
+#
+#   OVMX-PARTIAL   -- SOME of the answer is the executive's, and the paired
+#                     OVMX-LOCAL half names the rest.
+#   OVMX-EXECUTIVE -- ALL of it is. There is no remainder.
+#
+# Checks 1-5 are all evidence that the executive is REACHED and that mutating
+# it is observable. None of that separates the two kinds: a PARTIAL service
+# reaches the executive too, by definition, and its proof calls it too. So a
+# service that was already OVMX-PARTIAL satisfied every one of checks 1-5
+# BEFORE ANY EDIT, and the upgrade to a full exemption cost exactly one thing:
+# DELETING ITS OWN OVMX-LOCAL HALF -- the half that says a remainder exists.
+# Measured, on this branch, by an adversary: flipping sys$creprc's declaration
+# block and nothing else printed PASS with an extra full exemption. Worse than
+# free: the defect that paid for it, creprc-handshake-eintr, edits
+# src/libvms/syssvc/sys_process.c, which is PURE USERSPACE -- so the evidence
+# admitted in payment was evidence that the deleted half was TRUE.
+#
+# Hence the rule this file now enforces: EVIDENCE ABOUT THE USERSPACE
+# REMAINDER RUNS THE OTHER WAY. A defect that changes an observable public-API
+# answer by mutating code that runs in the CALLING PROCESS is evidence that
+# part of the answer is computed there, which is the exact negation of "all of
+# it is the executive's". It cannot pay for the claim; it refutes it. The
+# remedy the gate prints is OVMX-PARTIAL + OVMX-LOCAL, never deletion.
+#
+# WHAT CHECK 6 IS AND IS NOT WORTH, said here rather than left to be assumed:
+#
+#   - It is EVIDENCE-BASED AND ASYMMETRIC. It can find a proven remainder; it
+#     can never establish that there is none. A service whose userspace half
+#     nobody has written a defect for passes check 6 because nothing refutes
+#     it, not because anything confirms it. "No proven userspace remainder" is
+#     the strongest thing this gate says, and the printed report says exactly
+#     that rather than "wholly executive-resident".
+#   - It is FILE-GRANULAR, in both directions, which is the same coarseness
+#     check 5 already had (a defect in the executive event-flag file pays for
+#     every service whose answer path includes it, and does not separate
+#     sys$readef from sys$setef). A defect entered against one service in a
+#     shared translation unit disqualifies its neighbours' full exemptions too.
+#     That is conservative in the safe direction -- it can only ever weaken a
+#     claim, never strengthen one -- and it is not silently coarse: the run
+#     prints which defect and which file did it.
+#   - It is NOT SCOPED TO THE NAMED PROOF, deliberately. Scoping it there --
+#     "the proof you cite is itself reddened by mutating your userspace code"
+#     -- is a tighter argument and it would be PROOF-SHOPPABLE: name a
+#     different qemu suite that calls the service and the disqualifier goes
+#     quiet while the remainder stays exactly where it was.
 #
 # WHY 4 AND 5 ARE WORDED THAT WAY, MEASURED TWICE (vms-ecf).
 #
@@ -1010,47 +1099,39 @@ END {
 # is the instrument round 2 used on its own sys$readef gap.
 #
 # So the service is no longer bound to the mutation by anything anyone types.
-# It is bound by WHICH CODE THE MUTATION EDITS. The answer path (computed
-# above, printed below) is derived in four hops that are all code: the call
-# graph from the service; the VMS_IOCTL_* constants those functions reference;
-# the executive's own `case VMS_IOCTL_X:` dispatch arms; and the file each
-# handler is defined in. A defect pays for a claim when its `targets` -- the
-# files it edits, which the manifest already carries for its own injection --
-# land inside that set, and when one of its require_fail/knock_on_fail texts
-# is in the named proof. The assertion never has to mention the service, and
-# the round-2 settling command -- re-wording a proven assertion in the proof
-# and the manifest together so that it does -- is a RED control next door.
+# It is bound by WHICH CODE THE MUTATION EDITS. The executive half of the
+# answer path (computed above, printed below) is derived in four hops that are
+# all code: the call graph from the service; the VMS_IOCTL_* constants those
+# functions reference; the executive's own `case VMS_IOCTL_X:` dispatch arms;
+# and the file each handler is defined in. A defect pays for a claim when its
+# `targets` -- the files it edits, which the manifest already carries for its
+# own injection -- land inside that set, and when one of its
+# require_fail/knock_on_fail texts is in the named proof. The assertion never
+# has to mention the service, and the round-2 settling command -- re-wording a
+# proven assertion in the proof and the manifest together so that it does -- is
+# a RED control next door.
 #
-# THE OTHER HALF OF THAT, SAID RATHER THAN LEFT IMPLIED: `targets` IS written
-# by hand. It is not free text, because it is the file list the injection
-# actually seds and facility_defects.sh selftest fails when an anchor no longer
-# matches the tree -- but a FABRICATED defect entry, naming a target in some
-# service answer path and an assertion put into that proof to match, would pay
-# here. What stops that is not in this file: it is
-# tests/qemu/run_facility_negctl.sh, which injects each defect in QEMU and
-# requires the complete set of assertions that go red to EQUAL require_fail +
-# knock_on_fail exactly. This gate READS the manifest; that one RUNS it.
+# THE PRICE IS STILL PURCHASABLE AND THIS FILE DOES NOT CLAIM OTHERWISE. What
+# it deliberately does NOT carry is a number: FOUR consecutive revisions of
+# this comment stated a measured per-site cost ("one ignored line", "a comment",
+# "a re-worded assertion", "three edits") and every one of them was broken by
+# execution within days, because a price measured against one service is not
+# the price of the class. The residuals that are open, and where each is
+# tracked, are named instead of costed:
 #
-# WHAT THIS COSTS AN ADVERSARY, MEASURED ON THIS BRANCH RATHER THAN ASSERTED.
-# Buying sys$gettim an OVMX-EXECUTIVE claim now takes THREE edits, none of
-# which is prose: flip its declaration; add `(void)vms_kif_readef(0u, &s)` to
-# its body so the executive's event-flag code enters its answer path; and add
-# `(void)sys$gettim(&t)` to tests/qemu/test_syssvc_ef_mproc.c so the proof
-# calls it. Two of those are ignored calls. THE PRICE IS STILL PURCHASABLE and
-# this comment does not claim otherwise -- what changed is the CURRENCY: no
-# wording, in either file, is worth anything any more, and the buyer has to put
-# a call into the specific executive facility whose mutation reddens the proof
-# he names. The residual is vms-d89's, unchanged and still open: "contains a
-# call" is a syntactic proxy for "the answer came from there", and every
-# syntactic proxy is purchasable. Closing it needs per-assertion service
-# attribution measured AT RUNTIME by tests/qemu/run_facility_negctl.sh, which
-# is the only instrument here that executes anything (vms-38c).
-#
-# AND WHAT THE ATTRIBUTION IS ACTUALLY WORTH, said here rather than left for a
-# reader to assume: it is FACILITY-level, not service-level. eflag-clref-noop
-# mutates the executive event-flag code, so it pays for every service whose
-# answer path includes that file. It does not separate sys$readef from
-# sys$setef, and nothing in this file claims it does.
+#   - "the proof CALLS the service" is a syntactic proxy for "the answer came
+#     from there", and every syntactic proxy is purchasable. Closing it needs
+#     per-assertion service attribution measured AT RUNTIME by
+#     tests/qemu/run_facility_negctl.sh, the only instrument in this area that
+#     executes anything (vms-d89's residual, tracked as vms-38c).
+#   - `targets` in the manifest is written by hand, so BOTH check 5 and check 6
+#     read a human-written file list. Check 5's exposure is a fabricated entry
+#     (answered by run_facility_negctl.sh, which injects each defect in QEMU
+#     and requires the red set to EQUAL require_fail + knock_on_fail exactly).
+#     Check 6's exposure is the mirror: DELETING a defect entry removes the
+#     disqualifying evidence, and nothing in this tree floors the manifest
+#     against deletion. That is a real, open residual and it is recorded on
+#     vms-38c rather than costed here.
 FDMANIFEST="$SRC_ROOT/tests/qemu/facility_defects.sh"
 
 # The manifest, read once: one line per defect, "<name>|<targets>", with each
@@ -1121,7 +1202,40 @@ while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
         printf '     exact buy-off (vms-ecf).\n' >> "$WORK/errors"
         continue
     fi
-    # (5) A DEFECT THAT MUTATES THE ANSWER PATH AND REDDENS THIS PROOF.
+    # (6) NO DEFECT MUTATES THE USERSPACE REMAINDER. Checked BEFORE the payment
+    # check and reported separately, because it is not a missing payment: it is
+    # evidence against the claim itself. A defect here is a mutation of code
+    # running in the calling process that the manifest says changes an
+    # observable assertion -- i.e. a demonstration that part of the answer is
+    # computed outside the executive. No proof, however good, makes that go
+    # away, so this does NOT consult the named proof (see the header: scoping
+    # it there would be proof-shoppable).
+    _upath=$(awk -v n="$pname" '$1 == n { printf " %s", $2 }' "$WORK/usremainder" 2>/dev/null)
+    _refuters=""
+    while IFS='|' read -r _d _tg; do
+        for _t in $_tg; do
+            case "$_upath " in
+                *" src/$_t "*) _refuters="$_refuters $_d($_t)"; break ;;
+            esac
+        done
+    done < "$WORK/defects"
+    if [ -n "$_refuters" ]; then
+        printf 'EXECUTIVE DECLARATION REFUTED BY A DEFECT IN ITS USERSPACE REMAINDER: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
+        printf '  -> OVMX-EXECUTIVE claims the WHOLE answer comes from the executive, but\n' >> "$WORK/errors"
+        printf '     tests/qemu/facility_defects.sh carries a mutation of code that runs in\n' >> "$WORK/errors"
+        printf '     the CALLING PROCESS which changes an assertion it names:\n' >> "$WORK/errors"
+        for _r in $_refuters; do
+            printf '       %s\n' "$_r" >> "$WORK/errors"
+        done
+        printf '     The userspace remainder is:%s\n' "${_upath:- (empty)}" >> "$WORK/errors"
+        printf '     That is evidence FOR a remainder, so it cannot pay for a claim that\n' >> "$WORK/errors"
+        printf '     there is none. Say OVMX-PARTIAL and name the local half with an\n' >> "$WORK/errors"
+        printf '     OVMX-LOCAL line beside it -- do NOT delete either. Deleting the local\n' >> "$WORK/errors"
+        printf '     half to reach a full exemption is the buy-off this check exists for.\n' >> "$WORK/errors"
+        printf '%s\t%s\t%s\n' "$pname" "$pproof" "REFUTED:$(printf '%s' "$_refuters" | sed 's/^ //')" >> "$WORK/backed"
+        continue
+    fi
+    # (5) A DEFECT THAT MUTATES THE EXECUTIVE HALF AND REDDENS THIS PROOF.
     _apath=$(awk -v n="$pname" '$1 == n { printf " %s", $2 }' "$WORK/answerpath" 2>/dev/null)
     # COMMENT-STRIPPED, for the same reason check 4 is: the manifest claims
     # these texts go RED when the defect is injected, and a text sitting in a
@@ -1144,13 +1258,15 @@ while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
     if [ -z "$_payers" ]; then
         printf 'EXECUTIVE DECLARATION NO INJECTED DEFECT IN ITS ANSWER PATH REDDENS: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
         printf '  -> no defect in tests/qemu/facility_defects.sh both EDITS a file in %s\n' "$pname" >> "$WORK/errors"
-        printf '     answer path and names an assertion that appears in proof=%s.\n' "$pproof" >> "$WORK/errors"
-        printf '     The answer path is:%s\n' "${_apath:- (empty)}" >> "$WORK/errors"
+        printf '     EXECUTIVE answer path and names an assertion that appears in\n' >> "$WORK/errors"
+        printf '     proof=%s.\n' "$pproof" >> "$WORK/errors"
+        printf '     The executive answer path is:%s\n' "${_apath:- (empty)}" >> "$WORK/errors"
         printf '     Claiming the WHOLE answer comes from the executive costs a mutation\n' >> "$WORK/errors"
         printf '     to the executive code that answers, proven to redden that proof --\n' >> "$WORK/errors"
-        printf '     not a wording that mentions the service. Add a defect entry for the\n' >> "$WORK/errors"
-        printf '     facility, or say OVMX-PARTIAL and name the half that is not the\n' >> "$WORK/errors"
-        printf "     executive's.\\n" >> "$WORK/errors"
+        printf '     not a wording that mentions the service, and not a mutation of the\n' >> "$WORK/errors"
+        printf '     service own userspace code, which argues the other way. Add a defect\n' >> "$WORK/errors"
+        printf '     entry for the facility, or say OVMX-PARTIAL and name the half that is\n' >> "$WORK/errors"
+        printf "     not the executive's.\\n" >> "$WORK/errors"
     fi
     printf '%s\t%s\t%s\n' "$pname" "$pproof" "$(printf '%s' "$_payers" | sed 's/^ //')" >> "$WORK/backed"
 done < "$WORK/decl_ok"
@@ -1192,7 +1308,8 @@ while IFS=' ' read -r k v; do
         userspace)  echo "    $v say OVMX-USERSPACE -- no part of the answer is the executive's" ;;
         partial)    echo "    $v say OVMX-PARTIAL   -- a named part is, a named part is not" ;;
         executive)  echo "    $v say OVMX-EXECUTIVE -- all of it is, and name a proof that CALLS them" ;
-                    echo "       and that an injected defect in their answer path is known to redden" ;;
+                    echo "       and that an injected defect in the EXECUTIVE half of their answer" ;
+                    echo "       path is known to redden, with no defect in their userspace remainder" ;;
         exported)   echo "  $v sys\$ symbol(s) are EXPORTED by the compiled product (nm, $nobj object file(s))" ;;
         symonly)    echo "    $v of those the source scan never saw -- exported under a name the source" ;
                     echo "       does not spell (asm label / alias). They are in the universe under their" ;
@@ -1226,10 +1343,19 @@ fi
 if [ -s "$WORK/backed" ]; then
     echo
     echo "  the OVMX-EXECUTIVE claims, and the injected defect(s) that pay for each --"
-    echo "  a defect that EDITS a file in the service's answer path AND names an"
-    echo "  assertion that appears in the proof it points at:"
+    echo "  a defect that EDITS a file in the EXECUTIVE half of the service's answer"
+    echo "  path AND names an assertion that appears in the proof it points at. Read"
+    echo "  a paid claim as 'no proven userspace remainder', not as 'proven to have"
+    echo "  none': check 6 can refute a full exemption, never confirm one."
     sort "$WORK/backed" | while IFS="$(printf '\t')" read -r bn bp bd; do
         printf '      %-22s %s\n' "$bn" "$bp"
+        case "$bd" in
+            REFUTED:*)
+                for _b in $(printf '%s' "${bd#REFUTED:}"); do
+                    printf '          REFUTED by %-31s -- a defect in its USERSPACE remainder\n' "$_b"
+                done
+                continue ;;
+        esac
         for _b in $bd; do
             printf '          paid by %-34s (edits %s)\n' "$_b" \
                 "$(sh "$FDMANIFEST" field "$_b" targets 2>/dev/null | tr '\n' ' ')"

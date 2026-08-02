@@ -102,8 +102,13 @@ FDMAN="$ROOT/tests/qemu/facility_defects.sh"
 # code is the ioctl this file dispatches. If the gate cannot read the bridge it
 # must refuse to certify, and that refusal needs a control like anything else.
 DISPATCH="$ROOT/src/kernel/vms_module.c"
+# A REAL, ALREADY-DECLARED MIXTURE. The round-4 disqualifier is about services
+# that are ALREADY OVMX-PARTIAL -- they satisfy every other check before any
+# edit is made -- so the control for it cannot use a minted fixture service.
+# sys$creprc is the one an adversary measured the buy-off on.
+PROCESS="$ROOT/src/libvms/syssvc/sys_process.c"
 
-MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $LOCKPROOF $FDMAN $DISPATCH"
+MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $LOCKPROOF $FDMAN $DISPATCH $PROCESS"
 
 key_of() { printf '%s' "${1#"$ROOT"/}" | tr '/.' '__'; }
 
@@ -458,6 +463,66 @@ sed -i 's|child: sys\$ascefc joined the named common cluster|child: sys$ascefc j
 sed -i 's|child: sys\$ascefc joined the named common cluster|child: sys$ascefc joined the named common cluster, clock via sys$gettim|g' "$FDMAN"
 expect_red "$TIME $PROOF $FDMAN" "an EXECUTIVE claim paid by RE-WORDING a proven assertion to mention the service" \
     "EXECUTIVE DECLARATION WHOSE PROOF NEVER CALLS THE SERVICE: sys\$gettim"
+
+# ...AND THE UPGRADE THAT COST NOTHING AT ALL (vms-ecf, round 4). THE CONTROL
+# THIS ROUND EXISTS FOR, and the exact settling command an adversary measured
+# against the round-3 gate. Every check up to here is evidence that the
+# executive is REACHED, and an OVMX-PARTIAL service reaches it BY DEFINITION --
+# so sys$creprc satisfied all of them before any edit. Flipping its declaration
+# block to OVMX-EXECUTIVE and dropping the paired OVMX-LOCAL half -- ONE edit,
+# no ignored call, no test file touched, no code change -- printed PASS with an
+# extra full exemption. The evidence admitted in payment was creprc-handshake-
+# eintr, which edits THIS FILE, pure userspace: evidence that the deleted half
+# was true, spent on a claim that it is false.
+sed -i '/OVMX-LOCAL: sys\$creprc --/d' "$PROCESS"
+sed -i 's|OVMX-PARTIAL: sys\$creprc (\(vms-[0-9a-z.]*\)) -- exec:|OVMX-EXECUTIVE: sys$creprc (\1) proof=tests/qemu/test_syssvc_procnam.c --|' "$PROCESS"
+expect_red "$PROCESS" "an already-PARTIAL service upgraded to a full exemption by deleting its own local half" \
+    "EXECUTIVE DECLARATION REFUTED BY A DEFECT IN ITS USERSPACE REMAINDER: sys\$creprc"
+
+# ...AND THE SAME MECHANISM ISOLATED, so the red above cannot be passing for
+# some property peculiar to sys$creprc. This is the exact PAIR of the "full
+# exemption, PAID FOR" green control below: identical claim, identical proof,
+# identical paying defect in kernel/vms_eflag.c -- plus ONE fabricated manifest
+# entry whose target is the service's OWN defining translation unit. The green
+# one passes, this one must not, and the only difference between them is which
+# side of the bridge the extra mutation lands on.
+cat > "$WORK/negctl_branch" <<'BRANCH_EOF'
+    negctl-paid)
+        case "$_f" in
+        targets)      echo "kernel/vms_eflag.c";;
+        require_fail) echo 'negctl: sys$negctl_proven answers from the executive';;
+        *)            echo "";;
+        esac;;
+    negctl-userspace-remainder)
+        case "$_f" in
+        targets)      echo "libvms/syssvc/sys_event.c";;
+        require_fail) echo 'negctl: the userspace half still answers part of it';;
+        *)            echo "";;
+        esac;;
+BRANCH_EOF
+sed -i 's|^DEFECTS="|DEFECTS="negctl-paid\nnegctl-userspace-remainder\n|' "$FDMAN"
+awk 'NR == FNR { b = b $0 ORS; next }
+     { print }
+     !ins && /^    case "\$_d" in$/ { printf "%s", b; ins = 1 }' \
+    "$WORK/negctl_branch" "$FDMAN" > "$WORK/fdman.new" && mv "$WORK/fdman.new" "$FDMAN"
+{
+    echo ''
+    echo '/* OVMX-EXECUTIVE: sys$negctl_refuted (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo 'uint32_t sys$negctl_refuted(uint32_t efn) {'
+    echo '    uint32_t st = 0;'
+    echo '    (void)vms_kif_readef(efn, &st);'
+    echo '    return st;'
+    echo '}'
+} >> "$EVENT"
+{
+    echo 'void ovmx_negctl_refuted_caller(void);'
+    echo 'void ovmx_negctl_refuted_caller(void) {'
+    echo '    (void)sys$negctl_refuted(0);'
+    echo '    printf("  FAIL: negctl: sys$negctl_proven answers from the executive\\n");'
+    echo '}'
+} >> "$PROOF"
+expect_red "$EVENT $PROOF $FDMAN" "a fully paid EXECUTIVE claim refuted by one defect in its own defining translation unit" \
+    "EXECUTIVE DECLARATION REFUTED BY A DEFECT IN ITS USERSPACE REMAINDER: sys\$negctl_refuted"
 
 # THE PRICE MUST BE COMPUTABLE, or every EXECUTIVE claim is exempt for want of
 # a check. With the manifest of proven-reddenable assertions emptied out, the

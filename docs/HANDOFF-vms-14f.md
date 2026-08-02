@@ -29,24 +29,28 @@ round by SHA, never by branch name.**
 The objective is **`vms-14f`**: *OVMX runs unmodified VMS software: executive-resident system
 facilities, no facades.*
 
-**State (re-derived 2026-08-02, after triage):** closure = **26 open** by DAG walk from `vms-14f`,
-no cycles. Main is at `ce11330`. It was 17 before the eight items filed this round were triaged into
-the graph — see §3; that growth is a deliberate PM decision and is reversible.
+**State (re-derived 2026-08-02, after two merges and triage):** closure = **23 open** by DAG walk
+from `vms-14f`, no cycles. Main is at **`eff4fe3`**. It was 17 at the start of the round; eight new
+defects were triaged in (§3) and three items closed on merge, netting +6.
 
-**The frontier is still three branches, and they are no longer symmetric — that is the news.**
+**`vms-b33` is UNBLOCKED and `active`.** Its last two blockers, `vms-ecf` and `vms-f26`, closed with
+PR #47. **The fifth Phase 2 verdict is the next thing to run.**
 
-| Item | Branch @ SHA | State |
-|---|---|---|
-| `vms-fbe` | `work/vms-fbe-r3` == `work/vms-fbe-r4` @ `f4a59d7` | **draft PR #46, 35/35 CI green.** Awaiting a merge decision — nothing technical is outstanding. |
-| `vms-ecf` + `vms-f26` | `work/vms-ecf-f26-r4` @ `21519f5` | **draft PR #47.** Adversary says MERGEABLE; **CI is RED on `Build & Test`** — see §4. Round 5 addresses only that. |
-| `vms-cb5` (+`vms-f39`,`vms-f42d`) | `work/vms-cb5-env3-r4` @ `7ee3ba4` | round 4 pushed and green locally (**739 PASS / 0 FAIL**, negctl rc=77); **adversarial verification in flight** — one open risk, §4. |
+**Two of the three frontier branches are merged. One remains.**
 
-**Merging PR #47 unblocks `vms-b33`'s fifth verdict.** `vms-ecf` and `vms-f26` are its *only two*
-remaining open blockers; every other entry in its 17-blocker list is already terminal. Confirm that
-yourself with `rd show vms-b33` before acting on it.
+| Item | State |
+|---|---|
+| `vms-fbe` | **MERGED** — PR #46, `c243992`. Item closed. |
+| `vms-ecf` + `vms-f26` | **MERGED** — PR #47, `57fc164`. Both items closed. |
+| `vms-cb5` (+`vms-f39`, `vms-f42d`) | **PR #48 OPEN**, head `work/vms-cb5-env3-r4` @ `1598ef5` — main merged in, plus the `knock_on_fail` fix for the two scenario-G/OPCOM+ reds under `bind-client-no-register`. Verify CI, then merge. |
 
-**Do not start new work outside this set** until those three land. `vms-b33` hangs off them and the
-rest of the tree hangs off `vms-b33`.
+**The next thing to run is `vms-b33`'s fifth verdict** — Phase 2, *the executive is wired and
+provable, not merely present*. It is `active` and unblocked. Four previous runs returned NO-GO and in
+all four **every facility attacked survived**; the blocker was always *the gate the verdict rests on*.
+Expect the fifth to look the same, and read §5 before running it.
+
+`vms-150` (Phase 3 veracity) does **not** unblock when #48 merges — `vms-a30`, `vms-95f` and `vms-38c`
+also block it. See §3.
 
 ---
 
@@ -93,7 +97,7 @@ live member of the same identity class `vms-cb5` is fixing, deliberately left op
 ### The eight items filed 2026-08-02, and where triage put them
 
 Eight defects were found *in passing* while settling the three branches. They were filed unwired, then
-triaged into the graph. **This is what took the closure from 17 to 26.**
+triaged into the graph — **that took the closure 17 → 26; three closures on merge brought it to 23.**
 
 | Item | Pri | Wired to | Rationale |
 |---|---|---|---|
@@ -396,9 +400,9 @@ other projects.
 
 ## 8. Honest accounting
 
-The closure was 17 open on 2026-08-01. After a full round on all three frontier branches — all three
-now sit in **PRs #46, #47, #48, marked ready for review** — it is **26 open**, because **eight new
-defects were found in passing and nine items were triaged into the graph** (§3).
+The closure was 17 open on 2026-08-01. After a full round on all three frontier branches — **two
+merged (#46, #47), one open (#48)** — it is **23 open**: eight new defects were found in passing and
+nine items triaged into the graph (§3), against three items closed on merge.
 
 **The count went the wrong way and that is the honest outcome, not a failure.** Every one of the
 three branches passed local verification and was then refused by something nobody had run: two CI

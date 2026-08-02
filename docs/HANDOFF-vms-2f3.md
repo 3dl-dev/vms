@@ -280,6 +280,13 @@ oracle degrades before it errors.
     refused rejoin the peer's `MSCP$DISK` lookups stay `0x5b` for all four,
     while every join reaches `0x4b` by the second. A join CAN carry a leading
     `0x5b` (`N3A`). Useful free oracle; the causal reading is dead.
+15. **"OVMX is deaf to `cat 0x04` and that is the gate" (§4M.13).** `scsd.c`
+    never dispatches on a `cat 0x04` opcode — **and neither does a real node.**
+    Across 175 `cat 0x04` frames sent to the rejoining VAX3 there is never a
+    same-opcode reply; the category is absorbed by the ack field alone. OVMX's
+    non-dispatch is correct. Related and also dead: the peer's `op 0x04` to us
+    is byte-conformant with what the reference's returning node received and
+    joined on.
 14. **The peer's `cat 0x04` ack opcode (§4M.7).** Claimed as `op 0x00` on a
     join vs `op 0x04`/`op 0x06` on a rejoin, from one run. **Refuted the same
     session:** `N3A` JOINED with `op 0x04`; `N1D`/`N1E` were REFUSED with
@@ -3346,6 +3353,71 @@ all three VAXes emit both msgtypes, so responder identity carries no signal.
 fresh identities joined with it on and the rejoin is refused either way
 (§4M.9). It is not urgent to revert, and it must not be described as grounded
 until this is settled.
+
+### 4M.13 ⛔⭐ THE `cat 0x04` DECODE — the deafness lead is DEAD, and the peer treats us correctly
+
+Delegated byte decode of the reference crash-rejoin against `d94-N1A`/`d94-N1B`.
+
+**⛔ DEAD: "OVMX is deaf to `cat 0x04` and that is the gate."** §4M.7 noted
+`CAT_ACK` is never dispatched in `scsd.c`. **A real returning node does not
+answer these either.** Over 175 `cat 0x04` frames addressed to the rejoining
+VAX3, **there is never a same-opcode reply** — the median next transmission is
+0.4 ms later and is a response to a *different* message. The decisive case:
+VAX2→VAX3 `cat 0x04 op 0x04` (idx 1299), then `cat 0x01 op 0x03` (idx 1303),
+then VAX3 replies `cat 0x81 op 0x03` (idx 1304) — the `op 0x04` is absorbed
+purely by the ack field advancing 3→4. **`cat 0x04` is acknowledged at the
+sequenced-message layer only. OVMX's non-dispatch is correct behaviour.**
+
+**⭐ AND THE PEER IS TREATING US CORRECTLY.** `REF` idx 1299 (real rejoin,
+VAX2→VAX3) and `N1B` idx 163 (VAX1→OVMX) are the **same message at the same
+dialogue position** — both `cat 0x04 op 0x04`, both `seq=3 ack=3`. In the
+meaningful header region they differ only at `body[10]` (`03` vs `be`) and
+`body[14]` (`09` vs `0c`); everything past `body[20]` is the sender's stale
+uninitialised buffer (it contains readable OPCOM text and resource names — **do
+not read signal into those offsets**).
+
+> **So the `op 0x04` the peer sends OVMX on a rejoin is reference-conformant:
+> the reference's returning node received exactly this shape and joined anyway.**
+> That independently re-kills §4M.7 from the byte side.
+
+**⚠ AND AN AGENT CLAIM CHECKED AND CORRECTED — guardrail 13, again.** The decode
+concluded *"op 0x00 = the join form, op 0x04 = the rejoin form … consistent with
+the peers correctly classifying N1B as a rejoin."* **That is refuted by runs the
+agent did not have:** `N3A` **JOINED** with `op 0x04`; `N1D` and `N1E` were
+**REFUSED** with `op 0x00` (§4M.7's retraction). The agent confirmed a real
+pattern *within its two-capture window* that does not survive the six-run set.
+**A confirmation from a narrower corpus does not overturn a refutation from a
+wider one.**
+
+**⭐ ONE GENUINELY NEW ANOMALY, reported as bytes only.** Two 72-byte `mt=0x7b`
+frames from VAX1, **byte-identical to each other, present ONLY in `N1B` — zero
+in the reference, zero in `N1A`**, at +26.29 s and +29.32 s:
+
+```
+abs 30: 7b 13 0b 00 0c 00 01 00 12 00 0b 00 00 00 0c 00
+abs 46: 00 00 0b 00 00 00 01 00 00 02 0e 00 04 00 08 00
+abs 62: 01 00 | 07 00 c8 f8 | 0e 00 1c 65      <- dst CID / src CID
+```
+
+The Con.ID pair is the **SCS$DIRECTORY-side** OVMX↔VAX1 connection, *not* the
+`VMS$VAXcluster` CM connection. `0x7b` is the **retransmit** form (§4d.10,
+`SCS_DIR_OPCODE_RETX`). **So in a refused rejoin VAX1 retransmits twice on the
+directory connection and does so in no join and not in the reference** — which
+sits exactly alongside §4M.9's finding that the directory connection never
+reaches the data phase. Meaning undetermined; worth the next look.
+
+**And the isolation is total.** After OVMX answers `cat 0x01 op 0x03`, across
+**124 s** of further capture: **zero** CM frames from either peer to OVMX, only
+HELLO beacons (73) on a ~2.66 s cadence — while the two peers exchange **78** CM
+frames with each other. The cluster stays live; only OVMX is cut off.
+
+> **Offset note for future decodes:** the CM body starts at **abs 72**
+> (payload-rel 58), so `body[8]`=abs 80 and `body[9]`=abs 81 — which is what
+> `tools/cm.py` already uses. An abs-76 figure in a dispatch brief was wrong and
+> the agent caught it against the length-prefixed model string. Also: `body[8]`
+> is **not a clean category** — it behaves like a bitmask ORed with `0x80` for
+> responses, and naive scans produce false `cat 0x04` hits where ordinary data
+> lands at abs 80/81.
 
 ### 4M.5 The test, and its kill-switch
 

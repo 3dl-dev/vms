@@ -116,6 +116,27 @@ static int fail = 0;
 #define MSG_DUPLNAM MSG_NOTSET "\n-SYSTEM-F-DUPLNAM, duplicate name"
 #define MSG_IVLOGNAM MSG_NOTSET "\n-SYSTEM-F-IVLOGNAM, invalid logical name"
 
+/* The executive-UNREACHABLE report, used ONLY by device_absent_checks().
+ *
+ * This one is NOT oracle-pinned and MUST NOT be: it is deliberately not a
+ * VMS message. src/vmsdcl/dcl_cmd_set.c:597 emits it through
+ * dcl_error("OVMX", 2, "SETPRNFAIL", ...) precisely because "the executive
+ * is not there" is a condition OpenVMS never faces and therefore has no
+ * message for -- inventing a "%SYSTEM-F-..." for it would be the Rule 10
+ * self-certification this whole epic exists to kill. The OVMX facility
+ * prefix is the honest label; the raw status is printed as the only fact
+ * known, and is NOT matched here (its value comes from vms_kif's closed
+ * errno mapping, not from anything $SETPRN decided).
+ *
+ * The text below is the leading, status-free part of that message as
+ * OBSERVED by execution, not read off the format string: a device-absent
+ * DCL.EXE fed "SET PROCESS/NAME=<name>\nLOGOUT\n" printed
+ *   %OVMX-E-SETPRNFAIL, SET PROCESS/NAME could not reach the executive (status %X000002A4)
+ *   ...logged out at...
+ * and exited 0. See the device_absent_checks() header. */
+#define MSG_UNREACHABLE \
+    "%OVMX-E-SETPRNFAIL, SET PROCESS/NAME could not reach the executive"
+
 /* ---------------------------------------------------------------------
  * Small helpers.
  * --------------------------------------------------------------------- */
@@ -313,6 +334,63 @@ static int wait_for_named_row(uint32_t linux_pid, struct vms_procinfo *info,
 /* ---------------------------------------------------------------------
  * The negative-control path: with no /dev/vms, NOTHING may report
  * success, and DCL.EXE must not fabricate one either.
+ *
+ * ROUND 4 REWROTE THE DCL ASSERTION HERE, AND THE REASON IS AN EXECUTED
+ * OBSERVATION, NOT A READING OF THE SOURCE.
+ *
+ * Rounds 1-3 never ran the NEGATIVE_CONTROL=1 build. CI did, and this
+ * suite exited 1 instead of the contract's 77, on this assertion:
+ *
+ *     CHECK(strstr(out, "%DCL-") || strstr(out, "%SYSTEM-") ||
+ *           strstr(out, "$"),
+ *           "DCL.EXE produced ordinary output with no executive (no crash)");
+ *
+ * The job's own diagnosis -- "a public sys$ entry point reported SUCCESS
+ * with no executive present: a fabricated success" -- is WRONG, and is
+ * filed as vms-c9c: rc=1 only means "77 was not reached", and BOTH
+ * fabricated-success assertions above this block PASSED in that run.
+ *
+ * WHAT DCL.EXE ACTUALLY DOES, measured by running the shipped binary on a
+ * host with no /dev/vms, fed exactly the script below:
+ *
+ *     $ printf 'SET PROCESS/NAME=OVMXFBEHOLD\nLOGOUT\n' | DCL.EXE ; echo $?
+ *     %OVMX-E-SETPRNFAIL, SET PROCESS/NAME could not reach the executive (status %X000002A4)
+ *       SYSTEM      logged out at  2-AUG-2026 00:52:29.96
+ *     0
+ *
+ * So DCL.EXE does NOT crash. It refuses honestly, which is what Rule 9
+ * demands. The 139 bytes it prints simply contain no "%DCL-", no
+ * "%SYSTEM-" and -- because a piped, non-interactive DCL prints no "$"
+ * prompt -- no "$" either. The assertion was a crash PROXY whose three
+ * substrings did not include the message the product actually emits; it
+ * was testing the harness's guess about DCL's output, not DCL's behaviour.
+ * Two of its three disjuncts were also nearly free: "$" alone is satisfied
+ * by a bare prompt from a DCL that never ran the command at all.
+ *
+ * The replacement asserts the observed honest refusal POSITIVELY, so it
+ * goes red on a fabricated success (silence), on a crash before the
+ * message, and on any invented VMS-branded condition -- see the
+ * MSG_UNREACHABLE comment for why an OVMX-branded message is the correct
+ * shape here rather than a %SYSTEM-F-... one.
+ *
+ * That it HAS teeth is not asserted, it was seen: an intermediate run
+ * where DCL.EXE was staged without one of its shared libraries produced
+ * only a loader error, and this assertion went RED while the
+ * SETUP_FAIL_MARK check above it stayed GREEN -- the mark only catches a
+ * failed execl(), not a binary that execs and then dies. Staging the
+ * missing library and changing nothing else turned it GREEN. The
+ * predicate was also evaluated standalone against the real 139-byte
+ * capture and five defect shapes; it is GREEN on the real capture only,
+ * and the disjunction it replaces was GREEN on a silent userspace
+ * fallback that printed a bare "$" prompt -- i.e. on the exact Rule 9
+ * defect this gate exists to catch.
+ *
+ * NO PRODUCT CHANGE WAS MADE OR NEEDED: src/vmsdcl/dcl_cmd_set.c:552-600
+ * already routes this status away from the oracle-pinned $SETPRN refusal
+ * wrapper and reports it under the OVMX facility. Nothing here resurrects
+ * a degraded mode: the product cannot reach this state at all (vms-0ff --
+ * PID 1 refuses to boot without an executive), which is exactly why only
+ * the deliberately executive-less CI rig can observe it.
  * --------------------------------------------------------------------- */
 static int device_absent_checks(void)
 {
@@ -335,9 +413,12 @@ static int device_absent_checks(void)
                        out, sizeof(out)) == 0) {
         CHECK(strstr(out, SETUP_FAIL_MARK) == NULL,
               "DCL.EXE ran for the device-absent SET PROCESS/NAME check");
-        CHECK(strstr(out, "%DCL-") != NULL || strstr(out, "%SYSTEM-") != NULL ||
-              strstr(out, "$") != NULL,
-              "DCL.EXE produced ordinary output with no executive (no crash)");
+        CHECK(strstr(out, MSG_UNREACHABLE) != NULL,
+              "SET PROCESS/NAME reports the executive UNREACHABLE with no "
+              "executive, rather than fabricating a success");
+        CHECK(strstr(out, MSG_NOTSET) == NULL,
+              "SET PROCESS/NAME does not fabricate a $SETPRN refusal "
+              "(%SET-E-NOTSET) that no executive was there to return");
     }
 
     printf("=== test_syssvc_setname: %d passed, %d failed (SKIPPED: no /dev/vms) ===\n",
@@ -348,6 +429,40 @@ static int device_absent_checks(void)
 int main(void)
 {
     static char out[65536];
+
+    /*
+     * A BROKEN PIPE MUST BE A NAMED FAILURE, NOT A DEAD TEST.
+     *
+     * This suite writes a DCL script into a pipe whose only reader is a
+     * DCL.EXE it just forked (spawn_holder() and run_dcl()). If that
+     * DCL.EXE exits before the script is written, the write lands on a
+     * pipe with no reader and the DEFAULT SIGPIPE disposition kills THIS
+     * PROCESS -- the suite's verdict becomes rc=141 (128+13) and it
+     * attributes nothing: a suite that detected a defect is then
+     * indistinguishable from one that fell over.
+     *
+     * That is not hypothetical here. Under tests/qemu/facility_defects.sh's
+     * bind-client-no-register control (the vms-9fc defect restored: kif_bind()
+     * stops calling vms_kif_register()), DCL.EXE cannot bind to the executive
+     * at startup and dies immediately, so both writers race a corpse. CI's
+     * per-facility attribution job reported exactly that:
+     *   FAIL: suites OUTSIDE this facility failed: test_syssvc_setname(rc=141)
+     * plus three of this suite's assertions reddening unattributed.
+     *
+     * The remedy is the one tests/qemu/test_syssvc_showterm.c:392-405 already
+     * applied for the identical failure under the identical control, and its
+     * comment records the same lesson: with the signal ignored the writes fail
+     * into their checked branches instead of killing the program. spawn_holder()
+     * then returns -1 and "the holder DCL.EXE was started" prints a FAIL naming
+     * what it was doing; run_dcl() leaves `out` empty and every assertion keyed
+     * on DCL's output goes red with its own text. Nothing is weakened -- a
+     * signal death is replaced by named failures, which is strictly more
+     * information.
+     *
+     * Placed before the /dev/vms probe so device_absent_checks(), which also
+     * drives DCL.EXE through run_dcl(), is covered by it too.
+     */
+    signal(SIGPIPE, SIG_IGN);
 
     printf("=== test_syssvc_setname: SET PROCESS/NAME writes the executive process table ===\n");
 

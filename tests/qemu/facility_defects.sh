@@ -1351,7 +1351,20 @@ EOF
         # All three (showterm, ident, lock_status) arrived on separate
         # branches; this list is the UNION, re-derived by running the control
         # on the merged tree rather than kept from one side of the merge.
-        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status";;
+        #
+        # test_syssvc_setname is the NINTH, added by vms-fbe round 4, and it
+        # arrived the way every one above it did -- NOT PREDICTED, READ OFF A
+        # RUN of this control. Rounds 1-3 of that item verified
+        # proctab-duplicate-name exactly and never ran this control at all, so
+        # CI's attribution job was the first thing to execute it against the
+        # new suite: it reported test_syssvc_setname(rc=141) as a suite OUTSIDE
+        # this facility plus three unnamed assertions. BOTH halves of that were
+        # this suite's own defects, and both are fixed rather than declared
+        # away -- see knock_on_why. It does not hand-register (it opens
+        # /dev/vms only to decide skip-vs-run, then drives the real DCL.EXE),
+        # so it is a genuine detector of the same missing bind, not a widening
+        # of blind_suites.
+        suites_red)   echo "test_kmod_bind test_syssvc_procnam test_syssvc_showproc test_syssvc_ef_mproc test_syssvc_ef_local test_syssvc_showdev test_syssvc_startup_service test_syssvc_showterm test_syssvc_ident test_syssvc_lock_status test_syssvc_setname";;
         # test_kmod_setterm (vms-d0b) joins the blind set, MEASURED in the
         # same run: it stayed rc=0 with the defect injected, because
         # open_and_register() hand-registers exactly like test_kmod_devtab
@@ -1525,6 +1538,13 @@ F: F$GETJPI CURPRIV renders SYSTEM/ALL's actual enforced privilege names (CMKRNL
 parent: child took EX before the CVTUNGRANT probe (setup, not the property under test)
 parent: sys$enq CR queues behind the child's EX and still returns a real lock ID (public API)
 sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
+the executive's process table row for the holder became named
+a SECOND DCL.EXE's SHOW SYSTEM named the holder, which it did not create
+SET PROCESS/NAME for a name already held refuses with the oracle-pinned two-line %SET-E-NOTSET / -SYSTEM-F-DUPLNAM shape
+the executive's process table row for the second holder became named
+the 15-char boundary-legal name (VMS_PRCNAM_SIZE-1) was accepted
+the 16-char oversized name is refused with the oracle's two-line %SET-E-NOTSET / -SYSTEM-F-IVLOGNAM shape, now that upname is sized VMS_PRCNAM_XFER and reaches the executive intact
+after the refused rename, SHOW SYSTEM still names this process with its PRE-EXISTING boundary name -- left UNCHANGED by the refusal, exactly as the oracle transcript shows
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
@@ -1817,6 +1837,60 @@ not a hang and not a clean suite failure -- traced, not guessed:
      / "parent: child (CVTUNGRANT holder) exited clean" checks later in
      scenario_cvtungrant, never run -- there is no assertion text for them
      to redden, and none is claimed.
+
+THE NINTH SUITE, test_syssvc_setname, ADDED vms-fbe ROUND 4 -- and it arrived
+as TWO defects in the suite itself, not as a discovery about this mutation.
+Rounds 1-3 of that item verified proctab-duplicate-name exactly and NEVER RAN
+THIS CONTROL, so CI's attribution job executed it first and reported:
+  FAIL: suites OUTSIDE this facility failed: test_syssvc_setname(rc=141)
+  FAIL: these assertions went red and the manifest does NOT name them: (three)
+Both halves were fixed rather than declared away, and the order matters:
+
+  1. rc=141 WAS SIGPIPE IN THE SUITE, NOT A PROPERTY OF THIS DEFECT. The suite
+     forks a DCL.EXE and writes a script into a pipe it reads from. With the
+     bind deleted, DCL.EXE cannot register at startup and exits at once, so the
+     write landed on a pipe with no reader and the DEFAULT SIGPIPE disposition
+     killed the suite. Its verdict became a signal number, which attributes
+     nothing -- the identical failure, under the identical control, that
+     test_syssvc_showterm hit and recorded above. The identical remedy was
+     applied (signal(SIGPIPE, SIG_IGN) in main(), see that file's comment), and
+     the identical thing happened next: THE DECLARED SET GREW BECAUSE THE
+     OBSERVATION GOT BETTER. The suite now runs to completion under this
+     mutation -- 8 passed, 7 failed, rc=1 -- and the three reds CI could see
+     before it died are seven. Nothing about the defect changed; the truncated
+     observation did.
+
+  2. THE SEVEN ARE ALL ONE MISSING BIND, REACHING THE COMMAND LAYER. Every
+     assertion in this suite is about what SET PROCESS/NAME put in the
+     executive's process table, and DCL.EXE reaches that table only through
+     kif_bind(). With the register call deleted, vms_kif_setprn() is rejected
+     as an unregistered task, so no name is ever recorded and nothing
+     downstream can read one back: the two "process table row ... became named"
+     assertions are the write failing, "a SECOND DCL.EXE's SHOW SYSTEM named
+     the holder" and the P6 "left UNCHANGED by the refusal" assertion are reads
+     of a name that was never written, and the DUPLNAM, IVLOGNAM and 15-char
+     assertions are refusals-and-acceptances the executive was never asked to
+     make. The suite's own output shows the mechanism directly rather than
+     leaving it to be argued: SET PROCESS/NAME prints
+     "%OVMX-E-SETPRNFAIL, SET PROCESS/NAME could not reach the executive
+     (status %X000002A4)" -- the honest unreachable-executive report from
+     src/vmsdcl/dcl_cmd_set.c, the same one the executive-absent negative
+     control observes, arriving here because an unbound process is as unable to
+     reach the executive as an absent one.
+     What keeps this from being a blunderbuss: EIGHT assertions in the suite
+     stay GREEN, including "the truncated form of the oversized name never
+     appears anywhere in the output" -- the round-1 defect this suite was
+     written to catch is still correctly absent under an unrelated mutation --
+     and all five "a DCL.EXE ran ..." harness checks, which prove the suite is
+     still running the command rather than failing to start it.
+     "SET PROCESS/NAME for a name already held refuses ... DUPLNAM shape" is
+     named by proctab-duplicate-name's knock_on_fail as well. That is the same
+     two-defects-one-assertion-text case the lock_status paragraph above
+     records, not a collision: a clash test that is short-circuited and a clash
+     test that is never reached both leave the refusal unprinted.
+     DECLARED, NOT NARROWED, for the reason the showproc paragraph gives: the
+     whole value of this suite is that it drives the real DCL.EXE end to end,
+     so it SHOULD be sensitive to the whole stack beneath the command.
 EOF
                       ;;
         esac;;

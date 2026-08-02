@@ -2346,20 +2346,99 @@ Everything still standing points at the same instant: §4k.5's missing `DISC-REQ
 bits are almost certainly the same stall seen from wire and from SDA. A wire
 correlation across these exact three captures is **dispatched**.
 
-### 4L.4 The next experiment, and it is cheap
+### 4L.4 ⭐ RUN — the two bits are set WITH the CSB, not after it
 
-**Separate the two bits.** At 5 s cadence `vcc` and `status_rcvd` appear
-*together* in both joins, so their order is unknown. Re-run the triple with
-`CAD=2` and a shorter horizon (the decision is over by T+11 s in every admitted
-run) to find out which bit lands first and therefore which one is actually
-missing on a rejoin. `csbwatch.sh` already takes `CAD` from the environment.
+Re-ran the pair at `CAD=1` (~1.2 s effective) on a third identity, `OVMXM3`:
+
+| | `M3A` fresh join → **ADMITTED** | `M3B` same identity → **REFUSED** |
+|---|---|---|
+| T+0 … T+2/3 | `NO-CSB` (`SCSNODE not found`) | old CSB `879FBB80` `09 wait` `06040005 …` |
+| **first sample with a new CSB** | **T+3: `879FBB80`, `01 open`, CDT `879F5E00`, `02040000 status_rcvd,vcc`** | **T+4: `879EC440`, `01 open`, CDT `879FBF00`, `00000000`** |
+| next transition | T+9 `member,selected` | **none — flat for the rest of the run** |
+
+**There is no intermediate state.** In the admitted run the CSB does not appear
+empty and then gain flags — the very first sample in which it exists already has
+`status_rcvd` and `vcc` set. In the refused run it appears empty and stays empty.
+
+**So the question is not "why are the bits never set later" but "why is the CSB
+populated at creation in one case and not the other".** At ~1.2 s resolution the
+peer has our status by the time it publishes the CSB on a fresh join, and does
+not on a rejoin. This also replicates the whole §4L.1 result on a third
+independent identity.
+
+> Caveat: 1.2 s is the console round-trip floor, so this bounds the gap rather
+> than proving simultaneity. A sub-second separation would not be visible here.
 
 > **⚠ Do not read `status_rcvd` as "our status reply is wrong".** §4i.1 already
 > established that OVMX's node-status reply is **byte-for-byte identical** in
 > joined and refused runs (0 differing bytes of 132 across 4 frames). The bit is
 > unset for some other reason; §4h.2 made exactly this mistake and was refuted.
 
----
+### 4L.5 ⭐⭐⭐ THE PEER RECEIVED **ZERO** SEQUENCED MESSAGES FROM US — `Last seq num rcvd 0000`
+
+Diffing the **whole** CSB block at T+5 s, not just the flag line. **The two
+admitted runs are identical to each other on every field**; the refused run
+differs on exactly one cluster of fields — and they are all fields the peer fills
+in *from our node-status message*:
+
+| field | `M1A` admitted | `M2A` admitted | **`M1B` REFUSED** |
+|---|---|---|---|
+| Flags | `02040000 status_rcvd,vcc` | same | **`00000000`** |
+| **`Last seq num rcvd`** | **`0002`** | **`0002`** | **`0000`** |
+| `Next seq. number` | `0002` | `0002` | `0002` *(same)* |
+| `Unacked messages` | 2 | 2 | **0** |
+| `Quorum/Votes` | `1/0` | `1/0` | **`0/0`** |
+| `Quor. Disk Vote` | 1 | 1 | **0** |
+| `Lock mgr dir wgt` | 1 | 1 | **0** |
+| `SWVers` | `V7.3` | `V7.3` | **`........`** |
+| `HWName` | `OVMX Cluster Node` | `OVMX Cluster Node` | **empty** |
+| `Cpblty` | `00000A98 ext_status,cwcreprc,ipc_demult_conn` | same | **`00000008 ext_status`** |
+| CSID / CDT / SB / PDT / `Ref. count` | — | — | **identical to both controls** |
+
+**`Next seq. number` is `0002` in ALL THREE — the peer sent us two sequenced
+messages in every run. `Last seq num rcvd` is `0002` in both admitted runs and
+`0000` in the refused one.**
+
+> **The peer received ZERO sequenced messages from us across the entire 108 s of
+> the refused rejoin.**
+
+Everything else follows from that one fact: `status_rcvd` is unset because our
+status never arrived; `SWVers`/`HWName`/`Cpblty`/`Quorum/Votes`/`Lock mgr dir wgt`
+are blank or minimal because **those fields are populated FROM that message**;
+`vcc` is unset; §4k.5's `DISC-REQ` never comes because the peer is still waiting.
+One cause, not five symptoms.
+
+### 4L.6 The hypothesis this creates — and why it is NOT simply `vms-950`
+
+**Grounded facts, all with matched controls:**
+1. The peer sends 2 sequenced messages and receives 0 back (§4L.5, this session).
+2. On a **rejoin** the peer's `0x41` START carries a **continuing** `send_seq`
+   (`200`/`56`/`387` on lab-2 `r2B`; `11509`/`8990` on the real lab-1 specimen),
+   while on a **fresh join** every peer's START carries `1` (§4k.8).
+3. OVMX's own START always carries `send_seq = 1` (§4k.8) — which matches what a
+   real returning node does.
+
+**The inference (NOT yet grounded):** OVMX's sequenced replies on a rejoin carry
+sequence/ack numbering the peer does not accept, so the peer discards them and
+never advances `Last seq num rcvd`. On a fresh join both sides start at 1 and the
+numbering agrees, so the same code works.
+
+**This also contradicts §3 item 6**, which says *"Both sides restart at 1 on every
+attempt"*. §4k.8 measured the peer NOT restarting on a rejoin. That item needs
+re-checking — it may have been derived only from fresh-join captures.
+
+> **⚠ Distinguish this from `vms-950` before acting.** §4i.2's bug is that **OVMX
+> never advances its own `recv_ack`** on a sequenced frame, so *peers retransmit*.
+> This is the **opposite direction**: the peer's count of what **it** received from
+> us is zero. They may share a root cause in OVMX's sequence handling, or be
+> independent. §4i.4 showed the refusal survives with `RETX=0`, so `vms-950` alone
+> is not it — but "our sequenced frames are not accepted" was never tested.
+
+**The experiment that decides it:** in `d94-M1B.pcap`, does OVMX actually transmit
+sequenced (`0x4b`/`0x5b`) frames, and what `send_seq`/`recv_ack` do they carry
+relative to the peer's continuing sequence? If OVMX transmits them and the peer's
+`Last seq num rcvd` still reads `0000`, the peer is **discarding** them, and the
+discriminator is the numbering. **Dispatched.**
 
 ## 5. ⚠ WHERE TO START NEXT SESSION
 

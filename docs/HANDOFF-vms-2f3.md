@@ -2828,7 +2828,115 @@ Capture integrity checked: `seqchk.py` clean on all three, no truncation, full
 ~148 s spans. The only gap flags are OVMX correctly retransmitting an unacked
 `CONN-REQ` with its original sequence number.
 
-## 5. ⚠ WHERE TO START NEXT SESSION
+## 4M. ⭐⭐⭐ SESSION m (2026-08-02) — §4L.9h ANSWERED: WE MIRROR THE REQUEST MSGTYPE, AND ON A REJOIN THE PEER ASKS WITH `0x5b`
+
+**Found in our own run logs, for free, before any lab time or any capture** —
+exactly the oracle order §5 and guardrail 13 prescribe. Four sessions of capture
+work walked past it because the log line that carries it is *mislabelled*.
+
+### 4M.1 ⭐⭐⭐ The discriminator, 6/6 across bracketed identity-proven runs
+
+`grep DIRLOOKUP scsd-<tag>.log` over every lab-2 `M`-series run. The field
+printed as `(op=0x..)` is **not** our answer — it is `dv.opcode`, the **inbound
+request's msgtype** (`scsd.c:4909-4911`). Reading it as our response opcode is
+what hid this.
+
+| run | verdict | `MSCP$DISK` lookup-request msgtypes, in order, both peers |
+|---|---|---|
+| `M1A` | **JOINED** | `4b 4b` · `4b 4b` |
+| `M2A` | **JOINED** | `4b 4b` · `4b 4b` |
+| `M3A` | **JOINED** | `4b 4b` · `4b 4b` |
+| **`M1B`** | **REFUSED** | **`5b`** `4b` · `4b 4b` |
+| **`M3B`** | **REFUSED** | **`5b`** `4b` · **`5b`** `4b` |
+| **`M3C`** | **REFUSED** | **`5b`** `4b` · **`5b`** `4b` |
+
+**Zero `0x5b` in any of the three joins. A `0x5b` on the first `MSCP$DISK`
+lookup in every one of the three refusals.** The three joins are the bracketing
+controls §5 requires — `M1A`/`M2A` bracket `M1B` on both sides, and `M3A`
+precedes `M3B`/`M3C`. All six logged `identity on the wire`.
+
+**On a rejoin the peer asks its first `MSCP$DISK` directory lookup as msgtype
+`0x5b`; on a fresh join it asks as `0x4b`.**
+
+### 4M.2 ⭐⭐⭐ And OVMX MIRRORS IT — while our own source records that the reference never does
+
+`scsd.c:4882`, in the lookup-request branch:
+
+```c
+lp.opcode = dv.opcode; /* echo the request opcode (0x5b/0x4b) */
+```
+
+**We reflect whatever msgtype the peer asked with.** Set against
+`scs_dir.c:244-246`, which grounds the opposite rule from a **336-frame census**
+(every `op 5` in the capture library, 4 sender nodes, 15 captures) for the
+adjacent confirm frame:
+
+> `[16]` is `0x4b` (SEQAPP), **NOT a mirror of the op-4 being answered**: 86 of
+> the observed pairs answer a `0x5b` op-4 with a `0x4b` op-5, and all three
+> op-5s a real VAX has ever sent AT OVMX are `0x4b`.
+
+**This codebase already derived "never mirror the request msgtype", wrote it
+down, and applied it in `dir_confirm5_tmpl` — while the lookup-response path a
+few hundred lines away still mirrors.** No env var covers it (checked, guardrail
+16: the 29 `OVMX_*` switches contain nothing for this).
+
+### 4M.3 Why this has §4L.9h's exact shape
+
+> *What is different about OVMX-on-a-rejoin that is NOT different about
+> OVMX-on-a-fresh-join, and NOT different about a real-node-on-a-rejoin?*
+
+| | fresh join | rejoin |
+|---|---|---|
+| peer asks with | `0x4b` | **`0x5b`** |
+| **OVMX** answers with (mirror) | `0x4b` — **accidentally correct** | **`0x5b`** |
+| **real node** answers with | `0x4b` | **`0x4b`** |
+
+- **Not "wrong with OVMX generally"** — a fresh join never sends us a `0x5b`
+  lookup, so the mirroring bug is never exercised and the join succeeds.
+- **Not "inherent to the rejoin path"** — a real returning node answers `0x4b`
+  and is admitted.
+
+It is a rule we get right by luck on the path we test and wrong on the path we
+do not, and the peer only exercises it when it already holds state for us.
+
+### 4M.4 How it joins up with the standing findings
+
+If the peer discards a lookup response whose msgtype it does not accept, its
+directory step never completes — and that is **§4k.5's divergence point stated
+from our side**: the peer holds its round-1 directory connection open forever and
+never sends the `op 6` `DISC-REQ`, so round 2 never opens. Our own log shows the
+downstream consequence directly, and names it:
+
+```
+M1A: PSCLIENT,  opened OUR SCS$DIRECTORY client connect ... (disk-discovery step 1, post-credit)
+     PSCLIENT,  OUR dir bound (remote=0xF294000C) ... -> PSDONE, MSCP disk discovery complete
+M1B: PSCUNGATE, no op 6 on our server dir connection after 2000ms -- opened OUR
+                SCS$DIRECTORY client connect ... (disk-discovery step 1, UNGATED)
+     PSCLIENT,  retransmit disk-discovery step 1 (retx 1 .. retx 6)   <- never bound, ever
+```
+
+`PSDONE` is 2 in each join and **0** in `M1B`. That also explains the peer's
+`00000000` flag word (§4L.1) without any new mechanism: the peer never reaches
+the point where it applies our status.
+
+**Consistency is not evidence** (§4L.9a, and seven hypotheses died here saying
+exactly this). What is grounded is the 6/6 correlation and the mirroring in our
+source. What is NOT yet grounded is that the peer *discards* a mirrored `0x5b`
+lookup response — and whether the peer's choice of `0x5b` on a rejoin is itself
+downstream of something earlier. The test below decides it.
+
+### 4M.5 The test, and its kill-switch
+
+1. Ground the reference rule for the **lookup response** specifically (the 336-
+   frame census covers the op-5 confirm, not this frame): what msgtype does a
+   real VAX put on a lookup response to a `0x5b` request? **Dispatched.**
+2. Stop mirroring: emit `0x4b` on the lookup response unconditionally, behind
+   `OVMX_DIR_MIRROR_MSGTYPE=1` which restores today's mirror (guardrail 21 —
+   ship the switch and use it in the same session).
+3. Bracketed triple on `vaxlab-2`: fresh join → **same-identity rejoin** → fresh
+   join, identity proven on the wire, `csbwatch.sh`.
+
+
 
 > **⚠ THE ORDERED PLAN BELOW IS NOW FULLY EXECUTED — steps 0–3 in §4d, step 4
 > in §4e.4. Every step has been run and none was the gate.**

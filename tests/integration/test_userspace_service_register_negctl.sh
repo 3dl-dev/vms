@@ -79,6 +79,12 @@ cp -a "$SRC_ROOT/tools" "$ROOT/tools"
 # without tests/ would redden every executive declaration in the tree for the
 # wrong reason and drown every control below.
 cp -a "$SRC_ROOT/tests" "$ROOT/tests"
+# THE BUILD DESCRIPTION IS PART OF THE SANDBOX (vms-c19). The gate's compile
+# set is no longer a directory glob -- it asks cmake what the product compiles,
+# so a service can be relocated out of src/ and tools/ and still be found. A
+# sandbox with no CMakeLists.txt would take the gate's "this tree describes no
+# build" path and the controls for that reading would prove nothing.
+cp "$SRC_ROOT/CMakeLists.txt" "$ROOT/CMakeLists.txt"
 
 AST="$ROOT/src/libvms/syssvc/sys_ast.c"
 EVENT="$ROOT/src/libvms/syssvc/sys_event.c"
@@ -107,8 +113,18 @@ DISPATCH="$ROOT/src/kernel/vms_module.c"
 # edit is made -- so the control for it cannot use a minted fixture service.
 # sys$creprc is the one an adversary measured the buy-off on.
 PROCESS="$ROOT/src/libvms/syssvc/sys_process.c"
+# The build description, at both levels. The compile set is read out of what
+# cmake says it compiles, so the controls that relocate a service out of the
+# old glob have to edit the file that SHIPS it, and the control that makes the
+# build description unreadable has to edit the top-level one.
+TOPCM="$ROOT/CMakeLists.txt"
+LIBVMSCM="$ROOT/src/libvms/CMakeLists.txt"
+# A translation unit OUTSIDE src/ and tools/ -- the shape of the vms-c19
+# escape. It does not exist in the pristine tree, so restore() deletes it
+# rather than copying a saved original back.
+OUTSIDE="$ROOT/runtime/ovmx_time.c"
 
-MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $LOCKPROOF $FDMAN $DISPATCH $PROCESS"
+MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $LOCKPROOF $FDMAN $DISPATCH $PROCESS $TOPCM $LIBVMSCM"
 
 key_of() { printf '%s' "${1#"$ROOT"/}" | tr '/.' '__'; }
 
@@ -125,6 +141,7 @@ restore() {
     for _f in $MUTABLE; do
         cp "$WORK/orig/$(key_of "$_f")" "$_f"
     done
+    rm -rf "$(dirname "$OUTSIDE")"
 }
 
 injection_landed() {
@@ -335,6 +352,79 @@ sed -i '/OVMX-USERSPACE: sys\$gettim (vms-5b4)/d' "$TIME"
 expect_red "$STARLET $TIME" "a service renamed behind an asm label, definition, prototype and declaration together" \
     "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$gettim"
 
+# THE SAME ANTI-SHRINK PROPERTY, ESCAPED BY MOVING THE FILE (vms-c19). All
+# three members of the universe used to be read from ONE place -- the path glob
+# `src/` plus `tools/` -- so a definition RELOCATED out of those two
+# directories left every reading at once while CMake went on shipping it.
+# Measured on this tree before the fix: universe 88 -> 87, prototypes 87 -> 86,
+# exported 88 -> 87, symonly 0, rc=0 and PASS, while `cmake --build --target
+# vms` succeeded and `nm -D lib/LIBVMS$SHR.EXE` showed `T sys$gettim`. Every
+# caller linked unchanged. The compile set is now asked of the build.
+#
+# The helper performs the relocation only; each control below decides what to
+# do with the prototype, which is the half that separates the two readings.
+ovmx_relocate_gettim() {
+    mkdir -p "$(dirname "$OUTSIDE")"
+    cat > "$OUTSIDE" <<'OUTSIDE_EOF'
+#include <stdint.h>
+#include <time.h>
+#include "starlet.h"
+#include "ssdef.h"
+
+uint32_t sys$gettim(uint64_t *timadr) {
+    struct timespec ts;
+    if (!timadr) return SS$_BADPARAM;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    *timadr = (uint64_t)ts.tv_sec * 10000000ULL + 0x007C95674BEB4000ULL;
+    return SS$_NORMAL;
+}
+OUTSIDE_EOF
+    sed -i '/^uint32_t sys\$gettim(uint64_t \*timadr) {$/,/^}$/d' "$TIME"
+    sed -i '/OVMX-USERSPACE: sys\$gettim (vms-5b4)/d' "$TIME"
+    sed -i 's|^    syssvc/sys_time\.c$|    syssvc/sys_time.c\n    ../../runtime/ovmx_time.c|' "$LIBVMSCM"
+}
+
+# THE PATH SCOPING, ISOLATED. Definition relocated, prototype and declaration
+# deleted with it -- which under a path-scoped universe is INDISTINGUISHABLE
+# from an honest deletion (Rule 10's second answer, green by design). The build
+# is the only reading left that can tell the difference, and it can: CMake
+# still compiles the file.
+ovmx_relocate_gettim
+sed -i '/^uint32_t sys\$gettim(uint64_t \*timadr);$/d' "$STARLET"
+expect_red "$TIME $LIBVMSCM $STARLET" \
+    "a service relocated out of src/ and tools/ while CMake still ships it, prototype deleted with it" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$gettim"
+
+# ...AND THE FOUR-EDIT ESCAPE AS IT WAS MEASURED, which needs no deletion at
+# all: the prototype STAYS, spelled with a parenthesized declarator. That one
+# construct is the next control's subject; here it is doing the other half of
+# the job, keeping the prototype reading quiet while the file move keeps the
+# other two quiet.
+ovmx_relocate_gettim
+sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr);$|uint32_t (sys$gettim)(uint64_t *timadr);|' "$STARLET"
+expect_red "$TIME $LIBVMSCM $STARLET" \
+    "a service relocated out of src/ and tools/ behind a parenthesized declarator (the measured escape)" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$gettim"
+
+# THE PARENTHESIZED DECLARATOR, ISOLATED FROM THE SYMBOL SCAN. `uint32_t
+# (sys$foo)(...)` is the same declaration as `uint32_t sys$foo(...)` to every C
+# compiler, and read naively it binds the name to `uint32_t`. The two controls
+# above would go red on the nm reading alone, so this one puts the whole body
+# in a header as `static inline`, which exports NO SYMBOL: nm cannot see it,
+# and only the definition reading can. Without the declarator fix the gate is
+# green here with its universe unchanged.
+{
+    echo ''
+    echo 'static int ovmx_negctl_paren_state = 0;'
+    echo 'static inline uint32_t (sys$negctl_paren)(uint32_t v) {'
+    echo '    ovmx_negctl_paren_state += (int)v;'
+    echo '    return (uint32_t)ovmx_negctl_paren_state;'
+    echo '}'
+} >> "$STARLET"
+expect_red "$STARLET" \
+    "a header-inline service whose name hides inside a parenthesized declarator" \
+    "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$negctl_paren"
+
 # ...and the scan that makes that possible has to be able to say it BROKE. A
 # product file that does not compile contributes no symbols, so "it compiled to
 # nothing" must not read the same as "it exports nothing".
@@ -543,6 +633,15 @@ sed -i 's|case VMS_IOCTL_|case OVMX_NEGCTL_NOT_AN_IOCTL_|g' "$DISPATCH"
 expect_red "$DISPATCH" "the executive dispatch switch made unreadable, so no answer path can be derived" \
     "BROKEN IOCTL BRIDGE: "
 
+# ...AND THE SAME REFUSAL FOR THE BUILD DESCRIPTION (vms-c19). The compile set
+# is what CMake says the product compiles, so a tree that describes a build the
+# gate cannot read is a tree whose universe cannot be derived. The honest
+# answer is to refuse -- NOT to quietly fall back to the directory glob, which
+# is the reading the relocation controls above just showed to be escapable.
+printf '\nthis_is_not_cmake_syntax(((\n' >> "$TOPCM"
+expect_red "$TOPCM" "the build description made unreadable, so what the product compiles is unknown" \
+    "BROKEN BUILD-SET SCAN: "
+
 # ----------------------------------------------------------- GREEN controls --
 
 # THE CLAIM THIS GATE MAKES ABOUT ITS OWN SCOPE. Pure computation added to the
@@ -696,6 +795,17 @@ expect_red "$EVENT $LOCKPROOF $FDMAN" "an EXECUTIVE claim paid by a fabricated d
 } >> "$EVENT"
 expect_green "$EVENT" "a mixture that names both of its halves stays green"
 
+# THE BUILD-DERIVED COMPILE SET MUST NOT OVER-FIRE. The three relocation reds
+# above are all satisfiable by a gate that simply reddens anything outside
+# src/ and tools/, which would be a worse gate, not a better one: the point of
+# reading the build is that a translation unit is judged by whether the product
+# COMPILES it, not by where it sits. So the same relocation, done HONESTLY --
+# declaration moved with the implementation, prototype left alone -- is green.
+ovmx_relocate_gettim
+printf '/* OVMX-USERSPACE: sys$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME) here */\n' >> "$OUTSIDE"
+expect_green "$TIME $LIBVMSCM" \
+    "a service honestly relocated outside src/ and tools/, its declaration moved with it"
+
 # RULE 10'S SECOND ANSWER MUST STAY OPEN. Deleting the service outright --
 # definition, prototype and declaration together -- is the honest fix, and the
 # register must not stand in its way.
@@ -745,7 +855,7 @@ NOSYS="$WORK/fixture-no-sys-services"
 mkdir -p "$NOSYS/src" "$NOSYS/tools"
 printf 'int ovmx_negctl_not_a_service(void) { return 0; }\n' > "$NOSYS/src/plain.c"
 guard "$NOSYS" "a tree with C code but zero sys\$ services in it" \
-    "THE FLOOR: zero sys\$ services found under src/ and tools/."
+    "THE FLOOR: zero sys\$ services found in the product compile set."
 
 # ---------------------------------------------------------------- coverage --
 # "EVERY property has an evasion" is a claim this file used to make in its own
@@ -782,12 +892,21 @@ grep -oE 'BROKEN SYMBOL SCAN: ' "$GATE" | sort -u >> "$WORK/derived"
 # The ioctl bridge's own broken-scan path (vms-ecf round 3), same shape: an
 # echo that aborts the run rather than accusing a service.
 grep -oE 'BROKEN IOCTL BRIDGE: ' "$GATE" | sort -u >> "$WORK/derived"
+# The build-set scan's own refusal (vms-c19), same shape again. THE PREFIX IS
+# SHARED THREE WAYS, exactly as "BROKEN SYMBOL SCAN: " is shared two ways: the
+# gate spells it for an unreadable configure (provoked by a control above), for
+# a compile_commands.json it cannot parse, and for cmake being absent. This
+# extraction cannot tell them apart, so the coverage PASS below covers the
+# first only. "cmake is absent" is a PREREQUISITE failure that no mutation of
+# the TREE provokes; the unparseable-json path is provoked by nothing here and
+# is named as an open gap rather than claimed.
+grep -oE 'BROKEN BUILD-SET SCAN: ' "$GATE" | sort -u >> "$WORK/derived"
 # The gate's own source has to spell this one "sys\$" (escaped for the shell
 # double-quote it lives in); what actually prints at runtime is "sys$", with
 # no backslash. Normalize the same way so this line matches the fixture's
 # real output below instead of failing on a backslash that only exists on
 # disk.
-grep -oF 'THE FLOOR: zero sys\$ services found under src/ and tools/.' "$GATE" \
+grep -oF 'THE FLOOR: zero sys\$ services found in the product compile set.' "$GATE" \
     | sed 's/\\\$/$/' | sort -u >> "$WORK/derived"
 : > "$WORK/uncovered"
 ncov=0

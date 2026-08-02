@@ -109,16 +109,35 @@
 # its call edges and its state references exactly as a .c body does, and its
 # declaration must live in the header that defines it.
 #
+# WHAT THE GATE READS, AND WHERE IT LOOKS FOR IT.
+#
+# Two questions, and they used to be answered by one thing. WHICH FILES are
+# read is THE PRODUCT COMPILE SET; WHAT IS FOUND IN THEM is the union of three
+# readings below. Both matter, and the second is worth nothing without the
+# first.
+#
+# THE PRODUCT COMPILE SET is derived twice over and unioned (see "the product
+# compile set" below): the old directory glob -- src/ and tools/ -- and every
+# translation unit CMAKE SAYS THE PRODUCT COMPILES, read out of a
+# compile_commands.json this gate generates. The second reading exists because
+# the first is a PATH, and a path is a place a file can be moved out of.
+# Measured on this tree (vms-c19): relocate a definition into a new file
+# outside src/ and tools/, add that file to src/libvms/CMakeLists.txt, and the
+# universe went 88 -> 87 with rc=0 and PASS while `cmake --build --target vms`
+# succeeded, `nm -D lib/LIBVMS$SHR.EXE` showed `T sys$gettim`, and every caller
+# linked unchanged. The remedy is NOT a wider glob -- that is the same defect
+# one directory further out. It is to ask the build what it compiles.
+#
 # THE UNIVERSE, AND WHY IT IS A UNION.
 #
-# The universe is every sys$* file-scope function DEFINITION under src/ and
-# tools/ -- in .c files AND in headers, comment-stripped, product only (a
+# Within that compile set the universe is every sys$* file-scope function
+# DEFINITION -- in .c files AND in headers, comment-stripped, product only (a
 # definition in tests/ is not a product service) -- UNIONED with every sys$*
-# PROTOTYPE declared in any header under src/, UNIONED with every sys$* symbol
-# THE COMPILED PRODUCT ACTUALLY EXPORTS (nm, below). The union is the
-# anti-shrink property, and it is the lesson the census paid for: a gate whose
-# universe is read from ONE place can be disarmed by deleting the thing it
-# counts. Here:
+# PROTOTYPE declared in any header the product compiles against, UNIONED with
+# every sys$* symbol THE COMPILED PRODUCT ACTUALLY EXPORTS (nm, below). The
+# union is the anti-shrink property, and it is the lesson the census paid for:
+# a gate whose universe is read from ONE place can be disarmed by deleting the
+# thing it counts. Here:
 #
 #   - Deleting a prototype does not shrink the universe: the definition still
 #     holds the service in it, and it still needs a declaration.
@@ -159,13 +178,21 @@
 #     product still exports it. Whatever the source calls it, it is in the
 #     table under its EXPORTED name and it needs a declaration. Measured: the
 #     rename above is now a RED naming sys$gettim, and the universe stays 88.
-#   - it does NOT read ASSEMBLY. A .globl sys$foo in a .S file would define an
-#     exported service this scan never compiles and the C source scan never
-#     sees; the prototype half of the union is all that would hold it. That
-#     costs nothing to say and is measured, not assumed: `grep -rn 'sys\$'
-#     --include='*.S' --include='*.s' src tools` finds NOTHING today, so no
-#     service is defined that way in this tree. If one ever is, this scan has
-#     to grow an assembler pass -- it will not fall out of the C compile.
+#   - it now reads ASSEMBLY TOO, and only because the build says which
+#     assembly to read. This bullet used to record the opposite as an open
+#     residual: a `.globl sys$foo` in a .S file would export a service the scan
+#     never assembled. The compile set closed it for free -- CMake names the .S
+#     files it assembles FOR THIS ARCHITECTURE, so they are assembled and read
+#     with nm like anything else. They are deliberately NOT globbed:
+#     src/libvmssys/arch/ holds x86_64 and aarch64 sources side by side and a
+#     glob would hand the assembler the wrong one. What this buys today is
+#     nothing and says so: the 3 assembly files in this tree export no sys$
+#     symbol, so the exported count is unchanged. It buys that the NEXT one
+#     does not have to be noticed by a human.
+#   - the SOURCE readings still do not read assembly, and cannot: scan.awk
+#     parses C. An assembly-defined service is in the universe under its
+#     EXPORTED name with "-" in its exec and state columns, exactly like an
+#     aliased one below.
 #   - it does NOT make the call graph follow an alias. The exec/state columns
 #     are keyed on the SOURCE name, so a service exported under a name its
 #     source does not spell shows "-" in both, and the consistency checks
@@ -181,18 +208,30 @@
 #     which links nothing into libvms and exports no sys$ symbol today.
 #   - IT MAKES THIS GATE'S DEPENDENCIES THE WHOLE PRODUCT'S DEPENDENCIES, and
 #     that is a real cost, paid on purpose. Every product .c file is compiled
-#     here whether or not CMake would configure it, so a source guarded by an
-#     OPTIONAL third-party library still has to build: src/vmsssh/vmssshd.c
-#     includes <libssh/libssh.h>, so an environment without libssh-dev
-#     compiles 126 of 127 files and this gate REFUSES rather than certifying a
-#     universe with a hole in it (measured, vms-ecf r5 -- it reddened the CI
-#     Build & Test job, correctly). The fix taken was to install the
-#     dependency in the job that runs this gate, NOT to tolerate the short
-#     count; see the comment on that step in .github/workflows/ci.yml. If a
-#     future source genuinely cannot be compiled in any environment that runs
-#     this gate, the second legal answer is to extend SYMSCAN_EXCLUDE_DIR and
-#     say why HERE -- visibly, with what the exclusion costs -- never to skip
-#     the file quietly.
+#     here whether or not CMake would configure it -- which is precisely why
+#     the compile set UNIONS the glob with the build's answer instead of
+#     replacing one with the other. A source guarded by an OPTIONAL
+#     third-party library still has to build: src/vmsssh/vmssshd.c includes
+#     <libssh/libssh.h>, and CMake does not configure src/vmsssh at all
+#     without libssh, so the build's answer alone would have DROPPED that file
+#     and retired this refusal silently. The glob keeps offering it, and an
+#     environment without libssh-dev makes this gate REFUSE rather than certify
+#     a universe with a hole in it (measured, vms-ecf r5 -- it reddened the CI
+#     Build & Test job, correctly; re-measured under the compile set with the
+#     libssh include made unresolvable, which refuses at 129 of 130). The fix
+#     taken was to install the dependency in the job that runs this gate, NOT
+#     to tolerate the short count; see the comment on that step in
+#     .github/workflows/ci.yml. If a future source genuinely cannot be compiled
+#     in any environment that runs this gate, the second legal answer is to
+#     extend SYMSCAN_EXCLUDE_DIR and say why HERE -- visibly, with what the
+#     exclusion costs -- never to skip the file quietly.
+#   - IT MAKES CMAKE A DEPENDENCY OF THIS GATE. A tree with a CMakeLists.txt
+#     that cmake cannot configure is a tree whose compile set is unknown, and
+#     this gate refuses rather than falling back to the glob -- the glob is the
+#     reading vms-c19 showed to be escapable, so falling back to it silently is
+#     the whole defect wearing a different hat. A tree with NO CMakeLists.txt
+#     describes no build at all; there the glob is the honest whole reading,
+#     and the floor fixtures next door are exactly that shape.
 #
 # A definition with no prototype is NOT a red. It is still in the universe and
 # still needs a declaration; sys$fao_count_args is the live example -- an
@@ -283,6 +322,39 @@ STRIP_EOF
 # V/R feed the printed "answers from retained per-process state" column only.
 # They are evidence, not a verdict: see WHAT THIS GATE DOES NOT CLAIM.
 cat > "$WORK/scan.awk" <<'SCAN_EOF'
+# THE PARENTHESIZED DECLARATOR (vms-c19). `uint32_t (sys$gettim)(uint64_t *)`
+# is the same declaration as `uint32_t sys$gettim(uint64_t *)` to every C
+# compiler and to every caller, and it produces a byte-identical symbol. Read
+# naively -- bind the name to the last identifier before the first `(` at
+# top-level paren depth -- it binds `uint32_t`, and the service leaves BOTH
+# source readings at once, in ONE construct, with no declaration of any kind.
+# Measured on this tree before the fix: the definition reading emitted
+# `D <file> extern uint32_t` and the prototype reading emitted nothing.
+#
+# So a top-level paren group is tracked while it is open. A group that holds
+# EXACTLY ONE identifier and nothing else, and that is immediately followed by
+# another `(`, is a parenthesized declarator, and the name is the identifier
+# inside it. The "nothing else" is what keeps `(*fp)(int)` -- a function
+# POINTER object, not a function -- from being read as a function declarator,
+# and the "followed by `(`" is what keeps an ordinary one-identifier parameter
+# list `(void)` from being read as one.
+#
+# THE SPELLINGS THIS WAS RUN AGAINST, here and in proto.awk: plain;
+# parenthesized; parenthesized with a space before the parameter list;
+# parenthesized split across lines; pointer return; pointer return
+# parenthesized; struct return; leading __attribute__; function-pointer
+# parameters, with and without a parenthesized name; array parameters; and
+# `(void)`. The four that must NOT bind -- a `(*fp)(int)` object, an array of
+# them, an `extern` one, and a typedef of one -- bound nothing before this
+# change and bind nothing after it.
+#
+# ONE KNOWN NON-BINDING CASE, PRE-EXISTING AND UNCHANGED: a TRAILING
+# `__attribute__((...))` after a prototype's parameter list rebinds the name to
+# `__attribute__`, so `uint32_t sys$foo(int) __attribute__((pure));` is not
+# read as a prototype. It never was, before or after; the definition and nm
+# readings still hold such a service, which is the union doing its job.
+function grpopen() { gids = 0; gid = ""; gclean = 1 }
+function grpclose() { if (gclean && gids == 1) { gpend = 1; gname = gid } else gpend = 0 }
 function emitobj() {
     if (!pendfn && !td && !cn && !ex && pend != "" && !(pend in KW))
         print "V\t" SRC "\t" (st ? "static" : "extern") "\t" pend
@@ -298,6 +370,7 @@ function scan(line, node, ismac,   n, i, j, k, c, id, nxt, q) {
                 if (substr(line, i, 1) == q) { i++; break }
                 i++
             }
+            if (depth == 0) { if (pdepth == 1) gclean = 0; else if (pdepth == 0) gpend = 0 }
             continue
         }
         if (ismac) {
@@ -318,7 +391,7 @@ function scan(line, node, ismac,   n, i, j, k, c, id, nxt, q) {
                     curfn = pend
                     print "D\t" SRC "\t" (st ? "static" : "extern") "\t" curfn
                 } else curfn = ""
-                pend = ""; pendfn = 0
+                pend = ""; pendfn = 0; gpend = 0
             }
             depth++; i++; continue
         }
@@ -327,18 +400,25 @@ function scan(line, node, ismac,   n, i, j, k, c, id, nxt, q) {
             if (depth <= 0) {
                 depth = 0; curfn = ""; st = 0; cn = 0; td = 0; ex = 0
                 pend = ""; pendfn = 0; initmode = 0; pdepth = 0; bdepth = 0
+                gpend = 0; gclean = 1; gids = 0
             }
             i++; continue
         }
         if (depth == 0) {
-            if (c == "(") { pdepth++; if (pdepth == 1 && pend != "" && !initmode) pendfn = 1; i++; continue }
-            if (c == ")") { if (pdepth > 0) pdepth--; i++; continue }
-            if (c == "[") { bdepth++; i++; continue }
-            if (c == "]") { if (bdepth > 0) bdepth--; i++; continue }
+            if (c == "(") {
+                if (pdepth == 0) { if (gpend) { pend = gname; gpend = 0 }; grpopen() }
+                else if (pdepth == 1) gclean = 0
+                pdepth++
+                if (pdepth == 1 && pend != "" && !initmode) pendfn = 1
+                i++; continue
+            }
+            if (c == ")") { if (pdepth > 0) pdepth--; if (pdepth == 0) grpclose(); i++; continue }
+            if (c == "[") { if (pdepth == 1) gclean = 0; else if (pdepth == 0) gpend = 0; bdepth++; i++; continue }
+            if (c == "]") { if (pdepth == 1) gclean = 0; else if (pdepth == 0) gpend = 0; if (bdepth > 0) bdepth--; i++; continue }
             if (pdepth == 0 && bdepth == 0) {
-                if (c == ";") { emitobj(); pend = ""; pendfn = 0; st = 0; cn = 0; td = 0; ex = 0; initmode = 0; i++; continue }
-                if (c == ",") { emitobj(); pend = ""; i++; continue }
-                if (c == "=") { emitobj(); pend = ""; initmode = 1; i++; continue }
+                if (c == ";") { emitobj(); pend = ""; pendfn = 0; st = 0; cn = 0; td = 0; ex = 0; initmode = 0; gpend = 0; i++; continue }
+                if (c == ",") { emitobj(); pend = ""; gpend = 0; i++; continue }
+                if (c == "=") { emitobj(); pend = ""; initmode = 1; gpend = 0; i++; continue }
             }
         }
         if (c ~ /[A-Za-z_$]/) {
@@ -357,8 +437,13 @@ function scan(line, node, ismac,   n, i, j, k, c, id, nxt, q) {
                 else if (id == "typedef") td = 1
                 else if (id == "extern") ex = 1
                 else pend = id
-            }
+                gpend = 0
+            } else if (pdepth == 1) { gids++; gid = id }
             i = j; continue
+        }
+        if (depth == 0 && c != " " && c != "\t") {
+            if (pdepth == 1) gclean = 0
+            else if (pdepth == 0) gpend = 0
         }
         i++
     }
@@ -366,6 +451,7 @@ function scan(line, node, ismac,   n, i, j, k, c, id, nxt, q) {
 BEGIN {
     depth = 0; pdepth = 0; bdepth = 0; curfn = ""; pend = ""; pendfn = 0
     st = 0; cn = 0; td = 0; ex = 0; initmode = 0; inmac = 0; macnode = ""
+    gpend = 0; gname = ""; gids = 0; gid = ""; gclean = 1
     split("void int char long short float double signed unsigned struct union enum register volatile inline restrict _Atomic _Noreturn __attribute__ __extension__ __asm__ asm", _k, " ")
     for (_i in _k) KW[_k[_i]] = 1
 }
@@ -398,7 +484,16 @@ SCAN_EOF
 
 # ------------------------------------------------------- prototype scanner --
 cat > "$WORK/proto.awk" <<'PROTO_EOF'
-BEGIN { depth = 0; pdepth = 0; pend = ""; isfn = 0 }
+# The parenthesized declarator is read here exactly as it is in scan.awk above,
+# and for the same reason: `uint32_t (sys$gettim)(uint64_t *);` is a prototype
+# for sys$gettim, and binding the name to the last identifier before the first
+# `(` binds `uint32_t` instead. One construct defeated BOTH readings (vms-c19).
+function grpopen() { gids = 0; gid = ""; gclean = 1 }
+function grpclose() { if (gclean && gids == 1) { gpend = 1; gname = gid } else gpend = 0 }
+BEGIN {
+    depth = 0; pdepth = 0; pend = ""; isfn = 0
+    gpend = 0; gname = ""; gids = 0; gid = ""; gclean = 1
+}
 {
     line = $0
     if (line ~ /^[ \t]*#/) next
@@ -413,27 +508,335 @@ BEGIN { depth = 0; pdepth = 0; pend = ""; isfn = 0 }
                 if (substr(line, i, 1) == q) { i++; break }
                 i++
             }
+            if (depth == 0) { if (pdepth == 1) gclean = 0; else if (pdepth == 0) gpend = 0 }
             continue
         }
-        if (c == "{") { depth++; i++; continue }
-        if (c == "}") { if (depth > 0) depth--; i++; continue }
+        if (c == "{") { depth++; gpend = 0; i++; continue }
+        if (c == "}") { if (depth > 0) depth--; gpend = 0; i++; continue }
         if (depth == 0) {
-            if (c == "(") { pdepth++; if (pdepth == 1 && pend != "") isfn = 1; i++; continue }
-            if (c == ")") { if (pdepth > 0) pdepth--; i++; continue }
+            if (c == "(") {
+                if (pdepth == 0) { if (gpend) { pend = gname; gpend = 0 }; grpopen() }
+                else if (pdepth == 1) gclean = 0
+                pdepth++
+                if (pdepth == 1 && pend != "") isfn = 1
+                i++; continue
+            }
+            if (c == ")") { if (pdepth > 0) pdepth--; if (pdepth == 0) grpclose(); i++; continue }
             if (c == ";" && pdepth == 0) {
                 if (isfn && pend ~ /^sys\$/) print "P\t" SRC "\t" pend
-                pend = ""; isfn = 0; i++; continue
+                pend = ""; isfn = 0; gpend = 0; i++; continue
             }
         }
         if (c ~ /[A-Za-z_$]/) {
             j = i; while (j <= n && substr(line, j, 1) ~ /[A-Za-z0-9_$]/) j++
-            if (depth == 0 && pdepth == 0) pend = substr(line, i, j - i)
+            id = substr(line, i, j - i)
+            if (depth == 0 && pdepth == 0) { pend = id; gpend = 0 }
+            else if (depth == 0 && pdepth == 1) { gids++; gid = id }
             i = j; continue
+        }
+        if (depth == 0 && c != " " && c != "\t") {
+            if (pdepth == 1) gclean = 0
+            else if (pdepth == 0) gpend = 0
         }
         i++
     }
 }
 PROTO_EOF
+
+# ------------------------------------------------- the product compile set --
+# WHAT THE BUILD COMPILES, ASKED OF THE BUILD (vms-c19). Every reading in this
+# gate used to start from one glob -- `src/` plus `tools/` -- so the three
+# members of the universe were three readings of ONE PLACE, and the place was a
+# PATH. Measured on this tree: move a service's definition to a new file
+# OUTSIDE those two directories, add that file to src/libvms/CMakeLists.txt,
+# and the universe went 88 -> 87 with rc=0 and PASS while `cmake --build
+# --target vms` succeeded and `nm -D lib/LIBVMS$SHR.EXE` showed `T sys$gettim`.
+# The product still shipped the service; the gate had simply stopped looking
+# where it lives. Widening the glob would have been the same defect one level
+# out -- the next file goes one directory further.
+#
+# So the compile set is asked of the build system: cmake is run with
+# CMAKE_EXPORT_COMPILE_COMMANDS into a throwaway directory, and every
+# translation unit in the resulting compile_commands.json is in the set,
+# wherever in the tree it lives. That is a byproduct of the build description,
+# not a path convention, and a file CMake does not compile ships nothing.
+#
+# IT IS A UNION WITH THE OLD GLOB, NOT A REPLACEMENT, and that direction
+# matters: a configure only sees the options it was given, so a source guarded
+# by an option that is OFF here (src/imgact/, which needs OVMX_IMGACT) drops
+# out of compile_commands.json while still being product source. Measured on
+# this tree: the glob offers 127 files to the symbol scan and this configure
+# offers 122, overlapping in 118. Taking only the build's answer would have
+# SHRUNK the scan -- and would have quietly retired the libssh refusal below,
+# because CMake does not configure src/vmsssh/ without libssh while the glob
+# compiles it regardless. Union, so neither reading can lose a file the other
+# holds.
+#
+# WHAT IS OUT OF SCOPE AND WHY. tests/ has never been in this gate's universe
+# -- a definition in a test is not a product service -- so a source under
+# tests/ is in the compile set only when the target that compiles it is a
+# PRODUCT target: one declared outside tests/ that also compiles a source
+# outside tests/. Moving a definition into tests/ and adding it to the `vms`
+# library therefore does NOT get it out of the scan. Both halves of that
+# condition are load-bearing and the second was added after measurement:
+# tests/vmsssh/ builds test_term_mapping from its own test source PLUS
+# src/vmsssh/term_map.c, and without the "declared outside tests/" half the
+# test source came into the scan with it. It contributed no service, but a
+# scan that reaches into test programs is not the scope this gate states.
+# WHAT REMAINS OPEN, said here rather than discovered later:
+#   - a target declared under tests/, holding a sys$ definition in a source
+#     under tests/, that is nevertheless installed;
+#   - a source CMake compiles only under an option this configure leaves OFF
+#     AND that lives outside src/ and tools/. Inside those two directories the
+#     glob still holds it (that is what caught src/imgact/ here); outside them
+#     neither reading does. A configure is only as wide as its options.
+#   - what the compile set decides is WHICH FILES ARE READ. It says nothing
+#     about whether a service's declaration is true; that is the per-family
+#     Rule 10 decision, pinned to the oracle in the item the declaration names.
+#
+# IF THE BUILD DESCRIPTION CANNOT BE READ, THIS REFUSES. A tree with a
+# CMakeLists.txt and no way to read what it compiles is a tree this gate cannot
+# derive its universe from, and the precedent is already set twice over (no
+# compiler, unreadable ioctl bridge). A tree with NO CMakeLists.txt at all is
+# a different case -- it describes no build, so the glob is the whole honest
+# reading, and the gate's own floor fixtures are exactly that shape.
+BUILDSET_LOG="$WORK/cmk.log"
+: > "$WORK/buildset"
+if [ -f "$SRC_ROOT/CMakeLists.txt" ]; then
+    if ! command -v cmake >/dev/null 2>&1; then
+        echo "FAIL: BROKEN BUILD-SET SCAN: $SRC_ROOT/CMakeLists.txt describes a build"
+        echo "      but cmake(1) is not available to read what it compiles."
+        echo "  -> the universe of services is derived from what the BUILD compiles, not"
+        echo "     from a directory glob: a service relocated out of src/ and tools/ and"
+        echo "     added to a CMake target still ships (measured, vms-c19). Without cmake"
+        echo "     this gate cannot see that file, so it does not get to certify that"
+        echo "     every service is accounted for. Install cmake; do not add a skip."
+        exit 1
+    fi
+    if ! cmake -S "$SRC_ROOT" -B "$WORK/cmk" -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+              >"$BUILDSET_LOG" 2>&1 || [ ! -f "$WORK/cmk/compile_commands.json" ]; then
+        echo "FAIL: BROKEN BUILD-SET SCAN: cmake could not configure $SRC_ROOT, so the"
+        echo "      set of translation units the product compiles is unknown."
+        tail -15 "$BUILDSET_LOG" 2>/dev/null | sed 's/^/    /'
+        echo "  -> a gate that cannot ask the build what it compiles cannot tell a"
+        echo "     service that was deleted from one that was moved somewhere the glob"
+        echo "     does not look. Fix the build description; do not add a skip."
+        exit 1
+    fi
+    # compile_commands.json, one field per line as CMake writes it. Each entry
+    # gives the source file and the object it produces; the object path names
+    # the TARGET (the component before ".dir/"), which is how a test-only
+    # target is told from a product one.
+    awk -v ROOT="$SRC_ROOT/" '
+        /^[ \t]*"file"[ \t]*:/ {
+            f = $0; sub(/^[^:]*:[ \t]*"/, "", f); sub(/",?[ \t]*$/, "", f)
+            curf = f; curt = ""; next
+        }
+        /^[ \t]*"output"[ \t]*:/ {
+            o = $0; sub(/^[^:]*:[ \t]*"/, "", o); sub(/",?[ \t]*$/, "", o)
+            curt = o; next
+        }
+        /^[ \t]*\}/ {
+            if (curf != "" && index(curf, ROOT) == 1) {
+                rel = substr(curf, length(ROOT) + 1)
+                p = index(curt, ".dir/")
+                tgt = (p > 0) ? substr(curt, 1, p + 3) : "?"
+                q = index(curt, "/CMakeFiles/")
+                tdir = (q > 0) ? substr(curt, 1, q - 1) : ""
+                n++; src[n] = rel; tg[n] = tgt
+                if (rel !~ /^tests\// && tdir !~ /^tests\//) prodtgt[tgt] = 1
+            }
+            curf = ""; curt = ""; next
+        }
+        END {
+            for (i = 1; i <= n; i++) {
+                if (src[i] ~ /^tests\// && !(tg[i] in prodtgt)) continue
+                if (src[i] in seen) continue
+                seen[src[i]] = 1; print src[i]
+            }
+        }' "$WORK/cmk/compile_commands.json" | sort > "$WORK/buildset"
+    if [ ! -s "$WORK/buildset" ]; then
+        echo "FAIL: BROKEN BUILD-SET SCAN: cmake configured $SRC_ROOT but no translation"
+        echo "      unit could be read out of its compile_commands.json."
+        echo "  -> either the build compiles nothing, or this parse no longer matches"
+        echo "     what CMake writes. Both make the build half of the universe empty,"
+        echo "     which would silently reduce it to the directory glob it exists to"
+        echo "     back up. Fix the parse; do not let it fall back."
+        exit 1
+    fi
+fi
+
+# The .c set every source reading walks, and the .c/.S set the symbol scan
+# compiles: the glob UNION what the build compiles.
+find "$SRC_ROOT/src" "$SRC_ROOT/tools" -name '*.c' 2>/dev/null \
+    | sed "s|^$(printf '%s' "$SRC_ROOT" | sed 's/[\\&|]/\\\\&/g')/||" > "$WORK/prodc.raw"
+grep -E '\.c$' "$WORK/buildset" >> "$WORK/prodc.raw" 2>/dev/null || true
+sort -u "$WORK/prodc.raw" > "$WORK/prodc"
+# ASSEMBLY, and ONLY from the build. The header used to record "it does NOT
+# read ASSEMBLY -- a .globl sys$foo in a .S file would define an exported
+# service this scan never compiles" as an open residual. The build knows which
+# assembly files it assembles for THIS architecture, so they are assembled and
+# read with nm like anything else. They are NOT globbed: src/libvmssys/arch/
+# holds both x86_64 and aarch64 sources and globbing would hand the assembler
+# the wrong one.
+grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/prodasm"
+
+# --------------------------------------------------- exported-symbol scan --
+# THE UNIVERSE'S THIRD MEMBER, and the only one that is not source text. Every
+# product translation unit outside the declared exclusion is compiled here and
+# its defined, global sys$* symbols are read out with nm. See the header: the
+# two source readings were escaped TOGETHER by an asm-label rename that kept
+# the exported symbol byte-identical.
+#
+# Emits into the fact stream:
+#   S <file> <symbol>   a sys$ symbol the compiled product exports
+SYMSCAN_EXCLUDE_DIR="src/kernel"
+
+SYMCC=""
+for _c in cc gcc; do
+    if command -v "$_c" >/dev/null 2>&1; then SYMCC="$_c"; break; fi
+done
+if [ -z "$SYMCC" ] || ! command -v nm >/dev/null 2>&1; then
+    echo "FAIL: BROKEN SYMBOL SCAN: no C compiler (cc/gcc) or no nm(1) available."
+    echo "  -> the universe is derived from the symbols the product EXPORTS, because"
+    echo "     the source-text readings were both escaped by one asm-label rename"
+    echo "     (vms-f26). Without a compiler this gate cannot see a service exported"
+    echo "     under a name its source does not spell, so it does not get to certify"
+    echo "     that every service is accounted for. Install a compiler; do not add a"
+    echo "     skip."
+    exit 1
+fi
+
+SYMINC=""
+for _d in $(find "$SRC_ROOT/src" -name '*.h' -exec dirname {} \; 2>/dev/null | sort -u); do
+    SYMINC="$SYMINC -I$_d"
+done
+for _d in "$SRC_ROOT"/src/*/include; do
+    [ -d "$_d" ] && SYMINC="$SYMINC -I$_d"
+done
+
+OBJDIR="$WORK/obj"
+FAILLIST="$WORK/ccfail"
+mkdir -p "$OBJDIR"
+: > "$FAILLIST"
+export OBJDIR FAILLIST SYMCC SYMINC
+
+# -w plus the -Wno-error= forms: this is a SYMBOL scan, not a build gate. It
+# must read the symbols out of code that a stricter compiler would reject --
+# the negative controls next door deliberately delete prototypes and rename
+# definitions, and a gcc that promotes an implicit declaration to an error
+# (gcc 14 and later do) would turn those controls into "the scan broke"
+# instead of the reds they are testing for.
+#
+# EACH FLAG IS PROBED, because the first draft of this file assumed unknown
+# -Wno-* forms were ignored and MEASURED OTHERWISE: gcc 13.3 rejects
+# -Wno-error=return-mismatch (the warning arrives in gcc 14) with a cc1 error,
+# and all 127 files failed to compile. An empty translation unit is enough to
+# provoke it, so the probe is one compile per candidate.
+: > "$WORK/probe.c"
+SYMFLAGS="-w"
+for _fl in -Wno-implicit-function-declaration \
+           -Wno-error=implicit-function-declaration \
+           -Wno-error=implicit-int -Wno-error=int-conversion \
+           -Wno-error=incompatible-pointer-types \
+           -Wno-error=return-mismatch; do
+    if $SYMCC $_fl -c "$WORK/probe.c" -o "$WORK/probe.o" >/dev/null 2>&1; then
+        SYMFLAGS="$SYMFLAGS $_fl"
+    fi
+done
+rm -f "$WORK/probe.o"
+export SYMFLAGS
+
+# -MD, so the compile also reports WHICH HEADERS IT READ. The header reading
+# below is a glob like the .c reading was, and a header-inline definition
+# (`static inline sys$foo(...) { ... }`) is a service the nm scan cannot catch
+# -- a static inline exports no symbol. The dependency files are the same kind
+# of evidence as compile_commands.json: what the build actually read, not where
+# somebody expected it to be.
+cat > "$WORK/cc1.sh" <<'CC_EOF'
+#!/bin/sh
+o="$OBJDIR/$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_').o"
+e="$o.err"
+if ! $SYMCC -c -std=gnu11 -D_GNU_SOURCE $SYMINC $SYMFLAGS -MD -MF "$o.d" "$1" -o "$o" 2>"$e"; then
+    { printf '%s\n' "$1"; head -2 "$e" | sed 's/^/        /'; } >> "$FAILLIST"
+fi
+rm -f "$e"
+CC_EOF
+chmod +x "$WORK/cc1.sh"
+
+# -path/-prune, not a grep on the path: SRC_ROOT is an arbitrary directory and
+# a regexp match on it would be at the mercy of whatever punctuation it holds.
+{ cat "$WORK/prodc"; cat "$WORK/prodasm"; } | sort -u \
+    | grep -v "^$SYMSCAN_EXCLUDE_DIR/" \
+    | sed "s|^|$SRC_ROOT/|" | sort > "$WORK/csrc"
+
+njobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+if [ -s "$WORK/csrc" ]; then
+    if echo x | xargs -P 2 -n 1 true >/dev/null 2>&1; then
+        xargs -P "$njobs" -n 1 "$WORK/cc1.sh" < "$WORK/csrc"
+    else
+        while IFS= read -r _f; do "$WORK/cc1.sh" "$_f"; done < "$WORK/csrc"
+    fi
+fi
+
+nsrc=$(wc -l < "$WORK/csrc")
+nobj=$(find "$OBJDIR" -name '*.o' 2>/dev/null | wc -l)
+if [ -s "$FAILLIST" ] || [ "$nobj" -ne "$nsrc" ]; then
+    echo "FAIL: BROKEN SYMBOL SCAN: $nobj of $nsrc product source file(s) compiled."
+    [ -s "$FAILLIST" ] && sed 's/^/    /' "$FAILLIST"
+    echo "  -> the universe of services is derived from the symbols the compiled"
+    echo "     product EXPORTS. A file that does not compile contributes no symbols,"
+    echo "     so a service could hide behind a build error. Fix the file, or -- if it"
+    echo "     genuinely cannot be compiled here -- extend SYMSCAN_EXCLUDE_DIR and say"
+    echo "     why in the header. Do NOT let a compile failure pass silently."
+    echo "     (A short count with NO failing file above means two source paths"
+    echo "     mangled to the same object name -- also a lost file, also not a pass.)"
+    exit 1
+fi
+
+: > "$WORK/symbols"
+while IFS= read -r _f; do
+    _o="$OBJDIR/$(printf '%s' "$_f" | tr -c 'A-Za-z0-9' '_').o"
+    nm "$_o" 2>/dev/null | awk -v SRC="${_f#"$SRC_ROOT"/}" '
+        NF == 3 && $2 ~ /^[A-Z]$/ && $2 != "U" && $3 ~ /^sys\$/ {
+            print "S\t" SRC "\t" $3
+        }'
+done < "$WORK/csrc" | sort -u >> "$WORK/symbols"
+
+# The headers the product ACTUALLY INCLUDES, read out of the dependency files
+# the compiles above just wrote, UNIONED with the header glob for the same
+# reason the .c set is a union: a header nothing includes is still source in
+# this tree, and a union cannot lose one.
+find "$SRC_ROOT/src" "$SRC_ROOT/tools" -name '*.h' 2>/dev/null \
+    | sed "s|^$(printf '%s' "$SRC_ROOT" | sed 's/[\\&|]/\\\\&/g')/||" > "$WORK/prodh.raw"
+# A dependency file is MAKE syntax, not a path list: `$` is written `$$` and
+# the paths are not normalised. Left alone, `src/libvms/../kernel/vms_ioctl.h`
+# and `src/kernel/vms_ioctl.h` are two spellings of one file and the scanner
+# reads it TWICE -- which is a DEFINED MORE THAN ONCE red manufactured out of
+# nothing. Unescape and normalise, and drop anything that climbs out of the
+# tree rather than guessing what it meant.
+find "$OBJDIR" -name '*.d' -exec cat {} + 2>/dev/null \
+    | tr ' \\' '\n\n' \
+    | grep '\.h$' \
+    | awk -v ROOT="$SRC_ROOT/" '
+        function norm(p,   a, m, i, k, o, s) {
+            m = split(p, a, "/"); k = 0
+            for (i = 1; i <= m; i++) {
+                if (a[i] == "" || a[i] == ".") continue
+                if (a[i] == "..") { if (k == 0) return ""; k--; continue }
+                o[++k] = a[i]
+            }
+            s = ""
+            for (i = 1; i <= k; i++) s = s (i > 1 ? "/" : "") o[i]
+            return s
+        }
+        {
+            gsub(/\$\$/, "$")
+            if (index($0, ROOT) != 1) next
+            r = norm(substr($0, length(ROOT) + 1))
+            if (r != "") print r
+        }' >> "$WORK/prodh.raw"
+sort -u "$WORK/prodh.raw" > "$WORK/prodh"
 
 # ------------------------------------------------------------- fact gather --
 # HEADERS ARE SCANNED FOR DEFINITIONS TOO, and that is not tidiness: a
@@ -444,31 +847,36 @@ PROTO_EOF
 # so a header-inline body contributes its definition, its call edges and its
 # state references exactly as a .c body does, and its declaration must sit in
 # the header that defines it.
+cat "$WORK/prodc" "$WORK/prodh" | sort -u > "$WORK/scanset"
 : > "$WORK/facts"
-find "$SRC_ROOT/src" "$SRC_ROOT/tools" \( -name '*.c' -o -name '*.h' \) 2>/dev/null | sort | while read -r f; do
-    awk -f "$WORK/strip.awk" "$f" | awk -v SRC="${f#"$SRC_ROOT"/}" -f "$WORK/scan.awk"
-done > "$WORK/facts"
+while read -r f; do
+    [ -f "$SRC_ROOT/$f" ] || continue
+    awk -f "$WORK/strip.awk" "$SRC_ROOT/$f" | awk -v SRC="$f" -f "$WORK/scan.awk"
+done < "$WORK/scanset" > "$WORK/facts"
 
 : > "$WORK/protos"
-find "$SRC_ROOT/src" -name '*.h' 2>/dev/null | sort | while read -r h; do
-    awk -f "$WORK/strip.awk" "$h" | awk -v SRC="${h#"$SRC_ROOT"/}" -f "$WORK/proto.awk"
-done > "$WORK/protos"
+while read -r h; do
+    [ -f "$SRC_ROOT/$h" ] || continue
+    awk -f "$WORK/strip.awk" "$SRC_ROOT/$h" | awk -v SRC="$h" -f "$WORK/proto.awk"
+done < "$WORK/prodh" > "$WORK/protos"
 
 if [ ! -s "$WORK/facts" ]; then
     echo "FAIL: BROKEN GATE: the source scan produced no facts at all."
     echo "  -> a gate that reads nothing certifies everything. Fix the scan."
     exit 1
 fi
+cat "$WORK/symbols" >> "$WORK/facts"
 
 # ------------------------------------------------------------ declarations --
 # Read from the RAW files: the declaration lives in a comment by design.
 # Headers are read too, because a header-inline definition's declaration has
 # to sit in the header that defines it.
 : > "$WORK/decl_raw"
-find "$SRC_ROOT/src" "$SRC_ROOT/tools" \( -name '*.c' -o -name '*.h' \) 2>/dev/null | sort | while read -r f; do
-    grep -n 'OVMX-USERSPACE:\|OVMX-PARTIAL:\|OVMX-LOCAL:\|OVMX-EXECUTIVE:' "$f" 2>/dev/null \
-        | sed "s|^|${f#"$SRC_ROOT"/}:|" || true
-done > "$WORK/decl_raw"
+while read -r f; do
+    [ -f "$SRC_ROOT/$f" ] || continue
+    grep -n 'OVMX-USERSPACE:\|OVMX-PARTIAL:\|OVMX-LOCAL:\|OVMX-EXECUTIVE:' "$SRC_ROOT/$f" 2>/dev/null \
+        | sed "s|^|$f:|" || true
+done < "$WORK/scanset" > "$WORK/decl_raw"
 
 # decl_ok records, per accepted declaration line:
 #   <file> <kind> <sys$name> <item-or-dash> <proof-path-or-dash>
@@ -577,123 +985,6 @@ if [ ! -s "$WORK/ioctlmap" ] && grep -q '	EXECUTIVE	' "$WORK/decl_ok" 2>/dev/nul
     echo "     the dispatcher or this scan; do not add a skip."
     exit 1
 fi
-
-# --------------------------------------------------- exported-symbol scan --
-# THE UNIVERSE'S THIRD MEMBER, and the only one that is not source text. Every
-# product .c file outside the declared exclusion is compiled here and its
-# defined, global sys$* symbols are read out with nm. See the header: the two
-# source readings were escaped TOGETHER by an asm-label rename that kept the
-# exported symbol byte-identical.
-#
-# Emits into the fact stream:
-#   S <file> <symbol>   a sys$ symbol the compiled product exports
-SYMSCAN_EXCLUDE_DIR="src/kernel"
-
-SYMCC=""
-for _c in cc gcc; do
-    if command -v "$_c" >/dev/null 2>&1; then SYMCC="$_c"; break; fi
-done
-if [ -z "$SYMCC" ] || ! command -v nm >/dev/null 2>&1; then
-    echo "FAIL: BROKEN SYMBOL SCAN: no C compiler (cc/gcc) or no nm(1) available."
-    echo "  -> the universe is derived from the symbols the product EXPORTS, because"
-    echo "     the source-text readings were both escaped by one asm-label rename"
-    echo "     (vms-f26). Without a compiler this gate cannot see a service exported"
-    echo "     under a name its source does not spell, so it does not get to certify"
-    echo "     that every service is accounted for. Install a compiler; do not add a"
-    echo "     skip."
-    exit 1
-fi
-
-SYMINC=""
-for _d in $(find "$SRC_ROOT/src" -name '*.h' -exec dirname {} \; 2>/dev/null | sort -u); do
-    SYMINC="$SYMINC -I$_d"
-done
-for _d in "$SRC_ROOT"/src/*/include; do
-    [ -d "$_d" ] && SYMINC="$SYMINC -I$_d"
-done
-
-OBJDIR="$WORK/obj"
-FAILLIST="$WORK/ccfail"
-mkdir -p "$OBJDIR"
-: > "$FAILLIST"
-export OBJDIR FAILLIST SYMCC SYMINC
-
-# -w plus the -Wno-error= forms: this is a SYMBOL scan, not a build gate. It
-# must read the symbols out of code that a stricter compiler would reject --
-# the negative controls next door deliberately delete prototypes and rename
-# definitions, and a gcc that promotes an implicit declaration to an error
-# (gcc 14 and later do) would turn those controls into "the scan broke"
-# instead of the reds they are testing for.
-#
-# EACH FLAG IS PROBED, because the first draft of this file assumed unknown
-# -Wno-* forms were ignored and MEASURED OTHERWISE: gcc 13.3 rejects
-# -Wno-error=return-mismatch (the warning arrives in gcc 14) with a cc1 error,
-# and all 127 files failed to compile. An empty translation unit is enough to
-# provoke it, so the probe is one compile per candidate.
-: > "$WORK/probe.c"
-SYMFLAGS="-w"
-for _fl in -Wno-implicit-function-declaration \
-           -Wno-error=implicit-function-declaration \
-           -Wno-error=implicit-int -Wno-error=int-conversion \
-           -Wno-error=incompatible-pointer-types \
-           -Wno-error=return-mismatch; do
-    if $SYMCC $_fl -c "$WORK/probe.c" -o "$WORK/probe.o" >/dev/null 2>&1; then
-        SYMFLAGS="$SYMFLAGS $_fl"
-    fi
-done
-rm -f "$WORK/probe.o"
-export SYMFLAGS
-
-cat > "$WORK/cc1.sh" <<'CC_EOF'
-#!/bin/sh
-o="$OBJDIR/$(printf '%s' "$1" | tr -c 'A-Za-z0-9' '_').o"
-e="$o.err"
-if ! $SYMCC -c -std=gnu11 -D_GNU_SOURCE $SYMINC $SYMFLAGS "$1" -o "$o" 2>"$e"; then
-    { printf '%s\n' "$1"; head -2 "$e" | sed 's/^/        /'; } >> "$FAILLIST"
-fi
-rm -f "$e"
-CC_EOF
-chmod +x "$WORK/cc1.sh"
-
-# -path/-prune, not a grep on the path: SRC_ROOT is an arbitrary directory and
-# a regexp match on it would be at the mercy of whatever punctuation it holds.
-find "$SRC_ROOT/src" "$SRC_ROOT/tools" \
-     -path "$SRC_ROOT/$SYMSCAN_EXCLUDE_DIR/*" -prune -o \
-     -name '*.c' -print 2>/dev/null | sort > "$WORK/csrc"
-
-njobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
-if [ -s "$WORK/csrc" ]; then
-    if echo x | xargs -P 2 -n 1 true >/dev/null 2>&1; then
-        xargs -P "$njobs" -n 1 "$WORK/cc1.sh" < "$WORK/csrc"
-    else
-        while IFS= read -r _f; do "$WORK/cc1.sh" "$_f"; done < "$WORK/csrc"
-    fi
-fi
-
-nsrc=$(wc -l < "$WORK/csrc")
-nobj=$(find "$OBJDIR" -name '*.o' 2>/dev/null | wc -l)
-if [ -s "$FAILLIST" ] || [ "$nobj" -ne "$nsrc" ]; then
-    echo "FAIL: BROKEN SYMBOL SCAN: $nobj of $nsrc product source file(s) compiled."
-    [ -s "$FAILLIST" ] && sed 's/^/    /' "$FAILLIST"
-    echo "  -> the universe of services is derived from the symbols the compiled"
-    echo "     product EXPORTS. A file that does not compile contributes no symbols,"
-    echo "     so a service could hide behind a build error. Fix the file, or -- if it"
-    echo "     genuinely cannot be compiled here -- extend SYMSCAN_EXCLUDE_DIR and say"
-    echo "     why in the header. Do NOT let a compile failure pass silently."
-    echo "     (A short count with NO failing file above means two source paths"
-    echo "     mangled to the same object name -- also a lost file, also not a pass.)"
-    exit 1
-fi
-
-: > "$WORK/symbols"
-while IFS= read -r _f; do
-    _o="$OBJDIR/$(printf '%s' "$_f" | tr -c 'A-Za-z0-9' '_').o"
-    nm "$_o" 2>/dev/null | awk -v SRC="${_f#"$SRC_ROOT"/}" '
-        NF == 3 && $2 ~ /^[A-Z]$/ && $2 != "U" && $3 ~ /^sys\$/ {
-            print "S\t" SRC "\t" $3
-        }'
-done < "$WORK/csrc" | sort -u >> "$WORK/symbols"
-cat "$WORK/symbols" >> "$WORK/facts"
 
 # ---------------------------------------------------------------- analysis --
 : > "$WORK/answerpath"
@@ -906,7 +1197,7 @@ END {
     for (nm in protoname)
         if (!(nm in universe))
             errors[++nerr] = "PROTOTYPE WITH NO DEFINITION: " nm " is declared in " protofile[nm] \
-                             " but nothing under src/ or tools/ defines it.\n" \
+                             " but nothing in the product compile set defines it.\n" \
                              "  -> a rename or a deleted definition cannot shrink this universe quietly.\n" \
                              "     Delete the prototype too if the service is genuinely gone."
 
@@ -1311,8 +1602,8 @@ echo
 nuniverse=0
 while IFS=' ' read -r k v; do
     case "$k" in
-        universe)   echo "  $v sys\$ services defined under src/ and tools/"; nuniverse=$v ;;
-        protos)     echo "  $v sys\$ prototypes declared in headers under src/" ;;
+        universe)   echo "  $v sys\$ services defined in the product compile set"; nuniverse=$v ;;
+        protos)     echo "  $v sys\$ prototypes declared in the headers it compiles against" ;;
         exec)       echo "  $v reach the executive (transitive call to a vms_kif_* entry point)" ;;
         state)      echo "  $v touch retained per-process state (file-scope object, transitively)" ;;
         exec+state) echo "  $v do BOTH -- touch a file-scope object AND reach the executive (evidence, not a verdict)" ;;
@@ -1389,7 +1680,7 @@ fi
 # nothing left to prove and should be retired, not left green by accident.
 if [ "$nuniverse" -eq 0 ]; then
     echo
-    echo "  FAIL: THE FLOOR: zero sys\$ services found under src/ and tools/."
+    echo "  FAIL: THE FLOOR: zero sys\$ services found in the product compile set."
     echo "  -> a scan that finds nothing certifies everything else vacuously."
     status=1
 fi

@@ -13,6 +13,23 @@ from OVMX's own logs, and the orchestrator read no packet bytes at all.**
 > symlink makes every hardcoded path in the 23 lab scripts resolve, so do not
 > edit them.
 >
+> **⚠ THERE IS NOW A SECOND LAB, AND IT IS NOT THIS ONE.** `vms-a5c` landed
+> `tests/lab/` on main (2026-08-02): a k3s StatefulSet where **one pod is one
+> complete, isolated 2-node VMScluster**, cloned from the 3-node golden snapshot,
+> with its own `br0`+taps inside its own pod netns. Three replicas are running.
+> Scale with `kubectl -n ovmx-lab scale sts/vaxlab --replicas=N`.
+>
+> **What this changes for THIS investigation: nothing, deliberately.** Every
+> control and negative in §1–§4e was bracketed on lab-1, and lab-2 runs a
+> *different SIMH binary* (same open-simh commit `2e0d51e`, built for x86_64
+> instead of the aarch64 binary lab-1 carries). **Do not mix lab-1 and lab-2 runs
+> inside one comparison, and do not re-run a §3 killed hypothesis on lab-2 and
+> treat the result as new evidence.** Lab-2 is for the *other* `vms-ci` items
+> that were queued behind this one — `vms-ce7`, `vms-ac4`, `vms-ci.4` — and for
+> any fresh line of attack whose controls are built on lab-2 from the start.
+> The wire comparison that was run, and its explicit limits, are in
+> `tests/lab/README.md` — it is not a byte-level fidelity proof.
+>
 > **§5's ordered plan is now FULLY EXECUTED — step 4 was run in §4e.4 and is
 > refuted as the gate. Do not re-propose it.** §1–§4c exist so you do not re-derive
 > them, in particular §3 (things that look like the answer and are not). §0 and

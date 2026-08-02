@@ -87,13 +87,23 @@ QIO="$ROOT/src/libvms/syssvc/sys_qio.c"
 STR="$ROOT/src/libvms/rtl/str_routines.c"
 STARLET="$ROOT/src/libvms/include/starlet.h"
 PROOF="$ROOT/tests/qemu/test_syssvc_ef_mproc.c"
+# A SECOND proof, from a DIFFERENT facility. The price is charged on which code
+# a defect edits, so the controls that isolate that half need a service whose
+# answer path is the event-flag executive while the proof it names is the lock
+# manager's -- no defect can be in both.
+LOCKPROOF="$ROOT/tests/qemu/test_syssvc_lock.c"
 # The manifest of proven-reddenable assertions. It is MUTABLE because the
 # OVMX-EXECUTIVE price is now paid in one of its entries (vms-ecf): the control
 # that shows a full exemption CAN still be paid for has to add an entry, and
 # the control that shows the price cannot be skipped has to take them away.
 FDMAN="$ROOT/tests/qemu/facility_defects.sh"
+# The executive dispatch switch. An OVMX-EXECUTIVE claim is priced on which
+# EXECUTIVE CODE a proven defect mutates, and the hop from a service to that
+# code is the ioctl this file dispatches. If the gate cannot read the bridge it
+# must refuse to certify, and that refusal needs a control like anything else.
+DISPATCH="$ROOT/src/kernel/vms_module.c"
 
-MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $FDMAN"
+MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $LOCKPROOF $FDMAN $DISPATCH"
 
 key_of() { printf '%s' "${1#"$ROOT"/}" | tr '/.' '__'; }
 
@@ -407,7 +417,7 @@ sed -i 's|proof=tests/qemu/test_syssvc_ef_mproc.c|proof=tests/qemu/test_syssvc_e
 expect_red "$EVENT" "an EXECUTIVE claim citing a single-process proof" \
     "EXECUTIVE DECLARATION WHOSE PROOF IS SINGLE-PROCESS: sys\$setef"
 
-# A proof that never mentions the service is a proof about something else.
+# A proof that never calls the service is a proof about something else.
 {
     echo ''
     echo '/* OVMX-EXECUTIVE: sys$negctl_unnamed (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
@@ -417,20 +427,37 @@ expect_red "$EVENT" "an EXECUTIVE claim citing a single-process proof" \
     echo '    return st;'
     echo '}'
 } >> "$EVENT"
-expect_red "$EVENT" "an EXECUTIVE claim whose proof never names the service" \
-    "EXECUTIVE DECLARATION WHOSE PROOF DOES NOT NAME THE SERVICE: sys\$negctl_unnamed"
+expect_red "$EVENT" "an EXECUTIVE claim whose proof never calls the service" \
+    "EXECUTIVE DECLARATION WHOSE PROOF NEVER CALLS THE SERVICE: sys\$negctl_unnamed"
 
-# ...AND THE MENTION PAID FOR IN A COMMENT (vms-ecf). This is the control the
-# fifth check exists for, and it was a LIVE evasion measured end-to-end on the
-# merged gate: `grep -qF "$pname" "$proof"` is satisfied by a comment, so the
-# only full exemption the register grants cost ONE IGNORED CALL plus ONE
-# COMMENT LINE in an otherwise untouched proof -- and the gate printed PASS
-# with 11 EXECUTIVE claims. sys$gettim's answer is still 100% clock_gettime().
+# ...AND THE MENTION PAID FOR IN A COMMENT (vms-ecf, round 1). A LIVE evasion
+# measured end-to-end on the merged gate: `grep -qF "$pname" "$proof"` is
+# satisfied by a comment, so the only full exemption the register grants cost
+# ONE IGNORED CALL plus ONE COMMENT LINE in an otherwise untouched proof -- and
+# the gate printed PASS with 11 EXECUTIVE claims. sys$gettim answers from
+# clock_gettime() before and after. The proof is now read comment-stripped, so
+# this dies at the CALLS check.
 sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME)| * OVMX-EXECUTIVE: sys$gettim (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- bought|' "$TIME"
 sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_s = 0; (void)vms_kif_readef(0u, \&ovmx_negctl_s); }|' "$TIME"
 printf '/* also covers sys$gettim */\n' >> "$PROOF"
 expect_red "$TIME $PROOF" "an EXECUTIVE claim whose proof names it only in a COMMENT (the price paid in a comment)" \
-    "EXECUTIVE DECLARATION WHOSE PROOF NAMES NO ASSERTION ANY MUTATION HAS REDDENED: sys\$gettim"
+    "EXECUTIVE DECLARATION WHOSE PROOF NEVER CALLS THE SERVICE: sys\$gettim"
+
+# ...AND THE PRICE PAID BY RE-WORDING AN ASSERTION (vms-ecf, round 2). THE
+# CONTROL THIS ROUND EXISTS FOR, and the exact settling command that was
+# measured against the round-2 gate: the price then was "name an assertion the
+# manifest has proven reddenable that MENTIONS THIS SERVICE", and an assertion
+# text is a string living in exactly two places, both editable in one commit.
+# Appending ", clock via sys$gettim" to an already-proven assertion in the
+# proof AND the manifest, in lockstep, plus one ignored call, paid in full and
+# the gate printed "sys$gettim x1" as a paid claim. The price no longer reads
+# the wording of anything: it reads which FILE a defect edits.
+sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME)| * OVMX-EXECUTIVE: sys$gettim (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- bought|' "$TIME"
+sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_s = 0; (void)vms_kif_readef(0u, \&ovmx_negctl_s); }|' "$TIME"
+sed -i 's|child: sys\$ascefc joined the named common cluster|child: sys$ascefc joined the named common cluster, clock via sys$gettim|g' "$PROOF"
+sed -i 's|child: sys\$ascefc joined the named common cluster|child: sys$ascefc joined the named common cluster, clock via sys$gettim|g' "$FDMAN"
+expect_red "$TIME $PROOF $FDMAN" "an EXECUTIVE claim paid by RE-WORDING a proven assertion to mention the service" \
+    "EXECUTIVE DECLARATION WHOSE PROOF NEVER CALLS THE SERVICE: sys\$gettim"
 
 # THE PRICE MUST BE COMPUTABLE, or every EXECUTIVE claim is exempt for want of
 # a check. With the manifest of proven-reddenable assertions emptied out, the
@@ -439,6 +466,17 @@ expect_red "$TIME $PROOF" "an EXECUTIVE claim whose proof names it only in a COM
 : > "$FDMAN"
 expect_red "$FDMAN" "the manifest of proven-reddenable assertions emptied out" \
     "BROKEN PRICE CHECK: "
+
+# ...AND THE SAME REFUSAL ONE HOP EARLIER. The price is charged against the
+# files a defect edits, and the path from a service to the executive code that
+# answers it crosses an ioctl -- read out of the dispatch switch, which is the
+# one hop no call graph can walk. With the switch unreadable every answer path
+# is empty, which would make EVERY claim unpayable OR (if the gate were written
+# the other way round) every claim exempt. Neither is a verdict: a gate that
+# cannot compute its check must say so.
+sed -i 's|case VMS_IOCTL_|case OVMX_NEGCTL_NOT_AN_IOCTL_|g' "$DISPATCH"
+expect_red "$DISPATCH" "the executive dispatch switch made unreadable, so no answer path can be derived" \
+    "BROKEN IOCTL BRIDGE: "
 
 # ----------------------------------------------------------- GREEN controls --
 
@@ -473,18 +511,21 @@ expect_green "$STR" "a stateful RTL routine stays green -- the universe is sys\$
 # lives under tests/qemu/, forks, names it, AND holds an assertion that
 # tests/qemu/facility_defects.sh names as proven-reddenable, is green.
 #
-# NOTE WHAT THE MUTATION HAS TO TOUCH, because that IS the price: the manifest.
-# The line appended to the proof is still one line -- it is the MANIFEST ENTRY
-# that costs, and this file only checks that the entry exists. What makes an
-# entry real is tests/qemu/run_facility_negctl.sh, which injects the defect in
-# QEMU and requires the complete set of assertions that go red to EQUAL
-# require_fail + knock_on_fail exactly. A fabricated entry naming an assertion
-# no defect reddens fails THAT control. This one deliberately fabricates it, to
-# show the shape the register accepts -- it is not evidence that the assertion
-# is real.
+# NOTE WHAT THE MUTATION HAS TO TOUCH, because that IS the price: a defect
+# entry whose TARGET FILE lands inside the service answer path -- here
+# kernel/vms_eflag.c, which is where the executive handles the ioctl
+# vms_kif_readef issues -- plus an assertion of that defect appearing in the
+# proof IN CODE, plus the proof actually CALLING the service. This file only
+# checks that such an entry exists. What makes an entry real is
+# tests/qemu/run_facility_negctl.sh, which injects the defect in QEMU and
+# requires the complete set of assertions that go red to EQUAL require_fail +
+# knock_on_fail exactly. A fabricated entry naming an assertion no defect
+# reddens fails THAT control. This one deliberately fabricates it, to show the
+# shape the register accepts -- it is not evidence that the assertion is real.
 cat > "$WORK/negctl_branch" <<'BRANCH_EOF'
     negctl-paid)
         case "$_f" in
+        targets)      echo "kernel/vms_eflag.c";;
         require_fail) echo 'negctl: sys$negctl_proven answers from the executive';;
         *)            echo "";;
         esac;;
@@ -503,24 +544,77 @@ awk 'NR == FNR { b = b $0 ORS; next }
     echo '    return st;'
     echo '}'
 } >> "$EVENT"
-printf '/* negctl: sys$negctl_proven answers from the executive */\n' >> "$PROOF"
-expect_green "$EVENT $PROOF $FDMAN" "an EXECUTIVE claim whose proof forks, names it, and holds a proven-reddenable assertion"
+{
+    echo 'void ovmx_negctl_paid_caller(void);'
+    echo 'void ovmx_negctl_paid_caller(void) {'
+    echo '    (void)sys$negctl_proven(0);'
+    echo '    printf("  FAIL: negctl: sys$negctl_proven answers from the executive\\n");'
+    echo '}'
+} >> "$PROOF"
+expect_green "$EVENT $PROOF $FDMAN" "an EXECUTIVE claim whose proof forks, calls it, and holds a proven-reddenable assertion from a defect in its answer path"
 
 # ...and the SAME claim with the manifest entry withheld is a RED. Without this
 # the control above proves only that the gate tolerates the shape; it is the
 # pair that shows which half is load-bearing.
+# A PROOF FROM THE WRONG FACILITY. This service answers through
+# vms_kif_readef, so its answer path is sys_event.c plus the executive's
+# event-flag file; the proof it names is the LOCK manager's, which forks, calls
+# it, and is genuinely reddened by injected defects -- just never by one that
+# edits any code this service's answer can come from. Under the round-2 price a
+# proof that merely mentioned the service paid; under this one the mutation has
+# to land in the right code.
 {
     echo ''
-    echo '/* OVMX-EXECUTIVE: sys$negctl_unproven (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo '/* OVMX-EXECUTIVE: sys$negctl_unproven (vms-5b4) proof=tests/qemu/test_syssvc_lock.c -- negctl */'
     echo 'uint32_t sys$negctl_unproven(uint32_t efn) {'
     echo '    uint32_t st = 0;'
     echo '    (void)vms_kif_readef(efn, &st);'
     echo '    return st;'
     echo '}'
 } >> "$EVENT"
-printf '/* negctl: this proof names sys$negctl_unproven */\n' >> "$PROOF"
-expect_red "$EVENT $PROOF" "an EXECUTIVE claim whose proof names it but which no mutation has ever reddened" \
-    "EXECUTIVE DECLARATION WHOSE PROOF NAMES NO ASSERTION ANY MUTATION HAS REDDENED: sys\$negctl_unproven"
+{
+    echo 'void ovmx_negctl_unproven_caller(void);'
+    echo 'void ovmx_negctl_unproven_caller(void) { (void)sys$negctl_unproven(0); }'
+} >> "$LOCKPROOF"
+expect_red "$EVENT $LOCKPROOF" "an EXECUTIVE claim whose proof is reddened by defects, but none that edits its answer path" \
+    "EXECUTIVE DECLARATION NO INJECTED DEFECT IN ITS ANSWER PATH REDDENS: sys\$negctl_unproven"
+
+# ...AND THE SAME ISOLATION WITH THE DEFECT HANDED TO IT. The control above
+# leans on the real manifest; this one FABRICATES the most favourable defect an
+# adversary could write and it still must not pay: it names a real assertion
+# from the named proof (so the text half is satisfied outright, exactly as the
+# round-2 price would have accepted) and it edits kernel/vms_lock.c, a genuine
+# executive file that genuinely answers that proof -- just not for THIS service,
+# whose answer comes through the event-flag path. The only thing separating the
+# two is which code the mutation touches, which is the whole point.
+cat > "$WORK/negctl_branch" <<'BRANCH_EOF'
+    negctl-offpath)
+        case "$_f" in
+        targets)      echo "kernel/vms_lock.c";;
+        require_fail) echo 'child: sys$enq CR+NOQUEUE denied while parent holds EX (public API)';;
+        *)            echo "";;
+        esac;;
+BRANCH_EOF
+sed -i 's|^DEFECTS="|DEFECTS="negctl-offpath\n|' "$FDMAN"
+awk 'NR == FNR { b = b $0 ORS; next }
+     { print }
+     !ins && /^    case "\$_d" in$/ { printf "%s", b; ins = 1 }' \
+    "$WORK/negctl_branch" "$FDMAN" > "$WORK/fdman.new" && mv "$WORK/fdman.new" "$FDMAN"
+{
+    echo ''
+    echo '/* OVMX-EXECUTIVE: sys$negctl_offpath (vms-5b4) proof=tests/qemu/test_syssvc_lock.c -- negctl */'
+    echo 'uint32_t sys$negctl_offpath(uint32_t efn) {'
+    echo '    uint32_t st = 0;'
+    echo '    (void)vms_kif_readef(efn, &st);'
+    echo '    return st;'
+    echo '}'
+} >> "$EVENT"
+{
+    echo 'void ovmx_negctl_offpath_caller(void);'
+    echo 'void ovmx_negctl_offpath_caller(void) { (void)sys$negctl_offpath(0); }'
+} >> "$LOCKPROOF"
+expect_red "$EVENT $LOCKPROOF $FDMAN" "an EXECUTIVE claim paid by a fabricated defect that reddens the proof but edits nothing in the answer path" \
+    "EXECUTIVE DECLARATION NO INJECTED DEFECT IN ITS ANSWER PATH REDDENS: sys\$negctl_offpath"
 
 # ...and a mixture that names both halves is green too, so the PARTIAL reds
 # above are not satisfiable by a gate that rejects every PARTIAL line.
@@ -620,6 +714,9 @@ grep -oE 'the source scan produced no facts at all\.' "$GATE" | sort -u >> "$WOR
 # PREREQUISITE failure, the same class as this file's own `command -v cmp`
 # check, and no mutation of the TREE provokes it.
 grep -oE 'BROKEN SYMBOL SCAN: ' "$GATE" | sort -u >> "$WORK/derived"
+# The ioctl bridge's own broken-scan path (vms-ecf round 3), same shape: an
+# echo that aborts the run rather than accusing a service.
+grep -oE 'BROKEN IOCTL BRIDGE: ' "$GATE" | sort -u >> "$WORK/derived"
 # The gate's own source has to spell this one "sys\$" (escaped for the shell
 # double-quote it lives in); what actually prints at runtime is "sys$", with
 # no backslash. Normalize the same way so this line matches the fixture's

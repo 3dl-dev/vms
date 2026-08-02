@@ -71,8 +71,9 @@
 #     at all"; deciding which PART of an answer came from there needs the
 #     per-facility A-writes/B-reads proof, not a source scan. That is why the
 #     mixtures DECLARE their two halves by hand instead of the gate guessing
-#     them, and why OVMX-EXECUTIVE costs a named proof. Do not quote this gate
-#     as evidence that a service is fully wired; quote the proof it names.
+#     them, and why OVMX-EXECUTIVE costs a named proof that an injected defect
+#     in the service answer path is known to redden. Do not quote this gate as
+#     evidence that a service is fully wired; quote the proof it names.
 #   - It does NOT read the "state" column as a verdict, and nobody else should
 #     either. That column marks a service that transitively touches ANY
 #     file-scope object -- and vms_kif.c's /dev/vms file descriptor IS a
@@ -445,6 +446,124 @@ if [ ! -s "$WORK/facts" ]; then
     exit 1
 fi
 
+# ------------------------------------------------------------ declarations --
+# Read from the RAW files: the declaration lives in a comment by design.
+# Headers are read too, because a header-inline definition's declaration has
+# to sit in the header that defines it.
+: > "$WORK/decl_raw"
+find "$SRC_ROOT/src" "$SRC_ROOT/tools" \( -name '*.c' -o -name '*.h' \) 2>/dev/null | sort | while read -r f; do
+    grep -n 'OVMX-USERSPACE:\|OVMX-PARTIAL:\|OVMX-LOCAL:\|OVMX-EXECUTIVE:' "$f" 2>/dev/null \
+        | sed "s|^|${f#"$SRC_ROOT"/}:|" || true
+done > "$WORK/decl_raw"
+
+# decl_ok records, per accepted declaration line:
+#   <file> <kind> <sys$name> <item-or-dash> <proof-path-or-dash>
+: > "$WORK/decl_ok"
+: > "$WORK/decl_bad"
+while IFS= read -r rawline; do
+    [ -n "$rawline" ] || continue
+    dfile=${rawline%%:*}
+    good=$(printf '%s\n' "$rawline" \
+        | grep -oE 'OVMX-USERSPACE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*[^[:space:]]' \
+        | head -1)
+    if [ -n "$good" ]; then
+        dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-USERSPACE:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
+        ditem=$(printf '%s\n' "$good" | sed -E 's/.*\((vms-[0-9a-z.]+)\).*/\1/')
+        printf '%s\tUSERSPACE\t%s\t%s\t-\n' "$dfile" "$dname" "$ditem" >> "$WORK/decl_ok"
+        continue
+    fi
+    good=$(printf '%s\n' "$rawline" \
+        | grep -oE 'OVMX-PARTIAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*exec:[[:space:]]*[^[:space:]]' \
+        | head -1)
+    if [ -n "$good" ]; then
+        dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-PARTIAL:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
+        ditem=$(printf '%s\n' "$good" | sed -E 's/.*\((vms-[0-9a-z.]+)\).*/\1/')
+        printf '%s\tPARTIAL\t%s\t%s\t-\n' "$dfile" "$dname" "$ditem" >> "$WORK/decl_ok"
+        continue
+    fi
+    good=$(printf '%s\n' "$rawline" \
+        | grep -oE 'OVMX-LOCAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
+        | head -1)
+    if [ -n "$good" ]; then
+        dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-LOCAL:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
+        printf '%s\tLOCAL\t%s\t-\t-\n' "$dfile" "$dname" >> "$WORK/decl_ok"
+        continue
+    fi
+    good=$(printf '%s\n' "$rawline" \
+        | grep -oE 'OVMX-EXECUTIVE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*proof=[^[:space:]]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
+        | head -1)
+    if [ -n "$good" ]; then
+        dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-EXECUTIVE:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
+        ditem=$(printf '%s\n' "$good" | sed -E 's/.*\((vms-[0-9a-z.]+)\).*/\1/')
+        dproof=$(printf '%s\n' "$good" | sed -E 's/.*proof=([^[:space:]]+)[[:space:]]*--.*/\1/')
+        printf '%s\tEXECUTIVE\t%s\t%s\t%s\n' "$dfile" "$dname" "$ditem" "$dproof" >> "$WORK/decl_ok"
+        continue
+    fi
+    printf '%s\n' "$rawline" >> "$WORK/decl_bad"
+done < "$WORK/decl_raw"
+
+# -------------------------------------------------------- the ioctl bridge --
+# THE ONE HOP THE CALL GRAPH CANNOT WALK. A service's answer path runs
+#
+#   sys$readef            src/libvms/syssvc/sys_event.c
+#     -> vms_kif_readef   src/libvmssys/vms_kif.c        [ a call ]
+#     -> VMS_IOCTL_READEF                                [ the ioctl it issues ]
+#     -> vms_ioctl_readef                                [ the executive's handler ]
+#     -> src/kernel/vms_eflag.c                          [ where that handler lives ]
+#
+# and the third hop is an ioctl number crossing into the kernel, not a C call,
+# so the call graph stops dead at the wrapper. It is read HERE, out of the
+# executive's OWN dispatch switch in src/kernel/vms_module.c: each
+# `case VMS_IOCTL_X:` arm is paired with the functions that arm calls. Both
+# ends are code -- a case label and a call -- so the bridge is a byproduct of
+# the dispatcher, not a name anybody types into a manifest.
+#
+# It runs AFTER the declarations are parsed, and its refusal is conditional on
+# there being an OVMX-EXECUTIVE claim to price: a tree that claims no full
+# exemption needs no bridge, and making the refusal unconditional would have
+# turned the gate's own floor fixture -- C code, no services, no kernel
+# directory -- into a bridge failure instead of the floor red it is there to
+# provoke. (Measured: it did exactly that.)
+#
+# Emits:  X <VMS_IOCTL_NAME> <handler-function>
+: > "$WORK/ioctlmap"
+DISPATCH="$SRC_ROOT/src/kernel/vms_module.c"
+if [ -f "$DISPATCH" ]; then
+    awk -f "$WORK/strip.awk" "$DISPATCH" | awk '
+        {
+            line = $0
+            if (line ~ /case[ \t]+VMS_IOCTL_[A-Za-z0-9_]+[ \t]*:/) {
+                match(line, /VMS_IOCTL_[A-Za-z0-9_]+/)
+                cur = substr(line, RSTART, RLENGTH)
+                sub(/^.*case[ \t]+VMS_IOCTL_[A-Za-z0-9_]+[ \t]*:/, "", line)
+            } else if (line ~ /(^|[^A-Za-z0-9_])default[ \t]*:/) {
+                cur = ""
+            }
+            if (cur == "") next
+            rest = line
+            while (match(rest, /[A-Za-z_][A-Za-z0-9_]*[ \t]*\(/)) {
+                h = substr(rest, RSTART, RLENGTH)
+                sub(/[ \t]*\(/, "", h)
+                if (h != "if" && h != "while" && h != "for" && h != "switch" &&
+                    h != "return" && h != "sizeof")
+                    print "X\t" cur "\t" h
+                rest = substr(rest, RSTART + RLENGTH)
+            }
+        }' | sort -u > "$WORK/ioctlmap"
+fi
+
+if [ ! -s "$WORK/ioctlmap" ] && grep -q '	EXECUTIVE	' "$WORK/decl_ok" 2>/dev/null; then
+    echo "FAIL: BROKEN IOCTL BRIDGE: no VMS_IOCTL_* dispatch arm was readable in"
+    echo "      src/kernel/vms_module.c."
+    echo "  -> an OVMX-EXECUTIVE claim is priced on WHICH EXECUTIVE CODE a proven"
+    echo "     defect mutates, and the path from a service to that code runs through"
+    echo "     the ioctl the executive dispatches. With the bridge unreadable every"
+    echo "     answer path would be empty and every claim exempt for want of a"
+    echo "     check. A price that cannot be computed must refuse to certify. Fix"
+    echo "     the dispatcher or this scan; do not add a skip."
+    exit 1
+fi
+
 # --------------------------------------------------- exported-symbol scan --
 # THE UNIVERSE'S THIRD MEMBER, and the only one that is not source text. Every
 # product .c file outside the declared exclusion is compiled here and its
@@ -562,63 +681,8 @@ while IFS= read -r _f; do
 done < "$WORK/csrc" | sort -u >> "$WORK/symbols"
 cat "$WORK/symbols" >> "$WORK/facts"
 
-# ------------------------------------------------------------ declarations --
-# Read from the RAW files: the declaration lives in a comment by design.
-# Headers are read too, because a header-inline definition's declaration has
-# to sit in the header that defines it.
-: > "$WORK/decl_raw"
-find "$SRC_ROOT/src" "$SRC_ROOT/tools" \( -name '*.c' -o -name '*.h' \) 2>/dev/null | sort | while read -r f; do
-    grep -n 'OVMX-USERSPACE:\|OVMX-PARTIAL:\|OVMX-LOCAL:\|OVMX-EXECUTIVE:' "$f" 2>/dev/null \
-        | sed "s|^|${f#"$SRC_ROOT"/}:|" || true
-done > "$WORK/decl_raw"
-
-# decl_ok records, per accepted declaration line:
-#   <file> <kind> <sys$name> <item-or-dash> <proof-path-or-dash>
-: > "$WORK/decl_ok"
-: > "$WORK/decl_bad"
-while IFS= read -r rawline; do
-    [ -n "$rawline" ] || continue
-    dfile=${rawline%%:*}
-    good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-USERSPACE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*[^[:space:]]' \
-        | head -1)
-    if [ -n "$good" ]; then
-        dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-USERSPACE:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
-        ditem=$(printf '%s\n' "$good" | sed -E 's/.*\((vms-[0-9a-z.]+)\).*/\1/')
-        printf '%s\tUSERSPACE\t%s\t%s\t-\n' "$dfile" "$dname" "$ditem" >> "$WORK/decl_ok"
-        continue
-    fi
-    good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-PARTIAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*--[[:space:]]*exec:[[:space:]]*[^[:space:]]' \
-        | head -1)
-    if [ -n "$good" ]; then
-        dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-PARTIAL:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
-        ditem=$(printf '%s\n' "$good" | sed -E 's/.*\((vms-[0-9a-z.]+)\).*/\1/')
-        printf '%s\tPARTIAL\t%s\t%s\t-\n' "$dfile" "$dname" "$ditem" >> "$WORK/decl_ok"
-        continue
-    fi
-    good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-LOCAL:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
-        | head -1)
-    if [ -n "$good" ]; then
-        dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-LOCAL:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
-        printf '%s\tLOCAL\t%s\t-\t-\n' "$dfile" "$dname" >> "$WORK/decl_ok"
-        continue
-    fi
-    good=$(printf '%s\n' "$rawline" \
-        | grep -oE 'OVMX-EXECUTIVE:[[:space:]]*sys\$[A-Za-z0-9_]+[[:space:]]*\(vms-[0-9a-z]+(\.[0-9a-z]+)?\)[[:space:]]*proof=[^[:space:]]+[[:space:]]*--[[:space:]]*[^[:space:]]' \
-        | head -1)
-    if [ -n "$good" ]; then
-        dname=$(printf '%s\n' "$good" | sed -E 's/^OVMX-EXECUTIVE:[[:space:]]*(sys\$[A-Za-z0-9_]+).*/\1/')
-        ditem=$(printf '%s\n' "$good" | sed -E 's/.*\((vms-[0-9a-z.]+)\).*/\1/')
-        dproof=$(printf '%s\n' "$good" | sed -E 's/.*proof=([^[:space:]]+)[[:space:]]*--.*/\1/')
-        printf '%s\tEXECUTIVE\t%s\t%s\t%s\n' "$dfile" "$dname" "$ditem" "$dproof" >> "$WORK/decl_ok"
-        continue
-    fi
-    printf '%s\n' "$rawline" >> "$WORK/decl_bad"
-done < "$WORK/decl_raw"
-
 # ---------------------------------------------------------------- analysis --
+: > "$WORK/answerpath"
 awk -F'\t' \
     -v declf="$WORK/decl_ok" \
     -v protof="$WORK/protos" \
@@ -626,6 +690,8 @@ awk -F'\t' \
     -v out_err="$WORK/errors" \
     -v out_items="$WORK/items" \
     -v out_symonly="$WORK/symonly" \
+    -v ioctlf="$WORK/ioctlmap" \
+    -v out_apath="$WORK/answerpath" \
     -v out_table="$WORK/table" '
 $1 == "D" {
     if ($3 == "static" || $3 == "macro") { local[$2 SUBSEP $4] = 1; node = $2 ":" $4 }
@@ -645,6 +711,17 @@ $1 == "R" {
         n = (($2 SUBSEP $3) in local) ? $2 ":" $3 : $3
         stateful[n] = 1
         if (statewhy[n] == "") statewhy[n] = $4
+    }
+    # THE IOCTL A FUNCTION ISSUES, recorded per function. This is the near side
+    # of the bridge above: the wrapper names the ioctl number in code, the
+    # dispatcher names it in a case label, and the two ends meet on a constant
+    # both halves of the product compile against.
+    if ($4 ~ /^VMS_IOCTL_/) {
+        n = (($2 SUBSEP $3) in local) ? $2 ":" $3 : $3
+        if (!((n SUBSEP $4) in ioctlseen)) {
+            ioctlseen[n SUBSEP $4] = 1
+            ioctlrefs[n] = ioctlrefs[n] " " $4
+        }
     }
     next
 }
@@ -731,6 +808,50 @@ END {
         printf "%s %s\n", s, exported[s] > out_symonly
     }
 
+    # ------------------------------------------------ THE ANSWER PATH ------
+    # For each service claiming OVMX-EXECUTIVE, the set of SOURCE FILES its
+    # answer can come from: the file that defines it, plus -- for every
+    # function reachable from it -- the executive file holding the handler for
+    # every ioctl that function issues. Every hop is read out of code -- the
+    # call edges from the scanner, the ioctl references from the wrapper
+    # bodies, the ioctl->handler pairing from the dispatch switch itself, and
+    # the handler->file mapping from the definition scan of src/kernel/. No
+    # part of this set is read from a manifest.
+    #
+    # This is what the OVMX-EXECUTIVE price is charged against (see "the price
+    # of exemption" below): a claim is paid by a defect that MUTATES CODE IN
+    # THIS SET, not by an assertion whose wording mentions the service.
+    for (i = 1; i <= ne; i++) adj[ef[i]] = adj[ef[i]] " " et[i]
+    while ((getline l < ioctlf) > 0) {
+        split(l, x, "\t")
+        if (x[1] == "X") hnd[x[2]] = hnd[x[2]] " " x[3]
+    }
+    close(ioctlf)
+
+    for (nm in declfile) {
+        if (declkind[nm] != "EXECUTIVE") continue
+        if (!(nm in deffile)) continue
+        delete reach; delete q; delete apf
+        qh = 0; qt = 1; q[1] = nm; reach[nm] = 1
+        while (qh < qt) {
+            qh++
+            k = split(adj[q[qh]], nb, " ")
+            for (j = 1; j <= k; j++)
+                if (nb[j] != "" && !(nb[j] in reach)) { reach[nb[j]] = 1; qt++; q[qt] = nb[j] }
+        }
+        apf[deffile[nm]] = 1
+        for (cur in reach) {
+            k = split(ioctlrefs[cur], ir, " ")
+            for (j = 1; j <= k; j++) {
+                if (ir[j] == "") continue
+                m = split(hnd[ir[j]], hs, " ")
+                for (hi = 1; hi <= m; hi++)
+                    if (hs[hi] != "" && (hs[hi] in deffile)) apf[deffile[hs[hi]]] = 1
+            }
+        }
+        for (f in apf) printf "%s %s\n", nm, f > out_apath
+    }
+
     # (1) a prototyped service with no definition NAMES what vanished
     for (nm in protoname)
         if (!(nm in universe))
@@ -810,7 +931,8 @@ END {
     # and passed the now-undeclared facade. A syntactic proxy for "the answer
     # came from the executive" is purchasable by definition. So the exemption
     # is no longer computed: it is DECLARED, and full exemption costs an
-    # OVMX-EXECUTIVE line naming a proof that exists and names the service.
+    # OVMX-EXECUTIVE line naming a proof that exists, forks, CALLS the service,
+    # and that an injected defect editing the service answer path reddens.
     for (nm in universe) {
         if (nm in declfile) continue
         errors[++nerr] = "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: " nm " (" universe[nm] ")\n" \
@@ -850,9 +972,7 @@ END {
 
 # ------------------------------------------------- the price of exemption --
 # An OVMX-EXECUTIVE line is the ONLY full exemption this gate grants, so it is
-# the only place worth attacking, and it is priced accordingly. FIVE checks,
-# each buying back something the old "contains a vms_kif_* call" exemption gave
-# away for a token call:
+# the only place worth attacking, and it is priced accordingly. FIVE checks:
 #
 #   1. the proof EXISTS in this tree;
 #   2. it lives under tests/qemu/ -- the suite whose programs are booted into
@@ -864,57 +984,103 @@ END {
 #      per-service C proof is what the register needs to be able to point at;
 #   3. it FORKS. Rule 11's decisive test is A-writes / B-reads, and a
 #      single-process test passes perfectly against a per-process fake --
-#      which is exactly how the known facades survived. fork() is a coarse
-#      proxy for "more than one process is involved", and a coarse proxy that
-#      costs a second process is not purchasable with one line;
-#   4. it NAMES the service, so it is a proof ABOUT this service and not some
-#      other file that happened to satisfy 1-3;
-#   5. AND -- the one that costs something a comment cannot pay -- the proof
-#      contains an assertion that NAMES THIS SERVICE and that
-#      tests/qemu/facility_defects.sh has proven REDDENABLE: the exact text
-#      appears in some defect's require_fail or knock_on_fail set.
+#      which is exactly how the known facades survived;
+#   4. it CALLS the service, in code, with comments stripped by the same
+#      scanner that reads the product. Not "mentions": CALLS;
+#   5. some defect in tests/qemu/facility_defects.sh MUTATES A FILE IN THE
+#      SERVICE'S ANSWER PATH and names an assertion that appears verbatim in
+#      that proof.
 #
-# WHY 5 EXISTS, MEASURED (vms-ecf). Checks 1-4 are all source greps, and check
-# 4 is `grep -qF "$pname" "$proof"` -- WHICH A COMMENT SATISFIES. The whole
-# exemption was buyable for two lines: one ignored `(void)vms_kif_readef(...)`
-# in sys$gettim (whose answer is still 100% clock_gettime) plus the single
-# comment line `/* also covers sys$gettim */` appended to an otherwise
-# untouched proof. Both this gate and the kif caller census returned rc=0 and
-# the register printed 11 EXECUTIVE claims.
+# WHY 4 AND 5 ARE WORDED THAT WAY, MEASURED TWICE (vms-ecf).
 #
-# WHY IT IS NOT PRICED IN RUNTIME PASS LINES, which was the obvious answer and
-# is wrong: a PASS-line price is buyable for one more line -- a vacuous
-# CHECK(1, "sys$gettim ..."). A manifest entry is dearer, and the reason is in
-# the OTHER gate, not this one: tests/qemu/run_facility_negctl.sh injects each
-# defect in QEMU and requires the COMPLETE set of assertions that go red to
-# EQUAL require_fail + knock_on_fail EXACTLY (its header states that check; run
-# it, do not take this comment's word for it). A vacuous assertion cannot go
-# red, so naming one there fails that control rather than buying anything here.
+# ROUND 1: checks 1-4 were all source greps and check 4 was
+# `grep -qF "$service" "$proof"` -- WHICH A COMMENT SATISFIES. The exemption
+# was buyable for two lines: one ignored `(void)vms_kif_readef(...)` in
+# sys$gettim (whose answer is still 100% clock_gettime) plus the single comment
+# line `/* also covers sys$gettim */` appended to an otherwise untouched proof.
 #
-# WHAT 5 STILL DOES NOT BUY, and this is a residual, not a boast: this gate
-# reads the manifest, it does not run it -- the QEMU driver does, in the
-# kernel-executive-facility-negative-controls job. And the binding between an
-# assertion and a service is that the assertion's TEXT names it, so re-wording
-# an already-proven assertion to mention a second service would pay here. That
-# costs a lockstep edit in the manifest and a message CI prints on every run,
-# not a comment. It is not a claim that the price cannot be gamed.
+# ROUND 2 answered that with "the proof must contain an assertion that NAMES
+# THE SERVICE and that facility_defects.sh has proven reddenable" -- AND THAT
+# WAS THE SAME BUG IN PROSE. The assertion text is a string living in exactly
+# two places, the proof and the manifest, both editable in one commit:
+# appending ", clock via sys$gettim" to an already-proven assertion in both
+# files paid the price for sys$gettim in full, and the gate printed it as a
+# paid claim. IF EDITING AN ASSERTION'S WORDS IS HOW A SERVICE BECOMES
+# COVERED, COVERAGE IS A NAMING CONVENTION AND NOT A MEASUREMENT. Worse, that
+# is the instrument round 2 used on its own sys$readef gap.
+#
+# So the service is no longer bound to the mutation by anything anyone types.
+# It is bound by WHICH CODE THE MUTATION EDITS. The answer path (computed
+# above, printed below) is derived in four hops that are all code: the call
+# graph from the service; the VMS_IOCTL_* constants those functions reference;
+# the executive's own `case VMS_IOCTL_X:` dispatch arms; and the file each
+# handler is defined in. A defect pays for a claim when its `targets` -- the
+# files it edits, which the manifest already carries for its own injection --
+# land inside that set, and when one of its require_fail/knock_on_fail texts
+# is in the named proof. The assertion never has to mention the service, and
+# the round-2 settling command -- re-wording a proven assertion in the proof
+# and the manifest together so that it does -- is a RED control next door.
+#
+# THE OTHER HALF OF THAT, SAID RATHER THAN LEFT IMPLIED: `targets` IS written
+# by hand. It is not free text, because it is the file list the injection
+# actually seds and facility_defects.sh selftest fails when an anchor no longer
+# matches the tree -- but a FABRICATED defect entry, naming a target in some
+# service answer path and an assertion put into that proof to match, would pay
+# here. What stops that is not in this file: it is
+# tests/qemu/run_facility_negctl.sh, which injects each defect in QEMU and
+# requires the complete set of assertions that go red to EQUAL require_fail +
+# knock_on_fail exactly. This gate READS the manifest; that one RUNS it.
+#
+# WHAT THIS COSTS AN ADVERSARY, MEASURED ON THIS BRANCH RATHER THAN ASSERTED.
+# Buying sys$gettim an OVMX-EXECUTIVE claim now takes THREE edits, none of
+# which is prose: flip its declaration; add `(void)vms_kif_readef(0u, &s)` to
+# its body so the executive's event-flag code enters its answer path; and add
+# `(void)sys$gettim(&t)` to tests/qemu/test_syssvc_ef_mproc.c so the proof
+# calls it. Two of those are ignored calls. THE PRICE IS STILL PURCHASABLE and
+# this comment does not claim otherwise -- what changed is the CURRENCY: no
+# wording, in either file, is worth anything any more, and the buyer has to put
+# a call into the specific executive facility whose mutation reddens the proof
+# he names. The residual is vms-d89's, unchanged and still open: "contains a
+# call" is a syntactic proxy for "the answer came from there", and every
+# syntactic proxy is purchasable. Closing it needs per-assertion service
+# attribution measured AT RUNTIME by tests/qemu/run_facility_negctl.sh, which
+# is the only instrument here that executes anything (vms-38c).
+#
+# AND WHAT THE ATTRIBUTION IS ACTUALLY WORTH, said here rather than left for a
+# reader to assume: it is FACILITY-level, not service-level. eflag-clref-noop
+# mutates the executive event-flag code, so it pays for every service whose
+# answer path includes that file. It does not separate sys$readef from
+# sys$setef, and nothing in this file claims it does.
 FDMANIFEST="$SRC_ROOT/tests/qemu/facility_defects.sh"
-: > "$WORK/proven"
+
+# The manifest, read once: one line per defect, "<name>|<targets>", with each
+# defect's assertion texts (require_fail + knock_on_fail) in its own file.
+: > "$WORK/defects"
+mkdir -p "$WORK/dtext"
 if [ -f "$FDMANIFEST" ]; then
     for _d in $(sh "$FDMANIFEST" list 2>/dev/null); do
-        sh "$FDMANIFEST" field "$_d" require_fail 2>/dev/null
-        sh "$FDMANIFEST" field "$_d" knock_on_fail 2>/dev/null
-    done | grep -v '^[[:space:]]*$' | sort -u > "$WORK/proven"
+        case "$_d" in *[!A-Za-z0-9_-]*) continue ;; esac
+        _tg=$(sh "$FDMANIFEST" field "$_d" targets 2>/dev/null | tr '\n' ' ')
+        {
+            sh "$FDMANIFEST" field "$_d" require_fail 2>/dev/null
+            sh "$FDMANIFEST" field "$_d" knock_on_fail 2>/dev/null
+        } | grep -v '^[[:space:]]*$' > "$WORK/dtext/$_d"
+        [ -s "$WORK/dtext/$_d" ] || continue
+        [ -n "$(printf '%s' "$_tg" | tr -d ' ')" ] || continue
+        printf '%s|%s\n' "$_d" "$_tg" >> "$WORK/defects"
+    done
 fi
 
 : > "$WORK/backed"
+mkdir -p "$WORK/callcache"
 while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
     [ "$pkind" = "EXECUTIVE" ] || continue
-    if [ ! -s "$WORK/proven" ]; then
+    if [ ! -s "$WORK/defects" ]; then
         printf 'BROKEN PRICE CHECK: %s (%s) cannot be priced\n' "$pname" "$pfile" >> "$WORK/errors"
-        printf '  -> tests/qemu/facility_defects.sh named no proven-reddenable assertion\n' >> "$WORK/errors"
-        printf '     at all, so every OVMX-EXECUTIVE claim here would be exempt for want\n' >> "$WORK/errors"
-        printf '     of a check. A price that cannot be computed is not a price.\n' >> "$WORK/errors"
+        printf '  -> tests/qemu/facility_defects.sh named no defect with both a target\n' >> "$WORK/errors"
+        printf '     file and a proven-reddenable assertion, so every OVMX-EXECUTIVE claim\n' >> "$WORK/errors"
+        printf '     here would be exempt for want of a check. A price that cannot be\n' >> "$WORK/errors"
+        printf '     computed is not a price.\n' >> "$WORK/errors"
         continue
     fi
     if [ ! -f "$SRC_ROOT/$pproof" ]; then
@@ -937,30 +1103,56 @@ while IFS="$(printf '\t')" read -r pfile pkind pname pitem pproof; do
         printf '     A per-process fake can pass every single-process test perfectly.\n' >> "$WORK/errors"
         continue
     fi
-    if ! grep -qF "$pname" "$SRC_ROOT/$pproof" 2>/dev/null; then
-        printf 'EXECUTIVE DECLARATION WHOSE PROOF DOES NOT NAME THE SERVICE: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
-        printf '  -> proof=%s never mentions %s, so it is not a proof about it.\n' "$pproof" "$pname" >> "$WORK/errors"
+    # (4) THE PROOF CALLS THE SERVICE. Read with the scanner used on the
+    # product, so comments are gone before anything is matched: the ROUND-1
+    # buy-off was `/* also covers sys$gettim */`, and a mention in a comment is
+    # not a proof about anything. Cached per proof file -- the same proof backs
+    # every service of a facility.
+    _pk=$(printf '%s' "$pproof" | tr -c 'A-Za-z0-9' '_')
+    if [ ! -f "$WORK/callcache/$_pk" ]; then
+        awk -f "$WORK/strip.awk" "$SRC_ROOT/$pproof" \
+            | awk -v SRC="$pproof" -f "$WORK/scan.awk" \
+            | awk -F'\t' '$1 == "C" { print $4 }' | sort -u > "$WORK/callcache/$_pk"
+    fi
+    if ! grep -qxF "$pname" "$WORK/callcache/$_pk"; then
+        printf 'EXECUTIVE DECLARATION WHOSE PROOF NEVER CALLS THE SERVICE: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
+        printf '  -> proof=%s never calls %s in code (comments stripped), so it is not a\n' "$pproof" "$pname" >> "$WORK/errors"
+        printf '     proof about it. A mention can be a comment; this gate measured that\n' >> "$WORK/errors"
+        printf '     exact buy-off (vms-ecf).\n' >> "$WORK/errors"
         continue
     fi
-    # (5) the mutation-backed assertion. The proof is read ONCE and matched in
-    # the shell, because the alternative is (every manifest text) x (every
-    # EXECUTIVE claim) subprocesses, and this gate already compiles the tree.
-    pcontent=$(cat "$SRC_ROOT/$pproof" 2>/dev/null)
-    nbacked=0
-    while IFS= read -r _a; do
-        case "$_a" in *"$pname"*) ;; *) continue ;; esac
-        case "$pcontent" in *"$_a"*) nbacked=$((nbacked + 1)) ;; esac
-    done < "$WORK/proven"
-    printf '%s %s %d\n' "$pname" "$pproof" "$nbacked" >> "$WORK/backed"
-    if [ "$nbacked" -eq 0 ]; then
-        printf 'EXECUTIVE DECLARATION WHOSE PROOF NAMES NO ASSERTION ANY MUTATION HAS REDDENED: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
-        printf '  -> proof=%s mentions %s, but not in any assertion that\n' "$pproof" "$pname" >> "$WORK/errors"
-        printf '     tests/qemu/facility_defects.sh names in a require_fail or knock_on_fail\n' >> "$WORK/errors"
-        printf '     set. A mention can be a comment; this gate measured that exact buy-off\n' >> "$WORK/errors"
-        printf '     (vms-ecf). Claiming the whole answer comes from the executive costs an\n' >> "$WORK/errors"
-        printf '     assertion in that proof which an injected defect is known to redden --\n' >> "$WORK/errors"
-        printf '     or say OVMX-PARTIAL and name the half that is not the executive'"'"'s.\n' >> "$WORK/errors"
+    # (5) A DEFECT THAT MUTATES THE ANSWER PATH AND REDDENS THIS PROOF.
+    _apath=$(awk -v n="$pname" '$1 == n { printf " %s", $2 }' "$WORK/answerpath" 2>/dev/null)
+    # COMMENT-STRIPPED, for the same reason check 4 is: the manifest claims
+    # these texts go RED when the defect is injected, and a text sitting in a
+    # comment cannot go red. Round 1 of this item was bought with a comment.
+    _pcontent=$(awk -f "$WORK/strip.awk" "$SRC_ROOT/$pproof" 2>/dev/null)
+    _payers=""
+    while IFS='|' read -r _d _tg; do
+        _hit=0
+        for _t in $_tg; do
+            case "$_apath " in *" src/$_t "*) _hit=1; break ;; esac
+        done
+        [ "$_hit" -eq 1 ] || continue
+        while IFS= read -r _a; do
+            [ -n "$_a" ] || continue
+            case "$_pcontent" in
+                *"$_a"*) _payers="$_payers $_d"; break ;;
+            esac
+        done < "$WORK/dtext/$_d"
+    done < "$WORK/defects"
+    if [ -z "$_payers" ]; then
+        printf 'EXECUTIVE DECLARATION NO INJECTED DEFECT IN ITS ANSWER PATH REDDENS: %s (%s)\n' "$pname" "$pfile" >> "$WORK/errors"
+        printf '  -> no defect in tests/qemu/facility_defects.sh both EDITS a file in %s\n' "$pname" >> "$WORK/errors"
+        printf '     answer path and names an assertion that appears in proof=%s.\n' "$pproof" >> "$WORK/errors"
+        printf '     The answer path is:%s\n' "${_apath:- (empty)}" >> "$WORK/errors"
+        printf '     Claiming the WHOLE answer comes from the executive costs a mutation\n' >> "$WORK/errors"
+        printf '     to the executive code that answers, proven to redden that proof --\n' >> "$WORK/errors"
+        printf '     not a wording that mentions the service. Add a defect entry for the\n' >> "$WORK/errors"
+        printf '     facility, or say OVMX-PARTIAL and name the half that is not the\n' >> "$WORK/errors"
+        printf "     executive's.\\n" >> "$WORK/errors"
     fi
+    printf '%s\t%s\t%s\n' "$pname" "$pproof" "$(printf '%s' "$_payers" | sed 's/^ //')" >> "$WORK/backed"
 done < "$WORK/decl_ok"
 
 # --------------------------------------------------------------- reporting --
@@ -999,7 +1191,8 @@ while IFS=' ' read -r k v; do
         declared)   echo "  $v carry a well-formed declaration of where their answer comes from" ;;
         userspace)  echo "    $v say OVMX-USERSPACE -- no part of the answer is the executive's" ;;
         partial)    echo "    $v say OVMX-PARTIAL   -- a named part is, a named part is not" ;;
-        executive)  echo "    $v say OVMX-EXECUTIVE -- all of it is, and name a proof that names them" ;;
+        executive)  echo "    $v say OVMX-EXECUTIVE -- all of it is, and name a proof that CALLS them" ;
+                    echo "       and that an injected defect in their answer path is known to redden" ;;
         exported)   echo "  $v sys\$ symbol(s) are EXPORTED by the compiled product (nm, $nobj object file(s))" ;;
         symonly)    echo "    $v of those the source scan never saw -- exported under a name the source" ;
                     echo "       does not spell (asm label / alias). They are in the universe under their" ;
@@ -1032,10 +1225,15 @@ fi
 # number says so without anybody maintaining it.
 if [ -s "$WORK/backed" ]; then
     echo
-    echo "  the OVMX-EXECUTIVE claims, and how many assertions in the proof they name"
-    echo "  are BOTH about that service and known-reddenable by an injected defect:"
-    sort -k3,3nr -k1,1 "$WORK/backed" | while read -r bn bp bc; do
-        printf '      %-22s x%-3s %s\n' "$bn" "$bc" "$bp"
+    echo "  the OVMX-EXECUTIVE claims, and the injected defect(s) that pay for each --"
+    echo "  a defect that EDITS a file in the service's answer path AND names an"
+    echo "  assertion that appears in the proof it points at:"
+    sort "$WORK/backed" | while IFS="$(printf '\t')" read -r bn bp bd; do
+        printf '      %-22s %s\n' "$bn" "$bp"
+        for _b in $bd; do
+            printf '          paid by %-34s (edits %s)\n' "$_b" \
+                "$(sh "$FDMANIFEST" field "$_b" targets 2>/dev/null | tr '\n' ' ')"
+        done
     done
 fi
 

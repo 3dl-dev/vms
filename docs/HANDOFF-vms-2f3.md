@@ -3208,6 +3208,67 @@ the peer ignore us" but:
    state will name which node has not completed its part.
 3. `Member State Seq. Num` / `Last trans. number` across the stall.
 
+### 4M.11 ⭐⭐⭐ THE PEER NAMES THE STEP ITSELF — a 90-MILLISECOND WINDOW, and the oracle was free
+
+**§4d.9 said no peer oracle reports a DECISION. That was wrong, and the counter-
+example was sitting in a console log on disk the whole time.** `csbwatch.sh`
+parks **VAX1** inside SDA — but **VAX2's console is never touched**, and VMS
+prints the whole membership dialogue to OPCOM. Zero lab time, zero capture work.
+
+**Refused rejoin (`N1E`, and identically `N1B`/`N1C`/`N1D`):**
+
+```
+16:48:03.75 Node VAX1 received VAXcluster membership request from node OVMXN1
+16:48:04.34 Node VAX2 received VAXcluster membership request from node OVMXN1
+16:48:04.34 Node VAX2 PROPOSED ADDITION of node OVMXN1
+            << 115 SECONDS OF NOTHING -- the whole life of our process >>
+16:49:59.65 Node VAX2 lost connection to node OVMXN1      <- our process exited
+16:50:20.17 Node VAX2 timed-out lost connection
+16:50:20.17 Node VAX2 ABORTED VAXcluster state transition
+```
+
+**Fresh join (`N3A`), same lab, three minutes later:**
+
+```
+16:51:26.75 Node VAX1 received VAXcluster membership request from node OVMXN3
+16:51:27.37 Node VAX2 received VAXcluster membership request from node OVMXN3
+16:51:27.37 Node VAX2 PROPOSED ADDITION of node OVMXN3
+16:51:27.46 Node VAX2 COMPLETED VAXcluster state transition     <- +0.09 s
+```
+
+> **THE WINDOW IS NINETY MILLISECONDS WIDE.** Both runs are identical up to and
+> including `proposed addition`. A fresh identity completes the state transition
+> 90 ms after the proposal. A returning identity never completes it, at all,
+> ever — and the eventual `aborted` is triggered by **our process dying**, not by
+> any decision the cluster reached.
+
+**⚠ Read the `lost connection` line correctly — guardrail 22 nearly claimed
+another victim.** It is NOT the cluster spuriously declaring a live node dead.
+It fires 115 s after the proposal, immediately after our 110 s run ends. The
+first draft of this section said "the cluster declares lost connection while our
+process is still alive"; that was **wrong**, and it was wrong because the
+untimestamped `%CNXMAN,` console echoes interleave out of order with the
+timestamped `OPCOM` lines. **Use only the timestamped `Node X (csid …)` lines.**
+
+**What this retires and what it sharpens:**
+- It confirms §4M.10 from the peer's own words: the transition opens and hangs.
+- It kills "the peer never proposes us" — **it proposes us every single time.**
+- It gives an exact, named, 90 ms window to instrument, replacing every
+  "somewhere in the dialogue" framing in §4L and §4M.
+
+**The question, at its sharpest yet:**
+
+> Between `proposed addition of node X` and `completed VAXcluster state
+> transition` a real VMS cluster does something that takes **90 ms** for a fresh
+> identity and **never finishes** for a returning one. **What is that step?**
+
+`SCSD-I-BARRIER` is **12** in every join and **0** in every refusal, so the
+barrier round is the prime suspect — the coordinator never opens a barrier step
+with us. **Next: capture VAX2's console AND a pcap across that 90 ms window on
+a matched pair, and identify the first frame the join has that the rejoin does
+not.** The console gives the anchor timestamps to align them, which is what
+every previous attempt at this comparison lacked.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-
@@ -3439,6 +3500,15 @@ takes cannot show that nothing moves.
     RUNNING at the moment of every CSB/CDT sample**; §4e.3, §4f.3, §4g and §4j all
     mix the two, and any claim of the form "the peer never allocates X for us"
     taken from a dead-OVMX sample must be re-taken live before it is trusted.
+24. **Read the OTHER node's console. `csbwatch`/`stallpoll` park VAX1 inside
+    SDA, but VAX2's console is untouched and VMS prints the entire membership
+    dialogue to OPCOM** — `received membership request`, `proposed addition`,
+    `completed`/`aborted VAXcluster state transition`, with timestamps. §4d.9
+    concluded "no peer oracle reports a DECISION"; this one does, it was free,
+    it was on disk for four sessions, and it produced the 90 ms window of §4M.11.
+    **Corollary: use only the timestamped `Node X (csid …)` OPCOM lines.** The
+    bare `%CNXMAN,` echoes interleave out of order and reading them as a
+    sequence produced a wrong mechanism that survived one draft.
 23. **Run the kill-switch BEFORE you write down what your fix achieved.**
     Guardrail 21 said ship the switch and use it in the same session. Not
     enough: I shipped it, wrote two sections crediting the fix with a CSB

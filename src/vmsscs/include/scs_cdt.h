@@ -117,10 +117,12 @@
  * WHAT IS STILL NOT TRUE, so no one reads more into a green test run than is
  * there:
  *   - RECEIVED FRAMES ARE STILL NOT ROUTED THROUGH THE CDL. scsd.c continues to
- *     dispatch by comparing a frame's Con.ID against the three macros;
- *     scs_cdl_lookup() and scs_cdl_deliver_message/_datagram() have NO
- *     production caller. The p. 2-29 delivery path is implemented and unit
- *     tested, and unused.
+ *     DISPATCH by comparing a frame's Con.ID against the three macros. The one
+ *     exception is the [46:48] connection-control classifier, which does look
+ *     the destination Con.ID up with scs_cdl_lookup() -- but only to STEP the
+ *     state machine, never to deliver. scs_cdl_deliver_message() and
+ *     scs_cdl_deliver_datagram() still have NO production caller: the p. 2-29
+ *     delivery path is implemented and unit tested, and unused.
  *   - `struct peer_state`'s connected / dir_connected / joiner_connected
  *     booleans still gate every send. The CDT state is a RECORD of what those
  *     booleans did, not a replacement for them.

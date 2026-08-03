@@ -38,9 +38,20 @@
  * sender and asserts the selection is wire-invisible, refuses honestly when no
  * circuit is OPEN, and follows circuit STATE rather than peer-slot identity.
  *
- * SCOPE HONESTY: this exercises SCSD's frame-assembly path, not its receive loop
- * or socket setup. A lab join capture is the end-to-end proof and is a separate
- * activity; nothing here claims to be one.
+ * ALSO PINNED HERE (vms-dd5 + vms-fb1): the connection state machine as the
+ * DAEMON drives it, and -- since vms-fb1 hoisted the per-frame dispatch out of
+ * main() into scsd_handle_frame() -- the RECEIVE side as well. The four
+ * test_captured_* / test_exit_summary_* cases at the bottom of this file feed
+ * scsd_handle_frame() frames transcribed byte-exact from
+ * formation-ci1-joinwindow.pcap and assert the resulting CDT state and CONID.
+ *
+ * SCOPE HONESTY, restated to match what is actually here: this exercises SCSD's
+ * frame-assembly path AND its per-frame receive dispatch, through the production
+ * functions, with the transmit call and the socket replaced by the capture seam.
+ * It does NOT exercise socket setup, the pre-recv timer blocks in main()'s loop
+ * (the VC reissue timer and the vms-691 retransmit timer are still reachable
+ * only from main()), or any real interface. A lab join capture is the end-to-end
+ * proof and is a separate activity; nothing here claims to be one.
  */
 #include <stdio.h>
 #include <string.h>
@@ -1276,6 +1287,411 @@ static void test_second_peer_connection_is_refused_not_faked(void)
     CHECK(scsd_test_frames >= 2, "peer B's frame was suppressed by the state machine");
 }
 
+/* ==========================================================================
+ * vms-fb1 / vms-dd5 -- THE RECEIVE DISPATCH, DRIVEN WITH REAL CAPTURED FRAMES.
+ *
+ * WHY THIS BLOCK EXISTS. The vms-dd5 adversary pass measured that three of the
+ * four new conn_step() call sites, and the exit summary's
+ * scs_conn_report_stuck() call, lived inside main()'s receive loop -- which
+ * SCSD_UNIT_TEST renames away. They were compiled and never executed, so
+ * mutating them did not red anything. src/vmsscs/scsd.c now hoists that loop
+ * body into scsd_handle_frame() and the report into scsd_exit_summary(); these
+ * tests call BOTH, with frames taken byte-exact off the reference-lab wire.
+ *
+ * PROVENANCE OF EVERY FRAME BELOW (rule 8: observation + public docs only):
+ * all three were read out of
+ *   /data/training/vax/cluster/captures/formation-ci1-joinwindow.pcap
+ * -- the golden VAX2-joins-VAX1 formation -- with a pcap reader written for
+ * this test, and are transcribed here wire-byte for wire-byte, Ethernet header
+ * included. The pcap frame number is given for each. Frame #48 is the same
+ * frame tests/vmsscs/test_scs_connect.c transcribes as `real_request`, which is
+ * an independent cross-check that the reader read it right.
+ * ========================================================================== */
+
+/* pcap frame #30: VAX1 -> VAX2, SCS$DIRECTORY CONNECT-REQUEST. opcode 0x5b,
+ * 110-byte SCA class, [46:48] message type 0 = CONNECT_REQ, destination Con.ID
+ * 0 (VAX2's handle not yet known), source Con.ID 0x63050008. */
+static const uint8_t cap_dir_connect_req[124] = {
+    0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,
+    0x60, 0x07, 0x6c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x5b, 0x13, 0x00, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x42, 0x00, 0x04, 0x00,
+    0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x05, 0x63,
+    0x00, 0x00, 0x01, 0x00, 0x53, 0x43, 0x53, 0x24, 0x44, 0x49, 0x52, 0x45,
+    0x43, 0x54, 0x4f, 0x52, 0x59, 0x20, 0x20, 0x20, 0x53, 0x43, 0x53, 0x24,
+    0x44, 0x49, 0x52, 0x5f, 0x4c, 0x4f, 0x4f, 0x4b, 0x55, 0x50, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20
+};
+
+/* pcap frame #32: VAX2 -> VAX1, the answer to frame #30. opcode 0x5b, 66-byte
+ * SCA class, [46:48] message type 1 = CONNECT_RSP -- Figure 2-14's bare
+ * acknowledgement. Destination Con.ID 0x63050008 (VAX1's handle, echoed),
+ * source Con.ID 0 (the 66-byte class carries none: 31/31 on the wire, see
+ * test_scs_dir.c test_source_conid_p235). */
+static const uint8_t cap_connect_rsp[80] = {
+    0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x40, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x5b, 0x13, 0x01, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x16, 0x00, 0x04, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x08, 0x00, 0x05, 0x63, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x53, 0x43, 0x53, 0x24
+};
+
+/* pcap frame #48: VAX1 -> VAX2, the VMS$VAXcluster CONNECT-REQUEST. opcode
+ * 0x4b, 110-byte SCA class, [46:48] message type 0 = CONNECT_REQ, destination
+ * Con.ID 0, source Con.ID 0x62C50009. This is the frame OVMX answers on the
+ * MEMBER-opened connection. */
+static const uint8_t cap_vaxcluster_connect_req[124] = {
+    0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,
+    0x60, 0x07, 0x6c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x4b, 0x13, 0x06, 0x00, 0x07, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x06, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x06, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x42, 0x00, 0x04, 0x00,
+    0x00, 0x00, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x09, 0x00, 0xc5, 0x62,
+    0x00, 0x00, 0x01, 0x00, 0x56, 0x4d, 0x53, 0x24, 0x56, 0x41, 0x58, 0x63,
+    0x6c, 0x75, 0x73, 0x74, 0x65, 0x72, 0x20, 0x20, 0x56, 0x4d, 0x53, 0x24,
+    0x56, 0x41, 0x58, 0x63, 0x6c, 0x75, 0x73, 0x74, 0x65, 0x72, 0x20, 0x20,
+    0x01, 0x1b, 0x01, 0x03, 0x01, 0x00, 0x01, 0x00, 0x01, 0x00, 0x01, 0x08,
+    0x00, 0x00, 0x06, 0x00
+};
+
+/* The MAC each capture is addressed to; the daemon only acts on frames unicast
+ * to its own HW MAC, so the test wears the identity of the node that received
+ * the frame rather than editing the frame. */
+static const uint8_t vax2_hw_mac[6] = {0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9};
+static const uint8_t vax1_hw_mac[6] = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04};
+static const uint8_t vax1_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04};
+
+/*
+ * A complete receive-dispatch context, wired exactly the way main() wires one.
+ * Nothing here re-implements the daemon: scsd_handle_frame() and
+ * scsd_exit_summary() are the production functions, and this only supplies the
+ * state main() owns.
+ */
+struct rxworld {
+    struct world w;
+    struct scs_hello_params hello_params;
+    struct scsd_vc_ctx vc_ctx;
+    struct scsd_rx rx;
+    uint8_t hw_mac[6];
+    uint8_t logical[6];
+    uint8_t nonce[4];
+};
+
+static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
+                         const uint8_t logical[6])
+{
+    static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
+    memset(r, 0, sizeof(*r));
+    world_init(&r->w);
+    scs_cdl_init(&scsd_cdl);
+    scsd_cdl_ready = 1;
+    conn_transitions = 0;
+    conn_illegal_events = 0;
+    conn_unemitted_actions = 0;
+    memcpy(r->hw_mac, hw_mac, 6);
+    memcpy(r->logical, logical, 6);
+    memcpy(r->nonce, lab_nonce, 4);
+
+    r->vc_ctx.sock = 7;
+    r->vc_ctx.ifindex = 1;
+    r->vc_ctx.hw_mac = r->hw_mac;
+    r->vc_ctx.src_logical = r->logical;
+    r->vc_ctx.scssystemid = 1329;
+    r->vc_ctx.node_name = "OVMX";
+    r->vc_ctx.cfg = &r->w.cfg;
+
+    r->rx.sock = 7;
+    r->rx.ifindex = 1;
+    r->rx.our_hw_mac = r->hw_mac;
+    r->rx.our_src_logical = r->logical;
+    r->rx.lab_nonce = r->nonce;
+    r->rx.hello_params = &r->hello_params;
+    r->rx.cfg = &r->w.cfg;
+    r->rx.pdt = &r->w.pdt;
+    r->rx.peers = r->w.peers;
+    r->rx.vc_ctx = &r->vc_ctx;
+    r->rx.ifname = "test0";
+    r->rx.respond = 1;
+    r->rx.do_connect = 1;
+    r->rx.emit_hello = 0;
+
+    scsd_test_frames = 0;
+    scsd_test_last_len = 0;
+}
+
+/* Run the production dispatch with stdout/stderr swallowed -- the daemon logs
+ * every frame and the test output must stay readable. */
+static void rx_feed(struct rxworld *r, const uint8_t *frame, size_t len)
+{
+    fflush(stdout);
+    fflush(stderr);
+    int so = dup(STDOUT_FILENO);
+    int se = dup(STDERR_FILENO);
+    FILE *sink = fopen("/dev/null", "w");
+    if (sink != NULL) {
+        dup2(fileno(sink), STDOUT_FILENO);
+        dup2(fileno(sink), STDERR_FILENO);
+    }
+    scsd_handle_frame(&r->rx, frame, (ssize_t)len);
+    fflush(stdout);
+    fflush(stderr);
+    dup2(so, STDOUT_FILENO);
+    dup2(se, STDERR_FILENO);
+    close(so);
+    close(se);
+    if (sink != NULL) {
+        fclose(sink);
+    }
+}
+
+/*
+ * (1) THE SCS$DIRECTORY PAIR. Feeding the daemon the real captured
+ * SCS$DIRECTORY CONNECT-REQUEST must bind a CDT at OVMX's directory Con.ID and
+ * walk it CLOSED --RCV_CONNECT_REQ--> CONNECT REC --SVC_ACCEPT--> ACCEPT SENT,
+ * which is Figure 2-14's NODE_2 column. Both conn_step() calls in that branch
+ * are asserted by STATE and by CONID, not by log text.
+ */
+static void test_captured_directory_connect_drives_the_machine(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->pb != NULL, "the captured directory frame created no peer");
+    CHECK(ps->dir_connected == 1, "the daemon did not bind SCS$DIRECTORY");
+    CHECK(r.rx.dir_conn_resp_sent == 1,
+          "the daemon sent %ld directory CONNECT-RESPONSEs, expected 1",
+          r.rx.dir_conn_resp_sent);
+
+    CHECK(ps->cdt_dir != NULL,
+          "no CDT was bound for the SCS$DIRECTORY connection -- the conn_bind in"
+          " the receive loop did not run");
+    if (ps->cdt_dir == NULL) {
+        return;
+    }
+    CHECK(ps->cdt_dir->local_conid == SCS_DIR_OVMX_CONID,
+          "the directory CDT claims Con.ID 0x%08X, expected 0x%08X",
+          (unsigned)ps->cdt_dir->local_conid, (unsigned)SCS_DIR_OVMX_CONID);
+    CHECK(ps->cdt_dir->remote_conid == 0x63050008u,
+          "the directory CDT recorded remote Con.ID 0x%08X, but the captured frame"
+          " supplied 0x63050008", (unsigned)ps->cdt_dir->remote_conid);
+    CHECK(scs_conn_state_of(ps->cdt_dir) == SCS_CONN_ACCEPT_SENT,
+          "after CONNECT_REQ + our accept the directory connection is %s,"
+          " expected ACCEPT SENT",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_dir)));
+    CHECK(scs_cdl_lookup(&scsd_cdl, SCS_DIR_OVMX_CONID) == ps->cdt_dir,
+          "the directory CDT is not reachable by its CONID through the CDL");
+    CHECK(conn_transitions == 2,
+          "%lu transitions recorded for the directory pair, expected 2",
+          conn_transitions);
+    CHECK(conn_illegal_events == 0, "the captured directory frame scored %lu illegal events",
+          conn_illegal_events);
+}
+
+/*
+ * (2) THE MEMBER-SIDE VMS$VAXcluster PAIR. The real captured 0x4b
+ * CONNECT-REQUEST (destination Con.ID 0) must bind the member CDT at
+ * OVMX_LOCAL_CONID and reach ACCEPT SENT, and the FIRST arrival must report one
+ * unemitted action: the machine requires a CONNECT_RSP there and OVMX builds
+ * none. That count is the honesty claim scsd.c makes in prose; here it is a
+ * number.
+ */
+static void test_captured_member_connect_drives_the_machine(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->pb != NULL, "the captured VMS$VAXcluster frame created no peer");
+    CHECK(ps->connected == 1, "the daemon did not answer the member's CONNECT-REQUEST");
+    CHECK(r.rx.connect_resp_sent == 1,
+          "the daemon sent %ld CONNECT-RESPONSEs, expected 1", r.rx.connect_resp_sent);
+    CHECK(ps->cdt_member != NULL,
+          "no CDT was bound for the member-opened VMS$VAXcluster connection");
+    if (ps->cdt_member == NULL) {
+        return;
+    }
+    CHECK(ps->cdt_member->local_conid == OVMX_LOCAL_CONID,
+          "the member CDT claims Con.ID 0x%08X, expected 0x%08X",
+          (unsigned)ps->cdt_member->local_conid, (unsigned)OVMX_LOCAL_CONID);
+    CHECK(ps->cdt_member->remote_conid == 0x62C50009u,
+          "the member CDT recorded remote Con.ID 0x%08X, but the captured frame"
+          " supplied 0x62C50009", (unsigned)ps->cdt_member->remote_conid);
+    CHECK(scs_conn_state_of(ps->cdt_member) == SCS_CONN_ACCEPT_SENT,
+          "the member connection is %s, expected ACCEPT SENT",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_member)));
+    CHECK(conn_transitions == 2, "%lu transitions on the member pair, expected 2",
+          conn_transitions);
+    CHECK(conn_unemitted_actions == 1,
+          "%lu actions reported required-but-not-emitted, expected exactly 1"
+          " (the CONNECT_RSP OVMX has no builder for)",
+          conn_unemitted_actions);
+
+    /* A RETRANSMITTED request is re-answered (vms-c6d) and must stay in ACCEPT
+     * SENT through the labeled OVMX row -- and must NOT add a second unemitted
+     * action, because the ACCEPT_REQ the row requires IS the frame just sent. */
+    unsigned long unemitted_after_first = conn_unemitted_actions;
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    CHECK(scs_conn_state_of(ps->cdt_member) == SCS_CONN_ACCEPT_SENT,
+          "a retransmitted CONNECT-REQUEST moved the member connection to %s",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_member)));
+    CHECK(conn_illegal_events == 0, "the retransmit scored %lu illegal events",
+          conn_illegal_events);
+    CHECK(conn_unemitted_actions == unemitted_after_first,
+          "the retransmit reported another unemitted action (%lu -> %lu)",
+          unemitted_after_first, conn_unemitted_actions);
+}
+
+/*
+ * (3) THE [46:48] CONNECTION-CONTROL CLASSIFIER. This is the branch that had no
+ * other call site at all: before vms-dd5 the daemon did not react to a peer's
+ * CONNECT_RSP, so a connection the peer had parked was invisible.
+ *
+ * FRAME PROVENANCE, exactly: cap_connect_rsp is pcap frame #32 byte for byte
+ * EXCEPT the four bytes at [64:68], the destination Con.ID, which are retargeted
+ * from VAX1's handle 0x63050008 to OVMX_JOINER_CONID. That edit is unavoidable
+ * and it is the only one: OVMX's three Con.IDs are node-global constants, so a
+ * frame addressed to OVMX cannot carry a VAX's handle. Everything the classifier
+ * reads apart from that field -- the opcode at [30], the length, the [46:48]
+ * message type -- is the captured wire.
+ */
+static void test_captured_connect_rsp_drives_the_classifier(void)
+{
+    struct rxworld r;
+    /* OVMX stands in for the node the CONNECT_RSP was addressed to. */
+    rxworld_init(&r, vax1_hw_mac, vax1_logical);
+
+    /* Get a joiner connection into CONNECT SENT the production way. */
+    static const uint8_t peer_mac[6] = {0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9};
+    static const uint8_t peer_sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
+    struct peer_state *ps = peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, peer_mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&r.w.cfg, ps, peer_sysid);
+    (void)scs_pb_open(&r.w.cfg, ps->pb);
+    CHECK(send_joiner_connect_request(7, 1, &r.w.cfg, ps, NULL, r.hw_mac, r.logical) == 1,
+          "the joiner CONNECT-REQUEST was not sent");
+    CHECK(ps->cdt_joiner != NULL && scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CONNECT_SENT,
+          "the joiner connection is not in CONNECT SENT before the CONNECT_RSP arrives");
+    unsigned long transitions_before = conn_transitions;
+    unsigned frames_before = scsd_test_frames;
+
+    uint8_t frame[sizeof(cap_connect_rsp)];
+    memcpy(frame, cap_connect_rsp, sizeof(frame));
+    /* The ONLY edit: destination Con.ID -> OVMX's joiner handle (see above). */
+    frame[64] = (uint8_t)(OVMX_JOINER_CONID & 0xff);
+    frame[65] = (uint8_t)((OVMX_JOINER_CONID >> 8) & 0xff);
+    frame[66] = (uint8_t)((OVMX_JOINER_CONID >> 16) & 0xff);
+    frame[67] = (uint8_t)((OVMX_JOINER_CONID >> 24) & 0xff);
+    /* The captured message type must still be 1 after the edit -- if this ever
+     * reds, the frame was transcribed wrong and the test below proves nothing. */
+    CHECK((frame[60] | (frame[61] << 8)) == 1,
+          "the captured frame's [46:48] is %u, expected message type 1 (CONNECT_RSP)",
+          (unsigned)(frame[60] | (frame[61] << 8)));
+
+    rx_feed(&r, frame, sizeof(frame));
+
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CONNECT_ACK,
+          "after the peer's CONNECT_RSP the joiner connection is %s, expected"
+          " CONNECT ACK (p. 2-23)",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+    CHECK(conn_transitions == transitions_before + 1,
+          "the classifier recorded %lu transitions, expected exactly 1",
+          conn_transitions - transitions_before);
+    CHECK(conn_illegal_events == 0, "the captured CONNECT_RSP scored %lu illegal events",
+          conn_illegal_events);
+    /* RECEIVE-SIDE ONLY: the classifier emits nothing of its own. The one frame
+     * the dispatch does send here is the vms-691 SCS-layer 0x48 credit-return,
+     * which every sequenced message gets 1-for-1 and which predates this item --
+     * asserted by its opcode so a connection-control emission sneaking in would
+     * red rather than hide behind a frame count. */
+    CHECK(scsd_test_frames == frames_before + 1,
+          "the dispatch transmitted %u frame(s), expected exactly the credit-return",
+          scsd_test_frames - frames_before);
+    CHECK(scsd_test_last_len > 30 && scsd_test_last_frame[30] == SCS_MSGTYPE_CREDIT,
+          "the frame the dispatch sent has opcode 0x%02x, expected the 0x48"
+          " credit-return -- the classifier must put nothing on the wire",
+          scsd_test_last_len > 30 ? scsd_test_last_frame[30] : 0);
+
+    /* And the documented Figure 2-14 completion: the ACCEPT_REQ that follows now
+     * arrives in CONNECT ACK and opens the connection. */
+    scs_cdt_set_remote_conid(ps->cdt_joiner, 0x62C50009u);
+    conn_step(ps->cdt_joiner, SCS_CONN_EV_RCV_ACCEPT_REQ, NULL);
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_OPEN,
+          "CONNECT ACK + ACCEPT_REQ did not reach OPEN (got %s)",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+}
+
+/*
+ * (4) THE EXIT SUMMARY. "A state that is entered and never left is detectable"
+ * is only true if the detector RUNS. scsd_exit_summary() is the production
+ * report; this drives it over a CDL holding a connection parked off OPEN and
+ * asserts both halves: the transition accounting, and the named stuck
+ * connection.
+ *
+ * This one DOES assert on the report's text, and that is not a workaround: the
+ * text IS the product of a reporting function. The states it reports are
+ * asserted structurally in (1)-(3) above.
+ */
+static void test_exit_summary_reports_the_parked_connection(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    /* Same production path as (1): the directory connection ends in ACCEPT
+     * SENT, which is exactly a connection that never reached OPEN. */
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->cdt_dir != NULL && scs_conn_state_of(ps->cdt_dir) != SCS_CONN_OPEN,
+          "the fixture did not park a connection off OPEN -- the summary below"
+          " would have nothing to report");
+
+    char buf[4096];
+    buf[0] = '\0';
+    FILE *cap = tmpfile();
+    CHECK(cap != NULL, "tmpfile");
+    if (cap == NULL) {
+        return;
+    }
+    scsd_exit_summary(&r.rx, cap);
+    fflush(cap);
+    rewind(cap);
+    size_t got = fread(buf, 1, sizeof(buf) - 1, cap);
+    buf[got] = '\0';
+    fclose(cap);
+
+    char want_counters[128];
+    snprintf(want_counters, sizeof(want_counters),
+             "CONN-FSM: transitions=%lu illegal-events=%lu"
+             " actions-required-but-not-emitted=%lu",
+             conn_transitions, conn_illegal_events, conn_unemitted_actions);
+    CHECK(strstr(buf, want_counters) != NULL,
+          "the exit summary did not report the connection accounting ('%s')",
+          want_counters);
+
+    char want_stuck[160];
+    snprintf(want_stuck, sizeof(want_stuck), "SCSD-W-CONNSTUCK, conid=0x%08X",
+             (unsigned)SCS_DIR_OVMX_CONID);
+    CHECK(strstr(buf, want_stuck) != NULL,
+          "the exit summary did not NAME the connection parked off OPEN -- the"
+          " stuck scan is not reached from production code ('%s' absent)",
+          want_stuck);
+    CHECK(strstr(buf, "1 of 1 in-use connection(s) parked off OPEN") != NULL,
+          "the exit summary did not report the stuck COUNT");
+    CHECK(strstr(buf, scs_conn_state_name(SCS_CONN_ACCEPT_SENT)) != NULL,
+          "the exit summary did not report the state the connection is parked in");
+}
+
 int main(void)
 {
     /* Several assertions below assume the machine starts enabled. */
@@ -1300,6 +1716,12 @@ int main(void)
     test_conn_fsm_does_not_change_the_wire();
     test_joiner_retransmit_is_not_an_illegal_event();
     test_second_peer_connection_is_refused_not_faked();
+    /* vms-fb1: the SAME machine, driven through the daemon's receive dispatch
+     * with frames taken byte-exact off the reference-lab wire. */
+    test_captured_directory_connect_drives_the_machine();
+    test_captured_member_connect_drives_the_machine();
+    test_captured_connect_rsp_drives_the_classifier();
+    test_exit_summary_reports_the_parked_connection();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

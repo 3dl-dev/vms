@@ -1963,6 +1963,23 @@ static int scs_reflect_credit(int sock, int ifindex, struct peer_state *ps,
     r[44] = (uint8_t)sseq; r[45] = (uint8_t)(sseq >> 8);
     r[60] = (uint8_t)(buf[60] + 1);            /* op 6->7 / 8->9 */
     r[61] = 0;
+    /* vms-2f3 sec 4M.18: the memcpy above inherits the REQUEST's msgtype at
+     * abs 30. That is harmless while the request is 0x4b/0x5b, but once sec
+     * 4M.14 made us answer the RETRANSMIT form 0x7b, our op7/op9 reply started
+     * going out marked 0x7b as well -- i.e. announcing itself as a
+     * retransmission of a frame we had never sent. Observed directly on the
+     * wire (Q1B +28.582: `OVMX->PEER mt=7b op=9`).
+     *
+     * Every op7 and op9 in the capture library is 0x4b, including the ones a
+     * real node sends. Emit the data-phase form always. This is the same
+     * "derive, never inherit" rule as the length words below -- and note it is
+     * NOT the sec 4M.12 mirroring question, which is about lookup RESPONSES and
+     * remains an open RE gap (vms-7e7). Here the corpus is unanimous.
+     *
+     * OVMX_CREDIT_MIRROR_MSGTYPE=1 restores the inherited msgtype. */
+    if (getenv("OVMX_CREDIT_MIRROR_MSGTYPE") == NULL) {
+        r[30] = SCS_MSGTYPE_SEQAPP;            /* 0x4b, never 0x7b */
+    }
     memcpy(r + 64, buf + 68, 4);               /* rc = their lc (address the requester) */
     memcpy(r + 68, buf + 64, 4);               /* lc = their rc (our conid) */
 

@@ -3658,6 +3658,82 @@ it is the third instance of a defect this project has fixed twice elsewhere, it
 is on the gate the source labels as gating admission, and a real node answers
 those retransmissions. **Added to §3 as killed entry 16.**
 
+### 4M.18 ⭐⭐⭐ THE PEER'S CDT TABLE — the teardown is BLOCKED, not withheld, and the disk connect is queued behind it
+
+**`tools/connwatch.sh` (new, §6): SDA `SHOW CONNECTIONS/NODE=` on VAX1 through a
+matched pair.** `Q1A` fresh **JOINED** / `Q1B` same identity **REFUSED** / `Q2A`
+fresh **JOINED** — bracketed, identity-proven. This is the oracle §4d.9 named
+and nobody had ever pointed at lab-2.
+
+**The CDTs the peer holds for our identity, sampled throughout:**
+
+| CDT → `OVMXQ1` | `Q1A` **join** | `Q1B` **REFUSED** |
+|---|---|---|
+| `VMS$VAXcluster` | `0002 open`, queue empty, Sent 3→**36** / Rcvd 3→**36** | `0002 open`, **FROZEN at Sent 3 / Rcvd 3** |
+| `SCS$DIR_LOOKUP` → our `SCS$DIRECTORY` | **absent — torn down and freed** | **`0005 disc_sent`, Blocked `0004 disc_pend`, Message queue NON-EMPTY, Sent 5 / Rcvd 4, Send Credit 1** |
+| `VMS$DISK_CL_DRVR` → our `MSCP$DISK` | absent | **`0007 con_sent`, Blocked `0001 con_pend`, queue NON-EMPTY, Remote Con.ID `00000000`** |
+| free CDTs, pre → during | 5 → **4** | 5 → **2** |
+
+> **⭐ THE PEER IS NOT WITHHOLDING `op6`. IT HAS ISSUED THE DISCONNECT AND THE
+> DISCONNECT IS BLOCKED.** `disc_sent` + `disc_pend` + a non-empty message
+> queue. **That is why no `op6` frame ever reaches the wire** — §4M.16's central
+> observation, now explained mechanically rather than described.
+>
+> And the `MSCP$DISK` connect sits behind it in `con_pend`, which is why **zero
+> `MSCP$DISK` CONNECT-REQUESTs appear on the wire in any refusal (22–23 in every
+> join)** while §4g called it "the peer declines to connect". It does not
+> decline. **It cannot transmit.**
+>
+> `Rej/Disconn Reason` is **0** on every CDT. **Nothing is being rejected.**
+
+**The full directory dialogue, both runs, from the wire (OVMX's own conid):**
+
+```
+Q1A JOIN — 16 frames                Q1B REFUSED — 12 frames
+  OVMX op2  ->  PEER op3              OVMX op2  ->  PEER op3
+  4x op10 lookup -> 4x answer         4x op10 lookup -> 4x answer
+  PEER op8  ->  OVMX op9              PEER op8  ->  OVMX op9
+  PEER op6  ->  OVMX op7   teardown       ---- STOPS ----
+  OVMX op6  ->  PEER op7
+```
+
+**We answer everything the peer sends, in both runs.** The refusal is not a
+message we fail to answer at this layer.
+
+### 4M.19 ⭐ A NEW BUG THIS EXPOSED — we answer a retransmit *with* the retransmit form
+
+The tail of `Q1B`, on the VAX1 link:
+
+```
++25.612  PEER->OVMX  mt=4b op=8      ->  OVMX  mt=4b op=9
++28.581  PEER->OVMX  mt=7b op=8      <- VAX1 RETRANSMITS. It did not accept our op9.
++28.582  OVMX->PEER  mt=7b op=9      <- and our reply is marked 0x7b
+```
+
+`scs_reflect_credit` builds the reply with `memcpy(r, buf, 72)`, which inherits
+**abs 30, the msgtype**. Harmless while requests were `0x4b`/`0x5b` — but §4M.14
+made us answer `0x7b`, so our `op9` now goes out **announcing itself as a
+retransmission of a frame we never sent.**
+
+**Every `op7` and `op9` in the capture library is `0x4b`**, including a real
+node's. **Fixed:** emit `SCS_MSGTYPE_SEQAPP` always; `OVMX_CREDIT_MIRROR_MSGTYPE=1`
+restores the inherited form. Same "derive, never inherit" rule as the length
+words a few lines below it, which cost three sessions once already.
+
+> **⚠ This is NOT the §4M.12 mirroring question.** That one is about lookup
+> **responses**, where the corpus is genuinely split 10-vs-11 and the rule
+> remains an open RE gap (`vms-7e7`). Here the corpus is **unanimous**.
+>
+> **⚠ And do not assume it is the gate.** It fires at +28.6 s, seconds after the
+> divergence, and `VAX1` had already failed to accept the `op9` we sent at
+> +25.612 in the correct `0x4b` form. **Verdict pending a bracketed run.**
+
+**What this leaves as the live question:** the peer sends `op8`, we answer `op9`
+in the reference-correct form, and **VAX1 retransmits `op8` anyway** — so it did
+not accept that `op9`. On the VAX2 link the same exchange completes and `op6`
+still never comes. Why the peer does not accept an `op9` that §4M.16 proved is
+byte-identical to the accepted one is the next question.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

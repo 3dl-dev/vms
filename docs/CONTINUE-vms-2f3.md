@@ -110,10 +110,44 @@ identical, and the peer's own CDT says `Send Credit Q. empty`), the barrier
 Expect the tenth not to be either; fix them anyway (guardrail 15) and **run the
 kill-switch before writing down what a fix achieved** (guardrail 23).
 
-**The cheapest unexplored avenue: public OpenVMS documentation on SCS connection
-states and what blocks a disconnect** (`disc_sent`/`disc_pend`, `con_sent`/
-`con_pend`). SDA cannot resolve the ~5 ms dialogue against a ~1.2 s console
-floor, and the wire is largely exhausted. Rule 8: docs and observation only.
+### ⭐⭐⭐ THE SINGLE SHARPEST FACT — read this before proposing anything (§4M.24)
+
+**The peer never acknowledges our `op9`, and acknowledges a byte-identical one
+in every join.**
+
+| | join | **refusal** |
+|---|---|---|
+| peer `op8` | `recv_ack=11 send_seq=12` | identical |
+| our `op9` | `recv_ack=12 send_seq=12` | **byte-identical (§4M.16)** |
+| **peer's next frame** | **`op6`, `recv_ack=12`** ← accepted | **`op8` retransmit, `recv_ack=11`** ← never accepted |
+
+**From the peer's point of view we have never answered its `op8` at all**, and
+every downstream symptom — the retransmits, the `disc_pend` CDT, the missing
+`op6`, our own `op6` being ignored — follows from that one fact.
+
+**⛔ ALL OF THESE ARE KILLED WITH MATCHED CONTROLS. Do not re-propose:**
+- "our `op9` is malformed" — §4M.16, §4M.21 (zero class-discriminating bytes)
+- "our sequence numbering is wrong" — §4M.24 (12 frames identical, no duplicate)
+- "we fail to answer something" — §4M.18 (we answer everything it sends)
+- "the peer is rejecting us" — `Rej/Disconn Reason 0` on every CDT
+- credit · the barrier · `cat 0x04` · `OVMX_DISKLESS` · self-disconnect · the
+  four `0x7b`/msgtype/sequence defects — §3 entries 13, 16–20
+
+**TEN real defects found and fixed on this item. None was the gate.** Fix the
+eleventh too (guardrail 15) but do not expect it, and **run the kill-switch
+before writing down what it achieved** (guardrail 23).
+
+**What is genuinely left:** why a VMS connection manager declines to advance
+`recv_ack` on a correctly sequenced, correctly formed, correctly addressed frame
+— for a returning identity only. That is peer-internal, below every oracle the
+lab exposes (SDA cannot resolve a ~5 ms dialogue against a ~1.2 s console
+floor), and **undocumented in both the public SDA manual and the lab's own
+`HELP`** (§4M.22).
+
+> **THE HONEST NEXT STEP IS NOT ANOTHER OVMX-SIDE FIX.** It is (a) a VMS
+> internals documentation source not yet found — the DTJ SCA article paid off
+> (§4M.23), so other published DEC material may too; or (b) an operator ruling
+> that this is a **gate**. Raised as such in rd.
 
 ---
 

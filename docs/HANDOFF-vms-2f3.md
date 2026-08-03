@@ -3824,6 +3824,61 @@ it has no send credit would look exactly like this. **Establish how OVMX grants
 credit on the SCS$DIRECTORY connection specifically, and whether the join's
 credit flow is what frees the peer to send `op6`.**
 
+### 4M.22 ⭐ THE REFERENCE CONTROL — a returning REAL node DOES get `op6`, and credit is dead
+
+**Two checks that should have been run earlier, both free, both from captures
+already on disk.**
+
+**1. The reference control CONFIRMS §4M.16's framing rather than killing it.**
+In `vax3-class03-crash-REJOIN-SUCCESS`, the returning real node VAX3 receives
+exactly the pattern OVMX gets in a *join*, on **both** links:
+
+```
++110.087  peer -> VAX3   op8    ->   VAX3 -> peer   op9
++110.088  peer -> VAX3   op6    ->   VAX3 -> peer   op7      <- 1 ms after the op9
++110.090  VAX3 -> peer   op6    ->   peer -> VAX3   op7
+```
+
+**12 `op6` and 34 `op7` frames involve the returning node.** So the peer *does*
+tear down its directory connection to a returning real node, immediately after
+its `op9`, and OVMX's 0/0 is a genuine anomaly. **The §4L.9h exclusion test is
+satisfied: `op6` runs for OVMX-on-a-fresh-join and for a real-node-on-a-rejoin,
+and only OVMX-on-a-rejoin misses it.**
+
+**2. ⛔ CREDIT IS DEAD, before it cost any lab time.** §4M.21 named it as the
+next thread on the strength of `SCSD-I-CREDIT` 618-vs-25 and `Send Credit 1`.
+Both readings are wrong:
+
+- The `0x48` credit-return flow through the directory window is **essentially
+  identical** in `Q1A` and `Q1B` — OVMX acks `1,2,3,…,17` in both, at the same
+  offsets. My earlier frame filter required ≥72 bytes and had silently excluded
+  every 60-byte `0x48` frame.
+- The 618-vs-25 is **downstream message volume**, not a cause — a join goes on
+  to exchange hundreds of messages. *This is the same trap as §4M.7 and §4M.8;
+  a ratio between a run that proceeds and one that stops is not evidence.*
+- Decisively, the peer's own bookkeeping says so: **`Send Credit Q. empty`** on
+  the stuck CDT. Nothing is waiting for credit.
+
+**Also checked and NOT a discriminator:** OVMX sets its `op9`'s `recv_ack` to
+the request's `send_seq`. A real node usually does the same (`ra=18/ss=18`,
+`ra=143/ss=143`), with one case of acking a higher own high-water mark
+(`ra=11` against `ss=8`). Consistent, not a delta.
+
+**Where that leaves it.** The peer's directory CDT is in `disc_sent`/`disc_pend`
+with a non-empty message queue, no credit shortage, nothing rejected
+(`Rej/Disconn Reason 0`), and every frame we send is byte-correct. In a join the
+peer emits one more message between our `op9` and its `op6` — on the CM
+connection, matching §4M.15's `0x01/0x05` — and in a refusal it emits neither.
+**The block is inside the peer's connection-manager, upstream of both.**
+
+> **Method note for the next session.** SDA cannot resolve this: the whole
+> directory dialogue is ~5 ms and the console round-trip floor is ~1.2 s
+> (§4L.4). The remaining questions are either wire-level — largely exhausted —
+> or need **public OpenVMS documentation on SCS connection states and what
+> blocks a disconnect** (Rule 8: docs and observation only, never
+> disassembly). That documentation route has not been tried and is the cheapest
+> unexplored avenue.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

@@ -62,19 +62,27 @@
  * reaching vms_kif_* is necessary and nowhere near sufficient, and an ignored
  * call satisfies it.
  *
- * OVMX-EXECUTIVE: sys$setef (vms-2a8) proof=tests/qemu/test_syssvc_ef_mproc.c -- one-line
+ * THE ITEM THESE TEN CITE CHANGED FROM vms-2a8 TO vms-afc (vms-fab). vms-2a8 is
+ * the closed item that did the wiring above, and it met its outcome. vms-afc
+ * carries what it disclosed as still open for this facility: $WFLOR and $WFLAND
+ * have no A-writes/B-reads proof (which is the only reason they are PARTIAL
+ * rather than EXECUTIVE), and $ASCEFC's over-long and zero-length cluster-name
+ * behaviour has no oracle behind it. An id is where the decision is written
+ * down, and a closed item is not somewhere a decision can still be made.
+ *
+ * OVMX-EXECUTIVE: sys$setef (vms-afc) proof=tests/qemu/test_syssvc_ef_mproc.c -- one-line
  *     pass-through to vms_kif_setef; the flag and its wakeups are the executive's.
- * OVMX-EXECUTIVE: sys$clref (vms-2a8) proof=tests/qemu/test_syssvc_ef_mproc.c -- one-line
+ * OVMX-EXECUTIVE: sys$clref (vms-afc) proof=tests/qemu/test_syssvc_ef_mproc.c -- one-line
  *     pass-through to vms_kif_clref.
- * OVMX-EXECUTIVE: sys$waitfr (vms-2a8) proof=tests/qemu/test_syssvc_ef_mproc.c -- the wait
+ * OVMX-EXECUTIVE: sys$waitfr (vms-afc) proof=tests/qemu/test_syssvc_ef_mproc.c -- the wait
  *     is a kernel wait queue; the waiter child is woken by another process's $SETEF.
- * OVMX-EXECUTIVE: sys$readef (vms-2a8) proof=tests/qemu/test_syssvc_ef_mproc.c -- the whole
+ * OVMX-EXECUTIVE: sys$readef (vms-afc) proof=tests/qemu/test_syssvc_ef_mproc.c -- the whole
  *     cluster word comes back from the executive; no flag state exists in this file.
- * OVMX-EXECUTIVE: sys$ascefc (vms-2a8) proof=tests/qemu/test_syssvc_ef_mproc.c -- the named
+ * OVMX-EXECUTIVE: sys$ascefc (vms-afc) proof=tests/qemu/test_syssvc_ef_mproc.c -- the named
  *     cluster list is node-wide in the executive; the name is only marshalled here.
- * OVMX-EXECUTIVE: sys$dacefc (vms-2a8) proof=tests/qemu/test_syssvc_ef_mproc.c -- one-line
+ * OVMX-EXECUTIVE: sys$dacefc (vms-afc) proof=tests/qemu/test_syssvc_ef_mproc.c -- one-line
  *     pass-through to vms_kif_dacefc.
- * OVMX-EXECUTIVE: sys$dlcefc (vms-2a8) proof=tests/qemu/test_syssvc_ef_mproc.c -- one-line
+ * OVMX-EXECUTIVE: sys$dlcefc (vms-afc) proof=tests/qemu/test_syssvc_ef_mproc.c -- one-line
  *     pass-through to vms_kif_dlcefc.
  *
  * $WFLOR and $WFLAND are the same shape as $WAITFR and route the same way, but
@@ -85,15 +93,15 @@
  * cannot buy the full exemption, and they do not pretend to: what is missing is
  * the proof, and that is what their local half says.
  *
- * OVMX-PARTIAL: sys$wflor (vms-2a8) -- exec: the wait and every flag it tests are
+ * OVMX-PARTIAL: sys$wflor (vms-afc) -- exec: the wait and every flag it tests are
  *     the executive's; this is a one-line pass-through to vms_kif_wflor.
  * OVMX-LOCAL: sys$wflor -- nothing of the answer is computed here, but no
  *     A-writes/B-reads test names this service, so full residency is UNPROVEN.
- * OVMX-PARTIAL: sys$wfland (vms-2a8) -- exec: same one-line pass-through, to
+ * OVMX-PARTIAL: sys$wfland (vms-afc) -- exec: same one-line pass-through, to
  *     vms_kif_wfland.
  * OVMX-LOCAL: sys$wfland -- same gap: no test under tests/qemu names it.
  *
- * OVMX-PARTIAL: sys$synch (vms-2a8) -- exec: the wait, inherited whole from
+ * OVMX-PARTIAL: sys$synch (vms-afc) -- exec: the wait, inherited whole from
  *     $WAITFR, including the guarantee that it cannot return success on a clear flag.
  * OVMX-LOCAL: sys$synch -- the status it RETURNS is read out of the caller's own
  *     IOSB, in this process's memory. The executive never sees that word.

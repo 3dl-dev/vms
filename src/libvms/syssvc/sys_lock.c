@@ -31,7 +31,7 @@
  * OVMX service register (rd vms-d89) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-PARTIAL: sys$enq (vms-ci.7) -- exec: the grant decision, the lock id and the
+ * OVMX-PARTIAL: sys$enq (vms-82a) -- exec: the grant decision, the lock id and the
  *     value block all come back from the kernel lock manager. There is no userspace
  *     lock table and no flock() fallback; tests/qemu/test_syssvc_lock.c is the
  *     A-writes/B-reads proof, and lock-compat-cr-ex mutates the executive code that
@@ -39,10 +39,10 @@
  * OVMX-LOCAL: sys$enq -- the ssdef.h SPELLING of the status. kstat_to_ss() below runs
  *     in the calling process and maps the kernel numbering onto the public SS$_xxx
  *     constants; the executive never sees an ssdef.h value.
- * OVMX-PARTIAL: sys$enqw (vms-ci.7) -- exec: the same request as $ENQ with the wait
+ * OVMX-PARTIAL: sys$enqw (vms-82a) -- exec: the same request as $ENQ with the wait
  *     taken in the executive.
  * OVMX-LOCAL: sys$enqw -- the same userspace status mapping as $ENQ.
- * OVMX-PARTIAL: sys$deq (vms-ci.7) -- exec: a pass-through to vms_kif_deq; the release
+ * OVMX-PARTIAL: sys$deq (vms-82a) -- exec: a pass-through to vms_kif_deq; the release
  *     decision is entirely the kernel lock manager's.
  * OVMX-LOCAL: sys$deq -- the same userspace status mapping as $ENQ.
  *
@@ -57,6 +57,13 @@
  * SS$_CVTUNGRANT). A part of the answer a caller receives is therefore computed in
  * the calling process, which is what OVMX-PARTIAL + OVMX-LOCAL is for. The executive
  * facts the old lines asserted are all still asserted above, under exec:.
+ *
+ * THE ITEM THESE THREE CITE CHANGED FROM vms-ci.7 TO vms-82a (vms-fab). vms-ci.7 is
+ * the closed item that rewired $ENQ/$DEQ onto the kernel lock manager; it delivered
+ * the exec: half above and there is nothing left of it to do. vms-82a is the item the
+ * round-4 adversary filed for the remainder these lines name -- the executive's
+ * private numbering (100/108/116) and the kstat_to_ss() mapping that manufactures the
+ * VMS-visible status in the calling process.
  */
 
 #include <stdint.h>

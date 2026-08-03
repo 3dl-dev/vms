@@ -221,6 +221,22 @@ fi
 echo "  PASS: positive control -- the pristine sandbox copy is green"
 passed=$((passed + 1))
 
+# WHY EVERY PATTERN BELOW THAT TOUCHES A DECLARATION MATCHES THE SERVICE NAME
+# AND NOT THE ITEM ID (vms-fab). Five controls used to aim at sys$gettim's
+# declaration with the literal `(vms-5b4)`. vms-fab repointed that declaration
+# at vms-642, and every one of those seds became a NO-OP: the mutation never
+# landed, the expected red never fired, and the suite went 49/49 -> 42/49 with
+# seven controls reporting the gate had stopped enforcing properties it was in
+# fact still enforcing. NOTHING WAS WRONG WITH THE GATE. The controls had been
+# keyed on a fact that is supposed to change -- which item owns a facade -- so
+# repointing a citation, the correct maintenance action, silently disarmed
+# them. That is the same failure this whole suite exists to catch, one level
+# up, and it is why the id is now read out of the tree (\1) or skipped over
+# entirely rather than written down here.
+#
+# A control that names a service is aimed at something the tree will keep
+# spelling the same way. A control that names an item is aimed at a pointer.
+
 # ------------------------------------------------- THE BUY-OFF (vms-d89) --
 # One ignored call, exactly as measured on the merged gate. sys$gettim still
 # answers from clock_gettime(); nothing about where its answer comes from has
@@ -235,7 +251,7 @@ expect_red "$TIME" "an ignored vms_kif_* call added to a declared facade (the bu
 # must NOT pass. This is the control the whole revision exists for: a fix that
 # only reddens step 1 leaves the evasion intact one move later.
 sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_m = 0; (void)vms_kif_getmode(\&ovmx_negctl_m); }|' "$TIME"
-sed -i '/OVMX-USERSPACE: sys\$gettim (vms-5b4)/d' "$TIME"
+sed -i '/OVMX-USERSPACE: sys\$gettim (vms-/d' "$TIME"
 expect_red "$TIME" "the buy-off completed: ignored call added AND the honest declaration deleted" \
     "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$gettim"
 
@@ -348,7 +364,7 @@ expect_red "$STARLET $AST" "a prototype deleted to shrink the universe, declarat
 # and every caller linked unchanged. Nothing downstream could tell.
 sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr);|uint32_t ovmx_negctl_gettim(uint64_t *timadr) __asm__("sys$gettim");\n#define sys$gettim ovmx_negctl_gettim|' "$STARLET"
 sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t ovmx_negctl_gettim(uint64_t *timadr) {|' "$TIME"
-sed -i '/OVMX-USERSPACE: sys\$gettim (vms-5b4)/d' "$TIME"
+sed -i '/OVMX-USERSPACE: sys\$gettim (vms-/d' "$TIME"
 expect_red "$STARLET $TIME" "a service renamed behind an asm label, definition, prototype and declaration together" \
     "SAYS NOTHING ABOUT WHERE ITS ANSWER COMES FROM: sys\$gettim"
 
@@ -380,7 +396,7 @@ uint32_t sys$gettim(uint64_t *timadr) {
 }
 OUTSIDE_EOF
     sed -i '/^uint32_t sys\$gettim(uint64_t \*timadr) {$/,/^}$/d' "$TIME"
-    sed -i '/OVMX-USERSPACE: sys\$gettim (vms-5b4)/d' "$TIME"
+    sed -i '/OVMX-USERSPACE: sys\$gettim (vms-/d' "$TIME"
     sed -i 's|^    syssvc/sys_time\.c$|    syssvc/sys_time.c\n    ../../runtime/ovmx_time.c|' "$LIBVMSCM"
 }
 
@@ -532,7 +548,7 @@ expect_red "$EVENT" "an EXECUTIVE claim whose proof never calls the service" \
 # the gate printed PASS with 11 EXECUTIVE claims. sys$gettim answers from
 # clock_gettime() before and after. The proof is now read comment-stripped, so
 # this dies at the CALLS check.
-sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME)| * OVMX-EXECUTIVE: sys$gettim (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- bought|' "$TIME"
+sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (\(vms-[0-9a-z.]*\)) -- clock_gettime(CLOCK_REALTIME)| * OVMX-EXECUTIVE: sys$gettim (\1) proof=tests/qemu/test_syssvc_ef_mproc.c -- bought|' "$TIME"
 sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_s = 0; (void)vms_kif_readef(0u, \&ovmx_negctl_s); }|' "$TIME"
 printf '/* also covers sys$gettim */\n' >> "$PROOF"
 expect_red "$TIME $PROOF" "an EXECUTIVE claim whose proof names it only in a COMMENT (the price paid in a comment)" \
@@ -547,7 +563,7 @@ expect_red "$TIME $PROOF" "an EXECUTIVE claim whose proof names it only in a COM
 # proof AND the manifest, in lockstep, plus one ignored call, paid in full and
 # the gate printed "sys$gettim x1" as a paid claim. The price no longer reads
 # the wording of anything: it reads which FILE a defect edits.
-sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME)| * OVMX-EXECUTIVE: sys$gettim (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- bought|' "$TIME"
+sed -i 's|^ \* OVMX-USERSPACE: sys\$gettim (\(vms-[0-9a-z.]*\)) -- clock_gettime(CLOCK_REALTIME)| * OVMX-EXECUTIVE: sys$gettim (\1) proof=tests/qemu/test_syssvc_ef_mproc.c -- bought|' "$TIME"
 sed -i 's|^uint32_t sys\$gettim(uint64_t \*timadr) {|uint32_t sys$gettim(uint64_t *timadr) {\n    { uint32_t ovmx_negctl_s = 0; (void)vms_kif_readef(0u, \&ovmx_negctl_s); }|' "$TIME"
 sed -i 's|child: sys\$ascefc joined the named common cluster|child: sys$ascefc joined the named common cluster, clock via sys$gettim|g' "$PROOF"
 sed -i 's|child: sys\$ascefc joined the named common cluster|child: sys$ascefc joined the named common cluster, clock via sys$gettim|g' "$FDMAN"
@@ -802,7 +818,7 @@ expect_green "$EVENT" "a mixture that names both of its halves stays green"
 # COMPILES it, not by where it sits. So the same relocation, done HONESTLY --
 # declaration moved with the implementation, prototype left alone -- is green.
 ovmx_relocate_gettim
-printf '/* OVMX-USERSPACE: sys$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME) here */\n' >> "$OUTSIDE"
+printf '/* OVMX-USERSPACE: sys$gettim (vms-642) -- clock_gettime(CLOCK_REALTIME) here */\n' >> "$OUTSIDE"
 expect_green "$TIME $LIBVMSCM" \
     "a service honestly relocated outside src/ and tools/, its declaration moved with it"
 

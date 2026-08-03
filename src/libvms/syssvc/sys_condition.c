@@ -20,7 +20,13 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$unwind (vms-5b4) -- unwinds the process-local handler
+ * $UNWIND cited vms-5b4 until vms-fab; it is closed. vms-f90 owns it with the
+ * other compute-only services, and its question here is a real one: OVMX has no
+ * executive exception dispatch with saved per-frame state (see the file comment
+ * above), so what this service does and what SYS$UNWIND does have never been
+ * put side by side against the oracle.
+ *
+ * OVMX-USERSPACE: sys$unwind (vms-f90) -- unwinds the process-local handler
  *     stack kept in handler_count/handler_stack in src/libvms/rtl/lib_signal.c;
  *     there is no executive condition-dispatch frame, so nothing outside this
  *     process participates in or observes the unwind.

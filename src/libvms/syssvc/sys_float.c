@@ -25,7 +25,12 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$check_fen (vms-5b4) -- returns compiled-in constants
+ * $CHECK_FEN cited vms-5b4 until vms-fab; it is closed. vms-f90 owns the eight
+ * compute-only services, and this is the one of them with the sharpest doubt:
+ * a service whose answer is a compiled-in constant is the declared-stub shape
+ * vms-09c (INV-6) exists to find.
+ *
+ * OVMX-USERSPACE: sys$check_fen (vms-f90) -- returns compiled-in constants
  *     (*flags = 0, return 1) without reading any hardware PCB, process or
  *     executive state; the answer is the same on every system and every
  *     process, whatever the FEN bit would say.

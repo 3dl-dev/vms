@@ -280,6 +280,15 @@ oracle degrades before it errors.
     refused rejoin the peer's `MSCP$DISK` lookups stay `0x5b` for all four,
     while every join reaches `0x4b` by the second. A join CAN carry a leading
     `0x5b` (`N3A`). Useful free oracle; the causal reading is dead.
+20. **`OVMX_DISKLESS=1` on a rejoin (§4M.24).** Never tried in 13 sessions
+    despite a source comment describing exactly the stuck disk connect SDA
+    shows. **Refused** (`T1C`), switch verified engaged (`MSCP$DISK`
+    affirmatives 4 -> 0), between two joining controls.
+19. **OVMX performing its own disconnect call (§4M.23/§4M.24).** Documented as
+    required by DTJ v1n5 p.25 and implemented; our `op6` reaches the wire
+    well-formed and **the peer never answers it with `op7`** and retransmits
+    `op8` again. Refused (`U1B`, `N1I`) with the fix verified engaged, between
+    joining controls. Kept as opt-in.
 18. **Answering a retransmit with a fresh sequence number (§4M.20).** Real, and
     a defect §4M.14 itself created — the peer replayed `op8 send_seq=12` and we
     answered 12/13/14. Fixed (`scs_retx_reply_seq`, 11 assertions), **verified
@@ -3930,6 +3939,72 @@ client connect anyway **without ever disconnecting**.
 > copying the *received* 76-byte `op6`, so a proactive send needs a template
 > derived under Rule 8, not invented. Ship it behind a kill-switch and bracket
 > it like everything else.
+
+### 4M.24 ⛔⭐ SELF-DISCONNECT IS NOT THE GATE EITHER — and the peer NEVER ACKNOWLEDGES our `op9`
+
+**⚠ First, a VOID test of my own making.** The `T`-series tested §4M.23 and said
+nothing: `SELFDISC=0` in `T1B`/`T1D` because I hooked the fix into the
+`PSCUNGATE` path, **and `PSCUNGATE` never fires in this failure mode**
+(`PSCUNGATE=0` in every `T` run, against 2 in the `M`-session runs where I had
+seen it). Caught only by checking the counter instead of reading `XITDONE` and
+moving on.
+
+**Retriggered on a signal that IS reliable:** the peer's `op8` **retransmit** —
+2 per refused run, 3.0 s apart, **7/7, and never in a join**.
+
+**`U`-series, bracketed, fix verified engaged** (`SELFDISC=1` in both refusals,
+`0` in both joins): `U1A` fresh **JOINED** · `U1B` rejoin **REFUSED** · `N1I`
+(`OVMXN1`, seventh refusal) **REFUSED** · `U2A` fresh **JOINED**.
+
+**Our `op6` reached the wire, well-formed:**
+
+```
++28.059  PEER mt=7b op8 ra=11 ss=12   ->  OVMX mt=4b op9 ra=12 ss=12
++28.059                                   OVMX mt=4b op6 ra=12 ss=13   <- our disconnect call
++31.085  PEER mt=7b op8 ra=11 ss=12       <- retransmits AGAIN; no op7 ever
+```
+
+**The peer never answers our `op6` with `op7`.** So performing our own disconnect
+call — which the DTJ says the protocol requires — does not unblock it either.
+**§3 killed entry 19.**
+
+### ⭐⭐⭐ AND THE REAL FINDING: the peer's `recv_ack` never advances
+
+Every peer `op8`, original and both retransmits, carries **`recv_ack=11`**. Our
+`op9` carries `send_seq=12`. In a **join** the peer's very next frame carries
+**`recv_ack=12`** — it has accepted our `op9` into its sequenced stream:
+
+| | join (`Q1A`) | **refusal (`U1B`, `N1I`, `Q1B`, `R1B` …)** |
+|---|---|---|
+| peer `op8` | `ra=11 ss=12` | `ra=11 ss=12` |
+| our `op9` | `ra=12 ss=12` | `ra=12 ss=12` — **byte-identical (§4M.16)** |
+| **peer's next frame** | **`op6`, `ra=12`** ← accepted | **`op8` retransmit, `ra=11`** ← **never accepted** |
+
+> **The peer does not acknowledge our `op9`, ever, in any refused rejoin — and
+> acknowledges it immediately in every join, from a byte-identical frame.**
+>
+> That is why it retransmits, why its CDT stays `disc_pend`, why `op6` never
+> comes, and why our own `op6` is ignored: **from the peer's point of view we
+> have never answered its `op8` at all.** Every downstream symptom in §4M.16–
+> §4M.23 follows from this one fact.
+
+**This finally separates two things that looked identical.** §4M.16 proved the
+`op9` FRAME is byte-correct. This shows the frame is nonetheless **not accepted
+into the peer's receive window**. So the discriminator is not the frame's
+content but its *acceptability* — sequence-window state, connection binding, or
+something the peer keys on that a byte diff of the frame cannot see.
+
+**Where to go next, concretely:**
+1. **`ps->vc.seq` is SHARED across every connection to a peer** (`struct
+   peer_state`: *"All sends ride the shared per-channel `ps->vc.seq`"*). Check
+   whether `send_seq=12` was already spent on a DIFFERENT connection to that
+   peer before the `op9` — a duplicate sequence number at VC level would be
+   discarded exactly like this. **This is the strongest untested hypothesis on
+   the item and it is answerable from captures already on disk.**
+2. Compare, join vs refusal, every OVMX→peer frame's `send_seq` in the 200 ms
+   before the `op9`, and find where the numbering diverges.
+3. **⚠ Do NOT re-propose "our op9 is malformed"** — §4M.16 and §4M.21 killed
+   that twice.
 
 ### 4M.5 The test, and its kill-switch
 

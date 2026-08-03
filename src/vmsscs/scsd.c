@@ -2583,29 +2583,6 @@ int main(int argc, char **argv)
                 if (now_ms - ps->psc_gate_ms < (uint64_t)diskrun_gate_ms) {
                     continue;
                 }
-                /* vms-2f3 sec 4M.23: the peer's op6 has not come. By the
-                 * documented SCA protocol (DTJ v1n5 p.25) the teardown is
-                 * SYMMETRIC and each side must perform its own disconnect call
-                 * -- so perform ours here rather than opening a client connect
-                 * on a connection neither side has dismantled. The peer's CDT
-                 * is sitting in disc_sent/disc_pend waiting for exactly this.
-                 * Opt-IN for now (OVMX_DIR_SELF_DISCONNECT=1) so the default
-                 * wire behaviour is unchanged while this is under test. */
-                if (getenv("OVMX_DIR_SELF_DISCONNECT") != NULL &&
-                    !ps->psc_self_disc_sent && ps->dir_remote_conid != 0 &&
-                    scs_send_disconnect_self(sock, (int)ifindex, ps,
-                                             our_hw_mac, our_src_logical)) {
-                    ps->psc_self_disc_sent = 1;
-                    log_ts(stdout);
-                    printf(" SCSD-I-SELFDISC, peer sent no op 6 after %lums --"
-                           " performed OUR OWN disconnect call (op 6) on the server"
-                           " dir connection remote=0x%08X local=0x%08X."
-                           " DTJ v1n5 p.25: the teardown is symmetric\n",
-                           (unsigned long)diskrun_gate_ms,
-                           (unsigned)ps->dir_remote_conid,
-                           (unsigned)SCS_DIR_OVMX_CONID);
-                    fflush(stdout);
-                }
                 if (ps_send_dir_connect(sock, (int)ifindex, ps,
                                         our_hw_mac, our_src_logical)) {
                     ps->psc_step = PSC_DIR_CONNECT;
@@ -2723,6 +2700,35 @@ int main(int argc, char **argv)
                                " every previous build silently discarded this\n",
                                (unsigned)cm_op, cm_rc);
                         fflush(stdout);
+
+                        /* vms-2f3 sec 4M.23/4M.24: THE PEER IS TELLING US IT IS
+                         * STUCK. An op8 retransmission on OUR server directory
+                         * conid happens in EVERY refused rejoin (2 per run,
+                         * 3.0 s apart) and in NO join -- 7/7 measured. Its CDT is
+                         * in disc_sent/disc_pend, i.e. it has performed its
+                         * disconnect call and is waiting for ours (DTJ v1n5 p.25:
+                         * the teardown is SYMMETRIC and "the SYSAP in the other
+                         * node must then perform its own disconnect call").
+                         * OVMX otherwise only ever emits op6 in REPLY to the
+                         * peer's, which on a rejoin never comes -- so perform ours
+                         * here, on the one signal that reliably marks the stall.
+                         * Opt-in: OVMX_DIR_SELF_DISCONNECT=1. */
+                        if (cm_op == 8 && cm_rc == SCS_DIR_OVMX_CONID &&
+                            !ps->psc_self_disc_sent &&
+                            ps->dir_remote_conid != 0 &&
+                            getenv("OVMX_DIR_SELF_DISCONNECT") != NULL &&
+                            scs_send_disconnect_self(sock, (int)ifindex, ps,
+                                                     our_hw_mac, our_src_logical)) {
+                            ps->psc_self_disc_sent = 1;
+                            log_ts(stdout);
+                            printf(" SCSD-I-SELFDISC, peer retransmitted op8 and its"
+                                   " CDT is disconnect-pending -- performed OUR OWN"
+                                   " disconnect call (op 6) remote=0x%08X local=0x%08X."
+                                   " DTJ v1n5 p.25: the teardown is symmetric\n",
+                                   (unsigned)ps->dir_remote_conid,
+                                   (unsigned)SCS_DIR_OVMX_CONID);
+                            fflush(stdout);
+                        }
                     }
                     /* vms-760: op6 on OUR server dir connection (SCS_DIR_OVMX_CONID)
                      * is the LAST credit frame -- af2's joiner opens its own client

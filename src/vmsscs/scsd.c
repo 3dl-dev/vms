@@ -377,6 +377,15 @@ static struct peer_state *peer_find_or_add(struct scs_config *cfg, struct scs_pd
  * 48-bit SCS System Address of the System Block for its node. Replaces the old
  * `memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6)`; the bytes stored are
  * identical, the structure they are stored in is the architected one.
+ *
+ * ONE FAILURE MODE THE OLD memcpy DID NOT HAVE: the store now needs an SB, and
+ * scs_pb_learn_system_addr returns NULL if the SB pool is exhausted. If that ever
+ * happened, ps_sys_addr() would keep returning zeros and OVMX would put a zero
+ * peer-logical on the wire. That must NEVER be silent (CLAUDE.md rule 9 / INV-6),
+ * so it is logged as an error here. It is also unreachable at the shipped pool
+ * sizes -- SCS_CONFIG_MAX_SB (10) >= OVMX_MAX_PEERS (4) formative SBs + the local
+ * node's own SB -- which tests/vmsscs/test_scsd_wire.c asserts at compile time AND
+ * by driving a full peer table through this function.
  */
 static void ps_learn_sys_addr(struct scs_config *cfg, struct peer_state *ps,
                               const uint8_t *src_logical)
@@ -384,7 +393,16 @@ static void ps_learn_sys_addr(struct scs_config *cfg, struct peer_state *ps,
     if (ps == NULL || ps->pb == NULL) {
         return;
     }
-    scs_pb_learn_system_addr(cfg, ps->pb, src_logical);
+    if (scs_pb_learn_system_addr(cfg, ps->pb, src_logical) == NULL) {
+        log_ts(stderr);
+        fprintf(stderr,
+                " SCSD-E-NOSB, no system block available for peer"
+                " %02x:%02x:%02x:%02x:%02x:%02x -- its SCS system address is NOT"
+                " recorded and outgoing frames will carry a zero peer-logical\n",
+                ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
+        fflush(stderr);
+    }
 }
 
 /*
@@ -401,10 +419,41 @@ static void ps_channel_up(struct peer_state *ps)
     }
 }
 
+#ifdef SCSD_UNIT_TEST
+/*
+ * vms-7be TRANSMIT CAPTURE SEAM -- compiled ONLY into tests/vmsscs/test_scsd_wire.c,
+ * which is the single translation unit that defines SCSD_UNIT_TEST. The daemon
+ * never defines it, so the production build of send_frame_to below is byte-for-byte
+ * the code that shipped before this item.
+ *
+ * WHY: the frames OVMX puts on the wire are assembled INSIDE this file (dst MAC
+ * from ps_port_addr(), SCA peer-logical from ps_sys_addr()) and then handed to an
+ * AF_PACKET socket that needs CAP_NET_RAW, which CI does not have. Substituting the
+ * sendto() with a capture buffer lets a test drive the REAL scsd.c senders and
+ * inspect the REAL bytes, instead of re-deriving them in the test.
+ */
+uint8_t  scsd_test_last_frame[SCA_FRAME_MAX];
+uint8_t  scsd_test_last_dst[6];
+size_t   scsd_test_last_len;
+unsigned scsd_test_frames;
+#endif
+
 /* Send a fully-built Ethernet frame to a specific unicast MAC on ifindex. */
 static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
                              const uint8_t *frame, size_t len)
 {
+#ifdef SCSD_UNIT_TEST
+    (void)sock;
+    (void)ifindex;
+    if (len > sizeof(scsd_test_last_frame)) {
+        return -1;
+    }
+    memcpy(scsd_test_last_dst, mac, 6);
+    memcpy(scsd_test_last_frame, frame, len);
+    scsd_test_last_len = len;
+    scsd_test_frames++;
+    return (ssize_t)len;
+#else
     struct sockaddr_ll da;
     memset(&da, 0, sizeof(da));
     da.sll_family = AF_PACKET;
@@ -413,6 +462,7 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
     da.sll_halen = 6;
     memcpy(da.sll_addr, mac, 6);
     return sendto(sock, frame, len, 0, (struct sockaddr *)&da, sizeof(da));
+#endif
 }
 
 /*
@@ -528,7 +578,15 @@ static int send_joiner_connect_request(int sock, int ifindex, struct peer_state 
     return 0;
 }
 
+#ifdef SCSD_UNIT_TEST
+/* vms-7be: tests/vmsscs/test_scsd_wire.c #includes this file and supplies its own
+ * main(). The daemon entry point is RENAMED, not compiled out, so every static
+ * helper above is compiled exactly as the daemon compiles it. */
+int scsd_daemon_main(int argc, char **argv);
+int scsd_daemon_main(int argc, char **argv)
+#else
 int main(int argc, char **argv)
+#endif
 {
     const char *ifname = "br0";
     int duration = 0; /* 0 = run until SIGINT/SIGTERM */
@@ -1320,10 +1378,38 @@ int main(int argc, char **argv)
                         scs_vc_reset_seq(&ps->vc);
                         /* vms-7be: the circuit is OPEN -- run the p. 2-21
                          * transition. The formative Path Block leaves the PDT
-                         * and joins the System Block for this node; if that node
-                         * is already in the configuration queue with no other
-                         * circuit open (it departed and is rebooting), its old
-                         * System Block is REFRESHED from the formative one. */
+                         * and joins the System Block for this node.
+                         *
+                         * ===== WHAT IS ACTUALLY LIVE HERE (read this before
+                         * believing a green scs test run) =====
+                         * SCS_OPEN_NEW_SB is the only transition SCSD reaches
+                         * today. Specifically:
+                         *
+                         *  - SCS_OPEN_EXISTING_REFRESHED -- the p. 2-21 rejoin
+                         *    REFRESH rule -- is STRUCTURALLY UNREACHABLE here.
+                         *    It needs an SB whose PB queue has emptied, and
+                         *    scs_pb_close() has no caller in this file; peer
+                         *    slots are never released (peer_find_or_add matches
+                         *    on MAC and only ever allocates); and this call is
+                         *    gated on !ps->start_acked, which is never reset, so
+                         *    a rejoining node re-enters the SAME slot on the
+                         *    SAME already-open PB and never gets here at all.
+                         *    OVMX therefore does NOT implement the rejoin
+                         *    refresh rule. tests/vmsscs/test_scs_config.c proves
+                         *    the RULE; nothing proves the DAEMON does it.
+                         *
+                         *  - SCS_OPEN_EXISTING_SB needs a second circuit to a
+                         *    node already in the configuration queue, i.e. a
+                         *    peer presenting TWO Ethernet ports (two MACs, one
+                         *    SCS System ID). The reference lab has never
+                         *    presented one, so this is unexercised rather than
+                         *    impossible; test_scsd_wire.c pins what it does to
+                         *    the peer-logical bytes if it ever fires.
+                         *
+                         * Wiring close/reopen is WIRE-VISIBLE and therefore out
+                         * of scope for this pure-refactor item: it is filed as
+                         * vms-17f (blocked by vms-7be). The log below says so
+                         * out loud if either branch ever fires. */
                         enum scs_open_result open_res = scs_pb_open(&scs_cfg, ps->pb);
                         log_ts(stdout);
                         printf(" SCSD-I-STARTDONE, START/config complete with peer"
@@ -1338,7 +1424,9 @@ int main(int argc, char **argv)
                                open_res == SCS_OPEN_NEW_SB ? "node learned for the first time"
                                : open_res == SCS_OPEN_EXISTING_REFRESHED
                                    ? "old system block REFRESHED (rejoin, p. 2-21 Note)"
-                                   : "queued to the existing system block",
+                                     " -- UNEXPECTED: believed unreachable until vms-17f"
+                                   : "queued to the existing system block"
+                                     " -- UNEXPECTED: believed unreachable until vms-17f",
                                scs_config_sb_count(&scs_cfg),
                                scs_sb_pb_count(ps->pb->sb));
                         fflush(stdout);

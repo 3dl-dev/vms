@@ -161,3 +161,29 @@ set_tests_properties(vmsscs_config_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-7be - THE SCSD-LEVEL TEST. The other targets in this file link the builder
+# libraries; this one compiles src/vmsscs/scsd.c itself (SCSD_UNIT_TEST swaps the
+# AF_PACKET sendto for a capture buffer and renames the daemon's main) so the
+# peer-state accessors the SB/PB refactor rewrote are asserted through the REAL
+# frame-assembly path: the learned SCS System Address IS the SCA peer-logical
+# field and nothing else, the port address is only the destination, a shared
+# System Block aliases two ports' peer-logical, and SB-pool exhaustion degrades
+# to a zero peer-logical WITH an SCSD-E-NOSB log rather than silently.
+add_executable(test_scsd_wire test_scsd_wire.c)
+
+target_include_directories(test_scsd_wire PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
+)
+
+target_link_libraries(test_scsd_wire PRIVATE
+    vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
+    vmsscs_start vmsscs_vc vmsscs_member vmsscs_config
+)
+
+add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)
+set_tests_properties(vmsscs_scsd_wire_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

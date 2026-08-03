@@ -198,6 +198,41 @@ struct scs_config {
     struct scs_pb  pb_pool[SCS_CONFIG_MAX_PB];
 };
 
+/*
+ * ===== REACHABILITY IN SCSD TODAY -- DO NOT READ A GREEN TEST RUN AS "OVMX
+ * IMPLEMENTS THIS" =====
+ *
+ * This module implements the full p. 2-20..2-21 rule set and tests/vmsscs/
+ * test_scs_config.c exercises all of it. The DAEMON (src/vmsscs/scsd.c) reaches
+ * only part of it:
+ *
+ *   scs_pb_create / scs_pb_learn_system_addr / scs_pb_open -> SCS_OPEN_NEW_SB
+ *       LIVE. Every peer SCSD discovers takes exactly this path.
+ *
+ *   scs_pb_open -> SCS_OPEN_EXISTING_REFRESHED   (the p. 2-21 rejoin REFRESH)
+ *   scs_pb_close
+ *       STRUCTURALLY UNREACHABLE from scsd.c. SCSD never closes a Path Block,
+ *       never frees a peer slot (peer_find_or_add matches on MAC and only
+ *       allocates), and gates scs_pb_open behind a !start_acked flag it never
+ *       resets -- so a rejoining node re-enters the same peer slot on the same
+ *       already-open PB and the transition never runs a second time, leaving no
+ *       SB with an empty PB queue for the REFRESH rule to fire on. Wiring circuit
+ *       close/reopen changes what OVMX puts on the wire, so it is NOT part of
+ *       vms-7be (a deliberately wire-invisible refactor); it is filed as vms-17f.
+ *
+ *   scs_pb_open -> SCS_OPEN_EXISTING_SB
+ *       UNEXERCISED, not impossible: it needs a peer node presenting two Ethernet
+ *       ports (two MACs, one SCS System ID). The reference lab has never presented
+ *       one. Note the consequence, which tests/vmsscs/test_scsd_wire.c pins: after
+ *       this transition both peers' Path Blocks share ONE System Block, so the
+ *       System Address SCSD writes in the SCA peer-logical field is shared state
+ *       rather than the per-peer copy it was before vms-7be.
+ *
+ * Consequence, stated plainly: OVMX does NOT yet implement the rejoin refresh
+ * rule. It implements the STRUCTURE the rule is written in terms of, which is
+ * what vms-7be claims and all it claims.
+ */
+
 /* Result of scs_pb_open (pp. 2-20..2-21). */
 enum scs_open_result {
     SCS_OPEN_ERROR = -1,

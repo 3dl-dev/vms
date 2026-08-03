@@ -1088,8 +1088,199 @@ static void test_connect_selects_the_open_vc_via_config_sys(void)
           " through instead of the node's OPEN one");
 }
 
+/* ==========================================================================
+ * vms-dd5 -- THE CONNECTION STATE MACHINE, THROUGH THE REAL DAEMON.
+ *
+ * Two claims are made about wiring scsd.c to the CDL, and both are asserted
+ * here over the production translation unit rather than by reading the diff
+ * (the "structural diff-reading offered in place of a test" this epic has
+ * already rejected once):
+ *
+ *   1. IT IS WIRE-INVISIBLE. The frame scsd.c hands the transmit path is
+ *      byte-identical with the machine running and with OVMX_NO_CONN_FSM=1.
+ *   2. THE KILL SWITCH GATES THE THING THAT EXISTS. With it set, no CDT is
+ *      allocated, no transition is counted and no state is recorded -- and with
+ *      it unset all three happen. Guardrail 23: the switch is RUN and the
+ *      counter it gates is confirmed to move, in that order.
+ * ========================================================================== */
+
+/* Drive the real joiner sender once, from a fresh world and a fresh CDL. */
+static size_t drive_joiner_once(uint8_t *out, uint8_t out_dst[6],
+                                struct scs_cdt **cdt_out)
+{
+    struct world w;
+    world_init(&w);
+    scs_cdl_init(&scsd_cdl);
+    scsd_cdl_ready = 1;
+    conn_transitions = 0;
+    conn_illegal_events = 0;
+    conn_unemitted_actions = 0;
+
+    static const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x11, 0x22, 0x33};
+    static const uint8_t sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x31, 0x05};
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac);
+    if (ps == NULL) {
+        return 0;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    /* vms-398: the production call sites name only the NODE, so the circuit has
+     * to be OPEN for CONFIG_SYS selection to find it. Open it the way the daemon
+     * does, then call the sender exactly as the daemon calls it (named_vc NULL). */
+    (void)scs_pb_open(&w.cfg, ps->pb);
+    scsd_test_frames = 0;
+    scsd_test_last_len = 0;
+    if (!send_joiner_connect_request(7, 1, &w.cfg, ps, NULL, our_hw_mac, our_logical)) {
+        return 0;
+    }
+    memcpy(out, scsd_test_last_frame, scsd_test_last_len);
+    memcpy(out_dst, scsd_test_last_dst, 6);
+    if (cdt_out != NULL) {
+        *cdt_out = ps->cdt_joiner;
+    }
+    return scsd_test_last_len;
+}
+
+static void test_conn_fsm_does_not_change_the_wire(void)
+{
+    uint8_t on_frame[SCA_FRAME_MAX], off_frame[SCA_FRAME_MAX];
+    uint8_t on_dst[6], off_dst[6];
+    struct scs_cdt *on_cdt = NULL, *off_cdt = NULL;
+
+    /* --- machine ON --- */
+    CHECK(unsetenv("OVMX_NO_CONN_FSM") == 0, "unsetenv failed");
+    size_t on_len = drive_joiner_once(on_frame, on_dst, &on_cdt);
+    CHECK(on_len == SCS_CONNECT_FRAME_LEN, "joiner frame is %zu bytes, expected %d",
+          on_len, SCS_CONNECT_FRAME_LEN);
+    /* The counter the switch gates MUST have moved before anything is claimed
+     * about what turning it off achieves (guardrail 23). */
+    CHECK(conn_transitions == 1, "machine ON recorded %lu transitions, expected 1",
+          conn_transitions);
+    CHECK(conn_illegal_events == 0, "machine ON scored %lu illegal events",
+          conn_illegal_events);
+    CHECK(on_cdt != NULL, "no CDT was bound for the joiner connection");
+    CHECK(on_cdt != NULL && on_cdt->local_conid == OVMX_JOINER_CONID,
+          "the CDT did not claim the Con.ID that goes on the wire");
+    CHECK(on_cdt != NULL && scs_conn_state_of(on_cdt) == SCS_CONN_CONNECT_SENT,
+          "after sending a CONNECT_REQ the connection is %s, expected CONNECT SENT",
+          on_cdt ? scs_conn_state_name(scs_conn_state_of(on_cdt)) : "(none)");
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1, "expected exactly one CDT in the CDL");
+    /* The CDT is reachable the p. 2-29 way, by CONID. */
+    CHECK(scs_cdl_lookup(&scsd_cdl, OVMX_JOINER_CONID) == on_cdt,
+          "the daemon's CDT is not reachable by its CONID through the CDL");
+
+    /* --- machine OFF, same code path --- */
+    CHECK(setenv("OVMX_NO_CONN_FSM", "1", 1) == 0, "setenv failed");
+    size_t off_len = drive_joiner_once(off_frame, off_dst, &off_cdt);
+    CHECK(off_len == on_len, "the frame changed length with the machine off (%zu vs %zu)",
+          off_len, on_len);
+    CHECK(conn_transitions == 0, "the kill switch did not stop transitions (%lu recorded)",
+          conn_transitions);
+    CHECK(off_cdt == NULL, "the kill switch did not stop CDT allocation");
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 0,
+          "the kill switch left %u CDTs in the CDL", scs_cdl_in_use_count(&scsd_cdl));
+
+    /* --- THE WIRE CLAIM --- */
+    size_t first = 0, last = 0;
+    unsigned d = diff_positions(on_frame, off_frame, on_len, &first, &last);
+    CHECK(d == 0, "%u byte(s) of the CONNECT-REQUEST differ with the state machine"
+                  " running (first at offset %zu) -- it is NOT wire-invisible",
+          d, first);
+    CHECK(memcmp(on_dst, off_dst, 6) == 0, "the destination MAC changed");
+
+    CHECK(unsetenv("OVMX_NO_CONN_FSM") == 0, "unsetenv failed");
+}
+
+/*
+ * A RETRANSMITTED CONNECT-REQUEST must not be scored an illegal event. scsd.c
+ * re-sends this frame on a timer (vms-d94) and re-answers the member's repeats
+ * (vms-c6d); if every repeat were illegal the run log would be unreadable and
+ * the stuck diagnostic would be drowned out.
+ */
+static void test_joiner_retransmit_is_not_an_illegal_event(void)
+{
+    struct world w;
+    world_init(&w);
+    scs_cdl_init(&scsd_cdl);
+    scsd_cdl_ready = 1;
+    conn_transitions = 0;
+    conn_illegal_events = 0;
+
+    static const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x44, 0x55, 0x66};
+    static const uint8_t sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x31, 0x05};
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    (void)scs_pb_open(&w.cfg, ps->pb); /* vms-398: CONFIG_SYS selection needs an OPEN VC */
+
+    CHECK(send_joiner_connect_request(7, 1, &w.cfg, ps, NULL, our_hw_mac, our_logical) == 1,
+          "first send");
+    CHECK(send_joiner_connect_request(7, 1, &w.cfg, ps, NULL, our_hw_mac, our_logical) == 1,
+          "retransmit");
+    CHECK(send_joiner_connect_request(7, 1, &w.cfg, ps, NULL, our_hw_mac, our_logical) == 1,
+          "retransmit 2");
+
+    CHECK(conn_transitions == 3, "%lu transitions recorded, expected 3", conn_transitions);
+    CHECK(conn_illegal_events == 0, "a retransmit was scored illegal (%lu)",
+          conn_illegal_events);
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CONNECT_SENT,
+          "a retransmit moved the state to %s",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1,
+          "a retransmit allocated a second CDT (%u in use)",
+          scs_cdl_in_use_count(&scsd_cdl));
+}
+
+/*
+ * OVMX's three Con.IDs are node-global, so a SECOND peer cannot have its own
+ * CDT at the same Con.ID. That must be visible, not silently wrong: conn_bind
+ * refuses rather than allocating a Con.ID that differs from the one on the
+ * wire. This is the limitation scs_cdt.h records, asserted rather than asserted
+ * in prose.
+ */
+static void test_second_peer_connection_is_refused_not_faked(void)
+{
+    struct world w;
+    world_init(&w);
+    scs_cdl_init(&scsd_cdl);
+    scsd_cdl_ready = 1;
+
+    static const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x01, 0x01, 0x01};
+    static const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x02, 0x02, 0x02};
+    static const uint8_t sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x31, 0x05};
+
+    struct peer_state *a = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac_a);
+    struct peer_state *b = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac_b);
+    CHECK(a != NULL && b != NULL && a != b, "two distinct peer slots");
+    if (a == NULL || b == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, a, sysid);
+    ps_learn_sys_addr(&w.cfg, b, sysid);
+    (void)scs_pb_open(&w.cfg, a->pb);
+    (void)scs_pb_open(&w.cfg, b->pb);
+
+    CHECK(send_joiner_connect_request(7, 1, &w.cfg, a, a->pb, our_hw_mac, our_logical) == 1,
+          "peer A send");
+    CHECK(send_joiner_connect_request(7, 1, &w.cfg, b, b->pb, our_hw_mac, our_logical) == 1,
+          "peer B send");
+
+    CHECK(a->cdt_joiner != NULL, "peer A got no CDT");
+    CHECK(b->cdt_joiner == NULL,
+          "peer B was given a CDT at a node-global Con.ID already claimed by peer A"
+          " -- the CDL would then be describing the wrong connection");
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1, "expected exactly one CDT in the CDL");
+    /* Peer B still SENDS -- the machine is a recorder, never a gate. */
+    CHECK(scsd_test_frames >= 2, "peer B's frame was suppressed by the state machine");
+}
+
 int main(void)
 {
+    /* Several assertions below assume the machine starts enabled. */
+    (void)unsetenv("OVMX_NO_CONN_FSM");
+
     test_learned_system_address_is_the_peer_logical_field();
     test_port_address_and_system_address_stay_distinct();
     test_undiscovered_system_address_is_zero();
@@ -1105,6 +1296,10 @@ int main(void)
     test_vc_implied_ack_through_the_daemon();
     test_vc_reissue_and_abandon_through_the_daemon();
     test_connect_selects_the_open_vc_via_config_sys();
+    /* vms-dd5: the daemon's use of the connection state machine + the CDL. */
+    test_conn_fsm_does_not_change_the_wire();
+    test_joiner_retransmit_is_not_an_illegal_event();
+    test_second_peer_connection_is_refused_not_faked();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

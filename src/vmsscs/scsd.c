@@ -40,8 +40,10 @@
 #include <unistd.h>
 
 #include "cluster_authorize.h"
+#include "scs_cdt.h"
 #include "scs_classify.h"
 #include "scs_config.h"
+#include "scs_conn.h"
 #include "scs_connect.h"
 #include "scs_dir.h"
 #include "scs_hello.h"
@@ -296,6 +298,19 @@ struct peer_state {
     struct timespec last_padded;   /* CLOCK_MONOTONIC of our last padded send (rate limit) */
     int      padded_initiated;     /* we proactively sent one padded HELLO (golden joiner-first) */
     uint16_t peer_padded_sca;      /* largest padded-HELLO total SCA size seen from the peer */
+    /* --- vms-dd5: the three CONNECTION DESCRIPTORS this peer's three SCS
+     * connections live in, and with them the documented connection state
+     * machine (scs_conn.h). Each is a CDT in the node-wide Connection
+     * Descriptor List (scsd_cdl), claimed at the EXACT Con.ID OVMX has been
+     * putting on the lab wire since vms-5fe so that wiring the CDL changes no
+     * byte. NULL = not yet formed, or the machine is off (OVMX_NO_CONN_FSM), or
+     * the CDL slot was already claimed by another peer -- see conn_bind(). The
+     * booleans above (dir_connected/connected/joiner_connected) are NOT
+     * replaced: they still gate every send, so the machine is a recorder, not a
+     * gate. */
+    struct scs_cdt *cdt_dir;    /* SCS$DIRECTORY,   local Con.ID = SCS_DIR_OVMX_CONID */
+    struct scs_cdt *cdt_member; /* VMS$VAXcluster the MEMBER opened, local = OVMX_LOCAL_CONID */
+    struct scs_cdt *cdt_joiner; /* VMS$VAXcluster OVMX opened,       local = OVMX_JOINER_CONID */
 };
 
 static int mac_eq(const uint8_t *a, const uint8_t *b)
@@ -416,6 +431,118 @@ static void ps_channel_up(struct peer_state *ps)
     ps->channel_up = 1;
     if (ps->pb != NULL) {
         ps->pb->remote_port_state = SCS_PORT_STATE_ENABLED;
+    }
+}
+
+/* =====================================================================
+ * vms-dd5 -- THE CONNECTION DESCRIPTOR LIST AND THE CONNECTION STATE MACHINE
+ * =====================================================================
+ *
+ * WHAT CHANGED AND WHAT DID NOT. vms-e1a built scs_cdt.c (the CDT/CDL/CONID
+ * model of pp. 2-28..2-30) but nothing linked it and scsd.c called none of it;
+ * scs_cdt.h said so plainly. This block is that wiring, plus the state machine
+ * that vms-e1a explicitly left out. It is a RECORDER, not a gate: every
+ * `if (!ps->dir_connected)` / `if (!ps->joiner_connected)` guard that decided
+ * what OVMX sends is untouched and still decides it, the builders are called
+ * with the same arguments in the same order, and the three Con.IDs are claimed
+ * at their existing fixed values. No byte moves. See scs_conn.h's WIRE VERDICT.
+ *
+ * THE MAPPING FROM OBSERVED FRAME TO SCA MESSAGE is the weak claim here and it
+ * is stated at each call site below, with its grounding, so it can be checked
+ * against the frame that triggers it.
+ *
+ * KNOWN LIMIT, stated rather than hidden: OVMX's three Con.IDs are NODE-GLOBAL
+ * (OVMX_LOCAL_CONID / OVMX_JOINER_CONID / SCS_DIR_OVMX_CONID are macros, not
+ * per-peer allocations), so exactly one peer's connections can occupy those
+ * three CDL slots. This is the same blocker scs_cdt.h recorded. conn_bind()
+ * therefore LOGS and returns NULL for a second peer rather than allocating a
+ * different Con.ID than the one on the wire, which would make the CDL lie. In
+ * the lab (one VAX) this never fires; on a 3-node cluster the second peer's
+ * connections are simply not tracked, and the log says which.
+ */
+
+/* The node-wide Connection Descriptor List (p. 2-29). File scope so the send
+ * helpers can reach it; initialized once in daemon main. */
+static struct scs_cdl scsd_cdl;
+static int scsd_cdl_ready = 0;
+
+/* Counters for the end-of-run summary. */
+static unsigned long conn_transitions = 0;
+static unsigned long conn_illegal_events = 0;
+static unsigned long conn_unemitted_actions = 0;
+
+/*
+ * conn_bind - get (or create) the CDT for one of this peer's connections,
+ * claiming the EXACT Con.ID OVMX puts on the wire for it. Returns NULL when the
+ * machine is off, when the CDL slot is taken by another peer, or on any
+ * allocation failure -- every scs_conn_fsm_step() call below tolerates NULL.
+ */
+static struct scs_cdt *conn_bind(struct peer_state *ps, struct scs_cdt **slot,
+                                 uint32_t local_conid, const char *local_sysap,
+                                 const char *remote_sysap)
+{
+    if (ps == NULL || slot == NULL) {
+        return NULL;
+    }
+    if (*slot != NULL) {
+        return *slot;
+    }
+    if (!scs_conn_fsm_enabled() || !scsd_cdl_ready) {
+        return NULL; /* THE KILL SWITCH: no descriptors, hence no state, no log */
+    }
+    struct scs_cdt *cdt = scs_cdl_alloc_conid(&scsd_cdl, local_conid, local_sysap,
+                                              remote_sysap, ps->pb);
+    if (cdt == NULL) {
+        log_ts(stderr);
+        fprintf(stderr,
+                " SCSD-W-CONNSLOT, CDL slot for Con.ID 0x%08X (%s) is already"
+                " claimed -- OVMX's Con.IDs are node-global, so this peer's"
+                " connection is NOT tracked by the connection state machine\n",
+                (unsigned)local_conid, local_sysap);
+        fflush(stderr);
+        return NULL;
+    }
+    scs_conn_fsm_init(cdt);
+    *slot = cdt;
+    return cdt;
+}
+
+/*
+ * The wire->event mapping lives in scs_conn.c (scs_conn_event_for_msgtype), NOT
+ * here: it is a pure function of one wire field, it carries the grounding for
+ * every value in docs/cluster-protocol-spec.md sec 4(h)(1a), and keeping it in
+ * the library is what lets tests/vmsscs/test_scs_dir.c and test_scs_connect.c
+ * assert that the frames OVMX BUILDS classify as the SCA messages the state
+ * machine thinks they are -- without a socket.
+ *
+ * conn_step - drive the machine and account for the result. `emitted` names the
+ * frame the daemon actually put on the wire for this step, or NULL if it sent
+ * nothing; when the machine's action names a frame OVMX has no builder for,
+ * that is LOGGED as an unemitted action instead of being passed over in
+ * silence. That log line is the honest record of the OVMX/SCA divergence, and
+ * on the 0x4b connections it fires on every run.
+ */
+static void conn_step(struct scs_cdt *cdt, enum scs_conn_event ev, const char *emitted)
+{
+    if (cdt == NULL) {
+        return;
+    }
+    struct scs_conn_transition t = scs_conn_fsm_step(cdt, ev);
+    if (t.suppressed) {
+        return;
+    }
+    conn_transitions++;
+    if (t.illegal) {
+        conn_illegal_events++;
+        return;
+    }
+    if (t.action != SCS_CONN_ACT_NONE && emitted == NULL) {
+        conn_unemitted_actions++;
+        log_ts(stdout);
+        printf(" SCSD-W-CONNNOACT, conid=0x%08X: the state machine requires"
+               " '%s' here and OVMX has no builder for it -- nothing was sent\n",
+               (unsigned)cdt->local_conid, scs_conn_action_name(t.action));
+        fflush(stdout);
     }
 }
 
@@ -873,6 +1000,15 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
         ps->joiner_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
         scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
+        /* vms-dd5: OVMX is the SOURCE on this connection -- Figure 2-14's
+         * NODE_1 column. "o SCS SENDS 'CONNECT_REQ' TO NODE_2 / o CONN STATE =
+         * 'CONNECT SENT'". The frame just sent IS the CONNECT_REQ (remote
+         * Con.ID 0, spec sec 4g phase 4), so this is a GROUNDED mapping. A
+         * retransmit re-enters the same state through the labeled OVMX
+         * retransmit row rather than scoring an illegal event. */
+        conn_step(conn_bind(ps, &ps->cdt_joiner, OVMX_JOINER_CONID, "VMS$VAXcluster",
+                            "VMS$VAXcluster"),
+                  SCS_CONN_EV_SVC_CONNECT, "CONNECT-REQUEST");
         return 1;
     }
     return 0;
@@ -988,6 +1124,21 @@ int main(int argc, char **argv)
     struct scs_pdt scs_pdt;
     scs_config_init(&scs_cfg);
     scs_pdt_init(&scs_pdt, SCS_PORT_TYPE_ETHERNET, SCS_HELLO_PADDED_MAX_SCA);
+    /* vms-dd5: "The CDL is allocated during system initialization" (p. 2-30).
+     * The transition log goes to stdout beside every other SCSD-I- line so a run
+     * log carries the state history of every connection; if the machine is
+     * disabled nothing is initialized and nothing is logged. */
+    if (scs_conn_fsm_enabled()) {
+        scs_cdl_init(&scsd_cdl);
+        scsd_cdl_ready = 1;
+        scs_conn_set_log(stdout);
+    } else {
+        log_ts(stderr);
+        fprintf(stderr, " SCSD-I-CONNFSMOFF, OVMX_NO_CONN_FSM is set:"
+                        " no connection descriptors, no state machine, no"
+                        " transition log, no stuck-connection report\n");
+        fflush(stderr);
+    }
     static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
     uint8_t our_hw_mac[6];
     memset(our_hw_mac, 0, sizeof(our_hw_mac));
@@ -1798,11 +1949,52 @@ int main(int argc, char **argv)
                               ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
             uint32_t lconid = (uint32_t)buf[68] | ((uint32_t)buf[69] << 8) |
                               ((uint32_t)buf[70] << 16) | ((uint32_t)buf[71] << 24);
+
+            /* vms-dd5: THE CONNECTION-CONTROL CLASSIFIER. The destination Con.ID
+             * of a connection-control frame names one of OUR CDTs (p. 2-29: the
+             * low 16 bits index the CDL), and [46:48] names which SCA message it
+             * is (spec sec 4(h)(1a)). Together those are enough to drive the
+             * documented state machine off real frames instead of off inferred
+             * side effects. RECEIVE-SIDE ONLY -- it emits nothing and changes no
+             * byte; where the machine says a frame is owed, conn_step logs
+             * SCSD-W-CONNNOACT.
+             *
+             * DELIBERATELY NOT HANDLED HERE: message types 0 (CONNECT_REQ) and
+             * 2 (ACCEPT_REQ). Those are already fed by the explicit branches
+             * that ANSWER them -- the SCS$DIRECTORY connect branch and the two
+             * VMS$VAXcluster accept branches -- and feeding them twice would
+             * double-step the machine. Everything else (1, 3, 4, 5, 6, 7) has no
+             * other call site: before this item OVMX did not react to any of
+             * them at all, which is exactly why a peer parking a connection was
+             * invisible. */
+            /* [46:48] is absolute 60:62; the enclosing guard already required
+             * n >= 72. */
+            uint16_t cmsg = (uint16_t)((uint32_t)buf[60] | ((uint32_t)buf[61] << 8));
+            enum scs_conn_event cev;
+            if (cmsg != 0 && cmsg != 2 && scs_conn_event_for_msgtype(cmsg, &cev)) {
+                struct scs_cdt *tgt = scs_cdl_lookup(&scsd_cdl, rconid);
+                if (tgt != NULL) {
+                    conn_step(tgt, cev, NULL);
+                }
+            }
+
             if (rconid == OVMX_JOINER_CONID && lconid != 0) {
                 struct peer_state *ps = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
                 if (ps != NULL && !ps->joiner_connected) {
                     ps->joiner_remote_conid = lconid;
                     ps->joiner_connected = 1;
+                    /* vms-dd5: the member's answer to OUR CONNECT_REQ, carrying
+                     * BOTH Con.IDs -- message type 2, ACCEPT_REQ (spec sec
+                     * 4(h)(1a)). If the peer's message-type-1 CONNECT_RSP was
+                     * seen, the classifier above already moved this connection
+                     * to CONNECT ACK and this step is the DOCUMENTED Figure 2-14
+                     * transition to OPEN; if that frame was lost, this arrives in
+                     * CONNECT SENT and runs through the LABELED OVMX row instead,
+                     * and its log line says which. Either way the ACCEPT_RSP the
+                     * machine then requires has no OVMX builder, so it is
+                     * reported unemitted rather than silently skipped. */
+                    scs_cdt_set_remote_conid(ps->cdt_joiner, lconid);
+                    conn_step(ps->cdt_joiner, SCS_CONN_EV_RCV_ACCEPT_REQ, NULL);
                     log_ts(stdout);
                     printf(" SCSD-I-JOINBOUND, member accepted OUR VMS$VAXcluster"
                            " connect: local=0x%08X remote=0x%08X\n",
@@ -1861,6 +2053,15 @@ int main(int argc, char **argv)
                      * is a sequenced message: advance OVMX's send_seq per frame
                      * (spec sec 4h(4)). */
                     ps->dir_remote_conid = dv.local_conid;
+                    /* vms-dd5: OVMX is the TARGET on this connection -- Figure
+                     * 2-14's NODE_2 column, whose four messages are on the
+                     * wire as connection-control message types 0/1/2/3
+                     * (docs/cluster-protocol-spec.md sec 4(h)(1a), GROUNDED over
+                     * 16 dialogues). This frame is message type 0 = CONNECT_REQ:
+                     * 110 bytes, destination Con.ID 0, SYSAP name present. */
+                    struct scs_cdt *dcdt = conn_bind(ps, &ps->cdt_dir, SCS_DIR_OVMX_CONID,
+                                                     "SCS$DIRECTORY", "SCS$DIRECTORY");
+                    scs_cdt_set_remote_conid(dcdt, ps->dir_remote_conid);
                     struct scs_dir_params dp;
                     memset(&dp, 0, sizeof(dp));
                     memcpy(dp.dst_mac, ps_port_addr(ps), 6);
@@ -1881,6 +2082,12 @@ int main(int argc, char **argv)
                     uint8_t eframe[SCS_DIR_ECHO_FRAME_LEN];
                     if (scs_dir_build_connect_echo(&dp, eframe) == 0) {
                         send_frame_to(sock, (int)ifindex, ps_port_addr(ps), eframe, sizeof(eframe));
+                        /* The op=1 CONNECT-ECHO is spec sec 4(h)(1)'s SCA23:
+                         * "VAX2 echoes VAX1's handle, its own not yet assigned"
+                         * -- an acknowledgement that cannot yet carry a handle,
+                         * which is exactly Figure 2-14's CONNECT_RSP. Step:
+                         * CLOSED --RCV_CONNECT_REQ--> CONNECT REC, sending it. */
+                        conn_step(dcdt, SCS_CONN_EV_RCV_CONNECT_REQ, "op=1 CONNECT-ECHO");
                     }
 
                     dp.recv_ack = ps->vc.seq.recv_seq;
@@ -1891,6 +2098,12 @@ int main(int argc, char **argv)
                                       sizeof(rframe)) > 0) {
                         ps->dir_connected = 1;
                         dir_conn_resp_sent++;
+                        /* The op=2 CONNECT-RESPONSE is spec sec 4(h)(1)'s
+                         * SCA25: "VAX2 supplies its own handle -- pair now
+                         * bound", which is Figure 2-14's ACCEPT_REQ ("TARGET
+                         * SYSAP INVOKES ACCEPT / SCS SENDS 'ACCEPT_REQ'").
+                         * Step: CONNECT REC --SVC_ACCEPT--> ACCEPT SENT. */
+                        conn_step(dcdt, SCS_CONN_EV_SVC_ACCEPT, "op=2 CONNECT-RESPONSE");
                         log_ts(stdout);
                         printf(" SCSD-I-DIRCONN, bound SCS$DIRECTORY: remote=0x%08X"
                                " local=0x%08X with peer %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -2003,6 +2216,36 @@ int main(int argc, char **argv)
                     connect_resp_sent++;
                     int first = !ps->connected;
                     ps->connected = 1;
+                    /* vms-dd5: OVMX is the TARGET here (the member opened this
+                     * connection). Two steps for ONE emitted frame, and the
+                     * asymmetry is the point:
+                     *   RCV_CONNECT_REQ -- the member's 0x4b with destination
+                     *     Con.ID 0, message type 0 (spec sec 4g phase 4, golden
+                     *     frame 47). The machine requires a CONNECT_RSP here and
+                     *     OVMX BUILDS NONE -- note this is an OVMX gap, not a
+                     *     wire gap: the real VAX does send that frame (the
+                     *     66-byte message-type-1 class, 16 of 16 dialogues, spec
+                     *     sec 4(h)(1a)). Passing NULL makes conn_step LOG the
+                     *     unemitted action every run instead of quietly
+                     *     pretending a frame went out.
+                     *   SVC_ACCEPT -- the 110-byte CONNECT-RESPONSE we just sent
+                     *     carries BOTH Con.IDs (golden frame 50) and message
+                     *     type 2, which sec 4(h)(1a) grounds as ACCEPT_REQ. */
+                    struct scs_cdt *mcdt = conn_bind(ps, &ps->cdt_member, OVMX_LOCAL_CONID,
+                                                     "VMS$VAXcluster", "VMS$VAXcluster");
+                    scs_cdt_set_remote_conid(mcdt, v.local_conid);
+                    if (first) {
+                        conn_step(mcdt, SCS_CONN_EV_RCV_CONNECT_REQ, NULL);
+                        conn_step(mcdt, SCS_CONN_EV_SVC_ACCEPT, "0x4b CONNECT-RESPONSE");
+                    } else {
+                        /* A RETRANSMITTED CONNECT-REQUEST, which the member
+                         * sends until it accepts our answer and which we
+                         * deliberately re-answer (vms-c6d). The labeled OVMX
+                         * retransmit row keeps ACCEPT SENT and repeats the
+                         * ACCEPT_REQ -- which is the frame we did just send, so
+                         * nothing is reported unemitted here. */
+                        conn_step(mcdt, SCS_CONN_EV_RCV_CONNECT_REQ, "0x4b CONNECT-RESPONSE");
+                    }
                     log_ts(stdout);
                     printf(" SCSD-I-CONNRESP, %s peer VMS$VAXcluster CONNECT-REQUEST:"
                            " remote=0x%08X local=0x%08X recv_ack=%u send_seq=%u incarnation=%u\n",
@@ -2027,6 +2270,11 @@ int main(int argc, char **argv)
                  * connection the add-member burst must ride (clean-ref idx59). */
                 ps->joiner_remote_conid = v.local_conid;
                 ps->joiner_connected = 1;
+                /* vms-dd5: the same ACCEPT_REQ as the 0x5b-class sighting above
+                 * -- see that comment for which state machine row runs; this is
+                 * the 0x4b-class arrival of the same message. */
+                scs_cdt_set_remote_conid(ps->cdt_joiner, v.local_conid);
+                conn_step(ps->cdt_joiner, SCS_CONN_EV_RCV_ACCEPT_REQ, NULL);
                 log_ts(stdout);
                 printf(" SCSD-I-JOINBOUND, member accepted OUR VMS$VAXcluster connect:"
                        " local=0x%08X remote=0x%08X\n", OVMX_JOINER_CONID, v.local_conid);
@@ -2065,6 +2313,15 @@ int main(int argc, char **argv)
                 credit_sent, retransmit_sent);
         fprintf(stderr, "  DIR-CONNECT-RESP-SENT=%ld DIR-LOOKUP-RESP-SENT=%ld\n",
                 dir_conn_resp_sent, dir_lookup_sent);
+        /* vms-dd5: "A state that is entered and never left is detectable." Every
+         * connection that is not OPEN at process exit is named here with its
+         * CONID, which is the failure shape docs/HANDOFF-vms-2f3.md sec
+         * 4M.18/4M.28 records on the peer side and which OVMX previously could
+         * not represent at all. */
+        fprintf(stderr, "  CONN-FSM: transitions=%lu illegal-events=%lu"
+                " actions-required-but-not-emitted=%lu\n",
+                conn_transitions, conn_illegal_events, conn_unemitted_actions);
+        (void)scs_conn_report_stuck(&scsd_cdl, stderr);
         fprintf(stderr, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld PADDED-HELLO-SENT=%ld\n",
                 cm_config_frames, cm_response_sent, padded_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
@@ -2078,7 +2335,8 @@ int main(int argc, char **argv)
                     " dir_lookups=%ld connect_sent=%d connected=%s"
                     " credit_sent=%ld retx=%u remote_conid=0x%08X"
                     " cm_config=%s cm_responses=%ld sysap_send=%u sysap_recv=%u"
-                    " padded_replies=%ld padded_init=%d peer_padded_sca=%u\n",
+                    " padded_replies=%ld padded_init=%d peer_padded_sca=%u"
+                    " conn[dir=%s member=%s joiner=%s]\n",
                     pa[0], pa[1], pa[2], pa[3], pa[4], pa[5],
                     scs_vc_state_name(peers[i].pb->vc_state),
                     peers[i].channel_up ? "UP" : "down", peers[i].directed_replies,
@@ -2091,7 +2349,19 @@ int main(int argc, char **argv)
                     peers[i].cm_config_sent ? "YES" : "no", peers[i].cm_responses,
                     peers[i].sysap_send, peers[i].sysap_recv,
                     peers[i].padded_replies, peers[i].padded_initiated,
-                    peers[i].peer_padded_sca);
+                    peers[i].peer_padded_sca,
+                    /* "untracked" is NOT a state: it means no CDT was ever bound
+                     * for that connection (machine off, or the node-global
+                     * Con.ID slot belonged to another peer). Do not read it as
+                     * CLOSED. */
+                    peers[i].cdt_dir ? scs_conn_state_name(scs_conn_state_of(peers[i].cdt_dir))
+                                     : "untracked",
+                    peers[i].cdt_member
+                        ? scs_conn_state_name(scs_conn_state_of(peers[i].cdt_member))
+                        : "untracked",
+                    peers[i].cdt_joiner
+                        ? scs_conn_state_name(scs_conn_state_of(peers[i].cdt_joiner))
+                        : "untracked");
         }
     }
 

@@ -72,7 +72,7 @@ target_include_directories(test_scs_connect PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include
 )
 
-target_link_libraries(test_scs_connect PRIVATE vmsscs_hello vmsscs_connect)
+target_link_libraries(test_scs_connect PRIVATE vmsscs_hello vmsscs_connect vmsscs_conn)
 
 add_test(NAME vmsscs_connect_unit COMMAND test_scs_connect)
 set_tests_properties(vmsscs_connect_unit PROPERTIES
@@ -118,7 +118,7 @@ target_include_directories(test_scs_dir PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include
 )
 
-target_link_libraries(test_scs_dir PRIVATE vmsscs_dir)
+target_link_libraries(test_scs_dir PRIVATE vmsscs_dir vmsscs_conn)
 
 add_test(NAME vmsscs_dir_unit COMMAND test_scs_dir)
 set_tests_properties(vmsscs_dir_unit PROPERTIES
@@ -183,6 +183,26 @@ set_tests_properties(vmsscs_cdt_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-dd5 - THE SCA CONNECTION STATE MACHINE. Transcribes Figures 2-14/2-15/2-16
+# a SECOND time, independently of src/vmsscs/scs_conn.c's table, and asserts the
+# production table agrees row for row; then walks the formation, rejection and
+# disconnect paths live from BOTH ends asserting the exact state after every
+# message in each direction. Also RUNS the OVMX_NO_CONN_FSM kill switch
+# (guardrail 23) and pins the stuck-connection diagnostic.
+add_executable(test_scs_conn test_scs_conn.c)
+
+target_include_directories(test_scs_conn PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_conn PRIVATE vmsscs_conn)
+
+add_test(NAME vmsscs_conn_unit COMMAND test_scs_conn)
+set_tests_properties(vmsscs_conn_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
 # vms-7be - THE SCSD-LEVEL TEST. The other targets in this file link the builder
 # libraries; this one compiles src/vmsscs/scsd.c itself (SCSD_UNIT_TEST swaps the
 # AF_PACKET sendto for a capture buffer and renames the daemon's main) so the
@@ -200,7 +220,7 @@ target_include_directories(test_scsd_wire PRIVATE
 
 target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
-    vmsscs_start vmsscs_vc vmsscs_member vmsscs_config
+    vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)

@@ -4032,6 +4032,64 @@ lab's own `HELP` (§4M.22). **The honest next step is not another OVMX-side fix;
 it is either a VMS-internals documentation source we have not found, or an
 operator ruling that this is a gate.**
 
+### 4M.25 ⭐⭐⭐ THE BUG REPRODUCES ON A VIRGIN CLUSTER — accumulated state is eliminated
+
+**Operator authorised a different class of experiment. This is the most
+important elimination on the item.**
+
+**Every rejoin test across all thirteen sessions has run on a pod already
+carrying a dozen dead OVMX identities.** `vaxlab-3` was scaled up fresh and had
+never seen an OVMX node. Verified, not assumed: the only `OVMX` string anywhere
+in `V1A`'s pre-run `SHOW CONNECTIONS` dump is the `/NODE=OVMXV1` query marker
+itself; every CDT belongs to `VAX2` or is a bare `listen`.
+
+| run | identity | verdict |
+|---|---|---|
+| `V1A` | `OVMXV1` — **the first OVMX identity this cluster has ever seen** | **JOINED** |
+| **`V1B`** | same identity | **REFUSED** |
+| **`V1C`** | same identity, 2nd rejoin | **REFUSED** |
+| `V2A` | `OVMXV2` fresh | **JOINED** |
+
+> **A brand-new VMScluster admits an OVMX node once and then never again.**
+> Nothing accumulated, nothing contaminated, no residue from prior identities,
+> no CDT exhaustion. **The defect is intrinsic to the second admission of an
+> identity, on a cluster with no history whatsoever.**
+
+**What this eliminates outright:** accumulated pod state, cross-identity
+contamination, resource exhaustion from prior runs, and any theory that depends
+on the peer having seen other OVMX nodes. It also means **every earlier result
+on a used pod is trustworthy** — the litter was never the cause.
+
+**And it makes the defect more serious as a product bug, not less:** this is not
+a lab artifact that a clean deployment would avoid. It would hit the first
+restart of the first OVMX node in any cluster.
+
+> Incidental, recorded without interpretation: the virgin pod reported
+> `Number of free CDT's: 1` at T-PRE against `5` on the used pod, and joined
+> normally regardless. **Do not read a resource story into it** — that is the
+> §4M.7/§4M.22 ratio trap.
+
+### 4M.26 ⚠ THE SUPPRESSION SERIES IS LARGELY VOID — the switches had nothing to act on
+
+Second class tried in the same window on `vaxlab-2`: stop *adding* OVMX
+behaviour and instead suppress it, on the theory that our ungated client walk
+interferes with the very teardown we are waiting for.
+
+`X1A` fresh **JOINED** · `X1B` (`OVMX_NO_DISKRUN_UNGATE=1`) **REFUSED** · `X1C`
+(`OVMX_NO_OWN_VC=1`) **REFUSED** · `X1D` (both) **REFUSED** · `X2A` fresh
+**JOINED**.
+
+**But the switches did not measurably change what OVMX did.** `PSCUNGATE=0` and
+`PSCLIENT=0` in **every** run *including the joins*, and `CONNREQ=2` in all four
+— so `OVMX_NO_DISKRUN_UNGATE` had nothing to suppress (that path does not fire
+in this failure mode at all, §4M.24), and `OVMX_NO_OWN_VC` moved no counter I
+can see.
+
+> **Recorded as inconclusive, NOT as a kill.** Guardrail 23: verify the switch
+> engaged before believing the verdict. A refusal from a switch that did nothing
+> proves nothing. If this class is retried, first establish a counter that moves
+> when the switch is set.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

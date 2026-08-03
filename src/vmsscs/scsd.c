@@ -682,6 +682,8 @@ struct peer_state {
      * peer replaying send_seq=12). A retransmit must be answered by replaying
      * the original reply. */
     struct scs_retx_seq credit_seq; /* see scs_retx_reply_seq() in scs_vc.h */
+    int      psc_self_disc_sent;   /* vms-2f3 sec 4M.23: we performed our OWN disconnect
+                                    * call (op 6) after the peer's never came */
     int      psc_dir_sent;         /* we sent OUR PS SCS$DIRECTORY CONNECT-REQUEST */
     int      psc_dir_connected;    /* VAX1 accepted it (op2, pair bound) */
     uint32_t psc_dir_remote_conid; /* VAX1's handle on OUR PS dir connection */
@@ -2038,6 +2040,94 @@ static int scs_reflect_credit(int sock, int ifindex, struct peer_state *ps,
  * 00 00 01 00) and VAX1 acks op7 -> the connection is fully closed, and ONLY THEN does
  * the joiner open its own client dir connect. Built from the received VAX1 op6 frame
  * (`buf`, 76 bytes): reflect identity + swap the Con.ID pair, op stays 6, keep the tail. */
+/* vms-2f3 sec 4M.23: byte-exact 76-byte op6 DISCONNECT-REQUEST as OVMX itself
+ * emits it in a SUCCESSFUL join, lifted from our own lab wire
+ * (d94-Q1A.pcap, OVMX->VAX2). Used as the template for an OVMX-INITIATED
+ * disconnect, where there is no received op6 to copy. Identity, Con.IDs and
+ * counters are all substituted; the tail 00 00 01 00 is the value already
+ * GROUNDED at af2 143.76011 for a joiner's own op6. Rule 8: observed on our own
+ * wire, not derived from any VSI/HPE source. */
+static const uint8_t scs_dir_disc_tmpl[76] = {
+    /* [0:6]   */ 0x08, 0x00, 0x2b, 0x1e, 0x85, 0x61,   /* eth dst  (SUBST) */
+    /* [6:12]  */ 0x1e, 0x1f, 0xeb, 0x2f, 0x07, 0x08,   /* eth src  (SUBST) */
+    /* [12:14] */ 0x60, 0x07,
+    /* [14:16] */ 0x3c, 0x00,                           /* SCA length 60 (DERIVED below) */
+    /* [16:22] */ 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04,   /* dst logical (SUBST) */
+    /* [22:24] */ 0x01, 0x00,                           /* connect flag */
+    /* [24:30] */ 0xaa, 0x00, 0x04, 0x00, 0x21, 0x05,   /* src logical (SUBST) */
+    /* [30:32] */ 0x4b, 0x13,                           /* msgtype 0x4b / format 0x13 */
+    /* [32:34] */ 0x0e, 0x00,                           /* recv_ack (SUBST) */
+    /* [34:36] */ 0x0f, 0x00,                           /* send_seq (SUBST) */
+    /* [36:38] */ 0x01, 0x00,
+    /* [38:40] */ 0x12, 0x00,
+    /* [40:42] */ 0x0e, 0x00,                           /* recv_ack mirror (SUBST) */
+    /* [42:44] */ 0x00, 0x00,
+    /* [44:46] */ 0x0f, 0x00,                           /* send_seq mirror (SUBST) */
+    /* [46:48] */ 0x00, 0x00,
+    /* [48:50] */ 0x0e, 0x00,                           /* recv_ack 3rd (SUBST) */
+    /* [50:52] */ 0x00, 0x00,
+    /* [52:56] */ 0x01, 0x00, 0x00, 0x02,
+    /* [56:58] */ 0x12, 0x00,                           /* inner length 18 (DERIVED below) */
+    /* [58:60] */ 0x04, 0x00,
+    /* [60:62] */ 0x06, 0x00,                           /* op = 6, DISCONNECT-REQUEST */
+    /* [62:64] */ 0x00, 0x00,
+    /* [64:68] */ 0x0f, 0x00, 0x00, 0x6f,               /* remote Con.ID (SUBST) */
+    /* [68:72] */ 0x07, 0x00, 0x20, 0x77,               /* local Con.ID  (SUBST) */
+    /* [72:76] */ 0x00, 0x00, 0x01, 0x00,               /* tail, GROUNDED af2 143.76011 */
+};
+
+/* vms-2f3 sec 4M.23: perform OVMX's OWN disconnect call when the peer's op6
+ * never arrives.
+ *
+ * GROUNDED IN PUBLIC DOCUMENTATION -- Digital Technical Journal Vol.1 No.5
+ * (Sept 1987), "The System Communication Architecture", p.25: "that member
+ * performs a disconnect call to its SCA software. The SCA software will inform
+ * the SYSAP in the other node, WHICH MUST THEN PERFORM ITS OWN DISCONNECT CALL
+ * to synchronize the dismantling of the connection." The teardown is SYMMETRIC.
+ *
+ * OVMX only ever emitted op6 in REPLY to the peer's (scs_send_disconnect, from
+ * the cm_op==6 branch). On a rejoin the peer's op6 never arrives -- its CDT sits
+ * in disc_sent/disc_pend (sec 4M.18) -- so OVMX never performs its own
+ * disconnect call and by the documented protocol the teardown cannot complete.
+ * This performs it on the same 2000 ms timeout that already fires PSCUNGATE. */
+static int scs_send_disconnect_self(int sock, int ifindex, struct peer_state *ps,
+                                    const uint8_t our_hw_mac[6],
+                                    const uint8_t our_src_logical[6])
+{
+    uint8_t d[76];
+    memcpy(d, scs_dir_disc_tmpl, sizeof(d));
+    memcpy(d + 0, ps->eth_mac, 6);
+    memcpy(d + 6, our_hw_mac, 6);
+    memcpy(d + 14 + 2, ps->logical, 6);
+    memcpy(d + 14 + 10, our_src_logical, 6);
+
+    uint16_t rseq = ps->vc.seq.recv_seq;
+    uint16_t sseq = scs_seq_advance(&ps->vc.seq);
+    d[32] = (uint8_t)rseq; d[33] = (uint8_t)(rseq >> 8);
+    d[40] = (uint8_t)rseq; d[41] = (uint8_t)(rseq >> 8);
+    d[48] = (uint8_t)rseq; d[49] = (uint8_t)(rseq >> 8);
+    d[34] = (uint8_t)sseq; d[35] = (uint8_t)(sseq >> 8);
+    d[44] = (uint8_t)sseq; d[45] = (uint8_t)(sseq >> 8);
+
+    /* Con.ID pair: remote = the peer's handle on OUR server dir connection,
+     * local = ours. Same convention as scs_send_disconnect. */
+    uint32_t rc = ps->dir_remote_conid;
+    uint32_t lc = (uint32_t)SCS_DIR_OVMX_CONID;
+    d[64] = (uint8_t)rc;  d[65] = (uint8_t)(rc >> 8);
+    d[66] = (uint8_t)(rc >> 16); d[67] = (uint8_t)(rc >> 24);
+    d[68] = (uint8_t)lc;  d[69] = (uint8_t)(lc >> 8);
+    d[70] = (uint8_t)(lc >> 16); d[71] = (uint8_t)(lc >> 24);
+
+    /* DERIVE the length words from what we emit -- never inherit (the vms-760
+     * stall, and the same rule scs_reflect_credit documents below). */
+    uint16_t sca_len = (uint16_t)(sizeof(d) - 14 - 2); /* 60 */
+    uint16_t inner_len = (uint16_t)(sizeof(d) - 58);   /* 18 */
+    d[14] = (uint8_t)sca_len;   d[15] = (uint8_t)(sca_len >> 8);
+    d[56] = (uint8_t)inner_len; d[57] = (uint8_t)(inner_len >> 8);
+
+    return send_frame_to(sock, ifindex, ps->eth_mac, d, sizeof(d)) > 0;
+}
+
 static int scs_send_disconnect(int sock, int ifindex, struct peer_state *ps,
                                const uint8_t our_hw_mac[6],
                                const uint8_t our_src_logical[6], const uint8_t *buf)
@@ -2492,6 +2582,29 @@ int main(int argc, char **argv)
                 }
                 if (now_ms - ps->psc_gate_ms < (uint64_t)diskrun_gate_ms) {
                     continue;
+                }
+                /* vms-2f3 sec 4M.23: the peer's op6 has not come. By the
+                 * documented SCA protocol (DTJ v1n5 p.25) the teardown is
+                 * SYMMETRIC and each side must perform its own disconnect call
+                 * -- so perform ours here rather than opening a client connect
+                 * on a connection neither side has dismantled. The peer's CDT
+                 * is sitting in disc_sent/disc_pend waiting for exactly this.
+                 * Opt-IN for now (OVMX_DIR_SELF_DISCONNECT=1) so the default
+                 * wire behaviour is unchanged while this is under test. */
+                if (getenv("OVMX_DIR_SELF_DISCONNECT") != NULL &&
+                    !ps->psc_self_disc_sent && ps->dir_remote_conid != 0 &&
+                    scs_send_disconnect_self(sock, (int)ifindex, ps,
+                                             our_hw_mac, our_src_logical)) {
+                    ps->psc_self_disc_sent = 1;
+                    log_ts(stdout);
+                    printf(" SCSD-I-SELFDISC, peer sent no op 6 after %lums --"
+                           " performed OUR OWN disconnect call (op 6) on the server"
+                           " dir connection remote=0x%08X local=0x%08X."
+                           " DTJ v1n5 p.25: the teardown is symmetric\n",
+                           (unsigned long)diskrun_gate_ms,
+                           (unsigned)ps->dir_remote_conid,
+                           (unsigned)SCS_DIR_OVMX_CONID);
+                    fflush(stdout);
                 }
                 if (ps_send_dir_connect(sock, (int)ifindex, ps,
                                         our_hw_mac, our_src_logical)) {

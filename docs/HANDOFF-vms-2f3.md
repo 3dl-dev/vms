@@ -4174,6 +4174,14 @@ takes cannot show that nothing moves.
     RUNNING at the moment of every CSB/CDT sample**; §4e.3, §4f.3, §4g and §4j all
     mix the two, and any claim of the form "the peer never allocates X for us"
     taken from a dead-OVMX sample must be re-taken live before it is trusted.
+25. **Never leave the VAX console inside a utility, and never assume `EXIT`
+    exited.** An `SDA> HELP SHOW CONNECTIONS` run ended with its `EXIT` being
+    consumed by HELP's `Topic?` prompt rather than by SDA. The console sat at
+    `SDA>` and the next lab series aborted with `FATAL -- vax1 not at DCL`.
+    **That is guardrail 19 working** — the harness failed loudly instead of
+    producing a bad result — but it voided a whole series. Drive an interactive
+    utility only from a script that verifies it got back to `$`, and check the
+    console tail before trusting any run that follows one.
 24. **Read the OTHER node's console. `csbwatch`/`stallpoll` park VAX1 inside
     SDA, but VAX2's console is untouched and VMS prints the entire membership
     dialogue to OPCOM** — `received membership request`, `proposed addition`,

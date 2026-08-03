@@ -92,6 +92,21 @@ target_include_directories(vmsscs_cdt PUBLIC
 )
 target_link_libraries(vmsscs_cdt PUBLIC vmsscs_config)
 
+# vms-76e - SCA message flow control: the Send / Receive / Pending Receive
+# Credit account per connection, held in the CDT (VAXcluster Principles ch. 2
+# sec 2.8, pp. 2-42..2-45), plus the credit field in the message header --
+# grounded at SCA [48:50] from our own lab captures (see the WIRE VERDICT in
+# scs_credit.h). Depends on vmsscs_cdt for struct scs_cdt / struct scs_pdt.
+#
+# NOT LINKED INTO scsd_exe: nothing in the daemon calls it yet, and OVMX
+# therefore still emits no live credit. See the reachability note in
+# scs_credit.h -- do not read a green test run as "OVMX does flow control".
+add_library(vmsscs_credit STATIC scs_credit.c)
+target_include_directories(vmsscs_credit PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_credit PUBLIC vmsscs_cdt)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

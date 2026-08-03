@@ -208,3 +208,23 @@ set_tests_properties(vmsscs_scsd_wire_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-76e - SCA message flow control. Reproduces the VAXcluster Principles
+# pp. 2-43..2-44 worked example and its simultaneous-send variation EXACTLY,
+# the p. 2-45 Credit Wait refusal, the p. 2-44 special credit message, the
+# credit field read out of two REAL captured frames (110-byte CONNECT-REQUEST
+# carrying 10 = CLUSTER_CREDITS; 190-byte VC message carrying a piggybacked 3),
+# and the OVMX_NO_CREDIT_ACCOUNTING kill switch with a bracketing control.
+add_executable(test_scs_credit test_scs_credit.c)
+
+target_include_directories(test_scs_credit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_credit PRIVATE vmsscs_credit)
+
+add_test(NAME vmsscs_credit_unit COMMAND test_scs_credit)
+set_tests_properties(vmsscs_credit_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

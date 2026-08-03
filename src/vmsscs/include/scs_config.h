@@ -271,6 +271,21 @@ struct scs_pdt {
     unsigned long frames_received;
     unsigned long errors;
     struct scs_pb *formative_head;   /* p. 2-21 head of the formative-PB queue */
+
+    /*
+     * vms-76e: depth of this port's Message Free Queue. "SCA associates a
+     * Message Free Queue with each port. All free message buffers for
+     * connections supported by a particular port are kept in the MFREEQ
+     * associated with that port." (p. 2-45) VMS keeps the MFREEQ head in the
+     * Port Queue Block portion of the PDT; p. 2-45 explicitly permits the
+     * port/MFREEQ association to be implementation dependent, and OVMX has no
+     * port buffer pool to queue, so this accounts the DEPTH only (OVMX design
+     * choice, labeled per rule 8).
+     *
+     * Owned entirely by src/vmsscs/scs_credit.c -- scs_config.c never reads or
+     * writes it, exactly as it never touches scs_pb.cdt_head.
+     */
+    unsigned mfreeq_count;
 };
 
 /*

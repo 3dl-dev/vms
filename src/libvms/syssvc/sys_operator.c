@@ -16,7 +16,7 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-PARTIAL: sys$sndopr (vms-5b4) -- exec: the user name in the OPCOM
+ * OVMX-PARTIAL: sys$sndopr (vms-2d37) -- exec: the user name in the OPCOM
  *     header is the one the EXECUTIVE holds for the caller, read back through
  *     vms_kif_getjpi_self(). It used to come from the caller's own PCB and
  *     then from the host passwd database, which is why this line is an upgrade
@@ -26,11 +26,18 @@
  *     OPERATOR.LOG by this process through vmsfs path translation, the request
  *     number is a counter private to this image, and there is no OPCOM process
  *     to request, so no operator is notified and no reply can ever come back.
- * OVMX-USERSPACE: sys$brkthruw (vms-5b4) -- open()s the resolved terminal
+ * OVMX-USERSPACE: sys$brkthruw (vms-905) -- open()s the resolved terminal
  *     device and write()s to it directly, falling back to the caller's own
  *     stdout when that open fails. No executive mediates the broadcast, so it
- *     reaches a terminal only if this process can already open that device
- *     itself, and sndtyp (the VMS target class) is discarded.
+ *     reaches a terminal this process can already open itself and no other, and
+ *     sndtyp (the VMS target class) is discarded.
+ *
+ * THE TWO SERVICES CITE DIFFERENT ITEMS ON PURPOSE (vms-fab). They shared vms-5b4,
+ * which is the closed item that BUILT this register and owned neither of them.
+ * $SNDOPR's remainder is the OPCOM record itself -- vms-2d37 measured that the
+ * message body never reaches OPERATOR.LOG, because the callers point the
+ * descriptor at an OPC message block and this file copies it as a C string.
+ * $BRKTHRU's remainder is broadcast delivery, which is vms-905.
  */
 
 #include <stdint.h>

@@ -18,12 +18,18 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$getdvi (vms-fb9) -- answers from classify_device() in
+ * These three cited vms-fb9 until vms-fab. vms-fb9 is closed: it converted DCL's
+ * SHOW DEVICE and F$DEVICE into readers of the executive device table, and it
+ * had to reach vms_kif_* DIRECTLY because converting THESE services turned CI
+ * red -- tests/libvms/test_lib_fb3.c asserts their invented answers. vms-911 is
+ * the item that finding was filed as, and it names both services.
+ *
+ * OVMX-USERSPACE: sys$getdvi (vms-911) -- answers from classify_device() in
  *     this file plus statvfs()/termios on the host, not from the executive
- *     device table; the vms_kif_getdvi_* wrappers are declared OVMX-UNWIRED.
- * OVMX-USERSPACE: sys$getdviw (vms-fb9) -- tail-calls sys$getdvi, so it
+ *     device table.
+ * OVMX-USERSPACE: sys$getdviw (vms-911) -- tail-calls sys$getdvi, so it
  *     inherits that answer exactly.
- * OVMX-USERSPACE: sys$device_scan (vms-fb9) -- enumerates the compiled-in
+ * OVMX-USERSPACE: sys$device_scan (vms-911) -- enumerates the compiled-in
  *     scan_devices[] table below, so it reports the same devices on every
  *     system whatever is actually configured or mounted.
  */

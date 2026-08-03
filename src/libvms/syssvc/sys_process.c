@@ -14,12 +14,26 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * $CREPRC, $GETJPI and $GETJPIW reach the executive process table (vms-8019).
- * That used to exempt them from saying anything at all; it no longer does
- * (vms-d89), because reaching the executive is not the same as answering from
- * it, and all three of them answer from both places:
+ * $CREPRC, $GETJPI and $GETJPIW reach the executive process table. That used to
+ * exempt them from saying anything at all; it no longer does (vms-d89), because
+ * reaching the executive is not the same as answering from it, and all three of
+ * them answer from both places.
  *
- * OVMX-PARTIAL: sys$creprc (vms-8019) -- exec: the created process's NAME is
+ * WHICH ITEM EACH LINE CITES, AND WHY IT CHANGED (vms-fab). Every declaration in
+ * this file used to cite vms-8019, which is CLOSED and whose outcome was met: a
+ * process created with a prcnam carries that name where other processes can see
+ * it, SHOW SYSTEM lists processes DCL did not create, and $GETJPI resolves a
+ * process by name -- all against a real /dev/vms. Nobody is coming back for a
+ * done item, so the lines below cite the live items that own what is left:
+ *   vms-afd  -- $CREPRC does not propagate identity to the executive, so the
+ *               child's row carries no user name. That is the OVMX-LOCAL half
+ *               of $CREPRC exactly.
+ *   vms-pt1  -- the executive process table every process can query, with
+ *               VMS-meaningful attributes. That is what the eleven services
+ *               below reach nothing of, and where $GETJPI's /proc-derived
+ *               JPI$_CPUTIM belongs.
+ *
+ * OVMX-PARTIAL: sys$creprc (vms-afd) -- exec: the created process's NAME is
  *     registered with vms_kif_setprn() and the VMS process id reported back
  *     through pidadr is the one the executive assigned, read with
  *     vms_kif_getjpi_self(). Those are the parts another process can see.
@@ -27,14 +41,14 @@
  *     directory and quotas are copied out of the PARENT'S process-local PCB
  *     into the child's process-local PCB. No executive row records any of them,
  *     so nothing outside the child can read back what it was created with.
- * OVMX-PARTIAL: sys$getjpi (vms-8019) -- exec: JPI$_PID, JPI$_PRCNAM,
+ * OVMX-PARTIAL: sys$getjpi (vms-pt1) -- exec: JPI$_PID, JPI$_PRCNAM,
  *     JPI$_USERNAME and JPI$_UIC are read from the row the executive resolved,
  *     by name or by pid, with no PCB consulted -- which is what lets $GETJPI
  *     describe a process other than its caller at all.
  * OVMX-LOCAL: sys$getjpi -- JPI$_CPUTIM is not the executive's: it comes from
  *     getrusage(RUSAGE_SELF) for the caller and from /proc/<pid>/stat otherwise.
  *     The executive keeps no accounting for a process it has a row for.
- * OVMX-PARTIAL: sys$getjpiw (vms-8019) -- exec: tail-calls sys$getjpi, so the
+ * OVMX-PARTIAL: sys$getjpiw (vms-pt1) -- exec: tail-calls sys$getjpi, so the
  *     same executive-resolved row answers the same items.
  * OVMX-LOCAL: sys$getjpiw -- and inherits the same /proc-derived JPI$_CPUTIM.
  *
@@ -43,25 +57,25 @@
  * `(void)prcnam;`, so a caller that names its target rather than numbering it
  * is silently redirected to itself or to a raw Linux pid.
  *
- * OVMX-USERSPACE: sys$exit (vms-8019) -- runs the exit handlers held in
+ * OVMX-USERSPACE: sys$exit (vms-pt1) -- runs the exit handlers held in
  *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.
- * OVMX-USERSPACE: sys$dclexh (vms-8019) -- appends to that same per-process
+ * OVMX-USERSPACE: sys$dclexh (vms-pt1) -- appends to that same per-process
  *     array; no executive records that the process has an exit handler.
- * OVMX-USERSPACE: sys$forcex (vms-8019) -- with no pidadr it degenerates to
+ * OVMX-USERSPACE: sys$forcex (vms-pt1) -- with no pidadr it degenerates to
  *     sys$exit on the caller; otherwise kill() by Linux pid. prcnam discarded.
- * OVMX-USERSPACE: sys$delprc (vms-8019) -- kill(SIGTERM) by Linux pid, or the
+ * OVMX-USERSPACE: sys$delprc (vms-pt1) -- kill(SIGTERM) by Linux pid, or the
  *     caller's own pid when pidadr is NULL. prcnam discarded.
- * OVMX-USERSPACE: sys$hiber (vms-8019) -- pause() on the calling thread; the
+ * OVMX-USERSPACE: sys$hiber (vms-pt1) -- pause() on the calling thread; the
  *     executive has no record that this process is hibernating.
- * OVMX-USERSPACE: sys$wake (vms-8019) -- kill(SIGCONT) by Linux pid, or the
+ * OVMX-USERSPACE: sys$wake (vms-pt1) -- kill(SIGCONT) by Linux pid, or the
  *     caller's own pid when pidadr is NULL. prcnam discarded.
- * OVMX-USERSPACE: sys$suspnd (vms-8019) -- kill(SIGSTOP), same shape.
- * OVMX-USERSPACE: sys$suspend (vms-8019) -- tail-calls sys$suspnd.
- * OVMX-USERSPACE: sys$resume (vms-8019) -- kill(SIGCONT), same shape.
- * OVMX-USERSPACE: sys$setpri (vms-8019) -- getpriority/setpriority on the
+ * OVMX-USERSPACE: sys$suspnd (vms-pt1) -- kill(SIGSTOP), same shape.
+ * OVMX-USERSPACE: sys$suspend (vms-pt1) -- tail-calls sys$suspnd.
+ * OVMX-USERSPACE: sys$resume (vms-pt1) -- kill(SIGCONT), same shape.
+ * OVMX-USERSPACE: sys$setpri (vms-pt1) -- getpriority/setpriority on the
  *     CALLING process; pidadr as well as prcnam is discarded, so it cannot
  *     change any other process's priority however it is invoked.
- * OVMX-USERSPACE: sys$cancel (vms-8019) -- returns SS$_NORMAL without doing
+ * OVMX-USERSPACE: sys$cancel (vms-pt1) -- returns SS$_NORMAL without doing
  *     anything; there is no executive I/O queue to cancel against.
  */
 

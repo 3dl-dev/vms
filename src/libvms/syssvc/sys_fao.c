@@ -18,11 +18,17 @@
  * only where OVMX's answer comes from. Pin it to the oracle before quoting
  * these lines as a VMS match.
  *
- * OVMX-USERSPACE: sys$fao (vms-5b4) -- formats into the caller's outbuf from
+ * THAT UNSETTLED QUESTION NOW HAS AN ITEM (vms-fab). These three cited vms-5b4,
+ * the closed item that built the register; they cite vms-f90, whose outcome is
+ * the pin itself, across the eight compute-only services -- these three plus
+ * $NUMTIM/$ASCTIM/$BINTIM, $CHECK_FEN and $UNWIND. "Reads no system state" is a
+ * reason to check, not a reason not to.
+ *
+ * OVMX-USERSPACE: sys$fao (vms-f90) -- formats into the caller's outbuf from
  *     the caller's varargs; reads no process, system or device state.
- * OVMX-USERSPACE: sys$faol (vms-5b4) -- same, from a caller-supplied
+ * OVMX-USERSPACE: sys$faol (vms-f90) -- same, from a caller-supplied
  *     parameter list rather than varargs.
- * OVMX-USERSPACE: sys$fao_count_args (vms-5b4) -- counts directives in the
+ * OVMX-USERSPACE: sys$fao_count_args (vms-f90) -- counts directives in the
  *     caller's control string. An OVMX-internal helper that took a sys$ name;
  *     the gate prints a "proto" column saying whether a header declares it.
  */

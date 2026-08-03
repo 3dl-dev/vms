@@ -18,11 +18,15 @@
  * so two processes reading and writing the same file are not serialised by
  * anything RMS does.
  *
- * OVMX-USERSPACE: sys$get (vms-5b4) -- read(2) through the caller's own fd.
- * OVMX-USERSPACE: sys$put (vms-5b4) -- write(2) through the caller's own fd.
- * OVMX-USERSPACE: sys$update (vms-5b4) -- rewrite in place through that fd.
- * OVMX-USERSPACE: sys$delete (vms-5b4) -- marks the record through that fd.
- * OVMX-USERSPACE: sys$find (vms-5b4) -- positions that fd without transferring
+ * These five cited vms-5b4 until vms-fab; it is closed and owned none of them.
+ * vms-407 owns the missing arbitration, across rms_core.c, this file and
+ * rms_search.c.
+ *
+ * OVMX-USERSPACE: sys$get (vms-407) -- read(2) through the caller's own fd.
+ * OVMX-USERSPACE: sys$put (vms-407) -- write(2) through the caller's own fd.
+ * OVMX-USERSPACE: sys$update (vms-407) -- rewrite in place through that fd.
+ * OVMX-USERSPACE: sys$delete (vms-407) -- marks the record through that fd.
+ * OVMX-USERSPACE: sys$find (vms-407) -- positions that fd without transferring
  *     a record.
  */
 

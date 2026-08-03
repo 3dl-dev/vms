@@ -16,13 +16,19 @@
  * (the console terminal), and every other channel this file hands out is a
  * private Linux fd. The register now has to say so.
  *
- * OVMX-PARTIAL: sys$assign (vms-1c57) -- exec: a channel for the executive's
+ * THEY CITED vms-1c57, WHICH IS CLOSED (vms-fab). It wired the console channel
+ * and met its outcome. vms-6aa owns the remainder these lines describe, and it
+ * covers $QIO/$QIOW in src/libvms/syssvc/sys_qio.c too, because a channel is
+ * what $QIO operates on -- fixing either half alone rebuilds the two-models
+ * divergence vms-1c57 was filed to end.
+ *
+ * OVMX-PARTIAL: sys$assign (vms-6aa) -- exec: a channel for the executive's
  *     registered console terminal comes from vms_kif_assign(), so the device
  *     table and the I/O path agree on what "the terminal" is.
  * OVMX-LOCAL: sys$assign -- every other channel is a Linux fd recorded in this
  *     process's PCB. The channel number means nothing to any other process, and
  *     nothing outside this image can see the assignment.
- * OVMX-PARTIAL: sys$dassgn (vms-1c57) -- exec: deassigning a terminal channel
+ * OVMX-PARTIAL: sys$dassgn (vms-6aa) -- exec: deassigning a terminal channel
  *     releases the executive's channel through vms_kif_dassgn().
  * OVMX-LOCAL: sys$dassgn -- for every other channel it closes a process-local fd
  *     and clears a process-local PCB slot.

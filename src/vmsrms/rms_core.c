@@ -18,25 +18,32 @@
  * so there is no cross-process record locking and no shared file access
  * arbitration behind any of them.
  *
- * OVMX-USERSPACE: sys$open (vms-5b4) -- open(2) on the translated path; the
+ * THEY CITED vms-5b4 UNTIL vms-fab -- the item that BUILT this register, closed
+ * when the register landed, owning none of the facades in it. vms-407 owns them
+ * now, together with rms_record.c and rms_search.c. Note what it is NOT: RMS
+ * running in the caller's process is what OpenVMS does too. What is missing is
+ * the arbitration the process context is supposed to CALL, and vms-ci.7 already
+ * built the lock manager it should call.
+ *
+ * OVMX-USERSPACE: sys$open (vms-407) -- open(2) on the translated path; the
  *     FAB share/access fields do not reach any arbitrator.
- * OVMX-USERSPACE: sys$create (vms-5b4) -- open(2) with O_CREAT, plus a
+ * OVMX-USERSPACE: sys$create (vms-407) -- open(2) with O_CREAT, plus a
  *     .rms_meta sidecar written by this process.
- * OVMX-USERSPACE: sys$close (vms-5b4) -- close(2) of the caller's own fd.
- * OVMX-USERSPACE: sys$erase (vms-5b4) -- unlink(2) with no interlock against
+ * OVMX-USERSPACE: sys$close (vms-407) -- close(2) of the caller's own fd.
+ * OVMX-USERSPACE: sys$erase (vms-407) -- unlink(2) with no interlock against
  *     another process holding the file open.
- * OVMX-USERSPACE: sys$connect (vms-5b4) -- initializes the stream-position
+ * OVMX-USERSPACE: sys$connect (vms-407) -- initializes the stream-position
  *     fields (_current_offset/_eof/_last_rec_offset/_last_rec_size/rab$w_isi)
  *     directly inside the caller's own RAB. Measured: it never allocates;
  *     the RAB's rab->_rms_stream pointer sys$disconnect frees is never set
  *     by this function or anywhere else in the tree.
- * OVMX-USERSPACE: sys$disconnect (vms-5b4) -- resets those same fields and
+ * OVMX-USERSPACE: sys$disconnect (vms-407) -- resets those same fields and
  *     frees rab->_rms_stream if non-NULL, which measurement shows is always
  *     NULL -- no code path in the tree ever assigns it.
- * OVMX-USERSPACE: sys$display (vms-5b4) -- reloads the .rms_meta sidecar this
+ * OVMX-USERSPACE: sys$display (vms-407) -- reloads the .rms_meta sidecar this
  *     process wrote; the attributes are file content, not executive metadata.
- * OVMX-USERSPACE: sys$rewind (vms-5b4) -- repositions the caller's own fd.
- * OVMX-USERSPACE: sys$flush (vms-5b4) -- flushes the caller's own fd.
+ * OVMX-USERSPACE: sys$rewind (vms-407) -- repositions the caller's own fd.
+ * OVMX-USERSPACE: sys$flush (vms-407) -- flushes the caller's own fd.
  */
 
 #include <stdio.h>

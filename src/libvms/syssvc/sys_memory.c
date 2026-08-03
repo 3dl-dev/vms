@@ -20,23 +20,29 @@
  * lines below -- they say so individually rather than through a count here
  * that would drift the moment one of them is fixed.
  *
- * OVMX-USERSPACE: sys$expreg (vms-5b4) -- mmap() in the calling process's
+ * ALL NINE CITED vms-5b4 UNTIL vms-fab. That is the item that BUILT this
+ * register; it closed when the register landed and owned no facade in it, so
+ * these nine were parked against finished work. vms-e0a owns them now: global
+ * sections that no two processes can name, and three working-set services that
+ * report success for work OVMX does not do.
+ *
+ * OVMX-USERSPACE: sys$expreg (vms-e0a) -- mmap() in the calling process's
  *     address space; no executive page table or process working-set list.
- * OVMX-USERSPACE: sys$cretva (vms-5b4) -- mmap() at the requested address in
+ * OVMX-USERSPACE: sys$cretva (vms-e0a) -- mmap() at the requested address in
  *     the calling process only.
- * OVMX-USERSPACE: sys$deltva (vms-5b4) -- munmap() in the calling process only.
- * OVMX-USERSPACE: sys$deltva_64 (vms-5b4) -- munmap() in the calling process
+ * OVMX-USERSPACE: sys$deltva (vms-e0a) -- munmap() in the calling process only.
+ * OVMX-USERSPACE: sys$deltva_64 (vms-e0a) -- munmap() in the calling process
  *     only; the region_id_64 argument is discarded.
- * OVMX-USERSPACE: sys$crmpsc (vms-5b4) -- MAP_SHARED mmap of an fd taken from
+ * OVMX-USERSPACE: sys$crmpsc (vms-e0a) -- MAP_SHARED mmap of an fd taken from
  *     the caller's own pcb->channels[]; the global section NAME (gsdnam) is
  *     discarded, so no two processes can name the same section.
- * OVMX-USERSPACE: sys$dgblsc (vms-5b4) -- validates gsdnam and returns
+ * OVMX-USERSPACE: sys$dgblsc (vms-e0a) -- validates gsdnam and returns
  *     SS$_NORMAL; no global section database exists to delete from.
- * OVMX-USERSPACE: sys$purgws (vms-5b4) -- validates the range and returns
+ * OVMX-USERSPACE: sys$purgws (vms-e0a) -- validates the range and returns
  *     SS$_NORMAL; nothing is purged and no working set is consulted.
- * OVMX-USERSPACE: sys$lkwset (vms-5b4) -- validates the range, echoes it back
+ * OVMX-USERSPACE: sys$lkwset (vms-e0a) -- validates the range, echoes it back
  *     in retadr and returns SS$_NORMAL; no pages are locked.
- * OVMX-USERSPACE: sys$ulwset (vms-5b4) -- the same, for unlocking.
+ * OVMX-USERSPACE: sys$ulwset (vms-e0a) -- the same, for unlocking.
  */
 
 #include <stdint.h>

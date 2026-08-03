@@ -224,14 +224,16 @@ if(BUILD_TESTS)
         LABELS "integration;authenticity" TIMEOUT 600)
 
     # ... and the evasions, run against a sandbox copy of the tree. Each must
-    # drive the census RED for its own specific reason, and two GREEN controls
-    # pin the reachability rule from the other side.
+    # drive the census RED for its own specific reason, and four GREEN controls
+    # pin the rules from the other side — including that a function reached only
+    # through a LIVE callback table still counts (vms-c13).
     add_test(NAME kif_caller_census_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
-    # TIMEOUT raised from 300 (vms-e2b): 29 controls x a gate that now
-    # configures and preprocesses. MEASURED 3m29s on workshop; 37 controls
-    # after vms-8cc added the eight citation controls.
+    # TIMEOUT raised from 300 (vms-e2b): each control runs a gate that
+    # configures cmake and preprocesses every product translation unit.
+    # MEASURED 3m29s on workshop at 29 controls; 37 after vms-8cc added the
+    # citation controls, 43 after vms-c13 added the reachability ones.
     set_tests_properties(kif_caller_census_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 1800)
 

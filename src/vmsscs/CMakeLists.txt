@@ -39,11 +39,17 @@ target_include_directories(vmsscs_start PUBLIC
 # (spec sec 4h) + seq/ack tracking + retransmit trigger. Keeps the NISCA VC
 # alive so the VAX stops logging "Excessive packet losses / Closed Virtual
 # Circuit". Depends on vmsscs_start for the scs_seq_state helpers.
+#
+# vms-4071 also puts the VIRTUAL-CIRCUIT FORMATION state machine here (the
+# CLOSED / START SENT / START RECEIVED / OPEN dialogue of VAXcluster Principles
+# pp. 2-12..2-16, with the p. 2-14 acceptable-response table, the reissue timer,
+# the OS-dependent retry limit and the p. 2-16 implied ACK). That machine's
+# state lives in the Path Block, hence the vmsscs_config dependency.
 add_library(vmsscs_vc STATIC scs_vc.c)
 target_include_directories(vmsscs_vc PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(vmsscs_vc PUBLIC vmsscs_start)
+target_link_libraries(vmsscs_vc PUBLIC vmsscs_start vmsscs_config)
 
 # vms-246 - SCS$DIRECTORY connect + SCS$DIR_LOOKUP responder: binds the
 # SCS$DIRECTORY Con.ID pair and answers the established node's SYSAP-name

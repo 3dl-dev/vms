@@ -97,6 +97,72 @@ enum scs_vc_state {
     SCS_VC_OPEN = 3
 };
 
+/*
+ * ===== vms-4071: the VC FORMATION dialogue as an explicit state machine =====
+ *
+ * The three packet classes of the formation dialogue (p. 2-12, Figure 2-7) and
+ * the acceptability table of p. 2-14. The event/action enums live HERE, next to
+ * enum scs_vc_state, because the Path Block carries the machine's state (the
+ * machine itself is scs_vc.h/scs_vc.c -- this header stays pure state).
+ *
+ * The numeric values are OVMX's own; none of them reaches the wire.
+ */
+enum scs_vc_event {
+    SCS_VC_EV_START = 0, /* START  (Start Virtual Circuit), p. 2-12 */
+    SCS_VC_EV_STACK = 1, /* STACK  (Start Acknowledgment), p. 2-12 */
+    SCS_VC_EV_ACK   = 2, /* ACK    (Acknowledgment), p. 2-12 */
+    /*
+     * Any other packet that presupposes an OPEN circuit. OVMX design choice
+     * (labeled per rule 8): p. 2-16 says the implied ACK is triggered when "the
+     * remote node performs an operation that requires the circuit to be OPEN,
+     * and this operation results in a packet being sent to the local node". The
+     * book is explicit (p. 2-40) that "the START, STACK, and ACK packets used in
+     * virtual circuit formation are examples of datagrams" -- datagrams do NOT
+     * require an open circuit -- so OVMX feeds this event ONLY for the SCS
+     * sequenced-message classes, never for HELLOs or formation packets. See
+     * scs_vc_is_circuit_packet().
+     */
+    SCS_VC_EV_OTHER = 3
+};
+
+/* What the machine tells the port driver to do next. */
+enum scs_vc_action {
+    SCS_VC_ACT_NONE = 0,
+    SCS_VC_ACT_SEND_START = 1,
+    SCS_VC_ACT_SEND_STACK = 2,
+    SCS_VC_ACT_SEND_ACK = 3,
+    SCS_VC_ACT_ABANDON = 4 /* p. 2-14: formation is abandoned */
+};
+
+/*
+ * struct scs_vc_fsm - the retry/abandon bookkeeping of p. 2-14, carried in the
+ * Path Block alongside vc_state.
+ *
+ * "whenever a port driver sends a START or a STACK to some other port driver
+ * during virtual circuit formation, it starts a timer and expects a response.
+ * If the timer expires before any response is received, or if the response it
+ * receives is 'acceptable' but does not cause the circuit to advance to the
+ * next state of formation, SCA requires the port driver to reissue the START or
+ * STACK (whichever it last sent). If an 'unacceptable' response is received,
+ * SCA requires that formation of the virtual circuit be abandoned." (p. 2-14)
+ *
+ * OVMX design choice (labeled): the timer is a caller-supplied monotonic
+ * millisecond stamp rather than a real timer object, so every transition is
+ * deterministic and unit-testable. `abandoned` is a flag rather than a new
+ * enum scs_vc_state value: an abandoned circuit is not formed, so its state IS
+ * CLOSED (p. 2-11); the flag records WHY it is closed.
+ */
+struct scs_vc_fsm {
+    enum scs_vc_action last_emitted; /* SEND_START or SEND_STACK -- what a timeout reissues */
+    int      timer_armed;
+    uint64_t timer_ms;               /* monotonic ms at which last_emitted went out */
+    unsigned retries;                /* reissues of the CURRENT START/STACK (p. 2-14) */
+    int      abandoned;              /* formation abandoned (retry limit or unacceptable resp.) */
+    /* Observability only. */
+    unsigned long reissues;          /* total reissues over this PB's life */
+    unsigned long implied_acks;      /* p. 2-16 implied ACKs honored */
+};
+
 /* Remote port type (p. 2-11). OVMX values, not a wire encoding. */
 enum scs_port_type {
     SCS_PORT_TYPE_UNKNOWN = 0,
@@ -164,6 +230,7 @@ struct scs_pb {
     int in_use;
 
     enum scs_vc_state  vc_state;          /* p. 2-11, first item */
+    struct scs_vc_fsm  fsm;               /* vms-4071: formation timer/retry/abandon, p. 2-14 */
     enum scs_port_type remote_port_type;  /* p. 2-11 */
     enum scs_port_state remote_port_state;/* pp. 2-11..2-12 */
     uint8_t remote_port_addr[SCS_PORT_ADDR_LEN]; /* p. 2-12 */

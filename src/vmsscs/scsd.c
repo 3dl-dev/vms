@@ -466,6 +466,177 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
 }
 
 /*
+ * ===== vms-4071: the VC FORMATION state machine, driven onto the NISCA wire =====
+ *
+ * The machine itself is in src/vmsscs/scs_vc.c (CLOSED / START SENT / START
+ * RECEIVED / OPEN, the p. 2-14 acceptable-response table, the reissue timer,
+ * the OS-dependent retry limit, the p. 2-16 implied ACK). What lives HERE is
+ * only the translation between the machine's abstract packet classes and the
+ * concrete 0x41 config-round frames the existing vms-21e builders emit:
+ *
+ *     SCS_VC_ACT_SEND_START -> scs_start_build,     config-round 0 (106 bytes)
+ *     SCS_VC_ACT_SEND_STACK -> scs_start_build,     config-round 1 (106 bytes)
+ *     SCS_VC_ACT_SEND_ACK   -> scs_start_build_ack, config-round 2 ( 46 bytes)
+ *
+ * No frame layout is re-derived: these are the same two builders, called with
+ * the same parameters, that shipped before this item. On a clean fresh join the
+ * bytes and their order are unchanged -- OVMX still emits round-0 then round-1
+ * back to back on the peer's round-0 START, then its round-2 ack.
+ *
+ * WHAT DID CHANGE ON THE WIRE (declared, and gated by OVMX_VC_NO_RETRY_LIMIT):
+ *   1. The round-2 ack is now emitted on the OPEN transition, which the peer's
+ *      round-1 STACK causes (p. 2-14: "A response of either ACK or STACK will
+ *      advance the circuit to the OPEN state; and if the response is STACK, the
+ *      port driver will issue an ACK"). Previously it waited for the peer's own
+ *      round-2 frame. Same frame, same bytes, one peer-frame earlier -- and it
+ *      no longer stalls forever if the peer's round-2 is lost.
+ *   2. A START/STACK that goes unanswered for SCS_VC_FORMATION_TIMEOUT_MS is
+ *      reissued (p. 2-14), up to scs_vc_retry_limit() times, after which
+ *      formation is ABANDONED. Both are new; neither fires on a clean join.
+ */
+struct scsd_vc_ctx {
+    int             sock;
+    int             ifindex;
+    const uint8_t  *hw_mac;      /* OVMX HW MAC (Ethernet src) */
+    const uint8_t  *src_logical; /* OVMX cluster-logical addr (SCA abs 24) */
+    uint16_t        scssystemid;
+    const char     *node_name;
+    struct scs_config *cfg;
+};
+
+/*
+ * scsd_vc_emit - transmit the formation packet the state machine asked for.
+ * Returns 1 if a frame went out, 0 otherwise. `act` must be one of the three
+ * SEND_* actions; anything else is a no-op.
+ */
+static int scsd_vc_emit(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
+                        enum scs_vc_action act)
+{
+    if (ctx == NULL || ps == NULL || ps->pb == NULL) {
+        return 0;
+    }
+    struct scs_start_params sp;
+    memset(&sp, 0, sizeof(sp));
+    memcpy(sp.dst_mac, ps_port_addr(ps), 6);
+    memcpy(sp.src_mac, ctx->hw_mac, 6);
+    memcpy(sp.src_logical, ctx->src_logical, 6);
+    memcpy(sp.peer_logical, ps_sys_addr(ps), 6);
+    sp.scssystemid = ctx->scssystemid;
+    strncpy(sp.node_name, ctx->node_name, SCS_START_NODENAME_LEN);
+    sp.node_name[SCS_START_NODENAME_LEN] = '\0';
+    /* GROUNDED joiner values, unchanged from vms-21e: every joiner 0x41 frame
+     * carries send_seq=1 / recv_ack=0 (spec sec 4i.A) and echoes the member's
+     * advertised node-incarnation at [22:24] (spec sec 4i.B). */
+    sp.send_seq = ps->vc.seq.send_seq;
+    sp.recv_ack = 0;
+    sp.incarnation = ps->incarnation ? ps->incarnation : 1;
+
+    if (act == SCS_VC_ACT_SEND_ACK) {
+        uint8_t aframe[SCS_START_ACK_FRAME_LEN];
+        if (scs_start_build_ack(&sp, aframe) != 0) {
+            return 0;
+        }
+        return send_frame_to(ctx->sock, ctx->ifindex, ps_port_addr(ps),
+                             aframe, sizeof(aframe)) > 0 ? 1 : 0;
+    }
+    if (act == SCS_VC_ACT_SEND_START || act == SCS_VC_ACT_SEND_STACK) {
+        sp.config_round = (act == SCS_VC_ACT_SEND_START) ? 0 : 1;
+        uint8_t sframe[SCS_START_FRAME_LEN];
+        if (scs_start_build(&sp, sframe) != 0) {
+            return 0;
+        }
+        return send_frame_to(ctx->sock, ctx->ifindex, ps_port_addr(ps),
+                             sframe, sizeof(sframe)) > 0 ? 1 : 0;
+    }
+    return 0;
+}
+
+/*
+ * scsd_vc_on_open - the p. 2-21 open transition, run ONCE per circuit whenever
+ * the state machine reaches OPEN (by STACK, by a bare ACK, or by the p. 2-16
+ * implied ACK). Body unchanged from vms-21e/vms-246/vms-7be; only its trigger
+ * moved from "the peer sent its round-2 ack" to "the circuit reached OPEN".
+ *
+ * REACHABILITY, restated so a green test run is not misread: SCS_OPEN_NEW_SB is
+ * still the only transition SCSD reaches. scs_pb_close() still has no caller
+ * here and peer slots are still never released, so the p. 2-21 rejoin REFRESH
+ * rule remains unimplemented in the daemon (vms-17f). vms-4071 changed the VC
+ * FORMATION machine, not the Path-Block lifecycle.
+ */
+static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps)
+{
+    /* vms-246: the phase-2 config-round counters are SEPARATE from the SCS VC;
+     * both sides reset the VC to send_seq=1/recv_seq=0 when START completes. */
+    scs_vc_reset_seq(&ps->vc);
+    enum scs_open_result open_res = scs_pb_open(ctx->cfg, ps->pb);
+    log_ts(stdout);
+    printf(" SCSD-I-STARTDONE, START/config complete with peer"
+           " %02x:%02x:%02x:%02x:%02x:%02x -- VC reset"
+           " (send_seq=%u recv_seq=%u), awaiting 0x4b connect\n",
+           ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+           ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+           ps->vc.seq.send_seq, ps->vc.seq.recv_seq);
+    printf(" SCSD-I-VCOPEN, path block OPEN, %s"
+           " (configuration queue holds %u system blocks,"
+           " %u path block(s) on this node's SB)\n",
+           open_res == SCS_OPEN_NEW_SB ? "node learned for the first time"
+           : open_res == SCS_OPEN_EXISTING_REFRESHED
+               ? "old system block REFRESHED (rejoin, p. 2-21 Note)"
+                 " -- UNEXPECTED: believed unreachable until vms-17f"
+               : "queued to the existing system block"
+                 " -- UNEXPECTED: believed unreachable until vms-17f",
+           scs_config_sb_count(ctx->cfg),
+           scs_sb_pb_count(ps->pb->sb));
+    fflush(stdout);
+}
+
+/*
+ * scsd_vc_settle - after any state-machine step, do the two things that are
+ * NISCA-specific rather than SCA-abstract:
+ *
+ *  - If the circuit is now OPEN and OVMX has not yet put its round-2 ack out,
+ *    emit it. The p. 2-14 table only mandates an ACK when the OPEN transition
+ *    was caused by a STACK, but the NISCA dialogue requires BOTH nodes to carry
+ *    every round (spec sec 4g phase 2: the config-round walks 0/0/1/1/2/2,
+ *    "both nodes carry the same round"), so a circuit that opened on a bare ACK
+ *    or an implied ACK still owes the peer its round-2 frame. Labeled as an
+ *    OVMX design choice: it is the NISCA encoding's requirement, not SCA's.
+ *  - If formation was ABANDONED, re-arm the Path Block's formation machine so a
+ *    later START from the same peer can start the dialogue over. p. 2-14 says
+ *    only that formation is abandoned, not what happens next; OVMX cannot tear
+ *    the Path Block down here because the peer-slot/PB lifecycle is vms-17f, so
+ *    it resets the machine in place and says so in the log.
+ */
+static void scsd_vc_settle(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
+                           enum scs_vc_action act, long *start_ack_sent)
+{
+    if (ps->pb == NULL) {
+        return;
+    }
+    if (act == SCS_VC_ACT_ABANDON) {
+        log_ts(stderr);
+        fprintf(stderr,
+                " SCSD-W-VCABANDON, virtual-circuit formation ABANDONED with peer"
+                " %02x:%02x:%02x:%02x:%02x:%02x after %lu reissue(s) (p. 2-14)"
+                " -- path block re-armed to CLOSED for a fresh dialogue\n",
+                ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                ps->pb->fsm.reissues);
+        fflush(stderr);
+        scs_vc_fsm_init(ps->pb);
+        ps->start_replied = 0;
+        return;
+    }
+    if (ps->pb->vc_state == SCS_VC_OPEN && !ps->start_acked) {
+        if (scsd_vc_emit(ctx, ps, SCS_VC_ACT_SEND_ACK)) {
+            (*start_ack_sent)++;
+            ps->start_acked = 1;
+            scsd_vc_on_open(ctx, ps);
+        }
+    }
+}
+
+/*
  * cm_send_config_burst - vms-224: drive OVMX's connection-manager add-member
  * config burst on the bound 190-byte VMS$VAXcluster VC (spec sec 4j): op 0x14
  * (node model advertisement), op 0x01 (cluster parameters, VOTES=0 non-voting),
@@ -803,6 +974,18 @@ int main(int argc, char **argv)
     static uint8_t pframe[SCS_HELLO_PADDED_MAX_FRAME];
     struct timespec last_hello = {0, 0};
 
+    /* vms-4071: everything the VC formation state machine needs to put its
+     * actions on the wire. Pointers, so the HW MAC resolved in the emit_hello
+     * block above stays live. */
+    struct scsd_vc_ctx vc_ctx;
+    vc_ctx.sock = sock;
+    vc_ctx.ifindex = (int)ifindex;
+    vc_ctx.hw_mac = our_hw_mac;
+    vc_ctx.src_logical = our_src_logical;
+    vc_ctx.scssystemid = ovmx_scssystemid;
+    vc_ctx.node_name = ovmx_node;
+    vc_ctx.cfg = &scs_cfg;
+
     while (!g_stop) {
         if (emit_hello) {
             struct timespec now;
@@ -824,6 +1007,44 @@ int main(int argc, char **argv)
                     }
                 }
                 last_hello = now;
+            }
+        }
+
+        /* --- vms-4071: the p. 2-14 formation reissue timer. "whenever a port
+         * driver sends a START or a STACK ... it starts a timer and expects a
+         * response. If the timer expires before any response is received ...
+         * SCA requires the port driver to reissue the START or STACK (whichever
+         * it last sent)", bounded by an "operating system dependent retry
+         * limit" after which "formation of the virtual circuit is to be
+         * abandoned". THIS IS NEW ON THE WIRE and fires only under loss; the
+         * OVMX_VC_NO_RETRY_LIMIT=1 kill-switch restores unbounded retry. */
+        if (do_connect) {
+            uint64_t now_ms = monotonic_ms();
+            unsigned retry_limit = scs_vc_retry_limit();
+            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+                struct peer_state *ps = &peers[i];
+                if (ps->pb == NULL) {
+                    continue;
+                }
+                if (!scs_vc_fsm_timer_expired(ps->pb, now_ms, SCS_VC_FORMATION_TIMEOUT_MS)) {
+                    continue;
+                }
+                enum scs_vc_action act = scs_vc_fsm_timeout(ps->pb, now_ms, retry_limit);
+                if (act == SCS_VC_ACT_SEND_START || act == SCS_VC_ACT_SEND_STACK) {
+                    if (scsd_vc_emit(&vc_ctx, ps, act)) {
+                        start_sent++;
+                        ps->start_replies++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-VCREISSUE, formation timer expired -- %s to peer"
+                               " %02x:%02x:%02x:%02x:%02x:%02x (attempt %u, VC %s)\n",
+                               scs_vc_action_name(act),
+                               ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                               ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                               ps->pb->fsm.retries, scs_vc_state_name(ps->pb->vc_state));
+                        fflush(stdout);
+                    }
+                }
+                scsd_vc_settle(&vc_ctx, ps, act, &start_ack_sent);
             }
         }
 
@@ -921,6 +1142,34 @@ int main(int argc, char **argv)
             continue;
         }
         const uint8_t *src_mac = buf + OFF_ETH_SRC;
+
+        /* --- vms-4071: THE IMPLIED ACK (p. 2-16). "what if, in the meantime,
+         * the remote node performs an operation that requires the circuit to be
+         * OPEN, and this operation results in a packet being sent to the local
+         * node? In this case, SCA states that the local node will treat that
+         * packet as an 'implied ACK' and simply mark the circuit as being
+         * OPEN." Only the SCS sequenced-message classes qualify -- 0x41 and the
+         * HELLO are datagrams (p. 2-40) and precede the circuit, so feeding
+         * them here would open circuits that are still forming. Dormant on a
+         * clean join: the member does not send circuit traffic before the
+         * dialogue finishes. */
+        if (do_connect && n >= 32 && scs_vc_is_circuit_packet(buf[30])) {
+            struct scs_pb *ipb = scs_config_find_pb(&scs_cfg, &scs_pdt, src_mac);
+            if (ipb != NULL && ipb->vc_state == SCS_VC_START_RECEIVED) {
+                struct peer_state *ips = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
+                enum scs_vc_action iact =
+                    scs_vc_fsm_recv(ipb, SCS_VC_EV_OTHER, monotonic_ms());
+                log_ts(stdout);
+                printf(" SCSD-I-VCIMPACK, implied ACK from peer"
+                       " %02x:%02x:%02x:%02x:%02x:%02x (opcode 0x%02x) -- VC %s\n",
+                       src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
+                       buf[30], scs_vc_state_name(ipb->vc_state));
+                fflush(stdout);
+                if (ips != NULL && ips->pb == ipb) {
+                    scsd_vc_settle(&vc_ctx, ips, iact, &start_ack_sent);
+                }
+            }
+        }
 
         /* --- vms-691: VC engine -- credit-ack every sequenced message the peer
          * sends us. Each 0x5b directory / 0x4b connect / 190-byte VC message
@@ -1305,134 +1554,59 @@ int main(int argc, char **argv)
                    sv.is_ack ? 0 : sv.scssystemid);
             fflush(stdout);
 
-            struct scs_start_params sp;
-            memset(&sp, 0, sizeof(sp));
-            memcpy(sp.dst_mac, ps_port_addr(ps), 6);
-            memcpy(sp.src_mac, our_hw_mac, 6);
-            memcpy(sp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-            memcpy(sp.peer_logical, ps_sys_addr(ps), 6);
-            sp.scssystemid = ovmx_scssystemid;
-            strncpy(sp.node_name, ovmx_node, SCS_START_NODENAME_LEN);
-            sp.node_name[SCS_START_NODENAME_LEN] = '\0';
-            /* START is sequenced-message #1 for a fresh VC: send_seq=1 (from the
-             * state machine), leading counter recv_ack=0 -- GROUNDED joiner
-             * values (spec sec 4i.A: "Every joiner 0x41 frame carries
-             * send_seq=1, recv_ack=0"). Do NOT ack the member's send_seq here:
-             * the member's round-0 START may carry a large residual send_seq
-             * (its prior VC's continuation, e.g. 11974) which the joiner is
-             * receive-tolerant of but never echoes -- the handshake is driven
-             * by the config-round + incarnation echo, not by recv_ack. */
-            sp.send_seq = ps->vc.seq.send_seq;
-            sp.recv_ack = 0;
-            /* THE ESTABLISHED-JOIN GATE (spec sec 4i.B): stamp [22:24] with the
-             * node-incarnation the member advertised in its directed-HELLO
-             * [78:80]. Read off the wire above; 1 for a fresh contact. */
-            sp.incarnation = ps->incarnation ? ps->incarnation : 1;
+            /* ===== vms-4071: drive the VC FORMATION state machine =====
+             *
+             * This replaces the pair of unconditional scs_pb_set_vc_state()
+             * writes that used to stand in for the dialogue. Every transition
+             * now comes from scs_vc_fsm_recv()'s implementation of the p. 2-14
+             * acceptable-response table, and OVMX's emissions are whatever
+             * action the machine returns. See the scsd_vc_* helpers above for
+             * the config-round <-> START/STACK/ACK mapping and for the two
+             * declared wire-visible differences. */
+            uint64_t vc_now_ms = monotonic_ms();
+            enum scs_vc_event vc_ev = scs_vc_classify_round(sv.is_ack, sv.config_round);
 
-            if (!sv.is_ack) {
-                if (!ps->start_replied) {
-                    /* Send our round-0 then round-1 START (the joiner emits both
-                     * back-to-back; spec sec 4g phase-2 ordering #24/#25). */
-                    for (uint16_t rnd = 0; rnd <= 1; rnd++) {
-                        sp.config_round = rnd;
-                        uint8_t sframe[SCS_START_FRAME_LEN];
-                        if (scs_start_build(&sp, sframe) == 0 &&
-                            send_frame_to(sock, (int)ifindex, ps_port_addr(ps), sframe, sizeof(sframe)) > 0) {
-                            start_sent++;
-                            ps->start_replies++;
-                        }
-                    }
+            /* CLOSED -> START SENT. Trigger deliberately unchanged from vms-21e:
+             * OVMX issues its own START only when a peer identity-bearing frame
+             * arrives, never off a bare 46-byte ack (an ACK in START SENT is an
+             * unacceptable response and would abandon the circuit at once). */
+            if (vc_ev != SCS_VC_EV_ACK && ps->pb->vc_state == SCS_VC_CLOSED &&
+                !ps->pb->fsm.abandoned) {
+                if (scs_vc_fsm_send_start(ps->pb, vc_now_ms) == SCS_VC_ACT_SEND_START &&
+                    scsd_vc_emit(&vc_ctx, ps, SCS_VC_ACT_SEND_START)) {
+                    start_sent++;
+                    ps->start_replies++;
                     ps->start_replied = 1;
-                    /* vms-7be: drive the PB's virtual-circuit state machine
-                     * (pp. 2-12..2-14). We have now SENT a START (-> START SENT)
-                     * and RECEIVED one, whose description of the node we stored
-                     * in the System Block above (-> START RECEIVED, the state a
-                     * port driver holds while it waits for the acknowledgment
-                     * that opens the circuit). Bookkeeping only: no byte of any
-                     * frame depends on it. */
-                    scs_pb_set_vc_state(ps->pb, SCS_VC_START_SENT);
-                    scs_pb_set_vc_state(ps->pb, SCS_VC_START_RECEIVED);
                     log_ts(stdout);
-                    printf(" SCSD-I-STARTTX, sent round-0+round-1 START"
-                           " (sysid=%u node='%s' send_seq=%u recv_ack=%u incarnation=%u)\n",
-                           ovmx_scssystemid, ovmx_node, sp.send_seq, sp.recv_ack, sp.incarnation);
+                    printf(" SCSD-I-STARTTX, sent round-0 START (VC %s)"
+                           " (sysid=%u node='%s' send_seq=%u recv_ack=0 incarnation=%u)\n",
+                           scs_vc_state_name(ps->pb->vc_state), ovmx_scssystemid, ovmx_node,
+                           ps->vc.seq.send_seq, ps->incarnation ? ps->incarnation : 1);
                     fflush(stdout);
                 }
-            } else {
-                /* Peer's round-2 46-byte ack -> answer with ours; START done. */
-                if (!ps->start_acked) {
-                    uint8_t aframe[SCS_START_ACK_FRAME_LEN];
-                    if (scs_start_build_ack(&sp, aframe) == 0 &&
-                        send_frame_to(sock, (int)ifindex, ps_port_addr(ps), aframe, sizeof(aframe)) > 0) {
-                        start_ack_sent++;
-                        ps->start_acked = 1;
-                        /* vms-246 FIX: the START->VC transition. Per spec sec
-                         * 4i.A the phase-2 0x41 config-round counters are
-                         * SEPARATE from the SCS VC; both sides reset the VC to
-                         * send_seq=1/recv_seq=0 when START completes. Do it
-                         * ONCE here (guarded by !start_acked) -- NOT per frame.
-                         * Without it, recv_seq accumulated across formation, so
-                         * OVMX's 0x5b CONNECT-RESPONSE carried recv_ack too high
-                         * (observed 4 vs the golden joiner's 1) and the VAX
-                         * rejected the SCS$DIRECTORY connect and retransmitted. */
-                        scs_vc_reset_seq(&ps->vc);
-                        /* vms-7be: the circuit is OPEN -- run the p. 2-21
-                         * transition. The formative Path Block leaves the PDT
-                         * and joins the System Block for this node.
-                         *
-                         * ===== WHAT IS ACTUALLY LIVE HERE (read this before
-                         * believing a green scs test run) =====
-                         * SCS_OPEN_NEW_SB is the only transition SCSD reaches
-                         * today. Specifically:
-                         *
-                         *  - SCS_OPEN_EXISTING_REFRESHED -- the p. 2-21 rejoin
-                         *    REFRESH rule -- is STRUCTURALLY UNREACHABLE here.
-                         *    It needs an SB whose PB queue has emptied, and
-                         *    scs_pb_close() has no caller in this file; peer
-                         *    slots are never released (peer_find_or_add matches
-                         *    on MAC and only ever allocates); and this call is
-                         *    gated on !ps->start_acked, which is never reset, so
-                         *    a rejoining node re-enters the SAME slot on the
-                         *    SAME already-open PB and never gets here at all.
-                         *    OVMX therefore does NOT implement the rejoin
-                         *    refresh rule. tests/vmsscs/test_scs_config.c proves
-                         *    the RULE; nothing proves the DAEMON does it.
-                         *
-                         *  - SCS_OPEN_EXISTING_SB needs a second circuit to a
-                         *    node already in the configuration queue, i.e. a
-                         *    peer presenting TWO Ethernet ports (two MACs, one
-                         *    SCS System ID). The reference lab has never
-                         *    presented one, so this is unexercised rather than
-                         *    impossible; test_scsd_wire.c pins what it does to
-                         *    the peer-logical bytes if it ever fires.
-                         *
-                         * Wiring close/reopen is WIRE-VISIBLE and therefore out
-                         * of scope for this pure-refactor item: it is filed as
-                         * vms-17f (blocked by vms-7be). The log below says so
-                         * out loud if either branch ever fires. */
-                        enum scs_open_result open_res = scs_pb_open(&scs_cfg, ps->pb);
-                        log_ts(stdout);
-                        printf(" SCSD-I-STARTDONE, START/config complete with peer"
-                               " %02x:%02x:%02x:%02x:%02x:%02x -- VC reset"
-                               " (send_seq=%u recv_seq=%u), awaiting 0x4b connect\n",
-                               ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
-                               ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
-                               ps->vc.seq.send_seq, ps->vc.seq.recv_seq);
-                        printf(" SCSD-I-VCOPEN, path block OPEN, %s"
-                               " (configuration queue holds %u system blocks,"
-                               " %u path block(s) on this node's SB)\n",
-                               open_res == SCS_OPEN_NEW_SB ? "node learned for the first time"
-                               : open_res == SCS_OPEN_EXISTING_REFRESHED
-                                   ? "old system block REFRESHED (rejoin, p. 2-21 Note)"
-                                     " -- UNEXPECTED: believed unreachable until vms-17f"
-                                   : "queued to the existing system block"
-                                     " -- UNEXPECTED: believed unreachable until vms-17f",
-                               scs_config_sb_count(&scs_cfg),
-                               scs_sb_pb_count(ps->pb->sb));
-                        fflush(stdout);
-                    }
+            }
+
+            enum scs_vc_action vc_act = scs_vc_fsm_recv(ps->pb, vc_ev, vc_now_ms);
+            log_ts(stdout);
+            printf(" SCSD-I-VCFSM, %s received -> %s, VC %s\n",
+                   scs_vc_event_name(vc_ev), scs_vc_action_name(vc_act),
+                   scs_vc_state_name(ps->pb->vc_state));
+            fflush(stdout);
+
+            if (vc_act == SCS_VC_ACT_SEND_STACK) {
+                if (scsd_vc_emit(&vc_ctx, ps, SCS_VC_ACT_SEND_STACK)) {
+                    start_sent++;
+                    ps->start_replies++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-STARTTX, sent round-1 STACK (VC %s)\n",
+                           scs_vc_state_name(ps->pb->vc_state));
+                    fflush(stdout);
                 }
             }
+            /* SEND_ACK and the bare-ACK/implied-ACK opens are all handled by
+             * scsd_vc_settle(), which emits OVMX's round-2 frame exactly once
+             * per circuit and then runs the p. 2-21 open transition. */
+            scsd_vc_settle(&vc_ctx, ps, vc_act, &start_ack_sent);
             continue;
         }
 

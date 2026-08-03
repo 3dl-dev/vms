@@ -497,6 +497,313 @@ static void test_rejoin_is_inert_in_the_daemon(void)
      * implemented and tested in scs_config.c, but OVMX does not run it. */
 }
 
+/*
+ * =====================================================================
+ * vms-4071 -- the DAEMON's use of the VC formation state machine.
+ *
+ * test_scs_vc.c proves the machine. This proves scsd.c's translation of the
+ * machine's actions into 0x41 frames, through the SAME transmit seam and the
+ * SAME builders the daemon uses -- i.e. the bytes asserted here are the bytes
+ * scsd.c would have handed to sendto().
+ * =====================================================================
+ */
+
+static uint16_t le16_at(const uint8_t *p)
+{
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+/* The daemon-side context, built the way main() builds it. */
+static struct scsd_vc_ctx vc_test_ctx(struct world *w)
+{
+    struct scsd_vc_ctx ctx;
+    ctx.sock = 7; /* never touched under the seam */
+    ctx.ifindex = 1;
+    ctx.hw_mac = our_hw_mac;
+    ctx.src_logical = our_logical;
+    ctx.scssystemid = 1030;
+    ctx.node_name = "OVMX";
+    ctx.cfg = &w->cfg;
+    return ctx;
+}
+
+/*
+ * Each SEND_* action must produce the frame class the NISCA mapping claims:
+ * START -> 106-byte config-round 0, STACK -> 106-byte config-round 1,
+ * ACK -> the 46-byte round-2 frame. Offsets are absolute (payload + 14).
+ */
+static void test_vc_actions_emit_the_right_config_rounds(void)
+{
+    struct world w;
+    world_init(&w);
+    uint8_t peer_mac[6];
+    mac_of(0x71, peer_mac);
+    uint8_t sysid[6];
+    sysid_of(1025, sysid);
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer_mac);
+    CHECK(ps != NULL, "no peer slot for the VC action test");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    scs_vc_init(&ps->vc);
+    struct scsd_vc_ctx ctx = vc_test_ctx(&w);
+
+    scsd_test_frames = 0;
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START) == 1, "SEND_START emitted nothing");
+    CHECK(scsd_test_last_len == SCS_START_FRAME_LEN,
+          "SEND_START frame is %zu bytes, expected the 120-byte START class",
+          scsd_test_last_len);
+    CHECK(scsd_test_last_frame[30] == SCS_START_OPCODE, "SEND_START opcode is not 0x41");
+    CHECK(le16_at(scsd_test_last_frame + 14 + 44) == 0,
+          "SEND_START carries config-round %u, expected 0",
+          le16_at(scsd_test_last_frame + 14 + 44));
+    CHECK(memcmp(scsd_test_last_dst, peer_mac, 6) == 0, "SEND_START went to the wrong MAC");
+    uint8_t start_frame[SCS_START_FRAME_LEN];
+    memcpy(start_frame, scsd_test_last_frame, SCS_START_FRAME_LEN);
+
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_STACK) == 1, "SEND_STACK emitted nothing");
+    CHECK(scsd_test_last_len == SCS_START_FRAME_LEN,
+          "SEND_STACK is not the 106-byte identity-bearing class -- p. 2-12 says a"
+          " STACK re-supplies the node description");
+    CHECK(le16_at(scsd_test_last_frame + 14 + 44) == 1,
+          "SEND_STACK carries config-round %u, expected 1",
+          le16_at(scsd_test_last_frame + 14 + 44));
+    /* The STACK differs from the START in the config-round field and nothing
+     * else: it really is the same identity body sent again. */
+    size_t first = 0, last = 0;
+    unsigned ndiff = diff_positions(start_frame, scsd_test_last_frame,
+                                    SCS_START_FRAME_LEN, &first, &last);
+    CHECK(ndiff == 1 && first == 14 + 44,
+          "START vs STACK differ in %u byte(s) starting at %zu; expected exactly the"
+          " config-round field at %d", ndiff, first, 14 + 44);
+
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_ACK) == 1, "SEND_ACK emitted nothing");
+    CHECK(scsd_test_last_len == SCS_START_ACK_FRAME_LEN,
+          "SEND_ACK is not the 46-byte no-identity ACK class");
+    CHECK(le16_at(scsd_test_last_frame + 14 + 44) == SCS_START_ACK_ROUND,
+          "SEND_ACK carries config-round %u, expected 2",
+          le16_at(scsd_test_last_frame + 14 + 44));
+
+    /* Non-emitting actions must put nothing on the wire. */
+    unsigned before = scsd_test_frames;
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_NONE) == 0, "ACT_NONE emitted a frame");
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_ABANDON) == 0, "ACT_ABANDON emitted a frame");
+    CHECK(scsd_test_frames == before, "a non-emitting action reached the transmit path");
+}
+
+/*
+ * The happy-path dialogue, end to end through the daemon helpers: OVMX emits
+ * round-0 START, round-1 STACK, round-2 ACK -- three frames, in that order,
+ * exactly as before vms-4071 -- and the Path Block ends OPEN.
+ */
+static void test_vc_happy_path_frame_sequence(void)
+{
+    struct world w;
+    world_init(&w);
+    uint8_t peer_mac[6];
+    mac_of(0x72, peer_mac);
+    uint8_t sysid[6];
+    sysid_of(1025, sysid);
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer_mac);
+    CHECK(ps != NULL, "no peer slot for the happy-path test");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    scs_vc_init(&ps->vc);
+    struct scsd_vc_ctx ctx = vc_test_ctx(&w);
+    long acks = 0;
+    scsd_test_frames = 0;
+
+    /* CLOSED -> START SENT, round-0 START out. */
+    CHECK(scs_vc_fsm_send_start(ps->pb, 0) == SCS_VC_ACT_SEND_START, "no START action");
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START) == 1, "round-0 START not sent");
+    CHECK(le16_at(scsd_test_last_frame + 14 + 44) == 0, "first frame is not round 0");
+
+    /* Peer round-0 START -> round-1 STACK out, START RECEIVED. */
+    enum scs_vc_action act = scs_vc_fsm_recv(ps->pb, scs_vc_classify_round(0, 0), 10);
+    CHECK(act == SCS_VC_ACT_SEND_STACK, "peer round-0 did not produce a STACK");
+    CHECK(scsd_vc_emit(&ctx, ps, act) == 1, "round-1 STACK not sent");
+    CHECK(le16_at(scsd_test_last_frame + 14 + 44) == 1, "second frame is not round 1");
+    CHECK(ps->pb->vc_state == SCS_VC_START_RECEIVED, "VC is not START RECEIVED");
+    scsd_vc_settle(&ctx, ps, act, &acks);
+    CHECK(acks == 0, "the round-2 ack went out before the circuit was OPEN");
+
+    /* Peer round-1 STACK -> OPEN, round-2 ACK out exactly once. */
+    act = scs_vc_fsm_recv(ps->pb, scs_vc_classify_round(0, 1), 20);
+    CHECK(act == SCS_VC_ACT_SEND_ACK, "peer round-1 did not produce an ACK");
+    scsd_vc_settle(&ctx, ps, act, &acks);
+    CHECK(acks == 1, "the round-2 ack was not sent on the OPEN transition");
+    CHECK(scsd_test_last_len == SCS_START_ACK_FRAME_LEN, "third frame is not the 46-byte ack");
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN, "VC is not OPEN");
+    CHECK(ps->start_acked == 1, "start_acked was not latched");
+    CHECK(scsd_test_frames == 3, "the dialogue emitted %u frames, expected exactly 3",
+          scsd_test_frames);
+
+    /* The p. 2-21 open transition ran, and it is still the only one SCSD reaches. */
+    CHECK(scs_config_sb_count(&w.cfg) == 1, "the peer's System Block was not queued");
+    CHECK(scs_sb_pb_count(ps->pb->sb) == 1, "the Path Block did not join its System Block");
+    CHECK(scs_pdt_formative_count(&w.pdt) == 0, "the Path Block is still formative");
+    CHECK(ps->vc.seq.send_seq == 1 && ps->vc.seq.recv_seq == 0,
+          "the SCS VC was not reset at START completion (vms-246)");
+
+    /* The peer's own round-2 ack arrives afterwards and must add no frame. */
+    unsigned before = scsd_test_frames;
+    act = scs_vc_fsm_recv(ps->pb, scs_vc_classify_round(1, 2), 30);
+    scsd_vc_settle(&ctx, ps, act, &acks);
+    CHECK(scsd_test_frames == before && acks == 1,
+          "the peer's trailing round-2 ack produced a duplicate OVMX ack");
+}
+
+/*
+ * If the peer's round-1 STACK is lost and only its round-2 ack arrives, the SCA
+ * table opens the circuit with NO emission (p. 2-14) -- but the NISCA dialogue
+ * still owes the peer OVMX's round-2 frame, so scsd_vc_settle must send it.
+ * This is the path that was the ONLY path before vms-4071.
+ */
+static void test_vc_open_on_bare_ack_still_sends_round_2(void)
+{
+    struct world w;
+    world_init(&w);
+    uint8_t peer_mac[6];
+    mac_of(0x73, peer_mac);
+    uint8_t sysid[6];
+    sysid_of(1025, sysid);
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer_mac);
+    if (ps == NULL) {
+        CHECK(0, "no peer slot for the bare-ack test");
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    scs_vc_init(&ps->vc);
+    struct scsd_vc_ctx ctx = vc_test_ctx(&w);
+    long acks = 0;
+
+    scs_vc_fsm_send_start(ps->pb, 0);
+    scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START);
+    enum scs_vc_action act = scs_vc_fsm_recv(ps->pb, SCS_VC_EV_START, 10);
+    scsd_vc_emit(&ctx, ps, act);
+    scsd_vc_settle(&ctx, ps, act, &acks);
+
+    scsd_test_frames = 0;
+    act = scs_vc_fsm_recv(ps->pb, SCS_VC_EV_ACK, 20);
+    CHECK(act == SCS_VC_ACT_NONE, "SCA says a bare ACK opens the circuit silently");
+    scsd_vc_settle(&ctx, ps, act, &acks);
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN, "the bare ACK did not open the circuit");
+    CHECK(acks == 1 && scsd_test_frames == 1,
+          "OVMX did not emit its round-2 ack after opening on a bare ACK");
+    CHECK(scsd_test_last_len == SCS_START_ACK_FRAME_LEN, "the emitted frame is not the ack");
+}
+
+/*
+ * The p. 2-16 implied ACK, through the daemon: a circuit packet from a peer in
+ * START RECEIVED opens the circuit and settles it. Also pins WHICH opcodes
+ * qualify -- feeding 0x41 or a HELLO here would open circuits mid-dialogue.
+ */
+static void test_vc_implied_ack_through_the_daemon(void)
+{
+    struct world w;
+    world_init(&w);
+    uint8_t peer_mac[6];
+    mac_of(0x74, peer_mac);
+    uint8_t sysid[6];
+    sysid_of(1025, sysid);
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer_mac);
+    if (ps == NULL) {
+        CHECK(0, "no peer slot for the implied-ACK test");
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    scs_vc_init(&ps->vc);
+    struct scsd_vc_ctx ctx = vc_test_ctx(&w);
+    long acks = 0;
+
+    scs_vc_fsm_send_start(ps->pb, 0);
+    scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START);
+    enum scs_vc_action act = scs_vc_fsm_recv(ps->pb, SCS_VC_EV_START, 10);
+    scsd_vc_emit(&ctx, ps, act);
+    scsd_vc_settle(&ctx, ps, act, &acks);
+    CHECK(ps->pb->vc_state == SCS_VC_START_RECEIVED, "precondition: START RECEIVED");
+
+    /* The daemon's own lookup must find this PB by the peer's port address. */
+    CHECK(scs_config_find_pb(&w.cfg, &w.pdt, peer_mac) == ps->pb,
+          "the daemon cannot find the Path Block the implied-ACK hook needs");
+
+    scsd_test_frames = 0;
+    act = scs_vc_fsm_recv(ps->pb, SCS_VC_EV_OTHER, 20);
+    scsd_vc_settle(&ctx, ps, act, &acks);
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN, "the implied ACK did not open the circuit");
+    CHECK(ps->pb->fsm.implied_acks == 1, "the implied ACK was not counted");
+    CHECK(acks == 1 && scsd_test_frames == 1,
+          "OVMX did not emit its round-2 ack after the implied ACK");
+    CHECK(scs_vc_is_circuit_packet(SCS_START_OPCODE) == 0,
+          "0x41 must NOT be treated as a circuit packet -- it would open forming circuits");
+}
+
+/*
+ * The reissue/abandon path through the daemon: an unanswered START is reissued
+ * on the wire, and when the retry limit is hit scsd_vc_settle re-arms the Path
+ * Block instead of leaving the peer permanently unreachable.
+ */
+static void test_vc_reissue_and_abandon_through_the_daemon(void)
+{
+    struct world w;
+    world_init(&w);
+    uint8_t peer_mac[6];
+    mac_of(0x75, peer_mac);
+    uint8_t sysid[6];
+    sysid_of(1025, sysid);
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer_mac);
+    if (ps == NULL) {
+        CHECK(0, "no peer slot for the reissue test");
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    scs_vc_init(&ps->vc);
+    struct scsd_vc_ctx ctx = vc_test_ctx(&w);
+    long acks = 0;
+
+    scs_vc_fsm_send_start(ps->pb, 0);
+    scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START);
+    ps->start_replied = 1;
+
+    /* Nothing is due before the timeout, and the reissue is byte-identical. */
+    CHECK(scs_vc_fsm_timer_expired(ps->pb, SCS_VC_FORMATION_TIMEOUT_MS - 1,
+                                   SCS_VC_FORMATION_TIMEOUT_MS) == 0,
+          "the formation timer fired early");
+    uint8_t original[SCS_START_FRAME_LEN];
+    memcpy(original, scsd_test_last_frame, SCS_START_FRAME_LEN);
+
+    scsd_test_frames = 0;
+    enum scs_vc_action act = scs_vc_fsm_timeout(ps->pb, SCS_VC_FORMATION_TIMEOUT_MS, 3);
+    CHECK(act == SCS_VC_ACT_SEND_START, "the expired timer did not reissue the START");
+    CHECK(scsd_vc_emit(&ctx, ps, act) == 1, "the reissued START was not sent");
+    CHECK(scsd_test_last_len == SCS_START_FRAME_LEN &&
+              memcmp(scsd_test_last_frame, original, SCS_START_FRAME_LEN) == 0,
+          "the reissued START is not byte-identical to the original");
+
+    /* Drive it to the limit; the last expiry abandons. */
+    act = scs_vc_fsm_timeout(ps->pb, 2 * SCS_VC_FORMATION_TIMEOUT_MS, 3);
+    CHECK(act == SCS_VC_ACT_SEND_START, "second expiry did not reissue");
+    act = scs_vc_fsm_timeout(ps->pb, 3 * SCS_VC_FORMATION_TIMEOUT_MS, 3);
+    CHECK(act == SCS_VC_ACT_ABANDON, "the retry limit did not abandon formation");
+
+    unsigned before = scsd_test_frames;
+    scsd_vc_settle(&ctx, ps, act, &acks);
+    CHECK(scsd_test_frames == before && acks == 0,
+          "abandoning formation put a frame on the wire");
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED, "an abandoned circuit is not CLOSED");
+    CHECK(ps->pb->fsm.abandoned == 0,
+          "scsd_vc_settle left the Path Block permanently abandoned -- the peer could"
+          " never form a circuit again");
+    CHECK(ps->start_replied == 0, "the daemon's START-replied latch was not cleared");
+
+    /* And the re-armed Path Block can start the dialogue over. */
+    CHECK(scs_vc_fsm_send_start(ps->pb, 9999) == SCS_VC_ACT_SEND_START,
+          "the re-armed Path Block cannot issue a fresh START");
+}
+
 int main(void)
 {
     test_learned_system_address_is_the_peer_logical_field();
@@ -506,6 +813,12 @@ int main(void)
     test_shared_sb_aliases_the_peer_logical();
     test_sb_exhaustion_is_visible_and_unreachable();
     test_rejoin_is_inert_in_the_daemon();
+    /* vms-4071: the daemon's use of the VC formation state machine. */
+    test_vc_actions_emit_the_right_config_rounds();
+    test_vc_happy_path_frame_sequence();
+    test_vc_open_on_bare_ack_still_sends_round_2();
+    test_vc_implied_ack_through_the_daemon();
+    test_vc_reissue_and_abandon_through_the_daemon();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

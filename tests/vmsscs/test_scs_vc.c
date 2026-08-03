@@ -252,6 +252,417 @@ static void test_vc_reset_at_start_completion(void)
     check(1, "reset_seq(NULL) is a safe no-op");
 }
 
+/* =====================================================================
+ * vms-4071 -- the VIRTUAL-CIRCUIT FORMATION state machine.
+ *
+ * Drives every transition documented in VAXcluster Principles ch. 2:
+ * Figure 2-7 (dialogue 1), Figure 2-8 (dialogue 2), the p. 2-14
+ * acceptable-response table, the reissue timer, the OS-dependent retry limit,
+ * the abandon paths and the p. 2-16 implied ACK.
+ *
+ * These are PURE-STATE tests: the machine builds no frame and touches no
+ * socket, so nothing here is mocked -- the code under test is the shipped
+ * code. What they do NOT prove is the DAEMON's use of the machine or anything
+ * about the live wire; that needs the lab (see the item's bracketed triple).
+ * ===================================================================== */
+
+#include <stdlib.h>
+
+#include "scs_config.h"
+
+/* A configuration queue + one local port, freshly built for each scenario. */
+struct fsm_fixture {
+    struct scs_config cfg;
+    struct scs_pdt    pdt;
+    struct scs_pb    *pb;
+};
+
+static const uint8_t peer_port[6] = { 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9 };
+
+static void fsm_fixture_init(struct fsm_fixture *f)
+{
+    scs_config_init(&f->cfg);
+    scs_pdt_init(&f->pdt, SCS_PORT_TYPE_ETHERNET, 1500);
+    f->pb = scs_pb_create(&f->cfg, &f->pdt, peer_port, SCS_PORT_TYPE_ETHERNET);
+}
+
+/* p. 2-11: "When the PB is first initialized, it is marked to indicate that the
+ * state of the virtual circuit is CLOSED." */
+static void test_fsm_initial_state(void)
+{
+    printf("[fsm] initial state (p. 2-11)\n");
+    struct fsm_fixture f;
+    fsm_fixture_init(&f);
+    check(f.pb != NULL, "path block created");
+    check(f.pb->vc_state == SCS_VC_CLOSED, "fresh PB: VC state CLOSED");
+    check(f.pb->fsm.timer_armed == 0, "fresh PB: no formation timer armed");
+    check(f.pb->fsm.abandoned == 0, "fresh PB: formation not abandoned");
+
+    /* Design choice 5: a driver that has issued nothing has no response to
+     * classify, so events in CLOSED are ignored (not "unacceptable"). */
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 0) == SCS_VC_ACT_NONE,
+          "CLOSED + START -> ignored (nothing was issued to respond to)");
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_STACK, 0) == SCS_VC_ACT_NONE,
+          "CLOSED + STACK -> ignored");
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_ACK, 0) == SCS_VC_ACT_NONE,
+          "CLOSED + ACK -> ignored");
+    check(f.pb->vc_state == SCS_VC_CLOSED, "CLOSED is unchanged by ignored events");
+}
+
+/*
+ * Figure 2-7, dialogue 1: both nodes discover each other at about the same
+ * time. Local: send START -> START SENT; receive START -> send STACK, START
+ * RECEIVED; receive STACK -> send ACK, OPEN; receive ACK -> discarded.
+ */
+static void test_fsm_dialogue_1(void)
+{
+    printf("[fsm] Figure 2-7 dialogue 1 -- simultaneous discovery\n");
+    struct fsm_fixture f;
+    fsm_fixture_init(&f);
+
+    check(scs_vc_fsm_send_start(f.pb, 1000) == SCS_VC_ACT_SEND_START,
+          "d1: local port driver issues START");
+    check(f.pb->vc_state == SCS_VC_START_SENT, "d1: VC STATE = START SENT");
+    check(f.pb->fsm.timer_armed == 1 && f.pb->fsm.timer_ms == 1000,
+          "d1: timer armed on the emitted START (p. 2-14)");
+
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 1100) == SCS_VC_ACT_SEND_STACK,
+          "d1: START in START SENT -> issue STACK");
+    check(f.pb->vc_state == SCS_VC_START_RECEIVED, "d1: VC STATE = START RECEIVED");
+    check(f.pb->fsm.timer_armed == 1 && f.pb->fsm.timer_ms == 1100,
+          "d1: timer re-armed on the emitted STACK");
+    check(f.pb->fsm.last_emitted == SCS_VC_ACT_SEND_STACK,
+          "d1: STACK is now the packet a timeout would reissue");
+
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_STACK, 1200) == SCS_VC_ACT_SEND_ACK,
+          "d1: STACK in START RECEIVED -> OPEN and issue ACK");
+    check(f.pb->vc_state == SCS_VC_OPEN, "d1: VC STATE = OPEN");
+    check(f.pb->fsm.timer_armed == 0, "d1: no timer runs on an OPEN circuit");
+
+    /* p. 2-12: "each port driver simply discards the ACK it receives from the
+     * other node because it already considers the virtual circuit to be OPEN." */
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_ACK, 1300) == SCS_VC_ACT_NONE,
+          "d1: the trailing ACK is discarded on an already-OPEN circuit");
+    check(f.pb->vc_state == SCS_VC_OPEN, "d1: circuit stays OPEN");
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 1400) == SCS_VC_ACT_NONE,
+          "d1: a late START on an OPEN circuit is also discarded");
+    check(f.pb->vc_state == SCS_VC_OPEN, "d1: circuit still OPEN");
+}
+
+/*
+ * Figure 2-8, dialogue 2: NODE_1 discovers NODE_2 first, its START is discarded
+ * by a node that has no PB yet, and the circuit sits in START SENT until
+ * NODE_2's own START arrives. The local (NODE_1) view:
+ *   send START -> START SENT ... (peer silent) ... peer START -> send STACK,
+ *   START RECEIVED ... peer ACK -> OPEN with NO further emission.
+ * "When NODE_1's port driver receives the ACK from NODE_2, it alters its PB to
+ *  advance the state of the virtual circuit to OPEN." (p. 2-14)
+ */
+static void test_fsm_dialogue_2(void)
+{
+    printf("[fsm] Figure 2-8 dialogue 2 -- staggered discovery\n");
+    struct fsm_fixture f;
+    fsm_fixture_init(&f);
+
+    check(scs_vc_fsm_send_start(f.pb, 0) == SCS_VC_ACT_SEND_START, "d2: issue START");
+    check(f.pb->vc_state == SCS_VC_START_SENT, "d2: START SENT while the peer is deaf");
+
+    /* "Meanwhile the state of the virtual circuit on NODE_1 remains START SENT."
+     * (p. 2-13) -- the timer has not expired, so nothing changes. */
+    check(scs_vc_fsm_timer_expired(f.pb, 500, SCS_VC_FORMATION_TIMEOUT_MS) == 0,
+          "d2: timer has not expired at t+500ms");
+    check(f.pb->vc_state == SCS_VC_START_SENT, "d2: still START SENT");
+
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 600) == SCS_VC_ACT_SEND_STACK,
+          "d2: the peer's eventual START -> issue STACK");
+    check(f.pb->vc_state == SCS_VC_START_RECEIVED, "d2: START RECEIVED");
+
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_ACK, 700) == SCS_VC_ACT_NONE,
+          "d2: ACK in START RECEIVED -> OPEN, nothing emitted (p. 2-14)");
+    check(f.pb->vc_state == SCS_VC_OPEN, "d2: VC STATE = OPEN");
+    check(f.pb->fsm.timer_armed == 0, "d2: timer disarmed at OPEN");
+}
+
+/*
+ * The p. 2-14 table, every cell, including the two that are only reachable in
+ * a crossed/lossy dialogue.
+ */
+static void test_fsm_acceptable_response_table(void)
+{
+    printf("[fsm] p. 2-14 acceptable-response table, cell by cell\n");
+    struct fsm_fixture f;
+
+    /* START SENT + STACK -> OPEN + issue ACK ("advances the circuit all the way
+     * to the OPEN state, and the port driver issues an ACK"). */
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_STACK, 10) == SCS_VC_ACT_SEND_ACK,
+          "table: START SENT + STACK -> send ACK");
+    check(f.pb->vc_state == SCS_VC_OPEN, "table: START SENT + STACK -> OPEN");
+
+    /* START RECEIVED + bare START: "the state of the circuit is left unchanged
+     * and the port driver issues another STACK." */
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 10);
+    check(f.pb->vc_state == SCS_VC_START_RECEIVED, "table: precondition START RECEIVED");
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 20) == SCS_VC_ACT_SEND_STACK,
+          "table: START RECEIVED + START -> reissue STACK");
+    check(f.pb->vc_state == SCS_VC_START_RECEIVED,
+          "table: START RECEIVED + START leaves the state UNCHANGED");
+    check(f.pb->fsm.retries == 1 && f.pb->fsm.reissues == 1,
+          "table: an acceptable-but-non-advancing response counts as a reissue");
+    check(f.pb->fsm.timer_ms == 20, "table: the reissue re-arms the timer");
+
+    /* START SENT + ACK: not in the acceptable list -> abandon immediately. */
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_ACK, 10) == SCS_VC_ACT_ABANDON,
+          "table: START SENT + ACK is UNACCEPTABLE -> abandon");
+    check(f.pb->fsm.abandoned == 1, "table: abandoned flag raised");
+    check(f.pb->vc_state == SCS_VC_CLOSED, "table: an abandoned circuit is CLOSED");
+    check(f.pb->fsm.timer_armed == 0, "table: abandoning disarms the timer");
+    /* An abandoned circuit is inert: nothing revives it. */
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_STACK, 20) == SCS_VC_ACT_NONE,
+          "table: an abandoned circuit ignores a later STACK");
+    check(scs_vc_fsm_send_start(f.pb, 30) == SCS_VC_ACT_NONE,
+          "table: an abandoned circuit does not re-issue a START by itself");
+    check(scs_vc_fsm_timeout(f.pb, 9999, 8) == SCS_VC_ACT_NONE,
+          "table: an abandoned circuit has no timeout behaviour");
+}
+
+/*
+ * p. 2-14: "If the timer expires before any response is received ... reissue the
+ * START or STACK (whichever it last sent)" and "it is expected that an operating
+ * system dependent retry limit be placed on each such scenario. If that limit is
+ * reached, formation of the virtual circuit is to be abandoned."
+ */
+static void test_fsm_retry_and_abandon(void)
+{
+    printf("[fsm] p. 2-14 reissue timer, retry limit and abandon\n");
+    struct fsm_fixture f;
+
+    /* --- reissue of a START --- */
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    check(scs_vc_fsm_timer_expired(f.pb, SCS_VC_FORMATION_TIMEOUT_MS - 1,
+                                   SCS_VC_FORMATION_TIMEOUT_MS) == 0,
+          "retry: timer not expired one ms early");
+    check(scs_vc_fsm_timer_expired(f.pb, SCS_VC_FORMATION_TIMEOUT_MS,
+                                   SCS_VC_FORMATION_TIMEOUT_MS) == 1,
+          "retry: timer expired exactly at the timeout");
+    check(scs_vc_fsm_timeout(f.pb, 2000, 8) == SCS_VC_ACT_SEND_START,
+          "retry: expiry in START SENT reissues the START");
+    check(f.pb->vc_state == SCS_VC_START_SENT, "retry: reissue does not change the state");
+    check(f.pb->fsm.timer_ms == 2000, "retry: timer re-armed at the reissue");
+    check(f.pb->fsm.retries == 1, "retry: retry counter is 1");
+
+    /* --- reissue of a STACK: "whichever it last sent" --- */
+    scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 2100); /* -> START RECEIVED, STACK emitted */
+    check(f.pb->fsm.retries == 0,
+          "retry: advancing to a new state resets the retry counter");
+    check(scs_vc_fsm_timeout(f.pb, 4100, 8) == SCS_VC_ACT_SEND_STACK,
+          "retry: expiry in START RECEIVED reissues the STACK, not the START");
+
+    /* --- the retry limit is reached -> abandon --- */
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    const unsigned limit = 3;
+    uint64_t t = 0;
+    enum scs_vc_action act = SCS_VC_ACT_NONE;
+    unsigned reissued = 0;
+    for (unsigned i = 0; i < limit; i++) {
+        t += SCS_VC_FORMATION_TIMEOUT_MS;
+        act = scs_vc_fsm_timeout(f.pb, t, limit);
+        if (act == SCS_VC_ACT_SEND_START) {
+            reissued++;
+        }
+    }
+    check(reissued == limit - 1, "retry limit 3: exactly 2 reissues before the limit");
+    check(act == SCS_VC_ACT_ABANDON, "retry limit 3: the 3rd expiry ABANDONS formation");
+    check(f.pb->fsm.abandoned == 1, "retry limit: abandoned flag raised");
+    check(f.pb->vc_state == SCS_VC_CLOSED, "retry limit: circuit left CLOSED");
+
+    /* --- retry_limit == 0 means unlimited (the kill-switch path) --- */
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    t = 0;
+    int always_reissued = 1;
+    for (unsigned i = 0; i < 100; i++) {
+        t += SCS_VC_FORMATION_TIMEOUT_MS;
+        if (scs_vc_fsm_timeout(f.pb, t, 0) != SCS_VC_ACT_SEND_START) {
+            always_reissued = 0;
+        }
+    }
+    check(always_reissued == 1, "retry limit 0: 100 expiries all reissue the START");
+    check(f.pb->fsm.abandoned == 0, "retry limit 0: formation is never abandoned");
+    check(f.pb->fsm.retries == 100, "retry limit 0: the counter still climbs");
+
+    /* --- no timer armed (OPEN circuit) -> no timeout behaviour --- */
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    scs_vc_fsm_recv(f.pb, SCS_VC_EV_STACK, 10); /* -> OPEN */
+    check(scs_vc_fsm_timer_expired(f.pb, 999999, SCS_VC_FORMATION_TIMEOUT_MS) == 0,
+          "no timer on an OPEN circuit");
+    check(scs_vc_fsm_timeout(f.pb, 999999, 8) == SCS_VC_ACT_NONE,
+          "an OPEN circuit has no reissue behaviour");
+
+    /* --- a clock that appears to run backwards must not fire the timer --- */
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 10000);
+    check(scs_vc_fsm_timer_expired(f.pb, 5000, SCS_VC_FORMATION_TIMEOUT_MS) == 0,
+          "a backwards clock does not expire the timer");
+}
+
+/*
+ * The retry limit is also what bounds the "acceptable but non-advancing"
+ * reissue path -- a peer that repeats its START forever must not make the local
+ * driver emit STACKs forever (p. 2-14, "each such scenario").
+ */
+static void test_fsm_repeated_start_hits_the_limit(void)
+{
+    printf("[fsm] a peer repeating START forever is bounded by the retry limit\n");
+    struct fsm_fixture f;
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 1); /* -> START RECEIVED */
+
+    enum scs_vc_action act = SCS_VC_ACT_NONE;
+    unsigned stacks = 0;
+    for (unsigned i = 0; i < SCS_VC_FORMATION_RETRY_LIMIT + 5; i++) {
+        act = scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 100 + i);
+        if (act == SCS_VC_ACT_SEND_STACK) {
+            stacks++;
+        }
+        if (act == SCS_VC_ACT_ABANDON) {
+            break;
+        }
+    }
+    check(act == SCS_VC_ACT_ABANDON, "repeated START: formation is eventually abandoned");
+    check(stacks == SCS_VC_FORMATION_RETRY_LIMIT - 1,
+          "repeated START: STACK reissues stop one short of the limit");
+    check(f.pb->vc_state == SCS_VC_CLOSED, "repeated START: circuit CLOSED after abandon");
+}
+
+/* p. 2-16: the implied ACK. */
+static void test_fsm_implied_ack(void)
+{
+    printf("[fsm] p. 2-16 implied ACK\n");
+    struct fsm_fixture f;
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 10); /* -> START RECEIVED, STACK issued */
+    check(f.pb->vc_state == SCS_VC_START_RECEIVED,
+          "implied ACK: precondition -- waiting for an ACK that got lost");
+
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_OTHER, 20) == SCS_VC_ACT_NONE,
+          "implied ACK: a circuit packet emits nothing");
+    check(f.pb->vc_state == SCS_VC_OPEN,
+          "implied ACK: a packet requiring an OPEN circuit marks it OPEN");
+    check(f.pb->fsm.implied_acks == 1, "implied ACK: counted");
+    check(f.pb->fsm.timer_armed == 0, "implied ACK: the STACK timer is disarmed");
+
+    /* The rule is written for START RECEIVED ONLY. In START SENT the same
+     * packet must not open the circuit (nor abandon it). */
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    check(scs_vc_fsm_recv(f.pb, SCS_VC_EV_OTHER, 10) == SCS_VC_ACT_NONE,
+          "implied ACK: ignored in START SENT");
+    check(f.pb->vc_state == SCS_VC_START_SENT,
+          "implied ACK: START SENT is NOT advanced by a circuit packet");
+    check(f.pb->fsm.abandoned == 0,
+          "implied ACK: a circuit packet in START SENT is not 'unacceptable'");
+
+    /* Which packets count is scs_vc_is_circuit_packet's job: the sequenced
+     * message classes only. START/STACK/ACK are datagrams (p. 2-40). */
+    check(scs_vc_is_circuit_packet(0x4b) == 1, "circuit packet: 0x4b sequenced app");
+    check(scs_vc_is_circuit_packet(0x5b) == 1, "circuit packet: 0x5b directory");
+    check(scs_vc_is_circuit_packet(0x7b) == 1, "circuit packet: 0x7b directory retx");
+    check(scs_vc_is_circuit_packet(SCS_CREDIT_OPCODE) == 1,
+          "circuit packet: 0x48 credit-return");
+    check(scs_vc_is_circuit_packet(SCS_START_OPCODE) == 0,
+          "circuit packet: 0x41 START/STACK/ACK is a DATAGRAM, not a circuit packet");
+    check(scs_vc_is_circuit_packet(0x0c) == 0, "circuit packet: a HELLO is not one");
+}
+
+/* The NISCA config-round -> Figure 2-7 packet-class mapping (design choice 1). */
+static void test_fsm_round_classification(void)
+{
+    printf("[fsm] NISCA config-round -> START/STACK/ACK mapping\n");
+    check(scs_vc_classify_round(0, 0) == SCS_VC_EV_START,
+          "round 0, 106-byte identity frame -> START");
+    check(scs_vc_classify_round(0, 1) == SCS_VC_EV_STACK,
+          "round 1, 106-byte identity frame -> STACK (it re-supplies the description)");
+    check(scs_vc_classify_round(1, SCS_START_ACK_ROUND) == SCS_VC_EV_ACK,
+          "round 2, 46-byte no-identity frame -> ACK");
+    /* is_ack wins over the round: the class is decided by the presence of an
+     * identity body, which is what p. 2-12 distinguishes STACK from ACK by. */
+    check(scs_vc_classify_round(1, 0) == SCS_VC_EV_ACK,
+          "the 46-byte class is an ACK whatever round it carries");
+
+    /* Driving the classifier straight into the machine reproduces the observed
+     * 0/0/1/1/2/2 dialogue: OVMX emits START, then STACK on the peer's round-0,
+     * then ACK on the peer's round-1. */
+    struct fsm_fixture f;
+    fsm_fixture_init(&f);
+    check(scs_vc_fsm_send_start(f.pb, 0) == SCS_VC_ACT_SEND_START,
+          "wire dialogue: OVMX round-0 START");
+    check(scs_vc_fsm_recv(f.pb, scs_vc_classify_round(0, 0), 10) == SCS_VC_ACT_SEND_STACK,
+          "wire dialogue: peer round-0 -> OVMX round-1 STACK");
+    check(scs_vc_fsm_recv(f.pb, scs_vc_classify_round(0, 1), 20) == SCS_VC_ACT_SEND_ACK,
+          "wire dialogue: peer round-1 -> OVMX round-2 ACK, circuit OPEN");
+    check(f.pb->vc_state == SCS_VC_OPEN, "wire dialogue: OPEN after three OVMX frames");
+    check(scs_vc_fsm_recv(f.pb, scs_vc_classify_round(1, 2), 30) == SCS_VC_ACT_NONE,
+          "wire dialogue: the peer's round-2 ack is then discarded");
+}
+
+/* The OVMX_VC_NO_RETRY_LIMIT=1 kill-switch. */
+static void test_fsm_kill_switch(void)
+{
+    printf("[fsm] OVMX_VC_NO_RETRY_LIMIT kill-switch\n");
+    unsetenv(SCS_VC_NO_RETRY_LIMIT_ENV);
+    check(scs_vc_retry_limit() == SCS_VC_FORMATION_RETRY_LIMIT,
+          "kill-switch unset: the OS-dependent retry limit applies");
+
+    setenv(SCS_VC_NO_RETRY_LIMIT_ENV, "1", 1);
+    check(scs_vc_retry_limit() == 0, "OVMX_VC_NO_RETRY_LIMIT=1 -> unlimited retry");
+
+    /* With the switch on, the repeated-START path never abandons. */
+    struct fsm_fixture f;
+    fsm_fixture_init(&f);
+    scs_vc_fsm_send_start(f.pb, 0);
+    scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 1);
+    int all_stacks = 1;
+    for (unsigned i = 0; i < SCS_VC_FORMATION_RETRY_LIMIT + 20; i++) {
+        if (scs_vc_fsm_recv(f.pb, SCS_VC_EV_START, 100 + i) != SCS_VC_ACT_SEND_STACK) {
+            all_stacks = 0;
+        }
+    }
+    check(all_stacks == 1, "kill-switch on: every repeated START still reissues a STACK");
+    check(f.pb->fsm.abandoned == 0, "kill-switch on: formation is never abandoned");
+
+    setenv(SCS_VC_NO_RETRY_LIMIT_ENV, "0", 1);
+    check(scs_vc_retry_limit() == SCS_VC_FORMATION_RETRY_LIMIT,
+          "OVMX_VC_NO_RETRY_LIMIT=0 -> the limit applies again");
+    setenv(SCS_VC_NO_RETRY_LIMIT_ENV, "yes", 1);
+    check(scs_vc_retry_limit() == SCS_VC_FORMATION_RETRY_LIMIT,
+          "only the exact value \"1\" arms the kill-switch");
+    unsetenv(SCS_VC_NO_RETRY_LIMIT_ENV);
+}
+
+/* NULL-safety across the whole FSM surface. */
+static void test_fsm_null_safety(void)
+{
+    printf("[fsm] NULL safety\n");
+    scs_vc_fsm_init(NULL);
+    check(scs_vc_fsm_send_start(NULL, 0) == SCS_VC_ACT_NONE, "send_start(NULL) -> NONE");
+    check(scs_vc_fsm_recv(NULL, SCS_VC_EV_START, 0) == SCS_VC_ACT_NONE, "recv(NULL) -> NONE");
+    check(scs_vc_fsm_timer_expired(NULL, 0, 1) == 0, "timer_expired(NULL) -> 0");
+    check(scs_vc_fsm_timeout(NULL, 0, 1) == SCS_VC_ACT_NONE, "timeout(NULL) -> NONE");
+    check(scs_vc_event_name(SCS_VC_EV_STACK) != NULL, "event_name is never NULL");
+    check(scs_vc_action_name(SCS_VC_ACT_ABANDON) != NULL, "action_name is never NULL");
+}
+
 int main(void)
 {
     printf("test_scs_vc: SCS VC engine -- credit-return + seq/ack + retransmit (vms-691)\n");
@@ -260,6 +671,17 @@ int main(void)
     test_seq_ack();
     test_retransmit_trigger();
     test_vc_reset_at_start_completion();
+    printf("test_scs_vc: VC FORMATION state machine (vms-4071, pp. 2-12..2-16)\n");
+    test_fsm_initial_state();
+    test_fsm_dialogue_1();
+    test_fsm_dialogue_2();
+    test_fsm_acceptable_response_table();
+    test_fsm_retry_and_abandon();
+    test_fsm_repeated_start_hits_the_limit();
+    test_fsm_implied_ack();
+    test_fsm_round_classification();
+    test_fsm_kill_switch();
+    test_fsm_null_safety();
     printf("test_scs_vc: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

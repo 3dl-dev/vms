@@ -85,6 +85,13 @@ cp -a "$SRC_ROOT/tests" "$ROOT/tests"
 # sandbox with no CMakeLists.txt would take the gate's "this tree describes no
 # build" path and the controls for that reading would prove nothing.
 cp "$SRC_ROOT/CMakeLists.txt" "$ROOT/CMakeLists.txt"
+# tracking/ CARRIES THE rd CITATION LEDGER the gate now resolves cited item ids
+# against (rd vms-32e, via tests/integration/lib/rd_citations.sh). It is tree
+# DATA, so it lives in the sandbox where the citation controls below can break
+# it. The CHECKER is not tree data: the gate loads the library from its OWN
+# directory, so no control here can disarm the check by editing this copy --
+# which is the whole reason the gate resolves it that way.
+cp -a "$SRC_ROOT/tracking" "$ROOT/tracking"
 
 AST="$ROOT/src/libvms/syssvc/sys_ast.c"
 EVENT="$ROOT/src/libvms/syssvc/sys_event.c"
@@ -123,10 +130,101 @@ LIBVMSCM="$ROOT/src/libvms/CMakeLists.txt"
 # escape. It does not exist in the pristine tree, so restore() deletes it
 # rather than copying a saved original back.
 OUTSIDE="$ROOT/runtime/ovmx_time.c"
+# The citation ledger (rd vms-32e). Seven of the citation controls below break
+# the LEDGER rather than a citation, because a ledger that cannot be read must
+# be a REFUSAL: if destroying the evidence were cheaper than fixing the
+# citation, the whole mechanism would be one `rm` from vacuous.
+LEDGER="$ROOT/tracking/rd-citations.tsv"
+# THE KERNEL INTERFACE HEADER, which this gate's declaration parser DOES NOT
+# READ: it carries OVMX-UNWIRED lines, which belong to the kif caller census.
+# One control needs exactly that -- an id cited in the tree that the register's
+# own parser never hands to the checker -- to show that the checker's
+# independent rescan is live here and that this gate's parser is not the floor
+# on what gets resolved.
+KIFH="$ROOT/src/libvmssys/vms_kif.h"
 
-MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $LOCKPROOF $FDMAN $DISPATCH $PROCESS $TOPCM $LIBVMSCM"
+MUTABLE="$AST $EVENT $TIME $QIO $STR $STARLET $PROOF $LOCKPROOF $FDMAN $DISPATCH $PROCESS $TOPCM $LIBVMSCM $LEDGER $KIFH"
 
 key_of() { printf '%s' "${1#"$ROOT"/}" | tr '/.' '__'; }
+
+# ---------------------------------------------------------------------------
+# THE SYNTHETIC CITATION FIXTURE (rd vms-32e, following rd vms-a85).
+#
+# WHY THE MINTED SERVICES BELOW DO NOT CITE A REAL ITEM. Nine declarations
+# across eight controls invent a service that does not exist --
+# sys$negctl_ghost, sys$negctl_nothing (twice), sys$negctl_unnamed,
+# sys$negctl_refuted, sys$negctl_proven, sys$negctl_unproven,
+# sys$negctl_offpath, sys$negctl_mixed. Until vms-32e that declaration's id was
+# free, because nothing checked it: all nine cited the literal `(vms-5b4)`,
+# this suite's own item, which is `done` in rd AND -- since vms-fab repointed
+# the last src/ citation of it -- carries no ledger row at all, so the wired
+# checker's verdict on it is UNLISTED rather than CLOSED.
+#
+# MEASURED, rather than predicted: the 49-control revision of this file, with
+# nothing changed but one line sandboxing tracking/, run against the WIRED
+# gate. 47 passed, 2 FAILED, and both failures are GREEN controls --
+#
+#   "an EXECUTIVE claim whose proof forks, calls it, and holds a
+#    proven-reddenable assertion from a defect in its answer path"  (proven)
+#   "a mixture that names both of its halves stays green"           (mixed)
+#
+# -- each reporting "the register went RED on something it must tolerate",
+# with the register naming vms-5b4 twice: once as a citation the ledger does
+# not resolve, once as an id the independent tree rescan cannot resolve either.
+# A green control whose own fixture reds proves nothing about the property it
+# was written for.
+#
+# THE SEVEN RED ONES DID NOT FAIL, and that is the more interesting half: they
+# red for their own named reason, and the pre-vms-32e expect_red required only
+# that fragment, so an unrelated second red went unnoticed. A control reddening
+# partly on its fixture is one edit away from reddening ONLY on its fixture.
+# That is why expect_red now takes a forbidden list, and why the fixture is
+# resolved rather than merely tolerated.
+#
+# Pointing them at a real OPEN item instead is the trap vms-fab and vms-a85
+# both paid for: an id is a POINTER, items close, and a control keyed on one
+# disarms or misfires the day the correct maintenance action is taken. So the
+# fixture is SYNTHESIZED -- a synthetic id no product file cites and no
+# committed ledger row names, with the row that resolves it written into the
+# SANDBOX ledger. Tree state cannot disarm it, and it cannot introduce a
+# closed or unresolved citation into src/.
+#
+# The preconditions are ASSERTED below, not assumed. cite_fixture_broken() at
+# the citation controls does the same job per-control: injection_landed() only
+# ever proved a file CHANGED, and a fixture that changed a file without
+# carrying the property under test is exactly how a control goes vacuous.
+# ---------------------------------------------------------------------------
+
+# The OPEN id every minted fictional declaration cites.
+CITE_FIX_ID="vms-regnc"
+# The CLOSED exemplar the closed-citation and duplicate-row controls build.
+# Kept distinct from CITE_FIX_ID so that a control which needs a closed row
+# never has to flip the row the other controls depend on being open.
+CITE_CLOSED_ID="vms-regnc30"
+
+# Neither id may be real tree state, or these controls measure the product
+# instead of the fixture they build.
+for _cid in "$CITE_FIX_ID" "$CITE_CLOSED_ID"; do
+    if awk -F'\t' -v id="$_cid" '$1 == id { found = 1 } END { exit !found }' \
+            "$SRC_ROOT/tracking/rd-citations.tsv" 2>/dev/null; then
+        echo "  FAIL: BROKEN FIXTURE: the committed citation ledger already has a row"
+        echo "        for $_cid, so the controls that synthesize one would be editing"
+        echo "        real state. Rename the synthetic id; do NOT relax the gate."
+        exit 1
+    fi
+    if grep -rqF "$_cid" "$SRC_ROOT/src" "$SRC_ROOT/tools" 2>/dev/null; then
+        echo "  FAIL: BROKEN FIXTURE: $_cid is cited somewhere under src/ or tools/,"
+        echo "        so a control citing it would be measuring a real declaration."
+        echo "        Rename the synthetic id; do NOT relax the gate."
+        exit 1
+    fi
+done
+
+# The row that resolves CITE_FIX_ID, in the ledger's own four-field shape,
+# written BEFORE the pristine snapshot below so that restore() puts it back and
+# every control starts from the same fixture.
+printf '%s\topen\tinbox\t%s\n' "$CITE_FIX_ID" \
+    "negctl fixture -- the open item the minted fictional services cite" >> "$LEDGER"
 
 for f in $MUTABLE; do
     if [ ! -f "$f" ]; then
@@ -144,6 +242,34 @@ restore() {
     rm -rf "$(dirname "$OUTSIDE")"
 }
 
+# cite_rows_for <id> [file]: how many ledger rows carry that id.
+cite_rows_for() {
+    awk -F'\t' -v id="$1" '$1 == id { n++ } END { print n + 0 }' \
+        "${2:-$LEDGER}"
+}
+
+# The verdict column of every row carrying <id>, IN FILE ORDER, space-joined.
+# File order is the property, not a detail: the reader takes the FIRST match,
+# so "open closed" and "closed open" are different evasions.
+cite_verdicts_for() {
+    awk -F'\t' -v id="$1" '
+        $1 == id { out = (out == "" ? $2 : out " " $2) }
+        END { print out }' "${2:-$LEDGER}"
+}
+
+# The fixture the whole sandbox rests on, checked once, loudly, before any
+# control runs: exactly one row for the open id and none for the closed one.
+if [ "$(cite_verdicts_for "$CITE_FIX_ID")" != "open" ] || \
+   [ "$(cite_rows_for "$CITE_CLOSED_ID")" -ne 0 ]; then
+    echo "  FAIL: BROKEN FIXTURE: the sandbox ledger carries"
+    echo "        [$(cite_verdicts_for "$CITE_FIX_ID")] for $CITE_FIX_ID and"
+    echo "        $(cite_rows_for "$CITE_CLOSED_ID") row(s) for $CITE_CLOSED_ID,"
+    echo "        where exactly one 'open' row and zero rows are wanted. Every"
+    echo "        control that mints a fictional service would be asking the gate"
+    echo "        about a tree that is not the evasion."
+    exit 1
+fi
+
 injection_landed() {
     cmp -s "$1" "$WORK/orig/$(key_of "$1")" && return 1
     return 0
@@ -159,8 +285,25 @@ record_verdict() {
 }
 
 # expect_red <files-that-must-have-changed> <name> <required-output-fragment>
+#             [forbidden-fragments, one per line]
+#
+# THE FORBIDDEN LIST IS OPTIONAL AND IS AN ADDITION, not a relaxation (rd
+# vms-32e): a control that only requires its own message passes when the
+# mutation trips a SECOND, unrelated property too, and the citation controls
+# below are precisely where that matters -- eleven of them edit the same two
+# files and every one of the gate's citation verdicts is reachable from either.
+# It is ONE newline-separated argument rather than a variadic tail because
+# every fragment here contains spaces. Callers that pass three arguments behave
+# exactly as before.
+#
+# MEASURED so that this path is not itself an unfired assertion: add
+# "$F_CITE_TREE_UNRESOLVED" to the forbidden list of the fabricated-id control
+# -- a message that control genuinely does provoke, and is allowed to -- and
+# the suite goes 62/0 -> 61 passed, 1 FAILED, the failure being that control,
+# reporting "went red for its own reason AND for a forbidden one" and naming
+# the fragment.
 expect_red() {
-    files="$1"; name="$2"; need="$3"
+    files="$1"; name="$2"; need="$3"; forbid="${4:-}"
     printf '%s\n' "$need" >> "$WORK/needs"
     for _f in $files; do
         if ! injection_landed "$_f"; then
@@ -182,6 +325,19 @@ expect_red() {
         echo "        expected output to contain: $need"
         printf '%s\n' "$out" | grep -E 'FAIL|SAYS NOTHING|DECLARE|PROTOTYPE|DEFINED|LOCAL HALF|PARTIAL|EXECUTIVE DECL' | sed 's/^/          /'
         ok=0
+    elif [ -n "$forbid" ]; then
+        printf '%s\n' "$out" > "$WORK/red_out"
+        printf '%s\n' "$forbid" | while IFS= read -r _bad; do
+            [ -n "$_bad" ] || continue
+            grep -qF "$_bad" "$WORK/red_out" || continue
+            echo "  FAIL: went red for its own reason AND for a forbidden one: $name"
+            echo "        output must NOT contain: $_bad"
+            echo "        -- the mutation is not isolating the property under test, so a"
+            echo "           later change could make this control pass on the wrong red."
+            printf 'x' >> "$WORK/red_forbidden"
+        done
+        [ -s "$WORK/red_forbidden" ] && ok=0
+        rm -f "$WORK/red_forbidden"
     fi
     record_verdict "$name" $ok
     restore
@@ -302,7 +458,7 @@ expect_red "$STARLET" "a service whose entire body hides in a header as static i
 
 # A declaration naming something that is not a service at all: a typo, or the
 # leftover of a service that was deleted and whose register line was not.
-printf '/* OVMX-USERSPACE: sys$negctl_ghost (vms-5b4) -- negctl orphan */\n' >> "$EVENT"
+printf '/* OVMX-USERSPACE: sys$negctl_ghost ('"$CITE_FIX_ID"') -- negctl orphan */\n' >> "$EVENT"
 expect_red "$EVENT" "a declaration naming a service that does not exist" \
     "DECLARES SOMETHING THAT IS NOT A SERVICE: sys\$negctl_ghost"
 
@@ -464,7 +620,7 @@ expect_red "$EVENT" "a second definition of a service in another translation uni
 # thing a source scan CAN see.
 {
     echo ''
-    echo '/* OVMX-PARTIAL: sys$negctl_nothing (vms-5b4) -- exec: nothing, actually */'
+    echo '/* OVMX-PARTIAL: sys$negctl_nothing ('"$CITE_FIX_ID"') -- exec: nothing, actually */'
     echo '/* OVMX-LOCAL: sys$negctl_nothing -- all of it */'
     echo 'uint32_t sys$negctl_nothing(uint32_t v) { return v + 1; }'
 } >> "$EVENT"
@@ -475,7 +631,7 @@ expect_red "$EVENT" "a PARTIAL claim on a service that reaches no executive at a
 # answer comes from the executive while reaching nothing.
 {
     echo ''
-    echo '/* OVMX-EXECUTIVE: sys$negctl_nothing (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo '/* OVMX-EXECUTIVE: sys$negctl_nothing ('"$CITE_FIX_ID"') proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
     echo 'uint32_t sys$negctl_nothing(uint32_t v) { return v + 1; }'
 } >> "$EVENT"
 expect_red "$EVENT" "an EXECUTIVE claim on a service that reaches no executive at all" \
@@ -531,7 +687,7 @@ expect_red "$EVENT" "an EXECUTIVE claim citing a single-process proof" \
 # A proof that never calls the service is a proof about something else.
 {
     echo ''
-    echo '/* OVMX-EXECUTIVE: sys$negctl_unnamed (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo '/* OVMX-EXECUTIVE: sys$negctl_unnamed ('"$CITE_FIX_ID"') proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
     echo 'uint32_t sys$negctl_unnamed(uint32_t efn) {'
     echo '    uint32_t st = 0;'
     echo '    (void)vms_kif_readef(efn, &st);'
@@ -613,7 +769,7 @@ awk 'NR == FNR { b = b $0 ORS; next }
     "$WORK/negctl_branch" "$FDMAN" > "$WORK/fdman.new" && mv "$WORK/fdman.new" "$FDMAN"
 {
     echo ''
-    echo '/* OVMX-EXECUTIVE: sys$negctl_refuted (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo '/* OVMX-EXECUTIVE: sys$negctl_refuted ('"$CITE_FIX_ID"') proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
     echo 'uint32_t sys$negctl_refuted(uint32_t efn) {'
     echo '    uint32_t st = 0;'
     echo '    (void)vms_kif_readef(efn, &st);'
@@ -657,6 +813,311 @@ expect_red "$DISPATCH" "the executive dispatch switch made unreadable, so no ans
 printf '\nthis_is_not_cmake_syntax(((\n' >> "$TOPCM"
 expect_red "$TOPCM" "the build description made unreadable, so what the product compiles is unknown" \
     "BROKEN BUILD-SET SCAN: "
+
+# ------------------------------------------------------- THE CITED ITEM (vms-32e) --
+# THE DEFECT THESE EXIST FOR, found on pristine main with zero edits: the
+# register did not call the citation checker AT ALL. `grep -n 'rd_cite_check'
+# tests/integration/test_userspace_service_register.sh` returned nothing, while
+# the checker's own header, tools/gen_rd_citations.py and the census all said
+# the register was covered. So the item id in a declaration was SHAPE-checked
+# and nothing more. rd vms-32e records the attack as one site --
+# `sed s/(vms-1c57)/(vms-q9z9)/`, gate rc=0 PASS printing `vms-q9z9 x1` as an
+# owner, all 49 controls in this file green on the same tree. RE-MEASURED here
+# on c73726a, the last revision that shipped that way, with the two-site form
+# `sed s/(vms-6aa)/(vms-q9z9)/` on src/libvms/syssvc/sys_qio.c: rc=0, PASS,
+# `vms-q9z9 x2`. The same command against the wired gate: rc=1, naming the id
+# twice -- once for the citation, once for the independent tree rescan.
+#
+# ELEVEN REDS AND ONE GREEN HERE, plus a twelfth red among the structural
+# guards at the end of the file (a tree that cites NOTHING cannot be reached by
+# editing a real copy of the product, so it needs its own fixture, exactly like
+# the empty-src and no-services floors beside it).
+#
+# SEVEN OF THE TWELVE BREAK THE LEDGER rather than a citation, because a ledger
+# that cannot be read must be a REFUSAL: if destroying the evidence were
+# cheaper than fixing the citation the whole mechanism would be one `rm` from
+# vacuous. THE LAST RED IS THE SHARP ONE -- it fabricates an id in a marker
+# THIS GATE'S PARSER NEVER READS, to show that the checker's independent rescan
+# of src/ and tools/ is live here, so the register's own parser is not the
+# floor on what gets resolved.
+#
+# WHY THE CLOSED-ITEM EXEMPLAR IS SYNTHESIZED (rd vms-a85, same fix in the
+# sibling census negctl). After vms-fab there is NO closed id cited anywhere
+# under src/ or tools/, and keeping it that way is what vms-fab is FOR, so
+# re-aiming at a real closed id would mean putting one back. Deriving one from
+# whatever the ledger happens to carry resolves to nothing on this tree, which
+# would make the control disable itself -- the shape these gates reject. So the
+# fixture is built in the sandbox: the citing declaration AND the row that
+# resolves it, against an id no product file cites and no committed row names,
+# checked by cite_fixture_broken() BEFORE the gate is asked anything.
+#
+# WHAT IS UNDER TEST HERE is the gate's reading of a `closed` row and of two
+# rows for one id -- not rd's opinion of any particular item -- so a row in the
+# shape tools/gen_rd_citations.py writes is the faithful fixture.
+#
+# NON-VACUITY OF THE WHOLE BLOCK, MEASURED BY DISPROOF. Delete the four lines
+# that call rd_cite_check from the gate and change nothing else: this suite
+# goes 62/0 -> 50 passed, 12 FAILED. Eleven of those report "the register
+# CERTIFIED the evasion" -- one per red below -- and the twelfth is the
+# structural guard, reporting that it went red for the WRONG reason (the tree
+# with no citations still trips THE FLOOR, so rc is non-zero for a reason that
+# has nothing to do with citations, which is exactly why the guard requires its
+# own message and not merely a non-zero exit).
+#
+# The GREEN control is NOT in that twelve and cannot be: removing a check
+# cannot make a tolerated tree red. Its job is to bound OVER-firing, and it is
+# the only control here that does.
+
+F_CITE_UNLISTED=", which is NOT IN the citation ledger"
+F_CITE_ABSENT=" cites an rd item that DOES NOT EXIST: "
+F_CITE_CLOSED=" cites a CLOSED rd item: "
+F_CITE_NO_LEDGER="FAIL: REFUSING to certify citations: no citation ledger at "
+F_CITE_MALFORMED="FAIL: REFUSING to certify citations: malformed citation ledger "
+F_CITE_NO_STAMP="FAIL: REFUSING to certify citations: citation ledger has no generated-at stamp"
+F_CITE_BAD_STAMP="FAIL: REFUSING to certify citations: generated-at stamp is not a real instant"
+F_CITE_FUTURE="FAIL: REFUSING to certify citations: generated-at stamp is in the FUTURE"
+F_CITE_LEDGER_DUP="FAIL: REFUSING to certify citations: item listed twice in the citation ledger"
+F_CITE_NO_CITATIONS="FAIL: REFUSING to certify citations: this scan found NO rd id cited by any"
+F_CITE_NO_ROWS="FAIL: REFUSING to certify citations: the tree cites "
+F_CITE_TREE_UNRESOLVED="FAIL: the tree cites "
+
+# The verdicts a citation control must NOT also provoke. Each control below
+# removes from this list the one it is FOR, and says so where the removal is
+# not obvious.
+CITE_ALL="$F_CITE_UNLISTED
+$F_CITE_ABSENT
+$F_CITE_CLOSED
+$F_CITE_NO_LEDGER
+$F_CITE_MALFORMED
+$F_CITE_NO_STAMP
+$F_CITE_BAD_STAMP
+$F_CITE_FUTURE
+$F_CITE_LEDGER_DUP
+$F_CITE_NO_CITATIONS
+$F_CITE_NO_ROWS
+$F_CITE_TREE_UNRESOLVED"
+
+# cite_others <fragment>...: every verdict in CITE_ALL except the named ones,
+# one per line, for splatting into expect_red's forbidden list. Derived from
+# the list above rather than written out per control, so a verdict added to
+# CITE_ALL is forbidden everywhere it is not explicitly allowed.
+cite_others() {
+    _co_keep=$(printf '%s\n' "$@")
+    printf '%s\n' "$CITE_ALL" | while IFS= read -r _co_f; do
+        [ -n "$_co_f" ] || continue
+        printf '%s\n' "$_co_keep" | grep -qxF "$_co_f" && continue
+        printf '%s\n' "$_co_f"
+    done
+}
+
+# cite_repoint <id>: point sys$gettim's declaration at <id>. ANCHORED ON THE
+# SERVICE NAME, never on the id it currently carries -- see the note above the
+# RED controls: five controls keyed on a literal id became silent no-ops the
+# day vms-fab repointed that declaration, which is this suite's own defect one
+# level up.
+cite_repoint() {
+    sed -i "s|OVMX-USERSPACE: sys\$gettim (vms-[0-9a-z.]*)|OVMX-USERSPACE: sys\$gettim ($1)|" "$TIME"
+}
+
+# cite_row <id> <verdict> <rd status> <title>: one row in the ledger's own
+# four-field tab-separated shape.
+cite_row() { printf '%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" >> "$LEDGER"; }
+
+# How many of THIS gate's declarations cite <id>. 1 once a fixture is built.
+cite_decl_count() { grep -cF "OVMX-USERSPACE: sys\$gettim ($1)" "$TIME"; }
+
+# cite_fixture_broken <control> <want-verdicts>: 0 when the fixture just built
+# does NOT carry the property the control is about to test the gate against,
+# after printing why. injection_landed() proves a file CHANGED; it does not
+# prove the change means anything, and a control that appended a row which
+# stopped being a SECOND row is exactly what that distinction cost in the
+# census negctl (rd vms-a85).
+#
+# NOTE, because it looks like a gap and is not: when this fires the control's
+# required fragment is never pushed to $WORK/needs, so the coverage check at
+# the end reds too. Two reds for one broken fixture is deliberate -- the second
+# says the property went unprovoked, which is the part that matters.
+#
+# MEASURED, both halves at once: write the closed-item control's fixture row as
+# `open inbox` instead of `closed done` -- a one-word change that leaves the
+# file changed, so injection_landed() is satisfied and the OLD kind of control
+# would have run happily against a tree carrying no closed citation at all. The
+# suite goes 62/0 -> 60 passed, 2 FAILED: this function fires naming
+# "[open] ... where [closed] ... are wanted", and the coverage check
+# independently reports " cites a CLOSED rd item: " as a failure message no
+# control provokes.
+cite_fixture_broken() {
+    if [ "$(cite_rows_for "$CITE_CLOSED_ID" "$WORK/orig/$(key_of "$LEDGER")")" -eq 0 ] && \
+       [ "$(cite_verdicts_for "$CITE_CLOSED_ID")" = "$2" ] && \
+       [ "$(cite_decl_count "$CITE_CLOSED_ID")" -eq 1 ]; then
+        return 1
+    fi
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): $1"
+    echo "        the fixture does not carry the property this control tests: the"
+    echo "        ledger holds [$(cite_verdicts_for "$CITE_CLOSED_ID")] for"
+    echo "        $CITE_CLOSED_ID, of which"
+    echo "        $(cite_rows_for "$CITE_CLOSED_ID" "$WORK/orig/$(key_of "$LEDGER")") row(s)"
+    echo "        were there before this control ran, and $(cite_decl_count "$CITE_CLOSED_ID")"
+    echo "        declaration(s) cite it -- where [$2], none pre-existing, and one"
+    echo "        citing declaration are wanted. The gate would be asked about a tree"
+    echo "        that is not the evasion. Re-anchor it, or rename the synthetic id;"
+    echo "        do NOT relax the gate."
+    return 0
+}
+
+# 1. THE FABRICATED ID, ledger untouched -- the attack exactly as it was run
+#    against the unwired gate: one token, nothing else edited.
+#    F_CITE_TREE_UNRESOLVED is NOT forbidden here and that is the honest
+#    reading: the fabricated id is in a file under src/, so the checker's own
+#    rescan finds it unresolved as well. One mutation, two true statements.
+cite_repoint vms-q9z9
+expect_red "$TIME" \
+    "a fabricated item id on a service declaration is not resolved by the ledger" \
+    "$F_CITE_UNLISTED" \
+    "$(cite_others "$F_CITE_UNLISTED" "$F_CITE_TREE_UNRESOLVED")"
+
+# 2. THE SAME ID AFTER THE LEDGER IS REGENERATED -- what an author who ran
+#    tools/gen_rd_citations.py would actually commit. The generator does not
+#    invent a row; it records that rd has no such item. Without this control,
+#    "regenerate it and the red goes away" would be true.
+cite_repoint vms-q9z9
+cite_row vms-q9z9 absent - "(rd has no such item)"
+expect_red "$TIME $LEDGER" \
+    "a fabricated item id stays red after the ledger is regenerated" \
+    "$F_CITE_ABSENT" \
+    "$(cite_others "$F_CITE_ABSENT")"
+
+# 3. A CLOSED ITEM, fixture synthesized in the sandbox. Two edits: the
+#    declaration repointed at the synthetic id, and the row the generator
+#    writes for a cited id rd reports done. The required fragment includes the
+#    id, so the red has to be about THIS citation and not some other.
+name_cite_closed="a service declaration citing a CLOSED rd item is rejected"
+cite_repoint "$CITE_CLOSED_ID"
+cite_row "$CITE_CLOSED_ID" closed done "negctl -- the row the generator writes for a closed item"
+if cite_fixture_broken "$name_cite_closed" "closed"; then
+    record_verdict "$name_cite_closed" 0
+    restore
+else
+    expect_red "$TIME $LEDGER" \
+        "$name_cite_closed" \
+        "$F_CITE_CLOSED$CITE_CLOSED_ID" \
+        "$(cite_others "$F_CITE_CLOSED")"
+fi
+
+# 4. DELETE THE LEDGER. Every declaration is untouched and every cited item is
+#    open -- so the only honest answer is a refusal to measure. A gate that
+#    reported "0 citations checked, PASS" here would be the silent-fallback
+#    shape Rule 9 forbids one layer down.
+rm -f "$LEDGER"
+expect_red "$LEDGER" \
+    "a deleted citation ledger is a REFUSAL, not a skip" \
+    "$F_CITE_NO_LEDGER" \
+    "$(cite_others "$F_CITE_NO_LEDGER")"
+
+# 5. A row this reader cannot parse. Skipping it is how a derived ledger rots
+#    into an allowlist with a typo in it, so one unparseable row refuses the
+#    whole file rather than dropping one line.
+printf 'vms-642 open inbox not tab separated at all\n' >> "$LEDGER"
+expect_red "$LEDGER" \
+    "a malformed ledger row is a REFUSAL" \
+    "$F_CITE_MALFORMED" \
+    "$(cite_others "$F_CITE_MALFORMED")"
+
+# 6. Strip the stamp. The ledger is a SNAPSHOT of rd and the one residual this
+#    design carries is that the snapshot can be older than the truth, so a
+#    ledger whose age cannot be printed cannot have that residual judged.
+sed -i '/^# generated-at:/d' "$LEDGER"
+expect_red "$LEDGER" \
+    "a ledger with no generated-at stamp is a REFUSAL" \
+    "$F_CITE_NO_STAMP" \
+    "$(cite_others "$F_CITE_NO_STAMP")"
+
+# 7. A stamp with the right SHAPE that is not an instant. The shape check
+#    accepts 2026-13-45T99:99:99Z, and the age arithmetic downstream would then
+#    print a number derived from nothing.
+sed -i 's|^# generated-at:.*|# generated-at: 2026-13-45T99:99:99Z|' "$LEDGER"
+expect_red "$LEDGER" \
+    "a ledger stamped with an instant that cannot exist is a REFUSAL" \
+    "$F_CITE_BAD_STAMP" \
+    "$(cite_others "$F_CITE_BAD_STAMP")"
+
+# 8. A stamp in the FUTURE. A snapshot of rd cannot predate its own source, so
+#    a future stamp means the field was written rather than generated -- and
+#    the age this gate prints every run is the only disclosure of staleness
+#    there is. A negative age discloses nothing.
+sed -i 's|^# generated-at:.*|# generated-at: 2999-12-31T00:00:00Z|' "$LEDGER"
+expect_red "$LEDGER" \
+    "a ledger stamped in the FUTURE is a REFUSAL" \
+    "$F_CITE_FUTURE" \
+    "$(cite_others "$F_CITE_FUTURE")"
+
+# 9. TWO ROWS FOR ONE ID -- the override, written in the order that would buy
+#    something. The reader takes the FIRST match, so the forged `open` row goes
+#    ABOVE the true `closed` one, and the id is CITED so that there is a verdict
+#    to steal: this is control 3's tree with one row pasted in front of the row
+#    that reds it. FORBIDDING F_CITE_CLOSED IS THE LOAD-BEARING HALF -- it is
+#    what proves the refusal beat the forgery rather than the forgery being
+#    inert.
+#
+#    MEASURED, so this control's non-vacuity is a run and not a claim: delete
+#    the 10-line `_cs_dups` block from tests/integration/lib/rd_citations.sh
+#    and nothing else, and the gate reads the forged `open` row first and
+#    returns rc=0 on this control's tree -- the register CERTIFIES the override
+#    for an id its own ledger also records as closed. The full suite on that
+#    mutilated tree: 61 passed, 1 FAILED, the single failure being this
+#    control, reporting "the register CERTIFIED the evasion".
+name_cite_dup="an id listed twice in the citation ledger is a REFUSAL"
+cite_repoint "$CITE_CLOSED_ID"
+cite_row "$CITE_CLOSED_ID" open active "negctl -- forged override row, written ABOVE the true one"
+cite_row "$CITE_CLOSED_ID" closed done "negctl -- the row the generator writes for a closed item"
+if cite_fixture_broken "$name_cite_dup" "open closed"; then
+    record_verdict "$name_cite_dup" 0
+    restore
+else
+    expect_red "$TIME $LEDGER" \
+        "$name_cite_dup" \
+        "$F_CITE_LEDGER_DUP" \
+        "$(cite_others "$F_CITE_LEDGER_DUP")"
+fi
+
+# 10. THE LEDGER STRIPPED TO ITS HEADER. The tree still cites 22 ids and there
+#     is nothing to resolve them with. A header with no rows is not the same
+#     file as a missing one and it is the same amount of evidence, so it is its
+#     own refusal rather than falling through to the per-id loop with nothing
+#     to read.
+sed -i '/^[^#]/d' "$LEDGER"
+expect_red "$LEDGER" \
+    "a ledger stripped to its header, resolving nothing, is a REFUSAL" \
+    "$F_CITE_NO_ROWS" \
+    "$(cite_others "$F_CITE_NO_ROWS")"
+
+# 11. THE ONE THIS GATE'S OWN PARSER CANNOT SEE. src/libvmssys/vms_kif.h
+#     carries OVMX-UNWIRED declarations, which belong to the kif caller census;
+#     this gate parses OVMX-USERSPACE / PARTIAL / LOCAL / EXECUTIVE and never
+#     hands that id to the checker. If the check were driven by this gate's
+#     parser alone, fabricating THAT id would be free here -- and a parser that
+#     finds nothing would produce a gate that certifies nothing while printing
+#     PASS. The checker rescans src/ and tools/ itself, so it reds.
+#     F_CITE_UNLISTED is forbidden: no id this gate PARSED is unresolved, which
+#     is exactly the distinction under test.
+sed -i 's|OVMX-UNWIRED: vms_kif_getlki (vms-[0-9a-z.]*)|OVMX-UNWIRED: vms_kif_getlki (vms-t7z7)|' "$KIFH"
+expect_red "$KIFH" \
+    "an id cited in the tree that this gate's own parser never reads is still resolved" \
+    "$F_CITE_TREE_UNRESOLVED" \
+    "$(cite_others "$F_CITE_TREE_UNRESOLVED")"
+
+# 12. GREEN. Repoint a declaration from one OPEN ledgered item to a DIFFERENT
+#     one. Every red above edits a citation or the ledger, so without this the
+#     suite would be equally consistent with a check that reds on ANY change to
+#     a cited id -- which would make the register unmaintainable and would be
+#     discovered by whoever next needed to move a declaration to its real
+#     owner, not here. The target is the SYNTHETIC open id rather than a real
+#     one, for the same reason controls 3 and 9 synthesize theirs: a real id is
+#     a pointer, and a green control keyed on one goes red the day that item is
+#     correctly closed.
+cite_repoint "$CITE_FIX_ID"
+expect_green "$TIME" \
+    "a declaration repointed to a DIFFERENT open ledgered item stays green"
 
 # ----------------------------------------------------------- GREEN controls --
 
@@ -717,7 +1178,7 @@ awk 'NR == FNR { b = b $0 ORS; next }
     "$WORK/negctl_branch" "$FDMAN" > "$WORK/fdman.new" && mv "$WORK/fdman.new" "$FDMAN"
 {
     echo ''
-    echo '/* OVMX-EXECUTIVE: sys$negctl_proven (vms-5b4) proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
+    echo '/* OVMX-EXECUTIVE: sys$negctl_proven ('"$CITE_FIX_ID"') proof=tests/qemu/test_syssvc_ef_mproc.c -- negctl */'
     echo 'uint32_t sys$negctl_proven(uint32_t efn) {'
     echo '    uint32_t st = 0;'
     echo '    (void)vms_kif_readef(efn, &st);'
@@ -745,7 +1206,7 @@ expect_green "$EVENT $PROOF $FDMAN" "an EXECUTIVE claim whose proof forks, calls
 # to land in the right code.
 {
     echo ''
-    echo '/* OVMX-EXECUTIVE: sys$negctl_unproven (vms-5b4) proof=tests/qemu/test_syssvc_lock.c -- negctl */'
+    echo '/* OVMX-EXECUTIVE: sys$negctl_unproven ('"$CITE_FIX_ID"') proof=tests/qemu/test_syssvc_lock.c -- negctl */'
     echo 'uint32_t sys$negctl_unproven(uint32_t efn) {'
     echo '    uint32_t st = 0;'
     echo '    (void)vms_kif_readef(efn, &st);'
@@ -782,7 +1243,7 @@ awk 'NR == FNR { b = b $0 ORS; next }
     "$WORK/negctl_branch" "$FDMAN" > "$WORK/fdman.new" && mv "$WORK/fdman.new" "$FDMAN"
 {
     echo ''
-    echo '/* OVMX-EXECUTIVE: sys$negctl_offpath (vms-5b4) proof=tests/qemu/test_syssvc_lock.c -- negctl */'
+    echo '/* OVMX-EXECUTIVE: sys$negctl_offpath ('"$CITE_FIX_ID"') proof=tests/qemu/test_syssvc_lock.c -- negctl */'
     echo 'uint32_t sys$negctl_offpath(uint32_t efn) {'
     echo '    uint32_t st = 0;'
     echo '    (void)vms_kif_readef(efn, &st);'
@@ -800,7 +1261,7 @@ expect_red "$EVENT $LOCKPROOF $FDMAN" "an EXECUTIVE claim paid by a fabricated d
 # above are not satisfiable by a gate that rejects every PARTIAL line.
 {
     echo ''
-    echo '/* OVMX-PARTIAL: sys$negctl_mixed (vms-5b4) -- exec: the flag word */'
+    echo '/* OVMX-PARTIAL: sys$negctl_mixed ('"$CITE_FIX_ID"') -- exec: the flag word */'
     echo '/* OVMX-LOCAL: sys$negctl_mixed -- the counter added to it */'
     echo 'static int ovmx_negctl_mixed_state = 0;'
     echo 'uint32_t sys$negctl_mixed(uint32_t efn) {'
@@ -873,6 +1334,23 @@ printf 'int ovmx_negctl_not_a_service(void) { return 0; }\n' > "$NOSYS/src/plain
 guard "$NOSYS" "a tree with C code but zero sys\$ services in it" \
     "THE FLOOR: zero sys\$ services found in the product compile set."
 
+# THE CITATION FLOOR, which is the same shape one layer down and needs its own
+# fixture for the same reason: the mutation is "the tree cites nothing", and
+# reaching that state inside $ROOT would mean stripping every OVMX marker out
+# of a real copy of the product, which is neither minimal nor restorable.
+#
+# The ledger here is a byte copy of the committed one -- intact, stamped, 22
+# rows -- so the refusal cannot be about the ledger. What is missing is any
+# citation to resolve, and the honest answer to that is a REFUSAL: the gate
+# cannot tell "every facility got wired" from "the declarations were deleted",
+# and deletion is always the cheapest way to satisfy a counter.
+NOCITE="$WORK/fixture-no-citations"
+mkdir -p "$NOCITE/src" "$NOCITE/tools" "$NOCITE/tracking"
+printf 'int ovmx_negctl_not_a_service(void) { return 0; }\n' > "$NOCITE/src/plain.c"
+cp "$SRC_ROOT/tracking/rd-citations.tsv" "$NOCITE/tracking/rd-citations.tsv"
+guard "$NOCITE" "a tree with an intact ledger that cites no rd item at all" \
+    "$F_CITE_NO_CITATIONS"
+
 # ---------------------------------------------------------------- coverage --
 # "EVERY property has an evasion" is a claim this file used to make in its own
 # closing line while the enumeration behind it lived only in the author's head.
@@ -924,6 +1402,52 @@ grep -oE 'BROKEN BUILD-SET SCAN: ' "$GATE" | sort -u >> "$WORK/derived"
 # disk.
 grep -oF 'THE FLOOR: zero sys\$ services found in the product compile set.' "$GATE" \
     | sed 's/\\\$/$/' | sort -u >> "$WORK/derived"
+
+# THE CITATION CHECKER'S MESSAGES ARE THE GATE'S MESSAGES (rd vms-32e). The
+# gate SOURCES tests/integration/lib/rd_citations.sh, so every FAIL that
+# library can print is a FAIL this gate can print, and leaving them out of this
+# derivation would let the closing line below say "all N failure messages the
+# gate can emit are provoked" while a whole verdict class went unprovoked --
+# which is the exact shape of defect this file was extended to close.
+#
+# HOW IT IS EXTRACTED, and why it is not a hand-written list: every
+# `echo "FAIL: ..."` in that library is reduced to its LONGEST run of literal
+# text containing no shell variable. That is deterministic, it survives the
+# variables being renamed, and a message reworded around its longest literal
+# desyncs this check instead of slipping past it.
+#
+# WHAT IT DOES NOT CATCH, said rather than implied: a FAIL the library prints
+# some other way -- a printf, a multi-line here-doc, an echo not ending in a
+# quote -- is not extracted, exactly as a FAIL the gate prints outside the four
+# shapes above is not. And the gate's OWN "cannot find the citation checker"
+# refusal is deliberately not here: it is a PREREQUISITE failure, the same
+# class as "no compiler" and "no cmake", provoked by the gate's install being
+# broken and by no mutation of the tree.
+CITE_LIB="$SRC_ROOT/tests/integration/lib/rd_citations.sh"
+if [ ! -f "$CITE_LIB" ]; then
+    echo "  FAIL: BROKEN COVERAGE CHECK: no citation checker at $CITE_LIB, so its"
+    echo "        failure messages cannot be derived and the coverage claim below"
+    echo "        would silently exclude them."
+    exit 1
+fi
+sed -n 's/^[ 	]*echo "\(FAIL: .*\)"$/\1/p' "$CITE_LIB" | awk '
+{
+    best = ""
+    n = split($0, parts, /\$[A-Za-z_][A-Za-z0-9_]*/)
+    for (i = 1; i <= n; i++) if (length(parts[i]) > length(best)) best = parts[i]
+    if (best != "") print best
+}' | sort -u > "$WORK/derived_cite"
+ncite=$(grep -c . "$WORK/derived_cite" || true)
+if [ "${ncite:-0}" -eq 0 ]; then
+    echo "  FAIL: BROKEN COVERAGE CHECK: no failure message was extracted from the"
+    echo "        citation checker, so the citation verdicts would be covered"
+    echo "        vacuously. The extraction above no longer matches how"
+    echo "        ${CITE_LIB#"$SRC_ROOT"/} spells them -- fix the extraction, do NOT"
+    echo "        drop it."
+    exit 1
+fi
+cat "$WORK/derived_cite" >> "$WORK/derived"
+
 : > "$WORK/uncovered"
 ncov=0
 while IFS= read -r msg; do

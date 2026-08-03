@@ -4320,6 +4320,89 @@ is the gate; it is the first genuinely unexamined mechanism found in sessions.**
 ACCEPT_REQ on our own wire and compare it with OVMX's. Rule 8: the book gives
 the mechanism, our own captures give the bytes.
 
+### 4M.30 ⭐⭐⭐⭐ THE MASQUERADE TEST — a documented rule that abandons VC formation silently
+
+**Source: Roy G. Davis, *VAXcluster Principles*, Digital Press 1993, §2.3,
+p. 2-21, footnote †.** This is what thirteen sessions of wire work could not
+see, because it is a *decision the peer makes internally and never announces*.
+
+> *"† At this time, **special tests are made to ensure that the remote node is
+> not masquerading as a node already known to the local system.** For example,
+> if the SCS System ID in the formative System Block matches the SCS System ID
+> in a System Block already in the Configuration Queue, the SCS Node Names must
+> also match. The converse is also true. **If both items match, and if there is
+> a Path Block already queued to the System Block in the Configuration Queue,
+> then the 64-bit incarnation numbers must also match. Virtual circuit formation
+> is abandoned if any of these tests fail.**"*
+
+And the Note immediately preceding it, which explains why a **real** node
+survives the same path (same page):
+
+> *"If there are no other Path Blocks queued to the old System Block, the new
+> Path Block represents the only open virtual circuit with the remote node. If
+> this is the case, **the old System Block is refreshed** based on the contents
+> of the formative System Block before the formative System Block is discarded.
+> **Typically, this happens when the remote node was once in the cluster,
+> departed, and is now rebooting.**"*
+
+### The mechanism, stated
+
+1. The peer keeps a **System Block** per remote node. **§4L.9e measured exactly
+   this** — the SB persists per identity across our death, and we recorded it as
+   "NORMAL, not the bug". It is normal; it is also the precondition.
+2. On our return the peer builds a **formative** SB + Path Block from our START.
+3. When the VC would reach OPEN, the formative PB is queued to the **old** SB —
+   and the masquerade tests run.
+4. SCSSYSTEMID matches. SCSNODE matches. **So if a Path Block is still queued to
+   that old SB, our 64-bit incarnation must ALSO match.**
+5. **OVMX emits a FRESH incarnation every boot** — correctly, per §4 and the
+   published definition (*"established when the system is booted"*). On a rejoin
+   that fresh value **cannot** match. → **VIRTUAL CIRCUIT FORMATION ABANDONED.**
+6. A real rebooting node passes because **its departure leaves no Path Block**,
+   so the SB is *refreshed* with the new incarnation and the test never applies.
+
+### Why this fits EVERY observation, including the ones that killed other theories
+
+| observation | explained |
+|---|---|
+| Nothing is rejected — `Rej/Disconn Reason 0` everywhere (§4M.18) | VC formation is **abandoned**, not rejected. There is no reject message in this path. |
+| The peer never acknowledges our byte-identical `op9` (§4M.24) | The VC carrying it is being abandoned. Our frames are irrelevant. |
+| **Nothing we transmit differs by one non-per-run byte** (§4M.16) | Correct — and it never could. The test is on peer-held state vs. one field. |
+| CDTs stuck in `con_pend`/`disc_pend`, queued messages never transmitted (§4M.18, §4M.28) | Downstream of an abandoned VC. |
+| Reproduces on a **virgin cluster** (§4M.25) | The *first* join creates the SB and PB. History is irrelevant. |
+| Identity-keyed; repeats indefinitely (§4L.9d) | The SB is per-identity and persists. |
+| A real node rejoins fine (§4M.22) | Its departure clears the Path Block. |
+| Ten fixes to what we transmit changed nothing | The gate was never in what we transmit. |
+
+**It also retro-explains §3 item 9** (changing one half of the identity pair
+fails *differently*): that is the FIRST masquerade test — ID matches, name must
+match — firing instead of the incarnation test.
+
+> **⚠ NOT YET PROVEN. This is a documented rule plus a consistent fit, which is
+> exactly the state seven dead hypotheses were in.** §4L.9a: *"Consistency is not
+> evidence."* The difference here is that it is falsifiable in one run.
+
+### The test, running now
+
+`OVMX_INCARNATION_TIME=<n>` pins the quadword (§4). **Present the SAME
+incarnation on the rejoin that the peer already recorded**; if the masquerade
+test is the gate, it passes and the VC forms.
+
+`Z1A` fresh, incarnation pinned · **`Z1B` rejoin, SAME pinned incarnation — THE
+TEST** · `Z1C` rejoin, live/differing incarnation — the normal failure as a
+one-variable control · `Z2A` fresh closing control.
+
+> **⚠ This is a DIAGNOSTIC, not the fix.** A real node rejoins *with a new
+> incarnation*, because its Path Block is gone. If `Z1B` joins, the confirmed
+> mechanism points the real fix at **our DEPARTURE** — ensuring the peer's Path
+> Block is dequeued when OVMX exits — not at freezing our incarnation, which
+> would be VMS-incorrect and would earn the CLUEXIT of §4/App. C.7.1.
+
+**Transcript provenance:** the chapter was photographed from a legitimately
+borrowed copy and transcribed to `/home/baron/cluster/transcript/part{1..4}.md`
+— **deliberately OUTSIDE the git repo.** Load-bearing passages are quoted here
+with citation, as the DTJ material is; the full chapter is not committed.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

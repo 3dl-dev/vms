@@ -260,6 +260,63 @@ static void test_response_live_counters(void)
           "fresh-formation golden counters 7/8 reproduced when passed explicitly");
 }
 
+/*
+ * vms-e1a, p. 2-35: "each packet contains source and destination CONIDs. These
+ * quantities come from the CDT used by SCS on the source node to describe the
+ * connection between the two SYSAPs. The source CONID comes from the local
+ * CONID field of that CDT; and the destination CONID comes from the remote
+ * CONID field of the CDT."
+ *
+ * The 110-byte connect class is where the two CONIDs are EXCHANGED (p. 2-28:
+ * "SCA defines that these numbers be included in CONNECT_REQ and ACCEPT_REQ
+ * packets"), so it is the one class with a principled zero: a CONNECT_REQ has
+ * no destination CONID yet because the peer's CDT does not exist. Everything
+ * after it carries both. This pins that asymmetry on the frames OVMX BUILDS,
+ * and pins that whatever OVMX uses as its local CONID reaches abs 68 unaltered
+ * -- which is what lets a CDT's local_conid field be the source of that value
+ * without any wire change (see scs_cdt.h's WIRE VERDICT).
+ */
+static void test_both_conids_present_p235(void)
+{
+    printf("[p. 2-35: source and destination Con.IDs on the built frames]\n");
+    struct scs_connect_params cp;
+    memset(&cp, 0, sizeof(cp));
+    memcpy(cp.dst_mac, vax1_mac, 6);
+    memcpy(cp.src_mac, ovmx_mac, 6);
+    memcpy(cp.src_logical, ovmx_logical, 6);
+    memcpy(cp.peer_logical, vax1_mac, 6);
+
+    /* An arbitrary CONID pair, deliberately NOT the shipped OVMX constants, so
+     * the assertion is "the field is filled from the parameter", not "the field
+     * happens to hold a familiar constant". */
+    const uint32_t local = 0x4F58002Au;  /* would be CDL slot 0x2A */
+    const uint32_t remote = 0x33580008u; /* the VAX's own CONID */
+    cp.local_conid = local;
+    cp.remote_conid = remote;
+
+    uint8_t req[SCS_CONNECT_FRAME_LEN];
+    uint8_t resp[SCS_CONNECT_FRAME_LEN];
+    check(scs_connect_build_request(&cp, req) == 0, "build_request succeeds");
+    check(scs_connect_build_response(&cp, resp) == 0, "build_response succeeds");
+
+    /* CONNECT_REQ: source CONID present, destination CONID zero BY THE
+     * ARCHITECTURE (the peer's CDT does not exist yet, p. 2-28). */
+    check(le32(req + 68) == local, "CONNECT_REQ source Con.ID == our local CONID (abs 68)");
+    check(le32(req + 64) == 0, "CONNECT_REQ destination Con.ID == 0 (peer CDT not yet formed)");
+
+    /* ACCEPT_REQ / CONNECT-RESPONSE: BOTH present. */
+    check(le32(resp + 68) == local, "ACCEPT_REQ source Con.ID == our local CONID (abs 68)");
+    check(le32(resp + 64) == remote, "ACCEPT_REQ destination Con.ID == peer's CONID (abs 64)");
+    check(le32(resp + 64) != 0 && le32(resp + 68) != 0,
+          "ACCEPT_REQ carries BOTH Con.IDs non-zero (p. 2-35)");
+
+    /* The parser reads back exactly what the builder wrote, both directions. */
+    struct scs_connect_view v;
+    check(scs_connect_parse(resp, sizeof(resp), &v) == 0, "parse our own ACCEPT_REQ");
+    check(v.has_conid && v.local_conid == local && v.remote_conid == remote,
+          "round-trip: parsed Con.ID pair matches what was built");
+}
+
 int main(void)
 {
     printf("test_scs_connect: directed HELLO + SCS connect (vms-5fe/vms-c6d)\n");
@@ -268,6 +325,7 @@ int main(void)
     test_build_request();
     test_build_response();
     test_response_live_counters();
+    test_both_conids_present_p235();
     printf("test_scs_connect: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

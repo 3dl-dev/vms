@@ -343,6 +343,75 @@ static void test_incarnation_echo(void)
     check(le16(lout + 14 + 22) == 3, "lookup response [22:24] == 3 echoed");
 }
 
+/*
+ * vms-e1a, p. 2-35: "each packet contains source and destination CONIDs ...
+ * The source CONID comes from the local CONID field of that CDT".
+ *
+ * The directory exchange is where that rule meets its one measured exception,
+ * so pin it here rather than let a future reader "fix" it. Classifying every
+ * 0x13-format SCS frame in our own captures by total SCA length and by whether
+ * abs 64 / abs 68 are zero (formation-ci1-joinwindow.pcap, 3000 frames;
+ * vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap, 19930 frames):
+ *
+ *   - the 66-byte class (both 0x4b and 0x5b) carries SOURCE Con.ID == 0 on the
+ *     real VAX wire in 31 of 31 observed frames;
+ *   - the 94-byte and 110-byte directory classes carry BOTH Con.IDs non-zero.
+ *
+ * So OVMX's connect-echo builder leaving abs 68 at zero is NOT a shortcut to be
+ * tidied up later: filling it would be a deviation from the observed wire. The
+ * consequence for the connection layer is that a zero source Con.ID must mean
+ * "this class does not carry one", never "the sender is connection 0" -- which
+ * is exactly how scs_cdl_deliver_message treats it (scs_cdt.h WIRE VERDICT).
+ */
+static void test_source_conid_p235(void)
+{
+    printf("[p. 2-35: source Con.ID per directory frame class]\n");
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, vax1_mac, 6);
+    memcpy(p.src_mac, ovmx_mac, 6);
+    memcpy(p.src_logical, ovmx_logical, 6);
+    memcpy(p.peer_logical, vax1_mac, 6);
+    p.remote_conid = 0x63050008u;
+    p.local_conid = SCS_DIR_OVMX_CONID;
+    p.recv_ack = 3;
+    p.send_seq = 4;
+
+    /* 66-byte connect-echo: destination present, SOURCE ZERO -- and it stays
+     * zero even when a local Con.ID IS supplied, which is the point. */
+    uint8_t echo[SCS_DIR_ECHO_FRAME_LEN];
+    check(scs_dir_build_connect_echo(&p, echo) == 0, "build echo (66-byte class)");
+    check((size_t)(echo[14] | (echo[15] << 8)) + 2 == SCS_DIR_ECHO_SCA_LEN,
+          "echo is the 66-byte SCA class");
+    check(le32(echo + 64) == 0x63050008u, "echo destination Con.ID present (abs 64)");
+    check(le32(echo + 68) == 0u,
+          "echo source Con.ID stays 0 even with local_conid set (66-byte class, 31/31 on the wire)");
+
+    /* 110-byte connect-response: BOTH present. */
+    uint8_t resp[SCS_DIR_RESP_FRAME_LEN];
+    check(scs_dir_build_connect_response(&p, resp) == 0, "build response (110-byte class)");
+    check(le32(resp + 64) != 0 && le32(resp + 68) != 0,
+          "110-byte directory response carries BOTH Con.IDs non-zero (p. 2-35)");
+
+    /* 94-byte lookup response: BOTH present. */
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, vax1_mac, 6);
+    memcpy(lp.src_mac, ovmx_mac, 6);
+    memcpy(lp.src_logical, ovmx_logical, 6);
+    memcpy(lp.peer_logical, vax1_mac, 6);
+    lp.remote_conid = 0x63050008u;
+    lp.local_conid = SCS_DIR_OVMX_CONID;
+    lp.opcode = SCS_DIR_OPCODE;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memcpy(lp.name, "VMS$VAXcluster  ", SCS_DIR_NAME_LEN);
+    lp.affirmative = 1;
+    uint8_t look[SCS_DIR_LOOKUP_FRAME_LEN];
+    check(scs_dir_build_lookup_response(&lp, look) == 0, "build lookup (94-byte class)");
+    check(le32(look + 64) != 0 && le32(look + 68) != 0,
+          "94-byte lookup response carries BOTH Con.IDs non-zero (p. 2-35)");
+}
+
 int main(void)
 {
     printf("test_scs_dir: SCS$DIRECTORY connect + SCS$DIR_LOOKUP (vms-246)\n");
@@ -350,6 +419,7 @@ int main(void)
     test_build_connect_response();
     test_build_lookup_response();
     test_incarnation_echo();
+    test_source_conid_p235();
     printf("test_scs_dir: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

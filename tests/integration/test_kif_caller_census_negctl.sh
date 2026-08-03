@@ -1053,7 +1053,90 @@ fi
 #   33 the ledger has no generated-at stamp                     -> REFUSE
 #   34 the ledger lists one id twice                            -> REFUSE
 #   35 GREEN: a citation repointed to a DIFFERENT open item     -> GREEN
+#
+# WHY 30 AND 34 BUILD THEIR OWN CLOSED EXEMPLAR (rd vms-a85). Both used to name
+# the literal `vms-fb9`, an id that was `done` in rd AND carried a ledger row
+# because src/libvms/syssvc/sys_device.c cited it. 30 repointed a declaration
+# at it; 34 appended a second row for it. vms-fab then repointed that citation
+# -- it was the last closed id cited anywhere under src/ -- and the regenerated
+# ledger became 22 rows, every one open. MEASURED on that tree: control 30 went
+# red for the WRONG reason (F_CITE_UNLISTED: the id is in no row at all), and
+# control 34's appended row became the FIRST vms-fb9 row rather than a second
+# one, so no refusal fired and it reported "the census CERTIFIED the evasion".
+# A control written to prove the duplicate-row property was proving nothing.
+#
+# Both had been keyed on a property of the product tree that another item
+# existed to REMOVE, which is the same defect this suite exists to catch, one
+# level up -- and the same one vms-fab found in the sibling register negctl.
+# Re-aiming them at a different real closed id is not available: after vms-fab
+# no closed id is cited under src/ or tools/ at all, and keeping it that way is
+# what vms-fab is for. Deriving the exemplar from whatever the ledger happens
+# to carry was the third option; it resolves to nothing on this tree, so the
+# control would disable itself, which is the shape these gates reject.
+#
+# So each control SYNTHESIZES its fixture in the sandbox -- the citing
+# declaration AND the ledger row that resolves it -- and then CHECKS that what
+# it built has the property it is about to test the gate against.
+# injection_landed() proves a file changed; it does not prove the change means
+# anything, and control 34 is what that distinction costs when it is skipped.
+# What is under test here is the gate's reading of a `closed` row and of two
+# rows for one id, not rd's opinion of any particular item, so a row in the
+# shape tools/gen_rd_citations.py writes is the faithful fixture.
 # ---------------------------------------------------------------------------
+
+# The synthetic id controls 30 and 34 own. Nothing in the product tree cites
+# it and no committed ledger row names it; cite_id_free below is the check
+# that this is still true, rather than an assumption.
+CITE_CLOSED_ID="vms-negctl30"
+
+# cite_row <verdict> <rd status> <title>: append one row for $CITE_CLOSED_ID in
+# the ledger's own four-field tab-separated shape.
+cite_row() {
+    printf '%s\t%s\t%s\t%s\n' "$CITE_CLOSED_ID" "$1" "$2" "$3" >> "$LEDGER"
+}
+
+# The verdict column of every row now carrying $CITE_CLOSED_ID, IN FILE ORDER,
+# space-joined: "" before a fixture is built, "closed" after 30's, and
+# "open closed" after 34's -- which is the order that matters, since the reader
+# takes the first match.
+cite_verdicts() {
+    awk -F'\t' -v id="$CITE_CLOSED_ID" '
+        $1 == id { out = (out == "" ? $2 : out " " $2) }
+        END { print out }' "$LEDGER"
+}
+
+# How many declarations cite it. 1 once a fixture is built.
+cite_decl_count() {
+    grep -cF "OVMX-UNWIRED: vms_kif_ttsetmode ($CITE_CLOSED_ID)" "$H"
+}
+
+# How many rows the PRISTINE sandbox ledger carries for it -- 0, or these two
+# controls are measuring a real citation instead of the fixture they build.
+cite_pristine_rows() {
+    awk -F'\t' -v id="$CITE_CLOSED_ID" '
+        $1 == id { n++ } END { print n + 0 }' "$WORK/orig/$(key_of "$LEDGER")"
+}
+
+# cite_fixture_broken <control> <want-verdicts>: 0 when the fixture just built
+# does NOT have the property the control is about to test the gate against,
+# after printing why. This is the check control 34 did not have: it appended a
+# row and asked the gate a question, and when the row stopped being a SECOND
+# row there was nothing between that and a green suite.
+cite_fixture_broken() {
+    if [ "$(cite_pristine_rows)" -eq 0 ] && \
+       [ "$(cite_verdicts)" = "$2" ] && [ "$(cite_decl_count)" -eq 1 ]; then
+        return 1
+    fi
+    echo "  FAIL: BROKEN FIXTURE (not a broken gate): $1"
+    echo "        the fixture does not have the property this control tests: the"
+    echo "        ledger carries [$(cite_verdicts)] for $CITE_CLOSED_ID, of which"
+    echo "        $(cite_pristine_rows) row(s) were there before this control ran,"
+    echo "        and $(cite_decl_count) declaration(s) cite it -- where [$2], none"
+    echo "        pre-existing, and one citing declaration are wanted. The gate"
+    echo "        would be asked about a tree that is not the evasion. Re-anchor"
+    echo "        it, or rename the synthetic id; do NOT relax the gate."
+    return 0
+}
 
 # 28. The fabricated id, ledger untouched. This is the attack exactly as it was
 #     run against the previous revision: one token, nothing else edited.
@@ -1083,19 +1166,29 @@ expect_red "$H $LEDGER" \
     "$F_CITE_UNLISTED" "$F_CITE_CLOSED" "$F_CITE_NO_LEDGER" \
     "$F_CITE_MALFORMED" "$F_CITE_NO_STAMP" "$F_CITE_LEDGER_DUP"
 
-# 30. A CLOSED item. vms-fb9 is `done` and is already in the ledger (it is
-#     cited from src/libvms/syssvc/sys_device.c), so this control edits ONE
-#     character of tree state and nothing else -- no ledger surgery, which is
-#     what makes it the honest reproduction of the second measured attack.
-sed -i 's|OVMX-UNWIRED: vms_kif_ttsetmode (vms-a36)|OVMX-UNWIRED: vms_kif_ttsetmode (vms-fb9)|' "$H"
-expect_red "$H" \
-    "a citation of a CLOSED rd item is rejected" \
-    "$F_CITE_CLOSED" \
-    "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
-    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
-    "$F_NO_BUILD" "$F_NO_IFACE" \
-    "$F_CITE_UNLISTED" "$F_CITE_ABSENT" "$F_CITE_NO_LEDGER" \
-    "$F_CITE_MALFORMED" "$F_CITE_NO_STAMP" "$F_CITE_LEDGER_DUP"
+# 30. A CLOSED item, the fixture built in the sandbox (see the note above).
+#     Two edits: a declaration repointed at $CITE_CLOSED_ID, and the row the
+#     generator writes for a cited id that rd reports done. The gate is then
+#     asked the question it is for -- does a `closed` row refuse the exemption
+#     -- with nothing else in the tree changed. The required fragments include
+#     the id, so the red has to be about THIS citation and not some other.
+name30="a citation of a CLOSED rd item is rejected"
+sed -i "s|OVMX-UNWIRED: vms_kif_ttsetmode (vms-a36)|OVMX-UNWIRED: vms_kif_ttsetmode ($CITE_CLOSED_ID)|" "$H"
+cite_row closed done "negctl 30 -- the row the generator writes for a closed item"
+if cite_fixture_broken "$name30" "closed"; then
+    record_verdict "$name30" 0
+    restore
+else
+    expect_red "$H $LEDGER" \
+        "$name30" \
+        "$F_CITE_CLOSED
+$CITE_CLOSED_ID" \
+        "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+        "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+        "$F_NO_BUILD" "$F_NO_IFACE" \
+        "$F_CITE_UNLISTED" "$F_CITE_ABSENT" "$F_CITE_NO_LEDGER" \
+        "$F_CITE_MALFORMED" "$F_CITE_NO_STAMP" "$F_CITE_LEDGER_DUP"
+fi
 
 # 31. Delete the ledger. The declarations are untouched and all five cited
 #     items are open in rd -- so the ONLY honest answer is a refusal to
@@ -1138,18 +1231,41 @@ expect_red "$LEDGER" \
     "$F_CITE_UNLISTED" "$F_CITE_ABSENT" "$F_CITE_CLOSED" \
     "$F_CITE_NO_LEDGER" "$F_CITE_MALFORMED" "$F_CITE_LEDGER_DUP"
 
-# 34. Two rows for one id. The reader takes the first match, so a second row
-#     would let whoever appends it choose the verdict -- an `open` row pasted
-#     under a `closed` one is a hand-written override that looks like data.
-printf 'vms-fb9\topen\tactive\tsecond row, contradicting the first\n' >> "$LEDGER"
-expect_red "$LEDGER" \
-    "an id listed twice in the ledger is a REFUSAL" \
-    "$F_CITE_LEDGER_DUP" \
-    "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
-    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
-    "$F_NO_BUILD" "$F_NO_IFACE" \
-    "$F_CITE_UNLISTED" "$F_CITE_ABSENT" "$F_CITE_CLOSED" \
-    "$F_CITE_NO_LEDGER" "$F_CITE_MALFORMED" "$F_CITE_NO_STAMP"
+# 34. Two rows for one id -- the override, written in the order that would buy
+#     something. The reader takes the FIRST match, so the forged `open` row
+#     goes ABOVE the true `closed` one, and the id is CITED by a declaration so
+#     that there is a verdict to steal: this is 30's tree with one row pasted
+#     in front of the row that reds it. Forbidding F_CITE_CLOSED is the load-
+#     bearing half of the assertion -- it is what proves the refusal beat the
+#     forgery rather than the forgery being harmless.
+#
+#     MEASURED, so that this control's non-vacuity is a run and not a claim:
+#     with the duplicate-row refusal deleted from
+#     tests/integration/lib/rd_citations.sh (the `_cs_dups` block, 10 lines)
+#     and nothing else changed, the gate reads the forged row first, prints
+#     "13 declaration site(s) cite 5 distinct rd item(s) -- 5 open, 0 closed"
+#     and exits rc=0 on this control's tree: the census CERTIFIES the override
+#     for an item its own ledger also records as closed. The full suite on
+#     that mutilated tree was 42 passed / 1 FAILED, the single failure being
+#     this control, reporting "the census CERTIFIED the evasion".
+name34="an id listed twice in the ledger is a REFUSAL"
+sed -i "s|OVMX-UNWIRED: vms_kif_ttsetmode (vms-a36)|OVMX-UNWIRED: vms_kif_ttsetmode ($CITE_CLOSED_ID)|" "$H"
+cite_row open active "negctl 34 -- forged override row, written ABOVE the true one"
+cite_row closed done "negctl 34 -- the row the generator writes for a closed item"
+if cite_fixture_broken "$name34" "open closed"; then
+    record_verdict "$name34" 0
+    restore
+else
+    expect_red "$H $LEDGER" \
+        "$name34" \
+        "$F_CITE_LEDGER_DUP
+$CITE_CLOSED_ID" \
+        "$F_UNDECL" "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+        "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+        "$F_NO_BUILD" "$F_NO_IFACE" \
+        "$F_CITE_UNLISTED" "$F_CITE_ABSENT" "$F_CITE_CLOSED" \
+        "$F_CITE_NO_LEDGER" "$F_CITE_MALFORMED" "$F_CITE_NO_STAMP"
+fi
 
 # 35. GREEN. Repoint a declaration from one OPEN ledgered item to a DIFFERENT
 #     one. Every red above edits a citation, so without this the suite would be

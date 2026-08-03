@@ -3994,17 +3994,43 @@ into the peer's receive window**. So the discriminator is not the frame's
 content but its *acceptability* — sequence-window state, connection binding, or
 something the peer keys on that a byte diff of the frame cannot see.
 
-**Where to go next, concretely:**
-1. **`ps->vc.seq` is SHARED across every connection to a peer** (`struct
-   peer_state`: *"All sends ride the shared per-channel `ps->vc.seq`"*). Check
-   whether `send_seq=12` was already spent on a DIFFERENT connection to that
-   peer before the `op9` — a duplicate sequence number at VC level would be
-   discarded exactly like this. **This is the strongest untested hypothesis on
-   the item and it is answerable from captures already on disk.**
-2. Compare, join vs refusal, every OVMX→peer frame's `send_seq` in the 200 ms
-   before the `op9`, and find where the numbering diverges.
-3. **⚠ Do NOT re-propose "our op9 is malformed"** — §4M.16 and §4M.21 killed
-   that twice.
+### ⛔ AND THE VC-DUPLICATE HYPOTHESIS IS DEAD — killed free, from disk
+
+The obvious explanation was that `ps->vc.seq` is **shared across every
+connection to a peer** (`struct peer_state`: *"All sends ride the shared
+per-channel `ps->vc.seq`"*), so `send_seq=12` might already have been spent on
+another connection, making our `op9` a VC-level duplicate. **It is not.** Every
+OVMX→VAX1 sequenced frame, join vs refusal:
+
+| # | `Q1A` **join** | `U1B` **refusal** |
+|---|---|---|
+| 1–4 | `op1`, `op2`, `op0`, `op10` | **identical** |
+| 5–8 | `op3`, `op10`×3 | **identical** |
+| 9–11 | `op10`×3 | **identical** |
+| **12** | **`op9`** | **`op9`** |
+| 13+ | `op7`, `op6`, `op1`, `op4` → proceeds | `op9` replayed, `op6`, `op9` replayed |
+
+**Twelve frames, same opcodes, same sequence numbers, no duplicate anywhere.**
+Our numbering is perfect and identical right up to the `op9`.
+
+> **So the peer receives an identically-numbered, identically-formed `op9` in
+> both cases, and acknowledges it in one and not the other. The discriminator is
+> not in our frame, not in our sequence numbering, and not in our timing.** It
+> is state the peer holds, and every observable we can reach says our side is
+> correct.
+
+**⚠ Do NOT re-propose any of these** — each is now killed with a matched
+control: "our `op9` is malformed" (§4M.16, §4M.21), "our sequence numbering is
+wrong" (here), "we fail to answer something" (§4M.18 — we answer everything),
+"the peer is rejecting us" (`Rej/Disconn Reason 0` on every CDT).
+
+**What is genuinely left:** why a VMS connection manager declines to advance
+`recv_ack` on a correctly sequenced, correctly formed, correctly addressed
+frame — for a returning identity only. That is peer-internal, below every
+oracle the lab exposes, and undocumented in both the public SDA manual and the
+lab's own `HELP` (§4M.22). **The honest next step is not another OVMX-side fix;
+it is either a VMS-internals documentation source we have not found, or an
+operator ruling that this is a gate.**
 
 ### 4M.5 The test, and its kill-switch
 

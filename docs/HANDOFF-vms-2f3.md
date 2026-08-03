@@ -3879,6 +3879,58 @@ connection, matching §4M.15's `0x01/0x05` — and in a refusal it emits neither
 > disassembly). That documentation route has not been tried and is the cheapest
 > unexplored avenue.
 
+### 4M.23 ⭐⭐⭐ THE DISCONNECT PROTOCOL, FROM PUBLIC DOCUMENTATION — it is SYMMETRIC, and both sides must call disconnect
+
+**§4M.22 named public OpenVMS documentation as the cheapest unexplored avenue.
+It paid.** Source: **Digital Technical Journal Vol. 1 No. 5, September 1987,
+"The System Communication Architecture", p. 25** — a published DEC journal
+article, squarely inside CLAUDE.md Rule 8.
+
+> *"When either member of a pair of SYSAPs holding an open connection wishes to
+> break that connection, that member performs a **disconnect call** to its SCA
+> software. **The SCA software will inform the SYSAP in the other node, which
+> must then perform its own disconnect call to synchronize the dismantling of
+> the connection.** Each side informs the other of the disconnect call by
+> exchanging a **disconnect-request and disconnect-response message pair.**"*
+
+**This grounds `op6`/`op7` for the first time from documentation rather than
+inference, and it explains the shape we have measured all along:**
+
+```
+peer op6 (disconnect-request)  ->  OVMX op7 (disconnect-response)     side 1
+OVMX op6 (disconnect-request)  ->  peer op7 (disconnect-response)     side 2
+```
+
+Exactly two request/response pairs, one per side — in every OVMX join and in
+the reference real-node rejoin (§4M.22). **The teardown is SYMMETRIC: it is not
+complete until BOTH members have performed their own disconnect call.**
+
+> **So `disc_sent` / `disc_pend` reads naturally as: the peer has performed its
+> disconnect call and is waiting for the other side to perform its own.**
+
+**⛔ And the "stale CDT from the previous incarnation" idea is dead.** The stuck
+CDT's Con.ID pair (`local BAAE000C` / `remote DCAB0007`) **matches `Q1B`'s own
+`DIRCONN` line exactly** — `remote=0xBAAE000C local=0xDCAB0007`. It is a
+connection established in **this** run, not a leftover.
+
+**THE CANDIDATE THIS CREATES, and it is the best-grounded one on the item:**
+
+OVMX sends its own `op6` **only** from the `cm_op == 6` branch
+(`scsd.c`, `scs_send_disconnect`) — i.e. **only in response to the peer's
+`op6`.** On a rejoin the peer's `op6` never arrives, so **OVMX never performs
+its own disconnect call at all**, and by the documented protocol the teardown
+can never complete. OVMX already notices the situation — `PSCUNGATE` fires on
+*"no op 6 on our server dir connection after 2000 ms"* — and then opens its
+client connect anyway **without ever disconnecting**.
+
+> **Next implementation step:** on that 2000 ms ungate path, have OVMX perform
+> its own disconnect call (emit `op6`) on the directory connection, per the
+> documented symmetric protocol, instead of only ever reacting to the peer's.
+> **Caveat to respect:** `scs_send_disconnect()` today builds its frame by
+> copying the *received* 76-byte `op6`, so a proactive send needs a template
+> derived under Rule 8, not invented. Ship it behind a kill-switch and bracket
+> it like everything else.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

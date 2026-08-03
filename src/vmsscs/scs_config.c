@@ -437,3 +437,83 @@ const char *scs_vc_state_name(enum scs_vc_state state)
         return "?";
     }
 }
+
+/* --- CONFIG_SYS / CONFIG_PATH (vms-398, p. 2-47) -------------------------- */
+
+int scs_config_sys(struct scs_config *cfg, const uint8_t system_id[SCS_SYSTEM_ID_LEN],
+                   struct scs_config_sys_info *out)
+{
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    if (cfg == NULL || system_id == NULL || out == NULL) {
+        return 0;
+    }
+    /* CONFIG_SYS queries the System List (p. 2-17), i.e. the configuration
+     * queue -- not in-formation state. scs_config_find_sb already restricts
+     * itself to cfg->sb_head, which never holds a formative SB (scs_pb_open
+     * moves an SB there only as it stops being formative). */
+    struct scs_sb *sb = scs_config_find_sb(cfg, system_id);
+    if (sb == NULL) {
+        return 0;
+    }
+
+    memcpy(out->system_id, sb->system_id, SCS_SYSTEM_ID_LEN);
+    out->first_pb = sb->pb_head;
+
+    /* max_datagram_size / max_message_size: no such SB field exists (see the
+     * header note) -- left at 0, HAVE bits left unset. */
+
+    if (sb->os_name[0] != '\0') {
+        memcpy(out->software_type, sb->os_name, sizeof(out->software_type));
+        out->have |= SCS_CONFIG_SYS_HAVE_SOFTWARE_TYPE;
+    }
+    if (sb->os_version != 0) {
+        out->software_version = sb->os_version;
+        out->have |= SCS_CONFIG_SYS_HAVE_SOFTWARE_VERSION;
+    }
+    if (sb->node_name[0] != '\0') {
+        memcpy(out->node_name, sb->node_name, sizeof(out->node_name));
+        out->have |= SCS_CONFIG_SYS_HAVE_NODE_NAME;
+    }
+
+    return 1;
+}
+
+int scs_config_path(const struct scs_pb *pb, struct scs_config_path_info *out)
+{
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    if (pb == NULL || out == NULL || !pb->in_use) {
+        return 0;
+    }
+
+    out->vc_state = pb->vc_state;
+    out->remote_port_type = pb->remote_port_type;
+    out->remote_port_state = pb->remote_port_state;
+    memcpy(out->remote_port_addr, pb->remote_port_addr, SCS_PORT_ADDR_LEN);
+    out->sb = pb->sb;
+    out->next = pb->next;
+    out->on_formative_queue = pb->on_pdt;
+
+    return 1;
+}
+
+struct scs_pb *scs_config_select_vc(struct scs_config *cfg,
+                                    const uint8_t system_id[SCS_SYSTEM_ID_LEN])
+{
+    struct scs_config_sys_info sys_info;
+    if (!scs_config_sys(cfg, system_id, &sys_info)) {
+        return NULL;
+    }
+    /* Scan the PB queue for the first OPEN circuit (p. 2-47). See the header
+     * note: OVMX has only one interconnect type in production, so there is no
+     * CI-vs-Ethernet preference to apply here -- first OPEN PB found wins. */
+    for (struct scs_pb *pb = sys_info.first_pb; pb != NULL; pb = pb->next) {
+        if (pb->vc_state == SCS_VC_OPEN) {
+            return pb;
+        }
+    }
+    return NULL;
+}

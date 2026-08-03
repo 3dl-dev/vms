@@ -370,6 +370,153 @@ static void test_limits_and_null_safety(void)
           "PB pool overflowed past SCS_CONFIG_MAX_PB");
 }
 
+/*
+ * CONFIG_SYS / CONFIG_PATH (vms-398, p. 2-47). Builds a System Block with
+ * THREE open Path Blocks (three interconnects to one node -- an OVMX test
+ * scenario per scs_config.h's design-choice note, not a production shape) and
+ * walks CONFIG_SYS -> repeated CONFIG_PATH, checking every PB is reached
+ * exactly once and the queue-position fields (sb/next/on_formative_queue)
+ * agree with what scs_config.c itself queued.
+ */
+static void test_config_sys_and_path_walk_every_pb_once(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt_a, pdt_b, pdt_c;
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt_a, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt_b, SCS_PORT_TYPE_CI, 4096);
+    scs_pdt_init(&pdt_c, SCS_PORT_TYPE_CI_HSC, 4096);
+
+    struct scs_sb_info info = make_info(1040, "VAX9", 0x424242ull, 7);
+    uint8_t sysid[SCS_SYSTEM_ID_LEN];
+    sysid_from_scssystemid(1040, sysid);
+
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x40, 0x00, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x40, 0x00, 0x02};
+    const uint8_t mac_c[6] = {0x08, 0x00, 0x2b, 0x40, 0x00, 0x03};
+
+    struct scs_pb *pb_a = scs_pb_create(&cfg, &pdt_a, mac_a, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, pb_a, &info);
+    CHECK(scs_pb_open(&cfg, pb_a) == SCS_OPEN_NEW_SB, "first circuit did not create the SB");
+    struct scs_sb *sb = pb_a->sb;
+
+    struct scs_pb *pb_b = scs_pb_create(&cfg, &pdt_b, mac_b, SCS_PORT_TYPE_CI);
+    scs_pb_attach_formative_sb(&cfg, pb_b, &info);
+    CHECK(scs_pb_open(&cfg, pb_b) == SCS_OPEN_EXISTING_SB, "second circuit did not join the old SB");
+
+    struct scs_pb *pb_c = scs_pb_create(&cfg, &pdt_c, mac_c, SCS_PORT_TYPE_CI_HSC);
+    scs_pb_attach_formative_sb(&cfg, pb_c, &info);
+    CHECK(scs_pb_open(&cfg, pb_c) == SCS_OPEN_EXISTING_SB, "third circuit did not join the old SB");
+
+    /* --- CONFIG_SYS --- */
+    struct scs_config_sys_info sysinfo;
+    CHECK(scs_config_sys(&cfg, sysid, &sysinfo) == 1, "CONFIG_SYS did not find the SB");
+    CHECK(memcmp(sysinfo.system_id, sysid, SCS_SYSTEM_ID_LEN) == 0,
+          "CONFIG_SYS echoed the wrong System ID");
+    CHECK(sysinfo.first_pb == sb->pb_head, "CONFIG_SYS first_pb != sb->pb_head");
+    CHECK((sysinfo.have & SCS_CONFIG_SYS_HAVE_MAX_DATAGRAM) == 0,
+          "HAVE_MAX_DATAGRAM must never be set (no such SB field exists)");
+    CHECK(sysinfo.max_datagram_size == 0, "max_datagram_size must be 0, not invented");
+    CHECK((sysinfo.have & SCS_CONFIG_SYS_HAVE_MAX_MESSAGE) == 0,
+          "HAVE_MAX_MESSAGE must never be set (no such SB field exists)");
+    CHECK((sysinfo.have & SCS_CONFIG_SYS_HAVE_SOFTWARE_TYPE) != 0,
+          "software type should be known: this test's SB was built via attach_formative_sb");
+    CHECK(strcmp(sysinfo.software_type, "VAX/VMS") == 0, "software_type is '%s'",
+          sysinfo.software_type);
+    CHECK((sysinfo.have & SCS_CONFIG_SYS_HAVE_SOFTWARE_VERSION) != 0,
+          "software version should be known");
+    CHECK(sysinfo.software_version == 0x0703, "software_version is 0x%04x",
+          sysinfo.software_version);
+    CHECK((sysinfo.have & SCS_CONFIG_SYS_HAVE_NODE_NAME) != 0, "node name should be known");
+    CHECK(strcmp(sysinfo.node_name, "VAX9") == 0, "node_name is '%s'", sysinfo.node_name);
+
+    /* --- repeated CONFIG_PATH: walk from first_pb, must reach all 3 exactly once --- */
+    int seen_a = 0, seen_b = 0, seen_c = 0, total = 0;
+    struct scs_pb *cursor = sysinfo.first_pb;
+    struct scs_config_path_info pinfo;
+    while (cursor != NULL) {
+        total++;
+        CHECK(total <= 3, "CONFIG_PATH walk visited more PBs than were queued (loop?)");
+        if (total > 3) {
+            break; /* guard against an infinite loop corrupting the test run */
+        }
+        CHECK(scs_config_path(cursor, &pinfo) == 1, "CONFIG_PATH failed on a live PB");
+        CHECK(pinfo.vc_state == SCS_VC_OPEN, "CONFIG_PATH vc_state is %s, expected OPEN",
+              scs_vc_state_name(pinfo.vc_state));
+        CHECK(pinfo.sb == sb, "CONFIG_PATH sb identifier does not match the SB");
+        CHECK(pinfo.on_formative_queue == 0, "an OPEN PB must not read as on the formative queue");
+
+        if (cursor == pb_a) {
+            seen_a++;
+            CHECK(pinfo.remote_port_type == SCS_PORT_TYPE_ETHERNET, "pb_a port type wrong");
+        } else if (cursor == pb_b) {
+            seen_b++;
+            CHECK(pinfo.remote_port_type == SCS_PORT_TYPE_CI, "pb_b port type wrong");
+        } else if (cursor == pb_c) {
+            seen_c++;
+            CHECK(pinfo.remote_port_type == SCS_PORT_TYPE_CI_HSC, "pb_c port type wrong");
+        } else {
+            CHECK(0, "CONFIG_PATH walk reached a PB that was never queued to this SB");
+        }
+        cursor = pinfo.next;
+    }
+    CHECK(total == 3, "CONFIG_PATH walk visited %d PBs, expected 3", total);
+    CHECK(seen_a == 1 && seen_b == 1 && seen_c == 1,
+          "every PB must be reached EXACTLY once (a=%d b=%d c=%d)", seen_a, seen_b, seen_c);
+
+    /* --- CONNECT's "no circuit named" path: CONFIG_SYS + queue scan --- */
+    struct scs_pb *chosen = scs_config_select_vc(&cfg, sysid);
+    CHECK(chosen != NULL, "select_vc found no circuit for a node with 3 open PBs");
+    CHECK(chosen == pb_a || chosen == pb_b || chosen == pb_c,
+          "select_vc returned a PB not queued to this SB");
+    CHECK(chosen->vc_state == SCS_VC_OPEN, "select_vc must only choose an OPEN circuit");
+
+    /* Unknown System ID / NULL safety. */
+    uint8_t unknown[SCS_SYSTEM_ID_LEN];
+    sysid_from_scssystemid(9999, unknown);
+    struct scs_config_sys_info miss;
+    memset(&miss, 0xAA, sizeof(miss));
+    CHECK(scs_config_sys(&cfg, unknown, &miss) == 0, "CONFIG_SYS found a nonexistent System ID");
+    CHECK(miss.have == 0 && miss.first_pb == NULL, "CONFIG_SYS miss did not zero *out");
+    CHECK(scs_config_sys(NULL, sysid, &sysinfo) == 0, "CONFIG_SYS accepted NULL cfg");
+    CHECK(scs_config_sys(&cfg, NULL, &sysinfo) == 0, "CONFIG_SYS accepted NULL system_id");
+    CHECK(scs_config_sys(&cfg, sysid, NULL) == 0, "CONFIG_SYS accepted NULL out");
+    CHECK(scs_config_select_vc(&cfg, unknown) == NULL, "select_vc found a circuit for an unknown node");
+    CHECK(scs_config_select_vc(NULL, sysid) == NULL, "select_vc accepted NULL cfg");
+
+    CHECK(scs_config_path(NULL, &pinfo) == 0, "CONFIG_PATH accepted NULL pb");
+    CHECK(scs_config_path(pb_a, NULL) == 0, "CONFIG_PATH accepted NULL out");
+}
+
+/*
+ * CONFIG_PATH on a FORMATIVE (still-forming) PB: on_formative_queue must read
+ * 1, and the SB identifier returned is the formative SB (p. 2-20), since
+ * CONFIG_PATH is defined over "a" Path Block, not only open ones.
+ */
+static void test_config_path_on_formative_pb(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt;
+    const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x50, 0x00, 0x01};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 1498);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_set_vc_state(pb, SCS_VC_START_SENT);
+
+    struct scs_config_path_info pinfo;
+    CHECK(scs_config_path(pb, &pinfo) == 1, "CONFIG_PATH failed on a formative PB");
+    CHECK(pinfo.vc_state == SCS_VC_START_SENT, "formative PB vc_state is %s",
+          scs_vc_state_name(pinfo.vc_state));
+    CHECK(pinfo.on_formative_queue == 1, "PB queued to a PDT must read on_formative_queue == 1");
+    CHECK(pinfo.sb == NULL, "a PB with no SB yet must report sb == NULL");
+    CHECK(pinfo.next == NULL, "sole formative PB on this PDT has no next");
+
+    /* A closed (freed) PB is no longer a valid query target. */
+    scs_pb_close(&cfg, pb);
+    CHECK(scs_config_path(pb, &pinfo) == 0, "CONFIG_PATH must refuse a closed/freed PB");
+}
+
 int main(void)
 {
     test_pb_created_closed_and_formative();
@@ -379,6 +526,8 @@ int main(void)
     test_multi_sb_multi_pb_queue();
     test_learn_system_addr_at_discovery();
     test_limits_and_null_safety();
+    test_config_sys_and_path_walk_every_pb_once();
+    test_config_path_on_formative_pb();
 
     printf("test_scs_config: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

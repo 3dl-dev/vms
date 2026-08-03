@@ -42,12 +42,20 @@
 #   - PRODUCT ONLY: src/ and tools/. A caller in tests/ is not a product path --
 #     "kernel facility + wrapper + test suite, and nothing else" is the precise
 #     shape of the defect, so a test caller must not be able to satisfy the gate.
-#   - REACHABILITY, not mere presence. Calls inside vms_kif.c count only when the
-#     calling function is itself reachable from a caller outside vms_kif.c. That
-#     is how vms_kif_open/register/kerr_to_ss legitimately pass: nothing outside
-#     names them, but kif_bind() does, and kif_bind() is reached from every wired
+#   - REACHABILITY, not mere presence, ON BOTH SIDES OF THE INTERFACE.
+#     Inside vms_kif.c, a call counts only when the calling function is itself
+#     reachable from a caller outside vms_kif.c. That is how
+#     vms_kif_open/register/kerr_to_ss legitimately pass: nothing outside names
+#     them, but kif_bind() does, and kif_bind() is reached from every wired
 #     wrapper through KIF_CALL -> kif_call. A family that only calls itself is
 #     NOT reachable and does not pass.
+#     IN THE PRODUCT, the same rule now applies (rd vms-c13, section 2'): a call
+#     counts only when the function CONTAINING it is reachable from a root --
+#     main(), or something a header the build compiles declares -- following
+#     calls and address-taking. Until that landed, a call anywhere in any
+#     product translation unit counted, so a function nothing calls was a
+#     product path, and TWO edits in two already-built files moved the census
+#     from 31/44 reached to 32/44 with rc=0.
 #
 # THE ESCAPE HATCH, and its price. An entry point with no product path must be
 # declared in src/libvmssys/vms_kif.h with a line of the form
@@ -240,8 +248,32 @@
 # product compiles and asks the compiler what survives the preprocessor -- but
 # it is still not a compile, not a link and not an execution:
 #
-#   - A caller in a function nothing calls still counts. The census answers "is
-#     there a product path", not "is that path executed".
+#   - A REACHABLE CALL IS NOT AN EXECUTED CALL. Since rd vms-c13 the enclosing
+#     function must be reachable from a root, so a function nothing calls is no
+#     longer a product path -- but "reachable" is still not "runs". An exported
+#     API with no in-tree caller is a root by rule, and a reachable branch that
+#     never executes is reachable here. The census answers "is there a product
+#     path", not "is that path executed"; that question is rd vms-d33's.
+#   - THE ROOT RULE IS BOUGHT BY A THIRD EDIT, MEASURED RATHER THAN REASONED
+#     ABOUT. Give the dead function a PROTOTYPE IN A HEADER the build compiles
+#     and it becomes a root, because that is exactly what an exported library
+#     entry point looks like and this gate cannot tell the two apart without
+#     linking. MEASURED on this tree: a dead
+#         void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
+#     in src/vmsdcl/dcl_cmd_show.c, plus `void ovmx_dead_helper(void);` in
+#     src/vmsdcl/include/dcl/dcl_cmd.h, plus retiring the OVMX-UNWIRED token,
+#     is rc=0 at 44 entry points / 32 reached / 12 unwired. THREE edits across
+#     THREE files, one of them a public header. That is a price, not a wall:
+#     the same shape as the build-set edit vms-e2b priced, one level up. What
+#     would close it is linkage or execution evidence -- which symbols the
+#     product actually links and calls -- and that is not a preprocess.
+#   - A FILE-SCOPE REFERENCE THIS READER CANNOT ATTRIBUTE CREDITS NOTHING. An
+#     address taken at file scope outside every brace, in a declarator shape
+#     neither $pendobj nor $pendarr names, belongs to no node and therefore
+#     makes nothing reachable. That is the safe direction for an evasion and
+#     the WRONG one for correct code: it under-counts, which shows up as a RED
+#     naming an entry point, never as a silent PASS. If one appears, teach the
+#     reader that declarator; do not relax the rule.
 #   - It says NOTHING about whether the facility behind the call is real. An
 #     entry point can be wired to a per-process fake and pass here. That is the
 #     A-writes/B-reads question (CLAUDE.md Rule 11) and it belongs to the QEMU
@@ -309,17 +341,21 @@
 #     changes this gate's pass/fail behaviour on trees that pass today, which
 #     is outside this round's authorization. Tracked for a follow-up item;
 #     see this round's report to the operator.
-#   - A FABRICATED CALLER THAT IS GENUINELY IN THE BUILD STILL COUNTS, and
-#     this is the residual of the vms-e2b fix, MEASURED rather than reasoned
-#     about. Adding the fabricated file to src/libvmssys/CMakeLists.txt --
-#     one more edit than the version this gate now catches -- takes the census
-#     to 44 entry points / 32 reached / 12 unwired with rc=0. The build set
-#     raises the PRICE of the evasion (a build-system edit, in a file a
-#     reviewer reads, producing an object nothing links against) and it does
-#     not abolish it. This gate asks "is there a product path", never "is that
-#     path executed", and a compiled-but-never-called function is a product
-#     path by that definition. Do not read a PASS as "these callers run": that
-#     question belongs to the QEMU suites.
+#   - A FABRICATED CALLER GENUINELY IN THE BUILD IS NO LONGER ENOUGH BY
+#     ITSELF, and the change is measured, not argued. This bullet used to
+#     record the vms-e2b residual: put the fabricated caller in a file, ADD
+#     THAT FILE TO src/libvmssys/CMakeLists.txt, and the census read 44 entry
+#     points / 32 reached / 12 unwired with rc=0. RE-MEASURED against this
+#     revision, the same three edits -- kif_orphan_test.c containing
+#     `void kif_orphan_fn(void) { (void)vms_kif_chkpriv(0); }`, its line in
+#     CMakeLists.txt, and the retired OVMX-UNWIRED token -- are now rc=1 at
+#     44 / 31 / 13, naming vms_kif_chkpriv, with the call graph line printing
+#     "1 of 49 call(s) ... credit NOTHING: kif_orphan_fn". Compiling and
+#     linking a function does not make it reachable; a header has to declare
+#     it, or something reachable has to call it. THAT IS THE NEW PRICE, NOT A
+#     WALL -- see the root-rule bullet above for the three-edit form that
+#     still buys it, and note that this gate still asks "is there a product
+#     path", never "is that path executed" (rd vms-d33).
 #   - EXFILTRATION COMPOSED WITH A RENAME STILL LEAVES THE UNIVERSE, and the
 #     recipe is written down here because a residual nobody can reproduce is
 #     not a disclosure. Move a wrapper's body into a .inc; mark it `static`
@@ -361,7 +397,7 @@ KIF_C="$SRC_ROOT/src/libvmssys/vms_kif.c"
 IOCTL_H="$SRC_ROOT/src/kernel/vms_ioctl.h"
 status=0
 
-# The citation checker (rd vms-8cc), shared with the userspace service register.
+# The citation checker (rd vms-8cc).
 # Resolved from THIS FILE's directory, not from SRC_ROOT: it is gate code, not
 # tree data. SRC_ROOT is the tree under measurement -- the negative controls
 # hand it a sandbox copy, and a gate that loaded its own checker out of the
@@ -415,7 +451,7 @@ strip_comments() {
 }
 
 # ---------------------------------------------------------------------------
-# call_edges [calls|defs]: read comment-stripped C on stdin.
+# call_edges [calls|defs|graph <rel>]: read comment-stripped C on stdin.
 #
 #   calls (default) - print "ENCLOSING<TAB>CALLEE" for every call expression.
 #   defs            - print "static|extern<TAB>NAME" for every function
@@ -424,8 +460,34 @@ strip_comments() {
 #                     a call is what distinguishes them, so both readings of
 #                     the tree come from one reader and cannot disagree about
 #                     what a definition is.
+#   graph <rel>     - all five record kinds section 2 needs to build the
+#                     PRODUCT call graph, in ONE pass, each tagged and
+#                     attributed to the origin file <rel>:
+#                       D<TAB>rel<TAB>static|extern<TAB>NAME  a function
+#                                                             DEFINITION
+#                       O<TAB>rel<TAB>static|extern<TAB>NAME  a file-scope
+#                                                             OBJECT with a
+#                                                             braced initialiser
+#                       E<TAB>rel<TAB>ENCLOSING<TAB>CALLEE    a call edge
+#                       P<TAB>rel<TAB>NAME                    a file-scope
+#                                                             DECLARATION
+#                       R<TAB>rel<TAB>ENCLOSING<TAB>NAME  an identifier NOT
+#                                           followed by "(", i.e. a name USED
+#                                           without being CALLED -- which is
+#                                           what taking a function's address
+#                                           looks like.
+#                     ENCLOSING is a function name, or "@obj" when the record
+#                     comes from inside a file-scope object's initialiser, or
+#                     "" at file scope outside any braces. THE INITIALISER CASE
+#                     IS THE WHOLE REASON OBJECTS ARE NODES: a callback table
+#                     is where a function's address is taken, and whether that
+#                     address can be called depends on whether anything reaches
+#                     the TABLE.
+#                     Records are deduplicated inside the reader: the same
+#                     header is expanded into a hundred translation units and
+#                     each copy would otherwise emit the same rows again.
 #
-# It is a character-level reader, not a token search, for three reasons:
+# It is a character-level reader, not a token search, for five reasons:
 #   - a call at brace depth 0 is a PROTOTYPE or a DEFINITION, not a call, so the
 #     definition of vms_kif_setef must not count as a caller of itself;
 #   - string and character literals are skipped, so a brace inside "{" cannot
@@ -433,10 +495,31 @@ strip_comments() {
 #   - the enclosing function has to be known for the reachability pass below,
 #     and function-like MACROS are nodes too -- KIF_CALL is the only thing that
 #     names kif_call(), so a reader blind to macro bodies would conclude the
-#     bind path is dead and mark every entry point unwired.
+#     bind path is dead and mark every entry point unwired;
+#   - PARENTHESIS DEPTH is tracked, and it is load-bearing rather than tidy. A
+#     FUNCTION-POINTER PARAMETER contains an identifier followed by "(" inside
+#     the parameter list, so a reader that only looked at brace depth took the
+#     LAST such identifier as the name of the function being defined. MEASURED
+#     on this tree before the fix: the enclosing function of the vms_kif_enq
+#     and vms_kif_convert call sites in src/libvms/syssvc/sys_lock.c read as
+#     "void", from `void (*astadr)(void *)` in $ENQ's parameter list, and the
+#     same for $GETJPI's and $QIO's AST parameters. The old census never
+#     noticed because it threw the enclosing name away on the product side;
+#     a call graph cannot;
+#   - "$" IS AN IDENTIFIER CHARACTER HERE. OVMX's system services are spelled
+#     sys$assign, sys$enq, sys$getjpi -- real C identifiers, through the GNU
+#     extension the build already relies on. A reader that split on "$" would
+#     call every one of them "assign", "enq", "getjpi", merging unrelated
+#     nodes in the call graph and losing the ones that collide.
 # ---------------------------------------------------------------------------
 call_edges() {
-    awk -v want="${1:-calls}" '
+    awk -v want="${1:-calls}" -v rel="${2:-}" '
+        function once(k) { if (k in seen) return 0; seen[k] = 1; return 1 }
+        function emit_call(node, id) {
+            if (want == "calls") print node "\t" id
+            else if (want == "graph" && once("E" SUBSEP node SUBSEP id))
+                print "E\t" rel "\t" node "\t" id
+        }
         function scan(s, node, ismac,    n, i, j, k, c, id) {
             n = length(s); i = 1
             while (i <= n) {
@@ -450,45 +533,117 @@ call_edges() {
                     }
                     continue
                 }
+                # Parenthesis depth. A name followed by "(" INSIDE a parameter
+                # list is a function-pointer parameter, not the function being
+                # declared, so it must not become $pending.
+                if (!ismac && c == "(") { pdepth++; i++; continue }
+                if (!ismac && c == ")") { if (pdepth > 0) pdepth--; i++; continue }
+                if (!ismac && c == "=" && depth == 0 && pdepth == 0) {
+                    # Everything after "=" at file scope is the INITIALISER, so
+                    # the name of the declared object is whatever was last seen
+                    # before it. Freezing here is what stops
+                    # `static void (*p)(void) = some_handler;` from naming the
+                    # HANDLER as the object being declared.
+                    objfrozen = 1; i++; continue
+                }
                 if (!ismac && c == "{") {
                     if (depth == 0) {
-                        curfn = pending; pending = ""
-                        # A body opening at depth 0 behind a name that was
-                        # followed by "(" is a DEFINITION. A prototype never
-                        # gets here: its ";" clears pending below.
-                        if (want == "defs" && curfn != "")
-                            print (sawstatic ? "static" : "extern") "\t" curfn
-                        sawstatic = 0
+                        # WHAT KIND OF BRACE IS THIS, and the order of the
+                        # three tests is load-bearing. An "=" already seen at
+                        # file scope settles it: everything after it is an
+                        # INITIALISER, and no function body can follow one. That
+                        # test has to come FIRST, because a declarator like
+                        #     static void (*const tab[])(void) = { handler };
+                        # leaves "void" in $pending -- it is an identifier
+                        # followed by "(" -- and a reader that trusted $pending
+                        # here would read the TABLE as a function definition
+                        # named "void" and hand the handler inside it whatever
+                        # reachability that bogus node had. MEASURED: it had
+                        # enough, and the dead-table form of the buy this
+                        # section exists to close went rc=0 / 44 / 32 / 12
+                        # through exactly that hole.
+                        # Otherwise a name followed by "(" is a DEFINITION (a
+                        # prototype never gets here: its ";" clears pending
+                        # below), and a name NOT followed by "(" is an
+                        # aggregate type body.
+                        if (objfrozen) {
+                            # $pendobj is the last file-scope name outside any
+                            # parentheses; $pendarr is the last one followed by
+                            # "[". The second is what names an ARRAY OF FUNCTION
+                            # POINTERS -- in
+                            #     static uint32_t (*const tab[1])(void) = {...}
+                            # the declared name sits INSIDE the declarator
+                            # parentheses, so $pendobj never sees it, and
+                            # without $pendarr the table has no node, nothing
+                            # can reference it, and every handler in it reads
+                            # as unreachable. MEASURED before $pendarr existed:
+                            # a live table of that form, called from
+                            # cmd_show_process(), still reported its handler
+                            # under "credit NOTHING" -- a RED on correct code.
+                            objnm = (pendobj != "") ? pendobj : pendarr
+                            curfn = (objnm != "") ? "@" objnm : ""
+                            if (objnm != "" && want == "graph" && once("O" SUBSEP objnm))
+                                print "O\t" rel "\t" (sawstatic ? "static" : "extern") "\t" objnm
+                        } else if (pending != "") {
+                            curfn = pending
+                            if (want == "defs")
+                                print (sawstatic ? "static" : "extern") "\t" curfn
+                            else if (want == "graph" && once("D" SUBSEP curfn))
+                                print "D\t" rel "\t" (sawstatic ? "static" : "extern") "\t" curfn
+                        } else if (pendobj != "") {
+                            curfn = "@" pendobj
+                            if (want == "graph" && once("O" SUBSEP pendobj))
+                                print "O\t" rel "\t" (sawstatic ? "static" : "extern") "\t" pendobj
+                        } else {
+                            curfn = ""
+                        }
+                        pending = ""; pdepth = 0; sawstatic = 0
                     }
                     depth++; i++; continue
                 }
                 if (!ismac && c == "}") {
                     depth--
-                    if (depth <= 0) { depth = 0; curfn = ""; sawstatic = 0 }
+                    if (depth <= 0) {
+                        depth = 0; curfn = ""; sawstatic = 0; pdepth = 0
+                        pendobj = ""; pendarr = ""; objfrozen = 0
+                    }
                     i++; continue
                 }
-                if (!ismac && c == ";" && depth == 0) {
-                    pending = ""; sawstatic = 0; i++; continue
+                if (!ismac && c == ";" && depth == 0 && pdepth == 0) {
+                    # A name followed by "(" at file scope whose statement ends
+                    # in ";" is a DECLARATION -- a prototype.
+                    if (pending != "" && want == "graph" && once("P" SUBSEP pending))
+                        print "P\t" rel "\t" pending
+                    pending = ""; sawstatic = 0; pendobj = ""; pendarr = ""; objfrozen = 0
+                    i++; continue
                 }
-                if (c ~ /[A-Za-z_]/) {
+                if (c ~ /[A-Za-z_$]/) {
                     j = i
-                    while (j <= n && substr(s, j, 1) ~ /[A-Za-z0-9_]/) j++
+                    while (j <= n && substr(s, j, 1) ~ /[A-Za-z0-9_$]/) j++
                     id = substr(s, i, j - i)
                     k = j
                     while (k <= n && (substr(s, k, 1) == " " || substr(s, k, 1) == "\t")) k++
                     if (substr(s, k, 1) == "(") {
-                        if (ismac) { if (want == "calls") print node "\t" id }
-                        else if (depth >= 1) { if (want == "calls") print curfn "\t" id }
-                        else pending = id
+                        if (ismac) emit_call(node, id)
+                        else if (depth >= 1) emit_call(curfn, id)
+                        else if (pdepth == 0) pending = id
                     } else if (!ismac && depth == 0 && id == "static") {
                         sawstatic = 1
+                    } else if (want == "graph" && !ismac) {
+                        if (depth == 0 && !objfrozen) {
+                            if (pdepth == 0) pendobj = id
+                            if (substr(s, k, 1) == "[") pendarr = id
+                        }
+                        if (once("R" SUBSEP curfn SUBSEP id))
+                            print "R\t" rel "\t" curfn "\t" id
                     }
                     i = j; continue
                 }
                 i++
             }
         }
-        BEGIN { depth = 0; pending = ""; curfn = ""; inmac = 0; macnode = ""; sawstatic = 0 }
+        BEGIN { depth = 0; pending = ""; curfn = ""; inmac = 0; macnode = ""; sawstatic = 0
+                pdepth = 0; pendobj = ""; pendarr = ""; objfrozen = 0 }
         {
             line = $0
             if (inmac) {
@@ -1247,22 +1402,229 @@ awk -F'\t' -v dir="$WORK/byfile" '
       line = $0; sub(/^[^\t]*\t[^\t]*\t/, "", line); print line > out }
 ' "$WORK/prodtext_sorted"
 
+: > "$WORK/graph"
 for chunk in "$WORK/byfile"/[0-9]*; do
     case "$chunk" in *.name) continue ;; esac
     [ -f "$chunk" ] || continue
     rel=$(cat "$chunk.name")
-    # Seeded from the SEEDABLE set, not from the vms_kif_ prefix and NOT from
-    # the whole universe. The prefix is wrong because the definition reading is
-    # unfiltered, so a product caller of an entry point renamed out of the
-    # namespace must still count. The whole universe is wrong because it now
-    # contains un-namespaced static helper names, and a same-named product
-    # function would then certify an unwired wrapper as REACHED. See 1' above.
-    call_edges < "$chunk" | cut -f2 | grep -Fx -f "$WORK/seedable" \
-        | sed "s|^|$rel |" >> "$WORK/sites" || true
+    call_edges graph "$rel" < "$chunk" >> "$WORK/graph"
 done
+sort -u "$WORK/graph" -o "$WORK/graph"
+
+# The compiled translation units, by their path relative to SRC_ROOT. An origin
+# file that is NOT one of these was reached by #include -- it is a header, and
+# that is the only thing separating an exported declaration from a static's
+# forward declaration inside its own .c.
+cut -f3 "$WORK/product_tus" | sed "s|^$SRC_ROOT/||" | sort -u > "$WORK/tu_rel"
+
+# ---------------------------------------------------------------------------
+# 2'. THE PRODUCT CALL GRAPH, ITS ROOTS, AND THE CREDIT RULE (rd vms-c13).
+#
+# WHAT THIS REPLACED, AND WHY. Until this section existed, section 2 kept only
+# the CALLEE of each call and threw the enclosing function away: an entry point
+# was REACHED if any product translation unit contained a call to it ANYWHERE,
+# with no requirement that the calling function be reachable from anything. So
+# a function nothing calls was a product path. MEASURED against the revision
+# before this one, TWO edits in two files the build already compiles, no new
+# file, no CMakeLists change, no `#if 0`:
+#
+#     src/vmsdcl/dcl_cmd_show.c:
+#         static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
+#     src/libvmssys/vms_kif.h: retire vms_kif_chkpriv's OVMX-UNWIRED token
+#
+# rc=0, "44 entry points -- 32 reached from the product, 12 with no product
+# path", PASS, and `cmake --build --target vmsdcl` clean. Scaled -- one
+# 16-line dead static calling all 12 externally-linked unwired wrappers, plus
+# `sed s/OVMX-UNWIRED:/NOTE:/` over the header -- the same gate printed
+# "44 entry points -- 44 reached, 0 with no product path" and PASSED.
+#
+# THE RULE NOW. Reachability is seeded from ROOTS and followed along call
+# edges, and a call site credits an entry point only if ITS ENCLOSING FUNCTION
+# IS REACHED. The graph is built from the same preprocessed, build-set product
+# text section 2 already had, so everything vms-e2b bought still holds: a file
+# in no CMakeLists contributes no node, and an `#if 0` body is gone before the
+# reader sees it.
+#
+# NODE IDENTITY IS (ORIGIN FILE, NAME) FOR A `static` DEFINED IN A TRANSLATION
+# UNIT, AND THE BARE NAME OTHERWISE -- which is what `static` MEANS, and it is
+# load-bearing rather than pedantic. With one node per name, defining
+#     static void some_existing_api_name(void) { (void)vms_kif_chkpriv(0); }
+# in any product .c would merge the dead body into the live function of that
+# name and inherit its reachability -- the same two-edit buy wearing a
+# different name, and the same shape as the seeding collision section 1'
+# closes. Two statics of one name in two .c files stay two nodes; a static and
+# an extern of one name stay two nodes.
+#
+# THE ROOTS, all three derived from the tree, none written down here:
+#
+#   1. main(). The C runtime's entry point, and the only one that needs
+#      naming: nothing in the tree declares it.
+#   2. EVERY PRODUCT FUNCTION PROTOTYPED IN A HEADER THE BUILD COMPILES.
+#      This is the library's exported API surface, and it is a root ON PURPOSE:
+#      OVMX ships as libraries, an exported entry point is reachable by
+#      anything that links them, and LIBVMS$SHR's universals are entry points
+#      whether or not anything in THIS tree calls them. Demanding an in-tree
+#      caller for an exported symbol would make this gate red on correct code.
+#      "In a header" is what separates that from a static's forward
+#      declaration in its own .c, which declares nothing to anyone.
+#   3. EVERY PRODUCT FUNCTION WHOSE NAME IS USED WITHOUT BEING CALLED. That is
+#      what taking a function's address looks like, and INDIRECT CALLS ARE THE
+#      REASON THIS CLAUSE EXISTS: DCL dispatches its verbs through the
+#      builtin_verbs[] table, RMS takes completion routines, $ENQ and $QIO take
+#      AST handlers. A call graph blind to those would report the handlers as
+#      unreachable and UNDER-COUNT the reached set -- reddening correct code
+#      rather than certifying an evasion, but wrong either way. This reader
+#      does not resolve which pointer is called where; it treats a function
+#      whose address is taken anywhere as reachable, which is the safe
+#      direction and is stated rather than implied.
+#
+# WHAT THIS RULE DOES NOT PROVE, and it is a shorter list than what it does:
+#   - NOT that the reached path EXECUTES. An exported API with no in-tree
+#     caller is a root by rule 2, and a reachable function that is never
+#     called at runtime is still reachable here. This gate remains a CONFIGURE
+#     and a PREPROCESS; the execution question is rd vms-d33's and belongs to
+#     the QEMU suites.
+#   - NOT that an indirect call really happens. Rule 3 over-approximates.
+#   - The address-taken reader intersects raw identifiers with the set of
+#     product function names, so a VARIABLE that happens to share a function's
+#     name makes that function a root. Over-approximation again, same
+#     direction.
+# ---------------------------------------------------------------------------
+: > "$WORK/sites"
+: > "$WORK/sites_dead"
+: > "$WORK/sites_unattributed"
+: > "$WORK/prod_roots"
+: > "$WORK/prod_reached"
+: > "$WORK/prod_defs"
+
+awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" '
+    # The linkage-correct node id for a FUNCTION name n as written in file f,
+    # and the same for a file-scope OBJECT. "static" means the name is private
+    # to its translation unit, so it is a different node from any same-named
+    # function or object elsewhere.
+    function res(f, n)  { return ((f SUBSEP n) in statfn)  ? f "\t" n : "\t" n }
+    function reso(f, n) { return ((f SUBSEP n) in statobj) ? "@" f "\t" n : "@\t" n }
+    # The node a record belongs to: a function, or the initialiser of a
+    # file-scope object, or "" -- file scope outside any braces, which is a
+    # context this reader cannot attribute and which is therefore never
+    # reached. Nothing named only from there becomes a root.
+    function ctx(f, e) {
+        if (e == "") return ""
+        if (substr(e, 1, 1) == "@") return reso(f, substr(e, 2))
+        return res(f, e)
+    }
+    BEGIN {
+        while ((getline l < tuf) > 0)   if (l != "") istu[l] = 1
+        while ((getline l < seedf) > 0) if (l != "") seed[l] = 1
+    }
+    # Pass 1: which (file, name) pairs are file-scoped statics -- functions and
+    # objects both. Needed before any edge can be resolved, which is why the
+    # graph is read twice.
+    NR == FNR {
+        if ($1 == "D" && $3 == "static" && ($2 in istu)) statfn[$2, $4] = 1
+        if ($1 == "O" && $3 == "static" && ($2 in istu)) statobj[$2, $4] = 1
+        if ($1 == "D") isfn[$4] = 1
+        if ($1 == "O") isobj[$4] = 1
+        next
+    }
+    $1 == "D" { defn[res($2, $4)] = 1; next }
+    $1 == "O" { next }
+    $1 == "P" { if (!($2 in istu)) prot[$3] = 1; next }
+    $1 == "E" {
+        e = ctx($2, $3); c = res($2, $4)
+        edge[e] = edge[e] SUBSEP c
+        if ($4 in seed) { ns++; sfile[ns] = $2; sencl[ns] = $3; scall[ns] = $4 }
+        next
+    }
+    # A name USED WITHOUT BEING CALLED is an edge from the context that uses it
+    # -- NOT a root on its own. A function whose address is only ever taken in
+    # a table nothing reaches is not reachable, and neither is the function.
+    $1 == "R" {
+        e = ctx($2, $3)
+        if ($4 in isfn)       edge[e] = edge[e] SUBSEP res($2, $4)
+        else if ($4 in isobj) edge[e] = edge[e] SUBSEP reso($2, $4)
+        next
+    }
+    END {
+        if (("\tmain") in defn) root["\tmain"] = 1
+        for (n in prot) { k = "\t" n; if (k in defn) root[k] = 1 }
+
+        nroot = 0
+        for (k in root) {
+            nroot++
+            print k > (w "/prod_roots")
+            reach[k] = 1; q[++qn] = k
+        }
+        for (i = 1; i <= qn; i++) {
+            m = split(edge[q[i]], a, SUBSEP)
+            for (j = 1; j <= m; j++)
+                if (a[j] != "" && !(a[j] in reach)) { reach[a[j]] = 1; q[++qn] = a[j] }
+        }
+
+        ndef = 0; nreach = 0
+        for (k in defn) { ndef++; print k > (w "/prod_defs"); if (k in reach) nreach++ }
+        for (k in reach) print k > (w "/prod_reached")
+
+        ndead = 0
+        for (i = 1; i <= ns; i++) {
+            if (sencl[i] == "") {
+                print sfile[i] "\t(file scope)\t" scall[i] > (w "/sites_unattributed")
+                continue
+            }
+            e = ctx(sfile[i], sencl[i])
+            if (!(e in defn)) {
+                print sfile[i] "\t" sencl[i] "\t" scall[i] > (w "/sites_unattributed")
+                continue
+            }
+            if (e in reach) print sfile[i] " " sencl[i] " " scall[i] > (w "/sites")
+            else { ndead++; print sfile[i] " " sencl[i] " " scall[i] > (w "/sites_dead") }
+        }
+        printf "%d %d %d %d %d\n", ndef, nreach, nroot, ns, ndead > (w "/graph_counts")
+    }
+' "$WORK/graph" "$WORK/graph"
+
+n_prod_defs=0; n_prod_reached=0; n_prod_roots=0; n_sites_all=0; n_sites_dead=0
+read -r n_prod_defs n_prod_reached n_prod_roots n_sites_all n_sites_dead \
+    < "$WORK/graph_counts" 2>/dev/null || true
+
+# NO SILENT FALLBACK, the same rule the build set follows. Each of these means
+# the call graph is not the thing this gate claims to have measured, and a
+# census that shrugged and carried on would report the same PASS from a
+# strictly worse measurement.
+if [ "${n_prod_defs:-0}" -eq 0 ]; then
+    echo "FAIL: the product call graph contains no function definitions"
+    echo "  -> with no graph every enclosing function reads as unreachable and"
+    echo "     every entry point reads as unwired. The census refuses rather"
+    echo "     than reporting that as a measurement."
+    exit 1
+fi
+if [ "${n_prod_roots:-0}" -eq 0 ]; then
+    echo "FAIL: the product call graph has NO roots"
+    echo "  -> no main() and no function declared by any header the build"
+    echo "     compiles. Reachability seeded from nothing marks the whole"
+    echo "     product dead; the census refuses rather than measuring it."
+    exit 1
+fi
+if [ -s "$WORK/sites_unattributed" ]; then
+    echo "FAIL: a call to a kernel-interface entry point whose ENCLOSING function"
+    echo "      this reader cannot name, or cannot find a definition for:"
+    sed 's/^/    /' "$WORK/sites_unattributed" | head -10
+    echo "  -> reachability is decided per enclosing function, so an"
+    echo "     unattributable call site can be neither credited nor dismissed."
+    echo "     Fix the reader; do NOT let the census guess which it was."
+    exit 1
+fi
+
 sort -u "$WORK/sites" -o "$WORK/sites"
+sort -u "$WORK/sites_dead" -o "$WORK/sites_dead"
 n_site_files=$(cut -d' ' -f1 "$WORK/sites" | sort -u | grep -c . || true)
-cut -d' ' -f2 "$WORK/sites" | sort -u > "$WORK/direct"
+# Seeded from the SEEDABLE set, not from the vms_kif_ prefix and NOT from the
+# whole universe. The prefix is wrong because the definition reading is
+# unfiltered, so a product caller of an entry point renamed out of the
+# namespace must still count. The whole universe is wrong because it now
+# contains un-namespaced static helper names, and a same-named product
+# function would then certify an unwired wrapper as REACHED. See 1' above.
+cut -d' ' -f3 "$WORK/sites" | sort -u > "$WORK/direct"
 
 # ---------------------------------------------------------------------------
 # 3. Reachability inside vms_kif.c, seeded by those roots.
@@ -1403,6 +1765,12 @@ echo "          $unwired with no product path"
 echo "  build set: $n_product_tus product translation unit(s) of $n_ccdb in the compile"
 echo "          database, all preprocessed; call sites read from $n_site_files of them."
 echo "          A file in no CMakeLists is not in this set and credits nothing."
+echo "  call graph: $n_prod_defs product function(s), $n_prod_reached of them reached from"
+echo "          $n_prod_roots root(s) — main() and every function a header the build"
+echo "          compiles declares. Calls and address-taking are followed from there,"
+echo "          so a callback is reached exactly when its TABLE is. $n_sites_dead of"
+echo "          $n_sites_all call(s) to an entry point sit in a function no root reaches"
+echo "          and credit NOTHING:$(printf ' %s' $(cut -d' ' -f2 "$WORK/sites_dead" 2>/dev/null | sort -u))"
 echo "  interface: $n_private origin file(s) private to the vms_kif.c translation unit —"
 echo "          the definition universe is read from those, after preprocessing, so a"
 echo "          body moved to an #included .inc does not leave the census"

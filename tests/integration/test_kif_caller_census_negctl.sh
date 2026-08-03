@@ -115,6 +115,18 @@
 #   34 the ledger lists one id twice                             -> REFUSE
 #   35 ... a citation repointed to a DIFFERENT open item         -> GREEN
 #
+# And the controls (36 onward) that pin what 1-35 all take for granted: that
+# the function HOLDING a call is reachable from anything at all. Every red
+# among them was a clean PASS until rd vms-c13, at a price of TWO EDITS in two
+# files the build already compiles. See their own definitions for the numbers.
+#
+#   36 a call inside a dead STATIC                              -> RED
+#   37 ... the same function EXTERNALLY LINKED                  -> RED
+#   38 ... a dead static NAMED AFTER a reached product function -> RED
+#   39 ... reached only from a DEAD callback table              -> RED
+#   40 GREEN: reached from a LIVE callback table                -> GREEN
+#   41 the SCALED form: one dead static, all 12 wrappers        -> RED
+#
 # Usage: test_kif_caller_census_negctl.sh [SRC_ROOT]
 
 set -u
@@ -1147,6 +1159,148 @@ expect_red "$LEDGER" \
 sed -i 's|OVMX-UNWIRED: vms_kif_getlki (vms-a86)|OVMX-UNWIRED: vms_kif_getlki (vms-dv1)|' "$H"
 expect_green "$H" \
     "a citation repointed to a different OPEN item still passes"
+
+# ---------------------------------------------------------------------------
+# 36-41. THE REACHABILITY PROPERTIES (rd vms-c13).
+#
+# 22-27 settled "is this text part of the product". These settle the question
+# that survived it: IS THE FUNCTION HOLDING THE CALL REACHABLE FROM ANYTHING?
+# Until section 2' of the gate existed, a call anywhere in any compiled product
+# translation unit counted, with no requirement on its enclosing function. The
+# buy was TWO EDITS in two files the build already compiles -- no new file, no
+# CMakeLists change, no `#if 0`:
+#
+#     src/vmsdcl/dcl_cmd_show.c:
+#         static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
+#     src/libvmssys/vms_kif.h: retire vms_kif_chkpriv's OVMX-UNWIRED token
+#
+#   rc=0, "44 entry points -- 32 reached, 12 with no product path", PASS, and
+#   `cmake --build --target vmsdcl` clean. Scaled to one 16-line dead static
+#   calling all 12 externally-linked unwired wrappers, with `sed
+#   s/OVMX-UNWIRED:/NOTE:/` over the header, the same gate printed "44 entry
+#   points -- 44 reached, 0 with no product path" and PASSED.
+#
+#   36 a call inside a dead STATIC                              -> RED
+#   37 ... the same function EXTERNALLY LINKED                  -> RED
+#   38 ... a dead static NAMED AFTER a reached product function -> RED
+#   39 ... reached only from a DEAD callback table              -> RED
+#   40 GREEN: reached from a LIVE callback table                -> GREEN
+#   41 the SCALED form: one dead static, all 12 wrappers        -> RED
+#
+# EVERY ONE OF 36-39 AND 41 IS A CLEAN PASS ON THE REVISION BEFORE vms-c13,
+# and all five retire a REAL declaration rather than using the probe: the
+# probe has no declaration, so a dead caller for it would go red whether or
+# not the dead call counted, and the control would prove nothing. The subject
+# is vms_kif_chkpriv -- genuinely unwired, declared against vms-pv1, and its
+# body issues VMS_IOCTL_CHKPRIV, so nothing on the kernel side moves either.
+# ---------------------------------------------------------------------------
+
+RETIRE_CHKPRIV='s|OVMX-UNWIRED: vms_kif_chkpriv (vms-pv1)|(retired by the reachability controls)|'
+
+# 36. THE BUY THE RULING NAMES, exactly as measured.
+sed -i "$RETIRE_CHKPRIV" "$H"
+printf '\nstatic void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }\n' >> "$SHOW"
+expect_red "$H $SHOW" \
+    "a call inside a function nothing calls is not a product path" \
+    "vms_kif_chkpriv
+$F_UNDECL
+credit NOTHING: ovmx_dead_helper" \
+    "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_BUILD" "$F_NO_IFACE"
+
+# 37. THE SAME FUNCTION, EXTERNALLY LINKED. It needs its own control because
+#     the obvious fix for 36 -- "a static nothing calls is dead" -- would not
+#     touch this one, and an exported symbol IS a legitimate root when a
+#     header declares it. What makes this dead is that nothing declares it.
+sed -i "$RETIRE_CHKPRIV" "$H"
+printf '\nvoid ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }\n' >> "$SHOW"
+expect_red "$H $SHOW" \
+    "external linkage alone does not make a dead function a root" \
+    "vms_kif_chkpriv
+$F_UNDECL
+credit NOTHING: ovmx_dead_helper" \
+    "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_BUILD" "$F_NO_IFACE"
+
+# 38. THE NODE COLLISION, and it is control 20's shape one level up: instead of
+#     colliding an unwired WRAPPER with a product function's name, collide the
+#     DEAD CALLER with a reached one, so the dead body inherits the live
+#     function's reachability. It is defeated by node identity being (origin
+#     file, name) for a static in a translation unit -- which is what `static`
+#     means -- rather than the bare name. $COLLIDE is checked to be a real
+#     product function by control 20 above, so if src/vmslnm/ renames it, that
+#     control reports the broken fixture before this one runs.
+sed -i "$RETIRE_CHKPRIV" "$H"
+printf '\nstatic void %s(void) { (void)vms_kif_chkpriv(0); }\n' "$COLLIDE" >> "$SHOW"
+expect_red "$H $SHOW" \
+    "a dead static named after a reached product function does not inherit its reachability" \
+    "vms_kif_chkpriv
+$F_UNDECL
+credit NOTHING: $COLLIDE" \
+    "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_BUILD" "$F_NO_IFACE"
+
+# 39. THE ROUTE AROUND 36-38, and it was open for one revision of the fix.
+#     Indirect calls have to be followed or the gate reds on correct code, so
+#     the first version of section 2' made ANY function whose address is taken
+#     a root. That is bought by writing a table: two lines in ONE file, and
+#     rc=0 at 44 / 32 / 12 again. The table is DEAD -- nothing reads it -- so
+#     the fix is that address-taking is an EDGE from whatever context takes the
+#     address, not a root, and a file-scope table is reachable only when
+#     something reachable names it. Control 40 is the other side.
+sed -i "$RETIRE_CHKPRIV" "$H"
+printf '\nstatic void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }\nstatic void (*const ovmx_dead_tab[1])(void) = { ovmx_dead_helper };\n' >> "$SHOW"
+expect_red "$H $SHOW" \
+    "a DEAD callback table does not make the functions in it reachable" \
+    "vms_kif_chkpriv
+$F_UNDECL
+credit NOTHING: ovmx_dead_helper" \
+    "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_BUILD" "$F_NO_IFACE"
+
+# 40. GREEN CONTROL, the other side of 39, and the one that stops the fix for
+#     39 from being a gate that simply cannot see indirect calls. DCL dispatches
+#     its verbs through a table, RMS takes completion routines, $ENQ and $QIO
+#     take AST handlers: a census blind to those would report every handler
+#     unreachable and demand false declarations for whatever they call. Here the
+#     probe is called ONLY from a function whose address is taken in a table,
+#     and that table is named by cmd_show_process() -- which is reached. The
+#     census must be green.
+#
+#     THE TABLE IS DECLARED IN THE `(*const tab[1])(void)` FORM ON PURPOSE:
+#     the declared name sits INSIDE the declarator parentheses, and while the
+#     reader tracked only names outside them, this exact control was RED --
+#     the table had no node, so nothing could reference it and its handler
+#     read as dead. That is an under-count on correct code, and it is why the
+#     reader tracks the last name followed by "[" as well.
+add_probe_decl
+add_probe_def
+sed -i 's|^extern int vms_status_string(uint32_t status, char \*buf, size_t bufsize);$|static uint32_t kif_negctl_cb(void) { return vms_kif_negctl_probe(1); }\nstatic uint32_t (*const kif_negctl_tab[1])(void) = { kif_negctl_cb };\n&|' "$SHOW"
+sed -i 's|^        return cmd_show_process_quotas(ctx);$|        (void)kif_negctl_tab[0]();\n        return cmd_show_process_quotas(ctx);|' "$SHOW"
+expect_green "$H $C $SHOW" \
+    "a function reached only through a LIVE callback table counts as a caller"
+
+# 41. THE SCALED FORM, which is what the buy looks like when it is used rather
+#     than demonstrated: ONE dead static calling every externally-linked
+#     unwired wrapper, and one sed retiring every declaration in the header.
+#     On the revision before vms-c13 this printed "44 entry points -- 44
+#     reached, 0 with no product path" and PASSED, handing the Phase 2 verdict
+#     a fully-wired executive interface with nothing wired.
+sed -i 's/OVMX-UNWIRED:/NOTE:/' "$H"
+printf '\nstatic void ovmx_dead_helper(void)\n{\n    uint8_t m = 0; uint64_t a = 0, b = 0, p = 0; uint32_t g = 0, r = 0;\n    char nm[64]; uint8_t vb[16];\n    vms_kif_close();\n    (void)vms_kif_setmode(0);\n    (void)vms_kif_getmode(&m, &a, &b);\n    (void)vms_kif_setprv(0, 0, 0, &p);\n    (void)vms_kif_chkpriv(0);\n    (void)vms_kif_dclast(0, 0, 0);\n    (void)vms_kif_setast(0);\n    (void)vms_kif_deliverast(&a, &b, &m);\n    (void)vms_kif_getlki(0, &g, &r, nm, vb);\n    (void)vms_kif_alloc("X");\n    (void)vms_kif_dalloc("X");\n    (void)vms_kif_ttsetmode(0, 0, 0, 0, 0, 0);\n}\n' >> "$SHOW"
+expect_red "$H $SHOW" \
+    "one dead static calling every unwired wrapper wires nothing" \
+    "vms_kif_chkpriv
+vms_kif_ttsetmode
+$F_UNDECL
+credit NOTHING: ovmx_dead_helper" \
+    "$F_MALFORMED" "$F_STALE" "$F_UNKNOWN" "$F_DUP" \
+    "$F_ORPHAN_DEF" "$F_ORPHAN_PROTO" "$F_ORPHAN_OPCODE" "$F_ORPHAN_SEL" \
+    "$F_NO_BUILD" "$F_NO_IFACE"
 
 echo "  controls: $passed passed, $failed failed"
 if [ "$status" -eq 0 ]; then

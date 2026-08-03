@@ -264,6 +264,14 @@ if(BUILD_TESTS)
     # nm, because the source-text readings of the universe were all escaped
     # together by an asm-label rename that left the object symbol-identical.
     # One compile per product .c file per run, hence the raised timeout.
+    #
+    # AND IT RUNS CMAKE ITSELF (vms-c19). Which files it reads is no longer a
+    # directory glob: it configures this project into a throwaway directory and
+    # unions the glob with the translation units compile_commands.json says the
+    # product compiles, because a definition RELOCATED out of src/ and tools/
+    # left every reading at once while CMake went on shipping it. Running this
+    # gate therefore needs cmake on PATH; ctest already implies that. Measured
+    # cost of the extra configure: 0.6s per run.
     add_test(NAME userspace_service_register
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
@@ -277,13 +285,17 @@ if(BUILD_TESTS)
     # Each control runs the whole gate, and the gate now compiles the tree for
     # its symbol scan, so the wall clock is (controls x compiles). Measured on
     # an 8-core box: 99s for 34 controls before the symbol scan, 180s for 39
-    # after. The timeout is set well clear of that because a CI runner has
-    # fewer cores and the compiles are what parallelise.
+    # after. Re-measured on a 16-core box for vms-c19: 328s for 44 controls
+    # before, 387s for 49 after -- the added cmake configure per gate run costs
+    # about 0.4s per control, and the control COUNT is what moved. The timeout
+    # is set well clear of that because a CI runner has fewer cores and the
+    # compiles are what parallelise; it was raised with the control count, not
+    # to accommodate a slowdown.
     add_test(NAME userspace_service_register_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(userspace_service_register_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 900)
+        LABELS "integration;authenticity" TIMEOUT 1200)
 
     # Rule 10/11 standing gate (vms-fb9): a process does not name its own
     # terminal, and SHOW DEVICE does not invent device rows. Keeps the

@@ -490,6 +490,22 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
  * The state machine reaches OPEN one frame earlier than the ack goes out; that
  * is a state change, not a wire change. See scsd_vc_settle().
  *
+ * MEASURED, not asserted (lab-2 pod vaxlab-3, 2026-08-03). Head-to-head fresh
+ * joins, this branch (tag W9A) vs the same commit's parent main (tag WAA), same
+ * pod, same runner, captures at
+ * /data/training/vax/k8s-labs/vaxlab-3/logs/d94-{W9A,WAA}.pcap:
+ *   - Both emitted 3 OVMX 0x41 frames in the order round-0, round-1, round-2,
+ *     with the peer's frames interleaved identically:
+ *       peer r0, OVMX r0, OVMX r1, peer r1, peer r2, OVMX r2.
+ *   - Byte-diffing the three OVMX frames pairwise, the ONLY differing absolute
+ *     offsets are 28, 60 and 109 -- the SCSSYSTEMID low byte (1409 vs 1410) and
+ *     one SCSNODE character (OVMXW9 vs OVMXWA). Zero protocol bytes differ.
+ *   - Emission counters identical: START-SENT=2 START-ACK-SENT=1
+ *     CONNECT-REQ-SENT=1 CREDIT-SENT=8 DIR-CONNECT-RESP-SENT=1
+ *     DIR-LOOKUP-RESP-SENT=4 CM-CONFIG-FRAMES=3.
+ * NEITHER run reached CLUSTER_NODES=3 on that pod, and that is PRE-EXISTING:
+ * the main control failed identically. This item does not claim to fix it.
+ *
  * ===== WHAT IS NEW ON THE WIRE, AND WHAT GATES IT =====
  *   1. RETRY / ABANDON. A START/STACK unanswered for
  *      SCS_VC_FORMATION_TIMEOUT_MS is reissued (p. 2-14) up to
@@ -503,6 +519,17 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
  *      ACK"). Same 46 bytes, one peer-frame earlier. NO lab capture has shown
  *      the reference member accepts that ordering, so it does not ship on by
  *      default. See SCS_VC_EARLY_ACK_ENV in scs_vc.h.
+ *
+ *      KILL-SWITCH PROVEN TO MOVE (guardrail 23), lab-2 tag W5A vs W1A: with
+ *      OVMX_VC_EARLY_ACK=1 the daemon logs SCSD-I-STARTDONE immediately after
+ *      "STACK received -> send ACK, VC OPEN" and BEFORE the peer's round-2
+ *      arrives; with the switch off it logs it after "ACK received", i.e. after
+ *      the peer's round-2 -- which is where the pre-vms-4071 control (W4A)
+ *      logs it too. NOTE HONESTLY: on THIS lab the two orderings are NOT
+ *      distinguishable in the capture, because the peer emits its round-1 and
+ *      round-2 back to back inside one millisecond, so both are already on the
+ *      wire before OVMX can turn its ack around. The switch changes the daemon's
+ *      emission point; on this peer's timing it does not change the pcap.
  *   3. THE IMPLIED ACK (p. 2-16) can open a circuit with no peer round-2 ever
  *      arriving, in which case OVMX owes its round-2 immediately. Reachable
  *      only from START RECEIVED on an SCS sequenced-message class, which a

@@ -3478,6 +3478,63 @@ run reports it directly. 39/39 ctest green.
 > were not (§3 items 2, 3, 13). Series `P1A`/`N1F`/`P1B`/`P1C`/`P2A` is running;
 > `N1F` is `OVMXN1`, which has been refused **four** times.
 
+### 4M.15 ⭐⭐⭐ THE DIVERGENCE, LOCATED TO ONE FRAME AT +10.9 ms — and the barrier is downstream, not the cause
+
+**The decode §4M.11's 90 ms window made possible.** Aligned on the OPCOM
+`proposed addition` anchor; the agent measured the console-vs-host residual at
+**0 to +4 ms** (the wire goes silent for 460–725 ms before each burst onset, so
+the boundary is unambiguous) — far tighter than the ±0.1 s I assumed.
+
+**The join and the refused rejoin are the SAME PROTOCOL, message for message,
+for SIXTEEN connection-manager messages** — same direction, same
+category/opcode, same seq/ack — and then the rejoin simply ends:
+
+| # | `N3A` **JOIN** | `N1E` **REJOIN** |
+|---|---|---|
+| 0–8 | `0x24/0x54`, `0x24/0x54`, `0x24/0x44`, `0x01/0x14`, `0x01/0x01`, `0x01/0x02`, `0x24/0x44`, `0x01/0x14`, `0x01/0x01` | **identical** |
+| 9 | `0x04/0x41` seq3/ack3 | `0x04/0x00` seq3/ack3 — **residue byte, NOT a discriminator** |
+| 10–15 | `0x24/0x44`×2, `0x56/0x41`×2, `0x01/0x03` seq4/ack3, **`0x81/0x03` seq4/ack4 (OVMX answers)** | **identical** |
+| **16** | **`VAX2→OVMX cat 0x01 / op 0x05`, seq5/ack4, 204 B, +10.94 ms** | **— nothing, ever —** |
+
+`cat 0x01 op 0x05` is `SCS_MEMBER_OP_LOCKRB`, the lock/resource-rebuild
+transaction. **Count over the entire capture: 5 in `N3A`, 5 in `N1A`, ZERO in
+`N1E`, ZERO in `N1B`.** Everything downstream — the `0x01/0x06` ⟷ `0x04/0x00`
+pump (254/249 frames inside the window) and the barrier — follows from it.
+
+**OVMX's last transmission is a well-formed `0x81/0x03` seq4/ack4 reply,
+byte-comparable in both.** We are not sending anything wrong and not going
+silent early by choice.
+
+**⚠ AND OVMX IS NOT SHOUTING INTO THE VOID.** In the 5 s after the anchor:
+OVMX **6.0 fps**, VAX1 2.4, VAX2 6.0 — against 220/54/161 fps in a join. OVMX
+stops first, at **+9.11 ms**; VAX2 continues 6.7 ms longer **but only to VAX1**
+and never addresses OVMX again. No retry, no NAK, no disconnect, no error. **The
+connection is left open and simply unused.**
+
+> ### ⛔ CORRECTION TO §4M.10 — the barrier is NOT the proximate cause
+> §4M.10 named the barrier round as prime suspect because `SCSD-I-BARRIER` is 12
+> in every join and 0 in every refusal. **The timing refutes that as a cause.**
+> The barrier is `cat 0x01 op 0x0b` → `0x81/0x0b` → `0x01/0x0c`, 12 rounds × 3
+> frames, with a literal step counter at **abs 88** counting `01…0c`. It begins
+> at **≈+135 ms** — i.e. **~45 ms AFTER** the console logs `completed VAXcluster
+> state transition` at +90 ms. **It is a consequence of the transition
+> completing, not a step within it.** Its absence in the refusals is real but
+> downstream. Corrected in place; do not chase the barrier.
+
+**A second candidate, EARLIER than the named one.** In the join, VAX2 sends an
+`SCS-ctl(op6)` (76 B) at **+10.66 ms** — 0.28 ms *before* the `0x01/0x05` — and
+it too appears absent in the rejoin. Note OVMX **does** send its `SCS-ctl(op9)`
+at +8.77 ms in the rejoin, so the op8→op9 handshake ran on the VAX2 connection.
+**Whether the true first divergence is VAX2's `op6` or the `0x01/0x05`, and
+whether OVMX's `op9` differs byte-wise between the two, is dispatched.**
+
+> **This also re-scopes §4M.14.** VAX1's retransmitted `op8` (the `0x7b` frames
+> OVMX was deaf to) arrives at **+2.26 s and +5.33 s** — over two seconds AFTER
+> this divergence at +10.9 ms. So the `0x7b` deafness is a **real bug that
+> cannot be the proximate cause of the missing `0x01/0x05`.** It may still
+> matter for recovery. **Do not let the bracketed series' verdict be read as
+> more than it is.**
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-
@@ -3638,7 +3695,12 @@ REFUSED, and it refuted §4M.7 and §4M.8's attribution) and `N3A` fresh
 (`OVMXN3`, 1310) = its closing control, JOINED. Binary:
 `build-d94/bin/SCSD.EXE` built from the commit that lands §4M.
 **All four `N1*` rejoins were refused; all three fresh identities joined.**
-**Last SCSSYSTEMID used: 1310.**
+
+Run tags session m part 2 (the §4M.14 `0x7b` credit-handshake fix): `P1A` fresh
+(`OVMXP1`, 1311) opening control · **`N1F` = `OVMXN1` rejoin — the known
+reproducer, refused 4× as `N1B`/`N1C`/`N1D`/`N1E`** · `P1B`/`P1C` = `OVMXP1`
+consecutive rejoins · `P2A` fresh (`OVMXP2`, 1312) closing control. Kill-switch
+`OVMX_NO_CREDIT_RETX=1`. **Last SCSSYSTEMID used: 1312.**
 
 **Pod state after this session:** `vaxlab-0` SPENT (console wedged). `vaxlab-1`
 DEGRADED — its VAX2 was SIGKILLed by the `SMOKE` tool test and never rebooted.

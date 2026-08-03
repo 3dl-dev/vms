@@ -1,19 +1,31 @@
 #!/usr/bin/env python3
 """gen_rd_citations.py - regenerate tracking/rd-citations.tsv from live rd.
 
-WHY THIS EXISTS (rd vms-8cc). Several standing gates let a source declaration
-buy an exemption by CITING AN rd ITEM: the vms_kif caller census
-(tests/integration/test_kif_caller_census.sh) accepts
+WHY THIS EXISTS (rd vms-8cc). The vms_kif caller census
+(tests/integration/test_kif_caller_census.sh) lets a source declaration buy an
+exemption by CITING AN rd ITEM:
 
     OVMX-UNWIRED: vms_kif_foo (<rd item id>) -- why
 
-and the userspace service register accepts OVMX-USERSPACE / OVMX-PARTIAL /
-OVMX-LOCAL / OVMX-EXECUTIVE in the same shape. Both gates validated only the
-SHAPE of the id -- that a well-formed `vms-xxx` token was present. MEASURED on
-the branch this replaces: repointing one declaration at `vms-q9z9`, an id that
-has never existed, left the census rc=0 and its counts unchanged; repointing
-another at `vms-fb9`, whose status is `done`, did the same. The exemption was
-sold for a token, not for tracked work.
+It validated only the SHAPE of the id -- that a well-formed `vms-xxx` token was
+present. MEASURED on the branch this replaces: repointing one declaration at
+`vms-q9z9`, an id that has never existed, left the census rc=0 and its counts
+unchanged; repointing another at `vms-fb9`, whose status is `done`, did the
+same. The exemption was sold for a token, not for tracked work.
+
+WHICH GATES ACTUALLY READ THE LEDGER: the census, and
+tests/integration/test_rd_citations_fresh.sh. `grep -rn rd_cite_check tests/`
+is the list. The userspace service register
+(tests/integration/test_userspace_service_register.sh) accepts OVMX-USERSPACE /
+OVMX-PARTIAL / OVMX-LOCAL / OVMX-EXECUTIVE in the same shape and DOES NOT read
+this ledger -- that grep returns nothing for it, and an earlier revision of this
+docstring claimed otherwise. Its declarations are still shape-checked only;
+wiring it up is rd vms-fab, and is blocked because 85 of its 88 declarations
+cite closed items. This script still RESOLVES those ids -- they are cited from
+src/ and the scan below is not gate-specific. MEASURED on the tree at the time
+of writing: 133 marker lines, 67 of them OVMX-USERSPACE, 14 OVMX-PARTIAL, 14
+OVMX-LOCAL, 7 OVMX-EXECUTIVE -- against 14 OVMX-UNWIRED. So most of the ledger
+is resolved for a gate that never reads it.
 
 The gates cannot ask rd themselves: rd is nostr-backed and is not reachable
 from CI. So the resolution happens HERE, on a host that has rd, and the result
@@ -33,8 +45,32 @@ Usage:
 
 Exit status: 0 when a ledger was produced (including one that records ids rd
 does not know -- that is data, and the gates red on it). Non-zero only when rd
-could not be run at all, or the output could not be written: an unresolvable
-ledger is never written over a good one.
+could not be run at all, the output could not be written, or this script's own
+findings contradict the rows it just wrote (see check_self_consistent): an
+unresolvable ledger is never written over a good one.
+
+THIS SCRIPT IS NOT A TRUST ANCHOR AND MUST NOT BE READ AS ONE. It is one file
+in the repo, and both the CI-side check and the freshness test used to reduce
+to it: the freshness test regenerated with THIS code and compared the result to
+the committed ledger, so a generator that lied agreed with itself. MEASURED:
+one edit here -- the `absent` branch of main() writing ("open", "active")
+instead of ("absent", "-") -- plus `sed s/(vms-a86)/(vms-q9z9)/` on one
+declaration and a regenerate took the census to rc=0 PASS ("13 sites cite 5
+ids -- 5 open, 0 closed, 0 unknown") AND the freshness test to rc=0 PASS. It
+read as a false-absent bugfix. Two things now stand between that edit and a
+green, and NEITHER of them is in this file:
+
+  1. test_rd_citations_fresh.sh asks rd about every ledger row ITSELF, in its
+     own code, and never through this script.
+  2. it READS this script's stderr instead of echoing it, and reds when a
+     CLOSED:/ABSENT: line contradicts the row written for the same id -- which
+     is exactly what that one edit produces, because it left the reporting
+     path alone.
+
+check_self_consistent() below is a third, weaker tripwire that lives here: it
+catches the same edit at the source. It is trivially removed by the same
+attacker, and is worth having only because it costs six lines and turns a
+one-edit attack into a three-edit one.
 """
 
 import argparse
@@ -131,6 +167,40 @@ def clean_title(t):
     return t or "(no title)"
 
 
+def check_self_consistent(rows, closed, absent):
+    """The rows written must agree with the findings reported on stderr.
+
+    The two are built from the same branch of the same loop, so they can only
+    disagree if that branch was edited to write one verdict and report another
+    -- which is precisely the shape of the measured one-edit attack described
+    in the module docstring. Dying here is not a defense (the attacker owns
+    this file too); it is a tripwire that makes the cheap version of the attack
+    stop being cheap.
+    """
+    by_id = {r[0]: r[1] for r in rows}
+    for cid, _st in closed:
+        if by_id.get(cid) != "closed":
+            die("INTERNAL: reported %s as CLOSED but wrote the row as %r. This "
+                "script contradicts itself, so nothing it produced can be "
+                "trusted; refusing to let the ledger stand."
+                % (cid, by_id.get(cid)))
+    for cid in absent:
+        if by_id.get(cid) != "absent":
+            die("INTERNAL: reported %s as ABSENT but wrote the row as %r. This "
+                "script contradicts itself, so nothing it produced can be "
+                "trusted; refusing to let the ledger stand."
+                % (cid, by_id.get(cid)))
+    for cid, verdict in by_id.items():
+        if verdict == "closed" and cid not in {c for c, _ in closed}:
+            die("INTERNAL: wrote %s as closed without reporting it. The stderr "
+                "report is what the freshness test cross-checks; a row that "
+                "does not appear there is invisible to it." % cid)
+        if verdict == "absent" and cid not in set(absent):
+            die("INTERNAL: wrote %s as absent without reporting it. The stderr "
+                "report is what the freshness test cross-checks; a row that "
+                "does not appear there is invisible to it." % cid)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=None)
@@ -177,6 +247,8 @@ def main():
         else:
             rows.append((cid, "absent", "-", "(rd has no such item)"))
             absent.append(cid)
+
+    check_self_consistent(rows, closed, absent)
 
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     out = []

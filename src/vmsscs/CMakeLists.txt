@@ -75,6 +75,17 @@ target_include_directories(vmsscs_config PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-e1a - SCA Connection Descriptor Tables, the Connection Descriptor List
+# that addresses them by CONID, and the per-Path-Block connection queue
+# (VAXcluster Principles ch. 2, pp. 2-28..2-30, 2-35). Pure state + delivery:
+# builds no frame, parses no frame, opens no socket. Depends on vmsscs_config
+# for struct scs_pb / struct scs_sb (the CDT points at both).
+add_library(vmsscs_cdt STATIC scs_cdt.c)
+target_include_directories(vmsscs_cdt PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_cdt PUBLIC vmsscs_config)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include

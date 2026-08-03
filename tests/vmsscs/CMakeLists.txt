@@ -162,6 +162,27 @@ set_tests_properties(vmsscs_config_unit PROPERTIES
     TIMEOUT 30
 )
 
+# vms-e1a - CDT / CDL / Path-Block connection queue. Asserts the documented
+# connection model of VAXcluster Principles ch. 2: CONID -> CDL -> CDT lookup
+# (p. 2-29), two CDTs on one Path Block both reachable from the PB and both
+# notified on VC loss (p. 2-28), SCSCONNCNT+200 two-tier CDL sizing with
+# released-not-deallocated reuse (p. 2-30), and a packet routed to the right
+# SYSAP input routine by DESTINATION CONID with the SOURCE CONID checked
+# (pp. 2-29, 2-35).
+add_executable(test_scs_cdt test_scs_cdt.c)
+
+target_include_directories(test_scs_cdt PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_cdt PRIVATE vmsscs_cdt)
+
+add_test(NAME vmsscs_cdt_unit COMMAND test_scs_cdt)
+set_tests_properties(vmsscs_cdt_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
 # vms-7be - THE SCSD-LEVEL TEST. The other targets in this file link the builder
 # libraries; this one compiles src/vmsscs/scsd.c itself (SCSD_UNIT_TEST swaps the
 # AF_PACKET sendto for a capture buffer and renames the daemon's main) so the

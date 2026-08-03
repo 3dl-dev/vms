@@ -51,7 +51,9 @@
  * NOT IN SCOPE HERE (deliberately, so the refactor stays wire-invisible):
  *   - The masquerade tests of the p. 2-21 footnote (separate item).
  *   - SCS connections / CDTs, which are a layer ABOVE the virtual circuit
- *     (p. 2-11 Figure 2-6: many connections ride one VC) -- separate item.
+ *     (p. 2-11 Figure 2-6: many connections ride one VC). Landed since, as
+ *     src/vmsscs/scs_cdt.{h,c} (vms-e1a); the only thing it added to THIS file
+ *     is struct scs_pb's cdt_head, the p. 2-28 per-circuit connection queue.
  */
 #ifndef SCS_CONFIG_H
 #define SCS_CONFIG_H
@@ -151,6 +153,7 @@ struct scs_sb_info {
 };
 
 struct scs_pdt;
+struct scs_cdt; /* vms-e1a: connections queued to this circuit (scs_cdt.h) */
 
 /*
  * struct scs_pb - Path Block: describes one virtual circuit AND the port at the
@@ -169,6 +172,21 @@ struct scs_pb {
     struct scs_pdt *pdt; /* the LOCAL port this circuit uses (always set) */
 
     int on_pdt; /* 1 = queued to pdt->formative_head; 0 = queued to sb->pb_head */
+
+    /*
+     * vms-e1a: head of the queue of Connection Descriptor Tables for the SCS
+     * connections this virtual circuit supports. "SCA specifies that all CDTs
+     * corresponding to connections supported by a virtual circuit be queued to
+     * the Path Block corresponding to that circuit. If the circuit is broken
+     * for any reason, it is then a relatively simple matter to scan this queue
+     * to determine which connections have also been lost" (p. 2-28).
+     *
+     * Owned entirely by src/vmsscs/scs_cdt.c -- scs_config.c never reads or
+     * writes it. NOTE that scs_pb_close() zeroes the whole PB and does NOT walk
+     * this queue: the p. 2-28 VC-loss scan (scs_cdl_vc_loss) must run first, or
+     * the CDTs are left holding a dangling pb pointer.
+     */
+    struct scs_cdt *cdt_head;
 
     struct scs_pb *next;
     struct scs_pb *prev;

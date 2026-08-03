@@ -34,6 +34,51 @@ fails without the fix.** Concretely, all of:
 If the root cause turns out to be a VMS behaviour OVMX cannot match without an
 operator ruling, that is a **gate**, not a completion — see the reserved list.
 
+## ⚠ SESSION m CLOSED 2026-08-03 — READ THIS BEFORE THE BOOT SEQUENCE
+
+**The strategy changed. `vms-2f3` is no longer a bug hunt; it is now the
+acceptance test for a build.**
+
+Session m falsified **eleven** hypotheses and landed **ten** real, separately
+fixed defects, none of them the cause (§3 now carries 21 killed entries). It
+then obtained **Roy G. Davis, *VAXcluster Principles*, Digital Press 1993,
+ch.2** — the source every documentation sweep had failed to find — and measured
+OVMX against it. The finding that reframes everything:
+
+> **OVMX reproduces the WIRE SHAPES of selected SCA exchanges by replaying
+> byte-exact captured templates. It does not implement SCA.** Grep over
+> `src/vmsscs/`: `conn_state`=0, `path_block`=0, `system_block`=0,
+> `connect_data`=0, `reason_code`=0, `rspid`=0, `credit_wait`=0,
+> `ACCEPT_REQ`=0. State lives in a MAC-keyed `struct peer_state`.
+>
+> **That is why eleven hypotheses died.** The failure is a connection-state-
+> machine failure and OVMX has no connection state machine for it to be legibly
+> wrong in. Every fix so far corrected a frame; none could correct a state.
+
+**THE PLAN EXISTS: `vms-187`** — "OVMX SCS layer implements the SCA
+architecture", 45 items under 5 deliverable epics, dispatch-ready.
+`rd dep tree vms-187`. Dispatch with:
+`/swarm-dispatch --strategy worktree --workers 4 vms-187`.
+Its end-to-end item (`vms-70e2`) **is** this document's definition of done, and
+is explicitly permitted to fail honestly and raise a gate rather than licence a
+twelfth guess.
+
+**⚠ THE CHAPTER TRANSCRIPT IS NOT IN GIT AND EXISTS ONLY ON THIS HOST:**
+`/home/baron/cluster/transcript/part{1..4}.md` (pp. 2-1..2-57, all figures,
+uncertain characters marked `[?]`). It is a copyrighted book and **must not be
+committed**; load-bearing passages are quoted with page citations in
+`docs/HANDOFF-vms-2f3.md` §4M.23/§4M.28/§4M.30 and in the `vms-187` item
+descriptions. **If this host is lost the transcript is lost** — same exposure
+class as `vms-f7a`. The book was borrowed from archive.org
+(`vaxclusterprinci0000davi`) and can be borrowed again.
+
+> **⛔ PROVENANCE — do not undo this.** The *VAXcluster Disk I/O Internals
+> Manual* (bitsavers) is stamped DEC Confidential and cross-references SCS
+> **source listings**. It is EXCLUDED under Rule 8 and nothing from it is in
+> this project. Do not read it "just to check" — the DMCA 1201(f) protection on
+> the whole RE effort depends on provenance, and a confidential source read once
+> cannot be un-read. See §4M.27.
+
 ## Boot sequence, in order
 
 1. `cd ~/projects/vms`, branch `worktree-760-active-directory`. Re-derive the

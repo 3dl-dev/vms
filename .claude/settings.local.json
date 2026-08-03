@@ -66,7 +66,8 @@
       "Bash(python3 -c \"import dpkt; print\\('dpkt ok'\\)\")",
       "Bash(python3 -c \"import scapy; print\\('scapy ok'\\)\")",
       "Bash(mkdir -p /home/baron/.claude/jobs/f925fff5/tmp)",
-      "Read(//home/baron/.claude/jobs/f925fff5/tmp/**)"
+      "Read(//home/baron/.claude/jobs/f925fff5/tmp/**)",
+      "Bash(bash /tmp/poll53.sh)"
     ]
   },
   "worktree": {

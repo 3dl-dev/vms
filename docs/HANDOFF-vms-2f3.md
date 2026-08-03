@@ -280,6 +280,12 @@ oracle degrades before it errors.
     refused rejoin the peer's `MSCP$DISK` lookups stay `0x5b` for all four,
     while every join reaches `0x4b` by the second. A join CAN carry a leading
     `0x5b` (`N3A`). Useful free oracle; the causal reading is dead.
+16. **The `0x7b` credit-handshake deafness (§4M.14/§4M.17).** `scsd.c:2525`
+    discarded every retransmitted `op6`/`op8`; third instance of one defect, on
+    the gate the source labels as gating admission. **Real, fixed, kept — and
+    not the gate:** `N1F` (an identity already refused 4×) was refused again
+    with it, behind a joining control. Predicted by the timing — VAX1's
+    retransmit lands at +2.26 s, two seconds after the `op6` divergence.
 15. **"OVMX is deaf to `cat 0x04` and that is the gate" (§4M.13).** `scsd.c`
     never dispatches on a `cat 0x04` opcode — **and neither does a real node.**
     Across 175 `cat 0x04` frames sent to the rejoining VAX3 there is never a
@@ -3534,6 +3540,112 @@ whether OVMX's `op9` differs byte-wise between the two, is dispatched.**
 > cannot be the proximate cause of the missing `0x01/0x05`.** It may still
 > matter for recovery. **Do not let the bracketed series' verdict be read as
 > more than it is.**
+
+### 4M.16 ⭐⭐⭐ THE GATE IS THE PEER'S `op6`, AND NOTHING WE SEND DIFFERS BY ONE BYTE
+
+**The sharpest and best-evidenced statement this item has reached.**
+
+**1. `op6`/`op7` are absent from a refused rejoin entirely — whole capture, both
+links, both directions:**
+
+| SCS-ctl op | `N3A` join | `N1A` join | `N1E` rejoin | `N1B` rejoin |
+|---|---|---|---|---|
+| **`op6`** (76 B) | **4** | **4** | **0** | **0** |
+| **`op7`** (72 B) | **4** | **4** | **0** | **0** |
+| `op8` (72 B) | 4 | 2 | 6 | 6 |
+| `op9` (72 B) | 2 | 2 | **2** | **2** |
+
+`op8` and `op9` occur normally in the refusals. **Only the `op6`/`op7` pair
+vanishes.**
+
+**2. ⛔ THE DIVERGENCE IS ~700 ms EARLIER THAN §4M.15 SAID — it predates the
+membership proposal.** Corrected in place; §4M.15's "first divergence =
+`0x01/0x05` at +10.94 ms" is **too late**. The same pattern runs on the
+**OVMX↔VAX1** link *before* the anchor, and the rejoins truncate it identically:
+
+```
+N3A (join)   -716.06ms VAX1->OVMX op8      N1E (rejoin)  -702.96ms VAX1->OVMX op8
+             -715.95ms OVMX->VAX1 op9                    -702.91ms OVMX->VAX1 op9
+             -715.81ms VAX1->OVMX op6  <<<               ---- nothing further ----
+             -715.75ms OVMX->VAX1 op7
+             -715.71ms OVMX->VAX1 op6      N1B (rejoin)  -609.06ms VAX1->OVMX op8
+             -715.59ms VAX1->OVMX op7                    -609.00ms OVMX->VAX1 op9
+                                                         ---- nothing further ----
+```
+
+Everything before `op8` on that link is present and identically ordered in all
+four captures. **Earliest divergent frame in the whole capture: `VAX1 → OVMX`,
+SCS-ctl `op6`, 76 bytes, at anchor −715.81 ms (`N3A`) / −592.35 ms (`N1A`).**
+And the `0x01/0x05` absence is the same failure surfacing later on the CM
+channel — on the VAX2 link the two *race* (`op6` first in `N3A` by 0.28 ms,
+`0x01/0x05` first in `N1A` by 1.09 ms), so **neither is reliably "the" first**.
+
+**3. ⭐⭐⭐ NOTHING OVMX TRANSMITS DIFFERS BY A SINGLE NON-PER-RUN BYTE.** Every
+offset classified, with a class-discrimination test (joins agree with each other
+AND rejoins agree with each other AND the groups differ):
+
+| frame | differing offsets | non-per-run | **class-discriminating** |
+|---|---|---|---|
+| OVMX's `op9` (72 B) | 11 | 0 | **0** |
+| **the PEER's `op8` to us** (72 B) | 11 | 0 | **0** |
+| OVMX's CM `0x81/0x03` (204 B) | 90 | 80 | **0** |
+
+The 11 differences in `op9`/`op8` are ConnIDs, PEDRIVER seq/channel and the
+NISCA logaddr byte. The `0x81/0x03`'s 80 body differences are **stale-buffer
+residue** — readable ASCII (`SYSTEM$VAX1`, `F11B$aSYSDSK1`) — and cut *across*
+the classes (a join and a rejoin agree at abs 76). **Zero class signal anywhere.**
+
+**4. `op6` is NOT a reply to our `op9`.** Ordering over all 12 `op8` / 8 `op9` /
+8 `op6` / 8 `op7`:
+
+- **`op8` → `op9`**: peer requests, OVMX replies. **8/8**, median +0.12 ms.
+- **`op6` → `op7`**: a *symmetric* pair run **twice**, once each direction —
+  peer `op6` → OVMX `op7`, then OVMX `op6` → peer `op7`. **4/4 each.**
+
+`op9` already closes the `op8` pair. **`op6` is an independent step the peer
+initiates**, firing 0.14–0.26 ms after it receives our `op9`. OVMX's own `op6`
+is gated behind the peer's, so the peer withholding it suppresses both
+directions — exactly the 0/0 rejoin pattern.
+
+> ### THE STATEMENT
+> **The peer completes `op8`→`op9` with us, byte-identically in both cases, and
+> then simply does not send `op6`. It does this on EVERY link it opens to OVMX,
+> starting ~0.6–0.7 s before it proposes our addition.** `op6` is the
+> directory DISCONNECT-REQUEST (`scs_send_disconnect`, `scsd.c:2000`) — so this
+> is **§4k.5's "the peer's directory teardown never comes", now proven to the
+> byte and located 700 ms earlier than any previous framing.**
+>
+> **Every candidate on our side is now excluded by a byte-level matched
+> control.** The discriminator is state the peer holds about our identity, and
+> the decision is instantaneous (sub-millisecond after our `op9`).
+
+**5. Barrier timing restated precisely** (the agent corrected its own first
+figure, which was measured from burst onset and conflated two barriers):
+
+| | earliest `0x01/0x0b` **involving OVMX** | console `completed` |
+|---|---|---|
+| `N3A` | anchor **+137.05 ms** | anchor +90 ms |
+| `N1A` | anchor **+134.92 ms** | anchor +90 ms |
+
+**45–47 ms after completion. Confirms §4M.15's correction: the barrier is
+downstream and cannot be the cause.** Step index is at abs 88 counting `01…0c`;
+the `0x81/0x0b` response carries a constant `0x10` there, not a step.
+
+### 4M.17 ⛔ THE `0x7b` CREDIT FIX IS NOT THE GATE EITHER — `N1F` refused
+
+`N1F` = `OVMXN1`, the identity refused four times as `N1B`/`N1C`/`N1D`/`N1E`,
+rerun with §4M.14's fix and a joining control (`P1A`, `XITDONE=1`) immediately
+before. **`XITDONE=0` — refused, identity proven on the wire.**
+
+**This was predicted and is not a surprise:** §4M.15 already showed VAX1's
+retransmitted `op8` arrives at **+2.26 s**, over two seconds after the `op6`
+divergence at −0.7 s → +10.7 ms. A fix that far downstream could not have
+changed the outcome.
+
+**Keep it** (guardrail 15, seventh time on this item): the deafness was real,
+it is the third instance of a defect this project has fixed twice elsewhere, it
+is on the gate the source labels as gating admission, and a real node answers
+those retransmissions. **Added to §3 as killed entry 16.**
 
 ### 4M.5 The test, and its kill-switch
 

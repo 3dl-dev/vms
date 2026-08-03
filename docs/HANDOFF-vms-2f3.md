@@ -4130,8 +4130,27 @@ a candidate.
 `CC MFQ Empty`, `Cache Miss` (*VSI OpenVMS Cluster Systems*, DO-DCLUSY-01A, App.
 F, Example F.2, p. 365). The manual gives headers but **no prose definitions** —
 which does not matter: **if our unacknowledged `op9` increments a named bucket,
-that names the class of failure directly.** New tool `tools/portwatch.sh`;
-run `Y1A`/`Y1B` dispatched.
+that names the class of failure directly.**
+
+> ### ⛔ NULL RESULT — THOSE COUNTERS DO NOT EXIST ON VAX 7.3
+> `tools/portwatch.sh` was built and run (`Y1A` joined / `Y1B` refused), and
+> **captured nothing**: every sample returned
+> `%SDA-W-NOREAD, unable to access location 0000000A` / `%CLI-W-SYNTAX`.
+> **`SHOW PORT/VC` is not a valid VAX 7.3 SDA command.** Probing directly,
+> `SHOW PORT` and `SHOW PORTS` both work and yield only Port Descriptor Tables;
+> `HELP SHOW PORTS` documents `[/ADDRESS=n][/NODE=name]` and **no `/VC`**. The
+> `Illegal Seq Msg` / `Bad Checksum` / `Rcv Short Msg` buckets are Alpha-era
+> NISCA counters and **are not reachable on this lab.**
+>
+> **The `Y1A`/`Y1B` verdicts are therefore VOID as a test of anything** — the
+> instrument produced no data. Caught by reading the capture instead of the
+> `XITDONE` line; the third time today that check has stopped a bad conclusion.
+>
+> **What remains at this layer:** SCACP (`MC SCACP` → `SHOW VC`), which is
+> PEDRIVER's own view and *does* work here — §4d.9 measured `VC Total Errors`
+> **0 on a join vs 21 on a refused rejoin** with it, on lab-1, before nine of
+> this session's fixes landed. **Re-measuring that pair now would be cheap and
+> is the nearest surviving substitute for the counter the manual promised.**
 
 **3. ⭐ THE PUBLISHED MODEL SAYS A REMOVED NODE IS EXPECTED TO REBOOT.**
 
@@ -4438,7 +4457,11 @@ takes cannot show that nothing moves.
     **That is guardrail 19 working** — the harness failed loudly instead of
     producing a bad result — but it voided a whole series. Drive an interactive
     utility only from a script that verifies it got back to `$`, and check the
-    console tail before trusting any run that follows one.
+    console tail before trusting any run that follows one. **Specifically: never
+    let `HELP` be the last thing you send.** It has its own nested
+    `Topic?`/`Subtopic?` prompts that swallow `EXIT`, and it has now wedged the
+    console TWICE — once voiding a whole series. Send blank lines to unwind HELP
+    first, then `EXIT` to leave the utility, then verify the `$` prompt.
 24. **Read the OTHER node's console. `csbwatch`/`stallpoll` park VAX1 inside
     SDA, but VAX2's console is untouched and VMS prints the entire membership
     dialogue to OPCOM** — `received membership request`, `proposed addition`,

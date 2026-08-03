@@ -280,6 +280,14 @@ oracle degrades before it errors.
     refused rejoin the peer's `MSCP$DISK` lookups stay `0x5b` for all four,
     while every join reaches `0x4b` by the second. A join CAN carry a leading
     `0x5b` (`N3A`). Useful free oracle; the causal reading is dead.
+21. **The masquerade / incarnation-match test (§4M.30/§4M.31).** Documented in
+    *VAXcluster Principles* p.2-21: same SCSSYSTEMID + same SCSNODE + a Path
+    Block already queued => the 64-bit incarnations must match or **VC formation
+    is abandoned**. **Refuted twice.** `Z1B` presented a wire-verified identical
+    incarnation and was refused between joining controls; and the VC
+    demonstrably FORMS on every refusal (the peer opens connections, runs 8
+    lookups and completes `op8`->`op9` over it), so formation is not being
+    abandoned at all. The rule is real; it is not our gate.
 20. **`OVMX_DISKLESS=1` on a rejoin (§4M.24).** Never tried in 13 sessions
     despite a source comment describing exactly the stuck disk connect SDA
     shows. **Refused** (`T1C`), switch verified engaged (`MSCP$DISK`
@@ -4402,6 +4410,66 @@ one-variable control · `Z2A` fresh closing control.
 borrowed copy and transcribed to `/home/baron/cluster/transcript/part{1..4}.md`
 — **deliberately OUTSIDE the git repo.** Load-bearing passages are quoted here
 with citation, as the DTJ material is; the full chapter is not committed.
+
+### 4M.31 ⛔⛔ THE MASQUERADE TEST IS REFUTED — twice, and the second one was free
+
+**Run `Z`, bracketed, one variable, pin verified ON THE WIRE:**
+
+| run | incarnation | verdict |
+|---|---|---|
+| `Z1A` | pinned `0xbc06e9ee7e3b00` | **JOINED** |
+| **`Z1B`** | **SAME pinned value — THE TEST** | **REFUSED** |
+| `Z1C` | live (differs) — control | REFUSED |
+| `Z2A` | fresh identity | **JOINED** |
+
+The pin is **verified on the wire**, not assumed: OVMX's `0x41` START frames in
+`Z1A` and `Z1B` both carry incarnation quadword `0xbc06e9ee7e3b00` at abs 80..87.
+`Z1B` genuinely presented the value the peer had recorded, and was refused.
+
+**And the field was the right one.** p. 2-16 lists what an SB carries: *"SCA
+requires each node to have a 64-bit **software incarnation number** that changes
+each time the node reboots… VMS refers to this as a **software incarnation
+time** since VMS implements it as the date and time the system most recently
+booted."* That is exactly the quadword §4 grounded four ways, including VAX1
+reading our emitted value back as `Incarnation`. **We matched the field the
+footnote names, and it did not admit us.**
+
+> ### ⛔ AND THE SECOND REFUTATION WAS ALREADY IN HAND — I should not have needed the run
+> The footnote's consequence is *"**virtual circuit formation is abandoned**"*.
+> **But the virtual circuit demonstrably FORMS on every refused rejoin.** The
+> peer opens `SCS$DIRECTORY` connections to us, runs its 8 directory lookups,
+> exchanges config and sends `op8` — **all of which require an OPEN VC**
+> (§4M.18's frame-by-frame dialogue; `STARTDONE`=2 in every run). A VC whose
+> formation was abandoned carries none of that.
+>
+> **So the masquerade tests PASS, and §4M.30's mechanism is simply wrong.** This
+> was derivable from evidence collected days ago. **Method note: I fitted a
+> newly-found documented rule to the symptom set without first checking the rule's
+> own stated CONSEQUENCE against what we already knew.** A perfect explanatory
+> fit is not a test; §4L.9a said it and it caught me again.
+
+**§3 killed entry 21.** Eleventh hypothesis killed on this item.
+
+### What survives, and it is worth keeping
+
+- **The chapter's connection/disconnect state machines** (§4M.28) — those are
+  documentation and stand regardless. `disc_sent` = DISC SENT, `op6`/`op7` =
+  DISCONNECT_REQ/RSP, teardown symmetric.
+- **The masquerade tests themselves are real** and now explain §3 item 9's
+  *different* failure shape when one half of the identity pair is changed.
+- **The SCA connect data mechanism** (§4M.29) — 16 bytes at CONNECT/ACCEPT that
+  OVMX implements nothing for. **Untouched, and now the best remaining lead.**
+- **OVMX performs NO teardown at exit** — `g_stop=1`, print summary, exit. No VC
+  close, no disconnect, no departure. Grounded by reading our own source; not
+  yet shown to matter, but it is the only asymmetry left against a real node's
+  departure.
+
+### The failure is AFTER virtual-circuit formation
+
+That is now certain, and it narrows things usefully. The VC opens; connections
+open over it; the directory dialogue completes; `op8`→`op9` completes; and then
+the peer stops without rejecting anything. **Every remaining candidate must live
+at the SCS *connection* layer or above, not at VC formation.**
 
 ### 4M.5 The test, and its kill-switch
 

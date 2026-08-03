@@ -283,6 +283,17 @@ void scs_vc_mark_retransmitted(struct scs_vc *vc, uint64_t now_ms);
  *     nothing has no response to classify, so events in CLOSED are ignored
  *     rather than treated as unacceptable. (Figure 2-8's NODE_2, with no PB at
  *     all, likewise "discards the START from NODE_1", p. 2-13.)
+ *
+ *  6. WHEN THE ACTION IS ACTUALLY TRANSMITTED IS NOT THE MACHINE'S BUSINESS.
+ *     The p. 2-14 table says a STACK received in START SENT / START RECEIVED
+ *     opens the circuit AND makes the port driver issue an ACK, so
+ *     scs_vc_fsm_recv() returns SCS_VC_ACT_SEND_ACK at that moment. Whether the
+ *     NISCA encoding puts that ACK on the wire THEN, or waits for the peer's own
+ *     round-2 frame, is a transport decision made in scsd.c -- see
+ *     scs_vc_early_ack_enabled() and the ordering note above scsd_vc_settle().
+ *     OVMX ships the WAIT ordering by default because that is what it emitted
+ *     before vms-4071; the p. 2-14 ordering is opt-in and UNVERIFIED on the
+ *     wire.
  */
 
 /* Milliseconds a START/STACK waits for a response before it is reissued
@@ -304,6 +315,32 @@ void scs_vc_mark_retransmitted(struct scs_vc *vc, uint64_t now_ms);
  * SCS_VC_FORMATION_RETRY_LIMIT. Read on every call (no cached decision).
  */
 unsigned scs_vc_retry_limit(void);
+
+/*
+ * Environment OPT-IN (default OFF): OVMX_VC_EARLY_ACK=1 makes OVMX put its
+ * round-2 ACK on the wire the moment the circuit reaches OPEN -- i.e. on the
+ * peer's round-1 STACK, which is the literal p. 2-14 rule ("A response of
+ * either ACK or STACK will advance the circuit to the OPEN state; and if the
+ * response is STACK, the port driver will issue an ACK").
+ *
+ * WHY IT IS NOT THE DEFAULT. Pre-vms-4071 OVMX emitted its round-2 ACK only
+ * after the PEER's round-2 frame arrived, giving the fresh-join interleaving
+ *     OVMX r0, OVMX r1, peer r1, peer r2, OVMX r2
+ * The early ordering emits the same 46 bytes one peer-frame sooner:
+ *     OVMX r0, OVMX r1, peer r1, OVMX r2, peer r2
+ * Same frames, same bytes, different interleaving -- and NO lab capture has yet
+ * shown the reference member accepts the earlier one. The vms-4071 constraint
+ * is "a fresh join must produce the same frames", so the preserved ordering
+ * ships and the p. 2-14 ordering is available behind this switch for the lab
+ * run that would promote it.
+ */
+#define SCS_VC_EARLY_ACK_ENV "OVMX_VC_EARLY_ACK"
+
+/*
+ * scs_vc_early_ack_enabled - 1 when SCS_VC_EARLY_ACK_ENV is exactly "1", else
+ * 0. Read on every call (no cached decision).
+ */
+int scs_vc_early_ack_enabled(void);
 
 /*
  * scs_vc_classify_round - map an observed 0x41 frame onto a formation event

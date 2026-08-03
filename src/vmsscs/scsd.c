@@ -479,20 +479,34 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
  *     SCS_VC_ACT_SEND_ACK   -> scs_start_build_ack, config-round 2 ( 46 bytes)
  *
  * No frame layout is re-derived: these are the same two builders, called with
- * the same parameters, that shipped before this item. On a clean fresh join the
- * bytes and their order are unchanged -- OVMX still emits round-0 then round-1
- * back to back on the peer's round-0 START, then its round-2 ack.
+ * the same parameters, that shipped before this item.
  *
- * WHAT DID CHANGE ON THE WIRE (declared, and gated by OVMX_VC_NO_RETRY_LIMIT):
- *   1. The round-2 ack is now emitted on the OPEN transition, which the peer's
- *      round-1 STACK causes (p. 2-14: "A response of either ACK or STACK will
- *      advance the circuit to the OPEN state; and if the response is STACK, the
- *      port driver will issue an ACK"). Previously it waited for the peer's own
- *      round-2 frame. Same frame, same bytes, one peer-frame earlier -- and it
- *      no longer stalls forever if the peer's round-2 is lost.
- *   2. A START/STACK that goes unanswered for SCS_VC_FORMATION_TIMEOUT_MS is
- *      reissued (p. 2-14), up to scs_vc_retry_limit() times, after which
- *      formation is ABANDONED. Both are new; neither fires on a clean join.
+ * ===== WHAT THE DEFAULT BUILD PUTS ON A FRESH-JOIN WIRE =====
+ * Unchanged from pre-vms-4071, in BYTES and in ORDER RELATIVE TO THE PEER's
+ * frames. The fresh-join interleaving is still
+ *     OVMX r0, OVMX r1, peer r1, peer r2, OVMX r2
+ * because scsd_vc_settle() holds OVMX's round-2 ack until the PEER's round-2
+ * frame arrives, exactly as the pre-vms-4071 `else if (sv.is_ack)` branch did.
+ * The state machine reaches OPEN one frame earlier than the ack goes out; that
+ * is a state change, not a wire change. See scsd_vc_settle().
+ *
+ * ===== WHAT IS NEW ON THE WIRE, AND WHAT GATES IT =====
+ *   1. RETRY / ABANDON. A START/STACK unanswered for
+ *      SCS_VC_FORMATION_TIMEOUT_MS is reissued (p. 2-14) up to
+ *      scs_vc_retry_limit() times, after which formation is ABANDONED. Fires
+ *      only under loss; never on a clean join. Kill-switch:
+ *      OVMX_VC_NO_RETRY_LIMIT=1 restores unbounded retry with no abandon.
+ *   2. THE EARLY ACK -- OPT-IN, DEFAULT OFF. OVMX_VC_EARLY_ACK=1 emits the
+ *      round-2 ack on the OPEN transition instead (the literal p. 2-14 rule:
+ *      "A response of either ACK or STACK will advance the circuit to the OPEN
+ *      state; and if the response is STACK, the port driver will issue an
+ *      ACK"). Same 46 bytes, one peer-frame earlier. NO lab capture has shown
+ *      the reference member accepts that ordering, so it does not ship on by
+ *      default. See SCS_VC_EARLY_ACK_ENV in scs_vc.h.
+ *   3. THE IMPLIED ACK (p. 2-16) can open a circuit with no peer round-2 ever
+ *      arriving, in which case OVMX owes its round-2 immediately. Reachable
+ *      only from START RECEIVED on an SCS sequenced-message class, which a
+ *      clean join never produces mid-dialogue.
  */
 struct scsd_vc_ctx {
     int             sock;
@@ -591,16 +605,61 @@ static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps
 }
 
 /*
+ * scsd_vc_ack_due - THE WIRE-ORDERING DECISION, isolated in one predicate.
+ *
+ * The circuit being OPEN is not by itself permission to transmit OVMX's round-2
+ * ack; WHEN that 46-byte frame goes out is what decides whether a fresh join
+ * looks byte-and-order identical to pre-vms-4071. Three ways it becomes due:
+ *
+ *  1. DEFAULT / PRESERVED (`peer_round2_seen`): the peer's own round-2 frame has
+ *     arrived. This is precisely the pre-vms-4071 trigger -- the old code emitted
+ *     the ack from the `else` branch gated on scs_start_view.is_ack. Keeping it
+ *     as the default is what makes the fresh-join interleaving unchanged.
+ *  2. OPT-IN (`OVMX_VC_EARLY_ACK=1`): emit as soon as the circuit is OPEN, i.e.
+ *     on the peer's round-1 STACK. That is the literal p. 2-14 rule, but it puts
+ *     the ack one peer-frame earlier and NO lab capture has yet shown the
+ *     reference member accepts it, so it is off unless asked for.
+ *  3. IMPLIED ACK (p. 2-16, `fsm.implied_acks`): the peer is already sending
+ *     circuit traffic, so it considers the circuit OPEN and will never send a
+ *     round-2 for case 1 to wait on. Waiting would deadlock the dialogue. This
+ *     path is unreachable on a clean join (it needs an SCS sequenced-message
+ *     class to arrive while the PB is in START RECEIVED).
+ *
+ * Case 3 is an OVMX design choice, labeled per rule 8: p. 2-16 says only that
+ * the circuit is marked OPEN, not that anything is transmitted. It is the NISCA
+ * encoding that requires both nodes to carry every config round (spec sec 4g
+ * phase 2: 0/0/1/1/2/2, "both nodes carry the same round").
+ */
+/*
+ * scsd_vc_peer_round2 - THE DEFAULT ack trigger, in one place so the daemon and
+ * its test cannot drift apart about what it is: the peer's round-2 46-byte
+ * frame, which scs_vc_classify_round() maps to SCS_VC_EV_ACK. This is exactly
+ * the condition the pre-vms-4071 code branched on (scs_start_view.is_ack).
+ */
+static int scsd_vc_peer_round2(enum scs_vc_event ev)
+{
+    return ev == SCS_VC_EV_ACK;
+}
+
+static int scsd_vc_ack_due(const struct peer_state *ps, int peer_round2_seen)
+{
+    if (peer_round2_seen) {
+        return 1;
+    }
+    if (scs_vc_early_ack_enabled()) {
+        return 1;
+    }
+    return ps->pb != NULL && ps->pb->fsm.implied_acks > 0;
+}
+
+/*
  * scsd_vc_settle - after any state-machine step, do the two things that are
  * NISCA-specific rather than SCA-abstract:
  *
- *  - If the circuit is now OPEN and OVMX has not yet put its round-2 ack out,
- *    emit it. The p. 2-14 table only mandates an ACK when the OPEN transition
- *    was caused by a STACK, but the NISCA dialogue requires BOTH nodes to carry
- *    every round (spec sec 4g phase 2: the config-round walks 0/0/1/1/2/2,
- *    "both nodes carry the same round"), so a circuit that opened on a bare ACK
- *    or an implied ACK still owes the peer its round-2 frame. Labeled as an
- *    OVMX design choice: it is the NISCA encoding's requirement, not SCA's.
+ *  - If the circuit is OPEN, OVMX has not yet put its round-2 ack out, and
+ *    scsd_vc_ack_due() says it is time, emit it and run the p. 2-21 open
+ *    transition. `peer_round2_seen` is 1 only at the call site that just
+ *    processed the peer's 46-byte round-2 frame.
  *  - If formation was ABANDONED, re-arm the Path Block's formation machine so a
  *    later START from the same peer can start the dialogue over. p. 2-14 says
  *    only that formation is abandoned, not what happens next; OVMX cannot tear
@@ -608,7 +667,8 @@ static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps
  *    it resets the machine in place and says so in the log.
  */
 static void scsd_vc_settle(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
-                           enum scs_vc_action act, long *start_ack_sent)
+                           enum scs_vc_action act, int peer_round2_seen,
+                           long *start_ack_sent)
 {
     if (ps->pb == NULL) {
         return;
@@ -627,7 +687,8 @@ static void scsd_vc_settle(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
         ps->start_replied = 0;
         return;
     }
-    if (ps->pb->vc_state == SCS_VC_OPEN && !ps->start_acked) {
+    if (ps->pb->vc_state == SCS_VC_OPEN && !ps->start_acked &&
+        scsd_vc_ack_due(ps, peer_round2_seen)) {
         if (scsd_vc_emit(ctx, ps, SCS_VC_ACT_SEND_ACK)) {
             (*start_ack_sent)++;
             ps->start_acked = 1;
@@ -1044,7 +1105,8 @@ int main(int argc, char **argv)
                         fflush(stdout);
                     }
                 }
-                scsd_vc_settle(&vc_ctx, ps, act, &start_ack_sent);
+                /* peer_round2_seen=0: a timer expiry is not a peer frame. */
+                scsd_vc_settle(&vc_ctx, ps, act, 0, &start_ack_sent);
             }
         }
 
@@ -1166,7 +1228,10 @@ int main(int argc, char **argv)
                        buf[30], scs_vc_state_name(ipb->vc_state));
                 fflush(stdout);
                 if (ips != NULL && ips->pb == ipb) {
-                    scsd_vc_settle(&vc_ctx, ips, iact, &start_ack_sent);
+                    /* peer_round2_seen=0: no round-2 frame arrived, and none
+                     * ever will -- scsd_vc_ack_due() lets fsm.implied_acks
+                     * stand in for it so the dialogue does not deadlock. */
+                    scsd_vc_settle(&vc_ctx, ips, iact, 0, &start_ack_sent);
                 }
             }
         }
@@ -1566,6 +1631,28 @@ int main(int argc, char **argv)
             uint64_t vc_now_ms = monotonic_ms();
             enum scs_vc_event vc_ev = scs_vc_classify_round(sv.is_ack, sv.config_round);
 
+            /* ---- PHASE 1: TRANSMIT. NOTHING BETWEEN THE TWO SENDS. ----
+             * The pre-vms-4071 code emitted round-0 and round-1 from a two-pass
+             * `for` loop with nothing at all between the sendto() calls. An
+             * earlier revision of this block put a log_ts+printf+fflush after
+             * EACH send, which measurably widened that gap: of four lab-2 runs
+             * of that revision (vaxlab-3, 2026-08-03, tags W1A/W1B/W5A/W6A) one
+             * -- W6A -- captured the peer's round-1 arriving BETWEEN OVMX's
+             * round-0 and round-1; neither pre-vms-4071 control run (W4A, W7A)
+             * showed that, both keeping the two sends adjacent. Same frames and
+             * the same order FROM OVMX either way, but a wider window is still a
+             * wire-timing change, so the logging is deferred to phase 2 below.
+             * Re-measured after the split: W8A is adjacent again.
+             *
+             * NOT UNIT-TESTED, and it cannot be through the SCSD_UNIT_TEST seam:
+             * this code is inside main()'s receive loop, which that seam renames
+             * away. tests/vmsscs/test_scsd_wire.c covers the helpers this block
+             * calls; the adjacency itself is held only by the lab captures named
+             * above. */
+            int sent_start = 0;
+            int sent_stack = 0;
+            enum scs_vc_state state_after_start = ps->pb->vc_state;
+
             /* CLOSED -> START SENT. Trigger deliberately unchanged from vms-21e:
              * OVMX issues its own START only when a peer identity-bearing frame
              * arrives, never off a bare 46-byte ack (an ACK in START SENT is an
@@ -1577,36 +1664,50 @@ int main(int argc, char **argv)
                     start_sent++;
                     ps->start_replies++;
                     ps->start_replied = 1;
-                    log_ts(stdout);
-                    printf(" SCSD-I-STARTTX, sent round-0 START (VC %s)"
-                           " (sysid=%u node='%s' send_seq=%u recv_ack=0 incarnation=%u)\n",
-                           scs_vc_state_name(ps->pb->vc_state), ovmx_scssystemid, ovmx_node,
-                           ps->vc.seq.send_seq, ps->incarnation ? ps->incarnation : 1);
-                    fflush(stdout);
+                    sent_start = 1;
+                    state_after_start = ps->pb->vc_state;
                 }
             }
 
             enum scs_vc_action vc_act = scs_vc_fsm_recv(ps->pb, vc_ev, vc_now_ms);
-            log_ts(stdout);
-            printf(" SCSD-I-VCFSM, %s received -> %s, VC %s\n",
-                   scs_vc_event_name(vc_ev), scs_vc_action_name(vc_act),
-                   scs_vc_state_name(ps->pb->vc_state));
-            fflush(stdout);
 
             if (vc_act == SCS_VC_ACT_SEND_STACK) {
                 if (scsd_vc_emit(&vc_ctx, ps, SCS_VC_ACT_SEND_STACK)) {
                     start_sent++;
                     ps->start_replies++;
-                    log_ts(stdout);
-                    printf(" SCSD-I-STARTTX, sent round-1 STACK (VC %s)\n",
-                           scs_vc_state_name(ps->pb->vc_state));
-                    fflush(stdout);
+                    sent_stack = 1;
                 }
             }
-            /* SEND_ACK and the bare-ACK/implied-ACK opens are all handled by
-             * scsd_vc_settle(), which emits OVMX's round-2 frame exactly once
-             * per circuit and then runs the p. 2-21 open transition. */
-            scsd_vc_settle(&vc_ctx, ps, vc_act, &start_ack_sent);
+
+            /* ---- PHASE 2: LOG. Nothing below touches the wire. ---- */
+            if (sent_start) {
+                log_ts(stdout);
+                printf(" SCSD-I-STARTTX, sent round-0 START (VC %s)"
+                       " (sysid=%u node='%s' send_seq=%u recv_ack=0 incarnation=%u)\n",
+                       scs_vc_state_name(state_after_start), ovmx_scssystemid, ovmx_node,
+                       ps->vc.seq.send_seq, ps->incarnation ? ps->incarnation : 1);
+                fflush(stdout);
+            }
+            log_ts(stdout);
+            printf(" SCSD-I-VCFSM, %s received -> %s, VC %s\n",
+                   scs_vc_event_name(vc_ev), scs_vc_action_name(vc_act),
+                   scs_vc_state_name(ps->pb->vc_state));
+            fflush(stdout);
+            if (sent_stack) {
+                log_ts(stdout);
+                printf(" SCSD-I-STARTTX, sent round-1 STACK (VC %s)\n",
+                       scs_vc_state_name(ps->pb->vc_state));
+                fflush(stdout);
+            }
+            /* OVMX's round-2 ack is emitted by scsd_vc_settle(), exactly once
+             * per circuit, followed by the p. 2-21 open transition. By DEFAULT
+             * the trigger is the third argument below -- "the peer's round-2
+             * 46-byte frame is what we just processed" -- which is the identical
+             * trigger the pre-vms-4071 `else if (sv.is_ack)` branch used, so the
+             * fresh-join interleaving is unchanged. OVMX_VC_EARLY_ACK=1 moves it
+             * to the OPEN transition instead (scsd_vc_ack_due). */
+            scsd_vc_settle(&vc_ctx, ps, vc_act, scsd_vc_peer_round2(vc_ev),
+                           &start_ack_sent);
             continue;
         }
 

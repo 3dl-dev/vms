@@ -201,6 +201,15 @@ unsigned scs_vc_retry_limit(void)
     return SCS_VC_FORMATION_RETRY_LIMIT;
 }
 
+int scs_vc_early_ack_enabled(void)
+{
+    /* Opt-in, default OFF, re-read every call so it is never a cached decision.
+     * OFF preserves the pre-vms-4071 fresh-join frame interleaving; see the
+     * header note on SCS_VC_EARLY_ACK_ENV. */
+    const char *env = getenv(SCS_VC_EARLY_ACK_ENV);
+    return (env != NULL && env[0] == '1' && env[1] == '\0') ? 1 : 0;
+}
+
 enum scs_vc_event scs_vc_classify_round(int is_ack, uint16_t config_round)
 {
     /* OVMX design choice 1 in scs_vc.h: the observed 0/0/1/1/2/2 config-round

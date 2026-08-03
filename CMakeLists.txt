@@ -236,15 +236,26 @@ if(BUILD_TESTS)
         LABELS "integration;authenticity" TIMEOUT 1800)
 
     # The citation ledger is fresh (vms-8cc). tracking/rd-citations.tsv is what
-    # lets the gates above check that an exemption's cited rd item EXISTS and is
-    # OPEN without reaching rd -- rd is nostr-backed and unavailable in CI,
-    # which is why those gates shape-checked the id and nothing more until now.
+    # lets the vms_kif caller census above check that an exemption's cited rd
+    # item EXISTS and is OPEN without reaching rd -- rd is nostr-backed and
+    # unavailable in CI, which is why that gate shape-checked the id and
+    # nothing more until now. (The userspace service register below does NOT
+    # read the ledger; wiring it is rd vms-fab. Do not read the census's
+    # coverage as the register's.)
+    #
     # Committed derived state has one failure mode and it is the whole defect
     # one level up: the ledger goes stale and the gate then certifies a closed
     # item as open. Only this test can see that, and only where rd is
     # reachable, so it EXITS 77 and ctest reports SKIPPED -- never PASSED -- on
-    # a host without rd. Its self-controls run either way, so a skip still
-    # proves the comparator is not stuck at green.
+    # a host without rd.
+    #
+    # THE SKIP IS A STANDING RESIDUAL, not a clean result: under project rule 7
+    # a skipped test is a failing test, and this one skips on every CI run.
+    # What survives the skip is its self-controls and its ledger-FLOOR controls
+    # -- 16 of them, all rd-free -- so a skipped run still proves the
+    # comparator is not stuck at green and still proves the checker refuses an
+    # empty ledger. What does NOT survive is the part that needs rd: the live
+    # comparison and the independent read.
     add_test(NAME rd_citations_fresh
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_rd_citations_fresh.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})

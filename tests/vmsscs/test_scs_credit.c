@@ -315,15 +315,27 @@ static void test_special_credit_message_p2_44(void)
     CHECK(scs_credit_take_special(b.local) == -1, "no special message when not low");
 
     /* One-way traffic: the remote sends, the local releases, and never sends
-     * back -- so nothing is piggybacked and Receive Credit falls. */
+     * back -- so nothing is piggybacked and Receive Credit falls.
+     *
+     * BOUNDED ON PURPOSE. Receive Credit starts at the 10 extended credits and
+     * must fall by exactly 1 per message, so it crosses below threshold in 5
+     * steps and can never need more than 10. The guard makes a receive path
+     * that fails to debit Receive Credit FAIL HERE with a diagnosis instead of
+     * spinning forever -- an unbounded loop turns that mutant into a CMake
+     * TIMEOUT, which is a hang, not a test result. */
+    const unsigned max_sends = 10;
     unsigned sent = 0;
-    while (b.local->receive_credit >= threshold) {
+    while (b.local->receive_credit >= threshold && sent < max_sends) {
         int c = scs_credit_on_send(b.remote);
         CHECK(c >= 0, "remote send %u refused", sent);
         scs_credit_on_recv(b.local, (unsigned)c);
         scs_credit_release_buffer(b.local);
         sent++;
     }
+    CHECK(sent < max_sends,
+          "Receive Credit still %u after %u one-way messages -- the receive path "
+          "is not debiting Receive Credit",
+          b.local->receive_credit, sent);
     CHECK(b.local->receive_credit == threshold - 1, "Receive Credit %u, want %u",
           b.local->receive_credit, threshold - 1);
     CHECK(scs_credit_is_dangerously_low(b.local), "should be dangerously low at %u < %u",
@@ -432,6 +444,44 @@ static void test_wire_credit_field(void)
     CHECK(scs_credit_header_offset(41) == -1, "the 41-byte 0x48 short must be refused");
     CHECK(scs_credit_header_offset(526) == -1, "the 526-byte block class must be refused");
     CHECK(scs_credit_read_header(frame190_vc, 41, &v) == -1, "41-byte read must be refused");
+
+    /*
+     * THE ADMITTED SET IS EXACTLY THE MEASURED SET -- nothing extrapolated.
+     * Each of these seven was tabulated over all 47 captures under the 0x4B13
+     * filter and observed credit-shaped at offset 48 (per-class n / distinct /
+     * max in the WIRE VERDICT in scs_credit.h). This loop pins the set closed:
+     * any length not listed must be refused.
+     */
+    static const uint16_t grounded[] = {58, 62, 66, 86, 94, 110, 190};
+    for (size_t i = 0; i < sizeof(grounded) / sizeof(grounded[0]); i++) {
+        CHECK(scs_credit_header_offset(grounded[i]) == SCS_CREDIT_FIELD_SCA_OFFSET,
+              "grounded class %u must map to offset %d", grounded[i],
+              SCS_CREDIT_FIELD_SCA_OFFSET);
+    }
+    for (uint32_t len = 0; len <= 0xFFFFu; len++) {
+        int want = -1;
+        for (size_t i = 0; i < sizeof(grounded) / sizeof(grounded[0]); i++) {
+            if (grounded[i] == (uint16_t)len) {
+                want = SCS_CREDIT_FIELD_SCA_OFFSET;
+            }
+        }
+        if (scs_credit_header_offset((uint16_t)len) != want) {
+            CHECK(0, "class %u: offset %d, want %d -- the admitted set drifted", len,
+                  scs_credit_header_offset((uint16_t)len), want);
+            break;
+        }
+    }
+
+    /*
+     * 106 IN PARTICULAR (vms-76e, adversary-caught regression guard). An earlier
+     * revision admitted 106 as a grounded SCS class. It is not one: across all
+     * 47 pcaps in /data/training/vax/cluster/captures/ there are ZERO 106-byte
+     * SCA frames carrying the 0x4B13 SCS marker, and all 792 that do exist are
+     * marker 0x4113 -- the START/config class of cluster-protocol-spec sec 4(j),
+     * which has no credit field (sca[48:50] is a constant 0 there, 792/792).
+     */
+    CHECK(scs_credit_header_offset(106) == -1,
+          "the 106-byte class is 0x4113 START, not an SCS message -- must be refused");
 
     /* Stamping is the exact inverse of reading, on a real frame. */
     uint8_t out[190];

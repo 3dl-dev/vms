@@ -70,14 +70,28 @@
  * credit value as a grounded NUMBER but an ungrounded OFFSET ("its offset
  * shifts between message classes, so it is not pinned to a single fixed
  * field"). That negative is now SUPERSEDED. Re-measured here over our own lab
- * captures -- /data/training/vax/cluster/captures/formation-ci1.pcap (18558
- * frames) and formation-ci1-joinwindow.pcap (3000 frames) -- the credit field
- * IS at a single fixed offset for the SCS message classes:
+ * captures the credit field IS at a single fixed offset for the SCS message
+ * classes:
  *
  *   SCS credit field = SCA offset [48:50], LE uint16
  *                    = absolute frame offset [62:64] with the 14-byte Ethernet
  *                      header, i.e. the 2 bytes IMMEDIATELY PRECEDING the
  *                      remote/destination Con.ID at SCA [50:54].
+ *
+ * ---- HOW TO RE-DERIVE EVERY NUMBER BELOW (the exact method) --------------
+ *
+ *   Inputs: the two lab captures
+ *       /data/training/vax/cluster/captures/formation-ci1.pcap        (18558 frames)
+ *       /data/training/vax/cluster/captures/formation-ci1-joinwindow.pcap (3000 frames)
+ *   For each captured Ethernet frame let  sca = frame[14:]  (strip the 14-byte
+ *   Ethernet header; SCA offset 0 is absolute offset 14).
+ *
+ *   >>> FILTER, REQUIRED -- the counts below do NOT reproduce without it: <<<
+ *       keep a frame only if  len(sca) == <class>  AND  sca[16:18] == 4B 13
+ *   0x4B13 is the SCS message marker. Filtering on LENGTH ALONE over the same
+ *   two captures gives 20459 190-byte frames and the histogram
+ *   {0:5418, 1:11042, 2:2587, 3:1409, 4:3} -- 599 of those frames are not
+ *   0x4B13 and are NOT part of this grounding.
  *
  * Three independent lines of evidence, all from those two captures:
  *
@@ -91,9 +105,9 @@
  *     Total credits returned equals total messages sent to within the
  *     end-of-capture tail. That is exactly the p. 2-43 debit/credit identity
  *     and no other field in the header satisfies it.
- *  2. VALUE SHAPE. Over 19860 190-byte frames the field takes only
- *     {0:5174, 1:10696, 2:2582, 3:1405, 4:3} -- the shape of a piggybacked
- *     Pending Receive Credit in a near-lockstep flow, not a counter.
+ *  2. VALUE SHAPE. Over 19860 190-byte 0x4B13 frames (the filter above) the
+ *     field takes only {0:5174, 1:10696, 2:2582, 3:1405, 4:3} -- the shape of a
+ *     piggybacked Pending Receive Credit in a near-lockstep flow, not a counter.
  *  3. TUNABLE MATCH at connection formation. In the 110-byte
  *     CONNECT_REQ/ACCEPT_REQ class the same field carries the number of Send
  *     Credits that SYSAP is extending, byte-exact to TWO DIFFERENT SYSGEN
@@ -104,11 +118,51 @@
  *     A single offset matching two distinct tunables, on two distinct SYSAP
  *     pairs, is not coincidence.
  *
- * SCOPE OF THE GROUNDING. Offset 48 is asserted only for the SCS *message*
- * length classes listed in scs_credit_header_offset(). The block-data-transfer
- * classes (70/82/206/270/398/462/526/... byte SCA) carry large values there --
- * a different layout -- and are deliberately REFUSED rather than guessed at.
- * That is the residue of truth in the old sec 4(g) note.
+ * ---- SCOPE OF THE GROUNDING: EVERY ADMITTED CLASS IS MEASURED ------------
+ *
+ * Offset 48 is asserted only for the SCS *message* length classes admitted by
+ * scs_credit_header_offset(), and each one was measured. Same method as above
+ * (sca = frame[14:], sca[16:18] == 4B 13), swept over ALL 47 .pcap files in
+ * /data/training/vax/cluster/captures/, tabulating the LE u16 at sca[48:50]:
+ *
+ *     class   n frames   distinct values   max   -> ADMITTED (credit-shaped)
+ *        58        1212        2             1
+ *        62        1087        1             0
+ *        66         944        1             0
+ *        86         194        1             1
+ *        94        3670        2             1
+ *       110        3999        5            10   (the tunables: 1,3,6,8,10)
+ *       190      288484        5             4
+ *
+ *     class   n frames   distinct values   max   -> REFUSED (not credit-shaped)
+ *        50          51       47         64897
+ *        70         917      752         65447
+ *       122           4        3         10709
+ *       126           3        3         64891
+ *       142           8        8         21361
+ *   plus 82/206/242/270/... (the block-data-transfer classes) and the 41-byte
+ *   0x48 short, which is too short to reach offset 48 at all.
+ *
+ * WHY 106 IS NOT HERE (this list previously claimed it, wrongly). An earlier
+ * revision of this header listed 106 among the grounded classes. It is not
+ * grounded and it is not merely unmeasured -- it is WRONG. Over all 47
+ * captures there are ZERO 106-byte SCA frames with the 0x4B13 SCS marker. All
+ * 792 106-byte SCA frames that exist carry marker 0x4113: they are the START /
+ * config frames of spec sec 4(j), a different protocol layer with no credit
+ * field, and sca[48:50] there is a constant 0 in 792/792 frames (part of the
+ * config body, not an account). The 106 entry came from misreading the spec's
+ * FRAME-length listing of the 0x41 START class as an SCA message class. It has
+ * been deleted from the switch, not relabelled: there is nothing to label.
+ *
+ * WHAT THE LENGTH KEY DOES NOT DO. scs_credit_header_offset() keys on LENGTH
+ * ONLY and cannot tell an SCS message from anything else of the same size --
+ * the caller must have identified the frame already. The 0x4B13 filter above
+ * is a grounding method, not a runtime check. (For completeness: the sibling
+ * markers 0x5B13 and 0x7B13 at these same lengths carry the same
+ * credit-shaped values -- 190-byte 0x5B13 n=18086 max=3, 0x7B13 n=100 max=3;
+ * 110-byte 0x5B13 n=675 max=10, 0x7B13 n=106 max=10 -- so the offset holds
+ * across the SCS 0x?B13 family. 0x4113 is the one that does not, and that is
+ * exactly the 106 case above.)
  *
  * ================== REACHABILITY: WHAT IS LIVE AND WHAT IS NOT ============
  *
@@ -320,11 +374,18 @@ int scs_credit_take_special(struct scs_cdt *cdt);
  * of a message whose total SCA length is `total_sca_len`, or -1 if that length
  * class is not one this module has grounded a credit field for.
  *
- * Grounded classes: the SCS message classes 58, 62, 66, 86, 94, 106, 110 and
- * 190 SCA bytes. Everything else -- notably the block-data-transfer classes,
- * which carry unrelated large values at offset 48, and the 41-byte 0x48 short,
- * which is too short to reach offset 48 at all -- returns -1 rather than a
- * guess.
+ * GROUNDED CLASSES -- and this list contains nothing else. The SCS message
+ * classes 58, 62, 66, 86, 94, 110 and 190 SCA bytes. Every one of the seven was
+ * measured over our own captures and observed to carry a credit-shaped value at
+ * offset 48; see the per-class table in the WIRE VERDICT above for n, distinct
+ * values and max. There are NO extrapolated entries: a length class that was
+ * not measured is not admitted.
+ *
+ * Everything else -- notably the block-data-transfer classes, which carry
+ * unrelated large values at offset 48; the 41-byte 0x48 short, which is too
+ * short to reach offset 48 at all; and the 106-byte class, which is the 0x4113
+ * START/config frame and not an SCS message (see "WHY 106 IS NOT HERE") --
+ * returns -1 rather than a guess.
  */
 int scs_credit_header_offset(uint16_t total_sca_len);
 

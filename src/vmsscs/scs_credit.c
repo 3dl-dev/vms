@@ -233,11 +233,19 @@ int scs_credit_take_special(struct scs_cdt *cdt)
 int scs_credit_header_offset(uint16_t total_sca_len)
 {
     /*
-     * The SCS message length classes our captures show carrying a small,
-     * credit-shaped value at SCA [48:50]. See the WIRE VERDICT for the
-     * conservation proof (190) and the SYSGEN-tunable match (110). Anything
-     * else -- the block-data-transfer classes with large values there, and the
-     * 41-byte 0x48 short which does not even reach offset 48 -- is refused.
+     * EXACTLY the seven SCS message length classes our own captures show
+     * carrying a small, credit-shaped value at SCA [48:50]. Each one is
+     * measured -- see the WIRE VERDICT in scs_credit.h for the per-class
+     * observed-value table, the conservation proof (190) and the
+     * SYSGEN-tunable match (110). Everything else is refused rather than
+     * guessed at: the block-data-transfer classes carry large unrelated values
+     * there, the 41-byte 0x48 short does not even reach offset 48, and the
+     * 106-byte class is not an SCS message at all (it is the 0x4113 START /
+     * config frame -- see the "WHY 106 IS NOT HERE" note in the header).
+     *
+     * This keys on LENGTH ONLY. The caller is responsible for having already
+     * identified the frame as an SCS message; see the header's note on the
+     * 0x?b13 marker.
      */
     switch (total_sca_len) {
     case 58:
@@ -245,7 +253,6 @@ int scs_credit_header_offset(uint16_t total_sca_len)
     case 66:
     case 86:
     case 94:
-    case 106:
     case 110:
     case 190:
         return SCS_CREDIT_FIELD_SCA_OFFSET;

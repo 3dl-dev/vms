@@ -593,7 +593,13 @@ not a grounded offset.
 > (absolute frame offset `[62:64]`), i.e. the two bytes immediately preceding
 > the remote/destination Con.ID at `[50:54]`. `vms-76e` re-measured this over
 > `formation-ci1.pcap` (18 558 frames) and `formation-ci1-joinwindow.pcap`
-> (3 000 frames). Three independent lines:
+> (3 000 frames), both under `/data/training/vax/cluster/captures/`.
+> **Method — the counts below do not reproduce without the filter:** take
+> `sca = frame[14:]` and keep a frame only if `len(sca) == <class>` **and**
+> `sca[16:18] == 4B 13` (the SCS message marker). Length alone over the same two
+> captures gives 20 459 190-byte frames and
+> `{0:5418, 1:11042, 2:2587, 3:1409, 4:3}`; 599 of those are not `0x4B13` and are
+> not part of this grounding. Three independent lines:
 >
 > 1. **Conservation** over the 190-byte class — summing `[48:50]` across every
 >    190-byte frame a node *sends* against the count of 190-byte messages it
@@ -601,7 +607,7 @@ not a grounded offset.
 >    (Δ0), peer granted 6 712 vs VAX1 sent 6 715 (Δ3); `joinwindow` 1 601 vs
 >    1 602 (Δ1) and 1 300 vs 1 300 (Δ0). That is the debit/credit identity of
 >    *VAXcluster Principles* p. 2-43 and no other header field satisfies it.
-> 2. **Value shape** — over 19 860 190-byte frames the field takes only
+> 2. **Value shape** — over 19 860 190-byte `0x4B13` frames the field takes only
 >    `{0:5174, 1:10696, 2:2582, 3:1405, 4:3}`: a piggybacked Pending Receive
 >    Credit, not a counter. (Note `[46:48]` in the 190-byte class is a
 >    *constant* `0x000a` — that is the value the older note above was reading,
@@ -613,12 +619,30 @@ not a grounded offset.
 >    `MSCP$DISK`→`VMS$DISK_CL_DRVR` accept = **8** (`MSCP_CREDITS`), plus
 >    `SCS$DIRECTORY` 3, `SCS$DIR_LOOKUP` 1, `SCA$TRANSPORT` 6.
 >
-> **Scope of the grounding.** Offset 48 is asserted only for the SCS *message*
-> classes (58/62/66/86/94/106/110/190 SCA bytes). The block-data-transfer
-> classes (70/82/206/270/398/462/526/…) carry large unrelated values there and
-> are refused, and the 41-byte `0x48` short does not reach offset 48 at all —
-> which is the residue of truth in the "offset shifts between message classes"
-> note above. Field map, evidence and the reader/stamper:
+> **Scope of the grounding — every admitted class is measured.** Offset 48 is
+> asserted only for the SCS *message* classes **58/62/66/86/94/110/190** SCA
+> bytes, and all seven were tabulated over **all 47** `.pcap` files in
+> `/data/training/vax/cluster/captures/` under the `0x4B13` filter above
+> (n / distinct / max at `sca[48:50]`): 58 → 1212/2/1 · 62 → 1087/1/0 ·
+> 66 → 944/1/0 · 86 → 194/1/1 · 94 → 3670/2/1 · 110 → 3999/5/10 ·
+> 190 → 288 484/5/4. The block-data-transfer classes
+> (70/82/206/270/398/462/526/…) and 50/122/126/142 carry large unrelated values
+> there (e.g. 70 → 752 distinct, max 65 447) and are refused, and the 41-byte
+> `0x48` short does not reach offset 48 at all — which is the residue of truth
+> in the "offset shifts between message classes" note above.
+>
+> **Correction (`vms-76e`, adversary-caught): 106 is NOT one of these classes.**
+> An earlier revision of this note and of `scs_credit.h` listed 106. There are
+> **zero** 106-byte SCA frames with the `0x4B13` marker in any capture; all
+> **792** that exist are marker `0x4113` — the §4(j) START/config frames, a
+> different layer with no credit field (`sca[48:50]` is a constant 0 in 792/792).
+> The entry came from misreading the §4(c)/§4(e) *frame*-length listing of the
+> `0x41` START class as an SCA message class. It has been deleted from
+> `scs_credit_header_offset()`, not relabelled. Note this makes the §4(c) table
+> row "70, 110, 94, 62, 58, 66, 106, 86" and the §4(m) list a mix of two
+> markers; only the `0x?B13` members are SCS messages.
+>
+> Field map, evidence and the reader/stamper:
 > `src/vmsscs/include/scs_credit.h`. **OVMX does not yet stamp a live credit on
 > the wire** — see that header's reachability note.
 

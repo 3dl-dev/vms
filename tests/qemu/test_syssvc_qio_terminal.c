@@ -283,6 +283,7 @@ int main(void)
     int got1 = read_via_fresh_child(&after_assign);
     CHECK(got1 && (after_assign.status & 1),
           "parent: a fresh child process could read the executive's OPA0: row");
+    /* negctl: assign-terminal-bypasses-executive */
     CHECK(got1 && (after_assign.status & 1) &&
           after_assign.refcnt == baseline_refcnt + 1,
           "A-WRITES/B-READS: a fresh child sees the reference sys$assign(\"TT:\") added to OPA0: in the executive (public API, cross-process)");

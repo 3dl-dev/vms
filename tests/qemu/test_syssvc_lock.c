@@ -214,6 +214,7 @@ static int run_child(int c2p_write, int p2c_read)
     struct lksb_caller lksb_cr = {0};
     st = sys$enq(0, LCK$K_CRMODE, &lksb_cr, LCK$M_NOQUEUE,
                  &resnam, 0, NULL, 0, NULL, 0, 0);
+    /* negctl: lock-compat-cr-ex */
     CHECK(st == SS$_NOTQUEUED,
           "child: sys$enq CR+NOQUEUE denied while parent holds EX (public API)");
 
@@ -238,6 +239,7 @@ static int run_child(int c2p_write, int p2c_read)
     struct lksb_caller lksb_retry = {0};
     st = sys$enqw(0, LCK$K_EXMODE, &lksb_retry, 0,
                   &resnam, 0, NULL, 0, NULL, 0, 0);
+    /* negctl-knockon: lock-compat-cr-ex */
     CHECK((st & 1) && lksb_retry.lksb$l_lkid != 0,
           "child: sys$enqw EX granted after parent's sys$deq (cross-process release, public API)");
 
@@ -352,6 +354,7 @@ int main(void)
     if (r == 0)
         printf("  (child produced no NOQUEUE-denial report within %d ms)\n",
                CHILD_REPORT_TIMEOUT_MS);
+    /* negctl-knockon: lock-compat-cr-ex */
     CHECK(r == 1 && msg.stage == 1 && msg.fail == 0,
           "parent: child's NOQUEUE-denial checks reported via public API");
 
@@ -370,6 +373,7 @@ int main(void)
                " the resource is still held, so the parent's sys$deq reported"
                " success without releasing it in the executive)\n",
                CHILD_REPORT_TIMEOUT_MS);
+    /* negctl-knockon: lock-compat-cr-ex */
     CHECK(r == 1 && msg.stage == 2 && msg.fail == 0,
           "parent: child's post-release retry succeeded via public API");
 

@@ -118,6 +118,7 @@ int main(void) {
     enq_c.flags = LCK_M_NOQUEUE;
     strncpy(enq_c.resnam, "TESTRES2", sizeof(enq_c.resnam));
     ioctl(fd, VMS_IOCTL_ENQ, &enq_c);
+    /* negctl: lock-compat-ex-cr */
     CHECK(enq_c.status == SS_NOTQUEUED, "ENQ EX+NOQUEUE denied (CR held)");
 
     /* 8. Value block round-trip */

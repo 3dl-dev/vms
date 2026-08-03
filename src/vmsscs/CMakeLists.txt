@@ -39,11 +39,17 @@ target_include_directories(vmsscs_start PUBLIC
 # (spec sec 4h) + seq/ack tracking + retransmit trigger. Keeps the NISCA VC
 # alive so the VAX stops logging "Excessive packet losses / Closed Virtual
 # Circuit". Depends on vmsscs_start for the scs_seq_state helpers.
+#
+# vms-4071 also puts the VIRTUAL-CIRCUIT FORMATION state machine here (the
+# CLOSED / START SENT / START RECEIVED / OPEN dialogue of VAXcluster Principles
+# pp. 2-12..2-16, with the p. 2-14 acceptable-response table, the reissue timer,
+# the OS-dependent retry limit and the p. 2-16 implied ACK). That machine's
+# state lives in the Path Block, hence the vmsscs_config dependency.
 add_library(vmsscs_vc STATIC scs_vc.c)
 target_include_directories(vmsscs_vc PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(vmsscs_vc PUBLIC vmsscs_start)
+target_link_libraries(vmsscs_vc PUBLIC vmsscs_start vmsscs_config)
 
 # vms-246 - SCS$DIRECTORY connect + SCS$DIR_LOOKUP responder: binds the
 # SCS$DIRECTORY Con.ID pair and answers the established node's SYSAP-name
@@ -66,12 +72,32 @@ target_include_directories(vmsscs_member PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-7be - SCA System Blocks / Path Blocks / Port Descriptor Tables and the
+# VMS SCA Configuration Queue (VAXcluster Principles ch. 2, pp. 2-11..2-21).
+# Pure state: builds no frame, parses no frame, opens no socket -- it replaces
+# the ad-hoc MAC-keyed peer struct with the architected structures.
+add_library(vmsscs_config STATIC scs_config.c)
+target_include_directories(vmsscs_config PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
+# vms-e1a - SCA Connection Descriptor Tables, the Connection Descriptor List
+# that addresses them by CONID, and the per-Path-Block connection queue
+# (VAXcluster Principles ch. 2, pp. 2-28..2-30, 2-35). Pure state + delivery:
+# builds no frame, parses no frame, opens no socket. Depends on vmsscs_config
+# for struct scs_pb / struct scs_sb (the CDT points at both).
+add_library(vmsscs_cdt STATIC scs_cdt.c)
+target_include_directories(vmsscs_cdt PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_cdt PUBLIC vmsscs_config)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

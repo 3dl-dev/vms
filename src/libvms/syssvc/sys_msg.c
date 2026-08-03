@@ -15,13 +15,20 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$getmsg (vms-5b4) -- looks the condition value up in the
+ * OVMX-USERSPACE: sys$getmsg (vms-916) -- looks the condition value up in the
  *     compiled-in known_codes[] table in src/libvms/status.c via
  *     vms$status_message(); there is no message-file section to map, so a code
  *     absent from that array yields "unknown status code" rather than a
  *     lookup failure the caller can act on.
- * OVMX-USERSPACE: sys$putmsg (vms-5b4) -- formats from the same compiled-in
+ * OVMX-USERSPACE: sys$putmsg (vms-916) -- formats from the same compiled-in
  *     table and writes to the caller's own output; facnam is discarded.
+ *
+ * vms-916 is the message facility's item -- "real idents, no invented ones",
+ * whose done-condition is an audit of every emittable ident against the oracle.
+ * known_codes[] is the catalog these two services read, so that audit is what
+ * decides their answer. Its file list names src/vmsdcl/dcl_messages.c and not
+ * src/libvms/status.c; whoever works it should widen the list rather than treat
+ * these two as covered by it today.
  */
 
 #include <stdint.h>

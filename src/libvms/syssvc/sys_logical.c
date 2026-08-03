@@ -22,14 +22,18 @@
  * All three answer from logical_table[] in this file: a process-private array,
  * one linked list per table name. LNM$SYSTEM_TABLE is therefore private too --
  * a name defined in one process is invisible to every other, whatever table it
- * was defined in. This is the same facade vms-a4b tracks in
- * src/vmslnm/lnm_client.c, reached by a different door.
+ * was defined in.
  *
- * OVMX-USERSPACE: sys$crelnm (vms-a4b) -- inserts into the process-private
+ * vms-a4b, which these lines used to cite, is CLOSED: it closed on its deletion
+ * half (VMSLNMD.EXE, a daemon OpenVMS does not have, is gone) and its own close
+ * note records that vms-d37 owns making logical names executive-resident. So
+ * that is what they cite.
+ *
+ * OVMX-USERSPACE: sys$crelnm (vms-d37) -- inserts into the process-private
  *     logical_table[] under lnm_mutex; no daemon and no executive are told.
- * OVMX-USERSPACE: sys$dellnm (vms-a4b) -- removes from the same private table.
- * OVMX-USERSPACE: sys$trnlnm (vms-a4b) -- searches the same private table, so
- *     it can only ever find names this process defined.
+ * OVMX-USERSPACE: sys$dellnm (vms-d37) -- removes from the same private table.
+ * OVMX-USERSPACE: sys$trnlnm (vms-d37) -- searches the same private table, so
+ *     the names it finds are the ones this process defined.
  */
 
 #include <stdint.h>

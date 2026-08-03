@@ -14,6 +14,15 @@
 #include <sys/stat.h>
 #include <sys/utsname.h>
 #include <dirent.h>
+/* <pwd.h> is no longer used by any live code in this file: lex_user() reads
+ * the executive's row and lex_identifier() reads neither the executive nor
+ * the host. The include stays because tests/qemu/facility_defects.sh's
+ * dcl-fuser-host-login-name, dcl-fident-num2name-host-passwd and
+ * dcl-fident-name2num-host-passwd controls restore the getpwuid()/getpwnam()
+ * calls verbatim, and a mutation that will not compile is a broken fixture
+ * rather than a gate that bites. (A fourth control on this file,
+ * dcl-fident-num2name-bracketed-uic, needs no passwd call: it restores an
+ * INVENTED value rather than a leaked one.) */
 #include <pwd.h>
 #include <fnmatch.h>
 #include <sys/statvfs.h>
@@ -596,20 +605,68 @@ static int lex_user(struct dcl_context *ctx, const char *args,
                     char *result, size_t result_size)
 {
     (void)args;
-    if (ctx->username[0]) {
+    /*
+     * THE FALLBACK IS DELETED, NOT CORRECTED (vms-cb5, CLAUDE.md Rule 10).
+     *
+     * Two fallbacks stood here, taken when the executive holds no user name
+     * for this process (ctx->username is seeded from the executive's process
+     * table in dcl_main.c and from nowhere else):
+     *
+     *     struct passwd *pw = getpwuid(getuid());
+     *     if (pw) result = upcase(pw->pw_name);
+     *     else    result = "SYSTEM";
+     *
+     * MEASURED, not reasoned (tests/qemu/test_syssvc_ident.c, scenario C, on
+     * a real /dev/vms under QEMU): an UNPRIVILEGED process whose attempt to
+     * become SYSTEM the executive had just REFUSED with SS$_NOPRIV, running
+     * in an initramfs with no /etc/passwd, got
+     *
+     *     $ IDENT_U = F$GETJPI("","USERNAME")
+     *     $ SHOW SYMBOL IDENT_U
+     *       IDENT_U = "SYSTEM"
+     *
+     * while SHOW PROCESS -- reading the SAME field of the SAME executive row
+     * in the SAME process at the SAME moment -- honestly printed `User:`
+     * blank. So the display told the truth and the programmatic path
+     * fabricated the most privileged name on the system, for the one process
+     * that had just been refused it. It degraded UPWARD, which is the
+     * signature of this defect class.
+     *
+     * Why no replacement value is chosen here: VMS has no process without a
+     * user name -- the name lives in the executive's process table, and on
+     * the oracle a subprocess carries its creator's (VAX1, OpenVMS VAX V7.3:
+     * SPAWN answers "%DCL-S-SPAWNED, process SYSTEM_1 spawned"; the capture
+     * is cited at tests/uat/vms_session_qemu.sh) -- so this is a condition
+     * VMS never faces, and Rule 10 forbids inventing a plausible-looking
+     * handler for one. The honest answer is the one the executive gave,
+     * which for an unnamed process is the empty string. That is not a value
+     * this file picks: it is what SHOW PROCESS already prints for this exact
+     * case (src/vmsdcl/dcl_cmd_show.c), so the fix makes the two readers of
+     * the fact agree instead of introducing a third answer.
+     *
+     * getpwuid() had to go with it and is not the lesser half. A Linux
+     * account name upcased is not a VMS user name; substituting one is the
+     * same fabrication wearing a more convincing costume, and it is the
+     * branch taken on a system that does have an /etc/passwd. Measured on
+     * this repo's own build host, with the branch restored: F$USER()
+     * answered "BARON", the developer's login name (vms-f39).
+     *
+     * THE UNNAMED ROW IS REACHABLE ON THE ONE RUNTIME TARGET, and the repo
+     * says so elsewhere -- an earlier draft of this comment claimed the
+     * opposite ("no interactive session reaches DCL with an unnamed row")
+     * and it was false. vms_proc_register() in src/kernel/vms_module.c
+     * derives a fresh row for each new task and inherits nothing from the
+     * parent (src/kernel/vms_proctab.c), so a SPAWN from an ordinary console
+     * login yields a DCL whose row has no name. That blank is PINNED, not
+     * denied, by tests/uat/vms_session_qemu.sh ('User: +Process ID:') and it
+     * is $CREPRC identity propagation's to fix (vms-afd), not this
+     * function's. What this function owes that state is an honest answer,
+     * which is what is below.
+     */
+    if (ctx->username[0])
         strncpy(result, ctx->username, result_size - 1);
-    } else {
-        struct passwd *pw = getpwuid(getuid());
-        if (pw) {
-            size_t i;
-            for (i = 0; i < result_size - 1 && pw->pw_name[i]; i++) {
-                result[i] = (char)toupper((unsigned char)pw->pw_name[i]);
-            }
-            result[i] = '\0';
-        } else {
-            strncpy(result, "SYSTEM", result_size - 1);
-        }
-    }
+    else
+        result[0] = '\0';
     result[result_size - 1] = '\0';
     return 0;
 }
@@ -2393,22 +2450,54 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
         id_upper[j] = (char)toupper((unsigned char)id_upper[j]);
 
     if (strcmp(conv, "NAME_TO_NUMBER") == 0) {
-        /* Convert username to UIC number */
-        /* Hardcoded well-known identities */
+        /*
+         * THE TWO WELL-KNOWN IDENTIFIERS, BOTH NOW PINNED TO THE ORACLE
+         * (vms-2f8). Asked of OpenVMS VAX V7.3 on lab node vax3:
+         *
+         *     F$IDENTIFIER("SYSTEM","NAME_TO_NUMBER")  -> 65540   (%X00010004)
+         *     F$IDENTIFIER("DEFAULT","NAME_TO_NUMBER") -> 8388736 (%X00800080)
+         *
+         * SYSTEM already matched. DEFAULT DID NOT: this returned
+         * (200 << 16) | 1, i.e. OVMX had read VMS's UIC [200,200] -- which is
+         * OCTAL, as every VMS UIC is written -- as decimal group 200 with
+         * member 1. Corrected below, and written in octal so the literal
+         * reads as the UIC it is.
+         *
+         * These stay hardcoded here. On VMS the conversion is a lookup in the
+         * RIGHTS DATABASE; OVMX ships a populated
+         * SYS$SYSTEM:RIGHTSLIST.DAT (INTERACTIVE/BATCH/NETWORK/LOCAL/REMOTE,
+         * provisioned by src/ovmx_init/ovmx_init.c) that no code reads, so
+         * making this function read it is a real change and it is vms-2f8's,
+         * not this round's.
+         */
         if (strcmp(id_upper, "SYSTEM") == 0) {
             snprintf(result, result_size, "%d", (1 << 16) | 4); /* [1,4] */
         } else if (strcmp(id_upper, "DEFAULT") == 0) {
-            snprintf(result, result_size, "%d", (200 << 16) | 1); /* [200,1] */
+            snprintf(result, result_size, "%d", (0200 << 16) | 0200); /* [200,200] octal */
         } else {
-            /* Try /etc/passwd lookup */
-            struct passwd *pw = getpwnam(id_str);
-            if (pw) {
-                /* Map uid,gid to VMS UIC format [group,member] */
-                snprintf(result, result_size, "%d",
-                         (int)((pw->pw_gid << 16) | (pw->pw_uid & 0xFFFF)));
-            } else {
-                snprintf(result, result_size, "0");
-            }
+            /*
+             * NO HOST PASSWD LOOKUP (vms-f39, CLAUDE.md Rule 10). This read:
+             *
+             *     struct passwd *pw = getpwnam(id_str);
+             *     if (pw) result = (pw->pw_gid << 16) | (pw->pw_uid & 0xFFFF);
+             *
+             * so F$IDENTIFIER("baron","NAME_TO_NUMBER") answered with the
+             * developer's Linux account dressed as a VMS UIC. A Linux account
+             * is not a VMS rights identifier and its uid/gid pair is not a
+             * UIC. Deleted, not replaced.
+             *
+             * THE MISS VALUE IS ZERO, AND IT IS PINNED (vms-2f8). Asked of
+             * OpenVMS VAX V7.3 on lab node vax3:
+             *
+             *     F$IDENTIFIER("NOSUCHIDENT","NAME_TO_NUMBER")  ->  0
+             *
+             * and the public HP/VSI DCL Dictionary says the same for this
+             * direction: an identifier that is not valid converts to a zero.
+             * "0" is what this function already returned when the passwd
+             * lookup missed, so nothing changes here -- what changed is that
+             * it is now the measured answer rather than a kept one.
+             */
+            snprintf(result, result_size, "0");
         }
     } else if (strcmp(conv, "NUMBER_TO_NAME") == 0) {
         /* Convert UIC number to username */
@@ -2417,18 +2506,48 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
         int group = (int)((uic >> 16) & 0xFFFF);
 
         if (group == 1 && member == 4) {
+            /* [1,4] -> SYSTEM, pinned: the oracle answers
+             * F$IDENTIFIER(65540,"NUMBER_TO_NAME") -> "SYSTEM" (vms-2f8).
+             * The reverse of DEFAULT's 8388736 is NOT mapped here: the oracle
+             * was asked that pair only in the NAME_TO_NUMBER direction, and an
+             * unmeasured mapping is not something to add on the strength of
+             * symmetry. It therefore falls to the miss below. */
             snprintf(result, result_size, "SYSTEM");
         } else {
-            /* Try /etc/passwd lookup by uid */
-            struct passwd *pw = getpwuid((uid_t)member);
-            if (pw) {
-                strncpy(result, pw->pw_name, result_size - 1);
-                result[result_size - 1] = '\0';
-                for (size_t j = 0; result[j]; j++)
-                    result[j] = (char)toupper((unsigned char)result[j]);
-            } else {
-                snprintf(result, result_size, "[%d,%d]", group, member);
-            }
+            /*
+             * The same deletion as NAME_TO_NUMBER above, and the site that
+             * kept vms-f39 alive through round 2: this ran
+             * getpwuid((uid_t)member) and answered with the HOST Linux
+             * account name, upcased. MEASURED on this repo's build host,
+             * before this change:
+             *
+             *   $ printf 'X = F$IDENTIFIER(1000,"NUMBER_TO_NAME")\nSHOW SYMBOL X\n' |
+             *       ./build/bin/DCL.EXE
+             *     X = "BARON"
+             *
+             * It sat 1840 lines below lex_user()'s comment declaring the
+             * class removed, in the same file, and was reported settled.
+             *
+             * THE MISS VALUE IS THE NULL STRING, AND IT IS PINNED (vms-2f8).
+             * What stood here after that deletion was "[%d,%d]" -- the UIC the
+             * caller passed in, echoed back in brackets. REFUTED against
+             * OpenVMS VAX V7.3 on lab node vax3, every input shape tried:
+             *
+             *     F$IDENTIFIER(1000,"NUMBER_TO_NAME")        ->  ""
+             *     F$IDENTIFIER(0,"NUMBER_TO_NAME")           ->  ""
+             *     F$IDENTIFIER(77777,"NUMBER_TO_NAME")       ->  ""
+             *     F$IDENTIFIER(196609,"NUMBER_TO_NAME")      ->  ""
+             *     F$IDENTIFIER(%X80010004,"NUMBER_TO_NAME")  ->  ""
+             *
+             * and the public HP/VSI DCL Dictionary agrees: an identifier that
+             * is not valid converts to a null string in this direction. Real
+             * VMS emits no bracketed UIC from F$IDENTIFIER for any input, so
+             * the bracketed rendering was a plausible-looking answer to a
+             * condition VMS never gives that answer to -- CLAUDE.md Rule 10's
+             * illegal third answer. It is not kept and not re-chosen: it is
+             * replaced by the measured one.
+             */
+            result[0] = '\0';
         }
     } else {
         result[0] = '\0';

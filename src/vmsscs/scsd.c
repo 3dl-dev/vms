@@ -41,6 +41,7 @@
 
 #include "cluster_authorize.h"
 #include "scs_classify.h"
+#include "scs_config.h"
 #include "scs_connect.h"
 #include "scs_dir.h"
 #include "scs_hello.h"
@@ -226,11 +227,26 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
 #define OFF_HELLO_SRCLOG 24  /* HELLO SCA src-logical addr (abs 24-29) */
 #define OFF_HELLO_DIRFLG 92  /* directed-HELLO flag (abs 92-93) */
 
+/*
+ * struct peer_state - vms-7be: what used to be a MAC-keyed struct describing a
+ * remote node is now a THIN INDEX over the architected SCA structures.
+ *
+ * The node and the virtual circuit are described by the Path Block and System
+ * Block that `pb` points at (VAXcluster Principles ch. 2, pp. 2-11..2-21, see
+ * scs_config.h): the peer's Ethernet port address lives in pb->remote_port_addr
+ * (p. 2-12), its 48-bit SCS System Address in pb->sb->system_id (p. 2-16), and
+ * the state of the virtual circuit in pb->vc_state (p. 2-11) -- all of which
+ * previously lived here as eth_mac/logical/ad-hoc flags.
+ *
+ * What REMAINS here is deliberately not SB/PB material: it is SCS CONNECTION
+ * and SYSAP state (Con.ID pairs, directory handles, the connection-manager
+ * dialogue) plus NISCA channel bookkeeping. Connections ride ON a virtual
+ * circuit and are a layer above it (p. 2-11 Figure 2-6); moving them into
+ * connection descriptors is a separate item.
+ */
 struct peer_state {
-    int      in_use;
-    uint8_t  eth_mac[6];      /* peer's Ethernet source MAC (we reply here) */
-    uint8_t  logical[6];      /* peer's advertised SCA src-logical addr (HELLO abs 24) */
-    int      channel_up;      /* >=1 directed HELLO exchanged */
+    struct scs_pb *pb;        /* Path Block: this peer's port + virtual circuit; NULL = free slot */
+    int      channel_up;      /* >=1 directed HELLO exchanged (NISCA channel, not an SCA VC state) */
     long     directed_replies;
     struct timespec last_directed; /* CLOCK_MONOTONIC of our last directed reply (rate limit) */
     int      connect_sent;    /* we sent a CONNECT-REQUEST */
@@ -305,30 +321,139 @@ static int is_padded_hello(const uint8_t *buf, size_t n)
            buf[36] == 0x05;     /* message-class byte 0x05 == HELLO (spec sec 4a/4k) */
 }
 
-static struct peer_state *peer_find_or_add(struct peer_state *tbl, const uint8_t mac[6])
+/* vms-7be: all-zero address returned by the accessors below when the structure
+ * they read is not built yet -- byte-for-byte what the old zero-initialized
+ * peer_state fields produced in the same situation. */
+static const uint8_t zero_addr[6] = {0, 0, 0, 0, 0, 0};
+
+/* The peer's Ethernet PORT address (PB, p. 2-12) -- where we send its frames. */
+static const uint8_t *ps_port_addr(const struct peer_state *ps)
+{
+    return (ps != NULL && ps->pb != NULL) ? ps->pb->remote_port_addr : zero_addr;
+}
+
+/* The peer's 48-bit SCS System Address (SB, p. 2-16) -- the cluster-logical
+ * address OVMX writes in the SCA dest-logical field. Zeros until discovered,
+ * exactly as the old peer_state.logical was. */
+static const uint8_t *ps_sys_addr(const struct peer_state *ps)
+{
+    return (ps != NULL && ps->pb != NULL && ps->pb->sb != NULL) ? ps->pb->sb->system_id
+                                                                : zero_addr;
+}
+
+/*
+ * peer_find_or_add - vms-7be: look the peer up by its remote PORT ADDRESS in
+ * the configuration structures (PDT formative queue + open PBs, p. 2-21) and,
+ * on first contact, build the Path Block that describes the newly discovered
+ * port and the circuit forming with it (p. 2-11). The peer_state slot is now
+ * just the index cell that hangs the connection-level state off that PB.
+ */
+static struct peer_state *peer_find_or_add(struct scs_config *cfg, struct scs_pdt *pdt,
+                                           struct peer_state *tbl, const uint8_t mac[6])
 {
     int free_slot = -1;
     for (int i = 0; i < OVMX_MAX_PEERS; i++) {
-        if (tbl[i].in_use && mac_eq(tbl[i].eth_mac, mac)) {
+        if (tbl[i].pb != NULL && mac_eq(tbl[i].pb->remote_port_addr, mac)) {
             return &tbl[i];
         }
-        if (!tbl[i].in_use && free_slot < 0) {
+        if (tbl[i].pb == NULL && free_slot < 0) {
             free_slot = i;
         }
     }
     if (free_slot < 0) {
         return NULL;
     }
+    struct scs_pb *pb = scs_pb_create(cfg, pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    if (pb == NULL) {
+        return NULL; /* PB pool exhausted -- same "no room" answer as before */
+    }
     memset(&tbl[free_slot], 0, sizeof(tbl[free_slot]));
-    tbl[free_slot].in_use = 1;
-    memcpy(tbl[free_slot].eth_mac, mac, 6);
+    tbl[free_slot].pb = pb;
     return &tbl[free_slot];
 }
+
+/*
+ * ps_learn_sys_addr - record the peer's SCA src-logical address (abs 24) as the
+ * 48-bit SCS System Address of the System Block for its node. Replaces the old
+ * `memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6)`; the bytes stored are
+ * identical, the structure they are stored in is the architected one.
+ *
+ * ONE FAILURE MODE THE OLD memcpy DID NOT HAVE: the store now needs an SB, and
+ * scs_pb_learn_system_addr returns NULL if the SB pool is exhausted. If that ever
+ * happened, ps_sys_addr() would keep returning zeros and OVMX would put a zero
+ * peer-logical on the wire. That must NEVER be silent (CLAUDE.md rule 9 / INV-6),
+ * so it is logged as an error here. It is also unreachable at the shipped pool
+ * sizes -- SCS_CONFIG_MAX_SB (10) >= OVMX_MAX_PEERS (4) formative SBs + the local
+ * node's own SB -- which tests/vmsscs/test_scsd_wire.c asserts at compile time AND
+ * by driving a full peer table through this function.
+ */
+static void ps_learn_sys_addr(struct scs_config *cfg, struct peer_state *ps,
+                              const uint8_t *src_logical)
+{
+    if (ps == NULL || ps->pb == NULL) {
+        return;
+    }
+    if (scs_pb_learn_system_addr(cfg, ps->pb, src_logical) == NULL) {
+        log_ts(stderr);
+        fprintf(stderr,
+                " SCSD-E-NOSB, no system block available for peer"
+                " %02x:%02x:%02x:%02x:%02x:%02x -- its SCS system address is NOT"
+                " recorded and outgoing frames will carry a zero peer-logical\n",
+                ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
+        fflush(stderr);
+    }
+}
+
+/*
+ * ps_channel_up - the NISCA channel to this peer is verified. OVMX INFERENCE
+ * (labeled): a node exchanging directed HELLOs with us is handling normal SCA
+ * communication, which is what "port state = ENABLED" means for a VAX port
+ * (p. 2-11..2-12). Nothing here reaches the wire.
+ */
+static void ps_channel_up(struct peer_state *ps)
+{
+    ps->channel_up = 1;
+    if (ps->pb != NULL) {
+        ps->pb->remote_port_state = SCS_PORT_STATE_ENABLED;
+    }
+}
+
+#ifdef SCSD_UNIT_TEST
+/*
+ * vms-7be TRANSMIT CAPTURE SEAM -- compiled ONLY into tests/vmsscs/test_scsd_wire.c,
+ * which is the single translation unit that defines SCSD_UNIT_TEST. The daemon
+ * never defines it, so the production build of send_frame_to below is byte-for-byte
+ * the code that shipped before this item.
+ *
+ * WHY: the frames OVMX puts on the wire are assembled INSIDE this file (dst MAC
+ * from ps_port_addr(), SCA peer-logical from ps_sys_addr()) and then handed to an
+ * AF_PACKET socket that needs CAP_NET_RAW, which CI does not have. Substituting the
+ * sendto() with a capture buffer lets a test drive the REAL scsd.c senders and
+ * inspect the REAL bytes, instead of re-deriving them in the test.
+ */
+uint8_t  scsd_test_last_frame[SCA_FRAME_MAX];
+uint8_t  scsd_test_last_dst[6];
+size_t   scsd_test_last_len;
+unsigned scsd_test_frames;
+#endif
 
 /* Send a fully-built Ethernet frame to a specific unicast MAC on ifindex. */
 static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
                              const uint8_t *frame, size_t len)
 {
+#ifdef SCSD_UNIT_TEST
+    (void)sock;
+    (void)ifindex;
+    if (len > sizeof(scsd_test_last_frame)) {
+        return -1;
+    }
+    memcpy(scsd_test_last_dst, mac, 6);
+    memcpy(scsd_test_last_frame, frame, len);
+    scsd_test_last_len = len;
+    scsd_test_frames++;
+    return (ssize_t)len;
+#else
     struct sockaddr_ll da;
     memset(&da, 0, sizeof(da));
     da.sll_family = AF_PACKET;
@@ -337,6 +462,266 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
     da.sll_halen = 6;
     memcpy(da.sll_addr, mac, 6);
     return sendto(sock, frame, len, 0, (struct sockaddr *)&da, sizeof(da));
+#endif
+}
+
+/*
+ * ===== vms-4071: the VC FORMATION state machine, driven onto the NISCA wire =====
+ *
+ * The machine itself is in src/vmsscs/scs_vc.c (CLOSED / START SENT / START
+ * RECEIVED / OPEN, the p. 2-14 acceptable-response table, the reissue timer,
+ * the OS-dependent retry limit, the p. 2-16 implied ACK). What lives HERE is
+ * only the translation between the machine's abstract packet classes and the
+ * concrete 0x41 config-round frames the existing vms-21e builders emit:
+ *
+ *     SCS_VC_ACT_SEND_START -> scs_start_build,     config-round 0 (106 bytes)
+ *     SCS_VC_ACT_SEND_STACK -> scs_start_build,     config-round 1 (106 bytes)
+ *     SCS_VC_ACT_SEND_ACK   -> scs_start_build_ack, config-round 2 ( 46 bytes)
+ *
+ * No frame layout is re-derived: these are the same two builders, called with
+ * the same parameters, that shipped before this item.
+ *
+ * ===== WHAT THE DEFAULT BUILD PUTS ON A FRESH-JOIN WIRE =====
+ * Unchanged from pre-vms-4071, in BYTES and in ORDER RELATIVE TO THE PEER's
+ * frames. The fresh-join interleaving is still
+ *     OVMX r0, OVMX r1, peer r1, peer r2, OVMX r2
+ * because scsd_vc_settle() holds OVMX's round-2 ack until the PEER's round-2
+ * frame arrives, exactly as the pre-vms-4071 `else if (sv.is_ack)` branch did.
+ * The state machine reaches OPEN one frame earlier than the ack goes out; that
+ * is a state change, not a wire change. See scsd_vc_settle().
+ *
+ * MEASURED, not asserted (lab-2 pod vaxlab-3, 2026-08-03). Head-to-head fresh
+ * joins, this branch (tag W9A) vs the same commit's parent main (tag WAA), same
+ * pod, same runner, captures at
+ * /data/training/vax/k8s-labs/vaxlab-3/logs/d94-{W9A,WAA}.pcap:
+ *   - Both emitted 3 OVMX 0x41 frames in the order round-0, round-1, round-2,
+ *     with the peer's frames interleaved identically:
+ *       peer r0, OVMX r0, OVMX r1, peer r1, peer r2, OVMX r2.
+ *   - Byte-diffing the three OVMX frames pairwise, the ONLY differing absolute
+ *     offsets are 28, 60 and 109 -- the SCSSYSTEMID low byte (1409 vs 1410) and
+ *     one SCSNODE character (OVMXW9 vs OVMXWA). Zero protocol bytes differ.
+ *   - Emission counters identical: START-SENT=2 START-ACK-SENT=1
+ *     CONNECT-REQ-SENT=1 CREDIT-SENT=8 DIR-CONNECT-RESP-SENT=1
+ *     DIR-LOOKUP-RESP-SENT=4 CM-CONFIG-FRAMES=3.
+ * NEITHER run reached CLUSTER_NODES=3 on that pod, and that is PRE-EXISTING:
+ * the main control failed identically. This item does not claim to fix it.
+ *
+ * ===== WHAT IS NEW ON THE WIRE, AND WHAT GATES IT =====
+ *   1. RETRY / ABANDON. A START/STACK unanswered for
+ *      SCS_VC_FORMATION_TIMEOUT_MS is reissued (p. 2-14) up to
+ *      scs_vc_retry_limit() times, after which formation is ABANDONED. Fires
+ *      only under loss; never on a clean join. Kill-switch:
+ *      OVMX_VC_NO_RETRY_LIMIT=1 restores unbounded retry with no abandon.
+ *   2. THE EARLY ACK -- OPT-IN, DEFAULT OFF. OVMX_VC_EARLY_ACK=1 emits the
+ *      round-2 ack on the OPEN transition instead (the literal p. 2-14 rule:
+ *      "A response of either ACK or STACK will advance the circuit to the OPEN
+ *      state; and if the response is STACK, the port driver will issue an
+ *      ACK"). Same 46 bytes, one peer-frame earlier. NO lab capture has shown
+ *      the reference member accepts that ordering, so it does not ship on by
+ *      default. See SCS_VC_EARLY_ACK_ENV in scs_vc.h.
+ *
+ *      KILL-SWITCH PROVEN TO MOVE (guardrail 23), lab-2 tag W5A vs W1A: with
+ *      OVMX_VC_EARLY_ACK=1 the daemon logs SCSD-I-STARTDONE immediately after
+ *      "STACK received -> send ACK, VC OPEN" and BEFORE the peer's round-2
+ *      arrives; with the switch off it logs it after "ACK received", i.e. after
+ *      the peer's round-2 -- which is where the pre-vms-4071 control (W4A)
+ *      logs it too. NOTE HONESTLY: on THIS lab the two orderings are NOT
+ *      distinguishable in the capture, because the peer emits its round-1 and
+ *      round-2 back to back inside one millisecond, so both are already on the
+ *      wire before OVMX can turn its ack around. The switch changes the daemon's
+ *      emission point; on this peer's timing it does not change the pcap.
+ *   3. THE IMPLIED ACK (p. 2-16) can open a circuit with no peer round-2 ever
+ *      arriving, in which case OVMX owes its round-2 immediately. Reachable
+ *      only from START RECEIVED on an SCS sequenced-message class, which a
+ *      clean join never produces mid-dialogue.
+ */
+struct scsd_vc_ctx {
+    int             sock;
+    int             ifindex;
+    const uint8_t  *hw_mac;      /* OVMX HW MAC (Ethernet src) */
+    const uint8_t  *src_logical; /* OVMX cluster-logical addr (SCA abs 24) */
+    uint16_t        scssystemid;
+    const char     *node_name;
+    struct scs_config *cfg;
+};
+
+/*
+ * scsd_vc_emit - transmit the formation packet the state machine asked for.
+ * Returns 1 if a frame went out, 0 otherwise. `act` must be one of the three
+ * SEND_* actions; anything else is a no-op.
+ */
+static int scsd_vc_emit(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
+                        enum scs_vc_action act)
+{
+    if (ctx == NULL || ps == NULL || ps->pb == NULL) {
+        return 0;
+    }
+    struct scs_start_params sp;
+    memset(&sp, 0, sizeof(sp));
+    memcpy(sp.dst_mac, ps_port_addr(ps), 6);
+    memcpy(sp.src_mac, ctx->hw_mac, 6);
+    memcpy(sp.src_logical, ctx->src_logical, 6);
+    memcpy(sp.peer_logical, ps_sys_addr(ps), 6);
+    sp.scssystemid = ctx->scssystemid;
+    strncpy(sp.node_name, ctx->node_name, SCS_START_NODENAME_LEN);
+    sp.node_name[SCS_START_NODENAME_LEN] = '\0';
+    /* GROUNDED joiner values, unchanged from vms-21e: every joiner 0x41 frame
+     * carries send_seq=1 / recv_ack=0 (spec sec 4i.A) and echoes the member's
+     * advertised node-incarnation at [22:24] (spec sec 4i.B). */
+    sp.send_seq = ps->vc.seq.send_seq;
+    sp.recv_ack = 0;
+    sp.incarnation = ps->incarnation ? ps->incarnation : 1;
+
+    if (act == SCS_VC_ACT_SEND_ACK) {
+        uint8_t aframe[SCS_START_ACK_FRAME_LEN];
+        if (scs_start_build_ack(&sp, aframe) != 0) {
+            return 0;
+        }
+        return send_frame_to(ctx->sock, ctx->ifindex, ps_port_addr(ps),
+                             aframe, sizeof(aframe)) > 0 ? 1 : 0;
+    }
+    if (act == SCS_VC_ACT_SEND_START || act == SCS_VC_ACT_SEND_STACK) {
+        sp.config_round = (act == SCS_VC_ACT_SEND_START) ? 0 : 1;
+        uint8_t sframe[SCS_START_FRAME_LEN];
+        if (scs_start_build(&sp, sframe) != 0) {
+            return 0;
+        }
+        return send_frame_to(ctx->sock, ctx->ifindex, ps_port_addr(ps),
+                             sframe, sizeof(sframe)) > 0 ? 1 : 0;
+    }
+    return 0;
+}
+
+/*
+ * scsd_vc_on_open - the p. 2-21 open transition, run ONCE per circuit whenever
+ * the state machine reaches OPEN (by STACK, by a bare ACK, or by the p. 2-16
+ * implied ACK). Body unchanged from vms-21e/vms-246/vms-7be; only its trigger
+ * moved from "the peer sent its round-2 ack" to "the circuit reached OPEN".
+ *
+ * REACHABILITY, restated so a green test run is not misread: SCS_OPEN_NEW_SB is
+ * still the only transition SCSD reaches. scs_pb_close() still has no caller
+ * here and peer slots are still never released, so the p. 2-21 rejoin REFRESH
+ * rule remains unimplemented in the daemon (vms-17f). vms-4071 changed the VC
+ * FORMATION machine, not the Path-Block lifecycle.
+ */
+static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps)
+{
+    /* vms-246: the phase-2 config-round counters are SEPARATE from the SCS VC;
+     * both sides reset the VC to send_seq=1/recv_seq=0 when START completes. */
+    scs_vc_reset_seq(&ps->vc);
+    enum scs_open_result open_res = scs_pb_open(ctx->cfg, ps->pb);
+    log_ts(stdout);
+    printf(" SCSD-I-STARTDONE, START/config complete with peer"
+           " %02x:%02x:%02x:%02x:%02x:%02x -- VC reset"
+           " (send_seq=%u recv_seq=%u), awaiting 0x4b connect\n",
+           ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+           ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+           ps->vc.seq.send_seq, ps->vc.seq.recv_seq);
+    printf(" SCSD-I-VCOPEN, path block OPEN, %s"
+           " (configuration queue holds %u system blocks,"
+           " %u path block(s) on this node's SB)\n",
+           open_res == SCS_OPEN_NEW_SB ? "node learned for the first time"
+           : open_res == SCS_OPEN_EXISTING_REFRESHED
+               ? "old system block REFRESHED (rejoin, p. 2-21 Note)"
+                 " -- UNEXPECTED: believed unreachable until vms-17f"
+               : "queued to the existing system block"
+                 " -- UNEXPECTED: believed unreachable until vms-17f",
+           scs_config_sb_count(ctx->cfg),
+           scs_sb_pb_count(ps->pb->sb));
+    fflush(stdout);
+}
+
+/*
+ * scsd_vc_ack_due - THE WIRE-ORDERING DECISION, isolated in one predicate.
+ *
+ * The circuit being OPEN is not by itself permission to transmit OVMX's round-2
+ * ack; WHEN that 46-byte frame goes out is what decides whether a fresh join
+ * looks byte-and-order identical to pre-vms-4071. Three ways it becomes due:
+ *
+ *  1. DEFAULT / PRESERVED (`peer_round2_seen`): the peer's own round-2 frame has
+ *     arrived. This is precisely the pre-vms-4071 trigger -- the old code emitted
+ *     the ack from the `else` branch gated on scs_start_view.is_ack. Keeping it
+ *     as the default is what makes the fresh-join interleaving unchanged.
+ *  2. OPT-IN (`OVMX_VC_EARLY_ACK=1`): emit as soon as the circuit is OPEN, i.e.
+ *     on the peer's round-1 STACK. That is the literal p. 2-14 rule, but it puts
+ *     the ack one peer-frame earlier and NO lab capture has yet shown the
+ *     reference member accepts it, so it is off unless asked for.
+ *  3. IMPLIED ACK (p. 2-16, `fsm.implied_acks`): the peer is already sending
+ *     circuit traffic, so it considers the circuit OPEN and will never send a
+ *     round-2 for case 1 to wait on. Waiting would deadlock the dialogue. This
+ *     path is unreachable on a clean join (it needs an SCS sequenced-message
+ *     class to arrive while the PB is in START RECEIVED).
+ *
+ * Case 3 is an OVMX design choice, labeled per rule 8: p. 2-16 says only that
+ * the circuit is marked OPEN, not that anything is transmitted. It is the NISCA
+ * encoding that requires both nodes to carry every config round (spec sec 4g
+ * phase 2: 0/0/1/1/2/2, "both nodes carry the same round").
+ */
+/*
+ * scsd_vc_peer_round2 - THE DEFAULT ack trigger, in one place so the daemon and
+ * its test cannot drift apart about what it is: the peer's round-2 46-byte
+ * frame, which scs_vc_classify_round() maps to SCS_VC_EV_ACK. This is exactly
+ * the condition the pre-vms-4071 code branched on (scs_start_view.is_ack).
+ */
+static int scsd_vc_peer_round2(enum scs_vc_event ev)
+{
+    return ev == SCS_VC_EV_ACK;
+}
+
+static int scsd_vc_ack_due(const struct peer_state *ps, int peer_round2_seen)
+{
+    if (peer_round2_seen) {
+        return 1;
+    }
+    if (scs_vc_early_ack_enabled()) {
+        return 1;
+    }
+    return ps->pb != NULL && ps->pb->fsm.implied_acks > 0;
+}
+
+/*
+ * scsd_vc_settle - after any state-machine step, do the two things that are
+ * NISCA-specific rather than SCA-abstract:
+ *
+ *  - If the circuit is OPEN, OVMX has not yet put its round-2 ack out, and
+ *    scsd_vc_ack_due() says it is time, emit it and run the p. 2-21 open
+ *    transition. `peer_round2_seen` is 1 only at the call site that just
+ *    processed the peer's 46-byte round-2 frame.
+ *  - If formation was ABANDONED, re-arm the Path Block's formation machine so a
+ *    later START from the same peer can start the dialogue over. p. 2-14 says
+ *    only that formation is abandoned, not what happens next; OVMX cannot tear
+ *    the Path Block down here because the peer-slot/PB lifecycle is vms-17f, so
+ *    it resets the machine in place and says so in the log.
+ */
+static void scsd_vc_settle(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
+                           enum scs_vc_action act, int peer_round2_seen,
+                           long *start_ack_sent)
+{
+    if (ps->pb == NULL) {
+        return;
+    }
+    if (act == SCS_VC_ACT_ABANDON) {
+        log_ts(stderr);
+        fprintf(stderr,
+                " SCSD-W-VCABANDON, virtual-circuit formation ABANDONED with peer"
+                " %02x:%02x:%02x:%02x:%02x:%02x after %lu reissue(s) (p. 2-14)"
+                " -- path block re-armed to CLOSED for a fresh dialogue\n",
+                ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                ps->pb->fsm.reissues);
+        fflush(stderr);
+        scs_vc_fsm_init(ps->pb);
+        ps->start_replied = 0;
+        return;
+    }
+    if (ps->pb->vc_state == SCS_VC_OPEN && !ps->start_acked &&
+        scsd_vc_ack_due(ps, peer_round2_seen)) {
+        if (scsd_vc_emit(ctx, ps, SCS_VC_ACT_SEND_ACK)) {
+            (*start_ack_sent)++;
+            ps->start_acked = 1;
+            scsd_vc_on_open(ctx, ps);
+        }
+    }
 }
 
 /*
@@ -366,10 +751,10 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
      * identifies WHICH VMS$VAXcluster connection the burst rides (vms-d94: the
      * add-member burst must ride the JOINER-initiated connection). */
     memset(&mp, 0, sizeof(mp));
-    memcpy(mp.dst_mac, ps->eth_mac, 6);
+    memcpy(mp.dst_mac, ps_port_addr(ps), 6);
     memcpy(mp.src_mac, our_hw_mac, 6);
     memcpy(mp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 cluster-logical addr */
-    memcpy(mp.peer_logical, ps->logical, 6);
+    memcpy(mp.peer_logical, ps_sys_addr(ps), 6);
     mp.remote_conid = remote_conid;
     mp.local_conid = local_conid;
     mp.incarnation = ps->incarnation;
@@ -381,7 +766,7 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.sysap_ack_msg = ps->sysap_recv;
     mp.model = NULL; /* OVMX_MODEL_STRING default */
     if (scs_member_build_model(&mp, frame) == 0 &&
-        send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
+        send_frame_to(sock, ifindex, ps_port_addr(ps), frame, sizeof(frame)) > 0) {
         sent++;
     }
 
@@ -393,7 +778,7 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.sysap_ack_msg = ps->sysap_recv;
     mp.votes = SCS_MEMBER_VOTES_NONVOTING; /* VOTES=1 tested (vms-d94), did NOT change NEW->MEMBER */
     if (scs_member_build_params(&mp, frame) == 0 &&
-        send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
+        send_frame_to(sock, ifindex, ps_port_addr(ps), frame, sizeof(frame)) > 0) {
         sent++;
     }
 
@@ -404,7 +789,7 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.sysap_send_msg = ps->sysap_send++;
     mp.sysap_ack_msg = ps->sysap_recv;
     if (scs_member_build_config(&mp, frame) == 0 &&
-        send_frame_to(sock, ifindex, ps->eth_mac, frame, sizeof(frame)) > 0) {
+        send_frame_to(sock, ifindex, ps_port_addr(ps), frame, sizeof(frame)) > 0) {
         sent++;
     }
 
@@ -422,17 +807,58 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
  * not on a lazy HELLO poll. The request is one sequenced message: the first
  * send allocates a send_seq; retransmits REUSE it (a retransmit is not a new
  * message). Returns 1 if a frame was sent.
+ *
+ * vms-398 -- WHICH VIRTUAL CIRCUIT (VAXcluster Principles p. 2-47). CONNECT
+ * takes either a named circuit or none: "CONNECT ... uses CONFIG_SYS to obtain
+ * the address of the first Path Block queued to the System Block for the
+ * specified node ... [and] examines each Path Block in turn until it finds one
+ * whose virtual circuit is OPEN".
+ *   named_vc != NULL - the caller named the circuit; it is used as given.
+ *   named_vc == NULL - the caller named only the NODE. The circuit is selected
+ *                      from the configuration database by the peer's 48-bit SCS
+ *                      System Address, via scs_config_select_vc() (CONFIG_SYS +
+ *                      the OPEN scan). This is what BOTH of the daemon's own
+ *                      call sites pass.
+ * If no OPEN circuit exists for the node, NOTHING IS SENT and the refusal is
+ * logged: there is no honest frame to build without a circuit (a fabricated one
+ * would carry a zero peer-logical), and a silent success is exactly the failure
+ * mode CLAUDE.md rule 9 / INV-6 forbids.
+ *
+ * The circuit's characteristics -- the remote port address the frame is
+ * addressed to and the System Block whose System Address goes in the SCA
+ * peer-logical field -- are read back through CONFIG_PATH (p. 2-47), not by
+ * reaching into the Path Block, so the daemon sees the same view of a path that
+ * any other CONFIG_PATH caller would.
  */
-static int send_joiner_connect_request(int sock, int ifindex, struct peer_state *ps,
+static int send_joiner_connect_request(int sock, int ifindex, struct scs_config *cfg,
+                                       struct peer_state *ps, struct scs_pb *named_vc,
                                        const uint8_t our_hw_mac[6],
                                        const uint8_t our_src_logical[6])
 {
+    struct scs_pb *vc = named_vc;
+    if (vc == NULL) {
+        vc = scs_config_select_vc(cfg, ps_sys_addr(ps));
+    }
+    struct scs_config_path_info path;
+    if (vc == NULL || !scs_config_path(vc, &path)) {
+        log_ts(stderr);
+        fprintf(stderr,
+                " SCSD-E-NOVC, no OPEN virtual circuit to peer"
+                " %02x:%02x:%02x:%02x:%02x:%02x -- CONNECT-REQUEST NOT sent"
+                " (p. 2-47: CONNECT needs an open circuit; none was named and"
+                " CONFIG_SYS found none for this node)\n",
+                ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
+        fflush(stderr);
+        return 0;
+    }
+
     struct scs_connect_params cp;
     memset(&cp, 0, sizeof(cp));
-    memcpy(cp.dst_mac, ps->eth_mac, 6);
+    memcpy(cp.dst_mac, path.remote_port_addr, 6);
     memcpy(cp.src_mac, our_hw_mac, 6);
     memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-    memcpy(cp.peer_logical, ps->logical, 6);
+    memcpy(cp.peer_logical, path.sb != NULL ? path.sb->system_id : zero_addr, 6);
     cp.local_conid = OVMX_JOINER_CONID;
     cp.remote_conid = 0; /* CONNECT-REQUEST: the member's Con.ID is not yet known */
     cp.recv_ack = ps->vc.seq.recv_seq; /* always ack the member's latest send_seq */
@@ -443,7 +869,7 @@ static int send_joiner_connect_request(int sock, int ifindex, struct peer_state 
     cp.incarnation = ps->incarnation;
     uint8_t cframe[SCS_CONNECT_FRAME_LEN];
     if (scs_connect_build_request(&cp, cframe) == 0 &&
-        send_frame_to(sock, ifindex, ps->eth_mac, cframe, sizeof(cframe)) > 0) {
+        send_frame_to(sock, ifindex, path.remote_port_addr, cframe, sizeof(cframe)) > 0) {
         ps->joiner_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
         scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
@@ -452,7 +878,15 @@ static int send_joiner_connect_request(int sock, int ifindex, struct peer_state 
     return 0;
 }
 
+#ifdef SCSD_UNIT_TEST
+/* vms-7be: tests/vmsscs/test_scsd_wire.c #includes this file and supplies its own
+ * main(). The daemon entry point is RENAMED, not compiled out, so every static
+ * helper above is compiled exactly as the daemon compiles it. */
+int scsd_daemon_main(int argc, char **argv);
+int scsd_daemon_main(int argc, char **argv)
+#else
 int main(int argc, char **argv)
+#endif
 {
     const char *ifname = "br0";
     int duration = 0; /* 0 = run until SIGINT/SIGTERM */
@@ -542,9 +976,18 @@ int main(int argc, char **argv)
     memset(&hello_params, 0, sizeof(hello_params));
     memset(&hello_dst, 0, sizeof(hello_dst));
 
-    /* vms-5fe responder state. */
+    /* vms-5fe responder state, now indexed onto the vms-7be SCA structures. */
     struct peer_state peers[OVMX_MAX_PEERS];
     memset(peers, 0, sizeof(peers));
+    /* vms-7be: the VMS SCA Configuration Queue (p. 2-17) and the Port Descriptor
+     * Table for OVMX's single local SCA port -- the Ethernet/NISCA port this
+     * daemon has bound (p. 2-21: "VMS has one Port Descriptor Table for each
+     * local SCA port"). Formative Path Blocks queue here until their circuit
+     * opens; open ones move to the System Block of the node they reach. */
+    static struct scs_config scs_cfg;
+    struct scs_pdt scs_pdt;
+    scs_config_init(&scs_cfg);
+    scs_pdt_init(&scs_pdt, SCS_PORT_TYPE_ETHERNET, SCS_HELLO_PADDED_MAX_SCA);
     static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
     uint8_t our_hw_mac[6];
     memset(our_hw_mac, 0, sizeof(our_hw_mac));
@@ -574,6 +1017,21 @@ int main(int argc, char **argv)
      * and the HELLO HW-MAC tail. This is the fix that lets VAX1's PEDRIVER
      * verify the channel and open an OVMX CSB. */
     ovmx_cluster_logical(ovmx_scssystemid, our_src_logical);
+
+    /* vms-7be: OVMX's OWN System Block, in its own configuration queue.
+     * "SCA requires that each node in a network maintain an SB for every node in
+     * the network. Consequently, a node must maintain an SB that describes its
+     * own CPU and operating system." (p. 2-16; Figure 2-10 on p. 2-18 shows
+     * VAX_1's own SB queued alongside the remote ones.) Local bookkeeping only:
+     * nothing here is transmitted. */
+    {
+        struct scs_sb_info self_info;
+        memset(&self_info, 0, sizeof(self_info));
+        memcpy(self_info.system_id, our_src_logical, SCS_SYSTEM_ID_LEN);
+        self_info.node_name = ovmx_node;
+        self_info.os_name = "OVMX";
+        scs_config_insert_sb(&scs_cfg, &self_info);
+    }
 
     if (emit_hello) {
         uint8_t hw_mac[6];
@@ -645,6 +1103,18 @@ int main(int argc, char **argv)
     static uint8_t pframe[SCS_HELLO_PADDED_MAX_FRAME];
     struct timespec last_hello = {0, 0};
 
+    /* vms-4071: everything the VC formation state machine needs to put its
+     * actions on the wire. Pointers, so the HW MAC resolved in the emit_hello
+     * block above stays live. */
+    struct scsd_vc_ctx vc_ctx;
+    vc_ctx.sock = sock;
+    vc_ctx.ifindex = (int)ifindex;
+    vc_ctx.hw_mac = our_hw_mac;
+    vc_ctx.src_logical = our_src_logical;
+    vc_ctx.scssystemid = ovmx_scssystemid;
+    vc_ctx.node_name = ovmx_node;
+    vc_ctx.cfg = &scs_cfg;
+
     while (!g_stop) {
         if (emit_hello) {
             struct timespec now;
@@ -669,6 +1139,45 @@ int main(int argc, char **argv)
             }
         }
 
+        /* --- vms-4071: the p. 2-14 formation reissue timer. "whenever a port
+         * driver sends a START or a STACK ... it starts a timer and expects a
+         * response. If the timer expires before any response is received ...
+         * SCA requires the port driver to reissue the START or STACK (whichever
+         * it last sent)", bounded by an "operating system dependent retry
+         * limit" after which "formation of the virtual circuit is to be
+         * abandoned". THIS IS NEW ON THE WIRE and fires only under loss; the
+         * OVMX_VC_NO_RETRY_LIMIT=1 kill-switch restores unbounded retry. */
+        if (do_connect) {
+            uint64_t now_ms = monotonic_ms();
+            unsigned retry_limit = scs_vc_retry_limit();
+            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+                struct peer_state *ps = &peers[i];
+                if (ps->pb == NULL) {
+                    continue;
+                }
+                if (!scs_vc_fsm_timer_expired(ps->pb, now_ms, SCS_VC_FORMATION_TIMEOUT_MS)) {
+                    continue;
+                }
+                enum scs_vc_action act = scs_vc_fsm_timeout(ps->pb, now_ms, retry_limit);
+                if (act == SCS_VC_ACT_SEND_START || act == SCS_VC_ACT_SEND_STACK) {
+                    if (scsd_vc_emit(&vc_ctx, ps, act)) {
+                        start_sent++;
+                        ps->start_replies++;
+                        log_ts(stdout);
+                        printf(" SCSD-I-VCREISSUE, formation timer expired -- %s to peer"
+                               " %02x:%02x:%02x:%02x:%02x:%02x (attempt %u, VC %s)\n",
+                               scs_vc_action_name(act),
+                               ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                               ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                               ps->pb->fsm.retries, scs_vc_state_name(ps->pb->vc_state));
+                        fflush(stdout);
+                    }
+                }
+                /* peer_round2_seen=0: a timer expiry is not a peer frame. */
+                scsd_vc_settle(&vc_ctx, ps, act, 0, &start_ack_sent);
+            }
+        }
+
         /* --- vms-691: retransmit OVMX's own unacked sequenced message (the
          * connect-request) on timeout, so a dropped CONNECT-REQUEST does not
          * stall the handshake. Rate-capped (VC_RETRANSMIT_MAX) to respect the
@@ -677,7 +1186,7 @@ int main(int argc, char **argv)
             uint64_t now_ms = monotonic_ms();
             for (int i = 0; i < OVMX_MAX_PEERS; i++) {
                 struct peer_state *ps = &peers[i];
-                if (!ps->in_use || ps->connected || !ps->connect_sent) {
+                if (ps->pb == NULL || ps->connected || !ps->connect_sent) {
                     continue;
                 }
                 if (ps->vc.retransmit_count >= VC_RETRANSMIT_MAX) {
@@ -688,10 +1197,10 @@ int main(int argc, char **argv)
                 }
                 struct scs_connect_params cp;
                 memset(&cp, 0, sizeof(cp));
-                memcpy(cp.dst_mac, ps->eth_mac, 6);
+                memcpy(cp.dst_mac, ps_port_addr(ps), 6);
                 memcpy(cp.src_mac, our_hw_mac, 6);
                 memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-                memcpy(cp.peer_logical, ps->logical, 6);
+                memcpy(cp.peer_logical, ps_sys_addr(ps), 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = 0;
                 /* vms-c6d: re-send the SAME outstanding sequenced message --
@@ -702,14 +1211,14 @@ int main(int argc, char **argv)
                 cp.incarnation = ps->incarnation;
                 uint8_t rframe[SCS_CONNECT_FRAME_LEN];
                 if (scs_connect_build_request(&cp, rframe) == 0 &&
-                    send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe, sizeof(rframe)) > 0) {
+                    send_frame_to(sock, (int)ifindex, ps_port_addr(ps), rframe, sizeof(rframe)) > 0) {
                     scs_vc_mark_retransmitted(&ps->vc, now_ms);
                     retransmit_sent++;
                     log_ts(stdout);
                     printf(" SCSD-I-RETX, retransmit CONNECT-REQUEST to peer"
                            " %02x:%02x:%02x:%02x:%02x:%02x (attempt %u)\n",
-                           ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
-                           ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
+                           ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                           ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
                            ps->vc.retransmit_count);
                     fflush(stdout);
                 }
@@ -764,6 +1273,37 @@ int main(int argc, char **argv)
         }
         const uint8_t *src_mac = buf + OFF_ETH_SRC;
 
+        /* --- vms-4071: THE IMPLIED ACK (p. 2-16). "what if, in the meantime,
+         * the remote node performs an operation that requires the circuit to be
+         * OPEN, and this operation results in a packet being sent to the local
+         * node? In this case, SCA states that the local node will treat that
+         * packet as an 'implied ACK' and simply mark the circuit as being
+         * OPEN." Only the SCS sequenced-message classes qualify -- 0x41 and the
+         * HELLO are datagrams (p. 2-40) and precede the circuit, so feeding
+         * them here would open circuits that are still forming. Dormant on a
+         * clean join: the member does not send circuit traffic before the
+         * dialogue finishes. */
+        if (do_connect && n >= 32 && scs_vc_is_circuit_packet(buf[30])) {
+            struct scs_pb *ipb = scs_config_find_pb(&scs_cfg, &scs_pdt, src_mac);
+            if (ipb != NULL && ipb->vc_state == SCS_VC_START_RECEIVED) {
+                struct peer_state *ips = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
+                enum scs_vc_action iact =
+                    scs_vc_fsm_recv(ipb, SCS_VC_EV_OTHER, monotonic_ms());
+                log_ts(stdout);
+                printf(" SCSD-I-VCIMPACK, implied ACK from peer"
+                       " %02x:%02x:%02x:%02x:%02x:%02x (opcode 0x%02x) -- VC %s\n",
+                       src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
+                       buf[30], scs_vc_state_name(ipb->vc_state));
+                fflush(stdout);
+                if (ips != NULL && ips->pb == ipb) {
+                    /* peer_round2_seen=0: no round-2 frame arrived, and none
+                     * ever will -- scsd_vc_ack_due() lets fsm.implied_acks
+                     * stand in for it so the dialogue does not deadlock. */
+                    scsd_vc_settle(&vc_ctx, ips, iact, 0, &start_ack_sent);
+                }
+            }
+        }
+
         /* --- vms-691: VC engine -- credit-ack every sequenced message the peer
          * sends us. Each 0x5b directory / 0x4b connect / 190-byte VC message
          * (send_seq != 0 at [20:22], abs 34) is answered by EXACTLY ONE 0x48
@@ -778,21 +1318,21 @@ int main(int argc, char **argv)
              buf[30] == SCS_MSGTYPE_SEQAPP || cls == SCS_CLASS_SCS_FIXED)) {
             uint16_t peer_send_seq = (uint16_t)(buf[34] | ((uint16_t)buf[35] << 8)); /* [20:22] */
             uint16_t peer_recv_ack = (uint16_t)(buf[32] | ((uint16_t)buf[33] << 8)); /* [18:20] */
-            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            struct peer_state *ps = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
             if (ps != NULL) {
                 if (!ps->vc.initialized) {
                     scs_vc_init(&ps->vc);
                 }
                 /* The peer's leading counter acks OVMX's own sequenced sends. */
                 scs_vc_note_peer_ack(&ps->vc, peer_recv_ack);
-                memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* src-logical, abs 24 */
+                ps_learn_sys_addr(&scs_cfg, ps, buf + OFF_HELLO_SRCLOG); /* src-logical, abs 24 */
 
                 if (scs_vc_owes_credit(peer_send_seq)) {
                     scs_vc_note_recv(&ps->vc, peer_send_seq);
                     uint8_t cframe[SCS_CREDIT_FRAME_LEN];
-                    if (scs_vc_build_credit_for(&ps->vc, ps->eth_mac, our_hw_mac,
-                                                our_src_logical, ps->logical, cframe) == 0 &&
-                        send_frame_to(sock, (int)ifindex, ps->eth_mac, cframe,
+                    if (scs_vc_build_credit_for(&ps->vc, ps_port_addr(ps), our_hw_mac,
+                                                our_src_logical, ps_sys_addr(ps), cframe) == 0 &&
+                        send_frame_to(sock, (int)ifindex, ps_port_addr(ps), cframe,
                                       sizeof(cframe)) > 0) {
                         ps->credit_sent++;
                         credit_sent++;
@@ -800,8 +1340,8 @@ int main(int argc, char **argv)
                         printf(" SCSD-I-CREDIT, 0x48 credit-return acked peer_seq=%u"
                                " to %02x:%02x:%02x:%02x:%02x:%02x (#%ld)\n",
                                peer_send_seq,
-                               ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
-                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
+                               ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                               ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
                                ps->credit_sent);
                         fflush(stdout);
                     }
@@ -823,7 +1363,7 @@ int main(int argc, char **argv)
                 mv.msgtype == SCS_MEMBER_MSGTYPE &&
                 (mv.remote_conid == OVMX_LOCAL_CONID ||
                  mv.local_conid == OVMX_LOCAL_CONID)) {
-                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                struct peer_state *ps = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
                 if (ps != NULL && ps->connected) {
                     /* Track the member's SYSAP send-msg# high-water (our ack
                      * target). Only category-0x01 config messages carry the
@@ -846,10 +1386,10 @@ int main(int argc, char **argv)
                         }
                         struct scs_member_params mp;
                         memset(&mp, 0, sizeof(mp));
-                        memcpy(mp.dst_mac, ps->eth_mac, 6);
+                        memcpy(mp.dst_mac, ps_port_addr(ps), 6);
                         memcpy(mp.src_mac, our_hw_mac, 6);
                         memcpy(mp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-                        memcpy(mp.peer_logical, ps->logical, 6);
+                        memcpy(mp.peer_logical, ps_sys_addr(ps), 6);
                         mp.remote_conid = ps->remote_conid;
                         mp.local_conid = OVMX_LOCAL_CONID;
                         mp.incarnation = ps->incarnation;
@@ -859,7 +1399,7 @@ int main(int argc, char **argv)
                         mp.sysap_ack_msg = mv.sysap_send_msg; /* ack this request */
                         uint8_t rframe[SCS_MEMBER_FRAME_LEN];
                         if (scs_member_build_response(&mp, buf, (size_t)n, rframe) == 0 &&
-                            send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe,
+                            send_frame_to(sock, (int)ifindex, ps_port_addr(ps), rframe,
                                           sizeof(rframe)) > 0) {
                             ps->cm_responses++;
                             cm_response_sent++;
@@ -888,11 +1428,11 @@ int main(int argc, char **argv)
          * not classify as SCS_CLASS_HELLO (length != 120), so it reaches here as
          * SCS_CLASS_OTHER and is detected by is_padded_hello(). */
         if (is_padded_hello(buf, (size_t)n)) {
-            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            struct peer_state *ps = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
             if (ps == NULL) {
                 continue;
             }
-            memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* src-logical, abs 24 */
+            ps_learn_sys_addr(&scs_cfg, ps, buf + OFF_HELLO_SRCLOG); /* src-logical, abs 24 */
             uint16_t rx_sca = (uint16_t)((size_t)n - 14u); /* total SCA content received */
             if (rx_sca > ps->peer_padded_sca) {
                 ps->peer_padded_sca = rx_sca;
@@ -928,7 +1468,7 @@ int main(int argc, char **argv)
              * the one-shot proactive padded b3 sent from the plain-HELLO path
              * below (guarded by padded_initiated). */
             uint8_t pad_resp_pfw = scs_hello_response_pfw(buf[30]); /* b3 -> b4 */
-            ps->channel_up = 1;
+            ps_channel_up(ps);
             struct timespec pnow;
             clock_gettime(CLOCK_MONOTONIC, &pnow);
             uint8_t ackframe[SCS_HELLO_FRAME_LEN];
@@ -959,11 +1499,11 @@ int main(int argc, char **argv)
          * accept both. */
         if (cls == SCS_CLASS_HELLO && n >= OFF_HELLO_DIRFLG + 2 &&
             (buf[OFF_HELLO_DIRFLG] != 0x00 || buf[OFF_HELLO_DIRFLG + 1] != 0x00)) {
-            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            struct peer_state *ps = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
             if (ps == NULL) {
                 continue;
             }
-            memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6);
+            ps_learn_sys_addr(&scs_cfg, ps, buf + OFF_HELLO_SRCLOG);
 
             /* vms-af2/vms-691/vms-9f3: the member advertises the node-incarnation
              * it attributes to OVMX in its directed-HELLO flag [78:80] (abs 92),
@@ -1022,7 +1562,7 @@ int main(int argc, char **argv)
                     send_frame_to(sock, (int)ifindex, src_mac, dframe, sizeof(dframe)) > 0) {
                     directed_sent++;
                     ps->directed_replies++;
-                    ps->channel_up = 1;
+                    ps_channel_up(ps);
                     ps->last_directed = dnow;
                     log_ts(stdout);
                     printf(" SCSD-I-DIRHELLO, replied directed HELLO (abs30 %02x->%02x)"
@@ -1033,7 +1573,7 @@ int main(int argc, char **argv)
                     fflush(stdout);
                 }
             } else {
-                ps->channel_up = 1;
+                ps_channel_up(ps);
             }
 
             /* vms-9f3: match the golden joiner (VAX2) -- once our directed
@@ -1092,7 +1632,9 @@ int main(int argc, char **argv)
                 long last_ms = ps->last_joiner_req.tv_sec * 1000L +
                                ps->last_joiner_req.tv_nsec / 1000000L;
                 if ((now_ms - last_ms) >= 1000) {
-                    if (send_joiner_connect_request(sock, (int)ifindex, ps,
+                    /* vms-398: name the NODE, not the circuit -- CONNECT picks
+                     * the OPEN virtual circuit via CONFIG_SYS (p. 2-47). */
+                    if (send_joiner_connect_request(sock, (int)ifindex, &scs_cfg, ps, NULL,
                                                     our_hw_mac, our_src_logical)) {
                         connect_req_sent++;
                         log_ts(stdout);
@@ -1116,7 +1658,7 @@ int main(int argc, char **argv)
             if (scs_start_parse(buf, (size_t)n, &sv) != 0) {
                 continue;
             }
-            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            struct peer_state *ps = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
             if (ps == NULL) {
                 continue;
             }
@@ -1131,7 +1673,15 @@ int main(int argc, char **argv)
              * Feeding START counters into the VC left OVMX acking a sequence the
              * VAX never sent post-reset, so the VAX rejected OVMX's directory
              * CONNECT-RESPONSE and retransmitted its 0x5b/0x7b request forever. */
-            memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* START src-logical, abs 24 */
+            /* vms-7be: a START describes the sending node, and its description is
+             * what the System Block is built from (p. 2-12). OVMX fills the SB
+             * with the one item its START parser resolves today -- the 48-bit SCS
+             * System Address -- and leaves the CPU type / hardware revision / OS
+             * name+version / 64-bit software incarnation fields unset rather than
+             * inventing them. (The 16-bit node-incarnation OVMX echoes on the wire
+             * is a NISCA field, NOT the 64-bit SCA software incarnation number of
+             * p. 2-16; conflating them would be a fabrication.) */
+            ps_learn_sys_addr(&scs_cfg, ps, buf + OFF_HELLO_SRCLOG); /* START src-logical, abs 24 */
 
             log_ts(stdout);
             printf(" SCSD-I-STARTRX, %s round=%u peer_seq=%u peer_sysid=%u\n",
@@ -1139,79 +1689,95 @@ int main(int argc, char **argv)
                    sv.is_ack ? 0 : sv.scssystemid);
             fflush(stdout);
 
-            struct scs_start_params sp;
-            memset(&sp, 0, sizeof(sp));
-            memcpy(sp.dst_mac, ps->eth_mac, 6);
-            memcpy(sp.src_mac, our_hw_mac, 6);
-            memcpy(sp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-            memcpy(sp.peer_logical, ps->logical, 6);
-            sp.scssystemid = ovmx_scssystemid;
-            strncpy(sp.node_name, ovmx_node, SCS_START_NODENAME_LEN);
-            sp.node_name[SCS_START_NODENAME_LEN] = '\0';
-            /* START is sequenced-message #1 for a fresh VC: send_seq=1 (from the
-             * state machine), leading counter recv_ack=0 -- GROUNDED joiner
-             * values (spec sec 4i.A: "Every joiner 0x41 frame carries
-             * send_seq=1, recv_ack=0"). Do NOT ack the member's send_seq here:
-             * the member's round-0 START may carry a large residual send_seq
-             * (its prior VC's continuation, e.g. 11974) which the joiner is
-             * receive-tolerant of but never echoes -- the handshake is driven
-             * by the config-round + incarnation echo, not by recv_ack. */
-            sp.send_seq = ps->vc.seq.send_seq;
-            sp.recv_ack = 0;
-            /* THE ESTABLISHED-JOIN GATE (spec sec 4i.B): stamp [22:24] with the
-             * node-incarnation the member advertised in its directed-HELLO
-             * [78:80]. Read off the wire above; 1 for a fresh contact. */
-            sp.incarnation = ps->incarnation ? ps->incarnation : 1;
+            /* ===== vms-4071: drive the VC FORMATION state machine =====
+             *
+             * This replaces the pair of unconditional scs_pb_set_vc_state()
+             * writes that used to stand in for the dialogue. Every transition
+             * now comes from scs_vc_fsm_recv()'s implementation of the p. 2-14
+             * acceptable-response table, and OVMX's emissions are whatever
+             * action the machine returns. See the scsd_vc_* helpers above for
+             * the config-round <-> START/STACK/ACK mapping and for the two
+             * declared wire-visible differences. */
+            uint64_t vc_now_ms = monotonic_ms();
+            enum scs_vc_event vc_ev = scs_vc_classify_round(sv.is_ack, sv.config_round);
 
-            if (!sv.is_ack) {
-                if (!ps->start_replied) {
-                    /* Send our round-0 then round-1 START (the joiner emits both
-                     * back-to-back; spec sec 4g phase-2 ordering #24/#25). */
-                    for (uint16_t rnd = 0; rnd <= 1; rnd++) {
-                        sp.config_round = rnd;
-                        uint8_t sframe[SCS_START_FRAME_LEN];
-                        if (scs_start_build(&sp, sframe) == 0 &&
-                            send_frame_to(sock, (int)ifindex, ps->eth_mac, sframe, sizeof(sframe)) > 0) {
-                            start_sent++;
-                            ps->start_replies++;
-                        }
-                    }
+            /* ---- PHASE 1: TRANSMIT. NOTHING BETWEEN THE TWO SENDS. ----
+             * The pre-vms-4071 code emitted round-0 and round-1 from a two-pass
+             * `for` loop with nothing at all between the sendto() calls. An
+             * earlier revision of this block put a log_ts+printf+fflush after
+             * EACH send, which measurably widened that gap: of four lab-2 runs
+             * of that revision (vaxlab-3, 2026-08-03, tags W1A/W1B/W5A/W6A) one
+             * -- W6A -- captured the peer's round-1 arriving BETWEEN OVMX's
+             * round-0 and round-1; neither pre-vms-4071 control run (W4A, W7A)
+             * showed that, both keeping the two sends adjacent. Same frames and
+             * the same order FROM OVMX either way, but a wider window is still a
+             * wire-timing change, so the logging is deferred to phase 2 below.
+             * Re-measured after the split: W8A is adjacent again.
+             *
+             * NOT UNIT-TESTED, and it cannot be through the SCSD_UNIT_TEST seam:
+             * this code is inside main()'s receive loop, which that seam renames
+             * away. tests/vmsscs/test_scsd_wire.c covers the helpers this block
+             * calls; the adjacency itself is held only by the lab captures named
+             * above. */
+            int sent_start = 0;
+            int sent_stack = 0;
+            enum scs_vc_state state_after_start = ps->pb->vc_state;
+
+            /* CLOSED -> START SENT. Trigger deliberately unchanged from vms-21e:
+             * OVMX issues its own START only when a peer identity-bearing frame
+             * arrives, never off a bare 46-byte ack (an ACK in START SENT is an
+             * unacceptable response and would abandon the circuit at once). */
+            if (vc_ev != SCS_VC_EV_ACK && ps->pb->vc_state == SCS_VC_CLOSED &&
+                !ps->pb->fsm.abandoned) {
+                if (scs_vc_fsm_send_start(ps->pb, vc_now_ms) == SCS_VC_ACT_SEND_START &&
+                    scsd_vc_emit(&vc_ctx, ps, SCS_VC_ACT_SEND_START)) {
+                    start_sent++;
+                    ps->start_replies++;
                     ps->start_replied = 1;
-                    log_ts(stdout);
-                    printf(" SCSD-I-STARTTX, sent round-0+round-1 START"
-                           " (sysid=%u node='%s' send_seq=%u recv_ack=%u incarnation=%u)\n",
-                           ovmx_scssystemid, ovmx_node, sp.send_seq, sp.recv_ack, sp.incarnation);
-                    fflush(stdout);
-                }
-            } else {
-                /* Peer's round-2 46-byte ack -> answer with ours; START done. */
-                if (!ps->start_acked) {
-                    uint8_t aframe[SCS_START_ACK_FRAME_LEN];
-                    if (scs_start_build_ack(&sp, aframe) == 0 &&
-                        send_frame_to(sock, (int)ifindex, ps->eth_mac, aframe, sizeof(aframe)) > 0) {
-                        start_ack_sent++;
-                        ps->start_acked = 1;
-                        /* vms-246 FIX: the START->VC transition. Per spec sec
-                         * 4i.A the phase-2 0x41 config-round counters are
-                         * SEPARATE from the SCS VC; both sides reset the VC to
-                         * send_seq=1/recv_seq=0 when START completes. Do it
-                         * ONCE here (guarded by !start_acked) -- NOT per frame.
-                         * Without it, recv_seq accumulated across formation, so
-                         * OVMX's 0x5b CONNECT-RESPONSE carried recv_ack too high
-                         * (observed 4 vs the golden joiner's 1) and the VAX
-                         * rejected the SCS$DIRECTORY connect and retransmitted. */
-                        scs_vc_reset_seq(&ps->vc);
-                        log_ts(stdout);
-                        printf(" SCSD-I-STARTDONE, START/config complete with peer"
-                               " %02x:%02x:%02x:%02x:%02x:%02x -- VC reset"
-                               " (send_seq=%u recv_seq=%u), awaiting 0x4b connect\n",
-                               ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
-                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5],
-                               ps->vc.seq.send_seq, ps->vc.seq.recv_seq);
-                        fflush(stdout);
-                    }
+                    sent_start = 1;
+                    state_after_start = ps->pb->vc_state;
                 }
             }
+
+            enum scs_vc_action vc_act = scs_vc_fsm_recv(ps->pb, vc_ev, vc_now_ms);
+
+            if (vc_act == SCS_VC_ACT_SEND_STACK) {
+                if (scsd_vc_emit(&vc_ctx, ps, SCS_VC_ACT_SEND_STACK)) {
+                    start_sent++;
+                    ps->start_replies++;
+                    sent_stack = 1;
+                }
+            }
+
+            /* ---- PHASE 2: LOG. Nothing below touches the wire. ---- */
+            if (sent_start) {
+                log_ts(stdout);
+                printf(" SCSD-I-STARTTX, sent round-0 START (VC %s)"
+                       " (sysid=%u node='%s' send_seq=%u recv_ack=0 incarnation=%u)\n",
+                       scs_vc_state_name(state_after_start), ovmx_scssystemid, ovmx_node,
+                       ps->vc.seq.send_seq, ps->incarnation ? ps->incarnation : 1);
+                fflush(stdout);
+            }
+            log_ts(stdout);
+            printf(" SCSD-I-VCFSM, %s received -> %s, VC %s\n",
+                   scs_vc_event_name(vc_ev), scs_vc_action_name(vc_act),
+                   scs_vc_state_name(ps->pb->vc_state));
+            fflush(stdout);
+            if (sent_stack) {
+                log_ts(stdout);
+                printf(" SCSD-I-STARTTX, sent round-1 STACK (VC %s)\n",
+                       scs_vc_state_name(ps->pb->vc_state));
+                fflush(stdout);
+            }
+            /* OVMX's round-2 ack is emitted by scsd_vc_settle(), exactly once
+             * per circuit, followed by the p. 2-21 open transition. By DEFAULT
+             * the trigger is the third argument below -- "the peer's round-2
+             * 46-byte frame is what we just processed" -- which is the identical
+             * trigger the pre-vms-4071 `else if (sv.is_ack)` branch used, so the
+             * fresh-join interleaving is unchanged. OVMX_VC_EARLY_ACK=1 moves it
+             * to the OPEN transition instead (scsd_vc_ack_due). */
+            scsd_vc_settle(&vc_ctx, ps, vc_act, scsd_vc_peer_round2(vc_ev),
+                           &start_ack_sent);
             continue;
         }
 
@@ -1233,7 +1799,7 @@ int main(int argc, char **argv)
             uint32_t lconid = (uint32_t)buf[68] | ((uint32_t)buf[69] << 8) |
                               ((uint32_t)buf[70] << 16) | ((uint32_t)buf[71] << 24);
             if (rconid == OVMX_JOINER_CONID && lconid != 0) {
-                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                struct peer_state *ps = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
                 if (ps != NULL && !ps->joiner_connected) {
                     ps->joiner_remote_conid = lconid;
                     ps->joiner_connected = 1;
@@ -1276,7 +1842,7 @@ int main(int argc, char **argv)
             struct scs_dir_view dv;
             if (scs_dir_parse(buf, (size_t)n, &dv) == 0 &&
                 (dv.is_dir_connect_request || dv.is_lookup_request)) {
-                struct peer_state *ps = peer_find_or_add(peers, src_mac);
+                struct peer_state *ps = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
                 if (ps == NULL) {
                     continue;
                 }
@@ -1284,7 +1850,7 @@ int main(int argc, char **argv)
                     scs_vc_init(&ps->vc);
                 }
                 ps->dir_seen = 1;
-                memcpy(ps->logical, buf + OFF_HELLO_SRCLOG, 6); /* src-logical, abs 24 */
+                ps_learn_sys_addr(&scs_cfg, ps, buf + OFF_HELLO_SRCLOG); /* src-logical, abs 24 */
                 /* Ensure recv_ack is current even if the credit block did not run
                  * (e.g. a 0x7b retransmit); note_recv only advances the high-water. */
                 scs_vc_note_recv(&ps->vc, dv.send_seq);
@@ -1297,10 +1863,10 @@ int main(int argc, char **argv)
                     ps->dir_remote_conid = dv.local_conid;
                     struct scs_dir_params dp;
                     memset(&dp, 0, sizeof(dp));
-                    memcpy(dp.dst_mac, ps->eth_mac, 6);
+                    memcpy(dp.dst_mac, ps_port_addr(ps), 6);
                     memcpy(dp.src_mac, our_hw_mac, 6);
                     memcpy(dp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-                    memcpy(dp.peer_logical, ps->logical, 6);
+                    memcpy(dp.peer_logical, ps_sys_addr(ps), 6);
                     dp.remote_conid = ps->dir_remote_conid;
                     dp.local_conid = SCS_DIR_OVMX_CONID;
                     /* vms-246 (§4i established-join): echo the member's current
@@ -1314,14 +1880,14 @@ int main(int argc, char **argv)
                     dp.send_seq = scs_seq_advance(&ps->vc.seq);
                     uint8_t eframe[SCS_DIR_ECHO_FRAME_LEN];
                     if (scs_dir_build_connect_echo(&dp, eframe) == 0) {
-                        send_frame_to(sock, (int)ifindex, ps->eth_mac, eframe, sizeof(eframe));
+                        send_frame_to(sock, (int)ifindex, ps_port_addr(ps), eframe, sizeof(eframe));
                     }
 
                     dp.recv_ack = ps->vc.seq.recv_seq;
                     dp.send_seq = scs_seq_advance(&ps->vc.seq);
                     uint8_t rframe[SCS_DIR_RESP_FRAME_LEN];
                     if (scs_dir_build_connect_response(&dp, rframe) == 0 &&
-                        send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe,
+                        send_frame_to(sock, (int)ifindex, ps_port_addr(ps), rframe,
                                       sizeof(rframe)) > 0) {
                         ps->dir_connected = 1;
                         dir_conn_resp_sent++;
@@ -1329,15 +1895,18 @@ int main(int argc, char **argv)
                         printf(" SCSD-I-DIRCONN, bound SCS$DIRECTORY: remote=0x%08X"
                                " local=0x%08X with peer %02x:%02x:%02x:%02x:%02x:%02x\n",
                                ps->dir_remote_conid, (unsigned)SCS_DIR_OVMX_CONID,
-                               ps->eth_mac[0], ps->eth_mac[1], ps->eth_mac[2],
-                               ps->eth_mac[3], ps->eth_mac[4], ps->eth_mac[5]);
+                               ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                               ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
                         fflush(stdout);
                         /* vms-d94: the post-START directory phase has begun --
                          * PROMPTLY open OUR VMS$VAXcluster connection to the
                          * member (clean-ref idx52) before its CM times out and
                          * re-issues START. */
+                        /* vms-398: the caller here names the NODE the START
+                         * completed with, not a circuit, so CONNECT selects the
+                         * virtual circuit itself via CONFIG_SYS (p. 2-47). */
                         if (ps->start_acked && !ps->joiner_connected &&
-                            send_joiner_connect_request(sock, (int)ifindex, ps,
+                            send_joiner_connect_request(sock, (int)ifindex, &scs_cfg, ps, NULL,
                                                         our_hw_mac, our_src_logical)) {
                             connect_req_sent++;
                             log_ts(stdout);
@@ -1353,10 +1922,10 @@ int main(int argc, char **argv)
                      * rest with the GROUNDED "NOT PRESENT HERE" marker. */
                     struct scs_dir_lookup_params lp;
                     memset(&lp, 0, sizeof(lp));
-                    memcpy(lp.dst_mac, ps->eth_mac, 6);
+                    memcpy(lp.dst_mac, ps_port_addr(ps), 6);
                     memcpy(lp.src_mac, our_hw_mac, 6);
                     memcpy(lp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-                    memcpy(lp.peer_logical, ps->logical, 6);
+                    memcpy(lp.peer_logical, ps_sys_addr(ps), 6);
                     lp.remote_conid = ps->dir_remote_conid ? ps->dir_remote_conid
                                                            : dv.local_conid;
                     lp.local_conid = SCS_DIR_OVMX_CONID;
@@ -1369,7 +1938,7 @@ int main(int argc, char **argv)
                     lp.affirmative = (memcmp(dv.name, "VMS$VAXcluster", 14) == 0);
                     uint8_t lframe[SCS_DIR_LOOKUP_FRAME_LEN];
                     if (scs_dir_build_lookup_response(&lp, lframe) == 0 &&
-                        send_frame_to(sock, (int)ifindex, ps->eth_mac, lframe,
+                        send_frame_to(sock, (int)ifindex, ps_port_addr(ps), lframe,
                                       sizeof(lframe)) > 0) {
                         ps->dir_lookups_answered++;
                         dir_lookup_sent++;
@@ -1399,7 +1968,7 @@ int main(int argc, char **argv)
             if (v.msgtype != SCS_MSGTYPE_SEQAPP || !v.has_conid) {
                 continue;
             }
-            struct peer_state *ps = peer_find_or_add(peers, src_mac);
+            struct peer_state *ps = peer_find_or_add(&scs_cfg, &scs_pdt, peers, src_mac);
             if (ps == NULL) {
                 continue;
             }
@@ -1418,10 +1987,10 @@ int main(int argc, char **argv)
                  * of going silent once bound -- a lost response then self-heals. */
                 struct scs_connect_params cp;
                 memset(&cp, 0, sizeof(cp));
-                memcpy(cp.dst_mac, ps->eth_mac, 6);
+                memcpy(cp.dst_mac, ps_port_addr(ps), 6);
                 memcpy(cp.src_mac, our_hw_mac, 6);
                 memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-                memcpy(cp.peer_logical, ps->logical, 6);
+                memcpy(cp.peer_logical, ps_sys_addr(ps), 6);
                 cp.local_conid = OVMX_LOCAL_CONID;
                 cp.remote_conid = v.local_conid;
                 cp.recv_ack = ps->vc.seq.recv_seq;
@@ -1429,7 +1998,7 @@ int main(int argc, char **argv)
                 cp.incarnation = ps->incarnation; /* §4i.B established-join echo (0 => fresh 1) */
                 uint8_t rframe[SCS_CONNECT_FRAME_LEN];
                 if (scs_connect_build_response(&cp, rframe) == 0 &&
-                    send_frame_to(sock, (int)ifindex, ps->eth_mac, rframe, sizeof(rframe)) > 0) {
+                    send_frame_to(sock, (int)ifindex, ps_port_addr(ps), rframe, sizeof(rframe)) > 0) {
                     ps->remote_conid = v.local_conid;
                     connect_resp_sent++;
                     int first = !ps->connected;
@@ -1499,18 +2068,19 @@ int main(int argc, char **argv)
         fprintf(stderr, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld PADDED-HELLO-SENT=%ld\n",
                 cm_config_frames, cm_response_sent, padded_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
-            if (!peers[i].in_use) {
+            if (peers[i].pb == NULL) {
                 continue;
             }
+            const uint8_t *pa = peers[i].pb->remote_port_addr;
             fprintf(stderr,
-                    "  PEER %02x:%02x:%02x:%02x:%02x:%02x channel=%s directed_replies=%ld"
+                    "  PEER %02x:%02x:%02x:%02x:%02x:%02x vc=%s channel=%s directed_replies=%ld"
                     " incarnation=%u start_replied=%d start_acked=%d dir_connected=%s"
                     " dir_lookups=%ld connect_sent=%d connected=%s"
                     " credit_sent=%ld retx=%u remote_conid=0x%08X"
                     " cm_config=%s cm_responses=%ld sysap_send=%u sysap_recv=%u"
                     " padded_replies=%ld padded_init=%d peer_padded_sca=%u\n",
-                    peers[i].eth_mac[0], peers[i].eth_mac[1], peers[i].eth_mac[2],
-                    peers[i].eth_mac[3], peers[i].eth_mac[4], peers[i].eth_mac[5],
+                    pa[0], pa[1], pa[2], pa[3], pa[4], pa[5],
+                    scs_vc_state_name(peers[i].pb->vc_state),
                     peers[i].channel_up ? "UP" : "down", peers[i].directed_replies,
                     peers[i].incarnation,
                     peers[i].start_replied, peers[i].start_acked,

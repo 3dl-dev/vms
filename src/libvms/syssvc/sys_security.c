@@ -23,7 +23,7 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$chkpro (vms-5b4) -- decides in this process, from the
+ * OVMX-USERSPACE: sys$chkpro (vms-f15) -- decides in this process, from the
  *     caller's own getuid()/getgid() and the protection word the caller
  *     itself passed in. There is no executive reference monitor, no rights
  *     list and no ACL evaluation, so the checker and the checked are the same

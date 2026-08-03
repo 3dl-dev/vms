@@ -571,11 +571,14 @@ int main(void)
 
     struct vms_procinfo selfinfo;
     uint32_t st = vms_kif_getjpi_self(&selfinfo);
+    /* negctl: bind-client-no-register */
     CHECK(st & 1, "the caller has a row in the executive's process table");
 
     uint32_t subject = 0;
     st = spawn_named(SUBJECT_NAME, &subject);
+    /* negctl-knockon: bind-client-no-register */
     CHECK(st & 1, "sys$creprc created the subject process");
+    /* negctl-knockon: bind-client-no-register */
     CHECK(subject != 0, "sys$creprc returned the subject's VMS process ID");
     if (!(st & 1) || subject == 0) {
         printf("=== test_syssvc_showproc: %d passed, %d failed ===\n",
@@ -819,6 +822,7 @@ int main(void)
                       "own UIC group");
                 CHECK(strstr(out, SETUP_FAIL_MARK) == NULL,
                       "the unprivileged by-PID caller was set up as intended");
+                /* negctl: proctab-crossgroup-identity */
                 CHECK(has_line(out, MSG_NOPRIV),
                       "SHOW PROCESS/ID on an out-of-group process reports "
                       "%SYSTEM-F-NOPRIV verbatim");
@@ -826,6 +830,7 @@ int main(void)
                       "... and NOT %SYSTEM-W-NONEXPR: selected by PID the "
                       "process IS found, and it is the identity read that "
                       "is refused");
+                /* negctl-knockon: proctab-crossgroup-identity */
                 CHECK(line_containing(out, "Process ID:") == NULL,
                       "the by-PID refusal printed no process header");
 

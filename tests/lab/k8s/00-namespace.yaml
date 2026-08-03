@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ovmx-lab
+  labels:
+    app.kubernetes.io/part-of: ovmx
+    ovmx.io/item: vms-a5c

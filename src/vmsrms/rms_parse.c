@@ -11,7 +11,11 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$parse (vms-5b4) -- expands the caller's filespec into
+ * $PARSE cited vms-5b4 until vms-fab, and it does NOT follow its rms_core.c
+ * siblings to vms-407: what it lacks is not record arbitration but a device and
+ * volume database to resolve against, which is vms-dv1's outcome.
+ *
+ * OVMX-USERSPACE: sys$parse (vms-dv1) -- expands the caller's filespec into
  *     the caller's NAM block using vmsfs_parse_filespec(). The device and
  *     directory it resolves come from the vmsfs translation tables in this
  *     process, not from an executive device or volume database.

@@ -226,6 +226,7 @@ static int run_child(int c2p_write, int p2c_read)
     } else {
         state = 0;
         st = do_readef(fd, CLUSTER_EFN_A, &state);
+        /* negctl: eflag-clref-noop */
         CHECK((st & 1) && !(state & (1u << (CLUSTER_EFN_A - COMMON_BASE))),
               "child: a common flag CLEARED BY THE PARENT reads clear here (A clears, B reads)");
 

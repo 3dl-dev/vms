@@ -13,7 +13,11 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # vms-32e grew the register negative-control suite 49->62 controls and added a
+    # per-control citation check, taking this job from ~17m (main) to ~20m+ on the
+    # same runner class. The 20m cap left under 3 minutes of margin; raised for
+    # headroom. Suite runtime growth is tracked in rd (vms-32e).
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -23,19 +27,49 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/cache/apt/archives
-          # Cache-key hygiene, not a correctness fix (vms-fb9 r7): strace was
-          # added to the install list below. restore-keys already falls back
-          # to any apt-${{ runner.os }}- prefix, so apt-get install would
-          # still succeed and fetch strace on a stale-key cache hit -- this
-          # bump only avoids re-downloading it every run.
-          key: apt-${{ runner.os }}-cmake-gcc-readline-strace
+          # Cache-key hygiene, not a correctness fix (vms-fb9 r7, vms-ecf r5):
+          # strace, then libssh-dev, were added to the install list below.
+          # restore-keys already falls back to any apt-${{ runner.os }}-
+          # prefix, so apt-get install would still succeed and fetch them on a
+          # stale-key cache hit -- this bump only avoids re-downloading them
+          # every run.
+          key: apt-${{ runner.os }}-cmake-gcc-readline-strace-libssh
           restore-keys: apt-${{ runner.os }}-
 
+      # libssh-dev IS NOT OPTIONAL FOR THIS JOB, and the reason is a gate
+      # rather than a feature (vms-ecf r5). This job runs ctest, which runs
+      # tests/integration/test_userspace_service_register.sh. That gate derives
+      # the universe of sys$ services from WHAT THE PRODUCT EXPORTS: it
+      # compiles every product .c file and reads the sys$ symbols out of the
+      # objects with nm, because both source-text readings of the universe were
+      # escaped together by one asm-label rename (vms-f26). src/vmsssh/vmssshd.c
+      # is a product source and includes <libssh/libssh.h>, so without this
+      # package the scan compiles 126 of 127 files and the gate REFUSES TO
+      # CERTIFY -- "a service could hide behind a build error", its own words.
+      #
+      # THAT REFUSAL IS CORRECT AND MUST NOT BE WEAKENED. It is the same
+      # property as the -Wno-* flag probe next to it: a price that cannot be
+      # computed must refuse, not certify. The legal fixes are to make the
+      # condition unreachable (this line) or to declare the exclusion in the
+      # gate's header; silently skipping the file, allowlisting it, or
+      # tolerating a short count are not among them. Removing libssh-dev here
+      # does not "skip an optional component" -- it turns the register red.
+      #
+      # WHAT IT DOES NOT DO, measured rather than assumed because the
+      # expectation going in was wrong: it does NOT add test entries. ctest -N
+      # reports 53 with libssh-dev and 53 without -- identical. src/vmsssh
+      # (the daemon) is the part CMake skips when libssh is missing and it
+      # registers no tests; tests/vmsssh (the term_mapping unit test) has no
+      # libssh dependency and is configured either way, deliberately
+      # (CMakeLists.txt:171). So this package changes exactly one thing that
+      # ctest can see: the register gate can compile 127 of 127 product
+      # sources instead of 126, and stops refusing.
       - name: Install build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            cmake gcc make libc6-dev libreadline-dev strace libcap2-bin
+            cmake gcc make libc6-dev libreadline-dev strace libcap2-bin \
+            libssh-dev
 
       - name: Cache CMake build
         uses: actions/cache@v4

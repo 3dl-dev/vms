@@ -350,6 +350,69 @@ static void test_null_guards(void)
     CHECK(scs_member_build_model(&mp, out) == -1, "build_model rejects oversized model");
 }
 
+/*
+ * vms-e1a, p. 2-35: "each packet contains source and destination CONIDs. These
+ * quantities come from the CDT used by SCS on the source node to describe the
+ * connection between the two SYSAPs. The source CONID comes from the local
+ * CONID field of that CDT; and the destination CONID comes from the remote
+ * CONID field of the CDT."
+ *
+ * The 190-byte VMS$VAXcluster class is the steady-state message class -- it is
+ * 2899 of the 3000 frames in formation-ci1-joinwindow.pcap and 18296 of 19930
+ * in vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap -- and in every one of
+ * those observed frames BOTH Con.IDs are non-zero. Pin that on all four things
+ * this module builds, so the pair can be sourced from a CDT's local_conid /
+ * remote_conid fields with no wire change (scs_cdt.h WIRE VERDICT).
+ */
+static uint32_t m_le32(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+static void test_both_conids_p235(void)
+{
+    struct scs_member_params mp;
+    uint8_t out[SCS_MEMBER_FRAME_LEN];
+
+    struct {
+        const char *what;
+        int (*build)(const struct scs_member_params *, uint8_t *);
+    } builders[3] = {
+        {"op 0x14 model", scs_member_build_model},
+        {"op 0x01 params", scs_member_build_params},
+        {"op 0x02 config", scs_member_build_config},
+    };
+
+    for (unsigned i = 0; i < 3; i++) {
+        joiner_params(&mp, 10, 10, 1, 0);
+        CHECK(builders[i].build(&mp, out) == 0, "build for the p.2-35 Con.ID check");
+        CHECK(m_le32(out + 64) == VAX1_VC_CONID,
+              "190-byte frame destination Con.ID == remote CDT's CONID (abs 64)");
+        CHECK(m_le32(out + 68) == VAX2_VC_CONID,
+              "190-byte frame source Con.ID == local CDT's CONID (abs 68)");
+        CHECK(m_le32(out + 64) != 0 && m_le32(out + 68) != 0,
+              "190-byte frame carries BOTH Con.IDs non-zero (p. 2-35)");
+        (void)builders[i].what;
+    }
+
+    /* The 0x81 response to a member transaction carries the pair too. */
+    joiner_params(&mp, 20, 21, 5, 4);
+    uint8_t req[SCS_MEMBER_FRAME_LEN];
+    CHECK(scs_member_build_config(&mp, req) == 0, "build a stand-in request frame");
+    CHECK(scs_member_build_response(&mp, req, sizeof(req), out) == 0, "build_response ok");
+    CHECK(m_le32(out + 64) == VAX1_VC_CONID && m_le32(out + 68) == VAX2_VC_CONID,
+          "0x81 response carries BOTH Con.IDs from the CDT's pair (p. 2-35)");
+
+    /* The parser reads the same two fields back, so a receiver can use the
+     * destination Con.ID to find its CDT (p. 2-29) and the source Con.ID to
+     * check the sender (p. 2-35). */
+    struct scs_member_view mv;
+    CHECK(scs_member_parse(out, sizeof(out), &mv) == 0, "parse our own 0x81 response");
+    CHECK(mv.remote_conid == VAX1_VC_CONID && mv.local_conid == VAX2_VC_CONID,
+          "parsed Con.ID pair round-trips");
+}
+
 int main(void)
 {
     test_op14_byte_exact();
@@ -358,6 +421,7 @@ int main(void)
     test_default_model_is_ovmx();
     test_parse_classification();
     test_response_echoes_real_checksum();
+    test_both_conids_p235();
     test_null_guards();
 
     if (failures == 0) {

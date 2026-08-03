@@ -106,6 +106,7 @@ static int run_child(int cfd, int c2p_write, int p2c_read)
     enq_cr_nq.flags = LCK_M_NOQUEUE;
     strncpy(enq_cr_nq.resnam, "MPROCLOCK1", sizeof(enq_cr_nq.resnam));
     ioctl(cfd, VMS_IOCTL_ENQ, &enq_cr_nq);
+    /* negctl: lock-compat-cr-ex */
     CHECK(enq_cr_nq.status == SS_NOTQUEUED,
           "child: CR+NOQUEUE denied while parent holds EX (EX blocks CR)");
 
@@ -123,6 +124,7 @@ static int run_child(int cfd, int c2p_write, int p2c_read)
      * callers anywhere in the checkout before this. */
     uint32_t granted_mode = 0;
     uint32_t getlki_st = vms_kif_getlki(enq_cr.lkid, &granted_mode, NULL, NULL, NULL);
+    /* negctl-knockon: lock-compat-cr-ex */
     CHECK(getlki_st == SS_NORMAL && granted_mode == LCK_K_NLMODE,
           "child: queued CR request still ungranted (NL) per GETLKI");
 
@@ -249,6 +251,7 @@ int main(void)
     uint32_t p_granted_mode = 0, p_requested_mode = 0;
     uint32_t getlki_st = vms_kif_getlki(msg.lkid, &p_granted_mode,
                                          &p_requested_mode, NULL, NULL);
+    /* negctl-knockon: lock-compat-cr-ex */
     CHECK(getlki_st == SS_NORMAL && p_granted_mode == LCK_K_NLMODE
               && p_requested_mode == LCK_K_CRMODE,
           "parent: cross-process GETLKI sees child's queued CR request");
@@ -259,6 +262,7 @@ int main(void)
     uint64_t d_astadr = 0, d_astprm = 0;
     uint8_t d_acmode = 0;
     int ar = vms_kif_deliverast(&d_astadr, &d_astprm, &d_acmode);
+    /* negctl-knockon: lock-compat-cr-ex */
     CHECK(ar == 0 && d_astadr == AST_SENTINEL && d_astprm == parent_lkid,
           "parent: received blocking AST (astadr=sentinel, astprm=own lkid)");
 

@@ -15,21 +15,33 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$gettim (vms-5b4) -- clock_gettime(CLOCK_REALTIME)
+ * THE SEVEN SERVICES HERE CITE TWO ITEMS, NOT ONE (vms-fab). They all used to
+ * cite vms-5b4, the item that BUILT this register; it is closed and owned none
+ * of them. They divide by what their answer depends on:
+ *
+ *   vms-642  the four that want a system the executive owns -- a system-time
+ *            cell two processes can both see, and a timer queue something other
+ *            than this image can fire.
+ *   vms-f90  the three that transform the caller's own arguments and read no
+ *            system state, alongside $FAO and the other compute-only services.
+ *            Whether OpenVMS answers those in process context is UNPINNED; that
+ *            item's outcome is the pin, not a rewrite.
+ *
+ * OVMX-USERSPACE: sys$gettim (vms-642) -- clock_gettime(CLOCK_REALTIME)
  *     converted to VMS 100ns ticks; the host clock, not an executive EXE$GQ_
  *     system time cell, so no system-time base can be set or observed.
- * OVMX-USERSPACE: sys$getutc (vms-5b4) -- the same host clock read.
- * OVMX-USERSPACE: sys$numtim (vms-5b4) -- converts the caller's quadword (or
+ * OVMX-USERSPACE: sys$getutc (vms-642) -- the same host clock read.
+ * OVMX-USERSPACE: sys$numtim (vms-f90) -- converts the caller's quadword (or
  *     the host clock when timadr is NULL) into the caller's timbuf.
- * OVMX-USERSPACE: sys$asctim (vms-5b4) -- formats into the caller's buffer
+ * OVMX-USERSPACE: sys$asctim (vms-f90) -- formats into the caller's buffer
  *     from the compiled-in months[] table in this file.
- * OVMX-USERSPACE: sys$bintim (vms-5b4) -- parses the caller's string against
+ * OVMX-USERSPACE: sys$bintim (vms-f90) -- parses the caller's string against
  *     that same compiled-in table.
- * OVMX-USERSPACE: sys$setimr (vms-5b4) -- arms a POSIX timer recorded in the
+ * OVMX-USERSPACE: sys$setimr (vms-642) -- arms a POSIX timer recorded in the
  *     process-local timer_table[] in this file. There is no executive timer
  *     queue, so the request dies with the process and nothing else can see it.
- * OVMX-USERSPACE: sys$cantim (vms-5b4) -- cancels entries in that same
- *     process-local table, so it can only ever cancel this process's timers.
+ * OVMX-USERSPACE: sys$cantim (vms-642) -- cancels entries in that same
+ *     process-local table, so the timers it cancels are this process's.
  */
 
 #include <stdint.h>

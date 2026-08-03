@@ -217,17 +217,53 @@ if(BUILD_TESTS)
     add_test(NAME kif_caller_census
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
+    # TIMEOUT raised from 120 (vms-e2b): the census now configures cmake and
+    # preprocesses every product translation unit instead of globbing source
+    # text. ~9s on workshop; the headroom is for slower CI runners.
     set_tests_properties(kif_caller_census PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 120)
+        LABELS "integration;authenticity" TIMEOUT 600)
 
     # ... and the evasions, run against a sandbox copy of the tree. Each must
-    # drive the census RED for its own specific reason, and two GREEN controls
-    # pin the reachability rule from the other side.
+    # drive the census RED for its own specific reason, and four GREEN controls
+    # pin the rules from the other side — including that a function reached only
+    # through a LIVE callback table still counts (vms-c13).
     add_test(NAME kif_caller_census_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_kif_caller_census_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
+    # TIMEOUT raised from 300 (vms-e2b): each control runs a gate that
+    # configures cmake and preprocesses every product translation unit.
+    # MEASURED 3m29s on workshop at 29 controls; 37 after vms-8cc added the
+    # citation controls, 43 after vms-c13 added the reachability ones.
     set_tests_properties(kif_caller_census_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 300)
+        LABELS "integration;authenticity" TIMEOUT 1800)
+
+    # The citation ledger is fresh (vms-8cc). tracking/rd-citations.tsv is what
+    # lets the vms_kif caller census above check that an exemption's cited rd
+    # item EXISTS and is OPEN without reaching rd -- rd is nostr-backed and
+    # unavailable in CI, which is why that gate shape-checked the id and
+    # nothing more until now. (The userspace service register below does NOT
+    # read the ledger; wiring it is rd vms-fab. Do not read the census's
+    # coverage as the register's.)
+    #
+    # Committed derived state has one failure mode and it is the whole defect
+    # one level up: the ledger goes stale and the gate then certifies a closed
+    # item as open. Only this test can see that, and only where rd is
+    # reachable, so it EXITS 77 and ctest reports SKIPPED -- never PASSED -- on
+    # a host without rd.
+    #
+    # THE SKIP IS A STANDING RESIDUAL, not a clean result: under project rule 7
+    # a skipped test is a failing test, and this one skips on every CI run.
+    # What survives the skip is its self-controls and its ledger-FLOOR controls
+    # -- 16 of them, all rd-free -- so a skipped run still proves the
+    # comparator is not stuck at green and still proves the checker refuses an
+    # empty ledger. What does NOT survive is the part that needs rd: the live
+    # comparison and the independent read.
+    add_test(NAME rd_citations_fresh
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_rd_citations_fresh.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(rd_citations_fresh PROPERTIES
+        LABELS "integration;authenticity;needs-rd"
+        SKIP_RETURN_CODE 77 TIMEOUT 300)
 
     # Userspace service register (vms-5b4): every sys$ service either reaches
     # the executive or is declared, against an item, as answering from
@@ -235,21 +271,46 @@ if(BUILD_TESTS)
     # ask "is there another implementation of the same public service the
     # product reaches INSTEAD" — a facade is invisible to a gate that only
     # counts calls to the real thing. Source scan.
+    #
+    # NOT a pure source scan any more (vms-f26): it COMPILES every product .c
+    # file it scans and reads the exported sys$ symbols out of the objects with
+    # nm, because the source-text readings of the universe were all escaped
+    # together by an asm-label rename that left the object symbol-identical.
+    # One compile per product .c file per run, hence the raised timeout.
+    #
+    # AND IT RUNS CMAKE ITSELF (vms-c19). Which files it reads is no longer a
+    # directory glob: it configures this project into a throwaway directory and
+    # unions the glob with the translation units compile_commands.json says the
+    # product compiles, because a definition RELOCATED out of src/ and tools/
+    # left every reading at once while CMake went on shipping it. Running this
+    # gate therefore needs cmake on PATH; ctest already implies that. Measured
+    # cost of the extra configure: 0.6s per run.
     add_test(NAME userspace_service_register
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(userspace_service_register PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 120)
+        LABELS "integration;authenticity" TIMEOUT 300)
 
     # ...and the evasions, on a sandbox copy of the tree. The GREEN controls
     # carry as much weight as the RED ones here: the register's design rests on
     # firing for an undeclared impostor and NOT for legitimate pure computation,
     # and on leaving Rule 10's second answer (delete the service outright) open.
+    # Each control runs the whole gate, and the gate now compiles the tree for
+    # its symbol scan, so the wall clock is (controls x compiles). Measured on
+    # an 8-core box: 99s for 34 controls before the symbol scan, 180s for 39
+    # after. Re-measured on a 16-core box for vms-c19: 328s for 44 controls
+    # before, 387s for 49 after -- the added cmake configure per gate run costs
+    # about 0.4s per control, and the control COUNT is what moved. Re-measured
+    # again on the same 16-core box for vms-32e: 390s for 49 controls, 514s for
+    # 62 -- 13 citation controls added, and the per-control cost is unchanged.
+    # The timeout is set well clear of that because a CI runner has fewer cores
+    # and the compiles are what parallelise; it is raised with the control
+    # count, not to accommodate a slowdown.
     add_test(NAME userspace_service_register_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(userspace_service_register_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 300)
+        LABELS "integration;authenticity" TIMEOUT 1500)
 
     # Rule 10/11 standing gate (vms-fb9): a process does not name its own
     # terminal, and SHOW DEVICE does not invent device rows. Keeps the
@@ -269,6 +330,28 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(terminal_identity_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
+
+    # Rule 10/11 standing gate (vms-cb5): the DERIVED census of every writer
+    # and reader of the identity environment variables, across src/ AND
+    # tools/. The gate above scans src/ only, and both the reachable writer
+    # (tools/vms_login.c) and the single surviving reader (tools/vms_mail.c)
+    # live in tools/ -- which is how a security review came to state, and
+    # nearly ship, "written ONLY by vmssshd". A prose census drifts silently;
+    # this one fails loudly, and prints itself either way.
+    add_test(NAME env_identity_census
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_env_identity_census.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(env_identity_census PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # ...and the evasions. Includes the two controls that matter most for a
+    # gate whose passing output is a LIST: that tools/ is genuinely scanned,
+    # and that a variable named only in a comment cannot enter the census.
+    add_test(NAME env_identity_census_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_env_identity_census_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(env_identity_census_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 180)
 
     # The BEHAVIOURAL half of the same rule (vms-fb9 round 2), and the one
     # that actually carries the invariant. The two source scans above check

@@ -1,0 +1,81 @@
+# One StatefulSet replica == one complete, isolated 2-node VMScluster (vms-a5c).
+#
+# Scale to get parallel lab capacity:  kubectl -n ovmx-lab scale sts/vaxlab --replicas=3
+# Each replica clones its own disks from the golden snapshot and builds its own
+# br0 + taps inside its own pod netns, so replicas are invisible to each other
+# and to the cluster LAN. SCSSYSTEMIDs 1025/1026/1027 therefore repeat across
+# replicas by design — do not "fix" that by allocating new ones.
+apiVersion: v1
+kind: Service
+metadata:
+  name: vaxlab
+  namespace: ovmx-lab
+spec:
+  clusterIP: None          # headless: vaxlab-0.vaxlab.ovmx-lab.svc.cluster.local
+  selector:
+    app: vaxlab
+  ports:
+    - { name: dz-vax1, port: 2001, targetPort: 2001 }
+    - { name: dz-vax2, port: 2002, targetPort: 2002 }
+    - { name: dz-vax3, port: 2003, targetPort: 2003 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vaxlab
+  namespace: ovmx-lab
+  labels:
+    ovmx.io/item: vms-a5c
+spec:
+  serviceName: vaxlab
+  replicas: 1
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      app: vaxlab
+  template:
+    metadata:
+      labels:
+        app: vaxlab
+    spec:
+      # The PV's nodeAffinity already forces this, stated here so a scheduling
+      # failure reads as "wrong node" rather than "volume node conflict".
+      nodeSelector:
+        kubernetes.io/hostname: k3s-worker
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: vaxlab
+          image: 192.168.2.43:30500/ovmx-vaxlab:3
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: LAB_ROOT
+              value: /lab
+            - name: NODES
+              value: "vax1 vax2"        # add vax3 for the diskless satellite (vms-ce7)
+            - name: GOLDEN_SUFFIX
+              value: ".3node-golden.bak"
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]        # bridge + tap creation in the pod netns
+            privileged: false
+          resources:
+            # SIMH runs one thread per emulated VAX. 'set idle=vms' (see
+            # entrypoint.sh) makes an idle VMS node cost almost nothing; without
+            # it each node would sit at 100% of a core forever.
+            requests: { cpu: "500m",  memory: "512Mi" }
+            limits:   { cpu: "2500m", memory: "2Gi" }
+          volumeMounts:
+            - { name: vax-lab, mountPath: /lab }
+            - { name: tun,     mountPath: /dev/net/tun }
+      volumes:
+        - name: vax-lab
+          persistentVolumeClaim:
+            claimName: vax-lab-pvc
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice

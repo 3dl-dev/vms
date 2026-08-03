@@ -464,6 +464,22 @@ const char *scs_vc_state_name(enum scs_vc_state state);
  * (scs_config_find_sb, scs_config_find_pb, pb->sb, pb->next, ...). No new
  * opaque-handle type is introduced.
  *
+ * REACHABILITY (measured, not asserted -- the claim above this block about the
+ * rest of the module applies here too):
+ *   scs_config_select_vc / scs_config_sys
+ *       LIVE. src/vmsscs/scsd.c's send_joiner_connect_request() takes either a
+ *       named circuit or none, and BOTH of its call sites in the daemon pass
+ *       none -- so every joiner CONNECT-REQUEST OVMX transmits picks its
+ *       virtual circuit through scs_config_select_vc(), which is CONFIG_SYS
+ *       plus the p. 2-47 OPEN scan. If no circuit is OPEN, the daemon logs
+ *       SCSD-E-NOVC and sends NOTHING (rule 9 / INV-6: no invented circuit).
+ *       tests/vmsscs/test_scsd_wire.c drives that production sender.
+ *   scs_config_path
+ *       LIVE, on the same path twice over: the OPEN scan inside
+ *       scs_config_select_vc() examines each Path Block through it, and the
+ *       daemon reads the chosen circuit's remote port address and System Block
+ *       back through it to build the frame.
+ *
  * HONESTY ON UNPOPULATED FIELDS (do not invent a value, CLAUDE.md rule 8 /
  * INV-6 spirit): scs_sb has NEVER had a max-datagram-size or max-message-size
  * field -- grep src/vmsscs for "datagram" before this file and there is
@@ -480,6 +496,9 @@ const char *scs_vc_state_name(enum scs_vc_state state);
  * today, and would read back populated the moment attach_formative_sb gets a
  * real caller (tracked separately, vms-17f is the closest existing item for
  * wiring gaps of this kind; this module does not fix that wiring).
+ * test_config_sys_does_not_invent_unknown_fields() queries an SB built the way
+ * scsd.c builds one and asserts all three read back ABSENT, so the "do not
+ * invent" rule is executable rather than a comment.
  */
 enum scs_config_sys_have {
     SCS_CONFIG_SYS_HAVE_MAX_DATAGRAM     = 1u << 0, /* NEVER set: no such SB field exists (see above) */
@@ -541,7 +560,10 @@ int scs_config_path(const struct scs_pb *pb, struct scs_config_path_info *out);
  * of the first Path Block queued to the System Block for the specified node
  * ... [and] examines each Path Block in turn until it finds one whose virtual
  * circuit is OPEN". Looks up the SB by `system_id` (the CONFIG_SYS step) and
- * scans its PB queue for the first PB with vc_state == SCS_VC_OPEN.
+ * examines its PB queue through scs_config_path() for the first PB with
+ * vc_state == SCS_VC_OPEN. This is the selection scsd.c's joiner
+ * CONNECT-REQUEST performs on every join (see the REACHABILITY note above);
+ * a NULL return means CONNECT sends nothing, it does not fall back.
  *
  * OVMX DESIGN CHOICE / DOCUMENTED OMISSION (labeled per rule 8, vms-398
  * constraint): the book also describes a circuit-type preference (e.g. CI

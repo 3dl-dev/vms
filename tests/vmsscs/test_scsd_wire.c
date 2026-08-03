@@ -31,6 +31,13 @@
  *       the degraded frame is asserted, the failure is asserted to be LOGGED (not
  *       silent), and the path is shown unreachable at the shipped pool sizes.
  *
+ * ALSO PINNED HERE (vms-398): CONNECT's choice of virtual circuit. The daemon's
+ * CONNECT-REQUEST call sites name a NODE, not a circuit, so the circuit is
+ * selected from the configuration database (CONFIG_SYS + the p. 2-47 OPEN scan).
+ * test_connect_selects_the_open_vc_via_config_sys() drives that production
+ * sender and asserts the selection is wire-invisible, refuses honestly when no
+ * circuit is OPEN, and follows circuit STATE rather than peer-slot identity.
+ *
  * SCOPE HONESTY: this exercises SCSD's frame-assembly path, not its receive loop
  * or socket setup. A lab join capture is the end-to-end proof and is a separate
  * activity; nothing here claims to be one.
@@ -135,8 +142,13 @@ static size_t capture_joiner_request(const uint8_t mac[6], const uint8_t sysid[6
     ps_learn_sys_addr(&w.cfg, ps, sysid);
     scsd_test_frames = 0;
     scsd_test_last_len = 0;
-    if (!send_joiner_connect_request(7 /* fd never touched under the seam */, 1, ps,
-                                     our_hw_mac, our_logical)) {
+    /* vms-398: these address-plumbing captures NAME the circuit (ps->pb), which
+     * is exactly what the sender used before CONNECT gained the p. 2-47
+     * selection step -- so what they assert is unchanged. The selection path
+     * (named_vc == NULL, the one the daemon uses) is covered separately by
+     * test_connect_selects_the_open_vc_via_config_sys(). */
+    if (!send_joiner_connect_request(7 /* fd never touched under the seam */, 1, &w.cfg, ps,
+                                     ps->pb, our_hw_mac, our_logical)) {
         return 0;
     }
     memcpy(out, scsd_test_last_frame, scsd_test_last_len);
@@ -256,7 +268,7 @@ static void test_undiscovered_system_address_is_zero(void)
     CHECK(memcmp(ps_port_addr(ps), mac, 6) == 0, "port address not recorded");
 
     scsd_test_frames = 0;
-    CHECK(send_joiner_connect_request(7, 1, ps, our_hw_mac, our_logical) == 1,
+    CHECK(send_joiner_connect_request(7, 1, &w.cfg, ps, ps->pb, our_hw_mac, our_logical) == 1,
           "sender refused to build a frame");
     if (peer_logical_offset > 0 && scsd_test_frames == 1) {
         CHECK(is_zero6(scsd_test_last_frame + peer_logical_offset),
@@ -352,7 +364,7 @@ static void test_shared_sb_aliases_the_peer_logical(void)
 
     /* And it does reach the wire from port A. */
     scsd_test_frames = 0;
-    CHECK(send_joiner_connect_request(7, 1, pa, our_hw_mac, our_logical) == 1,
+    CHECK(send_joiner_connect_request(7, 1, &w.cfg, pa, pa->pb, our_hw_mac, our_logical) == 1,
           "sender refused to build a frame for port A");
     if (peer_logical_offset > 0 && scsd_test_frames == 1) {
         CHECK(memcmp(scsd_test_last_frame + peer_logical_offset, sid2, 6) == 0,
@@ -449,7 +461,7 @@ static void test_sb_exhaustion_is_visible_and_unreachable(void)
           "exhausted SB pool still produced a system address");
 
     scsd_test_frames = 0;
-    CHECK(send_joiner_connect_request(7, 1, ps, our_hw_mac, our_logical) == 1,
+    CHECK(send_joiner_connect_request(7, 1, &x.cfg, ps, ps->pb, our_hw_mac, our_logical) == 1,
           "sender refused to build a frame");
     if (peer_logical_offset > 0 && scsd_test_frames == 1) {
         CHECK(is_zero6(scsd_test_last_frame + peer_logical_offset),
@@ -936,6 +948,146 @@ static void test_vc_reissue_and_abandon_through_the_daemon(void)
           "the re-armed Path Block cannot issue a fresh START");
 }
 
+/*
+ * vms-398: the DAEMON's CONNECT really does select its virtual circuit from the
+ * configuration database (p. 2-47), rather than reaching through the peer slot.
+ *
+ * Both of scsd.c's CONNECT-REQUEST call sites pass named_vc == NULL -- "the
+ * caller did not name a circuit" -- so this drives the production sender the
+ * production way and asserts three separate things:
+ *   1. with an OPEN circuit, selection produces byte-for-byte the frame that
+ *      naming the circuit produces (the wiring is wire-invisible);
+ *   2. with no OPEN circuit for the node, NOTHING is transmitted and the refusal
+ *      is LOGGED (CLAUDE.md rule 9 / INV-6: no silent fake success);
+ *   3. selection follows the VIRTUAL-CIRCUIT STATE, not the peer slot: asked via
+ *      a peer whose own Path Block is not OPEN, CONNECT sends over the node's
+ *      OTHER, open Path Block.
+ *
+ * REACHABILITY of case 3: it needs the two-Ethernet-ports/one-System-ID node
+ * that test_shared_sb_aliases_the_peer_logical() also documents; the reference
+ * lab has never presented one, so this shape is formable by SCSD but unobserved.
+ * Cases 1 and 2 are the shapes the daemon takes on every join.
+ */
+static void test_connect_selects_the_open_vc_via_config_sys(void)
+{
+    uint8_t mac[6], sid[6];
+    mac_of(0x91, mac);
+    sysid_of(1329, sid);
+
+    /* --- 1. OPEN circuit: selecting == naming, byte for byte. --- */
+    struct world w;
+    world_init(&w);
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac);
+    CHECK(ps != NULL, "peer refused a slot");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sid);
+    CHECK(scs_pb_open(&w.cfg, ps->pb) == SCS_OPEN_NEW_SB, "join was not NEW_SB");
+    /* The daemon resets the SCS VC counters when START completes, immediately
+     * before it opens the Path Block and sends this CONNECT-REQUEST; do the same
+     * so the two captures below differ only in how the circuit was chosen. */
+    scs_vc_reset_seq(&ps->vc);
+
+    uint8_t named_frame[SCA_FRAME_MAX], named_dst[6];
+    scsd_test_frames = 0;
+    CHECK(send_joiner_connect_request(7, 1, &w.cfg, ps, ps->pb, our_hw_mac, our_logical) == 1,
+          "sender refused a NAMED open circuit");
+    size_t named_len = scsd_test_last_len;
+    memcpy(named_frame, scsd_test_last_frame, named_len);
+    memcpy(named_dst, scsd_test_last_dst, 6);
+
+    scsd_test_frames = 0;
+    CHECK(send_joiner_connect_request(7, 1, &w.cfg, ps, NULL, our_hw_mac, our_logical) == 1,
+          "CONNECT with no named circuit found no OPEN virtual circuit for an open node");
+    CHECK(scsd_test_frames == 1, "selection path transmitted %u frames, expected 1",
+          scsd_test_frames);
+    CHECK(scsd_test_last_len == named_len,
+          "selected-circuit frame is %zu bytes, named-circuit frame is %zu",
+          scsd_test_last_len, named_len);
+    CHECK(named_len > 0 && scsd_test_last_len == named_len &&
+              memcmp(scsd_test_last_frame, named_frame, named_len) == 0,
+          "CONFIG_SYS selection changed the CONNECT-REQUEST bytes");
+    CHECK(memcmp(scsd_test_last_dst, named_dst, 6) == 0 &&
+              memcmp(scsd_test_last_dst, mac, 6) == 0,
+          "selected circuit was not addressed to the peer's port");
+    if (peer_logical_offset > 0) {
+        CHECK(memcmp(scsd_test_last_frame + peer_logical_offset, sid, 6) == 0,
+              "selected circuit did not carry the node's System Address");
+    }
+
+    /* --- 2. No OPEN circuit: refuse, transmit nothing, and SAY SO. --- */
+    struct world f;
+    world_init(&f);
+    uint8_t mac2[6];
+    mac_of(0x92, mac2);
+    struct peer_state *forming = peer_find_or_add(&f.cfg, &f.pdt, f.peers, mac2);
+    CHECK(forming != NULL, "forming peer refused a slot");
+    if (forming == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&f.cfg, forming, sid);
+    scs_pb_set_vc_state(forming->pb, SCS_VC_START_SENT); /* still forming, never OPEN */
+
+    char logbuf[512];
+    logbuf[0] = '\0';
+    int rc = 0;
+    scsd_test_frames = 0;
+    FILE *cap = tmpfile();
+    if (cap != NULL) {
+        int saved_fd = dup(STDERR_FILENO);
+        fflush(stderr);
+        dup2(fileno(cap), STDERR_FILENO);
+        rc = send_joiner_connect_request(7, 1, &f.cfg, forming, NULL, our_hw_mac, our_logical);
+        fflush(stderr);
+        dup2(saved_fd, STDERR_FILENO);
+        close(saved_fd);
+        rewind(cap);
+        size_t got = fread(logbuf, 1, sizeof(logbuf) - 1, cap);
+        logbuf[got] = '\0';
+        fclose(cap);
+    } else {
+        rc = send_joiner_connect_request(7, 1, &f.cfg, forming, NULL, our_hw_mac, our_logical);
+    }
+    CHECK(rc == 0, "CONNECT invented a circuit for a node with none OPEN");
+    CHECK(scsd_test_frames == 0,
+          "CONNECT transmitted %u frames with no OPEN virtual circuit", scsd_test_frames);
+    CHECK(strstr(logbuf, "SCSD-E-NOVC") != NULL,
+          "CONNECT refused SILENTLY (CLAUDE.md rule 9 / INV-6); stderr was: '%s'", logbuf);
+
+    /* --- 3. Selection follows the circuit state, not the peer slot. --- */
+    struct world t;
+    world_init(&t);
+    uint8_t mac_a[6], mac_b[6];
+    mac_of(0xa1, mac_a);
+    mac_of(0xa2, mac_b);
+    struct peer_state *pa = peer_find_or_add(&t.cfg, &t.pdt, t.peers, mac_a);
+    struct peer_state *pb2 = peer_find_or_add(&t.cfg, &t.pdt, t.peers, mac_b);
+    CHECK(pa != NULL && pb2 != NULL, "two-port peer did not get two slots");
+    if (pa == NULL || pb2 == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&t.cfg, pa, sid);
+    ps_learn_sys_addr(&t.cfg, pb2, sid);
+    CHECK(scs_pb_open(&t.cfg, pa->pb) == SCS_OPEN_NEW_SB, "port A open was not NEW_SB");
+    CHECK(scs_pb_open(&t.cfg, pb2->pb) == SCS_OPEN_EXISTING_SB, "port B did not join the SB");
+    /* Port B is the HEAD of the node's Path Block queue (SBs queue at the head),
+     * and its circuit has since gone down while its PB is still queued. */
+    CHECK(pa->pb->sb != NULL && pa->pb->sb->pb_head == pb2->pb,
+          "port B is not the head of the node's Path Block queue -- case 3 would"
+          " pass without exercising the OPEN scan");
+    scs_pb_set_vc_state(pb2->pb, SCS_VC_CLOSED);
+
+    scsd_test_frames = 0;
+    CHECK(send_joiner_connect_request(7, 1, &t.cfg, pb2, NULL, our_hw_mac, our_logical) == 1,
+          "CONNECT found no OPEN circuit though port A's is open");
+    CHECK(scsd_test_frames == 1, "CONNECT transmitted %u frames, expected 1",
+          scsd_test_frames);
+    CHECK(memcmp(scsd_test_last_dst, mac_a, 6) == 0,
+          "CONNECT sent over the CLOSED circuit of the peer slot it was asked"
+          " through instead of the node's OPEN one");
+}
+
 int main(void)
 {
     test_learned_system_address_is_the_peer_logical_field();
@@ -952,6 +1104,7 @@ int main(void)
     test_vc_open_on_bare_ack_still_sends_round_2();
     test_vc_implied_ack_through_the_daemon();
     test_vc_reissue_and_abandon_through_the_daemon();
+    test_connect_selects_the_open_vc_via_config_sys();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

@@ -507,11 +507,19 @@ struct scs_pb *scs_config_select_vc(struct scs_config *cfg,
     if (!scs_config_sys(cfg, system_id, &sys_info)) {
         return NULL;
     }
-    /* Scan the PB queue for the first OPEN circuit (p. 2-47). See the header
-     * note: OVMX has only one interconnect type in production, so there is no
-     * CI-vs-Ethernet preference to apply here -- first OPEN PB found wins. */
-    for (struct scs_pb *pb = sys_info.first_pb; pb != NULL; pb = pb->next) {
-        if (pb->vc_state == SCS_VC_OPEN) {
+    /* "examines each Path Block in turn until it finds one whose virtual
+     * circuit is OPEN" (p. 2-47). The examination goes through CONFIG_PATH --
+     * that is the query the book defines for reading a Path Block's virtual-
+     * circuit state and its link to the next PB, and using it here means the
+     * scan sees exactly what any other CONFIG_PATH caller would see. See the
+     * header note: OVMX has only one interconnect type in production, so there
+     * is no CI-vs-Ethernet preference to apply -- first OPEN PB found wins. */
+    struct scs_config_path_info path_info;
+    for (struct scs_pb *pb = sys_info.first_pb; pb != NULL; pb = path_info.next) {
+        if (!scs_config_path(pb, &path_info)) {
+            break; /* not a live PB: the queue is corrupt, stop rather than guess */
+        }
+        if (path_info.vc_state == SCS_VC_OPEN) {
             return pb;
         }
     }

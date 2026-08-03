@@ -408,6 +408,14 @@ static void test_config_sys_and_path_walk_every_pb_once(void)
     scs_pb_attach_formative_sb(&cfg, pb_c, &info);
     CHECK(scs_pb_open(&cfg, pb_c) == SCS_OPEN_EXISTING_SB, "third circuit did not join the old SB");
 
+    /* Remote port STATE is written straight into the Path Block by its producer
+     * (src/vmsscs/scsd.c ps_channel_up() does exactly this assignment; there is
+     * no setter function). Give the three paths three DIFFERENT states so that
+     * CONFIG_PATH's copy of the field cannot be satisfied by any constant. */
+    pb_a->remote_port_state = SCS_PORT_STATE_ENABLED;
+    pb_b->remote_port_state = SCS_PORT_STATE_MAINT_ENABLED;
+    pb_c->remote_port_state = SCS_PORT_STATE_UNKNOWN;
+
     /* --- CONFIG_SYS --- */
     struct scs_config_sys_info sysinfo;
     CHECK(scs_config_sys(&cfg, sysid, &sysinfo) == 1, "CONFIG_SYS did not find the SB");
@@ -446,15 +454,31 @@ static void test_config_sys_and_path_walk_every_pb_once(void)
         CHECK(pinfo.sb == sb, "CONFIG_PATH sb identifier does not match the SB");
         CHECK(pinfo.on_formative_queue == 0, "an OPEN PB must not read as on the formative queue");
 
+        /* p. 2-47 "the type and state of the remote port" -- all THREE remote
+         * port characteristics are asserted per PB (type, state, address), each
+         * with a value unique to that PB, so no constant or dropped copy in
+         * scs_config_path() can satisfy them. */
         if (cursor == pb_a) {
             seen_a++;
             CHECK(pinfo.remote_port_type == SCS_PORT_TYPE_ETHERNET, "pb_a port type wrong");
+            CHECK(pinfo.remote_port_state == SCS_PORT_STATE_ENABLED,
+                  "pb_a port state is %d, expected ENABLED", (int)pinfo.remote_port_state);
+            CHECK(memcmp(pinfo.remote_port_addr, mac_a, SCS_PORT_ADDR_LEN) == 0,
+                  "pb_a remote port address not reported by CONFIG_PATH");
         } else if (cursor == pb_b) {
             seen_b++;
             CHECK(pinfo.remote_port_type == SCS_PORT_TYPE_CI, "pb_b port type wrong");
+            CHECK(pinfo.remote_port_state == SCS_PORT_STATE_MAINT_ENABLED,
+                  "pb_b port state is %d, expected MAINT_ENABLED", (int)pinfo.remote_port_state);
+            CHECK(memcmp(pinfo.remote_port_addr, mac_b, SCS_PORT_ADDR_LEN) == 0,
+                  "pb_b remote port address not reported by CONFIG_PATH");
         } else if (cursor == pb_c) {
             seen_c++;
             CHECK(pinfo.remote_port_type == SCS_PORT_TYPE_CI_HSC, "pb_c port type wrong");
+            CHECK(pinfo.remote_port_state == SCS_PORT_STATE_UNKNOWN,
+                  "pb_c port state is %d, expected UNKNOWN", (int)pinfo.remote_port_state);
+            CHECK(memcmp(pinfo.remote_port_addr, mac_c, SCS_PORT_ADDR_LEN) == 0,
+                  "pb_c remote port address not reported by CONFIG_PATH");
         } else {
             CHECK(0, "CONFIG_PATH walk reached a PB that was never queued to this SB");
         }
@@ -464,12 +488,16 @@ static void test_config_sys_and_path_walk_every_pb_once(void)
     CHECK(seen_a == 1 && seen_b == 1 && seen_c == 1,
           "every PB must be reached EXACTLY once (a=%d b=%d c=%d)", seen_a, seen_b, seen_c);
 
-    /* --- CONNECT's "no circuit named" path: CONFIG_SYS + queue scan --- */
+    /* --- CONNECT's "no circuit named" path: CONFIG_SYS + queue scan ---
+     * With every circuit OPEN the answer is exactly the first PB in the queue.
+     * That the scan actually SKIPS non-OPEN circuits is a separate property and
+     * is tested in test_select_vc_skips_a_circuit_that_is_not_open(); this
+     * assertion alone would not detect an unconditional "take the head". */
     struct scs_pb *chosen = scs_config_select_vc(&cfg, sysid);
-    CHECK(chosen != NULL, "select_vc found no circuit for a node with 3 open PBs");
-    CHECK(chosen == pb_a || chosen == pb_b || chosen == pb_c,
-          "select_vc returned a PB not queued to this SB");
-    CHECK(chosen->vc_state == SCS_VC_OPEN, "select_vc must only choose an OPEN circuit");
+    CHECK(chosen == sb->pb_head,
+          "with all circuits OPEN, select_vc must return the first PB in the queue");
+    CHECK(chosen != NULL && chosen->vc_state == SCS_VC_OPEN,
+          "select_vc must only choose an OPEN circuit");
 
     /* Unknown System ID / NULL safety. */
     uint8_t unknown[SCS_SYSTEM_ID_LEN];
@@ -517,6 +545,141 @@ static void test_config_path_on_formative_pb(void)
     CHECK(scs_config_path(pb, &pinfo) == 0, "CONFIG_PATH must refuse a closed/freed PB");
 }
 
+/*
+ * vms-398 CONSTRAINT: "report what the structure holds; do NOT invent a value."
+ *
+ * The test above queries an SB built by scs_pb_attach_formative_sb(), which the
+ * live daemon never calls -- so it only ever asks about a shape SCSD cannot
+ * produce. THIS test asks about the shape SCSD DOES produce: an SB created by
+ * scs_pb_learn_system_addr() at port discovery (the only SB producer on the
+ * daemon's peer path, src/vmsscs/scsd.c ps_learn_sys_addr) and then opened.
+ * Such an SB carries a System Address and NOTHING ELSE, so CONFIG_SYS must
+ * report software type, software version and node name as ABSENT -- HAVE bits
+ * clear, fields empty/zero. An implementation that claimed to know them anyway
+ * would be inventing values, and this is what catches it.
+ */
+static void test_config_sys_does_not_invent_unknown_fields(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt;
+    const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x60, 0x00, 0x01};
+    uint8_t sysid[SCS_SYSTEM_ID_LEN];
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 1498);
+    sysid_from_scssystemid(1329, sysid);
+
+    /* The production path, in order: discover the port, learn the System
+     * Address off the HELLO, run the circuit to OPEN. No START description of
+     * the node is ever applied, because SCSD never applies one. */
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    CHECK(scs_pb_learn_system_addr(&cfg, pb, sysid) != NULL, "learn_system_addr failed");
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_NEW_SB, "the discovered node did not create an SB");
+    CHECK(pb->sb != NULL && pb->sb->os_name[0] == '\0' && pb->sb->os_version == 0 &&
+              pb->sb->node_name[0] == '\0',
+          "the SB SCSD builds is no longer software-description-free -- this test"
+          " no longer exercises the unknown-field case, fix it rather than delete it");
+
+    struct scs_config_sys_info si;
+    memset(&si, 0xAA, sizeof(si)); /* poison: every reported field must be written */
+    CHECK(scs_config_sys(&cfg, sysid, &si) == 1, "CONFIG_SYS did not find the discovered node");
+
+    /* What IS known is reported. */
+    CHECK(memcmp(si.system_id, sysid, SCS_SYSTEM_ID_LEN) == 0,
+          "CONFIG_SYS did not echo the System ID of a discovered node");
+    CHECK(si.first_pb == pb, "CONFIG_SYS first_pb is not the node's only Path Block");
+
+    /* What is NOT known is reported as not known -- never guessed. */
+    CHECK((si.have & SCS_CONFIG_SYS_HAVE_SOFTWARE_TYPE) == 0,
+          "CONFIG_SYS claimed to know the software type of a node that never"
+          " described itself (have=0x%x)", si.have);
+    CHECK(si.software_type[0] == '\0', "CONFIG_SYS invented a software type: '%s'",
+          si.software_type);
+    CHECK((si.have & SCS_CONFIG_SYS_HAVE_SOFTWARE_VERSION) == 0,
+          "CONFIG_SYS claimed to know the software version of a node that never"
+          " described itself (have=0x%x)", si.have);
+    CHECK(si.software_version == 0, "CONFIG_SYS invented a software version: 0x%04x",
+          si.software_version);
+    CHECK((si.have & SCS_CONFIG_SYS_HAVE_NODE_NAME) == 0,
+          "CONFIG_SYS claimed to know the SCS Node Name of a node that never"
+          " described itself (have=0x%x)", si.have);
+    CHECK(si.node_name[0] == '\0', "CONFIG_SYS invented a node name: '%s'", si.node_name);
+
+    /* The two fields no SB has ever held are never claimed either. */
+    CHECK((si.have & SCS_CONFIG_SYS_HAVE_MAX_DATAGRAM) == 0 && si.max_datagram_size == 0,
+          "CONFIG_SYS invented a maximum datagram size");
+    CHECK((si.have & SCS_CONFIG_SYS_HAVE_MAX_MESSAGE) == 0 && si.max_message_size == 0,
+          "CONFIG_SYS invented a maximum message size");
+
+    /* Taken together: for the configuration SCSD actually builds, CONFIG_SYS
+     * asserts nothing beyond the node's identity and its Path Block queue. */
+    CHECK(si.have == 0, "CONFIG_SYS have-mask is 0x%x for a node whose SB holds only"
+          " a System Address; expected 0", si.have);
+}
+
+/*
+ * p. 2-47: CONNECT "examines each Path Block in turn until it finds one whose
+ * virtual circuit is OPEN". The head of the queue being OPEN is the easy case;
+ * this is the case that makes the rule a rule. A node with two Path Blocks
+ * whose FIRST circuit is not OPEN must be reached over the second one.
+ */
+static void test_select_vc_skips_a_circuit_that_is_not_open(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt_a, pdt_b;
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x70, 0x00, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x70, 0x00, 0x02};
+    uint8_t sysid[SCS_SYSTEM_ID_LEN];
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt_a, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt_b, SCS_PORT_TYPE_ETHERNET, 1498);
+    sysid_from_scssystemid(1041, sysid);
+    struct scs_sb_info info = make_info(1041, "VAX8", 0x515151ull, 7);
+
+    struct scs_pb *first_opened = scs_pb_create(&cfg, &pdt_a, mac_a, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, first_opened, &info);
+    CHECK(scs_pb_open(&cfg, first_opened) == SCS_OPEN_NEW_SB, "first circuit was not NEW_SB");
+    struct scs_sb *sb = first_opened->sb;
+
+    struct scs_pb *head = scs_pb_create(&cfg, &pdt_b, mac_b, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, head, &info);
+    CHECK(scs_pb_open(&cfg, head) == SCS_OPEN_EXISTING_SB, "second circuit did not join the SB");
+
+    /* PBs queue at the HEAD, so the second circuit opened is the one CONNECT
+     * examines first. Take that circuit down while its Path Block stays queued
+     * (scs_pb_close would remove it and there would be nothing to skip). */
+    CHECK(sb != NULL && sb->pb_head == head,
+          "the second circuit is not at the head of the queue -- this test would"
+          " pass without ever exercising the skip");
+    scs_pb_set_vc_state(head, SCS_VC_CLOSED);
+
+    struct scs_pb *chosen = scs_config_select_vc(&cfg, sysid);
+    CHECK(chosen == first_opened,
+          "select_vc returned the CLOSED circuit at the head of the queue instead"
+          " of scanning on to the OPEN one (p. 2-47)");
+
+    /* The same skip for every non-OPEN stage of formation, not just CLOSED. */
+    scs_pb_set_vc_state(head, SCS_VC_START_SENT);
+    CHECK(scs_config_select_vc(&cfg, sysid) == first_opened,
+          "select_vc accepted a START-SENT circuit as OPEN");
+    scs_pb_set_vc_state(head, SCS_VC_START_RECEIVED);
+    CHECK(scs_config_select_vc(&cfg, sysid) == first_opened,
+          "select_vc accepted a START-RECEIVED circuit as OPEN");
+
+    /* And with NO circuit open, CONNECT gets nothing -- it must not fall back to
+     * "any Path Block will do". */
+    scs_pb_set_vc_state(first_opened, SCS_VC_CLOSED);
+    CHECK(scs_config_select_vc(&cfg, sysid) == NULL,
+          "select_vc chose a circuit though none of the node's circuits is OPEN");
+
+    /* Reopening the head makes it the answer again: the choice tracks circuit
+     * state, not queue position or allocation order. */
+    scs_pb_set_vc_state(head, SCS_VC_OPEN);
+    CHECK(scs_config_select_vc(&cfg, sysid) == head,
+          "select_vc did not follow the circuit back to OPEN");
+}
+
 int main(void)
 {
     test_pb_created_closed_and_formative();
@@ -528,6 +691,8 @@ int main(void)
     test_limits_and_null_safety();
     test_config_sys_and_path_walk_every_pb_once();
     test_config_path_on_formative_pb();
+    test_config_sys_does_not_invent_unknown_fields();
+    test_select_vc_skips_a_circuit_that_is_not_open();
 
     printf("test_scs_config: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

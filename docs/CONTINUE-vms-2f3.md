@@ -40,8 +40,8 @@ operator ruling, that is a **gate**, not a completion — see the reserved list.
    SHA; do not trust any SHA written down anywhere.
 2. **Read `docs/HANDOFF-vms-2f3.md` §4M first** — it is the newest and it
    supersedes §4L's framing. Then §4L (for its observations, not its
-   conclusion), then §4k. Then **§3's killed list (13 entries) and §4L's seven
-   more.** Then §7 guardrails (22 entries) — they are the most transferable part
+   conclusion), then §4k. Then **§3's killed list (18 entries) and §4L's seven
+   more.** Then §7 guardrails (24 entries) — they are the most transferable part
    of the whole document.
 3. Read `docs/HANDOFF-vms-760.md` §0 for the orchestrator doctrine. It still
    applies verbatim.
@@ -74,8 +74,9 @@ kill-switch run `N1E` shows the identical populated CSB with the fix OFF. The
 morning `M` session refused with `00000000`; the afternoon `N` session refuses
 fully populated. **These are §4d.6's two refusal shapes and they must not be
 diffed against each other.** What makes a run take one shape or the other is
-**unknown and is now the most valuable open question** — it is the difference
-between "the peer never hears us" and "the peer hears us and declines".
+**unknown**. ⚠ It is NO LONGER the most valuable open question — §4M.16–§4M.22
+superseded it by locating the gate itself. Kept only so the two shapes are not
+diffed against each other by accident.
 
 ## ⭐⭐⭐ THE FRONTIER AS OF SESSION m END — READ THIS FIRST
 
@@ -132,13 +133,20 @@ up to and including `proposed addition of node X`:
 > cluster does something that takes 90 ms for a fresh identity and never
 > finishes for a returning one. WHAT IS THAT STEP?**
 
-Prime suspect: the **barrier round**. `SCSD-I-BARRIER` is 12 in every join and
-**0** in every refusal — the coordinator never opens a barrier step with us.
+> **⛔ The barrier was named here as prime suspect and is REFUTED (§4M.15).** It
+> starts at +137 ms, **45 ms after** the console logs `completed`. It is
+> downstream of the transition, not a step within it. Its 0/0 count in refusals
+> is a consequence. **Do not chase the barrier.**
+>
+> **⛔ And this window is no longer the frontier** — §4M.16 found the divergence
+> ~700 ms EARLIER, before the membership proposal, on the directory connection.
+> Read the frontier section above; this section is kept for the OPCOM oracle and
+> the anchor technique, which are still the right tools.
 
-**Next experiment:** matched pair with VAX2's console AND a pcap, aligned on the
-`proposed addition` OPCOM timestamp, and identify the first frame the join has
-that the rejoin does not. The console anchor is what every previous attempt at
-this comparison lacked. **Use only the timestamped `Node X (csid …)` OPCOM
+**The anchor technique, which is reusable:** align a pcap on the
+`proposed addition` OPCOM timestamp — the measured console-vs-host residual is
+0 to +4 ms, and the wire goes silent for 460–725 ms before each burst onset, so
+the boundary is unambiguous. **Use only the timestamped `Node X (csid …)` OPCOM
 lines — the bare `%CNXMAN,` echoes interleave out of order (guardrail 24).**
 
 **The one surviving wire correlate (§4M.9), a symptom not a cause:**

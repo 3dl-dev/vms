@@ -143,3 +143,21 @@ set_tests_properties(vmsscs_member_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-7be - SB/PB/PDT configuration queue: the architected replacement for the
+# MAC-keyed peer struct. Asserts the documented queue transitions of VAXcluster
+# Principles ch. 2 (pp. 2-11..2-21), including the p. 2-21 Note (an old SB with
+# no other PB queued to it is REFRESHED from the formative SB on a rejoin).
+add_executable(test_scs_config test_scs_config.c)
+
+target_include_directories(test_scs_config PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_config PRIVATE vmsscs_config)
+
+add_test(NAME vmsscs_config_unit COMMAND test_scs_config)
+set_tests_properties(vmsscs_config_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

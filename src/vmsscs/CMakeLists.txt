@@ -66,12 +66,21 @@ target_include_directories(vmsscs_member PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-7be - SCA System Blocks / Path Blocks / Port Descriptor Tables and the
+# VMS SCA Configuration Queue (VAXcluster Principles ch. 2, pp. 2-11..2-21).
+# Pure state: builds no frame, parses no frame, opens no socket -- it replaces
+# the ad-hoc MAC-keyed peer struct with the architected structures.
+add_library(vmsscs_config STATIC scs_config.c)
+target_include_directories(vmsscs_config PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

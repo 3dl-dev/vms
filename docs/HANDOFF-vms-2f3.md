@@ -4207,6 +4207,119 @@ remaining documentation move and it needs an operator with an archive.org
 login.** Also unobtained: Kronenberg et al., ACM TOCS 4(2) 1986 (paywalled, 403)
 — though the DTJ article by the same authors is likely a superset.
 
+### 4M.28 ⭐⭐⭐ THE SCA CONNECTION STATE MACHINE, FROM THE BOOK — and a hard contradiction with the wire
+
+**Source: Roy G. Davis, *VAXcluster Principles*, Digital Press, 1993, ch. 2
+"Systems Communications Architecture", Figures 2-14, 2-15 and 2-16, pp. 2-24 to
+2-26.** A published book, borrowed legitimately; passages transcribed under
+fair-use quotation exactly as the DTJ material was. **This is the source every
+sweep in §4M.27 failed to find, and it answers what no manual would.**
+
+**Figure 2-14, SCA Connection Formation — the states, at last:**
+
+```
+NODE_1 (initiator)                     NODE_2 (target)
+  CONN STATE = "CLOSED"                  TARGET SYSAP IS "LISTENING"
+  SCS SENDS "CONNECT_REQ"  ----------->
+  CONN STATE = "CONNECT SENT"            SCS SENDS "CONNECT_RSP"
+                           <-----------  SCS PASSES "CONNECT_REQ" TO TARGET SYSAP
+  CONN STATE = "CONNECT ACK"             CONN STATE = "CONNECT REC"
+                                         TARGET SYSAP INVOKES ACCEPT
+                           <-----------  SCS SENDS "ACCEPT_REQ"
+  SCS SENDS "ACCEPT_RSP"   ----------->  CONN STATE = "ACCEPT SENT"
+  CONN STATE = "OPEN"                    CONN STATE = "OPEN"
+```
+
+Figure 2-15 adds the rejection path: target invokes REJECT → `REJECT_REQ` →
+`CONN STATE = "REJECT SENT"` → initiator abandons and sends `REJECT_RSP`.
+
+> **These map straight onto SDA's undefined values.** `0001 listen` = LISTENING,
+> `0002 open` = OPEN, `0007 con_sent` = **CONNECT SENT**, `0005 disc_sent` =
+> **DISC SENT**. §4M.22/§4M.27's "not documented anywhere public" is now
+> resolved — it was in a book, not a manual.
+
+**Figure 2-16, Explicitly Breaking an SCA Connection — and it matches our join
+frame for frame:**
+
+```
+NODE_1                                   NODE_2
+  CONN STATE = "OPEN"                      CONN STATE = "OPEN"
+  SYSAP INVOKES DISCONNECT
+  SCS SENDS "DISCONNECT_REQ" ---------->
+  CONN STATE = "DISC SENT"                 SCS SENDS "DISCONNECT_RSP"
+                            <----------    SCS NOTIFIES SYSAP
+  CONN STATE = "DISC ACK"                  CONN STATE = "DISC RECEIVED"
+                                           SYSAP INVOKES DISCONNECT
+                            <----------    SCS SENDS "DISCONNECT_REQ"
+  SCS SENDS "DISCONNECT_RSP" --------->    CONN STATE = "DISC MATCH"
+  CONN STATE = "CLOSED"                    CONN STATE = "CLOSED"
+```
+
+**Our join is this figure exactly:** peer `op6` → our `op7` → our `op6` → peer
+`op7`. **So `op6` = `DISCONNECT_REQ` and `op7` = `DISCONNECT_RSP`, confirmed
+from documentation** rather than inferred from §4k.5's correlation. It also
+confirms §4M.23's DTJ reading: the teardown is symmetric, both SYSAPs invoke
+disconnect.
+
+### ⭐⭐⭐ THE CONTRADICTION — the peer is in DISC SENT with nothing on the wire
+
+Per Figure 2-16, **`DISC SENT` is entered by "SCS SENDS DISCONNECT_REQ"**. The
+peer's CDT for our identity sits in `0005 disc_sent` for the entire run
+(§4M.18). **Therefore the peer's SCS believes it has sent a DISCONNECT_REQ.**
+
+**No DISCONNECT_REQ ever reaches the wire.** Re-scanned with the net widened to
+**every msgtype** (the earlier scan filtered `0x4b`/`0x5b`/`0x7b`), peer→OVMX
+only, whole capture:
+
+| run | verdict | `op6` from peer, ANY msgtype |
+|---|---|---|
+| `Q1A` | JOINED | **2** |
+| `Q1B` | REFUSED | **0** |
+| `U1B` | REFUSED | **0** |
+| `V1B` | REFUSED (virgin cluster) | **0** |
+
+> **The peer's SCS has entered DISC SENT without the DISCONNECT_REQ reaching the
+> wire, and its CDT holds a NON-EMPTY message queue (§4M.18).** The disconnect
+> is built and queued and never transmitted. That is a peer-side transmit stall
+> on a specific message, now stated against a documented state machine instead
+> of inferred from silence.
+
+**⚠ Do not conclude "credit" from this.** The peer's own CDT reports
+`Send Credit 1` and **`Send Credit Q. empty`** — nothing is waiting on credit —
+and DTJ p.26 documents message credit as enforced at the *sender*, with silent
+discard only for datagrams (§4M.27). Credit is dead twice over.
+
+### 4M.29 ⭐⭐ A DOCUMENTED MECHANISM OVMX IMPLEMENTS NOTHING FOR — SCA connect data
+
+Same source, p. 2-25:
+
+> *"Up to **16 bytes of optional data** can be included in the CONNECT_REQ by
+> the SYSAP initiating the connection. SCA also permits the target SYSAP to
+> optionally provide up to 16 bytes of data to be included in the ACCEPT_REQ.
+> In particular, this option is used to limit which versions of VMS can coexist
+> with each other in a VAXcluster configuration. **When two Connection Managers
+> form a connection with each other, they use this data to effectively identify
+> to each other which version of VMS each is associated with.** If the target of
+> the CONNECT_REQ does not approve of the source Connection Manager's VMS
+> version, it rejects the request. If the source of the CONNECT_REQ does not
+> approve of the target Connection Manager's VMS version, **it explicitly breaks
+> the connection that the target Connection Manager accepted.**"*
+
+**`grep -i "connect data" src/vmsscs/` returns NOTHING. OVMX has no concept of
+this field.** And the peer's CDTs for our identity carry non-zero `Connect Data`
+pointers (`87A05404` on the join; `87BE1985` / `87BD5F01` / `87A04204` on the
+refusal), so the structure is populated on its side.
+
+**Why this is worth chasing:** it is a documented, connection-manager-level
+identification payload exchanged at CONNECT/ACCEPT time, whose documented
+failure mode is *"explicitly breaks the connection that the target Connection
+Manager accepted"* — which is close to the observed shape. **Unknown whether it
+is the gate; it is the first genuinely unexamined mechanism found in sessions.**
+
+**Next:** locate the 16-byte optional-data region in a real node's CONNECT_REQ /
+ACCEPT_REQ on our own wire and compare it with OVMX's. Rule 8: the book gives
+the mechanism, our own captures give the bytes.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

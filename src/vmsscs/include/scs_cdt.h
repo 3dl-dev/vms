@@ -229,6 +229,40 @@ struct scs_cdt {
      * to that circuit." Head of the queue lives in struct scs_pb (scs_config.h). */
     struct scs_cdt *pb_next;
     struct scs_cdt *pb_prev;
+
+    /*
+     * vms-76e: the message-service flow control account for this connection.
+     * "Since flow control for the SCS message service is done on a per
+     * connection basis, SCS maintains this information for each connection in
+     * the CDT it uses to describe the connection." (p. 2-45)
+     *
+     * Owned entirely by src/vmsscs/scs_credit.c -- scs_cdt.c only zeroes these
+     * with the rest of the CDT at open and never reads them. See scs_credit.h
+     * for the page cites, the grounded wire offset of the credit field, and the
+     * honest statement that NOTHING IN scsd.c CALLS ANY OF IT YET.
+     */
+
+    /* p. 2-43: number of buffers this node BELIEVES exist on the remote node to
+     * receive messages on this connection. Debited per message sent, raised by
+     * the credit field of every message received. */
+    unsigned send_credit;
+
+    /* p. 2-44: "effectively a mirror image of remote SCS's Send Credit count" --
+     * what the remote is believed to think IT may send us. */
+    unsigned receive_credit;
+
+    /* p. 2-43: buffers freed locally that the remote does not know about yet;
+     * piggybacked into the credit field of the next outbound message and then
+     * reset to 0 (p. 2-44). */
+    unsigned pending_receive_credit;
+
+    /* p. 2-43/2-45: this connection's share of the port MFREEQ -- the N Send
+     * Credits the local SYSAP extended at connection formation. */
+    unsigned extended_credits;
+
+    /* p. 2-44: the Minimum Send Credits argument the REMOTE SYSAP passed to
+     * CONNECT/ACCEPT; the dangerously-low threshold is compared against it. */
+    unsigned remote_min_send_credits;
 };
 
 /*

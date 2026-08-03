@@ -208,3 +208,64 @@ set_tests_properties(vmsscs_scsd_wire_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-76e - SCA message flow control. Reproduces the VAXcluster Principles
+# pp. 2-43..2-44 worked example and its simultaneous-send variation EXACTLY,
+# the p. 2-45 Credit Wait refusal, the p. 2-44 special credit message, the
+# credit field read out of two REAL captured frames (110-byte CONNECT-REQUEST
+# carrying 10 = CLUSTER_CREDITS; 190-byte VC message carrying a piggybacked 3),
+# and the OVMX_NO_CREDIT_ACCOUNTING kill switch with a bracketing control.
+add_executable(test_scs_credit test_scs_credit.c)
+
+target_include_directories(test_scs_credit PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_credit PRIVATE vmsscs_credit)
+
+add_test(NAME vmsscs_credit_unit COMMAND test_scs_credit)
+set_tests_properties(vmsscs_credit_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
+# vms-76e - the WIRE VERDICT prose must match the measurement.
+#
+# tools/scs_credit_measure.py re-derives every figure in the WIRE VERDICT of
+# src/vmsscs/include/scs_credit.h from the lab-1 captures and PASS/FAILs each
+# against a checked-in EXPECTED table. Those captures are host-only (13 GB, 47
+# files, not in git), so ctest cannot run that half -- run it by hand on a lab
+# host. What ctest DOES run needs no captures: it reads EXPECTED out of the same
+# script and asserts every figure still appears in the header and in
+# docs/cluster-protocol-spec.md, plus the two structural facts the vms-76e
+# review turned on (conservation is scoped to the UNFILTERED population; the
+# inverted ">>> FILTER, REQUIRED <<<" heading stays deleted).
+#
+# WHY IT EXISTS: nothing in ctest re-derived any WIRE VERDICT figure, so a wrong
+# recorded measurement was invisible to a green run. That is how a mis-scoped
+# filter claim survived two review rounds.
+#
+# The gate is registered UNCONDITIONALLY, under the same name and labels either
+# way. A missing interpreter must NOT make it vanish (a skipped test is a
+# failing test), and must NOT break configure either: tests/qemu/Dockerfile
+# configures this whole tree with -DOVMX_STATIC=ON -DBUILD_TESTS=ON on a musl
+# builder image with no python3, builds only `qemu_syssvc_tests vmsdcl`, and
+# never invokes ctest -- an earlier configure-time FATAL_ERROR here turned five
+# CI jobs red that run no vmsscs test at all. So the absence is made loud at
+# TEST time instead: scs_credit_figures_no_python3.cmake exits non-zero and
+# names the missing interpreter. Configure succeeds, a build that never runs
+# ctest is unaffected, and any build that does run ctest sees a RED test.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_credit_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_credit_figures.py)
+else()
+    add_test(NAME scs_credit_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_credit_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_credit_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)

@@ -589,6 +589,88 @@ numeric match to the tunable, but its offset shifts between message classes,
 so it is not pinned to a single fixed field — reported as a grounded value,
 not a grounded offset.
 
+> **⭐ SUPERSEDED — the credit field IS pinned, at SCA `[48:50]` LE u16**
+> (absolute frame offset `[62:64]`), i.e. the two bytes immediately preceding
+> the remote/destination Con.ID at `[50:54]`. `vms-76e` re-measured this over
+> `formation-ci1.pcap` (18 558 frames) and `formation-ci1-joinwindow.pcap`
+> (3 000 frames), both under `/data/training/vax/cluster/captures/`.
+> **Re-derive it:** `tools/scs_credit_measure.py --quick` (the two grounding
+> captures, ~5 s) or without `--quick` for all 47 (~5–10 min). It re-measures
+> every figure below from the raw pcaps and PASS/FAILs each against a
+> checked-in `EXPECTED` table — last full run 2026-08-03, **30 checks, 0
+> failures**. The captures are host-only and not in git, so ctest runs only the
+> cheap half (`scs_credit_figures`), which asserts these numbers still appear
+> verbatim here and in `scs_credit.h`.
+>
+> **Method — two populations, and each line says which it uses.** Take
+> `sca = frame[14:]`. **(A)** keep on `len(sca) == <class>` alone, no marker
+> filter; **(B)** additionally require `sca[16:18] == 4B 13`. Over the two
+> captures there are 20 459 190-byte frames, marker split
+> `{0x4B13: 19 860, 0x5B13: 591, 0x7B13: 8}` — every one is an SCS message of
+> the `0x?B13` family, all carrying the same credit field at the same offset, so
+> at this length (A) *is* "the whole `0x?B13` family" (the script asserts that
+> equality rather than assuming it). Three independent lines:
+>
+> 1. **Conservation** over the 190-byte class — **population (A), no marker
+>    filter, and it must be**: a debit/credit account only balances if every
+>    message on the connection is counted. Summing `[48:50]` across every
+>    190-byte frame a node *sends* against the count of 190-byte messages it
+>    *received*: `formation-ci1` VAX1 granted 10 842 vs peer sent 10 842
+>    (Δ0), peer granted 6 712 vs VAX1 sent 6 715 (Δ3); `joinwindow` 1 601 vs
+>    1 602 (Δ1) and 1 300 vs 1 300 (Δ0). All four reproduce exactly. That is the
+>    debit/credit identity of *VAXcluster Principles* p. 2-43 and no other
+>    header field satisfies it.
+>
+>    > **Correction (`vms-76e`, adversary-caught).** An earlier revision of this
+>    > note headed the `0x4B13` filter "the counts below do not reproduce
+>    > without it" and applied it to all three lines. For line 1 that is
+>    > **inverted**: filtering *destroys* the identity, giving 10 817 vs 10 266
+>    > (Δ−551) and 6 369 vs 6 695 (Δ+326) — a refutation. The four figures
+>    > printed were always the population-(A) numbers and are correct; only the
+>    > recorded method was wrong. **The offset conclusion is unaffected.**
+>
+> 2. **Value shape** — **population (B)** — over 19 860 190-byte `0x4B13` frames the field takes only
+>    `{0:5174, 1:10696, 2:2582, 3:1405, 4:3}`: a piggybacked Pending Receive
+>    Credit, not a counter. Unfiltered (population (A)) the same histogram over
+>    all 20 459 frames is `{0:5418, 1:11042, 2:2587, 3:1409, 4:3}` — the same
+>    shape, which is the independent reason the `0x5B13`/`0x7B13` siblings
+>    belong in line 1. (Note `[46:48]` in the 190-byte class is a
+>    *constant* `0x000a` — that is the value the older note above was reading,
+>    and it is a different field.)
+> 3. **Tunable match at formation** — **population (B)** — in the 110-byte `CONNECT_REQ`/
+>    `ACCEPT_REQ` class the same field carries the Send Credits that SYSAP
+>    extends, byte-exact to **two distinct** SYSGEN parameters in one capture:
+>    `VMS$VAXcluster`↔`VMS$VAXcluster` = **10** (`CLUSTER_CREDITS`),
+>    `MSCP$DISK`→`VMS$DISK_CL_DRVR` accept = **8** (`MSCP_CREDITS`), plus
+>    `SCS$DIRECTORY` 3, `SCS$DIR_LOOKUP` 1, `SCA$TRANSPORT` 6.
+>
+> **Scope of the grounding — every admitted class is measured.** Offset 48 is
+> asserted only for the SCS *message* classes **58/62/66/86/94/110/190** SCA
+> bytes, and all seven were tabulated over **all 47** `.pcap` files in
+> `/data/training/vax/cluster/captures/` under **population (B)**
+> (n / distinct / max at `sca[48:50]`): 58 → 1212/2/1 · 62 → 1087/1/0 ·
+> 66 → 944/1/0 · 86 → 194/1/1 · 94 → 3670/2/1 · 110 → 3999/5/10 ·
+> 190 → 288 484/5/4. The block-data-transfer classes
+> (70/82/206/270/398/462/526/…) and 50/122/126/142 carry large unrelated values
+> there (e.g. 70 → 752 distinct, max 65 447) and are refused, and the 41-byte
+> `0x48` short does not reach offset 48 at all — which is the residue of truth
+> in the "offset shifts between message classes" note above.
+>
+> **Correction (`vms-76e`, adversary-caught): 106 is NOT one of these classes.**
+> An earlier revision of this note and of `scs_credit.h` listed 106. There are
+> **zero** 106-byte SCA frames with the `0x4B13` marker in any capture; all
+> **792** that exist are marker `0x4113` — the §4(j) START/config frames, a
+> different layer with no credit field (`sca[48:50]` is a constant 0 in 792/792).
+> The entry came from misreading the §4(c)/§4(e) *frame*-length listing of the
+> `0x41` START class as an SCA message class. It has been deleted from
+> `scs_credit_header_offset()`, not relabelled. Note this makes the §4(c) table
+> row "70, 110, 94, 62, 58, 66, 106, 86" and the §4(m) list a mix of two
+> markers; only the `0x?B13` members are SCS messages.
+>
+> Field map, evidence and the reader/stamper:
+> `src/vmsscs/include/scs_credit.h`. **OVMX does not yet stamp a live credit on
+> the wire** — see that header's reachability note.
+
 **Vote / quorum — GROUNDED NEGATIVE RESULT** (the vote-varying capture
 recommended below was **done** for `vms-cd0`, subsuming `vms-41d`). The joiner
 was rebooted with `VOTES 0` (`cd0-bootB`) and then `VOTES 2` (`cd0-bootC`),

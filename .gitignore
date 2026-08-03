@@ -10,6 +10,11 @@ CMakeCache.txt
 CMakeFiles/
 cmake_install.cmake
 *.cmake
+# ...but *.cmake also swallows hand-written CMake scripts that live in the
+# SOURCE tree. Un-ignore those explicitly, one path at a time (vms-76e: this
+# one is the body of a ctest, so if it silently failed to get committed the
+# test would red in CI with "no such file" instead of its real diagnostic).
+!tests/vmsscs/scs_credit_figures_no_python3.cmake
 
 # Object files and libraries
 *.o

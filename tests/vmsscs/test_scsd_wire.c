@@ -40,10 +40,15 @@
  *
  * ALSO PINNED HERE (vms-dd5 + vms-fb1): the connection state machine as the
  * DAEMON drives it, and -- since vms-fb1 hoisted the per-frame dispatch out of
- * main() into scsd_handle_frame() -- the RECEIVE side as well. The four
- * test_captured_* / test_exit_summary_* cases at the bottom of this file feed
- * scsd_handle_frame() frames transcribed byte-exact from
- * formation-ci1-joinwindow.pcap and assert the resulting CDT state and CONID.
+ * main() into scsd_handle_frame() -- the RECEIVE side as well. The six
+ * test_captured_* / test_null_source_* / test_exit_summary_* cases at the
+ * bottom of this file feed scsd_handle_frame() frames transcribed byte-exact
+ * from formation-ci1-joinwindow.pcap (the VAX-to-VAX golden formation) and
+ * from ovmx-760-MEMBER-achieved-20260730.pcap (the run in which OVMX ITSELF
+ * joined, whose frames are already addressed to OVMX's own Con.IDs and so need
+ * no edit at all), and assert the resulting CDT state and CONID. Every state
+ * transition asserted there is performed by scsd.c: no case calls conn_step()
+ * or scs_cdt_set_remote_conid() on its own behalf.
  *
  * SCOPE HONESTY, restated to match what is actually here: this exercises SCSD's
  * frame-assembly path AND its per-frame receive dispatch, through the production
@@ -1365,6 +1370,60 @@ static const uint8_t vax2_hw_mac[6] = {0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9};
 static const uint8_t vax1_hw_mac[6] = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04};
 static const uint8_t vax1_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04};
 
+/* ==========================================================================
+ * THE MEMBER'S ANSWER TO *OVMX'S OWN* JOINER CONNECT-REQUEST, taken off the
+ * wire of a run in which OVMX ITSELF was the joiner. These two frames are
+ * addressed to Con.ID 0x4F580002 -- literally OVMX_JOINER_CONID -- so unlike
+ * the VAX-to-VAX frames above they need NO edit of any kind: OVMX's own handle
+ * is already in the bytes.
+ *
+ * PROVENANCE (rule 8: observation only): read with the same pcap reader out of
+ *   /data/training/vax/cluster/captures/ovmx-760-MEMBER-achieved-20260730.pcap
+ * -- the capture of the run in which OVMX reached full MEMBER. Frames #65 and
+ * #67, transcribed wire-byte for wire-byte, Ethernet header included, ZERO
+ * bytes edited. Both are VAX2 (08:00:2b:78:56:b9, SCS System Address
+ * aa:00:04:00:9b:04) -> OVMX (b6:16:8a:dc:3a:53, aa:00:04:00:02:04).
+ * ========================================================================== */
+
+/* pcap frame #65: opcode 0x4b, 66-byte SCA class, [46:48] message type 1 =
+ * CONNECT_RSP. Destination Con.ID 0x4F580002 = OVMX_JOINER_CONID (our handle,
+ * echoed); source Con.ID 0 -- the 66-byte class carries none. */
+static const uint8_t cap_ovmx_joiner_connect_rsp[80] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x40, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x0b, 0x00, 0x0b, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x00, 0x00,
+    0x0b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x16, 0x00, 0x04, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x58, 0x4f, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x00, 0x56, 0x4d, 0x53, 0x24
+};
+
+/* pcap frame #67: opcode 0x4b, 110-byte SCA class, [46:48] message type 2 =
+ * ACCEPT_REQ -- the frame that BINDS the pair. Destination Con.ID 0x4F580002 =
+ * OVMX_JOINER_CONID, source Con.ID 0x63020011 = the member's own freshly
+ * supplied handle, NON-ZERO. This is the specimen the production
+ * `lconid != 0` guard requires, and it is real. */
+static const uint8_t cap_ovmx_joiner_accept_req[124] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x6c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x0b, 0x00, 0x0c, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x0b, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00,
+    0x0b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x42, 0x00, 0x04, 0x00,
+    0x02, 0x00, 0x0a, 0x00, 0x02, 0x00, 0x58, 0x4f, 0x11, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x00, 0x00, 0x56, 0x4d, 0x53, 0x24, 0x56, 0x41, 0x58, 0x63,
+    0x6c, 0x75, 0x73, 0x74, 0x65, 0x72, 0x20, 0x20, 0x56, 0x4d, 0x53, 0x24,
+    0x56, 0x41, 0x58, 0x63, 0x6c, 0x75, 0x73, 0x74, 0x65, 0x72, 0x20, 0x20,
+    0x01, 0x1b, 0x01, 0x03, 0x01, 0x00, 0x01, 0x00, 0x03, 0x00, 0x01, 0x08,
+    0x00, 0x00, 0x06, 0x00
+};
+
+/* The member's Con.ID in that dialogue, and the two identities the frames use. */
+#define OVMX760_MEMBER_CONID 0x63020011u
+static const uint8_t ovmx760_hw_mac[6] = {0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53};
+static const uint8_t ovmx760_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
+static const uint8_t ovmx760_member_mac[6] = {0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9};
+static const uint8_t ovmx760_member_sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04};
+
 /*
  * A complete receive-dispatch context, wired exactly the way main() wires one.
  * Nothing here re-implements the daemon: scsd_handle_frame() and
@@ -1622,14 +1681,139 @@ static void test_captured_connect_rsp_drives_the_classifier(void)
           "the frame the dispatch sent has opcode 0x%02x, expected the 0x48"
           " credit-return -- the classifier must put nothing on the wire",
           scsd_test_last_len > 30 ? scsd_test_last_frame[30] : 0);
+    /* This case STOPS at CONNECT ACK on purpose. pcap #32 is the 66-byte class
+     * and carries source Con.ID 0, so production's `lconid != 0` guard rightly
+     * refuses to bind on it. The Figure 2-14 completion to OPEN is driven by
+     * the real ACCEPT_REQ in test_captured_ovmx_accept_req_opens_the_joiner()
+     * below -- by the DAEMON, not by this test calling conn_step() itself. */
+}
 
-    /* And the documented Figure 2-14 completion: the ACCEPT_REQ that follows now
-     * arrives in CONNECT ACK and opens the connection. */
-    scs_cdt_set_remote_conid(ps->cdt_joiner, 0x62C50009u);
-    conn_step(ps->cdt_joiner, SCS_CONN_EV_RCV_ACCEPT_REQ, NULL);
-    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_OPEN,
-          "CONNECT ACK + ACCEPT_REQ did not reach OPEN (got %s)",
+/*
+ * (3b) THE ACCEPT_REQ THAT BINDS, DRIVEN BY PRODUCTION. Feeding the classifier
+ * a CONNECT_RSP proves the classifier; it does NOT prove the JOINBOUND branch
+ * that actually binds the joiner connection -- that branch needs a frame whose
+ * SOURCE Con.ID is non-zero, which the 66-byte class never carries. So this
+ * case uses the two frames the member sent to OVMX ITSELF in the run that
+ * reached full MEMBER: #65 (CONNECT_RSP) then #67 (ACCEPT_REQ, source Con.ID
+ * 0x63020011). Both are addressed to OVMX_JOINER_CONID on the wire, so NOTHING
+ * IS EDITED. Every state change asserted below is performed by scsd.c.
+ */
+static void test_captured_ovmx_accept_req_opens_the_joiner(void)
+{
+    struct rxworld r;
+    /* OVMX wears the identity it actually had in that capture. */
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    struct peer_state *ps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&r.w.cfg, ps, ovmx760_member_sysid);
+    (void)scs_pb_open(&r.w.cfg, ps->pb);
+    CHECK(send_joiner_connect_request(7, 1, &r.w.cfg, ps, NULL, r.hw_mac, r.logical) == 1,
+          "the joiner CONNECT-REQUEST was not sent");
+    CHECK(ps->cdt_joiner != NULL && scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CONNECT_SENT,
+          "the joiner connection is not in CONNECT SENT before the member answers");
+
+    /* The member's bare acknowledgement -- classifier only, no bind (its
+     * source Con.ID is 0, and OVMX must not bind a null handle). */
+    rx_feed(&r, cap_ovmx_joiner_connect_rsp, sizeof(cap_ovmx_joiner_connect_rsp));
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CONNECT_ACK,
+          "after the member's real CONNECT_RSP the joiner connection is %s,"
+          " expected CONNECT ACK (p. 2-23)",
           scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+    CHECK(ps->joiner_connected == 0,
+          "the 66-byte CONNECT_RSP (source Con.ID 0) bound the joiner connection;"
+          " only the ACCEPT_REQ may do that");
+
+    /* The ACCEPT_REQ. THIS is the frame that satisfies `lconid != 0`, so the
+     * daemon itself runs scs_cdt_set_remote_conid() + conn_step(RCV_ACCEPT_REQ). */
+    unsigned long transitions_before = conn_transitions;
+    rx_feed(&r, cap_ovmx_joiner_accept_req, sizeof(cap_ovmx_joiner_accept_req));
+
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_OPEN,
+          "the member's real ACCEPT_REQ left the joiner connection %s, expected"
+          " OPEN (Figure 2-14)",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+    CHECK(conn_transitions == transitions_before + 1,
+          "the ACCEPT_REQ recorded %lu transitions, expected exactly 1",
+          conn_transitions - transitions_before);
+    CHECK(conn_illegal_events == 0,
+          "the real join dialogue scored %lu illegal events", conn_illegal_events);
+    /* The CDT must carry the member's handle off the wire, not a test constant. */
+    CHECK(ps->cdt_joiner->remote_conid == OVMX760_MEMBER_CONID,
+          "the joiner CDT's remote Con.ID is 0x%08X, expected the member's"
+          " 0x%08X read out of the frame",
+          ps->cdt_joiner->remote_conid,
+          (unsigned)OVMX760_MEMBER_CONID);
+    CHECK(ps->joiner_connected == 1 && ps->joiner_remote_conid == OVMX760_MEMBER_CONID,
+          "the daemon did not record the joiner bind (connected=%d remote=0x%08X)",
+          ps->joiner_connected, ps->joiner_remote_conid);
+    /* And the bind is what releases the add-member burst on the joiner VC. */
+    CHECK(r.rx.cm_config_frames > 0,
+          "the joiner bind sent no add-member config frames");
+}
+
+/*
+ * (3c) THE NEGATIVE CONTROL FOR THE DELETED DUPLICATE. scsd.c's branch (c)
+ * used to carry a second copy of the joiner bind, which measurement showed
+ * could only ever have run for a Con.ID-pair-class frame whose SOURCE Con.ID
+ * was 0 -- a shape absent from all 41 lab captures, and wrong anyway (0 means
+ * "handle not yet assigned"). The duplicate is deleted; this pins the
+ * behaviour that replaces it, so re-adding it reds.
+ *
+ * SYNTHESIZED, and labeled as such: this frame is the REAL captured ACCEPT_REQ
+ * with its source Con.ID field forced to 0. It is not a wire shape -- it is the
+ * only input that could have reached the deleted branch, which is exactly why
+ * it is the control.
+ */
+static void test_null_source_conid_binds_nothing(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    struct peer_state *ps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&r.w.cfg, ps, ovmx760_member_sysid);
+    (void)scs_pb_open(&r.w.cfg, ps->pb);
+    CHECK(send_joiner_connect_request(7, 1, &r.w.cfg, ps, NULL, r.hw_mac, r.logical) == 1,
+          "the joiner CONNECT-REQUEST was not sent");
+
+    uint8_t frame[sizeof(cap_ovmx_joiner_accept_req)];
+    memcpy(frame, cap_ovmx_joiner_accept_req, sizeof(frame));
+    /* The ONLY edit: source Con.ID -> 0. Self-checked so a mistranscription of
+     * the base frame cannot make this control vacuous. */
+    uint32_t base_src_conid = (uint32_t)frame[68] | ((uint32_t)frame[69] << 8) |
+                              ((uint32_t)frame[70] << 16) | ((uint32_t)frame[71] << 24);
+    CHECK(base_src_conid == OVMX760_MEMBER_CONID,
+          "the base frame's source Con.ID is 0x%08X, expected the member's 0x%08X"
+          " -- the frame was transcribed wrong and this control proves nothing",
+          base_src_conid, (unsigned)OVMX760_MEMBER_CONID);
+    frame[68] = frame[69] = frame[70] = frame[71] = 0;
+
+    rx_feed(&r, frame, sizeof(frame));
+
+    CHECK(ps->joiner_connected == 0,
+          "OVMX bound its joiner connection off a frame carrying source"
+          " Con.ID 0 -- a null remote handle is not a handle");
+    CHECK(ps->joiner_remote_conid == 0,
+          "OVMX recorded remote Con.ID 0x%08X from a null-source frame",
+          ps->joiner_remote_conid);
+    CHECK(ps->cdt_joiner->remote_conid == 0,
+          "the joiner CDT was bound to remote Con.ID 0x%08X off a null-source frame",
+          ps->cdt_joiner->remote_conid);
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CONNECT_SENT,
+          "a null-source frame moved the joiner connection to %s; it must stay"
+          " in CONNECT SENT",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+    CHECK(r.rx.cm_config_frames == 0,
+          "a null-source frame released the add-member burst");
 }
 
 /*
@@ -1721,6 +1905,8 @@ int main(void)
     test_captured_directory_connect_drives_the_machine();
     test_captured_member_connect_drives_the_machine();
     test_captured_connect_rsp_drives_the_classifier();
+    test_captured_ovmx_accept_req_opens_the_joiner();
+    test_null_source_conid_binds_nothing();
     test_exit_summary_reports_the_parked_connection();
 
     CHECK(peer_logical_offset > 0,

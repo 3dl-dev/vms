@@ -1634,8 +1634,16 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
      * (our handle, echoed) and whose local Con.ID is the member's own
      * freshly-supplied handle -- i.e. the CONNECT-RESPONSE that binds OUR
      * joiner connection. scs_dir_parse does not classify it (remote != 0, op
-     * != 0x0a) and it is not a 0x4b SEQAPP, so catch it here by the Con.ID
-     * signature and drive the add-member burst on the bound joiner VC. */
+     * != 0x0a), so catch it here by the Con.ID signature and drive the
+     * add-member burst on the bound joiner VC.
+     *
+     * The opcode set below deliberately includes the 0x4b SEQAPP class: the
+     * member's answer is 0x5b on some runs and 0x4b on others, and BOTH must
+     * bind. Because this block returns, it is the ONLY joiner-accept path in
+     * the daemon -- branch (c) below carries no duplicate, and the comment
+     * there records why re-adding one would be dead code. MEASURED: replaying
+     * all 19 OVMX lab captures (141,338 frames) through scsd_handle_frame()
+     * runs this bind 39 times and any (c)-side one 0 times. */
     if (rx->do_connect && n >= 72 &&
         (buf[30] == SCS_DIR_OPCODE || buf[30] == SCS_DIR_OPCODE_RETX ||
          buf[30] == SCS_MSGTYPE_SEQAPP)) {
@@ -1955,37 +1963,33 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * exactly why VAX1 ignored the burst and looped START. We
                  * still answer the member's CONNECT-REQUEST (above) to keep
                  * that connection alive; the burst rides our own joiner
-                 * connection, bound in the OVMX_JOINER_CONID branch below. */
-            }
-        } else if (v.remote_conid == OVMX_JOINER_CONID && !ps->joiner_connected) {
-            /* vms-d94: the member's CONNECT-RESPONSE to OUR active-joiner
-             * CONNECT-REQUEST -> the joiner-initiated VMS$VAXcluster pair is
-             * bound {local=OVMX_JOINER_CONID, remote=member's}. THIS is the
-             * connection the add-member burst must ride (clean-ref idx59). */
-            ps->joiner_remote_conid = v.local_conid;
-            ps->joiner_connected = 1;
-            /* vms-dd5: the same ACCEPT_REQ as the 0x5b-class sighting above
-             * -- see that comment for which state machine row runs; this is
-             * the 0x4b-class arrival of the same message. */
-            scs_cdt_set_remote_conid(ps->cdt_joiner, v.local_conid);
-            conn_step(ps->cdt_joiner, SCS_CONN_EV_RCV_ACCEPT_REQ, NULL);
-            log_ts(stdout);
-            printf(" SCSD-I-JOINBOUND, member accepted OUR VMS$VAXcluster connect:"
-                   " local=0x%08X remote=0x%08X\n", OVMX_JOINER_CONID, v.local_conid);
-            fflush(stdout);
-            if (!ps->joiner_cm_sent) {
-                int c = cm_send_config_burst(rx->sock, rx->ifindex, ps, rx->our_hw_mac,
-                                             rx->our_src_logical,
-                                             OVMX_JOINER_CONID, ps->joiner_remote_conid);
-                rx->cm_config_frames += c;
-                ps->joiner_cm_sent = 1;
-                log_ts(stdout);
-                printf(" SCSD-I-CMCONFIG, sent add-member config burst"
-                       " (op 0x14/0x01/0x02, %d frames, VOTES=0 non-voting)"
-                       " on OUR joiner VC\n", c);
-                fflush(stdout);
+                 * connection, bound in branch (b1) above. */
             }
         }
+        /* vms-dd5: THERE IS NO `else if (v.remote_conid == OVMX_JOINER_CONID)`
+         * BRANCH HERE, and re-adding one would be dead code. Branch (b1)
+         * above owns the joiner-accept path, and its guard is IMPLIED by the
+         * guard of this block:
+         *   - reaching here needs v.msgtype == SCS_MSGTYPE_SEQAPP, i.e.
+         *     buf[30] == 0x4b, which is in (b1)'s opcode set;
+         *   - reaching here needs v.has_conid, which scs_connect_parse only
+         *     sets for the 110-/190-byte classes with len >= 72, so (b1)'s
+         *     `n >= 72` holds too;
+         *   - (b1) RETURNS whenever rconid == OVMX_JOINER_CONID && lconid != 0.
+         * So the only frame that could ever have reached a joiner branch here
+         * is a 110-/190-byte-class frame whose destination Con.ID is our
+         * joiner handle and whose SOURCE Con.ID is 0 -- and binding a
+         * connection to a null remote Con.ID is wrong by construction (0 is
+         * the "handle not yet assigned" value, spec sec 4(h)(1)). MEASURED,
+         * not argued: (a) across all 41 pcaps in the reference-lab capture set
+         * there is no 110-/190-class frame with destination Con.ID != 0 and
+         * source Con.ID == 0; (b) instrumenting both sites and replaying all
+         * 19 OVMX lab captures (141,338 frames) through this very function ran
+         * the (b1) site 39 times and this one 0 times, including the
+         * MEMBER-achieved success capture. The branch that used to be here was
+         * a duplicate of (b1) that never executed; it is deleted, and
+         * test_null_source_conid_binds_nothing() in tests/vmsscs/
+         * test_scsd_wire.c reds if it comes back. */
         return;
     }
 }

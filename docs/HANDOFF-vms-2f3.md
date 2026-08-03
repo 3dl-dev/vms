@@ -3734,6 +3734,42 @@ not accept that `op9`. On the VAX2 link the same exchange completes and `op6`
 still never comes. Why the peer does not accept an `op9` that §4M.16 proved is
 byte-identical to the accepted one is the next question.
 
+### 4M.20 ⭐⭐ WE ANSWER A RETRANSMIT WITH A NEW SEQUENCE NUMBER — a bug §4M.14 CREATED
+
+The sequence numbers on the credit handshake, both links, both runs:
+
+| | `Q1A` **join** | `Q1B` **REFUSED** |
+|---|---|---|
+| VAX2 link | `op8 ss=12` → `op9 ss=12` → **`op6`** → `op7` → `op6` → `op7` | `op8 ss=13` → `op9 ss=13` → **stop** |
+| VAX1 link | `op8 ss=12` → `op9 ss=12` → **`op6`** → `op7` → `op6` → `op7` | `op8 ss=12` → `op9 **ss=12**`<br>`op8 RETX ss=12` → `op9 **ss=13**`<br>`op8 RETX ss=12` → `op9 **ss=14**` |
+
+**The peer replays the identical request (`send_seq=12` every time) and OVMX
+answers it with a different sequence number each time — 12, 13, 14.** Two
+phantom messages injected into the VC stream.
+
+> **This bug is one I created in §4M.14.** Before it, OVMX ignored `0x7b`
+> outright and consumed nothing. Answering them was right; answering them with
+> fresh sequence numbers is not. **Guardrail: a fix that makes a previously
+> unreachable path reachable must be re-checked on the wire, not just for
+> whether it fires.** §4M.14's counter said `CREDIT-RETX-ANSWERED=2` and looked
+> like success; the wire showed what those two answers actually carried.
+
+**And the codebase already had the rule written down.** `struct peer_state`'s
+own header: *"connect/lookup seqs are **allocate-once/retransmit-reuse** (the
+760mscp hole)"*, and `psc_dir_req_seq` implements it for the directory connect.
+`scs_reflect_credit()` was the hole.
+
+**Fixed** as `scs_retx_reply_seq()` in `scs_vc.c` — a pure function next to the
+VC engine, 11 assertions in `test_scs_vc.c` pinning replay-on-retransmit,
+advance-once-per-distinct-request, and the NULL cases.
+`OVMX_CREDIT_NO_SEQ_REUSE=1` restores the old behaviour. 39/39 green.
+
+> **⚠ VERDICT PENDING, and temper expectations.** On the VAX1 link the **first**
+> `op9` already carried the correct `send_seq=12` — structurally identical to
+> the join's accepted one — and the peer retransmitted anyway. So this fix
+> cannot explain why the *first* answer was not accepted. It removes a real
+> defect and stops us corrupting the stream during recovery.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

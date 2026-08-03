@@ -115,6 +115,31 @@ struct scs_vc {
 };
 
 /* Initialize a fresh VC (send_seq=1, recv_seq=0, no outstanding message). */
+
+/* vms-2f3 sec 4M.20: allocate-once / retransmit-reuse for a request/response
+ * pair whose reply consumes a VC sequence number.
+ *
+ * THE RULE: if a request arrives carrying a send_seq we have already answered,
+ * the reply must REPLAY the sequence number we used then. Allocating a fresh
+ * one manufactures phantom messages in the VC stream.
+ *
+ * WHY IT EXISTS: scs_reflect_credit() advanced unconditionally. That was
+ * unreachable while OVMX ignored retransmissions outright; sec 4M.14 started
+ * answering them, and the peer replaying op8 send_seq=12 three times drew
+ * replies numbered 12, 13, 14 (measured on the wire, run Q1B, VAX1 link).
+ * The scs_vc.h/peer_state headers already state this rule for connect and
+ * lookup seqs -- this path was the hole. */
+struct scs_retx_seq {
+    uint16_t last_req;   /* peer send_seq of the last request we answered */
+    uint16_t last_rsp;   /* the send_seq WE used in that reply */
+    int      valid;      /* the two above are meaningful */
+};
+
+/* Returns the send_seq to put on the reply, advancing `seq` only for a request
+ * we have not answered before. `st` must be zeroed before first use. */
+uint16_t scs_retx_reply_seq(struct scs_retx_seq *st, struct scs_seq_state *seq,
+                            uint16_t req_seq);
+
 void scs_vc_init(struct scs_vc *vc);
 
 /*

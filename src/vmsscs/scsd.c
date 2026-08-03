@@ -673,6 +673,15 @@ struct peer_state {
     int      psc_credit_done;      /* VAX1's op6/op8 credit handshake on OUR server dir
                                     * connection is complete -> safe to open our client
                                     * connect (af2: joiner opens its dir AFTER this) */
+    /* vms-2f3 sec 4M.20: allocate-once/retransmit-reuse for the op6/op8
+     * credit-handshake REPLY, the same rule the struct header states for
+     * connect/lookup seqs and that psc_dir_req_seq already implements.
+     * scs_reflect_credit() advanced ps->vc.seq unconditionally, so once sec
+     * 4M.14 made us answer retransmissions we began answering the SAME request
+     * with a NEW sequence number every time (observed 12 -> 13 -> 14 against a
+     * peer replaying send_seq=12). A retransmit must be answered by replaying
+     * the original reply. */
+    struct scs_retx_seq credit_seq; /* see scs_retx_reply_seq() in scs_vc.h */
     int      psc_dir_sent;         /* we sent OUR PS SCS$DIRECTORY CONNECT-REQUEST */
     int      psc_dir_connected;    /* VAX1 accepted it (op2, pair bound) */
     uint32_t psc_dir_remote_conid; /* VAX1's handle on OUR PS dir connection */
@@ -1954,7 +1963,22 @@ static int scs_reflect_credit(int sock, int ifindex, struct peer_state *ps,
     memcpy(r + 14 + 2, ps->logical, 6);        /* dst cluster-logical = VAX1 (abs16) */
     memcpy(r + 14 + 10, our_src_logical, 6);   /* src cluster-logical = OVMX (abs24) */
     uint16_t rseq = (uint16_t)buf[34] | ((uint16_t)buf[35] << 8); /* their send_seq */
-    uint16_t sseq = scs_seq_advance(&ps->vc.seq);
+    /* vms-2f3 sec 4M.20: ALLOCATE-ONCE / RETRANSMIT-REUSE. If this request
+     * carries a send_seq we have already answered, replay the reply we sent
+     * then -- do NOT consume a fresh sequence number. Measured on the wire
+     * (Q1B, VAX1 link): the peer replayed op8 send_seq=12 three times and OVMX
+     * answered send_seq 12, then 13, then 14, manufacturing two phantom
+     * messages in the VC stream. The struct header states this rule for
+     * connect/lookup seqs and psc_dir_req_seq already implements it; this path
+     * was the hole, and it only became reachable when sec 4M.14 started
+     * answering retransmissions at all.
+     * OVMX_CREDIT_NO_SEQ_REUSE=1 restores the always-advance behaviour. */
+    uint16_t sseq;
+    if (getenv("OVMX_CREDIT_NO_SEQ_REUSE") != NULL) {
+        sseq = scs_seq_advance(&ps->vc.seq);
+    } else {
+        sseq = scs_retx_reply_seq(&ps->credit_seq, &ps->vc.seq, rseq);
+    }
     /* recv_ack @abs 32/40/48, send_seq @abs 34/44 (dir_build_common layout). */
     r[32] = (uint8_t)rseq; r[33] = (uint8_t)(rseq >> 8);
     r[40] = (uint8_t)rseq; r[41] = (uint8_t)(rseq >> 8);

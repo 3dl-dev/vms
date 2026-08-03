@@ -64,7 +64,9 @@
       "Read(//home/baron/vax/cluster/work/**)",
       "Bash(mkdir -p /home/baron/.claude/jobs/c14776b7/tmp)",
       "Bash(python3 -c \"import dpkt; print\\('dpkt ok'\\)\")",
-      "Bash(python3 -c \"import scapy; print\\('scapy ok'\\)\")"
+      "Bash(python3 -c \"import scapy; print\\('scapy ok'\\)\")",
+      "Bash(mkdir -p /home/baron/.claude/jobs/f925fff5/tmp)",
+      "Read(//home/baron/.claude/jobs/f925fff5/tmp/**)"
     ]
   },
   "worktree": {

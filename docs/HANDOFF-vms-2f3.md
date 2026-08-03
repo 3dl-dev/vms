@@ -3633,9 +3633,20 @@ the `0x81/0x0b` response carries a constant `0x10` there, not a step.
 
 ### 4M.17 ⛔ THE `0x7b` CREDIT FIX IS NOT THE GATE EITHER — `N1F` refused
 
-`N1F` = `OVMXN1`, the identity refused four times as `N1B`/`N1C`/`N1D`/`N1E`,
-rerun with §4M.14's fix and a joining control (`P1A`, `XITDONE=1`) immediately
-before. **`XITDONE=0` — refused, identity proven on the wire.**
+Full bracketed series, all identity-proven on the wire:
+
+| run | identity | verdict | `CREDIT-RETX-ANSWERED` |
+|---|---|---|---|
+| `P1A` | `OVMXP1` fresh | **JOINED** | **0** |
+| **`N1F`** | **`OVMXN1` — refused 4× already** | **REFUSED** | **2** |
+| `P1B` | `OVMXP1` rejoin | REFUSED | **2** |
+| `P1C` | `OVMXP1` rejoin ×2 | REFUSED | **2** |
+| `P2A` | `OVMXP2` fresh | **JOINED** | **0** |
+
+**The fix engaged exactly as designed** — `0` in both joins, exactly `2` in all
+three refusals, matching §4M.14's 7/7 prediction frame for frame. So this is not
+a case of an untested change: the new code ran, answered both retransmissions in
+every refusal, **and the outcome did not move.**
 
 **This was predicted and is not a surprise:** §4M.15 already showed VAX1's
 retransmitted `op8` arrives at **+2.26 s**, over two seconds after the `op6`
@@ -3812,7 +3823,14 @@ Run tags session m part 2 (the §4M.14 `0x7b` credit-handshake fix): `P1A` fresh
 (`OVMXP1`, 1311) opening control · **`N1F` = `OVMXN1` rejoin — the known
 reproducer, refused 4× as `N1B`/`N1C`/`N1D`/`N1E`** · `P1B`/`P1C` = `OVMXP1`
 consecutive rejoins · `P2A` fresh (`OVMXP2`, 1312) closing control. Kill-switch
-`OVMX_NO_CREDIT_RETX=1`. **Last SCSSYSTEMID used: 1312.**
+`OVMX_NO_CREDIT_RETX=1`. **Result: both fresh identities JOINED, all three
+rejoins REFUSED, `CREDIT-RETX-ANSWERED` 0/0 in the joins and 2/2/2 in the
+refusals** (§4M.17).
+
+Run tags session m part 3 (`tools/connwatch.sh`, new — SDA `SHOW
+CONNECTIONS/NODE=` on VAX1, the link where `op6` first goes missing): `Q1A`
+fresh (`OVMXQ1`, 1313) · `Q1B` same-identity rejoin · `Q2A` fresh (`OVMXQ2`,
+1314) closing control. **Last SCSSYSTEMID used: 1314.**
 
 **Pod state after this session:** `vaxlab-0` SPENT (console wedged). `vaxlab-1`
 DEGRADED — its VAX2 was SIGKILLed by the `SMOKE` tool test and never rebooted.

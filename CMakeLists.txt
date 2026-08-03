@@ -300,15 +300,17 @@ if(BUILD_TESTS)
     # an 8-core box: 99s for 34 controls before the symbol scan, 180s for 39
     # after. Re-measured on a 16-core box for vms-c19: 328s for 44 controls
     # before, 387s for 49 after -- the added cmake configure per gate run costs
-    # about 0.4s per control, and the control COUNT is what moved. The timeout
-    # is set well clear of that because a CI runner has fewer cores and the
-    # compiles are what parallelise; it was raised with the control count, not
-    # to accommodate a slowdown.
+    # about 0.4s per control, and the control COUNT is what moved. Re-measured
+    # again on the same 16-core box for vms-32e: 390s for 49 controls, 514s for
+    # 62 -- 13 citation controls added, and the per-control cost is unchanged.
+    # The timeout is set well clear of that because a CI runner has fewer cores
+    # and the compiles are what parallelise; it is raised with the control
+    # count, not to accommodate a slowdown.
     add_test(NAME userspace_service_register_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(userspace_service_register_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 1200)
+        LABELS "integration;authenticity" TIMEOUT 1500)
 
     # Rule 10/11 standing gate (vms-fb9): a process does not name its own
     # terminal, and SHOW DEVICE does not invent device rows. Keeps the

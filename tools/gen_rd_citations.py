@@ -13,19 +13,19 @@ present. MEASURED on the branch this replaces: repointing one declaration at
 unchanged; repointing another at `vms-fb9`, whose status is `done`, did the
 same. The exemption was sold for a token, not for tracked work.
 
-WHICH GATES ACTUALLY READ THE LEDGER: the census, and
-tests/integration/test_rd_citations_fresh.sh. `grep -rn rd_cite_check tests/`
-is the list. The userspace service register
-(tests/integration/test_userspace_service_register.sh) accepts OVMX-USERSPACE /
-OVMX-PARTIAL / OVMX-LOCAL / OVMX-EXECUTIVE in the same shape and DOES NOT read
-this ledger -- that grep returns nothing for it, and an earlier revision of this
-docstring claimed otherwise. Its declarations are still shape-checked only;
-wiring it up is rd vms-fab, and is blocked because 85 of its 88 declarations
-cite closed items. This script still RESOLVES those ids -- they are cited from
-src/ and the scan below is not gate-specific. MEASURED on the tree at the time
-of writing: 133 marker lines, 67 of them OVMX-USERSPACE, 14 OVMX-PARTIAL, 14
-OVMX-LOCAL, 7 OVMX-EXECUTIVE -- against 14 OVMX-UNWIRED. So most of the ledger
-is resolved for a gate that never reads it.
+WHICH GATES READ THE LEDGER: run `grep -rn rd_cite_check tests/` and read the
+answer off the tree. This docstring twice named a list that did not match the
+code -- once claiming the userspace service register read the ledger when it
+did not (rd vms-32e), then correcting that to a standing "it never will". Both
+were wrong in the same way: a caller list frozen in a comment.
+
+The register (tests/integration/test_userspace_service_register.sh) accepts
+OVMX-USERSPACE / OVMX-PARTIAL / OVMX-EXECUTIVE in the same shape (plus
+OVMX-LOCAL, which carries no id of its own) and now resolves those ids through
+the same rd_cite_check as the census, which is why this script's scan is not
+gate-specific: it resolves every id cited under src/ and tools/ regardless of
+which marker carries it, and either gate's independent rescan reds when the
+ledger does not cover all of them.
 
 The gates cannot ask rd themselves: rd is nostr-backed and is not reachable
 from CI. So the resolution happens HERE, on a host that has rd, and the result

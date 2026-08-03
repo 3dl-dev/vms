@@ -12,20 +12,29 @@
 # repointed at `vms-fb9`, whose status is `done`, did the same. The exemption
 # cost a well-formed token.
 #
-# WHO ACTUALLY CALLS THIS. tests/integration/test_kif_caller_census.sh, and
-# tests/integration/test_rd_citations_fresh.sh for its own ledger self-check.
-# That is the whole list, and it is checkable:
+# WHO CALLS THIS. Read it off the tree rather than off this comment -- a
+# previous revision of this header named a caller list that did not match the
+# code, and that mismatch IS rd vms-32e:
 #
 #     grep -rn 'rd_cite_check' tests/
 #
-# An earlier revision of this header said the userspace service register
-# (OVMX-USERSPACE / OVMX-PARTIAL / OVMX-LOCAL / OVMX-EXECUTIVE) was checked
-# here too. IT IS NOT: test_userspace_service_register.sh contains no reference
-# to this library, to rd_cite_check, or to the ledger -- the grep above returns
-# nothing for it. Those declarations are still shape-checked only. That is
-# tracked as rd vms-fab (85 of its 88 declarations cite CLOSED items, so wiring
-# the register to this checker reds it until the citations are repointed) and
-# is deliberately NOT done here.
+# Today that is tests/integration/test_kif_caller_census.sh (OVMX-UNWIRED),
+# tests/integration/test_userspace_service_register.sh (OVMX-USERSPACE /
+# OVMX-PARTIAL / OVMX-EXECUTIVE; OVMX-LOCAL carries no id of its own), and
+# tests/integration/test_rd_citations_fresh.sh for its own ledger self-check.
+#
+# WHAT vms-32e COST, recorded because it is the reason this paragraph is
+# phrased as an instruction to grep. The register shipped for two rounds with
+# this library's header claiming it was checked here and two other files
+# repeating the claim, while the register contained no reference to
+# rd_cite_check at all. MEASURED on c73726a, the last revision that shipped
+# that way: `sed s/(vms-6aa)/(vms-q9z9)/` on src/libvms/syssvc/sys_qio.c -- an
+# id that has never existed, two declaration sites -- left the register rc=0
+# PASS with `vms-q9z9 x2` printed in its table as an owner. (rd vms-32e records
+# the same attack on a single site plus 49/49 green negative controls on that
+# tree; only the gate half is re-measured here.) On the revision that wired it,
+# the same command gives rc=1, naming the id twice -- once for the citation,
+# once for the independent tree rescan.
 #
 # WHY THE CHECK IS NOT A LIVE QUERY. rd is nostr-backed and is not reachable
 # from CI -- that constraint is why the gates were written to shape-check in

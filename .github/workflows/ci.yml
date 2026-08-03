@@ -13,7 +13,11 @@ jobs:
   build-and-test:
     name: Build & Test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # vms-32e grew the register negative-control suite 49->62 controls and added a
+    # per-control citation check, taking this job from ~17m (main) to ~20m+ on the
+    # same runner class. The 20m cap left under 3 minutes of margin; raised for
+    # headroom. Suite runtime growth is tracked in rd (vms-32e).
+    timeout-minutes: 35
 
     steps:
       - name: Checkout

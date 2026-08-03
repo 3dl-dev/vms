@@ -280,6 +280,16 @@ oracle degrades before it errors.
     refused rejoin the peer's `MSCP$DISK` lookups stay `0x5b` for all four,
     while every join reaches `0x4b` by the second. A join CAN carry a leading
     `0x5b` (`N3A`). Useful free oracle; the causal reading is dead.
+18. **Answering a retransmit with a fresh sequence number (§4M.20).** Real, and
+    a defect §4M.14 itself created — the peer replayed `op8 send_seq=12` and we
+    answered 12/13/14. Fixed (`scs_retx_reply_seq`, 11 assertions), **verified
+    replayed as 12/12/12 on the wire, and not the gate** (`N1G`/`R1B` refused
+    between joining controls).
+17. **Our `op7`/`op9` carrying the retransmit msgtype `0x7b` (§4M.19).** Real,
+    also created by §4M.14's `memcpy`. Fixed, **verified as `mt=4b` on the
+    wire, and not the gate.** Its closing inference — "VAX1 did not accept our
+    `op9`" — is **refuted** by §4M.21: the reply is now provably perfect and the
+    peer still retransmits.
 16. **The `0x7b` credit-handshake deafness (§4M.14/§4M.17).** `scsd.c:2525`
     discarded every retransmitted `op6`/`op8`; third instance of one defect, on
     the gate the source labels as gating admission. **Real, fixed, kept — and
@@ -3769,6 +3779,50 @@ advance-once-per-distinct-request, and the NULL cases.
 > the join's accepted one — and the peer retransmitted anyway. So this fix
 > cannot explain why the *first* answer was not accepted. It removes a real
 > defect and stops us corrupting the stream during recovery.
+
+### 4M.21 ⛔ BOTH FIXES VERIFIED ON THE WIRE, NEITHER IS THE GATE — and my "did not accept our op9" reading is corrected
+
+**R-series, bracketed and identity-proven:** `R1A` fresh **JOINED** · `N1G`
+(`OVMXN1`, now refused **five** times) **REFUSED** · `R1B` (`OVMXR1` rejoin)
+**REFUSED** · `R2A` fresh **JOINED**.
+
+**Both fixes are provably live**, not merely "fired":
+
+```
+N1G / R1B, VAX1 link, with sec 4M.19 + 4M.20 in:
+  +24.998  PEER mt=4b op8 ss=12   ->  OVMX mt=4b op9 ss=12
+  +28.008  PEER mt=7b op8 ss=12   ->  OVMX mt=4b op9 ss=12   <- 0x4b, not 0x7b; 12, not 13
+  +31.028  PEER mt=7b op8 ss=12   ->  OVMX mt=4b op9 ss=12   <- 12 again, not 14
+```
+
+Against §4M.20's pre-fix `12 → 13 → 14` and §4M.19's `mt=7b` reply. **Both
+defects are gone from the wire and the rejoin is refused exactly as before.**
+
+> ### ⛔ CORRECTION — "VAX1 did not accept our `op9`" (§4M.19's closing line)
+> **That reading is now refuted.** OVMX's `op9` is byte-correct, correctly
+> typed, correctly sequenced, and **replayed identically** on every
+> retransmission — and the peer retransmits anyway. So the retransmission is
+> **not** evidence that our reply was rejected. The better reading, consistent
+> with §4M.18: **the peer re-drives the `op8` handshake because its own
+> disconnect is stuck in `disc_pend`,** and the retransmit is a symptom of that
+> block, not a verdict on our answer. Do not chase "our op9 is wrong" again.
+
+**Added to §3 as killed entries 17 and 18.** That is now **nine** real,
+grounded, separately-fixed defects on this item, none of which is the cause.
+
+**What is left standing, and it is a short list.** The peer:
+- holds our directory CDT in `disc_sent` / `disc_pend` with a **non-empty
+  message queue** and **`Send Credit 1`**;
+- has an `MSCP$DISK` connect queued behind it in `con_pend`, never transmitted;
+- reports `Rej/Disconn Reason 0` — **nothing is being rejected**;
+- answers everything we send and is answered correctly in turn.
+
+**The next thread is CREDIT, and it has a number attached.** `SCSD-I-CREDIT` is
+**618** in a join and **25** in a refusal, and the stuck CDT sits at **`Send
+Credit 1`** with traffic queued behind it. A peer that cannot transmit because
+it has no send credit would look exactly like this. **Establish how OVMX grants
+credit on the SCS$DIRECTORY connection specifically, and whether the join's
+credit flow is what frees the peer to send `op6`.**
 
 ### 4M.5 The test, and its kill-switch
 

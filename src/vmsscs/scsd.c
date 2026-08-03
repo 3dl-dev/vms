@@ -807,17 +807,58 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
  * not on a lazy HELLO poll. The request is one sequenced message: the first
  * send allocates a send_seq; retransmits REUSE it (a retransmit is not a new
  * message). Returns 1 if a frame was sent.
+ *
+ * vms-398 -- WHICH VIRTUAL CIRCUIT (VAXcluster Principles p. 2-47). CONNECT
+ * takes either a named circuit or none: "CONNECT ... uses CONFIG_SYS to obtain
+ * the address of the first Path Block queued to the System Block for the
+ * specified node ... [and] examines each Path Block in turn until it finds one
+ * whose virtual circuit is OPEN".
+ *   named_vc != NULL - the caller named the circuit; it is used as given.
+ *   named_vc == NULL - the caller named only the NODE. The circuit is selected
+ *                      from the configuration database by the peer's 48-bit SCS
+ *                      System Address, via scs_config_select_vc() (CONFIG_SYS +
+ *                      the OPEN scan). This is what BOTH of the daemon's own
+ *                      call sites pass.
+ * If no OPEN circuit exists for the node, NOTHING IS SENT and the refusal is
+ * logged: there is no honest frame to build without a circuit (a fabricated one
+ * would carry a zero peer-logical), and a silent success is exactly the failure
+ * mode CLAUDE.md rule 9 / INV-6 forbids.
+ *
+ * The circuit's characteristics -- the remote port address the frame is
+ * addressed to and the System Block whose System Address goes in the SCA
+ * peer-logical field -- are read back through CONFIG_PATH (p. 2-47), not by
+ * reaching into the Path Block, so the daemon sees the same view of a path that
+ * any other CONFIG_PATH caller would.
  */
-static int send_joiner_connect_request(int sock, int ifindex, struct peer_state *ps,
+static int send_joiner_connect_request(int sock, int ifindex, struct scs_config *cfg,
+                                       struct peer_state *ps, struct scs_pb *named_vc,
                                        const uint8_t our_hw_mac[6],
                                        const uint8_t our_src_logical[6])
 {
+    struct scs_pb *vc = named_vc;
+    if (vc == NULL) {
+        vc = scs_config_select_vc(cfg, ps_sys_addr(ps));
+    }
+    struct scs_config_path_info path;
+    if (vc == NULL || !scs_config_path(vc, &path)) {
+        log_ts(stderr);
+        fprintf(stderr,
+                " SCSD-E-NOVC, no OPEN virtual circuit to peer"
+                " %02x:%02x:%02x:%02x:%02x:%02x -- CONNECT-REQUEST NOT sent"
+                " (p. 2-47: CONNECT needs an open circuit; none was named and"
+                " CONFIG_SYS found none for this node)\n",
+                ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
+        fflush(stderr);
+        return 0;
+    }
+
     struct scs_connect_params cp;
     memset(&cp, 0, sizeof(cp));
-    memcpy(cp.dst_mac, ps_port_addr(ps), 6);
+    memcpy(cp.dst_mac, path.remote_port_addr, 6);
     memcpy(cp.src_mac, our_hw_mac, 6);
     memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-    memcpy(cp.peer_logical, ps_sys_addr(ps), 6);
+    memcpy(cp.peer_logical, path.sb != NULL ? path.sb->system_id : zero_addr, 6);
     cp.local_conid = OVMX_JOINER_CONID;
     cp.remote_conid = 0; /* CONNECT-REQUEST: the member's Con.ID is not yet known */
     cp.recv_ack = ps->vc.seq.recv_seq; /* always ack the member's latest send_seq */
@@ -828,7 +869,7 @@ static int send_joiner_connect_request(int sock, int ifindex, struct peer_state 
     cp.incarnation = ps->incarnation;
     uint8_t cframe[SCS_CONNECT_FRAME_LEN];
     if (scs_connect_build_request(&cp, cframe) == 0 &&
-        send_frame_to(sock, ifindex, ps_port_addr(ps), cframe, sizeof(cframe)) > 0) {
+        send_frame_to(sock, ifindex, path.remote_port_addr, cframe, sizeof(cframe)) > 0) {
         ps->joiner_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
         scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
@@ -1591,7 +1632,9 @@ int main(int argc, char **argv)
                 long last_ms = ps->last_joiner_req.tv_sec * 1000L +
                                ps->last_joiner_req.tv_nsec / 1000000L;
                 if ((now_ms - last_ms) >= 1000) {
-                    if (send_joiner_connect_request(sock, (int)ifindex, ps,
+                    /* vms-398: name the NODE, not the circuit -- CONNECT picks
+                     * the OPEN virtual circuit via CONFIG_SYS (p. 2-47). */
+                    if (send_joiner_connect_request(sock, (int)ifindex, &scs_cfg, ps, NULL,
                                                     our_hw_mac, our_src_logical)) {
                         connect_req_sent++;
                         log_ts(stdout);
@@ -1859,8 +1902,11 @@ int main(int argc, char **argv)
                          * PROMPTLY open OUR VMS$VAXcluster connection to the
                          * member (clean-ref idx52) before its CM times out and
                          * re-issues START. */
+                        /* vms-398: the caller here names the NODE the START
+                         * completed with, not a circuit, so CONNECT selects the
+                         * virtual circuit itself via CONFIG_SYS (p. 2-47). */
                         if (ps->start_acked && !ps->joiner_connected &&
-                            send_joiner_connect_request(sock, (int)ifindex, ps,
+                            send_joiner_connect_request(sock, (int)ifindex, &scs_cfg, ps, NULL,
                                                         our_hw_mac, our_src_logical)) {
                             connect_req_sent++;
                             log_ts(stdout);

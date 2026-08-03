@@ -445,6 +445,143 @@ void scs_sb_apply_info(struct scs_sb *sb, const struct scs_sb_info *info);
 /* Human-readable VC state name, for logging. Never NULL. */
 const char *scs_vc_state_name(enum scs_vc_state state);
 
+/*
+ * ===== CONFIG_SYS / CONFIG_PATH (vms-398, p. 2-47) =========================
+ *
+ * "CONFIG_SYS ... given the SCS System ID of a node, returns ... the SCS
+ * System ID, the maximum datagram and message sizes, the type and version of
+ * software running on the node, the SCS Node Name, and the address of the
+ * first Path Block in the queue of Path Blocks for the node" and "CONFIG_PATH
+ * ... given the address of a Path Block, returns ... the state of the
+ * virtual circuit, the type and state of the remote port, the address of the
+ * System Block ... and the address of the next Path Block in the queue"
+ * (p. 2-47). These are READ-ONLY queries over the SB/PB structures above --
+ * this module adds no new state and performs no wire I/O.
+ *
+ * "Address of a Path Block" (p. 2-47) is an OVMX design choice here: a
+ * `struct scs_pb *` IS the identifier, exactly as every other lookup function
+ * in this header already returns/accepts SB and PB pointers as identifiers
+ * (scs_config_find_sb, scs_config_find_pb, pb->sb, pb->next, ...). No new
+ * opaque-handle type is introduced.
+ *
+ * REACHABILITY (measured, not asserted -- the claim above this block about the
+ * rest of the module applies here too):
+ *   scs_config_select_vc / scs_config_sys
+ *       LIVE. src/vmsscs/scsd.c's send_joiner_connect_request() takes either a
+ *       named circuit or none, and BOTH of its call sites in the daemon pass
+ *       none -- so every joiner CONNECT-REQUEST OVMX transmits picks its
+ *       virtual circuit through scs_config_select_vc(), which is CONFIG_SYS
+ *       plus the p. 2-47 OPEN scan. If no circuit is OPEN, the daemon logs
+ *       SCSD-E-NOVC and sends NOTHING (rule 9 / INV-6: no invented circuit).
+ *       tests/vmsscs/test_scsd_wire.c drives that production sender.
+ *   scs_config_path
+ *       LIVE, on the same path twice over: the OPEN scan inside
+ *       scs_config_select_vc() examines each Path Block through it, and the
+ *       daemon reads the chosen circuit's remote port address and System Block
+ *       back through it to build the frame.
+ *
+ * HONESTY ON UNPOPULATED FIELDS (do not invent a value, CLAUDE.md rule 8 /
+ * INV-6 spirit): scs_sb has NEVER had a max-datagram-size or max-message-size
+ * field -- grep src/vmsscs for "datagram" before this file and there is
+ * nothing. CONFIG_SYS reports these as 0 with their `have` bit UNSET,
+ * always, today. Software type/version and SCS Node Name DO exist as SB
+ * fields (os_name/os_version/node_name), but the live daemon has no call path
+ * that ever fills them for a REMOTE node: scs_pb_attach_formative_sb (the only
+ * function that sets them) is called only from tests, never from scsd.c (see
+ * the REACHABILITY note above this comment in the file). scs_config_sys()
+ * therefore sets each field's `have` bit from what the SB struct ACTUALLY
+ * holds at query time (nonempty string / nonzero version), not from a
+ * hardcoded assumption -- so a remote node's software_type/version/node_name
+ * read back as empty/0 with `have` unset in every configuration scsd.c builds
+ * today, and would read back populated the moment attach_formative_sb gets a
+ * real caller (tracked separately, vms-17f is the closest existing item for
+ * wiring gaps of this kind; this module does not fix that wiring).
+ * test_config_sys_does_not_invent_unknown_fields() queries an SB built the way
+ * scsd.c builds one and asserts all three read back ABSENT, so the "do not
+ * invent" rule is executable rather than a comment.
+ */
+enum scs_config_sys_have {
+    SCS_CONFIG_SYS_HAVE_MAX_DATAGRAM     = 1u << 0, /* NEVER set: no such SB field exists (see above) */
+    SCS_CONFIG_SYS_HAVE_MAX_MESSAGE      = 1u << 1, /* NEVER set: no such SB field exists (see above) */
+    SCS_CONFIG_SYS_HAVE_SOFTWARE_TYPE    = 1u << 2, /* set iff sb->os_name[0] != '\0' */
+    SCS_CONFIG_SYS_HAVE_SOFTWARE_VERSION = 1u << 3, /* set iff sb->os_version != 0 */
+    SCS_CONFIG_SYS_HAVE_NODE_NAME        = 1u << 4  /* set iff sb->node_name[0] != '\0' */
+};
+
+/* CONFIG_SYS result (p. 2-47). Zeroed and `have` == 0 when the System ID is
+ * not found; `first_pb` is the Path Block identifier of the first PB queued
+ * to the SB (NULL if the SB has none), i.e. sb->pb_head. */
+struct scs_config_sys_info {
+    uint8_t  system_id[SCS_SYSTEM_ID_LEN];      /* echoes the input System ID */
+    uint16_t max_datagram_size;                  /* always 0 -- HAVE_MAX_DATAGRAM never set */
+    uint16_t max_message_size;                   /* always 0 -- HAVE_MAX_MESSAGE never set */
+    char     software_type[SCS_SB_OSNAME_LEN + 1];    /* SB os_name, if HAVE_SOFTWARE_TYPE */
+    uint16_t software_version;                         /* SB os_version, if HAVE_SOFTWARE_VERSION */
+    char     node_name[SCS_SB_NODENAME_LEN + 1];      /* SB node_name, if HAVE_NODE_NAME */
+    struct scs_pb *first_pb;                     /* identifier of the first queued PB, or NULL */
+    unsigned have;                                /* bitmask of enum scs_config_sys_have */
+};
+
+/*
+ * scs_config_sys - CONFIG_SYS query (p. 2-47): find the System Block matching
+ * `system_id` in the configuration queue (a formative SB does NOT match --
+ * CONFIG_SYS queries the System List, p. 2-17, not in-formation state) and
+ * fill *out. Returns 1 if found, 0 if not found or on a NULL argument (out is
+ * always zeroed first when out != NULL).
+ */
+int scs_config_sys(struct scs_config *cfg, const uint8_t system_id[SCS_SYSTEM_ID_LEN],
+                   struct scs_config_sys_info *out);
+
+/* CONFIG_PATH result (p. 2-47): the PB's own state plus the identifiers of
+ * the SB it is queued to and the next PB in whichever queue holds it (the
+ * PDT's formative queue or an SB's open-circuit queue -- CONFIG_PATH does not
+ * distinguish the two per the book; `on_formative_queue` says which one). */
+struct scs_config_path_info {
+    enum scs_vc_state   vc_state;
+    enum scs_port_type  remote_port_type;
+    enum scs_port_state remote_port_state;
+    uint8_t  remote_port_addr[SCS_PORT_ADDR_LEN];
+    struct scs_sb *sb;              /* SB this PB is queued to (formative or owning), or NULL */
+    struct scs_pb *next;            /* next PB in the same queue, or NULL if last */
+    int on_formative_queue;         /* 1 if queued to a PDT (still forming), 0 if queued to an SB */
+};
+
+/*
+ * scs_config_path - CONFIG_PATH query (p. 2-47): given a Path Block
+ * identifier, fill *out with its queryable state. Returns 1 on success, 0 if
+ * pb/out is NULL or pb is not a live (in_use) Path Block (out is always
+ * zeroed first when out != NULL).
+ */
+int scs_config_path(const struct scs_pb *pb, struct scs_config_path_info *out);
+
+/*
+ * scs_config_select_vc - the CONNECT algorithm's "caller did not name a
+ * circuit" path (p. 2-47): "CONNECT ... uses CONFIG_SYS to obtain the address
+ * of the first Path Block queued to the System Block for the specified node
+ * ... [and] examines each Path Block in turn until it finds one whose virtual
+ * circuit is OPEN". Looks up the SB by `system_id` (the CONFIG_SYS step) and
+ * examines its PB queue through scs_config_path() for the first PB with
+ * vc_state == SCS_VC_OPEN. This is the selection scsd.c's joiner
+ * CONNECT-REQUEST performs on every join (see the REACHABILITY note above);
+ * a NULL return means CONNECT sends nothing, it does not fall back.
+ *
+ * OVMX DESIGN CHOICE / DOCUMENTED OMISSION (labeled per rule 8, vms-398
+ * constraint): the book also describes a circuit-type preference (e.g. CI
+ * over Ethernet) for a node reachable over more than one interconnect
+ * (p. 2-47). OVMX's only production interconnect is Ethernet -- scsd.c never
+ * opens a second circuit type to the same node (grep confirms no caller drives
+ * a mixed-type multi-circuit node in production) -- so that preference has
+ * nothing to choose between and is NOT implemented here. This function simply
+ * returns the first OPEN PB found scanning the queue from sb->pb_head; if
+ * OVMX ever grows a second interconnect type, this is where the preference
+ * order would need to be added.
+ *
+ * Returns the chosen PB, or NULL if the System ID is unknown or none of its
+ * queued PBs has vc_state == SCS_VC_OPEN.
+ */
+struct scs_pb *scs_config_select_vc(struct scs_config *cfg,
+                                    const uint8_t system_id[SCS_SYSTEM_ID_LEN]);
+
 #ifdef __cplusplus
 }
 #endif

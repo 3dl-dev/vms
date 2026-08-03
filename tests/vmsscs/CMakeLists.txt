@@ -244,18 +244,28 @@ set_tests_properties(vmsscs_credit_unit PROPERTIES
 # WHY IT EXISTS: nothing in ctest re-derived any WIRE VERDICT figure, so a wrong
 # recorded measurement was invisible to a green run. That is how a mis-scoped
 # filter claim survived two review rounds.
+#
+# The gate is registered UNCONDITIONALLY, under the same name and labels either
+# way. A missing interpreter must NOT make it vanish (a skipped test is a
+# failing test), and must NOT break configure either: tests/qemu/Dockerfile
+# configures this whole tree with -DOVMX_STATIC=ON -DBUILD_TESTS=ON on a musl
+# builder image with no python3, builds only `qemu_syssvc_tests vmsdcl`, and
+# never invokes ctest -- an earlier configure-time FATAL_ERROR here turned five
+# CI jobs red that run no vmsscs test at all. So the absence is made loud at
+# TEST time instead: scs_credit_figures_no_python3.cmake exits non-zero and
+# names the missing interpreter. Configure succeeds, a build that never runs
+# ctest is unaffected, and any build that does run ctest sees a RED test.
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_Interpreter_FOUND)
     add_test(NAME scs_credit_figures
              COMMAND ${Python3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_credit_figures.py)
-    set_tests_properties(scs_credit_figures PROPERTIES
-        LABELS "unit;scs;cluster;docs"
-        TIMEOUT 60
-    )
 else()
-    message(FATAL_ERROR
-        "Python3 interpreter not found: the scs_credit_figures gate (vms-76e) "
-        "cannot be registered, and it is not optional -- it is the only thing "
-        "that keeps the SCS credit WIRE VERDICT prose pinned to its measurement.")
+    add_test(NAME scs_credit_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_credit_figures_no_python3.cmake)
 endif()
+set_tests_properties(scs_credit_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)

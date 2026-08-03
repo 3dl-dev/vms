@@ -78,7 +78,22 @@
  *                      header, i.e. the 2 bytes IMMEDIATELY PRECEDING the
  *                      remote/destination Con.ID at SCA [50:54].
  *
- * ---- HOW TO RE-DERIVE EVERY NUMBER BELOW (the exact method) --------------
+ * ---- HOW TO RE-DERIVE EVERY NUMBER BELOW (a script, not a promise) -------
+ *
+ *   $ tools/scs_credit_measure.py --quick     # the two grounding captures, ~5s
+ *   $ tools/scs_credit_measure.py             # all 47 captures, ~5-10 min
+ *
+ *   That script re-measures every figure in this WIRE VERDICT from the raw
+ *   pcaps and PASS/FAILs each against a checked-in EXPECTED table. Last full
+ *   run 2026-08-03 on workshop: 30 checks, 0 failures. It needs the lab-1 captures, which
+ *   are host-only and not in git, so ctest cannot run it; what ctest DOES run
+ *   (scs_credit_figures) is the cheap half -- it asserts that every number in
+ *   EXPECTED still appears verbatim in this header and in
+ *   docs/cluster-protocol-spec.md, so the prose cannot drift away from the
+ *   measurement even on a machine with no captures. A comment is not evidence;
+ *   the script is.
+ *
+ *   The method it implements, spelled out:
  *
  *   Inputs: the two lab captures
  *       /data/training/vax/cluster/captures/formation-ci1.pcap        (18558 frames)
@@ -86,28 +101,51 @@
  *   For each captured Ethernet frame let  sca = frame[14:]  (strip the 14-byte
  *   Ethernet header; SCA offset 0 is absolute offset 14).
  *
- *   >>> FILTER, REQUIRED -- the counts below do NOT reproduce without it: <<<
- *       keep a frame only if  len(sca) == <class>  AND  sca[16:18] == 4B 13
- *   0x4B13 is the SCS message marker. Filtering on LENGTH ALONE over the same
- *   two captures gives 20459 190-byte frames and the histogram
- *   {0:5418, 1:11042, 2:2587, 3:1409, 4:3} -- 599 of those frames are not
- *   0x4B13 and are NOT part of this grounding.
+ *   >>> TWO DIFFERENT POPULATIONS -- READ WHICH ONE EACH LINE USES. <<<
+ *
+ *   (A) THE WHOLE SCS FAMILY -- keep a frame if  len(sca) == <class>.  No
+ *       marker filter. Evidence line 1 (CONSERVATION) uses THIS, and it MUST:
+ *       a debit/credit account only balances if you count every message on the
+ *       connection. Of the 20459 190-byte frames in the two captures the marker
+ *       split is {0x4B13: 19860, 0x5B13: 591, 0x7B13: 8} -- i.e. ALL of them
+ *       are SCS messages of the 0x?B13 family (the header note ~40 lines below
+ *       records that 0x5B13 and 0x7B13 carry the same credit field at the same
+ *       offset). "All 190-byte frames" and "the whole 0x?B13 family at 190
+ *       bytes" are therefore the SAME SET here, and the script asserts that
+ *       equality rather than assuming it. Dropping the 591+8 siblings drops
+ *       credits that were genuinely granted while still counting the messages
+ *       they paid for, and the identity below REFUTES instead of holding. The
+ *       measured refutation figures are quoted ONCE, in the CORRECTION section
+ *       below -- deliberately not repeated here, so that a drift in one copy
+ *       cannot be masked by a stale second copy (the docs gate checks the
+ *       figures by value, and duplicates defeat it).
+ *
+ *   (B) 0x4B13 ONLY -- keep a frame if  len(sca) == <class>  AND
+ *       sca[16:18] == 4B 13.  Evidence lines 2 and 3 and the per-class table
+ *       use THIS, because those are single-marker value-shape statements, not
+ *       accounting identities. 19860 of the 20459 190-byte frames survive it.
  *
  * Three independent lines of evidence, all from those two captures:
  *
- *  1. CONSERVATION over the 190-byte steady-state class. Summing [48:50] over
- *     every 190-byte frame a node SENDS, against the number of 190-byte
- *     messages it RECEIVED:
+ *  1. CONSERVATION over the 190-byte steady-state class. POPULATION (A): ALL
+ *     190-byte frames, NO marker filter. Summing [48:50] over every 190-byte
+ *     frame a node SENDS, against the number of 190-byte messages it RECEIVED
+ *     (nodes are the source MACs aa:00:04:00:01:04 = VAX1 and 08:00:2b:78:56:b9):
  *        formation-ci1:  VAX1 granted 10842 vs peer sent 10842  (delta 0)
  *                        peer granted  6712 vs VAX1 sent  6715  (delta 3)
  *        joinwindow:     VAX1 granted  1601 vs peer sent  1602  (delta 1)
  *                        peer granted  1300 vs VAX1 sent  1300  (delta 0)
- *     Total credits returned equals total messages sent to within the
- *     end-of-capture tail. That is exactly the p. 2-43 debit/credit identity
- *     and no other field in the header satisfies it.
- *  2. VALUE SHAPE. Over 19860 190-byte 0x4B13 frames (the filter above) the
+ *     All four reproduce EXACTLY under population (A) -- re-run
+ *     tools/scs_credit_measure.py --quick. Total credits returned equals total
+ *     messages sent to within the end-of-capture tail. That is exactly the
+ *     p. 2-43 debit/credit identity and no other field in the header satisfies
+ *     it.
+ *  2. VALUE SHAPE. POPULATION (B). Over 19860 190-byte 0x4B13 frames the
  *     field takes only {0:5174, 1:10696, 2:2582, 3:1405, 4:3} -- the shape of a
  *     piggybacked Pending Receive Credit in a near-lockstep flow, not a counter.
+ *     (Unfiltered, population (A), the same histogram is
+ *     {0:5418, 1:11042, 2:2587, 3:1409, 4:3} over 20459 frames -- same shape,
+ *     which is the independent reason the siblings belong in line 1.)
  *  3. TUNABLE MATCH at connection formation. In the 110-byte
  *     CONNECT_REQ/ACCEPT_REQ class the same field carries the number of Send
  *     Credits that SYSAP is extending, byte-exact to TWO DIFFERENT SYSGEN
@@ -118,10 +156,34 @@
  *     A single offset matching two distinct tunables, on two distinct SYSAP
  *     pairs, is not coincidence.
  *
+ * ---- CORRECTION: THE FILTER WAS SCOPED WRONG (adversary-caught) ----------
+ *
+ * An earlier revision of this block headed the 0x4B13 filter ">>> FILTER,
+ * REQUIRED -- the counts below do NOT reproduce without it <<<" and put it
+ * above ALL THREE evidence lines. For line 1 that was exactly INVERTED: the
+ * filter does not enable the conservation numbers, it DESTROYS them. Applying
+ * it to line 1 gives formation-ci1 VAX1 10817 granted vs 10266 peer-sent
+ * (delta -551) and peer 6369 vs 6695 (delta +326) -- the debit/credit identity
+ * REFUTED. A reader following the old comment literally would have derived a
+ * refutation of the primary grounding. The four figures printed in line 1 were
+ * always the population-(A) numbers and are correct; only the recorded method
+ * was wrong. Hence the (A)/(B) split above.
+ *
+ * THE OFFSET CONCLUSION IS UNAFFECTED. This was a recorded-method defect, not
+ * a wrong verdict: [48:50] is still the credit field, all four conservation
+ * figures still reproduce, and lines 2 and 3 are untouched.
+ *
+ * (One report in that review does not correspond to anything on this branch: a
+ * claimed figure "VAX1 granted 6708 vs peer sent 6708 (delta 0)". No revision
+ * of this header or of the spec ever contained 6708 -- `git log -S6708` over
+ * both files is empty and the first commit already read 10842/10842. The
+ * delta-0 partner is and always was 10842 vs 10842. Recorded here so the next
+ * reader does not go looking for a number that was never written.)
+ *
  * ---- SCOPE OF THE GROUNDING: EVERY ADMITTED CLASS IS MEASURED ------------
  *
  * Offset 48 is asserted only for the SCS *message* length classes admitted by
- * scs_credit_header_offset(), and each one was measured. Same method as above
+ * scs_credit_header_offset(), and each one was measured. POPULATION (B)
  * (sca = frame[14:], sca[16:18] == 4B 13), swept over ALL 47 .pcap files in
  * /data/training/vax/cluster/captures/, tabulating the LE u16 at sca[48:50]:
  *
@@ -156,8 +218,8 @@
  *
  * WHAT THE LENGTH KEY DOES NOT DO. scs_credit_header_offset() keys on LENGTH
  * ONLY and cannot tell an SCS message from anything else of the same size --
- * the caller must have identified the frame already. The 0x4B13 filter above
- * is a grounding method, not a runtime check. (For completeness: the sibling
+ * the caller must have identified the frame already. Populations (A) and (B)
+ * above are grounding methods, not runtime checks. (For completeness: the sibling
  * markers 0x5B13 and 0x7B13 at these same lengths carry the same
  * credit-shaped values -- 190-byte 0x5B13 n=18086 max=3, 0x7B13 n=100 max=3;
  * 110-byte 0x5B13 n=675 max=10, 0x7B13 n=106 max=10 -- so the offset holds

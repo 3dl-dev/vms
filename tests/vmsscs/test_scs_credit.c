@@ -325,7 +325,26 @@ static void test_special_credit_message_p2_44(void)
      * TIMEOUT, which is a hang, not a test result. */
     const unsigned max_sends = 10;
     unsigned sent = 0;
+    unsigned saw_boundary = 0;
     while (b.local->receive_credit >= threshold && sent < max_sends) {
+        /*
+         * THE OFF-BY-ONE BOUNDARY, asserted because nothing else does.
+         * p. 2-44 says dangerously low is "LESS THAN the sum of ... SCSFLOWCUSH
+         * and the remote value for Minimum Send Credits" -- so Receive Credit
+         * EQUAL to that sum is NOT low. Without this, the test only ever
+         * observes Receive Credit at 10 and 5 and `<` vs `<=` in
+         * scs_credit_is_dangerously_low() is unobservable: a mutant that
+         * reports the boundary as low passes the whole suite. Receive Credit
+         * falls 10,9,8,7,6 through this loop, so `== threshold` is reached on
+         * the last iteration; saw_boundary below proves it was.
+         */
+        if (b.local->receive_credit == threshold) {
+            CHECK(!scs_credit_is_dangerously_low(b.local),
+                  "Receive Credit == threshold (%u) must NOT be dangerously low: "
+                  "p. 2-44 says \"less than the sum\", not \"at most\"",
+                  threshold);
+            saw_boundary = 1;
+        }
         int c = scs_credit_on_send(b.remote);
         CHECK(c >= 0, "remote send %u refused", sent);
         scs_credit_on_recv(b.local, (unsigned)c);
@@ -336,8 +355,14 @@ static void test_special_credit_message_p2_44(void)
           "Receive Credit still %u after %u one-way messages -- the receive path "
           "is not debiting Receive Credit",
           b.local->receive_credit, sent);
+    CHECK(saw_boundary,
+          "Receive Credit never passed through exactly %u -- the boundary "
+          "assertion above did not run, so `<` vs `<=` is still untested",
+          threshold);
     CHECK(b.local->receive_credit == threshold - 1, "Receive Credit %u, want %u",
           b.local->receive_credit, threshold - 1);
+    /* ...and one below the sum IS low. Together with the == assertion in the
+     * loop this brackets the p. 2-44 comparison exactly. */
     CHECK(scs_credit_is_dangerously_low(b.local), "should be dangerously low at %u < %u",
           b.local->receive_credit, threshold);
     CHECK(b.local->pending_receive_credit == sent, "Pending Receive %u, want %u",

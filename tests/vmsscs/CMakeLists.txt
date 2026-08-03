@@ -228,3 +228,34 @@ set_tests_properties(vmsscs_credit_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-76e - the WIRE VERDICT prose must match the measurement.
+#
+# tools/scs_credit_measure.py re-derives every figure in the WIRE VERDICT of
+# src/vmsscs/include/scs_credit.h from the lab-1 captures and PASS/FAILs each
+# against a checked-in EXPECTED table. Those captures are host-only (13 GB, 47
+# files, not in git), so ctest cannot run that half -- run it by hand on a lab
+# host. What ctest DOES run needs no captures: it reads EXPECTED out of the same
+# script and asserts every figure still appears in the header and in
+# docs/cluster-protocol-spec.md, plus the two structural facts the vms-76e
+# review turned on (conservation is scoped to the UNFILTERED population; the
+# inverted ">>> FILTER, REQUIRED <<<" heading stays deleted).
+#
+# WHY IT EXISTS: nothing in ctest re-derived any WIRE VERDICT figure, so a wrong
+# recorded measurement was invisible to a green run. That is how a mis-scoped
+# filter claim survived two review rounds.
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_credit_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_credit_figures.py)
+    set_tests_properties(scs_credit_figures PROPERTIES
+        LABELS "unit;scs;cluster;docs"
+        TIMEOUT 60
+    )
+else()
+    message(FATAL_ERROR
+        "Python3 interpreter not found: the scs_credit_figures gate (vms-76e) "
+        "cannot be registered, and it is not optional -- it is the only thing "
+        "that keeps the SCS credit WIRE VERDICT prose pinned to its measurement.")
+endif()

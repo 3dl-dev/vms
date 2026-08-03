@@ -594,25 +594,50 @@ not a grounded offset.
 > the remote/destination Con.ID at `[50:54]`. `vms-76e` re-measured this over
 > `formation-ci1.pcap` (18 558 frames) and `formation-ci1-joinwindow.pcap`
 > (3 000 frames), both under `/data/training/vax/cluster/captures/`.
-> **Method — the counts below do not reproduce without the filter:** take
-> `sca = frame[14:]` and keep a frame only if `len(sca) == <class>` **and**
-> `sca[16:18] == 4B 13` (the SCS message marker). Length alone over the same two
-> captures gives 20 459 190-byte frames and
-> `{0:5418, 1:11042, 2:2587, 3:1409, 4:3}`; 599 of those are not `0x4B13` and are
-> not part of this grounding. Three independent lines:
+> **Re-derive it:** `tools/scs_credit_measure.py --quick` (the two grounding
+> captures, ~5 s) or without `--quick` for all 47 (~5–10 min). It re-measures
+> every figure below from the raw pcaps and PASS/FAILs each against a
+> checked-in `EXPECTED` table — last full run 2026-08-03, **30 checks, 0
+> failures**. The captures are host-only and not in git, so ctest runs only the
+> cheap half (`scs_credit_figures`), which asserts these numbers still appear
+> verbatim here and in `scs_credit.h`.
 >
-> 1. **Conservation** over the 190-byte class — summing `[48:50]` across every
+> **Method — two populations, and each line says which it uses.** Take
+> `sca = frame[14:]`. **(A)** keep on `len(sca) == <class>` alone, no marker
+> filter; **(B)** additionally require `sca[16:18] == 4B 13`. Over the two
+> captures there are 20 459 190-byte frames, marker split
+> `{0x4B13: 19 860, 0x5B13: 591, 0x7B13: 8}` — every one is an SCS message of
+> the `0x?B13` family, all carrying the same credit field at the same offset, so
+> at this length (A) *is* "the whole `0x?B13` family" (the script asserts that
+> equality rather than assuming it). Three independent lines:
+>
+> 1. **Conservation** over the 190-byte class — **population (A), no marker
+>    filter, and it must be**: a debit/credit account only balances if every
+>    message on the connection is counted. Summing `[48:50]` across every
 >    190-byte frame a node *sends* against the count of 190-byte messages it
 >    *received*: `formation-ci1` VAX1 granted 10 842 vs peer sent 10 842
 >    (Δ0), peer granted 6 712 vs VAX1 sent 6 715 (Δ3); `joinwindow` 1 601 vs
->    1 602 (Δ1) and 1 300 vs 1 300 (Δ0). That is the debit/credit identity of
->    *VAXcluster Principles* p. 2-43 and no other header field satisfies it.
-> 2. **Value shape** — over 19 860 190-byte `0x4B13` frames the field takes only
+>    1 602 (Δ1) and 1 300 vs 1 300 (Δ0). All four reproduce exactly. That is the
+>    debit/credit identity of *VAXcluster Principles* p. 2-43 and no other
+>    header field satisfies it.
+>
+>    > **Correction (`vms-76e`, adversary-caught).** An earlier revision of this
+>    > note headed the `0x4B13` filter "the counts below do not reproduce
+>    > without it" and applied it to all three lines. For line 1 that is
+>    > **inverted**: filtering *destroys* the identity, giving 10 817 vs 10 266
+>    > (Δ−551) and 6 369 vs 6 695 (Δ+326) — a refutation. The four figures
+>    > printed were always the population-(A) numbers and are correct; only the
+>    > recorded method was wrong. **The offset conclusion is unaffected.**
+>
+> 2. **Value shape** — **population (B)** — over 19 860 190-byte `0x4B13` frames the field takes only
 >    `{0:5174, 1:10696, 2:2582, 3:1405, 4:3}`: a piggybacked Pending Receive
->    Credit, not a counter. (Note `[46:48]` in the 190-byte class is a
+>    Credit, not a counter. Unfiltered (population (A)) the same histogram over
+>    all 20 459 frames is `{0:5418, 1:11042, 2:2587, 3:1409, 4:3}` — the same
+>    shape, which is the independent reason the `0x5B13`/`0x7B13` siblings
+>    belong in line 1. (Note `[46:48]` in the 190-byte class is a
 >    *constant* `0x000a` — that is the value the older note above was reading,
 >    and it is a different field.)
-> 3. **Tunable match at formation** — in the 110-byte `CONNECT_REQ`/
+> 3. **Tunable match at formation** — **population (B)** — in the 110-byte `CONNECT_REQ`/
 >    `ACCEPT_REQ` class the same field carries the Send Credits that SYSAP
 >    extends, byte-exact to **two distinct** SYSGEN parameters in one capture:
 >    `VMS$VAXcluster`↔`VMS$VAXcluster` = **10** (`CLUSTER_CREDITS`),
@@ -622,7 +647,7 @@ not a grounded offset.
 > **Scope of the grounding — every admitted class is measured.** Offset 48 is
 > asserted only for the SCS *message* classes **58/62/66/86/94/110/190** SCA
 > bytes, and all seven were tabulated over **all 47** `.pcap` files in
-> `/data/training/vax/cluster/captures/` under the `0x4B13` filter above
+> `/data/training/vax/cluster/captures/` under **population (B)**
 > (n / distinct / max at `sca[48:50]`): 58 → 1212/2/1 · 62 → 1087/1/0 ·
 > 66 → 944/1/0 · 86 → 194/1/1 · 94 → 3670/2/1 · 110 → 3999/5/10 ·
 > 190 → 288 484/5/4. The block-data-transfer classes

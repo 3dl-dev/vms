@@ -4090,6 +4090,104 @@ can see.
 > proves nothing. If this class is retried, first establish a counter that moves
 > when the switch is set.
 
+### 4M.27 ⭐⭐ THE DOCUMENTATION SWEEP — what is published, what is not, and one source DELIBERATELY EXCLUDED
+
+**Operator authorised the documentation hunt. Results, all published sources.**
+
+> ### ⛔ PROVENANCE EXCLUSION — read this first
+> The highest-detail source found was the **VAXcluster Disk I/O Internals
+> Manual (DEC, March 1988)**, on bitsavers. **It is EXCLUDED from this project
+> and must stay excluded.** Every page is footed *"Digital Equipment Corporation
+> / Confidential and Proprietary"*, and its symbol index cross-references SCS
+> **source listings** (`[SYSLOA.LIS]SYS$SCS.LIS`, `[DRIVER.LIS]SCSXPORT.LIS`).
+> That is an internal training manual derived from source — **outside CLAUDE.md
+> Rule 8's envelope**, which permits published documentation and our own wire
+> only. Nothing from it is used anywhere in this document.
+>
+> **Excluding it costs nothing:** its flow-control content restates the DTJ
+> passage below, which is clean. **Do not go and read it "just to check".** The
+> legal protection on this entire RE effort (DMCA 1201(f), EU SW Dir. Art. 6)
+> depends on provenance discipline, and a confidential source read once cannot
+> be un-read.
+
+**1. ⭐ CREDIT CANNOT CAUSE A RECEIVER-SIDE DISCARD OF A SEQUENCED MESSAGE.**
+
+> *"Datagram credit controls operate at the receiver… Upon receiving a datagram,
+> a SYSAP must have available a datagram-receive credit; otherwise, the datagram
+> is discarded. **The receiving of messages, however, is guaranteed.
+> Message-credit controls are instituted at the sending node.**"*
+> — Duffy, "The System Communication Architecture", **DTJ No. 5, Sept 1987,
+> p. 26.**
+
+**Independently confirms §4M.22's kill of the credit theory**, and from
+documentation rather than a counter: silent credit-based discard is documented
+**only for datagrams**. Our `op9` is a sequenced message, so credit is not even
+a candidate.
+
+**2. ⭐⭐ A NAMED DISCARD COUNTER EXISTS AND WE HAVE NEVER READ IT.**
+`SHOW PORT/VC` publishes per-VC discard buckets — **`Illegal Seq Msg`**,
+`Bad Checksum`, `Rcv Short Msg`, `No Xmt Chan`, `TR DFQ Empty`, `TR MFQ Empty`,
+`CC MFQ Empty`, `Cache Miss` (*VSI OpenVMS Cluster Systems*, DO-DCLUSY-01A, App.
+F, Example F.2, p. 365). The manual gives headers but **no prose definitions** —
+which does not matter: **if our unacknowledged `op9` increments a named bucket,
+that names the class of failure directly.** New tool `tools/portwatch.sh`;
+run `Y1A`/`Y1B` dispatched.
+
+**3. ⭐ THE PUBLISHED MODEL SAYS A REMOVED NODE IS EXPECTED TO REBOOT.**
+
+> *"**A node that recovers after it has been removed from the cluster is told to
+> re-boot by the connection managers.**"* — Kronenberg, Levy, Strecker &
+> Merewood, "The VAXcluster Concept", **DTJ No. 5, Sept 1987, p. 17.**
+
+> *"The cluster connection between two computers is broken for longer than
+> RECNXINTERVAL seconds. Thereafter, the connection is declared irrevocably
+> broken. If the connection is later reestablished, one of the computers shut
+> down with a CLUEXIT bugcheck."* — *VSI OpenVMS Cluster Systems*, App. C.7.1,
+> p. 314.
+
+Corroborated by Butcher, "OpenVMS Clusters Best Practice", hpUG Nov 2011,
+slide 55: *"Excluded member(s) must rejoin as new members (reboot)…"*
+
+> **⚠ FLAGGED AS INFERENCE, NOT DOCUMENTED.** No published source says a peer
+> keys admission on `INCARNATION`. What *is* documented is that identity carries
+> a **per-boot** component beyond SCSNODE/SCSSYSTEMID (`INCARNATION`: *"Unique
+> 16-digit hexadecimal number established when the system is booted"*; `CSID`:
+> *"may change when the system reboots"*). **Note §4 already made OVMX's
+> incarnation live per boot and §3.11 killed the `[22:24]` echo** — so the
+> obvious version of this is spent. Do not re-propose it without a new angle.
+
+**4. Sequence window — PARTIAL.** *"Each transmit message carries a sequence
+number; **duplicates are discarded**"* and *"Message acknowledgment — an
+increasing value that specifies the last sequenced message segment received…
+**all messages prior to this value are also acknowledged**"* (App. F, Tables F.3
+and F.10, pp. 359-360, 366). **NOT FOUND:** whether acceptance requires exactly
+`last+1`, or what happens to an out-of-window sequenced message.
+
+**5. ⛔ CONNECTION STATES — NOT FOUND, CONFIRMED EXHAUSTIVELY.** Two independent
+sweeps across every edition of the VAX/Alpha SDA manuals, HP V8.3/V8.4 and VSI
+System Analysis Tools manuals, the VSI wiki and four mirrors: all show the CDT
+fields and **none defines any of them**. Published examples show only `listen`
+and `open`. **`con_sent`, `disc_sent`, `con_pend`, `disc_pend` are undefined in
+every public source**, and *"does a disconnect-pending connection discard
+incoming sequenced messages"* is **NOT FOUND anywhere**. §4M.22's conclusion
+stands and is now thoroughly evidenced.
+
+**6. Useful null — do not repeat this search.** *VMS Internals and Data
+Structures* V5.2 (1462 pp.) was downloaded and full-text searched: **it has no
+SCS chapter.** Its only SCS content is a `CDT` pointer in the CDRP layout
+(Fig. 24.2, p. 680) and some SYSGEN parameter names. **IDSM is a dead end for
+SCS internals.**
+
+**7. The one published source still worth getting.** **Roy G. Davis,
+*VAXcluster Principles*, Digital Press, 1993** (ISBN 1555581129) — a *published
+book*, squarely in scope, and the most likely public home for the SCS connection
+state machine and disconnect-time message handling. On archive.org as
+`vaxclusterprinci0000davi`, **borrowable with a logged-in account**. Search it
+for "disconnect", "sequenced message", "connection state". **This is the #1
+remaining documentation move and it needs an operator with an archive.org
+login.** Also unobtained: Kronenberg et al., ACM TOCS 4(2) 1986 (paywalled, 403)
+— though the DTJ article by the same authors is likely a superset.
+
 ### 4M.5 The test, and its kill-switch
 
 1. Ground the reference rule for the **lookup response** specifically (the 336-

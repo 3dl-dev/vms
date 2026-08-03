@@ -77,7 +77,46 @@ diffed against each other.** What makes a run take one shape or the other is
 **unknown and is now the most valuable open question** — it is the difference
 between "the peer never hears us" and "the peer hears us and declines".
 
-**⭐ THE FRONTIER — §4M.11, a 90-MILLISECOND WINDOW NAMED BY THE PEER ITSELF.**
+## ⭐⭐⭐ THE FRONTIER AS OF SESSION m END — READ THIS FIRST
+
+**The gate is located, proven to the byte, and confirmed against a real-node
+control. It is peer-internal.**
+
+| | fresh join | **rejoin** | real node rejoining |
+|---|---|---|---|
+| peer's `op8` → our `op9` | runs | **runs, byte-identically** | runs |
+| peer's `op6` (directory DISCONNECT-REQ) | **4** | **0 — never** | **12** |
+| peer's CDT for us | torn down, freed | **`disc_sent`/`disc_pend`, queue non-empty** | torn down |
+| peer's `MSCP$DISK` connect | 22–23 on the wire | **0 — `con_sent`/`con_pend`, never transmitted** | present |
+
+**The peer has ISSUED the disconnect and it is BLOCKED** (§4M.18). It is not
+withholding `op6` and it is not rejecting us — `Rej/Disconn Reason` is **0** on
+every CDT. The `MSCP$DISK` connect is queued behind it, which is why §4g's "the
+peer declines to connect" is wrong: **it cannot transmit.**
+
+**NOTHING OVMX SENDS DIFFERS BY ONE NON-PER-RUN BYTE** (§4M.16) — a class
+discrimination test over our `op9`, our `0x81/0x03` and the peer's `op8` to us
+returns **zero** discriminating offsets. Every candidate on our side is excluded
+by a byte-level matched control.
+
+**⛔ Already dead, do not re-propose:** credit (§4M.22 — the `0x48` flow is
+identical, and the peer's own CDT says `Send Credit Q. empty`), the barrier
+(§4M.15 — it starts 45 ms *after* completion), the `cat 0x04` opcode (§3.14),
+`cat 0x04` deafness (§3.15), and the four `0x7b`/msgtype/sequence defects
+(§3.13, 16, 17, 18) — all real, all fixed, none the cause.
+
+**NINE separately-fixed real defects on this item, none of them the gate.**
+Expect the tenth not to be either; fix them anyway (guardrail 15) and **run the
+kill-switch before writing down what a fix achieved** (guardrail 23).
+
+**The cheapest unexplored avenue: public OpenVMS documentation on SCS connection
+states and what blocks a disconnect** (`disc_sent`/`disc_pend`, `con_sent`/
+`con_pend`). SDA cannot resolve the ~5 ms dialogue against a ~1.2 s console
+floor, and the wire is largely exhausted. Rule 8: docs and observation only.
+
+---
+
+**§4M.11 — a 90-MILLISECOND WINDOW NAMED BY THE PEER ITSELF.**
 VAX2's console is never touched by `csbwatch` (which parks VAX1 in SDA), and
 VMS prints the whole membership dialogue to OPCOM. Both outcomes are identical
 up to and including `proposed addition of node X`:
@@ -191,7 +230,7 @@ green by SHA.
 - Lab volume is ZFS, 40G quota; `rsync --sparse` for disk images.
 - `tools/mk_sysgen` is an aarch64 binary with no source — **use
   `tools/mk_sysgen.py`**.
-- **Last SCSSYSTEMID used: 1310.** Take the next one and update §6.
+- **Last SCSSYSTEMID used: 1316.** Take the next one and update §6.
 - **Pods:** `vaxlab-0` SPENT (console wedged), `vaxlab-1` DEGRADED (its VAX2 was
   SIGKILLed and never rebooted), **`vaxlab-2` healthy** and carrying residual
   state for `OVMXM1/M2/M3` — a ready-made rejoin reproducer. Fresh pods:

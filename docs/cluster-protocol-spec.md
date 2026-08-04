@@ -824,6 +824,13 @@ target refusing `MSCP$DISK` — precisely Figure 2-15. **Caveat, stated:** the
 obviously need. The label is the best reading of a decisive behavioural
 partition, not a decoded field.
 
+**And its 16-bit reason code (p. 2-26) is NOT located.** Both `4` and `6` are
+supposed to carry an optional reason code. Across 453 VMS-origin REJECT_REQ and
+220 VMS-origin DISCONNECT_REQ frames, nothing after the Con.ID pair varies at
+all and SDA's `Rej/Disconn Reason` reads 0 on every CDT — so the offset cannot
+be derived from anything we hold. See the `vms-6b3` entry in §5 for the census
+and for the LABELED OVMX placement that stands in for it.
+
 **`6` = DISCONNECT — plausible, NOT grounded.** All 6 occurrences are on
 connections that completed `0,1,2,3` and finished their work, and they appear in
 matched pairs one per direction, which is Figure 2-16's matched
@@ -1940,6 +1947,65 @@ For visibility, every field NOT marked GROUNDED above:
   trusting it. Kill-switch `OVMX_NO_MASQUERADE_TESTS=1`. This rule was tested as the
   cause of the `vms-2f3` rejoin failure and **REFUTED** (§4M.31 of
   `docs/HANDOFF-vms-2f3.md`): it fixes nothing.
+- **The REJECT/DISCONNECT 16-bit REASON CODE — the FIELD is real, its OFFSET is
+  UNGROUNDED, and OVMX's placement is a LABELED OVMX DESIGN CHOICE** (`vms-6b3`).
+  *VAXcluster Principles* p. 2-26: "When a SYSAP rejects a CONNECT_REQ or
+  explicitly breaks an open connection, it also has the option of providing the
+  other SYSAP a 16-bit 'reason code' explaining why it did so … the reason code
+  is included in the REJECT_REQ packet … [and] in a disconnect request packet".
+  The chapter grounds three things — the field exists, it is 16 bits, it rides
+  REJECT_REQ and DISCONNECT_REQ — and publishes neither a byte offset nor a
+  single code value.
+
+  **What the wire says (measured; re-derive with
+  `tools/cluster/scs_reason_measure.py`).** Over all 47 pcaps in the lab capture
+  set, every 62-byte-SCA connection-control frame (§4(h)(1a)) whose message type
+  at payload `[46:48]` is `4` or `6`, restricted to VMS-origin source MACs (DEC
+  OUI `08-00-2b` or the LAVC logical `aa-00-04-00-xx-04`) so no OVMX-emitted
+  frame is counted as a VMS observation: **453 REJECT_REQ across 19 pcaps, 220
+  DISCONNECT_REQ across 25 pcaps.** A per-offset census over the whole payload
+  shows the only varying bytes are the sequence/ack fields and the Con.ID pair at
+  `[50:58]`. The two 16-bit slots after the Con.ID pair read:
+
+  | slot | REJECT_REQ (453) | DISCONNECT_REQ (220) |
+  |---|---|---|
+  | payload `[58:60]` | `0x0000` × 453 | `0x0000` × 220 |
+  | payload `[60:62]` | `0x0001` × 453 | `0x0000` × 131, `0x0001` × 89 |
+
+  **The SDA oracle agrees.** `SHOW CONNECTIONS` prints a per-CDT field literally
+  named `Rej/Disconn Reason` (`captures/sda-scs-extract-vax1.txt`) and it reads
+  **0 on all 12 CDTs**. So the field is real and VMS-named, and both oracles say
+  every reason code our lab has ever produced was zero.
+
+  **Therefore the offset CANNOT be grounded from the data we hold** — with no
+  nonzero value anywhere, there is no varying field to localize. What the
+  measurement does buy is a *safe* placement: payload `[58:60]` is the only
+  16-bit slot in either frame that is zero in 100% of observed VMS frames, so an
+  OVMX frame carrying reason 0 there is byte-identical to what VMS sends, and
+  only a deliberately-set nonzero code makes OVMX differ. Payload `[60:62]` is
+  explicitly NOT usable: it is an observed constant `0x0001` on REJECT_REQ, i.e.
+  a field with an undecoded meaning. **`SCS_REASON_PAYLOAD_OFF = 58`
+  (`src/vmsscs/include/scs_reason.h`) is an OVMX design choice, not a decoded VMS
+  field. If a real node is ever observed setting a nonzero reason code, that
+  observation overrides it.** The **code VALUES** (`enum scs_reason_code`) are an
+  OVMX namespace for the same reason; only `SCS_REASON_NONE = 0` has any external
+  support, and it is the default.
+
+  **Consequence for OVMX, stated exactly.** The RECEIVE half is LIVE: `scsd.c`
+  decodes the field out of every REJECT_REQ/DISCONNECT_REQ addressed to one of
+  OVMX's own Con.IDs, logs `SCSD-I-CONNREASON` naming the frame, the code and its
+  name, and reports the totals in the exit summary — so the peer's SDA
+  `Rej/Disconn Reason` finally has a counterpart on our side. The SEND half is a
+  tested codec with **no production caller**: OVMX builds neither REJECT_REQ nor
+  DISCONNECT_REQ at all (the `SCSD-W-CONNNOACT` bullet above), so nothing here
+  claims OVMX transmits a reason code. `struct scs_svc_args.reason` already
+  carries a SYSAP's value into the emit callback, so a future builder need only
+  call `scs_reason_put()`. Kill switch `OVMX_NO_REASON_CODE=1` suppresses both
+  halves and says so in the exit summary. Tests: `tests/vmsscs/test_scs_reason.c`
+  (codec, plus two real captured frames asserted to read zero at the slot) and
+  the four `test_reason_*` cases in `tests/vmsscs/test_scsd_wire.c` (the daemon's
+  receive path, driven by an unedited real SCS$DIRECTORY dialogue ending in a
+  real DISCONNECT_REQ).
 
 ---
 

@@ -226,7 +226,7 @@ target_include_directories(test_scsd_wire PRIVATE
 target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
-    vmsscs_depart vmsscs_dgram vmsscs_svc
+    vmsscs_depart vmsscs_dgram vmsscs_svc vmsscs_reason
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)
@@ -380,6 +380,25 @@ target_include_directories(test_scs_sdir PRIVATE
 target_link_libraries(test_scs_sdir PRIVATE vmsscs_sdir)
 add_test(NAME vmsscs_sdir_unit COMMAND test_scs_sdir)
 set_tests_properties(vmsscs_sdir_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
+# vms-6b3 - the 16-bit REJECT/DISCONNECT reason code (VAXcluster Principles
+# p. 2-26). Asserts byte position, LE order and round-trip in BOTH frames; that
+# two REAL captured VMS frames (one REJECT_REQ, one DISCONNECT_REQ) read zero at
+# the OVMX slot, which is the observation the placement rests on; and the
+# OVMX_NO_REASON_CODE kill switch with a bracketing control on both sides.
+add_executable(test_scs_reason test_scs_reason.c)
+
+target_include_directories(test_scs_reason PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_reason PRIVATE vmsscs_reason)
+
+add_test(NAME vmsscs_reason_unit COMMAND test_scs_reason)
+set_tests_properties(vmsscs_reason_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )

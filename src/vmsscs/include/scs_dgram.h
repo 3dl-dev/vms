@@ -121,11 +121,22 @@
  * ACCOUNTS ITS DATAGRAMS" =====
  *
  * scs_dgram_cdl_deliver() is the accounted receive path and it has NO
- * PRODUCTION CALLER. It wraps scs_cdl_deliver_datagram(), which vms-e1a's
- * header already records as having no production caller either: scsd.c
- * dispatches received frames by comparing Con.IDs against three macros and
- * never routes a datagram through the CDL. No SYSAP is installed, so no
- * dgram_input routine exists to deliver to.
+ * PRODUCTION CALLER.
+ *
+ * It does NOT call scs_cdl_deliver_datagram() -- an earlier revision of this
+ * comment said it "wraps" it and that was false. It shares that function's
+ * p. 2-29 RESOLUTION (both go through scs_cdl_resolve(), scs_cdt.h) and then
+ * diverges, because the p. 2-42 accounting has to sit BETWEEN the resolution
+ * and the SYSAP callback -- take a DFREEQ buffer, check the connection's quota,
+ * debit it -- and scs_cdl_deliver_datagram() does resolution and callback in
+ * one step with no seam to interpose. The two are siblings, not a wrapper and
+ * a wrappee.
+ *
+ * The no-production-caller fact is independent of that and holds for both:
+ * vms-e1a's header records scs_cdl_deliver_datagram() as unreachable from
+ * scsd.c, which dispatches received frames by comparing Con.IDs against three
+ * macros and never routes a datagram through the CDL. No SYSAP is installed, so
+ * no dgram_input routine exists to deliver to.
  *
  * What IS wired: SCSD.EXE links this module and its exit summary calls
  * scs_dgram_report(), so every DFREEQ figure and every discard count is in the
@@ -237,13 +248,15 @@ int scs_dgram_deliver(struct scs_cdt *cdt, const void *buf, size_t len);
 
 /*
  * scs_dgram_cdl_deliver - THE ACCOUNTED RECEIVE PATH, p. 2-42 end to end:
- * dequeue from the DFREEQ of the port that supports the connection, resolve
- * the destination CONID through the CDL (p. 2-29), then deliver or discard.
+ * resolve the destination CONID through the CDL (p. 2-29, via
+ * scs_cdl_resolve()), dequeue from the DFREEQ of the port that supports the
+ * connection, then deliver or discard.
  *
- * This is the accounted counterpart of scs_cdl_deliver_datagram(), which
- * remains available and remains UNACCOUNTED -- callers that route datagrams
- * should use this one. Neither has a production caller today (see the
- * reachability note above).
+ * This is the accounted SIBLING of scs_cdl_deliver_datagram() -- same
+ * resolution function, different second half. It does not call that function
+ * (see the reachability note above for why it cannot). That one remains
+ * available and remains UNACCOUNTED; callers that route datagrams should use
+ * this one. Neither has a production caller today.
  *
  * `src_conid` is passed through to the vms-e1a source-CONID check; pass 0 when
  * the frame class does not carry one. Returns an enum scs_dgram_result, or

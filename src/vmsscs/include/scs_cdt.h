@@ -486,6 +486,28 @@ enum scs_deliver_result {
 };
 
 /*
+ * scs_cdl_resolve - THE p. 2-29 destination-CONID resolution, factored out so
+ * that every receive entry point resolves identically instead of each
+ * reimplementing it: the CDL index lookup plus the p. 2-35 source-CONID
+ * refusal. On SCS_DELIVER_OK `*out_cdt` is the connection; on any other result
+ * it is NULL. `out_cdt` may be NULL if the caller only wants the verdict.
+ *
+ * All three PACKET-DELIVERY entry points -- scs_cdl_deliver_message(),
+ * scs_cdl_deliver_datagram() and the accounted scs_dgram_cdl_deliver()
+ * (scs_dgram.h) -- resolve through THIS function and differ only in what they
+ * do with the CDT afterwards. Add a fourth and it resolves here too: two
+ * delivery paths that disagree about which connection a packet belongs to
+ * would be a real defect, and the point of this function is that they cannot.
+ *
+ * NOT a claim that this is the only scs_cdl_lookup() call in the tree. scsd.c
+ * calls it directly to drive the connection state machine off a received
+ * message type; that is an FSM step on an already-classified frame, not packet
+ * delivery to a SYSAP, and it applies no source-CONID refusal.
+ */
+int scs_cdl_resolve(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_conid,
+                    struct scs_cdt **out_cdt);
+
+/*
  * scs_cdl_deliver_message / scs_cdl_deliver_datagram - the p. 2-29 receive
  * path: "the remote port driver uses the low order 16 bits of the destination
  * CONID as an index into the remote node's CDL ... There it finds the address

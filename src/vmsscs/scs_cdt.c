@@ -272,11 +272,12 @@ struct scs_cdt *scs_cdl_lookup(const struct scs_cdl *cdl, uint32_t conid)
     return cdt;
 }
 
-/* Shared body of the two delivery entry points (p. 2-29: same CDL lookup, same
- * source-CONID check, different fixed location in the CDT for the routine). */
-static int cdl_deliver(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_conid,
-                       const void *buf, size_t len, int is_datagram)
+int scs_cdl_resolve(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_conid,
+                    struct scs_cdt **out_cdt)
 {
+    if (out_cdt != NULL) {
+        *out_cdt = NULL;
+    }
     struct scs_cdt *cdt = scs_cdl_lookup(cdl, dest_conid);
     if (cdt == NULL) {
         return SCS_DELIVER_NO_CDT;
@@ -286,6 +287,22 @@ static int cdl_deliver(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_co
      * known and they disagree, the packet is not for this connection. */
     if (src_conid != 0 && cdt->remote_conid != 0 && src_conid != cdt->remote_conid) {
         return SCS_DELIVER_SRC_MISMATCH;
+    }
+    if (out_cdt != NULL) {
+        *out_cdt = cdt;
+    }
+    return SCS_DELIVER_OK;
+}
+
+/* Shared body of the two delivery entry points (p. 2-29: same CDL resolution,
+ * different fixed location in the CDT for the routine). */
+static int cdl_deliver(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_conid,
+                       const void *buf, size_t len, int is_datagram)
+{
+    struct scs_cdt *cdt = NULL;
+    int r = scs_cdl_resolve(cdl, dest_conid, src_conid, &cdt);
+    if (r != SCS_DELIVER_OK) {
+        return r;
     }
     if (is_datagram) {
         if (cdt->dgram_input == NULL) {

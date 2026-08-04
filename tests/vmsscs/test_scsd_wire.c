@@ -2318,6 +2318,8 @@ static void test_multicast_beacon_keeps_a_peer_alive(void)
      * leaves it alone. */
     CHECK(rx_sweep(&r, 1 + timeout) == 0, "a beaconing peer was declared departed");
     CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "a beaconing peer lost its slot");
+}
+
 /*
  * (5) vms-b1d: THE DATAGRAM DISCARD IS IN THE PRODUCTION RUN LOG. A datagram
  * discard is silent on the wire by design (p. 2-42, "the port merely discards

@@ -1748,9 +1748,13 @@ For visibility, every field NOT marked GROUNDED above:
     a SENDER, this drops a RECEIPT.
   - **Consequence for OVMX**: `src/vmsscs/scs_dgram.c` implements the whole
     p. 2-42 mechanism and is unit tested, and **no production caller routes a
-    datagram through it** — `scs_dgram_cdl_deliver()` wraps
-    `scs_cdl_deliver_datagram()`, which vms-e1a already recorded as unreachable
-    from `scsd.c`. The only live daemon call is the exit-summary report, which
+    datagram through it**. `scs_dgram_cdl_deliver()` and
+    `scs_cdl_deliver_datagram()` are siblings, not a wrapper and a wrappee: they
+    share the p. 2-29 resolution (`scs_cdl_resolve()`) and diverge after it,
+    because the p. 2-42 accounting has to sit *between* the resolution and the
+    SYSAP callback and `scs_cdl_deliver_datagram()` does both in one step. Both
+    are unreachable from `scsd.c` — vms-e1a already recorded that for the
+    unaccounted one. The only live daemon call is the exit-summary report, which
     prints zeros.
 - **Minimum Send Credits — UNGROUNDED** (`vms-1d2`). p. 2-44 makes the
   dangerously-low threshold `local SCSFLOWCUSH + remote Minimum Send Credits`,

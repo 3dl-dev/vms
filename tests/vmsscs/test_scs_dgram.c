@@ -19,6 +19,14 @@
  *   - every discard is COUNTED, per connection for the no-quota class and per
  *     port for the empty-DFREEQ class, and printed by scs_dgram_report -- the
  *     INV-6 half of the item: silent on the wire must not mean invisible here
+ *   - THE ORDER of the debit and the callback: p. 2-42 decrements the CDT's
+ *     count "and then" passes the buffer to the input routine. That order is
+ *     invisible to an inert SYSAP fake (both orders leave the same final
+ *     counts), so it is driven with a RE-ENTRANT one -- see the block above
+ *     test_input_routine_sees_the_debit_already_applied
+ *   - the accounted and unaccounted CDL receive paths RESOLVE IDENTICALLY,
+ *     because they share scs_cdl_resolve() (scs_cdt.h) rather than each
+ *     implementing the p. 2-29 lookup
  *
  * AND the OVMX_NO_DGRAM_ACCOUNTING kill switch, exercised by re-running the
  * whole discard scenario with the switch set and asserting the discard does
@@ -28,7 +36,10 @@
  * datagram through this accounting. scs_dgram_cdl_deliver() has no production
  * caller (scs_dgram.h says so in full). A green run here proves the mechanism
  * is correct, not that OVMX exercises it. The one live daemon call site is
- * scs_dgram_report() in the exit summary, which prints zeros.
+ * scs_dgram_report() in the exit summary, which prints zeros -- and THAT call
+ * site is exercised for real by test_scsd_wire.c
+ * (test_exit_summary_reports_datagram_discards); deleting it from scsd.c reds
+ * that test while leaving this file green.
  *
  * NOT ASSERTED EITHER: any send-side debit. p. 2-42 states "SCA does not
  * provide a flow control mechanism for the datagram service"; the DFREEQ is a
@@ -377,10 +388,16 @@ static void test_dfreeq_is_per_port(void)
           pdt1.dfreeq_count);
     CHECK(pdt2.dfreeq_count == 2, "port 2 DFREEQ %u, want 2", pdt2.dfreeq_count);
 
-    /* Exhausting port 2 does not touch port 1's empty-discard counter. */
-    c2->dgram_buffers = 0;
-    scs_dgram_remove_buffers(c2, 0);
-    pdt2.dfreeq_count = 0;
+    /* Exhausting port 2 through the p. 2-43 deallocate request -- both its
+     * connection count and its DFREEQ go to 0, and no hand poke is needed to
+     * get there. Port 1's bank is untouched by it. */
+    CHECK(scs_dgram_remove_buffers(c2, 2) == 2, "removing port 2's deposit did not remove 2");
+    CHECK(c2->dgram_buffers == 0, "port 2 connection count %u after deallocating its whole"
+          " deposit, want 0", c2->dgram_buffers);
+    CHECK(pdt2.dfreeq_count == 0, "port 2 DFREEQ %u after deallocating its whole deposit,"
+          " want 0", pdt2.dfreeq_count);
+    CHECK(pdt1.dfreeq_count == 6, "port 1 DFREEQ %u after port 2 deallocated, want 6",
+          pdt1.dfreeq_count);
     CHECK(scs_dgram_cdl_deliver(&cdl, c2->local_conid, 0, DG, sizeof(DG))
               == SCS_DGRAM_DISCARD_DFREEQ_EMPTY, "port 2 did not discard");
     CHECK(scs_dgram_dfreeq_empty_discards(&pdt2) == 1, "port 2 empty-discards %lu, want 1",
@@ -478,6 +495,211 @@ static void test_report_prints_the_counters(void)
     CHECK(strstr(buf, "buffers=0/1") != NULL, "buffer count missing from:\n%s", buf);
 }
 
+/* ==========================================================================
+ * THE ORDER OF THE DEBIT AND THE CALLBACK (p. 2-42).
+ *
+ * "SCS delivers the datagram to the destination SYSAP. This is done by
+ * DECREMENTING the count of datagram buffers available to the connection, AND
+ * THEN passing the buffer to the datagram input routine whose address is in
+ * the CDT." (p. 2-42, emphasis on the sequencing the sentence states.)
+ *
+ * WHY A SEPARATE FAKE IS NEEDED. `struct sysap` above is INERT: it records the
+ * call and returns. Nothing it does can distinguish "debit then call" from
+ * "call then debit", because both orders leave the same final counts -- swap
+ * the two statements in scs_dgram_deliver() and every assertion above still
+ * passes. The order is only observable to a SYSAP that RE-ENTERS the API from
+ * inside its own input routine, which is precisely the case the ordering
+ * comment in scs_dgram.c is about. This fake does that.
+ *
+ * Re-entrancy is not hypothetical: SCS calls the input routine synchronously,
+ * and a SYSAP is documented (p. 2-42) as calling back into SCS from there to
+ * return or deallocate the buffer.
+ * ========================================================================== */
+
+enum reentry_mode {
+    RE_OBSERVE,   /* just record what the account looked like on entry */
+    RE_RELEASE,   /* p. 2-42: return the buffer from inside the input routine */
+    RE_REDELIVER  /* a second datagram arrives while the first is being processed */
+};
+
+struct reentrant_sysap {
+    enum reentry_mode mode;
+    unsigned          depth;      /* guards the RE_REDELIVER recursion */
+    unsigned long     calls;
+    unsigned          seen_buffers[4]; /* cdt->dgram_buffers AS SEEN AT ENTRY */
+    int               nested_result;
+};
+
+static void sysap_reentrant_input(struct scs_cdt *cdt, const void *buf, size_t len, void *ctx)
+{
+    struct reentrant_sysap *s = (struct reentrant_sysap *)ctx;
+    if (s->calls < 4) {
+        s->seen_buffers[s->calls] = cdt->dgram_buffers;
+    }
+    s->calls++;
+
+    if (s->depth > 0) {
+        return; /* one level of re-entry is enough to expose the order */
+    }
+    s->depth++;
+    if (s->mode == RE_RELEASE) {
+        scs_dgram_release_buffer(cdt);
+    } else if (s->mode == RE_REDELIVER) {
+        /* The SCS half only: this models a second datagram whose DFREEQ buffer
+         * the port has already dequeued, arriving while the first is still in
+         * the input routine. scs_dgram_deliver() is exactly the function whose
+         * internal order is under test. */
+        s->nested_result = scs_dgram_deliver(cdt, buf, len);
+    }
+    s->depth--;
+}
+
+static struct scs_cdt *reentrant_bench(struct bench *b, struct reentrant_sysap *rs,
+                                       enum reentry_mode mode, unsigned buffers)
+{
+    struct sysap ignored;
+    memset(b, 0, sizeof(*b));
+    memset(rs, 0, sizeof(*rs));
+    rs->mode = mode;
+    rs->nested_result = 0x7FFFFFFF; /* not any enum value: proves it was assigned */
+    memset(&ignored, 0, sizeof(ignored));
+    scs_config_init(&b->cfg);
+    scs_pdt_init(&b->pdt, SCS_PORT_TYPE_ETHERNET, 4096);
+    scs_cdl_init(&b->cdl);
+    b->a = open_conn(b, mac_a, sysid_a, &ignored);
+    if (b->a == NULL) {
+        return NULL;
+    }
+    scs_cdt_set_handlers(b->a, NULL, sysap_reentrant_input, NULL, rs);
+    scs_dgram_extend(b->a, buffers);
+    return b->a;
+}
+
+/*
+ * (1) THE SYSAP SEES THE DEBIT ALREADY APPLIED. p. 2-42 decrements BEFORE
+ * passing the buffer to the input routine, so a SYSAP that reads its own
+ * available-buffer count from inside that routine must see the post-debit
+ * value. Swap the two statements and this reds.
+ */
+static void test_input_routine_sees_the_debit_already_applied(void)
+{
+    struct bench b;
+    struct reentrant_sysap rs;
+    CHECK(reentrant_bench(&b, &rs, RE_OBSERVE, 3) != NULL, "bench setup failed");
+
+    CHECK(deliver(&b, b.a) == SCS_DGRAM_DELIVERED, "datagram not delivered");
+    CHECK(rs.calls == 1, "input routine calls %lu, want 1", rs.calls);
+    CHECK(rs.seen_buffers[0] == 2,
+          "the input routine saw %u available buffers, want 2 -- the p. 2-42 debit"
+          " is applied AFTER the callback, so the SYSAP sees a buffer that is"
+          " already spent", rs.seen_buffers[0]);
+    CHECK(b.a->dgram_buffers == 2, "CDT count %u after the callback, want 2",
+          b.a->dgram_buffers);
+}
+
+/*
+ * (2) THE ACCOUNT DOES NOT GAIN A BUFFER FROM NOWHERE. This is the consequence
+ * the ordering comment in scs_dgram.c names, made into an outcome rather than
+ * an assertion about statement order.
+ *
+ * The connection has EXACTLY ONE buffer. A second datagram is presented while
+ * the first is inside the input routine. With the p. 2-42 order the debit is
+ * already applied, the second sees a count of 0, and it is DISCARDED for want
+ * of quota with its buffer returned to the DFREEQ -- one buffer, one delivery.
+ * With the debit moved after the callback the second sees the count still at 1
+ * and is DELIVERED: two datagrams delivered against one buffer, and the outer
+ * decrement then underflows a count that is already 0.
+ */
+static void test_reentrant_delivery_cannot_spend_the_same_buffer_twice(void)
+{
+    struct bench b;
+    struct reentrant_sysap rs;
+    CHECK(reentrant_bench(&b, &rs, RE_REDELIVER, 1) != NULL, "bench setup failed");
+
+    CHECK(deliver(&b, b.a) == SCS_DGRAM_DELIVERED, "the first datagram was not delivered");
+
+    CHECK(rs.nested_result == SCS_DGRAM_DISCARD_NO_QUOTA,
+          "the re-entrant second datagram returned %d, want SCS_DGRAM_DISCARD_NO_QUOTA"
+          " (%d) -- one buffer delivered two datagrams",
+          rs.nested_result, (int)SCS_DGRAM_DISCARD_NO_QUOTA);
+    CHECK(rs.calls == 1,
+          "the input routine ran %lu times on a connection with ONE buffer, want 1",
+          rs.calls);
+    CHECK(scs_dgram_delivered(b.a) == 1,
+          "delivered counter %lu against a single buffer, want 1",
+          scs_dgram_delivered(b.a));
+    CHECK(scs_dgram_discards_no_quota(b.a) == 1,
+          "no-quota discard counter %lu, want 1 -- the second datagram was not refused",
+          scs_dgram_discards_no_quota(b.a));
+
+    /* And the counts are still sane: the returned buffer is back in the DFREEQ
+     * and the connection's count did not underflow. */
+    CHECK(b.a->dgram_buffers == 0, "CDT count %u, want 0", b.a->dgram_buffers);
+    CHECK(b.pdt.dfreeq_count == 1, "DFREEQ %u, want 1 (the discarded buffer returned)",
+          b.pdt.dfreeq_count);
+}
+
+/*
+ * (3) THE p. 2-42 RELEASE, ISSUED FROM INSIDE THE INPUT ROUTINE -- the exact
+ * case the ordering comment in scs_dgram.c describes. The SYSAP must see the
+ * debit applied when it releases, or its release is crediting a buffer that
+ * was never taken.
+ */
+static void test_release_from_inside_the_input_routine(void)
+{
+    struct bench b;
+    struct reentrant_sysap rs;
+    CHECK(reentrant_bench(&b, &rs, RE_RELEASE, 2) != NULL, "bench setup failed");
+
+    CHECK(deliver(&b, b.a) == SCS_DGRAM_DELIVERED, "datagram not delivered");
+    CHECK(rs.calls == 1, "input routine calls %lu, want 1", rs.calls);
+    CHECK(rs.seen_buffers[0] == 1,
+          "the SYSAP saw %u buffers when it released, want 1 -- it released against"
+          " an account that had not yet been debited", rs.seen_buffers[0]);
+
+    /* Net effect of take-debit-release: back where it started. */
+    CHECK(b.a->dgram_buffers == 2, "CDT count %u after release, want 2", b.a->dgram_buffers);
+    CHECK(b.pdt.dfreeq_count == 2, "DFREEQ %u after release, want 2", b.pdt.dfreeq_count);
+}
+
+/*
+ * The two CDL receive paths RESOLVE IDENTICALLY, because they resolve through
+ * the same function (scs_cdl_resolve, scs_cdt.h). Pinned so that the accounted
+ * path cannot drift into accepting a packet the unaccounted one refuses, or
+ * vice versa -- the reason the resolution was factored out rather than copied.
+ */
+static void test_both_receive_paths_resolve_identically(void)
+{
+    struct bench b;
+    struct sysap s;
+    CHECK(bench_init(&b, &s), "bench setup failed");
+    scs_dgram_extend(b.a, 8);
+    scs_cdt_set_remote_conid(b.a, 0x11112222u);
+
+    const uint32_t good = b.a->local_conid;
+    struct { uint32_t dest, src; int accepted; } cases[] = {
+        { good,        0x11112222u, 1 }, /* matching source CONID */
+        { good,        0u,          1 }, /* frame class carries no source CONID */
+        { good,        0x33334444u, 0 }, /* p. 2-35 source mismatch */
+        { 0x4F58BEEFu, 0x11112222u, 0 }, /* destination resolves to nothing */
+    };
+
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        int unacc = scs_cdl_deliver_datagram(&b.cdl, cases[i].dest, cases[i].src,
+                                             DG, sizeof(DG));
+        int acc = scs_dgram_cdl_deliver(&b.cdl, cases[i].dest, cases[i].src,
+                                        DG, sizeof(DG));
+        int unacc_ok = (unacc == SCS_DELIVER_OK);
+        int acc_ok = (acc != SCS_DGRAM_NO_CDT);
+        CHECK(unacc_ok == cases[i].accepted,
+              "case %u: unaccounted path returned %d, want %s", i, unacc,
+              cases[i].accepted ? "accepted" : "refused");
+        CHECK(acc_ok == cases[i].accepted,
+              "case %u: accounted path returned %d, want %s", i, acc,
+              cases[i].accepted ? "accepted" : "refused");
+    }
+}
+
 /*
  * The kill switch. With OVMX_NO_DGRAM_ACCOUNTING=1 the accounting is gone: no
  * count moves, and the datagram that WOULD have been discarded for want of
@@ -527,6 +749,12 @@ int main(void)
     test_unknown_conid_moves_nothing();
     test_no_input_routine_returns_the_buffer();
     test_report_prints_the_counters();
+    /* The p. 2-42 debit/callback ORDER -- only observable to a SYSAP that
+     * re-enters the API from inside its own input routine. */
+    test_input_routine_sees_the_debit_already_applied();
+    test_reentrant_delivery_cannot_spend_the_same_buffer_twice();
+    test_release_from_inside_the_input_routine();
+    test_both_receive_paths_resolve_identically();
     test_kill_switch();
 
     printf("%s: %d checks, %d failures\n", failures == 0 ? "PASS" : "FAIL", checks, failures);

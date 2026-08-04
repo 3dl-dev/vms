@@ -193,7 +193,15 @@ int scs_dgram_deliver(struct scs_cdt *cdt, const void *buf, size_t len)
      * connection, and then passing the buffer to the datagram input routine
      * whose address is in the CDT." Decrement FIRST, in that order: a SYSAP
      * that releases the buffer from inside its own input routine must see the
-     * debit already applied or the account gains a buffer from nowhere. */
+     * debit already applied or the account gains a buffer from nowhere.
+     *
+     * THAT ORDER IS TESTED, not merely asserted here. It is invisible to an
+     * inert SYSAP fake -- both orders leave identical final counts -- so
+     * test_scs_dgram.c drives it with a RE-ENTRANT SYSAP
+     * (test_input_routine_sees_the_debit_already_applied,
+     * test_reentrant_delivery_cannot_spend_the_same_buffer_twice,
+     * test_release_from_inside_the_input_routine). Swapping these two
+     * statements reds all three; before those tests existed it reded nothing. */
     cdt->dgram_buffers--;
     cdt->dgram_delivered++;
     cdt->dgram_input(cdt, buf, len, cdt->sysap_ctx);
@@ -206,15 +214,18 @@ int scs_dgram_cdl_deliver(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src
     /* p. 2-42: "SCS then locates the CDT associated with the destination CONID
      * in the datagram. (In VMS, SCS uses the low order 16 bits of the
      * destination CONID as an index into the CDL to obtain the address of the
-     * CDT.)" */
-    struct scs_cdt *cdt = scs_cdl_lookup(cdl, dest_conid);
-    if (cdt == NULL) {
-        return SCS_DGRAM_NO_CDT;
-    }
-    /* p. 2-35: the packet's source CONID is the sender's local CONID, i.e. this
-     * connection's remote CONID. Same refusal vms-e1a applies to the unaccounted
-     * path -- a datagram from the wrong connection is not this one's. */
-    if (src_conid != 0 && cdt->remote_conid != 0 && src_conid != cdt->remote_conid) {
+     * CDT.)"
+     *
+     * Resolved through scs_cdl_resolve() -- the SAME function
+     * scs_cdl_deliver_datagram() resolves with, including the p. 2-35
+     * source-CONID refusal vms-e1a added. This path does NOT reimplement the
+     * resolution, and it must not: two receive paths that resolve differently
+     * would be a real defect. Both SCS_DELIVER_NO_CDT and
+     * SCS_DELIVER_SRC_MISMATCH collapse to SCS_DGRAM_NO_CDT here because the
+     * datagram result enum reports buffer outcomes, and neither of those got as
+     * far as a buffer. */
+    struct scs_cdt *cdt = NULL;
+    if (scs_cdl_resolve(cdl, dest_conid, src_conid, &cdt) != SCS_DELIVER_OK) {
         return SCS_DGRAM_NO_CDT;
     }
 

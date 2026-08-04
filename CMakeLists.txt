@@ -328,8 +328,19 @@ if(BUILD_TESTS)
     add_test(NAME terminal_identity_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_terminal_identity_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})
+    # TIMEOUT raised from 120 (rd vms-008). The 120 was never derived from a
+    # measurement and the suite outgrew it: MEASURED on workshop 2026-08-04,
+    # 147s wall-clock for a run that exits rc=0 with "16 passed, 0 failed".
+    # ctest was killing a PASSING test, which reads in the report exactly like
+    # a broken one -- the same trap as a timeout-kill rendering as a plain
+    # "fail" in CI (rd vms-86a). 16 controls at ~9s each, and each control
+    # runs the whole gate against a sandbox copy of the tree, so the cost
+    # scales with the control count: every control added here has silently
+    # spent this budget. 600 is 4x the measured time, matching the headroom
+    # kif_caller_census carries for slower CI runners. If this is approached
+    # again, measure and say so here rather than doubling it blind.
     set_tests_properties(terminal_identity_negctl PROPERTIES
-        LABELS "integration;authenticity" TIMEOUT 120)
+        LABELS "integration;authenticity" TIMEOUT 600)
 
     # Rule 10/11 standing gate (vms-cb5): the DERIVED census of every writer
     # and reader of the identity environment variables, across src/ AND

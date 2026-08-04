@@ -49,7 +49,9 @@
  *     and completed as later frames describe the node.
  *
  * NOT IN SCOPE HERE (deliberately, so the refactor stays wire-invisible):
- *   - The masquerade tests of the p. 2-21 footnote (separate item).
+ *   - The masquerade tests of the p. 2-21 footnote. LANDED SINCE, as vms-22e --
+ *     see the "ANTI-MASQUERADE TESTS" block further down this file. That IS a
+ *     wire-visible change (it can abandon formation) and ships a kill-switch.
  *   - SCS connections / CDTs, which are a layer ABOVE the virtual circuit
  *     (p. 2-11 Figure 2-6: many connections ride one VC). Landed since, as
  *     src/vmsscs/scs_cdt.{h,c} (vms-e1a); the only thing it added to THIS file
@@ -157,7 +159,8 @@ struct scs_vc_fsm {
     int      timer_armed;
     uint64_t timer_ms;               /* monotonic ms at which last_emitted went out */
     unsigned retries;                /* reissues of the CURRENT START/STACK (p. 2-14) */
-    int      abandoned;              /* formation abandoned (retry limit or unacceptable resp.) */
+    int      abandoned;              /* formation abandoned (retry limit, unacceptable resp., or
+                                      * vms-22e: a failed p. 2-21 masquerade test) */
     /* Observability only. */
     unsigned long reissues;          /* total reissues over this PB's life */
     unsigned long implied_acks;      /* p. 2-16 implied ACKs honored */
@@ -260,6 +263,15 @@ struct scs_pb {
      */
     struct scs_cdt *cdt_head;
 
+    /*
+     * vms-22e: which p. 2-21 footnote test rejected this circuit's formative
+     * System Block, or SCS_MASQ_PASS (0) if none has. Written only by
+     * scs_pb_open; carried here so the port driver can log WHICH test failed
+     * without re-running the comparison. Declared as int because
+     * enum scs_masquerade_result is defined below this struct.
+     */
+    int masquerade_fail;
+
     struct scs_pb *next;
     struct scs_pb *prev;
 };
@@ -349,8 +361,119 @@ enum scs_open_result {
     SCS_OPEN_ERROR = -1,
     SCS_OPEN_NEW_SB = 0,          /* node learned for the first time: SB inserted */
     SCS_OPEN_EXISTING_SB = 1,     /* SB already present, other PBs on it: no refresh */
-    SCS_OPEN_EXISTING_REFRESHED = 2 /* SB already present with NO other PB: refreshed */
+    SCS_OPEN_EXISTING_REFRESHED = 2, /* SB already present with NO other PB: refreshed */
+    /* vms-22e: a p. 2-21 footnote masquerade test failed. NO queue move happened,
+     * the circuit is NOT open, and pb->masquerade_fail says which test failed. */
+    SCS_OPEN_ABANDONED_MASQUERADE = 3
 };
+
+/*
+ * ===== ANTI-MASQUERADE TESTS (vms-22e, p. 2-21 footnote) ===================
+ *
+ * The footnote hangs off the "a System Block corresponding to the remote node is
+ * already present in the Configuration Queue" bullet on p. 2-21:
+ *
+ *   "At this time, special tests are made to ensure that the remote node is not
+ *    masquerading as a node already known to the local system. For example, if
+ *    the SCS System ID in the formative System Block matches the SCS System ID
+ *    in a System Block already in the Configuration Queue, the SCS Node Names
+ *    must also match. The converse is also true. If both items match, and if
+ *    there is a Path Block already queued to the System Block in the
+ *    Configuration Queue, then the 64-bit incarnation numbers must also match.
+ *    Virtual circuit formation is abandoned if any of these tests fail."
+ *
+ * WHY THIS IS NOT A REJOIN FIX. This rule was tested as a hypothesis for the
+ * vms-2f3 rejoin failure and REFUTED twice (docs/HANDOFF-vms-2f3.md sec 4M.31):
+ * a run presenting the incarnation the peer had already recorded was refused
+ * anyway, and independently, the virtual circuit demonstrably FORMS on every
+ * refused rejoin (connections open over it), which a failed masquerade test
+ * would prevent. This module implements the rule because SCA specifies it, and
+ * for no other reason. It fixes nothing.
+ *
+ * WHEN THE TESTS RUN -- a LABELED READING, not a quotation. The footnote's
+ * example is written in the ID-matches direction, but "the converse is also
+ * true" describes a formative SB whose NODE NAME matches a queued SB while its
+ * System ID does not -- and that case lands in the OTHER p. 2-21 branch
+ * ("no other System Block corresponding to the remote node ... learned for the
+ * first time"), because the System-ID lookup misses. Running the tests only on
+ * the ID-match branch would therefore make the converse clause unreachable. So
+ * OVMX runs the whole test set at the single open transition, scanning the
+ * entire Configuration Queue, before any queue move. That is a reading of the
+ * footnote, not a documented VMS implementation detail.
+ *
+ * UNKNOWN INPUTS DO NOT FAIL A NODE (INV-6 spirit: never invent). A test whose
+ * inputs are not both populated is INDETERMINATE and cannot abandon formation:
+ *   - node name: skipped unless BOTH System Blocks carry a non-empty SCS Node
+ *     Name. The 0x41 START parser (scs_start_parse / struct scs_start_view) does
+ *     not extract the peer's node name today, so no SCSD-built System Block
+ *     carries one -- see the REACHABILITY note below.
+ *   - incarnation: skipped unless BOTH 64-bit incarnation numbers are non-zero.
+ *     vms-7be deliberately left this field unpopulated rather than inventing a
+ *     value, and the START parser still does not supply it, so THE INCARNATION
+ *     COMPARISON IS UNREACHABLE IN THE DAEMON TODAY. It is implemented and unit
+ *     tested so that it is correct the moment the parser supplies the field.
+ *     Recorded as a gap in docs/cluster-protocol-spec.md sec 5.
+ *
+ * REACHABILITY IN SCSD TODAY, stated plainly so a green test run is not misread:
+ * scs_pb_open() is reached from scsd.c on every join, so the SCAN runs live --
+ * but a comparison needs BOTH sides populated and the formative side never is.
+ * Everything SCSD learns about a REMOTE node is its 48-bit System Address
+ * (scs_pb_learn_system_addr); node_name is empty and incarnation is 0 on every
+ * remote System Block it builds. (SCSD does fill in a node name on its OWN
+ * System Block -- see scs_config_insert_sb in scsd.c's main() -- but that is the
+ * queued side of the comparison, not the formative one.) All three comparisons
+ * are therefore INDETERMINATE in production and OVMX has never abandoned a
+ * circuit for masquerade on the wire. THIS PARAGRAPH IS ITSELF ASSERTED, not
+ * merely written: test_masquerade_unknown_fields_do_not_convict() in
+ * tests/vmsscs/test_scs_config.c and step 0 of
+ * test_masquerade_open_is_logged_and_suppresses_vcopen() in
+ * tests/vmsscs/test_scsd_wire.c both build a peer the way the receive path does
+ * and RED if a node name or an incarnation ever appears on it.
+ *
+ * The rule itself is exercised by tests/vmsscs/test_scs_config.c against System
+ * Blocks whose fields ARE populated -- including against a System Block that is
+ * NOT the head of the Configuration Queue (so the queue walk is covered, not
+ * just the head), and with the incarnation comparison driven in BOTH directions
+ * (so an ordered compare cannot pass for an equality). What the DAEMON does with
+ * an abandonment -- log which test failed, and print no STARTDONE/VCOPEN for a
+ * circuit it refused -- is exercised by
+ * test_masquerade_open_is_logged_and_suppresses_vcopen() in test_scsd_wire.c.
+ * Do not read "the tests are implemented and tested" as "OVMX currently detects
+ * masqueraders".
+ *
+ * KILL-SWITCH: OVMX_NO_MASQUERADE_TESTS=1 makes scs_config_masquerade_check()
+ * return SCS_MASQ_PASS unconditionally, restoring the pre-vms-22e open
+ * transition exactly. Re-read from the environment on every call, so a test can
+ * bracket it.
+ */
+enum scs_masquerade_result {
+    SCS_MASQ_PASS = 0,
+    /* System IDs match a queued SB, SCS Node Names differ. */
+    SCS_MASQ_FAIL_NODE_NAME = 1,
+    /* The converse: SCS Node Names match a queued SB, System IDs differ. */
+    SCS_MASQ_FAIL_SYSTEM_ID = 2,
+    /* Both match, a Path Block is already queued to that SB, incarnations differ. */
+    SCS_MASQ_FAIL_INCARNATION = 3
+};
+
+/* 1 unless OVMX_NO_MASQUERADE_TESTS=1. Read fresh from the environment. */
+int scs_masquerade_tests_enabled(void);
+
+/* Short name of a masquerade result, for logging. Never NULL. */
+const char *scs_masquerade_result_name(enum scs_masquerade_result r);
+
+/*
+ * scs_config_masquerade_check - run the p. 2-21 footnote tests for `formative`
+ * against every System Block in the Configuration Queue. `formative` itself is
+ * skipped if it is somehow queued. Returns the FIRST failing test, or
+ * SCS_MASQ_PASS if all tests pass or are indeterminate (see the block above).
+ * Returns SCS_MASQ_PASS on a NULL argument and when the kill-switch is set.
+ *
+ * scs_pb_open() calls this itself -- a caller cannot skip it. It is public so
+ * the rule can be unit tested directly and so a port driver can pre-check.
+ */
+enum scs_masquerade_result scs_config_masquerade_check(const struct scs_config *cfg,
+                                                       const struct scs_sb *formative);
 
 /* --- lifecycle ------------------------------------------------------------ */
 
@@ -423,6 +546,13 @@ struct scs_sb *scs_pb_learn_system_addr(struct scs_config *cfg, struct scs_pb *p
  * Node identity for the lookup is the 48-bit SCS System ID (p. 2-16). Sets the
  * PB's VC state to OPEN. A PB that is already open is left alone
  * (SCS_OPEN_EXISTING_SB). Returns SCS_OPEN_ERROR if pb has no SB attached.
+ *
+ * vms-22e: BEFORE any queue move, the p. 2-21 footnote masquerade tests run
+ * (scs_config_masquerade_check). If one fails, formation is ABANDONED: no queue
+ * move happens, the PB stays formative on its PDT with vc_state CLOSED and
+ * fsm.abandoned raised, pb->masquerade_fail records which test failed, and
+ * SCS_OPEN_ABANDONED_MASQUERADE is returned. Tearing the Path Block down after
+ * that is the port driver's business (vms-17f), not this function's.
  */
 enum scs_open_result scs_pb_open(struct scs_config *cfg, struct scs_pb *pb);
 

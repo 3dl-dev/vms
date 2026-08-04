@@ -1511,6 +1511,7 @@ static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
      * reads them has to start from a known zero. */
     pb_open_results[0] = pb_open_results[1] = pb_open_results[2] = 0;
     pb_open_errors = 0;
+    pb_open_masquerades = 0; /* vms-22e */
     peer_departures = 0;
     depart_connections_lost = 0;
     depart_refusals = 0;
@@ -2319,6 +2320,188 @@ static void test_multicast_beacon_keeps_a_peer_alive(void)
     CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "a beaconing peer lost its slot");
 }
 
+/*
+ * =====================================================================
+ * vms-22e: WHAT THE DAEMON DOES WITH AN ABANDONED OPEN.
+ *
+ * scs_config.c owns the p. 2-21 footnote RULE and tests/vmsscs/test_scs_config.c
+ * proves it. This case is about the OTHER half of the item's done condition:
+ * that an abandonment "is logged with WHICH test failed", and that the daemon
+ * does not go on to announce a circuit it just refused. Neither of those lives
+ * in scs_config.c -- both are the SCSD-W-VCMASQ branch of scsd_vc_on_open().
+ *
+ * Left untested, three separate mutations of that branch survive the whole of
+ * this file: deleting it outright, logging a CONSTANT test name instead of the
+ * failing one, and dropping its early `return` so STARTDONE/VCOPEN print on a
+ * refused circuit. Each of those is a real failure mode -- the last one is an
+ * operator being told a virtual circuit is OPEN when it is not.
+ *
+ * WHY THIS CANNOT BE DRIVEN BY CAPTURED FRAMES, stated so the seeding below is
+ * not read as a shortcut: struct scs_start_view carries no SCS Node Name and no
+ * incarnation, so every System Block the daemon builds from the wire has an
+ * empty name and a zero incarnation, every footnote comparison is INDETERMINATE
+ * and scs_config_masquerade_check() returns PASS. That is asserted directly in
+ * step 0 below rather than asserted in prose. The named formative SB is
+ * therefore attached through the production entry point
+ * (scs_pb_attach_formative_sb) to the production peer slot's Path Block, and
+ * the transition itself is performed by production scsd_vc_on_open().
+ * =====================================================================
+ */
+static void test_masquerade_open_is_logged_and_suppresses_vcopen(void)
+{
+    struct world w;
+    world_init(&w);
+    uint8_t victim_mac[6], impostor_mac[6], sysid[6];
+    mac_of(0x91, victim_mac);
+    mac_of(0x92, impostor_mac);
+    sysid_of(1025, sysid);
+    struct scsd_vc_ctx ctx = vc_test_ctx(&w);
+
+    pb_open_results[0] = pb_open_results[1] = pb_open_results[2] = 0;
+    pb_open_errors = 0;
+    pb_open_masquerades = 0;
+    rxlog_reset();
+
+    /* ---- 0. THE REACHABILITY CLAIM, MEASURED. A peer built exactly the way
+     * the receive path builds one -- system address and nothing else -- opens
+     * cleanly against a queued node with the SAME System ID. No footnote test
+     * can fire on daemon-shaped input, which is why this case has to seed. ---- */
+    {
+        struct world d;
+        world_init(&d);
+        uint8_t mac_a[6], mac_b[6];
+        mac_of(0x9a, mac_a);
+        mac_of(0x9b, mac_b);
+        struct peer_state *p1 = peer_find_or_add(&d.cfg, &d.pdt, d.peers, mac_a);
+        CHECK(p1 != NULL, "no peer slot for the daemon-shape control");
+        if (p1 == NULL) {
+            return;
+        }
+        ps_learn_sys_addr(&d.cfg, p1, sysid);
+        CHECK(p1->pb->sb != NULL && p1->pb->sb->node_name[0] == '\0' &&
+                  p1->pb->sb->incarnation == 0,
+              "the receive path now supplies a node name or an incarnation -- this"
+              " case's premise (all three tests indeterminate in production) is"
+              " stale and the reachability comment on scsd_vc_on_open() must be"
+              " re-derived");
+        CHECK(scs_pb_open(&d.cfg, p1->pb) == SCS_OPEN_NEW_SB, "control first join failed");
+        struct peer_state *p2 = peer_find_or_add(&d.cfg, &d.pdt, d.peers, mac_b);
+        CHECK(p2 != NULL, "no second peer slot for the daemon-shape control");
+        if (p2 == NULL) {
+            return;
+        }
+        ps_learn_sys_addr(&d.cfg, p2, sysid);
+        CHECK(scs_pb_open(&d.cfg, p2->pb) != SCS_OPEN_ABANDONED_MASQUERADE,
+              "a daemon-shaped System Block was convicted -- the branch under test"
+              " IS reachable from the wire and the comment saying it is not is now"
+              " wrong");
+    }
+
+    /* ---- 1. A KNOWN NODE, named, with its circuit open. ---- */
+    struct peer_state *victim = peer_find_or_add(&w.cfg, &w.pdt, w.peers, victim_mac);
+    CHECK(victim != NULL, "no peer slot for the victim node");
+    if (victim == NULL) {
+        return;
+    }
+    struct scs_sb_info known;
+    memset(&known, 0, sizeof(known));
+    memcpy(known.system_id, sysid, 6);
+    known.node_name = "VAX1";
+    known.incarnation = 0x1000ull;
+    known.cpu_type = 7;
+    CHECK(scs_pb_attach_formative_sb(&w.cfg, victim->pb, &known) != NULL,
+          "could not attach the victim's formative System Block");
+    scs_vc_init(&victim->vc);
+    log_capture_begin();
+    scsd_vc_on_open(&ctx, victim);
+    log_capture_end();
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1,
+          "the victim's join produced %lu NEW_SB transitions, expected 1",
+          pb_open_results[SCS_OPEN_NEW_SB]);
+    CHECK(rxlog_has("SCSD-I-VCOPEN"),
+          "an ADMITTED circuit did not announce VCOPEN -- the suppression"
+          " assertion below would then pass for a daemon that never logs it");
+    CHECK(rxlog_has("SCSD-I-STARTDONE"), "an admitted circuit did not log STARTDONE");
+    CHECK(pb_open_masquerades == 0, "an admitted circuit counted as a masquerade");
+
+    /* ---- 2. THE IMPOSTOR: VAX1's System ID under another name. ---- */
+    rxlog_reset();
+    struct peer_state *impostor = peer_find_or_add(&w.cfg, &w.pdt, w.peers, impostor_mac);
+    CHECK(impostor != NULL, "no peer slot for the impostor");
+    if (impostor == NULL) {
+        return;
+    }
+    struct scs_sb_info fake = known;
+    fake.node_name = "EVIL";
+    CHECK(scs_pb_attach_formative_sb(&w.cfg, impostor->pb, &fake) != NULL,
+          "could not attach the impostor's formative System Block");
+    scs_vc_init(&impostor->vc);
+    log_capture_begin();
+    scsd_vc_on_open(&ctx, impostor);
+    log_capture_end();
+
+    CHECK(pb_open_masquerades == 1,
+          "the daemon recorded %lu abandoned opens, expected 1 -- the"
+          " SCSD-W-VCMASQ branch did not run", pb_open_masquerades);
+    CHECK(rxlog_has("SCSD-W-VCMASQ"),
+          "an abandoned virtual-circuit formation was NOT logged; log was: '%s'",
+          rxlog);
+    /* WHICH test failed, by its own text -- not merely "a masquerade happened".
+     * A branch that logged a constant would pass the line above. */
+    CHECK(rxlog_has(scs_masquerade_result_name(SCS_MASQ_FAIL_NODE_NAME)),
+          "the log does not name the failing test (%s); log was: '%s'",
+          scs_masquerade_result_name(SCS_MASQ_FAIL_NODE_NAME), rxlog);
+    CHECK(!rxlog_has(scs_masquerade_result_name(SCS_MASQ_PASS)),
+          "the abandonment was logged as PASS; log was: '%s'", rxlog);
+    /* THE SUPPRESSION: a refused circuit is not announced as open. */
+    CHECK(!rxlog_has("SCSD-I-VCOPEN"),
+          "the daemon announced VCOPEN on a circuit it had just ABANDONED;"
+          " log was: '%s'", rxlog);
+    CHECK(!rxlog_has("SCSD-I-STARTDONE"),
+          "the daemon announced STARTDONE on an abandoned circuit; log was: '%s'",
+          rxlog);
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1 &&
+              pb_open_results[SCS_OPEN_EXISTING_SB] == 0 &&
+              pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 0 &&
+              pb_open_errors == 0,
+          "an abandoned open was tallied as a completed transition"
+          " (new=%lu existing=%lu refreshed=%lu errors=%lu)",
+          pb_open_results[SCS_OPEN_NEW_SB], pb_open_results[SCS_OPEN_EXISTING_SB],
+          pb_open_results[SCS_OPEN_EXISTING_REFRESHED], pb_open_errors);
+    CHECK(scs_config_sb_count(&w.cfg) == 1,
+          "the abandoned formative System Block was inserted into the"
+          " configuration queue");
+
+    /* ---- 3. A DIFFERENT FAILING TEST MUST PRODUCE DIFFERENT TEXT. This is
+     * what makes step 2's assertion about naming the test load-bearing: a
+     * branch that logs any fixed string cannot satisfy both. ---- */
+    rxlog_reset();
+    uint8_t third_mac[6];
+    mac_of(0x93, third_mac);
+    struct peer_state *third = peer_find_or_add(&w.cfg, &w.pdt, w.peers, third_mac);
+    CHECK(third != NULL, "no peer slot for the incarnation impostor");
+    if (third == NULL) {
+        return;
+    }
+    struct scs_sb_info wrong_inc = known;
+    wrong_inc.incarnation = 0x2000ull; /* same ID, same name, PB still queued */
+    CHECK(scs_pb_attach_formative_sb(&w.cfg, third->pb, &wrong_inc) != NULL,
+          "could not attach the incarnation impostor's System Block");
+    scs_vc_init(&third->vc);
+    log_capture_begin();
+    scsd_vc_on_open(&ctx, third);
+    log_capture_end();
+    CHECK(pb_open_masquerades == 2, "the second abandonment was not counted (%lu)",
+          pb_open_masquerades);
+    CHECK(rxlog_has(scs_masquerade_result_name(SCS_MASQ_FAIL_INCARNATION)),
+          "the log names the wrong failing test -- expected '%s'; log was: '%s'",
+          scs_masquerade_result_name(SCS_MASQ_FAIL_INCARNATION), rxlog);
+    CHECK(!rxlog_has(scs_masquerade_result_name(SCS_MASQ_FAIL_NODE_NAME)),
+          "the log still names the PREVIOUS failing test -- the clause is a"
+          " constant, not the result; log was: '%s'", rxlog);
+    CHECK(!rxlog_has("SCSD-I-VCOPEN"), "VCOPEN printed on the second abandonment");
+}
+
 int main(void)
 {
     /* Several assertions below assume the machine starts enabled. */
@@ -2357,6 +2540,9 @@ int main(void)
     test_departure_kill_switch_restores_the_pinned_slot();
     test_listen_timeout_override_moves_the_departure();
     test_multicast_beacon_keeps_a_peer_alive();
+    /* vms-22e: the daemon's half of the p. 2-21 footnote rule -- the log line
+     * that names the failing test, and the VCOPEN it must NOT print. */
+    test_masquerade_open_is_logged_and_suppresses_vcopen();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

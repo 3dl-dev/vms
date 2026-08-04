@@ -513,6 +513,11 @@ static unsigned long conn_unemitted_actions = 0;
  */
 static unsigned long pb_open_results[3] = {0, 0, 0}; /* NEW_SB, EXISTING_SB, REFRESHED */
 static unsigned long pb_open_errors = 0;
+/* vms-22e: opens ABANDONED by the p. 2-21 footnote masquerade tests. Separate
+ * from pb_open_errors because an abandonment is a RULE firing, not a fault, and
+ * because "the wire has never produced one" is a claim this counter measures
+ * rather than asserts -- see the reachability block on scsd_vc_on_open(). */
+static unsigned long pb_open_masquerades = 0;
 static unsigned long peer_departures = 0;
 static unsigned long depart_connections_lost = 0;
 static unsigned long depart_refusals = 0;
@@ -793,9 +798,10 @@ static const char *scsd_open_result_text(enum scs_open_result r)
  * implied ACK). Body unchanged from vms-21e/vms-246/vms-7be; only its trigger
  * moved from "the peer sent its round-2 ack" to "the circuit reached OPEN".
  *
- * REACHABILITY AS MEASURED (vms-17f), so a green test run is not misread. Each
- * line is a counter this function increments, and each is asserted by a named
- * case in tests/vmsscs/test_scsd_wire.c that drives scsd_handle_frame():
+ * REACHABILITY AS MEASURED (vms-17f, extended by vms-22e), so a green test run
+ * is not misread. Each line is a counter this function increments, and each is
+ * asserted by a named case in tests/vmsscs/test_scsd_wire.c that drives
+ * scsd_handle_frame() or scsd_vc_on_open() directly:
  *
  *   SCS_OPEN_NEW_SB              REACHED. Every peer discovered for the first
  *                                time. (test_vc_happy_path_frame_sequence and
@@ -814,6 +820,26 @@ static const char *scsd_open_result_text(enum scs_open_result r)
  *                                MAC. Left in scsd_open_result_text() as a name,
  *                                claiming nothing.
  *   SCS_OPEN_ERROR               Only from a PB with no SB attached.
+ *   SCS_OPEN_ABANDONED_MASQUERADE
+ *                                NOT REACHED BY THE WIRE, and cannot be today:
+ *                                the p. 2-21 footnote comparisons need BOTH
+ *                                sides populated, and the formative side never
+ *                                is -- struct scs_start_view carries no node
+ *                                name and no incarnation, so the only thing
+ *                                SCSD learns about a REMOTE node is its 48-bit
+ *                                System Address (scs_pb_learn_system_addr),
+ *                                leaving node_name empty and incarnation 0. All
+ *                                three tests are therefore INDETERMINATE on the
+ *                                live path and scs_config_masquerade_check()
+ *                                returns SCS_MASQ_PASS. The branch below is NOT
+ *                                dead code wearing a fact's clothes: it is
+ *                                driven end-to-end by
+ *                                test_masquerade_open_is_logged_and_suppresses_vcopen
+ *                                in test_scsd_wire.c, which seeds a peer_state
+ *                                whose SB does carry a name and calls this
+ *                                function, and which asserts the SCSD-W-VCMASQ
+ *                                text names the failing test AND that no
+ *                                STARTDONE/VCOPEN line follows.
  */
 static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps)
 {
@@ -821,6 +847,31 @@ static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps
      * both sides reset the VC to send_seq=1/recv_seq=0 when START completes. */
     scs_vc_reset_seq(&ps->vc);
     enum scs_open_result open_res = scs_pb_open(ctx->cfg, ps->pb);
+    if (open_res == SCS_OPEN_ABANDONED_MASQUERADE) {
+        /* vms-22e: the p. 2-21 footnote tests rejected the formative System
+         * Block. Log WHICH test failed and stop -- the circuit is not open, so
+         * claiming STARTDONE/VCOPEN below would be a lie. The Path Block is left
+         * abandoned; tearing it down is vms-17f's surface, not this function's.
+         * NOTE this is unreached in production today. A comparison needs BOTH
+         * sides populated, and the formative side never is: the only thing SCSD
+         * learns about a REMOTE node is its 48-bit System Address
+         * (scs_pb_learn_system_addr), with node_name empty and incarnation 0.
+         * (SCSD does give its OWN System Block a node name, above in main(), but
+         * that is the other side of the comparison and cannot supply the
+         * missing one.) See the ANTI-MASQUERADE block in scs_config.h. */
+        pb_open_masquerades++;
+        log_ts(stderr);
+        fprintf(stderr,
+                " SCSD-W-VCMASQ, virtual-circuit formation ABANDONED with peer"
+                " %02x:%02x:%02x:%02x:%02x:%02x -- masquerade test failed: %s"
+                " (p. 2-21 footnote)\n",
+                ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                scs_masquerade_result_name(
+                    (enum scs_masquerade_result)ps->pb->masquerade_fail));
+        fflush(stderr);
+        return;
+    }
     if (open_res >= SCS_OPEN_NEW_SB && open_res <= SCS_OPEN_EXISTING_REFRESHED) {
         pb_open_results[(int)open_res]++;
     } else {
@@ -2307,10 +2358,12 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
         /* vms-17f: the p. 2-20/2-21 open transitions this run took, and the
          * departure sweep's work. PB-OPEN-REFRESHED is the p. 2-21 Note firing
          * -- a node that was here, left, and came back. */
-        fprintf(out, "  PB-OPEN: new-sb=%lu refreshed=%lu existing-sb=%lu errors=%lu\n",
+        fprintf(out, "  PB-OPEN: new-sb=%lu refreshed=%lu existing-sb=%lu errors=%lu"
+                " abandoned-masquerade=%lu\n",
                 pb_open_results[SCS_OPEN_NEW_SB],
                 pb_open_results[SCS_OPEN_EXISTING_REFRESHED],
-                pb_open_results[SCS_OPEN_EXISTING_SB], pb_open_errors);
+                pb_open_results[SCS_OPEN_EXISTING_SB], pb_open_errors,
+                pb_open_masquerades);
         fprintf(out, "  PEER-DEPARTURES=%lu CONNECTIONS-LOST=%lu TEARDOWNS-REFUSED=%lu"
                 " LISTEN-TIMEOUT-MS=%llu%s\n",
                 peer_departures, depart_connections_lost, depart_refusals,

@@ -1728,6 +1728,47 @@ For visibility, every field NOT marked GROUNDED above:
   conflated. OVMX therefore takes Minimum Send Credits as an API argument
   (`scs_credit_extend`, `scs_credit_set_remote_min_send_credits`) with no wire
   parser behind it.
+- **The remote node's SCS Node Name and 64-bit software incarnation number are
+  NOT PARSED off the wire** (`vms-22e`). The p. 2-21 footnote anti-masquerade
+  tests compare three System Block items — SCS System ID, SCS Node Name, and the
+  64-bit software incarnation number (p. 2-16) — and OVMX implements all three in
+  `src/vmsscs/scs_config.c` (`scs_config_masquerade_check`). Only the first has a
+  parser behind it:
+  - **SCS System ID** — populated live, from the `src-logical` field of every
+    HELLO (`aa:00:04:00:<LE16(SCSSYSTEMID)>`, §4a), via
+    `scs_pb_learn_system_addr()`.
+  - **SCS Node Name** — the field IS grounded on the wire: the phase-2 `0x41`
+    START body carries an 8-byte blank-padded ASCII node name at `[90:98]`
+    (§4g phase 2, GROUNDED). But `scs_start_parse()` / `struct scs_start_view`
+    do not extract it, so no System Block SCSD builds for a **remote** node
+    carries one. (SCSD does name its own local System Block, from `SCSNODE`.)
+  - **64-bit software incarnation number** — **UNGROUNDED, no identified wire
+    field.** `vms-7be` left `struct scs_sb.incarnation` unset rather than invent
+    a value and that is still the case. The candidates are the two per-boot
+    incarnation tokens `[66:71]` / `[98:104]` in the `0x41` START body, which
+    this section already lists as replayed-not-decoded; neither has been shown to
+    BE the p. 2-16 quadword, and the `0x41 [22:24]` field is a different
+    quantity (§4i.B, the member-attributed node-incarnation counter). **Do not
+    conflate them.** `vms-2f3` §4M.31 did pin an emitted quadword at abs 80..87
+    that a real VAX read back as `Incarnation`, but that is OVMX's *emitted*
+    value, not a decode of the peer's.
+
+  **Consequence, stated plainly:** all three masquerade comparisons are
+  INDETERMINATE for every System Block the live daemon builds, so OVMX has never
+  abandoned a virtual circuit for masquerade on the wire. The rule is implemented
+  and unit tested (`tests/vmsscs/test_scs_config.c`) against System Blocks whose
+  fields are populated by hand, so it is correct the moment a parser supplies
+  them — including against a **non-head** System Block (the queue walk, not just
+  the head), and with the incarnation comparison exercised in **both**
+  directions, so an accidentally-ordered compare cannot pass. The daemon's half
+  — the `SCSD-W-VCMASQ` line naming *which* test failed, and the suppression of
+  the `SCSD-I-STARTDONE` / `SCSD-I-VCOPEN` lines on a refused circuit — is
+  covered by `test_masquerade_open_is_logged_and_suppresses_vcopen` in
+  `tests/vmsscs/test_scsd_wire.c`, which drives production `scsd_vc_on_open()`
+  and whose first step re-measures the INDETERMINATE claim above rather than
+  trusting it. Kill-switch `OVMX_NO_MASQUERADE_TESTS=1`. This rule was tested as the
+  cause of the `vms-2f3` rejoin failure and **REFUTED** (§4M.31 of
+  `docs/HANDOFF-vms-2f3.md`): it fixes nothing.
 
 ---
 

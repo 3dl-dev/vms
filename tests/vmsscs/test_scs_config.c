@@ -14,7 +14,14 @@
  *     reboot/rejoin case)                                                  (p. 2-21)
  *   - a configuration queue holding several SBs with several PBs each
  *                                                              (pp. 2-17..2-19)
+ *   - vms-22e: the anti-masquerade tests of the p. 2-21 footnote -- ID match /
+ *     name mismatch, the converse, both matching with a Path Block queued and
+ *     differing incarnations, and both matching with NO Path Block queued (the
+ *     rebooted node, which is refreshed and admitted); plus the
+ *     OVMX_NO_MASQUERADE_TESTS kill-switch bracketed both ways, and the rule
+ *     that an input the local system never learned cannot convict a node
  *
+
  * Pure state: this test builds no frame and opens no socket.
  */
 #include <stdio.h>
@@ -150,13 +157,27 @@ static void test_second_circuit_no_refresh(void)
     scs_pdt_init(&pdt2, SCS_PORT_TYPE_CI, 4096);
 
     struct scs_sb_info first = make_info(1026, "VAX2", 0xAAAAAAAAull, 7);
+    first.hw_rev = 3;
+    first.os_version = 0x0703;
     struct scs_pb *pb1 = scs_pb_create(&cfg, &pdt1, mac_a, SCS_PORT_TYPE_ETHERNET);
     scs_pb_attach_formative_sb(&cfg, pb1, &first);
     CHECK(scs_pb_open(&cfg, pb1) == SCS_OPEN_NEW_SB, "first circuit did not create the SB");
     struct scs_sb *sb = pb1->sb;
 
-    /* Same node (same 48-bit System ID) reached over a second local port. */
-    struct scs_sb_info second = make_info(1026, "VAX2", 0xBBBBBBBBull, 7);
+    /* Same node (same 48-bit System ID) reached over a second local port.
+     *
+     * vms-22e: the SAME incarnation, deliberately. A node has exactly ONE
+     * software incarnation number at a time (p. 2-16: it changes when the node
+     * reboots), so two simultaneously-open circuits to one node necessarily
+     * carry the same value -- and presenting a DIFFERENT one here is now the
+     * p. 2-21 footnote masquerade failure, covered by
+     * test_masquerade_incarnation_mismatch_abandons(). The "was it refreshed?"
+     * question is therefore asked of hw_rev/os_version, fields the footnote
+     * does not compare, so this test still proves the no-refresh rule without
+     * depending on a state the architecture forbids. */
+    struct scs_sb_info second = make_info(1026, "VAX2", 0xAAAAAAAAull, 7);
+    second.hw_rev = 9;
+    second.os_version = 0x0704;
     struct scs_pb *pb2 = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_CI);
     scs_pb_attach_formative_sb(&cfg, pb2, &second);
     CHECK(scs_config_sb_count(&cfg) == 1, "formative SB leaked into the configuration queue");
@@ -169,9 +190,14 @@ static void test_second_circuit_no_refresh(void)
     CHECK(scs_sb_pb_count(sb) == 2, "SB holds %u PBs, expected 2 (two circuits, one node)",
           scs_sb_pb_count(sb));
     CHECK(pb2->sb == sb, "second PB was not re-pointed at the old SB");
-    CHECK(sb->incarnation == 0xAAAAAAAAull,
-          "old SB was refreshed (incarnation 0x%llx) although another PB was queued to it",
-          (unsigned long long)sb->incarnation);
+    CHECK(sb->hw_rev == 3,
+          "old SB was refreshed (hw_rev %u, expected 3) although another PB was"
+          " queued to it",
+          sb->hw_rev);
+    CHECK(sb->os_version == 0x0703,
+          "old SB was refreshed (os_version 0x%04x, expected 0x0703) although"
+          " another PB was queued to it",
+          sb->os_version);
     CHECK(scs_pdt_formative_count(&pdt2) == 0, "second PB was not dequeued from its PDT");
 }
 
@@ -871,20 +897,45 @@ static void test_depart_is_what_makes_the_rejoin_refresh(void)
     const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x17, 0xf0, 0x03};
 
     /* CONTROL: no departure. The second circuit finds the old SB still holding a
-     * Path Block, so the Note does not apply and nothing is refreshed. */
+     * Path Block, so the Note does not apply and nothing is refreshed.
+     *
+     * vms-22e: the second circuit MUST present the SAME 64-bit incarnation as
+     * the first. A node that never left has not rebooted, so its incarnation has
+     * not changed -- and with a Path Block still queued to the old SB, the
+     * p. 2-21 footnote requires the incarnations to match on pain of abandoned
+     * formation. This control originally presented 0x2000 here, which under the
+     * footnote rule is a MASQUERADER, not a second port; it was a fixture that
+     * had never been checked against the rule because the rule did not exist
+     * yet. The distinguishing signal moved to cpu_type instead, which the
+     * p. 2-21 Note refresh copies (scs_sb_apply_info) and no footnote test
+     * inspects -- so "nothing was refreshed" is still asserted, non-vacuously. */
     scs_config_init(&cfg);
     scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 1498);
     struct scs_sb_info boot1 = make_info(1329, "VAX9", 0x1000ull, 7);
     struct scs_pb *a = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
     scs_pb_attach_formative_sb(&cfg, a, &boot1);
     CHECK(scs_pb_open(&cfg, a) == SCS_OPEN_NEW_SB, "control: first join was not NEW_SB");
-    struct scs_sb_info boot2 = make_info(1329, "VAX9", 0x2000ull, 7);
+    struct scs_sb_info second_port = make_info(1329, "VAX9", 0x1000ull, 9);
     struct scs_pb *b = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
-    scs_pb_attach_formative_sb(&cfg, b, &boot2);
+    scs_pb_attach_formative_sb(&cfg, b, &second_port);
     CHECK(scs_pb_open(&cfg, b) == SCS_OPEN_EXISTING_SB,
           "control: a second circuit to a node that never left took the REFRESH");
-    CHECK(scs_config_find_sb(&cfg, boot1.system_id)->incarnation == 0x1000ull,
-          "control: the old SB was refreshed although the node never departed");
+    CHECK(scs_config_find_sb(&cfg, boot1.system_id)->cpu_type == 7,
+          "control: the old SB was refreshed although the node never departed"
+          " (cpu_type is now %u, the formative SB's)",
+          scs_config_find_sb(&cfg, boot1.system_id)->cpu_type);
+
+    /* And the rebooted-incarnation shape the control used to carry IS now an
+     * abandonment -- kept as a live assertion so the two rules stay wired to
+     * each other rather than to a comment. */
+    struct scs_sb_info impostor = make_info(1329, "VAX9", 0x2000ull, 7);
+    struct scs_pb *c = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, c, &impostor);
+    CHECK(scs_pb_open(&cfg, c) == SCS_OPEN_ABANDONED_MASQUERADE,
+          "a changed incarnation with Path Blocks still queued was admitted --"
+          " the p. 2-21 footnote incarnation test did not fire");
+
+    struct scs_sb_info boot2 = make_info(1329, "VAX9", 0x2000ull, 7);
 
     /* THE CASE: same node, but it departs first. */
     scs_config_init(&cfg);
@@ -973,6 +1024,486 @@ static void test_depart_kill_switch(void)
     unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
 }
 
+/* ======================================================================
+ * vms-22e: the p. 2-21 footnote anti-masquerade tests.
+ *
+ * "At this time, special tests are made to ensure that the remote node is not
+ *  masquerading as a node already known to the local system. For example, if the
+ *  SCS System ID in the formative System Block matches the SCS System ID in a
+ *  System Block already in the Configuration Queue, the SCS Node Names must also
+ *  match. The converse is also true. If both items match, and if there is a Path
+ *  Block already queued to the System Block in the Configuration Queue, then the
+ *  64-bit incarnation numbers must also match. Virtual circuit formation is
+ *  abandoned if any of these tests fail."   (Davis, ch. 2, p. 2-21, footnote)
+ *
+ * This rule was tested against the vms-2f3 rejoin failure and REFUTED as its
+ * cause (docs/HANDOFF-vms-2f3.md sec 4M.31). Nothing here fixes that bug.
+ * ====================================================================== */
+
+/* A node already in the configuration queue, with one open circuit on `pdt`. */
+static struct scs_sb *seed_known_node(struct scs_config *cfg, struct scs_pdt *pdt,
+                                      uint16_t scssystemid, const char *node,
+                                      uint64_t incarnation, const uint8_t mac[6])
+{
+    struct scs_sb_info info = make_info(scssystemid, node, incarnation, 7);
+    struct scs_pb *pb = scs_pb_create(cfg, pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(cfg, pb, &info);
+    if (scs_pb_open(cfg, pb) != SCS_OPEN_NEW_SB) {
+        return NULL;
+    }
+    return pb->sb;
+}
+
+/* Assert an abandoned formation left EVERYTHING as it was: the PB is still
+ * formative on its PDT, CLOSED and abandoned, and the configuration queue is
+ * untouched. Shared by the failure cases so each of them checks it.
+ * `sb_count` is how many System Blocks the queue held BEFORE the abandoned
+ * open -- a parameter rather than a constant 1 because the queue-depth case
+ * below deliberately runs against a deeper queue. */
+static void check_abandoned(struct scs_config *cfg, struct scs_pdt *pdt,
+                            struct scs_pb *pb, struct scs_sb *old,
+                            enum scs_masquerade_result expect, const char *what,
+                            unsigned sb_count)
+{
+    CHECK(pb->masquerade_fail == (int)expect,
+          "%s: failing test recorded as %d (%s), expected %d", what,
+          pb->masquerade_fail,
+          scs_masquerade_result_name((enum scs_masquerade_result)pb->masquerade_fail),
+          (int)expect);
+    CHECK(pb->vc_state == SCS_VC_CLOSED, "%s: abandoned circuit is %s, expected CLOSED",
+          what, scs_vc_state_name(pb->vc_state));
+    CHECK(pb->fsm.abandoned == 1, "%s: fsm.abandoned was not raised", what);
+    CHECK(pb->on_pdt == 1, "%s: abandoned PB was dequeued from its PDT", what);
+    CHECK(scs_pdt_formative_count(pdt) == 1,
+          "%s: PDT formative queue holds %u, expected the abandoned PB", what,
+          scs_pdt_formative_count(pdt));
+    CHECK(scs_config_sb_count(cfg) == sb_count,
+          "%s: configuration queue holds %u SBs, expected %u -- the abandoned"
+          " formative SB was inserted", what, scs_config_sb_count(cfg), sb_count);
+    CHECK(scs_sb_pb_count(old) == 1,
+          "%s: old SB holds %u PBs -- the abandoned PB was queued to it", what,
+          scs_sb_pb_count(old));
+    CHECK(pb->sb != old, "%s: abandoned PB was re-pointed at the old SB", what);
+}
+
+/* TEST 1: System IDs match, SCS Node Names do not -> abandon. */
+static void test_masquerade_node_name_mismatch_abandons(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt1, pdt2;
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x22, 0xe0, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x22, 0xe0, 0x02};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+
+    struct scs_sb *old = seed_known_node(&cfg, &pdt1, 1025, "VAX1", 0x1000ull, mac_a);
+    CHECK(old != NULL, "seeding the known node failed");
+
+    /* An impostor presenting VAX1's System ID under a different node name. */
+    struct scs_sb_info fake = make_info(1025, "EVIL", 0x1000ull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative = scs_pb_attach_formative_sb(&cfg, pb, &fake);
+    CHECK(scs_config_masquerade_check(&cfg, formative) == SCS_MASQ_FAIL_NODE_NAME,
+          "the ID-match/name-mismatch test did not fire");
+
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_ABANDONED_MASQUERADE,
+          "formation was not abandoned for a node-name mismatch");
+    check_abandoned(&cfg, &pdt2, pb, old, SCS_MASQ_FAIL_NODE_NAME, "name mismatch", 1);
+}
+
+/* TEST 2, THE CONVERSE: SCS Node Names match, System IDs do not -> abandon.
+ * Note this lands in the p. 2-21 "learned for the first time" branch (the
+ * System-ID lookup misses), which is why the tests scan the whole queue. */
+static void test_masquerade_system_id_mismatch_abandons(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt1, pdt2;
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x22, 0xe1, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x22, 0xe1, 0x02};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+
+    struct scs_sb *old = seed_known_node(&cfg, &pdt1, 1025, "VAX1", 0x1000ull, mac_a);
+    CHECK(old != NULL, "seeding the known node failed");
+    /* Control: without the tests this would be a plain first-contact join. */
+    struct scs_sb_info fake = make_info(1099, "VAX1", 0x1000ull, 7);
+    CHECK(scs_config_find_sb(&cfg, fake.system_id) == NULL,
+          "this scenario is not the 'learned for the first time' branch -- the"
+          " converse test would be reachable from the ID-match branch and the"
+          " queue scan would be untested");
+
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative = scs_pb_attach_formative_sb(&cfg, pb, &fake);
+    CHECK(scs_config_masquerade_check(&cfg, formative) == SCS_MASQ_FAIL_SYSTEM_ID,
+          "the converse (name-match/ID-mismatch) test did not fire");
+
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_ABANDONED_MASQUERADE,
+          "formation was not abandoned for a System ID mismatch");
+    check_abandoned(&cfg, &pdt2, pb, old, SCS_MASQ_FAIL_SYSTEM_ID, "ID mismatch", 1);
+}
+
+/* TEST 3: both match, a Path Block IS queued to the old SB, incarnations
+ * differ -> abandon. */
+static void test_masquerade_incarnation_mismatch_abandons(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt1, pdt2;
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x22, 0xe2, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x22, 0xe2, 0x02};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+
+    struct scs_sb *old = seed_known_node(&cfg, &pdt1, 1026, "VAX2", 0xAAAAAAAAull, mac_a);
+    CHECK(old != NULL, "seeding the known node failed");
+    CHECK(scs_sb_pb_count(old) == 1,
+          "the old SB has no Path Block queued -- the incarnation test does not"
+          " apply and this case would pass vacuously");
+
+    struct scs_sb_info fake = make_info(1026, "VAX2", 0xBBBBBBBBull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative = scs_pb_attach_formative_sb(&cfg, pb, &fake);
+    CHECK(scs_config_masquerade_check(&cfg, formative) == SCS_MASQ_FAIL_INCARNATION,
+          "the incarnation test did not fire");
+
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_ABANDONED_MASQUERADE,
+          "formation was not abandoned for an incarnation mismatch");
+    check_abandoned(&cfg, &pdt2, pb, old, SCS_MASQ_FAIL_INCARNATION, "incarnation", 1);
+    CHECK(old->incarnation == 0xAAAAAAAAull,
+          "the old SB was refreshed by a rejected formative SB (0x%llx)",
+          (unsigned long long)old->incarnation);
+}
+
+/*
+ * TEST 3b, THE OTHER DIRECTION: the footnote says the incarnations "must also
+ * match" -- it is an EQUALITY, not an ordering. Test 3 only ever presents a
+ * formative incarnation ABOVE the queued one (0xBBBBBBBB against 0xAAAAAAAA),
+ * which an ordered comparison (`>` instead of `!=`) satisfies just as well. A
+ * node whose incarnation goes DOWN -- a masquerader replaying an old value, or
+ * a node whose clock-derived incarnation regressed -- would then be admitted
+ * silently. This case presents the smaller value against the larger one, so an
+ * asymmetric compare reds here.
+ *
+ * The header claims this rule "is correct the moment the parser supplies the
+ * field". A rule tested in one direction only cannot support that claim.
+ */
+static void test_masquerade_incarnation_compare_is_symmetric(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt1, pdt2;
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x22, 0xe7, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x22, 0xe7, 0x02};
+
+    /* (a) formative BELOW queued: 0xAAAAAAAA presented against 0xBBBBBBBB. */
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+    struct scs_sb *old = seed_known_node(&cfg, &pdt1, 1026, "VAX2", 0xBBBBBBBBull, mac_a);
+    CHECK(old != NULL, "seeding the known node failed");
+    CHECK(scs_sb_pb_count(old) == 1,
+          "the old SB has no Path Block queued -- the incarnation test does not"
+          " apply and this case would pass vacuously");
+
+    struct scs_sb_info lower = make_info(1026, "VAX2", 0xAAAAAAAAull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative = scs_pb_attach_formative_sb(&cfg, pb, &lower);
+    CHECK(scs_config_masquerade_check(&cfg, formative) == SCS_MASQ_FAIL_INCARNATION,
+          "a DECREASING incarnation did not fire the test -- the comparison is"
+          " ordered, not an equality");
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_ABANDONED_MASQUERADE,
+          "formation was not abandoned for a decreasing incarnation");
+    check_abandoned(&cfg, &pdt2, pb, old, SCS_MASQ_FAIL_INCARNATION,
+                    "decreasing incarnation", 1);
+    CHECK(old->incarnation == 0xBBBBBBBBull,
+          "the old SB was refreshed by a rejected formative SB (0x%llx)",
+          (unsigned long long)old->incarnation);
+
+    /* (b) the boundary an ordered compare would also get wrong in the other
+     * direction: EQUAL incarnations must be admitted, not abandoned. */
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+    old = seed_known_node(&cfg, &pdt1, 1026, "VAX2", 0xBBBBBBBBull, mac_a);
+    CHECK(old != NULL, "seeding the known node failed (b)");
+    struct scs_sb_info same = make_info(1026, "VAX2", 0xBBBBBBBBull, 7);
+    pb = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    formative = scs_pb_attach_formative_sb(&cfg, pb, &same);
+    CHECK(scs_config_masquerade_check(&cfg, formative) == SCS_MASQ_PASS,
+          "a node presenting the SAME incarnation on a second port was called a"
+          " masquerader");
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_EXISTING_SB,
+          "a second port with a matching incarnation was not admitted");
+}
+
+/*
+ * TEST 3c, QUEUE DEPTH: the victim System Block is NOT the head of the
+ * Configuration Queue.
+ *
+ * Every other case here seeds exactly one node, so the whole scan is satisfied
+ * by examining cfg->sb_head and the `old = old->next` walk in
+ * scs_config_masquerade_check() is never needed. Mutating that walk to stop
+ * after the head leaves the rest of this file green -- i.e. the central
+ * security property was untested against any queue deeper than one, which is
+ * every real cluster. cfg_queue_insert() inserts at the HEAD, so seeding VAX1
+ * and then VAX2 puts the victim VAX1 second, behind an unrelated node.
+ */
+static void test_masquerade_scan_reaches_a_non_head_sb(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt1, pdt2, pdt3;
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x22, 0xe8, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x22, 0xe8, 0x02};
+    const uint8_t mac_c[6] = {0x08, 0x00, 0x2b, 0x22, 0xe8, 0x03};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt3, SCS_PORT_TYPE_ETHERNET, 1498);
+
+    struct scs_sb *victim = seed_known_node(&cfg, &pdt1, 1025, "VAX1", 0x1000ull, mac_a);
+    CHECK(victim != NULL, "seeding the victim node failed");
+    struct scs_sb *decoy = seed_known_node(&cfg, &pdt2, 1026, "VAX2", 0x2000ull, mac_b);
+    CHECK(decoy != NULL, "seeding the decoy node failed");
+    CHECK(scs_config_sb_count(&cfg) == 2, "two nodes were not queued");
+
+    /* The premise, asserted rather than assumed: if the victim were the head
+     * this case would degenerate into TEST 1 and prove nothing new. */
+    CHECK(cfg.sb_head == decoy,
+          "the decoy is not at the head of the configuration queue -- the"
+          " insertion order this case depends on has changed");
+    CHECK(cfg.sb_head->next == victim,
+          "the victim is not behind the decoy -- this case no longer tests the"
+          " queue walk");
+
+    /* An impostor presenting the NON-HEAD node's System ID under another name.
+     * Reaching it requires the scan to advance past the head. */
+    struct scs_sb_info fake = make_info(1025, "EVIL", 0x1000ull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt3, mac_c, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative = scs_pb_attach_formative_sb(&cfg, pb, &fake);
+    CHECK(scs_config_masquerade_check(&cfg, formative) == SCS_MASQ_FAIL_NODE_NAME,
+          "an impostor of a NON-HEAD System Block was not detected -- the scan"
+          " stopped at the head of the configuration queue");
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_ABANDONED_MASQUERADE,
+          "the impostor of a non-head node was ADMITTED");
+    check_abandoned(&cfg, &pdt3, pb, victim, SCS_MASQ_FAIL_NODE_NAME,
+                    "non-head victim", 2);
+
+    /* The same depth, but the failing test is the incarnation one -- so the
+     * walk is proven for the branch that needs a Path Block queued too. */
+    struct scs_sb_info wrong_inc = make_info(1025, "VAX1", 0x9999ull, 7);
+    struct scs_pb *pb2 = scs_pb_create(&cfg, &pdt3, mac_c, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative2 = scs_pb_attach_formative_sb(&cfg, pb2, &wrong_inc);
+    CHECK(scs_config_masquerade_check(&cfg, formative2) == SCS_MASQ_FAIL_INCARNATION,
+          "the incarnation test did not reach a non-head System Block");
+    CHECK(scs_pb_open(&cfg, pb2) == SCS_OPEN_ABANDONED_MASQUERADE,
+          "a bad incarnation against a non-head node was ADMITTED");
+    CHECK(victim->incarnation == 0x1000ull,
+          "the non-head victim SB was refreshed by a rejected formative SB");
+    CHECK(decoy->incarnation == 0x2000ull, "the decoy SB was disturbed");
+}
+
+/* TEST 4: both match, NO Path Block queued to the old SB -> the incarnation
+ * test does not apply, the p. 2-21 Note refresh runs and formation proceeds.
+ * This is the rebooted node, and it is why the pb_head guard is the rule. */
+static void test_masquerade_no_pb_queued_refreshes(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt;
+    const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x22, 0xe3, 0x01};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 1498);
+
+    struct scs_sb *old = seed_known_node(&cfg, &pdt, 1027, "VAX3", 0x1000ull, mac);
+    CHECK(old != NULL, "seeding the known node failed");
+    scs_pb_close(&cfg, old->pb_head); /* departure: the SB stays, p. 2-17 */
+    CHECK(scs_sb_pb_count(old) == 0, "departure left a Path Block queued");
+
+    /* Rebooted: same identity pair, a NEW incarnation -- which is exactly what a
+     * real rebooting node presents and must NOT be read as a masquerade. */
+    struct scs_sb_info boot2 = make_info(1027, "VAX3", 0x2000ull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative = scs_pb_attach_formative_sb(&cfg, pb, &boot2);
+    CHECK(scs_config_masquerade_check(&cfg, formative) == SCS_MASQ_PASS,
+          "a rebooted node with no queued Path Block was called a masquerader");
+
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_EXISTING_REFRESHED,
+          "the rebooted node was not admitted through the p. 2-21 Note refresh");
+    CHECK(pb->vc_state == SCS_VC_OPEN, "the admitted circuit is %s, expected OPEN",
+          scs_vc_state_name(pb->vc_state));
+    CHECK(pb->fsm.abandoned == 0, "an admitted circuit was marked abandoned");
+    CHECK(pb->masquerade_fail == (int)SCS_MASQ_PASS,
+          "an admitted circuit recorded a masquerade failure (%d)", pb->masquerade_fail);
+    CHECK(old->incarnation == 0x2000ull,
+          "the old SB was not refreshed with the new incarnation (0x%llx)",
+          (unsigned long long)old->incarnation);
+    CHECK(scs_sb_pb_count(old) == 1, "the rejoined PB was not queued to the old SB");
+}
+
+/* THE KILL-SWITCH, bracketed: the same scenario abandons with the tests on and
+ * is admitted with OVMX_NO_MASQUERADE_TESTS=1. Guardrail 23 -- the switch must
+ * be RUN and shown to suppress the gated behaviour, not merely shipped. */
+static void run_incarnation_mismatch(enum scs_open_result *result_out,
+                                     enum scs_masquerade_result *check_out)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt1, pdt2;
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x22, 0xe4, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x22, 0xe4, 0x02};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+    (void)seed_known_node(&cfg, &pdt1, 1026, "VAX2", 0xAAAAAAAAull, mac_a);
+
+    struct scs_sb_info fake = make_info(1026, "VAX2", 0xBBBBBBBBull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative = scs_pb_attach_formative_sb(&cfg, pb, &fake);
+    *check_out = scs_config_masquerade_check(&cfg, formative);
+    *result_out = scs_pb_open(&cfg, pb);
+}
+
+static void test_masquerade_kill_switch(void)
+{
+    enum scs_open_result result;
+    enum scs_masquerade_result checked;
+
+    unsetenv("OVMX_NO_MASQUERADE_TESTS");
+    CHECK(scs_masquerade_tests_enabled() == 1, "tests are off with no switch set");
+    run_incarnation_mismatch(&result, &checked);
+    CHECK(result == SCS_OPEN_ABANDONED_MASQUERADE,
+          "control: the gated behaviour did not happen with the switch unset (%d)",
+          (int)result);
+
+    setenv("OVMX_NO_MASQUERADE_TESTS", "1", 1);
+    CHECK(scs_masquerade_tests_enabled() == 0, "the kill-switch did not disable the tests");
+    run_incarnation_mismatch(&result, &checked);
+    CHECK(checked == SCS_MASQ_PASS, "the check still reported a failure under the switch");
+    CHECK(result == SCS_OPEN_EXISTING_SB,
+          "OVMX_NO_MASQUERADE_TESTS=1 did not suppress the abandonment (%d)",
+          (int)result);
+
+    /* Only "1" disables; anything else leaves the tests on. */
+    setenv("OVMX_NO_MASQUERADE_TESTS", "0", 1);
+    CHECK(scs_masquerade_tests_enabled() == 1, "OVMX_NO_MASQUERADE_TESTS=0 disabled the tests");
+    setenv("OVMX_NO_MASQUERADE_TESTS", "yes", 1);
+    CHECK(scs_masquerade_tests_enabled() == 1, "a non-'1' value disabled the tests");
+
+    unsetenv("OVMX_NO_MASQUERADE_TESTS");
+    run_incarnation_mismatch(&result, &checked);
+    CHECK(result == SCS_OPEN_ABANDONED_MASQUERADE,
+          "the tests did not come back after the switch was removed (%d)", (int)result);
+}
+
+/*
+ * A test whose inputs are not both populated is INDETERMINATE and must not
+ * convict a node (scs_config.h: never invent). This is the shape the LIVE
+ * daemon actually produces -- scs_pb_learn_system_addr fills the System Address
+ * and nothing else -- so it also pins the reachability claim: OVMX cannot
+ * abandon a circuit for masquerade with the System Blocks it builds today.
+ */
+static void test_masquerade_unknown_fields_do_not_convict(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt1, pdt2;
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x22, 0xe5, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x22, 0xe5, 0x02};
+    uint8_t sysid[SCS_SYSTEM_ID_LEN];
+    sysid_from_scssystemid(1030, sysid);
+
+    /* (a) Daemon shape: two ports, one node, System Address only. */
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+    struct scs_pb *pb1 = scs_pb_create(&cfg, &pdt1, mac_a, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_learn_system_addr(&cfg, pb1, sysid);
+    CHECK(scs_pb_open(&cfg, pb1) == SCS_OPEN_NEW_SB, "daemon-shaped first join failed");
+    CHECK(pb1->sb->node_name[0] == '\0' && pb1->sb->incarnation == 0,
+          "this test no longer models what the daemon builds -- a node name or"
+          " incarnation appeared, so it would stop covering the unknown-input rule");
+    struct scs_pb *pb2 = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_learn_system_addr(&cfg, pb2, sysid);
+    CHECK(scs_pb_open(&cfg, pb2) == SCS_OPEN_EXISTING_SB,
+          "a System-Address-only System Block was rejected as a masquerader");
+
+    /* (b) Formative knows its node name, the queued SB does not: the name
+     * comparison has nothing to compare against and must not fire. */
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+    pb1 = scs_pb_create(&cfg, &pdt1, mac_a, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_learn_system_addr(&cfg, pb1, sysid);
+    CHECK(scs_pb_open(&cfg, pb1) == SCS_OPEN_NEW_SB, "nameless first join failed");
+    struct scs_sb_info named = make_info(1030, "VAX4", 0, 7);
+    pb2 = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, pb2, &named);
+    CHECK(scs_pb_open(&cfg, pb2) == SCS_OPEN_EXISTING_SB,
+          "a named formative SB was rejected against a queued SB with no name");
+
+    /* (c) A zero System ID cannot match another zero System ID into the
+     * converse test: same node name, one side's ID never learned. */
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+    struct scs_sb_info known = make_info(1031, "VAX5", 0x10ull, 7);
+    pb1 = scs_pb_create(&cfg, &pdt1, mac_a, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, pb1, &known);
+    CHECK(scs_pb_open(&cfg, pb1) == SCS_OPEN_NEW_SB, "named first join failed");
+    struct scs_sb_info no_id;
+    memset(&no_id, 0, sizeof(no_id));
+    no_id.node_name = "VAX5";
+    no_id.incarnation = 0x10ull;
+    pb2 = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative = scs_pb_attach_formative_sb(&cfg, pb2, &no_id);
+    CHECK(scs_config_masquerade_check(&cfg, formative) == SCS_MASQ_PASS,
+          "an unlearned System ID was compared as if it were a value");
+
+    /* (d) One incarnation known, the other not, with a PB queued: indeterminate. */
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+    struct scs_sb *old = seed_known_node(&cfg, &pdt1, 1032, "VAX6", 0, mac_a);
+    CHECK(old != NULL && scs_sb_pb_count(old) == 1, "seeding (d) failed");
+    struct scs_sb_info with_inc = make_info(1032, "VAX6", 0x77ull, 7);
+    pb2 = scs_pb_create(&cfg, &pdt2, mac_b, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, pb2, &with_inc);
+    CHECK(scs_pb_open(&cfg, pb2) == SCS_OPEN_EXISTING_SB,
+          "an unlearned incarnation (0) was compared as if it were a value");
+}
+
+/* A queue holding OTHER nodes must not be dragged into the comparison: the
+ * tests are about the node being admitted, not about every pair in the queue. */
+static void test_masquerade_ignores_unrelated_nodes(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt1, pdt2, pdt3;
+    const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x22, 0xe6, 0x01};
+    const uint8_t mac_b[6] = {0x08, 0x00, 0x2b, 0x22, 0xe6, 0x02};
+    const uint8_t mac_c[6] = {0x08, 0x00, 0x2b, 0x22, 0xe6, 0x03};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt1, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt2, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_pdt_init(&pdt3, SCS_PORT_TYPE_ETHERNET, 1498);
+
+    CHECK(seed_known_node(&cfg, &pdt1, 1025, "VAX1", 0x1000ull, mac_a) != NULL, "seed A");
+    CHECK(seed_known_node(&cfg, &pdt2, 1026, "VAX2", 0x2000ull, mac_b) != NULL, "seed B");
+    CHECK(scs_config_sb_count(&cfg) == 2, "two nodes were not queued");
+
+    struct scs_sb_info fresh = make_info(1027, "VAX3", 0x3000ull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt3, mac_c, SCS_PORT_TYPE_ETHERNET);
+    struct scs_sb *formative = scs_pb_attach_formative_sb(&cfg, pb, &fresh);
+    CHECK(scs_config_masquerade_check(&cfg, formative) == SCS_MASQ_PASS,
+          "a third, unrelated node was called a masquerader");
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_NEW_SB,
+          "a third, unrelated node was not admitted as a first contact");
+}
+
 int main(void)
 {
     test_pb_created_closed_and_formative();
@@ -990,6 +1521,15 @@ int main(void)
     test_depart_runs_the_p228_sequence_in_order();
     test_depart_is_what_makes_the_rejoin_refresh();
     test_depart_kill_switch();
+    test_masquerade_node_name_mismatch_abandons();
+    test_masquerade_system_id_mismatch_abandons();
+    test_masquerade_incarnation_mismatch_abandons();
+    test_masquerade_incarnation_compare_is_symmetric();
+    test_masquerade_scan_reaches_a_non_head_sb();
+    test_masquerade_no_pb_queued_refreshes();
+    test_masquerade_kill_switch();
+    test_masquerade_unknown_fields_do_not_convict();
+    test_masquerade_ignores_unrelated_nodes();
 
     printf("test_scs_config: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

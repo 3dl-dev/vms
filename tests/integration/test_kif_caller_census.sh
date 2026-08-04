@@ -1,8 +1,15 @@
 #!/bin/sh
 #
-# test_kif_caller_census.sh - standing gate (rd vms-7fb): every kernel-interface
-# entry point is either REACHED FROM THE PRODUCT or DECLARED UNWIRED against an
-# item. Nothing ships a wrapper that nothing calls.
+# test_kif_caller_census.sh - standing gate (rd vms-7fb): for every
+# kernel-interface entry point, either THE PRODUCT EMITS A CALL TO IT or it is
+# DECLARED UNWIRED against an item. Nothing ships a wrapper that nothing calls.
+#
+# READ THE VERB LITERALLY. "The product emits a call" is what this gate
+# measures and the strongest thing it can say: cmake says which translation
+# units the product compiles, the preprocessor says which lines survive, the
+# compiler says which calls it actually emitted, and a call graph says whether
+# the function holding one is reachable from a root. It does NOT say the call
+# runs. That is rd vms-d33's question and it belongs to the QEMU suites.
 #
 # WHY THIS GATE EXISTS. The vms-14f Phase 2 veracity pass ran a comment-stripped
 # caller census over src/libvmssys/vms_kif.h and found that most of the executive
@@ -66,8 +73,9 @@
 # tracking it is how this state persisted through two merged items. The
 # declaration is also checked in the other direction -- declaring an entry point
 # that DOES have a caller fails the gate, so wiring a facility forces its
-# declaration to be deleted in the same commit and the census can never drift
-# into a stale allowlist.
+# declaration to be deleted in the same commit. Negative control 9 is the
+# disproof of that half; it is a checked relation, not a guarantee that the
+# list cannot rot by some route neither direction looks at.
 #
 # THE CITED ITEM IS CHECKED AGAINST A LEDGER, NOT AGAINST rd (rd vms-8cc), and
 # the difference is the whole contract of this paragraph. This gate used to say
@@ -244,29 +252,52 @@
 #     selector to vms.ko, land its wrapper in the same commit.
 #
 # WHAT THIS GATE DOES NOT SEE, stated so its PASS is never read as more than it
-# is. Since vms-e2b it is a CONFIGURE AND A PREPROCESS -- it asks cmake what the
-# product compiles and asks the compiler what survives the preprocessor -- but
-# it is still not a compile, not a link and not an execution:
+# is. Since vms-c79 it is a CONFIGURE, A PREPROCESS AND A COMPILE -- it asks
+# cmake what the product compiles, asks the compiler what survives the
+# preprocessor, and asks the object files which calls the compiler actually
+# EMITTED -- but it is still not a link and not an execution:
 #
-#   - A REACHABLE CALL IS NOT AN EXECUTED CALL. Since rd vms-c13 the enclosing
-#     function must be reachable from a root, so a function nothing calls is no
-#     longer a product path -- but "reachable" is still not "runs". An exported
-#     API with no in-tree caller is a root by rule, and a reachable branch that
-#     never executes is reachable here. The census answers "is there a product
-#     path", not "is that path executed"; that question is rd vms-d33's.
-#   - THE ROOT RULE IS BOUGHT BY A THIRD EDIT, MEASURED RATHER THAN REASONED
-#     ABOUT. Give the dead function a PROTOTYPE IN A HEADER the build compiles
-#     and it becomes a root, because that is exactly what an exported library
-#     entry point looks like and this gate cannot tell the two apart without
-#     linking. MEASURED on this tree: a dead
-#         void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
-#     in src/vmsdcl/dcl_cmd_show.c, plus `void ovmx_dead_helper(void);` in
-#     src/vmsdcl/include/dcl/dcl_cmd.h, plus retiring the OVMX-UNWIRED token,
-#     is rc=0 at 44 entry points / 32 reached / 12 unwired. THREE edits across
-#     THREE files, one of them a public header. That is a price, not a wall:
-#     the same shape as the build-set edit vms-e2b priced, one level up. What
-#     would close it is linkage or execution evidence -- which symbols the
-#     product actually links and calls -- and that is not a preprocess.
+#   - AN EMITTED CALL IS NOT AN EXECUTED CALL, and this is the residual that
+#     matters. Section 0'' moved the question from "does the source text
+#     contain a call" to "did the compiler emit one", which kills the whole
+#     class of branches a compiler can PROVE dead without the gate learning a
+#     single syntactic form: `if (0)`, `while (0)`, `if (1 == 2)`, a
+#     constant-folded flag, and the spellings nobody has written yet all die at
+#     the same door. IT DOES NOT KILL A BRANCH THAT IS MERELY FALSE AT RUNTIME,
+#     and the price of that is MEASURED, not estimated:
+#         src/vmsdcl/dcl_cmd_show.c, in the body of cmd_show():
+#             if (cmd->param_count < 0) { (void)vms_kif_chkpriv(0); }
+#         src/libvmssys/vms_kif.h: retire vms_kif_chkpriv's OVMX-UNWIRED token
+#     rc=0, "44 entry points -- 32 the product emits a call to, 12 with no
+#     product path", PASS. TWO edits across TWO files -- exactly what the
+#     `if (0)` form used to cost. cmd->param_count is never negative, but the
+#     compiler cannot prove it, so it emits the call and this gate credits it.
+#     Negative control 46 pins that as INTENDED rather than as an oversight: a
+#     reader that guessed at runtime values would red on every defensive branch
+#     in the tree. Execution is what closes this, and execution is rd vms-d33's
+#     question, not a reader's.
+#   - THE ROOT RULE IS BOUGHT AT TWO EDITS, RE-MEASURED AGAINST THIS REVISION
+#     rather than restated from the last one. Give a dead function a
+#     DECLARATION in a header the build compiles and it becomes a root, because
+#     that is exactly what an exported library entry point looks like and this
+#     gate cannot tell the two apart without linking. The emitted-call rule
+#     does not touch it -- the call in the dead function's own body is real
+#     code and the compiler emits it. MEASURED on this tree: ONE insertion into
+#     src/vmsdcl/include/dcl/dcl_cmd.h,
+#         #include "vms_kif.h"
+#         static void ovmx_dead_helper(void);
+#         static void ovmx_dead_helper(void) { (void)vms_kif_chkpriv(0); }
+#     plus retiring vms_kif_chkpriv's OVMX-UNWIRED token, is rc=0 at 44 entry
+#     points / 32 reached / 12 unwired with all 127 product translation units
+#     compiling clean. TWO edits across TWO files, one of them a public header.
+#     The `static` is what makes it link: nine translation units include that
+#     header, and a non-static definition would be nine duplicate symbols.
+#     THE SAME SHAPE THROUGH vms_kif.h ITSELF DOES NOT WORK, which is worth
+#     knowing before anyone tries it as a shortcut: section 0' excludes $KIF_H
+#     from the product text, so a declaration written beside the retired token
+#     -- two edits in ONE file -- makes no root. MEASURED: rc=1, naming
+#     vms_kif_chkpriv.
+#     What would close this class is execution evidence. It is not a compile.
 #   - A FILE-SCOPE REFERENCE THIS READER CANNOT ATTRIBUTE CREDITS NOTHING. An
 #     address taken at file scope outside every brace, in a declarator shape
 #     neither $pendobj nor $pendarr names, belongs to no node and therefore
@@ -353,9 +384,38 @@
 #     "1 of 49 call(s) ... credit NOTHING: kif_orphan_fn". Compiling and
 #     linking a function does not make it reachable; a header has to declare
 #     it, or something reachable has to call it. THAT IS THE NEW PRICE, NOT A
-#     WALL -- see the root-rule bullet above for the three-edit form that
-#     still buys it, and note that this gate still asks "is there a product
-#     path", never "is that path executed" (rd vms-d33).
+#     WALL -- see the root-rule bullet above for the two-edit form that still
+#     buys it, and note that this gate asks "does the product emit a call to
+#     it", not "is that call executed" (rd vms-d33).
+#   - THE EMITTED-CALL EVIDENCE SAYS NOTHING ABOUT ASSEMBLY. The three .S files
+#     under src/libvmssys/arch/x86_64 are in the compile database and ARE
+#     compiled here, but hand-written assembly puts its functions in whatever
+#     section it declares, not in `.text.<name>`, so section 0'' has no
+#     evidence about them and their edges are credited from the source reading
+#     unchanged. That is the "no evidence" door, working as designed, and it is
+#     stated here rather than discovered later. If an entry point is ever
+#     called from assembly, this gate credits it on the source reading alone.
+#   - THE EVIDENCE IS KEYED ON A FUNCTION NAME, NOT ON (object, name). Two
+#     statics of one name in two translation units share one evidence entry, so
+#     a call emitted from either credits both. The call graph still keeps them
+#     as separate nodes -- this only ever ADDS credit, never removes it, so it
+#     is an under-fire and not a hole that certifies anything new.
+#   - IT IS A COMPILE, SO A TREE THAT DOES NOT COMPILE IS A REFUSAL. That is a
+#     behaviour change, and it is deliberate: the previous revision only
+#     required each translation unit to PREPROCESS, and three negative controls
+#     in the sibling suite were running against sandbox trees that preprocessed
+#     and could never have built (two definitions of one name; a `static`
+#     colliding with a header's extern declaration; an .inc using another
+#     file's privates). All three were broken FIXTURES that nobody could see.
+#     A census of a tree that does not build is not a measurement of anything.
+#   - THE THREE TOOLCHAIN FACTS SECTION 0'' RESTS ON WERE MEASURED ON gcc 13.3
+#     / x86_64 AND ARE NOT PORTABLE BY ASSUMPTION. Per-function sections,
+#     intra-TU calls producing a section-symbol relocation, and dead-branch
+#     elimination happening at -O0 as well as -O2 are all things this gate
+#     REQUIRES. It fails loudly if the first one stops holding (no `.text.<name>`
+#     sections at all is an explicit refusal), but the other two would degrade
+#     QUIETLY, in the under-firing direction. Re-measure them on any other
+#     compiler or target before trusting a green from one.
 #   - EXFILTRATION COMPOSED WITH A RENAME STILL LEAVES THE UNIVERSE, and the
 #     recipe is written down here because a residual nobody can reproduce is
 #     not a disclosure. Move a wrapper's body into a .inc; mark it `static`
@@ -415,7 +475,7 @@ fi
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-echo "vms_kif caller census: every entry point is wired or declared unwired"
+echo "vms_kif caller census: the product emits a call to every entry point, or it is declared unwired"
 
 if [ ! -f "$KIF_H" ] || [ ! -f "$KIF_C" ]; then
     echo "FAIL: cannot find the kernel interface ($KIF_H / $KIF_C)"
@@ -1056,6 +1116,270 @@ if [ "$tu_ok" -ne "$tu_n" ] || [ "$tu_n" -eq 0 ]; then
     exit 1
 fi
 
+# ---------------------------------------------------------------------------
+# 0''. EMITTED-CALL EVIDENCE: what the COMPILER put in the object file
+#      (rd vms-c79). ASK THE COMPILER, DO NOT PARSE FOR SYNTAX.
+#
+# WHAT THIS CLOSES, MEASURED FIRST. vms-e2b made the census read the build set
+# and read it AFTER PREPROCESSING; vms-c13 made a call count only when its
+# ENCLOSING FUNCTION is reachable from a root. Neither sees a branch the
+# COMPILER deletes inside a function that genuinely runs. MEASURED against the
+# revision before this section, TWO edits in two files the build already
+# compiles, no new file, no dead function, no CMakeLists change:
+#
+#     src/vmsdcl/dcl_cmd_show.c, inside the body of cmd_show():
+#         if (0) { (void)vms_kif_chkpriv(0); }
+#     src/libvmssys/vms_kif.h: retire vms_kif_chkpriv's OVMX-UNWIRED token
+#
+# rc=0, "44 entry points -- 32 reached from the product, 12 with no product
+# path", PASS. The preprocessor keeps `if (0)` -- it only kills `#if 0` -- and
+# the call graph is satisfied because cmd_show() IS reached. One level up,
+# `if (0) { ovmx_dead_helper(); }` in cmd_show() with the helper calling the
+# wrapper was the same rc=0 at 44/32/12, so filtering the LEAF call would not
+# have been enough: the disqualifier has to apply to CALL EDGES generally.
+#
+# THE RULE, AND WHY IT IS NOT A REGEX. Enumerating syntactic forms is the
+# losing side: after `if (0)` comes `if (never_true_global)`, then
+# `if (argc < 0)`. So this section asks no syntactic question at all. Every
+# product translation unit is COMPILED, with its OWN flags out of the compile
+# database plus -ffunction-sections, and the RELOCATIONS the compiler emitted
+# are read back out of the object file. A call the compiler proved dead leaves
+# no relocation; a call it could not prove dead does. The gate never learns
+# what `if (0)` looks like.
+#
+# THE THREE FACTS THIS RESTS ON, EACH MEASURED ON THIS TOOLCHAIN
+# (gcc 13.3.0, x86_64) rather than assumed -- re-measure them on any other:
+#
+#   1. -ffunction-sections gives PER-FUNCTION attribution. Each function lands
+#      in its own `.text.<name>`, so its relocations land in
+#      `.rela.text.<name>` and can be intersected with the call graph at
+#      function granularity instead of collapsing to one answer per TU.
+#      Without it every function in a TU shares one `.text` and the evidence
+#      would be useless: `-O0` alone puts all five probe functions in one
+#      section.
+#   2. AN INTRA-TU CALL DOES PRODUCE A RELOCATION, which is the fact that
+#      could have sunk this: a direct call to a function in the same TU
+#      normally needs none. With -ffunction-sections the callee is in a
+#      different section, so the call becomes a section-relative relocation --
+#      but it names the SECTION SYMBOL, `.text.stat_fn`, not `stat_fn`. The
+#      reader below maps `.text.X` back to X for exactly this reason. A reader
+#      that only looked at symbol NAMES would silently credit nothing for every
+#      static call in the tree and this gate would red on correct code
+#      everywhere. (A call to a same-TU function with EXTERNAL linkage keeps
+#      the plain symbol name.)
+#   3. THE COMPILER-PROVABLY-DEAD BRANCH IS ERASED AT -O0 AND AT -O2 ALIKE,
+#      and the not-provably-dead one SURVIVES. Probe: one function containing
+#      `if (0) { f(); }` and `if (never_true_global) { f(); }` emits EXACTLY
+#      ONE relocation for f at both -O0 and -O2. That asymmetry is the whole
+#      mechanism, and it is also the whole residual -- see "WHAT THIS GATE DOES
+#      NOT SEE" in the header for the measured price of the surviving form.
+#
+# THE DIRECTION OF EVERY APPROXIMATION HERE IS "CREDIT IT", i.e. under-fire,
+# because a gate that reds on correct code is the one the next person weakens:
+#
+#   - NO EVIDENCE MEANS KEEP THE EDGE. If no object file carries a
+#     `.text.<enclosing>` section, this section says nothing about that
+#     function and its edges are taken from the source reading unchanged. That
+#     is not hypothetical: the 17 translation units the build compiles -O2 drop
+#     unreferenced statics entirely, and the three .S files under
+#     src/libvmssys/arch/x86_64 are hand-written assembly whose functions are
+#     not in `.text.<name>` sections at all.
+#   - EVIDENCE IS KEYED ON NAMES, NOT ON (file, name). Two statics of one name
+#     in two translation units share one evidence entry, so a call emitted from
+#     either credits both. The call graph still keeps them as separate nodes;
+#     this only ever ADDS credit relative to a per-object reading.
+#   - ONLY CALL EDGES AND ADDRESS-TAKES FROM INSIDE A FUNCTION BODY are
+#     filtered. An edge out of a file-scope object's initialiser (`@obj`) is
+#     kept as the source reading has it: an initialiser is a constant, it has
+#     no branches for a compiler to delete, and its relocations live in a data
+#     section this reader does not attribute.
+# ---------------------------------------------------------------------------
+if ! command -v readelf >/dev/null 2>&1; then
+    echo "FAIL: readelf(1) is not available, so the compiler's own answer about"
+    echo "      which calls it emitted cannot be read."
+    echo "  -> this gate REFUSES rather than falling back to the source reading."
+    echo "     Without it a branch the compiler deletes is a product path again"
+    echo "     (vms-c79), at two edits in two already-built files."
+    exit 1
+fi
+
+# THE EVIDENCE FLAGS, and every one of the four is load-bearing. This is a
+# COMPILE FOR EVIDENCE, not the shipping build: the object files are read and
+# thrown away, so the right setting is the one that keeps the answer
+# ATTRIBUTABLE while leaving the one transformation under study -- elimination
+# of a provably-dead branch -- exactly as the shipping build does it.
+#
+#   -ffunction-sections     per-function attribution; without it every function
+#                           in a TU shares one .text and the evidence collapses
+#                           to one answer per TU.
+#   -fno-inline             inlining MOVES code between functions, and a call
+#                           that was inlined leaves no relocation -- which is
+#                           indistinguishable from a call the compiler deleted.
+#                           MEASURED without it: 62 edges to product functions
+#                           vanished at -O2 (vms_fopen -> alloc_file,
+#                           vms_cos -> cos_poly, __vms_runtime_init ->
+#                           parse_auxv, ...) and 28 functions lost reachability
+#                           on a pristine tree. That is reddening correct code.
+#   -fkeep-static-functions an unreferenced static is otherwise dropped whole at
+#                           -O2, leaving no section -- and "no section" is this
+#                           section's no-evidence escape, so the buy this whole
+#                           section closes still worked inside the 17
+#                           translation units the build compiles -O2. MEASURED
+#                           before this flag: `if (0) { dead_static(); }` in
+#                           src/libvmssys/vms_string.c was rc=0 at 44/32/12.
+#   -fkeep-inline-functions the same hole for an inline definition in a header.
+#
+# NOTE WHAT IS NOT HERE: no -O override. Each translation unit keeps the
+# optimisation level the build gives it, because that is what decides how much
+# the compiler can prove.
+EVIDENCE_FLAGS="-ffunction-sections -fno-inline -fkeep-static-functions -fkeep-inline-functions"
+
+# RUN IN PARALLEL, IN BATCHES, AND CHECK EVERY OUTCOME. The compiles are
+# independent -- each writes one object into its own scratch path -- and
+# serially they cost about as much again as the whole rest of this gate.
+# MEASURED on workshop (16 cores): 15s per run serial, 12s batched, against a
+# 6s baseline before this section existed. That matters because the sibling
+# negative-control suite runs this gate once per control.
+# A FAILED COMPILE LEAVES A MARKER FILE rather than a status this loop could
+# lose: a background job's exit status is not the loop's, so a reader that
+# just carried on would silently measure a partial build set.
+NJOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+case "$NJOBS" in ''|*[!0-9]*) NJOBS=4 ;; esac
+[ "$NJOBS" -ge 1 ] || NJOBS=4
+
+mkdir -p "$WORK/obj"
+obj_n=0
+obj_ok=0
+running=0
+while IFS='	' read -r ccdir cccmd ccfile; do
+    [ -n "$ccfile" ] || continue
+    obj_n=$((obj_n + 1))
+    # The build's own command, with its -o replaced and $EVIDENCE_FLAGS added.
+    # -c is KEPT: this is a compile, not a preprocess. Everything else -- -D,
+    # -I, -std, -O, -ffreestanding -- is exactly what the build passes, because
+    # those are what decide what the compiler emits.
+    cargs=""
+    skipnext=0
+    first=1
+    for a in $cccmd; do
+        if [ "$skipnext" -eq 1 ]; then skipnext=0; continue; fi
+        case "$a" in
+            -o) skipnext=1; continue ;;
+        esac
+        if [ "$first" -eq 1 ]; then cargs="$a $EVIDENCE_FLAGS"; first=0
+        else cargs="$cargs $a"; fi
+    done
+    printf '%s\n' "$ccfile" > "$WORK/obj/$obj_n.f"
+    (
+        if ( cd "$ccdir" && $cargs -o "$WORK/obj/$obj_n.o" ) \
+                > "$WORK/obj/$obj_n.err" 2>&1; then
+            : > "$WORK/obj/$obj_n.ok"
+        fi
+    ) &
+    running=$((running + 1))
+    if [ "$running" -ge "$NJOBS" ]; then wait; running=0; fi
+done < "$WORK/product_tus"
+wait
+
+i=1
+while [ "$i" -le "$obj_n" ]; do
+    if [ -f "$WORK/obj/$i.ok" ] && [ -f "$WORK/obj/$i.o" ]; then
+        obj_ok=$((obj_ok + 1))
+    else
+        echo "FAIL: could not compile a product translation unit:"
+        echo "    $(sed "s|^$SRC_ROOT/||" "$WORK/obj/$i.f" 2>/dev/null)"
+        sed 's/^/      /' "$WORK/obj/$i.err" 2>/dev/null | tail -10
+        echo "  -> the census REFUSES on a partial build set, exactly as it does"
+        echo "     for the preprocess. A missing object file is missing evidence,"
+        echo "     and missing evidence CREDITS the edge -- so a silent skip here"
+        echo "     would hand back the vms-c79 buy without saying so."
+        exit 1
+    fi
+    i=$((i + 1))
+done
+
+if [ "$obj_ok" -ne "$obj_n" ] || [ "$obj_n" -eq 0 ]; then
+    echo "FAIL: compiled $obj_ok of $obj_n product translation unit(s)"
+    exit 1
+fi
+
+# Read the section table and the relocations out of every object at once.
+#   emit_fns   - NAME, once per function that has a `.text.<NAME>` section
+#                somewhere. "This section has evidence about NAME."
+#   emit_edges - CALLER<TAB>CALLEE, once per relocation the compiler emitted
+#                from inside `.text.<CALLER>`. A relocation naming the section
+#                symbol `.text.<CALLEE>` is an intra-TU reference and is mapped
+#                back to CALLEE; anything else is used as the symbol name it is.
+# .rela.eh_frame is NOT read: it names every function in the TU for unwinding,
+# which would make every function look referenced from everywhere. Keying on
+# `.rela.text.<name>` excludes it by construction.
+if ! readelf -SrW "$WORK"/obj/*.o > "$WORK/relo.txt" 2> "$WORK/relo.err"; then
+    echo "FAIL: readelf could not read the object files this gate just compiled"
+    sed 's/^/    /' "$WORK/relo.err" | tail -10
+    exit 1
+fi
+
+awk '
+    # The function a section name holds, or "" if it holds none. gcc splits
+    # cold and startup code into their own prefixes even under
+    # -ffunction-sections, so all four spellings map to the same function.
+    function defunc(s) {
+        if (sub(/^\.text\.unlikely\./, "", s)) return s
+        if (sub(/^\.text\.startup\./,  "", s)) return s
+        if (sub(/^\.text\.hot\./,      "", s)) return s
+        if (sub(/^\.text\./,           "", s)) return s
+        return ""
+    }
+    /^ *\[ *[0-9]+\] +\./ {
+        line = $0
+        sub(/^ *\[ *[0-9]+\] +/, "", line)
+        split(line, f, / +/)
+        fn = defunc(f[1])
+        if (fn != "") print "S\t" fn
+        cur = ""
+        next
+    }
+    /^Relocation section / {
+        n = split($0, q, "\047")
+        s = (n >= 2) ? q[2] : ""
+        if (s ~ /^\.rela\./)     s = substr(s, 6)
+        else if (s ~ /^\.rel\./) s = substr(s, 5)
+        cur = defunc(s)
+        next
+    }
+    # A relocation entry. The type field always begins R_; that is what
+    # separates an entry from the column header and from readelfs "File:"
+    # banner when several objects are read at once.
+    cur != "" && $3 ~ /^R_/ {
+        name = $5
+        if (name == "" || name == "+" || name == "-") next
+        t = defunc(name)
+        if (t != "") name = t
+        print "E\t" cur "\t" name
+        next
+    }
+' "$WORK/relo.txt" | sort -u > "$WORK/emit_raw"
+
+grep '^S	' "$WORK/emit_raw" | cut -f2 | sort -u > "$WORK/emit_fns"
+grep '^E	' "$WORK/emit_raw" | cut -f2,3 | sort -u > "$WORK/emit_edges"
+
+n_emit_fns=$(grep -c . "$WORK/emit_fns" || true)
+n_emit_edges=$(grep -c . "$WORK/emit_edges" || true)
+
+# NO SILENT FALLBACK, the same rule the build set and the call graph follow.
+# Zero functions with evidence means every edge falls through the "no evidence"
+# door and this section is doing nothing at all -- which is a strictly weaker
+# measurement reported under the same PASS.
+if [ "$n_emit_fns" -eq 0 ] || [ "$n_emit_edges" -eq 0 ]; then
+    echo "FAIL: the object files carry no per-function relocation evidence"
+    echo "      ($n_emit_fns function section(s), $n_emit_edges emitted edge(s))"
+    echo "  -> either -ffunction-sections did not take effect or this reader does"
+    echo "     not understand this toolchain's readelf output. Teach the reader;"
+    echo "     do NOT let the census fall back to the source-only reading, which"
+    echo "     credits a branch the compiler deletes (vms-c79)."
+    exit 1
+fi
+
 # 0'. THE INTERFACE-PRIVATE ORIGIN SET: the files that the interface
 #     translation unit compiles and NO OTHER product translation unit does.
 #
@@ -1492,12 +1816,14 @@ cut -f3 "$WORK/product_tus" | sed "s|^$SRC_ROOT/||" | sort -u > "$WORK/tu_rel"
 # ---------------------------------------------------------------------------
 : > "$WORK/sites"
 : > "$WORK/sites_dead"
+: > "$WORK/sites_noemit"
 : > "$WORK/sites_unattributed"
 : > "$WORK/prod_roots"
 : > "$WORK/prod_reached"
 : > "$WORK/prod_defs"
 
-awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" '
+awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" \
+    -v emitf="$WORK/emit_edges" -v hasf="$WORK/emit_fns" '
     # The linkage-correct node id for a FUNCTION name n as written in file f,
     # and the same for a file-scope OBJECT. "static" means the name is private
     # to its translation unit, so it is a different node from any same-named
@@ -1513,9 +1839,27 @@ awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" '
         if (substr(e, 1, 1) == "@") return reso(f, substr(e, 2))
         return res(f, e)
     }
+    # THE EMITTED-CALL DISQUALIFIER (rd vms-c79). An edge OUT OF A FUNCTION
+    # BODY survives only if the compiler actually put a relocation for it in
+    # that function s section. Every "return 1" below is a deliberate
+    # under-fire -- see section 0 for why each one credits rather than drops.
+    function emitted_ok(encl, callee) {
+        if (encl == "") return 1                  # file scope: no function to ask about
+        if (substr(encl, 1, 1) == "@") return 1   # an object initialiser has no branches
+        if (!(encl in hasfn)) return 1            # nothing was emitted for it: no evidence
+        if (!(callee in hasfn)) return 1          # the callee was inlined or is not ours
+        if (encl == callee) return 1              # a self-call stays inside one section
+        return ((encl SUBSEP callee) in emit)
+    }
     BEGIN {
         while ((getline l < tuf) > 0)   if (l != "") istu[l] = 1
         while ((getline l < seedf) > 0) if (l != "") seed[l] = 1
+        while ((getline l < hasf) > 0)  if (l != "") hasfn[l] = 1
+        while ((getline l < emitf) > 0) {
+            if (l == "") continue
+            i = index(l, "\t")
+            if (i > 0) emit[substr(l, 1, i - 1), substr(l, i + 1)] = 1
+        }
     }
     # Pass 1: which (file, name) pairs are file-scoped statics -- functions and
     # objects both. Needed before any edge can be resolved, which is why the
@@ -1531,6 +1875,11 @@ awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" '
     $1 == "O" { next }
     $1 == "P" { if (!($2 in istu)) prot[$3] = 1; next }
     $1 == "E" {
+        if (!emitted_ok($3, $4)) {
+            nnoemit++
+            if ($4 in seed) { nx++; xfile[nx] = $2; xencl[nx] = $3; xcall[nx] = $4 }
+            next
+        }
         e = ctx($2, $3); c = res($2, $4)
         edge[e] = edge[e] SUBSEP c
         if ($4 in seed) { ns++; sfile[ns] = $2; sencl[ns] = $3; scall[ns] = $4 }
@@ -1539,9 +1888,20 @@ awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" '
     # A name USED WITHOUT BEING CALLED is an edge from the context that uses it
     # -- NOT a root on its own. A function whose address is only ever taken in
     # a table nothing reaches is not reachable, and neither is the function.
+    # THE DISQUALIFIER APPLIES TO A FUNCTION S ADDRESS BEING TAKEN TOO, and it
+    # has to: `if (0) { p = ovmx_dead_helper; }` is the same buy wearing an
+    # address-of instead of a call, and the compiler erases it identically.
+    # IT DOES NOT APPLY TO AN OBJECT TARGET. A table read can be constant-folded
+    # away -- MEASURED: at -O0 gcc folds `filetab[0](x)` for a `const` table
+    # into a direct call, leaving no relocation naming filetab at all -- so
+    # requiring evidence for a name-to-OBJECT edge would red on correct code,
+    # which is what negative control 40 exists to catch.
     $1 == "R" {
         e = ctx($2, $3)
-        if ($4 in isfn)       edge[e] = edge[e] SUBSEP res($2, $4)
+        if ($4 in isfn) {
+            if (!emitted_ok($3, $4)) { nnoemit++; next }
+            edge[e] = edge[e] SUBSEP res($2, $4)
+        }
         else if ($4 in isobj) edge[e] = edge[e] SUBSEP reso($2, $4)
         next
     }
@@ -1579,13 +1939,17 @@ awk -F'\t' -v tuf="$WORK/tu_rel" -v seedf="$WORK/seedable" -v w="$WORK" '
             if (e in reach) print sfile[i] " " sencl[i] " " scall[i] > (w "/sites")
             else { ndead++; print sfile[i] " " sencl[i] " " scall[i] > (w "/sites_dead") }
         }
-        printf "%d %d %d %d %d\n", ndef, nreach, nroot, ns, ndead > (w "/graph_counts")
+        for (i = 1; i <= nx; i++)
+            print xfile[i] " " xencl[i] " " xcall[i] > (w "/sites_noemit")
+        printf "%d %d %d %d %d %d %d\n", ndef, nreach, nroot, ns + nx, ndead, \
+            nx, nnoemit > (w "/graph_counts")
     }
 ' "$WORK/graph" "$WORK/graph"
 
 n_prod_defs=0; n_prod_reached=0; n_prod_roots=0; n_sites_all=0; n_sites_dead=0
+n_sites_noemit=0; n_edges_noemit=0
 read -r n_prod_defs n_prod_reached n_prod_roots n_sites_all n_sites_dead \
-    < "$WORK/graph_counts" 2>/dev/null || true
+    n_sites_noemit n_edges_noemit < "$WORK/graph_counts" 2>/dev/null || true
 
 # NO SILENT FALLBACK, the same rule the build set follows. Each of these means
 # the call graph is not the thing this gate claims to have measured, and a
@@ -1760,11 +2124,19 @@ if [ -n "$undeclared" ]; then
 fi
 
 cat "$WORK/cite_summary" 2>/dev/null || true
-echo "  census: $n_entries entry points — $wired reached from the product,"
+echo "  census: $n_entries entry points — $wired the product emits a call to,"
 echo "          $unwired with no product path"
 echo "  build set: $n_product_tus product translation unit(s) of $n_ccdb in the compile"
-echo "          database, all preprocessed; call sites read from $n_site_files of them."
+echo "          database, all preprocessed AND compiled; call sites read from"
+echo "          $n_site_files of them."
 echo "          A file in no CMakeLists is not in this set and credits nothing."
+echo "  emitted code: $n_emit_fns function(s) have a .text.<name> section in the"
+echo "          object files this gate compiled, carrying $n_emit_edges relocation"
+echo "          edge(s). $n_edges_noemit source edge(s) had no relocation and were"
+echo "          DROPPED — the compiler proved that branch dead. $n_sites_noemit of"
+echo "          them were call(s) to an entry point:$(printf ' %s' $(cut -d' ' -f3 "$WORK/sites_noemit" 2>/dev/null | sort -u))"
+echo "          A function with NO section anywhere has no evidence here and its"
+echo "          edges are credited from the source reading unchanged."
 echo "  call graph: $n_prod_defs product function(s), $n_prod_reached of them reached from"
 echo "          $n_prod_roots root(s) — main() and every function a header the build"
 echo "          compiles declares. Calls and address-taking are followed from there,"

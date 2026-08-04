@@ -843,12 +843,30 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  * note 4), it leaves it CLOSED, and CLOSED is what this predicate reads.
  *
  * ============================ SEND SITE TABLE ============================
- * EVERY sender in this file and its verdict. BOTH halves of this table are
- * MECHANICALLY CHECKED: tests/vmsscs/test_scsd_send_sites.py parses scsd.c,
- * attributes every send_frame_raw() and send_frame_vc() call to its enclosing
- * function, and reds unless the direct-transport callers are exactly the EXEMPT
- * list and the choke-point callers are exactly the CHOKED list. Adding OR
- * renaming a sender without editing this table reds the test run.
+ * EVERY sender in this file and its verdict. ALL THREE parts of this table are
+ * MECHANICALLY CHECKED by tests/vmsscs/test_scsd_send_sites.py, which parses
+ * scsd.c and attributes every call to its enclosing function:
+ *
+ *   - it reds unless the ONLY function NAMING a transmit primitive is
+ *     send_frame_raw(), and it names exactly one. The list is
+ *     TRANSMIT_PRIMITIVES in that script (sendto, sendmsg, sendmmsg, send,
+ *     writev, pwritev, pwrite, write, syscall) and it is matched as a BARE
+ *     IDENTIFIER, so taking one as a value rather than calling it is caught
+ *     too;
+ *   - it reds unless the direct send_frame_raw() callers are exactly the EXEMPT
+ *     list, with exactly the pinned per-function call counts;
+ *   - it reds unless the send_frame_vc() callers are exactly the CHOKED list.
+ *
+ * Adding OR renaming a sender without editing this table reds the test run.
+ *
+ * THE PRIMITIVE CHECK IS WHY 'EVERY' IS SUPPORTABLE. Before vms-abc's second
+ * round the census keyed only on the two wrapper NAMES, so a raw sendto() was
+ * invisible to it by construction -- and MEASURED, one existed: main()'s HELLO
+ * beacon loop called sendto() on the AF_PACKET socket directly, incremented
+ * rx.hello_sent and appeared in the exit summary, while sitting in neither half
+ * of a table that claimed to list every sender. It is now routed through
+ * send_frame_channel() (see the EXEMPT entry), and the census keys on the
+ * primitive so the next one cannot hide the same way.
  *
  *   CHOKED (go through send_frame_vc, refused on a non-OPEN circuit) -- these
  *   are SCS sequenced messages and connection-control messages, i.e. exactly
@@ -875,14 +893,23 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                           guard here -- scs_vc_fsm_*() decides what may be
  *                           sent from each state, which is a stricter check
  *                           than "is it OPEN", not a weaker one.
- *     send_frame_channel()  The NISCA directed/padded HELLO replies, called
- *                           from 3 sites in scsd_handle_frame(): the
+ *     send_frame_channel()  ALL NISCA HELLO traffic, called from 4 sites: the
  *                           padded-probe b4 ack, the rate-limited directed
- *                           reply, and the one-shot proactive padded HELLO.
+ *                           reply and the one-shot proactive padded HELLO (all
+ *                           three in scsd_handle_frame()), plus the periodic
+ *                           MULTICAST HELLO BEACON in main()'s timer loop --
+ *                           the one that increments rx.hello_sent and is
+ *                           reported in the exit summary.
  *                           See that function for the reason; in short, HELLO
  *                           is CHANNEL maintenance BELOW the virtual circuit
  *                           and is the only thing that re-establishes a
- *                           channel after a break.
+ *                           channel after a break. The beacon is the strongest
+ *                           case in the class: it is addressed to the cluster
+ *                           MULTICAST group, not to any port address, and it is
+ *                           sent when NO peer and therefore no Path Block and
+ *                           no circuit is known at all -- it is how peers are
+ *                           discovered. Gating it on an OPEN circuit would mean
+ *                           a node could never announce itself.
  *
  *   THE EXEMPTION IS PER FUNCTION, WHICH IS WHY send_frame_channel() EXISTS.
  *   The three HELLO sends used to be inline in scsd_handle_frame(), so the
@@ -974,13 +1001,21 @@ static ssize_t send_frame_vc(int sock, int ifindex, struct peer_state *ps,
 /*
  * send_frame_channel - THE OTHER EXEMPTION, given a name so it can be counted.
  *
- * NISCA channel traffic: the directed and padded HELLOs. Deliberately NOT
- * routed through send_frame_vc(), for the reason in the SEND SITE TABLE -- a
- * HELLO is not a sequenced message, carries no Con.ID, is addressed to the
- * frame's source MAC rather than to a Path Block's remote port address, is
+ * NISCA channel traffic: the directed and padded HELLO replies, and (since
+ * vms-abc's second round) the periodic multicast HELLO beacon in main().
+ * Deliberately NOT routed through send_frame_vc(), for the reason in the SEND
+ * SITE TABLE -- a HELLO is not a sequenced message, carries no Con.ID, is
+ * addressed to the frame's source MAC (or, for the beacon, to the cluster
+ * multicast group) rather than to a Path Block's remote port address, is
  * exchanged with peers that have no Path Block at all, and is the only thing
  * that re-establishes a channel after a break. Gating it on an OPEN circuit
- * would make a broken circuit permanently unrecoverable.
+ * would make a broken circuit permanently unrecoverable, and would stop a
+ * node announcing itself at all.
+ *
+ * IT IS ALSO WHERE THE TRANSMIT PRIMITIVE STOPS BEING SPELLED OUT TWICE. The
+ * beacon used to build its own `struct sockaddr_ll` and call sendto() on the
+ * socket directly, so the "a HELLO has no circuit" exemption was argued in two
+ * places and enumerated in neither. It is argued once now, here.
  *
  * WHY IT IS A FUNCTION RATHER THAN THREE INLINE send_frame_raw() CALLS, which
  * is what it was: the census in tests/vmsscs/test_scsd_send_sites.py works by
@@ -3148,16 +3183,15 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* --- vms-b62: resolve HELLO identity + build the send-side sockaddr --- */
+    /* --- vms-b62: resolve HELLO identity. vms-abc removed the send-side
+     * sockaddr_ll that used to live here: send_frame_channel() builds it. --- */
     struct scs_hello_params hello_params;
-    struct sockaddr_ll hello_dst;
     /* vms-fb1: the receive-dispatch seam's state, including every run counter.
      * Static: the daemon has exactly one, and it keeps the 1514-byte padded
      * HELLO buffer off main()'s stack frame as the old `static pframe` did. */
     static struct scsd_rx rx;
     memset(&rx, 0, sizeof(rx));
     memset(&hello_params, 0, sizeof(hello_params));
-    memset(&hello_dst, 0, sizeof(hello_dst));
 
     /* vms-5fe responder state, now indexed onto the vms-7be SCA structures. */
     struct peer_state peers[OVMX_MAX_PEERS];
@@ -3263,12 +3297,6 @@ int main(int argc, char **argv)
         strncpy(hello_params.node_name, node_name, SCS_HELLO_NODENAME_LEN);
         hello_params.node_name[SCS_HELLO_NODENAME_LEN] = '\0';
 
-        hello_dst.sll_family = AF_PACKET;
-        hello_dst.sll_protocol = htons(SCA_ETHERTYPE);
-        hello_dst.sll_ifindex = (int)ifindex;
-        hello_dst.sll_halen = 6;
-        memcpy(hello_dst.sll_addr, hello_params.dst_mac, 6);
-
         log_ts(stderr);
         fprintf(stderr,
                 " SCSD-I-HELLOCFG, node='%s' group=%u mcast=%02x:%02x:%02x:%02x:%02x:%02x"
@@ -3346,10 +3374,24 @@ int main(int argc, char **argv)
                 uint8_t frame[SCS_HELLO_FRAME_LEN];
                 hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
                 if (scs_hello_build_frame(&hello_params, frame) == 0) {
-                    ssize_t sent = sendto(sock, frame, sizeof(frame), 0,
-                                           (struct sockaddr *)&hello_dst, sizeof(hello_dst));
+                    /* vms-abc: the beacon goes through send_frame_channel(), the
+                     * SAME exemption the directed/padded HELLO replies use --
+                     * see the EXEMPT half of the SEND SITE TABLE. It used to
+                     * call sendto() directly on `sock`, which put a real send
+                     * site (it increments rx.hello_sent and is reported in the
+                     * exit summary) in NEITHER half of a table that claims to
+                     * list every sender. The census keys on the transmit
+                     * primitive now, so that omission cannot recur silently;
+                     * routing it here states the exemption once instead of
+                     * twice. The bytes on the wire are unchanged:
+                     * send_frame_raw() builds the same sockaddr_ll from
+                     * hello_params.dst_mac and ifindex that the removed
+                     * `hello_dst` held. */
+                    ssize_t sent = send_frame_channel(sock, (int)ifindex,
+                                                      hello_params.dst_mac,
+                                                      frame, sizeof(frame));
                     if (sent < 0) {
-                        fprintf(stderr, "SCSD-E-SENDFAIL, sendto failed: %s\n", strerror(errno));
+                        fprintf(stderr, "SCSD-E-SENDFAIL, HELLO beacon transmit failed: %s\n", strerror(errno));
                     } else {
                         rx.hello_sent++;
                         log_ts(stdout);

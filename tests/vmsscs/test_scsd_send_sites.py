@@ -10,6 +10,11 @@ is three rounds of review each finding one more sender that did not. A runtime
 test can only prove the paths it happens to drive; this proves the SHAPE.
 
 WHAT IT ASSERTS, against src/vmsscs/scsd.c itself:
+  0. THE TRANSMIT PRIMITIVE ITSELF is confined: the only function in the file
+     containing a sendto/send/sendmsg/sendmmsg/write/writev call is
+     send_frame_raw(), and it contains exactly one. This is check 0 because
+     checks 1-4 all key on the WRAPPER NAMES, and a raw socket call is invisible
+     to a name check by construction.
   1. Every call to send_frame_raw() (the transport, which applies no policy)
      sits inside one of the functions the SEND SITE TABLE names as EXEMPT.
      A new direct caller anywhere else reds this test.
@@ -21,10 +26,50 @@ WHAT IT ASSERTS, against src/vmsscs/scsd.c itself:
   4. The choke point still consults SCS_VC_OPEN. (A guard that stopped checking
      would leave 1-3 all green.)
 
+WHY CHECK 0 EXISTS, measured. Without it this census made a completeness claim
+it could not support: main()'s HELLO beacon loop called sendto() on the
+AF_PACKET socket directly -- a real send site (it increments rx.hello_sent and
+is printed in the exit summary) that appeared in NEITHER half of the SEND SITE
+TABLE, and that this script could not see because both of its attribution passes
+keyed on the literals "send_frame_raw(" and "send_frame_vc(". The beacon now
+goes through send_frame_channel(); check 0 is what makes the next one impossible
+to add silently, wrapper or no wrapper.
+
+CHECK 0 IS PROVEN BY MUTATION, not asserted. Six mutants applied to scsd.c, each
+run against this script alone, each restored and the restore verified with cmp:
+
+  M-A  a stray sendto() added to main()'s timer loop          RED (killed)
+  M-B  a stray write() in a new helper beside scsd_handle_frame  RED
+  M-C  a SECOND sendto() added inside send_frame_raw itself   RED (count check)
+  M-D  THE ORIGINAL DEFECT restored -- the beacon rebuilt to
+       call sendto() on `sock` directly, exactly as it stood
+       before this round                                      RED
+  M-F  sendto taken as a VALUE (`... (*p)(...) = sendto;`) and
+       never called by name -- the reason check 0 matches a
+       bare identifier rather than `name(`                    RED
+  M-E  control for the pre-existing table check: the
+       send_frame_channel entry renamed out of the EXEMPT
+       block                                                  RED
+
+Zero survivors. M-D is the one that matters: this census was GREEN over that
+source before check 0 existed.
+
 WHAT IT DOES NOT ASSERT: that a choked site is *correct*, or that the exemptions
 are *justified*. Those are arguments in the source and measurements in
 tests/vmsscs/test_scsd_wire.c (test_a_broken_circuit_carries_no_traffic). This
 test only guarantees that a new sender cannot be added silently.
+
+THE BOUND ON 'EVERY', stated so the claim does not outrun the evidence: check 0
+enumerates senders in THIS FILE, which is the only one in src/vmsscs/ that has a
+socket to send on. Re-derive it with
+
+    grep -n 'socket\\|sendto\\|sendmsg\\|AF_PACKET\\|sockaddr' src/vmsscs/*.c \\
+        src/vmsscs/include/*.h
+
+-- as of this round every hit outside scsd.c is inside a COMMENT (scs_depart.c,
+scs_config.c and scs_conn.h each say they open no socket; scs_member.c quotes
+lab capture labels). The sibling modules are pure frame builders and state
+machines. If one is ever handed an fd, this census must grow to cover it.
 """
 
 import os
@@ -48,9 +93,12 @@ EXEMPT = {
     "scsd_vc_emit":        "0x41 VC-FORMATION frames (p. 2-14). Three of the four "
                            "formation states are not OPEN and the machine must "
                            "transmit from them, or no circuit could ever open.",
-    "send_frame_channel":  "The NISCA directed/padded HELLO replies -- channel "
-                           "maintenance BELOW the virtual circuit, and the only "
-                           "thing that re-establishes a channel after a break.",
+    "send_frame_channel":  "ALL NISCA HELLO traffic -- the directed/padded "
+                           "replies AND main()'s periodic multicast beacon. "
+                           "Channel maintenance BELOW the virtual circuit; the "
+                           "only thing that re-establishes a channel after a "
+                           "break, and (the beacon) how peers are discovered "
+                           "before any Path Block exists at all.",
 }
 
 # How many send_frame_raw() calls each exempt function is allowed to make. This
@@ -112,6 +160,63 @@ for i, line in enumerate(code_lines):
             current = None
             depth = 0
             started = False
+
+# --- check 0: the transmit primitive is confined to ONE function ---
+# Checks 1, 3 and 6 attribute calls to the WRAPPER NAMES. That is exactly the
+# hole a raw socket call walks through, so this pass keys on the syscall
+# wrappers themselves instead. Everything that can put a byte on the AF_PACKET
+# socket is listed; if a future one is added to libc, add it here.
+#
+# MATCHED AS A BARE IDENTIFIER, not as `name(`, so that TAKING one of these as a
+# value -- `= sendto;`, `&sendmsg`, stashing it in a dispatch table -- is caught
+# too. Comments and string literals were blanked above, so a mention in prose
+# does not trip it. Measured on the current file this costs nothing: the bare
+# scan and the call-shaped scan find the same single site, scsd.c's sendto()
+# inside send_frame_raw(). A future local named `send` would red here; renaming
+# it (or, if it really transmits, entering it in the SEND SITE TABLE) is the
+# intended response -- do NOT loosen the regex to make it pass.
+TRANSMIT_PRIMITIVES = ("sendto", "sendmsg", "sendmmsg", "send",
+                       "writev", "pwritev", "pwrite", "write", "syscall")
+PRIM_RE = re.compile(r"\b(" + "|".join(TRANSMIT_PRIMITIVES) + r")\b")
+
+# The ONLY function permitted to contain a transmit primitive, and how many it
+# may contain. send_frame_raw() is the transport: it is where the sockaddr_ll is
+# built and the one sendto() lives (the SCSD_UNIT_TEST arm of the same function
+# captures into a buffer instead and calls nothing). Anything else that wants to
+# transmit must reach it through send_frame_vc() (choked) or, with a written
+# justification in the SEND SITE TABLE, through an EXEMPT wrapper.
+PRIMITIVE_OWNERS = {"send_frame_raw": 1}
+
+prim_sites = {}
+for i, line in enumerate(code_lines):
+    n = len(PRIM_RE.findall(line))
+    if n:
+        prim_sites.setdefault(owner[i], []).extend([i + 1] * n)
+
+check(bool(prim_sites),
+      "no transmit primitive found anywhere in scsd.c -- the primitive scan is "
+      "broken, not the source (send_frame_raw() must contain a sendto())")
+for fn, at in sorted(prim_sites.items(), key=lambda kv: (kv[0] or "")):
+    which = sorted({p for a in set(at) for p in PRIM_RE.findall(code_lines[a - 1])})
+    check(fn in PRIMITIVE_OWNERS,
+          f"{fn or '<file scope>'}() names a transmit primitive "
+          f"({'/'.join(which)}) "
+          f"DIRECTLY at scsd.c line(s) {at}, bypassing send_frame_raw(). A raw "
+          f"socket call is invisible to the send_frame_raw()/send_frame_vc() "
+          f"name census -- which is how main()'s HELLO beacon sat outside the "
+          f"SEND SITE TABLE. Route it through send_frame_vc() (SCS traffic) or "
+          f"through an EXEMPT wrapper named in the table.")
+for fn, want in sorted(PRIMITIVE_OWNERS.items()):
+    got = len(prim_sites.get(fn, []))
+    check(got == want,
+          f"{fn}() contains {got} transmit primitive call(s), expected {want} "
+          f"(lines {prim_sites.get(fn, [])}). An EXTRA raw send inside the "
+          f"transport itself is still an unenumerated sender. If the change is "
+          f"intended, update PRIMITIVE_OWNERS and the SEND SITE TABLE together.")
+
+print(f"  {sum(len(v) for v in prim_sites.values())} transmit primitive call(s) "
+      f"in {len(prim_sites)} function(s): "
+      f"{', '.join(sorted(k or '<file scope>' for k in prim_sites))}")
 
 # --- check 2: the in-source table names the same exempt functions ---
 tbl = re.search(r"SEND SITE TABLE ={5,}\n(.*?)\n \* ={20,}", src, flags=re.S)

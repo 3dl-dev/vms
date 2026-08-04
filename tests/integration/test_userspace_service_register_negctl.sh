@@ -50,6 +50,16 @@
 # The POSITIVE CONTROL runs first: if the pristine tree is not green, every
 # verdict below is unfounded and this script says that instead of passing.
 #
+# PLAINLY, SO IT CANNOT BE MISQUOTED: this file's own controls DO execute
+# something real -- each expect_red/expect_green/guard call really runs
+# tests/integration/test_userspace_service_register.sh as a subprocess against
+# a mutated sandbox copy of the tree, and really greps its real stdout, so a
+# PASS below means that subprocess actually printed the named fragment on that
+# mutated tree. What none of this executes is the OVMX PRODUCT: no vms.ko, no
+# QEMU, no /dev/vms, nothing that could tell an executive-resident answer from
+# a per-process one. The only instrument in this program that executes the
+# product is tests/qemu/run_facility_negctl.sh, in CI only.
+#
 set -u
 
 SRC_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -1376,7 +1386,7 @@ grep -oE 'the source scan produced no facts at all\.' "$GATE" | sort -u >> "$WOR
 # than accusing a service.
 #
 # STATED PLAINLY BECAUSE THE PREFIX IS SHARED: the gate spells "BROKEN SYMBOL
-# SCAN: " twice -- once when a product file will not compile (provoked by a
+# SCAN: " twice -- once when a product file will not compile (named by a
 # control above) and once when there is no compiler or no nm at all. This
 # extraction cannot tell them apart, so the coverage PASS below covers the
 # first and NOT the second. That is deliberate: "no compiler" is a
@@ -1466,7 +1476,7 @@ elif [ -s "$WORK/uncovered" ]; then
     echo "  -> add a control for each, or the closing line below is a boast."
     status=1; failed=$((failed + 1))
 else
-    echo "  PASS: coverage -- all $ncov failure message(s) the gate can emit are provoked by a control above"
+    echo "  PASS: coverage -- all $ncov failure message(s) the gate can emit are named by a control's required fragment above"
     passed=$((passed + 1))
 fi
 

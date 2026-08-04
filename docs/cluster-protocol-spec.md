@@ -1645,6 +1645,38 @@ For visibility, every field NOT marked GROUNDED above:
   the lookup response. The choreography/timing that IS grounded (active-joiner
   drive, prompt-connect timeout, Con.ID-signature acceptance, `NEW` status,
   display-only software-version) is in §4L.
+- **The SPECIAL CREDIT MESSAGE — UNGROUNDED, no candidate class** (`vms-1d2`).
+  *VAXcluster Principles* p. 2-44 defines a second flow-control mechanism beside
+  the piggybacked credit field: when the local Receive Credit count is
+  "dangerously low" **and** the local Pending Receive Credit count is > 0, SCS
+  "immediately sends remote SCS a **special credit message** containing the local
+  Pending Receive Credit count". **Which wire class carries one is not known.**
+  What IS established:
+  - It is **NOT** the 41-byte `0x48` short. §4(h) grounds that class as a strict
+    1-for-1 sequence ack with **no locatable credit count** (622/622 frames; the
+    connection's credit was 10/8 and no `0x0a`/`0x08` byte tracks it), and it is
+    41 bytes so it cannot even reach the grounded credit field at SCA `[48:50]`.
+    A special credit message must *carry a count*, so this class is excluded.
+  - The seven classes that DO carry a credit field at `[48:50]` (58/62/66/86/94/
+    110/190, §4(g) WIRE VERDICT) are all ordinary SCS messages; nothing yet
+    distinguishes "an SCS message that happens to piggyback credit" from "a
+    message sent *because* credit was low". Distinguishing them needs a capture
+    with an engineered one-way SYSAP flow, which the lab has not produced.
+  - Consequence for OVMX: `src/vmsscs/scs_credit.c` implements the p. 2-44
+    **trigger** (when a special credit message is owed, and what count it
+    carries) and hands it to a per-CDT hook. **It builds no frame and OVMX emits
+    no special credit message.** Nothing installs the hook, and `vmsscs_credit`
+    is still not linked into `SCSD.EXE`.
+- **Minimum Send Credits — UNGROUNDED** (`vms-1d2`). p. 2-44 makes the
+  dangerously-low threshold `local SCSFLOWCUSH + remote Minimum Send Credits`,
+  where Minimum Send Credits is an argument the remote SYSAP passes to CONNECT or
+  ACCEPT. **No captured field is pinned to it.** The 110-byte
+  `CONNECT_REQ`/`ACCEPT_REQ` credit field at `[48:50]` is grounded as the number
+  of Send Credits being *extended* (the tunable match: 10 = `CLUSTER_CREDITS`,
+  8 = `MSCP_CREDITS`, …) — a different quantity, and the two must not be
+  conflated. OVMX therefore takes Minimum Send Credits as an API argument
+  (`scs_credit_extend`, `scs_credit_set_remote_min_send_credits`) with no wire
+  parser behind it.
 
 ---
 

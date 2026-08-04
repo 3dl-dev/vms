@@ -198,6 +198,17 @@ typedef void (*scs_dgram_input_fn)(struct scs_cdt *cdt, const void *buf, size_t 
 typedef void (*scs_vc_loss_fn)(struct scs_cdt *cdt, void *ctx);
 
 /*
+ * vms-1d2 flow-control hooks. Declared here because the CDT carries them
+ * (p. 2-45: SCS keeps the per-connection flow-control state in the CDT), but
+ * defined and driven entirely by src/vmsscs/scs_credit.c -- see scs_credit.h.
+ *
+ * struct scs_credit_waiter is the OVMX stand-in for the VMS CDRP that p. 2-45
+ * queues to the CDT in a Credit Wait; it is opaque to this module.
+ */
+struct scs_credit_waiter;
+typedef void (*scs_credit_special_fn)(struct scs_cdt *cdt, unsigned credit, void *ctx);
+
+/*
  * struct scs_cdt - Connection Descriptor Table entry: SCS's description of one
  * connection, from this node's point of view. Contents per p. 2-28/2-29.
  *
@@ -278,6 +289,42 @@ struct scs_cdt {
     /* p. 2-44: the Minimum Send Credits argument the REMOTE SYSAP passed to
      * CONNECT/ACCEPT; the dangerously-low threshold is compared against it. */
     unsigned remote_min_send_credits;
+
+    /*
+     * vms-1d2: the p. 2-45 CREDIT WAIT queue, and the p. 2-44 special credit
+     * message emitter. Both are owned entirely by src/vmsscs/scs_credit.c --
+     * scs_cdt.c only zeroes them with the rest of the CDT at open and never
+     * reads them.
+     *
+     * "If no Send Credits are available, then this routine temporarily suspends
+     * the operation involved by placing it in a Credit Wait. This is done by
+     * queuing the CDRP representing the operation to the CDT for the
+     * connection." (p. 2-45) -- so the queue head belongs HERE, on the CDT, and
+     * not in a side table.
+     *
+     * The queue is FIFO: "Each of the SCS wait queues described here is a
+     * 'first in first out' queue ... Queue priority is based on time spent in
+     * the queue." (p. 2-46) `credit_wait_tail` is the OVMX means of keeping it
+     * FIFO with an O(1) append; VMS's queue primitives are doubly linked and
+     * the book publishes no layout for them.
+     *
+     * `credit_wait_draining` is an OVMX reentrancy guard, not an SCA concept:
+     * a resumed waiter may itself send or receive on this connection, and a
+     * nested drain of the same queue would resume waiters out of order.
+     */
+    struct scs_credit_waiter *credit_wait_head;
+    struct scs_credit_waiter *credit_wait_tail;
+    unsigned                  credit_wait_depth;
+    int                       credit_wait_draining;
+
+    /* p. 2-44: "local SCS immediately sends remote SCS a special credit message
+     * containing the local Pending Receive Credit count." OVMX cannot build
+     * that frame (its wire class is an open RE gap -- see
+     * docs/cluster-protocol-spec.md sec 5), so the CDT carries the SYSAP/port
+     * hook that WOULD send it. NULL = nothing is wired, which is the state
+     * scsd.c is in today. */
+    scs_credit_special_fn special_emit;
+    void                 *special_emit_ctx;
 };
 
 /*

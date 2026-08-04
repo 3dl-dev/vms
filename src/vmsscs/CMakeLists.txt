@@ -98,9 +98,14 @@ target_link_libraries(vmsscs_cdt PUBLIC vmsscs_config)
 # grounded at SCA [48:50] from our own lab captures (see the WIRE VERDICT in
 # scs_credit.h). Depends on vmsscs_cdt for struct scs_cdt / struct scs_pdt.
 #
+# vms-1d2 extends it with the p. 2-45 CREDIT WAIT queue on the CDT (a starved
+# sender is suspended and resumed FIFO when credit arrives, pp. 2-45..2-46) and
+# the p. 2-44 special credit message trigger.
+#
 # NOT LINKED INTO scsd_exe: nothing in the daemon calls it yet, and OVMX
-# therefore still emits no live credit. See the reachability note in
-# scs_credit.h -- do not read a green test run as "OVMX does flow control".
+# therefore still emits no live credit, enters no Credit Wait and sends no
+# special credit message. See the reachability notes in scs_credit.h -- do not
+# read a green test run as "OVMX does flow control".
 add_library(vmsscs_credit STATIC scs_credit.c)
 target_include_directories(vmsscs_credit PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include

@@ -32,6 +32,13 @@
 # result, so ITS claim that an injection "lands" is genuinely executed -- see
 # cmd_selftest's own header. That still proves nothing about a suite.)
 #
+# The one qualification to "both are STATIC", added by vms-d894: `coverage`
+# now also READS a record of a past execution
+# (tests/qemu/facility_negctl_observed.tsv, emitted by the driver below and
+# read through tests/qemu/facility_negctl_record.sh). Reading a record is
+# still not executing anything, and the printed output says so every run: it
+# proves that A PAST RUN OBSERVED THESE RESULTS, never that they hold now.
+#
 # The claim that a named suite actually goes red, and that the exact
 # assertions this manifest lists are the ones that fire and no others, is
 # proven ONLY by tests/qemu/run_facility_negctl.sh: it builds vms.ko and the
@@ -275,6 +282,54 @@
 # the number somebody is choosing to lower. A disclosed, priced residual, not
 # a claimed closure.
 #
+# vms-d894 ROUND 2, AND vms-659: A FLOOR SOURCED FROM AN EXECUTION
+#
+# Every floor above is a relation over declarations this tree makes about
+# itself. The one thing in this program that EXECUTES anything is
+# tests/qemu/run_facility_negctl.sh -- it boots QEMU against a real /dev/vms
+# and injects each of these defects one at a time -- and its results used to
+# die with the job log.
+#
+# It now EMITS what it observed, as tests/qemu/facility_negctl_observed.tsv:
+# one row per defect it executed and one row per assertion it actually saw
+# FAIL, attributed to the suite that printed it. `coverage` reads that record
+# through tests/qemu/facility_negctl_record.sh and derives TWO things from it:
+#
+#   * section 2b: the suites a past run actually saw an assertion fail in are
+#     labelled PROVEN ABLE TO GO RED; every other in-scope suite stays NAMED.
+#     Two populations, two cardinals, never summed. That is vms-659: the word
+#     "PROVEN" is now spent only where an execution paid for it.
+#   * section 6b: the OBSERVED-EXECUTED count -- how many of these defects a
+#     past run actually executed. Deleting an entry from DEFECTS today cannot
+#     retroactively change what that run observed. Note carefully what the
+#     enforcement is there: NOT a numeric comparison. The observed set is
+#     intersected with DEFECTS before it is counted, so it can never exceed
+#     it and "observed <= declared" would be an assertion that cannot fail.
+#     The thing that cannot be gotten past is the REFUSAL -- a record naming
+#     a defect DEFECTS no longer has stops the gate certifying anything.
+#
+# AND THE HALF THAT IS NOT A SNAPSHOT: in CI the driver runs anyway, so it
+# compares what it just observed with the committed record and fails on any
+# disagreement in either direction. The committed record therefore cannot be
+# fabricated upward and cannot go stale quietly.
+#
+# WHAT THAT STILL DOES NOT BUY, and it is the residual that stays open: a
+# deleter who removes a defect from DEFECTS *and* removes that defect's rows
+# from the record has told the truth about a smaller manifest -- the live CI
+# run agrees with them, and nothing here disagrees. Closing that needs a floor
+# from OUTSIDE the commit (the previous commit's copy of the record, or an
+# external attestation) and there is not one. What changed is the price again:
+# the record's rows are one per OBSERVED ASSERTION, so the deletion is
+# proportional to what is being deleted instead of being one integer.
+# tests/qemu/facility_record_negctl.sh MEASURES that price on the tree in
+# front of it and prints the number, rather than this comment asserting one.
+#
+# A record that CONTRADICTS this tree -- naming a defect DEFECTS no longer
+# has, or an assertion text require_fail no longer names, or emitted by a run
+# whose pristine positive control did not pass -- is a REFUSAL, in the shape
+# tests/integration/lib/rd_citations.sh already uses: coverage certifies
+# nothing from it rather than certifying less.
+#
 # USAGE
 #   facility_defects.sh list
 #   facility_defects.sh scope
@@ -285,6 +340,13 @@
 #   facility_defects.sh apply <defect> <src-root> [<src-root>...]
 #   facility_defects.sh coverage <src-root> <tests-qemu-dir>
 #   facility_defects.sh selftest <repo-root>
+#
+# `coverage` additionally reads, from beside THIS file:
+#   facility_defects_floor.txt         the declared count floor (vms-d894 r1)
+#   facility_negctl_observed.tsv       the execution record (vms-d894 r2), via
+#   facility_negctl_record.sh          its reader
+# Its own negative controls are tests/qemu/facility_record_negctl.sh, run as
+# the `facility_negctl_record` ctest.
 #
 # `apply` takes SRC ROOTS -- directories that look like the repo's src/ -- so
 # it can patch every copy of a file that exists in the build image (the kernel
@@ -300,6 +362,21 @@ set -u
 # This script's own path. `coverage` reads it back to check that the DEFECTS
 # list and the two `case` blocks below agree -- see section 5 there.
 SELF="$0"
+
+# The execution-sourced attribution record's reader (rd vms-d894, rd vms-659).
+#
+# SOURCED CONDITIONALLY, and that is not a fallback. `apply` runs INSIDE the
+# harness container, where tests/qemu/Dockerfile copies this file alone to
+# /src/tests/qemu/ and the library is not beside it. Failing to source there
+# would break the injection path for a facility `coverage` never uses. So the
+# library is optional to LOAD and mandatory to HAVE for `coverage`, which
+# REFUSES when it is absent rather than quietly checking less -- see section 6.
+FNR_LIB="$(dirname "$SELF")/facility_negctl_record.sh"
+FNR_LOADED=0
+if [ -f "$FNR_LIB" ]; then
+    . "$FNR_LIB"
+    FNR_LOADED=1
+fi
 
 DEFECTS="access-mode-escalation
 kif-setmode-always-kernel
@@ -3025,6 +3102,41 @@ cmd_coverage() {
         _blind_suites="$_blind_suites $(defect_field "$_cov_d" blind_suites)"
     done
 
+    # --- 0. the execution-sourced record, read ONCE ----------------------
+    # Loaded before section 2 because two different sections consume it: the
+    # suite populations (vms-659) and the observed count floor (vms-d894).
+    # _cov_rec_state is one of:
+    #   ok       validated, populations derived, usable
+    #   refuse   present and contradicts this tree -- already printed, and
+    #            the caller's rc is set to 1 below
+    #   absent   no record has been committed yet
+    #   nolib    the reader itself is missing
+    _cov_recw=$(mktemp -d) || { echo "FAIL: coverage: mktemp -d failed" >&2; return 2; }
+    _cov_rec=""
+    _cov_rec_state=absent
+    if [ "$FNR_LOADED" -ne 1 ]; then
+        _cov_rec_state=nolib
+    else
+        _cov_rec=$(fnr_record_path "$(dirname "$SELF")")
+        if [ -f "$_cov_rec" ]; then
+            printf '%s\n' $DEFECTS >"$_cov_recw/defects"
+            # Built only when there is a record to check it against: this runs
+            # in the ordinary ctest job, and it is one sed(1) per defect.
+            : >"$_cov_recw/texts.raw"
+            for _cov_td in $DEFECTS; do
+                { defect_field "$_cov_td" require_fail; defect_field "$_cov_td" knock_on_fail; } \
+                    | sed "s/^/$_cov_td	/" >>"$_cov_recw/texts.raw"
+            done
+            # An empty field echoes a blank line, which becomes "<defect><TAB>".
+            grep -v '	[ 	]*$' "$_cov_recw/texts.raw" >"$_cov_recw/texts" || true
+            if fnr_validate "$_cov_rec" "$_cov_recw/defects" "$_cov_recw/texts" "$_cov_recw"; then
+                _cov_rec_state=ok
+            else
+                _cov_rec_state=refuse
+            fi
+        fi
+    fi
+
     # --- 1. translation units -------------------------------------------
     _missing=""
     for _cov_c in "$_cov_root"/kernel/*.c; do
@@ -3068,6 +3180,7 @@ cmd_coverage() {
                    | xargs -n1 basename | sed 's/\.c$//' | sort)
     _uncovered=""
     _blind_only=""
+    _named_suites=""
     _n_named=0
     for _cov_s in $_cov_derived; do
         _hit=0
@@ -3085,6 +3198,7 @@ cmd_coverage() {
                     _cov_rc=1;;
             esac
             _n_named=$((_n_named + 1))
+            _named_suites="$_named_suites $_cov_s"
             continue
         fi
         case " $SCOPE_OUT_SUITES " in
@@ -3105,6 +3219,56 @@ cmd_coverage() {
         echo "PASS: $_n_named derived suite(s) are each NAMED by some defect's suites_red glob"
         echo "  (a STRING MATCH against the manifest's own attribution claim -- not an"
         echo "   execution. See the header: only run_facility_negctl.sh, in CI, executes.)"
+    fi
+
+    # --- 2b. the two populations, separately counted (rd vms-659) --------
+    # "PROVEN able to go red" is restored HERE and only here, and only for the
+    # suites a past executed run recorded a failing assertion in. Everything
+    # else stays NAMED. Two populations, two cardinals, never summed into one
+    # sentence -- the defect this replaces was a single number that read as an
+    # execution result and was a glob match.
+    _n_proven=0
+    _proven_suites=""
+    _named_only=""
+    if [ "$_cov_rec_state" = ok ]; then
+        for _cov_s in $_named_suites; do
+            if grep -qx "$_cov_s" "$_cov_recw/fnr_red_suites" 2>/dev/null; then
+                _n_proven=$((_n_proven + 1))
+                _proven_suites="$_proven_suites $_cov_s"
+            else
+                _named_only="$_named_only $_cov_s"
+            fi
+        done
+        _n_exec=$(grep -c . "$_cov_recw/fnr_exec" 2>/dev/null || true)
+        _n_execpass=$(grep -c . "$_cov_recw/fnr_exec_pass" 2>/dev/null || true)
+        _n_complete=$(grep -c . "$_cov_recw/fnr_complete" 2>/dev/null || true)
+        _n_incomplete=$(grep -c . "$_cov_recw/fnr_incomplete" 2>/dev/null || true)
+        _n_unproven=$(grep -c . "$_cov_recw/fnr_unproven" 2>/dev/null || true)
+        _n_redrows=$(grep -c . "$_cov_recw/fnr_red" 2>/dev/null || true)
+        : "${_n_exec:=0}" "${_n_execpass:=0}" "${_n_complete:=0}"
+        : "${_n_incomplete:=0}" "${_n_unproven:=0}" "${_n_redrows:=0}"
+        echo "OBSERVED: of those $_n_named, $_n_proven are PROVEN ABLE TO GO RED and" \
+             "$((_n_named - _n_proven)) NAMED ONLY."
+        echo "  PROVEN = a past run recorded a failing assertion in the suite:$_proven_suites"
+        [ -n "$_named_only" ] && echo "  NAMED ONLY (declared reddenable, never observed red):$_named_only"
+        echo "  Source: $(basename "$_cov_rec"), generated" \
+             "$(fnr_header "$_cov_rec" generated-at), tree $(fnr_header "$_cov_rec" tree-commit)."
+        echo "  It records $_n_exec defect(s) of this manifest as EXECUTED" \
+             "($_n_execpass with a passing control, $_n_complete of those carrying every"
+        echo "  assertion text the manifest now names for them, $_n_incomplete carrying" \
+             "fewer), across $_n_redrows observed failing assertion(s);"
+        echo "  $_n_unproven manifest defect(s) are in no run this record covers."
+        echo "  WHAT THAT PROVES HERE: a PAST run, on the tree named above, observed"
+        echo "  these results. It does NOT say they hold now -- nothing on a host"
+        echo "  without a real /dev/vms can say that. The live driver in CI re-emits"
+        echo "  this record and reds on any disagreement with the committed copy;"
+        echo "  that comparison, not this file, is what keeps it honest."
+    else
+        _named_only="$_named_suites"
+        echo "OBSERVED: of those $_n_named, 0 are PROVEN ABLE TO GO RED and $_n_named are"
+        echo "  NAMED ONLY -- NOT MEASURED: no usable execution record was read (see"
+        echo "  section 6). Every claim above this line is a string relation over"
+        echo "  declarations the tree makes about itself."
     fi
     # A suite that appears ONLY as somebody's blind_suites is declared and
     # tracked, but no defect's suites_red glob names it -- so nothing here
@@ -3287,6 +3451,71 @@ cmd_coverage() {
         echo "FAIL: $_floor_file is missing -- the count floor (vms-d894) has nothing to read."
         _cov_rc=1
     fi
+
+    # --- 6b. the OBSERVED count floor (vms-d894, the execution-sourced half)
+    # The floor above is a hand-set integer in a file the deleter can edit in
+    # the same commit. This one is the number of defects a PAST RUN OF THE
+    # DRIVER ACTUALLY EXECUTED, read out of the record it emitted -- and
+    # deleting a manifest entry today cannot retroactively change what that run
+    # observed.
+    #
+    # THE TWO FLOORS ARE BOTH APPLIED AND NEITHER REPLACES THE OTHER. A record
+    # covering fewer defects (a partial run) can therefore never LOWER the
+    # declared floor; it can only add a second, independently sourced one.
+    #
+    # WHAT IT IS STILL NOT: tamper-proof. A deleter who removes a defect from
+    # DEFECTS and removes that defect's rows from the record has told the truth
+    # about a smaller manifest, and the live CI run agrees with them. The price
+    # is what changed: the record's rows are one per OBSERVED ASSERTION, so the
+    # deletion is proportional and visible instead of being one integer.
+    # Closing it entirely needs a floor from outside the commit -- the previous
+    # commit's copy of this record, or an external attestation. There is not
+    # one, and this is a disclosure, not a claim.
+    #
+    # WRITTEN AS if/elif AND NOT AS A `case`, deliberately: section 5 above
+    # finds this file's defect metadata by scanning $SELF for lines matching
+    # `^    [a-z0-9-]*\)$`, so a four-space-indented `ok)` arm here is read as
+    # a case arm for a defect named "ok". MEASURED -- the first draft of this
+    # section did exactly that and section 5 correctly reported "case arm(s)
+    # for defect(s) not in DEFECTS: absent nolib ok refuse". Section 5 is
+    # right; this is the code that has to move.
+    if [ "$_cov_rec_state" = ok ]; then
+        _obs_floor=$(grep -c . "$_cov_recw/fnr_exec" 2>/dev/null || true)
+        : "${_obs_floor:=0}"
+        echo "PASS: $_obs_floor of this manifest's $_n_defects defect(s) are" \
+             "OBSERVED-EXECUTED by the run recorded in $(basename "$_cov_rec")"
+        echo "  (derived from that record's RUN rows, not from any integer anybody"
+        echo "   wrote down.)"
+        echo "  THE ENFORCEMENT HERE IS THE REFUSAL, NOT A COMPARISON, and saying so is"
+        echo "  the point: the observed count is intersected with DEFECTS before it is"
+        echo "  counted, so it can never EXCEED it and 'observed <= declared' would be"
+        echo "  an assertion that cannot fail. What cannot be gotten past is above --"
+        echo "  a record naming a defect DEFECTS no longer has stops this gate"
+        echo "  certifying anything at all. That is what makes this count"
+        echo "  execution-sourced rather than declared."
+    elif [ "$_cov_rec_state" = refuse ]; then
+        # fnr_validate has already printed the REFUSING lines and why.
+        echo "  -> the observed count floor and the PROVEN suite population are BOTH"
+        echo "     withheld by that refusal. The declared floor above still applies;"
+        echo "     it is the weaker one, and it is now the only one."
+        _cov_rc=1
+    elif [ "$_cov_rec_state" = absent ]; then
+        echo "NOT MEASURED: no execution record at $_cov_rec, so there is no"
+        echo "  observed count floor and NO suite is PROVEN able to go red -- only"
+        echo "  NAMED. The record is emitted by tests/qemu/run_facility_negctl.sh,"
+        echo "  which runs in CI only (rd vms-b1f: it cannot run on a dev host at"
+        echo "  all). Take it from that job's output and commit it."
+        echo "  This is a stated degradation, not a pass with a smaller claim: the"
+        echo "  two cardinals it would have produced are absent rather than guessed."
+    else
+        echo "FAIL: REFUSING to certify: the execution-record reader"
+        echo "      $FNR_LIB is missing, so section 2b's populations and the observed"
+        echo "      count floor cannot be computed at all."
+        echo "  -> deleting the reader must not be a way to make this gate print fewer"
+        echo "     claims and still pass."
+        _cov_rc=1
+    fi
+    rm -rf "$_cov_recw"
 
     # --- the exclusions, stated, never implied ---------------------------
     _n_excl_units=0

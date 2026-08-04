@@ -589,10 +589,42 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # This job is the ONLY place the executive is actually exercised, and
+      # rd vms-b1f means it does not run on a dev host at all. It therefore
+      # also EMITS the execution-sourced attribution record (rd vms-d894,
+      # rd vms-659) that tests/qemu/facility_defects.sh's static `coverage`
+      # reads for its observed count floor and its PROVEN-able-to-go-red suite
+      # population.
+      #
+      # THE COMPARISON IS THE POINT. The driver compares what it just observed
+      # with tests/qemu/facility_negctl_observed.tsv committed in the tree and
+      # fails on ANY disagreement in either direction, so the committed record
+      # cannot be fabricated upward and cannot go stale quietly. That check is
+      # the half a deleter does not own; the committed file alone is a
+      # snapshot, exactly like tracking/rd-citations.tsv.
+      #
+      # FACILITY_NEGCTL_REQUIRE_RECORD: set to 1 to make a MISSING committed
+      # record red. It is 0 while the tree has none, because the first record
+      # can only be produced here -- the driver prints it in full and uploads
+      # it below. Flip it to 1 in the same change that commits the first
+      # record; a missing record is otherwise only a loud NOT MEASURED.
       - name: Every executive facility has a control that turns CI red and NAMES it
         env:
           CONTAINER_ENGINE: docker
+          FACILITY_NEGCTL_RECORD_OUT: ${{ runner.temp }}/facility_negctl_observed.tsv
+          FACILITY_NEGCTL_REQUIRE_RECORD: 0
         run: tests/qemu/run_facility_negctl.sh
+
+      # Uploaded even on failure: a run that went red is exactly when someone
+      # needs to see what it observed, and reading 42 defects' worth of rows
+      # out of a job log is how a record gets transcribed wrong.
+      - name: Upload the execution record this run observed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: facility-negctl-observed-record
+          path: ${{ runner.temp }}/facility_negctl_observed.tsv
+          if-no-files-found: warn
 
   # -----------------------------------------------------------------------
   # Job 4: Conformance tests

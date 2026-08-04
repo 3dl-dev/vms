@@ -119,3 +119,26 @@ add_test(
             selftest ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(facility_negctl_manifest PROPERTIES LABELS "harness")
+
+# ---------------------------------------------------------------------------
+# The negative controls ON the execution-sourced attribution record
+# (rd vms-d894, rd vms-659).
+#
+# tests/qemu/facility_negctl_record.sh is what lets the STATIC gates say
+# anything execution-sourced at all: run_facility_negctl.sh emits a record of
+# what it observed, and `coverage` derives its observed count floor and its
+# PROVEN-able-to-go-red suite population from that record instead of from the
+# manifest's own declarations about itself.
+#
+# A reader like that has exactly one way to be wrong that matters: certifying a
+# record that contradicts the tree, which would turn "declared" back into
+# "PROVEN" on no evidence. So it gets its own controls, in a sandbox, against a
+# SYNTHETIC record built from the manifest -- no QEMU, no container, no
+# /dev/vms, and nothing it produces is evidence about the executive. It runs in
+# the ordinary Build & Test job in well under a minute.
+add_test(
+    NAME facility_negctl_record
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_record_negctl.sh
+            ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(facility_negctl_record PROPERTIES LABELS "harness")

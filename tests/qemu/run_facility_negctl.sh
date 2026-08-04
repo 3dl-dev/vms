@@ -73,6 +73,18 @@
 #     control rather than a facility control.
 #   - "every derived suite produced a verdict line" catches a suite silently
 #     dropped from the initramfs by the rebuild.
+#   - the EXECUTION RECORD (rd vms-d894, rd vms-659). Everything this script
+#     observes used to die with the job log, so the static gates in
+#     facility_defects.sh had nothing but the tree's declarations about
+#     itself to read -- and said "PROVEN" over them. This script now writes
+#     tests/qemu/facility_negctl_observed.tsv: one row per defect it executed
+#     and one row per assertion it actually saw FAIL, attributed by the same
+#     fail_map() the equality check above is judged by. `coverage` derives its
+#     observed count floor and its PROVEN-able-to-go-red suite population from
+#     that record. Then -- the half a committed snapshot cannot buy -- this
+#     script compares what it just observed with the committed copy and fails
+#     on any disagreement in either direction, so the record can never be
+#     fabricated upward and can never go stale quietly.
 #   - the injection-landed check lives in facility_defects.sh and aborts the
 #     run with a distinct exit code, so a sed anchor that stopped matching is
 #     reported as a BROKEN FIXTURE instead of being certified as a caught
@@ -83,13 +95,46 @@
 # Usage:
 #   tests/qemu/run_facility_negctl.sh [defect ...]     (default: all)
 # Env:
-#   CONTAINER_ENGINE   docker | podman  (auto-detected)
+#   CONTAINER_ENGINE               docker | podman  (auto-detected)
+#   FACILITY_NEGCTL_RECORD_OUT     where to leave the emitted execution record
+#                                  (default: a temp file, removed on exit; the
+#                                  CI job sets it so it can be uploaded)
+#   FACILITY_NEGCTL_REQUIRE_RECORD 1 to fail when NO record is committed in the
+#                                  tree (default 0 -- see the comparison block
+#                                  at the bottom of this script)
 
 set -u
 
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 MANIFEST="$REPO_ROOT/tests/qemu/facility_defects.sh"
 BASE_TAG=ovmx-ktest-negctl-base:latest
+
+# The execution-sourced attribution record (rd vms-d894, rd vms-659). This
+# script is the only thing in the program that executes anything, and until
+# now its results died with the job log; the static gates then had nothing but
+# the tree's declarations about itself to read. It now EMITS what it observed,
+# and -- the half the deleter does not own -- compares that live observation
+# with the record committed in the tree.
+RECORD_LIB="$REPO_ROOT/tests/qemu/facility_negctl_record.sh"
+if [ ! -f "$RECORD_LIB" ]; then
+    echo "FATAL: $RECORD_LIB is missing. This script's observations are the only"
+    echo "       execution-sourced evidence the static gates have; running without"
+    echo "       emitting them would silently return this program to declarations."
+    exit 2
+fi
+. "$RECORD_LIB"
+COMMITTED_RECORD=$(fnr_record_path "$REPO_ROOT/tests/qemu")
+# Defaults to a temp file: this script must never dirty the checkout it is
+# judging. Set FACILITY_NEGCTL_RECORD_OUT to keep the emitted record at a known
+# path (the CI job does, so it can upload it as an artifact); either way the
+# record is printed in full in the job log when none is committed yet.
+LIVE_RECORD="${FACILITY_NEGCTL_RECORD_OUT:-}"
+if [ -z "$LIVE_RECORD" ]; then
+    LIVE_RECORD=$(mktemp)
+    LIVE_RECORD_IS_TEMP=1
+else
+    LIVE_RECORD_IS_TEMP=0
+fi
 
 if [ -n "${CONTAINER_ENGINE:-}" ]; then
     ENGINE="$CONTAINER_ENGINE"
@@ -143,7 +188,8 @@ bad()   { echo "  FAIL: $*"; DEFECT_BAD=1; }
 # ---------------------------------------------------------------------------
 OUTFILE=$(mktemp)
 RUNLOG=$(mktemp)
-trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$RUNLOG"' EXIT INT TERM
+trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$OUTFILE.map" "$RUNLOG"
+      if [ "$LIVE_RECORD_IS_TEMP" -eq 1 ]; then rm -f "$LIVE_RECORD"; fi' EXIT INT TERM
 
 # run_harness <defect|"">  -> normalised output in $OUTFILE
 # Returns the harness exit status, or:
@@ -347,9 +393,30 @@ echo ""
 # ---------------------------------------------------------------------------
 if [ $# -gt 0 ]; then
     DEFECT_LIST="$*"
+    FULL_RUN=0
 else
     DEFECT_LIST=$(sh "$MANIFEST" list)
+    FULL_RUN=1
 fi
+
+# ---------------------------------------------------------------------------
+# Open the live record. Emitted from HERE and not earlier because
+# `positive-control: pass` is only true past the block above -- the script
+# exits when the pristine control fails, so this emitter never writes anything
+# else into that field. It exists so that a record whose header says otherwise
+# is REFUSED by the reader: a hand-edited record is the one thing a static
+# consumer cannot tell from an observed one, and every negative control under a
+# failing positive control is unfounded.
+#
+# The cost of the whole emission is a handful of printf(1)s per defect against
+# a file already open, next to a QEMU boot and an in-container kernel rebuild.
+# ---------------------------------------------------------------------------
+N_MANIFEST=$(sh "$MANIFEST" list | grep -c . || true)
+TREE_COMMIT=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
+[ -n "$TREE_COMMIT" ] || TREE_COMMIT=unknown
+fnr_emit_header "$LIVE_RECORD" pass "$N_MANIFEST" "$N_EXPECTED" "$TREE_COMMIT"
+echo "--- emitting the execution record to $LIVE_RECORD (tree $TREE_COMMIT) ---"
+echo ""
 
 for defect in $DEFECT_LIST; do
     DEFECT_BAD=0
@@ -521,7 +588,10 @@ EOF
         ok "the red set is EXACTLY the $n_exp assertion(s) the manifest names (observed $n_obs), attributed to:"
         cut -f1 "$OUTFILE.map" | sort -u | sed 's/^/      /'
     fi
-    rm -f "$OUTFILE.exp" "$OUTFILE.exp2" "$OUTFILE.obs" "$OUTFILE.map"
+    rm -f "$OUTFILE.exp" "$OUTFILE.exp2" "$OUTFILE.obs"
+    # $OUTFILE.map is NOT removed here any more -- the record emission at the
+    # bottom of this loop body is what reads it, and it has to run after
+    # $DEFECT_BAD is final.
 
     # 7. KNOWN GAPS, PINNED. Suites that exercise this facility and OUGHT to
     #    detect this defect but measurably do not. Asserting them GREEN turns
@@ -553,6 +623,31 @@ EOF
         note "  (note: the guest survived to FINAL RESULTS; the manifest expects it not to. Re-read the 'why' -- if the unload is now survivable, this control's reasoning needs revisiting, not its threshold.)"
     fi
 
+    # -----------------------------------------------------------------------
+    # THE RECORD. What was OBSERVED, not what was declared: the suites that
+    # actually printed a failing assertion, and the assertion texts that
+    # actually fired, attributed by the same fail_map() the equality check
+    # above is judged by -- so the record can never disagree with the verdict
+    # printed beside it.
+    #
+    # The translation from fail_map() to rows is fnr_emit_defect(), in the
+    # library, so that it can be exercised without booting QEMU -- see
+    # tests/qemu/facility_record_negctl.sh. Inline here, the one step between
+    # an execution and the record of it would have had no test at all.
+    #
+    # Emitted for a FAILING control too, carrying verdict `fail`. Readers must
+    # exclude those from any proven population -- a control the driver itself
+    # rejected observed a red set the driver rejected -- but deleting the rows
+    # would make a failing run indistinguishable from a defect that was never
+    # executed, which is the direction that hides things.
+    # -----------------------------------------------------------------------
+    if [ "$DEFECT_BAD" -eq 0 ]; then
+        fnr_emit_defect "$LIVE_RECORD" "$defect" "$OUTFILE.map" pass
+    else
+        fnr_emit_defect "$LIVE_RECORD" "$defect" "$OUTFILE.map" fail
+    fi
+    rm -f "$OUTFILE.map"
+
     if [ "$DEFECT_BAD" -eq 0 ]; then
         echo "  PASS: '$defect' turns the harness red; the assertions that went red are"
         echo "        EXACTLY the ones the manifest names, and they name '$facility'."
@@ -566,6 +661,62 @@ EOF
 
     echo ""
 done
+
+# ---------------------------------------------------------------------------
+# THE COMMITTED RECORD vs WHAT THIS RUN OBSERVED.
+#
+# This is the part a deleter does not own. The static gates in
+# facility_defects.sh read a committed snapshot, and a snapshot in the repo can
+# be edited; here the driver has just executed the whole thing, so the two can
+# be required to agree, row for row, in BOTH directions. A committed record can
+# therefore be shrunk only by shrinking the manifest for real -- it can never
+# be fabricated upward, and it can never go stale quietly.
+#
+# ONLY ON A FULL RUN. With an explicit defect list the observation is a
+# subset by construction, and requiring a subset to equal the whole record
+# would red a correct invocation.
+#
+# ABSENCE IS NOT A FAILURE BY DEFAULT, AND THAT IS A DISCLOSED WEAKNESS. The
+# first record can only come from this job, so a tree that has never had one
+# would otherwise be unmergeable. The degradation is loud in both places: this
+# job prints the record it just produced and uploads it as an artifact, and
+# facility_defects.sh's coverage prints NOT MEASURED and withholds both
+# cardinals. FACILITY_NEGCTL_REQUIRE_RECORD is set EXPLICITLY by the CI job
+# (.github/workflows/ci.yml) and is 0 only while the tree has no record; flip
+# it to 1 in the same change that commits the first one.
+# ---------------------------------------------------------------------------
+echo "--- the execution record this run observed vs the one committed ---"
+n_run_rows=$(grep -c '^RUN	' "$LIVE_RECORD" 2>/dev/null || true)
+n_red_rows=$(grep -c '^RED	' "$LIVE_RECORD" 2>/dev/null || true)
+: "${n_run_rows:=0}" "${n_red_rows:=0}"
+echo "  observed: $n_run_rows defect(s) executed, $n_red_rows failing assertion(s) recorded"
+if [ "$FULL_RUN" -ne 1 ]; then
+    echo "  NOT COMPARED: this was a partial run ($# defect(s) named on the command"
+    echo "  line), so its record is a subset by construction and cannot be required"
+    echo "  to equal the committed one. Nothing is certified from it."
+elif [ -f "$COMMITTED_RECORD" ]; then
+    if fnr_compare "$LIVE_RECORD" "$COMMITTED_RECORD"; then
+        ok "the committed record matches this run EXACTLY, row for row"
+        pass_n=$((pass_n + 1))
+    else
+        fail_n=$((fail_n + 1))
+        FAILED_DEFECTS="$FAILED_DEFECTS committed-record-mismatch"
+    fi
+else
+    echo "  NO COMMITTED RECORD at ${COMMITTED_RECORD#"$REPO_ROOT"/}."
+    echo "  The static gates are therefore reading NOTHING execution-sourced: coverage"
+    echo "  prints NOT MEASURED, no suite is PROVEN able to go red, and there is no"
+    echo "  observed count floor. Commit the record below to close that."
+    echo "  ---------------- 8< ---- copy from here ---- 8< ----------------"
+    cat "$LIVE_RECORD"
+    echo "  ---------------- 8< ----- to here -------- 8< ----------------"
+    if [ "${FACILITY_NEGCTL_REQUIRE_RECORD:-0}" = "1" ]; then
+        bad "FACILITY_NEGCTL_REQUIRE_RECORD=1 and no record is committed"
+        fail_n=$((fail_n + 1))
+        FAILED_DEFECTS="$FAILED_DEFECTS committed-record-absent"
+    fi
+fi
+echo ""
 
 echo "=========================================================="
 echo " Facility negative controls: $pass_n passed, $fail_n failed"

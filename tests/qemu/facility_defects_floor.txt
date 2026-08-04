@@ -16,6 +16,13 @@
 # defect, in the same change that removes it and explains why -- never to
 # make an unrelated deletion pass quietly.
 #
+# THIS IS NO LONGER THE ONLY COUNT FLOOR, and it is the weaker one (vms-d894
+# round 2). Section 6b of cmd_coverage derives a second floor from
+# tests/qemu/facility_negctl_observed.tsv -- the number of defects a PAST RUN
+# OF THE DRIVER ACTUALLY EXECUTED, which no edit to this file can raise or
+# lower. Both floors are applied and neither replaces the other, so a record
+# covering fewer defects can never lower the number below.
+#
 # To raise the floor after legitimately ADDING defects, rerun and paste the
 # result below the comments:
 #   awk '/^DEFECTS="/{f=1;next} f&&/^"/{exit} f' tests/qemu/facility_defects.sh | wc -l

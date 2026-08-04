@@ -463,7 +463,7 @@ enum scs_vc_action scs_vc_fsm_timeout(struct scs_pb *pb, uint64_t now_ms,
  * (scs_vc_check_recv_seq's, restated in the script's docstring) to every
  * capture this project holds and counts how many times it would have fired.
  *
- *   51 pcaps, 321,599 sequenced messages examined, 506 duplicate/retransmit
+ *   47 pcaps, 321,599 sequenced messages examined, 506 duplicate/retransmit
  *   frames correctly NOT scored as gaps, 41 gaps -- and ALL 41 have source MAC
  *   b6:16:8a:dc:3a:53, which is OVMX's own transmit. In the RECEIVE direction,
  *   which is the only direction this detector runs in, the count is ZERO,
@@ -472,11 +472,21 @@ enum scs_vc_action scs_vc_fsm_timeout(struct scs_pb *pb, uint64_t now_ms,
  *   vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap.
  *
  * Re-derive with `python3 tools/cluster/scs_seqgap_measure.py --all` on a lab
- * host (the captures are host-only, 13 GB, not in git). The 41 OVMX-sourced
- * gaps are a real OVMX transmit-side defect -- it stamps the member's
- * continuation send_seq into its own outbound frames after a START, which spec
- * sec 4i.A says a joiner must not do -- and they are NOT fixed here; this item
- * is the receive-side guarantee only.
+ * host (the captures are host-only, 13 GB, not in git); the run prints
+ * "TOTAL pcaps=47 sequenced messages=321599 dup/retx=506 GAPS=41" followed by a
+ * GAP SOURCE CENSUS over EVERY gap -- one line, b6:16:8a:dc:3a:53 41. The pcap
+ * count agrees with docs/cluster-protocol-spec.md sec 4h(4a) and with
+ * `ls /data/training/vax/cluster/captures/ | grep -c '[.]pcap$'`. (An earlier revision
+ * of this block said 51; that figure re-derived from nothing and was a
+ * transcription slip. The census line and the pcap total were added to the
+ * script by this item precisely so the claim above cannot drift again: before,
+ * the script truncated its gap detail to 8 per file, so "ALL 41" was not
+ * checkable from the command this comment names.)
+ *
+ * The 41 OVMX-sourced gaps are a real OVMX transmit-side defect -- it stamps
+ * the member's continuation send_seq into its own outbound frames after a
+ * START, which spec sec 4i.A says a joiner must not do -- and they are NOT
+ * fixed here; this item is the receive-side guarantee only.
  * ==========================================================================
  *
  * OVMX DESIGN CHOICES (labeled per CLAUDE.md rule 8):

@@ -2006,6 +2006,16 @@ static void make_gap_frame(uint8_t out[124], uint16_t send_seq)
     out[45] = out[35];
 }
 
+/* Run the production retransmit tick -- the one main()'s loop calls every
+ * iteration -- with its logging captured into rxlog, exactly as rx_feed() does
+ * for the receive path. */
+static void rx_tick(struct rxworld *r, uint64_t now_ms)
+{
+    log_capture_begin();
+    scsd_retransmit_tick(&r->rx, now_ms);
+    log_capture_end();
+}
+
 /*
  * THE DONE CONDITION, through production code: inject a sequence gap on a VC
  * carrying two connections; the VC is broken and BOTH SYSAP handlers fire.
@@ -2045,6 +2055,45 @@ static void test_seq_gap_breaks_the_vc_and_notifies_both_sysaps(void)
     CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
           "the circuit is %s after the break, expected CLOSED",
           scs_vc_state_name(ps->pb->vc_state));
+
+    /* ===== THE TRIGGER, ON THE LIVE PATH. =====
+     * The done condition requires the event be logged naming the VC, the
+     * TRIGGER, and every connection broken. Asserting the reason ONLY inside
+     * test_scs_vc.c does not cover this: there the test itself supplies the
+     * constant, so it cannot notice scsd.c passing the wrong one. Swapping this
+     * call site's SCS_VC_BREAK_SEQ_GAP for SCS_VC_BREAK_LOCAL used to leave the
+     * whole scs label green (15/15) while the operator's log said "explicit
+     * local teardown" for a sequentiality breach. The assertions below are what
+     * makes that mutant die: MEASURED, the swap now reds 3 checks. */
+    CHECK(ps->vc.break_reason == (int)SCS_VC_BREAK_SEQ_GAP,
+          "the circuit was broken with reason %d (%s), expected SCS_VC_BREAK_SEQ_GAP"
+          " -- the daemon named the wrong trigger",
+          ps->vc.break_reason,
+          scs_vc_break_reason_name((enum scs_vc_break_reason)ps->vc.break_reason));
+    CHECK(rxlog_has("SCSD-W-VCBREAK,"),
+          "the daemon broke the circuit without logging it");
+    CHECK(rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_SEQ_GAP)),
+          "the VCBREAK log does not NAME the trigger '%s'",
+          scs_vc_break_reason_name(SCS_VC_BREAK_SEQ_GAP));
+    CHECK(!rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_LOCAL)),
+          "the VCBREAK log reports '%s' for a sequence gap",
+          scs_vc_break_reason_name(SCS_VC_BREAK_LOCAL));
+    CHECK(!rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_DELIVERY)),
+          "the VCBREAK log reports '%s' for a sequence gap",
+          scs_vc_break_reason_name(SCS_VC_BREAK_DELIVERY));
+    /* ...naming the VC (its remote port address) and the count of connections. */
+    {
+        char macstr[24];
+        snprintf(macstr, sizeof(macstr), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 ps->pb->remote_port_addr[0], ps->pb->remote_port_addr[1],
+                 ps->pb->remote_port_addr[2], ps->pb->remote_port_addr[3],
+                 ps->pb->remote_port_addr[4], ps->pb->remote_port_addr[5]);
+        CHECK(rxlog_has(macstr),
+              "the VCBREAK log does not name the circuit (%s)", macstr);
+        CHECK(rxlog_has("breaking 2 connection(s)"),
+              "the VCBREAK log does not report both broken connections");
+    }
+
     /* And OVMX must NOT have credit-acked the frame that revealed the gap:
      * returning a 0x48 for it claims receipt of the four messages that never
      * arrived. This is the behaviour that existed before this item. */
@@ -2121,121 +2170,6 @@ static void test_retransmit_does_not_break_the_vc(void)
           sysap_vc_loss_notifications);
     CHECK(ps->pb->vc_state != SCS_VC_CLOSED, "a retransmit closed the circuit");
     CHECK(ps->vc.seq.recv_seq == 8, "recv_seq is %u, expected 8", ps->vc.seq.recv_seq);
-}
-
-/*
- * THE DELIVERY GUARANTEE, through scsd_retransmit_tick() -- the production
- * function, over the production translation unit. Bracketed: first prove a tick
- * BELOW the limit retransmits and breaks nothing, then that the tick AT the
- * limit breaks the circuit and notifies the SYSAP.
- *
- * ===== WHAT THIS TEST DOES *NOT* PROVE, stated because the alternative is a
- * claim that outruns its evidence =====
- *
- * It does not prove the DAEMON reaches the delivery break, because the daemon
- * does not. scsd_retransmit_tick()'s loop is gated on `ps->connect_sent`, and
- * `connect_sent` is ASSIGNED NOWHERE in src/vmsscs/scsd.c -- it is declared,
- * read by this guard, and printed in the exit summary, and that is all
- * (`grep -n connect_sent src/vmsscs/scsd.c`: a declaration, this guard, and two
- * report lines; the only assignments in the file are to the DIFFERENT field
- * `joiner_connect_sent`). The whole vms-691 retransmit block has therefore been
- * dead since vms-d94 moved the connect to the joiner-opened connection, which
- * also means `vc.retransmit_count` never advances in a real run and
- * scs_vc_delivery_failed() never fires there.
- *
- * That is a PRE-EXISTING defect this item found and deliberately did NOT fix:
- * reviving the loop would start emitting CONNECT-REQUEST retransmits at
- * OVMX_LOCAL_CONID that OVMX does not send today -- a wire change, and one that
- * belongs to the connect/retransmit path, not to the p. 2-31 detector. It is
- * reported instead. The line below sets the flag the fixture needs and is
- * labeled as the stand-in it is.
- */
-static void test_delivery_failure_breaks_the_vc_through_the_daemon(void)
-{
-    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
-    struct rxworld r;
-    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
-
-    struct peer_state *ps =
-        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
-    CHECK(ps != NULL, "peer slot");
-    if (ps == NULL) {
-        return;
-    }
-    ps_learn_sys_addr(&r.w.cfg, ps, ovmx760_member_sysid);
-    (void)scs_pb_open(&r.w.cfg, ps->pb);
-    CHECK(send_joiner_connect_request(7, 1, &r.w.cfg, ps, NULL, r.hw_mac, r.logical) == 1,
-          "the joiner CONNECT-REQUEST was not sent");
-    CHECK(ps->cdt_joiner != NULL, "the joiner CDT was not bound");
-    CHECK(ps->vc.have_unacked == 1, "no outstanding sequenced message was recorded");
-    /* THE STAND-IN, see the note above: production never sets this. */
-    ps->connect_sent = 1;
-
-    /* --- CONTROL: below the limit the tick RETRANSMITS and breaks nothing. */
-    long retx_before = r.rx.retransmit_sent;
-    uint64_t now = ps->vc.unacked_sent_ms + VC_RETRANSMIT_TIMEOUT_MS + 1;
-    scsd_retransmit_tick(&r.rx, now);
-    CHECK(r.rx.retransmit_sent == retx_before + 1,
-          "CONTROL: the tick did not retransmit (%ld -> %ld)",
-          retx_before, r.rx.retransmit_sent);
-    CHECK(vc_breaks == 0, "CONTROL: a single retransmit broke the circuit");
-    CHECK(scs_vc_delivery_failed(&ps->vc) == 0,
-          "CONTROL: delivery is not yet failed after one retransmit");
-
-    /* --- Drive to the limit through the production tick, not by hand. */
-    for (unsigned i = 1; i < SCS_VC_DELIVERY_RETRY_LIMIT; i++) {
-        now += VC_RETRANSMIT_TIMEOUT_MS + 1;
-        scsd_retransmit_tick(&r.rx, now);
-    }
-    CHECK(ps->vc.retransmit_count == SCS_VC_DELIVERY_RETRY_LIMIT,
-          "the tick reached %u retransmits, expected %u",
-          ps->vc.retransmit_count, (unsigned)SCS_VC_DELIVERY_RETRY_LIMIT);
-    CHECK(vc_breaks == 0, "the circuit broke before the limit was reached");
-
-    /* --- THE BREAK: one more tick, now that delivery has demonstrably failed. */
-    now += VC_RETRANSMIT_TIMEOUT_MS + 1;
-    scsd_retransmit_tick(&r.rx, now);
-    CHECK(vc_breaks == 1,
-          "retransmit exhaustion broke %lu circuits, expected 1 -- OVMX is still"
-          " limping on past the p. 2-31 delivery guarantee", vc_breaks);
-    CHECK(sysap_vc_loss_notifications == 1,
-          "%lu SYSAP handlers fired on delivery failure, expected 1",
-          sysap_vc_loss_notifications);
-    CHECK(ps->vc.break_reason == (int)SCS_VC_BREAK_DELIVERY,
-          "the recorded break reason is %d, expected SCS_VC_BREAK_DELIVERY",
-          ps->vc.break_reason);
-    CHECK(ps->pb->vc_state == SCS_VC_CLOSED, "the circuit is %s, expected CLOSED",
-          scs_vc_state_name(ps->pb->vc_state));
-    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CLOSED,
-          "the joiner connection is %s after the break, expected CLOSED",
-          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
-
-    /* --- GATED: with the switch on, the same exhausted VC breaks nothing. */
-    (void)setenv(SCS_VC_NO_BREAK_ENV, "1", 1);
-    struct rxworld g;
-    rxworld_init(&g, ovmx760_hw_mac, ovmx760_logical);
-    struct peer_state *gp =
-        peer_find_or_add(&g.w.cfg, &g.w.pdt, g.w.peers, ovmx760_member_mac);
-    if (gp == NULL) {
-        (void)unsetenv(SCS_VC_NO_BREAK_ENV);
-        return;
-    }
-    ps_learn_sys_addr(&g.w.cfg, gp, ovmx760_member_sysid);
-    (void)scs_pb_open(&g.w.cfg, gp->pb);
-    (void)send_joiner_connect_request(7, 1, &g.w.cfg, gp, NULL, g.hw_mac, g.logical);
-    gp->connect_sent = 1; /* the same stand-in */
-    uint64_t gnow = gp->vc.unacked_sent_ms + VC_RETRANSMIT_TIMEOUT_MS + 1;
-    for (unsigned i = 0; i <= SCS_VC_DELIVERY_RETRY_LIMIT; i++) {
-        scsd_retransmit_tick(&g.rx, gnow);
-        gnow += VC_RETRANSMIT_TIMEOUT_MS + 1;
-    }
-    CHECK(scs_vc_delivery_failed(&gp->vc) == 1,
-          "GATED: the fixture did not reach delivery failure, so it proves nothing");
-    CHECK(vc_breaks == 0, "GATED: %lu circuits were broken, expected 0", vc_breaks);
-    CHECK(sysap_vc_loss_notifications == 0,
-          "GATED: %lu SYSAP handlers fired, expected 0", sysap_vc_loss_notifications);
-    CHECK(gp->pb->vc_state != SCS_VC_CLOSED, "GATED: the circuit was closed anyway");
-    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
 }
 
 /*
@@ -2371,6 +2305,237 @@ static struct peer_state *rx_peer_of(struct rxworld *r, const uint8_t mac[6])
         }
     }
     return NULL;
+}
+
+/* ==========================================================================
+ * vms-abc -- THE p. 2-31 DELIVERY GUARANTEE, ON THE LIVE PRODUCTION PATH.
+ *
+ * This case lives HERE, below the vms-17f formation captures, because it needs
+ * them: the only way to reach the delivery break without setting a field by
+ * hand is to let the daemon complete a real START dialogue first.
+ *
+ * WHAT AN EARLIER REVISION OF THIS TEST DID WRONG, recorded so it is not
+ * repeated. It set `ps->connect_sent = 1` and called it a stand-in.
+ * `connect_sent` is assigned NOWHERE in src/vmsscs/scsd.c, so the only reason
+ * that test passed was the line that set the unreachable gate: it proved the
+ * body of scsd_retransmit_tick() computes the right thing when reached, and
+ * nothing at all about reaching it.
+ *
+ * WHAT MADE THE PATH LIVE. Two production defects, both fixed with this case:
+ *   1. scsd_retransmit_tick()'s delivery scan was NESTED under the dead
+ *      `connect_sent` guard. It is now its own scan, gated only on
+ *      scs_vc_delivery_failed() -- see scan (A) in scsd.c. (The vms-691
+ *      retransmit under the dead guard, scan (B), is untouched and still dead;
+ *      nothing below depends on it, and the negative control at the end of this
+ *      case asserts it stayed dead.)
+ *   2. send_joiner_connect_request() called scs_vc_record_sent() on EVERY send,
+ *      including retransmits, and record_sent() RESETS vc.retransmit_count. So
+ *      the counter never left 0 in a real run and delivery could never be
+ *      declared failed. Retransmits now call scs_vc_mark_retransmitted().
+ *
+ * WHAT IS STILL NOT DRIVEN BY A FRAME, stated plainly: the ~1 Hz CADENCE. The
+ * daemon retransmits from its directed-HELLO branch, and this test holds no
+ * captured directed HELLO to feed (the three formation frames are 0x41 STARTs,
+ * a different SCA length class). So the retransmits below are driven by calling
+ * send_joiner_connect_request() -- the production function, with the production
+ * arguments, the same call that branch makes -- while asserting
+ * scsd_joiner_retransmit_pending(), the predicate that branch now branches on,
+ * before every one of them. A guard narrowed in scsd.c reds this test. What is
+ * bypassed is a clock, not a reachability gate.
+ * ========================================================================== */
+
+/* The LIVE fixture, built entirely by production dispatch from captured frames:
+ * the formation dialogue opens the circuit and latches start_acked, then the
+ * captured SCS$DIRECTORY CONNECT-REQUEST makes the daemon bind the directory
+ * connection AND promptly open its own VMS$VAXcluster connection (vms-d94), which
+ * is the outstanding sequenced message the delivery guarantee is about. */
+static struct peer_state *joiner_connect_outstanding(struct rxworld *r)
+{
+    rxworld_init(r, vax2_hw_mac, our_logical);
+    rx_feed_formation(r);
+    struct peer_state *ps = rx_peer_of(r, vax1_hw_mac);
+    CHECK(ps != NULL, "the daemon built no peer slot for the captured formation");
+    if (ps == NULL) {
+        return NULL;
+    }
+    CHECK(ps->start_acked == 1, "the daemon did not complete the START dialogue");
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN,
+          "PRECONDITION: the circuit is %s, not OPEN", scs_vc_state_name(ps->pb->vc_state));
+
+    rx_feed(r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    CHECK(ps->dir_connected == 1, "the daemon did not bind SCS$DIRECTORY");
+    /* THE POINT: the daemon sent its OWN CONNECT-REQUEST, nobody set a flag. */
+    CHECK(r->rx.connect_req_sent == 1,
+          "the daemon sent %ld joiner CONNECT-REQUESTs, expected 1 -- the fixture"
+          " has no outstanding sequenced message and proves nothing",
+          r->rx.connect_req_sent);
+    CHECK(ps->joiner_connect_sent == 1, "joiner_connect_sent was not latched by production");
+    CHECK(ps->cdt_joiner != NULL, "the joiner CDT was not bound");
+    CHECK(ps->vc.have_unacked == 1, "no outstanding sequenced message was recorded");
+    CHECK(ps->vc.retransmit_count == 0,
+          "a FIRST send recorded %u retransmits, expected 0", ps->vc.retransmit_count);
+    CHECK(scs_pb_cdt_count(ps->pb) == 2,
+          "%u connections are queued to the circuit, expected 2 (directory + joiner)",
+          scs_pb_cdt_count(ps->pb));
+    /* connect_sent is the DEAD vms-691 gate. Assert production left it alone, so
+     * that if anybody ever revives it the reachability story below is re-read
+     * rather than silently inherited. */
+    CHECK(ps->connect_sent == 0,
+          "production assigned connect_sent -- scan (B) in scsd.c is no longer dead"
+          " and this test's reachability argument must be redone");
+    return ps;
+}
+
+/* ONE retransmit, the way the daemon does it -- guard asserted, then the call. */
+static void drive_one_joiner_retransmit(struct rxworld *r, struct peer_state *ps)
+{
+    CHECK(scsd_joiner_retransmit_pending(&r->rx, ps) == 1,
+          "the daemon's OWN retransmit guard would not admit this peer, so the"
+          " retransmit driven here is unreachable in production");
+    log_capture_begin();
+    int sent = send_joiner_connect_request(r->rx.sock, r->rx.ifindex, r->rx.cfg, ps, NULL,
+                                           r->rx.our_hw_mac, r->rx.our_src_logical);
+    log_capture_end();
+    CHECK(sent == 1, "the production retransmit did not send a frame");
+}
+
+/*
+ * THE DELIVERY GUARANTEE. Bracketed: ticks below the limit break nothing, the
+ * tick at the limit breaks the circuit, names the trigger and notifies BOTH
+ * SYSAPs on the circuit.
+ */
+static void test_delivery_failure_breaks_the_vc_through_the_daemon(void)
+{
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    struct rxworld r;
+    struct peer_state *ps = joiner_connect_outstanding(&r);
+    if (ps == NULL) {
+        return;
+    }
+    uint16_t seq_before = ps->vc.unacked_seq;
+    uint64_t now = ps->vc.unacked_sent_ms;
+
+    /* --- CONTROL: below the limit, retransmitting and ticking break nothing,
+     * and each retransmit ADVANCES the delivery counter. That advance is the
+     * production fix; without it the loop below never reaches the limit. */
+    for (unsigned i = 1; i < SCS_VC_DELIVERY_RETRY_LIMIT; i++) {
+        drive_one_joiner_retransmit(&r, ps);
+        CHECK(ps->vc.retransmit_count == i,
+              "after retransmit %u the counter is %u -- a retransmit is not being"
+              " counted as one", i, ps->vc.retransmit_count);
+        CHECK(scs_vc_delivery_failed(&ps->vc) == 0,
+              "CONTROL: delivery was declared failed after only %u retransmits", i);
+        now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+        rx_tick(&r, now);
+        CHECK(vc_breaks == 0,
+              "CONTROL: the tick broke %lu circuits below the limit", vc_breaks);
+        CHECK(ps->pb->vc_state == SCS_VC_OPEN,
+              "CONTROL: the circuit left OPEN state below the limit (%s)",
+              scs_vc_state_name(ps->pb->vc_state));
+    }
+    CHECK(ps->vc.unacked_seq == seq_before,
+          "a retransmit allocated a NEW sequence number (%u -> %u) -- then it was"
+          " not a retransmit", seq_before, ps->vc.unacked_seq);
+
+    /* --- The retransmit that exhausts the budget. */
+    drive_one_joiner_retransmit(&r, ps);
+    CHECK(ps->vc.retransmit_count == SCS_VC_DELIVERY_RETRY_LIMIT,
+          "the production retransmits reached %u, expected the limit %u",
+          ps->vc.retransmit_count, (unsigned)SCS_VC_DELIVERY_RETRY_LIMIT);
+    CHECK(scs_vc_delivery_failed(&ps->vc) == 1,
+          "the limit was reached but delivery is not declared failed");
+    CHECK(vc_breaks == 0, "the circuit broke before a tick ran");
+
+    /* --- THE BREAK, in the production tick main()'s loop calls. */
+    now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+    rx_tick(&r, now);
+    CHECK(vc_breaks == 1,
+          "retransmit exhaustion broke %lu circuits, expected 1 -- OVMX is still"
+          " limping on past the p. 2-31 delivery guarantee", vc_breaks);
+    CHECK(vc_conns_broken == 2,
+          "%lu connections were broken, expected 2 (directory + joiner)", vc_conns_broken);
+    CHECK(sysap_vc_loss_notifications == 2,
+          "%lu SYSAP handlers fired on delivery failure, expected 2",
+          sysap_vc_loss_notifications);
+    CHECK(ps->vc.break_reason == (int)SCS_VC_BREAK_DELIVERY,
+          "the recorded break reason is %d (%s), expected SCS_VC_BREAK_DELIVERY",
+          ps->vc.break_reason,
+          scs_vc_break_reason_name((enum scs_vc_break_reason)ps->vc.break_reason));
+    /* The log names the trigger, not merely "a circuit broke". */
+    CHECK(rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_DELIVERY)),
+          "the VCBREAK log does not NAME the trigger '%s'",
+          scs_vc_break_reason_name(SCS_VC_BREAK_DELIVERY));
+    CHECK(!rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_LOCAL)),
+          "the VCBREAK log reports '%s' for retransmit exhaustion",
+          scs_vc_break_reason_name(SCS_VC_BREAK_LOCAL));
+    CHECK(rxlog_has("breaking 2 connection(s)"),
+          "the VCBREAK log does not report both broken connections");
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED, "the circuit is %s, expected CLOSED",
+          scs_vc_state_name(ps->pb->vc_state));
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CLOSED,
+          "the joiner connection is %s after the break, expected CLOSED",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+    CHECK(scs_conn_state_of(ps->cdt_dir) == SCS_CONN_CLOSED,
+          "the directory connection is %s after the break, expected CLOSED",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_dir)));
+    CHECK(ps->joiner_connected == 0 && ps->dir_connected == 0,
+          "the SYSAP handlers did not clear the send gates (joiner=%d dir=%d)",
+          ps->joiner_connected, ps->dir_connected);
+
+    /* --- The break is once, not once per tick: a broken circuit has nothing
+     * outstanding, so the next tick must find nothing to do. */
+    now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+    rx_tick(&r, now);
+    CHECK(vc_breaks == 1, "a second tick broke the same circuit again (%lu)", vc_breaks);
+
+    /* --- NEGATIVE CONTROL for scan (B): the dead vms-691 retransmit must have
+     * stayed dead through all of this. If it ever revives it starts emitting
+     * CONNECT-REQUESTs at OVMX_LOCAL_CONID, a wire change, and this reds. */
+    CHECK(r.rx.retransmit_sent == 0,
+          "the vms-691 OVMX_LOCAL_CONID retransmit fired %ld times -- it is"
+          " documented DEAD in scsd.c; the documentation or the code is wrong",
+          r.rx.retransmit_sent);
+}
+
+/*
+ * THE KILL SWITCH for the delivery half, on the SAME live path (guardrail 23).
+ * The case above established the counters MOVE with the switch off; this
+ * asserts every one stays put with it on, and that OVMX limps on exactly as it
+ * did before this item -- circuit still OPEN, connections still bound.
+ */
+static void test_delivery_failure_kill_switch_through_the_daemon(void)
+{
+    (void)setenv(SCS_VC_NO_BREAK_ENV, "1", 1);
+    struct rxworld r;
+    struct peer_state *ps = joiner_connect_outstanding(&r);
+    if (ps == NULL) {
+        (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+        return;
+    }
+    uint64_t now = ps->vc.unacked_sent_ms;
+    for (unsigned i = 0; i < SCS_VC_DELIVERY_RETRY_LIMIT; i++) {
+        drive_one_joiner_retransmit(&r, ps);
+        now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+        rx_tick(&r, now);
+    }
+    /* The fixture must actually REACH the failure or the assertions below are
+     * vacuous -- the whole point of running the kill switch. */
+    CHECK(scs_vc_delivery_failed(&ps->vc) == 1,
+          "GATED: the fixture did not reach delivery failure, so it proves nothing");
+    now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+    rx_tick(&r, now);
+    CHECK(vc_breaks == 0, "GATED: %lu circuits were broken, expected 0", vc_breaks);
+    CHECK(vc_conns_broken == 0, "GATED: %lu connections were broken, expected 0",
+          vc_conns_broken);
+    CHECK(sysap_vc_loss_notifications == 0,
+          "GATED: %lu SYSAP handlers fired, expected 0", sysap_vc_loss_notifications);
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN, "GATED: the circuit is %s, expected OPEN",
+          scs_vc_state_name(ps->pb->vc_state));
+    CHECK(ps->dir_connected == 1, "GATED: the send gates were cleared anyway");
+    CHECK(rxlog_has("SCSD-W-VCBREAKOFF,"),
+          "GATED: the suppression was SILENT -- a run log must never read as"
+          " 'no circuit was ever broken' when breaking is switched off");
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
 }
 
 /*
@@ -2958,6 +3123,7 @@ int main(void)
     test_seq_gap_kill_switch_through_the_daemon();
     test_retransmit_does_not_break_the_vc();
     test_delivery_failure_breaks_the_vc_through_the_daemon();
+    test_delivery_failure_kill_switch_through_the_daemon();
     test_exit_summary_reports_the_parked_connection();
     /* vms-17f: peer departure, and the p. 2-21 REFRESH the daemon can now
      * reach, driven by captured formation frames through the same dispatch. */

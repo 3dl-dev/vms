@@ -1196,7 +1196,11 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
     cp.local_conid = OVMX_JOINER_CONID;
     cp.remote_conid = 0; /* CONNECT-REQUEST: the member's Con.ID is not yet known */
     cp.recv_ack = ps->vc.seq.recv_seq; /* always ack the member's latest send_seq */
-    if (ps->joiner_req_seq == 0) {
+    /* vms-abc: FIRST send or RETRANSMIT? The sequence number is allocated once
+     * and reused, so "joiner_req_seq is still 0" IS the discriminator, and it
+     * has to be read BEFORE the allocation below. */
+    int first_send = (ps->joiner_req_seq == 0);
+    if (first_send) {
         ps->joiner_req_seq = scs_seq_advance(&ps->vc.seq); /* allocate once */
     }
     cp.send_seq = ps->joiner_req_seq; /* retransmits reuse the same seq */
@@ -1206,7 +1210,31 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
         send_frame_to(sock, ifindex, path.remote_port_addr, cframe, sizeof(cframe)) > 0) {
         ps->joiner_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
-        scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
+        /* vms-abc -- THE p. 2-31 DELIVERY GUARANTEE'S ONLY LIVE FEED.
+         *
+         * This function is the ONLY caller of scs_vc_record_sent() in OVMX
+         * (`grep -rn scs_vc_record_sent src/vmsscs/` -> its definition in
+         * scs_vc.c, this comment, and the one call below), so the joiner
+         * CONNECT-REQUEST is the only outstanding sequenced message the
+         * delivery detector can ever see.
+         *
+         * It used to call scs_vc_record_sent() on EVERY send. That contradicts
+         * this function's own contract two paragraphs up -- "retransmits REUSE
+         * it (a retransmit is not a new message)" -- because record_sent()
+         * RESETS vc.retransmit_count to 0. The counter therefore never left 0
+         * in a real run no matter how many times the member ignored us, and
+         * scs_vc_delivery_failed() could not become true in production. Fixing
+         * that is what gives the delivery break a live path.
+         *
+         * NOT A WIRE CHANGE: both calls only touch OVMX's local VC bookkeeping.
+         * The frame is byte-identical either way (same builder, same reused
+         * cp.send_seq), and the retry CAP is unchanged. What changes is that
+         * exhausting the retries is now DETECTABLE. */
+        if (first_send) {
+            scs_vc_record_sent(&ps->vc, cp.send_seq, monotonic_ms());
+        } else {
+            scs_vc_mark_retransmitted(&ps->vc, monotonic_ms());
+        }
         /* vms-dd5: OVMX is the SOURCE on this connection -- Figure 2-14's
          * NODE_1 column. "o SCS SENDS 'CONNECT_REQ' TO NODE_2 / o CONN STATE =
          * 'CONNECT SENT'". The frame just sent IS the CONNECT_REQ (remote
@@ -1280,6 +1308,33 @@ struct scsd_rx {
      * held here to keep it off the handler's stack frame. */
     uint8_t pframe[SCS_HELLO_PADDED_MAX_FRAME];
 };
+
+/*
+ * scsd_joiner_retransmit_pending - vms-abc: EXACTLY the condition under which
+ * the daemon retransmits its own outstanding joiner CONNECT-REQUEST, extracted
+ * from the branch that used to spell it inline (the directed-HELLO handler,
+ * SCSD-I-CONNREQ "retransmit").
+ *
+ * WHY IT IS A FUNCTION AND NOT AN `if`. This predicate is the whole
+ * reachability argument for the p. 2-31 DELIVERY break: retransmits are what
+ * advance vc.retransmit_count, and nothing else in OVMX advances it. A test
+ * that drives the retransmit therefore has to be able to assert the SAME
+ * predicate the dispatch branches on -- otherwise the test's claim "the daemon
+ * would have taken this path" is an unchecked assertion in a comment, which is
+ * how the previous revision of this file ended up testing `connect_sent`, a
+ * field production never writes. With the predicate shared, narrowing the guard
+ * reds the test.
+ *
+ * `pb != NULL` is not in the original inline guard because the enclosing branch
+ * already established it; it is spelled out here so the predicate is safe to
+ * call on any peer slot.
+ */
+static int scsd_joiner_retransmit_pending(const struct scsd_rx *rx,
+                                          const struct peer_state *ps)
+{
+    return rx != NULL && rx->do_connect && ps != NULL && ps->pb != NULL &&
+           ps->start_acked && ps->joiner_connect_sent && !ps->joiner_connected;
+}
 
 /*
  * scsd_handle_frame - dispatch ONE received Ethernet frame. `n` is the length
@@ -1726,8 +1781,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
          * post-START directory phase begins (see SCSD-I-DIRCONN). Here we
          * only RETRANSMIT it (reusing the same send_seq) every ~1s until the
          * member accepts (joiner_connected), in case the first was lost. */
-        if (rx->do_connect && ps->start_acked && ps->joiner_connect_sent &&
-            !ps->joiner_connected) {
+        if (scsd_joiner_retransmit_pending(rx, ps)) {
             long now_ms = monotonic_ms();
             long last_ms = ps->last_joiner_req.tv_sec * 1000L +
                            ps->last_joiner_req.tv_nsec / 1000000L;
@@ -2447,31 +2501,47 @@ static unsigned scsd_peer_departure_sweep(struct scsd_rx *rx, uint64_t now_ms)
  * test -- the same measured gap vms-fb1 closed for the receive path. The body
  * is that block, moved, with the loop-local state reached through `rx->`.
  *
- * THE ONE BEHAVIOUR CHANGE (vms-abc): reaching the retransmit cap used to be a
- * bare `continue` -- OVMX stopped retransmitting a message the peer had never
+ * THE BEHAVIOUR CHANGE (vms-abc): reaching the retransmit cap used to be a bare
+ * `continue` -- OVMX stopped retransmitting a message the peer had never
  * acknowledged and carried on with the circuit still OPEN. p. 2-31: "if either
  * the guarantee of message delivery or the guarantee of message sequentiality
  * cannot be satisfied, the virtual circuit between the ports involved will be
  * explicitly broken (if it isn't already)." Exhausting the retransmits IS the
- * delivery guarantee failing, so the circuit is now broken there. The CAP
+ * delivery guarantee failing, so the circuit is now broken instead. The CAP
  * itself is unchanged -- SCS_VC_DELIVERY_RETRY_LIMIT and VC_RETRANSMIT_MAX are
  * both 5 and a _Static_assert above holds them equal -- so the point at which
  * OVMX gives up is exactly where it was; only what it does there changed.
- * OVMX_NO_VC_BREAK=1 restores the `continue`.
+ * OVMX_NO_VC_BREAK=1 restores the limp-on.
  *
- * ===== THIS WHOLE LOOP IS DEAD IN PRODUCTION TODAY, and vms-abc did not
- * revive it. The guard below tests `ps->connect_sent`, and `connect_sent` is
- * ASSIGNED NOWHERE in this file -- it is declared, read here, and printed in
- * the exit summary; the only assignments are to the DIFFERENT field
- * `joiner_connect_sent`. So the vms-691 retransmit has not run since vms-d94
- * moved the connect onto the joiner-opened connection, `vc.retransmit_count`
- * never advances in a real run, and the delivery break below is therefore
- * UNREACHED IN PRODUCTION. That is a pre-existing defect, reported rather than
- * fixed: reviving the loop would start emitting CONNECT-REQUEST retransmits at
- * OVMX_LOCAL_CONID that OVMX does not send today, which is a wire change and
- * belongs to the connect/retransmit path, not to a p. 2-31 detector.
- * tests/vmsscs/test_scsd_wire.c states the same thing at the test that drives
- * this function. =====
+ * ===== TWO LOOP BODIES, AND ONLY ONE OF THEM IS LIVE. Read this before
+ * changing either guard. =====
+ *
+ * (A) THE DELIVERY SCAN (vms-abc) is gated ONLY on scs_vc_delivery_failed(),
+ *     which is itself gated on `vc.have_unacked`. It is LIVE. OVMX's one
+ *     outstanding sequenced message is the vms-d94 joiner CONNECT-REQUEST;
+ *     send_joiner_connect_request() is the only LIVE caller of
+ *     scs_vc_record_sent()/scs_vc_mark_retransmitted() in the tree (scan (B)
+ *     below calls mark_retransmitted too, but (B) is dead), and the
+ *     directed-HELLO handler retransmits it at ~1 Hz while the member has not
+ *     accepted (see scsd_joiner_retransmit_pending()). So a member that answers
+ *     HELLOs but never accepts our connection drives retransmit_count to
+ *     SCS_VC_DELIVERY_RETRY_LIMIT within ~5 s and the NEXT main-loop tick
+ *     breaks the circuit -- which is the p. 2-31 outcome. THIS IS WHY THE SCAN
+ *     IS NOT NESTED UNDER (B)'s GUARD: it must run for every peer with an
+ *     outstanding message, not only for the ones (B) would retransmit for.
+ *
+ * (B) THE vms-691 RETRANSMIT below it -- the one that re-sends a CONNECT-REQUEST
+ *     at OVMX_LOCAL_CONID -- is DEAD, and vms-abc deliberately did not revive
+ *     it. Its guard tests `ps->connect_sent`, which is ASSIGNED NOWHERE in this
+ *     file (`grep -n connect_sent src/vmsscs/scsd.c`: the declaration, this
+ *     guard, and two exit-report lines; every assignment in the file is to the
+ *     DIFFERENT field `joiner_connect_sent`). It has not run since vms-d94 moved
+ *     the connect onto the joiner-opened connection. It is NOT deleted here
+ *     because deleting it and reviving it are both wire decisions belonging to
+ *     the connect/retransmit path: reviving it would start emitting retransmits
+ *     at OVMX_LOCAL_CONID that OVMX does not send today. Reported, not fixed --
+ *     see the findings on this item. Nothing in vms-abc's coverage depends on
+ *     (B): the delivery break is proved through (A) alone.
  */
 static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
 {
@@ -2480,16 +2550,20 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
     }
     for (int i = 0; i < OVMX_MAX_PEERS; i++) {
         struct peer_state *ps = &rx->peers[i];
-        if (ps->pb == NULL || ps->connected || !ps->connect_sent) {
+        if (ps->pb == NULL) {
             continue;
         }
+        /* (A) vms-abc: the p. 2-31 DELIVERY guarantee. LIVE -- see the header. */
         if (scs_vc_delivery_failed(&ps->vc)) {
-            /* vms-abc: the p. 2-31 DELIVERY guarantee has failed. */
             unsigned broken = scs_vc_break(&ps->vc, ps->pb, SCS_VC_BREAK_DELIVERY, stdout);
             if (scs_vc_break_enabled()) {
                 vc_breaks++;
                 vc_conns_broken += broken;
             }
+            continue;
+        }
+        /* (B) vms-691's retransmit. DEAD -- see the header. */
+        if (ps->connected || !ps->connect_sent) {
             continue;
         }
         if (ps->vc.retransmit_count >= VC_RETRANSMIT_MAX) {

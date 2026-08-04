@@ -112,12 +112,15 @@ def main():
         args = sorted(os.path.join(LAB_CAPTURES, f)
                       for f in os.listdir(LAB_CAPTURES) if f.endswith(".pcap"))
     total_seq = total_gap = total_dup = 0
+    files = 0
+    gap_sources = {}
     for p in args:
         try:
             r = scan(p)
         except Exception as exc:  # noqa: BLE001 -- a bad pcap must not hide the rest
             print(f"{os.path.basename(p):<62} SKIP ({exc})")
             continue
+        files += 1
         total_seq += r["sequenced"]
         total_gap += len(r["gaps"])
         total_dup += r["dups"]
@@ -125,10 +128,26 @@ def main():
               f"seqmsg={r['sequenced']:>6} inorder={r['inorder']:>6} "
               f"dup/retx={r['dups']:>5} anchors={len(r['anchors']):>3} starts={r['starts']:>4} "
               f"GAPS={len(r['gaps'])}")
+        # The per-file detail is truncated for readability; the SOURCE census
+        # below is over EVERY gap, because "which node emitted them" is the
+        # claim the detector's safety argument rests on and a truncated list
+        # cannot support it.
         for (idx, src, dst, cur, ss, miss) in r["gaps"][:8]:
             print(f"    gap @frame {idx}: {src[-4:]}->{dst[-4:]} "
                   f"recv_seq={cur} send_seq={ss} missing={miss}")
-    print(f"\nTOTAL sequenced messages={total_seq} dup/retx={total_dup} GAPS={total_gap}")
+        if len(r["gaps"]) > 8:
+            print(f"    ... {len(r['gaps']) - 8} more gap(s) in this file"
+                  f" (all counted in the census below)")
+        for (_idx, src, _dst, _cur, _ss, _miss) in r["gaps"]:
+            key = ":".join(src[i:i + 2] for i in range(0, 12, 2))
+            gap_sources[key] = gap_sources.get(key, 0) + 1
+    print(f"\nTOTAL pcaps={files} sequenced messages={total_seq} "
+          f"dup/retx={total_dup} GAPS={total_gap}")
+    print("GAP SOURCE CENSUS (every gap, not just the printed ones):")
+    if not gap_sources:
+        print("    (none)")
+    for mac, n in sorted(gap_sources.items(), key=lambda kv: -kv[1]):
+        print(f"    {mac}  {n}")
     return 0
 
 

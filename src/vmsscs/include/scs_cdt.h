@@ -96,28 +96,43 @@
  *     (the CDT address is the context); C callbacks in a daemon need one.
  *   - `conn_state` is an OPAQUE int here. This module stores it and never
  *     interprets it. The state values and every transition between them belong
- *     to the SCS connection state machine (vms-dd5), which is deliberately NOT
- *     implemented here.
+ *     to the SCS connection state machine, which is deliberately NOT
+ *     implemented here. It now EXISTS, in scs_conn.{h,c} (vms-dd5): the values
+ *     are enum scs_conn_state and the transitions are the tables of Figures
+ *     2-14/2-15/2-16. Nothing below changed to accommodate it.
  *
  * ===== REACHABILITY IN SCSD TODAY -- DO NOT READ A GREEN TEST RUN AS "OVMX
  * IMPLEMENTS THIS" =====
  *
  * This module and tests/vmsscs/test_scs_cdt.c implement and exercise the full
- * p. 2-28..2-30 model. THE DAEMON DOES NOT USE IT YET. src/vmsscs/scsd.c still
- * carries its three Con.IDs as node-global macros and still dispatches received
- * frames by comparing against those macros, and its per-connection state still
- * lives in `struct peer_state` fields (connected / dir_connected /
- * joiner_connected / *_remote_conid).
+ * p. 2-28..2-30 model.
  *
- * That wiring is NOT withheld out of laziness; it is blocked on two things
- * this item is explicitly fenced out of:
- *   - CDT allocation is driven by CONNECT_REQ / ACCEPT_REQ arrival and by
- *     connection state, which is the SCS connection state machine (vms-dd5).
- *   - OVMX's Con.IDs are currently node-global, shared across all peers, so a
- *     CDT's pb pointer could not be honestly filled for more than one peer.
- *     Per-peer connection identity arrives with the state machine too.
- * Until then OVMX has connection DESCRIPTORS but its daemon does not yet route
- * through them, and this comment is the honest statement of that gap.
+ * AS OF vms-dd5 THE DAEMON USES IT -- PARTLY. scsd.c now links this module,
+ * initializes one node-wide CDL, and allocates a CDT for each of the three
+ * connections it forms per peer (SCS$DIRECTORY, the member-opened
+ * VMS$VAXcluster, and the joiner-opened VMS$VAXcluster), claiming each at the
+ * EXACT node-global Con.ID it already put on the wire via scs_cdl_alloc_conid.
+ * Those CDTs carry live connection state driven by scs_conn.c.
+ *
+ * WHAT IS STILL NOT TRUE, so no one reads more into a green test run than is
+ * there:
+ *   - RECEIVED FRAMES ARE STILL NOT ROUTED THROUGH THE CDL. scsd.c continues to
+ *     DISPATCH by comparing a frame's Con.ID against the three macros. The one
+ *     exception is the [46:48] connection-control classifier, which does look
+ *     the destination Con.ID up with scs_cdl_lookup() -- but only to STEP the
+ *     state machine, never to deliver. scs_cdl_deliver_message() and
+ *     scs_cdl_deliver_datagram() still have NO production caller: the p. 2-29
+ *     delivery path is implemented and unit tested, and unused.
+ *   - `struct peer_state`'s connected / dir_connected / joiner_connected
+ *     booleans still gate every send. The CDT state is a RECORD of what those
+ *     booleans did, not a replacement for them.
+ *   - OVMX's Con.IDs are STILL node-global, so only ONE peer's connections can
+ *     occupy the three CDL slots. A second peer's connections are not tracked;
+ *     scsd.c logs SCSD-W-CONNSLOT and carries on rather than allocating a
+ *     Con.ID that differs from the one on the wire.
+ *   - Nothing here has a SYSAP: msg_input / dgram_input / vc_loss_handler are
+ *     never installed by the daemon, so scs_cdl_vc_loss() has no production
+ *     caller either.
  */
 #ifndef SCS_CDT_H
 #define SCS_CDT_H
@@ -181,6 +196,17 @@ struct scs_cdt;
 typedef void (*scs_msg_input_fn)(struct scs_cdt *cdt, const void *buf, size_t len, void *ctx);
 typedef void (*scs_dgram_input_fn)(struct scs_cdt *cdt, const void *buf, size_t len, void *ctx);
 typedef void (*scs_vc_loss_fn)(struct scs_cdt *cdt, void *ctx);
+
+/*
+ * vms-1d2 flow-control hooks. Declared here because the CDT carries them
+ * (p. 2-45: SCS keeps the per-connection flow-control state in the CDT), but
+ * defined and driven entirely by src/vmsscs/scs_credit.c -- see scs_credit.h.
+ *
+ * struct scs_credit_waiter is the OVMX stand-in for the VMS CDRP that p. 2-45
+ * queues to the CDT in a Credit Wait; it is opaque to this module.
+ */
+struct scs_credit_waiter;
+typedef void (*scs_credit_special_fn)(struct scs_cdt *cdt, unsigned credit, void *ctx);
 
 /*
  * struct scs_cdt - Connection Descriptor Table entry: SCS's description of one
@@ -263,6 +289,42 @@ struct scs_cdt {
     /* p. 2-44: the Minimum Send Credits argument the REMOTE SYSAP passed to
      * CONNECT/ACCEPT; the dangerously-low threshold is compared against it. */
     unsigned remote_min_send_credits;
+
+    /*
+     * vms-1d2: the p. 2-45 CREDIT WAIT queue, and the p. 2-44 special credit
+     * message emitter. Both are owned entirely by src/vmsscs/scs_credit.c --
+     * scs_cdt.c only zeroes them with the rest of the CDT at open and never
+     * reads them.
+     *
+     * "If no Send Credits are available, then this routine temporarily suspends
+     * the operation involved by placing it in a Credit Wait. This is done by
+     * queuing the CDRP representing the operation to the CDT for the
+     * connection." (p. 2-45) -- so the queue head belongs HERE, on the CDT, and
+     * not in a side table.
+     *
+     * The queue is FIFO: "Each of the SCS wait queues described here is a
+     * 'first in first out' queue ... Queue priority is based on time spent in
+     * the queue." (p. 2-46) `credit_wait_tail` is the OVMX means of keeping it
+     * FIFO with an O(1) append; VMS's queue primitives are doubly linked and
+     * the book publishes no layout for them.
+     *
+     * `credit_wait_draining` is an OVMX reentrancy guard, not an SCA concept:
+     * a resumed waiter may itself send or receive on this connection, and a
+     * nested drain of the same queue would resume waiters out of order.
+     */
+    struct scs_credit_waiter *credit_wait_head;
+    struct scs_credit_waiter *credit_wait_tail;
+    unsigned                  credit_wait_depth;
+    int                       credit_wait_draining;
+
+    /* p. 2-44: "local SCS immediately sends remote SCS a special credit message
+     * containing the local Pending Receive Credit count." OVMX cannot build
+     * that frame (its wire class is an open RE gap -- see
+     * docs/cluster-protocol-spec.md sec 5), so the CDT carries the SYSAP/port
+     * hook that WOULD send it. NULL = nothing is wired, which is the state
+     * scsd.c is in today. */
+    scs_credit_special_fn special_emit;
+    void                 *special_emit_ctx;
 };
 
 /*

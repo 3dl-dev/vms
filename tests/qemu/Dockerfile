@@ -32,25 +32,56 @@ ARG NEGATIVE_CONTROL=0
 # build below, vms-1d9): the raw-ioctl test_kmod_* programs only need
 # gcc/libc6-dev, but exercising the PUBLIC sys$ API needs the real
 # src/libvms build graph, which this job did not build at all before.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+#
+# WHY linux-image-VIRTUAL AND NOT linux-image-generic (vms-2c6)
+#
+# These are the same kernel. `linux-image-virtual` resolves to the identical
+# linux-image-6.8.0-NNN-generic + linux-modules-6.8.0-NNN-generic pair that
+# `linux-image-generic` pulls, so the vmlinuz booted below, the module tree
+# vms.ko/vmsfs.ko are built against, and loop.ko are all byte-for-byte what
+# they were. NOTHING THIS HARNESS TESTS CHANGES.
+#
+# The one difference is that the `generic` meta-package hard-Depends on
+# `linux-firmware` and the `virtual` one does not. linux-firmware is a
+# 641 MB download of device blobs -- and run_tests.sh boots this guest with
+# `-nic none -nodefaults -m 256M`, i.e. no NIC, no disk, no PCI device of any
+# kind. Not one of those blobs is ever read.
+#
+# Measured with `apt-get install --print-uris` on ubuntu:24.04:
+#     linux-image-generic + headers  ->  859 MB across 59 packages
+#     linux-image-virtual + headers  ->  126 MB across 53 packages
+#
+# That 733 MB was downloaded from archive.ubuntu.com by THREE separate CI
+# jobs on every run (kernel-executive, its negative control, and the
+# per-facility controls), none of which share a layer cache -- a GitHub-hosted
+# runner is a fresh VM, so there has never been a warm one to be cold. The
+# cost was invisible while the mirror was fast (925 MB fetched in 16s at
+# 56.7 MB/s on run 30913764276, whole build 104s) and fatal when it was not:
+# on run 30917573860 the same fetch stalled 706s on the linux-firmware package
+# alone and the job was cancelled at its 20m cap having never run its
+# assertion step at all. A cancelled job yields NO verdict, so this was also
+# silently degrading the authenticity gates to "not red" rather than "green".
+#
+# QEMU is installed in this SAME layer, and the arch-conditional picks only
+# the package NAME, deliberately. It used to be a second RUN with its own
+# `apt-get update` -- but the first one ends in `rm -rf /var/lib/apt/lists/*`,
+# so the second had to re-download the whole 31.9 MB package index. That is
+# not free at the mirror throughputs actually observed: on run 30927522942 the
+# two index fetches cost 3min39s and 1min8s (146 kB/s and 472 kB/s) on top of
+# the payload. One `apt-get update`, one index fetch. Same packages installed.
+RUN apt-get update && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
+    apt-get install -y --no-install-recommends \
     make gcc libc6-dev kmod \
     linux-headers-generic \
-    linux-image-generic \
+    linux-image-virtual \
     busybox-static \
     cpio \
     zstd \
     cmake musl-tools linux-libc-dev \
+    "$QEMU_PKG" \
     && rm -rf /var/lib/apt/lists/*
-
-# Install QEMU for the correct architecture
-RUN apt-get update && \
-    ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "arm64" ]; then \
-        apt-get install -y --no-install-recommends qemu-system-arm; \
-    else \
-        apt-get install -y --no-install-recommends qemu-system-x86; \
-    fi && \
-    rm -rf /var/lib/apt/lists/*
 
 # Determine kernel version from installed headers
 RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && \
@@ -233,7 +264,27 @@ RUN KVER=$(cat /tmp/kver) && \
     fi && \
     ls -la /boot/vmlinuz
 
-# Find and decompress loop.ko for block-device tests
+# Find and decompress loop.ko for block-device tests, IF it is a module.
+#
+# THE "not found" BRANCH IS THE NORMAL ONE, AND IT IS NOT A SKIP (vms-2c6).
+# Ubuntu builds the loop driver into the kernel (CONFIG_BLK_DEV_LOOP=y), so
+# there is no loop.ko under /lib/modules at all and this step takes the else
+# branch on every build -- including every build on main today. init.sh knows
+# this ("loop may be built-in or a module"): it insmods /lib/modules/loop.ko
+# only if the file exists, then runs losetup either way. Measured on run
+# 30913764276: this step printed the "not found" message AND the guest still
+# reported "OK: loop0 attached to vmsfs_test.img" and ran
+# test_kmod_vmsfs_blkdev to completion.
+#
+# The old message claimed "block-device test will skip", which is FALSE and
+# actively misleading -- it reads like a silently-dropped suite, which is the
+# one thing this project treats as a failing test. Reworded to say what is
+# actually true. Nothing about the image or the tests changes here; the whole
+# edit is the text of an echo.
+#
+# This is also unaffected by the linux-image-virtual move above: `virtual`
+# selects the SAME linux-image-6.8.0-NNN-generic binary, so the loop driver is
+# built in there exactly as before.
 RUN KVER=$(cat /tmp/kver) && \
     LOOP_MOD=$(find /lib/modules/$KVER -name 'loop.ko*' | head -1) && \
     if [ -n "$LOOP_MOD" ]; then \
@@ -246,7 +297,11 @@ RUN KVER=$(cat /tmp/kver) && \
         esac; \
         echo "Decompressed: $(ls -la /tmp/loop.ko)"; \
     else \
-        echo "WARNING: loop.ko not found, block-device test will skip"; \
+        echo "loop.ko is not a module in this kernel (CONFIG_BLK_DEV_LOOP=y)."; \
+        echo "This is the EXPECTED path on Ubuntu. The block-device test still"; \
+        echo "runs -- init.sh calls losetup against the built-in driver; watch"; \
+        echo "for 'OK: loop0 attached' and the test_kmod_vmsfs_blkdev suite in"; \
+        echo "the guest output. Nothing is skipped."; \
     fi
 
 # Assemble initramfs
@@ -261,7 +316,8 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # Kernel modules
     cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
     cp /src/kernel/vmsfs/vmsfs.ko /initramfs/lib/modules/ && \
-    # Loop module (for block-device test)
+    # Loop module, only if this kernel has it as a module. On Ubuntu it does
+    # not (built in -- see the step above), so this is normally a no-op.
     [ -f /tmp/loop.ko ] && cp /tmp/loop.ko /initramfs/lib/modules/ || true && \
     # Block-device test image
     [ -f /vmsfs_test.img ] && cp /vmsfs_test.img /initramfs/test_data/ || true && \

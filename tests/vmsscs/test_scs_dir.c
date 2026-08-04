@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "scs_conn.h" /* vms-dd5: the connection state machine + wire->event map */
 #include "scs_dir.h"
 
 static int failures = 0;
@@ -412,6 +413,92 @@ static void test_source_conid_p235(void)
           "94-byte lookup response carries BOTH Con.IDs non-zero (p. 2-35)");
 }
 
+/*
+ * vms-dd5: THE FRAMES THIS MODULE BUILDS ARE FIGURE 2-14 MESSAGES, and the
+ * state machine must classify them as such.
+ *
+ * docs/cluster-protocol-spec.md sec 4(h)(1a) grounds the [46:48] field as the
+ * SCA connection-control message type (0=CONNECT_REQ, 1=CONNECT_RSP,
+ * 2=ACCEPT_REQ, 3=ACCEPT_RSP over 16 dialogues), REFUTING the "per-dialogue
+ * message counter" reading this file's own header cites. That makes OVMX's two
+ * directory-connect frames the CONNECT_RSP and the ACCEPT_REQ of *VAXcluster
+ * Principles* Figure 2-14 -- which is exactly what src/vmsscs/scsd.c now tells
+ * the machine when it sends them.
+ *
+ * This test closes that loop end to end WITHOUT A SOCKET: it takes the bytes the
+ * production builders emit, reads the message type back out of them with the
+ * production parser, and asserts the production mapping turns it into the event
+ * scsd.c feeds. If any one of the three drifts, this reds.
+ */
+static void test_connect_frames_classify_as_figure_2_14_messages(void)
+{
+    printf("[vms-dd5 Figure 2-14 classification of the frames we build]\n");
+
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, vax1_mac, 6);
+    memcpy(p.src_mac, ovmx_mac, 6);
+    memcpy(p.src_logical, ovmx_logical, 6);
+    memcpy(p.peer_logical, vax1_mac, 6);
+    p.remote_conid = 0x63050008u;
+    p.local_conid = SCS_DIR_OVMX_CONID;
+
+    /* --- the op=1 CONNECT-ECHO is Figure 2-14's CONNECT_RSP --- */
+    uint8_t echo[SCS_DIR_ECHO_FRAME_LEN];
+    check(scs_dir_build_connect_echo(&p, echo) == 0, "build the op=1 CONNECT-ECHO");
+    struct scs_dir_view ev_view;
+    check(scs_dir_parse(echo, sizeof(echo), &ev_view) == 0, "parse it back");
+    check(ev_view.op == 1, "the CONNECT-ECHO carries connection-control message type 1");
+    /* Its SHAPE must be the CONNECT_RSP shape the spec grounds: destination
+     * echoed, source still zero. A CONNECT_RSP structurally cannot carry the
+     * responder's handle -- that is what makes it not the accept. */
+    check(ev_view.remote_conid == 0x63050008u && ev_view.local_conid == 0,
+          "the CONNECT-ECHO has the CONNECT_RSP Con.ID shape (dest echoed, source 0)");
+    check(sizeof(echo) - 14 == 66, "the CONNECT-ECHO is the grounded 66-byte class");
+    enum scs_conn_event ev;
+    check(scs_conn_event_for_msgtype(ev_view.op, &ev) == 1, "message type 1 is mapped");
+    check(ev == SCS_CONN_EV_RCV_CONNECT_RSP,
+          "message type 1 maps to RCV_CONNECT_RSP");
+
+    /* --- the op=2 CONNECT-RESPONSE is Figure 2-14's ACCEPT_REQ --- */
+    uint8_t resp[SCS_DIR_RESP_FRAME_LEN];
+    check(scs_dir_build_connect_response(&p, resp) == 0, "build the op=2 CONNECT-RESPONSE");
+    struct scs_dir_view rv;
+    check(scs_dir_parse(resp, sizeof(resp), &rv) == 0, "parse it back");
+    check(rv.op == 2, "the CONNECT-RESPONSE carries connection-control message type 2");
+    check(rv.remote_conid == 0x63050008u && rv.local_conid == SCS_DIR_OVMX_CONID,
+          "the CONNECT-RESPONSE has the ACCEPT_REQ shape (both Con.IDs supplied)");
+    check(sizeof(resp) - 14 == 110, "the CONNECT-RESPONSE is the grounded 110-byte class");
+    check(scs_conn_event_for_msgtype(rv.op, &ev) == 1, "message type 2 is mapped");
+    check(ev == SCS_CONN_EV_RCV_ACCEPT_REQ, "message type 2 maps to RCV_ACCEPT_REQ");
+
+    /* --- and the two together walk the target's Figure 2-14 column --- */
+    static struct scs_cdl cdl;
+    scs_cdl_init(&cdl);
+    struct scs_cdt *c = scs_cdl_alloc_conid(&cdl, SCS_DIR_OVMX_CONID, "SCS$DIRECTORY",
+                                            "SCS$DIRECTORY", NULL);
+    check(c != NULL, "allocate the SCS$DIRECTORY CDT at the Con.ID we put on the wire");
+    if (c == NULL) {
+        return;
+    }
+    scs_conn_fsm_init(c);
+    struct scs_conn_transition t = scs_conn_fsm_step(c, SCS_CONN_EV_RCV_CONNECT_REQ);
+    check(t.action == SCS_CONN_ACT_SEND_CONNECT_RSP && t.to == SCS_CONN_CONNECT_REC,
+          "a received CONNECT_REQ makes the machine ask for the frame we build first");
+    t = scs_conn_fsm_step(c, SCS_CONN_EV_SVC_ACCEPT);
+    check(t.action == SCS_CONN_ACT_SEND_ACCEPT_REQ && t.to == SCS_CONN_ACCEPT_SENT,
+          "accepting makes the machine ask for the frame we build second");
+    t = scs_conn_fsm_step(c, SCS_CONN_EV_RCV_ACCEPT_RSP);
+    check(t.to == SCS_CONN_OPEN && !t.illegal,
+          "the peer's message-type-3 ACCEPT_RSP opens the connection");
+
+    /* The application class (10) carries every steady-state frame and is NOT a
+     * connection-control message -- feeding it to the machine would score an
+     * illegal event on every lookup. */
+    check(scs_conn_event_for_msgtype(SCS_DIR_OP_LOOKUP, &ev) == 0,
+          "the lookup/application message type is NOT a connection-control message");
+}
+
 int main(void)
 {
     printf("test_scs_dir: SCS$DIRECTORY connect + SCS$DIR_LOOKUP (vms-246)\n");
@@ -420,6 +507,7 @@ int main(void)
     test_build_lookup_response();
     test_incarnation_echo();
     test_source_conid_p235();
+    test_connect_frames_classify_as_figure_2_14_messages();
     printf("test_scs_dir: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

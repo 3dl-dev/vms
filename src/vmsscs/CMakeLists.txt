@@ -98,21 +98,39 @@ target_link_libraries(vmsscs_cdt PUBLIC vmsscs_config)
 # grounded at SCA [48:50] from our own lab captures (see the WIRE VERDICT in
 # scs_credit.h). Depends on vmsscs_cdt for struct scs_cdt / struct scs_pdt.
 #
+# vms-1d2 extends it with the p. 2-45 CREDIT WAIT queue on the CDT (a starved
+# sender is suspended and resumed FIFO when credit arrives, pp. 2-45..2-46) and
+# the p. 2-44 special credit message trigger.
+#
 # NOT LINKED INTO scsd_exe: nothing in the daemon calls it yet, and OVMX
-# therefore still emits no live credit. See the reachability note in
-# scs_credit.h -- do not read a green test run as "OVMX does flow control".
+# therefore still emits no live credit, enters no Credit Wait and sends no
+# special credit message. See the reachability notes in scs_credit.h -- do not
+# read a green test run as "OVMX does flow control".
 add_library(vmsscs_credit STATIC scs_credit.c)
 target_include_directories(vmsscs_credit PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(vmsscs_credit PUBLIC vmsscs_cdt)
 
+# vms-dd5 - THE SCA CONNECTION STATE MACHINE (VAXcluster Principles ch. 2,
+# Figures 2-14/2-15/2-16, pp. 2-22..2-27). Pure state: a static const transition
+# table, one store into struct scs_cdt's conn_state, and a transition log. Builds
+# no frame, parses no frame, opens no socket. Depends on vmsscs_cdt because the
+# state it drives is the CDT field vms-e1a reserved for it.
+add_library(vmsscs_conn STATIC scs_conn.c)
+target_include_directories(vmsscs_conn PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_conn PUBLIC vmsscs_cdt)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config)
+# vms-dd5 links vmsscs_conn (and, transitively, vmsscs_cdt -- which until this
+# item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

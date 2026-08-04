@@ -1848,6 +1848,74 @@ static void test_captured_member_connect_drives_the_machine(void)
 }
 
 /*
+ * vms-561 -- THE MEMBER CONNECT ON A CLOSED CIRCUIT IS A *COUNTED* REFUSAL.
+ *
+ * The p. 2-31 refusal on this path must stay VISIBLE after the migration to the
+ * ACCEPT service, and that is a stronger claim than "no frame went out". Two
+ * things can suppress the frame now:
+ *
+ *   - scsd.c's up-front scsd_refuse_without_open_vc(), which logs SCSD-E-NOVC
+ *     and increments vc_sends_refused -- the pre-migration behaviour, since the
+ *     send that used to be refused inside send_frame_vc() is the one it refuses
+ *     instead;
+ *   - scs_accept()'s own CONFIG_PATH check, which refuses SILENTLY (it has no
+ *     daemon logging and does not know about vc_sends_refused).
+ *
+ * If only the second survives, a broken circuit swallows connect requests with
+ * NOTHING in the run log and NOTHING in the exit summary -- the silent-drop
+ * failure CLAUDE.md rule 9 / INV-6 exists to forbid. MEASURED: deleting the
+ * up-front refusal leaves the whole suite green without this case. It is here
+ * because a mutant walked through.
+ */
+static void test_member_connect_on_a_closed_circuit_is_a_counted_refusal(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    if (ps == NULL) {
+        return;
+    }
+    /* Answer once on the OPEN circuit: the control, so the zero below is a
+     * statement about the CLOSED circuit and not about a fixture that reaches
+     * nothing. */
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    CHECK(r.rx.connect_resp_sent == 1,
+          "PRECONDITION: the OPEN circuit produced %ld CONNECT-RESPONSEs, expected 1",
+          r.rx.connect_resp_sent);
+
+    /* Now break it and replay the identical frame. */
+    scs_pb_set_vc_state(ps->pb, SCS_VC_CLOSED);
+    ps->novc_logged = 0; /* the per-break latch, as scsd_vc_on_open would clear it */
+    unsigned long refused_before = vc_sends_refused;
+    unsigned frames_before = scsd_test_frames;
+    long resp_before = r.rx.connect_resp_sent;
+    rxlog_reset();
+
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+
+    CHECK(scsd_test_frames == frames_before,
+          "%u frame(s) went out answering a CONNECT-REQUEST on a CLOSED circuit",
+          scsd_test_frames - frames_before);
+    CHECK(r.rx.connect_resp_sent == resp_before,
+          "a CONNECT-RESPONSE was counted sent on a CLOSED circuit (%ld -> %ld)",
+          resp_before, r.rx.connect_resp_sent);
+    /* TWO refusals, and both are named because the NUMBER is the discriminator.
+     * This one frame reaches two senders: the 0x48 credit-return the frame is
+     * acked with, and the 0x4b CONNECT-RESPONSE the ACCEPT service would emit.
+     * MEASURED both ways -- with scsd.c's up-front refusal in place the delta is
+     * 2; deleting it makes the delta 1, because scs_accept() then refuses
+     * silently on its own CONFIG_PATH check and the connect request is swallowed
+     * with nothing in the log and nothing in the exit summary. */
+    CHECK(vc_sends_refused == refused_before + 2,
+          "the CONNECT-RESPONSE refusal was not COUNTED: vc_sends_refused"
+          " %lu -> %lu, expected +2 (the 0x48 credit-return AND the 0x4b"
+          " CONNECT-RESPONSE). A silently swallowed connect request is invisible"
+          " in the exit summary", refused_before, vc_sends_refused);
+    CHECK(rxlog_has("SCSD-E-NOVC"),
+          "the refusal was SILENT -- no SCSD-E-NOVC line (CLAUDE.md rule 9 / INV-6)");
+}
+
+/*
  * (3) THE [46:48] CONNECTION-CONTROL CLASSIFIER. This is the branch that had no
  * other call site at all: before vms-dd5 the daemon did not react to a peer's
  * CONNECT_RSP, so a connection the peer had parked was invisible.
@@ -3843,6 +3911,7 @@ int main(void)
      * with frames taken byte-exact off the reference-lab wire. */
     test_captured_directory_connect_drives_the_machine();
     test_captured_member_connect_drives_the_machine();
+    test_member_connect_on_a_closed_circuit_is_a_counted_refusal();
     test_captured_connect_rsp_drives_the_classifier();
     test_captured_ovmx_accept_req_opens_the_joiner();
     test_null_source_conid_binds_nothing();

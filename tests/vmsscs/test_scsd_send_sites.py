@@ -25,6 +25,12 @@ WHAT IT ASSERTS, against src/vmsscs/scsd.c itself:
      exactly one choke point and not two.
   4. The choke point still consults SCS_VC_OPEN. (A guard that stopped checking
      would leave 1-3 all green.)
+  7. (vms-561) NO SITE BUILDS A CONNECTION-CONTROL FRAME BY HAND: the four
+     connect/accept frame builders are called only from the three service
+     emitters, those emitters all still build something, and scsd.c still
+     reaches scs_connect()/scs_accept(). A re-added open-coded CONNECT-RESPONSE
+     would otherwise keep every runtime test green while putting a connection on
+     the wire that no CDT describes.
 
 WHY CHECK 0 EXISTS, measured. Without it this census made a completeness claim
 it could not support: main()'s HELLO beacon loop called sendto() on the
@@ -379,6 +385,59 @@ if guard:
     check("scs_config_path" in guard.group(0),
           "scsd_refuse_without_open_vc() no longer reads the circuit through "
           "CONFIG_PATH (p. 2-47)")
+
+# --- check 7 (vms-561): NO SITE BUILDS A CONNECTION-CONTROL FRAME BY HAND. ---
+#
+# The five SCS services (src/vmsscs/scs_svc.c) own connection formation. scsd.c
+# is the port driver: it builds the frames, but only when a service asks it to,
+# from the three emitters the SEND SITE TABLE names. That is a SHAPE claim of
+# exactly the kind a runtime test cannot make -- a re-added open-coded
+# CONNECT-RESPONSE somewhere else would keep every existing test green while
+# putting a connection on the wire that no CDT describes and no state machine
+# ever saw.
+#
+# So: the four connection-control frame BUILDERS may be called only from the
+# emitters, and the emitters may be called only by name (they are handed to
+# scs_connect/scs_accept as args.emit, never invoked directly).
+CONN_BUILDERS = (
+    "scs_connect_build_request",
+    "scs_connect_build_response",
+    "scs_dir_build_connect_echo",
+    "scs_dir_build_connect_response",
+)
+BUILDER_CALLERS = {
+    "scsd_svc_emit_connect_req",
+    "scsd_svc_emit_dir_accept",
+    "scsd_svc_emit_member_accept",
+}
+builder_sites = {}
+for i, line in enumerate(code_lines):
+    for b in CONN_BUILDERS:
+        if re.search(r"\b" + b + r"\s*\(", line):
+            builder_sites.setdefault(owner[i], []).append((i + 1, b))
+
+check(bool(builder_sites),
+      "no connection-control frame builder is called anywhere in scsd.c -- the "
+      "builder scan is broken, not the source")
+for fn, at in sorted(builder_sites.items(), key=lambda kv: (kv[0] or "")):
+    check(fn in BUILDER_CALLERS,
+          f"{fn or '<file scope>'}() builds a connection-control frame by hand "
+          f"at scsd.c line(s) {[a for a, _ in at]} ({sorted({b for _, b in at})}). "
+          f"vms-561 requires connection formation to go through the SCS "
+          f"services: allocate through scs_connect()/scs_accept() and build the "
+          f"frame in the emitter they call. A hand-built connect/accept frame "
+          f"puts a connection on the wire that no CDT describes.")
+for fn in sorted(BUILDER_CALLERS):
+    check(fn in builder_sites,
+          f"{fn}() builds no connection-control frame -- it was renamed or "
+          f"gutted, and this check has gone stale rather than passing")
+
+# The services must actually be reached. A migration that deleted the calls
+# would leave every check above green with nothing driving them.
+for svc in ("scs_connect", "scs_accept"):
+    n = sum(1 for line in code_lines if re.search(r"\b" + svc + r"\s*\(\s*scsd_svc\(\)", line))
+    check(n > 0, f"nothing in scsd.c calls {svc}() -- connection formation is "
+                 f"no longer going through the SCS services")
 
 for f in failures:
     print("FAIL " + f, file=sys.stderr)

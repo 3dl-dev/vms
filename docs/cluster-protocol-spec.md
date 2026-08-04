@@ -1711,6 +1711,16 @@ For visibility, every field NOT marked GROUNDED above:
   decoded), `6` (DISCONNECT_REQ, plausible only), and the total **absence of
   `5` and `7`** — the REJECT_RSP and DISCONNECT_RSP halves that Figures 2-15 and
   2-16 require are on no capture we hold. Do not emit either.
+  **This gap is now a COUNTED RUNTIME FIGURE, not only a note** (`vms-561`): the
+  five SCS services (`src/vmsscs/scs_svc.c`) ask the port driver to emit the
+  packet each transition names, and `scsd.c` answers `SCS_SVC_EMIT_NOBUILDER`
+  for every class OVMX cannot build — `CONNECT_RSP`, `ACCEPT_RSP`, `REJECT_REQ`,
+  `REJECT_RSP`, `DISCONNECT_REQ`, `DISCONNECT_RSP`. Each one logs
+  `SCSD-W-CONNNOACT` and increments `struct scs_svc_port::unemitted`, so the
+  distance between OVMX's frame vocabulary and SCA's is a number in every run
+  log rather than a sentence in a header. On a normal join the member-opened
+  `VMS$VAXcluster` connection produces exactly one such report per formation
+  (the `CONNECT_RSP` the real VAX does send, 16 of 16 dialogues).
 - **Joining an ESTABLISHED cluster** (§4i, `vms-af2`): **RESOLVED — two distinct
   differences.** (A) The established member's round-0 `0x41` START
   `send_seq[20:22]` = `prior_VC_send_seq+1` (residual VC continuation, e.g.

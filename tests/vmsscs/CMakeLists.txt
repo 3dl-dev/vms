@@ -226,7 +226,7 @@ target_include_directories(test_scsd_wire PRIVATE
 target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
-    vmsscs_depart vmsscs_dgram
+    vmsscs_depart vmsscs_dgram vmsscs_svc
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)
@@ -342,6 +342,28 @@ target_link_libraries(test_scs_dgram PRIVATE vmsscs_dgram vmsscs_depart)
 
 add_test(NAME vmsscs_dgram_unit COMMAND test_scs_dgram)
 set_tests_properties(vmsscs_dgram_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
+# vms-561 - THE FIVE SCS SYSAP SERVICES: LISTEN, CONNECT, ACCEPT, REJECT,
+# DISCONNECT (VAXcluster Principles pp. 2-22..2-27, p. 2-56). Asserts the
+# p. 2-56 allocation rule as a number on every service (CONNECT and ACCEPT
+# allocate, DISCONNECT releases, REJECT never touches the CDL), the p. 2-47
+# circuit-selection refusal, the descriptorless OVMX_NO_CONN_FSM mode with a
+# matched control, and -- the integration case -- two independent SCS instances
+# forming, USING and tearing down a connection through the services, ending with
+# both CDLs empty and both ports' p. 2-42/2-43 buffer deposits returned.
+add_executable(test_scs_svc test_scs_svc.c)
+
+target_include_directories(test_scs_svc PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_svc PRIVATE vmsscs_svc vmsscs_dir)
+
+add_test(NAME vmsscs_svc_unit COMMAND test_scs_svc)
+set_tests_properties(vmsscs_svc_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )

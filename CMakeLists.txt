@@ -265,6 +265,21 @@ if(BUILD_TESTS)
         LABELS "integration;authenticity;needs-rd"
         SKIP_RETURN_CODE 77 TIMEOUT 300)
 
+    # The QEMU harness reaches the right verdict (vms-b1f). run_tests.sh used
+    # to decide "did this run report zero failed suites?" with a pipeline under
+    # `set -o pipefail`: grep -q exits on match without draining, echo takes
+    # SIGPIPE, the pipeline reports 141, and the harness printed KERNEL MODULE
+    # TESTS FAILED on a run with ZERO failures. It needed more than one pipe
+    # buffer of output AFTER the matching line, which is why a small transcript
+    # never showed it. These controls execute the verdict against synthetic
+    # transcripts — no QEMU, no container — so the decision is testable on any
+    # host, including the ones where run_facility_negctl.sh cannot run at all.
+    add_test(NAME qemu_harness_verdict
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_qemu_harness_verdict.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(qemu_harness_verdict PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 120)
+
     # Userspace service register (vms-5b4): every sys$ service either reaches
     # the executive or is declared, against an item, as answering from
     # userspace. The census asks "is this vms_kif wrapper called?" and cannot

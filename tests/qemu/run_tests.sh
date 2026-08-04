@@ -7,6 +7,15 @@
 
 set -euo pipefail
 
+# The verdict lives in a sourceable helper (rd vms-b1f) so that run_tests.sh
+# and the controls that exercise it cannot drift, and so that the decision is
+# testable without booting QEMU. It takes a FILE, deliberately: the defect it
+# replaces was `echo "$OUTPUT" | grep -q ...` under pipefail, where grep exits
+# on match without draining, echo takes SIGPIPE, and the pipeline reports 141 —
+# inverting the verdict on any run with more than a pipe buffer of output after
+# the matching line. Do not reintroduce a pipeline here.
+. "$(dirname "$0")/lib/harness_verdict.sh"
+
 TIMEOUT=120
 KERNEL=/boot/vmlinuz
 INITRD=/initramfs.cpio.gz
@@ -63,7 +72,11 @@ echo ""
 #   - the negative-control job asserts a NONZERO exit and gets 0, so it fails
 #     with "expected the harness to fail, but it exited 0".
 # [^0-9] before the 0 requires the zero to stand alone.
-if echo "$OUTPUT" | grep -qE "FINAL RESULTS:.*[^0-9]0 suites failed"; then
+OUTPUT_FILE=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
+trap 'rm -f "$OUTPUT_FILE"' EXIT
+printf '%s\n' "$OUTPUT" > "$OUTPUT_FILE"
+
+if harness_verdict_zero_failures "$OUTPUT_FILE"; then
     echo "=========================================="
     echo "  ALL KERNEL MODULE TESTS PASSED"
     echo "=========================================="
@@ -75,6 +88,6 @@ else
     # Show individual test results for easy diagnosis
     echo ""
     echo "Individual test results:"
-    echo "$OUTPUT" | grep -E "(PASS|FAIL):" || true
+    grep -E "(PASS|FAIL):" "$OUTPUT_FILE" || true
     exit 1
 fi

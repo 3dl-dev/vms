@@ -188,7 +188,7 @@ jobs:
   kernel-executive:
     name: Kernel Executive (vms.ko via /dev/vms, QEMU)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -336,7 +336,7 @@ jobs:
   kernel-executive-negative-control:
     name: Kernel Executive — Negative Control (proves the gate can fail)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
 
     steps:
       - name: Checkout

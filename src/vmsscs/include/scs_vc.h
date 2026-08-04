@@ -513,6 +513,19 @@ enum scs_vc_action scs_vc_fsm_timeout(struct scs_pb *pb, uint64_t now_ms,
  *     scs_pb_close() -- which zeroes the PB and would dangle every CDT still
  *     queued to it -- is the caller's decision and belongs to the teardown path
  *     (vms-17f), not to the detector.
+ *  5. WHAT STOPS THE SENDING AFTERWARDS IS THE **CLOSED PATH BLOCK**, NOT THE
+ *     SYSAP HANDLER. scsd.c's scsd_sysap_vc_loss() clears the daemon's
+ *     bound-connection flags, and an earlier revision claimed that was what
+ *     kept OVMX from transmitting into a broken circuit. It is NOT: two of the
+ *     three flags are read NEGATED by the dispatch, so clearing them RE-ARMS
+ *     those sends. MEASURED -- replaying the peer's captured SCS$DIRECTORY
+ *     CONNECT-REQUEST after a break produced a second CONNECT-RESPONSE on a
+ *     CLOSED circuit. Because of note 4 the PB is still there and still says
+ *     CLOSED, and that is the durable fact every send path must consult:
+ *     scsd.c's send_joiner_connect_request(), its directory-reply guard
+ *     scsd_refuse_without_open_vc() and its joiner-retransmit predicate all
+ *     read it through CONFIG_PATH and refuse with SCSD-E-NOVC. A new send path
+ *     that does not consult it will happily transmit into a broken circuit.
  */
 
 /* Why a circuit was broken. */

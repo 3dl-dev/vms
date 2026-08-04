@@ -573,12 +573,30 @@ static unsigned long sysap_vc_loss_notifications = 0; /* SYSAP handlers actually
  * at 0, including the deliberately-not-gated combination (departure sweep with
  * OVMX_NO_VC_BREAK=1 set, where the notification MUST still fire).
  *
- * WHAT IT DOES: clears the send gate for exactly the connection that was
- * broken. Those three booleans are what actually decide whether scsd.c sends
- * anything on a connection, so leaving them set after declaring the circuit
- * broken would keep OVMX transmitting into it -- the precise thing p. 2-31
- * forbids ("Any attempt to send a message from one port to another in the
- * absence of a virtual circuit will fail").
+ * WHAT IT DOES: clears the bound-connection flag for exactly the connection
+ * that was broken, so the daemon's view of what is bound matches the CDT it
+ * just closed.
+ *
+ * WHAT IT DOES **NOT** DO, and an earlier revision of this comment claimed it
+ * did -- the claim was FALSE and was measured false. It said these three
+ * booleans "are what actually decide whether scsd.c sends anything on a
+ * connection, so leaving them set ... would keep OVMX transmitting". Two of the
+ * three are read NEGATED: the directory CONNECT-REQUEST branch gates on
+ * `!ps->dir_connected`, and the prompt-joiner branch and
+ * scsd_joiner_retransmit_pending() gate on `!ps->joiner_connected`. Clearing
+ * them RE-ARMS those sends. MEASURED: with no other guard, replaying the peer's
+ * captured SCS$DIRECTORY CONNECT-REQUEST after a seq-gap break made OVMX emit a
+ * SECOND directory CONNECT-RESPONSE (dir_conn_resp_sent 1 -> 2) on a Path Block
+ * whose vc_state was CLOSED. Only `ps->connected` (the member-opened
+ * connection, read POSITIVE at the 0x4b branch) is suppressed by the clear.
+ *
+ * WHAT ACTUALLY ENFORCES p. 2-31 ("Any attempt to send a message from one port
+ * to another in the absence of a virtual circuit will fail") is the CLOSED Path
+ * Block, on the paths that consult it: send_joiner_connect_request(), which
+ * selects the circuit through CONFIG_PATH and refuses with SCSD-E-NOVC when
+ * none is OPEN, and the directory CONNECT-REQUEST branch, which calls
+ * scsd_refuse_without_open_vc(). Both refusals are asserted, with matched
+ * controls, in tests/vmsscs/test_scsd_wire.c.
  *
  * WHAT IT DELIBERATELY DOES NOT DO, so nobody reads more into it: it does not
  * free the peer slot, does not release the CDT, and does not re-drive a join.
@@ -604,7 +622,7 @@ static void scsd_sysap_vc_loss(struct scs_cdt *cdt, void *ctx)
     }
     log_ts(stdout);
     printf(" SCSD-W-SYSAPVCLOSS, SYSAP notified: connection %s (conid=0x%08X)"
-           " is broken; its send gate is cleared\n",
+           " is broken; it is no longer bound\n",
            which, cdt != NULL ? (unsigned)cdt->local_conid : 0u);
     fflush(stdout);
 }
@@ -1372,12 +1390,88 @@ struct scsd_rx {
  * `pb != NULL` is not in the original inline guard because the enclosing branch
  * already established it; it is spelled out here so the predicate is safe to
  * call on any peer slot.
+ *
+ * THE OPEN-CIRCUIT TERM IS NOT COSMETIC -- it fixes a live symptom. Every other
+ * term stays TRUE FOREVER after a delivery break: the break leaves the Path
+ * Block in place (scs_vc.h note 4 -- breaking a circuit does not deallocate
+ * it), start_acked and joiner_connect_sent are latched, and joiner_connected is
+ * CLEARED by scsd_sysap_vc_loss(), which this predicate reads NEGATED. So the
+ * daemon kept re-entering this branch once per directed HELLO, roughly 1 Hz,
+ * for the rest of the run -- each time calling send_joiner_connect_request(),
+ * which found no OPEN circuit and logged SCSD-E-NOVC. Honest (it never faked a
+ * send) but endless, and the retransmit it was attempting is exactly what
+ * p. 2-31 forbids on a broken circuit. Asking the Path Block up front stops the
+ * attempt at its source rather than rate-limiting its complaint. The circuit is
+ * read through CONFIG_PATH (p. 2-47) for the same reason
+ * send_joiner_connect_request() reads it that way.
  */
 static int scsd_joiner_retransmit_pending(const struct scsd_rx *rx,
                                           const struct peer_state *ps)
 {
-    return rx != NULL && rx->do_connect && ps != NULL && ps->pb != NULL &&
-           ps->start_acked && ps->joiner_connect_sent && !ps->joiner_connected;
+    if (!(rx != NULL && rx->do_connect && ps != NULL && ps->pb != NULL &&
+          ps->start_acked && ps->joiner_connect_sent && !ps->joiner_connected)) {
+        return 0;
+    }
+    struct scs_config_path_info path;
+    return scs_config_path(ps->pb, &path) && path.vc_state == SCS_VC_OPEN;
+}
+
+/*
+ * scsd_refuse_without_open_vc - vms-abc: p. 2-31's send precondition, applied
+ * to a reply the daemon is about to build. Returns 1 (and logs) when the peer's
+ * Path Block does NOT have an OPEN virtual circuit, meaning the caller must
+ * send nothing; returns 0 when the circuit is OPEN and the send may proceed.
+ *
+ * WHY THIS EXISTS -- a defect this item introduced, not a precaution.
+ * scsd_sysap_vc_loss() clears ps->dir_connected / ps->connected /
+ * ps->joiner_connected when a circuit is broken. Two of those three are read
+ * NEGATED by the dispatch below (`!ps->dir_connected` at the directory
+ * CONNECT-REQUEST branch, `!ps->joiner_connected` at the prompt-joiner branch
+ * and in scsd_joiner_retransmit_pending()), so clearing them RE-ARMS those
+ * sends rather than suppressing them. MEASURED before this guard existed: after
+ * a sequence gap broke the circuit, replaying the peer's captured SCS$DIRECTORY
+ * CONNECT-REQUEST made OVMX emit a second directory CONNECT-RESPONSE
+ * (dir_conn_resp_sent 1 -> 2) and re-bind the connection (conn state ACCEPT
+ * SENT) on a Path Block whose vc_state was CLOSED -- precisely the emission
+ * p. 2-31 forbids ("Any attempt to send a message from one port to another in
+ * the absence of a virtual circuit will fail").
+ *
+ * WHAT ACTUALLY STOPS THE SEND, stated exactly, because the previous revision
+ * of this file claimed the gate-clearing did it and that claim was false: the
+ * CLOSED Path Block does, on the paths that consult it. Those paths are
+ * send_joiner_connect_request(), which reads the circuit through CONFIG_PATH
+ * and refuses with SCSD-E-NOVC when no PB is OPEN, and the directory
+ * CONNECT-REQUEST branch, which calls this function. The gate booleans decide
+ * only whether a send is ATTEMPTED; the Path Block decides whether it happens.
+ *
+ * The state is read through scs_config_path() -- CONFIG_PATH (p. 2-47) -- for
+ * the same reason send_joiner_connect_request() does: the daemon then sees the
+ * same view of a path any other CONFIG_PATH caller would, rather than reaching
+ * into the Path Block. A peer with no Path Block at all, or one CONFIG_PATH
+ * refuses to describe, is also "no circuit" and is refused the same way.
+ */
+static int scsd_refuse_without_open_vc(const struct peer_state *ps, const char *what)
+{
+    struct scs_config_path_info path;
+    if (ps != NULL && ps->pb != NULL && scs_config_path(ps->pb, &path) &&
+        path.vc_state == SCS_VC_OPEN) {
+        return 0;
+    }
+    /* Never silent: a dropped reply that says nothing reads as a healthy run
+     * (CLAUDE.md rule 9 / INV-6). Name the circuit, its state and what was
+     * suppressed. */
+    const uint8_t *pa = ps_port_addr(ps);
+    log_ts(stderr);
+    fprintf(stderr,
+            " SCSD-E-NOVC, no OPEN virtual circuit to peer"
+            " %02x:%02x:%02x:%02x:%02x:%02x (circuit is %s) -- %s NOT sent"
+            " (p. 2-31: a send with no virtual circuit fails)\n",
+            pa[0], pa[1], pa[2], pa[3], pa[4], pa[5],
+            (ps != NULL && ps->pb != NULL) ? scs_vc_state_name(ps->pb->vc_state)
+                                           : "absent",
+            what);
+    fflush(stderr);
+    return 1;
 }
 
 /*
@@ -2102,7 +2196,8 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
              * (e.g. a 0x7b retransmit); note_recv only advances the high-water. */
             scs_vc_note_recv(&ps->vc, dv.send_seq);
 
-            if (dv.is_dir_connect_request && !ps->dir_connected) {
+            if (dv.is_dir_connect_request && !ps->dir_connected &&
+                !scsd_refuse_without_open_vc(ps, "SCS$DIRECTORY CONNECT-RESPONSE")) {
                 /* Learn the peer's SCS$DIRECTORY handle (its local Con.ID),
                  * then reply op=1 CONNECT-ECHO + op=2 CONNECT-RESPONSE. Each
                  * is a sequenced message: advance OVMX's send_seq per frame

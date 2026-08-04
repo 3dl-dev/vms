@@ -191,8 +191,16 @@ static void test_no_extra_documented_rows(void)
 /*
  * Every UNdocumented row must be one of the OVMX additions scs_conn.h names. A
  * new unlabeled shortcut must fail this test, not slip in.
+ *
+ * NAMED FOR WHAT IT CHECKS, NOT FOR A COUNT. This case used to be called
+ * "..._are_exactly_the_four_declared", from when the list below held only the
+ * four retransmit / missing-CONNECT_RSP rows. vms-abc added the eleven
+ * SCS_CONN_EV_VC_LOST rows, and the identifier went on saying "four" while the
+ * list said 15 -- a stale figure in the one file whose whole job is counting
+ * undocumented rows. The count is out of the name BECAUSE it is derived and
+ * asserted below (nexp), where it cannot go stale.
  */
-static void test_ovmx_rows_are_exactly_the_four_declared(void)
+static void test_ovmx_rows_are_exactly_the_declared_set(void)
 {
     static const struct {
         enum scs_conn_state from;
@@ -845,7 +853,7 @@ int main(void)
 
     test_every_figure_transition_is_present();
     test_no_extra_documented_rows();
-    test_ovmx_rows_are_exactly_the_four_declared();
+    test_ovmx_rows_are_exactly_the_declared_set();
     test_vc_loss_closes_every_state_and_notifies();
     test_formation_path_source();
     test_formation_path_target();

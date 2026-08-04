@@ -1608,6 +1608,48 @@ static void rx_feed(struct rxworld *r, const uint8_t *frame, size_t len)
     log_capture_end();
 }
 
+/*
+ * vms-abc: give the peer the OPEN virtual circuit the wire ALWAYS has before a
+ * phase-4 connect reaches it, without replaying the whole START dialogue.
+ *
+ * WHY EVERY PHASE-4 FIXTURE BELOW NOW NEEDS THIS. The daemon's SCS$DIRECTORY
+ * CONNECT-REQUEST branch consults the Path Block (scsd_refuse_without_open_vc)
+ * before replying, because p. 2-31 forbids sending with no virtual circuit.
+ * Fixtures that fed a captured 0x5b/0x4b into a freshly-created Path Block were
+ * exercising an ORDER THE WIRE NEVER PRODUCES: spec sec 4(h) grounds the whole
+ * SCS$DIRECTORY phase (SCA frames 21-31 of formation-ci1-joinwindow.pcap) as
+ * running strictly BETWEEN the sec 4g phase-2 0x41 START and the phase-4 0x4b
+ * connect -- so by the time a directory CONNECT-REQUEST arrives the circuit is
+ * already OPEN, in 41/41 lab captures. Opening it here makes the fixture match
+ * the capture; no assertion is removed or relaxed to accommodate it.
+ *
+ * Both calls are production: peer_find_or_add() is the daemon's own slot
+ * allocator (so the frame fed afterwards finds THIS slot by MAC rather than
+ * making a second one) and scs_pb_open() is the p. 2-21 open transition.
+ * test_captured_ovmx_accept_req_opens_the_joiner() already used this exact
+ * pair; this just names it.
+ */
+static struct peer_state *open_circuit_to(struct rxworld *r, const uint8_t mac[6],
+                                          const uint8_t sys_addr[6])
+{
+    struct peer_state *ps = peer_find_or_add(&r->w.cfg, &r->w.pdt, r->w.peers, mac);
+    CHECK(ps != NULL, "no peer slot could be built for the fixture's circuit");
+    if (ps == NULL) {
+        return NULL;
+    }
+    /* A Path Block with no System Block cannot open (scs_pb_open returns
+     * SCS_OPEN_ERROR on pb->sb == NULL), and on the wire the peer's 48-bit SCS
+     * System Address arrives in the src-logical field of the very frames that
+     * form the circuit. Learn it the production way first; the frame fed
+     * afterwards carries the same bytes and re-learning them is a no-op. */
+    ps_learn_sys_addr(&r->w.cfg, ps, sys_addr);
+    CHECK(scs_pb_open(&r->w.cfg, ps->pb) != SCS_OPEN_ERROR, "the circuit did not open");
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN,
+          "PRECONDITION: the fixture's circuit is %s, not OPEN",
+          scs_vc_state_name(ps->pb->vc_state));
+    return ps;
+}
+
 /* Run the production departure sweep with its logging captured into rxlog. */
 static unsigned rx_sweep(struct rxworld *r, uint64_t now_ms)
 {
@@ -1628,6 +1670,7 @@ static void test_captured_directory_connect_drives_the_machine(void)
 {
     struct rxworld r;
     rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
 
     rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
 
@@ -1959,6 +2002,16 @@ static void test_null_source_conid_binds_nothing(void)
 static struct peer_state *two_connections_on_one_circuit(struct rxworld *r)
 {
     rxworld_init(r, vax2_hw_mac, our_logical);
+    /* The circuit these two connections ride on, opened BEFORE they arrive.
+     * On the real wire the 0x41 START dialogue opens it first (spec sec 4g
+     * phase 2 precedes phase 4, and sec 4(h) grounds the directory phase as
+     * running between them); this fixture starts at phase 4, so the circuit is
+     * opened here through the production peer_find_or_add() + scs_pb_open().
+     * It used to be opened AFTER both frames, which (a) let the directory
+     * branch answer on a CLOSED Path Block -- an order the wire never produces
+     * -- and (b) would have made every "the circuit is CLOSED afterwards"
+     * assertion below pass vacuously if the open were ever dropped. */
+    (void)open_circuit_to(r, vax1_hw_mac, vax1_logical);
     rx_feed(r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
     rx_feed(r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
 
@@ -1981,13 +2034,10 @@ static struct peer_state *two_connections_on_one_circuit(struct rxworld *r)
           "the two captured frames scored %lu sequence gaps -- the fixture is"
           " already broken before the test starts", vc_seq_gaps);
 
-    /* The circuit these two connections ride on. On the real wire the 0x41
-     * START dialogue opens it BEFORE any 0x4b/0x5b connect arrives (spec sec
-     * 4g phase 2 precedes phase 4); this fixture starts at phase 4, so the
-     * circuit is opened here through the production scs_pb_open(). Without it
-     * the Path Block would still be CLOSED and every "the circuit is CLOSED
-     * afterwards" assertion below would pass vacuously. */
-    CHECK(scs_pb_open(&r->w.cfg, ps->pb) != SCS_OPEN_ERROR, "the circuit did not open");
+    /* Re-assert the precondition AFTER the two frames: nothing in the phase-4
+     * dispatch may have disturbed the circuit, and the "the circuit is CLOSED
+     * afterwards" assertions in every caller prove nothing if it is not OPEN
+     * here. */
     CHECK(ps->pb->vc_state == SCS_VC_OPEN,
           "PRECONDITION: the circuit is %s, not OPEN -- the CLOSED assertions"
           " below would prove nothing", scs_vc_state_name(ps->pb->vc_state));
@@ -2051,7 +2101,8 @@ static void test_seq_gap_breaks_the_vc_and_notifies_both_sysaps(void)
           "%lu SYSAP VC-loss handlers were invoked, expected 2 -- the production"
           " path did not notify the SYSAPs", sysap_vc_loss_notifications);
     CHECK(ps->connected == 0 && ps->dir_connected == 0,
-          "the SYSAP handler did not clear the send gates (connected=%d dir=%d)",
+          "the SYSAP handler did not clear the bound-connection flags"
+          " (connected=%d dir=%d)",
           ps->connected, ps->dir_connected);
     CHECK(scs_conn_state_of(ps->cdt_member) == SCS_CONN_CLOSED,
           "the member connection is %s after VC loss, expected CLOSED",
@@ -2107,6 +2158,45 @@ static void test_seq_gap_breaks_the_vc_and_notifies_both_sysaps(void)
     CHECK(r.rx.credit_sent == credit_before,
           "OVMX sent a credit-return for the gap frame (%ld -> %ld)",
           credit_before, r.rx.credit_sent);
+
+    /* ===== THE INVERSION THIS ITEM SHIPPED AND THIS CHECK EXISTS TO CATCH. =====
+     * scsd_sysap_vc_loss() clears dir_connected/connected/joiner_connected. But
+     * TWO of those three are read NEGATED by the dispatch: scsd.c's directory
+     * branch gates on `!ps->dir_connected` and the prompt-joiner branch on
+     * `!ps->joiner_connected`. Clearing them therefore RE-ARMS those sends
+     * instead of suppressing them. Replaying the peer's captured SCS$DIRECTORY
+     * CONNECT-REQUEST after the break used to make OVMX emit ANOTHER directory
+     * CONNECT-RESPONSE -- dir_conn_resp_sent 1 -> 2, dir_connected back to 1,
+     * ON A CIRCUIT WHOSE vc_state IS CLOSED -- which is exactly the emission
+     * p. 2-31 forbids. What actually stops it now is the CLOSED Path Block:
+     * the directory branch consults CONFIG_PATH before replying, the way
+     * send_joiner_connect_request() already did.
+     *
+     * The matched control is in test_seq_gap_kill_switch_through_the_daemon():
+     * the SAME replay with the break suppressed, where the counter must also
+     * stay at 1 -- there because dir_connected was never cleared. */
+    long dir_resp_before = r.rx.dir_conn_resp_sent;
+    CHECK(dir_resp_before == 1,
+          "PRECONDITION: the fixture sent %ld directory CONNECT-RESPONSEs,"
+          " expected 1 -- the replay below would measure nothing", dir_resp_before);
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "PRECONDITION: the circuit is %s, not CLOSED, before the replay",
+          scs_vc_state_name(ps->pb->vc_state));
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    CHECK(r.rx.dir_conn_resp_sent == dir_resp_before,
+          "OVMX answered a SCS$DIRECTORY CONNECT-REQUEST on a BROKEN circuit"
+          " (dir_conn_resp_sent %ld -> %ld) -- p. 2-31 forbids sending in the"
+          " absence of a virtual circuit", dir_resp_before, r.rx.dir_conn_resp_sent);
+    CHECK(ps->dir_connected == 0,
+          "the replay re-bound SCS$DIRECTORY on a circuit whose vc_state is %s",
+          scs_vc_state_name(ps->pb->vc_state));
+    CHECK(scs_conn_state_of(ps->cdt_dir) == SCS_CONN_CLOSED,
+          "the replay re-opened the directory connection (%s) on a broken circuit",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_dir)));
+    CHECK(rxlog_has("SCSD-E-NOVC"),
+          "the refusal was silent -- a dropped reply must say why (INV-6)");
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "the replay moved the circuit to %s", scs_vc_state_name(ps->pb->vc_state));
 }
 
 /*
@@ -2139,13 +2229,30 @@ static void test_seq_gap_kill_switch_through_the_daemon(void)
     CHECK(sysap_vc_loss_notifications == 0,
           "GATED: %lu SYSAP handlers fired, expected 0", sysap_vc_loss_notifications);
     CHECK(ps->connected == 1 && ps->dir_connected == 1,
-          "GATED: the send gates were cleared anyway");
+          "GATED: the bound-connection flags were cleared anyway");
     CHECK(scs_conn_state_of(ps->cdt_member) != SCS_CONN_CLOSED,
           "GATED: the member connection was closed anyway");
     CHECK(ps->pb->vc_state != SCS_VC_CLOSED, "GATED: the circuit was closed anyway");
     CHECK(r.rx.credit_sent == credit_before + 1,
           "GATED: OVMX should limp on and credit-ack as before (%ld -> %ld)",
           credit_before, r.rx.credit_sent);
+
+    /* THE MATCHED CONTROL for the directory replay above. Identical frame,
+     * identical fixture, break suppressed. The counter must stay at 1 here too
+     * -- but for the OLD reason: dir_connected was never cleared, so the
+     * `!ps->dir_connected` gate refuses. That is what makes the positive case a
+     * measurement of THIS ITEM: with the switch off the counter used to reach
+     * 2, with it on it stayed at 1, so the extra frame was caused by the
+     * gate-clearing this item introduced and by nothing else. */
+    long dir_resp_before = r.rx.dir_conn_resp_sent;
+    CHECK(dir_resp_before == 1,
+          "GATED PRECONDITION: %ld directory CONNECT-RESPONSEs, expected 1",
+          dir_resp_before);
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    CHECK(r.rx.dir_conn_resp_sent == dir_resp_before,
+          "GATED: the replay produced another directory CONNECT-RESPONSE"
+          " (%ld -> %ld)", dir_resp_before, r.rx.dir_conn_resp_sent);
+    CHECK(ps->dir_connected == 1, "GATED: the replay disturbed the bound directory");
     (void)unsetenv(SCS_VC_NO_BREAK_ENV);
 }
 
@@ -2196,7 +2303,9 @@ static void test_exit_summary_reports_the_parked_connection(void)
     rxworld_init(&r, vax2_hw_mac, our_logical);
 
     /* Same production path as (1): the directory connection ends in ACCEPT
-     * SENT, which is exactly a connection that never reached OPEN. */
+     * SENT, which is exactly a connection that never reached OPEN. It needs the
+     * same OPEN circuit (1) does -- see open_circuit_to(). */
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
     rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
     struct peer_state *ps = &r.w.peers[0];
     CHECK(ps->cdt_dir != NULL && scs_conn_state_of(ps->cdt_dir) != SCS_CONN_OPEN,
@@ -2486,8 +2595,25 @@ static void test_delivery_failure_breaks_the_vc_through_the_daemon(void)
           "the directory connection is %s after the break, expected CLOSED",
           scs_conn_state_name(scs_conn_state_of(ps->cdt_dir)));
     CHECK(ps->joiner_connected == 0 && ps->dir_connected == 0,
-          "the SYSAP handlers did not clear the send gates (joiner=%d dir=%d)",
-          ps->joiner_connected, ps->dir_connected);
+          "the SYSAP handlers did not clear the bound-connection flags"
+          " (joiner=%d dir=%d)", ps->joiner_connected, ps->dir_connected);
+
+    /* --- AND THE RETRANSMIT STOPS. Every OTHER term of
+     * scsd_joiner_retransmit_pending() is true forever after this break: the
+     * Path Block survives it, start_acked and joiner_connect_sent are latched,
+     * and joiner_connected -- read NEGATED -- was just CLEARED by the SYSAP
+     * handler. Before the open-circuit term was added the predicate therefore
+     * stayed true for the rest of the run, and the daemon called
+     * send_joiner_connect_request() once per directed HELLO (~1 Hz) forever,
+     * each call refusing with SCSD-E-NOVC. The CONTROL for this is every
+     * iteration of the loop above, where the same predicate is asserted TRUE
+     * on the same peer while the circuit is OPEN -- so this is the circuit
+     * state deciding it, not the predicate having been disabled. */
+    CHECK(scsd_joiner_retransmit_pending(&r.rx, ps) == 0,
+          "the daemon would keep retransmitting the joiner CONNECT-REQUEST on a"
+          " circuit it just broke (vc_state=%s) -- p. 2-31 forbids the send and"
+          " the run log fills with SCSD-E-NOVC at ~1 Hz",
+          scs_vc_state_name(ps->pb->vc_state));
 
     /* --- The break is once, not once per tick: a broken circuit has nothing
      * outstanding, so the next tick must find nothing to do. */
@@ -2538,7 +2664,7 @@ static void test_delivery_failure_kill_switch_through_the_daemon(void)
           "GATED: %lu SYSAP handlers fired, expected 0", sysap_vc_loss_notifications);
     CHECK(ps->pb->vc_state == SCS_VC_OPEN, "GATED: the circuit is %s, expected OPEN",
           scs_vc_state_name(ps->pb->vc_state));
-    CHECK(ps->dir_connected == 1, "GATED: the send gates were cleared anyway");
+    CHECK(ps->dir_connected == 1, "GATED: the bound-connection flags were cleared anyway");
     CHECK(rxlog_has("SCSD-W-VCBREAKOFF,"),
           "GATED: the suppression was SILENT -- a run log must never read as"
           " 'no circuit was ever broken' when breaking is switched off");
@@ -2669,7 +2795,7 @@ static void test_departure_notifies_the_sysaps(void)
               "GATED: %lu SYSAP handlers fired with the departure sweep off",
               sysap_vc_loss_notifications);
         CHECK(ps->connected == 1 && ps->dir_connected == 1,
-              "GATED: the send gates were cleared anyway");
+              "GATED: the bound-connection flags were cleared anyway");
         CHECK(!rxlog_has("SCSD-W-SYSAPVCLOSS,"),
               "GATED: the SYSAPVCLOSS line was printed anyway");
     }
@@ -3001,6 +3127,7 @@ static void test_exit_summary_reports_datagram_discards(void)
 {
     struct rxworld r;
     rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
     rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
     struct peer_state *ps = &r.w.peers[0];
     CHECK(ps->cdt_dir != NULL, "the fixture did not open a directory CDT");

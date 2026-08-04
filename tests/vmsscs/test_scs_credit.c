@@ -549,6 +549,15 @@ struct sender {
     uint8_t  frame[190]; /* zeroed = nothing was ever emitted */
     int      emits;
     unsigned carried; /* credit value of the last frame it emitted */
+
+    /* A SYSAP with more to send: when this one is resumed it immediately issues
+     * a second send, for `chain`. That is the only way to observe a send made
+     * while Send Credit is > 0 AND operations are still queued -- the state the
+     * fast path in scs_credit_send_or_wait() has to refuse. `chain_rc` records
+     * what that nested send_or_wait returned. NULL for every other test. */
+    struct sender *chain;
+    int            chain_rc;
+    int            chain_done;
 };
 
 static int g_emit_order[MAX_EMITS];
@@ -582,6 +591,13 @@ static void sender_resume(struct scs_credit_waiter *w, unsigned credit, void *ct
     struct sender *s = (struct sender *)ctx;
     CHECK(w == &s->w, "resume delivered the wrong waiter to sender %d", s->id);
     sender_emit(s, credit);
+
+    /* The resumed SYSAP has more to send. This runs INSIDE the drain, while
+     * later waiters are still queued and the grant is not yet exhausted. */
+    if (s->chain != NULL && !s->chain_done) {
+        s->chain_done = 1;
+        s->chain_rc = scs_credit_send_or_wait(w->cdt, &s->chain->w);
+    }
 }
 
 static void sender_init(struct sender *s, int id)
@@ -833,6 +849,262 @@ static void test_credit_wait_order_is_preserved(void)
 }
 
 /*
+ * p. 2-46: "Each of the SCS wait queues described here is a 'first in first
+ * out' queue ... Queue priority is based on time spent in the queue. When a
+ * resource associated with the queue (e.g., Send Credit ...) becomes
+ * available, the CDRP at the head of the queue has priority for receiving
+ * that resource."
+ *
+ * THE LATE SENDER. A send issued while Send Credit is > 0 but operations are
+ * ALREADY SUSPENDED must not consume that credit: it has spent no time in the
+ * queue, so the resource belongs to the head. Both witnesses below need the
+ * account to hold credit while the queue is non-empty, which happens exactly
+ * when a resumed operation issues another send:
+ *   (a) NESTED -- inside the drain, with the grant not yet exhausted and later
+ *       waiters still queued;
+ *   (b) TOP LEVEL -- after the drain, because the pass resumes only the
+ *       waiters that were queued when the count rose (the budget is fixed at
+ *       that moment), so leftover credit and a leftover waiter coexist.
+ */
+static void test_credit_wait_late_sender_does_not_overtake(void)
+{
+    struct bench b;
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 0, 1); /* the remote extended 0: we are starved at once */
+    emit_reset();
+
+    struct sender s1, s2, s3, s4, s5;
+    sender_init(&s1, 1);
+    sender_init(&s2, 2);
+    sender_init(&s3, 3);
+    sender_init(&s4, 4);
+    sender_init(&s5, 5);
+
+    /* s1's SYSAP has a second message ready the moment it is resumed. */
+    s1.chain = &s4;
+
+    CHECK(scs_credit_send_or_wait(b.local, &s1.w) == SCS_CREDIT_WAIT, "s1 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s2.w) == SCS_CREDIT_WAIT, "s2 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s3.w) == SCS_CREDIT_WAIT, "s3 should block");
+    CHECK(scs_credit_wait_depth(b.local) == 3, "queue depth %u, want 3",
+          scs_credit_wait_depth(b.local));
+
+    /* FIVE credits arrive but only three operations are waiting, so the pass
+     * resumes three and two Send Credits survive it. */
+    CHECK(scs_credit_on_recv(b.local, 5) == 0, "recv failed");
+
+    /* (a) THE NESTED LATE SENDER. When s1's follow-on send was issued the
+     * account held 4 Send Credits and s2/s3 were still queued. */
+    CHECK(s1.chain_done == 1, "s1's follow-on send never ran -- the witness is missing");
+    CHECK(s1.chain_rc == SCS_CREDIT_WAIT,
+          "a send issued while s2/s3 were still suspended returned %d: it took the "
+          "fast path and overtook them. p. 2-46 gives the resource to the head",
+          s1.chain_rc);
+    CHECK(s4.w.queued == 1, "the late sender was not queued");
+
+    CHECK(g_emit_n == 3, "%d senders emitted, want 3 (s4 arrived after the pass began)",
+          g_emit_n);
+    CHECK(g_emit_order[0] == 1 && g_emit_order[1] == 2 && g_emit_order[2] == 3,
+          "resume order %d,%d,%d -- want 1,2,3", g_emit_order[0], g_emit_order[1],
+          g_emit_order[2]);
+    CHECK(sender_silent(&s4), "the late sender was served in the same pass");
+    CHECK(scs_credit_wait_depth(b.local) == 1, "queue depth %u after the pass, want 1",
+          scs_credit_wait_depth(b.local));
+
+    /* (b) THE TOP-LEVEL LATE SENDER. The account really does have credit here
+     * -- asserted, so the refusal below cannot be vacuous -- and the queue is
+     * non-empty, which is the only state that distinguishes the two orderings. */
+    CHECK(b.local->send_credit == 2, "Send Credit %u after the pass, want 2",
+          b.local->send_credit);
+    CHECK(scs_credit_can_send(b.local) == 1,
+          "the account has no credit here -- the overtake test would be vacuous");
+    CHECK(b.local->credit_wait_head == &s4.w, "the queue head is not the waiting s4");
+
+    unsigned send_before = b.local->send_credit;
+    CHECK(scs_credit_send_or_wait(b.local, &s5.w) == SCS_CREDIT_WAIT,
+          "a send with 2 Send Credits available but s4 still queued must go to the "
+          "TAIL, not take the credit");
+    CHECK(b.local->send_credit == send_before,
+          "the late sender debited a Send Credit: %u, want %u", b.local->send_credit,
+          send_before);
+    CHECK(sender_silent(&s5), "the late sender emitted a frame");
+    CHECK(scs_credit_wait_depth(b.local) == 2, "queue depth %u, want 2",
+          scs_credit_wait_depth(b.local));
+    CHECK(b.local->credit_wait_head == &s4.w, "the late sender displaced the head");
+
+    /* And they go in the order they queued. */
+    CHECK(scs_credit_on_recv(b.local, 1) == 0, "recv failed");
+    CHECK(g_emit_n == 5, "%d emitted after the second grant, want 5", g_emit_n);
+    CHECK(g_emit_order[3] == 4 && g_emit_order[4] == 5,
+          "the two late senders went %d,%d -- want 4,5 (s4 queued first)",
+          g_emit_order[3], g_emit_order[4]);
+    CHECK(scs_credit_wait_depth(b.local) == 0, "queue depth %u, want 0",
+          scs_credit_wait_depth(b.local));
+}
+
+/*
+ * CANCELLING AT EVERY POSITION. test_credit_wait_order_is_preserved cancels the
+ * MIDDLE of the queue, which never exercises the tail (or head) fix-up.
+ *
+ * The tail case is the dangerous one: if the tail pointer is left aiming at the
+ * dequeued node, the NEXT operation to suspend is linked onto that node instead
+ * of onto the queue. It is then unreachable from the head -- credit_wait_depth
+ * counts it, but no drain can ever reach it and the operation is never resumed.
+ * p. 2-45 promises that "as many waiting CDRPs as possible are resumed"; a
+ * waiter that cannot be reached breaks that promise silently.
+ */
+static void test_credit_wait_cancel_relinks_the_queue(void)
+{
+    struct bench b;
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 0, 1);
+    emit_reset();
+
+    struct sender s1, s2, s3, s4;
+    sender_init(&s1, 1);
+    sender_init(&s2, 2);
+    sender_init(&s3, 3);
+    sender_init(&s4, 4);
+
+    /* --- cancelling the TAIL --- */
+    CHECK(scs_credit_send_or_wait(b.local, &s1.w) == SCS_CREDIT_WAIT, "s1 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s2.w) == SCS_CREDIT_WAIT, "s2 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s3.w) == SCS_CREDIT_WAIT, "s3 should block");
+    CHECK(b.local->credit_wait_tail == &s3.w, "the tail is not the last waiter queued");
+
+    CHECK(scs_credit_wait_cancel(b.local, &s3.w) == 0, "cancelling the tail failed");
+    CHECK(b.local->credit_wait_tail == &s2.w,
+          "cancelling the tail left the tail pointing at the dequeued waiter");
+    CHECK(scs_credit_wait_depth(b.local) == 2, "depth %u after a tail cancel, want 2",
+          scs_credit_wait_depth(b.local));
+
+    /* The next operation to suspend must land ON THE QUEUE. */
+    CHECK(scs_credit_send_or_wait(b.local, &s4.w) == SCS_CREDIT_WAIT, "s4 should block");
+    CHECK(s2.w.next == &s4.w,
+          "the new waiter was linked onto the cancelled node, not onto the queue -- "
+          "it is unreachable from the head and can never be resumed");
+    CHECK(b.local->credit_wait_tail == &s4.w, "the tail did not follow the new waiter");
+    CHECK(scs_credit_wait_depth(b.local) == 3, "depth %u, want 3",
+          scs_credit_wait_depth(b.local));
+
+    /* Drain: every counted waiter must actually be reachable and resumed. */
+    CHECK(scs_credit_on_recv(b.local, 3) == 0, "recv failed");
+    CHECK(g_emit_n == 3, "%d resumed on a 3-credit grant, want 3 -- depth said 3", g_emit_n);
+    CHECK(g_emit_order[0] == 1 && g_emit_order[1] == 2 && g_emit_order[2] == 4,
+          "resume order %d,%d,%d -- want 1,2,4 (s3 cancelled)", g_emit_order[0],
+          g_emit_order[1], g_emit_order[2]);
+    CHECK(s4.emits == 1 && s4.w.resumed == 1,
+          "the waiter queued after a tail cancel was never resumed");
+    CHECK(scs_credit_wait_depth(b.local) == 0,
+          "depth %u after draining everything -- a waiter is stranded in the count",
+          scs_credit_wait_depth(b.local));
+    CHECK(sender_silent(&s3), "a cancelled operation was resumed anyway");
+    CHECK(b.local->credit_wait_tail == NULL, "the drained queue left a dangling tail");
+
+    /* --- cancelling the HEAD, then the SOLE remaining waiter --- */
+    struct sender h1, h2, h3;
+    sender_init(&h1, 11);
+    sender_init(&h2, 12);
+    sender_init(&h3, 13);
+    CHECK(b.local->send_credit == 0, "the grant was not fully consumed: %u",
+          b.local->send_credit);
+    CHECK(scs_credit_send_or_wait(b.local, &h1.w) == SCS_CREDIT_WAIT, "h1 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &h2.w) == SCS_CREDIT_WAIT, "h2 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &h3.w) == SCS_CREDIT_WAIT, "h3 should block");
+
+    CHECK(scs_credit_wait_cancel(b.local, &h1.w) == 0, "cancelling the head failed");
+    CHECK(b.local->credit_wait_head == &h2.w, "cancelling the head did not advance the head");
+    CHECK(b.local->credit_wait_tail == &h3.w, "cancelling the head moved the tail");
+
+    CHECK(scs_credit_wait_cancel(b.local, &h2.w) == 0, "cancel failed");
+    CHECK(scs_credit_wait_cancel(b.local, &h3.w) == 0, "cancelling the sole waiter failed");
+    CHECK(b.local->credit_wait_head == NULL && b.local->credit_wait_tail == NULL,
+          "cancelling the last waiter left a dangling head or tail");
+    CHECK(scs_credit_wait_depth(b.local) == 0, "depth %u after cancelling everything",
+          scs_credit_wait_depth(b.local));
+
+    /* The emptied queue is still usable. */
+    emit_reset();
+    CHECK(scs_credit_send_or_wait(b.local, &h1.w) == SCS_CREDIT_WAIT,
+          "the emptied queue refused a new waiter");
+    CHECK(b.local->credit_wait_head == &h1.w && b.local->credit_wait_tail == &h1.w,
+          "the re-queued waiter is not both head and tail");
+    CHECK(scs_credit_on_recv(b.local, 1) == 0, "recv failed");
+    CHECK(g_emit_n == 1 && g_emit_order[0] == 11,
+          "the waiter queued after a full cancel was not resumed (%d emits)", g_emit_n);
+}
+
+/*
+ * p. 2-45: "WHENEVER the Send Credit count in a CDT is increased, the CDT's
+ * queue of waiting CDRPs is examined."
+ *
+ * TWO calls in this module increase it. test_credit_wait_released_fifo drives
+ * the receive path (scs_credit_on_recv); this drives THE OTHER ONE -- the
+ * peer's grant, scs_credit_grant_from_peer, which is where the very first Send
+ * Credits on a connection come from. "Whenever" means both, and a release that
+ * only happens on one of them leaves an operation suspended forever on a
+ * connection whose peer has already extended it credit.
+ *
+ * The scenario is the ordinary formation race (p. 2-43): the local SYSAP has
+ * extended ITS buffers and has traffic to send, but the peer's ACCEPT_REQ --
+ * which is what tells the local node how many Send Credits it has -- has not
+ * arrived yet, so the sends are starved and suspend. Then it arrives.
+ */
+static void test_credit_wait_released_by_peer_grant(void)
+{
+    struct bench b;
+    CHECK(bench_init(&b), "bench setup failed");
+    emit_reset();
+
+    /* Local half of formation only: no grant from the peer yet. */
+    CHECK(scs_credit_extend(b.local, 10, 1) == 0, "extend failed");
+    CHECK(b.local->send_credit == 0, "Send Credit %u before the peer's grant, want 0",
+          b.local->send_credit);
+
+    /* Three buffers already released back to SCS, so the first resumed send has
+     * something to piggyback (p. 2-44). */
+    for (int i = 0; i < 3; i++) {
+        CHECK(scs_credit_release_buffer(b.local) == 0, "release %d failed", i);
+    }
+
+    struct sender s1, s2, s3;
+    sender_init(&s1, 1);
+    sender_init(&s2, 2);
+    sender_init(&s3, 3);
+    CHECK(scs_credit_send_or_wait(b.local, &s1.w) == SCS_CREDIT_WAIT, "s1 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s2.w) == SCS_CREDIT_WAIT, "s2 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s3.w) == SCS_CREDIT_WAIT, "s3 should block");
+    CHECK(scs_credit_wait_depth(b.local) == 3, "depth %u, want 3",
+          scs_credit_wait_depth(b.local));
+    CHECK(g_emit_n == 0, "%d frames emitted before the peer granted anything", g_emit_n);
+
+    /* THE PEER'S ACCEPT_REQ: it extended 2 Send Credits to us. Nothing else is
+     * called -- no receive, no hand-rolled drain. */
+    CHECK(scs_credit_grant_from_peer(b.local, 2) == 0, "grant failed");
+
+    CHECK(g_emit_n == 2,
+          "%d operations resumed by the peer's grant, want 2 -- p. 2-45 says EVERY "
+          "rise in Send Credit examines the queue, not only the receive path",
+          g_emit_n);
+    CHECK(g_emit_order[0] == 1 && g_emit_order[1] == 2,
+          "resume order %d,%d -- p. 2-46 requires FIFO 1,2", g_emit_order[0],
+          g_emit_order[1]);
+    CHECK(scs_credit_wait_depth(b.local) == 1, "depth %u after the grant, want 1",
+          scs_credit_wait_depth(b.local));
+    CHECK(b.local->send_credit == 0, "Send Credit %u after 2 resumes, want 0",
+          b.local->send_credit);
+    CHECK(sender_silent(&s3), "s3 was resumed with no credit for it");
+
+    uint16_t v = 0xFFFF;
+    CHECK(sender_frame_credit(&s1, &v) == 0 && v == 3,
+          "the first resumed send carried credit %u, want 3", v);
+    CHECK(sender_frame_credit(&s2, &v) == 0 && v == 0,
+          "the second resumed send carried credit %u, want 0", v);
+    CHECK(b.local->pending_receive_credit == 0, "Pending Receive %u, want 0",
+          b.local->pending_receive_credit);
+}
+
+/*
  * p. 2-44 SPECIAL CREDIT MESSAGE, at the exact documented threshold.
  *
  * "Each time the local node receives a message on a connection, it checks to
@@ -944,6 +1216,32 @@ static void test_special_credit_fires_at_exact_threshold(void)
           "%d special credit messages fired with Pending Receive Credit 0 -- p. 2-44 "
           "requires BOTH conditions", rec.fires - fires_before);
 
+    /*
+     * THE TAKER'S OWN CONTRACT for that same case, asserted directly rather
+     * than through the emitter. The check above can only observe "no message
+     * was emitted", and the caller inside scs_credit_on_recv() emits only when
+     * the taker returns > 0 -- so it cannot tell "there is no message to take"
+     * (-1) from "here is a message carrying 0". p. 2-44 makes those different
+     * answers: a special credit message exists to CARRY the Pending Receive
+     * Credit count, so with that count at 0 there is no message, not an empty
+     * one. Nothing may move either.
+     */
+    unsigned rc_probe   = b.local->receive_credit;
+    unsigned pend_probe = b.local->pending_receive_credit;
+    CHECK(pend_probe == 0, "the probe is vacuous -- Pending Receive Credit is %u",
+          pend_probe);
+    CHECK(scs_credit_is_dangerously_low(b.local) == 1,
+          "the probe is vacuous -- Receive Credit %u is not dangerously low",
+          b.local->receive_credit);
+    CHECK(scs_credit_take_special(b.local) == -1,
+          "take_special handed back a message while Pending Receive Credit was 0 and "
+          "Receive Credit %u was dangerously low -- p. 2-44 requires BOTH",
+          b.local->receive_credit);
+    CHECK(b.local->receive_credit == rc_probe &&
+              b.local->pending_receive_credit == pend_probe,
+          "the refused take moved a count: Receive %u (was %u), Pending %u (was %u)",
+          b.local->receive_credit, rc_probe, b.local->pending_receive_credit, pend_probe);
+
     /* One release, one more receive: now both hold and it fires again. */
     CHECK(scs_credit_release_buffer(b.local) == 0, "release failed");
     CHECK(scs_credit_on_recv(b.local, 0) == 0, "recv failed");
@@ -969,6 +1267,120 @@ static void test_special_credit_fires_at_exact_threshold(void)
           "the threshold did not follow Minimum Send Credits");
 
     scs_credit_set_special_emitter(b.local, NULL, NULL);
+}
+
+/*
+ * THE ORDER OF THE TWO THINGS AN ARRIVING MESSAGE DOES (p. 2-44 / p. 2-45).
+ *
+ * An inbound message carrying credit does BOTH: it raises Send Credit, which
+ * examines the Credit Wait queue (p. 2-45), and it triggers the dangerously-low
+ * check that may send a special credit message (p. 2-44). scs_credit_on_recv()
+ * runs the release FIRST, and a paragraph of its reasoning claims that ordering
+ * is what makes it correct: a resumed send piggybacks the whole outstanding
+ * Pending Receive Credit (p. 2-44), leaving nothing for a special credit
+ * message to carry, and the special credit message exists precisely for the
+ * case where nothing is going the other way ("what if it is one-way, at least
+ * for awhile", p. 2-44).
+ *
+ * That claim is testable, and this is the test. The two phases below run the
+ * SAME arrival against the SAME account state and differ only in whether an
+ * operation is suspended:
+ *   - CONTROL, no waiter: the message is owed and IS emitted, carrying 2. This
+ *     is what makes phase 2 non-vacuous -- the conditions genuinely hold.
+ *   - WITH a waiter: the resumed send carries the 2 instead, and no special
+ *     credit message goes out. An implementation that checked BEFORE releasing
+ *     would send both, granting the same 2 buffers twice.
+ */
+static void test_special_credit_yields_to_a_resumed_waiter(void)
+{
+    const unsigned threshold = (unsigned)SCS_CREDIT_SCSFLOWCUSH + 3u;
+    CHECK(threshold == 5, "threshold %u, want 5", threshold);
+
+    /* ---- CONTROL: the same arrival with nothing suspended ---- */
+    struct bench c;
+    CHECK(bench_init(&c), "bench setup failed");
+    form(&c, 10, 0, 3); /* remote Minimum Send Credits 3; we are starved */
+    emit_reset();
+
+    /* Seven arrivals with no buffers released: Receive Credit falls below the
+     * threshold while Pending Receive Credit is still 0. No emitter installed
+     * yet, so nothing can fire during the wind-down. */
+    for (int i = 0; i < 7; i++) {
+        CHECK(scs_credit_on_recv(c.local, 0) == 0, "control recv %d failed", i);
+    }
+    CHECK(c.local->receive_credit == 3, "control Receive Credit %u, want 3",
+          c.local->receive_credit);
+    /* Now the SYSAP releases two buffers: from here BOTH p. 2-44 conditions hold. */
+    CHECK(scs_credit_release_buffer(c.local) == 0, "control release failed");
+    CHECK(scs_credit_release_buffer(c.local) == 0, "control release failed");
+    CHECK(c.local->pending_receive_credit == 2, "control Pending Receive %u, want 2",
+          c.local->pending_receive_credit);
+    CHECK(scs_credit_is_dangerously_low(c.local) == 1, "control is not dangerously low");
+
+    struct special_rec crec;
+    memset(&crec, 0, sizeof(crec));
+    CHECK(scs_credit_set_special_emitter(c.local, special_recorder, &crec) == 0,
+          "installing the emitter failed");
+    CHECK(scs_credit_wait_depth(c.local) == 0, "the control must have nothing suspended");
+
+    CHECK(scs_credit_on_recv(c.local, 1) == 0, "control recv failed");
+    CHECK(crec.fires == 1,
+          "%d special credit messages on the control arrival, want 1 -- without this "
+          "the suppression below is vacuous", crec.fires);
+    CHECK(crec.credit[0] == 2, "the control's special credit message carried %u, want 2",
+          crec.credit[0]);
+
+    /* ---- THE SAME ARRIVAL, with one operation suspended ---- */
+    struct bench b;
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 0, 3);
+    emit_reset();
+
+    for (int i = 0; i < 7; i++) {
+        CHECK(scs_credit_on_recv(b.local, 0) == 0, "recv %d failed", i);
+    }
+    CHECK(scs_credit_release_buffer(b.local) == 0, "release failed");
+    CHECK(scs_credit_release_buffer(b.local) == 0, "release failed");
+
+    struct sender s1;
+    sender_init(&s1, 1);
+    CHECK(scs_credit_send_or_wait(b.local, &s1.w) == SCS_CREDIT_WAIT, "s1 should block");
+
+    /* Identical to the control at this point, except for the suspended send. */
+    CHECK(b.local->receive_credit == 3, "Receive Credit %u, want 3 (as the control)",
+          b.local->receive_credit);
+    CHECK(b.local->pending_receive_credit == 2, "Pending Receive %u, want 2",
+          b.local->pending_receive_credit);
+    CHECK(scs_credit_is_dangerously_low(b.local) == 1, "not dangerously low");
+    CHECK(scs_credit_wait_depth(b.local) == 1, "depth %u, want 1",
+          scs_credit_wait_depth(b.local));
+
+    struct special_rec rec;
+    memset(&rec, 0, sizeof(rec));
+    CHECK(scs_credit_set_special_emitter(b.local, special_recorder, &rec) == 0,
+          "installing the emitter failed");
+
+    CHECK(scs_credit_on_recv(b.local, 1) == 0, "recv failed");
+
+    /* The resumed send took the whole outstanding grant with it (p. 2-44) ... */
+    CHECK(s1.emits == 1, "the suspended send was not resumed (%d emits)", s1.emits);
+    uint16_t v = 0xFFFF;
+    CHECK(sender_frame_credit(&s1, &v) == 0 && v == 2,
+          "the resumed send carried credit %u, want 2 -- a special credit message "
+          "took the grant before the release", v);
+    CHECK(b.local->pending_receive_credit == 0, "Pending Receive %u, want 0",
+          b.local->pending_receive_credit);
+
+    /* ... so there was nothing left for a special credit message to carry. */
+    CHECK(rec.fires == 0,
+          "%d special credit messages were emitted although a resumed send had "
+          "already piggybacked the whole Pending Receive Credit -- the dangerously-low "
+          "check must run AFTER the Credit Wait release, or the same buffers are "
+          "granted to the peer twice (p. 2-44)",
+          rec.fires);
+
+    scs_credit_set_special_emitter(b.local, NULL, NULL);
+    scs_credit_set_special_emitter(c.local, NULL, NULL);
 }
 
 /*
@@ -1150,7 +1562,11 @@ int main(void)
     test_credit_wait_blocks_and_does_not_emit();
     test_credit_wait_released_fifo();
     test_credit_wait_order_is_preserved();
+    test_credit_wait_late_sender_does_not_overtake();
+    test_credit_wait_cancel_relinks_the_queue();
+    test_credit_wait_released_by_peer_grant();
     test_special_credit_fires_at_exact_threshold();
+    test_special_credit_yields_to_a_resumed_waiter();
     test_credit_wait_kill_switch(); /* mutates the environment; restores it */
 
     test_kill_switch(); /* must run last: it mutates the environment */

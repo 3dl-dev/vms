@@ -499,15 +499,25 @@ int scs_credit_wait_enabled(void);
  * actually allocating the buffer, this routine first verifies that at least one
  * Send Credit is available on the connection being used."
  *
- * If a Send Credit is available, this behaves EXACTLY like scs_credit_on_send:
- * debits one Send Credit and returns (>= 0) the Pending Receive Credit to
- * piggyback, which it resets. `w` is left untouched and unqueued -- the caller
- * sends immediately, on its own stack.
+ * If a Send Credit is available AND THE CREDIT WAIT QUEUE IS EMPTY, this
+ * behaves exactly like scs_credit_on_send: debits one Send Credit and returns
+ * (>= 0) the Pending Receive Credit to piggyback, which it resets. `w` is left
+ * untouched and unqueued -- the caller sends immediately, on its own stack.
  *
- * If no Send Credit is available, `w` is appended to the TAIL of this CDT's
- * Credit Wait queue and SCS_CREDIT_WAIT is returned. NOTHING IS SENT and no
- * count moves. `w->resume` is called later, from whatever call increases the
- * Send Credit count.
+ * THE QUEUE-EMPTY CONDITION IS NOT AN OPTIMISATION, it is p. 2-46: "Queue
+ * priority is based on time spent in the queue ... the CDRP at the head of the
+ * queue has priority for receiving that resource." A send that arrives while
+ * operations are already suspended has spent no time in the queue, so it may
+ * not take a credit ahead of them even when one is free -- it goes to the tail
+ * like any other. (Free credit and a non-empty queue coexist whenever a resumed
+ * operation issues another send: the release pass fixes how many waiters it
+ * will resume at the moment the count rises, so a grant larger than the depth
+ * at that instant leaves credit behind.)
+ *
+ * Otherwise -- no Send Credit, or the queue is non-empty -- `w` is appended to
+ * the TAIL of this CDT's Credit Wait queue and SCS_CREDIT_WAIT is returned.
+ * NOTHING IS SENT and no count moves. `w->resume` is called later, from
+ * whatever call increases the Send Credit count.
  *
  * Returns -1 (and queues nothing) if cdt or w is NULL, if w is already queued,
  * or if the Credit Wait kill switch is set and there is no credit -- the
@@ -539,7 +549,9 @@ unsigned scs_credit_wait_depth(const struct scs_cdt *cdt);
  * increased" means. It is exported so a caller that manipulates the count by
  * some other route can honour the same rule, and so the drain can be asserted
  * in isolation. A test that calls it BY HAND proves only the drain, never the
- * trigger; the trigger is proven by driving scs_credit_on_recv().
+ * trigger. BOTH triggers are driven by tests that never call this function:
+ * test_credit_wait_released_fifo drives scs_credit_on_recv() and
+ * test_credit_wait_released_by_peer_grant drives scs_credit_grant_from_peer().
  *
  * Reentrant calls (a resume callback that receives on the same connection)
  * return 0 rather than draining the queue out of order.

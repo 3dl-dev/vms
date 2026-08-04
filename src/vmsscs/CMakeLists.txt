@@ -164,6 +164,24 @@ target_include_directories(vmsscs_dgram PUBLIC
 )
 target_link_libraries(vmsscs_dgram PUBLIC vmsscs_cdt)
 
+# vms-7fe - THE QUEUE OF SCS DIRECTORY ENTRIES (SDIRs) AND THE LISTENING CDTs
+# (VAXcluster Principles pp. 2-48..2-50, Figure 2-24). This is what the SCA
+# "list of listening SYSAPs" actually is: LISTEN allocates an SDIR carrying the
+# SYSAP name plus the CONID of a listening CDT, and an inbound CONNECT_REQ is
+# resolved by scanning it -- no match is p. 2-48's "no such SYSAP", a second
+# concurrent request is p. 2-50's "busy ... try again later".
+#
+# PURE STATE: it builds no frame and opens no socket. It parses exactly one
+# grounded field (the 16-byte target SYSAP name at payload [62:78], spec sec
+# 4(h)(2)) and returns an enum; the port driver decides what frame that becomes,
+# which is the same p. 2-56 split scs_svc.c keeps. Depends on vmsscs_cdt for the
+# CDL the listening CDTs are claimed from.
+add_library(vmsscs_sdir STATIC scs_sdir.c)
+target_include_directories(vmsscs_sdir PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_sdir PUBLIC vmsscs_cdt)
+
 # vms-561 - THE FIVE SCS SYSAP SERVICES: LISTEN, CONNECT, ACCEPT, REJECT,
 # DISCONNECT (VAXcluster Principles pp. 2-22..2-27, p. 2-56). An API SURFACE
 # over the layers this epic already built -- it allocates no memory, builds no
@@ -178,7 +196,7 @@ add_library(vmsscs_svc STATIC scs_svc.c)
 target_include_directories(vmsscs_svc PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
-target_link_libraries(vmsscs_svc PUBLIC vmsscs_conn vmsscs_credit vmsscs_dgram)
+target_link_libraries(vmsscs_svc PUBLIC vmsscs_conn vmsscs_credit vmsscs_dgram vmsscs_sdir)
 
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
@@ -187,7 +205,7 @@ target_include_directories(scsd_exe PRIVATE
 )
 # vms-dd5 links vmsscs_conn (and, transitively, vmsscs_cdt -- which until this
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_svc)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

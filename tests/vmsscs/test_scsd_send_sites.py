@@ -405,10 +405,21 @@ CONN_BUILDERS = (
     "scs_dir_build_connect_echo",
     "scs_dir_build_connect_response",
 )
+#
+# vms-7fe adds a FOURTH permitted caller, and it is not an emitter. The rule
+# this check enforces is "no hand-built frame may put A CONNECTION on the wire
+# that no CDT describes". scsd_send_sdir_refusal() builds the 66-byte
+# CONNECT_RSP that DECLINES a connection -- p. 2-48's "no such SYSAP" and
+# p. 2-50's "busy ... try again later". There is no CDT to allocate because the
+# p. 2-48 SDIR scan failed before any SYSAP saw the request, and no Figure 2-14
+# transition to take; routing it through scs_reject() would have made the
+# service ask for SEND_REJECT_REQ while the emitter built a CONNECT_RSP. It is
+# named here rather than exempted so that it, too, cannot be added silently.
 BUILDER_CALLERS = {
     "scsd_svc_emit_connect_req",
     "scsd_svc_emit_dir_accept",
     "scsd_svc_emit_member_accept",
+    "scsd_send_sdir_refusal",
 }
 builder_sites = {}
 for i, line in enumerate(code_lines):

@@ -644,6 +644,13 @@ static uint16_t le16_at(const uint8_t *p)
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
 }
 
+/* vms-7fe: the Con.ID pair at [50:58] is 32 bits wide. */
+static uint32_t le32_at(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
 /* The daemon-side context, built the way main() builds it. */
 static struct scsd_vc_ctx vc_test_ctx(struct world *w)
 {
@@ -1222,6 +1229,23 @@ static void test_connect_selects_the_open_vc_via_config_sys(void)
  *      it unset all three happen. Guardrail 23: the switch is RUN and the
  *      counter it gates is confirmed to move, in that order.
  * ========================================================================== */
+/*
+ * vms-7fe: RE-INITIALIZING THE CDL MUST ALSO RE-INITIALIZE THE PORT.
+ *
+ * scsd_svc() binds the port to scsd_cdl on first use and, as of vms-7fe, LISTEN
+ * allocates a listening CDT per SYSAP name out of that CDL (p. 2-48). A test
+ * that calls scs_cdl_init() again wipes those CDTs while the port's SDIR queue
+ * still names their Con.IDs -- a stale queue that exists only because the test
+ * seam rebuilds the world, since the daemon initializes its CDL exactly once.
+ * Resetting both together is what keeps the tests running the production path
+ * rather than a state the daemon can never be in.
+ */
+static void scsd_test_world_reset(void)
+{
+    scs_cdl_init(&scsd_cdl);
+    memset(&scsd_svc_port, 0, sizeof(scsd_svc_port));
+}
+
 
 /* Drive the real joiner sender once, from a fresh world and a fresh CDL. */
 static size_t drive_joiner_once(uint8_t *out, uint8_t out_dst[6],
@@ -1229,7 +1253,7 @@ static size_t drive_joiner_once(uint8_t *out, uint8_t out_dst[6],
 {
     struct world w;
     world_init(&w);
-    scs_cdl_init(&scsd_cdl);
+    scsd_test_world_reset();
     scsd_cdl_ready = 1;
     conn_transitions = 0;
     conn_illegal_events = 0;
@@ -1282,7 +1306,12 @@ static void test_conn_fsm_does_not_change_the_wire(void)
     CHECK(on_cdt != NULL && scs_conn_state_of(on_cdt) == SCS_CONN_CONNECT_SENT,
           "after sending a CONNECT_REQ the connection is %s, expected CONNECT SENT",
           on_cdt ? scs_conn_state_name(scs_conn_state_of(on_cdt)) : "(none)");
-    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1, "expected exactly one CDT in the CDL");
+    /* vms-7fe: one CONNECTION CDT, beside the listening CDTs LISTEN allocated
+     * for VMS$VAXcluster and SCS$DIRECTORY (p. 2-48). The listening CDTs live
+     * in a reserved Con.ID band precisely so they cannot take this one's slot. */
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1 + scs_sdir_count(scs_svc_sdir(scsd_svc())),
+          "expected one connection CDT beside %u listening CDT(s), CDL holds %u",
+          scs_sdir_count(scs_svc_sdir(scsd_svc())), scs_cdl_in_use_count(&scsd_cdl));
     /* The CDT is reachable the p. 2-29 way, by CONID. */
     CHECK(scs_cdl_lookup(&scsd_cdl, OVMX_JOINER_CONID) == on_cdt,
           "the daemon's CDT is not reachable by its CONID through the CDL");
@@ -1295,8 +1324,9 @@ static void test_conn_fsm_does_not_change_the_wire(void)
     CHECK(conn_transitions == 0, "the kill switch did not stop transitions (%lu recorded)",
           conn_transitions);
     CHECK(off_cdt == NULL, "the kill switch did not stop CDT allocation");
-    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 0,
-          "the kill switch left %u CDTs in the CDL", scs_cdl_in_use_count(&scsd_cdl));
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == scs_sdir_count(scs_svc_sdir(scsd_svc())),
+          "the kill switch left %u CDT(s) in the CDL beside the %u listening CDT(s)",
+          scs_cdl_in_use_count(&scsd_cdl), scs_sdir_count(scs_svc_sdir(scsd_svc())));
 
     /* --- THE WIRE CLAIM --- */
     size_t first = 0, last = 0;
@@ -1319,7 +1349,7 @@ static void test_joiner_retransmit_is_not_an_illegal_event(void)
 {
     struct world w;
     world_init(&w);
-    scs_cdl_init(&scsd_cdl);
+    scsd_test_world_reset();
     scsd_cdl_ready = 1;
     conn_transitions = 0;
     conn_illegal_events = 0;
@@ -1347,9 +1377,10 @@ static void test_joiner_retransmit_is_not_an_illegal_event(void)
     CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CONNECT_SENT,
           "a retransmit moved the state to %s",
           scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
-    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1,
-          "a retransmit allocated a second CDT (%u in use)",
-          scs_cdl_in_use_count(&scsd_cdl));
+    /* vms-7fe: one CONNECTION CDT, beside the p. 2-48 listening CDTs. */
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1 + scs_sdir_count(scs_svc_sdir(scsd_svc())),
+          "a retransmit allocated a second CDT (%u in use, %u of them listening)",
+          scs_cdl_in_use_count(&scsd_cdl), scs_sdir_count(scs_svc_sdir(scsd_svc())));
 }
 
 /*
@@ -1363,7 +1394,7 @@ static void test_second_peer_connection_is_refused_not_faked(void)
 {
     struct world w;
     world_init(&w);
-    scs_cdl_init(&scsd_cdl);
+    scsd_test_world_reset();
     scsd_cdl_ready = 1;
 
     static const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x01, 0x01, 0x01};
@@ -1390,7 +1421,9 @@ static void test_second_peer_connection_is_refused_not_faked(void)
     CHECK(b->cdt_joiner == NULL,
           "peer B was given a CDT at a node-global Con.ID already claimed by peer A"
           " -- the CDL would then be describing the wrong connection");
-    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1, "expected exactly one CDT in the CDL");
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1 + scs_sdir_count(scs_svc_sdir(scsd_svc())),
+          "expected one connection CDT beside %u listening CDT(s), CDL holds %u",
+          scs_sdir_count(scs_svc_sdir(scsd_svc())), scs_cdl_in_use_count(&scsd_cdl));
     /* Peer B still SENDS -- the machine is a recorder, never a gate. */
     CHECK(scsd_test_frames >= 2, "peer B's frame was suppressed by the state machine");
 }
@@ -1551,7 +1584,7 @@ static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
     static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
     memset(r, 0, sizeof(*r));
     world_init(&r->w);
-    scs_cdl_init(&scsd_cdl);
+    scsd_test_world_reset();
     scsd_cdl_ready = 1;
     conn_transitions = 0;
     conn_illegal_events = 0;
@@ -1562,6 +1595,11 @@ static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
     vc_conns_broken = 0;
     sysap_vc_loss_notifications = 0;
     vc_sends_refused = 0;
+    /* vms-7fe: the SDIR outcome counters are file-static in scsd.c too. */
+    sdir_connect_scans = 0;
+    sdir_no_such_sysap = 0;
+    sdir_busy_replies = 0;
+    sdir_refusals_unsent = 0;
     memcpy(r->hw_mac, hw_mac, 6);
     memcpy(r->logical, logical, 6);
     memcpy(r->nonce, lab_nonce, 4);
@@ -3701,6 +3739,615 @@ static void test_exit_summary_reports_datagram_discards(void)
           "the exit summary did not report the port DFREEQ");
 }
 
+/* ==========================================================================
+ * vms-7fe -- THE SDIR QUEUE, AS THE DAEMON USES IT.
+ *
+ * Everything below drives src/vmsscs/scsd.c through scsd_handle_frame(), and
+ * every assertion reads either a counter the production path moved or the frame
+ * the production senders actually handed to the transport. No case builds a
+ * reply on its own behalf.
+ *
+ * ONE case -- (2e) -- calls scs_sdir_connect_req() BEFORE the feed, and says so
+ * in its own header: it is the only way to present the daemon's scan with a
+ * listening CDT already in CONNECT RECEIVED, because scsd.c's receive loop
+ * answers synchronously and cannot leave one there between frames (scs_sdir.h
+ * OVMX DESIGN CHOICE 3). That arrangement is the fixture; what is asserted is
+ * still what the daemon did with it.
+ * ========================================================================== */
+
+/* Byte-exact SCA#29 from formation-ci1-joinwindow.pcap: VAX1's MSCP$TAPE
+ * SCS$DIR_LOOKUP request, with a 14-byte Ethernet header. MSCP$TAPE is a name
+ * OVMX does not LISTEN for, so this is the GROUNDED miss (spec sec 4(h)(2)). */
+static const uint8_t cap_lookup_mscptape[108] = {
+    0x08,0x00,0x2b,0x78,0x56,0xb9, 0xaa,0x00,0x04,0x00,0x01,0x04, 0x60,0x07,
+    0x5c,0x00,0xaa,0x00,0x04,0x00,0x02,0x04,0x01,0x00,0xaa,0x00,0x04,0x00,0x01,0x04,
+    0x5b,0x13,0x02,0x00,0x03,0x00,0x01,0x00,0x12,0x00,0x02,0x00,0x00,0x00,0x03,0x00,
+    0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x02,0x32,0x00,0x04,0x00,0x0a,0x00,
+    0x00,0x00,0x07,0x00,0x59,0x33,0x08,0x00,0x05,0x63,0x00,0x00,0x00,0x00,0x4d,0x53,
+    0x43,0x50,0x24,0x54,0x41,0x50,0x45,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+/* Byte-exact SCA#37: the VMS$VAXcluster lookup, opcode 0x4b. OVMX LISTENs for
+ * this name, so it is the affirmative case. */
+static const uint8_t cap_lookup_vaxcluster[108] = {
+    0x08,0x00,0x2b,0x78,0x56,0xb9, 0xaa,0x00,0x04,0x00,0x01,0x04, 0x60,0x07,
+    0x5c,0x00,0xaa,0x00,0x04,0x00,0x02,0x04,0x01,0x00,0xaa,0x00,0x04,0x00,0x01,0x04,
+    0x4b,0x13,0x05,0x00,0x06,0x00,0x01,0x00,0x12,0x00,0x05,0x00,0x00,0x00,0x06,0x00,
+    0x00,0x00,0x05,0x00,0x00,0x00,0x01,0x00,0x00,0x02,0x32,0x00,0x04,0x00,0x0a,0x00,
+    0x00,0x00,0x07,0x00,0x59,0x33,0x08,0x00,0x05,0x63,0x00,0x00,0x00,0x00,0x56,0x4d,
+    0x53,0x24,0x56,0x41,0x58,0x63,0x6c,0x75,0x73,0x74,0x65,0x72,0x20,0x20,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+/* The lookup response's 16-byte result field, payload [78:94] == abs [92:108]. */
+#define SDIR_RESULT_OFF (14 + 78)
+
+/* Copy a captured frame and substitute the 16-byte SYSAP name at payload
+ * [62:78]. LABELLED SYNTHESIS, and the reason is stated rather than hidden:
+ * our captures contain no lookup for SCS$DIRECTORY and no CONNECT_REQ for a
+ * SYSAP the target was not listening for, because the reference VAX polls only
+ * for names it wants and connects only to the directory service and the
+ * connection manager. Every byte except those 16 is the captured frame. */
+/* Re-stamp a captured frame's LIVE SCS counters. spec sec 4(h)(4) grounds
+ * send_seq at [20:22] mirrored byte-exact at [30:32] as state a sender COMPUTES
+ * (17,758/17,758 frames, 0 residuals), not content it replays -- so a replay
+ * that feeds captured frames out of their original order has to renumber them
+ * or the daemon's own p. 2-31 sequentiality check (vms-abc) correctly breaks the
+ * circuit on the gap. The golden lookups are SCA#29 and SCA#37, several credit
+ * shorts after the SCA#21 connect; this makes the replay contiguous. */
+static void seq_stamp(uint8_t *frame, uint16_t send_seq)
+{
+    frame[14 + 20] = (uint8_t)(send_seq & 0xff);
+    frame[14 + 21] = (uint8_t)(send_seq >> 8);
+    frame[14 + 30] = (uint8_t)(send_seq & 0xff);
+    frame[14 + 31] = (uint8_t)(send_seq >> 8);
+}
+
+static void subst_sysap_name(uint8_t *dst, const uint8_t *src, size_t len,
+                             const char *name)
+{
+    memcpy(dst, src, len);
+    uint8_t field[16];
+    memset(field, ' ', sizeof(field));
+    size_t n = strlen(name);
+    if (n > sizeof(field)) {
+        n = sizeof(field);
+    }
+    memcpy(field, name, n);
+    memcpy(dst + 14 + 62, field, sizeof(field));
+}
+
+/*
+ * (1) THE RESPONDER ANSWERS FROM THE QUEUE, AND THE KILL SWITCH PUTS THE OLD
+ * HARDCODED COMPARE BACK. Guardrail 23: the ON measurement is taken and the
+ * counter it gates is confirmed to have moved BEFORE anything is claimed about
+ * what turning the switch off achieves.
+ */
+static void test_sdir_lookup_is_answered_from_the_queue(void)
+{
+    /* The three queries, renumbered contiguously behind the SCA#21 connect
+     * (send_seq 1) so the replay does not read as a sequence gap. */
+    uint8_t q_tape[sizeof(cap_lookup_mscptape)];
+    uint8_t q_vc[sizeof(cap_lookup_vaxcluster)];
+    uint8_t q_dir[sizeof(cap_lookup_mscptape)];
+    memcpy(q_tape, cap_lookup_mscptape, sizeof(q_tape));
+    seq_stamp(q_tape, 2);
+    memcpy(q_vc, cap_lookup_vaxcluster, sizeof(q_vc));
+    seq_stamp(q_vc, 3);
+    subst_sysap_name(q_dir, cap_lookup_mscptape, sizeof(q_dir), "SCS$DIRECTORY");
+    seq_stamp(q_dir, 4);
+
+    /* --- SDIR ON --- */
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    const struct scs_sdir_queue *q = scs_svc_sdir(scsd_svc());
+    CHECK(scs_sdir_count(q) == 2,
+          "the daemon queued %u SDIRs, expected VMS$VAXcluster + SCS$DIRECTORY",
+          scs_sdir_count(q));
+    CHECK(scs_sdir_peek(q, "MSCP$DISK") == NULL,
+          "the daemon LISTENs for MSCP$DISK -- it has no MSCP server, so"
+          " advertising one is exactly the INV-6 failure");
+
+    /* MISS: a name not in the queue gets the GROUNDED marker. */
+    long sent_before = r.rx.dir_lookup_sent;
+    rx_feed(&r, q_tape, sizeof(q_tape));
+    CHECK(r.rx.dir_lookup_sent == sent_before + 1, "no MSCP$TAPE lookup response was sent");
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) == 0,
+          "MSCP$TAPE resolved to something other than the grounded"
+          " 'NOT PRESENT HERE' marker");
+
+    /* HIT: a queued name gets the affirmative descriptor. */
+    rx_feed(&r, q_vc, sizeof(q_vc));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) != 0,
+          "VMS$VAXcluster -- a SYSAP the daemon serves -- resolved to"
+          " 'NOT PRESENT HERE'");
+    CHECK(memcmp(scsd_test_last_frame + 14 + 62, "VMS$VAXcluster  ", 16) == 0,
+          "the response did not echo the queried name back");
+
+    /* THE ANSWER THAT CHANGES: SCS$DIRECTORY. The daemon serves it, so the
+     * queue says yes where the old hardcoded VMS$VAXcluster-only compare said
+     * no while the directory connection was live in the same breath. */
+    unsigned long scans_before = q->scans;
+    rx_feed(&r, q_dir, sizeof(q_dir));
+    CHECK(q->scans > scans_before,
+          "the responder did not consult the SDIR queue at all (scans %lu -> %lu)",
+          scans_before, q->scans);
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) != 0,
+          "SCS$DIRECTORY -- which the daemon had just accepted a connection for --"
+          " still resolves to 'NOT PRESENT HERE'");
+
+    /* --- SDIR OFF: the gated behaviour must be SUPPRESSED, not merely
+     * unmeasured. Same frames, same code path. --- */
+    CHECK(setenv("OVMX_NO_SDIR", "1", 1) == 0, "setenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    rx_feed(&r2, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    const struct scs_sdir_queue *q2 = scs_svc_sdir(scsd_svc());
+    unsigned long scans_off_before = q2->scans;
+    rx_feed(&r2, q_tape, sizeof(q_tape));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) == 0,
+          "the MSCP$TAPE answer changed with the switch off");
+    rx_feed(&r2, q_vc, sizeof(q_vc));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) != 0,
+          "the VMS$VAXcluster answer changed with the switch off");
+    rx_feed(&r2, q_dir, sizeof(q_dir));
+    CHECK(q2->scans == scans_off_before,
+          "OVMX_NO_SDIR=1 did not stop the responder consulting the queue"
+          " (scans %lu -> %lu)", scans_off_before, q2->scans);
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) == 0,
+          "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe answer for"
+          " SCS$DIRECTORY");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+}
+
+/*
+ * (2) AN INBOUND CONNECT_REQ FOR AN UNLISTED SYSAP IS REFUSED, p. 2-48 -- and
+ * the kill switch suppresses the refusal entirely (before this item OVMX
+ * accepted the connection without ever reading the target name).
+ *
+ * THIS IS THE 0x4b PATH. scsd.c has TWO branches that answer an inbound
+ * CONNECT_REQ and BOTH must be covered; the 0x5b SCS$DIRECTORY branch is
+ * (2c)/(2d)/(2e) below, which exist because deleting the whole scan from that
+ * branch once left this file at 723 checks, 0 failures.
+ *
+ * The 0x4b VMS$VAXcluster branch keys on the SCS message type and a zero
+ * destination Con.ID, so ANY target name reaches the p. 2-48 scan through it --
+ * which is why this case can rename the target to MSCP$DISK and get a miss.
+ */
+static void test_sdir_refuses_a_connect_request_for_an_unlisted_sysap(void)
+{
+    /* The captured 0x4b VMS$VAXcluster CONNECT-REQUEST with its target name
+     * changed to a SYSAP OVMX does not serve. See subst_sysap_name(). */
+    uint8_t req[sizeof(cap_vaxcluster_connect_req)];
+    subst_sysap_name(req, cap_vaxcluster_connect_req,
+                     sizeof(cap_vaxcluster_connect_req), "MSCP$DISK");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    rx_feed(&r, req, sizeof(req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(sdir_connect_scans == 1, "the connect request was not scanned (%lu scans)",
+          sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 1,
+          "no 'no such SYSAP' CONNECT_RSP was emitted (%lu)", sdir_no_such_sysap);
+
+    /* The frame is a CONNECT_RSP (GROUNDED [46:48] == 1, spec sec 4(h)(1a)),
+     * the 66-byte class, echoing the requester's handle with our own left at 0. */
+    CHECK(scsd_test_last_len == SCS_DIR_ECHO_FRAME_LEN,
+          "the refusal is %zu bytes, expected the 66-byte CONNECT_RSP class + 14",
+          scsd_test_last_len);
+    CHECK(le16_at(scsd_test_last_frame + 14 + 46) == 1,
+          "the refusal's [46:48] is %u, not the CONNECT_RSP message type 1",
+          le16_at(scsd_test_last_frame + 14 + 46));
+    CHECK(le32_at(scsd_test_last_frame + 14 + 50) == 0x62C50009u,
+          "the refusal did not echo the requester's Con.ID (it carried 0x%08X)",
+          le32_at(scsd_test_last_frame + 14 + 50));
+    CHECK(le32_at(scsd_test_last_frame + 14 + 54) == 0,
+          "the refusal supplied a local Con.ID -- it accepts nothing, so it"
+          " must not hand out a handle");
+    CHECK(scsd_test_last_frame[30] == SCS_MSGTYPE_SEQAPP,
+          "the refusal did not echo the request's 0x4b opcode (it sent 0x%02x)",
+          scsd_test_last_frame[30]);
+    /* THE OVMX-CHOSEN STATUS WORD (not grounded -- see scs_sdir.h). */
+    CHECK(le16_at(scsd_test_last_frame + 14 + 48) == SCS_SDIR_STATUS_NO_SUCH_SYSAP,
+          "the refusal's [48:50] is 0x%04X, expected the OVMX-chosen"
+          " no-such-SYSAP value 0x%04X",
+          le16_at(scsd_test_last_frame + 14 + 48),
+          (unsigned)SCS_SDIR_STATUS_NO_SUCH_SYSAP);
+
+    /* NOTHING WAS ACCEPTED: no binding, no CDT, no connection at the Con.ID. */
+    CHECK(ps->connected == 0, "a refused request still bound VMS$VAXcluster");
+    CHECK(ps->cdt_member == NULL, "a refused request still allocated a CDT");
+    CHECK(scs_cdl_lookup(&scsd_cdl, OVMX_LOCAL_CONID) == NULL,
+          "a refused request left a connection at the member Con.ID");
+    CHECK(r.rx.connect_resp_sent == 0,
+          "a refused request still counted %ld CONNECT-RESPONSE(s)",
+          r.rx.connect_resp_sent);
+
+    /* --- THE KILL SWITCH. Same frame, same world: no scan, no refusal, and
+     * the pre-vms-7fe accept happens instead. --- */
+    CHECK(setenv("OVMX_NO_SDIR", "1", 1) == 0, "setenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    rx_feed(&r2, req, sizeof(req));
+    CHECK(sdir_connect_scans == 0,
+          "OVMX_NO_SDIR=1 did not stop the connect scan (%lu scans)", sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 0,
+          "OVMX_NO_SDIR=1 still emitted %lu refusal(s)", sdir_no_such_sysap);
+    CHECK(sdir_busy_replies == 0 && sdir_refusals_unsent == 0,
+          "OVMX_NO_SDIR=1 still produced a refusal");
+    CHECK(r2.w.peers[0].connected == 1,
+          "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe accept of a connect"
+          " request whose target name nothing here listens for");
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+}
+
+/*
+ * (2b) THE OTHER KILL SWITCH MUST NOT BECOME A REFUSAL STORM.
+ *
+ * scsd_cdl_ready is only set when the connection state machine is enabled, so
+ * under the PRE-EXISTING OVMX_NO_CONN_FSM=1 the port binds no CDL and LISTEN
+ * never runs -- leaving the SDIR queue EMPTY. Read literally, an empty queue
+ * says "nothing on this node is listening", which would make the p. 2-48 scan
+ * refuse EVERY inbound connect request and turn a switch documented to change
+ * no byte into one that stops OVMX joining. scsd_sdir_live() is the guard;
+ * this is the test that says so, and it FAILED before that guard existed.
+ */
+static void test_no_conn_fsm_does_not_turn_into_a_refusal_storm(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_NO_CONN_FSM", "1", 1) == 0, "setenv failed");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    /* Reproduce what main() does under this switch: the CDL is NOT initialized
+     * and the port is never bound, which is the state the guard has to survive. */
+    scsd_cdl_ready = 0;
+    memset(&scsd_svc_port, 0, sizeof(scsd_svc_port));
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    CHECK(scs_sdir_count(scs_svc_sdir(scsd_svc())) == 0,
+          "the fixture did not reproduce the empty-queue state the guard is for");
+
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    /* Renumbered to follow the connect (see seq_stamp): the golden 0x4b sits at
+     * send_seq 7, and a contiguous replay must not read as a sequence gap. */
+    uint8_t member_req[sizeof(cap_vaxcluster_connect_req)];
+    memcpy(member_req, cap_vaxcluster_connect_req, sizeof(member_req));
+    seq_stamp(member_req, 2);
+    rx_feed(&r, member_req, sizeof(member_req));
+
+    CHECK(sdir_connect_scans == 0,
+          "the scan ran against an unpopulated queue (%lu scans)", sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 0,
+          "an unpopulated SDIR queue refused %lu connect request(s) -- every SYSAP"
+          " the daemon serves would be unreachable under OVMX_NO_CONN_FSM=1",
+          sdir_no_such_sysap);
+    /* And both connections still form, exactly as they did before this item. */
+    CHECK(r.w.peers[0].dir_connected == 1,
+          "SCS$DIRECTORY did not bind with the connection state machine off");
+    CHECK(r.w.peers[0].connected == 1,
+          "the member VMS$VAXcluster connection did not bind with the machine off");
+
+    CHECK(unsetenv("OVMX_NO_CONN_FSM") == 0, "unsetenv failed");
+}
+
+/* ==========================================================================
+ * (2c)/(2d)/(2e) -- THE 0x5b SCS$DIRECTORY PATH'S SCAN.
+ *
+ * WHY THESE THREE EXIST. scsd.c answers an inbound CONNECT_REQ from two
+ * branches, and the p. 2-48 scan was added to both. Only the 0x4b one was
+ * covered: with the ENTIRE scsd_sdir_live()/scsd_sdir_admit() block deleted from
+ * the 0x5b branch of scsd_handle_frame(), this file still reported 723 checks,
+ * 0 failures -- measured, not supposed. (3) below looked like coverage and was
+ * not: it asserts the SDIR is in LISTEN after the accept, which is trivially
+ * true when the scan never ran and the SDIR was never moved out of LISTEN.
+ *
+ * WHAT THE COVERAGE BOUNDS ARE, AND IT MATTERS. The 0x5b branch is classified by
+ * vms-246's scs_dir_parse(), whose is_dir_connect_request test is
+ * `remote_conid == 0 && memcmp(name, "SCS$DIRECTORY", 13) == 0` (scs_dir.c).
+ * The target name is therefore not free on this branch the way it is on the
+ * 0x4b one. Two consequences, both asserted below rather than assumed:
+ *
+ *   - For the frames the reference VAX actually sends -- name exactly
+ *     "SCS$DIRECTORY", a name OVMX LISTENs for -- THE SCAN ON THIS BRANCH CAN
+ *     ONLY EVER HIT. (2c) proves the hit is real work and not a no-op; it
+ *     cannot prove a production miss, because there is no production frame that
+ *     reaches this branch and misses.
+ *   - The classifier compares THIRTEEN bytes of a SIXTEEN-byte field, so a name
+ *     that merely STARTS WITH "SCS$DIRECTORY" is classified as a directory
+ *     connect request while the scan -- which reads the whole blank-trimmed
+ *     field via scs_sdir_target_name() -- looks up the full name and misses.
+ *     (2d) is that miss. It is a synthesized frame and labelled as one, but the
+ *     prefix compare it exploits is production code, and the kill-switch control
+ *     in (2d) shows what OVMX did with such a frame before this item: bound the
+ *     SCS$DIRECTORY connection for it without ever reading the name.
+ * ========================================================================== */
+
+/*
+ * (2c) THE 0x5b CONNECT_REQ IS SCANNED, AND THE SCAN IS THE THING THAT ADMITS
+ * IT. Every counter checked here is moved only by scsd_sdir_admit() ->
+ * scs_sdir_connect_req(); none of them can move on the pre-vms-7fe path.
+ */
+static void test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    const struct scs_sdir_queue *q = scs_svc_sdir(scsd_svc());
+    const struct scs_sdir *sd = scs_sdir_peek(q, "SCS$DIRECTORY");
+    CHECK(sd != NULL, "SCS$DIRECTORY is not in the queue");
+    unsigned long scans0 = q->scans, hits0 = q->hits, delivered0 = q->delivered;
+
+    /* The GOLDEN frame -- pcap #30, target name exactly "SCS$DIRECTORY". */
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    CHECK(sdir_connect_scans == 1,
+          "the 0x5b SCS$DIRECTORY CONNECT-REQUEST was never scanned (%lu scans)"
+          " -- the p. 2-48 scan is not on this branch at all",
+          sdir_connect_scans);
+    CHECK(q->scans == scans0 + 1,
+          "the queue was walked %lu times for one 0x5b connect request",
+          q->scans - scans0);
+    CHECK(q->hits == hits0 + 1,
+          "the scan did not match SCS$DIRECTORY, a name the daemon LISTENs for");
+    CHECK(q->delivered == delivered0 + 1,
+          "the request was never delivered to the listening CDT (delivered %lu)",
+          q->delivered - delivered0);
+    CHECK(sdir_no_such_sysap == 0 && sdir_busy_replies == 0 &&
+          sdir_refusals_unsent == 0,
+          "the golden SCS$DIRECTORY connect request was REFUSED -- OVMX LISTENs"
+          " for that name, so this scan must hit");
+
+    /* Having been admitted by the scan, the accept ran exactly as before. */
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->dir_connected == 1, "the admitted request did not bind SCS$DIRECTORY");
+    CHECK(ps->cdt_dir != NULL, "the admitted request allocated no connection CDT");
+
+    /* --- THE KILL SWITCH. Same frame, same world: the scan does not run, and
+     * the accept still happens -- this branch's pre-vms-7fe behaviour. --- */
+    CHECK(setenv("OVMX_NO_SDIR", "1", 1) == 0, "setenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    const struct scs_sdir_queue *q2 = scs_svc_sdir(scsd_svc());
+    unsigned long off_delivered0 = q2->delivered;
+    rx_feed(&r2, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    CHECK(sdir_connect_scans == 0,
+          "OVMX_NO_SDIR=1 did not stop the 0x5b scan (%lu scans)", sdir_connect_scans);
+    CHECK(q2->delivered == off_delivered0,
+          "OVMX_NO_SDIR=1 still delivered the request to a listening CDT");
+    CHECK(r2.w.peers[0].dir_connected == 1,
+          "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe accept on the 0x5b path");
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+}
+
+/*
+ * (2d) A 0x5b CONNECT_REQ WHOSE TARGET THE QUEUE DOES NOT CARRY IS REFUSED, and
+ * the refusal echoes the 0x5b opcode -- which is what identifies this as the
+ * directory branch's refusal and not the 0x4b one's.
+ *
+ * SYNTHESIS, LABELLED. "SCS$DIRECTORYX" is not a name any VAX sends. It is the
+ * shortest frame that reaches this branch and MISSES, and it reaches it through
+ * production code: scs_dir_parse() classifies on a 13-byte prefix (see the
+ * block header above). Every byte except the 16-byte name field is pcap #30.
+ */
+static void test_the_0x5b_scan_refuses_a_target_the_queue_does_not_carry(void)
+{
+    uint8_t req[sizeof(cap_dir_connect_req)];
+    subst_sysap_name(req, cap_dir_connect_req, sizeof(req), "SCS$DIRECTORYX");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(scs_sdir_peek(scs_svc_sdir(scsd_svc()), "SCS$DIRECTORYX") == NULL,
+          "the fixture's miss name is in the queue -- it would not miss");
+
+    rx_feed(&r, req, sizeof(req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(sdir_connect_scans == 1,
+          "the 0x5b connect request was not scanned (%lu scans)", sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 1,
+          "no 'no such SYSAP' CONNECT_RSP was emitted on the 0x5b path (%lu)",
+          sdir_no_such_sysap);
+
+    /* THE FRAME. 66-byte CONNECT_RSP class, message type 1, requester's handle
+     * echoed, no local Con.ID handed out -- and the 0x5b opcode. */
+    CHECK(scsd_test_last_len == SCS_DIR_ECHO_FRAME_LEN,
+          "the refusal is %zu bytes, expected the 66-byte CONNECT_RSP class + 14",
+          scsd_test_last_len);
+    CHECK(scsd_test_last_frame[30] == SCS_DIR_OPCODE,
+          "the refusal carried opcode 0x%02x, not the 0x5b of the request it"
+          " answers -- this is the directory branch",
+          scsd_test_last_frame[30]);
+    CHECK(le16_at(scsd_test_last_frame + 14 + 46) == 1,
+          "the refusal's [46:48] is %u, not the CONNECT_RSP message type 1",
+          le16_at(scsd_test_last_frame + 14 + 46));
+    CHECK(le32_at(scsd_test_last_frame + 14 + 50) == 0x63050008u,
+          "the refusal did not echo pcap #30's Con.ID (it carried 0x%08X)",
+          le32_at(scsd_test_last_frame + 14 + 50));
+    CHECK(le32_at(scsd_test_last_frame + 14 + 54) == 0,
+          "the refusal supplied a local Con.ID -- it accepts nothing, so it"
+          " must not hand out a handle");
+    /* THE OVMX-CHOSEN STATUS WORD (not grounded -- see scs_sdir.h). */
+    CHECK(le16_at(scsd_test_last_frame + 14 + 48) == SCS_SDIR_STATUS_NO_SUCH_SYSAP,
+          "the refusal's [48:50] is 0x%04X, expected the OVMX-chosen"
+          " no-such-SYSAP value 0x%04X",
+          le16_at(scsd_test_last_frame + 14 + 48),
+          (unsigned)SCS_SDIR_STATUS_NO_SUCH_SYSAP);
+
+    /* NOTHING WAS ACCEPTED. */
+    CHECK(ps->dir_connected == 0, "a refused request still bound SCS$DIRECTORY");
+    CHECK(ps->cdt_dir == NULL, "a refused request still allocated a CDT");
+    CHECK(ps->dir_remote_conid == 0,
+          "a refused request still learned the peer's directory handle 0x%08X",
+          ps->dir_remote_conid);
+    CHECK(scs_cdl_lookup(&scsd_cdl, SCS_DIR_OVMX_CONID) == NULL,
+          "a refused request left a connection at the directory Con.ID");
+    CHECK(r.rx.dir_conn_resp_sent == 0,
+          "a refused request still counted %ld directory CONNECT-RESPONSE(s)",
+          r.rx.dir_conn_resp_sent);
+
+    /* --- THE KILL SWITCH, and it shows what this item actually changed: before
+     * vms-7fe the 0x5b branch bound SCS$DIRECTORY for this frame without ever
+     * reading the name it asked for. --- */
+    CHECK(setenv("OVMX_NO_SDIR", "1", 1) == 0, "setenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    rx_feed(&r2, req, sizeof(req));
+    CHECK(sdir_connect_scans == 0,
+          "OVMX_NO_SDIR=1 did not stop the 0x5b scan (%lu scans)", sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 0 && sdir_busy_replies == 0 &&
+          sdir_refusals_unsent == 0,
+          "OVMX_NO_SDIR=1 still produced a refusal on the 0x5b path");
+    CHECK(r2.w.peers[0].dir_connected == 1,
+          "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe accept of a 0x5b"
+          " connect request whose target name nothing here listens for");
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+}
+
+/*
+ * (2e) THE 0x5b SCAN READS THE LISTENING CDT'S p. 2-50 STATE, AND RETURNS IT.
+ *
+ * (2c) shows counters move; this shows the daemon's scan is a real read of the
+ * SDIR's state and a real write back to LISTEN, and that it passes the frame's
+ * OWN requester Con.ID in.
+ *
+ * THE FIXTURE IS SYNTHETIC AND HERE IS WHY: scsd.c answers synchronously and
+ * calls scs_sdir_connect_answered() before returning, so its receive loop can
+ * never leave a listening CDT in CONNECT RECEIVED between frames (scs_sdir.h
+ * OVMX DESIGN CHOICE 3, which also records that the p. 2-50 BUSY reply is
+ * therefore unreachable from the daemon -- this case does NOT contradict that,
+ * it takes the DESIGN CHOICE 4 retransmit branch instead). The one call to
+ * scs_sdir_connect_req() below is the only way to present the daemon with that
+ * arrangement. Everything after the feed is the daemon's own work.
+ *
+ * And the discrimination is sharp: DESIGN CHOICE 4 delivers again only when the
+ * requester Con.ID MATCHES. pcap #30 carries 0x63050008, so if scsd.c passed
+ * anything else -- 0, a local handle, the peer's MAC-keyed id -- the scan would
+ * take the BUSY branch, refuse the golden frame, and the join would stop.
+ */
+static void test_the_0x5b_scan_reads_and_restores_the_listening_cdt_state(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    struct scs_sdir_queue *q = scs_svc_sdir_mut(scsd_svc());
+    const struct scs_sdir *sd = NULL;
+    /* THE FIXTURE (see header): hold the listening CDT in CONNECT RECEIVED for
+     * pcap #30's requester, 0x63050008. */
+    CHECK(scs_sdir_connect_req(q, "SCS$DIRECTORY", NULL, 0x63050008u, &sd) ==
+              SCS_SDIR_DELIVERED,
+          "the fixture could not put SCS$DIRECTORY into CONNECT RECEIVED");
+    CHECK(sd != NULL && sd->state == SCS_SDIR_CONNECT_RECEIVED,
+          "the fixture did not leave the listening CDT in CONNECT RECEIVED");
+    if (sd == NULL) {
+        return;
+    }
+    unsigned long retx0 = q->retransmits, busy0 = q->busy;
+
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    CHECK(sdir_connect_scans == 1,
+          "the 0x5b connect request was not scanned (%lu scans)", sdir_connect_scans);
+    CHECK(q->retransmits == retx0 + 1,
+          "the daemon's scan did not see the listening CDT in CONNECT RECEIVED"
+          " with the frame's own requester Con.ID (retransmits %lu -> %lu)",
+          retx0, q->retransmits);
+    CHECK(q->busy == busy0,
+          "the daemon's scan refused pcap #30 BUSY -- it passed a requester"
+          " Con.ID that is not the 0x63050008 the frame carries");
+    CHECK(sdir_busy_replies == 0,
+          "a busy CONNECT_RSP went on the wire for the golden connect request");
+
+    /* AND BACK. p. 2-50 via OVMX DESIGN CHOICE 3: answering returns it. */
+    CHECK(sd->state == SCS_SDIR_LISTEN,
+          "after answering, the listening CDT is %s -- it must be back in LISTEN"
+          " or every later connect request gets a busy reply forever",
+          scs_sdir_state_name(sd->state));
+    CHECK(sd->pending_remote_conid == 0,
+          "the answered request's requester 0x%08X is still pending on the SDIR",
+          sd->pending_remote_conid);
+    CHECK(r.w.peers[0].dir_connected == 1,
+          "the redelivered request did not bind SCS$DIRECTORY");
+}
+
+/*
+ * (3) p. 2-49: "the 'local CONID' used on the target node to identify the new
+ * connection is the CONID of this separate CDT, and NOT the CONID of the
+ * listening CDT." Read off the frame the daemon actually transmitted.
+ */
+static void test_accept_conid_is_not_the_listening_conid(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    const struct scs_sdir_queue *q = scs_svc_sdir(scsd_svc());
+    const struct scs_sdir *sd = scs_sdir_peek(q, "SCS$DIRECTORY");
+    CHECK(sd != NULL, "SCS$DIRECTORY is not in the queue");
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->cdt_dir != NULL, "the accept allocated no connection CDT");
+    if (sd == NULL || ps->cdt_dir == NULL) {
+        return;
+    }
+    /* FIRST: the accept below was reached THROUGH the scan. Without this the
+     * "still in LISTEN" check further down is trivially true of a daemon that
+     * never scans and never moves the SDIR at all -- which is exactly how this
+     * case survived the whole 0x5b guard block being deleted. */
+    CHECK(sdir_connect_scans == 1,
+          "the accept under test did not go through the p. 2-48 scan (%lu scans)",
+          sdir_connect_scans);
+    CHECK(q->delivered == 1,
+          "the request was never delivered to the listening CDT (delivered %lu)",
+          q->delivered);
+
+    CHECK(ps->cdt_dir->local_conid != sd->conid,
+          "the new connection took the LISTENING CDT's Con.ID 0x%08X", sd->conid);
+    CHECK(ps->cdt_dir->local_conid == SCS_DIR_OVMX_CONID,
+          "the new connection is at 0x%08X, not the Con.ID OVMX ships",
+          (unsigned)ps->cdt_dir->local_conid);
+    /* The listening CDT is a DIFFERENT descriptor and is still listening. */
+    struct scs_cdt *lcdt = scs_sdir_listening_cdt(q, sd);
+    CHECK(lcdt != NULL && lcdt != ps->cdt_dir,
+          "the listening CDT and the connection CDT are the same descriptor");
+    CHECK(sd->state == SCS_SDIR_LISTEN,
+          "after answering, the listening CDT is %s -- it must be back in LISTEN"
+          " or the next request gets a busy reply forever",
+          scs_sdir_state_name(sd->state));
+
+    /* AND IT IS THE NEW CON.ID THAT WENT ON THE WIRE: the last frame of the
+     * accept pair is the op=2 CONNECT-RESPONSE, local Con.ID at [54:58]. */
+    CHECK(le32_at(scsd_test_last_frame + 14 + 54) == SCS_DIR_OVMX_CONID,
+          "the CONNECT-RESPONSE carried local Con.ID 0x%08X, expected the new"
+          " connection's 0x%08X", le32_at(scsd_test_last_frame + 14 + 54),
+          (unsigned)SCS_DIR_OVMX_CONID);
+    CHECK(le32_at(scsd_test_last_frame + 14 + 54) != sd->conid,
+          "the CONNECT-RESPONSE put the LISTENING CDT's Con.ID on the wire");
+}
+
+
 /*
  * =====================================================================
  * vms-22e: WHAT THE DAEMON DOES WITH AN ABANDONED OPEN.
@@ -3937,6 +4584,15 @@ int main(void)
     test_masquerade_open_is_logged_and_suppresses_vcopen();
     /* vms-b1d: the exit summary's datagram-discard accounting. */
     test_exit_summary_reports_datagram_discards();
+    /* vms-7fe: the SDIR queue as the daemon uses it, and its kill switch. */
+    test_sdir_lookup_is_answered_from_the_queue();
+    test_sdir_refuses_a_connect_request_for_an_unlisted_sysap();
+    test_no_conn_fsm_does_not_turn_into_a_refusal_storm();
+    /* The OTHER inbound-CONNECT_REQ branch: the 0x5b SCS$DIRECTORY path. */
+    test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted();
+    test_the_0x5b_scan_refuses_a_target_the_queue_does_not_carry();
+    test_the_0x5b_scan_reads_and_restores_the_listening_cdt_state();
+    test_accept_conid_is_not_the_listening_conid();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

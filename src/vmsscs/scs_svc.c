@@ -36,6 +36,9 @@ void scs_svc_port_init(struct scs_svc_port *port, struct scs_cdl *cdl)
     }
     memset(port, 0, sizeof(*port));
     port->cdl = cdl;
+    /* vms-7fe: the "list of listening SYSAPs" IS the p. 2-48 SDIR queue now,
+     * and its listening CDTs come from this port's CDL. */
+    scs_sdir_queue_init(&port->sdir, cdl);
 }
 
 int scs_svc_descriptors_available(const struct scs_svc_port *port)
@@ -46,31 +49,32 @@ int scs_svc_descriptors_available(const struct scs_svc_port *port)
     return port != NULL && port->cdl != NULL && scs_conn_fsm_enabled();
 }
 
-/* --- LISTEN (p. 2-22) ----------------------------------------------------- */
+/* --- LISTEN (p. 2-22, p. 2-48) --------------------------------------------
+ *
+ * vms-7fe: the fixed `struct scs_svc_listener listen[]` array this used to keep
+ * is GONE. p. 2-48 says what the list actually is -- "a queue of SCS Directory
+ * Entries (SDIRs) ... Each SDIR contains the CONID of a special 'listening CDT'
+ * that is also allocated at this time" -- so the list lives in scs_sdir.c and
+ * these three functions are its calling interface. Nothing else changed about
+ * LISTEN's contract: same statuses, same not-idempotent duplicate rule.
+ */
 
-static int name_eq(const char *a, const char *b)
+const struct scs_sdir_queue *scs_svc_sdir(const struct scs_svc_port *port)
 {
-    return a != NULL && b != NULL &&
-           strncmp(a, b, SCS_CDT_SYSAP_NAME_LEN) == 0;
+    return (port != NULL) ? &port->sdir : NULL;
 }
 
-const struct scs_svc_listener *scs_svc_listener_of(const struct scs_svc_port *port,
-                                                   const char *local_sysap)
+struct scs_sdir_queue *scs_svc_sdir_mut(struct scs_svc_port *port)
 {
-    if (port == NULL || local_sysap == NULL) {
-        return NULL;
-    }
-    for (unsigned i = 0; i < SCS_SVC_MAX_LISTENERS; i++) {
-        if (port->listen[i].in_use && name_eq(port->listen[i].sysap, local_sysap)) {
-            return &port->listen[i];
-        }
-    }
-    return NULL;
+    return (port != NULL) ? &port->sdir : NULL;
 }
 
 int scs_svc_listening(const struct scs_svc_port *port, const char *local_sysap)
 {
-    return scs_svc_listener_of(port, local_sysap) != NULL;
+    if (port == NULL) {
+        return 0;
+    }
+    return scs_sdir_peek(&port->sdir, local_sysap) != NULL;
 }
 
 enum scs_svc_status scs_listen(struct scs_svc_port *port, const char *local_sysap,
@@ -79,21 +83,13 @@ enum scs_svc_status scs_listen(struct scs_svc_port *port, const char *local_sysa
     if (port == NULL || local_sysap == NULL || local_sysap[0] == '\0') {
         return SCS_SVC_BADARG;
     }
-    if (scs_svc_listening(port, local_sysap)) {
-        return SCS_SVC_NOLISTEN; /* already in the list -- see the header */
+    if (scs_sdir_listen(&port->sdir, local_sysap, on_connect_req, ctx) == NULL) {
+        /* Full, duplicate, no CDL, or the reserved listening CONID was taken.
+         * All four are "the SYSAP is not listening", which is what the caller
+         * has to act on; the SDIR counters distinguish them for the run log. */
+        return SCS_SVC_NOLISTEN;
     }
-    for (unsigned i = 0; i < SCS_SVC_MAX_LISTENERS; i++) {
-        if (port->listen[i].in_use) {
-            continue;
-        }
-        port->listen[i].in_use = 1;
-        strncpy(port->listen[i].sysap, local_sysap, SCS_CDT_SYSAP_NAME_LEN);
-        port->listen[i].sysap[SCS_CDT_SYSAP_NAME_LEN] = '\0';
-        port->listen[i].on_connect_req = on_connect_req;
-        port->listen[i].ctx = ctx;
-        return SCS_SVC_OK;
-    }
-    return SCS_SVC_NOLISTEN;
+    return SCS_SVC_OK;
 }
 
 /* --- the shared machinery ------------------------------------------------- */

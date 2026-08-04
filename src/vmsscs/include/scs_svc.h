@@ -73,16 +73,15 @@
  * ACCEPT      LIVE, twice: the SCS$DIRECTORY connect (op=1 CONNECT-ECHO +
  *             op=2 CONNECT-RESPONSE) and the member-opened VMS$VAXcluster
  *             0x4b CONNECT-RESPONSE.
- * LISTEN      REGISTERED, NOT YET CONSULTED. scsd.c declares VMS$VAXcluster and
- *             SCS$DIRECTORY when the port comes up, and scs_svc_listening()
- *             answers for them -- but NOTHING IN THE DAEMON READS IT YET. The
- *             SCS$DIR_LOOKUP responder still decides with its own hardcoded
- *             name compare, and no incoming connect request is refused for want
- *             of a listener. Rewiring the responder onto this list is a WIRE
- *             CHANGE (it would make every lookup answer depend on the list
- *             being populated, including under OVMX_NO_CONN_FSM) and is
- *             deliberately left to vms-7fe, which owns the SDIR queue and the
- *             listening CDT (p. 2-56).
+ * LISTEN      LIVE AS OF vms-7fe, and now backed by the p. 2-48 SDIR queue
+ *             (scs_sdir.h) with a listening CDT per name. TWO production
+ *             readers: the SCS$DIR_LOOKUP responder answers affirmative iff the
+ *             queried name is in the queue (the hardcoded VMS$VAXcluster name
+ *             compare is gone), and both inbound-CONNECT_REQ paths scan the
+ *             queue before accepting. Gated by OVMX_NO_SDIR, which restores the
+ *             pre-vms-7fe hardcoded compare and skips the connect scan.
+ *             STILL NOT TRUE: no SYSAP supplies a connect-request handler, so
+ *             the p. 2-48 delivery calls nothing (see scs_sdir.h).
  * REJECT      NO PRODUCTION CALLER. OVMX accepts every connect request it
  *             understands and ignores the rest; it has never rejected one.
  *             The service exists, allocates nothing, and is exercised only by
@@ -169,19 +168,21 @@
 #include "scs_cdt.h"    /* struct scs_cdt / struct scs_cdl, the SYSAP entry points */
 #include "scs_conn.h"   /* enum scs_conn_action / enum scs_conn_event, the table */
 #include "scs_config.h" /* struct scs_pb / struct scs_config, CONFIG_SYS + CONFIG_PATH */
+#include "scs_sdir.h"   /* vms-7fe: the p. 2-48 SDIR queue -- LISTEN's actual list */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 /*
- * How many SYSAP names one node may have LISTENing at once. VMS's list is a
- * queue of dynamically allocated SDIRs (p. 2-56) with no published bound; OVMX
- * uses a fixed array because it serves two names (VMS$VAXcluster and
- * SCS$DIRECTORY) and a fixed array cannot fail to allocate inside an executive
- * path. OVMX DESIGN CHOICE -- vms-7fe owns the real SDIR queue.
+ * How many SYSAP names one node may have LISTENing at once.
+ *
+ * vms-7fe: this is now just the SDIR queue's capacity, spelled here so callers
+ * that already used this name keep working. The real list is
+ * struct scs_sdir_queue (scs_sdir.h), which allocates a listening CDT per
+ * entry exactly as p. 2-48 requires.
  */
-#define SCS_SVC_MAX_LISTENERS 8
+#define SCS_SVC_MAX_LISTENERS SCS_SDIR_MAX
 
 /* --- status ---------------------------------------------------------------
  *
@@ -249,19 +250,11 @@ typedef int (*scs_svc_emit_fn)(void *ctx, struct scs_cdt *cdt,
                                const char **what);
 
 /* The routine a listening SYSAP supplies to handle an incoming connect request
- * (p. 2-56: "a listening CDT contains the address of the SYSAP's routine for
- * handling incoming connect requests"). OVMX registers one but nothing calls it
- * yet -- see the honest-state table above. */
-typedef void (*scs_svc_connect_req_fn)(const char *local_sysap,
-                                       const char *remote_sysap, void *ctx);
-
-/* --- one entry of the "list of listening SYSAPs" (p. 2-22) ---------------- */
-struct scs_svc_listener {
-    int  in_use;
-    char sysap[SCS_CDT_SYSAP_NAME_LEN + 1];
-    scs_svc_connect_req_fn on_connect_req;
-    void *ctx;
-};
+ * (p. 2-48: "a listening CDT contains the address of the SYSAP's routine for
+ * handling incoming connect requests"). vms-7fe stores it on the listening CDT
+ * the SDIR names, and scsd.c's directory and member accept paths now call it.
+ * The type is scs_sdir.h's -- one typedef, not two that must be kept in step. */
+typedef scs_sdir_connect_req_fn scs_svc_connect_req_fn;
 
 /*
  * struct scs_svc_port - the node's SCS service state. One per node (scsd.c has
@@ -275,7 +268,7 @@ struct scs_svc_listener {
  */
 struct scs_svc_port {
     struct scs_cdl *cdl;                                 /* p. 2-29 */
-    struct scs_svc_listener listen[SCS_SVC_MAX_LISTENERS];
+    struct scs_sdir_queue sdir;                          /* p. 2-48, Figure 2-24 */
 
     unsigned long connects;      /* scs_connect() calls that reached the machine */
     unsigned long accepts;       /* scs_accept()   ditto */
@@ -384,17 +377,23 @@ struct scs_svc_args {
  *  the SYSAP invokes the LISTEN service. This service will place the SYSAP's
  *  name into a 'list of listening SYSAPs' ..." (p. 2-22)
  *
- * `on_connect_req` is p. 2-56's "SYSAP's routine for handling incoming connect
+ * `on_connect_req` is p. 2-48's "SYSAP's routine for handling incoming connect
  * requests"; it may be NULL.
  *
- * WHAT THIS DELIBERATELY DOES NOT DO: it allocates no listening CDT and builds
- * no SDIR queue. p. 2-56 describes both as the VMS implementation of the list;
- * vms-7fe owns them. This is the minimal registration ACCEPT/REJECT and the
- * directory responder need in order to answer "is this SYSAP listening".
+ * WHAT THIS NOW DOES, AND DID NOT BEFORE vms-7fe: it allocates the SDIR and the
+ * listening CDT p. 2-48 requires ("an SDIR containing the SYSAP's name is
+ * allocated and placed in this queue. Each SDIR contains the CONID of a special
+ * 'listening CDT' that is also allocated at this time"). So LISTEN DOES take a
+ * CDT -- one per listening name, from a reserved CONID band that cannot collide
+ * with the three Con.IDs OVMX ships on the wire (scs_sdir.h, DESIGN CHOICE 1).
+ * p. 2-56's "CONNECT and ACCEPT services each result in the allocation of a CDT
+ * for new connections" is about CONNECTION CDTs and does not contradict this:
+ * a listening CDT is not a connection.
  *
  * Returns SCS_SVC_OK, SCS_SVC_BADARG (NULL port or name), or SCS_SVC_NOLISTEN
- * (the list is full, or the name is already in it -- LISTEN is not idempotent
- * by accident; a duplicate is a SYSAP bug worth seeing).
+ * (the queue is full, the name is already in it -- LISTEN is not idempotent by
+ * accident; a duplicate is a SYSAP bug worth seeing -- the port has no CDL, or
+ * the reserved listening CONID was already taken).
  */
 enum scs_svc_status scs_listen(struct scs_svc_port *port, const char *local_sysap,
                                scs_svc_connect_req_fn on_connect_req, void *ctx);
@@ -402,13 +401,14 @@ enum scs_svc_status scs_listen(struct scs_svc_port *port, const char *local_sysa
 /* Is `local_sysap` in the list? 0/1. The SCS Directory Service's question
  * (p. 2-22: "The SCS Directory Service is in fact a SYSAP that responds to
  * inquires from other nodes wanting to know if particular SYSAP names are in
- * this list."). */
+ * this list."). Non-counting: it does not move the SDIR scan counters. */
 int scs_svc_listening(const struct scs_svc_port *port, const char *local_sysap);
 
-/* The listener entry for `local_sysap`, or NULL. Exposed so vms-7fe can hang
- * the SDIR/listening-CDT model off it without this file having to grow one. */
-const struct scs_svc_listener *scs_svc_listener_of(const struct scs_svc_port *port,
-                                                   const char *local_sysap);
+/* The port's SDIR queue -- the p. 2-48 scan, the listening CDTs, and the
+ * counters. The mutable form is what the port driver's receive path runs
+ * scs_sdir_lookup() / scs_sdir_connect_req() against. */
+const struct scs_sdir_queue *scs_svc_sdir(const struct scs_svc_port *port);
+struct scs_sdir_queue *scs_svc_sdir_mut(struct scs_svc_port *port);
 
 /* --- CONNECT (pp. 2-22..2-23, 2-47, 2-56) ---------------------------------
  *

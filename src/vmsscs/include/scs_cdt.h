@@ -224,6 +224,23 @@ typedef void (*scs_credit_special_fn)(struct scs_cdt *cdt, unsigned credit, void
 struct scs_cdt {
     int in_use; /* 0 = released (p. 2-30: released but NOT deallocated) */
 
+    /*
+     * vms-7fe: THIS CDT IS A LISTENING CDT, NOT A CONNECTION.
+     *
+     * p. 2-48: "Each SDIR contains the CONID of a special 'listening CDT' that
+     * is also allocated at this time. Instead of containing the address of a
+     * regular message input routine, a listening CDT contains the address of
+     * the SYSAP's routine for handling incoming connect requests." So it is a
+     * CDT in every structural sense -- it occupies a CDL slot and has a CONID --
+     * but it describes no connection: it has no peer, no circuit, no remote
+     * CONID and no Figure 2-14 state. Set only by scs_sdir_listen()
+     * (src/vmsscs/scs_sdir.c); everything that reports on CONNECTIONS must skip
+     * it, which is why the flag is explicit rather than inferred from "pb is
+     * NULL and remote_sysap is empty" -- a connection CDT is briefly in that
+     * shape too, between allocation and binding.
+     */
+    int listening;
+
     /* p. 2-28: names of the local and remote SYSAPs on this connection. */
     char local_sysap[SCS_CDT_SYSAP_NAME_LEN + 1];
     char remote_sysap[SCS_CDT_SYSAP_NAME_LEN + 1];
@@ -575,6 +592,12 @@ unsigned scs_cdl_vc_loss(struct scs_pb *pb);
 
 /* Number of in-use CDTs in the whole CDL. */
 unsigned scs_cdl_in_use_count(const struct scs_cdl *cdl);
+
+/* vms-7fe: mark this CDT as a p. 2-48 LISTENING CDT (see the field). Called by
+ * scs_sdir_listen() immediately after allocation, before anything can report on
+ * it. cdt_open() clears the flag with the rest of the descriptor, so a released
+ * listening CDT reused for a connection is not still marked. */
+void scs_cdt_set_listening(struct scs_cdt *cdt, int listening);
 
 #ifdef __cplusplus
 }

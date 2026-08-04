@@ -853,6 +853,12 @@ at [48:50] and remains inferred.
   [62:78]) + a 16-byte **result field [78:94]**: all-zero in the request, and
   the literal ASCII **`"NOT PRESENT HERE"`** in the negative response.
 
+**The 16-byte name field at [62:78] is also the CONNECT_REQ's TARGET SYSAP
+name**, which is what `vms-7fe` scans the p. 2-48 SDIR queue with
+(`scs_sdir_target_name()`): the connect frame row immediately below records
+SCA 21 carrying `"SCS$DIRECTORY   "` there, and the 110-byte `[46:48] == 0`
+CONNECT_REQ class of §4(h)(1a) carries the target name in the same field.
+
 **GROUNDED (directly observed ASCII):** the queried SYSAP name and, decisively,
 the `"NOT PRESENT HERE"` result string that signals a negative resolution — the
 same string §4c reported but now pinned to the [78:94] result field. The exact
@@ -1649,6 +1655,43 @@ lossy link could exceed it; the choice rests on the margin, not on the maximum.
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:
+
+- **The `CONNECT_RSP` REFUSAL CODES — "no such SYSAP" and "busy, try again
+  later" (`vms-7fe`). NOT GROUNDED, IN PLACEMENT OR IN VALUE, AND OVMX SHIPS
+  BOTH.** *VAXcluster Principles* p. 2-48 requires a `CONNECT_RSP` "containing
+  the 'no such SYSAP' error" when the target SYSAP is not in the list of
+  listening SYSAPs, and p. 2-50 requires "a response that essentially says
+  'busy … try again later'" when the listening CDT is already in CONNECT
+  RECEIVED. **The book publishes no code for either, and neither frame is on any
+  capture we hold:** all 16 `CONNECT_RSP` frames in `formation-ci1.pcap` are the
+  positive kind (their targets were listening), and the companion word at
+  `[48:50]` is recorded as INFERRED in §4(h)(2). OVMX therefore carries its
+  refusal in `[48:50]` — the only word the positive `CONNECT_RSP` holds at zero
+  and the only one §4(h) names as a status/flag — with **OVMX-invented values**
+  `0x0002` (no such SYSAP) and `0x0003` (busy), declared in
+  `src/vmsscs/include/scs_sdir.h`. These are **not** VMS status codes and not
+  `$SSDEF` values. A capture of a real VAX refusing a connect request supersedes
+  both, and the frame class itself (the 66-byte `CONNECT_RSP`, `[46:48] == 1`,
+  requester's Con.ID echoed, local Con.ID `0`) IS grounded — only the status
+  word is invented. **Measured blast radius:** in the configuration OVMX runs
+  neither refusal is ever emitted, because the only two `CONNECT_REQ`s the
+  reference VAX addresses to OVMX name `SCS$DIRECTORY` and `VMS$VAXcluster` and
+  OVMX LISTENs for both; `tools/cluster/scsd_wire_diff.sh` byte-diffs 34 frames
+  across the pre/post trees with zero differences, and the daemon's exit summary
+  reports `no-such-sysap-sent` and `busy-sent` every run. Kill switch:
+  `OVMX_NO_SDIR=1`.
+
+- **The AFFIRMATIVE `SCS$DIR_LOOKUP` result encoding stays ungrounded
+  (§4(h) gap (c)) — but WHO DECIDES IT is now the SDIR queue (`vms-7fe`).**
+  The 16-byte negative marker `"NOT PRESENT HERE"` at `[78:94]` remains the one
+  GROUNDED half of the answer. What changed is the source of the yes/no: the
+  responder used to decide with a hardcoded `memcmp(name, "VMS$VAXcluster", 14)`
+  in `scsd.c`, and now scans the p. 2-48 queue of SCS Directory Entries that
+  `LISTEN` populates. **The only queried name whose answer changed is
+  `SCS$DIRECTORY`**, which OVMX serves and now affirms; `MSCP$TAPE` and
+  `MSCP$DISK` — the names the golden directory phase actually asks about — still
+  get the grounded negative marker, byte for byte, because OVMX LISTENs for
+  neither and deliberately does not advertise an MSCP server it does not have.
 
 - **Peer-liveness detection (`vms-17f`, §4M).** The two silence *populations* are
   GROUNDED (measured, re-derivable). What is **NOT** grounded is the timer a real

@@ -40,7 +40,8 @@ build() {
         "$tree"/src/vmsscs/scs_cdt.c "$tree"/src/vmsscs/scs_conn.c \
         "$tree"/src/vmsscs/scs_credit.c "$tree"/src/vmsscs/scs_depart.c \
         "$tree"/src/vmsscs/scs_dgram.c \
-        $( [ -f "$tree/src/vmsscs/scs_svc.c" ] && echo "$tree/src/vmsscs/scs_svc.c" )
+        $( [ -f "$tree/src/vmsscs/scs_svc.c" ] && echo "$tree/src/vmsscs/scs_svc.c" ) \
+        $( [ -f "$tree/src/vmsscs/scs_sdir.c" ] && echo "$tree/src/vmsscs/scs_sdir.c" )
     "$work/dump-$tag" "$work/frames-$tag.txt"
 }
 

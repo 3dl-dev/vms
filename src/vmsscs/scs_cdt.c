@@ -220,6 +220,14 @@ void scs_cdl_release(struct scs_cdl *cdl, struct scs_cdt *cdt)
 
 /* --- CDT field setters ---------------------------------------------------- */
 
+void scs_cdt_set_listening(struct scs_cdt *cdt, int listening)
+{
+    if (cdt == NULL) {
+        return;
+    }
+    cdt->listening = listening ? 1 : 0;
+}
+
 void scs_cdt_set_remote_conid(struct scs_cdt *cdt, uint32_t remote_conid)
 {
     if (cdt == NULL) {

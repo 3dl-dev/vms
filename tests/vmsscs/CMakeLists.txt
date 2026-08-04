@@ -367,3 +367,19 @@ set_tests_properties(vmsscs_svc_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-7fe - the p. 2-48 SDIR queue and the listening CDTs (Figure 2-24): LISTEN
+# allocates both, an inbound CONNECT_REQ is resolved by scanning the queue, and
+# the p. 2-49 rule that ACCEPT's local CONID is the NEW CDT's. The p. 2-50 BUSY
+# reply is exercised here and nowhere else -- see the SCOPE HONESTY note at the
+# top of the file for why the daemon cannot reach it.
+add_executable(test_scs_sdir test_scs_sdir.c)
+target_include_directories(test_scs_sdir PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+target_link_libraries(test_scs_sdir PRIVATE vmsscs_sdir)
+add_test(NAME vmsscs_sdir_unit COMMAND test_scs_sdir)
+set_tests_properties(vmsscs_sdir_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)

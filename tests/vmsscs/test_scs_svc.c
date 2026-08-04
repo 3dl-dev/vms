@@ -206,10 +206,33 @@ static void test_listen_places_the_name_in_the_list(void)
     CHECK(scs_listen(&n.port, "VMS$VAXcluster", NULL, NULL) == SCS_SVC_NOLISTEN,
           "LISTEN accepted the same name twice");
 
-    /* p. 2-56: LISTEN is not one of the services that allocates a CDT. */
-    CHECK(scs_cdl_in_use_count(&n.cdl) == 0,
-          "LISTEN allocated %u CDT(s) -- p. 2-56 gives CDTs to CONNECT and"
-          " ACCEPT only", scs_cdl_in_use_count(&n.cdl));
+    /*
+     * vms-7fe CORRECTS THIS ASSERTION. It used to read "LISTEN is not one of
+     * the services that allocates a CDT", cited to p. 2-56. That over-read the
+     * page: p. 2-56 says "The SCS CONNECT and ACCEPT services each result in
+     * the allocation of a CDT FOR NEW CONNECTIONS", and a listening CDT is not
+     * a connection. p. 2-48 is explicit the other way -- "an SDIR containing the
+     * SYSAP's name is allocated and placed in this queue. Each SDIR contains the
+     * CONID of a special 'listening CDT' that is also allocated at this time."
+     * Source-of-truth order puts the book above a test comment, so the number
+     * changes and the claim gets sharper: LISTEN allocates exactly one CDT, it
+     * is the LISTENING CDT the SDIR names, and it lives in the reserved band
+     * that cannot collide with a connection Con.ID.
+     */
+    CHECK(scs_cdl_in_use_count(&n.cdl) == 1,
+          "LISTEN allocated %u CDT(s) -- p. 2-48 gives it exactly one, the"
+          " listening CDT", scs_cdl_in_use_count(&n.cdl));
+    {
+        const struct scs_sdir *sd = scs_sdir_peek(scs_svc_sdir(&n.port),
+                                                  "VMS$VAXcluster");
+        CHECK(sd != NULL, "LISTEN queued no SDIR");
+        CHECK(sd != NULL && sd->conid == SCS_SDIR_CONID_BASE,
+              "the listening CDT is at 0x%08X, expected the reserved 0x%08X",
+              sd ? sd->conid : 0u, (unsigned)SCS_SDIR_CONID_BASE);
+        struct scs_cdt *lcdt = scs_sdir_listening_cdt(scs_svc_sdir(&n.port), sd);
+        CHECK(lcdt != NULL && lcdt->local_conid == sd->conid,
+              "the SDIR's CONID does not resolve to a listening CDT through the CDL");
+    }
 
     /* The list fills, and says so rather than overrunning. */
     char nm[8];
@@ -895,8 +918,12 @@ static void test_two_nodes_form_use_and_tear_down_a_connection(void)
     back_n = 0;
     deliver_all(&b, bcdt, back, &back_n);
     CHECK(b.port.cdts_released == 1, "B released %lu CDT(s)", b.port.cdts_released);
-    CHECK(scs_cdl_in_use_count(&b.cdl) == 0, "B's CDL still holds %u CDT(s)",
-          scs_cdl_in_use_count(&b.cdl));
+    /* vms-7fe: what must go to zero is B's CONNECTION CDTs. The listening CDT
+     * B's LISTEN allocated (p. 2-48) is still there and must be -- B is still
+     * listening for MSCP$DISK after the connection tears down. */
+    CHECK(scs_cdl_in_use_count(&b.cdl) == scs_sdir_count(scs_svc_sdir(&b.port)),
+          "B's CDL holds %u CDT(s) beside its %u listening CDT(s)",
+          scs_cdl_in_use_count(&b.cdl), scs_sdir_count(scs_svc_sdir(&b.port)));
 
     /* --- and the whole lifecycle scored no illegal event on either node. --- */
     CHECK(a.port.illegal == 0 && b.port.illegal == 0,

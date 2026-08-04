@@ -147,6 +147,39 @@ static const uint8_t cap_ovmx_joiner_accept_req[124] = {
     0x00, 0x00, 0x06, 0x00
 };
 
+
+/*
+ * vms-7fe: TWO REAL SCS$DIR_LOOKUP REQUESTS, byte-exact from
+ * formation-ci1-joinwindow.pcap (the same SCA#29 / SCA#37 payloads
+ * tests/vmsscs/test_scs_dir.c has carried since vms-246), with a 14-byte
+ * Ethernet header prepended. These are the two shapes the responder answers:
+ *   SCA#29  MSCP$TAPE       opcode 0x5b -- NOT in OVMX's SDIR queue -> the
+ *                           GROUNDED "NOT PRESENT HERE" marker
+ *   SCA#37  VMS$VAXcluster  opcode 0x4b -- IS in the queue -> affirmative
+ * The whole point of replaying them here is that vms-7fe replaced the hardcoded
+ * name compare that used to decide both answers with a scan of the SDIR queue,
+ * and BOTH ANSWERS MUST STILL BE THE SAME BYTES.
+ */
+static const uint8_t cap_lookup_req_mscptape[108] = {
+    0x08,0x00,0x2b,0x78,0x56,0xb9, 0xaa,0x00,0x04,0x00,0x01,0x04, 0x60,0x07,
+    0x5c,0x00,0xaa,0x00,0x04,0x00,0x02,0x04,0x01,0x00,0xaa,0x00,0x04,0x00,0x01,0x04,
+    0x5b,0x13,0x02,0x00,0x03,0x00,0x01,0x00,0x12,0x00,0x02,0x00,0x00,0x00,0x03,0x00,
+    0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x02,0x32,0x00,0x04,0x00,0x0a,0x00,
+    0x00,0x00,0x07,0x00,0x59,0x33,0x08,0x00,0x05,0x63,0x00,0x00,0x00,0x00,0x4d,0x53,
+    0x43,0x50,0x24,0x54,0x41,0x50,0x45,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+static const uint8_t cap_lookup_req_vaxcluster[108] = {
+    0x08,0x00,0x2b,0x78,0x56,0xb9, 0xaa,0x00,0x04,0x00,0x01,0x04, 0x60,0x07,
+    0x5c,0x00,0xaa,0x00,0x04,0x00,0x02,0x04,0x01,0x00,0xaa,0x00,0x04,0x00,0x01,0x04,
+    0x4b,0x13,0x05,0x00,0x06,0x00,0x01,0x00,0x12,0x00,0x05,0x00,0x00,0x00,0x06,0x00,
+    0x00,0x00,0x05,0x00,0x00,0x00,0x01,0x00,0x00,0x02,0x32,0x00,0x04,0x00,0x0a,0x00,
+    0x00,0x00,0x07,0x00,0x59,0x33,0x08,0x00,0x05,0x63,0x00,0x00,0x00,0x00,0x56,0x4d,
+    0x53,0x24,0x56,0x41,0x58,0x63,0x6c,0x75,0x73,0x74,0x65,0x72,0x20,0x20,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
 static const uint8_t vax2_hw_mac[6] = {0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9};
 static const uint8_t vax1_hw_mac[6] = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04};
 static const uint8_t vax1_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04};
@@ -176,6 +209,12 @@ static void dumpworld_init(struct dumpworld *w, const uint8_t hw_mac[6],
     scs_config_init(&w->cfg);
     scs_pdt_init(&w->pdt, SCS_PORT_TYPE_ETHERNET, SCA_FRAME_MAX);
     scs_cdl_init(&scsd_cdl);
+    /* vms-7fe: the port's SDIR queue names listening CDTs out of this CDL, so
+     * re-initializing one without the other leaves a queue pointing at wiped
+     * slots. The daemon initializes its CDL once; only this harness rebuilds a
+     * world, so only this harness has to reset both. (The pre-vms-7fe tree has
+     * no scs_svc_port field to reset -- the memset is over the whole struct.) */
+    memset(&scsd_svc_port, 0, sizeof(scsd_svc_port));
     scsd_cdl_ready = 1;
     memcpy(w->hw_mac, hw_mac, 6);
     memcpy(w->logical, logical, 6);
@@ -319,6 +358,41 @@ int main(int argc, char **argv)
                           (ssize_t)sizeof(cap_vaxcluster_connect_req));
     }
     (void)unsetenv("OVMX_NO_CONN_FSM");
+
+
+    /* --- (6) vms-7fe: THE SCS$DIR_LOOKUP RESPONDER, whose decision moved from
+     * a hardcoded name compare to the p. 2-48 SDIR scan. Both real captured
+     * queries are replayed: MSCP$TAPE (not listening -> "NOT PRESENT HERE") and
+     * VMS$VAXcluster (listening -> affirmative). If the rewire changed either
+     * answer, or any other byte of either response, this case reds the diff.
+     * Run twice, so the second pass also covers the responder on an already
+     * dir_connected peer. --- */
+    {
+        struct dumpworld w;
+        dumpworld_init(&w, vax2_hw_mac, our_logical);
+        struct peer_state *ps = open_circuit_to(&w, vax1_hw_mac, vax1_logical);
+        if (ps != NULL) {
+            ps->start_acked = 1;
+        }
+        fprintf(dump_out, "== case 6: SCS$DIR_LOOKUP miss + hit\n");
+        scsd_handle_frame(&w.rx, cap_dir_connect_req, (ssize_t)sizeof(cap_dir_connect_req));
+        /* The golden lookups sit several credit shorts after the SCA#21
+         * connect, so a contiguous replay has to renumber them or the daemon's
+         * own p. 2-31 sequentiality check correctly breaks the circuit on the
+         * gap and nothing further is emitted at all. spec sec 4(h)(4) grounds
+         * send_seq [20:22] + its [30:32] mirror as state a sender COMPUTES. */
+        for (uint16_t seq = 2; seq <= 5; seq++) {
+            uint8_t f[108];
+            const uint8_t *src = (seq % 2) == 0 ? cap_lookup_req_mscptape
+                                                : cap_lookup_req_vaxcluster;
+            memcpy(f, src, sizeof(f));
+            f[14 + 20] = (uint8_t)(seq & 0xff);
+            f[14 + 21] = (uint8_t)(seq >> 8);
+            f[14 + 30] = (uint8_t)(seq & 0xff);
+            f[14 + 31] = (uint8_t)(seq >> 8);
+            scsd_handle_frame(&w.rx, f, (ssize_t)sizeof(f));
+        }
+    }
 
     fprintf(dump_out, "== end, %u frame(s)\n", dump_seq);
     fclose(dump_out);

@@ -480,11 +480,20 @@ unsigned scs_conn_report_stuck(const struct scs_cdl *cdl, FILE *fp)
     }
 
     unsigned stuck = 0;
+    unsigned connections = 0;
     for (unsigned i = 0; i < SCS_CDL_ENTRIES; i++) {
         const struct scs_cdt *cdt = cdl->entry[i];
         if (cdt == NULL || !cdt->in_use) {
             continue;
         }
+        /* vms-7fe: a p. 2-48 LISTENING CDT describes no connection -- it has no
+         * peer, no circuit and no Figure 2-14 state -- so it is neither stuck
+         * nor counted. Reporting one as "parked off OPEN" would put a permanent
+         * false warning in every run's exit summary. */
+        if (cdt->listening) {
+            continue;
+        }
+        connections++;
         enum scs_conn_state st = scs_conn_state_of(cdt);
         if (st == SCS_CONN_OPEN) {
             continue;
@@ -502,7 +511,7 @@ unsigned scs_conn_report_stuck(const struct scs_cdl *cdl, FILE *fp)
     }
     if (fp != NULL) {
         fprintf(fp, "SCSD-I-CONNSTUCK, %u of %u in-use connection(s) parked off OPEN\n",
-                stuck, scs_cdl_in_use_count(cdl));
+                stuck, connections);
         fflush(fp);
     }
     return stuck;

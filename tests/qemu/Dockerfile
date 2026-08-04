@@ -264,7 +264,27 @@ RUN KVER=$(cat /tmp/kver) && \
     fi && \
     ls -la /boot/vmlinuz
 
-# Find and decompress loop.ko for block-device tests
+# Find and decompress loop.ko for block-device tests, IF it is a module.
+#
+# THE "not found" BRANCH IS THE NORMAL ONE, AND IT IS NOT A SKIP (vms-2c6).
+# Ubuntu builds the loop driver into the kernel (CONFIG_BLK_DEV_LOOP=y), so
+# there is no loop.ko under /lib/modules at all and this step takes the else
+# branch on every build -- including every build on main today. init.sh knows
+# this ("loop may be built-in or a module"): it insmods /lib/modules/loop.ko
+# only if the file exists, then runs losetup either way. Measured on run
+# 30913764276: this step printed the "not found" message AND the guest still
+# reported "OK: loop0 attached to vmsfs_test.img" and ran
+# test_kmod_vmsfs_blkdev to completion.
+#
+# The old message claimed "block-device test will skip", which is FALSE and
+# actively misleading -- it reads like a silently-dropped suite, which is the
+# one thing this project treats as a failing test. Reworded to say what is
+# actually true. Nothing about the image or the tests changes here; the whole
+# edit is the text of an echo.
+#
+# This is also unaffected by the linux-image-virtual move above: `virtual`
+# selects the SAME linux-image-6.8.0-NNN-generic binary, so the loop driver is
+# built in there exactly as before.
 RUN KVER=$(cat /tmp/kver) && \
     LOOP_MOD=$(find /lib/modules/$KVER -name 'loop.ko*' | head -1) && \
     if [ -n "$LOOP_MOD" ]; then \
@@ -277,7 +297,11 @@ RUN KVER=$(cat /tmp/kver) && \
         esac; \
         echo "Decompressed: $(ls -la /tmp/loop.ko)"; \
     else \
-        echo "WARNING: loop.ko not found, block-device test will skip"; \
+        echo "loop.ko is not a module in this kernel (CONFIG_BLK_DEV_LOOP=y)."; \
+        echo "This is the EXPECTED path on Ubuntu. The block-device test still"; \
+        echo "runs -- init.sh calls losetup against the built-in driver; watch"; \
+        echo "for 'OK: loop0 attached' and the test_kmod_vmsfs_blkdev suite in"; \
+        echo "the guest output. Nothing is skipped."; \
     fi
 
 # Assemble initramfs
@@ -292,7 +316,8 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # Kernel modules
     cp /src/kernel/vms.ko /initramfs/lib/modules/ && \
     cp /src/kernel/vmsfs/vmsfs.ko /initramfs/lib/modules/ && \
-    # Loop module (for block-device test)
+    # Loop module, only if this kernel has it as a module. On Ubuntu it does
+    # not (built in -- see the step above), so this is normally a no-op.
     [ -f /tmp/loop.ko ] && cp /tmp/loop.ko /initramfs/lib/modules/ || true && \
     # Block-device test image
     [ -f /vmsfs_test.img ] && cp /vmsfs_test.img /initramfs/test_data/ || true && \

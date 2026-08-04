@@ -56,8 +56,11 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
+#include "scs_conn.h"   /* the connection state machine a broken VC drives (vms-dd5) */
 #include "scs_config.h" /* struct scs_pb + enum scs_vc_state/event/action (vms-7be) */
+#include "scs_cdt.h"    /* struct scs_cdt, the PB connection queue, scs_cdl_vc_loss (vms-e1a) */
 #include "scs_start.h"  /* struct scs_seq_state + scs_seq_* helpers (vms-21e) */
 
 #ifdef __cplusplus
@@ -113,6 +116,24 @@ struct scs_vc {
     /* Stats (observability only). */
     unsigned long        credit_returns_sent;
     unsigned long        retransmits;
+
+    /*
+     * vms-abc: the p. 2-31 message guarantees. See "BREAKING THE CIRCUIT"
+     * below for the rules, the measurement, and the kill switch.
+     */
+
+    /* 1 once a sequenced message has been observed since init/reset, i.e. once
+     * recv_seq means "the peer's last send_seq" rather than "nothing seen yet".
+     * The FIRST sequenced message on a circuit can never be a gap: OVMX may
+     * attach to a circuit that is already carrying traffic (scsd.c calls
+     * scs_vc_init() lazily on the first sequenced frame from a peer), and
+     * nothing is known about what preceded the message that anchors it. */
+    int                  seq_anchored;
+
+    unsigned long        seq_gaps;      /* sequentiality failures detected */
+    int                  broken;        /* 1 = this circuit has been explicitly broken */
+    int                  break_reason;  /* enum scs_vc_break_reason of the last break */
+    unsigned long        breaks;        /* times this VC was broken */
 };
 
 /* Initialize a fresh VC (send_seq=1, recv_seq=0, no outstanding message). */
@@ -407,6 +428,191 @@ int scs_vc_fsm_timer_expired(const struct scs_pb *pb, uint64_t now_ms,
  */
 enum scs_vc_action scs_vc_fsm_timeout(struct scs_pb *pb, uint64_t now_ms,
                                       unsigned retry_limit);
+
+/*
+ * =====================================================================
+ * vms-abc -- BREAKING THE CIRCUIT WHEN A MESSAGE GUARANTEE FAILS (p. 2-31)
+ * =====================================================================
+ *
+ * THE RULE, quoted (VAXcluster Principles p. 2-31):
+ *
+ *   "Furthermore, if either the guarantee of message delivery or the guarantee
+ *   of message sequentiality cannot be satisfied, the virtual circuit between
+ *   the ports involved will be explicitly broken (if it isn't already). If this
+ *   happens, then every connection supported by this virtual circuit is also
+ *   broken, and the SYSAPs participating in these connections are notified of
+ *   the event."
+ *
+ * WHAT OVMX DID BEFORE THIS ITEM: nothing. A gap in the peer's send-sequence
+ * numbers advanced recv_seq to the new high-water and was credit-acked as if
+ * every intervening message had arrived (scs_vc_note_recv is a plain
+ * `recv_seq = max(recv_seq, peer_send_seq)`), so OVMX told the peer it had
+ * received messages it had never seen. Retransmit exhaustion was a `continue`
+ * in scsd.c's timer loop: OVMX stopped retransmitting an unacked message and
+ * carried on with the circuit still marked OPEN. Both are the "limp on"
+ * behaviour p. 2-31 forbids, and both are silent.
+ *
+ * THIS IS A FAIL-LOUD CHANGE. Under loss, OVMX now tears a circuit down where
+ * it previously continued. `OVMX_NO_VC_BREAK=1` restores the old behaviour
+ * exactly -- see scs_vc_break_enabled() for precisely what it gates.
+ *
+ * ================== IS THE DETECTOR SAFE ON THE REAL WIRE? ================
+ * A detector that fires on a healthy circuit would tear down working joins, so
+ * it was MEASURED before it was shipped, not after.
+ * tools/cluster/scs_seqgap_measure.py applies THE SAME RULE
+ * (scs_vc_check_recv_seq's, restated in the script's docstring) to every
+ * capture this project holds and counts how many times it would have fired.
+ *
+ *   51 pcaps, 321,599 sequenced messages examined, 506 duplicate/retransmit
+ *   frames correctly NOT scored as gaps, 41 gaps -- and ALL 41 have source MAC
+ *   b6:16:8a:dc:3a:53, which is OVMX's own transmit. In the RECEIVE direction,
+ *   which is the only direction this detector runs in, the count is ZERO,
+ *   including 2,960 sequenced messages of the golden fresh join
+ *   (formation-ci1-joinwindow.pcap), 17,760 of formation-ci1.pcap and 18,881 of
+ *   vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap.
+ *
+ * Re-derive with `python3 tools/cluster/scs_seqgap_measure.py --all` on a lab
+ * host (the captures are host-only, 13 GB, not in git). The 41 OVMX-sourced
+ * gaps are a real OVMX transmit-side defect -- it stamps the member's
+ * continuation send_seq into its own outbound frames after a START, which spec
+ * sec 4i.A says a joiner must not do -- and they are NOT fixed here; this item
+ * is the receive-side guarantee only.
+ * ==========================================================================
+ *
+ * OVMX DESIGN CHOICES (labeled per CLAUDE.md rule 8):
+ *
+ *  1. WHAT COUNTS AS A SEQUENTIALITY FAILURE. The book states the guarantee,
+ *     never how a port driver detects a breach. OVMX uses the sequence
+ *     numbering it already reproduces (spec sec 4h(4), GROUNDED: "a node holds
+ *     send_seq (its own next number) and recv_seq (highest peer send_seq seen);
+ *     a sequenced message stamps send_seq ... then increments send_seq") --
+ *     so consecutive is the rule and a jump of more than one is a breach.
+ *  2. THE ANCHOR. The first sequenced message seen on a circuit establishes the
+ *     baseline and can never be a gap (see scs_vc::seq_anchored). This costs
+ *     one message of detection and cannot produce a false break.
+ *  3. WHAT COUNTS AS A DELIVERY FAILURE. p. 2-31 does not define one either.
+ *     OVMX uses retransmit exhaustion of its own outstanding sequenced message:
+ *     once the retry limit is reached, delivery has demonstrably not been
+ *     achieved. The LIMIT is an OVMX number, not a VMS quantity.
+ *  4. BREAKING THE VC DOES NOT DEALLOCATE THE PATH BLOCK. scs_vc_break() sets
+ *     vc_state to CLOSED (p. 2-11 names no "broken" state, and a broken circuit
+ *     is simply not open) and leaves the PB and its CDT queue in place. Calling
+ *     scs_pb_close() -- which zeroes the PB and would dangle every CDT still
+ *     queued to it -- is the caller's decision and belongs to the teardown path
+ *     (vms-17f), not to the detector.
+ */
+
+/* Why a circuit was broken. */
+enum scs_vc_break_reason {
+    SCS_VC_BREAK_NONE = 0,
+    SCS_VC_BREAK_SEQ_GAP = 1,  /* p. 2-31 "guarantee of message sequentiality" */
+    SCS_VC_BREAK_DELIVERY = 2, /* p. 2-31 "guarantee of message delivery" */
+    SCS_VC_BREAK_LOCAL = 3     /* an explicit local teardown, not a guarantee failure */
+};
+
+/* Human-readable reason, for logs and tests. Never NULL. */
+const char *scs_vc_break_reason_name(enum scs_vc_break_reason r);
+
+/*
+ * THE KILL SWITCH. 0 iff OVMX_NO_VC_BREAK is set to anything other than "0".
+ * Read fresh on every call (NOT cached), so a test can bracket a single call.
+ *
+ * WHAT IT GATES, EXACTLY (guardrail 23 -- this statement is checked by
+ * tests/vmsscs/test_scs_vc.c and by tests/vmsscs/test_scsd_wire.c, which RUN the
+ * switch and assert the gated behaviour is suppressed):
+ *   - scs_vc_break() performs NO teardown: it does not step any connection, does
+ *     not invoke any SYSAP VC-loss handler, does not change vc_state, does not
+ *     mark the VC broken, and returns 0. It logs ONE line saying it was
+ *     suppressed, so a run log never reads as "no circuit was ever broken" when
+ *     the truth is "breaking was switched off".
+ *   - the DETECTORS still run: scs_vc_check_recv_seq() still returns
+ *     SCS_VC_SEQ_GAP and scsd.c still counts and logs it. The switch gates the
+ *     CONSEQUENCE, not the diagnosis -- so a lab run with the switch on still
+ *     tells you whether a gap occurred.
+ * It gates no emitted byte directly. It is wire-visible only in the sense that
+ * a circuit OVMX breaks stops carrying OVMX frames.
+ */
+#define SCS_VC_NO_BREAK_ENV "OVMX_NO_VC_BREAK"
+int scs_vc_break_enabled(void);
+
+/* What scs_vc_check_recv_seq() found. */
+enum scs_vc_seq_verdict {
+    SCS_VC_SEQ_ANCHOR = 0,   /* first sequenced message on this VC -- baseline, never a gap */
+    SCS_VC_SEQ_IN_ORDER = 1, /* exactly recv_seq + 1 */
+    SCS_VC_SEQ_DUPLICATE = 2,/* at or behind recv_seq -- a retransmit, NOT a gap */
+    SCS_VC_SEQ_GAP = 3       /* ahead by more than 1: sequentiality guarantee breached */
+};
+
+/*
+ * scs_vc_check_recv_seq - PURE predicate. Classify one received sequenced
+ * message's send_seq against the VC's recv_seq. Does not mutate. `missing_out`
+ * (optional) receives the number of messages the gap implies, 0 for every other
+ * verdict. A peer_send_seq of 0 is a pure ack (a 0x48 credit-return) and is
+ * classified SCS_VC_SEQ_DUPLICATE -- it carries no sequence at all.
+ * Comparison is modular over 16 bits, so it is correct across wrap.
+ */
+enum scs_vc_seq_verdict scs_vc_check_recv_seq(const struct scs_vc *vc,
+                                              uint16_t peer_send_seq,
+                                              unsigned *missing_out);
+
+/*
+ * scs_vc_note_recv_checked - what scs_vc_note_recv does, plus the p. 2-31
+ * sequentiality check. Returns the verdict, anchors the VC, bumps seq_gaps on a
+ * gap, and then advances recv_seq exactly as scs_vc_note_recv would.
+ *
+ * IT DOES NOT BREAK THE CIRCUIT: the caller decides, because only the caller
+ * knows which Path Block the message arrived on. scsd.c calls scs_vc_break()
+ * on SCS_VC_SEQ_GAP.
+ *
+ * recv_seq IS advanced even on a gap, deliberately: if the break is switched
+ * off the VC keeps running, and not advancing would re-report the same gap for
+ * every subsequent message.
+ */
+enum scs_vc_seq_verdict scs_vc_note_recv_checked(struct scs_vc *vc,
+                                                 uint16_t peer_send_seq,
+                                                 unsigned *missing_out);
+
+/*
+ * Retransmits of ONE outstanding sequenced message before delivery is declared
+ * unrecoverable (design choice 3 above -- an OVMX number). Kept equal to the
+ * cap scsd.c already applied when it merely stopped retransmitting, so the
+ * point at which OVMX gives up is unchanged; only what it does there changes.
+ */
+#define SCS_VC_DELIVERY_RETRY_LIMIT 5u
+
+/*
+ * scs_vc_delivery_failed - PURE predicate: 1 iff this VC has an outstanding
+ * unacked sequenced message that has been retransmitted SCS_VC_DELIVERY_RETRY_LIMIT
+ * times or more, i.e. the p. 2-31 delivery guarantee cannot be satisfied.
+ * 0 for NULL, for a VC with nothing outstanding, or below the limit.
+ */
+int scs_vc_delivery_failed(const struct scs_vc *vc);
+
+/*
+ * scs_vc_break - EXPLICITLY BREAK THE CIRCUIT (p. 2-31).
+ *
+ *   1. every CDT queued to pb (the p. 2-28 per-circuit connection queue) is
+ *      driven through the connection state machine with SCS_CONN_EV_VC_LOST,
+ *      so each connection reaches CLOSED by a transition that is logged and
+ *      that a test can walk -- not by a store;
+ *   2. scs_cdl_vc_loss(pb) then invokes each connection's SYSAP VC-loss error
+ *      handler (p. 2-28: "the VMS implementation of SCA stores the address of
+ *      the interested SYSAP's error handler for virtual circuit loss in the CDT
+ *      itself"). Handlers run AFTER step 1, so a handler that inspects its
+ *      connection sees it already broken;
+ *   3. pb->vc_state becomes SCS_VC_CLOSED;
+ *   4. `vc` (optional, may be NULL) records the break and its reason;
+ *   5. `log` (optional, may be NULL) receives one SCSD-W-VCBREAK line naming
+ *      the circuit and the trigger, then one SCSD-W-VCLOSSCONN line per
+ *      connection naming its CONID, its SYSAP pair and the state it was in.
+ *
+ * Returns the number of connections broken. Returns 0 and does nothing if pb is
+ * NULL, or if the kill switch is set (see scs_vc_break_enabled).
+ *
+ * It does NOT call scs_pb_close() -- see design choice 4.
+ */
+unsigned scs_vc_break(struct scs_vc *vc, struct scs_pb *pb,
+                      enum scs_vc_break_reason reason, FILE *log);
 
 /* Human-readable names, for logging. Never NULL. */
 const char *scs_vc_event_name(enum scs_vc_event ev);

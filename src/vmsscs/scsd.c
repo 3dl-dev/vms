@@ -102,6 +102,12 @@ static uint64_t hello_timer_tick100(void)
  * the reply-amplification guard (never out-pace real-node cadence). */
 #define VC_RETRANSMIT_TIMEOUT_MS 2000u
 #define VC_RETRANSMIT_MAX        5u
+/* vms-abc: reaching this cap IS the p. 2-31 delivery-guarantee failure, and
+ * scs_vc_delivery_failed() is what decides that. The two numbers must be the
+ * same one or OVMX would either give up before declaring failure (a silent
+ * limp-on, the bug this item removes) or declare failure it never reached. */
+_Static_assert(SCS_VC_DELIVERY_RETRY_LIMIT == VC_RETRANSMIT_MAX,
+               "scsd's retransmit cap and the p. 2-31 delivery-failure limit disagree");
 
 static void log_ts(FILE *out)
 {
@@ -501,6 +507,64 @@ static unsigned long conn_transitions = 0;
 static unsigned long conn_illegal_events = 0;
 static unsigned long conn_unemitted_actions = 0;
 
+/* vms-abc: p. 2-31 message-guarantee enforcement, counted for the exit report. */
+static unsigned long vc_seq_gaps = 0;    /* sequentiality failures detected */
+static unsigned long vc_breaks = 0;      /* circuits explicitly broken */
+static unsigned long vc_conns_broken = 0;/* connections broken with them */
+static unsigned long sysap_vc_loss_notifications = 0; /* SYSAP handlers actually invoked */
+
+/*
+ * vms-abc: THE SYSAP's VC-LOSS ERROR HANDLER, and the first one OVMX has ever
+ * installed.
+ *
+ * p. 2-28: "the VMS implementation of SCA stores the address of the interested
+ * SYSAP's error handler for virtual circuit loss in the CDT itself. This address
+ * is supplied by a SYSAP as an argument to the VMS implementations of both the
+ * CONNECT and ACCEPT services." p. 2-31: when a message guarantee fails, "every
+ * connection supported by this virtual circuit is also broken, and the SYSAPs
+ * participating in these connections are notified of the event."
+ *
+ * Until this item scs_cdl_vc_loss() had NO production caller and no CDT carried
+ * a handler, so the notification half of p. 2-31 was implemented and dead.
+ * conn_bind() below now installs THIS function on every CDT it creates, and
+ * scs_vc_break() reaches it through scs_cdl_vc_loss().
+ *
+ * WHAT IT DOES: clears the send gate for exactly the connection that was
+ * broken. Those three booleans are what actually decide whether scsd.c sends
+ * anything on a connection, so leaving them set after declaring the circuit
+ * broken would keep OVMX transmitting into it -- the precise thing p. 2-31
+ * forbids ("Any attempt to send a message from one port to another in the
+ * absence of a virtual circuit will fail").
+ *
+ * WHAT IT DELIBERATELY DOES NOT DO, so nobody reads more into it: it does not
+ * free the peer slot, does not release the CDT, and does not re-drive a join.
+ * Reopening after a loss is vms-17f's teardown/rejoin path, not this handler's.
+ */
+static void scsd_sysap_vc_loss(struct scs_cdt *cdt, void *ctx)
+{
+    struct peer_state *ps = (struct peer_state *)ctx;
+    const char *which = "?";
+
+    sysap_vc_loss_notifications++;
+    if (ps != NULL) {
+        if (cdt == ps->cdt_dir) {
+            ps->dir_connected = 0;
+            which = "SCS$DIRECTORY";
+        } else if (cdt == ps->cdt_member) {
+            ps->connected = 0;
+            which = "VMS$VAXcluster (member-opened)";
+        } else if (cdt == ps->cdt_joiner) {
+            ps->joiner_connected = 0;
+            which = "VMS$VAXcluster (joiner-opened)";
+        }
+    }
+    log_ts(stdout);
+    printf(" SCSD-W-SYSAPVCLOSS, SYSAP notified: connection %s (conid=0x%08X)"
+           " is broken; its send gate is cleared\n",
+           which, cdt != NULL ? (unsigned)cdt->local_conid : 0u);
+    fflush(stdout);
+}
+
 /*
  * vms-17f: the p. 2-20/2-21 open transitions this run actually took, indexed by
  * enum scs_open_result, plus the departure sweep's tallies. File scope for the
@@ -555,6 +619,13 @@ static struct scs_cdt *conn_bind(struct peer_state *ps, struct scs_cdt **slot,
         return NULL;
     }
     scs_conn_fsm_init(cdt);
+    /* vms-abc: the p. 2-28 VC-loss error handler, "supplied by a SYSAP as an
+     * argument to ... both the CONNECT and ACCEPT services". OVMX has no
+     * message/datagram input routines to install yet (received frames are still
+     * dispatched by Con.ID comparison, not through the CDL -- see scs_cdt.h),
+     * so those two stay NULL and scs_cdl_deliver_* still has no production
+     * caller. The VC-loss handler is the one that is now live. */
+    scs_cdt_set_handlers(cdt, NULL, NULL, scsd_sysap_vc_loss, ps);
     *slot = cdt;
     return cdt;
 }
@@ -1315,8 +1386,49 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             scs_vc_note_peer_ack(&ps->vc, peer_recv_ack);
             ps_learn_sys_addr(rx->cfg, ps, buf + OFF_HELLO_SRCLOG); /* src-logical, abs 24 */
 
+            /* --- vms-abc: THE p. 2-31 SEQUENTIALITY GUARANTEE. "if either the
+             * guarantee of message delivery or the guarantee of message
+             * sequentiality cannot be satisfied, the virtual circuit between
+             * the ports involved will be explicitly broken (if it isn't
+             * already). If this happens, then every connection supported by
+             * this virtual circuit is also broken, and the SYSAPs participating
+             * in these connections are notified of the event."
+             *
+             * scs_vc_note_recv_checked() is scs_vc_note_recv() plus that check:
+             * the recv_seq advance is identical, so nothing changes on the
+             * in-order, duplicate/retransmit or first-message paths -- which is
+             * every frame in every capture we hold (see the measurement in
+             * scs_vc.h). Only a genuine gap behaves differently, and then OVMX
+             * must NOT credit-ack: returning a 0x48 for a message that implies
+             * others were lost tells the peer OVMX received messages it never
+             * saw. That is what the code below used to do. */
+            unsigned missing = 0;
+            enum scs_vc_seq_verdict sv =
+                scs_vc_note_recv_checked(&ps->vc, peer_send_seq, &missing);
+            if (sv == SCS_VC_SEQ_GAP) {
+                vc_seq_gaps++;
+                log_ts(stdout);
+                printf(" SCSD-W-SEQGAP, peer %02x:%02x:%02x:%02x:%02x:%02x sent"
+                       " send_seq=%u with recv_seq=%u -- %u sequenced message(s)"
+                       " missing; the p. 2-31 sequentiality guarantee has failed\n",
+                       src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4],
+                       src_mac[5], peer_send_seq,
+                       (unsigned)(uint16_t)(peer_send_seq - missing - 1u), missing);
+                fflush(stdout);
+                unsigned broken = scs_vc_break(&ps->vc, ps->pb,
+                                               SCS_VC_BREAK_SEQ_GAP, stdout);
+                if (scs_vc_break_enabled()) {
+                    vc_breaks++;
+                    vc_conns_broken += broken;
+                    /* The circuit is gone. No credit-return, and no further
+                     * dispatch of a frame that arrived on it. */
+                    return;
+                }
+                /* OVMX_NO_VC_BREAK: fall through and limp on, exactly as OVMX
+                 * did before this item. */
+            }
+
             if (scs_vc_owes_credit(peer_send_seq)) {
-                scs_vc_note_recv(&ps->vc, peer_send_seq);
                 uint8_t cframe[SCS_CREDIT_FRAME_LEN];
                 if (scs_vc_build_credit_for(&ps->vc, ps_port_addr(ps), rx->our_hw_mac,
                                             rx->our_src_logical, ps_sys_addr(ps), cframe) == 0 &&
@@ -2327,6 +2439,96 @@ static unsigned scsd_peer_departure_sweep(struct scsd_rx *rx, uint64_t now_ms)
 }
 
 /*
+ * scsd_retransmit_tick - vms-691's retransmit of OVMX's own unacked sequenced
+ * message (the CONNECT-REQUEST), plus vms-abc's p. 2-31 DELIVERY guarantee.
+ *
+ * WHY IT IS A FUNCTION. This was an inline block in main()'s loop, and
+ * SCSD_UNIT_TEST renames main() away, so it was compiled but reachable from no
+ * test -- the same measured gap vms-fb1 closed for the receive path. The body
+ * is that block, moved, with the loop-local state reached through `rx->`.
+ *
+ * THE ONE BEHAVIOUR CHANGE (vms-abc): reaching the retransmit cap used to be a
+ * bare `continue` -- OVMX stopped retransmitting a message the peer had never
+ * acknowledged and carried on with the circuit still OPEN. p. 2-31: "if either
+ * the guarantee of message delivery or the guarantee of message sequentiality
+ * cannot be satisfied, the virtual circuit between the ports involved will be
+ * explicitly broken (if it isn't already)." Exhausting the retransmits IS the
+ * delivery guarantee failing, so the circuit is now broken there. The CAP
+ * itself is unchanged -- SCS_VC_DELIVERY_RETRY_LIMIT and VC_RETRANSMIT_MAX are
+ * both 5 and a _Static_assert above holds them equal -- so the point at which
+ * OVMX gives up is exactly where it was; only what it does there changed.
+ * OVMX_NO_VC_BREAK=1 restores the `continue`.
+ *
+ * ===== THIS WHOLE LOOP IS DEAD IN PRODUCTION TODAY, and vms-abc did not
+ * revive it. The guard below tests `ps->connect_sent`, and `connect_sent` is
+ * ASSIGNED NOWHERE in this file -- it is declared, read here, and printed in
+ * the exit summary; the only assignments are to the DIFFERENT field
+ * `joiner_connect_sent`. So the vms-691 retransmit has not run since vms-d94
+ * moved the connect onto the joiner-opened connection, `vc.retransmit_count`
+ * never advances in a real run, and the delivery break below is therefore
+ * UNREACHED IN PRODUCTION. That is a pre-existing defect, reported rather than
+ * fixed: reviving the loop would start emitting CONNECT-REQUEST retransmits at
+ * OVMX_LOCAL_CONID that OVMX does not send today, which is a wire change and
+ * belongs to the connect/retransmit path, not to a p. 2-31 detector.
+ * tests/vmsscs/test_scsd_wire.c states the same thing at the test that drives
+ * this function. =====
+ */
+static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
+{
+    if (rx == NULL || !rx->do_connect) {
+        return;
+    }
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL || ps->connected || !ps->connect_sent) {
+            continue;
+        }
+        if (scs_vc_delivery_failed(&ps->vc)) {
+            /* vms-abc: the p. 2-31 DELIVERY guarantee has failed. */
+            unsigned broken = scs_vc_break(&ps->vc, ps->pb, SCS_VC_BREAK_DELIVERY, stdout);
+            if (scs_vc_break_enabled()) {
+                vc_breaks++;
+                vc_conns_broken += broken;
+            }
+            continue;
+        }
+        if (ps->vc.retransmit_count >= VC_RETRANSMIT_MAX) {
+            continue;
+        }
+        if (!scs_vc_retransmit_due(&ps->vc, now_ms, VC_RETRANSMIT_TIMEOUT_MS)) {
+            continue;
+        }
+        struct scs_connect_params cp;
+        memset(&cp, 0, sizeof(cp));
+        memcpy(cp.dst_mac, ps_port_addr(ps), 6);
+        memcpy(cp.src_mac, rx->our_hw_mac, 6);
+        memcpy(cp.src_logical, rx->our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
+        memcpy(cp.peer_logical, ps_sys_addr(ps), 6);
+        cp.local_conid = OVMX_LOCAL_CONID;
+        cp.remote_conid = 0;
+        /* vms-c6d: re-send the SAME outstanding sequenced message -- reuse the
+         * recorded unacked send_seq (do NOT advance) and the current recv_ack. */
+        cp.recv_ack = ps->vc.seq.recv_seq;
+        cp.send_seq = ps->vc.unacked_seq;
+        cp.incarnation = ps->incarnation;
+        uint8_t rframe[SCS_CONNECT_FRAME_LEN];
+        if (scs_connect_build_request(&cp, rframe) == 0 &&
+            send_frame_to(rx->sock, rx->ifindex, ps_port_addr(ps), rframe,
+                          sizeof(rframe)) > 0) {
+            scs_vc_mark_retransmitted(&ps->vc, now_ms);
+            rx->retransmit_sent++;
+            log_ts(stdout);
+            printf(" SCSD-I-RETX, retransmit CONNECT-REQUEST to peer"
+                   " %02x:%02x:%02x:%02x:%02x:%02x (attempt %u)\n",
+                   ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                   ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                   ps->vc.retransmit_count);
+            fflush(stdout);
+        }
+    }
+}
+
+/*
  * scsd_exit_summary - the end-of-run report, including the vms-dd5 connection
  * state-machine accounting and the stuck-connection scan.
  */
@@ -2357,6 +2559,17 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
         fprintf(out, "  CONN-FSM: transitions=%lu illegal-events=%lu"
                 " actions-required-but-not-emitted=%lu\n",
                 conn_transitions, conn_illegal_events, conn_unemitted_actions);
+        /* vms-abc: the p. 2-31 message guarantees. Printed unconditionally --
+         * "0 gaps, 0 breaks" is the answer on a healthy run and it must be
+         * VISIBLE, not inferred from the absence of a warning. If the kill
+         * switch is set, say so on the same line: a run log must never read as
+         * "no circuit needed breaking" when the truth is "breaking was off". */
+        fprintf(out, "  VC-GUARANTEES: seq-gaps=%lu vc-breaks=%lu"
+                " connections-broken=%lu sysap-vc-loss-notifications=%lu%s\n",
+                vc_seq_gaps, vc_breaks, vc_conns_broken,
+                sysap_vc_loss_notifications,
+                scs_vc_break_enabled() ? "" : "  [" SCS_VC_NO_BREAK_ENV
+                                              " SET -- circuits were NOT broken]");
         (void)scs_conn_report_stuck(&scsd_cdl, out);
         /* vms-17f: the p. 2-20/2-21 open transitions this run took, and the
          * departure sweep's work. PB-OPEN-REFRESHED is the p. 2-21 Note firing
@@ -2780,48 +2993,9 @@ int main(int argc, char **argv)
          * connect-request) on timeout, so a dropped CONNECT-REQUEST does not
          * stall the handshake. Rate-capped (VC_RETRANSMIT_MAX) to respect the
          * reply-amplification guard. Only while the connect is still unbound. */
-        if (do_connect) {
-            uint64_t now_ms = monotonic_ms();
-            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
-                struct peer_state *ps = &peers[i];
-                if (ps->pb == NULL || ps->connected || !ps->connect_sent) {
-                    continue;
-                }
-                if (ps->vc.retransmit_count >= VC_RETRANSMIT_MAX) {
-                    continue;
-                }
-                if (!scs_vc_retransmit_due(&ps->vc, now_ms, VC_RETRANSMIT_TIMEOUT_MS)) {
-                    continue;
-                }
-                struct scs_connect_params cp;
-                memset(&cp, 0, sizeof(cp));
-                memcpy(cp.dst_mac, ps_port_addr(ps), 6);
-                memcpy(cp.src_mac, our_hw_mac, 6);
-                memcpy(cp.src_logical, our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
-                memcpy(cp.peer_logical, ps_sys_addr(ps), 6);
-                cp.local_conid = OVMX_LOCAL_CONID;
-                cp.remote_conid = 0;
-                /* vms-c6d: re-send the SAME outstanding sequenced message --
-                 * reuse the recorded unacked send_seq (do NOT advance) and the
-                 * current recv_ack. */
-                cp.recv_ack = ps->vc.seq.recv_seq;
-                cp.send_seq = ps->vc.unacked_seq;
-                cp.incarnation = ps->incarnation;
-                uint8_t rframe[SCS_CONNECT_FRAME_LEN];
-                if (scs_connect_build_request(&cp, rframe) == 0 &&
-                    send_frame_to(sock, (int)ifindex, ps_port_addr(ps), rframe, sizeof(rframe)) > 0) {
-                    scs_vc_mark_retransmitted(&ps->vc, now_ms);
-                    rx.retransmit_sent++;
-                    log_ts(stdout);
-                    printf(" SCSD-I-RETX, retransmit CONNECT-REQUEST to peer"
-                           " %02x:%02x:%02x:%02x:%02x:%02x (attempt %u)\n",
-                           ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
-                           ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
-                           ps->vc.retransmit_count);
-                    fflush(stdout);
-                }
-            }
-        }
+        /* vms-abc moved the body into scsd_retransmit_tick() so a test can
+         * reach it, and made retransmit exhaustion break the circuit. */
+        scsd_retransmit_tick(&rx, monotonic_ms());
 
         ssize_t n = recv(sock, buf, sizeof(buf), 0);
         if (n < 0) {

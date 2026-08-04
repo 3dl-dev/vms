@@ -925,6 +925,54 @@ state alone — no captured counter needs replaying. (This is exactly what the
 next-seq/last-ack CSB assignment (§3 `SHOW CLUSTER` triad) remains **inferred**,
 same honesty caveat as §4d/§4g.
 
+**(4a) SEQUENCE CONTINUITY — GROUNDED census over every capture we hold
+(`vms-abc`).** §4h(4) grounds that a sender increments `send_seq` by one per new
+sequenced message. `vms-abc` needed to know how often that is *violated* on the
+wire, because OVMX now breaks a virtual circuit when it sees a gap (VAXcluster
+Principles p. 2-31) and a detector that fires on healthy traffic would tear down
+working joins. Re-derive with
+`python3 tools/cluster/scs_seqgap_measure.py --all` (lab host; the captures are
+host-only). The rule applied is exactly the one in
+`src/vmsscs/scs_vc.c::scs_vc_check_recv_seq()`, restated in the script.
+
+| Population | Value |
+|---|---|
+| pcaps scanned (every `.pcap` in the lab capture dir, 0 skipped) | 47 |
+| sequenced messages examined (format `0x13`, `send_seq != 0`, `0x41` excluded) | **321,599** |
+| duplicate / retransmit frames (`send_seq` at or behind `recv_seq`) | 506 |
+| **gaps** (`send_seq` ahead by more than 1) | **41** |
+| gaps whose source MAC is a VAX | **0** |
+| gaps whose source MAC is `b6:16:8a:dc:3a:53` (OVMX) | **41** |
+
+Per-VC counters are keyed on the ordered (src,dst) MAC pair, reset to 0 on any
+`0x41` START in either direction (sec 4i.A: "the post-START SCS VC resets to
+`send_seq = 1` on both sides"), and the FIRST sequenced message on a pair
+ANCHORS the counter rather than being scored — a capture, like a node attaching
+to a circuit already carrying traffic, cannot know what preceded the first frame
+it sees. Without that anchor the same scan reports 147 "gaps"; the extra 106 are
+all anchor cases (the first sequenced message seen on a VC, typically at a
+capture that starts mid-stream on an established circuit, e.g. `recv_seq=0
+send_seq=11142`). That 147 is a measurement artefact and is recorded here so
+nobody re-derives it and reads it as wire loss.
+
+**What this establishes:** on the RECEIVE side — the only side a port driver can
+police — the reference wire never breaches sequentiality. `formation-ci1-
+joinwindow.pcap` (the golden fresh join) contributes 2,960 sequenced messages
+with 0 gaps, `formation-ci1.pcap` 17,760 with 0, and
+`vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap` 18,881 with 0.
+
+**What it also exposes — an OVMX TRANSMIT defect, not fixed by `vms-abc`:** all
+41 gaps are OVMX's own outbound frames, in three captures
+(`vms246-scsdir-0x4b-reached`, `ovmx-e81-newcomer-ignores-us`,
+`ovmx-e81-newcomer-refuses-60retx`). 40 of the 41 are one shape: OVMX emitting a
+`0x5b` with `send_seq = 10` immediately after the member's round-0 `0x41` START
+carried `send_seq = 10` — i.e. OVMX copying the member's *continuation*
+`send_seq` into its own counter, which §4i.A states in as many words a joiner
+must **not** do ("A correct joiner must not treat the member's `send_seq ≠ 1` as
+an error, and must not copy it into its own `send_seq`/`recv_ack`"). Recorded
+here as an open defect; it is a transmit-path bug and `vms-abc` is the
+receive-side guarantee only.
+
 **RE gaps left in §4h (honest):** (a) the [46:48] field is now **GROUNDED as the
 connection-control message type for values 0–3** (§4(h)(1a), `vms-dd5`), with
 `4` strongly supported as REJECT_REQ and `6` only plausible as DISCONNECT_REQ;

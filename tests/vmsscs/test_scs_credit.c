@@ -520,6 +520,551 @@ static void test_wire_credit_field(void)
           "stamping changed a byte outside the credit field");
 }
 
+/* ==========================================================================
+ * vms-1d2: the CREDIT WAIT QUEUE (pp. 2-45..2-46) and the SPECIAL CREDIT
+ * MESSAGE TRIGGER (p. 2-44).
+ *
+ * vms-76e proved the credit TEST. These prove the mechanism the test gates:
+ * a starved sender is SUSPENDED on the CDT rather than refused, and is resumed
+ * FIFO by the arrival of credit.
+ *
+ * THE EMIT PROXY, and why it is not a fiction. OVMX has no SYSAP that sends an
+ * SCS message, so "did the starved sender emit?" is asserted against a stand-in
+ * sender: a resumed operation stamps a REAL captured 190-byte VC frame
+ * (frame190_vc, the same specimen the wire test reads) through the REAL
+ * production stamper, scs_credit_stamp_header(). The frame's credit field is
+ * then read back with scs_credit_read_header(). So "did not emit" means the
+ * frame buffer is still untouched, and "emitted carrying N" means the grounded
+ * SCA [48:50] field of a real frame holds N. What is NOT proven is that any
+ * OVMX daemon ever runs this: nothing in scsd.c calls the credit module at all
+ * (see the reachability note in scs_credit.h). These senders are the test's,
+ * not production's.
+ * ========================================================================== */
+
+#define MAX_EMITS 16
+
+struct sender {
+    struct scs_credit_waiter w;
+    int      id;
+    uint8_t  frame[190]; /* zeroed = nothing was ever emitted */
+    int      emits;
+    unsigned carried; /* credit value of the last frame it emitted */
+};
+
+static int g_emit_order[MAX_EMITS];
+static int g_emit_n;
+
+static void emit_reset(void)
+{
+    g_emit_n = 0;
+    memset(g_emit_order, 0, sizeof(g_emit_order));
+}
+
+/* The stand-in SYSAP send: build the message and put the piggyback credit in
+ * its header (p. 2-44), using the production stamper on a real captured frame. */
+static void sender_emit(struct sender *s, unsigned credit)
+{
+    memcpy(s->frame, frame190_vc, sizeof(s->frame));
+    if (scs_credit_stamp_header(s->frame, sizeof(s->frame), credit) != 0) {
+        CHECK(0, "sender %d: stamping the credit field failed", s->id);
+    }
+    s->carried = credit;
+    s->emits++;
+    if (g_emit_n < MAX_EMITS) {
+        g_emit_order[g_emit_n++] = s->id;
+    }
+}
+
+/* p. 2-46: "the address of the instruction at which to resume the operation is
+ * kept in the CDRP" -- here, a callback on the waiter. */
+static void sender_resume(struct scs_credit_waiter *w, unsigned credit, void *ctx)
+{
+    struct sender *s = (struct sender *)ctx;
+    CHECK(w == &s->w, "resume delivered the wrong waiter to sender %d", s->id);
+    sender_emit(s, credit);
+}
+
+static void sender_init(struct sender *s, int id)
+{
+    memset(s, 0, sizeof(*s));
+    s->id = id;
+    s->w.resume = sender_resume;
+    s->w.ctx = s;
+}
+
+/* Did this sender's frame stay untouched? */
+static int sender_silent(const struct sender *s)
+{
+    for (size_t i = 0; i < sizeof(s->frame); i++) {
+        if (s->frame[i] != 0) {
+            return 0;
+        }
+    }
+    return s->emits == 0;
+}
+
+/* Read the credit field back out of what the sender actually emitted. */
+static int sender_frame_credit(const struct sender *s, uint16_t *out)
+{
+    return scs_credit_read_header(s->frame, sizeof(s->frame), out);
+}
+
+/*
+ * The special credit message emitter (p. 2-44). Records every firing: how many,
+ * what count each carried, and the Receive Credit at the moment it fired.
+ */
+struct special_rec {
+    int      fires;
+    unsigned credit[MAX_EMITS];
+    unsigned receive_credit_at_fire[MAX_EMITS];
+};
+
+static void special_recorder(struct scs_cdt *cdt, unsigned credit, void *ctx)
+{
+    struct special_rec *r = (struct special_rec *)ctx;
+    if (r->fires < MAX_EMITS) {
+        r->credit[r->fires] = credit;
+        r->receive_credit_at_fire[r->fires] = cdt->receive_credit;
+    }
+    r->fires++;
+}
+
+/*
+ * p. 2-45: "If no Send Credits are available, then this routine temporarily
+ * suspends the operation involved by placing it in a Credit Wait. This is done
+ * by queuing the CDRP representing the operation to the CDT for the
+ * connection."
+ *
+ * A send with 0 credits BLOCKS -- it is queued to the CDT -- and emits nothing.
+ */
+static void test_credit_wait_blocks_and_does_not_emit(void)
+{
+    struct bench b;
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 2, 1); /* the remote extended only 2 credits to us */
+    emit_reset();
+
+    struct sender s1, s2, s3;
+    sender_init(&s1, 1);
+    sender_init(&s2, 2);
+    sender_init(&s3, 3);
+
+    /* The first two sends have credit: the fast path returns the piggyback
+     * value and the operation is NOT queued -- it sends on its own stack. */
+    int r = scs_credit_send_or_wait(b.local, &s1.w);
+    CHECK(r >= 0, "send 1 should have credit, got %d", r);
+    sender_emit(&s1, (unsigned)r);
+    CHECK(s1.w.queued == 0, "a send that had credit must not be queued");
+    CHECK(scs_credit_wait_depth(b.local) == 0, "queue depth %u after an unblocked send",
+          scs_credit_wait_depth(b.local));
+
+    r = scs_credit_send_or_wait(b.local, &s2.w);
+    CHECK(r >= 0, "send 2 should have credit, got %d", r);
+    sender_emit(&s2, (unsigned)r);
+    CHECK(b.local->send_credit == 0, "Send Credit %u after 2 sends, want 0",
+          b.local->send_credit);
+
+    /* The third send is starved. Snapshot everything the account holds. */
+    unsigned send_before = b.local->send_credit;
+    unsigned recv_before = b.local->receive_credit;
+    unsigned pend_before = b.local->pending_receive_credit;
+    unsigned mfreeq_before = b.pdt_l.mfreeq_count;
+
+    r = scs_credit_send_or_wait(b.local, &s3.w);
+    CHECK(r == SCS_CREDIT_WAIT, "starved send must report SCS_CREDIT_WAIT, got %d", r);
+
+    /* It BLOCKED: queued to the CDT (p. 2-45), not refused and not sent. */
+    CHECK(scs_credit_wait_depth(b.local) == 1, "queue depth %u, want 1",
+          scs_credit_wait_depth(b.local));
+    CHECK(s3.w.queued == 1, "the starved waiter is not marked queued");
+    CHECK(s3.w.resumed == 0, "the starved waiter must not be resumed yet");
+    CHECK(b.local->credit_wait_head == &s3.w, "the CDT's queue head is not the waiter");
+
+    /* AND IT DID NOT EMIT. */
+    CHECK(sender_silent(&s3), "a blocked sender emitted a frame (%d emits)", s3.emits);
+
+    /* Nothing in the account moved. */
+    CHECK(b.local->send_credit == send_before, "Send Credit moved while blocking: %u",
+          b.local->send_credit);
+    CHECK(b.local->receive_credit == recv_before, "Receive Credit moved while blocking: %u",
+          b.local->receive_credit);
+    CHECK(b.local->pending_receive_credit == pend_before,
+          "Pending Receive moved while blocking: %u", b.local->pending_receive_credit);
+    CHECK(b.pdt_l.mfreeq_count == mfreeq_before, "MFREEQ moved while blocking: %u",
+          b.pdt_l.mfreeq_count);
+
+    /* A second queue attempt with the same waiter is refused, not double-linked. */
+    CHECK(scs_credit_send_or_wait(b.local, &s3.w) == -1,
+          "re-queuing an already-queued waiter must be refused");
+    CHECK(scs_credit_wait_depth(b.local) == 1, "depth %u after a refused re-queue",
+          scs_credit_wait_depth(b.local));
+
+    CHECK(scs_credit_wait_flush(b.local) == 1, "flush should have dropped 1 waiter");
+    CHECK(scs_credit_wait_depth(b.local) == 0, "flush left the queue non-empty");
+}
+
+/*
+ * p. 2-45: "Whenever the Send Credit count in a CDT is increased, the CDT's
+ * queue of waiting CDRPs is examined. If that queue is nonempty, as many
+ * waiting CDRPs as possible are resumed, based on the number of Send Credits
+ * currently available."
+ * p. 2-46: "Each of the SCS wait queues described here is a 'first in first
+ * out' queue ... the CDRP at the head of the queue has priority."
+ *
+ * THE TRIGGER IS DRIVEN, NOT SIMULATED: the queue is released by
+ * scs_credit_on_recv() -- an inbound message carrying a credit field -- which
+ * is the ordinary production path by which Send Credit rises. This test never
+ * calls scs_credit_wait_release() itself.
+ */
+static void test_credit_wait_released_fifo(void)
+{
+    struct bench b;
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 0, 1); /* the remote extended 0 credits: we are starved at once */
+    emit_reset();
+
+    CHECK(b.local->send_credit == 0, "local Send Credit %u, want 0", b.local->send_credit);
+
+    /* The local SYSAP has freed 4 received buffers that the remote does not know
+     * about yet (p. 2-43), so the first resumed send has 4 to piggyback. */
+    for (int i = 0; i < 4; i++) {
+        CHECK(scs_credit_release_buffer(b.local) == 0, "release %d failed", i);
+    }
+    CHECK(b.local->pending_receive_credit == 4, "Pending Receive %u, want 4",
+          b.local->pending_receive_credit);
+
+    struct sender s1, s2, s3;
+    sender_init(&s1, 1);
+    sender_init(&s2, 2);
+    sender_init(&s3, 3);
+    CHECK(scs_credit_send_or_wait(b.local, &s1.w) == SCS_CREDIT_WAIT, "s1 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s2.w) == SCS_CREDIT_WAIT, "s2 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s3.w) == SCS_CREDIT_WAIT, "s3 should block");
+    CHECK(scs_credit_wait_depth(b.local) == 3, "queue depth %u, want 3",
+          scs_credit_wait_depth(b.local));
+    CHECK(g_emit_n == 0, "%d frames emitted while all three were blocked", g_emit_n);
+
+    unsigned recv_before = b.local->receive_credit;
+
+    /* A message arrives carrying 2 credits: Send Credit rises by 2, so exactly
+     * TWO waiters may go -- "as many as possible, based on the number of Send
+     * Credits currently available" (p. 2-45). */
+    CHECK(scs_credit_on_recv(b.local, 2) == 0, "recv failed");
+
+    CHECK(g_emit_n == 2, "%d senders resumed on a 2-credit grant, want 2", g_emit_n);
+    CHECK(g_emit_order[0] == 1 && g_emit_order[1] == 2,
+          "resume order was %d,%d -- p. 2-46 requires FIFO 1,2", g_emit_order[0],
+          g_emit_order[1]);
+    CHECK(scs_credit_wait_depth(b.local) == 1, "queue depth %u after 2 resumes, want 1",
+          scs_credit_wait_depth(b.local));
+    CHECK(sender_silent(&s3), "s3 was resumed out of turn");
+    CHECK(b.local->send_credit == 0, "Send Credit %u after 2 resumes, want 0",
+          b.local->send_credit);
+
+    /* The head of the queue carried the whole outstanding Pending Receive Credit
+     * (p. 2-44) and the next carried none -- exactly a run of on_send calls.
+     * Read back out of the frame the sender actually built. */
+    uint16_t v = 0xFFFF;
+    CHECK(sender_frame_credit(&s1, &v) == 0 && v == 4,
+          "s1's emitted frame carries credit %u, want 4", v);
+    CHECK(sender_frame_credit(&s2, &v) == 0 && v == 0,
+          "s2's emitted frame carries credit %u, want 0", v);
+    CHECK(b.local->pending_receive_credit == 0, "Pending Receive %u after the grant, want 0",
+          b.local->pending_receive_credit);
+    /* -1 for the message that arrived, +4 mirrored from the piggyback (p. 2-44). */
+    CHECK(b.local->receive_credit == recv_before - 1 + 4, "Receive Credit %u, want %u",
+          b.local->receive_credit, recv_before - 1 + 4);
+
+    /* One more credit releases the last waiter, still FIFO. */
+    CHECK(scs_credit_on_recv(b.local, 1) == 0, "recv failed");
+    CHECK(g_emit_n == 3 && g_emit_order[2] == 3, "the third resume was %d, want sender 3",
+          g_emit_n == 3 ? g_emit_order[2] : -1);
+    CHECK(scs_credit_wait_depth(b.local) == 0, "queue depth %u, want 0",
+          scs_credit_wait_depth(b.local));
+    CHECK(s3.w.resumed == 1 && s3.emits == 1, "s3 did not emit exactly once");
+    CHECK(sender_frame_credit(&s3, &v) == 0 && v == 0, "s3 carried %u, want 0", v);
+
+    /* A credit that arrives with an empty queue resumes nobody. */
+    CHECK(scs_credit_on_recv(b.local, 1) == 0, "recv failed");
+    CHECK(g_emit_n == 3, "a grant on an empty queue emitted %d frames", g_emit_n);
+}
+
+/*
+ * A newly arriving sender must not overtake operations already waiting
+ * (p. 2-46: "Queue priority is based on time spent in the queue"), and a
+ * cancelled operation leaves the FIFO order of the rest intact.
+ */
+static void test_credit_wait_order_is_preserved(void)
+{
+    struct bench b;
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 0, 1);
+    emit_reset();
+
+    struct sender s1, s2, s3, s4;
+    sender_init(&s1, 1);
+    sender_init(&s2, 2);
+    sender_init(&s3, 3);
+    sender_init(&s4, 4);
+    CHECK(scs_credit_send_or_wait(b.local, &s1.w) == SCS_CREDIT_WAIT, "s1 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s2.w) == SCS_CREDIT_WAIT, "s2 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s3.w) == SCS_CREDIT_WAIT, "s3 should block");
+
+    /* Cancel the middle one: it is dequeued, resumes nothing, emits nothing. */
+    CHECK(scs_credit_wait_cancel(b.local, &s2.w) == 0, "cancel failed");
+    CHECK(scs_credit_wait_depth(b.local) == 2, "depth %u after a cancel, want 2",
+          scs_credit_wait_depth(b.local));
+    CHECK(scs_credit_wait_cancel(b.local, &s2.w) == -1, "cancelling twice must be refused");
+    CHECK(scs_credit_wait_cancel(b.local, &s4.w) == -1,
+          "cancelling a waiter that was never queued must be refused");
+
+    /* s4 arrives now. It goes to the TAIL, behind s1 and s3. */
+    CHECK(scs_credit_send_or_wait(b.local, &s4.w) == SCS_CREDIT_WAIT, "s4 should block");
+    CHECK(scs_credit_wait_depth(b.local) == 3, "depth %u, want 3",
+          scs_credit_wait_depth(b.local));
+
+    /* Grant everything at once. */
+    CHECK(scs_credit_on_recv(b.local, 3) == 0, "recv failed");
+    CHECK(g_emit_n == 3, "%d resumed, want 3", g_emit_n);
+    CHECK(g_emit_order[0] == 1 && g_emit_order[1] == 3 && g_emit_order[2] == 4,
+          "resume order %d,%d,%d -- want 1,3,4 (s2 cancelled, s4 last in)",
+          g_emit_order[0], g_emit_order[1], g_emit_order[2]);
+    CHECK(sender_silent(&s2), "a cancelled operation was resumed anyway");
+}
+
+/*
+ * p. 2-44 SPECIAL CREDIT MESSAGE, at the exact documented threshold.
+ *
+ * "Each time the local node receives a message on a connection, it checks to
+ * see if the local Receive Credit count for the connection is 'dangerously low'.
+ * If it is, AND if the local Pending Receive Credit count is greater than 0,
+ * local SCS immediately sends remote SCS a special credit message containing
+ * the local Pending Receive Credit count."
+ * "The VMS implementation of SCS considers the local Receive Credit count to be
+ * dangerously low if it is LESS THAN the sum of the local SYSGEN parameter
+ * SCSFLOWCUSH and the remote value for Minimum Send Credits."
+ *
+ * With SCS_CREDIT_SCSFLOWCUSH = 2 and the remote's Minimum Send Credits = 3 the
+ * threshold is 5. The scenario walks Receive Credit down THROUGH 5 with Pending
+ * Receive Credit already > 0, so the boundary is observable: a mutant that used
+ * <= instead of < fires one message early and this test catches it.
+ */
+static void test_special_credit_fires_at_exact_threshold(void)
+{
+    struct bench b;
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 10, 3); /* remote Minimum Send Credits = 3 */
+    emit_reset();
+
+    const unsigned threshold = (unsigned)SCS_CREDIT_SCSFLOWCUSH + 3u;
+    CHECK(threshold == 5, "threshold %u, want 5 (SCSFLOWCUSH 2 + remote minimum 3)",
+          threshold);
+
+    struct special_rec rec;
+    memset(&rec, 0, sizeof(rec));
+    CHECK(scs_credit_set_special_emitter(b.local, special_recorder, &rec) == 0,
+          "installing the special credit emitter failed");
+
+    int boundary_witnessed = 0;
+
+    /*
+     * ONE-WAY traffic (the case p. 2-44 introduces the mechanism for): the
+     * remote keeps sending, the local SYSAP keeps releasing the buffers, and the
+     * local node sends nothing back -- so nothing piggybacks and Pending Receive
+     * Credit only grows.
+     */
+    for (int i = 1; i <= 11; i++) {
+        unsigned rc_before = b.local->receive_credit;
+        unsigned pend_before = b.local->pending_receive_credit;
+        int fires_before = rec.fires;
+
+        CHECK(scs_credit_on_recv(b.local, 0) == 0, "recv %d failed", i);
+
+        /* The receive drops Receive Credit by one before the check (p. 2-44). */
+        unsigned rc_at_check = rc_before > 0 ? rc_before - 1 : 0;
+
+        if (rc_at_check == threshold) {
+            /* THE BOUNDARY. Pending Receive Credit is > 0 here, so the ONLY
+             * reason not to fire is that the count is not LESS THAN the sum. */
+            CHECK(pend_before > 0,
+                  "recv %d: boundary case is vacuous -- Pending Receive is 0", i);
+            CHECK(rec.fires == fires_before,
+                  "recv %d: a special credit message fired at Receive Credit == %u; "
+                  "p. 2-44 says LESS THAN the sum, so the boundary is NOT low", i,
+                  threshold);
+            boundary_witnessed++;
+        }
+        if (rc_at_check < threshold && pend_before > 0) {
+            CHECK(rec.fires == fires_before + 1,
+                  "recv %d: Receive Credit %u < %u with Pending Receive %u and no "
+                  "special credit message", i, rc_at_check, threshold, pend_before);
+        }
+
+        CHECK(scs_credit_release_buffer(b.local) == 0, "release %d failed", i);
+    }
+
+    CHECK(boundary_witnessed == 2,
+          "the run passed through Receive Credit == %u exactly %d times, want 2 -- "
+          "the boundary assertion above is otherwise unobservable",
+          threshold, boundary_witnessed);
+    CHECK(rec.fires == 2, "%d special credit messages, want 2", rec.fires);
+    CHECK(rec.credit[0] == 5 && rec.credit[1] == 5,
+          "special credit messages carried %u and %u, want 5 and 5", rec.credit[0],
+          rec.credit[1]);
+    /* The check saw Receive Credit 4 (one below the threshold); by the time the
+     * message is handed to the emitter the 5 Pending Receive Credits it carries
+     * have already been mirrored back into Receive Credit (p. 2-44), so 4+5=9. */
+    CHECK(rec.receive_credit_at_fire[0] == 9,
+          "first special fired at Receive Credit %u, want 9 (4 below the threshold, "
+          "+5 mirrored by taking the Pending Receive Credit)",
+          rec.receive_credit_at_fire[0]);
+
+    /*
+     * THE SECOND CONJUNCT, isolated. Keep receiving but stop releasing buffers,
+     * so Pending Receive Credit stays 0 while Receive Credit falls well below
+     * the threshold. p. 2-44 requires BOTH, so nothing may fire.
+     */
+    /* Clear the outstanding Pending Receive Credit the honest way -- the local
+     * SYSAP sends one message, which piggybacks it (p. 2-44). Traffic is now
+     * two-way for one message and then one-way again. */
+    CHECK(scs_credit_on_send(b.local) == 1, "the piggyback should have carried 1");
+    CHECK(b.local->pending_receive_credit == 0, "Pending Receive %u after a send, want 0",
+          b.local->pending_receive_credit);
+
+    int fires_before = rec.fires;
+    for (int i = 0; i < 8; i++) {
+        CHECK(scs_credit_on_recv(b.local, 0) == 0, "second-phase recv %d failed", i);
+    }
+    CHECK(b.local->pending_receive_credit == 0, "Pending Receive %u, want 0",
+          b.local->pending_receive_credit);
+    CHECK(scs_credit_is_dangerously_low(b.local) == 1,
+          "Receive Credit %u should be dangerously low (< %u)", b.local->receive_credit,
+          threshold);
+    CHECK(rec.fires == fires_before,
+          "%d special credit messages fired with Pending Receive Credit 0 -- p. 2-44 "
+          "requires BOTH conditions", rec.fires - fires_before);
+
+    /* One release, one more receive: now both hold and it fires again. */
+    CHECK(scs_credit_release_buffer(b.local) == 0, "release failed");
+    CHECK(scs_credit_on_recv(b.local, 0) == 0, "recv failed");
+    CHECK(rec.fires == fires_before + 1, "the emitter did not resume firing");
+    CHECK(rec.credit[fires_before] == 1, "special carried %u, want 1",
+          rec.credit[fires_before]);
+
+    /*
+     * Minimum Send Credits is an argument of CONNECT/ACCEPT and lives in the CDT
+     * (p. 2-44): moving it moves the threshold and nothing else.
+     */
+    unsigned rc = b.local->receive_credit;
+    unsigned pend = b.local->pending_receive_credit;
+    int fires = rec.fires;
+    CHECK(scs_credit_set_remote_min_send_credits(b.local, 0) == 0, "setter failed");
+    CHECK(b.local->remote_min_send_credits == 0, "remote minimum %u, want 0",
+          b.local->remote_min_send_credits);
+    CHECK(b.local->receive_credit == rc && b.local->pending_receive_credit == pend,
+          "changing Minimum Send Credits moved a credit count");
+    CHECK(rec.fires == fires, "changing Minimum Send Credits emitted a message");
+    CHECK(scs_credit_is_dangerously_low(b.local) ==
+              (b.local->receive_credit < (unsigned)SCS_CREDIT_SCSFLOWCUSH ? 1 : 0),
+          "the threshold did not follow Minimum Send Credits");
+
+    scs_credit_set_special_emitter(b.local, NULL, NULL);
+}
+
+/*
+ * OVMX_NO_CREDIT_WAIT=1 -- this item's kill switch, distinct from vms-76e's
+ * OVMX_NO_CREDIT_ACCOUNTING. With it set the module must revert EXACTLY to the
+ * vms-76e behaviour: a starved send is refused (-1), nothing is queued, nothing
+ * is resumed, and no special credit message is emitted.
+ *
+ * BRACKETED, per guardrail 23: the same sequence is run with the switch clear
+ * BOTH before and after, so a green run cannot come from the scenario never
+ * having produced the behaviour in the first place.
+ */
+static void test_credit_wait_kill_switch(void)
+{
+    struct sender s;
+    struct bench  b;
+
+    /* --- bracket 1: switch CLEAR. The behaviour must be present. --- */
+    scs_credit_reset_switch_cache();
+    CHECK(scs_credit_wait_enabled() == 1, "Credit Wait should start enabled");
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 0, 3);
+    emit_reset();
+    sender_init(&s, 1);
+    CHECK(scs_credit_send_or_wait(b.local, &s.w) == SCS_CREDIT_WAIT,
+          "control: a starved send must block");
+    CHECK(scs_credit_wait_depth(b.local) == 1, "control: depth %u, want 1",
+          scs_credit_wait_depth(b.local));
+    CHECK(scs_credit_on_recv(b.local, 1) == 0, "control: recv failed");
+    CHECK(s.emits == 1, "control: the waiter was not resumed by the grant");
+
+    /* --- switch SET --- */
+    if (setenv("OVMX_NO_CREDIT_WAIT", "1", 1) != 0) {
+        CHECK(0, "setenv failed");
+        return;
+    }
+    scs_credit_reset_switch_cache();
+    CHECK(scs_credit_wait_enabled() == 0, "the kill switch did not disable Credit Wait");
+    CHECK(scs_credit_enabled() == 1,
+          "OVMX_NO_CREDIT_WAIT must not disable the vms-76e account as well");
+
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 0, 3);
+    emit_reset();
+    sender_init(&s, 1);
+
+    /* No queue. The vms-76e refusal, byte for byte. */
+    CHECK(scs_credit_send_or_wait(b.local, &s.w) == -1,
+          "under the switch a starved send must be refused, not suspended");
+    CHECK(scs_credit_wait_depth(b.local) == 0, "under the switch the queue must stay empty");
+    CHECK(s.w.queued == 0, "under the switch the waiter must not be linked");
+    CHECK(sender_silent(&s), "under the switch a refused send emitted a frame");
+    CHECK(scs_credit_wait_release(b.local) == 0, "under the switch nothing may be resumed");
+
+    /* Credit still arrives and is still accounted -- only the WAIT is gone. */
+    CHECK(scs_credit_on_recv(b.local, 2) == 0, "recv failed");
+    CHECK(b.local->send_credit == 2, "Send Credit %u under the switch, want 2",
+          b.local->send_credit);
+    CHECK(s.emits == 0, "under the switch a grant resumed something");
+
+    /* And no special credit message is emitted, even though the conditions
+     * genuinely hold -- proved by taking the message by hand afterwards. */
+    struct special_rec gated;
+    memset(&gated, 0, sizeof(gated));
+    CHECK(scs_credit_set_special_emitter(b.local, special_recorder, &gated) == 0,
+          "installing the emitter failed");
+    for (int i = 0; i < 7; i++) {
+        CHECK(scs_credit_on_recv(b.local, 0) == 0, "recv %d failed", i);
+        CHECK(scs_credit_release_buffer(b.local) == 0, "release %d failed", i);
+    }
+    CHECK(gated.fires == 0, "%d special credit messages emitted under the switch",
+          gated.fires);
+    CHECK(scs_credit_is_dangerously_low(b.local) == 1,
+          "the scenario did not actually reach a dangerously low Receive Credit (%u) -- "
+          "the suppression above would be vacuous",
+          b.local->receive_credit);
+    CHECK(b.local->pending_receive_credit > 0,
+          "the scenario left Pending Receive Credit at 0 -- suppression vacuous");
+    CHECK(scs_credit_take_special(b.local) > 0,
+          "a special credit message WAS owed; only its emission is gated");
+
+    /* --- bracket 2: switch CLEAR again. The behaviour must come back. --- */
+    unsetenv("OVMX_NO_CREDIT_WAIT");
+    scs_credit_reset_switch_cache();
+    CHECK(scs_credit_wait_enabled() == 1, "clearing the switch did not re-enable Credit Wait");
+
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 0, 3);
+    emit_reset();
+    sender_init(&s, 1);
+    CHECK(scs_credit_send_or_wait(b.local, &s.w) == SCS_CREDIT_WAIT,
+          "bracket 2: a starved send must block again");
+    CHECK(scs_credit_on_recv(b.local, 1) == 0, "bracket 2: recv failed");
+    CHECK(s.emits == 1, "bracket 2: the waiter was not resumed after clearing the switch");
+}
+
 /* --- kill switch ---------------------------------------------------------- */
 
 /*
@@ -600,6 +1145,14 @@ int main(void)
     test_credit_wait_p2_45();
     test_special_credit_message_p2_44();
     test_wire_credit_field();
+
+    /* vms-1d2 */
+    test_credit_wait_blocks_and_does_not_emit();
+    test_credit_wait_released_fifo();
+    test_credit_wait_order_is_preserved();
+    test_special_credit_fires_at_exact_threshold();
+    test_credit_wait_kill_switch(); /* mutates the environment; restores it */
+
     test_kill_switch(); /* must run last: it mutates the environment */
 
     printf("%s: %d checks, %d failures\n", failures == 0 ? "PASS" : "FAIL", checks, failures);

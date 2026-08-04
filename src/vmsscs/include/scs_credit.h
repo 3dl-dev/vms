@@ -264,14 +264,24 @@
  * worked example a second time with the switch set and asserts every count
  * stays at its initial value.
  *
+ * vms-1d2 adds a SECOND, narrower switch -- OVMX_NO_CREDIT_WAIT=1 -- which
+ * gates only the Credit Wait queue and the special credit message trigger and
+ * leaves the account itself running. See the CREDIT WAIT section below.
+ *
  * OVMX DESIGN CHOICES (labeled per rule 8):
  *   - The counts are plain `unsigned` in the CDT, not a VMS-layout structure.
  *     The book documents the CONTENTS of the credit account, never a byte
  *     layout for it; nothing here but the [48:50] field reaches the wire.
- *   - Credit Wait is reported, not queued. p. 2-45 blocks by queuing the CDRP
- *     to the CDT; OVMX has no CDRP, so scs_credit_on_send() REFUSES the send
- *     and the caller is expected to retry. Nothing here silently succeeds --
- *     a refused send is an honest -1 (CLAUDE.md rule 9 / INV-6).
+ *   - Credit Wait is reported, not queued. **SUPERSEDED BY vms-1d2 -- see the
+ *     CREDIT WAIT section below.** vms-76e wrote: "p. 2-45 blocks by queuing
+ *     the CDRP to the CDT; OVMX has no CDRP, so scs_credit_on_send() REFUSES
+ *     the send and the caller is expected to retry." That is still exactly what
+ *     scs_credit_on_send() does, and it is still an honest -1 rather than a
+ *     silent success -- but it is no longer the whole mechanism. vms-1d2 adds
+ *     the queue (scs_credit_send_or_wait) with struct scs_credit_waiter as the
+ *     CDRP stand-in, because refuse-and-retry drops the p. 2-46 FIFO ordering
+ *     guarantee. Under OVMX_NO_CREDIT_WAIT=1 the module reverts to this
+ *     sentence exactly.
  *   - SCS_CREDIT_SCSFLOWCUSH's default is an OVMX value, not a VMS quantity.
  *     On VMS it is a SYSGEN parameter; OVMX has no SYSGEN plumbing for it, so
  *     it is a compile-time knob. Its ROLE in the dangerously-low test is the
@@ -357,6 +367,204 @@ int scs_credit_grant_from_peer(struct scs_cdt *cdt, unsigned n);
 
 /* --- send path (pp. 2-43..2-45) ------------------------------------------- */
 
+/* --- CREDIT WAIT: the queue on the CDT (pp. 2-45..2-46, vms-1d2) ---------- */
+
+/*
+ * WHAT vms-76e LEFT UNDONE, AND WHAT vms-1d2 ADDS.
+ *
+ * vms-76e implemented the p. 2-45 Credit Wait TEST (scs_credit_can_send) and
+ * made scs_credit_on_send REFUSE at zero credit, with this design note: "Credit
+ * Wait is reported, not queued ... OVMX has no CDRP, so scs_credit_on_send()
+ * REFUSES the send and the caller is expected to retry." That is only half the
+ * mechanism, and the missing half is the part the book actually specifies:
+ *
+ *   "If no Send Credits are available, then this routine temporarily suspends
+ *    the operation involved by placing it in a Credit Wait. This is done by
+ *    queuing the CDRP representing the operation to the CDT for the
+ *    connection.
+ *    Whenever the Send Credit count in a CDT is increased, the CDT's queue of
+ *    waiting CDRPs is examined. If that queue is nonempty, as many waiting
+ *    CDRPs as possible are resumed, based on the number of Send Credits
+ *    currently available."                                          p. 2-45
+ *   "Each of the SCS wait queues described here is a 'first in first out'
+ *    queue. The longer a CDRP has been in the queue, the closer it is to the
+ *    head of that queue. Queue priority is based on time spent in the queue.
+ *    When a resource associated with the queue (e.g., Send Credit, BDT entry,
+ *    etc.) becomes available, the CDRP at the head of the queue has priority
+ *    for receiving that resource."                                  p. 2-46
+ *   "When an operation is suspended due to an SCS Wait, the address of the
+ *    instruction at which to resume the operation is kept in the CDRP."
+ *                                                                   p. 2-46
+ *
+ * A refuse-and-retry contract is NOT that: it drops the ordering guarantee
+ * (p. 2-46 makes queue position a function of time waited) and it makes the
+ * resume edge invisible, so nothing can ever observe "the credit arrived and
+ * the starved sender went". This module now queues.
+ *
+ * SCOPE. Only Credit Wait. The other three VMS SCS Waits on pp. 2-45..2-46 --
+ * Pool Wait (CDRP queued to the PDT), BDT Wait, RDT Wait -- are deliberately
+ * NOT implemented here; OVMX has no nonpaged pool, no Block Data Transfer
+ * table and no Request Descriptor Table to wait on.
+ *
+ * OVMX DESIGN CHOICES (labeled per rule 8):
+ *   - struct scs_credit_waiter stands in for the VMS CDRP. p. 2-46 keeps a
+ *     resume PC and "the contents of a couple of registers" in the CDRP; C has
+ *     no such thing, so OVMX keeps a function pointer plus a void* context.
+ *     The book publishes no CDRP byte layout and none is invented here.
+ *   - The waiter is CALLER-OWNED storage. This module allocates nothing (same
+ *     rationale as the rest of vmsscs: the daemon gets no allocation failure
+ *     path). The caller must keep the waiter alive until it is resumed or
+ *     cancelled.
+ *   - The queue is singly linked with a tail pointer. VMS uses its
+ *     doubly-linked queue primitives; the observable behaviour required by
+ *     pp. 2-45..2-46 is FIFO order and O(1) append, which this gives.
+ *
+ * KILL SWITCH -- OVMX_NO_CREDIT_WAIT=1 (this item's, distinct from vms-76e's
+ * OVMX_NO_CREDIT_ACCOUNTING). With it set, BOTH mechanisms vms-1d2 adds are
+ * suppressed and the module reverts EXACTLY to the vms-76e behaviour:
+ *   - scs_credit_send_or_wait() never queues; at zero credit it returns -1,
+ *     which is what scs_credit_on_send() has always done;
+ *   - a rise in Send Credit does not examine the queue, so no waiter is ever
+ *     resumed;
+ *   - scs_credit_on_recv() does not fire the special credit emitter.
+ * scs_credit_take_special() is deliberately NOT gated: it is vms-76e's, it
+ * emits nothing by itself, and the vms-76e kill-switch test asserts its
+ * behaviour. Setting OVMX_NO_CREDIT_ACCOUNTING=1 also suppresses everything
+ * here, because with no account there is nothing to wait on.
+ *
+ * ===== REACHABILITY: THERE IS NO PRODUCTION CALLER. Stated plainly because
+ * this epic keeps rejecting claims that outrun their evidence. =====
+ *   - Nothing in src/vmsscs/scsd.c calls scs_credit_send_or_wait,
+ *     scs_credit_wait_release, scs_credit_set_special_emitter or anything else
+ *     declared in this header. vmsscs_credit is still not linked into
+ *     scsd_exe (see src/vmsscs/CMakeLists.txt) and `nm SCSD.EXE` shows no
+ *     symbol from this header. The daemon is BYTE-UNAFFECTED.
+ *   - Therefore NO OVMX SENDER CAN CURRENTLY ENTER A CREDIT WAIT, and OVMX
+ *     emits no special credit message. What is proven by the tests is that the
+ *     mechanism is correct, not that OVMX runs it.
+ *   - The special credit message additionally cannot be BUILT: OVMX has not
+ *     grounded which wire frame class carries one. That is filed as an
+ *     explicit RE gap in docs/cluster-protocol-spec.md sec 5. This module
+ *     decides WHEN one is owed and WHAT count it carries, and hands that to a
+ *     hook; it assembles no frame. The 41-byte 0x48 short is NOT it -- sec 4(h)
+ *     grounds that class as a strict 1-for-1 sequence ack with no locatable
+ *     credit count (622/622 frames), and it is too short to reach SCA
+ *     offset 48 anyway.
+ *   - Wiring both to the daemon needs the SCS connection state machine
+ *     (vms-dd5) and per-peer connection identity, which this item is fenced
+ *     out of.
+ */
+
+/* scs_credit_send_or_wait() return code: the operation was placed in a Credit
+ * Wait on the CDT and will be resumed later (p. 2-45). Distinct from -1, which
+ * stays "refused / error", so a caller cannot confuse suspended with failed. */
+#define SCS_CREDIT_WAIT (-2)
+
+struct scs_credit_waiter;
+
+/*
+ * scs_credit_resume_fn - "the address of the instruction at which to resume the
+ * operation" (p. 2-46), as a C callback. `credit` is the value the resumed send
+ * MUST place in its header credit field -- exactly what scs_credit_on_send()
+ * would have returned, because the resume path performs the same debit and the
+ * same piggyback-and-reset.
+ */
+typedef void (*scs_credit_resume_fn)(struct scs_credit_waiter *w, unsigned credit, void *ctx);
+
+/*
+ * struct scs_credit_waiter - one suspended send. OVMX's stand-in for the CDRP
+ * that p. 2-45 queues to the CDT. CALLER-OWNED storage; zero it before first
+ * use. Fields other than `resume`/`ctx` are owned by this module.
+ */
+struct scs_credit_waiter {
+    scs_credit_resume_fn resume; /* caller sets; may be NULL */
+    void                *ctx;    /* caller sets; passed back to resume */
+
+    struct scs_cdt          *cdt;       /* the connection it is queued to */
+    struct scs_credit_waiter *next;     /* FIFO link, module-owned */
+    int                       queued;   /* 1 while in a Credit Wait */
+    int                       resumed;  /* 1 once resumed (never reset here) */
+    unsigned                  credit;   /* the piggyback value it was resumed with */
+};
+
+/*
+ * scs_credit_wait_enabled - 0 when OVMX_NO_CREDIT_WAIT=1 is set in the
+ * environment, 1 otherwise. Read once and cached; scs_credit_reset_switch_cache
+ * re-reads it along with OVMX_NO_CREDIT_ACCOUNTING.
+ */
+int scs_credit_wait_enabled(void);
+
+/*
+ * scs_credit_send_or_wait - the p. 2-45 send-buffer-allocation routine: "Before
+ * actually allocating the buffer, this routine first verifies that at least one
+ * Send Credit is available on the connection being used."
+ *
+ * If a Send Credit is available, this behaves EXACTLY like scs_credit_on_send:
+ * debits one Send Credit and returns (>= 0) the Pending Receive Credit to
+ * piggyback, which it resets. `w` is left untouched and unqueued -- the caller
+ * sends immediately, on its own stack.
+ *
+ * If no Send Credit is available, `w` is appended to the TAIL of this CDT's
+ * Credit Wait queue and SCS_CREDIT_WAIT is returned. NOTHING IS SENT and no
+ * count moves. `w->resume` is called later, from whatever call increases the
+ * Send Credit count.
+ *
+ * Returns -1 (and queues nothing) if cdt or w is NULL, if w is already queued,
+ * or if the Credit Wait kill switch is set and there is no credit -- the
+ * vms-76e refusal.
+ */
+int scs_credit_send_or_wait(struct scs_cdt *cdt, struct scs_credit_waiter *w);
+
+/*
+ * scs_credit_wait_depth - number of operations currently in a Credit Wait on
+ * this connection. 0 for NULL.
+ */
+unsigned scs_credit_wait_depth(const struct scs_cdt *cdt);
+
+/*
+ * scs_credit_wait_release - "Whenever the Send Credit count in a CDT is
+ * increased, the CDT's queue of waiting CDRPs is examined. If that queue is
+ * nonempty, as many waiting CDRPs as possible are resumed, based on the number
+ * of Send Credits currently available." (p. 2-45)
+ *
+ * Resumes min(depth, Send Credit) waiters in FIFO order (p. 2-46), debiting one
+ * Send Credit per waiter and handing each the piggyback credit its send must
+ * carry -- so the FIRST waiter released carries the whole outstanding Pending
+ * Receive Credit and the rest carry 0, exactly as a run of scs_credit_on_send
+ * calls would. Returns the number resumed.
+ *
+ * PRODUCTION DOES NOT CALL THIS DIRECTLY. It is called for you by the two
+ * functions that raise Send Credit -- scs_credit_grant_from_peer() and
+ * scs_credit_on_recv() -- which is what "whenever the Send Credit count is
+ * increased" means. It is exported so a caller that manipulates the count by
+ * some other route can honour the same rule, and so the drain can be asserted
+ * in isolation. A test that calls it BY HAND proves only the drain, never the
+ * trigger; the trigger is proven by driving scs_credit_on_recv().
+ *
+ * Reentrant calls (a resume callback that receives on the same connection)
+ * return 0 rather than draining the queue out of order.
+ */
+unsigned scs_credit_wait_release(struct scs_cdt *cdt);
+
+/*
+ * scs_credit_wait_cancel - remove a waiter from the Credit Wait queue without
+ * resuming it (the operation was aborted). Returns 0 if it was dequeued, -1 if
+ * cdt or w is NULL or w is not queued on cdt. No credit moves.
+ */
+int scs_credit_wait_cancel(struct scs_cdt *cdt, struct scs_credit_waiter *w);
+
+/*
+ * scs_credit_wait_flush - dequeue EVERY waiter without resuming any, returning
+ * how many were dropped. For connection teardown: the book resumes waiters only
+ * when credit arrives, and a broken connection will never grant credit again.
+ *
+ * scs_cdl_release() does NOT call this -- scs_cdt.c does not know about the
+ * credit account (see scs_cdt.h) and connection teardown is vms-17f's surface,
+ * not this item's. A caller that releases a CDT with waiters still queued
+ * abandons them; that is stated here rather than silently handled.
+ */
+unsigned scs_credit_wait_flush(struct scs_cdt *cdt);
+
 /*
  * scs_credit_can_send - the p. 2-45 Credit Wait test: 1 if at least one Send
  * Credit is available on the connection, 0 if the operation would have to be
@@ -375,6 +583,13 @@ int scs_credit_can_send(const struct scs_cdt *cdt);
  * connection has no Send Credit and the send must go into a Credit Wait -- in
  * which case NOTHING is modified. Under the kill switch it always returns 0 and
  * modifies nothing.
+ *
+ * THIS FUNCTION NEVER QUEUES. It reports the starvation and leaves the caller
+ * to decide; a caller that wants the p. 2-45 mechanism -- to be SUSPENDED on
+ * the CDT and resumed FIFO when credit arrives -- calls
+ * scs_credit_send_or_wait() instead. It also ignores the Credit Wait queue, so
+ * calling it while operations are suspended lets this send overtake them; that
+ * is why the queue-aware entry point exists.
  */
 int scs_credit_on_send(struct scs_cdt *cdt);
 
@@ -428,6 +643,55 @@ int scs_credit_is_dangerously_low(const struct scs_cdt *cdt);
  * builds nothing. See the reachability note.
  */
 int scs_credit_take_special(struct scs_cdt *cdt);
+
+/*
+ * scs_credit_set_special_emitter - install the hook that SENDS a special credit
+ * message on this connection (vms-1d2). p. 2-44: "Each time the local node
+ * receives a message on a connection, it checks to see if the local Receive
+ * Credit count for the connection is 'dangerously low'. If it is, and if the
+ * local Pending Receive Credit count is greater than 0, local SCS IMMEDIATELY
+ * sends remote SCS a special credit message containing the local Pending
+ * Receive Credit count."
+ *
+ * That check is performed inside scs_credit_on_recv() -- "each time the local
+ * node receives a message" is a receive-path trigger, not something a caller
+ * polls. When it fires, `fn` is called with the count the message must carry,
+ * and the Pending Receive Credit is already reset to 0 (p. 2-44) with the
+ * Receive Credit raised by the same amount.
+ *
+ * `fn` may be NULL to unhook. Returns 0, or -1 if cdt is NULL.
+ *
+ * OVMX CANNOT BUILD THE FRAME. Which wire class carries an SCA special credit
+ * message is an open RE gap (docs/cluster-protocol-spec.md sec 5); this hook is
+ * where a builder would go, and today nothing installs one. See the
+ * reachability note above.
+ */
+int scs_credit_set_special_emitter(struct scs_cdt *cdt, scs_credit_special_fn fn, void *ctx);
+
+/*
+ * scs_credit_set_remote_min_send_credits - record the Minimum Send Credits
+ * argument "passed to the CONNECT or ACCEPT service by the remote SYSAP during
+ * connection formation" (p. 2-44) in the CDT, independently of
+ * scs_credit_extend().
+ *
+ * scs_credit_extend() already takes it, which covers the case where the local
+ * SYSAP extends its buffers knowing the peer's value. It does not cover the
+ * ordinary case: OVMX sends CONNECT_REQ (extending its own credits) and only
+ * LEARNS the peer's Minimum Send Credits when the ACCEPT_REQ comes back. This
+ * setter is that second edge. It changes only the dangerously-low threshold;
+ * no count moves and no message is emitted.
+ *
+ * Returns 0, or -1 if cdt is NULL. A no-op returning 0 under
+ * OVMX_NO_CREDIT_ACCOUNTING.
+ *
+ * NOT WIRE-DERIVED: no capture pins a Minimum Send Credits field. The 110-byte
+ * CONNECT_REQ/ACCEPT_REQ credit field at SCA [48:50] carries the EXTENDED Send
+ * Credits (grounded -- see the WIRE VERDICT, tunable match), which is a
+ * different quantity. Where the remote's Minimum Send Credits rides on the wire
+ * is an open gap (docs/cluster-protocol-spec.md sec 5); this call is how a
+ * parser would deliver it once it is found.
+ */
+int scs_credit_set_remote_min_send_credits(struct scs_cdt *cdt, unsigned n);
 
 /* --- the wire field (see the WIRE VERDICT) -------------------------------- */
 

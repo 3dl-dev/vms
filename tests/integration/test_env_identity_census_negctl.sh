@@ -138,6 +138,40 @@ printf '%s\n' '/* getenv("VMS_PRIVILEGES") and setenv("VMS_TERMINAL", x, 1) were
     >> "$SANDBOX/t/tools/vms_mail.c"
 expect_green "G: a variable named only in a comment does not enter the census"
 
+# --- H. USER is watched (vms-b2e) -------------------------------------------
+# The census went green for months while AUTHORIZE.EXE decided who could
+# manage SYSUAF from getenv("USER"), because plain USER was not in VARS. It is
+# now, and this is the case that keeps it there: if H goes green, the universe
+# has silently narrowed back to the OVMX-prefixed names and the next
+# identity-from-the-environment defect is invisible again.
+fresh_tree
+printf '%s\n' 'static const char *evade_h(void) { return getenv("USER"); }' \
+    >> "$SANDBOX/t/tools/vms_authorize.c"
+expect_red "H: a reader of USER is caught -- the vms-b2e blind spot is closed"
+
+# --- I. LOGNAME is watched too ----------------------------------------------
+# It has no census entry as a reader and vmssshd is its only writer; the gate
+# must be WATCHING it rather than merely listing the names it happens to find.
+fresh_tree
+printf '%s\n' 'static const char *evade_i(void) { return getenv("LOGNAME"); }' \
+    >> "$SANDBOX/t/src/vmsdcl/dcl_main.c"
+expect_red "I: a reader of LOGNAME is caught"
+
+# --- J. USER does NOT over-fire on names that merely start with it ----------
+# THE INVERSE FAILURE, and the one that gets a gate disabled. Adding a short
+# name like USER to a substring-matched census risks it matching USERNAME,
+# VMS_USERNAME or a USERNAME_SIZE macro, at which point the census fills with
+# phantom sites, someone adds an exemption, and the gate stops being read. The
+# closing quote in the grep patterns is what prevents it; this holds that
+# apart. Both lines below are real environment reads of OTHER variables and
+# neither is a declared site, so the gate must stay GREEN.
+fresh_tree
+printf '%s\n' 'static const char *evade_j1(void) { return getenv("USERNAME"); }' \
+    >> "$SANDBOX/t/src/vmsdcl/dcl_main.c"
+printf '%s\n' 'static const char *evade_j2(void) { return getenv("LOGNAME_FILE"); }' \
+    >> "$SANDBOX/t/src/vmsdcl/dcl_main.c"
+expect_green "J: USER/LOGNAME do not over-fire on USERNAME or LOGNAME_FILE"
+
 echo ""
 if [ "$status" -eq 0 ]; then
     echo "PASS: every census property can be tripped, and prose cannot trip it"

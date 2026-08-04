@@ -4612,6 +4612,97 @@ static void test_masquerade_open_is_logged_and_suppresses_vcopen(void)
     CHECK(!rxlog_has("SCSD-I-VCOPEN"), "VCOPEN printed on the second abandonment");
 }
 
+/*
+ * vms-fdd -- SCA CONNECT DATA THROUGH THE DAEMON (p. 2-25 / p. 2-28).
+ *
+ * The builder-side bytes are asserted in test_scs_connect.c. What that file
+ * cannot reach is scsd.c: whether the 16 bytes survive to the frame the daemon
+ * hands the transmit path, whether the CDT the CONNECT and ACCEPT services
+ * allocate actually carries them (p. 2-28), and whether the inbound decode fires
+ * off a real captured frame. All three are driven here THROUGH THE PRODUCTION
+ * CALL SITES -- send_joiner_connect_request() and scsd_handle_frame() -- with no
+ * step performed by hand.
+ */
+static void test_connect_data_rides_the_daemon(void)
+{
+    static const uint8_t joiner_cd[SCS_CONNECT_DATA_LEN] = {
+        0x01,0x1b,0x01,0x03, 0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+        0x08,0x00,0x00,0x06,0x00
+    };
+
+    /* --- CONNECT: the daemon's own joiner CONNECT_REQ. --- */
+    (void)unsetenv("OVMX_NO_CONNECT_DATA");
+    scs_connect_data_reset_switch_cache();
+    uint8_t frame[SCA_FRAME_MAX], dst[6];
+    struct scs_cdt *cdt = NULL;
+    size_t len = drive_joiner_once(frame, dst, &cdt);
+    CHECK(len == SCS_CONNECT_FRAME_LEN, "joiner frame is %zu bytes", len);
+    CHECK(memcmp(frame + SCS_CONNECT_DATA_ABS_OFF, joiner_cd, SCS_CONNECT_DATA_LEN) == 0,
+          "the frame the daemon transmitted does not carry the measured connect data");
+    CHECK(cdt != NULL, "no CDT was allocated for the joiner connection");
+    CHECK(cdt != NULL && cdt->connect_data_len == SCS_CONNECT_DATA_LEN,
+          "the CONNECT service's CDT carries %zu connect-data bytes, expected %d"
+          " (p. 2-28)", cdt ? cdt->connect_data_len : (size_t)0, SCS_CONNECT_DATA_LEN);
+    CHECK(cdt != NULL &&
+          memcmp(cdt->connect_data, joiner_cd, SCS_CONNECT_DATA_LEN) == 0,
+          "the CDT's connect data is not the bytes that went on the wire");
+
+    /* --- ACCEPT + INBOUND DECODE: a real captured member CONNECT_REQ fed to
+     * the daemon's receive dispatch. It must be decoded and logged, and the
+     * CDT the ACCEPT service allocates must carry OUR connect data. --- */
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    log_capture_begin();
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    log_capture_end();
+
+    CHECK(rxlog_has("SCSD-I-CONNDATA"),
+          "the daemon did not log the peer's connect data for a captured"
+          " CONNECT_REQ; log was: '%s'", rxlog);
+    /* The captured member frame is VAX1's, whose connect data differs from ours
+     * in [98:105] -- so the log proves a DECODE, not an echo of our own bytes. */
+    CHECK(rxlog_has("01 1b 01 03 01 00 01 00 01 00 01 08 00 00 06 00"),
+          "the log does not carry the MEMBER value from the captured frame;"
+          " log was: '%s'", rxlog);
+    CHECK(!rxlog_has("(same as ours)"),
+          "the daemon reported the peer's value as identical to ours, but the"
+          " captured member frame differs from the joiner value we send");
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->cdt_member != NULL, "no CDT for the member-opened connection");
+    CHECK(ps->cdt_member != NULL &&
+          ps->cdt_member->connect_data_len == SCS_CONNECT_DATA_LEN,
+          "the ACCEPT service's CDT carries %zu connect-data bytes, expected %d",
+          ps->cdt_member ? ps->cdt_member->connect_data_len : (size_t)0,
+          SCS_CONNECT_DATA_LEN);
+    CHECK(ps->cdt_member != NULL &&
+          memcmp(ps->cdt_member->connect_data, joiner_cd, SCS_CONNECT_DATA_LEN) == 0,
+          "the ACCEPT service's CDT does not carry the connect data we stamped");
+
+    /* --- THE KILL SWITCH, THROUGH THE SAME PATH (guardrail 23). The frame the
+     * daemon transmits must change, and the CDT must stop carrying the field --
+     * a switch that left either alone would be gating nothing. --- */
+    CHECK(setenv("OVMX_NO_CONNECT_DATA", "1", 1) == 0, "setenv failed");
+    scs_connect_data_reset_switch_cache();
+    uint8_t off_frame[SCA_FRAME_MAX], off_dst[6];
+    struct scs_cdt *off_cdt = NULL;
+    size_t off_len = drive_joiner_once(off_frame, off_dst, &off_cdt);
+    CHECK(off_len == len, "the frame changed length with the stamp off");
+    CHECK(memcmp(off_frame + SCS_CONNECT_DATA_ABS_OFF, joiner_cd,
+                 SCS_CONNECT_DATA_LEN) != 0,
+          "OVMX_NO_CONNECT_DATA=1 did NOT change the transmitted connect data"
+          " -- the switch gates nothing");
+    CHECK(memcmp(off_frame, frame, SCS_CONNECT_DATA_ABS_OFF) == 0,
+          "the switch changed bytes OUTSIDE the connect data");
+    CHECK(off_cdt != NULL && off_cdt->connect_data_len == 0,
+          "with the stamp off the CDT still carries %zu connect-data bytes",
+          off_cdt ? off_cdt->connect_data_len : (size_t)0);
+
+    (void)unsetenv("OVMX_NO_CONNECT_DATA");
+    scs_connect_data_reset_switch_cache();
+}
+
 int main(void)
 {
     /* Several assertions below assume the machine starts enabled. */
@@ -4644,6 +4735,9 @@ int main(void)
     test_captured_connect_rsp_drives_the_classifier();
     test_captured_ovmx_accept_req_opens_the_joiner();
     test_null_source_conid_binds_nothing();
+    /* vms-fdd: the SCA connect data, through CONNECT, ACCEPT and the receive
+     * dispatch (p. 2-25 / p. 2-28). */
+    test_connect_data_rides_the_daemon();
     /* vms-abc: the p. 2-31 message guarantees, through the same dispatch. */
     test_seq_gap_breaks_the_vc_and_notifies_both_sysaps();
     test_seq_gap_kill_switch_through_the_daemon();

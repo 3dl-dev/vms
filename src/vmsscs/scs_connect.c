@@ -5,7 +5,46 @@
  */
 #include "scs_connect.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* --- vms-fdd: SCA connect data (p. 2-25 / p. 2-28) -----------------------
+ *
+ * Byte-exact to the joiner's VMS$VAXcluster connect data in
+ * vax3-2to3-established-join-20260730.pcap -- raw frame 132 (VAX3's
+ * CONNECT_REQ) and raw frame 210 (VAX3's ACCEPT_REQ), which carry the SAME 16
+ * bytes. That capture is the library's only recording of a real node being
+ * admitted to an already-running cluster, i.e. the operation OVMX performs.
+ * The full census, the two invariant spans and the honest gap over [98:105]
+ * are in the CONNECT DATA verdict in scs_connect.h; re-derive with
+ * tools/scs_connect_data_measure.py.
+ *
+ * NOT invented, NOT an OVMX design choice: every byte below was observed. */
+const uint8_t scs_connect_data_vaxcluster[SCS_CONNECT_DATA_LEN] = {
+    /* [0:4]  version quad, 203/203 VMS$VAXcluster connect frames */
+    0x01, 0x1b, 0x01, 0x03,
+    /* [4:11] the joiner form (all-zero); what it encodes is an RE gap */
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    /* [11:16] tail, 203/203 */
+    0x08, 0x00, 0x00, 0x06, 0x00
+};
+
+static int g_connect_data_enabled = -1;
+
+void scs_connect_data_reset_switch_cache(void)
+{
+    g_connect_data_enabled = -1;
+}
+
+int scs_connect_data_enabled(void)
+{
+    if (g_connect_data_enabled < 0) {
+        const char *v = getenv("OVMX_NO_CONNECT_DATA");
+        g_connect_data_enabled = (v != NULL && v[0] == '1' && v[1] == '\0') ? 0 : 1;
+    }
+    return g_connect_data_enabled;
+}
 
 /* Byte-exact 110-byte SCA content of a real CONNECT-REQUEST
  * (formation-ci1-joinwindow.pcap raw frame 47 / SCA#39, VAX1->VAX2).
@@ -118,6 +157,19 @@ static int build_from_tmpl(const struct scs_connect_params *p,
     put_le16(out + 14 + 30, p->send_seq);       /* send-seq mirror [30:32] (== [20:22], GROUNDED) */
     put_le16(out + 14 + 34, p->recv_ack);       /* recv_ack 3rd    [34:36] */
 
+    /* --- vms-fdd: stamp the SCA connect data at [94:110] (abs 108-123).
+     * Before this the region was a labeled REPLAY of whichever golden frame
+     * the template came from; the CONNECT-REQUEST template is VAX1's, an
+     * established MEMBER's frame, so OVMX -- a joiner -- was presenting a
+     * member's connect data. Stamping the measured joiner value fixes that
+     * for the request and is a no-op for the response (whose template is
+     * VAX2's joiner frame and already carries these bytes).
+     * OVMX_NO_CONNECT_DATA=1 skips the stamp, restoring the template bytes. */
+    if (scs_connect_data_enabled()) {
+        memcpy(out + SCS_CONNECT_DATA_ABS_OFF, scs_connect_data_vaxcluster,
+               SCS_CONNECT_DATA_LEN);
+    }
+
     return 0;
 }
 
@@ -164,5 +216,76 @@ int scs_connect_parse(const uint8_t *frame, size_t len, struct scs_connect_view 
         v->local_conid = get_le32(frame + 68);
     }
 
+    /* [46:48] = abs 60:62, the SCA connection-control message type (spec sec
+     * 4h(1a)). Filled whenever the frame is long enough to hold it. */
+    if (len >= 62) {
+        v->conn_msgtype = (uint16_t)(frame[60] | ((uint16_t)frame[61] << 8));
+    }
+
+    /* vms-fdd: the peer's connect data. Claimed ONLY for the population it is
+     * grounded over -- the 110-byte class, message type CONNECT_REQ or
+     * ACCEPT_REQ. The same 110-byte class ALSO carries message type 10, whose
+     * [62:78] is binary rather than a SYSAP name and which is not a connect
+     * frame, so a length test alone would over-claim. */
+    if (scs_connect_data_get(frame, len, v->connect_data) == 0) {
+        v->has_connect_data = 1;
+    }
+
     return 0;
+}
+
+int scs_connect_data_get(const uint8_t *frame, size_t len,
+                         uint8_t out[SCS_CONNECT_DATA_LEN])
+{
+    if (frame == NULL || out == NULL || len < SCS_CONNECT_FRAME_LEN) {
+        return -1;
+    }
+    /* SCA length word (abs 14) -> total SCA bytes; must be the 110-byte class. */
+    uint16_t lenword = (uint16_t)(frame[14] | ((uint16_t)frame[15] << 8));
+    if ((uint16_t)(lenword + 2) != SCS_CONNECT_SCA_LEN) {
+        return -1;
+    }
+    /* format constant 0x13 (GROUNDED) + an SCS-message opcode. */
+    if (frame[31] != SCS_FORMAT_CONST) {
+        return -1;
+    }
+    if (frame[30] != SCS_MSGTYPE_SEQAPP && frame[30] != 0x5b && frame[30] != 0x7b) {
+        return -1;
+    }
+    uint16_t cmsg = (uint16_t)(frame[60] | ((uint16_t)frame[61] << 8));
+    if (cmsg != SCS_CONN_MSGTYPE_CONNECT_REQ && cmsg != SCS_CONN_MSGTYPE_ACCEPT_REQ) {
+        return -1;
+    }
+    memcpy(out, frame + SCS_CONNECT_DATA_ABS_OFF, SCS_CONNECT_DATA_LEN);
+    return 0;
+}
+
+const char *scs_connect_data_fmt(const uint8_t *cd, char *buf, size_t bufsz)
+{
+    /* 16*3 hex + "|" + 16 ascii + "|" + NUL = 67. */
+    if (buf == NULL || bufsz < 72) {
+        return "";
+    }
+    if (cd == NULL) {
+        buf[0] = '\0';
+        return buf;
+    }
+    size_t o = 0;
+    for (int i = 0; i < SCS_CONNECT_DATA_LEN; i++) {
+        int n = snprintf(buf + o, bufsz - o, "%02x%s", cd[i],
+                         i == SCS_CONNECT_DATA_LEN - 1 ? " |" : " ");
+        if (n < 0 || (size_t)n >= bufsz - o) {
+            buf[bufsz - 1] = '\0';
+            return buf;
+        }
+        o += (size_t)n;
+    }
+    for (int i = 0; i < SCS_CONNECT_DATA_LEN && o + 2 < bufsz; i++) {
+        buf[o++] = (cd[i] >= 32 && cd[i] < 127) ? (char)cd[i] : '.';
+    }
+    if (o + 1 < bufsz) {
+        buf[o++] = '|';
+    }
+    buf[o] = '\0';
+    return buf;
 }

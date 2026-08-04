@@ -29,13 +29,100 @@
  * live counters is what lets the VAX accept the accept.
  *
  * REPLAYED (ungrounded, spec sec 4g/sec 5) fields still left at their captured
- * values: the connect-state / inner-length body bytes (abs 56-61 and abs
- * 108-123) and the [42:56] region beyond the counters. These are tied to the
- * live channel's message flow and cannot be grounded from passive capture;
- * replaying a real frame's values is the documented lab-shortcut posture
- * (mirrors the nonce replay), NOT a general connect-body implementation. A
- * veracity adversary should treat every non-substituted byte here as a labeled
- * replay.
+ * values: the connect-state / inner-length body bytes (abs 56-61) and the
+ * [42:56] region beyond the counters. These are tied to the live channel's
+ * message flow and cannot be grounded from passive capture; replaying a real
+ * frame's values is the documented lab-shortcut posture (mirrors the nonce
+ * replay), NOT a general connect-body implementation. A veracity adversary
+ * should treat every non-substituted byte here as a labeled replay.
+ *
+ * (abs 108-123 USED to be on that replay list. vms-fdd took it off: it is the
+ * SCA connect-data field, and it is now measured, named and stamped. See the
+ * CONNECT DATA verdict below.)
+ *
+ * =====================================================================
+ * CONNECT DATA -- THE 16-BYTE SCA FIELD (vms-fdd, spec sec 4n)
+ * =====================================================================
+ *
+ * VAXcluster Principles p. 2-25: the initiating SYSAP may supply up to 16 bytes
+ * of connect data in CONNECT_REQ and the target SYSAP up to 16 in ACCEPT_REQ;
+ * "this option is used to limit which versions of VMS can coexist... When two
+ * Connection Managers form a connection with each other, they use this data to
+ * effectively identify to each other which version of VMS each is associated
+ * with. If the target does not approve of the source Connection Manager VMS
+ * version, it rejects the request." p. 2-28 puts the field in the CDT.
+ *
+ * WHERE IT IS -- GROUNDED. The field is the LAST 16 payload bytes of the
+ * 110-byte connect class, [94:110] payload-relative (abs 108-123), directly
+ * after the two 16-byte ASCII SYSAP name fields [62:78] and [78:94] that spec
+ * sec 4h(2) already grounds. The 110-byte class is exactly the two connect
+ * messages: over every lab capture its connection-control message type
+ * ([46:48], spec sec 4h(1a)) reads {0: 1497, 2: 394, 10: 2889}, and all 1891
+ * type-0/type-2 frames carry an ASCII SYSAP name at [62:78] with 0 residuals
+ * while the type-10 frames carry binary there. So the field is claimed for
+ * CONNECT_REQ and ACCEPT_REQ only.
+ *
+ * WHAT IS IN IT -- GROUNDED, and it is per-SYSAP, not per-node. Census of
+ * [94:110] over 48 pcaps, 1891 connect frames, keyed on the local SYSAP name:
+ *
+ *     MSCP$DISK          1052 frames, 1 distinct  ASCII "V5.0          + "
+ *     SCS$DIRECTORY       314 frames, 1 distinct  16 ASCII spaces
+ *     SCS$DIR_LOOKUP      189 frames, 1 distinct  16 ASCII spaces
+ *     SCA$TRANSPORT        32 frames, 2 distinct  02 02 01 03 ...
+ *     VMS$DISK_CL_DRVR    101 frames, 5 distinct  00 00 04 a0 ...
+ *     VMS$VAXcluster      203 frames, 5 distinct  01 1b 01 03 ...
+ *
+ * MSCP$DISK is the decisive one: a printable ASCII version string, "V5.0", in
+ * the connect data of the disk-server SYSAP -- p. 2-25's "which version" read
+ * straight off the wire, in the field this module now names.
+ *
+ * THE VMS$VAXcluster VALUE -- what is invariant. Across ALL 203 VMS$VAXcluster
+ * connect frames, from every node, every boot and every capture we hold (all
+ * VAX/VMS V7.3):
+ *     [94:98]   == 01 1b 01 03        203/203, 0 residuals
+ *     [105:110] == 08 00 00 06 00     203/203, 0 residuals
+ * The seven bytes in between, [98:105], take 5 values and are NOT grounded --
+ * see the RE gap below and spec sec 5.
+ *
+ * THE VALUE OVMX SENDS -- and why this specific one. OVMX joins an existing
+ * cluster. The only capture in the library of a REAL node doing that is
+ * vax3-2to3-established-join-20260730.pcap (spec sec 1), and in it the joiner
+ * VAX3 (08:00:2b:11:22:33) emits ONE connect-data value for BOTH message types
+ * -- raw frame 132, its VMS$VAXcluster CONNECT_REQ to VAX1, and raw frame 210,
+ * its ACCEPT_REQ answering VAX2's CONNECT_REQ:
+ *
+ *     01 1b 01 03 00 00 00 00 00 00 00 08 00 00 06 00
+ *
+ * That is scs_connect_data_vaxcluster[] below, byte for byte, and it is what
+ * OVMX stamps in both builders -- because OVMX occupies exactly VAX3's role in
+ * exactly that exchange. The established MEMBERS in the same capture emit a
+ * DIFFERENT value (VAX1 raw frame 136, VAX2 raw frame 208, both
+ * 01 1b 01 03 01 00 01 00 02 00 01 08 00 00 06 00), which is the contrast the
+ * decode test asserts.
+ *
+ * RE GAP, STATED (spec sec 5): what [98:105] ENCODES is unknown. Two families
+ * appear -- all-zero, and 01 00 01 00 NN 00 01 with NN in {1,2,3} -- and the
+ * nodes that emit the all-zero form are the ones joining. "NN = the count of
+ * cluster members the sender currently sees" fits every capture and is the best
+ * reading, but it is INFERRED, not grounded, and nothing here depends on it:
+ * OVMX copies a real joiner's bytes rather than computing them. It is NOT the
+ * member-state sequence (af2-established-rejoin runs Member State Seq 2->3->4
+ * while VAX1 sends NN=1 throughout) and NOT the node number (VAX1, node 1,
+ * sends NN=2 in the 2-member specimen). OVMX therefore cannot yet generate a
+ * connect data for a role it has not observed.
+ *
+ * RE-DERIVE ALL OF THE ABOVE: tools/scs_connect_data_measure.py (lab host; the
+ * captures are host-only and not in git). Last run 2026-08-04: 25 checks, 0
+ * failures. `ctest -R scs_connect_data_figures` needs no captures -- it asserts
+ * these figures still appear verbatim here and in the spec.
+ *
+ * KILL SWITCH: OVMX_NO_CONNECT_DATA=1 suppresses the stamp, leaving the
+ * captured template's own bytes in place -- i.e. exactly the pre-vms-fdd wire.
+ * That is wire-visible in the CONNECT-REQUEST (whose golden template is VAX1's,
+ * a MEMBER's frame, so its [98:105] reads 01 00 01 00 01 00 01) and a no-op in
+ * the CONNECT-RESPONSE (whose golden template is VAX2's, a joiner's frame, so
+ * it already carries the stamped value). Both directions are asserted in
+ * tests/vmsscs/test_scs_connect.c.
  *
  * OVMX DESIGN CHOICE (not VMS-authentic, labeled per rule 8): OVMX allocates
  * its own Local Con.ID (SCS_CONNECT_OVMX_CONID_BASE | index). The value is
@@ -65,6 +152,47 @@ extern "C" {
 /* Recognizable OVMX Con.ID base ("OX" | connection index). OVMX design
  * choice -- opaque to the peer (see header note). */
 #define SCS_CONNECT_OVMX_CONID_BASE 0x4F580000u
+
+/* --- vms-fdd: SCA connect data (p. 2-25 / p. 2-28), see the header verdict. */
+#define SCS_CONNECT_DATA_LEN     16  /* p. 2-25 "up to 16 bytes" */
+#define SCS_CONNECT_DATA_OFF     94  /* SCA payload-relative (GROUNDED) */
+#define SCS_CONNECT_DATA_ABS_OFF (14 + SCS_CONNECT_DATA_OFF) /* abs 108 */
+
+/* SCA connection-control message types at payload [46:48] (spec sec 4h(1a)).
+ * Only these two carry connect data. */
+#define SCS_CONN_MSGTYPE_CONNECT_REQ 0
+#define SCS_CONN_MSGTYPE_ACCEPT_REQ  2
+
+/* The VMS$VAXcluster connect data OVMX presents in both CONNECT_REQ and
+ * ACCEPT_REQ: byte-exact to the joiner's value in the established-join
+ * specimen (see the header verdict). */
+extern const uint8_t scs_connect_data_vaxcluster[SCS_CONNECT_DATA_LEN];
+
+/*
+ * scs_connect_data_enabled - 0 when OVMX_NO_CONNECT_DATA=1 is set, in which
+ * case the builders leave the captured template's own bytes at [94:110]
+ * (the pre-vms-fdd wire). Cached; call the reset for a test bracket.
+ */
+int scs_connect_data_enabled(void);
+void scs_connect_data_reset_switch_cache(void);
+
+/*
+ * scs_connect_data_get - decode the peer's connect data out of a received
+ * Ethernet+SCA frame. Copies SCS_CONNECT_DATA_LEN bytes into `out` and
+ * returns 0 only when the frame is a 110-byte-class SCS message
+ * (format 0x13, opcode 0x4b/0x5b/0x7b) whose connection-control message type
+ * is CONNECT_REQ or ACCEPT_REQ -- the ONLY population the field is grounded
+ * for. Returns -1 otherwise (and leaves `out` untouched).
+ */
+int scs_connect_data_get(const uint8_t *frame, size_t len,
+                         uint8_t out[SCS_CONNECT_DATA_LEN]);
+
+/*
+ * scs_connect_data_fmt - render 16 connect-data bytes as
+ * "xx xx .. xx |ascii|" into `buf` for logging. `bufsz` must be >= 72.
+ * Returns buf.
+ */
+const char *scs_connect_data_fmt(const uint8_t *cd, char *buf, size_t bufsz);
 
 struct scs_connect_params {
     uint8_t  dst_mac[6];      /* Ethernet dst = peer's observed src MAC */
@@ -108,6 +236,13 @@ struct scs_connect_view {
     uint32_t remote_conid;   /* abs 64 LE u32 (valid only for the 110/190-byte Con.ID classes) */
     uint32_t local_conid;    /* abs 68 LE u32 */
     int      has_conid;      /* 1 if total_sca_len is a Con.ID-bearing class (110 or 190) */
+    /* --- vms-fdd: the peer's SCA connect data, valid only when
+     * has_connect_data == 1 (110-byte class, message type CONNECT_REQ or
+     * ACCEPT_REQ). conn_msgtype is [46:48] and is filled whenever the frame
+     * reaches that offset. */
+    uint16_t conn_msgtype;
+    uint8_t  connect_data[SCS_CONNECT_DATA_LEN];
+    int      has_connect_data;
 };
 
 /*

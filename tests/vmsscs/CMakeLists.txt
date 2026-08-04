@@ -383,3 +383,35 @@ set_tests_properties(vmsscs_sdir_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-fdd - the SCA CONNECT DATA verdict prose must match the measurement.
+#
+# tools/scs_connect_data_measure.py re-derives every figure in the CONNECT DATA
+# verdict of src/vmsscs/include/scs_connect.h and spec section 4(n) from the
+# lab-1 captures and PASS/FAILs each against a checked-in EXPECTED table. Those
+# captures are host-only (not in git), so ctest cannot run that half -- run it
+# by hand on a lab host. What ctest DOES run needs no captures: it reads
+# EXPECTED out of the same script and asserts every figure still appears in the
+# header and the spec, and that the C array scs_connect_data_vaxcluster[], the
+# header verdict and the spec agree on the 16 bytes byte for byte.
+#
+# WHY IT EXISTS: those 16 bytes are a VMS VERSION CLAIM that the peer connection
+# manager is documented to reject on (VAXcluster Principles p. 2-25). A wrong
+# recorded measurement behind them would be invisible to a green run.
+#
+# Registered UNCONDITIONALLY under the same name and labels either way -- see
+# the vms-76e note above for why the missing-interpreter case reds at TEST time
+# instead of failing configure.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_connect_data_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_connect_data_figures.py)
+else()
+    add_test(NAME scs_connect_data_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_connect_data_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_connect_data_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)

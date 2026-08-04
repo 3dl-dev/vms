@@ -11,6 +11,7 @@
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "scs_conn.h" /* vms-dd5: the connection state machine + wire->event map */
@@ -122,6 +123,261 @@ static const uint8_t real_response[124] = {
     0x56,0x41,0x58,0x63,0x6c,0x75,0x73,0x74,0x65,0x72,0x20,0x20, 0x01,0x1b,0x01,0x03,
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x06,0x00
 };
+
+/* ---------------------------------------------------------------------------
+ * vms-fdd: THE ESTABLISHED-JOIN SPECIMEN.
+ *
+ * vax3-2to3-established-join-20260730.pcap is the only capture in the library
+ * of a REAL node being admitted to an already-running cluster (spec sec 1),
+ * which is the operation OVMX performs. These are two of its frames, dumped
+ * byte-for-byte:
+ *
+ *   raw frame 132 -- VAX3 (the JOINER, 08:00:2b:11:22:33) -> VAX1,
+ *                    VMS$VAXcluster CONNECT_REQ (message type 0)
+ *   raw frame 136 -- VAX1 (an established MEMBER) -> VAX3,
+ *                    VMS$VAXcluster ACCEPT_REQ (message type 2)
+ *
+ * They carry DIFFERENT connect data, which is what makes the decode test a
+ * test: a decoder that returned a constant, or read the wrong 16 bytes, cannot
+ * produce both. Re-derive with tools/scs_connect_data_measure.py.
+ * ------------------------------------------------------------------------- */
+static const uint8_t vax3_joiner_connect_req[124] = {
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x08,0x00,0x2b,0x11,0x22,0x33, 0x60,0x07, 0x6c,0x00,
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x01,0x00, 0xaa,0x00,0x04,0x00,0x03,0x04, 0x5b,0x13,
+    0x08,0x00,0x0a,0x00,0x01,0x00,0x12,0x00, 0x08,0x00,0x00,0x00,0x0a,0x00,0x00,0x00,
+    0x08,0x00,0x00,0x00,0x01,0x00,0x00,0x02, 0x42,0x00,0x04,0x00,0x00,0x00,0x0a,0x00,
+    0x00,0x00,0x00,0x00, 0x09,0x00,0xe3,0x18, 0x00,0x00,0x01,0x00, 0x56,0x4d,0x53,0x24,
+    0x56,0x41,0x58,0x63,0x6c,0x75,0x73,0x74,0x65,0x72,0x20,0x20, 0x56,0x4d,0x53,0x24,
+    0x56,0x41,0x58,0x63,0x6c,0x75,0x73,0x74,0x65,0x72,0x20,0x20, 0x01,0x1b,0x01,0x03,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x08,0x00,0x00,0x06,0x00
+};
+static const uint8_t vax1_member_accept_req[124] = {
+    0x08,0x00,0x2b,0x11,0x22,0x33, 0xaa,0x00,0x04,0x00,0x01,0x04, 0x60,0x07, 0x6c,0x00,
+    0xaa,0x00,0x04,0x00,0x03,0x04, 0x01,0x00, 0xaa,0x00,0x04,0x00,0x01,0x04, 0x4b,0x13,
+    0x0a,0x00,0x0b,0x00,0x01,0x00,0x12,0x00, 0x0a,0x00,0x00,0x00,0x0b,0x00,0x00,0x00,
+    0x0a,0x00,0x00,0x00,0x01,0x00,0x00,0x02, 0x42,0x00,0x04,0x00,0x02,0x00,0x0a,0x00,
+    0x09,0x00,0xe3,0x18, 0x0e,0x00,0x52,0x35, 0x00,0x00,0x00,0x00, 0x56,0x4d,0x53,0x24,
+    0x56,0x41,0x58,0x63,0x6c,0x75,0x73,0x74,0x65,0x72,0x20,0x20, 0x56,0x4d,0x53,0x24,
+    0x56,0x41,0x58,0x63,0x6c,0x75,0x73,0x74,0x65,0x72,0x20,0x20, 0x01,0x1b,0x01,0x03,
+    0x01,0x00,0x01,0x00,0x02,0x00,0x01,0x08,0x00,0x00,0x06,0x00
+};
+
+/* The two connect-data values, spelled out independently of the production
+ * constant so a mutation of scs_connect_data_vaxcluster[] reds this file. */
+static const uint8_t joiner_cd[SCS_CONNECT_DATA_LEN] = {
+    0x01,0x1b,0x01,0x03, 0x00,0x00,0x00,0x00,0x00,0x00,0x00, 0x08,0x00,0x00,0x06,0x00
+};
+static const uint8_t member_cd[SCS_CONNECT_DATA_LEN] = {
+    0x01,0x1b,0x01,0x03, 0x01,0x00,0x01,0x00,0x02,0x00,0x01, 0x08,0x00,0x00,0x06,0x00
+};
+
+static void fill_params(struct scs_connect_params *cp)
+{
+    memset(cp, 0, sizeof(*cp));
+    memcpy(cp->dst_mac, vax1_mac, 6);
+    memcpy(cp->src_mac, ovmx_mac, 6);
+    memcpy(cp->src_logical, ovmx_logical, 6);
+    memcpy(cp->peer_logical, vax1_mac, 6);
+    cp->local_conid = SCS_CONNECT_OVMX_CONID_BASE | 0x0001u;
+    cp->remote_conid = 0x62C50009u;
+}
+
+/*
+ * vms-fdd (1): the 16-byte connect data both builders put on the wire, asserted
+ * byte-for-byte at the GROUNDED offset (abs 108-123 = payload [94:110]).
+ */
+static void test_connect_data_byte_exact_in_both_builders(void)
+{
+    printf("[connect data: byte-exact in both builders]\n");
+    scs_connect_data_reset_switch_cache();
+
+    struct scs_connect_params cp;
+    uint8_t req[SCS_CONNECT_FRAME_LEN];
+    uint8_t rsp[SCS_CONNECT_FRAME_LEN];
+    fill_params(&cp);
+    check(scs_connect_build_request(&cp, req) == 0, "build_request succeeds");
+    check(scs_connect_build_response(&cp, rsp) == 0, "build_response succeeds");
+
+    check(SCS_CONNECT_DATA_ABS_OFF == 108, "connect data sits at abs 108 (payload [94:110])");
+    check(SCS_CONNECT_DATA_LEN == 16, "connect data is 16 bytes (p. 2-25 'up to 16')");
+
+    check_bytes(req + SCS_CONNECT_DATA_ABS_OFF, joiner_cd, SCS_CONNECT_DATA_LEN,
+                "CONNECT_REQ connect data == the joiner value from raw frame 132");
+    check_bytes(rsp + SCS_CONNECT_DATA_ABS_OFF, joiner_cd, SCS_CONNECT_DATA_LEN,
+                "ACCEPT_REQ connect data == the joiner value from raw frame 210");
+    check_bytes(scs_connect_data_vaxcluster, joiner_cd, SCS_CONNECT_DATA_LEN,
+                "the exported constant is that same measured value");
+
+    /* It is the LAST 16 bytes: nothing follows, and the SYSAP name field
+     * immediately before it is untouched (spec sec 4h(2)). */
+    check(SCS_CONNECT_DATA_ABS_OFF + SCS_CONNECT_DATA_LEN == SCS_CONNECT_FRAME_LEN,
+          "connect data is the frame's last 16 bytes");
+    check_bytes(req + 92, (const uint8_t *)"VMS$VAXcluster  ", 16,
+                "the remote SYSAP name field just before it is unchanged");
+
+    /* And the stamp changed nothing else: the request differs from a
+     * pre-vms-fdd build ONLY inside the connect data. */
+    uint8_t before[SCS_CONNECT_FRAME_LEN];
+    setenv("OVMX_NO_CONNECT_DATA", "1", 1);
+    scs_connect_data_reset_switch_cache();
+    check(scs_connect_build_request(&cp, before) == 0, "build_request with the stamp off succeeds");
+    unsetenv("OVMX_NO_CONNECT_DATA");
+    scs_connect_data_reset_switch_cache();
+    check(memcmp(before, req, SCS_CONNECT_DATA_ABS_OFF) == 0,
+          "every byte BEFORE the connect data is identical with the stamp on and off");
+}
+
+/*
+ * vms-fdd (2): THE KILL SWITCH, RUN (guardrail 23). OVMX_NO_CONNECT_DATA=1
+ * must actually suppress the stamp, and the suppressed frame must carry the
+ * captured template's own bytes -- which for the CONNECT-REQUEST is VAX1's, a
+ * MEMBER's, connect data. If the switch gated nothing, the two builds would be
+ * equal and the inequality assertion below would fail.
+ */
+static void test_connect_data_kill_switch(void)
+{
+    printf("[connect data: OVMX_NO_CONNECT_DATA=1 kill switch]\n");
+    struct scs_connect_params cp;
+    fill_params(&cp);
+
+    uint8_t on_req[SCS_CONNECT_FRAME_LEN], off_req[SCS_CONNECT_FRAME_LEN];
+    uint8_t on_rsp[SCS_CONNECT_FRAME_LEN], off_rsp[SCS_CONNECT_FRAME_LEN];
+
+    unsetenv("OVMX_NO_CONNECT_DATA");
+    scs_connect_data_reset_switch_cache();
+    check(scs_connect_data_enabled() == 1, "stamp is ON with the variable unset");
+    scs_connect_build_request(&cp, on_req);
+    scs_connect_build_response(&cp, on_rsp);
+
+    setenv("OVMX_NO_CONNECT_DATA", "1", 1);
+    scs_connect_data_reset_switch_cache();
+    check(scs_connect_data_enabled() == 0, "stamp is OFF with OVMX_NO_CONNECT_DATA=1");
+    scs_connect_build_request(&cp, off_req);
+    scs_connect_build_response(&cp, off_rsp);
+
+    /* THE GATE IS REAL: the request's 16 bytes actually change. */
+    check(memcmp(on_req + SCS_CONNECT_DATA_ABS_OFF,
+                 off_req + SCS_CONNECT_DATA_ABS_OFF, SCS_CONNECT_DATA_LEN) != 0,
+          "the switch CHANGES the CONNECT_REQ connect data (it gates a real byte)");
+    /* The fallback is the CONNECT-REQUEST template's own bytes, i.e. the
+     * golden capture's VAX1 frame (raw 47) -- an established MEMBER's connect
+     * data, and one of the 5 VMS$VAXcluster values in the census. Asserted
+     * against that captured frame rather than a re-typed literal. */
+    check_bytes(off_req + SCS_CONNECT_DATA_ABS_OFF,
+                real_request + SCS_CONNECT_DATA_ABS_OFF, SCS_CONNECT_DATA_LEN,
+                "with the stamp off the CONNECT_REQ falls back to the golden template's MEMBER value");
+    check(memcmp(real_request + SCS_CONNECT_DATA_ABS_OFF, joiner_cd,
+                 SCS_CONNECT_DATA_LEN) != 0,
+          "and that template value is NOT the joiner value (which is why the stamp exists)");
+    check(memcmp(on_req, off_req, SCS_CONNECT_FRAME_LEN - SCS_CONNECT_DATA_LEN) == 0,
+          "and the switch changes NOTHING outside the connect data");
+
+    /* Bracketing control: the RESPONSE template is a joiner's frame, so it
+     * already carried the stamped value -- the switch is a no-op there, and
+     * saying so is the honest scope of the change. */
+    check(memcmp(on_rsp, off_rsp, SCS_CONNECT_FRAME_LEN) == 0,
+          "the CONNECT-RESPONSE is byte-identical either way (its template was already the joiner value)");
+
+    /* A value other than exactly "1" does NOT disable the stamp. */
+    setenv("OVMX_NO_CONNECT_DATA", "0", 1);
+    scs_connect_data_reset_switch_cache();
+    check(scs_connect_data_enabled() == 1, "OVMX_NO_CONNECT_DATA=0 leaves the stamp ON");
+    setenv("OVMX_NO_CONNECT_DATA", "11", 1);
+    scs_connect_data_reset_switch_cache();
+    check(scs_connect_data_enabled() == 1, "OVMX_NO_CONNECT_DATA=11 leaves the stamp ON");
+
+    unsetenv("OVMX_NO_CONNECT_DATA");
+    scs_connect_data_reset_switch_cache();
+}
+
+/*
+ * vms-fdd (3): DECODE AGAINST REAL CAPTURED FRAMES. Two frames of the
+ * established-join specimen, carrying two DIFFERENT connect-data values, plus
+ * the negative cases the field is NOT claimed for.
+ */
+static void test_connect_data_decode_real_frames(void)
+{
+    printf("[connect data: decode real captured frames]\n");
+    uint8_t cd[SCS_CONNECT_DATA_LEN];
+    struct scs_connect_view v;
+
+    /* The joiner's CONNECT_REQ (raw 132). */
+    check(scs_connect_data_get(vax3_joiner_connect_req,
+                               sizeof(vax3_joiner_connect_req), cd) == 0,
+          "decode VAX3's real CONNECT_REQ (raw frame 132)");
+    check_bytes(cd, joiner_cd, SCS_CONNECT_DATA_LEN,
+                "VAX3's connect data decodes to the joiner value");
+    check(scs_connect_parse(vax3_joiner_connect_req,
+                            sizeof(vax3_joiner_connect_req), &v) == 0, "parse raw 132");
+    check(v.has_connect_data == 1, "parse marks raw 132 as carrying connect data");
+    check(v.conn_msgtype == SCS_CONN_MSGTYPE_CONNECT_REQ, "raw 132 message type == 0 CONNECT_REQ");
+    check_bytes(v.connect_data, joiner_cd, SCS_CONNECT_DATA_LEN, "view carries the joiner value");
+
+    /* The member's ACCEPT_REQ (raw 136) -- a DIFFERENT value. */
+    check(scs_connect_data_get(vax1_member_accept_req,
+                               sizeof(vax1_member_accept_req), cd) == 0,
+          "decode VAX1's real ACCEPT_REQ (raw frame 136)");
+    check_bytes(cd, member_cd, SCS_CONNECT_DATA_LEN,
+                "VAX1's connect data decodes to the MEMBER value, not the joiner value");
+    check(memcmp(joiner_cd, member_cd, SCS_CONNECT_DATA_LEN) != 0,
+          "the two captured values really are different (the decode test discriminates)");
+    check(scs_connect_parse(vax1_member_accept_req,
+                            sizeof(vax1_member_accept_req), &v) == 0, "parse raw 136");
+    check(v.conn_msgtype == SCS_CONN_MSGTYPE_ACCEPT_REQ, "raw 136 message type == 2 ACCEPT_REQ");
+    check_bytes(v.connect_data, member_cd, SCS_CONNECT_DATA_LEN, "view carries the member value");
+
+    /* The two invariant spans, read off the captured frames rather than off
+     * our own builder (203/203 across the library). */
+    check(memcmp(vax3_joiner_connect_req + SCS_CONNECT_DATA_ABS_OFF,
+                 vax1_member_accept_req + SCS_CONNECT_DATA_ABS_OFF, 4) == 0,
+          "the [94:98] version quad is the same in both captured frames");
+    check(memcmp(vax3_joiner_connect_req + SCS_CONNECT_DATA_ABS_OFF + 11,
+                 vax1_member_accept_req + SCS_CONNECT_DATA_ABS_OFF + 11, 5) == 0,
+          "the [105:110] tail is the same in both captured frames");
+    check(memcmp(vax3_joiner_connect_req + SCS_CONNECT_DATA_ABS_OFF + 4,
+                 vax1_member_accept_req + SCS_CONNECT_DATA_ABS_OFF + 4, 7) != 0,
+          "and [98:105] is what differs between joiner and member (the RE gap)");
+
+    /* NEGATIVES -- the field is claimed for message types 0 and 2 only. */
+    uint8_t mangled[124];
+    memcpy(mangled, vax3_joiner_connect_req, sizeof(mangled));
+    mangled[60] = 10; /* the 110-byte class's OTHER message type (2889 frames) */
+    check(scs_connect_data_get(mangled, sizeof(mangled), cd) == -1,
+          "message type 10 in the same length class is REFUSED (not a connect frame)");
+    memcpy(mangled, vax3_joiner_connect_req, sizeof(mangled));
+    mangled[60] = 1; /* CONNECT_RSP: real, but a 66-byte frame with no such field */
+    check(scs_connect_data_get(mangled, sizeof(mangled), cd) == -1,
+          "message type 1 (CONNECT_RSP) is REFUSED");
+    memcpy(mangled, vax3_joiner_connect_req, sizeof(mangled));
+    mangled[31] = 0x14; /* not the GROUNDED format constant */
+    check(scs_connect_data_get(mangled, sizeof(mangled), cd) == -1,
+          "a frame whose format byte is not 0x13 is REFUSED");
+    memcpy(mangled, vax3_joiner_connect_req, sizeof(mangled));
+    mangled[14] = 0xbc; /* SCA length word -> 190-byte class */
+    check(scs_connect_data_get(mangled, sizeof(mangled), cd) == -1,
+          "the 190-byte VC class is REFUSED (no connect data there)");
+    check(scs_connect_data_get(vax3_joiner_connect_req, 100, cd) == -1,
+          "a truncated frame is REFUSED");
+    check(scs_connect_data_get(NULL, 124, cd) == -1, "NULL frame is REFUSED");
+    check(scs_connect_data_get(vax3_joiner_connect_req, 124, NULL) == -1, "NULL out is REFUSED");
+
+    /* And a frame with no connect data leaves the view's flag clear. */
+    uint8_t shortframe[64];
+    memset(shortframe, 0, sizeof(shortframe));
+    shortframe[14] = 0x27; /* 41-byte credit-return class */
+    shortframe[30] = SCS_MSGTYPE_CREDIT;
+    shortframe[31] = SCS_FORMAT_CONST;
+    check(scs_connect_parse(shortframe, sizeof(shortframe), &v) == 0, "parse a credit short");
+    check(v.has_connect_data == 0, "a 0x48 credit short carries no connect data");
+
+    /* The log renderer used by scsd.c. */
+    char buf[80];
+    const char *s = scs_connect_data_fmt(joiner_cd, buf, sizeof(buf));
+    check(strncmp(s, "01 1b 01 03 ", 12) == 0, "fmt renders the version quad first");
+    check(strstr(s, "|") != NULL, "fmt renders an ASCII column");
+    check(strcmp(scs_connect_data_fmt(joiner_cd, buf, 8), "") == 0,
+          "fmt refuses a buffer too small to hold the rendering");
+}
 
 static void test_parse_real_frames(void)
 {
@@ -403,6 +659,9 @@ int main(void)
     test_response_live_counters();
     test_both_conids_present_p235();
     test_connect_frames_classify_as_figure_2_14_messages();
+    test_connect_data_byte_exact_in_both_builders();
+    test_connect_data_kill_switch();
+    test_connect_data_decode_real_frames();
     printf("test_scs_connect: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

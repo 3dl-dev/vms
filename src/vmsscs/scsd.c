@@ -1618,6 +1618,70 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     return sent;
 }
 
+/* =====================================================================
+ * vms-fdd -- SCA CONNECT DATA (VAXcluster Principles p. 2-25, p. 2-28)
+ * =====================================================================
+ *
+ * p. 2-25: the initiating SYSAP supplies up to 16 bytes of connect data in
+ * CONNECT_REQ and the target up to 16 in ACCEPT_REQ, and the two connection
+ * managers "use this data to effectively identify to each other which version
+ * of VMS each is associated with" -- either end may refuse on it. p. 2-28 puts
+ * the field in the CDT. The wire location, the census that grounds the value
+ * and the honest gap are the CONNECT DATA verdict in scs_connect.h.
+ *
+ * TWO SIDES, AND ONLY ONE OF THEM IS OURS:
+ *   - OUTBOUND: scs_connect_build_request()/_response() stamp the bytes; the
+ *     two helpers below record the same bytes on the CDT the CONNECT / ACCEPT
+ *     service just allocated, which is what p. 2-28 asks for.
+ *   - INBOUND: OVMX DECODES AND LOGS the peer's value on every CONNECT_REQ and
+ *     ACCEPT_REQ it receives, and does NOT act on it. OVMX has no version
+ *     policy: it never rejects a peer on connect data, because we have exactly
+ *     one VMS version on the lab wire (V7.3) and no observation of what a
+ *     refusal looks like. Logging it is the honest half; a version policy
+ *     built on one data point would be an invented one.
+ */
+static void scsd_cdt_record_connect_data(struct scs_cdt *cdt)
+{
+    if (cdt == NULL || !scs_connect_data_enabled()) {
+        return;
+    }
+    (void)scs_cdt_set_connect_data(cdt, scs_connect_data_vaxcluster,
+                                   SCS_CONNECT_DATA_LEN);
+}
+
+/* Decode + log the peer's connect data. Returns 1 if the frame carried a
+ * decodable field (i.e. it was a CONNECT_REQ or ACCEPT_REQ), 0 otherwise. */
+static int scsd_log_peer_connect_data(const uint8_t *buf, size_t n)
+{
+    uint8_t cd[SCS_CONNECT_DATA_LEN];
+    if (scs_connect_data_get(buf, n, cd) != 0) {
+        return 0;
+    }
+    /* [46:48] = abs 60:62; scs_connect_data_get() already required it to be
+     * one of these two, and the frame to be long enough to hold it. */
+    uint16_t cmsg = (uint16_t)(buf[60] | ((uint16_t)buf[61] << 8));
+    /* [62:78] = abs 76:92, the sender's local SYSAP name (spec sec 4h(2)).
+     * Measured ASCII in 1891/1891 connect frames, but this is peer-supplied
+     * and goes straight into a log line, so sanitize rather than trust it. */
+    char sysap[17];
+    for (int i = 0; i < 16; i++) {
+        uint8_t c = buf[76 + i];
+        sysap[i] = (c >= 32 && c < 127) ? (char)c : '.';
+    }
+    sysap[16] = '\0';
+    char rendered[80];
+    log_ts(stdout);
+    printf(" SCSD-I-CONNDATA, peer %s connect data (p. 2-25) from"
+           " %s: %s%s\n",
+           cmsg == SCS_CONN_MSGTYPE_ACCEPT_REQ ? "ACCEPT_REQ" : "CONNECT_REQ",
+           sysap,
+           scs_connect_data_fmt(cd, rendered, sizeof(rendered)),
+           memcmp(cd, scs_connect_data_vaxcluster, SCS_CONNECT_DATA_LEN) == 0
+               ? " (same as ours)" : "");
+    fflush(stdout);
+    return 1;
+}
+
 /*
  * ===== vms-7fe: THE SDIR REFUSAL SENDER =====
  *
@@ -2063,6 +2127,11 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
     if (ec.sent) {
         if (cdt != NULL) {
             ps->cdt_joiner = cdt;
+            /* vms-fdd: p. 2-28 puts the SYSAP's connect data in the CDT, and
+             * this is the CONNECT service's copy -- the same 16 bytes
+             * scs_connect_build_request() just stamped at [94:110]. Carried,
+             * not interpreted; the owning SYSAP reads it back off the CDT. */
+            scsd_cdt_record_connect_data(cdt);
         }
         ps->joiner_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
@@ -2304,6 +2373,18 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         return;
     }
     const uint8_t *src_mac = buf + OFF_ETH_SRC;
+
+    /* vms-fdd: DECODE AND LOG THE PEER'S CONNECT DATA (p. 2-25). Sited here,
+     * once, ahead of every branch, deliberately: the connect frames of the
+     * different SYSAPs are answered in several different places below (the
+     * joiner-accept bind (b1), the SCS$DIRECTORY responder (b2), and the
+     * member-opened VMS$VAXcluster accept (c)), several of which `return`, so
+     * a per-branch log would silently miss whichever SYSAP's frame took
+     * another path. scs_connect_data_get() is the filter -- it accepts ONLY
+     * the 110-byte class with connection-control message type CONNECT_REQ(0)
+     * or ACCEPT_REQ(2) -- so this fires on exactly the connect frames and on
+     * nothing else, and it reads no state and emits no frame. */
+    (void)scsd_log_peer_connect_data(buf, (size_t)n);
 
     /* --- vms-4071: THE IMPLIED ACK (p. 2-16). "what if, in the meantime,
      * the remote node performs an operation that requires the circuit to be
@@ -3342,6 +3423,9 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             }
             if (mcdt != NULL) {
                 ps->cdt_member = mcdt;
+                /* vms-fdd: the ACCEPT service's p. 2-28 copy of the connect
+                 * data scs_connect_build_response() stamped. */
+                scsd_cdt_record_connect_data(mcdt);
             }
             if (mec.sent) {
                 ps->remote_conid = v.local_conid;

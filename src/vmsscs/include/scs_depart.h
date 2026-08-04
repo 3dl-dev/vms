@@ -131,6 +131,11 @@ struct scs_depart_stats {
     unsigned handlers_notified;  /* of those, ones with a SYSAP error handler */
     unsigned waiters_flushed;    /* Credit Wait entries abandoned (p. 2-45) */
     unsigned mfreeq_reclaimed;   /* MFREEQ buffers returned to the port (p. 2-43) */
+    /* vms-b1d: DFREEQ buffers returned to the port (p. 2-43). Measured the same
+     * way as mfreeq_reclaimed -- the port's depth before minus after -- so a
+     * regression that stops returning the datagram deposit shows up as a zero
+     * here and not merely as a slowly-growing depth nobody reads. */
+    unsigned dfreeq_reclaimed;
 };
 
 /*
@@ -142,8 +147,8 @@ struct scs_depart_stats {
  *   2. For each connection still on the circuit: abandon its Credit Wait queue
  *      (p. 2-45 -- a broken connection will never grant credit again, so the
  *      waiters can never be resumed) and release the CDT, which returns its
- *      MFREEQ share to the port (p. 2-43) and leaves it in its CDL slot for
- *      reuse (p. 2-30).
+ *      MFREEQ share AND its DFREEQ share to the port (p. 2-43) and leaves it in
+ *      its CDL slot for reuse (p. 2-30).
  *   3. Only now close the Path Block. The System Block STAYS in the
  *      configuration queue (p. 2-17), which is what makes the returning node's
  *      scs_pb_open() find an SB with an empty PB queue and take the p. 2-21

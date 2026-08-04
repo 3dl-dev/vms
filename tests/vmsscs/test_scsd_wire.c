@@ -2109,6 +2109,36 @@ static void test_rejoin_reaches_the_p221_refresh(void)
     CHECK(peer_departures == 0, "the control sweeps departed %lu peers", peer_departures);
     CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "a control sweep released the peer slot");
 
+    /* vms-b1d: THE PORT'S DATAGRAM ACCOUNT MUST SURVIVE THE ROUND TRIP TOO.
+     * p. 2-43 puts a connection's datagram buffers on the PORT's DFREEQ, and
+     * the departure sweep below releases this circuit's CDTs -- so each one owes
+     * the port back the deposit it is still holding. Asserted HERE, on the
+     * daemon's OWN PDT and CDL rather than a unit bench, because THIS sweep is
+     * what makes the leak production-reachable. MEASURED with the return removed
+     * from scs_cdl_release: the depth reads 5 after the departure and is still 5
+     * after the rejoin -- the departed incarnation's deposit is simply never
+     * given back, and a real node that connected again would deposit on top of
+     * it. (The rejoin here opens no new connection, so 5 is the figure to expect
+     * from that mutant, not 10.) */
+    /* The CDT is allocated HERE rather than taken from ps->cdt_* because this
+     * fixture's formation does not bind one (the daemon's Con.IDs are
+     * node-global, so an earlier fixture in this process already holds the CDL
+     * slots -- see the SCSD-W-CONNSLOT line in the log above). What is
+     * PRODUCTION about this assertion is everything that matters: the CDL is the
+     * daemon's own scsd_cdl, the port is the daemon's own r.w.pdt, the circuit
+     * is the one the captured frames built, and the teardown is rx_sweep ->
+     * scs_pb_depart with nothing stubbed. Only the connection's origin is the
+     * test's. */
+    struct scs_cdt *acct = scs_cdl_alloc(&scsd_cdl, "SCS$DIRECTORY   ",
+                                         "SCS$DIRECTORY   ", ps->pb);
+    CHECK(acct != NULL, "no CDL slot to account against");
+    if (acct != NULL) {
+        CHECK(scs_dgram_extend(acct, 5) == 0, "extend failed on the daemon's CDT");
+    }
+    CHECK(r.w.pdt.dfreeq_count == 5,
+          "the daemon's port DFREEQ is %u with one 5-buffer deposit outstanding,"
+          " expected 5", r.w.pdt.dfreeq_count);
+
     /* ---- 3. THE DEPARTURE. ---- */
     CHECK(rx_sweep(&r, heard_at + timeout) == 1,
           "a peer silent for exactly the listen timeout was NOT declared departed");
@@ -2139,6 +2169,10 @@ static void test_rejoin_reaches_the_p221_refresh(void)
           "the System Block was dropped with the circuit, so nothing is left for a"
           " rejoin to refresh");
     CHECK(rxlog_has("SCSD-I-PEERGONE"), "the departure was not logged");
+    CHECK(r.w.pdt.dfreeq_count == 0,
+          "the daemon's port DFREEQ is %u after the peer departed, expected 0 --"
+          " the released connection's datagram deposit was never returned to the"
+          " port (p. 2-43)", r.w.pdt.dfreeq_count);
 
     /* ---- 4. THE REJOIN, SAME IDENTITY, SAME CAPTURED FRAMES. ---- */
     rxlog_reset();
@@ -2169,6 +2203,13 @@ static void test_rejoin_reaches_the_p221_refresh(void)
           "the rejoin logged the FIRST-CONTACT clause");
     CHECK(!rxlog_has("UNEXPECTED"),
           "a log line still claims a transition is unreachable");
+    /* vms-b1d: and the returning node starts from a CLEAN datagram account. This
+     * is the assertion the leak would fail on a real cluster: the port's depth
+     * would carry the departed incarnation's deposit into every rejoin. */
+    CHECK(r.w.pdt.dfreeq_count == 0,
+          "the daemon's port DFREEQ is %u after the rejoin, expected 0 -- the"
+          " returning node inherited the departed incarnation's deposit",
+          r.w.pdt.dfreeq_count);
 
     /* THE WIRE-VISIBLE CONSEQUENCE, which is the whole reason this item ships a
      * kill switch: the returning node is answered with a second, complete

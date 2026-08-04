@@ -27,6 +27,14 @@
  *   - the accounted and unaccounted CDL receive paths RESOLVE IDENTICALLY,
  *     because they share scs_cdl_resolve() (scs_cdt.h) rather than each
  *     implementing the p. 2-29 lookup
+ *   - THE CONNECTION LIFECYCLE: releasing a connection RETURNS its deposit to
+ *     the port, because "each person is entitled only to the amount of money
+ *     that he or she has on deposit" and a depositor who is gone has none
+ *     (2-43). Driven both directly and through vms-17f's departure sweep, the
+ *     production caller. Every fixture written before these opened its
+ *     connections once and never released one, so none of them could see the
+ *     port's account grow across connection churn -- it did, 8/16/24/32 over
+ *     four cycles
  *
  * AND the OVMX_NO_DGRAM_ACCOUNTING kill switch, exercised by re-running the
  * whole discard scenario with the switch set and asserting the discard does
@@ -50,6 +58,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "scs_depart.h" /* vms-17f's sweep: the live caller of scs_cdl_release */
 #include "scs_dgram.h"
 
 static int failures = 0;
@@ -700,6 +709,252 @@ static void test_both_receive_paths_resolve_identically(void)
     }
 }
 
+/* ==========================================================================
+ * CONNECTION LIFECYCLE -- the deposit has to come BACK (vms-b1d, second pass).
+ *
+ * Every fixture above this point opens its connections once and never releases
+ * one, so none of them could see what happens to the port's account when a
+ * connection goes away. It went nowhere: the deposit stayed on the port for
+ * ever. Measured on the pre-fix tree, four connect/extend(8)/release cycles on
+ * ONE port gave DFREEQ = 8 -> 16 -> 24 -> 32.
+ *
+ * p. 2-43's bank analogy is the rule being enforced -- "each person is entitled
+ * only to the amount of money that he or she has on deposit in the bank" -- and
+ * a depositor who no longer exists has no deposit. Same defect class as
+ * vms-61b's MFREEQ leak, in the same function (scs_cdl_release), and LIVE
+ * rather than latent since vms-17f: the departure sweep releases every CDT on a
+ * departing peer's circuit.
+ * ========================================================================== */
+
+/*
+ * THE PROBE. Four full connect / extend / release cycles on a single port. The
+ * assertion that matters is inside the loop: after each release the port is
+ * back where it started, so nothing accumulates over the cycles.
+ */
+static void test_release_returns_the_dfreeq_deposit_to_the_port(void)
+{
+    struct bench b;
+    struct sysap s;
+    memset(&b, 0, sizeof(b));
+    memset(&s, 0, sizeof(s));
+    scs_config_init(&b.cfg);
+    scs_pdt_init(&b.pdt, SCS_PORT_TYPE_ETHERNET, 4096);
+    scs_cdl_init(&b.cdl);
+
+    for (unsigned cycle = 1; cycle <= 4; cycle++) {
+        struct scs_cdt *c = open_conn(&b, mac_a, sysid_a, &s);
+        CHECK(c != NULL, "cycle %u: connection did not open", cycle);
+        if (c == NULL) {
+            return;
+        }
+        CHECK(scs_dgram_extend(c, 8) == 0, "cycle %u: extend failed", cycle);
+        CHECK(b.pdt.dfreeq_count == 8, "cycle %u: DFREEQ %u with one open"
+              " connection holding 8, want 8 -- a deposit from an earlier cycle"
+              " is still on the port's books", cycle, b.pdt.dfreeq_count);
+
+        struct scs_pb *pb = c->pb;
+        scs_cdl_release(&b.cdl, c);
+        CHECK(b.pdt.dfreeq_count == 0, "cycle %u: DFREEQ %u after releasing the"
+              " only connection on the port, want 0 -- the deposit was not"
+              " returned", cycle, b.pdt.dfreeq_count);
+        /* The Path Block only closes because the CDT was released first; that
+         * ordering is vms-17f's scs_pb_close contract, asserted here so this
+         * fixture cannot quietly stop being a lifecycle. */
+        CHECK(scs_pb_close(&b.cfg, pb) == SCS_PB_CLOSE_OK,
+              "cycle %u: path block would not close after the release", cycle);
+    }
+}
+
+/*
+ * WHICH figure is returned. A connection's `dgram_extended` is what it ever
+ * contributed; its `dgram_buffers` is what is STILL SITTING IN the queue.
+ * Buffers already dequeued by the port and handed to the SYSAP left the queue
+ * when they were taken, so returning `dgram_extended` would credit the port
+ * twice -- and with a second connection on the same port, would hand it that
+ * connection's buffers.
+ *
+ * A is given 5 and consumes 3 (the SYSAP holds them: it neither released nor
+ * deallocated). B holds 4 on the same port. Depth is 2 + 4 = 6. Releasing A
+ * must leave B's 4. Returning `dgram_extended` instead would leave 1.
+ */
+static void test_release_returns_only_what_is_still_on_deposit(void)
+{
+    struct bench b;
+    struct sysap s;
+    CHECK(bench_init(&b, &s), "bench setup failed");
+
+    struct sysap s_b;
+    memset(&s_b, 0, sizeof(s_b));
+    b.b = open_conn(&b, mac_b, sysid_b, &s_b);
+    CHECK(b.b != NULL, "second connection failed to open");
+    if (b.b == NULL) {
+        return;
+    }
+
+    scs_dgram_extend(b.a, 5);
+    scs_dgram_extend(b.b, 4);
+    CHECK(b.pdt.dfreeq_count == 9, "shared DFREEQ %u, want 9", b.pdt.dfreeq_count);
+
+    for (unsigned i = 0; i < 3; i++) {
+        CHECK(deliver(&b, b.a) == SCS_DGRAM_DELIVERED, "A's datagram %u not delivered", i);
+    }
+    CHECK(s.calls == 3, "A's input routine calls %lu, want 3", s.calls);
+    CHECK(b.a->dgram_buffers == 2, "A still on deposit %u, want 2", b.a->dgram_buffers);
+    CHECK(b.a->dgram_extended == 5, "A ever contributed %u, want 5", b.a->dgram_extended);
+    CHECK(b.pdt.dfreeq_count == 6, "DFREEQ %u with 3 buffers in the SYSAP's hands,"
+          " want 6", b.pdt.dfreeq_count);
+
+    scs_cdl_release(&b.cdl, b.a);
+    CHECK(b.pdt.dfreeq_count == 4, "DFREEQ %u after releasing A, want 4 -- B's"
+          " deposit, and only B's", b.pdt.dfreeq_count);
+    CHECK(b.b->dgram_buffers == 4, "B's own count %u was disturbed by A's release,"
+          " want 4", b.b->dgram_buffers);
+
+    /* B still receives, out of its own untouched deposit. */
+    CHECK(deliver(&b, b.b) == SCS_DGRAM_DELIVERED, "B starved by A's release");
+    CHECK(s_b.calls == 1, "B input routine calls %lu, want 1", s_b.calls);
+    CHECK(b.pdt.dfreeq_count == 3, "DFREEQ %u after B received, want 3",
+          b.pdt.dfreeq_count);
+}
+
+/*
+ * THE LIVE PATH. vms-17f's departure sweep is what makes this leak reachable in
+ * production, so it is driven here rather than only through scs_cdl_release:
+ * scs_pb_depart() notifies the SYSAPs, flushes the Credit Waits, releases every
+ * CDT on the circuit and closes the Path Block. Its stats block reports the
+ * DFREEQ reclaim the same way it reports the MFREEQ one -- measured as the
+ * port's depth before minus after, not as what the CDT claimed to owe.
+ */
+static void test_departure_sweep_returns_the_dfreeq_deposit(void)
+{
+    struct bench b;
+    struct sysap s;
+    CHECK(bench_init(&b, &s), "bench setup failed");
+
+    struct scs_pb *pb = b.a->pb;
+    CHECK(pb != NULL, "the bench connection has no path block");
+    if (pb == NULL) {
+        return;
+    }
+    scs_dgram_extend(b.a, 6);
+    CHECK(b.pdt.dfreeq_count == 6, "DFREEQ %u before the departure, want 6",
+          b.pdt.dfreeq_count);
+
+    struct scs_depart_stats st;
+    enum scs_pb_close_result r = scs_pb_depart(&b.cdl, &b.cfg, pb, &st);
+    CHECK(r == SCS_PB_CLOSE_OK, "departure did not close the path block (result %d)",
+          (int)r);
+    CHECK(st.connections_lost == 1, "departure lost %u connection(s), want 1",
+          st.connections_lost);
+    CHECK(st.dfreeq_reclaimed == 6, "departure reclaimed %u DFREEQ buffer(s), want 6",
+          st.dfreeq_reclaimed);
+    CHECK(b.pdt.dfreeq_count == 0, "port DFREEQ %u after the peer departed, want 0",
+          b.pdt.dfreeq_count);
+}
+
+/*
+ * p. 2-42 makes the CONNECT/ACCEPT buffer request a SET, not an add: "the
+ * number of datagram buffers requested by the SYSAP is stored in the CDT". So
+ * re-extending a connection that is STILL OPEN replaces its deposit, and the
+ * old one must leave the port's books first -- which is the ONLY thing the
+ * subtraction at the top of scs_dgram_extend() does, now that scs_cdl_release
+ * returns the deposit itself. Driven with a second connection holding 2 on the
+ * same port so a stacked deposit is arithmetically visible (3+5=8 would show as
+ * a depth of 10, not 7).
+ */
+static void test_re_extension_replaces_the_deposit_it_does_not_stack(void)
+{
+    struct bench b;
+    struct sysap s;
+    CHECK(bench_init(&b, &s), "bench setup failed");
+
+    struct sysap s_b;
+    memset(&s_b, 0, sizeof(s_b));
+    b.b = open_conn(&b, mac_b, sysid_b, &s_b);
+    CHECK(b.b != NULL, "second connection failed to open");
+    if (b.b == NULL) {
+        return;
+    }
+    scs_dgram_extend(b.b, 2);
+
+    scs_dgram_extend(b.a, 3);
+    CHECK(b.pdt.dfreeq_count == 5, "DFREEQ %u after A's first extension, want 5",
+          b.pdt.dfreeq_count);
+
+    scs_dgram_extend(b.a, 5);
+    CHECK(b.a->dgram_buffers == 5, "A count %u after re-extension, want 5 (SET,"
+          " not added)", b.a->dgram_buffers);
+    CHECK(b.a->dgram_extended == 5, "A extension %u after re-extension, want 5",
+          b.a->dgram_extended);
+    CHECK(b.pdt.dfreeq_count == 7, "DFREEQ %u after A re-extended from 3 to 5,"
+          " want 7 -- the old deposit stacked instead of being replaced",
+          b.pdt.dfreeq_count);
+    CHECK(b.b->dgram_buffers == 2, "B's deposit %u disturbed by A's re-extension",
+          b.b->dgram_buffers);
+}
+
+/*
+ * A CDT NOT BOUND TO A PATH BLOCK. p. 2-43 puts the DFREEQ on the PORT and this
+ * module reaches the port only through cdt->pb->pdt, so a connection with no
+ * Path Block has no account to draw on. scs_dgram_port_take()'s documented
+ * NULL-pdt contract and scs_dgram_cdl_deliver()'s treatment of it (only
+ * SCS_DGRAM_DISCARD_DFREEQ_EMPTY stops delivery; SCS_DGRAM_NO_CDT from the port
+ * half falls through to the connection's own quota) were both written down and
+ * neither was driven -- every other fixture here binds every CDT to a port.
+ *
+ * REACHABILITY, stated rather than implied: scs_cdl_alloc() accepts a NULL Path
+ * Block and this is the behaviour it produces. No scsd.c path is known to pass
+ * one today -- conn_bind() passes ps->pb -- so this pins an API contract, not
+ * an observed production sequence.
+ */
+static void test_unbound_cdt_has_no_port_to_account_against(void)
+{
+    CHECK(scs_dgram_port_take(NULL) == SCS_DGRAM_NO_CDT,
+          "a NULL port did not report NO_CDT");
+
+    struct bench b;
+    struct sysap s;
+    CHECK(bench_init(&b, &s), "bench setup failed");
+    scs_dgram_extend(b.a, 4); /* a real deposit on the bench port, to be left alone */
+
+    struct sysap s_u;
+    memset(&s_u, 0, sizeof(s_u));
+    struct scs_cdt *u = scs_cdl_alloc(&b.cdl, "VMS$VAXcluster  ", "VMS$VAXcluster  ", NULL);
+    CHECK(u != NULL, "unbound CDT allocation failed");
+    if (u == NULL) {
+        return;
+    }
+    CHECK(u->pb == NULL, "the CDT was bound to a path block after all");
+    scs_cdt_set_handlers(u, NULL, sysap_dgram_input, NULL, &s_u);
+
+    /* The CDT's own count moves; no port is credited, in particular not the
+     * bench port that happens to be the only one around. */
+    CHECK(scs_dgram_extend(u, 3) == 0, "extend on an unbound CDT failed");
+    CHECK(u->dgram_buffers == 3, "unbound CDT count %u, want 3", u->dgram_buffers);
+    CHECK(b.pdt.dfreeq_count == 4, "DFREEQ %u -- an unbound connection credited a"
+          " port it is not on, want 4", b.pdt.dfreeq_count);
+
+    /* The accounted receive path runs the port half, gets SCS_DGRAM_NO_CDT
+     * because there is no port, and delivers anyway against the connection's
+     * own count. Nothing is counted against any port. */
+    CHECK(scs_dgram_cdl_deliver(&b.cdl, u->local_conid, 0, DG, sizeof(DG))
+              == SCS_DGRAM_DELIVERED, "unbound connection did not receive");
+    CHECK(s_u.calls == 1, "unbound input routine calls %lu, want 1", s_u.calls);
+    CHECK(u->dgram_buffers == 2, "unbound CDT count %u after delivery, want 2",
+          u->dgram_buffers);
+    CHECK(b.pdt.dfreeq_count == 4, "DFREEQ %u -- an unbound delivery drew on a"
+          " port it is not on, want 4", b.pdt.dfreeq_count);
+    CHECK(scs_dgram_dfreeq_empty_discards(&b.pdt) == 0,
+          "the bench port was charged an unbound connection's discard");
+
+    /* And releasing it returns a deposit to nobody, quietly. */
+    scs_cdl_release(&b.cdl, u);
+    CHECK(b.pdt.dfreeq_count == 4, "releasing an unbound connection moved a port's"
+          " depth to %u, want 4", b.pdt.dfreeq_count);
+    CHECK(b.a->dgram_buffers == 4, "the bound connection's deposit %u was disturbed,"
+          " want 4", b.a->dgram_buffers);
+}
+
 /*
  * The kill switch. With OVMX_NO_DGRAM_ACCOUNTING=1 the accounting is gone: no
  * count moves, and the datagram that WOULD have been discarded for want of
@@ -755,6 +1010,14 @@ int main(void)
     test_reentrant_delivery_cannot_spend_the_same_buffer_twice();
     test_release_from_inside_the_input_routine();
     test_both_receive_paths_resolve_identically();
+    /* The CONNECTION LIFECYCLE -- releasing a connection must give the port its
+     * datagram deposit back, or the account grows on every connect/release
+     * cycle (and vms-17f's departure sweep drives that cycle in production). */
+    test_release_returns_the_dfreeq_deposit_to_the_port();
+    test_release_returns_only_what_is_still_on_deposit();
+    test_departure_sweep_returns_the_dfreeq_deposit();
+    test_re_extension_replaces_the_deposit_it_does_not_stack();
+    test_unbound_cdt_has_no_port_to_account_against();
     test_kill_switch();
 
     printf("%s: %d checks, %d failures\n", failures == 0 ? "PASS" : "FAIL", checks, failures);

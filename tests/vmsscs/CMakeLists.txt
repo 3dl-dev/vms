@@ -308,7 +308,10 @@ target_include_directories(test_scs_dgram PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include
 )
 
-target_link_libraries(test_scs_dgram PRIVATE vmsscs_dgram)
+# vmsscs_depart as well as vmsscs_dgram: the connection-lifecycle fixtures drive
+# the DFREEQ deposit return through scs_pb_depart(), the PRODUCTION caller of
+# scs_cdl_release() since vms-17f, not only through scs_cdl_release() directly.
+target_link_libraries(test_scs_dgram PRIVATE vmsscs_dgram vmsscs_depart)
 
 add_test(NAME vmsscs_dgram_unit COMMAND test_scs_dgram)
 set_tests_properties(vmsscs_dgram_unit PROPERTIES

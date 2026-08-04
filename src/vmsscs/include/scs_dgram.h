@@ -117,6 +117,25 @@
  *     the distinction that tells a per-connection starvation apart from a
  *     port-wide one.
  *
+ * ===== DEPOSIT RETURN: WHERE THE ACCOUNT IS CLOSED =====
+ *
+ * The DFREEQ deposit is returned to the port by scs_cdl_release() (scs_cdt.c),
+ * NOT by anything in this file, because releasing a connection is a CDT-layer
+ * event and the CDT layer is where the sibling MFREEQ return already lives
+ * (vms-61b). p. 2-43's bank analogy is the whole argument: "each person is
+ * entitled only to the amount of money that he or she has on deposit", and a
+ * depositor who no longer exists has no deposit. The quantity returned is
+ * `dgram_buffers` -- the share still sitting IN the queue. Buffers already
+ * dequeued by scs_dgram_port_take() and handed to the SYSAP (the difference
+ * dgram_extended - dgram_buffers) are NOT returned; they left the queue when
+ * they were taken, and returning them here would credit the port twice.
+ *
+ * THIS IS NOT DECORATIVE. vms-17f made connection release production-reachable:
+ * scs_pb_depart() releases every CDT on a departing peer's circuit, so without
+ * the return a node that leaves and rejoins inflates the port's datagram
+ * account on each cycle and never deflates it. It is the same defect class as
+ * vms-61b, in the same function.
+ *
  * ===== REACHABILITY IN SCSD TODAY -- DO NOT READ A GREEN TEST RUN AS "OVMX
  * ACCOUNTS ITS DATAGRAMS" =====
  *

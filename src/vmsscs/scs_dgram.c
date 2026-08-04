@@ -78,9 +78,14 @@ int scs_dgram_extend(struct scs_cdt *cdt, unsigned n)
      * are inserted into the Datagram Free Queue (DFREEQ) associated with the
      * port that supports the connection."
      *
-     * This is formation, so the count is SET. Any buffers a previous use of
-     * this CDT still had on deposit leave the DFREEQ with it -- the bank does
-     * not keep an account whose owner has gone (p. 2-43). */
+     * This is formation, so the count is SET, not added to. The subtraction
+     * below is therefore about RE-EXTENSION of a connection that is STILL OPEN:
+     * setting the deposit to n means the old deposit stops being on the port's
+     * books first. It is NOT the release path -- a released CDT is memset to 0
+     * by scs_cdl_release, which returns its deposit itself (see the DEPOSIT
+     * RETURN note in scs_dgram.h), so dgram_buffers is already 0 on a reused
+     * slot and this branch does nothing there. Covered by
+     * test_re_extension_replaces_the_deposit_it_does_not_stack. */
     if (cdt->dgram_buffers > 0) {
         dfreeq_sub(cdt, cdt->dgram_buffers);
     }

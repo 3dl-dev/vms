@@ -118,7 +118,8 @@ target_link_libraries(vmsscs_credit PUBLIC vmsscs_cdt)
 # the config <- cdt <- credit dependency chain, because it is the only place
 # from which the whole p. 2-28 sequence can be run: notify the SYSAPs on the
 # circuit, flush their Credit Waits, release their CDTs (returning the MFREEQ
-# share to the port), and only then close the Path Block. Pure state: builds no
+# share AND, since vms-b1d, the DFREEQ share to the port), and only then close
+# the Path Block. Pure state: builds no
 # frame, parses no frame, opens no socket. Carries the OVMX_NO_PEER_DEPART kill
 # switch and the measured listen timeout.
 add_library(vmsscs_depart STATIC scs_depart.c)

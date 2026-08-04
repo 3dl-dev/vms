@@ -186,6 +186,30 @@ void scs_cdl_release(struct scs_cdl *cdl, struct scs_cdt *cdt)
                                 ? pdt->mfreeq_count - cdt->extended_credits
                                 : 0;
     }
+    /* vms-b1d: THE DFREEQ MUST BE GIVEN BACK TOO, for exactly the same reason
+     * and by exactly the same argument. p. 2-42/2-43: the datagram buffers a
+     * SYSAP requested for this connection were "inserted into the Datagram Free
+     * Queue (DFREEQ) associated with the port that supports the connection", and
+     * p. 2-43's bank analogy is that "each person is entitled only to the amount
+     * of money that he or she has on deposit" -- a depositor who has gone has no
+     * deposit. Without this the port's DFREEQ depth grows by the connection's
+     * remaining deposit on EVERY connect/release cycle, and vms-17f made that
+     * cycle production-reachable: the departure sweep in scs_pb_depart releases
+     * every CDT on a departing peer's circuit, so a node that leaves and rejoins
+     * inflates the port's datagram account each time.
+     *
+     * cdt->dgram_buffers, not cdt->dgram_extended, is the right figure: it is
+     * this connection's share STILL SITTING IN the DFREEQ. Buffers currently in
+     * the SYSAP's hands (delivered, not yet released) were already dequeued by
+     * scs_dgram_port_take, so the difference dgram_extended - dgram_buffers is
+     * already out of the port's depth and must not be subtracted twice.
+     * Saturating, for the same reason as the MFREEQ above. */
+    if (cdt->pb != NULL && cdt->pb->pdt != NULL && cdt->dgram_buffers > 0) {
+        struct scs_pdt *pdt = cdt->pb->pdt;
+        pdt->dfreeq_count = (pdt->dfreeq_count > cdt->dgram_buffers)
+                                ? pdt->dfreeq_count - cdt->dgram_buffers
+                                : 0;
+    }
     pb_queue_remove(cdt->pb, cdt);
     /* Zero everything but keep the CDT itself in the CDL (p. 2-30). The next
      * scs_cdl_alloc that reuses this slot re-derives local_conid from the slot

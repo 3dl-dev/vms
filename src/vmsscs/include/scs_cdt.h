@@ -432,6 +432,14 @@ struct scs_cdt *scs_cdl_alloc_conid(struct scs_cdl *cdl, uint32_t conid,
  * queue is NOT drained here, because struct scs_credit_waiter is opaque to
  * scs_cdt.c. A caller tearing a connection down must call
  * scs_credit_wait_flush() first (scs_depart.c does).
+ *
+ * vms-b1d: and RETURNS this connection's share of the port DFREEQ, by the same
+ * p. 2-43 argument -- `dgram_buffers`, the deposit STILL SITTING IN the queue,
+ * is subtracted from cdt->pb->pdt->dfreeq_count (saturating at 0). Buffers the
+ * SYSAP still holds (dgram_extended - dgram_buffers) were already dequeued by
+ * scs_dgram_port_take and are deliberately NOT returned: they are gone with the
+ * connection that held them. Without this the port's datagram account grows on
+ * every connect/release cycle -- see the DEPOSIT RETURN note in scs_dgram.h.
  */
 void scs_cdl_release(struct scs_cdl *cdl, struct scs_cdt *cdt);
 

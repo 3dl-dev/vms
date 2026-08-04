@@ -2300,13 +2300,15 @@ static unsigned scsd_peer_departure_sweep(struct scsd_rx *rx, uint64_t now_ms)
         printf(" SCSD-I-PEERGONE, peer %02x:%02x:%02x:%02x:%02x:%02x silent %llums"
                " (listen timeout %llums) -- path block CLOSED, peer slot released,"
                " %u connection(s) lost, %u credit waiter(s) flushed,"
-               " %u MFREEQ buffer(s) returned; its system block STAYS in the"
+               " %u MFREEQ buffer(s) returned, %u DFREEQ buffer(s) returned;"
+               " its system block STAYS in the"
                " configuration queue (p. 2-17) so a rejoin can refresh it (p. 2-21)."
                " Configuration queue now holds %u system block(s)\n",
                gone_mac[0], gone_mac[1], gone_mac[2], gone_mac[3], gone_mac[4],
                gone_mac[5], (unsigned long long)silent_ms,
                (unsigned long long)timeout_ms, st.connections_lost,
-               st.waiters_flushed, st.mfreeq_reclaimed, scs_config_sb_count(rx->cfg));
+               st.waiters_flushed, st.mfreeq_reclaimed, st.dfreeq_reclaimed,
+               scs_config_sb_count(rx->cfg));
         fflush(stdout);
 
         /* Release the slot, WHOLE. `pb = NULL` alone would be enough to free it

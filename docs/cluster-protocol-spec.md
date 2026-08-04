@@ -1746,6 +1746,21 @@ For visibility, every field NOT marked GROUNDED above:
     invisible locally is indistinguishable from a facility that does nothing
     (INV-6). **Do not conflate this discard with message credit**: credit blocks
     a SENDER, this drops a RECEIPT.
+  - **The deposit is returned to the port when the connection is released.**
+    p. 2-43's bank analogy — "each person is entitled only to the amount of money
+    that he or she has on deposit in the bank" — is what forces this: a depositor
+    that no longer exists has no deposit. `scs_cdl_release()` subtracts the
+    connection's `dgram_buffers` (the share *still sitting in* the DFREEQ, not
+    the `dgram_extended` total it ever contributed — buffers the SYSAP is still
+    holding left the queue when the port dequeued them) from the port's depth,
+    the exact mirror of the MFREEQ return `vms-61b` added to the same function.
+    **This is live, not latent**: `vms-17f`'s departure sweep releases every CDT
+    on a departing peer's circuit, so without the return a node that leaves and
+    rejoins inflates the port's datagram account on every cycle. Measured on the
+    unfixed tree, four connect/extend(8)/release cycles on one port gave a DFREEQ
+    depth of 8 → 16 → 24 → 32 and never fell. The reclaim is reported per
+    departure as `dfreeq_reclaimed` in `struct scs_depart_stats` and logged in the
+    `SCSD-I-PEERGONE` line.
   - **Consequence for OVMX**: `src/vmsscs/scs_dgram.c` implements the whole
     p. 2-42 mechanism and is unit tested, and **no production caller routes a
     datagram through it**. `scs_dgram_cdl_deliver()` and

@@ -91,12 +91,16 @@ enum scs_pb_close_result scs_pb_depart(struct scs_cdl *cdl, struct scs_config *c
          * between the two is exactly the accounting bug (vms-61b) this reports
          * on. */
         struct scs_pdt *pdt = (c->pb != NULL) ? c->pb->pdt : NULL;
-        unsigned before = (pdt != NULL) ? pdt->mfreeq_count : 0;
+        unsigned mbefore = (pdt != NULL) ? pdt->mfreeq_count : 0;
+        unsigned dbefore = (pdt != NULL) ? pdt->dfreeq_count : 0;
         scs_cdl_release(cdl, c);
-        unsigned after = (pdt != NULL) ? pdt->mfreeq_count : 0;
+        unsigned mafter = (pdt != NULL) ? pdt->mfreeq_count : 0;
+        unsigned dafter = (pdt != NULL) ? pdt->dfreeq_count : 0;
         if (stats != NULL) {
             stats->waiters_flushed += dropped;
-            stats->mfreeq_reclaimed += (before > after) ? (before - after) : 0;
+            stats->mfreeq_reclaimed += (mbefore > mafter) ? (mbefore - mafter) : 0;
+            /* vms-b1d: the datagram half of the same reconciliation (p. 2-43). */
+            stats->dfreeq_reclaimed += (dbefore > dafter) ? (dbefore - dafter) : 0;
         }
     }
 

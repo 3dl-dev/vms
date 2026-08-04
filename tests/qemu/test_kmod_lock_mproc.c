@@ -45,7 +45,8 @@
 #include "vms_kif.h"
 
 #define SS_NORMAL       1
-#define SS_NOTQUEUED    40
+/* ssdef.h SS$_NOTQUEUED -- see vms-82a; the private 40 is gone. */
+#define SS_NOTQUEUED    2488
 
 #define AST_SENTINEL    0xABCD1234ULL
 

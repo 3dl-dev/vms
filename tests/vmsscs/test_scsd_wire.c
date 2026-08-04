@@ -2318,6 +2318,66 @@ static void test_multicast_beacon_keeps_a_peer_alive(void)
      * leaves it alone. */
     CHECK(rx_sweep(&r, 1 + timeout) == 0, "a beaconing peer was declared departed");
     CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "a beaconing peer lost its slot");
+/*
+ * (5) vms-b1d: THE DATAGRAM DISCARD IS IN THE PRODUCTION RUN LOG. A datagram
+ * discard is silent on the wire by design (p. 2-42, "the port merely discards
+ * the datagram"); if it is also invisible locally, the whole DFREEQ is
+ * indistinguishable from a facility that does nothing (INV-6). The counters are
+ * asserted structurally in test_scs_dgram.c; what is asserted HERE is that
+ * scsd_exit_summary() -- the daemon's own report, not a test-local printer --
+ * actually emits them.
+ *
+ * Honest scope: this drives the report over a CDL whose counters this test
+ * moved, because NOTHING IN scsd.c ROUTES A DATAGRAM through
+ * scs_dgram_cdl_deliver() (see the reachability note in scs_dgram.h). It proves
+ * the reporting call site is live and prints real per-connection numbers. It
+ * does NOT prove the daemon ever discards a datagram -- it cannot, because the
+ * daemon never receives one through the accounted path.
+ */
+static void test_exit_summary_reports_datagram_discards(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->cdt_dir != NULL, "the fixture did not open a directory CDT");
+    if (ps->cdt_dir == NULL) {
+        return;
+    }
+
+    /* One buffer extended, one datagram delivered to a connection with no SYSAP
+     * input routine, then the quota driven to 0 and a discard forced -- all
+     * through the vms-b1d entry points, over the daemon's OWN CDL. */
+    static const unsigned char dg[] = {0x01, 0x02, 0x03};
+    CHECK(scs_dgram_extend(ps->cdt_dir, 1) == 0, "extend failed");
+    ps->cdt_dir->dgram_buffers = 0;
+    CHECK(scs_dgram_cdl_deliver(&scsd_cdl, ps->cdt_dir->local_conid, 0, dg, sizeof(dg))
+              == SCS_DGRAM_DISCARD_NO_QUOTA,
+          "the daemon's CDL did not produce a no-quota discard");
+
+    char  buf[8192];
+    FILE *cap = tmpfile();
+    CHECK(cap != NULL, "tmpfile");
+    if (cap == NULL) {
+        return;
+    }
+    scsd_exit_summary(&r.rx, cap);
+    fflush(cap);
+    rewind(cap);
+    size_t got = fread(buf, 1, sizeof(buf) - 1, cap);
+    buf[got] = '\0';
+    fclose(cap);
+
+    char want[160];
+    snprintf(want, sizeof(want), "DGRAM: conid=0x%08X", (unsigned)SCS_DIR_OVMX_CONID);
+    CHECK(strstr(buf, want) != NULL,
+          "the exit summary did not report the connection's datagram account"
+          " ('%s' absent) -- the discard is invisible in the run log",
+          want);
+    CHECK(strstr(buf, "discarded-no-quota=1") != NULL,
+          "the exit summary did not report the DISCARD COUNT");
+    CHECK(strstr(buf, "DFREEQ: port#0") != NULL,
+          "the exit summary did not report the port DFREEQ");
 }
 
 /*
@@ -2543,6 +2603,8 @@ int main(void)
     /* vms-22e: the daemon's half of the p. 2-21 footnote rule -- the log line
      * that names the failing test, and the VCOPEN it must NOT print. */
     test_masquerade_open_is_logged_and_suppresses_vcopen();
+    /* vms-b1d: the exit summary's datagram-discard accounting. */
+    test_exit_summary_reports_datagram_discards();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

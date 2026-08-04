@@ -1718,6 +1718,40 @@ For visibility, every field NOT marked GROUNDED above:
     carries) and hands it to a per-CDT hook. **It builds no frame and OVMX emits
     no special credit message.** Nothing installs the hook, and `vmsscs_credit`
     is still not linked into `SCSD.EXE`.
+- **DATAGRAM BUFFER COUNT (the DFREEQ deposit) — UNGROUNDED, and an OVMX
+  CHOSEN VALUE** (`vms-b1d`). *VAXcluster Principles* p. 2-42 has a SYSAP
+  optionally request a number of datagram buffers for a connection through "an
+  optional argument in the CONNECT and ACCEPT services"; the count is stored in
+  the CDT and the buffers go into the port's *Datagram Free Queue* (DFREEQ).
+  **No captured field is pinned to that count**, and it may well never appear on
+  the wire — the book describes it as an argument to a LOCAL service, unlike the
+  message-service credit count, which §4(g)'s WIRE VERDICT grounds at SCA
+  `[48:50]`. The book publishes **no default** either, and none of the three
+  SYSGEN parameters it lists for the message and datagram services (SCSMAXMSG,
+  SCSMAXDG, SCSRSPCNT — p. 2-35) is a datagram buffer count. So
+  `SCS_DGRAM_DEFAULT_BUFFERS = 8` in `src/vmsscs/include/scs_dgram.h` is an
+  **OVMX chosen value, not an inferred VMS one** — nothing observed suggests 8,
+  and callers are expected to pass an explicit count. Also recorded here so the
+  next agent does not read it as measured:
+  - **The datagram account is on the RECEIVE path, not the send path.** p. 2-42
+    opens with "SCA does not provide a flow control mechanism for the datagram
+    service"; the DFREEQ is debited when "the port RECEIVES a datagram", and the
+    send side (p. 2-35) simply allocates a buffer with no queue consulted. A
+    send-side datagram quota does not exist and OVMX does not implement one.
+  - **Both documented discard classes are SILENT ON THE WIRE**: a datagram
+    dropped for want of connection quota (buffer returned to the DFREEQ) and one
+    dropped because the DFREEQ was empty (dropped by the port) both emit
+    nothing. OVMX counts them locally — per connection and per port respectively
+    — and prints them in the `SCSD.EXE` exit summary, because a discard that is
+    invisible locally is indistinguishable from a facility that does nothing
+    (INV-6). **Do not conflate this discard with message credit**: credit blocks
+    a SENDER, this drops a RECEIPT.
+  - **Consequence for OVMX**: `src/vmsscs/scs_dgram.c` implements the whole
+    p. 2-42 mechanism and is unit tested, and **no production caller routes a
+    datagram through it** — `scs_dgram_cdl_deliver()` wraps
+    `scs_cdl_deliver_datagram()`, which vms-e1a already recorded as unreachable
+    from `scsd.c`. The only live daemon call is the exit-summary report, which
+    prints zeros.
 - **Minimum Send Credits — UNGROUNDED** (`vms-1d2`). p. 2-44 makes the
   dangerously-low threshold `local SCSFLOWCUSH + remote Minimum Send Credits`,
   where Minimum Send Credits is an argument the remote SYSAP passes to CONNECT or

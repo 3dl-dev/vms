@@ -303,6 +303,30 @@ struct scs_pdt {
      * writes it, exactly as it never touches scs_pb.cdt_head.
      */
     unsigned mfreeq_count;
+
+    /*
+     * vms-b1d: depth of this port's Datagram Free Queue, the DFREEQ. "SCA
+     * associates a separate DFREEQ with each port. ... The datagram buffers
+     * allocated for a connection are inserted into the DFREEQ for the port
+     * that supports that connection." (p. 2-43) VMS keeps the DFREEQ head in
+     * the same Port Queue Block portion of the PDT as the MFREEQ head, and
+     * p. 2-45 permits that association to be implementation dependent -- so,
+     * exactly as for mfreeq_count, OVMX accounts the DEPTH only (OVMX design
+     * choice, labeled per rule 8).
+     *
+     * `dfreeq_empty_discards` counts the p. 2-42 port-level drop: "The
+     * possibility exists that the DFREEQ itself is empty when the port
+     * receives a datagram. If this is the case, the port merely discards the
+     * datagram." That discard is silent on the wire by design; counting it
+     * locally is what keeps it from also being invisible (INV-6). It is a
+     * PORT counter, not a connection counter, because at that point in the
+     * receive path SCS has not yet looked up a CDT.
+     *
+     * Owned entirely by src/vmsscs/scs_dgram.c -- scs_config.c never reads or
+     * writes either field, exactly as it never touches mfreeq_count.
+     */
+    unsigned      dfreeq_count;
+    unsigned long dfreeq_empty_discards;
 };
 
 /*

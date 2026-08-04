@@ -44,6 +44,7 @@
 #include "scs_classify.h"
 #include "scs_config.h"
 #include "scs_conn.h"
+#include "scs_dgram.h"
 #include "scs_connect.h"
 #include "scs_depart.h"
 #include "scs_dir.h"
@@ -2369,6 +2370,14 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                 peer_departures, depart_connections_lost, depart_refusals,
                 (unsigned long long)scs_depart_listen_timeout_ms(),
                 scs_depart_enabled() ? "" : " (OVMX_NO_PEER_DEPART: sweep DISABLED)");
+        /* vms-b1d: the p. 2-42 datagram buffer account. A datagram discard is
+         * silent ON THE WIRE by design; it must not also be invisible HERE, or
+         * the facility is indistinguishable from one that does nothing (INV-6).
+         * These lines print zeros today and that is the honest state: nothing
+         * in this daemon routes a received datagram through
+         * scs_dgram_cdl_deliver(), so no buffer has ever been taken. See the
+         * reachability note in scs_dgram.h. */
+        (void)scs_dgram_report(&scsd_cdl, out);
         fprintf(out, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld PADDED-HELLO-SENT=%ld\n",
                 rx->cm_config_frames, rx->cm_response_sent, rx->padded_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {

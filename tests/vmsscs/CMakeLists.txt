@@ -226,7 +226,7 @@ target_include_directories(test_scsd_wire PRIVATE
 target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
-    vmsscs_depart
+    vmsscs_depart vmsscs_dgram
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)
@@ -294,4 +294,24 @@ endif()
 set_tests_properties(scs_credit_figures PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 60
+)
+
+# vms-b1d - SCA datagram buffer management: the per-port DFREEQ and the
+# per-connection buffer count in the CDT (VAXcluster Principles pp. 2-42..2-43).
+# Covers both documented discard classes, the fact that a no-quota discard
+# RETURNS the buffer to the DFREEQ, the per-connection and per-port counters,
+# the run-log report that makes a wire-silent discard locally visible (INV-6),
+# and the OVMX_NO_DGRAM_ACCOUNTING kill switch.
+add_executable(test_scs_dgram test_scs_dgram.c)
+
+target_include_directories(test_scs_dgram PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_dgram PRIVATE vmsscs_dgram)
+
+add_test(NAME vmsscs_dgram_unit COMMAND test_scs_dgram)
+set_tests_properties(vmsscs_dgram_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
 )

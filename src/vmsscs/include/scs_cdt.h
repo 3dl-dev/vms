@@ -328,6 +328,37 @@ struct scs_cdt {
      * scsd.c is in today. */
     scs_credit_special_fn special_emit;
     void                 *special_emit_ctx;
+
+    /*
+     * vms-b1d: this connection's DATAGRAM buffer account. "The number of
+     * datagram buffers requested by the SYSAP is stored in the CDT that
+     * describes the connection." (p. 2-42) Owned entirely by
+     * src/vmsscs/scs_dgram.c -- scs_cdt.c only zeroes these with the rest of
+     * the CDT at open and never reads them. See scs_dgram.h for the page
+     * cites, for why the account is on the RECEIVE path and not the send path,
+     * and for the honest statement that no production caller routes a datagram
+     * through it.
+     *
+     * NOTE that this is NOT credit. p. 2-42: "SCA does not provide a flow
+     * control mechanism for the datagram service." The message account above
+     * blocks a sender; this one silently discards a receipt. Do not conflate.
+     */
+
+    /* p. 2-42: "the CDT's count of datagram buffers available to this
+     * connection" -- decremented on delivery, restored when the SYSAP returns
+     * the buffer. Zero means every datagram arriving for this connection is
+     * discarded, even with buffers free in the port DFREEQ. */
+    unsigned dgram_buffers;
+
+    /* The number requested at CONNECT/ACCEPT (p. 2-42), kept so the run log
+     * can show how far the available count has fallen from its extension. */
+    unsigned dgram_extended;
+
+    /* INV-6 visibility (an OVMX addition -- see scs_dgram.h). `no_quota` is the
+     * p. 2-42 discard made when dgram_buffers is 0 and the buffer goes back to
+     * the DFREEQ; the port-wide empty-DFREEQ discard is counted on the PDT. */
+    unsigned long dgram_delivered;
+    unsigned long dgram_discards_no_quota;
 };
 
 /*

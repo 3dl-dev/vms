@@ -138,6 +138,25 @@ target_include_directories(vmsscs_conn PUBLIC
 )
 target_link_libraries(vmsscs_conn PUBLIC vmsscs_cdt)
 
+# vms-b1d - SCA DATAGRAM BUFFER MANAGEMENT: the per-port Datagram Free Queue
+# (DFREEQ) and the per-connection datagram buffer count in the CDT (VAXcluster
+# Principles ch. 2 sec 2.8, pp. 2-42..2-43, 2-45). Pure local accounting: builds
+# no frame, parses no frame, changes no transmitted byte. Depends on vmsscs_cdt
+# for struct scs_cdt / struct scs_pdt.
+#
+# NOT flow control -- p. 2-42: "SCA does not provide a flow control mechanism
+# for the datagram service." Its whole observable behaviour is a SILENT DISCARD,
+# which is why every discard is counted and reported.
+#
+# LINKED into scsd_exe for the exit-summary report ONLY. No production caller
+# routes a datagram through scs_dgram_cdl_deliver(), so the reported figures are
+# zeros today -- see the reachability note in scs_dgram.h.
+add_library(vmsscs_dgram STATIC scs_dgram.c)
+target_include_directories(vmsscs_dgram PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_dgram PUBLIC vmsscs_cdt)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -145,7 +164,7 @@ target_include_directories(scsd_exe PRIVATE
 )
 # vms-dd5 links vmsscs_conn (and, transitively, vmsscs_cdt -- which until this
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

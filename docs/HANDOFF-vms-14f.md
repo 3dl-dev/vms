@@ -21,6 +21,14 @@ the hour.
 | disk **3.4 GB free, 98%** | **2.7 GB free, 99%.** Tighter than briefed. Still do not prune `vat-env-*`. |
 | PR #75 is open | **Merged** (`75f49dc`). PR #71, recorded here as "closed as refuted", was **fixed and merged** (`5dde28c`). |
 
+### Then round 9 continued, and finished the defects
+
+| | |
+|---|---|
+| "**two** real VMS defects remain" | **Zero.** `vms-e60` and `vms-82a` are fixed in the same PR as this revision. `vms-2f8` (F$IDENTIFIER's data source) and `vms-4c2` (AUTHORIZE's positive control) remain, but neither is a wrong-answer defect. |
+| `vms-e60` "the site set is nine sites in four files" | Confirmed and fixed, **plus two decimal literals** the enumeration missed: `DEFAULT_UIC_GROUP` and `next_uic_member()`'s floor. |
+| `vms-82a` "real executive work, not cheap" | Correct, and the expensive part was not the kernel change. It was that `kstat_to_ss()` carries **three defect-manifest controls**; deleting it naively would have meant deleting three defects, their record rows and lowering the floor — **the exact action the open `vms-d894` gate is about**. The controls were **repointed at the executive** instead: 42 defects, floor 42, every record row still valid, gate not prejudged. |
+
 ---
 
 ## 1. Execution pointer — start here

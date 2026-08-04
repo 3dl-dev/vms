@@ -19,6 +19,28 @@
 # checked in. This file generalises it: one MINIMAL injected defect per
 # executive facility, checked in, applied mechanically, run in CI.
 #
+# WHAT `coverage` AND `selftest` BELOW ACTUALLY CHECK, AND WHAT THEY DO NOT
+# (vms-659 -- read this before trusting either command's PASS lines)
+#
+# Both are STATIC. They check declarations the manifest (DEFECTS below) and
+# the tests/qemu suite SOURCES make about THEMSELVES -- names in a list,
+# glob patterns matched against other strings, `/* negctl: ... */` comment
+# anchors, literal assertion text -- entirely by string and glob matching.
+# NEITHER COMPILES NOR RUNS A SINGLE SUITE, AND NEITHER TOUCHES vms.ko OR
+# /dev/vms. (`selftest`'s per-defect loop is a partial exception: it does run
+# real sed(1) against a throwaway copy of the source tree and diffs the
+# result, so ITS claim that an injection "lands" is genuinely executed -- see
+# cmd_selftest's own header. That still proves nothing about a suite.)
+#
+# The claim that a named suite actually goes red, and that the exact
+# assertions this manifest lists are the ones that fire and no others, is
+# proven ONLY by tests/qemu/run_facility_negctl.sh: it builds vms.ko and the
+# suites, boots a real QEMU guest against /dev/vms, injects each defect one
+# at a time, and asserts the observed red set. THAT is the one gate in this
+# program that executes anything, and it runs in CI ONLY -- there is no
+# host-side equivalent. A "PASS" printed by `coverage` or `selftest` is a
+# claim about the manifest's internal consistency, not about the executive.
+#
 # THE METHOD RULE THIS FILE ENFORCES ON ITSELF
 #
 #   EVERY PROPERTY GETS ITS OWN MINIMAL MUTATION THAT TRIPS THAT PROPERTY AND
@@ -225,6 +247,33 @@
 #     following an anchor, up to the first `;`, to contain one of that defect's
 #     named assertion texts. It exists to catch an anchor parked in a comment
 #     block, not to parse C.
+#
+# vms-d894: THE FIRST BULLET ABOVE WAS THE WHOLE FINDING, AND NOTHING FLOORED
+# THE COUNT
+#
+# The anchor pairing floors CONSISTENCY (a DEFECTS entry and its anchor must
+# agree with each other); it was never a floor on the SIZE of DEFECTS, and
+# nothing was. MEASURED: deleting `kstat-cvtungrant-mismapped` -- its DEFECTS
+# line, its two case arms, and its one anchor, 20 lines across 2 files --
+# leaves `coverage` and `selftest` both exit 0, printing "all 41 defect(s)
+# anchored by 272 marker(s)" AS A PASS. A full greedy set-cover deletion
+# (cover size 12, so 30 of the 42 entries are redundant to it) was DERIVED
+# AND THEN EXECUTED, not just predicted: 1179 deleted lines across 13 files,
+# `coverage`/`selftest` still green throughout. (An earlier estimate of "~1600
+# lines across 26 files" for this same exercise was wrong on both numbers --
+# deleted per the standing rule rather than corrected in place; the figure
+# above is the one that was actually measured by running the deletion.)
+#
+# Section 6 of `coverage` (below) adds a derived, printed floor: DEFECTS must
+# have at least as many entries as tests/qemu/facility_defects_floor.txt
+# records. That file is NOT owned by an in-file deletion the way the anchor
+# pairing is -- shrinking DEFECTS without also editing it now fails. IT IS
+# STILL NOT TAMPER-PROOF: raising or lowering the floor file's number is one
+# more line in one more file, and lowering it to match a shrink still passes.
+# What changed is the price and its visibility -- 20 lines/2 files silently
+# before, now >=21 lines/3 files, one of which is a file whose only content is
+# the number somebody is choosing to lower. A disclosed, priced residual, not
+# a claimed closure.
 #
 # USAGE
 #   facility_defects.sh list
@@ -2920,33 +2969,42 @@ cmd_apply() {
 #      must be named by at least one defect's targets. Adding a facility file
 #      without a control turns this red.
 #   2. SUITE. Every derived tests/qemu/test_{kmod,syssvc}_*.c suite must be
-#      either (a) in some defect's suites_red, or (b) in SCOPE_OUT_SUITES with
-#      a stated reason. A suite covered by nothing is never proven capable of
-#      going red, and round 1 shipped two of those (the vmsfs pair) without
-#      saying so.
+#      either (a) NAMED by some defect's suites_red glob, or (b) in
+#      SCOPE_OUT_SUITES with a stated reason. A suite named by nothing has no
+#      declared attribution at all, and round 1 shipped two of those (the
+#      vmsfs pair) without saying so.
 #      A suite that appears ONLY in some defect's blind_suites USED TO satisfy
 #      this and print a `NOTE:`. It no longer does. Being declared blind is a
-#      record that nothing reddens the suite -- that is the definition of
+#      record that no glob names the suite -- that is the definition of
 #      uncovered, and printing it as a note is how the set-cover deletion
-#      measured in the header dropped two suites out of the proven set while
+#      measured in the header dropped two suites out of the named set while
 #      exiting 0. blind_suites keeps its other job (pinning a named suite GREEN
 #      under one defect); it is no longer a substitute for coverage.
 #   3. SCOPE CONSISTENCY. Nothing under SCOPE_OUT_UNIT_DIRS may be named by a
 #      defect: if it is, the scope statement is wrong and must be corrected
-#      rather than quietly outvoted by a control.
+#      rather than quietly outvoted by a declaration.
 #   4. ANCHORS. Every defect must be anchored, by a `/* negctl: <defect> */`
 #      comment, at an assertion in a suite source it is allowed to redden; and
-#      every anchor found in a suite source must name a live defect. This is
-#      the floor under the SIZE of the DEFECTS list, and it is the only check
-#      here whose universe comes from outside this file. See the header for
-#      exactly what it claims and what it does not.
+#      every anchor found in a suite source must name a live defect. This
+#      floors the PAIRING between the manifest and the suite sources -- a
+#      deletion confined to this one file cannot pass -- and its universe
+#      comes from outside this file (the suite sources). It does NOT floor the
+#      list's SIZE: deleting a defect's line, its two arms, AND its anchor
+#      together still passes, still prints a smaller number as PASS (vms-d894).
+#      See the header and section 6 below for the size floor.
 #   5. ARM AGREEMENT. Every defect must have exactly two `case` arms in this
 #      script (defect_field and apply_edit) and every arm must name a live
 #      defect. Deleting one line from DEFECTS and leaving forty lines of
 #      documented metadata behind is not a legitimate edit; neither is an arm
 #      for a defect nobody runs.
+#   6. COUNT FLOOR (vms-d894). DEFECTS must not have fewer entries than the
+#      number recorded in tests/qemu/facility_defects_floor.txt, a file this
+#      command does not itself write. NOT tamper-proof -- see section 6's own
+#      comment in the function body and the header for the price this buys.
 #
-# The PASS lines below name the exclusions explicitly, so a reader cannot take
+# None of the six is an execution claim. Read the header before trusting any
+# PASS line as more than "these declarations agree with each other". The PASS
+# lines below also name the exclusions explicitly, so a reader cannot take
 # them as a claim about the whole harness.
 # ---------------------------------------------------------------------------
 cmd_coverage() {
@@ -2984,7 +3042,7 @@ cmd_coverage() {
         echo "  tests/qemu/facility_defects.sh -- do not delete this check."
         _cov_rc=1
     else
-        echo "PASS: every src/kernel/*.c translation unit is named by a negative control"
+        echo "PASS: every src/kernel/*.c translation unit is named by some defect's targets declaration"
     fi
 
     # --- 3. scope consistency (checked before printing the exclusion) ----
@@ -3010,7 +3068,7 @@ cmd_coverage() {
                    | xargs -n1 basename | sed 's/\.c$//' | sort)
     _uncovered=""
     _blind_only=""
-    _n_proven=0
+    _n_named=0
     for _cov_s in $_cov_derived; do
         _hit=0
         for _cov_g in $_red_globs; do
@@ -3026,7 +3084,7 @@ cmd_coverage() {
                     echo "  The manifest says two things. Drop it from SCOPE_OUT_SUITES."
                     _cov_rc=1;;
             esac
-            _n_proven=$((_n_proven + 1))
+            _n_named=$((_n_named + 1))
             continue
         fi
         case " $SCOPE_OUT_SUITES " in
@@ -3038,20 +3096,22 @@ cmd_coverage() {
         _uncovered="$_uncovered $_cov_s"
     done
     if [ -n "$_uncovered" ]; then
-        echo "FAIL: derived suite(s) that NO negative control can turn red:$_uncovered"
-        echo "  A suite nothing can redden is never proven to assert anything. Give it a"
-        echo "  facility control, or add it to SCOPE_OUT_SUITES with a reason -- but do"
-        echo "  not leave it silent."
+        echo "FAIL: derived suite(s) NAMED BY NO defect's suites_red:$_uncovered"
+        echo "  A suite no glob names is not attributed to anything, so nothing here even"
+        echo "  claims it can go red. Give it a facility control, or add it to"
+        echo "  SCOPE_OUT_SUITES with a reason -- but do not leave it silent."
         _cov_rc=1
     else
-        echo "PASS: $_n_proven derived suite(s) are PROVEN able to go red by a control"
+        echo "PASS: $_n_named derived suite(s) are each NAMED by some defect's suites_red glob"
+        echo "  (a STRING MATCH against the manifest's own attribution claim -- not an"
+        echo "   execution. See the header: only run_facility_negctl.sh, in CI, executes.)"
     fi
     # A suite that appears ONLY as somebody's blind_suites is declared and
-    # tracked, but nothing in this manifest has ever turned it red -- so its
-    # assertions are still unproven. That is not coverage, and until vms-279 it
-    # was printed as a NOTE and passed.
+    # tracked, but no defect's suites_red glob names it -- so nothing here
+    # even claims its assertions can fire. That is not coverage, and until
+    # vms-279 it was printed as a NOTE and passed.
     if [ -n "$_blind_only" ]; then
-        echo "FAIL: suite(s) declared blind but never reddened by ANY control:$_blind_only"
+        echo "FAIL: suite(s) declared blind but named by no defect's suites_red:$_blind_only"
         echo "  A blind declaration records that a suite does not catch one defect. A"
         echo "  suite that no defect catches is UNCOVERED, however many defects declare"
         echo "  it blind. Give it a control that names an assertion in it, or move it to"
@@ -3136,23 +3196,27 @@ cmd_coverage() {
     fi
     if [ -n "$_unanchored" ]; then
         echo "FAIL: defect(s) with NO /* negctl: ... */ anchor in any suite source:$_unanchored"
-        echo "  Every control has to be findable AT the assertion it names, so that the"
-        echo "  size of this list is floored by the suite sources rather than by nothing."
+        echo "  Every entry has to be findable AT the assertion it names, so that a"
+        echo "  deletion here alone (this file only) cannot pass -- the suite source"
+        echo "  has to change too. That is a floor on PAIRING, not on the list's SIZE;"
+        echo "  see the header (vms-d894) and section 6 below for the size floor."
         echo "  Add the anchor above the CHECK() its require_fail names."
         _cov_rc=1; _anch_rc=1
     fi
     if [ -n "$_unanch_suites" ]; then
         echo "FAIL: in-scope suite(s) with NO anchor at all:$_unanch_suites"
-        echo "  No control names an assertion in these, so nothing here proves they can"
-        echo "  fail -- being matched by somebody's suites_red glob is a permission, not"
-        echo "  a measurement."
+        echo "  No defect names an assertion in these, so nothing here even claims they"
+        echo "  can fail -- being matched by somebody's suites_red glob is a permission,"
+        echo "  not a measurement."
         _cov_rc=1; _anch_rc=1
     fi
     if [ "$_anch_rc" -eq 0 ]; then
         echo "PASS: all $(echo $DEFECTS | wc -w) defect(s) anchored by $_n_anch marker(s)" \
              "across $_n_anch_suites in-scope suite source(s)"
-        echo "  (this floors the LIST AGAINST A ONE-FILE EDIT ONLY -- deleting a defect"
-        echo "   and its anchors together still passes. See the header.)"
+        echo "  (this floors PAIRING against a ONE-FILE EDIT ONLY -- deleting a defect"
+        echo "   and its anchors together still shrinks the list and still passes THIS"
+        echo "   check. It does not floor the list's SIZE; see section 6 below, priced"
+        echo "   honestly rather than claimed closed -- vms-d894.)"
     fi
 
     # --- 5. the two case blocks must agree with the list -----------------
@@ -3180,6 +3244,47 @@ cmd_coverage() {
         fi
     else
         echo "FAIL: cannot read \$SELF ($SELF) to check the case arms against DEFECTS."
+        _cov_rc=1
+    fi
+
+    # --- 6. count floor (vms-d894) ----------------------------------------
+    # None of sections 1-5 floors the SIZE of DEFECTS: a defect's line, its
+    # two arms, and its one anchor can all be deleted together (20 lines
+    # across 2 files, MEASURED) and every check above still passes, printing
+    # a smaller number as a PASS. This section adds a floor sourced from a
+    # file this function does not itself hold the pen for --
+    # tests/qemu/facility_defects_floor.txt -- so a shrink below the recorded
+    # floor now also requires a THIRD file to change, in a diff whose only
+    # content is the number being lowered.
+    #
+    # NOT TAMPER-PROOF (see the header, vms-d894): the floor file can be
+    # edited in the same commit that shrinks DEFECTS. What this buys is that
+    # the edit is no longer silent -- raising the price from 20 lines/2 files
+    # to >=21 lines/3 files, one of which has no other job. A disclosed,
+    # priced residual, not a claimed closure.
+    _floor_file="$(dirname "$SELF")/facility_defects_floor.txt"
+    _n_defects=$(echo $DEFECTS | wc -w)
+    if [ -f "$_floor_file" ]; then
+        _floor=$(grep -Ev '^[[:space:]]*(#|$)' "$_floor_file" | tail -1 | tr -d '[:space:]')
+        case "$_floor" in
+            ''|*[!0-9]*)
+                echo "FAIL: $_floor_file's floor value is not a bare integer: '$_floor'"
+                _cov_rc=1;;
+            *)
+                if [ "$_n_defects" -lt "$_floor" ]; then
+                    echo "FAIL: DEFECTS has $_n_defects entries, below the floor of $_floor" \
+                         "recorded in $_floor_file."
+                    echo "  This floor is a derived count check, not a claim of tamper-proofing"
+                    echo "  (vms-d894): raising or lowering it is one edit to one more file. What"
+                    echo "  it buys is that a shrink is no longer silent -- lower it only for a"
+                    echo "  tracked, intentional removal, in the same change that explains why."
+                    _cov_rc=1
+                else
+                    echo "PASS: $_n_defects defect(s) >= floor $_floor recorded in $_floor_file"
+                fi;;
+        esac
+    else
+        echo "FAIL: $_floor_file is missing -- the count floor (vms-d894) has nothing to read."
         _cov_rc=1
     fi
 
@@ -3359,9 +3464,11 @@ cmd_selftest() {
     cmd_coverage "$_st_root" "$_st_tests" || _st_rc=1
 
     if [ "$_st_rc" -eq 0 ]; then
-        echo "PASS: every negative control injects into the current tree, its"
-        echo "      injection-landed check demonstrably fires when it does not, and"
-        echo "      every assertion it names is one a suite can actually print."
+        echo "PASS: every defect's sed mutation injects into the current tree (executed,"
+        echo "      real sed + cmp against a throwaway copy), its injection-landed check"
+        echo "      demonstrably fires on a no-op re-apply, and every assertion it names"
+        echo "      appears literally in a suite source (a text search, not a run --"
+        echo "      only run_facility_negctl.sh, in CI, actually prints it)."
     fi
     return $_st_rc
 }

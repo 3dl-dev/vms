@@ -603,16 +603,18 @@ jobs:
       # the half a deleter does not own; the committed file alone is a
       # snapshot, exactly like tracking/rd-citations.tsv.
       #
-      # FACILITY_NEGCTL_REQUIRE_RECORD: set to 1 to make a MISSING committed
-      # record red. It is 0 while the tree has none, because the first record
-      # can only be produced here -- the driver prints it in full and uploads
-      # it below. Flip it to 1 in the same change that commits the first
-      # record; a missing record is otherwise only a loud NOT MEASURED.
+      # FACILITY_NEGCTL_REQUIRE_RECORD: 1 makes a MISSING committed record red.
+      # It was 0 only while the tree had none -- the first record can only be
+      # produced here. That record is now committed
+      # (tests/qemu/facility_negctl_observed.tsv, emitted by run
+      # 30940272725 at tree-commit 6ffde90, positive-control pass, 42 RUN rows
+      # and 272 observed failing assertions), so this is 1 and deleting the
+      # record is red rather than a loud NOT MEASURED.
       - name: Every executive facility has a control that turns CI red and NAMES it
         env:
           CONTAINER_ENGINE: docker
           FACILITY_NEGCTL_RECORD_OUT: ${{ runner.temp }}/facility_negctl_observed.tsv
-          FACILITY_NEGCTL_REQUIRE_RECORD: 0
+          FACILITY_NEGCTL_REQUIRE_RECORD: 1
         run: tests/qemu/run_facility_negctl.sh
 
       # Uploaded even on failure: a run that went red is exactly when someone

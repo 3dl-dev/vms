@@ -12,10 +12,14 @@
  * HOW. This translation unit #includes src/vmsscs/scsd.c with SCSD_UNIT_TEST
  * defined. That does exactly two things to the daemon source (both guarded, both
  * absent from the shipped binary):
- *   1. send_frame_to() captures the frame into scsd_test_last_frame/_dst instead
- *      of calling sendto() on an AF_PACKET socket that needs CAP_NET_RAW. The
- *      frame handed to it is built by the REAL scsd.c senders from the REAL
- *      peer_state accessors -- nothing is re-derived here.
+ *   1. send_frame_raw() captures the frame into scsd_test_last_frame/_dst
+ *      instead of calling sendto() on an AF_PACKET socket that needs
+ *      CAP_NET_RAW, and counts it in scsd_test_frames. The frame handed to it
+ *      is built by the REAL scsd.c senders from the REAL peer_state accessors
+ *      -- nothing is re-derived here. Because the seam is at the TRANSPORT,
+ *      below scsd.c's send_frame_vc() choke point, scsd_test_frames is the
+ *      total number of frames that would actually have left the interface --
+ *      which is what test_a_broken_circuit_carries_no_traffic() asserts on.
  *   2. the daemon's main() is RENAMED (not compiled out) so this file can supply
  *      its own and every static helper is still compiled as the daemon compiles it.
  * Everything under test -- peer_find_or_add, ps_learn_sys_addr, ps_sys_addr,
@@ -141,6 +145,14 @@ static void world_init(struct world *w)
 static const uint8_t our_hw_mac[6] = {0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc};
 static const uint8_t our_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x41, 0x05};
 
+/* The stdout/stderr capture helpers, defined with the rx harness far below.
+ * Forward-declared because the address-plumbing cases up here now have to
+ * assert that a REFUSED send says why (INV-6), and the refusal goes to stderr. */
+static void rxlog_reset(void);
+static int  rxlog_has(const char *needle);
+static void log_capture_begin(void);
+static void log_capture_end(void);
+
 /*
  * Drive the REAL scsd.c joiner CONNECT-REQUEST sender for a freshly discovered
  * peer with the given port address and learned System Address, and copy out the
@@ -156,6 +168,17 @@ static size_t capture_joiner_request(const uint8_t mac[6], const uint8_t sysid[6
         return 0;
     }
     ps_learn_sys_addr(&w.cfg, ps, sysid);
+    /* vms-abc: OPEN the named circuit. A CONNECT-REQUEST is a send, and since
+     * this item every send consults the Path Block, so a CLOSED circuit now
+     * produces no frame to capture. NOTE THIS IS A REAL TIGHTENING, not just a
+     * fixture edit: before, only the CONFIG_SYS *selection* path (named_vc ==
+     * NULL) checked for OPEN, so a caller that NAMED a closed circuit got a
+     * frame anyway -- p. 2-31 forbids that for a named path exactly as much as
+     * for a selected one. Opening here restores what these captures are about
+     * (which bytes of the frame follow which learned address) without asserting
+     * anything less. */
+    CHECK(scs_pb_open(&w.cfg, ps->pb) != SCS_OPEN_ERROR,
+          "the capture fixture's circuit did not open");
     scsd_test_frames = 0;
     scsd_test_last_len = 0;
     /* vms-398: these address-plumbing captures NAME the circuit (ps->pb), which
@@ -265,8 +288,30 @@ static void test_port_address_and_system_address_stay_distinct(void)
     }
 }
 
-/* A peer whose System Address is not learned yet emits zeros there -- byte for
- * byte what the zero-initialized per-peer field it replaced produced. */
+/*
+ * A peer whose System Address is not learned yet HAS ZEROS THERE -- byte for
+ * byte what the zero-initialized per-peer field it replaced produced.
+ *
+ * vms-abc CHANGED WHAT THE LAST TWO CHECKS CAN ASSERT, and the reason is
+ * structural rather than cosmetic, so it is written down instead of quietly
+ * edited. This test used to drive send_joiner_connect_request() and assert the
+ * EMITTED frame carried a zero peer-logical. That emission is now unreachable,
+ * and unreachable by construction, not by luck:
+ *   - every SCS-layer send consults the Path Block (send_frame_vc), and
+ *   - a Path Block cannot be OPEN without a System Block (scs_pb_open returns
+ *     SCS_OPEN_ERROR on pb->sb == NULL), and
+ *   - the only thing that attaches an SB is ps_learn_sys_addr().
+ * So "no System Address learned" now IMPLIES "no OPEN circuit" implies "no
+ * frame". The property the old assertion protected -- OVMX must not put a
+ * fabricated or zero peer-logical on the wire -- is satisfied more strongly:
+ * nothing goes on the wire at all, and the refusal is logged.
+ *
+ * WHAT IS STILL ASSERTED, so this is not coverage traded away: the zero
+ * peer-logical VALUE is asserted at its source (ps_sys_addr), the refusal is
+ * asserted to happen, and the refusal is asserted to be LOUD (INV-6). The
+ * negative control for the guard itself is the mutation record on
+ * send_frame_vc: removing its `vc_state == SCS_VC_OPEN` term reds this case.
+ */
 static void test_undiscovered_system_address_is_zero(void)
 {
     struct world w;
@@ -284,12 +329,23 @@ static void test_undiscovered_system_address_is_zero(void)
     CHECK(memcmp(ps_port_addr(ps), mac, 6) == 0, "port address not recorded");
 
     scsd_test_frames = 0;
-    CHECK(send_joiner_connect_request(7, 1, &w.cfg, ps, ps->pb, our_hw_mac, our_logical) == 1,
-          "sender refused to build a frame");
-    if (peer_logical_offset > 0 && scsd_test_frames == 1) {
-        CHECK(is_zero6(scsd_test_last_frame + peer_logical_offset),
-              "unlearned peer emitted a non-zero peer-logical");
-    }
+    unsigned long refused_before = vc_sends_refused;
+    rxlog_reset();
+    log_capture_begin();
+    int sent = send_joiner_connect_request(7, 1, &w.cfg, ps, ps->pb,
+                                           our_hw_mac, our_logical);
+    log_capture_end();
+    CHECK(sent == 0,
+          "the sender built a CONNECT-REQUEST for a peer with no System Address"
+          " -- its peer-logical field could only have been zeros");
+    CHECK(scsd_test_frames == 0,
+          "%u frame(s) reached the wire for a peer with no OPEN circuit",
+          scsd_test_frames);
+    CHECK(vc_sends_refused == refused_before + 1,
+          "the choke point recorded %lu refusals, expected 1",
+          vc_sends_refused - refused_before);
+    CHECK(rxlog_has("SCSD-E-NOVC"),
+          "the refusal was SILENT (CLAUDE.md rule 9 / INV-6)");
 }
 
 /* Peer slots stay one-per-port-address, and a full table still answers "no room"
@@ -394,8 +450,12 @@ static void test_shared_sb_aliases_the_peer_logical(void)
  *   1. it is UNREACHABLE at the shipped pool sizes -- a full peer table plus the
  *      local node's own SB (the exact allocation SCSD's main() performs) leaves
  *      every peer with a correctly recorded address;
- *   2. if it were reachable it is HONEST, not silent -- the frame degrades to a
- *      zero peer-logical and SCSD logs SCSD-E-NOSB (CLAUDE.md rule 9 / INV-6).
+ *   2. if it were reachable it is HONEST, not silent -- SCSD logs SCSD-E-NOSB
+ *      on the failed learn, and since vms-abc it then sends NOTHING rather than
+ *      degrading the frame to a zero peer-logical, logging SCSD-E-NOVC for that
+ *      too (CLAUDE.md rule 9 / INV-6). The claim in this line used to end at
+ *      "the frame degrades"; it no longer can, and the last block of this test
+ *      is the measurement that says so.
  */
 static void test_sb_exhaustion_is_visible_and_unreachable(void)
 {
@@ -476,15 +536,32 @@ static void test_sb_exhaustion_is_visible_and_unreachable(void)
     CHECK(is_zero6(ps_sys_addr(ps)),
           "exhausted SB pool still produced a system address");
 
+    /* vms-abc: THE DEGRADED FRAME IS NO LONGER EMITTED AT ALL, which makes
+     * claim (2) above stronger than it was, not weaker. The zero peer-logical
+     * used to go on the wire with an SCSD-E-NOSB beside it -- honest, but a
+     * degraded frame all the same. Now: no SB means the Path Block can never
+     * open (scs_pb_open returns SCS_OPEN_ERROR on pb->sb == NULL), and no OPEN
+     * circuit means send_frame_vc() refuses, so the exhausted-pool peer gets
+     * SILENCE plus TWO loud log lines. Both are asserted; nothing is inferred.
+     * (SCSD-E-NOSB is asserted above, on the learn attempt.) */
     scsd_test_frames = 0;
-    CHECK(send_joiner_connect_request(7, 1, &x.cfg, ps, ps->pb, our_hw_mac, our_logical) == 1,
-          "sender refused to build a frame");
-    if (peer_logical_offset > 0 && scsd_test_frames == 1) {
-        CHECK(is_zero6(scsd_test_last_frame + peer_logical_offset),
-              "degraded peer did not emit a zero peer-logical");
-        CHECK(memcmp(scsd_test_last_dst, mac, 6) == 0,
-              "degraded peer lost its destination port address too");
-    }
+    unsigned long refused_before = vc_sends_refused;
+    rxlog_reset();
+    log_capture_begin();
+    int sent = send_joiner_connect_request(7, 1, &x.cfg, ps, ps->pb,
+                                           our_hw_mac, our_logical);
+    log_capture_end();
+    CHECK(sent == 0,
+          "the SB-exhausted peer still got a CONNECT-REQUEST built for it --"
+          " its peer-logical field could only have been zeros");
+    CHECK(scsd_test_frames == 0,
+          "%u frame(s) reached the wire for an SB-exhausted peer, whose Path"
+          " Block cannot be OPEN", scsd_test_frames);
+    CHECK(vc_sends_refused == refused_before + 1,
+          "the choke point recorded %lu refusals, expected 1",
+          vc_sends_refused - refused_before);
+    CHECK(rxlog_has("SCSD-E-NOVC"),
+          "the refusal was SILENT (CLAUDE.md rule 9 / INV-6)");
 }
 
 /*
@@ -1484,6 +1561,7 @@ static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
     vc_breaks = 0;
     vc_conns_broken = 0;
     sysap_vc_loss_notifications = 0;
+    vc_sends_refused = 0;
     memcpy(r->hw_mac, hw_mac, 6);
     memcpy(r->logical, logical, 6);
     memcpy(r->nonce, lab_nonce, 4);
@@ -1718,6 +1796,13 @@ static void test_captured_member_connect_drives_the_machine(void)
 {
     struct rxworld r;
     rxworld_init(&r, vax2_hw_mac, our_logical);
+    /* vms-abc: the same fixture correction the four phase-4 fixtures already
+     * carry -- the wire never delivers a phase-4 0x4b to a circuit that is not
+     * already OPEN (spec sec 4g phase 2 precedes phase 4, 41/41 lab captures),
+     * and since every SCS-layer send now goes through send_frame_vc() the
+     * daemon correctly refuses to answer one that does. Opening the circuit
+     * here makes the fixture match the capture; nothing below is relaxed. */
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
 
     rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
 
@@ -2253,6 +2338,252 @@ static void test_seq_gap_kill_switch_through_the_daemon(void)
           "GATED: the replay produced another directory CONNECT-RESPONSE"
           " (%ld -> %ld)", dir_resp_before, r.rx.dir_conn_resp_sent);
     CHECK(ps->dir_connected == 1, "GATED: the replay disturbed the bound directory");
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+}
+
+/* ==========================================================================
+ * vms-abc: "A BROKEN VIRTUAL CIRCUIT CARRIES NO TRAFFIC" -- ASSERTED ON THE
+ * TOTAL FRAME COUNT, NOT ON ONE COUNTER PER PATH.
+ *
+ * WHY THIS TEST EXISTS AND WHY IT IS SHAPED LIKE THIS. The first version of
+ * this item guarded ONE send path (the SCS$DIRECTORY CONNECT-RESPONSE) and
+ * asserted ONE counter (dir_conn_resp_sent). Re-measuring the SAME broken
+ * circuit then found three more paths transmitting on it, and the per-path
+ * assertion could not see any of them:
+ *   - replaying cap_dir_connect_req moved credit_sent 3 -> 4 (a real 60-byte
+ *     0x48 SCS credit-return, ethertype 0x6007, dst aa:00:04:00:01:04, opcode
+ *     0x48 fmt 0x13) while dir_conn_resp_sent correctly stayed put;
+ *   - replaying cap_vaxcluster_connect_req moved connect_resp_sent 1 -> 2 AND
+ *     credit_sent 2 -> 3 -- TWO frames, the last a 124-byte opcode 0x4b -- and
+ *     re-armed ps->connected 0 -> 1, putting the member CDT back in ACCEPT
+ *     SENT with remote_conid re-learned, which in turn re-opened the 0x81
+ *     CM-response path;
+ *   - the SCS$DIR_LOOKUP reply was never gated at all.
+ * p. 2-31 is not a rule about directory replies. So this asserts the property
+ * p. 2-31 actually states -- NOTHING leaves -- by measuring scsd_test_frames,
+ * the count of frames handed to the TRANSPORT (send_frame_raw), below the
+ * choke point. A send path added tomorrow that consults nothing reds this test
+ * without anyone having to think of its counter.
+ *
+ * WHICH FRAMES ARE REPLAYED: every capture in this file that the fixture's PEER
+ * (vax1, aa:00:04:00:01:04) sends to the fixture's IDENTITY (vax2,
+ * 08:00:2b:78:56:b9) -- which is both of the frames two_connections_on_one_
+ * circuit() feeds. The other captures are excluded for stated reasons, not
+ * omitted: cap_connect_rsp is addressed TO vax1 (the daemon wearing vax2 never
+ * sees it, and the dispatch's unicast-to-us gate drops it before any sender);
+ * cap_ovmx_joiner_* are from the ovmx-760 capture and carry a different pair of
+ * identities entirely; and cap_vax1_start_round0 / _stack_round1 / _ack_round2
+ * are 0x41 VC-FORMATION frames, which scsd.c's SEND SITE TABLE names as one of
+ * the two justified exemptions -- replying to a START on a non-OPEN circuit is
+ * how a circuit re-forms, so demanding silence for them would be demanding a
+ * permanently dead node.
+ * ========================================================================== */
+static const struct {
+    const uint8_t *frame;
+    size_t         len;
+    const char    *name;
+} peer_captures[] = {
+    { cap_dir_connect_req, sizeof(cap_dir_connect_req),
+      "SCS$DIRECTORY CONNECT-REQUEST (pcap #30)" },
+    { cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req),
+      "VMS$VAXcluster CONNECT-REQUEST (pcap #48)" },
+};
+
+/* Feed every peer capture once, in wire order. */
+static void replay_every_peer_capture(struct rxworld *r)
+{
+    for (size_t i = 0; i < sizeof(peer_captures) / sizeof(peer_captures[0]); i++) {
+        rx_feed(r, peer_captures[i].frame, peer_captures[i].len);
+    }
+}
+
+static void test_a_broken_circuit_carries_no_traffic(void)
+{
+    /* ===================== THE MEASUREMENT (break ON) ===================== */
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    struct rxworld r;
+    struct peer_state *ps = two_connections_on_one_circuit(&r);
+    if (ps == NULL) {
+        return;
+    }
+    uint8_t gap[124];
+    make_gap_frame(gap, 12); /* recv_seq 7 -> 12: four messages missing */
+    rx_feed(&r, gap, sizeof(gap));
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "PRECONDITION: the circuit is %s, not CLOSED -- everything below"
+          " would pass for the wrong reason", scs_vc_state_name(ps->pb->vc_state));
+
+    /* The fixture ALREADY put frames on the wire, so a zero delta below is a
+     * statement about the replays and not about a daemon that never transmits
+     * at all. Pin that here rather than trusting it. */
+    unsigned frames_before = scsd_test_frames;
+    CHECK(frames_before > 0,
+          "PRECONDITION: the fixture emitted %u frames -- with none, 'the replay"
+          " emitted nothing' measures nothing", frames_before);
+    long dir_before     = r.rx.dir_conn_resp_sent;
+    long lookup_before  = r.rx.dir_lookup_sent;
+    long conn_before    = r.rx.connect_resp_sent;
+    long connreq_before = r.rx.connect_req_sent;
+    long credit_before  = r.rx.credit_sent;
+    long cm_before      = r.rx.cm_response_sent;
+    long cmcfg_before   = r.rx.cm_config_frames;
+    long retx_before    = r.rx.retransmit_sent;
+    long start_before   = r.rx.start_sent;
+    long ack_before     = r.rx.start_ack_sent;
+    long dir_sent_before = r.rx.directed_sent;
+    long pad_before     = r.rx.padded_sent;
+    uint32_t remote_conid_before = ps->remote_conid;
+    unsigned long refused_before = vc_sends_refused;
+
+    replay_every_peer_capture(&r);
+
+    /* --- THE ASSERTION THAT CANNOT BE OUTFLANKED BY A NEW SEND PATH. --- */
+    CHECK(scsd_test_frames == frames_before,
+          "OVMX put %u frame(s) on the wire replaying captured traffic into a"
+          " CLOSED circuit (total %u -> %u). p. 2-31: a broken virtual circuit"
+          " carries NO traffic -- not 'no directory replies'. The last frame was"
+          " %zu bytes to %02x:%02x:%02x:%02x:%02x:%02x",
+          scsd_test_frames - frames_before, frames_before, scsd_test_frames,
+          scsd_test_last_len, scsd_test_last_dst[0], scsd_test_last_dst[1],
+          scsd_test_last_dst[2], scsd_test_last_dst[3], scsd_test_last_dst[4],
+          scsd_test_last_dst[5]);
+
+    /* --- and the per-path counters, named, so a failure says WHICH path. --- */
+    CHECK(r.rx.dir_conn_resp_sent == dir_before,
+          "SCS$DIRECTORY CONNECT-RESPONSE sent on a broken circuit (%ld -> %ld)",
+          dir_before, r.rx.dir_conn_resp_sent);
+    CHECK(r.rx.dir_lookup_sent == lookup_before,
+          "SCS$DIR_LOOKUP response sent on a broken circuit (%ld -> %ld)",
+          lookup_before, r.rx.dir_lookup_sent);
+    CHECK(r.rx.connect_resp_sent == conn_before,
+          "VMS$VAXcluster CONNECT-RESPONSE sent on a broken circuit (%ld -> %ld)",
+          conn_before, r.rx.connect_resp_sent);
+    CHECK(r.rx.connect_req_sent == connreq_before,
+          "joiner CONNECT-REQUEST sent on a broken circuit (%ld -> %ld)",
+          connreq_before, r.rx.connect_req_sent);
+    CHECK(r.rx.credit_sent == credit_before,
+          "0x48 credit-return sent on a broken circuit (%ld -> %ld)",
+          credit_before, r.rx.credit_sent);
+    CHECK(r.rx.cm_response_sent == cm_before,
+          "0x81 CM response sent on a broken circuit (%ld -> %ld)",
+          cm_before, r.rx.cm_response_sent);
+    CHECK(r.rx.cm_config_frames == cmcfg_before,
+          "add-member config burst sent on a broken circuit (%ld -> %ld)",
+          cmcfg_before, r.rx.cm_config_frames);
+    CHECK(r.rx.retransmit_sent == retx_before,
+          "CONNECT-REQUEST retransmit sent on a broken circuit (%ld -> %ld)",
+          retx_before, r.rx.retransmit_sent);
+    /* The two EXEMPT families must also stay put here -- not because they are
+     * gated (they are not), but because none of the replayed frames is a 0x41
+     * or a HELLO. If one of these ever moves, the replay set drifted and the
+     * exemption argument above no longer describes what this test feeds. */
+    CHECK(r.rx.start_sent == start_before && r.rx.start_ack_sent == ack_before,
+          "a replayed capture reached the VC-FORMATION sender (start %ld -> %ld,"
+          " ack %ld -> %ld) -- the replay set is not what this test documents",
+          start_before, r.rx.start_sent, ack_before, r.rx.start_ack_sent);
+    CHECK(r.rx.directed_sent == dir_sent_before && r.rx.padded_sent == pad_before,
+          "a replayed capture reached a HELLO sender (directed %ld -> %ld,"
+          " padded %ld -> %ld) -- the replay set is not what this test documents",
+          dir_sent_before, r.rx.directed_sent, pad_before, r.rx.padded_sent);
+
+    /* --- the STATE must not re-arm either. A silent re-bind is how the 0x81
+     * path came back to life the last time. --- */
+    CHECK(ps->connected == 0 && ps->dir_connected == 0 && ps->joiner_connected == 0,
+          "a replay re-armed a bound-connection flag on a CLOSED circuit"
+          " (connected=%d dir=%d joiner=%d)",
+          ps->connected, ps->dir_connected, ps->joiner_connected);
+    CHECK(ps->remote_conid == remote_conid_before,
+          "a replay re-learned the peer's Con.ID on a CLOSED circuit"
+          " (0x%08X -> 0x%08X)", remote_conid_before, ps->remote_conid);
+    CHECK(scs_conn_state_of(ps->cdt_member) == SCS_CONN_CLOSED,
+          "a replay moved the member connection to %s on a CLOSED circuit",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_member)));
+    CHECK(scs_conn_state_of(ps->cdt_dir) == SCS_CONN_CLOSED,
+          "a replay moved the directory connection to %s on a CLOSED circuit",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_dir)));
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "the replays moved the circuit to %s", scs_vc_state_name(ps->pb->vc_state));
+
+    /* --- NOT VACUOUS: the replays DID reach senders, and were refused there.
+     * Without this, a dispatch that returned early for an unrelated reason
+     * would satisfy every assertion above. --- */
+    CHECK(vc_sends_refused > refused_before,
+          "the choke point refused nothing (%lu -> %lu) -- the replays never"
+          " reached a sender, so 'no frames went out' proves nothing",
+          refused_before, vc_sends_refused);
+    /* --- and the refusal is announced ONCE per circuit, not once per frame.
+     * The daemon re-enters these paths at the peer's ~1 Hz HELLO cadence; the
+     * count, not the log, is what carries the volume. --- */
+    CHECK(rxlog_count("SCSD-E-NOVC") == 1,
+          "SCSD-E-NOVC was logged %u times for %lu refusals on ONE circuit --"
+          " it must be latched to one line per break (INV-6 wants it said, not"
+          " repeated)", rxlog_count("SCSD-E-NOVC"),
+          vc_sends_refused - refused_before);
+    CHECK(rxlog_has("p. 2-31"),
+          "the refusal does not cite the rule it is enforcing");
+
+    /* --- THE LATCH IS PER BREAK, NOT PER PROCESS. A circuit that re-opens and
+     * breaks AGAIN must announce it again; a latch that is never cleared turns
+     * the second outage silent, which is the same INV-6 failure as never
+     * logging at all. Re-open through the production p. 2-21 transition, break
+     * it a second time, and demand a second line. --- */
+    {
+        unsigned novc_after_first = rxlog_count("SCSD-E-NOVC");
+        scsd_vc_on_open(&r.vc_ctx, ps);
+        CHECK(ps->pb->vc_state == SCS_VC_OPEN,
+              "the circuit did not re-open (%s) -- the re-break below would"
+              " measure nothing", scs_vc_state_name(ps->pb->vc_state));
+        unsigned broken = scs_vc_break(&ps->vc, ps->pb, SCS_VC_BREAK_SEQ_GAP, stdout);
+        (void)broken;
+        CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+              "the circuit did not re-break (%s)", scs_vc_state_name(ps->pb->vc_state));
+        replay_every_peer_capture(&r);
+        CHECK(rxlog_count("SCSD-E-NOVC") == novc_after_first + 1,
+              "the SECOND break was SILENT: SCSD-E-NOVC count %u -> %u, expected"
+              " one more line. scsd_vc_on_open() must clear the per-circuit"
+              " latch, or an outage after a recovery says nothing (INV-6)",
+              novc_after_first, rxlog_count("SCSD-E-NOVC"));
+    }
+
+    /* ============ THE MATCHED CONTROL (identical replays, break OFF) ========
+     * Same fixture, same gap frame, same replay set, OVMX_NO_VC_BREAK=1. The
+     * circuit stays OPEN, so the replays MUST put frames on the wire. That is
+     * what makes the zero above a measurement of the break rather than of a
+     * replay set that reaches nothing. */
+    (void)setenv(SCS_VC_NO_BREAK_ENV, "1", 1);
+    struct rxworld g;
+    struct peer_state *gps = two_connections_on_one_circuit(&g);
+    if (gps == NULL) {
+        (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+        return;
+    }
+    uint8_t ggap[124];
+    make_gap_frame(ggap, 12);
+    rx_feed(&g, ggap, sizeof(ggap));
+    CHECK(gps->pb->vc_state != SCS_VC_CLOSED,
+          "GATED: the circuit was closed anyway (%s)",
+          scs_vc_state_name(gps->pb->vc_state));
+
+    unsigned gframes_before = scsd_test_frames;
+    long gconn_before = g.rx.connect_resp_sent;
+    unsigned long grefused_before = vc_sends_refused;
+
+    replay_every_peer_capture(&g);
+
+    CHECK(scsd_test_frames > gframes_before,
+          "GATED: the replay set put %u frames on an OPEN circuit -- it reaches"
+          " no sender at all, so the CLOSED-circuit zero above is vacuous",
+          scsd_test_frames - gframes_before);
+    CHECK(g.rx.connect_resp_sent > gconn_before,
+          "GATED: replaying the captured VMS$VAXcluster CONNECT-REQUEST on an"
+          " OPEN circuit produced no CONNECT-RESPONSE (%ld -> %ld) -- that path"
+          " is the one that re-armed ps->connected, and it must be LIVE here",
+          gconn_before, g.rx.connect_resp_sent);
+    CHECK(vc_sends_refused == grefused_before,
+          "GATED: the choke point refused %lu send(s) on an OPEN circuit",
+          vc_sends_refused - grefused_before);
+    CHECK(!rxlog_has("SCSD-E-NOVC"),
+          "GATED: SCSD-E-NOVC was logged for an OPEN circuit");
     (void)unsetenv(SCS_VC_NO_BREAK_ENV);
 }
 
@@ -3386,6 +3717,7 @@ int main(void)
     /* vms-abc: the p. 2-31 message guarantees, through the same dispatch. */
     test_seq_gap_breaks_the_vc_and_notifies_both_sysaps();
     test_seq_gap_kill_switch_through_the_daemon();
+    test_a_broken_circuit_carries_no_traffic();
     test_retransmit_does_not_break_the_vc();
     test_delivery_failure_breaks_the_vc_through_the_daemon();
     test_delivery_failure_kill_switch_through_the_daemon();

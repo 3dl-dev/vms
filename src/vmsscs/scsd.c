@@ -326,6 +326,14 @@ struct peer_state {
     struct scs_cdt *cdt_dir;    /* SCS$DIRECTORY,   local Con.ID = SCS_DIR_OVMX_CONID */
     struct scs_cdt *cdt_member; /* VMS$VAXcluster the MEMBER opened, local = OVMX_LOCAL_CONID */
     struct scs_cdt *cdt_joiner; /* VMS$VAXcluster OVMX opened,       local = OVMX_JOINER_CONID */
+    /* vms-abc: has send_frame_vc() already announced that THIS circuit carries
+     * no traffic? The refusal is a per-circuit fact, not a per-frame one, and
+     * the daemon re-enters the refusing paths at the peer's HELLO cadence
+     * (~1 Hz), so logging every refusal buries the run in identical lines.
+     * Cleared by scsd_vc_on_open() so a circuit that breaks AGAIN says so
+     * again. Every refusal is still COUNTED in vc_sends_refused and reported
+     * by scsd_exit_summary(). */
+    int      novc_logged;
 };
 
 static int mac_eq(const uint8_t *a, const uint8_t *b)
@@ -512,6 +520,7 @@ static unsigned long vc_seq_gaps = 0;    /* sequentiality failures detected */
 static unsigned long vc_breaks = 0;      /* circuits explicitly broken */
 static unsigned long vc_conns_broken = 0;/* connections broken with them */
 static unsigned long sysap_vc_loss_notifications = 0; /* SYSAP handlers actually invoked */
+static unsigned long vc_sends_refused = 0; /* frames send_frame_vc() would not transmit */
 
 /*
  * vms-abc: THE SYSAP's VC-LOSS ERROR HANDLER, and the first one OVMX has ever
@@ -587,16 +596,25 @@ static unsigned long sysap_vc_loss_notifications = 0; /* SYSAP handlers actually
  * them RE-ARMS those sends. MEASURED: with no other guard, replaying the peer's
  * captured SCS$DIRECTORY CONNECT-REQUEST after a seq-gap break made OVMX emit a
  * SECOND directory CONNECT-RESPONSE (dir_conn_resp_sent 1 -> 2) on a Path Block
- * whose vc_state was CLOSED. Only `ps->connected` (the member-opened
- * connection, read POSITIVE at the 0x4b branch) is suppressed by the clear.
+ * whose vc_state was CLOSED.
+ *
+ * AND `ps->connected` DOES NOT SUPPRESS ANYTHING EITHER, which a previous
+ * revision of this comment also got wrong: it claimed `ps->connected` (read
+ * POSITIVE at the 0x4b branch) was "suppressed by the clear". It is not. The
+ * branch that ANSWERS the member's 0x4b CONNECT-REQUEST is gated on
+ * `v.remote_conid == 0` and never reads ps->connected at all -- it SETS it. So
+ * replaying the peer's captured VMS$VAXcluster connect after a break re-armed
+ * ps->connected 0 -> 1, which in turn re-opened the 0x81 CM-response path that
+ * IS gated on it. MEASURED, same broken circuit: connect_resp_sent 1 -> 2,
+ * credit_sent 2 -> 3, two frames on the wire, member CDT back to ACCEPT SENT.
  *
  * WHAT ACTUALLY ENFORCES p. 2-31 ("Any attempt to send a message from one port
  * to another in the absence of a virtual circuit will fail") is the CLOSED Path
- * Block, on the paths that consult it: send_joiner_connect_request(), which
- * selects the circuit through CONFIG_PATH and refuses with SCSD-E-NOVC when
- * none is OPEN, and the directory CONNECT-REQUEST branch, which calls
- * scsd_refuse_without_open_vc(). Both refusals are asserted, with matched
- * controls, in tests/vmsscs/test_scsd_wire.c.
+ * Block, consulted at ONE choke point that every SCS-layer send now goes
+ * through: send_frame_vc(). See its SEND SITE TABLE for the full census of
+ * senders and the two justified exemptions (VC formation and NISCA HELLO).
+ * These three booleans decide only which SYSAP dialogue the daemon believes is
+ * bound; they gate no send that the choke point does not already refuse.
  *
  * WHAT IT DELIBERATELY DOES NOT DO, so nobody reads more into it: it does not
  * free the peer slot, does not release the CDT, and does not re-drive a join.
@@ -735,7 +753,7 @@ static void conn_step(struct scs_cdt *cdt, enum scs_conn_event ev, const char *e
 /*
  * vms-7be TRANSMIT CAPTURE SEAM -- compiled ONLY into tests/vmsscs/test_scsd_wire.c,
  * which is the single translation unit that defines SCSD_UNIT_TEST. The daemon
- * never defines it, so the production build of send_frame_to below is byte-for-byte
+ * never defines it, so the production build of send_frame_raw below is byte-for-byte
  * the code that shipped before this item.
  *
  * WHY: the frames OVMX puts on the wire are assembled INSIDE this file (dst MAC
@@ -750,9 +768,29 @@ size_t   scsd_test_last_len;
 unsigned scsd_test_frames;
 #endif
 
-/* Send a fully-built Ethernet frame to a specific unicast MAC on ifindex. */
-static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
-                             const uint8_t *frame, size_t len)
+/*
+ * send_frame_raw - THE TRANSPORT, and nothing else: hand a fully-built Ethernet
+ * frame to a specific unicast MAC on ifindex. It applies NO policy.
+ *
+ * vms-abc RENAMED IT from send_frame_to, deliberately and mechanically. Every
+ * SCS-layer send in this file now goes through send_frame_vc() below, which
+ * asks the peer's Path Block whether a virtual circuit exists before any byte
+ * leaves (p. 2-31). The rename is what makes the remaining direct callers
+ * COUNTABLE: tests/vmsscs/test_scsd_send_sites.py attributes every
+ * send_frame_raw() call to its enclosing function and reds unless that set is
+ * exactly the EXEMPT list in the SEND SITE TABLE below. Under the old name a
+ * new send site was indistinguishable from an old one.
+ *
+ * THE DIRECT CALLERS, and how many calls each makes: send_frame_vc() 1,
+ * send_frame_channel() 1, scsd_vc_emit() 2. Those three counts are PINNED in
+ * that script (EXEMPT_CALLS), so an extra raw send added inside an already
+ * exempt function -- the one way to get an unguarded frame past a structural
+ * check that only looks at function names -- reds too. The number of sends
+ * routed through the choke point is reported by the script but deliberately
+ * NOT pinned: adding one is safe by construction.
+ */
+static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
+                              const uint8_t *frame, size_t len)
 {
 #ifdef SCSD_UNIT_TEST
     (void)sock;
@@ -775,6 +813,189 @@ static ssize_t send_frame_to(int sock, int ifindex, const uint8_t mac[6],
     memcpy(da.sll_addr, mac, 6);
     return sendto(sock, frame, len, 0, (struct sockaddr *)&da, sizeof(da));
 #endif
+}
+
+/*
+ * ===== vms-abc: THE ONE PLACE p. 2-31 IS ENFORCED ON THE TRANSMIT PATH =====
+ *
+ * p. 2-31: "Any attempt to send a message from one port to another in the
+ * absence of a virtual circuit will fail." NOT "any attempt to send a directory
+ * reply". The rule is about the circuit, so the enforcement has to be about the
+ * circuit too -- one predicate, consulted by every SCS-layer sender, rather
+ * than a guard bolted onto whichever branch was last caught misbehaving.
+ *
+ * WHY THIS SHAPE, stated as the history that produced it. This item first
+ * guarded ONE path (the SCS$DIRECTORY CONNECT-REQUEST reply). Re-measuring the
+ * SAME broken circuit then found the identical defect on three more: the 0x48
+ * credit-return, the 0x4b VMS$VAXcluster CONNECT-RESPONSE (which additionally
+ * re-armed ps->connected and re-opened the CM 0x81 path), and the
+ * SCS$DIR_LOOKUP reply. The defect was never per-path: NO SEND SITE CONSULTED
+ * THE PATH BLOCK. Guarding sites one at a time cannot terminate, because the
+ * next site added is unguarded by default. Routing them through one function
+ * inverts that: a new site is guarded by default and an UNguarded one has to be
+ * written deliberately, named in the table below, and justified.
+ *
+ * WHY THE GATE BOOLEANS CANNOT DO THIS JOB. scsd_sysap_vc_loss() clears
+ * ps->dir_connected / ps->connected / ps->joiner_connected on a break, but two
+ * of the three are read NEGATED by the dispatch (`!ps->dir_connected`,
+ * `!ps->joiner_connected`), so clearing them RE-ARMS those sends. The durable
+ * fact is the Path Block: breaking a circuit does not deallocate it (scs_vc.h
+ * note 4), it leaves it CLOSED, and CLOSED is what this predicate reads.
+ *
+ * ============================ SEND SITE TABLE ============================
+ * EVERY sender in this file and its verdict. BOTH halves of this table are
+ * MECHANICALLY CHECKED: tests/vmsscs/test_scsd_send_sites.py parses scsd.c,
+ * attributes every send_frame_raw() and send_frame_vc() call to its enclosing
+ * function, and reds unless the direct-transport callers are exactly the EXEMPT
+ * list and the choke-point callers are exactly the CHOKED list. Adding OR
+ * renaming a sender without editing this table reds the test run.
+ *
+ *   CHOKED (go through send_frame_vc, refused on a non-OPEN circuit) -- these
+ *   are SCS sequenced messages and connection-control messages, i.e. exactly
+ *   the traffic p. 2-31 says a circuit carries:
+ *     cm_send_config_burst()       op 0x14 / 0x01 / 0x02 add-member config
+ *     send_joiner_connect_request()  0x4b joiner CONNECT-REQUEST
+ *     scsd_handle_frame()          0x48 credit-return
+ *                                  0x81 CM transaction response
+ *                                  op=1 SCS$DIRECTORY CONNECT-ECHO
+ *                                  op=2 SCS$DIRECTORY CONNECT-RESPONSE
+ *                                  SCS$DIR_LOOKUP response
+ *                                  0x4b VMS$VAXcluster CONNECT-RESPONSE
+ *     scsd_retransmit_tick()       0x4b CONNECT-REQUEST retransmit
+ *
+ *   EXEMPT (call send_frame_raw directly). Two functions, and the reason is the
+ *   same in both: THESE FRAMES ARE HOW A CIRCUIT COMES TO EXIST. Refusing them
+ *   on a non-OPEN circuit is not conservative, it is a deadlock -- no circuit
+ *   could ever open, and a broken one could never re-form.
+ *     scsd_vc_emit()        The 0x41 VC-FORMATION frames (START / STACK / ACK,
+ *                           p. 2-14). The formation machine's states are
+ *                           CLOSED, START SENT, START RECEIVED, OPEN; three of
+ *                           the four are not OPEN, and the machine's whole job
+ *                           is to transmit from them. The circuit state IS the
+ *                           guard here -- scs_vc_fsm_*() decides what may be
+ *                           sent from each state, which is a stricter check
+ *                           than "is it OPEN", not a weaker one.
+ *     send_frame_channel()  The NISCA directed/padded HELLO replies, called
+ *                           from 3 sites in scsd_handle_frame(): the
+ *                           padded-probe b4 ack, the rate-limited directed
+ *                           reply, and the one-shot proactive padded HELLO.
+ *                           See that function for the reason; in short, HELLO
+ *                           is CHANNEL maintenance BELOW the virtual circuit
+ *                           and is the only thing that re-establishes a
+ *                           channel after a break.
+ *
+ *   THE EXEMPTION IS PER FUNCTION, WHICH IS WHY send_frame_channel() EXISTS.
+ *   The three HELLO sends used to be inline in scsd_handle_frame(), so the
+ *   census had to exempt that whole 1000-line function -- and MEASURED, four
+ *   unguarded SCS senders inside it passed the census while transmitting on a
+ *   CLOSED circuit. Never exempt a function that contains anything else.
+ * =========================================================================
+ *
+ * scsd_refuse_without_open_vc - the predicate. Returns 1 (caller must send
+ * nothing) when `vc` -- the circuit the caller intends to send on -- is not
+ * OPEN; returns 0 when it is, filling *out (when non-NULL) with the CONFIG_PATH
+ * view the caller then addresses the frame from.
+ *
+ * THE CIRCUIT IS NAMED, NOT ASSUMED. Every caller but one passes ps->pb, the
+ * peer's own Path Block. send_joiner_connect_request() passes the circuit
+ * CONNECT selected, which p. 2-47 permits to be a NAMED path or one found by
+ * the CONFIG_SYS + OPEN scan -- not necessarily ps->pb. Reading ps->pb there
+ * would check a different circuit from the one the frame rides.
+ *
+ * The state is read through scs_config_path() -- CONFIG_PATH (p. 2-47) -- not
+ * by reaching into the Path Block, so the daemon sees the same view of a path
+ * that any other CONFIG_PATH caller would. A NULL circuit, or one CONFIG_PATH
+ * refuses to describe, is also "no circuit" and is refused the same way.
+ *
+ * NEVER SILENT, but never repetitive either: a dropped reply that says nothing
+ * reads as a healthy run (CLAUDE.md rule 9 / INV-6), while one line per refused
+ * frame buries the run -- the daemon re-enters these paths at the peer's HELLO
+ * cadence, ~1 Hz, for the rest of the run. So the FIRST refusal on a circuit
+ * logs SCSD-E-NOVC naming the circuit, its state and what was suppressed; later
+ * refusals on the same circuit are counted, not printed, and the total is in
+ * the exit summary. scsd_vc_on_open() clears the latch, so a circuit that
+ * breaks a second time announces it a second time.
+ */
+static int scsd_refuse_without_open_vc(struct peer_state *ps, const struct scs_pb *vc,
+                                       const char *what,
+                                       struct scs_config_path_info *out)
+{
+    struct scs_config_path_info scratch;
+    struct scs_config_path_info *path = (out != NULL) ? out : &scratch;
+    if (vc != NULL && scs_config_path(vc, path) && path->vc_state == SCS_VC_OPEN) {
+        return 0;
+    }
+    vc_sends_refused++;
+    if (ps != NULL && ps->novc_logged) {
+        return 1; /* already announced for this circuit -- counted, not printed */
+    }
+    if (ps != NULL) {
+        ps->novc_logged = 1;
+    }
+    const uint8_t *pa = ps_port_addr(ps);
+    log_ts(stderr);
+    fprintf(stderr,
+            " SCSD-E-NOVC, no OPEN virtual circuit to peer"
+            " %02x:%02x:%02x:%02x:%02x:%02x (circuit is %s) -- %s NOT sent"
+            " (p. 2-31: a send with no virtual circuit fails). Further refusals"
+            " on this circuit are counted, not logged.\n",
+            pa[0], pa[1], pa[2], pa[3], pa[4], pa[5],
+            vc != NULL ? scs_vc_state_name(vc->vc_state) : "absent", what);
+    fflush(stderr);
+    return 1;
+}
+
+/*
+ * send_frame_vc - THE CHOKE POINT. Transmit `frame` on circuit `vc`, or refuse.
+ * Returns the byte count send_frame_raw() returned, or -1 if the circuit
+ * refused it -- so every existing `... > 0` call-site idiom keeps working
+ * unchanged and a refused send takes the same "nothing was sent" branch a
+ * builder failure would.
+ *
+ * THE DESTINATION COMES FROM THE CIRCUIT, not from the caller. p. 2-47: the
+ * remote port address a frame is addressed to is a property of the Path Block
+ * CONNECT selected, so it is read back out of the CONFIG_PATH view that just
+ * proved the circuit OPEN. For every caller passing ps->pb this is byte-for-
+ * byte ps_port_addr(ps), the value those sites passed before; for
+ * send_joiner_connect_request() it is path.remote_port_addr, the value that
+ * site already used.
+ */
+static ssize_t send_frame_vc(int sock, int ifindex, struct peer_state *ps,
+                             const struct scs_pb *vc, const char *what,
+                             const uint8_t *frame, size_t len)
+{
+    struct scs_config_path_info path;
+    if (scsd_refuse_without_open_vc(ps, vc, what, &path)) {
+        return -1;
+    }
+    return send_frame_raw(sock, ifindex, path.remote_port_addr, frame, len);
+}
+
+/*
+ * send_frame_channel - THE OTHER EXEMPTION, given a name so it can be counted.
+ *
+ * NISCA channel traffic: the directed and padded HELLOs. Deliberately NOT
+ * routed through send_frame_vc(), for the reason in the SEND SITE TABLE -- a
+ * HELLO is not a sequenced message, carries no Con.ID, is addressed to the
+ * frame's source MAC rather than to a Path Block's remote port address, is
+ * exchanged with peers that have no Path Block at all, and is the only thing
+ * that re-establishes a channel after a break. Gating it on an OPEN circuit
+ * would make a broken circuit permanently unrecoverable.
+ *
+ * WHY IT IS A FUNCTION RATHER THAN THREE INLINE send_frame_raw() CALLS, which
+ * is what it was: the census in tests/vmsscs/test_scsd_send_sites.py works by
+ * attributing each call to its enclosing function. With the HELLO sends inline
+ * in scsd_handle_frame(), exempting the HELLOs meant exempting that entire
+ * 1000-line function -- and MEASURED, four unguarded SCS senders inside it
+ * (the SCS$DIR_LOOKUP reply, the two SCS$DIRECTORY replies and the 0x81 CM
+ * response) passed the census while transmitting on a CLOSED circuit. Hoisting
+ * the three HELLO sends out is what shrinks the exemption to the frames it is
+ * actually about.
+ */
+static ssize_t send_frame_channel(int sock, int ifindex, const uint8_t dst[6],
+                                  const uint8_t *frame, size_t len)
+{
+    return send_frame_raw(sock, ifindex, dst, frame, len);
 }
 
 /*
@@ -889,7 +1110,7 @@ static int scsd_vc_emit(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
         if (scs_start_build_ack(&sp, aframe) != 0) {
             return 0;
         }
-        return send_frame_to(ctx->sock, ctx->ifindex, ps_port_addr(ps),
+        return send_frame_raw(ctx->sock, ctx->ifindex, ps_port_addr(ps),
                              aframe, sizeof(aframe)) > 0 ? 1 : 0;
     }
     if (act == SCS_VC_ACT_SEND_START || act == SCS_VC_ACT_SEND_STACK) {
@@ -898,7 +1119,7 @@ static int scsd_vc_emit(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
         if (scs_start_build(&sp, sframe) != 0) {
             return 0;
         }
-        return send_frame_to(ctx->sock, ctx->ifindex, ps_port_addr(ps),
+        return send_frame_raw(ctx->sock, ctx->ifindex, ps_port_addr(ps),
                              sframe, sizeof(sframe)) > 0 ? 1 : 0;
     }
     return 0;
@@ -1011,6 +1232,11 @@ static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps
     } else {
         pb_open_errors++;
     }
+    /* vms-abc: the circuit carries traffic again, so the "this circuit refuses
+     * sends" announcement is spent. Clearing it here (and ONLY here) is what
+     * makes the latch per-BREAK rather than once-per-process: a circuit that
+     * opens, breaks, re-opens and breaks again logs SCSD-E-NOVC twice. */
+    ps->novc_logged = 0;
     log_ts(stdout);
     printf(" SCSD-I-STARTDONE, START/config complete with peer"
            " %02x:%02x:%02x:%02x:%02x:%02x -- VC reset"
@@ -1162,7 +1388,8 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.sysap_ack_msg = ps->sysap_recv;
     mp.model = NULL; /* OVMX_MODEL_STRING default */
     if (scs_member_build_model(&mp, frame) == 0 &&
-        send_frame_to(sock, ifindex, ps_port_addr(ps), frame, sizeof(frame)) > 0) {
+        send_frame_vc(sock, ifindex, ps, ps->pb,
+                      "add-member op 0x14 (node model)", frame, sizeof(frame)) > 0) {
         sent++;
     }
 
@@ -1174,7 +1401,8 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.sysap_ack_msg = ps->sysap_recv;
     mp.votes = SCS_MEMBER_VOTES_NONVOTING; /* VOTES=1 tested (vms-d94), did NOT change NEW->MEMBER */
     if (scs_member_build_params(&mp, frame) == 0 &&
-        send_frame_to(sock, ifindex, ps_port_addr(ps), frame, sizeof(frame)) > 0) {
+        send_frame_vc(sock, ifindex, ps, ps->pb,
+                      "add-member op 0x01 (cluster parameters)", frame, sizeof(frame)) > 0) {
         sent++;
     }
 
@@ -1185,7 +1413,8 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
     mp.sysap_send_msg = ps->sysap_send++;
     mp.sysap_ack_msg = ps->sysap_recv;
     if (scs_member_build_config(&mp, frame) == 0 &&
-        send_frame_to(sock, ifindex, ps_port_addr(ps), frame, sizeof(frame)) > 0) {
+        send_frame_vc(sock, ifindex, ps, ps->pb,
+                      "add-member op 0x02 (config/topology)", frame, sizeof(frame)) > 0) {
         sent++;
     }
 
@@ -1236,16 +1465,22 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
         vc = scs_config_select_vc(cfg, ps_sys_addr(ps));
     }
     struct scs_config_path_info path;
-    if (vc == NULL || !scs_config_path(vc, &path)) {
-        log_ts(stderr);
-        fprintf(stderr,
-                " SCSD-E-NOVC, no OPEN virtual circuit to peer"
-                " %02x:%02x:%02x:%02x:%02x:%02x -- CONNECT-REQUEST NOT sent"
-                " (p. 2-47: CONNECT needs an open circuit; none was named and"
-                " CONFIG_SYS found none for this node)\n",
-                ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
-                ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
-        fflush(stderr);
+    /* vms-abc: the refusal is the CHOKE POINT's, not a bespoke one. It used to
+     * be an inline fprintf here, which is where the ~1 Hz SCSD-E-NOVC flood
+     * after a break came from: the daemon re-enters this function once per
+     * directed HELLO and every entry printed. Routing it through
+     * scsd_refuse_without_open_vc() gives it the same per-circuit latch and the
+     * same vc_sends_refused accounting as every other refused send; the p. 2-47
+     * specifics that used to be in the format string are carried in `what`.
+     * NOTE the condition is now STRICTER: the old test was "CONFIG_PATH
+     * describes it", which a CLOSED PB satisfies -- only scs_config_select_vc()
+     * checked OPEN, and only on the named_vc == NULL path. A caller that NAMED
+     * a CLOSED circuit got a frame. */
+    if (scsd_refuse_without_open_vc(
+            ps, vc,
+            "VMS$VAXcluster CONNECT-REQUEST (p. 2-47: CONNECT needs an open"
+            " circuit; none was named and CONFIG_SYS found none for this node)",
+            &path)) {
         return 0;
     }
 
@@ -1269,7 +1504,8 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
     cp.incarnation = ps->incarnation;
     uint8_t cframe[SCS_CONNECT_FRAME_LEN];
     if (scs_connect_build_request(&cp, cframe) == 0 &&
-        send_frame_to(sock, ifindex, path.remote_port_addr, cframe, sizeof(cframe)) > 0) {
+        send_frame_vc(sock, ifindex, ps, vc, "VMS$VAXcluster CONNECT-REQUEST",
+                      cframe, sizeof(cframe)) > 0) {
         ps->joiner_connect_sent = 1;
         clock_gettime(CLOCK_MONOTONIC, &ps->last_joiner_req);
         /* vms-abc -- THE p. 2-31 DELIVERY GUARANTEE'S ONLY LIVE FEED.
@@ -1402,8 +1638,14 @@ struct scsd_rx {
  * send) but endless, and the retransmit it was attempting is exactly what
  * p. 2-31 forbids on a broken circuit. Asking the Path Block up front stops the
  * attempt at its source rather than rate-limiting its complaint. The circuit is
- * read through CONFIG_PATH (p. 2-47) for the same reason
- * send_joiner_connect_request() reads it that way.
+ * read through CONFIG_PATH (p. 2-47) for the same reason send_frame_vc() does.
+ *
+ * IT IS NOT THE ENFORCEMENT, though, and must not be read as such: this
+ * predicate stops one ATTEMPT early. Whether a frame may leave is decided in
+ * send_frame_vc() for every sender in the file. If this term were deleted the
+ * frame would still not go out -- only the log would get noisy again. That is
+ * the difference between an optimisation and a guard, and the reason the fix
+ * for the flood is here while the fix for the emission is there.
  */
 static int scsd_joiner_retransmit_pending(const struct scsd_rx *rx,
                                           const struct peer_state *ps)
@@ -1414,64 +1656,6 @@ static int scsd_joiner_retransmit_pending(const struct scsd_rx *rx,
     }
     struct scs_config_path_info path;
     return scs_config_path(ps->pb, &path) && path.vc_state == SCS_VC_OPEN;
-}
-
-/*
- * scsd_refuse_without_open_vc - vms-abc: p. 2-31's send precondition, applied
- * to a reply the daemon is about to build. Returns 1 (and logs) when the peer's
- * Path Block does NOT have an OPEN virtual circuit, meaning the caller must
- * send nothing; returns 0 when the circuit is OPEN and the send may proceed.
- *
- * WHY THIS EXISTS -- a defect this item introduced, not a precaution.
- * scsd_sysap_vc_loss() clears ps->dir_connected / ps->connected /
- * ps->joiner_connected when a circuit is broken. Two of those three are read
- * NEGATED by the dispatch below (`!ps->dir_connected` at the directory
- * CONNECT-REQUEST branch, `!ps->joiner_connected` at the prompt-joiner branch
- * and in scsd_joiner_retransmit_pending()), so clearing them RE-ARMS those
- * sends rather than suppressing them. MEASURED before this guard existed: after
- * a sequence gap broke the circuit, replaying the peer's captured SCS$DIRECTORY
- * CONNECT-REQUEST made OVMX emit a second directory CONNECT-RESPONSE
- * (dir_conn_resp_sent 1 -> 2) and re-bind the connection (conn state ACCEPT
- * SENT) on a Path Block whose vc_state was CLOSED -- precisely the emission
- * p. 2-31 forbids ("Any attempt to send a message from one port to another in
- * the absence of a virtual circuit will fail").
- *
- * WHAT ACTUALLY STOPS THE SEND, stated exactly, because the previous revision
- * of this file claimed the gate-clearing did it and that claim was false: the
- * CLOSED Path Block does, on the paths that consult it. Those paths are
- * send_joiner_connect_request(), which reads the circuit through CONFIG_PATH
- * and refuses with SCSD-E-NOVC when no PB is OPEN, and the directory
- * CONNECT-REQUEST branch, which calls this function. The gate booleans decide
- * only whether a send is ATTEMPTED; the Path Block decides whether it happens.
- *
- * The state is read through scs_config_path() -- CONFIG_PATH (p. 2-47) -- for
- * the same reason send_joiner_connect_request() does: the daemon then sees the
- * same view of a path any other CONFIG_PATH caller would, rather than reaching
- * into the Path Block. A peer with no Path Block at all, or one CONFIG_PATH
- * refuses to describe, is also "no circuit" and is refused the same way.
- */
-static int scsd_refuse_without_open_vc(const struct peer_state *ps, const char *what)
-{
-    struct scs_config_path_info path;
-    if (ps != NULL && ps->pb != NULL && scs_config_path(ps->pb, &path) &&
-        path.vc_state == SCS_VC_OPEN) {
-        return 0;
-    }
-    /* Never silent: a dropped reply that says nothing reads as a healthy run
-     * (CLAUDE.md rule 9 / INV-6). Name the circuit, its state and what was
-     * suppressed. */
-    const uint8_t *pa = ps_port_addr(ps);
-    log_ts(stderr);
-    fprintf(stderr,
-            " SCSD-E-NOVC, no OPEN virtual circuit to peer"
-            " %02x:%02x:%02x:%02x:%02x:%02x (circuit is %s) -- %s NOT sent"
-            " (p. 2-31: a send with no virtual circuit fails)\n",
-            pa[0], pa[1], pa[2], pa[3], pa[4], pa[5],
-            (ps != NULL && ps->pb != NULL) ? scs_vc_state_name(ps->pb->vc_state)
-                                           : "absent",
-            what);
-    fflush(stderr);
-    return 1;
 }
 
 /*
@@ -1625,7 +1809,8 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 uint8_t cframe[SCS_CREDIT_FRAME_LEN];
                 if (scs_vc_build_credit_for(&ps->vc, ps_port_addr(ps), rx->our_hw_mac,
                                             rx->our_src_logical, ps_sys_addr(ps), cframe) == 0 &&
-                    send_frame_to(rx->sock, rx->ifindex, ps_port_addr(ps), cframe,
+                    send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                                  "0x48 credit-return", cframe,
                                   sizeof(cframe)) > 0) {
                     ps->credit_sent++;
                     rx->credit_sent++;
@@ -1692,7 +1877,8 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                     mp.sysap_ack_msg = mv.sysap_send_msg; /* ack this request */
                     uint8_t rframe[SCS_MEMBER_FRAME_LEN];
                     if (scs_member_build_response(&mp, buf, (size_t)n, rframe) == 0 &&
-                        send_frame_to(rx->sock, rx->ifindex, ps_port_addr(ps), rframe,
+                        send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                                      "0x81 CM transaction response", rframe,
                                       sizeof(rframe)) > 0) {
                         ps->cm_responses++;
                         rx->cm_response_sent++;
@@ -1769,7 +1955,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         if (scs_hello_build_directed_frame(rx->hello_params, src_mac, rx->lab_nonce,
                                            SCS_HELLO_JOINER_INCARNATION,
                                            pad_resp_pfw, ackframe) == 0 &&
-            send_frame_to(rx->sock, rx->ifindex, src_mac, ackframe, sizeof(ackframe)) > 0) {
+            send_frame_channel(rx->sock, rx->ifindex, src_mac, ackframe, sizeof(ackframe)) > 0) {
             ps->padded_replies++;
             ps->last_padded = pnow;
             rx->directed_sent++;
@@ -1852,7 +2038,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             if (scs_hello_build_directed_frame(rx->hello_params, src_mac, rx->lab_nonce,
                                                SCS_HELLO_JOINER_INCARNATION,
                                                resp_pfw, dframe) == 0 &&
-                send_frame_to(rx->sock, rx->ifindex, src_mac, dframe, sizeof(dframe)) > 0) {
+                send_frame_channel(rx->sock, rx->ifindex, src_mac, dframe, sizeof(dframe)) > 0) {
                 rx->directed_sent++;
                 ps->directed_replies++;
                 ps_channel_up(ps);
@@ -1886,7 +2072,7 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                                                       SCS_HELLO_JOINER_INCARNATION,
                                                       (uint16_t)SCS_HELLO_PADDED_MAX_SCA,
                                                       rx->pframe, sizeof(rx->pframe), &plen) == 0 &&
-                send_frame_to(rx->sock, rx->ifindex, src_mac, rx->pframe, plen) > 0) {
+                send_frame_channel(rx->sock, rx->ifindex, src_mac, rx->pframe, plen) > 0) {
                 ps->padded_initiated = 1;
                 clock_gettime(CLOCK_MONOTONIC, &ps->last_padded);
                 rx->padded_sent++;
@@ -2196,8 +2382,16 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
              * (e.g. a 0x7b retransmit); note_recv only advances the high-water. */
             scs_vc_note_recv(&ps->vc, dv.send_seq);
 
+            /* vms-abc: the up-front refusal is kept EVEN THOUGH both sends
+             * below now go through send_frame_vc(). It is not redundant: this
+             * branch has side effects that are not sends -- it learns
+             * dv.local_conid into ps->dir_remote_conid and conn_bind()s the
+             * directory CDT -- and letting those run on a CLOSED circuit
+             * re-binds a connection whose SYSAP was just told the circuit is
+             * gone. The choke point stops the FRAMES; this stops the STATE. */
             if (dv.is_dir_connect_request && !ps->dir_connected &&
-                !scsd_refuse_without_open_vc(ps, "SCS$DIRECTORY CONNECT-RESPONSE")) {
+                !scsd_refuse_without_open_vc(ps, ps->pb,
+                                             "SCS$DIRECTORY CONNECT-RESPONSE", NULL)) {
                 /* Learn the peer's SCS$DIRECTORY handle (its local Con.ID),
                  * then reply op=1 CONNECT-ECHO + op=2 CONNECT-RESPONSE. Each
                  * is a sequenced message: advance OVMX's send_seq per frame
@@ -2231,7 +2425,9 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 dp.send_seq = scs_seq_advance(&ps->vc.seq);
                 uint8_t eframe[SCS_DIR_ECHO_FRAME_LEN];
                 if (scs_dir_build_connect_echo(&dp, eframe) == 0) {
-                    send_frame_to(rx->sock, rx->ifindex, ps_port_addr(ps), eframe, sizeof(eframe));
+                    send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                                  "SCS$DIRECTORY op=1 CONNECT-ECHO", eframe,
+                                  sizeof(eframe));
                     /* The op=1 CONNECT-ECHO is spec sec 4(h)(1)'s SCA23:
                      * "VAX2 echoes VAX1's handle, its own not yet assigned"
                      * -- an acknowledgement that cannot yet carry a handle,
@@ -2244,7 +2440,8 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 dp.send_seq = scs_seq_advance(&ps->vc.seq);
                 uint8_t rframe[SCS_DIR_RESP_FRAME_LEN];
                 if (scs_dir_build_connect_response(&dp, rframe) == 0 &&
-                    send_frame_to(rx->sock, rx->ifindex, ps_port_addr(ps), rframe,
+                    send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                                  "SCS$DIRECTORY op=2 CONNECT-RESPONSE", rframe,
                                   sizeof(rframe)) > 0) {
                     ps->dir_connected = 1;
                     rx->dir_conn_resp_sent++;
@@ -2301,7 +2498,8 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 lp.affirmative = (memcmp(dv.name, "VMS$VAXcluster", 14) == 0);
                 uint8_t lframe[SCS_DIR_LOOKUP_FRAME_LEN];
                 if (scs_dir_build_lookup_response(&lp, lframe) == 0 &&
-                    send_frame_to(rx->sock, rx->ifindex, ps_port_addr(ps), lframe,
+                    send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                                  "SCS$DIR_LOOKUP response", lframe,
                                   sizeof(lframe)) > 0) {
                     ps->dir_lookups_answered++;
                     rx->dir_lookup_sent++;
@@ -2361,7 +2559,9 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             cp.incarnation = ps->incarnation; /* §4i.B established-join echo (0 => fresh 1) */
             uint8_t rframe[SCS_CONNECT_FRAME_LEN];
             if (scs_connect_build_response(&cp, rframe) == 0 &&
-                send_frame_to(rx->sock, rx->ifindex, ps_port_addr(ps), rframe, sizeof(rframe)) > 0) {
+                send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                              "VMS$VAXcluster 0x4b CONNECT-RESPONSE", rframe,
+                              sizeof(rframe)) > 0) {
                 ps->remote_conid = v.local_conid;
                 rx->connect_resp_sent++;
                 int first = !ps->connected;
@@ -2726,7 +2926,8 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
         cp.incarnation = ps->incarnation;
         uint8_t rframe[SCS_CONNECT_FRAME_LEN];
         if (scs_connect_build_request(&cp, rframe) == 0 &&
-            send_frame_to(rx->sock, rx->ifindex, ps_port_addr(ps), rframe,
+            send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                          "0x4b CONNECT-REQUEST retransmit", rframe,
                           sizeof(rframe)) > 0) {
             scs_vc_mark_retransmitted(&ps->vc, now_ms);
             rx->retransmit_sent++;
@@ -2777,10 +2978,15 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
          * VISIBLE, not inferred from the absence of a warning. If the kill
          * switch is set, say so on the same line: a run log must never read as
          * "no circuit needed breaking" when the truth is "breaking was off". */
+        /* sends-refused is the OTHER half of the guarantee, and the half a log
+         * scan would otherwise miss: the SCSD-E-NOVC line is latched to one per
+         * circuit-break, so the only place the TOTAL number of frames p. 2-31
+         * kept off the wire appears is here. */
         fprintf(out, "  VC-GUARANTEES: seq-gaps=%lu vc-breaks=%lu"
-                " connections-broken=%lu sysap-vc-loss-notifications=%lu%s\n",
+                " connections-broken=%lu sysap-vc-loss-notifications=%lu"
+                " sends-refused=%lu%s\n",
                 vc_seq_gaps, vc_breaks, vc_conns_broken,
-                sysap_vc_loss_notifications,
+                sysap_vc_loss_notifications, vc_sends_refused,
                 scs_vc_break_enabled() ? "" : "  [" SCS_VC_NO_BREAK_ENV
                                               " SET -- circuits were NOT broken]");
         (void)scs_conn_report_stuck(&scsd_cdl, out);

@@ -296,6 +296,33 @@ set_tests_properties(scs_credit_figures PROPERTIES
     TIMEOUT 60
 )
 
+# vms-abc - THE SEND SITE CENSUS. test_scsd_send_sites.py reads src/vmsscs/scsd.c
+# and asserts that every direct caller of the transport (send_frame_raw) is one
+# of the functions the SEND SITE TABLE names as EXEMPT, i.e. that every other
+# sender goes through the send_frame_vc() choke point where p. 2-31 is enforced.
+#
+# WHY A SOURCE GATE AND NOT ONLY A RUNTIME ONE: the runtime test
+# (test_a_broken_circuit_carries_no_traffic) can only prove the send paths its
+# captured frames happen to drive. Three review rounds on this item each found
+# one more sender that no runtime test reached. This one cannot be outflanked by
+# adding a path -- adding one reds it.
+#
+# Registered unconditionally, exactly like scs_credit_figures above: a missing
+# interpreter must make the gate RED, never make it vanish.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_send_sites
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scsd_send_sites.py)
+else()
+    add_test(NAME scs_send_sites
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_send_sites_no_python3.cmake)
+endif()
+set_tests_properties(scs_send_sites PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 60
+)
+
 # vms-b1d - SCA datagram buffer management: the per-port DFREEQ and the
 # per-connection buffer count in the CDT (VAXcluster Principles pp. 2-42..2-43).
 # Covers both documented discard classes, the fact that a no-quota discard

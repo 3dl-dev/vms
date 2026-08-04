@@ -516,16 +516,25 @@ enum scs_vc_action scs_vc_fsm_timeout(struct scs_pb *pb, uint64_t now_ms,
  *  5. WHAT STOPS THE SENDING AFTERWARDS IS THE **CLOSED PATH BLOCK**, NOT THE
  *     SYSAP HANDLER. scsd.c's scsd_sysap_vc_loss() clears the daemon's
  *     bound-connection flags, and an earlier revision claimed that was what
- *     kept OVMX from transmitting into a broken circuit. It is NOT: two of the
+ *     kept OVMX from transmitting into a broken circuit. It is NOT. Two of the
  *     three flags are read NEGATED by the dispatch, so clearing them RE-ARMS
- *     those sends. MEASURED -- replaying the peer's captured SCS$DIRECTORY
- *     CONNECT-REQUEST after a break produced a second CONNECT-RESPONSE on a
- *     CLOSED circuit. Because of note 4 the PB is still there and still says
- *     CLOSED, and that is the durable fact every send path must consult:
- *     scsd.c's send_joiner_connect_request(), its directory-reply guard
- *     scsd_refuse_without_open_vc() and its joiner-retransmit predicate all
- *     read it through CONFIG_PATH and refuse with SCSD-E-NOVC. A new send path
- *     that does not consult it will happily transmit into a broken circuit.
+ *     those sends; the third (`connected`) is not read by the branch that
+ *     answers the peer's connect at all -- that branch SETS it, so a replayed
+ *     connect re-arms it and with it the 0x81 CM-response path. MEASURED, on
+ *     one circuit broken by a real sequence gap: replaying the peer's captured
+ *     SCS$DIRECTORY CONNECT-REQUEST produced another CONNECT-RESPONSE **plus a
+ *     credit-return**, and replaying its captured VMS$VAXcluster connect
+ *     produced two more frames and re-opened the connection. Four distinct
+ *     send paths, one defect: none of them consulted the Path Block.
+ *
+ *     Because of note 4 the PB is still there and still says CLOSED, and that
+ *     is the durable fact. It is now consulted in exactly ONE place --
+ *     scsd.c's send_frame_vc(), which every SCS-layer sender is routed
+ *     through, with a census of senders and two justified exemptions (VC
+ *     formation frames and NISCA HELLOs, both of which must transmit on a
+ *     non-OPEN circuit or no circuit could ever form). Adding a per-path guard
+ *     instead of using that choke point is how this defect survived a round of
+ *     review: guarding paths one at a time cannot terminate.
  */
 
 /* Why a circuit was broken. */

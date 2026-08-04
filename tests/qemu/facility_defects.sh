@@ -172,24 +172,32 @@
 #                            init. It is here so the discriminating
 #                            assertions are NAMED and stay named.
 #   kstat-deadlock-mismapped, kstat-ivlockid-mismapped,
-#   kstat-cvtungrant-mismapped        src/libvms/syssvc/sys_lock.c's
-#                            kstat_to_ss(), the single point where a raw
-#                            kernel lock-manager status crosses into the
-#                            public ssdef.h SS$_xxx contract (vms-2e5). Each
-#                            of these three mutations changes only the
-#                            PUBLIC constant kstat_to_ss() returns for a
-#                            fixed kernel-side status -- the kernel's own
-#                            decision to deadlock/reject is untouched by
-#                            THESE THREE mutations. That is not a claim
-#                            about kernel-side mutations in general: a pure
-#                            constant drift on the KERNEL side (e.g.
-#                            SS__DEADLOCK's numeric value in
-#                            src/kernel/vms_internal.h) also reddens
-#                            test_syssvc_lock_status, because kstat_to_ss()
-#                            switches on that same numeric literal. These
-#                            three are here because the translation itself
-#                            was UNASSERTED at every layer, not because the
-#                            kernel side is somehow unreachable.
+#   kstat-cvtungrant-mismapped        the CONDITION VALUES the kernel lock
+#                            manager yields (src/kernel/vms_internal.h). Each
+#                            mutation gives one of SS__DEADLOCK / SS__IVLOCKID
+#                            / SS__CANCELGRANT the value of SS$_NOTQUEUED, so a
+#                            caller is told a request was merely "not queued"
+#                            when the executive actually rejected it for
+#                            deadlock, for an invalid lock ID, or as an
+#                            ungrantable conversion. The kernel's DECISION is
+#                            untouched by all three; only the value it answers
+#                            with moves.
+#
+#                            THESE THREE USED TO ATTACK USERSPACE, and the
+#                            move is the point (vms-82a). They mutated case
+#                            arms in kstat_to_ss() in src/libvms/syssvc/
+#                            sys_lock.c -- a mapping that ran in the CALLING
+#                            PROCESS and turned the executive's private
+#                            numbering (40/100/108/...) into public ssdef.h
+#                            values. That mapping was the defect vms-2e5
+#                            found and vms-82a fixed: the executive now emits
+#                            VMS condition values itself and kstat_to_ss() is
+#                            deleted. The controls were REPOINTED, not
+#                            retired -- same three defects, same suite, same
+#                            require_fail assertions, manifest size unchanged
+#                            -- because a control that disappears when the
+#                            code it attacked improves was measuring the code
+#                            rather than the property.
 # All are edits under src/, not src/kernel/, so cmd_selftest copies libvms,
 # libvmssys and vmsdcl alongside kernel/ when it checks that every anchor still
 # matches.
@@ -2410,13 +2418,13 @@ EOF
     # comment), not a negative control for this manifest.
     kstat-deadlock-mismapped)
         case "$_f" in
-        facility)     echo "kstat_to_ss()'s DEADLOCK mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
-        targets)      echo "libvms/syssvc/sys_lock.c";;
+        facility)     echo "the executive's SS__DEADLOCK condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields to a caller it aborted for deadlock (vms-2e5, vms-82a)";;
+        targets)      echo "kernel/vms_internal.h";;
         suites_red)   echo "test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "case 100 (kernel SS__DEADLOCK) returns SS\$_NOTQUEUED instead of SS\$_DEADLOCK -- the EXACT mutation vms-2e5 was found by (a request the executive rejected for deadlock is reported to the caller as merely 'not queued'). The kernel's own decision to abort the request for deadlock is untouched; only the public value crossing the boundary changes.";;
+        why)          echo "SS__DEADLOCK is 2488 (SS\$_NOTQUEUED) instead of 3594 (SS\$_DEADLOCK) -- a request the executive rejected FOR DEADLOCK reports to the caller as merely 'not queued'. Since vms-82a the executive yields the VMS condition value itself, so this attacks the executive rather than a userspace mapping: the kernel's DECISION to abort for deadlock is untouched, only the value it answers with changes.";;
         require_fail) cat <<'EOF'
 parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
 EOF
@@ -2427,13 +2435,13 @@ EOF
 
     kstat-ivlockid-mismapped)
         case "$_f" in
-        facility)     echo "kstat_to_ss()'s IVLOCKID mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
-        targets)      echo "libvms/syssvc/sys_lock.c";;
+        facility)     echo "the executive's SS__IVLOCKID condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields for a lock ID that does not exist (vms-2e5, vms-82a)";;
+        targets)      echo "kernel/vms_internal.h";;
         suites_red)   echo "test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "case 108 (kernel SS__IVLOCKID) returns SS\$_NOTQUEUED instead of SS\$_IVLOCKID -- a caller given a nonexistent lock ID is told the request was merely not queued rather than that the ID itself is invalid.";;
+        why)          echo "SS__IVLOCKID is 2488 (SS\$_NOTQUEUED) instead of 8484 (SS\$_IVLOCKID) -- a caller given a nonexistent lock ID is told the request was merely not queued rather than that the ID itself is invalid.";;
         require_fail) cat <<'EOF'
 sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
 EOF
@@ -2444,13 +2452,13 @@ EOF
 
     kstat-cvtungrant-mismapped)
         case "$_f" in
-        facility)     echo "kstat_to_ss()'s CVTUNGRANT mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
-        targets)      echo "libvms/syssvc/sys_lock.c";;
+        facility)     echo "the executive's SS__CANCELGRANT condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields for a queued conversion it could not grant (vms-2e5, vms-82a)";;
+        targets)      echo "kernel/vms_internal.h";;
         suites_red)   echo "test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "case 116 (kernel SS__CANCELGRANT) returns SS\$_NOTQUEUED instead of SS\$_CVTUNGRANT -- a CONVERT that lands on a lock still queued from an earlier request is told the SAME thing a fresh NOQUEUE request would be told, collapsing two different conditions into one report.";;
+        why)          echo "SS__CANCELGRANT is 2488 (SS\$_NOTQUEUED) instead of 8508 (SS\$_CVTUNGRANT) -- an ungrantable conversion is reported as a plain 'not queued'.";;
         require_fail) cat <<'EOF'
 sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
 EOF
@@ -2924,11 +2932,11 @@ apply_edit() {
         # the rule half-applied rather than restored.
         sed -i 's|strncasecmp(given, full, glen) == 0|strcasecmp(given, full) == 0 /* NEGCTL run-qualifier-not-abbreviated */|' "$_file";;
     kstat-deadlock-mismapped)
-        sed -i 's|case 100: return SS\$_DEADLOCK;|case 100: return SS$_NOTQUEUED; /* NEGCTL kstat-deadlock-mismapped */|' "$_file";;
+        sed -i 's|#define SS__DEADLOCK    3594|#define SS__DEADLOCK    2488 /* NEGCTL kstat-deadlock-mismapped */|' "$_file";;
     kstat-ivlockid-mismapped)
-        sed -i 's|case 108: return SS\$_IVLOCKID;|case 108: return SS$_NOTQUEUED; /* NEGCTL kstat-ivlockid-mismapped */|' "$_file";;
+        sed -i 's|#define SS__IVLOCKID    8484|#define SS__IVLOCKID    2488 /* NEGCTL kstat-ivlockid-mismapped */|' "$_file";;
     kstat-cvtungrant-mismapped)
-        sed -i 's|case 116: return SS\$_CVTUNGRANT;|case 116: return SS$_NOTQUEUED; /* NEGCTL kstat-cvtungrant-mismapped */|' "$_file";;
+        sed -i 's|#define SS__CANCELGRANT 8508|#define SS__CANCELGRANT 2488 /* NEGCTL kstat-cvtungrant-mismapped */|' "$_file";;
 
     assign-terminal-bypasses-executive)
         sed -i 's|        if (devres.is_terminal) {|        if (0 \&\& devres.is_terminal) { /* NEGCTL assign-terminal-bypasses-executive */|' "$_file";;

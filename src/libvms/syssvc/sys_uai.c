@@ -134,11 +134,14 @@ static int parse_uaf_line(const char *line, struct uaf_record *rec)
 
     f = strtok_r(NULL, "|", &saveptr);
     if (!f) return -1;
-    rec->uic_group = (unsigned int)strtoul(f, NULL, 10);
+    /* OCTAL: SYSUAF.DAT UIC fields (vms-e60; derivation in
+     * src/libvms/rtl/sysuaf.c). */
+    rec->uic_group = (unsigned int)strtoul(f, NULL, 8);
 
     f = strtok_r(NULL, "|", &saveptr);
     if (!f) return -1;
-    rec->uic_member = (unsigned int)strtoul(f, NULL, 10);
+    /* OCTAL: see above (vms-e60). */
+    rec->uic_member = (unsigned int)strtoul(f, NULL, 8);
 
     f = strtok_r(NULL, "|", &saveptr);
     if (!f) return -1;

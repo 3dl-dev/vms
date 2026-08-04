@@ -31,39 +31,35 @@
  * OVMX service register (rd vms-d89) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-PARTIAL: sys$enq (vms-82a) -- exec: the grant decision, the lock id and the
- *     value block all come back from the kernel lock manager. There is no userspace
- *     lock table and no flock() fallback; tests/qemu/test_syssvc_lock.c is the
- *     A-writes/B-reads proof, and lock-compat-cr-ex mutates the executive code that
- *     answers it.
- * OVMX-LOCAL: sys$enq -- the ssdef.h SPELLING of the status. kstat_to_ss() below runs
- *     in the calling process and maps the kernel numbering onto the public SS$_xxx
- *     constants; the executive never sees an ssdef.h value.
- * OVMX-PARTIAL: sys$enqw (vms-82a) -- exec: the same request as $ENQ with the wait
- *     taken in the executive.
- * OVMX-LOCAL: sys$enqw -- the same userspace status mapping as $ENQ.
- * OVMX-PARTIAL: sys$deq (vms-82a) -- exec: a pass-through to vms_kif_deq; the release
- *     decision is entirely the kernel lock manager's.
- * OVMX-LOCAL: sys$deq -- the same userspace status mapping as $ENQ.
+ * OVMX-EXECUTIVE: sys$enq (vms-82a) proof=tests/qemu/test_syssvc_lock_status.c -- the
+ *     grant decision, the lock id, the value block AND THE VMS CONDITION VALUE all
+ *     come back from the kernel lock manager. There is no userspace lock table, no
+ *     flock() fallback, and since kstat_to_ss() was deleted no status mapping either.
+ * OVMX-EXECUTIVE: sys$enqw (vms-82a) proof=tests/qemu/test_syssvc_lock_status.c -- the
+ *     same request as $ENQ with the wait taken in the executive, reporting the same
+ *     executive-supplied condition value.
+ * OVMX-EXECUTIVE: sys$deq (vms-82a) proof=tests/qemu/test_syssvc_lock_status.c -- a
+ *     pass-through to vms_kif_deq; the release decision and the returned condition
+ *     value are both the kernel lock manager's.
  *
- * THESE THREE WERE OVMX-EXECUTIVE UNTIL vms-ecf ROUND 4, AND THE DOWNGRADE IS A
- * MEASUREMENT, NOT A LOSS OF CONFIDENCE IN THE LOCK MANAGER. What sat here was the
- * hand-written defence "kstat_to_ss() is a translation of the executive's answer, not
- * a substitute for it: it changes how the answer is spelled, never what it says."
- * That is exactly the kind of prose the register is not allowed to read, and the
- * manifest contradicts it: kstat-deadlock-mismapped, kstat-ivlockid-mismapped and
- * kstat-cvtungrant-mismapped each mutate THIS FILE ONLY -- no executive code at all --
- * and each changes what a public-API caller observes (SS$_DEADLOCK, SS$_IVLOCKID,
- * SS$_CVTUNGRANT). A part of the answer a caller receives is therefore computed in
- * the calling process, which is what OVMX-PARTIAL + OVMX-LOCAL is for. The executive
- * facts the old lines asserted are all still asserted above, under exec:.
+ * THESE THREE WERE DOWNGRADED TO OVMX-PARTIAL + OVMX-LOCAL BY vms-ecf ROUND 4
+ * AND ARE UPGRADED BACK HERE BY MEASUREMENT, NOT BY ASSERTION (vms-82a).
  *
- * THE ITEM THESE THREE CITE CHANGED FROM vms-ci.7 TO vms-82a (vms-fab). vms-ci.7 is
- * the closed item that rewired $ENQ/$DEQ onto the kernel lock manager; it delivered
- * the exec: half above and there is nothing left of it to do. vms-82a is the item the
- * round-4 adversary filed for the remainder these lines name -- the executive's
- * private numbering (100/108/116) and the kstat_to_ss() mapping that manufactures the
- * VMS-visible status in the calling process.
+ * The downgrade was correct for as long as it stood. What it recorded was that
+ * kstat_to_ss(), running in the calling process, decided part of what a caller
+ * saw: kstat-deadlock-mismapped, kstat-ivlockid-mismapped and
+ * kstat-cvtungrant-mismapped each mutated ONLY src/libvms/syssvc/sys_lock.c --
+ * no executive code at all -- and each changed the public status a caller
+ * received. A facility whose ANSWER is finished in userspace is not
+ * executive-resident however real the executive half is.
+ *
+ * That remainder is now gone rather than re-described: the executive emits VMS
+ * condition values itself and the mapping function is deleted. The three
+ * controls are NOT deleted with it -- they are repointed at the executive
+ * constants in src/kernel/vms_internal.h, so the same three defects still turn
+ * test_syssvc_lock_status red and the manifest's size is unchanged. A control
+ * that stops existing because the code it attacked improved is a control that
+ * measured the code rather than the property.
  */
 
 #include <stdint.h>
@@ -98,47 +94,28 @@ struct lksb {
  */
 
 /*
- * kstat_to_ss - Translate a kernel lock-manager status code into its
- * public ssdef.h SS$_xxx constant.
+ * THERE IS NO kstat_to_ss() ANY MORE, AND ITS ABSENCE IS THE FIX (vms-82a).
  *
- * The kernel module (src/kernel/vms_internal.h, SS__xxx) uses a compact
- * internal numbering scheme that does NOT match the public ssdef.h
- * values for most lock-manager codes (e.g. "not queued" is 40 in the
- * kernel; ssdef.h's SS$_NOTQUEUED is a different value -- see ssdef.h
- * itself, not a number recited here to drift out of sync with it). This
- * is the boundary where a raw kernel status crosses into the public
- * sys$enq/sys$enqw/sys$deq contract -- translate here, once, at the
- * point a status is stored
- * into the caller's LKSB or returned. Internal control flow in do_enq
- * (the wait-loop's success-bit and granted-mode checks) must keep using
- * the raw kernel value; only the value that actually leaves this file
- * gets mapped.
+ * A function stood here that mapped the kernel lock manager's private
+ * numbering (40/100/108/112/116/120) onto the public ssdef.h SS$_xxx
+ * constants, in the CALLING PROCESS. It was defended in this file as "a
+ * translation of the executive's answer, not a substitute for it: it changes
+ * how the answer is spelled, never what it says". That defence was FALSE and
+ * the defect manifest proved it: mutating one of its case arms -- with zero
+ * executive code changed -- moved what a caller received from SS$_DEADLOCK to
+ * SS$_NOTQUEUED, which is a different answer, not a different spelling.
  *
- * The magic numbers on the left are the raw kernel SS__xxx values from
- * src/kernel/vms_internal.h (kept as literals rather than an #include,
- * since that header pulls in kernel-only headers and cannot be built
- * into glibc userspace code). Anything not listed here -- including
- * SS__NORMAL(1)/SS__BADPARAM(0x14)/SS__ACCVIO(0xC), which already
- * share the same numeric value in both schemes -- passes through
- * unchanged, so an unexpected kernel status is never silently mapped
- * to the wrong public constant.
+ * The executive now yields VMS condition values directly (see the block above
+ * the lock codes in src/kernel/vms_internal.h), so there is nothing left to
+ * translate and no part of the answer is computed here. $ENQ/$ENQW/$DEQ store
+ * and return exactly what the lock manager said.
+ *
+ * DO NOT REINTRODUCE A MAPPING LAYER. If a kernel lock status ever needs a
+ * different public value, the value the EXECUTIVE emits is what changes;
+ * re-adding a userspace switch would restore precisely the split answer this
+ * deleted -- and the lock manager is the facility the whole executive-
+ * residency ruling turns on (vms-ci.7), so it is the worst place to keep one.
  */
-static uint32_t kstat_to_ss(uint32_t k)
-{
-    switch (k) {
-    case 40:  return SS$_NOTQUEUED;    /* kernel SS__NOTQUEUED */
-    case 100: return SS$_DEADLOCK;     /* kernel SS__DEADLOCK */
-    case 108: return SS$_IVLOCKID;     /* kernel SS__IVLOCKID */
-    case 112: return SS$_SUBLOCKS;     /* kernel SS__SUBLOCKS */
-    case 116: return SS$_CVTUNGRANT;   /* kernel SS__CANCELGRANT -- same
-                                         * concept as ssdef.h's "convert
-                                         * ungrantable": a queued
-                                         * conversion could not be
-                                         * granted (deadlock avoidance) */
-    case 120: return SS$_VALNOTVALID;  /* kernel SS__VALNOTVALID */
-    default:  return k;
-    }
-}
 
 /*
  * lckflags_to_kernel - Translate public OpenVMS LCK$M_* flag bits (real
@@ -220,17 +197,15 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
                               &lkid, valblk);
     }
 
-    /* Translate raw kernel status -> public ssdef.h constant exactly once,
-     * at the boundary where it is stored/returned. The kernel has already
-     * blocked (for a queued sync request) and reports the final granted /
-     * deadlock status directly -- no userspace wait loop remains. */
-    uint32_t pub_status = kstat_to_ss(status);
-
-    lksb->lksb$w_status = (uint16_t)pub_status;
+    /* The kernel has already blocked (for a queued sync request) and reports
+     * the final granted / deadlock status directly -- no userspace wait loop
+     * remains, and since vms-82a no translation either: `status` IS the VMS
+     * condition value the lock manager yielded. */
+    lksb->lksb$w_status = (uint16_t)status;
     lksb->lksb$l_lkid = lkid;
     memcpy(lksb->lksb$b_valblk, valblk, sizeof(valblk));
 
-    return pub_status;
+    return status;
 }
 
 /*
@@ -318,6 +293,5 @@ uint32_t sys$deq(uint32_t lkid, void *valblk, uint32_t acmode,
      * /CANCEL/INVVALBLK) distinct from the $ENQ flags defined in starlet.h;
      * the kernel deq currently only acts on the VALBLK bit, so only that is
      * meaningful here. Full $DEQ flag support is tracked separately. */
-    return kstat_to_ss(vms_kif_deq(lkid, (uint8_t *)valblk,
-                                   lckflags_to_kernel(flags)));
+    return vms_kif_deq(lkid, (uint8_t *)valblk, lckflags_to_kernel(flags));
 }

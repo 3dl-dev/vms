@@ -1058,8 +1058,17 @@ static void establish_system_identity(void)
         ovmx_exec_halt("no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT",
                        "the system process has no authorized identity");
 
-    uint32_t uic = ((uint32_t)strtoul(uic_group, NULL, 10) << 16) |
-                    (uint32_t)strtoul(uic_member, NULL, 10);
+    /*
+     * OCTAL (vms-e60). SYSUAF.DAT's UIC fields are octal; derivation in
+     * src/libvms/rtl/sysuaf.c. This site is the one that mattered most and
+     * the item did not name it: PID 1 parses SYSTEM's UIC here and stamps
+     * it into the executive via vms_kif_setident(), so a base mismatch here
+     * gives the system process a different identity from the one every
+     * other reader of SYSUAF computes. It was correct only because SYSTEM
+     * is 1|4, which reads the same in both bases.
+     */
+    uint32_t uic = ((uint32_t)strtoul(uic_group, NULL, 8) << 16) |
+                    (uint32_t)strtoul(uic_member, NULL, 8);
     uint64_t privs = parse_privilege_string(priv_str);
 
     uint32_t st = vms_kif_setident("SYSTEM", uic, privs);

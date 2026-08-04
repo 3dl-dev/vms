@@ -212,9 +212,17 @@ CITE_FIX_ID="vms-regnc"
 # never has to flip the row the other controls depend on being open.
 CITE_CLOSED_ID="vms-regnc30"
 
-# Neither id may be real tree state, or these controls measure the product
+# The two exemplars for the TREE-WIDE rescan's own verdicts (rd vms-004e).
+# Distinct from the ids above because those are cited from a marker family
+# this gate PARSES, and these must be cited from one it does not -- see
+# controls 11a/11b for why that distinction is the whole point.
+CITE_TREE_ABSENT_ID="vms-regnc41"
+CITE_TREE_CLOSED_ID="vms-regnc42"
+
+# None of these may be real tree state, or these controls measure the product
 # instead of the fixture they build.
-for _cid in "$CITE_FIX_ID" "$CITE_CLOSED_ID"; do
+for _cid in "$CITE_FIX_ID" "$CITE_CLOSED_ID" \
+            "$CITE_TREE_ABSENT_ID" "$CITE_TREE_CLOSED_ID"; do
     if awk -F'\t' -v id="$_cid" '$1 == id { found = 1 } END { exit !found }' \
             "$SRC_ROOT/tracking/rd-citations.tsv" 2>/dev/null; then
         echo "  FAIL: BROKEN FIXTURE: the committed citation ledger already has a row"
@@ -890,6 +898,15 @@ F_CITE_LEDGER_DUP="FAIL: REFUSING to certify citations: item listed twice in the
 F_CITE_NO_CITATIONS="FAIL: REFUSING to certify citations: this scan found NO rd id cited by any"
 F_CITE_NO_ROWS="FAIL: REFUSING to certify citations: the tree cites "
 F_CITE_TREE_UNRESOLVED="FAIL: the tree cites "
+# The tree-wide rescan's CLOSED and NONEXISTENT verdicts (rd vms-004e). These
+# are DIFFERENT CODE PATHS from F_CITE_CLOSED / F_CITE_ABSENT above, which are
+# the verdicts about ids THIS GATE'S OWN PARSER handed to the checker. Until
+# vms-004e reworded the headlines, both paths reduced to the same longest
+# literal run -- " cites a CLOSED rd item: " -- so the coverage check could not
+# tell them apart and one control appeared to cover both. It never did: the
+# tree-wide half was unprovoked by anything here. Controls 11a/11b provoke it.
+F_CITE_TREE_CLOSED="FAIL: the tree cites a CLOSED rd item: "
+F_CITE_TREE_ABSENT="FAIL: the tree cites an rd item that DOES NOT EXIST: "
 
 # The verdicts a citation control must NOT also provoke. Each control below
 # removes from this list the one it is FOR, and says so where the removal is
@@ -905,7 +922,9 @@ $F_CITE_FUTURE
 $F_CITE_LEDGER_DUP
 $F_CITE_NO_CITATIONS
 $F_CITE_NO_ROWS
-$F_CITE_TREE_UNRESOLVED"
+$F_CITE_TREE_UNRESOLVED
+$F_CITE_TREE_CLOSED
+$F_CITE_TREE_ABSENT"
 
 # cite_others <fragment>...: every verdict in CITE_ALL except the named ones,
 # one per line, for splatting into expect_red's forbidden list. Derived from
@@ -990,12 +1009,19 @@ expect_red "$TIME" \
 #    tools/gen_rd_citations.py would actually commit. The generator does not
 #    invent a row; it records that rd has no such item. Without this control,
 #    "regenerate it and the red goes away" would be true.
+#    F_CITE_TREE_ABSENT is allowed for the same reason control 1 allows
+#    F_CITE_TREE_UNRESOLVED, and it is the same honest reading: the repointed
+#    declaration lives under src/, so once the ledger records the id as absent
+#    the tree-wide rescan reaches the very same verdict about the very same id.
+#    One mutation, two true statements. Controls 11a/11b are what provoke that
+#    verdict WITHOUT the parser also reaching it, which is what makes it a
+#    covered property rather than a side effect observed here.
 cite_repoint vms-q9z9
 cite_row vms-q9z9 absent - "(rd has no such item)"
 expect_red "$TIME $LEDGER" \
     "a fabricated item id stays red after the ledger is regenerated" \
     "$F_CITE_ABSENT" \
-    "$(cite_others "$F_CITE_ABSENT")"
+    "$(cite_others "$F_CITE_ABSENT" "$F_CITE_TREE_ABSENT")"
 
 # 3. A CLOSED ITEM, fixture synthesized in the sandbox. Two edits: the
 #    declaration repointed at the synthetic id, and the row the generator
@@ -1008,10 +1034,14 @@ if cite_fixture_broken "$name_cite_closed" "closed"; then
     record_verdict "$name_cite_closed" 0
     restore
 else
+    # F_CITE_TREE_CLOSED allowed for the reason spelled out on control 2: the
+    # repointed declaration is under src/, so the tree-wide rescan independently
+    # reaches the same CLOSED verdict about the same id. Control 11b provokes
+    # that verdict with the parser NOT reaching the id, which is what covers it.
     expect_red "$TIME $LEDGER" \
         "$name_cite_closed" \
         "$F_CITE_CLOSED$CITE_CLOSED_ID" \
-        "$(cite_others "$F_CITE_CLOSED")"
+        "$(cite_others "$F_CITE_CLOSED" "$F_CITE_TREE_CLOSED")"
 fi
 
 # 4. DELETE THE LEDGER. Every declaration is untouched and every cited item is
@@ -1115,6 +1145,56 @@ expect_red "$KIFH" \
     "an id cited in the tree that this gate's own parser never reads is still resolved" \
     "$F_CITE_TREE_UNRESOLVED" \
     "$(cite_others "$F_CITE_TREE_UNRESOLVED")"
+
+# 11a/11b. THE TREE-WIDE RESCAN'S OWN CLOSED AND NONEXISTENT VERDICTS
+#     (rd vms-004e).
+#
+# Control 11 above proves the rescan finds an id the parser never reads, but it
+# leaves that id with NO LEDGER ROW, so the only verdict it can provoke is
+# "... and <ledger> has NO ROW for it". The rescan has two further verdicts --
+# the id resolves to an rd item that is CLOSED, or to none at all -- and until
+# this commit NOTHING here provoked either. That was invisible rather than
+# argued: the tree-wide headlines used to begin with the same "$_cs_what"
+# variable as the parser's, so both paths reduced to the identical longest
+# literal run and controls 2 and 3 appeared to cover all four verdicts. They
+# only ever covered the parser's two. Rewording the headline did not create
+# this gap; it made it legible.
+#
+# So each of these mutates the OVMX-UNWIRED marker -- a family this gate's
+# parser does not read, exactly as control 11 does -- AND writes the ledger row
+# the generator would write. That is the minimal way to reach the rescan's
+# verdict without the parser reaching the same id: F_CITE_UNLISTED stays
+# forbidden, and it is the load-bearing half of the attribution, because it is
+# the verdict that would fire if this gate HAD parsed the id.
+#
+# WHAT CANNOT BE FORBIDDEN HERE, AND WHY -- said rather than quietly omitted.
+# The parser fragments are proper SUBSTRINGS of the tree-wide ones:
+#
+#     " cites a CLOSED rd item: "  is inside  "FAIL: the tree cites a CLOSED rd item: "
+#
+# and the forbidden check is a substring grep over the whole output. So the
+# tree-wide message necessarily matches the parser fragment, and F_CITE_CLOSED
+# / F_CITE_ABSENT cannot be forbidden in the control that provokes the
+# tree-wide verdict -- not because the mutation is impure, but because
+# substring matching cannot separate them in that direction. The REQUIRED
+# fragment carries the weight instead: it is the tree-wide headline WITH the
+# synthetic id appended, which no parser verdict can produce. F_CITE_TREE_-
+# UNRESOLVED is allowed for the same containment reason ("FAIL: the tree cites "
+# is inside both), and it is the reason these are two controls and not one:
+# each names its own id, so neither can be satisfied by the other's red.
+sed -i 's|OVMX-UNWIRED: vms_kif_getlki (vms-[0-9a-z.]*)|OVMX-UNWIRED: vms_kif_getlki ('"$CITE_TREE_ABSENT_ID"')|' "$KIFH"
+cite_row "$CITE_TREE_ABSENT_ID" absent - "(rd has no such item)"
+expect_red "$KIFH $LEDGER" \
+    "an id the gate never parses, recorded by the ledger as NONEXISTENT, is named by the tree-wide rescan" \
+    "$F_CITE_TREE_ABSENT$CITE_TREE_ABSENT_ID" \
+    "$(cite_others "$F_CITE_TREE_ABSENT" "$F_CITE_ABSENT" "$F_CITE_TREE_UNRESOLVED")"
+
+sed -i 's|OVMX-UNWIRED: vms_kif_getlki (vms-[0-9a-z.]*)|OVMX-UNWIRED: vms_kif_getlki ('"$CITE_TREE_CLOSED_ID"')|' "$KIFH"
+cite_row "$CITE_TREE_CLOSED_ID" closed done "negctl -- the row the generator writes for a closed item"
+expect_red "$KIFH $LEDGER" \
+    "an id the gate never parses, recorded by the ledger as CLOSED, is named by the tree-wide rescan" \
+    "$F_CITE_TREE_CLOSED$CITE_TREE_CLOSED_ID" \
+    "$(cite_others "$F_CITE_TREE_CLOSED" "$F_CITE_CLOSED" "$F_CITE_TREE_UNRESOLVED")"
 
 # 12. GREEN. Repoint a declaration from one OPEN ledgered item to a DIFFERENT
 #     one. Every red above edits a citation or the ledger, so without this the

@@ -516,7 +516,7 @@ rd_cite_check() {
                 ;;
             closed)
                 _cs_o_closed=$((_cs_o_closed + 1))
-                echo "FAIL: $_cs_what cites a CLOSED rd item: $_cs_tid (status: $_cs_status)"
+                echo "FAIL: the tree cites a CLOSED rd item: $_cs_tid (status: $_cs_status)"
                 echo "        $_cs_title"
                 echo "  -> found by the independent tree-wide rescan (rd vms-004e), not by"
                 echo "     $_cs_what's own parser -- some OTHER marker family cites this id."
@@ -527,7 +527,7 @@ rd_cite_check() {
                 ;;
             absent)
                 _cs_o_absent=$((_cs_o_absent + 1))
-                echo "FAIL: $_cs_what cites an rd item that DOES NOT EXIST: $_cs_tid"
+                echo "FAIL: the tree cites an rd item that DOES NOT EXIST: $_cs_tid"
                 echo "  -> found by the independent tree-wide rescan (rd vms-004e), not by"
                 echo "     $_cs_what's own parser -- some OTHER marker family cites this id."
                 echo "     rd has no such item. The ledger records that rather than"

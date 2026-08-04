@@ -248,10 +248,15 @@ struct scs_pb {
      * for any reason, it is then a relatively simple matter to scan this queue
      * to determine which connections have also been lost" (p. 2-28).
      *
-     * Owned entirely by src/vmsscs/scs_cdt.c -- scs_config.c never reads or
-     * writes it. NOTE that scs_pb_close() zeroes the whole PB and does NOT walk
-     * this queue: the p. 2-28 VC-loss scan (scs_cdl_vc_loss) must run first, or
-     * the CDTs are left holding a dangling pb pointer.
+     * POPULATED entirely by src/vmsscs/scs_cdt.c -- scs_config.c never inserts
+     * into or removes from this queue and never dereferences a CDT. It does
+     * READ the head pointer for exactly one purpose (vms-17f/vms-228):
+     * scs_pb_close() REFUSES to close a Path Block whose connection queue is not
+     * empty, returning SCS_PB_CLOSE_CONNECTIONS_QUEUED. The p. 2-28 VC-loss scan
+     * (scs_cdl_vc_loss) must run first, or the CDTs are left holding a dangling
+     * pb pointer. That used to be a comment; a comment is not enforcement, so it
+     * is now a refusal the caller cannot ignore. src/vmsscs/scs_depart.c is the
+     * one function that performs the whole sequence in the documented order.
      */
     struct scs_cdt *cdt_head;
 
@@ -311,14 +316,19 @@ struct scs_config {
  *
  *   scs_pb_open -> SCS_OPEN_EXISTING_REFRESHED   (the p. 2-21 rejoin REFRESH)
  *   scs_pb_close
- *       STRUCTURALLY UNREACHABLE from scsd.c. SCSD never closes a Path Block,
- *       never frees a peer slot (peer_find_or_add matches on MAC and only
- *       allocates), and gates scs_pb_open behind a !start_acked flag it never
- *       resets -- so a rejoining node re-enters the same peer slot on the same
- *       already-open PB and the transition never runs a second time, leaving no
- *       SB with an empty PB queue for the REFRESH rule to fire on. Wiring circuit
- *       close/reopen changes what OVMX puts on the wire, so it is NOT part of
- *       vms-7be (a deliberately wire-invisible refactor); it is filed as vms-17f.
+ *       LIVE AS OF vms-17f. Until that item both were structurally unreachable:
+ *       SCSD never closed a Path Block, never freed a peer slot, and gated
+ *       scs_pb_open behind a !start_acked flag it never reset, so a rejoining
+ *       node re-entered the same slot on the same already-open PB. scsd.c now
+ *       runs a departure sweep (scsd_peer_departure_sweep) that, when a peer has
+ *       been silent past the listen timeout, calls scs_pb_depart() -- the p. 2-28
+ *       ordered teardown in src/vmsscs/scs_depart.c -- and releases the peer
+ *       slot. The returning node then builds a NEW formative PB and its
+ *       scs_pb_open finds the old SB with an empty PB queue, which is exactly the
+ *       p. 2-21 Note. tests/vmsscs/test_scsd_wire.c drives that whole sequence
+ *       through the daemon's own receive dispatch with captured frames.
+ *       This is WIRE-VISIBLE (a returning peer now gets a fresh formation
+ *       dialogue instead of silence); OVMX_NO_PEER_DEPART=1 is the kill switch.
  *
  *   scs_pb_open -> SCS_OPEN_EXISTING_SB
  *       UNEXERCISED, not impossible: it needs a peer node presenting two Ethernet
@@ -328,9 +338,10 @@ struct scs_config {
  *       System Address SCSD writes in the SCA peer-logical field is shared state
  *       rather than the per-peer copy it was before vms-7be.
  *
- * Consequence, stated plainly: OVMX does NOT yet implement the rejoin refresh
- * rule. It implements the STRUCTURE the rule is written in terms of, which is
- * what vms-7be claims and all it claims.
+ * Consequence, stated plainly (vms-17f revision): OVMX now implements the rejoin
+ * refresh rule AND reaches it from the daemon. What it still does NOT have is a
+ * second interconnect, so SCS_OPEN_EXISTING_SB stays unexercised by scsd.c --
+ * see the note above it.
  */
 
 /* Result of scs_pb_open (pp. 2-20..2-21). */
@@ -415,14 +426,32 @@ struct scs_sb *scs_pb_learn_system_addr(struct scs_config *cfg, struct scs_pb *p
  */
 enum scs_open_result scs_pb_open(struct scs_config *cfg, struct scs_pb *pb);
 
+/* Result of scs_pb_close (vms-17f/vms-228). */
+enum scs_pb_close_result {
+    SCS_PB_CLOSE_OK = 0,      /* the PB was dequeued and returned to the pool */
+    SCS_PB_CLOSE_NOTHING = 1, /* NULL argument, or a PB that was not in use */
+    /* REFUSED: connections are still queued to this circuit. p. 2-28 requires
+     * the VC-loss scan to notify their SYSAPs BEFORE the circuit structure goes
+     * away, and zeroing the PB here would leave every one of those CDTs holding
+     * a dangling pb pointer. Run scs_cdl_vc_loss() + release the CDTs first --
+     * or just call scs_pb_depart() (scs_depart.h), which does it in order. */
+    SCS_PB_CLOSE_CONNECTIONS_QUEUED = 2
+};
+
 /*
  * scs_pb_close - the circuit went away. Dequeues the PB from whichever queue
  * holds it and returns it to the pool. The SB stays in the configuration queue
  * even with no PBs left: VMS "keeps in a queue the System Blocks for nodes with
  * which it has had at least one open virtual circuit" (p. 2-17) -- that is what
  * makes the p. 2-21 refresh case reachable on a rejoin.
+ *
+ * REFUSES (and changes nothing) when connections are still queued to the PB --
+ * see SCS_PB_CLOSE_CONNECTIONS_QUEUED above. This module cannot notify them
+ * itself: the CDT lives one layer up (scs_cdt.c depends on this file, not the
+ * other way round), so the refusal is how the ordering is ENFORCED rather than
+ * merely documented.
  */
-void scs_pb_close(struct scs_config *cfg, struct scs_pb *pb);
+enum scs_pb_close_result scs_pb_close(struct scs_config *cfg, struct scs_pb *pb);
 
 /* --- lookups -------------------------------------------------------------- */
 

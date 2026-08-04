@@ -102,15 +102,30 @@ target_link_libraries(vmsscs_cdt PUBLIC vmsscs_config)
 # sender is suspended and resumed FIFO when credit arrives, pp. 2-45..2-46) and
 # the p. 2-44 special credit message trigger.
 #
-# NOT LINKED INTO scsd_exe: nothing in the daemon calls it yet, and OVMX
-# therefore still emits no live credit, enters no Credit Wait and sends no
-# special credit message. See the reachability notes in scs_credit.h -- do not
-# read a green test run as "OVMX does flow control".
+# LINKED INTO scsd_exe SINCE vms-17f, but only barely: the daemon's ONE call
+# into this library is scs_credit_wait_flush() on connection teardown (via
+# vmsscs_depart). OVMX still emits no live credit, enters no Credit Wait and
+# sends no special credit message, so that flush always drops zero waiters
+# today. See the reachability notes in scs_credit.h -- do not read a green test
+# run as "OVMX does flow control".
 add_library(vmsscs_credit STATIC scs_credit.c)
 target_include_directories(vmsscs_credit PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(vmsscs_credit PUBLIC vmsscs_cdt)
+
+# vms-17f - ORDERED PATH-BLOCK TEARDOWN ON PEER DEPARTURE. Sits at the TOP of
+# the config <- cdt <- credit dependency chain, because it is the only place
+# from which the whole p. 2-28 sequence can be run: notify the SYSAPs on the
+# circuit, flush their Credit Waits, release their CDTs (returning the MFREEQ
+# share to the port), and only then close the Path Block. Pure state: builds no
+# frame, parses no frame, opens no socket. Carries the OVMX_NO_PEER_DEPART kill
+# switch and the measured listen timeout.
+add_library(vmsscs_depart STATIC scs_depart.c)
+target_include_directories(vmsscs_depart PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_depart PUBLIC vmsscs_credit)
 
 # vms-dd5 - THE SCA CONNECTION STATE MACHINE (VAXcluster Principles ch. 2,
 # Figures 2-14/2-15/2-16, pp. 2-22..2-27). Pure state: a static const transition
@@ -130,7 +145,7 @@ target_include_directories(scsd_exe PRIVATE
 )
 # vms-dd5 links vmsscs_conn (and, transitively, vmsscs_cdt -- which until this
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

@@ -45,6 +45,7 @@
 #include "scs_config.h"
 #include "scs_conn.h"
 #include "scs_connect.h"
+#include "scs_depart.h"
 #include "scs_dir.h"
 #include "scs_hello.h"
 #include "scs_member.h"
@@ -248,6 +249,13 @@ static void ovmx_cluster_logical(uint16_t sysid, uint8_t out[6])
  */
 struct peer_state {
     struct scs_pb *pb;        /* Path Block: this peer's port + virtual circuit; NULL = free slot */
+    /* vms-17f: CLOCK_MONOTONIC ms at which this peer was last heard from AT ALL
+     * -- any 0x6007 frame carrying its source MAC, multicast beacons included,
+     * not only the ones addressed to us. That breadth is deliberate: a node that
+     * is still beaconing has not departed, and stamping only unicast-to-us
+     * frames would declare a live-but-quiet member gone. 0 = never heard (a slot
+     * built by a test, or by a lookup that allocated one). */
+    uint64_t last_rx_ms;
     int      channel_up;      /* >=1 directed HELLO exchanged (NISCA channel, not an SCA VC state) */
     long     directed_replies;
     struct timespec last_directed; /* CLOCK_MONOTONIC of our last directed reply (rate limit) */
@@ -384,7 +392,28 @@ static struct peer_state *peer_find_or_add(struct scs_config *cfg, struct scs_pd
     }
     memset(&tbl[free_slot], 0, sizeof(tbl[free_slot]));
     tbl[free_slot].pb = pb;
+    /* vms-17f: first contact IS contact. Without this stamp a slot allocated by
+     * a frame that never reaches peer_touch() would sit at last_rx_ms 0 forever
+     * and the departure sweep would have nothing to age it from. */
+    tbl[free_slot].last_rx_ms = monotonic_ms();
     return &tbl[free_slot];
+}
+
+/*
+ * peer_touch - vms-17f: record that `mac` was heard from at `now_ms`. Stamps an
+ * EXISTING peer slot only; it never allocates one, so a stray frame from an
+ * unknown node cannot consume a slot. Called for every 0x6007 frame the daemon
+ * receives, BEFORE the "unicast to our HW MAC" gate -- see the last_rx_ms field
+ * comment for why the multicast beacons have to count.
+ */
+static void peer_touch(struct peer_state *tbl, const uint8_t mac[6], uint64_t now_ms)
+{
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        if (tbl[i].pb != NULL && mac_eq(tbl[i].pb->remote_port_addr, mac)) {
+            tbl[i].last_rx_ms = now_ms;
+            return;
+        }
+    }
 }
 
 /*
@@ -470,6 +499,23 @@ static int scsd_cdl_ready = 0;
 static unsigned long conn_transitions = 0;
 static unsigned long conn_illegal_events = 0;
 static unsigned long conn_unemitted_actions = 0;
+
+/*
+ * vms-17f: the p. 2-20/2-21 open transitions this run actually took, indexed by
+ * enum scs_open_result, plus the departure sweep's tallies. File scope for the
+ * same reason as the three above: scsd_vc_on_open() is handed a const context
+ * and the sweep runs from main()'s timer block, so there is no one `rx` both can
+ * reach. tests/vmsscs/test_scsd_wire.c resets and reads them.
+ *
+ * These exist because "the REFRESH branch is reachable now" is precisely the
+ * kind of claim this epic has repeatedly sent back for being unmeasured. The
+ * number is the claim.
+ */
+static unsigned long pb_open_results[3] = {0, 0, 0}; /* NEW_SB, EXISTING_SB, REFRESHED */
+static unsigned long pb_open_errors = 0;
+static unsigned long peer_departures = 0;
+static unsigned long depart_connections_lost = 0;
+static unsigned long depart_refusals = 0;
 
 /*
  * conn_bind - get (or create) the CDT for one of this peer's connections,
@@ -720,16 +766,54 @@ static int scsd_vc_emit(const struct scsd_vc_ctx *ctx, struct peer_state *ps,
 }
 
 /*
+ * scsd_open_result_text - what the p. 2-21 open transition did, as one clause
+ * for the log line. Purely a name for an enum value: it asserts nothing about
+ * whether the daemon can reach it, because a log branch that claims a rule the
+ * daemon cannot execute is dead code wearing a fact's clothes (that is what the
+ * two "UNEXPECTED: believed unreachable" clauses here were before vms-17f).
+ * Reachability is stated once, below, with the test that measures it.
+ */
+static const char *scsd_open_result_text(enum scs_open_result r)
+{
+    switch (r) {
+    case SCS_OPEN_NEW_SB:
+        return "node learned for the first time";
+    case SCS_OPEN_EXISTING_REFRESHED:
+        return "old system block REFRESHED (rejoin, p. 2-21 Note)";
+    case SCS_OPEN_EXISTING_SB:
+        return "queued to the existing system block";
+    default:
+        return "OPEN FAILED -- no path block or no system block";
+    }
+}
+
+/*
  * scsd_vc_on_open - the p. 2-21 open transition, run ONCE per circuit whenever
  * the state machine reaches OPEN (by STACK, by a bare ACK, or by the p. 2-16
  * implied ACK). Body unchanged from vms-21e/vms-246/vms-7be; only its trigger
  * moved from "the peer sent its round-2 ack" to "the circuit reached OPEN".
  *
- * REACHABILITY, restated so a green test run is not misread: SCS_OPEN_NEW_SB is
- * still the only transition SCSD reaches. scs_pb_close() still has no caller
- * here and peer slots are still never released, so the p. 2-21 rejoin REFRESH
- * rule remains unimplemented in the daemon (vms-17f). vms-4071 changed the VC
- * FORMATION machine, not the Path-Block lifecycle.
+ * REACHABILITY AS MEASURED (vms-17f), so a green test run is not misread. Each
+ * line is a counter this function increments, and each is asserted by a named
+ * case in tests/vmsscs/test_scsd_wire.c that drives scsd_handle_frame():
+ *
+ *   SCS_OPEN_NEW_SB              REACHED. Every peer discovered for the first
+ *                                time. (test_vc_happy_path_frame_sequence and
+ *                                the rejoin case below.)
+ *   SCS_OPEN_EXISTING_REFRESHED  REACHED SINCE vms-17f, and only since: it needs
+ *                                the departure sweep to have closed the previous
+ *                                Path Block and released the peer slot, so that
+ *                                the returning node builds a second, FORMATIVE
+ *                                PB whose open finds the old SB with an empty PB
+ *                                queue. (test_rejoin_reaches_the_p221_refresh.)
+ *   SCS_OPEN_EXISTING_SB         NOT REACHED, and not reachable as OVMX is
+ *                                built: it needs one node presenting TWO ports,
+ *                                so that its SB still has another PB queued to
+ *                                it when the second circuit opens. OVMX binds a
+ *                                single interconnect and creates one PB per peer
+ *                                MAC. Left in scsd_open_result_text() as a name,
+ *                                claiming nothing.
+ *   SCS_OPEN_ERROR               Only from a PB with no SB attached.
  */
 static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps)
 {
@@ -737,6 +821,11 @@ static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps
      * both sides reset the VC to send_seq=1/recv_seq=0 when START completes. */
     scs_vc_reset_seq(&ps->vc);
     enum scs_open_result open_res = scs_pb_open(ctx->cfg, ps->pb);
+    if (open_res >= SCS_OPEN_NEW_SB && open_res <= SCS_OPEN_EXISTING_REFRESHED) {
+        pb_open_results[(int)open_res]++;
+    } else {
+        pb_open_errors++;
+    }
     log_ts(stdout);
     printf(" SCSD-I-STARTDONE, START/config complete with peer"
            " %02x:%02x:%02x:%02x:%02x:%02x -- VC reset"
@@ -747,12 +836,7 @@ static void scsd_vc_on_open(const struct scsd_vc_ctx *ctx, struct peer_state *ps
     printf(" SCSD-I-VCOPEN, path block OPEN, %s"
            " (configuration queue holds %u system blocks,"
            " %u path block(s) on this node's SB)\n",
-           open_res == SCS_OPEN_NEW_SB ? "node learned for the first time"
-           : open_res == SCS_OPEN_EXISTING_REFRESHED
-               ? "old system block REFRESHED (rejoin, p. 2-21 Note)"
-                 " -- UNEXPECTED: believed unreachable until vms-17f"
-               : "queued to the existing system block"
-                 " -- UNEXPECTED: believed unreachable until vms-17f",
+           scsd_open_result_text(open_res),
            scs_config_sb_count(ctx->cfg),
            scs_sb_pb_count(ps->pb->sb));
     fflush(stdout);
@@ -1102,6 +1186,13 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
 
     rx->counts[cls]++;
     rx->total_frames++;
+
+    /* vms-17f: the peer is alive. Stamped for EVERY 0x6007 frame carrying a
+     * known peer's source MAC, before the unicast-to-us gate below, because a
+     * node that is only beaconing multicast has not departed. Allocates
+     * nothing -- an unknown source is ignored here and picked up (or not) by
+     * the branch that handles its frame. */
+    peer_touch(rx->peers, buf + OFF_ETH_SRC, monotonic_ms());
 
     log_ts(stdout);
     printf(" SCSD-I-FRAME, class=%-9s total_sca_len=%u eth_len=%zd"
@@ -1994,6 +2085,193 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
     }
 }
 
+/* =====================================================================
+ * vms-17f -- PEER DEPARTURE, AND WHY THE p. 2-21 REFRESH WAS UNREACHABLE
+ * =====================================================================
+ *
+ * WHAT WAS BROKEN. scs_config.c has implemented the p. 2-21 Note correctly since
+ * vms-7be -- "If there are no other Path Blocks queued to the old System Block
+ * ... the old System Block is refreshed based on the contents of the formative
+ * System Block ... Typically, this happens when the remote node was once in the
+ * cluster, departed, and is now rebooting." SCSD could not reach it, for three
+ * reasons that all had to be fixed together:
+ *
+ *   1. scs_pb_close() had NO CALLER anywhere in this file. A circuit, once open,
+ *      stayed open for the life of the process.
+ *   2. peer_find_or_add() matches on port address and only ever ALLOCATES. A
+ *      slot was never released, so a returning node re-entered its stale one.
+ *   3. scs_pb_open() ran behind `if (!ps->start_acked)`, and start_acked was
+ *      never reset.
+ *
+ * So a rejoining VAX landed in the SAME peer slot on the SAME already-OPEN Path
+ * Block, took scs_pb_open()'s `!pb->on_pdt` early return, and got
+ * SCS_OPEN_EXISTING_SB. The REFRESH branch was structurally unreachable and its
+ * log clause said so.
+ *
+ * WHAT THIS SWEEP DOES. When a peer has been silent past the listen timeout it
+ * is declared departed: scs_pb_depart() runs the p. 2-28 ordered teardown (see
+ * scs_depart.h) and the peer slot is RELEASED. The System Block survives, by
+ * design (p. 2-17). When that node comes back, peer_find_or_add() builds a
+ * fresh slot -- start_acked back to 0 with the rest of the zeroed struct -- and
+ * a fresh FORMATIVE Path Block, formation runs from CLOSED again, and
+ * scs_pb_open() finds the old SB with an empty PB queue. That is the p. 2-21
+ * Note, executed.
+ *
+ * THIS IS WIRE-VISIBLE, and the change is exactly this: a returning peer now
+ * gets a full formation dialogue (round-0 START, round-1 STACK, round-2 ack)
+ * where before it got nothing, because OVMX thought the circuit was still open.
+ * OVMX_NO_PEER_DEPART=1 restores the old behaviour completely -- no teardown, no
+ * slot release, no second formation.
+ *
+ * WHAT IS NOT CLAIMED. This does not fix vms-2f3 (OVMX's own rejoin failure) and
+ * must not be read as doing so. It is the wiring that failure's diagnosis
+ * depends on: eleven hypotheses about frame content have been falsified there,
+ * and the strategy note is explicit that the rejoin is a connection-STATE
+ * failure. This gives the state a place to be wrong in. Whether it is the fault
+ * is a lab question, not a code-reading question.
+ *
+ * ===== MEASURED IN THE LAB, 2026-08-04 (lab-2 pods, tests/lab/README.md) =====
+ *
+ * Method: run SCSD against a live 2-node VMScluster, SIGKILL one node's SIMH
+ * process (a hard node failure -- NOT a shutdown, which would be a graceful
+ * departure and a different case), leave it dead well past the listen timeout,
+ * then reboot it with an UNCHANGED SCSNODE/SCSSYSTEMID. That is the p. 2-21
+ * Note's own scenario. Captures and SCSD logs are on the lab volume at
+ * /data/training/vax/k8s-labs/<pod>/logs/{17f-<tag>.pcap,scsd-<tag>.log}.
+ *
+ *   D2  vaxlab-2, VAX1 killed -- the node OVMX had an OPEN circuit and TWO SCS
+ *       connections with. SCSD: "peer aa:00:04:00:01:04 silent 20291ms ...
+ *       path block CLOSED, peer slot released, 2 connection(s) lost". When VAX1
+ *       came back: "path block OPEN, old system block REFRESHED (rejoin,
+ *       p. 2-21 Note)" and PB-OPEN: new-sb=1 refreshed=1. THE ITEM'S CLAIM,
+ *       on the wire.
+ *   D0  vaxlab-3, IDENTICAL scenario with OVMX_NO_PEER_DEPART=1. PB-OPEN:
+ *       new-sb=1 refreshed=0, PEER-DEPARTURES=0, zero SCSD-I-PEERGONE lines.
+ *       The switch suppresses the behaviour completely (guardrail 23: the
+ *       counter was RUN both ways before anything was written down here).
+ *   TZ  vaxlab-2, a fresh identity, 150 s, nobody killed. PB-OPEN: new-sb=1,
+ *       PEER-DEPARTURES=0 -- the ordinary join is unchanged and no healthy peer
+ *       is aged out.
+ *
+ * EVERY DEPARTURE RE-DERIVED FROM THE RAW CAPTURE, not from SCSD's own log: in
+ * D2 the three peers SCSD departed last transmitted at 17:09:23.9 / 17:09:54.7 /
+ * (VAX1) 17:07:10.6, and SCSD declared them gone 20.9 s / 20.5 s / 20.3 s later.
+ * No peer that was still transmitting was departed. VAX1's silence in that
+ * capture is 165.6 s end to end -- the kill, the 95 s dead window and the reboot.
+ */
+
+/*
+ * scsd_peer_departure_sweep - age every peer slot against `now_ms` and tear down
+ * the ones that have gone quiet. Returns the number of peers declared departed.
+ *
+ * Separated from main()'s loop for the reason vms-fb1 separated the receive
+ * dispatch: a timer block inside main() is renamed away by SCSD_UNIT_TEST and
+ * can therefore be mutated freely without reddening a test. This is the
+ * production sweep and tests/vmsscs/test_scsd_wire.c calls this function.
+ *
+ * KNOWN LIMIT, stated rather than hidden: main() calls this once per loop
+ * iteration, and the loop is driven by recv(). The 1-second SO_RCVTIMEO that
+ * makes it wake on an idle wire is set only in --emit-hello mode (which
+ * --respond and --connect both imply), so a receive-only SCSD watching a wire
+ * that goes COMPLETELY silent blocks in recv() and does not sweep until some
+ * frame arrives. Every mode that can form a circuit sets the timeout, so no
+ * circuit OVMX actually opens is affected; a listener that opens none has
+ * nothing to tear down.
+ */
+static unsigned scsd_peer_departure_sweep(struct scsd_rx *rx, uint64_t now_ms)
+{
+    if (rx == NULL || rx->peers == NULL) {
+        return 0;
+    }
+    if (!scs_depart_enabled()) {
+        /* THE KILL SWITCH: no peer is ever declared departed.
+         *
+         * REDUNDANT BY DESIGN, and measured to be: scs_pb_depart() checks the
+         * same switch, and the `res != SCS_PB_CLOSE_OK` guard below then
+         * declines to release the slot -- so deleting these three lines changes
+         * no observable behaviour (mutation M10 of the vms-17f battery survives
+         * the whole suite, and is listed as an equivalent mutant rather than
+         * quietly dropped). It is kept because the gate belongs at the top of
+         * the policy that reads the timeout, not only inside the mechanism. */
+        return 0;
+    }
+    uint64_t timeout_ms = scs_depart_listen_timeout_ms();
+    unsigned departed = 0;
+
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL || ps->last_rx_ms == 0) {
+            continue; /* free slot, or one never heard from -- nothing to age */
+        }
+        if (now_ms < ps->last_rx_ms || now_ms - ps->last_rx_ms < timeout_ms) {
+            continue;
+        }
+
+        uint8_t gone_mac[6];
+        memcpy(gone_mac, ps_port_addr(ps), 6);
+        uint64_t silent_ms = now_ms - ps->last_rx_ms;
+
+        struct scs_depart_stats st;
+        enum scs_pb_close_result res =
+            scs_pb_depart(scsd_cdl_ready ? &scsd_cdl : NULL, rx->cfg, ps->pb, &st);
+
+        if (res == SCS_PB_CLOSE_CONNECTIONS_QUEUED) {
+            /* A SYSAP error handler queued a NEW connection to the dying
+             * circuit. Nothing here can safely destroy a structure a SYSAP is
+             * holding, so the slot is LEFT ALONE and re-aged next sweep. Loud,
+             * because it means the teardown did not complete (INV-6: never fake
+             * success for an executive facility). */
+            depart_refusals++;
+            log_ts(stderr);
+            fprintf(stderr,
+                    " SCSD-W-DEPARTBUSY, peer %02x:%02x:%02x:%02x:%02x:%02x silent"
+                    " %llums but its path block still carries %u connection(s) --"
+                    " NOT torn down, will retry\n",
+                    gone_mac[0], gone_mac[1], gone_mac[2], gone_mac[3], gone_mac[4],
+                    gone_mac[5], (unsigned long long)silent_ms, scs_pb_cdt_count(ps->pb));
+            fflush(stderr);
+            continue;
+        }
+        if (res != SCS_PB_CLOSE_OK) {
+            /* The teardown did not happen -- the kill switch is set, or the PB
+             * was not in use. Releasing the slot anyway would be a departure
+             * that tore nothing down, i.e. exactly the "report success for work
+             * that was not done" shape INV-6 forbids. Leave it alone. */
+            continue;
+        }
+
+        peer_departures++;
+        depart_connections_lost += st.connections_lost;
+        departed++;
+
+        log_ts(stdout);
+        printf(" SCSD-I-PEERGONE, peer %02x:%02x:%02x:%02x:%02x:%02x silent %llums"
+               " (listen timeout %llums) -- path block CLOSED, peer slot released,"
+               " %u connection(s) lost, %u credit waiter(s) flushed,"
+               " %u MFREEQ buffer(s) returned; its system block STAYS in the"
+               " configuration queue (p. 2-17) so a rejoin can refresh it (p. 2-21)."
+               " Configuration queue now holds %u system block(s)\n",
+               gone_mac[0], gone_mac[1], gone_mac[2], gone_mac[3], gone_mac[4],
+               gone_mac[5], (unsigned long long)silent_ms,
+               (unsigned long long)timeout_ms, st.connections_lost,
+               st.waiters_flushed, st.mfreeq_reclaimed, scs_config_sb_count(rx->cfg));
+        fflush(stdout);
+
+        /* Release the slot, WHOLE. `pb = NULL` alone would be enough to free it
+         * for reuse (peer_find_or_add zeroes any slot it allocates), but a free
+         * slot must not sit there holding a departed node's connection handles,
+         * incarnation and start_acked: the only thing that distinguishes free
+         * from in-use is that one pointer, and every other field would read as
+         * the returning node's if anything ever looked without checking it.
+         * The memset is also what resets start_acked (and the three CDT
+         * pointers, whose CDTs scs_pb_depart just released), so the
+         * returning node re-drives formation from CLOSED instead of being pinned
+         * to state from its previous incarnation. */
+        memset(ps, 0, sizeof(*ps));
+    }
+    return departed;
+}
+
 /*
  * scsd_exit_summary - the end-of-run report, including the vms-dd5 connection
  * state-machine accounting and the stuck-connection scan.
@@ -2026,6 +2304,18 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                 " actions-required-but-not-emitted=%lu\n",
                 conn_transitions, conn_illegal_events, conn_unemitted_actions);
         (void)scs_conn_report_stuck(&scsd_cdl, out);
+        /* vms-17f: the p. 2-20/2-21 open transitions this run took, and the
+         * departure sweep's work. PB-OPEN-REFRESHED is the p. 2-21 Note firing
+         * -- a node that was here, left, and came back. */
+        fprintf(out, "  PB-OPEN: new-sb=%lu refreshed=%lu existing-sb=%lu errors=%lu\n",
+                pb_open_results[SCS_OPEN_NEW_SB],
+                pb_open_results[SCS_OPEN_EXISTING_REFRESHED],
+                pb_open_results[SCS_OPEN_EXISTING_SB], pb_open_errors);
+        fprintf(out, "  PEER-DEPARTURES=%lu CONNECTIONS-LOST=%lu TEARDOWNS-REFUSED=%lu"
+                " LISTEN-TIMEOUT-MS=%llu%s\n",
+                peer_departures, depart_connections_lost, depart_refusals,
+                (unsigned long long)scs_depart_listen_timeout_ms(),
+                scs_depart_enabled() ? "" : " (OVMX_NO_PEER_DEPART: sweep DISABLED)");
         fprintf(out, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld PADDED-HELLO-SENT=%ld\n",
                 rx->cm_config_frames, rx->cm_response_sent, rx->padded_sent);
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
@@ -2200,6 +2490,28 @@ int main(int argc, char **argv)
                         " transition log, no stuck-connection report\n");
         fflush(stderr);
     }
+    /* vms-17f: say once, at startup, exactly what the departure policy is, so a
+     * capture is never read as a spontaneous departure (or as the absence of
+     * one). A timeout at or below the longest peer silence ever measured on a
+     * HEALTHY link is legal -- the lab harness forces one to make a departure
+     * happen inside a short run -- but it is never silent. */
+    if (!scs_depart_enabled()) {
+        log_ts(stderr);
+        fprintf(stderr, " SCSD-I-DEPARTOFF, OVMX_NO_PEER_DEPART is set: no peer is"
+                        " ever declared departed, no path block is closed and no"
+                        " peer slot is released -- the pre-vms-17f behaviour\n");
+        fflush(stderr);
+    } else {
+        uint64_t lt = scs_depart_listen_timeout_ms();
+        log_ts(stdout);
+        printf(" SCSD-I-DEPARTON, peer listen timeout %llums%s\n",
+               (unsigned long long)lt,
+               lt <= (uint64_t)SCS_DEPART_HEALTHY_SILENCE_MAX_MS
+                   ? " -- AT OR BELOW the longest silence measured on a healthy"
+                     " link: departures in this run may be artificial"
+                   : "");
+        fflush(stdout);
+    }
     static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
     uint8_t our_hw_mac[6];
     memset(our_hw_mac, 0, sizeof(our_hw_mac));
@@ -2353,6 +2665,13 @@ int main(int argc, char **argv)
                 last_hello = now;
             }
         }
+
+        /* --- vms-17f: the peer departure sweep. A peer silent past the listen
+         * timeout has its Path Block torn down (p. 2-28 order) and its slot
+         * released, so that if it comes back it re-drives formation and its
+         * open takes the p. 2-21 REFRESH. WIRE-VISIBLE; OVMX_NO_PEER_DEPART=1
+         * disables it entirely. See the block above scsd_peer_departure_sweep. */
+        (void)scsd_peer_departure_sweep(&rx, monotonic_ms());
 
         /* --- vms-4071: the p. 2-14 formation reissue timer. "whenever a port
          * driver sends a START or a STACK ... it starts a timer and expects a

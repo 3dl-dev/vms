@@ -165,6 +165,27 @@ void scs_cdl_release(struct scs_cdl *cdl, struct scs_cdt *cdt)
     if (cdt == NULL || !cdt->in_use) {
         return;
     }
+    /* vms-61b: THE MFREEQ MUST BE GIVEN BACK. p. 2-43: forming the connection
+     * put `extended_credits` message buffers "into the MFREEQ associated with
+     * the port that supports the connection", and p. 2-45 records that share on
+     * the CDT. Breaking the connection returns those buffers to the port -- the
+     * depth is a property of the PORT, not of a connection that no longer
+     * exists. Without this the port's MFREEQ depth grows by the connection's
+     * contribution on every connect/disconnect cycle, which is exactly what a
+     * rejoining node produces. Saturating, because the count is unsigned and an
+     * inconsistency must not wrap it into a huge free-buffer claim.
+     *
+     * Only the DEPTH is reconciled here. scs_cdt.c deliberately knows nothing
+     * else about the credit account (see the field comments in scs_cdt.h and the
+     * teardown note in scs_credit.h): draining the CDT's Credit Wait queue needs
+     * struct scs_credit_waiter, which is opaque in this translation unit, so it
+     * is the caller's job and scs_depart.c is the caller that does it. */
+    if (cdt->pb != NULL && cdt->pb->pdt != NULL && cdt->extended_credits > 0) {
+        struct scs_pdt *pdt = cdt->pb->pdt;
+        pdt->mfreeq_count = (pdt->mfreeq_count > cdt->extended_credits)
+                                ? pdt->mfreeq_count - cdt->extended_credits
+                                : 0;
+    }
     pb_queue_remove(cdt->pb, cdt);
     /* Zero everything but keep the CDT itself in the CDL (p. 2-30). The next
      * scs_cdl_alloc that reuses this slot re-derives local_conid from the slot

@@ -309,10 +309,19 @@ enum scs_open_result scs_pb_open(struct scs_config *cfg, struct scs_pb *pb)
     return result;
 }
 
-void scs_pb_close(struct scs_config *cfg, struct scs_pb *pb)
+enum scs_pb_close_result scs_pb_close(struct scs_config *cfg, struct scs_pb *pb)
 {
     if (cfg == NULL || pb == NULL || !pb->in_use) {
-        return;
+        return SCS_PB_CLOSE_NOTHING;
+    }
+    /* p. 2-28: "If the circuit is broken for any reason, it is then a relatively
+     * simple matter to scan this queue to determine which connections have also
+     * been lost, and to notify the interested SYSAPs." That scan has to happen
+     * BEFORE the circuit structure is destroyed, and this module cannot perform
+     * it (the CDT layer sits above this one). So it is enforced instead of
+     * described: a PB with connections still queued to it is NOT closed. */
+    if (pb->cdt_head != NULL) {
+        return SCS_PB_CLOSE_CONNECTIONS_QUEUED;
     }
     if (pb->on_pdt) {
         pdt_queue_remove(pb->pdt, pb);
@@ -326,6 +335,7 @@ void scs_pb_close(struct scs_config *cfg, struct scs_pb *pb)
          * which it has had at least one open virtual circuit (p. 2-17). */
     }
     memset(pb, 0, sizeof(*pb));
+    return SCS_PB_CLOSE_OK;
 }
 
 /* --- lookups -------------------------------------------------------------- */

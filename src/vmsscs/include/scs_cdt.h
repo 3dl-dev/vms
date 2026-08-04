@@ -131,8 +131,11 @@
  *     scsd.c logs SCSD-W-CONNSLOT and carries on rather than allocating a
  *     Con.ID that differs from the one on the wire.
  *   - Nothing here has a SYSAP: msg_input / dgram_input / vc_loss_handler are
- *     never installed by the daemon, so scs_cdl_vc_loss() has no production
- *     caller either.
+ *     never installed by the daemon. scs_cdl_vc_loss() DOES have a production
+ *     caller as of vms-17f (scs_pb_depart(), reached from scsd.c's departure
+ *     sweep), but with no handler installed its notification loop currently
+ *     notifies nobody -- it counts the lost connections and releases them.
+ *     Installing real SYSAP error handlers is vms-abc's surface, not this one's.
  */
 #ifndef SCS_CDT_H
 #define SCS_CDT_H
@@ -390,6 +393,14 @@ struct scs_cdt *scs_cdl_alloc_conid(struct scs_cdl *cdl, uint32_t conid,
  * scs_cdl_release - the connection is broken. Dequeues the CDT from its Path
  * Block and marks it unused, but leaves it in its CDL slot for reuse (p. 2-30:
  * "released (but not deallocated)"). No-op on NULL or an already-free CDT.
+ *
+ * vms-61b: also RETURNS this connection's share of the port MFREEQ -- the
+ * `extended_credits` buffers p. 2-43 contributed at connection formation are
+ * subtracted from cdt->pb->pdt->mfreeq_count (saturating at 0). Nothing else
+ * about the credit account is touched; in particular the CDT's Credit Wait
+ * queue is NOT drained here, because struct scs_credit_waiter is opaque to
+ * scs_cdt.c. A caller tearing a connection down must call
+ * scs_credit_wait_flush() first (scs_depart.c does).
  */
 void scs_cdl_release(struct scs_cdl *cdl, struct scs_cdt *cdt);
 
@@ -491,7 +502,10 @@ unsigned scs_pb_cdt_count(const struct scs_pb *pb);
  * It does NOT release the CDTs and does NOT touch conn_state: what a connection
  * becomes after VC loss is the connection state machine's decision (vms-dd5).
  * It must be called BEFORE scs_pb_close(), which returns the Path Block to its
- * pool and would leave every CDT on it holding a dangling pb pointer.
+ * pool and would leave every CDT on it holding a dangling pb pointer. Since
+ * vms-17f that is enforced, not merely required: scs_pb_close() REFUSES a PB
+ * with a non-empty CDT queue (SCS_PB_CLOSE_CONNECTIONS_QUEUED). scs_depart.c's
+ * scs_pb_depart() is the one routine that performs the full sequence.
  */
 unsigned scs_cdl_vc_loss(struct scs_pb *pb);
 

@@ -1556,9 +1556,60 @@ Rule 8).
 
 ---
 
+### 4(M) Peer silence: how long a live node may say nothing (GROUNDED, `vms-17f`)
+
+**What this grounds and why.** OVMX now declares a peer *departed* after a listen
+timeout, tears its Path Block down and releases its peer slot (VAXcluster
+Principles pp. 2-17/2-21/2-28; `src/vmsscs/scs_depart.h`). That threshold decides
+whether a node that is merely quiet gets thrown out of OVMX's configuration
+database, so it is bounded by measurement rather than chosen. Nothing here is a
+frame layout — it is a **timing** property of the wire, measured the same way.
+
+**Method.** `tools/scs_peer_silence_measure.py` (re-runnable; PASS/FAILs each
+figure against a checked-in table). Over every `0x6007` frame in a capture, the
+gap between consecutive frames with the same **source MAC**, regardless of
+destination — multicast beacons included, because a node that is beaconing has
+not departed. Leading/trailing gaps at the capture window's edges are reported
+separately and excluded. Captures are classified as *healthy* or *departure* by
+what the run was for, never by the numbers.
+
+| population | captures | frames | wire span | **max per-source silence** |
+|---|---|---|---|---|
+| healthy (no node left) | `ovmx-760-persist-10min-20260730`, `cd0-baseline-current-20260728`, `formation-ci1-joinwindow` | 13 392 | 747 s | **3.153 s** |
+| departure (VAX2 dropped and rejoined, VAX1 up throughout) | `af2-established-rejoin-20260728` | 16 340 | 606 s | **395.955 s** (VAX2) |
+
+The two populations do not overlap, and they do not overlap **inside** the
+departure capture either: VAX1, which stayed up the whole time, never exceeds
+3.12 s in the same window as VAX2's 395.955 s gap.
+
+**What OVMX does with it (OVMX design choice, labeled per Rule 8).** The default
+listen timeout is **20 000 ms** — the value of the lab's SYSGEN `RECNXINTERVAL`
+(20, §3) — which is 6.3× the longest healthy silence measured and 20× below the
+observed departure. This is **not** a claim that VMS uses 20 s as a listen
+timeout: `RECNXINTERVAL` governs removal *after* a circuit breaks, not the timer
+that breaks it. The book (ch. 2) describes circuit loss but publishes no
+detection timer; that lives in the port drivers, which ch. 2 is not about.
+`OVMX_PEER_LISTEN_TIMEOUT_MS` overrides it and SCSD logs the value at startup, so
+a capture is never read as a spontaneous departure.
+
+**Explicit non-claim.** 3.153 s is the largest silence in 747 s of captured wire
+from a 2–3 node lab, not an upper bound. A larger cluster, a loaded node or a
+lossy link could exceed it; the choice rests on the margin, not on the maximum.
+
+---
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:
+
+- **Peer-liveness detection (`vms-17f`, §4M).** The two silence *populations* are
+  GROUNDED (measured, re-derivable). What is **NOT** grounded is the timer a real
+  VMS port driver uses to decide a channel is dead: no capture shows it and ch. 2
+  of the book does not publish one. OVMX's 20 s default is an OVMX choice sitting
+  in the gap between the measured populations, and is labeled as such in
+  `src/vmsscs/include/scs_depart.h`. Also not grounded: what a real node
+  *transmits*, if anything, on declaring a peer gone — OVMX transmits nothing at
+  that moment, which is an absence of evidence, not evidence of absence.
 
 - HELLO/SOLICIT: the offset-30 "per-frame word" is **now GROUNDED for the
   directed values (b2/b3/b4) in §4(a).1** (`vms-d94`, the NISCA channel-verify

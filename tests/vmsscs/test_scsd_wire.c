@@ -488,13 +488,19 @@ static void test_sb_exhaustion_is_visible_and_unreachable(void)
 }
 
 /*
- * The p. 2-21 REFRESH transition is INERT in the daemon. This asserts the reason
- * mechanically so the claim in scsd.c and scs_config.h cannot rot silently: a
- * rejoining node re-enters the same peer slot on the same already-open Path
- * Block, and the second open takes the early return instead of the REFRESH.
- * Making it fire is wire-visible and is filed as vms-17f.
+ * vms-17f: THE PEER SLOT IS THE THING THAT PINNED THE REJOIN, and this is the
+ * mechanism at slot level, without any frames.
+ *
+ * Until vms-17f peer_find_or_add() matched on port address and only ever
+ * ALLOCATED, so a node that left and came back re-entered its stale slot on its
+ * still-OPEN Path Block and the second open took scs_pb_open's already-open
+ * early return. Releasing the slot is what gives the returning node a second,
+ * FORMATIVE circuit for the p. 2-21 Note to fire on. The full sequence, driven
+ * by captured frames through the daemon's own receive dispatch, is
+ * test_rejoin_reaches_the_p221_refresh() further down; this case isolates the
+ * slot behaviour so a failure there can be told apart from a failure here.
  */
-static void test_rejoin_is_inert_in_the_daemon(void)
+static void test_released_peer_slot_gives_a_returning_node_a_new_circuit(void)
 {
     struct world w;
     world_init(&w);
@@ -510,19 +516,39 @@ static void test_rejoin_is_inert_in_the_daemon(void)
     ps_learn_sys_addr(&w.cfg, ps, sid);
     struct scs_pb *first_pb = ps->pb;
     CHECK(scs_pb_open(&w.cfg, ps->pb) == SCS_OPEN_NEW_SB, "first join was not NEW_SB");
+    ps->start_acked = 1; /* as scsd_vc_settle latches it when the circuit opens */
 
-    /* The node reboots and comes back on the same Ethernet port. SCSD's lookup is
-     * by port address and never releases a slot, so this is the SAME slot and the
-     * SAME Path Block -- there is no second circuit to run the transition on. */
+    /* THE OLD BEHAVIOUR, still exactly reachable: without a departure the lookup
+     * hands back the SAME slot and the SAME already-open Path Block. */
     struct peer_state *again = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac);
-    CHECK(again == ps, "rejoin allocated a new peer slot");
-    CHECK(again != NULL && again->pb == first_pb, "rejoin allocated a new Path Block");
-    CHECK(scs_pdt_formative_count(&w.pdt) == 0, "rejoin re-queued a formative PB");
+    CHECK(again == ps, "an undeparted peer did not resolve to its own slot");
+    CHECK(again != NULL && again->pb == first_pb, "an undeparted peer got a new Path Block");
     CHECK(scs_pb_open(&w.cfg, ps->pb) == SCS_OPEN_EXISTING_SB,
-          "a rejoin on the same PB no longer takes the already-open early return");
+          "a second open of the SAME open PB no longer takes the early return");
+
+    /* THE DEPARTURE. The Path Block goes, the slot goes, the System Block stays
+     * (p. 2-17) -- and start_acked goes with the slot, which is what lets
+     * formation run again for the returning node. */
+    CHECK(scs_pb_depart(NULL, &w.cfg, ps->pb, NULL) == SCS_PB_CLOSE_OK,
+          "the departure did not close the Path Block");
+    memset(ps, 0, sizeof(*ps));
+    CHECK(scs_config_sb_count(&w.cfg) == 1, "the System Block did not survive the departure");
+
+    struct peer_state *back = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac);
+    CHECK(back != NULL, "the returning peer was refused a slot");
+    if (back == NULL) {
+        return;
+    }
+    CHECK(back->start_acked == 0, "the returning peer inherited start_acked from its"
+                                  " previous incarnation -- formation would not re-run");
+    CHECK(back->pb != first_pb || back->pb->on_pdt == 1,
+          "the returning peer did not get a FORMATIVE Path Block");
+    CHECK(scs_pdt_formative_count(&w.pdt) == 1,
+          "the returning peer's Path Block is not queued to the PDT (p. 2-20)");
+    ps_learn_sys_addr(&w.cfg, back, sid);
+    CHECK(scs_pb_open(&w.cfg, back->pb) == SCS_OPEN_EXISTING_REFRESHED,
+          "the returning peer's open did not take the p. 2-21 REFRESH");
     CHECK(scs_config_sb_count(&w.cfg) == 1, "rejoin duplicated the System Block");
-    /* i.e. SCS_OPEN_EXISTING_REFRESHED is never produced: the refresh rule is
-     * implemented and tested in scs_config.c, but OVMX does not run it. */
 }
 
 /*
@@ -1430,6 +1456,8 @@ static const uint8_t ovmx760_member_sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x9b, 0x
  * scsd_exit_summary() are the production functions, and this only supplies the
  * state main() owns.
  */
+static void rxlog_reset(void); /* defined with the log-capture helpers below */
+
 struct rxworld {
     struct world w;
     struct scs_hello_params hello_params;
@@ -1478,33 +1506,109 @@ static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
     r->rx.do_connect = 1;
     r->rx.emit_hello = 0;
 
+    /* vms-17f: the p. 2-20/2-21 open-transition tallies and the departure
+     * counters are file-scope in scsd.c (see the comment there); a test that
+     * reads them has to start from a known zero. */
+    pb_open_results[0] = pb_open_results[1] = pb_open_results[2] = 0;
+    pb_open_errors = 0;
+    peer_departures = 0;
+    depart_connections_lost = 0;
+    depart_refusals = 0;
+    rxlog_reset();
+
     scsd_test_frames = 0;
     scsd_test_last_len = 0;
 }
 
-/* Run the production dispatch with stdout/stderr swallowed -- the daemon logs
- * every frame and the test output must stay readable. */
-static void rx_feed(struct rxworld *r, const uint8_t *frame, size_t len)
+/*
+ * The daemon logs every frame, so its output has to be taken off the terminal to
+ * keep the test output readable. vms-17f KEEPS it instead of discarding it: the
+ * SCSD-I-VCOPEN line names which p. 2-21 transition ran, and asserting that text
+ * is what stops a mutant from swapping two clauses of scsd_open_result_text()
+ * without reddening anything. `rxlog` accumulates until rxlog_reset().
+ */
+static char rxlog[262144];
+static size_t rxlog_len = 0;
+
+static void rxlog_reset(void)
+{
+    rxlog[0] = '\0';
+    rxlog_len = 0;
+}
+
+static int rxlog_has(const char *needle)
+{
+    return strstr(rxlog, needle) != NULL;
+}
+
+/* How many times `needle` appears in the captured log. */
+static unsigned rxlog_count(const char *needle)
+{
+    unsigned n = 0;
+    for (const char *p = strstr(rxlog, needle); p != NULL; p = strstr(p + 1, needle)) {
+        n++;
+    }
+    return n;
+}
+
+static int cap_saved_out = -1;
+static int cap_saved_err = -1;
+static FILE *cap_file = NULL;
+
+static void log_capture_begin(void)
 {
     fflush(stdout);
     fflush(stderr);
-    int so = dup(STDOUT_FILENO);
-    int se = dup(STDERR_FILENO);
-    FILE *sink = fopen("/dev/null", "w");
-    if (sink != NULL) {
-        dup2(fileno(sink), STDOUT_FILENO);
-        dup2(fileno(sink), STDERR_FILENO);
+    cap_saved_out = dup(STDOUT_FILENO);
+    cap_saved_err = dup(STDERR_FILENO);
+    cap_file = tmpfile();
+    if (cap_file != NULL) {
+        dup2(fileno(cap_file), STDOUT_FILENO);
+        dup2(fileno(cap_file), STDERR_FILENO);
     }
-    scsd_handle_frame(&r->rx, frame, (ssize_t)len);
+}
+
+static void log_capture_end(void)
+{
     fflush(stdout);
     fflush(stderr);
-    dup2(so, STDOUT_FILENO);
-    dup2(se, STDERR_FILENO);
-    close(so);
-    close(se);
-    if (sink != NULL) {
-        fclose(sink);
+    if (cap_saved_out >= 0) {
+        dup2(cap_saved_out, STDOUT_FILENO);
+        close(cap_saved_out);
+        cap_saved_out = -1;
     }
+    if (cap_saved_err >= 0) {
+        dup2(cap_saved_err, STDERR_FILENO);
+        close(cap_saved_err);
+        cap_saved_err = -1;
+    }
+    if (cap_file != NULL) {
+        fflush(cap_file);
+        rewind(cap_file);
+        size_t room = sizeof(rxlog) - 1 - rxlog_len;
+        size_t got = fread(rxlog + rxlog_len, 1, room, cap_file);
+        rxlog_len += got;
+        rxlog[rxlog_len] = '\0';
+        fclose(cap_file);
+        cap_file = NULL;
+    }
+}
+
+/* Run the production dispatch with its logging captured into rxlog. */
+static void rx_feed(struct rxworld *r, const uint8_t *frame, size_t len)
+{
+    log_capture_begin();
+    scsd_handle_frame(&r->rx, frame, (ssize_t)len);
+    log_capture_end();
+}
+
+/* Run the production departure sweep with its logging captured into rxlog. */
+static unsigned rx_sweep(struct rxworld *r, uint64_t now_ms)
+{
+    log_capture_begin();
+    unsigned departed = scsd_peer_departure_sweep(&r->rx, now_ms);
+    log_capture_end();
+    return departed;
 }
 
 /*
@@ -1876,6 +1980,345 @@ static void test_exit_summary_reports_the_parked_connection(void)
           "the exit summary did not report the state the connection is parked in");
 }
 
+/* ==========================================================================
+ * vms-17f -- THE p. 2-21 REFRESH, REACHED BY THE DAEMON.
+ *
+ * PROVENANCE OF THE THREE FRAMES BELOW (rule 8: observation only). All three
+ * are VAX1 -> VAX2 formation frames read out of
+ *   /data/training/vax/cluster/captures/formation-ci1-joinwindow.pcap
+ * -- the golden VAX2-joins-VAX1 formation -- with the same pcap reader as the
+ * capture block above, transcribed wire-byte for wire-byte, Ethernet header
+ * included, ZERO bytes edited. pcap frame numbers #24, #27, #28: the complete
+ * peer half of one virtual-circuit formation dialogue (spec sec 4g phase 2,
+ * rounds 0/1/2). Each is 0x41 at abs 30 and carries the config round at
+ * abs [58:60].
+ *
+ * The test wears VAX2's HW MAC, exactly as the vms-fb1 cases do, because the
+ * daemon only acts on frames unicast to its own MAC.
+ * ========================================================================== */
+
+/* pcap frame #24: VAX1 -> VAX2, round-0 START. 106-byte SCA class. */
+static const uint8_t cap_vax1_start_round0[120] = {
+    0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,
+    0x60, 0x07, 0x68, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x41, 0x13, 0x00, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3e, 0x00, 0x00, 0x00,
+    0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x40, 0x02, 0xd8, 0x00,
+    0x56, 0x4d, 0x53, 0x20, 0x56, 0x37, 0x2e, 0x33, 0x66, 0x15, 0x66, 0x7a,
+    0x93, 0x00, 0xbc, 0x00, 0x56, 0x41, 0x58, 0x20, 0x06, 0x00, 0x00, 0x0a,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x00, 0x56, 0x41, 0x58, 0x31,
+    0x20, 0x20, 0x20, 0x20, 0x80, 0x98, 0xb1, 0x55, 0x96, 0x00, 0xbc, 0x00
+};
+
+/* pcap frame #27: VAX1 -> VAX2, round-1 STACK. Identical to #24 except the
+ * config round at [58:60]. */
+static const uint8_t cap_vax1_stack_round1[120] = {
+    0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,
+    0x60, 0x07, 0x68, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x41, 0x13, 0x00, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3e, 0x00, 0x01, 0x00,
+    0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x40, 0x02, 0xd8, 0x00,
+    0x56, 0x4d, 0x53, 0x20, 0x56, 0x37, 0x2e, 0x33, 0x66, 0x15, 0x66, 0x7a,
+    0x93, 0x00, 0xbc, 0x00, 0x56, 0x41, 0x58, 0x20, 0x06, 0x00, 0x00, 0x0a,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x00, 0x56, 0x41, 0x58, 0x31,
+    0x20, 0x20, 0x20, 0x20, 0x80, 0x98, 0xb1, 0x55, 0x96, 0x00, 0xbc, 0x00
+};
+
+/* pcap frame #28: VAX1 -> VAX2, the round-2 46-byte-class ack that completes
+ * the dialogue. This is the frame the daemon answers with its own round-2. */
+static const uint8_t cap_vax1_ack_round2[60] = {
+    0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,
+    0x60, 0x07, 0x2c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x41, 0x13, 0x00, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00
+};
+
+/* Feed the peer's whole formation dialogue through the production dispatch. */
+static void rx_feed_formation(struct rxworld *r)
+{
+    rx_feed(r, cap_vax1_start_round0, sizeof(cap_vax1_start_round0));
+    rx_feed(r, cap_vax1_stack_round1, sizeof(cap_vax1_stack_round1));
+    rx_feed(r, cap_vax1_ack_round2, sizeof(cap_vax1_ack_round2));
+}
+
+/* The peer slot the daemon built for VAX1, or NULL if it released it. */
+static struct peer_state *rx_peer_of(struct rxworld *r, const uint8_t mac[6])
+{
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        if (r->w.peers[i].pb != NULL && mac_eq(r->w.peers[i].pb->remote_port_addr, mac)) {
+            return &r->w.peers[i];
+        }
+    }
+    return NULL;
+}
+
+/*
+ * THE HEADLINE CASE. A node forms a circuit, goes silent past the listen
+ * timeout, and comes back with the SAME identity -- all of it through
+ * scsd_handle_frame() and scsd_peer_departure_sweep(), the two production
+ * functions the daemon's main loop calls, with captured frames.
+ *
+ * Nothing here performs a transition by hand. The test supplies frames and a
+ * clock; every scs_pb_open(), scs_pb_depart() and slot release is scsd.c's.
+ */
+static void test_rejoin_reaches_the_p221_refresh(void)
+{
+    struct rxworld r;
+    unsetenv("OVMX_NO_PEER_DEPART");
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    /* ---- 1. THE FIRST JOIN. ---- */
+    rx_feed_formation(&r);
+
+    struct peer_state *ps = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(ps != NULL, "the daemon built no peer slot for the captured formation");
+    if (ps == NULL) {
+        return;
+    }
+    CHECK(ps->start_acked == 1, "the daemon did not complete the START dialogue");
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1,
+          "the first join produced %lu NEW_SB transitions, expected 1",
+          pb_open_results[SCS_OPEN_NEW_SB]);
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 0,
+          "a FIRST join took the rejoin REFRESH");
+    CHECK(scs_config_sb_count(&r.w.cfg) == 1, "the peer's System Block was not queued");
+    unsigned frames_after_first_join = scsd_test_frames;
+    CHECK(frames_after_first_join == 3,
+          "the first join emitted %u frames, expected the 3 of a formation dialogue",
+          frames_after_first_join);
+    struct scs_sb *sb_before = ps->pb->sb;
+    uint8_t sysid_before[6];
+    memcpy(sysid_before, sb_before->system_id, 6);
+    CHECK(memcmp(sysid_before, vax1_logical, 6) == 0,
+          "the SB does not carry the SCS System Address the captured frames advertise");
+
+    /* ---- 2. THE NEGATIVE CONTROL: a peer that has just spoken is not gone. ----
+     * Same sweep, same code, one argument different. Without this the assertion
+     * below would pass for a sweep that departs everyone unconditionally. */
+    uint64_t heard_at = ps->last_rx_ms;
+    uint64_t timeout = scs_depart_listen_timeout_ms();
+    CHECK(heard_at != 0, "the daemon never stamped the peer's last-heard time");
+    CHECK(rx_sweep(&r, heard_at) == 0, "a peer heard from this instant was declared departed");
+    CHECK(rx_sweep(&r, heard_at + timeout - 1) == 0,
+          "a peer silent for one ms less than the listen timeout was declared departed");
+    CHECK(peer_departures == 0, "the control sweeps departed %lu peers", peer_departures);
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "a control sweep released the peer slot");
+
+    /* ---- 3. THE DEPARTURE. ---- */
+    CHECK(rx_sweep(&r, heard_at + timeout) == 1,
+          "a peer silent for exactly the listen timeout was NOT declared departed");
+    CHECK(peer_departures == 1, "the sweep recorded %lu departures, expected 1",
+          peer_departures);
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == NULL, "the departed peer kept its slot");
+    /* And the slot is released WHOLE. A free slot is recognised by pb == NULL
+     * alone, so anything else left in it is a departed node's state sitting
+     * where a reader that does not check would take it for a live peer's. */
+    {
+        struct peer_state empty;
+        memset(&empty, 0, sizeof(empty));
+        int residue = 0;
+        for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+            if (memcmp(&r.w.peers[i], &empty, sizeof(empty)) != 0) {
+                residue = 1;
+            }
+        }
+        CHECK(residue == 0,
+              "the released peer slot still carries state from the departed node");
+    }
+    CHECK(scs_pdt_formative_count(&r.w.pdt) == 0, "the closed Path Block was left on the PDT");
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 0,
+          "a connection survived the departure of the circuit that carried it");
+    /* p. 2-17: the System Block is the node's memory and it must SURVIVE -- that
+     * is the whole premise of the p. 2-21 Note. */
+    CHECK(scs_config_sb_count(&r.w.cfg) == 1,
+          "the System Block was dropped with the circuit, so nothing is left for a"
+          " rejoin to refresh");
+    CHECK(rxlog_has("SCSD-I-PEERGONE"), "the departure was not logged");
+
+    /* ---- 4. THE REJOIN, SAME IDENTITY, SAME CAPTURED FRAMES. ---- */
+    rxlog_reset();
+    rx_feed_formation(&r);
+
+    struct peer_state *back = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(back != NULL, "the returning node got no peer slot");
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 1,
+          "the rejoin produced %lu REFRESH transitions, expected 1 --"
+          " SCS_OPEN_EXISTING_REFRESHED is still unreachable from the daemon",
+          pb_open_results[SCS_OPEN_EXISTING_REFRESHED]);
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1,
+          "the rejoin learned the node again instead of refreshing its System Block");
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_SB] == 0,
+          "the rejoin took the already-open early return -- the pre-vms-17f behaviour");
+    CHECK(scs_config_sb_count(&r.w.cfg) == 1, "the rejoin duplicated the System Block");
+    CHECK(back != NULL && back->pb != NULL && back->pb->sb == sb_before,
+          "the rejoin attached to a different System Block -- the old one was not"
+          " refreshed, it was replaced");
+    /* The log branch is LIVE, and it says the right thing. A mutant that swaps
+     * two clauses of scsd_open_result_text() dies here. */
+    CHECK(rxlog_has("old system block REFRESHED (rejoin, p. 2-21 Note)"),
+          "the daemon did not log the REFRESH transition");
+    CHECK(rxlog_count("SCSD-I-VCOPEN") == 1,
+          "the rejoin logged %u open transitions, expected exactly 1",
+          rxlog_count("SCSD-I-VCOPEN"));
+    CHECK(!rxlog_has("node learned for the first time"),
+          "the rejoin logged the FIRST-CONTACT clause");
+    CHECK(!rxlog_has("UNEXPECTED"),
+          "a log line still claims a transition is unreachable");
+
+    /* THE WIRE-VISIBLE CONSEQUENCE, which is the whole reason this item ships a
+     * kill switch: the returning node is answered with a second, complete
+     * formation dialogue. Before vms-17f OVMX emitted nothing at all, because it
+     * believed the circuit was still open. */
+    CHECK(scsd_test_frames == frames_after_first_join + 3,
+          "the rejoin emitted %u frames in total, expected %u (a second formation"
+          " dialogue on top of the first)",
+          scsd_test_frames, frames_after_first_join + 3);
+}
+
+/*
+ * THE KILL SWITCH, RUN AT DAEMON LEVEL (guardrail 23), and it is the same
+ * fixture as above so the ONLY difference is the environment variable.
+ *
+ * With OVMX_NO_PEER_DEPART=1 the daemon must behave exactly as it did before
+ * vms-17f: no departure, no slot release, and -- the part that matters on the
+ * wire -- NOT ONE FRAME emitted in answer to the returning node's formation
+ * dialogue, because the circuit is still believed open.
+ */
+static void test_departure_kill_switch_restores_the_pinned_slot(void)
+{
+    struct rxworld r;
+    setenv("OVMX_NO_PEER_DEPART", "1", 1);
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    rx_feed_formation(&r);
+    struct peer_state *ps = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(ps != NULL, "the daemon built no peer slot with the switch set");
+    if (ps == NULL) {
+        unsetenv("OVMX_NO_PEER_DEPART");
+        return;
+    }
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1, "the first join did not run under the switch");
+    unsigned frames_after_first_join = scsd_test_frames;
+
+    /* However long the peer is silent, nothing happens. */
+    uint64_t way_past = ps->last_rx_ms + 100u * scs_depart_listen_timeout_ms();
+    CHECK(rx_sweep(&r, way_past) == 0, "OVMX_NO_PEER_DEPART=1 still departed a peer");
+    CHECK(peer_departures == 0, "the switch let %lu departures through", peer_departures);
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "the switch still released the peer slot");
+    CHECK(ps->pb->in_use == 1, "the switch still closed the Path Block");
+    CHECK(!rxlog_has("SCSD-I-PEERGONE"), "the switch still logged a departure");
+
+    /* The returning node re-enters the SAME slot on the SAME open circuit, and
+     * OVMX answers its formation dialogue with silence. */
+    rx_feed_formation(&r);
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "the switch did not pin the peer to its slot");
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 0,
+          "the REFRESH ran with OVMX_NO_PEER_DEPART=1 set -- the switch does not gate it");
+    CHECK(scsd_test_frames == frames_after_first_join,
+          "the gated daemon emitted %u frames to the returning node, expected 0 more"
+          " than the %u of the first join",
+          scsd_test_frames - frames_after_first_join, frames_after_first_join);
+
+    /* BRACKET: unset it, feed the same frames to a fresh fixture, and the
+     * behaviour comes back. Without this the case above is equally consistent
+     * with "the rejoin never works". */
+    unsetenv("OVMX_NO_PEER_DEPART");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    rx_feed_formation(&r2);
+    struct peer_state *ps2 = rx_peer_of(&r2, vax1_hw_mac);
+    CHECK(ps2 != NULL, "bracket: no peer slot");
+    if (ps2 == NULL) {
+        return;
+    }
+    unsigned frames_before = scsd_test_frames;
+    CHECK(rx_sweep(&r2, ps2->last_rx_ms + scs_depart_listen_timeout_ms()) == 1,
+          "bracket: the peer did not depart with the switch unset");
+    rx_feed_formation(&r2);
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 1,
+          "bracket: the REFRESH did not run with the switch unset");
+    CHECK(scsd_test_frames == frames_before + 3,
+          "bracket: the returning node was not answered with a formation dialogue");
+}
+
+/*
+ * The listen timeout is not a hidden constant: OVMX_PEER_LISTEN_TIMEOUT_MS moves
+ * it, which is how a lab run forces a departure inside a short window, and the
+ * daemon's own accessor is what the sweep uses.
+ */
+static void test_listen_timeout_override_moves_the_departure(void)
+{
+    struct rxworld r;
+    unsetenv("OVMX_NO_PEER_DEPART");
+    setenv("OVMX_PEER_LISTEN_TIMEOUT_MS", "2000", 1);
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    rx_feed_formation(&r);
+    struct peer_state *ps = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(ps != NULL, "no peer slot");
+    if (ps == NULL) {
+        unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+        return;
+    }
+    uint64_t heard_at = ps->last_rx_ms;
+    CHECK(scs_depart_listen_timeout_ms() == 2000, "the override did not reach the daemon");
+    CHECK(rx_sweep(&r, heard_at + 1999) == 0, "departed 1ms before the overridden timeout");
+    CHECK(rx_sweep(&r, heard_at + 2000) == 1, "did not depart at the overridden timeout");
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+}
+
+/*
+ * A peer that is only BEACONING is not departed. The daemon acts on frames
+ * unicast to its own MAC, but liveness is a broader question than "is it talking
+ * to me": stamping only the frames the responder handles would age out a member
+ * that is up and multicasting. peer_touch() runs before that gate, and this is
+ * the case that holds it there.
+ */
+static void test_multicast_beacon_keeps_a_peer_alive(void)
+{
+    struct rxworld r;
+    unsetenv("OVMX_NO_PEER_DEPART");
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    rx_feed_formation(&r);
+    struct peer_state *ps = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(ps != NULL, "no peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    /* Wind the peer's last-heard time back to the very start of the clock, so
+     * that "it has been silent long enough to depart" is true by construction
+     * and the ONLY thing that can rescue it is the beacon below. */
+    ps->last_rx_ms = 1;
+    uint64_t timeout = scs_depart_listen_timeout_ms();
+
+    /* The SAME captured round-0 START, re-addressed to the HELLO multicast group
+     * -- i.e. a frame from this peer that the responder will NOT act on, because
+     * it is not unicast to us. Only the destination MAC changes. */
+    uint8_t beacon[sizeof(cap_vax1_start_round0)];
+    memcpy(beacon, cap_vax1_start_round0, sizeof(beacon));
+    const uint8_t hello_group[6] = {0xab, 0x00, 0x04, 0x01, 0x01, 0x01};
+    memcpy(beacon, hello_group, 6);
+
+    unsigned frames_before = scsd_test_frames;
+    rx_feed(&r, beacon, sizeof(beacon));
+    CHECK(scsd_test_frames == frames_before,
+          "the daemon answered a frame that was not addressed to it");
+    CHECK(ps->last_rx_ms > 1,
+          "a multicast frame from a live peer did not refresh its last-heard time --"
+          " liveness is being taken from the unicast responder path only");
+
+    /* The peer is therefore still alive as of the beacon, not as of the last
+     * frame it addressed to us: a sweep well past the old timestamp's deadline
+     * leaves it alone. */
+    CHECK(rx_sweep(&r, 1 + timeout) == 0, "a beaconing peer was declared departed");
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "a beaconing peer lost its slot");
+}
+
 int main(void)
 {
     /* Several assertions below assume the machine starts enabled. */
@@ -1887,7 +2330,7 @@ int main(void)
     test_peer_slot_identity_and_capacity();
     test_shared_sb_aliases_the_peer_logical();
     test_sb_exhaustion_is_visible_and_unreachable();
-    test_rejoin_is_inert_in_the_daemon();
+    test_released_peer_slot_gives_a_returning_node_a_new_circuit();
     /* vms-4071: the daemon's use of the VC formation state machine. */
     test_vc_actions_emit_the_right_config_rounds();
     test_vc_happy_path_frame_sequence();
@@ -1908,6 +2351,12 @@ int main(void)
     test_captured_ovmx_accept_req_opens_the_joiner();
     test_null_source_conid_binds_nothing();
     test_exit_summary_reports_the_parked_connection();
+    /* vms-17f: peer departure, and the p. 2-21 REFRESH the daemon can now
+     * reach, driven by captured formation frames through the same dispatch. */
+    test_rejoin_reaches_the_p221_refresh();
+    test_departure_kill_switch_restores_the_pinned_slot();
+    test_listen_timeout_override_moves_the_departure();
+    test_multicast_beacon_keeps_a_peer_alive();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

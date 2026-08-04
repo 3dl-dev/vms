@@ -154,7 +154,12 @@ target_include_directories(test_scs_config PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include
 )
 
-target_link_libraries(test_scs_config PRIVATE vmsscs_config)
+# vms-17f also puts the ORDERED TEARDOWN cases here (scs_pb_close's refusal, the
+# p. 2-28 notify-before-destroy sequence, the p. 2-43 MFREEQ reconciliation and
+# the OVMX_NO_PEER_DEPART kill switch), so this target links vmsscs_depart --
+# which pulls in vmsscs_credit and vmsscs_cdt, the other two layers the sequence
+# spans.
+target_link_libraries(test_scs_config PRIVATE vmsscs_config vmsscs_depart)
 
 add_test(NAME vmsscs_config_unit COMMAND test_scs_config)
 set_tests_properties(vmsscs_config_unit PROPERTIES
@@ -221,6 +226,7 @@ target_include_directories(test_scsd_wire PRIVATE
 target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
+    vmsscs_depart
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)

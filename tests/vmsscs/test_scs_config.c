@@ -18,9 +18,12 @@
  * Pure state: this test builds no frame and opens no socket.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "scs_config.h"
+#include "scs_credit.h"
+#include "scs_depart.h"
 
 static int failures = 0;
 static int checks = 0;
@@ -195,7 +198,7 @@ static void test_rejoin_refreshes_old_sb(void)
     struct scs_sb *sb = pb1->sb;
 
     /* Departure: the only circuit closes. The SB stays (p. 2-17). */
-    scs_pb_close(&cfg, pb1);
+    CHECK(scs_pb_close(&cfg, pb1) == SCS_PB_CLOSE_OK, "closing an open PB was refused");
     CHECK(scs_config_sb_count(&cfg) == 1, "SB was dropped when its last circuit closed");
     CHECK(scs_sb_pb_count(sb) == 0, "SB still holds %u PBs after departure",
           scs_sb_pb_count(sb));
@@ -357,7 +360,10 @@ static void test_limits_and_null_safety(void)
 
     struct scs_pb *pb = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
     CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_ERROR, "open without an SB must fail");
-    scs_pb_close(&cfg, pb);
+    CHECK(scs_pb_close(&cfg, pb) == SCS_PB_CLOSE_OK, "closing a formative PB was refused");
+    CHECK(scs_pb_close(&cfg, pb) == SCS_PB_CLOSE_NOTHING,
+          "closing an already-closed PB must report that it did nothing");
+    CHECK(scs_pb_close(&cfg, NULL) == SCS_PB_CLOSE_NOTHING, "NULL PB accepted by close");
     CHECK(scs_pdt_formative_count(&pdt) == 0, "closing a formative PB left it queued");
 
     for (unsigned i = 0; i < SCS_CONFIG_MAX_PB; i++) {
@@ -541,7 +547,7 @@ static void test_config_path_on_formative_pb(void)
     CHECK(pinfo.next == NULL, "sole formative PB on this PDT has no next");
 
     /* A closed (freed) PB is no longer a valid query target. */
-    scs_pb_close(&cfg, pb);
+    CHECK(scs_pb_close(&cfg, pb) == SCS_PB_CLOSE_OK, "closing the query target was refused");
     CHECK(scs_config_path(pb, &pinfo) == 0, "CONFIG_PATH must refuse a closed/freed PB");
 }
 
@@ -680,6 +686,293 @@ static void test_select_vc_skips_a_circuit_that_is_not_open(void)
           "select_vc did not follow the circuit back to OPEN");
 }
 
+/* ==========================================================================
+ * vms-17f / vms-228 / vms-61b -- ORDERED TEARDOWN ON DEPARTURE.
+ *
+ * These cases are about the SEQUENCE, not about any one structure: p. 2-28
+ * requires the SYSAPs on a circuit to be notified BEFORE the circuit goes away,
+ * p. 2-43/2-45 require the connection's port buffers and suspended sends to be
+ * dealt with as it is released, and p. 2-17 requires the System Block to
+ * SURVIVE. Every one of those used to be a sentence in a comment; each is now
+ * asserted, and the ordering one is asserted by the production refusal rather
+ * than by the test being careful.
+ * ========================================================================== */
+
+/* What a SYSAP's VC-loss error handler saw when it ran (p. 2-28). */
+struct vcloss_witness {
+    int      calls;
+    int      pb_was_still_in_use;
+    int      cdt_was_still_on_the_pb;
+    unsigned pb_cdt_count_at_notify;
+};
+
+static void vcloss_observer(struct scs_cdt *cdt, void *ctx)
+{
+    struct vcloss_witness *w = (struct vcloss_witness *)ctx;
+    w->calls++;
+    if (cdt->pb != NULL) {
+        w->pb_was_still_in_use = cdt->pb->in_use;
+        w->pb_cdt_count_at_notify = scs_pb_cdt_count(cdt->pb);
+        for (const struct scs_cdt *c = scs_pb_first_cdt(cdt->pb); c != NULL;
+             c = scs_cdt_next_on_pb(c)) {
+            if (c == cdt) {
+                w->cdt_was_still_on_the_pb = 1;
+            }
+        }
+    }
+}
+
+/*
+ * THE ORDERING, ENFORCED. A Path Block with connections still queued to it is
+ * NOT closed -- scs_pb_close refuses, and refuses without changing anything.
+ * This is the vms-228 defect: the old code memset the PB regardless, leaving
+ * every CDT on it pointing at a recycled structure, and the only thing stopping
+ * that was a comment telling the caller to go first.
+ */
+static void test_pb_close_refuses_while_connections_are_queued(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt;
+    static struct scs_cdl cdl;
+    const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x17, 0xf0, 0x01};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_cdl_init(&cdl);
+
+    struct scs_sb_info info = make_info(1329, "VAX9", 0x11ull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, pb, &info);
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_NEW_SB, "setup: first join was not NEW_SB");
+    struct scs_sb *sb = pb->sb;
+
+    struct scs_cdt *cdt = scs_cdl_alloc(&cdl, "VMS$VAXcluster", "VMS$VAXcluster", pb);
+    CHECK(cdt != NULL, "setup: no CDT");
+    CHECK(scs_pb_cdt_count(pb) == 1, "setup: the CDT is not on the circuit");
+
+    CHECK(scs_pb_close(&cfg, pb) == SCS_PB_CLOSE_CONNECTIONS_QUEUED,
+          "scs_pb_close destroyed a Path Block that still carried a connection");
+    /* Refused means UNCHANGED, not half-done. */
+    CHECK(pb->in_use == 1, "the refused close freed the Path Block anyway");
+    CHECK(pb->sb == sb, "the refused close detached the Path Block from its SB");
+    CHECK(scs_sb_pb_count(sb) == 1, "the refused close dequeued the PB from its SB");
+    CHECK(scs_pb_cdt_count(pb) == 1, "the refused close touched the connection queue");
+    CHECK(cdt->pb == pb, "the refused close left the CDT pointing somewhere else");
+
+    /* Release the connection and the same call now succeeds -- so the refusal is
+     * about the queue, not about this PB being unclosable. */
+    scs_cdl_release(&cdl, cdt);
+    CHECK(scs_pb_close(&cfg, pb) == SCS_PB_CLOSE_OK,
+          "an empty circuit was still refused after its connection was released");
+    CHECK(scs_config_sb_count(&cfg) == 1, "the System Block did not survive (p. 2-17)");
+}
+
+/*
+ * THE FULL p. 2-28 SEQUENCE through scs_pb_depart(): the SYSAP error handler
+ * runs while its connection and the circuit are STILL INTACT (that is the whole
+ * point of notifying first), then the Credit Wait is abandoned (p. 2-45), the
+ * MFREEQ share goes back to the port (p. 2-43, the vms-61b defect), the CDT is
+ * released but stays in its CDL slot (p. 2-30), and only then is the Path Block
+ * closed -- with its System Block left in the configuration queue (p. 2-17).
+ */
+static void test_depart_runs_the_p228_sequence_in_order(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt;
+    static struct scs_cdl cdl;
+    const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x17, 0xf0, 0x02};
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_cdl_init(&cdl);
+    scs_credit_reset_switch_cache();
+
+    struct scs_sb_info info = make_info(1329, "VAX9", 0x11ull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, pb, &info);
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_NEW_SB, "setup: first join was not NEW_SB");
+
+    struct scs_cdt *cdt = scs_cdl_alloc(&cdl, "VMS$VAXcluster", "VMS$VAXcluster", pb);
+    CHECK(cdt != NULL, "setup: no CDT");
+    uint32_t conid = cdt->local_conid;
+
+    struct vcloss_witness witness;
+    memset(&witness, 0, sizeof(witness));
+    scs_cdt_set_handlers(cdt, NULL, NULL, vcloss_observer, &witness);
+
+    /* p. 2-43: forming the connection contributed 10 buffers to the port's
+     * MFREEQ. That is the depth that must come back. */
+    CHECK(scs_credit_extend(cdt, 10, 5) == 0, "setup: extend failed");
+    CHECK(pdt.mfreeq_count == 10, "setup: MFREEQ depth is %u, expected 10", pdt.mfreeq_count);
+
+    /* p. 2-45: with no Send Credits, two sends are suspended in a Credit Wait. */
+    struct scs_credit_waiter w1, w2;
+    memset(&w1, 0, sizeof(w1));
+    memset(&w2, 0, sizeof(w2));
+    CHECK(scs_credit_send_or_wait(cdt, &w1) == SCS_CREDIT_WAIT, "setup: w1 did not suspend");
+    CHECK(scs_credit_send_or_wait(cdt, &w2) == SCS_CREDIT_WAIT, "setup: w2 did not suspend");
+    CHECK(scs_credit_wait_depth(cdt) == 2, "setup: Credit Wait depth is %u, expected 2",
+          scs_credit_wait_depth(cdt));
+
+    struct scs_depart_stats st;
+    enum scs_pb_close_result res = scs_pb_depart(&cdl, &cfg, pb, &st);
+
+    CHECK(res == SCS_PB_CLOSE_OK, "departure did not close the Path Block (result %d)", (int)res);
+
+    /* 1. The notification happened, and it happened FIRST -- the handler saw its
+     *    own CDT still queued to a Path Block that was still in use. */
+    CHECK(witness.calls == 1, "the VC-loss handler ran %d times, expected 1", witness.calls);
+    CHECK(witness.pb_was_still_in_use == 1,
+          "the SYSAP was notified AFTER its Path Block was destroyed (p. 2-28 order)");
+    CHECK(witness.cdt_was_still_on_the_pb == 1,
+          "the SYSAP was notified after its connection had been dequeued");
+    CHECK(witness.pb_cdt_count_at_notify == 1,
+          "the circuit held %u connections at notify time, expected 1",
+          witness.pb_cdt_count_at_notify);
+    CHECK(st.connections_lost == 1, "reported %u connections lost, expected 1",
+          st.connections_lost);
+    CHECK(st.handlers_notified == 1, "reported %u handlers, expected 1", st.handlers_notified);
+
+    /* 2. p. 2-45: the waiters are gone, and gone WITHOUT being resumed. */
+    CHECK(st.waiters_flushed == 2, "flushed %u credit waiters, expected 2", st.waiters_flushed);
+    CHECK(w1.resumed == 0 && w2.resumed == 0,
+          "a Credit Wait was RESUMED by a teardown -- the connection is broken and"
+          " will never grant credit");
+    CHECK(w1.queued == 0 && w2.queued == 0, "a waiter is still linked to a released CDT");
+
+    /* 3. p. 2-43 / vms-61b: the port got its buffers back. */
+    CHECK(st.mfreeq_reclaimed == 10, "reclaimed %u MFREEQ buffers, expected 10",
+          st.mfreeq_reclaimed);
+    CHECK(pdt.mfreeq_count == 0,
+          "the port MFREEQ still holds %u buffers from a connection that no longer"
+          " exists -- this is the vms-61b leak", pdt.mfreeq_count);
+
+    /* 4. p. 2-30: released, not deallocated -- the CDL slot is reusable. */
+    CHECK(scs_cdl_in_use_count(&cdl) == 0, "a CDT is still in use after teardown");
+    struct scs_cdt *reused = scs_cdl_alloc_conid(&cdl, conid, "SCS$DIRECTORY", "SCS$DIRECTORY",
+                                                 NULL);
+    CHECK(reused != NULL, "the released CDT's CDL slot cannot be reused (p. 2-30)");
+
+    /* 5. p. 2-17: the System Block outlives the circuit. That is the premise of
+     *    the p. 2-21 rejoin REFRESH. */
+    CHECK(scs_config_sb_count(&cfg) == 1, "the System Block was dropped with the circuit");
+    CHECK(scs_pdt_formative_count(&pdt) == 0, "the closed PB was left on the PDT");
+}
+
+/*
+ * The whole point, at module level: departure THEN return gives the p. 2-21
+ * REFRESH, and it is the departure that makes the difference. The control is
+ * the same sequence with no departure in it.
+ */
+static void test_depart_is_what_makes_the_rejoin_refresh(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt;
+    const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x17, 0xf0, 0x03};
+
+    /* CONTROL: no departure. The second circuit finds the old SB still holding a
+     * Path Block, so the Note does not apply and nothing is refreshed. */
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 1498);
+    struct scs_sb_info boot1 = make_info(1329, "VAX9", 0x1000ull, 7);
+    struct scs_pb *a = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, a, &boot1);
+    CHECK(scs_pb_open(&cfg, a) == SCS_OPEN_NEW_SB, "control: first join was not NEW_SB");
+    struct scs_sb_info boot2 = make_info(1329, "VAX9", 0x2000ull, 7);
+    struct scs_pb *b = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, b, &boot2);
+    CHECK(scs_pb_open(&cfg, b) == SCS_OPEN_EXISTING_SB,
+          "control: a second circuit to a node that never left took the REFRESH");
+    CHECK(scs_config_find_sb(&cfg, boot1.system_id)->incarnation == 0x1000ull,
+          "control: the old SB was refreshed although the node never departed");
+
+    /* THE CASE: same node, but it departs first. */
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 1498);
+    struct scs_pb *first = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, first, &boot1);
+    CHECK(scs_pb_open(&cfg, first) == SCS_OPEN_NEW_SB, "first join was not NEW_SB");
+    CHECK(scs_pb_depart(NULL, &cfg, first, NULL) == SCS_PB_CLOSE_OK,
+          "departure of a connectionless circuit was not clean");
+
+    struct scs_pb *back = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, back, &boot2);
+    CHECK(scs_pb_open(&cfg, back) == SCS_OPEN_EXISTING_REFRESHED,
+          "the returning node did not take the p. 2-21 REFRESH");
+    CHECK(scs_config_sb_count(&cfg) == 1, "the rejoin duplicated the System Block");
+    CHECK(scs_config_find_sb(&cfg, boot1.system_id)->incarnation == 0x2000ull,
+          "the old SB was not refreshed from the formative SB");
+}
+
+/*
+ * THE KILL SWITCH, RUN (guardrail 23). OVMX_NO_PEER_DEPART=1 must make
+ * scs_pb_depart a complete no-op -- and the bracketing control either side of it
+ * is what shows the switch is what changed the answer, not the test's setup.
+ */
+static void test_depart_kill_switch(void)
+{
+    struct scs_config cfg;
+    struct scs_pdt pdt;
+    static struct scs_cdl cdl;
+    const uint8_t mac[6] = {0x08, 0x00, 0x2b, 0x17, 0xf0, 0x04};
+
+    unsetenv("OVMX_NO_PEER_DEPART");
+    CHECK(scs_depart_enabled() == 1, "the departure sweep is not on by default");
+    CHECK(scs_depart_listen_timeout_ms() == SCS_DEPART_LISTEN_TIMEOUT_DEFAULT_MS,
+          "the default listen timeout is not SCS_DEPART_LISTEN_TIMEOUT_DEFAULT_MS");
+
+    /* The measured bounds the default sits between; a change that moved it into
+     * either observed population would red here. See scs_depart.h. */
+    CHECK(SCS_DEPART_LISTEN_TIMEOUT_DEFAULT_MS > SCS_DEPART_HEALTHY_SILENCE_MAX_MS,
+          "the listen timeout is at or below the longest silence measured on a"
+          " HEALTHY link -- healthy peers would be declared departed");
+    CHECK(SCS_DEPART_LISTEN_TIMEOUT_DEFAULT_MS < SCS_DEPART_OBSERVED_DEPARTURE_MS,
+          "the listen timeout is above the silence of a peer that really did"
+          " depart -- a real departure would never be detected");
+
+    setenv("OVMX_NO_PEER_DEPART", "1", 1);
+    CHECK(scs_depart_enabled() == 0, "OVMX_NO_PEER_DEPART=1 did not disable the sweep");
+
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 1498);
+    scs_cdl_init(&cdl);
+    struct scs_sb_info info = make_info(1329, "VAX9", 0x11ull, 7);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt, mac, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_attach_formative_sb(&cfg, pb, &info);
+    CHECK(scs_pb_open(&cfg, pb) == SCS_OPEN_NEW_SB, "setup: first join was not NEW_SB");
+    struct scs_cdt *cdt = scs_cdl_alloc(&cdl, "VMS$VAXcluster", "VMS$VAXcluster", pb);
+    CHECK(cdt != NULL, "setup: no CDT");
+
+    struct scs_depart_stats st;
+    CHECK(scs_pb_depart(&cdl, &cfg, pb, &st) == SCS_PB_CLOSE_NOTHING,
+          "the kill switch did not suppress the teardown");
+    CHECK(st.connections_lost == 0 && st.waiters_flushed == 0 && st.mfreeq_reclaimed == 0,
+          "the kill switch reported work it did not do");
+    CHECK(pb->in_use == 1, "the kill switch still closed the Path Block");
+    CHECK(scs_pb_cdt_count(pb) == 1, "the kill switch still released the connection");
+    CHECK(scs_cdl_in_use_count(&cdl) == 1, "the kill switch still released the CDT");
+
+    /* And with the switch off again the SAME call tears the SAME structures
+     * down: the difference is the switch and nothing else. */
+    unsetenv("OVMX_NO_PEER_DEPART");
+    CHECK(scs_pb_depart(&cdl, &cfg, pb, &st) == SCS_PB_CLOSE_OK,
+          "the bracketing control did not tear down");
+    CHECK(st.connections_lost == 1, "the bracketing control lost %u connections, expected 1",
+          st.connections_lost);
+    CHECK(pb->in_use == 0, "the bracketing control left the Path Block in use");
+
+    /* The listen timeout override, and its refusals. */
+    setenv("OVMX_PEER_LISTEN_TIMEOUT_MS", "1500", 1);
+    CHECK(scs_depart_listen_timeout_ms() == 1500, "the listen-timeout override was ignored");
+    setenv("OVMX_PEER_LISTEN_TIMEOUT_MS", "0", 1);
+    CHECK(scs_depart_listen_timeout_ms() == SCS_DEPART_LISTEN_TIMEOUT_DEFAULT_MS,
+          "a 0ms listen timeout was accepted -- it would depart every peer at once");
+    setenv("OVMX_PEER_LISTEN_TIMEOUT_MS", "banana", 1);
+    CHECK(scs_depart_listen_timeout_ms() == SCS_DEPART_LISTEN_TIMEOUT_DEFAULT_MS,
+          "a non-numeric listen timeout was not rejected");
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+}
+
 int main(void)
 {
     test_pb_created_closed_and_formative();
@@ -693,6 +986,10 @@ int main(void)
     test_config_path_on_formative_pb();
     test_config_sys_does_not_invent_unknown_fields();
     test_select_vc_skips_a_circuit_that_is_not_open();
+    test_pb_close_refuses_while_connections_are_queued();
+    test_depart_runs_the_p228_sequence_in_order();
+    test_depart_is_what_makes_the_rejoin_refresh();
+    test_depart_kill_switch();
 
     printf("test_scs_config: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

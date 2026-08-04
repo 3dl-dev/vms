@@ -53,6 +53,19 @@
 #      cross-checked against the rows, and against the generator's own summary
 #      counts.
 #
+#   4. A LIVE CLOSED OR ABSENT CITATION IS ITSELF A RED (rd vms-004e), not
+#      merely a mismatch to catch. (3) above only asks whether the report and
+#      the row AGREE with each other; an HONEST regenerate of a citation
+#      pointing at `vms-q9z9` (never existed) or at a real closed id produces
+#      a report and a row that agree perfectly -- no forgery, no staleness --
+#      while the citation is still illegitimate. MEASURED against the
+#      revision this replaces: exactly that (no forgery, an honest
+#      regenerate) left THIS test rc=0, printing "ABSENT: rd has no item
+#      vms-q9z9" and passing anyway, because nothing downstream of (3) ever
+#      asked whether zero CLOSED/ABSENT citations is itself the bar. Now it
+#      is: any id the generator reports CLOSED or ABSENT, live, right now, is
+#      an unconditional RED here, independent of whether the ledger is stale.
+#
 # ---------------------------------------------------------------------------
 # WHAT IS COMPARED, AND THE ONE COLUMN THAT IS NOT
 # ---------------------------------------------------------------------------
@@ -163,6 +176,42 @@ ledgers_agree() {
         }
         END { exit bad ? 1 : 0 }
     ' "$WORK/cmp_a" "$WORK/cmp_b"
+}
+
+# citations_clean <gen_err_file>: 0 when <gen_err_file> (the shape
+# tools/gen_rd_citations.py writes to stderr) names no CLOSED: and no
+# ABSENT: id; 1 and a named diagnostic otherwise (rd vms-004e). This is the
+# ONLY rule for "(3b) a live CLOSED or ABSENT citation is itself a RED"
+# below -- pulled into a function so the self-controls a few screens down can
+# provoke it directly, on a synthetic gen.err, without needing rd. The live
+# path and the self-controls therefore run the SAME code, not a copy that
+# could quietly drift from it.
+citations_clean() {
+    _cc_err="$1"
+    _cc_bad=0
+    _cc_closed=$(sed -n 's/^ *CLOSED: \([a-z0-9.-]*\) .*/\1/p' "$_cc_err" | sort -u)
+    _cc_absent=$(sed -n 's/^ *ABSENT: rd has no item \([a-z0-9.-]*\),.*/\1/p' "$_cc_err" | sort -u)
+    if [ -n "$_cc_closed" ]; then
+        echo "FAIL: live rd resolves citation(s) in the tree to a CLOSED rd item -- not"
+        echo "      a freshness problem, a citation problem:"
+        printf '%s\n' "$_cc_closed" | sed 's/^/        /'
+        echo "  -> a closed item tracks nothing. rd, asked LIVE, right now, says so --"
+        echo "     this is not the ledger going stale. Fix the declaration (rd"
+        echo "     vms-004e): repoint it at the item that really carries the work, or"
+        echo "     delete it if the facility is genuinely wired."
+        _cc_bad=1
+    fi
+    if [ -n "$_cc_absent" ]; then
+        echo "FAIL: live rd resolves citation(s) in the tree to an rd item that DOES NOT"
+        echo "      EXIST -- not a freshness problem, a citation problem:"
+        printf '%s\n' "$_cc_absent" | sed 's/^/        /'
+        echo "  -> a well-formed id is not an owner. rd, asked LIVE, right now, has no"
+        echo "     such item. The citation is fabricated or the id was mistyped; an"
+        echo "     honest regenerate (tools/gen_rd_citations.py) will keep reproducing"
+        echo "     this row, not clear it -- the fix is the declaration, not the ledger."
+        _cc_bad=1
+    fi
+    return "$_cc_bad"
 }
 
 # ---------------------------------------------------------------------------
@@ -294,6 +343,51 @@ sort -r "$B" > "$WORK/sc_h.tsv"
 sc "H: the same rows in a different order" agree "$B" "$WORK/sc_h.tsv"
 
 # ---------------------------------------------------------------------------
+# P/Q/R (rd vms-004e): citations_clean() self-controls. These need no rd --
+# they feed a SYNTHETIC gen.err, in the exact shape tools/gen_rd_citations.py
+# writes, to the same function the live path calls a few screens down.
+# ---------------------------------------------------------------------------
+printf '  CLOSED: vms-cln1 (status done), 1 citation(s): src/fixture.c:1\n' \
+    > "$WORK/gc_closed.err"
+if citations_clean "$WORK/gc_closed.err" >"$WORK/gc_closed.out" 2>&1; then
+    echo "  FAIL: self-control P -- citations_clean did not fire on a CLOSED: line"
+    sc_fail=$((sc_fail + 1)); status=1
+elif ! grep -qF "vms-cln1" "$WORK/gc_closed.out"; then
+    echo "  FAIL: self-control P -- fired, but never named vms-cln1"
+    sc_fail=$((sc_fail + 1)); status=1
+else
+    echo "  PASS: self-control P: citations_clean fires on a CLOSED: report line"
+    sc_pass=$((sc_pass + 1))
+fi
+
+printf '  ABSENT: rd has no item vms-abs1, 1 citation(s): src/fixture.c:1\n' \
+    > "$WORK/gc_absent.err"
+if citations_clean "$WORK/gc_absent.err" >"$WORK/gc_absent.out" 2>&1; then
+    echo "  FAIL: self-control Q -- citations_clean did not fire on an ABSENT: line"
+    sc_fail=$((sc_fail + 1)); status=1
+elif ! grep -qF "vms-abs1" "$WORK/gc_absent.out"; then
+    echo "  FAIL: self-control Q -- fired, but never named vms-abs1"
+    sc_fail=$((sc_fail + 1)); status=1
+else
+    echo "  PASS: self-control Q: citations_clean fires on an ABSENT: report line"
+    sc_pass=$((sc_pass + 1))
+fi
+
+# R (GREEN): bounding P/Q -- a gen.err with neither line must NOT fire. Without
+# this, P and Q would be equally consistent with a function that always reds.
+printf 'gen_rd_citations: 3 cited id(s) from 3 declaration site(s) -- 3 open, 0 closed, 0 absent\n' \
+    > "$WORK/gc_clean.err"
+if citations_clean "$WORK/gc_clean.err" >"$WORK/gc_clean.out" 2>&1; then
+    echo "  PASS: self-control R: citations_clean does not fire on a clean report"
+    sc_pass=$((sc_pass + 1))
+else
+    echo "  FAIL: self-control R -- citations_clean fired on a report naming"
+    echo "        neither CLOSED: nor ABSENT:"
+    sed 's/^/        /' "$WORK/gc_clean.out"
+    sc_fail=$((sc_fail + 1)); status=1
+fi
+
+# ---------------------------------------------------------------------------
 # LEDGER-FLOOR CONTROLS (K-O). These do not exercise the comparator; they
 # exercise tests/integration/lib/rd_citations.sh, the reader the census uses,
 # on fixture trees built here. They need no rd.
@@ -386,7 +480,138 @@ EOF
 floor_rc "O: an id the caller never passed in is still resolved (or red)" 1 \
     "has NO ROW for it"
 
+# ---------------------------------------------------------------------------
+# S/T/U (rd vms-004e): THE OTHER POPULATION GETS THE FULL VERDICT, not a
+# presence check. Control O above already proves a MISSING row is caught for
+# an id the caller never passed in; these three prove the same is now true
+# when the row EXISTS and says open, closed or absent -- the exact gap
+# MEASURED against the revision this replaces: an honest regenerate handed a
+# row saying `closed` or `absent`, for an id cited by a marker family the
+# caller never parses, left rd_cite_check silent ("0 tree id(s) unresolved").
+# ---------------------------------------------------------------------------
+
+# S (GREEN): an id outside the caller's own ids, with an OPEN row, passes.
+# Bounds T/U -- without this they would be equally consistent with a check
+# that reds on ANY id outside the caller's own list, open or not.
+build_floor_tree
+cat >> "$FT/src/libvms/fixture.c" <<'EOF'
+/* OVMX-NOTE: cites an id no caller here parsed (vms-otr1) -- fixture */
+EOF
+printf 'vms-otr1\topen\tinbox\tfixture: other population, open\n' >> "$FT/tracking/rd-citations.tsv"
+printf 'vms-a86\n' > "$WORK/fw/ids"
+floor_rc "S: an OPEN id outside the caller's own ids passes" 0 ""
+
+# T (RED): the same shape, but the row the caller never asked about is
+# CLOSED. MEASURED, before this fix: this exact fixture (row exists, says
+# closed) left the OLD completeness loop silent -- presence was enough.
+build_floor_tree
+cat >> "$FT/src/libvms/fixture.c" <<'EOF'
+/* OVMX-NOTE: cites an id no caller here parsed (vms-otr2) -- fixture */
+EOF
+printf 'vms-otr2\tclosed\tdone\tfixture: other population, closed\n' >> "$FT/tracking/rd-citations.tsv"
+printf 'vms-a86\n' > "$WORK/fw/ids"
+floor_rc "T: a CLOSED id outside the caller's own ids is still resolved (not just present)" 1 \
+    "cites a CLOSED rd item: vms-otr2"
+
+# U (RED): the same shape, ABSENT. This is the exact vms-q9z9 attack: no
+# forgery, the row is precisely what tools/gen_rd_citations.py itself writes
+# for an id that has never existed.
+build_floor_tree
+cat >> "$FT/src/libvms/fixture.c" <<'EOF'
+/* OVMX-NOTE: cites an id no caller here parsed (vms-otr3) -- fixture */
+EOF
+printf 'vms-otr3\tabsent\t-\t(rd has no such item)\n' >> "$FT/tracking/rd-citations.tsv"
+printf 'vms-a86\n' > "$WORK/fw/ids"
+floor_rc "U: an ABSENT id outside the caller's own ids is still resolved (not just present)" 1 \
+    "cites an rd item that DOES NOT EXIST: vms-otr3"
+
 rm -rf "$FT"
+
+# ---------------------------------------------------------------------------
+# V/W (rd vms-35f): A DIRECTORY NAME MUST NOT FABRICATE A CITATION, and the
+# refusal that exists precisely to catch a citation manufactured by deletion
+# must still fire when the directory name is what manufactured it.
+#
+# These need a tree whose ROOT DIRECTORY has a specific NAME -- not just a
+# specific ledger and fixture.c under a fixed $WORK/floortree, which is what
+# build_floor_tree gives every other control here. So they get their own
+# builder, one that plants the fixture under a caller-chosen directory name
+# inside $WORK rather than reusing the fixed-name sandbox.
+# ---------------------------------------------------------------------------
+build_dirname_tree() {
+    _dn_name="$1"
+    _dn_root="$WORK/dnfixtures/$_dn_name"
+    rm -rf "$WORK/dnfixtures"
+    mkdir -p "$_dn_root/src/libvms" "$_dn_root/tracking" "$WORK/dnw"
+    printf '%s\n' "$2" > "$_dn_root/src/libvms/fixture.c"
+    {
+        echo "# fixture ledger"
+        echo "# generated-at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        [ -n "$3" ] && printf '%s\n' "$3"
+    } > "$_dn_root/tracking/rd-citations.tsv"
+    rm -rf "$WORK/dnw"; mkdir -p "$WORK/dnw"
+    : > "$WORK/dnw/ids"
+    printf '%s\n' "$_dn_root"
+}
+
+# V (GREEN): a REAL, well-formed citation of a synthetic id, in a tree whose
+# root directory is named vms-fx7z -- a directory name matching the id
+# regex, the way "vms-base" or a checkout's own vms-<sha> tag would. Before
+# rd vms-35f, grep -Hn's "path:lineno:text" let the id regex match the PATH,
+# so a ledger with no row for the DIRECTORY NAME (there is deliberately none
+# here) used to fabricate an unresolved citation of "vms-fx7z" out of nothing
+# but where the tree sits. The genuine citation (vms-realid) has its own row
+# and must still resolve; the fixture's own name must not need one.
+DNROOT=$(build_dirname_tree "vms-fx7z" \
+    "/* OVMX-UNWIRED: vms_kif_fixture (vms-realid) -- fixture declaration */" \
+    "vms-realid	open	inbox	fixture: the real citation, not the directory name")
+rd_cite_check "$DNROOT" "$WORK/dnw/ids" "$WORK/dnw" 1 "the dirname fixture" \
+    > "$WORK/dnw/out" 2>&1
+_dn_rc=$?
+if [ "$_dn_rc" -ne 0 ]; then
+    echo "  FAIL: control V -- a tree rooted at vms-fx7z with a genuine, resolved"
+    echo "        citation should pass; the checker returned $_dn_rc"
+    sed 's/^/        /' "$WORK/dnw/out"
+    sc_fail=$((sc_fail + 1)); status=1
+elif grep -qF "vms-fx7z" "$WORK/dnw/out"; then
+    echo "  FAIL: control V -- the checker's own output names vms-fx7z, the"
+    echo "        DIRECTORY the tree is rooted at, as though it were a citation"
+    sed 's/^/        /' "$WORK/dnw/out"
+    sc_fail=$((sc_fail + 1)); status=1
+else
+    echo "  PASS: control V: a tree rooted at vms-fx7z fabricates no citation of vms-fx7z"
+    sc_pass=$((sc_pass + 1))
+fi
+
+# W (RED, the deletion case, rd vms-35f finding (b)): a marker that carries
+# NO rd id at all, in a tree rooted at vms-fx8z. Before this fix, the id
+# regex matching the PATH satisfied FLOOR 1 (rd_cite_check's own "the tree
+# cites nothing at all" refusal) with an id manufactured from nothing but the
+# directory name, and a hand-added row for that fabricated id -- the shape a
+# careless "fix" would reach for -- turned it into a silent PASS. Correct
+# behavior is FLOOR 1 firing regardless: a marker with no id is a marker with
+# no id, wherever the tree sits, and a row named after the directory must not
+# be able to buy its way past that.
+DNROOT=$(build_dirname_tree "vms-fx8z" \
+    "/* OVMX-UNWIRED: vms_kif_fixture -- no rd id in this marker at all */" \
+    "vms-fx8z	open	inbox	the row a careless fix would add for the directory name")
+rd_cite_check "$DNROOT" "$WORK/dnw/ids" "$WORK/dnw" 0 "the dirname fixture" \
+    > "$WORK/dnw/out" 2>&1
+_dn_rc=$?
+if [ "$_dn_rc" -ne 2 ]; then
+    echo "  FAIL: control W -- a marker with no rd id, under vms-fx8z, should hit"
+    echo "        FLOOR 1 (rc=2); the checker returned $_dn_rc"
+    sed 's/^/        /' "$WORK/dnw/out"
+    sc_fail=$((sc_fail + 1)); status=1
+elif ! grep -qF "found NO rd id cited" "$WORK/dnw/out"; then
+    echo "  FAIL: control W -- rc was 2 but not for FLOOR 1's own reason"
+    sed 's/^/        /' "$WORK/dnw/out"
+    sc_fail=$((sc_fail + 1)); status=1
+else
+    echo "  PASS: control W: FLOOR 1 fires under vms-fx8z even with a same-named ledger row"
+    sc_pass=$((sc_pass + 1))
+fi
+rm -rf "$WORK/dnfixtures" "$WORK/dnw"
 echo "  self-controls: $sc_pass passed, $sc_fail failed"
 
 # ---------------------------------------------------------------------------
@@ -497,6 +722,40 @@ else
         echo "    (report cross-check: $g_open open / $g_closed closed / $g_absent absent, matching the rows written)"
     fi
 fi
+
+# ---------------------------------------------------------------------------
+# (3b) A LIVE CLOSED OR ABSENT CITATION IS ITSELF A RED (rd vms-004e), not
+# just a consistency check that the report and the row agree with each other.
+#
+# Sections (3) above answer "did the generator contradict itself" -- and
+# MEASURED, on the revision this replaces, that question alone is not enough:
+# an HONEST regenerate of a declaration citing `vms-q9z9` (never existed) or
+# a real closed id produces a report and a row that agree with EACH OTHER
+# perfectly (both say `absent`, or both say `closed`) while the citation
+# itself is still illegitimate. No forgery is involved -- the row is exactly
+# what tools/gen_rd_citations.py writes -- so sections (3) and (1) both went
+# rc=0: (1) because a fresh regenerate matches the committed ledger (neither
+# side is STALE), and (3) because the report and the row it wrote agree. This
+# test's own name is "freshness", and an id that resolves to nothing live is
+# not a freshness problem -- but printing "ABSENT: rd has no item vms-q9z9"
+# to stderr and returning 0 anyway is indistinguishable, to a reader who
+# trusts the exit code, from there being no problem at all.
+#
+# So: any citation that resolves live, right now, to CLOSED or ABSENT is an
+# unconditional RED here, independent of whether the ledger is stale. This is
+# NOT the only place that catches it -- rd_cite_check's own "OTHER
+# population" verdict (same item) now catches every closed/absent citation
+# through the STATIC ledger too, in every gate that sources this library, not
+# only the ones whose own parser accepts the marker family that carries it.
+# This check is the LIVE-rd-backed second opinion: it needs no gate's parser
+# and no assumption that some OTHER caller's cite_want happens to miss the
+# id, because it reads straight off what the generator told rd, moments ago.
+#
+# THE RULE ITSELF is citations_clean() above, so the self-controls a few
+# screens up already proved it fires on a synthetic gen.err -- this is that
+# same function, called here on the REAL one this run just produced.
+# ---------------------------------------------------------------------------
+citations_clean "$WORK/gen.err" || status=1
 
 # ---------------------------------------------------------------------------
 # (2) THE INDEPENDENT READ. Ask rd about every id in the COMMITTED ledger using

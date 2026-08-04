@@ -524,10 +524,54 @@ static unsigned long sysap_vc_loss_notifications = 0; /* SYSAP handlers actually
  * connection supported by this virtual circuit is also broken, and the SYSAPs
  * participating in these connections are notified of the event."
  *
- * Until this item scs_cdl_vc_loss() had NO production caller and no CDT carried
- * a handler, so the notification half of p. 2-31 was implemented and dead.
- * conn_bind() below now installs THIS function on every CDT it creates, and
- * scs_vc_break() reaches it through scs_cdl_vc_loss().
+ * BEFORE THIS ITEM no CDT carried a VC-loss handler at all, so the notification
+ * half of p. 2-31 was implemented and DEAD: scs_cdl_vc_loss() walked the Path
+ * Block's connection queue, counted what it found and notified nobody, because
+ * every vc_loss_handler it tested was NULL. conn_bind() below now installs THIS
+ * function on every CDT it creates -- the first SYSAP error handler OVMX has
+ * ever had.
+ *
+ * WHO CALLS THE SCAN. An earlier draft of this comment said scs_cdl_vc_loss()
+ * "had no production caller". That was true when it was written and is FALSE on
+ * this branch: vms-17f landed underneath this item and brought one. There are
+ * TWO production callers, and this handler is now reached from BOTH:
+ *
+ *   1. scs_vc_break()  (src/vmsscs/scs_vc.c) -- THIS item's caller. A p. 2-31
+ *      message-guarantee failure: a receive-side sequence gap detected in
+ *      scsd_handle_frame(), or retransmit exhaustion in scsd_retransmit_tick().
+ *      Gated by OVMX_NO_VC_BREAK.
+ *   2. scs_pb_depart() (src/vmsscs/scs_depart.c) -- vms-17f's caller, the
+ *      p. 2-28 ordered teardown, reached from scsd_peer_departure_sweep() below
+ *      when a peer goes silent past the listen timeout.
+ *      Gated by OVMX_NO_PEER_DEPART.
+ *
+ * THE CONSEQUENCE ON CALLER (2), which this item introduced and therefore owns:
+ * because installation happens in conn_bind() rather than in the break path,
+ * EVERY peer departure carrying bound connections now invokes this handler,
+ * moves sysap_vc_loss_notifications and emits SCSD-W-SYSAPVCLOSS. vms-17f's
+ * departures used to be silent here. That is asserted through the production
+ * sweep by test_departure_notifies_the_sysaps() in tests/vmsscs/test_scsd_wire.c.
+ *
+ * WHY OVMX_NO_VC_BREAK DOES NOT GATE INSTALLATION -- decided, not defaulted.
+ * The obvious alternative is to skip the install when this item's kill switch is
+ * set, so the switch covers everything the item changes. Rejected, for three
+ * reasons:
+ *   - The switch's contract is "do not BREAK a circuit on a message-guarantee
+ *     failure"; it announces itself as SCSD-W-VCBREAKOFF. A departure is not a
+ *     message-guarantee failure.
+ *   - Notifying the SYSAP on a departure is p. 2-28 behaviour that vms-17f
+ *     explicitly wanted and could not have, only because no handler existed.
+ *     Gating installation here would make THIS item's kill switch silently
+ *     disable a SIBLING item's intended behaviour -- a switch that does more
+ *     than revert its own item is worse than no switch.
+ *   - It would change WHAT IS BOUND rather than what happens on failure: a CDT
+ *     with a NULL vc_loss_handler is a structurally different object, so the
+ *     switch would perturb steady state, not just the failure path.
+ * The property that actually matters is that no path reaching this handler is
+ * UNGATED, and that holds: caller (1) is gated by OVMX_NO_VC_BREAK, caller (2)
+ * by OVMX_NO_PEER_DEPART. Both gates are RUN with the counter confirmed to stay
+ * at 0, including the deliberately-not-gated combination (departure sweep with
+ * OVMX_NO_VC_BREAK=1 set, where the notification MUST still fire).
  *
  * WHAT IT DOES: clears the send gate for exactly the connection that was
  * broken. Those three booleans are what actually decide whether scsd.c sends

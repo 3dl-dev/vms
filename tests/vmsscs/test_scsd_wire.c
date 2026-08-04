@@ -1932,12 +1932,19 @@ static void test_null_source_conid_binds_nothing(void)
  * THE TRAP THIS EXISTS TO AVOID, stated so nobody has to guess: a test that
  * calls scs_cdl_vc_loss() or scs_vc_break() directly proves the MECHANISM
  * works (that is tests/vmsscs/test_scs_vc.c's job) and proves NOTHING about
- * whether the daemon ever reaches it. Before this item scs_cdl_vc_loss() had no
- * production caller at all and no CDT carried a VC-loss handler. So everything
- * below drives scsd_handle_frame() and scsd_retransmit_tick() -- the real
- * receive dispatch and the real timer tick, over the real src/vmsscs/scsd.c
- * translation unit -- and asserts the SYSAP handler count that only
- * scsd_sysap_vc_loss() can move.
+ * whether the daemon ever reaches it. So everything below drives
+ * scsd_handle_frame(), scsd_retransmit_tick() and scsd_peer_departure_sweep()
+ * -- the real receive dispatch, the real timer tick and the real departure
+ * sweep, over the real src/vmsscs/scsd.c translation unit -- and asserts the
+ * SYSAP handler count that only scsd_sysap_vc_loss() can move.
+ *
+ * WHAT WAS DEAD BEFORE THIS ITEM, stated precisely because an earlier draft of
+ * this comment overstated it: no CDT carried a VC-loss handler, so
+ * scs_cdl_vc_loss()'s notification loop notified nobody. The SCAN itself was
+ * NOT callerless -- vms-17f's scs_pb_depart() already called it underneath this
+ * item. This item supplies the missing half (the handler), which is why it also
+ * owns the resulting behaviour change on vms-17f's departure path; see
+ * test_departure_notifies_the_sysaps() below.
  * ========================================================================== */
 
 /* Build two REAL connections on ONE circuit, the production way, and leave the
@@ -2539,6 +2546,137 @@ static void test_delivery_failure_kill_switch_through_the_daemon(void)
 }
 
 /*
+ * THE CONSEQUENCE THIS ITEM HAS ON vms-17f's DEPARTURE PATH, asserted rather
+ * than left to be discovered.
+ *
+ * conn_bind() installs scsd_sysap_vc_loss() on every CDT it creates -- not on
+ * the break path. scs_pb_depart() (vms-17f) already walked the Path Block's
+ * connection queue through scs_cdl_vc_loss() and, before this item, found a
+ * NULL handler on every CDT and notified nobody. Installing the handler
+ * therefore CHANGES vms-17f's departure behaviour: every departure carrying
+ * bound connections now invokes the SYSAP handler, moves the counter and prints
+ * SCSD-W-SYSAPVCLOSS. That is this item's change, on someone else's path, and
+ * it is asserted HERE, through the production sweep.
+ *
+ * AND IT IS DELIBERATELY NOT GATED BY OVMX_NO_VC_BREAK. Part B is the assertion
+ * of that decision, not an accident being ratified: with this item's kill switch
+ * SET, a departure must STILL notify, because a departure is not a
+ * message-guarantee failure and the p. 2-28 notification belongs to vms-17f's
+ * teardown. The reasoning is in scsd.c on scsd_sysap_vc_loss(). Part C runs the
+ * switch that DOES gate this path.
+ */
+static void test_departure_notifies_the_sysaps(void)
+{
+    uint64_t timeout = scs_depart_listen_timeout_ms();
+
+    /* ---- A. NEITHER SWITCH SET: the departure notifies both SYSAPs. ---- */
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    (void)unsetenv("OVMX_NO_PEER_DEPART");
+    {
+        struct rxworld r;
+        struct peer_state *ps = two_connections_on_one_circuit(&r);
+        if (ps == NULL) {
+            return;
+        }
+        uint64_t heard_at = ps->last_rx_ms;
+        CHECK(heard_at != 0, "the daemon never stamped the peer's last-heard time");
+
+        /* NEGATIVE CONTROL, same code one argument different: a peer that has
+         * just spoken departs nothing and notifies nobody. Without this, the
+         * assertions below would pass for a sweep that notified every CDT it
+         * could see on every call. */
+        CHECK(rx_sweep(&r, heard_at) == 0, "a peer heard from this instant departed");
+        CHECK(sysap_vc_loss_notifications == 0,
+              "the control sweep fired %lu SYSAP handlers",
+              sysap_vc_loss_notifications);
+
+        CHECK(rx_sweep(&r, heard_at + timeout) == 1,
+              "a peer silent for the listen timeout was NOT declared departed");
+        CHECK(peer_departures == 1, "the sweep recorded %lu departures, expected 1",
+              peer_departures);
+        CHECK(depart_connections_lost == 2,
+              "the departure reported %lu connections lost, expected 2",
+              depart_connections_lost);
+        /* THE MEASUREMENT. Only scsd_sysap_vc_loss() can move this, and on this
+         * path it is reached only through scs_pb_depart() -> scs_cdl_vc_loss(). */
+        CHECK(sysap_vc_loss_notifications == 2,
+              "the departure fired %lu SYSAP VC-loss handlers, expected 2 (the"
+              " member and directory connections on the departing circuit)",
+              sysap_vc_loss_notifications);
+        /* ONE LINE PER NOTIFIED CONNECTION, and each names WHICH connection.
+         * rxlog_count, not rxlog_has: a handler that fired twice and logged
+         * once would leave the counter right and the operator's log wrong. The
+         * two substrings below are unique to scsd_sysap_vc_loss()'s format
+         * string, so no other daemon log line can satisfy them. */
+        CHECK(rxlog_count("SCSD-W-SYSAPVCLOSS,") == 2,
+              "the departure printed %u SYSAPVCLOSS lines for 2 notifications",
+              rxlog_count("SCSD-W-SYSAPVCLOSS,"));
+        CHECK(rxlog_has("SYSAP notified: connection SCS$DIRECTORY"),
+              "the SYSAPVCLOSS log does not name the directory connection");
+        CHECK(rxlog_has("SYSAP notified: connection VMS$VAXcluster"),
+              "the SYSAPVCLOSS log does not name the VMS$VAXcluster connection");
+        /* A departure is NOT a broken message guarantee: it must not be scored
+         * as one, or the exit summary reports circuits that nothing broke. */
+        CHECK(vc_breaks == 0,
+              "the departure was counted as %lu VC break(s) -- a silent peer is"
+              " not a p. 2-31 message-guarantee failure", vc_breaks);
+        CHECK(vc_seq_gaps == 0, "the departure scored %lu sequence gaps", vc_seq_gaps);
+        CHECK(!rxlog_has("SCSD-W-VCBREAK,"),
+              "the departure logged a VC BREAK");
+    }
+
+    /* ---- B. WITH THIS ITEM'S KILL SWITCH SET, the departure STILL notifies.
+     * This is the documented decision under assertion: OVMX_NO_VC_BREAK gates
+     * BREAKING a circuit on a message-guarantee failure, and nothing else. If
+     * someone later gates handler INSTALLATION on it, this reds -- and they
+     * will have to read the reasoning in scsd.c before overriding it. ---- */
+    (void)setenv(SCS_VC_NO_BREAK_ENV, "1", 1);
+    {
+        struct rxworld r;
+        struct peer_state *ps = two_connections_on_one_circuit(&r);
+        if (ps == NULL) {
+            (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+            return;
+        }
+        uint64_t heard_at = ps->last_rx_ms;
+        CHECK(rx_sweep(&r, heard_at + timeout) == 1,
+              "OVMX_NO_VC_BREAK=1 suppressed a peer DEPARTURE -- it must gate"
+              " only the p. 2-31 break");
+        CHECK(sysap_vc_loss_notifications == 2,
+              "OVMX_NO_VC_BREAK=1 suppressed the DEPARTURE notification (%lu"
+              " handlers fired, expected 2) -- this item's switch must not"
+              " disable vms-17f's p. 2-28 teardown",
+              sysap_vc_loss_notifications);
+        CHECK(vc_breaks == 0, "the gated run broke %lu circuits", vc_breaks);
+    }
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+
+    /* ---- C. THE SWITCH THAT DOES GATE THIS PATH. OVMX_NO_PEER_DEPART=1 runs
+     * no sweep teardown at all, so scs_cdl_vc_loss() is never called and no
+     * handler fires -- the matched zero for part A. ---- */
+    (void)setenv("OVMX_NO_PEER_DEPART", "1", 1);
+    {
+        struct rxworld r;
+        struct peer_state *ps = two_connections_on_one_circuit(&r);
+        if (ps == NULL) {
+            (void)unsetenv("OVMX_NO_PEER_DEPART");
+            return;
+        }
+        uint64_t heard_at = ps->last_rx_ms;
+        CHECK(rx_sweep(&r, heard_at + timeout) == 0,
+              "GATED: OVMX_NO_PEER_DEPART=1 still departed a peer");
+        CHECK(sysap_vc_loss_notifications == 0,
+              "GATED: %lu SYSAP handlers fired with the departure sweep off",
+              sysap_vc_loss_notifications);
+        CHECK(ps->connected == 1 && ps->dir_connected == 1,
+              "GATED: the send gates were cleared anyway");
+        CHECK(!rxlog_has("SCSD-W-SYSAPVCLOSS,"),
+              "GATED: the SYSAPVCLOSS line was printed anyway");
+    }
+    (void)unsetenv("OVMX_NO_PEER_DEPART");
+}
+
+/*
  * THE HEADLINE CASE. A node forms a circuit, goes silent past the listen
  * timeout, and comes back with the SAME identity -- all of it through
  * scsd_handle_frame() and scsd_peer_departure_sweep(), the two production
@@ -3124,6 +3262,8 @@ int main(void)
     test_retransmit_does_not_break_the_vc();
     test_delivery_failure_breaks_the_vc_through_the_daemon();
     test_delivery_failure_kill_switch_through_the_daemon();
+    /* This item's handler installation changes vms-17f's departure path. */
+    test_departure_notifies_the_sysaps();
     test_exit_summary_reports_the_parked_connection();
     /* vms-17f: peer departure, and the p. 2-21 REFRESH the daemon can now
      * reach, driven by captured formation frames through the same dispatch. */

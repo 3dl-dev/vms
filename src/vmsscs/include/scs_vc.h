@@ -453,8 +453,11 @@ enum scs_vc_action scs_vc_fsm_timeout(struct scs_pb *pb, uint64_t now_ms,
  * behaviour p. 2-31 forbids, and both are silent.
  *
  * THIS IS A FAIL-LOUD CHANGE. Under loss, OVMX now tears a circuit down where
- * it previously continued. `OVMX_NO_VC_BREAK=1` restores the old behaviour
- * exactly -- see scs_vc_break_enabled() for precisely what it gates.
+ * it previously continued. `OVMX_NO_VC_BREAK=1` restores the old behaviour on
+ * every path that BREAKS a circuit -- see scs_vc_break_enabled() for precisely
+ * what it gates, and for the one behaviour change of this item that it
+ * deliberately does NOT gate (the SYSAP notification on vms-17f's peer
+ * departure path, which OVMX_NO_PEER_DEPART gates instead).
  *
  * ================== IS THE DETECTOR SAFE ON THE REAL WIRE? ================
  * A detector that fires on a healthy circuit would tear down working joins, so
@@ -541,6 +544,18 @@ const char *scs_vc_break_reason_name(enum scs_vc_break_reason r);
  *     tells you whether a gap occurred.
  * It gates no emitted byte directly. It is wire-visible only in the sense that
  * a circuit OVMX breaks stops carrying OVMX frames.
+ *
+ * WHAT IT DOES *NOT* GATE, stated because "this switch reverts my item" was
+ * overclaimed here once already. scsd.c's conn_bind() installs its SYSAP
+ * VC-loss handler UNCONDITIONALLY, so vms-17f's peer-departure teardown --
+ * scs_pb_depart() -> scs_cdl_vc_loss(), a path this switch has nothing to do
+ * with -- now reaches that handler and logs SCSD-W-SYSAPVCLOSS whether this
+ * switch is set or not. That is deliberate: a departure is not a
+ * message-guarantee failure, and this item's switch must not disable a sibling
+ * item's p. 2-28 behaviour. The reasoning is on scsd_sysap_vc_loss() in
+ * src/vmsscs/scsd.c; the not-gating is ASSERTED by
+ * test_departure_notifies_the_sysaps() in tests/vmsscs/test_scsd_wire.c, which
+ * also runs OVMX_NO_PEER_DEPART=1 -- the switch that DOES gate that path.
  */
 #define SCS_VC_NO_BREAK_ENV "OVMX_NO_VC_BREAK"
 int scs_vc_break_enabled(void);

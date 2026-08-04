@@ -130,12 +130,15 @@
  *     occupy the three CDL slots. A second peer's connections are not tracked;
  *     scsd.c logs SCSD-W-CONNSLOT and carries on rather than allocating a
  *     Con.ID that differs from the one on the wire.
- *   - Nothing here has a SYSAP: msg_input / dgram_input / vc_loss_handler are
- *     never installed by the daemon. scs_cdl_vc_loss() DOES have a production
- *     caller as of vms-17f (scs_pb_depart(), reached from scsd.c's departure
- *     sweep), but with no handler installed its notification loop currently
- *     notifies nobody -- it counts the lost connections and releases them.
- *     Installing real SYSAP error handlers is vms-abc's surface, not this one's.
+ *   - msg_input and dgram_input are STILL never installed by the daemon, so the
+ *     p. 2-29 delivery path above stays dead.
+ *   - vc_loss_handler IS installed now: as of vms-abc, scsd.c's conn_bind()
+ *     puts scsd_sysap_vc_loss() on every CDT it creates, so
+ *     scs_cdl_vc_loss()'s notification loop notifies somebody. It has TWO
+ *     production callers, and both therefore reach that handler:
+ *     scs_pb_depart() (vms-17f, the departure sweep, gated by
+ *     OVMX_NO_PEER_DEPART) and scs_vc_break() (vms-abc, the p. 2-31
+ *     message-guarantee failures, gated by OVMX_NO_VC_BREAK).
  */
 #ifndef SCS_CDT_H
 #define SCS_CDT_H

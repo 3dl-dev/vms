@@ -3439,6 +3439,138 @@ static void test_multicast_beacon_keeps_a_peer_alive(void)
 }
 
 /*
+ * vms-abc: THE HELLO BEACON IS A SEND SITE, AND IT IS NOW ONE A TEST CAN SEE.
+ *
+ * This send used to be six lines inside main()'s timer loop -- the one function
+ * the SCSD_UNIT_TEST seam renames away -- and it called sendto() on the socket
+ * directly, so it appeared in NEITHER half of the SEND SITE TABLE and no test
+ * could reach it. scsd_hello_beacon_emit() is that code, hoisted; this drives
+ * the REAL function.
+ *
+ * WHAT IS ASSERTED, and why each part:
+ *
+ *   (a) IT TRANSMITS WITH NO CIRCUIT IN EXISTENCE. The world here has no peer
+ *       slot, no System Block and no Path Block at all -- scs_config_path()
+ *       could not describe a circuit if something asked it to. That is not an
+ *       oversight in the fixture, it is the JUSTIFICATION for the exemption
+ *       stated as a test: a beacon is how peers are discovered, so it is sent
+ *       precisely when nothing is known. If a future change routed it through
+ *       send_frame_vc() this assertion reds, and it should -- the node would
+ *       have lost the ability to announce itself.
+ *
+ *   (b) IT REACHES THE TRANSMIT PATH, asserted BELOW the choke point via
+ *       scsd_test_frames (the capture buffer substituted into send_frame_raw),
+ *       not from the function's return value. A send that is refused increments
+ *       nothing here.
+ *
+ *   (c) IT IS NOT OFFERED TO THE CHOKE POINT AT ALL: vc_sends_refused does not
+ *       move. Together with (b) this distinguishes "exempt" from "refused but
+ *       we didn't notice".
+ *
+ *   (d) THE BYTES ARE THE BUILDER'S BYTES, TO THE MULTICAST GROUP. The frame
+ *       captured off the transmit path is compared against an independently
+ *       built scs_hello_build_frame() output and the destination against
+ *       scs_hello_multicast_addr(), so the wrapper is proven to forward rather
+ *       than to rewrite. The timer tick is the one field that legitimately
+ *       moves between two builds (a live 100ns clock, spec sec 4k), so it is
+ *       compared by first copying the tick the production call actually used
+ *       out of the params the function updated in place.
+ *
+ *   (e) THE RUN COUNTER IS THE ONE THE EXIT SUMMARY PRINTS. rx.hello_sent
+ *       advances by exactly one per beacon -- that counter is why this was a
+ *       real send site and not dead code.
+ *
+ * NON-VACUITY, measured. Three mutants of scsd.c, each rebuilt and run, each
+ * restored and the restore verified with cmp; all three are killed by THIS test:
+ *   M-G  the beacon routed through send_frame_vc() instead -- i.e. choked on a
+ *        circuit that does not exist. Reds (b) 0 frames, (c) +1 refusal.
+ *   M-H  send_frame_channel() rewriting the destination MAC rather than
+ *        forwarding it. Reds (d).
+ *   M-I  `rx->hello_sent++` deleted. Reds (e).
+ * The structural half of the same guarantee -- that no OTHER sender can appear
+ * without being enumerated -- is tests/vmsscs/test_scsd_send_sites.py, which
+ * carries its own seven-mutant record.
+ */
+static void test_the_hello_beacon_transmits_through_the_channel_exemption(void)
+{
+    struct world w;
+    world_init(&w);
+
+    /* (a) NOTHING is discovered: world_init() zeroes every peer slot and the
+     * fixture adds none, so there is no Path Block anywhere for a circuit check
+     * to consult. Asserted, not assumed -- if a future world_init() pre-seeded
+     * a peer this test would silently stop being about "no circuit at all". */
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        CHECK(w.peers[i].pb == NULL,
+              "peer slot %d already carries a Path Block -- the beacon fixture"
+              " is supposed to have no circuit in existence", i);
+    }
+
+    static struct scsd_rx rx;
+    memset(&rx, 0, sizeof(rx));
+    rx.cfg = &w.cfg;
+    rx.pdt = &w.pdt;
+    rx.peers = w.peers;
+
+    struct scs_hello_params hp;
+    memset(&hp, 0, sizeof(hp));
+    scs_hello_multicast_addr(SCS_HELLO_MCAST_GROUP1, hp.dst_mac);
+    memcpy(hp.src_mac, our_hw_mac, 6);
+    memcpy(hp.src_logical, our_logical, 6);
+    memcpy(hp.node_name, "OVMX1 ", SCS_HELLO_NODENAME_LEN);
+    hp.node_name[SCS_HELLO_NODENAME_LEN] = '\0';
+
+    scsd_test_frames = 0;
+    scsd_test_last_len = 0;
+    unsigned long refused_before = vc_sends_refused;
+
+    ssize_t sent = scsd_hello_beacon_emit(&rx, &hp, 7 /* fd never touched */, 1);
+
+    /* (b) it reached the transmit path, asserted below the choke point. */
+    CHECK(scsd_test_frames == 1,
+          "the HELLO beacon put %u frame(s) on the transmit path, expected 1 --"
+          " a node that cannot beacon is a node no peer can discover",
+          scsd_test_frames);
+    CHECK(sent == (ssize_t)SCS_HELLO_FRAME_LEN,
+          "the beacon reported %zd bytes sent, expected %d", sent,
+          SCS_HELLO_FRAME_LEN);
+
+    /* (c) it was never offered to send_frame_vc(): the exemption is real, not a
+     * refusal nobody looked at. */
+    CHECK(vc_sends_refused == refused_before,
+          "the beacon was refused by the virtual-circuit choke point (%lu new"
+          " refusal(s)) -- a HELLO rides no circuit and must not consult one",
+          vc_sends_refused - refused_before);
+
+    /* (d) the wrapper forwarded the builder's bytes to the multicast group. */
+    uint8_t want_dst[6];
+    scs_hello_multicast_addr(SCS_HELLO_MCAST_GROUP1, want_dst);
+    CHECK(memcmp(scsd_test_last_dst, want_dst, 6) == 0,
+          "the beacon went to %02x:%02x:%02x:%02x:%02x:%02x, not the cluster"
+          " multicast group",
+          scsd_test_last_dst[0], scsd_test_last_dst[1], scsd_test_last_dst[2],
+          scsd_test_last_dst[3], scsd_test_last_dst[4], scsd_test_last_dst[5]);
+    CHECK(scsd_test_last_len == SCS_HELLO_FRAME_LEN,
+          "the beacon frame is %zu bytes, expected %d", scsd_test_last_len,
+          SCS_HELLO_FRAME_LEN);
+    uint8_t expect[SCS_HELLO_FRAME_LEN];
+    /* hp.timer_tick is whatever the production call stamped in; reuse it so the
+     * one legitimately-moving field does not make this a flaky comparison. */
+    CHECK(scs_hello_build_frame(&hp, expect) == 0, "the reference build failed");
+    CHECK(memcmp(scsd_test_last_frame, expect, SCS_HELLO_FRAME_LEN) == 0,
+          "the beacon's bytes are not the builder's bytes -- send_frame_channel()"
+          " is rewriting the frame, not forwarding it");
+
+    /* (e) the counter the exit summary prints. */
+    CHECK(rx.hello_sent == 1, "rx.hello_sent is %ld after one beacon, expected 1",
+          rx.hello_sent);
+    (void)scsd_hello_beacon_emit(&rx, &hp, 7, 1);
+    CHECK(rx.hello_sent == 2 && scsd_test_frames == 2,
+          "a second beacon did not advance both the counter (%ld) and the"
+          " transmit path (%u)", rx.hello_sent, scsd_test_frames);
+}
+
+/*
  * (5) vms-b1d: THE DATAGRAM DISCARD IS IN THE PRODUCTION RUN LOG. A datagram
  * discard is silent on the wire by design (p. 2-42, "the port merely discards
  * the datagram"); if it is also invisible locally, the whole DFREEQ is
@@ -3718,6 +3850,7 @@ int main(void)
     test_seq_gap_breaks_the_vc_and_notifies_both_sysaps();
     test_seq_gap_kill_switch_through_the_daemon();
     test_a_broken_circuit_carries_no_traffic();
+    test_the_hello_beacon_transmits_through_the_channel_exemption();
     test_retransmit_does_not_break_the_vc();
     test_delivery_failure_breaks_the_vc_through_the_daemon();
     test_delivery_failure_kill_switch_through_the_daemon();

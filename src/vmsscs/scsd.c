@@ -855,7 +855,11 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *     too;
  *   - it reds unless the direct send_frame_raw() callers are exactly the EXEMPT
  *     list, with exactly the pinned per-function call counts;
- *   - it reds unless the send_frame_vc() callers are exactly the CHOKED list.
+ *   - it reds unless the send_frame_vc() callers are exactly the CHOKED list;
+ *   - it reds unless the send_frame_channel() callers, and how many calls each
+ *     makes, are exactly what the EXEMPT entry for it below says. The exemption
+ *     is per FUNCTION, so its call sites are the one thing a name-only check
+ *     could not see growing.
  *
  * Adding OR renaming a sender without editing this table reds the test run.
  *
@@ -893,13 +897,17 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                           guard here -- scs_vc_fsm_*() decides what may be
  *                           sent from each state, which is a stricter check
  *                           than "is it OPEN", not a weaker one.
- *     send_frame_channel()  ALL NISCA HELLO traffic, called from 4 sites: the
- *                           padded-probe b4 ack, the rate-limited directed
- *                           reply and the one-shot proactive padded HELLO (all
- *                           three in scsd_handle_frame()), plus the periodic
- *                           MULTICAST HELLO BEACON in main()'s timer loop --
- *                           the one that increments rx.hello_sent and is
- *                           reported in the exit summary.
+ *     send_frame_channel()  ALL NISCA HELLO traffic, called from 4 sites in 2
+ *                           functions -- a set and a count BOTH PINNED by the
+ *                           census (CHANNEL_CALLERS), so this paragraph
+ *                           re-derives:
+ *                             scsd_handle_frame()       3 -- the padded-probe
+ *                               b4 ack, the rate-limited directed reply, and
+ *                               the one-shot proactive padded HELLO;
+ *                             scsd_hello_beacon_emit()  1 -- the periodic
+ *                               MULTICAST beacon off main()'s timer, the one
+ *                               that increments rx.hello_sent and is reported
+ *                               in the exit summary.
  *                           See that function for the reason; in short, HELLO
  *                           is CHANNEL maintenance BELOW the virtual circuit
  *                           and is the only thing that re-establishes a
@@ -1641,6 +1649,53 @@ struct scsd_rx {
      * held here to keep it off the handler's stack frame. */
     uint8_t pframe[SCS_HELLO_PADDED_MAX_FRAME];
 };
+
+/*
+ * scsd_hello_beacon_emit - build and transmit ONE periodic multicast HELLO, the
+ * beacon a node announces itself with. Returns what send_frame_channel()
+ * returned, or -1 if the frame could not be built or could not be sent.
+ *
+ * WHY IT IS A FUNCTION. It was six lines inside main()'s timer loop, and the
+ * SCSD_UNIT_TEST seam RENAMES main() AWAY -- so this send, alone among the
+ * daemon's senders, was reachable from no test at all. That is also how it came
+ * to call sendto() on the socket directly and sit in neither half of the SEND
+ * SITE TABLE: nothing could look at it. Hoisted here it is an ordinary static
+ * helper, driven by tests/vmsscs/test_scsd_wire.c
+ * (test_the_hello_beacon_transmits_through_the_channel_exemption) against the
+ * capture buffer, exactly as every other sender in this file is.
+ *
+ * THE CADENCE STAYS IN THE LOOP. This function does not consult the clock and
+ * has no idea how often it is called; main() still owns `last_hello` and the
+ * --hello-interval comparison. Only the build-and-send moved, so the wire sees
+ * the same frames at the same times.
+ *
+ * It is a HELLO, so it takes the send_frame_channel() exemption: it is
+ * addressed to the cluster MULTICAST group rather than to any port address, and
+ * it is transmitted when no peer, no System Block, no Path Block and therefore
+ * no virtual circuit is known at all -- it is how peers are discovered in the
+ * first place. See the EXEMPT half of the SEND SITE TABLE.
+ */
+static ssize_t scsd_hello_beacon_emit(struct scsd_rx *rx, struct scs_hello_params *hp,
+                                      int sock, int ifindex)
+{
+    uint8_t frame[SCS_HELLO_FRAME_LEN];
+    hp->timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
+    if (scs_hello_build_frame(hp, frame) != 0) {
+        return -1;
+    }
+    ssize_t sent = send_frame_channel(sock, ifindex, hp->dst_mac, frame, sizeof(frame));
+    if (sent < 0) {
+        fprintf(stderr, "SCSD-E-SENDFAIL, HELLO beacon transmit failed: %s\n",
+                strerror(errno));
+        return -1;
+    }
+    rx->hello_sent++;
+    log_ts(stdout);
+    printf(" SCSD-I-HELLOSENT, node='%s' seq=%ld bytes=%zd\n",
+           hp->node_name, rx->hello_sent, sent);
+    fflush(stdout);
+    return sent;
+}
 
 /*
  * scsd_joiner_retransmit_pending - vms-abc: EXACTLY the condition under which
@@ -3371,35 +3426,17 @@ int main(int argc, char **argv)
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
             if (now.tv_sec - last_hello.tv_sec >= hello_interval) {
-                uint8_t frame[SCS_HELLO_FRAME_LEN];
-                hello_params.timer_tick = hello_timer_tick100(); /* vms-9f3: live 100ns tick */
-                if (scs_hello_build_frame(&hello_params, frame) == 0) {
-                    /* vms-abc: the beacon goes through send_frame_channel(), the
-                     * SAME exemption the directed/padded HELLO replies use --
-                     * see the EXEMPT half of the SEND SITE TABLE. It used to
-                     * call sendto() directly on `sock`, which put a real send
-                     * site (it increments rx.hello_sent and is reported in the
-                     * exit summary) in NEITHER half of a table that claims to
-                     * list every sender. The census keys on the transmit
-                     * primitive now, so that omission cannot recur silently;
-                     * routing it here states the exemption once instead of
-                     * twice. The bytes on the wire are unchanged:
-                     * send_frame_raw() builds the same sockaddr_ll from
-                     * hello_params.dst_mac and ifindex that the removed
-                     * `hello_dst` held. */
-                    ssize_t sent = send_frame_channel(sock, (int)ifindex,
-                                                      hello_params.dst_mac,
-                                                      frame, sizeof(frame));
-                    if (sent < 0) {
-                        fprintf(stderr, "SCSD-E-SENDFAIL, HELLO beacon transmit failed: %s\n", strerror(errno));
-                    } else {
-                        rx.hello_sent++;
-                        log_ts(stdout);
-                        printf(" SCSD-I-HELLOSENT, node='%s' seq=%ld bytes=%zd\n",
-                               hello_params.node_name, rx.hello_sent, sent);
-                        fflush(stdout);
-                    }
-                }
+                /* vms-abc: the beacon's build-and-send is scsd_hello_beacon_emit()
+                 * -- see that function. Only the CADENCE is here. It used to be
+                 * inline AND it used to call sendto() on `sock` directly, which
+                 * put a real send site (it increments rx.hello_sent and is
+                 * reported in the exit summary) in NEITHER half of a SEND SITE
+                 * TABLE that claims to list every sender, inside the one
+                 * function no test can reach. The wire is unchanged: the same
+                 * frame goes to the same multicast MAC on the same interface at
+                 * the same times, because send_frame_raw() builds the same
+                 * sockaddr_ll the deleted `hello_dst` held. */
+                (void)scsd_hello_beacon_emit(&rx, &hello_params, sock, (int)ifindex);
                 last_hello = now;
             }
         }

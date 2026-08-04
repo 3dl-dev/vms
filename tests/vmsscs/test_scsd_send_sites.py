@@ -35,8 +35,9 @@ keyed on the literals "send_frame_raw(" and "send_frame_vc(". The beacon now
 goes through send_frame_channel(); check 0 is what makes the next one impossible
 to add silently, wrapper or no wrapper.
 
-CHECK 0 IS PROVEN BY MUTATION, not asserted. Six mutants applied to scsd.c, each
-run against this script alone, each restored and the restore verified with cmp:
+CHECKS 0 AND 7 ARE PROVEN BY MUTATION, not asserted. Seven mutants applied to
+scsd.c, each run against this script alone, each restored and the restore
+verified with cmp:
 
   M-A  a stray sendto() added to main()'s timer loop          RED (killed)
   M-B  a stray write() in a new helper beside scsd_handle_frame  RED
@@ -47,6 +48,8 @@ run against this script alone, each restored and the restore verified with cmp:
   M-F  sendto taken as a VALUE (`... (*p)(...) = sendto;`) and
        never called by name -- the reason check 0 matches a
        bare identifier rather than `name(`                    RED
+  M-J  a new function quietly calling send_frame_channel(),
+       i.e. taking the HELLO exemption without being named    RED (check 7)
   M-E  control for the pre-existing table check: the
        send_frame_channel entry renamed out of the EXEMPT
        block                                                  RED
@@ -241,6 +244,42 @@ for fn, at in sorted(callers.items(), key=lambda kv: (kv[0] or "")):
           f"(p. 2-31). If this site genuinely must transmit on a non-OPEN "
           f"circuit, add it to the EXEMPT block of the SEND SITE TABLE in "
           f"scsd.c with a reason, and to EXEMPT in this script.")
+
+# --- check 7: the CALL SITES of the HELLO exemption are pinned too ---
+# send_frame_channel() is exempt as a FUNCTION, so every one of its callers
+# inherits the exemption. Check 1 cannot see that set grow -- it only sees
+# send_frame_channel() itself. This pins who may take the HELLO exemption and
+# how often, and it is what makes the "4 sites in 2 functions" figure in the
+# EXEMPT entry of the SEND SITE TABLE a measurement rather than a claim.
+CHANNEL_CALLERS = {
+    "scsd_handle_frame": 3,       # padded-probe b4 ack, rate-limited directed
+                                  # reply, one-shot proactive padded HELLO
+    "scsd_hello_beacon_emit": 1,  # the periodic multicast beacon off main()'s
+                                  # timer loop
+}
+chan_callers = {}
+for i, line in enumerate(code_lines):
+    if "send_frame_channel(" not in line:
+        continue
+    if re.match(r"^static\s+ssize_t\s+send_frame_channel\s*\(", line):
+        continue
+    if owner[i] == "send_frame_channel":
+        continue
+    chan_callers.setdefault(owner[i], []).append(i + 1)
+
+check(set(chan_callers) == set(CHANNEL_CALLERS),
+      f"send_frame_channel() is called from {sorted(k or '<file scope>' for k in chan_callers)}, "
+      f"expected {sorted(CHANNEL_CALLERS)}. Calling it takes the HELLO exemption "
+      f"-- 'this frame rides no virtual circuit'. A new caller must be justified "
+      f"in the EXEMPT half of the SEND SITE TABLE and added here; if what it "
+      f"sends is not a HELLO it belongs at send_frame_vc() instead.")
+for fn, want in sorted(CHANNEL_CALLERS.items()):
+    got = len(chan_callers.get(fn, []))
+    check(got == want,
+          f"{fn}() makes {got} send_frame_channel() call(s), expected {want} "
+          f"(lines {chan_callers.get(fn, [])}). Update CHANNEL_CALLERS and the "
+          f"per-function counts in the send_frame_channel() entry of the SEND "
+          f"SITE TABLE together.")
 
 check("send_frame_vc" in callers,
       "send_frame_vc() does not call send_frame_raw() -- the choke point does "

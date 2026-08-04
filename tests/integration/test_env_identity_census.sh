@@ -55,34 +55,18 @@
 #     documented; that is filed, not done here, because src/vmsssh/ belongs
 #     to vms-475.
 #
-#   - VMS_USERNAME has exactly ONE reader, tools/vms_mail.c, which uses it to
-#     choose whose mailbox to open. That is a real identity decision, so it is
-#     the one entry below that could carry an escalation. It does not, for two
-#     independent measured reasons.
+#   - VMS_USERNAME now has ZERO readers. It had exactly one -- tools/vms_mail.c,
+#     which used it to choose whose mailbox to open -- and vms-a30 deleted that
+#     site rather than documenting it, so every one of these variables is now
+#     write-only. The long analysis of whether MAIL's reader could carry an
+#     escalation is deleted with the reader, not reworded: it described code
+#     that no longer exists, and a stale argument for why something is safe is
+#     worse than none.
 #
-#     (1) No way was found for a console user to write the process
-#         environment. DCL contains no setenv/putenv at all, and its exec
-#         paths (dcl_exec_utility's execv/execvp, cmd_run's execl, cmd_spawn's
-#         execl) hand the child environ verbatim. The mechanisms a user could
-#         actually reach were TRIED, on the runtime, not reasoned about:
-#         DEFINE, ASSIGN and a DCL symbol assignment, each in its own fresh
-#         login session, each followed by SPAWN of a fresh DCL -- and the
-#         subprocess reported the LOGINOUT-set value every time. The
-#         observation channel was proved live in the same run by moving the
-#         cwd with SET DEFAULT and watching the subprocess still report the
-#         environment's value over it. This is a "none found by these
-#         probes", not a proof of impossibility: a mechanism nobody thought
-#         to try is exactly what a gate is for, which is why the census
-#         below fails on a new READER as well as a new writer.
-#
-#     (2) MAIL opened no mailbox at all on this runtime -- not another
-#         user's, and not its own. It fails with "%MAIL-E-NOMAIL, cannot
-#         create mail directory: No such file or directory" because
-#         get_user_homedir() returns the raw VMS filespec from SYSUAF
-#         ("SYS$SYSDEVICE:[USERS.GUEST]") and build_maildir() then uses it
-#         as a Linux path. Measured for GUEST and for SYSTEM, which is both
-#         accounts rather than a sample: the other four SYSUAF rows carry no
-#         password hash and cannot authenticate at all (vms-08f).
+#   - USER and LOGNAME are written by vmssshd (not in the runtime image) and
+#     read by nothing. tools/vms_authorize.c read USER to decide who could
+#     manage SYSUAF until vms-b2e; AUTHORIZE now takes its privilege mask from
+#     the executive, so that reader is gone too.
 #
 # IF YOU ARE HERE BECAUSE THIS FAILED: adding your new site to the declared
 # set below is the WRONG first move. Ask Rule 10's question first -- does VMS
@@ -137,12 +121,13 @@ echo ""
 # what carries the security meaning.
 # ---------------------------------------------------------------------------
 DECLARED=$(cat <<'EOF'
+WRITE src/vmsssh/vmssshd.c LOGNAME
+WRITE src/vmsssh/vmssshd.c USER
 WRITE src/vmsssh/vmssshd.c VMS_PRIVILEGES
 WRITE src/vmsssh/vmssshd.c VMS_UIC_GROUP
 WRITE src/vmsssh/vmssshd.c VMS_UIC_MEMBER
 WRITE src/vmsssh/vmssshd.c VMS_USERNAME
 WRITE tools/vms_login.c VMS_USERNAME
-READ tools/vms_mail.c VMS_USERNAME
 EOF
 )
 
@@ -172,7 +157,25 @@ strip_comments() {
     }' "$1"
 }
 
-VARS="VMS_USERNAME VMS_UIC_GROUP VMS_UIC_MEMBER VMS_PRIVILEGES VMS_TERMINAL"
+# USER and LOGNAME are in this list because of vms-b2e (2026-08-04).
+#
+# AUTHORIZE.EXE decided who may manage SYSUAF from getenv("USER"), and THIS
+# GATE WAS GREEN THROUGHOUT. It was not wrong -- plain USER was outside the
+# five VMS_-prefixed names it declared, so its "6 sites" was true of its own
+# scope and said nothing about that one. That is the failure mode the header
+# above warns about in the abstract ("a gate scoped to one directory is a gate
+# against the directory a defect last happened to live in"); vms-b2e is the
+# same sentence with "directory" replaced by "variable name".
+#
+# The universe is therefore the identity NAMES, not the OVMX-prefixed ones.
+# The grep verbs below pin these to the environment API, and the closing quote
+# in the pattern keeps USER from matching VMS_USERNAME or a USERNAME_SIZE
+# macro -- cases H, I and J in the negative control hold that apart.
+#
+# HOME is deliberately NOT here. It is a directory, not an identity, and
+# widening this to every variable vmssshd happens to set would make the census
+# a list of environment variables rather than a census of identity.
+VARS="VMS_USERNAME VMS_UIC_GROUP VMS_UIC_MEMBER VMS_PRIVILEGES VMS_TERMINAL USER LOGNAME"
 
 # BOTH TREES. src/ alone is what let the refuted sentence stand.
 FILES=$(find "$SRC_ROOT/src" "$SRC_ROOT/tools" \( -name '*.c' -o -name '*.h' \) | sort)
@@ -241,14 +244,23 @@ fi
 # ---------------------------------------------------------------------------
 # THE ONE PROPERTY THE CENSUS IMPLIES THAT IS WORTH STATING SEPARATELY.
 #
-# Four of the five variables are WRITE-ONLY: nothing reads them. That is the
-# fact that makes the writer count harmless, and it is a stronger and more
-# durable claim than any statement about which writers exist -- it survives
-# any number of new writers. It is DERIVED from the census above, not
-# declared, so it cannot be true here and false in the tree.
+# EVERY variable in the universe is WRITE-ONLY: nothing in src/ or tools/
+# reads any of them. That is the fact that makes the writer count harmless,
+# and it is a stronger and more durable claim than any statement about which
+# writers exist -- it survives any number of new writers. It is DERIVED from
+# the census above, not declared, so it cannot be true here and false in the
+# tree.
+#
+# THIS LOOP USED TO NAME FOUR VARIABLES rather than iterating $VARS, because
+# VMS_USERNAME had a live reader (tools/vms_mail.c) and USER had one too
+# (tools/vms_authorize.c, which decided SYSUAF management from it). vms-a30
+# and vms-b2e deleted both, so the exception list is gone and the claim is now
+# total. Iterating $VARS is also what keeps this honest when the universe
+# grows: a variable added to VARS without a reader-check would otherwise be
+# counted by the census and asserted about by nothing.
 # ---------------------------------------------------------------------------
 echo ""
-for v in VMS_UIC_GROUP VMS_UIC_MEMBER VMS_PRIVILEGES VMS_TERMINAL; do
+for v in $VARS; do
     n=$(printf '%s\n' "$OBS_SORTED" | grep -c "^READ .* $v$")
     if [ "$n" -eq 0 ]; then
         echo "  OK: $v has no reader in src/ or tools/ -- writing it decides nothing"

@@ -29,6 +29,18 @@
 # never to delete it; and a PARTIAL or EXECUTIVE claim on a service that
 # reaches nothing at all is a RED the other way.
 #
+# WHAT THIS GATE IS, PLAINLY, SO IT CANNOT BE MISQUOTED: it READS declarations
+# -- marker comments, prototypes, exported symbols -- and checks that they are
+# consistent with each other and with a call graph this script derives from
+# source text. IT DOES NOT RUN THE PRODUCT. Nothing below boots OVMX, loads
+# vms.ko, or opens /dev/vms; the compiler invocations in this file exist only
+# to read the symbol table with nm, not to exercise what the symbols do. The
+# only instrument in this program that executes anything against a real
+# executive is tests/qemu/run_facility_negctl.sh, and it runs in CI only. Every
+# "PROVEN", "every", "cannot" and "only" printed by this gate is a claim about
+# a STRING or GLOB relation computed over declarations the tree makes about
+# itself; where that is what is meant, that is now how it is worded.
+#
 # WHY THIS GATE EXISTS, AND WHY THE CENSUS CANNOT COVER IT.
 #
 # tests/integration/test_kif_caller_census.sh (vms-7fb) asks one question:
@@ -290,6 +302,11 @@
 #          The parser here is not the floor on what gets checked.
 #   DOES - claim the cited item is the RIGHT one, or that anyone is working it.
 #   NOT    An open item is an owner, not a schedule.
+#        - check what the row SAYS. It asks whether the cited id has a row and
+#          whether that row's verdict is open -- never whether the row is
+#          actually ABOUT this declaration. That gap is real and open, tracked
+#          as vms-004e; it is a gap in the ledger and the checker this gate
+#          calls, not one this file can close by itself.
 #        - reach rd. rd is nostr-backed and unreachable from CI, so the answer
 #          comes from a committed SNAPSHOT whose age this gate prints every
 #          run. An item closed in rd since that stamp still reads open here,
@@ -322,7 +339,7 @@ status=0
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
-echo "userspace service register: every sys\$ service reaches the executive or is declared"
+echo "userspace service register: every sys\$ service declares, against an item, where its answer comes from"
 
 if [ ! -d "$SRC_ROOT/src" ]; then
     echo "FAIL: cannot find $SRC_ROOT/src -- this gate scans the product tree."
@@ -1696,9 +1713,10 @@ while IFS=' ' read -r k v; do
         declared)   echo "  $v carry a well-formed declaration of where their answer comes from" ;;
         userspace)  echo "    $v say OVMX-USERSPACE -- no part of the answer is the executive's" ;;
         partial)    echo "    $v say OVMX-PARTIAL   -- a named part is, a named part is not" ;;
-        executive)  echo "    $v say OVMX-EXECUTIVE -- all of it is, and name a proof that CALLS them" ;
-                    echo "       and that an injected defect in the EXECUTIVE half of their answer" ;
-                    echo "       path is known to redden, with no defect in their userspace remainder" ;;
+        executive)  echo "    $v say OVMX-EXECUTIVE -- all of it is, and name a proof that this scan" ;
+                    echo "       finds a (syntactic, see vms-38c) call to them in, with a defect the" ;
+                    echo "       manifest attributes to the EXECUTIVE half of their answer path and" ;
+                    echo "       none attributed to their userspace remainder" ;;
         exported)   echo "  $v sys\$ symbol(s) are EXPORTED by the compiled product (nm, $nobj object file(s))" ;;
         symonly)    echo "    $v of those the source scan never saw -- exported under a name the source" ;
                     echo "       does not spell (asm label / alias). They are in the universe under their" ;

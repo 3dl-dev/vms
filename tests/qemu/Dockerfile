@@ -401,8 +401,40 @@ COPY tests/qemu/facility_defects.sh /src/tests/qemu/facility_defects.sh
 COPY tests/qemu/inject_and_run.sh /inject_and_run.sh
 RUN chmod +x /inject_and_run.sh /src/tests/qemu/facility_defects.sh
 
-# Copy test runner
+# Copy test runner AND the helper it sources.
+#
+# run_tests.sh lands at /run_tests.sh, so its `. "$(dirname "$0")/lib/..."`
+# resolves to //lib/harness_verdict.sh -- the layout below is what makes that
+# path real inside the image. Copying run_tests.sh without lib/ produces
+#
+#     /run_tests.sh: line 17: //lib/harness_verdict.sh: No such file or directory
+#
+# and, because the shell exits 1 there, the CI step reports the harness itself
+# as "exited nonzero" -- indistinguishable from a genuine executive failure
+# until you read the log. Keep these two COPYs together.
+# A single-FILE COPY, not `COPY tests/qemu/lib/ /lib/`, deliberately: on
+# ubuntu:24.04 /lib is a symlink to usr/lib, and a directory COPY onto that
+# path is not worth the risk of replacing the symlink with a real directory
+# and cutting the image off from every shared library in it. One file is all
+# lib/ holds, and the guard below is what notices if that stops being true.
 COPY tests/qemu/run_tests.sh /run_tests.sh
+COPY tests/qemu/lib/harness_verdict.sh /lib/harness_verdict.sh
 RUN chmod +x /run_tests.sh
+
+# The image must not be able to build without the helper run_tests.sh sources.
+# Both halves are checked because they fail differently and both were live
+# possibilities here: the file must EXIST (a dropped COPY), and it must be the
+# only thing lib/ ships (a second helper added upstream that no COPY brings in,
+# which would fail identically at boot and just as confusingly).
+RUN test -r /lib/harness_verdict.sh \
+    || { echo "FATAL: /lib/harness_verdict.sh missing -- run_tests.sh sources it at boot, so the harness would die before running one suite and CI would report it as 'harness exited nonzero'"; exit 1; }
+COPY tests/qemu/lib/ /tmp/lib_check/
+RUN n=$(ls -1 /tmp/lib_check | wc -l); \
+    if [ "$n" -ne 1 ]; then \
+        echo "FATAL: tests/qemu/lib/ now holds $n files but only harness_verdict.sh is COPYed into the image."; \
+        ls -1 /tmp/lib_check; \
+        echo "Add a COPY for each, then raise the count here. Do not delete this check."; \
+        exit 1; \
+    fi && rm -rf /tmp/lib_check
 
 CMD ["/run_tests.sh"]

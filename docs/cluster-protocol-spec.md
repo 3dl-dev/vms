@@ -783,13 +783,69 @@ that only lists `SCS$DIRECTORY` in its **listen** CDT (`62C50000`); a formed
 handle *identity* is **inferred** (the dynamically-allocated `SCS$DIRECTORY`
 CDT Con.IDs), the handle *binding* is **GROUNDED**.
 
+**(1a) [46:48] IS THE SCA CONNECTION-CONTROL MESSAGE TYPE — GROUNDED (`vms-dd5`),
+and it corrects this section.** The four-frame handshake tabulated in (1) is not
+peculiar to `SCS$DIRECTORY`, and [46:48] is not a counter. Measured over
+`formation-ci1.pcap` (the full independent run), restricting to the
+connection-control length classes 110/66/62 and excluding the application value
+`10`: **60 frames, 16 complete connection dialogues, 0 residuals.**
+
+| [46:48] | Frames | Length | Con.ID pair | Reading |
+|---|---|---|---|---|
+| `0` | 16 | 110 | remote `0`, local supplied, SYSAP name present | **CONNECT_REQ** |
+| `1` | 16 | 66 | remote echoed, local still `0` | **CONNECT_RSP** |
+| `2` | 6 | 110 | both filled, SYSAP name present | **ACCEPT_REQ** |
+| `3` | 6 | 62 | both bound, original direction | **ACCEPT_RSP** |
+| `4` | 10 | 62 | both bound | **REJECT_REQ** (see below) |
+| `6` | 6 | 62 | both bound, matched pairs both directions | **DISCONNECT_REQ** (see below) |
+
+**Why 0/1/2/3 are GROUNDED, not merely labelled.** The counts pair exactly —
+16 CONNECT_REQ, 16 CONNECT_RSP, and each dialogue terminated by exactly one of
+6 ACCEPT_REQ or 10 REJECT_REQ (**6 + 10 = 16, with zero Con.IDs receiving
+both**) — and each value's Con.ID fill pattern is what *VAXcluster Principles*
+Figure 2-14 requires of that message and of no other: `0` carries destination
+Con.ID 0 because the target's CDT does not exist yet (p. 2-28: the CONIDs are
+exchanged *during* formation); `1` echoes it while leaving its own at 0, which
+is an acknowledgement that structurally *cannot* be the accept; `2` supplies the
+responder's own handle, the admission act; `3` carries the bound pair back in
+the original direction. Five SYSAPs exercise the same four values in the same
+order in a single capture — `SCS$DIRECTORY` (×3), `VMS$VAXcluster`,
+`MSCP$DISK`, `VMS$DISK_CL_DRVR`, `SCA$TRANSPORT` — so the pattern is a property
+of SCA, not of one SYSAP. A per-dialogue counter is **REFUTED** by two
+observations: the `MSCP$DISK` dialogues run `0,1,4` (a counter cannot skip to 4
+as the third message), and the `SCS$DIRECTORY` connection runs
+`0,1,2,3,10,10,…,6,6` (a counter cannot go back down to 6 after 10).
+
+**`4` = REJECT_REQ — strongly grounded, one caveat.** All 10 occurrences follow
+a CONNECT_RSP and terminate the dialogue with no ACCEPT_REQ ever sent, and the
+partition against ACCEPT_REQ is exact (no Con.ID gets both). All 10 are the
+target refusing `MSCP$DISK` — precisely Figure 2-15. **Caveat, stated:** the
+`4` frame carries the *responder's own* Con.ID, which a pure rejection does not
+obviously need. The label is the best reading of a decisive behavioural
+partition, not a decoded field.
+
+**`6` = DISCONNECT — plausible, NOT grounded.** All 6 occurrences are on
+connections that completed `0,1,2,3` and finished their work, and they appear in
+matched pairs one per direction, which is Figure 2-16's matched
+`DISCONNECT_REQ`. But see the gap below.
+
+**THE GAP THIS OPENS (do not paper over it): `5` and `7` DO NOT EXIST ON OUR
+WIRE.** If [46:48] enumerates the eight SCA connection-control messages in
+figure order, `5` is REJECT_RSP and `7` is DISCONNECT_RSP. **Neither value
+appears in any capture we hold** — not once, in 18,541 frames. So the REJECT and
+DISCONNECT dialogues of Figures 2-15 and 2-16 are each observed with only their
+REQ half. Three readings survive and we cannot separate them: (i) VMS does not
+send those responses; (ii) they are carried by the `0x48` credit-return that
+acks every sequenced message; (iii) our captures simply never contain one. **Do
+not build a `5` or `7` frame on this section.**
+
 **(2) SCS$DIR_LOOKUP body — name resolution with a grounded negative marker.**
 Past the handle pair the body carries fixed-position, blank-padded ASCII SYSAP
-name fields beginning at [62]. Two observed shapes, selected by a
-directory-operation field at **[46:48]** (a per-dialogue message counter:
-`0,1,2,3` across the connect handshake frames 21–27, then `10` for the
-`MSCP$TAPE` lookup 29/31 — its exact role is **inferred**; a companion
-flag/status word sits at [48:50]):
+name fields beginning at [62]. Two observed shapes, selected by the field at
+**[46:48]**, which this section previously called a "per-dialogue message
+counter" — **that reading is REFUTED, see §4(h)(1a) immediately below**; it is
+the SCA connection-control **message type**. A companion flag/status word sits
+at [48:50] and remains inferred.
 
 - **connect frame** (SCA 21): target SYSAP `"SCS$DIRECTORY   "` (16-byte field
   [62:78]) + operation `"SCS$DIR_LOOKUP"` (blank-padded, [78:]).
@@ -869,9 +925,12 @@ state alone — no captured counter needs replaying. (This is exactly what the
 next-seq/last-ack CSB assignment (§3 `SHOW CLUSTER` triad) remains **inferred**,
 same honesty caveat as §4d/§4g.
 
-**RE gaps left in §4h (honest):** (a) the `0x5b` directory-operation field
-[46:48] and its companion [48:50] flag — the value↔operation mapping is
-inferred, not documented; (b) the `0x48` secondary counter [30:32] and the
+**RE gaps left in §4h (honest):** (a) the [46:48] field is now **GROUNDED as the
+connection-control message type for values 0–3** (§4(h)(1a), `vms-dd5`), with
+`4` strongly supported as REJECT_REQ and `6` only plausible as DISCONNECT_REQ;
+`5` and `7` are **absent from every capture we hold**, so the response halves of
+the reject and disconnect dialogues are unaccounted for, and the companion
+[48:50] flag remains inferred; (b) the `0x48` secondary counter [30:32] and the
 early-phase shorts' non-zero residual at [30:40] (SCA 22/24 carry printable
 leftover bytes) are not grounded to a field; (c) the affirmative
 (non-`"NOT PRESENT HERE"`) lookup *result* encoding — the capture's directory
@@ -1543,9 +1602,16 @@ For visibility, every field NOT marked GROUNDED above:
   inner length [42:44], config-round counter [44:46], SCSSYSTEMID [46:48],
   version/hardware/node-name ASCII fields. Remaining unknown in that body: the
   `0x0240`/`0x00d8` pair [54:58] (constants, no tunable match) and the per-boot
-  incarnation tokens [66:71]/[98:104]. Remaining unknown in §4h: the `0x5b`
-  directory-operation field [46:48], the `0x48` secondary counter [30:32], and
-  the affirmative-lookup result encoding.
+  incarnation tokens [66:71]/[98:104]. Remaining unknown in §4h: the `0x48`
+  secondary counter [30:32] and the affirmative-lookup result encoding. **The
+  [46:48] field is no longer unknown** — §4(h)(1a) (`vms-dd5`) grounds it as the
+  SCA connection-control message type (`0`=CONNECT_REQ, `1`=CONNECT_RSP,
+  `2`=ACCEPT_REQ, `3`=ACCEPT_RSP over 16 dialogues with an exact accept/reject
+  partition), which also REFUTES this document's earlier "per-dialogue message
+  counter" reading. What remains open there: `4` (REJECT_REQ, strong but not
+  decoded), `6` (DISCONNECT_REQ, plausible only), and the total **absence of
+  `5` and `7`** — the REJECT_RSP and DISCONNECT_RSP halves that Figures 2-15 and
+  2-16 require are on no capture we hold. Do not emit either.
 - **Joining an ESTABLISHED cluster** (§4i, `vms-af2`): **RESOLVED — two distinct
   differences.** (A) The established member's round-0 `0x41` START
   `send_seq[20:22]` = `prior_VC_send_seq+1` (residual VC continuation, e.g.

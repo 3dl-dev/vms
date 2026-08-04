@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "scs_conn.h" /* vms-dd5: the connection state machine + wire->event map */
 #include "scs_connect.h"
 #include "scs_hello.h"
 
@@ -317,6 +318,81 @@ static void test_both_conids_present_p235(void)
           "round-trip: parsed Con.ID pair matches what was built");
 }
 
+/*
+ * vms-dd5: THE 0x4b CONNECT FRAMES ARE FIGURE 2-14 MESSAGES TOO.
+ *
+ * docs/cluster-protocol-spec.md sec 4(h)(1a) grounds the [46:48] field as the
+ * SCA connection-control message type and shows the SAME four-message dialogue
+ * running for five different SYSAPs, VMS$VAXcluster among them. This module's
+ * two builders are therefore Figure 2-14's CONNECT_REQ and ACCEPT_REQ, and this
+ * test asserts that the bytes they emit classify that way -- without a socket.
+ *
+ * NOTE WHAT IS *NOT* ASSERTED. OVMX builds no CONNECT_RSP and no ACCEPT_RSP for
+ * this SYSAP. Both exist on the real wire (the 66-byte message-type-1 and the
+ * 62-byte message-type-3 frames), so this is an OVMX gap, not a wire gap; the
+ * state machine reports the missing sends as SCSD-W-CONNNOACT at runtime rather
+ * than pretending they went out.
+ */
+static void test_connect_frames_classify_as_figure_2_14_messages(void)
+{
+    printf("[vms-dd5 Figure 2-14 classification of the 0x4b connect frames]\n");
+
+    struct scs_connect_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, vax1_mac, 6);
+    memcpy(p.src_mac, ovmx_mac, 6);
+    memcpy(p.src_logical, ovmx_logical, 6);
+    memcpy(p.peer_logical, vax1_mac, 6);
+    p.local_conid = SCS_CONNECT_OVMX_CONID_BASE | 0x0002u;
+    p.remote_conid = 0x33580008u;
+
+    uint8_t req[SCS_CONNECT_FRAME_LEN];
+    check(scs_connect_build_request(&p, req) == 0, "build the 0x4b CONNECT-REQUEST");
+    /* [46:48] is absolute 60:62. */
+    unsigned req_msgtype = (unsigned)req[60] | ((unsigned)req[61] << 8);
+    check(req_msgtype == 0, "the CONNECT-REQUEST carries connection-control message type 0");
+    struct scs_connect_view rv;
+    check(scs_connect_parse(req, sizeof(req), &rv) == 0, "parse it back");
+    check(rv.remote_conid == 0 && rv.local_conid == p.local_conid,
+          "the CONNECT-REQUEST has the CONNECT_REQ Con.ID shape (destination 0)");
+    enum scs_conn_event ev;
+    check(scs_conn_event_for_msgtype(req_msgtype, &ev) == 1, "message type 0 is mapped");
+    check(ev == SCS_CONN_EV_RCV_CONNECT_REQ, "message type 0 maps to RCV_CONNECT_REQ");
+
+    uint8_t rsp[SCS_CONNECT_FRAME_LEN];
+    check(scs_connect_build_response(&p, rsp) == 0, "build the 0x4b CONNECT-RESPONSE");
+    unsigned rsp_msgtype = (unsigned)rsp[60] | ((unsigned)rsp[61] << 8);
+    check(rsp_msgtype == 2, "the CONNECT-RESPONSE carries connection-control message type 2");
+    check(scs_connect_parse(rsp, sizeof(rsp), &rv) == 0, "parse it back");
+    check(rv.remote_conid == p.remote_conid && rv.local_conid == p.local_conid,
+          "the CONNECT-RESPONSE has the ACCEPT_REQ shape (both Con.IDs supplied)");
+    check(scs_conn_event_for_msgtype(rsp_msgtype, &ev) == 1, "message type 2 is mapped");
+    check(ev == SCS_CONN_EV_RCV_ACCEPT_REQ, "message type 2 maps to RCV_ACCEPT_REQ");
+
+    /* The source's Figure 2-14 column, driven by those two message types plus
+     * the CONNECT_RSP the peer sends between them. */
+    static struct scs_cdl cdl;
+    scs_cdl_init(&cdl);
+    struct scs_cdt *c = scs_cdl_alloc_conid(&cdl, p.local_conid, "VMS$VAXcluster",
+                                            "VMS$VAXcluster", NULL);
+    check(c != NULL, "allocate the joiner CDT at the Con.ID we put on the wire");
+    if (c == NULL) {
+        return;
+    }
+    scs_conn_fsm_init(c);
+    struct scs_conn_transition t = scs_conn_fsm_step(c, SCS_CONN_EV_SVC_CONNECT);
+    check(t.action == SCS_CONN_ACT_SEND_CONNECT_REQ && t.to == SCS_CONN_CONNECT_SENT,
+          "invoking CONNECT asks for the frame this module builds first");
+    t = scs_conn_fsm_step(c, SCS_CONN_EV_RCV_CONNECT_RSP);
+    check(t.to == SCS_CONN_CONNECT_ACK && t.documented,
+          "the peer's message-type-1 CONNECT_RSP advances to CONNECT ACK by the book");
+    t = scs_conn_fsm_step(c, SCS_CONN_EV_RCV_ACCEPT_REQ);
+    check(t.to == SCS_CONN_OPEN && t.documented,
+          "the peer's message-type-2 ACCEPT_REQ opens the connection by the book");
+    check(t.action == SCS_CONN_ACT_SEND_ACCEPT_RSP,
+          "and the book requires an ACCEPT_RSP that this module has no builder for");
+}
+
 int main(void)
 {
     printf("test_scs_connect: directed HELLO + SCS connect (vms-5fe/vms-c6d)\n");
@@ -326,6 +402,7 @@ int main(void)
     test_build_response();
     test_response_live_counters();
     test_both_conids_present_p235();
+    test_connect_frames_classify_as_figure_2_14_messages();
     printf("test_scs_connect: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

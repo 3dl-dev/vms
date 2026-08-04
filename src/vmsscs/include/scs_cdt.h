@@ -96,28 +96,43 @@
  *     (the CDT address is the context); C callbacks in a daemon need one.
  *   - `conn_state` is an OPAQUE int here. This module stores it and never
  *     interprets it. The state values and every transition between them belong
- *     to the SCS connection state machine (vms-dd5), which is deliberately NOT
- *     implemented here.
+ *     to the SCS connection state machine, which is deliberately NOT
+ *     implemented here. It now EXISTS, in scs_conn.{h,c} (vms-dd5): the values
+ *     are enum scs_conn_state and the transitions are the tables of Figures
+ *     2-14/2-15/2-16. Nothing below changed to accommodate it.
  *
  * ===== REACHABILITY IN SCSD TODAY -- DO NOT READ A GREEN TEST RUN AS "OVMX
  * IMPLEMENTS THIS" =====
  *
  * This module and tests/vmsscs/test_scs_cdt.c implement and exercise the full
- * p. 2-28..2-30 model. THE DAEMON DOES NOT USE IT YET. src/vmsscs/scsd.c still
- * carries its three Con.IDs as node-global macros and still dispatches received
- * frames by comparing against those macros, and its per-connection state still
- * lives in `struct peer_state` fields (connected / dir_connected /
- * joiner_connected / *_remote_conid).
+ * p. 2-28..2-30 model.
  *
- * That wiring is NOT withheld out of laziness; it is blocked on two things
- * this item is explicitly fenced out of:
- *   - CDT allocation is driven by CONNECT_REQ / ACCEPT_REQ arrival and by
- *     connection state, which is the SCS connection state machine (vms-dd5).
- *   - OVMX's Con.IDs are currently node-global, shared across all peers, so a
- *     CDT's pb pointer could not be honestly filled for more than one peer.
- *     Per-peer connection identity arrives with the state machine too.
- * Until then OVMX has connection DESCRIPTORS but its daemon does not yet route
- * through them, and this comment is the honest statement of that gap.
+ * AS OF vms-dd5 THE DAEMON USES IT -- PARTLY. scsd.c now links this module,
+ * initializes one node-wide CDL, and allocates a CDT for each of the three
+ * connections it forms per peer (SCS$DIRECTORY, the member-opened
+ * VMS$VAXcluster, and the joiner-opened VMS$VAXcluster), claiming each at the
+ * EXACT node-global Con.ID it already put on the wire via scs_cdl_alloc_conid.
+ * Those CDTs carry live connection state driven by scs_conn.c.
+ *
+ * WHAT IS STILL NOT TRUE, so no one reads more into a green test run than is
+ * there:
+ *   - RECEIVED FRAMES ARE STILL NOT ROUTED THROUGH THE CDL. scsd.c continues to
+ *     DISPATCH by comparing a frame's Con.ID against the three macros. The one
+ *     exception is the [46:48] connection-control classifier, which does look
+ *     the destination Con.ID up with scs_cdl_lookup() -- but only to STEP the
+ *     state machine, never to deliver. scs_cdl_deliver_message() and
+ *     scs_cdl_deliver_datagram() still have NO production caller: the p. 2-29
+ *     delivery path is implemented and unit tested, and unused.
+ *   - `struct peer_state`'s connected / dir_connected / joiner_connected
+ *     booleans still gate every send. The CDT state is a RECORD of what those
+ *     booleans did, not a replacement for them.
+ *   - OVMX's Con.IDs are STILL node-global, so only ONE peer's connections can
+ *     occupy the three CDL slots. A second peer's connections are not tracked;
+ *     scsd.c logs SCSD-W-CONNSLOT and carries on rather than allocating a
+ *     Con.ID that differs from the one on the wire.
+ *   - Nothing here has a SYSAP: msg_input / dgram_input / vc_loss_handler are
+ *     never installed by the daemon, so scs_cdl_vc_loss() has no production
+ *     caller either.
  */
 #ifndef SCS_CDT_H
 #define SCS_CDT_H

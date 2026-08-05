@@ -114,15 +114,34 @@
  * EXACT node-global Con.ID it already put on the wire via scs_cdl_alloc_conid.
  * Those CDTs carry live connection state driven by scs_conn.c.
  *
+ * AS OF vms-7c0 RECEIVED APPLICATION MESSAGES ARE ROUTED THROUGH THE CDL. The
+ * paragraph that used to stand here said they were not, and that is no longer
+ * the case: scsd.c's receive dispatch decodes the SCS header (src/vmsscs/
+ * scs_rx.c), and every frame whose message type is 10 -- the p. 4-13
+ * APPLICATION MESSAGE, grounded in docs/cluster-protocol-spec.md sec 4(h)(1b)
+ * -- is handed to scs_cdl_deliver_message(), which resolves the destination
+ * Con.ID here and calls the CDT's msg_input. The five services install that
+ * routine on every CDT they open (scsd.c's four scs_svc_args sites). The
+ * VMS$VAXcluster connection-manager dialogue, which used to decide for itself
+ * whether a frame was OVMX's by comparing Con.IDs against three macros, IS that
+ * routine now. Measured: gcov over tests/vmsscs/test_scsd_wire.c driving real
+ * captured frames shows scs_cdl_deliver_message and scs_cdl_resolve at 100%
+ * line coverage, entered only from scsd_handle_frame().
+ *
  * WHAT IS STILL NOT TRUE, so no one reads more into a green test run than is
  * there:
- *   - RECEIVED FRAMES ARE STILL NOT ROUTED THROUGH THE CDL. scsd.c continues to
- *     DISPATCH by comparing a frame's Con.ID against the three macros. The one
- *     exception is the [46:48] connection-control classifier, which does look
- *     the destination Con.ID up with scs_cdl_lookup() -- but only to STEP the
- *     state machine, never to deliver. scs_cdl_deliver_message() and
- *     scs_cdl_deliver_datagram() still have NO production caller: the p. 2-29
- *     delivery path is implemented and unit tested, and unused.
+ *   - scs_cdl_deliver_datagram() STILL HAS NO PRODUCTION CALLER, and that is a
+ *     measurement rather than an omission. Over 141 reference-lab pcaps and
+ *     981,367 envelope-conformant SCA frames the SCS message-type namespace is
+ *     exactly {0..10} -- 0..9 connection control, 10 the application message --
+ *     so no application DATAGRAM class has ever been observed, and p. 4-68's
+ *     credit==0 rule is necessary rather than sufficient (24.1% of MTYPE-10
+ *     frames carry credit 0). OVMX cannot recognise an inbound datagram from
+ *     this wire and does not pretend to; see the census in scs_rx.h and the
+ *     rx_unknown_mtype counter that will notice the first candidate.
+ *   - CONNECTION-CONTROL messages (types 0..9) are still NOT delivered through
+ *     the CDL -- they drive the connection state machine, which is right:
+ *     p. 2-29's delivery is to a SYSAP, and control messages are SCS's own.
  *   - `struct peer_state`'s connected / dir_connected / joiner_connected
  *     booleans still gate every send. The CDT state is a RECORD of what those
  *     booleans did, not a replacement for them.
@@ -130,8 +149,9 @@
  *     occupy the three CDL slots. A second peer's connections are not tracked;
  *     scsd.c logs SCSD-W-CONNSLOT and carries on rather than allocating a
  *     Con.ID that differs from the one on the wire.
- *   - msg_input and dgram_input are STILL never installed by the daemon, so the
- *     p. 2-29 delivery path above stays dead.
+ *   - msg_input IS installed now (vms-7c0, see above). dgram_input is still
+ *     never installed, for the reason measured above -- not for want of a
+ *     place to install it.
  *   - vc_loss_handler IS installed now: as of vms-abc, scsd.c's conn_bind()
  *     puts scsd_sysap_vc_loss() on every CDT it creates, so
  *     scs_cdl_vc_loss()'s notification loop notifies somebody. It has TWO

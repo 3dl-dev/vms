@@ -227,7 +227,7 @@ target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
     vmsscs_depart vmsscs_dgram vmsscs_svc vmsscs_reason vmsscs_disc
-    vmsscs_poll
+    vmsscs_poll vmsscs_rx
     # vms-578: the merged scsd.c drives the MSCP$DISK client builders, so the
     # unit-test seam needs them too (it #includes scsd.c whole).
     vmsscs_mscp

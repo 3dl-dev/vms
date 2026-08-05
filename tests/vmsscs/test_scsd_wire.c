@@ -1859,6 +1859,16 @@ static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
     vc_conns_broken = 0;
     sysap_vc_loss_notifications = 0;
     vc_sends_refused = 0;
+    /* vms-7c0: the p. 2-29 delivery ledger is file-static in scsd.c too. Every
+     * case that asserts on delivery starts from a known zero. */
+    rx_app_messages = 0;
+    rx_delivered_message = 0;
+    rx_deliver_no_cdt = 0;
+    rx_deliver_src_mismatch = 0;
+    rx_deliver_no_routine = 0;
+    rx_unknown_mtype = 0;
+    sysap_msg_input_calls = 0;
+    sysap_cm_messages = 0;
     /* vms-7fe: the SDIR outcome counters are file-static in scsd.c too. */
     sdir_connect_scans = 0;
     sdir_no_such_sysap = 0;
@@ -2422,6 +2432,410 @@ static void test_null_source_conid_binds_nothing(void)
           scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
     CHECK(r.rx.cm_config_frames == 0,
           "a null-source frame released the add-member burst");
+}
+
+/* ==========================================================================
+ * vms-7c0 -- THE p. 2-29 DELIVERY PATH, DRIVEN BY A REAL CAPTURED APPLICATION
+ * MESSAGE ADDRESSED TO ONE OF OVMX'S OWN Con.IDs.
+ *
+ * PROVENANCE (rule 8: observation only). pcap frame #76 of
+ *   /data/training/vax/cluster/captures/ovmx-760-MEMBER-achieved-20260730.pcap
+ * -- the same capture, the same dialogue and the same member as frames #65/#67
+ * above, read with the same pcap reader and transcribed wire-byte for
+ * wire-byte, Ethernet header included, ZERO bytes edited. It is the FIRST
+ * 190-content application message the member sent to OVMX after the ACCEPT_REQ
+ * of frame #67 bound the joiner connection.
+ *
+ * WHY THIS FRAME AND NOT A SYNTHETIC ONE. Everything the delivery path reads is
+ * already in it and none of it is ours to choose:
+ *   - SCA content [44:46] = 0x0004 and [42:44] = 146 = 190-44, so it passes the
+ *     spec sec 4(h)(1b) envelope test scs_rx_parse() applies;
+ *   - content [46:48] MTYPE = 10, the p. 4-13 APPLICATION MESSAGE (sec 4(h)(1b));
+ *   - content [50:54] destination Con.ID = 0x4F580002 = OVMX_JOINER_CONID --
+ *     literally the handle OVMX issued and the member echoed;
+ *   - content [54:58] source Con.ID = 0x63020011 = OVMX760_MEMBER_CONID, which
+ *     frame #67 taught the CDT, so the p. 2-35 source check has something real
+ *     to agree with;
+ *   - its SYSAP payload (content [58:], abs 72) opens with SYSAP send-msg# 1,
+ *     category 0x01, opcode 0x14 -- the member's node-model config message.
+ *
+ * That last field is what makes this a delivery test rather than a counter
+ * test: ps->sysap_recv can only reach 1 if the CM dialogue actually read the
+ * payload, and the ONLY path from scsd_handle_frame() to that code is
+ * scs_cdl_deliver_message() -> cdt->msg_input.
+ * ========================================================================== */
+
+/* pcap frame #76: VAX2 -> OVMX. opcode byte 0x4b, 190-byte SCA class,
+ * [46:48] MTYPE 10 = application message, credit 0, destination Con.ID
+ * 0x4F580002, source Con.ID 0x63020011. */
+static const uint8_t cap_ovmx_cm_app_message[204] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0xbc, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x0f, 0x00, 0x0e, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00,
+    0x0f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x92, 0x00, 0x04, 0x00,
+    0x0a, 0x00, 0x00, 0x00, 0x02, 0x00, 0x58, 0x4f, 0x11, 0x00, 0x02, 0x63,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x14, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x15, 0x56, 0x41, 0x58, 0x73, 0x65, 0x72, 0x76,
+    0x65, 0x72, 0x20, 0x33, 0x39, 0x30, 0x30, 0x20, 0x53, 0x65, 0x72, 0x69,
+    0x65, 0x73, 0x9d, 0x87, 0x04, 0x00, 0x01, 0x00, 0x28, 0x00, 0x00, 0x00,
+    0xb4, 0xdf, 0xfb, 0x7f, 0x25, 0x00, 0x60, 0x00, 0xf4, 0xdf, 0xf8, 0x7f,
+    0x7e, 0x00, 0x00, 0x00, 0x93, 0x28, 0xec, 0x7f, 0x90, 0x00, 0x02, 0x00,
+    0x9c, 0x96, 0xf8, 0x7f, 0x8b, 0x00, 0x2e, 0x01, 0xca, 0xe2, 0xf8, 0x7f,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x48, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+/*
+ * pcap frame #73: VAX2 -> OVMX, the frame that sits BETWEEN the ACCEPT_REQ and
+ * the config message in the real dialogue. 110-byte SCA class, [46:48] MTYPE 10
+ * = application message, send_seq 13 -- so feeding #67, #73, #76 in order gives
+ * the VC the contiguous 12/13/14 the real wire carried, and no p. 2-31 sequence
+ * gap. ZERO bytes edited.
+ *
+ * It also earns its place twice over: its destination Con.ID is 0x4F58000A, a
+ * slot the member really did address on OVMX in that run and that the fixture
+ * world below never allocates. So it is a REAL captured message for a
+ * connection that does not exist here -- the no-CDT refusal, off the wire,
+ * rather than synthesized.
+ */
+static const uint8_t cap_ovmx_app_message_other_conid[124] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x6c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x0f, 0x00, 0x0d, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x0f, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x00, 0x00,
+    0x0f, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x42, 0x00, 0x04, 0x00,
+    0x0a, 0x00, 0x01, 0x00, 0x0a, 0x00, 0x58, 0x4f, 0x10, 0x00, 0x02, 0x63,
+    0x01, 0x00, 0xe2, 0x7e, 0x00, 0x40, 0x00, 0x00, 0x83, 0x00, 0x04, 0x00,
+    0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0xa1, 0x12, 0x5c, 0x10, 0x64, 0x25, 0x00, 0x00, 0x00, 0x00,
+    0x49, 0x00, 0x0d, 0x00, 0x01, 0x00, 0x00, 0x00, 0xb5, 0x03, 0x01, 0x01,
+    0x6e, 0x00, 0x20, 0x20
+};
+
+/*
+ * scs_rx_parse() OVER THE FRAMES THIS FILE ALREADY HOLDS.
+ *
+ * The classifier is the thing that decides which frames are SYSAP data, so it
+ * is pinned against REAL frames rather than hand-built ones -- and against
+ * frames of BOTH verdicts, so "it says app-message" is a discrimination and not
+ * a constant. Every expected value below is read off the wire bytes in this
+ * file, and the census that grounds the MTYPE meanings is in scs_rx.h.
+ */
+static void test_rx_classifier_over_captured_frames(void)
+{
+    struct scs_rx_hdr h;
+
+    struct rxcase {
+        const char *name;
+        const uint8_t *frame;
+        size_t len;
+        uint16_t mtype;
+        int kind;
+        uint32_t dest;
+        uint32_t src;
+        size_t payload_len;
+    };
+    const struct rxcase cases[] = {
+        {"pcap#30 SCS$DIRECTORY CONNECT_REQ", cap_dir_connect_req,
+         sizeof(cap_dir_connect_req), 0, SCS_RX_CONTROL, 0u, 0x63050008u, 110 - 58},
+        {"pcap#32 CONNECT_RSP", cap_connect_rsp,
+         sizeof(cap_connect_rsp), 1, SCS_RX_CONTROL, 0x63050008u, 0u, 66 - 58},
+        {"pcap#48 VMS$VAXcluster CONNECT_REQ", cap_vaxcluster_connect_req,
+         sizeof(cap_vaxcluster_connect_req), 0, SCS_RX_CONTROL, 0u, 0x62C50009u, 110 - 58},
+        {"pcap#67 ACCEPT_REQ to OVMX", cap_ovmx_joiner_accept_req,
+         sizeof(cap_ovmx_joiner_accept_req), 2, SCS_RX_CONTROL,
+         OVMX_JOINER_CONID, OVMX760_MEMBER_CONID, 110 - 58},
+        {"pcap#76 application message to OVMX", cap_ovmx_cm_app_message,
+         sizeof(cap_ovmx_cm_app_message), 10, SCS_RX_APP_MESSAGE,
+         OVMX_JOINER_CONID, OVMX760_MEMBER_CONID, 190 - 58},
+        {"pcap#73 application message on another OVMX Con.ID",
+         cap_ovmx_app_message_other_conid, sizeof(cap_ovmx_app_message_other_conid),
+         10, SCS_RX_APP_MESSAGE, 0x4F58000Au, 0x63020010u, 110 - 58},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const struct rxcase *c = &cases[i];
+        CHECK(scs_rx_parse(c->frame + 14, c->len - 14, &h) == 0,
+              "%s: scs_rx_parse refused an envelope-conformant captured frame",
+              c->name);
+        CHECK(h.mtype == c->mtype, "%s: MTYPE read as %u, expected %u",
+              c->name, (unsigned)h.mtype, (unsigned)c->mtype);
+        CHECK(h.kind == c->kind, "%s: classified '%s', expected '%s'",
+              c->name, scs_rx_kind_name(h.kind), scs_rx_kind_name(c->kind));
+        CHECK(h.dest_conid == c->dest,
+              "%s: destination Con.ID 0x%08X, expected 0x%08X",
+              c->name, h.dest_conid, c->dest);
+        CHECK(h.src_conid == c->src, "%s: source Con.ID 0x%08X, expected 0x%08X",
+              c->name, h.src_conid, c->src);
+        CHECK(h.payload_len == c->payload_len,
+              "%s: SYSAP payload is %zu bytes, expected %zu (total-58)",
+              c->name, h.payload_len, c->payload_len);
+    }
+
+    /* The sec 4(h)(1d) NEGATIVE. The 120-byte HELLO does not carry this
+     * envelope, and reading it with these offsets is the error that section
+     * exists to forbid. The HELLO is built here by the production builder, so
+     * this cannot go stale against a hand-typed copy. */
+    struct scs_hello_params hp;
+    uint8_t hello[SCS_HELLO_FRAME_LEN];
+    memset(&hp, 0, sizeof(hp));
+    scs_hello_multicast_addr(SCS_HELLO_MCAST_GROUP1, hp.dst_mac);
+    memcpy(hp.src_mac, our_hw_mac, 6);
+    memcpy(hp.src_logical, our_logical, 6);
+    memcpy(hp.node_name, "OVMX1 ", SCS_HELLO_NODENAME_LEN);
+    hp.node_name[SCS_HELLO_NODENAME_LEN] = '\0';
+    CHECK(scs_hello_build_frame(&hp, hello) == 0, "the HELLO builder failed");
+    CHECK(scs_rx_parse(hello + 14, sizeof(hello) - 14, &h) == -1,
+          "scs_rx_parse read a 120-byte HELLO as an SCS message envelope --"
+          " spec sec 4(h)(1d) says these offsets do not apply to it");
+}
+
+/*
+ * THE ITEM. A real captured application message reaches the owning SYSAP by
+ * CONID lookup through the CDL. Everything before the last rx_feed() is the
+ * production join dialogue of test_captured_ovmx_accept_req_opens_the_joiner()
+ * -- no state is set by hand.
+ */
+static void test_captured_app_message_reaches_the_sysap_through_the_cdl(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    struct peer_state *ps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&r.w.cfg, ps, ovmx760_member_sysid);
+    (void)scs_pb_open(&r.w.cfg, ps->pb);
+    CHECK(send_joiner_connect_request(7, 1, &r.w.cfg, ps, NULL, r.hw_mac, r.logical) == 1,
+          "the joiner CONNECT-REQUEST was not sent");
+    rx_feed(&r, cap_ovmx_joiner_connect_rsp, sizeof(cap_ovmx_joiner_connect_rsp));
+    rx_feed(&r, cap_ovmx_joiner_accept_req, sizeof(cap_ovmx_joiner_accept_req));
+    CHECK(ps->cdt_joiner != NULL && scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_OPEN,
+          "the joiner connection did not reach OPEN off the captured dialogue");
+
+    /* THE CONTROL HALF, and it is not decoration: every frame fed so far is a
+     * connection-control message (MTYPE 0/1/2), and NONE of them may reach a
+     * SYSAP message input routine. If this is nonzero the delivery gate is
+     * classifying control traffic as data. */
+    CHECK(sysap_msg_input_calls == 0,
+          "%lu connection-control frame(s) were delivered to a SYSAP message"
+          " input routine; only MTYPE 10 may be (p. 4-13/p. 4-15)",
+          sysap_msg_input_calls);
+    CHECK(rx_app_messages == 0,
+          "the connect dialogue was counted as %lu application message(s)",
+          rx_app_messages);
+    CHECK(ps->sysap_recv == 0, "the CM dialogue advanced before any data arrived");
+
+    /* pcap #73 -- the next frame the member really sent, and the one that keeps
+     * the VC's sequence contiguous (12 -> 13 -> 14). Its destination Con.ID is
+     * 0x4F58000A, which this world never allocated, so it is ALSO the real-wire
+     * no-CDT refusal: an application message OVMX cannot deliver, from a
+     * capture, refused rather than guessed at. */
+    rx_feed(&r, cap_ovmx_app_message_other_conid,
+            sizeof(cap_ovmx_app_message_other_conid));
+    CHECK(rx_app_messages == 1,
+          "pcap#73 was not classified as an application message (%lu)",
+          rx_app_messages);
+    CHECK(rx_deliver_no_cdt == 1 && rx_delivered_message == 0,
+          "an application message for Con.ID 0x4F58000A -- a connection this"
+          " node never opened -- produced no-cdt=%lu delivered=%lu, expected"
+          " 1 and 0", rx_deliver_no_cdt, rx_delivered_message);
+    CHECK(sysap_msg_input_calls == 0,
+          "a SYSAP input routine ran for a Con.ID with no CDT");
+
+    /* THE APPLICATION MESSAGE. */
+    rx_feed(&r, cap_ovmx_cm_app_message, sizeof(cap_ovmx_cm_app_message));
+
+    CHECK(rx_app_messages == 2,
+          "the dispatch saw %lu application message(s), expected 2",
+          rx_app_messages);
+    CHECK(rx_deliver_no_cdt == 1,
+          "the destination Con.ID 0x%08X resolved to no open connection"
+          " (%lu refusal(s), expected the one pcap#73 caused) -- the CDL did"
+          " not find the CDT the member is addressing",
+          (unsigned)OVMX_JOINER_CONID, rx_deliver_no_cdt);
+    CHECK(rx_deliver_src_mismatch == 0,
+          "the member's own source Con.ID was refused by the p. 2-35 check"
+          " (%lu refusal(s))", rx_deliver_src_mismatch);
+    CHECK(rx_deliver_no_routine == 0,
+          "the CDT the message resolved to carries no message input routine"
+          " (%lu) -- the five services are not installing one",
+          rx_deliver_no_routine);
+    CHECK(rx_delivered_message == 1,
+          "scs_cdl_deliver_message() reported %lu successful deliveries,"
+          " expected 1", rx_delivered_message);
+
+    /* THE SYSAP RAN -- and it ran on THIS connection. */
+    CHECK(sysap_msg_input_calls == 1,
+          "the SYSAP message input routine fired %lu time(s), expected 1",
+          sysap_msg_input_calls);
+    CHECK(sysap_cm_messages == 1,
+          "the input routine ran but the VMS$VAXcluster CM dialogue did not"
+          " accept the frame (%lu)", sysap_cm_messages);
+
+    /* THE STATE THE PAYLOAD MOVED. This is the assertion a counter cannot
+     * fake: sysap_send_msg == 1 is a field of the captured SYSAP payload, and
+     * ps->sysap_recv can only carry it if the delivered bytes were parsed. */
+    CHECK(ps->sysap_recv == 1,
+          "the SYSAP send-msg# high-water is %u after the member's config"
+          " message, expected 1 -- the payload was not processed",
+          (unsigned)ps->sysap_recv);
+    CHECK(ps->cm_last_recv_cat == 0x01 && ps->cm_last_recv_op == 0x14,
+          "the dialogue recorded category 0x%02x opcode 0x%02x, expected the"
+          " captured 0x01/0x14", ps->cm_last_recv_cat, ps->cm_last_recv_op);
+}
+
+/*
+ * SECURITY SURFACE -- THE CDL INDEX IS PEER-SUPPLIED.
+ *
+ * The low 16 bits of a destination Con.ID that arrived off the wire select a
+ * CDL slot, and the CDL has SCS_CDL_ENTRIES (240) of them against a 65,536-wide
+ * field. The bound check lives in scs_cdl_lookup(); this drives it from
+ * PRODUCTION, with the real frame, so "the daemon cannot be made to index past
+ * the table" is exercised rather than asserted.
+ *
+ * Three edits of the SAME captured frame, each self-checked against the
+ * unedited value so a mistranscription cannot make the control vacuous:
+ *   (a) slot 0xFFFF   -- past the end of the CDL;
+ *   (b) slot 0x0003   -- in range, but no CDT was ever placed there;
+ *   (c) a foreign high half -- a Con.ID this node could not have issued.
+ * All three must refuse, and none may reach a SYSAP.
+ */
+static void test_peer_supplied_conid_cannot_index_past_the_cdl(void)
+{
+    static const struct {
+        const char *name;
+        uint32_t conid;
+    } bad[] = {
+        {"slot 0xFFFF, past the end of the CDL", 0u},  /* filled below */
+        {"slot 3, in range but never allocated", 0u},
+        {"a Con.ID with another node's high half", 0x1234000Au},
+    };
+
+    for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+        struct rxworld r;
+        rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+        struct peer_state *ps =
+            peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+        CHECK(ps != NULL, "peer slot");
+        if (ps == NULL) {
+            return;
+        }
+        ps_learn_sys_addr(&r.w.cfg, ps, ovmx760_member_sysid);
+        (void)scs_pb_open(&r.w.cfg, ps->pb);
+        CHECK(send_joiner_connect_request(7, 1, &r.w.cfg, ps, NULL, r.hw_mac,
+                                          r.logical) == 1,
+              "the joiner CONNECT-REQUEST was not sent");
+        rx_feed(&r, cap_ovmx_joiner_connect_rsp, sizeof(cap_ovmx_joiner_connect_rsp));
+        rx_feed(&r, cap_ovmx_joiner_accept_req, sizeof(cap_ovmx_joiner_accept_req));
+        /* Keeps the VC sequence contiguous, exactly as in the delivery case
+         * above; it costs one expected no-CDT refusal. */
+        rx_feed(&r, cap_ovmx_app_message_other_conid,
+                sizeof(cap_ovmx_app_message_other_conid));
+
+        uint8_t frame[sizeof(cap_ovmx_cm_app_message)];
+        memcpy(frame, cap_ovmx_cm_app_message, sizeof(frame));
+        uint32_t base_dest = (uint32_t)frame[64] | ((uint32_t)frame[65] << 8) |
+                             ((uint32_t)frame[66] << 16) | ((uint32_t)frame[67] << 24);
+        CHECK(base_dest == OVMX_JOINER_CONID,
+              "%s: the base frame's destination Con.ID is 0x%08X, expected"
+              " OVMX_JOINER_CONID 0x%08X -- this control proves nothing",
+              bad[i].name, base_dest, (unsigned)OVMX_JOINER_CONID);
+
+        uint32_t evil = bad[i].conid;
+        if (i == 0) {
+            evil = (base_dest & 0xFFFF0000u) | 0xFFFFu;
+        } else if (i == 1) {
+            evil = (base_dest & 0xFFFF0000u) | 0x0003u;
+        }
+        frame[64] = (uint8_t)(evil & 0xff);
+        frame[65] = (uint8_t)((evil >> 8) & 0xff);
+        frame[66] = (uint8_t)((evil >> 16) & 0xff);
+        frame[67] = (uint8_t)((evil >> 24) & 0xff);
+
+        unsigned long calls_before = sysap_msg_input_calls;
+        uint16_t recv_before = ps->sysap_recv;
+        rx_feed(&r, frame, sizeof(frame));
+
+        CHECK(rx_app_messages == 2,
+              "%s: the frame was not even classified as an application message"
+              " (%lu seen, expected pcap#73 plus this one)",
+              bad[i].name, rx_app_messages);
+        CHECK(rx_deliver_no_cdt == 2,
+              "%s: destination Con.ID 0x%08X produced %lu no-CDT refusal(s),"
+              " expected 2 (pcap#73's plus this one)", bad[i].name, evil,
+              rx_deliver_no_cdt);
+        CHECK(rx_delivered_message == 0,
+              "%s: Con.ID 0x%08X was DELIVERED (%lu)", bad[i].name, evil,
+              rx_delivered_message);
+        CHECK(sysap_msg_input_calls == calls_before,
+              "%s: a SYSAP input routine ran for Con.ID 0x%08X", bad[i].name, evil);
+        CHECK(ps->sysap_recv == recv_before,
+              "%s: the CM dialogue advanced on a frame addressed to Con.ID"
+              " 0x%08X", bad[i].name, evil);
+    }
+}
+
+/*
+ * p. 2-35, THE SOURCE Con.ID REFUSAL, FROM PRODUCTION. "The source CONID comes
+ * from the local CONID field of that CDT" -- so a frame addressed to our
+ * connection but sourced from a handle that is NOT the peer handle this
+ * connection was bound to is not for this connection. This is not hypothetical:
+ * ovmx-760-MEMBER-achieved-20260730.pcap carries three different member Con.IDs
+ * on OVMX_JOINER_CONID (0x63020011, 0x2F520012, 0x15B50011) because the member
+ * restarted, and 0x2F520012 is one of them -- a real handle from a real other
+ * incarnation, which is exactly the traffic that must not be accepted.
+ */
+static void test_source_conid_from_another_incarnation_is_refused(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, ovmx760_hw_mac, ovmx760_logical);
+
+    struct peer_state *ps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&r.w.cfg, ps, ovmx760_member_sysid);
+    (void)scs_pb_open(&r.w.cfg, ps->pb);
+    CHECK(send_joiner_connect_request(7, 1, &r.w.cfg, ps, NULL, r.hw_mac, r.logical) == 1,
+          "the joiner CONNECT-REQUEST was not sent");
+    rx_feed(&r, cap_ovmx_joiner_connect_rsp, sizeof(cap_ovmx_joiner_connect_rsp));
+    rx_feed(&r, cap_ovmx_joiner_accept_req, sizeof(cap_ovmx_joiner_accept_req));
+    rx_feed(&r, cap_ovmx_app_message_other_conid,
+            sizeof(cap_ovmx_app_message_other_conid)); /* keeps send_seq contiguous */
+    CHECK(ps->cdt_joiner->remote_conid == OVMX760_MEMBER_CONID,
+          "the CDT did not learn the member's handle");
+
+    uint8_t frame[sizeof(cap_ovmx_cm_app_message)];
+    memcpy(frame, cap_ovmx_cm_app_message, sizeof(frame));
+    uint32_t base_src = (uint32_t)frame[68] | ((uint32_t)frame[69] << 8) |
+                        ((uint32_t)frame[70] << 16) | ((uint32_t)frame[71] << 24);
+    CHECK(base_src == OVMX760_MEMBER_CONID,
+          "the base frame's source Con.ID is 0x%08X, expected 0x%08X",
+          base_src, (unsigned)OVMX760_MEMBER_CONID);
+    /* The other incarnation's handle, observed in the same capture. */
+    frame[68] = 0x12; frame[69] = 0x00; frame[70] = 0x52; frame[71] = 0x2F;
+
+    rx_feed(&r, frame, sizeof(frame));
+
+    CHECK(rx_deliver_src_mismatch == 1,
+          "a frame sourced from another incarnation's Con.ID produced %lu"
+          " p. 2-35 refusal(s), expected 1", rx_deliver_src_mismatch);
+    CHECK(rx_delivered_message == 0,
+          "it was delivered anyway (%lu)", rx_delivered_message);
+    CHECK(sysap_msg_input_calls == 0,
+          "the SYSAP ran on a frame from a stale peer handle");
+    CHECK(ps->sysap_recv == 0,
+          "the CM dialogue advanced on a frame from a stale peer handle");
 }
 
 /* ==========================================================================
@@ -6541,6 +6955,13 @@ int main(void)
     test_captured_connect_rsp_drives_the_classifier();
     test_captured_ovmx_accept_req_opens_the_joiner();
     test_null_source_conid_binds_nothing();
+    /* vms-7c0: the p. 2-29 delivery path -- a real captured application message
+     * reaching its SYSAP by CONID lookup through the CDL, plus the two refusals
+     * that make the lookup a gate rather than a formality. */
+    test_rx_classifier_over_captured_frames();
+    test_captured_app_message_reaches_the_sysap_through_the_cdl();
+    test_peer_supplied_conid_cannot_index_past_the_cdl();
+    test_source_conid_from_another_incarnation_is_refused();
     /* vms-fdd: the SCA connect data, through CONNECT, ACCEPT and the receive
      * dispatch (p. 2-25 / p. 2-28). */
     test_connect_data_rides_the_daemon();

@@ -226,7 +226,7 @@ target_include_directories(test_scsd_wire PRIVATE
 target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
-    vmsscs_depart vmsscs_dgram vmsscs_svc
+    vmsscs_depart vmsscs_dgram vmsscs_svc vmsscs_reason
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)
@@ -414,4 +414,104 @@ endif()
 set_tests_properties(scs_connect_data_figures PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 60
+)
+# vms-6b3 - the 16-bit REJECT/DISCONNECT reason code (VAXcluster Principles
+# p. 2-26). Asserts byte position, LE order and round-trip in BOTH frames; that
+# two REAL captured VMS frames (one REJECT_REQ, one DISCONNECT_REQ) read zero at
+# the OVMX slot, which is the observation the placement rests on; and the
+# OVMX_NO_REASON_CODE kill switch with a bracketing control on both sides.
+add_executable(test_scs_reason test_scs_reason.c)
+
+target_include_directories(test_scs_reason PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_reason PRIVATE vmsscs_reason)
+
+add_test(NAME vmsscs_reason_unit COMMAND test_scs_reason)
+set_tests_properties(vmsscs_reason_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
+# vms-6b3, review round 2 - THE REASON-CODE CENSUS GATE. Both defects that round
+# found were the same defect: a figure that only a comment carried. The header
+# and the spec justified payload [58:60] as "the only slot zero in 100% of
+# observed frames" -- refuted by re-running the census with the file's own
+# population rule -- and the spec said "nothing after the Con.ID pair varies"
+# while tools/cluster/scs_reason_measure.py printed the DISCONNECT_REQ
+# payload[60:62] split in the same commit. Nothing in ctest read the
+# measurement, so both survived a green run.
+#
+# test_scs_reason_figures.py PARSES the CENSUS-A/B/C lines out of scs_reason.h
+# and the CENSUS-marked tables out of docs/cluster-protocol-spec.md and compares
+# them field by field against the EXPECTED table in scs_reason_measure.py, pins
+# the two REFUTATION-FACT lines that carry the measurements the dead claims deny,
+# and reds if a refuted claim is asserted anywhere outside an explicit
+# REFUTED-QUOTE-BEGIN/END block. It needs no captures.
+#
+# NO MUTATION-COVERAGE NUMBER LIVES IN THIS COMMENT. The round-2 version of it
+# claimed "26 of 26 mutants (drifted digits in either document ... and both
+# refuted sentences reinstated)" and the clause that mattered was FALSE:
+# re-asserting "Nothing after the Con.ID pair varies." in three natural sites
+# left the gate GREEN, because its refuted-claim check was a proximity window
+# over two documents that are entirely ABOUT the refutation. A comment that
+# overstates a gate is worse than no gate. The count is now MEASURED on every
+# ctest run by scs_reason_mutants below -- read its output, not a comment.
+#
+# Registered unconditionally, exactly like scs_credit_figures above: a missing
+# interpreter must make the gate RED, never make it vanish.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_reason_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_reason_figures.py)
+else()
+    add_test(NAME scs_reason_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_reason_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_reason_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)
+
+# vms-6b3, review round 3 - THE MUTATION BATTERY FOR THE GATE ABOVE.
+#
+# WHY IT EXISTS: the defect round 3 found was not in the spec or the header, it
+# was in the artifact built to protect them. scs_reason_figures shipped with a
+# refuted-claim check that could not fail, and a CMake comment that said it
+# could. The fix is not a better comment -- it is a test that re-derives the
+# kill count from scratch every run.
+#
+# test_scs_reason_mutants.py copies scs_reason.h, cluster-protocol-spec.md and
+# tools/cluster/scs_reason_measure.py into a scratch tree, proves the UNMUTATED
+# copy is green (the control), then applies each mutant on its own and requires
+# scs_reason_figures to exit non-zero, restoring and re-verifying the control
+# after every one. Mutants that do not actually change the file are reported as
+# failures, never scored as kills. Nothing under src/, docs/ or tools/ is
+# written; the gate is pointed at the scratch copies with the
+# OVMX_SCS_REASON_{HEADER,SPEC,MEASURE} environment overrides.
+#
+# The classes it covers: drifted digits and deleted rows in either document and
+# in EXPECTED; the four sites where a verbatim re-assertion of a refuted claim
+# survived round 2 (three of them the adversary's); the four sites where one
+# survived round 3, each the first prose paragraph after a CENSUS table or a
+# REFUTATION-FACT block (the DATABLOCK-* group); five REWORDED forms of the same
+# claims; four attacks on the quarantine mechanism itself; six attacks on the
+# pinned REFUTATION-FACT lines; and the structural claims the placement
+# rationale rests on. The NUMBER of mutants and how many died is PRINTED by the
+# test -- deliberately not restated here, because a second copy of a figure is
+# how this item got rejected twice.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_reason_mutants
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_reason_mutants.py)
+else()
+    add_test(NAME scs_reason_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_reason_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_reason_mutants PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 300
 )

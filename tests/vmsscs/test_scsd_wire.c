@@ -4703,6 +4703,309 @@ static void test_connect_data_rides_the_daemon(void)
     scs_connect_data_reset_switch_cache();
 }
 
+/* ===================================================================
+ * vms-6b3 - THE 16-BIT REJECT/DISCONNECT REASON CODE, RECEIVE SIDE.
+ *
+ * p. 2-26: "When a SYSAP rejects a CONNECT_REQ or explicitly breaks an open
+ * connection, it also has the option of providing the other SYSAP a 16-bit
+ * 'reason code' explaining why it did so."
+ *
+ * These four cases drive scsd_handle_frame() -- the production receive
+ * dispatch -- with REJECT_REQ and DISCONNECT_REQ frames and assert what the
+ * daemon does with the field. No case decodes a frame by hand next to an
+ * assertion: every number checked below is produced by scsd.c.
+ *
+ * WHAT THE OFFSET IS. A LABELED OVMX DESIGN CHOICE, not a decoded VMS field --
+ * see scs_reason.h for the 673-frame census behind it and
+ * docs/cluster-protocol-spec.md sec 5 for the registered gap. Consequently the
+ * NONZERO case below feeds a SYNTHETIC frame: no VMS node has ever set the
+ * field on our wire, so a nonzero reason cannot be transcribed from a capture,
+ * and the edit is spelled out where it happens.
+ * =================================================================== */
+
+/*
+ * A real VMS DISCONNECT_REQ addressed to OVMX's own SCS$DIRECTORY Con.ID.
+ * ovmx-760-MEMBER-achieved-20260730.pcap, SCA frame index 181, source
+ * 08:00:2b:78:56:b9 (VAX2). Message type 6 at payload [46:48]; destination
+ * Con.ID 0x4F580007 == SCS_DIR_OVMX_CONID. Transcribed byte-exact; UNEDITED.
+ */
+static const uint8_t cap_disconnect_req_to_ovmx[76] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00,
+    0x2b, 0x78, 0x56, 0xb9, 0x60, 0x07, 0x3c, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13,
+    0x18, 0x00, 0x19, 0x00, 0x01, 0x00, 0x12, 0x00,
+    0x18, 0x00, 0x00, 0x00, 0x19, 0x00, 0x00, 0x00,
+    0x18, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02,
+    0x12, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00, 0x00,
+    0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x00, 0x00,
+};
+
+/*
+ * A real VMS REJECT_REQ. ovmx-e81-bystander-ADDITION-SUCCESS-20260731.pcap,
+ * SCA frame index 4873, source 08:00:2b:11:22:33 (VAX3). Message type 4;
+ * destination Con.ID 0x4F58000A -- a handle OVMX does NOT hold, which is what
+ * makes it useful twice: unedited it is the not-ours negative, and with the
+ * destination Con.ID retargeted (the same single edit
+ * test_captured_connect_rsp_drives_the_classifier() already makes, and the only
+ * one) it is the ours-positive.
+ */
+static const uint8_t cap_reject_req_other_conid[76] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00,
+    0x2b, 0x11, 0x22, 0x33, 0x60, 0x07, 0x3c, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0xb9, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x03, 0x04, 0x4b, 0x13,
+    0x17, 0x00, 0x18, 0x00, 0x01, 0x00, 0x12, 0x00,
+    0x17, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
+    0x17, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02,
+    0x12, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x0a, 0x00, 0x58, 0x4f, 0x0e, 0x00, 0x10, 0x1f,
+    0x00, 0x00, 0x01, 0x00,
+};
+
+/*
+ * The SCS$DIRECTORY CONNECT_REQ that OPENS the connection frame 181 goes on to
+ * disconnect. ovmx-760-MEMBER-achieved-20260730.pcap, SCA frame index 167 --
+ * 14 frames before the DISCONNECT_REQ above, same capture, same peer, and its
+ * source Con.ID 0x63020012 is the one the DISCONNECT_REQ carries back.
+ * Transcribed byte-exact; UNEDITED. Feeding this rather than
+ * cap_dir_connect_req is what lets the whole fixture wear OVMX's real identity
+ * from that run, so no frame below needs its destination MAC rewritten.
+ */
+static const uint8_t cap_ovmx_dir_connect_req[124] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x6c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x13, 0x00, 0x14, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x13, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
+    0x13, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x42, 0x00, 0x04, 0x00,
+    0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x01, 0x00, 0x53, 0x43, 0x53, 0x24, 0x44, 0x49, 0x52, 0x45,
+    0x43, 0x54, 0x4f, 0x52, 0x59, 0x20, 0x20, 0x20, 0x53, 0x43, 0x53, 0x24,
+    0x44, 0x49, 0x52, 0x5f, 0x4c, 0x4f, 0x4f, 0x4b, 0x55, 0x50, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20,
+};
+
+/*
+ * The rest of the peer's CONTIGUOUS sequenced stream between frame 167 and
+ * frame 181, same capture, same peer, same Con.ID pair 0x4F580007/0x63020012 --
+ * SCA frames 171 (ACCEPT_RSP, type 3), 172 and 176 (SCS$DIR_LOOKUP, type 10)
+ * and 179 (type 8). All UNEDITED.
+ *
+ * WHY THEY ARE HERE AND ARE NOT OPTIONAL. scsd.c enforces the p. 2-31
+ * sequentiality guarantee: feeding 167 (peer send_seq 20) and then 181
+ * (send_seq 25) is a five-message GAP, and the production code correctly breaks
+ * the circuit and dispatches the frame no further -- so a fixture that skipped
+ * these would have tested nothing while looking like it passed. Replaying the
+ * peer's real consecutive send_seq run 20,21,22,23,24,25 is what makes the
+ * DISCONNECT_REQ arrive on a circuit that is still up, which is the only way it
+ * arrives on a real wire.
+ */
+static const uint8_t cap_ovmx_dir_accept_rsp[76] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x3c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x15, 0x00, 0x15, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x15, 0x00, 0x00, 0x00, 0x15, 0x00, 0x00, 0x00,
+    0x15, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x12, 0x00, 0x04, 0x00,
+    0x03, 0x00, 0x00, 0x00, 0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x01, 0x00,
+};
+static const uint8_t cap_ovmx_dir_lookup1[108] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x5c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x15, 0x00, 0x16, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x15, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00,
+    0x15, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x32, 0x00, 0x04, 0x00,
+    0x0a, 0x00, 0x00, 0x00, 0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x00, 0x00, 0x4d, 0x53, 0x43, 0x50, 0x24, 0x54, 0x41, 0x50,
+    0x45, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x91, 0x04, 0x00, 0x05,
+    0x04, 0x04, 0x00, 0x0a, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+};
+static const uint8_t cap_ovmx_dir_lookup2[108] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x5c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x16, 0x00, 0x17, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x16, 0x00, 0x00, 0x00, 0x17, 0x00, 0x00, 0x00,
+    0x16, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x32, 0x00, 0x04, 0x00,
+    0x0a, 0x00, 0x01, 0x00, 0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x00, 0x00, 0x4d, 0x53, 0x43, 0x50, 0x24, 0x44, 0x49, 0x53,
+    0x4b, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x7b, 0x03, 0x00, 0x01,
+    0xe9, 0x01, 0x00, 0x0e, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x00,
+};
+static const uint8_t cap_ovmx_dir_msg8[72] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x38, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x17, 0x00, 0x18, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x17, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
+    0x17, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x0e, 0x00, 0x04, 0x00,
+    0x08, 0x00, 0x01, 0x00, 0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+};
+
+/* Bring OVMX's SCS$DIRECTORY connection into existence the production way, so
+ * SCS_DIR_OVMX_CONID resolves through the CDL, and zero this item's counters.
+ * OVMX wears the identity it actually had in ovmx-760-MEMBER-achieved, and the
+ * peer's sequenced stream is replayed with no gap (see above). */
+static void reason_world_init(struct rxworld *r)
+{
+    rxworld_init(r, ovmx760_hw_mac, ovmx760_logical);
+    (void)open_circuit_to(r, ovmx760_member_mac, ovmx760_member_sysid);
+    rx_feed(r, cap_ovmx_dir_connect_req, sizeof(cap_ovmx_dir_connect_req));
+    rx_feed(r, cap_ovmx_dir_accept_rsp, sizeof(cap_ovmx_dir_accept_rsp));
+    rx_feed(r, cap_ovmx_dir_lookup1, sizeof(cap_ovmx_dir_lookup1));
+    rx_feed(r, cap_ovmx_dir_lookup2, sizeof(cap_ovmx_dir_lookup2));
+    rx_feed(r, cap_ovmx_dir_msg8, sizeof(cap_ovmx_dir_msg8));
+    CHECK(scs_cdl_lookup(&scsd_cdl, SCS_DIR_OVMX_CONID) != NULL,
+          "the reason-code fixture has no SCS$DIRECTORY CDT to address");
+    CHECK(vc_seq_gaps == 0 && vc_breaks == 0,
+          "the fixture's own replay opened a sequence gap (%lu) or broke the"
+          " circuit (%lu) -- the DISCONNECT_REQ below would never be dispatched",
+          vc_seq_gaps, vc_breaks);
+    conn_reason_seen = 0;
+    conn_reason_nonzero = 0;
+    rxlog_reset();
+}
+
+/* A REAL VMS DISCONNECT_REQ for one of our connections is decoded and logged --
+ * and reports NONE, which is what the peer's SDA "Rej/Disconn Reason" reports. */
+static void test_reason_real_disconnect_req_is_decoded_and_logged(void)
+{
+    struct rxworld r;
+    reason_world_init(&r);
+
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    CHECK(conn_reason_seen == 1,
+          "the daemon decoded %lu reason codes out of one real DISCONNECT_REQ,"
+          " expected 1", conn_reason_seen);
+    CHECK(conn_reason_nonzero == 0,
+          "a real VMS DISCONNECT_REQ was reported as carrying a reason (%lu)",
+          conn_reason_nonzero);
+    CHECK(rxlog_has("SCSD-I-CONNREASON"),
+          "the peer's reason code was decoded but never surfaced in the run log;"
+          " log was: '%s'", rxlog);
+    CHECK(rxlog_has("DISCONNECT_REQ carries reason code 0 (NONE)"),
+          "the log does not name the frame and the decoded code; log was: '%s'", rxlog);
+}
+
+/*
+ * A REJECT_REQ for a Con.ID we do NOT hold is another node's business: it must
+ * not be counted and must not be reported as ours.
+ *
+ * NOT A VACUOUS NEGATIVE. Its matched positive is
+ * test_reason_nonzero_code_is_decoded_named_and_counted() below, which feeds
+ * THE SAME FRAME from the same source MAC with the destination Con.ID as the
+ * only difference and does get a decode and a log line. So what is being
+ * measured here is the ownership test, not some unrelated reason the frame
+ * failed to reach the classifier.
+ */
+static void test_reason_frame_for_another_conid_is_not_ours(void)
+{
+    struct rxworld r;
+    reason_world_init(&r);
+
+    rx_feed(&r, cap_reject_req_other_conid, sizeof(cap_reject_req_other_conid));
+
+    CHECK(conn_reason_seen == 0,
+          "a REJECT_REQ addressed to Con.ID 0x4F58000A -- which OVMX does not"
+          " hold -- was decoded as ours (%lu)", conn_reason_seen);
+    CHECK(!rxlog_has("SCSD-I-CONNREASON"),
+          "another node's REJECT_REQ was reported in our run log: '%s'", rxlog);
+}
+
+/*
+ * A REJECT_REQ that DOES name one of our connections and carries a nonzero
+ * reason. TWO edits, both stated: the destination Con.ID is retargeted to
+ * SCS_DIR_OVMX_CONID so the frame is addressed to us, and the reason slot is
+ * set to 5 BECAUSE NO CAPTURED VMS FRAME EVER SETS IT (scs_reason.h). This case
+ * therefore proves the DAEMON's decode-and-report path, not any fact about VMS.
+ */
+static void test_reason_nonzero_code_is_decoded_named_and_counted(void)
+{
+    struct rxworld r;
+    reason_world_init(&r);
+
+    uint8_t frame[sizeof(cap_reject_req_other_conid)];
+    memcpy(frame, cap_reject_req_other_conid, sizeof(frame));
+    frame[64] = (uint8_t)(SCS_DIR_OVMX_CONID & 0xff);
+    frame[65] = (uint8_t)((SCS_DIR_OVMX_CONID >> 8) & 0xff);
+    frame[66] = (uint8_t)((SCS_DIR_OVMX_CONID >> 16) & 0xff);
+    frame[67] = (uint8_t)((SCS_DIR_OVMX_CONID >> 24) & 0xff);
+    frame[SCS_REASON_FRAME_OFF] = SCS_REASON_SYSAP_SHUTDOWN;
+    frame[SCS_REASON_FRAME_OFF + 1] = 0;
+
+    rx_feed(&r, frame, sizeof(frame));
+
+    CHECK(conn_reason_seen == 1, "%lu reason codes decoded, expected 1", conn_reason_seen);
+    CHECK(conn_reason_nonzero == 1,
+          "a nonzero reason code was not counted as one (%lu)", conn_reason_nonzero);
+    CHECK(rxlog_has("REJECT_REQ carries reason code 5 (SYSAP_SHUTDOWN)"),
+          "the log does not carry the decoded code and its name; log was: '%s'", rxlog);
+    CHECK(!rxlog_has("no reason supplied"),
+          "a nonzero reason was described as no reason supplied; log was: '%s'", rxlog);
+}
+
+/*
+ * THE KILL SWITCH, RUN THROUGH THE DAEMON -- guardrail 23. Bracketed on both
+ * sides with the identical frame, so the difference is the switch and nothing
+ * else. With the switch set the daemon must decode nothing, count nothing and
+ * log nothing, and the exit summary must SAY the decoding was off rather than
+ * read as "no peer gave a reason".
+ */
+static void test_reason_kill_switch_through_the_daemon(void)
+{
+    struct rxworld r;
+
+    /* Control 1: switch clear. */
+    (void)unsetenv("OVMX_NO_REASON_CODE");
+    reason_world_init(&r);
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(conn_reason_seen == 1, "control: the enabled daemon decoded %lu, expected 1",
+          conn_reason_seen);
+    CHECK(rxlog_has("SCSD-I-CONNREASON"), "control: the enabled daemon logged nothing");
+
+    /* Switch set. */
+    (void)setenv("OVMX_NO_REASON_CODE", "1", 1);
+    reason_world_init(&r);
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(conn_reason_seen == 0,
+          "OVMX_NO_REASON_CODE DID NOT GATE THE DECODE: %lu codes decoded",
+          conn_reason_seen);
+    CHECK(!rxlog_has("SCSD-I-CONNREASON"),
+          "OVMX_NO_REASON_CODE DID NOT GATE THE LOG; log was: '%s'", rxlog);
+
+    /* And the switch must be visible in the daemon's own exit report, not
+     * silent -- a log that reads "no peer gave a reason" when the truth is
+     * "decoding was off" is the failure mode this line exists to prevent. */
+    {
+        char sbuf[8192];
+        sbuf[0] = '\0';
+        FILE *cap = tmpfile();
+        CHECK(cap != NULL, "tmpfile for the exit summary");
+        if (cap != NULL) {
+            scsd_exit_summary(&r.rx, cap);
+            fflush(cap);
+            rewind(cap);
+            size_t got = fread(sbuf, 1, sizeof(sbuf) - 1, cap);
+            sbuf[got] = '\0';
+            fclose(cap);
+            CHECK(strstr(sbuf, "CONN-REASON:") != NULL,
+                  "the exit summary does not report the reason-code counters");
+            CHECK(strstr(sbuf, "OVMX_NO_REASON_CODE set") != NULL,
+                  "the exit summary hides that decoding was switched off");
+        }
+    }
+
+    /* Control 2: switch clear again, same frame. */
+    (void)unsetenv("OVMX_NO_REASON_CODE");
+    reason_world_init(&r);
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(conn_reason_seen == 1,
+          "bracketing control: the daemon did not come back on (%lu)", conn_reason_seen);
+    CHECK(rxlog_has("SCSD-I-CONNREASON"),
+          "bracketing control: the daemon did not log after the switch was cleared");
+}
+
 int main(void)
 {
     /* Several assertions below assume the machine starts enabled. */
@@ -4769,6 +5072,11 @@ int main(void)
     test_the_0x5b_scan_refuses_a_target_the_queue_does_not_carry();
     test_the_0x5b_scan_reads_and_restores_the_listening_cdt_state();
     test_accept_conid_is_not_the_listening_conid();
+    /* vms-6b3: p. 2-26's reason code, decoded off REJECT_REQ/DISCONNECT_REQ. */
+    test_reason_real_disconnect_req_is_decoded_and_logged();
+    test_reason_frame_for_another_conid_is_not_ours();
+    test_reason_nonzero_code_is_decoded_named_and_counted();
+    test_reason_kill_switch_through_the_daemon();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

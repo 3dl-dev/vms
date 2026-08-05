@@ -345,7 +345,11 @@ struct scs_svc_args {
 
     /* p. 2-26: "it contains an optional disconnect reason code if one is
      * specified by the SYSAP", and the same for REJECT (p. 2-24). CARRIED, NEVER
-     * INTERPRETED -- vms-6b3 owns the 16-bit value and its meaning. */
+     * INTERPRETED HERE -- vms-6b3 defines the value in scs_reason.h
+     * (enum scs_reason_code) and the two bytes it occupies. This field is
+     * already handed to args->emit, so the REJECT_REQ / DISCONNECT_REQ builder
+     * OVMX still does not have needs only to call scs_reason_put() on the frame
+     * it assembles; nothing in this file puts a reason code on any wire. */
     uint16_t reason;
 
     /*

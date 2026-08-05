@@ -145,6 +145,17 @@ target_include_directories(vmsscs_conn PUBLIC
 )
 target_link_libraries(vmsscs_conn PUBLIC vmsscs_cdt)
 
+# vms-6b3 - THE 16-BIT REJECT/DISCONNECT REASON CODE (VAXcluster Principles
+# p. 2-26). Two bytes and their kill switch: no allocation, no dependency on any
+# other vmsscs library. The RECEIVE half is live in scsd.c; the send half is a
+# tested codec with no production caller because OVMX builds neither REJECT_REQ
+# nor DISCONNECT_REQ (scs_svc.h). The byte OFFSET is a LABELED OVMX design
+# choice -- see scs_reason.h and docs/cluster-protocol-spec.md sec 5.
+add_library(vmsscs_reason STATIC scs_reason.c)
+target_include_directories(vmsscs_reason PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # vms-b1d - SCA DATAGRAM BUFFER MANAGEMENT: the per-port Datagram Free Queue
 # (DFREEQ) and the per-connection datagram buffer count in the CDT (VAXcluster
 # Principles ch. 2 sec 2.8, pp. 2-42..2-43, 2-45). Pure local accounting: builds
@@ -210,7 +221,7 @@ target_include_directories(scsd_exe PRIVATE
 )
 # vms-dd5 links vmsscs_conn (and, transitively, vmsscs_cdt -- which until this
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

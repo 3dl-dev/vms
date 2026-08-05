@@ -51,6 +51,7 @@
 #include "scs_hello.h"
 #include "scs_sdir.h"
 #include "scs_member.h"
+#include "scs_reason.h"
 #include "scs_start.h"
 #include "scs_svc.h"
 #include "scs_vc.h"
@@ -600,6 +601,15 @@ static unsigned long sdir_refusals_unsent = 0; /* refusal the circuit would not 
 static unsigned long conn_transitions = 0;
 static unsigned long conn_illegal_events = 0;
 static unsigned long conn_unemitted_actions = 0;
+
+/* vms-6b3: p. 2-26's 16-bit reason code, as RECEIVED. `seen` counts every
+ * REJECT_REQ/DISCONNECT_REQ addressed to one of our Con.IDs whose field we
+ * decoded; `nonzero` counts those where the peer actually supplied a reason.
+ * Both are printed in the exit summary because "0 nonzero" is the answer our
+ * whole lab capture set gives (scs_reason.h) and it must be VISIBLE rather than
+ * inferred from the absence of a log line. */
+static unsigned long conn_reason_seen = 0;
+static unsigned long conn_reason_nonzero = 0;
 
 /* vms-abc: p. 2-31 message-guarantee enforcement, counted for the exit report. */
 static unsigned long vc_seq_gaps = 0;    /* sequentiality failures detected */
@@ -2987,6 +2997,41 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         if (cmsg != 0 && cmsg != 2 && scs_conn_event_for_msgtype(cmsg, &cev)) {
             struct scs_cdt *tgt = scs_cdl_lookup(&scsd_cdl, rconid);
             if (tgt != NULL) {
+                /* vms-6b3: THE REASON CODE, decoded before the transition so
+                 * the log reads in wire order. p. 2-26: REJECT_REQ and
+                 * DISCONNECT_REQ each carry an optional 16-bit reason code.
+                 * This is the counterpart of the peer's SDA "Rej/Disconn
+                 * Reason" field: without it, a peer that told us WHY it refused
+                 * us said it into a void. Gated on the same Con.ID ownership
+                 * test as the transition -- another node's connection-control
+                 * traffic on the shared LAN is not ours to report.
+                 *
+                 * THE OFFSET IS AN OVMX DESIGN CHOICE, NOT A DECODED VMS FIELD
+                 * (scs_reason.h; docs/cluster-protocol-spec.md sec 5). Every
+                 * one of the 673 VMS-origin REJECT/DISCONNECT frames we hold
+                 * reads 0 there, so on real VMS traffic this line reports NONE
+                 * -- which is exactly what SDA reports -- and it would only
+                 * ever differ against a peer using the same placement. */
+                if (scs_reason_carried_by(cmsg)) {
+                    uint16_t reason = 0;
+                    if (scs_reason_get(buf, (size_t)n, cmsg, &reason) == 1) {
+                        conn_reason_seen++;
+                        if (reason != 0) {
+                            conn_reason_nonzero++;
+                        }
+                        log_ts(stdout);
+                        printf(" SCSD-I-CONNREASON, conid=0x%08X: %s carries"
+                               " reason code %u (%s)%s\n",
+                               (unsigned)rconid,
+                               cmsg == SCS_REASON_MSGTYPE_REJECT_REQ
+                                   ? "REJECT_REQ" : "DISCONNECT_REQ",
+                               (unsigned)reason, scs_reason_name(reason),
+                               reason == 0 ? " -- no reason supplied, which is"
+                                             " what every VMS frame we have"
+                                             " observed carries" : "");
+                        fflush(stdout);
+                    }
+                }
                 conn_step(tgt, cev, NULL);
             }
         }
@@ -3839,6 +3884,14 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
         fprintf(out, "  CONN-FSM: transitions=%lu illegal-events=%lu"
                 " actions-required-but-not-emitted=%lu\n",
                 conn_transitions, conn_illegal_events, conn_unemitted_actions);
+        /* vms-6b3: p. 2-26's reason code as received. If the kill switch is
+         * set, say so on the same line -- a run log must never read as "no peer
+         * gave a reason" when the truth is "decoding was off". */
+        fprintf(out, "  CONN-REASON: rej/disconn frames decoded=%lu"
+                " carrying a nonzero reason=%lu%s\n",
+                conn_reason_seen, conn_reason_nonzero,
+                scs_reason_enabled() ? "" : " (OVMX_NO_REASON_CODE set --"
+                                            " DECODING WAS OFF)");
         /* vms-abc: the p. 2-31 message guarantees. Printed unconditionally --
          * "0 gaps, 0 breaks" is the answer on a healthy run and it must be
          * VISIBLE, not inferred from the absence of a warning. If the kill

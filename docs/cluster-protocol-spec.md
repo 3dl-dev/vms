@@ -824,6 +824,28 @@ target refusing `MSCP$DISK` — precisely Figure 2-15. **Caveat, stated:** the
 obviously need. The label is the best reading of a decisive behavioural
 partition, not a decoded field.
 
+**And its 16-bit reason code (p. 2-26) is NOT located.** Both `4` and `6` are
+supposed to carry an optional reason code. Measured over the two carrier
+populations with `tools/cluster/scs_reason_measure.py` — the two 16-bit words
+that follow the Con.ID pair at `[50:58]`:
+
+<!-- CENSUS-A: parsed by tests/vmsscs/test_scs_reason_figures.py. One digit per
+     figure, nowhere else in this section. Re-run the script; do not hand-edit. -->
+
+| msgtype | frames | pcaps | payload `[58:60]` | payload `[60:62]` |
+|---|---|---|---|---|
+| `4` REJECT_REQ | 453 | 19 | `0x0000` × 453 | `0x0001` × 453 |
+| `6` DISCONNECT_REQ | 220 | 25 | `0x0000` × 220 | `0x0000` × 131, `0x0001` × 89 |
+
+So `[58:60]` never carries a nonzero value in either frame — and `[60:62]`,
+which **an earlier revision of this paragraph wrongly described as invariant**,
+*varies* on DISCONNECT_REQ. It is a live field with an undecoded meaning, not a
+reason code we can read. SDA's `Rej/Disconn Reason` likewise reads zero on every
+CDT. With no nonzero reason code anywhere in the data, the offset cannot be
+derived from anything we hold. See the `vms-6b3` entry in §5 for the neighbour
+census — which shows `[58:60]` is *not* dead space across the envelope — and for
+the LABELED OVMX placement that stands in for the undecoded offset.
+
 **`6` = DISCONNECT — plausible, NOT grounded.** All 6 occurrences are on
 connections that completed `0,1,2,3` and finished their work, and they appear in
 matched pairs one per direction, which is Figure 2-16's matched
@@ -2261,6 +2283,143 @@ For visibility, every field NOT marked GROUNDED above:
   trusting it. Kill-switch `OVMX_NO_MASQUERADE_TESTS=1`. This rule was tested as the
   cause of the `vms-2f3` rejoin failure and **REFUTED** (§4M.31 of
   `docs/HANDOFF-vms-2f3.md`): it fixes nothing.
+- **The REJECT/DISCONNECT 16-bit REASON CODE — the FIELD is real, its OFFSET is
+  UNGROUNDED, and OVMX's placement is a LABELED OVMX DESIGN CHOICE** (`vms-6b3`).
+  *VAXcluster Principles* p. 2-26: "When a SYSAP rejects a CONNECT_REQ or
+  explicitly breaks an open connection, it also has the option of providing the
+  other SYSAP a 16-bit 'reason code' explaining why it did so … the reason code
+  is included in the REJECT_REQ packet … [and] in a disconnect request packet".
+  The chapter grounds three things — the field exists, it is 16 bits, it rides
+  REJECT_REQ and DISCONNECT_REQ — and publishes neither a byte offset nor a
+  single code value.
+
+  **What the wire says (measured; re-derive with
+  `tools/cluster/scs_reason_measure.py`).** Population rule: every SCA frame in
+  the connection-control length classes (§4(h)(1a)), restricted to VMS-origin
+  source MACs (DEC OUI `08-00-2b` or the LAVC logical `aa-00-04-00-xx-04`) so no
+  OVMX-emitted frame is counted as a VMS observation, over the whole lab capture
+  set; message type is payload `[46:48]`, the Con.ID pair `[50:58]`.
+
+      CENSUS-P sca_len_classes=62,66,110 pcaps_scanned=47
+
+  The two carrier frames and the two 16-bit words that follow the pair are the
+  CENSUS-A table in §4(h)(1a) above — that table is the single copy of those
+  figures and is not repeated here.
+
+  **The two facts that do the refuting, pinned.** Both lines are parsed and
+  compared against `EXPECTED` by `scs_reason_figures`, in this document *and* in
+  `scs_reason.h`. They are what makes each refuted claim below unwritable: a
+  sentence contradicting them cannot coexist with them, and deleting one reds
+  the gate exactly as loudly as reinstating the claim would.
+
+      REFUTATION-FACT off=60 type=6 distinct_values=2 values=0x0000:131,0x0001:89
+      REFUTATION-FACT off=58 len=62 type=3 name=ACCEPT_RSP nonzero=62
+
+  **The SDA oracle agrees.** `SHOW CONNECTIONS` prints a per-CDT field literally
+  named `Rej/Disconn Reason`. Counted out of the captured extract rather than
+  asserted (`cdts` = how many CDTs it printed, `values` = the histogram):
+
+      CENSUS-D sda_file=sda-scs-extract-vax1.txt cdts=12 values=0:12
+
+  So the field is real and VMS-named, and both oracles say every reason code our
+  lab has ever produced was zero.
+
+  **Therefore the offset CANNOT be grounded from the data we hold** — with no
+  nonzero value anywhere, there is no varying field to localize.
+
+  **THE FIRST RATIONALE FOR THE PLACEMENT WAS REFUTED, and the refutation is
+  itself measured.** <!-- REFUTED-QUOTE-BEGIN --> Revision 1 of this entry
+  justified the slot as "the only 16-bit slot in either frame that is zero in
+  100% of observed VMS frames". That is false in both halves.
+  <!-- REFUTED-QUOTE-END --> Census B applies the SAME population rule to the whole
+  connection-control envelope (every message type) and finds `[58:60]` in live
+  use by neighbouring types — including `3` = ACCEPT_RSP, which shares the
+  **identical 62-byte layout** with `4` and `6`:
+
+  <!-- CENSUS-B: parsed by tests/vmsscs/test_scs_reason_figures.py against the
+       EXPECTED table in tools/cluster/scs_reason_measure.py. Do not hand-edit. -->
+
+  | SCA len | type | name | frames | pcaps | nonzero at `[58:60]` |
+  |---|---|---|---|---|---|
+  | 62 | `3` | ACCEPT_RSP | 258 | 33 | 62 |
+  | 62 | `4` | REJECT_REQ | 453 | 19 | 0 |
+  | 62 | `6` | DISCONNECT_REQ | 220 | 25 | 0 |
+  | 66 | `1` | CONNECT_RSP | 778 | 26 | 0 |
+  | 110 | `0` | CONNECT_REQ | 1101 | 35 | 809 |
+  | 110 | `2` | ACCEPT_REQ | 324 | 25 | 101 |
+  | 110 | `10` | APPLICATION | 2889 | 39 | 2889 |
+
+  And census C shows it is not the only always-zero slot either — these are the
+  16-bit-aligned payload slots that are `0x0000` in 100% of the frames of that
+  type:
+
+  <!-- CENSUS-C: parsed by tests/vmsscs/test_scs_reason_figures.py. Do not hand-edit. -->
+
+  | msgtype | always-zero 16-bit payload slots |
+  |---|---|
+  | `4` | 28, 32, 36, 48, 58 |
+  | `6` | 28, 32, 36, 48, 58 |
+  | both, at or after payload 50 | 58 |
+
+  **What survives is narrower, and is all the placement needs.** (1) By CENSUS-A,
+  `[58:60]` is zero in every frame of the two types that *carry* the reason code,
+  so an OVMX REJECT_REQ or DISCONNECT_REQ carrying reason 0 there is
+  byte-identical to what VMS sends, and only a deliberately-set nonzero code
+  makes OVMX differ. The word is evidently per-message-type, and `4` and `6` are
+  precisely the types that leave it zero. (2) By the last CENSUS-C row,
+  `[58:60]` is the **only always-zero slot at or after payload 50** — the only
+  one outside the SCS sequenced-message counter region `[18:50]`, whose low
+  halves demonstrably vary (the others are that region's high halves and would
+  collide with a counter as soon as one wraps) — and it sits immediately after
+  the Con.ID pair, where p. 2-26 puts the reason code relative to the
+  identification of the connection. Payload `[60:62]` is explicitly NOT usable:
+  constant on REJECT_REQ and *varying* on DISCONNECT_REQ, i.e. a live field with
+  an undecoded meaning. **`SCS_REASON_PAYLOAD_OFF = 58`
+  (`src/vmsscs/include/scs_reason.h`) is a LABELED OVMX DESIGN CHOICE, not a
+  decoded VMS field. If a real node is ever observed setting a nonzero reason
+  code, that observation overrides it.** The **code VALUES**
+  (`enum scs_reason_code`) are an OVMX namespace for the same reason; only
+  `SCS_REASON_NONE = 0` has any external support, and it is the default.
+
+  **Consequence for OVMX, stated exactly.** The RECEIVE half is LIVE: `scsd.c`
+  decodes the field out of every REJECT_REQ/DISCONNECT_REQ addressed to one of
+  OVMX's own Con.IDs, logs `SCSD-I-CONNREASON` naming the frame, the code and its
+  name, and reports the totals in the exit summary — so the peer's SDA
+  `Rej/Disconn Reason` finally has a counterpart on our side. The SEND half is a
+  tested codec with **no production caller**: OVMX builds neither REJECT_REQ nor
+  DISCONNECT_REQ at all (the `SCSD-W-CONNNOACT` bullet above), so nothing here
+  claims OVMX transmits a reason code. `struct scs_svc_args.reason` already
+  carries a SYSAP's value into the emit callback, so a future builder need only
+  call `scs_reason_put()`. Kill switch `OVMX_NO_REASON_CODE=1` suppresses both
+  halves and says so in the exit summary. Tests: `tests/vmsscs/test_scs_reason.c`
+  (codec, plus two real captured frames asserted to read zero at the slot) and
+  the four `test_reason_*` cases in `tests/vmsscs/test_scsd_wire.c` (the daemon's
+  receive path, driven by an unedited real SCS$DIRECTORY dialogue ending in a
+  real DISCONNECT_REQ). **And the figures above are pinned to the measurement by
+  construction:** `tools/cluster/scs_reason_measure.py` carries a checked-in
+  `EXPECTED` table and re-derives it from the captures on a lab host, while the
+  ctest gate `scs_reason_figures` (`tests/vmsscs/test_scs_reason_figures.py`,
+  needs no captures) asserts every figure in `EXPECTED` still appears in both
+  `scs_reason.h` and this section. Both defects above were figures carried only
+  by a comment; that is why the gate exists.
+
+  **And a refuted claim cannot be written back in.** Review round 3 measured the
+  first version of that half of the gate and found it did not work: it looked
+  for an excuse word ("refuted", "wrongly", "earlier revision") within a few
+  hundred characters of the dead sentence, and this document is *about* the
+  refutation, so the excuse words are everywhere — re-asserting a dead claim in
+  three natural sites left ctest green. The proximity window is gone. A dead
+  claim is now legal in exactly one place: a QUARANTINE BLOCK, of which there is
+  one in the refutation paragraph above. Anywhere else it reds, in any wording,
+  because the check matches the claim FAMILY (subject + constancy assertion)
+  rather than a fixed sentence. The block itself is size-capped, must say the
+  claim inside it is refuted, and may not swallow a measurement line; the gate
+  names the exact markers when it reds. The `REFUTATION-FACT` lines above pin
+  the positive measurements the dead claims deny, so *deleting* the
+  contradiction reds as loudly as reinstating the claim. What the gate really
+  kills is not asserted in a comment either — it is re-derived on every ctest
+  run by `scs_reason_mutants` (`tests/vmsscs/test_scs_reason_mutants.py`), which
+  applies each mutant to a scratch copy and requires the gate to red.
 
 ---
 

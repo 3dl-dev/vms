@@ -55,6 +55,7 @@
 #include "scs_mscp.h"
 #include "scs_poll.h"
 #include "scs_reason.h"
+#include "scs_rx.h"
 #include "scs_start.h"
 #include "scs_svc.h"
 #include "scs_vc.h"
@@ -1511,6 +1512,47 @@ static struct scs_cdl scsd_cdl;
 static int scsd_cdl_ready = 0;
 
 /*
+ * ===== vms-7c0: THE PORT DRIVER'S RECEIVE CONTEXT AND ITS DELIVERY LEDGER ====
+ *
+ * scsd_rx_current is set for the duration of ONE scs_cdl_deliver_message()
+ * call and restored afterwards. It exists because p. 2-29 hands the SYSAP input
+ * routine "the message" -- the payload -- while OVMX's SYSAP parsers
+ * (scs_member_parse) read ABSOLUTE frame offsets and also need the daemon's
+ * transmit context to answer on. LABELED an OVMX design choice: VMS passes the
+ * CDT address as the context and its port driver has an IRP; scsd has a
+ * single-threaded recv loop, so the equivalent is this. The save/restore at the
+ * call site makes a nested delivery correct rather than merely improbable.
+ *
+ * The counters below are the honest record of what the p. 2-29 path actually
+ * did on a run. They are file scope for the same reason pb_open_results is:
+ * scsd_exit_summary() reports them and tests/vmsscs/test_scsd_wire.c resets and
+ * reads them. "The CDL routes messages now" is a claim these numbers make or
+ * fail to make -- rx_delivered_message == 0 on a run that joined a cluster
+ * would mean the path is decorative.
+ */
+struct scsd_rx; /* completed below, at the receive-loop context */
+struct scsd_rx_frame {
+    struct scsd_rx *rx;
+    const uint8_t  *frame;
+    ssize_t         len;
+};
+static struct scsd_rx_frame scsd_rx_current;
+
+static unsigned long rx_app_messages = 0;        /* MTYPE 10 frames seen */
+static unsigned long rx_delivered_message = 0;   /* ... reaching a SYSAP */
+static unsigned long rx_deliver_no_cdt = 0;      /* dest Con.ID names no open connection */
+static unsigned long rx_deliver_src_mismatch = 0;/* p. 2-35 source refusal */
+static unsigned long rx_deliver_no_routine = 0;  /* CDT carries no input routine */
+static unsigned long rx_unknown_mtype = 0;       /* MTYPE outside the observed {0..10} */
+static unsigned long sysap_msg_input_calls = 0;  /* the input routine ran */
+static unsigned long sysap_cm_messages = 0;      /* ... and it was a CM dialogue frame */
+
+/* Installed on every CDT the five services open (p. 2-29); defined with the
+ * receive dispatch, far below, because it drives the whole CM dialogue. */
+static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t msglen,
+                                 void *ctx);
+
+/*
  * vms-561: the node's SCS SERVICE PORT -- the object the five architected
  * services (LISTEN, CONNECT, ACCEPT, REJECT, DISCONNECT) run against. One per
  * node, next to the one CDL it drives. See src/vmsscs/include/scs_svc.h.
@@ -1842,10 +1884,12 @@ static unsigned long depart_refusals = 0;
  *
  * The p. 2-28 VC-loss error handler ("supplied by a SYSAP as an argument to ...
  * both the CONNECT and ACCEPT services") is now passed the way the book says,
- * as args.vc_loss. OVMX still has no message/datagram input routines to install
- * (received frames are dispatched by Con.ID comparison, not through the CDL --
- * see scs_cdt.h), so args.msg_input/args.dgram_input stay NULL and
- * scs_cdl_deliver_* still has no production caller.
+ * as args.vc_loss. As of vms-7c0 so is the p. 2-29 MESSAGE input routine:
+ * args.msg_input carries scsd_sysap_msg_input() at all four sites, received
+ * application messages are dispatched through the CDL rather than by Con.ID
+ * comparison, and scs_cdl_deliver_message() has a production caller. args.
+ * dgram_input is still NULL -- OVMX cannot identify an application datagram on
+ * this wire, and the census that says so is in scs_rx.h.
  *
  * scsd_svc_mark / scsd_svc_settle - the exit summary's three counters
  * (conn_transitions / conn_illegal_events / conn_unemitted_actions) used to be
@@ -2077,8 +2121,16 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *   the traffic p. 2-31 says a circuit carries:
  *     cm_send_config_burst()       op 0x14 / 0x01 / 0x02 add-member config
  *     scsd_handle_frame()          0x48 credit-return
- *                                  0x81 CM transaction response
  *                                  SCS$DIR_LOOKUP response
+ *     scsd_sysap_msg_input()       0x81 CM transaction response
+ *
+ *   vms-7c0 MOVED that last one, and moved NOTHING ELSE. The 0x81 response used
+ *   to be emitted from an inline block in scsd_handle_frame(); the block is now
+ *   the VMS$VAXcluster SYSAP's p. 2-29 message input routine, reached through
+ *   the CDL instead of by comparing Con.IDs against macros. Same builder, same
+ *   bytes, same send_frame_vc() choke point, different enclosing function --
+ *   which is exactly the change this table exists to make visible. No send was
+ *   added, removed or re-routed by that item.
  *
  *   CHOKED, and new in vms-561: the three SERVICE EMITTERS. These are the
  *   port-driver half of the five SCS services (p. 2-56) -- scs_connect() and
@@ -3669,6 +3721,11 @@ static int send_joiner_connect_request(int sock, int ifindex, struct scs_config 
     a.cfg = cfg;
     a.vc = vc;
     a.vc_loss = scsd_sysap_vc_loss;
+    /* vms-7c0: p. 2-29 -- the message input routine is an argument to CONNECT
+     * and ACCEPT, and this is the first OVMX build that supplies one. No
+     * datagram input routine is supplied; see the note under
+     * scsd_sysap_msg_input() for the measurement that says why. */
+    a.msg_input = scsd_sysap_msg_input;
     a.sysap_ctx = ps;
     a.conid = OVMX_JOINER_CONID;
     a.emit = scsd_svc_emit_connect_req;
@@ -5045,350 +5102,86 @@ static int ps_send_gus(int sock, int ifindex, struct peer_state *ps,
  * recv() returned; the caller has already handled the error returns. This is
  * the daemon's entire receive path.
  */
-static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
+/*
+ * ===== vms-7c0: THE VMS$VAXcluster SYSAP'S p. 2-29 MESSAGE INPUT ROUTINE =====
+ *
+ * "The port driver then offsets to a fixed location within the CDT to locate
+ *  the address of the remote SYSAP's message input routine, and passes the
+ *  message to that routine."                                        (p. 2-29)
+ * "the message and datagram input routines stored in the CDT [are] supplied as
+ *  arguments to the CONNECT and ACCEPT services."                   (p. 2-29)
+ *
+ * This is the routine scs_cdt.h said OVMX did not have. It is installed on
+ * EVERY CDT the five services open (all four scs_svc_args sites below set
+ * .msg_input to it), and it is reached only from scs_cdl_deliver_message(),
+ * which is reached only from the CDL lookup in scsd_handle_frame().
+ *
+ * Its body is the vms-224 connection-manager add-member dialogue, moved here
+ * WHOLE and otherwise unchanged. The one thing that changed is the question it
+ * no longer has to ask: it used to test the frame's Con.ID pair against
+ * OVMX_LOCAL_CONID / OVMX_JOINER_CONID to find out whether the frame was for
+ * OVMX and, if so, which circuit it rode. The CDL has answered both by the time
+ * this runs -- the frame is here BECAUSE its destination Con.ID resolved to
+ * `cdt` -- so `cm_on_joiner_vc` is now a pointer comparison against the CDT the
+ * joiner connection owns.
+ *
+ * WHAT THAT CHANGES IN BEHAVIOUR, stated rather than glossed:
+ *   - a frame whose destination Con.ID names a connection that does not exist,
+ *     or has been released, is no longer handled (counted: rx_deliver_no_cdt).
+ *     The old macro test could not tell a released Con.ID from a live one.
+ *   - a frame whose SOURCE Con.ID is not the peer handle this connection was
+ *     bound to is refused by p. 2-35 (counted: rx_deliver_src_mismatch). A
+ *     returning incarnation of the peer issues new Con.IDs, and the old test
+ *     accepted them.
+ *   - conversely it is WIDER on the destination: any CDT in the CDL now
+ *     receives, not just the three Con.IDs the macros named. The lab captures
+ *     address OVMX at slots 1, 2, 7, 8, 10 and 11.
+ *
+ * `msg` / `msglen` are the p. 4-15 SYSAP payload (SCA content [58:], see
+ * scs_rx.h). The CM parsers read absolute frame offsets, so they take the frame
+ * from scsd_rx_current instead -- see the DESIGN CHOICE note at the delivery
+ * site.
+ */
+static void scsd_sysap_msg_input(struct scs_cdt *cdt, const void *msg, size_t msglen,
+                                 void *ctx)
 {
-    if (n < 14) {
-        return; /* shorter than a bare Ethernet header -- ignore */
-    }
+    struct peer_state *ps = (struct peer_state *)ctx;
+    struct scsd_rx *rx = scsd_rx_current.rx;
+    const uint8_t *buf = scsd_rx_current.frame;
+    ssize_t n = scsd_rx_current.len;
 
-    /* The socket protocol filter already restricts delivery to
-     * ethertype 0x6007, but re-check explicitly: it documents intent
-     * and matches the absolute frame-offset convention (spec sec 2 /
-     * dissect_sca.py) where the SCA payload begins at offset 14. */
-    uint16_t ethertype = (uint16_t)(((unsigned)buf[12] << 8) | buf[13]);
-    if (ethertype != SCA_ETHERTYPE) {
+    (void)msg;
+    (void)msglen;
+
+    sysap_msg_input_calls++;
+
+    if (cdt == NULL || ps == NULL || rx == NULL || buf == NULL) {
         return;
     }
-
-    const uint8_t *sca_payload = buf + 14;
-    size_t payload_len = (size_t)n - 14;
-
-    uint16_t total_sca_len = 0;
-    scs_class_t cls = scs_classify_sca_payload(sca_payload, payload_len, &total_sca_len);
-
-    rx->counts[cls]++;
-    rx->total_frames++;
-
-    /* vms-17f: the peer is alive. Stamped for EVERY 0x6007 frame carrying a
-     * known peer's source MAC, before the unicast-to-us gate below, because a
-     * node that is only beaconing multicast has not departed. Allocates
-     * nothing -- an unknown source is ignored here and picked up (or not) by
-     * the branch that handles its frame. */
-    peer_touch(rx->peers, buf + OFF_ETH_SRC, monotonic_ms());
-
-    log_ts(stdout);
-    printf(" SCSD-I-FRAME, class=%-9s total_sca_len=%u eth_len=%zd"
-           " src=%02x:%02x:%02x:%02x:%02x:%02x dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
-           scs_class_name(cls), total_sca_len, n,
-           buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
-           buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
-    fflush(stdout);
-
-    /* --- vms-5fe responder --- only act on frames unicast to our HW MAC
-     * (our own multicast beacon prompts the peer's directed HELLO). */
-    if (!rx->respond || !mac_eq(buf + OFF_ETH_DST, rx->our_hw_mac)) {
-        return;
-    }
-    const uint8_t *src_mac = buf + OFF_ETH_SRC;
-
-    /* vms-fdd: DECODE AND LOG THE PEER'S CONNECT DATA (p. 2-25). Sited here,
-     * once, ahead of every branch, deliberately: the connect frames of the
-     * different SYSAPs are answered in several different places below (the
-     * joiner-accept bind (b1), the SCS$DIRECTORY responder (b2), and the
-     * member-opened VMS$VAXcluster accept (c)), several of which `return`, so
-     * a per-branch log would silently miss whichever SYSAP's frame took
-     * another path. scs_connect_data_get() is the filter -- it accepts ONLY
-     * the 110-byte class with connection-control message type CONNECT_REQ(0)
-     * or ACCEPT_REQ(2) -- so this fires on exactly the connect frames and on
-     * nothing else, and it reads no state and emits no frame. */
-    (void)scsd_log_peer_connect_data(buf, (size_t)n);
-
-    /* --- vms-4071: THE IMPLIED ACK (p. 2-16). "what if, in the meantime,
-     * the remote node performs an operation that requires the circuit to be
-     * OPEN, and this operation results in a packet being sent to the local
-     * node? In this case, SCA states that the local node will treat that
-     * packet as an 'implied ACK' and simply mark the circuit as being
-     * OPEN." Only the SCS sequenced-message classes qualify -- 0x41 and the
-     * HELLO are datagrams (p. 2-40) and precede the circuit, so feeding
-     * them here would open circuits that are still forming. Dormant on a
-     * clean join: the member does not send circuit traffic before the
-     * dialogue finishes. */
-    if (rx->do_connect && n >= 32 && scs_vc_is_circuit_packet(buf[30])) {
-        struct scs_pb *ipb = scs_config_find_pb(rx->cfg, rx->pdt, src_mac);
-        if (ipb != NULL && ipb->vc_state == SCS_VC_START_RECEIVED) {
-            struct peer_state *ips = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
-            enum scs_vc_action iact =
-                scs_vc_fsm_recv(ipb, SCS_VC_EV_OTHER, monotonic_ms());
-            log_ts(stdout);
-            printf(" SCSD-I-VCIMPACK, implied ACK from peer"
-                   " %02x:%02x:%02x:%02x:%02x:%02x (opcode 0x%02x) -- VC %s\n",
-                   src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
-                   buf[30], scs_vc_state_name(ipb->vc_state));
-            fflush(stdout);
-            if (ips != NULL && ips->pb == ipb) {
-                /* peer_round2_seen=0: no round-2 frame arrived, and none
-                 * ever will -- scsd_vc_ack_due() lets fsm.implied_acks
-                 * stand in for it so the dialogue does not deadlock. */
-                scsd_vc_settle(rx->vc_ctx, ips, iact, 0, &rx->start_ack_sent);
-            }
-        }
-    }
-    /* --- vms-760 server-first: answer VAX1's op8->op9 / op6->op7 SCS
-     * connection credit/ready handshake on ANY of OUR connections. VAX1 runs
-     * this after a connection binds and GATES admission (incl. accepting the
-     * joiner's own client connects) on it. rc@64 = OUR conid (peer addresses
-     * us); op@60 in {6,8}. Reflect it (scs_reflect_credit). --- */
-    /* vms-760: answering the peer's op6/op8 connection-management handshake is a
-     * PROTOCOL requirement on every path, not a pure-server nicety -- the real
-     * joiner (VAX3) answers them while driving its own connects. Previously gated
-     * to pure-server, so the sequencer path left them unanswered. */
-    /* vms-2f3 sec 4M.14: ...AND ITS RETRANSMIT FORM, 0x7b. THIRD instance of
-     * the same defect -- sec 4d.10 fixed it on the connection-manager path and
-     * the 0x5b comment below fixed it once before that, but THIS site, the one
-     * whose own comment says VAX1 "GATES admission" on the handshake, still
-     * gated on 0x4b||0x5b and silently discarded every retransmission.
-     *
-     * Measured 7/7 on lab-2 with bracketing controls: VAX1 sends op=8 to us in
-     * EVERY run, and only in the four REFUSED rejoins does it retransmit --
-     * twice, 3.0 s apart (the collapsed ReXmt interval of sec 4d.9), as 72-byte
-     * mt=0x7b addressed to SCS_DIR_OVMX_CONID. The three joins are answered
-     * first time and never retransmit, so a fresh identity never meets 0x7b
-     * here and the deafness is unreachable on the path we test. That is exactly
-     * the sec 4L.9h shape.
-     *
-     * OVMX_NO_CREDIT_RETX=1 restores the deaf behaviour (guardrail 21). */
-    if (rx->do_connect && n >= 72 &&
-        (buf[30] == SCS_MSGTYPE_SEQAPP || buf[30] == SCS_DIR_OPCODE ||
-         (buf[30] == SCS_DIR_OPCODE_RETX &&
-          getenv("OVMX_NO_CREDIT_RETX") == NULL))) {
-        uint16_t cm_op = (uint16_t)buf[60] | ((uint16_t)buf[61] << 8);
-        uint32_t cm_rc = (uint32_t)buf[64] | ((uint32_t)buf[65] << 8) |
-                         ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
-        /* vms-578 INTEGRATION -- THE TWO BRANCHES READ [46:48]==6 AS THE SAME
-         * THING UNDER DIFFERENT NAMES, AND THE ARCHITECTED READING WINS.
-         *
-         * worktree-760 called {6, 8} a "credit/ready handshake" and answered 6
-         * by calling scs_send_disconnect() -- its own comment says "complete the
-         * bidirectional teardown ... fully closing the server dir connection".
-         * That IS the DISCONNECT_REQ -> DISCONNECT_RSP pairing that spec sec
-         * 4(h)(1a) grounds as message types 6 and 7, and that vms-591 already
-         * implements properly: Figure 2-16's two arrows, the p. 2-26 symmetric
-         * own-disconnect, the p. 2-27 simultaneous case and the reason code, all
-         * driven off the CDT by the vms-dd5 classifier in (b1) below.
-         *
-         * This branch RETURNS, so leaving 6 in it swallowed every DISCONNECT
-         * before the classifier ran. MEASURED: 17 assertions across
-         * test_reason_real_disconnect_req_is_decoded_and_logged,
-         * test_peer_disconnect_req_is_answered_and_matched,
-         * test_simultaneous_disconnect_sends_no_second_request and
-         * test_clean_shutdown_kill_switch_through_the_daemon went red on the
-         * merged tree and green again with 6 removed from here.
-         *
-         * 8 STAYS. scs_conn_event_for_msgtype() names 0..7 and nothing else, so
-         * message type 8 has no architected handler and worktree-760's
-         * observation of it (op=8 to us in EVERY lab-2 run, 7/7) is the only
-         * thing that answers it at all. It is left exactly as worktree-760 had
-         * it, retransmit handling included. */
-        if (cm_op == 8 &&
-            (cm_rc & 0xFFFF0000u) == ovmx_conid_base()) {
-            struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
-            if (ps != NULL) {
-                if (!ps->vc.initialized) {
-                    scs_vc_init(&ps->vc);
-                }
-                scs_vc_note_recv(&ps->vc,
-                    (uint16_t)buf[34] | ((uint16_t)buf[35] << 8));
-                scs_reflect_credit(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
-                                   rx->our_src_logical, buf, (size_t)n);
-                /* vms-2f3 sec 4M.14: make the retransmit case visible. Every
-                 * refused rejoin measured so far carries exactly two of these
-                 * and every join carries none. */
-                if (buf[30] == SCS_DIR_OPCODE_RETX) {
-                    rx->credit_retx_seen++;
-                    log_ts(stdout);
-                    printf(" SCSD-I-CREDITRETX, answered a RETRANSMITTED (0x7b)"
-                           " op%u credit/ready handshake on conid=0x%08X --"
-                           " every previous build silently discarded this\n",
-                           (unsigned)cm_op, cm_rc);
-                    fflush(stdout);
-
-                    /* vms-2f3 sec 4M.23/4M.24: THE PEER IS TELLING US IT IS
-                     * STUCK. An op8 retransmission on OUR server directory
-                     * conid happens in EVERY refused rejoin (2 per run,
-                     * 3.0 s apart) and in NO join -- 7/7 measured. Its CDT is
-                     * in disc_sent/disc_pend, i.e. it has performed its
-                     * disconnect call and is waiting for ours (DTJ v1n5 p.25:
-                     * the teardown is SYMMETRIC and "the SYSAP in the other
-                     * node must then perform its own disconnect call").
-                     * OVMX otherwise only ever emits op6 in REPLY to the
-                     * peer's, which on a rejoin never comes -- so perform ours
-                     * here, on the one signal that reliably marks the stall.
-                     * Opt-in: OVMX_DIR_SELF_DISCONNECT=1. */
-                    if (cm_op == 8 && cm_rc == SCS_DIR_OVMX_CONID &&
-                        !ps->psc_self_disc_sent &&
-                        ps->dir_remote_conid != 0 &&
-                        getenv("OVMX_DIR_SELF_DISCONNECT") != NULL &&
-                        scs_send_disconnect_self(rx->sock, (int)rx->ifindex, ps,
-                                                 rx->our_hw_mac, rx->our_src_logical)) {
-                        ps->psc_self_disc_sent = 1;
-                        log_ts(stdout);
-                        printf(" SCSD-I-SELFDISC, peer retransmitted op8 and its"
-                               " CDT is disconnect-pending -- performed OUR OWN"
-                               " disconnect call (op 6) remote=0x%08X local=0x%08X."
-                               " DTJ v1n5 p.25: the teardown is symmetric\n",
-                               (unsigned)ps->dir_remote_conid,
-                               (unsigned)SCS_DIR_OVMX_CONID);
-                        fflush(stdout);
-                    }
-                }
-                /* DELETED (vms-096): a `if (cm_op == 6 && cm_rc ==
-                 * SCS_DIR_OVMX_CONID)` block used to sit HERE -- INSIDE the
-                 * `cm_op == 8` branch, where cm_op is 8 by construction. It was
-                 * unreachable, and it carried real behaviour with it: the only
-                 * call of scs_send_disconnect(), the only write to
-                 * ps->psc_credit_done, and one of the two disk-discovery
-                 * triggers. See the DISK DISCOVERY note above
-                 * scsd_peer_departure_sweep()'s ungate block in main() for what
-                 * remains and what was ruled. */
-            }
-            return;
-        }
-    }
-    /* --- vms-691: VC engine -- credit-ack every sequenced message the peer
-     * sends us. Each 0x5b directory / 0x4b connect / 190-byte VC message
-     * (send_seq != 0 at [20:22], abs 34) is answered by EXACTLY ONE 0x48
-     * credit-return (strict 1-for-1, spec sec 4h(3)). This is what stops
-     * the VAX's "%PEA0 Excessive packet losses / Closed Virtual Circuit"
-     * teardown. The 0x41 START phase uses its own config-round ack
-     * mechanism (branch (b) below), so 0x41 is excluded here. We do NOT
-     * `continue`: 0x4b/190 frames still fall through to branch (c) for
-     * Con.ID binding. */
-    if (rx->do_connect && n >= 36 && buf[31] == SCS_FORMAT_CONST &&
-        (buf[30] == SCS_MSGTYPE_DIRLOOKUP || buf[30] == SCS_DIR_OPCODE_RETX ||
-         buf[30] == SCS_MSGTYPE_SEQAPP || cls == SCS_CLASS_SCS_FIXED)) {
-        uint16_t peer_send_seq = (uint16_t)(buf[34] | ((uint16_t)buf[35] << 8)); /* [20:22] */
-        uint16_t peer_recv_ack = (uint16_t)(buf[32] | ((uint16_t)buf[33] << 8)); /* [18:20] */
-        struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
-        if (ps != NULL) {
-            if (!ps->vc.initialized) {
-                scs_vc_init(&ps->vc);
-            }
-            /* The peer's leading counter acks OVMX's own sequenced sends. */
-            scs_vc_note_peer_ack(&ps->vc, peer_recv_ack);
-            ps_learn_sys_addr(rx->cfg, ps, buf + OFF_HELLO_SRCLOG); /* src-logical, abs 24 */
-
-            /* --- vms-abc: THE p. 2-31 SEQUENTIALITY GUARANTEE. "if either the
-             * guarantee of message delivery or the guarantee of message
-             * sequentiality cannot be satisfied, the virtual circuit between
-             * the ports involved will be explicitly broken (if it isn't
-             * already). If this happens, then every connection supported by
-             * this virtual circuit is also broken, and the SYSAPs participating
-             * in these connections are notified of the event."
-             *
-             * scs_vc_note_recv_checked() is scs_vc_note_recv() plus that check:
-             * the recv_seq advance is identical, so nothing changes on the
-             * in-order, duplicate/retransmit or first-message paths -- which is
-             * every frame in every capture we hold (see the measurement in
-             * scs_vc.h). Only a genuine gap behaves differently, and then OVMX
-             * must NOT credit-ack: returning a 0x48 for a message that implies
-             * others were lost tells the peer OVMX received messages it never
-             * saw. That is what the code below used to do. */
-            unsigned missing = 0;
-            enum scs_vc_seq_verdict sv =
-                scs_vc_note_recv_checked(&ps->vc, peer_send_seq, &missing);
-            if (sv == SCS_VC_SEQ_GAP) {
-                vc_seq_gaps++;
-                log_ts(stdout);
-                printf(" SCSD-W-SEQGAP, peer %02x:%02x:%02x:%02x:%02x:%02x sent"
-                       " send_seq=%u with recv_seq=%u -- %u sequenced message(s)"
-                       " missing; the p. 2-31 sequentiality guarantee has failed\n",
-                       src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4],
-                       src_mac[5], peer_send_seq,
-                       (unsigned)(uint16_t)(peer_send_seq - missing - 1u), missing);
-                fflush(stdout);
-                unsigned broken = scs_vc_break(&ps->vc, ps->pb,
-                                               SCS_VC_BREAK_SEQ_GAP, stdout);
-                if (scs_vc_break_enabled()) {
-                    vc_breaks++;
-                    vc_conns_broken += broken;
-                    /* The circuit is gone. No credit-return, and no further
-                     * dispatch of a frame that arrived on it. */
-                    return;
-                }
-                /* OVMX_NO_VC_BREAK: fall through and limp on, exactly as OVMX
-                 * did before this item. */
-            }
-
-            if (scs_vc_owes_credit(peer_send_seq)) {
-                uint8_t cframe[SCS_CREDIT_FRAME_LEN];
-                if (scs_vc_build_credit_for(&ps->vc, ps_port_addr(ps), rx->our_hw_mac,
-                                            rx->our_src_logical, ps_sys_addr(ps), cframe) == 0 &&
-                    send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
-                                  "0x48 credit-return", cframe,
-                                  sizeof(cframe)) > 0) {
-                    ps->credit_sent++;
-                    rx->credit_sent++;
-                    log_ts(stdout);
-                    printf(" SCSD-I-CREDIT, 0x48 credit-return acked peer_seq=%u"
-                           " to %02x:%02x:%02x:%02x:%02x:%02x (#%ld)\n",
-                           peer_send_seq,
-                           ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
-                           ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
-                           ps->credit_sent);
-                    fflush(stdout);
-                }
-            }
-        }
-    }
-
-    /* --- vms-224: connection-manager add-member SYSAP dialogue (spec sec
-     * 4j) on the bound 190-byte VMS$VAXcluster VC. THE MILESTONE. Once the
-     * 0x4b connect binds the VC (ps->connected), OVMX (the joiner) drives
-     * its config burst (op 0x14/0x01/0x02) and then answers the member's
-     * op 0x03 commit + op 0x05 lock-rebuild transactions with a 0x81
-     * response echoing the (txn,checksum) token -- which is what promotes
-     * OVMX to a full cluster MEMBER (a CSB in SDA SHOW CLUSTER). The credit
-     * block above already 0x48-acked this frame at the SCS layer. */
-    if (rx->do_connect && cls == SCS_CLASS_SCS_FIXED) {
+    {
         struct scs_member_view mv;
-        /* vms-760: accept CM traffic on EITHER virtual circuit. The
-         * member-opened VC uses OVMX_LOCAL_CONID; in OVMX_JOIN_SEQ mode the
-         * whole membership dialogue instead rides the VC the JOINER opened
-         * (OVMX_JOINER_CONID). Gating on OVMX_LOCAL_CONID alone meant this
-         * handler never fired on the joiner-driven path, so the member's
-         * op 0x03 COMMIT / op 0x05 lock-rebuild transactions went
-         * unanswered. */
         int cm_parsed = (scs_member_parse(buf, (size_t)n, &mv) == 0);
-        int cm_on_joiner_vc = cm_parsed &&
-                              (mv.remote_conid == OVMX_JOINER_CONID ||
-                               mv.local_conid == OVMX_JOINER_CONID);
+        /* vms-7c0: WAS `cm_parsed && (mv.remote_conid == OVMX_JOINER_CONID ||
+         * mv.local_conid == OVMX_JOINER_CONID)`. The CDL has already decided
+         * which connection this frame belongs to. */
+        int cm_on_joiner_vc = (cdt == ps->cdt_joiner);
         /* vms-760: a 190-byte CM message is identified by its LENGTH CLASS and
-         * Con.ID pair, NOT by msgtype. The coordinator sends some of them with
-         * msgtype 0x5b even on a long-established VC -- d94-e3.pcap frame 1212
-         * is the op 0x09 that ends the add-member transaction, 204 bytes on our
-         * joiner Con.ID pair, carrying 0x5b. Gating on 0x4b alone silently
-         * DISCARDED it before any handler ran, so the coordinator waited forever
-         * for a response it was never going to get and the CSB stayed 'open'.
-         * The reference does the same thing (frame 217). Accept both phases. */
-        /* vms-2f3: ...AND ITS RETRANSMIT FORM, 0x7b. Same defect as the 0x5b
-         * one above, one msgtype further along, and it is what makes the
-         * rejoin asymmetric: a fresh identity never provokes a
-         * retransmission, so it never meets 0x7b, while a returning one is
-         * deaf to every retransmission from the first onward. The peer then
-         * retransmits on a timer that backs off to its 3 s ceiling and its
-         * VC transmit window collapses to 2 (SCACP, run s3E) -- measurably
-         * BEFORE our op 0x02 is even sent. OVMX_CM_NO_RETX=1 restores the
-         * old deaf behaviour so the failure stays reproducible. */
+         * msgtype, not by an opcode table -- the coordinator sends some of them
+         * with msgtype 0x5b even on a long-established VC (d94-e3.pcap frame
+         * 1212), and gating on 0x4b alone silently DISCARDED them.
+         * vms-2f3: ...and the retransmit form 0x7b, which is what made the
+         * rejoin asymmetric: a fresh identity never provokes a retransmission,
+         * so it never meets 0x7b, while a returning one is deaf to every
+         * retransmission from the first onward. OVMX_CM_NO_RETX=1 restores the
+         * old deaf behaviour so that failure stays reproducible.
+         * (The Con.ID half of the old predicate is GONE -- see the header.) */
         if (cm_parsed &&
             (mv.msgtype == SCS_MEMBER_MSGTYPE ||
              mv.msgtype == SCS_MEMBER_MSGTYPE_ALT ||
              (mv.msgtype == SCS_MEMBER_MSGTYPE_RETX &&
-              getenv("OVMX_CM_NO_RETX") == NULL)) &&
-            (mv.remote_conid == OVMX_LOCAL_CONID ||
-             mv.local_conid == OVMX_LOCAL_CONID ||
-             cm_on_joiner_vc)) {
-            struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
-            if (ps != NULL && (ps->connected || (cm_on_joiner_vc && ps->joiner_connected))) {
+              getenv("OVMX_CM_NO_RETX") == NULL))) {
+            if (ps->connected || (cm_on_joiner_vc && ps->joiner_connected)) {
+                sysap_cm_messages++;
                 /* Track the member's SYSAP send-msg# high-water (our ack
                  * target). Only category-0x01 config messages carry the
                  * membership dialogue; DLM (cat 0x02) rides here later. */
@@ -6088,6 +5881,422 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                         fflush(stdout);
                     }
                 }
+            }
+        }
+    }
+}
+
+/*
+ * vms-7c0: the p. 2-29 DATAGRAM input routine has deliberately NOT been
+ * written, and this comment is the reason rather than an oversight.
+ *
+ * scs_rx.h carries the measurement: over 141 reference-lab pcaps and 981,367
+ * envelope-conformant SCA frames the SCS message-type namespace is exactly
+ * {0..10}, of which 10 is the p. 4-13 APPLICATION MESSAGE and 0..9 are the
+ * connection-control messages. There is no eleventh value, and p. 4-68's
+ * credit==0 rule is necessary rather than sufficient (24.1% of MTYPE-10 frames
+ * carry credit 0), so no field OVMX can read off this wire says "datagram".
+ *
+ * Installing a datagram input routine would therefore install a routine that no
+ * frame in any capture we hold can reach, and the choice of discriminator would
+ * be a guess presented as a decode. scs_cdl_deliver_datagram() consequently
+ * still has NO production caller after this item; the rx_unknown_mtype counter
+ * at the delivery site is what will notice the first frame that could be one.
+ */
+
+static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
+{
+    if (n < 14) {
+        return; /* shorter than a bare Ethernet header -- ignore */
+    }
+
+    /* The socket protocol filter already restricts delivery to
+     * ethertype 0x6007, but re-check explicitly: it documents intent
+     * and matches the absolute frame-offset convention (spec sec 2 /
+     * dissect_sca.py) where the SCA payload begins at offset 14. */
+    uint16_t ethertype = (uint16_t)(((unsigned)buf[12] << 8) | buf[13]);
+    if (ethertype != SCA_ETHERTYPE) {
+        return;
+    }
+
+    const uint8_t *sca_payload = buf + 14;
+    size_t payload_len = (size_t)n - 14;
+
+    uint16_t total_sca_len = 0;
+    scs_class_t cls = scs_classify_sca_payload(sca_payload, payload_len, &total_sca_len);
+
+    rx->counts[cls]++;
+    rx->total_frames++;
+
+    /* vms-17f: the peer is alive. Stamped for EVERY 0x6007 frame carrying a
+     * known peer's source MAC, before the unicast-to-us gate below, because a
+     * node that is only beaconing multicast has not departed. Allocates
+     * nothing -- an unknown source is ignored here and picked up (or not) by
+     * the branch that handles its frame. */
+    peer_touch(rx->peers, buf + OFF_ETH_SRC, monotonic_ms());
+
+    log_ts(stdout);
+    printf(" SCSD-I-FRAME, class=%-9s total_sca_len=%u eth_len=%zd"
+           " src=%02x:%02x:%02x:%02x:%02x:%02x dst=%02x:%02x:%02x:%02x:%02x:%02x\n",
+           scs_class_name(cls), total_sca_len, n,
+           buf[6], buf[7], buf[8], buf[9], buf[10], buf[11],
+           buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
+    fflush(stdout);
+
+    /* --- vms-5fe responder --- only act on frames unicast to our HW MAC
+     * (our own multicast beacon prompts the peer's directed HELLO). */
+    if (!rx->respond || !mac_eq(buf + OFF_ETH_DST, rx->our_hw_mac)) {
+        return;
+    }
+    const uint8_t *src_mac = buf + OFF_ETH_SRC;
+
+    /* vms-fdd: DECODE AND LOG THE PEER'S CONNECT DATA (p. 2-25). Sited here,
+     * once, ahead of every branch, deliberately: the connect frames of the
+     * different SYSAPs are answered in several different places below (the
+     * joiner-accept bind (b1), the SCS$DIRECTORY responder (b2), and the
+     * member-opened VMS$VAXcluster accept (c)), several of which `return`, so
+     * a per-branch log would silently miss whichever SYSAP's frame took
+     * another path. scs_connect_data_get() is the filter -- it accepts ONLY
+     * the 110-byte class with connection-control message type CONNECT_REQ(0)
+     * or ACCEPT_REQ(2) -- so this fires on exactly the connect frames and on
+     * nothing else, and it reads no state and emits no frame. */
+    (void)scsd_log_peer_connect_data(buf, (size_t)n);
+
+    /* --- vms-4071: THE IMPLIED ACK (p. 2-16). "what if, in the meantime,
+     * the remote node performs an operation that requires the circuit to be
+     * OPEN, and this operation results in a packet being sent to the local
+     * node? In this case, SCA states that the local node will treat that
+     * packet as an 'implied ACK' and simply mark the circuit as being
+     * OPEN." Only the SCS sequenced-message classes qualify -- 0x41 and the
+     * HELLO are datagrams (p. 2-40) and precede the circuit, so feeding
+     * them here would open circuits that are still forming. Dormant on a
+     * clean join: the member does not send circuit traffic before the
+     * dialogue finishes. */
+    if (rx->do_connect && n >= 32 && scs_vc_is_circuit_packet(buf[30])) {
+        struct scs_pb *ipb = scs_config_find_pb(rx->cfg, rx->pdt, src_mac);
+        if (ipb != NULL && ipb->vc_state == SCS_VC_START_RECEIVED) {
+            struct peer_state *ips = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
+            enum scs_vc_action iact =
+                scs_vc_fsm_recv(ipb, SCS_VC_EV_OTHER, monotonic_ms());
+            log_ts(stdout);
+            printf(" SCSD-I-VCIMPACK, implied ACK from peer"
+                   " %02x:%02x:%02x:%02x:%02x:%02x (opcode 0x%02x) -- VC %s\n",
+                   src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4], src_mac[5],
+                   buf[30], scs_vc_state_name(ipb->vc_state));
+            fflush(stdout);
+            if (ips != NULL && ips->pb == ipb) {
+                /* peer_round2_seen=0: no round-2 frame arrived, and none
+                 * ever will -- scsd_vc_ack_due() lets fsm.implied_acks
+                 * stand in for it so the dialogue does not deadlock. */
+                scsd_vc_settle(rx->vc_ctx, ips, iact, 0, &rx->start_ack_sent);
+            }
+        }
+    }
+    /* --- vms-760 server-first: answer VAX1's op8->op9 / op6->op7 SCS
+     * connection credit/ready handshake on ANY of OUR connections. VAX1 runs
+     * this after a connection binds and GATES admission (incl. accepting the
+     * joiner's own client connects) on it. rc@64 = OUR conid (peer addresses
+     * us); op@60 in {6,8}. Reflect it (scs_reflect_credit). --- */
+    /* vms-760: answering the peer's op6/op8 connection-management handshake is a
+     * PROTOCOL requirement on every path, not a pure-server nicety -- the real
+     * joiner (VAX3) answers them while driving its own connects. Previously gated
+     * to pure-server, so the sequencer path left them unanswered. */
+    /* vms-2f3 sec 4M.14: ...AND ITS RETRANSMIT FORM, 0x7b. THIRD instance of
+     * the same defect -- sec 4d.10 fixed it on the connection-manager path and
+     * the 0x5b comment below fixed it once before that, but THIS site, the one
+     * whose own comment says VAX1 "GATES admission" on the handshake, still
+     * gated on 0x4b||0x5b and silently discarded every retransmission.
+     *
+     * Measured 7/7 on lab-2 with bracketing controls: VAX1 sends op=8 to us in
+     * EVERY run, and only in the four REFUSED rejoins does it retransmit --
+     * twice, 3.0 s apart (the collapsed ReXmt interval of sec 4d.9), as 72-byte
+     * mt=0x7b addressed to SCS_DIR_OVMX_CONID. The three joins are answered
+     * first time and never retransmit, so a fresh identity never meets 0x7b
+     * here and the deafness is unreachable on the path we test. That is exactly
+     * the sec 4L.9h shape.
+     *
+     * OVMX_NO_CREDIT_RETX=1 restores the deaf behaviour (guardrail 21). */
+    if (rx->do_connect && n >= 72 &&
+        (buf[30] == SCS_MSGTYPE_SEQAPP || buf[30] == SCS_DIR_OPCODE ||
+         (buf[30] == SCS_DIR_OPCODE_RETX &&
+          getenv("OVMX_NO_CREDIT_RETX") == NULL))) {
+        uint16_t cm_op = (uint16_t)buf[60] | ((uint16_t)buf[61] << 8);
+        uint32_t cm_rc = (uint32_t)buf[64] | ((uint32_t)buf[65] << 8) |
+                         ((uint32_t)buf[66] << 16) | ((uint32_t)buf[67] << 24);
+        /* vms-578 INTEGRATION -- THE TWO BRANCHES READ [46:48]==6 AS THE SAME
+         * THING UNDER DIFFERENT NAMES, AND THE ARCHITECTED READING WINS.
+         *
+         * worktree-760 called {6, 8} a "credit/ready handshake" and answered 6
+         * by calling scs_send_disconnect() -- its own comment says "complete the
+         * bidirectional teardown ... fully closing the server dir connection".
+         * That IS the DISCONNECT_REQ -> DISCONNECT_RSP pairing that spec sec
+         * 4(h)(1a) grounds as message types 6 and 7, and that vms-591 already
+         * implements properly: Figure 2-16's two arrows, the p. 2-26 symmetric
+         * own-disconnect, the p. 2-27 simultaneous case and the reason code, all
+         * driven off the CDT by the vms-dd5 classifier in (b1) below.
+         *
+         * This branch RETURNS, so leaving 6 in it swallowed every DISCONNECT
+         * before the classifier ran. MEASURED: 17 assertions across
+         * test_reason_real_disconnect_req_is_decoded_and_logged,
+         * test_peer_disconnect_req_is_answered_and_matched,
+         * test_simultaneous_disconnect_sends_no_second_request and
+         * test_clean_shutdown_kill_switch_through_the_daemon went red on the
+         * merged tree and green again with 6 removed from here.
+         *
+         * 8 STAYS. scs_conn_event_for_msgtype() names 0..7 and nothing else, so
+         * message type 8 has no architected handler and worktree-760's
+         * observation of it (op=8 to us in EVERY lab-2 run, 7/7) is the only
+         * thing that answers it at all. It is left exactly as worktree-760 had
+         * it, retransmit handling included. */
+        if (cm_op == 8 &&
+            (cm_rc & 0xFFFF0000u) == ovmx_conid_base()) {
+            struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
+            if (ps != NULL) {
+                if (!ps->vc.initialized) {
+                    scs_vc_init(&ps->vc);
+                }
+                scs_vc_note_recv(&ps->vc,
+                    (uint16_t)buf[34] | ((uint16_t)buf[35] << 8));
+                scs_reflect_credit(rx->sock, (int)rx->ifindex, ps, rx->our_hw_mac,
+                                   rx->our_src_logical, buf, (size_t)n);
+                /* vms-2f3 sec 4M.14: make the retransmit case visible. Every
+                 * refused rejoin measured so far carries exactly two of these
+                 * and every join carries none. */
+                if (buf[30] == SCS_DIR_OPCODE_RETX) {
+                    rx->credit_retx_seen++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-CREDITRETX, answered a RETRANSMITTED (0x7b)"
+                           " op%u credit/ready handshake on conid=0x%08X --"
+                           " every previous build silently discarded this\n",
+                           (unsigned)cm_op, cm_rc);
+                    fflush(stdout);
+
+                    /* vms-2f3 sec 4M.23/4M.24: THE PEER IS TELLING US IT IS
+                     * STUCK. An op8 retransmission on OUR server directory
+                     * conid happens in EVERY refused rejoin (2 per run,
+                     * 3.0 s apart) and in NO join -- 7/7 measured. Its CDT is
+                     * in disc_sent/disc_pend, i.e. it has performed its
+                     * disconnect call and is waiting for ours (DTJ v1n5 p.25:
+                     * the teardown is SYMMETRIC and "the SYSAP in the other
+                     * node must then perform its own disconnect call").
+                     * OVMX otherwise only ever emits op6 in REPLY to the
+                     * peer's, which on a rejoin never comes -- so perform ours
+                     * here, on the one signal that reliably marks the stall.
+                     * Opt-in: OVMX_DIR_SELF_DISCONNECT=1. */
+                    if (cm_op == 8 && cm_rc == SCS_DIR_OVMX_CONID &&
+                        !ps->psc_self_disc_sent &&
+                        ps->dir_remote_conid != 0 &&
+                        getenv("OVMX_DIR_SELF_DISCONNECT") != NULL &&
+                        scs_send_disconnect_self(rx->sock, (int)rx->ifindex, ps,
+                                                 rx->our_hw_mac, rx->our_src_logical)) {
+                        ps->psc_self_disc_sent = 1;
+                        log_ts(stdout);
+                        printf(" SCSD-I-SELFDISC, peer retransmitted op8 and its"
+                               " CDT is disconnect-pending -- performed OUR OWN"
+                               " disconnect call (op 6) remote=0x%08X local=0x%08X."
+                               " DTJ v1n5 p.25: the teardown is symmetric\n",
+                               (unsigned)ps->dir_remote_conid,
+                               (unsigned)SCS_DIR_OVMX_CONID);
+                        fflush(stdout);
+                    }
+                }
+                /* DELETED (vms-096): a `if (cm_op == 6 && cm_rc ==
+                 * SCS_DIR_OVMX_CONID)` block used to sit HERE -- INSIDE the
+                 * `cm_op == 8` branch, where cm_op is 8 by construction. It was
+                 * unreachable, and it carried real behaviour with it: the only
+                 * call of scs_send_disconnect(), the only write to
+                 * ps->psc_credit_done, and one of the two disk-discovery
+                 * triggers. See the DISK DISCOVERY note above
+                 * scsd_peer_departure_sweep()'s ungate block in main() for what
+                 * remains and what was ruled. */
+            }
+            return;
+        }
+    }
+    /* --- vms-691: VC engine -- credit-ack every sequenced message the peer
+     * sends us. Each 0x5b directory / 0x4b connect / 190-byte VC message
+     * (send_seq != 0 at [20:22], abs 34) is answered by EXACTLY ONE 0x48
+     * credit-return (strict 1-for-1, spec sec 4h(3)). This is what stops
+     * the VAX's "%PEA0 Excessive packet losses / Closed Virtual Circuit"
+     * teardown. The 0x41 START phase uses its own config-round ack
+     * mechanism (branch (b) below), so 0x41 is excluded here. We do NOT
+     * `continue`: 0x4b/190 frames still fall through to branch (c) for
+     * Con.ID binding. */
+    if (rx->do_connect && n >= 36 && buf[31] == SCS_FORMAT_CONST &&
+        (buf[30] == SCS_MSGTYPE_DIRLOOKUP || buf[30] == SCS_DIR_OPCODE_RETX ||
+         buf[30] == SCS_MSGTYPE_SEQAPP || cls == SCS_CLASS_SCS_FIXED)) {
+        uint16_t peer_send_seq = (uint16_t)(buf[34] | ((uint16_t)buf[35] << 8)); /* [20:22] */
+        uint16_t peer_recv_ack = (uint16_t)(buf[32] | ((uint16_t)buf[33] << 8)); /* [18:20] */
+        struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
+        if (ps != NULL) {
+            if (!ps->vc.initialized) {
+                scs_vc_init(&ps->vc);
+            }
+            /* The peer's leading counter acks OVMX's own sequenced sends. */
+            scs_vc_note_peer_ack(&ps->vc, peer_recv_ack);
+            ps_learn_sys_addr(rx->cfg, ps, buf + OFF_HELLO_SRCLOG); /* src-logical, abs 24 */
+
+            /* --- vms-abc: THE p. 2-31 SEQUENTIALITY GUARANTEE. "if either the
+             * guarantee of message delivery or the guarantee of message
+             * sequentiality cannot be satisfied, the virtual circuit between
+             * the ports involved will be explicitly broken (if it isn't
+             * already). If this happens, then every connection supported by
+             * this virtual circuit is also broken, and the SYSAPs participating
+             * in these connections are notified of the event."
+             *
+             * scs_vc_note_recv_checked() is scs_vc_note_recv() plus that check:
+             * the recv_seq advance is identical, so nothing changes on the
+             * in-order, duplicate/retransmit or first-message paths -- which is
+             * every frame in every capture we hold (see the measurement in
+             * scs_vc.h). Only a genuine gap behaves differently, and then OVMX
+             * must NOT credit-ack: returning a 0x48 for a message that implies
+             * others were lost tells the peer OVMX received messages it never
+             * saw. That is what the code below used to do. */
+            unsigned missing = 0;
+            enum scs_vc_seq_verdict sv =
+                scs_vc_note_recv_checked(&ps->vc, peer_send_seq, &missing);
+            if (sv == SCS_VC_SEQ_GAP) {
+                vc_seq_gaps++;
+                log_ts(stdout);
+                printf(" SCSD-W-SEQGAP, peer %02x:%02x:%02x:%02x:%02x:%02x sent"
+                       " send_seq=%u with recv_seq=%u -- %u sequenced message(s)"
+                       " missing; the p. 2-31 sequentiality guarantee has failed\n",
+                       src_mac[0], src_mac[1], src_mac[2], src_mac[3], src_mac[4],
+                       src_mac[5], peer_send_seq,
+                       (unsigned)(uint16_t)(peer_send_seq - missing - 1u), missing);
+                fflush(stdout);
+                unsigned broken = scs_vc_break(&ps->vc, ps->pb,
+                                               SCS_VC_BREAK_SEQ_GAP, stdout);
+                if (scs_vc_break_enabled()) {
+                    vc_breaks++;
+                    vc_conns_broken += broken;
+                    /* The circuit is gone. No credit-return, and no further
+                     * dispatch of a frame that arrived on it. */
+                    return;
+                }
+                /* OVMX_NO_VC_BREAK: fall through and limp on, exactly as OVMX
+                 * did before this item. */
+            }
+
+            if (scs_vc_owes_credit(peer_send_seq)) {
+                uint8_t cframe[SCS_CREDIT_FRAME_LEN];
+                if (scs_vc_build_credit_for(&ps->vc, ps_port_addr(ps), rx->our_hw_mac,
+                                            rx->our_src_logical, ps_sys_addr(ps), cframe) == 0 &&
+                    send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                                  "0x48 credit-return", cframe,
+                                  sizeof(cframe)) > 0) {
+                    ps->credit_sent++;
+                    rx->credit_sent++;
+                    log_ts(stdout);
+                    printf(" SCSD-I-CREDIT, 0x48 credit-return acked peer_seq=%u"
+                           " to %02x:%02x:%02x:%02x:%02x:%02x (#%ld)\n",
+                           peer_send_seq,
+                           ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                           ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                           ps->credit_sent);
+                    fflush(stdout);
+                }
+            }
+        }
+    }
+
+    /* ===================== vms-7c0: THE p. 2-29 RECEIVE PATH ==================
+     *
+     * "the remote port driver uses the low order 16 bits of the destination
+     *  CONID as an index into the remote node's CDL ... There it finds the
+     *  address of the CDT ... The port driver then offsets to a fixed location
+     *  within the CDT to locate the address of the remote SYSAP's message input
+     *  routine, and passes the message to that routine."      (p. 2-29)
+     *
+     * WHAT THIS REPLACED. The vms-224 connection-manager block used to sit
+     * here and decide, for itself, whether a 190-byte frame was addressed to
+     * OVMX -- by comparing the frame's Con.ID pair against two compile-time
+     * macros (`mv.remote_conid == OVMX_LOCAL_CONID || mv.local_conid ==
+     * OVMX_LOCAL_CONID || mv.remote_conid == OVMX_JOINER_CONID || ...`). That
+     * is the per-opcode ad-hoc dispatch the CDL exists to abolish: it can only
+     * ever recognise the three Con.IDs somebody remembered to spell out, it
+     * cannot tell a live connection from a released one, and it accepted a
+     * frame whose SOURCE Con.ID belonged to a previous incarnation of the peer.
+     *
+     * Now the CDL answers all three questions in one lookup, and the block that
+     * used to ask them is scsd_sysap_msg_input() -- the VMS$VAXcluster SYSAP's
+     * p. 2-29 message input routine, installed on every CDT the five services
+     * open. Nothing about the CM dialogue itself changed; what changed is WHO
+     * decided the frame was ours.
+     *
+     * PEER-SUPPLIED INDEX -- the bound check is scs_cdl_lookup()'s and stays
+     * there. h.dest_conid comes off the wire, and its low 16 bits select a CDL
+     * slot; SCS_CDL_ENTRIES is 240 while the field spans 0..65535, so the
+     * `slot >= SCS_CDL_ENTRIES` refusal in scs_cdl_lookup() is REACHABLE from
+     * this call and is what stops a peer indexing past the table. On top of it
+     * the lookup requires the slot to hold an IN-USE CDT whose full 32-bit
+     * local Con.ID equals the value supplied, and scs_cdl_resolve() then
+     * refuses a source Con.ID that is not this connection's remote handle
+     * (p. 2-35). Nothing in this file indexes the CDL itself.
+     *
+     * THIS SENDS NOTHING. Every frame the delivered SYSAP goes on to emit still
+     * leaves through send_frame_vc(), exactly as it did when the block was
+     * inline -- the SEND SITE TABLE is unchanged by this item.
+     * ======================================================================= */
+    if (rx->do_connect && scsd_cdl_ready) {
+        struct scs_rx_hdr h;
+        if (scs_rx_parse(sca_payload, payload_len, &h) == 0) {
+            if (h.kind == SCS_RX_APP_MESSAGE) {
+                rx_app_messages++;
+                /* The daemon's receive context, for the duration of ONE
+                 * delivery. OVMX DESIGN CHOICE, labeled: p. 2-29 hands the
+                 * input routine "the message", and OVMX's SYSAP parsers
+                 * (scs_member_parse) read ABSOLUTE frame offsets, so the
+                 * routine is given the p. 4-15 payload as its argument AND can
+                 * reach the frame it came out of through here. scsd is a
+                 * single-threaded recv loop -- one frame is in flight at a
+                 * time -- and the save/restore makes a nested delivery safe
+                 * rather than merely unlikely. */
+                struct scsd_rx_frame saved = scsd_rx_current;
+                scsd_rx_current.rx = rx;
+                scsd_rx_current.frame = buf;
+                scsd_rx_current.len = n;
+                int dres = scs_cdl_deliver_message(&scsd_cdl, h.dest_conid,
+                                                   h.src_conid, h.payload,
+                                                   h.payload_len);
+                scsd_rx_current = saved;
+                switch (dres) {
+                case SCS_DELIVER_OK:
+                    rx_delivered_message++;
+                    break;
+                case SCS_DELIVER_NO_CDT:
+                    rx_deliver_no_cdt++;
+                    break;
+                case SCS_DELIVER_SRC_MISMATCH:
+                    rx_deliver_src_mismatch++;
+                    log_ts(stdout);
+                    printf(" SCSD-W-RXSRCMISMATCH, application message for"
+                           " conid=0x%08X carries source conid=0x%08X, which is"
+                           " not that connection's remote handle (p. 2-35) --"
+                           " not delivered\n",
+                           (unsigned)h.dest_conid, (unsigned)h.src_conid);
+                    fflush(stdout);
+                    break;
+                case SCS_DELIVER_NO_ROUTINE:
+                default:
+                    rx_deliver_no_routine++;
+                    break;
+                }
+            } else if (h.kind == SCS_RX_UNKNOWN_MTYPE) {
+                /* Never observed in 981,367 envelope-conformant frames across
+                 * 141 reference-lab pcaps -- see the census in scs_rx.h. This
+                 * counter is how "OVMX has never seen an SCS message type
+                 * outside {0..10}" stays a MEASUREMENT instead of a memory, and
+                 * it is the counter that would move the day an application
+                 * DATAGRAM class finally shows up. */
+                rx_unknown_mtype++;
+                log_ts(stdout);
+                printf(" SCSD-W-RXMTYPE, SCS message type %u is outside the"
+                       " observed {0..10} namespace (dest=0x%08X src=0x%08X"
+                       " total_sca=%u) -- not classified, not delivered\n",
+                       (unsigned)h.mtype, (unsigned)h.dest_conid,
+                       (unsigned)h.src_conid, (unsigned)h.total_sca_len);
+                fflush(stdout);
             }
         }
     }
@@ -7930,6 +8139,11 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                 da.cfg = rx->cfg;
                 da.target_node = ps_sys_addr(ps);
                 da.vc_loss = scsd_sysap_vc_loss;
+                /* vms-7c0: p. 2-29 -- the message input routine is an argument to CONNECT
+                 * and ACCEPT, and this is the first OVMX build that supplies one. No
+                 * datagram input routine is supplied; see the note under
+                 * scsd_sysap_msg_input() for the measurement that says why. */
+                da.msg_input = scsd_sysap_msg_input;
                 da.sysap_ctx = ps;
                 da.conid = SCS_DIR_OVMX_CONID;
                 da.remote_conid = ps->dir_remote_conid;
@@ -8263,6 +8477,11 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             ma.cfg = rx->cfg;
             ma.target_node = ps_sys_addr(ps);
             ma.vc_loss = scsd_sysap_vc_loss;
+            /* vms-7c0: p. 2-29 -- the message input routine is an argument to CONNECT
+             * and ACCEPT, and this is the first OVMX build that supplies one. No
+             * datagram input routine is supplied; see the note under
+             * scsd_sysap_msg_input() for the measurement that says why. */
+            ma.msg_input = scsd_sysap_msg_input;
             ma.sysap_ctx = ps;
             ma.conid = OVMX_LOCAL_CONID;
             ma.remote_conid = v.local_conid;
@@ -8677,6 +8896,11 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
         ra.cfg = rx->cfg;
         ra.target_node = ps_sys_addr(ps);
         ra.vc_loss = scsd_sysap_vc_loss;
+        /* vms-7c0: p. 2-29 -- the message input routine is an argument to CONNECT
+         * and ACCEPT, and this is the first OVMX build that supplies one. No
+         * datagram input routine is supplied; see the note under
+         * scsd_sysap_msg_input() for the measurement that says why. */
+        ra.msg_input = scsd_sysap_msg_input;
         ra.sysap_ctx = ps;
         ra.conid = OVMX_LOCAL_CONID;
         ra.emit = scsd_svc_emit_connect_req;
@@ -8945,6 +9169,18 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                 sysap_vc_loss_notifications, vc_sends_refused,
                 scs_vc_break_enabled() ? "" : "  [" SCS_VC_NO_BREAK_ENV
                                               " SET -- circuits were NOT broken]");
+        /* vms-7c0: the p. 2-29 delivery ledger. This is the line that says
+         * whether the CDL actually routed anything, and it is deliberately
+         * printed unconditionally: a run whose app-messages count is large and
+         * whose delivered count is 0 has a CDL that is decorative, and that has
+         * to be visible in the run log rather than inferable from silence.
+         * unknown-mtype is the datagram watch -- see scs_rx.h. */
+        fprintf(out, "  RX-CDL: app-messages=%lu delivered=%lu no-cdt=%lu"
+                " src-mismatch=%lu no-input-routine=%lu unknown-mtype=%lu"
+                " sysap-input-calls=%lu cm-messages=%lu\n",
+                rx_app_messages, rx_delivered_message, rx_deliver_no_cdt,
+                rx_deliver_src_mismatch, rx_deliver_no_routine, rx_unknown_mtype,
+                sysap_msg_input_calls, sysap_cm_messages);
         (void)scs_conn_report_stuck(&scsd_cdl, out);
         /* vms-17f: the p. 2-20/2-21 open transitions this run took, and the
          * departure sweep's work. PB-OPEN-REFRESHED is the p. 2-21 Note firing

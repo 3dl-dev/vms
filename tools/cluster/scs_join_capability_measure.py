@@ -42,6 +42,14 @@ THE RESULT, IN ONE LINE: the joining binary transmits 514 CM frames and receives
 583; the failing binary transmits 3, receives 0, and never sends the ACCEPT_RSP
 (message type 3) that its own state machine logs as required-but-unemitted.
 
+THREE BRACKETS LIVE HERE, in the order they were measured. Each has its own
+EXPECTED/CAPTURES pair and its own pod, and they are NEVER folded together --
+each one's gate asserts a SHAPE that a merged dict could not state.
+
+    EXPECTED      vms-70e2  vaxlab-4  does the closure branch join at all?  NO
+    EXPECTED_578  vms-578   vaxlab-4  does the INTEGRATED tree join?        YES
+    EXPECTED_449  vms-449   vaxlab-6  can a returning identity REJOIN?      NO
+
     tools/cluster/scs_join_capability_measure.py            # PASS/FAIL vs EXPECTED
     tools/cluster/scs_join_capability_measure.py --print    # just print
 
@@ -160,10 +168,8 @@ DEFAULT_CAPTURE_DIR = "/data/training/vax/cluster/captures-lab2"
 ETHERTYPE_SCA = b"\x60\x07"
 
 
-# ===========================================================================
-# vms-578: THE SECOND BRACKET -- does the INTEGRATED tree join?
-# ===========================================================================
-# vms-70e2's bracket above measured that work/vms-187-closure CANNOT complete a
+# ====================================================================# vms-578: THE SECOND BRACKET -- does the INTEGRATED tree join?
+# ====================================================================# vms-70e2's bracket above measured that work/vms-187-closure CANNOT complete a
 # first join and worktree-760-active-directory can. vms-578 merged the two and
 # this is the acceptance measurement for that merge, taken the same way on the
 # SAME pod (vaxlab-4) minutes apart, with the control BETWEEN the two runs of
@@ -226,6 +232,171 @@ CAPTURES_578 = {
     "B1": "vms578-B1-lab2-vaxlab4-20260805.pcap",
     "B3": "vms578-B3-lab2-vaxlab4-20260805.pcap",
     "B2": "vms578-B2-lab2-vaxlab4-20260805.pcap",
+}
+
+
+# ====================================================================# vms-449: THE THIRD BRACKET -- THE REJOIN QUESTION, ASKED AND ANSWERED
+# ====================================================================# vms-2f3's question -- can a returning OVMX identity rejoin a cluster it was
+# removed from? -- had never actually been ASKED on a tree that can complete a
+# FIRST join. vms-70e2's positive control failed (EXPECTED above); vms-578 fixed
+# that (EXPECTED_578) and nobody re-ran the triple. This is the triple.
+#
+# THE ANSWER IS NO. Four consecutive same-identity rejoins were refused on a
+# VIRGIN pod that had never seen an OVMX node, each one bracketed by a fresh
+# identity that joined in 13 s on the same pod with the same binary.
+#
+# THE BRACKET (lab-2 `vaxlab-6`, a virgin pod, 2026-08-05, one binary
+# throughout: this worktree's build of main at f874b04)
+#
+#     A1  OVMXJ0 / 1500  FIRST JOIN   JOINED   CLUSTER_NODES=3  XITDONE=1
+#     B1  OVMXJ0 / 1500  rejoin #1    REFUSED                   XITDONE=0
+#     C1  OVMXK1 / 1501  fresh        JOINED   <- control BETWEEN the tests
+#     B2  OVMXJ0 / 1500  rejoin #2    REFUSED                   XITDONE=0
+#     C2  OVMXK2 / 1502  fresh        JOINED   <- control BETWEEN the tests
+#     B3  OVMXJ0 / 1500  rejoin #3    REFUSED                   XITDONE=0
+#     C3  OVMXK3 / 1503  fresh        JOINED   <- closing control
+#     B4  OVMXJ0 / 1500  rejoin #4    REFUSED  } matched pair under csbwatch.sh,
+#     C4  OVMXK4 / 1504  fresh        JOINED   } which reads the peer's CSB LIVE
+#
+# Guardrail 18: every identity below is the set of `OVMX??` strings in the
+# capture itself, never SCSD's log. Guardrail 20: a control sits BETWEEN each
+# pair of test runs, not merely before and after them. Guardrail 14: four
+# positive controls, on the same lab, with the same binary, minutes apart.
+#
+# ⚠ THE OVMX MAC IS PER-POD, NOT PER-LAB. `vaxlab-6`'s OVMX tap is
+# 26:8b:49:99:95:3c and `vaxlab-4`'s is 4e:83:cd:c4:fe:54 -- the lab-2 README's
+# "every replica reuses the same node MACs by design" is true of the VAX nodes
+# (aa:00:04:00:01:04) and NOT of the OVMX tap, which the pod's netns mints per
+# instance. Reusing EXPECTED["ovmx_mac"] here would have measured every figure
+# as zero and looked like a total wire failure. Each bracket carries its own.
+EXPECTED_449 = {
+    "pod": "vaxlab-6",
+    "lab": "lab-2",
+    "date": "2026-08-05",
+    "ovmx_mac": "26:8b:49:99:95:3c",
+    # The rejoin subject and the four fresh controls, so a reader can tell which
+    # rows are the experiment without decoding the tag scheme.
+    "subject": "OVMXJ0",
+    "runs": {
+        "A1": {"role": "first-join", "identity": ["OVMXJ0"], "joined": True,
+               "cm_190_tx": 510, "cm_190_rx": 579,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 9: 2},
+               "ctl_rx": {0: 9, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 8: 2},
+               "accept_rsp_tx": 2},
+        "B1": {"role": "rejoin", "identity": ["OVMXJ0"], "joined": False,
+               "cm_190_tx": 14, "cm_190_rx": 11,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 2, 9: 4},
+               "ctl_rx": {0: 2, 1: 2, 2: 2, 3: 2, 8: 4},
+               "accept_rsp_tx": 2},
+        "C1": {"role": "control", "identity": ["OVMXK1"], "joined": True,
+               "cm_190_tx": 510, "cm_190_rx": 583,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 9: 2},
+               "ctl_rx": {0: 9, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 8: 2},
+               "accept_rsp_tx": 2},
+        "B2": {"role": "rejoin", "identity": ["OVMXJ0"], "joined": False,
+               "cm_190_tx": 14, "cm_190_rx": 11,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 2, 9: 4},
+               "ctl_rx": {0: 2, 1: 2, 2: 2, 3: 2, 8: 4},
+               "accept_rsp_tx": 2},
+        "C2": {"role": "control", "identity": ["OVMXK2"], "joined": True,
+               "cm_190_tx": 510, "cm_190_rx": 578,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 9: 2},
+               "ctl_rx": {0: 9, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 8: 2},
+               "accept_rsp_tx": 2},
+        "B3": {"role": "rejoin", "identity": ["OVMXJ0"], "joined": False,
+               "cm_190_tx": 14, "cm_190_rx": 11,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 2, 9: 4},
+               "ctl_rx": {0: 2, 1: 2, 2: 2, 3: 2, 8: 4},
+               "accept_rsp_tx": 2},
+        "C3": {"role": "control", "identity": ["OVMXK3"], "joined": True,
+               "cm_190_tx": 510, "cm_190_rx": 574,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 9: 2},
+               "ctl_rx": {0: 9, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 8: 2},
+               "accept_rsp_tx": 2},
+        "B4": {"role": "rejoin", "identity": ["OVMXJ0"], "joined": False,
+               "cm_190_tx": 14, "cm_190_rx": 11,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 2, 9: 4},
+               "ctl_rx": {0: 2, 1: 2, 2: 2, 3: 2, 8: 4},
+               "accept_rsp_tx": 2},
+        "C4": {"role": "control", "identity": ["OVMXK4"], "joined": True,
+               "cm_190_tx": 513, "cm_190_rx": 583,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 9: 2},
+               "ctl_rx": {0: 9, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 8: 2},
+               "accept_rsp_tx": 2},
+    },
+}
+
+# The run ORDER, which is the bracket. Held separately from the dict because
+# what makes this a bracket rather than nine runs is that no two rejoins are
+# adjacent -- see check_449_bracket_shape().
+ORDER_449 = ["A1", "B1", "C1", "B2", "C2", "B3", "C3", "B4", "C4"]
+
+CAPTURES_449 = {
+    t: "vms449-%s-lab2-vaxlab6-20260805.pcap" % t for t in ORDER_449
+}
+
+
+# ====================================================================# vms-449R: THE REPLICATION -- IS THE REFUSAL A PROPERTY OF OVMX, OR OF A POD?
+# ====================================================================# EXPECTED_449 answered the rejoin question on ONE pod. A single pod cannot
+# distinguish "OVMX identities are refused readmission" from "vaxlab-6 was
+# sick". This is the same experiment on `vaxlab-7`, scaled up fresh, verified
+# CLUSTER_NODES=2 before the first run, with the SAME binary (build-449,
+# worktree HEAD = main at f874b04) and default environment. SCSSYSTEMIDs
+# 1520-1523.
+#
+#     A1  OVMXM0 / 1520  FIRST JOIN   JOINED    XITDONE=1
+#     B1  OVMXM0 / 1520  rejoin #1    REFUSED   XITDONE=0
+#     C1  OVMXN1 / 1521  fresh        JOINED    <- closing control
+#
+# ⚠ THIS BRACKET IS SHORTER THAN EXPECTED_449 ON PURPOSE, AND THE REASON IS
+# RECORDED RATHER THAN HIDDEN. Four further runs (B2/C2/B3/C3) were started and
+# are VOID: the lab pod terminated at 2026-08-05T18:58:50Z (exit 255,
+# RESTARTS=1) and came back at 18:59:01Z, so both VAXes rebooted *during* B2.
+# A1/B1/C1 all completed before 18:56:58 and are unaffected. The void runs are
+# discarded on HARNESS grounds -- the restart, not their figures -- which is
+# guardrail 19 applied in the only order that is honest: a run whose lab
+# rebooted under it does not get to vote either way. Their captures are NOT
+# archived and no figure from them appears anywhere.
+#
+# WHAT THIS BRACKET THEREFORE DOES AND DOES NOT ESTABLISH. It shows the refusal
+# and both of EXPECTED_449's wire discriminators reproducing on a second,
+# independent, virgin pod -- so the finding is not an artefact of vaxlab-6. It
+# contains ONE rejoin, so it does NOT independently establish the
+# "three consecutive rejoins, so a single refusal is not a fluke" property.
+# That property rests on EXPECTED_449's four. check_449r_bracket_shape() states
+# exactly this weaker shape and must never be conflated with the stronger one.
+#
+# ⚠ The OVMX tap MAC is per-POD: vaxlab-7 mints a THIRD distinct value, which
+# is independent confirmation of the trap recorded in spec sec 4(O.2).
+EXPECTED_449R = {
+    "pod": "vaxlab-7",
+    "lab": "lab-2",
+    "date": "2026-08-05",
+    "ovmx_mac": "3a:ad:35:5d:23:80",
+    "subject": "OVMXM0",
+    "runs": {
+        "A1": {"role": "first-join", "identity": ["OVMXM0"], "joined": True,
+               "cm_190_tx": 504, "cm_190_rx": 568,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 9: 2},
+               "ctl_rx": {0: 6, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 8: 2},
+               "accept_rsp_tx": 2},
+        "B1": {"role": "rejoin", "identity": ["OVMXM0"], "joined": False,
+               "cm_190_tx": 14, "cm_190_rx": 11,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 2, 9: 4},
+               "ctl_rx": {0: 2, 1: 2, 2: 2, 3: 2, 8: 4},
+               "accept_rsp_tx": 2},
+        "C1": {"role": "control", "identity": ["OVMXN1"], "joined": True,
+               "cm_190_tx": 502, "cm_190_rx": 568,
+               "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 9: 2},
+               "ctl_rx": {0: 6, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 8: 2},
+               "accept_rsp_tx": 2},
+    },
+}
+
+ORDER_449R = ["A1", "B1", "C1"]
+
+CAPTURES_449R = {
+    t: "vms449r-%s-lab2-vaxlab7-20260805.pcap" % t for t in ORDER_449R
 }
 
 
@@ -375,6 +546,157 @@ def rederive(capdir, **_kw):
            "the vms-578 control is not bracketed by the two integrated runs")
 
     return results, {"runs"}
+def check_449_bracket_shape():
+    """The vms-449 bracket's SHAPE, asserted from the checked-in table alone.
+
+    This runs on every host, captures or not. It exists because the figures are
+    only worth reading if the experiment they came from was bracketed: a run of
+    rejoins with the controls piled up at one end would produce the same numbers
+    and mean nothing (guardrail 20). Returns a list of failure strings.
+    """
+    f = []
+    runs = EXPECTED_449["runs"]
+    if sorted(ORDER_449) != sorted(runs):
+        f.append("ORDER_449 %s does not cover EXPECTED_449 %s"
+                 % (sorted(ORDER_449), sorted(runs)))
+        return f
+    roles = [runs[t]["role"] for t in ORDER_449]
+    rejoins = [t for t in ORDER_449 if runs[t]["role"] == "rejoin"]
+    controls = [t for t in ORDER_449 if runs[t]["role"] == "control"]
+    firsts = [t for t in ORDER_449 if runs[t]["role"] == "first-join"]
+
+    if len(firsts) != 1 or ORDER_449[0] != firsts[0]:
+        f.append("the bracket must OPEN with exactly one first-join run")
+    if len(rejoins) < 3:
+        f.append("fewer than three rejoins were attempted, so a single refusal "
+                 "could be mistaken for a rule (%d)" % len(rejoins))
+    # Guardrail 20, stated mechanically: no two test runs are adjacent, so a
+    # control always sits BETWEEN them.
+    for i in range(len(roles) - 1):
+        if roles[i] == "rejoin" and roles[i + 1] == "rejoin":
+            f.append("runs %s and %s are adjacent rejoins -- no control between "
+                     "them" % (ORDER_449[i], ORDER_449[i + 1]))
+    if roles[-1] != "control":
+        f.append("the bracket does not CLOSE with a control, so 'the lab "
+                 "stopped admitting anyone' is not excluded")
+    # The subject is one identity across every rejoin, and no control shares it.
+    subj = EXPECTED_449["subject"]
+    for t in rejoins + firsts:
+        if runs[t]["identity"] != [subj]:
+            f.append("%s is a test run but its wire identity is %s, not [%r]"
+                     % (t, runs[t]["identity"], subj))
+    for t in controls:
+        if subj in runs[t]["identity"]:
+            f.append("control %s carries the subject identity %s -- it is not a "
+                     "control" % (t, subj))
+        if runs[t]["identity"] in ([runs[c]["identity"] for c in controls
+                                    if c != t]):
+            f.append("control %s reuses another control's identity %s -- a "
+                     "reused control identity is itself a rejoin"
+                     % (t, runs[t]["identity"]))
+    # The verdicts, which are the answer.
+    if not all(runs[t]["joined"] for t in controls + firsts):
+        f.append("a control or the first join did not join -- suspect the "
+                 "harness, not the theory (guardrail 19)")
+    if any(runs[t]["joined"] for t in rejoins):
+        f.append("EXPECTED_449 records a rejoin as JOINED; the recorded answer "
+                 "is that every rejoin was refused")
+    # The wire discriminator, as a RELATION over the table and not one row.
+    for t in rejoins:
+        if runs[t]["ctl_rx"].get(6, 0) or runs[t]["ctl_rx"].get(7, 0):
+            f.append("%s: a refused rejoin is recorded as receiving a "
+                     "DISCONNECT_REQ/RSP from the peer" % t)
+    for t in controls + firsts:
+        if not (runs[t]["ctl_rx"].get(6, 0) and runs[t]["ctl_rx"].get(7, 0)):
+            f.append("%s: a joining run is recorded as receiving no peer "
+                     "DISCONNECT pair" % t)
+    # And the vms-70e2 precondition: this tree emits ACCEPT_RSP on EVERY arm,
+    # which is what makes it 'the tree that joins' and the question askable.
+    for t in ORDER_449:
+        if runs[t]["accept_rsp_tx"] <= 0:
+            f.append("%s emitted no ACCEPT_RSP -- that is the vms-70e2 failing "
+                     "binary's signature and this bracket must not contain it" % t)
+    return f
+
+
+def check_449r_bracket_shape():
+    """The REPLICATION bracket's shape -- deliberately a WEAKER claim.
+
+    check_449_bracket_shape() demands three-or-more rejoins with a control
+    between each pair, because EXPECTED_449 has to carry "not a fluke" on its
+    own. EXPECTED_449R has ONE rejoin and must not pretend otherwise, so this
+    asserts only what a replication needs to be worth reading:
+
+      * it opens with a first join that JOINED (the positive control -- without
+        it a refusal says nothing, cf. vms-70e2);
+      * it contains at least one rejoin of a single subject identity;
+      * it CLOSES with a control that joined, so "the pod stopped admitting
+        anyone" is excluded;
+      * no control shares the subject's identity (a control that does IS a
+        rejoin);
+      * and it is measured against a DIFFERENT pod and a different OVMX tap MAC
+        from EXPECTED_449 -- a "replication" on the same pod replicates nothing.
+
+    Returns a list of failure strings.
+    """
+    f = []
+    runs = EXPECTED_449R["runs"]
+    if sorted(ORDER_449R) != sorted(runs):
+        f.append("ORDER_449R %s does not cover EXPECTED_449R %s"
+                 % (sorted(ORDER_449R), sorted(runs)))
+        return f
+    roles = [runs[t]["role"] for t in ORDER_449R]
+    rejoins = [t for t in ORDER_449R if runs[t]["role"] == "rejoin"]
+    controls = [t for t in ORDER_449R if runs[t]["role"] == "control"]
+    firsts = [t for t in ORDER_449R if runs[t]["role"] == "first-join"]
+    subj = EXPECTED_449R["subject"]
+
+    if len(firsts) != 1 or ORDER_449R[0] != firsts[0]:
+        f.append("the replication must OPEN with exactly one first-join run")
+    if not rejoins:
+        f.append("the replication contains no rejoin -- it replicates nothing")
+    if roles[-1] != "control":
+        f.append("the replication does not CLOSE with a control, so 'the pod "
+                 "stopped admitting anyone' is not excluded")
+    for t in rejoins + firsts:
+        if runs[t]["identity"] != [subj]:
+            f.append("%s is a test run but its wire identity is %s, not [%r]"
+                     % (t, runs[t]["identity"], subj))
+    for t in controls:
+        if subj in runs[t]["identity"]:
+            f.append("control %s carries the subject identity %s -- it is not "
+                     "a control" % (t, subj))
+    if not all(runs[t]["joined"] for t in controls + firsts):
+        f.append("a control or the first join did not join -- suspect the "
+                 "harness, not the theory (guardrail 19)")
+    if any(runs[t]["joined"] for t in rejoins):
+        f.append("EXPECTED_449R records a rejoin as JOINED; the recorded "
+                 "replication is that the rejoin was refused")
+    # The discriminators, required to reproduce -- that IS the replication.
+    for t in rejoins:
+        if runs[t]["ctl_rx"].get(6, 0) or runs[t]["ctl_rx"].get(7, 0):
+            f.append("%s: a refused rejoin is recorded as receiving a peer "
+                     "DISCONNECT_REQ/RSP -- the sec 4(O.2) discriminator did "
+                     "not reproduce" % t)
+    for t in controls + firsts:
+        if not (runs[t]["ctl_rx"].get(6, 0) and runs[t]["ctl_rx"].get(7, 0)):
+            f.append("%s: a joining run is recorded as receiving no peer "
+                     "DISCONNECT pair" % t)
+    for t in ORDER_449R:
+        if runs[t]["accept_rsp_tx"] <= 0:
+            f.append("%s emitted no ACCEPT_RSP -- the vms-70e2 failing "
+                     "signature must not appear in this bracket" % t)
+    # A replication on the same pod is not a replication.
+    if EXPECTED_449R["pod"] == EXPECTED_449["pod"]:
+        f.append("EXPECTED_449R names the same pod as EXPECTED_449 (%s) -- "
+                 "that replicates nothing" % EXPECTED_449R["pod"])
+    if EXPECTED_449R["ovmx_mac"] == EXPECTED_449["ovmx_mac"]:
+        f.append("EXPECTED_449R reuses EXPECTED_449's OVMX tap MAC; the tap is "
+                 "per-pod, so this would be the same pod or a mismeasurement")
+    if EXPECTED_449R["subject"] == EXPECTED_449["subject"]:
+        f.append("EXPECTED_449R reuses EXPECTED_449's subject identity -- a "
+                 "replication must carry an identity of its own")
+    return f
 
 
 def main():
@@ -423,11 +745,140 @@ def main():
             for t, n in sorted(m["ctl_tx"].items())))
         print("   ACCEPT_RSP (type 3)  : %d" % m["accept_rsp_tx"])
 
+    # --- vms-449's bracket: the rejoin triple, reported the same way ---
+    got449 = {}
+    for tag, fn in CAPTURES_449.items():
+        path = os.path.join(args.captures, fn)
+        if os.path.exists(path):
+            got449[tag] = measure_capture(path, EXPECTED_449["ovmx_mac"])
+    for tag in ORDER_449:
+        if tag not in got449:
+            continue
+        m = got449[tag]
+        e = EXPECTED_449["runs"][tag]
+        print("== %s  (%s)  joined=%s" % (tag, e["role"], e["joined"]))
+        print("   identity on the wire : %s" % ", ".join(m["identity"]))
+        print("   CM 190-byte frames   : tx=%d rx=%d" % (m["cm_190_tx"], m["cm_190_rx"]))
+        print("   OVMX-sent ctl types  : %s" % ", ".join(
+            "%d=%s x%d" % (t, MSGTYPE_NAMES.get(t, "type%d" % t), n)
+            for t, n in sorted(m["ctl_tx"].items())))
+        print("   peer-sent ctl types  : %s" % ", ".join(
+            "%d=%s x%d" % (t, MSGTYPE_NAMES.get(t, "type%d" % t), n)
+            for t, n in sorted(m["ctl_rx"].items())))
+
+    # --- vms-449R's replication bracket, on the OTHER pod ---
+    got449r = {}
+    for tag, fn in CAPTURES_449R.items():
+        path = os.path.join(args.captures, fn)
+        if os.path.exists(path):
+            got449r[tag] = measure_capture(path, EXPECTED_449R["ovmx_mac"])
+    for tag in ORDER_449R:
+        if tag not in got449r:
+            continue
+        m = got449r[tag]
+        e = EXPECTED_449R["runs"][tag]
+        print("== 449R %s  (%s)  joined=%s  [%s]"
+              % (tag, e["role"], e["joined"], EXPECTED_449R["pod"]))
+        print("   identity on the wire : %s" % ", ".join(m["identity"]))
+        print("   CM 190-byte frames   : tx=%d rx=%d" % (m["cm_190_tx"], m["cm_190_rx"]))
+        print("   peer-sent ctl types  : %s" % ", ".join(
+            "%d=%s x%d" % (t, MSGTYPE_NAMES.get(t, "type%d" % t), n)
+            for t, n in sorted(m["ctl_rx"].items())))
+
     if args.just_print:
         return 0
 
     results, _covered = rederive(args.captures)
     fails = [label for ok, label in results if not ok]
+
+    # --- vms-449: THE REJOIN BRACKET, checked figure by figure ---
+    # The shape check runs on EVERY host; only the figure re-derivation needs
+    # the captures.
+    fails.extend(check_449_bracket_shape())
+    if len(got449) == len(CAPTURES_449):
+        for tag in ORDER_449:
+            m, e = got449[tag], EXPECTED_449["runs"][tag]
+            for field in ("identity", "cm_190_tx", "cm_190_rx", "ctl_tx",
+                          "ctl_rx", "accept_rsp_tx"):
+                ck(m[field] == e[field],
+                   "449 %s %s %r != %r" % (tag, field, m[field], e[field]))
+        rejoins = [t for t in ORDER_449
+                   if EXPECTED_449["runs"][t]["role"] == "rejoin"]
+        joiners = [t for t in ORDER_449
+                   if EXPECTED_449["runs"][t]["role"] != "rejoin"]
+        # THE ANSWER, as a relation over the measured captures rather than as
+        # nine tables. Two independent discriminators, both 4/4 vs 5/5:
+        #
+        #  (1) the CM membership dialogue collapses by a factor of ~36 on a
+        #      rejoin -- it is not that OVMX goes silent (it transmits 14) but
+        #      that the exchange stops after the opening burst; and
+        #  (2) the peer never sends the SCA DISCONNECT pair (types 6 and 7)
+        #      that, on every joining run, tears down its own SCS$DIRECTORY
+        #      connection before readmission. That is sec 4k.5's divergence
+        #      point, measured as a message-type census instead of by hand.
+        ck(max(got449[t]["cm_190_rx"] for t in rejoins)
+           < min(got449[t]["cm_190_rx"] for t in joiners) / 10,
+           "the CM-collapse discriminator did not hold across the 449 bracket")
+        ck(all(got449[t]["ctl_rx"].get(6, 0) == 0
+               and got449[t]["ctl_rx"].get(7, 0) == 0 for t in rejoins),
+           "a refused rejoin received a peer DISCONNECT pair")
+        ck(all(got449[t]["ctl_rx"].get(6, 0) > 0
+               and got449[t]["ctl_rx"].get(7, 0) > 0 for t in joiners),
+           "a joining run received no peer DISCONNECT pair")
+        # ...and every arm, refused ones included, emits the ACCEPT_RSP whose
+        # absence WAS the vms-70e2 failure. The question was actually asked.
+        ck(all(got449[t]["accept_rsp_tx"] > 0 for t in ORDER_449),
+           "an arm of the 449 bracket emitted no ACCEPT_RSP -- on this tree "
+           "every arm must, or the rejoin question was not the thing measured")
+    else:
+        print("[vms-449 bracket captures absent -- its figures were not "
+              "re-derived; the bracket SHAPE was still checked]")
+
+    # --- vms-449R: THE REPLICATION, checked the same way ------------------
+    fails.extend(check_449r_bracket_shape())
+    if len(got449r) == len(CAPTURES_449R):
+        for tag in ORDER_449R:
+            m, e = got449r[tag], EXPECTED_449R["runs"][tag]
+            for field in ("identity", "cm_190_tx", "cm_190_rx", "ctl_tx",
+                          "ctl_rx", "accept_rsp_tx"):
+                ck(m[field] == e[field],
+                   "449R %s %s %r != %r" % (tag, field, m[field], e[field]))
+        rj = [t for t in ORDER_449R
+              if EXPECTED_449R["runs"][t]["role"] == "rejoin"]
+        jn = [t for t in ORDER_449R
+              if EXPECTED_449R["runs"][t]["role"] != "rejoin"]
+        # THE REPLICATION, as the same two relations that carried sec 4(O.2) --
+        # measured on a different pod, against a different tap MAC.
+        ck(max(got449r[t]["cm_190_rx"] for t in rj)
+           < min(got449r[t]["cm_190_rx"] for t in jn) / 10,
+           "the CM-collapse discriminator did not reproduce on "
+           + EXPECTED_449R["pod"])
+        ck(all(got449r[t]["ctl_rx"].get(6, 0) == 0
+               and got449r[t]["ctl_rx"].get(7, 0) == 0 for t in rj),
+           "a refused rejoin received a peer DISCONNECT pair on "
+           + EXPECTED_449R["pod"])
+        ck(all(got449r[t]["ctl_rx"].get(6, 0) > 0
+               and got449r[t]["ctl_rx"].get(7, 0) > 0 for t in jn),
+           "a joining run received no peer DISCONNECT pair on "
+           + EXPECTED_449R["pod"])
+        ck(all(got449r[t]["accept_rsp_tx"] > 0 for t in ORDER_449R),
+           "an arm of the 449R replication emitted no ACCEPT_RSP")
+        # And the rejoin's collapsed census must be the SAME on both pods --
+        # that identity is the strongest single statement the pair makes.
+        if len(got449) == len(CAPTURES_449):
+            b6 = [got449[t] for t in ORDER_449
+                  if EXPECTED_449["runs"][t]["role"] == "rejoin"]
+            for t in rj:
+                ck(all(got449r[t]["cm_190_tx"] == o["cm_190_tx"]
+                       and got449r[t]["cm_190_rx"] == o["cm_190_rx"]
+                       and got449r[t]["ctl_tx"] == o["ctl_tx"]
+                       and got449r[t]["ctl_rx"] == o["ctl_rx"] for o in b6),
+                   "the refused-rejoin census differs between %s and %s; spec "
+                   "sec 4(O.3) claims the two pods produce the identical census"
+                   % (EXPECTED_449["pod"], EXPECTED_449R["pod"]))
+    else:
+        print("[vms-449R replication captures absent -- its figures were not "
+              "re-derived; the bracket SHAPE was still checked]")
 
     if fails:
         for f in fails:

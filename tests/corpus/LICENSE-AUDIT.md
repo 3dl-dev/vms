@@ -15,6 +15,10 @@ Audited: 2026-02-19
 | tier3-mmk (MMK) | BSD 3-Clause | YES | YES | Attribution required |
 | tier3-netlib (NETLIB) | All Rights Reserved | YES (read-only corpus) | With caution | No redistribution rights confirmed |
 | tier4-mx (MX) | BSD 3-Clause (BLISS); mixed C | YES | YES | Attribution required |
+| tier6-laxdriver (vms-laxdriver) | MIT | YES | YES | Attribution required |
+| tier6-ipc-benchmark (vms-ipc_benchmark) | MIT | YES | YES | Attribution required |
+| tier6-memtester (vms-memtester) | GPL-2.0 | YES | YES | Source availability (GPL) |
+| tier6-cmatrix (cmatrix) | GPL-3.0 | YES | YES | Source availability (GPL) |
 
 ---
 
@@ -148,6 +152,80 @@ copy, and redistribution with attribution. Compatible with OVMX testing.
 - Preserve per-file copyright headers
 - Preserve the advertising clause requirement for the NetBSD-derived files
   if redistributing (include acknowledgement of Henry Spencer / UC Regents)
+
+---
+
+## tier6-laxdriver/ — vms-laxdriver
+
+**License type:** MIT
+**License file:** `tier6-laxdriver/LICENSE`
+**SPDX:** MIT
+**Copyright:** Jake Hamby, 2022
+
+### OVMX usage assessment
+
+**Status: FULLY USABLE.** MIT permits use, copy, modify, and distribute
+with attribution. Preserve `LICENSE` and file headers.
+
+---
+
+## tier6-ipc-benchmark/ — vms-ipc_benchmark
+
+**License type:** MIT
+**License file:** `tier6-ipc-benchmark/LICENSE`
+**SPDX:** MIT
+**Copyright:** Jake Hamby, 2023
+
+### OVMX usage assessment
+
+**Status: FULLY USABLE.** Same terms as tier6-laxdriver.
+
+---
+
+## tier6-memtester/ — vms-memtester
+
+**License type:** GPL-2.0
+**License file:** `tier6-memtester/COPYING`
+**SPDX:** GPL-2.0
+**Copyright:** Charles Cazabon (original memtester); Jake Hamby (VMS port), 2022
+
+### OVMX usage assessment
+
+**Status: FULLY USABLE.** GPL-2.0 permits use, copy, modify, and
+redistribution; redistributed source must remain under GPL-2.0 with
+`COPYING` intact. Compatible with read-only corpus use and with commit to
+the repo (OVMX is not linking this code into its own binaries, only using
+it as a compile/run test target).
+
+---
+
+## tier6-cmatrix/ — cmatrix
+
+**License type:** GPL-3.0
+**License file:** `tier6-cmatrix/COPYING`
+**SPDX:** GPL-3.0
+**Copyright:** Chris Allegretta (original cmatrix); Jake Hamby (VMS port), 2021
+
+### OVMX usage assessment
+
+**Status: FULLY USABLE.** Same reasoning as tier6-memtester, under GPL-3.0.
+
+---
+
+## Round 2 acquisition (vms-e86) — items NOT committed
+
+Everything else discovered in the `vms-e86` breadth pass (WASD, OpenSSL,
+curl, plibsys, GNV forks, John Francis PCSI kits, Digiater freeware CD,
+vms-ports SourceForge, further jhamby ports, both vmsbackup
+implementations, VSI's own freeware/PCSI kits, hobbyist OS ISOs) was
+either too large to commit (repo size discipline) or has unclear/no
+declared license. None of it was added to git. Full per-item license
+status is in `tests/corpus/inventory.json` and the flagged-list table in
+`tests/corpus/INVENTORY.md`. Fetch scripts for the redistributable-but-large
+items live in `tests/corpus/fetch/`; nothing under `fetch/` should ever be
+run automatically as part of a build or test — it is a manual/documented
+retrieval path only, landing outside git (see each script's `DEST`
+handling, which defaults to a scratch staging directory, never the repo).
 
 ---
 

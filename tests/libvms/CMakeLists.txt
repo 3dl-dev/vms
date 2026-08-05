@@ -89,6 +89,28 @@ add_test(NAME test_libvms_identity COMMAND test_libvms_identity)
 libvms_add_test(test_libvms_protection
     ${CMAKE_CURRENT_SOURCE_DIR}/test_protection.c)
 
+# ...and the fixture that lets it run honestly on a host whose distro policy
+# blocks unprivileged user namespaces (rd vms-bd7). test_protection.c
+# synthesizes a caller UIC either with setgid()+setuid() (needs CAP_SETGID +
+# CAP_SETUID) or with CLONE_NEWUSER; Ubuntu 24.04 -- both the GitHub Actions
+# runner and the workshop dev seat -- restricts the second by AppArmor default.
+# CI carried an inline `sudo setcap` for exactly this and the dev seat did not,
+# so the same commit was green in one place and red in the other. The grant now
+# lives in ONE script that both call.
+#
+# It is a FIXTURE, not a post-build step, because setcap's file capabilities are
+# dropped on every relink -- the fixture re-applies them on every ctest run. The
+# script always exits 0 by design: where the grant is impossible the test must
+# still RUN and fail honestly, never be marked "Not Run", which is what a
+# nonzero fixture would do and is a skip by another name.
+add_test(NAME test_libvms_protection_caps
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/grant_protection_caps.sh
+            $<TARGET_FILE:test_libvms_protection>)
+set_tests_properties(test_libvms_protection_caps PROPERTIES
+    FIXTURES_SETUP ovmx_protection_caps)
+set_tests_properties(test_libvms_protection PROPERTIES
+    FIXTURES_REQUIRED ovmx_protection_caps)
+
 # Test 13: vms-2b8 round 13 — CodeQL cpp/unclear-buffer-write on the
 # snprintf-return accumulation at dcl_cmd_show.c:1597 (Authorized
 # privileges grid) and dcl_lexical.c:1472 (CURPRIV/AUTHPRIV renderer).

@@ -2420,7 +2420,7 @@ EOF
         case "$_f" in
         facility)     echo "the executive's SS__DEADLOCK condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields to a caller it aborted for deadlock (vms-2e5, vms-82a)";;
         targets)      echo "kernel/vms_internal.h";;
-        suites_red)   echo "test_syssvc_lock_status";;
+        suites_red)   echo "test_kmod_lock_sync test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
@@ -2429,8 +2429,34 @@ EOF
 parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+parent: sync ENQ closing the cycle rejected SS$_DEADLOCK
+parent: child (completion AST) exited clean
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME DEFECT SEEN FROM THE OTHER SIDE, and its appearance here is a
+consequence of vms-82a rather than a coarse mutation.
+
+Before vms-82a this control mutated kstat_to_ss() in src/libvms/syssvc/
+sys_lock.c -- a userspace mapping only the PUBLIC sys$ path went through. So
+only test_syssvc_lock_status could see it, and test_kmod_lock_sync, which
+reaches the lock manager through raw ioctls, could not.
+
+The executive now yields the VMS condition value itself, so there is exactly
+ONE place the deadlock status exists and BOTH paths read it. test_kmod_lock_sync
+asserts the raw status is SS$_DEADLOCK; test_syssvc_lock_status asserts the
+public API reports SS$_DEADLOCK. One mutated constant, two observations of the
+one defect -- which is the thing the change was for.
+
+The second assertion follows from the first in that suite: the parent decides
+the child exited clean by checking the deadlock status it got, so once the
+status is wrong the parent's own verdict on the child goes with it. There is
+no finer mutation available -- the constant is a single #define, and splitting
+it would mean inventing a second deadlock value the executive does not have
+(the illegal third answer, Rule 10).
+EOF
+                      ;;
         esac;;
 
     kstat-ivlockid-mismapped)

@@ -4,7 +4,7 @@ test_scs_diskrun_figures.py -- vms-ebb: the disk-discovery-trigger ruling must
 keep saying what the bracket measured.
 
 NEEDS NO CAPTURES. It compares the figures written into
-  docs/cluster-protocol-spec.md   (sec 4(O.2), the ruling and its table)
+  docs/cluster-protocol-spec.md   (sec 4(O.4), the ruling and its table)
   src/vmsscs/scsd.c               (scsd_diskrun_ungate_tick()'s header)
 against the EXPECTED table in tools/cluster/scs_diskrun_trigger_measure.py,
 which is the checked-in record of what the lab-2 bracket measured. Only that
@@ -83,9 +83,9 @@ def read(path):
 
 
 def spec_section(text):
-    """Sec 4(O.2), from its heading to the next heading at the same level."""
-    m = re.search(r"^#### 4\(O\.2\).*$", text, re.M)
-    check(m is not None, "docs/cluster-protocol-spec.md has no sec 4(O.2) -- the "
+    """Sec 4(O.4), from its heading to the next heading at the same level."""
+    m = re.search(r"^#### 4\(O\.4\).*$", text, re.M)
+    check(m is not None, "docs/cluster-protocol-spec.md has no sec 4(O.4) -- the "
                          "vms-ebb ruling is not in the spec at all")
     if m is None:
         return ""
@@ -124,7 +124,7 @@ def main():
                 row = line
                 break
         check(row is not None,
-              "sec 4(O.2) has no table row for arm %s (capture %s)" % (ident, name))
+              "sec 4(O.4) has no table row for arm %s (capture %s)" % (ident, name))
         if row is None:
             continue
         digits = [int(x) for x in re.findall(r"\*\*(\d+)\*\*", row)]
@@ -142,17 +142,17 @@ def main():
 
     # Every arm joined -- the fact the whole ruling turns on.
     check(len(re.findall(r"`CN_3`", sec)) >= len(mod.EXPECTED),
-          "sec 4(O.2) does not record CLUSTER_NODES=3 for every arm; the ruling "
+          "sec 4(O.4) does not record CLUSTER_NODES=3 for every arm; the ruling "
           "rests on the control joining too")
 
     # ---- (2) THE LEAD ---------------------------------------------------
     for lead in mod.EXPECTED_LEAD_S:
         check(("%.3f" % lead) in sec,
-              "sec 4(O.2) does not carry the measured per-peer lead %.3f s"
+              "sec 4(O.4) does not carry the measured per-peer lead %.3f s"
               % lead)
     lo, hi = mod.EXPECTED_LEAD_RANGE
     band = "%.1f–%.1f s" % (lo, hi)
-    check(band in sec, "sec 4(O.2) does not state the %s lead band" % band)
+    check(band in sec, "sec 4(O.4) does not state the %s lead band" % band)
     check(band in fn or ("%.1f-%.1f s" % (lo, hi)) in fn,
           "scsd_diskrun_ungate_tick()'s header does not state the %s lead band, "
           "so the code does not carry the reason the ruling gives" % band)
@@ -168,7 +168,7 @@ def main():
     subject = r"(disconnect_req|op ?6|signal|frame)"
     absence = r"(never (arriv|sends|comes)|does not arriv|no(thing)? to fire on|"\
               r"absent|0 frames in every arm)"
-    for label, body in (("spec sec 4(O.2)", sec),
+    for label, body in (("spec sec 4(O.4)", sec),
                         ("scsd_diskrun_ungate_tick()", fn)):
         for sentence in re.split(r"(?<=[.!?])\s+", body):
             s = sentence.lower()

@@ -1376,7 +1376,7 @@ two controls in the same session.
 >   reachable. It does not describe the tree in `main` and must not be requoted
 >   as if it did.
 >
-> `vms-ebb` ran the bracket the deletion left owing (spec §4(O.2), lab-2
+> `vms-ebb` ran the bracket the deletion left owing (spec §4(O.4), lab-2
 > `vaxlab-1`, three pure-server arms with the control between them) and **RULED:
 > one trigger stays.** It also refutes a tempting reading of the deletion — the
 > peer *does* initiate a p. 2-26 teardown of our `SCS$DIRECTORY` server

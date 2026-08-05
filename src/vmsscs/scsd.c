@@ -8980,7 +8980,7 @@ static unsigned long scsd_diskrun_gate_ms(void)
  * vms-ebb ran the missing bracket: three pure-server arms on ONE lab-2 pod
  * (`vaxlab-1`), control BETWEEN the two test arms, identity read off the
  * capture, one binary md5-verified in-pod before and after every arm. Spec sec
- * 4(O.2) carries the figures. What it measured:
+ * 4(O.4) carries the figures. What it measured:
  *
  *   - THIS GATE IS WHAT STARTS THE RUN. PSC-UNGATED went 2 -> 0 -> 2 across
  *     test/control/test, and the PS SCS$DIRECTORY CONNECT_REQ (local Con.ID
@@ -9004,7 +9004,7 @@ static unsigned long scsd_diskrun_gate_ms(void)
  *     second entry point restores exactly the two-writer shape vms-096 deleted.
  *
  * So: not re-attached. NOT because the signal is missing -- it is there, it is
- * timed, and sec 4(O.2) records where it would attach and what it would gain --
+ * timed, and sec 4(O.4) records where it would attach and what it would gain --
  * but because nothing this bracket can reach is waiting for it.
  *
  * WHAT THIS BRACKET DOES NOT SETTLE, and it is the case that motivated the
@@ -9882,7 +9882,7 @@ int main(int argc, char **argv)
         /* --- DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS CALL IS IT.
          * vms-ebb moved the body into scsd_diskrun_ungate_tick() so a test can
          * reach it (SCSD_UNIT_TEST renames main() away), and ruled the single
-         * trigger on a lab bracket -- spec sec 4(O.2). Read that function's
+         * trigger on a lab bracket -- spec sec 4(O.4). Read that function's
          * header before adding a second entry point. */
         (void)scsd_diskrun_ungate_tick(&rx, monotonic_ms());
 

@@ -6918,7 +6918,7 @@ static void test_the_process_poller_kill_switch(void)
 /*
  * ===================== vms-ebb: DISK DISCOVERY HAS ONE TRIGGER ==============
  *
- * The ruling is spec sec 4(O.2), taken on a lab-2 bracket. THIS is what stops
+ * The ruling is spec sec 4(O.4), taken on a lab-2 bracket. THIS is what stops
  * the ruling from decaying into a comment: the daemon must start its
  * pure-server disk-discovery run from the gate expiring and from NOTHING ELSE,
  * and in particular not from the peer's DISCONNECT_REQ on our SCS$DIRECTORY
@@ -7016,7 +7016,7 @@ static void test_the_peer_disconnect_req_starts_no_disk_discovery(void)
           disc_req_recv);
     CHECK(ps->psc_step == PSC_IDLE,
           "the peer's DISCONNECT_REQ moved the disk-discovery machine to step %d."
-          " Spec sec 4(O.2) rules ONE trigger; this frame is not it",
+          " Spec sec 4(O.4) rules ONE trigger; this frame is not it",
           ps->psc_step);
     CHECK(ps->psc_dir_sent == 0,
           "the peer's DISCONNECT_REQ opened OUR SCS$DIRECTORY client connection");
@@ -7069,7 +7069,7 @@ static void test_the_diskrun_ungate_kill_switch(void)
 {
     /* GUARDRAIL 23: run the switch, confirm the gated behaviour is suppressed,
      * and show the SAME world does the thing without it. This is the in-suite
-     * twin of spec sec 4(O.2)'s E8 control arm. */
+     * twin of spec sec 4(O.4)'s E8 control arm. */
     CHECK(setenv("OVMX_PURE_SERVER", "1", 1) == 0, "setenv failed");
     CHECK(setenv("OVMX_NO_DISKRUN_UNGATE", "1", 1) == 0, "setenv failed");
 
@@ -7127,7 +7127,7 @@ static void test_the_diskrun_ungate_kill_switch(void)
 
 /*
  * The gate value itself, since the ruling quotes it. OVMX_DISKRUN_GATE_MS is
- * the only reason sec 4(O.2)'s timings are reproducible, and a default that
+ * the only reason sec 4(O.4)'s timings are reproducible, and a default that
  * silently moved would move every figure in that section with it.
  */
 static void test_the_diskrun_gate_default_and_override(void)
@@ -7135,7 +7135,7 @@ static void test_the_diskrun_gate_default_and_override(void)
     (void)unsetenv("OVMX_DISKRUN_GATE_MS");
     CHECK(scsd_diskrun_gate_ms() == 2000UL,
           "the disk-run gate default is %lu ms; spec sec 4c.8 puts it inside the"
-          " 1.4-4.4 s window and sec 4(O.2) measured its arms at 2000",
+          " 1.4-4.4 s window and sec 4(O.4) measured its arms at 2000",
           scsd_diskrun_gate_ms());
     CHECK(setenv("OVMX_DISKRUN_GATE_MS", "750", 1) == 0, "setenv failed");
     CHECK(scsd_diskrun_gate_ms() == 750UL, "the override did not take");
@@ -7253,7 +7253,7 @@ int main(void)
     /* vms-096: the departure sweep vs. a poll cycle in flight. */
     test_peer_departure_under_a_live_poll_cycle();
     test_the_process_poller_kill_switch();
-    /* vms-ebb: disk discovery has ONE trigger (spec sec 4(O.2)), and the
+    /* vms-ebb: disk discovery has ONE trigger (spec sec 4(O.4)), and the
      * peer's DISCONNECT_REQ -- which the bracket measured as a LIVE frame --
      * is not it. */
     test_the_diskrun_gate_default_and_override();

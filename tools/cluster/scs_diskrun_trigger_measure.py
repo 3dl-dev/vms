@@ -2,7 +2,7 @@
 """scs_diskrun_trigger_measure.py - vms-ebb: re-derive the disk-discovery
 trigger measurements from the raw lab-2 captures.
 
-Every figure quoted in docs/cluster-protocol-spec.md sec 4(O.2) and in
+Every figure quoted in docs/cluster-protocol-spec.md sec 4(O.4) and in
 scsd_diskrun_ungate_tick()'s header in src/vmsscs/scsd.c comes out of this
 script. It reads pcaps only and imports nothing from OVMX.
 
@@ -25,7 +25,7 @@ The question vms-096 left open was whether disk discovery should regain an
 IMMEDIATE trigger beside the OVMX_DISKRUN_GATE_MS ungate. Answering it needs two
 counts off the wire, and BOTH have to come off the wire rather than off SCSD's
 log -- the log is the thing under test, and two arms of this very bracket ran a
-FOREIGN daemon whose log lines were plausible and wrong (sec 4(O.2)).
+FOREIGN daemon whose log lines were plausible and wrong (sec 4(O.4)).
 
 (A) DOES THE SIGNAL AN IMMEDIATE TRIGGER WOULD FIRE ON EXIST? That signal is an
     SCA connection-control DISCONNECT_REQ -- message type 6, spec sec 4(h)(1a)

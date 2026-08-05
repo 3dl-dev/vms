@@ -873,7 +873,7 @@ set_tests_properties(scs_figures_wire_mutants PROPERTIES
 # two -- to a comment. A ruling in a comment decays: sec 4(O.1)'s bracket ran
 # the DEFAULT environment and never entered the block at all, so nothing in
 # ctest read the comment or could contradict it. vms-ebb ran the missing
-# pure-server bracket (spec sec 4(O.2)) and these two tests hold the documents
+# pure-server bracket (spec sec 4(O.4)) and these two tests hold the documents
 # to it WITHOUT needing the captures, which are host-only under CLAUDE.md rule 8.
 #
 # The one thing they exist above all to stop: the FIRST draft of this ruling

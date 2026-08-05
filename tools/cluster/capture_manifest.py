@@ -111,7 +111,7 @@ MANIFEST = {
     # `**/*.pcap` recursively and picks this one up too (pcaps_scanned=48).
     "vax1-verify.pcap": LAB1,
 
-    # --- lab-2: /data/training/vax/cluster/captures-lab2/*.pcap (7 files) --
+    # --- lab-2: /data/training/vax/cluster/captures-lab2/*.pcap (22 files) -
     # vaxlab-4, the vms-70e2/vms-578/vms-096 brackets. Read ONLY by
     # tools/cluster/scs_join_capability_measure.py.
     "vms096-V96-lab2-vaxlab4-20260805.pcap": LAB2,
@@ -121,6 +121,24 @@ MANIFEST = {
     "vms70e2-A0-lab2-vaxlab4-20260805.pcap": LAB2,
     "vms70e2-A1-lab2-vaxlab4-20260805.pcap": LAB2,
     "vms70e2-A3-lab2-vaxlab4-20260805.pcap": LAB2,
+    # vaxlab-6, vms-449's rejoin triple bracket (ORDER_449, nine runs).
+    "vms449-A1-lab2-vaxlab6-20260805.pcap": LAB2,
+    "vms449-B1-lab2-vaxlab6-20260805.pcap": LAB2,
+    "vms449-B2-lab2-vaxlab6-20260805.pcap": LAB2,
+    "vms449-B3-lab2-vaxlab6-20260805.pcap": LAB2,
+    "vms449-B4-lab2-vaxlab6-20260805.pcap": LAB2,
+    "vms449-C1-lab2-vaxlab6-20260805.pcap": LAB2,
+    "vms449-C2-lab2-vaxlab6-20260805.pcap": LAB2,
+    "vms449-C3-lab2-vaxlab6-20260805.pcap": LAB2,
+    "vms449-C4-lab2-vaxlab6-20260805.pcap": LAB2,
+    # vaxlab-7, vms-449R's replication of the same bracket (ORDER_449R).
+    "vms449r-A1-lab2-vaxlab7-20260805.pcap": LAB2,
+    "vms449r-B1-lab2-vaxlab7-20260805.pcap": LAB2,
+    "vms449r-C1-lab2-vaxlab7-20260805.pcap": LAB2,
+    # vaxlab-1, vms-ebb's disk-discovery trigger bracket.
+    "vmsebb-E7-lab2-vaxlab1-20260805.pcap": LAB2,
+    "vmsebb-E8-control-lab2-vaxlab1-20260805.pcap": LAB2,
+    "vmsebb-E9-lab2-vaxlab1-20260805.pcap": LAB2,
 }
 
 

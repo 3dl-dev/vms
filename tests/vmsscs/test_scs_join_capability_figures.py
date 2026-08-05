@@ -178,7 +178,31 @@ check(M.MSGTYPE_OFF == SPEC_MSGTYPE_OFF,
 spec = open(SPEC, encoding="utf-8").read()
 check("### 4(O)" in spec, "spec section 4(O) is missing")
 
-sec = spec.split("### 4(O)", 1)[1].split("\n## 5.", 1)[0] if "### 4(O)" in spec else ""
+
+# EVERY 4(O*) SLICE IS BOUNDED BY THE NEXT SUBSECTION, NOT BY `## 5.`.
+# vms-449 added 4(O.2) and every one of these slices silently grew to swallow
+# it: 4(O.1)'s table check started reading 4(O.2)'s rows and produced 19
+# failures that were entirely an artefact of the slicing. That is the same
+# loosening the comment above section 4(O) in the spec warns about, arriving
+# from the other direction -- a slice that ends at `## 5.` is a slice that ends
+# wherever the LAST subsection ends, so a loose `\b%d\b` figure search inside it
+# can be satisfied by a number belonging to a different experiment.
+def section(name):
+    """The text of spec subsection `name`, up to the next 4(O*) heading."""
+    if name not in spec:
+        return ""
+    body = spec.split(name, 1)[1]
+    stop = len(body)
+    for nxt in re.finditer(r"\n#{3,4} 4\(O", body):
+        stop = min(stop, nxt.start())
+        break
+    tail = body.find("\n## 5.")
+    if tail != -1:
+        stop = min(stop, tail)
+    return body[:stop]
+
+
+sec = section("### 4(O)")
 
 for tag, e in EXPECTED["runs"].items():
     check(tag in sec, f"run tag {tag} is not named in spec sec 4(O)")
@@ -250,7 +274,7 @@ CAPTURES_578 = getattr(M, "CAPTURES_578", {})
 
 if EXPECTED_578:
     check("#### 4(O.1)" in spec, "spec section 4(O.1) is missing")
-    sec1 = spec.split("#### 4(O.1)", 1)[1].split("\n## 5.", 1)[0] if "#### 4(O.1)" in spec else ""
+    sec1 = section("#### 4(O.1)")
     # The prose writes branches inside backticks; compare against a copy with
     # the markup removed rather than teaching EXPECTED_578 to carry markup.
     sec1_plain = sec1.replace("`", "")
@@ -376,6 +400,233 @@ if EXPECTED_578:
     else:
         print(f"[no lab-2 captures under {cap578} -- EXPECTED_578 was pinned to "
               f"the prose; the re-derivation was not run]")
+
+# ===========================================================================
+# 2c. THE vms-449 REJOIN BRACKET -- EXPECTED_449 vs spec sec 4(O.2)
+# ===========================================================================
+# WHY THIS EXISTS. EXPECTED_449 records the answer to the question the whole
+# vms-2f3 programme exists for -- can a returning identity rejoin? -- and the
+# answer is NO, four times, bracketed by four controls that joined. A NEGATIVE
+# result is exactly the kind that rots: nobody re-reads it, and the next session
+# is tempted to "just try it again". This pins the figures AND the bracket's
+# shape to the prose, so neither can drift with the suite green.
+check(hasattr(M, "EXPECTED_449"),
+      "the measurement no longer defines EXPECTED_449 -- the vms-449 rejoin "
+      "bracket has lost its recorded figures")
+EXPECTED_449 = getattr(M, "EXPECTED_449", None)
+CAPTURES_449 = getattr(M, "CAPTURES_449", {})
+ORDER_449 = getattr(M, "ORDER_449", [])
+
+if EXPECTED_449:
+    # The bracket's SHAPE is asserted by the measurement itself so the tool and
+    # the gate cannot disagree about what a bracket is. It runs on every host.
+    for msg in M.check_449_bracket_shape():
+        check(False, "449 bracket shape: " + msg)
+
+    check("#### 4(O.2)" in spec, "spec section 4(O.2) is missing")
+    sec2 = section("#### 4(O.2)")
+
+    check(EXPECTED_449["pod"] in sec2, "the pod is not named in spec sec 4(O.2)")
+    check(EXPECTED_449["date"] in sec2, "the run date is not in spec sec 4(O.2)")
+    check(EXPECTED_449["lab"] in sec2,
+          "spec sec 4(O.2) does not say which LAB the runs were taken on")
+    # The per-pod OVMX MAC is the trap that would have zeroed every figure.
+    check(EXPECTED_449["ovmx_mac"] in sec2,
+          "spec sec 4(O.2) does not name the OVMX tap MAC this bracket was "
+          "measured against -- it is per-POD and reusing another bracket's "
+          "returns zero for every figure")
+    check(EXPECTED_449["ovmx_mac"] != EXPECTED["ovmx_mac"],
+          "EXPECTED_449 reuses the vaxlab-4 OVMX MAC; the two pods mint "
+          "different taps and this would silently measure nothing")
+
+    def rows449(text):
+        rows = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if not (line.startswith("|") and line.endswith("|")):
+                continue
+            cells = [c.strip().strip("`").replace("**", "").strip()
+                     for c in line[1:-1].split("|")]
+            if len(cells) < 7 or not re.fullmatch(r"[ABC]\d", cells[0]):
+                continue
+            rows[cells[0]] = cells
+        return rows
+
+    tbl = rows449(sec2)
+    check(set(tbl) == set(EXPECTED_449["runs"]),
+          f"spec sec 4(O.2)'s table lists runs {sorted(tbl)}, EXPECTED_449 has "
+          f"{sorted(EXPECTED_449['runs'])}")
+    for tag, e in EXPECTED_449["runs"].items():
+        row = tbl.get(tag)
+        if not row:
+            check(False, f"{tag} has no row in the spec sec 4(O.2) table")
+            continue
+        # | run | role | identity | CM 190 tx | CM 190 rx | peer DISC rx | verdict |
+        check(row[2] in e["identity"],
+              f"{tag}: the table's identity {row[2]!r} is not among the "
+              f"identities measured on the wire {e['identity']!r}")
+        for col, field in ((3, "cm_190_tx"), (4, "cm_190_rx")):
+            check(row[col].isdigit() and int(row[col]) == e[field],
+                  f"{tag} {field}: the spec sec 4(O.2) row says {row[col]!r}, "
+                  f"the measurement says {e[field]}")
+        # The peer-DISCONNECT column IS the discriminator; it is checked against
+        # ctl_rx rather than trusted as prose.
+        want = "%d / %d" % (e["ctl_rx"].get(6, 0), e["ctl_rx"].get(7, 0))
+        check(row[5].replace(" ", "") == want.replace(" ", ""),
+              f"{tag}: the table says the peer sent {row[5]!r} DISCONNECT "
+              f"REQ/RSP, the measurement says {want!r}")
+        check(("JOINED" in row[6]) is bool(e["joined"]),
+              f"{tag}: the table verdict {row[6]!r} contradicts "
+              f"joined={e['joined']}")
+        check(e["ctl_tx"].get(3) == e["accept_rsp_tx"],
+              f"{tag}: ctl_tx type-3 count {e['ctl_tx'].get(3)} disagrees with "
+              f"accept_rsp_tx {e['accept_rsp_tx']}")
+
+    # --- the claims the section must keep making ---------------------------
+    check("The answer is NO" in sec2 or "answer is NO" in sec2,
+          "spec sec 4(O.2) no longer states the answer; a bracket this "
+          "expensive must say what it concluded in words, not only in a table")
+    check("REFRESH" in sec2 and "refreshed=0" in sec2,
+          "spec sec 4(O.2) lost the p. 2-21 REFRESH elimination -- that path "
+          "was the standing candidate mechanism and its counter is the evidence")
+    check("non-claim" in sec2.lower(),
+          "spec sec 4(O.2) lost its explicit non-claims; the missing peer "
+          "DISCONNECT pair is a correlation and must not be read as a cause")
+    check("guardrail 20" in sec2.lower() or "between" in sec2.lower(),
+          "spec sec 4(O.2) does not record that the controls sit BETWEEN the "
+          "test runs")
+    check(set(CAPTURES_449) == set(EXPECTED_449["runs"]),
+          f"CAPTURES_449 {sorted(CAPTURES_449)} does not cover exactly the runs "
+          f"in EXPECTED_449 {sorted(EXPECTED_449['runs'])}")
+
+    cap449 = os.environ.get("OVMX_LAB2_CAPTURES",
+                            os.environ.get("OVMX_LAB_CAPTURES", M.DEFAULT_CAPTURE_DIR))
+    have449 = all(os.path.exists(os.path.join(cap449, fn))
+                  for fn in CAPTURES_449.values())
+    if have449:
+        for tag, fn in CAPTURES_449.items():
+            g = M.measure_capture(os.path.join(cap449, fn),
+                                  EXPECTED_449["ovmx_mac"])
+            e = EXPECTED_449["runs"][tag]
+            for field in ("cm_190_tx", "cm_190_rx", "ctl_tx", "ctl_rx",
+                          "accept_rsp_tx", "identity"):
+                check(g[field] == e[field],
+                      f"[captures-449] {tag} {field} {g[field]!r} != {e[field]!r}")
+        print("[the lab-2 captures are present -- EXPECTED_449 was re-derived "
+              "from them]")
+    else:
+        print(f"[no lab-2 captures under {cap449} -- EXPECTED_449 was pinned to "
+              f"the prose and its shape checked; the re-derivation was not run]")
+
+# ===========================================================================
+# 2d. THE vms-449R REPLICATION -- EXPECTED_449R vs spec sec 4(O.3)
+# ===========================================================================
+# WHY THIS EXISTS SEPARATELY FROM 2c. The replication's whole value is that it
+# was taken on a DIFFERENT pod; a later edit that "tidied" it to share
+# EXPECTED_449's pod, MAC or subject would leave both dicts individually
+# plausible and destroy the only thing the pair proves. Those cross-checks live
+# in check_449r_bracket_shape() and are asserted here. The bracket is also
+# deliberately WEAKER (one rejoin) and says so -- this gate pins that admission
+# to the prose so nobody can quietly upgrade the claim.
+check(hasattr(M, "EXPECTED_449R"),
+      "the measurement no longer defines EXPECTED_449R -- the vms-449 "
+      "replication has lost its recorded figures")
+EXPECTED_449R = getattr(M, "EXPECTED_449R", None)
+CAPTURES_449R = getattr(M, "CAPTURES_449R", {})
+ORDER_449R = getattr(M, "ORDER_449R", [])
+
+if EXPECTED_449R:
+    for msg in M.check_449r_bracket_shape():
+        check(False, "449R bracket shape: " + msg)
+
+    check("#### 4(O.3)" in spec, "spec section 4(O.3) is missing")
+    sec3 = section("#### 4(O.3)")
+
+    check(EXPECTED_449R["pod"] in sec3, "the pod is not named in spec sec 4(O.3)")
+    check(EXPECTED_449R["date"] in sec3, "the run date is not in spec sec 4(O.3)")
+    check(EXPECTED_449R["ovmx_mac"] in sec3,
+          "spec sec 4(O.3) does not name the OVMX tap MAC this replication was "
+          "measured against")
+    # The replication is only a replication if the prose says which OTHER pod
+    # it is replicating, and they really are different pods.
+    check(EXPECTED_449["pod"] in sec3,
+          "spec sec 4(O.3) does not name the pod it is replicating "
+          f"({EXPECTED_449['pod']})")
+    check(EXPECTED_449R["pod"] != EXPECTED_449["pod"],
+          "EXPECTED_449R and EXPECTED_449 name the same pod")
+    check(EXPECTED_449R["ovmx_mac"] != EXPECTED_449["ovmx_mac"],
+          "EXPECTED_449R and EXPECTED_449 share an OVMX tap MAC")
+
+    tbl3 = rows449(sec3)
+    check(set(tbl3) == set(EXPECTED_449R["runs"]),
+          f"spec sec 4(O.3)'s table lists runs {sorted(tbl3)}, EXPECTED_449R "
+          f"has {sorted(EXPECTED_449R['runs'])}")
+    for tag, e in EXPECTED_449R["runs"].items():
+        row = tbl3.get(tag)
+        if not row:
+            check(False, f"{tag} has no row in the spec sec 4(O.3) table")
+            continue
+        check(row[2] in e["identity"],
+              f"449R {tag}: the table's identity {row[2]!r} is not among the "
+              f"identities measured on the wire {e['identity']!r}")
+        for col, field in ((3, "cm_190_tx"), (4, "cm_190_rx")):
+            check(row[col].isdigit() and int(row[col]) == e[field],
+                  f"449R {tag} {field}: the spec sec 4(O.3) row says "
+                  f"{row[col]!r}, the measurement says {e[field]}")
+        want = "%d / %d" % (e["ctl_rx"].get(6, 0), e["ctl_rx"].get(7, 0))
+        check(row[5].replace(" ", "") == want.replace(" ", ""),
+              f"449R {tag}: the table says the peer sent {row[5]!r} DISCONNECT "
+              f"REQ/RSP, the measurement says {want!r}")
+        check(("JOINED" in row[6]) is bool(e["joined"]),
+              f"449R {tag}: the table verdict {row[6]!r} contradicts "
+              f"joined={e['joined']}")
+
+    # The refused census must be IDENTICAL across the two pods -- that identity
+    # is the strongest single statement sec 4(O.3) makes, so it is checked
+    # against the dicts and not merely asserted in prose.
+    r6 = [EXPECTED_449["runs"][t] for t in M.ORDER_449
+          if EXPECTED_449["runs"][t]["role"] == "rejoin"]
+    r7 = [EXPECTED_449R["runs"][t] for t in ORDER_449R
+          if EXPECTED_449R["runs"][t]["role"] == "rejoin"]
+    for a in r7:
+        for b in r6:
+            for field in ("cm_190_tx", "cm_190_rx", "ctl_tx", "ctl_rx"):
+                check(a[field] == b[field],
+                      f"the refused-rejoin {field} differs between "
+                      f"{EXPECTED_449R['pod']} ({a[field]!r}) and "
+                      f"{EXPECTED_449['pod']} ({b[field]!r}), but spec sec "
+                      f"4(O.3) claims the census is identical")
+
+    # The admissions the section must keep making.
+    check("VOID" in sec3 or "void" in sec3,
+          "spec sec 4(O.3) no longer records that four started runs were "
+          "discarded -- a bracket that hides its abandoned runs is not evidence")
+    check("18:58:50" in sec3,
+          "spec sec 4(O.3) lost the pod-restart timestamp, which is the "
+          "HARNESS ground on which the void runs were discarded")
+    check("one" in sec3.lower() and "fluke" in sec3.lower(),
+          "spec sec 4(O.3) no longer admits that it contains a single rejoin "
+          "and does not by itself establish the not-a-fluke property")
+    check(set(CAPTURES_449R) == set(EXPECTED_449R["runs"]),
+          f"CAPTURES_449R {sorted(CAPTURES_449R)} does not cover exactly the "
+          f"runs in EXPECTED_449R {sorted(EXPECTED_449R['runs'])}")
+
+    have449r = all(os.path.exists(os.path.join(cap449, fn))
+                   for fn in CAPTURES_449R.values())
+    if have449r:
+        for tag, fn in CAPTURES_449R.items():
+            g = M.measure_capture(os.path.join(cap449, fn),
+                                  EXPECTED_449R["ovmx_mac"])
+            e = EXPECTED_449R["runs"][tag]
+            for field in ("cm_190_tx", "cm_190_rx", "ctl_tx", "ctl_rx",
+                          "accept_rsp_tx", "identity"):
+                check(g[field] == e[field],
+                      f"[captures-449R] {tag} {field} {g[field]!r} != {e[field]!r}")
+        print("[the lab-2 captures are present -- EXPECTED_449R was re-derived "
+              "from them]")
+    else:
+        print(f"[no lab-2 captures under {cap449} -- EXPECTED_449R was pinned "
+              f"to the prose and its shape checked; no re-derivation]")
 
 # ===========================================================================
 # 3. THE QUARANTINE

@@ -3096,6 +3096,172 @@ reference capture and both are kept; what this bracket measured is only that
 the integrated tree joins, not WHICH of the merged pieces was necessary.
 Isolating that is a separate experiment and no claim is made about it here.
 
+---
+
+#### 4(O.2) The rejoin question, ASKED AND ANSWERED — the `vms-449` bracket (GROUNDED live, `vms-449`)
+
+**The answer is NO.** A returning OVMX identity is refused readmission by a
+cluster it was admitted to minutes earlier, on the tree that joins, on a pod
+that had never seen an OVMX node. This is the first time the question was put
+to a tree capable of completing a first join: `vms-70e2`'s positive control
+failed (§4(O)), `vms-578` fixed that (§4(O.1)), and nobody re-ran the triple.
+
+**Method.** Nine runs on ONE lab-2 pod, `vaxlab-6`, scaled up fresh for this
+bracket and verified `CLUSTER_NODES=2` before the first run, inside twenty-one
+minutes on 2026-08-05 — **one binary throughout** (a build of `main` at
+`f874b04`), **default environment**, no switches. `SCSSYSTEMID`s 1500–1504.
+Identity is proven from the capture bytes on every run, never from SCSD's log
+(guardrail 18). A control sits **between** every pair of test runs, not merely
+before and after them (guardrail 20). The last two runs are a matched pair
+driven by `tests/lab/tools/csbwatch.sh`, which parks VAX1 in SDA and samples the
+peer's CSB for our identity **while OVMX is still running** (guardrail 22).
+
+| run | role | identity | CM 190 tx | CM 190 rx | peer DISCONNECT_REQ/RSP rx | verdict |
+|---|---|---|---|---|---|---|
+| `A1` | first join | `OVMXJ0` | **510** | **579** | 3 / 3 | **JOINED, t+13 s**, `XITDONE=1` |
+| `B1` | rejoin #1 | `OVMXJ0` | **14** | **11** | **0 / 0** | **REFUSED**, `XITDONE=0` |
+| `C1` | control | `OVMXK1` | 510 | 583 | 3 / 3 | JOINED, t+13 s |
+| `B2` | rejoin #2 | `OVMXJ0` | **14** | **11** | **0 / 0** | **REFUSED** |
+| `C2` | control | `OVMXK2` | 510 | 578 | 3 / 3 | JOINED, t+13 s |
+| `B3` | rejoin #3 | `OVMXJ0` | **14** | **11** | **0 / 0** | **REFUSED** |
+| `C3` | control | `OVMXK3` | 510 | 574 | 3 / 3 | JOINED, t+13 s |
+| `B4` | rejoin #4 | `OVMXJ0` | **14** | **11** | **0 / 0** | **REFUSED** |
+| `C4` | control | `OVMXK4` | 513 | 583 | 3 / 3 | JOINED, `completed` at t+9 s |
+
+Four consecutive rejoins of one identity, four fresh identities admitted around
+them. **Every arm — refused ones included — emits the `ACCEPT_RSP` whose absence
+was the `vms-70e2` failure signature**, which is what establishes that the thing
+measured here is the rejoin and not §4(O)'s first-join defect.
+
+**The discriminator at the SCA connection-control layer, 4/4 against 5/5.** On
+every joining run the peer sends `6` DISCONNECT_REQ ×3 and `7` DISCONNECT_RSP ×3
+— it tears down its own `SCS$DIRECTORY` connection to us and then re-probes,
+opening a *new* one (`0` CONNECT_REQ rises to ×9). **On every refused rejoin it
+sends none of the three**: no DISCONNECT_REQ, no DISCONNECT_RSP, and `0`
+CONNECT_REQ stays at ×2. OVMX is left holding both connections open and, at
+exit, tears them down itself:
+
+```
+SCSD-W-CONNSTUCK, conid=…0002 VMS$VAXcluster parked in DISC SENT
+SCSD-W-CONNSTUCK, conid=…0007 SCS$DIRECTORY  parked in DISC SENT
+SCSD-I-CONNSTUCK, 2 of 2 in-use connection(s) parked off OPEN
+```
+
+against `0 of 0` on the control. This is the same divergence the `vms-2f3`
+handoff located by hand in §4k.5 — *the peer's directory teardown never comes* —
+now expressed as a message-type census and as a named state in a state machine
+that did not exist when it was first found.
+
+**The peer's own dialogue, off VAX1's console (`B4` vs `C4`).** Only the
+timestamped `Node X (csid …)` OPCOM lines are used (guardrail 24):
+
+| | fresh identity `OVMXK4` | returning identity `OVMXJ0` |
+|---|---|---|
+| | `received membership request` | `received membership request` |
+| | `proposed addition` | `proposed addition` |
+| | **`aborted VAXcluster state transition`** (+20 ms) | — *nothing, ever* |
+| | *second* request 6.2 s later → `proposed addition` | — *no second request* |
+| | **`completed VAXcluster state transition`** (+170 ms) | — |
+
+The cluster neither completes **nor aborts** the transition it opened for a
+returning identity; the CLUB is still `quorum,transition` at T+130 s. And the
+peer's CSB for our identity tells the same story from the other side:
+
+| sample | fresh `OVMXK4` | returning `OVMXJ0` |
+|---|---|---|
+| T‑PRE | `SCSNODE … not found` | `09 wait` `long_break,status_rcvd,send_status`, CSID `00010006` |
+| T+5 s | `01 open` `status_rcvd`, CSID `00000000` | `01 open` `status_rcvd`, CSID `00000000` |
+| T+10 s | **`01 open` `member,selected,status_rcvd`, CSID `00010007`** | `01 open` `status_rcvd`, CSID `00000000` |
+| T+125 s | (member) | **unchanged — `01 open`, CSID `00000000`** |
+
+Both identities reach the *same* intermediate CSB state. The fresh one advances
+out of it in 5 s; the returning one never does.
+
+**⛔ THE p. 2-21 REFRESH PATH IS ELIMINATED as the mechanism here.** `vms-17f`
+made `SCS_OPEN_EXISTING_REFRESHED` reachable and it was the standing candidate
+for what would let a returning identity back in. It did not fire: SCSD's own
+`PB-OPEN:` summary reads `new-sb=2 refreshed=0 existing-sb=0` on **every** run
+of this bracket, joining and refused alike, with `PEER-DEPARTURES=0`. The branch
+is about OVMX refreshing an SB for a *peer* that departed and returned, not
+about a peer refreshing OVMX, and no peer departed in any of these runs. It is
+symmetric across the discriminator and therefore cannot be it.
+(`tests/vmsscs/test_scsd_wire.c`'s `test_rejoin_reaches_the_p221_refresh` is the
+positive control that the counter is live and can read non-zero.)
+
+**Explicit non-claims.** (1) The missing peer DISCONNECT pair is **not** shown
+to *cause* the refusal — it is the peer's own behaviour, and what it responds to
+is unknown; naming it a cause is exactly the correlation §3 of the `vms-2f3`
+handoff exists to prevent. (2) Nothing here isolates *which* byte of the
+returning identity's traffic the peer keys on; §4M.16 established that nothing
+OVMX transmits differs by one non-per-run byte from a successful join, and this
+bracket does not revisit that. (3) `type 9` ×4 / `type 8` ×4 on a rejoin against
+×2 / ×2 on a join is recorded as a figure and is **not** interpreted — the 8/9
+pair is undecoded (§3 of the followup design note).
+
+Re-derive every figure: `tools/cluster/scs_join_capability_measure.py`
+(`EXPECTED_449`). Captures:
+`vms449-{A1,B1,C1,B2,C2,B3,C3,B4,C4}-lab2-vaxlab6-20260805.pcap`.
+
+> **⚠ THE OVMX TAP MAC IS PER-POD.** `vaxlab-6` puts OVMX on
+> `26:8b:49:99:95:3c`; `vaxlab-4` (§4(O), §4(O.1)) used `4e:83:cd:c4:fe:54`. The
+> lab-2 README's "every replica reuses the same node MACs by design" is true of
+> the **VAX** nodes (`aa:00:04:00:01:04`) and not of the OVMX tap. Measuring
+> this bracket with the other bracket's MAC returns zero for every figure and
+> reads as a total wire failure. Each `EXPECTED*` dict carries its own.
+
+---
+
+#### 4(O.3) The refusal REPLICATES on a second pod — the `vms-449` replication (GROUNDED live, `vms-449`)
+
+§4(O.2) answered the rejoin question on one pod. A single pod cannot separate
+*"a returning OVMX identity is refused"* from *"`vaxlab-6` was sick"*. This is
+the same experiment on **`vaxlab-7`** — a lab-2 pod scaled up fresh for it,
+`CLUSTER_NODES=2` verified before the first run, never having seen an OVMX node
+— with the **same binary** as §4(O.2) (a build of `main` at `f874b04`), default
+environment, no switches. `SCSSYSTEMID`s 1520–1523. Identity is proven from the
+capture bytes on every run (guardrail 18).
+
+| run | role | identity | CM 190 tx | CM 190 rx | peer DISCONNECT_REQ/RSP rx | verdict |
+|---|---|---|---|---|---|---|
+| `A1` | first join | `OVMXM0` | **504** | **568** | 3 / 3 | **JOINED, t+13 s**, `XITDONE=1` |
+| `B1` | rejoin #1 | `OVMXM0` | **14** | **11** | **0 / 0** | **REFUSED**, `XITDONE=0` |
+| `C1` | control | `OVMXN1` | **502** | **568** | 3 / 3 | JOINED, t+13 s |
+
+**Both discriminators reproduce, and the refused census is identical.** The
+returning identity's whole message census on `vaxlab-7` — `cm190 tx=14 rx=11`,
+OVMX-sent `0`×2 `1`×2 `2`×2 `3`×2 `6`×2 `9`×4, peer-sent `0`×2 `1`×2 `2`×2
+`3`×2 `8`×4 — is **the same in every field** as all four refused rejoins on
+`vaxlab-6`, on a pod that shares no state with it. The peer again sends **no**
+DISCONNECT_REQ and **no** DISCONNECT_RSP on the rejoin while sending ×3 of each
+on both joining runs. So the finding of §4(O.2) is a property of OVMX, not of
+one pod.
+
+**⚠ FOUR FURTHER RUNS WERE STARTED AND ARE VOID — recorded, not hidden.**
+`B2`/`C2`/`B3`/`C3` were to extend this to three rejoins. The lab pod terminated
+at `2026-08-05T18:58:50Z` (exit 255, `RESTARTS=1`) and restarted at `18:59:01Z`,
+rebooting both VAXes *during* `B2`; the console had already begun returning
+empty `CLUSTER_NODES` reads. `A1`/`B1`/`C1` all completed before `18:56:58` and
+are unaffected. **The void runs are discarded on harness grounds — the restart,
+not their figures.** That order matters: a run whose lab rebooted under it does
+not get to vote either way (guardrail 19). Their captures are not archived and
+no figure from them appears in this spec.
+
+**What this therefore does and does not establish.** It establishes that the
+refusal and both wire discriminators reproduce on an independent virgin pod. It
+contains **one** rejoin, so it does **not** independently establish the "three
+consecutive rejoins, so a single refusal is not a fluke" property — that rests
+on §4(O.2)'s four. `check_449r_bracket_shape()` asserts this weaker shape
+deliberately and must not be conflated with `check_449_bracket_shape()`.
+
+> **⚠ A THIRD DISTINCT OVMX TAP MAC.** `vaxlab-7` mints
+> `3a:ad:35:5d:23:80`, against `vaxlab-6`'s `26:8b:49:99:95:3c` and
+> `vaxlab-4`'s `4e:83:cd:c4:fe:54`. Three pods, three taps — independent
+> confirmation of the per-pod trap recorded in §4(O.2).
+
+Re-derive every figure: `tools/cluster/scs_join_capability_measure.py`
+(`EXPECTED_449R`). Captures:
+`vms449r-{A1,B1,C1}-lab2-vaxlab7-20260805.pcap`.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

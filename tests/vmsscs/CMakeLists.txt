@@ -732,6 +732,46 @@ set_tests_properties(scs_join_capability_mutants PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 300
 )
+
+# vms-449 - THE MUTATION BATTERY FOR THE REJOIN BRACKET'S SHAPE.
+#
+# vms-449 asked vms-2f3's question on the tree that joins and recorded the
+# answer: a returning OVMX identity is REFUSED, four times, on a virgin pod,
+# with four fresh identities admitted around it (spec sec 4(O.2),
+# EXPECTED_449). A negative result of that cost is only worth what the
+# experiment behind it was worth, and every property that makes it an
+# experiment rather than nine runs -- controls BETWEEN the tests and closing
+# the bracket, three-or-more rejoins, one subject identity no control shares,
+# every control joining -- lives in check_449_bracket_shape().
+#
+# It scores a SECOND battery against check_449r_bracket_shape(), the vms-449
+# replication on a different pod (spec sec 4(O.3), EXPECTED_449R). That bracket
+# is deliberately weaker -- one rejoin, not three -- so it gets its own check
+# and its own mutants; the extra rules it DOES carry are the cross-checks that
+# make it a replication at all (different pod, different tap MAC, different
+# subject identity from EXPECTED_449). The two are scored separately on
+# purpose: folded together, a mutant of one could be "killed" by the other's
+# rules and score a pass it did not earn.
+#
+# So this gate does not assert the check passes. It applies each mutant alone
+# and requires the check to RED, restoring and re-verifying between each; a
+# mutant that changes nothing is scored a FAILURE, never a kill. Needs no
+# captures, no lab and no network: it runs everywhere including CI, which is
+# the half of the measurement CI can actually hold. The COUNT is printed by the
+# test, not restated here.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_449_bracket_shape
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_449_bracket_shape.py)
+else()
+    add_test(NAME scs_449_bracket_shape
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_449_bracket_shape_no_python3.cmake)
+endif()
+set_tests_properties(scs_449_bracket_shape PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 120
+)
 # vms-760 - MSCP-over-SCS disk-client command builders: SET CONTROLLER
 # CHARACTERISTICS (0x04) + GET UNIT STATUS (0x03) byte-exact vs the golden af2
 # joiner commands, plus the END-response parser (0x84/0x83, status + returned

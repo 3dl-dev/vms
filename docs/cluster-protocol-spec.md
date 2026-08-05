@@ -3339,7 +3339,7 @@ OWN MOTIVATION.** `E8` joined with disk discovery *entirely* suppressed, on the
 same schedule as the arms that ran it. Nothing here says the disk run is
 useless — §4c.8 shows a real joiner performing it, and this lab's admission
 simply does not gate on it — but "the run must happen inside the 1.4–4.4 s
-window or the join suffers" is not a claim this lab supports. Filed, not fixed.
+window or the join suffers" is not a claim this lab supports. Filed as `vms-5c7e`, not fixed.
 
 **A HARNESS DEFECT FOUND WHILE RUNNING THIS, AND EVERY FIGURE ABOVE DEPENDS ON
 THE FIX.** `tools/lab2run.sh` stages the daemon to `/lab/SCSD.EXE`, and `/lab`

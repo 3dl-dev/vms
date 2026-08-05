@@ -34,6 +34,12 @@ static void check_bytes(const uint8_t *got, const uint8_t *want, size_t n, const
 }
 
 static uint16_t le16(const uint8_t *p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+static uint64_t le64(const uint8_t *p)
+{
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) { v = (v << 8) | p[i]; }
+    return v;
+}
 
 /* OVMX test identity. */
 static const uint8_t ovmx_mac[6] = { 0x02, 0x00, 0x00, 0x4f, 0x56, 0x58 };
@@ -238,6 +244,146 @@ static void test_incarnation_echo(void)
     check(le16(out + 44) == 11974, "mirror [30:32]==send_seq, not the incarnation (abs 44)");
 }
 
+/* vms-2f3: THIS SYSTEM'S INCARNATION at [66:74] (abs 80) is a live VMS
+ * absolute-time quadword, not the template's replayed one. A frozen value here
+ * is what made a peer hand a returning OVMX back the System Block -- and the
+ * stale VC sequence state -- of its previous incarnation, so the rejoin was
+ * admitted into a transition and then timed out.
+ *
+ * The template's own value is 0x00bc00947a678ebb (26-JUL-2026 14:35:33.59),
+ * which SDA on the real VAX1 rendered verbatim as OVMX's CSB "Incarnation".
+ * That literal is asserted here as the thing we must NOT emit by default. */
+static void test_incarnation_time(void)
+{
+    printf("[system incarnation: 0x41 START [66:74] is live per-boot (vms-2f3)]\n");
+    const uint64_t replayed = 0x00bc00947a678ebbULL; /* the captured joiner's own value */
+
+    struct scs_start_params sp;
+    memset(&sp, 0, sizeof(sp));
+    memcpy(sp.dst_mac, vax1_mac, 6);
+    memcpy(sp.src_mac, ovmx_mac, 6);
+    memcpy(sp.src_logical, ovmx_logical, 6);
+    memcpy(sp.peer_logical, vax1_mac, 6);
+    sp.scssystemid = 1030;
+    strncpy(sp.node_name, "OVMX", sizeof(sp.node_name) - 1);
+    sp.config_round = 0;
+    sp.send_seq = 1;
+    sp.recv_ack = 0;
+    sp.incarnation = 1;
+
+    uint8_t out[SCS_START_FRAME_LEN];
+
+    /* 0 => the control arm: template bytes survive untouched. This is what
+     * OVMX_INCARNATION_FROZEN=1 selects, and it must still be reachable so the
+     * failing case stays reproducible. */
+    sp.incarnation_time = 0;
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "build with incarnation_time 0");
+    check(le64(out + 80) == replayed,
+          "0 leaves the replayed template quadword at [66:74] (abs 80)");
+
+    /* A live value must land byte-exact, little-endian, at abs 80. Two distinct
+     * values, because a field that is written once and never varies would pass
+     * a single-value assertion by accident. */
+    const uint64_t t1 = 0x00bc04d17ccba480ULL; /*  1-AUG-2026 00:02:21 */
+    const uint64_t t2 = 0x00bc04d200000000ULL; /*  a later, unrelated stamp */
+    sp.incarnation_time = t1;
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "build with a live incarnation_time");
+    check(le64(out + 80) == t1, "[66:74] carries the supplied quadword (abs 80)");
+    check(le64(out + 80) != replayed, "the replayed constant is gone");
+    sp.incarnation_time = t2;
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "rebuild with a second incarnation_time");
+    check(le64(out + 80) == t2, "[66:74] tracks the supplied value, not a constant");
+
+    /* It must disturb nothing else. The bytes on either side of the quadword
+     * are the software-version string [58:66] and the "VAX " hardware tag at
+     * [74:78]; the counters and the node name must also be untouched. */
+    check(memcmp(out + 72, SCS_START_SW_VERSION, 8) == 0,
+          "software version [58:66] intact (abs 72)");
+    check(memcmp(out + 88, "VAX ", 4) == 0,
+          "the byte after the quadword [74:78] is intact (abs 88)");
+    check(le16(out + 36) == 1, "[22:24] incarnation COUNTER untouched (abs 36)");
+    check(le16(out + 34) == 1, "send_seq [20:22] untouched (abs 34)");
+    check(memcmp(out + 104, "OVMX    ", 8) == 0, "node name [90:98] intact (abs 104)");
+
+    /* The two "incarnation" fields are independent: the [22:24] counter is the
+     * value the MEMBER attributes to us, the [66:74] quadword is what WE
+     * advertise about ourselves. Conflating them is the mistake that made an
+     * earlier byte-diff clear the wrong field. */
+    sp.incarnation = 3;
+    sp.incarnation_time = t1;
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "build with both incarnation fields set");
+    check(le16(out + 36) == 3, "counter [22:24] carries 3 (abs 36)");
+    check(le64(out + 80) == t1, "quadword [66:74] carries the timestamp (abs 80)");
+}
+
+/* vms-2f3: the SECOND quadword, [98:106] (abs 112) -- when the frame was
+ * composed. Real peers carry 2-3 DIFFERENT values inside one capture and one of
+ * VAX3's matches the OPCOM line it printed as it built the frame; OVMX replayed
+ * the template's 26-JUL-2026 14:48:50.66 on every frame it ever sent. It is a
+ * separate field from the incarnation and must be settable independently, so
+ * the two can be bisected against the lab one at a time. */
+static void test_message_time(void)
+{
+    printf("[message timestamp: 0x41 START [98:106] is live per frame (vms-2f3)]\n");
+    const uint64_t replayed = 0x00bc009655d32a40ULL; /* 26-JUL-2026 14:48:50.66 */
+    const uint64_t inc      = 0x00bc04d17ccba480ULL;
+    const uint64_t m1       = 0x00bc0552abcdef00ULL;
+    const uint64_t m2       = 0x00bc0552abcdff00ULL;
+
+    struct scs_start_params sp;
+    memset(&sp, 0, sizeof(sp));
+    memcpy(sp.dst_mac, vax1_mac, 6);
+    memcpy(sp.src_mac, ovmx_mac, 6);
+    memcpy(sp.src_logical, ovmx_logical, 6);
+    memcpy(sp.peer_logical, vax1_mac, 6);
+    sp.scssystemid = 1030;
+    strncpy(sp.node_name, "OVMX", sizeof(sp.node_name) - 1);
+    sp.config_round = 0;
+    sp.send_seq = 1;
+    sp.incarnation = 1;
+
+    uint8_t out[SCS_START_FRAME_LEN];
+
+    sp.message_time = 0;
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "build with message_time 0");
+    check(le64(out + 112) == replayed,
+          "0 leaves the replayed template quadword at [98:106] (abs 112)");
+
+    sp.message_time = m1;
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "build with a live message_time");
+    check(le64(out + 112) == m1, "[98:106] carries the supplied quadword (abs 112)");
+    sp.message_time = m2;
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "rebuild with a second message_time");
+    check(le64(out + 112) == m2, "[98:106] tracks the supplied value (abs 112)");
+
+    /* The two quadwords are INDEPENDENT: a real node's incarnation is fixed for
+     * the life of a boot while this one moves every frame, so setting one must
+     * never move the other. */
+    sp.incarnation_time = inc;
+    sp.message_time = m1;
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "build with both quadwords set");
+    check(le64(out + 80) == inc, "[66:74] holds the incarnation (abs 80)");
+    check(le64(out + 112) == m1, "[98:106] holds the message time (abs 112)");
+    sp.message_time = m2;
+    memset(out, 0xAA, sizeof(out));
+    check(scs_start_build(&sp, out) == 0, "advance only the message time");
+    check(le64(out + 80) == inc, "[66:74] is UNCHANGED when the frame time moves");
+    check(le64(out + 112) == m2, "[98:106] moved (abs 112)");
+
+    /* [98:106] is the last field in the 106-byte SCA content: nothing may be
+     * written past it, and the node name immediately before it must survive. */
+    check(memcmp(out + 104, "OVMX    ", 8) == 0, "node name [90:98] intact (abs 104)");
+    check(SCS_START_FRAME_LEN == 14 + 106, "frame is 14 + 106 bytes; [98:106] is the tail");
+}
+
 static void test_parse_real(void)
 {
     printf("[parse real captured 0x41 frames]\n");
@@ -275,6 +421,8 @@ int main(void)
     test_build_start();
     test_build_ack();
     test_incarnation_echo();
+    test_incarnation_time();
+    test_message_time();
     test_parse_real();
     printf("test_scs_start: %d failure(s)\n", failures);
     return failures ? 1 : 0;

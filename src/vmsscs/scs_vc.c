@@ -82,6 +82,12 @@ void scs_vc_reset_seq(struct scs_vc *vc)
     vc->unacked_sent_ms = 0;
     vc->retransmit_count = 0;
     vc->initialized = 1;
+    /* vms-abc: a fresh post-START VC has seen no sequenced message yet, and is
+     * not broken. The CUMULATIVE counters (seq_gaps, breaks) are observability
+     * and deliberately survive the reset. */
+    vc->seq_anchored = 0;
+    vc->broken = 0;
+    vc->break_reason = (int)SCS_VC_BREAK_NONE;
 }
 
 void scs_vc_note_recv(struct scs_vc *vc, uint16_t peer_send_seq)
@@ -437,6 +443,203 @@ const char *scs_vc_event_name(enum scs_vc_event ev)
     }
 }
 
+/* ========================================================================= *
+ * vms-abc -- BREAKING THE CIRCUIT WHEN A MESSAGE GUARANTEE FAILS (p. 2-31).
+ *
+ * See scs_vc.h for the quoted rule, the four labeled OVMX design choices, the
+ * exact statement of what the kill switch gates, and the measurement showing
+ * this detector fires on nothing OVMX has ever RECEIVED.
+ * ========================================================================= */
+
+const char *scs_vc_break_reason_name(enum scs_vc_break_reason r)
+{
+    switch (r) {
+    case SCS_VC_BREAK_NONE:
+        return "none";
+    case SCS_VC_BREAK_SEQ_GAP:
+        return "message sequentiality guarantee failed (sequence gap)";
+    case SCS_VC_BREAK_DELIVERY:
+        return "message delivery guarantee failed (retransmits exhausted)";
+    case SCS_VC_BREAK_LOCAL:
+        return "explicit local teardown";
+    default:
+        return "?";
+    }
+}
+
+int scs_vc_break_enabled(void)
+{
+    /* Read fresh every call (see scs_vc.h): a cached answer could not be
+     * bracketed by a test, and guardrail 23 requires the switch be RUN. */
+    const char *v = getenv(SCS_VC_NO_BREAK_ENV);
+    if (v == NULL || v[0] == '\0') {
+        return 1;
+    }
+    if (v[0] == '0' && v[1] == '\0') {
+        return 1;
+    }
+    return 0;
+}
+
+/* 1 iff 16-bit sequence `a` is strictly ahead of `b`, modular over the 16-bit
+ * space (the same "reached" convention scs_vc_note_peer_ack already uses). */
+static int seq_ahead(uint16_t a, uint16_t b)
+{
+    uint16_t d = (uint16_t)(a - b);
+    return d != 0 && d < 0x8000u;
+}
+
+enum scs_vc_seq_verdict scs_vc_check_recv_seq(const struct scs_vc *vc,
+                                              uint16_t peer_send_seq,
+                                              unsigned *missing_out)
+{
+    if (missing_out != NULL) {
+        *missing_out = 0;
+    }
+    if (vc == NULL) {
+        return SCS_VC_SEQ_DUPLICATE;
+    }
+    /* A pure ack (a 0x48 credit-return: send_seq is 0 in 622/622 observed
+     * frames, spec sec 4h(3)) carries no sequence and cannot breach
+     * sequentiality. */
+    if (peer_send_seq == 0) {
+        return SCS_VC_SEQ_DUPLICATE;
+    }
+    if (!vc->seq_anchored) {
+        return SCS_VC_SEQ_ANCHOR;
+    }
+    if (!seq_ahead(peer_send_seq, vc->seq.recv_seq)) {
+        return SCS_VC_SEQ_DUPLICATE; /* a retransmit -- 506 of these in the captures */
+    }
+    unsigned ahead = (unsigned)(uint16_t)(peer_send_seq - vc->seq.recv_seq);
+    if (ahead == 1u) {
+        return SCS_VC_SEQ_IN_ORDER;
+    }
+    if (missing_out != NULL) {
+        *missing_out = ahead - 1u;
+    }
+    return SCS_VC_SEQ_GAP;
+}
+
+enum scs_vc_seq_verdict scs_vc_note_recv_checked(struct scs_vc *vc,
+                                                 uint16_t peer_send_seq,
+                                                 unsigned *missing_out)
+{
+    if (missing_out != NULL) {
+        *missing_out = 0;
+    }
+    if (vc == NULL) {
+        return SCS_VC_SEQ_DUPLICATE;
+    }
+    enum scs_vc_seq_verdict v = scs_vc_check_recv_seq(vc, peer_send_seq, missing_out);
+    if (v == SCS_VC_SEQ_GAP) {
+        vc->seq_gaps++;
+    }
+    if (peer_send_seq != 0) {
+        vc->seq_anchored = 1;
+    }
+    /* Advance exactly as scs_vc_note_recv() would -- including on a gap; see
+     * the scs_vc.h note on why. */
+    scs_vc_note_recv(vc, peer_send_seq);
+    return v;
+}
+
+int scs_vc_delivery_failed(const struct scs_vc *vc)
+{
+    if (vc == NULL || !vc->have_unacked) {
+        return 0;
+    }
+    return vc->retransmit_count >= SCS_VC_DELIVERY_RETRY_LIMIT;
+}
+
+unsigned scs_vc_break(struct scs_vc *vc, struct scs_pb *pb,
+                      enum scs_vc_break_reason reason, FILE *log)
+{
+    if (pb == NULL) {
+        return 0;
+    }
+
+    if (!scs_vc_break_enabled()) {
+        /* THE KILL SWITCH. Nothing is torn down. One line, so a run log can
+         * never read as "no circuit was ever broken" when the truth is
+         * "breaking was switched off". */
+        if (log != NULL) {
+            fprintf(log,
+                    "SCSD-W-VCBREAKOFF, %s on the circuit to"
+                    " %02x:%02x:%02x:%02x:%02x:%02x -- teardown SUPPRESSED by %s;"
+                    " %u connection(s) left as they were, VC state left %s\n",
+                    scs_vc_break_reason_name(reason),
+                    pb->remote_port_addr[0], pb->remote_port_addr[1],
+                    pb->remote_port_addr[2], pb->remote_port_addr[3],
+                    pb->remote_port_addr[4], pb->remote_port_addr[5],
+                    SCS_VC_NO_BREAK_ENV, scs_pb_cdt_count(pb),
+                    scs_vc_state_name(pb->vc_state));
+            fflush(log);
+        }
+        return 0;
+    }
+
+    unsigned n = scs_pb_cdt_count(pb);
+
+    if (log != NULL) {
+        fprintf(log,
+                "SCSD-W-VCBREAK, virtual circuit to port"
+                " %02x:%02x:%02x:%02x:%02x:%02x (node %s, VC state %s) is being"
+                " EXPLICITLY BROKEN: %s -- breaking %u connection(s) (p. 2-31)\n",
+                pb->remote_port_addr[0], pb->remote_port_addr[1],
+                pb->remote_port_addr[2], pb->remote_port_addr[3],
+                pb->remote_port_addr[4], pb->remote_port_addr[5],
+                (pb->sb != NULL && pb->sb->node_name[0]) ? pb->sb->node_name : "?",
+                scs_vc_state_name(pb->vc_state),
+                scs_vc_break_reason_name(reason), n);
+    }
+
+    /* (1) Drive every connection this circuit supports through the connection
+     * state machine. p. 2-28: "SCA specifies that all CDTs corresponding to
+     * connections supported by a virtual circuit be queued to the Path Block
+     * corresponding to that circuit. If the circuit is broken for any reason,
+     * it is then a relatively simple matter to scan this queue to determine
+     * which connections have also been lost". */
+    for (struct scs_cdt *c = scs_pb_first_cdt(pb); c != NULL; c = scs_cdt_next_on_pb(c)) {
+        enum scs_conn_state was = scs_conn_state_of(c);
+        struct scs_conn_transition t = scs_conn_fsm_step(c, SCS_CONN_EV_VC_LOST);
+        if (log != NULL) {
+            fprintf(log,
+                    "SCSD-W-VCLOSSCONN, conid=0x%08X remote=0x%08X %s->%s:"
+                    " connection broken by VC loss (%s -> %s)%s\n",
+                    (unsigned)c->local_conid, (unsigned)c->remote_conid,
+                    c->local_sysap[0] ? c->local_sysap : "?",
+                    c->remote_sysap[0] ? c->remote_sysap : "?",
+                    scs_conn_state_name(was), scs_conn_state_name(scs_conn_state_of(c)),
+                    t.suppressed ? " [state NOT tracked -- OVMX_NO_CONN_FSM]" : "");
+        }
+    }
+
+    /* (2) Notify the SYSAPs. p. 2-28: the VC-loss error handler lives in the
+     * CDT and is supplied by the SYSAP as an argument to CONNECT and ACCEPT.
+     * Run AFTER the state machine so a handler that inspects its connection
+     * sees it already broken. */
+    (void)scs_cdl_vc_loss(pb);
+
+    /* (3) The circuit itself. p. 2-11 names no "broken" state; a broken circuit
+     * is simply not open. The Path Block is NOT closed here -- design choice 4
+     * in scs_vc.h. */
+    scs_pb_set_vc_state(pb, SCS_VC_CLOSED);
+
+    /* (4) Record it. */
+    if (vc != NULL) {
+        vc->broken = 1;
+        vc->break_reason = (int)reason;
+        vc->breaks++;
+        vc->have_unacked = 0; /* nothing can be delivered on a circuit that is gone */
+    }
+
+    if (log != NULL) {
+        fflush(log);
+    }
+    return n;
+}
+
 const char *scs_vc_action_name(enum scs_vc_action act)
 {
     switch (act) {
@@ -453,4 +656,21 @@ const char *scs_vc_action_name(enum scs_vc_action act)
     default:
         return "?";
     }
+}
+
+/* vms-760: idempotent reply-sequence allocation. A retransmitted REQUEST must
+ * be answered with the SAME response sequence number, consuming nothing. */
+uint16_t scs_retx_reply_seq(struct scs_retx_seq *st, struct scs_seq_state *seq,
+                            uint16_t req_seq)
+{
+    if (st == NULL || seq == NULL) {
+        return 0;
+    }
+    if (st->valid && st->last_req == req_seq) {
+        return st->last_rsp;      /* retransmit -> replay, consume nothing */
+    }
+    st->last_req = req_seq;
+    st->last_rsp = scs_seq_advance(seq);
+    st->valid = 1;
+    return st->last_rsp;
 }

@@ -184,7 +184,66 @@ static const struct conn_rule conn_table[] = {
      * action it returns (send ACCEPT_RSP) is one OVMX has no builder for;
      * scsd.c LOGS the unemitted action rather than pretending it went out. */
     {SCS_CONN_CONNECT_SENT, SCS_CONN_EV_RCV_ACCEPT_REQ,
-     SCS_CONN_OPEN, SCS_CONN_ACT_SEND_ACCEPT_RSP, SCS_CONN_NOTIFY_ACCEPTED, 0}
+     SCS_CONN_OPEN, SCS_CONN_ACT_SEND_ACCEPT_RSP, SCS_CONN_NOTIFY_ACCEPTED, 0},
+
+    /* === OVMX ADDITIONS (doc == 0) -- VIRTUAL CIRCUIT LOSS (vms-abc) ========
+     *
+     * p. 2-31: "if either the guarantee of message delivery or the guarantee of
+     * message sequentiality cannot be satisfied, the virtual circuit between the
+     * ports involved will be explicitly broken (if it isn't already). If this
+     * happens, then every connection supported by this virtual circuit is also
+     * broken, and the SYSAPs participating in these connections are notified of
+     * the event."
+     *
+     * WHY doc == 0 EVEN THOUGH THE BOOK SAYS IT. The two things the rows encode
+     * are exactly the two things p. 2-31 states -- the connection is BROKEN (so
+     * the state is CLOSED, the state Figure 2-14 gives a connection that is not
+     * formed) and the SYSAP is NOTIFIED (so the notify bit is
+     * SCS_CONN_NOTIFY_DISCONNECTED, the same bit Figure 2-16 raises when SCS
+     * notifies a SYSAP that its connection went away). What is NOT in the book
+     * is an ARROW: no figure draws a VC-loss transition, and nothing in ch. 2
+     * says a VC loss is processed by the connection state machine as an event.
+     * Modelling it that way is an OVMX choice and is flagged as one, so a run
+     * log can never present these lines as figure transitions.
+     *
+     * ONE ROW PER STATE, no wildcards: the table is a list of (from, event)
+     * pairs and scs_conn_table_lookup() is a linear scan of it, so a wildcard
+     * would be a second mechanism. Written out, every row is independently
+     * walkable by a test.
+     *
+     * NO ACTION on any row. The circuit is gone; p. 2-31's whole point is that
+     * a message cannot be sent in its absence ("Any attempt to send a message
+     * from one port to another in the absence of a virtual circuit will fail").
+     * A row that asked for a DISCONNECT_REQ here would be asking OVMX to
+     * transmit into a circuit it has just declared broken. */
+
+    /* A CDT still queued to the Path Block but never formed. Nothing was
+     * broken, so nothing is notified -- but the row EXISTS so that a VC loss
+     * over a circuit carrying an unformed connection is not scored as an
+     * illegal event. */
+    {SCS_CONN_CLOSED, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, 0, 0},
+
+    {SCS_CONN_CONNECT_SENT, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0},
+    {SCS_CONN_CONNECT_ACK, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0},
+    {SCS_CONN_CONNECT_REC, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0},
+    {SCS_CONN_ACCEPT_SENT, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0},
+    {SCS_CONN_REJECT_SENT, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0},
+    {SCS_CONN_OPEN, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0},
+    {SCS_CONN_DISC_SENT, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0},
+    {SCS_CONN_DISC_ACK, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0},
+    {SCS_CONN_DISC_RECEIVED, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0},
+    {SCS_CONN_DISC_MATCH, SCS_CONN_EV_VC_LOST,
+     SCS_CONN_CLOSED, SCS_CONN_ACT_NONE, SCS_CONN_NOTIFY_DISCONNECTED, 0}
 };
 
 #define CONN_TABLE_ROWS ((unsigned)(sizeof(conn_table) / sizeof(conn_table[0])))
@@ -421,11 +480,20 @@ unsigned scs_conn_report_stuck(const struct scs_cdl *cdl, FILE *fp)
     }
 
     unsigned stuck = 0;
+    unsigned connections = 0;
     for (unsigned i = 0; i < SCS_CDL_ENTRIES; i++) {
         const struct scs_cdt *cdt = cdl->entry[i];
         if (cdt == NULL || !cdt->in_use) {
             continue;
         }
+        /* vms-7fe: a p. 2-48 LISTENING CDT describes no connection -- it has no
+         * peer, no circuit and no Figure 2-14 state -- so it is neither stuck
+         * nor counted. Reporting one as "parked off OPEN" would put a permanent
+         * false warning in every run's exit summary. */
+        if (cdt->listening) {
+            continue;
+        }
+        connections++;
         enum scs_conn_state st = scs_conn_state_of(cdt);
         if (st == SCS_CONN_OPEN) {
             continue;
@@ -443,7 +511,7 @@ unsigned scs_conn_report_stuck(const struct scs_cdl *cdl, FILE *fp)
     }
     if (fp != NULL) {
         fprintf(fp, "SCSD-I-CONNSTUCK, %u of %u in-use connection(s) parked off OPEN\n",
-                stuck, scs_cdl_in_use_count(cdl));
+                stuck, connections);
         fflush(fp);
     }
     return stuck;
@@ -509,6 +577,8 @@ const char *scs_conn_event_name(enum scs_conn_event ev)
         return "RCV_DISCONNECT_REQ";
     case SCS_CONN_EV_RCV_DISCONNECT_RSP:
         return "RCV_DISCONNECT_RSP";
+    case SCS_CONN_EV_VC_LOST:
+        return "VC_LOST";
     default:
         return "?";
     }

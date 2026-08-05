@@ -130,9 +130,15 @@
  *     occupy the three CDL slots. A second peer's connections are not tracked;
  *     scsd.c logs SCSD-W-CONNSLOT and carries on rather than allocating a
  *     Con.ID that differs from the one on the wire.
- *   - Nothing here has a SYSAP: msg_input / dgram_input / vc_loss_handler are
- *     never installed by the daemon, so scs_cdl_vc_loss() has no production
- *     caller either.
+ *   - msg_input and dgram_input are STILL never installed by the daemon, so the
+ *     p. 2-29 delivery path above stays dead.
+ *   - vc_loss_handler IS installed now: as of vms-abc, scsd.c's conn_bind()
+ *     puts scsd_sysap_vc_loss() on every CDT it creates, so
+ *     scs_cdl_vc_loss()'s notification loop notifies somebody. It has TWO
+ *     production callers, and both therefore reach that handler:
+ *     scs_pb_depart() (vms-17f, the departure sweep, gated by
+ *     OVMX_NO_PEER_DEPART) and scs_vc_break() (vms-abc, the p. 2-31
+ *     message-guarantee failures, gated by OVMX_NO_VC_BREAK).
  */
 #ifndef SCS_CDT_H
 #define SCS_CDT_H
@@ -182,8 +188,28 @@ extern "C" {
  */
 #define SCS_CDT_CONID_TAG 0x4F58u
 
+/*
+ * vms-578: THE TAG IS A DEFAULT, NOT A CONSTANT ANY MORE.
+ *
+ * worktree-760 made the high half of every OVMX Con.ID PER-INCARNATION
+ * (scsd.c's ovmx_conid_base(): a clock+pid mix, or OVMX_CONID_BASE). The reason
+ * is vms-2f3's: a node that returns must not present the handles its previous
+ * incarnation used. That is incompatible with a compile-time tag -- the CDL
+ * refused every real Con.ID as "not one this node could have issued", so no
+ * connection got a CDT at all and the whole vms-e1a/vms-dd5 layer went dark
+ * (MEASURED: 19 assertions in test_scsd_wire.c, every one of them a missing
+ * CDT).
+ *
+ * So the tag becomes SETTABLE, defaulting to 0x4F58. Whoever chooses the
+ * incarnation's base calls scs_cdt_set_conid_tag() once at startup; everything
+ * else keeps asking. The CHECK is unchanged in strength -- a Con.ID whose high
+ * half is not THIS node's is still refused -- it is just asking a variable now.
+ */
+void scs_cdt_set_conid_tag(uint16_t tag);
+uint16_t scs_cdt_conid_tag(void);
+
 /* Compose / decompose a CONID (p. 2-29: the low 16 bits index the CDL). */
-#define SCS_CDT_MAKE_CONID(slot) (((uint32_t)SCS_CDT_CONID_TAG << 16) | ((uint32_t)(slot) & 0xFFFFu))
+#define SCS_CDT_MAKE_CONID(slot) (((uint32_t)scs_cdt_conid_tag() << 16) | ((uint32_t)(slot) & 0xFFFFu))
 #define SCS_CDT_CONID_SLOT(conid) ((unsigned)((uint32_t)(conid) & 0xFFFFu))
 
 struct scs_cdt;
@@ -217,6 +243,23 @@ typedef void (*scs_credit_special_fn)(struct scs_cdt *cdt, unsigned credit, void
  */
 struct scs_cdt {
     int in_use; /* 0 = released (p. 2-30: released but NOT deallocated) */
+
+    /*
+     * vms-7fe: THIS CDT IS A LISTENING CDT, NOT A CONNECTION.
+     *
+     * p. 2-48: "Each SDIR contains the CONID of a special 'listening CDT' that
+     * is also allocated at this time. Instead of containing the address of a
+     * regular message input routine, a listening CDT contains the address of
+     * the SYSAP's routine for handling incoming connect requests." So it is a
+     * CDT in every structural sense -- it occupies a CDL slot and has a CONID --
+     * but it describes no connection: it has no peer, no circuit, no remote
+     * CONID and no Figure 2-14 state. Set only by scs_sdir_listen()
+     * (src/vmsscs/scs_sdir.c); everything that reports on CONNECTIONS must skip
+     * it, which is why the flag is explicit rather than inferred from "pb is
+     * NULL and remote_sysap is empty" -- a connection CDT is briefly in that
+     * shape too, between allocation and binding.
+     */
+    int listening;
 
     /* p. 2-28: names of the local and remote SYSAPs on this connection. */
     char local_sysap[SCS_CDT_SYSAP_NAME_LEN + 1];
@@ -325,6 +368,37 @@ struct scs_cdt {
      * scsd.c is in today. */
     scs_credit_special_fn special_emit;
     void                 *special_emit_ctx;
+
+    /*
+     * vms-b1d: this connection's DATAGRAM buffer account. "The number of
+     * datagram buffers requested by the SYSAP is stored in the CDT that
+     * describes the connection." (p. 2-42) Owned entirely by
+     * src/vmsscs/scs_dgram.c -- scs_cdt.c only zeroes these with the rest of
+     * the CDT at open and never reads them. See scs_dgram.h for the page
+     * cites, for why the account is on the RECEIVE path and not the send path,
+     * and for the honest statement that no production caller routes a datagram
+     * through it.
+     *
+     * NOTE that this is NOT credit. p. 2-42: "SCA does not provide a flow
+     * control mechanism for the datagram service." The message account above
+     * blocks a sender; this one silently discards a receipt. Do not conflate.
+     */
+
+    /* p. 2-42: "the CDT's count of datagram buffers available to this
+     * connection" -- decremented on delivery, restored when the SYSAP returns
+     * the buffer. Zero means every datagram arriving for this connection is
+     * discarded, even with buffers free in the port DFREEQ. */
+    unsigned dgram_buffers;
+
+    /* The number requested at CONNECT/ACCEPT (p. 2-42), kept so the run log
+     * can show how far the available count has fallen from its extension. */
+    unsigned dgram_extended;
+
+    /* INV-6 visibility (an OVMX addition -- see scs_dgram.h). `no_quota` is the
+     * p. 2-42 discard made when dgram_buffers is 0 and the buffer goes back to
+     * the DFREEQ; the port-wide empty-DFREEQ discard is counted on the PDT. */
+    unsigned long dgram_delivered;
+    unsigned long dgram_discards_no_quota;
 };
 
 /*
@@ -390,6 +464,27 @@ struct scs_cdt *scs_cdl_alloc_conid(struct scs_cdl *cdl, uint32_t conid,
  * scs_cdl_release - the connection is broken. Dequeues the CDT from its Path
  * Block and marks it unused, but leaves it in its CDL slot for reuse (p. 2-30:
  * "released (but not deallocated)"). No-op on NULL or an already-free CDT.
+ *
+ * vms-61b: also RETURNS this connection's share of the port MFREEQ -- the
+ * buffers p. 2-43 contributed at connection formation that are STILL SITTING IN
+ * the queue, i.e. `receive_credit + pending_receive_credit`, are subtracted from
+ * cdt->pb->pdt->mfreeq_count (saturating at 0). CORRECTED vms-096: this used to
+ * subtract `extended_credits`, the whole formation deposit, which charges the
+ * port a second time for every buffer already dequeued into the SYSAP's hands
+ * by mfreeq_take() -- the exact error vms-b1d had already fixed on the DFREEQ
+ * side below. Nothing else
+ * about the credit account is touched; in particular the CDT's Credit Wait
+ * queue is NOT drained here, because struct scs_credit_waiter is opaque to
+ * scs_cdt.c. A caller tearing a connection down must call
+ * scs_credit_wait_flush() first (scs_depart.c does).
+ *
+ * vms-b1d: and RETURNS this connection's share of the port DFREEQ, by the same
+ * p. 2-43 argument -- `dgram_buffers`, the deposit STILL SITTING IN the queue,
+ * is subtracted from cdt->pb->pdt->dfreeq_count (saturating at 0). Buffers the
+ * SYSAP still holds (dgram_extended - dgram_buffers) were already dequeued by
+ * scs_dgram_port_take and are deliberately NOT returned: they are gone with the
+ * connection that held them. Without this the port's datagram account grows on
+ * every connect/release cycle -- see the DEPOSIT RETURN note in scs_dgram.h.
  */
 void scs_cdl_release(struct scs_cdl *cdl, struct scs_cdt *cdt);
 
@@ -444,6 +539,28 @@ enum scs_deliver_result {
 };
 
 /*
+ * scs_cdl_resolve - THE p. 2-29 destination-CONID resolution, factored out so
+ * that every receive entry point resolves identically instead of each
+ * reimplementing it: the CDL index lookup plus the p. 2-35 source-CONID
+ * refusal. On SCS_DELIVER_OK `*out_cdt` is the connection; on any other result
+ * it is NULL. `out_cdt` may be NULL if the caller only wants the verdict.
+ *
+ * All three PACKET-DELIVERY entry points -- scs_cdl_deliver_message(),
+ * scs_cdl_deliver_datagram() and the accounted scs_dgram_cdl_deliver()
+ * (scs_dgram.h) -- resolve through THIS function and differ only in what they
+ * do with the CDT afterwards. Add a fourth and it resolves here too: two
+ * delivery paths that disagree about which connection a packet belongs to
+ * would be a real defect, and the point of this function is that they cannot.
+ *
+ * NOT a claim that this is the only scs_cdl_lookup() call in the tree. scsd.c
+ * calls it directly to drive the connection state machine off a received
+ * message type; that is an FSM step on an already-classified frame, not packet
+ * delivery to a SYSAP, and it applies no source-CONID refusal.
+ */
+int scs_cdl_resolve(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_conid,
+                    struct scs_cdt **out_cdt);
+
+/*
  * scs_cdl_deliver_message / scs_cdl_deliver_datagram - the p. 2-29 receive
  * path: "the remote port driver uses the low order 16 bits of the destination
  * CONID as an index into the remote node's CDL ... There it finds the address
@@ -491,12 +608,21 @@ unsigned scs_pb_cdt_count(const struct scs_pb *pb);
  * It does NOT release the CDTs and does NOT touch conn_state: what a connection
  * becomes after VC loss is the connection state machine's decision (vms-dd5).
  * It must be called BEFORE scs_pb_close(), which returns the Path Block to its
- * pool and would leave every CDT on it holding a dangling pb pointer.
+ * pool and would leave every CDT on it holding a dangling pb pointer. Since
+ * vms-17f that is enforced, not merely required: scs_pb_close() REFUSES a PB
+ * with a non-empty CDT queue (SCS_PB_CLOSE_CONNECTIONS_QUEUED). scs_depart.c's
+ * scs_pb_depart() is the one routine that performs the full sequence.
  */
 unsigned scs_cdl_vc_loss(struct scs_pb *pb);
 
 /* Number of in-use CDTs in the whole CDL. */
 unsigned scs_cdl_in_use_count(const struct scs_cdl *cdl);
+
+/* vms-7fe: mark this CDT as a p. 2-48 LISTENING CDT (see the field). Called by
+ * scs_sdir_listen() immediately after allocation, before anything can report on
+ * it. cdt_open() clears the flag with the rest of the descriptor, so a released
+ * listening CDT reused for a connection is not still marked. */
+void scs_cdt_set_listening(struct scs_cdt *cdt, int listening);
 
 #ifdef __cplusplus
 }

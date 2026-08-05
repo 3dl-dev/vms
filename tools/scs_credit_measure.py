@@ -39,6 +39,27 @@ import sys
 
 DEFAULT_CAPDIR = "/data/training/vax/cluster/captures"
 
+# THE LAB FENCE (vms-096). DEFAULT_CAPDIR is the LAB-1 grounding library and
+# every figure checked below is a lab-1 measurement. lab-2 replicas reuse
+# lab-1's SCSSYSTEMIDs and node MACs by design (tests/lab/README.md), so a
+# lab-2 capture deposited here silently moves every census -- six 2026-08-05
+# vaxlab-4 captures did exactly that and put 11 of this script's 30 checks red.
+# They now live in the /data/training/vax/cluster/captures-lab2 SIBLING. Full
+# rationale in tools/cluster/scs_disc_measure.py.
+LAB2_MARKER = "-lab2-"
+
+
+def lab1_only(paths):
+    """Return `paths` unchanged, or die naming every lab-2 capture in them."""
+    foreign = sorted(os.path.basename(p) for p in paths
+                     if LAB2_MARKER in os.path.basename(p))
+    if foreign:
+        raise SystemExit(
+            "lab fence: %d lab-2 capture(s) in the lab-1 grounding library. "
+            "Move them to a <capdir>-lab2 sibling and re-run; do NOT raise "
+            "EXPECTED to absorb them.\n  %s" % (len(foreign), "\n  ".join(foreign)))
+    return paths
+
 SCS_MARKER = b"\x4b\x13"
 # The SCS message-marker family. All three are SCS messages on the same
 # connections and all three carry the credit field at SCA [48:50]; 0x4113 (the
@@ -202,7 +223,7 @@ def measure_classes(capdir):
     c106_markers = collections.Counter()
     c106_values = collections.Counter()
     siblings = collections.defaultdict(collections.Counter)
-    paths = sorted(glob.glob(os.path.join(capdir, "*.pcap")))
+    paths = lab1_only(sorted(glob.glob(os.path.join(capdir, "*.pcap"))))
     for p in paths:
         for fr in frames(p):
             sca = fr[14:]

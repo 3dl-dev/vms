@@ -55,6 +55,14 @@ wire). Verified by re-measurement: the (1a) type field sits at frame-absolute
 
 ## 1. Specimens used
 
+**`vax3-2to3-established-join-20260730.pcap`** (17 705 frames, 83.7 s) — **the authority
+for an established join.** A third *real* VAX (VAX3, `SCSNODE=VAX3`,
+`SCSSYSTEMID=1027`, `VOTES=0`, root `[SYS2]`, MAC `08:00:2b:11:22:33`) built on the lab
+disk and booted into the **running 2-node cluster**, reaching MEMBER
+(`CLUSTER_NODES=3`). Every other join specimen in this library is a 1→2 *formation*;
+this is the only capture of a node being **admitted to an existing cluster**, which is
+the operation OVMX must reproduce. Grounds §4(m) and §4(n).
+
 | pcap | Frames (0x6007) | Used for |
 |---|---|---|
 | `scs-idle-baseline.pcap` | 36 | §4(b) HELLO baseline, §4(d) SCS envelope baseline |
@@ -197,6 +205,37 @@ multicast and directed) and `satellite-niscs-boot-solicit.pcap` frame 1100
 | 64 | 1 | constant `0x03` | unknown |
 | 65 | 3 | zero | unknown |
 | 68 | 4 | **connect/join nonce** | **GROUNDED**: `0x00000000` on every multicast HELLO, and the identical non-zero shared token (e.g. `ee 05 39 5b`) on every directed HELLO between VAX1/VAX2 *and* on the VAX3 boot SOLICIT — the same cluster-wide token the initial RE-specimens doc flagged. Confirmed frame examples: `scs-idle-baseline.pcap` frame 1 (zero, multicast) vs. frame 2/3 (`ee05395b`, directed); `satellite-niscs-boot-solicit.pcap` frame 1100 (`ee05395b`). |
+
+#### 4(a).0 Directed-HELLO addressing: abs 16 is the peer's LOGICAL address, not its HW MAC (GROUNDED, `vms-760`)
+
+On a **directed** HELLO the Ethernet destination (abs 0–5) and the SCA
+destination-logical address (abs 16–21) are **two different addresses**:
+
+| field | value |
+|---|---|
+| abs 0–5 | the peer's **hardware** MAC (where the frame is delivered) |
+| abs 16–21 | the peer's **cluster-logical** LAVC address `aa:00:04:00:<LE16(sysid)>` |
+| abs 24–29 | the **sender's own** cluster-logical address (§4a) |
+
+**GROUNDED**, `vax3-2to3-established-join-20260730.pcap` **frame 182** — VAX3
+answering VAX2's channel probe carries eth-dst `08:00:2b:78:56:b9` (VAX2's HW
+MAC) and abs 16 `aa:00:04:00:02:04` (VAX2's logical address).
+
+> **This corrects an earlier reading.** The rule was previously recorded as "the
+> wire mirrors abs 0 into abs 16." That inference came from a **2-node** lab in
+> which VAX1's HW MAC *is* its logical address (`aa:00:04:00:01:04`), so the two
+> fields were indistinguishable in every specimen available at the time. It is
+> wrong for any node whose HW MAC is not a DECnet `aa:00:04:..` address.
+>
+> **Failure signature if you mirror instead.** The peer silently DROPS the
+> reply. It re-sends its `0xb2` probe indefinitely (51 times in a 100 s OVMX
+> run) and never sends the `0xb4` that finalises the channel; a correct
+> exchange is **one** `0xb2` → `0xb3` → `0xb4` and then steady `0xb3`/`0xb4`
+> keepalives. With the channel unverified that peer never opens SCS connections
+> to the joiner at all, so the cluster-wide reconfiguration cannot run and the
+> joiner is stuck at `NEW` no matter how correct its SCS layer is. Because a
+> 2-node lab cannot exhibit this, **a third node with a non-DECnet HW MAC is
+> required to observe it** — which is how it was found.
 
 #### 4(a).1 The directed-HELLO offset-30 per-frame word — the NISCA channel-verify handshake (GROUNDED, `vms-d94`)
 
@@ -544,25 +583,36 @@ offset 14; add 14 for the absolute offset). The 106-byte START body:
 | 54 | 2 | constant `0x0240` = 576 | 28/28; inferred (SCS transport param, no tunable match) |
 | 56 | 2 | constant `0x00d8` = 216 | 28/28; inferred |
 | **58** | **8** | **software version string** `"VMS V7.3"` (ASCII) | **GROUNDED**: byte-exact `56 4d 53 20 56 37 2e 33` in **28/28** frames. *Correction to the earlier §4g note:* the field is `"VMS V7.3"` for **all** nodes; the previously-reported `"VMS V7.3f"` was a misread — the `f` (`0x66`) is the first byte of the per-boot token at [66:], which happened to be printable in the golden VAX1 frame (it is `0xd8`/`0x5d`/`0xae` in other boots). |
-| 66 | 5 | per-boot token (version-side) | inferred: incarnation/timestamp, **not identity** — changes across reboots of the *same* node (see below) |
-| 71 | 1 | token/flag (`0x00`/`0x01` observed) | unknown |
-| 72 | 2 | constant `0x00bc` = 188 | observed constant |
+| **66** | **8** | **THIS SYSTEM'S INCARNATION** — a single VMS absolute-time quadword (LE, 100 ns units since 17-NOV-1858), = the time this system was booted | **GROUNDED** (`vms-2f3`, 2026-08-01) four ways: (1) SDA on VAX1 rendered OVMX's CSB as `Incarnation 26-JUL-2026 14:35:33` — decoding our replayed template bytes `bb 8e 67 7a 94 00 bc 00` to the second; (2) the same dump gives real peers their own boot times (VAX3 `1-AUG-2026 00:02:21`, VAX1 `30-JUL 08:54:26`, which had not rebooted); (3) after OVMX started emitting a live value, VAX1 read back `Incarnation 1-AUG-2026 15:25:12`, matching the `0x00bc05526906b4a1` we emitted; (4) **public doc** — VSI *System Management Utilities Ref. Vol. II*, SHOW CLUSTER SYSTEMS class: *"INCARNATION: Unique 16-digit hexadecimal number established when the system is booted."* Sixteen hex digits **is** this quadword. |
 | **74** | **4** | **hardware-type string** `"VAX "` (ASCII) | **GROUNDED**: 28/28 frames |
 | 78 | 2 | constant `0x0006` | 28/28 |
 | 80 | 2 | `0x0a` = 10 = SYSGEN `CLUSTER_CREDITS` at [81] | GROUNDED numeric match (as §4g credit) |
 | 82 | 6 | zero | constant observed |
 | 88 | 2 | constant `0x0077` | 28/28 |
 | **90** | **8** | **node name** (ASCII, **fixed 8-byte, blank-padded, left-justified**) | **GROUNDED**: `"VAX1    "`, `"VAX2    "`, and `"ZK      "` — the 2-char `"ZK"` name occupies the same 8-byte field with 6 trailing spaces and **the following bytes do not shift** (28/28), proving a fixed-width blank-filled field, *not* the length-prefixed encoding HELLO uses (§4a). Distinct encoding from §4a. |
-| 98 | 6 | per-boot token (name-side) | inferred: incarnation/timestamp, not identity |
-| 104 | 2 | constant `0x00bc` = 188 | observed constant |
+| **98** | **8** | **frame-composition time** — a second VMS absolute-time quadword, distinct from [66:74] | **GROUNDED as a live timestamp** (`vms-2f3`): real peers carry two or three *different* values here inside a single capture, and one of VAX3's matches — to the second — the OPCOM line it printed as it built the frame. Its precise *role* is **not** grounded and OVMX does not claim one. What **is** grounded is the negative: **no real node ever sends a stale one.** |
 
-**The per-boot tokens ([66:71] and [98:104]) are NOT node identity.** They
-change across reboots of the *same* node: VAX1's tokens differ between the
-days-old golden capture and the fresh `cd0-boot*` captures although VAX1's
-name/SCSSYSTEMID are unchanged. Within a single join both nodes share sub-spans
-(e.g. `51 7b`, `e8 fb 01`), consistent with a cluster-wide time/incarnation
-component with per-node low bytes. Best label: **inferred incarnation/timestamp
-token**; not derivable further from passive capture.
+> ### ⚠ CORRECTION (2026-08-01, `vms-2f3`) — this table previously split
+> **[66:74]** into three fields (a 5-byte token at 66, a flag at 71, a "constant
+> `0x00bc`" at 72) and **[98:106]** into two. **Both are single 8-byte VMS
+> absolute-time quadwords.** The upper bytes only *look* constant because every
+> 2026-era VMS timestamp ends `bc 00`. The old "per-boot token, not derivable
+> from passive capture" reading was wrong in a way that mattered: OVMX replayed
+> the captured template's [66:74] on **every** boot, forever, advertising a
+> 26-JUL-2026 boot time for six days. Per VSI *OpenVMS Cluster Systems* App.
+> C.7.1, a connection reestablished after `RECNXINTERVAL` *without the node
+> having rebooted* earns a **CLUEXIT bugcheck** on the surviving side — a node
+> whose incarnation never changes is exactly that node. Fixed in `c302b7d`.
+>
+> **Method note for the rest of this spec:** any remaining "observed constant"
+> in a replayed template that decodes as a plausible 2020s VMS quadword should
+> be re-audited the same way before it is trusted. The honesty debt (`vms-70c`)
+> and this bug turned out to be the same defect class.
+
+**These quadwords are NOT node identity.** They change across reboots of the
+*same* node: VAX1's values differ between the days-old golden capture and the
+fresh `cd0-boot*` captures although VAX1's name/SCSSYSTEMID are unchanged. That
+observation was always correct — it is *why* they are timestamps.
 
 **SCS counters in the START phase.** Region [18:32] carries the same
 sequenced-message counters as §4d: a 16-bit counter at [20:22] mirrored at
@@ -848,20 +898,126 @@ target refusing `MSCP$DISK` — precisely Figure 2-15. **Caveat, stated:** the
 obviously need. The label is the best reading of a decisive behavioural
 partition, not a decoded field.
 
+**And its 16-bit reason code (p. 2-26) is NOT located.** Both `4` and `6` are
+supposed to carry an optional reason code. Measured over the two carrier
+populations with `tools/cluster/scs_reason_measure.py` — the two 16-bit words
+that follow the Con.ID pair at `[50:58]`:
+
+<!-- CENSUS-A: parsed by tests/vmsscs/test_scs_reason_figures.py. One digit per
+     figure, nowhere else in this section. Re-run the script; do not hand-edit. -->
+
+| msgtype | frames | pcaps | payload `[58:60]` | payload `[60:62]` |
+|---|---|---|---|---|
+| `4` REJECT_REQ | 453 | 19 | `0x0000` × 453 | `0x0001` × 453 |
+| `6` DISCONNECT_REQ | 220 | 25 | `0x0000` × 220 | `0x0000` × 131, `0x0001` × 89 |
+
+So `[58:60]` never carries a nonzero value in either frame — and `[60:62]`,
+which **an earlier revision of this paragraph wrongly described as invariant**,
+*varies* on DISCONNECT_REQ. It is a live field with an undecoded meaning, not a
+reason code we can read. SDA's `Rej/Disconn Reason` likewise reads zero on every
+CDT. With no nonzero reason code anywhere in the data, the offset cannot be
+derived from anything we hold. See the `vms-6b3` entry in §5 for the neighbour
+census — which shows `[58:60]` is *not* dead space across the envelope — and for
+the LABELED OVMX placement that stands in for the undecoded offset.
+
 **`6` = DISCONNECT — plausible, NOT grounded.** All 6 occurrences are on
 connections that completed `0,1,2,3` and finished their work, and they appear in
 matched pairs one per direction, which is Figure 2-16's matched
-`DISCONNECT_REQ`. But see the gap below.
+`DISCONNECT_REQ`. **THIS PARAGRAPH IS SUPERSEDED BY §4(h)(1b)
+(`vms-591`), which supplies the decisive part it lacked:** across all 47
+captures a type-`6` frame is answered by a type-`7` frame 262 times and by
+nothing else. Do not quote the "plausible" verdict above without it.
 
-**THE GAP THIS OPENS (do not paper over it): `5` and `7` DO NOT EXIST ON OUR
-WIRE.** If [46:48] enumerates the eight SCA connection-control messages in
-figure order, `5` is REJECT_RSP and `7` is DISCONNECT_RSP. **Neither value
-appears in any capture we hold** — not once, in 18,541 frames. So the REJECT and
-DISCONNECT dialogues of Figures 2-15 and 2-16 are each observed with only their
-REQ half. Three readings survive and we cannot separate them: (i) VMS does not
-send those responses; (ii) they are carried by the `0x48` credit-return that
-acks every sequenced message; (iii) our captures simply never contain one. **Do
-not build a `5` or `7` frame on this section.**
+**(1b) `5` AND `7` ARE ON OUR WIRE, AND THIS SECTION SAID THEY WERE NOT —
+CORRECTED BY `vms-591`.**
+
+The claim this replaces, REFUTED by the census below and kept only so a reader
+who saw the old text recognises what went:
+
+<!-- REFUTED-QUOTE-BEGIN -->
+> REFUTED by §4(h)(1b):
+> ~~"`5` and `7` DO NOT EXIST ON OUR WIRE … Do not build a `5` or `7` frame."~~
+<!-- REFUTED-QUOTE-END -->
+
+**Why it survived three revisions: a sampling error, not a decoding error.**
+Every census of [46:48] had been restricted to the SCA length classes
+**{62, 66, 110}**, because those are the classes the four *formation* messages
+occupy — the restriction is written into the table above and into
+`tools/cluster/scs_reason_measure.py`'s `CONNCTL_CLASSES`. **Both RESPONSE
+messages are shorter than all three.** They are **58 bytes**: the envelope, the
+message type and the Con.ID pair, and nothing else. They fell outside the filter
+that was looking for them.
+
+Re-measured with no length restriction, over all 47 captures, pairing each
+connection-control frame with **the first frame in the reverse direction whose
+Con.ID pair is this frame's pair with the two handles swapped**:
+
+<!-- CENSUS-D: parsed by tests/vmsscs/test_scs_disc_figures.py. One line per
+     figure, nowhere else in this document. Re-run
+     tools/cluster/scs_disc_measure.py; do not hand-edit. -->
+
+| request | | response | | frames | pcaps |
+|---|---|---|---|---|---|
+| 110 B | `0` CONNECT_REQ | 66 B | `1` CONNECT_RSP | 1115 | 34 |
+| 110 B | `2` ACCEPT_REQ | 62 B | `3` ACCEPT_RSP | 381 | 33 |
+| 62 B | `4` REJECT_REQ | 58 B | `5` **REJECT_RSP** | 696 | 26 |
+| 62 B | `6` DISCONNECT_REQ | 58 B | `7` **DISCONNECT_RSP** | 262 | 25 |
+
+All four SCA request/response pairs, in figure order. No other
+(request → response) combination occurs for any of these four request classes.
+
+**This upgrades `6` from "plausible" to grounded, and it grounds `7`.** `6` is
+now supported by the same kind of decisive behavioural partition that carried
+`4`: it is answered, 262 times in 25 captures, by a distinct message type that
+answers nothing else. And `4` gains its response half on the identical
+argument. The `5`/`7` labels themselves still rest on **figure order** — the
+book draws REJECT_RSP after REJECT_REQ and DISCONNECT_RSP after DISCONNECT_REQ,
+and the values land exactly there — which is an inference, not a decoded field
+name. **State it that way and no more strongly.**
+
+**A COMPLETE TEARDOWN, frame by frame.** `formation-ci1.pcap` raw frames
+61/63/64/65 (SCA #53/#55/#56/#57), between VAX1 (Con.ID `63050008`) and VAX2
+(`33590007`) — Figure 2-16 end to end, both halves:
+
+| SCA # | direction | class | msgtype | `[60:62]` |
+|---|---|---|---|---|
+| 53 | VAX1 → VAX2 | 62 B | `6` DISCONNECT_REQ | `0x0000` |
+| 55 | VAX2 → VAX1 | 58 B | `7` DISCONNECT_RSP | — |
+| 56 | VAX2 → VAX1 | 62 B | `6` DISCONNECT_REQ | `0x0001` |
+| 57 | VAX1 → VAX2 | 58 B | `7` DISCONNECT_RSP | — |
+
+**AND `[60:62]` IS DECODED — the MATCHING flag (`vms-591`).** This section
+recorded it above as "a live field with an undecoded meaning". Ranking each
+VMS-origin DISCONNECT_REQ within its own Con.ID-pair dialogue partitions it
+exactly, with **zero residuals** over all 220 frames:
+
+<!-- CENSUS-E: parsed by tests/vmsscs/test_scs_disc_figures.py. -->
+
+| rank within the dialogue | `[60:62]` | frames | pcaps |
+|---|---|---|---|
+| 0 — the first DISCONNECT_REQ on the pair | `0x0000` | 131 | 25 |
+| 1 — the matching one, from the other end | `0x0001` | 89 | 18 |
+
+No frame of either rank carries the other value and no pair carries a third
+DISCONNECT_REQ. (131 ≠ 89 because 42 dialogues' matching half falls outside the
+capture window.) So the field distinguishes *initiating* a disconnect from
+*matching* one, which is Figure 2-16's DISC SENT vs DISC MATCH. **Same honesty
+bound as `4`:** this is the best reading of a decisive behavioural partition,
+not a decoded field; a peer that ignored the flag would look identical here.
+
+**A NEW GAP THIS OPENS, recorded rather than smoothed over.** The same
+unrestricted census finds message types **`8` and `9`** in the 58-byte class,
+paired the same way — 131 frames each, in 25 captures — and positioned inside
+the connection lifetime between the ACCEPT_RSP and the DISCONNECT_REQ (the
+observed order on a full connection is `0,1,2,3,…,8,9,6,7`). **They are not
+named here.** *VAXcluster Principles* ch. 2 draws eight connection-control
+messages and these are a ninth and tenth; nothing we hold says what they are.
+See §5.
+
+**What OVMX now builds on this section:** `6` and `7`, from byte-exact captured
+templates, in `src/vmsscs/scs_disc.c` (`vms-591`). Not `5` — OVMX has no
+production REJECT caller to answer, so a REJECT_RSP builder would be untested
+code.
 
 **(1b) THE WIDER CORPUS CLOSES THE 5/7 GAP AND IDENTIFIES 10 — vms-54f,
 2026-08-05.** Re-measured over the full lab-1 corpus (163 pcaps:
@@ -968,6 +1124,12 @@ at [48:50] and remains inferred.
   [62:78]) + a 16-byte **result field [78:94]**: all-zero in the request, and
   the literal ASCII **`"NOT PRESENT HERE"`** in the negative response.
 
+**The 16-byte name field at [62:78] is also the CONNECT_REQ's TARGET SYSAP
+name**, which is what `vms-7fe` scans the p. 2-48 SDIR queue with
+(`scs_sdir_target_name()`): the connect frame row immediately below records
+SCA 21 carrying `"SCS$DIRECTORY   "` there, and the 110-byte `[46:48] == 0`
+CONNECT_REQ class of §4(h)(1a) carries the target name in the same field.
+
 **GROUNDED (directly observed ASCII):** the queried SYSAP name and, decisively,
 the `"NOT PRESENT HERE"` result string that signals a negative resolution — the
 same string §4c reported but now pinned to the [78:94] result field. The exact
@@ -975,6 +1137,140 @@ byte width of each name field varies by operation (the operation name in the
 connect frame runs longer than 16 bytes), so field *widths* are reported
 as-observed, not asserted as a fixed schema; the *presence, position, and
 negative-marker semantics* are grounded.
+
+**(2a) THE ASK SIDE — the two REQUEST frames, and what the reference VAX does
+with them (GROUNDED, `vms-66f`).** Everything §4h recorded before this entry was
+a frame OVMX *answers*. The SCS Process Poller of *VAXcluster Principles* p. 2-50
+(SYSAP name `SCS$DIR_LOOKUP`) has to *ask*, so both request classes were dumped
+byte-for-byte out of `formation-ci1-joinwindow.pcap` and are now baked into
+`src/vmsscs/scs_dir.c`:
+
+| Frame | raw pcap | SCA | class | key fields |
+|---|---|---|---|---|
+| `SCS$DIRECTORY` CONNECT_REQ | 29 | 21 | 110 B | `[46:48]=0`, remote `0`, local `0x63050008` offered, `[48:50]=3` |
+| lookup REQUEST | 37 | 29 | 94 B | `[46:48]=0x0a`, `[48:50]=0`, `[58:62]=0` marker, result `[78:94]` all-zero |
+
+*(Raw pcap indices in this section are **0-based** record indices, counting every
+record in the file including non-SCA ones. Wireshark/tcpdump frame numbers are
+these **plus one** — the same two frames are 30 and 38 there. Stated because a
+review of this section cited the 1-based numbers and the two sets do not
+overlap by accident.)*
+
+**`[48:50]` IN BOTH ROWS IS THE GROUNDED SCA CREDIT FIELD, NOT A FLAG — and the
+capture refutes reading it as a request/response discriminator (`vms-66f`,
+corrected).** §4(d)'s ⭐ block pins `[48:50]` as the piggybacked credit for the
+SCS message classes 58/62/66/86/94/110/190, and line 3 of that grounding names
+`SCS$DIRECTORY` = 3 / `SCS$DIR_LOOKUP` = 1 among the extended Send Credits in
+the 110-byte `CONNECT_REQ` class — which is exactly the `3` in row 1 above. On
+the 94-byte lookup class the same field is the ordinary piggybacked credit, and
+the census below is the refutation of the "flag" reading. Selecting **by
+connection identity, not by SCA length** (the Con.ID pair of each observed
+`SCS$DIRECTORY` connection — see `tools/cluster/scs_dir_role_measure.py`, and
+`vms-c11` on why length-keyed censuses in this epic are not trusted), the
+capture holds **12** lookup messages, all of length 94, split by the grounded
+`[58:62]` marker into 6 REQUESTs and 6 RESPONSEs:
+
+| side | `[48:50]` histogram | frames |
+|---|---|---|
+| REQUEST (`[58:62]=0`) | `{0: 2, 1: 4}` | `0` at 37, 1244; `1` at 41, 43, 45, 1248 |
+| RESPONSE (`[58:62]=1`) | `{1: 6}` | 39, 42, 44, 46, 1247, 1250 |
+
+So `[48:50]` is **not** constant in requests and **does not** separate requests
+from responses: the value `1` appears on four requests and all six responses.
+The only structure the capture *does* show is positional — the two zeros are
+exactly the FIRST lookup message on each of the two directory connections (37
+opens VAX1's, 1244 opens VAX2's) — and **that is a correlation over n=2, not a
+grounded rule**. Which condition sets the field to 0 rather than 1 (no credit
+owed yet, a credit already returned by the intervening `0x48` short, or
+something else) is **NOT separated by this capture** and is recorded as §4h gap (f).
+What *is* grounded is the negative: the "request/response flag" reading is dead.
+
+**Why OVMX pins 0 anyway, and what is NOT grounded.** `dir_lookupreq_tmpl` in
+`src/vmsscs/scs_dir.c` is a byte-exact replay of SCA 29 (raw 37), the first
+lookup on its connection, so its `[48:50]` is 0 for the same reason the wire's
+is. OVMX **does not stamp a live credit on any frame** — that is the standing
+reachability gap recorded in `src/vmsscs/include/scs_credit.h`, not something
+this template decides — so every inquiry OVMX sends carries 0 whether it is the
+first on the connection or the fourth. That is a KNOWN DEVIATION from the
+reference wire, recorded as §4h gap (f), and it is one of the unseparated
+candidates for the unanswered-inquiry gap below.
+
+**The two 16-byte name fields are (DESTINATION SYSAP, SOURCE SYSAP), and the
+request/response PAIR is what grounds it.** SCA 21 carries
+`[62:78]="SCS$DIRECTORY   "` then `[78:94]="SCS$DIR_LOOKUP  "`; SCA 25, the
+answer travelling the other way, carries exactly those two strings **swapped**.
+A pair that swaps with direction is an endpoint pair. The alternative reading —
+a fixed "target, operation" schema — is **REFUTED** by SCA 25, since
+`SCS$DIR_LOOKUP` is not an operation performed on `SCS$DIRECTORY`. This confirms
+`scs_sdir_target_name()`'s use of `[62:78]` on the 110-byte CONNECT_REQ class.
+
+**WHAT THE REFERENCE VAX DID WHEN OVMX ASKED — measured, and it is half good
+news.** OVMX drove its poller against VAX1 (VAX 7.3, lab-2 replica `vaxlab-1`,
+2026-08-05, 8 cycles over 60 s, `PRCPOLINTERVAL=8`):
+
+- **The VAX ACCEPTS an OVMX-initiated `SCS$DIR_LOOKUP → SCS$DIRECTORY`
+  connection.** It answered the CONNECT_REQ with a message-type-1 `CONNECT_RSP`
+  and, on the second cycle, a message-type-2 `ACCEPT_REQ`, taking OVMX's CDT to
+  OPEN through the §4(h)(1a) sequence. This is the first time OVMX has been the
+  ACTIVE half of any SCA connection on the reference wire.
+- **It did NOT answer the inquiry that followed.** Zero lookup RESPONSEs over 8
+  cycles; the VAX instead retransmitted `CONNECT_RSP`. So the inquiry OVMX
+  builds is not yet the inquiry the VAX will answer, and the reason is **not
+  identified** — candidates not separated by this run are the Con.ID the inquiry
+  addresses (`[50:54]`, which OVMX learned as `0`), the `[48:50]` **credit**
+  (OVMX stamps a constant 0 there; the reference wire sends 1 on every inquiry
+  after the first — §4h gap (f)), and the sequence state. **Recorded as an open
+  gap, not as a working exchange.**
+- **Enabling the poller COST THE JOIN.** Same binary, back-to-back, poller on
+  vs. gated: on → `dir_connected=no dir_lookups=0 cm_config=no`, no join at all
+  (the member never ran its own directory phase, `connect_scans=0`); gated →
+  `dir_connected=YES dir_lookups=4 cm_config=YES joiner=OPEN`. OVMX's poller
+  therefore ships **OFF by default** (`OVMX_PROCESS_POLLER=1` opts in,
+  `OVMX_NO_PROCESS_POLLER=1` forces off) until the unanswered-inquiry gap is
+  closed. Logs: `/data/training/vax/k8s-labs/vaxlab-1/logs/vms66f-{on,off}.log`.
+
+**WHO IS THE ACTIVE HALF — corrected, because the first version of this
+paragraph was refuted by the capture it cited (`vms-66f`).** The rejected text
+said:
+
+<!-- REFUTED-QUOTE-BEGIN -->
+> (revision 1, quoted here only to kill it — every clause below is REFUTED)
+> the directory exchange "runs in ONE direction", VAX2 "only answers", and VAX2
+> "opens its own `VMS$VAXcluster` connection without having polled anybody".
+<!-- REFUTED-QUOTE-END -->
+
+**Both halves of that are false**, and the roles were inverted. Census
+over the whole file, keyed on the `[62:94]` SYSAP name pair and the `[46:48]`
+message type with **no SCA length filter**
+(`tools/cluster/scs_dir_role_measure.py`; `vms-c11`):
+
+| what | count | frames (0-based raw pcap) |
+|---|---|---|
+| `VMS$VAXcluster` ↔ `VMS$VAXcluster` CONNECT_REQ (`[46:48]=0`) | **1** | 47, **VAX1 → VAX2** |
+| …of those, sent by the JOINER (VAX2) | **0** | — |
+| `VMS$VAXcluster` ACCEPT_REQ (`[46:48]=2`) | **1** | 50, **VAX2 → VAX1** |
+| `SCS$DIRECTORY` ← `SCS$DIR_LOOKUP` CONNECT_REQ (`[46:48]=0`) | **2** | 29, VAX1 → VAX2; **1237, VAX2 → VAX1** |
+
+Read off that table:
+
+- **The joiner never opens the `VMS$VAXcluster` connection.** There is exactly
+  one `VMS$VAXcluster` CONNECT_REQ in the file and the **established member**
+  sends it (47, VAX1 → VAX2). The joiner's frame 50 is `[46:48]=2`, an
+  ACCEPT_REQ. The established member is the ACTIVE half of `VMS$VAXcluster`
+  formation and the joiner is the PASSIVE half — the opposite of the rejected
+  reading. Scope: **n=1 formation**, so this is what the reference wire did
+  here, not a proven protocol rule about who may connect.
+- **The joiner DOES poll.** Frame 1237 is VAX2 → VAX1, `[46:48]=0`, name pair
+  `("SCS$DIRECTORY", "SCS$DIR_LOOKUP")` — VAX2 opening its own Process Poller
+  connection — and its own lookup round follows on it (requests 1244/1248,
+  answers 1247/1250, the second half of the §4(h)(2a) census above). The
+  directory exchange is **bidirectional**; it just is not simultaneous.
+- **What is true is only the ORDERING.** VAX2's poll is at t+33.804 s, 0.36 s
+  *after* the `VMS$VAXcluster` connection formed at t+33.444 s (frames 47/50).
+  So a joiner polls **after** it is in, not before — which still refutes gating
+  a joiner's connect on a poller answer, but for a reason about *sequence*, not
+  about *direction*. That was the only defensible part of the rejected
+  paragraph and it is all that survives.
 
 **(3) `0x48` credit-return short — the 41-byte body.** Every credit-return is a
 fixed 41-byte SCA frame (Ethernet-padded to 60). Its distinguishing feature vs.
@@ -1040,19 +1336,84 @@ state alone — no captured counter needs replaying. (This is exactly what the
 next-seq/last-ack CSB assignment (§3 `SHOW CLUSTER` triad) remains **inferred**,
 same honesty caveat as §4d/§4g.
 
-**RE gaps left in §4h (honest):** (a) the [46:48] field is now **GROUNDED as the
+**(4a) SEQUENCE CONTINUITY — GROUNDED census over every capture we hold
+(`vms-abc`).** §4h(4) grounds that a sender increments `send_seq` by one per new
+sequenced message. `vms-abc` needed to know how often that is *violated* on the
+wire, because OVMX now breaks a virtual circuit when it sees a gap (VAXcluster
+Principles p. 2-31) and a detector that fires on healthy traffic would tear down
+working joins. Re-derive with
+`python3 tools/cluster/scs_seqgap_measure.py --all` (lab host; the captures are
+host-only). The rule applied is exactly the one in
+`src/vmsscs/scs_vc.c::scs_vc_check_recv_seq()`, restated in the script.
+
+| Population | Value |
+|---|---|
+| pcaps scanned (every `.pcap` in the lab capture dir, 0 skipped) | 47 |
+| sequenced messages examined (format `0x13`, `send_seq != 0`, `0x41` excluded) | **321,599** |
+| duplicate / retransmit frames (`send_seq` at or behind `recv_seq`) | 506 |
+| **gaps** (`send_seq` ahead by more than 1) | **41** |
+| gaps whose source MAC is a VAX | **0** |
+| gaps whose source MAC is `b6:16:8a:dc:3a:53` (OVMX) | **41** |
+
+Per-VC counters are keyed on the ordered (src,dst) MAC pair, reset to 0 on any
+`0x41` START in either direction (sec 4i.A: "the post-START SCS VC resets to
+`send_seq = 1` on both sides"), and the FIRST sequenced message on a pair
+ANCHORS the counter rather than being scored — a capture, like a node attaching
+to a circuit already carrying traffic, cannot know what preceded the first frame
+it sees. Without that anchor the same scan reports 147 "gaps"; the extra 106 are
+all anchor cases (the first sequenced message seen on a VC, typically at a
+capture that starts mid-stream on an established circuit, e.g. `recv_seq=0
+send_seq=11142`). That 147 is a measurement artefact and is recorded here so
+nobody re-derives it and reads it as wire loss.
+
+**What this establishes:** on the RECEIVE side — the only side a port driver can
+police — the reference wire never breaches sequentiality. `formation-ci1-
+joinwindow.pcap` (the golden fresh join) contributes 2,960 sequenced messages
+with 0 gaps, `formation-ci1.pcap` 17,760 with 0, and
+`vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap` 18,881 with 0.
+
+**What it also exposes — an OVMX TRANSMIT defect, not fixed by `vms-abc`:** all
+41 gaps are OVMX's own outbound frames, in three captures
+(`vms246-scsdir-0x4b-reached`, `ovmx-e81-newcomer-ignores-us`,
+`ovmx-e81-newcomer-refuses-60retx`). 40 of the 41 are one shape: OVMX emitting a
+`0x5b` with `send_seq = 10` immediately after the member's round-0 `0x41` START
+carried `send_seq = 10` — i.e. OVMX copying the member's *continuation*
+`send_seq` into its own counter, which §4i.A states in as many words a joiner
+must **not** do ("A correct joiner must not treat the member's `send_seq ≠ 1` as
+an error, and must not copy it into its own `send_seq`/`recv_ack`"). Recorded
+here as an open defect; it is a transmit-path bug and `vms-abc` is the
+receive-side guarantee only.
+
+**RE gaps left in §4h (honest):** (a) the [46:48] field is **GROUNDED as the
 connection-control message type for values 0–3** (§4(h)(1a), `vms-dd5`), with
-`4` strongly supported as REJECT_REQ and `6` only plausible as DISCONNECT_REQ;
-`5` and `7` are **absent from every capture we hold**, so the response halves of
-the reject and disconnect dialogues are unaccounted for, and the companion
-[48:50] flag remains inferred; (b) the `0x48` secondary counter [30:32] and the
+`4` and `6` supported by decisive behavioural partitions and `5` and `7`
+grounded as their answers by the §4(h)(1b) pairing census (`vms-591`) but
+LABELLED by figure order only; message types `8` and `9` in the same 58-byte
+class are observed and **unidentified**. *(The clause that used to end this item
+— "and the companion [48:50] flag remains inferred" — is **withdrawn**:
+`[48:50]` is not a companion flag of `[46:48]`, it is the §4(d) credit field,
+and reading it as a flag is refuted in §4(h)(2a), `vms-66f`.)*
+(b) the `0x48` secondary counter [30:32] and the
 early-phase shorts' non-zero residual at [30:40] (SCA 22/24 carry printable
 leftover bytes) are not grounded to a field; (c) the affirmative
 (non-`"NOT PRESENT HERE"`) lookup *result* encoding — the capture's directory
 lookups that resolve carry the resolved SYSAP name back, but no separate
 status/handle-return field was isolated; (d) the absolute `SCS$DIRECTORY`
 connection Con.IDs are inferred (dynamically-allocated, absent from the
-idle-state decoder ring).
+idle-state decoder ring). **(e) `vms-66f`: the reference VAX accepts an
+OVMX-initiated directory connection but does not answer the lookup REQUEST that
+follows — see §4(h)(2a). The request frame's bytes are a byte-exact replay of
+SCA 29; what is NOT grounded is what makes the VAX answer one.** **(f)
+`vms-66f`: on the 94-byte lookup class, WHAT SETS `[48:50]` TO 0 RATHER THAN 1
+is not decoded. The field is the §4(d) credit (the "flag" reading is refuted,
+§4(h)(2a)); over the 12 lookup messages in the golden capture the only two zeros
+are the first message on each of the two directory connections, which is a
+correlation over n=2, not a rule. Consequently — and this is the OVMX-side half
+of the same gap — **OVMX stamps a constant 0 there on every inquiry it sends**,
+because it stamps no live credit on any frame (`scs_credit.h` reachability
+note). A reference exchange longer than one inquiry would show a `1` OVMX never
+sends. Listed as a KNOWN DEVIATION and as one of the unseparated candidates
+for (e).**
 
 ### 4(i) Joining an ALREADY-ESTABLISHED cluster (member-state-seq > 1)
 
@@ -1655,13 +2016,46 @@ at `NEW`; `VOTES=0` is legitimate — an existing member ran `VOTES=0`); sending
 `0x02` **prematurely** in the initial burst (held it — still `NEW`); and
 **3-node reconfiguration coordination** (zero member↔member 190-byte VC traffic
 followed the joiner's connect, so the member is **not** blocked waiting on the
-peer member's ack). The leading remaining hypothesis: the member reciprocates only
-once the joiner presents the **full connection-set a real joiner establishes** —
-notably actively **opening its own `SCS$DIRECTORY` connection** (dir connect/lookup
-**requests**, of which only the *response* side is currently built) and possibly
-returning its live `VMS$VAXcluster` handle in the directory-lookup **response** —
-so the member can resolve the joiner and reciprocate. This is the next
-deliverable.
+peer member's ack).
+
+The missing predicate is now **GROUNDED** as the **full joiner-CLIENT connection
+choreography** (`vms-760`, live 2026-07-29). Byte-anchored against the clean
+1→2-node formation (`formation-clean-2node.pcap`, joiner `08:00:2b:94:ca:47`), the
+real joiner, on **one shared monotonic per-channel `send_seq`**, does — in order:
+(a) open its **own `SCS$DIRECTORY` CLIENT connection** (SCA idx20, `send_seq=1`,
+local handle `0x4e630007`); (b) **look up each SYSAP on the member as a client**
+before connecting to it — `MSCP$TAPE`/`MSCP$DISK` (idx31, `seq4`) and
+`VMS$VAXcluster` (idx41, `seq7`), each answered **affirmatively** by the member on
+that dir-client connection; (c) only **then** open the `MSCP$DISK` client
+connection `VMS$DISK_CL_DRVR→MSCP$DISK` (idx35, `seq6`, local `0x4e620008`); (d)
+open the `VMS$VAXcluster` VC (idx47, `seq10`, local `0x4e620009`); (e) send the
+add-member burst (idx54, `seq14`, `cat=0x01/op=0x14`). The member reciprocates its
+own `0x14/0x01` (idx59) within ~1 ms of receiving (e), **independently of the
+joiner's later `0x02`** (idx97, +3.5 s). The single element OVMX has **never**
+presented in any capture is the joiner acting as a **directory + disk CLIENT** —
+0 `VMS$DISK_CL_DRVR` frames vs the clean joiner's 41.
+
+**Shared-sequence deadlock — the mechanism, live-grounded (`d94-760mscp.pcap`).**
+The per-channel `send_seq` is **shared across all Con.ID pairs** (clean joiner
+draws `1,3,4,5,6,7,9,10,14…` across its dir/MSCP/VC connections from one counter);
+OVMX's single-counter model is therefore **correct**, not the bug. The consequence:
+a connect the member **cannot yet process** — e.g. OVMX firing the `MSCP$DISK`
+connect **without first resolving `MSCP$DISK` via a dir-client lookup** — occupies
+a slot in that shared sequence and creates an **in-order hole**. Observed live: the
+member froze its `recv_ack` at `2` (the last dir-response) and **never** accepted
+the `VMS$VAXcluster` connect at the next `seq`, regressing OVMX **below `NEW` to
+blank** status. This falsifies the "inject the `MSCP$DISK` connect standalone"
+shortcut and proves the SYSAP **resolution ordering** (lookup-before-connect) is
+load-bearing, not cosmetic. The byte-exact `MSCP$DISK` connect builder
+(`scs_connect_build_mscp_request`, template = clean idx35) is built and verified,
+but must not be driven until the dir-client resolution precedes it.
+
+**Next deliverable:** implement the full dir-client resolution choreography (a),
+(b), (c), (d) with correct shared-`send_seq` ordering. This subsumes the earlier
+own-`SCS$DIRECTORY`-connect attempt (`vms-760`/d94-760b), which regressed only
+because OVMX's own-dir drive **mis-sequenced** and suppressed the member's parallel
+dir probe (the clean member opens **its own** dir connect regardless, idx76) — an
+OVMX drive bug, **not** a protocol incompatibility.
 
 **Clean-room provenance:** every claim here is from (a) observing the reference
 lab wire (`formation-clean-2node.pcap` + live `SHOW CLUSTER`/`SDA` output on the
@@ -1671,9 +2065,1249 @@ Rule 8).
 
 ---
 
+### 4(M) Peer silence: how long a live node may say nothing (GROUNDED, `vms-17f`)
+
+**What this grounds and why.** OVMX now declares a peer *departed* after a listen
+timeout, tears its Path Block down and releases its peer slot (VAXcluster
+Principles pp. 2-17/2-21/2-28; `src/vmsscs/scs_depart.h`). That threshold decides
+whether a node that is merely quiet gets thrown out of OVMX's configuration
+database, so it is bounded by measurement rather than chosen. Nothing here is a
+frame layout — it is a **timing** property of the wire, measured the same way.
+
+**Method.** `tools/scs_peer_silence_measure.py` (re-runnable; PASS/FAILs each
+figure against a checked-in table). Over every `0x6007` frame in a capture, the
+gap between consecutive frames with the same **source MAC**, regardless of
+destination — multicast beacons included, because a node that is beaconing has
+not departed. Leading/trailing gaps at the capture window's edges are reported
+separately and excluded. Captures are classified as *healthy* or *departure* by
+what the run was for, never by the numbers.
+
+| population | captures | frames | wire span | **max per-source silence** |
+|---|---|---|---|---|
+| healthy (no node left) | `ovmx-760-persist-10min-20260730`, `cd0-baseline-current-20260728`, `formation-ci1-joinwindow` | 13 392 | 747 s | **3.153 s** |
+| departure (VAX2 dropped and rejoined, VAX1 up throughout) | `af2-established-rejoin-20260728` | 16 340 | 606 s | **395.955 s** (VAX2) |
+
+The two populations do not overlap, and they do not overlap **inside** the
+departure capture either: VAX1, which stayed up the whole time, never exceeds
+3.12 s in the same window as VAX2's 395.955 s gap.
+
+**What OVMX does with it (OVMX design choice, labeled per Rule 8).** The default
+listen timeout is **20 000 ms** — the value of the lab's SYSGEN `RECNXINTERVAL`
+(20, §3) — which is 6.3× the longest healthy silence measured and 20× below the
+observed departure. This is **not** a claim that VMS uses 20 s as a listen
+timeout: `RECNXINTERVAL` governs removal *after* a circuit breaks, not the timer
+that breaks it. The book (ch. 2) describes circuit loss but publishes no
+detection timer; that lives in the port drivers, which ch. 2 is not about.
+`OVMX_PEER_LISTEN_TIMEOUT_MS` overrides it and SCSD logs the value at startup, so
+a capture is never read as a spontaneous departure.
+
+**Explicit non-claim.** 3.153 s is the largest silence in 747 s of captured wire
+from a 2–3 node lab, not an upper bound. A larger cluster, a loaded node or a
+lossy link could exceed it; the choice rests on the margin, not on the maximum.
+
+---
+
+### 4(N) The 16-byte SCA connect data (GROUNDED location + census, `vms-fdd`)
+
+*VAXcluster Principles* p. 2-25: the initiating SYSAP may supply **up to 16
+bytes** of connect data in `CONNECT_REQ`, and the target SYSAP up to 16 in
+`ACCEPT_REQ`. "This option is used to limit which versions of VMS can
+coexist… When two Connection Managers form a connection with each other, they
+use this data to effectively identify to each other which version of VMS each
+is associated with. If the target does not approve of the source Connection
+Manager VMS version, it rejects the request. If the source does not approve of
+the target, it explicitly breaks the connection that the target accepted."
+p. 2-28 puts the field in the CDT. This section locates it on our wire.
+
+**Re-derive everything below:** `tools/scs_connect_data_measure.py` (lab host;
+the captures are host-only and not in git). Last full run **2026-08-05: 67
+checks, 0 failures.** `ctest -R scs_connect_data_figures` needs no captures — it
+asserts these figures still appear verbatim here and in
+`src/vmsscs/include/scs_connect.h`.
+
+**THE POPULATION IS VAX-ONLY — OVMX's own frames are not evidence about VMS.**
+The lab captures are recorded on a LAN where OVMX itself is a talker, so a
+quarter of the library's connect frames were **transmitted by OVMX** and are
+**excluded here: 466 of 1891, of which 55 are `VMS$VAXcluster`**.
+Counting those toward "what a
+real VAX puts in this field" is circular grounding: the census could not then
+distinguish *"every VMS node does this"* from *"we do this, and so do the VAXes
+we recorded alongside us"*. **Every GROUNDED figure in this section is therefore
+measured over VAX-sourced frames only.** The split is on the Ethernet source MAC
+and is a first-class filter in the tool, which reports both populations and the
+counts it dropped.
+
+Identification is sound: OVMX never spoofs its Ethernet source — `scsd` takes
+`our_hw_mac` from `SIOCGIFHWADDR` and every builder copies it into abs `[6:12]`
+— and its MACs are the `hwmac=` values `scsd` itself logged in the lab work
+directory. That blocklist is backed by a **structural rule**: a real lab VAX
+sources from `08:00:2b` (DEC NIC OUI) or `aa:00:04` (DECnet logical address);
+anything else, in particular a locally-administered Linux tap MAC, is not a VAX.
+The tool **fails** on any source it cannot place, so a future OVMX run on a new
+MAC reds the measurement rather than silently rejoining the sample.
+
+OVMX-sourced frames remain legitimate evidence about exactly one thing — **what
+OVMX's own encoder emits** — and the tool reports that population separately.
+They are never evidence about a real VAX.
+
+**A MAC IS NOT A NODE — how many sources agree is counted from identity.** The
+source MAC is the right axis for *"is this frame ours"* and the wrong axis for
+*"how many independent nodes agree"*; an earlier revision of this section used
+it for both, and **both directions of that error are real in this library**:
+
+- **one node, two MACs** — `08:00:2b:4a:b7:15` (VAX1's DEC NIC address) and
+  `aa:00:04:00:01:04` (the DECnet logical address that replaces it once DECnet
+  starts) are the same machine; both name themselves `VAX1`/1025 in their own
+  START frames;
+- **one MAC, three nodes** — `08:00:2b:78:56:b9` was reconfigured across reboots
+  and appears as `VAX2` (1026), `VX3` (1050) and `ZK` (1099).
+
+Identity is therefore read **out of the frames**. Every connect frame carries
+its sender's own LAVC logical address at `[10:16]` in the form
+`aa:00:04:00:NN:04`, `NN` = `SCSSYSTEMID & 1023` (§4(g)) — **0 residuals** over
+the VAX population, and **0 mismatches** where the Ethernet source is itself an
+`aa:00:04` address. `NN` is resolved to the ASCII node name through the 106-byte
+START frames (`[90:98]` name, `[46:48]` SCSSYSTEMID, §4(g)); the tool requires
+that map to be 1:1 and to cover every node number in the census:
+`{1: VAX1, 2: VAX2, 3: VAX3, 26: VX3, 75: ZK}`.
+
+Two counts follow, and they are **not** interchangeable:
+
+| count | what it is | value |
+|---|---|---|
+| **node identities** | distinct cluster members | **5** |
+| **hardware sources** | connected components of the MAC ↔ identity graph — distinct SIMH instances. `{VAX1}`, `{VAX3}`, `{VAX2, VX3, ZK}` | **3** |
+
+**No "sources agree" claim in this section may use the source-MAC count**,
+because `VX3` and `ZK` are the same reconfigured box as `VAX2` and are not
+separate observations of VMS behaviour. **The independence figure dropped**:
+this section previously said *"four independent real VAX nodes"*, which was the
+source-MAC count; the graph count is **3**.
+
+A by-product is a second, independent check on the population split: the node
+numbers the VAX population emits and the ones OVMX emits must be **disjoint
+sets**, and they are. A misclassified source would surface as a node number in
+the wrong population.
+
+**…and 3 is not an independence count either — what the attestation actually
+rests on.** *"3 independent hardware sources"*, *"distinct lab machines"* is
+what this section said next, and that is **also false**. It matters more than
+the first error, because it was the conservative figure the first correction
+retreated to. The lab's real configuration
+(`/data/training/vax/cluster/README-lab.md`, `cluster/vax.ini`) is:
+
+| | | |
+|---|---|---|
+| **emulator instances** | `vax1`, `vax2`, `vax3` — all the same emulated model (MicroVAX 3900 / KA655) under the same SIMH binary on **one** Linux host. No physical hardware diversity exists in this lab at all. | **3** |
+| **system roots** | `[SYS0]` = VAX1 · `[SYS1]` = VAX2 and, re-identified with `MC SYSGEN` between reboots, VX3 and ZK · `[SYS11]` = VAX3, a diskless satellite whose root is MSCP-served | **3** |
+| **system disk images** | all three roots live in the single file `data/d0.dsk`, which `vax1` and `vax2` attach at the same time (dual-ported) | **1** |
+| **VMS installations** | one OpenVMS VAX V7.3 install, whose `SYS$COMMON` executive images all three roots share | **1** |
+
+The last row is **measured**, not merely read off the lab notes: all **668**
+VAX-sourced 106-byte START frames report version `[58:66]` = `"VMS V7.3"` on
+hardware `[74:78]` = `"VAX "` — **one** distinct version string across all 5
+node identities (§4(g) grounds both fields).
+
+> **So the honest attestation behind every GROUNDED figure in this section is:
+> one VMS build, under three system roots, on one system disk image, across
+> three emulator instances.** Three roots of one installation agreeing about a
+> connect-data byte is much closer to **one observation repeated** than to three
+> independent confirmations, and nothing below may be read as the latter.
+
+What the census **does** establish is that the value is stable across node
+identity, node number, system root, boot, incarnation and role (joiner vs
+member) — that is worth having, and it is the whole of it. What it **cannot**
+establish is anything at all about another VMS version, another build, or a
+second installation of the same version: the sample holds exactly one of each.
+§5 carries that as a standing limit on this section.
+
+**WHERE IT IS — GROUNDED.** The connect data is the **last 16 payload bytes of
+the 110-byte connect class, `[94:110]`** (absolute frame `[108:124]`), directly
+after the two 16-byte ASCII SYSAP name fields `[62:78]` and `[78:94]` that
+§4(h)(2) already grounds. This closes the region §4(g)/§5 previously carried as
+an unexplained replay.
+
+**Population, and why it is exactly this one.** Take `sca = frame[14:]`; keep
+`len(sca) == 110`, format byte `sca[17] == 0x13`, opcode `sca[16]` in
+`{0x4b, 0x5b, 0x7b}`; drop OVMX-sourced frames per the guard above; then split
+on the SCA connection-control message type at `[46:48]` (§4(h)(1a)). Over every
+`.pcap` in the lab capture directory (**48 files**) the VAX-sourced part of that
+class carries message types **`{0: 1101, 2: 324, 10: 2889}`**. The
+1101 + 324 = **1425** type-0/type-2 frames all carry an ASCII SYSAP name at
+`[62:78]` — **0 non-ASCII residuals** — while the type-10 frames carry binary
+there and are not connect frames. So the field is claimed for `CONNECT_REQ` and
+`ACCEPT_REQ` **only**; a length test alone would over-claim by 2 889 frames.
+(OVMX's own 466 connect frames are `{0: 396, 2: 70}` — it emits **no** type-10
+frame at all. The two populations are not scaled copies of one another, which is
+why the exclusion has to be applied before the split rather than to the totals.)
+
+**WHAT IS IN IT — GROUNDED, and it is per-SYSAP, not per-node.** Census of
+`[94:110]` over those 1 425 VAX-sourced frames, keyed on the local SYSAP name
+`[62:78]`. The last column records what OVMX contributed and the guard removed:
+
+| local SYSAP | VAX frames | distinct values | value(s) | OVMX frames excluded |
+|---|---|---|---|---|
+| `MSCP$DISK` | 809 | 1 | ASCII **`"V5.0          + "`** | 243 |
+| `SCS$DIRECTORY` | 201 | 1 | 16 ASCII spaces | 113 |
+| `SCS$DIR_LOOKUP` | 134 | 1 | 16 ASCII spaces | 55 |
+| `SCA$TRANSPORT` | 32 | 2 | `02 02 01 03 …` | 0 |
+| `VMS$DISK_CL_DRVR` | 101 | 5 | `00 00 04 a0 00 00 00 00 NN 04 00 00 00 00 04 01` | 0 |
+| `VMS$VAXcluster` | 148 | 5 | `01 1b 01 03 …` | 55 |
+
+**`MSCP$DISK` is the decisive row**: a printable ASCII **version string** in the
+connect data of the disk-server SYSAP — p. 2-25's "which version" read straight
+off the wire, at these offsets, with **809** VAX-sourced frames from **5 node
+identities on 3 emulator instances** — i.e. 1 VMS build, 3 system roots, 1 disk
+image — and one distinct value. (The
+earlier "four distinct VAX nodes" here was the source-MAC count.) Every SYSAP
+row in the table above is emitted by all 5 identities; the tool pins that
+per-row. The `VMS$DISK_CL_DRVR` row is the
+corroborating one, and it is **untouched by the guard** — OVMX runs no such
+SYSAP, so all 101 frames are VAX-sourced: its byte `NN` takes
+`{01, 02, 03, 1a, 4b}` = `{1, 2, 3, 26, 75}`, exactly the LAVC node numbers of
+VAX1/VAX2/VAX3/VX3-1050/ZK-1099 (`SCSSYSTEMID & 1023`, §4(g)) — a per-node datum
+landing inside the 16-byte window, which is a second, independent check that the
+window's boundaries are right.
+
+**The `VMS$VAXcluster` value — what is invariant.** Across **all 148**
+VAX-sourced `VMS$VAXcluster` connect frames, every boot and every capture we
+hold (all VAX/VMS V7.3), which by node identity are
+
+| node | VAX1 | VAX2 | VAX3 | VX3 | ZK | total |
+|---|---|---|---|---|---|---|
+| frames | 74 | 32 | 36 | 3 | 3 | **148** |
+
+— **5 node identities on 3 emulator instances**, which is 1 VMS build under 3
+system roots on 1 disk image:
+
+| span | value | grounding |
+|---|---|---|
+| `[94:98]` | `01 1b 01 03` | **GROUNDED 148/148, 0 residuals** — the version quad |
+| `[98:105]` | 5 distinct | **NOT GROUNDED** — see the gap below |
+| `[105:110]` | `08 00 00 06 00` | **GROUNDED 148/148, 0 residuals** |
+
+Excluding OVMX moved these counts from `203/203` to `148/148`; it did **not**
+weaken either claim below what we would accept from a stranger's capture — the
+two spans still hold with zero residuals over **3 emulator instances
+carrying 5 node identities**, many boots and 48 captures, and the
+distinct-value count for `[98:105]` is unchanged at 5 (OVMX's 55 frames carried
+only values the VAXes already emit). No claim in this section had to be
+downgraded to a §5 gap as a result. **The independence count itself did drop**,
+from the 4 this paragraph previously claimed to 3 — that figure was a source-MAC
+count, not a node count (see "A MAC IS NOT A NODE" above).
+
+**What OVMX sends, and why that value.** OVMX joins an existing cluster.
+`vax3-2to3-established-join-20260730.pcap` is the library's only capture of a
+**real node being admitted to an already-running cluster** (§1), and in it the
+joiner VAX3 (`08:00:2b:11:22:33`) emits **one** connect-data value for **both**
+message types — raw frame 132 (its `CONNECT_REQ` to VAX1) and raw frame 210 (its
+`ACCEPT_REQ` answering VAX2):
+
+```
+01 1b 01 03 00 00 00 00 00 00 00 08 00 00 06 00
+```
+
+That is `scs_connect_data_vaxcluster[]` in `src/vmsscs/scs_connect.c`, byte for
+byte, stamped by **both** OVMX builders — because OVMX occupies exactly VAX3's
+role in exactly that exchange. The established **members** in the same capture
+emit a different value (VAX1 raw 136, VAX2 raw 208, both
+`01 1b 01 03 01 00 01 00 02 00 01 08 00 00 06 00`), and that contrast is what
+the decode test in `tests/vmsscs/test_scs_connect.c` asserts. **Both ends of
+that contrast are real VAXes.** OVMX is present in the specimen as a bystander
+(209 SCA frames) but sources no `VMS$VAXcluster` connect frame in it, and the
+tool asserts that — the joiner/member contrast is VAX-to-VAX throughout.
+
+**Not just the specimen.** Two frames would be thin evidence for a value a peer
+is documented to *reject* on, so the adopted value is attested independently:
+**40 VAX-sourced `VMS$VAXcluster` connect frames carry it, 38 of them outside
+the specimen, from 5 distinct node identities on 3 emulator
+instances, across 18 captures.** All five counts are pinned by the tool. (The
+earlier "3 distinct VAX nodes" here was a source-MAC count that coincided with
+the graph count by accident, not by derivation.) Read with the configuration
+above, those 3 instances are still **one VMS build under 3 system roots on 1
+disk image**: this is repetition across roles, boots and roots, not
+corroboration by independent VMS systems. (OVMX's own excluded frames also carry it 54 times —
+that is evidence about an OVMX build, deliberately not counted here.)
+
+**What changed on OVMX's wire.** Before `vms-fdd` the region was a labelled
+replay of whichever golden frame the template came from. The `CONNECT-REQUEST`
+template is VAX1's — an established **member's** frame — so OVMX, a joiner, was
+presenting a member's connect data (`[98:105]` = `01 00 01 00 01 00 01`). This
+is a claim about the code as it stood immediately before `vms-fdd`, measured by
+`scsd_wire_diff.sh`, **not** a claim about OVMX's whole recorded history: the
+OVMX frames in the capture library predate the `vms-561` refactor that routed
+the joiner request through this template, and 54 of their 55 already carried the
+joiner value. The `CONNECT-RESPONSE` template is VAX2's joiner frame and already
+carried the stamped bytes, so that direction is byte-unchanged. Kill switch
+`OVMX_NO_CONNECT_DATA=1` suppresses the stamp and restores the template bytes
+exactly; both directions are asserted in the unit test.
+
+**RE gap left in §4(N) (honest).** What `[98:105]` **encodes is unknown.** All
+five values it takes over the 148 VAX-sourced frames, exhaustively:
+
+| `[98:105]` | VAX frames | note |
+|---|---|---|
+| `00 00 00 00 00 00 00` | 40 | the joining form — the value OVMX adopts |
+| `01 00 01 00 02 00 01` | 59 | |
+| `01 00 01 00 03 00 01` | 37 | |
+| `01 00 01 00 01 00 01` | 11 | |
+| `01 00 00 00 02 00 01` | 1 | **does not fit the shape below** |
+
+The nodes emitting the all-zero form are the ones joining. Four of the five fit
+`01 00 01 00 NN 00 01` with `NN ∈ {1,2,3}`, and "`NN` = the count of cluster
+members the sender currently sees" fits every capture and is the best reading —
+but it is **INFERRED**, the fifth value does not even fit the shape, and one
+frame is too few to say whether that is a sixth state or a transient. Nothing
+OVMX does depends on any of it: OVMX copies a real joiner's observed bytes
+rather than computing them. Two candidate readings are **REFUTED**: it is not
+the member-state sequence (`af2-established-rejoin` runs Member State Seq 2→3→4
+while VAX1 sends `NN=1` throughout) and not the node number (VAX1, node 1, sends
+`NN=2` in the 2-member specimen). **Consequence, and it is a real limit:** OVMX
+cannot yet *generate* connect data for a role it has not observed, and it must
+not claim to.
+
+**OVMX does NOT act on the peer's value.** It decodes and logs it
+(`SCSD-I-CONNDATA`) and nothing more. p. 2-25's rejection behaviour is real, but
+every node on our wire is VMS V7.3, so we have never observed a refusal and have
+no basis for a version policy. Implementing one on a single data point would be
+inventing it.
+
+---
+
+<!-- vms-578 INTEGRATION NOTE ON SECTION ORDER.
+     Section 4(O) is placed LAST before section 5 on purpose, and moving it is
+     not cosmetic. test_scs_join_capability_figures.py pins its figures by
+     slicing the document from the 4(O) heading to the section-5 heading, so
+     anything that lands between them is searched for those figures too.
+     Merging worktree-760`s
+     4(m)..4(r) sections in AFTER 4(O) widened that slice by ~38 KB and a
+     mutant that changed A0`s cm_190_rx from 583 to 584 SURVIVED -- the string
+     "584" occurs in the widened slice as the item id `vms-584`. The gate was
+     right and the document was wrong; the sections are reordered rather than
+     the slice loosened. Keep 4(O) immediately above section 5. -->
+
+### 4(m) SCS connection lifecycle — the `op` verb set at abs 60 (GROUNDED, `vax3-2to3-established-join-20260730.pcap`)
+
+Every SCS connection-control frame carries a little-endian verb at **abs 60**
+(`sca[46:48]`). Prior sections decoded individual frames; this is the complete verb
+set and state machine, grounded on a real VAX (VAX3, `08:00:2b:11:22:33`) joining the
+live 2-node cluster — the only capture in the library of an **established** join by a
+genuine VMS node, and therefore the authority for connection semantics.
+
+| op | name (inferred) | SCA len | sent by | meaning |
+|----|-----------------|---------|---------|---------|
+| 0 | CONNECT-REQUEST | 110 | initiator | opens a connection to a named SYSAP; `remote_conid`=0, `local_conid`=own handle; `name@76` = target SYSAP, `result@92` = offered local SYSAP |
+| 1 | CONNECT-ECHO | 66 | acceptor | "received"; echoes `remote_conid`=initiator's handle, `local_conid` still 0. **Every** accept emits this first |
+| 2 | CONNECT-RESPONSE | 110 | acceptor | the ACCEPT — supplies the acceptor's handle in `local_conid`; binds the Con.ID pair |
+| 3 | CONNECT-CONFIRM | 62 | initiator | initiator acknowledges the bind. **Load-bearing**: without it the connection stays half-open and the peer will not accept the initiator's *next* connect — and, on the `VMS$VAXcluster` VC specifically, will not run the add-member dialogue on it at all (see below) |
+| 4 | CONNECT-ACCEPT (alt) | 62 | acceptor | the accept form used when answering a **member-initiated `MSCP$DISK`** connect (in place of op 2) |
+| 5 | CONNECT-CONFIRM (alt) | 58 | initiator | confirm paired with op 4 |
+| 6 | DISCONNECT-REQUEST | 62 | either | tears the connection down. **Bidirectional**: each side sends its own op 6 and answers the peer's with op 7 |
+| 7 | DISCONNECT-RESPONSE | 58 | either | acks an op 6 |
+| 8 | CREDIT/READY-REQUEST | 58 | either | post-bind flow-control/ready exchange |
+| 9 | CREDIT/READY-RESPONSE | 58 | either | answers op 8 |
+| 10 | DATA / DIRECTORY-OP | 94/110/190 | either | directory lookup (§4h), MSCP command (§4e), and the 190-byte SYSAP config dialogue (§4j) all ride op 10 |
+
+**Response construction (ops 7/9):** a standard reflection — swap Ethernet src/dst,
+swap the cluster-logical addresses at abs 16 / abs 24, swap the Con.ID pair
+(`rc`↔`lc`), set `op = op+1`, `recv_ack` = the request's `send_seq`, and take a fresh
+`send_seq` from the shared counter.
+
+**Directory connections are TRANSIENT and serially reused.** A `SCS$DIRECTORY`
+connection is opened, used for lookups, then closed by the op8/9 + op6/7 sequence. A
+node opens a *new* directory connection later rather than keeping one alive. Do not
+model it as long-lived.
+
+#### The msgtype phase rule (abs 30) — supersedes the §4(d) note for connection frames
+
+`msgtype` tracks the **connection's** phase, not the node's:
+- **`0x5b`** while a connection is being established — the joiner's own `SCS$DIRECTORY`,
+  `MSCP$DISK` **and** `VMS$VAXcluster` CONNECT-REQUESTs are all `0x5b`, as are its
+  op 3 confirms and its first directory lookups.
+- **`0x4b`** once traffic is data-phase — later lookups on an established directory
+  connection, MSCP commands, and all 190-byte SYSAP config frames.
+
+The acceptor answers in the phase it has reached, so a `0x5b` request is commonly
+answered with a `0x4b` echo/response. Sending a connect as `0x4b` when the peer expects
+an establishing connection, or a post-establishment lookup as `0x5b`, causes the member
+to **echo (op 1) but never accept (op 2)** — the signature failure mode.
+
+#### Connect-class at abs 22 (`sca[8:10]`)
+
+Connection-control frames carry **`0x0001`** here. (`0x03e8` appears in some
+fresh-formation captures and is *not* accepted by an established member — a member that
+receives it echoes and stalls.) The same field carries the node-incarnation echo on
+`0x41` START frames (§4i); it is phase-dependent, not a single global constant.
+
+#### Ordering invariant
+
+The joiner's connects are **pipelined on one shared, contiguous `send_seq`** — it issues
+the next connect/lookup before earlier responses arrive. It is *not* stop-and-wait. What
+is strictly ordered is the **confirm**: a connection must be confirmed (op 3) before the
+initiator's next CONNECT-REQUEST will be accepted.
+
+#### The VC confirm gates the ENTIRE membership dialogue (GROUNDED, `vms-760`)
+
+The op-3 confirm on the joiner's own `VMS$VAXcluster` VC is not merely
+housekeeping for the *next* connect — it is what makes the peer's connection
+manager treat the VC as usable at all. Reference ordering:
+
+```
+frame 132  ss=10  J->M  CONNECT-REQUEST  VMS$VAXcluster
+frame 136  ss=11  M->J  op 2 ACCEPT
+frame 139  ss=13  J->M  op 3 CONFIRM            <-- load-bearing
+frames 142/143 ss=14,15 J->M  the 190-byte MODEL+PARAMS config
+frames 145/146          M->J  the peer's reciprocal config      (+0.3 ms)
+frame 162  +0.9543      M->J  the peer opens its OWN SCS$DIRECTORY connect back
+```
+
+**Omit frame 139 and everything from 145 onward disappears.** Observed
+directly (`d94-disc2.pcap`, `d94-disc3.pcap`): a joiner that sent only op 10 on
+its VC Con.ID got its config burst **bound and silently discarded** — no
+reciprocal config, and — the diagnostic tell — **no member-initiated connections
+back**, which a real member opens to a real joiner within ~15 ms. Restoring the
+confirm restored both immediately.
+
+> This is worth stating plainly because the failure looks nothing like a missing
+> acknowledgement: every frame the joiner sends is accepted at the SCS layer,
+> the Con.ID pair binds, `SHOW CLUSTER` shows the node as `NEW`, and the peer
+> simply never speaks again. It is easy to misread as an admission policy
+> decision taken *above* SCS. It is not — it is a half-open connection.
+
+### 4(n) MSCP disk-client command layer (GROUNDED, same capture)
+
+§4(e) decoded MSCP request/response *framing*; this is the client command sequence a
+joiner must execute, and the MSCP message layout carried in the op-10 body at **abs 72**.
+
+| body offset | field |
+|-------------|-------|
+| `[0:2]` | class token — `0x0002` SET CONTROLLER CHARACTERISTICS, `0x0001` GET UNIT STATUS |
+| `[2:4]` | message id — increments per command, **echoed verbatim** by the server |
+| `[4:6]` | unit word (GUS: the unit being queried; END: the unit returned) |
+| `[8]` | MSCP opcode — `0x04` SET CTLR CHAR, `0x03` GET UNIT STATUS; **END response = opcode \| 0x80** |
+| `[9]` | flags |
+| `[10:12]` | modifiers on a command (`0x0001` = NEXT-UNIT); **MSCP status** on an END |
+
+MSCP status majors observed: `0x0000` SUCCESS, `0x0004` UNIT AVAILABLE, `0x0003` UNIT
+OFFLINE.
+
+**The client sequence (complete — this is all a joiner does):**
+1. `SET CONTROLLER CHARACTERISTICS` **twice** → END `0x84`, status SUCCESS.
+2. `GET UNIT STATUS` walk with the NEXT-UNIT modifier. **The first command seeds unit
+   word `0x0001`**; each subsequent command uses *the previous END's returned unit word
+   + 1*. Each real disk answers status AVAILABLE; the walk ends when an END returns
+   status **OFFLINE**, which is the end-of-list terminator, not an error.
+3. Nothing else — there is **no MSCP INIT handshake** before it (the SCS
+   connect/accept/confirm subsumes it) and **no ONLINE or READ** after it. The joiner
+   never mounts or reads the disk during the join.
+
+Seeding the first GUS with unit `0x0000` makes the server answer OFFLINE immediately and
+the enumeration terminates after one exchange — a silent, plausible-looking failure.
+
+### 4(o) The joiner's category-0x01 membership dialogue, end to end (GROUNDED, `vms-760`)
+
+§4(j) grounded the SYSAP envelope and the field map. This is the **order of
+events** on an established join, and in particular *when* each of the joiner's
+three config messages goes out — the part that decides whether admission starts.
+
+| # | t (ref) | dir | cat | op | meaning |
+|---|---------|-----|-----|----|---------|
+| 1 | +0.9394 | J→M | `0x01` | `0x14` | model advertisement |
+| 2 | +0.9394 | J→M | `0x01` | `0x01` | cluster parameters (VOTES, `"V7.3"`) |
+| 3 | +0.9397 | M→J | `0x01` | `0x14`+`0x01` | the peer reciprocates in kind |
+| 4 | **+5.8774** | J→M | `0x01` | **`0x02`** | **config/topology — this starts admission** |
+| 5 | +5.8777 | M→J | `0x04` | `0x00` | peer ack (0.3 ms later) |
+| 6 | +5.8804 | M→J | `0x01` | `0x03` | membership **COMMIT** request (`txn`,`cksum`) |
+| 7 | +5.8806 | J→M | `0x81` | `0x03` | joiner echoes the token |
+| 8 | +5.8808… | M→J | `0x01` | `0x05` | lock/resource-database rebuild requests |
+| 9 | +5.8815… | J→M | `0x81` | `0x05` | joiner echoes each token |
+| 10 | +5.8827… | M→J | `0x01` | `0x06` | burst, acked by the joiner with `0x04/0x49`,`0x04/0x00`,`0x04/0x02` |
+
+**The initial burst is MODEL+PARAMS only — but `0x02` is deferred, not
+omitted.** Sending `0x02` inside the initial burst leaves the peer silent
+(grounded previously); never sending it leaves the dialogue permanently
+half-finished.
+
+**⚠ UPDATE 2026-08-01 (`vms-2f3`): the gap is not a fixed delay and it is not
+idle.** It measures **1.44 s** (`af2-firsttimer`, VX3's rejoin at SCA 20170) and
+**4.4 s** (`vax3-2to3`), so "~4.9 s" was one specimen, not a constant. **GROUNDED:
+what the real joiner does in that window** (`af2-firsttimer` frames 20212–20243,
+32 frames) is a complete **client run of its own**:
+
+1. opens **its own** `SCS$DIRECTORY` connection — it does **not** reuse the
+   member's — and confirms it;
+2. looks up `MSCP$TAPE` and `MSCP$DISK` on it;
+3. opens an `MSCP$DISK` connection (op 0/1/2/3);
+4. runs 2× SET CONTROLLER CHARACTERISTICS, then the full GET-UNIT-STATUS
+   NEXT-UNIT walk (10 command/END pairs);
+5. tears the directory connection down;
+6. *then* sends `op 0x02`.
+
+So the rule is not "wait N seconds" — the joiner sends `op 0x02` when its own
+disk-client discovery is finished. **OVMX implements none of steps 1–5** and
+substitutes a `JOIN_CFG2_DELAY_MS` timer. Whether the run is a *gate* on
+admission is **not** decidable from passive capture — `vax3-2to3#285` carries an
+all-zero topology body and is acked in 0.3 ms, so the MSCP walk is not *encoded*
+into `op 0x02`. But it is the largest ungrounded behavioural gap left between
+OVMX and a real joiner.
+
+**Do NOT "fix" this by matching the `op 0x02` ack-msg alone.** A real joiner's
+admission `op 0x02` is `(smsg=3, amsg=2)` and OVMX's bundled one is
+`(smsg=3, amsg=0)` — a shape that occurs 104× from OVMX and **0× in 196 real
+specimens**, so the observation is correct. But `OVMX_PURE_SERVER=1` already
+emits the reference shape (2-frame burst, deferred, coordinator-only, correct
+`amsg`) and **the coordinator answers it not at all** — no ack, no COMMIT — where
+the malformed bundled form draws an ack in 0.4 ms. Tested 2026-08-01, run `p1A`,
+fresh identity, no code change. See `docs/HANDOFF-vms-2f3.md` §4c.2.
+
+**Which VC carries it.** A member opens its own `VMS$VAXcluster` VC back to the
+joiner **only if the joiner has not already opened one to it**. In the reference
+VAX3 opened its own VC to VAX1 (so VAX1 reused it) but not to VAX2 (so VAX2
+opened one, frame 208, and the whole commit dialogue rode VAX2's). Either way
+the dialogue rides **one** VC per peer; answer on whichever the request arrived
+on.
+
+**Two body fields of the admission `0x02` are REPLAYED, not decoded** —
+`body[10:12]` = `0x5041` and twelve `0x20` spaces at `body[40:52]`
+(frame 285). They are **not constants**: the same node's later `0x02`
+(frame 8658) carries `0x0004` and binary data in those places. One specimen of
+one variant; see §5(z).
+
+### 4(p) The cluster-wide state-transition BARRIER (GROUNDED, `vms-760`)
+
+After the add-member commit the coordinator runs a **12-step barrier**. It is not
+joiner-private work: the coordinator runs the same dialogue with **every** member
+and releases step *N* to nobody until **all** of them have sent their step-*N*
+request.
+
+#### Does the step count scale with membership? NO — the FRAME count does (GROUNDED, `vms-584`)
+
+This mattered enough to be measured rather than assumed: if the step count grew
+with cluster size, OVMX would strand the first larger cluster it met and nothing
+in the earlier evidence would have warned us. A census of **41 captures** finds
+**40 transitions, of which 30 ran a barrier to completion**, and:
+
+- **Every completed barrier tops out at exactly step 12** — indices 1…12, no
+  gaps, no 13. M=2 (16 barriers), M=3 (11), M=4 (3): **zero variance.** The four
+  partial barriers all stop at an OVMX defect, not at a protocol boundary.
+- **The frame count scales exactly: `#0x0b = #0x0c = 12 × (M−1)`, in 30 of 30.**
+- The topology is a **star**. Every member exchanges `0x0b`/`0x0c` only with the
+  coordinator; members never barrier with each other.
+- It is **one cluster-wide lock-stepped barrier**, not `M−1` independent runs:
+  `0x0c#N` never precedes the last `0x0b#N` — **0 violations out of 12 steps in
+  every transition**.
+- A class-`0x03` (remove-a-failed-node) transition runs the **same 12 steps and
+  the same `12 × (M−1)` law**; only its opening differs (§4(r)). A class-`0x04`
+  self-departure emits its `op 0x0a` and starts **no barrier at all**.
+
+> **Implementation consequence, and it is the reassuring one:** a joiner or an
+> ordinary member always sends exactly **12** `0x0b` frames and receives exactly
+> **12** `0x0c`, *regardless of cluster size*. Its cost is flat and it does not
+> need to know M. The `12 × (M−1)` scaling is entirely the **coordinator's**
+> obligation — which OVMX will inherit only at T3, when it can be elected.
+> The one member-side effect of a large cluster is **latency**: the coordinator
+> holds `0x0c#N` until the slowest member reports, so per-step wait grows with M.
+> **Do not time out on a step merely because it is slow.**
+
+> **No peer ever announces the step total.** An exhaustive scan of all 54 `op
+> 0x09` opens and all 65 class-`0x02` `op 0x0a` GOs finds no byte equal to 12 or
+> 13, and no LE u16 equal to 12, at any constant offset. **12 must be a
+> constant** — but instrument for a mismatch rather than trusting it, because…
+
+> **…the honest bound on this evidence is FOUR MEMBERS.** The largest cluster in
+> the entire library is VAX1+VAX2+VAX3+OVMX (bitmap `0x1e`), and OVMX is one of
+> the four; the largest all-reference-VAX cluster is **three**. Treat "12" as
+> GROUNDED-to-M=4. Nothing above 4 is grounded, and `vms-584` item 1 exists to
+> extend it.
+
+| step | dir | cat | op | note |
+|---|---|---|---|---|
+| open | M→J | `0x01` | `0x09` | `body[16:18]=0x0240`; carries the transition **epoch** at `body[12:16]` and the membership **bitmap** at `body[55]` |
+| | J→M | `0x81` | `0x09` | echo + **three** mutations (below) |
+| go | M→J | `0x01` | `0x0a` | `body[16:18]=0x0260`. **Never answered.** Start the barrier at N=1 |
+| ×12 | J→M | `0x01` | `0x0b` | epoch at `body[12:16]`, step N (LE u32) at `body[16:20]` |
+| | M→J | `0x81` | `0x0b` | the coordinator's ack — **not** the release |
+| | M→J | `0x01` | `0x0c` | release of step N. **Never answered.** N<12 → N+1; N=12 → complete |
+
+**GROUNDED across 6 joins / 4 clusters / 3 different joiner nodes**: exactly 12
+steps, indices 1…12, and the `0x0240`/`0x0260`/`0x0210` tags are invariant. The
+count 12 is the only termination signal — `0x0c#12` is byte-identical to earlier
+releases apart from its index.
+
+**The gating is directly observable.** At step 5 the reference coordinator held
+the joiner's completed request for **89 ms** and released `0x0c#5` to *both*
+members 0.8 ms after the last member caught up. `0x0c#N` never precedes `0x0b#N`
+anywhere — 72 ordered pairs, 0 residuals.
+
+> **A joiner that ignores the barrier does not merely fail to join — it breaks
+> the cluster.** The coordinator's barrier stays permanently one member short, so
+> the transition times out, `%CNXMAN, aborting VAXcluster state transition` is
+> logged, and the healthy members are dropped. Observed twice before this was
+> implemented.
+
+**Notifications carry `txn=0` and are NEVER answered.** `op 0x0a` and `op 0x0c`
+get no response of any kind — no `0x8a`/`0x8c` exists in any capture, and no
+cat-`0x04` ack is attributable to them. Only the `op 0x06` burst is acked. An
+`op 0x0a` whose `body[16:18]` is not `0x0260` (e.g. `0x0460`, seen on a running
+cluster) is **not** a barrier start.
+
+#### The `0x81` echo takes THREE mutations — corrects §4(j)
+
+§4(j) says a response echoes the request body with the response bit set. It is
+echo **plus three** edits, verified on `0x03`, `0x05` and `0x09` over 6/6
+responses in 5 captures with 3 different responder nodes:
+
+```
+body[8] |= 0x80        response bit
+body[18]  = 0x01       response marker    (NOT on op 0x0f -- see §4(r))
+body[55]  = 0x00       cleared            (op 0x09 only)
+```
+
+> **`body[55]` is not a "mutation slot" — it is the coordinator's MEMBERSHIP
+> BITMAP, and the responder is refusing to assert it** (GROUNDED, `vms-584`).
+> `popcount(body[55])` of the `op 0x09` open **equals the post-transition member
+> count in 54 of 54 opens, zero residuals**; bit *k* is the member holding CSID
+> index *k*, and bit 0 is never set. The three values this section originally
+> recorded as "held `0x0e` / `0x0a` / `0x06`" are exactly the M=3, M=2 and M=2
+> bitmaps.
+>
+> | bmap | bits | M | context |
+> |---|---|---|---|
+> | `0x06` | 1,2 | 2 | fresh 2-node formation |
+> | `0x0a` | 1,3 | 2 | a node's 2nd incarnation (slot 3) |
+> | `0x0e` | 1,2,3 | 3 | 3-node |
+> | `0x12` | 1,4 | 2 | 3rd incarnation (slot 4) |
+> | `0x16` | 1,2,4 | 3 | a node joins after the slot-3 holder departed |
+> | `0x1e` | 1,2,3,4 | 4 | VAX1+VAX2+VAX3+OVMX |
+> | `0x22` | 1,5 | 2 | 4th incarnation (slot 5) |
+>
+> Slot allocation is self-consistent across independent runs: `af2-firsttimer`
+> shows `0x0a → 0x12 → 0x22` as one node rejoins three times taking slots 3, 4, 5,
+> and a vacated slot is **not** reused by the next joiner.
+>
+> **A joiner can therefore read the expected barrier-participant set out of the
+> open it receives.** Two cautions: a class-`0x03` removal has **no `op 0x09` at
+> all** (it starts directly at `op 0x0a` / tag `0x0360`) and so carries no bitmap;
+> and one byte holds only 8 slots while the library already reaches slot 5.
+> `body[52:55]` and `body[56:60]` are all-zero in every specimen, so the field is
+> certainly **wider than a byte**, but its extent and endianness are UNDETERMINED
+> — a BE u32 at `body[52:56]` fits the data as well as an LE map based at
+> `body[55]`. **Do not assume 8 slots.**
+
+#### Category is per-SYSAP, and the response SHAPE is per-category
+
+`cat`/`op` are namespaces scoped to the SYSAP the Con.ID resolves to; the same
+numbers mean different things on `SCA$TRANSPORT` and `VMS$VAXcluster`. Response
+shape likewise does not generalise:
+
+- **cat `0x01`** — echo the whole body (+ the three mutations).
+- **cat `0x06`** — closes the transaction. Carry only the `(txn,checksum)`; send
+  your **own** node-parameter block, the same one carried in the `op 0x01`
+  PARAMS message (`body[72:76]=0x10`, `body[76:80]=0x01`,
+  `body[88:96]="V7.3    "`). **Echoing this request's payload bugchecks the
+  peer** — it carries that peer's live Con.IDs and cluster id, and reflecting
+  them back produced a fatal `INCONSTATE, Inconsistent I/O data base`.
+- **cat `0x02`** (DLM) — during the join the coordinator replays lock-resource
+  records as token-correlated transactions **interleaved with the barrier**, and
+  gates the next step on them being answered. Five unanswered cat-`0x02`
+  requests froze the barrier at step 5.
+  **`op 0x0d` is the ONLY cat-`0x02` opcode that occurs during a join** (216/216
+  in the reference), and its response is now **GROUNDED to an unusual degree**:
+  the recipe below reconstructs **1367 of 1367** real responses byte-for-byte,
+  from four responder nodes across two captures, with zero residuals.
+
+  ```
+  memcpy(resp_body, req_body, 132);      /* VERBATIM echo            */
+  resp[0:2] = own SYSAP send-msg#        /* envelope                 */
+  resp[2:4] = ack of the peer's send#    /* envelope                 */
+  resp[8]  |= 0x80                       /* 0x02 -> 0x82             */
+  resp[34]  = 0xf9                       /* MANDATORY, unconditional */
+  /* everything else -- txn/cksum, opcode, body[12:16], the L1 region
+     and the resource name -- echoed byte for byte                   */
+  ```
+
+  `body[34]` is written **unconditionally**: requests carried `0xf9`(209),
+  `0x00`(3), `0x20`(2), `0x72`(1), `0xbc`(1) and *every* response carried `0xf9`,
+  landing mid-ASCII in two specimens — a fixed-offset stamp, not a payload field.
+  INFERRED to be a per-opcode result code; `op 0x01/0x07/0x15` use `0xfa`.
+
+  **Request layout (GROUNDED):** `body[12:14]=0x0001` and `body[14:16]=0x0003`
+  invariant · `body[16]` = L1 length · `body[47]` = **resource-name length** ·
+  `body[48 : 48+len]` = the **lock RESOURCE NAME** in ASCII + binary sub-key.
+  Observed verbatim: `"F11B$aSYSDSK1     "`, `"CACHE$cmSYSDSK1     "`,
+  `"VCC$vSYSDSK1     "`, `"SYS$_$2$DUA0:"`, `"SYS$SYS_ID"` — the documented
+  Files-11 / extent-cache / VCC namespaces (§4(f)).
+
+  > ⚠ **DO NOT apply the cat-`0x01` mutations here.** `body[18]` is the 2nd byte
+  > of the L1 region and **`body[55]` is the 8TH BYTE OF THE RESOURCE NAME** for
+  > every observed length (13–24). OVMX applied both and shipped
+  > `"CACHE$cmSYSDSK1"` as `"CACHE$c\0SYSDSK1"` on all eight replies; VAX1 and
+  > VAX3 took a fatal **`LOCKMGRERR`**. The in-capture control is decisive:
+  > across the same milliseconds VAX1 and VAX3 exchanged the *same* records with
+  > each other correctly and neither crashed. Specimen:
+  > `ovmx-760-lockmgrerr-20260730.pcap`.
+
+  > **The plausible-sounding theory that was WRONG.** "A joiner holds no locks,
+  > so echoing a rebuild record asserts lock state it does not have" was carried
+  > for three sessions and is false. The echo returns the **coordinator's own
+  > record** with a result code and claims nothing — which is exactly why a
+  > lock-less joiner answers all 216. Refusing them instead pins the barrier at
+  > step 5 forever: the coordinator **retransmits each unanswered record up to
+  > 3×** (measured, `ovmx-760-dlm-refused-20260730.pcap`). Step 5 *is* the
+  > lock-rebuild barrier step — in the reference it is held for 89 ms while 216
+  > of these transactions run.
+
+#### Residue: several "fields" are uninitialised buffer contents
+
+`op 0x02`'s `body[10:12]` and `body[40:52]`, and the varying opcode of a
+cat-`0x04` ack, are **not data**. 9 of 12 genuine `op 0x02` specimens carry zeros
+there and are acked identically; the outliers hold printable digraphs (`"AP"`,
+`"IS"`) and ASCII spaces. A real cat-`0x04` ack reads
+`04 49 "IR_LOOKUP  SCS$DIRECTORY"` — a leftover `"DIR_LOOKUP SCS$DIRECTORY"`
+whose first two bytes were overwritten by the category and opcode. An
+implementation should send zeros; do not reproduce another implementation's
+uninitialised memory.
+
+#### Admission is single-coordinator — and the peer must be THE COORDINATOR
+
+The joiner sends its `op 0x02` to **exactly one** peer, which relays the new node
+to the rest (`op 0x12`) and then runs the barrier across all members.
+
+**A non-coordinator peer SILENTLY DISCARDS `op 0x02`.** GROUNDED, `d94-e15`
+byte-verified: all three members received a byte-identical `op 0x02` inside
+400 ms; VAX1 and VAX2 each answered only a cat-`0x04` ack and did nothing further
+— VAX1 had a **383 ms head start** — while VAX3 relayed `op 0x12` to VAX1 1.0 ms
+later and drove `0x03`/`0x05`/`0x09`/`0x0a` to **both** peers. The reference
+joiner behaves identically: it sent its `op 0x02` to **VAX2, not VAX1**
+(frame 285), and VAX2 relayed to VAX1 in 0.3 ms (286). So the reference picks
+**the coordinator**, not "one peer arbitrarily".
+
+> **CORRECTION to the previous text.** Fan-out does **not** start N competing
+> transitions. In `d94-e15` exactly **one** transition ran, started by VAX3;
+> the other two contributed only acks, and no abort occurred. The earlier
+> "competing transitions / cluster abort" reading is **not reproduced**. Fan-out
+> appeared to work only because it happened to include the coordinator.
+
+*How* a joiner identifies the coordinator is **NOT grounded**. No wire-visible
+coordinator flag was found: the coordinator is a **zero-vote** node in both
+specimens, and every field distinguishing VAX3 from VAX1/VAX2 in our lab is
+all-zero on the reference's coordinator VAX2 — so those are node-local
+properties, not a role marker. The only predicate surviving both specimens is
+**highest DECnet node number** (VAX2 of {VAX1,VAX2}; VAX3 of {VAX1,VAX2,VAX3}),
+which is confounded with "highest SCSSYSTEMID" and "last to have joined".
+OVMX implements that observable and labels it INFERRED (`cm_pick_coordinator`).
+
+#### Never answer a (category, opcode) pair you have not grounded
+
+Once the relay works, the **non-coordinator members open their own
+token-correlated transactions with the joiner**, carrying opcodes that never
+appear in the pre-relay dialogue — `0x12`, `0x0f`, `0x08`, `0x00` were all
+observed (`ovmx-760-relay-crash-20260730.pcap`).
+
+> ⚠ OVMX answered every one of them with the cat-`0x01` full-body echo and
+> **crashed two real VAXes**: VAX3 `INCONSTATE, Inconsistent I/O data base` and
+> VAX1 `INVEXCEPTN, Exception while above ASTDEL or on interrupt stack`. These
+> request bodies carry the **peer's own live Con.IDs and cluster id**; echoing
+> one reflects that peer's I/O structures back at it. It is the same failure as
+> generalising the cat-`0x01` echo to cat-`0x06`.
+
+The rule is an **allowlist, never a default**: answer only (category, opcode)
+pairs grounded in the reference; for anything else send **nothing** and log it.
+Silence is the safer failure — but not a free one. A joiner that fails to answer
+something the coordinator gates on strands the transition, which times out and
+drops healthy members. An unanswered pair is a gap to close, not a resting state.
+
+### 4(q) After the barrier — what makes a node a MEMBER (GROUNDED, `vms-760`)
+
+**There is no "you are now a member" message, and no joiner-emitted field flips.**
+Membership *follows from the transition completing*. Grounded three ways:
+
+- Every non-DLM message in the 500 ms after `op 0x0c`#12 recurs elsewhere in the
+  capture; none is unique to the transition. `cat 0x06`/`0x86 op 0x00` is a
+  recurring member poll (~1/s, and one occurs *before* the barrier);
+  `cat 0x02 op 0x02` is an **OPCOM broadcast relay** (ASCII `"OPCO"` at
+  `abs 82 = 0x00bb`), not a membership message and never answered.
+- The joiner's HELLOs are **byte-identical across the boundary** except the
+  padded-vs-plain framing (abs 14–15), the §4(a).1 channel-verify oscillator
+  (abs 30) and a free-running tick (abs 96–100). Incarnation (`abs 92`) and
+  poller sweep (`abs 128`) are unchanged. Sampled over +390 s.
+- The joiner's **CSID is already on the wire ~160 ms *before* the barrier opens**
+  (frame 297), and it never appears in a HELLO (0 hits in 741 sampled).
+
+> `SHOW CLUSTER`'s `NEW` → `MEMBER` is **member-side state produced by the
+> transition**. There is nothing extra for a joiner to emit to be *rendered* as
+> `MEMBER`.
+
+**`op 0x0c`#12 must NOT be answered**, exactly like every other release. No
+`0x81`/`0x0c` exists anywhere in the capture, and `op 0x0c` carries `txn=0`, so
+there is nothing to correlate. The joiner's next frame is a **standalone
+`cat 0x04` credit ack** — for steps 1–11 that ack rode piggyback on the next
+`op 0x0b`; after step 12 there is no next step, so it goes out alone. Answering
+the release would invent a message VMS never sends (Rule 10).
+
+**Ongoing MEMBER obligations** (a node that stops meeting them may be dropped):
+HELLO cadence is *unchanged* (~2.3 s); **SCS credit return (`mt 0x48`) becomes
+continuous** (~0.75 frames/s combined, vs a handful during setup); members
+re-issue an `MSCP$DISK` CONNECT-REQUEST every ~10 s **indefinitely**; fresh
+`SCS$DIRECTORY` connections open post-join; `SCA$TRANSPORT` is opened once by a
+peer; and `mt 0x7b` (len 204) frames appear on the `VMS$VAXcluster` Con.ID pair
+— **payload undecoded**; accept and ack at the SCS level, answer nothing above it.
+
+**What a LOCK-LESS member actually receives — MEASURED, not inferred.** Over a
+7-minute OVMX membership with full CM tracing, the *entire* post-`XITDONE`
+inbound inventory was: **5×** `cat 0x06 op 0x00` (answered `0x86`), **1×**
+`cat 0x04 op 0x00` (notification, correctly unanswered), **1×** `cat 0x02
+op 0x01` (refused, see §4(p) — free). **Zero** `cat 0x02 op 0x12`.
+
+> The reference joiner answers 411 `cat 0x02 op 0x12` and 138 `op 0x01` post-join
+> because it is a real node **with lock activity**. A node holding no locks never
+> provokes them. So the reference's post-join answer table is a **superset scoped
+> to a lock-holding member**, not a checklist every member must meet — and the
+> steady-state obligations of a lock-less member are far smaller than it implies.
+> Do not implement the whole table on the strength of the reference alone;
+> measure what actually arrives first.
+
+**The post-barrier DLM burst is a consequence, not an obligation** (INFERRED):
+membership is reached at the release, before any of it; all 338 cat-`0x02` frames
+in the window are joiner-initiated and every resource is Files-11/MOUNT
+(`MOU$_`, `F11B$*`, `VCC$v`, `DMT$_`), never `CNX$`/quorum. A lock-less OVMX
+likely needs to emit **no** outbound DLM to reach or hold `MEMBER`.
+
+### 4(r) The connection-manager ROLE SLOT and TRANSITION CLASS — `body[16]`, `body[17]` (GROUNDED, `vms-e4b`)
+
+Census over 26 captures in both capture trees, all 204-byte `0x6007` frames.
+`body[0]` = abs 72, so `body[16:18]` = abs 88:90.
+
+**`body[16]` is a stable ROLE SLOT.** It partitions the category-`0x01`
+connection-manager opcodes with zero residuals:
+
+| role | opcodes | meaning |
+|---|---|---|
+| `0x10` | `0x12` (and the coordinator's `0x81/0x0b`) | announce / relay |
+| `0x20` | `0x03`, `0x05`, `0x06`, joiner's `0x02` | commit / lock push |
+| `0x30` | `0x0f` | the extra step of a class-`0x03` transition |
+| `0x40` | `0x09`, `0x08`, `0x0d` | **transition-open** |
+| `0x60` | `0x0a` | barrier GO |
+
+**`body[17]` is the TRANSITION CLASS — not a generation.** The epoch is
+`body[12:16]` (LE u32), where §4(j) and §4(p) already put it.
+
+| class | transition | has `0x05`/`0x06`? | has the 12-step barrier? | opened by |
+|---|---|---|---|---|
+| `0x02` | ADD a member | yes | **yes** | `op 0x09`, tag `0x0240` |
+| `0x03` | REMOVE a failed member | no | **yes** | `op 0x08`, tag `0x0340` |
+| `0x04` | a node announces its OWN departure | no | **no** | `op 0x0d`, tag `0x0440` |
+
+A class-`0x04` departure is `0x12` → `0x03` → `0x0d` → `0x0a` and then nothing;
+an `0x81/0x0b` carrying class `0x04` occurs in **no** capture.
+
+The `op 0x0a` tag is `(class << 8) | role`, i.e. `0x0260` / `0x0360` / `0x0460`.
+Two of the three start a barrier.
+
+**Two things this REFUTES, both of which had been believed:**
+
+1. *`body[16:18]` is `<generation><role>`* — no. `af2-firsttimer-established-20260728.pcap`
+   contains six successive transitions whose epoch runs **3, 4, 6, 7, 9, 11**
+   (monotone) while `body[17]` runs **`0x04, 0x04, 0x02, 0x04, 0x02, 0x02`** — it
+   goes *down*. Frames 1826/1828/1830/1832, 2638/2986/2989, 19431/19433/19435/19440,
+   20247/20595/20598, 33670/34018/34021.
+2. *The transition-open opcode varies with generation (`0x09` gen-2, `0x08` gen-3,
+   `0x0d` gen-4)* — no. That triple is the three **classes**, which merely look
+   like consecutive small integers. The same capture runs three successive ADD
+   transitions at epochs 6, 9 and 11 and opens every one with `op 0x09` / tag
+   `0x0240`; `0x81/0x09` is 54/54 library-wide.
+
+**The role slot must NOT be used as the response key.** Role `0x20` alone spans
+`op 0x03`/`0x05` (full-body echo), `op 0x06` (answered with a cat-`0x04` ack and
+**never** an echo — 7882 frames) and the joiner's own `op 0x02`. Keying on the
+role would fire a 132-byte echo at the entire `op 0x06` burst. Role tags do not
+exist at all on categories `0x02` and `0x06` — the two categories that have
+already bugchecked real VAXes. **The response key is `(SYSAP, category, opcode)`;
+the role slot is a corroborating cross-check and the place the class is read
+from.**
+
+**And an opcode alone is not an identifier either.** `op 0x0d` is the
+class-`0x04` transition-open in category `0x01` and the DLM lock-resource rebuild
+record in category `0x02`, and a single join carries **216** of the latter.
+
+**Response recipes by opcode** (cat `0x01`), each a verbatim body echo plus
+`body[8] |= 0x80` and then:
+
+| opcode | extra mutations |
+|---|---|
+| `0x03`, `0x05`, `0x08`, `0x09`, `0x0d` | `body[18] = 0x01`; `body[55] = 0x00` on `0x09` only (§4(p)) |
+| `0x0f` | **none** — `body[18]` is *echoed*, not forced |
+| `0x12` | `body[18] = 0x01`; `body[17]` = the responder's own current class; `body[20:24]` = LE u32 copy of the request's `body[12:16]` (the epoch) |
+| `0x06` | never `0x81` — answered with cat-`0x04` acks |
+| `0x0a`, `0x0c` | never answered (`txn = 0`) |
+
+> The `0x0f` row reconciles two censuses that looked contradictory. One found a
+> single real `0x0f` response with `body[18] == 1`; the other found six that leave
+> it `0`. The first specimen's **request** already carried `1` — so both are
+> echoes, and neither is a node setting the byte.
+
+**Not accounted for:** what `op 0x0f` (role `0x30`) *means*, and why one responder
+additionally flipped `body[20]` `0x0e`→`0x1e` where another answering the same
+byte did not. `scs-node-leave.pcap` contains no transition frames at all and is
+not usable as a departure specimen; the `af2-*` captures are.
+
+### 4(O) What an OVMX daemon must put on the wire to be admitted — the capability bracket (GROUNDED live, `vms-70e2`)
+
+**What this grounds and why.** `vms-70e2` set out to prove a same-identity
+REJOIN end to end and never reached the question, because its POSITIVE CONTROL
+failed: an SCSD built from `work/vms-187-closure` cannot complete a FIRST join
+either. This section records what that binary does and does not transmit,
+measured against a binary that joins, so the gap is a wire fact rather than a
+branch comparison. Nothing here is a new VMS field — every offset used is
+already grounded above.
+
+**Method.** `tools/cluster/scs_join_capability_measure.py` (re-runnable;
+PASS/FAILs every figure against a checked-in table). Three runs on ONE lab-2
+pod, `vaxlab-4`, a pod that had never seen an OVMX node, inside twelve minutes
+on 2026-08-05, with only the BINARY varying. Guardrail 18: each identity is
+proven from the capture bytes, not from a log. Guardrail 20: the closing
+control ran AFTER the joining one, so "the lab stopped admitting anyone" is
+excluded. Frames are counted between the OVMX MAC and a peer only; peer↔peer
+traffic is not counted, because the two VAXes talk to each other at the same
+rate whatever OVMX does.
+
+| run | binary | identity on the wire | CM 190-byte tx | CM 190-byte rx | OVMX ACCEPT_RSP | verdict |
+|---|---|---|---|---|---|---|
+| `A1` | `work/vms-187-closure` | `OVMXA1` | **3** | **0** | **0** | NOT JOINED |
+| `A0` | `worktree-760-active-directory` | `OVMXA0` | **514** | **583** | **2** | **JOINED, t+13 s** |
+| `A3` | `work/vms-187-closure` | `OVMXA3` | **3** | **0** | **0** | NOT JOINED |
+
+The 190-byte class is §4(d)'s fixed SCS class, the one §4(g)/§4(j)'s membership
+dialogue rides. The failing binary emits its three-frame add-member burst
+(op `0x14`/`0x01`/`0x02`) to one peer at t+2.85 s and then transmits nothing
+further in that class for the rest of the run, and **the peer answers with
+none**. The joining binary sustains the dialogue in both directions to t+25.7 s
+and is a member by t+13 s.
+
+**The connection-control repertoire, at payload `[46:48]` (§4(h)(1a)).** OVMX-
+sourced frames only, over the grounded classes `{58, 62, 66, 110}`:
+
+| run | message types OVMX transmitted |
+|---|---|
+| `A1` | `0` CONNECT_REQ ×1 · `1` CONNECT_RSP ×1 · `2` ACCEPT_REQ ×1 · `6` DISCONNECT_REQ ×2 |
+| `A0` | `0` ×2 · `1` ×6 · `2` ×2 · **`3` ACCEPT_RSP ×2** · `4` REJECT_REQ ×4 · `6` ×2 · `7` DISCONNECT_RSP ×2 · `9` ×2 |
+| `A3` | `0` CONNECT_REQ ×1 · `1` CONNECT_RSP ×1 · `2` ACCEPT_REQ ×1 · `6` DISCONNECT_REQ ×2 |
+
+**The one named frame.** In `A1` and `A3` the peer's `ACCEPT_REQ` (type `2`)
+arrives on OVMX's own `VMS$VAXcluster` connection at t+2.852 s (Con.ID pair
+`4F580002`/`B74F000D`), the `vms-dd5` state machine resolves it to
+CONNECT ACK → OPEN with the action *send ACCEPT_RSP*, and the daemon prints
+`SCSD-W-CONNNOACT … OVMX has no builder for it -- nothing was sent` and closes
+the run with `actions-required-but-not-emitted=1`. The joining binary sends that
+frame twice, one per peer, at t+3.412 s.
+
+<a name="sec4o-refutation"></a>
+**⛔ AND THIS REFUTES A LOAD-BEARING SOURCE COMMENT.**
+`src/vmsscs/include/scs_sdir.h` justified returning a listening CDT to LISTEN on
+*emit* rather than on the response — a deliberate deviation from p. 2-50 — partly
+on the ground that
+<!-- REFUTED-QUOTE-BEGIN -->
+*"OVMX HAS NEVER OBSERVED AN ACCEPT_RSP ADDRESSED TO ITSELF … A listening CDT
+that waited for a frame that never comes would wedge in CONNECT RECEIVED with no
+timeout"* — **REFUTED by run `A1` below; quoted only to kill it.**
+<!-- REFUTED-QUOTE-END -->
+It has. In `A1`, at t+2.851 s, VAX1 answers OVMX's own `ACCEPT_REQ`
+on the `SCS$DIRECTORY` connection with a 62-byte type-`3` `ACCEPT_RSP` addressed
+to the OVMX MAC and carrying OVMX's own Con.ID pair `4F580007`/`B751000C`, and
+the daemon logs the matching `ACCEPT SENT --RCV_ACCEPT_RSP--> OPEN` transition.
+The same frame is present in `A3`. The latency is **0.5 ms**, so "a frame that
+never comes" is not the situation. **The deviation may still be the right design
+— a synchronous ACCEPT has no one to wait for — but that premise is dead and may
+not be restated.** `tests/vmsscs/test_scs_join_capability_figures.py` reds if it
+comes back.
+
+**Explicit non-claim, and it is the important one.** This does **not** establish
+that the missing `ACCEPT_RSP` causes the failed join. Both differences —
+the unsent `ACCEPT_RSP` and the absent CM dialogue — are present together in
+both failing runs and absent together in the joining one, and no run isolates
+either. The CM layer that drives §4(g)'s dialogue is simply not present in the
+failing binary at all, so there is nothing to attribute. Naming a cause here
+would be the correlation §3 of the `vms-2f3` handoff exists to prevent.
+
+---
+
+#### 4(O.1) The integrated tree joins — the `vms-578` bracket (GROUNDED live, `vms-578`)
+
+`vms-578` merged `work/vms-187-closure` (the SCA architecture) with
+`worktree-760-active-directory` (the layer that joins). This is the acceptance
+measurement, taken the same way as the bracket above, on the **same pod**
+(`vaxlab-4`, lab-2) on **2026-08-05**, minutes apart, with the control
+**between** the two runs of the binary under test rather than after them.
+
+Identity is proven ON THE WIRE
+(`strings -a <pcap> | grep -oE 'OVMX[A-Z0-9]{2}'`), not from a log. All three
+runs used the **default** environment — no `OVMX_JOIN_SEQ`, no
+`OVMX_PURE_SERVER`, no `OVMX_MSCP_SERVER`.
+
+| run | binary | identity | CM 190 tx | CM 190 rx | ACCEPT_RSP | verdict |
+|---|---|---|---|---|---|---|
+| `B1` | `work/vms-578` (integrated) | `OVMXB1` | **509** | **575** | **2** | **JOINED, t+13 s** |
+| `B3` | `worktree-760-active-directory` | `OVMXB3` | **513** | **579** | **2** | **JOINED, t+26 s** |
+| `B2` | `work/vms-578` (integrated) | `OVMXB2` | **508** | **571** | **2** | **JOINED, t+13 s** |
+
+Every arm reached `CLUSTER_NODES=3` with `XITDONE=1`. Compare the `A1`/`A3` rows
+above — the same closure code, on the same lab, reaching `cm_190_rx=0` and
+`accept_rsp_tx=0` and never joining. The merge is what closes that gap.
+
+**What differs between the integrated tree and the `worktree-760` control, and
+it is not nothing.** The control emits `1` CONNECT_RSP ×8 and `4` REJECT_REQ ×6;
+the integrated tree emits ×2 and none, and emits one more DISCONNECT pair (×3
+against ×2). Both join. The reduction is the `vms-7fe` p. 2-48 SDIR scan and the
+`vms-561` ACCEPT service replacing `worktree-760`'s open-coded echo-per-connect:
+one CONNECT_RSP per accepted connection instead of one per received frame, and
+no speculative REJECT. **NOT CLAIMED: that the reduction is an improvement.** It
+is a difference, both shapes are accepted by this peer, and nothing here
+measures which one a different peer would prefer.
+
+**The `B1` capture carries two identities**, `OVMXA0` and `OVMXB1`. `OVMXA0` is
+residue — `VAX1` still held the `vms-70e2` `A0` run's CSB on this pod and names
+it on the wire. `B2`, run a cycle later, is clean. Recorded rather than filtered.
+
+**Not in scope and not claimed:** the rejoin (`vms-2f3`). Every run above is a
+FIRST join by an identity that had never been admitted anywhere
+(`no prior-admission sidecar` in each run log).
+
+Re-derive every figure: `tools/cluster/scs_join_capability_measure.py`
+(`EXPECTED_578`). Captures:
+`vms578-{B1,B3,B2}-lab2-vaxlab4-20260805.pcap`.
+
+**The two kill switches were RUN, not asserted (guardrail 23).** Same pod, same
+runner, one extra arm each.
+
+| switch | what it is supposed to gate | measured OFF | measured ON |
+|---|---|---|---|
+| `OVMX_CONNREQ_LEGACY_MSGTYPE=1` | msgtype at `SCA[16]` of the joiner's own VMS$VAXcluster CONNECT-REQUEST | `0x5b`, `0x5b` | `0x4b`, `0x4b` |
+| `OVMX_MSCP_SERVER=1` | MSCP$DISK LISTEN + lookup answer + inbound connect accept | `SDIR listening=2`, `MSCP-SERVER-ACCEPTS-SENT=0` | `SDIR listening=3`, `MSCP-SERVER-ACCEPTS-SENT=4` |
+
+The msgtype figures are read out of the capture (`d94-B2.pcap` /
+`d94-B5.pcap`), selecting OVMX-sourced 110-byte SCA frames whose `[46:48]` is
+message type 0 and whose `[62:78]` is `VMS$VAXcluster` — not from a log line.
+
+**AND BOTH SETTINGS OF BOTH SWITCHES JOINED**, `CLUSTER_NODES=3`, `XITDONE=1`
+(`B4`, `B5`). That is stated because it CONTRADICTS a tempting reading of the
+merge: neither the `0x5b` msgtype nor the MSCP$DISK affirmative is, on this
+lab, the thing that decides a first join. `worktree-760` grounded each on a
+reference capture and both are kept; what this bracket measured is only that
+the integrated tree joins, not WHICH of the merged pieces was necessary.
+Isolating that is a separate experiment and no claim is made about it here.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:
+
+- **`PRCPOLINTERVAL` — GROUNDED, and recorded here because a default that
+  matters is worth pinning to its oracle (`vms-66f`).** The SCS process polling
+  interval of *VAXcluster Principles* p. 2-50 is a real SYSGEN parameter, and it
+  was read off the reference system rather than inferred from the prose —
+  `MC SYSGEN SHOW/SCS` on VAX1 (VAX 7.3, lab-2 replica `vaxlab-1`, 2026-08-05):
+  `PRCPOLINTERVAL  Current 30  Default 30  Min. 1  Max. 32767  Seconds  Dynamic`.
+  `src/vmsscs/include/scs_poll.h` carries all four numbers and clamps to the
+  range. Raw evidence:
+  `/data/training/vax/k8s-labs/vaxlab-1/logs/sysgen-scs-vax1-20260805.txt`.
+  **What is NOT grounded and is labeled as an OVMX choice in that header:**
+  `SCS_POLL_CYCLE_TIMEOUT_MS` (5 s — SCA states no bound on how long a poll
+  cycle may stay open; it is a local timer and puts nothing on the wire), and
+  the forced CDT release when a poller cycle ends without the p. 2-26 disconnect
+  dialogue completing (counted in `descriptors_forced`, see
+  `poll_release_cdt()`).
+
+  > **CORRECTED (`vms-66f` round 4).** The sentence above used to justify the
+  > forced release with "OVMX builds no `DISCONNECT_REQ`". That was true when it
+  > was written and is FALSE as of `vms-591`, which added
+  > `scs_disc_build_request()`. The poller's own emitter in `scsd.c` went on
+  > answering `NOBUILDER` for `SEND_DISCONNECT_REQ` anyway, so the p. 2-50 cycle
+  > could never end the way the page describes and **every** cycle force-released
+  > its descriptor. It now sends the frame, the dialogue completes, and
+  > `descriptors_forced` stays at 0 on a normal cycle — the forced release is
+  > what is left for a cycle that is ABANDONED (timeout, lost circuit, node
+  > dropped mid-cycle), which is a real case and still an OVMX choice. The
+  > completed teardowns are counted apart in `disconnects_closed`.
+
+- **The poller's ANSWER READING is two-thirds inferred (`vms-66f`).** p. 2-50
+  says the directory answers "Yes" or "No"; only the "No" is on our wire, as the
+  literal `"NOT PRESENT HERE"` in `[78:94]` (§4(h)(2)). "Yes" cannot be read —
+  §4(h) gap (c) — so `enum scs_dir_answer` is three-valued: `NO` is GROUNDED,
+  `YES` means "non-zero and not the negative marker" (INFERRED), and an all-zero
+  result is reported `UNKNOWN` and notifies nobody. A boolean here would have
+  turned every unreadable response into a discovery.
+
+- **The `CONNECT_RSP` REFUSAL CODES — "no such SYSAP" and "busy, try again
+  later" (`vms-7fe`). NOT GROUNDED, IN PLACEMENT OR IN VALUE, AND OVMX SHIPS
+  BOTH.** *VAXcluster Principles* p. 2-48 requires a `CONNECT_RSP` "containing
+  the 'no such SYSAP' error" when the target SYSAP is not in the list of
+  listening SYSAPs, and p. 2-50 requires "a response that essentially says
+  'busy … try again later'" when the listening CDT is already in CONNECT
+  RECEIVED. **The book publishes no code for either, and neither frame is on any
+  capture we hold:** all 16 `CONNECT_RSP` frames in `formation-ci1.pcap` are the
+  positive kind (their targets were listening), and the companion word at
+  `[48:50]` is recorded as INFERRED in §4(h)(2). OVMX therefore carries its
+  refusal in `[48:50]` — the only word the positive `CONNECT_RSP` holds at zero
+  and the only one §4(h) named as a status/flag — with **OVMX-invented values**
+  `0x0002` (no such SYSAP) and `0x0003` (busy), declared in
+  `src/vmsscs/include/scs_sdir.h`. These are **not** VMS status codes and not
+  `$SSDEF` values. A capture of a real VAX refusing a connect request supersedes
+  both, and the frame class itself (the 66-byte `CONNECT_RSP`, `[46:48] == 1`,
+  requester's Con.ID echoed, local Con.ID `0`) IS grounded — only the status
+  word is invented. **Measured blast radius:** in the configuration OVMX runs
+  neither refusal is ever emitted, because the only two `CONNECT_REQ`s the
+  reference VAX addresses to OVMX name `SCS$DIRECTORY` and `VMS$VAXcluster` and
+  OVMX LISTENs for both; `tools/cluster/scsd_wire_diff.sh` byte-diffs 34 frames
+  across the pre/post trees with zero differences, and the daemon's exit summary
+  reports `no-such-sysap-sent` and `busy-sent` every run. Kill switch:
+  `OVMX_NO_SDIR=1`.
+
+  > **⚠ CONFLICT RAISED, NOT RESOLVED HERE (`vms-66f`, 2026-08-05).** The
+  > sentence above calls `[48:50]` "the only [word] §4(h) names as a
+  > status/flag". §4(h)(2a) has since **refuted the flag reading of `[48:50]`**
+  > and §4(d)'s ⭐ block grounds it as the SCA credit field for exactly the
+  > classes involved, including the 66-byte `CONNECT_RSP` (`66 → 944/1/0`:
+  > constant 0 in 944 frames). The *observation* that survives is only "the
+  > 66-byte `CONNECT_RSP` holds 0 there" — which is now explained as "no credit
+  > extended", not as "an unused status word". **So OVMX's invented refusal
+  > codes `0x0002`/`0x0003` are being written into a field the spec elsewhere
+  > grounds as a credit count, and a peer that reads credit there would see
+  > OVMX extend 2 or 3 send credits it does not honour.** `vms-66f` does not
+  > change `vms-7fe`'s frames — that is `vms-7fe`'s decision to revisit — it
+  > records the collision so the next reader does not have to rediscover it.
+
+  **The two codes are not equally exercised, and the difference should not be
+  glossed.** `0x0002` (no such SYSAP) is emitted by `scsd.c` under a synthesized
+  frame — `tests/vmsscs/test_scsd_wire.c` case (2d), a 0x5b `CONNECT_REQ` whose
+  16-byte name field is substituted — so the wire shape OVMX would send is at
+  least pinned, even though the status *value* in it is an OVMX invention that
+  no capture can confirm. `0x0003` (busy) is **never emitted by the daemon at
+  all**, in production or in test: reaching it needs a listening CDT still in
+  CONNECT RECEIVED when a *different* requester's frame arrives, and `scsd.c`
+  answers synchronously and returns the CDT to LISTEN before it reads the next
+  frame (OVMX DESIGN CHOICE 3 in `src/vmsscs/include/scs_sdir.h`). That is
+  measured, not predicted: `tests/vmsscs/test_scsd_wire.c` sums the daemon's
+  `sdir_busy_replies` across every case it runs and asserts the total is `0`,
+  and a live daemon prints `busy-sent` in its exit summary. The BUSY path is
+  reached only through the `src/vmsscs/scs_sdir.c` module API, only by
+  `tests/vmsscs/test_scs_sdir.c`. **Do not read that green test as evidence that
+  OVMX sends busy replies.**
+
+- **The AFFIRMATIVE `SCS$DIR_LOOKUP` result encoding stays ungrounded
+  (§4(h) gap (c)) — but WHO DECIDES IT is now the SDIR queue (`vms-7fe`).**
+  The 16-byte negative marker `"NOT PRESENT HERE"` at `[78:94]` remains the one
+  GROUNDED half of the answer. What changed is the source of the yes/no: the
+  responder used to decide with a hardcoded `memcmp(name, "VMS$VAXcluster", 14)`
+  in `scsd.c`, and now scans the p. 2-48 queue of SCS Directory Entries that
+  `LISTEN` populates. **The only queried name whose answer changed is
+  `SCS$DIRECTORY`**, which OVMX serves and now affirms; `MSCP$TAPE` and
+  `MSCP$DISK` — the names the golden directory phase actually asks about — still
+  get the grounded negative marker, byte for byte, because OVMX LISTENs for
+  neither and deliberately does not advertise an MSCP server it does not have.
+
+- **SCA connect data `[98:105]` (`vms-fdd`, §4(N)).** The 16-byte field's
+  *location*, its *width*, its *per-SYSAP* character and the two spans `[94:98]`
+  = `01 1b 01 03` and `[105:110]` = `08 00 00 06 00` are GROUNDED (148/148
+  **VAX-sourced** `VMS$VAXcluster` connect frames from 5 node identities on 3
+  emulator instances, 0 residuals; OVMX's own 55 frames are excluded — see the
+  circular-grounding guard in §4(N)). **GROUNDED IN A NARROW SENSE, AND THE
+  NARROWNESS IS THE POINT — see the limit bullet below.** The **seven bytes
+  between them are not**: 5 distinct values, four of
+  which fit `01 00 01 00 NN 00 01` with `NN ∈ {1,2,3}` and one of which
+  (`01 00 00 00 02 00 01`, 1 frame) does not, plus the all-zero form,
+  correlated with whether the sender is joining. "`NN` = current member count"
+  is the best reading and is **INFERRED**; member-state-sequence and
+  node-number are both REFUTED (§4(N)). OVMX copies a real joiner's observed
+  bytes and therefore **cannot generate** connect data for a role it has not
+  captured. Also not grounded: what a real node's *rejection* on connect data
+  looks like — only one VMS version (V7.3) has ever been on our wire, so no
+  refusal has ever been observed, and OVMX correspondingly implements no
+  version policy.
+
+- **STANDING LIMIT on every "GROUNDED" in §4(N): the sample is ONE VMS BUILD
+  (`vms-fdd`).** The GROUNDED figures in §4(N) are re-derivable and their
+  residual counts are real, but they must not be read as agreement between
+  independent VMS systems, and two earlier revisions of §4(N) said exactly that
+  — first *"four independent real VAX nodes"* (a source-MAC count), then
+  *"3 independent hardware sources" / "distinct lab machines"*. **Both were
+  false.** The lab's actual configuration, per
+  `/data/training/vax/cluster/README-lab.md` and `cluster/vax.ini`, is **1
+  OpenVMS VAX V7.3 installation, under 3 system roots (`[SYS0]`, `[SYS1]`,
+  `[SYS11]`), on 1 system disk image (`data/d0.dsk`), across 3 SIMH instances
+  of one emulated model on one host** — the five node identities are those
+  three roots, two of them re-identified with `MC SYSGEN` between reboots. The
+  one-installation half is measured, not assumed: all 668 VAX-sourced START
+  frames report a single version string, `"VMS V7.3"` on `"VAX "` (§4(g)).
+  **So §4(N)'s GROUNDED claims mean "stable across identity, node number, root,
+  boot, incarnation and role in this one installation" and nothing wider** —
+  three roots of one install agreeing about a byte is nearer one observation
+  repeated than three confirmations. Nothing in §4(N) is evidence about a
+  second VMS version, a second build, or a second installation of V7.3; the
+  sample holds exactly one of each. **This bullet is the reason OVMX ships no
+  version policy** (see the connect-data gap above): the field is a version
+  claim a peer may reject on, and one build's value is not a basis for deciding
+  what to accept from anyone else. Lifting the limit needs a capture from an
+  installation OVMX did not build — a second VMS version, or the same version
+  installed independently — and `tools/scs_connect_data_measure.py` reds if a
+  second version string ever appears without this text being re-derived.
+
+- **What a non-VAX peer puts in the field (`vms-fdd`, §4(N)).** Nothing in the
+  census is evidence about implementations other than VAX/VMS V7.3, and — since
+  the guard now excludes them — nothing in it is evidence drawn from OVMX's own
+  transmissions either. The library holds 466 OVMX-sourced connect frames; they
+  ground OVMX's *encoder*, and nothing about VMS. A second real VMS
+  implementation on the wire is what would raise the confidence here, and we do
+  not have one.
+
+- **Peer-liveness detection (`vms-17f`, §4M).** The two silence *populations* are
+  GROUNDED (measured, re-derivable). What is **NOT** grounded is the timer a real
+  VMS port driver uses to decide a channel is dead: no capture shows it and ch. 2
+  of the book does not publish one. OVMX's 20 s default is an OVMX choice sitting
+  in the gap between the measured populations, and is labeled as such in
+  `src/vmsscs/include/scs_depart.h`. Also not grounded: what a real node
+  *transmits*, if anything, on declaring a peer gone — OVMX transmits nothing at
+  that moment, which is an absence of evidence, not evidence of absence.
+
+- **THE BLOCK DATA TRANSFER SERVICE — DELIBERATELY UNIMPLEMENTED, and this is
+  its only durable record** (`vms-941`, closed as RECORDED; written down here by
+  `vms-096` after an audit found the deferral existed nowhere in the tree).
+
+  SCA offers SYSAPs three services. OVMX implements the datagram and message
+  services (§4(h), `scs_dgram.c`, `scs_credit.c`). It implements **none** of the
+  third, and the omission is a decision rather than an oversight. What is being
+  deferred, from *VAXcluster Principles* ch. 2 sec 2.7 (pp. 2-32..2-41) and
+  sec 2.9 (pp. 2-45..2-46):
+
+  | mechanism | pages | what it is |
+  |---|---|---|
+  | **Named buffers** | 2-32..2-34 | a SYSAP declares a region of its own memory to SCS and receives an opaque *buffer name*, which it may then hand to the remote SYSAP; the name, not the address, is what the far end quotes |
+  | **Buffer mapping** | 2-34..2-36 | the port maps a named buffer for direct port-to-port access, so the transfer never passes through the SYSAP's own copy loop |
+  | **`SNDDAT` / `REQDAT`** | 2-36..2-38 | the two directions of the transfer: SEND DATA pushes into a remote named buffer, REQUEST DATA pulls from one. These are port *commands*, not connection-control message types, and neither appears in the `[46:48]` namespace §4(h)(1a) grounds |
+  | **Buffer Descriptor Table (BDT)** | 2-34..2-36 | the per-port table the buffer names index into |
+  | **Class Driver Request Packets (CDRPs)** | 2-38..2-40 | the request context a class driver queues to the port for the duration of a transfer |
+  | **RSPID / Request Descriptor Table (RDT)** | 2-40..2-41 | the response identifier a request carries so its (possibly much later, possibly out-of-order) completion can be matched back to its CDRP |
+  | **Pool / BDT / RDT SCS Waits** | 2-45..2-46 | the three additional wait states a SYSAP can be suspended in when the resource it needs — non-paged pool, a BDT entry, an RDT entry — is exhausted. Siblings of the Credit Wait `scs_credit.c` does implement |
+
+  **WHY IT IS DEFERRED:** every one of these exists to move bulk data between a
+  disk class driver and a disk *server*, and **OVMX serves no real storage to a
+  cluster peer.** OVMX's MSCP work (`vms-760`, `scs_mscp.c`) is the disk
+  **client** side, and its purpose is admission: a joiner that never presents a
+  disk-client connection is not promoted to MEMBER. A client that reads nothing
+  issues no `REQDAT` and is asked for no `SNDDAT`. Implementing the service now
+  would be a large, entirely untestable surface — there is no traffic on our lab
+  wire to ground it against, because nothing in our lab asks OVMX for data.
+
+  **THE UN-DEFER TRIGGER, so this is a decision with an expiry and not a
+  permanent silence.** Revisit the moment EITHER holds:
+  1. OVMX serves real storage to a cluster peer (an OVMX MSCP **server**, not
+     client), or
+  2. a peer issues a `SNDDAT`/`REQDAT` — or any port command naming a buffer —
+     that OVMX must answer. Today that cannot arise, because OVMX declares no
+     named buffers and a peer can only address one it has been given.
+
+  **NOT CLAIMED:** that the seven mechanisms above are decoded. They are *named*
+  from the public book, at page granularity, so a future implementer knows what
+  the gap contains. No byte layout for any of them appears anywhere in OVMX, and
+  none has been observed on our wire.
 
 - HELLO/SOLICIT: the offset-30 "per-frame word" is **now GROUNDED for the
   directed values (b2/b3/b4) in §4(a).1** (`vms-d94`, the NISCA channel-verify
@@ -1723,19 +3357,118 @@ For visibility, every field NOT marked GROUNDED above:
   SCA connection-control message type (`0`=CONNECT_REQ, `1`=CONNECT_RSP,
   `2`=ACCEPT_REQ, `3`=ACCEPT_RSP over 16 dialogues with an exact accept/reject
   partition), which also REFUTES this document's earlier "per-dialogue message
-  counter" reading. What remains open there: `4` (REJECT_REQ, strong but not
-  decoded), `6` (DISCONNECT_REQ, plausible only), and the total **absence of
-  `5` and `7`** — the REJECT_RSP and DISCONNECT_RSP halves that Figures 2-15 and
-  2-16 require are on no capture we hold. Do not emit either. **Updated by
-  §4(h)(1b)** (`vms-54f`): the field is the SCS message type shared by every
-  length class; `5` and `7` DO appear in the wider corpus (5≈4 and 7≈6
-  count-pairing, so the reject/disconnect response halves are observable after
-  all, retiring the emit ban's premise — emission decisions still live with the
-  items); `10` is IDENTIFIED as the SCS "application message" MTYPE
-  (*VAXcluster Principles* pp. 4-13..4-15) carrying all SYSAP payloads; `8`/`9`
-  are a paired, envelope-only control exchange on established connections,
-  registered but deliberately unnamed — candidate and decisive experiment in
-  `docs/design-mscp-direction.md` §1.3.
+  counter" reading. What remains open there, **as corrected by `vms-591` and
+  then by the MSCP research pass**: `4` (REJECT_REQ) and `6` (DISCONNECT_REQ)
+  are each supported by a decisive behavioural partition rather than a decoded
+  field name; `5` and `7` **DO occur** — §4(h)(1b) pairs them to `4` and `6`
+  over 696 and 262 dialogues, and this document's earlier claim that they appear
+  on no capture we hold is **REFUTED**, having rested on a census restricted to
+  the length classes {62, 66, 110} while both response messages are 58 bytes.
+  That cause is recorded because it is reusable: a class-restricted census is
+  how this document came to publish a false absence.
+  **`10` is IDENTIFIED** as the SCS "application message" MTYPE (*VAXcluster
+  Principles* pp. 4-13..4-15) carrying all SYSAP payloads — which explains its
+  2 889-frame majority of the 110-byte class and the fact that OVMX, which
+  routes no SYSAP payload, has never emitted one.
+  `8`/`9` are a paired, envelope-only control exchange on established
+  connections — that is a CHARACTERISATION, not an identification:
+  **nothing we hold identifies them**, and they are not
+  named here. The candidate and its decisive experiment are in
+  `docs/design-mscp-direction.md` §1.3. Do not name or emit them.
+  **The vocabulary gap is a COUNTED RUNTIME FIGURE, not only a note**
+  (`vms-561`): the five SCS services (`src/vmsscs/scs_svc.c`) ask the port
+  driver to emit the packet each transition names, and `scsd.c` answers
+  `SCS_SVC_EMIT_NOBUILDER` for every class OVMX cannot build. As of `vms-591`
+  that list is `CONNECT_RSP`, `ACCEPT_RSP`, `REJECT_REQ` and `REJECT_RSP` —
+  `DISCONNECT_REQ` and `DISCONNECT_RSP` came off it, and are built by
+  `src/vmsscs/scs_disc.c`. Each remaining one logs `SCSD-W-CONNNOACT` and
+  increments `struct scs_svc_port::unemitted`, so the distance between OVMX's
+  frame vocabulary and SCA's is a number in every run log rather than a sentence
+  in a header. On a normal join the member-opened `VMS$VAXcluster` connection
+  produces exactly one such report per formation (the `CONNECT_RSP` the real VAX
+  does send, 16 of 16 dialogues).
+- **The DISCONNECT dialogue and its `[60:62]` matching flag** (§4(h)(1b),
+  `vms-591`): **GROUNDED-BY-PARTITION.** The `[60:62]` word on a DISCONNECT_REQ
+  reads `0x0000` on the first request of a Con.ID-pair dialogue and `0x0001` on
+  the matching one, 131/89 with **zero residuals** over all 220 VMS-origin
+  frames. What is measured is the partition; what is inferred is that it means
+  "matching". **What is still NOT grounded:** the reason code's byte offset
+  (unchanged, see the `vms-6b3` entry below — it remains a LABELED OVMX
+  placement, and both DISCONNECT templates read zero there), and whether a VMS
+  peer keys on the matching flag at all. OVMX emits it because emitting the
+  value the wire carries in that position is strictly closer to VMS than
+  emitting a constant; a peer that ignores it costs nothing.
+- **DISCONNECT_REQ → DISCONNECT_RSP latency** (`vms-591`): 220 of 220 VMS-origin
+  requests answered, max 0.006919 s, none over 10 ms. **Explicit non-claim**, in
+  the same terms as §4(M): that is the largest latency in our captures, not an
+  upper bound. It justifies `scsd.c`'s 500 ms bounded shutdown wait by margin —
+  and exceeding the bound costs only a log line, because the daemon exits anyway
+  rather than blocking on a peer.
+- **~~A VAX DID NOT ANSWER *OVMX's* DISCONNECT_REQ ON THE `vaxlab-4` RUNS~~ —
+  REFUTED, 10 answers out of 10 answerable requests** (`vms-abd`, refuted by
+  `vms-096` against this branch's own `vaxlab-4` captures).
+
+  <!-- REFUTED-QUOTE-BEGIN -->
+  > REFUTED — the entry here used to read: *"When OVMX sends the same frame … no
+  > `DISCONNECT_RSP` arrived on any of these four runs, over 20 s of capture past
+  > the request."* That claim is false; the measurement below kills it.
+  <!-- REFUTED-QUOTE-END -->
+
+  **THE MEASUREMENT THAT KILLS IT.** Over the six `vaxlab-4` captures this branch
+  produced (`vms578-{B1,B2,B3}` + `vms70e2-{A0,A1,A3}`, 2026-08-05, now held in
+  `/data/training/vax/cluster/captures-lab2/`), pairing every OVMX-sourced
+  msgtype-`6` with the first later VMS-origin frame carrying the same Con.ID pair
+  with the two handles swapped — the pairing rule `scs_disc_measure.py` uses:
+
+  | | |
+  |---|---|
+  | OVMX `DISCONNECT_REQ` (msgtype `6`) emitted | **14** |
+  | answered by a VMS-origin frame | **10** — msgtype `7`, 58-byte class, 10/10 |
+  | request→response latency | 0.073 – 0.807 ms |
+  | unanswered *inside the capture window* | 4 — all at daemon shutdown, at the tail of their capture |
+
+  So a real VAX **does** answer OVMX's `DISCONNECT_REQ`, on this very pod, in
+  under a millisecond, and the 58-byte `7` class is exactly the response class
+  §4(h)(1a) grounds. The four unanswered ones are an artefact of where the
+  capture stops, not a refusal.
+
+  **WHAT SURVIVES AND IS STILL OPEN.** VAX1's console logs, exactly once per
+  disconnect-sending run and never for the control run that sent none:
+
+  > `%PEA0, Inappropriate SCA Control Message - FLAGS/OPC/STATUS/PORT 00/22/00/DD`
+
+  **`OPC/22` is NOT decoded** — it is a port-level opcode, not the [46:48]
+  connection-control message type, and nothing we hold identifies it. Do not
+  guess at it and do not build on it. **What this console line means is now
+  ITSELF the open question**, and it is a smaller one than before: the entry used
+  to read it as "so the peer receives and **refuses** it", which was the only
+  available reading while the response was believed absent. It is not available
+  any more — the SCA layer answers 10/10 in under a millisecond, so whatever the
+  port layer is complaining about, it is not a refusal of the disconnect.
+  **One hypothesis is already dead, with a matched control:** the LABELED OVMX
+  reason-code placement at [58:60] is not the cause — a run with
+  `OVMX_NO_REASON_CODE=1`, verified on the wire to carry `0x0000` there against
+  `0x0005` in its bracketing run, was refused identically. This is a REGISTERED
+  GAP, not a solved problem, and it is **not** evidence about the `vms-2f3`
+  rejoin failure in either direction (sec 4M.24 already killed self-disconnect
+  as a fix for that).
+
+  **AND IT IS NOT A GENERAL FACT ABOUT VMS — measured in `vms-591` round 2.**
+  Counting VMS-sourced 58-byte type-7 frames whose Ethernet destination is
+  OVMX's own HW MAC `b6:16:8a:dc:3a:53`, over all 47 captures:
+
+  | source | frames | | |
+  |---|---|---|---|
+  | `aa:00:04:00:01:04` (VAX1) | 16 | total | **42** in **16** pcaps |
+  | `08:00:2b:78:56:b9` (VAX2) | 15 | destination Con.ID | `0x4F580007` in 42/42 |
+  | `08:00:2b:11:22:33` (VAX3) | 11 | | |
+
+  Three distinct real VAX nodes have answered OVMX on OVMX's own SCS$DIRECTORY
+  Con.ID, and `ovmx-760-MEMBER-achieved-20260730.pcap` SCA 181/182/183/184 is a
+  complete Figure 2-16 teardown with OVMX at one end of it. So the open question
+  is **why these four `vaxlab-4` runs differ**, not whether a VAX will answer
+  OVMX at all. `tests/vmsscs/test_scsd_wire.c` drives OVMX's receive side with
+  SCA 184 unedited.
 - **Joining an ESTABLISHED cluster** (§4i, `vms-af2`): **RESOLVED — two distinct
   differences.** (A) The established member's round-0 `0x41` START
   `send_seq[20:22]` = `prior_VC_send_seq+1` (residual VC continuation, e.g.
@@ -1791,6 +3524,59 @@ For visibility, every field NOT marked GROUNDED above:
     carries) and hands it to a per-CDT hook. **It builds no frame and OVMX emits
     no special credit message.** Nothing installs the hook, and `vmsscs_credit`
     is still not linked into `SCSD.EXE`.
+- **DATAGRAM BUFFER COUNT (the DFREEQ deposit) — UNGROUNDED, and an OVMX
+  CHOSEN VALUE** (`vms-b1d`). *VAXcluster Principles* p. 2-42 has a SYSAP
+  optionally request a number of datagram buffers for a connection through "an
+  optional argument in the CONNECT and ACCEPT services"; the count is stored in
+  the CDT and the buffers go into the port's *Datagram Free Queue* (DFREEQ).
+  **No captured field is pinned to that count**, and it may well never appear on
+  the wire — the book describes it as an argument to a LOCAL service, unlike the
+  message-service credit count, which §4(g)'s WIRE VERDICT grounds at SCA
+  `[48:50]`. The book publishes **no default** either, and none of the three
+  SYSGEN parameters it lists for the message and datagram services (SCSMAXMSG,
+  SCSMAXDG, SCSRSPCNT — p. 2-35) is a datagram buffer count. So
+  `SCS_DGRAM_DEFAULT_BUFFERS = 8` in `src/vmsscs/include/scs_dgram.h` is an
+  **OVMX chosen value, not an inferred VMS one** — nothing observed suggests 8,
+  and callers are expected to pass an explicit count. Also recorded here so the
+  next agent does not read it as measured:
+  - **The datagram account is on the RECEIVE path, not the send path.** p. 2-42
+    opens with "SCA does not provide a flow control mechanism for the datagram
+    service"; the DFREEQ is debited when "the port RECEIVES a datagram", and the
+    send side (p. 2-35) simply allocates a buffer with no queue consulted. A
+    send-side datagram quota does not exist and OVMX does not implement one.
+  - **Both documented discard classes are SILENT ON THE WIRE**: a datagram
+    dropped for want of connection quota (buffer returned to the DFREEQ) and one
+    dropped because the DFREEQ was empty (dropped by the port) both emit
+    nothing. OVMX counts them locally — per connection and per port respectively
+    — and prints them in the `SCSD.EXE` exit summary, because a discard that is
+    invisible locally is indistinguishable from a facility that does nothing
+    (INV-6). **Do not conflate this discard with message credit**: credit blocks
+    a SENDER, this drops a RECEIPT.
+  - **The deposit is returned to the port when the connection is released.**
+    p. 2-43's bank analogy — "each person is entitled only to the amount of money
+    that he or she has on deposit in the bank" — is what forces this: a depositor
+    that no longer exists has no deposit. `scs_cdl_release()` subtracts the
+    connection's `dgram_buffers` (the share *still sitting in* the DFREEQ, not
+    the `dgram_extended` total it ever contributed — buffers the SYSAP is still
+    holding left the queue when the port dequeued them) from the port's depth,
+    the exact mirror of the MFREEQ return `vms-61b` added to the same function.
+    **This is live, not latent**: `vms-17f`'s departure sweep releases every CDT
+    on a departing peer's circuit, so without the return a node that leaves and
+    rejoins inflates the port's datagram account on every cycle. Measured on the
+    unfixed tree, four connect/extend(8)/release cycles on one port gave a DFREEQ
+    depth of 8 → 16 → 24 → 32 and never fell. The reclaim is reported per
+    departure as `dfreeq_reclaimed` in `struct scs_depart_stats` and logged in the
+    `SCSD-I-PEERGONE` line.
+  - **Consequence for OVMX**: `src/vmsscs/scs_dgram.c` implements the whole
+    p. 2-42 mechanism and is unit tested, and **no production caller routes a
+    datagram through it**. `scs_dgram_cdl_deliver()` and
+    `scs_cdl_deliver_datagram()` are siblings, not a wrapper and a wrappee: they
+    share the p. 2-29 resolution (`scs_cdl_resolve()`) and diverge after it,
+    because the p. 2-42 accounting has to sit *between* the resolution and the
+    SYSAP callback and `scs_cdl_deliver_datagram()` does both in one step. Both
+    are unreachable from `scsd.c` — vms-e1a already recorded that for the
+    unaccounted one. The only live daemon call is the exit-summary report, which
+    prints zeros.
 - **Minimum Send Credits — UNGROUNDED** (`vms-1d2`). p. 2-44 makes the
   dangerously-low threshold `local SCSFLOWCUSH + remote Minimum Send Credits`,
   where Minimum Send Credits is an argument the remote SYSAP passes to CONNECT or
@@ -1801,8 +3587,397 @@ For visibility, every field NOT marked GROUNDED above:
   conflated. OVMX therefore takes Minimum Send Credits as an API argument
   (`scs_credit_extend`, `scs_credit_set_remote_min_send_credits`) with no wire
   parser behind it.
+- **The remote node's SCS Node Name and 64-bit software incarnation number are
+  NOT PARSED off the wire** (`vms-22e`). The p. 2-21 footnote anti-masquerade
+  tests compare three System Block items — SCS System ID, SCS Node Name, and the
+  64-bit software incarnation number (p. 2-16) — and OVMX implements all three in
+  `src/vmsscs/scs_config.c` (`scs_config_masquerade_check`). Only the first has a
+  parser behind it:
+  - **SCS System ID** — populated live, from the `src-logical` field of every
+    HELLO (`aa:00:04:00:<LE16(SCSSYSTEMID)>`, §4a), via
+    `scs_pb_learn_system_addr()`.
+  - **SCS Node Name** — the field IS grounded on the wire: the phase-2 `0x41`
+    START body carries an 8-byte blank-padded ASCII node name at `[90:98]`
+    (§4g phase 2, GROUNDED). But `scs_start_parse()` / `struct scs_start_view`
+    do not extract it, so no System Block SCSD builds for a **remote** node
+    carries one. (SCSD does name its own local System Block, from `SCSNODE`.)
+  - **64-bit software incarnation number** — **UNGROUNDED, no identified wire
+    field.** `vms-7be` left `struct scs_sb.incarnation` unset rather than invent
+    a value and that is still the case. The candidates are the two per-boot
+    incarnation tokens `[66:71]` / `[98:104]` in the `0x41` START body, which
+    this section already lists as replayed-not-decoded; neither has been shown to
+    BE the p. 2-16 quadword, and the `0x41 [22:24]` field is a different
+    quantity (§4i.B, the member-attributed node-incarnation counter). **Do not
+    conflate them.** `vms-2f3` §4M.31 did pin an emitted quadword at abs 80..87
+    that a real VAX read back as `Incarnation`, but that is OVMX's *emitted*
+    value, not a decode of the peer's.
+
+  **Consequence, stated plainly:** all three masquerade comparisons are
+  INDETERMINATE for every System Block the live daemon builds, so OVMX has never
+  abandoned a virtual circuit for masquerade on the wire. The rule is implemented
+  and unit tested (`tests/vmsscs/test_scs_config.c`) against System Blocks whose
+  fields are populated by hand, so it is correct the moment a parser supplies
+  them — including against a **non-head** System Block (the queue walk, not just
+  the head), and with the incarnation comparison exercised in **both**
+  directions, so an accidentally-ordered compare cannot pass. The daemon's half
+  — the `SCSD-W-VCMASQ` line naming *which* test failed, and the suppression of
+  the `SCSD-I-STARTDONE` / `SCSD-I-VCOPEN` lines on a refused circuit — is
+  covered by `test_masquerade_open_is_logged_and_suppresses_vcopen` in
+  `tests/vmsscs/test_scsd_wire.c`, which drives production `scsd_vc_on_open()`
+  and whose first step re-measures the INDETERMINATE claim above rather than
+  trusting it. Kill-switch `OVMX_NO_MASQUERADE_TESTS=1`. This rule was tested as the
+  cause of the `vms-2f3` rejoin failure and **REFUTED** (§4M.31 of
+  `docs/HANDOFF-vms-2f3.md`): it fixes nothing.
+- **The REJECT/DISCONNECT 16-bit REASON CODE — the FIELD is real, its OFFSET is
+  UNGROUNDED, and OVMX's placement is a LABELED OVMX DESIGN CHOICE** (`vms-6b3`).
+  *VAXcluster Principles* p. 2-26: "When a SYSAP rejects a CONNECT_REQ or
+  explicitly breaks an open connection, it also has the option of providing the
+  other SYSAP a 16-bit 'reason code' explaining why it did so … the reason code
+  is included in the REJECT_REQ packet … [and] in a disconnect request packet".
+  The chapter grounds three things — the field exists, it is 16 bits, it rides
+  REJECT_REQ and DISCONNECT_REQ — and publishes neither a byte offset nor a
+  single code value.
+
+  **What the wire says (measured; re-derive with
+  `tools/cluster/scs_reason_measure.py`).** Population rule: every SCA frame in
+  the connection-control length classes (§4(h)(1a)), restricted to VMS-origin
+  source MACs (DEC OUI `08-00-2b` or the LAVC logical `aa-00-04-00-xx-04`) so no
+  OVMX-emitted frame is counted as a VMS observation, over the whole lab capture
+  set; message type is payload `[46:48]`, the Con.ID pair `[50:58]`.
+
+      CENSUS-P sca_len_classes=62,66,110 pcaps_scanned=47
+
+  The two carrier frames and the two 16-bit words that follow the pair are the
+  CENSUS-A table in §4(h)(1a) above — that table is the single copy of those
+  figures and is not repeated here.
+
+  **The two facts that do the refuting, pinned.** Both lines are parsed and
+  compared against `EXPECTED` by `scs_reason_figures`, in this document *and* in
+  `scs_reason.h`. They are what makes each refuted claim below unwritable: a
+  sentence contradicting them cannot coexist with them, and deleting one reds
+  the gate exactly as loudly as reinstating the claim would.
+
+      REFUTATION-FACT off=60 type=6 distinct_values=2 values=0x0000:131,0x0001:89
+      REFUTATION-FACT off=58 len=62 type=3 name=ACCEPT_RSP nonzero=62
+
+  **The SDA oracle agrees.** `SHOW CONNECTIONS` prints a per-CDT field literally
+  named `Rej/Disconn Reason`. Counted out of the captured extract rather than
+  asserted (`cdts` = how many CDTs it printed, `values` = the histogram):
+
+      CENSUS-D sda_file=sda-scs-extract-vax1.txt cdts=12 values=0:12
+
+  So the field is real and VMS-named, and both oracles say every reason code our
+  lab has ever produced was zero.
+
+  **Therefore the offset CANNOT be grounded from the data we hold** — with no
+  nonzero value anywhere, there is no varying field to localize.
+
+  **THE FIRST RATIONALE FOR THE PLACEMENT WAS REFUTED, and the refutation is
+  itself measured.** <!-- REFUTED-QUOTE-BEGIN --> Revision 1 of this entry
+  justified the slot as "the only 16-bit slot in either frame that is zero in
+  100% of observed VMS frames". That is false in both halves.
+  <!-- REFUTED-QUOTE-END --> Census B applies the SAME population rule to the whole
+  connection-control envelope (every message type) and finds `[58:60]` in live
+  use by neighbouring types — including `3` = ACCEPT_RSP, which shares the
+  **identical 62-byte layout** with `4` and `6`:
+
+  <!-- CENSUS-B: parsed by tests/vmsscs/test_scs_reason_figures.py against the
+       EXPECTED table in tools/cluster/scs_reason_measure.py. Do not hand-edit. -->
+
+  | SCA len | type | name | frames | pcaps | nonzero at `[58:60]` |
+  |---|---|---|---|---|---|
+  | 62 | `3` | ACCEPT_RSP | 258 | 33 | 62 |
+  | 62 | `4` | REJECT_REQ | 453 | 19 | 0 |
+  | 62 | `6` | DISCONNECT_REQ | 220 | 25 | 0 |
+  | 66 | `1` | CONNECT_RSP | 778 | 26 | 0 |
+  | 110 | `0` | CONNECT_REQ | 1101 | 35 | 809 |
+  | 110 | `2` | ACCEPT_REQ | 324 | 25 | 101 |
+  | 110 | `10` | APPLICATION | 2889 | 39 | 2889 |
+
+  And census C shows it is not the only always-zero slot either — these are the
+  16-bit-aligned payload slots that are `0x0000` in 100% of the frames of that
+  type:
+
+  <!-- CENSUS-C: parsed by tests/vmsscs/test_scs_reason_figures.py. Do not hand-edit. -->
+
+  | msgtype | always-zero 16-bit payload slots |
+  |---|---|
+  | `4` | 28, 32, 36, 48, 58 |
+  | `6` | 28, 32, 36, 48, 58 |
+  | both, at or after payload 50 | 58 |
+
+  **What survives is narrower, and is all the placement needs.** (1) By CENSUS-A,
+  `[58:60]` is zero in every frame of the two types that *carry* the reason code,
+  so an OVMX REJECT_REQ or DISCONNECT_REQ carrying reason 0 there is
+  byte-identical to what VMS sends, and only a deliberately-set nonzero code
+  makes OVMX differ. The word is evidently per-message-type, and `4` and `6` are
+  precisely the types that leave it zero. (2) By the last CENSUS-C row,
+  `[58:60]` is the **only always-zero slot at or after payload 50** — the only
+  one outside the SCS sequenced-message counter region `[18:50]`, whose low
+  halves demonstrably vary (the others are that region's high halves and would
+  collide with a counter as soon as one wraps) — and it sits immediately after
+  the Con.ID pair, where p. 2-26 puts the reason code relative to the
+  identification of the connection. Payload `[60:62]` is explicitly NOT usable:
+  constant on REJECT_REQ and *varying* on DISCONNECT_REQ, i.e. a live field with
+  an undecoded meaning. **`SCS_REASON_PAYLOAD_OFF = 58`
+  (`src/vmsscs/include/scs_reason.h`) is a LABELED OVMX DESIGN CHOICE, not a
+  decoded VMS field. If a real node is ever observed setting a nonzero reason
+  code, that observation overrides it.** The **code VALUES**
+  (`enum scs_reason_code`) are an OVMX namespace for the same reason; only
+  `SCS_REASON_NONE = 0` has any external support, and it is the default.
+
+  **Consequence for OVMX, stated exactly.** The RECEIVE half is LIVE: `scsd.c`
+  decodes the field out of every REJECT_REQ/DISCONNECT_REQ addressed to one of
+  OVMX's own Con.IDs, logs `SCSD-I-CONNREASON` naming the frame, the code and its
+  name, and reports the totals in the exit summary — so the peer's SDA
+  `Rej/Disconn Reason` finally has a counterpart on our side.
+
+  **THE SEND HALF IS LIVE TOO, AND OVMX PUTS UNGROUNDED VALUES ON A REAL VAX'S
+  WIRE. STATED HERE BECAUSE IT MUST NOT BE SILENT** (`vms-096`; this paragraph
+  used to say the send half was "a tested codec with **no production caller**",
+  which stopped being true at `vms-591`). `scs_disc_build_request()` calls
+  `scs_reason_put()` (`src/vmsscs/scs_disc.c:138`), and `scsd.c` drives it with
+  `SCS_REASON_SYSAP_SHUTDOWN` (5) on clean shutdown and
+  `SCS_REASON_PEER_DISCONNECT` (7) on the symmetric answer to a peer's
+  disconnect. Census over the six lab-2 `vaxlab-4` captures (2026-08-05), 62-byte
+  connection-control class:
+
+  | source | msgtype `6` reason values |
+  |---|---|
+  | **OVMX** | `0` ×4, **`5` ×6**, **`7` ×4** |
+  | VMS-origin, same captures | `0` ×10 |
+  | VMS-origin, lab-1 library (47 pcaps) | `0` ×220 (msgtype `6`), `0` ×453 (msgtype `4`) |
+
+  **RULED (`vms-096`): the values are an OVMX DESIGN CHOICE and are KEPT, with
+  the refusal recorded.** Across 683 frames every VMS-origin reason field reads
+  0, so reason `5` and reason `7` are OVMX's own vocabulary in OVMX's own labeled
+  slot — not decoded VMS values, and this section is where that is written down.
+  (These are REASON CODES in the `[58:60]` slot; they are unrelated to
+  connection-control *message types* `5`/`7`, which §4(h)(1a) grounds and which
+  are on our wire.) They are kept rather than zeroed because zeroing was MEASURED not
+  to help: a matched control run with `OVMX_NO_REASON_CODE=1`, verified on the
+  wire to carry `0x0000` where its bracketing run carried `0x0005`, drew VAX1's
+  `Inappropriate SCA Control Message` console line identically (see the
+  DISCONNECT_RSP entry above, where that console line is the surviving open
+  question). Zeroing therefore costs OVMX its own diagnostics and buys nothing.
+  **If a real node is ever observed setting a nonzero code, that observation
+  overrides both the placement and the namespace.**
+
+  `struct scs_svc_args.reason` is what carries a SYSAP's value into the emit
+  callback; `scs_svc.c` itself stamps nothing. Kill switch
+  `OVMX_NO_REASON_CODE=1` suppresses both halves and says so in the exit summary.
+  Tests: `tests/vmsscs/test_scs_reason.c` (the codec, plus two real captured
+  frames asserted to read zero at the slot), `tests/vmsscs/test_scs_disc.c` (the
+  builder stamps what it is given), and in `tests/vmsscs/test_scsd_wire.c` both
+  the four `test_reason_*` cases (the daemon's receive path, driven by an
+  unedited real SCS$DIRECTORY dialogue ending in a real DISCONNECT_REQ) and
+  `test_peer_disconnect_req_is_answered_and_matched()`, which asserts the
+  daemon's own DISCONNECT_REQ carries `SCS_REASON_PEER_DISCONNECT`. **And the figures above are pinned to the measurement by
+  construction:** `tools/cluster/scs_reason_measure.py` carries a checked-in
+  `EXPECTED` table and re-derives it from the captures on a lab host, while the
+  ctest gate `scs_reason_figures` (`tests/vmsscs/test_scs_reason_figures.py`,
+  needs no captures) asserts every figure in `EXPECTED` still appears in both
+  `scs_reason.h` and this section. Both defects above were figures carried only
+  by a comment; that is why the gate exists.
+
+  **And a refuted claim cannot be written back in.** Review round 3 measured the
+  first version of that half of the gate and found it did not work: it looked
+  for an excuse word ("refuted", "wrongly", "earlier revision") within a few
+  hundred characters of the dead sentence, and this document is *about* the
+  refutation, so the excuse words are everywhere — re-asserting a dead claim in
+  three natural sites left ctest green. The proximity window is gone. A dead
+  claim is now legal in exactly one place: a QUARANTINE BLOCK, of which there is
+  one in the refutation paragraph above. Anywhere else it reds, in any wording,
+  because the check matches the claim FAMILY (subject + constancy assertion)
+  rather than a fixed sentence. The block itself is size-capped, must say the
+  claim inside it is refuted, and may not swallow a measurement line; the gate
+  names the exact markers when it reds. The `REFUTATION-FACT` lines above pin
+  the positive measurements the dead claims deny, so *deleting* the
+  contradiction reds as loudly as reinstating the claim. What the gate really
+  kills is not asserted in a comment either — it is re-derived on every ctest
+  run by `scs_reason_mutants` (`tests/vmsscs/test_scs_reason_mutants.py`), which
+  applies each mutant to a scratch copy and requires the gate to red.
+- **`NEW → MEMBER` reciprocal transaction** (§4L(7)): the missing predicate is
+  now **GROUNDED** (`vms-760`, live 2026-07-29) as the **full joiner-CLIENT
+  connection choreography** — the joiner opens its own `SCS$DIRECTORY` client
+  connection, **looks up each SYSAP** (`MSCP$DISK`, `VMS$VAXcluster`) on the member
+  before connecting to it, then opens the `MSCP$DISK` and `VMS$VAXcluster`
+  connections and sends the add-member burst, all on **one shared monotonic
+  `send_seq`**; the member reciprocates within ~1 ms. Live-proven mechanism: the
+  shared sequence deadlocks if any connect the member cannot yet process (e.g. an
+  `MSCP$DISK` connect with no prior dir-client lookup) occupies a slot — it froze
+  the member's `recv_ack` and dropped OVMX below `NEW`. VOTES, premature-`0x02`,
+  and 3-node coordination remain ruled out. **Implementation of the choreography is
+  the next deliverable** (the byte-exact `MSCP$DISK` connect builder is done).
 
 ---
+
+### 5(z) OPEN — the last gap to `MEMBER` (current frontier)
+
+**Resolved since the previous entry** (which wrongly concluded admission was
+gated above the SCS layer — it was a half-open VC, §4m, plus a directed-HELLO
+addressing bug, §4a.0). OVMX now:
+
+- opens `SCS$DIRECTORY`, `MSCP$DISK` and `VMS$VAXcluster`, all accepted;
+- completes the MSCP unit enumeration identically to a real VAX;
+- exchanges config with **all** members and sends the deferred `op 0x02`;
+- is answered `cat 0x04`, and driven through `op 0x03` COMMIT, `op 0x05` lock
+  rebuilds, the `op 0x06` burst, `op 0x09`, `op 0x12`, and the cat-`0x06` close;
+- executes the §4(p) barrier with correct releases, and answers the interleaved
+  cat-`0x02` DLM rebuild transactions.
+
+VMS logs `%CNXMAN, received VAXcluster membership request`, `proposed addition of
+node OVMX…`, and `completing VAXcluster state transition`, and SDA shows a real
+CSB with an assigned CSID.
+
+> **SUPERSEDED 2026-07-30g — the fan-out anomaly below is SOLVED.** A
+> non-coordinator peer silently discards `op 0x02` (see §4(p)); fan-out only ever
+> worked because it happened to include the coordinator. Aiming a single `op
+> 0x02` at the coordinator produces the relay, the commit, and the barrier. The
+> live frontier is now **the cat-`0x02` `op 0x0d` DLM response shape**, which
+> bugchecks peers with `LOCKMGRERR` — see §4(p) and `docs/HANDOFF-vms-760.md`.
+> The historical measurement is kept below because it is what identified the
+> recipient, not the message, as the variable.
+
+**The fan-out anomaly (historical).** Measured as a controlled pair on a
+**pristine** 3-node cluster (`reset3.sh`; zero ghost CSBs; all three peers
+verified `MEMBER` before each run):
+
+| run | `op 0x02` sent to | result |
+|---|---|---|
+| `d94-e14` | **one** peer — what the reference does | acked cat-`0x04`, then **nothing**. No commit, no transition, CSID `00000000`, zero barrier steps. |
+| `d94-e15` | **all** peers (`OVMX_CFG2_ALL=1`) | `Node VAX3 (csid 00010003) proposed addition of node OVMX…`; the barrier starts. |
+
+So on our cluster the **fan-out** gates the transition — which **contradicts**
+the reference, where the joiner demonstrably sends `op 0x02` to exactly one peer
+and that peer relays (`op 0x12`) and barriers with everyone. Two readings, both
+testable and both kept live behind `OVMX_CFG2_ALL`:
+
+- **(a) the peer-*selection* rule matters** and our "first eligible" pick is
+  wrong. The candidate rules ("last to complete config", "last MSCP walk",
+  "highest SCSSYSTEMID") are mutually confounded in the single 3-node specimen.
+- **(b) something in our `op 0x02` or our `0x81`/`op 0x09` response** stops the
+  chosen peer from relaying.
+
+> ⚠ **"Barrier step 5 of 12" is NOT the baseline.** The earlier runs that reached
+> step 5 were on a cluster that was itself re-forming — their OPCOM carries
+> `%CNXMAN, proposing formation of a VAXcluster`. On a pristine cluster the
+> single-coordinator form does not open a transition at all. The §4(p) barrier
+> implementation is correct and grounded; it is simply not the current blocker.
+> Re-establish any baseline on a freshly reset lab.
+
+The destructive failure mode is understood and no longer occurs: the cluster
+stays healthy at 3 members across all of these runs.
+
+### 4(s) Where a member's ADVERTISED cluster state comes from (GROUNDED, `vms-584`)
+
+A member advertises `member_count`, `cluster_formed` and `last_transition` in
+`cat 0x01 op 0x01`. The question this section answers is where a correct
+implementation *gets* those values — and the answer is **not** the place OVMX
+originally took them from.
+
+**`op 0x01` is a REPLY, not a broadcast.** It is a point-in-time answer to a
+newcomer's query, sent once per VC, and it is sent to a newcomer **before that
+newcomer is counted** — VAX1 answered OVMX 6.7 s early and VAX3 4.1 s early, and
+in the whole of `by13` **VAX1 never advertises 4 at all**. So a value copied from
+one goes stale the moment the next transition happens, and nothing re-teaches it.
+Observed live: `by13` frame 2941, OVMX advertising `member_count=2` to VAX3 while
+VAX1 (frame 2869) and VAX2 had both said `3` on the same wire seconds earlier.
+
+**The TRANSITION-OPEN is the bundle.** `op 0x09` (class `0x02` add), `op 0x08`
+(class `0x03` remove-failed) and `op 0x0d` (class `0x04` depart) all carry, in
+one frame that *every* node sees — member or bystander — on *every* transition:
+
+| body | abs | meaning | grounding |
+|---|---|---|---|
+| `body[40:48]` | 112:120 | the transition-time quadword | matches the `last_transition` a member later advertises, to the millisecond against OPCOM; present **20 ms before** OPCOM logs "completed" |
+| `body[55]` | 127 | coordinator's membership bitmap | `popcount == post-transition member count`, 54/54 opens, zero residuals |
+
+Same encoding as `cluster_formed` (VMS quadword, 1858 epoch, 100 ns ticks).
+`cluster_formed` itself never changes in any capture and is correctly copy-once.
+
+`last_transition` updates on **every class, including `0x04`**, which runs no
+barrier at all (`af2-firsttimer`: count 2→1 and the transition time set to the
+departure instant, twice). Neither `op 0x0c` (barrier release — epoch and step
+marker only) nor `op 0x12` carries any membership bundle.
+
+**Two limits, deliberately kept.** The bitmap's **bit-to-node mapping is NOT
+grounded** — both observed transitions set a contiguous run `bits[1..count]`,
+which fits "bit k = CSID slot" and "bit k = join order" equally, and one byte
+cannot be the whole field (`body[52:55]` and `body[56:60]` are zero in every
+specimen, so the extent is undetermined). Counting bits needs no mapping;
+*asserting* the bitmap would, so an implementation that is not the coordinator
+must never assert it. And a member should adopt the facts when the transition
+becomes **real** — when its own barrier completes — so that a proposal which
+never completes is never advertised; class `0x04`, having no barrier, applies at
+the open.
+
+**Consequence of getting it wrong: none observable.** Searched for any peer
+reaction to a wrong `member_count` across the whole library and found none — no
+refusal, no retransmit storm, no reset. `by13` reached four nodes normally with
+OVMX advertising a stale `2`. Recorded as an explicit absence, not as permission:
+it means this defect class is invisible on the wire and will not announce itself.
+
+### 4(t) Con.ID allocation (GROUNDED, `vms-584`)
+
+A Con.ID identifies a connection **endpoint**. Real nodes allocate from a single
+monotonic counter **shared across all service classes** within one boot —
+`formation-ci1`, node `08:00:2b:78:56:b9`: SCS$DIRECTORY `0x33590007`,
+VMS$VAXcluster `0x33580008`, MSCP$DISK `0x33580009`, continuing upward on later
+reopens, with the peer showing the same simultaneous pattern. The **high word
+reseeds non-arithmetically at each incarnation** of the same node identity:
+`af2-firsttimer` shows `0x8fd20007 → 0xe9950007 → 0x5b050007` for the same class
+across three boots. Consistent with a per-boot seed (address or clock), not a
+persisted counter. **A real node therefore never repeats a Con.ID across
+incarnations**, and `af2-established-rejoin` confirms a rejoin is always a fresh
+CONN-REQ with `remote_conid=0`, never a resumed handshake.
+
+**The peer binds whatever is offered and never validates the value**: 30+ CONNECT
+sequences with unpredictable values, every one answered ECHO → ACCEPT → CONFIRM,
+zero DISC-RSP substituted for an ECHO, and no NAK anywhere tied to a Con.ID
+value. That is what makes changing OVMX's allocation safe.
+
+**Not grounded, and untestable from passive capture:** whether a peer would
+reject a literal repeat after a full teardown. No reference capture contains one,
+because a real allocator cannot produce one. Only the join/exit cycling test can
+answer it.
+
+### 4(u) The cat-`0x04` SYSAP ack cadence (GROUNDED, `vms-584`)
+
+The reference ack is **prompt**, **opportunistic**, **cumulative**, and **never
+keyed to an opcode**:
+
+- It names whichever frame was genuinely received last — a member's first ack
+  targets the newcomer's `op 0x02` (Δ 0.30 ms), the newcomer's first targets the
+  member's `op 0x06` burst (Δ 0.53 ms), and on a link carrying neither it targets
+  the first `cat 0x02 op 0x0d` DLM response. Reproduced at 0.39/0.45 ms.
+- **No timer and no fixed N.** Idle captures carry zero acks; on busy links
+  inter-ack gaps run 0 ms–2.3 s with no period.
+- **An `op 0x01` is never acked** (0/4 reference link-checks). Ack-of-ack occurs
+  once in 4, as an `amsg` coincidence deep in steady state, not deliberately.
+
+OVMX diverges in two inert ways, both measured: an ack naming an `op 0x01`
+~7.0 s after it arrived (`by10` idx 255, `by11` idx 2945, `bystander` idx 254 —
+7013/6754/7014 ms), and a genuine ack-of-ack ~4 s late (`by11` idx 3006,
+`bystander` idx 4922). **No peer reacted to either in any run.** These are
+instrumented (`SCSD-W-STRAYACK`) rather than suppressed — see the commit message
+for why widening the emission trigger would contradict the grounded claim that
+the `op 0x0a`/`op 0x0c` notifications draw no ack.
+
+### 4(v) Member-initiated connect-back timing — a retired finding (`vms-584`)
+
+Previously filed as "OVMX connects back ~11 minutes early". **Refuted.** The
+connect-back is the member side's directed HELLO/channel-init fired off the
+newcomer's first multicast self-announce or SOLICIT, and it is **sub-2 s in every
+reference specimen** — 0.054 s, 0.183 s, 0.195 s, 0.501 s, 0.696 s, 1.77 s
+(×2), 1.925 s across 9 events in 6 captures. There is no 660 s interval anywhere
+in the library, and three of the reference captures are shorter than 660 s in
+total. OVMX measures 0.046–1.150 s across 5 captures — **inside the reference
+range**. The frame originally cited as evidence (`by11` 2980) is an `mt=0x4b`
+CONN-REQ — routine MSCP disk-class sub-channel renegotiation on a ~10 s cadence,
+reproduced byte-identically in `by10` — not the connect-back at all. The
+~660 s numbers were capture *lengths*, not protocol intervals. **No code change;
+the rule OVMX already follows is the grounded one.**
 
 ## 6. Using the dissector
 

@@ -186,6 +186,17 @@ int scs_hello_build_directed_frame(const struct scs_hello_params *p,
         return rc;
     }
 
+    /* vms-760: the SCA dest-logical addr (abs 16) is the peer's CLUSTER-LOGICAL
+     * address, NOT its HW MAC -- scs_hello_build_frame() mirrored the Ethernet
+     * dst into it, which is right only when the two coincide (VAX1). Overwrite
+     * it with the peer's logical addr when the caller supplied one.
+     * GROUNDED, vax3-2to3-established-join-20260730.pcap frame 182 (VAX3->VAX2:
+     * eth-dst 08:00:2b:78:56:b9, abs 16 aa:00:04:00:02:04). */
+    static const uint8_t zero6[6] = {0};
+    if (memcmp(p->peer_logical, zero6, 6) != 0) {
+        memcpy(out + 16, p->peer_logical, 6);
+    }
+
     /* Patch the directed-specific fields (spec sec 4a/4b). */
     out[30] = per_frame_word;
     out[31] = 0x00;             /* abs-30 channel-verify word (GROUNDED, sec 4a offset-30);

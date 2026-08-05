@@ -663,6 +663,373 @@ static void test_fsm_null_safety(void)
     check(scs_vc_action_name(SCS_VC_ACT_ABANDON) != NULL, "action_name is never NULL");
 }
 
+/* ==========================================================================
+ * vms-abc -- THE p. 2-31 MESSAGE GUARANTEES.
+ *
+ * "if either the guarantee of message delivery or the guarantee of message
+ * sequentiality cannot be satisfied, the virtual circuit between the ports
+ * involved will be explicitly broken (if it isn't already). If this happens,
+ * then every connection supported by this virtual circuit is also broken, and
+ * the SYSAPs participating in these connections are notified of the event."
+ * ========================================================================== */
+
+/* A SYSAP that records that its VC-loss error handler ran, and on which CDT. */
+struct vcloss_record {
+    int      calls;
+    uint32_t conid[4];
+    int      state_when_called[4]; /* to prove the machine ran BEFORE the handler */
+};
+
+static void rec_vcloss(struct scs_cdt *cdt, void *ctx)
+{
+    struct vcloss_record *r = (struct vcloss_record *)ctx;
+    if (r->calls < 4) {
+        r->conid[r->calls] = cdt->local_conid;
+        r->state_when_called[r->calls] = (int)scs_conn_state_of(cdt);
+    }
+    r->calls++;
+}
+
+/* One circuit (Path Block) carrying two SCS connections, both with a SYSAP
+ * VC-loss handler installed -- the p. 2-28 shape scs_vc_break() must walk. */
+struct two_conn_vc {
+    struct scs_config cfg;
+    struct scs_pdt    pdt;
+    struct scs_cdl    cdl;
+    struct scs_pb    *pb;
+    struct scs_cdt   *a;
+    struct scs_cdt   *b;
+    struct scs_vc     vc;
+    struct vcloss_record rec;
+};
+
+static void two_conn_vc_build(struct two_conn_vc *t)
+{
+    memset(t, 0, sizeof(*t));
+    scs_config_init(&t->cfg);
+    scs_pdt_init(&t->pdt, SCS_PORT_TYPE_ETHERNET, 4096);
+    scs_cdl_init(&t->cdl);
+    scs_vc_init(&t->vc);
+    t->pb = scs_pb_create(&t->cfg, &t->pdt, vax2_hw, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_set_vc_state(t->pb, SCS_VC_OPEN);
+    t->a = scs_cdl_alloc(&t->cdl, "SCS$DIRECTORY", "SCS$DIRECTORY", t->pb);
+    t->b = scs_cdl_alloc(&t->cdl, "VMS$VAXcluster", "VMS$VAXcluster", t->pb);
+    scs_cdt_set_handlers(t->a, NULL, NULL, rec_vcloss, &t->rec);
+    scs_cdt_set_handlers(t->b, NULL, NULL, rec_vcloss, &t->rec);
+    /* Drive both to OPEN through the machine, as a formed connection is. */
+    for (int i = 0; i < 2; i++) {
+        struct scs_cdt *c = i ? t->b : t->a;
+        (void)scs_conn_fsm_step(c, SCS_CONN_EV_SVC_CONNECT);
+        (void)scs_conn_fsm_step(c, SCS_CONN_EV_RCV_CONNECT_RSP);
+        (void)scs_conn_fsm_step(c, SCS_CONN_EV_RCV_ACCEPT_REQ);
+    }
+}
+
+/* The pure sequentiality predicate. Spec sec 4h(4) GROUNDS the rule this
+ * encodes: "a node holds send_seq (its own next number) and recv_seq (highest
+ * peer send_seq seen); a sequenced message stamps send_seq ... then increments
+ * send_seq" -- so consecutive is the rule and a jump of >1 is a breach. */
+static void test_seq_gap_verdicts(void)
+{
+    printf("[p2-31] the sequentiality verdicts\n");
+    struct scs_vc vc;
+    scs_vc_init(&vc);
+    unsigned missing = 12345;
+
+    check(scs_vc_check_recv_seq(&vc, 7, &missing) == SCS_VC_SEQ_ANCHOR,
+          "the FIRST sequenced message on a VC anchors and is never a gap");
+    check(missing == 0, "the anchor reports no missing messages");
+
+    /* Anchor at 7, then walk. */
+    check(scs_vc_note_recv_checked(&vc, 7, NULL) == SCS_VC_SEQ_ANCHOR, "anchored at 7");
+    check(vc.seq.recv_seq == 7, "the anchor advanced recv_seq to 7");
+    check(scs_vc_note_recv_checked(&vc, 8, NULL) == SCS_VC_SEQ_IN_ORDER, "8 after 7 is in order");
+    check(scs_vc_note_recv_checked(&vc, 8, NULL) == SCS_VC_SEQ_DUPLICATE,
+          "a repeat of 8 is a retransmit, NOT a gap");
+    check(scs_vc_note_recv_checked(&vc, 5, NULL) == SCS_VC_SEQ_DUPLICATE,
+          "a stale 5 is behind recv_seq, NOT a gap");
+    check(scs_vc_check_recv_seq(&vc, 0, &missing) == SCS_VC_SEQ_DUPLICATE,
+          "send_seq 0 is a 0x48 pure ack, never a gap (spec sec 4h(3), 622/622)");
+
+    check(scs_vc_check_recv_seq(&vc, 10, &missing) == SCS_VC_SEQ_GAP, "8 -> 10 is a GAP");
+    check(missing == 1, "8 -> 10 reports exactly 1 missing message");
+    check(scs_vc_check_recv_seq(&vc, 100, &missing) == SCS_VC_SEQ_GAP, "8 -> 100 is a GAP");
+    check(missing == 91, "8 -> 100 reports 91 missing messages");
+
+    check(vc.seq_gaps == 0, "the PURE predicate does not count gaps");
+    check(scs_vc_note_recv_checked(&vc, 10, &missing) == SCS_VC_SEQ_GAP, "note_recv_checked reports the gap");
+    check(vc.seq_gaps == 1, "note_recv_checked counted the gap");
+    check(vc.seq.recv_seq == 10, "recv_seq still advances over a gap (see scs_vc.h)");
+
+    /* 16-bit wrap: 65535 -> 0 is not a legal sequence value, 65535 -> 1 is a
+     * one-message gap, and a huge backwards value stays a duplicate. */
+    struct scs_vc w;
+    scs_vc_init(&w);
+    (void)scs_vc_note_recv_checked(&w, 65534, NULL); /* anchor */
+    check(scs_vc_note_recv_checked(&w, 65535, NULL) == SCS_VC_SEQ_IN_ORDER, "65534 -> 65535 in order");
+    check(scs_vc_check_recv_seq(&w, 1, &missing) == SCS_VC_SEQ_GAP, "65535 -> 1 is a gap across wrap");
+    check(missing == 1, "65535 -> 1 misses exactly one message (0)");
+    check(scs_vc_check_recv_seq(&w, 60000, &missing) == SCS_VC_SEQ_DUPLICATE,
+          "a value far behind across wrap is a duplicate, not a 60000-message gap");
+    /* A pure ack must be rejected BEFORE the sequence comparison, not by it.
+     * Near the top of the space `0` compares as AHEAD of recv_seq, so an
+     * implementation that let send_seq 0 reach the comparison would score every
+     * 0x48 credit-return as a gap -- and tear down a healthy circuit. */
+    check(scs_vc_check_recv_seq(&w, 0, &missing) == SCS_VC_SEQ_DUPLICATE,
+          "a pure ack is never a gap even at recv_seq=65535, where 0 compares AHEAD");
+    struct scs_vc h;
+    scs_vc_init(&h);
+    (void)scs_vc_note_recv_checked(&h, 60000, NULL); /* anchor high in the space */
+    check(scs_vc_note_recv_checked(&h, 0, NULL) == SCS_VC_SEQ_DUPLICATE,
+          "a 0x48 pure ack at recv_seq=60000 is not a 5536-message gap");
+    check(h.seq_gaps == 0, "and no gap was counted for it");
+    check(h.seq.recv_seq == 60000, "and it did not advance recv_seq");
+
+    check(scs_vc_check_recv_seq(NULL, 5, &missing) == SCS_VC_SEQ_DUPLICATE, "NULL vc is safe");
+    check(scs_vc_note_recv_checked(NULL, 5, &missing) == SCS_VC_SEQ_DUPLICATE, "NULL vc is safe");
+}
+
+/* A fresh post-START VC re-anchors: sec 4i.A GROUNDS that "the post-START SCS
+ * VC resets to send_seq = 1 on both sides", so the counter the reset installs
+ * must not be compared against the pre-reset peer sequence. */
+static void test_reset_reanchors(void)
+{
+    printf("[p2-31] a VC reset re-anchors\n");
+    struct scs_vc vc;
+    scs_vc_init(&vc);
+    (void)scs_vc_note_recv_checked(&vc, 11973, NULL);
+    (void)scs_vc_note_recv_checked(&vc, 11974, NULL);
+    check(vc.seq_anchored == 1, "the VC is anchored after two messages");
+    scs_vc_reset_seq(&vc);
+    check(vc.seq_anchored == 0, "a reset drops the anchor");
+    check(scs_vc_note_recv_checked(&vc, 1, NULL) == SCS_VC_SEQ_ANCHOR,
+          "the first post-reset message anchors instead of scoring a 11974-message gap");
+    check(vc.seq_gaps == 0, "and no gap was counted");
+}
+
+/* THE DONE CONDITION, at the mechanism level: a gap on a VC carrying TWO
+ * connections breaks the VC and BOTH SYSAP handlers fire. */
+static void test_break_walks_the_pb_and_notifies_both(void)
+{
+    printf("[p2-31] breaking a VC breaks every connection on it\n");
+    struct two_conn_vc t;
+    two_conn_vc_build(&t);
+
+    check(t.pb != NULL && t.a != NULL && t.b != NULL, "the two-connection circuit was built");
+    check(scs_pb_cdt_count(t.pb) == 2, "both CDTs are queued to the Path Block (p. 2-28)");
+    check(scs_conn_state_of(t.a) == SCS_CONN_OPEN, "connection A is OPEN");
+    check(scs_conn_state_of(t.b) == SCS_CONN_OPEN, "connection B is OPEN");
+    check(t.pb->vc_state == SCS_VC_OPEN, "the circuit is OPEN");
+
+    /* Inject the sequence gap on the VC. */
+    (void)scs_vc_note_recv_checked(&t.vc, 4, NULL); /* anchor */
+    (void)scs_vc_note_recv_checked(&t.vc, 5, NULL); /* in order */
+    unsigned missing = 0;
+    check(scs_vc_note_recv_checked(&t.vc, 9, &missing) == SCS_VC_SEQ_GAP,
+          "5 -> 9 on the circuit is a sequentiality failure");
+    check(missing == 3, "three messages are missing");
+
+    unsigned broken = scs_vc_break(&t.vc, t.pb, SCS_VC_BREAK_SEQ_GAP, NULL);
+    check(broken == 2, "scs_vc_break reports 2 connections broken");
+    check(t.rec.calls == 2, "BOTH SYSAP VC-loss handlers fired");
+    check((t.rec.conid[0] == t.a->local_conid && t.rec.conid[1] == t.b->local_conid) ||
+          (t.rec.conid[0] == t.b->local_conid && t.rec.conid[1] == t.a->local_conid),
+          "the two handler calls carried the two connections' CONIDs");
+    check(t.rec.state_when_called[0] == (int)SCS_CONN_CLOSED &&
+          t.rec.state_when_called[1] == (int)SCS_CONN_CLOSED,
+          "each SYSAP saw its connection ALREADY broken when it was notified");
+    check(scs_conn_state_of(t.a) == SCS_CONN_CLOSED, "connection A is CLOSED");
+    check(scs_conn_state_of(t.b) == SCS_CONN_CLOSED, "connection B is CLOSED");
+    check(t.pb->vc_state == SCS_VC_CLOSED, "the circuit itself is CLOSED");
+    check(t.vc.broken == 1 && t.vc.breaks == 1, "the VC recorded the break");
+    check(t.vc.break_reason == (int)SCS_VC_BREAK_SEQ_GAP, "and recorded the reason");
+    /* Design choice 4: the Path Block is NOT closed, so the CDTs still hang off
+     * it rather than dangling. */
+    check(t.pb->in_use == 1, "the Path Block is left allocated (scs_pb_close is the caller's)");
+    check(scs_pb_cdt_count(t.pb) == 2, "and its connection queue is intact");
+}
+
+/* The log must name the VC, the trigger, and every connection broken. */
+static void test_break_log_names_vc_trigger_and_connections(void)
+{
+    printf("[p2-31] the break is logged with the VC, the trigger and each connection\n");
+    struct two_conn_vc t;
+    two_conn_vc_build(&t);
+
+    char buf[4096];
+    memset(buf, 0, sizeof(buf));
+    FILE *fp = fmemopen(buf, sizeof(buf) - 1, "w");
+    check(fp != NULL, "log buffer opened");
+    if (fp == NULL) {
+        return;
+    }
+    (void)scs_vc_break(&t.vc, t.pb, SCS_VC_BREAK_DELIVERY, fp);
+    fclose(fp);
+
+    check(strstr(buf, "SCSD-W-VCBREAK") != NULL, "the break is logged");
+    check(strstr(buf, "08:00:2b:78:56:b9") != NULL, "the log names the VC by its remote port address");
+    check(strstr(buf, "retransmits exhausted") != NULL, "the log names the trigger");
+    char want_a[64], want_b[64];
+    snprintf(want_a, sizeof(want_a), "conid=0x%08X", (unsigned)t.a->local_conid);
+    snprintf(want_b, sizeof(want_b), "conid=0x%08X", (unsigned)t.b->local_conid);
+    check(strstr(buf, want_a) != NULL, "the log names connection A");
+    check(strstr(buf, want_b) != NULL, "the log names connection B");
+    check(strstr(buf, "SCS$DIRECTORY") != NULL, "the log names connection A's SYSAP");
+    check(strstr(buf, "VMS$VAXcluster") != NULL, "the log names connection B's SYSAP");
+    check(strstr(buf, "OPEN -> CLOSED") != NULL, "the log records the state each connection left");
+}
+
+/* The p. 2-31 DELIVERY guarantee: retransmit exhaustion. */
+static void test_delivery_failure_predicate(void)
+{
+    printf("[p2-31] the delivery-guarantee predicate\n");
+    struct scs_vc vc;
+    scs_vc_init(&vc);
+    check(scs_vc_delivery_failed(&vc) == 0, "an idle VC has not failed delivery");
+    check(scs_vc_delivery_failed(NULL) == 0, "NULL is safe");
+
+    scs_vc_record_sent(&vc, 42, 1000);
+    check(scs_vc_delivery_failed(&vc) == 0, "a freshly sent message has not failed delivery");
+    for (unsigned i = 0; i < SCS_VC_DELIVERY_RETRY_LIMIT - 1u; i++) {
+        scs_vc_mark_retransmitted(&vc, 2000 + i);
+        check(scs_vc_delivery_failed(&vc) == 0,
+              "below the retry limit delivery has not yet failed");
+    }
+    scs_vc_mark_retransmitted(&vc, 9000);
+    check(vc.retransmit_count == SCS_VC_DELIVERY_RETRY_LIMIT, "the retry limit is reached");
+    check(scs_vc_delivery_failed(&vc) == 1,
+          "AT the retry limit the delivery guarantee has failed");
+
+    /* An ack clears the outstanding message, so delivery succeeded after all. */
+    scs_vc_note_peer_ack(&vc, 42);
+    check(scs_vc_delivery_failed(&vc) == 0, "an acknowledged message is not a delivery failure");
+}
+
+/*
+ * THE KILL SWITCH (guardrail 23). The control runs FIRST with the switch off
+ * and confirms the counter moved; only then is the switch set and the gated
+ * behaviour asserted absent. Both halves use the SAME circuit shape.
+ */
+static void test_break_kill_switch(void)
+{
+    printf("[p2-31] OVMX_NO_VC_BREAK -- bracketed\n");
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    check(scs_vc_break_enabled() == 1, "breaking is ON by default");
+
+    /* --- CONTROL: switch OFF. The teardown must actually happen. --- */
+    struct two_conn_vc on;
+    two_conn_vc_build(&on);
+    unsigned n_on = scs_vc_break(&on.vc, on.pb, SCS_VC_BREAK_SEQ_GAP, NULL);
+    check(n_on == 2, "CONTROL: 2 connections broken with the switch off");
+    check(on.rec.calls == 2, "CONTROL: 2 SYSAP handlers fired");
+    check(on.pb->vc_state == SCS_VC_CLOSED, "CONTROL: the circuit is CLOSED");
+    check(on.vc.broken == 1, "CONTROL: the VC is marked broken");
+
+    /* --- GATED: switch ON. Nothing may happen. --- */
+    (void)setenv(SCS_VC_NO_BREAK_ENV, "1", 1);
+    check(scs_vc_break_enabled() == 0, "the switch is read fresh, not cached");
+    struct two_conn_vc off;
+    two_conn_vc_build(&off);
+    char buf[2048];
+    memset(buf, 0, sizeof(buf));
+    FILE *fp = fmemopen(buf, sizeof(buf) - 1, "w");
+    unsigned n_off = scs_vc_break(&off.vc, off.pb, SCS_VC_BREAK_SEQ_GAP, fp);
+    if (fp != NULL) {
+        fclose(fp);
+    }
+    check(n_off == 0, "GATED: no connection is broken");
+    check(off.rec.calls == 0, "GATED: no SYSAP handler fires");
+    check(scs_conn_state_of(off.a) == SCS_CONN_OPEN, "GATED: connection A is still OPEN");
+    check(scs_conn_state_of(off.b) == SCS_CONN_OPEN, "GATED: connection B is still OPEN");
+    check(off.pb->vc_state == SCS_VC_OPEN, "GATED: the circuit is still OPEN");
+    check(off.vc.broken == 0 && off.vc.breaks == 0, "GATED: the VC is not marked broken");
+    check(strstr(buf, "SCSD-W-VCBREAKOFF") != NULL,
+          "GATED: the suppression is LOGGED -- a run log must not read as 'nothing was broken'");
+
+    /* The DETECTOR is not gated: diagnosis survives the switch. */
+    struct scs_vc det;
+    scs_vc_init(&det);
+    (void)scs_vc_note_recv_checked(&det, 1, NULL);
+    check(scs_vc_note_recv_checked(&det, 5, NULL) == SCS_VC_SEQ_GAP,
+          "GATED: the gap is still DETECTED with the switch on");
+    check(det.seq_gaps == 1, "GATED: and still counted");
+
+    /* Only the exact non-"0" value arms it. */
+    (void)setenv(SCS_VC_NO_BREAK_ENV, "0", 1);
+    check(scs_vc_break_enabled() == 1, "\"0\" does not arm the switch");
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    check(scs_vc_break_enabled() == 1, "unset does not arm the switch");
+}
+
+/* A VC loss over a circuit with no connections, and other NULL/edge paths. */
+static void test_break_edges(void)
+{
+    printf("[p2-31] break edges\n");
+    check(scs_vc_break(NULL, NULL, SCS_VC_BREAK_LOCAL, NULL) == 0, "break(NULL pb) is 0");
+
+    struct scs_config cfg;
+    struct scs_pdt pdt;
+    scs_config_init(&cfg);
+    scs_pdt_init(&pdt, SCS_PORT_TYPE_ETHERNET, 4096);
+    struct scs_pb *pb = scs_pb_create(&cfg, &pdt, vax2_hw, SCS_PORT_TYPE_ETHERNET);
+    scs_pb_set_vc_state(pb, SCS_VC_OPEN);
+    check(scs_vc_break(NULL, pb, SCS_VC_BREAK_LOCAL, NULL) == 0,
+          "a circuit with no connections breaks 0 of them");
+    check(pb->vc_state == SCS_VC_CLOSED, "and the circuit is still CLOSED afterwards");
+    check(scs_vc_break_reason_name(SCS_VC_BREAK_NONE) != NULL, "reason_name is never NULL");
+    check(scs_vc_break_reason_name((enum scs_vc_break_reason)99) != NULL,
+          "reason_name of a bogus value is never NULL");
+}
+
+/* =====================================================================
+ * vms-578 INTEGRATION: test functions added by worktree-760.
+ * Both branches only APPENDED here, so nothing is replaced -- these are
+ * carried over verbatim and registered in main() below.
+ * ===================================================================== */
+
+
+/* vms-2f3 sec 4M.20: a retransmitted request must be answered by REPLAYING the
+ * original reply's sequence number, never by consuming a fresh one.
+ *
+ * REGRESSION THIS PINS: scs_reflect_credit() advanced unconditionally. That was
+ * unreachable while OVMX ignored retransmissions; sec 4M.14 started answering
+ * them, and the wire then showed the peer replaying op8 send_seq=12 three times
+ * (run Q1B, VAX1 link) while OVMX answered 12, then 13, then 14 -- two phantom
+ * messages injected into the VC stream. */
+static void test_retx_reply_seq(void)
+{
+    printf("[retransmit-reuse of the reply sequence number -- vms-2f3 sec 4M.20]\n");
+
+    struct scs_seq_state seq;
+    scs_seq_init(&seq);                       /* send_seq starts at 1 */
+    struct scs_retx_seq st;
+    memset(&st, 0, sizeof(st));
+
+    /* A fresh request consumes a sequence number. */
+    uint16_t a = scs_retx_reply_seq(&st, &seq, 12);
+    check(a == 1, "first reply to req seq 12 uses send_seq 1");
+
+    /* The SAME request replayed twice must reuse it, and must not advance. */
+    check(scs_retx_reply_seq(&st, &seq, 12) == a, "retransmit of req 12 replays the same send_seq");
+    check(scs_retx_reply_seq(&st, &seq, 12) == a, "second retransmit replays it again");
+    check(seq.send_seq == 2, "the VC sequence advanced ONCE across three answers");
+
+    /* A genuinely new request advances again. */
+    uint16_t b = scs_retx_reply_seq(&st, &seq, 13);
+    check(b == 2, "a new req seq 13 consumes the next send_seq");
+    check(b != a, "and it differs from the previous reply");
+    check(scs_retx_reply_seq(&st, &seq, 13) == b, "its retransmit replays it");
+    check(seq.send_seq == 3, "still exactly one advance per distinct request");
+
+    /* Going back to an older request seq is treated as new -- we only remember
+     * the most recent, which is what the single-outstanding-request protocol
+     * needs and all that the wire evidence supports. */
+    check(scs_retx_reply_seq(&st, &seq, 12) == 3, "an older req seq is not replayed from history");
+
+    check(scs_retx_reply_seq(NULL, &seq, 1) == 0, "NULL state rejected");
+    check(scs_retx_reply_seq(&st, NULL, 1) == 0, "NULL seq rejected");
+}
+
 int main(void)
 {
     printf("test_scs_vc: SCS VC engine -- credit-return + seq/ack + retransmit (vms-691)\n");
@@ -682,6 +1049,16 @@ int main(void)
     test_fsm_round_classification();
     test_fsm_kill_switch();
     test_fsm_null_safety();
+    printf("test_scs_vc: p. 2-31 MESSAGE GUARANTEES -- breaking the VC (vms-abc)\n");
+    test_seq_gap_verdicts();
+    test_reset_reanchors();
+    test_break_walks_the_pb_and_notifies_both();
+    test_break_log_names_vc_trigger_and_connections();
+    test_delivery_failure_predicate();
+    test_break_kill_switch();
+    test_break_edges();
+    /* vms-578: worktree-760 test functions, registered here too. */
+    test_retx_reply_seq();
     printf("test_scs_vc: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

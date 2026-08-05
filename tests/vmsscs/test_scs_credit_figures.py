@@ -43,9 +43,20 @@ def check(cond, msg):
 
 
 def load_expected():
-    spec = importlib.util.spec_from_file_location("scs_credit_measure", MEASURE)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    """Execute the measure script FROM SOURCE, never from cached bytecode.
+
+    importlib's source-file loader validates its cached .pyc on
+    (mtime-in-SECONDS, size), so an edit that keeps the file the same length
+    and lands in the same second as a previous run silently reuses the OLD
+    bytecode -- i.e. the OLD EXPECTED -- and this gate reads EXPECTED out of
+    that module, so such a mutation would survive. test_scs_reason_figures.py
+    hit exactly that and switched to compile()+exec(); this is the same form.
+    """
+    src = open(MEASURE, encoding="utf-8").read()
+    mod = importlib.util.module_from_spec(
+        importlib.util.spec_from_loader("scs_credit_measure", loader=None))
+    mod.__file__ = MEASURE
+    exec(compile(src, MEASURE, "exec"), mod.__dict__)
     return mod.EXPECTED
 
 

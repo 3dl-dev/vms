@@ -5,7 +5,53 @@
  */
 #include "scs_connect.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* --- vms-fdd: SCA connect data (p. 2-25 / p. 2-28) -----------------------
+ *
+ * Byte-exact to the joiner's VMS$VAXcluster connect data in
+ * vax3-2to3-established-join-20260730.pcap -- raw frame 132 (VAX3's
+ * CONNECT_REQ) and raw frame 210 (VAX3's ACCEPT_REQ), which carry the SAME 16
+ * bytes. That capture is the library's only recording of a real node being
+ * admitted to an already-running cluster, i.e. the operation OVMX performs.
+ * The full census, the two invariant spans and the honest gap over [98:105]
+ * are in the CONNECT DATA verdict in scs_connect.h; re-derive with
+ * tools/scs_connect_data_measure.py.
+ *
+ * NOT invented, NOT an OVMX design choice: every byte below was observed.
+ * OBSERVED IN ONE VMS BUILD, THOUGH -- the whole capture library is a single
+ * OpenVMS VAX V7.3 installation under 3 system roots on 1 disk image, so
+ * "148/148" below means "no counterexample in that installation", not
+ * agreement between independent VMS systems. See the attestation note in
+ * scs_connect.h and the standing limit in spec sec 5. It is the reason OVMX
+ * decodes the peer's version claim and acts on none of it. */
+const uint8_t scs_connect_data_vaxcluster[SCS_CONNECT_DATA_LEN] = {
+    /* [0:4]  version quad, 148/148 VAX-sourced VMS$VAXcluster connect
+     * frames (OVMX's own 55 excluded -- see the guard in scs_connect.h) */
+    0x01, 0x1b, 0x01, 0x03,
+    /* [4:11] the joiner form (all-zero); what it encodes is an RE gap */
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    /* [11:16] tail, 148/148 VAX-sourced */
+    0x08, 0x00, 0x00, 0x06, 0x00
+};
+
+static int g_connect_data_enabled = -1;
+
+void scs_connect_data_reset_switch_cache(void)
+{
+    g_connect_data_enabled = -1;
+}
+
+int scs_connect_data_enabled(void)
+{
+    if (g_connect_data_enabled < 0) {
+        const char *v = getenv("OVMX_NO_CONNECT_DATA");
+        g_connect_data_enabled = (v != NULL && v[0] == '1' && v[1] == '\0') ? 0 : 1;
+    }
+    return g_connect_data_enabled;
+}
 
 /* Byte-exact 110-byte SCA content of a real CONNECT-REQUEST
  * (formation-ci1-joinwindow.pcap raw frame 47 / SCA#39, VAX1->VAX2).
@@ -55,6 +101,36 @@ static const uint8_t connect_response_tmpl[SCS_CONNECT_SCA_LEN] = {
     /* [98:110]*/ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x06, 0x00
 };
 
+/* Byte-exact 110-byte SCA content of the JOINER's MSCP$DISK client
+ * CONNECT-REQUEST (VMS$DISK_CL_DRVR -> MSCP$DISK), captured from the clean
+ * 1->2-node formation (formation-clean-2node.pcap SCA idx35, joiner->member).
+ * Same connect class as connect_request_tmpl; the substituted fields are
+ * identical (dest logical [2:8], src logical [10:16], remote Con.ID [50:54],
+ * local Con.ID [54:58], and the live SCS seq counters). Everything else is a
+ * REPLAY of the captured frame, including the msgtype 0x5b at [16], the
+ * MSCP-specific [8:10]=0x03e8 and [58:62] connect-class fields, the
+ * 'MSCP$DISK' target [62:78] / 'VMS$DISK_CL_DRVR' requester [78:94] SYSAP
+ * names, and the ASCII 'V5.0          + ' class descriptor [94:110]. The
+ * ungrounded constants are replayed, not synthesized (clean-room: observe +
+ * public docs only, CLAUDE.md Rule 8). vms-760. */
+static const uint8_t mscp_connect_request_tmpl[SCS_CONNECT_SCA_LEN] = {
+    /* [0:2]   */ 0x6c, 0x00,
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x4c, 0x04,       /* dest logical (SUBST) */
+    /* [8:10]  */ 0xe8, 0x03,                               /* MSCP connect-class field (REPLAY) */
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x4d, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x5b, 0x13,                               /* msgtype 0x5b, format 0x13 */
+    /* [18:26] */ 0x04, 0x00, 0x06, 0x00, 0x01, 0x00, 0x12, 0x00,
+    /* [26:34] */ 0x04, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
+    /* [34:42] */ 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02,
+    /* [42:50] */ 0x42, 0x00, 0x04, 0x00, 0x00, 0x00, 0x0a, 0x00,
+    /* [50:54] */ 0x00, 0x00, 0x00, 0x00,                   /* remote Con.ID (SUBST, 0 for REQUEST) */
+    /* [54:58] */ 0x08, 0x00, 0x62, 0x4e,                   /* local Con.ID (SUBST) */
+    /* [58:62] */ 0x02, 0x00, 0x01, 0x00,                   /* MSCP connect-class field (REPLAY) */
+    /* [62:78] */ 'M','S','C','P','$','D','I','S','K',' ',' ',' ',' ',' ',' ',' ',
+    /* [78:94] */ 'V','M','S','$','D','I','S','K','_','C','L','_','D','R','V','R',
+    /* [94:110]*/ 'V','5','.','0',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','+',' '
+};
+
 static void put_le16(uint8_t *dst, uint16_t v)
 {
     dst[0] = (uint8_t)(v & 0xff);
@@ -75,9 +151,23 @@ static uint32_t get_le32(const uint8_t *src)
            ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
 }
 
+/*
+ * vms-578: `stamp_connect_data` -- WHOSE connect data goes at [94:110].
+ *
+ * vms-fdd stamps the measured VMS$VAXcluster joiner connect data there for the
+ * VMS$VAXcluster connect classes. p. 2-25 makes that region PER-SYSAP ("up to
+ * 16 bytes ... passed to the destination SYSAP"), and the vms-760 MSCP$DISK
+ * template carries a DIFFERENT, equally grounded value in it -- the ASCII class
+ * descriptor 'V5.0          + ' replayed from formation-clean-2node SCA idx35.
+ * Stamping VMS$VAXcluster's bytes over it would present MSCP$DISK's connect
+ * with the connection manager's connect data, which appears on no capture.
+ * Measured: test_build_mscp_request's byte-exact check against idx35 fails with
+ * the stamp on and passes with it off, and that is the check that caught it.
+ */
 static int build_from_tmpl(const struct scs_connect_params *p,
                            const uint8_t tmpl[SCS_CONNECT_SCA_LEN],
                            uint32_t remote_conid,
+                           int stamp_connect_data,
                            uint8_t out[SCS_CONNECT_FRAME_LEN])
 {
     if (p == NULL || out == NULL) {
@@ -118,6 +208,19 @@ static int build_from_tmpl(const struct scs_connect_params *p,
     put_le16(out + 14 + 30, p->send_seq);       /* send-seq mirror [30:32] (== [20:22], GROUNDED) */
     put_le16(out + 14 + 34, p->recv_ack);       /* recv_ack 3rd    [34:36] */
 
+    /* --- vms-fdd: stamp the SCA connect data at [94:110] (abs 108-123).
+     * Before this the region was a labeled REPLAY of whichever golden frame
+     * the template came from; the CONNECT-REQUEST template is VAX1's, an
+     * established MEMBER's frame, so OVMX -- a joiner -- was presenting a
+     * member's connect data. Stamping the measured joiner value fixes that
+     * for the request and is a no-op for the response (whose template is
+     * VAX2's joiner frame and already carries these bytes).
+     * OVMX_NO_CONNECT_DATA=1 skips the stamp, restoring the template bytes. */
+    if (stamp_connect_data && scs_connect_data_enabled()) {
+        memcpy(out + SCS_CONNECT_DATA_ABS_OFF, scs_connect_data_vaxcluster,
+               SCS_CONNECT_DATA_LEN);
+    }
+
     return 0;
 }
 
@@ -125,7 +228,7 @@ int scs_connect_build_request(const struct scs_connect_params *p,
                               uint8_t out[SCS_CONNECT_FRAME_LEN])
 {
     /* CONNECT-REQUEST: remote Con.ID is always 0 (peer's not yet known). */
-    return build_from_tmpl(p, connect_request_tmpl, 0, out);
+    return build_from_tmpl(p, connect_request_tmpl, 0, 1, out);
 }
 
 int scs_connect_build_response(const struct scs_connect_params *p,
@@ -135,7 +238,15 @@ int scs_connect_build_response(const struct scs_connect_params *p,
         return -1;
     }
     /* CONNECT-RESPONSE: echo the peer's Con.ID as remote. */
-    return build_from_tmpl(p, connect_response_tmpl, p->remote_conid, out);
+    return build_from_tmpl(p, connect_response_tmpl, p->remote_conid, 1, out);
+}
+
+int scs_connect_build_mscp_request(const struct scs_connect_params *p,
+                                   uint8_t out[SCS_CONNECT_FRAME_LEN])
+{
+    /* MSCP$DISK CONNECT-REQUEST: remote Con.ID always 0 (peer's not yet known). */
+    /* vms-578: MSCP$DISK carries its OWN [94:110]; do NOT stamp. */
+    return build_from_tmpl(p, mscp_connect_request_tmpl, 0, 0, out);
 }
 
 int scs_connect_parse(const uint8_t *frame, size_t len, struct scs_connect_view *v)
@@ -164,5 +275,76 @@ int scs_connect_parse(const uint8_t *frame, size_t len, struct scs_connect_view 
         v->local_conid = get_le32(frame + 68);
     }
 
+    /* [46:48] = abs 60:62, the SCA connection-control message type (spec sec
+     * 4h(1a)). Filled whenever the frame is long enough to hold it. */
+    if (len >= 62) {
+        v->conn_msgtype = (uint16_t)(frame[60] | ((uint16_t)frame[61] << 8));
+    }
+
+    /* vms-fdd: the peer's connect data. Claimed ONLY for the population it is
+     * grounded over -- the 110-byte class, message type CONNECT_REQ or
+     * ACCEPT_REQ. The same 110-byte class ALSO carries message type 10, whose
+     * [62:78] is binary rather than a SYSAP name and which is not a connect
+     * frame, so a length test alone would over-claim. */
+    if (scs_connect_data_get(frame, len, v->connect_data) == 0) {
+        v->has_connect_data = 1;
+    }
+
     return 0;
+}
+
+int scs_connect_data_get(const uint8_t *frame, size_t len,
+                         uint8_t out[SCS_CONNECT_DATA_LEN])
+{
+    if (frame == NULL || out == NULL || len < SCS_CONNECT_FRAME_LEN) {
+        return -1;
+    }
+    /* SCA length word (abs 14) -> total SCA bytes; must be the 110-byte class. */
+    uint16_t lenword = (uint16_t)(frame[14] | ((uint16_t)frame[15] << 8));
+    if ((uint16_t)(lenword + 2) != SCS_CONNECT_SCA_LEN) {
+        return -1;
+    }
+    /* format constant 0x13 (GROUNDED) + an SCS-message opcode. */
+    if (frame[31] != SCS_FORMAT_CONST) {
+        return -1;
+    }
+    if (frame[30] != SCS_MSGTYPE_SEQAPP && frame[30] != 0x5b && frame[30] != 0x7b) {
+        return -1;
+    }
+    uint16_t cmsg = (uint16_t)(frame[60] | ((uint16_t)frame[61] << 8));
+    if (cmsg != SCS_CONN_MSGTYPE_CONNECT_REQ && cmsg != SCS_CONN_MSGTYPE_ACCEPT_REQ) {
+        return -1;
+    }
+    memcpy(out, frame + SCS_CONNECT_DATA_ABS_OFF, SCS_CONNECT_DATA_LEN);
+    return 0;
+}
+
+const char *scs_connect_data_fmt(const uint8_t *cd, char *buf, size_t bufsz)
+{
+    /* 16*3 hex + "|" + 16 ascii + "|" + NUL = 67. */
+    if (buf == NULL || bufsz < 72) {
+        return "";
+    }
+    if (cd == NULL) {
+        buf[0] = '\0';
+        return buf;
+    }
+    size_t o = 0;
+    for (int i = 0; i < SCS_CONNECT_DATA_LEN; i++) {
+        int n = snprintf(buf + o, bufsz - o, "%02x%s", cd[i],
+                         i == SCS_CONNECT_DATA_LEN - 1 ? " |" : " ");
+        if (n < 0 || (size_t)n >= bufsz - o) {
+            buf[bufsz - 1] = '\0';
+            return buf;
+        }
+        o += (size_t)n;
+    }
+    for (int i = 0; i < SCS_CONNECT_DATA_LEN && o + 2 < bufsz; i++) {
+        buf[o++] = (cd[i] >= 32 && cd[i] < 127) ? (char)cd[i] : '.';
+    }
+    if (o + 1 < bufsz) {
+        buf[o++] = '|';
+    }
+    buf[o] = '\0';
+    return buf;
 }

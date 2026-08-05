@@ -7,6 +7,7 @@
  */
 #include "scs_config.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 /* --- pool helpers --------------------------------------------------------- */
@@ -248,6 +249,89 @@ struct scs_sb *scs_pb_learn_system_addr(struct scs_config *cfg, struct scs_pb *p
     return pb->sb;
 }
 
+/* --- the p. 2-21 footnote masquerade tests (vms-22e) ---------------------- */
+
+int scs_masquerade_tests_enabled(void)
+{
+    /* Read fresh every call (see scs_config.h): a cached answer could not be
+     * bracketed by a test, and guardrail 23 requires the switch be RUN. */
+    const char *v = getenv("OVMX_NO_MASQUERADE_TESTS");
+    return (v != NULL && v[0] == '1' && v[1] == '\0') ? 0 : 1;
+}
+
+const char *scs_masquerade_result_name(enum scs_masquerade_result r)
+{
+    switch (r) {
+    case SCS_MASQ_PASS:
+        return "PASS";
+    case SCS_MASQ_FAIL_NODE_NAME:
+        return "SCS Node Names differ for a matching SCS System ID";
+    case SCS_MASQ_FAIL_SYSTEM_ID:
+        return "SCS System IDs differ for a matching SCS Node Name";
+    case SCS_MASQ_FAIL_INCARNATION:
+        return "incarnation numbers differ with a Path Block still queued";
+    default:
+        return "?";
+    }
+}
+
+enum scs_masquerade_result scs_config_masquerade_check(const struct scs_config *cfg,
+                                                       const struct scs_sb *formative)
+{
+    if (cfg == NULL || formative == NULL) {
+        return SCS_MASQ_PASS;
+    }
+    if (!scs_masquerade_tests_enabled()) {
+        return SCS_MASQ_PASS;
+    }
+
+    for (const struct scs_sb *old = cfg->sb_head; old != NULL; old = old->next) {
+        if (old == formative) {
+            continue;
+        }
+
+        /* An input the local system has never learned cannot convict a node:
+         * "known" gates each comparison, "match" is the comparison itself. */
+        int id_known = system_id_is_set(formative->system_id) &&
+                       system_id_is_set(old->system_id);
+        int id_match = id_known &&
+                       memcmp(old->system_id, formative->system_id,
+                              SCS_SYSTEM_ID_LEN) == 0;
+        int name_known = formative->node_name[0] != '\0' && old->node_name[0] != '\0';
+        int name_match = name_known &&
+                         strcmp(old->node_name, formative->node_name) == 0;
+
+        /* "if the SCS System ID in the formative System Block matches the SCS
+         * System ID in a System Block already in the Configuration Queue, the
+         * SCS Node Names must also match" (p. 2-21 footnote) */
+        if (id_match && name_known && !name_match) {
+            return SCS_MASQ_FAIL_NODE_NAME;
+        }
+
+        /* "The converse is also true." (same footnote) */
+        if (name_match && id_known && !id_match) {
+            return SCS_MASQ_FAIL_SYSTEM_ID;
+        }
+
+        /* "If both items match, and if there is a Path Block already queued to
+         * the System Block in the Configuration Queue, then the 64-bit
+         * incarnation numbers must also match." (same footnote)
+         *
+         * The p. 2-21 Note is the other side of this: with NO Path Block queued
+         * the old SB is REFRESHED instead ("the remote node was once in the
+         * cluster, departed, and is now rebooting"), so a rebooted node's new
+         * incarnation is expected there and must not be treated as a masquerade.
+         * Hence the old->pb_head guard, which is the rule, not an escape hatch. */
+        if (id_match && name_match && old->pb_head != NULL) {
+            if (formative->incarnation != 0 && old->incarnation != 0 &&
+                formative->incarnation != old->incarnation) {
+                return SCS_MASQ_FAIL_INCARNATION;
+            }
+        }
+    }
+    return SCS_MASQ_PASS;
+}
+
 enum scs_open_result scs_pb_open(struct scs_config *cfg, struct scs_pb *pb)
 {
     if (cfg == NULL || pb == NULL || pb->sb == NULL) {
@@ -261,6 +345,24 @@ enum scs_open_result scs_pb_open(struct scs_config *cfg, struct scs_pb *pb)
     }
 
     struct scs_sb *formative = pb->sb;
+
+    /* vms-22e: "At this time, special tests are made to ensure that the remote
+     * node is not masquerading as a node already known to the local system ...
+     * Virtual circuit formation is abandoned if any of these tests fail."
+     * (p. 2-21 footnote). BEFORE the queue moves: an abandoned circuit must
+     * leave the configuration queue exactly as it found it. */
+    enum scs_masquerade_result masq = scs_config_masquerade_check(cfg, formative);
+    if (masq != SCS_MASQ_PASS) {
+        pb->masquerade_fail = (int)masq;
+        /* p. 2-14 / scs_vc.h: an abandoned circuit is simply not formed, so its
+         * state IS CLOSED and fsm.abandoned records why. The PB stays formative
+         * on its PDT; tearing it down is the port driver's job (vms-17f). */
+        pb->vc_state = SCS_VC_CLOSED;
+        pb->fsm.abandoned = 1;
+        return SCS_OPEN_ABANDONED_MASQUERADE;
+    }
+    pb->masquerade_fail = (int)SCS_MASQ_PASS;
+
     struct scs_sb *old = scs_config_find_sb(cfg, formative->system_id);
 
     pdt_queue_remove(pb->pdt, pb);
@@ -309,10 +411,19 @@ enum scs_open_result scs_pb_open(struct scs_config *cfg, struct scs_pb *pb)
     return result;
 }
 
-void scs_pb_close(struct scs_config *cfg, struct scs_pb *pb)
+enum scs_pb_close_result scs_pb_close(struct scs_config *cfg, struct scs_pb *pb)
 {
     if (cfg == NULL || pb == NULL || !pb->in_use) {
-        return;
+        return SCS_PB_CLOSE_NOTHING;
+    }
+    /* p. 2-28: "If the circuit is broken for any reason, it is then a relatively
+     * simple matter to scan this queue to determine which connections have also
+     * been lost, and to notify the interested SYSAPs." That scan has to happen
+     * BEFORE the circuit structure is destroyed, and this module cannot perform
+     * it (the CDT layer sits above this one). So it is enforced instead of
+     * described: a PB with connections still queued to it is NOT closed. */
+    if (pb->cdt_head != NULL) {
+        return SCS_PB_CLOSE_CONNECTIONS_QUEUED;
     }
     if (pb->on_pdt) {
         pdt_queue_remove(pb->pdt, pb);
@@ -326,6 +437,7 @@ void scs_pb_close(struct scs_config *cfg, struct scs_pb *pb)
          * which it has had at least one open virtual circuit (p. 2-17). */
     }
     memset(pb, 0, sizeof(*pb));
+    return SCS_PB_CLOSE_OK;
 }
 
 /* --- lookups -------------------------------------------------------------- */

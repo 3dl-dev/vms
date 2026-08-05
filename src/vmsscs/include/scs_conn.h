@@ -70,8 +70,8 @@
  *                       test_scs_conn.c::test_every_figure_transition_is_present
  *                       walks the figures independently and asserts each one.
  *
- *   documented == 0  -- an OVMX ADDITION, labeled per rule 8. There are 4, each
- *                       carrying its own justification in scs_conn.c:
+ *   documented == 0  -- an OVMX ADDITION, labeled per rule 8. There are 15,
+ *                       each carrying its own justification in scs_conn.c:
  *                       - three RETRANSMIT-TOLERANCE rows. SCA does not say what
  *                         a node does when a formation message it has already
  *                         answered arrives again, but the real VAX retransmits
@@ -82,7 +82,17 @@
  *                       - one row tolerating a LOST or unclassified CONNECT_RSP,
  *                         so that ACCEPT_REQ arriving in CONNECT SENT rather
  *                         than CONNECT ACK does not park a working connection.
- *                       None of the four is presented as VMS-authentic.
+ *                       - eleven VC-LOSS rows (vms-abc), one per state, for the
+ *                         event SCS_CONN_EV_VC_LOST. THE OUTCOME IS DOCUMENTED
+ *                         and the ARC IS NOT: p. 2-31 states that when a message
+ *                         guarantee fails "every connection supported by this
+ *                         virtual circuit is also broken, and the SYSAPs
+ *                         participating in these connections are notified of the
+ *                         event" -- but no figure draws a VC-loss arrow, and
+ *                         modelling it as a table event keyed on every state is
+ *                         an OVMX choice. Flagged 0 so a run log cannot present
+ *                         it as a figure transition.
+ *                       None of the fifteen is presented as VMS-authentic.
  * ==========================================================================
  *
  * ============ THE ROLE MAPPING IS THE DAEMON'S, NOT THIS MODULE'S ==========
@@ -175,9 +185,26 @@ enum scs_conn_event {
     SCS_CONN_EV_RCV_REJECT_REQ = 8,
     SCS_CONN_EV_RCV_REJECT_RSP = 9,
     SCS_CONN_EV_RCV_DISCONNECT_REQ = 10,
-    SCS_CONN_EV_RCV_DISCONNECT_RSP = 11
+    SCS_CONN_EV_RCV_DISCONNECT_RSP = 11,
+    /*
+     * vms-abc: the virtual circuit carrying this connection was broken. NOT a
+     * received message and NOT a local service invocation -- it is the third
+     * kind of thing that can happen to a connection, and p. 2-31 is the rule:
+     * "if either the guarantee of message delivery or the guarantee of message
+     * sequentiality cannot be satisfied, the virtual circuit between the ports
+     * involved will be explicitly broken (if it isn't already). If this happens,
+     * then every connection supported by this virtual circuit is also broken,
+     * and the SYSAPs participating in these connections are notified of the
+     * event."
+     *
+     * Delivered by scs_vc_break() (scs_vc.h) to every CDT queued to the broken
+     * circuit's Path Block. Every state accepts it and every state goes to
+     * CLOSED; see the OVMX-addition note above for why the rows are flagged
+     * undocumented even though the OUTCOME is quoted verbatim from the book.
+     */
+    SCS_CONN_EV_VC_LOST = 12
 };
-#define SCS_CONN_EVENT_COUNT 12
+#define SCS_CONN_EVENT_COUNT 13
 
 /*
  * enum scs_conn_action - the packet SCS must send as a result of the

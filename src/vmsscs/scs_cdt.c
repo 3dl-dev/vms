@@ -125,6 +125,24 @@ struct scs_cdt *scs_cdl_alloc(struct scs_cdl *cdl, const char *local_sysap,
     return NULL; /* CDL full: SCSCONNCNT + 200 connections already open */
 }
 
+/* vms-578: the per-incarnation Con.ID tag. Defaults to the historical
+ * SCS_CDT_CONID_TAG so anything that never sets it behaves exactly as before. */
+static uint16_t g_conid_tag = SCS_CDT_CONID_TAG;
+
+void scs_cdt_set_conid_tag(uint16_t tag)
+{
+    /* 0 reads as "no handle" on the wire, so it is not a legal tag; refuse it
+     * rather than issue Con.IDs a peer would read as absent. */
+    if (tag != 0u) {
+        g_conid_tag = tag;
+    }
+}
+
+uint16_t scs_cdt_conid_tag(void)
+{
+    return g_conid_tag;
+}
+
 struct scs_cdt *scs_cdl_alloc_conid(struct scs_cdl *cdl, uint32_t conid,
                                     const char *local_sysap, const char *remote_sysap,
                                     struct scs_pb *pb)
@@ -132,7 +150,7 @@ struct scs_cdt *scs_cdl_alloc_conid(struct scs_cdl *cdl, uint32_t conid,
     if (cdl == NULL) {
         return NULL;
     }
-    if ((conid >> 16) != (uint32_t)SCS_CDT_CONID_TAG) {
+    if ((conid >> 16) != (uint32_t)scs_cdt_conid_tag()) {
         return NULL; /* not a CONID this node could have issued */
     }
     unsigned slot = SCS_CDT_CONID_SLOT(conid);
@@ -165,6 +183,71 @@ void scs_cdl_release(struct scs_cdl *cdl, struct scs_cdt *cdt)
     if (cdt == NULL || !cdt->in_use) {
         return;
     }
+    /* vms-61b: THE MFREEQ MUST BE GIVEN BACK. p. 2-43: forming the connection
+     * put `extended_credits` message buffers "into the MFREEQ associated with
+     * the port that supports the connection", and p. 2-45 records that share on
+     * the CDT. Breaking the connection returns those buffers to the port -- the
+     * depth is a property of the PORT, not of a connection that no longer
+     * exists. Without this the port's MFREEQ depth grows by the connection's
+     * contribution on every connect/disconnect cycle, which is exactly what a
+     * rejoining node produces. Saturating, because the count is unsigned and an
+     * inconsistency must not wrap it into a huge free-buffer claim.
+     *
+     * Only the DEPTH is reconciled here. scs_cdt.c deliberately knows nothing
+     * else about the credit account (see the field comments in scs_cdt.h and the
+     * teardown note in scs_credit.h): draining the CDT's Credit Wait queue needs
+     * struct scs_credit_waiter, which is opaque in this translation unit, so it
+     * is the caller's job and scs_depart.c is the caller that does it.
+     *
+     * CORRECTED (vms-096): the figure is `receive_credit + pending_receive_credit`,
+     * NOT `extended_credits`. extended_credits is the WHOLE deposit made at
+     * formation and never changes again; the share STILL SITTING IN the MFREEQ
+     * is smaller whenever a received message is in the SYSAP's hands. Trace it:
+     * scs_credit_extend(n) does mfreeq += n, receive_credit = n; delivering a
+     * message does mfreeq_take() + receive_credit--; releasing the buffer does
+     * mfreeq_return() + pending_receive_credit++ (and take_pending_receive_credit
+     * later folds pending back into receive_credit). So at every instant this
+     * connection's contribution to the port depth is exactly
+     * receive_credit + pending_receive_credit = n - taken + returned.
+     * Subtracting `extended_credits` charges the port a second time for buffers
+     * mfreeq_take() had already removed, and drives mfreeq_count to its
+     * saturating floor of 0 -- i.e. the port forgets buffers belonging to OTHER
+     * connections. This is the identical argument vms-b1d already applied to the
+     * DFREEQ below (`dgram_buffers`, not `dgram_extended`); the MFREEQ half was
+     * simply never brought into line. */
+    {
+        unsigned mfreeq_share = cdt->receive_credit + cdt->pending_receive_credit;
+        if (cdt->pb != NULL && cdt->pb->pdt != NULL && mfreeq_share > 0) {
+            struct scs_pdt *pdt = cdt->pb->pdt;
+            pdt->mfreeq_count = (pdt->mfreeq_count > mfreeq_share)
+                                    ? pdt->mfreeq_count - mfreeq_share
+                                    : 0;
+        }
+    }
+    /* vms-b1d: THE DFREEQ MUST BE GIVEN BACK TOO, for exactly the same reason
+     * and by exactly the same argument. p. 2-42/2-43: the datagram buffers a
+     * SYSAP requested for this connection were "inserted into the Datagram Free
+     * Queue (DFREEQ) associated with the port that supports the connection", and
+     * p. 2-43's bank analogy is that "each person is entitled only to the amount
+     * of money that he or she has on deposit" -- a depositor who has gone has no
+     * deposit. Without this the port's DFREEQ depth grows by the connection's
+     * remaining deposit on EVERY connect/release cycle, and vms-17f made that
+     * cycle production-reachable: the departure sweep in scs_pb_depart releases
+     * every CDT on a departing peer's circuit, so a node that leaves and rejoins
+     * inflates the port's datagram account each time.
+     *
+     * cdt->dgram_buffers, not cdt->dgram_extended, is the right figure: it is
+     * this connection's share STILL SITTING IN the DFREEQ. Buffers currently in
+     * the SYSAP's hands (delivered, not yet released) were already dequeued by
+     * scs_dgram_port_take, so the difference dgram_extended - dgram_buffers is
+     * already out of the port's depth and must not be subtracted twice.
+     * Saturating, for the same reason as the MFREEQ above. */
+    if (cdt->pb != NULL && cdt->pb->pdt != NULL && cdt->dgram_buffers > 0) {
+        struct scs_pdt *pdt = cdt->pb->pdt;
+        pdt->dfreeq_count = (pdt->dfreeq_count > cdt->dgram_buffers)
+                                ? pdt->dfreeq_count - cdt->dgram_buffers
+                                : 0;
+    }
     pb_queue_remove(cdt->pb, cdt);
     /* Zero everything but keep the CDT itself in the CDL (p. 2-30). The next
      * scs_cdl_alloc that reuses this slot re-derives local_conid from the slot
@@ -174,6 +257,14 @@ void scs_cdl_release(struct scs_cdl *cdl, struct scs_cdt *cdt)
 }
 
 /* --- CDT field setters ---------------------------------------------------- */
+
+void scs_cdt_set_listening(struct scs_cdt *cdt, int listening)
+{
+    if (cdt == NULL) {
+        return;
+    }
+    cdt->listening = listening ? 1 : 0;
+}
 
 void scs_cdt_set_remote_conid(struct scs_cdt *cdt, uint32_t remote_conid)
 {
@@ -251,11 +342,12 @@ struct scs_cdt *scs_cdl_lookup(const struct scs_cdl *cdl, uint32_t conid)
     return cdt;
 }
 
-/* Shared body of the two delivery entry points (p. 2-29: same CDL lookup, same
- * source-CONID check, different fixed location in the CDT for the routine). */
-static int cdl_deliver(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_conid,
-                       const void *buf, size_t len, int is_datagram)
+int scs_cdl_resolve(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_conid,
+                    struct scs_cdt **out_cdt)
 {
+    if (out_cdt != NULL) {
+        *out_cdt = NULL;
+    }
     struct scs_cdt *cdt = scs_cdl_lookup(cdl, dest_conid);
     if (cdt == NULL) {
         return SCS_DELIVER_NO_CDT;
@@ -265,6 +357,22 @@ static int cdl_deliver(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_co
      * known and they disagree, the packet is not for this connection. */
     if (src_conid != 0 && cdt->remote_conid != 0 && src_conid != cdt->remote_conid) {
         return SCS_DELIVER_SRC_MISMATCH;
+    }
+    if (out_cdt != NULL) {
+        *out_cdt = cdt;
+    }
+    return SCS_DELIVER_OK;
+}
+
+/* Shared body of the two delivery entry points (p. 2-29: same CDL resolution,
+ * different fixed location in the CDT for the routine). */
+static int cdl_deliver(struct scs_cdl *cdl, uint32_t dest_conid, uint32_t src_conid,
+                       const void *buf, size_t len, int is_datagram)
+{
+    struct scs_cdt *cdt = NULL;
+    int r = scs_cdl_resolve(cdl, dest_conid, src_conid, &cdt);
+    if (r != SCS_DELIVER_OK) {
+        return r;
     }
     if (is_datagram) {
         if (cdt->dgram_input == NULL) {

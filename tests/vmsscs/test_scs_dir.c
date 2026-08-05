@@ -499,15 +499,474 @@ static void test_connect_frames_classify_as_figure_2_14_messages(void)
           "the lookup/application message type is NOT a connection-control message");
 }
 
+/* --- vms-66f: the ASK side ------------------------------------------------
+ *
+ * The strongest available test for a replayed template is REPRODUCTION: feed
+ * the builder the identity and counters the golden frame's sender actually had,
+ * and require the output to equal the captured bytes exactly. A substitution
+ * that drifted would show up here as a byte diff, not as a passing counter.
+ */
+static const uint8_t vax2_mac[6] = { 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04 };
+
+static void test_build_connect_request_reproduces_sca21(void)
+{
+    printf("[build the poller's SCS$DIRECTORY CONNECT-REQUEST == SCA#21]\n");
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    /* VAX1's identity, since SCA#21 is VAX1's frame. */
+    memcpy(p.dst_mac, vax2_mac, 6);
+    memcpy(p.src_mac, vax1_mac, 6);
+    memcpy(p.src_logical, vax1_mac, 6);
+    memcpy(p.peer_logical, vax2_mac, 6);
+    p.local_conid = 0x63050008u; /* the handle VAX1 offered */
+    p.remote_conid = 0xDEADBEEFu; /* MUST be ignored: a CONNECT_REQ has none */
+    p.recv_ack = 0;
+    p.send_seq = 1;
+
+    uint8_t out[SCS_DIR_CONNREQ_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_connect_request(&p, out) == 0, "build_connect_request succeeds");
+    check_bytes(out + 14, sca21, sizeof(sca21),
+                "the built CONNECT-REQUEST is BYTE-EXACT with captured SCA#21");
+    check(le32(out + 14 + 50) == 0,
+          "remote Con.ID is forced to 0 even when the caller supplies one (sec 4h(1a))");
+    check(le16(out + 14 + 46) == SCS_DIR_MSGTYPE_CONNECT_REQ,
+          "message type [46:48] == 0 == CONNECT_REQ (GROUNDED, sec 4h(1a))");
+    check(memcmp(out + 14 + 62, "SCS$DIRECTORY   ", 16) == 0,
+          "destination SYSAP name [62:78] is SCS$DIRECTORY (p. 2-50)");
+    check(memcmp(out + 14 + 78, "SCS$DIR_LOOKUP  ", 16) == 0,
+          "source SYSAP name [78:94] is SCS$DIR_LOOKUP (p. 2-50)");
+
+    /* And the substitution really substitutes: OVMX's own handle must land. */
+    p.local_conid = SCS_DIR_OVMX_POLL_CONID;
+    memcpy(p.src_logical, ovmx_logical, 6);
+    check(scs_dir_build_connect_request(&p, out) == 0, "rebuild with OVMX identity");
+    check(le32(out + 14 + 54) == SCS_DIR_OVMX_POLL_CONID,
+          "local Con.ID [54:58] carries the POLLER's own handle");
+    check(le32(out + 14 + 54) != SCS_DIR_OVMX_CONID,
+          "which is NOT the served SCS$DIRECTORY handle (p. 2-49: distinct CDTs)");
+    check_bytes(out + 24, ovmx_logical, 6, "src-logical (abs 24) substituted");
+    check(scs_dir_build_connect_request(NULL, out) == -1, "NULL params rejected");
+}
+
+static void test_build_lookup_request_reproduces_sca29(void)
+{
+    printf("[build a lookup REQUEST == SCA#29]\n");
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, vax2_mac, 6);
+    memcpy(lp.src_mac, vax1_mac, 6);
+    memcpy(lp.src_logical, vax1_mac, 6);
+    memcpy(lp.peer_logical, vax2_mac, 6);
+    lp.remote_conid = 0x33590007u;
+    lp.local_conid = 0x63050008u;
+    lp.recv_ack = 2;
+    lp.send_seq = 3;
+    lp.opcode = SCS_DIR_OPCODE;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memcpy(lp.name, "MSCP$TAPE       ", SCS_DIR_NAME_LEN);
+    lp.affirmative = 1; /* MUST be ignored on a request */
+
+    uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_lookup_request(&lp, out) == 0, "build_lookup_request succeeds");
+    check_bytes(out + 14, sca29, sizeof(sca29),
+                "the built lookup REQUEST is BYTE-EXACT with captured SCA#29");
+    check(le32(out + 14 + 58) == 0,
+          "[58:62] carries the REQUEST marker 0 (GROUNDED discriminator)");
+    for (int i = 0; i < SCS_DIR_RESULT_LEN; i++) {
+        if (out[14 + 78 + i] != 0) {
+            check(0, "result field [78:94] stays empty on a request");
+            break;
+        }
+    }
+    check(out[14 + 78] == 0,
+          "affirmative=1 does NOT put an answer into a request's result field");
+
+    /* A request must parse back as a request, on the production classifier. */
+    struct scs_dir_view v;
+    check(scs_dir_parse(out, SCS_DIR_LOOKUP_FRAME_LEN, &v) == 0, "parse the built request");
+    check(v.is_lookup_request == 1 && v.is_lookup_response == 0,
+          "round-trip: the built frame classifies as a lookup REQUEST");
+
+    /* The 0x4b form the exchange switches to once the connection is up. */
+    lp.opcode = SCS_MSGTYPE_SEQAPP;
+    check(scs_dir_build_lookup_request(&lp, out) == 0, "rebuild with opcode 0x4b");
+    check(out[14 + 16] == 0x4b, "opcode [16] is substitutable (sec 4h / 4g phase-3)");
+    check(scs_dir_build_lookup_request(NULL, out) == -1, "NULL params rejected");
+}
+
+static void test_answer_classification(void)
+{
+    printf("[reading the directory's Yes / No / unreadable]\n");
+    uint8_t f[128];
+    struct scs_dir_view v;
+
+    /* The GROUNDED negative: captured SCA#31, "NOT PRESENT HERE". */
+    size_t n = make_frame(f, sca31, sizeof(sca31));
+    check(scs_dir_parse(f, n, &v) == 0, "parse SCA#31");
+    check(v.is_lookup_response == 1, "SCA#31 classifies as a lookup RESPONSE (marker == 1)");
+    check(v.answer == SCS_DIR_ANSWER_NO,
+          "and its answer is NO -- the GROUNDED 'NOT PRESENT HERE' marker (sec 4h(2))");
+
+    /* The affirmative descriptor, through the production response builder. */
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, vax1_mac, 6);
+    memcpy(lp.src_mac, ovmx_mac, 6);
+    memcpy(lp.src_logical, ovmx_logical, 6);
+    memcpy(lp.peer_logical, vax1_mac, 6);
+    lp.opcode = SCS_DIR_OPCODE;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memcpy(lp.name, "VMS$VAXcluster  ", SCS_DIR_NAME_LEN);
+    lp.affirmative = 1;
+    uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN];
+    check(scs_dir_build_lookup_response(&lp, out) == 0, "build an affirmative response");
+    check(scs_dir_parse(out, sizeof(out), &v) == 0, "parse it back");
+    check(v.is_lookup_response == 1 && v.answer == SCS_DIR_ANSWER_YES,
+          "the affirmative descriptor reads as YES (inferred: not the negative marker)");
+
+    /* A response whose result field is all-zero is NOT an answer we can read.
+     * Take the real negative response and blank its result. */
+    n = make_frame(f, sca31, sizeof(sca31));
+    memset(f + 14 + 78, 0, SCS_DIR_RESULT_LEN);
+    check(scs_dir_parse(f, n, &v) == 0, "parse a response with an empty result field");
+    check(v.is_lookup_response == 1 && v.answer == SCS_DIR_ANSWER_UNKNOWN,
+          "an empty result field reads as UNKNOWN, never as a Yes");
+
+    /* A REQUEST is never an answer. */
+    n = make_frame(f, sca29, sizeof(sca29));
+    check(scs_dir_parse(f, n, &v) == 0, "parse SCA#29");
+    check(v.is_lookup_response == 0,
+          "a lookup REQUEST is never classified as a response, even though its"
+          " result field is also all-zero");
+
+    check(strcmp(scs_dir_answer_name(SCS_DIR_ANSWER_NO), "NO") == 0 &&
+          strcmp(scs_dir_answer_name(SCS_DIR_ANSWER_YES), "YES") == 0,
+          "the answer names read back");
+
+    /* Guard: the response builder refuses a params block marked as a request. */
+    lp.request = 1;
+    check(scs_dir_build_lookup_response(&lp, out) == -1,
+          "build_lookup_response REFUSES a request-shaped params block");
+}
+
+/* =====================================================================
+ * vms-578 INTEGRATION: test functions added by worktree-760.
+ * Both branches only APPENDED here, so nothing is replaced -- these are
+ * carried over verbatim and registered in main() below.
+ * ===================================================================== */
+
+
+static void test_build_connect_confirm(void)
+{
+    printf("[build dir op=3 CONNECT-CONFIRM (vms-760)]\n");
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, vax1_mac, 6);
+    memcpy(p.src_mac, ovmx_mac, 6);
+    memcpy(p.src_logical, ovmx_logical, 6);
+    memcpy(p.peer_logical, vax1_mac, 6);
+    p.remote_conid = 0xe2dc0008u;              /* member's dir handle */
+    p.local_conid = SCS_DIR_OVMX_JOINER_CONID; /* OVMX's own dir-client handle */
+    p.recv_ack = 2;
+    p.send_seq = 2;
+    p.incarnation = 0;
+
+    uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_connect_confirm(&p, out) == 0, "build_connect_confirm succeeds");
+
+    check(out[12] == 0x60 && out[13] == 0x07, "ethertype 0x6007");
+    check(out[14 + 0] == 0x3c && out[14 + 1] == 0x00, "SCA length word 0x003c (total 62)");
+    check(out[30] == 0x5b && out[31] == 0x13, "msgtype 0x5b, format 0x13 (abs 30/31)");
+    check(le16(out + 14 + 46) == SCS_DIR_OP_CONFIRM, "op [46:48] == 3 (connect-confirm)");
+    check(le32(out + 14 + 50) == 0xe2dc0008u, "remote Con.ID == member dir handle [50:54]");
+    check(le32(out + 14 + 54) == SCS_DIR_OVMX_JOINER_CONID, "local Con.ID == OVMX dir-client handle [54:58]");
+    /* marker 0x00010000 at [58:62] (baked in, not substituted). */
+    check(le16(out + 14 + 58) == 0x0000 && le16(out + 14 + 60) == 0x0001,
+          "marker [58:62] == 0x00010000");
+    /* live counters threaded. */
+    check(le16(out + 14 + 18) == 2 && le16(out + 14 + 20) == 2,
+          "recv_ack/send_seq threaded [18:20]/[20:22]");
+    check(le16(out + 14 + 30) == 2, "send_seq mirror [30:32] == 2");
+    /* No SYSAP names: the 62-byte SCA frame ends at the marker (abs 76). */
+    check(sizeof(out) == 76, "frame length 76 (62-byte SCA, no names)");
+
+    /* Con.ID substitution independent of the template. */
+    p.remote_conid = 0x12340008u;
+    p.local_conid = 0x4F580008u;
+    p.incarnation = 3;
+    check(scs_dir_build_connect_confirm(&p, out) == 0, "build_connect_confirm (2)");
+    check(le32(out + 14 + 50) == 0x12340008u, "remote Con.ID threaded");
+    check(le32(out + 14 + 54) == 0x4F580008u, "local Con.ID threaded");
+    check(le16(out + 14 + 22) == 3, "incarnation 3 echoed into [22:24]");
+
+    check(scs_dir_build_connect_confirm(NULL, out) == -1, "NULL params rejected");
+    check(scs_dir_build_connect_confirm(&p, NULL) == -1, "NULL out rejected");
+}
+
+/* --- vms-760 SERVER-FIRST established-join identity + golden frames ---
+ * af2-firsttimer-established.pcap, cycle 1 (rel~143.758): the ESTABLISHED
+ * member (VAX1) opens an MSCP$DISK connect TO the joiner (OVMX's role) and OVMX
+ * SERVES it. member eth+logical = aa:00:04:00:01:04; joiner HW MAC =
+ * 08:00:2b:78:56:b9, joiner cluster-logical = aa:00:04:00:1a:04. */
+static const uint8_t af2_member[6]        = { 0xaa,0x00,0x04,0x00,0x01,0x04 };
+static const uint8_t af2_joiner_hw[6]     = { 0x08,0x00,0x2b,0x78,0x56,0xb9 };
+static const uint8_t af2_joiner_logical[6]= { 0xaa,0x00,0x04,0x00,0x1a,0x04 };
+
+/* J->M op=1 CONNECT-ECHO (80-byte frame), byte-exact from the pcap. */
+static const uint8_t af2_echo_op1[80] = {
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x08,0x00,0x2b,0x78,0x56,0xb9, 0x60,0x07, 0x40,0x00,
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x01,0x00, 0xaa,0x00,0x04,0x00,0x1a,0x04, 0x4b,0x13,
+    0x07,0x00,0x07,0x00,0x01,0x00,0x12,0x00, 0x07,0x00,0x00,0x00,0x07,0x00,0x00,0x00,
+    0x07,0x00,0x00,0x00,0x01,0x00,0x00,0x02, 0x16,0x00,0x04,0x00,0x01,0x00,0x00,0x00,
+    0x0a,0x00,0x53,0x35, 0x00,0x00,0x00,0x00, 0x00,0x00,0x01,0x00, 0x4d,0x53,0x43,0x50
+};
+
+/* J->M op=4 CONNECT-ACCEPT (76-byte frame), byte-exact from the pcap. */
+static const uint8_t af2_accept_op4[76] = {
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x08,0x00,0x2b,0x78,0x56,0xb9, 0x60,0x07, 0x3c,0x00,
+    0xaa,0x00,0x04,0x00,0x01,0x04, 0x01,0x00, 0xaa,0x00,0x04,0x00,0x1a,0x04, 0x5b,0x13,
+    0x07,0x00,0x08,0x00,0x01,0x00,0x12,0x00, 0x07,0x00,0x00,0x00,0x08,0x00,0x00,0x00,
+    0x07,0x00,0x00,0x00,0x01,0x00,0x00,0x02, 0x12,0x00,0x04,0x00,0x04,0x00,0x00,0x00,
+    0x0a,0x00,0x53,0x35, 0x08,0x00,0xd1,0x8f, 0x00,0x00,0x01,0x00
+};
+
+static void test_mscp_server_builders(void)
+{
+    printf("[vms-760 SERVER-FIRST: op=1 echo + op=4 accept byte-exact]\n");
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, af2_member, 6);
+    memcpy(p.src_mac, af2_joiner_hw, 6);
+    memcpy(p.src_logical, af2_joiner_logical, 6);
+    memcpy(p.peer_logical, af2_member, 6);
+    p.remote_conid = 0x3553000au;               /* member MSCP CLIENT handle */
+    p.incarnation = 0;                          /* leaves the fresh template value 1 */
+
+    /* op=1 echo: local Con.ID stays 0, recv_ack=7 send_seq=7 (both ack member ss=7). */
+    p.local_conid = 0;                          /* ignored by the echo builder */
+    p.recv_ack = 7;
+    p.send_seq = 7;
+    uint8_t eout[SCS_DIR_ECHO_FRAME_LEN];
+    memset(eout, 0xAA, sizeof(eout));
+    check(scs_dir_build_mscp_echo(&p, eout) == 0, "build_mscp_echo succeeds");
+    check(sizeof(eout) == 80, "echo frame length 80 (66-byte SCA)");
+    check_bytes(eout, af2_echo_op1, 80, "op=1 echo byte-EXACT vs pcap (af2 rel~143.758)");
+    /* Spot the two deltas vs the directory-echo template (readable failures). */
+    check(eout[30] == 0x4b, "echo opcode [16] == 0x4b (data-phase, NOT 0x5b)");
+    check_bytes(eout + 76, (const uint8_t *)"MSCP", 4, "echo name-tail [62:66] == 'MSCP' (NOT 'SCS$')");
+    check(le32(eout + 64) == 0x3553000au, "echo remote Con.ID == member client handle (abs 64)");
+    check(le32(eout + 68) == 0u, "echo local Con.ID == 0 (server handle supplied by the accept)");
+
+    /* op=4 accept: local = OVMX server handle 0x8fd10008 (ref), recv_ack=7 send_seq=8. */
+    p.local_conid = 0x8fd10008u;
+    p.recv_ack = 7;
+    p.send_seq = 8;
+    uint8_t aout[SCS_DIR_CONFIRM_FRAME_LEN];
+    memset(aout, 0xAA, sizeof(aout));
+    check(scs_dir_build_mscp_accept(&p, aout) == 0, "build_mscp_accept succeeds");
+    check(sizeof(aout) == 76, "accept frame length 76 (62-byte SCA)");
+    check_bytes(aout, af2_accept_op4, 76, "op=4 accept byte-EXACT vs pcap (af2 rel~143.758)");
+    /* Spot the load-bearing fields. */
+    check(aout[30] == 0x5b, "accept opcode [16] == 0x5b (SAME as the op=3 confirm, NOT the data-phase 0x4b)");
+    check(le16(aout + 14 + 46) == SCS_DIR_OP_ACCEPT, "accept op [46:48] == 4 (the SINGLE delta vs confirm's 3)");
+    check(le32(aout + 64) == 0x3553000au, "accept remote Con.ID == member client handle (abs 64)");
+    check(le32(aout + 68) == 0x8fd10008u, "accept local Con.ID == OVMX server handle (abs 68)");
+    check(le16(aout + 14 + 58) == 0x0000 && le16(aout + 14 + 60) == 0x0001,
+          "accept marker [58:62] == 0x00010000");
+
+    /* Con.ID / handle substitution proven independent of the template: OVMX's
+     * live server handle 0x4F58000B reproduces everything except abs 68. */
+    p.local_conid = 0x4F58000Bu;
+    check(scs_dir_build_mscp_accept(&p, aout) == 0, "build_mscp_accept (live handle)");
+    check(le32(aout + 68) == 0x4F58000Bu, "accept local Con.ID threaded to OVMX's live server handle");
+    check(le32(aout + 64) == 0x3553000au, "accept remote Con.ID unaffected by local substitution");
+
+    check(scs_dir_build_mscp_echo(NULL, eout) == -1, "build_mscp_echo NULL params rejected");
+    check(scs_dir_build_mscp_accept(&p, NULL) == -1, "build_mscp_accept NULL out rejected");
+}
+
+static void test_mscp_disk_affirmative(void)
+{
+    printf("[vms-760 SERVER-FIRST: MSCP$DISK lookup HIT result == name echo]\n");
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, af2_member, 6);
+    memcpy(lp.src_mac, af2_joiner_hw, 6);
+    memcpy(lp.src_logical, af2_joiner_logical, 6);
+    memcpy(lp.peer_logical, af2_member, 6);
+    lp.remote_conid = 0x356b0009u;   /* member dir handle (ref) */
+    lp.local_conid = 0x8fd20007u;    /* OVMX dir-server handle (ref) */
+    lp.recv_ack = 4; lp.send_seq = 4; lp.opcode = 0x4b; lp.op = 0x0a;
+    memcpy(lp.name, "MSCP$DISK", 9);
+    lp.affirmative = 1;
+
+    uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_lookup_response(&lp, out) == 0, "build_lookup_response (MSCP$DISK HIT) succeeds");
+    check_bytes(out + 14 + 62, (const uint8_t *)"MSCP$DISK       ", 16, "name echoed into [62:78]");
+    /* THE vms-760 FIX: the MSCP$DISK HIT result == the queried NAME (blank-padded),
+     * GROUNDED byte-exact (af2 pcap result@92 == 'MSCP$DISK       '), NOT the
+     * VMS$VAXcluster 011b0103 descriptor. */
+    check_bytes(out + 14 + 78, (const uint8_t *)"MSCP$DISK       ", 16,
+                "result [78:94] == 'MSCP$DISK       ' (name echo HIT, GROUNDED af2)");
+    static const uint8_t vc_descr[16] = {
+        0x01,0x1b,0x01,0x03,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x06,0x00
+    };
+    check(memcmp(out + 14 + 78, vc_descr, 16) != 0,
+          "MSCP$DISK result is NOT the VMS$VAXcluster descriptor (per-name selection)");
+
+    /* Regression guard: VMS$VAXcluster still returns the 011b0103 descriptor. */
+    struct scs_dir_lookup_params vp = lp;
+    memset(vp.name, 0, sizeof(vp.name));
+    memcpy(vp.name, "VMS$VAXcluster", 14);
+    check(scs_dir_build_lookup_response(&vp, out) == 0, "build_lookup_response (VMS$VAXcluster HIT) succeeds");
+    check_bytes(out + 14 + 78, vc_descr, 16,
+                "VMS$VAXcluster result [78:94] still == 011b0103 descriptor (no regression)");
+
+    /* MSCP$TAPE stays a negative miss. */
+    struct scs_dir_lookup_params tp = lp;
+    memset(tp.name, 0, sizeof(tp.name));
+    memcpy(tp.name, "MSCP$TAPE", 9);
+    tp.affirmative = 0;
+    check(scs_dir_build_lookup_response(&tp, out) == 0, "build_lookup_response (MSCP$TAPE miss) succeeds");
+    check_bytes(out + 14 + 78, (const uint8_t *)"NOT PRESENT HERE", 16,
+                "MSCP$TAPE result [78:94] == 'NOT PRESENT HERE' (miss unchanged)");
+}
+
+/*
+ * vms-e81: the op-5 CONFIRM5 must NOT be "the op-3 confirm with a different
+ * opcode". It is FOUR BYTES SHORTER -- the trailing marker word is absent and
+ * BOTH length words are re-derived. Building it the obvious way emits 62 bytes
+ * declaring 60, which a peer drops as a runt IN SILENCE (there is no NAK in this
+ * protocol), and the next frame then dies on the sequence gap. That is the exact
+ * failure that stalled the join for three sessions, so it is tested explicitly:
+ * every assertion below is a length or a length-derived field.
+ */
+static void test_build_mscp_confirm5(void)
+{
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, vax1_mac, 6);
+    memcpy(p.src_mac, ovmx_logical, 6);
+    memcpy(p.src_logical, ovmx_logical, 6);
+    memcpy(p.peer_logical, vax1_mac, 6);
+    p.remote_conid = 0xb018000dU; /* peer's handle, from its op-4 [54:58] */
+    p.local_conid  = 0x7462000bU; /* ours, the one we sent in our op-0 */
+    p.incarnation  = 1;
+    p.recv_ack = 9;
+    p.send_seq = 10;
+
+    uint8_t out[SCS_DIR_CONFIRM5_FRAME_LEN];
+    check(scs_dir_build_mscp_confirm5(&p, out) == 0, "build_mscp_confirm5 succeeds");
+
+    /* THE POINT: 72 wire / 58 SCA, four bytes shorter than the op-3 confirm. */
+    check(SCS_DIR_CONFIRM5_FRAME_LEN == 72 && SCS_DIR_CONFIRM5_SCA_LEN == 58,
+          "confirm5 is 72 wire / 58 SCA (NOT the confirm's 76/62)");
+    check(SCS_DIR_CONFIRM5_FRAME_LEN == SCS_DIR_CONFIRM_FRAME_LEN - 4,
+          "confirm5 is exactly 4 bytes shorter than the op-3 confirm");
+
+    /* Both length words DERIVED from what we emit, never inherited. */
+    check(le16(out + 14 + 0) == (uint16_t)(SCS_DIR_CONFIRM5_SCA_LEN - 2),
+          "outer length word [0:2] == 56, derived from the 58-byte SCA");
+    check(le16(out + 14 + 42) == 14, "inner length word [42:44] == 14 (not the confirm's 18)");
+
+    check(le16(out + 14 + 46) == 5, "op [46:48] == 5");
+    check(out[14 + 16] == 0x4b, "msgtype [16] == 0x4b SEQAPP (never mirrors the op-4)");
+    check(le16(out + 14 + 48) == 0, "flag [48:50] == 0 (336/336 on the wire)");
+
+    /* Con.ID convention: peer's handle first, ours second -- same as op 3. */
+    check(le32(out + 14 + 50) == 0xb018000dU, "remote Con.ID [50:54] == the peer's handle");
+    check(le32(out + 14 + 54) == 0x7462000bU, "local Con.ID [54:58] == our own handle");
+
+    /* Counters substituted in all three mirrors. */
+    check(le16(out + 14 + 18) == 9 && le16(out + 14 + 26) == 9 && le16(out + 14 + 34) == 9,
+          "recv_ack substituted at [18]/[26]/[34]");
+    check(le16(out + 14 + 20) == 10 && le16(out + 14 + 30) == 10,
+          "send_seq substituted at [20]/[30]");
+
+    check(scs_dir_build_mscp_confirm5(NULL, out) == -1, "confirm5 NULL params rejected");
+}
+
+/* vms-2f3 sec 4M: OVMX does not mirror the request msgtype onto a directory
+ * response -- it answers with the SEQAPP data-phase form 0x4b.
+ *
+ * ⚠ THIS PINS AN OVMX DESIGN CHOICE, NOT A REFERENCE RULE (sec 4M.12, and it
+ * is an unresolved RE gap -- see the item filed against it). Two candidate
+ * rules were tested against the capture library and BOTH were refuted:
+ * "a real VAX never mirrors" (10 genuine 0x5b->0x5b mirrors exist) and "the
+ * response tracks the result" (18 of 63 land off-diagonal). No header byte in
+ * 129,084 real-VAX frames separates 0x4b from 0x5b.
+ *
+ * So this asserts what OVMX CHOOSES, not what VMS requires. Its value is that
+ * the choice is made in ONE place, is kill-switchable, and cannot drift
+ * silently. If the selector is ever grounded, this test changes with it. */
+static void test_response_msgtype_never_mirrors(void)
+{
+    printf("[directory response msgtype never mirrors the request -- vms-2f3 sec 4M]\n");
+
+    /* The rule, over every request msgtype OVMX can be asked with. */
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE, 0) == SCS_DIR_OPCODE_SEQAPP,
+          "0x5b establishing request -> 0x4b response (THE rejoin case)");
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE_SEQAPP, 0) == SCS_DIR_OPCODE_SEQAPP,
+          "0x4b data-phase request -> 0x4b response (the fresh-join case)");
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE_RETX, 0) == SCS_DIR_OPCODE_SEQAPP,
+          "0x7b retransmit request -> 0x4b response");
+
+    /* The kill-switch restores the pre-fix echo, so the failing case stays
+     * reproducible on the lab (guardrail 21). */
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE, 1) == SCS_DIR_OPCODE,
+          "OVMX_DIR_MIRROR_MSGTYPE restores the 0x5b echo");
+    check(scs_dir_response_msgtype(SCS_DIR_OPCODE_SEQAPP, 1) == SCS_DIR_OPCODE_SEQAPP,
+          "kill-switch is a no-op for a 0x4b request");
+
+    /* End-to-end: the byte OVMX actually puts on the wire at [16], built the
+     * same way scsd.c builds it, for a 0x5b MSCP$DISK lookup -- the exact frame
+     * that stalled every rejoin. */
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, vax1_mac, 6);
+    memcpy(lp.src_mac, ovmx_mac, 6);
+    memcpy(lp.src_logical, ovmx_logical, 6);
+    memcpy(lp.peer_logical, vax1_mac, 6);
+    lp.remote_conid = 0x63050008u;
+    lp.local_conid = SCS_DIR_OVMX_CONID;
+    lp.recv_ack = 6;
+    lp.send_seq = 6;
+    lp.op = 0x0a;
+    memcpy(lp.name, "MSCP$DISK", 9);
+    lp.affirmative = 1;
+    lp.opcode = scs_dir_response_msgtype(SCS_DIR_OPCODE, 0);
+
+    uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_lookup_response(&lp, out) == 0,
+          "build_lookup_response for a 0x5b-asked MSCP$DISK lookup succeeds");
+    check(out[30] == SCS_DIR_OPCODE_SEQAPP,
+          "wire msgtype [16] (abs 30) == 0x4b even though the request was 0x5b");
+    check(out[31] == 0x13, "format [17] (abs 31) == 0x13, unchanged");
+}
+
 int main(void)
 {
     printf("test_scs_dir: SCS$DIRECTORY connect + SCS$DIR_LOOKUP (vms-246)\n");
+    test_build_connect_request_reproduces_sca21();
+    test_build_lookup_request_reproduces_sca29();
+    test_answer_classification();
     test_parse_real();
     test_build_connect_response();
     test_build_lookup_response();
     test_incarnation_echo();
     test_source_conid_p235();
     test_connect_frames_classify_as_figure_2_14_messages();
+    /* vms-578: worktree-760 test functions, registered here too. */
+    test_response_msgtype_never_mirrors();
+    test_build_connect_confirm();
+    test_mscp_server_builders();
+    test_mscp_disk_affirmative();
+    test_build_mscp_confirm5();
     printf("test_scs_dir: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

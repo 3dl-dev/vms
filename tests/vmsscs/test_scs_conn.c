@@ -189,10 +189,18 @@ static void test_no_extra_documented_rows(void)
 }
 
 /*
- * Every UNdocumented row must be one of the four OVMX additions scs_conn.h
- * names. A new unlabeled shortcut must fail this test, not slip in.
+ * Every UNdocumented row must be one of the OVMX additions scs_conn.h names. A
+ * new unlabeled shortcut must fail this test, not slip in.
+ *
+ * NAMED FOR WHAT IT CHECKS, NOT FOR A COUNT. This case used to be called
+ * "..._are_exactly_the_four_declared", from when the list below held only the
+ * four retransmit / missing-CONNECT_RSP rows. vms-abc added the eleven
+ * SCS_CONN_EV_VC_LOST rows, and the identifier went on saying "four" while the
+ * list said 15 -- a stale figure in the one file whose whole job is counting
+ * undocumented rows. The count is out of the name BECAUSE it is derived and
+ * asserted below (nexp), where it cannot go stale.
  */
-static void test_ovmx_rows_are_exactly_the_four_declared(void)
+static void test_ovmx_rows_are_exactly_the_declared_set(void)
 {
     static const struct {
         enum scs_conn_state from;
@@ -201,7 +209,21 @@ static void test_ovmx_rows_are_exactly_the_four_declared(void)
         {SCS_CONN_CONNECT_SENT, SCS_CONN_EV_SVC_CONNECT},      /* retransmit */
         {SCS_CONN_CONNECT_REC, SCS_CONN_EV_RCV_CONNECT_REQ},   /* retransmit */
         {SCS_CONN_ACCEPT_SENT, SCS_CONN_EV_RCV_CONNECT_REQ},   /* retransmit */
-        {SCS_CONN_CONNECT_SENT, SCS_CONN_EV_RCV_ACCEPT_REQ}    /* missing 0x4b CONNECT_RSP */
+        {SCS_CONN_CONNECT_SENT, SCS_CONN_EV_RCV_ACCEPT_REQ},   /* missing 0x4b CONNECT_RSP */
+        /* vms-abc: VC loss, one row per state (p. 2-31 states the OUTCOME --
+         * the connection is broken and its SYSAP notified -- but no figure
+         * draws the arrow, so the rows are OVMX additions). */
+        {SCS_CONN_CLOSED, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_CONNECT_SENT, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_CONNECT_ACK, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_CONNECT_REC, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_ACCEPT_SENT, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_REJECT_SENT, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_OPEN, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_DISC_SENT, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_DISC_ACK, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_DISC_RECEIVED, SCS_CONN_EV_VC_LOST},
+        {SCS_CONN_DISC_MATCH, SCS_CONN_EV_VC_LOST}
     };
     const unsigned nexp = (unsigned)(sizeof(expected) / sizeof(expected[0]));
 
@@ -237,6 +259,63 @@ static void test_ovmx_rows_are_exactly_the_four_declared(void)
               scs_conn_state_name(t.from), scs_conn_event_name(expected[j].ev),
               scs_conn_state_name(t.to));
     }
+}
+
+/*
+ * vms-abc: the VC-loss rows, walked state by state INDEPENDENTLY of the list
+ * above. p. 2-31: "every connection supported by this virtual circuit is also
+ * broken, and the SYSAPs participating in these connections are notified of the
+ * event." So from EVERY state:
+ *   - a rule must exist (a VC loss is never an illegal event),
+ *   - it must land in CLOSED,
+ *   - it must ask for NO packet (the circuit is gone -- p. 2-31: "Any attempt
+ *     to send a message from one port to another in the absence of a virtual
+ *     circuit will fail"),
+ *   - and every state that HAD a connection must notify the SYSAP.
+ * A mutant that drops one row, sends a packet, or forgets the notify bit dies
+ * here.
+ */
+static void test_vc_loss_closes_every_state_and_notifies(void)
+{
+    for (int s = 0; s < SCS_CONN_STATE_COUNT; s++) {
+        enum scs_conn_state from = (enum scs_conn_state)s;
+        struct scs_conn_transition t;
+        CHECK(scs_conn_table_lookup(from, SCS_CONN_EV_VC_LOST, &t),
+              "no VC-loss rule for state %s -- a VC loss must never be an"
+              " illegal event", scs_conn_state_name(from));
+        CHECK(!t.illegal, "VC loss in %s is illegal", scs_conn_state_name(from));
+        CHECK(t.to == SCS_CONN_CLOSED, "VC loss in %s lands in %s, not CLOSED",
+              scs_conn_state_name(from), scs_conn_state_name(t.to));
+        CHECK(t.action == SCS_CONN_ACT_NONE,
+              "VC loss in %s asks to send '%s' into a circuit that is gone",
+              scs_conn_state_name(from), scs_conn_action_name(t.action));
+        CHECK(t.documented == 0,
+              "the VC-loss row for %s claims to be drawn in a figure; no figure"
+              " draws a VC-loss arc", scs_conn_state_name(from));
+        if (from == SCS_CONN_CLOSED) {
+            CHECK(t.notify == 0, "VC loss in CLOSED notifies a SYSAP about a"
+                                 " connection that was never formed");
+        } else {
+            CHECK((t.notify & SCS_CONN_NOTIFY_DISCONNECTED) != 0,
+                  "VC loss in %s does not notify the SYSAP (p. 2-31 requires it)",
+                  scs_conn_state_name(from));
+        }
+    }
+
+    /* And it must actually MOVE a live connection, through the machine. */
+    struct scs_cdt *c = fresh_conn("VMS$VAXcluster", "VMS$VAXcluster");
+    CHECK(c != NULL, "allocation failed");
+    if (c == NULL) {
+        return;
+    }
+    (void)scs_conn_fsm_step(c, SCS_CONN_EV_SVC_CONNECT);
+    (void)scs_conn_fsm_step(c, SCS_CONN_EV_RCV_CONNECT_RSP);
+    (void)scs_conn_fsm_step(c, SCS_CONN_EV_RCV_ACCEPT_REQ);
+    CHECK_STATE(c, SCS_CONN_OPEN);
+    struct scs_conn_transition t = scs_conn_fsm_step(c, SCS_CONN_EV_VC_LOST);
+    CHECK(t.from == SCS_CONN_OPEN && t.to == SCS_CONN_CLOSED,
+          "an OPEN connection did not go to CLOSED on VC loss");
+    CHECK_STATE(c, SCS_CONN_CLOSED);
 }
 
 /* ==========================================================================
@@ -774,7 +853,8 @@ int main(void)
 
     test_every_figure_transition_is_present();
     test_no_extra_documented_rows();
-    test_ovmx_rows_are_exactly_the_four_declared();
+    test_ovmx_rows_are_exactly_the_declared_set();
+    test_vc_loss_closes_every_state_and_notifies();
     test_formation_path_source();
     test_formation_path_target();
     test_rejection_path();

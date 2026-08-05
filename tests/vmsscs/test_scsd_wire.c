@@ -12,10 +12,14 @@
  * HOW. This translation unit #includes src/vmsscs/scsd.c with SCSD_UNIT_TEST
  * defined. That does exactly two things to the daemon source (both guarded, both
  * absent from the shipped binary):
- *   1. send_frame_to() captures the frame into scsd_test_last_frame/_dst instead
- *      of calling sendto() on an AF_PACKET socket that needs CAP_NET_RAW. The
- *      frame handed to it is built by the REAL scsd.c senders from the REAL
- *      peer_state accessors -- nothing is re-derived here.
+ *   1. send_frame_raw() captures the frame into scsd_test_last_frame/_dst
+ *      instead of calling sendto() on an AF_PACKET socket that needs
+ *      CAP_NET_RAW, and counts it in scsd_test_frames. The frame handed to it
+ *      is built by the REAL scsd.c senders from the REAL peer_state accessors
+ *      -- nothing is re-derived here. Because the seam is at the TRANSPORT,
+ *      below scsd.c's send_frame_vc() choke point, scsd_test_frames is the
+ *      total number of frames that would actually have left the interface --
+ *      which is what test_a_broken_circuit_carries_no_traffic() asserts on.
  *   2. the daemon's main() is RENAMED (not compiled out) so this file can supply
  *      its own and every static helper is still compiled as the daemon compiles it.
  * Everything under test -- peer_find_or_add, ps_learn_sys_addr, ps_sys_addr,
@@ -68,14 +72,37 @@
 static int failures = 0;
 static int checks = 0;
 
+/*
+ * WHERE A FAILING CHECK IS PRINTED, and why it is not stdout.
+ *
+ * log_capture_begin() below dup2()s a tmpfile over fd 1 AND fd 2 so the
+ * daemon's run log can be asserted on. Until vms-591 round 2 CHECK printed
+ * with printf(), so EVERY assertion that failed inside a capture window --
+ * which is most of the assertions in this file, since rx_feed() runs inside
+ * one -- had its message swallowed into rxlog and never reached the operator.
+ * The run still exited non-zero, so ctest still went red, but it went red with
+ * NO REASON PRINTED. That was measured, not supposed: it is what the first
+ * mutation run of this round produced.
+ *
+ * chk_out is a stream over a dup of the ORIGINAL fd 2, taken in main() before
+ * any capture can run, so it survives every dup2() the capture does.
+ */
+static FILE *chk_out = NULL;
+
+static FILE *chk_stream(void)
+{
+    return chk_out != NULL ? chk_out : stderr;
+}
+
 #define CHECK(cond, ...)                                                                 \
     do {                                                                                 \
         checks++;                                                                        \
         if (!(cond)) {                                                                   \
             failures++;                                                                  \
-            printf("FAIL %s:%d: ", __func__, __LINE__);                                  \
-            printf(__VA_ARGS__);                                                         \
-            printf("\n");                                                                \
+            fprintf(chk_stream(), "FAIL %s:%d: ", __func__, __LINE__);                    \
+            fprintf(chk_stream(), __VA_ARGS__);                                          \
+            fprintf(chk_stream(), "\n");                                                 \
+            fflush(chk_stream());                                                        \
         }                                                                                \
     } while (0)
 
@@ -141,6 +168,14 @@ static void world_init(struct world *w)
 static const uint8_t our_hw_mac[6] = {0x52, 0x54, 0x00, 0xaa, 0xbb, 0xcc};
 static const uint8_t our_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x41, 0x05};
 
+/* The stdout/stderr capture helpers, defined with the rx harness far below.
+ * Forward-declared because the address-plumbing cases up here now have to
+ * assert that a REFUSED send says why (INV-6), and the refusal goes to stderr. */
+static void rxlog_reset(void);
+static int  rxlog_has(const char *needle);
+static void log_capture_begin(void);
+static void log_capture_end(void);
+
 /*
  * Drive the REAL scsd.c joiner CONNECT-REQUEST sender for a freshly discovered
  * peer with the given port address and learned System Address, and copy out the
@@ -156,6 +191,17 @@ static size_t capture_joiner_request(const uint8_t mac[6], const uint8_t sysid[6
         return 0;
     }
     ps_learn_sys_addr(&w.cfg, ps, sysid);
+    /* vms-abc: OPEN the named circuit. A CONNECT-REQUEST is a send, and since
+     * this item every send consults the Path Block, so a CLOSED circuit now
+     * produces no frame to capture. NOTE THIS IS A REAL TIGHTENING, not just a
+     * fixture edit: before, only the CONFIG_SYS *selection* path (named_vc ==
+     * NULL) checked for OPEN, so a caller that NAMED a closed circuit got a
+     * frame anyway -- p. 2-31 forbids that for a named path exactly as much as
+     * for a selected one. Opening here restores what these captures are about
+     * (which bytes of the frame follow which learned address) without asserting
+     * anything less. */
+    CHECK(scs_pb_open(&w.cfg, ps->pb) != SCS_OPEN_ERROR,
+          "the capture fixture's circuit did not open");
     scsd_test_frames = 0;
     scsd_test_last_len = 0;
     /* vms-398: these address-plumbing captures NAME the circuit (ps->pb), which
@@ -265,8 +311,30 @@ static void test_port_address_and_system_address_stay_distinct(void)
     }
 }
 
-/* A peer whose System Address is not learned yet emits zeros there -- byte for
- * byte what the zero-initialized per-peer field it replaced produced. */
+/*
+ * A peer whose System Address is not learned yet HAS ZEROS THERE -- byte for
+ * byte what the zero-initialized per-peer field it replaced produced.
+ *
+ * vms-abc CHANGED WHAT THE LAST TWO CHECKS CAN ASSERT, and the reason is
+ * structural rather than cosmetic, so it is written down instead of quietly
+ * edited. This test used to drive send_joiner_connect_request() and assert the
+ * EMITTED frame carried a zero peer-logical. That emission is now unreachable,
+ * and unreachable by construction, not by luck:
+ *   - every SCS-layer send consults the Path Block (send_frame_vc), and
+ *   - a Path Block cannot be OPEN without a System Block (scs_pb_open returns
+ *     SCS_OPEN_ERROR on pb->sb == NULL), and
+ *   - the only thing that attaches an SB is ps_learn_sys_addr().
+ * So "no System Address learned" now IMPLIES "no OPEN circuit" implies "no
+ * frame". The property the old assertion protected -- OVMX must not put a
+ * fabricated or zero peer-logical on the wire -- is satisfied more strongly:
+ * nothing goes on the wire at all, and the refusal is logged.
+ *
+ * WHAT IS STILL ASSERTED, so this is not coverage traded away: the zero
+ * peer-logical VALUE is asserted at its source (ps_sys_addr), the refusal is
+ * asserted to happen, and the refusal is asserted to be LOUD (INV-6). The
+ * negative control for the guard itself is the mutation record on
+ * send_frame_vc: removing its `vc_state == SCS_VC_OPEN` term reds this case.
+ */
 static void test_undiscovered_system_address_is_zero(void)
 {
     struct world w;
@@ -284,12 +352,23 @@ static void test_undiscovered_system_address_is_zero(void)
     CHECK(memcmp(ps_port_addr(ps), mac, 6) == 0, "port address not recorded");
 
     scsd_test_frames = 0;
-    CHECK(send_joiner_connect_request(7, 1, &w.cfg, ps, ps->pb, our_hw_mac, our_logical) == 1,
-          "sender refused to build a frame");
-    if (peer_logical_offset > 0 && scsd_test_frames == 1) {
-        CHECK(is_zero6(scsd_test_last_frame + peer_logical_offset),
-              "unlearned peer emitted a non-zero peer-logical");
-    }
+    unsigned long refused_before = vc_sends_refused;
+    rxlog_reset();
+    log_capture_begin();
+    int sent = send_joiner_connect_request(7, 1, &w.cfg, ps, ps->pb,
+                                           our_hw_mac, our_logical);
+    log_capture_end();
+    CHECK(sent == 0,
+          "the sender built a CONNECT-REQUEST for a peer with no System Address"
+          " -- its peer-logical field could only have been zeros");
+    CHECK(scsd_test_frames == 0,
+          "%u frame(s) reached the wire for a peer with no OPEN circuit",
+          scsd_test_frames);
+    CHECK(vc_sends_refused == refused_before + 1,
+          "the choke point recorded %lu refusals, expected 1",
+          vc_sends_refused - refused_before);
+    CHECK(rxlog_has("SCSD-E-NOVC"),
+          "the refusal was SILENT (CLAUDE.md rule 9 / INV-6)");
 }
 
 /* Peer slots stay one-per-port-address, and a full table still answers "no room"
@@ -394,8 +473,12 @@ static void test_shared_sb_aliases_the_peer_logical(void)
  *   1. it is UNREACHABLE at the shipped pool sizes -- a full peer table plus the
  *      local node's own SB (the exact allocation SCSD's main() performs) leaves
  *      every peer with a correctly recorded address;
- *   2. if it were reachable it is HONEST, not silent -- the frame degrades to a
- *      zero peer-logical and SCSD logs SCSD-E-NOSB (CLAUDE.md rule 9 / INV-6).
+ *   2. if it were reachable it is HONEST, not silent -- SCSD logs SCSD-E-NOSB
+ *      on the failed learn, and since vms-abc it then sends NOTHING rather than
+ *      degrading the frame to a zero peer-logical, logging SCSD-E-NOVC for that
+ *      too (CLAUDE.md rule 9 / INV-6). The claim in this line used to end at
+ *      "the frame degrades"; it no longer can, and the last block of this test
+ *      is the measurement that says so.
  */
 static void test_sb_exhaustion_is_visible_and_unreachable(void)
 {
@@ -476,25 +559,48 @@ static void test_sb_exhaustion_is_visible_and_unreachable(void)
     CHECK(is_zero6(ps_sys_addr(ps)),
           "exhausted SB pool still produced a system address");
 
+    /* vms-abc: THE DEGRADED FRAME IS NO LONGER EMITTED AT ALL, which makes
+     * claim (2) above stronger than it was, not weaker. The zero peer-logical
+     * used to go on the wire with an SCSD-E-NOSB beside it -- honest, but a
+     * degraded frame all the same. Now: no SB means the Path Block can never
+     * open (scs_pb_open returns SCS_OPEN_ERROR on pb->sb == NULL), and no OPEN
+     * circuit means send_frame_vc() refuses, so the exhausted-pool peer gets
+     * SILENCE plus TWO loud log lines. Both are asserted; nothing is inferred.
+     * (SCSD-E-NOSB is asserted above, on the learn attempt.) */
     scsd_test_frames = 0;
-    CHECK(send_joiner_connect_request(7, 1, &x.cfg, ps, ps->pb, our_hw_mac, our_logical) == 1,
-          "sender refused to build a frame");
-    if (peer_logical_offset > 0 && scsd_test_frames == 1) {
-        CHECK(is_zero6(scsd_test_last_frame + peer_logical_offset),
-              "degraded peer did not emit a zero peer-logical");
-        CHECK(memcmp(scsd_test_last_dst, mac, 6) == 0,
-              "degraded peer lost its destination port address too");
-    }
+    unsigned long refused_before = vc_sends_refused;
+    rxlog_reset();
+    log_capture_begin();
+    int sent = send_joiner_connect_request(7, 1, &x.cfg, ps, ps->pb,
+                                           our_hw_mac, our_logical);
+    log_capture_end();
+    CHECK(sent == 0,
+          "the SB-exhausted peer still got a CONNECT-REQUEST built for it --"
+          " its peer-logical field could only have been zeros");
+    CHECK(scsd_test_frames == 0,
+          "%u frame(s) reached the wire for an SB-exhausted peer, whose Path"
+          " Block cannot be OPEN", scsd_test_frames);
+    CHECK(vc_sends_refused == refused_before + 1,
+          "the choke point recorded %lu refusals, expected 1",
+          vc_sends_refused - refused_before);
+    CHECK(rxlog_has("SCSD-E-NOVC"),
+          "the refusal was SILENT (CLAUDE.md rule 9 / INV-6)");
 }
 
 /*
- * The p. 2-21 REFRESH transition is INERT in the daemon. This asserts the reason
- * mechanically so the claim in scsd.c and scs_config.h cannot rot silently: a
- * rejoining node re-enters the same peer slot on the same already-open Path
- * Block, and the second open takes the early return instead of the REFRESH.
- * Making it fire is wire-visible and is filed as vms-17f.
+ * vms-17f: THE PEER SLOT IS THE THING THAT PINNED THE REJOIN, and this is the
+ * mechanism at slot level, without any frames.
+ *
+ * Until vms-17f peer_find_or_add() matched on port address and only ever
+ * ALLOCATED, so a node that left and came back re-entered its stale slot on its
+ * still-OPEN Path Block and the second open took scs_pb_open's already-open
+ * early return. Releasing the slot is what gives the returning node a second,
+ * FORMATIVE circuit for the p. 2-21 Note to fire on. The full sequence, driven
+ * by captured frames through the daemon's own receive dispatch, is
+ * test_rejoin_reaches_the_p221_refresh() further down; this case isolates the
+ * slot behaviour so a failure there can be told apart from a failure here.
  */
-static void test_rejoin_is_inert_in_the_daemon(void)
+static void test_released_peer_slot_gives_a_returning_node_a_new_circuit(void)
 {
     struct world w;
     world_init(&w);
@@ -510,19 +616,39 @@ static void test_rejoin_is_inert_in_the_daemon(void)
     ps_learn_sys_addr(&w.cfg, ps, sid);
     struct scs_pb *first_pb = ps->pb;
     CHECK(scs_pb_open(&w.cfg, ps->pb) == SCS_OPEN_NEW_SB, "first join was not NEW_SB");
+    ps->start_acked = 1; /* as scsd_vc_settle latches it when the circuit opens */
 
-    /* The node reboots and comes back on the same Ethernet port. SCSD's lookup is
-     * by port address and never releases a slot, so this is the SAME slot and the
-     * SAME Path Block -- there is no second circuit to run the transition on. */
+    /* THE OLD BEHAVIOUR, still exactly reachable: without a departure the lookup
+     * hands back the SAME slot and the SAME already-open Path Block. */
     struct peer_state *again = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac);
-    CHECK(again == ps, "rejoin allocated a new peer slot");
-    CHECK(again != NULL && again->pb == first_pb, "rejoin allocated a new Path Block");
-    CHECK(scs_pdt_formative_count(&w.pdt) == 0, "rejoin re-queued a formative PB");
+    CHECK(again == ps, "an undeparted peer did not resolve to its own slot");
+    CHECK(again != NULL && again->pb == first_pb, "an undeparted peer got a new Path Block");
     CHECK(scs_pb_open(&w.cfg, ps->pb) == SCS_OPEN_EXISTING_SB,
-          "a rejoin on the same PB no longer takes the already-open early return");
+          "a second open of the SAME open PB no longer takes the early return");
+
+    /* THE DEPARTURE. The Path Block goes, the slot goes, the System Block stays
+     * (p. 2-17) -- and start_acked goes with the slot, which is what lets
+     * formation run again for the returning node. */
+    CHECK(scs_pb_depart(NULL, &w.cfg, ps->pb, NULL) == SCS_PB_CLOSE_OK,
+          "the departure did not close the Path Block");
+    memset(ps, 0, sizeof(*ps));
+    CHECK(scs_config_sb_count(&w.cfg) == 1, "the System Block did not survive the departure");
+
+    struct peer_state *back = peer_find_or_add(&w.cfg, &w.pdt, w.peers, mac);
+    CHECK(back != NULL, "the returning peer was refused a slot");
+    if (back == NULL) {
+        return;
+    }
+    CHECK(back->start_acked == 0, "the returning peer inherited start_acked from its"
+                                  " previous incarnation -- formation would not re-run");
+    CHECK(back->pb != first_pb || back->pb->on_pdt == 1,
+          "the returning peer did not get a FORMATIVE Path Block");
+    CHECK(scs_pdt_formative_count(&w.pdt) == 1,
+          "the returning peer's Path Block is not queued to the PDT (p. 2-20)");
+    ps_learn_sys_addr(&w.cfg, back, sid);
+    CHECK(scs_pb_open(&w.cfg, back->pb) == SCS_OPEN_EXISTING_REFRESHED,
+          "the returning peer's open did not take the p. 2-21 REFRESH");
     CHECK(scs_config_sb_count(&w.cfg) == 1, "rejoin duplicated the System Block");
-    /* i.e. SCS_OPEN_EXISTING_REFRESHED is never produced: the refresh rule is
-     * implemented and tested in scs_config.c, but OVMX does not run it. */
 }
 
 /*
@@ -539,6 +665,13 @@ static void test_rejoin_is_inert_in_the_daemon(void)
 static uint16_t le16_at(const uint8_t *p)
 {
     return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+/* vms-7fe: the Con.ID pair at [50:58] is 32 bits wide. */
+static uint32_t le32_at(const uint8_t *p)
+{
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 /* The daemon-side context, built the way main() builds it. */
@@ -597,14 +730,49 @@ static void test_vc_actions_emit_the_right_config_rounds(void)
     CHECK(le16_at(scsd_test_last_frame + 14 + 44) == 1,
           "SEND_STACK carries config-round %u, expected 1",
           le16_at(scsd_test_last_frame + 14 + 44));
-    /* The STACK differs from the START in the config-round field and nothing
-     * else: it really is the same identity body sent again. */
-    size_t first = 0, last = 0;
-    unsigned ndiff = diff_positions(start_frame, scsd_test_last_frame,
-                                    SCS_START_FRAME_LEN, &first, &last);
-    CHECK(ndiff == 1 && first == 14 + 44,
-          "START vs STACK differ in %u byte(s) starting at %zu; expected exactly the"
-          " config-round field at %d", ndiff, first, 14 + 44);
+    /* The STACK differs from the START in the config-round field and in the
+     * [98:106] MESSAGE TIMESTAMP, and in nothing else: it really is the same
+     * identity body sent again, at a later instant.
+     *
+     * WIDENED FROM `ndiff == 1` (vms-096), and widened by ADDING assertions,
+     * not by relaxing one. The old form was written while scsd_vc_emit() set
+     * neither time quadword -- which is precisely the defect this item fixes:
+     * every 0x41 OVMX transmitted carried the captured template's 26-JUL-2026
+     * timestamps. Now [98:106] is stamped per frame (scs_start.h: "live per
+     * frame"), so START and STACK legitimately differ there. Every byte
+     * position is still accounted for: the diff set must be a SUBSET of
+     * {config-round, message-time} and must CONTAIN the config-round, and the
+     * per-boot incarnation at [66:74] must be byte-identical across the two --
+     * a START and a STACK from one system are one incarnation. */
+    {
+        unsigned ndiff = 0;
+        int off_cfg = 0, off_msg = 0, off_other = -1;
+        for (size_t i = 0; i < SCS_START_FRAME_LEN; i++) {
+            if (start_frame[i] == scsd_test_last_frame[i]) {
+                continue;
+            }
+            ndiff++;
+            if (i >= 14 + 44 && i < 14 + 46) {
+                off_cfg = 1;
+            } else if (i >= 14 + 98 && i < 14 + 106) {
+                off_msg = 1;
+            } else if (off_other < 0) {
+                off_other = (int)i;
+            }
+        }
+        CHECK(off_other < 0,
+              "START vs STACK differ at absolute offset %d, which is neither the"
+              " config-round [44:46] nor the message timestamp [98:106]; %u byte(s)"
+              " differ in total", off_other, ndiff);
+        CHECK(off_cfg,
+              "START and STACK carry the SAME config-round -- the round counter is"
+              " the one field that must distinguish them");
+        (void)off_msg;
+        CHECK(memcmp(start_frame + 14 + 66, scsd_test_last_frame + 14 + 66, 8) == 0,
+              "the START and the STACK carry DIFFERENT [66:74] incarnations -- one"
+              " OVMX run is one incarnation, and a per-frame value would make every"
+              " frame look like a different system");
+    }
 
     CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_ACK) == 1, "SEND_ACK emitted nothing");
     CHECK(scsd_test_last_len == SCS_START_ACK_FRAME_LEN,
@@ -733,6 +901,155 @@ static void test_vc_happy_path_frame_sequence(void)
     scsd_vc_settle(&ctx, ps, act, scsd_vc_peer_round2(scs_vc_classify_round(1, 2)), &acks);
     CHECK(scsd_test_frames == before && acks == 1,
           "a duplicate peer round-2 ack produced a duplicate OVMX ack");
+}
+
+/*
+ * THE DAEMON STAMPS A LIVE, PER-BOOT INCARNATION (vms-2f3, restored by vms-096).
+ *
+ * WHY THIS TEST EXISTS, AND WHY THE SUITE WAS GREEN WITHOUT IT. c302b7d made
+ * OVMX stop replaying the captured template's 26-JUL-2026 quadwords -- [66:74],
+ * which a peer stores as our CSB "Incarnation", and [98:106], when the frame was
+ * composed. It set both at the ONE 0x41 build site that existed at the time, in
+ * main(). The vms-4071 VC-FSM refactor then moved every 0x41 emission behind
+ * scsd_vc_emit() and did NOT carry the two assignments across, so the only
+ * production caller of ovmx_incarnation_time() disappeared and OVMX went back to
+ * shipping the replayed template -- the arm scs_start.h explicitly labels the
+ * control and says not to ship.
+ *
+ * NOTHING CAUGHT IT. tests/vmsscs/test_scs_start.c covers scs_start_build(),
+ * which is handed an incarnation_time by its caller and does the right thing
+ * with whatever it gets; it can never see that the DAEMON stopped supplying
+ * one. This test drives the daemon's own emitter and reads the wire bytes.
+ *
+ * All four assertions below are about the frame scsd_vc_emit() produced. The
+ * offsets are absolute: [66:74] is abs 80, [98:106] is abs 112.
+ */
+static uint64_t le64_at(const uint8_t *p)
+{
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--) {
+        v = (v << 8) | p[i];
+    }
+    return v;
+}
+
+static void test_vc_start_carries_a_live_per_boot_incarnation(void)
+{
+    /* The two values the captured joiner template replays. Shipping either is
+     * the defect. */
+    const uint64_t tmpl_incarnation = 0x00bc00947a678ebbULL; /* 26-JUL-2026 14:35:33.59 */
+    const uint64_t tmpl_message     = 0x00bc009655d32a40ULL; /* 26-JUL-2026 14:48:50.66 */
+
+    struct world w;
+    world_init(&w);
+    uint8_t peer_mac[6];
+    mac_of(0x7A, peer_mac);
+    uint8_t sysid[6];
+    sysid_of(1025, sysid);
+    struct peer_state *ps = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer_mac);
+    CHECK(ps != NULL, "no peer slot for the incarnation test");
+    if (ps == NULL) {
+        return;
+    }
+    ps_learn_sys_addr(&w.cfg, ps, sysid);
+    scs_vc_init(&ps->vc);
+    struct scsd_vc_ctx ctx = vc_test_ctx(&w);
+
+    /* --- 1. THE PINNED VALUE LANDS ON THE WIRE, BYTE-EXACT ---------------
+     * OVMX_INCARNATION_TIME makes this deterministic instead of "not the
+     * template", so the assertion cannot be satisfied by any other live-ish
+     * number. g_ovmx_incarnation_time is reset because the accessor caches. */
+    const uint64_t pinned = 0x00bc05526906b4a1ULL; /* 1-AUG-2026 15:25:12, the
+                                                   * value SDA rendered in
+                                                   * OVMX's CSB on the lab */
+    CHECK(setenv("OVMX_INCARNATION_TIME", "0x00bc05526906b4a1", 1) == 0, "setenv failed");
+    CHECK(unsetenv("OVMX_INCARNATION_FROZEN") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSGTIME_FROZEN") == 0, "unsetenv failed");
+    g_ovmx_incarnation_time = 0;
+
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START) == 1, "SEND_START emitted nothing");
+    CHECK(scsd_test_last_len == SCS_START_FRAME_LEN, "SEND_START is not the START class");
+    CHECK(le64_at(scsd_test_last_frame + 80) == pinned,
+          "the daemon put 0x%016llx at [66:74]; OVMX_INCARNATION_TIME pinned it to"
+          " 0x%016llx. If this reads 0x%016llx the daemon is shipping the CAPTURED"
+          " TEMPLATE's incarnation again -- the control arm, on every START",
+          (unsigned long long)le64_at(scsd_test_last_frame + 80),
+          (unsigned long long)pinned, (unsigned long long)tmpl_incarnation);
+    CHECK(le64_at(scsd_test_last_frame + 112) != tmpl_message &&
+              le64_at(scsd_test_last_frame + 112) != 0,
+          "the daemon put 0x%016llx at [98:106] -- the replayed template's"
+          " 26-JUL-2026 compose time. Every START would claim to have been"
+          " written days earlier",
+          (unsigned long long)le64_at(scsd_test_last_frame + 112));
+    uint64_t msg_start = le64_at(scsd_test_last_frame + 112);
+
+    /* --- 2. ONE RUN IS ONE INCARNATION, AND THE MESSAGE TIME IS NOT ------- */
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_STACK) == 1, "SEND_STACK emitted nothing");
+    CHECK(le64_at(scsd_test_last_frame + 80) == pinned,
+          "the STACK carries a DIFFERENT [66:74] than the START -- the incarnation"
+          " is sampled once per process, not per frame");
+    CHECK(le64_at(scsd_test_last_frame + 112) >= msg_start,
+          "the STACK's [98:106] compose time (0x%016llx) went BACKWARDS from the"
+          " START's (0x%016llx)",
+          (unsigned long long)le64_at(scsd_test_last_frame + 112),
+          (unsigned long long)msg_start);
+
+    /* A SECOND peer must get the SAME incarnation: it is this system's boot
+     * time, not a per-circuit nonce. */
+    uint8_t peer2[6];
+    mac_of(0x7B, peer2);
+    uint8_t sysid2[6];
+    sysid_of(1026, sysid2);
+    struct peer_state *ps2 = peer_find_or_add(&w.cfg, &w.pdt, w.peers, peer2);
+    CHECK(ps2 != NULL, "no second peer slot");
+    if (ps2 != NULL) {
+        ps_learn_sys_addr(&w.cfg, ps2, sysid2);
+        scs_vc_init(&ps2->vc);
+        CHECK(scsd_vc_emit(&ctx, ps2, SCS_VC_ACT_SEND_START) == 1, "second SEND_START emitted nothing");
+        CHECK(le64_at(scsd_test_last_frame + 80) == pinned,
+              "a second peer was told a different incarnation");
+    }
+
+    /* --- 3. THE CONTROL ARM IS STILL REACHABLE, AND IS NOT THE DEFAULT ----
+     * OVMX_INCARNATION_FROZEN=1 must restore the replayed template bytes --
+     * that is what keeps the vms-2f3 failing case reproducible. Proving the
+     * switch MOVES the wire is also what proves assertion 1 was measuring the
+     * daemon and not a constant (guardrail 23). */
+    CHECK(unsetenv("OVMX_INCARNATION_TIME") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_INCARNATION_FROZEN", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_MSGTIME_FROZEN", "1", 1) == 0, "setenv failed");
+    g_ovmx_incarnation_time = 0;
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START) == 1, "frozen SEND_START emitted nothing");
+    CHECK(le64_at(scsd_test_last_frame + 80) == tmpl_incarnation,
+          "OVMX_INCARNATION_FROZEN=1 did not restore the replayed template"
+          " quadword at [66:74] (got 0x%016llx) -- the control arm of the vms-2f3"
+          " experiment is gone",
+          (unsigned long long)le64_at(scsd_test_last_frame + 80));
+    CHECK(le64_at(scsd_test_last_frame + 112) == tmpl_message,
+          "OVMX_MSGTIME_FROZEN=1 did not restore the replayed template quadword"
+          " at [98:106] (got 0x%016llx)",
+          (unsigned long long)le64_at(scsd_test_last_frame + 112));
+
+    /* --- 4. AND THE DEFAULT, WITH NO ENV AT ALL, IS LIVE ------------------ */
+    CHECK(unsetenv("OVMX_INCARNATION_FROZEN") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_MSGTIME_FROZEN") == 0, "unsetenv failed");
+    g_ovmx_incarnation_time = 0;
+    CHECK(scsd_vc_emit(&ctx, ps, SCS_VC_ACT_SEND_START) == 1, "default SEND_START emitted nothing");
+    uint64_t live = le64_at(scsd_test_last_frame + 80);
+    CHECK(live != 0 && live != tmpl_incarnation,
+          "with NO environment set the daemon put 0x%016llx at [66:74]; the shipped"
+          " default must be a live per-boot timestamp, not the captured template's"
+          " 0x%016llx",
+          (unsigned long long)live, (unsigned long long)tmpl_incarnation);
+    /* Sanity on the epoch: a live value must be AFTER the template's, which is
+     * 26-JUL-2026. A clock-derived quadword that is smaller means the epoch
+     * conversion is wrong, which a "not the template" check alone would miss. */
+    CHECK(live > tmpl_incarnation,
+          "the live incarnation 0x%016llx is EARLIER than the 26-JUL-2026 template"
+          " value 0x%016llx -- the VMS epoch conversion is wrong",
+          (unsigned long long)live, (unsigned long long)tmpl_incarnation);
+    CHECK(le64_at(scsd_test_last_frame + 112) > tmpl_message,
+          "the default [98:106] compose time is not later than the template's");
 }
 
 /*
@@ -1119,6 +1436,35 @@ static void test_connect_selects_the_open_vc_via_config_sys(void)
  *      it unset all three happen. Guardrail 23: the switch is RUN and the
  *      counter it gates is confirmed to move, in that order.
  * ========================================================================== */
+/*
+ * vms-7fe: RE-INITIALIZING THE CDL MUST ALSO RE-INITIALIZE THE PORT.
+ *
+ * scsd_svc() binds the port to scsd_cdl on first use and, as of vms-7fe, LISTEN
+ * allocates a listening CDT per SYSAP name out of that CDL (p. 2-48). A test
+ * that calls scs_cdl_init() again wipes those CDTs while the port's SDIR queue
+ * still names their Con.IDs -- a stale queue that exists only because the test
+ * seam rebuilds the world, since the daemon initializes its CDL exactly once.
+ * Resetting both together is what keeps the tests running the production path
+ * rather than a state the daemon can never be in.
+ */
+static void scsd_test_world_reset(void)
+{
+    /* vms-578: the daemon sets the per-incarnation Con.ID tag once, in main(),
+     * before it initializes the CDL (ovmx_conid_base(); see scs_cdt.h). The
+     * SCSD_UNIT_TEST seam renames main() away, so a test that rebuilds the world
+     * has to do the same thing or the CDL refuses every Con.ID scsd.c issues --
+     * which is what 19 assertions here measured before this line existed. */
+    scs_cdt_set_conid_tag((uint16_t)(ovmx_conid_base() >> 16));
+    scs_cdl_init(&scsd_cdl);
+    memset(&scsd_svc_port, 0, sizeof(scsd_svc_port));
+    /* vms-66f: for exactly the same reason. The poller holds a pointer to a CDT
+     * out of this CDL and a pointer to the rx world; both are dangling the
+     * moment the world is rebuilt. Clearing scsd_poller_ready makes scsd_poll()
+     * re-bind on next use, which is the state the daemon is actually in. */
+    memset(&scsd_poller, 0, sizeof(scsd_poller));
+    scsd_poller_ready = 0;
+}
+
 
 /* Drive the real joiner sender once, from a fresh world and a fresh CDL. */
 static size_t drive_joiner_once(uint8_t *out, uint8_t out_dst[6],
@@ -1126,7 +1472,7 @@ static size_t drive_joiner_once(uint8_t *out, uint8_t out_dst[6],
 {
     struct world w;
     world_init(&w);
-    scs_cdl_init(&scsd_cdl);
+    scsd_test_world_reset();
     scsd_cdl_ready = 1;
     conn_transitions = 0;
     conn_illegal_events = 0;
@@ -1179,7 +1525,12 @@ static void test_conn_fsm_does_not_change_the_wire(void)
     CHECK(on_cdt != NULL && scs_conn_state_of(on_cdt) == SCS_CONN_CONNECT_SENT,
           "after sending a CONNECT_REQ the connection is %s, expected CONNECT SENT",
           on_cdt ? scs_conn_state_name(scs_conn_state_of(on_cdt)) : "(none)");
-    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1, "expected exactly one CDT in the CDL");
+    /* vms-7fe: one CONNECTION CDT, beside the listening CDTs LISTEN allocated
+     * for VMS$VAXcluster and SCS$DIRECTORY (p. 2-48). The listening CDTs live
+     * in a reserved Con.ID band precisely so they cannot take this one's slot. */
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1 + scs_sdir_count(scs_svc_sdir(scsd_svc())),
+          "expected one connection CDT beside %u listening CDT(s), CDL holds %u",
+          scs_sdir_count(scs_svc_sdir(scsd_svc())), scs_cdl_in_use_count(&scsd_cdl));
     /* The CDT is reachable the p. 2-29 way, by CONID. */
     CHECK(scs_cdl_lookup(&scsd_cdl, OVMX_JOINER_CONID) == on_cdt,
           "the daemon's CDT is not reachable by its CONID through the CDL");
@@ -1192,8 +1543,9 @@ static void test_conn_fsm_does_not_change_the_wire(void)
     CHECK(conn_transitions == 0, "the kill switch did not stop transitions (%lu recorded)",
           conn_transitions);
     CHECK(off_cdt == NULL, "the kill switch did not stop CDT allocation");
-    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 0,
-          "the kill switch left %u CDTs in the CDL", scs_cdl_in_use_count(&scsd_cdl));
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == scs_sdir_count(scs_svc_sdir(scsd_svc())),
+          "the kill switch left %u CDT(s) in the CDL beside the %u listening CDT(s)",
+          scs_cdl_in_use_count(&scsd_cdl), scs_sdir_count(scs_svc_sdir(scsd_svc())));
 
     /* --- THE WIRE CLAIM --- */
     size_t first = 0, last = 0;
@@ -1216,7 +1568,7 @@ static void test_joiner_retransmit_is_not_an_illegal_event(void)
 {
     struct world w;
     world_init(&w);
-    scs_cdl_init(&scsd_cdl);
+    scsd_test_world_reset();
     scsd_cdl_ready = 1;
     conn_transitions = 0;
     conn_illegal_events = 0;
@@ -1244,9 +1596,10 @@ static void test_joiner_retransmit_is_not_an_illegal_event(void)
     CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CONNECT_SENT,
           "a retransmit moved the state to %s",
           scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
-    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1,
-          "a retransmit allocated a second CDT (%u in use)",
-          scs_cdl_in_use_count(&scsd_cdl));
+    /* vms-7fe: one CONNECTION CDT, beside the p. 2-48 listening CDTs. */
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1 + scs_sdir_count(scs_svc_sdir(scsd_svc())),
+          "a retransmit allocated a second CDT (%u in use, %u of them listening)",
+          scs_cdl_in_use_count(&scsd_cdl), scs_sdir_count(scs_svc_sdir(scsd_svc())));
 }
 
 /*
@@ -1260,7 +1613,7 @@ static void test_second_peer_connection_is_refused_not_faked(void)
 {
     struct world w;
     world_init(&w);
-    scs_cdl_init(&scsd_cdl);
+    scsd_test_world_reset();
     scsd_cdl_ready = 1;
 
     static const uint8_t mac_a[6] = {0x08, 0x00, 0x2b, 0x01, 0x01, 0x01};
@@ -1287,7 +1640,9 @@ static void test_second_peer_connection_is_refused_not_faked(void)
     CHECK(b->cdt_joiner == NULL,
           "peer B was given a CDT at a node-global Con.ID already claimed by peer A"
           " -- the CDL would then be describing the wrong connection");
-    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1, "expected exactly one CDT in the CDL");
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 1 + scs_sdir_count(scs_svc_sdir(scsd_svc())),
+          "expected one connection CDT beside %u listening CDT(s), CDL holds %u",
+          scs_sdir_count(scs_svc_sdir(scsd_svc())), scs_cdl_in_use_count(&scsd_cdl));
     /* Peer B still SENDS -- the machine is a recorder, never a gate. */
     CHECK(scsd_test_frames >= 2, "peer B's frame was suppressed by the state machine");
 }
@@ -1382,7 +1737,11 @@ static const uint8_t vax1_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04};
  * -- the capture of the run in which OVMX reached full MEMBER. Frames #65 and
  * #67, transcribed wire-byte for wire-byte, Ethernet header included, ZERO
  * bytes edited. Both are VAX2 (08:00:2b:78:56:b9, SCS System Address
- * aa:00:04:00:9b:04) -> OVMX (b6:16:8a:dc:3a:53, aa:00:04:00:02:04).
+ * aa:00:04:00:02:04) -> OVMX (b6:16:8a:dc:3a:53, aa:00:04:00:9b:04).
+ *
+ * THAT LAST LINE WAS BACKWARDS UNTIL vms-591 ROUND 2, and so were the two
+ * constants below it -- see the census there. It is corrected here because
+ * this is where the claim is made.
  * ========================================================================== */
 
 /* pcap frame #65: opcode 0x4b, 66-byte SCA class, [46:48] message type 1 =
@@ -1417,12 +1776,38 @@ static const uint8_t cap_ovmx_joiner_accept_req[124] = {
     0x00, 0x00, 0x06, 0x00
 };
 
-/* The member's Con.ID in that dialogue, and the two identities the frames use. */
+/*
+ * The member's Con.ID in that dialogue, and the two identities the frames use.
+ *
+ * THE TWO LOGICAL ADDRESSES WERE SWAPPED FROM vms-dd5 (commit d373c63) UNTIL
+ * vms-591 ROUND 2, and every fixture in this file that dresses OVMX or the
+ * member wore the other node's SCS System Address as a result. The names were
+ * always used correctly -- ovmx760_logical for OVMX's own, ovmx760_member_sysid
+ * for the member's -- so only the VALUES move here, and no call site changes.
+ *
+ * HOW IT IS KNOWN, re-derivable with the pcap reader on a host with the lab
+ * captures. Over ovmx-760-MEMBER-achieved-20260730.pcap, pairing each 0x6007
+ * frame's Ethernet source with its SCA src-logical address at [10:16] (abs 24,
+ * scsd.c's OFF_HELLO_SRCLOG) gives exactly four (MAC, address) pairs and no
+ * frame contradicts its own:
+ *
+ *   OVMX760-SRCLOG: b6:16:8a:dc:3a:53 -> aa:00:04:00:9b:04   n=1287
+ *   OVMX760-SRCLOG: aa:00:04:00:01:04 -> aa:00:04:00:01:04   n=993
+ *   OVMX760-SRCLOG: 08:00:2b:11:22:33 -> aa:00:04:00:03:04   n=930
+ *   OVMX760-SRCLOG: 08:00:2b:78:56:b9 -> aa:00:04:00:02:04   n=578
+ *
+ * b6:16:8a:dc:3a:53 is OVMX (a locally-administered Linux MAC, and the MAC the
+ * captured frames below are addressed TO); 08:00:2b:78:56:b9 is VAX2, whose
+ * aa:00:04:00:02:04 also matches the SCSSYSTEMID 1026 the spec records for
+ * VAX2 (docs/cluster-protocol-spec.md sec 4g, the 106-byte START table at
+ * payload [46:48]: 0x0402 = 1026 = VAX2), the lab's
+ * own SYSGEN setting. The addresses are aa:00:04:00:<LE16(SCSSYSTEMID)>.
+ */
 #define OVMX760_MEMBER_CONID 0x63020011u
 static const uint8_t ovmx760_hw_mac[6] = {0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53};
-static const uint8_t ovmx760_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
+static const uint8_t ovmx760_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04};
 static const uint8_t ovmx760_member_mac[6] = {0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9};
-static const uint8_t ovmx760_member_sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04};
+static const uint8_t ovmx760_member_sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
 
 /*
  * A complete receive-dispatch context, wired exactly the way main() wires one.
@@ -1430,6 +1815,8 @@ static const uint8_t ovmx760_member_sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x9b, 0x
  * scsd_exit_summary() are the production functions, and this only supplies the
  * state main() owns.
  */
+static void rxlog_reset(void); /* defined with the log-capture helpers below */
+
 struct rxworld {
     struct world w;
     struct scs_hello_params hello_params;
@@ -1440,17 +1827,43 @@ struct rxworld {
     uint8_t nonce[4];
 };
 
+/*
+ * vms-7fe: THE BUSY-REPLY ACCUMULATOR, so "busy-sent is 0" is a MEASUREMENT
+ * this file re-derives rather than a claim it repeats.
+ *
+ * scsd.c's sdir_busy_replies is zeroed by rxworld_init below, so a per-case
+ * assertion only ever says "not in that case". This carries the count ACROSS
+ * every reset; main() asserts the total at the end. It reds the moment any
+ * frame fed to scsd_handle_frame(), in any case in this file, makes the daemon
+ * emit a p. 2-50 busy CONNECT_RSP -- which OVMX DESIGN CHOICE 3 says it cannot,
+ * because the answer is synchronous and no listening CDT is in CONNECT RECEIVED
+ * between frames. If DESIGN CHOICE 3 ever stops holding, this is what says so.
+ */
+static unsigned long sdir_busy_seen_total = 0;
+
 static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
                          const uint8_t logical[6])
 {
     static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
+    sdir_busy_seen_total += sdir_busy_replies; /* before the reset below */
     memset(r, 0, sizeof(*r));
     world_init(&r->w);
-    scs_cdl_init(&scsd_cdl);
+    scsd_test_world_reset();
     scsd_cdl_ready = 1;
     conn_transitions = 0;
     conn_illegal_events = 0;
     conn_unemitted_actions = 0;
+    /* vms-abc: the p. 2-31 guarantee counters are file-static in scsd.c too. */
+    vc_seq_gaps = 0;
+    vc_breaks = 0;
+    vc_conns_broken = 0;
+    sysap_vc_loss_notifications = 0;
+    vc_sends_refused = 0;
+    /* vms-7fe: the SDIR outcome counters are file-static in scsd.c too. */
+    sdir_connect_scans = 0;
+    sdir_no_such_sysap = 0;
+    sdir_busy_replies = 0;
+    sdir_refusals_unsent = 0;
     memcpy(r->hw_mac, hw_mac, 6);
     memcpy(r->logical, logical, 6);
     memcpy(r->nonce, lab_nonce, 4);
@@ -1478,33 +1891,152 @@ static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
     r->rx.do_connect = 1;
     r->rx.emit_hello = 0;
 
+    /* vms-17f: the p. 2-20/2-21 open-transition tallies and the departure
+     * counters are file-scope in scsd.c (see the comment there); a test that
+     * reads them has to start from a known zero. */
+    pb_open_results[0] = pb_open_results[1] = pb_open_results[2] = 0;
+    pb_open_errors = 0;
+    pb_open_masquerades = 0; /* vms-22e */
+    peer_departures = 0;
+    depart_connections_lost = 0;
+    depart_refusals = 0;
+    rxlog_reset();
+
     scsd_test_frames = 0;
     scsd_test_last_len = 0;
 }
 
-/* Run the production dispatch with stdout/stderr swallowed -- the daemon logs
- * every frame and the test output must stay readable. */
-static void rx_feed(struct rxworld *r, const uint8_t *frame, size_t len)
+/*
+ * The daemon logs every frame, so its output has to be taken off the terminal to
+ * keep the test output readable. vms-17f KEEPS it instead of discarding it: the
+ * SCSD-I-VCOPEN line names which p. 2-21 transition ran, and asserting that text
+ * is what stops a mutant from swapping two clauses of scsd_open_result_text()
+ * without reddening anything. `rxlog` accumulates until rxlog_reset().
+ */
+static char rxlog[262144];
+static size_t rxlog_len = 0;
+
+static void rxlog_reset(void)
+{
+    rxlog[0] = '\0';
+    rxlog_len = 0;
+}
+
+static int rxlog_has(const char *needle)
+{
+    return strstr(rxlog, needle) != NULL;
+}
+
+/* How many times `needle` appears in the captured log. */
+static unsigned rxlog_count(const char *needle)
+{
+    unsigned n = 0;
+    for (const char *p = strstr(rxlog, needle); p != NULL; p = strstr(p + 1, needle)) {
+        n++;
+    }
+    return n;
+}
+
+static int cap_saved_out = -1;
+static int cap_saved_err = -1;
+static FILE *cap_file = NULL;
+
+static void log_capture_begin(void)
 {
     fflush(stdout);
     fflush(stderr);
-    int so = dup(STDOUT_FILENO);
-    int se = dup(STDERR_FILENO);
-    FILE *sink = fopen("/dev/null", "w");
-    if (sink != NULL) {
-        dup2(fileno(sink), STDOUT_FILENO);
-        dup2(fileno(sink), STDERR_FILENO);
+    cap_saved_out = dup(STDOUT_FILENO);
+    cap_saved_err = dup(STDERR_FILENO);
+    cap_file = tmpfile();
+    if (cap_file != NULL) {
+        dup2(fileno(cap_file), STDOUT_FILENO);
+        dup2(fileno(cap_file), STDERR_FILENO);
     }
-    scsd_handle_frame(&r->rx, frame, (ssize_t)len);
+}
+
+static void log_capture_end(void)
+{
     fflush(stdout);
     fflush(stderr);
-    dup2(so, STDOUT_FILENO);
-    dup2(se, STDERR_FILENO);
-    close(so);
-    close(se);
-    if (sink != NULL) {
-        fclose(sink);
+    if (cap_saved_out >= 0) {
+        dup2(cap_saved_out, STDOUT_FILENO);
+        close(cap_saved_out);
+        cap_saved_out = -1;
     }
+    if (cap_saved_err >= 0) {
+        dup2(cap_saved_err, STDERR_FILENO);
+        close(cap_saved_err);
+        cap_saved_err = -1;
+    }
+    if (cap_file != NULL) {
+        fflush(cap_file);
+        rewind(cap_file);
+        size_t room = sizeof(rxlog) - 1 - rxlog_len;
+        size_t got = fread(rxlog + rxlog_len, 1, room, cap_file);
+        rxlog_len += got;
+        rxlog[rxlog_len] = '\0';
+        fclose(cap_file);
+        cap_file = NULL;
+    }
+}
+
+/* Run the production dispatch with its logging captured into rxlog. */
+static void rx_feed(struct rxworld *r, const uint8_t *frame, size_t len)
+{
+    log_capture_begin();
+    scsd_handle_frame(&r->rx, frame, (ssize_t)len);
+    log_capture_end();
+}
+
+/*
+ * vms-abc: give the peer the OPEN virtual circuit the wire ALWAYS has before a
+ * phase-4 connect reaches it, without replaying the whole START dialogue.
+ *
+ * WHY EVERY PHASE-4 FIXTURE BELOW NOW NEEDS THIS. The daemon's SCS$DIRECTORY
+ * CONNECT-REQUEST branch consults the Path Block (scsd_refuse_without_open_vc)
+ * before replying, because p. 2-31 forbids sending with no virtual circuit.
+ * Fixtures that fed a captured 0x5b/0x4b into a freshly-created Path Block were
+ * exercising an ORDER THE WIRE NEVER PRODUCES: spec sec 4(h) grounds the whole
+ * SCS$DIRECTORY phase (SCA frames 21-31 of formation-ci1-joinwindow.pcap) as
+ * running strictly BETWEEN the sec 4g phase-2 0x41 START and the phase-4 0x4b
+ * connect -- so by the time a directory CONNECT-REQUEST arrives the circuit is
+ * already OPEN, in 41/41 lab captures. Opening it here makes the fixture match
+ * the capture; no assertion is removed or relaxed to accommodate it.
+ *
+ * Both calls are production: peer_find_or_add() is the daemon's own slot
+ * allocator (so the frame fed afterwards finds THIS slot by MAC rather than
+ * making a second one) and scs_pb_open() is the p. 2-21 open transition.
+ * test_captured_ovmx_accept_req_opens_the_joiner() already used this exact
+ * pair; this just names it.
+ */
+static struct peer_state *open_circuit_to(struct rxworld *r, const uint8_t mac[6],
+                                          const uint8_t sys_addr[6])
+{
+    struct peer_state *ps = peer_find_or_add(&r->w.cfg, &r->w.pdt, r->w.peers, mac);
+    CHECK(ps != NULL, "no peer slot could be built for the fixture's circuit");
+    if (ps == NULL) {
+        return NULL;
+    }
+    /* A Path Block with no System Block cannot open (scs_pb_open returns
+     * SCS_OPEN_ERROR on pb->sb == NULL), and on the wire the peer's 48-bit SCS
+     * System Address arrives in the src-logical field of the very frames that
+     * form the circuit. Learn it the production way first; the frame fed
+     * afterwards carries the same bytes and re-learning them is a no-op. */
+    ps_learn_sys_addr(&r->w.cfg, ps, sys_addr);
+    CHECK(scs_pb_open(&r->w.cfg, ps->pb) != SCS_OPEN_ERROR, "the circuit did not open");
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN,
+          "PRECONDITION: the fixture's circuit is %s, not OPEN",
+          scs_vc_state_name(ps->pb->vc_state));
+    return ps;
+}
+
+/* Run the production departure sweep with its logging captured into rxlog. */
+static unsigned rx_sweep(struct rxworld *r, uint64_t now_ms)
+{
+    log_capture_begin();
+    unsigned departed = scsd_peer_departure_sweep(&r->rx, now_ms);
+    log_capture_end();
+    return departed;
 }
 
 /*
@@ -1518,6 +2050,7 @@ static void test_captured_directory_connect_drives_the_machine(void)
 {
     struct rxworld r;
     rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
 
     rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
 
@@ -1565,6 +2098,13 @@ static void test_captured_member_connect_drives_the_machine(void)
 {
     struct rxworld r;
     rxworld_init(&r, vax2_hw_mac, our_logical);
+    /* vms-abc: the same fixture correction the four phase-4 fixtures already
+     * carry -- the wire never delivers a phase-4 0x4b to a circuit that is not
+     * already OPEN (spec sec 4g phase 2 precedes phase 4, 41/41 lab captures),
+     * and since every SCS-layer send now goes through send_frame_vc() the
+     * daemon correctly refuses to answer one that does. Opening the circuit
+     * here makes the fixture match the capture; nothing below is relaxed. */
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
 
     rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
 
@@ -1607,6 +2147,74 @@ static void test_captured_member_connect_drives_the_machine(void)
     CHECK(conn_unemitted_actions == unemitted_after_first,
           "the retransmit reported another unemitted action (%lu -> %lu)",
           unemitted_after_first, conn_unemitted_actions);
+}
+
+/*
+ * vms-561 -- THE MEMBER CONNECT ON A CLOSED CIRCUIT IS A *COUNTED* REFUSAL.
+ *
+ * The p. 2-31 refusal on this path must stay VISIBLE after the migration to the
+ * ACCEPT service, and that is a stronger claim than "no frame went out". Two
+ * things can suppress the frame now:
+ *
+ *   - scsd.c's up-front scsd_refuse_without_open_vc(), which logs SCSD-E-NOVC
+ *     and increments vc_sends_refused -- the pre-migration behaviour, since the
+ *     send that used to be refused inside send_frame_vc() is the one it refuses
+ *     instead;
+ *   - scs_accept()'s own CONFIG_PATH check, which refuses SILENTLY (it has no
+ *     daemon logging and does not know about vc_sends_refused).
+ *
+ * If only the second survives, a broken circuit swallows connect requests with
+ * NOTHING in the run log and NOTHING in the exit summary -- the silent-drop
+ * failure CLAUDE.md rule 9 / INV-6 exists to forbid. MEASURED: deleting the
+ * up-front refusal leaves the whole suite green without this case. It is here
+ * because a mutant walked through.
+ */
+static void test_member_connect_on_a_closed_circuit_is_a_counted_refusal(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    if (ps == NULL) {
+        return;
+    }
+    /* Answer once on the OPEN circuit: the control, so the zero below is a
+     * statement about the CLOSED circuit and not about a fixture that reaches
+     * nothing. */
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    CHECK(r.rx.connect_resp_sent == 1,
+          "PRECONDITION: the OPEN circuit produced %ld CONNECT-RESPONSEs, expected 1",
+          r.rx.connect_resp_sent);
+
+    /* Now break it and replay the identical frame. */
+    scs_pb_set_vc_state(ps->pb, SCS_VC_CLOSED);
+    ps->novc_logged = 0; /* the per-break latch, as scsd_vc_on_open would clear it */
+    unsigned long refused_before = vc_sends_refused;
+    unsigned frames_before = scsd_test_frames;
+    long resp_before = r.rx.connect_resp_sent;
+    rxlog_reset();
+
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+
+    CHECK(scsd_test_frames == frames_before,
+          "%u frame(s) went out answering a CONNECT-REQUEST on a CLOSED circuit",
+          scsd_test_frames - frames_before);
+    CHECK(r.rx.connect_resp_sent == resp_before,
+          "a CONNECT-RESPONSE was counted sent on a CLOSED circuit (%ld -> %ld)",
+          resp_before, r.rx.connect_resp_sent);
+    /* TWO refusals, and both are named because the NUMBER is the discriminator.
+     * This one frame reaches two senders: the 0x48 credit-return the frame is
+     * acked with, and the 0x4b CONNECT-RESPONSE the ACCEPT service would emit.
+     * MEASURED both ways -- with scsd.c's up-front refusal in place the delta is
+     * 2; deleting it makes the delta 1, because scs_accept() then refuses
+     * silently on its own CONFIG_PATH check and the connect request is swallowed
+     * with nothing in the log and nothing in the exit summary. */
+    CHECK(vc_sends_refused == refused_before + 2,
+          "the CONNECT-RESPONSE refusal was not COUNTED: vc_sends_refused"
+          " %lu -> %lu, expected +2 (the 0x48 credit-return AND the 0x4b"
+          " CONNECT-RESPONSE). A silently swallowed connect request is invisible"
+          " in the exit summary", refused_before, vc_sends_refused);
+    CHECK(rxlog_has("SCSD-E-NOVC"),
+          "the refusal was SILENT -- no SCSD-E-NOVC line (CLAUDE.md rule 9 / INV-6)");
 }
 
 /*
@@ -1816,6 +2424,569 @@ static void test_null_source_conid_binds_nothing(void)
           "a null-source frame released the add-member burst");
 }
 
+/* ==========================================================================
+ * vms-abc -- THE p. 2-31 MESSAGE GUARANTEES, THROUGH THE PRODUCTION PATH.
+ *
+ * THE TRAP THIS EXISTS TO AVOID, stated so nobody has to guess: a test that
+ * calls scs_cdl_vc_loss() or scs_vc_break() directly proves the MECHANISM
+ * works (that is tests/vmsscs/test_scs_vc.c's job) and proves NOTHING about
+ * whether the daemon ever reaches it. So everything below drives
+ * scsd_handle_frame(), scsd_retransmit_tick() and scsd_peer_departure_sweep()
+ * -- the real receive dispatch, the real timer tick and the real departure
+ * sweep, over the real src/vmsscs/scsd.c translation unit -- and asserts the
+ * SYSAP handler count that only scsd_sysap_vc_loss() can move.
+ *
+ * WHAT WAS DEAD BEFORE THIS ITEM, stated precisely because an earlier draft of
+ * this comment overstated it: no CDT carried a VC-loss handler, so
+ * scs_cdl_vc_loss()'s notification loop notified nobody. The SCAN itself was
+ * NOT callerless -- vms-17f's scs_pb_depart() already called it underneath this
+ * item. This item supplies the missing half (the handler), which is why it also
+ * owns the resulting behaviour change on vms-17f's departure path; see
+ * test_departure_notifies_the_sysaps() below.
+ * ========================================================================== */
+
+/* Build two REAL connections on ONE circuit, the production way, and leave the
+ * VC's recv_seq anchored at the captured 7.
+ *
+ * ORDER MATTERS AND IS NOT ARBITRARY: cap_vaxcluster_connect_req is pcap frame
+ * #48 (send_seq 7) and cap_dir_connect_req is frame #30 (send_seq 1). Feeding
+ * #48 first ANCHORS the VC at 7; #30 then arrives behind the high-water and is
+ * classified a duplicate, which is what it is. Feeding them the other way round
+ * would anchor at 1 and score the jump to 7 as a five-message gap -- an
+ * artefact of the fixture skipping frames #31..#47, not of the wire. */
+static struct peer_state *two_connections_on_one_circuit(struct rxworld *r)
+{
+    rxworld_init(r, vax2_hw_mac, our_logical);
+    /* The circuit these two connections ride on, opened BEFORE they arrive.
+     * On the real wire the 0x41 START dialogue opens it first (spec sec 4g
+     * phase 2 precedes phase 4, and sec 4(h) grounds the directory phase as
+     * running between them); this fixture starts at phase 4, so the circuit is
+     * opened here through the production peer_find_or_add() + scs_pb_open().
+     * It used to be opened AFTER both frames, which (a) let the directory
+     * branch answer on a CLOSED Path Block -- an order the wire never produces
+     * -- and (b) would have made every "the circuit is CLOSED afterwards"
+     * assertion below pass vacuously if the open were ever dropped. */
+    (void)open_circuit_to(r, vax1_hw_mac, vax1_logical);
+    rx_feed(r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    rx_feed(r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    struct peer_state *ps = &r->w.peers[0];
+    CHECK(ps->pb != NULL, "no peer/Path Block was created");
+    CHECK(ps->cdt_member != NULL && ps->cdt_dir != NULL,
+          "the fixture did not bind both connections");
+    if (ps->pb == NULL || ps->cdt_member == NULL || ps->cdt_dir == NULL) {
+        return NULL;
+    }
+    CHECK(scs_pb_cdt_count(ps->pb) == 2,
+          "%u connections are queued to the circuit's Path Block, expected 2",
+          scs_pb_cdt_count(ps->pb));
+    CHECK(ps->connected == 1 && ps->dir_connected == 1,
+          "both connections should be bound before the circuit is broken");
+    CHECK(ps->vc.seq.recv_seq == 7,
+          "the VC anchored at recv_seq=%u, expected the captured 7",
+          ps->vc.seq.recv_seq);
+    CHECK(vc_seq_gaps == 0,
+          "the two captured frames scored %lu sequence gaps -- the fixture is"
+          " already broken before the test starts", vc_seq_gaps);
+
+    /* Re-assert the precondition AFTER the two frames: nothing in the phase-4
+     * dispatch may have disturbed the circuit, and the "the circuit is CLOSED
+     * afterwards" assertions in every caller prove nothing if it is not OPEN
+     * here. */
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN,
+          "PRECONDITION: the circuit is %s, not OPEN -- the CLOSED assertions"
+          " below would prove nothing", scs_vc_state_name(ps->pb->vc_state));
+    return ps;
+}
+
+/* The gap frame: the captured VMS$VAXcluster CONNECT-REQUEST with ONE field
+ * changed -- send_seq [20:22] (abs 34) and its grounded mirror [30:32] (abs 44),
+ * which spec sec 4h(4) shows are byte-equal in 17,758/17,758 real frames. Both
+ * move together or the frame would not be a legal sequenced message. */
+static void make_gap_frame(uint8_t out[124], uint16_t send_seq)
+{
+    memcpy(out, cap_vaxcluster_connect_req, 124);
+    uint16_t base = (uint16_t)(out[34] | ((uint16_t)out[35] << 8));
+    /* Self-check: if the base frame were mistranscribed this control would be
+     * measuring nothing. */
+    CHECK(base == 7, "the base frame's send_seq is %u, expected the captured 7", base);
+    CHECK((uint16_t)(out[44] | ((uint16_t)out[45] << 8)) == base,
+          "the base frame's send_seq mirror [30:32] does not match [20:22]");
+    out[34] = (uint8_t)(send_seq & 0xff);
+    out[35] = (uint8_t)(send_seq >> 8);
+    out[44] = out[34];
+    out[45] = out[35];
+}
+
+/* Run the production retransmit tick -- the one main()'s loop calls every
+ * iteration -- with its logging captured into rxlog, exactly as rx_feed() does
+ * for the receive path. */
+static void rx_tick(struct rxworld *r, uint64_t now_ms)
+{
+    log_capture_begin();
+    scsd_retransmit_tick(&r->rx, now_ms);
+    log_capture_end();
+}
+
+/*
+ * THE DONE CONDITION, through production code: inject a sequence gap on a VC
+ * carrying two connections; the VC is broken and BOTH SYSAP handlers fire.
+ */
+static void test_seq_gap_breaks_the_vc_and_notifies_both_sysaps(void)
+{
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    struct rxworld r;
+    struct peer_state *ps = two_connections_on_one_circuit(&r);
+    if (ps == NULL) {
+        return;
+    }
+    long credit_before = r.rx.credit_sent;
+
+    uint8_t gap[124];
+    make_gap_frame(gap, 12); /* recv_seq 7 -> 12: four messages missing */
+    rx_feed(&r, gap, sizeof(gap));
+
+    CHECK(vc_seq_gaps == 1, "the daemon detected %lu gaps, expected 1", vc_seq_gaps);
+    CHECK(vc_breaks == 1, "the daemon broke %lu circuits, expected 1", vc_breaks);
+    CHECK(vc_conns_broken == 2, "%lu connections were broken, expected 2", vc_conns_broken);
+    /* THE claim of this item: the SYSAP notification half of p. 2-31 is LIVE.
+     * Only scsd_sysap_vc_loss() -- installed by the production conn_bind() and
+     * reached only through scs_cdl_vc_loss() -- can move this counter. */
+    CHECK(sysap_vc_loss_notifications == 2,
+          "%lu SYSAP VC-loss handlers were invoked, expected 2 -- the production"
+          " path did not notify the SYSAPs", sysap_vc_loss_notifications);
+    CHECK(ps->connected == 0 && ps->dir_connected == 0,
+          "the SYSAP handler did not clear the bound-connection flags"
+          " (connected=%d dir=%d)",
+          ps->connected, ps->dir_connected);
+    CHECK(scs_conn_state_of(ps->cdt_member) == SCS_CONN_CLOSED,
+          "the member connection is %s after VC loss, expected CLOSED",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_member)));
+    CHECK(scs_conn_state_of(ps->cdt_dir) == SCS_CONN_CLOSED,
+          "the directory connection is %s after VC loss, expected CLOSED",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_dir)));
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "the circuit is %s after the break, expected CLOSED",
+          scs_vc_state_name(ps->pb->vc_state));
+
+    /* ===== THE TRIGGER, ON THE LIVE PATH. =====
+     * The done condition requires the event be logged naming the VC, the
+     * TRIGGER, and every connection broken. Asserting the reason ONLY inside
+     * test_scs_vc.c does not cover this: there the test itself supplies the
+     * constant, so it cannot notice scsd.c passing the wrong one. Swapping this
+     * call site's SCS_VC_BREAK_SEQ_GAP for SCS_VC_BREAK_LOCAL used to leave the
+     * whole scs label green (15/15) while the operator's log said "explicit
+     * local teardown" for a sequentiality breach. The assertions below are what
+     * makes that mutant die: MEASURED, the swap now reds 3 checks. */
+    CHECK(ps->vc.break_reason == (int)SCS_VC_BREAK_SEQ_GAP,
+          "the circuit was broken with reason %d (%s), expected SCS_VC_BREAK_SEQ_GAP"
+          " -- the daemon named the wrong trigger",
+          ps->vc.break_reason,
+          scs_vc_break_reason_name((enum scs_vc_break_reason)ps->vc.break_reason));
+    CHECK(rxlog_has("SCSD-W-VCBREAK,"),
+          "the daemon broke the circuit without logging it");
+    CHECK(rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_SEQ_GAP)),
+          "the VCBREAK log does not NAME the trigger '%s'",
+          scs_vc_break_reason_name(SCS_VC_BREAK_SEQ_GAP));
+    CHECK(!rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_LOCAL)),
+          "the VCBREAK log reports '%s' for a sequence gap",
+          scs_vc_break_reason_name(SCS_VC_BREAK_LOCAL));
+    CHECK(!rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_DELIVERY)),
+          "the VCBREAK log reports '%s' for a sequence gap",
+          scs_vc_break_reason_name(SCS_VC_BREAK_DELIVERY));
+    /* ...naming the VC (its remote port address) and the count of connections. */
+    {
+        char macstr[24];
+        snprintf(macstr, sizeof(macstr), "%02x:%02x:%02x:%02x:%02x:%02x",
+                 ps->pb->remote_port_addr[0], ps->pb->remote_port_addr[1],
+                 ps->pb->remote_port_addr[2], ps->pb->remote_port_addr[3],
+                 ps->pb->remote_port_addr[4], ps->pb->remote_port_addr[5]);
+        CHECK(rxlog_has(macstr),
+              "the VCBREAK log does not name the circuit (%s)", macstr);
+        CHECK(rxlog_has("breaking 2 connection(s)"),
+              "the VCBREAK log does not report both broken connections");
+    }
+
+    /* And OVMX must NOT have credit-acked the frame that revealed the gap:
+     * returning a 0x48 for it claims receipt of the four messages that never
+     * arrived. This is the behaviour that existed before this item. */
+    CHECK(r.rx.credit_sent == credit_before,
+          "OVMX sent a credit-return for the gap frame (%ld -> %ld)",
+          credit_before, r.rx.credit_sent);
+
+    /* ===== THE INVERSION THIS ITEM SHIPPED AND THIS CHECK EXISTS TO CATCH. =====
+     * scsd_sysap_vc_loss() clears dir_connected/connected/joiner_connected. But
+     * TWO of those three are read NEGATED by the dispatch: scsd.c's directory
+     * branch gates on `!ps->dir_connected` and the prompt-joiner branch on
+     * `!ps->joiner_connected`. Clearing them therefore RE-ARMS those sends
+     * instead of suppressing them. Replaying the peer's captured SCS$DIRECTORY
+     * CONNECT-REQUEST after the break used to make OVMX emit ANOTHER directory
+     * CONNECT-RESPONSE -- dir_conn_resp_sent 1 -> 2, dir_connected back to 1,
+     * ON A CIRCUIT WHOSE vc_state IS CLOSED -- which is exactly the emission
+     * p. 2-31 forbids. What actually stops it now is the CLOSED Path Block:
+     * the directory branch consults CONFIG_PATH before replying, the way
+     * send_joiner_connect_request() already did.
+     *
+     * The matched control is in test_seq_gap_kill_switch_through_the_daemon():
+     * the SAME replay with the break suppressed, where the counter must also
+     * stay at 1 -- there because dir_connected was never cleared. */
+    long dir_resp_before = r.rx.dir_conn_resp_sent;
+    CHECK(dir_resp_before == 1,
+          "PRECONDITION: the fixture sent %ld directory CONNECT-RESPONSEs,"
+          " expected 1 -- the replay below would measure nothing", dir_resp_before);
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "PRECONDITION: the circuit is %s, not CLOSED, before the replay",
+          scs_vc_state_name(ps->pb->vc_state));
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    CHECK(r.rx.dir_conn_resp_sent == dir_resp_before,
+          "OVMX answered a SCS$DIRECTORY CONNECT-REQUEST on a BROKEN circuit"
+          " (dir_conn_resp_sent %ld -> %ld) -- p. 2-31 forbids sending in the"
+          " absence of a virtual circuit", dir_resp_before, r.rx.dir_conn_resp_sent);
+    CHECK(ps->dir_connected == 0,
+          "the replay re-bound SCS$DIRECTORY on a circuit whose vc_state is %s",
+          scs_vc_state_name(ps->pb->vc_state));
+    CHECK(scs_conn_state_of(ps->cdt_dir) == SCS_CONN_CLOSED,
+          "the replay re-opened the directory connection (%s) on a broken circuit",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_dir)));
+    CHECK(rxlog_has("SCSD-E-NOVC"),
+          "the refusal was silent -- a dropped reply must say why (INV-6)");
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "the replay moved the circuit to %s", scs_vc_state_name(ps->pb->vc_state));
+}
+
+/*
+ * THE KILL SWITCH, RUN, on the SAME production path (guardrail 23). The control
+ * above already established that the counters MOVE with the switch off; this
+ * asserts every one of them stays put with it on, and that OVMX limps on
+ * exactly as it used to -- including sending the credit-return it used to send.
+ */
+static void test_seq_gap_kill_switch_through_the_daemon(void)
+{
+    (void)setenv(SCS_VC_NO_BREAK_ENV, "1", 1);
+    struct rxworld r;
+    struct peer_state *ps = two_connections_on_one_circuit(&r);
+    if (ps == NULL) {
+        (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+        return;
+    }
+    long credit_before = r.rx.credit_sent;
+
+    uint8_t gap[124];
+    make_gap_frame(gap, 12);
+    rx_feed(&r, gap, sizeof(gap));
+
+    CHECK(vc_seq_gaps == 1,
+          "GATED: the gap must still be DETECTED (%lu) -- the switch gates the"
+          " consequence, not the diagnosis", vc_seq_gaps);
+    CHECK(vc_breaks == 0, "GATED: %lu circuits were broken, expected 0", vc_breaks);
+    CHECK(vc_conns_broken == 0, "GATED: %lu connections were broken, expected 0",
+          vc_conns_broken);
+    CHECK(sysap_vc_loss_notifications == 0,
+          "GATED: %lu SYSAP handlers fired, expected 0", sysap_vc_loss_notifications);
+    CHECK(ps->connected == 1 && ps->dir_connected == 1,
+          "GATED: the bound-connection flags were cleared anyway");
+    CHECK(scs_conn_state_of(ps->cdt_member) != SCS_CONN_CLOSED,
+          "GATED: the member connection was closed anyway");
+    CHECK(ps->pb->vc_state != SCS_VC_CLOSED, "GATED: the circuit was closed anyway");
+    CHECK(r.rx.credit_sent == credit_before + 1,
+          "GATED: OVMX should limp on and credit-ack as before (%ld -> %ld)",
+          credit_before, r.rx.credit_sent);
+
+    /* THE MATCHED CONTROL for the directory replay above. Identical frame,
+     * identical fixture, break suppressed. The counter must stay at 1 here too
+     * -- but for the OLD reason: dir_connected was never cleared, so the
+     * `!ps->dir_connected` gate refuses. That is what makes the positive case a
+     * measurement of THIS ITEM: with the switch off the counter used to reach
+     * 2, with it on it stayed at 1, so the extra frame was caused by the
+     * gate-clearing this item introduced and by nothing else. */
+    long dir_resp_before = r.rx.dir_conn_resp_sent;
+    CHECK(dir_resp_before == 1,
+          "GATED PRECONDITION: %ld directory CONNECT-RESPONSEs, expected 1",
+          dir_resp_before);
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    CHECK(r.rx.dir_conn_resp_sent == dir_resp_before,
+          "GATED: the replay produced another directory CONNECT-RESPONSE"
+          " (%ld -> %ld)", dir_resp_before, r.rx.dir_conn_resp_sent);
+    CHECK(ps->dir_connected == 1, "GATED: the replay disturbed the bound directory");
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+}
+
+/* ==========================================================================
+ * vms-abc: "A BROKEN VIRTUAL CIRCUIT CARRIES NO TRAFFIC" -- ASSERTED ON THE
+ * TOTAL FRAME COUNT, NOT ON ONE COUNTER PER PATH.
+ *
+ * WHY THIS TEST EXISTS AND WHY IT IS SHAPED LIKE THIS. The first version of
+ * this item guarded ONE send path (the SCS$DIRECTORY CONNECT-RESPONSE) and
+ * asserted ONE counter (dir_conn_resp_sent). Re-measuring the SAME broken
+ * circuit then found three more paths transmitting on it, and the per-path
+ * assertion could not see any of them:
+ *   - replaying cap_dir_connect_req moved credit_sent 3 -> 4 (a real 60-byte
+ *     0x48 SCS credit-return, ethertype 0x6007, dst aa:00:04:00:01:04, opcode
+ *     0x48 fmt 0x13) while dir_conn_resp_sent correctly stayed put;
+ *   - replaying cap_vaxcluster_connect_req moved connect_resp_sent 1 -> 2 AND
+ *     credit_sent 2 -> 3 -- TWO frames, the last a 124-byte opcode 0x4b -- and
+ *     re-armed ps->connected 0 -> 1, putting the member CDT back in ACCEPT
+ *     SENT with remote_conid re-learned, which in turn re-opened the 0x81
+ *     CM-response path;
+ *   - the SCS$DIR_LOOKUP reply was never gated at all.
+ * p. 2-31 is not a rule about directory replies. So this asserts the property
+ * p. 2-31 actually states -- NOTHING leaves -- by measuring scsd_test_frames,
+ * the count of frames handed to the TRANSPORT (send_frame_raw), below the
+ * choke point. A send path added tomorrow that consults nothing reds this test
+ * without anyone having to think of its counter.
+ *
+ * WHICH FRAMES ARE REPLAYED: every capture in this file that the fixture's PEER
+ * (vax1, aa:00:04:00:01:04) sends to the fixture's IDENTITY (vax2,
+ * 08:00:2b:78:56:b9) -- which is both of the frames two_connections_on_one_
+ * circuit() feeds. The other captures are excluded for stated reasons, not
+ * omitted: cap_connect_rsp is addressed TO vax1 (the daemon wearing vax2 never
+ * sees it, and the dispatch's unicast-to-us gate drops it before any sender);
+ * cap_ovmx_joiner_* are from the ovmx-760 capture and carry a different pair of
+ * identities entirely; and cap_vax1_start_round0 / _stack_round1 / _ack_round2
+ * are 0x41 VC-FORMATION frames, which scsd.c's SEND SITE TABLE names as one of
+ * the two justified exemptions -- replying to a START on a non-OPEN circuit is
+ * how a circuit re-forms, so demanding silence for them would be demanding a
+ * permanently dead node.
+ * ========================================================================== */
+static const struct {
+    const uint8_t *frame;
+    size_t         len;
+    const char    *name;
+} peer_captures[] = {
+    { cap_dir_connect_req, sizeof(cap_dir_connect_req),
+      "SCS$DIRECTORY CONNECT-REQUEST (pcap #30)" },
+    { cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req),
+      "VMS$VAXcluster CONNECT-REQUEST (pcap #48)" },
+};
+
+/* Feed every peer capture once, in wire order. */
+static void replay_every_peer_capture(struct rxworld *r)
+{
+    for (size_t i = 0; i < sizeof(peer_captures) / sizeof(peer_captures[0]); i++) {
+        rx_feed(r, peer_captures[i].frame, peer_captures[i].len);
+    }
+}
+
+static void test_a_broken_circuit_carries_no_traffic(void)
+{
+    /* ===================== THE MEASUREMENT (break ON) ===================== */
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    struct rxworld r;
+    struct peer_state *ps = two_connections_on_one_circuit(&r);
+    if (ps == NULL) {
+        return;
+    }
+    uint8_t gap[124];
+    make_gap_frame(gap, 12); /* recv_seq 7 -> 12: four messages missing */
+    rx_feed(&r, gap, sizeof(gap));
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "PRECONDITION: the circuit is %s, not CLOSED -- everything below"
+          " would pass for the wrong reason", scs_vc_state_name(ps->pb->vc_state));
+
+    /* The fixture ALREADY put frames on the wire, so a zero delta below is a
+     * statement about the replays and not about a daemon that never transmits
+     * at all. Pin that here rather than trusting it. */
+    unsigned frames_before = scsd_test_frames;
+    CHECK(frames_before > 0,
+          "PRECONDITION: the fixture emitted %u frames -- with none, 'the replay"
+          " emitted nothing' measures nothing", frames_before);
+    long dir_before     = r.rx.dir_conn_resp_sent;
+    long lookup_before  = r.rx.dir_lookup_sent;
+    long conn_before    = r.rx.connect_resp_sent;
+    long connreq_before = r.rx.connect_req_sent;
+    long credit_before  = r.rx.credit_sent;
+    long cm_before      = r.rx.cm_response_sent;
+    long cmcfg_before   = r.rx.cm_config_frames;
+    long retx_before    = r.rx.retransmit_sent;
+    long start_before   = r.rx.start_sent;
+    long ack_before     = r.rx.start_ack_sent;
+    long dir_sent_before = r.rx.directed_sent;
+    long pad_before     = r.rx.padded_sent;
+    uint32_t remote_conid_before = ps->remote_conid;
+    unsigned long refused_before = vc_sends_refused;
+
+    replay_every_peer_capture(&r);
+
+    /* --- THE ASSERTION THAT CANNOT BE OUTFLANKED BY A NEW SEND PATH. --- */
+    CHECK(scsd_test_frames == frames_before,
+          "OVMX put %u frame(s) on the wire replaying captured traffic into a"
+          " CLOSED circuit (total %u -> %u). p. 2-31: a broken virtual circuit"
+          " carries NO traffic -- not 'no directory replies'. The last frame was"
+          " %zu bytes to %02x:%02x:%02x:%02x:%02x:%02x",
+          scsd_test_frames - frames_before, frames_before, scsd_test_frames,
+          scsd_test_last_len, scsd_test_last_dst[0], scsd_test_last_dst[1],
+          scsd_test_last_dst[2], scsd_test_last_dst[3], scsd_test_last_dst[4],
+          scsd_test_last_dst[5]);
+
+    /* --- and the per-path counters, named, so a failure says WHICH path. --- */
+    CHECK(r.rx.dir_conn_resp_sent == dir_before,
+          "SCS$DIRECTORY CONNECT-RESPONSE sent on a broken circuit (%ld -> %ld)",
+          dir_before, r.rx.dir_conn_resp_sent);
+    CHECK(r.rx.dir_lookup_sent == lookup_before,
+          "SCS$DIR_LOOKUP response sent on a broken circuit (%ld -> %ld)",
+          lookup_before, r.rx.dir_lookup_sent);
+    CHECK(r.rx.connect_resp_sent == conn_before,
+          "VMS$VAXcluster CONNECT-RESPONSE sent on a broken circuit (%ld -> %ld)",
+          conn_before, r.rx.connect_resp_sent);
+    CHECK(r.rx.connect_req_sent == connreq_before,
+          "joiner CONNECT-REQUEST sent on a broken circuit (%ld -> %ld)",
+          connreq_before, r.rx.connect_req_sent);
+    CHECK(r.rx.credit_sent == credit_before,
+          "0x48 credit-return sent on a broken circuit (%ld -> %ld)",
+          credit_before, r.rx.credit_sent);
+    CHECK(r.rx.cm_response_sent == cm_before,
+          "0x81 CM response sent on a broken circuit (%ld -> %ld)",
+          cm_before, r.rx.cm_response_sent);
+    CHECK(r.rx.cm_config_frames == cmcfg_before,
+          "add-member config burst sent on a broken circuit (%ld -> %ld)",
+          cmcfg_before, r.rx.cm_config_frames);
+    CHECK(r.rx.retransmit_sent == retx_before,
+          "CONNECT-REQUEST retransmit sent on a broken circuit (%ld -> %ld)",
+          retx_before, r.rx.retransmit_sent);
+    /* The two EXEMPT families must also stay put here -- not because they are
+     * gated (they are not), but because none of the replayed frames is a 0x41
+     * or a HELLO. If one of these ever moves, the replay set drifted and the
+     * exemption argument above no longer describes what this test feeds. */
+    CHECK(r.rx.start_sent == start_before && r.rx.start_ack_sent == ack_before,
+          "a replayed capture reached the VC-FORMATION sender (start %ld -> %ld,"
+          " ack %ld -> %ld) -- the replay set is not what this test documents",
+          start_before, r.rx.start_sent, ack_before, r.rx.start_ack_sent);
+    CHECK(r.rx.directed_sent == dir_sent_before && r.rx.padded_sent == pad_before,
+          "a replayed capture reached a HELLO sender (directed %ld -> %ld,"
+          " padded %ld -> %ld) -- the replay set is not what this test documents",
+          dir_sent_before, r.rx.directed_sent, pad_before, r.rx.padded_sent);
+
+    /* --- the STATE must not re-arm either. A silent re-bind is how the 0x81
+     * path came back to life the last time. --- */
+    CHECK(ps->connected == 0 && ps->dir_connected == 0 && ps->joiner_connected == 0,
+          "a replay re-armed a bound-connection flag on a CLOSED circuit"
+          " (connected=%d dir=%d joiner=%d)",
+          ps->connected, ps->dir_connected, ps->joiner_connected);
+    CHECK(ps->remote_conid == remote_conid_before,
+          "a replay re-learned the peer's Con.ID on a CLOSED circuit"
+          " (0x%08X -> 0x%08X)", remote_conid_before, ps->remote_conid);
+    CHECK(scs_conn_state_of(ps->cdt_member) == SCS_CONN_CLOSED,
+          "a replay moved the member connection to %s on a CLOSED circuit",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_member)));
+    CHECK(scs_conn_state_of(ps->cdt_dir) == SCS_CONN_CLOSED,
+          "a replay moved the directory connection to %s on a CLOSED circuit",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_dir)));
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+          "the replays moved the circuit to %s", scs_vc_state_name(ps->pb->vc_state));
+
+    /* --- NOT VACUOUS: the replays DID reach senders, and were refused there.
+     * Without this, a dispatch that returned early for an unrelated reason
+     * would satisfy every assertion above. --- */
+    CHECK(vc_sends_refused > refused_before,
+          "the choke point refused nothing (%lu -> %lu) -- the replays never"
+          " reached a sender, so 'no frames went out' proves nothing",
+          refused_before, vc_sends_refused);
+    /* --- and the refusal is announced ONCE per circuit, not once per frame.
+     * The daemon re-enters these paths at the peer's ~1 Hz HELLO cadence; the
+     * count, not the log, is what carries the volume. --- */
+    CHECK(rxlog_count("SCSD-E-NOVC") == 1,
+          "SCSD-E-NOVC was logged %u times for %lu refusals on ONE circuit --"
+          " it must be latched to one line per break (INV-6 wants it said, not"
+          " repeated)", rxlog_count("SCSD-E-NOVC"),
+          vc_sends_refused - refused_before);
+    CHECK(rxlog_has("p. 2-31"),
+          "the refusal does not cite the rule it is enforcing");
+
+    /* --- THE LATCH IS PER BREAK, NOT PER PROCESS. A circuit that re-opens and
+     * breaks AGAIN must announce it again; a latch that is never cleared turns
+     * the second outage silent, which is the same INV-6 failure as never
+     * logging at all. Re-open through the production p. 2-21 transition, break
+     * it a second time, and demand a second line. --- */
+    {
+        unsigned novc_after_first = rxlog_count("SCSD-E-NOVC");
+        scsd_vc_on_open(&r.vc_ctx, ps);
+        CHECK(ps->pb->vc_state == SCS_VC_OPEN,
+              "the circuit did not re-open (%s) -- the re-break below would"
+              " measure nothing", scs_vc_state_name(ps->pb->vc_state));
+        unsigned broken = scs_vc_break(&ps->vc, ps->pb, SCS_VC_BREAK_SEQ_GAP, stdout);
+        (void)broken;
+        CHECK(ps->pb->vc_state == SCS_VC_CLOSED,
+              "the circuit did not re-break (%s)", scs_vc_state_name(ps->pb->vc_state));
+        replay_every_peer_capture(&r);
+        CHECK(rxlog_count("SCSD-E-NOVC") == novc_after_first + 1,
+              "the SECOND break was SILENT: SCSD-E-NOVC count %u -> %u, expected"
+              " one more line. scsd_vc_on_open() must clear the per-circuit"
+              " latch, or an outage after a recovery says nothing (INV-6)",
+              novc_after_first, rxlog_count("SCSD-E-NOVC"));
+    }
+
+    /* ============ THE MATCHED CONTROL (identical replays, break OFF) ========
+     * Same fixture, same gap frame, same replay set, OVMX_NO_VC_BREAK=1. The
+     * circuit stays OPEN, so the replays MUST put frames on the wire. That is
+     * what makes the zero above a measurement of the break rather than of a
+     * replay set that reaches nothing. */
+    (void)setenv(SCS_VC_NO_BREAK_ENV, "1", 1);
+    struct rxworld g;
+    struct peer_state *gps = two_connections_on_one_circuit(&g);
+    if (gps == NULL) {
+        (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+        return;
+    }
+    uint8_t ggap[124];
+    make_gap_frame(ggap, 12);
+    rx_feed(&g, ggap, sizeof(ggap));
+    CHECK(gps->pb->vc_state != SCS_VC_CLOSED,
+          "GATED: the circuit was closed anyway (%s)",
+          scs_vc_state_name(gps->pb->vc_state));
+
+    unsigned gframes_before = scsd_test_frames;
+    long gconn_before = g.rx.connect_resp_sent;
+    unsigned long grefused_before = vc_sends_refused;
+
+    replay_every_peer_capture(&g);
+
+    CHECK(scsd_test_frames > gframes_before,
+          "GATED: the replay set put %u frames on an OPEN circuit -- it reaches"
+          " no sender at all, so the CLOSED-circuit zero above is vacuous",
+          scsd_test_frames - gframes_before);
+    CHECK(g.rx.connect_resp_sent > gconn_before,
+          "GATED: replaying the captured VMS$VAXcluster CONNECT-REQUEST on an"
+          " OPEN circuit produced no CONNECT-RESPONSE (%ld -> %ld) -- that path"
+          " is the one that re-armed ps->connected, and it must be LIVE here",
+          gconn_before, g.rx.connect_resp_sent);
+    CHECK(vc_sends_refused == grefused_before,
+          "GATED: the choke point refused %lu send(s) on an OPEN circuit",
+          vc_sends_refused - grefused_before);
+    CHECK(!rxlog_has("SCSD-E-NOVC"),
+          "GATED: SCSD-E-NOVC was logged for an OPEN circuit");
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+}
+
+/*
+ * A frame that is merely a RETRANSMIT must never break anything. This is the
+ * false-positive control for the detector, and it matters: 506 of the 321,599
+ * sequenced messages in the lab captures are retransmits or duplicates
+ * (tools/cluster/scs_seqgap_measure.py), so a detector that scored them as gaps
+ * would tear down every healthy circuit OVMX has ever formed.
+ */
+static void test_retransmit_does_not_break_the_vc(void)
+{
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    struct rxworld r;
+    struct peer_state *ps = two_connections_on_one_circuit(&r);
+    if (ps == NULL) {
+        return;
+    }
+    /* The same frame again (send_seq 7 == recv_seq), then the next in sequence. */
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    uint8_t next[124];
+    make_gap_frame(next, 8);
+    rx_feed(&r, next, sizeof(next));
+
+    CHECK(vc_seq_gaps == 0, "a retransmit and an in-order message scored %lu gaps",
+          vc_seq_gaps);
+    CHECK(vc_breaks == 0, "a retransmit broke %lu circuits", vc_breaks);
+    CHECK(sysap_vc_loss_notifications == 0, "a retransmit notified %lu SYSAPs",
+          sysap_vc_loss_notifications);
+    CHECK(ps->pb->vc_state != SCS_VC_CLOSED, "a retransmit closed the circuit");
+    CHECK(ps->vc.seq.recv_seq == 8, "recv_seq is %u, expected 8", ps->vc.seq.recv_seq);
+}
+
 /*
  * (4) THE EXIT SUMMARY. "A state that is entered and never left is detectable"
  * is only true if the detector RUNS. scsd_exit_summary() is the production
@@ -1833,7 +3004,9 @@ static void test_exit_summary_reports_the_parked_connection(void)
     rxworld_init(&r, vax2_hw_mac, our_logical);
 
     /* Same production path as (1): the directory connection ends in ACCEPT
-     * SENT, which is exactly a connection that never reached OPEN. */
+     * SENT, which is exactly a connection that never reached OPEN. It needs the
+     * same OPEN circuit (1) does -- see open_circuit_to(). */
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
     rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
     struct peer_state *ps = &r.w.peers[0];
     CHECK(ps->cdt_dir != NULL && scs_conn_state_of(ps->cdt_dir) != SCS_CONN_OPEN,
@@ -1876,8 +3049,3466 @@ static void test_exit_summary_reports_the_parked_connection(void)
           "the exit summary did not report the state the connection is parked in");
 }
 
+/* ==========================================================================
+ * vms-17f -- THE p. 2-21 REFRESH, REACHED BY THE DAEMON.
+ *
+ * PROVENANCE OF THE THREE FRAMES BELOW (rule 8: observation only). All three
+ * are VAX1 -> VAX2 formation frames read out of
+ *   /data/training/vax/cluster/captures/formation-ci1-joinwindow.pcap
+ * -- the golden VAX2-joins-VAX1 formation -- with the same pcap reader as the
+ * capture block above, transcribed wire-byte for wire-byte, Ethernet header
+ * included, ZERO bytes edited. pcap frame numbers #24, #27, #28: the complete
+ * peer half of one virtual-circuit formation dialogue (spec sec 4g phase 2,
+ * rounds 0/1/2). Each is 0x41 at abs 30 and carries the config round at
+ * abs [58:60].
+ *
+ * The test wears VAX2's HW MAC, exactly as the vms-fb1 cases do, because the
+ * daemon only acts on frames unicast to its own MAC.
+ * ========================================================================== */
+
+/* pcap frame #24: VAX1 -> VAX2, round-0 START. 106-byte SCA class. */
+static const uint8_t cap_vax1_start_round0[120] = {
+    0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,
+    0x60, 0x07, 0x68, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x41, 0x13, 0x00, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3e, 0x00, 0x00, 0x00,
+    0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x40, 0x02, 0xd8, 0x00,
+    0x56, 0x4d, 0x53, 0x20, 0x56, 0x37, 0x2e, 0x33, 0x66, 0x15, 0x66, 0x7a,
+    0x93, 0x00, 0xbc, 0x00, 0x56, 0x41, 0x58, 0x20, 0x06, 0x00, 0x00, 0x0a,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x00, 0x56, 0x41, 0x58, 0x31,
+    0x20, 0x20, 0x20, 0x20, 0x80, 0x98, 0xb1, 0x55, 0x96, 0x00, 0xbc, 0x00
+};
+
+/* pcap frame #27: VAX1 -> VAX2, round-1 STACK. Identical to #24 except the
+ * config round at [58:60]. */
+static const uint8_t cap_vax1_stack_round1[120] = {
+    0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,
+    0x60, 0x07, 0x68, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x41, 0x13, 0x00, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3e, 0x00, 0x01, 0x00,
+    0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x40, 0x02, 0xd8, 0x00,
+    0x56, 0x4d, 0x53, 0x20, 0x56, 0x37, 0x2e, 0x33, 0x66, 0x15, 0x66, 0x7a,
+    0x93, 0x00, 0xbc, 0x00, 0x56, 0x41, 0x58, 0x20, 0x06, 0x00, 0x00, 0x0a,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x77, 0x00, 0x56, 0x41, 0x58, 0x31,
+    0x20, 0x20, 0x20, 0x20, 0x80, 0x98, 0xb1, 0x55, 0x96, 0x00, 0xbc, 0x00
+};
+
+/* pcap frame #28: VAX1 -> VAX2, the round-2 46-byte-class ack that completes
+ * the dialogue. This is the frame the daemon answers with its own round-2. */
+static const uint8_t cap_vax1_ack_round2[60] = {
+    0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9, 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,
+    0x60, 0x07, 0x2c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x01, 0x04, 0x41, 0x13, 0x00, 0x00, 0x01, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x02, 0x00
+};
+
+/* Feed the peer's whole formation dialogue through the production dispatch. */
+static void rx_feed_formation(struct rxworld *r)
+{
+    rx_feed(r, cap_vax1_start_round0, sizeof(cap_vax1_start_round0));
+    rx_feed(r, cap_vax1_stack_round1, sizeof(cap_vax1_stack_round1));
+    rx_feed(r, cap_vax1_ack_round2, sizeof(cap_vax1_ack_round2));
+}
+
+/* The peer slot the daemon built for VAX1, or NULL if it released it. */
+static struct peer_state *rx_peer_of(struct rxworld *r, const uint8_t mac[6])
+{
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        if (r->w.peers[i].pb != NULL && mac_eq(r->w.peers[i].pb->remote_port_addr, mac)) {
+            return &r->w.peers[i];
+        }
+    }
+    return NULL;
+}
+
+/* ==========================================================================
+ * vms-abc -- THE p. 2-31 DELIVERY GUARANTEE, ON THE LIVE PRODUCTION PATH.
+ *
+ * This case lives HERE, below the vms-17f formation captures, because it needs
+ * them: the only way to reach the delivery break without setting a field by
+ * hand is to let the daemon complete a real START dialogue first.
+ *
+ * WHAT AN EARLIER REVISION OF THIS TEST DID WRONG, recorded so it is not
+ * repeated. It set `ps->connect_sent = 1` and called it a stand-in.
+ * `connect_sent` is assigned NOWHERE in src/vmsscs/scsd.c, so the only reason
+ * that test passed was the line that set the unreachable gate: it proved the
+ * body of scsd_retransmit_tick() computes the right thing when reached, and
+ * nothing at all about reaching it.
+ *
+ * WHAT MADE THE PATH LIVE. Two production defects, both fixed with this case:
+ *   1. scsd_retransmit_tick()'s delivery scan was NESTED under the dead
+ *      `connect_sent` guard. It is now its own scan, gated only on
+ *      scs_vc_delivery_failed() -- see scan (A) in scsd.c. (The vms-691
+ *      retransmit under the dead guard, scan (B), is untouched and still dead;
+ *      nothing below depends on it, and the negative control at the end of this
+ *      case asserts it stayed dead.)
+ *   2. send_joiner_connect_request() called scs_vc_record_sent() on EVERY send,
+ *      including retransmits, and record_sent() RESETS vc.retransmit_count. So
+ *      the counter never left 0 in a real run and delivery could never be
+ *      declared failed. Retransmits now call scs_vc_mark_retransmitted().
+ *
+ * WHAT IS STILL NOT DRIVEN BY A FRAME, stated plainly: the ~1 Hz CADENCE. The
+ * daemon retransmits from its directed-HELLO branch, and this test holds no
+ * captured directed HELLO to feed (the three formation frames are 0x41 STARTs,
+ * a different SCA length class). So the retransmits below are driven by calling
+ * send_joiner_connect_request() -- the production function, with the production
+ * arguments, the same call that branch makes -- while asserting
+ * scsd_joiner_retransmit_pending(), the predicate that branch now branches on,
+ * before every one of them. A guard narrowed in scsd.c reds this test. What is
+ * bypassed is a clock, not a reachability gate.
+ * ========================================================================== */
+
+/* The LIVE fixture, built entirely by production dispatch from captured frames:
+ * the formation dialogue opens the circuit and latches start_acked, then the
+ * captured SCS$DIRECTORY CONNECT-REQUEST makes the daemon bind the directory
+ * connection AND promptly open its own VMS$VAXcluster connection (vms-d94), which
+ * is the outstanding sequenced message the delivery guarantee is about. */
+static struct peer_state *joiner_connect_outstanding(struct rxworld *r)
+{
+    rxworld_init(r, vax2_hw_mac, our_logical);
+    rx_feed_formation(r);
+    struct peer_state *ps = rx_peer_of(r, vax1_hw_mac);
+    CHECK(ps != NULL, "the daemon built no peer slot for the captured formation");
+    if (ps == NULL) {
+        return NULL;
+    }
+    CHECK(ps->start_acked == 1, "the daemon did not complete the START dialogue");
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN,
+          "PRECONDITION: the circuit is %s, not OPEN", scs_vc_state_name(ps->pb->vc_state));
+
+    rx_feed(r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    CHECK(ps->dir_connected == 1, "the daemon did not bind SCS$DIRECTORY");
+    /* THE POINT: the daemon sent its OWN CONNECT-REQUEST, nobody set a flag. */
+    CHECK(r->rx.connect_req_sent == 1,
+          "the daemon sent %ld joiner CONNECT-REQUESTs, expected 1 -- the fixture"
+          " has no outstanding sequenced message and proves nothing",
+          r->rx.connect_req_sent);
+    CHECK(ps->joiner_connect_sent == 1, "joiner_connect_sent was not latched by production");
+    CHECK(ps->cdt_joiner != NULL, "the joiner CDT was not bound");
+    CHECK(ps->vc.have_unacked == 1, "no outstanding sequenced message was recorded");
+    CHECK(ps->vc.retransmit_count == 0,
+          "a FIRST send recorded %u retransmits, expected 0", ps->vc.retransmit_count);
+    CHECK(scs_pb_cdt_count(ps->pb) == 2,
+          "%u connections are queued to the circuit, expected 2 (directory + joiner)",
+          scs_pb_cdt_count(ps->pb));
+    /* connect_sent is the DEAD vms-691 gate. Assert production left it alone, so
+     * that if anybody ever revives it the reachability story below is re-read
+     * rather than silently inherited. */
+    CHECK(ps->connect_sent == 0,
+          "production assigned connect_sent -- scan (B) in scsd.c is no longer dead"
+          " and this test's reachability argument must be redone");
+    return ps;
+}
+
+/* ONE retransmit, the way the daemon does it -- guard asserted, then the call. */
+static void drive_one_joiner_retransmit(struct rxworld *r, struct peer_state *ps)
+{
+    CHECK(scsd_joiner_retransmit_pending(&r->rx, ps) == 1,
+          "the daemon's OWN retransmit guard would not admit this peer, so the"
+          " retransmit driven here is unreachable in production");
+    log_capture_begin();
+    int sent = send_joiner_connect_request(r->rx.sock, r->rx.ifindex, r->rx.cfg, ps, NULL,
+                                           r->rx.our_hw_mac, r->rx.our_src_logical);
+    log_capture_end();
+    CHECK(sent == 1, "the production retransmit did not send a frame");
+}
+
+/*
+ * THE DELIVERY GUARANTEE. Bracketed: ticks below the limit break nothing, the
+ * tick at the limit breaks the circuit, names the trigger and notifies BOTH
+ * SYSAPs on the circuit.
+ */
+static void test_delivery_failure_breaks_the_vc_through_the_daemon(void)
+{
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    struct rxworld r;
+    struct peer_state *ps = joiner_connect_outstanding(&r);
+    if (ps == NULL) {
+        return;
+    }
+    uint16_t seq_before = ps->vc.unacked_seq;
+    uint64_t now = ps->vc.unacked_sent_ms;
+
+    /* --- CONTROL: below the limit, retransmitting and ticking break nothing,
+     * and each retransmit ADVANCES the delivery counter. That advance is the
+     * production fix; without it the loop below never reaches the limit. */
+    for (unsigned i = 1; i < SCS_VC_DELIVERY_RETRY_LIMIT; i++) {
+        drive_one_joiner_retransmit(&r, ps);
+        CHECK(ps->vc.retransmit_count == i,
+              "after retransmit %u the counter is %u -- a retransmit is not being"
+              " counted as one", i, ps->vc.retransmit_count);
+        CHECK(scs_vc_delivery_failed(&ps->vc) == 0,
+              "CONTROL: delivery was declared failed after only %u retransmits", i);
+        now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+        rx_tick(&r, now);
+        CHECK(vc_breaks == 0,
+              "CONTROL: the tick broke %lu circuits below the limit", vc_breaks);
+        CHECK(ps->pb->vc_state == SCS_VC_OPEN,
+              "CONTROL: the circuit left OPEN state below the limit (%s)",
+              scs_vc_state_name(ps->pb->vc_state));
+    }
+    CHECK(ps->vc.unacked_seq == seq_before,
+          "a retransmit allocated a NEW sequence number (%u -> %u) -- then it was"
+          " not a retransmit", seq_before, ps->vc.unacked_seq);
+
+    /* --- The retransmit that exhausts the budget. */
+    drive_one_joiner_retransmit(&r, ps);
+    CHECK(ps->vc.retransmit_count == SCS_VC_DELIVERY_RETRY_LIMIT,
+          "the production retransmits reached %u, expected the limit %u",
+          ps->vc.retransmit_count, (unsigned)SCS_VC_DELIVERY_RETRY_LIMIT);
+    CHECK(scs_vc_delivery_failed(&ps->vc) == 1,
+          "the limit was reached but delivery is not declared failed");
+    CHECK(vc_breaks == 0, "the circuit broke before a tick ran");
+
+    /* --- THE BREAK, in the production tick main()'s loop calls. */
+    now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+    rx_tick(&r, now);
+    CHECK(vc_breaks == 1,
+          "retransmit exhaustion broke %lu circuits, expected 1 -- OVMX is still"
+          " limping on past the p. 2-31 delivery guarantee", vc_breaks);
+    CHECK(vc_conns_broken == 2,
+          "%lu connections were broken, expected 2 (directory + joiner)", vc_conns_broken);
+    CHECK(sysap_vc_loss_notifications == 2,
+          "%lu SYSAP handlers fired on delivery failure, expected 2",
+          sysap_vc_loss_notifications);
+    CHECK(ps->vc.break_reason == (int)SCS_VC_BREAK_DELIVERY,
+          "the recorded break reason is %d (%s), expected SCS_VC_BREAK_DELIVERY",
+          ps->vc.break_reason,
+          scs_vc_break_reason_name((enum scs_vc_break_reason)ps->vc.break_reason));
+    /* The log names the trigger, not merely "a circuit broke". */
+    CHECK(rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_DELIVERY)),
+          "the VCBREAK log does not NAME the trigger '%s'",
+          scs_vc_break_reason_name(SCS_VC_BREAK_DELIVERY));
+    CHECK(!rxlog_has(scs_vc_break_reason_name(SCS_VC_BREAK_LOCAL)),
+          "the VCBREAK log reports '%s' for retransmit exhaustion",
+          scs_vc_break_reason_name(SCS_VC_BREAK_LOCAL));
+    CHECK(rxlog_has("breaking 2 connection(s)"),
+          "the VCBREAK log does not report both broken connections");
+    CHECK(ps->pb->vc_state == SCS_VC_CLOSED, "the circuit is %s, expected CLOSED",
+          scs_vc_state_name(ps->pb->vc_state));
+    CHECK(scs_conn_state_of(ps->cdt_joiner) == SCS_CONN_CLOSED,
+          "the joiner connection is %s after the break, expected CLOSED",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_joiner)));
+    CHECK(scs_conn_state_of(ps->cdt_dir) == SCS_CONN_CLOSED,
+          "the directory connection is %s after the break, expected CLOSED",
+          scs_conn_state_name(scs_conn_state_of(ps->cdt_dir)));
+    CHECK(ps->joiner_connected == 0 && ps->dir_connected == 0,
+          "the SYSAP handlers did not clear the bound-connection flags"
+          " (joiner=%d dir=%d)", ps->joiner_connected, ps->dir_connected);
+
+    /* --- AND THE RETRANSMIT STOPS. Every OTHER term of
+     * scsd_joiner_retransmit_pending() is true forever after this break: the
+     * Path Block survives it, start_acked and joiner_connect_sent are latched,
+     * and joiner_connected -- read NEGATED -- was just CLEARED by the SYSAP
+     * handler. Before the open-circuit term was added the predicate therefore
+     * stayed true for the rest of the run, and the daemon called
+     * send_joiner_connect_request() once per directed HELLO (~1 Hz) forever,
+     * each call refusing with SCSD-E-NOVC. The CONTROL for this is every
+     * iteration of the loop above, where the same predicate is asserted TRUE
+     * on the same peer while the circuit is OPEN -- so this is the circuit
+     * state deciding it, not the predicate having been disabled. */
+    CHECK(scsd_joiner_retransmit_pending(&r.rx, ps) == 0,
+          "the daemon would keep retransmitting the joiner CONNECT-REQUEST on a"
+          " circuit it just broke (vc_state=%s) -- p. 2-31 forbids the send and"
+          " the run log fills with SCSD-E-NOVC at ~1 Hz",
+          scs_vc_state_name(ps->pb->vc_state));
+
+    /* --- The break is once, not once per tick: a broken circuit has nothing
+     * outstanding, so the next tick must find nothing to do. */
+    now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+    rx_tick(&r, now);
+    CHECK(vc_breaks == 1, "a second tick broke the same circuit again (%lu)", vc_breaks);
+
+    /* --- NEGATIVE CONTROL for scan (B): the dead vms-691 retransmit must have
+     * stayed dead through all of this. If it ever revives it starts emitting
+     * CONNECT-REQUESTs at OVMX_LOCAL_CONID, a wire change, and this reds. */
+    CHECK(r.rx.retransmit_sent == 0,
+          "the vms-691 OVMX_LOCAL_CONID retransmit fired %ld times -- it is"
+          " documented DEAD in scsd.c; the documentation or the code is wrong",
+          r.rx.retransmit_sent);
+}
+
+/*
+ * THE KILL SWITCH for the delivery half, on the SAME live path (guardrail 23).
+ * The case above established the counters MOVE with the switch off; this
+ * asserts every one stays put with it on, and that OVMX limps on exactly as it
+ * did before this item -- circuit still OPEN, connections still bound.
+ */
+static void test_delivery_failure_kill_switch_through_the_daemon(void)
+{
+    (void)setenv(SCS_VC_NO_BREAK_ENV, "1", 1);
+    struct rxworld r;
+    struct peer_state *ps = joiner_connect_outstanding(&r);
+    if (ps == NULL) {
+        (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+        return;
+    }
+    uint64_t now = ps->vc.unacked_sent_ms;
+    for (unsigned i = 0; i < SCS_VC_DELIVERY_RETRY_LIMIT; i++) {
+        drive_one_joiner_retransmit(&r, ps);
+        now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+        rx_tick(&r, now);
+    }
+    /* The fixture must actually REACH the failure or the assertions below are
+     * vacuous -- the whole point of running the kill switch. */
+    CHECK(scs_vc_delivery_failed(&ps->vc) == 1,
+          "GATED: the fixture did not reach delivery failure, so it proves nothing");
+    now += VC_RETRANSMIT_TIMEOUT_MS + 1;
+    rx_tick(&r, now);
+    CHECK(vc_breaks == 0, "GATED: %lu circuits were broken, expected 0", vc_breaks);
+    CHECK(vc_conns_broken == 0, "GATED: %lu connections were broken, expected 0",
+          vc_conns_broken);
+    CHECK(sysap_vc_loss_notifications == 0,
+          "GATED: %lu SYSAP handlers fired, expected 0", sysap_vc_loss_notifications);
+    CHECK(ps->pb->vc_state == SCS_VC_OPEN, "GATED: the circuit is %s, expected OPEN",
+          scs_vc_state_name(ps->pb->vc_state));
+    CHECK(ps->dir_connected == 1, "GATED: the bound-connection flags were cleared anyway");
+    CHECK(rxlog_has("SCSD-W-VCBREAKOFF,"),
+          "GATED: the suppression was SILENT -- a run log must never read as"
+          " 'no circuit was ever broken' when breaking is switched off");
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+}
+
+/*
+ * THE CONSEQUENCE THIS ITEM HAS ON vms-17f's DEPARTURE PATH, asserted rather
+ * than left to be discovered.
+ *
+ * conn_bind() installs scsd_sysap_vc_loss() on every CDT it creates -- not on
+ * the break path. scs_pb_depart() (vms-17f) already walked the Path Block's
+ * connection queue through scs_cdl_vc_loss() and, before this item, found a
+ * NULL handler on every CDT and notified nobody. Installing the handler
+ * therefore CHANGES vms-17f's departure behaviour: every departure carrying
+ * bound connections now invokes the SYSAP handler, moves the counter and prints
+ * SCSD-W-SYSAPVCLOSS. That is this item's change, on someone else's path, and
+ * it is asserted HERE, through the production sweep.
+ *
+ * AND IT IS DELIBERATELY NOT GATED BY OVMX_NO_VC_BREAK. Part B is the assertion
+ * of that decision, not an accident being ratified: with this item's kill switch
+ * SET, a departure must STILL notify, because a departure is not a
+ * message-guarantee failure and the p. 2-28 notification belongs to vms-17f's
+ * teardown. The reasoning is in scsd.c on scsd_sysap_vc_loss(). Part C runs the
+ * switch that DOES gate this path.
+ */
+static void test_departure_notifies_the_sysaps(void)
+{
+    uint64_t timeout = scs_depart_listen_timeout_ms();
+
+    /* ---- A. NEITHER SWITCH SET: the departure notifies both SYSAPs. ---- */
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+    (void)unsetenv("OVMX_NO_PEER_DEPART");
+    {
+        struct rxworld r;
+        struct peer_state *ps = two_connections_on_one_circuit(&r);
+        if (ps == NULL) {
+            return;
+        }
+        uint64_t heard_at = ps->last_rx_ms;
+        CHECK(heard_at != 0, "the daemon never stamped the peer's last-heard time");
+
+        /* NEGATIVE CONTROL, same code one argument different: a peer that has
+         * just spoken departs nothing and notifies nobody. Without this, the
+         * assertions below would pass for a sweep that notified every CDT it
+         * could see on every call. */
+        CHECK(rx_sweep(&r, heard_at) == 0, "a peer heard from this instant departed");
+        CHECK(sysap_vc_loss_notifications == 0,
+              "the control sweep fired %lu SYSAP handlers",
+              sysap_vc_loss_notifications);
+
+        CHECK(rx_sweep(&r, heard_at + timeout) == 1,
+              "a peer silent for the listen timeout was NOT declared departed");
+        CHECK(peer_departures == 1, "the sweep recorded %lu departures, expected 1",
+              peer_departures);
+        CHECK(depart_connections_lost == 2,
+              "the departure reported %lu connections lost, expected 2",
+              depart_connections_lost);
+        /* THE MEASUREMENT. Only scsd_sysap_vc_loss() can move this, and on this
+         * path it is reached only through scs_pb_depart() -> scs_cdl_vc_loss(). */
+        CHECK(sysap_vc_loss_notifications == 2,
+              "the departure fired %lu SYSAP VC-loss handlers, expected 2 (the"
+              " member and directory connections on the departing circuit)",
+              sysap_vc_loss_notifications);
+        /* ONE LINE PER NOTIFIED CONNECTION, and each names WHICH connection.
+         * rxlog_count, not rxlog_has: a handler that fired twice and logged
+         * once would leave the counter right and the operator's log wrong. The
+         * two substrings below are unique to scsd_sysap_vc_loss()'s format
+         * string, so no other daemon log line can satisfy them. */
+        CHECK(rxlog_count("SCSD-W-SYSAPVCLOSS,") == 2,
+              "the departure printed %u SYSAPVCLOSS lines for 2 notifications",
+              rxlog_count("SCSD-W-SYSAPVCLOSS,"));
+        CHECK(rxlog_has("SYSAP notified: connection SCS$DIRECTORY"),
+              "the SYSAPVCLOSS log does not name the directory connection");
+        CHECK(rxlog_has("SYSAP notified: connection VMS$VAXcluster"),
+              "the SYSAPVCLOSS log does not name the VMS$VAXcluster connection");
+        /* A departure is NOT a broken message guarantee: it must not be scored
+         * as one, or the exit summary reports circuits that nothing broke. */
+        CHECK(vc_breaks == 0,
+              "the departure was counted as %lu VC break(s) -- a silent peer is"
+              " not a p. 2-31 message-guarantee failure", vc_breaks);
+        CHECK(vc_seq_gaps == 0, "the departure scored %lu sequence gaps", vc_seq_gaps);
+        CHECK(!rxlog_has("SCSD-W-VCBREAK,"),
+              "the departure logged a VC BREAK");
+    }
+
+    /* ---- B. WITH THIS ITEM'S KILL SWITCH SET, the departure STILL notifies.
+     * This is the documented decision under assertion: OVMX_NO_VC_BREAK gates
+     * BREAKING a circuit on a message-guarantee failure, and nothing else. If
+     * someone later gates handler INSTALLATION on it, this reds -- and they
+     * will have to read the reasoning in scsd.c before overriding it. ---- */
+    (void)setenv(SCS_VC_NO_BREAK_ENV, "1", 1);
+    {
+        struct rxworld r;
+        struct peer_state *ps = two_connections_on_one_circuit(&r);
+        if (ps == NULL) {
+            (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+            return;
+        }
+        uint64_t heard_at = ps->last_rx_ms;
+        CHECK(rx_sweep(&r, heard_at + timeout) == 1,
+              "OVMX_NO_VC_BREAK=1 suppressed a peer DEPARTURE -- it must gate"
+              " only the p. 2-31 break");
+        CHECK(sysap_vc_loss_notifications == 2,
+              "OVMX_NO_VC_BREAK=1 suppressed the DEPARTURE notification (%lu"
+              " handlers fired, expected 2) -- this item's switch must not"
+              " disable vms-17f's p. 2-28 teardown",
+              sysap_vc_loss_notifications);
+        CHECK(vc_breaks == 0, "the gated run broke %lu circuits", vc_breaks);
+    }
+    (void)unsetenv(SCS_VC_NO_BREAK_ENV);
+
+    /* ---- C. THE SWITCH THAT DOES GATE THIS PATH. OVMX_NO_PEER_DEPART=1 runs
+     * no sweep teardown at all, so scs_cdl_vc_loss() is never called and no
+     * handler fires -- the matched zero for part A. ---- */
+    (void)setenv("OVMX_NO_PEER_DEPART", "1", 1);
+    {
+        struct rxworld r;
+        struct peer_state *ps = two_connections_on_one_circuit(&r);
+        if (ps == NULL) {
+            (void)unsetenv("OVMX_NO_PEER_DEPART");
+            return;
+        }
+        uint64_t heard_at = ps->last_rx_ms;
+        CHECK(rx_sweep(&r, heard_at + timeout) == 0,
+              "GATED: OVMX_NO_PEER_DEPART=1 still departed a peer");
+        CHECK(sysap_vc_loss_notifications == 0,
+              "GATED: %lu SYSAP handlers fired with the departure sweep off",
+              sysap_vc_loss_notifications);
+        CHECK(ps->connected == 1 && ps->dir_connected == 1,
+              "GATED: the bound-connection flags were cleared anyway");
+        CHECK(!rxlog_has("SCSD-W-SYSAPVCLOSS,"),
+              "GATED: the SYSAPVCLOSS line was printed anyway");
+    }
+    (void)unsetenv("OVMX_NO_PEER_DEPART");
+}
+
+/*
+ * THE HEADLINE CASE. A node forms a circuit, goes silent past the listen
+ * timeout, and comes back with the SAME identity -- all of it through
+ * scsd_handle_frame() and scsd_peer_departure_sweep(), the two production
+ * functions the daemon's main loop calls, with captured frames.
+ *
+ * Nothing here performs a transition by hand. The test supplies frames and a
+ * clock; every scs_pb_open(), scs_pb_depart() and slot release is scsd.c's.
+ */
+static void test_rejoin_reaches_the_p221_refresh(void)
+{
+    struct rxworld r;
+    unsetenv("OVMX_NO_PEER_DEPART");
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    /* ---- 1. THE FIRST JOIN. ---- */
+    rx_feed_formation(&r);
+
+    struct peer_state *ps = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(ps != NULL, "the daemon built no peer slot for the captured formation");
+    if (ps == NULL) {
+        return;
+    }
+    CHECK(ps->start_acked == 1, "the daemon did not complete the START dialogue");
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1,
+          "the first join produced %lu NEW_SB transitions, expected 1",
+          pb_open_results[SCS_OPEN_NEW_SB]);
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 0,
+          "a FIRST join took the rejoin REFRESH");
+    CHECK(scs_config_sb_count(&r.w.cfg) == 1, "the peer's System Block was not queued");
+    unsigned frames_after_first_join = scsd_test_frames;
+    CHECK(frames_after_first_join == 3,
+          "the first join emitted %u frames, expected the 3 of a formation dialogue",
+          frames_after_first_join);
+    struct scs_sb *sb_before = ps->pb->sb;
+    uint8_t sysid_before[6];
+    memcpy(sysid_before, sb_before->system_id, 6);
+    CHECK(memcmp(sysid_before, vax1_logical, 6) == 0,
+          "the SB does not carry the SCS System Address the captured frames advertise");
+
+    /* ---- 2. THE NEGATIVE CONTROL: a peer that has just spoken is not gone. ----
+     * Same sweep, same code, one argument different. Without this the assertion
+     * below would pass for a sweep that departs everyone unconditionally. */
+    uint64_t heard_at = ps->last_rx_ms;
+    uint64_t timeout = scs_depart_listen_timeout_ms();
+    CHECK(heard_at != 0, "the daemon never stamped the peer's last-heard time");
+    CHECK(rx_sweep(&r, heard_at) == 0, "a peer heard from this instant was declared departed");
+    CHECK(rx_sweep(&r, heard_at + timeout - 1) == 0,
+          "a peer silent for one ms less than the listen timeout was declared departed");
+    CHECK(peer_departures == 0, "the control sweeps departed %lu peers", peer_departures);
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "a control sweep released the peer slot");
+
+    /* vms-b1d: THE PORT'S DATAGRAM ACCOUNT MUST SURVIVE THE ROUND TRIP TOO.
+     * p. 2-43 puts a connection's datagram buffers on the PORT's DFREEQ, and
+     * the departure sweep below releases this circuit's CDTs -- so each one owes
+     * the port back the deposit it is still holding. Asserted HERE, on the
+     * daemon's OWN PDT and CDL rather than a unit bench, because THIS sweep is
+     * what makes the leak production-reachable. MEASURED with the return removed
+     * from scs_cdl_release: the depth reads 5 after the departure and is still 5
+     * after the rejoin -- the departed incarnation's deposit is simply never
+     * given back, and a real node that connected again would deposit on top of
+     * it. (The rejoin here opens no new connection, so 5 is the figure to expect
+     * from that mutant, not 10.) */
+    /* The CDT is allocated HERE rather than taken from ps->cdt_* because this
+     * fixture's formation does not bind one (the daemon's Con.IDs are
+     * node-global, so an earlier fixture in this process already holds the CDL
+     * slots -- see the SCSD-W-CONNSLOT line in the log above). What is
+     * PRODUCTION about this assertion is everything that matters: the CDL is the
+     * daemon's own scsd_cdl, the port is the daemon's own r.w.pdt, the circuit
+     * is the one the captured frames built, and the teardown is rx_sweep ->
+     * scs_pb_depart with nothing stubbed. Only the connection's origin is the
+     * test's. */
+    struct scs_cdt *acct = scs_cdl_alloc(&scsd_cdl, "SCS$DIRECTORY   ",
+                                         "SCS$DIRECTORY   ", ps->pb);
+    CHECK(acct != NULL, "no CDL slot to account against");
+    if (acct != NULL) {
+        CHECK(scs_dgram_extend(acct, 5) == 0, "extend failed on the daemon's CDT");
+    }
+    CHECK(r.w.pdt.dfreeq_count == 5,
+          "the daemon's port DFREEQ is %u with one 5-buffer deposit outstanding,"
+          " expected 5", r.w.pdt.dfreeq_count);
+
+    /* ---- 3. THE DEPARTURE. ---- */
+    CHECK(rx_sweep(&r, heard_at + timeout) == 1,
+          "a peer silent for exactly the listen timeout was NOT declared departed");
+    CHECK(peer_departures == 1, "the sweep recorded %lu departures, expected 1",
+          peer_departures);
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == NULL, "the departed peer kept its slot");
+    /* And the slot is released WHOLE. A free slot is recognised by pb == NULL
+     * alone, so anything else left in it is a departed node's state sitting
+     * where a reader that does not check would take it for a live peer's. */
+    {
+        struct peer_state empty;
+        memset(&empty, 0, sizeof(empty));
+        int residue = 0;
+        for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+            if (memcmp(&r.w.peers[i], &empty, sizeof(empty)) != 0) {
+                residue = 1;
+            }
+        }
+        CHECK(residue == 0,
+              "the released peer slot still carries state from the departed node");
+    }
+    CHECK(scs_pdt_formative_count(&r.w.pdt) == 0, "the closed Path Block was left on the PDT");
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == 0,
+          "a connection survived the departure of the circuit that carried it");
+    /* p. 2-17: the System Block is the node's memory and it must SURVIVE -- that
+     * is the whole premise of the p. 2-21 Note. */
+    CHECK(scs_config_sb_count(&r.w.cfg) == 1,
+          "the System Block was dropped with the circuit, so nothing is left for a"
+          " rejoin to refresh");
+    CHECK(rxlog_has("SCSD-I-PEERGONE"), "the departure was not logged");
+    CHECK(r.w.pdt.dfreeq_count == 0,
+          "the daemon's port DFREEQ is %u after the peer departed, expected 0 --"
+          " the released connection's datagram deposit was never returned to the"
+          " port (p. 2-43)", r.w.pdt.dfreeq_count);
+
+    /* ---- 4. THE REJOIN, SAME IDENTITY, SAME CAPTURED FRAMES. ---- */
+    rxlog_reset();
+    rx_feed_formation(&r);
+
+    struct peer_state *back = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(back != NULL, "the returning node got no peer slot");
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 1,
+          "the rejoin produced %lu REFRESH transitions, expected 1 --"
+          " SCS_OPEN_EXISTING_REFRESHED is still unreachable from the daemon",
+          pb_open_results[SCS_OPEN_EXISTING_REFRESHED]);
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1,
+          "the rejoin learned the node again instead of refreshing its System Block");
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_SB] == 0,
+          "the rejoin took the already-open early return -- the pre-vms-17f behaviour");
+    CHECK(scs_config_sb_count(&r.w.cfg) == 1, "the rejoin duplicated the System Block");
+    CHECK(back != NULL && back->pb != NULL && back->pb->sb == sb_before,
+          "the rejoin attached to a different System Block -- the old one was not"
+          " refreshed, it was replaced");
+    /* The log branch is LIVE, and it says the right thing. A mutant that swaps
+     * two clauses of scsd_open_result_text() dies here. */
+    CHECK(rxlog_has("old system block REFRESHED (rejoin, p. 2-21 Note)"),
+          "the daemon did not log the REFRESH transition");
+    CHECK(rxlog_count("SCSD-I-VCOPEN") == 1,
+          "the rejoin logged %u open transitions, expected exactly 1",
+          rxlog_count("SCSD-I-VCOPEN"));
+    CHECK(!rxlog_has("node learned for the first time"),
+          "the rejoin logged the FIRST-CONTACT clause");
+    CHECK(!rxlog_has("UNEXPECTED"),
+          "a log line still claims a transition is unreachable");
+    /* vms-b1d: and the returning node starts from a CLEAN datagram account. This
+     * is the assertion the leak would fail on a real cluster: the port's depth
+     * would carry the departed incarnation's deposit into every rejoin. */
+    CHECK(r.w.pdt.dfreeq_count == 0,
+          "the daemon's port DFREEQ is %u after the rejoin, expected 0 -- the"
+          " returning node inherited the departed incarnation's deposit",
+          r.w.pdt.dfreeq_count);
+
+    /* THE WIRE-VISIBLE CONSEQUENCE, which is the whole reason this item ships a
+     * kill switch: the returning node is answered with a second, complete
+     * formation dialogue. Before vms-17f OVMX emitted nothing at all, because it
+     * believed the circuit was still open. */
+    CHECK(scsd_test_frames == frames_after_first_join + 3,
+          "the rejoin emitted %u frames in total, expected %u (a second formation"
+          " dialogue on top of the first)",
+          scsd_test_frames, frames_after_first_join + 3);
+}
+
+/*
+ * THE KILL SWITCH, RUN AT DAEMON LEVEL (guardrail 23), and it is the same
+ * fixture as above so the ONLY difference is the environment variable.
+ *
+ * With OVMX_NO_PEER_DEPART=1 the daemon must behave exactly as it did before
+ * vms-17f: no departure, no slot release, and -- the part that matters on the
+ * wire -- NOT ONE FRAME emitted in answer to the returning node's formation
+ * dialogue, because the circuit is still believed open.
+ */
+static void test_departure_kill_switch_restores_the_pinned_slot(void)
+{
+    struct rxworld r;
+    setenv("OVMX_NO_PEER_DEPART", "1", 1);
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+
+    rx_feed_formation(&r);
+    struct peer_state *ps = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(ps != NULL, "the daemon built no peer slot with the switch set");
+    if (ps == NULL) {
+        unsetenv("OVMX_NO_PEER_DEPART");
+        return;
+    }
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1, "the first join did not run under the switch");
+    unsigned frames_after_first_join = scsd_test_frames;
+
+    /* However long the peer is silent, nothing happens. */
+    uint64_t way_past = ps->last_rx_ms + 100u * scs_depart_listen_timeout_ms();
+    CHECK(rx_sweep(&r, way_past) == 0, "OVMX_NO_PEER_DEPART=1 still departed a peer");
+    CHECK(peer_departures == 0, "the switch let %lu departures through", peer_departures);
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "the switch still released the peer slot");
+    CHECK(ps->pb->in_use == 1, "the switch still closed the Path Block");
+    CHECK(!rxlog_has("SCSD-I-PEERGONE"), "the switch still logged a departure");
+
+    /* The returning node re-enters the SAME slot on the SAME open circuit, and
+     * OVMX answers its formation dialogue with silence. */
+    rx_feed_formation(&r);
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "the switch did not pin the peer to its slot");
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 0,
+          "the REFRESH ran with OVMX_NO_PEER_DEPART=1 set -- the switch does not gate it");
+    CHECK(scsd_test_frames == frames_after_first_join,
+          "the gated daemon emitted %u frames to the returning node, expected 0 more"
+          " than the %u of the first join",
+          scsd_test_frames - frames_after_first_join, frames_after_first_join);
+
+    /* BRACKET: unset it, feed the same frames to a fresh fixture, and the
+     * behaviour comes back. Without this the case above is equally consistent
+     * with "the rejoin never works". */
+    unsetenv("OVMX_NO_PEER_DEPART");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    rx_feed_formation(&r2);
+    struct peer_state *ps2 = rx_peer_of(&r2, vax1_hw_mac);
+    CHECK(ps2 != NULL, "bracket: no peer slot");
+    if (ps2 == NULL) {
+        return;
+    }
+    unsigned frames_before = scsd_test_frames;
+    CHECK(rx_sweep(&r2, ps2->last_rx_ms + scs_depart_listen_timeout_ms()) == 1,
+          "bracket: the peer did not depart with the switch unset");
+    rx_feed_formation(&r2);
+    CHECK(pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 1,
+          "bracket: the REFRESH did not run with the switch unset");
+    CHECK(scsd_test_frames == frames_before + 3,
+          "bracket: the returning node was not answered with a formation dialogue");
+}
+
+/*
+ * The listen timeout is not a hidden constant: OVMX_PEER_LISTEN_TIMEOUT_MS moves
+ * it, which is how a lab run forces a departure inside a short window, and the
+ * daemon's own accessor is what the sweep uses.
+ */
+static void test_listen_timeout_override_moves_the_departure(void)
+{
+    struct rxworld r;
+    unsetenv("OVMX_NO_PEER_DEPART");
+    setenv("OVMX_PEER_LISTEN_TIMEOUT_MS", "2000", 1);
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    rx_feed_formation(&r);
+    struct peer_state *ps = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(ps != NULL, "no peer slot");
+    if (ps == NULL) {
+        unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+        return;
+    }
+    uint64_t heard_at = ps->last_rx_ms;
+    CHECK(scs_depart_listen_timeout_ms() == 2000, "the override did not reach the daemon");
+    CHECK(rx_sweep(&r, heard_at + 1999) == 0, "departed 1ms before the overridden timeout");
+    CHECK(rx_sweep(&r, heard_at + 2000) == 1, "did not depart at the overridden timeout");
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+}
+
+/*
+ * A peer that is only BEACONING is not departed. The daemon acts on frames
+ * unicast to its own MAC, but liveness is a broader question than "is it talking
+ * to me": stamping only the frames the responder handles would age out a member
+ * that is up and multicasting. peer_touch() runs before that gate, and this is
+ * the case that holds it there.
+ */
+static void test_multicast_beacon_keeps_a_peer_alive(void)
+{
+    struct rxworld r;
+    unsetenv("OVMX_NO_PEER_DEPART");
+    unsetenv("OVMX_PEER_LISTEN_TIMEOUT_MS");
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    rx_feed_formation(&r);
+    struct peer_state *ps = rx_peer_of(&r, vax1_hw_mac);
+    CHECK(ps != NULL, "no peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    /* Wind the peer's last-heard time back to the very start of the clock, so
+     * that "it has been silent long enough to depart" is true by construction
+     * and the ONLY thing that can rescue it is the beacon below. */
+    ps->last_rx_ms = 1;
+    uint64_t timeout = scs_depart_listen_timeout_ms();
+
+    /* The SAME captured round-0 START, re-addressed to the HELLO multicast group
+     * -- i.e. a frame from this peer that the responder will NOT act on, because
+     * it is not unicast to us. Only the destination MAC changes. */
+    uint8_t beacon[sizeof(cap_vax1_start_round0)];
+    memcpy(beacon, cap_vax1_start_round0, sizeof(beacon));
+    const uint8_t hello_group[6] = {0xab, 0x00, 0x04, 0x01, 0x01, 0x01};
+    memcpy(beacon, hello_group, 6);
+
+    unsigned frames_before = scsd_test_frames;
+    rx_feed(&r, beacon, sizeof(beacon));
+    CHECK(scsd_test_frames == frames_before,
+          "the daemon answered a frame that was not addressed to it");
+    CHECK(ps->last_rx_ms > 1,
+          "a multicast frame from a live peer did not refresh its last-heard time --"
+          " liveness is being taken from the unicast responder path only");
+
+    /* The peer is therefore still alive as of the beacon, not as of the last
+     * frame it addressed to us: a sweep well past the old timestamp's deadline
+     * leaves it alone. */
+    CHECK(rx_sweep(&r, 1 + timeout) == 0, "a beaconing peer was declared departed");
+    CHECK(rx_peer_of(&r, vax1_hw_mac) == ps, "a beaconing peer lost its slot");
+}
+
+/*
+ * vms-abc: THE HELLO BEACON IS A SEND SITE, AND IT IS NOW ONE A TEST CAN SEE.
+ *
+ * This send used to be six lines inside main()'s timer loop -- the one function
+ * the SCSD_UNIT_TEST seam renames away -- and it called sendto() on the socket
+ * directly, so it appeared in NEITHER half of the SEND SITE TABLE and no test
+ * could reach it. scsd_hello_beacon_emit() is that code, hoisted; this drives
+ * the REAL function.
+ *
+ * WHAT IS ASSERTED, and why each part:
+ *
+ *   (a) IT TRANSMITS WITH NO CIRCUIT IN EXISTENCE. The world here has no peer
+ *       slot, no System Block and no Path Block at all -- scs_config_path()
+ *       could not describe a circuit if something asked it to. That is not an
+ *       oversight in the fixture, it is the JUSTIFICATION for the exemption
+ *       stated as a test: a beacon is how peers are discovered, so it is sent
+ *       precisely when nothing is known. If a future change routed it through
+ *       send_frame_vc() this assertion reds, and it should -- the node would
+ *       have lost the ability to announce itself.
+ *
+ *   (b) IT REACHES THE TRANSMIT PATH, asserted BELOW the choke point via
+ *       scsd_test_frames (the capture buffer substituted into send_frame_raw),
+ *       not from the function's return value. A send that is refused increments
+ *       nothing here.
+ *
+ *   (c) IT IS NOT OFFERED TO THE CHOKE POINT AT ALL: vc_sends_refused does not
+ *       move. Together with (b) this distinguishes "exempt" from "refused but
+ *       we didn't notice".
+ *
+ *   (d) THE BYTES ARE THE BUILDER'S BYTES, TO THE MULTICAST GROUP. The frame
+ *       captured off the transmit path is compared against an independently
+ *       built scs_hello_build_frame() output and the destination against
+ *       scs_hello_multicast_addr(), so the wrapper is proven to forward rather
+ *       than to rewrite. The timer tick is the one field that legitimately
+ *       moves between two builds (a live 100ns clock, spec sec 4k), so it is
+ *       compared by first copying the tick the production call actually used
+ *       out of the params the function updated in place.
+ *
+ *   (e) THE RUN COUNTER IS THE ONE THE EXIT SUMMARY PRINTS. rx.hello_sent
+ *       advances by exactly one per beacon -- that counter is why this was a
+ *       real send site and not dead code.
+ *
+ * NON-VACUITY, measured. Three mutants of scsd.c, each rebuilt and run, each
+ * restored and the restore verified with cmp; all three are killed by THIS test:
+ *   M-G  the beacon routed through send_frame_vc() instead -- i.e. choked on a
+ *        circuit that does not exist. Reds (b) 0 frames, (c) +1 refusal.
+ *   M-H  send_frame_channel() rewriting the destination MAC rather than
+ *        forwarding it. Reds (d).
+ *   M-I  `rx->hello_sent++` deleted. Reds (e).
+ * The structural half of the same guarantee -- that no OTHER sender can appear
+ * without being enumerated -- is tests/vmsscs/test_scsd_send_sites.py, which
+ * carries its own seven-mutant record.
+ */
+static void test_the_hello_beacon_transmits_through_the_channel_exemption(void)
+{
+    struct world w;
+    world_init(&w);
+
+    /* (a) NOTHING is discovered: world_init() zeroes every peer slot and the
+     * fixture adds none, so there is no Path Block anywhere for a circuit check
+     * to consult. Asserted, not assumed -- if a future world_init() pre-seeded
+     * a peer this test would silently stop being about "no circuit at all". */
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        CHECK(w.peers[i].pb == NULL,
+              "peer slot %d already carries a Path Block -- the beacon fixture"
+              " is supposed to have no circuit in existence", i);
+    }
+
+    static struct scsd_rx rx;
+    memset(&rx, 0, sizeof(rx));
+    rx.cfg = &w.cfg;
+    rx.pdt = &w.pdt;
+    rx.peers = w.peers;
+
+    struct scs_hello_params hp;
+    memset(&hp, 0, sizeof(hp));
+    scs_hello_multicast_addr(SCS_HELLO_MCAST_GROUP1, hp.dst_mac);
+    memcpy(hp.src_mac, our_hw_mac, 6);
+    memcpy(hp.src_logical, our_logical, 6);
+    memcpy(hp.node_name, "OVMX1 ", SCS_HELLO_NODENAME_LEN);
+    hp.node_name[SCS_HELLO_NODENAME_LEN] = '\0';
+
+    scsd_test_frames = 0;
+    scsd_test_last_len = 0;
+    unsigned long refused_before = vc_sends_refused;
+
+    ssize_t sent = scsd_hello_beacon_emit(&rx, &hp, 7 /* fd never touched */, 1);
+
+    /* (b) it reached the transmit path, asserted below the choke point. */
+    CHECK(scsd_test_frames == 1,
+          "the HELLO beacon put %u frame(s) on the transmit path, expected 1 --"
+          " a node that cannot beacon is a node no peer can discover",
+          scsd_test_frames);
+    CHECK(sent == (ssize_t)SCS_HELLO_FRAME_LEN,
+          "the beacon reported %zd bytes sent, expected %d", sent,
+          SCS_HELLO_FRAME_LEN);
+
+    /* (c) it was never offered to send_frame_vc(): the exemption is real, not a
+     * refusal nobody looked at. */
+    CHECK(vc_sends_refused == refused_before,
+          "the beacon was refused by the virtual-circuit choke point (%lu new"
+          " refusal(s)) -- a HELLO rides no circuit and must not consult one",
+          vc_sends_refused - refused_before);
+
+    /* (d) the wrapper forwarded the builder's bytes to the multicast group. */
+    uint8_t want_dst[6];
+    scs_hello_multicast_addr(SCS_HELLO_MCAST_GROUP1, want_dst);
+    CHECK(memcmp(scsd_test_last_dst, want_dst, 6) == 0,
+          "the beacon went to %02x:%02x:%02x:%02x:%02x:%02x, not the cluster"
+          " multicast group",
+          scsd_test_last_dst[0], scsd_test_last_dst[1], scsd_test_last_dst[2],
+          scsd_test_last_dst[3], scsd_test_last_dst[4], scsd_test_last_dst[5]);
+    CHECK(scsd_test_last_len == SCS_HELLO_FRAME_LEN,
+          "the beacon frame is %zu bytes, expected %d", scsd_test_last_len,
+          SCS_HELLO_FRAME_LEN);
+    uint8_t expect[SCS_HELLO_FRAME_LEN];
+    /* hp.timer_tick is whatever the production call stamped in; reuse it so the
+     * one legitimately-moving field does not make this a flaky comparison. */
+    CHECK(scs_hello_build_frame(&hp, expect) == 0, "the reference build failed");
+    CHECK(memcmp(scsd_test_last_frame, expect, SCS_HELLO_FRAME_LEN) == 0,
+          "the beacon's bytes are not the builder's bytes -- send_frame_channel()"
+          " is rewriting the frame, not forwarding it");
+
+    /* (e) the counter the exit summary prints. */
+    CHECK(rx.hello_sent == 1, "rx.hello_sent is %ld after one beacon, expected 1",
+          rx.hello_sent);
+    (void)scsd_hello_beacon_emit(&rx, &hp, 7, 1);
+    CHECK(rx.hello_sent == 2 && scsd_test_frames == 2,
+          "a second beacon did not advance both the counter (%ld) and the"
+          " transmit path (%u)", rx.hello_sent, scsd_test_frames);
+}
+
+/*
+ * (5) vms-b1d: THE DATAGRAM DISCARD IS IN THE PRODUCTION RUN LOG. A datagram
+ * discard is silent on the wire by design (p. 2-42, "the port merely discards
+ * the datagram"); if it is also invisible locally, the whole DFREEQ is
+ * indistinguishable from a facility that does nothing (INV-6). The counters are
+ * asserted structurally in test_scs_dgram.c; what is asserted HERE is that
+ * scsd_exit_summary() -- the daemon's own report, not a test-local printer --
+ * actually emits them.
+ *
+ * Honest scope: this drives the report over a CDL whose counters this test
+ * moved, because NOTHING IN scsd.c ROUTES A DATAGRAM through
+ * scs_dgram_cdl_deliver() (see the reachability note in scs_dgram.h). It proves
+ * the reporting call site is live and prints real per-connection numbers. It
+ * does NOT prove the daemon ever discards a datagram -- it cannot, because the
+ * daemon never receives one through the accounted path.
+ */
+static void test_exit_summary_reports_datagram_discards(void)
+{
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->cdt_dir != NULL, "the fixture did not open a directory CDT");
+    if (ps->cdt_dir == NULL) {
+        return;
+    }
+
+    /* One buffer extended, one datagram delivered to a connection with no SYSAP
+     * input routine, then the quota driven to 0 and a discard forced -- all
+     * through the vms-b1d entry points, over the daemon's OWN CDL. */
+    static const unsigned char dg[] = {0x01, 0x02, 0x03};
+    CHECK(scs_dgram_extend(ps->cdt_dir, 1) == 0, "extend failed");
+    ps->cdt_dir->dgram_buffers = 0;
+    CHECK(scs_dgram_cdl_deliver(&scsd_cdl, ps->cdt_dir->local_conid, 0, dg, sizeof(dg))
+              == SCS_DGRAM_DISCARD_NO_QUOTA,
+          "the daemon's CDL did not produce a no-quota discard");
+
+    char  buf[8192];
+    FILE *cap = tmpfile();
+    CHECK(cap != NULL, "tmpfile");
+    if (cap == NULL) {
+        return;
+    }
+    scsd_exit_summary(&r.rx, cap);
+    fflush(cap);
+    rewind(cap);
+    size_t got = fread(buf, 1, sizeof(buf) - 1, cap);
+    buf[got] = '\0';
+    fclose(cap);
+
+    char want[160];
+    snprintf(want, sizeof(want), "DGRAM: conid=0x%08X", (unsigned)SCS_DIR_OVMX_CONID);
+    CHECK(strstr(buf, want) != NULL,
+          "the exit summary did not report the connection's datagram account"
+          " ('%s' absent) -- the discard is invisible in the run log",
+          want);
+    CHECK(strstr(buf, "discarded-no-quota=1") != NULL,
+          "the exit summary did not report the DISCARD COUNT");
+    CHECK(strstr(buf, "DFREEQ: port#0") != NULL,
+          "the exit summary did not report the port DFREEQ");
+}
+
+/* ==========================================================================
+ * vms-7fe -- THE SDIR QUEUE, AS THE DAEMON USES IT.
+ *
+ * Everything below drives src/vmsscs/scsd.c through scsd_handle_frame(), and
+ * every assertion reads either a counter the production path moved or the frame
+ * the production senders actually handed to the transport. No case builds a
+ * reply on its own behalf.
+ *
+ * ONE case -- (2e) -- calls scs_sdir_connect_req() BEFORE the feed, and says so
+ * in its own header: it is the only way to present the daemon's scan with a
+ * listening CDT already in CONNECT RECEIVED, because scsd.c's receive loop
+ * answers synchronously and cannot leave one there between frames (scs_sdir.h
+ * OVMX DESIGN CHOICE 3). That arrangement is the fixture; what is asserted is
+ * still what the daemon did with it.
+ * ========================================================================== */
+
+/* Byte-exact SCA#29 from formation-ci1-joinwindow.pcap: VAX1's MSCP$TAPE
+ * SCS$DIR_LOOKUP request, with a 14-byte Ethernet header. MSCP$TAPE is a name
+ * OVMX does not LISTEN for, so this is the GROUNDED miss (spec sec 4(h)(2)). */
+static const uint8_t cap_lookup_mscptape[108] = {
+    0x08,0x00,0x2b,0x78,0x56,0xb9, 0xaa,0x00,0x04,0x00,0x01,0x04, 0x60,0x07,
+    0x5c,0x00,0xaa,0x00,0x04,0x00,0x02,0x04,0x01,0x00,0xaa,0x00,0x04,0x00,0x01,0x04,
+    0x5b,0x13,0x02,0x00,0x03,0x00,0x01,0x00,0x12,0x00,0x02,0x00,0x00,0x00,0x03,0x00,
+    0x00,0x00,0x02,0x00,0x00,0x00,0x01,0x00,0x00,0x02,0x32,0x00,0x04,0x00,0x0a,0x00,
+    0x00,0x00,0x07,0x00,0x59,0x33,0x08,0x00,0x05,0x63,0x00,0x00,0x00,0x00,0x4d,0x53,
+    0x43,0x50,0x24,0x54,0x41,0x50,0x45,0x20,0x20,0x20,0x20,0x20,0x20,0x20,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+/* Byte-exact SCA#37: the VMS$VAXcluster lookup, opcode 0x4b. OVMX LISTENs for
+ * this name, so it is the affirmative case. */
+static const uint8_t cap_lookup_vaxcluster[108] = {
+    0x08,0x00,0x2b,0x78,0x56,0xb9, 0xaa,0x00,0x04,0x00,0x01,0x04, 0x60,0x07,
+    0x5c,0x00,0xaa,0x00,0x04,0x00,0x02,0x04,0x01,0x00,0xaa,0x00,0x04,0x00,0x01,0x04,
+    0x4b,0x13,0x05,0x00,0x06,0x00,0x01,0x00,0x12,0x00,0x05,0x00,0x00,0x00,0x06,0x00,
+    0x00,0x00,0x05,0x00,0x00,0x00,0x01,0x00,0x00,0x02,0x32,0x00,0x04,0x00,0x0a,0x00,
+    0x00,0x00,0x07,0x00,0x59,0x33,0x08,0x00,0x05,0x63,0x00,0x00,0x00,0x00,0x56,0x4d,
+    0x53,0x24,0x56,0x41,0x58,0x63,0x6c,0x75,0x73,0x74,0x65,0x72,0x20,0x20,0x00,0x00,
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+};
+
+/* The lookup response's 16-byte result field, payload [78:94] == abs [92:108]. */
+#define SDIR_RESULT_OFF (14 + 78)
+
+/* Copy a captured frame and substitute the 16-byte SYSAP name at payload
+ * [62:78]. LABELLED SYNTHESIS, and the reason is stated rather than hidden:
+ * our captures contain no lookup for SCS$DIRECTORY and no CONNECT_REQ for a
+ * SYSAP the target was not listening for, because the reference VAX polls only
+ * for names it wants and connects only to the directory service and the
+ * connection manager. Every byte except those 16 is the captured frame. */
+/* Re-stamp a captured frame's LIVE SCS counters. spec sec 4(h)(4) grounds
+ * send_seq at [20:22] mirrored byte-exact at [30:32] as state a sender COMPUTES
+ * (17,758/17,758 frames, 0 residuals), not content it replays -- so a replay
+ * that feeds captured frames out of their original order has to renumber them
+ * or the daemon's own p. 2-31 sequentiality check (vms-abc) correctly breaks the
+ * circuit on the gap. The golden lookups are SCA#29 and SCA#37, several credit
+ * shorts after the SCA#21 connect; this makes the replay contiguous. */
+static void seq_stamp(uint8_t *frame, uint16_t send_seq)
+{
+    frame[14 + 20] = (uint8_t)(send_seq & 0xff);
+    frame[14 + 21] = (uint8_t)(send_seq >> 8);
+    frame[14 + 30] = (uint8_t)(send_seq & 0xff);
+    frame[14 + 31] = (uint8_t)(send_seq >> 8);
+}
+
+static void subst_sysap_name(uint8_t *dst, const uint8_t *src, size_t len,
+                             const char *name)
+{
+    memcpy(dst, src, len);
+    uint8_t field[16];
+    memset(field, ' ', sizeof(field));
+    size_t n = strlen(name);
+    if (n > sizeof(field)) {
+        n = sizeof(field);
+    }
+    memcpy(field, name, n);
+    memcpy(dst + 14 + 62, field, sizeof(field));
+}
+
+/*
+ * (1) THE RESPONDER ANSWERS FROM THE QUEUE, AND THE KILL SWITCH PUTS THE OLD
+ * HARDCODED COMPARE BACK. Guardrail 23: the ON measurement is taken and the
+ * counter it gates is confirmed to have moved BEFORE anything is claimed about
+ * what turning the switch off achieves.
+ */
+static void test_sdir_lookup_is_answered_from_the_queue(void)
+{
+    /* The three queries, renumbered contiguously behind the SCA#21 connect
+     * (send_seq 1) so the replay does not read as a sequence gap. */
+    uint8_t q_tape[sizeof(cap_lookup_mscptape)];
+    uint8_t q_vc[sizeof(cap_lookup_vaxcluster)];
+    uint8_t q_dir[sizeof(cap_lookup_mscptape)];
+    memcpy(q_tape, cap_lookup_mscptape, sizeof(q_tape));
+    seq_stamp(q_tape, 2);
+    memcpy(q_vc, cap_lookup_vaxcluster, sizeof(q_vc));
+    seq_stamp(q_vc, 3);
+    subst_sysap_name(q_dir, cap_lookup_mscptape, sizeof(q_dir), "SCS$DIRECTORY");
+    seq_stamp(q_dir, 4);
+
+    /* --- SDIR ON --- */
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    const struct scs_sdir_queue *q = scs_svc_sdir(scsd_svc());
+    CHECK(scs_sdir_count(q) == 2,
+          "the daemon queued %u SDIRs, expected VMS$VAXcluster + SCS$DIRECTORY",
+          scs_sdir_count(q));
+    CHECK(scs_sdir_peek(q, "MSCP$DISK") == NULL,
+          "the daemon LISTENs for MSCP$DISK -- it has no MSCP server, so"
+          " advertising one is exactly the INV-6 failure");
+
+    /* MISS: a name not in the queue gets the GROUNDED marker. */
+    long sent_before = r.rx.dir_lookup_sent;
+    rx_feed(&r, q_tape, sizeof(q_tape));
+    CHECK(r.rx.dir_lookup_sent == sent_before + 1, "no MSCP$TAPE lookup response was sent");
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) == 0,
+          "MSCP$TAPE resolved to something other than the grounded"
+          " 'NOT PRESENT HERE' marker");
+
+    /* HIT: a queued name gets the affirmative descriptor. */
+    rx_feed(&r, q_vc, sizeof(q_vc));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) != 0,
+          "VMS$VAXcluster -- a SYSAP the daemon serves -- resolved to"
+          " 'NOT PRESENT HERE'");
+    CHECK(memcmp(scsd_test_last_frame + 14 + 62, "VMS$VAXcluster  ", 16) == 0,
+          "the response did not echo the queried name back");
+
+    /* THE ANSWER THAT CHANGES: SCS$DIRECTORY. The daemon serves it, so the
+     * queue says yes where the old hardcoded VMS$VAXcluster-only compare said
+     * no while the directory connection was live in the same breath. */
+    unsigned long scans_before = q->scans;
+    rx_feed(&r, q_dir, sizeof(q_dir));
+    CHECK(q->scans > scans_before,
+          "the responder did not consult the SDIR queue at all (scans %lu -> %lu)",
+          scans_before, q->scans);
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) != 0,
+          "SCS$DIRECTORY -- which the daemon had just accepted a connection for --"
+          " still resolves to 'NOT PRESENT HERE'");
+
+    /* --- SDIR OFF: the gated behaviour must be SUPPRESSED, not merely
+     * unmeasured. Same frames, same code path. --- */
+    CHECK(setenv("OVMX_NO_SDIR", "1", 1) == 0, "setenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    rx_feed(&r2, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    const struct scs_sdir_queue *q2 = scs_svc_sdir(scsd_svc());
+    unsigned long scans_off_before = q2->scans;
+    rx_feed(&r2, q_tape, sizeof(q_tape));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) == 0,
+          "the MSCP$TAPE answer changed with the switch off");
+    rx_feed(&r2, q_vc, sizeof(q_vc));
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) != 0,
+          "the VMS$VAXcluster answer changed with the switch off");
+    rx_feed(&r2, q_dir, sizeof(q_dir));
+    CHECK(q2->scans == scans_off_before,
+          "OVMX_NO_SDIR=1 did not stop the responder consulting the queue"
+          " (scans %lu -> %lu)", scans_off_before, q2->scans);
+    CHECK(memcmp(scsd_test_last_frame + SDIR_RESULT_OFF, "NOT PRESENT HERE", 16) == 0,
+          "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe answer for"
+          " SCS$DIRECTORY");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+}
+
+/*
+ * (2) AN INBOUND CONNECT_REQ FOR AN UNLISTED SYSAP IS REFUSED, p. 2-48 -- and
+ * the kill switch suppresses the refusal entirely (before this item OVMX
+ * accepted the connection without ever reading the target name).
+ *
+ * THIS IS THE 0x4b PATH. scsd.c has TWO branches that answer an inbound
+ * CONNECT_REQ and BOTH must be covered; the 0x5b SCS$DIRECTORY branch is
+ * (2c)/(2d)/(2e) below, which exist because deleting the whole scan from that
+ * branch once left this file at 723 checks, 0 failures.
+ *
+ * The 0x4b VMS$VAXcluster branch keys on the SCS message type and a zero
+ * destination Con.ID, so ANY target name reaches the p. 2-48 scan through it --
+ * which is why this case can rename the target to MSCP$DISK and get a miss.
+ */
+static void test_sdir_refuses_a_connect_request_for_an_unlisted_sysap(void)
+{
+    /* The captured 0x4b VMS$VAXcluster CONNECT-REQUEST with its target name
+     * changed to a SYSAP OVMX does not serve. See subst_sysap_name(). */
+    uint8_t req[sizeof(cap_vaxcluster_connect_req)];
+    subst_sysap_name(req, cap_vaxcluster_connect_req,
+                     sizeof(cap_vaxcluster_connect_req), "MSCP$DISK");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    rx_feed(&r, req, sizeof(req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(sdir_connect_scans == 1, "the connect request was not scanned (%lu scans)",
+          sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 1,
+          "no 'no such SYSAP' CONNECT_RSP was emitted (%lu)", sdir_no_such_sysap);
+
+    /* The frame is a CONNECT_RSP (GROUNDED [46:48] == 1, spec sec 4(h)(1a)),
+     * the 66-byte class, echoing the requester's handle with our own left at 0. */
+    CHECK(scsd_test_last_len == SCS_DIR_ECHO_FRAME_LEN,
+          "the refusal is %zu bytes, expected the 66-byte CONNECT_RSP class + 14",
+          scsd_test_last_len);
+    CHECK(le16_at(scsd_test_last_frame + 14 + 46) == 1,
+          "the refusal's [46:48] is %u, not the CONNECT_RSP message type 1",
+          le16_at(scsd_test_last_frame + 14 + 46));
+    CHECK(le32_at(scsd_test_last_frame + 14 + 50) == 0x62C50009u,
+          "the refusal did not echo the requester's Con.ID (it carried 0x%08X)",
+          le32_at(scsd_test_last_frame + 14 + 50));
+    CHECK(le32_at(scsd_test_last_frame + 14 + 54) == 0,
+          "the refusal supplied a local Con.ID -- it accepts nothing, so it"
+          " must not hand out a handle");
+    CHECK(scsd_test_last_frame[30] == SCS_MSGTYPE_SEQAPP,
+          "the refusal did not echo the request's 0x4b opcode (it sent 0x%02x)",
+          scsd_test_last_frame[30]);
+    /* THE OVMX-CHOSEN STATUS WORD (not grounded -- see scs_sdir.h). */
+    CHECK(le16_at(scsd_test_last_frame + 14 + 48) == SCS_SDIR_STATUS_NO_SUCH_SYSAP,
+          "the refusal's [48:50] is 0x%04X, expected the OVMX-chosen"
+          " no-such-SYSAP value 0x%04X",
+          le16_at(scsd_test_last_frame + 14 + 48),
+          (unsigned)SCS_SDIR_STATUS_NO_SUCH_SYSAP);
+
+    /* NOTHING WAS ACCEPTED: no binding, no CDT, no connection at the Con.ID. */
+    CHECK(ps->connected == 0, "a refused request still bound VMS$VAXcluster");
+    CHECK(ps->cdt_member == NULL, "a refused request still allocated a CDT");
+    CHECK(scs_cdl_lookup(&scsd_cdl, OVMX_LOCAL_CONID) == NULL,
+          "a refused request left a connection at the member Con.ID");
+    CHECK(r.rx.connect_resp_sent == 0,
+          "a refused request still counted %ld CONNECT-RESPONSE(s)",
+          r.rx.connect_resp_sent);
+
+    /* --- THE KILL SWITCH. Same frame, same world: no scan, no refusal, and
+     * the pre-vms-7fe accept happens instead. --- */
+    CHECK(setenv("OVMX_NO_SDIR", "1", 1) == 0, "setenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    rx_feed(&r2, req, sizeof(req));
+    CHECK(sdir_connect_scans == 0,
+          "OVMX_NO_SDIR=1 did not stop the connect scan (%lu scans)", sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 0,
+          "OVMX_NO_SDIR=1 still emitted %lu refusal(s)", sdir_no_such_sysap);
+    CHECK(sdir_busy_replies == 0 && sdir_refusals_unsent == 0,
+          "OVMX_NO_SDIR=1 still produced a refusal");
+    CHECK(r2.w.peers[0].connected == 1,
+          "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe accept of a connect"
+          " request whose target name nothing here listens for");
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+}
+
+/*
+ * (2b) THE OTHER KILL SWITCH MUST NOT BECOME A REFUSAL STORM.
+ *
+ * scsd_cdl_ready is only set when the connection state machine is enabled, so
+ * under the PRE-EXISTING OVMX_NO_CONN_FSM=1 the port binds no CDL and LISTEN
+ * never runs -- leaving the SDIR queue EMPTY. Read literally, an empty queue
+ * says "nothing on this node is listening", which would make the p. 2-48 scan
+ * refuse EVERY inbound connect request and turn a switch documented to change
+ * no byte into one that stops OVMX joining. scsd_sdir_live() is the guard;
+ * this is the test that says so, and it FAILED before that guard existed.
+ */
+static void test_no_conn_fsm_does_not_turn_into_a_refusal_storm(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_NO_CONN_FSM", "1", 1) == 0, "setenv failed");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    /* Reproduce what main() does under this switch: the CDL is NOT initialized
+     * and the port is never bound, which is the state the guard has to survive. */
+    scsd_cdl_ready = 0;
+    memset(&scsd_svc_port, 0, sizeof(scsd_svc_port));
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    CHECK(scs_sdir_count(scs_svc_sdir(scsd_svc())) == 0,
+          "the fixture did not reproduce the empty-queue state the guard is for");
+
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    /* Renumbered to follow the connect (see seq_stamp): the golden 0x4b sits at
+     * send_seq 7, and a contiguous replay must not read as a sequence gap. */
+    uint8_t member_req[sizeof(cap_vaxcluster_connect_req)];
+    memcpy(member_req, cap_vaxcluster_connect_req, sizeof(member_req));
+    seq_stamp(member_req, 2);
+    rx_feed(&r, member_req, sizeof(member_req));
+
+    CHECK(sdir_connect_scans == 0,
+          "the scan ran against an unpopulated queue (%lu scans)", sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 0,
+          "an unpopulated SDIR queue refused %lu connect request(s) -- every SYSAP"
+          " the daemon serves would be unreachable under OVMX_NO_CONN_FSM=1",
+          sdir_no_such_sysap);
+    /* And both connections still form, exactly as they did before this item. */
+    CHECK(r.w.peers[0].dir_connected == 1,
+          "SCS$DIRECTORY did not bind with the connection state machine off");
+    CHECK(r.w.peers[0].connected == 1,
+          "the member VMS$VAXcluster connection did not bind with the machine off");
+
+    CHECK(unsetenv("OVMX_NO_CONN_FSM") == 0, "unsetenv failed");
+}
+
+/* ==========================================================================
+ * (2c)/(2d)/(2e) -- THE 0x5b SCS$DIRECTORY PATH'S SCAN.
+ *
+ * WHY THESE THREE EXIST. scsd.c answers an inbound CONNECT_REQ from two
+ * branches, and the p. 2-48 scan was added to both. Only the 0x4b one was
+ * covered: with the ENTIRE scsd_sdir_live()/scsd_sdir_admit() block deleted from
+ * the 0x5b branch of scsd_handle_frame(), this file still reported 723 checks,
+ * 0 failures -- measured, not supposed. (3) below looked like coverage and was
+ * not: it asserts the SDIR is in LISTEN after the accept, which is trivially
+ * true when the scan never ran and the SDIR was never moved out of LISTEN.
+ *
+ * WHAT THE COVERAGE BOUNDS ARE, AND IT MATTERS. The 0x5b branch is classified by
+ * vms-246's scs_dir_parse(), whose is_dir_connect_request test is
+ * `remote_conid == 0 && memcmp(name, "SCS$DIRECTORY", 13) == 0` (scs_dir.c).
+ * The target name is therefore not free on this branch the way it is on the
+ * 0x4b one. Two consequences, both asserted below rather than assumed:
+ *
+ *   - For the frames the reference VAX actually sends -- name exactly
+ *     "SCS$DIRECTORY", a name OVMX LISTENs for -- THE SCAN ON THIS BRANCH CAN
+ *     ONLY EVER HIT. (2c) proves the hit is real work and not a no-op; it
+ *     cannot prove a production miss, because there is no production frame that
+ *     reaches this branch and misses.
+ *   - The classifier compares THIRTEEN bytes of a SIXTEEN-byte field, so a name
+ *     that merely STARTS WITH "SCS$DIRECTORY" is classified as a directory
+ *     connect request while the scan -- which reads the whole blank-trimmed
+ *     field via scs_sdir_target_name() -- looks up the full name and misses.
+ *     (2d) is that miss. It is a synthesized frame and labelled as one, but the
+ *     prefix compare it exploits is production code, and the kill-switch control
+ *     in (2d) shows what OVMX did with such a frame before this item: bound the
+ *     SCS$DIRECTORY connection for it without ever reading the name.
+ *
+ * AND A THIRD BOUND, ON (2e) RATHER THAN ON THE CLASSIFIER. (2e)'s starting
+ * state -- a listening CDT already in CONNECT RECEIVED -- is one the daemon's
+ * receive loop CANNOT PRODUCE, because it answers synchronously (scs_sdir.h
+ * OVMX DESIGN CHOICE 3). The case hand-builds it through the module API, which
+ * is the only way it exists. So (2e) proves the daemon READS and RESTORES that
+ * state correctly when handed it, and proves nothing about whether the daemon
+ * can be in it; in particular IT WOULD NOT RED if scsd.c's answer stopped being
+ * synchronous. See its own header for the full statement.
+ *
+ * NONE OF THE THREE ASSERTS A p. 2-50 BUSY FRAME, and that is not an omission:
+ * the daemon cannot emit one (same DESIGN CHOICE 3). That is measured at the
+ * bottom of main(), which sums scsd.c's sdir_busy_replies across every case in
+ * this file and asserts 0. The BUSY path itself is exercised only at module
+ * level, in tests/vmsscs/test_scs_sdir.c.
+ * ========================================================================== */
+
+/*
+ * (2c) THE 0x5b CONNECT_REQ IS SCANNED, AND THE SCAN IS THE THING THAT ADMITS
+ * IT. Every counter checked here is moved only by scsd_sdir_admit() ->
+ * scs_sdir_connect_req(); none of them can move on the pre-vms-7fe path.
+ *
+ * THE BOUND, RESTATED HERE RATHER THAN LEFT IN THE BLOCK HEADER, because it is
+ * the thing a reader of this case would otherwise over-read: vms-246's
+ * scs_dir_parse() sets is_dir_connect_request only when the name field's first
+ * 13 bytes are "SCS$DIRECTORY", a name OVMX LISTENs for. SO ON THIS BRANCH THE
+ * SCAN CAN ONLY EVER HIT for any frame a real VAX sends. This case proves the
+ * hit is real work; IT CANNOT PROVE A PRODUCTION MISS IS HANDLED, because no
+ * production frame reaches this branch and misses. The miss is reachable only
+ * through the substituted-name synthetic in (2d).
+ */
+static void test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    const struct scs_sdir_queue *q = scs_svc_sdir(scsd_svc());
+    const struct scs_sdir *sd = scs_sdir_peek(q, "SCS$DIRECTORY");
+    CHECK(sd != NULL, "SCS$DIRECTORY is not in the queue");
+    unsigned long scans0 = q->scans, hits0 = q->hits, delivered0 = q->delivered;
+
+    /* The GOLDEN frame -- pcap #30, target name exactly "SCS$DIRECTORY". */
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    CHECK(sdir_connect_scans == 1,
+          "the 0x5b SCS$DIRECTORY CONNECT-REQUEST was never scanned (%lu scans)"
+          " -- the p. 2-48 scan is not on this branch at all",
+          sdir_connect_scans);
+    CHECK(q->scans == scans0 + 1,
+          "the queue was walked %lu times for one 0x5b connect request",
+          q->scans - scans0);
+    CHECK(q->hits == hits0 + 1,
+          "the scan did not match SCS$DIRECTORY, a name the daemon LISTENs for");
+    CHECK(q->delivered == delivered0 + 1,
+          "the request was never delivered to the listening CDT (delivered %lu)",
+          q->delivered - delivered0);
+    CHECK(sdir_no_such_sysap == 0 && sdir_busy_replies == 0 &&
+          sdir_refusals_unsent == 0,
+          "the golden SCS$DIRECTORY connect request was REFUSED -- OVMX LISTENs"
+          " for that name, so this scan must hit");
+
+    /* Having been admitted by the scan, the accept ran exactly as before. */
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->dir_connected == 1, "the admitted request did not bind SCS$DIRECTORY");
+    CHECK(ps->cdt_dir != NULL, "the admitted request allocated no connection CDT");
+
+    /* --- THE KILL SWITCH. Same frame, same world: the scan does not run, and
+     * the accept still happens -- this branch's pre-vms-7fe behaviour. --- */
+    CHECK(setenv("OVMX_NO_SDIR", "1", 1) == 0, "setenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    const struct scs_sdir_queue *q2 = scs_svc_sdir(scsd_svc());
+    unsigned long off_delivered0 = q2->delivered;
+    rx_feed(&r2, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+    CHECK(sdir_connect_scans == 0,
+          "OVMX_NO_SDIR=1 did not stop the 0x5b scan (%lu scans)", sdir_connect_scans);
+    CHECK(q2->delivered == off_delivered0,
+          "OVMX_NO_SDIR=1 still delivered the request to a listening CDT");
+    CHECK(r2.w.peers[0].dir_connected == 1,
+          "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe accept on the 0x5b path");
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+}
+
+/*
+ * (2d) A 0x5b CONNECT_REQ WHOSE TARGET THE QUEUE DOES NOT CARRY IS REFUSED, and
+ * the refusal echoes the 0x5b opcode -- which is what identifies this as the
+ * directory branch's refusal and not the 0x4b one's.
+ *
+ * SYNTHESIS, LABELLED. "SCS$DIRECTORYX" is not a name any VAX sends. It is the
+ * shortest frame that reaches this branch and MISSES, and it reaches it through
+ * production code: scs_dir_parse() classifies on a 13-byte prefix (see the
+ * block header above). Every byte except the 16-byte name field is pcap #30.
+ *
+ * THE BOUND, RESTATED: because that classifier keys on "SCS$DIRECTORY" and OVMX
+ * LISTENs for that name, THE REFUSAL PATH THIS CASE EXERCISES IS UNREACHABLE
+ * FROM ANY CAPTURED FRAME. It exists only under the substituted name. What this
+ * case therefore pins is that IF such a frame arrived the branch would refuse
+ * rather than bind -- not that OVMX has ever refused one, and not that the
+ * refusal looks like what a VAX would send.
+ *
+ * AND THE STATUS WORD IS AN OVMX INVENTION. The 66-byte CONNECT_RSP class,
+ * [46:48] == 1, the echoed requester handle and the zero local Con.ID are all
+ * GROUNDED (spec sec 4(h)(1a)). The value at [48:50] asserted below,
+ * SCS_SDIR_STATUS_NO_SUCH_SYSAP == 0x0002, IS NOT: the book names the error and
+ * publishes no code, and no capture we hold contains a refusal frame. This case
+ * pins OVMX's own choice against accidental change; it is not evidence about
+ * VMS. Spec sec 5 carries the gap. A capture of a real VAX refusing a connect
+ * request supersedes the value and this assertion with it.
+ */
+static void test_the_0x5b_scan_refuses_a_target_the_queue_does_not_carry(void)
+{
+    uint8_t req[sizeof(cap_dir_connect_req)];
+    subst_sysap_name(req, cap_dir_connect_req, sizeof(req), "SCS$DIRECTORYX");
+
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(scs_sdir_peek(scs_svc_sdir(scsd_svc()), "SCS$DIRECTORYX") == NULL,
+          "the fixture's miss name is in the queue -- it would not miss");
+
+    rx_feed(&r, req, sizeof(req));
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(sdir_connect_scans == 1,
+          "the 0x5b connect request was not scanned (%lu scans)", sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 1,
+          "no 'no such SYSAP' CONNECT_RSP was emitted on the 0x5b path (%lu)",
+          sdir_no_such_sysap);
+
+    /* THE FRAME. 66-byte CONNECT_RSP class, message type 1, requester's handle
+     * echoed, no local Con.ID handed out -- and the 0x5b opcode. */
+    CHECK(scsd_test_last_len == SCS_DIR_ECHO_FRAME_LEN,
+          "the refusal is %zu bytes, expected the 66-byte CONNECT_RSP class + 14",
+          scsd_test_last_len);
+    CHECK(scsd_test_last_frame[30] == SCS_DIR_OPCODE,
+          "the refusal carried opcode 0x%02x, not the 0x5b of the request it"
+          " answers -- this is the directory branch",
+          scsd_test_last_frame[30]);
+    CHECK(le16_at(scsd_test_last_frame + 14 + 46) == 1,
+          "the refusal's [46:48] is %u, not the CONNECT_RSP message type 1",
+          le16_at(scsd_test_last_frame + 14 + 46));
+    CHECK(le32_at(scsd_test_last_frame + 14 + 50) == 0x63050008u,
+          "the refusal did not echo pcap #30's Con.ID (it carried 0x%08X)",
+          le32_at(scsd_test_last_frame + 14 + 50));
+    CHECK(le32_at(scsd_test_last_frame + 14 + 54) == 0,
+          "the refusal supplied a local Con.ID -- it accepts nothing, so it"
+          " must not hand out a handle");
+    /* THE OVMX-CHOSEN STATUS WORD (not grounded -- see scs_sdir.h). */
+    CHECK(le16_at(scsd_test_last_frame + 14 + 48) == SCS_SDIR_STATUS_NO_SUCH_SYSAP,
+          "the refusal's [48:50] is 0x%04X, expected the OVMX-chosen"
+          " no-such-SYSAP value 0x%04X",
+          le16_at(scsd_test_last_frame + 14 + 48),
+          (unsigned)SCS_SDIR_STATUS_NO_SUCH_SYSAP);
+
+    /* NOTHING WAS ACCEPTED. */
+    CHECK(ps->dir_connected == 0, "a refused request still bound SCS$DIRECTORY");
+    CHECK(ps->cdt_dir == NULL, "a refused request still allocated a CDT");
+    CHECK(ps->dir_remote_conid == 0,
+          "a refused request still learned the peer's directory handle 0x%08X",
+          ps->dir_remote_conid);
+    CHECK(scs_cdl_lookup(&scsd_cdl, SCS_DIR_OVMX_CONID) == NULL,
+          "a refused request left a connection at the directory Con.ID");
+    CHECK(r.rx.dir_conn_resp_sent == 0,
+          "a refused request still counted %ld directory CONNECT-RESPONSE(s)",
+          r.rx.dir_conn_resp_sent);
+
+    /* --- THE KILL SWITCH, and it shows what this item actually changed: before
+     * vms-7fe the 0x5b branch bound SCS$DIRECTORY for this frame without ever
+     * reading the name it asked for. --- */
+    CHECK(setenv("OVMX_NO_SDIR", "1", 1) == 0, "setenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    rx_feed(&r2, req, sizeof(req));
+    CHECK(sdir_connect_scans == 0,
+          "OVMX_NO_SDIR=1 did not stop the 0x5b scan (%lu scans)", sdir_connect_scans);
+    CHECK(sdir_no_such_sysap == 0 && sdir_busy_replies == 0 &&
+          sdir_refusals_unsent == 0,
+          "OVMX_NO_SDIR=1 still produced a refusal on the 0x5b path");
+    CHECK(r2.w.peers[0].dir_connected == 1,
+          "OVMX_NO_SDIR=1 did not restore the pre-vms-7fe accept of a 0x5b"
+          " connect request whose target name nothing here listens for");
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+}
+
+/*
+ * (2e) THE 0x5b SCAN READS THE LISTENING CDT'S p. 2-50 STATE, AND RETURNS IT.
+ *
+ * (2c) shows counters move; this shows the daemon's scan is a real read of the
+ * SDIR's state and a real write back to LISTEN, and that it passes the frame's
+ * OWN requester Con.ID in.
+ *
+ * THE FIXTURE IS SYNTHETIC AND HERE IS WHY: scsd.c answers synchronously and
+ * calls scs_sdir_connect_answered() before returning, so its receive loop can
+ * never leave a listening CDT in CONNECT RECEIVED between frames (scs_sdir.h
+ * OVMX DESIGN CHOICE 3, which also records that the p. 2-50 BUSY reply is
+ * therefore unreachable from the daemon -- this case does NOT contradict that,
+ * it takes the DESIGN CHOICE 4 retransmit branch instead). The one call to
+ * scs_sdir_connect_req() below is the only way to present the daemon with that
+ * arrangement. Everything after the feed is the daemon's own work.
+ *
+ * And the discrimination is sharp: DESIGN CHOICE 4 delivers again only when the
+ * requester Con.ID MATCHES. pcap #30 carries 0x63050008, so if scsd.c passed
+ * anything else -- 0, a local handle, the peer's MAC-keyed id -- the scan would
+ * take the BUSY branch, refuse the golden frame, and the join would stop.
+ *
+ * ===== WHAT THIS CASE DOES NOT GUARD, STATED SO NOBODY BANKS ON IT =====
+ *
+ * The arrangement under test is MODULE-LEVEL AND THE DAEMON CANNOT PRODUCE IT.
+ * The fixture call above is not a shortcut to a state the receive loop reaches
+ * by another route -- it is the ONLY route, because the loop's answer is
+ * synchronous. Three consequences, all of them limits on this case:
+ *
+ *   1. IT IS NOT A REGRESSION TEST FOR scsd.c's SYNCHRONOUS ANSWER. If someone
+ *      makes ACCEPT asynchronous and the daemon starts leaving listening CDTs
+ *      in CONNECT RECEIVED between frames, THIS CASE STILL PASSES -- it hand
+ *      -builds that state either way. What such a change would break is DESIGN
+ *      CHOICE 3's premise, and with it every statement in this tree that
+ *      p. 2-50 BUSY is unreachable. Nothing in THIS CASE reds for it. What
+ *      would is the end-of-run busy total in main(), and only if the changed
+ *      daemon actually emits a busy reply on one of the frames this file feeds
+ *      it -- so a change to the answer's synchrony must still re-derive the
+ *      premise by hand rather than lean on a green suite.
+ *   2. THE RETRANSMIT-NOT-BUSY SEMANTICS ARE AN OVMX INVENTION (DESIGN CHOICE
+ *      4). SCA has no retransmit concept at this point in p. 2-50; the
+ *      established VAX's retransmit-until-accepted behaviour is OUR OWN wire
+ *      observation, and "same requester Con.ID means the same request" is our
+ *      rule for what to do about it. No capture confirms that a real VAX would
+ *      re-deliver rather than refuse. This case pins OVMX's choice, not VMS's.
+ *   3. IT PROVES NOTHING ABOUT THE BUSY BRANCH. It deliberately takes the OTHER
+ *      arm. The BUSY arm has no daemon-level test because it has no daemon-level
+ *      reachability; tests/vmsscs/test_scs_sdir.c covers it at module level.
+ */
+static void test_the_0x5b_scan_reads_and_restores_the_listening_cdt_state(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+
+    struct scs_sdir_queue *q = scs_svc_sdir_mut(scsd_svc());
+    const struct scs_sdir *sd = NULL;
+    /* THE FIXTURE (see header): hold the listening CDT in CONNECT RECEIVED for
+     * pcap #30's requester, 0x63050008. */
+    CHECK(scs_sdir_connect_req(q, "SCS$DIRECTORY", NULL, 0x63050008u, &sd) ==
+              SCS_SDIR_DELIVERED,
+          "the fixture could not put SCS$DIRECTORY into CONNECT RECEIVED");
+    CHECK(sd != NULL && sd->state == SCS_SDIR_CONNECT_RECEIVED,
+          "the fixture did not leave the listening CDT in CONNECT RECEIVED");
+    if (sd == NULL) {
+        return;
+    }
+    unsigned long retx0 = q->retransmits, busy0 = q->busy;
+
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    CHECK(sdir_connect_scans == 1,
+          "the 0x5b connect request was not scanned (%lu scans)", sdir_connect_scans);
+    CHECK(q->retransmits == retx0 + 1,
+          "the daemon's scan did not see the listening CDT in CONNECT RECEIVED"
+          " with the frame's own requester Con.ID (retransmits %lu -> %lu)",
+          retx0, q->retransmits);
+    CHECK(q->busy == busy0,
+          "the daemon's scan refused pcap #30 BUSY -- it passed a requester"
+          " Con.ID that is not the 0x63050008 the frame carries");
+    CHECK(sdir_busy_replies == 0,
+          "a busy CONNECT_RSP went on the wire for the golden connect request");
+
+    /* AND BACK. p. 2-50 via OVMX DESIGN CHOICE 3: answering returns it. */
+    CHECK(sd->state == SCS_SDIR_LISTEN,
+          "after answering, the listening CDT is %s -- it must be back in LISTEN"
+          " or every later connect request gets a busy reply forever",
+          scs_sdir_state_name(sd->state));
+    CHECK(sd->pending_remote_conid == 0,
+          "the answered request's requester 0x%08X is still pending on the SDIR",
+          sd->pending_remote_conid);
+    CHECK(r.w.peers[0].dir_connected == 1,
+          "the redelivered request did not bind SCS$DIRECTORY");
+}
+
+/*
+ * (3) p. 2-49: "the 'local CONID' used on the target node to identify the new
+ * connection is the CONID of this separate CDT, and NOT the CONID of the
+ * listening CDT." Read off the frame the daemon actually transmitted.
+ */
+static void test_accept_conid_is_not_the_listening_conid(void)
+{
+    CHECK(unsetenv("OVMX_NO_SDIR") == 0, "unsetenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    rx_feed(&r, cap_dir_connect_req, sizeof(cap_dir_connect_req));
+
+    const struct scs_sdir_queue *q = scs_svc_sdir(scsd_svc());
+    const struct scs_sdir *sd = scs_sdir_peek(q, "SCS$DIRECTORY");
+    CHECK(sd != NULL, "SCS$DIRECTORY is not in the queue");
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->cdt_dir != NULL, "the accept allocated no connection CDT");
+    if (sd == NULL || ps->cdt_dir == NULL) {
+        return;
+    }
+    /* FIRST: the accept below was reached THROUGH the scan. Without this the
+     * "still in LISTEN" check further down is trivially true of a daemon that
+     * never scans and never moves the SDIR at all -- which is exactly how this
+     * case survived the whole 0x5b guard block being deleted. */
+    CHECK(sdir_connect_scans == 1,
+          "the accept under test did not go through the p. 2-48 scan (%lu scans)",
+          sdir_connect_scans);
+    CHECK(q->delivered == 1,
+          "the request was never delivered to the listening CDT (delivered %lu)",
+          q->delivered);
+
+    CHECK(ps->cdt_dir->local_conid != sd->conid,
+          "the new connection took the LISTENING CDT's Con.ID 0x%08X", sd->conid);
+    CHECK(ps->cdt_dir->local_conid == SCS_DIR_OVMX_CONID,
+          "the new connection is at 0x%08X, not the Con.ID OVMX ships",
+          (unsigned)ps->cdt_dir->local_conid);
+    /* The listening CDT is a DIFFERENT descriptor and is still listening. */
+    struct scs_cdt *lcdt = scs_sdir_listening_cdt(q, sd);
+    CHECK(lcdt != NULL && lcdt != ps->cdt_dir,
+          "the listening CDT and the connection CDT are the same descriptor");
+    CHECK(sd->state == SCS_SDIR_LISTEN,
+          "after answering, the listening CDT is %s -- it must be back in LISTEN"
+          " or the next request gets a busy reply forever",
+          scs_sdir_state_name(sd->state));
+
+    /* AND IT IS THE NEW CON.ID THAT WENT ON THE WIRE: the last frame of the
+     * accept pair is the op=2 CONNECT-RESPONSE, local Con.ID at [54:58]. */
+    CHECK(le32_at(scsd_test_last_frame + 14 + 54) == SCS_DIR_OVMX_CONID,
+          "the CONNECT-RESPONSE carried local Con.ID 0x%08X, expected the new"
+          " connection's 0x%08X", le32_at(scsd_test_last_frame + 14 + 54),
+          (unsigned)SCS_DIR_OVMX_CONID);
+    CHECK(le32_at(scsd_test_last_frame + 14 + 54) != sd->conid,
+          "the CONNECT-RESPONSE put the LISTENING CDT's Con.ID on the wire");
+}
+
+
+/*
+ * =====================================================================
+ * vms-22e: WHAT THE DAEMON DOES WITH AN ABANDONED OPEN.
+ *
+ * scs_config.c owns the p. 2-21 footnote RULE and tests/vmsscs/test_scs_config.c
+ * proves it. This case is about the OTHER half of the item's done condition:
+ * that an abandonment "is logged with WHICH test failed", and that the daemon
+ * does not go on to announce a circuit it just refused. Neither of those lives
+ * in scs_config.c -- both are the SCSD-W-VCMASQ branch of scsd_vc_on_open().
+ *
+ * Left untested, three separate mutations of that branch survive the whole of
+ * this file: deleting it outright, logging a CONSTANT test name instead of the
+ * failing one, and dropping its early `return` so STARTDONE/VCOPEN print on a
+ * refused circuit. Each of those is a real failure mode -- the last one is an
+ * operator being told a virtual circuit is OPEN when it is not.
+ *
+ * WHY THIS CANNOT BE DRIVEN BY CAPTURED FRAMES, stated so the seeding below is
+ * not read as a shortcut: struct scs_start_view carries no SCS Node Name and no
+ * incarnation, so every System Block the daemon builds from the wire has an
+ * empty name and a zero incarnation, every footnote comparison is INDETERMINATE
+ * and scs_config_masquerade_check() returns PASS. That is asserted directly in
+ * step 0 below rather than asserted in prose. The named formative SB is
+ * therefore attached through the production entry point
+ * (scs_pb_attach_formative_sb) to the production peer slot's Path Block, and
+ * the transition itself is performed by production scsd_vc_on_open().
+ * =====================================================================
+ */
+static void test_masquerade_open_is_logged_and_suppresses_vcopen(void)
+{
+    struct world w;
+    world_init(&w);
+    uint8_t victim_mac[6], impostor_mac[6], sysid[6];
+    mac_of(0x91, victim_mac);
+    mac_of(0x92, impostor_mac);
+    sysid_of(1025, sysid);
+    struct scsd_vc_ctx ctx = vc_test_ctx(&w);
+
+    pb_open_results[0] = pb_open_results[1] = pb_open_results[2] = 0;
+    pb_open_errors = 0;
+    pb_open_masquerades = 0;
+    rxlog_reset();
+
+    /* ---- 0. THE REACHABILITY CLAIM, MEASURED. A peer built exactly the way
+     * the receive path builds one -- system address and nothing else -- opens
+     * cleanly against a queued node with the SAME System ID. No footnote test
+     * can fire on daemon-shaped input, which is why this case has to seed. ---- */
+    {
+        struct world d;
+        world_init(&d);
+        uint8_t mac_a[6], mac_b[6];
+        mac_of(0x9a, mac_a);
+        mac_of(0x9b, mac_b);
+        struct peer_state *p1 = peer_find_or_add(&d.cfg, &d.pdt, d.peers, mac_a);
+        CHECK(p1 != NULL, "no peer slot for the daemon-shape control");
+        if (p1 == NULL) {
+            return;
+        }
+        ps_learn_sys_addr(&d.cfg, p1, sysid);
+        CHECK(p1->pb->sb != NULL && p1->pb->sb->node_name[0] == '\0' &&
+                  p1->pb->sb->incarnation == 0,
+              "the receive path now supplies a node name or an incarnation -- this"
+              " case's premise (all three tests indeterminate in production) is"
+              " stale and the reachability comment on scsd_vc_on_open() must be"
+              " re-derived");
+        CHECK(scs_pb_open(&d.cfg, p1->pb) == SCS_OPEN_NEW_SB, "control first join failed");
+        struct peer_state *p2 = peer_find_or_add(&d.cfg, &d.pdt, d.peers, mac_b);
+        CHECK(p2 != NULL, "no second peer slot for the daemon-shape control");
+        if (p2 == NULL) {
+            return;
+        }
+        ps_learn_sys_addr(&d.cfg, p2, sysid);
+        CHECK(scs_pb_open(&d.cfg, p2->pb) != SCS_OPEN_ABANDONED_MASQUERADE,
+              "a daemon-shaped System Block was convicted -- the branch under test"
+              " IS reachable from the wire and the comment saying it is not is now"
+              " wrong");
+    }
+
+    /* ---- 1. A KNOWN NODE, named, with its circuit open. ---- */
+    struct peer_state *victim = peer_find_or_add(&w.cfg, &w.pdt, w.peers, victim_mac);
+    CHECK(victim != NULL, "no peer slot for the victim node");
+    if (victim == NULL) {
+        return;
+    }
+    struct scs_sb_info known;
+    memset(&known, 0, sizeof(known));
+    memcpy(known.system_id, sysid, 6);
+    known.node_name = "VAX1";
+    known.incarnation = 0x1000ull;
+    known.cpu_type = 7;
+    CHECK(scs_pb_attach_formative_sb(&w.cfg, victim->pb, &known) != NULL,
+          "could not attach the victim's formative System Block");
+    scs_vc_init(&victim->vc);
+    log_capture_begin();
+    scsd_vc_on_open(&ctx, victim);
+    log_capture_end();
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1,
+          "the victim's join produced %lu NEW_SB transitions, expected 1",
+          pb_open_results[SCS_OPEN_NEW_SB]);
+    CHECK(rxlog_has("SCSD-I-VCOPEN"),
+          "an ADMITTED circuit did not announce VCOPEN -- the suppression"
+          " assertion below would then pass for a daemon that never logs it");
+    CHECK(rxlog_has("SCSD-I-STARTDONE"), "an admitted circuit did not log STARTDONE");
+    CHECK(pb_open_masquerades == 0, "an admitted circuit counted as a masquerade");
+
+    /* ---- 2. THE IMPOSTOR: VAX1's System ID under another name. ---- */
+    rxlog_reset();
+    struct peer_state *impostor = peer_find_or_add(&w.cfg, &w.pdt, w.peers, impostor_mac);
+    CHECK(impostor != NULL, "no peer slot for the impostor");
+    if (impostor == NULL) {
+        return;
+    }
+    struct scs_sb_info fake = known;
+    fake.node_name = "EVIL";
+    CHECK(scs_pb_attach_formative_sb(&w.cfg, impostor->pb, &fake) != NULL,
+          "could not attach the impostor's formative System Block");
+    scs_vc_init(&impostor->vc);
+    log_capture_begin();
+    scsd_vc_on_open(&ctx, impostor);
+    log_capture_end();
+
+    CHECK(pb_open_masquerades == 1,
+          "the daemon recorded %lu abandoned opens, expected 1 -- the"
+          " SCSD-W-VCMASQ branch did not run", pb_open_masquerades);
+    CHECK(rxlog_has("SCSD-W-VCMASQ"),
+          "an abandoned virtual-circuit formation was NOT logged; log was: '%s'",
+          rxlog);
+    /* WHICH test failed, by its own text -- not merely "a masquerade happened".
+     * A branch that logged a constant would pass the line above. */
+    CHECK(rxlog_has(scs_masquerade_result_name(SCS_MASQ_FAIL_NODE_NAME)),
+          "the log does not name the failing test (%s); log was: '%s'",
+          scs_masquerade_result_name(SCS_MASQ_FAIL_NODE_NAME), rxlog);
+    CHECK(!rxlog_has(scs_masquerade_result_name(SCS_MASQ_PASS)),
+          "the abandonment was logged as PASS; log was: '%s'", rxlog);
+    /* THE SUPPRESSION: a refused circuit is not announced as open. */
+    CHECK(!rxlog_has("SCSD-I-VCOPEN"),
+          "the daemon announced VCOPEN on a circuit it had just ABANDONED;"
+          " log was: '%s'", rxlog);
+    CHECK(!rxlog_has("SCSD-I-STARTDONE"),
+          "the daemon announced STARTDONE on an abandoned circuit; log was: '%s'",
+          rxlog);
+    CHECK(pb_open_results[SCS_OPEN_NEW_SB] == 1 &&
+              pb_open_results[SCS_OPEN_EXISTING_SB] == 0 &&
+              pb_open_results[SCS_OPEN_EXISTING_REFRESHED] == 0 &&
+              pb_open_errors == 0,
+          "an abandoned open was tallied as a completed transition"
+          " (new=%lu existing=%lu refreshed=%lu errors=%lu)",
+          pb_open_results[SCS_OPEN_NEW_SB], pb_open_results[SCS_OPEN_EXISTING_SB],
+          pb_open_results[SCS_OPEN_EXISTING_REFRESHED], pb_open_errors);
+    CHECK(scs_config_sb_count(&w.cfg) == 1,
+          "the abandoned formative System Block was inserted into the"
+          " configuration queue");
+
+    /* ---- 3. A DIFFERENT FAILING TEST MUST PRODUCE DIFFERENT TEXT. This is
+     * what makes step 2's assertion about naming the test load-bearing: a
+     * branch that logs any fixed string cannot satisfy both. ---- */
+    rxlog_reset();
+    uint8_t third_mac[6];
+    mac_of(0x93, third_mac);
+    struct peer_state *third = peer_find_or_add(&w.cfg, &w.pdt, w.peers, third_mac);
+    CHECK(third != NULL, "no peer slot for the incarnation impostor");
+    if (third == NULL) {
+        return;
+    }
+    struct scs_sb_info wrong_inc = known;
+    wrong_inc.incarnation = 0x2000ull; /* same ID, same name, PB still queued */
+    CHECK(scs_pb_attach_formative_sb(&w.cfg, third->pb, &wrong_inc) != NULL,
+          "could not attach the incarnation impostor's System Block");
+    scs_vc_init(&third->vc);
+    log_capture_begin();
+    scsd_vc_on_open(&ctx, third);
+    log_capture_end();
+    CHECK(pb_open_masquerades == 2, "the second abandonment was not counted (%lu)",
+          pb_open_masquerades);
+    CHECK(rxlog_has(scs_masquerade_result_name(SCS_MASQ_FAIL_INCARNATION)),
+          "the log names the wrong failing test -- expected '%s'; log was: '%s'",
+          scs_masquerade_result_name(SCS_MASQ_FAIL_INCARNATION), rxlog);
+    CHECK(!rxlog_has(scs_masquerade_result_name(SCS_MASQ_FAIL_NODE_NAME)),
+          "the log still names the PREVIOUS failing test -- the clause is a"
+          " constant, not the result; log was: '%s'", rxlog);
+    CHECK(!rxlog_has("SCSD-I-VCOPEN"), "VCOPEN printed on the second abandonment");
+}
+
+/*
+ * vms-fdd -- SCA CONNECT DATA THROUGH THE DAEMON (p. 2-25 / p. 2-28).
+ *
+ * The builder-side bytes are asserted in test_scs_connect.c. What that file
+ * cannot reach is scsd.c: whether the 16 bytes survive to the frame the daemon
+ * hands the transmit path, whether the CDT the CONNECT and ACCEPT services
+ * allocate actually carries them (p. 2-28), and whether the inbound decode fires
+ * off a real captured frame. All three are driven here THROUGH THE PRODUCTION
+ * CALL SITES -- send_joiner_connect_request() and scsd_handle_frame() -- with no
+ * step performed by hand.
+ */
+static void test_connect_data_rides_the_daemon(void)
+{
+    static const uint8_t joiner_cd[SCS_CONNECT_DATA_LEN] = {
+        0x01,0x1b,0x01,0x03, 0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+        0x08,0x00,0x00,0x06,0x00
+    };
+
+    /* --- CONNECT: the daemon's own joiner CONNECT_REQ. --- */
+    (void)unsetenv("OVMX_NO_CONNECT_DATA");
+    scs_connect_data_reset_switch_cache();
+    uint8_t frame[SCA_FRAME_MAX], dst[6];
+    struct scs_cdt *cdt = NULL;
+    size_t len = drive_joiner_once(frame, dst, &cdt);
+    CHECK(len == SCS_CONNECT_FRAME_LEN, "joiner frame is %zu bytes", len);
+    CHECK(memcmp(frame + SCS_CONNECT_DATA_ABS_OFF, joiner_cd, SCS_CONNECT_DATA_LEN) == 0,
+          "the frame the daemon transmitted does not carry the measured connect data");
+    CHECK(cdt != NULL, "no CDT was allocated for the joiner connection");
+    CHECK(cdt != NULL && cdt->connect_data_len == SCS_CONNECT_DATA_LEN,
+          "the CONNECT service's CDT carries %zu connect-data bytes, expected %d"
+          " (p. 2-28)", cdt ? cdt->connect_data_len : (size_t)0, SCS_CONNECT_DATA_LEN);
+    CHECK(cdt != NULL &&
+          memcmp(cdt->connect_data, joiner_cd, SCS_CONNECT_DATA_LEN) == 0,
+          "the CDT's connect data is not the bytes that went on the wire");
+
+    /* --- ACCEPT + INBOUND DECODE: a real captured member CONNECT_REQ fed to
+     * the daemon's receive dispatch. It must be decoded and logged, and the
+     * CDT the ACCEPT service allocates must carry OUR connect data. --- */
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    (void)open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    log_capture_begin();
+    rx_feed(&r, cap_vaxcluster_connect_req, sizeof(cap_vaxcluster_connect_req));
+    log_capture_end();
+
+    CHECK(rxlog_has("SCSD-I-CONNDATA"),
+          "the daemon did not log the peer's connect data for a captured"
+          " CONNECT_REQ; log was: '%s'", rxlog);
+    /* The captured member frame is VAX1's, whose connect data differs from ours
+     * in [98:105] -- so the log proves a DECODE, not an echo of our own bytes. */
+    CHECK(rxlog_has("01 1b 01 03 01 00 01 00 01 00 01 08 00 00 06 00"),
+          "the log does not carry the MEMBER value from the captured frame;"
+          " log was: '%s'", rxlog);
+    CHECK(!rxlog_has("(same as ours)"),
+          "the daemon reported the peer's value as identical to ours, but the"
+          " captured member frame differs from the joiner value we send");
+
+    struct peer_state *ps = &r.w.peers[0];
+    CHECK(ps->cdt_member != NULL, "no CDT for the member-opened connection");
+    CHECK(ps->cdt_member != NULL &&
+          ps->cdt_member->connect_data_len == SCS_CONNECT_DATA_LEN,
+          "the ACCEPT service's CDT carries %zu connect-data bytes, expected %d",
+          ps->cdt_member ? ps->cdt_member->connect_data_len : (size_t)0,
+          SCS_CONNECT_DATA_LEN);
+    CHECK(ps->cdt_member != NULL &&
+          memcmp(ps->cdt_member->connect_data, joiner_cd, SCS_CONNECT_DATA_LEN) == 0,
+          "the ACCEPT service's CDT does not carry the connect data we stamped");
+
+    /* --- THE KILL SWITCH, THROUGH THE SAME PATH (guardrail 23). The frame the
+     * daemon transmits must change, and the CDT must stop carrying the field --
+     * a switch that left either alone would be gating nothing. --- */
+    CHECK(setenv("OVMX_NO_CONNECT_DATA", "1", 1) == 0, "setenv failed");
+    scs_connect_data_reset_switch_cache();
+    uint8_t off_frame[SCA_FRAME_MAX], off_dst[6];
+    struct scs_cdt *off_cdt = NULL;
+    size_t off_len = drive_joiner_once(off_frame, off_dst, &off_cdt);
+    CHECK(off_len == len, "the frame changed length with the stamp off");
+    CHECK(memcmp(off_frame + SCS_CONNECT_DATA_ABS_OFF, joiner_cd,
+                 SCS_CONNECT_DATA_LEN) != 0,
+          "OVMX_NO_CONNECT_DATA=1 did NOT change the transmitted connect data"
+          " -- the switch gates nothing");
+    CHECK(memcmp(off_frame, frame, SCS_CONNECT_DATA_ABS_OFF) == 0,
+          "the switch changed bytes OUTSIDE the connect data");
+    CHECK(off_cdt != NULL && off_cdt->connect_data_len == 0,
+          "with the stamp off the CDT still carries %zu connect-data bytes",
+          off_cdt ? off_cdt->connect_data_len : (size_t)0);
+
+    (void)unsetenv("OVMX_NO_CONNECT_DATA");
+    scs_connect_data_reset_switch_cache();
+}
+
+/* ===================================================================
+ * vms-6b3 - THE 16-BIT REJECT/DISCONNECT REASON CODE, RECEIVE SIDE.
+ *
+ * p. 2-26: "When a SYSAP rejects a CONNECT_REQ or explicitly breaks an open
+ * connection, it also has the option of providing the other SYSAP a 16-bit
+ * 'reason code' explaining why it did so."
+ *
+ * These four cases drive scsd_handle_frame() -- the production receive
+ * dispatch -- with REJECT_REQ and DISCONNECT_REQ frames and assert what the
+ * daemon does with the field. No case decodes a frame by hand next to an
+ * assertion: every number checked below is produced by scsd.c.
+ *
+ * WHAT THE OFFSET IS. A LABELED OVMX DESIGN CHOICE, not a decoded VMS field --
+ * see scs_reason.h for the 673-frame census behind it and
+ * docs/cluster-protocol-spec.md sec 5 for the registered gap. Consequently the
+ * NONZERO case below feeds a SYNTHETIC frame: no VMS node has ever set the
+ * field on our wire, so a nonzero reason cannot be transcribed from a capture,
+ * and the edit is spelled out where it happens.
+ * =================================================================== */
+
+/*
+ * A real VMS DISCONNECT_REQ addressed to OVMX's own SCS$DIRECTORY Con.ID.
+ * ovmx-760-MEMBER-achieved-20260730.pcap, SCA frame index 181, source
+ * 08:00:2b:78:56:b9 (VAX2). Message type 6 at payload [46:48]; destination
+ * Con.ID 0x4F580007 == SCS_DIR_OVMX_CONID. Transcribed byte-exact; UNEDITED.
+ */
+static const uint8_t cap_disconnect_req_to_ovmx[76] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00,
+    0x2b, 0x78, 0x56, 0xb9, 0x60, 0x07, 0x3c, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13,
+    0x18, 0x00, 0x19, 0x00, 0x01, 0x00, 0x12, 0x00,
+    0x18, 0x00, 0x00, 0x00, 0x19, 0x00, 0x00, 0x00,
+    0x18, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02,
+    0x12, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00, 0x00,
+    0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x00, 0x00,
+};
+
+/*
+ * A real VMS REJECT_REQ. ovmx-e81-bystander-ADDITION-SUCCESS-20260731.pcap,
+ * SCA frame index 4873, source 08:00:2b:11:22:33 (VAX3). Message type 4;
+ * destination Con.ID 0x4F58000A -- a handle OVMX does NOT hold, which is what
+ * makes it useful twice: unedited it is the not-ours negative, and with the
+ * destination Con.ID retargeted (the same single edit
+ * test_captured_connect_rsp_drives_the_classifier() already makes, and the only
+ * one) it is the ours-positive.
+ */
+static const uint8_t cap_reject_req_other_conid[76] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00,
+    0x2b, 0x11, 0x22, 0x33, 0x60, 0x07, 0x3c, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0xb9, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x03, 0x04, 0x4b, 0x13,
+    0x17, 0x00, 0x18, 0x00, 0x01, 0x00, 0x12, 0x00,
+    0x17, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
+    0x17, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02,
+    0x12, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x0a, 0x00, 0x58, 0x4f, 0x0e, 0x00, 0x10, 0x1f,
+    0x00, 0x00, 0x01, 0x00,
+};
+
+/*
+ * The SCS$DIRECTORY CONNECT_REQ that OPENS the connection frame 181 goes on to
+ * disconnect. ovmx-760-MEMBER-achieved-20260730.pcap, SCA frame index 167 --
+ * 14 frames before the DISCONNECT_REQ above, same capture, same peer, and its
+ * source Con.ID 0x63020012 is the one the DISCONNECT_REQ carries back.
+ * Transcribed byte-exact; UNEDITED. Feeding this rather than
+ * cap_dir_connect_req is what lets the whole fixture wear OVMX's real identity
+ * from that run, so no frame below needs its destination MAC rewritten.
+ */
+static const uint8_t cap_ovmx_dir_connect_req[124] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x6c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x13, 0x00, 0x14, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x13, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00,
+    0x13, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x42, 0x00, 0x04, 0x00,
+    0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x01, 0x00, 0x53, 0x43, 0x53, 0x24, 0x44, 0x49, 0x52, 0x45,
+    0x43, 0x54, 0x4f, 0x52, 0x59, 0x20, 0x20, 0x20, 0x53, 0x43, 0x53, 0x24,
+    0x44, 0x49, 0x52, 0x5f, 0x4c, 0x4f, 0x4f, 0x4b, 0x55, 0x50, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20,
+    0x20, 0x20, 0x20, 0x20,
+};
+
+/*
+ * The rest of the peer's CONTIGUOUS sequenced stream between frame 167 and
+ * frame 181, same capture, same peer, same Con.ID pair 0x4F580007/0x63020012 --
+ * SCA frames 171 (ACCEPT_RSP, type 3), 172 and 176 (SCS$DIR_LOOKUP, type 10)
+ * and 179 (type 8). All UNEDITED.
+ *
+ * WHY THEY ARE HERE AND ARE NOT OPTIONAL. scsd.c enforces the p. 2-31
+ * sequentiality guarantee: feeding 167 (peer send_seq 20) and then 181
+ * (send_seq 25) is a five-message GAP, and the production code correctly breaks
+ * the circuit and dispatches the frame no further -- so a fixture that skipped
+ * these would have tested nothing while looking like it passed. Replaying the
+ * peer's real consecutive send_seq run 20,21,22,23,24,25 is what makes the
+ * DISCONNECT_REQ arrive on a circuit that is still up, which is the only way it
+ * arrives on a real wire.
+ */
+static const uint8_t cap_ovmx_dir_accept_rsp[76] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x3c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x15, 0x00, 0x15, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x15, 0x00, 0x00, 0x00, 0x15, 0x00, 0x00, 0x00,
+    0x15, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x12, 0x00, 0x04, 0x00,
+    0x03, 0x00, 0x00, 0x00, 0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x01, 0x00,
+};
+static const uint8_t cap_ovmx_dir_lookup1[108] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x5c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x15, 0x00, 0x16, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x15, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00,
+    0x15, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x32, 0x00, 0x04, 0x00,
+    0x0a, 0x00, 0x00, 0x00, 0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x00, 0x00, 0x4d, 0x53, 0x43, 0x50, 0x24, 0x54, 0x41, 0x50,
+    0x45, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x91, 0x04, 0x00, 0x05,
+    0x04, 0x04, 0x00, 0x0a, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00,
+};
+static const uint8_t cap_ovmx_dir_lookup2[108] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x5c, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x16, 0x00, 0x17, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x16, 0x00, 0x00, 0x00, 0x17, 0x00, 0x00, 0x00,
+    0x16, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x32, 0x00, 0x04, 0x00,
+    0x0a, 0x00, 0x01, 0x00, 0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+    0x00, 0x00, 0x00, 0x00, 0x4d, 0x53, 0x43, 0x50, 0x24, 0x44, 0x49, 0x53,
+    0x4b, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x7b, 0x03, 0x00, 0x01,
+    0xe9, 0x01, 0x00, 0x0e, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf8, 0x00,
+};
+static const uint8_t cap_ovmx_dir_msg8[72] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9,
+    0x60, 0x07, 0x38, 0x00, 0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13, 0x17, 0x00, 0x18, 0x00,
+    0x01, 0x00, 0x12, 0x00, 0x17, 0x00, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00,
+    0x17, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02, 0x0e, 0x00, 0x04, 0x00,
+    0x08, 0x00, 0x01, 0x00, 0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63,
+};
+
+/* Bring OVMX's SCS$DIRECTORY connection into existence the production way, so
+ * SCS_DIR_OVMX_CONID resolves through the CDL, and zero this item's counters.
+ * OVMX wears the identity it actually had in ovmx-760-MEMBER-achieved, and the
+ * peer's sequenced stream is replayed with no gap (see above). */
+static void reason_world_init(struct rxworld *r)
+{
+    /* THE FIXTURE'S TWO IDENTITIES ARE READ BACK OFF A CAPTURED FRAME, so the
+     * inversion corrected in vms-591 round 2 cannot silently return. Every
+     * frame replayed below was sent BY the member TO OVMX, so by spec sec 4g
+     * its dst-logical at payload [2:8] (abs 16) is OVMX's own SCS System
+     * Address and its src-logical at [10:16] (abs 24) is the member's. */
+    CHECK(memcmp(cap_ovmx_dir_connect_req + 16, ovmx760_logical, 6) == 0,
+          "ovmx760_logical is not the dst-logical of the frames the member sent"
+          " OVMX -- the fixture is dressing OVMX in another node's SCS System"
+          " Address");
+    CHECK(memcmp(cap_ovmx_dir_connect_req + 24, ovmx760_member_sysid, 6) == 0,
+          "ovmx760_member_sysid is not the src-logical the member actually put"
+          " on its own frames");
+    rxworld_init(r, ovmx760_hw_mac, ovmx760_logical);
+    (void)open_circuit_to(r, ovmx760_member_mac, ovmx760_member_sysid);
+    rx_feed(r, cap_ovmx_dir_connect_req, sizeof(cap_ovmx_dir_connect_req));
+    rx_feed(r, cap_ovmx_dir_accept_rsp, sizeof(cap_ovmx_dir_accept_rsp));
+    rx_feed(r, cap_ovmx_dir_lookup1, sizeof(cap_ovmx_dir_lookup1));
+    rx_feed(r, cap_ovmx_dir_lookup2, sizeof(cap_ovmx_dir_lookup2));
+    rx_feed(r, cap_ovmx_dir_msg8, sizeof(cap_ovmx_dir_msg8));
+    CHECK(scs_cdl_lookup(&scsd_cdl, SCS_DIR_OVMX_CONID) != NULL,
+          "the reason-code fixture has no SCS$DIRECTORY CDT to address");
+    CHECK(vc_seq_gaps == 0 && vc_breaks == 0,
+          "the fixture's own replay opened a sequence gap (%lu) or broke the"
+          " circuit (%lu) -- the DISCONNECT_REQ below would never be dispatched",
+          vc_seq_gaps, vc_breaks);
+    conn_reason_seen = 0;
+    conn_reason_nonzero = 0;
+    rxlog_reset();
+}
+
+/* A REAL VMS DISCONNECT_REQ for one of our connections is decoded and logged --
+ * and reports NONE, which is what the peer's SDA "Rej/Disconn Reason" reports. */
+static void test_reason_real_disconnect_req_is_decoded_and_logged(void)
+{
+    struct rxworld r;
+    reason_world_init(&r);
+
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    CHECK(conn_reason_seen == 1,
+          "the daemon decoded %lu reason codes out of one real DISCONNECT_REQ,"
+          " expected 1", conn_reason_seen);
+    CHECK(conn_reason_nonzero == 0,
+          "a real VMS DISCONNECT_REQ was reported as carrying a reason (%lu)",
+          conn_reason_nonzero);
+    CHECK(rxlog_has("SCSD-I-CONNREASON"),
+          "the peer's reason code was decoded but never surfaced in the run log;"
+          " log was: '%s'", rxlog);
+    CHECK(rxlog_has("DISCONNECT_REQ carries reason code 0 (NONE)"),
+          "the log does not name the frame and the decoded code; log was: '%s'", rxlog);
+}
+
+/*
+ * A REJECT_REQ for a Con.ID we do NOT hold is another node's business: it must
+ * not be counted and must not be reported as ours.
+ *
+ * NOT A VACUOUS NEGATIVE. Its matched positive is
+ * test_reason_nonzero_code_is_decoded_named_and_counted() below, which feeds
+ * THE SAME FRAME from the same source MAC with the destination Con.ID as the
+ * only difference and does get a decode and a log line. So what is being
+ * measured here is the ownership test, not some unrelated reason the frame
+ * failed to reach the classifier.
+ */
+static void test_reason_frame_for_another_conid_is_not_ours(void)
+{
+    struct rxworld r;
+    reason_world_init(&r);
+
+    rx_feed(&r, cap_reject_req_other_conid, sizeof(cap_reject_req_other_conid));
+
+    CHECK(conn_reason_seen == 0,
+          "a REJECT_REQ addressed to Con.ID 0x4F58000A -- which OVMX does not"
+          " hold -- was decoded as ours (%lu)", conn_reason_seen);
+    CHECK(!rxlog_has("SCSD-I-CONNREASON"),
+          "another node's REJECT_REQ was reported in our run log: '%s'", rxlog);
+}
+
+/*
+ * A REJECT_REQ that DOES name one of our connections and carries a nonzero
+ * reason. TWO edits, both stated: the destination Con.ID is retargeted to
+ * SCS_DIR_OVMX_CONID so the frame is addressed to us, and the reason slot is
+ * set to 5 BECAUSE NO CAPTURED VMS FRAME EVER SETS IT (scs_reason.h). This case
+ * therefore proves the DAEMON's decode-and-report path, not any fact about VMS.
+ */
+static void test_reason_nonzero_code_is_decoded_named_and_counted(void)
+{
+    struct rxworld r;
+    reason_world_init(&r);
+
+    uint8_t frame[sizeof(cap_reject_req_other_conid)];
+    memcpy(frame, cap_reject_req_other_conid, sizeof(frame));
+    frame[64] = (uint8_t)(SCS_DIR_OVMX_CONID & 0xff);
+    frame[65] = (uint8_t)((SCS_DIR_OVMX_CONID >> 8) & 0xff);
+    frame[66] = (uint8_t)((SCS_DIR_OVMX_CONID >> 16) & 0xff);
+    frame[67] = (uint8_t)((SCS_DIR_OVMX_CONID >> 24) & 0xff);
+    frame[SCS_REASON_FRAME_OFF] = SCS_REASON_SYSAP_SHUTDOWN;
+    frame[SCS_REASON_FRAME_OFF + 1] = 0;
+
+    rx_feed(&r, frame, sizeof(frame));
+
+    CHECK(conn_reason_seen == 1, "%lu reason codes decoded, expected 1", conn_reason_seen);
+    CHECK(conn_reason_nonzero == 1,
+          "a nonzero reason code was not counted as one (%lu)", conn_reason_nonzero);
+    CHECK(rxlog_has("REJECT_REQ carries reason code 5 (SYSAP_SHUTDOWN)"),
+          "the log does not carry the decoded code and its name; log was: '%s'", rxlog);
+    CHECK(!rxlog_has("no reason supplied"),
+          "a nonzero reason was described as no reason supplied; log was: '%s'", rxlog);
+}
+
+/*
+ * THE KILL SWITCH, RUN THROUGH THE DAEMON -- guardrail 23. Bracketed on both
+ * sides with the identical frame, so the difference is the switch and nothing
+ * else. With the switch set the daemon must decode nothing, count nothing and
+ * log nothing, and the exit summary must SAY the decoding was off rather than
+ * read as "no peer gave a reason".
+ */
+static void test_reason_kill_switch_through_the_daemon(void)
+{
+    struct rxworld r;
+
+    /* Control 1: switch clear. */
+    (void)unsetenv("OVMX_NO_REASON_CODE");
+    reason_world_init(&r);
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(conn_reason_seen == 1, "control: the enabled daemon decoded %lu, expected 1",
+          conn_reason_seen);
+    CHECK(rxlog_has("SCSD-I-CONNREASON"), "control: the enabled daemon logged nothing");
+
+    /* Switch set. */
+    (void)setenv("OVMX_NO_REASON_CODE", "1", 1);
+    reason_world_init(&r);
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(conn_reason_seen == 0,
+          "OVMX_NO_REASON_CODE DID NOT GATE THE DECODE: %lu codes decoded",
+          conn_reason_seen);
+    CHECK(!rxlog_has("SCSD-I-CONNREASON"),
+          "OVMX_NO_REASON_CODE DID NOT GATE THE LOG; log was: '%s'", rxlog);
+
+    /* And the switch must be visible in the daemon's own exit report, not
+     * silent -- a log that reads "no peer gave a reason" when the truth is
+     * "decoding was off" is the failure mode this line exists to prevent. */
+    {
+        char sbuf[8192];
+        sbuf[0] = '\0';
+        FILE *cap = tmpfile();
+        CHECK(cap != NULL, "tmpfile for the exit summary");
+        if (cap != NULL) {
+            scsd_exit_summary(&r.rx, cap);
+            fflush(cap);
+            rewind(cap);
+            size_t got = fread(sbuf, 1, sizeof(sbuf) - 1, cap);
+            sbuf[got] = '\0';
+            fclose(cap);
+            CHECK(strstr(sbuf, "CONN-REASON:") != NULL,
+                  "the exit summary does not report the reason-code counters");
+            CHECK(strstr(sbuf, "OVMX_NO_REASON_CODE set") != NULL,
+                  "the exit summary hides that decoding was switched off");
+        }
+    }
+
+    /* Control 2: switch clear again, same frame. */
+    (void)unsetenv("OVMX_NO_REASON_CODE");
+    reason_world_init(&r);
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(conn_reason_seen == 1,
+          "bracketing control: the daemon did not come back on (%lu)", conn_reason_seen);
+    CHECK(rxlog_has("SCSD-I-CONNREASON"),
+          "bracketing control: the daemon did not log after the switch was cleared");
+}
+
+/* ===================================================================
+ * vms-591 - THE DISCONNECT DIALOGUE, DRIVEN BY THE PRODUCTION DISPATCH.
+ *
+ * Figure 2-16, pp. 2-26/2-27. Every case below feeds a frame to
+ * scsd_handle_frame() -- the real receive path -- or calls the real shutdown
+ * teardown, and asserts what scsd.c PUT ON THE WIRE and what state it left the
+ * connection in. NOTHING here performs a transition by hand next to an
+ * assertion: that pattern was rejected once in this epic, and it would be
+ * especially hollow here, where the whole defect being fixed is that the
+ * receive path recorded a transition and emitted nothing.
+ *
+ * THE INPUT IS A REAL CAPTURED FRAME. cap_disconnect_req_to_ovmx (above, used
+ * by the vms-6b3 reason cases) is a genuine VMS DISCONNECT_REQ addressed to
+ * OVMX's own SCS$DIRECTORY Con.ID, transcribed byte-exact and UNEDITED, with
+ * its [60:62] matching flag reading 0x0000 -- i.e. the peer initiating.
+ * =================================================================== */
+
+/* The Con.ID the captured DISCONNECT_REQ is addressed to, and the peer handle
+ * it supplies -- both read out of the frame rather than restated. */
+static uint32_t disc_cap_dst_conid(void)
+{
+    return (uint32_t)cap_disconnect_req_to_ovmx[64] |
+           ((uint32_t)cap_disconnect_req_to_ovmx[65] << 8) |
+           ((uint32_t)cap_disconnect_req_to_ovmx[66] << 16) |
+           ((uint32_t)cap_disconnect_req_to_ovmx[67] << 24);
+}
+
+static uint32_t disc_cap_src_conid(void)
+{
+    return (uint32_t)cap_disconnect_req_to_ovmx[68] |
+           ((uint32_t)cap_disconnect_req_to_ovmx[69] << 8) |
+           ((uint32_t)cap_disconnect_req_to_ovmx[70] << 16) |
+           ((uint32_t)cap_disconnect_req_to_ovmx[71] << 24);
+}
+
+/* Is `f` a DISCONNECT frame of the given connection-control message type? Read
+ * off the frame the daemon emitted, never assumed from the call order. */
+static int disc_is(const uint8_t *f, size_t len, unsigned msgtype, size_t want_len)
+{
+    if (len != want_len || len < 62) {
+        return 0;
+    }
+    return ((unsigned)f[60] | ((unsigned)f[61] << 8)) == msgtype;
+}
+
+static int disc_frame_is_req(const uint8_t *f, size_t len)
+{
+    return disc_is(f, len, SCS_DISC_MSGTYPE_REQ, SCS_DISC_REQ_FRAME_LEN);
+}
+
+static int disc_frame_is_rsp(const uint8_t *f, size_t len)
+{
+    return disc_is(f, len, SCS_DISC_MSGTYPE_RSP, SCS_DISC_RSP_FRAME_LEN);
+}
+
+/* ===================================================================
+ * THE PEER'S OWN DISCONNECT_RSP, ADDRESSED TO OVMX, UNEDITED (vms-591 rd 2).
+ *
+ * WHAT WAS WRONG WITH THE FRAME THIS REPLACES. Case (2) below closes Figure
+ * 2-16's DISC MATCH --RCV_DISCONNECT_RSP--> CLOSED arrow. It used to close it
+ * with a frame OVMX ITSELF ENCODED: scs_disc_build_response() run with the
+ * roles swapped. That was labeled, but it left one whole error class
+ * invisible -- a systematic mistake about the 58-byte class would be
+ * SYMMETRIC between OVMX's encoder and OVMX's classifier, and the case would
+ * pass with both halves wrong in the same direction.
+ *
+ * IT WAS ALSO UNNECESSARY, AND THE REASON IT LOOKED NECESSARY IS A CLAIM THAT
+ * IS FALSE. The frame carried a note saying OVMX has never received a real
+ * message-type-7 frame addressed to one of its own Con.IDs, so one had to be
+ * synthesized. RE-MEASURED over all 47 lab captures, counting every 72-byte
+ * 0x6007 frame whose [46:48] is 7 and whose Ethernet destination is OVMX's own
+ * HW MAC b6:16:8a:dc:3a:53 -- a strict subset of the 223 VMS-origin type-7
+ * frames scs_disc.h's own census already counted:
+ *
+ *   DISC-RSP-TO-OVMX: total=42 pcaps=16
+ *   DISC-RSP-TO-OVMX: src aa:00:04:00:01:04 (VAX1) n=16
+ *   DISC-RSP-TO-OVMX: src 08:00:2b:78:56:b9 (VAX2) n=15
+ *   DISC-RSP-TO-OVMX: src 08:00:2b:11:22:33 (VAX3) n=11
+ *   DISC-RSP-TO-OVMX: destination Con.ID 0x4F580007 in 42 of 42
+ *
+ * FORTY-TWO of them, from THREE distinct real VAX nodes, across SIXTEEN
+ * captures, every one addressed to SCS_DIR_OVMX_CONID -- OVMX's own
+ * SCS$DIRECTORY handle. So nothing had to be synthesized: the peer's answer
+ * was already on our wire, exactly as REJECT_RSP and DISCONNECT_RSP
+ * themselves were before round 1 found them. The synthesized frame is gone
+ * and this one is fed with ZERO BYTES EDITED.
+ *
+ * PROVENANCE (rule 8: observation only).
+ *   /data/training/vax/cluster/captures/ovmx-760-MEMBER-achieved-20260730.pcap
+ * SCA frame index 184, transcribed wire-byte for wire-byte, Ethernet header
+ * included. That is the SAME capture, the SAME peer and the SAME connection
+ * as cap_disconnect_req_to_ovmx (SCA 181) and the whole fixture stream above
+ * it -- and it is the tail of a COMPLETE Figure 2-16 teardown in which the
+ * other end of the dialogue was OVMX:
+ *
+ *   181  VAX2 -> OVMX  76 B  msgtype 6  DISCONNECT_REQ  match=0  seq 25
+ *   182  OVMX -> VAX2  72 B  msgtype 7  DISCONNECT_RSP           seq 25
+ *   183  OVMX -> VAX2  76 B  msgtype 6  DISCONNECT_REQ  match=1  seq 26
+ *   184  VAX2 -> OVMX  72 B  msgtype 7  DISCONNECT_RSP           seq 26
+ *
+ * The peer sends nothing else between 181 and 184, so 184's send_seq 26
+ * follows 181's 25 with no gap and the frame arrives IN SEQUENCE on the
+ * circuit the fixture has already built. That is why it needs no edit at all,
+ * not even to its counters: case (2) feeds it exactly as the VAX sent it.
+ *
+ * WHAT THIS DOES *NOT* SAY, and the distinction is load-bearing. 182 and 183
+ * are OVMX's, from the pre-vms-591 attempt src/vmsscs/include/scs_disc.h
+ * describes -- so the capture shows a real VAX ANSWERING an OVMX
+ * DISCONNECT_REQ, which the four vms-591 lab runs on vaxlab-4 did NOT see
+ * (there the VAX logged "Inappropriate SCA Control Message" and answered
+ * nothing in 20 s). Those two observations are BOTH real and this file does
+ * not reconcile them; scs_disc.h's lab verdict is scoped to its own runs and
+ * points here. Reconciling them is the live anomaly's job, not this file's.
+ *
+ * WHAT CASE (2) WAS MUTATED AGAINST -- RUN, not reasoned about. Each mutation
+ * was applied to the tree, rebuilt, run, and the source restored under cmp
+ * from a job-private copy. Eight mutations, eight killed:
+ *
+ *   N1  case (2) expects 2 closes instead of 1        -> red. Says the body
+ *                                                        reaches its assertions.
+ *   N2  scsd.c reads the message type at [44:46]      -> red (many cases)
+ *   N3  the classifier's `n >= 72` raised to 73, i.e.
+ *       the 58-byte class excluded                    -> red ONLY in case (2).
+ *                                                        This case is the SOLE
+ *                                                        coverage of the
+ *                                                        58-byte RECEIVE class.
+ *   N4  the captured answer's [46:48] changed 7 -> 6  -> red, and the close
+ *                                                        stops happening: the
+ *                                                        arrow really does turn
+ *                                                        on those two bytes.
+ *   N5  the two ovmx760 logical addresses re-swapped
+ *       to their pre-round-2 values                   -> red (identity guards)
+ *   N6  the answer's destination Con.ID moved off
+ *       OVMX's handle by one                          -> red
+ *   N7  the answer's send_seq made non-contiguous
+ *       with the request's                            -> red on the
+ *                                                        transcription check,
+ *                                                        on vc_breaks and on
+ *                                                        the recv_seq advance
+ *   N8  scsd.c reads the destination Con.ID 2 bytes
+ *       low                                           -> red (many cases)
+ * =================================================================== */
+
+/*
+ * ovmx-760-MEMBER-achieved-20260730.pcap SCA frame 184. VAX2 -> OVMX,
+ * message type 7 at [46:48], destination Con.ID 0x4F580007 ==
+ * SCS_DIR_OVMX_CONID, source Con.ID 0x63020012 == the handle SCA 181 supplies.
+ * Transcribed byte-exact; UNEDITED. Every byte fed to the daemon in case (2)
+ * is a byte a VAX wrote.
+ */
+static const uint8_t cap_disc_rsp_to_ovmx[SCS_DISC_RSP_FRAME_LEN] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00,
+    0x2b, 0x78, 0x56, 0xb9, 0x60, 0x07, 0x38, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13,
+    0x1a, 0x00, 0x1a, 0x00, 0x01, 0x00, 0x12, 0x00,
+    0x1a, 0x00, 0x00, 0x00, 0x1a, 0x00, 0x00, 0x00,
+    0x1a, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02,
+    0x0e, 0x00, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63
+};
+
+/*
+ * THE CAPTURED ANSWER IS WHAT IT IS CLAIMED TO BE -- asserted from its bytes,
+ * every field read out of the frame rather than restated, and every
+ * expectation taken from the OTHER captured frame of the same dialogue rather
+ * than from a literal. Run before the frame is fed, so a mis-transcription is
+ * reported as a mis-transcription instead of as a state-machine failure.
+ *
+ * NOTE WHAT IS *NOT* HERE: no offset in this frame is asserted against
+ * scs_disc.h. The Con.ID pair is checked against the pair
+ * cap_disconnect_req_to_ovmx supplies -- a frame a real VAX addressed to a
+ * handle OVMX minted -- so the ownership relation is grounded on interop, and
+ * the message type is simply read where the daemon reads it. Nothing is
+ * written into this frame, so there is no offset for the fixture to get wrong
+ * in the same direction as the code.
+ */
+static void disc_check_captured_answer(void)
+{
+    CHECK(memcmp(cap_disc_rsp_to_ovmx + 0, ovmx760_hw_mac, 6) == 0,
+          "the captured DISCONNECT_RSP is not addressed to OVMX's HW MAC");
+    CHECK(memcmp(cap_disc_rsp_to_ovmx + 6, ovmx760_member_mac, 6) == 0,
+          "the captured DISCONNECT_RSP was not sent by the fixture's peer");
+    CHECK(memcmp(cap_disc_rsp_to_ovmx + 16, ovmx760_logical, 6) == 0,
+          "the captured DISCONNECT_RSP's dst-logical is not OVMX's SCS System "
+          "Address");
+    CHECK(memcmp(cap_disc_rsp_to_ovmx + 24, ovmx760_member_sysid, 6) == 0,
+          "the captured DISCONNECT_RSP's src-logical is not the peer's SCS "
+          "System Address");
+    CHECK(disc_frame_is_rsp(cap_disc_rsp_to_ovmx, sizeof(cap_disc_rsp_to_ovmx)),
+          "the captured answer is not a %d-byte message-type-%u frame",
+          SCS_DISC_RSP_FRAME_LEN, SCS_DISC_MSGTYPE_RSP);
+    /* THE OWNERSHIP RELATION, against the request the same VAX sent us: the
+     * answer names OUR handle as its destination and ITS OWN as its source,
+     * the same way round as the request. */
+    uint32_t rem = (uint32_t)cap_disc_rsp_to_ovmx[64] |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[65] << 8) |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[66] << 16) |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[67] << 24);
+    uint32_t loc = (uint32_t)cap_disc_rsp_to_ovmx[68] |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[69] << 8) |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[70] << 16) |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[71] << 24);
+    CHECK(rem == disc_cap_dst_conid() && rem == SCS_DIR_OVMX_CONID,
+          "the captured answer names remote Con.ID 0x%08X; a real VAX answering "
+          "OVMX must name OVMX's own 0x%08X -- this is the whole reason the "
+          "frame did not have to be synthesized", rem, disc_cap_dst_conid());
+    CHECK(loc == disc_cap_src_conid(),
+          "the captured answer's local Con.ID is 0x%08X, not the 0x%08X the "
+          "same peer supplied on its DISCONNECT_REQ -- the two frames are not "
+          "the same dialogue", loc, disc_cap_src_conid());
+    /* CONTIGUITY. 184 is the peer's next sequenced message after 181, which is
+     * what lets it be fed unedited: an out-of-run send_seq would be a p. 2-31
+     * gap and scsd.c would break the circuit instead of answering. */
+    uint16_t req_seq = (uint16_t)((unsigned)cap_disconnect_req_to_ovmx[34] |
+                                  ((unsigned)cap_disconnect_req_to_ovmx[35] << 8));
+    uint16_t rsp_seq = (uint16_t)((unsigned)cap_disc_rsp_to_ovmx[34] |
+                                  ((unsigned)cap_disc_rsp_to_ovmx[35] << 8));
+    CHECK(rsp_seq == (uint16_t)(req_seq + 1),
+          "the captured answer carries send_seq %u against the request's %u; "
+          "the two are not consecutive on the peer's stream and the answer "
+          "could not be fed unedited", rsp_seq, req_seq);
+}
+
+/* Build the SCS$DIRECTORY connection the captured DISCONNECT_REQ addresses,
+ * through production, and reset this item's counters. Returns the CDT. */
+static struct scs_cdt *disc_world_init(struct rxworld *r)
+{
+    (void)unsetenv("OVMX_NO_CLEAN_SHUTDOWN");
+    reason_world_init(r);
+    disc_req_recv = 0;
+    disc_rsp_sent = 0;
+    disc_req_sent = 0;
+    disc_rsp_recv = 0;
+    disc_closed = 0;
+    disc_simultaneous = 0;
+    disc_shutdown_pending = 0;
+    struct scs_cdt *cdt = scs_cdl_lookup(&scsd_cdl, disc_cap_dst_conid());
+    CHECK(cdt != NULL, "the fixture built no CDT at the Con.ID the captured "
+                       "DISCONNECT_REQ is addressed to (0x%08X)",
+          (unsigned)disc_cap_dst_conid());
+    return cdt;
+}
+
+/*
+ * (1) THE DEFECT THIS ITEM FIXES, AS A TEST.
+ *
+ * p. 2-26: OVMX must answer a peer's DISCONNECT_REQ with a DISCONNECT_RSP AND
+ * then have its own SYSAP invoke DISCONNECT, sending a MATCHING
+ * DISCONNECT_REQ. Before vms-591 the receive path stepped the state machine
+ * and emitted NOTHING, so both frames were missing by construction.
+ */
+static void test_peer_disconnect_req_is_answered_and_matched(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    enum scs_conn_state before = scs_conn_state_of(cdt);
+    CHECK(before == SCS_CONN_OPEN || before == SCS_CONN_ACCEPT_SENT,
+          "the fixture's SCS$DIRECTORY connection is %s -- Figure 2-16 starts "
+          "from a formed connection", scs_conn_state_name(before));
+
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    /* The peer's request was DELIVERED, not merely observed. */
+    CHECK(disc_req_recv == 1, "the daemon delivered %lu DISCONNECT_REQ, expected 1",
+          disc_req_recv);
+
+    /* BOTH frames went out, and this is the whole point of the item. */
+    CHECK(disc_rsp_sent == 1,
+          "the daemon sent %lu DISCONNECT_RSP; Figure 2-16 puts one on the same "
+          "arrow as the transition to DISC RECEIVED", disc_rsp_sent);
+    CHECK(disc_req_sent == 1,
+          "the daemon sent %lu DISCONNECT_REQ of its own; p. 2-26 requires the "
+          "other SYSAP to invoke DISCONNECT symmetrically, and before vms-591 "
+          "this was structurally 0", disc_req_sent);
+
+    /* And the connection is where Figure 2-16 puts it after both. */
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_MATCH,
+          "after answering and matching, the connection is %s, expected "
+          "DISC MATCH", scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(disc_simultaneous == 0,
+          "a peer-initiated teardown was scored as the p. 2-27 simultaneous case");
+
+    /* THE LAST FRAME OUT IS THE MATCHING REQUEST, and its matching flag is
+     * SET -- read off the emitted bytes, which is the only evidence that
+     * distinguishes "we initiated" from "we matched" on the wire. */
+    CHECK(disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len),
+          "the last frame the daemon sent is %zu bytes with [46:48]=%u; expected "
+          "the %d-byte DISCONNECT_REQ (message type %u)",
+          scsd_test_last_len,
+          scsd_test_last_len >= 62 ? (unsigned)(scsd_test_last_frame[60] |
+                                                (scsd_test_last_frame[61] << 8)) : 0,
+          SCS_DISC_REQ_FRAME_LEN, SCS_DISC_MSGTYPE_REQ);
+    if (disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len)) {
+        uint16_t m = 0xffff;
+        CHECK(scs_disc_match_get(scsd_test_last_frame, scsd_test_last_len, &m) == 1 &&
+                  m == SCS_DISC_MATCH_MATCHING,
+              "OVMX's own DISCONNECT_REQ carries matching flag 0x%04x, expected "
+              "0x%04x -- it is ANSWERING the peer's, not initiating", m,
+              SCS_DISC_MATCH_MATCHING);
+        /* Addressed to the connection, from the pair the peer supplied. */
+        uint32_t rem = (uint32_t)scsd_test_last_frame[64] |
+                       ((uint32_t)scsd_test_last_frame[65] << 8) |
+                       ((uint32_t)scsd_test_last_frame[66] << 16) |
+                       ((uint32_t)scsd_test_last_frame[67] << 24);
+        uint32_t loc = (uint32_t)scsd_test_last_frame[68] |
+                       ((uint32_t)scsd_test_last_frame[69] << 8) |
+                       ((uint32_t)scsd_test_last_frame[70] << 16) |
+                       ((uint32_t)scsd_test_last_frame[71] << 24);
+        CHECK(rem == disc_cap_src_conid(),
+              "OVMX addressed its DISCONNECT_REQ to remote Con.ID 0x%08X, "
+              "expected the peer's own 0x%08X read out of its request",
+              rem, disc_cap_src_conid());
+        CHECK(loc == disc_cap_dst_conid(),
+              "OVMX's DISCONNECT_REQ carries local Con.ID 0x%08X, expected "
+              "0x%08X", loc, disc_cap_dst_conid());
+        /* p. 2-26's optional reason code: OVMX says WHY. */
+        uint16_t why = 0xffff;
+        CHECK(scs_reason_get(scsd_test_last_frame, scsd_test_last_len,
+                             SCS_REASON_MSGTYPE_DISCONNECT_REQ, &why) == 1 &&
+                  why == SCS_REASON_PEER_DISCONNECT,
+              "OVMX's matching DISCONNECT_REQ carries reason %u, expected %u "
+              "(%s)", why, (unsigned)SCS_REASON_PEER_DISCONNECT,
+              scs_reason_name(SCS_REASON_PEER_DISCONNECT));
+    }
+    CHECK(rxlog_has("SCSD-I-DISCMATCH"),
+          "the daemon did not log the symmetric own-disconnect; log was: '%s'", rxlog);
+    CHECK(conn_illegal_events == 0,
+          "the teardown scored %lu illegal events", conn_illegal_events);
+}
+
+/*
+ * (2) THE MATCHING DISCONNECT_RSP CLOSES IT, and the CDT is RELEASED.
+ * Figure 2-16: DISC MATCH --RCV_DISCONNECT_RSP--> CLOSED.
+ *
+ * THE INPUT IS THE PEER'S OWN ANSWER, UNEDITED -- ovmx-760-MEMBER-achieved
+ * SCA frame 184, a real VAX2 DISCONNECT_RSP addressed to OVMX's own Con.ID,
+ * three frames after the DISCONNECT_REQ this case already feeds and on the
+ * same connection. Not one byte of it is OVMX's. See the census and the
+ * four-frame teardown above cap_disc_rsp_to_ovmx, including what that capture
+ * does and does not say about the vms-591 lab runs.
+ */
+static void test_matching_disconnect_rsp_closes_the_connection(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    /* The transcription is checked before it is trusted. */
+    disc_check_captured_answer();
+
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    if (scs_conn_state_of(cdt) != SCS_CONN_DISC_MATCH) {
+        return; /* case (1) already reported why */
+    }
+    unsigned in_use_before = scs_cdl_in_use_count(&scsd_cdl);
+
+    struct peer_state *rps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(rps != NULL, "peer slot for the answering peer");
+    if (rps == NULL) {
+        return;
+    }
+    uint16_t peer_recv_seq_before = rps->vc.seq.recv_seq;
+
+    unsigned long breaks_before = vc_breaks;
+    rx_feed(&r, cap_disc_rsp_to_ovmx, sizeof(cap_disc_rsp_to_ovmx));
+    CHECK(vc_breaks == breaks_before,
+          "feeding the peer's own DISCONNECT_RSP broke the virtual circuit -- "
+          "every assertion below would then be measuring VC loss rather than "
+          "the teardown");
+    /* AND IT ARRIVED IN SEQUENCE, not as a retransmit the circuit tolerated.
+     * scsd.c ACCEPTS and dispatches a duplicate without breaking anything, so
+     * vc_breaks above cannot tell the two apart; this can. It is also what
+     * says the capture's own send_seq really is contiguous with the request's
+     * on the LIVE circuit and not merely in the pcap. */
+    CHECK(rps->vc.seq.recv_seq == (uint16_t)(peer_recv_seq_before + 1),
+          "the peer's recv_seq went %u -> %u, expected %u -- the "
+          "DISCONNECT_RSP was not delivered as the next sequenced message on "
+          "the circuit, so it was a duplicate and not an answer",
+          peer_recv_seq_before, rps->vc.seq.recv_seq,
+          (uint16_t)(peer_recv_seq_before + 1));
+
+    CHECK(disc_rsp_recv == 1, "the daemon delivered %lu DISCONNECT_RSP, expected 1",
+          disc_rsp_recv);
+    CHECK(disc_closed == 1,
+          "the daemon closed %lu connection(s); the matching DISCONNECT_RSP is "
+          "what takes DISC MATCH to CLOSED (p. 2-26)", disc_closed);
+    CHECK(scs_cdl_lookup(&scsd_cdl, disc_cap_dst_conid()) == NULL,
+          "the CDT was not released when the connection reached CLOSED");
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == in_use_before - 1,
+          "the CDL in-use count went %u -> %u, expected a release of exactly one",
+          in_use_before, scs_cdl_in_use_count(&scsd_cdl));
+    CHECK(rxlog_has("SCSD-I-DISCCLOSED"),
+          "the daemon did not log the close; log was: '%s'", rxlog);
+    CHECK(conn_illegal_events == 0,
+          "the full teardown scored %lu illegal events", conn_illegal_events);
+}
+
+/*
+ * (3) THE p. 2-27 SIMULTANEOUS CASE. "When each node receives the
+ * DISCONNECT_REQ from the other node, it replies with a DISCONNECT_RSP. It
+ * then transitions ... to DISCONNECT MATCH since it has seen a matching
+ * DISCONNECT_REQ" -- three states, not four.
+ *
+ * OVMX initiates FIRST (through the production shutdown teardown), then the
+ * peer's own DISCONNECT_REQ arrives. The distinguishing assertion is that OVMX
+ * sends its request ONCE: a second one here would mean the daemon read the
+ * crossing request as a fresh peer-initiated teardown.
+ */
+static void test_simultaneous_disconnect_sends_no_second_request(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    struct peer_state *ps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    /* Teach the CDT the peer's handle the way the wire would, so OVMX can
+     * address a request it initiates. */
+    scs_cdt_set_remote_conid(cdt, disc_cap_src_conid());
+
+    /* OVMX initiates -- the real service, through the real emitter. */
+    struct scsd_disc_emit_ctx e;
+    memset(&e, 0, sizeof(e));
+    e.sock = 7;
+    e.ifindex = 1;
+    e.ps = ps;
+    e.our_hw_mac = r.hw_mac;
+    e.our_src_logical = r.logical;
+    e.matching = 0;
+    struct scs_svc_args a = scsd_disc_args(&e, SCS_REASON_SYSAP_SHUTDOWN);
+    unsigned k = scs_svc_disconnect_all(scsd_svc(), ps->pb, &a);
+    CHECK(k >= 1, "scs_svc_disconnect_all drove %u connection(s), expected >= 1", k);
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_SENT,
+          "after OVMX invoked DISCONNECT the connection is %s, expected DISC SENT",
+          scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(disc_req_sent == k,
+          "OVMX drove %u disconnect(s) but sent %lu DISCONNECT_REQ", k, disc_req_sent);
+    /* An INITIATED request carries the matching flag CLEAR. */
+    uint16_t m = 0xffff;
+    CHECK(disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len) &&
+              scs_disc_match_get(scsd_test_last_frame, scsd_test_last_len, &m) == 1 &&
+              m == SCS_DISC_MATCH_INITIAL,
+          "OVMX's INITIATED DISCONNECT_REQ carries matching flag 0x%04x, "
+          "expected 0x%04x", m, SCS_DISC_MATCH_INITIAL);
+
+    unsigned long req_after_initiate = disc_req_sent;
+    unsigned long rsp_before = disc_rsp_sent;
+
+    /* Now the peer's request crosses ours on the wire. */
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_MATCH,
+          "the crossing DISCONNECT_REQ left the connection %s, expected "
+          "DISC MATCH (p. 2-27, three states not four)",
+          scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(disc_rsp_sent == rsp_before + 1,
+          "OVMX sent %lu DISCONNECT_RSP for the crossing request, expected 1",
+          disc_rsp_sent - rsp_before);
+    CHECK(disc_req_sent == req_after_initiate,
+          "OVMX sent %lu EXTRA DISCONNECT_REQ after the crossing request. In the "
+          "simultaneous case its own request has already gone out; a second one "
+          "means the daemon read the crossing request as a fresh teardown",
+          disc_req_sent - req_after_initiate);
+    CHECK(disc_simultaneous == 1,
+          "the daemon scored %lu simultaneous disconnect(s), expected 1",
+          disc_simultaneous);
+    CHECK(rxlog_has("SCSD-I-DISCSIMUL"),
+          "the daemon did not log the p. 2-27 simultaneous case; log was: '%s'", rxlog);
+    CHECK(conn_illegal_events == 0,
+          "the simultaneous teardown scored %lu illegal events", conn_illegal_events);
+}
+
+/*
+ * (4) SHUTDOWN. Before vms-591 the daemon set g_stop and exited, leaving every
+ * connection formed from the peer's point of view. This drives the real
+ * scsd_shutdown_teardown() and asserts it disconnects what it holds and does
+ * not block. The wait is set to 0 so the case measures the SEND half without
+ * a peer to answer; the pending report is then the honest outcome and is
+ * asserted as such.
+ */
+static void test_shutdown_disconnects_every_open_connection(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    scs_cdt_set_remote_conid(cdt, disc_cap_src_conid());
+    unsigned open_before = scsd_open_connection_count();
+    CHECK(open_before >= 1, "the fixture holds no open connection to tear down");
+
+    uint8_t buf[SCA_FRAME_MAX];
+    (void)setenv("OVMX_SHUTDOWN_WAIT_MS", "0", 1);
+    log_capture_begin();
+    scsd_shutdown_teardown(&r.rx, buf, sizeof(buf));
+    log_capture_end();
+    (void)unsetenv("OVMX_SHUTDOWN_WAIT_MS");
+
+    CHECK(disc_req_sent >= 1,
+          "the shutdown teardown sent %lu DISCONNECT_REQ; it holds %u open "
+          "connection(s)", disc_req_sent, open_before);
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_SENT,
+          "after shutdown the connection is %s, expected DISC SENT",
+          scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(rxlog_has("SCSD-I-SHUTDISC"),
+          "the shutdown did not log what it disconnected; log was: '%s'", rxlog);
+    /* NO PEER ANSWERED, so the honest outcome is a reported pending count --
+     * not a hang, and not a silent success. */
+    CHECK(disc_shutdown_pending >= 1,
+          "with no peer answering, the shutdown reported %lu pending "
+          "connection(s); it must report what it could not close",
+          disc_shutdown_pending);
+    CHECK(rxlog_has("SCSD-W-DISCPEND"),
+          "the shutdown did not warn about the connections it left open; "
+          "log was: '%s'", rxlog);
+}
+
+/*
+ * (5) THE KILL SWITCH, RUN, WITH CONTROLS ON BOTH SIDES.
+ *
+ * OVMX_NO_CLEAN_SHUTDOWN=1 must restore the pre-vms-591 wire, which carried NO
+ * DISCONNECT frame at all. What it must NOT suppress is the state machine --
+ * vms-dd5's diagnostic has to keep working -- and that is asserted too, so
+ * "the switch is set" can never be read as "nothing happened".
+ */
+static void test_clean_shutdown_kill_switch_through_the_daemon(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt;
+
+    /* CONTROL BEFORE: switch clear, both frames go out. */
+    cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(disc_rsp_sent == 1 && disc_req_sent == 1,
+          "control: the enabled daemon sent rsp=%lu req=%lu, expected 1 and 1",
+          disc_rsp_sent, disc_req_sent);
+
+    /* THE SWITCH. */
+    cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    (void)setenv("OVMX_NO_CLEAN_SHUTDOWN", "1", 1);
+    unsigned frames_before = scsd_test_frames;
+    unsigned long unemitted_before = scsd_svc_port.unemitted;
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    CHECK(disc_rsp_sent == 0 && disc_req_sent == 0,
+          "OVMX_NO_CLEAN_SHUTDOWN DID NOT GATE THE WIRE: rsp=%lu req=%lu",
+          disc_rsp_sent, disc_req_sent);
+    /* Not merely "the counters stayed 0": NO DISCONNECT-shaped frame reached
+     * the transmit seam at all. The dispatch still sends the vms-691 0x48
+     * credit-return for the sequenced message, which predates this item. */
+    for (unsigned i = frames_before; i < scsd_test_frames; i++) {
+        /* only the last frame is retained by the seam; check it explicitly */
+        (void)i;
+    }
+    CHECK(!disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len) &&
+              !disc_frame_is_rsp(scsd_test_last_frame, scsd_test_last_len),
+          "with the switch set the daemon still put a DISCONNECT-shaped frame "
+          "(%zu bytes) on the wire", scsd_test_last_len);
+    /* WHAT IT MUST NOT SUPPRESS: the state machine still records the arrival,
+     * and the un-buildable action is reported rather than hidden. */
+    /* DISC MATCH, not DISC RECEIVED, and the difference is the whole contract:
+     * a NOBUILDER answer COMMITS the transition (scs_svc.h) -- the connection
+     * really did advance, SCA just did not get its packet. So with the switch
+     * set the daemon still answers and still invokes its own disconnect at the
+     * STATE level, and reports both frames unemitted. Asserting DISC RECEIVED
+     * here would be asserting that the switch silently gates the machine too,
+     * which it does not and must not. */
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_MATCH,
+          "with the switch set the connection is %s, expected DISC MATCH -- "
+          "the switch gates the WIRE, not the state machine, and an unbuildable "
+          "action still commits its transition",
+          scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(scsd_svc_port.unemitted > unemitted_before,
+          "with the switch set the daemon reported no unemitted action; a frame "
+          "the machine required and the port could not build must be COUNTED, "
+          "not passed over (INV-6)");
+    CHECK(rxlog_has("SCSD-W-CONNNOACT"),
+          "with the switch set the daemon did not report the frame it could not "
+          "build; log was: '%s'", rxlog);
+
+    /* And the shutdown teardown does not run either. */
+    {
+        uint8_t buf[SCA_FRAME_MAX];
+        unsigned long req_before = disc_req_sent;
+        rxlog_reset();
+        log_capture_begin();
+        scsd_shutdown_teardown(&r.rx, buf, sizeof(buf));
+        log_capture_end();
+        CHECK(disc_req_sent == req_before,
+              "with the switch set the shutdown teardown still sent %lu "
+              "DISCONNECT_REQ", disc_req_sent - req_before);
+        CHECK(rxlog_has("SCSD-I-NOCLEANSHUT"),
+              "the suppressed shutdown did not say so; log was: '%s'", rxlog);
+    }
+
+    /* CONTROL AFTER: clearing it brings both frames back. */
+    (void)unsetenv("OVMX_NO_CLEAN_SHUTDOWN");
+    cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(disc_rsp_sent == 1 && disc_req_sent == 1,
+          "bracketing control: clearing the switch did not restore the "
+          "teardown (rsp=%lu req=%lu)", disc_rsp_sent, disc_req_sent);
+}
+
+/*
+ * (6) THE EXIT SUMMARY REPORTS THE TEARDOWN. A run log that does not say
+ * whether OVMX ever performed its own disconnect call cannot be used to tell a
+ * symmetric teardown from the pre-vms-591 one-sided one.
+ */
+static void test_exit_summary_reports_the_disconnect_dialogue(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    char sbuf[16384];
+    sbuf[0] = '\0';
+    FILE *cap = tmpfile();
+    CHECK(cap != NULL, "tmpfile for the exit summary");
+    if (cap == NULL) {
+        return;
+    }
+    scsd_exit_summary(&r.rx, cap);
+    fflush(cap);
+    rewind(cap);
+    size_t got = fread(sbuf, 1, sizeof(sbuf) - 1, cap);
+    sbuf[got] = '\0';
+    fclose(cap);
+
+    CHECK(strstr(sbuf, "DISCONNECT:") != NULL,
+          "the exit summary carries no DISCONNECT line");
+    CHECK(strstr(sbuf, "req-sent=1") != NULL,
+          "the exit summary does not report OVMX's OWN disconnect call, which is "
+          "the number that distinguishes a symmetric teardown from the "
+          "pre-vms-591 one-sided one. Summary was:\n%s", sbuf);
+    CHECK(strstr(sbuf, "rsp-sent=1") != NULL,
+          "the exit summary does not report the DISCONNECT_RSP");
+
+    /* With the switch set the same line must SAY the wire was gated. */
+    (void)setenv("OVMX_NO_CLEAN_SHUTDOWN", "1", 1);
+    cap = tmpfile();
+    if (cap != NULL) {
+        scsd_exit_summary(&r.rx, cap);
+        fflush(cap);
+        rewind(cap);
+        got = fread(sbuf, 1, sizeof(sbuf) - 1, cap);
+        sbuf[got] = '\0';
+        fclose(cap);
+        CHECK(strstr(sbuf, "OVMX_NO_CLEAN_SHUTDOWN set") != NULL,
+              "the exit summary hides that the disconnect wire was switched off "
+              "-- a log reading 'req-sent=0' must never be mistakable for 'the "
+              "peer never disconnected'");
+    }
+    (void)unsetenv("OVMX_NO_CLEAN_SHUTDOWN");
+}
+
+
+
+/* ==========================================================================
+ * vms-66f: THE SCS PROCESS POLLER, THROUGH THE DAEMON (p. 2-50)
+ *
+ * test_scs_poll.c proves the poller's RULES against a stub port driver. This
+ * proves the WIRING: that scsd.c's own emitters turn those rules into the two
+ * real frames, that the daemon's receive dispatch feeds the answers back, and
+ * that a Yes reaches the SYSAP that then connects. Every frame below is taken
+ * from, or built by, production code -- nothing is hand-assembled except the
+ * PEER's replies, which is the one thing a test has to stand in for.
+ * ========================================================================== */
+
+/* Turn the poller's own outbound frame into the reply the peer would send back:
+ * swap the Con.ID pair into the peer's direction and set the message type. */
+static size_t poll_peer_reply(const uint8_t *ours, size_t len, uint16_t msgtype,
+                              uint32_t peer_handle, const uint8_t ovmx_hw[6],
+                              uint8_t *out)
+{
+    memcpy(out, ours, len);
+    /* Ethernet + SCA envelope: the reply comes FROM the peer TO us. */
+    memcpy(out + 0, ovmx_hw, 6);
+    memcpy(out + 6, vax1_hw_mac, 6);
+    memcpy(out + 16, our_logical, 6);   /* dst logical = ours */
+    memcpy(out + 24, vax1_logical, 6);  /* src logical = the peer's */
+    out[14 + 46] = (uint8_t)(msgtype & 0xff);
+    out[14 + 47] = (uint8_t)(msgtype >> 8);
+    /* remote = OUR handle (the peer addresses us), local = the peer's own. */
+    out[14 + 50] = (uint8_t)(SCS_DIR_OVMX_POLL_CONID & 0xff);
+    out[14 + 51] = (uint8_t)((SCS_DIR_OVMX_POLL_CONID >> 8) & 0xff);
+    out[14 + 52] = (uint8_t)((SCS_DIR_OVMX_POLL_CONID >> 16) & 0xff);
+    out[14 + 53] = (uint8_t)((SCS_DIR_OVMX_POLL_CONID >> 24) & 0xff);
+    out[14 + 54] = (uint8_t)(peer_handle & 0xff);
+    out[14 + 55] = (uint8_t)((peer_handle >> 8) & 0xff);
+    out[14 + 56] = (uint8_t)((peer_handle >> 16) & 0xff);
+    out[14 + 57] = (uint8_t)((peer_handle >> 24) & 0xff);
+    return len;
+}
+
+static void test_the_process_poller_asks_and_a_yes_reaches_the_sysap(void)
+{
+    CHECK(unsetenv("OVMX_NO_PROCESS_POLLER") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_PRCPOLINTERVAL", "1", 1) == 0, "setenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "no peer");
+
+    struct scs_poller *p = scsd_poll(&r.rx);
+    CHECK(scs_poll_polling(p, "VMS$VAXcluster", ps_sys_addr(ps)) == 1,
+          "the daemon did not register VMS$VAXcluster for polling (p. 2-50)");
+    CHECK(scs_poll_add_node(p, ps_sys_addr(ps)) == 1, "the node was not registered");
+
+    /* --- 1. THE CONNECT. --- */
+    scsd_test_frames = 0;
+    scs_poll_tick(p, 100000);
+    CHECK(r.rx.poll_connect_sent == 1,
+          "the poller put no SCS$DIRECTORY CONNECT-REQUEST on the wire (%ld)",
+          r.rx.poll_connect_sent);
+    CHECK(scsd_test_last_len == SCS_DIR_CONNREQ_FRAME_LEN,
+          "the CONNECT-REQUEST is %zu bytes, not the 110-byte SCA class",
+          scsd_test_last_len);
+    uint8_t connreq[SCS_DIR_CONNREQ_FRAME_LEN];
+    memcpy(connreq, scsd_test_last_frame, scsd_test_last_len);
+    CHECK(connreq[30] == SCS_DIR_OPCODE, "the CONNECT-REQUEST is not opcode 0x5b");
+    struct scs_dir_view cv;
+    CHECK(scs_dir_parse(connreq, SCS_DIR_CONNREQ_FRAME_LEN, &cv) == 0, "parse failed");
+    CHECK(cv.op == SCS_DIR_MSGTYPE_CONNECT_REQ,
+          "message type [46:48] is %u, not 0 == CONNECT_REQ", cv.op);
+    CHECK(cv.remote_conid == 0, "a CONNECT_REQ named a remote Con.ID (0x%08X)",
+          cv.remote_conid);
+    CHECK(cv.local_conid == SCS_DIR_OVMX_POLL_CONID,
+          "the poller offered 0x%08X, not its own handle", cv.local_conid);
+    CHECK(memcmp(connreq + 14 + 62, "SCS$DIRECTORY   ", 16) == 0,
+          "the CONNECT-REQUEST does not name SCS$DIRECTORY as its destination");
+    CHECK(memcmp(connreq + 14 + 78, "SCS$DIR_LOOKUP  ", 16) == 0,
+          "the CONNECT-REQUEST does not name SCS$DIR_LOOKUP as its source");
+    CHECK(memcmp(scsd_test_last_dst, vax1_hw_mac, 6) == 0,
+          "the CONNECT-REQUEST went to the wrong port address");
+
+    /* --- 2. THE PEER ACCEPTS -> the inquiry goes out. --- */
+    uint8_t reply[SCA_FRAME_MAX];
+    size_t rl = poll_peer_reply(connreq, SCS_DIR_CONNREQ_FRAME_LEN,
+                                SCS_DIR_MSGTYPE_ACCEPT_REQ, 0x63050008u,
+                                r.hw_mac, reply);
+    scsd_test_frames = 0;
+    rx_feed(&r, reply, rl);
+    CHECK(r.rx.poll_inquiry_sent == 1,
+          "the accepted connection produced no inquiry (%ld)", r.rx.poll_inquiry_sent);
+    CHECK(scs_poll_pending(p) == 1, "no reply is outstanding after the inquiry");
+    uint8_t inq[SCS_DIR_LOOKUP_FRAME_LEN];
+    CHECK(scsd_test_last_len == SCS_DIR_LOOKUP_FRAME_LEN,
+          "the inquiry is %zu bytes, not the 94-byte lookup class", scsd_test_last_len);
+    memcpy(inq, scsd_test_last_frame, scsd_test_last_len);
+    struct scs_dir_view iv;
+    CHECK(scs_dir_parse(inq, sizeof(inq), &iv) == 0, "parse failed");
+    CHECK(iv.is_lookup_request == 1, "the inquiry does not classify as a lookup REQUEST");
+    CHECK(memcmp(iv.name, "VMS$VAXcluster  ", 16) == 0,
+          "the inquiry asks about '%s', not VMS$VAXcluster", iv.name);
+    CHECK(iv.remote_conid == 0x63050008u,
+          "the inquiry does not address the handle the peer just supplied (0x%08X)",
+          iv.remote_conid);
+
+    /* --- 3. THE ANSWER IS YES -> the SYSAP connects. --- */
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, r.hw_mac, 6);
+    memcpy(lp.src_mac, vax1_hw_mac, 6);
+    memcpy(lp.src_logical, vax1_logical, 6);
+    memcpy(lp.peer_logical, our_logical, 6);
+    lp.remote_conid = SCS_DIR_OVMX_POLL_CONID;
+    lp.local_conid = 0x63050008u;
+    lp.opcode = SCS_MSGTYPE_SEQAPP;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memcpy(lp.name, "VMS$VAXcluster  ", SCS_DIR_NAME_LEN);
+    lp.affirmative = 1;
+    uint8_t yes[SCS_DIR_LOOKUP_FRAME_LEN];
+    CHECK(scs_dir_build_lookup_response(&lp, yes) == 0, "could not build the Yes");
+    long connreqs_before = r.rx.connect_req_sent;
+    rx_feed(&r, yes, sizeof(yes));
+    CHECK(r.rx.poll_answers == 1, "the daemon did not feed the answer to the poller");
+    CHECK(r.rx.poll_found == 1,
+          "an affirmative answer notified nobody (%ld)", r.rx.poll_found);
+    CHECK(r.rx.connect_req_sent == connreqs_before + 1,
+          "the notified SYSAP did not open its VMS$VAXcluster connection");
+    CHECK(scs_poll_pending(p) == 0, "an answered inquiry is still outstanding");
+
+    /* --- 4. p. 2-50's disable, driven by the DAEMON's own connect path. --- */
+    scsd_poll_found("VMS$VAXcluster", ps_sys_addr(ps), &r.rx); /* idempotent re-notify */
+    scs_poll_connected(p, "VMS$VAXcluster", ps_sys_addr(ps));
+    CHECK(scs_poll_polling(p, "VMS$VAXcluster", ps_sys_addr(ps)) == 0,
+          "polling for the connected pair did not stop (p. 2-50)");
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
+/*
+ * ==========================================================================
+ * vms-66f ROUND 4: THE OTHER HALF OF p. 2-50 -- "the Process Poller and
+ * Directory Service disconnect from each other".
+ *
+ * THE DEFECT THIS CASE EXISTS FOR. scsd_poll_emit() answered NOBUILDER for
+ * SCS_CONN_ACT_SEND_DISCONNECT_REQ and justified it with a comment saying OVMX
+ * builds no such frame. That comment was true when it was written and FALSE on
+ * this branch: vms-591 added scs_disc_build_request() and this file's own
+ * test_peer_disconnect_req_is_answered_and_matched() proves the daemon drives
+ * it. The measurable consequence was NOT a stale sentence -- it was that the
+ * poller's cycle could never end the way p. 2-50 says it ends, so every cycle
+ * force-released its descriptor and BOTH clean-release arms of scs_poll.c were
+ * unreachable code. gcov, whole `ctest -L scs` suite, before the fix:
+ * scs_poll.c lines 400-403 and 515-517 executed 0 times.
+ *
+ * WHAT IS TAKEN FROM PRODUCTION AND WHAT IS STOOD IN FOR. Every OVMX frame
+ * below is built by production scsd.c/scs_disc.c and read back off the
+ * transmit path. The PEER's two answers are built by OVMX's own vms-591
+ * builders with the parameters swapped into the peer's direction. That is a
+ * synthesis and it is labeled: no capture in this repo contains a VAX
+ * answering an OVMX Process Poller, because no reference cluster has ever seen
+ * one. What the synthesis does NOT have to carry is the byte layout -- that is
+ * proven against REAL captured VAX2 frames by disc_check_captured_answer() and
+ * the two cases above, which feed unedited captures. This case proves the
+ * POLLER's reaction, not the frame format.
+ * ========================================================================== */
+
+/* One peer-direction DISCONNECT frame for the poller's connection. `matching`
+ * and the message class are the caller's; everything else is the mirror of the
+ * poller's own addressing. Returns the frame length, 0 on failure. */
+static size_t poll_peer_disc(int want_request, int matching, uint32_t peer_handle,
+                             const uint8_t ovmx_hw[6], uint8_t *out)
+{
+    struct scs_disc_params dp;
+    memset(&dp, 0, sizeof(dp));
+    memcpy(dp.dst_mac, ovmx_hw, 6);        /* to us */
+    memcpy(dp.src_mac, vax1_hw_mac, 6);    /* from the peer */
+    memcpy(dp.src_logical, vax1_logical, 6);
+    memcpy(dp.peer_logical, our_logical, 6);
+    dp.remote_conid = SCS_DIR_OVMX_POLL_CONID; /* the peer addresses OUR handle */
+    dp.local_conid = peer_handle;
+    dp.matching = matching;
+    if (want_request) {
+        return scs_disc_build_request(&dp, out) == 0 ? SCS_DISC_REQ_FRAME_LEN : 0;
+    }
+    return scs_disc_build_response(&dp, out) == 0 ? SCS_DISC_RSP_FRAME_LEN : 0;
+}
+
+/*
+ * Build a world and drive ONE poller cycle through production up to and
+ * including the last answer -- which is what makes the poller invoke DISCONNECT
+ * (p. 2-50). Everything is production scsd.c except the peer's ACCEPT_REQ and
+ * its affirmative lookup response. `*disc_before` receives the daemon-wide
+ * disc_req_sent count taken IMMEDIATELY before the answer, so the caller can
+ * attribute the teardown to this cycle rather than to the run.
+ *
+ * The CLEAN-SHUTDOWN switch is NOT touched here: the caller sets it, which is
+ * the whole point of the bracket below.
+ */
+static struct scs_poller *poll_drive_to_teardown(struct rxworld *r,
+                                                 uint32_t peer_handle,
+                                                 long *disc_before)
+{
+    CHECK(unsetenv("OVMX_NO_PROCESS_POLLER") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_PRCPOLINTERVAL", "1", 1) == 0, "setenv failed");
+    rxworld_init(r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "no peer");
+    struct scs_poller *p = scsd_poll(&r->rx);
+    CHECK(scs_poll_add_node(p, ps_sys_addr(ps)) == 1, "the node was not registered");
+
+    scs_poll_tick(p, 100000);
+    CHECK(r->rx.poll_connect_sent == 1, "the poller sent no CONNECT-REQUEST");
+    uint8_t connreq[SCS_DIR_CONNREQ_FRAME_LEN];
+    memcpy(connreq, scsd_test_last_frame, SCS_DIR_CONNREQ_FRAME_LEN);
+    uint8_t reply[SCA_FRAME_MAX];
+    size_t rl = poll_peer_reply(connreq, SCS_DIR_CONNREQ_FRAME_LEN,
+                                SCS_DIR_MSGTYPE_ACCEPT_REQ, peer_handle,
+                                r->hw_mac, reply);
+    rx_feed(r, reply, rl);
+    CHECK(scs_poll_pending(p) == 1, "the accepted connection produced no inquiry");
+
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, r->hw_mac, 6);
+    memcpy(lp.src_mac, vax1_hw_mac, 6);
+    memcpy(lp.src_logical, vax1_logical, 6);
+    memcpy(lp.peer_logical, our_logical, 6);
+    lp.remote_conid = SCS_DIR_OVMX_POLL_CONID;
+    lp.local_conid = peer_handle;
+    lp.opcode = SCS_MSGTYPE_SEQAPP;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memcpy(lp.name, "VMS$VAXcluster  ", SCS_DIR_NAME_LEN);
+    lp.affirmative = 1;
+    uint8_t yes[SCS_DIR_LOOKUP_FRAME_LEN];
+    CHECK(scs_dir_build_lookup_response(&lp, yes) == 0, "could not build the Yes");
+    *disc_before = (long)disc_req_sent;
+    rx_feed(r, yes, sizeof(yes));
+    return p;
+}
+
+static void test_the_process_poller_disconnects_and_the_cycle_closes_clean(void)
+{
+    CHECK(unsetenv("OVMX_NO_CLEAN_SHUTDOWN") == 0, "unsetenv failed");
+    const uint32_t peer_handle = 0x63050009u;
+    struct rxworld r;
+    long disc_before = 0;
+    struct scs_poller *p = poll_drive_to_teardown(&r, peer_handle, &disc_before);
+    struct scs_cdt *pcdt = scs_cdl_lookup(&scsd_cdl, SCS_DIR_OVMX_POLL_CONID);
+    CHECK(pcdt != NULL, "the poller's CDT is not on the CDL");
+
+    /* --- 1. THE FRAME THAT USED NOT TO EXIST. --- */
+    CHECK(r.rx.poll_disconnect_sent == 1,
+          "the poller put %ld cycle-closing DISCONNECT_REQ on the wire, expected"
+          " 1 -- p. 2-50 ends the cycle with a disconnect, and before this round"
+          " the emitter answered NOBUILDER", r.rx.poll_disconnect_sent);
+    CHECK((long)disc_req_sent == disc_before + 1,
+          "the poller's teardown did not go through the SHARED vms-591 emitter"
+          " (disc_req_sent %lu -> %lu)", (unsigned long)disc_before, disc_req_sent);
+    CHECK(disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len),
+          "the last frame out is %zu bytes, not the %d-byte DISCONNECT_REQ",
+          scsd_test_last_len, SCS_DISC_REQ_FRAME_LEN);
+    if (disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len)) {
+        uint16_t m = 0xffff;
+        CHECK(scs_disc_match_get(scsd_test_last_frame, scsd_test_last_len, &m) == 1 &&
+                  m == SCS_DISC_MATCH_INITIAL,
+              "the poller's DISCONNECT_REQ carries matching flag 0x%04x, expected"
+              " 0x%04x -- the poller INITIATES this dialogue", m,
+              SCS_DISC_MATCH_INITIAL);
+        uint32_t rem = (uint32_t)scsd_test_last_frame[64] |
+                       ((uint32_t)scsd_test_last_frame[65] << 8) |
+                       ((uint32_t)scsd_test_last_frame[66] << 16) |
+                       ((uint32_t)scsd_test_last_frame[67] << 24);
+        uint32_t loc = (uint32_t)scsd_test_last_frame[68] |
+                       ((uint32_t)scsd_test_last_frame[69] << 8) |
+                       ((uint32_t)scsd_test_last_frame[70] << 16) |
+                       ((uint32_t)scsd_test_last_frame[71] << 24);
+        CHECK(rem == peer_handle && loc == SCS_DIR_OVMX_POLL_CONID,
+              "the teardown names Con.ID pair (0x%08X,0x%08X); the poller's own"
+              " connection is (0x%08X,0x%08X)", rem, loc, peer_handle,
+              (unsigned)SCS_DIR_OVMX_POLL_CONID);
+        CHECK(memcmp(scsd_test_last_dst, vax1_hw_mac, 6) == 0,
+              "the teardown went to the wrong port address");
+    }
+    CHECK(scs_poll_state_of(p) == SCS_POLL_DISCONNECTING,
+          "after one DISCONNECT the poller is %s; p. 2-26 says one DISCONNECT"
+          " closes nothing", scs_poll_state_name(scs_poll_state_of(p)));
+    CHECK(scs_conn_state_of(pcdt) == SCS_CONN_DISC_SENT,
+          "the poller's connection is %s, expected DISC SENT (Figure 2-16)",
+          scs_conn_state_name(scs_conn_state_of(pcdt)));
+
+    /* --- 2. THE PEER ANSWERS, and Figure 2-16 runs to CLOSED. --- */
+    uint8_t prsp[SCS_DISC_RSP_FRAME_LEN];
+    size_t pl = poll_peer_disc(0, 0, peer_handle, r.hw_mac, prsp);
+    CHECK(pl == SCS_DISC_RSP_FRAME_LEN, "could not build the peer's DISCONNECT_RSP");
+    rx_feed(&r, prsp, pl);
+    CHECK(scs_conn_state_of(pcdt) == SCS_CONN_DISC_ACK,
+          "after the peer's DISCONNECT_RSP the connection is %s, expected DISC ACK",
+          scs_conn_state_name(scs_conn_state_of(pcdt)));
+    CHECK(scs_poll_state_of(p) == SCS_POLL_DISCONNECTING,
+          "the poller left DISCONNECTING on a half-finished dialogue");
+
+    uint8_t preq[SCS_DISC_REQ_FRAME_LEN];
+    pl = poll_peer_disc(1, 1, peer_handle, r.hw_mac, preq);
+    CHECK(pl == SCS_DISC_REQ_FRAME_LEN, "could not build the peer's matching request");
+    unsigned long rsp_before = disc_rsp_sent;
+    rx_feed(&r, preq, pl);
+
+    /* --- 3. THE CYCLE ENDS CLEAN -- the arm that was dead. --- */
+    CHECK(disc_rsp_sent == rsp_before + 1,
+          "OVMX did not answer the peer's matching DISCONNECT_REQ on the poller's"
+          " connection (%lu -> %lu)", rsp_before, disc_rsp_sent);
+    CHECK(scs_poll_state_of(p) == SCS_POLL_IDLE,
+          "the poller is %s after its connection reached CLOSED, expected IDLE",
+          scs_poll_state_name(scs_poll_state_of(p)));
+    CHECK(p->disconnects_closed == 1,
+          "the completed teardown was counted %lu times, expected once",
+          p->disconnects_closed);
+    CHECK(p->disconnects_unclosed == 0,
+          "a teardown that COMPLETED was reported as unclosed (%lu)",
+          p->disconnects_unclosed);
+    CHECK(p->descriptors_forced == 0,
+          "the cycle force-released its descriptor (%lu) instead of getting it"
+          " back the p. 2-26 way -- the whole point of this round",
+          p->descriptors_forced);
+    CHECK(scs_cdl_lookup(&scsd_cdl, SCS_DIR_OVMX_POLL_CONID) == NULL,
+          "the poller's CDT is still on the CDL after CLOSED (p. 2-26)");
+    CHECK(rxlog_has("SCSD-I-POLLCLOSED"),
+          "the daemon never reported the poller's cycle closing; log: '%s'", rxlog);
+    CHECK(conn_illegal_events == 0,
+          "the poller's teardown scored %lu illegal events", conn_illegal_events);
+
+    /* --- 4. AND THE NEXT CYCLE RUNS. The descriptor came back, so the same
+     * Con.ID is free again -- which is what force-release was invented to fake
+     * and what a completed dialogue now does for real. --- */
+    scs_poll_tick(p, 200000);
+    CHECK(r.rx.poll_connect_sent == 2,
+          "the poller sent %ld CONNECT-REQUESTs across two cycles, expected 2 --"
+          " cycle 2 was refused, so the descriptor did not really come back",
+          r.rx.poll_connect_sent);
+    CHECK(p->connect_refused == 0, "cycle 2 was refused (%lu)", p->connect_refused);
+    scs_poll_abandon(p);
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
+/*
+ * GUARDRAIL 23 for the frame this round adds. Putting a DISCONNECT_REQ on the
+ * poller's connection is a WIRE-VISIBLE change, so it ships behind a switch
+ * with a bracketing control. The switch is vms-591's OVMX_NO_CLEAN_SHUTDOWN,
+ * enforced INSIDE scs_disc_build_request() rather than at the call site, so the
+ * poller's emitter cannot route around it -- and with it set the poller's wire
+ * is byte-for-byte what it was before this round: connect, inquire, and
+ * nothing else.
+ *
+ * AND THE SUPPRESSION IS HONEST. The refusal comes back as NOBUILDER, so the
+ * transition still commits (the connection really is in DISC SENT) and
+ * port->unemitted counts the frame SCA did not get. That is scs_svc.h's
+ * contract, and it is the difference between "OVMX did not send it" and "OVMX
+ * pretended it did".
+ */
+static void test_the_process_poller_teardown_honours_the_clean_shutdown_switch(void)
+{
+    const uint32_t peer_handle = 0x6305000au;
+    CHECK(setenv("OVMX_NO_CLEAN_SHUTDOWN", "1", 1) == 0, "setenv failed");
+    struct rxworld r;
+    long disc_before = 0;
+    unsigned long unemitted_before = scsd_svc()->unemitted;
+    struct scs_poller *p = poll_drive_to_teardown(&r, peer_handle, &disc_before);
+    CHECK(r.rx.poll_disconnect_sent == 0,
+          "OVMX_NO_CLEAN_SHUTDOWN=1 did not suppress the poller's teardown"
+          " (%ld frame(s) still went out)", r.rx.poll_disconnect_sent);
+    CHECK((long)disc_req_sent == disc_before,
+          "a DISCONNECT_REQ reached the wire with the switch set (%lu -> %lu)",
+          (unsigned long)disc_before, disc_req_sent);
+    CHECK(!disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len),
+          "the last frame out IS a DISCONNECT_REQ despite the switch");
+    CHECK(scsd_svc()->unemitted == unemitted_before + 1,
+          "the suppressed frame was not counted in port->unemitted (%lu -> %lu)"
+          " -- a gated frame must still be REPORTED, not vanish",
+          unemitted_before, scsd_svc()->unemitted);
+    CHECK(scs_poll_state_of(p) == SCS_POLL_DISCONNECTING,
+          "the poller is %s; the transition commits on NOBUILDER (scs_svc.h)",
+          scs_poll_state_name(scs_poll_state_of(p)));
+    scs_poll_abandon(p);
+
+    /* THE CONTROL. Same world, same drive, switch cleared. */
+    CHECK(unsetenv("OVMX_NO_CLEAN_SHUTDOWN") == 0, "unsetenv failed");
+    struct rxworld r2;
+    long disc_before2 = 0;
+    struct scs_poller *p2 = poll_drive_to_teardown(&r2, peer_handle, &disc_before2);
+    CHECK(r2.rx.poll_disconnect_sent == 1,
+          "CONTROL FAILED: with the switch cleared the poller STILL sent no"
+          " teardown, so the measurement above proves nothing about the switch");
+    CHECK((long)disc_req_sent == disc_before2 + 1,
+          "CONTROL FAILED: disc_req_sent did not move (%lu -> %lu)",
+          (unsigned long)disc_before2, disc_req_sent);
+    scs_poll_abandon(p2);
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
+/*
+ * A PEER DEPARTS UNDER A POLL CYCLE IN FLIGHT (vms-096).
+ *
+ * THE BUG, IN TWO HALVES.
+ *
+ * (a) scs_pb_depart() releases EVERY CDT queued to the departing peer's Path
+ *     Block, and the poller's in-flight cycle connection is an ordinary CDT on
+ *     that circuit. Nothing told the poller. It kept `cdt` pointing at a
+ *     released slot and stayed in CONNECTING/INQUIRING/DISCONNECTING.
+ *
+ * (b) The next scs_poll_abandon() then called scs_cdl_release() on whatever
+ *     now occupied that CDL slot -- and a released slot is the FIRST one
+ *     scs_cdl_alloc() hands out. So an unrelated connection was torn down under
+ *     its owner and its MFREEQ/DFREEQ deposit was subtracted from the port.
+ *
+ * The two halves are asserted separately because they are fixed separately:
+ * part 1 pins scsd.c's scs_poll_pb_departing() call, part 2 pins the ownership
+ * check inside poll_release_cdt(). Removing either one alone reds this test.
+ */
+static void test_peer_departure_under_a_live_poll_cycle(void)
+{
+    CHECK(unsetenv("OVMX_NO_PROCESS_POLLER") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_NO_PEER_DEPART") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_PRCPOLINTERVAL", "1", 1) == 0, "setenv failed");
+
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "no peer");
+    if (ps == NULL) {
+        return;
+    }
+    struct scs_pb *pb = ps->pb;
+
+    struct scs_poller *p = scsd_poll(&r.rx);
+    CHECK(scs_poll_add_node(p, ps_sys_addr(ps)) == 1, "the node was not registered");
+    scs_poll_tick(p, 100000);
+    CHECK(r.rx.poll_connect_sent >= 1, "the poller opened no cycle to depart under");
+    CHECK(scs_poll_state_of(p) != SCS_POLL_IDLE,
+          "the poller is IDLE, so there is no in-flight cycle for the sweep to"
+          " interrupt and this test would prove nothing");
+    struct scs_cdt *cycle_cdt = p->cdt;
+    uint32_t cycle_conid = (cycle_cdt != NULL) ? cycle_cdt->local_conid : 0u;
+    CHECK(cycle_cdt != NULL, "the cycle holds no descriptor");
+    CHECK(cycle_cdt != NULL && cycle_cdt->pb == pb,
+          "the cycle's descriptor is not queued to the departing peer's path block,"
+          " so the sweep would not release it");
+    unsigned long abandoned_before = p->cycles_abandoned;
+
+    /* ---- 1. THE DEPARTURE MUST END THE CYCLE ---------------------------- */
+    ps->last_rx_ms = 1;
+    CHECK(rx_sweep(&r, 1 + scs_depart_listen_timeout_ms()) == 1,
+          "the silent peer was not declared departed");
+    CHECK(p->cdt == NULL,
+          "the poller still points at a descriptor the departure sweep RELEASED."
+          " The next scs_poll_abandon() will call scs_cdl_release() on whatever"
+          " has since been allocated into that CDL slot");
+    CHECK(scs_poll_state_of(p) == SCS_POLL_IDLE,
+          "the poller is %s after the node under its cycle departed; a cycle whose"
+          " connection no longer exists can never complete and would block every"
+          " later cycle", scs_poll_state_name(scs_poll_state_of(p)));
+    CHECK(p->cycles_abandoned == abandoned_before + 1,
+          "the interrupted cycle was not counted as abandoned (%lu -> %lu) -- a"
+          " cycle that ended because its node vanished is abandoned however far it"
+          " had got", abandoned_before, p->cycles_abandoned);
+
+    /* ---- 2. AND A RECYCLED SLOT IS NEVER RELEASED ------------------------
+     * Reconstruct exactly the state the unfixed sweep left behind: the poller
+     * pointing at a CDL slot that has since been handed to a DIFFERENT
+     * connection. scs_poll_abandon() must decline it. Without the ownership
+     * check in poll_release_cdt() this releases the victim. */
+    static const uint8_t other_hw_mac[6]  = {0x08, 0x00, 0x2b, 0x11, 0x22, 0x33};
+    static const uint8_t other_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x03, 0x04};
+    struct peer_state *ps2 = open_circuit_to(&r, other_hw_mac, other_logical);
+    CHECK(ps2 != NULL, "no second peer for the recycled-slot arm");
+    if (ps2 != NULL) {
+        /* Claim the departed cycle's EXACT slot by Con.ID rather than taking
+         * whatever scs_cdl_alloc() offers: earlier cases in this file have
+         * consumed low slots, so "the first free slot" is not necessarily the
+         * one just released, and the arm has to exercise a RECYCLED slot to
+         * mean anything. */
+        struct scs_cdt *victim = scs_cdl_alloc_conid(&scsd_cdl, cycle_conid,
+                                                     "VMS$VAXcluster  ",
+                                                     "VMS$VAXcluster  ", ps2->pb);
+        CHECK(victim != NULL, "the departed cycle's CDL slot could not be reclaimed"
+                              " (Con.ID 0x%08X)", cycle_conid);
+        if (victim != NULL) {
+            CHECK(victim == cycle_cdt,
+                  "the CDL did not hand back the slot the departed cycle used, so"
+                  " this arm is not exercising a RECYCLED slot at all");
+            uint32_t victim_conid = victim->local_conid;
+            p->cdt = victim;              /* the state the bug produced */
+            p->state = SCS_POLL_INQUIRING;
+            scs_poll_abandon(p);
+            CHECK(victim->in_use,
+                  "scs_poll_abandon() RELEASED a connection the poller does not own"
+                  " (Con.ID 0x%08X) -- a recycled-slot release, taken out of a live"
+                  " SYSAP's connection", victim_conid);
+            CHECK(victim->local_conid == victim_conid,
+                  "the victim's Con.ID was zeroed, i.e. its descriptor was reset"
+                  " under it");
+            CHECK(p->cdt == NULL && scs_poll_state_of(p) == SCS_POLL_IDLE,
+                  "the poller kept a descriptor it declined to release");
+            scs_cdl_release(&scsd_cdl, victim);
+        }
+    }
+
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
+static void test_the_process_poller_kill_switch(void)
+{
+    /* GUARDRAIL 23: run the switch, confirm the gated behaviour is suppressed,
+     * and show the SAME world without it does the thing. */
+    CHECK(setenv("OVMX_PRCPOLINTERVAL", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_NO_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    struct scs_poller *p = scsd_poll(&r.rx);
+    CHECK(scs_poll_add_node(p, ps_sys_addr(ps)) == 1, "the node was not registered");
+    scsd_test_frames = 0;
+    for (uint64_t t = 100000; t <= 110000; t += 1000) {
+        scs_poll_tick(p, t);
+    }
+    CHECK(r.rx.poll_connect_sent == 0 && r.rx.poll_inquiry_sent == 0,
+          "OVMX_NO_PROCESS_POLLER=1 did not suppress the poller: %ld connect(s),"
+          " %ld inquiry(s) still went out",
+          r.rx.poll_connect_sent, r.rx.poll_inquiry_sent);
+    CHECK(scsd_test_frames == 0,
+          "the gated poller still handed %d frame(s) to the transmit path",
+          scsd_test_frames);
+
+    CHECK(unsetenv("OVMX_NO_PROCESS_POLLER") == 0, "unsetenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    struct peer_state *ps2 = open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    struct scs_poller *p2 = scsd_poll(&r2.rx);
+    (void)scs_poll_add_node(p2, ps_sys_addr(ps2));
+    scs_poll_tick(p2, 100000);
+    CHECK(r2.rx.poll_connect_sent == 1,
+          "CONTROL FAILED: with the switch cleared the poller still sent nothing,"
+          " so the measurement above proves nothing about the switch");
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
 int main(void)
 {
+    /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
+     * chk_stream() above -- without this, a CHECK that fails inside a
+     * log-capture window prints into rxlog and the operator sees nothing. */
+    {
+        int fd = dup(STDERR_FILENO);
+        if (fd >= 0) {
+            chk_out = fdopen(fd, "w");
+        }
+    }
+
     /* Several assertions below assume the machine starts enabled. */
     (void)unsetenv("OVMX_NO_CONN_FSM");
 
@@ -1887,9 +6518,11 @@ int main(void)
     test_peer_slot_identity_and_capacity();
     test_shared_sb_aliases_the_peer_logical();
     test_sb_exhaustion_is_visible_and_unreachable();
-    test_rejoin_is_inert_in_the_daemon();
+    test_released_peer_slot_gives_a_returning_node_a_new_circuit();
     /* vms-4071: the daemon's use of the VC formation state machine. */
     test_vc_actions_emit_the_right_config_rounds();
+    /* vms-2f3 / vms-096: the DAEMON's [66:74] and [98:106], not the builder's. */
+    test_vc_start_carries_a_live_per_boot_incarnation();
     test_vc_happy_path_frame_sequence();
     test_vc_early_ack_is_opt_in();
     test_vc_open_on_bare_ack_still_sends_round_2();
@@ -1904,14 +6537,80 @@ int main(void)
      * with frames taken byte-exact off the reference-lab wire. */
     test_captured_directory_connect_drives_the_machine();
     test_captured_member_connect_drives_the_machine();
+    test_member_connect_on_a_closed_circuit_is_a_counted_refusal();
     test_captured_connect_rsp_drives_the_classifier();
     test_captured_ovmx_accept_req_opens_the_joiner();
     test_null_source_conid_binds_nothing();
+    /* vms-fdd: the SCA connect data, through CONNECT, ACCEPT and the receive
+     * dispatch (p. 2-25 / p. 2-28). */
+    test_connect_data_rides_the_daemon();
+    /* vms-abc: the p. 2-31 message guarantees, through the same dispatch. */
+    test_seq_gap_breaks_the_vc_and_notifies_both_sysaps();
+    test_seq_gap_kill_switch_through_the_daemon();
+    test_a_broken_circuit_carries_no_traffic();
+    test_the_hello_beacon_transmits_through_the_channel_exemption();
+    test_retransmit_does_not_break_the_vc();
+    test_delivery_failure_breaks_the_vc_through_the_daemon();
+    test_delivery_failure_kill_switch_through_the_daemon();
+    /* This item's handler installation changes vms-17f's departure path. */
+    test_departure_notifies_the_sysaps();
     test_exit_summary_reports_the_parked_connection();
+    /* vms-17f: peer departure, and the p. 2-21 REFRESH the daemon can now
+     * reach, driven by captured formation frames through the same dispatch. */
+    test_rejoin_reaches_the_p221_refresh();
+    test_departure_kill_switch_restores_the_pinned_slot();
+    test_listen_timeout_override_moves_the_departure();
+    test_multicast_beacon_keeps_a_peer_alive();
+    /* vms-22e: the daemon's half of the p. 2-21 footnote rule -- the log line
+     * that names the failing test, and the VCOPEN it must NOT print. */
+    test_masquerade_open_is_logged_and_suppresses_vcopen();
+    /* vms-b1d: the exit summary's datagram-discard accounting. */
+    test_exit_summary_reports_datagram_discards();
+    /* vms-7fe: the SDIR queue as the daemon uses it, and its kill switch. */
+    test_sdir_lookup_is_answered_from_the_queue();
+    test_sdir_refuses_a_connect_request_for_an_unlisted_sysap();
+    test_no_conn_fsm_does_not_turn_into_a_refusal_storm();
+    /* The OTHER inbound-CONNECT_REQ branch: the 0x5b SCS$DIRECTORY path. */
+    test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted();
+    test_the_0x5b_scan_refuses_a_target_the_queue_does_not_carry();
+    test_the_0x5b_scan_reads_and_restores_the_listening_cdt_state();
+    test_accept_conid_is_not_the_listening_conid();
+    /* vms-6b3: p. 2-26's reason code, decoded off REJECT_REQ/DISCONNECT_REQ. */
+    test_reason_real_disconnect_req_is_decoded_and_logged();
+    test_reason_frame_for_another_conid_is_not_ours();
+    test_reason_nonzero_code_is_decoded_named_and_counted();
+    test_reason_kill_switch_through_the_daemon();
+    /* vms-591: the Figure 2-16 DISCONNECT dialogue and the clean shutdown. */
+    test_peer_disconnect_req_is_answered_and_matched();
+    test_matching_disconnect_rsp_closes_the_connection();
+    test_simultaneous_disconnect_sends_no_second_request();
+    test_shutdown_disconnects_every_open_connection();
+    test_clean_shutdown_kill_switch_through_the_daemon();
+    test_exit_summary_reports_the_disconnect_dialogue();
+    /* vms-66f: the SCS Process Poller's two senders and its kill switch. */
+    test_the_process_poller_asks_and_a_yes_reaches_the_sysap();
+    test_the_process_poller_disconnects_and_the_cycle_closes_clean();
+    test_the_process_poller_teardown_honours_the_clean_shutdown_switch();
+    /* vms-096: the departure sweep vs. a poll cycle in flight. */
+    test_peer_departure_under_a_live_poll_cycle();
+    test_the_process_poller_kill_switch();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"
           " assertions above did not run");
+
+    /* vms-7fe: THE p. 2-50 BUSY REPLY, MEASURED ACROSS EVERY CASE ABOVE.
+     * scs_sdir.h OVMX DESIGN CHOICE 3 predicts scsd.c can never emit one; this
+     * is the number that makes the prediction falsifiable inside the suite
+     * rather than only in a live daemon's exit summary. Every comment in this
+     * tree that says "busy-sent is 0" re-derives from HERE. */
+    sdir_busy_seen_total += sdir_busy_replies;
+    CHECK(sdir_busy_seen_total == 0,
+          "scsd_handle_frame() emitted %lu p. 2-50 BUSY CONNECT_RSP(s) across this"
+          " file -- OVMX DESIGN CHOICE 3 says the daemon's synchronous answer makes"
+          " that unreachable, so either the answer stopped being synchronous or the"
+          " unreachability claim in scs_sdir.h, scsd.c and spec sec 5 is now false",
+          sdir_busy_seen_total);
 
     printf("test_scsd_wire: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

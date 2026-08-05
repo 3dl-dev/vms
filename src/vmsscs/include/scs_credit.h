@@ -230,26 +230,42 @@
  *
  * READ THIS BEFORE CREDITING A GREEN TEST RUN AS "OVMX DOES FLOW CONTROL".
  *
- *   - NOTHING IN scsd.c CALLS THIS MODULE. src/vmsscs/scsd.c does not link
- *     vmsscs_credit and does not route through CDTs at all (see the same
- *     admission at the end of scs_cdt.h): its connections are still node-global
- *     Con.ID macros over `struct peer_state`. The daemon is BYTE-UNAFFECTED by
- *     this file. `nm SCSD.EXE` shows no scs_credit_* symbol.
- *   - CONSEQUENTLY OVMX STILL PUTS NO LIVE CREDIT ON THE WIRE. Every frame OVMX
- *     emits carries whatever value its captured template had at [48:50]; this
- *     module changes not one transmitted byte. scs_credit_stamp_header() and
- *     scs_credit_read_header() exist, are unit-tested against real captured
- *     frames, and have ZERO production callers today.
+ *   - THE MODULE IS LINKED AND REACHED, BY THREE PATHS, NONE OF THEM A DIRECT
+ *     CALL FROM scsd.c. CORRECTED (vms-096): this bullet used to read "NOTHING
+ *     IN scsd.c CALLS THIS MODULE ... does not link vmsscs_credit ... `nm
+ *     SCSD.EXE` shows no scs_credit_* symbol". All three clauses are false.
+ *     `nm build/bin/SCSD.EXE | grep -c ' T scs_credit'` reports **22**, and
+ *     src/vmsscs/CMakeLists.txt links vmsscs_credit into scsd_exe transitively
+ *     THREE ways -- via vmsscs_depart, via vmsscs_svc, and (since vms-096) via
+ *     vmsscs_poll, which pulls in both.
+ *
+ *     THE MECHANISM, stated exactly, because "linked" is not "used":
+ *       scs_depart.c:88   scs_credit_wait_flush() on every CDT of a departing
+ *                         peer's Path Block (the p. 2-28 ordered teardown);
+ *       scs_svc.c:269     scs_credit_wait_flush() in svc_release(), the SCS
+ *                         services' release path;
+ *       scs_poll.c:377    scs_credit_wait_flush() in poll_release_cdt(), when a
+ *                         poll cycle ends without the p. 2-26 dialogue;
+ *       scs_svc.c:250     scs_credit_extend(), but ONLY when a caller passes a
+ *                         nonzero send_credits/min_send_credits -- and scsd.c
+ *                         passes 0 on every production connection.
+ *     So the reached surface is the TEARDOWN half. Every flush drops zero
+ *     waiters today, because nothing ever enters a Credit Wait (below).
+ *   - OVMX STILL PUTS NO LIVE CREDIT ON THE WIRE, and THAT part was and remains
+ *     true. Every frame OVMX emits carries whatever value its captured template
+ *     had at [48:50]; no path above changes a transmitted byte.
+ *     scs_credit_stamp_header() and scs_credit_read_header() exist, are
+ *     unit-tested against real captured frames, and have ZERO production callers.
  *   - The 0x48 "credit-return" emitter in scs_vc.c is untouched and is NOT this
  *     mechanism. It is a 1-for-1 ACK; the 41-byte 0x48 class is too short to
  *     even contain SCA offset 48. Whether the 0x48 short is SCA's "special
  *     credit message" (p. 2-44) is NOT established and is not claimed here.
- *     NAME COLLISION WARNING: `nm SCSD.EXE` DOES show one `scs_credit_*`
- *     symbol -- `scs_credit_build`, scs_vc.c's 0x48 frame builder, which
- *     predates this module (vms-691). No symbol declared in THIS header
- *     appears in the daemon.
- *   - Wiring this to the daemon needs the connection state machine (vms-dd5)
- *     and per-peer connection identity, which this item is fenced out of.
+ *     NAME COLLISION WARNING, still worth stating: `scs_credit_build` in that
+ *     symbol count is scs_vc.c's 0x48 frame builder and predates this module
+ *     (vms-691). It is 1 of the 22, not evidence about this header.
+ *   - Wiring the SEND side to the daemon needs per-connection credit on the
+ *     production connections -- i.e. scsd.c passing nonzero send_credits into
+ *     scs_connect()/scs_accept() -- which this item is fenced out of.
  *
  * PER THE DISPATCH: this is implemented for CORRECTNESS. It is NOT a fix for
  * the vms-2f3 rejoin failure and is not offered as one -- HANDOFF sec 4M.22
@@ -432,16 +448,29 @@ int scs_credit_grant_from_peer(struct scs_cdt *cdt, unsigned n);
  * behaviour. Setting OVMX_NO_CREDIT_ACCOUNTING=1 also suppresses everything
  * here, because with no account there is nothing to wait on.
  *
- * ===== REACHABILITY: THERE IS NO PRODUCTION CALLER. Stated plainly because
- * this epic keeps rejecting claims that outrun their evidence. =====
- *   - Nothing in src/vmsscs/scsd.c calls scs_credit_send_or_wait,
- *     scs_credit_wait_release, scs_credit_set_special_emitter or anything else
- *     declared in this header. vmsscs_credit is still not linked into
- *     scsd_exe (see src/vmsscs/CMakeLists.txt) and `nm SCSD.EXE` shows no
- *     symbol from this header. The daemon is BYTE-UNAFFECTED.
+ * ===== REACHABILITY: THE CREDIT WAIT IS NEVER ENTERED, BUT IT IS FLUSHED ON
+ * EVERY TEARDOWN. Stated exactly because this epic keeps rejecting claims that
+ * outrun their evidence -- INCLUDING THIS ONE. =====
+ *
+ * CORRECTED (vms-096). This block used to say "vmsscs_credit is still not
+ * linked into scsd_exe ... `nm SCSD.EXE` shows no symbol from this header. The
+ * daemon is BYTE-UNAFFECTED." It IS linked -- transitively through
+ * vmsscs_depart, vmsscs_svc and vmsscs_poll -- and `nm build/bin/SCSD.EXE`
+ * reports 22 scs_credit symbols. The full mechanism is in the first
+ * REACHABILITY block above; the accurate statement for THIS half is narrower:
+ *   - THE ENTRY POINTS ARE NOT CALLED. Nothing in the tree calls
+ *     scs_credit_send_or_wait(), scs_credit_wait_release() or
+ *     scs_credit_set_special_emitter() outside tests/vmsscs/test_scs_credit.c.
+ *   - THE EXIT POINT IS. scs_credit_wait_flush() runs on every connection
+ *     release, from three production sites (scs_depart.c:88, scs_svc.c:269,
+ *     scs_poll.c:377). It necessarily drops ZERO waiters, since the queue can
+ *     only be filled by scs_credit_send_or_wait(), which nothing calls -- and
+ *     that zero is asserted in the daemon's departure statistics rather than
+ *     assumed here.
  *   - Therefore NO OVMX SENDER CAN CURRENTLY ENTER A CREDIT WAIT, and OVMX
  *     emits no special credit message. What is proven by the tests is that the
- *     mechanism is correct, not that OVMX runs it.
+ *     mechanism is correct, not that OVMX runs it. THE WIRE IS UNAFFECTED --
+ *     which is the claim that matters and is the one the old wording got right.
  *   - The special credit message additionally cannot be BUILT: OVMX has not
  *     grounded which wire frame class carries one. That is filed as an
  *     explicit RE gap in docs/cluster-protocol-spec.md sec 5. This module
@@ -450,9 +479,9 @@ int scs_credit_grant_from_peer(struct scs_cdt *cdt, unsigned n);
  *     grounds that class as a strict 1-for-1 sequence ack with no locatable
  *     credit count (622/622 frames), and it is too short to reach SCA
  *     offset 48 anyway.
- *   - Wiring both to the daemon needs the SCS connection state machine
- *     (vms-dd5) and per-peer connection identity, which this item is fenced
- *     out of.
+ *   - Wiring the entry points to the daemon needs scsd.c to extend nonzero
+ *     credit on its production connections (scs_svc.c:250 already routes it);
+ *     that, and grounding the special-credit frame class, is what remains.
  */
 
 /* scs_credit_send_or_wait() return code: the operation was placed in a Credit

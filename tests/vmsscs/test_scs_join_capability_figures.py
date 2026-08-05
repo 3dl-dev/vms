@@ -50,6 +50,41 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 import scs_wire                                                    # noqa: E402
 
+
+def _lab2_capture_dir(default):
+    """The lab-2 resolution order (vms-371 / vms-14f3), and why it exists.
+
+    These are LAB-2 captures, living in a SIBLING of the lab-1 grounding
+    library (vms-096), so the LAB-1 variable must never be the thing that
+    LOCATES them:
+
+      1. OVMX_LAB2_CAPTURES names the lab-2 library outright, and wins.
+      2. OVMX_LAB_CAPTURES pointing at a path that DOES NOT EXIST still forces
+         the no-captures arm: test_scs_join_capability_mutants.py hides the
+         wire that way, and a "hide the captures" lever has to keep working.
+      3. Otherwise `default` (the tool's own DEFAULT_CAPTURE_DIR). An
+         OVMX_LAB_CAPTURES that names a REAL directory is a lab-1 library; it
+         says nothing about where the lab-2 brackets are, and must not be
+         read as "absent".
+
+    Every lab-2 capture block in this gate (the vms-70e2/vms-578 wire arm in
+    section 4, and the vms-449/vms-449R brackets in 2c/2d) MUST resolve
+    through this one function -- vms-371 fixed the 70e2/578 arm and vms-14f3
+    found the 449/449R blocks still doing their own ad hoc
+    OVMX_LAB2_CAPTURES-or-OVMX_LAB_CAPTURES lookup, which let
+    OVMX_LAB_CAPTURES=<a real lab-1 library> silently skip 72 checks with no
+    banner and no failure (the exact LAB1_SHADOW shape vms-371 closed for
+    70e2/578, left open here).
+    """
+    cap2 = os.environ.get("OVMX_LAB2_CAPTURES")
+    cap1 = os.environ.get(scs_wire.ENV_CAPTURES)
+    if cap2:
+        return cap2
+    if cap1 and not os.path.isdir(cap1):
+        return cap1                     # deliberate hide -> counts as absent
+    return default
+
+
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 # The three overrides exist so test_scs_join_capability_mutants.py can point
 # this gate at scratch copies. Nothing under src/, docs/ or tools/ is ever
@@ -484,10 +519,9 @@ if EXPECTED_449:
           f"CAPTURES_449 {sorted(CAPTURES_449)} does not cover exactly the runs "
           f"in EXPECTED_449 {sorted(EXPECTED_449['runs'])}")
 
-    cap449 = os.environ.get("OVMX_LAB2_CAPTURES",
-                            os.environ.get("OVMX_LAB_CAPTURES", M.DEFAULT_CAPTURE_DIR))
-    have449 = all(os.path.exists(os.path.join(cap449, fn))
-                  for fn in CAPTURES_449.values())
+    cap449 = _lab2_capture_dir(M.DEFAULT_CAPTURE_DIR)
+    have449 = os.path.isdir(cap449) and all(
+        os.path.exists(os.path.join(cap449, fn)) for fn in CAPTURES_449.values())
     if have449:
         for tag, fn in CAPTURES_449.items():
             g = M.measure_capture(os.path.join(cap449, fn),
@@ -497,11 +531,10 @@ if EXPECTED_449:
                           "accept_rsp_tx", "identity"):
                 check(g[field] == e[field],
                       f"[captures-449] {tag} {field} {g[field]!r} != {e[field]!r}")
-        print("[the lab-2 captures are present -- EXPECTED_449 was re-derived "
-              "from them]")
+        print("[scs_join_capability_figures-449: the lab-2 captures are present "
+              "-- EXPECTED_449 was re-derived from the packets]")
     else:
-        print(f"[no lab-2 captures under {cap449} -- EXPECTED_449 was pinned to "
-              f"the prose and its shape checked; the re-derivation was not run]")
+        scs_wire.announce_absent("scs_join_capability_figures-449", cap449, check)
 
 # ===========================================================================
 # 2d. THE vms-449R REPLICATION -- EXPECTED_449R vs spec sec 4(O.3)
@@ -596,22 +629,22 @@ if EXPECTED_449R:
           f"CAPTURES_449R {sorted(CAPTURES_449R)} does not cover exactly the "
           f"runs in EXPECTED_449R {sorted(EXPECTED_449R['runs'])}")
 
-    have449r = all(os.path.exists(os.path.join(cap449, fn))
-                   for fn in CAPTURES_449R.values())
+    cap449r = _lab2_capture_dir(M.DEFAULT_CAPTURE_DIR)
+    have449r = os.path.isdir(cap449r) and all(
+        os.path.exists(os.path.join(cap449r, fn)) for fn in CAPTURES_449R.values())
     if have449r:
         for tag, fn in CAPTURES_449R.items():
-            g = M.measure_capture(os.path.join(cap449, fn),
+            g = M.measure_capture(os.path.join(cap449r, fn),
                                   EXPECTED_449R["ovmx_mac"])
             e = EXPECTED_449R["runs"][tag]
             for field in ("cm_190_tx", "cm_190_rx", "ctl_tx", "ctl_rx",
                           "accept_rsp_tx", "identity"):
                 check(g[field] == e[field],
                       f"[captures-449R] {tag} {field} {g[field]!r} != {e[field]!r}")
-        print("[the lab-2 captures are present -- EXPECTED_449R was re-derived "
-              "from them]")
+        print("[scs_join_capability_figures-449R: the lab-2 captures are "
+              "present -- EXPECTED_449R was re-derived from the packets]")
     else:
-        print(f"[no lab-2 captures under {cap449} -- EXPECTED_449R was pinned "
-              f"to the prose and its shape checked; no re-derivation]")
+        scs_wire.announce_absent("scs_join_capability_figures-449R", cap449r, check)
 
 # ===========================================================================
 # 3. THE QUARANTINE
@@ -708,14 +741,7 @@ check("4F580007" in header and "B751000C" in header,
 # test_scs_figures_wire_mutants.py::LAB1_SHADOW is the regression test: it runs
 # this gate with OVMX_LAB_CAPTURES on a real lab-1 library and OVMX_LAB2_CAPTURES
 # unset, and requires the wire arm to have RUN.
-_cap2 = os.environ.get("OVMX_LAB2_CAPTURES")
-_cap1 = os.environ.get(scs_wire.ENV_CAPTURES)
-if _cap2:
-    _where = _cap2
-elif _cap1 and not os.path.isdir(_cap1):
-    _where = _cap1                      # deliberate hide -> capture_dir() None
-else:
-    _where = M.DEFAULT_CAPTURE_DIR
+_where = _lab2_capture_dir(M.DEFAULT_CAPTURE_DIR)
 os.environ[scs_wire.ENV_CAPTURES] = _where
 _capdir = scs_wire.capture_dir(M.DEFAULT_CAPTURE_DIR, need=M.BRACKET_CAPTURES)
 if _capdir is None:

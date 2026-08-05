@@ -49,6 +49,8 @@ struct stub {
     int connect_reqs;                 /* CONNECT_REQ actions offered */
     int disconnect_reqs;              /* DISCONNECT_REQ actions offered */
     int other_actions;
+    int accept_rsps;                  /* ACCEPT_RSP actions offered */
+    int accept_rsp_sent;              /* 1 => the emitter HAS an ACCEPT_RSP builder */
     int inquiries;                    /* lookup REQUESTs offered */
     char last_inquiry[SCS_DIR_NAME_LEN + 1];
     uint8_t last_inquiry_node[6];
@@ -95,6 +97,17 @@ static int stub_emit(void *ctx, struct scs_cdt *cdt, enum scs_conn_action act,
          * honest answer is NOBUILDER, and the poller must cope with it. */
         s->disconnect_reqs++;
         return SCS_SVC_EMIT_NOBUILDER;
+    }
+    if (act == SCS_CONN_ACT_SEND_ACCEPT_RSP && s->accept_rsp_sent) {
+        /* An emitter that DOES have the builder. This is the ONLY way the
+         * SCS_SVC_EMIT_SENT arm of poll_emit_action() can be reached: see the
+         * comment on test_emit_accounting_counts_a_sent_action. Today's
+         * scsd_poll_emit() has no ACCEPT_RSP builder and returns NOBUILDER --
+         * the case below this one -- so the stub carries BOTH answers and each
+         * case states which emitter it is standing in for. */
+        s->accept_rsps++;
+        *what = "SCS$DIRECTORY ACCEPT-RESPONSE (poller, stub builder)";
+        return SCS_SVC_EMIT_SENT;
     }
     s->other_actions++;
     /* REFUSED and NOBUILDER land in DIFFERENT port counters (scs_svc.h). The
@@ -535,15 +548,21 @@ static void test_descriptors_are_real_cdts(void)
  * ROUND 2 (vms-66f) -- THE BRANCHES A MUTATION SWEEP FOUND UNCOVERED.
  *
  * The veracity review mutated production code under the stubs above and named
- * surviving mutants. A re-run with a harder set left 18 of 26 alive. EVERY case
- * below exists because a specific mutant survived without it, and each one
- * names its mutant.
+ * surviving mutants. A re-run with a harder set left 18 of the 26 mutants that
+ * sweep then carried alive. EVERY case below exists because a specific mutant
+ * survived without it, and each one names its mutant.
+ *
+ * ROUND 3 added two more (M27, M28), for two arms a sweep alone did NOT find:
+ * gcov showed them never executed at all, and the surviving mutants only
+ * confirmed what the zero counts already said. The sweep's mutant count is a
+ * moving number and is deliberately not restated here -- the script prints it.
  *
  * NO KILL COUNT IS ASSERTED HERE. Re-derive it:
  *
  *     ./tools/cluster/scs_poll_mutation_sweep.py
  *
- * That script carries all 26 mutants, runs a CONTROL first (so no kill can be a
+ * That script carries every mutant named below, runs a CONTROL first (so no
+ * kill can be a
  * pre-existing red), rebuilds per mutant, and prints the count. It is hand-run,
  * not a ctest, because every mutant needs a full rebuild -- the same reason
  * tools/scs_credit_measure.py is hand-run. Its cheap document-only sibling,
@@ -815,6 +834,138 @@ static void test_emit_accounting_splits_refused_from_nobuilder(void)
     unsetenv("OVMX_PRCPOLINTERVAL");
 }
 
+/* MUTANT KILLED (review round 3): deleting `p->port->emitted++` from the
+ * SCS_SVC_EMIT_SENT arm of poll_emit_action().
+ *
+ * WHY IT SURVIVED: gcov showed poll_emit_action() entered many times with the
+ * SENT arm taken ZERO times -- line count 0, branch 0 taken 0%. (The review
+ * reported 34 entries over the whole `ctest -L scs` suite. Re-measured here
+ * with `-DCMAKE_C_FLAGS="--coverage -O0"` over the two binaries that link
+ * vmsscs_poll -- test_scs_poll and test_scsd_wire -- the entry count reads 19
+ * WITH the case below already in place, so 34 is the review's number and is
+ * not restated as this file's. The ZERO is what both measurements agree on and
+ * the only part this case rests on; re-derive with gcov -b on
+ * scs_poll.c.gcda.) The
+ * stub answered SENT only for SEND_CONNECT_REQ, and THAT action never reaches
+ * poll_emit_action -- the poller's CONNECT_REQ goes out through scs_connect()
+ * in scs_svc.c, which does its own accounting. Measured over scs_poll.c, the
+ * ONLY action ever passed to poll_emit_action is SEND_ACCEPT_RSP, from the
+ * single `poll_emit_action(p, t.action)` call site in scs_poll_opened() (the
+ * CONNECT_SENT + RCV_ACCEPT_REQ row of scs_conn.c). So the arm is reachable
+ * exactly when the installed emitter has an ACCEPT_RSP builder.
+ *
+ * WHAT IS AND IS NOT CLAIMED HERE: today's scsd_poll_emit() has NO ACCEPT_RSP
+ * builder and returns NOBUILDER, so with the daemon's own emitter this arm does
+ * not run -- test_emit_accounting_splits_refused_from_nobuilder is the case
+ * that covers the daemon as it stands. What this case covers is the OTHER
+ * legal answer of the scs_svc.h emit contract: an emitter is allowed to return
+ * SENT for any action, and when it does, the poller must credit port->emitted
+ * and NOT unemitted/refused. Nothing below asserts that OVMX builds an
+ * ACCEPT_RSP frame, and the stub's `what` string says "stub builder" so a
+ * reader of a failure message cannot mistake it for a production one. */
+static void test_emit_accounting_counts_a_sent_action(void)
+{
+    printf("[a SENT action lands in port->emitted, not in unemitted or refused]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    f.stub.accept_rsp_sent = 1;   /* stand in for an emitter that HAS the builder */
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+    scs_poll_tick(&f.poll, 10000);
+
+    unsigned long emitted_before   = f.port.emitted;
+    unsigned long unemitted_before = f.port.unemitted;
+    unsigned long refused_before   = f.port.refused;
+
+    scs_poll_opened(&f.poll, 10001);
+
+    check(f.stub.accept_rsps == 1,
+          "the ACCEPT_RSP the CONNECT_SENT+RCV_ACCEPT_REQ row owes really was "
+          "offered to the emitter -- the arm below is not counting a no-op");
+    check(f.port.emitted == emitted_before + 1,
+          "a SENT emit is credited to port->emitted (the poller accounts "
+          "'exactly as scs_svc.c does', which is what that comment claims)");
+    check(f.port.unemitted == unemitted_before,
+          "and it is NOT counted as 'no builder'");
+    check(f.port.refused == refused_before, "nor as refused");
+    check(f.stub.other_actions == 0,
+          "the SENT answer was taken on the ACCEPT_RSP itself, not on some "
+          "other action falling through the stub");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANT KILLED (review round 3, the adversary's X2): replacing the shift-down
+ * memcpy in scs_poll_answer()'s "drop the answered inquiry" loop with `;`.
+ *
+ * WHY IT SURVIVED: gcov showed the loop guard at that line evaluated many times
+ * (the review counted 20; the re-measurement described on the case above reads
+ * 14 with this case already in place -- same caveat, the review's number is not
+ * restated as ours) and its BODY executed ZERO times -- line count 0, the shift
+ * branch taken 0%. Every case in this file answered either a
+ * single-name cycle or the LAST entry of the pending list, and in both of those
+ * `hit + 1 == pending_count`, so the loop never iterates and pending_count--
+ * alone is enough. Answering a MIDDLE entry is the only shape that compacts,
+ * and with the memcpy gone the tail entry is silently DUPLICATED over the
+ * answered slot and the last real name is dropped -- the poller would then
+ * re-notify on a name it already answered and never wait for the one it lost. */
+static void test_answering_a_middle_inquiry_compacts_the_pending_list(void)
+{
+    printf("[answering a MIDDLE inquiry compacts the pending list in order]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    /* Three names, so there IS a middle. Registration order is the order
+     * scs_poll_opened() puts them into `pending`. */
+    scs_poll_request(&f.poll, "MSCP$DISK", NULL, on_found, &f.found);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_request(&f.poll, "MSCP$TAPE", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    unsigned sent = run_cycle(&f, 10000);
+    check(sent == 3, "the cycle asks about all three names");
+    check(scs_poll_pending(&f.poll) == 3, "and all three are pending");
+    check(strcmp(f.poll.pending[0], "MSCP$DISK") == 0 &&
+          strcmp(f.poll.pending[1], "VMS$VAXcluster") == 0 &&
+          strcmp(f.poll.pending[2], "MSCP$TAPE") == 0,
+          "the pending list is in registration order before the answer");
+
+    /* Answer the MIDDLE one. hit == 1, pending_count == 3, so the loop body
+     * runs exactly once: pending[1] <- pending[2]. */
+    check(scs_poll_answer(&f.poll, "VMS$VAXcluster", SCS_DIR_ANSWER_NO, 10002) == 1,
+          "the middle inquiry is recognised and consumed");
+    check(scs_poll_pending(&f.poll) == 2, "two inquiries are still outstanding");
+    check(strcmp(f.poll.pending[0], "MSCP$DISK") == 0,
+          "the entry BEFORE the answered one is untouched");
+    check(strcmp(f.poll.pending[1], "MSCP$TAPE") == 0,
+          "and the entry AFTER it shifted down into the hole -- without the "
+          "shift, pending[1] would still read VMS$VAXcluster and MSCP$TAPE "
+          "would be unreachable while pending_count says 2");
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_INQUIRING,
+          "the cycle is still running -- the compaction happened mid-cycle");
+
+    /* The survivors must still be ANSWERABLE, which is the consequence a
+     * duplicated slot destroys: with the memcpy gone, MSCP$TAPE is not in the
+     * list at all and this answer would be scored unsolicited. */
+    unsigned unsolicited_before = f.poll.answers_unsolicited;
+    check(scs_poll_answer(&f.poll, "MSCP$TAPE", SCS_DIR_ANSWER_NO, 10003) == 1,
+          "the shifted entry is still findable by name");
+    check(f.poll.answers_unsolicited == unsolicited_before,
+          "and it was NOT scored as an unsolicited answer");
+    check(scs_poll_answer(&f.poll, "MSCP$DISK", SCS_DIR_ANSWER_NO, 10004) == 1,
+          "so is the one that never moved");
+    check(scs_poll_pending(&f.poll) == 0, "the cycle drained");
+    check(f.poll.cycles_completed == 1, "and completed");
+
+    /* A second answer for the name already consumed is unsolicited -- it was
+     * removed, not merely skipped. */
+    check(scs_poll_answer(&f.poll, "VMS$VAXcluster", SCS_DIR_ANSWER_NO, 10005) == 0,
+          "the answered middle name is GONE from the list, not still in it");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
 /* MUTANT KILLED: deleting the disabled-name skip (and its skipped_disabled++)
  * from the inquiry loop in scs_poll_opened().
  *
@@ -975,6 +1126,8 @@ int main(void)
     test_vc_lost_mid_inquiry_is_a_failed_cycle();
     test_illegal_accept_abandons_the_cycle();
     test_emit_accounting_splits_refused_from_nobuilder();
+    test_emit_accounting_counts_a_sent_action();
+    test_answering_a_middle_inquiry_compacts_the_pending_list();
     test_disabled_name_is_not_inquired_about();
     test_disabled_table_is_bounded_and_refuses_overflow();
     test_a_fresh_request_re_enables_polling();

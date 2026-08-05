@@ -114,7 +114,18 @@ MUTANTS = [
     # --- C. attacks on the quarantine itself --------------------------------
     # Unbalance it: an open BEGIN with no END must yield NO span, not a licence
     # that runs to the end of the file.
-    ("QUARANTINE-spec-end-removed", "spec", "<!-- REFUTED-QUOTE-END -->\n", ""),
+    # ANCHORED to the LAST line of THIS item's block, not to a bare
+    # "<!-- REFUTED-QUOTE-END -->". The spec now carries several quarantine
+    # blocks (vms-591 added one ABOVE this one), and a bare anchor with count=1
+    # deleted SOMEBODY ELSE'S end marker -- which this gate is not responsible
+    # for and does not red on, so the mutant survived. Caught on the rebase onto
+    # work/vms-187-closure; the lesson is that a mutant anchor must name the
+    # construct it is attacking, not the first textual match of its type.
+    ("QUARANTINE-spec-end-removed", "spec",
+     "> \"opens its own `VMS$VAXcluster` connection without having polled "
+     "anybody\".\n<!-- REFUTED-QUOTE-END -->\n",
+     "> \"opens its own `VMS$VAXcluster` connection without having polled "
+     "anybody\".\n"),
     ("QUARANTINE-scsd-end-removed", "scsd_c", " *      REFUTED-QUOTE-END\n", ""),
     # Remove the markers but keep the quotation: the dead claim is then simply
     # asserted in the document.

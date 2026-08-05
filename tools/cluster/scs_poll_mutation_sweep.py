@@ -157,6 +157,22 @@ MUTANTS = [
      "    /* [58:62] */ 0x00, 0x00, 0x00, 0x00,                   /* REQUEST marker (GROUNDED, sec 4h) */",
      "    /* [58:62] */ 0x01, 0x00, 0x00, 0x00,                   /* REQUEST marker (GROUNDED, sec 4h) */",
      "the request/response marker at [58:62]"),
+
+    # --- review round 3: the two arms gcov found UNCOVERED ------------------
+    # Both were measured over the whole `ctest -L scs` suite: poll_emit_action()
+    # was entered 34 times with the SENT arm taken 0 times, and the compaction
+    # loop guard was evaluated 20 times with its body executed 0 times. They are
+    # in the sweep so the two new cases in test_scs_poll.c cannot rot back into
+    # decoration -- run them with `./tools/cluster/scs_poll_mutation_sweep.py
+    # M27 M28`.
+    ("M27", "scs_poll.c", """    if (r == SCS_SVC_EMIT_SENT) {
+        p->port->emitted++;""", """    if (r == SCS_SVC_EMIT_SENT) {
+        ;""",
+     "a SENT emit is credited to port->emitted"),
+    ("M28", "scs_poll.c",
+     "        memcpy(p->pending[i], p->pending[i + 1], SCS_DIR_NAME_LEN + 1);",
+     "        ;",
+     "the pending list COMPACTS when a middle inquiry is answered"),
 ]
 
 

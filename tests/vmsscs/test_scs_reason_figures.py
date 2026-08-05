@@ -31,6 +31,52 @@ adjacency window. Six of fourteen mutants SURVIVED it, because a figure that
 appears twice in a document masks a drift in one copy. Hence: one copy per
 figure, parsed, compared. Do not regress it to substring searching.
 
+HOW THE REFUTED-CLAIM HALF WORKS, AND WHY IT IS NOT A PROXIMITY WINDOW. Review
+round 3 measured the round-2 version of this same check and found it did not
+work: it matched each dead sentence and then asked whether an EXCUSE WORD
+("refuted", "is false", "wrongly", "earlier revision") appeared within 500
+characters before / 300 after. Both documents are ABOUT the refutation, so those
+words are everywhere -- the excuse windows cover roughly 4 kB of the spec and
+2 kB of the header. Re-inserting "Nothing after the Con.ID pair varies." into
+its own sec 4(h)(1a) paragraph, into the sec 5 refutation paragraph, and into
+the scs_reason.h census paragraph left the gate GREEN in all three. A gate that
+is defeated by writing the claim next to the word "refuted" is not a gate.
+
+The replacement has three parts and no windows:
+
+  1. QUARANTINE. A refuted claim may be written down ONLY inside an explicit
+     `REFUTED-QUOTE-BEGIN` ... `REFUTED-QUOTE-END` block. Anywhere else, in
+     either document, it reds -- position is irrelevant, neighbouring prose is
+     irrelevant. The blocks themselves are checked: balanced, size-capped (so
+     "quarantine the whole section" is not an escape), each one must carry a
+     refutation label, and none may swallow a CENSUS or REFUTATION-FACT line.
+
+  2. CLAIM FAMILIES, NOT SENTENCES. The prose can be reworded, so each dead
+     claim is matched as SUBJECT + CONSTANCY-ASSERTION within one sentence,
+     with an explicit RESCUE clause naming the exception that makes a scoped
+     version of the sentence true. "payload [60:62] is a constant on
+     REJECT_REQ but VARIES on DISCONNECT_REQ" is rescued; "nothing after the
+     Con.ID pair varies" is not, however it is phrased.
+
+  3. THE POSITIVE FACT, PINNED IN BOTH DOCUMENTS. `REFUTATION-FACT` lines carry
+     the two measurements that DO the refuting -- payload[60:62] taking two
+     values on DISCONNECT_REQ (0x0000 x131 / 0x0001 x89), and ACCEPT_RSP
+     setting payload[58:60] 62 times on the identical 62-byte layout -- parsed
+     and compared against EXPECTED exactly like the CENSUS lines. Deleting the
+     dead claim's contradiction is now as loud as asserting the dead claim.
+
+KNOWN, DELIBERATE FALSE POSITIVE: spelling the quarantine markers in ordinary
+prose opens a span that has no partner (or wraps the wrong text) and reds this
+gate. That is why neither document writes them out in explanatory text -- both
+say "a quarantine block" and point at a real one. The failure mode is LOUD, not
+silent, which is the correct trade for a mechanism whose entire job is to be
+un-evadable; do not "fix" it by making the markers fuzzier.
+
+The mutation battery for all of this is tests/vmsscs/test_scs_reason_mutants.py
+(ctest name `scs_reason_mutants`), which re-derives the kill count on every run
+instead of asserting one in a comment. That test drives THIS file by path, via
+the OVMX_SCS_REASON_{HEADER,SPEC,MEASURE} environment overrides below.
+
 It does NOT re-derive the numbers from packets: the captures are host-only (not
 in git) and only tools/cluster/scs_reason_measure.py on a lab host does that.
 
@@ -44,9 +90,18 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-HEADER = os.path.join(ROOT, "src", "vmsscs", "include", "scs_reason.h")
-SPEC = os.path.join(ROOT, "docs", "cluster-protocol-spec.md")
-MEASURE = os.path.join(ROOT, "tools", "cluster", "scs_reason_measure.py")
+
+# The three inputs are overridable ONLY so the mutation battery can point this
+# gate at a scratch copy of the tree. Nothing in the repo sets them.
+HEADER = os.environ.get(
+    "OVMX_SCS_REASON_HEADER",
+    os.path.join(ROOT, "src", "vmsscs", "include", "scs_reason.h"))
+SPEC = os.environ.get(
+    "OVMX_SCS_REASON_SPEC",
+    os.path.join(ROOT, "docs", "cluster-protocol-spec.md"))
+MEASURE = os.environ.get(
+    "OVMX_SCS_REASON_MEASURE",
+    os.path.join(ROOT, "tools", "cluster", "scs_reason_measure.py"))
 
 failures = []
 checks = 0
@@ -211,6 +266,119 @@ def parse_spec_neighbours(spec):
     return out
 
 
+def parse_refutation_facts(text):
+    """The two POSITIVE facts that do the refuting, one machine-readable line
+    each, required in BOTH documents:
+
+      REFUTATION-FACT off=60 type=6 distinct_values=2 values=0x0000:131,0x0001:89
+      REFUTATION-FACT off=58 len=62 type=3 name=ACCEPT_RSP nonzero=62
+
+    Returns (varies_fact_or_None, neighbour_fact_or_None)."""
+    varies = None
+    m = re.search(r"REFUTATION-FACT\s+off=60\s+type=(\d+)\s+"
+                  r"distinct_values=(\d+)\s+values=(\S+)", text)
+    if m:
+        varies = {"type": int(m.group(1)), "distinct": int(m.group(2)),
+                  "values": parse_values(m.group(3))}
+    nb = None
+    m = re.search(r"REFUTATION-FACT\s+off=58\s+len=(\d+)\s+type=(\d+)\s+"
+                  r"name=(\S+)\s+nonzero=(\d+)", text)
+    if m:
+        nb = {"len": int(m.group(1)), "type": int(m.group(2)),
+              "name": m.group(3), "nonzero": int(m.group(4))}
+    return varies, nb
+
+
+# --- the refuted-claim gate -------------------------------------------------
+#
+# See the module docstring. No proximity windows: a dead claim is legal ONLY
+# inside a quarantine block.
+
+QUOTE_BEGIN = "REFUTED-QUOTE-BEGIN"
+QUOTE_END = "REFUTED-QUOTE-END"
+MAX_QUOTE_SPAN = 400        # flattened chars in ONE quarantine block
+MAX_QUOTE_TOTAL = 1200      # flattened chars quarantined in ONE document
+REFUTATION_LABEL = re.compile(
+    r"(?i)refut|is false|claim is false|wrongly|revision 1|first revision|"
+    r"earlier revision")
+
+# Each entry: (id, subject, constancy-or-None, rescue-or-None, what).
+#   subject    -- what the sentence is about
+#   constancy  -- the assertion that the subject does not vary / is unique.
+#                 None when the subject pattern already IS the whole assertion.
+#   rescue     -- names the exception that makes a SCOPED version of the
+#                 sentence true; None means the claim is dead in every form
+REFUTED_CLAIMS = (
+    ("post-conid-invariance",
+     r"(?i)(?:after|following|past|beyond)\s+the\s+"
+     r"(?:Con\.?\s?ID|CONID|connection[- ]identifier)s?(?:\s+pair)?"
+     r"|\[58:62\]|\[60:62\]",
+     # NB: `.` and not `[^.]` -- the subject itself contains a full stop
+     # ("Con.ID"), and a character class excluding it made this whole family
+     # unmatchable. That bug let all four REASSERT mutants through the first
+     # cut of this rewrite; tests/vmsscs/test_scs_reason_mutants.py caught it.
+     # Scanning is already per-sentence, so `.` cannot run past the claim.
+     r"(?i)nothing.{0,60}?var|does not vary|do not vary|never var|"
+     r"invarian|is constant|are constant|constant in (?:all|every)|"
+     r"unchanging|identical in every frame|"
+     r"only.{0,40}?(?:bytes|words|fields).{0,30}?(?:that )?var",
+     r"(?i)var(?:ies|ying|y)\s+(?:0/1\s+)?on\s+DISCONNECT_REQ|"
+     r"0x0000\s*[:x×]\s*131",
+     "payload[60:62] VARIES on DISCONNECT_REQ -- 0x0000 x131 / 0x0001 x89, "
+     "the CENSUS-A off=60 row for msgtype 6"),
+
+    ("only-always-zero-slot",
+     r"(?i)only\s.{0,80}?(?:slot|word|field|halfword).{0,90}?zero in 100%"
+     r"|only\s.{0,40}?always-zero\s+(?:slot|word|field)"
+     r"|only\s(?:16-bit\s)?(?:slot|word|field).{0,80}?"
+     r"(?:always|never non-?)zero",
+     None,                          # the pattern above IS the assertion
+     r"(?i)at or after payload \d+|(?:not|no longer|isn't|is not) the only",
+     "'the only slot zero in 100% of observed frames' -- ACCEPT_RSP sets "
+     "payload[58:60] on the identical 62-byte layout (CENSUS-B len=62 type=3)"),
+
+    ("only-varying-is-seq-ack",
+     r"(?i)only.{0,40}?(?:varying\s+)?bytes.{0,30}?are the sequence/ack"
+     r"|only.{0,40}?(?:bytes|words|fields) that vary are",
+     None,
+     None,
+     "'the only varying bytes are the sequence/ack fields and the Con.ID pair'"),
+)
+
+
+def quarantine_spans(flat):
+    """[(start, end)] of the REFUTED-QUOTE blocks, plus a list of structural
+    complaints. Spans are half-open over `flat` and INCLUDE the markers."""
+    problems = []
+    marks = [(m.start(), m.end(), m.group(0))
+             for m in re.finditer("%s|%s" % (QUOTE_BEGIN, QUOTE_END), flat)]
+    spans, open_at = [], None
+    for start, end, tok in marks:
+        if tok == QUOTE_BEGIN:
+            if open_at is not None:
+                problems.append("nested %s at offset %d" % (QUOTE_BEGIN, start))
+            open_at = start
+        else:
+            if open_at is None:
+                problems.append("%s at offset %d with no %s"
+                                % (QUOTE_END, start, QUOTE_BEGIN))
+                continue
+            spans.append((open_at, end))
+            open_at = None
+    if open_at is not None:
+        problems.append("unterminated %s at offset %d" % (QUOTE_BEGIN, open_at))
+    return spans, problems
+
+
+def sentences(flat):
+    """(offset, text) for each sentence of the flattened document."""
+    out, pos = [], 0
+    for piece in re.split(r"(?<=[.!?])\s+", flat):
+        out.append((pos, piece))
+        pos += len(piece) + 1
+    return out
+
+
 def parse_spec_zero_slots(spec):
     """§5 CENSUS-C table: per-msgtype slot lists plus the 'at or after' row."""
     rows = md_table_after(spec, "<!-- CENSUS-C:")
@@ -328,30 +496,128 @@ def main():
               "EXPECTED has neighbour rows at SCA lengths %r outside the "
               "population CENSUS-P declares" % (stray,))
 
-    # ---- 4. the two REFUTED sentences must stay dead ------------------------
+    # ---- 3c. the POSITIVE facts that do the refuting, pinned in both docs ---
+    # A contradicting sentence cannot coexist with these: they ARE the
+    # measurement the dead claims deny, and they are compared to EXPECTED.
+    for name, text in docs.items():
+        v_fact, n_fact = parse_refutation_facts(text)
+        check(v_fact is not None,
+              "%s: the REFUTATION-FACT off=60 line is missing. It carries the "
+              "fact that kills 'nothing after the Con.ID pair varies'; without "
+              "it the document no longer states its own refutation" % name)
+        if v_fact is not None:
+            eq(v_fact["type"], 6,
+               "%s: REFUTATION-FACT off=60 must be about msgtype 6 "
+               "(DISCONNECT_REQ), the type the slot varies on" % name)
+            eq(v_fact["values"], dict(exp["carriers"][6]["off60"]),
+               "%s: the REFUTATION-FACT off=60 histogram does not match the "
+               "measurement" % name)
+            eq(v_fact["distinct"], len(exp["carriers"][6]["off60"]),
+               "%s: REFUTATION-FACT off=60 distinct_values disagrees with its "
+               "own histogram / with EXPECTED" % name)
+            check(v_fact["distinct"] > 1,
+                  "%s: REFUTATION-FACT off=60 now claims a SINGLE value, which "
+                  "IS the refuted claim in machine-readable form" % name)
+        check(n_fact is not None,
+              "%s: the REFUTATION-FACT off=58 line is missing. It carries the "
+              "fact that kills 'the only slot zero in 100%% of observed "
+              "frames'" % name)
+        if n_fact is not None:
+            eq((n_fact["len"], n_fact["type"]), (62, 3),
+               "%s: REFUTATION-FACT off=58 must name the 62-byte neighbour "
+               "(ACCEPT_RSP, type 3) that shares the carriers' layout" % name)
+            want = exp["neighbours"][(62, 3)]
+            eq((n_fact["name"], n_fact["nonzero"]),
+               (want["name"], want["nonzero58"]),
+               "%s: the REFUTATION-FACT off=58 neighbour figures do not match "
+               "the measurement" % name)
+            check(n_fact["nonzero"] > 0,
+                  "%s: REFUTATION-FACT off=58 now reports the neighbour never "
+                  "setting the slot, which IS the refuted claim" % name)
+            check(n_fact["type"] not in exp["carriers"],
+                  "%s: REFUTATION-FACT off=58 names a CARRIER as the "
+                  "counter-example; the whole point is that it is a NEIGHBOUR "
+                  "on the same layout" % name)
+
+    # ---- 4. the REFUTED claims must stay dead -------------------------------
+    #
+    # Round 2 did this with a proximity window and it did not work: both
+    # documents are about the refutation, so the excuse words are everywhere
+    # and three natural re-assertion sites stayed green. There is no window
+    # here. A dead claim is legal in exactly one place -- inside a quarantine
+    # block -- and the blocks are themselves constrained so that quarantining
+    # the whole section is not a way out.
     for name, text in docs.items():
         flat = re.sub(r"\s+", " ", text.replace("*", "").replace("`", ""))
-        # Each refuted sentence may appear ONLY inside a passage that labels it
-        # as refuted -- quoting the dead claim in order to kill it is fine,
-        # asserting it is not.
-        refuted = (
-            (r"(?i)nothing after the Con\.?ID pair varies",
-             "'nothing after the Con.ID pair varies' -- payload[60:62] varies "
-             "on DISCONNECT_REQ, see CENSUS-A"),
-            (r"(?i)only varying bytes are the sequence/ack fields",
-             "'the only varying bytes are the sequence/ack fields and the "
-             "Con.ID pair'"),
-            (r"(?i)only (?:16-bit )?slot [^.]{0,80}zero in 100%",
-             "'the only slot zero in 100% of observed frames' -- ACCEPT_RSP "
-             "sets [58:60] on the same 62-byte layout"),
-        )
-        for pat, what in refuted:
-            for m in re.finditer(pat, flat):
-                window = flat[max(0, m.start() - 500):m.end() + 300]
-                check(re.search(r"(?i)refut|is false|wrongly|revision 1|"
-                                r"first revision|earlier revision", window) is not None,
-                      "%s: the REFUTED claim %s is asserted again at %r"
-                      % (name, what, m.group(0)))
+        spans, problems = quarantine_spans(flat)
+        for p in problems:
+            check(False, "%s: malformed %s block -- %s" % (name, QUOTE_BEGIN, p))
+        total = 0
+        for a, b in spans:
+            # The INTERIOR, with the markers excluded. `REFUTED-QUOTE-BEGIN`
+            # itself contains "REFUT", so testing the whole span for a
+            # refutation label made that check vacuously true -- the battery's
+            # QUARANTINE-no-refutation-label mutant survived on exactly this.
+            body = flat[a + len(QUOTE_BEGIN):b - len(QUOTE_END)]
+            total += b - a
+            check(b - a <= MAX_QUOTE_SPAN,
+                  "%s: a %s block is %d flattened chars (limit %d). Quarantine "
+                  "the QUOTATION, not the argument around it -- an oversized "
+                  "block is how a dead claim gets licensed wholesale"
+                  % (name, QUOTE_BEGIN, b - a, MAX_QUOTE_SPAN))
+            check(REFUTATION_LABEL.search(body) is not None,
+                  "%s: a %s block does not say the claim inside it is refuted. "
+                  "Quarantine is for quoting a dead claim in order to kill it, "
+                  "not for parking it: %r" % (name, QUOTE_BEGIN, body[:120]))
+            # No MEASUREMENT may sit inside quarantine -- tested by running the
+            # parsers on the block itself rather than by grepping for a marker
+            # word, so a prose mention of "the CENSUS-A off=60 line" is fine
+            # while an actual data line is not, and this stays correct if a
+            # census line ever changes shape.
+            swallowed = (any(parse_header(body)[:3])
+                         or parse_header(body)[3] is not None
+                         or parse_population(body) is not None
+                         or parse_sda(body) is not None
+                         or parse_refutation_facts(body) != (None, None))
+            check(not swallowed,
+                  "%s: a %s block swallows a CENSUS / REFUTATION-FACT data "
+                  "line. The measurement must never sit inside quarantine: %r"
+                  % (name, QUOTE_BEGIN, body[:120]))
+        check(total <= MAX_QUOTE_TOTAL,
+              "%s: %d flattened chars are quarantined (limit %d) -- the "
+              "exemption has grown into a second document"
+              % (name, total, MAX_QUOTE_TOTAL))
+
+        # Scan every sentence. A hit is excused ONLY when the whole matched
+        # claim -- subject through assertion -- lies inside a quarantine block.
+        # Deliberately NOT "the sentence overlaps a block": that would let a
+        # two-word quarantined aside license the sentence around it.
+        scanned = 0
+        for off, sent in sentences(flat):
+            scanned += 1
+            for cid, subject, constancy, rescue, what in REFUTED_CLAIMS:
+                sm = re.search(subject, sent)
+                if sm is None:
+                    continue
+                cm = re.search(constancy, sent) if constancy else sm
+                if cm is None:
+                    continue
+                if rescue is not None and re.search(rescue, sent):
+                    continue
+                lo = off + min(sm.start(), cm.start())
+                hi = off + max(sm.end(), cm.end())
+                if any(a <= lo and hi <= b for a, b in spans):
+                    continue
+                check(False,
+                      "%s: the REFUTED claim [%s] is asserted again -- %s\n"
+                      "       matched: %r\n"
+                      "       If you are QUOTING the dead claim in order to "
+                      "kill it, put it in a %s block."
+                      % (name, cid, what, flat[lo:hi][:220], QUOTE_BEGIN))
+        check(scanned > 20,
+              "%s: only %d sentences reached the refuted-claim scan. Either "
+              "the document collapsed or quarantine swallowed it"
+              % (name, scanned))
 
     # ---- 5. structure ------------------------------------------------------
     for name, text in docs.items():

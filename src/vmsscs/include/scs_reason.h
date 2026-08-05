@@ -42,6 +42,19 @@
  *   >>> Those are grounded in spec sec 4(h)(1a) or pinned by the macros below
  *   >>> (SCS_REASON_PAYLOAD_OFF), and the gate checks them against the
  *   >>> script's own constants rather than against a census.
+ *   >>>
+ *   >>> AND: THE TWO REFUTED CLAIMS CANNOT BE WRITTEN BACK IN. Both are
+ *   >>> quoted -- and killed -- lower down this comment, each inside a
+ *   >>> QUARANTINE BLOCK. The gate reds if either is asserted anywhere else in
+ *   >>> this file or in the spec, in ANY wording: it matches the claim family
+ *   >>> (subject + constancy assertion), not a sentence, and there is no
+ *   >>> proximity excuse -- writing the claim next to the word "refuted" does
+ *   >>> not license it. If you must write one down, copy the shape of a
+ *   >>> quarantine block below; the gate names the exact markers when it reds,
+ *   >>> and checks that the block is small, says the claim is refuted, and
+ *   >>> holds no CENSUS-/REFUTATION-FACT line. What the gate ACTUALLY kills is
+ *   >>> measured, never claimed, by the ctest mutation battery
+ *   >>> tests/vmsscs/test_scs_reason_mutants.py -- read its output.
  *
  *   POPULATION RULE. Every SCA frame in the connection-control length classes
  *   (spec sec 4(h)(1a)), from a VMS-origin source MAC (DEC OUI 08-00-2b or the
@@ -65,8 +78,19 @@
  *   Read off those six lines: payload [58:60] is 0x0000 in EVERY frame of BOTH
  *   carriers, while payload [60:62] is a constant on REJECT_REQ but VARIES on
  *   DISCONNECT_REQ. So [60:62] is a live, undecoded field and MUST NOT be used.
+ *
+ *   THE POSITIVE FACT, PINNED. These two lines are parsed and compared against
+ *   EXPECTED by the same gate. They are the measurements that KILL the two
+ *   claims quarantined below, so a contradicting sentence cannot quietly
+ *   coexist with them, and deleting one is as loud as asserting the claim:
+ *
+ *     REFUTATION-FACT off=60 type=6 distinct_values=2 values=0x0000:131,0x0001:89
+ *     REFUTATION-FACT off=58 len=62 type=3 name=ACCEPT_RSP nonzero=62
+ *
+ *   REFUTED-QUOTE-BEGIN
  *   (An earlier revision of the spec said "nothing after the Con.ID pair
  *   varies". The CENSUS-A off=60 line for type=6 refutes it.)
+ *   REFUTED-QUOTE-END
  *
  *   THE SECOND ORACLE AGREES. SDA `SHOW CONNECTIONS` prints a per-CDT field
  *   literally named "Rej/Disconn Reason". Counted out of the captured extract,
@@ -86,10 +110,14 @@
  * WHY payload [58:60] -- AND THE RATIONALE THAT WAS REFUTED (read this)
  * ---------------------------------------------------------------------------
  *
+ *   REFUTED-QUOTE-BEGIN
  *   The FIRST revision of this file justified the slot as "the only 16-bit
  *   slot in either frame that is zero in 100% of observed VMS frames". THAT
- *   CLAIM IS FALSE IN BOTH HALVES, and both halves are now measured, not
- *   asserted -- censuses B and C of scs_reason_measure.py:
+ *   CLAIM IS FALSE IN BOTH HALVES,
+ *   REFUTED-QUOTE-END
+ *
+ *   ...and both halves are now measured, not asserted -- censuses B and C of
+ *   scs_reason_measure.py:
  *
  *   (B) THE SLOT IS NOT DEAD ACROSS THE ENVELOPE. The SAME population rule
  *       applied to the whole connection-control envelope shows payload [58:60]

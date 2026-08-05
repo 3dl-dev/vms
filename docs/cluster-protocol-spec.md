@@ -1985,6 +1985,15 @@ For visibility, every field NOT marked GROUNDED above:
   CENSUS-A table in §4(h)(1a) above — that table is the single copy of those
   figures and is not repeated here.
 
+  **The two facts that do the refuting, pinned.** Both lines are parsed and
+  compared against `EXPECTED` by `scs_reason_figures`, in this document *and* in
+  `scs_reason.h`. They are what makes each refuted claim below unwritable: a
+  sentence contradicting them cannot coexist with them, and deleting one reds
+  the gate exactly as loudly as reinstating the claim would.
+
+      REFUTATION-FACT off=60 type=6 distinct_values=2 values=0x0000:131,0x0001:89
+      REFUTATION-FACT off=58 len=62 type=3 name=ACCEPT_RSP nonzero=62
+
   **The SDA oracle agrees.** `SHOW CONNECTIONS` prints a per-CDT field literally
   named `Rej/Disconn Reason`. Counted out of the captured extract rather than
   asserted (`cdts` = how many CDTs it printed, `values` = the histogram):
@@ -1998,9 +2007,10 @@ For visibility, every field NOT marked GROUNDED above:
   nonzero value anywhere, there is no varying field to localize.
 
   **THE FIRST RATIONALE FOR THE PLACEMENT WAS REFUTED, and the refutation is
-  itself measured.** Revision 1 of this entry justified the slot as "the only
-  16-bit slot in either frame that is zero in 100% of observed VMS frames". That
-  is false in both halves. Census B applies the SAME population rule to the whole
+  itself measured.** <!-- REFUTED-QUOTE-BEGIN --> Revision 1 of this entry
+  justified the slot as "the only 16-bit slot in either frame that is zero in
+  100% of observed VMS frames". That is false in both halves.
+  <!-- REFUTED-QUOTE-END --> Census B applies the SAME population rule to the whole
   connection-control envelope (every message type) and finds `[58:60]` in live
   use by neighbouring types — including `3` = ACCEPT_RSP, which shares the
   **identical 62-byte layout** with `4` and `6`:
@@ -2069,9 +2079,26 @@ For visibility, every field NOT marked GROUNDED above:
   `EXPECTED` table and re-derives it from the captures on a lab host, while the
   ctest gate `scs_reason_figures` (`tests/vmsscs/test_scs_reason_figures.py`,
   needs no captures) asserts every figure in `EXPECTED` still appears in both
-  `scs_reason.h` and this section — and reds if either refuted claim returns.
-  Both defects above were figures carried only by a comment; that is why the gate
-  exists.
+  `scs_reason.h` and this section. Both defects above were figures carried only
+  by a comment; that is why the gate exists.
+
+  **And a refuted claim cannot be written back in.** Review round 3 measured the
+  first version of that half of the gate and found it did not work: it looked
+  for an excuse word ("refuted", "wrongly", "earlier revision") within a few
+  hundred characters of the dead sentence, and this document is *about* the
+  refutation, so the excuse words are everywhere — re-asserting a dead claim in
+  three natural sites left ctest green. The proximity window is gone. A dead
+  claim is now legal in exactly one place: a QUARANTINE BLOCK, of which there is
+  one in the refutation paragraph above. Anywhere else it reds, in any wording,
+  because the check matches the claim FAMILY (subject + constancy assertion)
+  rather than a fixed sentence. The block itself is size-capped, must say the
+  claim inside it is refuted, and may not swallow a measurement line; the gate
+  names the exact markers when it reds. The `REFUTATION-FACT` lines above pin
+  the positive measurements the dead claims deny, so *deleting* the
+  contradiction reds as loudly as reinstating the claim. What the gate really
+  kills is not asserted in a comment either — it is re-derived on every ctest
+  run by `scs_reason_mutants` (`tests/vmsscs/test_scs_reason_mutants.py`), which
+  applies each mutant to a scratch copy and requires the gate to red.
 
 ---
 

@@ -101,6 +101,36 @@ static const uint8_t connect_response_tmpl[SCS_CONNECT_SCA_LEN] = {
     /* [98:110]*/ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x06, 0x00
 };
 
+/* Byte-exact 110-byte SCA content of the JOINER's MSCP$DISK client
+ * CONNECT-REQUEST (VMS$DISK_CL_DRVR -> MSCP$DISK), captured from the clean
+ * 1->2-node formation (formation-clean-2node.pcap SCA idx35, joiner->member).
+ * Same connect class as connect_request_tmpl; the substituted fields are
+ * identical (dest logical [2:8], src logical [10:16], remote Con.ID [50:54],
+ * local Con.ID [54:58], and the live SCS seq counters). Everything else is a
+ * REPLAY of the captured frame, including the msgtype 0x5b at [16], the
+ * MSCP-specific [8:10]=0x03e8 and [58:62] connect-class fields, the
+ * 'MSCP$DISK' target [62:78] / 'VMS$DISK_CL_DRVR' requester [78:94] SYSAP
+ * names, and the ASCII 'V5.0          + ' class descriptor [94:110]. The
+ * ungrounded constants are replayed, not synthesized (clean-room: observe +
+ * public docs only, CLAUDE.md Rule 8). vms-760. */
+static const uint8_t mscp_connect_request_tmpl[SCS_CONNECT_SCA_LEN] = {
+    /* [0:2]   */ 0x6c, 0x00,
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x4c, 0x04,       /* dest logical (SUBST) */
+    /* [8:10]  */ 0xe8, 0x03,                               /* MSCP connect-class field (REPLAY) */
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x4d, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x5b, 0x13,                               /* msgtype 0x5b, format 0x13 */
+    /* [18:26] */ 0x04, 0x00, 0x06, 0x00, 0x01, 0x00, 0x12, 0x00,
+    /* [26:34] */ 0x04, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
+    /* [34:42] */ 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02,
+    /* [42:50] */ 0x42, 0x00, 0x04, 0x00, 0x00, 0x00, 0x0a, 0x00,
+    /* [50:54] */ 0x00, 0x00, 0x00, 0x00,                   /* remote Con.ID (SUBST, 0 for REQUEST) */
+    /* [54:58] */ 0x08, 0x00, 0x62, 0x4e,                   /* local Con.ID (SUBST) */
+    /* [58:62] */ 0x02, 0x00, 0x01, 0x00,                   /* MSCP connect-class field (REPLAY) */
+    /* [62:78] */ 'M','S','C','P','$','D','I','S','K',' ',' ',' ',' ',' ',' ',' ',
+    /* [78:94] */ 'V','M','S','$','D','I','S','K','_','C','L','_','D','R','V','R',
+    /* [94:110]*/ 'V','5','.','0',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','+',' '
+};
+
 static void put_le16(uint8_t *dst, uint16_t v)
 {
     dst[0] = (uint8_t)(v & 0xff);
@@ -121,9 +151,23 @@ static uint32_t get_le32(const uint8_t *src)
            ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
 }
 
+/*
+ * vms-578: `stamp_connect_data` -- WHOSE connect data goes at [94:110].
+ *
+ * vms-fdd stamps the measured VMS$VAXcluster joiner connect data there for the
+ * VMS$VAXcluster connect classes. p. 2-25 makes that region PER-SYSAP ("up to
+ * 16 bytes ... passed to the destination SYSAP"), and the vms-760 MSCP$DISK
+ * template carries a DIFFERENT, equally grounded value in it -- the ASCII class
+ * descriptor 'V5.0          + ' replayed from formation-clean-2node SCA idx35.
+ * Stamping VMS$VAXcluster's bytes over it would present MSCP$DISK's connect
+ * with the connection manager's connect data, which appears on no capture.
+ * Measured: test_build_mscp_request's byte-exact check against idx35 fails with
+ * the stamp on and passes with it off, and that is the check that caught it.
+ */
 static int build_from_tmpl(const struct scs_connect_params *p,
                            const uint8_t tmpl[SCS_CONNECT_SCA_LEN],
                            uint32_t remote_conid,
+                           int stamp_connect_data,
                            uint8_t out[SCS_CONNECT_FRAME_LEN])
 {
     if (p == NULL || out == NULL) {
@@ -172,7 +216,7 @@ static int build_from_tmpl(const struct scs_connect_params *p,
      * for the request and is a no-op for the response (whose template is
      * VAX2's joiner frame and already carries these bytes).
      * OVMX_NO_CONNECT_DATA=1 skips the stamp, restoring the template bytes. */
-    if (scs_connect_data_enabled()) {
+    if (stamp_connect_data && scs_connect_data_enabled()) {
         memcpy(out + SCS_CONNECT_DATA_ABS_OFF, scs_connect_data_vaxcluster,
                SCS_CONNECT_DATA_LEN);
     }
@@ -184,7 +228,7 @@ int scs_connect_build_request(const struct scs_connect_params *p,
                               uint8_t out[SCS_CONNECT_FRAME_LEN])
 {
     /* CONNECT-REQUEST: remote Con.ID is always 0 (peer's not yet known). */
-    return build_from_tmpl(p, connect_request_tmpl, 0, out);
+    return build_from_tmpl(p, connect_request_tmpl, 0, 1, out);
 }
 
 int scs_connect_build_response(const struct scs_connect_params *p,
@@ -194,7 +238,15 @@ int scs_connect_build_response(const struct scs_connect_params *p,
         return -1;
     }
     /* CONNECT-RESPONSE: echo the peer's Con.ID as remote. */
-    return build_from_tmpl(p, connect_response_tmpl, p->remote_conid, out);
+    return build_from_tmpl(p, connect_response_tmpl, p->remote_conid, 1, out);
+}
+
+int scs_connect_build_mscp_request(const struct scs_connect_params *p,
+                                   uint8_t out[SCS_CONNECT_FRAME_LEN])
+{
+    /* MSCP$DISK CONNECT-REQUEST: remote Con.ID always 0 (peer's not yet known). */
+    /* vms-578: MSCP$DISK carries its OWN [94:110]; do NOT stamp. */
+    return build_from_tmpl(p, mscp_connect_request_tmpl, 0, 0, out);
 }
 
 int scs_connect_parse(const uint8_t *frame, size_t len, struct scs_connect_view *v)

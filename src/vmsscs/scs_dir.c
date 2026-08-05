@@ -229,6 +229,111 @@ static const uint8_t dir_affirmative_result[SCS_DIR_RESULT_LEN] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00
 };
 
+/* vms-578 INTEGRATION: worktree-760 carried its OWN dir_connreq_tmpl
+ * here, derived from formation-clean-2node.pcap. It is DELETED as a duplicate,
+ * and that is a MEASURED claim, not an assumption: comparing the two arrays
+ * byte-for-byte, the only offsets that differ are 6, 14, 54, 56 and 57
+ * -- every one of them a field the builder SUBSTITUTES at send time (the two
+ * logical addresses and the Con.ID pair). At every byte the builder does NOT
+ * touch, the two captures agree. The vms-66f template above is kept because the
+ * byte-exact tests (test_scs_dir.c, SCA#21) assert against it.
+ */
+
+/* vms-578 INTEGRATION: worktree-760 carried its OWN dir_lookupreq_tmpl
+ * here, derived from formation-clean-2node.pcap. It is DELETED as a duplicate,
+ * and that is a MEASURED claim, not an assumption: comparing the two arrays
+ * byte-for-byte, the only offsets that differ are 6, 14, 50, 52, 53, 54, 56 and 57
+ * -- every one of them a field the builder SUBSTITUTES at send time (the two
+ * logical addresses and the Con.ID pair). At every byte the builder does NOT
+ * touch, the two captures agree. The vms-66f template above is kept because the
+ * byte-exact tests (test_scs_dir.c, SCA#29) assert against it.
+ */
+
+/* vms-760: OVMX's directory op=3 CONNECT-CONFIRM (62-byte SCA). Byte-exact to
+ * the clean joiner's confirm (formation-clean-2node.pcap SCA idx26) EXCEPT
+ * [8:10] connect-flag = 0x0001 (golden, matching the other OVMX dir templates;
+ * the clean ref carried 0x03e8, a config artifact). Substituted at build time:
+ * dst/src logical, counters, remote Con.ID [50:54], local Con.ID [54:58].
+ * op[46:48]=3 and marker[58:62]=0x00010000 are baked in. NO SYSAP names (the
+ * frame ends at the marker). */
+static const uint8_t dir_confirm_tmpl[SCS_DIR_CONFIRM_SCA_LEN] = {
+    /* [0:2]   */ 0x3c, 0x00,
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,       /* dst logical (SUBST) */
+    /* [8:10]  */ 0x01, 0x00,                               /* connect flag (golden 0x0001) */
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x5b, 0x13,
+    /* [18:20] */ 0x02, 0x00,                               /* recv_ack (SUBST) */
+    /* [20:22] */ 0x02, 0x00,                               /* send_seq (SUBST) */
+    /* [22:24] */ 0x01, 0x00,                               /* incarnation (SUBST) */
+    /* [24:26] */ 0x12, 0x00,
+    /* [26:28] */ 0x02, 0x00,                               /* recv_ack mirror (SUBST) */
+    /* [28:30] */ 0x00, 0x00,
+    /* [30:32] */ 0x02, 0x00,                               /* send_seq mirror (SUBST) */
+    /* [32:34] */ 0x00, 0x00,
+    /* [34:36] */ 0x02, 0x00,                               /* recv_ack 3rd (SUBST) */
+    /* [36:38] */ 0x00, 0x00,
+    /* [38:40] */ 0x01, 0x00,
+    /* [40:42] */ 0x00, 0x02,
+    /* [42:44] */ 0x12, 0x00,                               /* inner length = 18 */
+    /* [44:46] */ 0x04, 0x00,
+    /* [46:48] */ 0x03, 0x00,                               /* op = 3 (connect-confirm) */
+    /* [48:50] */ 0x00, 0x00,                               /* credit = 0 (sec 4d); vms-578 relabelled */
+    /* [50:54] */ 0x08, 0x00, 0xdc, 0xe2,                   /* remote Con.ID (SUBST, member's) */
+    /* [54:58] */ 0x07, 0x00, 0x00, 0x00,                   /* local Con.ID (SUBST) */
+    /* [58:62] */ 0x00, 0x00, 0x01, 0x00                    /* marker = 0x00010000 */
+};
+
+/*
+ * vms-e81: the op-5 CONFIRM5 template -- 58 SCA bytes, NOT 62.
+ *
+ * It is tempting to build this as "the op-3 confirm with the opcode changed",
+ * and that would have been wrong in the way this project keeps getting caught.
+ * A 336-frame census (every op 5 in the capture library, across 4 sender nodes
+ * and 15 captures) says op 5 differs from op 3 in FOUR places, not one:
+ *
+ *   [0:2]   0x003c -> 0x0038   outer length word   (SCA 62 -> 58)
+ *   [42:44] 0x0012 -> 0x000e   inner length word   (18 -> 14)
+ *   [46:48] 0x0003 -> 0x0005   opcode
+ *   [58:62] the trailing marker word is ABSENT -- the frame ENDS at 58
+ *
+ * Copying the op-3 template and patching only the opcode would have emitted 62
+ * bytes declaring 60, i.e. a frame four bytes longer than it claims. That is the
+ * exact shape of the malformed op-7 that stalled the whole join for three
+ * sessions: DERIVE LENGTH WORDS FROM WHAT YOU EMIT, NEVER INHERIT THEM. A peer
+ * drops the over-long frame as a runt and the next frame dies on the sequence
+ * gap -- in silence, because there is no NAK anywhere in this protocol.
+ *
+ * [16] is 0x4b (SEQAPP), NOT a mirror of the op-4 being answered: 86 of the
+ * observed pairs answer a 0x5b op-4 with a 0x4b op-5, and all three op-5s a real
+ * VAX has ever sent AT OVMX are 0x4b.
+ */
+static const uint8_t dir_confirm5_tmpl[SCS_DIR_CONFIRM5_SCA_LEN] = {
+    /* [0:2]   */ 0x38, 0x00,                               /* outer length = 56 (SCA 58) */
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,       /* dst logical (SUBST) */
+    /* [8:10]  */ 0x01, 0x00,                               /* connect flag (336/336) */
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x4b, 0x13,                               /* SEQAPP -- never mirrors the op-4 */
+    /* [18:20] */ 0x02, 0x00,                               /* recv_ack (SUBST) */
+    /* [20:22] */ 0x02, 0x00,                               /* send_seq (SUBST) */
+    /* [22:24] */ 0x01, 0x00,                               /* incarnation (SUBST) -- OUR OWN */
+    /* [24:26] */ 0x12, 0x00,
+    /* [26:28] */ 0x02, 0x00,                               /* recv_ack mirror (SUBST) */
+    /* [28:30] */ 0x00, 0x00,
+    /* [30:32] */ 0x02, 0x00,                               /* send_seq mirror (SUBST) */
+    /* [32:34] */ 0x00, 0x00,
+    /* [34:36] */ 0x02, 0x00,                               /* recv_ack 3rd (SUBST) */
+    /* [36:38] */ 0x00, 0x00,
+    /* [38:40] */ 0x01, 0x00,
+    /* [40:42] */ 0x00, 0x02,
+    /* [42:44] */ 0x0e, 0x00,                               /* inner length = 14 */
+    /* [44:46] */ 0x04, 0x00,
+    /* [46:48] */ 0x05, 0x00,                               /* op = 5 (MSCP connect-CONFIRM5) */
+    /* [48:50] */ 0x00, 0x00,                               /* credit = 0 (sec 4d), 336/336; vms-578 relabelled */
+    /* [50:54] */ 0x08, 0x00, 0xdc, 0xe2,                   /* remote Con.ID (SUBST, peer's) */
+    /* [54:58] */ 0x07, 0x00, 0x00, 0x00                    /* local Con.ID (SUBST, ours) */
+    /* NO marker word -- the frame ends here. */
+};
+
 static void put_le16(uint8_t *dst, uint16_t v)
 {
     dst[0] = (uint8_t)(v & 0xff);
@@ -315,6 +420,48 @@ int scs_dir_build_connect_echo(const struct scs_dir_params *p,
     return 0;
 }
 
+/* vms-2f3 sec 4M. The msgtype OVMX must put on a directory response, given the
+ * msgtype the request arrived with.
+ *
+ * ⚠ NOT GROUNDED -- THIS IS AN OVMX DESIGN CHOICE (vms-2f3 sec 4M.12).
+ * The first version of this comment claimed the 336-frame op-5 census at the
+ * head of this file proved "a real VAX never mirrors". THAT CENSUS IS ABOUT THE
+ * op-5 CONFIRM FRAME, NOT ABOUT LOOKUP RESPONSES, and generalising it was wrong.
+ * A byte census of every real-VAX lookup pair in the capture library (5
+ * captures, OVMX excluded as responder) says:
+ *
+ *     req 0x5b -> resp 0x5b : 10      req 0x4b -> resp 0x4b : 50
+ *     req 0x5b -> resp 0x4b : 11      req 0x4b -> resp 0x5b :  1
+ *
+ * So a real VAX mirrors a 0x5b lookup about half the time, and NEITHER
+ * "always mirror" (OVMX's old behaviour, 60/72) nor "always 0x4b" (this
+ * function, 61/72) is the rule. Both are a coin-flip against the corpus.
+ *
+ * "the response tracks the RESULT (present -> 0x4b, absent -> 0x5b)" was tested
+ * next and is ALSO REFUTED: 18 of 63 real-VAX responses land off-diagonal.
+ * Reference frame 8994 is the clean kill -- VAX1 answers a 0x5b MSCP$TAPE
+ * request "NOT PRESENT HERE" (the same result value as frames 1193/1239, which
+ * carried 0x5b) and puts 0x4b on the wire.
+ *
+ * NOTHING KNOWN PREDICTS IT. Over 72 real-VAX matched pairs, result, SYSAP name,
+ * responder MAC and request msgtype all tie at 11 classification errors, and a
+ * brute-force scan of every header byte at abs 14-29 and 31-59 over 129,084
+ * real-VAX 0x4b/0x5b frames found no byte that separates them.
+ *
+ * THE RULING (vms-2f3 sec 4M.12, under CLAUDE.md Rule 8): this is an unresolved
+ * RE gap. OVMX emits a fixed 0x4b as a LABELLED OVMX DESIGN CHOICE -- 0x4b is
+ * the dominant form on the wire (18,785 vs 92 in the reference capture), it is
+ * the best single fixed choice against the corpus (61/72 against the mirror's
+ * 60/72), it is behaviourally neutral in the lab, and it is kill-switched.
+ * It is NOT VMS-authentic and must never be described as such.
+ *
+ * `mirror` restores the pre-fix behaviour for the OVMX_DIR_MIRROR_MSGTYPE
+ * kill-switch, so the failing case stays reproducible (guardrail 21). */
+uint8_t scs_dir_response_msgtype(uint8_t request_msgtype, int mirror)
+{
+    return mirror ? request_msgtype : (uint8_t)SCS_DIR_OPCODE_SEQAPP;
+}
+
 int scs_dir_build_connect_response(const struct scs_dir_params *p,
                                    uint8_t out[SCS_DIR_RESP_FRAME_LEN])
 {
@@ -379,13 +526,31 @@ static int dir_build_lookup(const struct scs_dir_lookup_params *p,
         memcpy(out + 14 + 62, namebuf, SCS_DIR_NAME_LEN);
     }
 
-    /* Result field [78:94]. A REQUEST carries no answer, so the template's
-     * all-zero field is left exactly as captured; only a RESPONSE writes here. */
+    /* Result field [78:94].
+     *
+     * vms-578 INTEGRATION: both sides changed this and BOTH changes are kept.
+     * The outer guard is vms-66f's; the inner selection is vms-760's.
+     *
+     * OUTER (vms-66f): a REQUEST carries no answer, so the template's all-zero
+     * field is left exactly as captured; only a RESPONSE writes here.
+     *
+     * INNER (vms-760) per-name selection:
+     *   - negative (p->affirmative == 0): the GROUNDED literal "NOT PRESENT HERE"
+     *   - MSCP$DISK HIT: the queried NAME echoed, 16-byte blank-padded. GROUNDED
+     *     byte-exact (af2-firsttimer-established.pcap: OVMX's MSCP$DISK lookup
+     *     RESPONSE result@92 == 'MSCP$DISK       '). This DIFFERS from the
+     *     VMS$VAXcluster HIT, so the affirmative descriptor is NOT one-size.
+     *   - any other affirmative (VMS$VAXcluster): the SCA#38 descriptor blob.
+     * The MSCP$DISK-name test uses a 9-char prefix compare so the caller may pass
+     * either a NUL- or blank-terminated name. */
     if (!p->request) {
-        if (p->affirmative) {
-            memcpy(out + 14 + 78, dir_affirmative_result, SCS_DIR_RESULT_LEN);
-        } else {
+        if (!p->affirmative) {
             memcpy(out + 14 + 78, SCS_DIR_NOT_PRESENT, SCS_DIR_RESULT_LEN);
+        } else if (memcmp(p->name, "MSCP$DISK", 9) == 0) {
+            /* result == the queried name, same 16-byte blank-padded form as [62:78]. */
+            memcpy(out + 14 + 78, out + 14 + 62, SCS_DIR_RESULT_LEN);
+        } else {
+            memcpy(out + 14 + 78, dir_affirmative_result, SCS_DIR_RESULT_LEN);
         }
     }
     return 0;
@@ -406,6 +571,29 @@ int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
     return dir_build_lookup(p, dir_lookup_tmpl, out);
 }
 
+/* vms-578 INTEGRATION: worktree-760 carried its own scs_dir_build_connect_request
+ * here. It is byte-for-byte equivalent to the vms-66f one already defined above
+ * (same dir_connreq_tmpl, remote Con.ID forced to 0, local = p->local_conid;
+ * the closure version relies on the template's already-zero [50:54] instead of
+ * re-zeroing it). The duplicate definition is dropped -- no behaviour is lost.
+ * SCS_DIR_CONNREQ_SCA_LEN is #defined to SCS_DIR_RESP_SCA_LEN, so even the
+ * length argument is the same value. */
+
+int scs_dir_build_connect_confirm(const struct scs_dir_params *p,
+                                  uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_confirm_tmpl, SCS_DIR_CONFIRM_SCA_LEN, p->recv_ack,
+                     p->send_seq, p->incarnation, out);
+    /* Con.ID pair now bound: remote = member's dir handle, local = OVMX's own. */
+    put_le32(out + 14 + 50, p->remote_conid);
+    put_le32(out + 14 + 54, p->local_conid);
+    return 0;
+}
+
 int scs_dir_build_lookup_request(const struct scs_dir_lookup_params *p,
                                  uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN])
 {
@@ -415,6 +603,19 @@ int scs_dir_build_lookup_request(const struct scs_dir_lookup_params *p,
     struct scs_dir_lookup_params q = *p;
     q.request = 1;         /* forces the result field to stay empty */
     q.affirmative = 0;     /* meaningless on a request; make that explicit */
+    /* vms-578 INTEGRATION: worktree-760's copy of this builder HARD-CODED
+     * op=SCS_DIR_OP_LOOKUP and never touched the opcode byte, because its
+     * callers left both fields zero. The vms-66f version kept here makes both
+     * caller-supplied (SCA#37 needs opcode 0x4b, SCA#29 needs 0x5b). Defaulting
+     * zero preserves the worktree-760 wire bytes for any caller that still
+     * leaves them unset, so no merged call site can silently emit opcode 0x00
+     * or op 0x0000 -- neither of which exists on any capture. */
+    if (q.opcode == 0) {
+        q.opcode = SCS_DIR_OPCODE;
+    }
+    if (q.op == 0) {
+        q.op = SCS_DIR_OP_LOOKUP;
+    }
     return dir_build_lookup(&q, dir_lookupreq_tmpl, out);
 }
 
@@ -426,6 +627,68 @@ const char *scs_dir_answer_name(enum scs_dir_answer a)
     case SCS_DIR_ANSWER_UNKNOWN: break;
     }
     return "UNKNOWN";
+}
+
+int scs_dir_build_mscp_echo(const struct scs_dir_params *p,
+                            uint8_t out[SCS_DIR_ECHO_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    /* Same 66-byte SCA class as the directory CONNECT-ECHO. */
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_echo_tmpl, SCS_DIR_ECHO_SCA_LEN, p->recv_ack, p->send_seq,
+                     p->incarnation, out);
+    /* remote = member's MSCP client handle (echoed); local stays 0 for the echo. */
+    put_le32(out + 14 + 50, p->remote_conid);
+    /* vms-760 delta (1): opcode [16] = 0x4b (data-phase; the VC to OVMX is up),
+     * NOT the 0x5b the directory-echo template carries. GROUNDED from the pcap. */
+    out[14 + 16] = SCS_MSGTYPE_SEQAPP;
+    /* vms-760 delta (2): the truncated SYSAP-name tail [62:66] = 'MSCP' (the
+     * 66-byte SCA window clips 'MSCP$DISK' after 4 bytes), NOT the template's
+     * 'SCS$'. GROUNDED from the pcap. */
+    memcpy(out + 14 + 62, "MSCP", 4);
+    return 0;
+}
+
+int scs_dir_build_vc_echo(const struct scs_dir_params *p,
+                          uint8_t out[SCS_DIR_ECHO_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    /* vms-760: the joiner's op=1 CONNECT-ECHO answering the MEMBER-opened
+     * VMS$VAXcluster VC (af2-firsttimer-established VC pair, ~143.7586). Same
+     * 66-byte SCA as the MSCP echo; the only delta is the truncated SYSAP-name
+     * tail [62:66] = 'VMS$' ("VMS$VAXcluster" clipped to the 66-byte window).
+     * Every accept in this protocol echoes op=1 before its op=2/op=4 response. */
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_echo_tmpl, SCS_DIR_ECHO_SCA_LEN, p->recv_ack, p->send_seq,
+                     p->incarnation, out);
+    put_le32(out + 14 + 50, p->remote_conid); /* member's VC handle (echoed) */
+    out[14 + 16] = SCS_MSGTYPE_SEQAPP;         /* opcode 0x4b (data-phase) */
+    memcpy(out + 14 + 62, "VMS$", 4);          /* GROUNDED name tail */
+    return 0;
+}
+
+int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
+                              uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    /* Structurally the op=3 dir CONNECT-CONFIRM (same 62-byte SCA, opcode 0x5b,
+     * marker 0x00010000, no SYSAP names). */
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_confirm_tmpl, SCS_DIR_CONFIRM_SCA_LEN, p->recv_ack,
+                     p->send_seq, p->incarnation, out);
+    /* Con.ID pair bound: remote = member's MSCP client handle, local = OVMX's
+     * fresh MSCP server handle (the admission act for OUR server connection). */
+    put_le32(out + 14 + 50, p->remote_conid);
+    put_le32(out + 14 + 54, p->local_conid);
+    /* vms-760: the SINGLE fixed-byte delta vs the confirm -- op [46:48] = 4. */
+    put_le16(out + 14 + 46, SCS_DIR_OP_ACCEPT);
+    return 0;
 }
 
 int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v)
@@ -502,5 +765,40 @@ int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v)
         }
     }
 
+    return 0;
+}
+
+/*
+ * scs_dir_build_mscp_confirm5 - answer a peer's op-4 ACCEPT4 with an op-5
+ * CONFIRM5, completing the "form B" accept of a connection WE opened.
+ *
+ * There are two accept forms on an MSCP$DISK connection and OVMX only ever
+ * implemented half of each:
+ *   form A: op 0 -> op 1 -> op 2 RESPONSE -> op 3 CONFIRM      (we handle this)
+ *   form B: op 0 -> op 1 -> op 4 ACCEPT4  -> op 5 CONFIRM5     (we EMIT op 4 as
+ *           a server, but could not CONSUME one as a client)
+ *
+ * The consequence was not a missing feature, it was a wedged node: when VAX3
+ * answered our connect with an op-4 we silently dropped it, then retransmitted
+ * the same request 60 times over 178 s with a frozen send_seq.
+ *
+ * Grounded on 336 op-5 frames from 4 sender nodes across 15 captures, including
+ * three a real VAX sent AT OVMX. Con.ID convention is identical to the op-3
+ * confirm: [50] = the peer's handle, taken from the op-4's [54]; [54] = our own,
+ * the handle we put in our op-0. Nothing follows an op-5 -- across all 336 the
+ * Con.ID pair never appears again (334 silent, 2 retransmits), so OVMX owes the
+ * peer nothing further on that connection.
+ */
+int scs_dir_build_mscp_confirm5(const struct scs_dir_params *p,
+                                uint8_t out[SCS_DIR_CONFIRM5_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     dir_confirm5_tmpl, SCS_DIR_CONFIRM5_SCA_LEN, p->recv_ack,
+                     p->send_seq, p->incarnation, out);
+    put_le32(out + 14 + 50, p->remote_conid); /* peer's handle, from its op-4 [54] */
+    put_le32(out + 14 + 54, p->local_conid);  /* ours, the one we sent in our op-0 */
     return 0;
 }

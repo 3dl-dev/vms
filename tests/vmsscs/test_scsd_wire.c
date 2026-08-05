@@ -1265,6 +1265,12 @@ static void test_connect_selects_the_open_vc_via_config_sys(void)
  */
 static void scsd_test_world_reset(void)
 {
+    /* vms-578: the daemon sets the per-incarnation Con.ID tag once, in main(),
+     * before it initializes the CDL (ovmx_conid_base(); see scs_cdt.h). The
+     * SCSD_UNIT_TEST seam renames main() away, so a test that rebuilds the world
+     * has to do the same thing or the CDL refuses every Con.ID scsd.c issues --
+     * which is what 19 assertions here measured before this line existed. */
+    scs_cdt_set_conid_tag((uint16_t)(ovmx_conid_base() >> 16));
     scs_cdl_init(&scsd_cdl);
     memset(&scsd_svc_port, 0, sizeof(scsd_svc_port));
     /* vms-66f: for exactly the same reason. The poller holds a pointer to a CDT

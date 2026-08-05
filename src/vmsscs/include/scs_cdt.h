@@ -188,8 +188,28 @@ extern "C" {
  */
 #define SCS_CDT_CONID_TAG 0x4F58u
 
+/*
+ * vms-578: THE TAG IS A DEFAULT, NOT A CONSTANT ANY MORE.
+ *
+ * worktree-760 made the high half of every OVMX Con.ID PER-INCARNATION
+ * (scsd.c's ovmx_conid_base(): a clock+pid mix, or OVMX_CONID_BASE). The reason
+ * is vms-2f3's: a node that returns must not present the handles its previous
+ * incarnation used. That is incompatible with a compile-time tag -- the CDL
+ * refused every real Con.ID as "not one this node could have issued", so no
+ * connection got a CDT at all and the whole vms-e1a/vms-dd5 layer went dark
+ * (MEASURED: 19 assertions in test_scsd_wire.c, every one of them a missing
+ * CDT).
+ *
+ * So the tag becomes SETTABLE, defaulting to 0x4F58. Whoever chooses the
+ * incarnation's base calls scs_cdt_set_conid_tag() once at startup; everything
+ * else keeps asking. The CHECK is unchanged in strength -- a Con.ID whose high
+ * half is not THIS node's is still refused -- it is just asking a variable now.
+ */
+void scs_cdt_set_conid_tag(uint16_t tag);
+uint16_t scs_cdt_conid_tag(void);
+
 /* Compose / decompose a CONID (p. 2-29: the low 16 bits index the CDL). */
-#define SCS_CDT_MAKE_CONID(slot) (((uint32_t)SCS_CDT_CONID_TAG << 16) | ((uint32_t)(slot) & 0xFFFFu))
+#define SCS_CDT_MAKE_CONID(slot) (((uint32_t)scs_cdt_conid_tag() << 16) | ((uint32_t)(slot) & 0xFFFFu))
 #define SCS_CDT_CONID_SLOT(conid) ((unsigned)((uint32_t)(conid) & 0xFFFFu))
 
 struct scs_cdt;

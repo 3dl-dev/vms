@@ -657,3 +657,20 @@ const char *scs_vc_action_name(enum scs_vc_action act)
         return "?";
     }
 }
+
+/* vms-760: idempotent reply-sequence allocation. A retransmitted REQUEST must
+ * be answered with the SAME response sequence number, consuming nothing. */
+uint16_t scs_retx_reply_seq(struct scs_retx_seq *st, struct scs_seq_state *seq,
+                            uint16_t req_seq)
+{
+    if (st == NULL || seq == NULL) {
+        return 0;
+    }
+    if (st->valid && st->last_req == req_seq) {
+        return st->last_rsp;      /* retransmit -> replay, consume nothing */
+    }
+    st->last_req = req_seq;
+    st->last_rsp = scs_seq_advance(seq);
+    st->valid = 1;
+    return st->last_rsp;
+}

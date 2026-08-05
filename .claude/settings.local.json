@@ -45,7 +45,32 @@
       "WebFetch(domain:www.linuxfromscratch.org)",
       "Skill(bd-plan)",
       "Bash(awk '{print $1,$2}')",
-      "Bash(ip -br link show tap2)"
+      "Bash(ip -br link show tap2)",
+      "Bash(podman images *)",
+      "Bash(bash /tmp/watch_ci.sh)",
+      "Bash(podman ps *)",
+      "Read(//home/baron/projects/vms/**)",
+      "Bash(rd show *)",
+      "Bash(podman build *)",
+      "Bash(kill -0 895117)",
+      "Read(//tmp/**)",
+      "Bash(podman run *)",
+      "Bash(gh run *)",
+      "Bash(mkdir -p /home/baron/.claude/jobs/c7fdf35d/tmp)",
+      "Read(//home/baron/.claude/jobs/c7fdf35d/tmp/**)",
+      "Read(//home/baron/vax/cluster/tools/**)",
+      "Bash(mkdir -p /home/baron/.claude/jobs/678334fd/tmp)",
+      "Bash(cp /home/baron/vax/cluster/tools/*.py /home/baron/.claude/jobs/678334fd/tmp/)",
+      "Read(//home/baron/vax/cluster/work/**)",
+      "Bash(mkdir -p /home/baron/.claude/jobs/c14776b7/tmp)",
+      "Bash(python3 -c \"import dpkt; print\\('dpkt ok'\\)\")",
+      "Bash(python3 -c \"import scapy; print\\('scapy ok'\\)\")",
+      "Bash(mkdir -p /home/baron/.claude/jobs/f925fff5/tmp)",
+      "Read(//home/baron/.claude/jobs/f925fff5/tmp/**)",
+      "Bash(bash /tmp/poll53.sh)"
     ]
+  },
+  "worktree": {
+    "bgIsolation": "none"
   }
 }

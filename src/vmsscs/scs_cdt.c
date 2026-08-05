@@ -125,6 +125,24 @@ struct scs_cdt *scs_cdl_alloc(struct scs_cdl *cdl, const char *local_sysap,
     return NULL; /* CDL full: SCSCONNCNT + 200 connections already open */
 }
 
+/* vms-578: the per-incarnation Con.ID tag. Defaults to the historical
+ * SCS_CDT_CONID_TAG so anything that never sets it behaves exactly as before. */
+static uint16_t g_conid_tag = SCS_CDT_CONID_TAG;
+
+void scs_cdt_set_conid_tag(uint16_t tag)
+{
+    /* 0 reads as "no handle" on the wire, so it is not a legal tag; refuse it
+     * rather than issue Con.IDs a peer would read as absent. */
+    if (tag != 0u) {
+        g_conid_tag = tag;
+    }
+}
+
+uint16_t scs_cdt_conid_tag(void)
+{
+    return g_conid_tag;
+}
+
 struct scs_cdt *scs_cdl_alloc_conid(struct scs_cdl *cdl, uint32_t conid,
                                     const char *local_sysap, const char *remote_sysap,
                                     struct scs_pb *pb)
@@ -132,7 +150,7 @@ struct scs_cdt *scs_cdl_alloc_conid(struct scs_cdl *cdl, uint32_t conid,
     if (cdl == NULL) {
         return NULL;
     }
-    if ((conid >> 16) != (uint32_t)SCS_CDT_CONID_TAG) {
+    if ((conid >> 16) != (uint32_t)scs_cdt_conid_tag()) {
         return NULL; /* not a CONID this node could have issued */
     }
     unsigned slot = SCS_CDT_CONID_SLOT(conid);

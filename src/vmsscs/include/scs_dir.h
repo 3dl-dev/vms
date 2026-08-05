@@ -115,6 +115,12 @@ extern "C" {
 
 #define SCS_DIR_OPCODE        0x5b /* SCS$DIRECTORY connect / lookup (spec sec 4h) */
 #define SCS_DIR_OPCODE_RETX   0x7b /* its retransmit form (spec sec 4h) */
+/* vms-2f3 sec 4M: the SEQAPP / data-phase msgtype. scs_dir.h:33 records that a
+ * directory frame carries 0x5b while the SCS$DIRECTORY connection is
+ * establishing and 0x4b "once the connection is up". ⚠ What selects it on a
+ * LOOKUP RESPONSE is NOT established -- see the census and the live candidate
+ * in scs_dir.c above scs_dir_response_msgtype(). */
+#define SCS_DIR_OPCODE_SEQAPP 0x4b
 #define SCS_DIR_OP_LOOKUP     0x0a /* [46:48] operation value seen on every name lookup (inferred) */
 
 /* SCA-content and full-frame lengths of the joiner templates. The request
@@ -137,18 +143,52 @@ extern "C" {
 #define SCS_DIR_MSGTYPE_CONNECT_RSP 0x0001u
 #define SCS_DIR_MSGTYPE_ACCEPT_REQ  0x0002u
 
+#define SCS_DIR_CONFIRM_SCA_LEN   62
+#define SCS_DIR_CONFIRM_FRAME_LEN 76  /* 14 + 62 */
+/* vms-e81: the op-5 CONFIRM5 is FOUR BYTES SHORTER than the op-3 confirm -- the
+ * trailing marker word is absent and BOTH length words are re-derived. It is not
+ * "the confirm with a different opcode"; building it that way emits 62 bytes
+ * declaring 60. See dir_confirm5_tmpl in scs_dir.c. */
+#define SCS_DIR_CONFIRM5_SCA_LEN   58
+#define SCS_DIR_CONFIRM5_FRAME_LEN 72 /* 14 + 58 */
+
+/* Directory-connection operation codes ([46:48], byte-verified on the clean
+ * 2-node formation dir-client dialogue, joiner handle 0x4e630007). */
+#define SCS_DIR_OP_CONNECT  0 /* connect-request / echo carries op=0 / op=1 */
+#define SCS_DIR_OP_RESPONSE 2 /* member connect-response supplies its handle */
+#define SCS_DIR_OP_CONFIRM  3 /* joiner connect-confirm (62-byte, no names) */
+#define SCS_DIR_OP_ACCEPT   4 /* vms-760 server-first: MSCP connect-ACCEPT (62-byte, binds our server handle) */
+#define SCS_DIR_OP_MSCP_CONFIRM 5 /* vms-760 server-first: the MEMBER's op=5 confirm of our MSCP accept (M->J) */
+
 /* Recognizable OVMX SCS$DIRECTORY Con.ID ("OX" base | 7). OVMX design choice,
  * opaque to the peer (see header note). Distinct from OVMX's VMS$VAXcluster
- * handle (SCS_CONNECT_OVMX_CONID_BASE | 1). */
+ * handle (SCS_CONNECT_OVMX_CONID_BASE | 1). Used when OVMX ANSWERS the member's
+ * directory connect. */
 #define SCS_DIR_OVMX_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0007u)
+
+/* Handle OVMX uses when it OPENS ITS OWN SCS$DIRECTORY connection to the member
+ * (vms-760: the active joiner opens its own directory connection and queries the
+ * member's directory, clean-ref formation-clean-2node.pcap idx25). Distinct from
+ * SCS_DIR_OVMX_CONID so the member-opened and OVMX-opened directory connections
+ * do not collide. */
+#define SCS_DIR_OVMX_JOINER_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0008u)
 
 /* The SCS Process Poller's OWN connection handle -- the ACTIVE half, OVMX
  * calling a remote SCS$DIRECTORY (p. 2-50). Deliberately NOT SCS_DIR_OVMX_CONID:
  * that one names the connection the PEER opened to OVMX's directory, and a node
  * that is simultaneously serving a directory connection and polling one has two
  * distinct CDTs (p. 2-49: the connection CDT is never the listening CDT).
- * OVMX design choice, opaque to the peer. */
-#define SCS_DIR_OVMX_POLL_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0008u)
+ * OVMX design choice, opaque to the peer.
+ *
+ * vms-578 INTEGRATION NOTE: on work/vms-187-closure this was |0x0008u, which is
+ * the value the vms-760 joiner directory connection already puts on the wire.
+ * Two live CDTs may not share a Local Con.ID (p. 2-30: the CDL is addressed BY
+ * Con.ID), so one had to move. The joiner value is the one empirically observed
+ * on a successful join (vms-70e2 bracket); the poller value has never been on a
+ * wire. Therefore the POLLER moved, to |0x0009u. Nothing in-tree pins either to
+ * a literal -- every reference is through these two symbols (checked by grep for
+ * 0x4f580008 across src/, tests/, tools/, docs/: zero hits). */
+#define SCS_DIR_OVMX_POLL_CONID (SCS_CONNECT_OVMX_CONID_BASE | 0x0009u)
 
 /* p. 2-50 SYSAP names. "The SCS Directory Service is called SCS$DIRECTORY, and
  * the SCS Process Poller is called SCS$DIR_LOOKUP." */
@@ -195,7 +235,10 @@ struct scs_dir_lookup_params {
     uint16_t op;              /* echo the request [46:48] directory-operation value */
     uint16_t incarnation;     /* [22:24] node-incarnation echo (0 => template 1) */
     char     name[SCS_DIR_NAME_LEN]; /* queried SYSAP name, echoed into [62:78] (blank-padded) */
-    int      affirmative;     /* 1 => VMS$VAXcluster descriptor into [78:94]; 0 => NOT PRESENT HERE */
+    int      affirmative;     /* 1 => affirmative HIT into [78:94]; the descriptor is
+                               * PER-NAME (vms-760): MSCP$DISK echoes the queried name,
+                               * everything else gets the VMS$VAXcluster SCA#38 blob.
+                               * 0 => NOT PRESENT HERE. */
     int      request;         /* vms-66f: 1 => build the REQUEST form (SCA#29 template:
                                * [58:62] marker 0, result [78:94] all-zero). 0 => the
                                * RESPONSE form, which is what every pre-vms-66f caller
@@ -235,14 +278,28 @@ int scs_dir_build_connect_echo(const struct scs_dir_params *p,
  * (SCA#25): remote [50:54] = peer's handle, local [54:58] = OVMX's own handle
  * (the admission act binds the pair). Returns 0, or -1 if p/out is NULL.
  */
+/* vms-2f3 sec 4M/4M.12: the msgtype to answer a directory request with. Returns
+ * the SEQAPP data-phase form 0x4b for any request msgtype. ⚠ THIS IS AN OVMX
+ * DESIGN CHOICE, NOT A REFERENCE-DERIVED RULE -- a real VAX mirrors a 0x5b
+ * lookup about half the time; see the census in scs_dir.c. `mirror` non-zero
+ * restores OVMX's pre-fix echo for the OVMX_DIR_MIRROR_MSGTYPE kill-switch. */
+uint8_t scs_dir_response_msgtype(uint8_t request_msgtype, int mirror);
+
 int scs_dir_build_connect_response(const struct scs_dir_params *p,
                                    uint8_t out[SCS_DIR_RESP_FRAME_LEN]);
 
 /*
  * scs_dir_build_lookup_response - Build a 94-byte directory lookup RESPONSE:
- * echoes p->name into [62:78] and writes [78:94] = the VMS$VAXcluster
- * affirmative descriptor (p->affirmative != 0) or the GROUNDED literal
- * "NOT PRESENT HERE" (p->affirmative == 0). Returns 0, or -1 if p/out is NULL.
+ * echoes p->name into [62:78] and writes the [78:94] result field:
+ *   - p->affirmative == 0            -> the GROUNDED literal "NOT PRESENT HERE"
+ *   - p->affirmative, name MSCP$DISK -> the queried NAME echoed (16-byte
+ *     blank-padded), GROUNDED byte-exact from af2-firsttimer-established.pcap
+ *     (OVMX's MSCP$DISK HIT result = 'MSCP$DISK       ')
+ *   - p->affirmative, other name     -> the VMS$VAXcluster affirmative
+ *     descriptor 01 1b 01 03 00*10 06 00 (SCA#38 replay, ungrounded semantics)
+ * The per-name selection is required because the member's established-join
+ * choreography resolves MSCP$DISK on OVMX (name-echo HIT) BEFORE it opens the
+ * MSCP$DISK connect. Returns 0, or -1 if p/out is NULL.
  */
 int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
                                   uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN]);
@@ -260,6 +317,32 @@ int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
  * answer. p->name is the queried SYSAP.
  *
  * Returns 0, or -1 if p/out is NULL.
+ *
+ * vms-578 INTEGRATION: worktree-760's own doc block for this builder said it
+ * hard-codes op[46:48]=0x0a. The merged implementation keeps the vms-66f
+ * caller-supplied form and DEFAULTS opcode/op when the caller leaves them zero,
+ * which reproduces the worktree-760 bytes exactly for its call sites.
+ */
+/*
+ * scs_dir_build_connect_confirm - vms-760: build OVMX's directory op=3
+ * CONNECT-CONFIRM, the third frame of the joiner's own SCS$DIRECTORY client
+ * handshake (after the member's op=1 echo + op=2 response). 62-byte SCA /
+ * 76-byte frame, NO SYSAP names, both Con.IDs bound (remote = member's dir
+ * handle, local = OVMX's SCS_DIR_OVMX_JOINER_CONID), marker 0x00010000. Byte
+ * template = the clean 2-node formation joiner confirm (formation-clean-2node
+ * SCA idx26). Neither 760b nor 760mscp ever sent this; it is required to
+ * complete the dir-client bind before the SYSAP lookups. Returns 0, or -1 if
+ * p/out is NULL.
+ */
+int scs_dir_build_connect_confirm(const struct scs_dir_params *p,
+                                  uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN]);
+
+/*
+ * scs_dir_build_lookup_request - vms-760: build OVMX's directory LOOKUP-REQUEST
+ * querying the member's directory for p->name. op[46:48]=0x0a, [58:62] request
+ * marker=0, result [78:94]=zeros. remote [50:54]=member's directory handle,
+ * local [54:58]=OVMX's joiner directory handle. 94-byte SCA class, byte-exact to
+ * the clean joiner's lookup (idx32) modulo the queried name. Returns 0/-1.
  */
 int scs_dir_build_lookup_request(const struct scs_dir_lookup_params *p,
                                  uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN]);
@@ -287,6 +370,42 @@ enum scs_dir_answer {
 };
 
 const char *scs_dir_answer_name(enum scs_dir_answer a);
+
+/*
+ * scs_dir_build_mscp_echo - vms-760 SERVER-FIRST established-join: build the
+ * op=1 CONNECT-ECHO OVMX (as the MSCP$DISK SERVER) sends in reply to the
+ * MEMBER's inbound MSCP$DISK connect. Shares the 66-byte directory-echo SCA
+ * class, but with two byte deltas grounded from af2-firsttimer-established.pcap
+ * (J->M op=1, rel~143.758): opcode [16]=0x4b (the data-phase msgtype, the VC to
+ * OVMX is already running) and the truncated SYSAP-name tail [62:66]='MSCP'
+ * (the 66-byte window clips 'MSCP$DISK'). remote Con.ID [50:54]=p->remote_conid
+ * (the member's MSCP client handle, echoed); local Con.ID [54:58] stays 0 (our
+ * server handle is supplied by the op=4 ACCEPT, not the echo). Returns 0/-1.
+ */
+int scs_dir_build_mscp_echo(const struct scs_dir_params *p,
+                            uint8_t out[SCS_DIR_ECHO_FRAME_LEN]);
+
+/*
+ * scs_dir_build_vc_echo - vms-760 SERVER-FIRST established-join: build the op=1
+ * CONNECT-ECHO answering the MEMBER-opened VMS$VAXcluster VC. Same 66-byte SCA as
+ * the MSCP echo; delta is the truncated name tail [62:66]='VMS$'. Sent before the
+ * op=2 CONNECT-RESPONSE (every accept echoes op=1 first).
+ */
+int scs_dir_build_vc_echo(const struct scs_dir_params *p,
+                          uint8_t out[SCS_DIR_ECHO_FRAME_LEN]);
+
+/*
+ * scs_dir_build_mscp_accept - vms-760 SERVER-FIRST established-join: build the
+ * op=4 CONNECT-ACCEPT that BINDS OVMX's MSCP$DISK server connection. Structurally
+ * IDENTICAL to the op=3 dir CONNECT-CONFIRM (62-byte SCA, opcode 0x5b, marker
+ * 0x00010000, NO SYSAP names) with the SINGLE fixed-byte delta op [46:48]=4
+ * (vs 3). GROUNDED byte-exact from af2-firsttimer-established.pcap (J->M op=4,
+ * rel~143.758). remote Con.ID [50:54]=p->remote_conid (member's MSCP client
+ * handle), local Con.ID [54:58]=p->local_conid (OVMX's FRESH MSCP server handle,
+ * opaque to the peer -- OVMX design choice). Returns 0, or -1 if p/out is NULL.
+ */
+int scs_dir_build_mscp_accept(const struct scs_dir_params *p,
+                              uint8_t out[SCS_DIR_CONFIRM_FRAME_LEN]);
 
 /* Read-only view of a received directory (0x5b / 0x4b-directory) frame. */
 struct scs_dir_view {
@@ -328,5 +447,14 @@ int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v);
 #ifdef __cplusplus
 }
 #endif
+
+/*
+ * scs_dir_build_mscp_confirm5 - op-5 CONFIRM5 answering a peer's op-4 ACCEPT4 on
+ * a connection OVMX opened (the "form B" accept). remote_conid = the peer's
+ * handle from the op-4's [54:58]; local_conid = the handle OVMX sent in its
+ * op-0. incarnation is OUR OWN value, never an echo of the op-4's.
+ */
+int scs_dir_build_mscp_confirm5(const struct scs_dir_params *p,
+                                uint8_t out[SCS_DIR_CONFIRM5_FRAME_LEN]);
 
 #endif /* SCS_DIR_H */

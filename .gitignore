@@ -71,6 +71,7 @@ __pycache__/
 .telemetry/
 scratchpad/
 .ready/*.lock
+.ready/nostr-rejected.jsonl
 
 # short-name build dir used by the integration worktree
 b/

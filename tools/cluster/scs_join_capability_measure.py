@@ -142,6 +142,75 @@ DEFAULT_CAPTURE_DIR = "/data/training/vax/cluster/captures"
 ETHERTYPE_SCA = b"\x60\x07"
 
 
+# ===========================================================================
+# vms-578: THE SECOND BRACKET -- does the INTEGRATED tree join?
+# ===========================================================================
+# vms-70e2's bracket above measured that work/vms-187-closure CANNOT complete a
+# first join and worktree-760-active-directory can. vms-578 merged the two and
+# this is the acceptance measurement for that merge, taken the same way on the
+# SAME pod (vaxlab-4) minutes apart, with the control BETWEEN the two runs of
+# the binary under test rather than after them:
+#
+#     B1  integrated tree, default env
+#     B3  worktree-760-active-directory, default env   <- the control
+#     B2  integrated tree, default env
+#
+# All three JOINED (CLUSTER_NODES=3, XITDONE=1). Every figure below is
+# re-derived from the captures by the same decoder as the bracket above; the
+# identity of each run is proven ON THE WIRE, not from a log.
+#
+# HELD SEPARATE FROM EXPECTED["runs"] ON PURPOSE. The figures gate asserts the
+# SHAPE of the vms-70e2 bracket -- exactly two runs of the failing binary around
+# one of the joining one -- and folding three more runs into that dict would
+# make that assertion unstatable. This dict is checked by main() below and
+# leaves the gate's surface untouched.
+EXPECTED_578 = {
+    "pod": "vaxlab-4",
+    "lab": "lab-2",
+    "date": "2026-08-05",
+    "runs": {
+        "B1": {
+            "branch": "work/vms-578 (integrated)",
+            # OVMXA0 is a RESIDUE, not this run's identity: VAX1 still held the
+            # CSB of the vms-70e2 A0 run on this pod and names it on the wire.
+            # B2, run after another cycle, is clean. Recorded rather than
+            # filtered -- a decoder that only ever sees one name is a decoder
+            # nobody has tested against a busy cluster.
+            "identity": ["OVMXA0", "OVMXB1"],
+            "joined": True,
+            "cm_190_tx": 509,
+            "cm_190_rx": 575,
+            "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 9: 2},
+            "accept_rsp_tx": 2,
+        },
+        "B3": {
+            "branch": "worktree-760-active-directory",
+            "identity": ["OVMXB3"],
+            "joined": True,
+            "cm_190_tx": 513,
+            "cm_190_rx": 579,
+            "ctl_tx": {0: 2, 1: 8, 2: 2, 3: 2, 4: 6, 6: 2, 7: 2, 9: 2},
+            "accept_rsp_tx": 2,
+        },
+        "B2": {
+            "branch": "work/vms-578 (integrated)",
+            "identity": ["OVMXB2"],
+            "joined": True,
+            "cm_190_tx": 508,
+            "cm_190_rx": 571,
+            "ctl_tx": {0: 2, 1: 2, 2: 2, 3: 2, 6: 3, 7: 3, 9: 2},
+            "accept_rsp_tx": 2,
+        },
+    },
+}
+
+CAPTURES_578 = {
+    "B1": "vms578-B1-lab2-vaxlab4-20260805.pcap",
+    "B3": "vms578-B3-lab2-vaxlab4-20260805.pcap",
+    "B2": "vms578-B2-lab2-vaxlab4-20260805.pcap",
+}
+
+
 def _read_pcap(path):
     """The pcap reader, imported LAZILY from dissect_sca.py so that the ctest
     figures gate -- which copies this file alone into a scratch tree for its
@@ -238,6 +307,25 @@ def main():
             for t, n in sorted(m["ctl_tx"].items())))
         print("   ACCEPT_RSP (type 3)  : %d" % m["accept_rsp_tx"])
 
+    # --- vms-578's bracket, reported the same way ---
+    got578 = {}
+    for tag, fn in CAPTURES_578.items():
+        path = os.path.join(args.captures, fn)
+        if os.path.exists(path):
+            got578[tag] = measure_capture(path, EXPECTED["ovmx_mac"])
+    for tag in ("B1", "B3", "B2"):
+        if tag not in got578:
+            continue
+        m = got578[tag]
+        e = EXPECTED_578["runs"][tag]
+        print("== %s  (%s)  joined=%s" % (tag, e["branch"], e["joined"]))
+        print("   identity on the wire : %s" % ", ".join(m["identity"]))
+        print("   CM 190-byte frames   : tx=%d rx=%d" % (m["cm_190_tx"], m["cm_190_rx"]))
+        print("   OVMX-sent ctl types  : %s" % ", ".join(
+            "%d=%s x%d" % (t, MSGTYPE_NAMES.get(t, "type%d" % t), n)
+            for t, n in sorted(m["ctl_tx"].items())))
+        print("   ACCEPT_RSP (type 3)  : %d" % m["accept_rsp_tx"])
+
     if args.just_print:
         return 0
 
@@ -269,6 +357,30 @@ def main():
     ck(got["A0"]["cm_190_rx"] > 0 and got["A1"]["cm_190_rx"] == 0
        and got["A3"]["cm_190_rx"] == 0,
        "the inbound-CM discriminator did not hold")
+
+    # --- vms-578: the SECOND bracket, checked figure by figure ---
+    if len(got578) == len(CAPTURES_578):
+        for tag in ("B1", "B3", "B2"):
+            m, e = got578[tag], EXPECTED_578["runs"][tag]
+            for field in ("identity", "cm_190_tx", "cm_190_rx", "ctl_tx",
+                          "accept_rsp_tx"):
+                ck(m[field] == e[field],
+                   "578 %s %s %r != %r" % (tag, field, m[field], e[field]))
+        # The finding, as a RELATION and not only as three tables: on this
+        # bracket every arm reached the connection-manager layer, which is the
+        # thing the vms-70e2 bracket showed work/vms-187-closure never did.
+        ck(all(got578[t]["cm_190_rx"] > 0 for t in ("B1", "B3", "B2")),
+           "an arm of the vms-578 bracket received no CM frames")
+        ck(all(got578[t]["accept_rsp_tx"] > 0 for t in ("B1", "B3", "B2")),
+           "an arm of the vms-578 bracket emitted no ACCEPT_RSP")
+        # ...and the control sits BETWEEN the two runs under test, which is what
+        # makes it a bracket rather than a before/after.
+        ck(list(CAPTURES_578) == ["B1", "B3", "B2"] and
+           EXPECTED_578["runs"]["B3"]["branch"] == "worktree-760-active-directory",
+           "the vms-578 control is not bracketed by the two integrated runs")
+    else:
+        print("[vms-578 bracket captures absent -- its figures were not "
+              "re-derived]")
 
     if fails:
         for f in fails:

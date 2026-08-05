@@ -650,6 +650,86 @@ static void test_connect_frames_classify_as_figure_2_14_messages(void)
           "and the book requires an ACCEPT_RSP that this module has no builder for");
 }
 
+/* =====================================================================
+ * vms-578 INTEGRATION: test functions added by worktree-760.
+ * Both branches only APPENDED here, so nothing is replaced -- these are
+ * carried over verbatim and registered in main() below.
+ * ===================================================================== */
+
+
+/* vms-760: byte-exact 110-byte SCA content of the clean 1->2-node formation
+ * joiner's MSCP$DISK client CONNECT-REQUEST (formation-clean-2node.pcap SCA
+ * idx35, joiner 08:00:2b:94:ca:47 -> member). Building with this frame's exact
+ * identity/Con.ID/seq must reproduce it byte-for-byte -- the proof that the
+ * MSCP$DISK connect builder is a faithful replay, not a hand-rolled guess. */
+static const uint8_t clean_mscp_request_sca[110] = {
+    0x6c,0x00, 0xaa,0x00,0x04,0x00,0x4c,0x04, 0xe8,0x03, 0xaa,0x00,0x04,0x00,0x4d,0x04,
+    0x5b,0x13, 0x04,0x00,0x06,0x00,0x01,0x00,0x12,0x00, 0x04,0x00,0x00,0x00,0x06,0x00,0x00,0x00,
+    0x04,0x00,0x00,0x00,0x01,0x00,0x00,0x02, 0x42,0x00,0x04,0x00,0x00,0x00,0x0a,0x00,
+    0x00,0x00,0x00,0x00, 0x08,0x00,0x62,0x4e, 0x02,0x00,0x01,0x00,
+    'M','S','C','P','$','D','I','S','K',' ',' ',' ',' ',' ',' ',' ',
+    'V','M','S','$','D','I','S','K','_','C','L','_','D','R','V','R',
+    'V','5','.','0',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ','+',' '
+};
+
+static void test_build_mscp_request(void)
+{
+    printf("[build MSCP$DISK CONNECT-REQUEST (vms-760)]\n");
+    /* The clean-ref joiner's exact identity/Con.ID/seq for SCA idx35. */
+    static const uint8_t clean_dest_logical[6] = { 0xaa,0x00,0x04,0x00,0x4c,0x04 };
+    static const uint8_t clean_src_logical[6]  = { 0xaa,0x00,0x04,0x00,0x4d,0x04 };
+    struct scs_connect_params cp;
+    memset(&cp, 0, sizeof(cp));
+    memcpy(cp.dst_mac, clean_dest_logical, 6);
+    memcpy(cp.src_mac, ovmx_mac, 6);          /* Ethernet src (not part of SCA) */
+    memcpy(cp.src_logical, clean_src_logical, 6);
+    memcpy(cp.peer_logical, clean_dest_logical, 6);
+    cp.local_conid = 0x4e620008u;             /* clean joiner's MSCP handle */
+    cp.remote_conid = 0;                      /* ignored (REQUEST forces 0) */
+    cp.recv_ack = 4;                          /* clean idx35 [18:20] */
+    cp.send_seq = 6;                          /* clean idx35 [20:22] */
+    cp.incarnation = 1;                       /* clean idx35 [22:24] */
+
+    uint8_t out[SCS_CONNECT_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_connect_build_mscp_request(&cp, out) == 0, "build_mscp_request succeeds");
+
+    /* The SCA content (abs 14..123) reproduces the captured idx35 byte-for-byte. */
+    check_bytes(out + 14, clean_mscp_request_sca, 110,
+                "SCA content == clean-ref idx35 byte-exact (identity/Con.ID/seq threaded)");
+
+    /* Spot the load-bearing fields (also covered by the byte-exact check, asserted
+     * explicitly for readable failure output). */
+    check(out[30] == 0x5b && out[31] == 0x13,
+          "msgtype 0x5b (MSCP connect, NOT the VC's 0x4b), format 0x13 (abs 30/31)");
+    check_bytes(out + 76, (const uint8_t *)"MSCP$DISK       ", 16,
+                "target SYSAP name == 'MSCP$DISK' (abs 76)");
+    check_bytes(out + 92, (const uint8_t *)"VMS$DISK_CL_DRVR", 16,
+                "requesting SYSAP name == 'VMS$DISK_CL_DRVR' (abs 92)");
+    check_bytes(out + 108, (const uint8_t *)"V5.0          + ", 16,
+                "class descriptor == 'V5.0          + ' (abs 108)");
+    check(le32(out + 64) == 0x00000000u, "Remote Con.ID == 0 (CONNECT-REQUEST, abs 64)");
+    check(le32(out + 68) == 0x4e620008u, "Local Con.ID == joiner MSCP handle (abs 68)");
+
+    /* Con.ID + seq substitution proven independent of the template (build with
+     * OVMX's live values). */
+    struct scs_connect_params live = cp;
+    live.local_conid = SCS_CONNECT_OVMX_CONID_BASE | 0x000Au; /* OVMX_MSCP_CONID */
+    live.recv_ack = 3; live.send_seq = 9; live.incarnation = 0;
+    uint8_t out2[SCS_CONNECT_FRAME_LEN];
+    check(scs_connect_build_mscp_request(&live, out2) == 0, "build_mscp_request (live values) succeeds");
+    check(le32(out2 + 68) == (SCS_CONNECT_OVMX_CONID_BASE | 0x000Au),
+          "Local Con.ID threaded to OVMX_MSCP_CONID (abs 68)");
+    check(le16(out2 + 32) == 3 && le16(out2 + 34) == 9,
+          "live recv_ack/send_seq threaded (abs 32/34), not the golden 4/6");
+    check(le16(out2 + 36) == 1, "incarnation 0 leaves the fresh template value 1 (abs 36)");
+    /* SYSAP names unchanged by the seq/Con.ID substitution. */
+    check_bytes(out2 + 76, (const uint8_t *)"MSCP$DISK       ", 16, "names survive live substitution");
+
+    check(scs_connect_build_mscp_request(NULL, out) == -1, "build_mscp_request NULL params rejected");
+    check(scs_connect_build_mscp_request(&cp, NULL) == -1, "build_mscp_request NULL out rejected");
+}
+
 int main(void)
 {
     printf("test_scs_connect: directed HELLO + SCS connect (vms-5fe/vms-c6d)\n");
@@ -663,6 +743,8 @@ int main(void)
     test_connect_data_byte_exact_in_both_builders();
     test_connect_data_kill_switch();
     test_connect_data_decode_real_frames();
+    /* vms-578: worktree-760 test functions, registered here too. */
+    test_build_mscp_request();
     printf("test_scs_connect: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

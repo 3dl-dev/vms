@@ -228,6 +228,9 @@ target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
     vmsscs_depart vmsscs_dgram vmsscs_svc vmsscs_reason vmsscs_disc
     vmsscs_poll
+    # vms-578: the merged scsd.c drives the MSCP$DISK client builders, so the
+    # unit-test seam needs them too (it #includes scsd.c whole).
+    vmsscs_mscp
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)
@@ -728,4 +731,22 @@ endif()
 set_tests_properties(scs_join_capability_mutants PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 300
+)
+# vms-760 - MSCP-over-SCS disk-client command builders: SET CONTROLLER
+# CHARACTERISTICS (0x04) + GET UNIT STATUS (0x03) byte-exact vs the golden af2
+# joiner commands, plus the END-response parser (0x84/0x83, status + returned
+# unit-word that drives the NEXT-UNIT enumeration). The disk-discovery the
+# joiner must complete after NEW before an established VAX1 commits it to MEMBER.
+add_executable(test_scs_mscp test_scs_mscp.c)
+
+target_include_directories(test_scs_mscp PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+
+target_link_libraries(test_scs_mscp PRIVATE vmsscs_mscp)
+
+add_test(NAME vmsscs_mscp_unit COMMAND test_scs_mscp)
+set_tests_properties(vmsscs_mscp_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
 )

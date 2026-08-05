@@ -242,6 +242,17 @@ target_include_directories(vmsscs_poll PUBLIC
 )
 target_link_libraries(vmsscs_poll PUBLIC vmsscs_svc vmsscs_dir)
 
+# vms-760 - MSCP-over-SCS disk-client command builders (SET CONTROLLER
+# CHARACTERISTICS 0x04 + GET UNIT STATUS 0x03, byte-exact vs the golden af2
+# joiner commands). What the joiner sends as a disk CLIENT after NEW, on its own
+# MSCP$DISK connection, so an established VAX1 promotes it to MEMBER. MSCP is a
+# publicly documented DEC protocol (Rule 8: public opcodes + lab-wire capture);
+# plain POSIX + stdint template builders, no other vmsscs dependency.
+add_library(vmsscs_mscp STATIC scs_mscp.c)
+target_include_directories(vmsscs_mscp PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -249,7 +260,9 @@ target_include_directories(scsd_exe PRIVATE
 )
 # vms-dd5 links vmsscs_conn (and, transitively, vmsscs_cdt -- which until this
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll)
+# vms-578 adds vmsscs_mscp back: the worktree-760 CM layer merged into scsd.c
+# drives the MSCP$DISK client command builders after NEW.
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_mscp vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

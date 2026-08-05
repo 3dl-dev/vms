@@ -981,6 +981,55 @@ static void test_break_edges(void)
           "reason_name of a bogus value is never NULL");
 }
 
+/* =====================================================================
+ * vms-578 INTEGRATION: test functions added by worktree-760.
+ * Both branches only APPENDED here, so nothing is replaced -- these are
+ * carried over verbatim and registered in main() below.
+ * ===================================================================== */
+
+
+/* vms-2f3 sec 4M.20: a retransmitted request must be answered by REPLAYING the
+ * original reply's sequence number, never by consuming a fresh one.
+ *
+ * REGRESSION THIS PINS: scs_reflect_credit() advanced unconditionally. That was
+ * unreachable while OVMX ignored retransmissions; sec 4M.14 started answering
+ * them, and the wire then showed the peer replaying op8 send_seq=12 three times
+ * (run Q1B, VAX1 link) while OVMX answered 12, then 13, then 14 -- two phantom
+ * messages injected into the VC stream. */
+static void test_retx_reply_seq(void)
+{
+    printf("[retransmit-reuse of the reply sequence number -- vms-2f3 sec 4M.20]\n");
+
+    struct scs_seq_state seq;
+    scs_seq_init(&seq);                       /* send_seq starts at 1 */
+    struct scs_retx_seq st;
+    memset(&st, 0, sizeof(st));
+
+    /* A fresh request consumes a sequence number. */
+    uint16_t a = scs_retx_reply_seq(&st, &seq, 12);
+    check(a == 1, "first reply to req seq 12 uses send_seq 1");
+
+    /* The SAME request replayed twice must reuse it, and must not advance. */
+    check(scs_retx_reply_seq(&st, &seq, 12) == a, "retransmit of req 12 replays the same send_seq");
+    check(scs_retx_reply_seq(&st, &seq, 12) == a, "second retransmit replays it again");
+    check(seq.send_seq == 2, "the VC sequence advanced ONCE across three answers");
+
+    /* A genuinely new request advances again. */
+    uint16_t b = scs_retx_reply_seq(&st, &seq, 13);
+    check(b == 2, "a new req seq 13 consumes the next send_seq");
+    check(b != a, "and it differs from the previous reply");
+    check(scs_retx_reply_seq(&st, &seq, 13) == b, "its retransmit replays it");
+    check(seq.send_seq == 3, "still exactly one advance per distinct request");
+
+    /* Going back to an older request seq is treated as new -- we only remember
+     * the most recent, which is what the single-outstanding-request protocol
+     * needs and all that the wire evidence supports. */
+    check(scs_retx_reply_seq(&st, &seq, 12) == 3, "an older req seq is not replayed from history");
+
+    check(scs_retx_reply_seq(NULL, &seq, 1) == 0, "NULL state rejected");
+    check(scs_retx_reply_seq(&st, NULL, 1) == 0, "NULL seq rejected");
+}
+
 int main(void)
 {
     printf("test_scs_vc: SCS VC engine -- credit-return + seq/ack + retransmit (vms-691)\n");
@@ -1008,6 +1057,8 @@ int main(void)
     test_delivery_failure_predicate();
     test_break_kill_switch();
     test_break_edges();
+    /* vms-578: worktree-760 test functions, registered here too. */
+    test_retx_reply_seq();
     printf("test_scs_vc: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

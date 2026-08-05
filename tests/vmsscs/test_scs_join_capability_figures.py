@@ -28,20 +28,28 @@ THREE JOBS, AND THE FIRST ONE IS THE ONLY ONE THAT RUNS REAL CODE.
     header or the spec.
 
 (4) AND IF THE CAPTURES ARE PRESENT (a lab host), it runs the real measurement
-    and requires it to PASS. On a machine without them this part is reported as
-    not-run, and the three checks above still gate.
+    and requires it to PASS -- BOTH brackets: vms-70e2's (which binary joins)
+    and vms-578's acceptance bracket (the three runs that JOIN, the evidence
+    the whole SCA layer rests on). On a machine without them the absence is
+    announced with a BANNER, not a parenthetical (vms-371: a quiet skip is how
+    `ctest -L scs` stayed green while four measurement tools were red), and the
+    three checks above still gate. OVMX_SCS_REQUIRE_WIRE=1 turns the absence
+    itself into a failure.
 
 WHAT THIS TEST DOES NOT CLAIM: nothing here says the missing ACCEPT_RSP causes
 the failed join. Section 4(O) states the non-claim; this test only keeps the
 measured numbers and the refutation from drifting.
 """
-import importlib.util
 import os
 import re
 import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import scs_wire                                                    # noqa: E402
+
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 # The three overrides exist so test_scs_join_capability_mutants.py can point
 # this gate at scratch copies. Nothing under src/, docs/ or tools/ is ever
@@ -73,14 +81,10 @@ def load(path, name):
     bytecode -- i.e. the OLD EXPECTED / EXPECTED_578 -- and this gate reads
     both out of that module, so such a mutation would survive. The mutation
     battery for test_scs_reason_figures.py had exactly one survivor for this
-    reason; this is the compile()+exec() form that fixed it.
+    reason; this is the compile()+exec() form that fixed it, now shared by all
+    six figures gates as scs_wire.load_source().
     """
-    src = open(path, encoding="utf-8").read()
-    mod = importlib.util.module_from_spec(
-        importlib.util.spec_from_loader(name, loader=None))
-    mod.__file__ = path
-    exec(compile(src, path, "exec"), mod.__dict__)
-    return mod
+    return scs_wire.load_source(path, name)
 
 
 check(os.path.exists(MEASURE), "tools/cluster/scs_join_capability_measure.py is missing")
@@ -355,27 +359,8 @@ if EXPECTED_578:
               or "vms578-{B1,B3,B2}-lab2-vaxlab4-20260805.pcap" in spec,
               f"spec sec 4(O.1) does not name the capture {fn}")
 
-    # --- and re-derive it when the lab-2 captures are here ------------------
-    # OVMX_LAB_CAPTURES is honoured as the fallback because
-    # test_scs_join_capability_mutants.py points it at a nonexistent directory to
-    # score only the host-independent checks; a re-derivation that ignored it
-    # would try to import the dissector into the mutants' scratch tree.
-    cap578 = os.environ.get("OVMX_LAB2_CAPTURES",
-                            os.environ.get("OVMX_LAB_CAPTURES", M.DEFAULT_CAPTURE_DIR))
-    have578 = all(os.path.exists(os.path.join(cap578, fn))
-                  for fn in CAPTURES_578.values())
-    if have578:
-        for tag, fn in CAPTURES_578.items():
-            g = M.measure_capture(os.path.join(cap578, fn), EXPECTED_578.get(
-                "ovmx_mac", EXPECTED["ovmx_mac"]))
-            e = EXPECTED_578["runs"][tag]
-            for field in ("cm_190_tx", "cm_190_rx", "ctl_tx", "accept_rsp_tx", "identity"):
-                check(g[field] == e[field],
-                      f"[captures-578] {tag} {field} {g[field]!r} != {e[field]!r}")
-        print("[the lab-2 captures are present -- EXPECTED_578 was re-derived from them]")
-    else:
-        print(f"[no lab-2 captures under {cap578} -- EXPECTED_578 was pinned to "
-              f"the prose; the re-derivation was not run]")
+    # The re-derivation of BOTH brackets now happens once, at the end of this
+    # file, through scs_wire.gate() -- see section 4.
 
 # ===========================================================================
 # 3. THE QUARANTINE
@@ -437,22 +422,31 @@ check("4F580007" in header and "B751000C" in header,
       "scs_sdir.h does not carry the Con.ID pair of the observed ACCEPT_RSP")
 
 # ===========================================================================
-# 4. THE REAL MEASUREMENT, WHEN THE CAPTURES ARE HERE
+# 4. THE REAL MEASUREMENT, WHEN THE CAPTURES ARE HERE (vms-371)
 # ===========================================================================
-cap_dir = os.environ.get("OVMX_LAB_CAPTURES", M.DEFAULT_CAPTURE_DIR)
-have = all(os.path.exists(os.path.join(cap_dir, fn)) for fn in M.CAPTURES.values())
-if have:
-    got = {t: M.measure_capture(os.path.join(cap_dir, fn), EXPECTED["ovmx_mac"])
-           for t, fn in M.CAPTURES.items()}
-    for tag, e in EXPECTED["runs"].items():
-        g = got[tag]
-        for field in ("cm_190_tx", "cm_190_rx", "ctl_tx", "accept_rsp_tx", "identity"):
-            check(g[field] == e[field],
-                  f"[captures] {tag} {field} {g[field]!r} != {e[field]!r}")
-    print("[the lab captures are present -- EXPECTED was re-derived from them]")
+# Sections 1-3 pin the DECODER, the PROSE and the QUARANTINE. This pins
+# EXPECTED and EXPECTED_578 to the PACKETS, via the tool's own rederive(), so a
+# green gate on a lab host means wire == EXPECTED == prose for BOTH brackets.
+#
+# BRACKET_CAPTURES is passed as the `need` set rather than "*.pcap": a lab-2
+# directory holding only the vms-70e2 files must count as ABSENT and get the
+# banner, or the vms-578 acceptance figures would be skipped silently -- which
+# is exactly the state vms-371 found them in (pinned by no gate at all).
+#
+# OVMX_LAB2_CAPTURES is honoured first because these are LAB-2 captures living
+# in a sibling directory of the lab-1 grounding library (vms-096); scs_wire's
+# own OVMX_LAB_CAPTURES is the fallback so the mutation battery can force the
+# no-captures arm with one variable.
+_cap2 = os.environ.get("OVMX_LAB2_CAPTURES")
+if _cap2:
+    os.environ[scs_wire.ENV_CAPTURES] = _cap2
+_capdir = scs_wire.capture_dir(M.DEFAULT_CAPTURE_DIR, need=M.BRACKET_CAPTURES)
+if _capdir is None:
+    scs_wire.require_coverage("scs_join_capability_figures", M, None, check)
+    scs_wire.announce_absent("scs_join_capability_figures", M.DEFAULT_CAPTURE_DIR, check)
 else:
-    print(f"[no lab captures under {cap_dir} -- the decoder, the prose and the "
-          f"quarantine were gated; the re-derivation was not]")
+    _covered = scs_wire.rederive("scs_join_capability_figures", M, _capdir, check)
+    scs_wire.require_coverage("scs_join_capability_figures", M, _covered, check)
 
 print(f"{checks} checks, {len(failures)} failures")
 for f in failures:

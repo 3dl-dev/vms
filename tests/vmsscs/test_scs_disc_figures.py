@@ -41,16 +41,23 @@ WHY THIS GATE EXISTS, in the specific terms of what went wrong.
       too. The quarantine block is itself size-capped, so "quarantine the whole
       section" is not an escape hatch.
 
-WHAT THIS TEST DOES NOT DO: it does not read a pcap and it cannot tell you the
-measurement is right. It tells you the documents still say what the measurement
-said. `tools/cluster/scs_disc_measure.py` is the only thing that re-derives it.
+AND SINCE vms-371, IT READS THE WIRE WHEN THE WIRE IS HERE. On a host with the
+lab captures this gate calls `scs_disc_measure.rederive()` and reds on any
+figure the packets no longer support, so "the documents still say what the
+measurement said" is joined by "and the measurement still says it". On a host
+without the captures it prints a banner saying the wire was NOT read -- loudly,
+because the earlier silence is how `ctest -L scs` stayed 32/32 green while this
+script was 23 checks red. See tests/vmsscs/scs_wire.py.
 """
-import importlib.util
 import os
 import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import scs_wire                                                    # noqa: E402
+
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 
 HEADER = os.environ.get("OVMX_SCS_DISC_HEADER",
@@ -91,19 +98,17 @@ def load_measure():
     test_scs_reason_figures.py hit exactly that (one surviving mutant,
     `EXPECTED pcaps 25 -> 26`) and switched to compile()+exec(); this gate had
     not. Reading the source text every time removes the cache from the path.
+
+    The loader now lives in scs_wire.load_source() so all six figures gates
+    share ONE implementation and the mutation battery attacks one place.
     """
-    src = open(MEASURE, encoding="utf-8").read()
-    mod = importlib.util.module_from_spec(
-        importlib.util.spec_from_loader("scs_disc_measure", loader=None))
-    mod.__file__ = MEASURE
     # scs_disc_measure.py imports dissect_sca LAZILY, so nothing here needs
     # the dissector or a capture -- but keep its directory on sys.path so a
     # future eager import does not turn this gate red for the wrong reason.
     d = os.path.dirname(MEASURE)
     if d not in sys.path:
         sys.path.insert(0, d)
-    exec(compile(src, MEASURE, "exec"), mod.__dict__)
-    return mod
+    return scs_wire.load_source(MEASURE, "scs_disc_measure")
 
 
 MEASURE_MOD = load_measure()
@@ -494,6 +499,16 @@ if os.path.exists(JC):
     check(re.search(r'DEFAULT_CAPTURE_DIR\s*=\s*"[^"]*captures-lab2"', jc),
           "scs_join_capability_measure.py still defaults to the lab-1 capture "
           "directory; its six lab-2 captures belong in the -lab2 sibling")
+
+# ===========================================================================
+# N. THE WIRE ITSELF (vms-371)
+# ===========================================================================
+# Everything above pins the PROSE to EXPECTED. This pins EXPECTED to the
+# PACKETS -- and the two together are what make a green run mean "the prose
+# matches a re-derived measurement" rather than "the prose matches a table that
+# also drifted". Without captures it announces that loudly and reds nothing;
+# with OVMX_SCS_REQUIRE_WIRE=1 the absence itself is a failure.
+scs_wire.gate("scs_disc_figures", MEASURE_MOD, MEASURE_MOD.DEFAULT_CAPDIR, check)
 
 print(f"{'FAIL' if failures else 'PASS'}: {checks} checks, {failures} failure(s)")
 sys.exit(1 if failures else 0)

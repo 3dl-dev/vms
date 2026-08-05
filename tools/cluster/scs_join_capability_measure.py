@@ -60,10 +60,12 @@ scs_connect_data_measure (18/67) and scs_credit_measure (11/30). Those four now
 carry a `lab1_only()` fence that dies loudly if a `-lab2-` capture reappears
 there. Do not move these files back.
 
-`ctest -R scs_join_capability_figures` does NOT need them: it exercises this
+`ctest -R scs_join_capability_figures` does not REQUIRE them: it exercises this
 file's decoder against synthesized frames and asserts every figure in EXPECTED
-still appears in docs/cluster-protocol-spec.md sec 4(O). Only this script, on a
-host with the captures, re-derives EXPECTED itself.
+still appears in docs/cluster-protocol-spec.md sec 4(O). When the captures ARE
+present it also calls rederive() below and re-derives BOTH brackets -- vms-70e2's
+and the vms-578 acceptance bracket, which until vms-371 was pinned by no gate at
+all -- reddening on any figure the packets no longer support (vms-371).
 
 CLEAN-ROOM (rule 8): every byte read here is from OUR OWN captures off OUR OWN
 lab. No VSI/HPE source or binary was consulted. The [46:48] message-type
@@ -296,6 +298,85 @@ def measure_capture(path, ovmx_mac):
     return measure_frames(sca_frames(_read_pcap(path)), ovmx_mac)
 
 
+# EXPECTED keys re-derived from packets, and keys no capture can produce.
+# `pod`, `lab` and `date` are provenance labels; `ovmx_mac` is an INPUT to the
+# measurement (which MAC is OVMX's tap) rather than an output of it, and is
+# checked structurally by the ctest gate instead. tests/vmsscs/scs_wire.py reds
+# if EXPECTED grows a figure in neither list.
+WIRE_KEYS = ("runs",)
+NON_WIRE_KEYS = ("pod", "lab", "date", "ovmx_mac")
+
+# Every capture BOTH brackets need. test_scs_join_capability_figures.py passes
+# this to scs_wire.capture_dir(), so a directory holding only one bracket's
+# files counts as ABSENT and gets the loud banner rather than a half-run that
+# silently skips the vms-578 acceptance figures.
+BRACKET_CAPTURES = tuple(CAPTURES.values()) + tuple(CAPTURES_578.values())
+
+
+def rederive(capdir, **_kw):
+    """THE ctest GATE'S ENTRY POINT (vms-371) -- BOTH brackets.
+
+    vms-70e2's bracket (EXPECTED) proved work/vms-187-closure cannot complete a
+    FIRST join and the active-directory tree can. vms-578's acceptance bracket
+    (EXPECTED_578) is the three runs that JOIN -- the evidence the whole SCA
+    layer rests on -- and until vms-371 NO gate pinned it to the packets at all.
+    Both are re-derived here, from the captures, by the same decoder.
+
+    Returns (results, covered_keys) with `results` as [(ok, label), ...].
+    """
+    results = []
+
+    def ck(cond, msg):
+        results.append((bool(cond), msg))
+
+    got = {}
+    for bracket, caps, exp in (("70e2", CAPTURES, EXPECTED),
+                               ("578", CAPTURES_578, EXPECTED_578)):
+        got[bracket] = {}
+        for tag, fn in caps.items():
+            path = os.path.join(capdir, fn)
+            if not os.path.exists(path):
+                ck(False, "%s %s: capture %s is not under %s"
+                   % (bracket, tag, fn, capdir))
+                continue
+            m = measure_capture(path, EXPECTED["ovmx_mac"])
+            got[bracket][tag] = m
+            e = exp["runs"][tag]
+            for field in ("identity", "cm_190_tx", "cm_190_rx", "ctl_tx",
+                          "accept_rsp_tx"):
+                ck(m[field] == e[field],
+                   "%s %s %s %r != %r" % (bracket, tag, field, m[field], e[field]))
+
+    # The vms-70e2 finding as a RELATION, not only as three tables: the joining
+    # binary is the only one that emits an ACCEPT_RSP and the only one the peer
+    # answers at the CM layer.
+    a = got["70e2"]
+    if len(a) == len(CAPTURES):
+        ck(a["A0"]["accept_rsp_tx"] > 0 and a["A1"]["accept_rsp_tx"] == 0
+           and a["A3"]["accept_rsp_tx"] == 0,
+           "the ACCEPT_RSP discriminator did not hold")
+        ck(a["A0"]["cm_190_rx"] > 0 and a["A1"]["cm_190_rx"] == 0
+           and a["A3"]["cm_190_rx"] == 0,
+           "the inbound-CM discriminator did not hold")
+
+    # The vms-578 acceptance finding as a RELATION: EVERY arm reached the
+    # connection-manager layer, which is the thing work/vms-187-closure never
+    # did. Measured off the packets, not read off EXPECTED_578.
+    b = got["578"]
+    if len(b) == len(CAPTURES_578):
+        ck(all(b[t]["cm_190_rx"] > 0 for t in CAPTURES_578),
+           "an arm of the vms-578 acceptance bracket received no CM frames")
+        ck(all(b[t]["accept_rsp_tx"] > 0 for t in CAPTURES_578),
+           "an arm of the vms-578 acceptance bracket emitted no ACCEPT_RSP")
+        # ...and the control sits BETWEEN the two runs under test, which is what
+        # makes it a bracket rather than a before/after.
+        ck(list(CAPTURES_578) == ["B1", "B3", "B2"]
+           and EXPECTED_578["runs"]["B3"]["branch"] == "worktree-760-active-directory",
+           "the vms-578 control is not bracketed by the two integrated runs")
+
+    return results, {"runs"}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--captures", default=DEFAULT_CAPTURE_DIR)
@@ -345,58 +426,8 @@ def main():
     if args.just_print:
         return 0
 
-    fails = []
-
-    def ck(cond, msg):
-        if not cond:
-            fails.append(msg)
-
-    for tag in ("A1", "A0", "A3"):
-        m, e = got[tag], EXPECTED["runs"][tag]
-        ck(m["identity"] == e["identity"],
-           "%s identity %s != %s" % (tag, m["identity"], e["identity"]))
-        ck(m["cm_190_tx"] == e["cm_190_tx"],
-           "%s cm_190_tx %d != %d" % (tag, m["cm_190_tx"], e["cm_190_tx"]))
-        ck(m["cm_190_rx"] == e["cm_190_rx"],
-           "%s cm_190_rx %d != %d" % (tag, m["cm_190_rx"], e["cm_190_rx"]))
-        ck(m["ctl_tx"] == e["ctl_tx"],
-           "%s ctl_tx %s != %s" % (tag, m["ctl_tx"], e["ctl_tx"]))
-        ck(m["accept_rsp_tx"] == e["accept_rsp_tx"],
-           "%s accept_rsp_tx %d != %d" % (tag, m["accept_rsp_tx"], e["accept_rsp_tx"]))
-
-    # The finding itself, asserted as a relation and not only as three tables:
-    # the joining binary is the only one that emits an ACCEPT_RSP, and the only
-    # one the peer answers at the CM layer.
-    ck(got["A0"]["accept_rsp_tx"] > 0 and got["A1"]["accept_rsp_tx"] == 0
-       and got["A3"]["accept_rsp_tx"] == 0,
-       "the ACCEPT_RSP discriminator did not hold")
-    ck(got["A0"]["cm_190_rx"] > 0 and got["A1"]["cm_190_rx"] == 0
-       and got["A3"]["cm_190_rx"] == 0,
-       "the inbound-CM discriminator did not hold")
-
-    # --- vms-578: the SECOND bracket, checked figure by figure ---
-    if len(got578) == len(CAPTURES_578):
-        for tag in ("B1", "B3", "B2"):
-            m, e = got578[tag], EXPECTED_578["runs"][tag]
-            for field in ("identity", "cm_190_tx", "cm_190_rx", "ctl_tx",
-                          "accept_rsp_tx"):
-                ck(m[field] == e[field],
-                   "578 %s %s %r != %r" % (tag, field, m[field], e[field]))
-        # The finding, as a RELATION and not only as three tables: on this
-        # bracket every arm reached the connection-manager layer, which is the
-        # thing the vms-70e2 bracket showed work/vms-187-closure never did.
-        ck(all(got578[t]["cm_190_rx"] > 0 for t in ("B1", "B3", "B2")),
-           "an arm of the vms-578 bracket received no CM frames")
-        ck(all(got578[t]["accept_rsp_tx"] > 0 for t in ("B1", "B3", "B2")),
-           "an arm of the vms-578 bracket emitted no ACCEPT_RSP")
-        # ...and the control sits BETWEEN the two runs under test, which is what
-        # makes it a bracket rather than a before/after.
-        ck(list(CAPTURES_578) == ["B1", "B3", "B2"] and
-           EXPECTED_578["runs"]["B3"]["branch"] == "worktree-760-active-directory",
-           "the vms-578 control is not bracketed by the two integrated runs")
-    else:
-        print("[vms-578 bracket captures absent -- its figures were not "
-              "re-derived]")
+    results, _covered = rederive(args.captures)
+    fails = [label for ok, label in results if not ok]
 
     if fails:
         for f in fails:

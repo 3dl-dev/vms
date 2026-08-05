@@ -10,23 +10,39 @@ behind them has to stay pinned to the words that report it.
 
 tools/scs_connect_data_measure.py re-derives every figure from the lab-1
 captures and PASS/FAILs it against a checked-in EXPECTED table. Those captures
-are host-only and not in git, so ctest cannot run that half -- run it by hand
-on a lab host. What ctest DOES run needs no captures: it reads EXPECTED out of
-the same script and asserts every figure still appears in the header and in the
-spec, and that the C constant, the header verdict and the spec agree on the
-16 bytes byte for byte.
+are host-only and not in git. What ctest runs everywhere needs no captures: it
+reads EXPECTED out of the same script and asserts every figure still appears in
+the header and in the spec, and that the C constant, the header verdict and the
+spec agree on the 16 bytes byte for byte.
+
+AND SINCE vms-371, ON A HOST THAT HAS THE CAPTURES, ctest runs the other half
+too: main() calls scs_connect_data_measure.rederive() and reds on any of its 67
+figures the packets no longer support. That is not hypothetical -- six lab-2
+captures once put 18 of those 67 into failure while `ctest -L scs` stayed 32/32
+green, because this gate compared a table to prose and never opened a pcap. On
+a host without the captures it now says so with a banner rather than silently.
+See tests/vmsscs/scs_wire.py.
 """
-import importlib.util
 import os
 import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import scs_wire                                                    # noqa: E402
+
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-MEASURE = os.path.join(ROOT, "tools", "scs_connect_data_measure.py")
-HEADER = os.path.join(ROOT, "src", "vmsscs", "include", "scs_connect.h")
-SOURCE = os.path.join(ROOT, "src", "vmsscs", "scs_connect.c")
-SPEC = os.path.join(ROOT, "docs", "cluster-protocol-spec.md")
+# The overrides exist only so test_scs_figures_wire_mutants.py can point this
+# gate at a scratch copy of the tree. Nothing in the repo sets them.
+MEASURE = os.environ.get("OVMX_SCS_CONNDATA_MEASURE",
+                         os.path.join(ROOT, "tools", "scs_connect_data_measure.py"))
+HEADER = os.environ.get("OVMX_SCS_CONNDATA_HEADER",
+                        os.path.join(ROOT, "src", "vmsscs", "include", "scs_connect.h"))
+SOURCE = os.environ.get("OVMX_SCS_CONNDATA_SOURCE",
+                        os.path.join(ROOT, "src", "vmsscs", "scs_connect.c"))
+SPEC = os.environ.get("OVMX_SCS_CONNDATA_SPEC",
+                      os.path.join(ROOT, "docs", "cluster-protocol-spec.md"))
 # Every other file that quotes a connect-data census figure in a comment. They
 # are scanned for the OVMX-inclusive totals too -- the correction is worthless
 # if the rejected numbers survive in a comment three files away (vms-fdd).
@@ -203,13 +219,11 @@ def load_measure():
     and this gate reads EXPECTED out of that module: a mutation test once got a
     false result because the .pyc still held the pre-restore table. Compiling
     the source text directly removes the cache from the path entirely.
+
+    The loader now lives in scs_wire.load_source() so all six figures gates
+    share ONE implementation and the mutation battery attacks one place.
     """
-    src = open(MEASURE, encoding="utf-8").read()
-    spec = importlib.util.spec_from_loader("scs_connect_data_measure", loader=None)
-    mod = importlib.util.module_from_spec(spec)
-    mod.__file__ = MEASURE
-    exec(compile(src, MEASURE, "exec"), mod.__dict__)
-    return mod
+    return scs_wire.load_source(MEASURE, "scs_connect_data_measure")
 
 
 def main():
@@ -581,6 +595,15 @@ def main():
     check("connect data" in spec.lower() and "4(N)" in spec,
           "the spec carries a section 4(N) on connect data")
     check("[98:105]" in spec, "the spec records the ungrounded span")
+
+    # --- THE WIRE ITSELF (vms-371) -----------------------------------------
+    # Everything above pins the PROSE to EXPECTED. This pins EXPECTED to the
+    # PACKETS. Together they are what makes a green run mean "the prose matches
+    # a re-derived measurement" instead of "the prose matches a table that also
+    # drifted". `logdir=None` skips only the scsd-log cross-check, which reads
+    # a log directory and not a capture; the tool records that as a skip.
+    scs_wire.gate("scs_connect_data_figures", measure, measure.DEFAULT_CAPDIR,
+                  check, logdir=os.environ.get("OVMX_SCSD_LOGS"))
 
     print("\n%d checks, %d failure(s)" % (checks, len(failures)))
     return 1 if failures else 0

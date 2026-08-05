@@ -124,12 +124,10 @@ def name(sca, off):
     return raw.decode("ascii").rstrip()
 
 
-def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PCAP
-    if not os.path.exists(path):
-        print(f"SKIP: {path} not present (captures are host-only, not in git)")
-        return 0
-
+def measure(path):
+    """Re-derive every EXPECTED figure from one capture. Split out of main()
+    for vms-371 so rederive() below -- and therefore the ctest gate -- reads
+    the same packets by the same code."""
     got = {}
 
     # ---------------- CENSUS A: who opens what ----------------
@@ -197,6 +195,42 @@ def main():
     got["response_credit_hist"] = rsp_hist
     got["request_credit_zero_frames"] = req_zero
     got["lookup_length_hist"] = len_hist
+    return got
+
+
+# Every EXPECTED key here is a packet census; none is a declaration.
+# tests/vmsscs/scs_wire.require_coverage() reds if that stops being true.
+WIRE_KEYS = tuple(EXPECTED)
+NON_WIRE_KEYS = ()
+
+# The single capture this census is taken over. The ctest gate passes it to
+# scs_wire.capture_dir() as the `need` set, so a directory without it counts as
+# ABSENT and gets the banner instead of a silent skip.
+CAPTURE_NAME = os.path.basename(DEFAULT_PCAP)
+DEFAULT_CAPDIR = os.path.dirname(DEFAULT_PCAP)
+
+
+def rederive(capdir, **_kw):
+    """THE ctest GATE'S ENTRY POINT (vms-371).
+
+    Returns (results, covered_keys) with `results` as [(ok, label), ...], so
+    `ctest -R scs_dir_figures` reds on a lab host when the packets stop
+    supporting the sec 4(h)(2a) census -- not only when the prose stops
+    matching the (possibly stale) table.
+    """
+    got = measure(os.path.join(capdir, CAPTURE_NAME))
+    return ([(got.get(k) == EXPECTED[k],
+              "%s %r != %r" % (k, got.get(k), EXPECTED[k])) for k in EXPECTED],
+            set(WIRE_KEYS))
+
+
+def main():
+    path = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_PCAP
+    if not os.path.exists(path):
+        print(f"SKIP: {path} not present (captures are host-only, not in git)")
+        return 0
+
+    got = measure(path)
 
     failures = 0
     print(f"{path}\n")

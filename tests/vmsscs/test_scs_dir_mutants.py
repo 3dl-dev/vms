@@ -160,6 +160,15 @@ def run_gate(root):
     env = dict(os.environ)
     env["OVMX_SCS_DIR_ROOT"] = root
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # vms-371: force the HOST-INDEPENDENT arm. This battery scores the gate's
+    # PROSE-vs-EXPECTED pinning; the wire arm is scored by
+    # test_scs_figures_wire_mutants.py, which mutates the packets themselves.
+    # Pointing OVMX_LAB_CAPTURES at a path that cannot exist makes every mutant
+    # here run against the same, deterministic half of the gate -- and keeps a
+    # scratch copy of a measure script (which has no dissector beside it) from
+    # reddening the CONTROL for a reason that has nothing to do with the mutant.
+    env["OVMX_LAB_CAPTURES"] = os.path.join(root, "no-such-capture-dir")
+    env.pop("OVMX_SCS_REQUIRE_WIRE", None)
     p = subprocess.run([sys.executable, GATE], env=env,
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return p.returncode, p.stdout.decode("utf-8", "replace")

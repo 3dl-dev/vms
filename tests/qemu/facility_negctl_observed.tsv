@@ -23,8 +23,8 @@
 #   RUN <defect> <suites that went red, space-joined, or "-"> <pass|fail>
 #   RED <defect> <suite or (harness)> <assertion text observed FAILing>
 #
-# generated-at: 2026-08-05T00:08:53Z
-# tree-commit: c47f25cc31b819a843f6896984bc75f72eb29a2f
+# generated-at: 2026-08-05T00:31:23Z
+# tree-commit: 66d590067dbd53daa3eb1eca75f9d563baf4f8f6
 # positive-control: pass
 # defects-in-manifest: 42
 # suites-derived: 27
@@ -298,7 +298,7 @@ RED	run-qualifier-not-abbreviated	test_syssvc_startup_service	RUN/DETACH/PROC= c
 RED	run-qualifier-not-abbreviated	test_syssvc_startup_service	RUN/PRIO is /PRIORITY: the abbreviation is refused and the image does not run
 RED	run-qualifier-not-abbreviated	test_syssvc_startup_service	RUN/PROC is /PROCESS_NAME: refused, image not run, nothing named in the executive
 RED	run-qualifier-not-abbreviated	test_syssvc_startup_service	the abbreviated form announces the process ID the executive assigned
-RUN	kstat-deadlock-mismapped	test_kmod_lock_sync test_syssvc_lock_status	fail
+RUN	kstat-deadlock-mismapped	test_kmod_lock_sync test_syssvc_lock_status	pass
 RED	kstat-deadlock-mismapped	test_kmod_lock_sync	parent: child (completion AST) exited clean
 RED	kstat-deadlock-mismapped	test_kmod_lock_sync	parent: sync ENQ closing the cycle rejected SS$_DEADLOCK
 RED	kstat-deadlock-mismapped	test_syssvc_lock_status	parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)

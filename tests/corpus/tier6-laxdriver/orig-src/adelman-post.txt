@@ -1,0 +1,51 @@
+X-NEWS: wkuvx1 comp.os.vms: 7738
+Relay-Version: VMS News - V6.0-3 14/03/90 VAX/VMS V5.5; site wkuvx1.bitnet
+Path: wkuvx1.bitnet!vlsi!ukma!wupost!zaphod.mps.ohio-state.edu!cis.ohio-state.edu!pacific.mps.ohio-state.edu!linac!att!ucbvax!TGV.COM!adelman
+Newsgroups: comp.os.vms
+Subject: Re: LAV Driver question - very simple ?!
+Message-ID: <920224171737.22a000ae@TGV.COM>
+From: adelman@TGV.COM (Kenneth Adelman)
+Date: 25 Feb 92 01:22:20 GMT
+Reply-To: Adelman@TGV.COM (Kenneth Adelman)
+Sender: daemon@ucbvax.BERKELEY.EDU
+Organization: The Internet
+Lines: 815
+
+> I am using Ken Adelman's LAV driver and am stumped by how to interpret the
+> info returned. I am enclosing a copy of my SHORT FORTRAN code to get the
+> system average load info from LAV0. How do I interpret the Blocking priority
+> info and the queue length info i.e. both of these would seem to be integer
+> values because priorities are integers and queue lengths would also appear to
+> be integers as well.
+
+> According to the way I read Ken's comments (which I've added to the top of
+> my code), the driver returns all real values, which when displayed are all
+> less than 1.00.
+
+    These are time averages over 1, 5, and 15 minutes of the following
+quantities:
+
+    1) The number of processes waiting for the CPU. Scans the scheduler
+       queues for the number of processes in COM, COMO, COLPG, PFW, and
+       similar states indicating "execution".
+
+    2) The average disk queue length. Scans the disk database for the
+       "queue length" of each disk. Takes the longest one (per scan) and
+       averages the "longest disk queue length".
+
+    3) The average priority of the executing process. Scans each processor
+       looking for the LOWEST priority which is currently executing. Averages
+       this number. This is a good indication of whether or not you'll get
+       the CPU if you request it. If you are much above this number, you'll
+       get 100%. If you are much below it, you'll get 0%.
+
+
+    On a machine which isn't very busy, any of these quantities can easily
+be less than 1.00. For example, on an idle machine the quantities are all
+zero.
+
+    Here is a current copy of LAVDRIVER.MAR for those who are interested.
+
+								Ken
+
+

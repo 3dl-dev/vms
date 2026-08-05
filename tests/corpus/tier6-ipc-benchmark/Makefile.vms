@@ -1,0 +1,66 @@
+# Makefile for OpenVMS Alpha/Itanium/x86 with GNV installed.
+
+TARGET := pipe socketpair uds tcp udp shm
+
+# Background color
+GREEN  				:= 
+YELLOW 				:= 
+BLUE 				:= 
+MAGENTA             := 
+WHITE  				:= 
+RESET  				:= 
+TARGET_MAX_CHAR_NUM := 20
+
+## Show help
+help:
+	@echo ''
+	@echo 'Usage:'
+	@echo '  ${YELLOW}make${RESET} ${GREEN}<target>${RESET} ${MAGENTA}[variable=value]${RESET}'
+	@echo ''
+	@echo 'Targets:'
+	@echo 'all pipe socketpair uds tcp udp shm test clean'
+
+.PHONY: all
+## Compile all 
+all: $(TARGET)
+
+.PHONY: pipe
+## Compile pipe
+pipe: pipe.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+.PHONY: socketpair
+## Compile socketpair
+socketpair: socketpair.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+.PHONY: uds
+## Compile unix domain socket
+uds: uds.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+.PHONY: tcp
+## Compile tcp
+tcp: tcp.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+.PHONY: udp
+## Compile udp
+udp: udp.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+.PHONY: shm
+## Compile shared memory
+shm: shm.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+
+.PHONY: test
+## Run benchmark tests
+test:
+	./run_tests.sh
+
+.PHONY: clean
+## Clean build artifacts
+clean:
+	rm $(TARGET) *.o

@@ -1,0 +1,25 @@
+# Object files
+*.o
+*.obj
+
+# Listings
+*.lis
+*.anl
+
+# Linker output
+*.map
+*.stb
+
+# Libraries
+*.olb
+
+# Executables
+*.exe
+
+# Debug files
+*.dsf
+*.pca
+
+# Editor files
+*_swp
+*.swp

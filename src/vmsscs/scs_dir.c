@@ -107,6 +107,77 @@ static const uint8_t dir_lookup_tmpl[SCS_DIR_LOOKUP_SCA_LEN] = {
     /* [78:94] */ 'N','O','T',' ','P','R','E','S','E','N','T',' ','H','E','R','E'
 };
 
+/* SCA#21 CONNECT-REQUEST (msgtype [46:48]=0, 110 bytes): VAX1->VAX2, the
+ * POLLER's outbound connect. remote=0 (target CDT does not exist yet), local
+ * 0x63050008 offered. Names: [62:78]='SCS$DIRECTORY   ' (destination SYSAP),
+ * [78:94]='SCS$DIR_LOOKUP  ' (source SYSAP), [94:110] blanks. Substituted at
+ * build time: dst-logical [2:8], src-logical [10:16], counters
+ * [18:20]/[20:22]/[26:28]/[30:32]/[34:36], local Con.ID [54:58]. remote [50:54]
+ * is FORCED to 0, never substituted (see scs_dir.h). Raw pcap frame 29 of
+ * formation-ci1-joinwindow.pcap, byte-exact. */
+static const uint8_t dir_connreq_tmpl[SCS_DIR_CONNREQ_SCA_LEN] = {
+    /* [0:2]   */ 0x6c, 0x00,
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04,       /* dst logical (SUBST) */
+    /* [8:10]  */ 0x01, 0x00,
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x5b, 0x13,                               /* opcode 0x5b, format 0x13 */
+    /* [18:20] */ 0x00, 0x00,                               /* recv_ack (SUBST) */
+    /* [20:22] */ 0x01, 0x00,                               /* send_seq (SUBST) */
+    /* [22:24] */ 0x01, 0x00,                               /* node-incarnation (SUBST if nonzero) */
+    /* [24:26] */ 0x12, 0x00,
+    /* [26:28] */ 0x00, 0x00,                               /* recv_ack mirror (SUBST) */
+    /* [28:30] */ 0x00, 0x00,
+    /* [30:32] */ 0x01, 0x00,                               /* send_seq mirror (SUBST) */
+    /* [32:34] */ 0x00, 0x00,
+    /* [34:36] */ 0x00, 0x00,                               /* recv_ack 3rd (SUBST) */
+    /* [36:38] */ 0x00, 0x00,
+    /* [38:40] */ 0x01, 0x00,
+    /* [40:42] */ 0x00, 0x02,
+    /* [42:44] */ 0x42, 0x00,                               /* inner length = 66 */
+    /* [44:46] */ 0x04, 0x00,
+    /* [46:48] */ 0x00, 0x00,                               /* msgtype 0 = CONNECT_REQ (sec 4h(1a)) */
+    /* [48:50] */ 0x03, 0x00,                               /* companion flag, replayed (inferred) */
+    /* [50:54] */ 0x00, 0x00, 0x00, 0x00,                   /* remote Con.ID = 0 (FORCED) */
+    /* [54:58] */ 0x08, 0x00, 0x05, 0x63,                   /* local Con.ID (SUBST) */
+    /* [58:62] */ 0x00, 0x00, 0x01, 0x00,                   /* replayed (connect-class value) */
+    /* [62:78] */ 'S','C','S','$','D','I','R','E','C','T','O','R','Y',' ',' ',' ',
+    /* [78:94] */ 'S','C','S','$','D','I','R','_','L','O','O','K','U','P',' ',' ',
+    /* [94:110]*/ ' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' ',' '
+};
+
+/* SCA#29 LOOKUP-REQUEST (94 bytes): VAX1->VAX2 asking about MSCP$TAPE.
+ * marker [58:62]=0, result [78:94] all-zero. Substituted: dst/src logical,
+ * opcode [16], counters, op [46:48], remote [50:54], local [54:58], name
+ * [62:78]. Raw pcap frame 37, byte-exact. */
+static const uint8_t dir_lookupreq_tmpl[SCS_DIR_LOOKUP_SCA_LEN] = {
+    /* [0:2]   */ 0x5c, 0x00,
+    /* [2:8]   */ 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04,       /* dst logical (SUBST) */
+    /* [8:10]  */ 0x01, 0x00,
+    /* [10:16] */ 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04,       /* src logical (SUBST) */
+    /* [16:18] */ 0x5b, 0x13,                               /* opcode (SUBST) / format 0x13 */
+    /* [18:20] */ 0x02, 0x00,                               /* recv_ack (SUBST) */
+    /* [20:22] */ 0x03, 0x00,                               /* send_seq (SUBST) */
+    /* [22:24] */ 0x01, 0x00,                               /* node-incarnation (SUBST if nonzero) */
+    /* [24:26] */ 0x12, 0x00,
+    /* [26:28] */ 0x02, 0x00,                               /* recv_ack mirror (SUBST) */
+    /* [28:30] */ 0x00, 0x00,
+    /* [30:32] */ 0x03, 0x00,                               /* send_seq mirror (SUBST) */
+    /* [32:34] */ 0x00, 0x00,
+    /* [34:36] */ 0x02, 0x00,                               /* recv_ack 3rd (SUBST) */
+    /* [36:38] */ 0x00, 0x00,
+    /* [38:40] */ 0x01, 0x00,
+    /* [40:42] */ 0x00, 0x02,
+    /* [42:44] */ 0x32, 0x00,                               /* inner length = 50 */
+    /* [44:46] */ 0x04, 0x00,
+    /* [46:48] */ 0x0a, 0x00,                               /* op = 0x0a (SUBST) */
+    /* [48:50] */ 0x00, 0x00,                               /* flag = 0 (a request; the response has 1) */
+    /* [50:54] */ 0x07, 0x00, 0x59, 0x33,                   /* remote Con.ID (SUBST) */
+    /* [54:58] */ 0x08, 0x00, 0x05, 0x63,                   /* local Con.ID (SUBST) */
+    /* [58:62] */ 0x00, 0x00, 0x00, 0x00,                   /* REQUEST marker (GROUNDED, sec 4h) */
+    /* [62:78] */ 'M','S','C','P','$','T','A','P','E',' ',' ',' ',' ',' ',' ',' ',
+    /* [78:94] */ 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0          /* result: empty in a request */
+};
+
 /* The AFFIRMATIVE VMS$VAXcluster result descriptor, [78:94] of SCA#38.
  * Reproduced byte-exact as observed; internal semantics NOT grounded
  * (spec sec 4h RE gap (c)). */
@@ -216,14 +287,29 @@ int scs_dir_build_connect_response(const struct scs_dir_params *p,
     return 0;
 }
 
-int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
-                                  uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN])
+int scs_dir_build_connect_request(const struct scs_dir_params *p,
+                                  uint8_t out[SCS_DIR_CONNREQ_FRAME_LEN])
 {
     if (p == NULL || out == NULL) {
         return -1;
     }
     dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
-                     dir_lookup_tmpl, SCS_DIR_LOOKUP_SCA_LEN, p->recv_ack, p->send_seq,
+                     dir_connreq_tmpl, SCS_DIR_CONNREQ_SCA_LEN, p->recv_ack, p->send_seq,
+                     p->incarnation, out);
+    /* remote [50:54] stays the template's 0 -- a CONNECT_REQ cannot name a CDT
+     * that does not exist yet (sec 4h(1a)). Only the offered local handle moves. */
+    put_le32(out + 14 + 54, p->local_conid);
+    return 0;
+}
+
+/* The two 94-byte lookup classes differ only in which template they start from;
+ * every substitution below is identical, which is the point -- an inquiry and
+ * its answer are the same frame shape (spec sec 4h(2)). */
+static int dir_build_lookup(const struct scs_dir_lookup_params *p,
+                            const uint8_t *tmpl, uint8_t *out)
+{
+    dir_build_common(p->dst_mac, p->src_mac, p->src_logical, p->peer_logical,
+                     tmpl, SCS_DIR_LOOKUP_SCA_LEN, p->recv_ack, p->send_seq,
                      p->incarnation, out);
 
     /* Opcode echoes the request (0x5b before the SCS$DIRECTORY connection is up,
@@ -250,14 +336,53 @@ int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
         memcpy(out + 14 + 62, namebuf, SCS_DIR_NAME_LEN);
     }
 
-    /* Result field [78:94]: affirmative descriptor or the GROUNDED negative
-     * marker "NOT PRESENT HERE". */
-    if (p->affirmative) {
-        memcpy(out + 14 + 78, dir_affirmative_result, SCS_DIR_RESULT_LEN);
-    } else {
-        memcpy(out + 14 + 78, SCS_DIR_NOT_PRESENT, SCS_DIR_RESULT_LEN);
+    /* Result field [78:94]. A REQUEST carries no answer, so the template's
+     * all-zero field is left exactly as captured; only a RESPONSE writes here. */
+    if (!p->request) {
+        if (p->affirmative) {
+            memcpy(out + 14 + 78, dir_affirmative_result, SCS_DIR_RESULT_LEN);
+        } else {
+            memcpy(out + 14 + 78, SCS_DIR_NOT_PRESENT, SCS_DIR_RESULT_LEN);
+        }
     }
     return 0;
+}
+
+int scs_dir_build_lookup_response(const struct scs_dir_lookup_params *p,
+                                  uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    /* A caller that set `request` and then asked for a RESPONSE would get a
+     * frame with a request's marker and an answer's result field -- a shape
+     * that exists on no wire. Refuse it rather than emit it. */
+    if (p->request) {
+        return -1;
+    }
+    return dir_build_lookup(p, dir_lookup_tmpl, out);
+}
+
+int scs_dir_build_lookup_request(const struct scs_dir_lookup_params *p,
+                                 uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN])
+{
+    if (p == NULL || out == NULL) {
+        return -1;
+    }
+    struct scs_dir_lookup_params q = *p;
+    q.request = 1;         /* forces the result field to stay empty */
+    q.affirmative = 0;     /* meaningless on a request; make that explicit */
+    return dir_build_lookup(&q, dir_lookupreq_tmpl, out);
+}
+
+const char *scs_dir_answer_name(enum scs_dir_answer a)
+{
+    switch (a) {
+    case SCS_DIR_ANSWER_YES:     return "YES";
+    case SCS_DIR_ANSWER_NO:      return "NO";
+    case SCS_DIR_ANSWER_UNKNOWN: break;
+    }
+    return "UNKNOWN";
 }
 
 int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v)
@@ -320,6 +445,18 @@ int scs_dir_parse(const uint8_t *frame, size_t len, struct scs_dir_view *v)
      * the live join. */
     if (v->op == SCS_DIR_OP_LOOKUP && v->has_name && v->has_result && v->marker == 0) {
         v->is_lookup_request = 1;
+    }
+    /* vms-66f: the same marker, read the other way -- a lookup RESPONSE sets
+     * [58:62] to 1. This is the frame the SCS Process Poller waits for. */
+    if (v->op == SCS_DIR_OP_LOOKUP && v->has_name && v->has_result && v->marker == 1) {
+        v->is_lookup_response = 1;
+        if (v->result_zero) {
+            v->answer = SCS_DIR_ANSWER_UNKNOWN;
+        } else if (memcmp(frame + 14 + 78, SCS_DIR_NOT_PRESENT, SCS_DIR_RESULT_LEN) == 0) {
+            v->answer = SCS_DIR_ANSWER_NO;
+        } else {
+            v->answer = SCS_DIR_ANSWER_YES;
+        }
     }
 
     return 0;

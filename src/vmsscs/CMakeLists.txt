@@ -231,6 +231,17 @@ target_include_directories(vmsscs_svc PUBLIC
 )
 target_link_libraries(vmsscs_svc PUBLIC vmsscs_conn vmsscs_credit vmsscs_dgram vmsscs_sdir)
 
+# vms-66f - the SCS Process Poller (SCS$DIR_LOOKUP, p. 2-50). The SEND side of
+# the directory exchange: it CONNECTs to a remote SCS$DIRECTORY, asks whether
+# named SYSAPs are listening, notifies on a Yes only, and DISCONNECTs. Links
+# vmsscs_svc for the five services it drives and vmsscs_dir for the request
+# frame shapes and the answer classification.
+add_library(vmsscs_poll STATIC scs_poll.c)
+target_include_directories(vmsscs_poll PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_poll PUBLIC vmsscs_svc vmsscs_dir)
+
 add_executable(scsd_exe scsd.c)
 target_include_directories(scsd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -238,7 +249,7 @@ target_include_directories(scsd_exe PRIVATE
 )
 # vms-dd5 links vmsscs_conn (and, transitively, vmsscs_cdt -- which until this
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc vmsscs_poll)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

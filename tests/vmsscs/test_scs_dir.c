@@ -499,9 +499,164 @@ static void test_connect_frames_classify_as_figure_2_14_messages(void)
           "the lookup/application message type is NOT a connection-control message");
 }
 
+/* --- vms-66f: the ASK side ------------------------------------------------
+ *
+ * The strongest available test for a replayed template is REPRODUCTION: feed
+ * the builder the identity and counters the golden frame's sender actually had,
+ * and require the output to equal the captured bytes exactly. A substitution
+ * that drifted would show up here as a byte diff, not as a passing counter.
+ */
+static const uint8_t vax2_mac[6] = { 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04 };
+
+static void test_build_connect_request_reproduces_sca21(void)
+{
+    printf("[build the poller's SCS$DIRECTORY CONNECT-REQUEST == SCA#21]\n");
+    struct scs_dir_params p;
+    memset(&p, 0, sizeof(p));
+    /* VAX1's identity, since SCA#21 is VAX1's frame. */
+    memcpy(p.dst_mac, vax2_mac, 6);
+    memcpy(p.src_mac, vax1_mac, 6);
+    memcpy(p.src_logical, vax1_mac, 6);
+    memcpy(p.peer_logical, vax2_mac, 6);
+    p.local_conid = 0x63050008u; /* the handle VAX1 offered */
+    p.remote_conid = 0xDEADBEEFu; /* MUST be ignored: a CONNECT_REQ has none */
+    p.recv_ack = 0;
+    p.send_seq = 1;
+
+    uint8_t out[SCS_DIR_CONNREQ_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_connect_request(&p, out) == 0, "build_connect_request succeeds");
+    check_bytes(out + 14, sca21, sizeof(sca21),
+                "the built CONNECT-REQUEST is BYTE-EXACT with captured SCA#21");
+    check(le32(out + 14 + 50) == 0,
+          "remote Con.ID is forced to 0 even when the caller supplies one (sec 4h(1a))");
+    check(le16(out + 14 + 46) == SCS_DIR_MSGTYPE_CONNECT_REQ,
+          "message type [46:48] == 0 == CONNECT_REQ (GROUNDED, sec 4h(1a))");
+    check(memcmp(out + 14 + 62, "SCS$DIRECTORY   ", 16) == 0,
+          "destination SYSAP name [62:78] is SCS$DIRECTORY (p. 2-50)");
+    check(memcmp(out + 14 + 78, "SCS$DIR_LOOKUP  ", 16) == 0,
+          "source SYSAP name [78:94] is SCS$DIR_LOOKUP (p. 2-50)");
+
+    /* And the substitution really substitutes: OVMX's own handle must land. */
+    p.local_conid = SCS_DIR_OVMX_POLL_CONID;
+    memcpy(p.src_logical, ovmx_logical, 6);
+    check(scs_dir_build_connect_request(&p, out) == 0, "rebuild with OVMX identity");
+    check(le32(out + 14 + 54) == SCS_DIR_OVMX_POLL_CONID,
+          "local Con.ID [54:58] carries the POLLER's own handle");
+    check(le32(out + 14 + 54) != SCS_DIR_OVMX_CONID,
+          "which is NOT the served SCS$DIRECTORY handle (p. 2-49: distinct CDTs)");
+    check_bytes(out + 24, ovmx_logical, 6, "src-logical (abs 24) substituted");
+    check(scs_dir_build_connect_request(NULL, out) == -1, "NULL params rejected");
+}
+
+static void test_build_lookup_request_reproduces_sca29(void)
+{
+    printf("[build a lookup REQUEST == SCA#29]\n");
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, vax2_mac, 6);
+    memcpy(lp.src_mac, vax1_mac, 6);
+    memcpy(lp.src_logical, vax1_mac, 6);
+    memcpy(lp.peer_logical, vax2_mac, 6);
+    lp.remote_conid = 0x33590007u;
+    lp.local_conid = 0x63050008u;
+    lp.recv_ack = 2;
+    lp.send_seq = 3;
+    lp.opcode = SCS_DIR_OPCODE;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memcpy(lp.name, "MSCP$TAPE       ", SCS_DIR_NAME_LEN);
+    lp.affirmative = 1; /* MUST be ignored on a request */
+
+    uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN];
+    memset(out, 0xAA, sizeof(out));
+    check(scs_dir_build_lookup_request(&lp, out) == 0, "build_lookup_request succeeds");
+    check_bytes(out + 14, sca29, sizeof(sca29),
+                "the built lookup REQUEST is BYTE-EXACT with captured SCA#29");
+    check(le32(out + 14 + 58) == 0,
+          "[58:62] carries the REQUEST marker 0 (GROUNDED discriminator)");
+    for (int i = 0; i < SCS_DIR_RESULT_LEN; i++) {
+        if (out[14 + 78 + i] != 0) {
+            check(0, "result field [78:94] stays empty on a request");
+            break;
+        }
+    }
+    check(out[14 + 78] == 0,
+          "affirmative=1 does NOT put an answer into a request's result field");
+
+    /* A request must parse back as a request, on the production classifier. */
+    struct scs_dir_view v;
+    check(scs_dir_parse(out, SCS_DIR_LOOKUP_FRAME_LEN, &v) == 0, "parse the built request");
+    check(v.is_lookup_request == 1 && v.is_lookup_response == 0,
+          "round-trip: the built frame classifies as a lookup REQUEST");
+
+    /* The 0x4b form the exchange switches to once the connection is up. */
+    lp.opcode = SCS_MSGTYPE_SEQAPP;
+    check(scs_dir_build_lookup_request(&lp, out) == 0, "rebuild with opcode 0x4b");
+    check(out[14 + 16] == 0x4b, "opcode [16] is substitutable (sec 4h / 4g phase-3)");
+    check(scs_dir_build_lookup_request(NULL, out) == -1, "NULL params rejected");
+}
+
+static void test_answer_classification(void)
+{
+    printf("[reading the directory's Yes / No / unreadable]\n");
+    uint8_t f[128];
+    struct scs_dir_view v;
+
+    /* The GROUNDED negative: captured SCA#31, "NOT PRESENT HERE". */
+    size_t n = make_frame(f, sca31, sizeof(sca31));
+    check(scs_dir_parse(f, n, &v) == 0, "parse SCA#31");
+    check(v.is_lookup_response == 1, "SCA#31 classifies as a lookup RESPONSE (marker == 1)");
+    check(v.answer == SCS_DIR_ANSWER_NO,
+          "and its answer is NO -- the GROUNDED 'NOT PRESENT HERE' marker (sec 4h(2))");
+
+    /* The affirmative descriptor, through the production response builder. */
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, vax1_mac, 6);
+    memcpy(lp.src_mac, ovmx_mac, 6);
+    memcpy(lp.src_logical, ovmx_logical, 6);
+    memcpy(lp.peer_logical, vax1_mac, 6);
+    lp.opcode = SCS_DIR_OPCODE;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memcpy(lp.name, "VMS$VAXcluster  ", SCS_DIR_NAME_LEN);
+    lp.affirmative = 1;
+    uint8_t out[SCS_DIR_LOOKUP_FRAME_LEN];
+    check(scs_dir_build_lookup_response(&lp, out) == 0, "build an affirmative response");
+    check(scs_dir_parse(out, sizeof(out), &v) == 0, "parse it back");
+    check(v.is_lookup_response == 1 && v.answer == SCS_DIR_ANSWER_YES,
+          "the affirmative descriptor reads as YES (inferred: not the negative marker)");
+
+    /* A response whose result field is all-zero is NOT an answer we can read.
+     * Take the real negative response and blank its result. */
+    n = make_frame(f, sca31, sizeof(sca31));
+    memset(f + 14 + 78, 0, SCS_DIR_RESULT_LEN);
+    check(scs_dir_parse(f, n, &v) == 0, "parse a response with an empty result field");
+    check(v.is_lookup_response == 1 && v.answer == SCS_DIR_ANSWER_UNKNOWN,
+          "an empty result field reads as UNKNOWN, never as a Yes");
+
+    /* A REQUEST is never an answer. */
+    n = make_frame(f, sca29, sizeof(sca29));
+    check(scs_dir_parse(f, n, &v) == 0, "parse SCA#29");
+    check(v.is_lookup_response == 0,
+          "a lookup REQUEST is never classified as a response, even though its"
+          " result field is also all-zero");
+
+    check(strcmp(scs_dir_answer_name(SCS_DIR_ANSWER_NO), "NO") == 0 &&
+          strcmp(scs_dir_answer_name(SCS_DIR_ANSWER_YES), "YES") == 0,
+          "the answer names read back");
+
+    /* Guard: the response builder refuses a params block marked as a request. */
+    lp.request = 1;
+    check(scs_dir_build_lookup_response(&lp, out) == -1,
+          "build_lookup_response REFUSES a request-shaped params block");
+}
+
 int main(void)
 {
     printf("test_scs_dir: SCS$DIRECTORY connect + SCS$DIR_LOOKUP (vms-246)\n");
+    test_build_connect_request_reproduces_sca21();
+    test_build_lookup_request_reproduces_sca29();
+    test_answer_classification();
     test_parse_real();
     test_build_connect_response();
     test_build_lookup_response();

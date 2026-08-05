@@ -52,6 +52,7 @@
 #include "scs_hello.h"
 #include "scs_sdir.h"
 #include "scs_member.h"
+#include "scs_poll.h"
 #include "scs_reason.h"
 #include "scs_start.h"
 #include "scs_svc.h"
@@ -289,6 +290,10 @@ struct peer_state {
     /* --- vms-246: SCS$DIRECTORY / SCS$DIR_LOOKUP responder state --- */
     int      dir_seen;             /* the peer has begun the directory exchange with us */
     int      dir_connected;        /* SCS$DIRECTORY Con.ID pair bound (we sent CONNECT-RESPONSE) */
+    uint32_t poll_remote_conid;    /* vms-66f: the peer's handle on the connection OUR
+                                    * SCS$DIR_LOOKUP opened to ITS SCS$DIRECTORY.
+                                    * Distinct from dir_remote_conid, which is the
+                                    * peer-opened direction (p. 2-49). */
     uint32_t dir_remote_conid;     /* the peer's SCS$DIRECTORY handle (learned from its request) */
     long     dir_lookups_answered; /* SCS$DIR_LOOKUP responses we sent this peer */
     /* --- vms-224: connection-manager add-member SYSAP dialogue (spec sec 4j) ---
@@ -542,6 +547,13 @@ static struct scs_svc_port scsd_svc_port;
  * scs_svc_port_init() zeroes the counters, so this must run at most once per
  * CDL; the scsd_svc_port.cdl == NULL guard is what guarantees that.
  */
+/* vms-66f: the SCS Process Poller (p. 2-50). Declared up here with the other
+ * node-wide state because scsd_sysap_vc_loss(), far above its definition, has
+ * to re-enable polling on a lost connection. See the POLLER block further down
+ * for what it does and what it deliberately does not do. */
+static struct scs_poller scsd_poller;
+static int scsd_poller_ready = 0;
+
 static struct scs_svc_port *scsd_svc(void)
 {
     if (scsd_svc_port.cdl == NULL && scsd_cdl_ready) {
@@ -749,6 +761,13 @@ static void scsd_sysap_vc_loss(struct scs_cdt *cdt, void *ctx)
         } else if (cdt == ps->cdt_joiner) {
             ps->joiner_connected = 0;
             which = "VMS$VAXcluster (joiner-opened)";
+            /* p. 2-50: "If that connection is lost, SYSAP_A has the option of
+             * once again requesting its Process Poller to look for SYSAP_X on
+             * NODE_X." OVMX exercises that option. */
+            if (scsd_poller_ready) {
+                scs_poll_connection_lost(&scsd_poller, "VMS$VAXcluster",
+                                         ps_sys_addr(ps));
+            }
         }
     }
     log_ts(stdout);
@@ -1084,6 +1103,22 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                  argument and for why the census's check 7
  *                                  lists it beside the three. It is never
  *                                  emitted in the configuration OVMX runs.
+ *
+ *   CHOKED, and new in vms-66f: the SCS PROCESS POLLER'S TWO SENDERS. These are
+ *   the first frames OVMX has ever sent to a REMOTE SCS$DIRECTORY (everything
+ *   above answers one). Both are sequenced messages on an established circuit,
+ *   so both are choked like any other; neither takes an exemption:
+ *     scsd_poll_emit()      the 110-byte 0x5b SCS$DIRECTORY CONNECT-REQUEST
+ *                           the poller opens its cycle with (p. 2-50, template
+ *                           SCA#21). This is the CONNECT service's emitter,
+ *                           called by scs_connect() exactly as the three above.
+ *                           Its DISCONNECT_REQ arm builds nothing and says so.
+ *     scsd_poll_inquire()   the 94-byte lookup REQUEST ("is <SYSAP> in your list
+ *                           of listening SYSAPs?", template SCA#29). Not a
+ *                           service emitter -- an inquiry is a SYSAP message on
+ *                           an open connection, not a Figure 2-14 action -- so
+ *                           it is listed separately, like scsd_send_sdir_refusal
+ *                           above and for the same kind of reason.
  *
  *   EXEMPT (call send_frame_raw directly). Two functions, and the reason is the
  *   same in both: THESE FRAMES ARE HOW A CIRCUIT COMES TO EXIST. Refusing them
@@ -2502,6 +2537,10 @@ struct scsd_rx {
     long retransmit_sent;    /* vms-691: connect-request retransmits sent */
     long dir_conn_resp_sent; /* vms-246: SCS$DIRECTORY CONNECT-RESPONSEs sent */
     long dir_lookup_sent;    /* vms-246: SCS$DIR_LOOKUP responses sent */
+    long poll_connect_sent;  /* vms-66f: SCS$DIR_LOOKUP -> SCS$DIRECTORY CONNECT_REQs */
+    long poll_inquiry_sent;  /* vms-66f: p. 2-50 inquiries put on the wire */
+    long poll_answers;       /* vms-66f: lookup RESPONSEs fed back to the poller */
+    long poll_found;         /* vms-66f: affirmative discoveries notified */
     long cm_config_frames;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
     long cm_response_sent;   /* vms-224: 0x81 responses to member 0x03/0x05 txns */
     long padded_sent;        /* vms-9f3: padded directed HELLOs sent (sec 4k) */
@@ -2607,6 +2646,232 @@ static int scsd_joiner_retransmit_pending(const struct scsd_rx *rx,
     }
     struct scs_config_path_info path;
     return scs_config_path(ps->pb, &path) && path.vc_state == SCS_VC_OPEN;
+}
+
+/*
+ * ===========================================================================
+ * vms-66f: THE SCS PROCESS POLLER (SCS$DIR_LOOKUP), ON THE WIRE
+ * ===========================================================================
+ *
+ * The poller itself is src/vmsscs/scs_poll.c (p. 2-50: the cadence, the
+ * one-node-at-a-time rule, the notify-on-Yes-only rule, the per-(SYSAP,node)
+ * disable). What lives HERE is only the port-driver half: turning the two
+ * actions it needs into the two frames scs_dir.c builds, finding the peer the
+ * frames ride to, and feeding received answers back in.
+ *
+ * WHAT THIS DOES *NOT* DO, AND WHY -- READ BEFORE "FINISHING THE JOB".
+ * The item that produced this file was written expecting the poller to REPLACE
+ * a speculative client walk: OVMX opening a VMS$VAXcluster connection without
+ * first asking whether the target is listening. Two facts, both checked rather
+ * than assumed, changed the shape of the change:
+ *
+ *  (1) NO SUCH WALK EXISTS ON THIS BASE. Before this item, scsd.c never sent an
+ *      outbound SCS$DIRECTORY connect at all -- scs_dir.c held three templates
+ *      and every one of them was a RESPONSE. OVMX could answer a lookup and
+ *      could not make one. There was nothing to delete.
+ *
+ *  (2) THE REFERENCE JOINER DOES NOT POLL BEFORE IT CONNECTS. In the golden
+ *      formation-ci1-joinwindow.pcap the directory exchange runs in ONE
+ *      direction: SCA 21/29/37 are all VAX1 (the established member) asking
+ *      VAX2 (the joiner), and VAX2 only answers. VAX2 then opens its own
+ *      VMS$VAXcluster connection (clean-ref idx52, vms-d94) WITHOUT having
+ *      polled anybody. So gating OVMX's joiner connect on a poller answer would
+ *      move OVMX AWAY from the reference wire, not toward it. That connect is
+ *      therefore left exactly as it was.
+ *
+ * What the poller adds is the discovery path OVMX genuinely lacked: a node OVMX
+ * can see but which has never opened a directory connection TO it was, until
+ * now, a node whose SYSAPs OVMX could never learn about. That is the gap
+ * p. 2-50 exists to fill, and it is what is wired below.
+ *
+ * KILL-SWITCH: OVMX_NO_PROCESS_POLLER=1. It gates scs_poll_tick(), which is the
+ * only thing that starts a cycle, so with it set neither frame below is ever
+ * built. Measured, not asserted -- see the item's bracket.
+ */
+/* The poller's emitters need the socket and the peer table; both live in
+ * struct scsd_rx, so that is what the ctx is. */
+static struct scsd_rx *scsd_poll_rx = NULL;
+
+/* Find the peer whose SCS System Address is `node` (the CONFIG_SYS key the
+ * poller passes as args->target_node). NULL if the peer is gone. */
+static struct peer_state *scsd_peer_by_sys(struct scsd_rx *rx, const uint8_t node[6])
+{
+    if (rx == NULL || node == NULL) {
+        return NULL;
+    }
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb != NULL && memcmp(ps_sys_addr(ps), node, 6) == 0) {
+            return ps;
+        }
+    }
+    return NULL;
+}
+
+/* Fill the shared envelope every poller frame needs from a peer. */
+static void scsd_poll_dir_params(struct scsd_rx *rx, struct peer_state *ps,
+                                 struct scs_dir_params *dp)
+{
+    memset(dp, 0, sizeof(*dp));
+    memcpy(dp->dst_mac, ps_port_addr(ps), 6);
+    memcpy(dp->src_mac, rx->our_hw_mac, 6);
+    memcpy(dp->src_logical, rx->our_src_logical, 6); /* vms-9f3: abs-24 logical addr */
+    memcpy(dp->peer_logical, ps_sys_addr(ps), 6);
+    dp->local_conid = SCS_DIR_OVMX_POLL_CONID;
+    dp->incarnation = ps->incarnation; /* sec 4i echo, same rule as the responder */
+    dp->recv_ack = ps->vc.seq.recv_seq;
+    dp->send_seq = scs_seq_advance(&ps->vc.seq);
+}
+
+/*
+ * CONNECT / DISCONNECT for the poller's own connection. Goes through
+ * send_frame_vc(), the p. 2-31 choke point, so this is a CHOKED entry in the
+ * SEND SITE TABLE and takes no exemption.
+ */
+static int scsd_poll_emit(void *ctx, struct scs_cdt *cdt, enum scs_conn_action act,
+                          const struct scs_svc_args *args, const char **what)
+{
+    struct scsd_rx *rx = (struct scsd_rx *)ctx;
+    if (act != SCS_CONN_ACT_SEND_CONNECT_REQ) {
+        /* DISCONNECT_REQ, ACCEPT_RSP: OVMX builds neither (scs_svc.h). Say so. */
+        return scsd_svc_no_builder(cdt, act);
+    }
+    struct peer_state *ps = scsd_peer_by_sys(rx, args->target_node);
+    if (ps == NULL) {
+        return SCS_SVC_EMIT_REFUSED;
+    }
+    struct scs_dir_params dp;
+    scsd_poll_dir_params(rx, ps, &dp);
+    uint8_t frame[SCS_DIR_CONNREQ_FRAME_LEN];
+    if (scs_dir_build_connect_request(&dp, frame) != 0) {
+        return SCS_SVC_EMIT_REFUSED;
+    }
+    *what = "SCS$DIR_LOOKUP -> SCS$DIRECTORY CONNECT-REQUEST";
+    if (send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb, *what,
+                      frame, sizeof(frame)) <= 0) {
+        return SCS_SVC_EMIT_REFUSED;
+    }
+    rx->poll_connect_sent++;
+    log_ts(stdout);
+    printf(" SCSD-I-POLLCONN, SCS$DIR_LOOKUP connects to SCS$DIRECTORY on"
+           " %02x:%02x:%02x:%02x:%02x:%02x local_conid=0x%08X seq=%u\n",
+           ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+           ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+           (unsigned)SCS_DIR_OVMX_POLL_CONID, dp.send_seq);
+    fflush(stdout);
+    return SCS_SVC_EMIT_SENT;
+}
+
+/* ONE inquiry: "is <sysap> in your list of listening SYSAPs?" (p. 2-50). */
+static int scsd_poll_inquire(void *ctx, struct scs_cdt *cdt, const uint8_t node[6],
+                             const char *sysap)
+{
+    struct scsd_rx *rx = (struct scsd_rx *)ctx;
+    (void)cdt;
+    struct peer_state *ps = scsd_peer_by_sys(rx, node);
+    if (ps == NULL) {
+        return 0;
+    }
+    struct scs_dir_params dp;
+    scsd_poll_dir_params(rx, ps, &dp);
+
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, dp.dst_mac, 6);
+    memcpy(lp.src_mac, dp.src_mac, 6);
+    memcpy(lp.src_logical, dp.src_logical, 6);
+    memcpy(lp.peer_logical, dp.peer_logical, 6);
+    lp.remote_conid = ps->poll_remote_conid;
+    lp.local_conid = SCS_DIR_OVMX_POLL_CONID;
+    lp.recv_ack = dp.recv_ack;
+    lp.send_seq = dp.send_seq;
+    lp.incarnation = dp.incarnation;
+    /* Once the connection is up the exchange uses 0x4b (spec sec 4h / 4g
+     * phase-3), which is what SCA#37 shows the reference poller doing. */
+    lp.opcode = SCS_MSGTYPE_SEQAPP;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memset(lp.name, ' ', sizeof(lp.name));
+    size_t nl = strlen(sysap);
+    if (nl > SCS_DIR_NAME_LEN) {
+        nl = SCS_DIR_NAME_LEN;
+    }
+    memcpy(lp.name, sysap, nl);
+
+    uint8_t frame[SCS_DIR_LOOKUP_FRAME_LEN];
+    if (scs_dir_build_lookup_request(&lp, frame) != 0) {
+        return 0;
+    }
+    if (send_frame_vc(rx->sock, rx->ifindex, ps, ps->pb,
+                      "SCS$DIR_LOOKUP inquiry", frame, sizeof(frame)) <= 0) {
+        return 0;
+    }
+    rx->poll_inquiry_sent++;
+    log_ts(stdout);
+    printf(" SCSD-I-POLLASK, SCS$DIR_LOOKUP asks %02x:%02x:%02x:%02x:%02x:%02x"
+           " about '%s' seq=%u\n",
+           ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+           ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+           sysap, lp.send_seq);
+    fflush(stdout);
+    return 1;
+}
+
+/*
+ * p. 2-50's "SYSAP_A is notified about the discovery of SYSAP_X; and SYSAP_A
+ * can then connect to SYSAP_X." OVMX's interested SYSAP is its connection
+ * manager, so the notification opens the VMS$VAXcluster connection -- the SAME
+ * call the grounded post-directory path makes, from a different trigger.
+ */
+static void scsd_poll_found(const char *sysap, const uint8_t node[6], void *ctx)
+{
+    struct scsd_rx *rx = (struct scsd_rx *)ctx;
+    struct peer_state *ps = scsd_peer_by_sys(rx, node);
+    if (ps == NULL) {
+        return;
+    }
+    log_ts(stdout);
+    printf(" SCSD-I-POLLFOUND, SCS$DIR_LOOKUP discovered '%s' listening on"
+           " %02x:%02x:%02x:%02x:%02x:%02x -- notifying the SYSAP\n",
+           sysap, ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+           ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5]);
+    fflush(stdout);
+    rx->poll_found++;
+    if (!ps->joiner_connected &&
+        send_joiner_connect_request(rx->sock, rx->ifindex, rx->cfg, ps, NULL,
+                                    rx->our_hw_mac, rx->our_src_logical)) {
+        rx->connect_req_sent++;
+        log_ts(stdout);
+        printf(" SCSD-I-CONNREQ, sent OUR VMS$VAXcluster CONNECT-REQUEST"
+               " local_conid=0x%08X seq=%u (poller discovery)\n",
+               OVMX_JOINER_CONID, ps->joiner_req_seq);
+        fflush(stdout);
+    }
+}
+
+/*
+ * The poller, bound on first use for exactly the reason scsd_svc() is: the
+ * SCSD_UNIT_TEST seam renames main() away, so anything bound only in main()
+ * would be dead in every wire test.
+ */
+static struct scs_poller *scsd_poll(struct scsd_rx *rx)
+{
+    if (!scsd_poller_ready) {
+        scsd_poller_ready = 1;
+        scsd_poll_rx = rx;
+        scs_poll_init(&scsd_poller, scsd_svc(), rx->cfg);
+        scs_poll_set_emitters(&scsd_poller, scsd_poll_emit, rx,
+                              scsd_poll_inquire, rx);
+        /*
+         * p. 2-50: "VMS software, in fact, requests polling for SYSAP names on
+         * all nodes." OVMX registers the ONE SYSAP it would actually connect to
+         * on discovery -- its connection manager. Registering names OVMX would
+         * do nothing about (MSCP$DISK, MSCP$TAPE) would put inquiries on the
+         * wire whose answers no code consumes, which is noise, not discovery.
+         */
+        (void)scs_poll_request(&scsd_poller, "VMS$VAXcluster", NULL,
+                               scsd_poll_found, rx);
+    }
+    return &scsd_poller;
 }
 
 /*
@@ -3349,6 +3614,10 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             if (ps != NULL && !ps->joiner_connected) {
                 ps->joiner_remote_conid = lconid;
                 ps->joiner_connected = 1;
+                /* p. 2-50: "Once SYSAP_A has established a connection with
+                 * SYSAP_X, it will disable polling for SYSAP_X on NODE_X."
+                 * Polling for VMS$VAXcluster continues on every OTHER node. */
+                scs_poll_connected(scsd_poll(rx), "VMS$VAXcluster", ps_sys_addr(ps));
                 /* vms-dd5: the member's answer to OUR CONNECT_REQ, carrying
                  * BOTH Con.IDs -- message type 2, ACCEPT_REQ (spec sec
                  * 4(h)(1a)). If the peer's message-type-1 CONNECT_RSP was
@@ -3398,6 +3667,41 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
         (buf[30] == SCS_DIR_OPCODE || buf[30] == SCS_DIR_OPCODE_RETX ||
          buf[30] == SCS_MSGTYPE_SEQAPP)) {
         struct scs_dir_view dv;
+
+        /* (b2.0) vms-66f: frames addressed to the connection OUR SCS$DIR_LOOKUP
+         * opened. These are the ANSWER half of p. 2-50 and are the only frames
+         * in this file whose [50:54] names the poller's own handle, so the test
+         * is exact and cannot capture the peer-opened directory connection. */
+        if (scs_dir_parse(buf, (size_t)n, &dv) == 0 &&
+            dv.remote_conid == SCS_DIR_OVMX_POLL_CONID) {
+            struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
+            if (ps == NULL) {
+                return;
+            }
+            if (!ps->vc.initialized) {
+                scs_vc_init(&ps->vc);
+            }
+            scs_vc_note_recv(&ps->vc, dv.send_seq);
+            if (dv.local_conid != 0) {
+                ps->poll_remote_conid = dv.local_conid;
+            }
+            if (dv.is_lookup_response) {
+                /* p. 2-50's "Yes"/"No". scs_poll_answer() decides who, if
+                 * anyone, is notified -- this branch decides nothing. */
+                rx->poll_answers++;
+                log_ts(stdout);
+                printf(" SCSD-I-POLLANS, SCS$DIRECTORY answered '%s' -> %s\n",
+                       dv.name, scs_dir_answer_name(dv.answer));
+                fflush(stdout);
+                (void)scs_poll_answer(scsd_poll(rx), dv.name, dv.answer, monotonic_ms());
+            } else if (dv.op == SCS_DIR_MSGTYPE_ACCEPT_REQ) {
+                /* "and the Directory Service accepts the connection" (p. 2-50):
+                 * the message-type-2 ACCEPT_REQ, GROUNDED in sec 4h(1a). */
+                (void)scs_poll_opened(scsd_poll(rx), monotonic_ms());
+            }
+            return;
+        }
+
         if (scs_dir_parse(buf, (size_t)n, &dv) == 0 &&
             (dv.is_dir_connect_request || dv.is_lookup_request)) {
             struct peer_state *ps = peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
@@ -4452,6 +4756,34 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                     sdir_connect_scans, sdir_no_such_sysap, sdir_busy_replies,
                     sdir_refusals_unsent, scs_sdir_enabled() ? "YES" : "no (OVMX_NO_SDIR)");
         }
+        /*
+         * vms-66f: the p. 2-50 poller, as numbers. `skipped` is the interesting
+         * one on a 2-node join: once OVMX's connection manager has its
+         * VMS$VAXcluster connection, p. 2-50 disables polling for that pair, so
+         * a run with connects=0 and skipped>0 is the RULE working, not the
+         * poller failing. Reading connects=0 alone would get that backwards.
+         */
+        fprintf(out,
+                "  POLLER SCS$DIR_LOOKUP interval=%us state=%s cycles=%lu"
+                " completed=%lu abandoned=%lu disc-unclosed=%lu connect-refused=%lu"
+                " last-connect-status=%s last-refused-node=%02x:%02x:%02x:%02x:%02x:%02x connects-sent=%ld inquiries-sent=%ld answers=%ld yes=%lu no=%lu"
+                " unknown=%lu unsolicited=%lu notified=%lu skipped=%lu"
+                " forced-cdt-release=%lu enabled=%s\n",
+                scs_poll_interval_sec(), scs_poll_state_name(scsd_poller.state),
+                scsd_poller.cycles_started, scsd_poller.cycles_completed,
+                scsd_poller.cycles_abandoned, scsd_poller.disconnects_unclosed,
+                scsd_poller.connect_refused,
+                scs_svc_status_name(scsd_poller.last_connect_status),
+                scsd_poller.last_refused_node[0], scsd_poller.last_refused_node[1],
+                scsd_poller.last_refused_node[2], scsd_poller.last_refused_node[3],
+                scsd_poller.last_refused_node[4], scsd_poller.last_refused_node[5],
+                rx->poll_connect_sent,
+                rx->poll_inquiry_sent, rx->poll_answers, scsd_poller.answers_yes,
+                scsd_poller.answers_no, scsd_poller.answers_unknown,
+                scsd_poller.answers_unsolicited, scsd_poller.notifications,
+                scsd_poller.skipped_disabled, scsd_poller.descriptors_forced,
+                scs_poll_enabled() ? "YES" : "no (ships OFF; OVMX_PROCESS_POLLER=1 opts in,"
+                                     " OVMX_NO_PROCESS_POLLER=1 forces off)");
         for (int i = 0; i < OVMX_MAX_PEERS; i++) {
             if (rx->peers[i].pb == NULL) {
                 continue;
@@ -4839,6 +5171,44 @@ int main(int argc, char **argv)
                 /* peer_round2_seen=0: a timer expiry is not a peer frame. */
                 scsd_vc_settle(&vc_ctx, ps, act, 0, &rx.start_ack_sent);
             }
+        }
+
+        /* --- vms-66f: the p. 2-50 SCS process poll. "A VMS system will poll
+         * each other node that it can see approximately once, but not more than
+         * once, during each such interval" -- so the set of nodes it can see is
+         * refreshed here, from the ONE authority on whether a circuit is open
+         * (CONFIG_PATH, p. 2-47), and scs_poll_tick() decides whether anything
+         * happens. WIRE-VISIBLE and NEW: this is the first outbound
+         * SCS$DIRECTORY traffic OVMX has ever emitted. OVMX_NO_PROCESS_POLLER=1
+         * suppresses it entirely. */
+        if (do_connect) {
+            struct scs_poller *poller = scsd_poll(&rx);
+            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+                struct peer_state *ps = &peers[i];
+                if (ps->pb == NULL) {
+                    continue;
+                }
+                const uint8_t *sys = ps_sys_addr(ps);
+                /*
+                 * ASK THE QUESTION CONNECT WILL ASK, not a similar one.
+                 * The first revision of this loop tested the Path Block's own
+                 * vc_state and MEASURED WRONG on the lab wire: the VC formation
+                 * machine reaches OPEN one received frame BEFORE scs_pb_open()
+                 * moves the Path Block off the PDT formative queue, so for that
+                 * window the circuit is "open" and CONFIG_SYS cannot reach it.
+                 * The poller duly registered the node, CONNECT ran the p. 2-47
+                 * selection, and the run ended with connect-refused=1
+                 * last-connect-status=NOVC and not one frame sent. Using
+                 * scs_config_select_vc() -- the selection itself -- closes the
+                 * gap by construction: if it answers, CONNECT will too.
+                 */
+                if (scs_config_select_vc(rx.cfg, sys) != NULL) {
+                    (void)scs_poll_add_node(poller, sys);
+                } else {
+                    scs_poll_drop_node(poller, sys);
+                }
+            }
+            scs_poll_tick(poller, monotonic_ms());
         }
 
         /* --- vms-691: retransmit OVMX's own unacked sequenced message (the

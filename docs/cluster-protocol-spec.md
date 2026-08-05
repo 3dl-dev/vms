@@ -973,6 +973,58 @@ connect frame runs longer than 16 bytes), so field *widths* are reported
 as-observed, not asserted as a fixed schema; the *presence, position, and
 negative-marker semantics* are grounded.
 
+**(2a) THE ASK SIDE — the two REQUEST frames, and what the reference VAX does
+with them (GROUNDED, `vms-66f`).** Everything §4h recorded before this entry was
+a frame OVMX *answers*. The SCS Process Poller of *VAXcluster Principles* p. 2-50
+(SYSAP name `SCS$DIR_LOOKUP`) has to *ask*, so both request classes were dumped
+byte-for-byte out of `formation-ci1-joinwindow.pcap` and are now baked into
+`src/vmsscs/scs_dir.c`:
+
+| Frame | raw pcap | SCA | class | key fields |
+|---|---|---|---|---|
+| `SCS$DIRECTORY` CONNECT_REQ | 29 | 21 | 110 B | `[46:48]=0`, remote `0`, local `0x63050008` offered, `[48:50]=3` |
+| lookup REQUEST | 37 | 29 | 94 B | `[46:48]=0x0a`, `[48:50]=0`, `[58:62]=0` marker, result `[78:94]` all-zero |
+
+**The two 16-byte name fields are (DESTINATION SYSAP, SOURCE SYSAP), and the
+request/response PAIR is what grounds it.** SCA 21 carries
+`[62:78]="SCS$DIRECTORY   "` then `[78:94]="SCS$DIR_LOOKUP  "`; SCA 25, the
+answer travelling the other way, carries exactly those two strings **swapped**.
+A pair that swaps with direction is an endpoint pair. The alternative reading —
+a fixed "target, operation" schema — is **REFUTED** by SCA 25, since
+`SCS$DIR_LOOKUP` is not an operation performed on `SCS$DIRECTORY`. This confirms
+`scs_sdir_target_name()`'s use of `[62:78]` on the 110-byte CONNECT_REQ class.
+
+**WHAT THE REFERENCE VAX DID WHEN OVMX ASKED — measured, and it is half good
+news.** OVMX drove its poller against VAX1 (VAX 7.3, lab-2 replica `vaxlab-1`,
+2026-08-05, 8 cycles over 60 s, `PRCPOLINTERVAL=8`):
+
+- **The VAX ACCEPTS an OVMX-initiated `SCS$DIR_LOOKUP → SCS$DIRECTORY`
+  connection.** It answered the CONNECT_REQ with a message-type-1 `CONNECT_RSP`
+  and, on the second cycle, a message-type-2 `ACCEPT_REQ`, taking OVMX's CDT to
+  OPEN through the §4(h)(1a) sequence. This is the first time OVMX has been the
+  ACTIVE half of any SCA connection on the reference wire.
+- **It did NOT answer the inquiry that followed.** Zero lookup RESPONSEs over 8
+  cycles; the VAX instead retransmitted `CONNECT_RSP`. So the inquiry OVMX
+  builds is not yet the inquiry the VAX will answer, and the reason is **not
+  identified** — candidates not separated by this run are the Con.ID the inquiry
+  addresses (`[50:54]`, which OVMX learned as `0`), the `[48:50]` flag, and the
+  sequence state. **Recorded as an open gap, not as a working exchange.**
+- **Enabling the poller COST THE JOIN.** Same binary, back-to-back, poller on
+  vs. gated: on → `dir_connected=no dir_lookups=0 cm_config=no`, no join at all
+  (the member never ran its own directory phase, `connect_scans=0`); gated →
+  `dir_connected=YES dir_lookups=4 cm_config=YES joiner=OPEN`. OVMX's poller
+  therefore ships **OFF by default** (`OVMX_PROCESS_POLLER=1` opts in,
+  `OVMX_NO_PROCESS_POLLER=1` forces off) until the unanswered-inquiry gap is
+  closed. Logs: `/data/training/vax/k8s-labs/vaxlab-1/logs/vms66f-{on,off}.log`.
+
+**The reference joiner does NOT poll before it connects, and that matters for
+anyone tempted to make polling the gate.** In `formation-ci1-joinwindow.pcap`
+the directory exchange runs in ONE direction — SCA 21/29/37 are all VAX1 (the
+established member) asking VAX2 (the joiner); VAX2 only answers, and then opens
+its own `VMS$VAXcluster` connection without having polled anybody. Gating a
+joiner's connect on a poller answer moves away from the reference wire, not
+toward it.
+
 **(3) `0x48` credit-return short — the 41-byte body.** Every credit-return is a
 fixed 41-byte SCA frame (Ethernet-padded to 60). Its distinguishing feature vs.
 a sequenced message: **[20:22] (send-seq) is 0** — a credit-return carries no
@@ -1098,7 +1150,10 @@ leftover bytes) are not grounded to a field; (c) the affirmative
 lookups that resolve carry the resolved SYSAP name back, but no separate
 status/handle-return field was isolated; (d) the absolute `SCS$DIRECTORY`
 connection Con.IDs are inferred (dynamically-allocated, absent from the
-idle-state decoder ring).
+idle-state decoder ring). **(e) `vms-66f`: the reference VAX accepts an
+OVMX-initiated directory connection but does not answer the lookup REQUEST that
+follows — see §4(h)(2a). The request frame's bytes are a byte-exact replay of
+SCA 29; what is NOT grounded is what makes the VAX answer one.**
 
 ### 4(i) Joining an ALREADY-ESTABLISHED cluster (member-state-seq > 1)
 
@@ -2029,6 +2084,30 @@ inventing it.
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:
+
+- **`PRCPOLINTERVAL` — GROUNDED, and recorded here because a default that
+  matters is worth pinning to its oracle (`vms-66f`).** The SCS process polling
+  interval of *VAXcluster Principles* p. 2-50 is a real SYSGEN parameter, and it
+  was read off the reference system rather than inferred from the prose —
+  `MC SYSGEN SHOW/SCS` on VAX1 (VAX 7.3, lab-2 replica `vaxlab-1`, 2026-08-05):
+  `PRCPOLINTERVAL  Current 30  Default 30  Min. 1  Max. 32767  Seconds  Dynamic`.
+  `src/vmsscs/include/scs_poll.h` carries all four numbers and clamps to the
+  range. Raw evidence:
+  `/data/training/vax/k8s-labs/vaxlab-1/logs/sysgen-scs-vax1-20260805.txt`.
+  **What is NOT grounded and is labeled as an OVMX choice in that header:**
+  `SCS_POLL_CYCLE_TIMEOUT_MS` (5 s — SCA states no bound on how long a poll
+  cycle may stay open; it is a local timer and puts nothing on the wire), and
+  the forced CDT release when a poller cycle ends without the p. 2-26 disconnect
+  dialogue completing (OVMX builds no `DISCONNECT_REQ`; counted in
+  `descriptors_forced`, see `poll_release_cdt()`).
+
+- **The poller's ANSWER READING is two-thirds inferred (`vms-66f`).** p. 2-50
+  says the directory answers "Yes" or "No"; only the "No" is on our wire, as the
+  literal `"NOT PRESENT HERE"` in `[78:94]` (§4(h)(2)). "Yes" cannot be read —
+  §4(h) gap (c) — so `enum scs_dir_answer` is three-valued: `NO` is GROUNDED,
+  `YES` means "non-zero and not the negative marker" (INFERRED), and an all-zero
+  result is reported `UNKNOWN` and notifies nobody. A boolean here would have
+  turned every unreadable response into a discovery.
 
 - **The `CONNECT_RSP` REFUSAL CODES — "no such SYSAP" and "busy, try again
   later" (`vms-7fe`). NOT GROUNDED, IN PLACEMENT OR IN VALUE, AND OVMX SHIPS

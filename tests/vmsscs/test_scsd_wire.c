@@ -1267,6 +1267,12 @@ static void scsd_test_world_reset(void)
 {
     scs_cdl_init(&scsd_cdl);
     memset(&scsd_svc_port, 0, sizeof(scsd_svc_port));
+    /* vms-66f: for exactly the same reason. The poller holds a pointer to a CDT
+     * out of this CDL and a pointer to the rx world; both are dangling the
+     * moment the world is rebuilt. Clearing scsd_poller_ready makes scsd_poll()
+     * re-bind on next use, which is the state the daemon is actually in. */
+    memset(&scsd_poller, 0, sizeof(scsd_poller));
+    scsd_poller_ready = 0;
 }
 
 
@@ -5751,6 +5757,180 @@ static void test_exit_summary_reports_the_disconnect_dialogue(void)
 }
 
 
+
+/* ==========================================================================
+ * vms-66f: THE SCS PROCESS POLLER, THROUGH THE DAEMON (p. 2-50)
+ *
+ * test_scs_poll.c proves the poller's RULES against a stub port driver. This
+ * proves the WIRING: that scsd.c's own emitters turn those rules into the two
+ * real frames, that the daemon's receive dispatch feeds the answers back, and
+ * that a Yes reaches the SYSAP that then connects. Every frame below is taken
+ * from, or built by, production code -- nothing is hand-assembled except the
+ * PEER's replies, which is the one thing a test has to stand in for.
+ * ========================================================================== */
+
+/* Turn the poller's own outbound frame into the reply the peer would send back:
+ * swap the Con.ID pair into the peer's direction and set the message type. */
+static size_t poll_peer_reply(const uint8_t *ours, size_t len, uint16_t msgtype,
+                              uint32_t peer_handle, const uint8_t ovmx_hw[6],
+                              uint8_t *out)
+{
+    memcpy(out, ours, len);
+    /* Ethernet + SCA envelope: the reply comes FROM the peer TO us. */
+    memcpy(out + 0, ovmx_hw, 6);
+    memcpy(out + 6, vax1_hw_mac, 6);
+    memcpy(out + 16, our_logical, 6);   /* dst logical = ours */
+    memcpy(out + 24, vax1_logical, 6);  /* src logical = the peer's */
+    out[14 + 46] = (uint8_t)(msgtype & 0xff);
+    out[14 + 47] = (uint8_t)(msgtype >> 8);
+    /* remote = OUR handle (the peer addresses us), local = the peer's own. */
+    out[14 + 50] = (uint8_t)(SCS_DIR_OVMX_POLL_CONID & 0xff);
+    out[14 + 51] = (uint8_t)((SCS_DIR_OVMX_POLL_CONID >> 8) & 0xff);
+    out[14 + 52] = (uint8_t)((SCS_DIR_OVMX_POLL_CONID >> 16) & 0xff);
+    out[14 + 53] = (uint8_t)((SCS_DIR_OVMX_POLL_CONID >> 24) & 0xff);
+    out[14 + 54] = (uint8_t)(peer_handle & 0xff);
+    out[14 + 55] = (uint8_t)((peer_handle >> 8) & 0xff);
+    out[14 + 56] = (uint8_t)((peer_handle >> 16) & 0xff);
+    out[14 + 57] = (uint8_t)((peer_handle >> 24) & 0xff);
+    return len;
+}
+
+static void test_the_process_poller_asks_and_a_yes_reaches_the_sysap(void)
+{
+    CHECK(unsetenv("OVMX_NO_PROCESS_POLLER") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_PRCPOLINTERVAL", "1", 1) == 0, "setenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "no peer");
+
+    struct scs_poller *p = scsd_poll(&r.rx);
+    CHECK(scs_poll_polling(p, "VMS$VAXcluster", ps_sys_addr(ps)) == 1,
+          "the daemon did not register VMS$VAXcluster for polling (p. 2-50)");
+    CHECK(scs_poll_add_node(p, ps_sys_addr(ps)) == 1, "the node was not registered");
+
+    /* --- 1. THE CONNECT. --- */
+    scsd_test_frames = 0;
+    scs_poll_tick(p, 100000);
+    CHECK(r.rx.poll_connect_sent == 1,
+          "the poller put no SCS$DIRECTORY CONNECT-REQUEST on the wire (%ld)",
+          r.rx.poll_connect_sent);
+    CHECK(scsd_test_last_len == SCS_DIR_CONNREQ_FRAME_LEN,
+          "the CONNECT-REQUEST is %zu bytes, not the 110-byte SCA class",
+          scsd_test_last_len);
+    uint8_t connreq[SCS_DIR_CONNREQ_FRAME_LEN];
+    memcpy(connreq, scsd_test_last_frame, scsd_test_last_len);
+    CHECK(connreq[30] == SCS_DIR_OPCODE, "the CONNECT-REQUEST is not opcode 0x5b");
+    struct scs_dir_view cv;
+    CHECK(scs_dir_parse(connreq, SCS_DIR_CONNREQ_FRAME_LEN, &cv) == 0, "parse failed");
+    CHECK(cv.op == SCS_DIR_MSGTYPE_CONNECT_REQ,
+          "message type [46:48] is %u, not 0 == CONNECT_REQ", cv.op);
+    CHECK(cv.remote_conid == 0, "a CONNECT_REQ named a remote Con.ID (0x%08X)",
+          cv.remote_conid);
+    CHECK(cv.local_conid == SCS_DIR_OVMX_POLL_CONID,
+          "the poller offered 0x%08X, not its own handle", cv.local_conid);
+    CHECK(memcmp(connreq + 14 + 62, "SCS$DIRECTORY   ", 16) == 0,
+          "the CONNECT-REQUEST does not name SCS$DIRECTORY as its destination");
+    CHECK(memcmp(connreq + 14 + 78, "SCS$DIR_LOOKUP  ", 16) == 0,
+          "the CONNECT-REQUEST does not name SCS$DIR_LOOKUP as its source");
+    CHECK(memcmp(scsd_test_last_dst, vax1_hw_mac, 6) == 0,
+          "the CONNECT-REQUEST went to the wrong port address");
+
+    /* --- 2. THE PEER ACCEPTS -> the inquiry goes out. --- */
+    uint8_t reply[SCA_FRAME_MAX];
+    size_t rl = poll_peer_reply(connreq, SCS_DIR_CONNREQ_FRAME_LEN,
+                                SCS_DIR_MSGTYPE_ACCEPT_REQ, 0x63050008u,
+                                r.hw_mac, reply);
+    scsd_test_frames = 0;
+    rx_feed(&r, reply, rl);
+    CHECK(r.rx.poll_inquiry_sent == 1,
+          "the accepted connection produced no inquiry (%ld)", r.rx.poll_inquiry_sent);
+    CHECK(scs_poll_pending(p) == 1, "no reply is outstanding after the inquiry");
+    uint8_t inq[SCS_DIR_LOOKUP_FRAME_LEN];
+    CHECK(scsd_test_last_len == SCS_DIR_LOOKUP_FRAME_LEN,
+          "the inquiry is %zu bytes, not the 94-byte lookup class", scsd_test_last_len);
+    memcpy(inq, scsd_test_last_frame, scsd_test_last_len);
+    struct scs_dir_view iv;
+    CHECK(scs_dir_parse(inq, sizeof(inq), &iv) == 0, "parse failed");
+    CHECK(iv.is_lookup_request == 1, "the inquiry does not classify as a lookup REQUEST");
+    CHECK(memcmp(iv.name, "VMS$VAXcluster  ", 16) == 0,
+          "the inquiry asks about '%s', not VMS$VAXcluster", iv.name);
+    CHECK(iv.remote_conid == 0x63050008u,
+          "the inquiry does not address the handle the peer just supplied (0x%08X)",
+          iv.remote_conid);
+
+    /* --- 3. THE ANSWER IS YES -> the SYSAP connects. --- */
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, r.hw_mac, 6);
+    memcpy(lp.src_mac, vax1_hw_mac, 6);
+    memcpy(lp.src_logical, vax1_logical, 6);
+    memcpy(lp.peer_logical, our_logical, 6);
+    lp.remote_conid = SCS_DIR_OVMX_POLL_CONID;
+    lp.local_conid = 0x63050008u;
+    lp.opcode = SCS_MSGTYPE_SEQAPP;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memcpy(lp.name, "VMS$VAXcluster  ", SCS_DIR_NAME_LEN);
+    lp.affirmative = 1;
+    uint8_t yes[SCS_DIR_LOOKUP_FRAME_LEN];
+    CHECK(scs_dir_build_lookup_response(&lp, yes) == 0, "could not build the Yes");
+    long connreqs_before = r.rx.connect_req_sent;
+    rx_feed(&r, yes, sizeof(yes));
+    CHECK(r.rx.poll_answers == 1, "the daemon did not feed the answer to the poller");
+    CHECK(r.rx.poll_found == 1,
+          "an affirmative answer notified nobody (%ld)", r.rx.poll_found);
+    CHECK(r.rx.connect_req_sent == connreqs_before + 1,
+          "the notified SYSAP did not open its VMS$VAXcluster connection");
+    CHECK(scs_poll_pending(p) == 0, "an answered inquiry is still outstanding");
+
+    /* --- 4. p. 2-50's disable, driven by the DAEMON's own connect path. --- */
+    scsd_poll_found("VMS$VAXcluster", ps_sys_addr(ps), &r.rx); /* idempotent re-notify */
+    scs_poll_connected(p, "VMS$VAXcluster", ps_sys_addr(ps));
+    CHECK(scs_poll_polling(p, "VMS$VAXcluster", ps_sys_addr(ps)) == 0,
+          "polling for the connected pair did not stop (p. 2-50)");
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
+static void test_the_process_poller_kill_switch(void)
+{
+    /* GUARDRAIL 23: run the switch, confirm the gated behaviour is suppressed,
+     * and show the SAME world without it does the thing. */
+    CHECK(setenv("OVMX_PRCPOLINTERVAL", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_NO_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    struct rxworld r;
+    rxworld_init(&r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(&r, vax1_hw_mac, vax1_logical);
+    struct scs_poller *p = scsd_poll(&r.rx);
+    CHECK(scs_poll_add_node(p, ps_sys_addr(ps)) == 1, "the node was not registered");
+    scsd_test_frames = 0;
+    for (uint64_t t = 100000; t <= 110000; t += 1000) {
+        scs_poll_tick(p, t);
+    }
+    CHECK(r.rx.poll_connect_sent == 0 && r.rx.poll_inquiry_sent == 0,
+          "OVMX_NO_PROCESS_POLLER=1 did not suppress the poller: %ld connect(s),"
+          " %ld inquiry(s) still went out",
+          r.rx.poll_connect_sent, r.rx.poll_inquiry_sent);
+    CHECK(scsd_test_frames == 0,
+          "the gated poller still handed %d frame(s) to the transmit path",
+          scsd_test_frames);
+
+    CHECK(unsetenv("OVMX_NO_PROCESS_POLLER") == 0, "unsetenv failed");
+    struct rxworld r2;
+    rxworld_init(&r2, vax2_hw_mac, our_logical);
+    struct peer_state *ps2 = open_circuit_to(&r2, vax1_hw_mac, vax1_logical);
+    struct scs_poller *p2 = scsd_poll(&r2.rx);
+    (void)scs_poll_add_node(p2, ps_sys_addr(ps2));
+    scs_poll_tick(p2, 100000);
+    CHECK(r2.rx.poll_connect_sent == 1,
+          "CONTROL FAILED: with the switch cleared the poller still sent nothing,"
+          " so the measurement above proves nothing about the switch");
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
 int main(void)
 {
     /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
@@ -5839,6 +6019,10 @@ int main(void)
     test_shutdown_disconnects_every_open_connection();
     test_clean_shutdown_kill_switch_through_the_daemon();
     test_exit_summary_reports_the_disconnect_dialogue();
+    /* vms-66f: the SCS Process Poller's two senders and its kill switch. */
+    test_the_process_poller_asks_and_a_yes_reaches_the_sysap();
+    test_the_process_poller_kill_switch();
+
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"
           " assertions above did not run");

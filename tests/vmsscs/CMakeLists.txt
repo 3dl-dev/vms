@@ -227,6 +227,7 @@ target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
     vmsscs_depart vmsscs_dgram vmsscs_svc vmsscs_reason vmsscs_disc
+    vmsscs_poll
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)
@@ -373,6 +374,23 @@ set_tests_properties(vmsscs_svc_unit PROPERTIES
 # the p. 2-49 rule that ACCEPT's local CONID is the NEW CDT's. The p. 2-50 BUSY
 # reply is exercised here and nowhere else -- see the SCOPE HONESTY note at the
 # top of the file for why the daemon cannot reach it.
+# vms-66f - the SCS Process Poller (SCS$DIR_LOOKUP, p. 2-50). Drives the real
+# scs_connect()/scs_disconnect() services and the real connection state machine
+# through a stub port driver, and builds the real request frames on the way, so
+# the cadence/notify/disable rules are tested against production code paths
+# rather than asserted beside them. Carries the OVMX_NO_PROCESS_POLLER
+# kill-switch measurement and its matched control.
+add_executable(test_scs_poll test_scs_poll.c)
+target_include_directories(test_scs_poll PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+target_link_libraries(test_scs_poll PRIVATE vmsscs_poll)
+add_test(NAME vmsscs_poll_unit COMMAND test_scs_poll)
+set_tests_properties(vmsscs_poll_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
 add_executable(test_scs_sdir test_scs_sdir.c)
 target_include_directories(test_scs_sdir PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsscs/include

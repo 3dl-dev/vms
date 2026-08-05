@@ -103,8 +103,20 @@ jobs:
       # job: without it the suite still runs (the fallback tries), but on
       # THIS runner it fails honestly rather than skipping, per the suite's
       # own rule that a skipped discriminating case is a failing one.
+      #
+      # THE GRANT ITSELF IS NO LONGER WRITTEN HERE (rd vms-bd7). It used to be
+      # an inline `sudo setcap` on this line, and that is precisely why the dev
+      # seat was red while this job was green: the workshop host restricts
+      # unprivileged CLONE_NEWUSER the same way ubuntu-latest does, but nothing
+      # there ran this step, so the same commit produced 9/9 here and 3/9 there
+      # and four separate agents reported the dev-seat red as noise. The grant
+      # now lives in tests/libvms/grant_protection_caps.sh, which this step and
+      # a ctest FIXTURES_SETUP fixture both call -- one mechanism, both hosts.
+      # This step is therefore redundant with the fixture and is kept anyway, so
+      # that a failure to grant is attributable to a named step in the log
+      # rather than to a line of fixture output.
       - name: Grant test_libvms_protection the two capabilities its synthetic-UIC mechanism needs
-        run: sudo setcap cap_setgid,cap_setuid+ep build/bin/test_libvms_protection
+        run: tests/libvms/grant_protection_caps.sh build/bin/test_libvms_protection
 
       - name: Test
         run: |

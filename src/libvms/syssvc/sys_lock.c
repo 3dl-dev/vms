@@ -31,16 +31,44 @@
  * OVMX service register (rd vms-d89) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-EXECUTIVE: sys$enq (vms-82a) proof=tests/qemu/test_syssvc_lock_status.c -- the
+ * OVMX-EXECUTIVE: sys$enq (vms-042) proof=tests/qemu/test_syssvc_lock_status.c -- the
  *     grant decision, the lock id, the value block AND THE VMS CONDITION VALUE all
  *     come back from the kernel lock manager. There is no userspace lock table, no
  *     flock() fallback, and since kstat_to_ss() was deleted no status mapping either.
- * OVMX-EXECUTIVE: sys$enqw (vms-82a) proof=tests/qemu/test_syssvc_lock_status.c -- the
+ * OVMX-EXECUTIVE: sys$enqw (vms-042) proof=tests/qemu/test_syssvc_lock_status.c -- the
  *     same request as $ENQ with the wait taken in the executive, reporting the same
  *     executive-supplied condition value.
- * OVMX-EXECUTIVE: sys$deq (vms-82a) proof=tests/qemu/test_syssvc_lock_status.c -- a
+ * OVMX-EXECUTIVE: sys$deq (vms-042) proof=tests/qemu/test_syssvc_lock_status.c -- a
  *     pass-through to vms_kif_deq; the release decision and the returned condition
  *     value are both the kernel lock manager's.
+ *
+ * THE CITED ITEM MOVED FROM vms-82a TO vms-042 ON 2026-08-05, AND THE REASON IS
+ * WORTH MORE THAN THE EDIT (rd vms-d798 / vms-344 / vms-b55, all three the same
+ * red filed three times). vms-82a was the DEFECT -- "the executive returns
+ * private lock status numbers, the VMS status is manufactured in userspace by
+ * kstat_to_ss()". Round 9 fixed it (PR #78: kstat_to_ss deleted, the three
+ * controls repointed at the executive) and closed the item. These declarations
+ * were left citing it, and a closed citation is a RED by design: rd_cite_check
+ * treats a closed id as tracking nothing, so it cannot be what a live
+ * declaration is declared against.
+ *
+ * vms-042 -- "Phase 3: the real VMS system facilities that must exist before
+ * remote access is faithful" -- is the item vms-82a BLOCKED, it is open, and its
+ * scope is executive-residency for exactly this class of facility. Per the
+ * register gate's own statement of what the id is worth, the id records WHERE
+ * THE DECISION IS WRITTEN DOWN, and "an open item is an owner, not a schedule".
+ * vms-042 is the owner of this claim now that its blocker is settled.
+ *
+ * WHAT THIS EDIT DOES NOT FIX, stated here because the next person to hit it
+ * should not have to re-derive it: an OVMX-EXECUTIVE declaration asserts a
+ * FINISHED state (this facility IS executive-resident, proof=<file>), yet the
+ * gate requires it to cite an item, and every item eventually closes. So EVERY
+ * successful executive-residency fix arms this same red the moment its own item
+ * is closed. vms-82a is the first to fire and will not be the last. The
+ * structural question -- whether the declaration grammar needs a "settled,
+ * proof=<file>, no open owner" form, or whether closing such an item must
+ * require repointing its declarations first -- is rd vms-344, escalated rather
+ * than answered here. Repointing is the honest local fix; it is not the answer.
  *
  * THESE THREE WERE DOWNGRADED TO OVMX-PARTIAL + OVMX-LOCAL BY vms-ecf ROUND 4
  * AND ARE UPGRADED BACK HERE BY MEASUREMENT, NOT BY ASSERTION (vms-82a).

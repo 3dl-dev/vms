@@ -125,7 +125,11 @@ GATES = [
          measure_env="OVMX_SCS_JOINCAP_MEASURE",
          caps=LAB2, caps_env="OVMX_LAB2_CAPTURES",
          truncate="vms578-B1-lab2-vaxlab4-20260805.pcap",
-         edit=('"cm_190_tx": 509,', '"cm_190_tx": 519,')),
+         edit=('"cm_190_tx": 509,', '"cm_190_tx": 519,'),
+         # The only gate whose library is NOT the one OVMX_LAB_CAPTURES names,
+         # so the only one the lab-1 variable can shadow. Turns on the
+         # LAB1_SHADOW arm in main().
+         lab2=True),
 ]
 
 problems = []
@@ -360,6 +364,48 @@ def main():
                 note(rc != 0,
                      "PYCACHE: same-size, same-second edit %r -> %r behind a "
                      "primed __pycache__, wire arm OFF" % spec["edit"])
+
+            # LAB1_SHADOW: the lab-1 variable must not be able to switch a
+            # lab-2 gate off. Only scs_join_capability_figures reads a library
+            # that is NOT the one OVMX_LAB_CAPTURES names, so only it can be
+            # shadowed -- and it is the single gate on the vms-578 acceptance
+            # bracket, so a silent downgrade there costs the most.
+            #
+            # MEASURED, and the reason this arm exists: with
+            # OVMX_LAB_CAPTURES=<lab-1 library> and OVMX_LAB2_CAPTURES unset --
+            # the ordinary way to run the other five gates against a library
+            # that is not at their compiled-in default -- this gate took its
+            # no-captures arm on a host that had the bracket captures at
+            # DEFAULT_CAPTURE_DIR, printed the banner, and ctest said
+            # `Passed 0.03 sec`.
+            #
+            # This is NOT scored through note(): note() asks "did the gate
+            # RED?", and here the requirement is the opposite -- the gate must
+            # stay GREEN and must have READ THE WIRE. A pass whose wire arm did
+            # not run is the failure.
+            # LAB1 must be a REAL directory for this to test anything: a lab-1
+            # path that does not exist is the deliberate "hide the captures"
+            # lever (rule 2 in the gate), and asserting the wire ran under it
+            # would be a false red, not a regression test.
+            if spec.get("lab2") and have_caps and os.path.isdir(LAB1):
+                env = dict(os.environ)
+                env.pop("OVMX_LAB2_CAPTURES", None)
+                env["OVMX_LAB_CAPTURES"] = LAB1
+                env["OVMX_SCS_REQUIRE_WIRE"] = "0"
+                r = subprocess.run(
+                    [sys.executable, os.path.join(HERE, spec["gate"])],
+                    env=env, capture_output=True, text=True)
+                out = r.stdout + r.stderr
+                ran = "re-derived from the packets" in out
+                note(r.returncode == 0 and ran,
+                     "LAB1_SHADOW: OVMX_LAB_CAPTURES=%s (a lab-1 library) with "
+                     "OVMX_LAB2_CAPTURES unset must NOT push this lab-2 gate "
+                     "onto its no-captures arm -- rc=%d, wire arm ran=%s"
+                     % (LAB1, r.returncode, ran))
+            elif spec.get("lab2"):
+                skipped.append("%s LAB1_SHADOW (no captures under %s)"
+                               % (spec["name"], spec["caps"]))
+                print("  SKIP LAB1_SHADOW: no captures under %s" % spec["caps"])
 
             # UNMEASURED: a figure the prose could be pinned to that no packet
             # supports. Appended AFTER WIRE_KEYS is computed, so it lands in

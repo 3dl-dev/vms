@@ -433,13 +433,39 @@ check("4F580007" in header and "B751000C" in header,
 # banner, or the vms-578 acceptance figures would be skipped silently -- which
 # is exactly the state vms-371 found them in (pinned by no gate at all).
 #
-# OVMX_LAB2_CAPTURES is honoured first because these are LAB-2 captures living
-# in a sibling directory of the lab-1 grounding library (vms-096); scs_wire's
-# own OVMX_LAB_CAPTURES is the fallback so the mutation battery can force the
-# no-captures arm with one variable.
+# RESOLUTION ORDER, and why it is NOT simply "the override wins".
+#
+# These are LAB-2 captures, living in a SIBLING of the lab-1 grounding library
+# (vms-096), so the LAB-1 variable must never be the thing that LOCATES them.
+# The first cut of this gate let OVMX_LAB_CAPTURES win outright, and the
+# consequence was measured on workshop: `OVMX_LAB_CAPTURES=<lab-1 library>
+# ctest -L scs` -- the natural way to point the other five gates at a library
+# that is not at their compiled-in default -- pushed THIS gate onto its
+# no-captures arm on a host that had the bracket captures sitting at
+# DEFAULT_CAPTURE_DIR the whole time. The one gate on the vms-578 acceptance
+# bracket printed its banner and ctest reported `Passed 0.03 sec`. That is the
+# exact shape vms-371 exists to kill, reintroduced by a variable name.
+#
+#   1. OVMX_LAB2_CAPTURES names the lab-2 library outright, and wins.
+#   2. OVMX_LAB_CAPTURES pointing at a path that DOES NOT EXIST still forces
+#      the no-captures arm: test_scs_join_capability_mutants.py hides the wire
+#      that way, and a "hide the captures" lever has to keep working.
+#   3. Otherwise the tool's own DEFAULT_CAPTURE_DIR. An OVMX_LAB_CAPTURES that
+#      names a REAL directory is a lab-1 library; it says nothing whatsoever
+#      about where the lab-2 brackets are, and must not be read as "absent".
+#
+# test_scs_figures_wire_mutants.py::LAB1_SHADOW is the regression test: it runs
+# this gate with OVMX_LAB_CAPTURES on a real lab-1 library and OVMX_LAB2_CAPTURES
+# unset, and requires the wire arm to have RUN.
 _cap2 = os.environ.get("OVMX_LAB2_CAPTURES")
+_cap1 = os.environ.get(scs_wire.ENV_CAPTURES)
 if _cap2:
-    os.environ[scs_wire.ENV_CAPTURES] = _cap2
+    _where = _cap2
+elif _cap1 and not os.path.isdir(_cap1):
+    _where = _cap1                      # deliberate hide -> capture_dir() None
+else:
+    _where = M.DEFAULT_CAPTURE_DIR
+os.environ[scs_wire.ENV_CAPTURES] = _where
 _capdir = scs_wire.capture_dir(M.DEFAULT_CAPTURE_DIR, need=M.BRACKET_CAPTURES)
 if _capdir is None:
     scs_wire.require_coverage("scs_join_capability_figures", M, None, check)

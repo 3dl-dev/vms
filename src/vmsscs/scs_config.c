@@ -363,12 +363,16 @@ enum scs_open_result scs_pb_open(struct scs_config *cfg, struct scs_pb *pb)
     }
     pb->masquerade_fail = (int)SCS_MASQ_PASS;
 
+    /* vms-348: scs_config_find_sb() only ever searches cfg->sb_head, and a
+     * formative SB is never linked into cfg->sb_head until the branch below
+     * inserts it (cfg_queue_insert) -- so `old == formative` cannot happen
+     * here; the search space structurally excludes `formative` by construction. */
     struct scs_sb *old = scs_config_find_sb(cfg, formative->system_id);
 
     pdt_queue_remove(pb->pdt, pb);
     pb->vc_state = SCS_VC_OPEN;
 
-    if (old == NULL || old == formative) {
+    if (old == NULL) {
         /* "If there is no other System Block corresponding to the remote node in
          * the VMS SCA Configuration Queue ... the Path Block is dequeued from the
          * PDT, the System Block is inserted into the Configuration Queue, and the
@@ -418,10 +422,13 @@ enum scs_pb_close_result scs_pb_close(struct scs_config *cfg, struct scs_pb *pb)
     }
     /* p. 2-28: "If the circuit is broken for any reason, it is then a relatively
      * simple matter to scan this queue to determine which connections have also
-     * been lost, and to notify the interested SYSAPs." That scan has to happen
-     * BEFORE the circuit structure is destroyed, and this module cannot perform
-     * it (the CDT layer sits above this one). So it is enforced instead of
-     * described: a PB with connections still queued to it is NOT closed. */
+     * been lost, and to notify the interested SYSAPs." That is the RATIONALE the
+     * book gives for queueing CDTs to the Path Block -- it is not an ordering
+     * mandate. Requiring the scan to happen BEFORE the circuit structure is
+     * destroyed is an OVMX design choice (vms-228): this module cannot perform
+     * the scan itself (the CDT layer sits above this one), so instead of relying
+     * on callers to get the order right, a PB with connections still queued to
+     * it is refused rather than closed. */
     if (pb->cdt_head != NULL) {
         return SCS_PB_CLOSE_CONNECTIONS_QUEUED;
     }

@@ -1579,6 +1579,88 @@ static void test_kill_switch(void)
  * saturates), which is why the FIRST number is the discriminator and the second
  * is the conservation check.
  */
+/*
+ * vms-919: scs_credit_wait_release()'s credit_wait_draining reentrancy guard
+ * (scs_credit.c) has no covering test -- replacing the guard body with `if (0)`
+ * leaves the whole suite green. The guard exists for exactly one caller shape:
+ * a resume callback that itself calls scs_credit_wait_release() on the same
+ * CDT (the comment's example is "a resumed waiter that receives on this same
+ * connection"). This drives that shape directly instead of describing it.
+ *
+ * WHAT THE GUARD IS FOR: without it, the reentrant call would drain the
+ * REMAINDER of the queue out from under the in-progress outer loop. The two
+ * observable symptoms:
+ *   (1) the reentrant call itself would return a nonzero resume count instead
+ *       of the guarded 0, and
+ *   (2) the OUTER scs_credit_wait_release() call's own return value would come
+ *       up short, because waiters the inner call drained were never counted by
+ *       the outer loop's own `resumed` counter.
+ * Both are asserted below, so `if (0)` reds this test even though the total
+ * "how many waiters ended up resumed" count is unaffected (both paths resume
+ * everyone in the same FIFO order -- only who counts them differs, which is
+ * why a coarser assertion could pass with the guard gone).
+ */
+static int g_reentrant_inner_rc = -999; /* sentinel: must be overwritten */
+
+static void reentrant_resume(struct scs_credit_waiter *w, unsigned credit, void *ctx)
+{
+    struct sender *s = (struct sender *)ctx;
+    sender_emit(s, credit);
+
+    /* Reentrant call, from inside the drain the guard is meant to protect. */
+    CHECK(w->cdt->credit_wait_draining == 1,
+          "credit_wait_draining was %d during a nested call -- the guard's own "
+          "flag is not set while the drain it guards is running",
+          w->cdt->credit_wait_draining);
+    g_reentrant_inner_rc = (int)scs_credit_wait_release(w->cdt);
+}
+
+static void test_credit_wait_release_reentrancy_guard(void)
+{
+    struct bench b;
+    CHECK(bench_init(&b), "bench setup failed");
+    form(&b, 10, 0, 1); /* starved at once, exactly like test_credit_wait_released_fifo */
+    emit_reset();
+    g_reentrant_inner_rc = -999;
+
+    struct sender s1, s2, s3;
+    sender_init(&s1, 1);
+    sender_init(&s2, 2);
+    sender_init(&s3, 3);
+    s1.w.resume = reentrant_resume; /* s1's resume calls scs_credit_wait_release() itself */
+
+    CHECK(scs_credit_send_or_wait(b.local, &s1.w) == SCS_CREDIT_WAIT, "s1 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s2.w) == SCS_CREDIT_WAIT, "s2 should block");
+    CHECK(scs_credit_send_or_wait(b.local, &s3.w) == SCS_CREDIT_WAIT, "s3 should block");
+    CHECK(scs_credit_wait_depth(b.local) == 3, "queue depth %u, want 3",
+          scs_credit_wait_depth(b.local));
+
+    /* Grant exactly enough Send Credit for all three, directly (this test needs
+     * the OUTER call's own return value, which scs_credit_on_recv() does not
+     * hand back). */
+    b.local->send_credit = 3;
+    unsigned outer_rc = scs_credit_wait_release(b.local);
+
+    CHECK(g_reentrant_inner_rc == 0,
+          "the reentrant scs_credit_wait_release() call returned %d, want 0 -- "
+          "the guard should have refused to drain a second time from inside "
+          "the first drain", g_reentrant_inner_rc);
+    CHECK(outer_rc == 3,
+          "the OUTER scs_credit_wait_release() call returned %u resumed, want 3 "
+          "-- if the reentrant call actually drained s2/s3, the outer loop's own "
+          "counter never saw them and undercounts", outer_rc);
+    CHECK(s1.emits == 1 && s2.emits == 1 && s3.emits == 1,
+          "resume counts were s1=%d s2=%d s3=%d, want 1/1/1 -- a broken guard "
+          "can double-resume a waiter (once from the nested call, again from "
+          "the outer loop continuing to iterate over an already-drained queue)",
+          s1.emits, s2.emits, s3.emits);
+    CHECK(scs_credit_wait_depth(b.local) == 0, "queue depth %u after full drain, want 0",
+          scs_credit_wait_depth(b.local));
+    CHECK(b.local->credit_wait_draining == 0,
+          "credit_wait_draining left set at %d after the drain finished",
+          b.local->credit_wait_draining);
+}
+
 static void test_release_returns_the_share_still_in_the_mfreeq(void)
 {
     struct scs_config cfg;
@@ -1663,6 +1745,7 @@ int main(void)
     test_credit_wait_released_by_peer_grant();
     test_special_credit_fires_at_exact_threshold();
     test_special_credit_yields_to_a_resumed_waiter();
+    test_credit_wait_release_reentrancy_guard(); /* vms-919 */
     test_credit_wait_kill_switch(); /* mutates the environment; restores it */
 
     test_kill_switch(); /* must run last: it mutates the environment */

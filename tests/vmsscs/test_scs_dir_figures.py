@@ -101,6 +101,21 @@ def read(path):
         return f.read()
 
 
+def num_in(n, text):
+    """
+    vms-c66/vms-d04: `str(n) in text` is a SUBSTRING match, and every figure
+    checked below (6, 6, 12) is one or two digits -- exactly the size most
+    likely to appear as a sibling inside an unrelated larger number (a byte
+    count, a frame number, a year) anywhere in a multi-thousand-line spec.
+    That means a REAL drift (the measured figure changing) could still find
+    SOME digit-string match elsewhere in the file and pass. Word-boundary the
+    match instead: `(?<!\\d)n(?!\\d)` refuses to match inside a longer run of
+    digits on either side.
+    """
+    import re
+    return re.search(r"(?<!\d)%d(?!\d)" % n, text) is not None
+
+
 # ---------------------------------------------------------------------------
 # (A) the figures the prose is allowed to state, read out of EXPECTED
 # ---------------------------------------------------------------------------
@@ -116,9 +131,9 @@ for where, txt in (("spec sec 4(h)(2a)", spec_txt), ("scs_dir.c", dir_txt)):
     check(req_hist in txt, f"{where} states the REQUEST [48:50] histogram {req_hist}")
     check(rsp_hist in txt, f"{where} states the RESPONSE [48:50] histogram {rsp_hist}")
 
-check(str(E["lookup_requests"]) in spec_txt and str(E["lookup_responses"]) in spec_txt,
+check(num_in(E["lookup_requests"], spec_txt) and num_in(E["lookup_responses"], spec_txt),
       "the spec states the 6/6 request/response split")
-check(f"{E['lookup_frames_total']}" in spec_txt and f"{E['lookup_frames_total']}" in dir_txt,
+check(num_in(E["lookup_frames_total"], spec_txt) and num_in(E["lookup_frames_total"], dir_txt),
       f"both state the lookup-message total ({E['lookup_frames_total']})")
 
 # CENSUS A frame numbers. These are the load-bearing ones -- they are what

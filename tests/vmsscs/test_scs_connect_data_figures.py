@@ -172,6 +172,18 @@ def check(cond, what):
         failures.append(what)
 
 
+def num_in(n, text):
+    """
+    vms-c66/vms-d04: `str(n) in text` is a SUBSTRING match. Several figures
+    this gate pins (e.g. ovmx_connect_frames, ovmx_vaxcluster_frames) are only
+    two or three digits, small enough to appear as a sibling inside an
+    unrelated larger number anywhere in a multi-thousand-line spec or header --
+    which means a real drift in the measured figure could still find some
+    OTHER digit-string match and pass. Word-boundary the search instead.
+    """
+    return re.search(r"(?<!\d)%d(?!\d)" % n, text) is not None
+
+
 def flat(text):
     """Comment/markdown text as one whitespace-normalised line.
 
@@ -243,7 +255,7 @@ def main():
         ("connect frames", exp["connect_frames"]),
         ("VMS$VAXcluster frames", exp["vaxcluster_frames"]),
     ):
-        check(str(value) in header, "%s (%d) appears in scs_connect.h" % (label, value))
+        check(num_in(value, header), "%s (%d) appears in scs_connect.h" % (label, value))
     hist = exp["msgtype_histogram"]
     check("{0: %d, 2: %d, 10: %d}" % (hist[0], hist[2], hist[10]) in header,
           "the 110-byte message-type histogram appears verbatim in scs_connect.h")
@@ -326,11 +338,11 @@ def main():
     for phrase in ("circular grounding", "VAX-sourced frames only"):
         check(any(phrase in b for b in spec_connect_data_blocks(spec)),
               "spec 4(N) states the guard (%r)" % phrase)
-    check(str(exp["ovmx_connect_frames"]) in header and str(exp["ovmx_connect_frames"]) in spec,
+    check(num_in(exp["ovmx_connect_frames"], header) and num_in(exp["ovmx_connect_frames"], spec),
           "the dropped OVMX frame count (%d) is stated in both documents"
           % exp["ovmx_connect_frames"])
-    check(str(exp["ovmx_vaxcluster_frames"]) in header
-          and str(exp["ovmx_vaxcluster_frames"]) in spec,
+    check(num_in(exp["ovmx_vaxcluster_frames"], header)
+          and num_in(exp["ovmx_vaxcluster_frames"], spec),
           "the dropped OVMX VMS$VAXcluster count (%d) is stated in both documents"
           % exp["ovmx_vaxcluster_frames"])
     check("SIOCGIFHWADDR" in header and "SIOCGIFHWADDR" in spec,
@@ -339,7 +351,7 @@ def main():
                           (exp["adopted_value_vax_frames_outside_specimen"],
                            "of them outside the specimen"),
                           (exp["adopted_value_vax_captures"], "captures")):
-        check(str(figure) in header and str(figure) in spec,
+        check(num_in(figure, header) and num_in(figure, spec),
               "the adopted value's independent attestation (%d %s) is stated"
               % (figure, label))
 
@@ -510,7 +522,7 @@ def main():
     # The measured half: one version string, and the frame count behind it.
     for docname, doc in (("scs_connect.h", flat(hverdict)),
                          ("the spec", "\n".join(sblocks))):
-        check(str(exp["vax_start_frames"]) in doc,
+        check(num_in(exp["vax_start_frames"], doc),
               "%s states the %d VAX START frames the version count came from"
               % (docname, exp["vax_start_frames"]))
         for v in exp["vax_vms_versions"]:
@@ -535,7 +547,7 @@ def main():
           "spec section 5 carries the one-VMS-build limit on 4(N)")
     for token in ("3 system roots", "1 system disk image", "SYS11", "d0.dsk"):
         check(token in sec5, "the section 5 limit names %r" % token)
-    check(str(exp["vax_start_frames"]) in sec5,
+    check(num_in(exp["vax_start_frames"], sec5),
           "the section 5 limit states the %d START frames behind it"
           % exp["vax_start_frames"])
     # ...and the sec 5 GROUNDED bullet for this field must not restate a node

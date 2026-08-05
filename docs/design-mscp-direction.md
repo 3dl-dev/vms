@@ -20,6 +20,20 @@ This settles that **chapter 4 contains no numeric opcode/status enumeration
 anywhere**; MSCP numeric values remain capture-grounded only (§2). Still
 missing: p. 4-103, Figures 4-29/4-30, pp. 5-58–5-69.
 
+**SUPERSEDED 2026-08-05 — a PUBLIC wire-level MSCP spec now exists for this
+project.** *MSCP Basic Disk Functions Manual* **AA-L619A-TK v1.2 (Apr 1982)**,
+part of the customer-orderable UDA50 Programmer's Doc Kit QP-905-GZ — standard
+copyright page, **no confidential or restricted-distribution marking**, so it
+is admissible public documentation under Rule 8. Archived host-only at
+`~/cluster/mscp-spec/` with the appendices transcribed to
+`~/cluster/mscp-spec/appendices.md` (opcodes, status/event codes, generic and
+per-command message formats, ch.3 credit rules). **MSCP numeric values are
+therefore no longer capture-only** — the "capture-grounded only" rule above
+applies to the *SCA/SCS envelope*, not to MSCP command internals.
+⛔ **EXCLUDED under Rule 8, do not read:** the bitsavers `dec/dsa/mscp`
+*Mass Storage Control Protocol* v2.4.0 / Rev 2.4.0 / TMSCP 2.0.2 files are
+stamped "DEC CONFIDENTIAL AND PROPRIETARY / RESTRICTED DISTRIBUTION".
+
 ---
 
 ## 1. The three unidentified message types — resolved shape
@@ -168,6 +182,23 @@ All page cites into `~/cluster/transcript/ch4-5-*.md`; index in `ch4-5-INDEX.md`
   dispatch (p. 4-13/4-15), credit piggyback on delivery (p. 4-15).
 - **Command classes** (pp. 4-15..4-17): immediate vs nonimmediate (controller
   timeout period, 75 s on HSC), sequential vs nonsequential ordering rules.
+- **Opcode numerics — now DOCUMENTED, and OVMX's capture-derived labels
+  VALIDATE.** AA-L619A-TK Table A-1 gives the full enumeration; the values
+  OVMX carries are exact: `0x03` GET UNIT STATUS (`MSCP$K_OP_GTUNT`), `0x04`
+  SET CONTROLLER CHARACTERISTICS (`MSCP$K_OP_STCON`), `0x09` ONLINE, `0x21`
+  READ, `0x22` WRITE, and the end-message flag `0x80` (`OP.END`; an endcode is
+  `command | 0x80`) — matching `scs_mscp.h`'s `SCS_MSCP_OP_GET_UNIT_STATUS`,
+  `SCS_MSCP_OP_SET_CTLR_CHAR` and `SCS_MSCP_END_BIT` byte for byte.
+  **Wire cross-check:** filtering the 94-content type-10 population by the
+  SYSAP that owns the connection, every frame on the **VMS$DISK_CL_DRVR**
+  (disk class driver = MSCP client) connection decodes to a valid Table A-1
+  opcode at body[8] — 5 245/5 245, and only `0x03`/`0x04`. This simultaneously
+  confirms the Figure 4-4 body layout (cmd-ref u32, unit u16, reserved u16,
+  then modifiers/CAA/opcode with opcode in the low byte at body[8]) against a
+  public spec. *Caveat:* body[8] is an MSCP opcode **only** on MSCP
+  connections — the same offset on `SCS$DIR_LOOKUP`/`SCS$DIRECTORY` frames
+  yields `0x24`/`0x56`, which are not Table A-1 opcodes at all. An unfiltered
+  body[8] census is a category error; filter by SYSAP first.
 - **Opcodes named in prose** (no numeric enum anywhere in ch.4): ONLINE,
   AVAILABLE, READ, WRITE, GET UNIT STATUS, GET COMMAND STATUS, SET CONTROLLER
   CHARACTERISTICS. Numeric values stay grounded from our captures only
@@ -200,8 +231,11 @@ every message OVMX emits or receives; dispatch-on-MTYPE at receive (control
 hook `scs_credit.c` already anticipates). This dissolves the per-class
 template special-casing and is the precondition for everything below.
 
-**Phase B — MSCP client on grounded fields.** Promote `scs_mscp.c` from
-byte-replay toward Fig 4-4-grounded builds: cmd-ref, unit, opcode, modifiers
+**Phase B — MSCP client on DOCUMENTED fields (now cheaper than planned).**
+AA-L619A-TK supplies the opcode, status/event and per-command formats, so this
+is no longer a decode exercise — it is transcription from a public spec, with
+the captures as the conformance check. Promote `scs_mscp.c` from byte-replay
+toward Fig 4-4-grounded builds: cmd-ref, unit, opcode, modifiers
 as first-class fields; end-message parse keeps the END bit and adds status
 handling. Opcode *numbers* remain capture-grounded only. Scope stays
 joiner-role (SCC + GUS today); mount-verify read path deferred until OVMX

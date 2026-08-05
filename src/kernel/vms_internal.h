@@ -103,12 +103,47 @@
 #define SS__WASCLR      1           /* flag/AST was disabled/clear (ssdef.h SS$_WASCLR) */
 #define SS__ILLEFC      236         /* illegal event flag cluster (ssdef.h SS$_ILLEFC) */
 #define SS__UNASEFC     564         /* unassociated common EFC (ssdef.h SS$_UNASEFC) */
-#define SS__NOTQUEUED   40          /* lock not queued (NOQUEUE flag) */
-#define SS__DEADLOCK    100         /* deadlock detected */
-#define SS__IVLOCKID    108         /* invalid lock ID */
-#define SS__SUBLOCKS    112         /* sublocks still held */
-#define SS__CANCELGRANT 116         /* conversion cancelled */
-#define SS__VALNOTVALID 120         /* value block not valid */
+/*
+ * ============================================================
+ * THE LOCK MANAGER YIELDS VMS CONDITION VALUES (vms-82a)
+ * ============================================================
+ * These six were a PRIVATE numbering -- 40/100/108/112/116/120 -- that no
+ * VMS ever produced. The executive emitted them and kstat_to_ss(), running
+ * in the CALLING PROCESS, mapped them onto the public ssdef.h constants.
+ *
+ * WHY THAT WAS A DEFECT AND NOT A SPELLING CHOICE. On real OpenVMS the
+ * condition value IS what the lock manager yields; SS$_DEADLOCK is the
+ * lock manager's answer, not a userspace rendering of it. Measured on the
+ * old arrangement: mutating one case arm in sys_lock.c -- with ZERO
+ * executive code changed -- moved what a public-API caller received from
+ * 3594 to 2488, i.e. SS$_DEADLOCK became SS$_NOTQUEUED. That is a
+ * DIFFERENT ANSWER, not a different spelling: a caller branching on the
+ * status behaves differently. So part of the answer was decided outside
+ * the executive, and the one facility cited as proof that OVMX does
+ * executive residency properly (vms-ci.7, ENQ/DEQ -> kernel lock manager)
+ * was the one still finishing its answer in userspace.
+ *
+ * NO NEW CONSTANT IS INVENTED HERE (Rule 8/Rule 10). Each value below is
+ * the value src/libvms/include/ssdef.h ALREADY ships for that name, and
+ * the pairing is the one kstat_to_ss() already asserted -- 100 <-> 
+ * SS$_DEADLOCK, 108 <-> SS$_IVLOCKID, 116 <-> SS$_CVTUNGRANT and so on.
+ * What changed is WHERE the value is produced, not WHAT it is. The
+ * provenance of the numbers themselves is unchanged and is recorded above
+ * the lock section of ssdef.h (single-lineage, not independently confirmed
+ * against an official VSI $SSDEF extract); that remains open there and is
+ * not settled, or worsened, by moving the value into the executive.
+ *
+ * SS__CANCELGRANT keeps its kernel name but carries SS$_CVTUNGRANT's
+ * value: same concept (a queued conversion that could not be granted),
+ * and that pairing is inherited from the mapping this replaces.
+ * ============================================================
+ */
+#define SS__NOTQUEUED   2488        /* lock not queued (ssdef.h SS$_NOTQUEUED) */
+#define SS__DEADLOCK    3594        /* deadlock detected (ssdef.h SS$_DEADLOCK) */
+#define SS__IVLOCKID    8484        /* invalid lock ID (ssdef.h SS$_IVLOCKID) */
+#define SS__SUBLOCKS    8492        /* sublocks still held (ssdef.h SS$_SUBLOCKS) */
+#define SS__CANCELGRANT 8508        /* conversion cancelled (ssdef.h SS$_CVTUNGRANT) */
+#define SS__VALNOTVALID 2544        /* value block not valid (ssdef.h SS$_VALNOTVALID) */
 
 /*
  * Device-table statuses. Values are this tree's existing ssdef.h

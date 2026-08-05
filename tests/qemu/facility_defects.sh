@@ -19,6 +19,35 @@
 # checked in. This file generalises it: one MINIMAL injected defect per
 # executive facility, checked in, applied mechanically, run in CI.
 #
+# WHAT `coverage` AND `selftest` BELOW ACTUALLY CHECK, AND WHAT THEY DO NOT
+# (vms-659 -- read this before trusting either command's PASS lines)
+#
+# Both are STATIC. They check declarations the manifest (DEFECTS below) and
+# the tests/qemu suite SOURCES make about THEMSELVES -- names in a list,
+# glob patterns matched against other strings, `/* negctl: ... */` comment
+# anchors, literal assertion text -- entirely by string and glob matching.
+# NEITHER COMPILES NOR RUNS A SINGLE SUITE, AND NEITHER TOUCHES vms.ko OR
+# /dev/vms. (`selftest`'s per-defect loop is a partial exception: it does run
+# real sed(1) against a throwaway copy of the source tree and diffs the
+# result, so ITS claim that an injection "lands" is genuinely executed -- see
+# cmd_selftest's own header. That still proves nothing about a suite.)
+#
+# The one qualification to "both are STATIC", added by vms-d894: `coverage`
+# now also READS a record of a past execution
+# (tests/qemu/facility_negctl_observed.tsv, emitted by the driver below and
+# read through tests/qemu/facility_negctl_record.sh). Reading a record is
+# still not executing anything, and the printed output says so every run: it
+# proves that A PAST RUN OBSERVED THESE RESULTS, never that they hold now.
+#
+# The claim that a named suite actually goes red, and that the exact
+# assertions this manifest lists are the ones that fire and no others, is
+# proven ONLY by tests/qemu/run_facility_negctl.sh: it builds vms.ko and the
+# suites, boots a real QEMU guest against /dev/vms, injects each defect one
+# at a time, and asserts the observed red set. THAT is the one gate in this
+# program that executes anything, and it runs in CI ONLY -- there is no
+# host-side equivalent. A "PASS" printed by `coverage` or `selftest` is a
+# claim about the manifest's internal consistency, not about the executive.
+#
 # THE METHOD RULE THIS FILE ENFORCES ON ITSELF
 #
 #   EVERY PROPERTY GETS ITS OWN MINIMAL MUTATION THAT TRIPS THAT PROPERTY AND
@@ -143,24 +172,32 @@
 #                            init. It is here so the discriminating
 #                            assertions are NAMED and stay named.
 #   kstat-deadlock-mismapped, kstat-ivlockid-mismapped,
-#   kstat-cvtungrant-mismapped        src/libvms/syssvc/sys_lock.c's
-#                            kstat_to_ss(), the single point where a raw
-#                            kernel lock-manager status crosses into the
-#                            public ssdef.h SS$_xxx contract (vms-2e5). Each
-#                            of these three mutations changes only the
-#                            PUBLIC constant kstat_to_ss() returns for a
-#                            fixed kernel-side status -- the kernel's own
-#                            decision to deadlock/reject is untouched by
-#                            THESE THREE mutations. That is not a claim
-#                            about kernel-side mutations in general: a pure
-#                            constant drift on the KERNEL side (e.g.
-#                            SS__DEADLOCK's numeric value in
-#                            src/kernel/vms_internal.h) also reddens
-#                            test_syssvc_lock_status, because kstat_to_ss()
-#                            switches on that same numeric literal. These
-#                            three are here because the translation itself
-#                            was UNASSERTED at every layer, not because the
-#                            kernel side is somehow unreachable.
+#   kstat-cvtungrant-mismapped        the CONDITION VALUES the kernel lock
+#                            manager yields (src/kernel/vms_internal.h). Each
+#                            mutation gives one of SS__DEADLOCK / SS__IVLOCKID
+#                            / SS__CANCELGRANT the value of SS$_NOTQUEUED, so a
+#                            caller is told a request was merely "not queued"
+#                            when the executive actually rejected it for
+#                            deadlock, for an invalid lock ID, or as an
+#                            ungrantable conversion. The kernel's DECISION is
+#                            untouched by all three; only the value it answers
+#                            with moves.
+#
+#                            THESE THREE USED TO ATTACK USERSPACE, and the
+#                            move is the point (vms-82a). They mutated case
+#                            arms in kstat_to_ss() in src/libvms/syssvc/
+#                            sys_lock.c -- a mapping that ran in the CALLING
+#                            PROCESS and turned the executive's private
+#                            numbering (40/100/108/...) into public ssdef.h
+#                            values. That mapping was the defect vms-2e5
+#                            found and vms-82a fixed: the executive now emits
+#                            VMS condition values itself and kstat_to_ss() is
+#                            deleted. The controls were REPOINTED, not
+#                            retired -- same three defects, same suite, same
+#                            require_fail assertions, manifest size unchanged
+#                            -- because a control that disappears when the
+#                            code it attacked improves was measuring the code
+#                            rather than the property.
 # All are edits under src/, not src/kernel/, so cmd_selftest copies libvms,
 # libvmssys and vmsdcl alongside kernel/ when it checks that every anchor still
 # matches.
@@ -226,6 +263,81 @@
 #     named assertion texts. It exists to catch an anchor parked in a comment
 #     block, not to parse C.
 #
+# vms-d894: THE FIRST BULLET ABOVE WAS THE WHOLE FINDING, AND NOTHING FLOORED
+# THE COUNT
+#
+# The anchor pairing floors CONSISTENCY (a DEFECTS entry and its anchor must
+# agree with each other); it was never a floor on the SIZE of DEFECTS, and
+# nothing was. MEASURED: deleting `kstat-cvtungrant-mismapped` -- its DEFECTS
+# line, its two case arms, and its one anchor, 20 lines across 2 files --
+# leaves `coverage` and `selftest` both exit 0, printing "all 41 defect(s)
+# anchored by 272 marker(s)" AS A PASS. A full greedy set-cover deletion
+# (cover size 12, so 30 of the 42 entries are redundant to it) was DERIVED
+# AND THEN EXECUTED, not just predicted: 1179 deleted lines across 13 files,
+# `coverage`/`selftest` still green throughout. (An earlier estimate of "~1600
+# lines across 26 files" for this same exercise was wrong on both numbers --
+# deleted per the standing rule rather than corrected in place; the figure
+# above is the one that was actually measured by running the deletion.)
+#
+# Section 6 of `coverage` (below) adds a derived, printed floor: DEFECTS must
+# have at least as many entries as tests/qemu/facility_defects_floor.txt
+# records. That file is NOT owned by an in-file deletion the way the anchor
+# pairing is -- shrinking DEFECTS without also editing it now fails. IT IS
+# STILL NOT TAMPER-PROOF: raising or lowering the floor file's number is one
+# more line in one more file, and lowering it to match a shrink still passes.
+# What changed is the price and its visibility -- 20 lines/2 files silently
+# before, now >=21 lines/3 files, one of which is a file whose only content is
+# the number somebody is choosing to lower. A disclosed, priced residual, not
+# a claimed closure.
+#
+# vms-d894 ROUND 2, AND vms-659: A FLOOR SOURCED FROM AN EXECUTION
+#
+# Every floor above is a relation over declarations this tree makes about
+# itself. The one thing in this program that EXECUTES anything is
+# tests/qemu/run_facility_negctl.sh -- it boots QEMU against a real /dev/vms
+# and injects each of these defects one at a time -- and its results used to
+# die with the job log.
+#
+# It now EMITS what it observed, as tests/qemu/facility_negctl_observed.tsv:
+# one row per defect it executed and one row per assertion it actually saw
+# FAIL, attributed to the suite that printed it. `coverage` reads that record
+# through tests/qemu/facility_negctl_record.sh and derives TWO things from it:
+#
+#   * section 2b: the suites a past run actually saw an assertion fail in are
+#     labelled PROVEN ABLE TO GO RED; every other in-scope suite stays NAMED.
+#     Two populations, two cardinals, never summed. That is vms-659: the word
+#     "PROVEN" is now spent only where an execution paid for it.
+#   * section 6b: the OBSERVED-EXECUTED count -- how many of these defects a
+#     past run actually executed. Deleting an entry from DEFECTS today cannot
+#     retroactively change what that run observed. Note carefully what the
+#     enforcement is there: NOT a numeric comparison. The observed set is
+#     intersected with DEFECTS before it is counted, so it can never exceed
+#     it and "observed <= declared" would be an assertion that cannot fail.
+#     The thing that cannot be gotten past is the REFUSAL -- a record naming
+#     a defect DEFECTS no longer has stops the gate certifying anything.
+#
+# AND THE HALF THAT IS NOT A SNAPSHOT: in CI the driver runs anyway, so it
+# compares what it just observed with the committed record and fails on any
+# disagreement in either direction. The committed record therefore cannot be
+# fabricated upward and cannot go stale quietly.
+#
+# WHAT THAT STILL DOES NOT BUY, and it is the residual that stays open: a
+# deleter who removes a defect from DEFECTS *and* removes that defect's rows
+# from the record has told the truth about a smaller manifest -- the live CI
+# run agrees with them, and nothing here disagrees. Closing that needs a floor
+# from OUTSIDE the commit (the previous commit's copy of the record, or an
+# external attestation) and there is not one. What changed is the price again:
+# the record's rows are one per OBSERVED ASSERTION, so the deletion is
+# proportional to what is being deleted instead of being one integer.
+# tests/qemu/facility_record_negctl.sh MEASURES that price on the tree in
+# front of it and prints the number, rather than this comment asserting one.
+#
+# A record that CONTRADICTS this tree -- naming a defect DEFECTS no longer
+# has, or an assertion text require_fail no longer names, or emitted by a run
+# whose pristine positive control did not pass -- is a REFUSAL, in the shape
+# tests/integration/lib/rd_citations.sh already uses: coverage certifies
+# nothing from it rather than certifying less.
+#
 # USAGE
 #   facility_defects.sh list
 #   facility_defects.sh scope
@@ -236,6 +348,13 @@
 #   facility_defects.sh apply <defect> <src-root> [<src-root>...]
 #   facility_defects.sh coverage <src-root> <tests-qemu-dir>
 #   facility_defects.sh selftest <repo-root>
+#
+# `coverage` additionally reads, from beside THIS file:
+#   facility_defects_floor.txt         the declared count floor (vms-d894 r1)
+#   facility_negctl_observed.tsv       the execution record (vms-d894 r2), via
+#   facility_negctl_record.sh          its reader
+# Its own negative controls are tests/qemu/facility_record_negctl.sh, run as
+# the `facility_negctl_record` ctest.
 #
 # `apply` takes SRC ROOTS -- directories that look like the repo's src/ -- so
 # it can patch every copy of a file that exists in the build image (the kernel
@@ -251,6 +370,21 @@ set -u
 # This script's own path. `coverage` reads it back to check that the DEFECTS
 # list and the two `case` blocks below agree -- see section 5 there.
 SELF="$0"
+
+# The execution-sourced attribution record's reader (rd vms-d894, rd vms-659).
+#
+# SOURCED CONDITIONALLY, and that is not a fallback. `apply` runs INSIDE the
+# harness container, where tests/qemu/Dockerfile copies this file alone to
+# /src/tests/qemu/ and the library is not beside it. Failing to source there
+# would break the injection path for a facility `coverage` never uses. So the
+# library is optional to LOAD and mandatory to HAVE for `coverage`, which
+# REFUSES when it is absent rather than quietly checking less -- see section 6.
+FNR_LIB="$(dirname "$SELF")/facility_negctl_record.sh"
+FNR_LOADED=0
+if [ -f "$FNR_LIB" ]; then
+    . "$FNR_LIB"
+    FNR_LOADED=1
+fi
 
 DEFECTS="access-mode-escalation
 kif-setmode-always-kernel
@@ -2284,30 +2418,56 @@ EOF
     # comment), not a negative control for this manifest.
     kstat-deadlock-mismapped)
         case "$_f" in
-        facility)     echo "kstat_to_ss()'s DEADLOCK mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
-        targets)      echo "libvms/syssvc/sys_lock.c";;
-        suites_red)   echo "test_syssvc_lock_status";;
+        facility)     echo "the executive's SS__DEADLOCK condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields to a caller it aborted for deadlock (vms-2e5, vms-82a)";;
+        targets)      echo "kernel/vms_internal.h";;
+        suites_red)   echo "test_kmod_lock_sync test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "case 100 (kernel SS__DEADLOCK) returns SS\$_NOTQUEUED instead of SS\$_DEADLOCK -- the EXACT mutation vms-2e5 was found by (a request the executive rejected for deadlock is reported to the caller as merely 'not queued'). The kernel's own decision to abort the request for deadlock is untouched; only the public value crossing the boundary changes.";;
+        why)          echo "SS__DEADLOCK is 2488 (SS\$_NOTQUEUED) instead of 3594 (SS\$_DEADLOCK) -- a request the executive rejected FOR DEADLOCK reports to the caller as merely 'not queued'. Since vms-82a the executive yields the VMS condition value itself, so this attacks the executive rather than a userspace mapping: the kernel's DECISION to abort for deadlock is untouched, only the value it answers with changes.";;
         require_fail) cat <<'EOF'
 parent: sync sys$enqw closing the cycle rejected SS$_DEADLOCK (public API)
 EOF
                       ;;
-        knock_on_fail) echo "";;
-        knock_on_why)  echo "";;
+        knock_on_fail) cat <<'EOF'
+parent: sync ENQ closing the cycle rejected SS$_DEADLOCK
+parent: child (completion AST) exited clean
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+THE SAME DEFECT SEEN FROM THE OTHER SIDE, and its appearance here is a
+consequence of vms-82a rather than a coarse mutation.
+
+Before vms-82a this control mutated kstat_to_ss() in src/libvms/syssvc/
+sys_lock.c -- a userspace mapping only the PUBLIC sys$ path went through. So
+only test_syssvc_lock_status could see it, and test_kmod_lock_sync, which
+reaches the lock manager through raw ioctls, could not.
+
+The executive now yields the VMS condition value itself, so there is exactly
+ONE place the deadlock status exists and BOTH paths read it. test_kmod_lock_sync
+asserts the raw status is SS$_DEADLOCK; test_syssvc_lock_status asserts the
+public API reports SS$_DEADLOCK. One mutated constant, two observations of the
+one defect -- which is the thing the change was for.
+
+The second assertion follows from the first in that suite: the parent decides
+the child exited clean by checking the deadlock status it got, so once the
+status is wrong the parent's own verdict on the child goes with it. There is
+no finer mutation available -- the constant is a single #define, and splitting
+it would mean inventing a second deadlock value the executive does not have
+(the illegal third answer, Rule 10).
+EOF
+                      ;;
         esac;;
 
     kstat-ivlockid-mismapped)
         case "$_f" in
-        facility)     echo "kstat_to_ss()'s IVLOCKID mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
-        targets)      echo "libvms/syssvc/sys_lock.c";;
+        facility)     echo "the executive's SS__IVLOCKID condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields for a lock ID that does not exist (vms-2e5, vms-82a)";;
+        targets)      echo "kernel/vms_internal.h";;
         suites_red)   echo "test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "case 108 (kernel SS__IVLOCKID) returns SS\$_NOTQUEUED instead of SS\$_IVLOCKID -- a caller given a nonexistent lock ID is told the request was merely not queued rather than that the ID itself is invalid.";;
+        why)          echo "SS__IVLOCKID is 2488 (SS\$_NOTQUEUED) instead of 8484 (SS\$_IVLOCKID) -- a caller given a nonexistent lock ID is told the request was merely not queued rather than that the ID itself is invalid.";;
         require_fail) cat <<'EOF'
 sys$deq on an unknown lock ID reports SS$_IVLOCKID (public API, real executive)
 EOF
@@ -2318,13 +2478,13 @@ EOF
 
     kstat-cvtungrant-mismapped)
         case "$_f" in
-        facility)     echo "kstat_to_ss()'s CVTUNGRANT mapping (src/libvms/syssvc/sys_lock.c), the kernel-status-to-public-VMS-status boundary for the lock manager (vms-2e5)";;
-        targets)      echo "libvms/syssvc/sys_lock.c";;
+        facility)     echo "the executive's SS__CANCELGRANT condition value (src/kernel/vms_internal.h), the value the kernel lock manager yields for a queued conversion it could not grant (vms-2e5, vms-82a)";;
+        targets)      echo "kernel/vms_internal.h";;
         suites_red)   echo "test_syssvc_lock_status";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "case 116 (kernel SS__CANCELGRANT) returns SS\$_NOTQUEUED instead of SS\$_CVTUNGRANT -- a CONVERT that lands on a lock still queued from an earlier request is told the SAME thing a fresh NOQUEUE request would be told, collapsing two different conditions into one report.";;
+        why)          echo "SS__CANCELGRANT is 2488 (SS\$_NOTQUEUED) instead of 8508 (SS\$_CVTUNGRANT) -- an ungrantable conversion is reported as a plain 'not queued'.";;
         require_fail) cat <<'EOF'
 sys$enq(LCK$M_CONVERT) on a lock still queued (waiting) reports SS$_CVTUNGRANT (public API)
 EOF
@@ -2798,11 +2958,11 @@ apply_edit() {
         # the rule half-applied rather than restored.
         sed -i 's|strncasecmp(given, full, glen) == 0|strcasecmp(given, full) == 0 /* NEGCTL run-qualifier-not-abbreviated */|' "$_file";;
     kstat-deadlock-mismapped)
-        sed -i 's|case 100: return SS\$_DEADLOCK;|case 100: return SS$_NOTQUEUED; /* NEGCTL kstat-deadlock-mismapped */|' "$_file";;
+        sed -i 's|#define SS__DEADLOCK    3594|#define SS__DEADLOCK    2488 /* NEGCTL kstat-deadlock-mismapped */|' "$_file";;
     kstat-ivlockid-mismapped)
-        sed -i 's|case 108: return SS\$_IVLOCKID;|case 108: return SS$_NOTQUEUED; /* NEGCTL kstat-ivlockid-mismapped */|' "$_file";;
+        sed -i 's|#define SS__IVLOCKID    8484|#define SS__IVLOCKID    2488 /* NEGCTL kstat-ivlockid-mismapped */|' "$_file";;
     kstat-cvtungrant-mismapped)
-        sed -i 's|case 116: return SS\$_CVTUNGRANT;|case 116: return SS$_NOTQUEUED; /* NEGCTL kstat-cvtungrant-mismapped */|' "$_file";;
+        sed -i 's|#define SS__CANCELGRANT 8508|#define SS__CANCELGRANT 2488 /* NEGCTL kstat-cvtungrant-mismapped */|' "$_file";;
 
     assign-terminal-bypasses-executive)
         sed -i 's|        if (devres.is_terminal) {|        if (0 \&\& devres.is_terminal) { /* NEGCTL assign-terminal-bypasses-executive */|' "$_file";;
@@ -2920,33 +3080,42 @@ cmd_apply() {
 #      must be named by at least one defect's targets. Adding a facility file
 #      without a control turns this red.
 #   2. SUITE. Every derived tests/qemu/test_{kmod,syssvc}_*.c suite must be
-#      either (a) in some defect's suites_red, or (b) in SCOPE_OUT_SUITES with
-#      a stated reason. A suite covered by nothing is never proven capable of
-#      going red, and round 1 shipped two of those (the vmsfs pair) without
-#      saying so.
+#      either (a) NAMED by some defect's suites_red glob, or (b) in
+#      SCOPE_OUT_SUITES with a stated reason. A suite named by nothing has no
+#      declared attribution at all, and round 1 shipped two of those (the
+#      vmsfs pair) without saying so.
 #      A suite that appears ONLY in some defect's blind_suites USED TO satisfy
 #      this and print a `NOTE:`. It no longer does. Being declared blind is a
-#      record that nothing reddens the suite -- that is the definition of
+#      record that no glob names the suite -- that is the definition of
 #      uncovered, and printing it as a note is how the set-cover deletion
-#      measured in the header dropped two suites out of the proven set while
+#      measured in the header dropped two suites out of the named set while
 #      exiting 0. blind_suites keeps its other job (pinning a named suite GREEN
 #      under one defect); it is no longer a substitute for coverage.
 #   3. SCOPE CONSISTENCY. Nothing under SCOPE_OUT_UNIT_DIRS may be named by a
 #      defect: if it is, the scope statement is wrong and must be corrected
-#      rather than quietly outvoted by a control.
+#      rather than quietly outvoted by a declaration.
 #   4. ANCHORS. Every defect must be anchored, by a `/* negctl: <defect> */`
 #      comment, at an assertion in a suite source it is allowed to redden; and
-#      every anchor found in a suite source must name a live defect. This is
-#      the floor under the SIZE of the DEFECTS list, and it is the only check
-#      here whose universe comes from outside this file. See the header for
-#      exactly what it claims and what it does not.
+#      every anchor found in a suite source must name a live defect. This
+#      floors the PAIRING between the manifest and the suite sources -- a
+#      deletion confined to this one file cannot pass -- and its universe
+#      comes from outside this file (the suite sources). It does NOT floor the
+#      list's SIZE: deleting a defect's line, its two arms, AND its anchor
+#      together still passes, still prints a smaller number as PASS (vms-d894).
+#      See the header and section 6 below for the size floor.
 #   5. ARM AGREEMENT. Every defect must have exactly two `case` arms in this
 #      script (defect_field and apply_edit) and every arm must name a live
 #      defect. Deleting one line from DEFECTS and leaving forty lines of
 #      documented metadata behind is not a legitimate edit; neither is an arm
 #      for a defect nobody runs.
+#   6. COUNT FLOOR (vms-d894). DEFECTS must not have fewer entries than the
+#      number recorded in tests/qemu/facility_defects_floor.txt, a file this
+#      command does not itself write. NOT tamper-proof -- see section 6's own
+#      comment in the function body and the header for the price this buys.
 #
-# The PASS lines below name the exclusions explicitly, so a reader cannot take
+# None of the six is an execution claim. Read the header before trusting any
+# PASS line as more than "these declarations agree with each other". The PASS
+# lines below also name the exclusions explicitly, so a reader cannot take
 # them as a claim about the whole harness.
 # ---------------------------------------------------------------------------
 cmd_coverage() {
@@ -2967,6 +3136,41 @@ cmd_coverage() {
         _blind_suites="$_blind_suites $(defect_field "$_cov_d" blind_suites)"
     done
 
+    # --- 0. the execution-sourced record, read ONCE ----------------------
+    # Loaded before section 2 because two different sections consume it: the
+    # suite populations (vms-659) and the observed count floor (vms-d894).
+    # _cov_rec_state is one of:
+    #   ok       validated, populations derived, usable
+    #   refuse   present and contradicts this tree -- already printed, and
+    #            the caller's rc is set to 1 below
+    #   absent   no record has been committed yet
+    #   nolib    the reader itself is missing
+    _cov_recw=$(mktemp -d) || { echo "FAIL: coverage: mktemp -d failed" >&2; return 2; }
+    _cov_rec=""
+    _cov_rec_state=absent
+    if [ "$FNR_LOADED" -ne 1 ]; then
+        _cov_rec_state=nolib
+    else
+        _cov_rec=$(fnr_record_path "$(dirname "$SELF")")
+        if [ -f "$_cov_rec" ]; then
+            printf '%s\n' $DEFECTS >"$_cov_recw/defects"
+            # Built only when there is a record to check it against: this runs
+            # in the ordinary ctest job, and it is one sed(1) per defect.
+            : >"$_cov_recw/texts.raw"
+            for _cov_td in $DEFECTS; do
+                { defect_field "$_cov_td" require_fail; defect_field "$_cov_td" knock_on_fail; } \
+                    | sed "s/^/$_cov_td	/" >>"$_cov_recw/texts.raw"
+            done
+            # An empty field echoes a blank line, which becomes "<defect><TAB>".
+            grep -v '	[ 	]*$' "$_cov_recw/texts.raw" >"$_cov_recw/texts" || true
+            if fnr_validate "$_cov_rec" "$_cov_recw/defects" "$_cov_recw/texts" "$_cov_recw"; then
+                _cov_rec_state=ok
+            else
+                _cov_rec_state=refuse
+            fi
+        fi
+    fi
+
     # --- 1. translation units -------------------------------------------
     _missing=""
     for _cov_c in "$_cov_root"/kernel/*.c; do
@@ -2984,7 +3188,7 @@ cmd_coverage() {
         echo "  tests/qemu/facility_defects.sh -- do not delete this check."
         _cov_rc=1
     else
-        echo "PASS: every src/kernel/*.c translation unit is named by a negative control"
+        echo "PASS: every src/kernel/*.c translation unit is named by some defect's targets declaration"
     fi
 
     # --- 3. scope consistency (checked before printing the exclusion) ----
@@ -3010,7 +3214,8 @@ cmd_coverage() {
                    | xargs -n1 basename | sed 's/\.c$//' | sort)
     _uncovered=""
     _blind_only=""
-    _n_proven=0
+    _named_suites=""
+    _n_named=0
     for _cov_s in $_cov_derived; do
         _hit=0
         for _cov_g in $_red_globs; do
@@ -3026,7 +3231,8 @@ cmd_coverage() {
                     echo "  The manifest says two things. Drop it from SCOPE_OUT_SUITES."
                     _cov_rc=1;;
             esac
-            _n_proven=$((_n_proven + 1))
+            _n_named=$((_n_named + 1))
+            _named_suites="$_named_suites $_cov_s"
             continue
         fi
         case " $SCOPE_OUT_SUITES " in
@@ -3038,20 +3244,72 @@ cmd_coverage() {
         _uncovered="$_uncovered $_cov_s"
     done
     if [ -n "$_uncovered" ]; then
-        echo "FAIL: derived suite(s) that NO negative control can turn red:$_uncovered"
-        echo "  A suite nothing can redden is never proven to assert anything. Give it a"
-        echo "  facility control, or add it to SCOPE_OUT_SUITES with a reason -- but do"
-        echo "  not leave it silent."
+        echo "FAIL: derived suite(s) NAMED BY NO defect's suites_red:$_uncovered"
+        echo "  A suite no glob names is not attributed to anything, so nothing here even"
+        echo "  claims it can go red. Give it a facility control, or add it to"
+        echo "  SCOPE_OUT_SUITES with a reason -- but do not leave it silent."
         _cov_rc=1
     else
-        echo "PASS: $_n_proven derived suite(s) are PROVEN able to go red by a control"
+        echo "PASS: $_n_named derived suite(s) are each NAMED by some defect's suites_red glob"
+        echo "  (a STRING MATCH against the manifest's own attribution claim -- not an"
+        echo "   execution. See the header: only run_facility_negctl.sh, in CI, executes.)"
+    fi
+
+    # --- 2b. the two populations, separately counted (rd vms-659) --------
+    # "PROVEN able to go red" is restored HERE and only here, and only for the
+    # suites a past executed run recorded a failing assertion in. Everything
+    # else stays NAMED. Two populations, two cardinals, never summed into one
+    # sentence -- the defect this replaces was a single number that read as an
+    # execution result and was a glob match.
+    _n_proven=0
+    _proven_suites=""
+    _named_only=""
+    if [ "$_cov_rec_state" = ok ]; then
+        for _cov_s in $_named_suites; do
+            if grep -qx "$_cov_s" "$_cov_recw/fnr_red_suites" 2>/dev/null; then
+                _n_proven=$((_n_proven + 1))
+                _proven_suites="$_proven_suites $_cov_s"
+            else
+                _named_only="$_named_only $_cov_s"
+            fi
+        done
+        _n_exec=$(grep -c . "$_cov_recw/fnr_exec" 2>/dev/null || true)
+        _n_execpass=$(grep -c . "$_cov_recw/fnr_exec_pass" 2>/dev/null || true)
+        _n_complete=$(grep -c . "$_cov_recw/fnr_complete" 2>/dev/null || true)
+        _n_incomplete=$(grep -c . "$_cov_recw/fnr_incomplete" 2>/dev/null || true)
+        _n_unproven=$(grep -c . "$_cov_recw/fnr_unproven" 2>/dev/null || true)
+        _n_redrows=$(grep -c . "$_cov_recw/fnr_red" 2>/dev/null || true)
+        : "${_n_exec:=0}" "${_n_execpass:=0}" "${_n_complete:=0}"
+        : "${_n_incomplete:=0}" "${_n_unproven:=0}" "${_n_redrows:=0}"
+        echo "OBSERVED: of those $_n_named, $_n_proven are PROVEN ABLE TO GO RED and" \
+             "$((_n_named - _n_proven)) NAMED ONLY."
+        echo "  PROVEN = a past run recorded a failing assertion in the suite:$_proven_suites"
+        [ -n "$_named_only" ] && echo "  NAMED ONLY (declared reddenable, never observed red):$_named_only"
+        echo "  Source: $(basename "$_cov_rec"), generated" \
+             "$(fnr_header "$_cov_rec" generated-at), tree $(fnr_header "$_cov_rec" tree-commit)."
+        echo "  It records $_n_exec defect(s) of this manifest as EXECUTED" \
+             "($_n_execpass with a passing control, $_n_complete of those carrying every"
+        echo "  assertion text the manifest now names for them, $_n_incomplete carrying" \
+             "fewer), across $_n_redrows observed failing assertion(s);"
+        echo "  $_n_unproven manifest defect(s) are in no run this record covers."
+        echo "  WHAT THAT PROVES HERE: a PAST run, on the tree named above, observed"
+        echo "  these results. It does NOT say they hold now -- nothing on a host"
+        echo "  without a real /dev/vms can say that. The live driver in CI re-emits"
+        echo "  this record and reds on any disagreement with the committed copy;"
+        echo "  that comparison, not this file, is what keeps it honest."
+    else
+        _named_only="$_named_suites"
+        echo "OBSERVED: of those $_n_named, 0 are PROVEN ABLE TO GO RED and $_n_named are"
+        echo "  NAMED ONLY -- NOT MEASURED: no usable execution record was read (see"
+        echo "  section 6). Every claim above this line is a string relation over"
+        echo "  declarations the tree makes about itself."
     fi
     # A suite that appears ONLY as somebody's blind_suites is declared and
-    # tracked, but nothing in this manifest has ever turned it red -- so its
-    # assertions are still unproven. That is not coverage, and until vms-279 it
-    # was printed as a NOTE and passed.
+    # tracked, but no defect's suites_red glob names it -- so nothing here
+    # even claims its assertions can fire. That is not coverage, and until
+    # vms-279 it was printed as a NOTE and passed.
     if [ -n "$_blind_only" ]; then
-        echo "FAIL: suite(s) declared blind but never reddened by ANY control:$_blind_only"
+        echo "FAIL: suite(s) declared blind but named by no defect's suites_red:$_blind_only"
         echo "  A blind declaration records that a suite does not catch one defect. A"
         echo "  suite that no defect catches is UNCOVERED, however many defects declare"
         echo "  it blind. Give it a control that names an assertion in it, or move it to"
@@ -3136,23 +3394,27 @@ cmd_coverage() {
     fi
     if [ -n "$_unanchored" ]; then
         echo "FAIL: defect(s) with NO /* negctl: ... */ anchor in any suite source:$_unanchored"
-        echo "  Every control has to be findable AT the assertion it names, so that the"
-        echo "  size of this list is floored by the suite sources rather than by nothing."
+        echo "  Every entry has to be findable AT the assertion it names, so that a"
+        echo "  deletion here alone (this file only) cannot pass -- the suite source"
+        echo "  has to change too. That is a floor on PAIRING, not on the list's SIZE;"
+        echo "  see the header (vms-d894) and section 6 below for the size floor."
         echo "  Add the anchor above the CHECK() its require_fail names."
         _cov_rc=1; _anch_rc=1
     fi
     if [ -n "$_unanch_suites" ]; then
         echo "FAIL: in-scope suite(s) with NO anchor at all:$_unanch_suites"
-        echo "  No control names an assertion in these, so nothing here proves they can"
-        echo "  fail -- being matched by somebody's suites_red glob is a permission, not"
-        echo "  a measurement."
+        echo "  No defect names an assertion in these, so nothing here even claims they"
+        echo "  can fail -- being matched by somebody's suites_red glob is a permission,"
+        echo "  not a measurement."
         _cov_rc=1; _anch_rc=1
     fi
     if [ "$_anch_rc" -eq 0 ]; then
         echo "PASS: all $(echo $DEFECTS | wc -w) defect(s) anchored by $_n_anch marker(s)" \
              "across $_n_anch_suites in-scope suite source(s)"
-        echo "  (this floors the LIST AGAINST A ONE-FILE EDIT ONLY -- deleting a defect"
-        echo "   and its anchors together still passes. See the header.)"
+        echo "  (this floors PAIRING against a ONE-FILE EDIT ONLY -- deleting a defect"
+        echo "   and its anchors together still shrinks the list and still passes THIS"
+        echo "   check. It does not floor the list's SIZE; see section 6 below, priced"
+        echo "   honestly rather than claimed closed -- vms-d894.)"
     fi
 
     # --- 5. the two case blocks must agree with the list -----------------
@@ -3182,6 +3444,112 @@ cmd_coverage() {
         echo "FAIL: cannot read \$SELF ($SELF) to check the case arms against DEFECTS."
         _cov_rc=1
     fi
+
+    # --- 6. count floor (vms-d894) ----------------------------------------
+    # None of sections 1-5 floors the SIZE of DEFECTS: a defect's line, its
+    # two arms, and its one anchor can all be deleted together (20 lines
+    # across 2 files, MEASURED) and every check above still passes, printing
+    # a smaller number as a PASS. This section adds a floor sourced from a
+    # file this function does not itself hold the pen for --
+    # tests/qemu/facility_defects_floor.txt -- so a shrink below the recorded
+    # floor now also requires a THIRD file to change, in a diff whose only
+    # content is the number being lowered.
+    #
+    # NOT TAMPER-PROOF (see the header, vms-d894): the floor file can be
+    # edited in the same commit that shrinks DEFECTS. What this buys is that
+    # the edit is no longer silent -- raising the price from 20 lines/2 files
+    # to >=21 lines/3 files, one of which has no other job. A disclosed,
+    # priced residual, not a claimed closure.
+    _floor_file="$(dirname "$SELF")/facility_defects_floor.txt"
+    _n_defects=$(echo $DEFECTS | wc -w)
+    if [ -f "$_floor_file" ]; then
+        _floor=$(grep -Ev '^[[:space:]]*(#|$)' "$_floor_file" | tail -1 | tr -d '[:space:]')
+        case "$_floor" in
+            ''|*[!0-9]*)
+                echo "FAIL: $_floor_file's floor value is not a bare integer: '$_floor'"
+                _cov_rc=1;;
+            *)
+                if [ "$_n_defects" -lt "$_floor" ]; then
+                    echo "FAIL: DEFECTS has $_n_defects entries, below the floor of $_floor" \
+                         "recorded in $_floor_file."
+                    echo "  This floor is a derived count check, not a claim of tamper-proofing"
+                    echo "  (vms-d894): raising or lowering it is one edit to one more file. What"
+                    echo "  it buys is that a shrink is no longer silent -- lower it only for a"
+                    echo "  tracked, intentional removal, in the same change that explains why."
+                    _cov_rc=1
+                else
+                    echo "PASS: $_n_defects defect(s) >= floor $_floor recorded in $_floor_file"
+                fi;;
+        esac
+    else
+        echo "FAIL: $_floor_file is missing -- the count floor (vms-d894) has nothing to read."
+        _cov_rc=1
+    fi
+
+    # --- 6b. the OBSERVED count floor (vms-d894, the execution-sourced half)
+    # The floor above is a hand-set integer in a file the deleter can edit in
+    # the same commit. This one is the number of defects a PAST RUN OF THE
+    # DRIVER ACTUALLY EXECUTED, read out of the record it emitted -- and
+    # deleting a manifest entry today cannot retroactively change what that run
+    # observed.
+    #
+    # THE TWO FLOORS ARE BOTH APPLIED AND NEITHER REPLACES THE OTHER. A record
+    # covering fewer defects (a partial run) can therefore never LOWER the
+    # declared floor; it can only add a second, independently sourced one.
+    #
+    # WHAT IT IS STILL NOT: tamper-proof. A deleter who removes a defect from
+    # DEFECTS and removes that defect's rows from the record has told the truth
+    # about a smaller manifest, and the live CI run agrees with them. The price
+    # is what changed: the record's rows are one per OBSERVED ASSERTION, so the
+    # deletion is proportional and visible instead of being one integer.
+    # Closing it entirely needs a floor from outside the commit -- the previous
+    # commit's copy of this record, or an external attestation. There is not
+    # one, and this is a disclosure, not a claim.
+    #
+    # WRITTEN AS if/elif AND NOT AS A `case`, deliberately: section 5 above
+    # finds this file's defect metadata by scanning $SELF for lines matching
+    # `^    [a-z0-9-]*\)$`, so a four-space-indented `ok)` arm here is read as
+    # a case arm for a defect named "ok". MEASURED -- the first draft of this
+    # section did exactly that and section 5 correctly reported "case arm(s)
+    # for defect(s) not in DEFECTS: absent nolib ok refuse". Section 5 is
+    # right; this is the code that has to move.
+    if [ "$_cov_rec_state" = ok ]; then
+        _obs_floor=$(grep -c . "$_cov_recw/fnr_exec" 2>/dev/null || true)
+        : "${_obs_floor:=0}"
+        echo "PASS: $_obs_floor of this manifest's $_n_defects defect(s) are" \
+             "OBSERVED-EXECUTED by the run recorded in $(basename "$_cov_rec")"
+        echo "  (derived from that record's RUN rows, not from any integer anybody"
+        echo "   wrote down.)"
+        echo "  THE ENFORCEMENT HERE IS THE REFUSAL, NOT A COMPARISON, and saying so is"
+        echo "  the point: the observed count is intersected with DEFECTS before it is"
+        echo "  counted, so it can never EXCEED it and 'observed <= declared' would be"
+        echo "  an assertion that cannot fail. What cannot be gotten past is above --"
+        echo "  a record naming a defect DEFECTS no longer has stops this gate"
+        echo "  certifying anything at all. That is what makes this count"
+        echo "  execution-sourced rather than declared."
+    elif [ "$_cov_rec_state" = refuse ]; then
+        # fnr_validate has already printed the REFUSING lines and why.
+        echo "  -> the observed count floor and the PROVEN suite population are BOTH"
+        echo "     withheld by that refusal. The declared floor above still applies;"
+        echo "     it is the weaker one, and it is now the only one."
+        _cov_rc=1
+    elif [ "$_cov_rec_state" = absent ]; then
+        echo "NOT MEASURED: no execution record at $_cov_rec, so there is no"
+        echo "  observed count floor and NO suite is PROVEN able to go red -- only"
+        echo "  NAMED. The record is emitted by tests/qemu/run_facility_negctl.sh,"
+        echo "  which runs in CI only (rd vms-b1f: it cannot run on a dev host at"
+        echo "  all). Take it from that job's output and commit it."
+        echo "  This is a stated degradation, not a pass with a smaller claim: the"
+        echo "  two cardinals it would have produced are absent rather than guessed."
+    else
+        echo "FAIL: REFUSING to certify: the execution-record reader"
+        echo "      $FNR_LIB is missing, so section 2b's populations and the observed"
+        echo "      count floor cannot be computed at all."
+        echo "  -> deleting the reader must not be a way to make this gate print fewer"
+        echo "     claims and still pass."
+        _cov_rc=1
+    fi
+    rm -rf "$_cov_recw"
 
     # --- the exclusions, stated, never implied ---------------------------
     _n_excl_units=0
@@ -3359,9 +3727,11 @@ cmd_selftest() {
     cmd_coverage "$_st_root" "$_st_tests" || _st_rc=1
 
     if [ "$_st_rc" -eq 0 ]; then
-        echo "PASS: every negative control injects into the current tree, its"
-        echo "      injection-landed check demonstrably fires when it does not, and"
-        echo "      every assertion it names is one a suite can actually print."
+        echo "PASS: every defect's sed mutation injects into the current tree (executed,"
+        echo "      real sed + cmp against a throwaway copy), its injection-landed check"
+        echo "      demonstrably fires on a no-op re-apply, and every assertion it names"
+        echo "      appears literally in a suite source (a text search, not a run --"
+        echo "      only run_facility_negctl.sh, in CI, actually prints it)."
     fi
     return $_st_rc
 }

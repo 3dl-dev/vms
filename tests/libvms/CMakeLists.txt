@@ -124,3 +124,49 @@ target_link_libraries(test_libvms_sysuaf_auth PRIVATE
 add_test(NAME test_libvms_sysuaf_auth
          COMMAND test_libvms_sysuaf_auth
          "${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT")
+
+# Test: vms-e60 — SYSUAF.DAT's UIC fields are OCTAL, so LOGINOUT and
+# F$IDENTIFIER stop giving two different UICs for one account. Needs vmsfs
+# because it repoints DKA0: at a staged fixture root rather than reading
+# whatever the host has mounted at /vms.
+add_executable(test_libvms_sysuaf_uic_base
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sysuaf_uic_base.c)
+target_include_directories(test_libvms_sysuaf_uic_base PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_sysuaf_uic_base PRIVATE
+    vms
+    vmsfs
+    vmslnm
+    pthread
+    m
+)
+add_test(NAME test_libvms_sysuaf_uic_base
+         COMMAND test_libvms_sysuaf_uic_base)
+
+# Test: vms-2f8 — F$IDENTIFIER READS the rights database instead of answering
+# from a hardcoded pair, and the rights database OVMX ships holds the values
+# the oracle holds. Takes the two REAL SHIPPED data files as argv so the
+# assertion runs against what boots rather than a fixture that can drift from
+# it; stages them under a private root (DKA0: + SYS$SYSTEM) like
+# test_libvms_sysuaf_uic_base, so it does not read the host's /vms.
+add_executable(test_libvms_rightslist
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_rightslist.c)
+target_include_directories(test_libvms_rightslist PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+)
+target_link_libraries(test_libvms_rightslist PRIVATE
+    vms
+    vmsfs
+    vmslnm
+    pthread
+    m
+)
+add_test(NAME test_libvms_rightslist
+         COMMAND test_libvms_rightslist
+         "${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/RIGHTSLIST.DAT"
+         "${CMAKE_SOURCE_DIR}/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT")

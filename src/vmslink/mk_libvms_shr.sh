@@ -10,9 +10,9 @@
 # mth$/ots$ in rtl/, plus descrip/status) — linked by LINK.EXE (NO ld/ld.so) into a
 # single OVMX shareable (ELF ET_DYN) that:
 #   (a) carries a `.vms$sv` symbol vector exposing ALL its universals — every
-#       non-static function defined by the 40 translation units (sys$*, lib$*, str$*,
+#       non-static function defined by its translation units (sys$*, lib$*, str$*,
 #       mth$*, ots$*, ovmx_* ...), enumerated from `nm` of the compiled objects.
-#       The vector is generated (not hand-typed): 40 objects define hundreds of
+#       The vector is generated (not hand-typed): the objects define hundreds of
 #       universals; a name-sorted PROCEDURE vector is deterministic across builds.
 #       NOTE (follow-up): this milestone exports PROCEDURE universals only. libvms
 #       DATA universals (global tables a future consumer might import) and a frozen,
@@ -37,7 +37,8 @@
 #       still vms-212. The activation loads TWO TLS producers (LIBVMSPROCESS$SHR +
 #       LIBVMS$SHR); IMGACT's assign_tls_offsets gives each module its own TP offset.
 #
-# Composition: the 40 libvms translation units listed in src/libvms/CMakeLists.txt,
+# Composition: the libvms translation units listed in LIST below (see its comment --
+# that list is NOT checked against src/libvms/CMakeLists.txt; vms-79f),
 # compiled -fPIC musl. Compile flags mirror the proven lib-shareable pattern:
 #   -fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics
 #   -fno-builtin        : keep memcpy/strncpy/... as real CALL26 imports to DECC$SHR
@@ -84,7 +85,18 @@ echo "mk_libvms_shr: LINK.EXE=$LINK_EXE  CC=$CC  GSMATCH=$GSMATCH"
 echo "mk_libvms_shr: src=$SRC"
 echo "mk_libvms_shr: --use $DECC_SHR $PROC_SHR $SYS_SHR $FS_SHR"
 
-# The 40 translation units of the libvms library (== src/libvms/CMakeLists.txt).
+# The translation units of the libvms library.
+#
+# THIS LIST IS A SECOND SOURCE OF TRUTH FOR src/libvms/CMakeLists.txt, AND
+# NOTHING CHECKS THAT THE TWO AGREE. It used to claim "== src/libvms/
+# CMakeLists.txt" in this comment; that claim was unenforced and it broke the
+# first time someone added a TU. vms-2f8 added rtl/rightslist.c to CMakeLists
+# and not here, everything built and every host test passed, and the ONLY
+# thing that noticed was the VMS-native DCL link job in CI failing on an
+# undefined rightslist_name_to_value five minutes later.
+#
+# The claim is deleted rather than reworded, per the standing ruling. Making
+# the two lists provably agree is filed as vms-79f.
 LIST="descrip status \
 syssvc/sys_assign syssvc/sys_mailbox syssvc/sys_qio syssvc/sys_uring syssvc/sys_event \
 syssvc/sys_time syssvc/sys_process syssvc/sys_memory syssvc/sys_logical syssvc/sys_ast \
@@ -93,7 +105,7 @@ syssvc/sys_float syssvc/sys_uai syssvc/sys_device syssvc/sys_operator syssvc/sys
 rtl/ovmx_accounting rtl/lib_vm rtl/lib_output rtl/lib_signal rtl/lib_datetime rtl/lib_misc \
 rtl/lib_dyndesc rtl/lib_logical rtl/lib_symbol rtl/lib_string_ops rtl/lib_bitops \
 rtl/lib_eventflags rtl/str_routines rtl/mth_routines rtl/ots_routines rtl/sha256 \
-rtl/sysuaf rtl/str_util"
+rtl/sysuaf rtl/rightslist rtl/str_util"
 
 OBJS=""
 for c in $LIST; do

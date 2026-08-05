@@ -33,13 +33,19 @@
 #include "vmsfs/filespec.h"
 #include "vms/logical.h"
 #include "ovmx_identity.h"
+/* This process's privilege mask comes from the executive (vms-b2e). */
+#include "prvdef.h"
+#include "vms_kif.h"
 #define MAX_USERS     1024
 #define MAX_LINE      1024
 /* AUTHORIZE reports the OVMX product version from the SSOT (INV-1). */
 #define UAF_VERSION   OVMX_PRODUCT_VERSION
 
-/* Default values for new users */
-#define DEFAULT_UIC_GROUP    200
+/* Default values for new users.
+ * UIC numbers are OCTAL (vms-e60), so this literal is written 0200 -- it is
+ * the group [200,...] a VMS administrator reads, not decimal 200, which
+ * would display as [310,...]. */
+#define DEFAULT_UIC_GROUP    0200
 #define DEFAULT_PRIVS        "TMPMBX,NETMBX"
 
 /* In-memory database */
@@ -149,8 +155,12 @@ static int load_sysuaf(void)
         str_upcase(r->username);
 
         strncpy(r->password_hash, fields[1], sizeof(r->password_hash) - 1);
-        r->uic_group  = (uint32_t)strtoul(fields[2], NULL, 10);
-        r->uic_member = (uint32_t)strtoul(fields[3], NULL, 10);
+        /* OCTAL: SYSUAF.DAT UIC fields (vms-e60; derivation in
+         * src/libvms/rtl/sysuaf.c). Read, write, display and the
+         * /UIC=[g,m] parse below all move together or AUTHORIZE
+         * disagrees with the file it just wrote. */
+        r->uic_group  = (uint32_t)strtoul(fields[2], NULL, 8);
+        r->uic_member = (uint32_t)strtoul(fields[3], NULL, 8);
         strncpy(r->default_dir, fields[4], sizeof(r->default_dir) - 1);
 
         if (nf > 5 && fields[5])
@@ -197,7 +207,9 @@ static int save_sysuaf(void)
 
     for (int i = 0; i < g_nusers; i++) {
         const sysuaf_record_t *r = &g_users[i];
-        fprintf(fp, "%s|%s|%u|%u|%s|%s|%s\n",
+        /* %o: the UIC fields are octal (vms-e60) -- writing them decimal
+         * would make AUTHORIZE unable to read back what it just saved. */
+        fprintf(fp, "%s|%s|%o|%o|%s|%s|%s\n",
                 r->username,
                 r->password_hash,
                 r->uic_group,
@@ -245,7 +257,11 @@ static int find_user(const char *username)
 /* Find highest UIC member number for a given group */
 static uint32_t next_uic_member(uint32_t group)
 {
-    uint32_t max_member = 200;
+    /* 0200 OCTAL (vms-e60): the floor must be in the same base as the member
+     * numbers it is compared against, or it sorts above every real account.
+     * With the shipped SYSUAF (members 201/202/203 octal = 129/130/131) a
+     * decimal 200 floor would beat all of them and hand out 0311. */
+    uint32_t max_member = 0200;
     for (int i = 0; i < g_nusers; i++) {
         if (g_users[i].uic_group == group &&
             g_users[i].uic_member > max_member)
@@ -382,7 +398,8 @@ static void cmd_add(const char *args)
         const char *v = val;
         if (*v == '[') v++;
         unsigned g = 0, m = 0;
-        if (sscanf(v, "%u,%u", &g, &m) == 2) {
+        /* /UIC=[g,m] is typed in octal (vms-e60) */
+        if (sscanf(v, "%o,%o", &g, &m) == 2) {
             rec.uic_group  = g;
             rec.uic_member = m;
         }
@@ -493,7 +510,8 @@ static void cmd_modify(const char *args)
         const char *v = val;
         if (*v == '[') v++;
         unsigned g = 0, m = 0;
-        if (sscanf(v, "%u,%u", &g, &m) == 2) {
+        /* /UIC=[g,m] is typed in octal (vms-e60) */
+        if (sscanf(v, "%o,%o", &g, &m) == 2) {
             r->uic_group  = (uint32_t)g;
             r->uic_member = (uint32_t)m;
         }
@@ -564,7 +582,8 @@ static void cmd_list(const char *args)
     for (int i = 0; i < g_nusers; i++) {
         const sysuaf_record_t *r = &g_users[i];
         char uic_str[16];
-        snprintf(uic_str, sizeof(uic_str), "[%03u,%03u]",
+        /* octal, as VMS writes UICs (vms-e60) */
+        snprintf(uic_str, sizeof(uic_str), "[%03o,%03o]",
                  r->uic_group, r->uic_member);
         printf("%-18s %-12s %-22s %-10s %s\n",
                r->username,
@@ -601,7 +620,8 @@ static void cmd_show(const char *args)
 
     const sysuaf_record_t *r = &g_users[idx];
     char uic_str[16];
-    snprintf(uic_str, sizeof(uic_str), "[%03u,%03u]",
+    /* octal, as VMS writes UICs (vms-e60) */
+    snprintf(uic_str, sizeof(uic_str), "[%03o,%03o]",
              r->uic_group, r->uic_member);
 
     printf("\n");
@@ -661,122 +681,65 @@ static void cmd_help(void)
 /* ------------------------------------------------------------------ */
 
 /*
- * Check if a privilege word appears as an exact token in a
- * comma-separated privilege list.  Case-insensitive.
- * E.g. has_priv_word("TMPMBX,SYSPRV,NETMBX", "SYSPRV") -> 1
- *      has_priv_word("ALLSPOOL", "ALL") -> 0
- */
-static int has_priv_word(const char *list, const char *word)
-{
-    if (!list || !word)
-        return 0;
-
-    size_t wlen = strlen(word);
-    const char *p = list;
-
-    while (*p) {
-        /* Skip leading whitespace/commas */
-        while (*p == ',' || *p == ' ' || *p == '\t')
-            p++;
-        if (*p == '\0')
-            break;
-
-        /* Find end of current token */
-        const char *tok = p;
-        while (*p && *p != ',' && *p != ' ' && *p != '\t')
-            p++;
-
-        size_t tlen = (size_t)(p - tok);
-        if (tlen == wlen && strncasecmp(tok, word, wlen) == 0)
-            return 1;
-    }
-    return 0;
-}
-
-/*
- * Check that the caller has SYSPRV privilege.
+ * Does this process hold SYSPRV?
  *
- * Strategy (in order):
- *   1. euid == 0 (root) — always authorized (SYSTEM equivalent)
- *   2. Look up the calling user in SYSUAF and check for SYSPRV or ALL
- *      in their privilege field.
+ * ============================================================
+ * THE ANSWER COMES FROM THE EXECUTIVE (vms-b2e)
+ * ============================================================
+ * AUTHORIZE manages SYSUAF. On VMS the right to do that is decided by the
+ * privilege mask the executive holds for the process -- never by anything
+ * the process is able to say about itself.
  *
- * The previous implementation read VMS_PRIVILEGES from the environment,
- * which any unprivileged process could spoof.  This version reads the
- * on-disk SYSUAF directly, which is only writable by root.
+ * WHAT USED TO STAND HERE, so nobody puts it back:
+ *
+ *     if (geteuid() == 0) return 1;
+ *     const char *login = getenv("USER");   -- upcased, looked up in
+ *                                              SYSUAF, ALL/SYSPRV granted
+ *
+ * MEASURED on a host build of main a4ead89, against the built binary with
+ * the shipped SYSUAF: `env USER=baron` was refused with %UAF-F-NOAUTH,
+ * while `env USER=SYSTEM` opened a full SYSUAF-management session and
+ * printed SYSTEM's password hash. One environment variable flipped
+ * refusal into total control of the authorization database.
+ *
+ * Both of the old tests were HOST facts. geteuid() is the Linux uid this
+ * binary happens to run under; getenv("USER") is a string the caller
+ * chooses. Neither is a VMS identity. Consulting the host environment for
+ * a VMS privilege decision is the illegal third answer CLAUDE.md Rule 10
+ * names: it had the shape of an access control system and the substance
+ * of an honor system.
+ *
+ * The executive derives the UIC from credentials a process cannot grant
+ * itself, and a user name arrives only through VMS_IOCTL_SETIDENT, which
+ * refuses any caller without SETPRV an identity that is not a weakening
+ * of its own. So cur_privs is what something privileged established for
+ * this process, which is the difference between an identity and a claim
+ * (Rule 11).
+ *
+ * THERE IS NO ABSENT-EXECUTIVE BRANCH AND MUST NOT BE ONE (Rule 9). PID 1
+ * refuses to bring OVMX up without /dev/vms, so on the one OVMX runtime
+ * this read cannot fail. If it fails anyway -- a developer running this
+ * binary on a bare Linux host -- AUTHORIZE refuses, because a process
+ * whose privileges nothing can vouch for holds none. Substituting a local
+ * guess for a failed executive read is this same defect wearing a
+ * different name.
+ *
+ * SYSPRV SUBSUMES THE OLD "ALL" TEST: a mask carrying every privilege has
+ * bit PRV$V_SYSPRV set, so the two-word check is not lost by dropping to
+ * one bit. PRV$M_SYSPRV is held to the executive's own VMS_PRV_M_SYSPRV
+ * by _Static_assert in src/libvms/prv_agreement.c, so this is a pinned
+ * constant and not a self-certified one (Rule 8).
+ * ============================================================
  */
 static int check_privilege(void)
 {
-    /* Root is always privileged */
-    if (geteuid() == 0)
-        return 1;
+    struct vms_procinfo self;
+    memset(&self, 0, sizeof(self));
 
-    /* Look up the calling user's record in SYSUAF */
-    const char *login = getenv("USER");
-    if (!login)
+    if (!(vms_kif_getjpi_self(&self) & 1))
         return 0;
 
-    char uname[64];
-    strncpy(uname, login, sizeof(uname) - 1);
-    uname[sizeof(uname) - 1] = '\0';
-    str_upcase(uname);
-
-    char sysuaf_linux[1024];
-    vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
-    FILE *fp = fopen(sysuaf_linux, "r");
-    if (!fp)
-        return 0;
-
-    char line[MAX_LINE];
-    int authorized = 0;
-    while (fgets(line, sizeof(line), fp)) {
-        if (line[0] == '#' || line[0] == '\n' || line[0] == '\r')
-            continue;
-        str_trim(line);
-        if (line[0] == '\0')
-            continue;
-
-        /* Extract username (first pipe-delimited field) */
-        char *sep = strchr(line, '|');
-        if (!sep)
-            continue;
-        *sep = '\0';
-
-        char recname[64];
-        strncpy(recname, line, sizeof(recname) - 1);
-        recname[sizeof(recname) - 1] = '\0';
-        str_upcase(recname);
-
-        if (strcmp(recname, uname) != 0)
-            continue;
-
-        /* Found the user — extract privileges (7th field, index 6) */
-        char *p = sep + 1;
-        int field = 1; /* already past field 0 */
-        while (field < 6 && p) {
-            char *next = strchr(p, '|');
-            if (next)
-                p = next + 1;
-            else
-                p = NULL;
-            field++;
-        }
-
-        if (p) {
-            /* p now points at the privileges field */
-            char privs[256];
-            strncpy(privs, p, sizeof(privs) - 1);
-            privs[sizeof(privs) - 1] = '\0';
-            str_trim(privs);
-
-            if (has_priv_word(privs, "ALL") ||
-                has_priv_word(privs, "SYSPRV"))
-                authorized = 1;
-        }
-        break;
-    }
-    fclose(fp);
-    return authorized;
+    return (self.cur_privs & PRV$M_SYSPRV) != 0;
 }
 
 /* ------------------------------------------------------------------ */

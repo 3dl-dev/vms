@@ -1,5 +1,5 @@
 /*
- * test_syssvc_lock_status.c - kstat_to_ss() public-status-mapping tests
+ * test_syssvc_lock_status.c - the lock manager yields VMS condition values
  * (vms-2e5)
  *
  * src/libvms/syssvc/sys_lock.c's kstat_to_ss() is the SINGLE POINT where a
@@ -28,11 +28,11 @@
  * Exhaustive grep of every `args.status = ` assignment in
  * src/kernel/vms_lock.c (the entire kernel lock manager) finds SS__BADPARAM,
  * SS__INSFMEM, SS__NORMAL, SS__NOTQUEUED, SS__DEADLOCK, SS__IVLOCKID and
- * SS__CANCELGRANT -- never SS__SUBLOCKS (112) or SS__VALNOTVALID (120).
+ * SS__CANCELGRANT -- never SS__SUBLOCKS or SS__VALNOTVALID.
  * vms_ioctl_getlki even carries `args.parent_id = 0; -- TODO: parent lock
  * support`: the kernel implements no lock hierarchy and no value-block
- * validity tracking, so nothing can ever produce raw 112 or 120 for
- * kstat_to_ss to translate. Those two mappings are correct-if-ever-reached
+ * validity tracking, so nothing can ever emit those two condition values at
+ * all. They are correct-if-ever-reached
  * but currently unreachable dead code, not a fidelity gap this suite can
  * provoke by exercising real behaviour -- inventing a kernel path that
  * emits them just to make an assertion pass would be the illegal third
@@ -407,7 +407,7 @@ static void scenario_deadlock(void)
 
 int main(void)
 {
-    printf("=== test_syssvc_lock_status (kstat_to_ss public-status-mapping, vms-2e5) ===\n");
+    printf("=== test_syssvc_lock_status (executive-yielded VMS statuses, vms-2e5/vms-82a) ===\n");
 
     if (bootstrap("parent") < 0) {
         /*

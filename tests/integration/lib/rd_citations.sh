@@ -60,10 +60,22 @@
 #           A gate that counts things and treats zero as success is satisfied
 #           by deletion. MEASURED after: stripping every data row from the
 #           committed ledger took the census from rc=0 PASS to rc=1 REFUSING.
-#         - EVERY id the tree cites must have a ledger row, whether or not the
-#           CALLER passed that id in. The caller's id list is the caller's own
-#           parse; this scan is independent of it, so a citation the caller
-#           does not parse cannot go unresolved.
+#         - EVERY id the tree cites gets the SAME open/closed/absent verdict,
+#           whether or not the CALLER passed that id in (rd vms-004e). The
+#           caller's id list is the caller's own parse; this scan is
+#           independent of it, so a citation the caller does not parse cannot
+#           go unresolved -- and, since the fix below, cannot go UNVERDICTED
+#           either. MEASURED, on the revision this replaces: before vms-004e,
+#           an id outside the caller's own parse was checked for PRESENCE
+#           only -- a row existing was enough, whatever it said. Repointing a
+#           declaration this gate does not itself parse at `vms-q9z9`, an id
+#           that has never existed, plus the row tools/gen_rd_citations.py
+#           ITSELF writes for it (no forgery -- that row is what an honest
+#           regenerate produces), left the census rc=0, "0 tree id(s)
+#           unresolved". A CLOSED id's own honest row bought the same
+#           silence. Neither buys anything now: both populations run the same
+#           verdict, and the printed summary states which population each
+#           cardinal covers so the two can no longer be misread as one.
 #         - a stamp in the FUTURE is a REFUSAL. MEASURED against the revision
 #           this replaces: future-dating the stamp to 2999-12-31T00:00:00Z made
 #           this function print "generated 2999-12-31T00:00:00Z (-355530
@@ -165,10 +177,50 @@ rd_cite_scan_tree() {
             | xargs -0 grep -Hn 'OVMX-[A-Z][A-Z]*:' \
             > "$_ts_work/cite_tree_markers" 2>/dev/null || true
     fi
-    grep -E '\<vms-[0-9a-z]+(\.[0-9a-z]+)?\>' "$_ts_work/cite_tree_markers" \
-        > "$_ts_work/cite_tree_sites" 2>/dev/null || true
-    grep -oE '\<vms-[0-9a-z]+(\.[0-9a-z]+)?\>' "$_ts_work/cite_tree_sites" 2>/dev/null \
-        | sort -u > "$_ts_work/cite_tree_ids" || : > "$_ts_work/cite_tree_ids"
+
+    # rd vms-35f. grep -Hn's OWN OUTPUT is "path:lineno:text", and applying the
+    # id regex to that whole line treats the PATH as citable content.
+    # MEASURED, two ways:
+    #   (a) exporting this tree into a directory named vms-base fabricates a
+    #       citation of vms-base out of nothing but the directory name -- the
+    #       census then refuses with "the tree cites vms-base and ... has NO
+    #       ROW for it" on a tree that mentions vms-base nowhere in its text.
+    #   (b) a fixture whose single OVMX-<TOKEN>: marker carries NO rd id at
+    #       all, placed under src/vms-abc/, satisfies FLOOR 1 below -- the
+    #       refusal whose entire job is that a citation cannot be manufactured
+    #       by deletion -- the same way, because the id "found" came from the
+    #       PATH, never from the marker.
+    #
+    # So the id regex runs against the TEXT ONLY, with the "path:lineno:"
+    # prefix stripped first. cite_tree_markers and cite_tree_sites are still
+    # full "path:lineno:text" lines -- every diagnostic that names a file
+    # still can -- only the id EXTRACTION is now blind to where the file
+    # lives. The strip assumes a path holds no colon, true of everything
+    # SCAN_DIRS walks and already relied on wherever this file's own
+    # diagnostics `cut -d: -f2-` a grep -Hn/-n line.
+    : > "$_ts_work/cite_tree_content"
+    : > "$_ts_work/cite_tree_sites"
+    : > "$_ts_work/cite_tree_ids"
+    if [ -s "$_ts_work/cite_tree_markers" ]; then
+        sed 's/^[^:]*:[0-9][0-9]*://' "$_ts_work/cite_tree_markers" \
+            > "$_ts_work/cite_tree_content"
+        grep -n -E '\<vms-[0-9a-z]+(\.[0-9a-z]+)?\>' "$_ts_work/cite_tree_content" \
+                2>/dev/null | cut -d: -f1 > "$_ts_work/cite_tree_site_lines" \
+            || : > "$_ts_work/cite_tree_site_lines"
+        if [ -s "$_ts_work/cite_tree_site_lines" ]; then
+            # Select, from the PATH-carrying markers file, exactly the lines
+            # whose CONTENT-only counterpart (same line number, same order --
+            # sed above neither drops nor reorders lines) matched the id
+            # regex. This is what keeps cite_tree_sites showing the path for
+            # diagnostics while the match itself never looked at one.
+            awk 'NR == FNR { want[$1] = 1; next } FNR in want' \
+                "$_ts_work/cite_tree_site_lines" "$_ts_work/cite_tree_markers" \
+                > "$_ts_work/cite_tree_sites"
+        fi
+        grep -oE '\<vms-[0-9a-z]+(\.[0-9a-z]+)?\>' "$_ts_work/cite_tree_content" \
+                2>/dev/null | sort -u > "$_ts_work/cite_tree_ids" \
+            || : > "$_ts_work/cite_tree_ids"
+    fi
 }
 
 # rd_cite_check <src_root> <ids_file> <workdir> <n_decl_sites> <what>
@@ -398,19 +450,53 @@ rd_cite_check() {
     done < "$_cs_work/cite_want"
 
     # -----------------------------------------------------------------------
-    # COMPLETENESS, independent of the caller. Everything above answers about
-    # the ids the CALLER handed over. This answers about the ids the TREE
-    # carries: every one of them must have a row, or the ledger is a partial
-    # resolution being read as a total one. It is a RED and not a refusal --
-    # the ledger is readable, it is just incomplete, and the fix is a
-    # regenerate.
+    # THE OTHER POPULATION (rd vms-004e). Everything above answers about the
+    # ids the CALLER handed over, with the FULL open/closed/absent verdict.
+    # This population is every OTHER id the independent tree-wide rescan
+    # found -- cited by a marker family THIS CALLER's own parser does not
+    # accept (the census parses only OVMX-UNWIRED; the register parses only
+    # OVMX-USERSPACE/PARTIAL/LOCAL/EXECUTIVE; a brand new OVMX-<TOKEN>: family
+    # is accepted by NEITHER). Until this fix, this population was
+    # PRESENCE-checked only -- "does a row exist" -- not verdict-checked, and
+    # that is a materially weaker claim than the one above it: a row saying
+    # `closed` or `absent` satisfied it exactly as an `open` row would.
+    #
+    # MEASURED: repointing a declaration this gate does not itself parse at
+    # `vms-q9z9` -- an id that has never existed -- plus the row
+    # tools/gen_rd_citations.py ITSELF writes for it (no forgery: that row is
+    # what an honest regenerate produces) left the OLD loop below silent, this
+    # gate rc=0, "0 tree id(s) unresolved". The same held for a row citing a
+    # CLOSED id. Both are reproduced against this revision in
+    # tests/integration/test_rd_citations_fresh.sh's K-series-adjacent
+    # controls.
+    #
+    # So this population now gets the SAME verdict as the caller's own ids,
+    # not a presence check -- closed and absent are RED here exactly as they
+    # are above. That also closes the "no parser for this marker family"
+    # hole for free: rd_cite_scan_tree is family-agnostic (it matches ANY
+    # OVMX-<TOKEN>:, not just the families a specific gate's own regex
+    # accepts), so an id cited only by a family NO gate parses still gets
+    # resolved here, by every caller that runs this check.
+    #
+    # THE MESSAGES ARE DELIBERATELY THE SAME LITERAL TEXT as the loop above
+    # (only the "no row" case, unchanged from the original completeness
+    # loop, was already worded this way). That is not laziness: register's
+    # own negative-control suite derives its coverage requirement by reading
+    # every distinct `echo "FAIL: ..."` string out of this file, and a
+    # differently-worded message here would be a second, uncovered failure
+    # mode that suite cannot see coming. $_cs_what may read slightly loosely
+    # for an id this gate did not itself parse -- the plain-text line right
+    # after each FAIL says so.
     # -----------------------------------------------------------------------
-    _cs_n_treeunres=0
+    comm -13 "$_cs_work/cite_want" "$_cs_work/cite_tree_ids" \
+        > "$_cs_work/cite_other" 2>/dev/null || : > "$_cs_work/cite_other"
+    _cs_o_open=0; _cs_o_closed=0; _cs_o_absent=0; _cs_o_norow=0
+
     while IFS= read -r _cs_tid; do
         [ -n "$_cs_tid" ] || continue
-        if ! awk -F'\t' -v id="$_cs_tid" '$1 == id { found=1; exit } END { exit !found }' \
-                "$_cs_work/cite_rows"; then
-            _cs_n_treeunres=$((_cs_n_treeunres + 1))
+        _cs_row=$(awk -F'\t' -v id="$_cs_tid" '$1 == id { print; exit }' "$_cs_work/cite_rows")
+        if [ -z "$_cs_row" ]; then
+            _cs_o_norow=$((_cs_o_norow + 1))
             echo "FAIL: the tree cites $_cs_tid and $_cs_rel has NO ROW for it"
             grep -n "\<$_cs_tid\>" "$_cs_work/cite_tree_sites" 2>/dev/null \
                 | cut -d: -f2- | head -3 | sed 's/^/        /'
@@ -419,10 +505,42 @@ rd_cite_check() {
             echo "     regenerated after the citation changed. Run"
             echo "     tools/gen_rd_citations.py on a host with rd and commit the result."
             _cs_rc=1
+            continue
         fi
-    done < "$_cs_work/cite_tree_ids"
+        _cs_verdict=$(printf '%s\n' "$_cs_row" | cut -f2)
+        _cs_status=$(printf '%s\n' "$_cs_row" | cut -f3)
+        _cs_title=$(printf '%s\n' "$_cs_row" | cut -f4)
+        case "$_cs_verdict" in
+            open)
+                _cs_o_open=$((_cs_o_open + 1))
+                ;;
+            closed)
+                _cs_o_closed=$((_cs_o_closed + 1))
+                echo "FAIL: the tree cites a CLOSED rd item: $_cs_tid (status: $_cs_status)"
+                echo "        $_cs_title"
+                echo "  -> found by the independent tree-wide rescan (rd vms-004e), not by"
+                echo "     $_cs_what's own parser -- some OTHER marker family cites this id."
+                echo "     a closed item tracks nothing. Either the work is genuinely"
+                echo "     done -- in which case delete the declaration and wire it --"
+                echo "     or repoint the citation at the item that really carries it."
+                _cs_rc=1
+                ;;
+            absent)
+                _cs_o_absent=$((_cs_o_absent + 1))
+                echo "FAIL: the tree cites an rd item that DOES NOT EXIST: $_cs_tid"
+                echo "  -> found by the independent tree-wide rescan (rd vms-004e), not by"
+                echo "     $_cs_what's own parser -- some OTHER marker family cites this id."
+                echo "     rd has no such item. The ledger records that rather than"
+                echo "     inventing a row for it. A well-formed id is not an owner."
+                _cs_rc=1
+                ;;
+        esac
+    done < "$_cs_work/cite_other"
+    _cs_n_treeunres=$((_cs_o_closed + _cs_o_absent + _cs_o_norow))
 
     _cs_ncited=$(grep -c . "$_cs_work/cite_want" || true)
+    _cs_nother=$(grep -c . "$_cs_work/cite_other" || true)
+    : "${_cs_nother:=0}"
     # _cs_then / _cs_now were computed and bounded by REFUSAL 2b above; the age
     # here is arithmetic on an instant already proven to be real and past.
     _cs_age=$(( (_cs_now - _cs_then) / 86400 ))
@@ -430,13 +548,24 @@ rd_cite_check() {
 
     {
         echo "  citations: $_cs_nsites declaration site(s) cite $_cs_ncited distinct rd item(s) —"
+        echo "          OF THE IDS THIS CALLER ITSELF PARSED ($_cs_what):"
         echo "          $_cs_n_open open, $_cs_n_closed closed, $_cs_n_absent unknown to rd,"
         echo "          $_cs_n_unlisted not resolved at all, per $_cs_rel"
         echo "          generated $_cs_stamp$_cs_age."
+        echo "          OF EVERY OTHER id the independent tree-wide rescan found -- cited by"
+        echo "          a marker family this caller's own parser does not accept (rd vms-004e):"
+        echo "          $_cs_nother distinct id(s) -- $_cs_o_open open, $_cs_o_closed closed,"
+        echo "          $_cs_o_absent unknown to rd, $_cs_o_norow not resolved at all."
+        echo "          THESE TWO CARDINALS COVER DIFFERENT POPULATIONS and must never be"
+        echo "          added together or read as one: the first is what this caller's own"
+        echo "          declarations say; the second is every other OVMX-<TOKEN>: marker in"
+        echo "          the tree, resolved to the SAME verdict, whether or not this caller's"
+        echo "          own parser would ever have accepted the line that carries it."
         echo "          FLOOR, rescanned here and not taken from the caller:"
         echo "          $_cs_tree_markers OVMX-<TOKEN>: marker line(s) under $(rd_cite_scan_dirs_label),"
         echo "          $_cs_tree_sites of them citing an id, $_cs_tree_nids distinct id(s),"
-        echo "          resolved by $_cs_rows_n ledger row(s); $_cs_n_treeunres tree id(s) unresolved."
+        echo "          resolved by $_cs_rows_n ledger row(s); $_cs_n_treeunres of the OTHER"
+        echo "          population above are closed, absent or unresolved."
         echo "          Zero cited ids is a REFUSAL here, not a pass: a counter with no"
         echo "          floor is satisfied by deleting the things it counts."
         echo "          THIS GATE DOES NOT REACH rd -- rd is nostr-backed and not"

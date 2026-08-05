@@ -29,7 +29,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
-#include <pwd.h>
 #include <dirent.h>
 #include <fcntl.h>
 
@@ -42,6 +41,8 @@
 #include "vmsfs/device.h"
 #include "vmsfs/filespec.h"
 #include "vms/logical.h"
+/* Whose mailbox this is comes from the executive (vms-a30). */
+#include "vms_kif.h"
 #define SYSUAF_PATH     VMS_SYSUAF_PATH
 #define MAIL_SUBDIR     ".vmsmail"
 #define MAIL_INDEX      "MAIL.IDX"
@@ -142,13 +143,15 @@ static int user_exists(const char *username)
         fclose(fp);
     }
 
-    /* Fall back to /etc/passwd for Linux users */
-    char lower[MAX_USERNAME];
-    strncpy(lower, username, sizeof(lower) - 1);
-    lower[sizeof(lower) - 1] = '\0';
-    for (int i = 0; lower[i]; i++)
-        lower[i] = (char)tolower((unsigned char)lower[i]);
-    return (getpwnam(lower) != NULL);
+    /*
+     * DELETED, NOT REPLACED (vms-a30): a getpwnam(lowercased name) fall
+     * back to /etc/passwd stood here. SYSUAF is the VMS account database;
+     * consulting the host passwd file made every Linux login a VMS user
+     * as far as MAIL was concerned. A VMS account that is not in SYSUAF
+     * does not exist (Rule 10 -- match VMS or make the condition
+     * unreachable; a local guess is neither).
+     */
+    return 0;
 }
 
 /* Get home directory for a VMS username */
@@ -192,18 +195,12 @@ static int get_user_homedir(const char *username, char *homedir, size_t sz)
         fclose(fp);
     }
 
-    /* Fall back to /etc/passwd */
-    char lower[MAX_USERNAME];
-    strncpy(lower, username, sizeof(lower) - 1);
-    lower[sizeof(lower) - 1] = '\0';
-    for (int i = 0; lower[i]; i++)
-        lower[i] = (char)tolower((unsigned char)lower[i]);
-    struct passwd *pw = getpwnam(lower);
-    if (pw) {
-        strncpy(homedir, pw->pw_dir, sz - 1);
-        homedir[sz - 1] = '\0';
-        return 0;
-    }
+    /*
+     * DELETED, NOT REPLACED (vms-a30): the /etc/passwd fallback that
+     * stood here handed back pw_dir -- a Linux home directory -- as a
+     * VMS account's default directory. Same defect as in user_exists():
+     * SYSUAF answers this or nothing does.
+     */
     return -1;
 }
 
@@ -863,22 +860,44 @@ int main(int argc, char *argv[])
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
 
-    /* Determine current username */
-    const char *env_user = getenv("VMS_USERNAME");
-    if (env_user && env_user[0]) {
-        strncpy(g_username, env_user, sizeof(g_username) - 1);
-        g_username[sizeof(g_username) - 1] = '\0';
-        str_upcase(g_username);
-    } else {
-        struct passwd *pw = getpwuid(getuid());
-        if (pw) {
-            strncpy(g_username, pw->pw_name, sizeof(g_username) - 1);
-            g_username[sizeof(g_username) - 1] = '\0';
-            str_upcase(g_username);
-        } else {
-            strncpy(g_username, "SYSTEM", sizeof(g_username) - 1);
-        }
-    }
+    /*
+     * ============================================================
+     * WHOSE MAILBOX THIS IS COMES FROM THE EXECUTIVE (vms-a30)
+     * ============================================================
+     * g_username feeds build_maildir() directly, so this is the value
+     * that PICKS THE MAILBOX. It is a real identity decision and it is
+     * the executive's to make (CLAUDE.md Rule 11).
+     *
+     * WHAT USED TO STAND HERE, so nobody puts it back: a three-step
+     * chain -- getenv("VMS_USERNAME"), then getpwuid(getuid()) upcased,
+     * then the literal "SYSTEM". It is the same shape deleted from
+     * lex_user(), F$IDENTIFIER and sys$sndopr, and MAIL.EXE was the last
+     * binary carrying it. Every step is a value the process itself
+     * controls or a host fact that is not a VMS identity: any caller
+     * that could set VMS_USERNAME could open another user's mail, and
+     * falling back to the local passwd file lets a Linux account decide
+     * a VMS question. That is CLAUDE.md Rule 10's illegal third answer.
+     *
+     * THERE IS NO ABSENT-EXECUTIVE BRANCH AND MUST NOT BE ONE, and in
+     * particular no message is invented for one. "The executive did not
+     * answer" is the per-call condition vms-a35/vms-0ff deleted rather
+     * than handled product-wide, on the ground that PID 1 refuses to
+     * bring OVMX up without /dev/vms and holds it open for the life of
+     * the system (src/ovmx_init/ovmx_init.c, executive_attach). Inventing
+     * a %MAIL-F- or %OVMX-F- message here would repeat the EXECDEV /
+     * NODEVTAB mistake recorded in src/vmsdcl/dcl_cmd_show.c. So on the
+     * one OVMX runtime this cannot fail; off it, MAIL exits without
+     * opening anything rather than guessing whose mail to open.
+     * ============================================================
+     */
+    struct vms_procinfo self;
+    memset(&self, 0, sizeof(self));
+    if (!(vms_kif_getjpi_self(&self) & 1) || self.username[0] == '\0')
+        return 1;
+
+    strncpy(g_username, self.username, sizeof(g_username) - 1);
+    g_username[sizeof(g_username) - 1] = '\0';
+    str_upcase(g_username);
 
     /* Build maildir for current user */
     build_maildir(g_username, g_maildir, sizeof(g_maildir));

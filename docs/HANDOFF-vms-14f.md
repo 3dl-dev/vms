@@ -1,43 +1,103 @@
 # HANDOFF — vms-14f, the executive-residency dispatch
 
-**Originally written 2026-08-01. Rewritten 2026-08-02, and rewritten again 2026-08-03 after the round
-that produced the SEVENTH Phase 2 verdict.** Read §1 first. Everything else is reference §1 sends you
-to.
+**Revised 2026-08-05 (round 10), after the round that finished the last wrong-answer defect and
+found the data file underneath it was an invention.** Read §0-R10 first, then §1.
 
-Every number below was re-derived on 2026-08-03 by the command named beside it. Where a figure comes
-from a run I did not repeat, it says so.
+Every number below was re-derived on 2026-08-05. **Re-derive them again.**
 
 ---
 
-## 0. What changed since the 2026-08-02 revision — read this before trusting anything you remember
+## 0-R10. What changed in round 10
 
-| The 2026-08-02 revision said | Actually |
+Round 10 worked exactly one item, `vms-2f8`, because it turned out to be two.
+
+| The 2026-08-04/round-9 revision said | Actually |
 |---|---|
-| main is at `eff4fe3` | **main is at `f04b3d6`**, attesting product tip **`8e8be98`**. It travelled `eff4fe3` → `a4ead89` (#48) → eight more merges → `8e8be98`. Re-derive it; do not quote this line back later. |
-| "`vms-cb5` — **PR #48 OPEN**… Verify CI, then merge" — the document's single named loose end | **#48 was merged at `2026-08-02T02:42:42Z`.** That revision was committed at `2026-08-02T02:30:05Z`. **The only loose end it named was gone twelve minutes after it was written**, and every agent that read it started by chasing something that did not exist. |
-| closure = **23 open** by DAG walk from `vms-14f` | **35 open**, measured today by the same walk (`rd list --json`, transitive `blocked_by`, no cycles). Two of the old 23 closed with #48 (`vms-f39`, `vms-f42d`); **fourteen** members have been filed since that revision was committed. |
-| "`vms-b33` is UNBLOCKED and `active`. The fifth Phase 2 verdict is the next thing to run." | Runs five, six and seven have all been run and all returned **NO-GO**. `vms-b33` is **`blocked` again**, by five items that did not exist when that sentence was written. |
-| `libssh-dev` is **absent**, local ctest is 39/41, and the `vms-ecf` gate honestly refuses on this host | **`libssh-dev` 0.10.6-2ubuntu0.4 is installed.** `src/vmsssh` configures, the build-derived gates can compile every product source, and that refusal is gone. Local ctest is **59 tests** on today's main. |
+| closure = **30 open** | **28 open.** `vms-2f8` closed; `vms-e60`/`vms-82a` had already closed. |
+| `vms-2f8` is "F$IDENTIFIER's data source … not a wrong-answer defect" | **Half right, and the wrong half was the dangerous one.** The SOURCE question was real and is now answered. But the file it was going to be pointed at — the shipped `RIGHTSLIST.DAT` — **was an invention**, and wiring the reader to it unchanged would have shipped six wrong answers *while looking like it had started reading a real facility*. |
+| local ctest **64 tests**, 1 expected failure | **66 tests, 2 failures.** `test_libvms_protection` (`vms-2a1`, the documented apparmor one) and **`rd_citations_fresh`, which is RED ON MAIN and was before this round** — filed as `vms-344`, left exactly as found. |
+| disk **2.7 GB free, 99%** | **4.5 GB free, 98%.** Slightly better. Still do not prune `vat-env-*`. |
+| no PR open | **PR #79 merged**, `e68fc4d`, 35/35 CI green by SHA `4fe0deb`. |
 
-### And a constraint on HOW this round could be run, which shaped everything
+### What `vms-2f8` actually was
 
-The guard hooks around worktrees are now tight enough to change the dispatch pattern, and a session
-that does not know this will burn a cycle discovering it:
+`F$IDENTIFIER` now READS the rights database (`src/libvms/rtl/rightslist.c`): general identifiers
+from `SYS$SYSTEM:RIGHTSLIST.DAT`, UIC identifiers **derived** from SYSUAF rather than duplicated,
+because two files free to disagree about one account's UIC is the defect `vms-e60` closed.
 
-- **An agent isolated in an `agent-*` worktree cannot touch the shared checkout.** Measured here: a
-  command whose `cd` lands in `/home/baron/projects/vms` before running `git` is refused outright,
-  and so is any command the hook cannot statically prove stays inside the worktree — pipelines,
-  `for` loops, `$(…)` substitution and `>` redirects inside a compound command all get refused. Every
-  `rd` call has to be issued plain and separately. Budget for it; it roughly doubles the tool calls in
-  any measurement pass.
-- **Reported but NOT verified by me, so treat as a lead rather than a fact:** that a session whose cwd
-  lands in a *non*-`agent-*` worktree is blocked for all tool use, and that non-isolated subagents
-  inherit that cwd and inherit the block. I could not test either from inside an isolated worktree. If
-  you hit it, that is what it is.
+**The shipped file carried `INTERACTIVE:1 BATCH:2 NETWORK:3 LOCAL:4 REMOTE:5`, all attributed
+`RESOURCE`. Asked of the oracle: none of 1–5 is an identifier on real VMS — every one answers the
+null string.** The real environmental identifiers are `%X80000001`–`%X80000006` assigned
+*alphabetically*; `DIALUP` was missing entirely; the Attributes column is empty. Corrected in the
+same commit that made anything read it. Transcript: `docs/oracle/vax73-rights-database.md` (new).
 
-The practical consequence for orchestration: measurement and merging must happen in the shared
-checkout by a non-isolated session, and implementation must happen in isolated worktrees. Do not plan
-a round that needs one agent to do both.
+The `8388736 -> "DEFAULT"` reverse mapping round 9 deliberately declined to add on the strength of
+symmetry has now been **asked** and answers `DEFAULT`. Not inferred — read out of the database.
+
+### The three things round 10 found that outlive it
+
+1. **`vms-79f` — the VMS-native shareable recipes keep a hand-maintained TU list parallel to
+   `CMakeLists.txt`, and nothing checks they agree.** Adding `rtl/rightslist.c` to CMake and not to
+   `src/vmslink/mk_libvms_shr.sh` left **every local signal green** — clean build, 64/66 ctest,
+   every host test of the new code passing — and failed only in CI's arm64 VMS-native DCL link job,
+   5m19s in, on an undefined symbol. `mk_vmsrms_shr.sh` has the same shape. The comment claiming
+   the lists were equal was itself the thing that was wrong.
+2. **`vms-c71` — `SHOW SYMBOL` renders integers as 64-bit**: negatives sign-extend in Hex/Octal, and
+   the Octal field is 12 digits where VMS prints 11 (wrong for *positive* values too, today). The
+   six general identifiers are the first negative values `F$IDENTIFIER` can return, which is why
+   this surfaced now.
+3. **`vms-344` — `rd_citations_fresh` is red on `main`.** `sys_lock.c`'s three `OVMX-EXECUTIVE`
+   declarations cite `vms-82a`, which round 9 closed. **Regenerating the ledger does NOT fix it** —
+   that fixes only the freshness half; the tree-wide rescan fails independently. And the underlying
+   tension is general: an `OVMX-EXECUTIVE` declaration is a claim a facility IS executive-resident,
+   yet the gate requires it to cite an item, and every item eventually closes. **Every successful
+   executive-residency fix arms this same red the moment its item closes.** `vms-82a` is the first
+   to fire, not the last.
+
+### Method, round 10
+
+**THE MEASUREMENT THAT LOOKED LIKE A FINDING, THREE TIMES.** Establishing whether new assertions
+would enlarge a control's red set meant applying each `dcl-fident-*` mutation and probing. The first
+three attempts all reported "no effect" — a clean, believable result. All three were **void**: first
+the subcommand was wrong (`inject`, not `apply`), then the src-root was wrong (`.`, not `src`, since
+`targets` is a path relative to it). The landed-check that should have caught it diffed against git
+`HEAD`, which was already dirty with the round's own edits, so it reported "landed" every time.
+*Prove which binary ran — the md5 of the artifact, not the exit status of the tool.*
+
+**A FIRST GUESS AT WHICH ASSERTION CATCHES WHICH MUTATION WAS WRONG, IN THE COMFORTING DIRECTION.**
+The new test's header claimed the `1..5` miss checks would catch a reader wired to the uncorrected
+file. Measured: they do not — the old file's bare-decimal values do not parse at all, so the
+*positive* checks fail instead. A second mutation (old numbering in the new notation) is what the
+misses actually catch. Both populations are in the test because neither mutation is caught by both.
+
+**AN ASSERTION YOU CANNOT MEASURE WHERE IT RUNS DOES NOT GO THERE.** The discriminating `4 -> ""`
+check would have enlarged two declared red sets, and its behaviour under one control is
+host-sensitive (`getpwuid(4)` is `SYNC` on this host; the guest stages a different passwd). It was
+kept out of the QEMU suite and lives in the host test where its negative control is real and
+complete. Declaring a red-set entry measurable only on the host, for a gate that runs in QEMU, is
+the reasoning the manifest's own rulings forbid.
+
+---
+
+## 0. What changed in round 9
+
+| The 2026-08-04 revision said | Actually |
+|---|---|
+| "**Do this first: merge #74**" | **Done — merged by the operator** at 20:59:44Z as `a923eff`, 42 seconds into this round's first command. Pre-merge check still stands: the diff was confined to `tests/qemu/*` + `ci.yml`, 1832 insertions / 3 deletions, no census reversion. |
+| closure = **34 open** | **30 open.** `vms-b2e` and `vms-a30` fixed and closed; `vms-4c2` filed and wired. |
+| four real VMS defects remain | **Two.** `vms-b2e` and `vms-a30` are fixed (PR #76, squash `9b72ba4`). `vms-82a` and `vms-e60` remain, plus `vms-2f8`. |
+| `vms-d894` is the scope call you inherit | **Raised as an `rd` gate (`scope`) with a recommendation, not decided.** It was NOT closed by assertion. §3. |
+| local ctest **63 tests** | **64 tests**, 1 expected failure (`vms-2a1`). #74 added one. |
+| disk **3.4 GB free, 98%** | **2.7 GB free, 99%.** Tighter than briefed. Still do not prune `vat-env-*`. |
+| PR #75 is open | **Merged** (`75f49dc`). PR #71, recorded here as "closed as refuted", was **fixed and merged** (`5dde28c`). |
+
+### Then round 9 continued, and finished the defects
+
+| | |
+|---|---|
+| "**two** real VMS defects remain" | **Zero.** `vms-e60` and `vms-82a` are fixed in the same PR as this revision. `vms-2f8` (F$IDENTIFIER's data source) and `vms-4c2` (AUTHORIZE's positive control) remain, but neither is a wrong-answer defect. |
+| `vms-e60` "the site set is nine sites in four files" | Confirmed and fixed, **plus two decimal literals** the enumeration missed: `DEFAULT_UIC_GROUP` and `next_uic_member()`'s floor. |
+| `vms-82a` "real executive work, not cheap" | Correct, and the expensive part was not the kernel change. It was that `kstat_to_ss()` carries **three defect-manifest controls**; deleting it naively would have meant deleting three defects, their record rows and lowering the floor — **the exact action the open `vms-d894` gate is about**. The controls were **repointed at the executive** instead: 42 defects, floor 42, every record row still valid, gate not prejudged. |
 
 ---
 
@@ -46,382 +106,259 @@ a round that needs one agent to do both.
 The objective is **`vms-14f`**: *OVMX runs unmodified VMS software: executive-resident system
 facilities, no facades.*
 
-**State (re-derived 2026-08-03):** closure = **35 open** by DAG walk from `vms-14f`, counting the epic
-itself, no cycles. Main is at **`f04b3d6`** (product `8e8be98`).
+**State (re-derived 2026-08-05, end of round 10):** closure = **28 open** by DAG walk from
+`vms-14f`; **16 of them unblocked**. Main is at **`e68fc4d`**. No PR is open.
 
-**`vms-b33` is `blocked`, and by exactly five items** — every one of them a *two-edit escape from a
-static gate*, every one filed on 2026-08-03 by the seventh verdict's adversary:
+> **Round 10 note on §1's "go here next" list below: both of its entries are DONE.** `vms-e60` and
+> `vms-82a` closed in round 9; `vms-2f8` closed in round 10. **There is no wrong-answer VMS defect
+> left unblocked in this closure.** What remains unblocked is `vms-4c2` (AUTHORIZE's positive
+> control — needs a human first, §6) and fifteen machinery items. The ratio the last two revisions
+> kept flagging is now the whole picture, and §6's "whether to keep paying for the machinery" is
+> the live question rather than a background one.
 
-| Blocker | Pri | What it buys, for two edits |
+**`vms-b33` is still blocked by exactly one item: `vms-d894`**, and `vms-d894` is now sitting on a
+human as an `rd` **scope gate**, not on you. Do not close it by asserting its criterion is met — it
+is measurably not met (§3). Everything else in the closure is workable without it.
+
+**Do this first: `rd gates`.** If `vms-d894` has been answered, act on the answer. If it has not,
+**do not wait** — go to the defects below.
+
+### The honest shape of what remains
+
+| Category | Count | Note |
 |---|---|---|
-| `vms-c79` | p1 | `if (0) { (void)vms_kif_chkpriv(0); }` inside a function that IS reached → census `44/32/12` PASS |
-| `vms-004e` | p1 | cite an id that has never existed, plus the row the generator itself emits → census, register and freshness all rc=0 |
-| `vms-659` | p1 | a suite whose whole body is two `printf`s joins the "PROVEN able to go red" set |
-| `vms-d894` | p2 | delete a control for 20 lines across 2 files; the gate prints a smaller number as a PASS |
-| `vms-35f` | p1 | a **directory** named `vms-<alnum>` satisfies the floor whose entire job is that you cannot get there by deletion |
+| Gate / harness machinery | **19** | Whether the measurement proves what it claims |
+| Phase containers & rulings | 6 | `vms-14f`, `vms-b33`, `vms-042`, `vms-150`, `vms-cb5`, `vms-b8d` |
+| End-of-epic sweeps | 5 | Cannot start until the phases close |
+| **Real VMS defects** | **2** (+2) | `vms-82a`, `vms-e60`; plus `vms-2f8` and `vms-4c2` |
 
-**The next thing to run is not an eighth verdict.** Seven have been run; all seven returned NO-GO; in
-all seven **every facility attacked survived**. The blocker has been *the gate the verdict rests on*
-since run 3. Run 7 finally said what that means (§3), and the fix is a design call, not another
-measurement pass. Fix the four gates' vocabulary and the five escapes first.
+**Nineteen of thirty remaining items are still machinery that measures the work rather than the
+work.** That was the last revision's headline and it survived a round in which four items closed,
+because the round deliberately spent itself on the defects instead. Anyone picking this up is still
+inheriting a verification program with a VMS program inside it.
 
-`vms-150` (Phase 3 veracity) is blocked by nine open items: `vms-a30`, `vms-95f`, `vms-38c`,
-`vms-d33`, `vms-05e7`, `vms-ed8`, `vms-41b`, `vms-35f`, `vms-10c`.
+### Go here next, in this order
 
----
+**1. `vms-e60` — the question is already answered; the work is mechanical.** SYSUAF.DAT's UIC fields
+are **OCTAL**, derived (not picked) from an oracle value that is already pinned *and already
+asserted in-tree* at `tests/qemu/test_syssvc_ident.c:1039`: `F$IDENTIFIER("DEFAULT")` = `8388736` =
+`%X00800080` = `[200,200]` octal. The file literally contains `200|200`. Octal reproduces the
+oracle; decimal (`13107400`) matches nothing. SYSTEM's `1|4` reads the same in both bases — that is
+the coincidence that hid this.
 
-## 2. What this objective actually delivers, and what it does not
+**The site set is NINE sites in FOUR files, not the three the item names**, and they must move in one
+commit or the fix recreates the same defect with different endpoints. The two the item misses are
+`src/libvms/syssvc/sys_uai.c:137,141` and — the worst — `src/ovmx_init/ovmx_init.c:1061,1062`, where
+**PID 1 parses SYSTEM's UIC and stamps it into the executive** via `vms_kif_setident()`. Full
+enumeration, including the write path (`vms_authorize.c:203`, `%u`→`%o`), the two display sites and
+the two `/UIC=[g,m]` input sites, is in the item's notes. The fixing commit must carry a
+**discriminating** test — assert DEFAULT resolves to `8388736`; SYSTEM passes under both bases and
+proves nothing.
 
-**The epic's title overpromises relative to its closure. Say so out loud rather than discovering it at
-the end.** Nothing this round changed that, and the honest limit got sharper, not softer.
-
-What the closure delivers is the *substrate*: a VMS executive that really is the executive. Process
-table, device table, event flags, identity and privileges, terminal characteristics and the lock
-manager live in `vms.ko` and are proven **cross-process** — A writes, B reads — because that is the
-only test a per-process fake fails. PID 1 refuses to boot without it; the per-call "executive absent"
-fallbacks were **deleted rather than corrected**, so there is no degraded mode to drift back into.
-
-What it does **not** deliver:
-
-- **Running unmodified VMS images.** That is the toolchain and image-activation work — `vms-ade`,
-  `vms-913` — a different epic.
-- **Remote access.** SSH is excluded from Phase 3. `vms-b8d` exists to *decide* whether it is next.
-
-**THE LIMIT THAT MUST STAY VISIBLE, and it is now the item's own clause text.** On 2026-08-02 the
-operator ruled `vms-1e1` **(B)**: `vms-b33`'s *closing condition* governs, not its *clause*. The item
-had carried two non-equivalent tests — the clause quantified over EVERY facility, the closing
-condition over every WIRED facility — and with **13 of 44 entry points unwired they answer
-oppositely**, so under the clause reading `vms-b33` could never close. The amended clause is:
-
-> Every facility `vms.ko` claims AND THAT THE PRODUCT REACHES is exercised from userspace through
-> `vms_kif` against a REAL `/dev/vms`, proven cross-process (A-writes/B-reads), with a negative
-> control proving each gate can go red. Every entry point the product does NOT reach must be honestly
-> DECLARED, and its cited item must EXIST and be OPEN — machine-checked, not shape-checked.
-
-Three things about that ruling you must carry:
-
-1. **13 of 44 entry points still have no product path.** Today's census on main is `44 / 31 / 13`
-   with floors `33/33` opcodes and `5/5` selectors (printed in `8e8be98`'s own commit body).
-   **Phase 2 closing means what is wired is PROVEN, not that the executive is complete.** Anyone
-   quoting a Phase 2 GO as "the executive is complete" is misquoting it. The four unwired families —
-   `vms-pv1`, `vms-as1`, `vms-dv1`, `vms-a86` — gate Phase 3 (`vms-042`), not Phase 2.
-2. **(B) is only in force while the citation check is machine-checked**, which is `vms-8cc`. That was
-   the binding side condition, and it landed this round (§3). But `vms-004e` and `vms-35f` are both
-   attacks on exactly that check, so the side condition is currently **weaker than the ruling
-   assumes**. That is a live consideration for whether (B) still holds, not a settled one.
-3. **The undo is one command:** `rd dep add vms-b33 vms-pv1` (and `vms-as1`, `vms-dv1`, `vms-a86`),
-   then restore the clause text from `vms-1e1`'s history. That returns reading (A) and re-blocks
-   `vms-b33`.
+**2. `vms-82a` — real executive work, not cheap.** `vms.ko` uses a private numbering (100/108/116)
+and never produces an `ssdef.h` value; `kstat_to_ss()` manufactures the VMS-visible status in the
+calling process, so `SS$_DEADLOCK` vs `SS$_NOTQUEUED` — a *different answer*, not a different
+spelling — is decided in userspace. This is the facility the whole executive ruling turns on. Note
+the binding side condition in the item: the `OVMX-PARTIAL`/`OVMX-LOCAL` declaration block at the top
+of `src/libvms/syssvc/sys_lock.c` must be rewritten **in the same commit**, and
+`tracking/rd-citations.tsv` regenerated with `tools/gen_rd_citations.py` **from the repo root**
+(see §5 — running it from a worktree produces churn).
 
 ---
 
-## 3. What merged this round, and the seventh verdict
+## 2. What merged in round 9
 
-### The merges
+| Item(s) | PR | What it bought |
+|---|---|---|
+| `vms-d894`/`vms-659` | #74 | The negctl driver emits what it OBSERVED; the static gates read it. **Merged by the operator**, not by this round. |
+| — | #75 | The previous revision of this document. |
+| `vms-004e` follow-up | #71 | The FAIL headline names the population that found the id. Recorded in the last revision as "closed as refuted"; it was fixed and merged. **Not mine.** |
+| `vms-b2e`, `vms-a30` | **#76** | AUTHORIZE and MAIL take identity from the executive, not the environment. |
 
-Eight PRs closing `vms-b33` blockers landed between 2026-08-02T17:15Z and 2026-08-03T22:56Z. **Every
-SHA below was checked against `gh api repos/3dl-dev/vms/commits`**, and every one shows `success` on
-both **Build & Test** and **Kernel Executive — Per-Facility Negative Controls (attribution)**.
+**Closed with verified reasons:** `vms-b2e`, `vms-a30`.
+**Filed:** `vms-4c2` (wired as a blocker of `vms-cb5`).
+**Raised to a human:** `vms-d894` (`rd gate`, type `scope`).
 
-| Item(s) | PR | SHA on main | What it bought |
-|---|---|---|---|
-| `vms-279` | #49 | `ca193e4` | Floors the negative-control manifest against its own deletion. Before: 37 of 42 defects deletable individually, **32 of 42 in one edit** by exact set-cover, with the coverage drop printed only as a NOTE. Now anchored in the suite sources. |
-| `vms-e2b` | #50 | `2d80e3f` | Census reachability derived from `compile_commands.json` and read **after preprocessing**. All six measured buys closed — including the 13-additive-edit file of fabricated callers that was in no CMakeLists and `#include`d by nothing. |
-| `vms-c19` | #51 | `f5a321e` | Register universe = the **build union glob**, not where the files sit; parenthesized declarators bind. |
-| `vms-8cc` | #52 | `47a6678` | A cited rd id must **exist and be open**, not merely be well-formed. Mechanism, shaped by rd being nostr-backed and unreachable from CI: a committed derived ledger `tracking/rd-citations.tsv`, a sourceable checker CI reads, and a host-side freshness test. |
-| `vms-c13` | #55 | `35896b5` | A call counts only if its **enclosing function is reached** — a product call graph over the preprocessed build set, roots = `main()` plus every function prototyped in a compiled header. All five dead-function buys went rc=0 → rc=1. Pristine unchanged at `44/31/13`. |
-| `vms-fab` | #54 | `8552c29` | The register's 88 declarations went from **9 cited ids — 7 CLOSED, carrying 85 sites — to 20 ids, all OPEN**. 33 sites to 12 existing live owners, 52 to 6 new narrow ones, **zero resolved by deleting a declaration**. |
-| `vms-a85` | — | inside `8552c29` | Two census controls had gone **vacuous** because `vms-fab` removed the last closed citation in the tree; control 34 was certifying the evasion it existed to catch. **No separate SHA on main** — fixed as `a42a3d9` on `work/vms-fab-citations` and squashed into #54. |
-| `vms-27e` `vms-d79` `vms-d98` | #53 | `c73726a` | Ledger hardening. The freshness test no longer routes through the generator it validates; the generator's `ABSENT:`/`CLOSED:` stderr, which used to be piped into the report **unread**, is now parsed and reds on contradiction; the checker derives and prints its own floor by independently rescanning `src/` and `tools/`. |
-| `vms-32e` | #57 | `8e8be98` | The register checks its citations too — `49 → 62` controls, coverage `27 → 39`. |
+### What #76 actually proved, and what it did not
 
-`8e8be98` is green on **all 35 checks**. Its printed cardinals, which are today's baseline: register
-`88 services / 21 exec / 60 state / 67 USERSPACE / 14 PARTIAL / 7 EXECUTIVE / 87 protos / 88 exported
-/ 0 symonly`, citations `88 sites, 20 ids, 20 open, 0 closed`; register negctl `62 controls, coverage
-39/39`; census `44/31/13`; census negctl `43 controls`; `rd_citations_fresh` `22 rows, 22 open, 16
-self-controls`.
+`AUTHORIZE.EXE` decided who may manage SYSUAF from `getenv("USER")`. Measured before: `env
+USER=baron` refused; `env USER=SYSTEM` opened a full SYSUAF-management session **and printed
+SYSTEM's password hash**. Measured after: all three refuse.
 
-*(Main also moved through four SCS-layer merges — #56 `d9b69cc`, #58 `62aff14`, #59 `6a5674a`, #60
-`31d497e`. Those belong to `vms-187`, a different dispatch. They matter here only because they change
-the test count under you; see §5.)*
+**That replay is weaker than it looks and the item says so.** The dev host has no `/dev/vms`, so
+every refusal is equally explained by the executive read failing rather than by the SYSPRV bit being
+clear. A `check_privilege()` hardwired to `return 0` passes everything in the repo today. The
+positive control — a SYSPRV holder is still **admitted** — is unproven at every layer and is
+`vms-4c2`, which also blocks `vms-cb5`.
 
-### The seventh verdict: NO-GO
-
-Measured by an independent adversary on `d9b69cc` and on PR head `3efb610`. **Five escapes, every one
-at two edits** — they are `vms-c79`, `vms-004e`, `vms-659`, `vms-35f`, `vms-d894`, tabulated in §1.
-Plus:
-
-- **`vms-38c`, unchanged at two edits.** Its paying call is now best written
-  `if (0) { (void)sys$wflor(0u,0u); }` — i.e. the `vms-c79` trick applied to the register.
-- **`vms-41b`, RE-PRICED CHEAPER at two edits across two files — and it links clean.** It was filed
-  earlier on 2026-08-03 as `vms-c13`'s own disclosed residual, at *three* edits across three files. It
-  got cheaper on measurement, not more expensive.
-
-**The sentence these four gates have actually earned, and the only one a verdict may use — quoted
-verbatim:**
-
-> they price evasions in the low single digits of edits and print the price; they do not execute
-> anything, and every PROVEN / every / cannot line in their output is a string relation over
-> declarations the tree makes about itself.
-
-Three items reached that independently — `vms-d33`, `vms-38c`, `vms-41b` — *before* the adversary
-demonstrated it. That convergence is the reason to believe it rather than argue with it.
+**The durable half is the census.** `test_env_identity_census.sh` was green throughout the exploit's
+life because it scanned five `VMS_`-prefixed names and plain `USER` was outside them. Its "6 sites"
+was true of its own scope and said nothing about AUTHORIZE. `USER`/`LOGNAME` are now in the
+universe, and with MAIL's reader deleted the write-only claim iterates `$VARS` — every identity
+variable in `src/` and `tools/` is now write-only, a total claim where it was partial.
 
 ---
 
-## 4. What must NOT be lost in the fix
+## 3. `vms-d894` — the one blocker, and why it does not close
 
-Read this before touching any of the four gates. The seventh verdict is a narrow finding and it is
-very easy to over-correct into deleting something that works.
+**STATUS (round 9): raised as an `rd` scope gate with a recommendation. NOT decided, NOT closed.**
+Check `rd gates` before reading further — if it has been answered, this section is history. The
+recommendation given was **(A) close as sufficient**, on the ground that 19 of 30 remaining items
+are already machinery and option (B) spends a round hardening a measurement against an adversary who
+must already write a self-contradicting three-file, 69-line commit. Absent an answer the round did
+neither and worked the defects instead.
 
-**`tests/qemu/run_facility_negctl.sh` genuinely does the thing.** It injects every defect in the
-42-entry manifest one at a time, rebuilds `vms.ko` and the suites inside the container, boots QEMU
-against a real `/dev/vms`, and asserts the complete red set is **EXACTLY** the set the manifest names
-— no missing member and no extra member — with a pristine positive control run first, so a harness
-that fails indiscriminately cannot pass it. **That CI job was `success` on every one of the eight
-merge SHAs in §3**, checked individually. It is the one instrument in this program that executes
-anything.
+Everything below is the measurement the gate was raised on. It is measured, not argued.
 
-**The defect is that the STATIC gates borrowed its vocabulary.** The census, the register, the
-manifest selftest and the freshness test say "PROVEN", "every" and "cannot" about relations they
-compute over declarations. Saying **"declared"** and **"anchored"** where they mean declared and
-anchored is a one-line honesty fix per gate and **should not wait for runtime attribution**. Do it
-first; it costs nothing and it makes every later claim true.
+**What PR #74 builds.** `run_facility_negctl.sh` — the only thing in this program that executes
+anything — now emits `tests/qemu/facility_negctl_observed.tsv`: one `RUN` row per defect, one `RED`
+row per observed failing assertion. The static gates read it instead of guessing.
 
-**THE TRAP, named for the next round: do not special-case `if (0)`.** The next form is
-`if (never_true_global)`, and after that `if (argc < 0)`. **Enumerating syntactic forms is the losing
-side of this game.** `vms-c13` already showed the winning side once — it replaced "is there a call
-site" with "is the enclosing function reached", a *semantic* question — and `vms-c79` exists only
-because that call graph still credits a branch the compiler deletes. The answer is a reachability
-question the compiler can already answer, or the question moves to runtime. It is not a bigger regex.
+**It is live, not theoretical.** The first real record is committed: CI run `30940272725`, job passed
+in 15m44s, tree-commit `6ffde90`, positive-control pass, **42 RUN rows and 272 observed failing
+assertions**. `FACILITY_NEGCTL_REQUIRE_RECORD` is now `1`.
 
----
-
-## 5. Method — the part that transfers
-
-The most valuable thing in this document. Each was paid for. The first block is from earlier rounds
-and still holds; the second was earned on 2026-08-03.
-
-**Two legal answers, never three** (Rule 10). Match VMS, or make the condition unreachable. The
-illegal third — a reasonable-looking handler for a condition VMS never faces — is the defect behind
-nearly every facade found here. **It always looks like diligence.**
-
-**The decisive test for a facility is A-writes / B-reads** (Rule 11). A per-process fake passes every
-single-process test perfectly.
-
-**Delete emphatic claims; do not correct them.** Every round that deleted ended clean; every round
-that reworded shipped a new false claim. This covers runtime output — a sentence OVMX prints is a
-claim. **`vms-32e` and `vms-c13` both deleted a false "shared with the userspace service register"
-sentence this round; neither rewrote it.**
-
-**Never write a "cannot"/"only"/"never"/"every" you have not tried to break by execution.**
-
-**A green result only means something if the mutation would otherwise have changed behaviour.**
-
-**A cardinal must be derived-and-printed or absent.**
-
-**Run `nm` on the built artifact.** A facade is invisible in source review and obvious in the symbol
-table.
-
-### Earned 2026-08-03
-
-**A GREEN ON A STALE BASE IS NOT EVIDENCE, and this was measured twice.** PR #53 was `35/35` green
-while sitting on base `44870ac`, which predates #55. **I re-derived the gap by configuring both trees:
-`44870ac` enumerates 56 ctest tests; `d9b69cc`, the tree it was about to land in, enumerates 58.** A
-branch can be green on a suite that is missing the very tests written to catch it. The rule: before
-merging, `update-branch` and re-run — and when a queue has a required order (#55 → #54 → #53 here), a
-green earned out of order proves nothing about the merged tree.
-
-**A CONTROL CAN GO VACUOUS WHEN THE TREE CHANGES UNDER IT, and the *correct* fix is what disarms it.**
-`vms-fab` did exactly the right thing — repoint 85 declaration sites off closed items — and thereby
-broke five register controls keyed on the literal `(vms-5b4)` (the seds became no-ops, so the
-mutations never landed and the expected red never fired) and two census controls keyed on `vms-fb9` as
-their closed-item exemplar. **The controls were keyed on a fact that is SUPPOSED to change.** Both
-were fixed by changing the controls' **AIM**, never by touching an assertion; both now **synthesize
-their fixture inside the sandbox** against a synthetic id no product file cites.
-
-**AND SEVEN MORE CAN REDDEN PARTLY ON THEIR OWN FIXTURE WITHOUT ANYONE NOTICING.** When `vms-32e`
-wired the register to the citation checker, nine fictional-service controls citing the closed
-`vms-5b4` were expected to break. The two GREEN ones did. **The seven RED ones did not fail** —
-`expect_red` required only that their named fragment appear somewhere in the output, so each was
-reddening *partly on its own fixture*, one edit away from reddening *only* on it. The remedy is a
-**forbidden-fragment list**: a control that reds for a second, unrelated reason must fail, not pass
-quietly.
-
-**PROVE NON-VACUITY BY DISPROOF, SHOWING EXACTLY ONE CONTROL FAIL.** The pattern that worked four
-times in `vms-32e` and again in `vms-a85`: delete the mechanism the control exists to exercise, run
-the whole suite, and show the failure count is **one**, and that the one is the control in question.
-"62 passed" proves nothing by itself; "delete the 10-line `_cs_dups` block → 61 passed, 1 FAILED,
-exactly the duplicate-row control" proves the control is load-bearing *and* that nothing else was
-quietly depending on it.
-
-**UNDER-FIRING IS A FINDING, NOT A FAILURE.** `vms-c13`'s first design cut made address-taken
-functions **roots**, and was bought at the same two edits by a dead table. Making file-scope objects
-*nodes* instead fixed that — but the same change initially **redded on correct code**, a function
-reached through a live callback table. A GREEN control was added to bound the over-firing. Test a new
-disqualifier for over-firing as hard as for under-firing; a gate that reds on correct code is the one
-the next person weakens.
-
-**VERIFY AGAINST THE CHEAPER ORACLE BEFORE BRIEFING — INCLUDING WHEN THE ORACLE IS YOUR OWN MERGE
-QUEUE.** Recorded because it is mine. I briefed the run-7 adversary describing the register as already
-checking its citations. **Those numbers were PR #57's, not main's — #57 was still open.** The
-adversary caught the mismatch itself and measured *both* trees. An orchestrator running a merge queue
-holds a picture of the tree that is ahead of the tree, and it does not announce itself.
-
-**GO TO THE LAB BEFORE DECLARING SOMETHING UNPINNABLE.** Escalate what only the operator knows — not
-what you can measure.
-
----
-
-## 6. Environment and harness facts — read before running anything
-
-**Disk is the binding constraint on this host and it is tight.** Measured 2026-08-03: `/dev/sda1`,
-154 G total, **8.0 G available, 95% used**. Build one image at a time, `docker rmi` immediately, and
-prune *dangling* layers only. This round was run under a standing "no builds, no container images"
-constraint for exactly this reason.
-
-**Do not reclaim space by deleting the big images — they are not ours.** `docker images` shows nine
-tags `192.168.2.43:30500/vat-env-v49` … `v57`, 9.3–9.71 GB each as reported (that column double-counts
-shared layers, so the true footprint is smaller than the naive ~86 GB sum). Nothing in OVMX builds or
-consumes them. The OVMX-owned images on this host are `ovmx-test:latest` (126 MB),
-`192.168.2.43:30500/ovmx-vaxlab:2` and `:3` (201 MB each) and `simh-build:24.04` (595 MB).
-
-**`libssh-dev` is now installed** (0.10.6-2ubuntu0.4). `CMakeLists.txt:379-385` adds `src/vmsssh` when
-`libssh/libssh.h` is found, so every product source compiles and the build-derived gates no longer
-refuse on this host — that was the `vms-ecf` "BROKEN SYMBOL SCAN: 126 of 127 product source file(s)
-compiled" refusal the previous revision documented. Corollary worth knowing: `tests/vmsssh`
-contributes only the `term_mapping` unit test, and there is **no `vmsssh_integration` ctest in this
-tree**, so the old "39 vs 41" arithmetic is dead and quoting it will mislead you.
-
-**Local ctest is 59 tests on today's main.** Measured by configure-only enumeration
-(`cmake -S <tree> -B /tmp/… -DBUILD_TESTS=ON -DBUILD_TOOLS=ON`, then `ctest -N`; no build, no
-container, temp trees deleted). Counts at four points, all measured the same way:
+**What the gate said before and after, same tree:**
 
 ```
-44870ac  56 tests   <- the stale base PR #53 was green on
-8552c29  56 tests
-d9b69cc  58 tests   <- the tree run 7 reported against
-8e8be98  59 tests   <- today's main (#60 added one)
+before:  OBSERVED: of those 25, 0 are PROVEN ABLE TO GO RED and 25 are NAMED ONLY
+         NOT MEASURED: no execution record
+
+after:   OBSERVED: of those 25, 25 are PROVEN ABLE TO GO RED and 0 NAMED ONLY.
+         PASS: 42 of this manifest's 42 defect(s) are OBSERVED-EXECUTED
 ```
 
-**Two ctest failures are expected, and both are host-shaped rather than regressions.** Run 7 reported
-`58 tests, 2 failed, rc=8` on its merged tree. **I did not re-run ctest this round** (no builds), so
-that pair is carried from run 7 and not re-measured. Both tests do exist in today's enumeration:
+**"PROVEN" is now spendable only by a QEMU run that happened.** That was `vms-659`'s better option
+and it is done.
 
-- `terminal_identity_negctl` (#12) — ctest `TIMEOUT 120` against roughly 138 s actual. **`vms-008`.**
-- `test_libvms_protection` (#35) — 6 of 8 subtests need unprivileged user namespaces, restricted on
-  this host. **`vms-2a1`.**
+**Deletion test 1 — delete a defect, leave the record:**
 
-**`test_rd_citations_fresh` is flaky about 1 in 4, and it SKIPS in CI.** Cause: `gen_rd_citations.py`
-derives open-ness from `rd list --json`, which is **transiently incomplete** — run 7 saw 167 items
-from one cwd and 282 from another seconds apart. **`vms-10c`**, and it is a correctness defect in the
-ledger generator, not merely an unstable gate. *I did not reproduce it:* two consecutive
-`rd list --json` dumps here both returned 288 items with identical id sets, which is what a 1-in-4
-flake looks like when you get lucky. The skip is deliberate and honest —
-`tests/integration/test_rd_citations_fresh.sh:407-427` exits **77** when `rd` is absent so ctest
-reports Skipped and never Passed — but **under rule 7 a skipped test is a failing test**, and CI is
-precisely where it always skips. That is the real ceiling on the whole citation mechanism, and the
-merge commits say so rather than claiming otherwise.
+```
+FAIL: REFUSING to certify ...: it records defect(s) the manifest [no longer has]   rc=1
+```
 
-**What I did verify about the ledger, by hand, standing in for the test CI cannot run:** all 22 rows
-of `tracking/rd-citations.tsv` read `open`, and all 22 ids are present in rd's live open set. No row
-is stale today.
+and the PROVEN population drops back to **0** rather than holding a stale claim. A contradicted
+record certifies nothing.
 
-**CI `Build & Test` needed `timeout-minutes` 20 → 35** (`.github/workflows/ci.yml:20`, with the reason
-in the comment directly above it). `userspace_service_register_negctl` went **504 s → 692 s (+37%)**
-as `vms-32e` took the register negctl from 49 to 62 controls and added a per-control citation check;
-`terminal_identity_negctl` held within 1% across the same two runs, so the runner was not the
-variable. Main's job runs about 17 minutes and the 20 m cap left under three minutes of margin — it
-was killed mid-ctest with **no assertion failure**, which is the failure mode to recognise before you
-go hunting for a broken test.
+**Deletion test 2 — delete the defect AND its record rows AND lower the floor:**
 
-**The per-facility negative control job is separate and slower:**
-`kernel-executive-facility-negative-controls`, `timeout-minutes: 60`, running
-`tests/qemu/run_facility_negctl.sh` (`.github/workflows/ci.yml:586-595`). The manifest it drives holds
-**42 defects** (`tests/qemu/facility_defects.sh:255`).
+```
+OBSERVED: of those 25, 25 are PROVEN ABLE TO GO RED and 0 NAMED ONLY.
+PASS: 41 of this manifest's 41 defect(s) are OBSERVED-EXECUTED
+```
 
-**Reproduce with `docker`, not `podman`, and use your own image tag** — parallel agents race a shared
-one. The negative control is the same build with `--build-arg NEGATIVE_CONTROL=1`.
+**Every record check goes quiet and certifies a smaller manifest as fully proven.** Both files are in
+the same commit, the deleter owns both, and a regenerating CI run agrees with them.
 
-**`vms-b1f` still stands and still matters:** `tests/qemu/run_tests.sh` decides its verdict with
-`echo "$OUTPUT" | grep -q …` under `set -o pipefail`; past one pipe buffer of trailing output, `grep`
-exits first, `echo` takes SIGPIPE, and the harness prints "KERNEL MODULE TESTS FAILED" and exits 1 on
-a run with **zero failures**. It is host-sensitive — CI on main exits 0. **Judge local runs by the
-`FINAL RESULTS` line and the SUITE banners.** It also makes `run_facility_negctl.sh` refuse to run on
-workshop at all, because that driver's first step is a pristine positive control which exits 1 through
-this bug. **The driver is behaving correctly** — refusing to certify when its own control fails is the
-property `vms-ecf` added on purpose. Do not loosen it to work around a harness bug. CI is that job's
-only home.
+**So the item's actual criterion — a floor sourced from something the deleter does not own — is
+unmet.** What closes it is comparing against the **base branch's** record, which cannot be faked
+without rewriting history. Needs `fetch-depth: 0` and a base-record extraction. Deliberately not
+bundled: an untestable CI step that can red the only job which executes anything is the worse trade.
+
+Price of deleting a defect is now a **measured 69 changed lines across 3 files** — measured by the
+test, which searches for the cheapest deletable defect rather than asserting a number. It was ~21
+lines / 3 files.
+
+**The decision:** close `vms-d894` on the grounds that 69 lines and a visible three-file diff is
+enough, or build the base-branch floor. That is a scope call. **Do not close it by asserting the
+criterion is met — it is measurably not.**
 
 ---
 
-## 7. Open items filed this round
+## 4. Method — what this round paid for
 
-Seven were filed on 2026-08-03 and wired into the `vms-14f` closure. All seven are open and `inbox`.
+The 2026-08-03 and 2026-08-04 blocks still hold. **New in round 9:**
 
-| Item | Pri | Blocks | What it is |
-|---|---|---|---|
-| `vms-c79` | p1 | `vms-b33` | The census counts a branch the compiler deletes. Preprocessing kills `#if 0`; it does not kill `if (0)`. |
-| `vms-004e` | p1 | `vms-b33` | The citation completeness loop asks whether an id has a **row**, never what the row **says**. |
-| `vms-659` | p1 | `vms-b33` | `facility_defects`' "PROVEN able to go red" set is a **glob match against the manifest's own attribution claim**; neither coverage nor selftest runs anything. |
-| `vms-35f` | p1 | `vms-b33`, `vms-150` | `rd_cite_scan_tree` greps with `-Hn`, so a **directory name** matching `vms-<alnum>` fabricates a citation and satisfies floor 1. *The item's own original "fails safe" disclosure was wrong and has been deleted rather than corrected.* |
-| `vms-d894` | p2 | `vms-b33` | Nothing floors the **size** of the defect manifest. Deleting a control costs 20 lines across 2 files and prints a smaller number as a PASS. |
-| `vms-41b` | p2 | `vms-150` | Prototype a dead function in a compiled header and the census makes it a **root**. Filed at 3 edits as `vms-c13`'s disclosed residual; **re-priced this round at 2 edits / 2 files, and it links clean.** |
-| `vms-10c` | p1 | `vms-150` | `gen_rd_citations` derives open-ness from a transiently incomplete `rd list --json`. §6. |
+**A DISPROOF WITH A RED BASELINE PROVES NOTHING, AND IT LOOKS LIKE IT PASSED.** Proving the new
+census controls were non-vacuous meant deleting the mechanism and showing exactly the right controls
+fail. The first attempt removed `USER`/`LOGNAME` from `VARS` but **left their `DECLARED` entries**,
+so the unmutated tree went red ("a declared site no longer exists") — and every mutation case
+"went red" too, including the two that were supposed to. It read as a clean disproof. The second
+attempt removed the declarations as well, held the baseline green, and then **exactly H and I
+failed** with A–G and J unchanged. *Before believing a disproof, confirm its baseline is green.*
 
-**Two more were filed on 2026-08-03 and are deliberately NOT in this closure** — they came out of the
-`vms-187` SCS dispatch, and are recorded here only so nobody re-files them: `vms-819d` (p2, parent
-`vms-898`: the authenticity negctl gates take 5+ minutes each and `ctest --timeout` does not reap
-them) and `vms-2c6` (p1, unwired: QEMU CI harnesses exit nonzero while their own accounting reports
-everything passed — the `vms-b1f` shape, seen from another dispatch).
+**AN ITEM'S STATED SITE SET CAN BE AN UNDERCOUNT, AND THE MISSING ONES ARE THE DANGEROUS ONES.**
+`vms-e60` names three `strtoul(...,10)` sites; there are nine in four files. The two it misses are
+`sys_uai.c` and `ovmx_init.c` — the latter being PID 1 stamping SYSTEM's UIC into the executive.
+A partial fix there would recreate the exact defect the item describes with different endpoints.
+Enumerate from the tree, not from the item.
 
-**One cosmetic note:** `vms-35f` carries a malformed priority field — rd reports it as `1`, not `p1`.
-Harmless, but it sorts oddly in any `--json` consumer, so do not read it as a distinct tier.
+**TEST A WIDENED GATE FOR OVER-FIRING IN THE SAME COMMIT.** Adding a short name like `USER` to a
+substring-matched census risks matching `USERNAME`/`VMS_USERNAME`; that is how a gate acquires an
+exemption and stops being read. Case J pins it.
+
+**MERGING IS NOT THE END OF THE RE-DERIVATION.** Main moved twice more (#75, #71) *while #76's CI
+ran*. The file-overlap check before merging was empty, so it was safe — but the check is the reason
+that is known, not an assumption. Re-read *which files* differ every time.
+
+Still true from before:
+
+**THREE DEFECTS THIS ROUND WERE MISDIAGNOSED IN THE SAME WAY: A KILL READS AS A FAILURE.**
+`vms-b1f` was filed "host-sensitive" (it is trailing-output-size). `vms-008` was carried as a known
+failing test (ctest was killing a passing one). `vms-86a` I watched manufacture a red on my own PR.
+A `timeout-minutes` kill, a ctest TIMEOUT and an infra cancellation **all** report
+`conclusion: cancelled` or `Timeout` and render in `gh pr checks` as a plain `fail`. **Check
+`.conclusion` and whether the assertion step actually ran before attributing any red to the diff.**
+
+**A DISPROOF CAN BE WRONG IN THE DIRECTION THAT COMFORTS YOU.** `ctest --timeout 120` does **not**
+override a per-test `TIMEOUT` property. My first `vms-008` disproof therefore passed, which would
+have "proved" the timeout was fine. The real disproof needs a tree configured with the old property.
+If a disproof tells you the thing you wanted to hear, check the disproof.
+
+**MEASURE ONE ORACLE AT A TIME.** Three PRs' CI running concurrently took the per-facility negctl
+job from 27m09s to >60m and it was killed by its own timeout — a red I manufactured by parallelism.
+Series: **27m09s idle / 50m39s moderate / >60m killed**. Serialize the long jobs.
+
+**DO NOT GARBAGE-COLLECT A TREE A BACKGROUND JOB IS STANDING IN.** I deleted a worktree under a
+running negctl and got 16 "failures", every one carrying `getcwd() failed`. That run was void, not a
+result, and it looked exactly like a finding.
+
+**THE OBVIOUS HONEST FIX CAN COLLIDE WITH AN EXISTING DISCRIMINATOR.** PR #71 reworded a FAIL
+headline to be truthful and CI refuted it: `F_CITE_TREE_UNRESOLVED="FAIL: the tree cites "` already
+existed, so the reword made three distinct failure modes share a prefix. Closed rather than patched.
+`vms-c13c` carries the constraint any replacement must satisfy.
+
+**A BRANCH CUT EARLIER IN A ROUND CAN SILENTLY REVERT WHAT LANDED SINCE.** PR #74's branch predated
+#69 and #66; `git diff main` showed 448 lines of census work as *removals*. Always read *which files*
+differ before merging, not just whether it merges.
 
 ---
 
-## 8. What still needs a human
+## 5. Environment
 
-- **`vms-b8d`** — the ruling on whether remote access is buildable faithfully yet. Typed `decision`;
-  it escalates rather than deciding. An agent must not self-approve it.
-- **`vms-c9e`** — a GitHub branch-protection admin action no agent can take.
-- **Whether `vms-1e1` (B) still holds.** It was ruled on the binding side condition that the
-  `OVMX-UNWIRED` citation is machine-checked. `vms-004e` and `vms-35f` are attacks on precisely that
-  check. Re-affirming (B), or invoking the one-command undo in §2, is a scope call and not an agent's.
-- **Any VMS constant or message value** not settleable at the lab. Pin it to the oracle
-  (`/data/training/vax`, or public VSI docs) or escalate. **Never self-certify. Green CI is not
-  evidence of VMS correctness.**
+- **Disk is the binding constraint: 2.7 GB free, 99% used** (tighter than the last revision said). Build one image at a time. The ~48 GB of
+  `vat-env-*` images are **not ours** — do not prune them.
+- Local ctest is **64 tests, 1 expected failure**: `vms-2a1` (`test_libvms_protection`, 6 of 8
+  subtests need unprivileged user namespaces, restricted by apparmor on 24.04). That is a genuine
+  host restriction, not a budget.
+- `docker`, not podman. `export PATH="$HOME/.local/bin:$PATH"` for `rd`.
+- **`rd` run outside the repo returns a PARTIAL set, not an error.** 289 items from
+  `~/projects/vms`, **159** from another directory, stable across runs. This is `vms-10c`'s real
+  mechanism and it silently corrupts a regenerated ledger — genuinely-active items get written
+  `closed`, with their true status still in column 3. `closed active` is self-contradictory and is
+  the tell.
+- `run_facility_negctl.sh` still runs in CI only.
+- **Run `tools/gen_rd_citations.py` from the repo root, never a worktree.** Doing it from a worktree
+  produced 23 lines of status churn that had nothing to do with the change — the same `vms-10c`
+  cwd-dependence described above. It also correctly adds nothing for plain prose citations: it only
+  records `OVMX-<TOKEN>:` declaration markers.
 
 ---
 
-## 9. Honest accounting
+## 6. What needs a human
 
-The closure was 17 open on 2026-08-01, 23 on 2026-08-02, and is **35 today**. Eight PRs merged this
-round, every one CI-green by SHA, and **the number still went up by twelve.**
-
-**That is the honest outcome, and it is the same shape as the last two rounds.** Every merge in §3
-closed a real, measured, reproduced purchase of a gate — the manifest's set-cover deletion, the
-census's fabricated-caller file, the shape-only citation, the source-spelling universe, the dead
-function's call site, the 85 declarations citing closed items. The round's adversary then bought each
-surviving gate for two edits, on a tree where all of that had already landed.
-
-**What moved is not the count. It is what the gates are allowed to say.** Before this round the four
-static gates printed "PROVEN" and "cannot" about string relations. After it, three items reached
-independently — and an adversary demonstrated — that **they price evasions and print the price, and
-nothing more.** That sentence is now the ceiling on what a Phase 2 verdict may claim, and it is a
-smaller true claim replacing a larger false one. **A smaller number that is true is the deliverable
-here.**
-
-Two things are worth stating plainly against the temptation to read seven NO-GOs as stalling:
-
-1. **Every facility attacked has survived, across all seven runs.** Process table, lock manager, event
-   flags, device table, identity, terminal characteristics — each was attacked by injecting a
-   per-process facade **into the kernel** that keeps shared storage, shared lock and every write and
-   kills only cross-process resolution, and each reddened named assertions at two or three layers. The
-   substrate is real. The blocker has never been the substrate.
-2. **`run_facility_negctl.sh` is real and was green on every merge.** The thing that executes works.
-   What got refuted is the thing that only reads.
-
-The eighth verdict should not be run until the four gates say what they mean and the five two-edit
-escapes are closed. Running it now would produce an eighth NO-GO for the seventh reason, and the
-record already contains that.
+- **`vms-d894` — now a live `rd` gate (`scope`), awaiting an answer.** Close on
+  69-lines-and-visible, or build the base-branch floor. §3. This is the only thing blocking
+  `vms-b33`, and it is the only reason Phase 2 is not closeable.
+- **`vms-b8d`**: is remote access next.
+- **Whether `vms-1e1` (B) still holds.** It was ruled on the side condition that the citation check
+  is machine-checked. `vms-004e` and `vms-35f` were attacks on exactly that check and are now fixed
+  and merged, which arguably restores it — but re-affirming is a scope call. **Round 9 did not
+  touch this; it is unchanged and still open.**
+- **Whether to keep paying for the machinery.** Now **19 of 30**. The ratio did not improve because
+  round 9 spent itself on defects rather than gates — which is the shape the last revision asked
+  for, and it means the machinery count is flat, not falling. §1.
+- **`vms-4c2` (new).** Proving AUTHORIZE still *admits* a SYSPRV holder needs `AUTHORIZE.EXE` in the
+  QEMU test image, which today plumbs `DCL.EXE` only. That is a small but real widening of the one
+  CI job that executes anything, on a host with 2.7 GB free. Worth confirming someone wants it
+  before it is built.

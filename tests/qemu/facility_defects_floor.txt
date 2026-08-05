@@ -1,0 +1,31 @@
+# tests/qemu/facility_defects_floor.txt
+#
+# DERIVED FLOOR (vms-d894) on the number of entries in facility_defects.sh's
+# DEFECTS list. Read by cmd_coverage's section 6 -- see that function and the
+# file header's "vms-d894" paragraph for what this does and does not prove.
+#
+# This is a SEPARATE artifact on purpose. facility_defects.sh's own anchor
+# check (section 4, vms-279) already requires a defect deletion to touch two
+# files (facility_defects.sh + a suite source); this floor adds a THIRD, so
+# a shrink below the number below is no longer confined to the deleter's own
+# edit -- it has to also lower this file, visibly, in a diff with no other
+# content.
+#
+# NOT TAMPER-PROOF: lowering the number below to match a deletion still
+# passes the check. Lower it ONLY for a tracked, intentional removal of a
+# defect, in the same change that removes it and explains why -- never to
+# make an unrelated deletion pass quietly.
+#
+# THIS IS NO LONGER THE ONLY COUNT FLOOR, and it is the weaker one (vms-d894
+# round 2). Section 6b of cmd_coverage derives a second floor from
+# tests/qemu/facility_negctl_observed.tsv -- the number of defects a PAST RUN
+# OF THE DRIVER ACTUALLY EXECUTED, which no edit to this file can raise or
+# lower. Both floors are applied and neither replaces the other, so a record
+# covering fewer defects can never lower the number below.
+#
+# To raise the floor after legitimately ADDING defects, rerun and paste the
+# result below the comments:
+#   awk '/^DEFECTS="/{f=1;next} f&&/^"/{exit} f' tests/qemu/facility_defects.sh | wc -l
+#
+# Value as of the commit that added this file (vms-d894): 42 entries.
+42

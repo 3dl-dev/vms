@@ -1,8 +1,66 @@
-# Rights Database
-# Format: IDENTIFIER:VALUE:ATTRIBUTES
-# Identifiers are rights that can be granted to users
-INTERACTIVE:1:RESOURCE
-BATCH:2:RESOURCE
-NETWORK:3:RESOURCE
-LOCAL:4:RESOURCE
-REMOTE:5:RESOURCE
+# Rights Database — SYS$SYSTEM:RIGHTSLIST.DAT
+#
+# THE VALUES IN THIS FILE ARE MEASURED, NOT CHOSEN (vms-2f8).
+# Oracle: OpenVMS VAX V7.3, lab node VAX1, 2026-08-05. Full transcript,
+# including the AUTHORIZE SHOW/IDENTIFIER/FULL listing these rows come from,
+# is docs/oracle/vax73-rights-database.md.
+#
+# WHAT THIS FILE USED TO SAY, AND WHY IT WAS WRONG.
+# It shipped five rows -- INTERACTIVE:1 BATCH:2 NETWORK:3 LOCAL:4 REMOTE:5 --
+# and nothing read it. Asked of real VMS, NONE of the values 1..5 is an
+# identifier at all; every one answers the null string:
+#
+#     F$IDENTIFIER(1,"NUMBER_TO_NAME")  ->  ""     ... through 5, all ""
+#     F$IDENTIFIER("LOCAL","NAME_TO_NUMBER") -> -2147483644 = %X80000004
+#
+# The numbering was an invention, and the ordering was too: the real
+# environmental identifiers are %X80000001..%X80000006 assigned ALPHABETICALLY
+# (BATCH, DIALUP, INTERACTIVE, LOCAL, NETWORK, REMOTE). DIALUP was missing
+# entirely. The Attributes column was RESOURCE on all five rows; on real VMS
+# these identifiers carry NO attributes.
+#
+# ------------------------------------------------------------------------
+# FORMAT — an OVMX design choice, deliberately labelled as one (Rule 8).
+#
+#     IDENTIFIER:VALUE:ATTRIBUTES
+#
+# Real RIGHTSLIST.DAT is an indexed RMS file. Nothing in this project has
+# observed its bytes, so OVMX defines its own text representation rather than
+# guessing at VSI's. It is NOT presented as VMS-authentic.
+#
+# VALUE is written in the notation AUTHORIZE prints for that kind of
+# identifier, so a row here reads the same as the row the tool shows:
+#     %Xnnnnnnnn   general identifier (hexadecimal)
+#     [g,m]        UIC identifier (OCTAL, as every VMS UIC is written -- vms-e60)
+#
+# ATTRIBUTES is a comma-separated KGB$M_ list (see src/libvms/include/kgbdef.h)
+# and is EMPTY for every row below, because it is empty on the oracle.
+#
+# ------------------------------------------------------------------------
+# WHAT IS NOT HERE, AND WHY.
+#
+# 1. NO UIC IDENTIFIERS. The oracle's listing has one UIC identifier per UAF
+#    account (SYSTEM [1,4], DEFAULT [200,200], ...), because on VMS AUTHORIZE
+#    maintains the account and its identifier together. OVMX has no such
+#    coupled path, so shipping those rows HERE as well as in SYSUAF.DAT would
+#    be two files free to disagree about one account's UIC -- which is exactly
+#    the defect vms-e60 just closed (LOGINOUT stamping one UIC while
+#    F$IDENTIFIER answered another). UIC identifiers are therefore DERIVED
+#    from SYSUAF.DAT at lookup time; see src/libvms/rtl/rightslist.c. One
+#    source, by construction.
+#
+# 2. NO DECWINDOWS / VMS$BUFFER_OBJECT_USER / VMS$MEM_RESIDENT_USER. The
+#    oracle carries them; they name facilities OVMX does not have. Observing
+#    that VMS ships an identifier is not authority for OVMX to ship one for a
+#    facility that cannot grant or check it (Rule 10 -- match it or hide it,
+#    never invent the plausible-looking middle).
+#
+# 3. NO SITE ROWS. BARON, SYS$NODE_VAX*, TCPIP$*, SECSRV$*, MAIL$SERVER and
+#    the rest of the oracle's listing belong to that lab, not to VMS.
+# ------------------------------------------------------------------------
+BATCH:%X80000001:
+DIALUP:%X80000002:
+INTERACTIVE:%X80000003:
+LOCAL:%X80000004:
+NETWORK:%X80000005:
+REMOTE:%X80000006:

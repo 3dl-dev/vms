@@ -22,7 +22,9 @@
 #include "vms_kif.h"
 
 #define SS_NORMAL       1
-#define SS_NOTQUEUED    40
+/* ssdef.h SS$_NOTQUEUED. The executive yields VMS condition values now,
+ * not the private 40 it used to answer with (vms-82a). */
+#define SS_NOTQUEUED    2488
 
 static int pass = 0, fail = 0;
 

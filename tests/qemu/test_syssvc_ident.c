@@ -909,6 +909,14 @@ static void scenario_g_unnamed_row_reports_nothing(void)
         "SHOW SYMBOL IDENT_W\n"
         "IDENT_D = F$IDENTIFIER(\"DEFAULT\",\"NAME_TO_NUMBER\")\n"
         "SHOW SYMBOL IDENT_D\n"
+        /* vms-2f8: the two that only a rights-database READER can answer.
+         * LOCAL comes from RIGHTSLIST.DAT (not SYSUAF, not any hardcode),
+         * and 8388736 exercises the reverse mapping the oracle has now been
+         * asked for directly. */
+        "IDENT_L = F$IDENTIFIER(\"LOCAL\",\"NAME_TO_NUMBER\")\n"
+        "SHOW SYMBOL IDENT_L\n"
+        "IDENT_R = F$IDENTIFIER(8388736,\"NUMBER_TO_NAME\")\n"
+        "SHOW SYMBOL IDENT_R\n"
         "IDENT_V = F$IDENTIFIER(\"" G_PWNAME "\",\"NAME_TO_NUMBER\")\n"
         "SHOW SYMBOL IDENT_V\n"
         "SHOW PROCESS\n"
@@ -1040,6 +1048,66 @@ static void scenario_g_unnamed_row_reports_nothing(void)
           "G/F$IDENTIFIER: NAME_TO_NUMBER resolves \"DEFAULT\" to 8388736 "
           "(%X00800080, UIC [200,200] OCTAL) -- OVMX answered 13107201, "
           "having read VMS's octal UIC as decimal group 200 member 1");
+    /* --- the rights database is READ, not fabricated (vms-2f8) --------
+     *
+     * The three anchors above are all satisfiable by a hardcoded table, and
+     * for as long as one existed they WERE: lex_identifier() held SYSTEM and
+     * DEFAULT as literals and this suite passed in an initramfs with no
+     * system disk at all. F$IDENTIFIER now reads SYS$SYSTEM:RIGHTSLIST.DAT
+     * and SYSUAF, both staged into this image by tests/qemu/Dockerfile.
+     *
+     * LOCAL IS THE ONE THAT CANNOT BE FAKED BY THE OLD SHAPE. It is a
+     * GENERAL identifier -- it is not any account's UIC, so SYSUAF cannot
+     * produce it, and no hardcode ever held it. Its value can only have come
+     * out of the file. Oracle (docs/oracle/vax73-rights-database.md):
+     *
+     *     F$IDENTIFIER("LOCAL","NAME_TO_NUMBER")  ->  -2147483644
+     *
+     * asserted here in DCL's own signed rendering, which is the rendering
+     * the oracle's DCL printed.
+     */
+    CHECK(strstr(outg, "IDENT_L = -2147483644") != NULL,
+          "G/F$IDENTIFIER: NAME_TO_NUMBER resolves \"LOCAL\" to -2147483644 "
+          "(%X80000004) -- a GENERAL identifier, holdable by no hardcode and "
+          "derivable from no account's UIC, so this answer can only have been "
+          "read out of SYS$SYSTEM:RIGHTSLIST.DAT");
+    CHECK(strstr(outg, "IDENT_R = \"DEFAULT\"\n") != NULL,
+          "G/F$IDENTIFIER: NUMBER_TO_NAME resolves 8388736 to \"DEFAULT\" -- "
+          "the direction an earlier round deliberately left unmapped rather "
+          "than add on the strength of symmetry. The oracle has since been "
+          "asked it directly and answers \"DEFAULT\"");
+    /*
+     * WHAT IS DELIBERATELY *NOT* ASSERTED HERE, AND WHY (vms-2f8).
+     *
+     * The discriminating check for this change is that 4 -- the value OVMX's
+     * own shipped RIGHTSLIST.DAT used to assign to LOCAL -- resolves to
+     * NOTHING, since on real VMS it is not an identifier at all. It is not
+     * asserted in this suite, and that is a measurement, not an oversight.
+     *
+     * MEASURED on the build host, mutation applied through
+     * facility_defects.sh apply + a verified rebuild (DCL.EXE md5 changed on
+     * every step), probing F$IDENTIFIER(4,"NUMBER_TO_NAME"):
+     *
+     *   baseline                        -> ""
+     *   dcl-fident-num2name-bracketed-uic -> "[0,4]"   <-- would go red
+     *   dcl-fident-num2name-host-passwd   -> "SYNC"    <-- would go red
+     *   dcl-fident-name2num-host-passwd   -> ""        unchanged
+     *
+     * So the assertion would ENLARGE the declared red set of two controls,
+     * and its behaviour under the second one is host-sensitive: "SYNC" is
+     * getpwuid(4) on THIS machine, and the guest's staged passwd is a
+     * different database. Declaring a red-set entry I can only measure on
+     * the host, for a gate that runs in QEMU, is exactly the reasoning the
+     * manifest's own rulings forbid.
+     *
+     * The check therefore lives where it can be measured completely:
+     * tests/libvms/test_rightslist.c asserts 1..5 all miss, and proves those
+     * assertions non-vacuous against two mutations of the data file. Nothing
+     * is lost; the claim moved to where its negative control is real.
+     *
+     * The two assertions kept above were measured the same way and are
+     * UNCHANGED under all three controls, so no declared red set moves.
+     */
     /* --- the misses, both oracle-pinned ------------------------------ */
     /* negctl: dcl-fident-num2name-bracketed-uic */
     /* negctl-knockon: dcl-fident-num2name-host-passwd */

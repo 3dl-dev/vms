@@ -713,8 +713,26 @@ static int sysuaf_split(char *line, char **user, uint32_t *grp, uint32_t *mem,
     }
 
     *user   = f[0];
-    *grp    = (uint32_t)strtoul(f[2], NULL, 10);
-    *mem    = (uint32_t)strtoul(f[3], NULL, 10);
+    /*
+     * OCTAL (vms-e60), and this site is the reason the item's own enumeration
+     * was not enough. SYSUAF.DAT's UIC fields are octal; derivation in
+     * src/libvms/rtl/sysuaf.c.
+     *
+     * MEASURED, by the UAT rather than by review: fixing the other ten sites
+     * and leaving this one decimal made every non-SYSTEM login unable to write
+     * its OWN login directory. This function feeds own_tree(), which chowns
+     * SYS$SYSDEVICE:[USERS.<name>] to the account's UIC, while LOGINOUT
+     * setuid()s to the UIC it reads through libvms. With the two on different
+     * bases GUEST's directory was owned by 201:200 and GUEST ran as 129:128,
+     * so `COPY SYS$MANAGER:LOGIN.COM UATUSER.TXT` returned %RMS-E-CRE.
+     *
+     * That is exactly the failure mode a partial base change produces: it does
+     * not restore the old behaviour, it relocates the disagreement to a new
+     * pair of subsystems. Any future change to this base must move all of the
+     * sites listed in sysuaf.c together.
+     */
+    *grp    = (uint32_t)strtoul(f[2], NULL, 8);
+    *mem    = (uint32_t)strtoul(f[3], NULL, 8);
     *defdir = f[4];
     return 0;
 }

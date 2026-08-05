@@ -3,10 +3,41 @@
 # EXPECT: regex:P =
 # EXPECT: regex:D =
 # EXPECT: contains:SYS$SYSDEVICE
-# EXPECT: contains:SYSTEM
 # EXPECT: regex:C = 65
 # EXPECT_NOT: contains:_OPA0:
 # EXPECT_NOT: contains:_FTA0:
+# EXPECT_NOT: contains:I = "[
+#
+# A SECOND ASSERTION CHANGED, SAME REASON AS THE FIRST (vms-2f8). This file
+# used to carry
+#   # EXPECT: contains:SYSTEM
+# for the F$IDENTIFIER(65540,"NUMBER_TO_NAME") line. That passed because
+# lex_identifier() held a hardcoded [1,4] -> "SYSTEM" case: the assertion was
+# satisfied by a literal in the function, not by a rights database.
+#
+# F$IDENTIFIER now READS the rights database (SYS$SYSTEM:RIGHTSLIST.DAT for
+# general identifiers, SYSUAF for UIC identifiers -- src/libvms/rtl/
+# rightslist.c), so under ctest, where nothing has provisioned a system disk,
+# it answers the MISS. That is the correct behaviour and it is pinned to the
+# oracle: an identifier that is not valid converts to the null string in this
+# direction. A missing facility must answer the miss, not resurrect a
+# built-in table (CLAUDE.md Rule 9).
+#
+# The claim did not disappear -- it MOVED SOMEWHERE STRONGER. Whether
+# F$IDENTIFIER resolves SYSTEM, DEFAULT, GUEST and the six environmental
+# identifiers, in BOTH directions, against the actual shipped data files, is
+# now tests/libvms/test_rightslist.c: 34 assertions, every value measured on
+# OpenVMS VAX V7.3 (docs/oracle/vax73-rights-database.md), staged under a
+# private root so it does not depend on the host's /vms at all. One
+# `contains:SYSTEM` that a hardcode satisfied is not coverage that file
+# lacks.
+#
+# What replaces it HERE is an assertion that is true in both environments and
+# was not true before: `I` must never come back as a bracketed UIC. That
+# rendering -- echoing the caller's own UIC back as "[1,4]" -- was Rule 10's
+# illegal third answer, refuted against the oracle for every input shape
+# tried, and it is the one wrong answer this line can still produce whether
+# or not a rights database is present.
 #
 # ONE ASSERTION CHANGED, AND WHY (vms-fb9). This file used to carry
 #   # EXPECT: contains:_OPA0:

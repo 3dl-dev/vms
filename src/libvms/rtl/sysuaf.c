@@ -27,16 +27,26 @@
 /* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
 /* ------------------------------------------------------------------ */
-/* sysuaf_lookup                                                       */
+/* sysuaf_lookup / sysuaf_lookup_by_uic                                */
 /* ------------------------------------------------------------------ */
 
 /*
- * Look up a user in SYSUAF_PATH.
- * The username comparison is case-insensitive.
+ * ONE SCANNER, TWO LOOKUP DIRECTIONS (vms-2f8).
+ *
+ * sysuaf_lookup() answers by name; sysuaf_lookup_by_uic() answers by UIC,
+ * which is what F$IDENTIFIER's NUMBER_TO_NAME direction needs now that it
+ * reads the rights database instead of a hardcoded pair. Both walk the same
+ * loop below and share one field parser, so there is exactly one place that
+ * decides how a SYSUAF row becomes a record -- in particular exactly one
+ * place that reads the UIC fields in the base vms-e60 pinned. A second copy
+ * of that parse would be a second answer waiting to drift.
+ *
+ * 'want_uic' is matched only when 'username' is NULL.
  * On success the record is written to *rec and 0 is returned.
- * Returns -1 if the file cannot be opened or the user is not found.
+ * Returns -1 if the file cannot be opened or nothing matches.
  */
-int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
+static int sysuaf_scan(const char *username, uint32_t want_uic,
+                       sysuaf_record_t *out)
 {
     char sysuaf_linux[1024];
     vmsfs_to_linux_path(SYSUAF_PATH, sysuaf_linux, sizeof(sysuaf_linux));
@@ -46,9 +56,12 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
 
     /* Build uppercased search key */
     char search_copy[64];
-    strncpy(search_copy, username, sizeof(search_copy) - 1);
-    search_copy[sizeof(search_copy) - 1] = '\0';
-    str_upcase(search_copy);
+    search_copy[0] = '\0';
+    if (username) {
+        strncpy(search_copy, username, sizeof(search_copy) - 1);
+        search_copy[sizeof(search_copy) - 1] = '\0';
+        str_upcase(search_copy);
+    }
 
     char line[1024];
     while (fgets(line, sizeof(line), fp)) {
@@ -78,14 +91,18 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
         if (nf < 5)
             continue;  /* malformed line */
 
-        /* Case-insensitive compare */
-        char uname_copy[64];
-        strncpy(uname_copy, fields[0], sizeof(uname_copy) - 1);
-        uname_copy[sizeof(uname_copy) - 1] = '\0';
-        str_upcase(uname_copy);
-
-        if (strcmp(uname_copy, search_copy) == 0) {
-            memset(rec, 0, sizeof(*rec));
+        /* Every row is parsed into 'row' before either direction decides
+         * whether it matched, so the UIC direction reads the SAME parse the
+         * name direction does rather than a second copy of it. */
+        {
+            sysuaf_record_t row;
+            memset(&row, 0, sizeof(row));
+            /* 'rec' is an alias for the row being parsed, kept so the field
+             * fill below -- including the vms-e60 octal block, which is the
+             * one thing in this file nobody should be re-typing -- stays
+             * byte-identical to what it was before this scan grew a second
+             * caller. The function's out-parameter is 'out'. */
+            sysuaf_record_t *rec = &row;
             strncpy(rec->username, fields[0], sizeof(rec->username) - 1);
             str_upcase(rec->username);
             strncpy(rec->password_hash, fields[1], sizeof(rec->password_hash) - 1);
@@ -129,13 +146,56 @@ int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
                 strncpy(rec->flags, fields[5], sizeof(rec->flags) - 1);
             if (nf > 6)
                 strncpy(rec->privileges, fields[6], sizeof(rec->privileges) - 1);
-            fclose(fp);
-            return 0;
+
+            if (username
+                ? strcmp(row.username, search_copy) == 0
+                : ((row.uic_group << 16) | row.uic_member) == want_uic) {
+                *out = row;
+                fclose(fp);
+                return 0;
+            }
         }
     }
 
     fclose(fp);
-    return -1;  /* User not found */
+    return -1;  /* No matching account */
+}
+
+/*
+ * Look up a user in SYSUAF_PATH.
+ * The username comparison is case-insensitive.
+ * On success the record is written to *rec and 0 is returned.
+ * Returns -1 if the file cannot be opened or the user is not found.
+ */
+int sysuaf_lookup(const char *username, sysuaf_record_t *rec)
+{
+    if (!username || !rec)
+        return -1;
+    return sysuaf_scan(username, 0, rec);
+}
+
+/*
+ * Look up the account whose UIC is 'uic' ((group << 16) | member).
+ *
+ * Added for vms-2f8: on VMS every UAF account has a matching UIC identifier
+ * in the rights database, so F$IDENTIFIER's NUMBER_TO_NAME direction has to
+ * be able to go from a UIC back to the account name. Deriving that from
+ * SYSUAF rather than duplicating the UIC rows into RIGHTSLIST.DAT keeps one
+ * source for an account's UIC (see the shipped RIGHTSLIST.DAT header).
+ *
+ * FIRST MATCH WINS, and OVMX's shipped SYSUAF has no duplicate UICs. VMS
+ * treats a UIC as identifying one account; if a site ever writes two rows
+ * with one UIC that is a malformed SYSUAF, not a case with a defined answer,
+ * and nothing here invents one.
+ *
+ * Returns 0 on success, -1 if the file cannot be opened or no account holds
+ * that UIC.
+ */
+int sysuaf_lookup_by_uic(uint32_t uic, sysuaf_record_t *rec)
+{
+    if (!rec)
+        return -1;
+    return sysuaf_scan(NULL, uic, rec);
 }
 
 /* ------------------------------------------------------------------ */

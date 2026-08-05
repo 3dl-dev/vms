@@ -112,6 +112,12 @@ static inline struct XABKEY sysuaf_rms_primary_key(void)
 /* Look up a user in sysuaf.dat. Returns 0 on success, -1 if not found. */
 int sysuaf_lookup(const char *username, sysuaf_record_t *rec);
 
+/* Look up the account holding UIC 'uic' ((group << 16) | member).
+   Returns 0 on success, -1 if no account holds it (vms-2f8: the rights
+   database derives UIC identifiers from SYSUAF rather than keeping a second
+   copy of every account's UIC that is free to disagree with this one). */
+int sysuaf_lookup_by_uic(uint32_t uic, sysuaf_record_t *rec);
+
 /* Authenticate: returns 1 if password matches, 0 if not.
    An empty/unset hash NEVER authenticates -- returns 0 for every password,
    including the empty string (vms-08f; see the Rule 10 disposition in

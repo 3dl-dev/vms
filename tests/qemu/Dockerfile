@@ -359,6 +359,32 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
       { echo "FATAL: DCL.EXE was not built into the static tree -- SHOW SYSTEM would go unproven against a real executive"; exit 1; }; } && \
     chmod +x /initramfs/bin/DCL.EXE && \
     cp /initramfs/bin/DCL.EXE /initramfs/tests/DCL.EXE && \
+    # THE SYSTEM DATA FILES F$IDENTIFIER READS (vms-2f8).
+    #
+    # F$IDENTIFIER used to answer from a hardcoded pair of names inside
+    # lex_identifier(), so the ident suite's SYSTEM/DEFAULT assertions passed
+    # in an initramfs that had no system disk at all. It now READS the rights
+    # database -- SYS$SYSTEM:RIGHTSLIST.DAT for general identifiers, SYSUAF
+    # for UIC identifiers -- which means those assertions are only meaningful
+    # if the guest has the files. Staged at the product's own layout, from
+    # the product's own distro/rootfs, so the suite asserts against what
+    # actually boots rather than a fixture invented for the harness.
+    #
+    # ovmx_init provisions these on the real boot path
+    # (src/ovmx_init/ovmx_init.c:531); this harness runs busybox init, not
+    # ovmx_init, so it stages them itself.
+    #
+    # ABSENCE IS FATAL, not skipped -- same reason as DCL.EXE and n_syssvc
+    # above. A missing rights database does not fail loudly at run time: it
+    # is indistinguishable from "no such identifier", which is a legal VMS
+    # answer. The suite's positive assertions would simply stop being
+    # reachable while the job stayed green.
+    mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE && \
+    for f in RIGHTSLIST.DAT SYSUAF.DAT; do \
+        cp "/src/repo/distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/$f" \
+           /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ || \
+        { echo "FATAL: $f was not staged into the initramfs -- F\$IDENTIFIER reads the rights database now, and every identifier assertion would silently become a miss"; exit 1; }; \
+    done && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

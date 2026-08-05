@@ -436,6 +436,38 @@ set_tests_properties(scs_connect_data_figures PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 60
 )
+
+# vms-beb - the capture corpus is a MANIFEST, not a glob.
+#
+# tools/cluster/capture_manifest.py is the declared allowlist of every lab
+# capture a measurement tool may read, and which lab produced it -- the
+# replacement for the `-lab2-` filename-marker blocklist that let six lab-2
+# vaxlab-4 captures silently mix into the lab-1 grounding library (vms-096).
+# test_capture_manifest.py needs NO lab captures: every scenario uses empty
+# placeholder files in a scratch tmp dir, since the manifest functions only
+# ever look at filenames. It proves the item's own acceptance test -- a
+# lab-1 census pointed at a real lab-2-declared capture reds -- through both
+# the list-based and directory-globbing entry points, and asserts all five
+# tools named in vms-beb actually call into the module (a manifest nobody
+# calls is not a fence).
+#
+# Registered UNCONDITIONALLY under the same name either way -- see the
+# vms-76e note above for why the missing-interpreter case reds at TEST time
+# instead of failing configure.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME capture_manifest
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_capture_manifest.py)
+else()
+    add_test(NAME capture_manifest
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/capture_manifest_no_python3.cmake)
+endif()
+set_tests_properties(capture_manifest PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 30
+)
+
 # vms-6b3 - the 16-bit REJECT/DISCONNECT reason code (VAXcluster Principles
 # p. 2-26). Asserts byte position, LE order and round-trip in BOTH frames; that
 # two REAL captured VMS frames (one REJECT_REQ, one DISCONNECT_REQ) read zero at

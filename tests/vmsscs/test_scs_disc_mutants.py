@@ -156,6 +156,14 @@ def main():
         for k, src in SRC.items():
             paths[k] = os.path.join(tmp, NAMES[k])
             shutil.copyfile(src, paths[k])
+        # scs_disc_measure.py's lab1_only() (called directly by
+        # test_scs_disc_figures.py's "THE LAB FENCE" section) lazily imports
+        # tools/cluster/capture_manifest.py from its OWN directory -- which,
+        # for the scratch copy, is `tmp`. Copy the manifest module alongside
+        # it, the same way dissect_sca.py rides along for scs_reason_measure.
+        shutil.copy2(os.path.join(os.path.dirname(SRC["measure"]),
+                                  "capture_manifest.py"),
+                     os.path.join(tmp, "capture_manifest.py"))
 
         def restore():
             for k, src in SRC.items():

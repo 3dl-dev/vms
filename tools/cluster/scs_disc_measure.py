@@ -89,20 +89,26 @@ DEFAULT_CAPDIR = "/data/training/vax/cluster/captures"
 # a subdirectory because scs_connect_data_measure.py globs `**/*.pcap`
 # recursively and a subdirectory would not fence it out.
 #
-# This guard makes a repeat LOUD instead of silent.
-LAB2_MARKER = "-lab2-"
+# vms-beb: the guard below now checks against the checked-in MANIFEST in
+# tools/cluster/capture_manifest.py -- a declared allowlist, not a `-lab2-`
+# filename blocklist -- so a capture that is unknown to the manifest, or
+# mislabeled in it, reds too, not just one that happens to carry the marker.
+LAB2_MARKER = "-lab2-"   # kept for readers who still grep for it; unused below
 
 
 def lab1_only(paths):
-    """Return `paths` unchanged, or die naming every lab-2 capture in them."""
-    foreign = sorted(os.path.basename(p) for p in paths
-                     if LAB2_MARKER in os.path.basename(p))
-    if foreign:
-        raise SystemExit(
-            "lab fence: %d lab-2 capture(s) in the lab-1 grounding library. "
-            "Move them to a <capdir>-lab2 sibling and re-run; do NOT raise "
-            "EXPECTED to absorb them.\n  %s" % (len(foreign), "\n  ".join(foreign)))
-    return paths
+    """Return `paths` unchanged, or die naming every non-lab-1 capture in
+    them -- checked against tools/cluster/capture_manifest.py's declared
+    manifest, not a filename heuristic. Imports the manifest LAZILY, from
+    this file's own directory, so callers that never touch a capture (e.g.
+    the figures-gate mutation harness reading EXPECTED out of this module)
+    never need it on sys.path.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import capture_manifest
+    return capture_manifest.check_paths(paths, capture_manifest.LAB1)
 
 
 def _read_pcap():

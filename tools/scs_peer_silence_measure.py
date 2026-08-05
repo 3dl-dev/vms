@@ -63,6 +63,21 @@ HEALTHY = (
 DEPARTURE = ("af2-established-rejoin-20260728.pcap",)
 DEPARTURE_NODE = "08:00:2b:78:56:b9"  # VAX2, the node that left
 
+
+def _lab1_named(capdir, names):
+    """Verify `names` (a fixed, named capture list -- this script does not
+    glob) are declared lab-1 in tools/cluster/capture_manifest.py, and audit
+    `capdir` for any OTHER capture that disagrees with the manifest (vms-beb).
+    Refuses (SystemExit) rather than silently reading an undeclared or
+    mislabeled file. Imports the manifest LAZILY from the sibling
+    tools/cluster/ directory.
+    """
+    cluster_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cluster")
+    if cluster_dir not in sys.path:
+        sys.path.insert(0, cluster_dir)
+    import capture_manifest
+    return capture_manifest.check_named(capdir, names, capture_manifest.LAB1)
+
 # ---------------------------------------------------------------------------
 # The recorded measurement (2026-08-04). Every figure appears in
 # src/vmsscs/include/scs_depart.h.
@@ -137,6 +152,11 @@ def main():
     ap.add_argument("--captures", default=DEFAULT_CAPDIR)
     ap.add_argument("--print", dest="just_print", action="store_true")
     args = ap.parse_args()
+
+    # vms-beb: refuse rather than silently read if any HEALTHY/DEPARTURE
+    # capture is unknown to the manifest, mislabeled, or if a foreign capture
+    # (e.g. a lab-2 file) has been deposited into args.captures.
+    _lab1_named(args.captures, HEALTHY + DEPARTURE)
 
     healthy_max = 0.0
     healthy_where = ""

@@ -17,6 +17,7 @@ cmake_install.cmake
 !tests/vmsscs/scs_credit_figures_no_python3.cmake
 !tests/vmsscs/scs_connect_data_figures_no_python3.cmake
 !tests/vmsscs/scs_reason_figures_no_python3.cmake
+!tests/vmsscs/capture_manifest_no_python3.cmake
 
 # Object files and libraries
 *.o

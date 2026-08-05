@@ -43,6 +43,14 @@ what `tcpdump -xx` / `tcpdump -e -xx` shows, and what
 `tools/cluster/dissect_sca.py` prints in its `[off..off]` column). The SCA
 payload begins at offset 14 (after the 14-byte Ethernet header).
 
+**Convention erratum (vms-54f, 2026-08-05):** §4(h) — including (1a)/(1b)/(2) —
+uses **SCA-content-relative** offsets (frame-absolute − 14), and its
+"58/62/66/110-byte class" names are SCA-content lengths (72/76/80/124 on the
+wire). Verified by re-measurement: the (1a) type field sits at frame-absolute
+[60:62] = content [46:48], and the CONNECT_REQ SYSAP name at content [62:78]
+(`MSCP$DISK       ` observed there byte-exact, and binary at frame-absolute
+[62:78]). All other sections follow the frame-absolute convention above.
+
 ---
 
 ## 1. Specimens used
@@ -525,6 +533,22 @@ the keystone CONNECT-REQUEST (SCA#39) and CONNECT-RESPONSE (SCA#42) are
 | 16 | **SCS message-type byte** | inferred label, GROUNDED correlation: value partitions the exchange 100%/0-residual — `0x41`=START/config (6 frames), `0x5b`=directory lookup (9), `0x4b`=sequenced-application message = connect **and** all VC/DLM data (2 951), `0x48`=credit-return short (9). No public SCS opcode *table* was used, so the numeric→name mapping is inferred; the value↔phase partition itself is a grounded fact. Reconfirmed on `formation-ci1.pcap` (same four values dominate; the bulk-block-transfer class additionally shows `0x7b`/`0xb3`, left unknown as in §4e). |
 | 17 | **format/version constant `0x13`** | **GROUNDED: 2 975/2 975 directed SCS-envelope frames carry `0x13` here, 0 residuals** — a fixed protocol-format byte, not a counter. |
 
+**NAMING — START / STACK / ACK, corrected (`vms-c35`, 2026-08-05).** Earlier
+revisions of this section called the round-1 106-byte `0x41` frame a
+"START-retransmit". *VAXcluster Principles* p. 2-12 names it a **STACK** (Start
+Acknowledgment) and gives it two jobs: "a STACK acknowledges receipt of the
+START… And second, each node uses the STACK to again supply the other node with
+a description of itself" — which is exactly why the round-1 frame is 106 bytes
+and re-carries the config body, where a pure retransmit would be redundant. The
+round-2 46-byte frame is the **ACK**, normally discarded on receipt ("each port
+driver simply discards the ACK it receives… because it already considers the
+virtual circuit to be OPEN", p. 2-12). This spec now uses START/STACK/ACK,
+matching `src/vmsscs/scs_vc.c` and `scs_vc.h`. **Caveat kept:** p. 2-14 shows a
+genuine *retransmitted START* is possible in the asymmetric-timing case ("A
+response of START advances the circuit only to the START RECEIVED state,
+causing the port driver to issue a STACK") — a retransmitted START exists in
+SCA, it just is not what our round-1 frame is.
+
 **Phase 2 — START/config body — GROUNDED field map** (opcode `0x41`,
 106-byte class; captured for `vms-cd0`). The identity a joining node presents
 for membership rides here. This was grounded by **controlled reconfiguration**
@@ -552,7 +576,7 @@ offset 14; add 14 for the absolute offset). The 106-byte START body:
 | 38 | 2 | constant `0x0001` | constant observed |
 | 40 | 2 | zero | constant observed |
 | **42** | **2** | **inner length** = (payload length − 44) | **GROUNDED**: `0x003e`=62 for the 106-byte START and `0x0002`=2 for the 46-byte ack — the length identity `LE16([42:44]) == len(payload) − 44` holds **42/42 frames, 0 residuals** across both length classes (same proof style as §2's outer length). The config descriptor section starts at payload [44]. |
-| **44** | **2** | **config-round counter** | **GROUNDED**: increments `0 → 0 → 1 → 1 → 2 → 2` across START(round 0), START-retransmit(round 1) and the 46-byte ack(round 2); both nodes carry the same round. |
+| **44** | **2** | **config-round counter** | **GROUNDED**: increments `0 → 0 → 1 → 1 → 2 → 2` across START(round 0), **STACK**(round 1) and the 46-byte ACK(round 2); both nodes carry the same round. |
 | **46** | **2** | **SCSSYSTEMID** (LE `uint16`) | **GROUNDED**: `0x0401`=1025 (VAX1), `0x0402`=1026 (VAX2), `0x044b`=**1099** (the reconfigured ZK node) — byte-exact to the SYSGEN/SDA-reported SCSSYSTEMID in **28/28** 106-byte frames across three distinct values. The joiner's logical LAVC src addr [10:16] tracks it (`aa:00:04:00:4b:04`, node `0x4b`=75 = 1099 & 1023). |
 | 48 | 4 | zero (SCSSYSTEMIDH region) | constant observed |
 | 52 | 2 | constant `0x0001` | 28/28 |
@@ -994,6 +1018,97 @@ See §5.
 templates, in `src/vmsscs/scs_disc.c` (`vms-591`). Not `5` — OVMX has no
 production REJECT caller to answer, so a REJECT_RSP builder would be untested
 code.
+
+**(1b) THE WIDER CORPUS CLOSES THE 5/7 GAP AND IDENTIFIES 10 — vms-54f,
+2026-08-05.** Re-measured over the full lab-1 corpus (163 pcaps:
+`cluster/work/`, `cluster/captures/`, `clean-cluster/captures/`; ad-hoc census,
+mixed sources — per-population claims still owed to the OUI-rule split; offsets
+below content-relative per the §0 erratum):
+
+- **The envelope unifies across every length class.** Every SCS message —
+  the short classes here, the 94-content MSCP commands, and the 190-content
+  §4(d)/§4(j) class — carries inner-length [42:44] (= content length − 44),
+  constant `0x0004` [44:46], **message type [46:48]**, credit [48:50], handle
+  pair [50:58]. The 190-content class is uniformly type **10** with inner
+  length 146 (173,927/173,927 in the sampled `work/` corpus): the "SCS
+  sequence-region" reading of §4(d) for those bytes is superseded — they are
+  this same header.
+- **Resolution (iii) was correct: `5` and `7` exist.** 58-content class:
+  type `7` 988× against 986 `DISCONNECT_REQ` (type 6) — 1:1; type `5` 4,536×
+  against 4,654 `REJECT_REQ` (type 4). The 58-content class is the short
+  response/control class: envelope + handle pair, no payload (inner length 14).
+  The earlier "absent in 18,541 frames" finding was a property of the single
+  `formation-ci1.pcap` corpus, not of VMS.
+- **Type `10` = the SCS "application message" MTYPE — IDENTIFIED.**
+  *VAXcluster Principles* p. 4-13 defines the three-way MTYPE taxonomy
+  (application message / application datagram / SCS control message) and
+  Figure 4-5 (p. 4-14) shows an MSCP command nested under the SCS header
+  `CREDIT — SCS MTYPE, DEST CONID, SRC CONID`; p. 4-15 grounds dispatch-on-
+  MTYPE into the CDT message-input routine. On our wire: the golden
+  94-content MSCP command frames (`af2-firsttimer-established-20260728.pcap`,
+  112 frames, identity-proven real-VAX) carry type 10, and the 110-content
+  class partitions exactly {0 CONNECT_REQ, 2 ACCEPT_REQ, 10 application
+  message}. This closes the vms-ecff identification: type 10 is not a tenth
+  connection-control message — it is the carrier of *all* SYSAP payloads.
+- **Types `8`/`9` — REGISTERED, still unnamed.** 58-content class, paired
+  request/response on established connections (8 from A handles (X,Y), 9 from
+  B handles swapped), envelope-only, credit field = 1 in every inspected
+  exemplar; observed immediately preceding teardown
+  (`work/control-vax3-late.pcap` frames 5297–5302: `8 → 9 → 6 → 7` on one
+  handle pair); real-VAX-sourced instances exist. Candidate (NOT grounded, do
+  not name): the credit-flow pair around the p. 2-44 "special credit message"
+  (vms-1d2). Decisive experiment and full observations:
+  `docs/design-mscp-direction.md` §1.3.
+
+**(1c) CREDIT-FIELD MEASUREMENT — one candidate confirmed structurally, one
+WEAKENED, one REFUTED (`vms-54f`, 2026-08-05).** *VAXcluster Principles*
+p. 4-68 (the SSP section) enumerates **four** SCS message types — "datagrams,
+regular messages, **special credit messages**, and node name packets" — and
+states a testable rule: "This field must contain a 0 in datagram packets since
+messages must be used to extend send credits." Measured over the full corpus,
+**real-VAX sources only** (OUI `08:00:2b` + DECnet-logical `aa:00:04`), credit
+field at content `[48:50]`:
+
+| Type | n | credit == 0 | credit values seen |
+|---|---|---|---|
+| 0 (CONNECT_REQ) | 6 081 | 0 (0.0%) | 3, 6, 10 |
+| 2 (ACCEPT_REQ) | 1 109 | 0 (0.0%) | 1, 6, 8, 10 |
+| **5** | **4 523** | **4 523 (100%)** | **0 only** |
+| **7** | **734** | **734 (100%)** | **0 only** |
+| 8 | 608 | 0 (0.0%) | **1 only** |
+| 9 | 247 | 0 (0.0%) | **1 only** |
+| 10 (application msg) | 12 759 | 0 (0.0%) | **1 only** |
+
+- **Types 5 and 7 partition perfectly on credit==0** against every other type,
+  which is what p. 4-68's rule predicts of a class that does not extend credit.
+  This is an independent structural corroboration that 5/7 are the *response*
+  halves (a response acknowledges; it does not extend buffers). Recorded as an
+  observation — the p. 4-68 rule is stated for SSP ports, and we do not assert
+  it verbatim for the LAN/NISCA path.
+- **The 8/9 = "special credit message" candidate is WEAKENED, not confirmed.**
+  p. 2-44 requires a special credit message to *carry the local Pending Receive
+  Credit count* — a quantity that varies with how many buffers were released.
+  Types 8 and 9 carry a **constant 1** across 855 real-VAX frames, identical to
+  ordinary application messages (type 10, constant 1). A constant is not a
+  pending count. Do not name 8/9 as credit messages on present evidence; the
+  §1.3 engineered one-way-flow experiment is still the way to settle it, and it
+  should now also look for a *varying* credit value as the signature.
+- **REFUTED for `vms-7e7`:** the `0x4b13`/`0x5b13` msgtype words at content
+  `[16:18]` are **not** the message-vs-datagram distinction. If they were, one
+  of them would carry credit 0 throughout; instead both carry mostly-nonzero
+  credit at similar rates (`0x4b13`: 24.2% zero of 864 193; `0x5b13`: 29.9%
+  zero of 66 096). That is a fourth candidate rule killed for vms-7e7's
+  lookup-response msgtype question.
+
+**(1d) CORRECTION — the 70-content class does NOT share this envelope.** An
+earlier scratch census for this item printed "types 1..22" for the 70-content
+class by reading `[46:48]` there. That reading is **wrong**: in the 70-content
+class `[42:44]` is not an inner length (observed 9,10,11,12,13 — never 26) and
+`[44:46]` is not the `0x0004` format word (observed `522f`, `532f`, `2abe`, …).
+The envelope in (1b) is asserted for the 58/62/66/110-content connection
+classes, the 94-content MSCP class and the 190-content class **only**. The
+70-content class is a different shape and remains undecoded. Do not extend the
+(1b) offsets to it.
 
 **(2) SCS$DIR_LOOKUP body — name resolution with a grounded negative marker.**
 Past the handle pair the body carries fixed-position, blank-padded ASCII SYSAP
@@ -3242,18 +3357,22 @@ For visibility, every field NOT marked GROUNDED above:
   SCA connection-control message type (`0`=CONNECT_REQ, `1`=CONNECT_RSP,
   `2`=ACCEPT_REQ, `3`=ACCEPT_RSP over 16 dialogues with an exact accept/reject
   partition), which also REFUTES this document's earlier "per-dialogue message
-  counter" reading. What remains open there, **as corrected by `vms-591`**:
-  `4` (REJECT_REQ) and `6` (DISCONNECT_REQ) are each supported by a decisive
-  behavioural partition rather than a decoded field name; `5` and `7` **DO
-  occur** — §4(h)(1b) pairs them to `4` and `6` over 696 and 262 dialogues, and
-  this document's earlier claim that they appear on no capture we hold is
-  **REFUTED**, having rested on a census restricted to the length classes
-  {62, 66, 110} while both response messages are 58 bytes. Their *names* are
-  still figure order, not decoded. **Newly open:** message types `8` and `9`,
-  same 58-byte class, 131 frames each in 25 captures, paired with each other and
-  sitting between the ACCEPT_RSP and the DISCONNECT_REQ in the connection
-  lifetime. Ch. 2 draws eight connection-control messages; these are a ninth and
-  a tenth and **nothing we hold identifies them**. Do not name or emit them.
+  counter" reading. What remains open there, **as corrected by `vms-591` and
+  then by the MSCP research pass**: `4` (REJECT_REQ) and `6` (DISCONNECT_REQ)
+  are each supported by a decisive behavioural partition rather than a decoded
+  field name; `5` and `7` **DO occur** — §4(h)(1b) pairs them to `4` and `6`
+  over 696 and 262 dialogues, and this document's earlier claim that they appear
+  on no capture we hold is **REFUTED**, having rested on a census restricted to
+  the length classes {62, 66, 110} while both response messages are 58 bytes.
+  That cause is recorded because it is reusable: a class-restricted census is
+  how this document came to publish a false absence.
+  **`10` is IDENTIFIED** as the SCS "application message" MTYPE (*VAXcluster
+  Principles* pp. 4-13..4-15) carrying all SYSAP payloads — which explains its
+  2 889-frame majority of the 110-byte class and the fact that OVMX, which
+  routes no SYSAP payload, has never emitted one.
+  `8`/`9` are a paired, envelope-only control exchange on established
+  connections, registered but **deliberately unnamed**; candidate and decisive
+  experiment in `docs/design-mscp-direction.md` §1.3. Do not emit them.
   **The vocabulary gap is a COUNTED RUNTIME FIGURE, not only a note**
   (`vms-561`): the five SCS services (`src/vmsscs/scs_svc.c`) ask the port
   driver to emit the packet each transition names, and `scsd.c` answers

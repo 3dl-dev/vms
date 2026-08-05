@@ -314,15 +314,58 @@ record_verdict() {
 # every fragment here contains spaces. Callers that pass three arguments behave
 # exactly as before.
 #
-# MEASURED so that this path is not itself an unfired assertion: add
-# "$F_CITE_TREE_UNRESOLVED" to the forbidden list of the fabricated-id control
-# -- a message that control genuinely does provoke, and is allowed to -- and
-# the suite goes 62/0 -> 61 passed, 1 FAILED, the failure being that control,
-# reporting "went red for its own reason AND for a forbidden one" and naming
-# the fragment.
+# MEASURED so that this path is not itself an unfired assertion: the vms-871
+# measurement recorded below forbids "FAIL:" on the fabricated-id control and
+# the suite reports "went red for its own reason AND for a forbidden one",
+# naming the fragment. So the forbidden list fires.
+#
+# A PREVIOUS RECIPE FOR THIS IS DELETED RATHER THAN REWORDED, per the standing
+# ruling. It said to add "$F_CITE_TREE_UNRESOLVED" to that control's forbidden
+# list for a 62/0 -> 61/1 result. RE-MEASURED 2026-08-05: that no longer
+# fails -- the control does not provoke that message on this tree. It was true
+# when written; the tree moved under it. A recipe naming a specific gate
+# message is exactly the kind of measurement that goes stale silently, which is
+# why its replacement forbids a fragment any red output must contain.
+#
+# COVERAGE IS CONTRIBUTED BY A CONTROL THAT PASSED, NOT BY ONE THAT RAN
+# (rd vms-871). This push used to be the FIRST statement of this function --
+# before injection_landed(), before the gate ran, before any verdict. The
+# coverage check at the bottom of this file is membership in $WORK/needs and
+# nothing else, so "coverage 39/39" meant 39 properties were NAMED by a control
+# that RAN, not 39 provoked by a control that PASSED. A control that went red
+# for the wrong reason, or whose fixture never landed, still bought its own
+# coverage.
+#
+# SEVERITY WAS BOUNDED AND IS STATED SO IT IS NOT RE-PRICED AS AN ESCAPE: a
+# failing control reds the suite, so this could never certify a GREEN run. It
+# misreported only inside an already-red one -- which is exactly when someone
+# is reading the coverage line to decide what still needs a control.
+#
+# MEASURED, BOTH DIRECTIONS, SAME FORCED FAILURE. One control -- the
+# fabricated-item-id one, whose required fragment is $F_CITE_UNLISTED -- was
+# made to fail by forbidding a fragment its red output certainly contains
+# ("FAIL:"), leaving its `need` untouched so the only variable is whether a
+# FAILING control contributes coverage:
+#
+#   without this change: "PASS: coverage -- all 41 failure message(s) the gate
+#                        can emit are named by a control's required fragment"
+#                        63 control(s) passed, 1 failed
+#                        -- the run reports the property COVERED by the very
+#                           control that just failed to provoke it.
+#
+#   with this change:    "FAIL: the gate can fail in ways no control here
+#                        provokes:  , which is NOT IN the citation ledger"
+#                        62 control(s) passed, 2 failed
+#                        -- the property is correctly reported UNCOVERED.
+#
+# A NOTE FOR WHOEVER MEASURES THIS NEXT, because it cost a cycle: the recipe
+# recorded above for the forbidden-list path -- add "$F_CITE_TREE_UNRESOLVED"
+# to the fabricated-id control's forbidden list -- NO LONGER FAILS on this
+# tree. It was a true measurement when written and the tree has moved under it.
+# That is why the measurement above forbids a fragment that cannot go stale
+# rather than a specific gate message.
 expect_red() {
     files="$1"; name="$2"; need="$3"; forbid="${4:-}"
-    printf '%s\n' "$need" >> "$WORK/needs"
     for _f in $files; do
         if ! injection_landed "$_f"; then
             echo "  FAIL: BROKEN FIXTURE (not a broken gate): $name"
@@ -356,6 +399,11 @@ expect_red() {
         done
         [ -s "$WORK/red_forbidden" ] && ok=0
         rm -f "$WORK/red_forbidden"
+    fi
+    # See the header: only a control that actually provoked its property gets
+    # to claim that property is covered (rd vms-871).
+    if [ "$ok" -eq 1 ]; then
+        printf '%s\n' "$need" >> "$WORK/needs"
     fi
     record_verdict "$name" $ok
     restore

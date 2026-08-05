@@ -88,6 +88,18 @@ import time
 DECL_RE = re.compile(r"OVMX-[A-Z]+:")
 ID_RE = re.compile(r"\bvms-[0-9a-z]+(?:\.[0-9a-z]+)?\b")
 
+# The statuses that mean an item is CLOSED, taken from rd itself rather than
+# from observation of this board: `rd close --help` states "Resolution must be
+# one of: done, cancelled, failed (default: done)".
+#
+# THIS IS NOT A CLASSIFIER AND MUST NOT BECOME ONE. `open` is still decided
+# solely by membership in `rd list` (see the module docstring). This set is
+# used in one place, for one purpose: to REFUSE a `closed` verdict that the
+# item's own status contradicts (rd vms-10c). Anything not in here -- including
+# a status added to rd after this line was written -- takes the refusal path,
+# which is the safe direction.
+CLOSING_STATUSES = frozenset(("done", "cancelled", "failed"))
+
 SCAN_DIRS = ("src", "tools")
 SCAN_SUFFIXES = (".c", ".h", ".inc", ".S", ".py", ".sh", ".cmake", ".txt", ".md")
 
@@ -242,6 +254,48 @@ def main():
         rc, item = rd_json(["show", cid], root)
         if rc == 0 and isinstance(item, dict) and item.get("id"):
             st = item.get("status") or "?"
+            # ABSENCE FROM `rd list` DOES NOT MEAN CLOSED (rd vms-10c).
+            #
+            # This branch used to write ("closed", st) on the strength of the
+            # id not appearing in `rd list`. That is only sound if the list is
+            # COMPLETE, and it is not: rd auto-detects its board from the
+            # working directory, so the same board answered 289 items from the
+            # repo root and 159 from a clone of the same repo at another path,
+            # same machine, same second. Run against a sandbox copy -- which is
+            # exactly what the freshness suite does -- genuinely-active items
+            # fell into this branch and were written `closed`.
+            #
+            # THE ROW IT PRODUCED WAS SELF-CONTRADICTORY AND THAT IS THE TELL:
+            # `closed  active`. A closed item does not have status `active`.
+            # OBSERVED on vms-as1 and vms-pv1, both cited by OVMX-UNWIRED
+            # declarations, in a run where this script's own reporting and the
+            # freshness test's independent per-row read disagreed with each
+            # other inside one invocation.
+            #
+            # So the contradiction is detected with data already in hand and
+            # REFUSED. Note what is deliberately NOT done here: the status is
+            # not used to decide `open`. Membership in `rd list` remains the
+            # sole classifier, exactly as the module docstring requires, so an
+            # unfamiliar status still cannot be mis-sorted INTO open. The
+            # status is used only to reject a `closed` verdict that the item's
+            # own record contradicts -- and an unrecognised status takes the
+            # refusal path too, because the safe direction for "this script has
+            # never seen this state" is to stop, not to guess `closed`.
+            if st not in CLOSING_STATUSES:
+                die("`rd list` does not carry %s, but `rd show %s` reports its "
+                    "status as %r -- which is not a closing status (%s).\n"
+                    "Writing this row would record a live item as `closed`, and "
+                    "every gate that reads the ledger trusts that column.\n"
+                    "The overwhelmingly likely cause is a PARTIAL `rd list`: rd "
+                    "resolves its board from the working directory, and this run "
+                    "used %s. That is rd vms-10c, and the row it produces "
+                    "(`closed %s`) is self-contradictory rather than merely "
+                    "wrong.\n"
+                    "Refusing to write a ledger instead of guessing. If %r is "
+                    "genuinely a closing status this script does not know, add "
+                    "it to CLOSING_STATUSES -- deliberately, not to clear a red."
+                    % (cid, cid, st, "|".join(sorted(CLOSING_STATUSES)),
+                       root, st, st))
             rows.append((cid, "closed", st, clean_title(item.get("title"))))
             closed.append((cid, st))
         else:

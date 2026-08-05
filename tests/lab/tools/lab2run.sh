@@ -19,10 +19,13 @@
 # docs/HANDOFF-vms-2f3.md.
 set -u
 POD=$1; TAG=$2; STORE=$3; DUR=$4; shift 4
-NS=ovmx-lab
-L=/lab/k8s-labs/$POD/logs
-HOSTL=/data/training/vax/k8s-labs/$POD/logs
-W=/data/training/vax/cluster/work
+# vms-1da: NS/L/HOSTL/W overridable (defaults unchanged) so the staging +
+# md5-verification logic can be exercised against a mocked kubectl/pod-fs in
+# a test harness, without a live k3s cluster or the real tank mounts.
+NS=${NS:-ovmx-lab}
+L=${L:-/lab/k8s-labs/$POD/logs}
+HOSTL=${HOSTL:-/data/training/vax/k8s-labs/$POD/logs}
+W=${W:-/data/training/vax/cluster/work}
 REPO=${REPO:-/home/baron/projects/vms}
 # vms-578: the daemon under test is overridable, so a worktree can run its
 # OWN build without clobbering the shared build-d94 artifact another agent
@@ -45,20 +48,47 @@ clean(){ tr -d '\000' < "$HOSTL/vax1.log" 2>/dev/null | sed 's/\x1b\[[0-9;]*[a-z
 
 log "RUN $TAG pod=$POD store=$STORE dur=$DUR daemon=$SCSD_BIN env='$*'"
 
-# Stage the daemon and the identity store into the pod.
+# vms-1da: /lab is the tank volume, mounted into EVERY pod and shared with
+# lab-1. Staging the daemon at a fixed /lab/SCSD.EXE meant concurrent lab-2
+# sessions (or lab-1) silently clobbered each other's binary mid-run -- one
+# arm's captures got attributed to another arm's daemon. Stage per-run, under
+# a directory namespaced by this run's TAG (already required to be unique --
+# see the RUN log line above), never touch a shared path, and prove the copy
+# landed byte-exact before AND after the run instead of trusting cp's exit code.
+RDIR="/lab/run-$TAG"
+kx mkdir -p "$RDIR"
+
+# Stage the daemon and the identity store into the pod. Never discard cp's
+# stderr -- a truncated/failed copy must be visible, not silently swallowed.
 [ -x "$SCSD_BIN" ] || { echo "lab2run: FATAL -- no daemon at $SCSD_BIN" >&2; exit 2; }
-kubectl -n $NS cp "$SCSD_BIN" "$POD:/lab/SCSD.EXE" >/dev/null 2>&1
-kubectl -n $NS cp "$STORE" "$POD:/lab/$TAG.sysgen"      >/dev/null 2>&1
+LOCAL_MD5=$(md5sum "$SCSD_BIN" | awk '{print $1}')
+if ! kubectl -n $NS cp "$SCSD_BIN" "$POD:$RDIR/SCSD.EXE"; then
+  echo "lab2run: FATAL -- kubectl cp of $SCSD_BIN to $POD:$RDIR/SCSD.EXE failed" >&2
+  exit 2
+fi
+POD_MD5=$(kx md5sum "$RDIR/SCSD.EXE" 2>/dev/null | awk '{print $1}')
+if [ "$LOCAL_MD5" != "$POD_MD5" ]; then
+  echo "lab2run: FATAL -- staged SCSD.EXE md5 mismatch: local=$LOCAL_MD5 pod=$POD_MD5" >&2
+  exit 2
+fi
+log "staged SCSD.EXE at $RDIR/SCSD.EXE md5=$LOCAL_MD5 (verified in-pod)"
+if ! kubectl -n $NS cp "$STORE" "$POD:$RDIR/$TAG.sysgen"; then
+  echo "lab2run: FATAL -- kubectl cp of $STORE to $POD:$RDIR/$TAG.sysgen failed" >&2
+  exit 2
+fi
 # The prior-admission sidecar (sec 4d.2) is part of the identity -- carry it if
 # it exists, and make sure a stale one never leaks in if it does not.
 if [ -r "$STORE.cluster" ]; then
-  kubectl -n $NS cp "$STORE.cluster" "$POD:/lab/$TAG.sysgen.cluster" >/dev/null 2>&1
+  if ! kubectl -n $NS cp "$STORE.cluster" "$POD:$RDIR/$TAG.sysgen.cluster"; then
+    echo "lab2run: FATAL -- kubectl cp of $STORE.cluster to $POD:$RDIR/$TAG.sysgen.cluster failed" >&2
+    exit 2
+  fi
   log "carried prior-admission sidecar ($(wc -c < "$STORE.cluster") bytes)"
 else
-  kx rm -f "/lab/$TAG.sysgen.cluster" 2>/dev/null
+  kx rm -f "$RDIR/$TAG.sysgen.cluster" 2>/dev/null
   log "no prior-admission sidecar -- this identity has never been admitted anywhere"
 fi
-kx chmod +x /lab/SCSD.EXE
+kx chmod +x "$RDIR/SCSD.EXE"
 
 # ⚠ A backgrounded process does NOT survive `kubectl exec` teardown -- a nohup'd
 # tcpdump died at 26 s once and produced a misleadingly short capture. HOLD THE
@@ -68,7 +98,7 @@ kubectl -n $NS exec "$POD" -- timeout $((DUR+40)) \
 TCPD=$!
 sleep 2
 kubectl -n $NS exec "$POD" -- sh -c \
-    "cd /lab && OVMX_SYSGEN_PATH=/lab/$TAG.sysgen $* ./SCSD.EXE --connect --duration $DUR --iface br0 > $L/scsd-$TAG.log 2>&1" &
+    "cd $RDIR && OVMX_SYSGEN_PATH=$RDIR/$TAG.sysgen $* ./SCSD.EXE --connect --duration $DUR --iface br0 > $L/scsd-$TAG.log 2>&1" &
 SCSDP=$!
 log "SCSD started in $POD (exec sessions held open: tcpdump=$TCPD scsd=$SCSDP)"
 
@@ -86,6 +116,17 @@ done
 sleep 3
 kx pkill -f SCSD.EXE 2>/dev/null
 wait $SCSDP 2>/dev/null; wait $TCPD 2>/dev/null
+
+# vms-1da: prove the binary that ran for the whole duration is still the one
+# we staged -- a per-run dir stops a CONCURRENT session from clobbering it,
+# but this is the check that would have caught it happening anyway instead of
+# silently trusting the staging-time verification.
+POST_MD5=$(kx md5sum "$RDIR/SCSD.EXE" 2>/dev/null | awk '{print $1}')
+if [ "$POST_MD5" != "$LOCAL_MD5" ]; then
+  log "FATAL -- SCSD.EXE at $RDIR/SCSD.EXE changed during the run: staged=$LOCAL_MD5 post-run=$POST_MD5 -- this run's results are UNATTRIBUTABLE"
+else
+  log "post-run md5 verified: $RDIR/SCSD.EXE unchanged ($POST_MD5)"
+fi
 log "XITDONE=$(kx grep -ac XITDONE $L/scsd-$TAG.log 2>/dev/null)  RETX=$(kx grep -ac 'RETRANSMIT 0x7b' $L/scsd-$TAG.log 2>/dev/null)  PSC-UNGATED=$(kx grep -aoE 'PSC-UNGATED=[0-9]+' $L/scsd-$TAG.log 2>/dev/null | tail -1)"
 log "CM census:"
 kx grep -ao 'SCSD-T-CMIN, cat 0x[0-9a-f]* op 0x[0-9a-f]*' "$L/scsd-$TAG.log" 2>/dev/null \

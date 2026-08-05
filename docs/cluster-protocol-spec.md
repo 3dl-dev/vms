@@ -3371,8 +3371,10 @@ For visibility, every field NOT marked GROUNDED above:
   2 889-frame majority of the 110-byte class and the fact that OVMX, which
   routes no SYSAP payload, has never emitted one.
   `8`/`9` are a paired, envelope-only control exchange on established
-  connections, registered but **deliberately unnamed**; candidate and decisive
-  experiment in `docs/design-mscp-direction.md` §1.3. Do not emit them.
+  connections — that is a CHARACTERISATION, not an identification:
+  **nothing we hold identifies them**, and they are not
+  named here. The candidate and its decisive experiment are in
+  `docs/design-mscp-direction.md` §1.3. Do not name or emit them.
   **The vocabulary gap is a COUNTED RUNTIME FIGURE, not only a note**
   (`vms-561`): the five SCS services (`src/vmsscs/scs_svc.c`) ask the port
   driver to emit the packet each transition names, and `scsd.c` answers

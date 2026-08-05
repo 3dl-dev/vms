@@ -31,8 +31,11 @@ Two halves. They are judged separately below because they answer differently.
 | Thing | SHA | Note |
 |---|---|---|
 | Executive / negative-control evidence | **`0830b59`** | CI run `31023091917`, job green |
-| Citation evidence | **`cf4ce33`** | current `origin/main` at time of measurement |
-| Intervening merge | `dc10e1b` (#85, `vms-187` SCA) | **executive paths untouched** — see §4 |
+| …re-confirmed on current main | **`dc10e1b`** (#85, `vms-187` SCA) | CI run `31025600839`, job green, **identical figures** |
+| Citation evidence | **`cf4ce33`** | current `origin/main` (attest commit on `dc10e1b`) |
+
+Half one was measured twice, on two different SHAs, across an unrelated 47,968-line merge. Both runs
+report the same figures. See §4.5.
 
 ---
 
@@ -62,7 +65,8 @@ finding rather than five.
 ## 2. HALF ONE — the executive: **SATISFIED, BY EXECUTION**
 
 Source: CI run `31023091917`, job *Kernel Executive — Per-Facility Negative Controls (attribution)*,
-tree `0830b59`, 15m46s, **conclusion `success`**.
+tree `0830b59`, **conclusion `success`** — and re-measured on current main `dc10e1b` (run
+`31025600839`, same job, `success`, identical figures; §4.5).
 
 ### The positive control ran first, and it is not vacuous
 
@@ -230,11 +234,16 @@ red the gate when the ledger is accurate. The failure in §3.2 is the ledger, no
    `vms-41b`). All are wired to `vms-150`/`vms-042` as veracity questions, not to `vms-b33`.
 4. **`vms-d894`'s literal criterion is unmet by operator ruling**, not by argument. Deleting a defect
    costs a measured 69 changed lines across 3 files.
-5. **This verdict's executive evidence is from `0830b59`, one merge behind current main.** `dc10e1b`
-   (#85, `vms-187` SCA) landed during the run. Its diff touches `src/vmsscs/`, `tests/vmsscs/` and
-   `tools/cluster/` and **no path under `src/kernel/`, `src/libvms/` or `tests/qemu/`** — verified by
-   `git diff --name-only`. The negative-control evidence therefore carries forward. The citation
-   evidence in §3 is already at `cf4ce33` and includes #85's new sources.
+5. **Half one is measured on two SHAs, not one, and it was not assumed to carry.** `dc10e1b` (#85,
+   `vms-187` SCA — 47,968 insertions) landed mid-run. Its diff touches `src/vmsscs/`,
+   `tests/vmsscs/` and `tools/cluster/` and **no path under `src/kernel/`, `src/libvms/` or
+   `tests/qemu/`** (verified by `git diff --name-only`), which is the *argument* that the evidence
+   carries. It was then **also measured**: CI run `31025600839` on `dc10e1b` reports
+   `Facility negative controls: 45 passed, 0 failed`, `observed: 42 defect(s) executed, 274 failing
+   assertion(s) recorded`, `ok: the committed record matches this run EXACTLY, row for row`, and the
+   same pristine positive control — identical to `0830b59` in every figure. The citation evidence in
+   §3 is at `cf4ce33` and already includes #85's new sources (they add no closed citation: the count
+   is 22 cited ids, 21 open).
 
 ---
 

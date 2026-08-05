@@ -71,3 +71,6 @@ __pycache__/
 .telemetry/
 scratchpad/
 .ready/*.lock
+
+# short-name build dir used by the integration worktree
+b/

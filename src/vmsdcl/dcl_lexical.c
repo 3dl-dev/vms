@@ -41,6 +41,9 @@
 #include "vmsfs/filespec.h"
 #include "sysgen_params.h"
 #include "ovmx_identity.h"
+/* The rights database: F$IDENTIFIER READS it rather than answering from a
+ * table of its own (vms-2f8). See src/libvms/rtl/rightslist.c. */
+#include "rightslist.h"
 
 /* External functions */
 extern int dcl_translate_logical(const char *name, char *result, size_t result_size);
@@ -2451,52 +2454,51 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
 
     if (strcmp(conv, "NAME_TO_NUMBER") == 0) {
         /*
-         * THE TWO WELL-KNOWN IDENTIFIERS, BOTH NOW PINNED TO THE ORACLE
-         * (vms-2f8). Asked of OpenVMS VAX V7.3 on lab node vax3:
+         * THE RIGHTS DATABASE ANSWERS THIS, NOT THIS FUNCTION (vms-2f8).
          *
-         *     F$IDENTIFIER("SYSTEM","NAME_TO_NUMBER")  -> 65540   (%X00010004)
-         *     F$IDENTIFIER("DEFAULT","NAME_TO_NUMBER") -> 8388736 (%X00800080)
+         * What stood here was a hardcoded pair: SYSTEM -> 65540 and
+         * DEFAULT -> 8388736, everything else the miss. Both VALUES were
+         * right -- an earlier round pinned them to the oracle -- and the
+         * function was still fabricating in the sense CLAUDE.md Rule 11
+         * means: a user-visible VMS command producing an answer itself
+         * instead of reading the facility that owns it. The visible cost was
+         * that the six environmental identifiers VMS has (BATCH, DIALUP,
+         * INTERACTIVE, LOCAL, NETWORK, REMOTE) and OVMX's own non-SYSTEM
+         * accounts had no identifier at all, while SYS$SYSTEM:RIGHTSLIST.DAT
+         * sat provisioned on the system disk with no reader.
          *
-         * SYSTEM already matched. DEFAULT DID NOT: this returned
-         * (200 << 16) | 1, i.e. OVMX had read VMS's UIC [200,200] -- which is
-         * OCTAL, as every VMS UIC is written -- as decimal group 200 with
-         * member 1. Corrected below, and written in octal so the literal
-         * reads as the UIC it is.
+         * It reads it now. src/libvms/rtl/rightslist.c resolves general
+         * identifiers from RIGHTSLIST.DAT and UIC identifiers from SYSUAF,
+         * which is where the oracle shows both kinds coming from; every
+         * value is measured in docs/oracle/vax73-rights-database.md.
          *
-         * These stay hardcoded here. On VMS the conversion is a lookup in the
-         * RIGHTS DATABASE; OVMX ships a populated
-         * SYS$SYSTEM:RIGHTSLIST.DAT (INTERACTIVE/BATCH/NETWORK/LOCAL/REMOTE,
-         * provisioned by src/ovmx_init/ovmx_init.c) that no code reads, so
-         * making this function read it is a real change and it is vms-2f8's,
-         * not this round's.
+         * THE MISS IS UNCHANGED AND STILL PINNED: an identifier that is not
+         * valid converts to a ZERO in this direction. Measured --
+         * F$IDENTIFIER("NOSUCHIDENT","NAME_TO_NUMBER") -> 0 -- and the
+         * public HP/VSI DCL Dictionary says the same. A rights database
+         * that cannot be opened at all takes this same path, deliberately:
+         * a missing facility answers the miss, it does not resurrect a
+         * built-in table (Rule 9 -- fail honestly, never fake).
+         *
+         * NO HOST PASSWD LOOKUP (vms-f39, Rule 10). This once read:
+         *
+         *     struct passwd *pw = getpwnam(id_str);
+         *     if (pw) result = (pw->pw_gid << 16) | (pw->pw_uid & 0xFFFF);
+         *
+         * so F$IDENTIFIER("baron","NAME_TO_NUMBER") answered with the
+         * developer's Linux account dressed as a VMS UIC. Deleted, not
+         * replaced -- and note that what replaces the whole branch now is a
+         * VMS facility rather than another host one.
          */
-        if (strcmp(id_upper, "SYSTEM") == 0) {
-            snprintf(result, result_size, "%d", (1 << 16) | 4); /* [1,4] */
-        } else if (strcmp(id_upper, "DEFAULT") == 0) {
-            snprintf(result, result_size, "%d", (0200 << 16) | 0200); /* [200,200] octal */
+        uint32_t ident_value;
+        if (rightslist_name_to_value(id_upper, &ident_value) == 0) {
+            snprintf(result, result_size, "%d", (int)ident_value);
         } else {
-            /*
-             * NO HOST PASSWD LOOKUP (vms-f39, CLAUDE.md Rule 10). This read:
-             *
-             *     struct passwd *pw = getpwnam(id_str);
-             *     if (pw) result = (pw->pw_gid << 16) | (pw->pw_uid & 0xFFFF);
-             *
-             * so F$IDENTIFIER("baron","NAME_TO_NUMBER") answered with the
-             * developer's Linux account dressed as a VMS UIC. A Linux account
-             * is not a VMS rights identifier and its uid/gid pair is not a
-             * UIC. Deleted, not replaced.
-             *
-             * THE MISS VALUE IS ZERO, AND IT IS PINNED (vms-2f8). Asked of
-             * OpenVMS VAX V7.3 on lab node vax3:
-             *
-             *     F$IDENTIFIER("NOSUCHIDENT","NAME_TO_NUMBER")  ->  0
-             *
-             * and the public HP/VSI DCL Dictionary says the same for this
-             * direction: an identifier that is not valid converts to a zero.
-             * "0" is what this function already returned when the passwd
-             * lookup missed, so nothing changes here -- what changed is that
-             * it is now the measured answer rather than a kept one.
-             */
+            /* The miss, pinned: an identifier that is not valid converts to
+             * a ZERO in this direction. See the block above -- and note this
+             * is also the line the dcl-fident-name2num-host-passwd negative
+             * control restores the deleted getpwnam() defect onto, so its
+             * text and indentation are load-bearing. */
             snprintf(result, result_size, "0");
         }
     } else if (strcmp(conv, "NUMBER_TO_NAME") == 0) {
@@ -2505,48 +2507,68 @@ static int lex_identifier(struct dcl_context *ctx, const char *args,
         int member = (int)(uic & 0xFFFF);
         int group = (int)((uic >> 16) & 0xFFFF);
 
-        if (group == 1 && member == 4) {
-            /* [1,4] -> SYSTEM, pinned: the oracle answers
-             * F$IDENTIFIER(65540,"NUMBER_TO_NAME") -> "SYSTEM" (vms-2f8).
-             * The reverse of DEFAULT's 8388736 is NOT mapped here: the oracle
-             * was asked that pair only in the NAME_TO_NUMBER direction, and an
-             * unmeasured mapping is not something to add on the strength of
-             * symmetry. It therefore falls to the miss below. */
-            snprintf(result, result_size, "SYSTEM");
+        /*
+         * 'group' and 'member' ARE DELIBERATELY KEPT THOUGH THIS FUNCTION NO
+         * LONGER BRANCHES ON THEM. Two negative controls in
+         * tests/qemu/facility_defects.sh restore the deleted defects onto the
+         * miss line below -- dcl-fident-num2name-host-passwd needs 'member'
+         * for its getpwuid() and dcl-fident-num2name-bracketed-uic needs both
+         * for its "[%d,%d]". Deleting them here would leave two mutations
+         * that do not compile, and a mutation that does not compile is a
+         * broken fixture rather than a gate that bites (see this file's
+         * header note on <pwd.h>, which keeps that include for the same
+         * reason).
+         */
+        (void)group;
+        (void)member;
+
+        /*
+         * THE RIGHTS DATABASE ANSWERS THIS TOO (vms-2f8).
+         *
+         * What stood here was a single hardcoded case, [1,4] -> "SYSTEM",
+         * with everything else falling to the miss. That round declined to
+         * add DEFAULT's reverse mapping because the oracle had been asked
+         * that pair only in the NAME_TO_NUMBER direction and symmetry is not
+         * evidence -- the right call on the evidence it had. IT HAS NOW BEEN
+         * ASKED (docs/oracle/vax73-rights-database.md §2):
+         *
+         *     F$IDENTIFIER(8388736,"NUMBER_TO_NAME")  ->  "DEFAULT"
+         *
+         * and every identifier the oracle holds round-trips. So the mapping
+         * is not added on symmetry; it falls out of reading the database,
+         * which is where VMS reads it from.
+         *
+         * THE MISS VALUE IS THE NULL STRING, AND IT IS PINNED. Measured
+         * against OpenVMS VAX V7.3, every input shape tried:
+         *
+         *     F$IDENTIFIER(1000,"NUMBER_TO_NAME")        ->  ""
+         *     F$IDENTIFIER(0,"NUMBER_TO_NAME")           ->  ""
+         *     F$IDENTIFIER(77777,"NUMBER_TO_NAME")       ->  ""
+         *     F$IDENTIFIER(196609,"NUMBER_TO_NAME")      ->  ""
+         *     F$IDENTIFIER(%X80010004,"NUMBER_TO_NAME")  ->  ""
+         *     F$IDENTIFIER(1..5,"NUMBER_TO_NAME")        ->  ""
+         *
+         * That last row is the one this change turns on. 1..5 were the values
+         * OVMX's own shipped RIGHTSLIST.DAT assigned to INTERACTIVE, BATCH,
+         * NETWORK, LOCAL and REMOTE; on real VMS not one of them is an
+         * identifier. Wiring this function to the file as it stood would have
+         * shipped five wrong answers while looking like it had started
+         * reading a real facility, so the file was corrected in the same
+         * commit that made anything read it.
+         *
+         * Real VMS emits no bracketed UIC from F$IDENTIFIER for any input, so
+         * the "[%d,%d]" rendering that once stood on the miss line was a
+         * plausible-looking answer to a condition VMS never gives that answer
+         * to -- CLAUDE.md Rule 10's illegal third answer.
+         */
+        char ident_name[RIGHTSLIST_NAME_MAX];
+        if (rightslist_value_to_name((uint32_t)uic, ident_name,
+                                     sizeof(ident_name)) == 0) {
+            snprintf(result, result_size, "%s", ident_name);
         } else {
-            /*
-             * The same deletion as NAME_TO_NUMBER above, and the site that
-             * kept vms-f39 alive through round 2: this ran
-             * getpwuid((uid_t)member) and answered with the HOST Linux
-             * account name, upcased. MEASURED on this repo's build host,
-             * before this change:
-             *
-             *   $ printf 'X = F$IDENTIFIER(1000,"NUMBER_TO_NAME")\nSHOW SYMBOL X\n' |
-             *       ./build/bin/DCL.EXE
-             *     X = "BARON"
-             *
-             * It sat 1840 lines below lex_user()'s comment declaring the
-             * class removed, in the same file, and was reported settled.
-             *
-             * THE MISS VALUE IS THE NULL STRING, AND IT IS PINNED (vms-2f8).
-             * What stood here after that deletion was "[%d,%d]" -- the UIC the
-             * caller passed in, echoed back in brackets. REFUTED against
-             * OpenVMS VAX V7.3 on lab node vax3, every input shape tried:
-             *
-             *     F$IDENTIFIER(1000,"NUMBER_TO_NAME")        ->  ""
-             *     F$IDENTIFIER(0,"NUMBER_TO_NAME")           ->  ""
-             *     F$IDENTIFIER(77777,"NUMBER_TO_NAME")       ->  ""
-             *     F$IDENTIFIER(196609,"NUMBER_TO_NAME")      ->  ""
-             *     F$IDENTIFIER(%X80010004,"NUMBER_TO_NAME")  ->  ""
-             *
-             * and the public HP/VSI DCL Dictionary agrees: an identifier that
-             * is not valid converts to a null string in this direction. Real
-             * VMS emits no bracketed UIC from F$IDENTIFIER for any input, so
-             * the bracketed rendering was a plausible-looking answer to a
-             * condition VMS never gives that answer to -- CLAUDE.md Rule 10's
-             * illegal third answer. It is not kept and not re-chosen: it is
-             * replaced by the measured one.
-             */
+            /* The miss. Also the line both num2name negative controls
+             * restore their defect onto -- text and indentation are
+             * load-bearing. */
             result[0] = '\0';
         }
     } else {

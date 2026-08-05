@@ -2670,14 +2670,35 @@ static int scsd_joiner_retransmit_pending(const struct scsd_rx *rx,
  *      and every one of them was a RESPONSE. OVMX could answer a lookup and
  *      could not make one. There was nothing to delete.
  *
- *  (2) THE REFERENCE JOINER DOES NOT POLL BEFORE IT CONNECTS. In the golden
- *      formation-ci1-joinwindow.pcap the directory exchange runs in ONE
- *      direction: SCA 21/29/37 are all VAX1 (the established member) asking
- *      VAX2 (the joiner), and VAX2 only answers. VAX2 then opens its own
- *      VMS$VAXcluster connection (clean-ref idx52, vms-d94) WITHOUT having
- *      polled anybody. So gating OVMX's joiner connect on a poller answer would
- *      move OVMX AWAY from the reference wire, not toward it. That connect is
- *      therefore left exactly as it was.
+ *  (2) THE REFERENCE JOINER POLLS *AFTER* IT IS IN, NOT BEFORE.
+ *
+ *      CORRECTED (vms-66f, adversary-caught): an earlier revision of this
+ *      comment said --
+ *      REFUTED-QUOTE-BEGIN
+ *        "the directory exchange runs in ONE direction ... VAX2 only
+ *        answers. VAX2 then opens its own VMS$VAXcluster connection WITHOUT
+ *        having polled anybody."
+ *      REFUTED-QUOTE-END
+ *      Both of those are REFUTED by the capture they
+ *      cite, and the roles were inverted. Re-derive with
+ *      tools/cluster/scs_dir_role_measure.py (14 checks, 0 failures,
+ *      2026-08-05); frame numbers below are 0-based raw pcap indices of
+ *      formation-ci1-joinwindow.pcap:
+ *
+ *        - VAX2 NEVER sends a VMS$VAXcluster CONNECT_REQ. The file holds
+ *          exactly ONE ([46:48]=0, name pair VMS$VAXcluster/VMS$VAXcluster) and
+ *          it is frame 47, VAX1 -> VAX2. VAX2's answer, frame 50, VAX2 -> VAX1,
+ *          is [46:48]=2, an ACCEPT_REQ. The ESTABLISHED MEMBER is the active half.
+ *        - VAX2 DOES poll: frame 1237, VAX2 -> VAX1, [46:48]=0, name pair
+ *          ("SCS$DIRECTORY", "SCS$DIR_LOOKUP"), with its own lookup round
+ *          following on it (1244/1248 asking, 1247/1250 answering).
+ *
+ *      What survives is ORDERING: VAX2's poll is at t+33.804 s, 0.36 s AFTER
+ *      the VMS$VAXcluster connection formed at t+33.444 s. A joiner polls once
+ *      it is in. So gating OVMX's joiner connect on a poller answer still moves
+ *      OVMX away from the reference wire -- but because of the SEQUENCE, not
+ *      because the joiner never polls. That connect is left exactly as it was.
+ *      Full census and both refuted sentences: spec sec 4(h)(2a).
  *
  * What the poller adds is the discovery path OVMX genuinely lacked: a node OVMX
  * can see but which has never opened a directory connection TO it was, until

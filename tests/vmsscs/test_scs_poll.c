@@ -53,6 +53,7 @@ struct stub {
     char last_inquiry[SCS_DIR_NAME_LEN + 1];
     uint8_t last_inquiry_node[6];
     int inquiry_refuse;               /* 1 => the builder declines */
+    int refuse_other;                 /* 1 => non-connect actions come back REFUSED */
     uint8_t last_connect_frame[SCS_DIR_CONNREQ_FRAME_LEN];
     int have_connect_frame;
 };
@@ -96,7 +97,10 @@ static int stub_emit(void *ctx, struct scs_cdt *cdt, enum scs_conn_action act,
         return SCS_SVC_EMIT_NOBUILDER;
     }
     s->other_actions++;
-    return SCS_SVC_EMIT_NOBUILDER;
+    /* REFUSED and NOBUILDER land in DIFFERENT port counters (scs_svc.h). The
+     * flag lets a case pick which, so the split is measured rather than
+     * assumed -- see test_emit_accounting_splits_refused_from_nobuilder. */
+    return s->refuse_other ? SCS_SVC_EMIT_REFUSED : SCS_SVC_EMIT_NOBUILDER;
 }
 
 static int stub_inquire(void *ctx, struct scs_cdt *cdt, const uint8_t node[6],
@@ -527,6 +531,430 @@ static void test_descriptors_are_real_cdts(void)
     unsetenv("OVMX_PRCPOLINTERVAL");
 }
 
+/* ==========================================================================
+ * ROUND 2 (vms-66f) -- THE BRANCHES A MUTATION SWEEP FOUND UNCOVERED.
+ *
+ * The veracity review mutated production code under the stubs above and named
+ * surviving mutants. A re-run with a harder set left 18 of 26 alive. EVERY case
+ * below exists because a specific mutant survived without it, and each one
+ * names its mutant.
+ *
+ * NO KILL COUNT IS ASSERTED HERE. Re-derive it:
+ *
+ *     ./tools/cluster/scs_poll_mutation_sweep.py
+ *
+ * That script carries all 26 mutants, runs a CONTROL first (so no kill can be a
+ * pre-existing red), rebuilds per mutant, and prints the count. It is hand-run,
+ * not a ctest, because every mutant needs a full rebuild -- the same reason
+ * tools/scs_credit_measure.py is hand-run. Its cheap document-only sibling,
+ * tests/vmsscs/test_scs_dir_mutants.py, IS in ctest.
+ * ========================================================================== */
+
+/* MUTANTS KILLED: name_scopes() -> `return 1;`  and  -> `return n->all_nodes;`
+ * and scs_poll_polling() dropping its name_scopes() term.
+ *
+ * WHY THEY SURVIVED: every scs_poll_request() call site -- in this file AND in
+ * production scsd.c -- passed node == NULL. p. 2-50's SPECIFIC-NODE scope
+ * ("requesting its Process Poller to look for SYSAP_X on NODE_X") had no caller
+ * at all, so the whole branch was free to be wrong. */
+static void test_node_scoped_request(void)
+{
+    printf("[p. 2-50 specific-node scope: SYSAP_X on NODE_X, and nowhere else]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    fixture_open_vc(&f, vax2);
+    /* VAX2 is added FIRST so it occupies the slot the node scan reaches first.
+     * Without that the scan short-circuits on VAX1 and never has to decide
+     * anything about VAX2. */
+    scs_poll_add_node(&f.poll, vax2);
+    scs_poll_add_node(&f.poll, vax1);
+
+    check(scs_poll_request(&f.poll, "MSCP$DISK", vax1, on_found, &f.found) == 1,
+          "a SYSAP requests polling for MSCP$DISK on VAX1 ONLY (p. 2-50)");
+    check(scs_poll_polling(&f.poll, "MSCP$DISK", vax1) == 1,
+          "polling is ON for the node the request names");
+    check(scs_poll_polling(&f.poll, "MSCP$DISK", vax2) == 0,
+          "polling is OFF on every OTHER node -- a node-scoped request is not "
+          "an all-nodes request");
+
+    unsigned sent = run_cycle(&f, 10000);
+    check(sent == 1 && memcmp(f.stub.last_inquiry_node, vax1, 6) == 0,
+          "the cycle that runs is against VAX1, the node in scope");
+    check(f.poll.skipped_disabled == 1,
+          "VAX2 -- reachable, but with no name in scope -- was SKIPPED and counted, "
+          "not connected to for nothing");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANT KILLED: the round-robin index `(p->next_scan + k) % MAX` -> `k`.
+ *
+ * WHY IT SURVIVED: with TWO nodes and a 5 s interval the earlier slot is never
+ * due twice running, so a scan that always restarts at slot 0 is
+ * indistinguishable from round-robin. Three nodes at the SYSGEN MINIMUM
+ * interval (1 s, where every node is due every cycle) separate them. */
+static void test_round_robin_visits_every_node(void)
+{
+    printf("[round-robin: three always-due nodes are visited in turn]\n");
+    static const uint8_t vax3[6] = { 0xaa, 0x00, 0x04, 0x00, 0x03, 0x04 };
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "1", 1); /* the SYSGEN minimum */
+    fixture_open_vc(&f, vax1);
+    fixture_open_vc(&f, vax2);
+    fixture_open_vc(&f, vax3);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+    scs_poll_add_node(&f.poll, vax2);
+    scs_poll_add_node(&f.poll, vax3);
+
+    uint8_t seen[3][6];
+    uint64_t t = 10000;
+    for (int i = 0; i < 3; i++) {
+        scs_poll_tick(&f.poll, t);
+        if (scs_poll_state_of(&f.poll) != SCS_POLL_CONNECTING) {
+            check(0, "a cycle started");
+            break;
+        }
+        memcpy(seen[i], scs_poll_current_node(&f.poll), 6);
+        scs_poll_opened(&f.poll, t);
+        scs_poll_answer(&f.poll, "VMS$VAXcluster", SCS_DIR_ANSWER_NO, t + 1);
+        scs_poll_abandon(&f.poll); /* the disconnect dialogue is vms-591's */
+        t += 1100;                 /* clears BOTH the ~1 s spacing and the interval */
+    }
+    check(f.stub.connect_reqs == 3, "three cycles ran");
+    check(memcmp(seen[0], seen[1], 6) != 0 && memcmp(seen[1], seen[2], 6) != 0 &&
+          memcmp(seen[0], seen[2], 6) != 0,
+          "all THREE nodes were visited -- an always-due earlier slot does not "
+          "starve the later ones");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANT KILLED: dropping the `now_ms < nd->last_poll_ms` term from the
+ * interval test.
+ *
+ * WHY IT SURVIVED: no case ever moved the clock backwards. It matters because
+ * now_ms is unsigned -- a backward step makes `now_ms - last_poll_ms` underflow
+ * to ~2^64, every node reads as due, and the poller floods the wire at exactly
+ * the moment the host is least healthy. */
+static void test_clock_regression_does_not_flood(void)
+{
+    printf("[a clock that steps BACKWARD does not make every node due]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    scs_poll_tick(&f.poll, 20000);
+    check(f.stub.connect_reqs == 1, "the node is polled at t=20000");
+    scs_poll_abandon(&f.poll);
+
+    scs_poll_tick(&f.poll, 9000);   /* the clock steps back 11 s */
+    check(f.stub.connect_reqs == 1,
+          "a BACKWARD clock step does NOT re-poll the node (no unsigned underflow)");
+    scs_poll_tick(&f.poll, 26000);
+    check(f.stub.connect_reqs == 2,
+          "CONTROL: once the interval genuinely elapses the node IS polled again");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANTS KILLED: collapsing disconnects_unclosed into cycles_abandoned, and
+ * dropping `p->descriptors_forced++` from poll_release_cdt().
+ *
+ * WHY THEY SURVIVED: no case ever let a cycle reach DISCONNECTING and then time
+ * out. That is the ONLY path that separates "never got its answers" from "got
+ * them all, and is stuck in the disconnect dialogue OVMX cannot complete"
+ * (vms-591) -- the distinction scs_poll.c's comment claims to make. */
+static void test_disconnect_timeout_is_counted_apart(void)
+{
+    printf("[a stuck DISCONNECT is not a discovery failure, and the forced "
+           "release is counted]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    run_cycle(&f, 10000);
+    check(scs_poll_answer(&f.poll, "VMS$VAXcluster", SCS_DIR_ANSWER_YES, 10010) == 1,
+          "the cycle's one inquiry is answered");
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_DISCONNECTING,
+          "the poller waits in DISCONNECTING -- one DISCONNECT closes nothing (p. 2-26)");
+    check(f.poll.cycles_completed == 1, "the cycle IS recorded as completed");
+
+    scs_poll_tick(&f.poll, 10010 + SCS_POLL_CYCLE_TIMEOUT_MS);
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE, "the wait times out");
+    check(f.poll.disconnects_unclosed == 1 && f.poll.cycles_abandoned == 0,
+          "it is counted as an UNCLOSED DISCONNECT, not as an abandoned cycle -- "
+          "the answers did arrive");
+    check(f.poll.descriptors_forced == 1,
+          "and the descriptor the p. 2-26 dialogue never released was FORCED, "
+          "and counted as forced");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANT KILLED: widening the tick() fast path from
+ * `state == DISCONNECTING && cdt && close_if_closed(...)` to
+ * `cdt && close_if_closed(...)`.
+ *
+ * WHY IT SURVIVED: no case ever had the poller's CDT reach CLOSED while the
+ * poller was still INQUIRING. The peer dropping the virtual circuit mid-inquiry
+ * does exactly that, and the mutant turns that failure into a silent return to
+ * IDLE with no counter moved. */
+static void test_vc_lost_mid_inquiry_is_a_failed_cycle(void)
+{
+    printf("[a circuit lost mid-inquiry is an ABANDONED cycle, not a quiet IDLE]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    unsigned sent = run_cycle(&f, 10000);
+    check(sent == 1 && scs_poll_state_of(&f.poll) == SCS_POLL_INQUIRING,
+          "one inquiry is outstanding");
+    struct scs_cdt *c = scs_cdl_lookup(&f.cdl, SCS_DIR_OVMX_POLL_CONID);
+    check(c != NULL, "the poller's CDT is findable");
+    if (c != NULL) {
+        (void)scs_conn_fsm_step(c, SCS_CONN_EV_VC_LOST); /* p. 2-28: any state -> CLOSED */
+        check(scs_conn_state_of(c) == SCS_CONN_CLOSED, "the peer's circuit is gone");
+    }
+    scs_poll_tick(&f.poll, 10001);
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_INQUIRING,
+          "the poller is STILL INQUIRING -- a closed descriptor is not an answer");
+    scs_poll_tick(&f.poll, 10000 + SCS_POLL_CYCLE_TIMEOUT_MS);
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE &&
+          f.poll.cycles_abandoned == 1 && f.poll.cycles_completed == 0,
+          "it times out as an ABANDONED cycle: the inquiry never got its reply");
+    check(f.poll.descriptors_forced == 0,
+          "CONTROL for the forced-release counter: this descriptor was already "
+          "CLOSED, so it was released the p. 2-26 way and NOT counted as forced");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANT KILLED: dropping the `t.illegal` guard from scs_poll_opened().
+ *
+ * WHY IT SURVIVED: every case fed the poller exactly one RCV_ACCEPT_REQ, from
+ * CONNECT SENT, where it is legal. A duplicate ACCEPT_REQ arriving on an
+ * already-OPEN connection is the case the guard exists for, and without it the
+ * poller would inquire on a connection whose state machine just refused a
+ * transition. */
+static void test_illegal_accept_abandons_the_cycle(void)
+{
+    printf("[an ACCEPT the state machine refuses does not become an inquiry]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    scs_poll_tick(&f.poll, 10000);
+    struct scs_cdt *c = scs_cdl_lookup(&f.cdl, SCS_DIR_OVMX_POLL_CONID);
+    check(c != NULL && scs_conn_state_of(c) == SCS_CONN_CONNECT_SENT,
+          "the poller's connection is in CONNECT SENT");
+    if (c != NULL) {
+        struct scs_conn_transition t1 = scs_conn_fsm_step(c, SCS_CONN_EV_RCV_ACCEPT_REQ);
+        check(!t1.illegal && scs_conn_state_of(c) == SCS_CONN_OPEN,
+              "the FIRST ACCEPT_REQ is legal and opens the connection (Figure 2-14)");
+    }
+    unsigned sent = scs_poll_opened(&f.poll, 10001);
+    check(sent == 0 && f.stub.inquiries == 0,
+          "the poller's own ACCEPT step is now ILLEGAL, so NO inquiry is built");
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE && f.poll.cycles_abandoned == 1,
+          "the cycle is abandoned and counted, not carried on regardless");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANTS KILLED: dropping `port->unemitted++` when the poller has no emitter,
+ * and folding the REFUSED arm of poll_emit_action() into unemitted.
+ *
+ * WHY THEY SURVIVED: the stub emitter was always present and never returned
+ * REFUSED, so two of poll_emit_action()'s three arms were dead in test. The
+ * comment above that function claims the poller accounts "exactly as scs_svc.c
+ * does" -- that claim is what these two cases check. */
+static void test_emit_accounting_splits_refused_from_nobuilder(void)
+{
+    printf("[the poller's frames land in the port's OWN emitted/unemitted/refused]\n");
+    struct fixture f;
+
+    /* (1) no emitter at all: both the CONNECT_REQ and the ACCEPT_RSP are
+     *     unemitted, and BOTH are counted. */
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    scs_poll_set_emitters(&f.poll, NULL, NULL, stub_inquire, &f.stub);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+    scs_poll_tick(&f.poll, 10000);
+    check(f.port.unemitted == 1 && f.stub.connect_reqs == 0,
+          "with no emitter the CONNECT_REQ is UNEMITTED, not pretended sent");
+    scs_poll_opened(&f.poll, 10001);
+    check(f.port.unemitted == 2,
+          "and the ACCEPT_RSP the poller owes is unemitted too -- the poller's "
+          "frames are not hidden from the port's census");
+    check(f.port.refused == 0, "nothing was refused");
+
+    /* (2) an emitter that REFUSES a non-connect action: a different counter. */
+    fixture_init(&f);
+    f.stub.refuse_other = 1;
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+    scs_poll_tick(&f.poll, 10000);
+    unsigned before_refused = f.port.refused;
+    scs_poll_opened(&f.poll, 10001);
+    check(f.port.refused == before_refused + 1,
+          "a REFUSED emit is counted as REFUSED, never as 'no builder'");
+    check(f.stub.other_actions == 1, "and the emitter really was asked");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANT KILLED: deleting the disabled-name skip (and its skipped_disabled++)
+ * from the inquiry loop in scs_poll_opened().
+ *
+ * WHY IT SURVIVED: every case registered ONE name, so a node was either fully
+ * enabled or had nothing to ask. p. 2-50 disables a (SYSAP, node) PAIR, so the
+ * case that matters is a node with one disabled name and one live one. */
+static void test_disabled_name_is_not_inquired_about(void)
+{
+    printf("[a name already connected on this node is skipped, not asked again]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "MSCP$DISK", NULL, on_found, &f.found);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+    scs_poll_connected(&f.poll, "MSCP$DISK", vax1);
+
+    unsigned sent = run_cycle(&f, 10000);
+    check(sent == 1, "the cycle asks about ONE of the two names");
+    check(strcmp(f.stub.last_inquiry, "VMS$VAXcluster") == 0,
+          "and it is the name that is NOT already connected on VAX1");
+    check(f.poll.skipped_disabled == 1,
+          "the disabled name was skipped and counted (p. 2-50)");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANT KILLED: replacing the bounded `if (n->disabled_count <
+ * SCS_POLL_MAX_NODES)` deposit with a wrapping one.
+ *
+ * WHY IT SURVIVED: no case ever disabled a name on more than two nodes. The
+ * wrapping version silently EVICTS the first node's entry, which would resume
+ * polling a pair that is already connected -- exactly what p. 2-50 forbids. */
+static void test_disabled_table_is_bounded_and_refuses_overflow(void)
+{
+    printf("[the per-name disabled table is bounded: it refuses, it does not wrap]\n");
+    struct fixture f;
+    fixture_init(&f);
+    scs_poll_request(&f.poll, "MSCP$DISK", NULL, on_found, &f.found);
+
+    uint8_t node[SCS_POLL_MAX_NODES + 1][6];
+    for (unsigned i = 0; i <= SCS_POLL_MAX_NODES; i++) {
+        memcpy(node[i], vax1, 6);
+        node[i][5] = (uint8_t)(0x10 + i);
+        scs_poll_connected(&f.poll, "MSCP$DISK", node[i]);
+    }
+    check(scs_poll_polling(&f.poll, "MSCP$DISK", node[0]) == 0,
+          "the FIRST node disabled is still disabled -- it was not evicted");
+    check(scs_poll_polling(&f.poll, "MSCP$DISK", node[SCS_POLL_MAX_NODES - 1]) == 0,
+          "so is the last one that fit");
+    check(scs_poll_polling(&f.poll, "MSCP$DISK", node[SCS_POLL_MAX_NODES]) == 1,
+          "the one PAST the bound was refused -- it is still polled, which is "
+          "wasteful but honest, where eviction would have been silently wrong");
+}
+
+/* MUTANT KILLED: dropping `n->disabled_count = 0;` from scs_poll_request().
+ *
+ * WHY IT SURVIVED: no case re-requested a name after it had been disabled.
+ * p. 2-50 names that path explicitly ("once again requesting its Process Poller
+ * to look for SYSAP_X on NODE_X"). */
+static void test_a_fresh_request_re_enables_polling(void)
+{
+    printf("[re-requesting a disabled name turns polling back on (p. 2-50)]\n");
+    struct fixture f;
+    fixture_init(&f);
+    scs_poll_request(&f.poll, "MSCP$DISK", NULL, on_found, &f.found);
+    scs_poll_connected(&f.poll, "MSCP$DISK", vax1);
+    check(scs_poll_polling(&f.poll, "MSCP$DISK", vax1) == 0,
+          "polling is off while the connection exists");
+    check(scs_poll_request(&f.poll, "MSCP$DISK", NULL, on_found, &f.found) == 1,
+          "the SYSAP requests polling for it again");
+    check(scs_poll_polling(&f.poll, "MSCP$DISK", vax1) == 1,
+          "a FRESH REQUEST re-enables polling on every node it had been "
+          "disabled on");
+}
+
+/* MUTANT KILLED: dropping the `name_trim_len(sysap) == 0` guard from
+ * scs_poll_request(). A blank name would be registered, would occupy one of the
+ * eight slots, and would be inquired about on every cycle -- a 16-space SYSAP
+ * name on the reference wire. */
+static void test_a_blank_sysap_name_is_refused(void)
+{
+    printf("[a blank SYSAP name is refused, not registered]\n");
+    struct fixture f;
+    fixture_init(&f);
+    check(scs_poll_request(&f.poll, "", NULL, on_found, &f.found) == 0,
+          "an empty SYSAP name is refused");
+    check(scs_poll_request(&f.poll, "     ", NULL, on_found, &f.found) == 0,
+          "an all-blank SYSAP name is refused too");
+    check(scs_poll_polling(&f.poll, "", vax1) == 0, "and nothing was registered");
+    check(scs_poll_request(&f.poll, "MSCP$DISK", NULL, on_found, &f.found) == 1,
+          "CONTROL: a real name is still accepted");
+}
+
+/* MUTANT KILLED: dropping the in-flight abandon from scs_poll_drop_node().
+ *
+ * WHY IT SURVIVED: no case dropped a node while a cycle against it was open.
+ * The circuit that carried the cycle is exactly what has gone away, so the
+ * cycle cannot continue and its descriptor must come back. */
+static void test_dropping_the_node_under_a_cycle_abandons_it(void)
+{
+    printf("[dropping the node a cycle is running against abandons the cycle]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    unsigned before = scs_cdl_in_use_count(&f.cdl);
+    scs_poll_tick(&f.poll, 10000);
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_CONNECTING &&
+          scs_cdl_in_use_count(&f.cdl) == before + 1,
+          "a cycle is in flight against VAX1 and holds a CDT");
+    scs_poll_drop_node(&f.poll, vax1);
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE,
+          "the cycle is ABANDONED -- the circuit that carried it is gone");
+    check(scs_cdl_in_use_count(&f.cdl) == before,
+          "and its descriptor was given back, not leaked");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* MUTANT KILLED: dropping `p->answers_unsolicited++` from the not-INQUIRING
+ * arm of scs_poll_answer(). The existing unsolicited case answered a name that
+ * was not outstanding WHILE inquiring, which is the OTHER arm. */
+static void test_an_answer_while_idle_is_unsolicited(void)
+{
+    printf("[an answer arriving with no cycle open is counted, not ignored]\n");
+    struct fixture f;
+    fixture_init(&f);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE, "no cycle is open");
+    check(scs_poll_answer(&f.poll, "VMS$VAXcluster", SCS_DIR_ANSWER_YES, 1) == 0,
+          "the answer is rejected");
+    check(f.poll.answers_unsolicited == 1,
+          "and COUNTED as unsolicited -- a directory answering a question nobody "
+          "asked is a fact about the peer, not noise");
+    check(f.found.count == 0, "it notifies nobody");
+}
+
 int main(void)
 {
     printf("test_scs_poll: the SCS Process Poller SCS$DIR_LOOKUP (vms-66f, p. 2-50)\n");
@@ -539,6 +967,20 @@ int main(void)
     test_refusals_are_honest();
     test_cycle_timeout();
     test_descriptors_are_real_cdts();
+    /* round 2 -- the branches the mutation sweep found uncovered */
+    test_node_scoped_request();
+    test_round_robin_visits_every_node();
+    test_clock_regression_does_not_flood();
+    test_disconnect_timeout_is_counted_apart();
+    test_vc_lost_mid_inquiry_is_a_failed_cycle();
+    test_illegal_accept_abandons_the_cycle();
+    test_emit_accounting_splits_refused_from_nobuilder();
+    test_disabled_name_is_not_inquired_about();
+    test_disabled_table_is_bounded_and_refuses_overflow();
+    test_a_fresh_request_re_enables_polling();
+    test_a_blank_sysap_name_is_refused();
+    test_dropping_the_node_under_a_cycle_abandons_it();
+    test_an_answer_while_idle_is_unsolicited();
     printf("test_scs_poll: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

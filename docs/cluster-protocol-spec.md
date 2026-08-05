@@ -985,6 +985,51 @@ byte-for-byte out of `formation-ci1-joinwindow.pcap` and are now baked into
 | `SCS$DIRECTORY` CONNECT_REQ | 29 | 21 | 110 B | `[46:48]=0`, remote `0`, local `0x63050008` offered, `[48:50]=3` |
 | lookup REQUEST | 37 | 29 | 94 B | `[46:48]=0x0a`, `[48:50]=0`, `[58:62]=0` marker, result `[78:94]` all-zero |
 
+*(Raw pcap indices in this section are **0-based** record indices, counting every
+record in the file including non-SCA ones. Wireshark/tcpdump frame numbers are
+these **plus one** — the same two frames are 30 and 38 there. Stated because a
+review of this section cited the 1-based numbers and the two sets do not
+overlap by accident.)*
+
+**`[48:50]` IN BOTH ROWS IS THE GROUNDED SCA CREDIT FIELD, NOT A FLAG — and the
+capture refutes reading it as a request/response discriminator (`vms-66f`,
+corrected).** §4(d)'s ⭐ block pins `[48:50]` as the piggybacked credit for the
+SCS message classes 58/62/66/86/94/110/190, and line 3 of that grounding names
+`SCS$DIRECTORY` = 3 / `SCS$DIR_LOOKUP` = 1 among the extended Send Credits in
+the 110-byte `CONNECT_REQ` class — which is exactly the `3` in row 1 above. On
+the 94-byte lookup class the same field is the ordinary piggybacked credit, and
+the census below is the refutation of the "flag" reading. Selecting **by
+connection identity, not by SCA length** (the Con.ID pair of each observed
+`SCS$DIRECTORY` connection — see `tools/cluster/scs_dir_role_measure.py`, and
+`vms-c11` on why length-keyed censuses in this epic are not trusted), the
+capture holds **12** lookup messages, all of length 94, split by the grounded
+`[58:62]` marker into 6 REQUESTs and 6 RESPONSEs:
+
+| side | `[48:50]` histogram | frames |
+|---|---|---|
+| REQUEST (`[58:62]=0`) | `{0: 2, 1: 4}` | `0` at 37, 1244; `1` at 41, 43, 45, 1248 |
+| RESPONSE (`[58:62]=1`) | `{1: 6}` | 39, 42, 44, 46, 1247, 1250 |
+
+So `[48:50]` is **not** constant in requests and **does not** separate requests
+from responses: the value `1` appears on four requests and all six responses.
+The only structure the capture *does* show is positional — the two zeros are
+exactly the FIRST lookup message on each of the two directory connections (37
+opens VAX1's, 1244 opens VAX2's) — and **that is a correlation over n=2, not a
+grounded rule**. Which condition sets the field to 0 rather than 1 (no credit
+owed yet, a credit already returned by the intervening `0x48` short, or
+something else) is **NOT separated by this capture** and is recorded as §4h gap (f).
+What *is* grounded is the negative: the "request/response flag" reading is dead.
+
+**Why OVMX pins 0 anyway, and what is NOT grounded.** `dir_lookupreq_tmpl` in
+`src/vmsscs/scs_dir.c` is a byte-exact replay of SCA 29 (raw 37), the first
+lookup on its connection, so its `[48:50]` is 0 for the same reason the wire's
+is. OVMX **does not stamp a live credit on any frame** — that is the standing
+reachability gap recorded in `src/vmsscs/include/scs_credit.h`, not something
+this template decides — so every inquiry OVMX sends carries 0 whether it is the
+first on the connection or the fourth. That is a KNOWN DEVIATION from the
+reference wire, recorded as §4h gap (f), and it is one of the unseparated
+candidates for the unanswered-inquiry gap below.
+
 **The two 16-byte name fields are (DESTINATION SYSAP, SOURCE SYSAP), and the
 request/response PAIR is what grounds it.** SCA 21 carries
 `[62:78]="SCS$DIRECTORY   "` then `[78:94]="SCS$DIR_LOOKUP  "`; SCA 25, the
@@ -1007,8 +1052,10 @@ news.** OVMX drove its poller against VAX1 (VAX 7.3, lab-2 replica `vaxlab-1`,
   cycles; the VAX instead retransmitted `CONNECT_RSP`. So the inquiry OVMX
   builds is not yet the inquiry the VAX will answer, and the reason is **not
   identified** — candidates not separated by this run are the Con.ID the inquiry
-  addresses (`[50:54]`, which OVMX learned as `0`), the `[48:50]` flag, and the
-  sequence state. **Recorded as an open gap, not as a working exchange.**
+  addresses (`[50:54]`, which OVMX learned as `0`), the `[48:50]` **credit**
+  (OVMX stamps a constant 0 there; the reference wire sends 1 on every inquiry
+  after the first — §4h gap (f)), and the sequence state. **Recorded as an open
+  gap, not as a working exchange.**
 - **Enabling the poller COST THE JOIN.** Same binary, back-to-back, poller on
   vs. gated: on → `dir_connected=no dir_lookups=0 cm_config=no`, no join at all
   (the member never ran its own directory phase, `connect_scans=0`); gated →
@@ -1017,13 +1064,48 @@ news.** OVMX drove its poller against VAX1 (VAX 7.3, lab-2 replica `vaxlab-1`,
   `OVMX_NO_PROCESS_POLLER=1` forces off) until the unanswered-inquiry gap is
   closed. Logs: `/data/training/vax/k8s-labs/vaxlab-1/logs/vms66f-{on,off}.log`.
 
-**The reference joiner does NOT poll before it connects, and that matters for
-anyone tempted to make polling the gate.** In `formation-ci1-joinwindow.pcap`
-the directory exchange runs in ONE direction — SCA 21/29/37 are all VAX1 (the
-established member) asking VAX2 (the joiner); VAX2 only answers, and then opens
-its own `VMS$VAXcluster` connection without having polled anybody. Gating a
-joiner's connect on a poller answer moves away from the reference wire, not
-toward it.
+**WHO IS THE ACTIVE HALF — corrected, because the first version of this
+paragraph was refuted by the capture it cited (`vms-66f`).** The rejected text
+said:
+
+<!-- REFUTED-QUOTE-BEGIN -->
+> (revision 1, quoted here only to kill it — every clause below is REFUTED)
+> the directory exchange "runs in ONE direction", VAX2 "only answers", and VAX2
+> "opens its own `VMS$VAXcluster` connection without having polled anybody".
+<!-- REFUTED-QUOTE-END -->
+
+**Both halves of that are false**, and the roles were inverted. Census
+over the whole file, keyed on the `[62:94]` SYSAP name pair and the `[46:48]`
+message type with **no SCA length filter**
+(`tools/cluster/scs_dir_role_measure.py`; `vms-c11`):
+
+| what | count | frames (0-based raw pcap) |
+|---|---|---|
+| `VMS$VAXcluster` ↔ `VMS$VAXcluster` CONNECT_REQ (`[46:48]=0`) | **1** | 47, **VAX1 → VAX2** |
+| …of those, sent by the JOINER (VAX2) | **0** | — |
+| `VMS$VAXcluster` ACCEPT_REQ (`[46:48]=2`) | **1** | 50, **VAX2 → VAX1** |
+| `SCS$DIRECTORY` ← `SCS$DIR_LOOKUP` CONNECT_REQ (`[46:48]=0`) | **2** | 29, VAX1 → VAX2; **1237, VAX2 → VAX1** |
+
+Read off that table:
+
+- **The joiner never opens the `VMS$VAXcluster` connection.** There is exactly
+  one `VMS$VAXcluster` CONNECT_REQ in the file and the **established member**
+  sends it (47, VAX1 → VAX2). The joiner's frame 50 is `[46:48]=2`, an
+  ACCEPT_REQ. The established member is the ACTIVE half of `VMS$VAXcluster`
+  formation and the joiner is the PASSIVE half — the opposite of the rejected
+  reading. Scope: **n=1 formation**, so this is what the reference wire did
+  here, not a proven protocol rule about who may connect.
+- **The joiner DOES poll.** Frame 1237 is VAX2 → VAX1, `[46:48]=0`, name pair
+  `("SCS$DIRECTORY", "SCS$DIR_LOOKUP")` — VAX2 opening its own Process Poller
+  connection — and its own lookup round follows on it (requests 1244/1248,
+  answers 1247/1250, the second half of the §4(h)(2a) census above). The
+  directory exchange is **bidirectional**; it just is not simultaneous.
+- **What is true is only the ORDERING.** VAX2's poll is at t+33.804 s, 0.36 s
+  *after* the `VMS$VAXcluster` connection formed at t+33.444 s (frames 47/50).
+  So a joiner polls **after** it is in, not before — which still refutes gating
+  a joiner's connect on a poller answer, but for a reason about *sequence*, not
+  about *direction*. That was the only defensible part of the rejected
+  paragraph and it is all that survives.
 
 **(3) `0x48` credit-return short — the 41-byte body.** Every credit-return is a
 fixed 41-byte SCA frame (Ethernet-padded to 60). Its distinguishing feature vs.
@@ -1142,8 +1224,11 @@ connection-control message type for values 0–3** (§4(h)(1a), `vms-dd5`), with
 `4` and `6` supported by decisive behavioural partitions and `5` and `7`
 grounded as their answers by the §4(h)(1b) pairing census (`vms-591`) but
 LABELLED by figure order only; message types `8` and `9` in the same 58-byte
-class are observed and **unidentified**; the companion
-[48:50] flag remains inferred; (b) the `0x48` secondary counter [30:32] and the
+class are observed and **unidentified**. *(The clause that used to end this item
+— "and the companion [48:50] flag remains inferred" — is **withdrawn**:
+`[48:50]` is not a companion flag of `[46:48]`, it is the §4(d) credit field,
+and reading it as a flag is refuted in §4(h)(2a), `vms-66f`.)*
+(b) the `0x48` secondary counter [30:32] and the
 early-phase shorts' non-zero residual at [30:40] (SCA 22/24 carry printable
 leftover bytes) are not grounded to a field; (c) the affirmative
 (non-`"NOT PRESENT HERE"`) lookup *result* encoding — the capture's directory
@@ -1153,7 +1238,17 @@ connection Con.IDs are inferred (dynamically-allocated, absent from the
 idle-state decoder ring). **(e) `vms-66f`: the reference VAX accepts an
 OVMX-initiated directory connection but does not answer the lookup REQUEST that
 follows — see §4(h)(2a). The request frame's bytes are a byte-exact replay of
-SCA 29; what is NOT grounded is what makes the VAX answer one.**
+SCA 29; what is NOT grounded is what makes the VAX answer one.** **(f)
+`vms-66f`: on the 94-byte lookup class, WHAT SETS `[48:50]` TO 0 RATHER THAN 1
+is not decoded. The field is the §4(d) credit (the "flag" reading is refuted,
+§4(h)(2a)); over the 12 lookup messages in the golden capture the only two zeros
+are the first message on each of the two directory connections, which is a
+correlation over n=2, not a rule. Consequently — and this is the OVMX-side half
+of the same gap — **OVMX stamps a constant 0 there on every inquiry it sends**,
+because it stamps no live credit on any frame (`scs_credit.h` reachability
+note). A reference exchange longer than one inquiry would show a `1` OVMX never
+sends. Listed as a KNOWN DEVIATION and as one of the unseparated candidates
+for (e).**
 
 ### 4(i) Joining an ALREADY-ESTABLISHED cluster (member-state-seq > 1)
 
@@ -2120,7 +2215,7 @@ For visibility, every field NOT marked GROUNDED above:
   positive kind (their targets were listening), and the companion word at
   `[48:50]` is recorded as INFERRED in §4(h)(2). OVMX therefore carries its
   refusal in `[48:50]` — the only word the positive `CONNECT_RSP` holds at zero
-  and the only one §4(h) names as a status/flag — with **OVMX-invented values**
+  and the only one §4(h) named as a status/flag — with **OVMX-invented values**
   `0x0002` (no such SYSAP) and `0x0003` (busy), declared in
   `src/vmsscs/include/scs_sdir.h`. These are **not** VMS status codes and not
   `$SSDEF` values. A capture of a real VAX refusing a connect request supersedes
@@ -2133,6 +2228,20 @@ For visibility, every field NOT marked GROUNDED above:
   across the pre/post trees with zero differences, and the daemon's exit summary
   reports `no-such-sysap-sent` and `busy-sent` every run. Kill switch:
   `OVMX_NO_SDIR=1`.
+
+  > **⚠ CONFLICT RAISED, NOT RESOLVED HERE (`vms-66f`, 2026-08-05).** The
+  > sentence above calls `[48:50]` "the only [word] §4(h) names as a
+  > status/flag". §4(h)(2a) has since **refuted the flag reading of `[48:50]`**
+  > and §4(d)'s ⭐ block grounds it as the SCA credit field for exactly the
+  > classes involved, including the 66-byte `CONNECT_RSP` (`66 → 944/1/0`:
+  > constant 0 in 944 frames). The *observation* that survives is only "the
+  > 66-byte `CONNECT_RSP` holds 0 there" — which is now explained as "no credit
+  > extended", not as "an unused status word". **So OVMX's invented refusal
+  > codes `0x0002`/`0x0003` are being written into a field the spec elsewhere
+  > grounds as a credit count, and a peer that reads credit there would see
+  > OVMX extend 2 or 3 send credits it does not honour.** `vms-66f` does not
+  > change `vms-7fe`'s frames — that is `vms-7fe`'s decision to revisit — it
+  > records the collision so the next reader does not have to rediscover it.
 
   **The two codes are not equally exercised, and the difference should not be
   glossed.** `0x0002` (no such SYSAP) is emitted by `scsd.c` under a synthesized

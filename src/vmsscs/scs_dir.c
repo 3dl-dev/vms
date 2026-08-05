@@ -9,6 +9,49 @@
 
 /* --- byte-exact SCA-content templates (payload byte 0 = abs frame 14) --- */
 
+/*
+ * [48:50] IN EVERY TEMPLATE BELOW IS THE SCA CREDIT FIELD, NOT A FLAG.
+ *
+ * CORRECTED (vms-66f, adversary-caught). Earlier revisions of these templates
+ * commented [48:50] as "flag", and the lookup REQUEST template went further --
+ * REFUTED-QUOTE-BEGIN
+ *   "flag = 0 (a request; the response has 1)"
+ * REFUTED-QUOTE-END
+ * -- i.e. a request/response discriminator.
+ * THE CAPTURE THOSE TEMPLATES ARE CUT FROM REFUTES THAT.
+ * Census over all 12 lookup messages in formation-ci1-joinwindow.pcap, selected
+ * by CONNECTION IDENTITY (the Con.ID pair of each observed SCS$DIRECTORY
+ * connection) rather than by SCA length -- vms-c11 showed length-keyed censuses
+ * in this epic silently dropped whole classes -- and split by the GROUNDED
+ * [58:62] marker:
+ *
+ *     REQUEST  ([58:62]=0): [48:50] histogram {0: 2, 1: 4}   6 frames
+ *     RESPONSE ([58:62]=1): [48:50] histogram {1: 6}         6 frames
+ *
+ * So 1 appears on four REQUESTs and on all six RESPONSEs: [48:50] neither
+ * separates the two nor is constant within requests. What it is, is the credit
+ * field docs/cluster-protocol-spec.md sec 4(d) pins at SCA [48:50] for the
+ * 58/62/66/86/94/110/190 message classes -- the same grounding that reads
+ * SCS$DIRECTORY = 3 and SCS$DIR_LOOKUP = 1 as extended Send Credits in the
+ * 110-byte CONNECT_REQ class, which is exactly dir_connreq_tmpl's 3 below.
+ *
+ * WHY OVMX STILL SHIPS 0 IN dir_lookupreq_tmpl: that template is a byte-exact
+ * replay of SCA 29 (raw pcap 37), the FIRST lookup on its connection, whose
+ * credit is 0 on the wire. OVMX stamps no live credit on any frame -- the
+ * standing reachability gap in scs_credit.h -- so every inquiry it sends
+ * carries 0 whether it is the first on the connection or the fourth. That is a
+ * KNOWN DEVIATION, recorded as spec sec 4h gap (f), and one of the unseparated
+ * candidates for the unanswered-inquiry gap (sec 4h gap (e)).
+ *
+ * WHAT DRIVES 0 vs 1 IS NOT DECODED. The two zeros are exactly the first lookup
+ * on each of the two directory connections (raw 37 and 1244), but that is a
+ * correlation over n=2, not a rule. Recorded as spec sec 4h gap (f).
+ *
+ * Re-derive every figure above: tools/cluster/scs_dir_role_measure.py
+ * (14 checks, 0 failures, 2026-08-05). The checked-in half that needs no
+ * capture is the ctest scs_dir_figures.
+ */
+
 /* SCA#23 CONNECT-ECHO (op=1): VAX2->VAX1, remote=0x63050008 echoed, local=0.
  * formation-ci1-joinwindow.pcap. Substituted at build time: dst-logical
  * [2:8], src-logical [10:16], counters [18:20]/[20:22]/[26:28]/[30:32]/
@@ -34,7 +77,7 @@ static const uint8_t dir_echo_tmpl[SCS_DIR_ECHO_SCA_LEN] = {
     /* [42:44] */ 0x16, 0x00,                               /* inner length = 22 */
     /* [44:46] */ 0x04, 0x00,
     /* [46:48] */ 0x01, 0x00,                               /* op = 1 */
-    /* [48:50] */ 0x00, 0x00,                               /* flag = 0 */
+    /* [48:50] */ 0x00, 0x00,                               /* credit = 0 (sec 4d) */
     /* [50:54] */ 0x08, 0x00, 0x05, 0x63,                   /* remote Con.ID (SUBST) */
     /* [54:58] */ 0x00, 0x00, 0x00, 0x00,                   /* local Con.ID = 0 (not yet assigned) */
     /* [58:62] */ 0x00, 0x00, 0x01, 0x00,
@@ -66,7 +109,7 @@ static const uint8_t dir_resp_tmpl[SCS_DIR_RESP_SCA_LEN] = {
     /* [42:44] */ 0x42, 0x00,                               /* inner length = 66 */
     /* [44:46] */ 0x04, 0x00,
     /* [46:48] */ 0x02, 0x00,                               /* op = 2 */
-    /* [48:50] */ 0x01, 0x00,                               /* flag = 1 */
+    /* [48:50] */ 0x01, 0x00,                               /* credit = 1 (sec 4d) */
     /* [50:54] */ 0x08, 0x00, 0x05, 0x63,                   /* remote Con.ID (SUBST) */
     /* [54:58] */ 0x07, 0x00, 0x59, 0x33,                   /* local Con.ID (SUBST) */
     /* [58:62] */ 0x00, 0x00, 0x00, 0x00,
@@ -99,7 +142,7 @@ static const uint8_t dir_lookup_tmpl[SCS_DIR_LOOKUP_SCA_LEN] = {
     /* [42:44] */ 0x32, 0x00,                               /* inner length = 50 */
     /* [44:46] */ 0x04, 0x00,
     /* [46:48] */ 0x0a, 0x00,                               /* op = 0x0a (SUBST-echo) */
-    /* [48:50] */ 0x01, 0x00,                               /* flag = 1 */
+    /* [48:50] */ 0x01, 0x00,                               /* credit = 1 (sec 4d) */
     /* [50:54] */ 0x08, 0x00, 0x05, 0x63,                   /* remote Con.ID (SUBST) */
     /* [54:58] */ 0x07, 0x00, 0x59, 0x33,                   /* local Con.ID (SUBST) */
     /* [58:62] */ 0x01, 0x00, 0x00, 0x00,                   /* response marker */
@@ -136,7 +179,7 @@ static const uint8_t dir_connreq_tmpl[SCS_DIR_CONNREQ_SCA_LEN] = {
     /* [42:44] */ 0x42, 0x00,                               /* inner length = 66 */
     /* [44:46] */ 0x04, 0x00,
     /* [46:48] */ 0x00, 0x00,                               /* msgtype 0 = CONNECT_REQ (sec 4h(1a)) */
-    /* [48:50] */ 0x03, 0x00,                               /* companion flag, replayed (inferred) */
+    /* [48:50] */ 0x03, 0x00,                               /* Send Credits SCS$DIRECTORY extends = 3 (GROUNDED, sec 4d) */
     /* [50:54] */ 0x00, 0x00, 0x00, 0x00,                   /* remote Con.ID = 0 (FORCED) */
     /* [54:58] */ 0x08, 0x00, 0x05, 0x63,                   /* local Con.ID (SUBST) */
     /* [58:62] */ 0x00, 0x00, 0x01, 0x00,                   /* replayed (connect-class value) */
@@ -170,7 +213,7 @@ static const uint8_t dir_lookupreq_tmpl[SCS_DIR_LOOKUP_SCA_LEN] = {
     /* [42:44] */ 0x32, 0x00,                               /* inner length = 50 */
     /* [44:46] */ 0x04, 0x00,
     /* [46:48] */ 0x0a, 0x00,                               /* op = 0x0a (SUBST) */
-    /* [48:50] */ 0x00, 0x00,                               /* flag = 0 (a request; the response has 1) */
+    /* [48:50] */ 0x00, 0x00,                               /* credit = 0, as SCA 29 carries it; NOT a request/response discriminator -- sec 4h(2a) census */
     /* [50:54] */ 0x07, 0x00, 0x59, 0x33,                   /* remote Con.ID (SUBST) */
     /* [54:58] */ 0x08, 0x00, 0x05, 0x63,                   /* local Con.ID (SUBST) */
     /* [58:62] */ 0x00, 0x00, 0x00, 0x00,                   /* REQUEST marker (GROUNDED, sec 4h) */

@@ -583,6 +583,41 @@ set_tests_properties(scs_disc_figures PROPERTIES
     TIMEOUT 60
 )
 
+# vms-66f, review round 2 - THE SCS$DIRECTORY ROLE / LOOKUP-CREDIT GATE.
+#
+# WHY IT EXISTS: two claims shipped in round 1 that the capture they cited
+# REFUTES. docs/cluster-protocol-spec.md sec 4(h)(2a) and src/vmsscs/scsd.c said
+# the reference joiner "only answers" and connects "without having polled
+# anybody" (the roles are inverted: the ESTABLISHED MEMBER sends the only
+# VMS$VAXcluster CONNECT_REQ, and the joiner does poll, later); and
+# src/vmsscs/scs_dir.c commented SCA [48:50] as a fixed request/response flag
+# (it is the sec 4(d) credit field, and 1 appears on four of six requests).
+# Nothing in ctest read the capture, so both survived a green run.
+#
+# test_scs_dir_figures.py reads the EXPECTED table out of
+# tools/cluster/scs_dir_role_measure.py and requires every figure the prose
+# states to match it -- each frame WITH ITS DIRECTION, not a bare digit -- and
+# reds if either dead sentence appears outside an explicit
+# REFUTED-QUOTE-BEGIN/END block. It needs no captures. The capture half is
+# scs_dir_role_measure.py itself; run it on a lab host.
+#
+# NO COVERAGE NUMBER LIVES IN THIS COMMENT -- scs_dir_mutants below measures it
+# on every run. Registered unconditionally: a missing interpreter must make the
+# gate RED, never make it vanish.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_dir_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_dir_figures.py)
+else()
+    add_test(NAME scs_dir_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_dir_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_dir_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)
+
 # vms-591 - THE MUTATION BATTERY for scs_disc_figures. See the file header: it
 # found two real defects in that gate (a quarantine parser that accepted nested
 # markers, and a claim matcher that missed "neither 5 nor 7"), which is the
@@ -599,6 +634,38 @@ else()
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_disc_mutants_no_python3.cmake)
 endif()
 set_tests_properties(scs_disc_mutants PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 300
+)
+
+# vms-66f, review round 2 - THE MUTATION BATTERY FOR THE GATE ABOVE.
+#
+# The first draft of scs_dir_figures checked the dead sentences with a PROXIMITY
+# WINDOW, which is the artifact vms-6b3 was rejected for: inside documents that
+# are entirely ABOUT the refutation, the excuse words are everywhere, so a
+# re-assertion three lines under the correction passes. test_scs_dir_mutants.py
+# copies every input into a scratch tree, proves the UNMUTATED copy green (the
+# control), applies each mutant alone via the OVMX_SCS_DIR_ROOT override,
+# requires a non-zero exit, and restores and re-verifies the control after every
+# one. A mutant that does not change the file is reported as a failure, never
+# scored as a kill. Nothing under src/, docs/, tools/ or tests/ is written.
+#
+# Classes covered: drifted figures in the prose and in EXPECTED (including the
+# 0-based/1-based frame-number slip that caused the original error); the dead
+# sentences re-asserted at eight natural sites, one of them directly under the
+# correction; four attacks on the quarantine mechanism; the deleted tool
+# citation and the deleted sec 4(d) attribution; and a template relabelled back
+# to "flag". The COUNT is printed by the test, not restated here.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_dir_mutants
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_dir_mutants.py)
+else()
+    add_test(NAME scs_dir_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_dir_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_dir_mutants PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 300
 )

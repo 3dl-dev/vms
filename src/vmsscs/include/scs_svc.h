@@ -86,16 +86,21 @@
  *             understands and ignores the rest; it has never rejected one.
  *             The service exists, allocates nothing, and is exercised only by
  *             tests/vmsscs/test_scs_svc.c.
- * DISCONNECT  NO PRODUCTION CALLER. OVMX has no builder for a DISCONNECT_REQ
- *             frame (its wire class is an open RE gap -- see
- *             docs/cluster-protocol-spec.md sec 5), so a live DISCONNECT would
- *             transition the connection and report the frame unemitted. The
- *             descriptor half -- Credit Wait flush, CDT release, MFREEQ/DFREEQ
- *             deposit return -- is real and is exercised by the two-node
- *             integration test.
+ * DISCONNECT  LIVE AS OF vms-591, and it is the one entry above whose status
+ *             changed from "no production caller". THREE production callers:
+ *             the receive path's answer to a peer DISCONNECT_REQ (the p. 2-26
+ *             symmetric own-disconnect), the daemon's shutdown teardown, and
+ *             scs_svc_disconnect_all(). OVMX now BUILDS both DISCONNECT_REQ
+ *             and DISCONNECT_RSP from byte-exact captured templates
+ *             (src/vmsscs/scs_disc.h) -- including the DISCONNECT_RSP the spec
+ *             said did not exist on our wire, which vms-591 found and which
+ *             corrects docs/cluster-protocol-spec.md sec 4(h)(1a).
+ *             Gated by OVMX_NO_CLEAN_SHUTDOWN=1, which restores the
+ *             pre-vms-591 wire exactly (it carried no DISCONNECT frame at all).
  *
- * Do not read "the service exists" as "OVMX disconnects cleanly on the wire".
- * It does not, and the counters in struct scs_svc_port say so at runtime.
+ * Do not read "the service exists" as "OVMX disconnects cleanly on the wire"
+ * for the four entries above that say otherwise; the counters in struct
+ * scs_svc_port say which is which at runtime.
  *
  * ==========================================================================
  * NO KILL SWITCH, AND WHY THAT IS THE RIGHT ANSWER HERE
@@ -276,6 +281,7 @@ struct scs_svc_port {
     unsigned long disconnects;   /* scs_disconnect() ditto */
     unsigned long cdts_allocated;/* p. 2-56: CONNECT and ACCEPT allocate */
     unsigned long cdts_released; /* p. 2-56: DISCONNECT releases */
+    unsigned long delivered;     /* vms-591: received-message events fed to scs_svc_deliver() */
     unsigned long transitions;   /* transitions COMMITTED onto a CDT */
     unsigned long emitted;       /* actions the port put on the wire */
     unsigned long unemitted;     /* actions the port had no builder for */
@@ -526,10 +532,66 @@ enum scs_svc_status scs_disconnect(struct scs_svc_port *port, struct scs_cdt *cd
  * Separate from scs_disconnect() because the transition that reaches CLOSED is
  * usually a RECEIVED message (Figure 2-16: DISC ACK --RCV_DISCONNECT_REQ-->
  * CLOSED, DISC MATCH --RCV_DISCONNECT_RSP--> CLOSED), and the receive dispatch
- * is not one of the five services. vms-591 owns that path; this is the hook it
- * calls.
+ * is not one of the five services. vms-591 wired that path; scs_svc_deliver()
+ * below is it, and this stays exported because scsd.c also calls it directly.
  */
 int scs_svc_close_if_closed(struct scs_svc_port *port, struct scs_cdt *cdt);
+
+/* --- the RECEIVE side (vms-591) -------------------------------------------
+ *
+ * scs_svc_deliver - apply a RECEIVED SCS control message to `cdt`, EMIT
+ * whatever the state machine says that message is answered with, and release
+ * the CDT if the transition reached CLOSED.
+ *
+ * WHY IT HAD TO EXIST. Before vms-591 the daemon's receive path called
+ * conn_step(), which RECORDS a transition and emits nothing -- so an arriving
+ * DISCONNECT_REQ moved the CDT to DISC RECEIVED and the DISCONNECT_RSP that
+ * Figure 2-16 draws on that same arrow was never sent, by construction. The
+ * five services all emit through svc_emit(); the receive side had no
+ * equivalent, and half of Figure 2-16 is receive-side.
+ *
+ * It is deliberately NOT a sixth service: p. 2-56 names five, and this is the
+ * port driver delivering a message, not a SYSAP invoking anything. It shares
+ * the services' emitter, their counters and their emit contract (a REFUSED
+ * emit leaves the state untouched and returns SCS_SVC_NOTSENT).
+ *
+ * `ev` must be one of SCS_CONN_EV_RCV_* -- a local SYSAP invocation belongs to
+ * the five services and SCS_CONN_EV_VC_LOST belongs to scs_vc_break(); either
+ * one here returns SCS_SVC_BADARG rather than opening a second unaudited entry
+ * point into the same machine.
+ *
+ * `*closed_out` (may be NULL) is set to 1 iff this delivery reached CLOSED and
+ * the CDT was released -- which the caller needs, because after that the CDT
+ * pointer must not be dereferenced again.
+ */
+enum scs_svc_status scs_svc_deliver(struct scs_svc_port *port, struct scs_cdt *cdt,
+                                    enum scs_conn_event ev,
+                                    const struct scs_svc_args *args,
+                                    int *closed_out);
+
+/*
+ * scs_svc_disconnect_all - invoke DISCONNECT on every in-use connection on
+ * circuit `vc` that the state machine has a DISCONNECT rule for, and return
+ * how many were driven. `vc` NULL means every circuit.
+ *
+ * This is what "OVMX can INITIATE a disconnect" means at the port level, and
+ * it is what the daemon runs at shutdown, once per peer.
+ *
+ * WHY IT TAKES A CIRCUIT. The frame is addressed FROM the CDT (its Con.ID
+ * pair) but transmitted TO whatever peer the caller's emitter is bound to, so
+ * a walk that ignored the circuit would send one peer's DISCONNECT_REQ to
+ * another peer's MAC the moment OVMX has two peers.
+ *
+ * LISTENING CDTs ARE SKIPPED (p. 2-48: they describe no connection).
+ * Connections in a state with no (state, SVC_DISCONNECT) row are skipped too,
+ * not forced: from CLOSED or from the formation states there is no disconnect
+ * to invoke, and from DISC SENT / DISC ACK / DISC MATCH one has already been
+ * invoked. The TABLE decides which -- this function asks
+ * scs_conn_table_lookup() and never encodes its own list of states, so a table
+ * change cannot leave it stale.
+ */
+unsigned scs_svc_disconnect_all(struct scs_svc_port *port, const struct scs_pb *vc,
+                                const struct scs_svc_args *args);
 
 /* Zero the port and point it at a CDL. `cdl` may be NULL (descriptorless). */
 void scs_svc_port_init(struct scs_svc_port *port, struct scs_cdl *cdl);

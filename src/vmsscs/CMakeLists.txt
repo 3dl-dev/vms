@@ -156,6 +156,23 @@ target_include_directories(vmsscs_reason PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# vms-591 - THE DISCONNECT DIALOGUE ON THE WIRE (VAXcluster Principles Figure
+# 2-16, pp. 2-26/2-27). Two frame builders and their kill switch: the 62-byte
+# DISCONNECT_REQ and the 58-byte DISCONNECT_RSP, both from byte-exact captured
+# templates. Grounding the RESPONSE is the part that was thought impossible --
+# docs/cluster-protocol-spec.md sec 4(h)(1a) said message types 5 and 7 do not
+# appear on our wire and "do not build a 5 or 7 frame on this section". They do
+# appear: every census had been restricted to SCA length classes {62, 66, 110}
+# and both RESPONSE messages are 58 bytes. vms-591 corrects the spec.
+#
+# Depends on vmsscs_reason for the ONE definition of the p. 2-26 reason code's
+# payload offset -- respelling the constant here is how the two would drift.
+add_library(vmsscs_disc STATIC scs_disc.c)
+target_include_directories(vmsscs_disc PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsscs_disc PUBLIC vmsscs_reason)
+
 # vms-b1d - SCA DATAGRAM BUFFER MANAGEMENT: the per-port Datagram Free Queue
 # (DFREEQ) and the per-connection datagram buffer count in the CDT (VAXcluster
 # Principles ch. 2 sec 2.8, pp. 2-42..2-43, 2-45). Pure local accounting: builds
@@ -221,7 +238,7 @@ target_include_directories(scsd_exe PRIVATE
 )
 # vms-dd5 links vmsscs_conn (and, transitively, vmsscs_cdt -- which until this
 # item was built but NOT linked into the daemon, exactly as scs_cdt.h said).
-target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason)
+target_link_libraries(scsd_exe PRIVATE vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn vmsscs_depart vmsscs_dgram vmsscs_sdir vmsscs_svc vmsscs_reason vmsscs_disc)
 set_target_properties(scsd_exe PROPERTIES
     OUTPUT_NAME "SCSD"
     SUFFIX ".EXE"

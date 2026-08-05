@@ -48,6 +48,7 @@
 #include "scs_connect.h"
 #include "scs_depart.h"
 #include "scs_dir.h"
+#include "scs_disc.h"
 #include "scs_hello.h"
 #include "scs_sdir.h"
 #include "scs_member.h"
@@ -611,6 +612,22 @@ static unsigned long conn_unemitted_actions = 0;
 static unsigned long conn_reason_seen = 0;
 static unsigned long conn_reason_nonzero = 0;
 
+/* vms-591: the DISCONNECT dialogue (Figure 2-16), counted for the exit summary.
+ * These are the numbers that say whether the teardown was symmetric or whether
+ * OVMX only ever answered: `req_recv` counts peer DISCONNECT_REQs delivered to
+ * the machine, `rsp_sent` OVMX's answers, `req_sent` OVMX's OWN disconnect
+ * calls (which is the half that did not exist before this item), `rsp_recv` the
+ * peer's answers to those, `closed` connections that actually reached CLOSED,
+ * and `simul` the p. 2-27 simultaneous case. `shutdown_pending` is how many
+ * connections were still not CLOSED when the shutdown wait timed out. */
+static unsigned long disc_req_recv = 0;
+static unsigned long disc_rsp_sent = 0;
+static unsigned long disc_req_sent = 0;
+static unsigned long disc_rsp_recv = 0;
+static unsigned long disc_closed = 0;
+static unsigned long disc_simultaneous = 0;
+static unsigned long disc_shutdown_pending = 0;
+
 /* vms-abc: p. 2-31 message-guarantee enforcement, counted for the exit report. */
 static unsigned long vc_seq_gaps = 0;    /* sequentiality failures detected */
 static unsigned long vc_breaks = 0;      /* circuits explicitly broken */
@@ -1033,6 +1050,26 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *     scsd_svc_emit_dir_accept()     op=1 SCS$DIRECTORY CONNECT-ECHO and
  *                                    op=2 SCS$DIRECTORY CONNECT-RESPONSE (ACCEPT)
  *     scsd_svc_emit_member_accept()  0x4b VMS$VAXcluster CONNECT-RESPONSE (ACCEPT)
+ *
+ *   CHOKED, and new in vms-591: the DISCONNECT emitter. One function, two
+ *   frames, both of the Figure 2-16 teardown arrows:
+ *     scsd_svc_emit_disconnect()   the 62-byte DISCONNECT_REQ (message type 6)
+ *                                  and the 58-byte DISCONNECT_RSP (type 7),
+ *                                  built by src/vmsscs/scs_disc.c from
+ *                                  byte-exact captured templates. Reached from
+ *                                  scs_svc_deliver() on a received
+ *                                  DISCONNECT_REQ/RSP, from scs_disconnect()
+ *                                  when the SYSAP invokes its own symmetric
+ *                                  disconnect, and from
+ *                                  scs_svc_disconnect_all() at shutdown --
+ *                                  three call paths, ONE send site, which is
+ *                                  the shape this table exists to keep.
+ *                                  CHOKED because a teardown is ordinary
+ *                                  sequenced traffic: p. 2-31's rule applies
+ *                                  and, if the circuit is already gone, every
+ *                                  connection on it has been driven to CLOSED
+ *                                  by scs_vc_break() and there is nothing left
+ *                                  to disconnect.
  *
  *   CHOKED, and new in vms-7fe:
  *     scsd_send_sdir_refusal()     the 66-byte CONNECT_RSP that DECLINES a
@@ -2017,6 +2054,244 @@ static int scsd_svc_emit_member_accept(void *ctx, struct scs_cdt *cdt,
     }
     e->sent = 1;
     return SCS_SVC_EMIT_SENT;
+}
+
+/*
+ * ================= vms-591: THE DISCONNECT DIALOGUE (Figure 2-16) ==========
+ *
+ * The port-driver half of DISCONNECT: the emitter for the two actions the
+ * connection state machine names on the teardown arrows, SEND_DISCONNECT_REQ
+ * and SEND_DISCONNECT_RSP. Both frames are built by src/vmsscs/scs_disc.c from
+ * byte-exact captured templates; read scs_disc.h for the grounding, including
+ * why the DISCONNECT_RSP -- which the spec said was not on our wire -- is.
+ *
+ * WHICH CONNECTION. The frame is addressed from the CDT: local Con.ID is the
+ * CDT's own handle, remote Con.ID is the peer's handle recorded on it. That
+ * matters because a peer has up to three connections to OVMX at once and the
+ * daemon must be able to tear down exactly the one being disconnected.
+ *
+ * EVERY SEND IS SEQUENCED. Both frames are SCS sequenced messages, so each
+ * takes its own send_seq from the peer's live VC (scs_seq_advance) at the
+ * moment it is built, exactly as the SCS$DIRECTORY accept pair does. A
+ * DISCONNECT frame carrying a stale sequence number is the failure mode
+ * vms-c6d already had to fix once on the 0x4b connect.
+ *
+ * CHOKED, per the SEND SITE TABLE: both sends go through send_frame_vc(), so
+ * p. 2-31 applies -- OVMX will not disconnect over a circuit that is not OPEN.
+ * That is the right answer and not a limitation: if the circuit is gone, the
+ * connections it carried are already broken by scs_vc_break(), which drives
+ * every one of them to CLOSED through SCS_CONN_EV_VC_LOST. There is nothing
+ * left to disconnect and no circuit to disconnect it over.
+ */
+struct scsd_disc_emit_ctx {
+    int sock;
+    int ifindex;
+    struct peer_state *ps;
+    const uint8_t *our_hw_mac;
+    const uint8_t *our_src_logical;
+    uint16_t reason;   /* p. 2-26's optional reason code (vms-6b3) */
+    int matching;      /* the [60:62] flag: is this REQ answering the peer's? */
+    int req_sent;
+    int rsp_sent;
+};
+
+static int scsd_svc_emit_disconnect(void *ctx, struct scs_cdt *cdt,
+                                    enum scs_conn_action act,
+                                    const struct scs_svc_args *args,
+                                    const char **what)
+{
+    struct scsd_disc_emit_ctx *e = (struct scsd_disc_emit_ctx *)ctx;
+    struct scs_disc_params dp;
+    uint8_t frame[SCS_DISC_REQ_FRAME_LEN];
+    size_t len;
+    (void)args;
+
+    if (act != SCS_CONN_ACT_SEND_DISCONNECT_REQ &&
+        act != SCS_CONN_ACT_SEND_DISCONNECT_RSP) {
+        return scsd_svc_no_builder(cdt, act);
+    }
+    /* No CDT means no Con.ID pair, and a DISCONNECT frame without one names no
+     * connection. Descriptorless mode (scs_svc.h) therefore cannot disconnect;
+     * say so rather than emitting a frame addressed to connection zero. */
+    if (cdt == NULL) {
+        return scsd_svc_no_builder(cdt, act);
+    }
+
+    memset(&dp, 0, sizeof(dp));
+    memcpy(dp.dst_mac, ps_port_addr(e->ps), 6);
+    memcpy(dp.src_mac, e->our_hw_mac, 6);
+    memcpy(dp.src_logical, e->our_src_logical, 6);
+    memcpy(dp.peer_logical, ps_sys_addr(e->ps), 6);
+    dp.remote_conid = cdt->remote_conid;
+    dp.local_conid = cdt->local_conid;
+    dp.incarnation = e->ps->incarnation;
+    dp.recv_ack = e->ps->vc.seq.recv_seq;
+    dp.send_seq = scs_seq_advance(&e->ps->vc.seq);
+    dp.reason = e->reason;
+    dp.matching = e->matching;
+
+    if (act == SCS_CONN_ACT_SEND_DISCONNECT_REQ) {
+        if (scs_disc_build_request(&dp, frame) != 0) {
+            /* The ONLY way this fails with a non-NULL params is the kill
+             * switch. NOBUILDER is then literally true -- with
+             * OVMX_NO_CLEAN_SHUTDOWN=1 OVMX has no DISCONNECT_REQ builder,
+             * which is the state it was in before this item. */
+            return scsd_svc_no_builder(cdt, act);
+        }
+        len = SCS_DISC_REQ_FRAME_LEN;
+        *what = "DISCONNECT_REQ";
+    } else {
+        if (scs_disc_build_response(&dp, frame) != 0) {
+            return scsd_svc_no_builder(cdt, act);
+        }
+        len = SCS_DISC_RSP_FRAME_LEN;
+        *what = "DISCONNECT_RSP";
+    }
+
+    if (send_frame_vc(e->sock, e->ifindex, e->ps, e->ps->pb, *what,
+                      frame, len) <= 0) {
+        return SCS_SVC_EMIT_REFUSED;
+    }
+    if (act == SCS_CONN_ACT_SEND_DISCONNECT_REQ) {
+        e->req_sent++;
+        disc_req_sent++;
+    } else {
+        e->rsp_sent++;
+        disc_rsp_sent++;
+    }
+    return SCS_SVC_EMIT_SENT;
+}
+
+/*
+ * scsd_disc_args - the service argument set for a teardown. Only the emitter,
+ * the reason and (through the ctx) the matching flag matter here: DISCONNECT
+ * allocates nothing, so none of the CONNECT/ACCEPT arguments apply.
+ */
+static struct scs_svc_args scsd_disc_args(struct scsd_disc_emit_ctx *e, uint16_t reason)
+{
+    struct scs_svc_args a;
+    memset(&a, 0, sizeof(a));
+    e->reason = reason;
+    a.reason = reason;
+    a.emit = scsd_svc_emit_disconnect;
+    a.emit_ctx = e;
+    return a;
+}
+
+/*
+ * scsd_disconnect_dialogue - drive Figure 2-16 for ONE received DISCONNECT
+ * message on ONE connection.
+ *
+ * p. 2-26, the rule this implements:
+ *
+ *   "the symmetry that SCA builds into the concept of a connection requires
+ *    that the other SYSAP respond by also invoking the DISCONNECT service"
+ *
+ * so a received DISCONNECT_REQ is answered in TWO steps, not one:
+ *
+ *   1. DELIVER it. From OPEN that is Figure 2-16's OPEN --RCV_DISCONNECT_REQ-->
+ *      DISC RECEIVED with action send DISCONNECT_RSP and the SYSAP-disconnected
+ *      notification. From DISC SENT it is the p. 2-27 SIMULTANEOUS case,
+ *      straight to DISC MATCH with the same answer. From DISC ACK it is the
+ *      last arrow of the figure, to CLOSED.
+ *
+ *   2. If, and only if, that left the connection in DISC RECEIVED, the owning
+ *      SYSAP now INVOKES ITS OWN DISCONNECT -- DISC RECEIVED --SVC_DISCONNECT-->
+ *      DISC MATCH, sending the MATCHING DISCONNECT_REQ ([60:62] = 1). In the
+ *      simultaneous case step 2 is skipped because our own DISCONNECT_REQ has
+ *      already gone out; that is what "transitioning through only three states"
+ *      (p. 2-27) means, and the state test is how this code knows which case it
+ *      is in rather than guessing from timing.
+ *
+ * WHICH SYSAP INVOKES IT. OVMX has no asynchronous SYSAP to hand the
+ * notification to and no disconnect callback on the CDT, so scsd.c invokes the
+ * symmetric DISCONNECT itself, synchronously, in the receive path. That is the
+ * SAME labeled difference scs_svc.h already records for ACCEPT ("an OVMX SYSAP
+ * cannot currently take time to decide"), stated again here rather than left to
+ * be inferred: the p. 2-26 SYSAP notification is LOGGED (the CONNFSM line's
+ * notify=SYSAP-disconnected bit) and is not DELIVERED to any handler, because
+ * there is no handler to deliver it to. The one handler a CDT does carry is the
+ * VC-LOSS handler, and calling that for a disconnect would report a circuit
+ * loss that did not happen -- scs_svc.h refuses it for exactly that reason.
+ *
+ * Returns 1 if the connection reached CLOSED and its CDT was released (after
+ * which `cdt` must not be touched again).
+ */
+static int scsd_disconnect_dialogue(int sock, int ifindex, struct peer_state *ps,
+                                    struct scs_cdt *cdt, enum scs_conn_event ev,
+                                    const uint8_t our_hw_mac[6],
+                                    const uint8_t our_src_logical[6])
+{
+    struct scsd_disc_emit_ctx e;
+    struct scs_svc_port *port = scsd_svc();
+    enum scs_conn_state before;
+    int closed = 0;
+
+    if (port == NULL || cdt == NULL || ps == NULL) {
+        return 0;
+    }
+    memset(&e, 0, sizeof(e));
+    e.sock = sock;
+    e.ifindex = ifindex;
+    e.ps = ps;
+    e.our_hw_mac = our_hw_mac;
+    e.our_src_logical = our_src_logical;
+
+    before = scs_conn_state_of(cdt);
+    if (ev == SCS_CONN_EV_RCV_DISCONNECT_REQ) {
+        disc_req_recv++;
+    } else {
+        disc_rsp_recv++;
+    }
+
+    /* Step 1. Answering a peer's DISCONNECT_REQ is an answer, not an
+     * initiation, so the DISCONNECT_RSP carries no matching flag at all (the
+     * 58-byte class has no such field) and the reason code is the peer's
+     * business, not ours. */
+    {
+        struct scs_svc_args a = scsd_disc_args(&e, SCS_REASON_NONE);
+        struct scsd_svc_mark m = scsd_svc_mark();
+        (void)scs_svc_deliver(port, cdt, ev, &a, &closed);
+        scsd_svc_settle(m);
+    }
+    if (closed) {
+        disc_closed++;
+        log_ts(stdout);
+        printf(" SCSD-I-DISCCLOSED, connection closed and CDT released after"
+               " the %s teardown\n",
+               before == SCS_CONN_DISC_MATCH ? "matching" : "peer-initiated");
+        fflush(stdout);
+        return 1;
+    }
+
+    /* p. 2-27: BOTH sides had already sent a DISCONNECT_REQ. We answered it
+     * above and are now in DISC MATCH with nothing further to invoke. */
+    if (before == SCS_CONN_DISC_SENT && ev == SCS_CONN_EV_RCV_DISCONNECT_REQ &&
+        scs_conn_state_of(cdt) == SCS_CONN_DISC_MATCH) {
+        disc_simultaneous++;
+        log_ts(stdout);
+        printf(" SCSD-I-DISCSIMUL, conid=0x%08X: simultaneous disconnect"
+               " (p. 2-27) -- both ends had sent DISCONNECT_REQ; answered and"
+               " went straight to DISC MATCH\n", (unsigned)cdt->local_conid);
+        fflush(stdout);
+        return 0;
+    }
+
+    /* Step 2. THE SYMMETRIC HALF -- the one OVMX never performed. */
+    if (scs_conn_state_of(cdt) == SCS_CONN_DISC_RECEIVED) {
+        struct scs_svc_args a = scsd_disc_args(&e, SCS_REASON_PEER_DISCONNECT);
+        struct scsd_svc_mark m = scsd_svc_mark();
+        e.matching = 1;
+        (void)scs_disconnect(port, cdt, &a);
+        scsd_svc_settle(m);
+        log_ts(stdout);
+        printf(" SCSD-I-DISCMATCH, conid=0x%08X: SYSAP invoked its own"
+               " DISCONNECT (p. 2-26) -- matching DISCONNECT_REQ %s\n",
+               (unsigned)cdt->local_conid,
+               e.req_sent ? "sent" : "NOT sent (no builder or refused)");
+        fflush(stdout);
+    }
+    return 0;
 }
 
 /*
@@ -3032,7 +3307,40 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                         fflush(stdout);
                     }
                 }
-                conn_step(tgt, cev, NULL);
+                /* vms-591: THE DISCONNECT MESSAGES ARE ANSWERED, NOT MERELY
+                 * RECORDED. conn_step() drives the machine and emits nothing,
+                 * which for the eight formation/rejection messages is correct
+                 * (their answers are emitted by the branches that own them).
+                 * For the two teardown messages it was NOT: a peer
+                 * DISCONNECT_REQ moved the CDT to DISC RECEIVED and the
+                 * DISCONNECT_RSP that Figure 2-16 draws on the SAME arrow was
+                 * never sent, and the symmetric own-disconnect p. 2-26
+                 * requires was never invoked. That is what this branch fixes;
+                 * see scsd_disconnect_dialogue().
+                 *
+                 * lconid IS THE PEER'S HANDLE and it is recorded before the
+                 * dialogue runs: OVMX must address its DISCONNECT_RSP and its
+                 * own DISCONNECT_REQ to the peer's Con.ID, and on a connection
+                 * OVMX did not open (the member-opened VMS$VAXcluster one) the
+                 * CDT may not have it yet. A frame carrying remote Con.ID 0
+                 * names no connection at the peer. */
+                if (cev == SCS_CONN_EV_RCV_DISCONNECT_REQ ||
+                    cev == SCS_CONN_EV_RCV_DISCONNECT_RSP) {
+                    struct peer_state *dps =
+                        peer_find_or_add(rx->cfg, rx->pdt, rx->peers, src_mac);
+                    if (dps != NULL) {
+                        if (lconid != 0) {
+                            scs_cdt_set_remote_conid(tgt, lconid);
+                        }
+                        (void)scsd_disconnect_dialogue(rx->sock, rx->ifindex, dps,
+                                                       tgt, cev, rx->our_hw_mac,
+                                                       rx->our_src_logical);
+                    } else {
+                        conn_step(tgt, cev, NULL);
+                    }
+                } else {
+                    conn_step(tgt, cev, NULL);
+                }
             }
         }
 
@@ -3854,6 +4162,183 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
 }
 
 /*
+ * ============ vms-591: CLEAN SHUTDOWN -- OVMX STOPS VANISHING ==============
+ *
+ * Before this item the daemon's whole shutdown was `g_stop = 1` and then exit.
+ * Every connection it held was left formed from the peer's point of view, and
+ * the peer's CDT for it stayed pending until its own timers gave up. p. 2-26
+ * requires a SYSAP that is done with a connection to invoke DISCONNECT; a
+ * process that just exits has invoked nothing.
+ *
+ * WHAT THIS DOES, in order:
+ *   1. For each peer, invoke DISCONNECT on every connection on its circuit
+ *      (scs_svc_disconnect_all). Each sends a DISCONNECT_REQ with the matching
+ *      flag CLEAR -- we are initiating, not answering -- and moves the
+ *      connection OPEN -> DISC SENT.
+ *   2. Keep receiving for a BOUNDED time so the peer's DISCONNECT_RSP (and its
+ *      own matching DISCONNECT_REQ) can be answered by the normal receive
+ *      path, which is what walks each connection the rest of the way to
+ *      CLOSED. No special-case receive loop: the same scsd_handle_frame() runs.
+ *   3. Stop when every connection is CLOSED, or when the deadline expires.
+ *
+ * ============================ THE TIMEOUT ==================================
+ *
+ * SCSD_SHUTDOWN_WAIT_MS = 500, and A SHUTDOWN THAT HANGS WAITING FOR A PEER IS
+ * WORSE THAN ONE THAT DOES NOT. The bound is what makes this safe; the value is
+ * measured rather than picked:
+ *
+ *   Over all 47 lab captures, every VMS-origin DISCONNECT_REQ is answered by a
+ *   DISCONNECT_RSP -- none unanswered -- and not one answer takes 10 ms.
+ *   Seconds; re-derive with tools/cluster/scs_disc_measure.py:
+ *
+ * DISC-CENSUS-LAT: requests=220 answered=220 unanswered=0
+ * DISC-CENSUS-LAT: min=0.000006 p50=0.000286 p90=0.001041 p99=0.003459 max=0.006919
+ * DISC-CENSUS-LAT: over10ms=0
+ *
+ * 500 ms is 72x the largest REQ->RSP latency ever observed on our wire, and it
+ * is still a fifth of a HELLO period, so a peer that is alive at all has had
+ * many chances to answer. EXPLICIT NON-CLAIM, in the same terms spec sec 4(M)
+ * uses: 6.919 ms is the largest latency in our captures, not an upper bound. A
+ * loaded node could exceed it. The choice rests on the margin -- and, more
+ * importantly, on the fact that EXCEEDING IT COSTS NOTHING BUT A LOG LINE. If
+ * the deadline expires with connections still open, they are REPORTED
+ * (SCSD-W-DISCPEND, counted in disc_shutdown_pending and printed in the exit
+ * summary) and the daemon exits anyway. It never blocks on a peer.
+ *
+ * AND ON THE LAB IT ALWAYS DOES EXPIRE. Those latency figures are VAX-to-VAX.
+ * Measured over four lab-2 runs (scs_disc.h, THE LAB VERDICT), a real VAX
+ * ANSWERS NO DISCONNECT_REQ OVMX SENDS -- not in 500 ms, and not in the 20 s a
+ * capture ran past one. It logs "%PEA0, Inappropriate SCA Control Message"
+ * instead. So on today's wire this wait ALWAYS runs to its deadline and always
+ * reports SCSD-W-DISCPEND, and raising it would only make shutdown slower. It
+ * is kept, and kept short, because the bound is what stops a peer that answers
+ * SOMETIMES from turning into a hang -- and because when the refusal is
+ * understood, the wait is what will let the dialogue finish.
+ *
+ * OVMX_SHUTDOWN_WAIT_MS overrides the value; 0 disables the wait entirely (send
+ * and go). OVMX_NO_CLEAN_SHUTDOWN=1 skips the whole function -- and, because
+ * the kill switch is enforced inside scs_disc_build_*(), would also make every
+ * frame here unbuildable even if this check were removed.
+ */
+#define SCSD_SHUTDOWN_WAIT_MS 500
+
+static unsigned scsd_open_connection_count(void)
+{
+    unsigned n = 0;
+    if (!scsd_cdl_ready) {
+        return 0;
+    }
+    for (unsigned i = 0; i < SCS_CDL_ENTRIES; i++) {
+        const struct scs_cdt *cdt = scsd_cdl.entry[i];
+        if (cdt == NULL || !cdt->in_use || cdt->listening) {
+            continue;
+        }
+        if (scs_conn_state_of(cdt) != SCS_CONN_CLOSED) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static long scsd_shutdown_wait_ms(void)
+{
+    const char *e = getenv("OVMX_SHUTDOWN_WAIT_MS");
+    if (e != NULL && e[0] != '\0') {
+        char *end = NULL;
+        long v = strtol(e, &end, 10);
+        if (end != NULL && *end == '\0' && v >= 0) {
+            return v;
+        }
+    }
+    return SCSD_SHUTDOWN_WAIT_MS;
+}
+
+static void scsd_shutdown_teardown(struct scsd_rx *rx, uint8_t *buf, size_t bufsz)
+{
+    struct scs_svc_port *port = scsd_svc();
+    unsigned driven = 0;
+    long wait_ms;
+    uint64_t deadline;
+
+    if (port == NULL || !rx->do_connect) {
+        return;
+    }
+    if (!scs_disc_enabled()) {
+        log_ts(stdout);
+        printf(" SCSD-I-NOCLEANSHUT, OVMX_NO_CLEAN_SHUTDOWN=1 -- no DISCONNECT"
+               " frame will be sent and no teardown wait will run (this is the"
+               " pre-vms-591 behaviour: exit without disconnecting)\n");
+        fflush(stdout);
+        return;
+    }
+
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (ps->pb == NULL) {
+            continue;
+        }
+        struct scsd_disc_emit_ctx e;
+        memset(&e, 0, sizeof(e));
+        e.sock = rx->sock;
+        e.ifindex = rx->ifindex;
+        e.ps = ps;
+        e.our_hw_mac = rx->our_hw_mac;
+        e.our_src_logical = rx->our_src_logical;
+        e.matching = 0; /* WE are initiating: [60:62] = 0 (scs_disc.h) */
+
+        struct scs_svc_args a = scsd_disc_args(&e, SCS_REASON_SYSAP_SHUTDOWN);
+        struct scsd_svc_mark m = scsd_svc_mark();
+        unsigned k = scs_svc_disconnect_all(port, ps->pb, &a);
+        scsd_svc_settle(m);
+        if (k > 0) {
+            driven += k;
+            log_ts(stdout);
+            printf(" SCSD-I-SHUTDISC, invoked DISCONNECT on %u connection(s) to"
+                   " peer %02x:%02x:%02x:%02x:%02x:%02x (%d DISCONNECT_REQ sent,"
+                   " reason %u=%s)\n",
+                   k, ps_port_addr(ps)[0], ps_port_addr(ps)[1], ps_port_addr(ps)[2],
+                   ps_port_addr(ps)[3], ps_port_addr(ps)[4], ps_port_addr(ps)[5],
+                   e.req_sent, (unsigned)SCS_REASON_SYSAP_SHUTDOWN,
+                   scs_reason_name(SCS_REASON_SYSAP_SHUTDOWN));
+            fflush(stdout);
+        }
+    }
+    if (driven == 0) {
+        return;
+    }
+
+    /* Wait, bounded, for the peer to complete the dialogue. The frames are
+     * handled by the ordinary receive path -- scsd_disconnect_dialogue() is
+     * reached from scsd_handle_frame() exactly as it is during a run. */
+    wait_ms = scsd_shutdown_wait_ms();
+    deadline = monotonic_ms() + (uint64_t)wait_ms;
+    while (wait_ms > 0 && monotonic_ms() < deadline) {
+        if (scsd_open_connection_count() == 0) {
+            break;
+        }
+        ssize_t n = recv(rx->sock, buf, bufsz, 0);
+        if (n < 0) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue; /* the socket's SO_RCVTIMEO is the inner bound */
+            }
+            break;
+        }
+        scsd_handle_frame(rx, buf, n);
+    }
+
+    disc_shutdown_pending = scsd_open_connection_count();
+    log_ts(stdout);
+    if (disc_shutdown_pending == 0) {
+        printf(" SCSD-I-SHUTDONE, every connection reached CLOSED before exit\n");
+    } else {
+        printf(" SCSD-W-DISCPEND, %lu connection(s) had NOT reached CLOSED when"
+               " the %ld ms shutdown wait expired -- exiting anyway rather than"
+               " blocking on a peer\n", disc_shutdown_pending, wait_ms);
+    }
+    fflush(stdout);
+}
+
+/*
  * scsd_exit_summary - the end-of-run report, including the vms-dd5 connection
  * state-machine accounting and the stuck-connection scan.
  */
@@ -3892,6 +4377,19 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
                 conn_reason_seen, conn_reason_nonzero,
                 scs_reason_enabled() ? "" : " (OVMX_NO_REASON_CODE set --"
                                             " DECODING WAS OFF)");
+        /* vms-591: the Figure 2-16 teardown, both halves. Printed
+         * unconditionally: the number that matters is req-sent, because before
+         * this item it was structurally 0 -- OVMX only ever reacted. If the
+         * kill switch is set, say so on the same line, so a run log can never
+         * read as "the peer never disconnected" when the truth is "we could
+         * not have answered". */
+        fprintf(out, "  DISCONNECT: req-recv=%lu rsp-sent=%lu req-sent=%lu"
+                " rsp-recv=%lu closed=%lu simultaneous=%lu"
+                " still-open-at-exit=%lu%s\n",
+                disc_req_recv, disc_rsp_sent, disc_req_sent, disc_rsp_recv,
+                disc_closed, disc_simultaneous, disc_shutdown_pending,
+                scs_disc_enabled() ? "" : " (OVMX_NO_CLEAN_SHUTDOWN set --"
+                                          " NO DISCONNECT FRAME WAS SENT)");
         /* vms-abc: the p. 2-31 message guarantees. Printed unconditionally --
          * "0 gaps, 0 breaks" is the answer on a healthy run and it must be
          * VISIBLE, not inferred from the absence of a warning. If the kill
@@ -4364,6 +4862,9 @@ int main(int argc, char **argv)
         }
         scsd_handle_frame(&rx, buf, n);
     }
+
+    /* vms-591: disconnect before vanishing. Bounded; see the function. */
+    scsd_shutdown_teardown(&rx, buf, sizeof(buf));
 
     scsd_exit_summary(&rx, stderr);
 

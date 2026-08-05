@@ -226,7 +226,7 @@ target_include_directories(test_scsd_wire PRIVATE
 target_link_libraries(test_scsd_wire PRIVATE
     vmsscs_classify vmsscs_hello vmsscs_connect vmsscs_dir
     vmsscs_start vmsscs_vc vmsscs_member vmsscs_config vmsscs_conn
-    vmsscs_depart vmsscs_dgram vmsscs_svc vmsscs_reason
+    vmsscs_depart vmsscs_dgram vmsscs_svc vmsscs_reason vmsscs_disc
 )
 
 add_test(NAME vmsscs_scsd_wire_unit COMMAND test_scsd_wire)
@@ -512,6 +512,75 @@ else()
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_reason_mutants_no_python3.cmake)
 endif()
 set_tests_properties(scs_reason_mutants PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 300
+)
+
+# vms-591 - THE DISCONNECT DIALOGUE ON THE WIRE (Figure 2-16, pp. 2-26/2-27).
+#
+# Asserts byte-exact reproduction of TWO REAL CAPTURED FRAMES -- one
+# DISCONNECT_REQ and one DISCONNECT_RSP from a single complete teardown in
+# formation-ci1.pcap -- from both ends of the dialogue, plus every substituted
+# field, the derived length fields, the newly-grounded [60:62] matching flag,
+# and the OVMX_NO_CLEAN_SHUTDOWN kill switch RUN with controls on both sides.
+#
+# The DISCONNECT_RSP half is the one that matters most: the spec said message
+# type 7 does not appear on our wire and told the next agent not to build one.
+# It does appear; every census had been restricted to SCA length classes
+# {62, 66, 110} and the response class is 58. The test carries that correction
+# as an assertion over the captured bytes, not as a sentence.
+add_executable(test_scs_disc test_scs_disc.c)
+target_include_directories(test_scs_disc PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsscs/include
+)
+target_link_libraries(test_scs_disc PRIVATE vmsscs_disc vmsscs_reason)
+add_test(NAME vmsscs_disc_unit COMMAND test_scs_disc)
+set_tests_properties(vmsscs_disc_unit PROPERTIES
+    LABELS "unit;scs;cluster"
+    TIMEOUT 30
+)
+
+# vms-591 - the FIGURES gate for the disconnect measurement. Needs no captures:
+# it asserts every number tools/cluster/scs_disc_measure.py recorded still
+# appears verbatim in scs_disc.h, in scsd.c's shutdown-timeout justification and
+# in docs/cluster-protocol-spec.md, so the prose cannot drift away from the
+# measurement. Only the measure script, on a host with the captures, re-derives
+# the numbers themselves.
+#
+# It ALSO gates the correction: the spec's old "5 and 7 DO NOT EXIST ON OUR
+# WIRE" / "do not build a 5 or 7 frame" claims are REFUTED, and this test reds
+# if either sentence comes back anywhere in the spec outside the block that
+# quarantines it as refuted history.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_disc_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_disc_figures.py)
+else()
+    add_test(NAME scs_disc_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_disc_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_disc_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)
+
+# vms-591 - THE MUTATION BATTERY for scs_disc_figures. See the file header: it
+# found two real defects in that gate (a quarantine parser that accepted nested
+# markers, and a claim matcher that missed "neither 5 nor 7"), which is the
+# whole argument for having it. The mutant count and the kill count are PRINTED
+# by the test and deliberately not restated here -- a second copy of a figure is
+# how the vms-6b3 gate got rejected twice.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_disc_mutants
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_disc_mutants.py)
+else()
+    add_test(NAME scs_disc_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_disc_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_disc_mutants PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 300
 )

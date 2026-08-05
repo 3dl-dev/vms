@@ -936,6 +936,247 @@ static void test_two_nodes_form_use_and_tear_down_a_connection(void)
 }
 
 /* Null/degenerate arguments must be refused, not crash. */
+/* ==========================================================================
+ * vms-591 - THE RECEIVE SIDE: scs_svc_deliver() and scs_svc_disconnect_all().
+ *
+ * The daemon-level behaviour of both is covered over the real scsd.c
+ * translation unit in tests/vmsscs/test_scsd_wire.c. What is covered HERE is
+ * what that cannot reach: the argument contract, and the per-circuit filter --
+ * which matters exactly when a node has TWO peers, a configuration the wire
+ * test's fixtures do not build.
+ * ========================================================================== */
+
+/* Put a fresh connection in OPEN through the machine, the way the existing
+ * cases in this file do. Returns NULL (and CHECKs) on failure. */
+static struct scs_cdt *open_connection(struct node *n, struct scs_pb *vc)
+{
+    struct scs_cdt *cdt = scs_cdl_alloc(&n->cdl, "VMS$VAXcluster", "VMS$VAXcluster", vc);
+    CHECK(cdt != NULL, "no CDT");
+    if (cdt == NULL) {
+        return NULL;
+    }
+    scs_conn_fsm_init(cdt);
+    (void)scs_conn_fsm_step(cdt, SCS_CONN_EV_SVC_CONNECT);
+    (void)scs_conn_fsm_step(cdt, SCS_CONN_EV_RCV_CONNECT_RSP);
+    (void)scs_conn_fsm_step(cdt, SCS_CONN_EV_RCV_ACCEPT_REQ);
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_OPEN, "fixture did not reach OPEN");
+    return cdt;
+}
+
+/*
+ * scs_svc_deliver() EMITS. This is the defect the item exists to fix, stated
+ * at the service layer: before vms-591 the receive side had no emitting entry
+ * point at all, so the DISCONNECT_RSP Figure 2-16 draws on the
+ * OPEN --RCV_DISCONNECT_REQ--> DISC RECEIVED arrow could not be sent.
+ */
+static void test_deliver_emits_the_answer_the_machine_names(void)
+{
+    struct node a;
+    static const uint8_t pb_[6] = {0x08, 0x00, 0x2b, 0x00, 0x00, 0x0b};
+    static const uint8_t bsys[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
+    node_init(&a, "A", 0x01);
+    node_open_circuit(&a, bsys, pb_);
+    wire_reset();
+
+    struct scs_cdt *cdt = open_connection(&a, a.pb);
+    if (cdt == NULL) {
+        return;
+    }
+    struct scs_svc_args args;
+    memset(&args, 0, sizeof(args));
+    args.vc = a.pb;
+    args.emit = node_emit;
+    wire_reset();
+
+    int closed = -1;
+    unsigned long delivered_before = a.port.delivered;
+    CHECK(scs_svc_deliver(&a.port, cdt, SCS_CONN_EV_RCV_DISCONNECT_REQ, &args,
+                          &closed) == SCS_SVC_OK,
+          "deliver refused a DISCONNECT_REQ on an OPEN connection");
+    CHECK(a.port.delivered == delivered_before + 1,
+          "deliver did not count the delivery");
+    CHECK(wire_depth == 1 && wire[0].action == SCS_CONN_ACT_SEND_DISCONNECT_RSP,
+          "deliver emitted %u message(s); Figure 2-16 puts a DISCONNECT_RSP on "
+          "this arrow", wire_depth);
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_RECEIVED,
+          "after the peer's DISCONNECT_REQ the connection is %s, expected "
+          "DISC RECEIVED", scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(closed == 0, "deliver reported a close that did not happen");
+    CHECK(cdt->in_use, "deliver released the CDT before the connection closed");
+}
+
+/* The RECEIVED-MESSAGES-ONLY contract. A local SYSAP invocation belongs to one
+ * of the five services and VC loss belongs to scs_vc_break(); accepting either
+ * here would give both a second, unaudited entry point into the machine. */
+static void test_deliver_rejects_everything_that_is_not_a_received_message(void)
+{
+    struct node a;
+    static const uint8_t pb_[6] = {0x08, 0x00, 0x2b, 0x00, 0x00, 0x0b};
+    static const uint8_t bsys[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
+    node_init(&a, "A", 0x01);
+    node_open_circuit(&a, bsys, pb_);
+    wire_reset();
+
+    struct scs_cdt *cdt = open_connection(&a, a.pb);
+    if (cdt == NULL) {
+        return;
+    }
+    struct scs_svc_args args;
+    memset(&args, 0, sizeof(args));
+    args.vc = a.pb;
+    args.emit = node_emit;
+    wire_reset();
+
+    static const enum scs_conn_event rejected[] = {
+        SCS_CONN_EV_SVC_CONNECT, SCS_CONN_EV_SVC_ACCEPT,
+        SCS_CONN_EV_SVC_REJECT, SCS_CONN_EV_SVC_DISCONNECT,
+        SCS_CONN_EV_VC_LOST
+    };
+    for (size_t i = 0; i < sizeof(rejected) / sizeof(rejected[0]); i++) {
+        enum scs_conn_state before = scs_conn_state_of(cdt);
+        CHECK(scs_svc_deliver(&a.port, cdt, rejected[i], &args, NULL) == SCS_SVC_BADARG,
+              "deliver accepted %s, which is not a received message",
+              scs_conn_event_name(rejected[i]));
+        CHECK(scs_conn_state_of(cdt) == before,
+              "a rejected event still moved the connection (%s -> %s)",
+              scs_conn_state_name(before),
+              scs_conn_state_name(scs_conn_state_of(cdt)));
+    }
+    CHECK(wire_depth == 0, "a rejected event emitted %u message(s)", wire_depth);
+
+    /* NULL handling. */
+    CHECK(scs_svc_deliver(NULL, cdt, SCS_CONN_EV_RCV_DISCONNECT_REQ, &args, NULL)
+              == SCS_SVC_BADARG, "NULL port accepted");
+    CHECK(scs_svc_deliver(&a.port, NULL, SCS_CONN_EV_RCV_DISCONNECT_REQ, &args, NULL)
+              == SCS_SVC_BADARG, "NULL cdt accepted");
+}
+
+/* Deliver RELEASES when the transition reaches CLOSED, and says so. */
+static void test_deliver_releases_on_closed(void)
+{
+    struct node a;
+    static const uint8_t pb_[6] = {0x08, 0x00, 0x2b, 0x00, 0x00, 0x0b};
+    static const uint8_t bsys[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
+    node_init(&a, "A", 0x01);
+    node_open_circuit(&a, bsys, pb_);
+    wire_reset();
+
+    struct scs_cdt *cdt = open_connection(&a, a.pb);
+    if (cdt == NULL) {
+        return;
+    }
+    struct scs_svc_args args;
+    memset(&args, 0, sizeof(args));
+    args.vc = a.pb;
+    args.emit = node_emit;
+
+    /* Walk the far side of Figure 2-16: we disconnect, the peer answers, the
+     * peer disconnects, we answer -- CLOSED. Every step through production. */
+    CHECK(scs_disconnect(&a.port, cdt, &args) == SCS_SVC_OK, "DISCONNECT refused");
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_SENT, "not DISC SENT");
+    CHECK(scs_svc_deliver(&a.port, cdt, SCS_CONN_EV_RCV_DISCONNECT_RSP, &args, NULL)
+              == SCS_SVC_OK, "the peer's DISCONNECT_RSP was refused");
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_ACK, "not DISC ACK");
+
+    unsigned in_use_before = scs_cdl_in_use_count(&a.cdl);
+    unsigned long released_before = a.port.cdts_released;
+    wire_reset();
+    int closed = -1;
+    CHECK(scs_svc_deliver(&a.port, cdt, SCS_CONN_EV_RCV_DISCONNECT_REQ, &args, &closed)
+              == SCS_SVC_OK, "the peer's matching DISCONNECT_REQ was refused");
+    CHECK(wire_depth == 1 && wire[0].action == SCS_CONN_ACT_SEND_DISCONNECT_RSP,
+          "the last arrow of Figure 2-16 emitted %u message(s)", wire_depth);
+    CHECK(closed == 1, "deliver did not report the close");
+    CHECK(a.port.cdts_released == released_before + 1,
+          "deliver did not release the CDT at CLOSED");
+    CHECK(scs_cdl_in_use_count(&a.cdl) == in_use_before - 1,
+          "the CDL in-use count did not drop");
+}
+
+/*
+ * THE PER-CIRCUIT FILTER, and it is the reason scs_svc_disconnect_all() takes a
+ * circuit at all. With two peers, a walk that ignored the circuit would send
+ * peer B's DISCONNECT_REQ to peer A's emitter. The wire test cannot reach this
+ * -- its fixtures build one peer.
+ */
+static void test_disconnect_all_is_scoped_to_one_circuit(void)
+{
+    struct node a;
+    static const uint8_t portb[6] = {0x08, 0x00, 0x2b, 0x00, 0x00, 0x0b};
+    static const uint8_t portc[6] = {0x08, 0x00, 0x2b, 0x00, 0x00, 0x0c};
+    static const uint8_t bsys[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
+    static const uint8_t csys[6] = {0xaa, 0x00, 0x04, 0x00, 0x03, 0x04};
+
+    node_init(&a, "A", 0x01);
+    node_open_circuit(&a, bsys, portb);
+    struct scs_pb *vc_b = a.pb;
+    node_open_circuit(&a, csys, portc);
+    struct scs_pb *vc_c = a.pb;
+    CHECK(vc_b != NULL && vc_c != NULL && vc_b != vc_c,
+          "the fixture did not build two distinct circuits");
+    if (vc_b == NULL || vc_c == NULL || vc_b == vc_c) {
+        return;
+    }
+
+    struct scs_cdt *cb = open_connection(&a, vc_b);
+    struct scs_cdt *cc = open_connection(&a, vc_c);
+    if (cb == NULL || cc == NULL) {
+        return;
+    }
+    /* A LISTENING CDT on the same node: p. 2-48 says it describes no
+     * connection, so it must never be disconnected. */
+    CHECK(scs_listen(&a.port, "SCS$DIRECTORY", NULL, NULL) == SCS_SVC_OK,
+          "LISTEN refused");
+    unsigned listening_before = scs_cdl_in_use_count(&a.cdl);
+
+    struct scs_svc_args args;
+    memset(&args, 0, sizeof(args));
+    args.emit = node_emit;
+    wire_reset();
+
+    unsigned n = scs_svc_disconnect_all(&a.port, vc_b, &args);
+    CHECK(n == 1, "disconnect_all on circuit B drove %u connection(s), expected 1", n);
+    CHECK(scs_conn_state_of(cb) == SCS_CONN_DISC_SENT,
+          "the connection on circuit B is %s, expected DISC SENT",
+          scs_conn_state_name(scs_conn_state_of(cb)));
+    CHECK(scs_conn_state_of(cc) == SCS_CONN_OPEN,
+          "the connection on circuit C is %s -- naming circuit B must not tear "
+          "down another peer's connection", scs_conn_state_name(scs_conn_state_of(cc)));
+    CHECK(wire_depth == 1 && wire[0].action == SCS_CONN_ACT_SEND_DISCONNECT_REQ,
+          "disconnect_all emitted %u message(s), expected 1", wire_depth);
+    CHECK(scs_cdl_in_use_count(&a.cdl) == listening_before,
+          "disconnect_all released a CDT; p. 2-26 says one DISCONNECT closes "
+          "nothing");
+
+    /* NULL circuit = every circuit. Circuit B is now in DISC SENT, which has no
+     * SVC_DISCONNECT row, so only C is driven -- and the LISTENING CDT is still
+     * skipped. */
+    wire_reset();
+    n = scs_svc_disconnect_all(&a.port, NULL, &args);
+    CHECK(n == 1, "disconnect_all over every circuit drove %u, expected 1 (B is "
+                  "already in DISC SENT and the listening CDT is not a "
+                  "connection)", n);
+    CHECK(scs_conn_state_of(cc) == SCS_CONN_DISC_SENT,
+          "the connection on circuit C is %s, expected DISC SENT",
+          scs_conn_state_name(scs_conn_state_of(cc)));
+    CHECK(scs_conn_state_of(cb) == SCS_CONN_DISC_SENT,
+          "the connection on circuit B moved again; DISC SENT has no "
+          "(state, SVC_DISCONNECT) row and must be skipped");
+    CHECK(scs_svc_listening(&a.port, "SCS$DIRECTORY"),
+          "disconnect_all tore down the LISTENING CDT (p. 2-48: it describes no "
+          "connection)");
+
+    /* And a third call drives nothing at all: every connection has already
+     * invoked its disconnect. The TABLE decides, not a hard-coded state list. */
+    wire_reset();
+    CHECK(scs_svc_disconnect_all(&a.port, NULL, &args) == 0,
+          "disconnect_all drove a connection that has no DISCONNECT rule left");
+    CHECK(wire_depth == 0, "an empty disconnect_all still emitted %u message(s)",
+          wire_depth);
+
+    CHECK(scs_svc_disconnect_all(NULL, NULL, &args) == 0, "NULL port accepted");
+}
+
 static void test_null_safety(void)
 {
     struct scs_svc_args args;
@@ -966,6 +1207,11 @@ int main(void)
     test_kill_switch_records_nothing_and_sends_everything();
     test_one_disconnect_does_not_release();
     test_two_nodes_form_use_and_tear_down_a_connection();
+    /* vms-591: the receive side and the scoped teardown walk. */
+    test_deliver_emits_the_answer_the_machine_names();
+    test_deliver_rejects_everything_that_is_not_a_received_message();
+    test_deliver_releases_on_closed();
+    test_disconnect_all_is_scoped_to_one_circuit();
     test_null_safety();
 
     printf("test_scs_svc: %d checks, %d failures\n", checks, failures);

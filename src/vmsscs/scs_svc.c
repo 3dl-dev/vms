@@ -455,3 +455,87 @@ enum scs_svc_status scs_disconnect(struct scs_svc_port *port, struct scs_cdt *cd
     (void)scs_svc_close_if_closed(port, cdt);
     return st;
 }
+
+/* --- the RECEIVE side (vms-591) ------------------------------------------- */
+
+enum scs_svc_status scs_svc_deliver(struct scs_svc_port *port, struct scs_cdt *cdt,
+                                    enum scs_conn_event ev,
+                                    const struct scs_svc_args *args,
+                                    int *closed_out)
+{
+    static const struct scs_svc_args no_args;
+
+    if (closed_out != NULL) {
+        *closed_out = 0;
+    }
+    if (port == NULL) {
+        return SCS_SVC_BADARG;
+    }
+    if (args == NULL) {
+        args = &no_args;
+    }
+    if (cdt == NULL || !cdt->in_use) {
+        return SCS_SVC_BADARG;
+    }
+    /* RECEIVED MESSAGES ONLY. A local SYSAP service invocation belongs to one
+     * of the five services and SCS_CONN_EV_VC_LOST belongs to scs_vc_break();
+     * accepting them here would give each of those a second, unaudited entry
+     * point into the same machine. */
+    if (ev < SCS_CONN_EV_RCV_CONNECT_REQ || ev > SCS_CONN_EV_RCV_DISCONNECT_RSP) {
+        return SCS_SVC_BADARG;
+    }
+
+    port->delivered++;
+    enum scs_svc_status st = svc_step(port, cdt, ev, args, NULL);
+    if (st == SCS_SVC_BADSTATE) {
+        return st;
+    }
+    int closed = scs_svc_close_if_closed(port, cdt);
+    if (closed_out != NULL) {
+        *closed_out = closed;
+    }
+    return st;
+}
+
+unsigned scs_svc_disconnect_all(struct scs_svc_port *port, const struct scs_pb *vc,
+                                const struct scs_svc_args *args)
+{
+    unsigned n = 0;
+
+    if (port == NULL || port->cdl == NULL) {
+        return 0;
+    }
+    for (unsigned i = 0; i < SCS_CDL_ENTRIES; i++) {
+        struct scs_cdt *cdt = port->cdl->entry[i];
+        if (cdt == NULL || !cdt->in_use) {
+            continue;
+        }
+        /* p. 2-48: a listening CDT "describes no connection" -- no peer, no
+         * circuit, no Figure 2-14 state. There is nothing to disconnect. */
+        if (cdt->listening) {
+            continue;
+        }
+        /* ONE CIRCUIT AT A TIME when the caller names one. The frames are
+         * addressed from the CDT but TRANSMITTED to a peer the caller supplies,
+         * so tearing down connections on a circuit the caller did not name
+         * would send one peer's DISCONNECT_REQ to another peer's MAC. */
+        if (vc != NULL && cdt->pb != vc) {
+            continue;
+        }
+        /* p. 2-26's DISCONNECT is defined from OPEN and from DISC RECEIVED.
+         * Any other state either has no disconnect to invoke (CLOSED, the
+         * formation states) or has already invoked one (DISC SENT, DISC ACK,
+         * DISC MATCH); driving those would score illegal events and log noise
+         * rather than tear anything down. The table decides, not this loop --
+         * ask it, and skip what it has no rule for. */
+        struct scs_conn_transition row;
+        if (!scs_conn_table_lookup(scs_conn_state_of(cdt),
+                                   SCS_CONN_EV_SVC_DISCONNECT, &row)) {
+            continue;
+        }
+        if (scs_disconnect(port, cdt, args) == SCS_SVC_OK) {
+            n++;
+        }
+    }
+    return n;
+}

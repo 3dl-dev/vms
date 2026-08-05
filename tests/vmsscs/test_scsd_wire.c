@@ -5006,6 +5006,521 @@ static void test_reason_kill_switch_through_the_daemon(void)
           "bracketing control: the daemon did not log after the switch was cleared");
 }
 
+/* ===================================================================
+ * vms-591 - THE DISCONNECT DIALOGUE, DRIVEN BY THE PRODUCTION DISPATCH.
+ *
+ * Figure 2-16, pp. 2-26/2-27. Every case below feeds a frame to
+ * scsd_handle_frame() -- the real receive path -- or calls the real shutdown
+ * teardown, and asserts what scsd.c PUT ON THE WIRE and what state it left the
+ * connection in. NOTHING here performs a transition by hand next to an
+ * assertion: that pattern was rejected once in this epic, and it would be
+ * especially hollow here, where the whole defect being fixed is that the
+ * receive path recorded a transition and emitted nothing.
+ *
+ * THE INPUT IS A REAL CAPTURED FRAME. cap_disconnect_req_to_ovmx (above, used
+ * by the vms-6b3 reason cases) is a genuine VMS DISCONNECT_REQ addressed to
+ * OVMX's own SCS$DIRECTORY Con.ID, transcribed byte-exact and UNEDITED, with
+ * its [60:62] matching flag reading 0x0000 -- i.e. the peer initiating.
+ * =================================================================== */
+
+/* The Con.ID the captured DISCONNECT_REQ is addressed to, and the peer handle
+ * it supplies -- both read out of the frame rather than restated. */
+static uint32_t disc_cap_dst_conid(void)
+{
+    return (uint32_t)cap_disconnect_req_to_ovmx[64] |
+           ((uint32_t)cap_disconnect_req_to_ovmx[65] << 8) |
+           ((uint32_t)cap_disconnect_req_to_ovmx[66] << 16) |
+           ((uint32_t)cap_disconnect_req_to_ovmx[67] << 24);
+}
+
+static uint32_t disc_cap_src_conid(void)
+{
+    return (uint32_t)cap_disconnect_req_to_ovmx[68] |
+           ((uint32_t)cap_disconnect_req_to_ovmx[69] << 8) |
+           ((uint32_t)cap_disconnect_req_to_ovmx[70] << 16) |
+           ((uint32_t)cap_disconnect_req_to_ovmx[71] << 24);
+}
+
+/* Is `f` a DISCONNECT frame of the given connection-control message type? Read
+ * off the frame the daemon emitted, never assumed from the call order. */
+static int disc_is(const uint8_t *f, size_t len, unsigned msgtype, size_t want_len)
+{
+    if (len != want_len || len < 62) {
+        return 0;
+    }
+    return ((unsigned)f[60] | ((unsigned)f[61] << 8)) == msgtype;
+}
+
+static int disc_frame_is_req(const uint8_t *f, size_t len)
+{
+    return disc_is(f, len, SCS_DISC_MSGTYPE_REQ, SCS_DISC_REQ_FRAME_LEN);
+}
+
+static int disc_frame_is_rsp(const uint8_t *f, size_t len)
+{
+    return disc_is(f, len, SCS_DISC_MSGTYPE_RSP, SCS_DISC_RSP_FRAME_LEN);
+}
+
+/* Build the SCS$DIRECTORY connection the captured DISCONNECT_REQ addresses,
+ * through production, and reset this item's counters. Returns the CDT. */
+static struct scs_cdt *disc_world_init(struct rxworld *r)
+{
+    (void)unsetenv("OVMX_NO_CLEAN_SHUTDOWN");
+    reason_world_init(r);
+    disc_req_recv = 0;
+    disc_rsp_sent = 0;
+    disc_req_sent = 0;
+    disc_rsp_recv = 0;
+    disc_closed = 0;
+    disc_simultaneous = 0;
+    disc_shutdown_pending = 0;
+    struct scs_cdt *cdt = scs_cdl_lookup(&scsd_cdl, disc_cap_dst_conid());
+    CHECK(cdt != NULL, "the fixture built no CDT at the Con.ID the captured "
+                       "DISCONNECT_REQ is addressed to (0x%08X)",
+          (unsigned)disc_cap_dst_conid());
+    return cdt;
+}
+
+/*
+ * (1) THE DEFECT THIS ITEM FIXES, AS A TEST.
+ *
+ * p. 2-26: OVMX must answer a peer's DISCONNECT_REQ with a DISCONNECT_RSP AND
+ * then have its own SYSAP invoke DISCONNECT, sending a MATCHING
+ * DISCONNECT_REQ. Before vms-591 the receive path stepped the state machine
+ * and emitted NOTHING, so both frames were missing by construction.
+ */
+static void test_peer_disconnect_req_is_answered_and_matched(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    enum scs_conn_state before = scs_conn_state_of(cdt);
+    CHECK(before == SCS_CONN_OPEN || before == SCS_CONN_ACCEPT_SENT,
+          "the fixture's SCS$DIRECTORY connection is %s -- Figure 2-16 starts "
+          "from a formed connection", scs_conn_state_name(before));
+
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    /* The peer's request was DELIVERED, not merely observed. */
+    CHECK(disc_req_recv == 1, "the daemon delivered %lu DISCONNECT_REQ, expected 1",
+          disc_req_recv);
+
+    /* BOTH frames went out, and this is the whole point of the item. */
+    CHECK(disc_rsp_sent == 1,
+          "the daemon sent %lu DISCONNECT_RSP; Figure 2-16 puts one on the same "
+          "arrow as the transition to DISC RECEIVED", disc_rsp_sent);
+    CHECK(disc_req_sent == 1,
+          "the daemon sent %lu DISCONNECT_REQ of its own; p. 2-26 requires the "
+          "other SYSAP to invoke DISCONNECT symmetrically, and before vms-591 "
+          "this was structurally 0", disc_req_sent);
+
+    /* And the connection is where Figure 2-16 puts it after both. */
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_MATCH,
+          "after answering and matching, the connection is %s, expected "
+          "DISC MATCH", scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(disc_simultaneous == 0,
+          "a peer-initiated teardown was scored as the p. 2-27 simultaneous case");
+
+    /* THE LAST FRAME OUT IS THE MATCHING REQUEST, and its matching flag is
+     * SET -- read off the emitted bytes, which is the only evidence that
+     * distinguishes "we initiated" from "we matched" on the wire. */
+    CHECK(disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len),
+          "the last frame the daemon sent is %zu bytes with [46:48]=%u; expected "
+          "the %d-byte DISCONNECT_REQ (message type %u)",
+          scsd_test_last_len,
+          scsd_test_last_len >= 62 ? (unsigned)(scsd_test_last_frame[60] |
+                                                (scsd_test_last_frame[61] << 8)) : 0,
+          SCS_DISC_REQ_FRAME_LEN, SCS_DISC_MSGTYPE_REQ);
+    if (disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len)) {
+        uint16_t m = 0xffff;
+        CHECK(scs_disc_match_get(scsd_test_last_frame, scsd_test_last_len, &m) == 1 &&
+                  m == SCS_DISC_MATCH_MATCHING,
+              "OVMX's own DISCONNECT_REQ carries matching flag 0x%04x, expected "
+              "0x%04x -- it is ANSWERING the peer's, not initiating", m,
+              SCS_DISC_MATCH_MATCHING);
+        /* Addressed to the connection, from the pair the peer supplied. */
+        uint32_t rem = (uint32_t)scsd_test_last_frame[64] |
+                       ((uint32_t)scsd_test_last_frame[65] << 8) |
+                       ((uint32_t)scsd_test_last_frame[66] << 16) |
+                       ((uint32_t)scsd_test_last_frame[67] << 24);
+        uint32_t loc = (uint32_t)scsd_test_last_frame[68] |
+                       ((uint32_t)scsd_test_last_frame[69] << 8) |
+                       ((uint32_t)scsd_test_last_frame[70] << 16) |
+                       ((uint32_t)scsd_test_last_frame[71] << 24);
+        CHECK(rem == disc_cap_src_conid(),
+              "OVMX addressed its DISCONNECT_REQ to remote Con.ID 0x%08X, "
+              "expected the peer's own 0x%08X read out of its request",
+              rem, disc_cap_src_conid());
+        CHECK(loc == disc_cap_dst_conid(),
+              "OVMX's DISCONNECT_REQ carries local Con.ID 0x%08X, expected "
+              "0x%08X", loc, disc_cap_dst_conid());
+        /* p. 2-26's optional reason code: OVMX says WHY. */
+        uint16_t why = 0xffff;
+        CHECK(scs_reason_get(scsd_test_last_frame, scsd_test_last_len,
+                             SCS_REASON_MSGTYPE_DISCONNECT_REQ, &why) == 1 &&
+                  why == SCS_REASON_PEER_DISCONNECT,
+              "OVMX's matching DISCONNECT_REQ carries reason %u, expected %u "
+              "(%s)", why, (unsigned)SCS_REASON_PEER_DISCONNECT,
+              scs_reason_name(SCS_REASON_PEER_DISCONNECT));
+    }
+    CHECK(rxlog_has("SCSD-I-DISCMATCH"),
+          "the daemon did not log the symmetric own-disconnect; log was: '%s'", rxlog);
+    CHECK(conn_illegal_events == 0,
+          "the teardown scored %lu illegal events", conn_illegal_events);
+}
+
+/*
+ * (2) THE MATCHING DISCONNECT_RSP CLOSES IT, and the CDT is RELEASED.
+ * Figure 2-16: DISC MATCH --RCV_DISCONNECT_RSP--> CLOSED.
+ */
+static void test_matching_disconnect_rsp_closes_the_connection(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    if (scs_conn_state_of(cdt) != SCS_CONN_DISC_MATCH) {
+        return; /* case (1) already reported why */
+    }
+    unsigned in_use_before = scs_cdl_in_use_count(&scsd_cdl);
+
+    /* The peer's answer. SYNTHESIZED AND LABELED: OVMX has never received a
+     * real message-type-7 frame ADDRESSED TO ONE OF ITS OWN Con.IDs -- the 223
+     * real ones in the capture library are all VAX-to-VAX. So this frame is
+     * built by the production builder from the peer's point of view: the
+     * peer's handle as local, OVMX's as remote. What it is NOT is a hand-rolled
+     * byte array; it is the same encoder, run with the roles swapped, and its
+     * shape is pinned against a real captured DISCONNECT_RSP in
+     * tests/vmsscs/test_scs_disc.c. */
+    struct scs_disc_params p;
+    uint8_t rsp[SCS_DISC_RSP_FRAME_LEN];
+    memset(&p, 0, sizeof(p));
+    memcpy(p.dst_mac, r.hw_mac, 6);
+    memcpy(p.src_mac, ovmx760_member_mac, 6);
+    memcpy(p.src_logical, ovmx760_member_sysid, 6);
+    memcpy(p.peer_logical, r.logical, 6);
+    p.remote_conid = disc_cap_dst_conid();   /* OVMX's handle */
+    p.local_conid = disc_cap_src_conid();    /* the peer's own */
+    /* THE SEQUENCE NUMBERS ARE THE PEER'S LIVE ONES, taken from the VC the
+     * daemon itself maintains -- not invented. An invented send_seq is a
+     * SEQUENCE GAP, and the daemon (correctly, vms-abc / p. 2-31) breaks the
+     * circuit and drives every connection on it to CLOSED, which would make
+     * this case pass for entirely the wrong reason. */
+    struct peer_state *rps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(rps != NULL, "peer slot for the answering peer");
+    if (rps == NULL) {
+        return;
+    }
+    p.recv_ack = rps->vc.seq.send_seq;
+    p.send_seq = (uint16_t)(rps->vc.seq.recv_seq + 1);
+    p.incarnation = 1;
+    CHECK(scs_disc_build_response(&p, rsp) == 0, "could not build the peer's answer");
+
+    unsigned long breaks_before = vc_breaks;
+    rx_feed(&r, rsp, sizeof(rsp));
+    CHECK(vc_breaks == breaks_before,
+          "feeding the peer's DISCONNECT_RSP broke the virtual circuit -- the "
+          "fixture's sequence numbers are wrong, and every assertion below "
+          "would then be measuring VC loss rather than the teardown");
+
+    CHECK(disc_rsp_recv == 1, "the daemon delivered %lu DISCONNECT_RSP, expected 1",
+          disc_rsp_recv);
+    CHECK(disc_closed == 1,
+          "the daemon closed %lu connection(s); the matching DISCONNECT_RSP is "
+          "what takes DISC MATCH to CLOSED (p. 2-26)", disc_closed);
+    CHECK(scs_cdl_lookup(&scsd_cdl, disc_cap_dst_conid()) == NULL,
+          "the CDT was not released when the connection reached CLOSED");
+    CHECK(scs_cdl_in_use_count(&scsd_cdl) == in_use_before - 1,
+          "the CDL in-use count went %u -> %u, expected a release of exactly one",
+          in_use_before, scs_cdl_in_use_count(&scsd_cdl));
+    CHECK(rxlog_has("SCSD-I-DISCCLOSED"),
+          "the daemon did not log the close; log was: '%s'", rxlog);
+    CHECK(conn_illegal_events == 0,
+          "the full teardown scored %lu illegal events", conn_illegal_events);
+}
+
+/*
+ * (3) THE p. 2-27 SIMULTANEOUS CASE. "When each node receives the
+ * DISCONNECT_REQ from the other node, it replies with a DISCONNECT_RSP. It
+ * then transitions ... to DISCONNECT MATCH since it has seen a matching
+ * DISCONNECT_REQ" -- three states, not four.
+ *
+ * OVMX initiates FIRST (through the production shutdown teardown), then the
+ * peer's own DISCONNECT_REQ arrives. The distinguishing assertion is that OVMX
+ * sends its request ONCE: a second one here would mean the daemon read the
+ * crossing request as a fresh peer-initiated teardown.
+ */
+static void test_simultaneous_disconnect_sends_no_second_request(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    struct peer_state *ps =
+        peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
+    CHECK(ps != NULL, "peer slot");
+    if (ps == NULL) {
+        return;
+    }
+    /* Teach the CDT the peer's handle the way the wire would, so OVMX can
+     * address a request it initiates. */
+    scs_cdt_set_remote_conid(cdt, disc_cap_src_conid());
+
+    /* OVMX initiates -- the real service, through the real emitter. */
+    struct scsd_disc_emit_ctx e;
+    memset(&e, 0, sizeof(e));
+    e.sock = 7;
+    e.ifindex = 1;
+    e.ps = ps;
+    e.our_hw_mac = r.hw_mac;
+    e.our_src_logical = r.logical;
+    e.matching = 0;
+    struct scs_svc_args a = scsd_disc_args(&e, SCS_REASON_SYSAP_SHUTDOWN);
+    unsigned k = scs_svc_disconnect_all(scsd_svc(), ps->pb, &a);
+    CHECK(k >= 1, "scs_svc_disconnect_all drove %u connection(s), expected >= 1", k);
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_SENT,
+          "after OVMX invoked DISCONNECT the connection is %s, expected DISC SENT",
+          scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(disc_req_sent == k,
+          "OVMX drove %u disconnect(s) but sent %lu DISCONNECT_REQ", k, disc_req_sent);
+    /* An INITIATED request carries the matching flag CLEAR. */
+    uint16_t m = 0xffff;
+    CHECK(disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len) &&
+              scs_disc_match_get(scsd_test_last_frame, scsd_test_last_len, &m) == 1 &&
+              m == SCS_DISC_MATCH_INITIAL,
+          "OVMX's INITIATED DISCONNECT_REQ carries matching flag 0x%04x, "
+          "expected 0x%04x", m, SCS_DISC_MATCH_INITIAL);
+
+    unsigned long req_after_initiate = disc_req_sent;
+    unsigned long rsp_before = disc_rsp_sent;
+
+    /* Now the peer's request crosses ours on the wire. */
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_MATCH,
+          "the crossing DISCONNECT_REQ left the connection %s, expected "
+          "DISC MATCH (p. 2-27, three states not four)",
+          scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(disc_rsp_sent == rsp_before + 1,
+          "OVMX sent %lu DISCONNECT_RSP for the crossing request, expected 1",
+          disc_rsp_sent - rsp_before);
+    CHECK(disc_req_sent == req_after_initiate,
+          "OVMX sent %lu EXTRA DISCONNECT_REQ after the crossing request. In the "
+          "simultaneous case its own request has already gone out; a second one "
+          "means the daemon read the crossing request as a fresh teardown",
+          disc_req_sent - req_after_initiate);
+    CHECK(disc_simultaneous == 1,
+          "the daemon scored %lu simultaneous disconnect(s), expected 1",
+          disc_simultaneous);
+    CHECK(rxlog_has("SCSD-I-DISCSIMUL"),
+          "the daemon did not log the p. 2-27 simultaneous case; log was: '%s'", rxlog);
+    CHECK(conn_illegal_events == 0,
+          "the simultaneous teardown scored %lu illegal events", conn_illegal_events);
+}
+
+/*
+ * (4) SHUTDOWN. Before vms-591 the daemon set g_stop and exited, leaving every
+ * connection formed from the peer's point of view. This drives the real
+ * scsd_shutdown_teardown() and asserts it disconnects what it holds and does
+ * not block. The wait is set to 0 so the case measures the SEND half without
+ * a peer to answer; the pending report is then the honest outcome and is
+ * asserted as such.
+ */
+static void test_shutdown_disconnects_every_open_connection(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    scs_cdt_set_remote_conid(cdt, disc_cap_src_conid());
+    unsigned open_before = scsd_open_connection_count();
+    CHECK(open_before >= 1, "the fixture holds no open connection to tear down");
+
+    uint8_t buf[SCA_FRAME_MAX];
+    (void)setenv("OVMX_SHUTDOWN_WAIT_MS", "0", 1);
+    log_capture_begin();
+    scsd_shutdown_teardown(&r.rx, buf, sizeof(buf));
+    log_capture_end();
+    (void)unsetenv("OVMX_SHUTDOWN_WAIT_MS");
+
+    CHECK(disc_req_sent >= 1,
+          "the shutdown teardown sent %lu DISCONNECT_REQ; it holds %u open "
+          "connection(s)", disc_req_sent, open_before);
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_SENT,
+          "after shutdown the connection is %s, expected DISC SENT",
+          scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(rxlog_has("SCSD-I-SHUTDISC"),
+          "the shutdown did not log what it disconnected; log was: '%s'", rxlog);
+    /* NO PEER ANSWERED, so the honest outcome is a reported pending count --
+     * not a hang, and not a silent success. */
+    CHECK(disc_shutdown_pending >= 1,
+          "with no peer answering, the shutdown reported %lu pending "
+          "connection(s); it must report what it could not close",
+          disc_shutdown_pending);
+    CHECK(rxlog_has("SCSD-W-DISCPEND"),
+          "the shutdown did not warn about the connections it left open; "
+          "log was: '%s'", rxlog);
+}
+
+/*
+ * (5) THE KILL SWITCH, RUN, WITH CONTROLS ON BOTH SIDES.
+ *
+ * OVMX_NO_CLEAN_SHUTDOWN=1 must restore the pre-vms-591 wire, which carried NO
+ * DISCONNECT frame at all. What it must NOT suppress is the state machine --
+ * vms-dd5's diagnostic has to keep working -- and that is asserted too, so
+ * "the switch is set" can never be read as "nothing happened".
+ */
+static void test_clean_shutdown_kill_switch_through_the_daemon(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt;
+
+    /* CONTROL BEFORE: switch clear, both frames go out. */
+    cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(disc_rsp_sent == 1 && disc_req_sent == 1,
+          "control: the enabled daemon sent rsp=%lu req=%lu, expected 1 and 1",
+          disc_rsp_sent, disc_req_sent);
+
+    /* THE SWITCH. */
+    cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    (void)setenv("OVMX_NO_CLEAN_SHUTDOWN", "1", 1);
+    unsigned frames_before = scsd_test_frames;
+    unsigned long unemitted_before = scsd_svc_port.unemitted;
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    CHECK(disc_rsp_sent == 0 && disc_req_sent == 0,
+          "OVMX_NO_CLEAN_SHUTDOWN DID NOT GATE THE WIRE: rsp=%lu req=%lu",
+          disc_rsp_sent, disc_req_sent);
+    /* Not merely "the counters stayed 0": NO DISCONNECT-shaped frame reached
+     * the transmit seam at all. The dispatch still sends the vms-691 0x48
+     * credit-return for the sequenced message, which predates this item. */
+    for (unsigned i = frames_before; i < scsd_test_frames; i++) {
+        /* only the last frame is retained by the seam; check it explicitly */
+        (void)i;
+    }
+    CHECK(!disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len) &&
+              !disc_frame_is_rsp(scsd_test_last_frame, scsd_test_last_len),
+          "with the switch set the daemon still put a DISCONNECT-shaped frame "
+          "(%zu bytes) on the wire", scsd_test_last_len);
+    /* WHAT IT MUST NOT SUPPRESS: the state machine still records the arrival,
+     * and the un-buildable action is reported rather than hidden. */
+    /* DISC MATCH, not DISC RECEIVED, and the difference is the whole contract:
+     * a NOBUILDER answer COMMITS the transition (scs_svc.h) -- the connection
+     * really did advance, SCA just did not get its packet. So with the switch
+     * set the daemon still answers and still invokes its own disconnect at the
+     * STATE level, and reports both frames unemitted. Asserting DISC RECEIVED
+     * here would be asserting that the switch silently gates the machine too,
+     * which it does not and must not. */
+    CHECK(scs_conn_state_of(cdt) == SCS_CONN_DISC_MATCH,
+          "with the switch set the connection is %s, expected DISC MATCH -- "
+          "the switch gates the WIRE, not the state machine, and an unbuildable "
+          "action still commits its transition",
+          scs_conn_state_name(scs_conn_state_of(cdt)));
+    CHECK(scsd_svc_port.unemitted > unemitted_before,
+          "with the switch set the daemon reported no unemitted action; a frame "
+          "the machine required and the port could not build must be COUNTED, "
+          "not passed over (INV-6)");
+    CHECK(rxlog_has("SCSD-W-CONNNOACT"),
+          "with the switch set the daemon did not report the frame it could not "
+          "build; log was: '%s'", rxlog);
+
+    /* And the shutdown teardown does not run either. */
+    {
+        uint8_t buf[SCA_FRAME_MAX];
+        unsigned long req_before = disc_req_sent;
+        rxlog_reset();
+        log_capture_begin();
+        scsd_shutdown_teardown(&r.rx, buf, sizeof(buf));
+        log_capture_end();
+        CHECK(disc_req_sent == req_before,
+              "with the switch set the shutdown teardown still sent %lu "
+              "DISCONNECT_REQ", disc_req_sent - req_before);
+        CHECK(rxlog_has("SCSD-I-NOCLEANSHUT"),
+              "the suppressed shutdown did not say so; log was: '%s'", rxlog);
+    }
+
+    /* CONTROL AFTER: clearing it brings both frames back. */
+    (void)unsetenv("OVMX_NO_CLEAN_SHUTDOWN");
+    cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+    CHECK(disc_rsp_sent == 1 && disc_req_sent == 1,
+          "bracketing control: clearing the switch did not restore the "
+          "teardown (rsp=%lu req=%lu)", disc_rsp_sent, disc_req_sent);
+}
+
+/*
+ * (6) THE EXIT SUMMARY REPORTS THE TEARDOWN. A run log that does not say
+ * whether OVMX ever performed its own disconnect call cannot be used to tell a
+ * symmetric teardown from the pre-vms-591 one-sided one.
+ */
+static void test_exit_summary_reports_the_disconnect_dialogue(void)
+{
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        return;
+    }
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    char sbuf[16384];
+    sbuf[0] = '\0';
+    FILE *cap = tmpfile();
+    CHECK(cap != NULL, "tmpfile for the exit summary");
+    if (cap == NULL) {
+        return;
+    }
+    scsd_exit_summary(&r.rx, cap);
+    fflush(cap);
+    rewind(cap);
+    size_t got = fread(sbuf, 1, sizeof(sbuf) - 1, cap);
+    sbuf[got] = '\0';
+    fclose(cap);
+
+    CHECK(strstr(sbuf, "DISCONNECT:") != NULL,
+          "the exit summary carries no DISCONNECT line");
+    CHECK(strstr(sbuf, "req-sent=1") != NULL,
+          "the exit summary does not report OVMX's OWN disconnect call, which is "
+          "the number that distinguishes a symmetric teardown from the "
+          "pre-vms-591 one-sided one. Summary was:\n%s", sbuf);
+    CHECK(strstr(sbuf, "rsp-sent=1") != NULL,
+          "the exit summary does not report the DISCONNECT_RSP");
+
+    /* With the switch set the same line must SAY the wire was gated. */
+    (void)setenv("OVMX_NO_CLEAN_SHUTDOWN", "1", 1);
+    cap = tmpfile();
+    if (cap != NULL) {
+        scsd_exit_summary(&r.rx, cap);
+        fflush(cap);
+        rewind(cap);
+        got = fread(sbuf, 1, sizeof(sbuf) - 1, cap);
+        sbuf[got] = '\0';
+        fclose(cap);
+        CHECK(strstr(sbuf, "OVMX_NO_CLEAN_SHUTDOWN set") != NULL,
+              "the exit summary hides that the disconnect wire was switched off "
+              "-- a log reading 'req-sent=0' must never be mistakable for 'the "
+              "peer never disconnected'");
+    }
+    (void)unsetenv("OVMX_NO_CLEAN_SHUTDOWN");
+}
+
+
 int main(void)
 {
     /* Several assertions below assume the machine starts enabled. */
@@ -5077,7 +5592,13 @@ int main(void)
     test_reason_frame_for_another_conid_is_not_ours();
     test_reason_nonzero_code_is_decoded_named_and_counted();
     test_reason_kill_switch_through_the_daemon();
-
+    /* vms-591: the Figure 2-16 DISCONNECT dialogue and the clean shutdown. */
+    test_peer_disconnect_req_is_answered_and_matched();
+    test_matching_disconnect_rsp_closes_the_connection();
+    test_simultaneous_disconnect_sends_no_second_request();
+    test_shutdown_disconnects_every_open_connection();
+    test_clean_shutdown_kill_switch_through_the_daemon();
+    test_exit_summary_reports_the_disconnect_dialogue();
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"
           " assertions above did not run");

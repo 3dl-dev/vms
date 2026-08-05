@@ -849,17 +849,101 @@ the LABELED OVMX placement that stands in for the undecoded offset.
 **`6` = DISCONNECT — plausible, NOT grounded.** All 6 occurrences are on
 connections that completed `0,1,2,3` and finished their work, and they appear in
 matched pairs one per direction, which is Figure 2-16's matched
-`DISCONNECT_REQ`. But see the gap below.
+`DISCONNECT_REQ`. **THIS PARAGRAPH IS SUPERSEDED BY §4(h)(1b)
+(`vms-591`), which supplies the decisive part it lacked:** across all 47
+captures a type-`6` frame is answered by a type-`7` frame 262 times and by
+nothing else. Do not quote the "plausible" verdict above without it.
 
-**THE GAP THIS OPENS (do not paper over it): `5` and `7` DO NOT EXIST ON OUR
-WIRE.** If [46:48] enumerates the eight SCA connection-control messages in
-figure order, `5` is REJECT_RSP and `7` is DISCONNECT_RSP. **Neither value
-appears in any capture we hold** — not once, in 18,541 frames. So the REJECT and
-DISCONNECT dialogues of Figures 2-15 and 2-16 are each observed with only their
-REQ half. Three readings survive and we cannot separate them: (i) VMS does not
-send those responses; (ii) they are carried by the `0x48` credit-return that
-acks every sequenced message; (iii) our captures simply never contain one. **Do
-not build a `5` or `7` frame on this section.**
+**(1b) `5` AND `7` ARE ON OUR WIRE, AND THIS SECTION SAID THEY WERE NOT —
+CORRECTED BY `vms-591`.**
+
+The claim this replaces, REFUTED by the census below and kept only so a reader
+who saw the old text recognises what went:
+
+<!-- REFUTED-QUOTE-BEGIN -->
+> REFUTED by §4(h)(1b):
+> ~~"`5` and `7` DO NOT EXIST ON OUR WIRE … Do not build a `5` or `7` frame."~~
+<!-- REFUTED-QUOTE-END -->
+
+**Why it survived three revisions: a sampling error, not a decoding error.**
+Every census of [46:48] had been restricted to the SCA length classes
+**{62, 66, 110}**, because those are the classes the four *formation* messages
+occupy — the restriction is written into the table above and into
+`tools/cluster/scs_reason_measure.py`'s `CONNCTL_CLASSES`. **Both RESPONSE
+messages are shorter than all three.** They are **58 bytes**: the envelope, the
+message type and the Con.ID pair, and nothing else. They fell outside the filter
+that was looking for them.
+
+Re-measured with no length restriction, over all 47 captures, pairing each
+connection-control frame with **the first frame in the reverse direction whose
+Con.ID pair is this frame's pair with the two handles swapped**:
+
+<!-- CENSUS-D: parsed by tests/vmsscs/test_scs_disc_figures.py. One line per
+     figure, nowhere else in this document. Re-run
+     tools/cluster/scs_disc_measure.py; do not hand-edit. -->
+
+| request | | response | | frames | pcaps |
+|---|---|---|---|---|---|
+| 110 B | `0` CONNECT_REQ | 66 B | `1` CONNECT_RSP | 1115 | 34 |
+| 110 B | `2` ACCEPT_REQ | 62 B | `3` ACCEPT_RSP | 381 | 33 |
+| 62 B | `4` REJECT_REQ | 58 B | `5` **REJECT_RSP** | 696 | 26 |
+| 62 B | `6` DISCONNECT_REQ | 58 B | `7` **DISCONNECT_RSP** | 262 | 25 |
+
+All four SCA request/response pairs, in figure order. No other
+(request → response) combination occurs for any of these four request classes.
+
+**This upgrades `6` from "plausible" to grounded, and it grounds `7`.** `6` is
+now supported by the same kind of decisive behavioural partition that carried
+`4`: it is answered, 262 times in 25 captures, by a distinct message type that
+answers nothing else. And `4` gains its response half on the identical
+argument. The `5`/`7` labels themselves still rest on **figure order** — the
+book draws REJECT_RSP after REJECT_REQ and DISCONNECT_RSP after DISCONNECT_REQ,
+and the values land exactly there — which is an inference, not a decoded field
+name. **State it that way and no more strongly.**
+
+**A COMPLETE TEARDOWN, frame by frame.** `formation-ci1.pcap` raw frames
+61/63/64/65 (SCA #53/#55/#56/#57), between VAX1 (Con.ID `63050008`) and VAX2
+(`33590007`) — Figure 2-16 end to end, both halves:
+
+| SCA # | direction | class | msgtype | `[60:62]` |
+|---|---|---|---|---|
+| 53 | VAX1 → VAX2 | 62 B | `6` DISCONNECT_REQ | `0x0000` |
+| 55 | VAX2 → VAX1 | 58 B | `7` DISCONNECT_RSP | — |
+| 56 | VAX2 → VAX1 | 62 B | `6` DISCONNECT_REQ | `0x0001` |
+| 57 | VAX1 → VAX2 | 58 B | `7` DISCONNECT_RSP | — |
+
+**AND `[60:62]` IS DECODED — the MATCHING flag (`vms-591`).** This section
+recorded it above as "a live field with an undecoded meaning". Ranking each
+VMS-origin DISCONNECT_REQ within its own Con.ID-pair dialogue partitions it
+exactly, with **zero residuals** over all 220 frames:
+
+<!-- CENSUS-E: parsed by tests/vmsscs/test_scs_disc_figures.py. -->
+
+| rank within the dialogue | `[60:62]` | frames | pcaps |
+|---|---|---|---|
+| 0 — the first DISCONNECT_REQ on the pair | `0x0000` | 131 | 25 |
+| 1 — the matching one, from the other end | `0x0001` | 89 | 18 |
+
+No frame of either rank carries the other value and no pair carries a third
+DISCONNECT_REQ. (131 ≠ 89 because 42 dialogues' matching half falls outside the
+capture window.) So the field distinguishes *initiating* a disconnect from
+*matching* one, which is Figure 2-16's DISC SENT vs DISC MATCH. **Same honesty
+bound as `4`:** this is the best reading of a decisive behavioural partition,
+not a decoded field; a peer that ignored the flag would look identical here.
+
+**A NEW GAP THIS OPENS, recorded rather than smoothed over.** The same
+unrestricted census finds message types **`8` and `9`** in the 58-byte class,
+paired the same way — 131 frames each, in 25 captures — and positioned inside
+the connection lifetime between the ACCEPT_RSP and the DISCONNECT_REQ (the
+observed order on a full connection is `0,1,2,3,…,8,9,6,7`). **They are not
+named here.** *VAXcluster Principles* ch. 2 draws eight connection-control
+messages and these are a ninth and tenth; nothing we hold says what they are.
+See §5.
+
+**What OVMX now builds on this section:** `6` and `7`, from byte-exact captured
+templates, in `src/vmsscs/scs_disc.c` (`vms-591`). Not `5` — OVMX has no
+production REJECT caller to answer, so a REJECT_RSP builder would be untested
+code.
 
 **(2) SCS$DIR_LOOKUP body — name resolution with a grounded negative marker.**
 Past the handle pair the body carries fixed-position, blank-padded ASCII SYSAP
@@ -1001,11 +1085,12 @@ an error, and must not copy it into its own `send_seq`/`recv_ack`"). Recorded
 here as an open defect; it is a transmit-path bug and `vms-abc` is the
 receive-side guarantee only.
 
-**RE gaps left in §4h (honest):** (a) the [46:48] field is now **GROUNDED as the
+**RE gaps left in §4h (honest):** (a) the [46:48] field is **GROUNDED as the
 connection-control message type for values 0–3** (§4(h)(1a), `vms-dd5`), with
-`4` strongly supported as REJECT_REQ and `6` only plausible as DISCONNECT_REQ;
-`5` and `7` are **absent from every capture we hold**, so the response halves of
-the reject and disconnect dialogues are unaccounted for, and the companion
+`4` and `6` supported by decisive behavioural partitions and `5` and `7`
+grounded as their answers by the §4(h)(1b) pairing census (`vms-591`) but
+LABELLED by figure order only; message types `8` and `9` in the same 58-byte
+class are observed and **unidentified**; the companion
 [48:50] flag remains inferred; (b) the `0x48` secondary counter [30:32] and the
 early-phase shorts' non-zero residual at [30:40] (SCA 22/24 carry printable
 leftover bytes) are not grounded to a field; (c) the affirmative
@@ -2110,20 +2195,68 @@ For visibility, every field NOT marked GROUNDED above:
   SCA connection-control message type (`0`=CONNECT_REQ, `1`=CONNECT_RSP,
   `2`=ACCEPT_REQ, `3`=ACCEPT_RSP over 16 dialogues with an exact accept/reject
   partition), which also REFUTES this document's earlier "per-dialogue message
-  counter" reading. What remains open there: `4` (REJECT_REQ, strong but not
-  decoded), `6` (DISCONNECT_REQ, plausible only), and the total **absence of
-  `5` and `7`** — the REJECT_RSP and DISCONNECT_RSP halves that Figures 2-15 and
-  2-16 require are on no capture we hold. Do not emit either.
-  **This gap is now a COUNTED RUNTIME FIGURE, not only a note** (`vms-561`): the
-  five SCS services (`src/vmsscs/scs_svc.c`) ask the port driver to emit the
-  packet each transition names, and `scsd.c` answers `SCS_SVC_EMIT_NOBUILDER`
-  for every class OVMX cannot build — `CONNECT_RSP`, `ACCEPT_RSP`, `REJECT_REQ`,
-  `REJECT_RSP`, `DISCONNECT_REQ`, `DISCONNECT_RSP`. Each one logs
-  `SCSD-W-CONNNOACT` and increments `struct scs_svc_port::unemitted`, so the
-  distance between OVMX's frame vocabulary and SCA's is a number in every run
-  log rather than a sentence in a header. On a normal join the member-opened
-  `VMS$VAXcluster` connection produces exactly one such report per formation
-  (the `CONNECT_RSP` the real VAX does send, 16 of 16 dialogues).
+  counter" reading. What remains open there, **as corrected by `vms-591`**:
+  `4` (REJECT_REQ) and `6` (DISCONNECT_REQ) are each supported by a decisive
+  behavioural partition rather than a decoded field name; `5` and `7` **DO
+  occur** — §4(h)(1b) pairs them to `4` and `6` over 696 and 262 dialogues, and
+  this document's earlier claim that they appear on no capture we hold is
+  **REFUTED**, having rested on a census restricted to the length classes
+  {62, 66, 110} while both response messages are 58 bytes. Their *names* are
+  still figure order, not decoded. **Newly open:** message types `8` and `9`,
+  same 58-byte class, 131 frames each in 25 captures, paired with each other and
+  sitting between the ACCEPT_RSP and the DISCONNECT_REQ in the connection
+  lifetime. Ch. 2 draws eight connection-control messages; these are a ninth and
+  a tenth and **nothing we hold identifies them**. Do not name or emit them.
+  **The vocabulary gap is a COUNTED RUNTIME FIGURE, not only a note**
+  (`vms-561`): the five SCS services (`src/vmsscs/scs_svc.c`) ask the port
+  driver to emit the packet each transition names, and `scsd.c` answers
+  `SCS_SVC_EMIT_NOBUILDER` for every class OVMX cannot build. As of `vms-591`
+  that list is `CONNECT_RSP`, `ACCEPT_RSP`, `REJECT_REQ` and `REJECT_RSP` —
+  `DISCONNECT_REQ` and `DISCONNECT_RSP` came off it, and are built by
+  `src/vmsscs/scs_disc.c`. Each remaining one logs `SCSD-W-CONNNOACT` and
+  increments `struct scs_svc_port::unemitted`, so the distance between OVMX's
+  frame vocabulary and SCA's is a number in every run log rather than a sentence
+  in a header. On a normal join the member-opened `VMS$VAXcluster` connection
+  produces exactly one such report per formation (the `CONNECT_RSP` the real VAX
+  does send, 16 of 16 dialogues).
+- **The DISCONNECT dialogue and its `[60:62]` matching flag** (§4(h)(1b),
+  `vms-591`): **GROUNDED-BY-PARTITION.** The `[60:62]` word on a DISCONNECT_REQ
+  reads `0x0000` on the first request of a Con.ID-pair dialogue and `0x0001` on
+  the matching one, 131/89 with **zero residuals** over all 220 VMS-origin
+  frames. What is measured is the partition; what is inferred is that it means
+  "matching". **What is still NOT grounded:** the reason code's byte offset
+  (unchanged, see the `vms-6b3` entry below — it remains a LABELED OVMX
+  placement, and both DISCONNECT templates read zero there), and whether a VMS
+  peer keys on the matching flag at all. OVMX emits it because emitting the
+  value the wire carries in that position is strictly closer to VMS than
+  emitting a constant; a peer that ignores it costs nothing.
+- **DISCONNECT_REQ → DISCONNECT_RSP latency** (`vms-591`): 220 of 220 VMS-origin
+  requests answered, max 0.006919 s, none over 10 ms. **Explicit non-claim**, in
+  the same terms as §4(M): that is the largest latency in our captures, not an
+  upper bound. It justifies `scsd.c`'s 500 ms bounded shutdown wait by margin —
+  and exceeding the bound costs only a log line, because the daemon exits anyway
+  rather than blocking on a peer.
+- **A VAX DOES NOT ANSWER *OVMX's* DISCONNECT_REQ — OPEN, and newly measured**
+  (`vms-591`, lab-2 `vaxlab-4`, four runs on four fresh identities): the two
+  figures above are about **VAX→VAX** traffic. Between VAXes the request is
+  answered 220/220 within 7 ms. When **OVMX** sends the same frame — byte-diffed
+  against a real VAX DISCONNECT_REQ with **zero** differences outside the
+  per-run/substituted fields — no `DISCONNECT_RSP` ever arrives, over 20 s of
+  capture past the request. VAX1's console instead logs, exactly once per
+  disconnect-sending run and never for the control run that sent none:
+
+  > `%PEA0, Inappropriate SCA Control Message - FLAGS/OPC/STATUS/PORT 00/22/00/DD`
+
+  So the peer **receives and refuses** it. **`OPC/22` is NOT decoded** — it is a
+  port-level opcode, not the [46:48] connection-control message type, and
+  nothing we hold identifies it. Do not guess at it and do not build on it.
+  **One hypothesis is already dead, with a matched control:** the LABELED OVMX
+  reason-code placement at [58:60] is not the cause — a run with
+  `OVMX_NO_REASON_CODE=1`, verified on the wire to carry `0x0000` there against
+  `0x0005` in its bracketing run, was refused identically. This is a REGISTERED
+  GAP, not a solved problem, and it is **not** evidence about the `vms-2f3`
+  rejoin failure in either direction (sec 4M.24 already killed self-disconnect
+  as a fix for that).
 - **Joining an ESTABLISHED cluster** (§4i, `vms-af2`): **RESOLVED — two distinct
   differences.** (A) The established member's round-0 `0x41` START
   `send_seq[20:22]` = `prior_VC_send_seq+1` (residual VC continuation, e.g.

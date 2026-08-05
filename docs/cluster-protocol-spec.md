@@ -2176,6 +2176,86 @@ inventing it.
 
 ---
 
+### 4(O) What an OVMX daemon must put on the wire to be admitted — the capability bracket (GROUNDED live, `vms-70e2`)
+
+**What this grounds and why.** `vms-70e2` set out to prove a same-identity
+REJOIN end to end and never reached the question, because its POSITIVE CONTROL
+failed: an SCSD built from `work/vms-187-closure` cannot complete a FIRST join
+either. This section records what that binary does and does not transmit,
+measured against a binary that joins, so the gap is a wire fact rather than a
+branch comparison. Nothing here is a new VMS field — every offset used is
+already grounded above.
+
+**Method.** `tools/cluster/scs_join_capability_measure.py` (re-runnable;
+PASS/FAILs every figure against a checked-in table). Three runs on ONE lab-2
+pod, `vaxlab-4`, a pod that had never seen an OVMX node, inside twelve minutes
+on 2026-08-05, with only the BINARY varying. Guardrail 18: each identity is
+proven from the capture bytes, not from a log. Guardrail 20: the closing
+control ran AFTER the joining one, so "the lab stopped admitting anyone" is
+excluded. Frames are counted between the OVMX MAC and a peer only; peer↔peer
+traffic is not counted, because the two VAXes talk to each other at the same
+rate whatever OVMX does.
+
+| run | binary | identity on the wire | CM 190-byte tx | CM 190-byte rx | OVMX ACCEPT_RSP | verdict |
+|---|---|---|---|---|---|---|
+| `A1` | `work/vms-187-closure` | `OVMXA1` | **3** | **0** | **0** | NOT JOINED |
+| `A0` | `worktree-760-active-directory` | `OVMXA0` | **514** | **583** | **2** | **JOINED, t+13 s** |
+| `A3` | `work/vms-187-closure` | `OVMXA3` | **3** | **0** | **0** | NOT JOINED |
+
+The 190-byte class is §4(d)'s fixed SCS class, the one §4(g)/§4(j)'s membership
+dialogue rides. The failing binary emits its three-frame add-member burst
+(op `0x14`/`0x01`/`0x02`) to one peer at t+2.85 s and then transmits nothing
+further in that class for the rest of the run, and **the peer answers with
+none**. The joining binary sustains the dialogue in both directions to t+25.7 s
+and is a member by t+13 s.
+
+**The connection-control repertoire, at payload `[46:48]` (§4(h)(1a)).** OVMX-
+sourced frames only, over the grounded classes `{58, 62, 66, 110}`:
+
+| run | message types OVMX transmitted |
+|---|---|
+| `A1` | `0` CONNECT_REQ ×1 · `1` CONNECT_RSP ×1 · `2` ACCEPT_REQ ×1 · `6` DISCONNECT_REQ ×2 |
+| `A0` | `0` ×2 · `1` ×6 · `2` ×2 · **`3` ACCEPT_RSP ×2** · `4` REJECT_REQ ×4 · `6` ×2 · `7` DISCONNECT_RSP ×2 · `9` ×2 |
+| `A3` | `0` CONNECT_REQ ×1 · `1` CONNECT_RSP ×1 · `2` ACCEPT_REQ ×1 · `6` DISCONNECT_REQ ×2 |
+
+**The one named frame.** In `A1` and `A3` the peer's `ACCEPT_REQ` (type `2`)
+arrives on OVMX's own `VMS$VAXcluster` connection at t+2.852 s (Con.ID pair
+`4F580002`/`B74F000D`), the `vms-dd5` state machine resolves it to
+CONNECT ACK → OPEN with the action *send ACCEPT_RSP*, and the daemon prints
+`SCSD-W-CONNNOACT … OVMX has no builder for it -- nothing was sent` and closes
+the run with `actions-required-but-not-emitted=1`. The joining binary sends that
+frame twice, one per peer, at t+3.412 s.
+
+<a name="sec4o-refutation"></a>
+**⛔ AND THIS REFUTES A LOAD-BEARING SOURCE COMMENT.**
+`src/vmsscs/include/scs_sdir.h` justified returning a listening CDT to LISTEN on
+*emit* rather than on the response — a deliberate deviation from p. 2-50 — partly
+on the ground that
+<!-- REFUTED-QUOTE-BEGIN -->
+*"OVMX HAS NEVER OBSERVED AN ACCEPT_RSP ADDRESSED TO ITSELF … A listening CDT
+that waited for a frame that never comes would wedge in CONNECT RECEIVED with no
+timeout"* — **REFUTED by run `A1` below; quoted only to kill it.**
+<!-- REFUTED-QUOTE-END -->
+It has. In `A1`, at t+2.851 s, VAX1 answers OVMX's own `ACCEPT_REQ`
+on the `SCS$DIRECTORY` connection with a 62-byte type-`3` `ACCEPT_RSP` addressed
+to the OVMX MAC and carrying OVMX's own Con.ID pair `4F580007`/`B751000C`, and
+the daemon logs the matching `ACCEPT SENT --RCV_ACCEPT_RSP--> OPEN` transition.
+The same frame is present in `A3`. The latency is **0.5 ms**, so "a frame that
+never comes" is not the situation. **The deviation may still be the right design
+— a synchronous ACCEPT has no one to wait for — but that premise is dead and may
+not be restated.** `tests/vmsscs/test_scs_join_capability_figures.py` reds if it
+comes back.
+
+**Explicit non-claim, and it is the important one.** This does **not** establish
+that the missing `ACCEPT_RSP` causes the failed join. Both differences —
+the unsent `ACCEPT_RSP` and the absent CM dialogue — are present together in
+both failing runs and absent together in the joining one, and no run isolates
+either. The CM layer that drives §4(g)'s dialogue is simply not present in the
+failing binary at all, so there is nothing to attribute. Naming a cause here
+would be the correlation §3 of the `vms-2f3` handoff exists to prevent.
+
+---
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

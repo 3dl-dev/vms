@@ -146,14 +146,29 @@
  *    or REJECT_RSP comes back, because a VMS SYSAP takes time to decide.
  *    OVMX's ACCEPT is SYNCHRONOUS -- scs_svc.h already labels that ("OVMX has
  *    no asynchronous SYSAP to hand it to, so the receive path decides and calls
- *    ACCEPT synchronously") -- and, decisively, OVMX HAS NEVER OBSERVED AN
- *    ACCEPT_RSP ADDRESSED TO ITSELF: spec sec 4(h)(1a) finds message type 3 in
- *    VAX-to-VAX dialogues only, and scsd.c reports the ACCEPT_RSP it owes as
- *    unemitted on every run (SCSD-W-CONNNOACT). A listening CDT that waited for
- *    a frame that never comes would wedge in CONNECT RECEIVED with no timeout
- *    and refuse every later connect request from every other node. Emitting the
- *    answer is the point at which OVMX's SYSAP has finished deciding, so that
- *    is when the SDIR returns to LISTEN.
+ *    ACCEPT synchronously"). Emitting the answer is the point at which OVMX's
+ *    SYSAP has finished deciding, so that is when the SDIR returns to LISTEN.
+ *
+ *    /!\ THE SECOND HALF OF THIS JUSTIFICATION WAS REFUTED (vms-70e2) AND HAS
+ *    BEEN REMOVED. It read:
+ *    REFUTED-QUOTE-BEGIN
+ *      "decisively, OVMX HAS NEVER OBSERVED AN ACCEPT_RSP ADDRESSED TO ITSELF
+ *       ... A listening CDT that waited for a frame that never comes would
+ *       wedge in CONNECT RECEIVED with no timeout"
+ *      -- REFUTED by run A1; quoted only to kill it.
+ *    REFUTED-QUOTE-END
+ *    OVMX HAS observed
+ *    one, on this branch, on lab-2 pod vaxlab-4 (run A1, 2026-08-05, capture
+ *    vms70e2-A1-lab2-vaxlab4-20260805.pcap): VAX1 answers OVMX's own
+ *    SCS$DIRECTORY ACCEPT_REQ with a 62-byte [46:48]=3 ACCEPT_RSP addressed to
+ *    the OVMX MAC and carrying OVMX's own Con.ID pair 4F580007/B751000C, 0.5 ms
+ *    later, and the daemon logs the matching
+ *    "ACCEPT SENT --RCV_ACCEPT_RSP--> OPEN" transition. The same frame is in
+ *    run A3. The SYNCHRONOUS-ACCEPT reason above still stands on its own; the
+ *    "it never comes" reason is dead and may not be restated. Spec sec 4(O)
+ *    carries the measurement and
+ *    tests/vmsscs/test_scs_join_capability_figures.py reds if the refuted
+ *    sentence returns to this file or to the spec.
  *
  *    THE HONEST CONSEQUENCE, STATED SO NOBODY READS MORE INTO IT: the
  *    CONNECT RECEIVED window is one call deep, so under scsd.c's single

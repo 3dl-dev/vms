@@ -98,6 +98,24 @@ byte-level fidelity proof — no field-level diff was run. The arch-difference
 caveat below still governs: reproduce a *contradicting* lab-2 result on lab-1
 before trusting it.
 
+## Check the pod is a CLUSTER before you use it (`vms-70e2`, 2026-08-05)
+
+A replica can be `1/1 Running` for days with its two VAXes not clustered to each
+other. `vaxlab-0` and `vaxlab-1` were both in that state on 2026-08-05 — vax1 and
+vax2 each reporting `CLUSTER_NODES = 1`. A join test against such a pod fails for
+reasons that have nothing to do with the daemon under test.
+
+```bash
+K="kubectl -n ovmx-lab exec vaxlab-N --"; L=/lab/k8s-labs/vaxlab-N/logs
+$K sh -c "printf 'WRITE SYS\$OUTPUT \"CN_\"+F\$STRING(F\$GETSYI(\"CLUSTER_NODES\"))\r' > $L/vax1.log.in"
+# CN_2 = a healthy 2-node lab.  CN_1 = broken, do not run an experiment on it.
+# CN_3 = an OVMX node is currently joined.
+```
+
+Scaling up is cheaper than repairing one: `kubectl -n ovmx-lab scale sts/vaxlab
+--replicas=N` gave a healthy virgin pod in ~2.5 minutes. The StatefulSet was left
+at **6 replicas**; `vaxlab-4` carries the `vms-70e2` bracket.
+
 ## Things that will bite you
 
 - **`dep bdr 0` stays commented on every node.** Depositing 0 into the KA655

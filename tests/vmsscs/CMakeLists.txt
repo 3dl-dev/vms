@@ -669,3 +669,63 @@ set_tests_properties(scs_dir_mutants PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 300
 )
+
+# vms-70e2 - THE JOIN-CAPABILITY GATE.
+#
+# WHY IT EXISTS: vms-70e2 set out to prove a same-identity REJOIN end to end and
+# never reached the question, because its POSITIVE CONTROL failed -- an SCSD
+# built from work/vms-187-closure cannot complete a FIRST join either. A matched
+# bracket on one lab-2 pod (three runs, twelve minutes, only the binary varying,
+# each identity proven from the capture bytes) measured what that binary does
+# and does not put on the wire, and docs/cluster-protocol-spec.md sec 4(O)
+# records it.
+#
+# Needs no captures. It drives tools/cluster/scs_join_capability_measure.py's
+# decoder with synthesized frames whose answer is known by construction, pins
+# every figure in EXPECTED to sec 4(O), and quarantines the claim this item
+# refuted: scs_sdir.h justified a deliberate deviation from p. 2-50 partly on
+# "OVMX HAS NEVER OBSERVED AN ACCEPT_RSP ADDRESSED TO ITSELF", and run A1
+# contains one -- addressed to the OVMX MAC, carrying OVMX's own Con.ID pair,
+# 0.5 ms after OVMX's ACCEPT_REQ. On a lab host that also holds the captures the
+# test re-derives EXPECTED from them; on any other host it says so and the other
+# three checks still gate.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_join_capability_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_join_capability_figures.py)
+else()
+    add_test(NAME scs_join_capability_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_join_capability_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_join_capability_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 120
+)
+
+# vms-70e2 - THE MUTATION BATTERY FOR THE GATE ABOVE.
+#
+# Copies the measurement, the spec and scs_sdir.h into a scratch tree, proves
+# the unmutated copy green, then applies each mutant alone through the
+# OVMX_SCS_JOINCAP_{MEASURE,SPEC,HEADER} overrides and requires a non-zero exit,
+# restoring and re-verifying between each. A mutant that does not change the
+# file is scored as a FAILURE, never a kill. The captures are hidden from the
+# gate during the battery, so what is scored is the part that runs on every
+# host including CI. Classes covered: the decoder's direction, length classes,
+# message-type offset and identity harvest; the checked-in figures and the
+# self-consistency of the bracket in EXPECTED; the sec 4(O) prose including its
+# explicit non-claim; and four attacks on the quarantine. The COUNT is printed
+# by the test, not restated here.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_join_capability_mutants
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_join_capability_mutants.py)
+else()
+    add_test(NAME scs_join_capability_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_join_capability_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_join_capability_mutants PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 300
+)

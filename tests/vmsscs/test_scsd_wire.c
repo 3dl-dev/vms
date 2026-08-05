@@ -57,10 +57,14 @@
  * SCOPE HONESTY, restated to match what is actually here: this exercises SCSD's
  * frame-assembly path AND its per-frame receive dispatch, through the production
  * functions, with the transmit call and the socket replaced by the capture seam.
- * It does NOT exercise socket setup, the pre-recv timer blocks in main()'s loop
- * (the VC reissue timer and the vms-691 retransmit timer are still reachable
- * only from main()), or any real interface. A lab join capture is the end-to-end
- * proof and is a separate activity; nothing here claims to be one.
+ * It does NOT exercise socket setup, the remaining pre-recv timer blocks in
+ * main()'s loop (the VC reissue timer is still reachable only from main()), or
+ * any real interface. Two of those blocks HAVE since been hoisted into
+ * functions this file calls: the vms-691 retransmit timer (scsd_retransmit_tick,
+ * vms-abc) and the pure-server disk-discovery ungate -- the daemon's ONE
+ * disk-discovery trigger -- (scsd_diskrun_ungate_tick, vms-ebb). A lab join
+ * capture is the end-to-end proof and is a separate activity; nothing here
+ * claims to be one.
  */
 #include <stdio.h>
 #include <string.h>
@@ -6911,6 +6915,240 @@ static void test_the_process_poller_kill_switch(void)
     CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
 }
 
+/*
+ * ===================== vms-ebb: DISK DISCOVERY HAS ONE TRIGGER ==============
+ *
+ * The ruling is spec sec 4(O.2), taken on a lab-2 bracket. THIS is what stops
+ * the ruling from decaying into a comment: the daemon must start its
+ * pure-server disk-discovery run from the gate expiring and from NOTHING ELSE,
+ * and in particular not from the peer's DISCONNECT_REQ on our SCS$DIRECTORY
+ * server Con.ID -- which the bracket measured as a LIVE frame, twice per run in
+ * 3 of 3 arms, so the negative below is about a signal that really arrives
+ * rather than one that never comes.
+ *
+ * WHY THE POSITIVE ARM IS IN THE SAME FUNCTION. "No disk run started" is
+ * trivially true in a world that could not start one. Each case therefore
+ * proves the SAME world does start a run once the gate expires, so the absence
+ * is attributable to the trigger being gone rather than to the fixture.
+ *
+ * The trigger itself was inline in main()'s loop until this item and so was
+ * reachable from no test at all (SCSD_UNIT_TEST renames main() away); it is now
+ * scsd_diskrun_ungate_tick(), and this file calls the production function.
+ */
+
+/* The peer_state the disc_* fixture's SCS$DIRECTORY connection belongs to. */
+static struct peer_state *diskrun_fixture_peer(struct rxworld *r)
+{
+    return peer_find_or_add(&r->w.cfg, &r->w.pdt, r->w.peers, ovmx760_member_mac);
+}
+
+/* Read the local Con.ID out of a frame the daemon emitted, where scsd.c reads
+ * a peer's: abs [68:72]. */
+static uint32_t frame_local_conid(const uint8_t *f, size_t len)
+{
+    if (f == NULL || len < 72) {
+        return 0;
+    }
+    return (uint32_t)f[68] | ((uint32_t)f[69] << 8) |
+           ((uint32_t)f[70] << 16) | ((uint32_t)f[71] << 24);
+}
+
+/*
+ * Put the fixture's peer in the state the ungate requires -- an answered member
+ * config, which is what sets cm_config_sent and stamps psc_gate_ms -- using the
+ * production burst rather than by assigning the two fields. Returns the gate
+ * base the tick must be measured against.
+ */
+static uint64_t diskrun_arm_the_gate(struct rxworld *r, struct peer_state *ps)
+{
+    log_capture_begin();
+    (void)cm_send_config_burst(r->rx.sock, r->rx.ifindex, ps,
+                               r->rx.our_hw_mac, r->rx.our_src_logical,
+                               OVMX_LOCAL_CONID, ps->remote_conid);
+    log_capture_end();
+    CHECK(ps->cm_config_sent == 1,
+          "the production config burst did not mark the peer cm_config_sent, so"
+          " the ungate's own precondition is not met and the arms below would"
+          " prove nothing");
+    CHECK(ps->psc_gate_ms != 0,
+          "the production config burst stamped no psc_gate_ms -- the gate has no"
+          " base to expire from");
+    return ps->psc_gate_ms;
+}
+
+/* Run the production tick with its logging captured, like rx_feed does. */
+static unsigned rx_diskrun_tick(struct rxworld *r, uint64_t now_ms)
+{
+    log_capture_begin();
+    unsigned n = scsd_diskrun_ungate_tick(&r->rx, now_ms);
+    log_capture_end();
+    return n;
+}
+
+static void test_the_peer_disconnect_req_starts_no_disk_discovery(void)
+{
+    CHECK(setenv("OVMX_PURE_SERVER", "1", 1) == 0, "setenv failed");
+    CHECK(unsetenv("OVMX_NO_DISKRUN_UNGATE") == 0, "unsetenv failed");
+
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        (void)unsetenv("OVMX_PURE_SERVER");
+        return;
+    }
+    struct peer_state *ps = diskrun_fixture_peer(&r);
+    CHECK(ps != NULL, "the fixture's peer slot vanished");
+    if (ps == NULL) {
+        (void)unsetenv("OVMX_PURE_SERVER");
+        return;
+    }
+    CHECK(ps->psc_step == PSC_IDLE && ps->psc_dir_sent == 0,
+          "PRECONDITION: the fixture already has a disk run in flight (step %d,"
+          " dir_sent %d)", ps->psc_step, ps->psc_dir_sent);
+
+    /* ---- 1. THE NEGATIVE: the frame arrives, is DELIVERED to the architected
+     * DISCONNECT path, and starts no disk run. --------------------------- */
+    rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
+
+    CHECK(disc_req_recv == 1,
+          "the captured DISCONNECT_REQ was not delivered (%lu) -- this case would"
+          " then be asserting that a frame the daemon never saw started nothing",
+          disc_req_recv);
+    CHECK(ps->psc_step == PSC_IDLE,
+          "the peer's DISCONNECT_REQ moved the disk-discovery machine to step %d."
+          " Spec sec 4(O.2) rules ONE trigger; this frame is not it",
+          ps->psc_step);
+    CHECK(ps->psc_dir_sent == 0,
+          "the peer's DISCONNECT_REQ opened OUR SCS$DIRECTORY client connection");
+    CHECK(!rxlog_has("disk-discovery step 1"),
+          "something logged a disk-discovery step 1 off the DISCONNECT_REQ;"
+          " log was: '%s'", rxlog);
+    CHECK(r.rx.psc_ungated == 0,
+          "psc_ungated is %ld before the gate has expired", r.rx.psc_ungated);
+
+    /* ---- 2. THE POSITIVE CONTROL, SAME WORLD: the gate does start it. --- */
+    uint64_t base = diskrun_arm_the_gate(&r, ps);
+    unsigned long gate = scsd_diskrun_gate_ms();
+    CHECK(gate == SCSD_DISKRUN_GATE_MS_DEFAULT,
+          "the default gate is %lu ms, not the %lu the ruling was measured at",
+          gate, SCSD_DISKRUN_GATE_MS_DEFAULT);
+
+    /* Not yet: one millisecond short of the gate is still silence. */
+    CHECK(rx_diskrun_tick(&r, base + gate - 1) == 0,
+          "the disk run started BEFORE the gate expired -- the gate is not a gate");
+    CHECK(ps->psc_step == PSC_IDLE, "the early tick moved the machine anyway");
+
+    unsigned before_frames = scsd_test_frames;
+    CHECK(rx_diskrun_tick(&r, base + gate + 1) == 1,
+          "the gate expired and no disk run started -- the ONE trigger the daemon"
+          " has does not work, which would make arm 1 above vacuous");
+    CHECK(ps->psc_step == PSC_DIR_CONNECT,
+          "after the ungate the machine is at step %d, expected PSC_DIR_CONNECT",
+          ps->psc_step);
+    CHECK(r.rx.psc_ungated == 1, "psc_ungated is %ld, expected 1", r.rx.psc_ungated);
+    CHECK(rxlog_has("SCSD-I-PSCUNGATE"),
+          "the ungate started a run without saying so; log was: '%s'", rxlog);
+    CHECK(scsd_test_frames == before_frames + 1,
+          "the ungate put %u frames on the wire, expected exactly 1",
+          scsd_test_frames - before_frames);
+    CHECK(frame_local_conid(scsd_test_last_frame, scsd_test_last_len)
+              == OVMX_PS_DIR_CONID,
+          "the frame the ungate sent carries local Con.ID 0x%08X, not the PS"
+          " disk-client handle 0x%08X -- read off the emitted bytes, not the log",
+          frame_local_conid(scsd_test_last_frame, scsd_test_last_len),
+          (unsigned)OVMX_PS_DIR_CONID);
+
+    /* ---- 3. AND IT IS ONE RUN, NOT ONE PER TICK. ------------------------ */
+    CHECK(rx_diskrun_tick(&r, base + gate + 5000) == 0,
+          "a second tick started the disk run AGAIN on a peer already running it");
+
+    CHECK(unsetenv("OVMX_PURE_SERVER") == 0, "unsetenv failed");
+}
+
+static void test_the_diskrun_ungate_kill_switch(void)
+{
+    /* GUARDRAIL 23: run the switch, confirm the gated behaviour is suppressed,
+     * and show the SAME world does the thing without it. This is the in-suite
+     * twin of spec sec 4(O.2)'s E8 control arm. */
+    CHECK(setenv("OVMX_PURE_SERVER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_NO_DISKRUN_UNGATE", "1", 1) == 0, "setenv failed");
+
+    struct rxworld r;
+    struct scs_cdt *cdt = disc_world_init(&r);
+    if (cdt == NULL) {
+        (void)unsetenv("OVMX_PURE_SERVER");
+        (void)unsetenv("OVMX_NO_DISKRUN_UNGATE");
+        return;
+    }
+    struct peer_state *ps = diskrun_fixture_peer(&r);
+    CHECK(ps != NULL, "the fixture's peer slot vanished");
+    if (ps == NULL) {
+        (void)unsetenv("OVMX_PURE_SERVER");
+        (void)unsetenv("OVMX_NO_DISKRUN_UNGATE");
+        return;
+    }
+    uint64_t base = diskrun_arm_the_gate(&r, ps);
+    unsigned long gate = scsd_diskrun_gate_ms();
+
+    unsigned before_frames = scsd_test_frames;
+    CHECK(rx_diskrun_tick(&r, base + gate + 1) == 0,
+          "OVMX_NO_DISKRUN_UNGATE=1 did not suppress the ungate");
+    CHECK(ps->psc_step == PSC_IDLE,
+          "the kill switch left the machine at step %d", ps->psc_step);
+    CHECK(scsd_test_frames == before_frames,
+          "the killed ungate still put %u frame(s) on the wire",
+          scsd_test_frames - before_frames);
+
+    /* Same world, switch off: the run starts. Without this the case above is
+     * satisfied by any world that cannot start a run at all. */
+    CHECK(unsetenv("OVMX_NO_DISKRUN_UNGATE") == 0, "unsetenv failed");
+    CHECK(rx_diskrun_tick(&r, base + gate + 1) == 1,
+          "with the kill switch cleared the same world started no run, so the"
+          " suppression above measured nothing");
+    CHECK(scsd_test_frames == before_frames + 1,
+          "the ungate put %u frames on the wire, expected exactly 1",
+          scsd_test_frames - before_frames);
+
+    /* AND THE OTHER SWITCH: outside pure-server the trigger does not exist at
+     * all, which is why spec sec 4(O.1)'s default-environment bracket could not
+     * speak to this block either way. */
+    CHECK(unsetenv("OVMX_PURE_SERVER") == 0, "unsetenv failed");
+    struct rxworld r2;
+    struct scs_cdt *cdt2 = disc_world_init(&r2);
+    if (cdt2 != NULL) {
+        struct peer_state *ps2 = diskrun_fixture_peer(&r2);
+        if (ps2 != NULL) {
+            uint64_t b2 = diskrun_arm_the_gate(&r2, ps2);
+            CHECK(rx_diskrun_tick(&r2, b2 + scsd_diskrun_gate_ms() + 1) == 0,
+                  "the disk-discovery ungate ran with OVMX_PURE_SERVER unset");
+        }
+    }
+}
+
+/*
+ * The gate value itself, since the ruling quotes it. OVMX_DISKRUN_GATE_MS is
+ * the only reason sec 4(O.2)'s timings are reproducible, and a default that
+ * silently moved would move every figure in that section with it.
+ */
+static void test_the_diskrun_gate_default_and_override(void)
+{
+    (void)unsetenv("OVMX_DISKRUN_GATE_MS");
+    CHECK(scsd_diskrun_gate_ms() == 2000UL,
+          "the disk-run gate default is %lu ms; spec sec 4c.8 puts it inside the"
+          " 1.4-4.4 s window and sec 4(O.2) measured its arms at 2000",
+          scsd_diskrun_gate_ms());
+    CHECK(setenv("OVMX_DISKRUN_GATE_MS", "750", 1) == 0, "setenv failed");
+    CHECK(scsd_diskrun_gate_ms() == 750UL, "the override did not take");
+    /* 0 and garbage keep the default rather than making the gate vanish. */
+    CHECK(setenv("OVMX_DISKRUN_GATE_MS", "0", 1) == 0, "setenv failed");
+    CHECK(scsd_diskrun_gate_ms() == 2000UL,
+          "OVMX_DISKRUN_GATE_MS=0 removed the gate instead of keeping the"
+          " default -- a zero gate would fire the run on the first tick");
+    CHECK(setenv("OVMX_DISKRUN_GATE_MS", "", 1) == 0, "setenv failed");
+    CHECK(scsd_diskrun_gate_ms() == 2000UL, "an empty override removed the gate");
+    CHECK(unsetenv("OVMX_DISKRUN_GATE_MS") == 0, "unsetenv failed");
+}
+
 int main(void)
 {
     /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
@@ -7015,6 +7253,12 @@ int main(void)
     /* vms-096: the departure sweep vs. a poll cycle in flight. */
     test_peer_departure_under_a_live_poll_cycle();
     test_the_process_poller_kill_switch();
+    /* vms-ebb: disk discovery has ONE trigger (spec sec 4(O.2)), and the
+     * peer's DISCONNECT_REQ -- which the bracket measured as a LIVE frame --
+     * is not it. */
+    test_the_diskrun_gate_default_and_override();
+    test_the_peer_disconnect_req_starts_no_disk_discovery();
+    test_the_diskrun_ungate_kill_switch();
 
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"

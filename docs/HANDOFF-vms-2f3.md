@@ -1363,6 +1363,29 @@ two controls in the same session.
 
 **The ordered plan of §5 is now fully executed.** Nothing in it remains unrun.
 
+> ### ⚠ SUPERSEDED IN PART (`vms-096` then `vms-ebb`, 2026-08-05) — read before quoting the two paragraphs above
+> Two statements above describe a tree that no longer exists, and both are left
+> in place as the record of what was measured then:
+> - **"exactly two entry points, and both require `ps->psc_credit_done`"** — on
+>   the integrated tree the `op 6` handler that set that flag sat inside an
+>   `if (cm_op == 8)` branch and was unreachable, so `vms-096` deleted the flag,
+>   its writer and the immediate trigger together. **There is ONE entry point**,
+>   `scsd_diskrun_ungate_tick()`.
+> - **"`SCSD-I-PSCLIENT` fires 33 times on a join and 0 times on a rejoin"** was
+>   measured on `worktree-760-active-directory`, where that handler really was
+>   reachable. It does not describe the tree in `main` and must not be requoted
+>   as if it did.
+>
+> `vms-ebb` ran the bracket the deletion left owing (spec §4(O.2), lab-2
+> `vaxlab-1`, three pure-server arms with the control between them) and **RULED:
+> one trigger stays.** It also refutes a tempting reading of the deletion — the
+> peer *does* initiate a p. 2-26 teardown of our `SCS$DIRECTORY` server
+> connection, twice per run in 3 of 3 arms, so the immediate trigger's signal is
+> live; it is simply not worth a second entry point, because the control arm
+> with disk discovery **entirely suppressed** joined on the same schedule. Every
+> arm there is a FIRST join: **whether that `op 6` arrives on a REJOIN — the case
+> §4e.4 is about — is `vms-449`'s bracket and is still open.**
+
 ---
 
 ## 4f. SESSION L part 2 — LAB-2, and the two experiments lab-1 could never run

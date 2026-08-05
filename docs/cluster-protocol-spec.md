@@ -3262,6 +3262,97 @@ Re-derive every figure: `tools/cluster/scs_join_capability_measure.py`
 (`EXPECTED_449R`). Captures:
 `vms449r-{A1,B1,C1}-lab2-vaxlab7-20260805.pcap`.
 
+---
+
+#### 4(O.4) Disk discovery keeps ONE trigger — the `vms-ebb` bracket (GROUNDED live, `vms-ebb`)
+
+`vms-096` deleted the immediate disk-discovery trigger together with the
+unreachable `cm_op == 6` block that gated it, leaving the
+`OVMX_DISKRUN_GATE_MS` ungate as the only entry point, and explicitly left the
+question open: is one trigger correct, or should an immediate one be re-attached
+to the architected DISCONNECT path (`scs_disc_*`, the `vms-591`/`vms-dd5`
+classifier)? §4(O.1) could not answer it — **all three of its arms ran the
+default environment, so none of them entered the pure-server disk-client path at
+all.** This is the missing bracket.
+
+**Method.** One lab-2 pod, `vaxlab-1`, restored to a healthy 2-node cluster
+first (`CLUSTER_NODES=2` on `VAX1` before any arm; the replica had been sitting
+at `CN_1` with `vax2` halted at `?06 HLT INST`, so its `d0`/`d1` were re-cloned
+from the golden images). One binary for all three arms, `md5 9fc8451f…`,
+**verified in-pod before and after every arm**. Three fresh identities, none of
+which had ever been admitted anywhere. Control run **between** the two test arms
+(guardrail 20). Identity read off the capture, never off `SCSD`'s log
+(guardrail 18). SCSSYSTEMIDs `1387`/`1388`/`1389`.
+
+| run | env (plus `OVMX_PURE_SERVER=1`) | identity | `PSC-UNGATED` | PS `SCS$DIRECTORY` `CONNECT_REQ` on the wire (slot `0x000C`) | peer `DISCONNECT_REQ` → our slot `0x0007` | join |
+|---|---|---|---|---|---|---|
+| `E7` | — | `OVMXE7` | **2** | t+3.113, t+3.558 | 2 — t+0.939, t+1.420 | **`CN_3`, t+13 s** |
+| `E8` | `OVMX_NO_DISKRUN_UNGATE=1` | `OVMXE8` | **0** | **none** | 2 — t+3.821, t+4.295 | **`CN_3`, t+13 s** |
+| `E9` | — | `OVMXE9` | **2** | t+5.110, t+5.999 | 2 — t+2.272, t+3.827 | **`CN_3`, t+13 s** |
+
+**The kill switch was RUN, not asserted (guardrail 23).**
+`OVMX_NO_DISKRUN_UNGATE=1` takes `PSC-UNGATED` from 2 to 0 *and* removes the PS
+`CONNECT_REQ` from the capture — the counter and the wire agree, so the gated
+behaviour is genuinely suppressed rather than merely unlogged.
+
+**THE IMMEDIATE TRIGGER IS NOT DEAD FOR WANT OF A SIGNAL.** The peer *initiates*
+a p. 2-26 symmetric teardown of OUR `SCS$DIRECTORY` server connection, twice per
+run — once per VAX — in 3 of 3 arms. Microsecond ordering, `E7`, slot `0x0007`:
+
+```
+t+0.938545  peer->OVMX  DISCONNECT_REQ   (peer initiates)
+t+0.938743  OVMX->peer  DISCONNECT_RSP
+t+0.938788  OVMX->peer  DISCONNECT_REQ   (our own disconnect call, p. 2-26)
+t+0.938882  peer->OVMX  DISCONNECT_RSP
+```
+
+That `DISCONNECT_REQ` is exactly the frame the deleted trigger fired on, and the
+`vms-591`/`vms-dd5` classifier now handles it (`scsd_disconnect_dialogue`). An
+immediate trigger re-attached there would start the disk run **2.1–2.9 s
+earlier** than the gate does (measured, paired per peer node: 2.175 s / 2.138 s
+on `E7`, 2.838 s / 2.172 s on `E9`).
+
+Re-derive every figure in this section:
+`tools/cluster/scs_diskrun_trigger_measure.py` (`EXPECTED`). Captures:
+`vmsebb-{E7,E8-control,E9}-lab2-vaxlab1-20260805.pcap`. `ctest -R
+scs_diskrun_figures` holds the prose to that table without needing them.
+
+**RULED: one trigger. It buys nothing on the path this bracket can reach.** All
+three arms reached `CLUSTER_NODES=3` at t+13 s — *including the control, in
+which disk discovery never ran at all.* Admission on this lab does not wait on
+the disk run, so there is no measured effect for 2.1–2.9 s of earlier start to
+improve, while a second entry point restores exactly the two-writer shape
+`vms-096` deleted. The reason is the bracket, not conservatism, and it is not
+"the signal is missing" — the signal is there and is timed above.
+
+**What this does NOT settle, and it is the case that motivated the trigger: the
+REJOIN.** Every arm is a FIRST join by an identity that had never been admitted
+anywhere. §4e.3's peer-side evidence — the peer holding `VMS$DISK_CL_DRVR` in
+`con_sent` with a zero Remote Con. ID during a *refused rejoin*, where a
+successful join leaves `MSCP$DISK` `open` — is not exercised here, and whether
+the op 6 above even arrives on a rejoin is `vms-449`'s bracket. If it does and
+the earlier start matters there, this ruling is what to re-open; the attachment
+point and the gain are already measured.
+
+**A SECOND RESULT NOBODY ASKED FOR, RECORDED BECAUSE IT WEAKENS THE UNGATE'S
+OWN MOTIVATION.** `E8` joined with disk discovery *entirely* suppressed, on the
+same schedule as the arms that ran it. Nothing here says the disk run is
+useless — §4c.8 shows a real joiner performing it, and this lab's admission
+simply does not gate on it — but "the run must happen inside the 1.4–4.4 s
+window or the join suffers" is not a claim this lab supports. Filed, not fixed.
+
+**A HARNESS DEFECT FOUND WHILE RUNNING THIS, AND EVERY FIGURE ABOVE DEPENDS ON
+THE FIX.** `tools/lab2run.sh` stages the daemon to `/lab/SCSD.EXE`, and `/lab`
+**is the shared tank volume** — the same file for every pod and for lab-1. Two
+sessions bracketing at once overwrite each other's binary between the copy and
+the exec, silently, because the copy's errors are discarded. Two vms-ebb arms
+(`E1`, `E4`) ran a FOREIGN daemon this way: `md5 fbd553d8…` then `b62bd7cb…`,
+183768 bytes against this tree's 398288, and their logs carry
+`disk-discovery step 1, post-credit` — **a log line that exists nowhere in this
+tree**. Both were discarded. The arms above ran from a per-run
+`/lab/ebb-<TAG>/` directory with the md5 checked in-pod before and after. Do not
+run a lab-2 bracket through `lab2run.sh` while another session is live.
+
 ## 5. Summary of unknown/inferred fields (RE gaps)
 
 For visibility, every field NOT marked GROUNDED above:

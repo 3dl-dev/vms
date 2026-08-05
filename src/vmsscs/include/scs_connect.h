@@ -83,13 +83,43 @@
  * follow, and they are not interchangeable:
  *   - NODE IDENTITIES: distinct cluster members. 5 here.
  *   - HARDWARE SOURCES: connected components of the MAC <-> identity graph,
- *     i.e. distinct lab machines. 3 here -- {VAX1}, {VAX3}, {VAX2, VX3, ZK}.
- * Every "independent sources agree" claim uses the HARDWARE count, because VX3
- * and ZK are the same reconfigured box as VAX2 and are not independent
- * observations of VMS behaviour. THE INDEPENDENCE FIGURE DROPPED: this comment
- * previously said "4 independent nodes", which was the MAC count; it is 3.
+ *     i.e. distinct SIMH instances. 3 here -- {VAX1}, {VAX3}, {VAX2, VX3, ZK}.
+ * No "sources agree" claim may use the MAC count, because VX3 and ZK are the
+ * same reconfigured box as VAX2 and are not separate observations of VMS
+ * behaviour. THE INDEPENDENCE FIGURE DROPPED: this comment previously said
+ * "4 independent nodes", which was the MAC count; the graph count is 3.
  * (A by-product is a second check on the population split -- the node numbers
  * the VAX population emits and the ones OVMX emits are disjoint sets.)
+ *
+ * ...AND 3 IS NOT AN INDEPENDENCE COUNT EITHER. WHAT THE ATTESTATION RESTS ON.
+ * "3 independent hardware sources", "distinct lab machines" is what this
+ * comment said next, and that is ALSO false -- and it matters more, because it
+ * was the conservative figure the first correction retreated to. The lab
+ * (/data/training/vax/cluster/README-lab.md, cluster/vax.ini) is:
+ *   - 3 EMULATOR INSTANCES -- vax1, vax2, vax3 -- all the same emulated model
+ *     (MicroVAX 3900 / KA655) under the same SIMH binary on ONE Linux host.
+ *     There is no physical hardware diversity in this lab at all.
+ *   - 3 SYSTEM ROOTS -- [SYS0] = VAX1; [SYS1] = VAX2 and, re-identified with
+ *     MC SYSGEN between reboots, VX3 and ZK; [SYS11] = VAX3, a diskless
+ *     satellite whose root is MSCP-served.
+ *   - 1 SYSTEM DISK IMAGE -- all three roots live in the single file
+ *     data/d0.dsk, which vax1 and vax2 attach at the same time (dual-ported).
+ *   - 1 VMS INSTALLATION, whose SYS$COMMON executive images all three roots
+ *     share. That half is MEASURED, not merely read off the lab notes: all
+ *     668 VAX-sourced 106-byte START frames report version [58:66] "VMS V7.3"
+ *     on hardware [74:78] "VAX " -- ONE distinct version string across all 5
+ *     node identities (spec sec 4g grounds both fields).
+ * SO THE HONEST ATTESTATION IS: ONE VMS BUILD, UNDER THREE SYSTEM ROOTS, ON
+ * ONE SYSTEM DISK IMAGE, ACROSS THREE EMULATOR INSTANCES. Three roots of one
+ * installation agreeing about a connect-data byte is much closer to ONE
+ * OBSERVATION REPEATED than to three independent confirmations, and nothing
+ * below may be read as the latter. What the census DOES establish is that the
+ * value is stable across node identity, node number, system root, boot,
+ * incarnation and role (joiner vs member). What it CANNOT establish is
+ * anything at all about another VMS version, another build, or a second
+ * installation of the same version -- the sample holds exactly one of each.
+ * Every "GROUNDED" below is grounded in that sense and no wider; spec sec 5
+ * carries it as a standing limit on sec 4(N).
  *
  * WHERE IT IS -- GROUNDED. The field is the LAST 16 payload bytes of the
  * 110-byte connect class, [94:110] payload-relative (abs 108-123), directly
@@ -121,7 +151,8 @@
  * VAX/VMS V7.3), broken out by node identity:
  *
  *     VAX1 74   VAX2 32   VAX3 36   VX3 3   ZK 3     = 148 frames
- *     5 node identities, on 3 independent hardware sources
+ *     5 node identities, on 3 emulator instances -- i.e. 1 VMS build,
+ *     3 system roots, 1 system disk image (see the attestation note above)
  *
  *     [94:98]   == 01 1b 01 03        148/148, 0 residuals
  *     [105:110] == 08 00 00 06 00     148/148, 0 residuals
@@ -149,10 +180,13 @@
  * NOT JUST THE SPECIMEN. Two frames would be thin evidence for a value a peer
  * is documented to reject on, so the adopted value is separately attested:
  * 40 VAX-sourced VMS$VAXcluster connect frames carry it, 38 of them OUTSIDE
- * the specimen, from 5 distinct node identities on 3 independent hardware
- * sources, across 18 captures. The measure script pins all five counts. (The
- * earlier "3 distinct VAX nodes" here was a source-MAC count; it coincided
- * with the hardware count by accident, not by derivation.)
+ * the specimen, from 5 distinct node identities on 3 emulator instances,
+ * across 18 captures. The measure script pins all five counts. (The earlier
+ * "3 distinct VAX nodes" here was a source-MAC count; it coincided with the
+ * graph count by accident, not by derivation.) Read that with the attestation
+ * note above: those 3 instances are still ONE VMS build under 3 system roots
+ * on 1 disk image, so this is repetition across roles and boots, not
+ * corroboration by independent VMS systems.
  *
  * RE GAP, STATED (spec sec 5): what [98:105] ENCODES is unknown. All 5 values
  * it takes over the 148 VAX-sourced frames, exhaustively:
@@ -176,7 +210,7 @@
  * for a role it has not observed.
  *
  * RE-DERIVE ALL OF THE ABOVE: tools/scs_connect_data_measure.py (lab host; the
- * captures are host-only and not in git). Last run 2026-08-05: 57 checks, 0
+ * captures are host-only and not in git). Last run 2026-08-05: 67 checks, 0
  * failures. `ctest -R scs_connect_data_figures` needs no captures -- it asserts
  * these figures still appear verbatim here and in the spec.
  *

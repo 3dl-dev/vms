@@ -20,7 +20,13 @@
  * are in the CONNECT DATA verdict in scs_connect.h; re-derive with
  * tools/scs_connect_data_measure.py.
  *
- * NOT invented, NOT an OVMX design choice: every byte below was observed. */
+ * NOT invented, NOT an OVMX design choice: every byte below was observed.
+ * OBSERVED IN ONE VMS BUILD, THOUGH -- the whole capture library is a single
+ * OpenVMS VAX V7.3 installation under 3 system roots on 1 disk image, so
+ * "148/148" below means "no counterexample in that installation", not
+ * agreement between independent VMS systems. See the attestation note in
+ * scs_connect.h and the standing limit in spec sec 5. It is the reason OVMX
+ * decodes the peer's version claim and acts on none of it. */
 const uint8_t scs_connect_data_vaxcluster[SCS_CONNECT_DATA_LEN] = {
     /* [0:4]  version quad, 148/148 VAX-sourced VMS$VAXcluster connect
      * frames (OVMX's own 55 excluded -- see the guard in scs_connect.h) */

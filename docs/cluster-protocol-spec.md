@@ -1665,7 +1665,7 @@ the target, it explicitly breaks the connection that the target accepted."
 p. 2-28 puts the field in the CDT. This section locates it on our wire.
 
 **Re-derive everything below:** `tools/scs_connect_data_measure.py` (lab host;
-the captures are host-only and not in git). Last full run **2026-08-05: 57
+the captures are host-only and not in git). Last full run **2026-08-05: 67
 checks, 0 failures.** `ctest -R scs_connect_data_figures` needs no captures — it
 asserts these figures still appear verbatim here and in
 `src/vmsscs/include/scs_connect.h`.
@@ -1721,18 +1721,50 @@ Two counts follow, and they are **not** interchangeable:
 | count | what it is | value |
 |---|---|---|
 | **node identities** | distinct cluster members | **5** |
-| **hardware sources** | connected components of the MAC ↔ identity graph — distinct lab machines: `{VAX1}`, `{VAX3}`, `{VAX2, VX3, ZK}` | **3** |
+| **hardware sources** | connected components of the MAC ↔ identity graph — distinct SIMH instances. `{VAX1}`, `{VAX3}`, `{VAX2, VX3, ZK}` | **3** |
 
-**Every "independent sources agree" claim in this section uses the hardware
-count**, because `VX3` and `ZK` are the same reconfigured box as `VAX2` and are
-not independent observations of VMS behaviour. **The independence figure
-dropped**: this section previously said *"four independent real VAX nodes"*,
-which was the source-MAC count; the honest figure is **3**.
+**No "sources agree" claim in this section may use the source-MAC count**,
+because `VX3` and `ZK` are the same reconfigured box as `VAX2` and are not
+separate observations of VMS behaviour. **The independence figure dropped**:
+this section previously said *"four independent real VAX nodes"*, which was the
+source-MAC count; the graph count is **3**.
 
 A by-product is a second, independent check on the population split: the node
 numbers the VAX population emits and the ones OVMX emits must be **disjoint
 sets**, and they are. A misclassified source would surface as a node number in
 the wrong population.
+
+**…and 3 is not an independence count either — what the attestation actually
+rests on.** *"3 independent hardware sources"*, *"distinct lab machines"* is
+what this section said next, and that is **also false**. It matters more than
+the first error, because it was the conservative figure the first correction
+retreated to. The lab's real configuration
+(`/data/training/vax/cluster/README-lab.md`, `cluster/vax.ini`) is:
+
+| | | |
+|---|---|---|
+| **emulator instances** | `vax1`, `vax2`, `vax3` — all the same emulated model (MicroVAX 3900 / KA655) under the same SIMH binary on **one** Linux host. No physical hardware diversity exists in this lab at all. | **3** |
+| **system roots** | `[SYS0]` = VAX1 · `[SYS1]` = VAX2 and, re-identified with `MC SYSGEN` between reboots, VX3 and ZK · `[SYS11]` = VAX3, a diskless satellite whose root is MSCP-served | **3** |
+| **system disk images** | all three roots live in the single file `data/d0.dsk`, which `vax1` and `vax2` attach at the same time (dual-ported) | **1** |
+| **VMS installations** | one OpenVMS VAX V7.3 install, whose `SYS$COMMON` executive images all three roots share | **1** |
+
+The last row is **measured**, not merely read off the lab notes: all **668**
+VAX-sourced 106-byte START frames report version `[58:66]` = `"VMS V7.3"` on
+hardware `[74:78]` = `"VAX "` — **one** distinct version string across all 5
+node identities (§4(g) grounds both fields).
+
+> **So the honest attestation behind every GROUNDED figure in this section is:
+> one VMS build, under three system roots, on one system disk image, across
+> three emulator instances.** Three roots of one installation agreeing about a
+> connect-data byte is much closer to **one observation repeated** than to three
+> independent confirmations, and nothing below may be read as the latter.
+
+What the census **does** establish is that the value is stable across node
+identity, node number, system root, boot, incarnation and role (joiner vs
+member) — that is worth having, and it is the whole of it. What it **cannot**
+establish is anything at all about another VMS version, another build, or a
+second installation of the same version: the sample holds exactly one of each.
+§5 carries that as a standing limit on this section.
 
 **WHERE IT IS — GROUNDED.** The connect data is the **last 16 payload bytes of
 the 110-byte connect class, `[94:110]`** (absolute frame `[108:124]`), directly
@@ -1770,7 +1802,8 @@ why the exclusion has to be applied before the split rather than to the totals.)
 **`MSCP$DISK` is the decisive row**: a printable ASCII **version string** in the
 connect data of the disk-server SYSAP — p. 2-25's "which version" read straight
 off the wire, at these offsets, with **809** VAX-sourced frames from **5 node
-identities on 3 independent hardware sources** and one distinct value. (The
+identities on 3 emulator instances** — i.e. 1 VMS build, 3 system roots, 1 disk
+image — and one distinct value. (The
 earlier "four distinct VAX nodes" here was the source-MAC count.) Every SYSAP
 row in the table above is emitted by all 5 identities; the tool pins that
 per-row. The `VMS$DISK_CL_DRVR` row is the
@@ -1789,7 +1822,8 @@ hold (all VAX/VMS V7.3), which by node identity are
 |---|---|---|---|---|---|---|
 | frames | 74 | 32 | 36 | 3 | 3 | **148** |
 
-— **5 node identities on 3 independent hardware sources**:
+— **5 node identities on 3 emulator instances**, which is 1 VMS build under 3
+system roots on 1 disk image:
 
 | span | value | grounding |
 |---|---|---|
@@ -1799,7 +1833,7 @@ hold (all VAX/VMS V7.3), which by node identity are
 
 Excluding OVMX moved these counts from `203/203` to `148/148`; it did **not**
 weaken either claim below what we would accept from a stranger's capture — the
-two spans still hold with zero residuals over **3 independent hardware sources
+two spans still hold with zero residuals over **3 emulator instances
 carrying 5 node identities**, many boots and 48 captures, and the
 distinct-value count for `[98:105]` is unchanged at 5 (OVMX's 55 frames carried
 only values the VAXes already emit). No claim in this section had to be
@@ -1831,10 +1865,13 @@ tool asserts that — the joiner/member contrast is VAX-to-VAX throughout.
 **Not just the specimen.** Two frames would be thin evidence for a value a peer
 is documented to *reject* on, so the adopted value is attested independently:
 **40 VAX-sourced `VMS$VAXcluster` connect frames carry it, 38 of them outside
-the specimen, from 5 distinct node identities on 3 independent hardware
-sources, across 18 captures.** All five counts are pinned by the tool. (The
+the specimen, from 5 distinct node identities on 3 emulator
+instances, across 18 captures.** All five counts are pinned by the tool. (The
 earlier "3 distinct VAX nodes" here was a source-MAC count that coincided with
-the hardware count by accident, not by derivation.) (OVMX's own excluded frames also carry it 54 times —
+the graph count by accident, not by derivation.) Read with the configuration
+above, those 3 instances are still **one VMS build under 3 system roots on 1
+disk image**: this is repetition across roles, boots and roots, not
+corroboration by independent VMS systems. (OVMX's own excluded frames also carry it 54 times —
 that is evidence about an OVMX build, deliberately not counted here.)
 
 **What changed on OVMX's wire.** Before `vms-fdd` the region was a labelled
@@ -1943,9 +1980,11 @@ For visibility, every field NOT marked GROUNDED above:
 - **SCA connect data `[98:105]` (`vms-fdd`, §4(N)).** The 16-byte field's
   *location*, its *width*, its *per-SYSAP* character and the two spans `[94:98]`
   = `01 1b 01 03` and `[105:110]` = `08 00 00 06 00` are GROUNDED (148/148
-  **VAX-sourced** `VMS$VAXcluster` connect frames from 4 nodes, 0 residuals;
-  OVMX's own 55 frames are excluded — see the circular-grounding guard in
-  §4(N)). The **seven bytes between them are not**: 5 distinct values, four of
+  **VAX-sourced** `VMS$VAXcluster` connect frames from 5 node identities on 3
+  emulator instances, 0 residuals; OVMX's own 55 frames are excluded — see the
+  circular-grounding guard in §4(N)). **GROUNDED IN A NARROW SENSE, AND THE
+  NARROWNESS IS THE POINT — see the limit bullet below.** The **seven bytes
+  between them are not**: 5 distinct values, four of
   which fit `01 00 01 00 NN 00 01` with `NN ∈ {1,2,3}` and one of which
   (`01 00 00 00 02 00 01`, 1 frame) does not, plus the all-zero form,
   correlated with whether the sender is joining. "`NN` = current member count"
@@ -1956,6 +1995,33 @@ For visibility, every field NOT marked GROUNDED above:
   looks like — only one VMS version (V7.3) has ever been on our wire, so no
   refusal has ever been observed, and OVMX correspondingly implements no
   version policy.
+
+- **STANDING LIMIT on every "GROUNDED" in §4(N): the sample is ONE VMS BUILD
+  (`vms-fdd`).** The GROUNDED figures in §4(N) are re-derivable and their
+  residual counts are real, but they must not be read as agreement between
+  independent VMS systems, and two earlier revisions of §4(N) said exactly that
+  — first *"four independent real VAX nodes"* (a source-MAC count), then
+  *"3 independent hardware sources" / "distinct lab machines"*. **Both were
+  false.** The lab's actual configuration, per
+  `/data/training/vax/cluster/README-lab.md` and `cluster/vax.ini`, is **1
+  OpenVMS VAX V7.3 installation, under 3 system roots (`[SYS0]`, `[SYS1]`,
+  `[SYS11]`), on 1 system disk image (`data/d0.dsk`), across 3 SIMH instances
+  of one emulated model on one host** — the five node identities are those
+  three roots, two of them re-identified with `MC SYSGEN` between reboots. The
+  one-installation half is measured, not assumed: all 668 VAX-sourced START
+  frames report a single version string, `"VMS V7.3"` on `"VAX "` (§4(g)).
+  **So §4(N)'s GROUNDED claims mean "stable across identity, node number, root,
+  boot, incarnation and role in this one installation" and nothing wider** —
+  three roots of one install agreeing about a byte is nearer one observation
+  repeated than three confirmations. Nothing in §4(N) is evidence about a
+  second VMS version, a second build, or a second installation of V7.3; the
+  sample holds exactly one of each. **This bullet is the reason OVMX ships no
+  version policy** (see the connect-data gap above): the field is a version
+  claim a peer may reject on, and one build's value is not a basis for deciding
+  what to accept from anyone else. Lifting the limit needs a capture from an
+  installation OVMX did not build — a second VMS version, or the same version
+  installed independently — and `tools/scs_connect_data_measure.py` reds if a
+  second version string ever appears without this text being re-derived.
 
 - **What a non-VAX peer puts in the field (`vms-fdd`, §4(N)).** Nothing in the
   census is evidence about implementations other than VAX/VMS V7.3, and — since

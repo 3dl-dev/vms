@@ -87,6 +87,51 @@ def allowed_spans(text, total, dropped, corrected):
     return spans
 
 
+# ---------------------------------------------------------------------------
+# THE REJECTED INDEPENDENCE WORDING, AND THE ONLY WAY IT MAY APPEAR
+# ---------------------------------------------------------------------------
+# The census was rejected TWICE for over-claiming how many sources agree. First
+# "four independent real VAX nodes" (a source-MAC count). Then, after that was
+# corrected, "3 independent hardware sources" / "distinct lab machines" -- also
+# false, and worse, because it was the conservative figure the first correction
+# retreated to: the five identities are three system ROOTS of ONE OpenVMS VAX
+# V7.3 installation on ONE disk image, driven by three SIMH instances of one
+# emulated model on one host.
+#
+# The corrected documents must still QUOTE those phrases, because the record of
+# what was wrong is the point. So the rule is the same shape as the one above:
+# the phrase is licensed only inside a span that also carries a correction
+# marker, and bare use anywhere else reds. The self-test at the bottom asserts
+# both directions.
+REJECTED_INDEPENDENCE = (
+    "independent hardware sources",
+    "distinct lab machines",
+    "independent real VAX nodes",
+)
+# Within this many characters either side, one of the markers must appear.
+_MARKER_WINDOW = 400
+_CORRECTION_MARKERS = ("false", "rejected", "previously said", "said next",
+                       "earlier revision", "is also", "was the mac count",
+                       "source-mac count")
+
+
+def rejected_phrase_violations(text):
+    """Every use of a rejected independence phrase with no correction nearby."""
+    bad = []
+    low = text.lower()
+    for phrase in REJECTED_INDEPENDENCE:
+        # Both sides lowercased -- an early version compared a phrase carrying
+        # "VAX" against lowercased text and silently matched nothing.
+        for m in re.finditer(re.escape(phrase.lower()), low):
+            s, e = m.span()
+            ctx = low[max(0, s - _MARKER_WINDOW):e + _MARKER_WINDOW]
+            if not any(k in ctx for k in _CORRECTION_MARKERS):
+                line = text.count("\n", 0, s) + 1
+                bad.append((phrase, line,
+                            " ".join(text[max(0, s - 60):e + 60].split())))
+    return bad
+
+
 def rejected_total_violations(text):
     """Every occurrence of a rejected total that no allowed span covers."""
     bad = []
@@ -109,6 +154,29 @@ def check(cond, what):
     else:
         print("  FAIL: %s" % what)
         failures.append(what)
+
+
+def flat(text):
+    """Comment/markdown text as one whitespace-normalised line.
+
+    A phrase that straddles a C comment line break reads as "ONE\\n * OBSERVATION"
+    in the file; without this, a literal check for it fails for a reason that
+    has nothing to do with what the comment says.
+    """
+    return " ".join(text.replace("\n *", " ").split())
+
+
+_WORD_NUM = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5"}
+
+
+def numeric(text):
+    """Small spelled-out numbers as digits.
+
+    "THREE SYSTEM ROOTS" and "3 system roots" are the same claim; without this,
+    a count check can be dodged by spelling the number out.
+    """
+    return re.sub(r"\b(one|two|three|four|five)\b",
+                  lambda m: _WORD_NUM[m.group(1).lower()], text, flags=re.I)
 
 
 def connect_data_verdict(header):
@@ -285,11 +353,12 @@ def main():
     # several sentences, and flipping any ONE of them is the regression.
     counted = {
         r"(\d+)\s*(?:distinct\s+|independent\s+)?node identities": ident,
-        r"(\d+)\s*independent hardware sources": hw,
+        r"(\d+)\s*emulator\s+instances": hw,
         r"distinct cluster members\.\s*(\d+) here": ident,
-        r"distinct lab machines\.\s*(\d+) here": hw,
+        r"distinct SIMH instances\.\s*(\d+) here": hw,
         r"\|\s*\*\*node identities\*\*[^\n]*?\|\s*\*\*(\d+)\*\*\s*\|": ident,
         r"\|\s*\*\*hardware sources\*\*[^\n]*?\|\s*\*\*(\d+)\*\*\s*\|": hw,
+        r"\|\s*\*\*emulator instances\*\*[^\n]*?\|\s*\*\*(\d+)\*\*\s*\|": hw,
     }
     for docname, doc in (("scs_connect.h", hverdict),
                          ("the spec", "\n".join(sblocks))):
@@ -335,11 +404,10 @@ def main():
     aid, ahw = (exp["adopted_value_vax_node_identities"],
                 exp["adopted_value_vax_hardware_sources"])
     attest = re.compile(
-        r"%d distinct node identities on\s+%d independent hardware\s+sources"
-        % (aid, ahw))
+        r"%d distinct node identities on\s+%d emulator\s+instances" % (aid, ahw))
     for docname, doc in (("scs_connect.h", hverdict),
                          ("the spec", "\n".join(sblocks))):
-        check(attest.search(doc.replace("\n *", "\n")) is not None,
+        check(attest.search(flat(doc)) is not None,
               "%s attests the adopted value to %d identities on %d hardware sources"
               % (docname, aid, ahw))
     check(aid <= ident and ahw <= hw,
@@ -366,6 +434,110 @@ def main():
     check(len(comps) == hw,
           "hardware_components() finds %d machines for the lab's MAC/identity map"
           % hw)
+
+    print("[3 is not an independence count -- the configuration is stated]")
+    # The second rejection: "3 independent hardware sources" / "distinct lab
+    # machines" was also false. The honest configuration -- 1 VMS build, 3
+    # system roots, 1 disk image, 3 emulator instances -- has to be stated
+    # where the counts are, in BOTH documents, and the value's grounding has to
+    # be marked in spec sec 5 rather than only in sec 4(N).
+    # Self-test of rejected_phrase_violations() first, both directions.
+    for good in ('previously said "3 independent hardware sources"; that is'
+                 ' also false',
+                 'an earlier revision called them distinct lab machines',
+                 'the rejected wording "four independent real VAX nodes"'):
+        check(not rejected_phrase_violations(good),
+              "ALLOWED: the rejected phrase quoted beside its correction (%r)"
+              % good[:46])
+    for bad in ("attested on 3 independent hardware sources, 0 residuals",
+                "the three distinct lab machines agree byte for byte",
+                "confirmed by four independent real VAX nodes"):
+        check(bool(rejected_phrase_violations(bad)),
+              "REJECTED: the rejected phrase asserted as fact (%r)" % bad[:46])
+    for docname, doc in (("scs_connect.h", hverdict),
+                         ("the spec", "\n".join(sblocks))):
+        bad = rejected_phrase_violations(doc)
+        check(not bad,
+              "%s never asserts the rejected independence wording%s"
+              % (docname, "" if not bad else "\n        offending: %s: %s"
+                 % (bad[0][0], bad[0][2])))
+    # The configuration itself, as numbers, in both documents. EVERY statement
+    # of each count must agree with the tool's declared configuration -- "at
+    # least one site is right" is not enough and was measured not to be: a
+    # first version of this check accepted a header that said "4 system roots"
+    # in one sentence and "3 SYSTEM ROOTS" in another, which is precisely the
+    # fix-the-named-instance-and-leave-the-siblings defect this item exists to
+    # kill. Counts spelled as words are normalised first, so "THREE SYSTEM
+    # ROOTS" cannot dodge the check by not being a digit.
+    config_counted = {
+        r"(\d+)\s+VMS (?:build|installation)s?": exp["lab_vms_installations"],
+        r"(\d+)\s+system roots?": exp["lab_system_roots"],
+        r"(\d+)\s+(?:system )?disk images?": exp["lab_system_disk_images"],
+        r"(\d+)\s+emulator instances?": exp["lab_emulator_instances"],
+    }
+    for docname, doc in (("scs_connect.h", numeric(flat(hverdict))),
+                         ("the spec", numeric(flat("\n".join(sblocks))))):
+        for pat, want in config_counted.items():
+            hits = [int(m.group(1)) for m in re.finditer(pat, doc, re.I)]
+            check(bool(hits) and all(h == want for h in hits),
+                  "%s states %s and every statement of it says %d (%d sites: %s)"
+                  % (docname, pat, want, len(hits), hits))
+    # "Last run: N checks, 0 failures" is itself a figure, and it drifted --
+    # both documents said 57 while the script ran 66. It now comes from
+    # EXPECTED, and the script asserts its own total against the same key, so
+    # neither half can move without the other.
+    runline = re.compile(r"(\d+)\s*checks,\s*0\s*failures")
+    for docname, doc in (("scs_connect.h", flat(hverdict)),
+                         ("the spec", flat("\n".join(sblocks)))):
+        hits = [int(x) for x in runline.findall(doc)]
+        check(bool(hits) and all(h == exp["measure_check_count"] for h in hits),
+              "%s reports the measure script's run as %d checks (%d sites: %s)"
+              % (docname, exp["measure_check_count"], len(hits), hits))
+    # The measured half: one version string, and the frame count behind it.
+    for docname, doc in (("scs_connect.h", flat(hverdict)),
+                         ("the spec", "\n".join(sblocks))):
+        check(str(exp["vax_start_frames"]) in doc,
+              "%s states the %d VAX START frames the version count came from"
+              % (docname, exp["vax_start_frames"]))
+        for v in exp["vax_vms_versions"]:
+            check(v in doc, "%s names the single measured version %r"
+                  % (docname, v))
+    check(len(exp["vax_vms_versions"]) == exp["lab_vms_installations"],
+          "the measured version count and the declared install count agree")
+    # "one observation repeated" is the honest reading and must be said, not
+    # left for the reader to work out from the table.
+    for docname, doc in (("scs_connect.h", flat(hverdict).lower()),
+                         ("the spec", flat("\n".join(sblocks)).lower())):
+        check("one observation repeated" in doc,
+              "%s says what three roots of one install actually amount to"
+              % docname)
+    # Section 5 must carry the limit -- 4(N) marking its own grounding is not
+    # enough, because sec 5 is the register a reader checks for what is NOT
+    # grounded. Located independently of spec_connect_data_blocks().
+    m5 = re.search(r"\n## 5\. Summary of unknown/inferred fields.*", spec, re.S)
+    sec5 = m5.group(0) if m5 else ""
+    check(bool(sec5), "spec section 5 was located")
+    check("STANDING LIMIT" in sec5 and "ONE VMS BUILD" in sec5,
+          "spec section 5 carries the one-VMS-build limit on 4(N)")
+    for token in ("3 system roots", "1 system disk image", "SYS11", "d0.dsk"):
+        check(token in sec5, "the section 5 limit names %r" % token)
+    check(str(exp["vax_start_frames"]) in sec5,
+          "the section 5 limit states the %d START frames behind it"
+          % exp["vax_start_frames"])
+    # ...and the sec 5 GROUNDED bullet for this field must not restate a node
+    # count that disagrees with the census (the exact defect that was rejected:
+    # "148/148 ... from 4 nodes" survived there after 4(N) was corrected).
+    m5b = re.search(r"\n- \*\*SCA connect data[^\n]*\*\*.*?(?=\n\n)", sec5, re.S)
+    bullet = m5b.group(0) if m5b else ""
+    check(bool(bullet), "the section 5 SCA connect-data bullet was located")
+    for mm in re.finditer(r"(\d+)\s*node", bullet):
+        check(int(mm.group(1)) == ident,
+              "the section 5 bullet's node count is %d, not %s"
+              % (ident, mm.group(1)))
+    check("emulator instances" in bullet and str(hw) in bullet,
+          "the section 5 bullet reports the source count as emulator instances")
+    check(not rejected_phrase_violations(bullet),
+          "the section 5 bullet does not assert the rejected wording")
 
     print("[the two invariant spans are stated with their counts]")
     n = exp["vaxcluster_frames"]

@@ -106,6 +106,49 @@ numbers the VAX population emits and the ones the OVMX population emits must be
 DISJOINT sets. A misclassified source would show up as a node number in the
 wrong population.
 
+=======================================================================
+WHAT THAT COUNT IS WORTH -- THE LAB'S ACTUAL CONFIGURATION
+=======================================================================
+
+The hardware-source count is a real derived quantity, but it must NOT be read
+as "3 independent VMS systems", and this script previously called them exactly
+that ("3 independent hardware sources", "distinct lab machines"). That was the
+second false claim the veracity review threw out, and it was the more dangerous
+one because it was the conservative figure the first correction retreated TO.
+The lab's real configuration, from /data/training/vax/cluster/README-lab.md and
+the shared cluster/vax.ini:
+
+  * 3 EMULATOR INSTANCES -- vax1, vax2, vax3 -- every one of them the same
+    emulated model (MicroVAX 3900 / KA655) under the same SIMH binary on one
+    Linux host. There is NO physical hardware diversity in this lab at all;
+    "hardware source" here means EMULATOR INSTANCE and nothing stronger.
+  * 3 SYSTEM ROOTS -- [SYS0] (VAX1), [SYS1] (VAX2, and VX3/1050 and ZK/1099,
+    which are that same root re-identified with MC SYSGEN between reboots), and
+    [SYS11] (VAX3, a diskless satellite whose root is MSCP-served).
+  * 1 SYSTEM DISK IMAGE -- all three roots live in the single file
+    data/d0.dsk. vax1 and vax2 attach it at the same time (dual-ported:
+    `attach rq0 ../data/d0.dsk` in the shared vax.ini) and vax3 reads its root
+    out of it over MSCP.
+  * 1 VMS INSTALLATION -- one OpenVMS VAX V7.3 install, whose SYS$COMMON
+    executive images all three roots share. This half is MEASURED, not merely
+    read off the lab notes: every one of the 668 VAX-sourced 106-byte START
+    frames in the library reports version [58:66] = "VMS V7.3" on hardware
+    [74:78] = "VAX " -- ONE distinct version string across all 5 node
+    identities (spec sec 4g grounds both fields).
+
+SO THE HONEST ATTESTATION BEHIND EVERY GROUNDED FIGURE HERE IS: ONE VMS BUILD,
+UNDER THREE SYSTEM ROOTS, ON ONE SYSTEM DISK IMAGE, ACROSS THREE EMULATOR
+INSTANCES. Three roots of one installation agreeing about a connect-data byte
+is much closer to ONE OBSERVATION REPEATED than to three independent
+confirmations, and nothing here may be presented as the latter.
+
+What the census DOES establish is that the value is stable across node
+identity, node number, system root, boot, incarnation and role (joiner vs
+member) -- worth having, and it is the whole of it. What it CANNOT establish is
+anything at all about another VMS version, another build, or a second
+installation of the same version: the sample contains exactly one of each.
+Spec sec 5 carries that as a standing limit on sec 4(N).
+
 THE POPULATION (and why it is exactly this one). Take `sca = frame[14:]` for
 every ethertype-0x6007 frame. Keep frames with `len(sca) == 110`, format byte
 `sca[17] == 0x13`, and opcode `sca[16]` in the SCS-message family
@@ -162,7 +205,20 @@ LAVC_PREFIX = b"\xaa\x00\x04\x00"
 START_LEN, START_OPCODE = 106, 0x41
 START_NAME = (90, 98)        # 8-byte blank-padded ASCII node name (spec 4g)
 START_SCSSYSTEMID = (46, 48)  # LE u16 (spec 4g); node number == id & 1023
+START_VERSION = (58, 66)     # 8-byte ASCII VMS version, e.g. "VMS V7.3" (4g)
+START_HARDWARE = (74, 78)    # 4-byte ASCII hardware family, e.g. "VAX " (4g)
 LAVC_NODE_MASK = 1023
+
+# --- the lab configuration behind the counts, see the docstring note ------
+# NOT capture-derived and never presented as such: a pcap cannot show which
+# system root a node booted or which file its disk is. Sourced from
+# /data/training/vax/cluster/README-lab.md and cluster/vax.ini, declared here
+# so the honesty statement in scs_connect.h and spec sec 4(N) is checkable
+# against something, and cross-checked below against the measured census.
+LAB_SYSTEM_ROOT = {"VAX1": "SYS0", "VAX2": "SYS1", "VX3": "SYS1",
+                   "ZK": "SYS1", "VAX3": "SYS11"}
+LAB_SYSTEM_DISK_IMAGES = ("data/d0.dsk",)
+LAB_EMULATOR_INSTANCES = ("vax1", "vax2", "vax3")
 # OVMX's own hardware MACs, as logged by scsd itself (`hwmac=` in the lab work
 # directory). --logs re-derives this set and the check fails if it has grown.
 OVMX_HW_MACS = frozenset((
@@ -209,9 +265,23 @@ EXPECTED = {
         "VAX1": 74, "VAX2": 32, "VAX3": 36, "VX3": 3, "ZK": 3,
     },
     "vaxcluster_node_identities": 5,
-    # The CONSERVATIVE count, and the one every "independent sources" claim
-    # uses: connected components of the MAC <-> node-identity graph.
+    # Connected components of the MAC <-> node-identity graph. This is the
+    # CONSERVATIVE count -- it is NOT an independence count. See "WHAT THAT
+    # COUNT IS WORTH" above: these are three SIMH instances of one emulated
+    # model on one host, booting three roots of ONE VMS installation off ONE
+    # disk image, so they are not independent observations of VMS behaviour.
     "vaxcluster_hardware_sources": 3,
+    # --- what the attestation actually rests on (the configuration note) ---
+    # MEASURED from the 106-byte START frames, VAX-sourced only:
+    "vax_start_frames": 668,
+    "vax_vms_versions": ["VMS V7.3"],    # [58:66], 1 distinct over 5 identities
+    "vax_hardware_strings": ["VAX "],    # [74:78], 1 distinct
+    # DECLARED lab configuration (LAB_* above), cross-checked against the
+    # census. Not measured; a capture cannot show a system root.
+    "lab_vms_installations": 1,
+    "lab_system_roots": 3,
+    "lab_system_disk_images": 1,
+    "lab_emulator_instances": 3,
     # LAVC node number -> ASCII node name, over the whole VAX population.
     "vax_node_names": {1: "VAX1", 2: "VAX2", 3: "VAX3", 26: "VX3", 75: "ZK"},
     # The three lab machines, as (source MACs, node identities). Derived, not
@@ -271,6 +341,10 @@ EXPECTED = {
     "adopted_value_vax_node_identities": 5,
     "adopted_value_vax_hardware_sources": 3,
     "adopted_value_vax_captures": 18,
+    # This script's own check total, quoted by both documents as "Last full
+    # run: N checks, 0 failures". Self-referential on purpose -- see the
+    # measure_check_count cmp() at the end of check().
+    "measure_check_count": 67,
 }
 
 
@@ -413,6 +487,12 @@ def measure(capdir):
         "adopted_value_sightings": collections.Counter(),
         # LAVC node number -> ASCII node name, from the 106-byte START frames.
         "node_names": collections.defaultdict(collections.Counter),
+        # VAX-sourced START frames only: how many VMS versions and hardware
+        # families the whole VAX population actually reports. This is the
+        # measured half of "one VMS build" (see the configuration note).
+        "vax_start_frames": 0,
+        "vax_start_versions": collections.Counter(),
+        "vax_start_hardware": collections.Counter(),
     }
     adopted = bytes.fromhex(EXPECTED["ovmx_value"].replace(" ", ""))
     for path in sorted(glob.glob(os.path.join(capdir, "**", "*.pcap"), recursive=True)):
@@ -435,6 +515,17 @@ def measure(capdir):
                                               START_SCSSYSTEMID[1]])[0]
                 if all(32 <= c < 127 for c in nm) and nm.strip():
                     m["node_names"][sid & LAVC_NODE_MASK][nm.decode().strip()] += 1
+                    # VAX-only: OVMX's own START frames say "VMX V0.1" (and,
+                    # where it replays a captured body, "VMS V7.3"), which is
+                    # evidence about OVMX and must not enter this count.
+                    if classify_source(src) == VAX:
+                        m["vax_start_frames"] += 1
+                        m["vax_start_versions"][
+                            sca[START_VERSION[0]:START_VERSION[1]]
+                            .decode("latin-1")] += 1
+                        m["vax_start_hardware"][
+                            sca[START_HARDWARE[0]:START_HARDWARE[1]]
+                            .decode("latin-1")] += 1
             if len(sca) != 110 or sca[17] != 0x13 or sca[16] not in (0x4B, 0x5B, 0x7B):
                 continue
             which = classify_source(src)
@@ -524,8 +615,9 @@ def _report_pop(m, which, label, out):
     print("    distinct node identities      : %d" % len(p["vaxcluster_nodes"]),
           file=out)
     comps = hardware_components(p["mac_nodes"])
-    print("    distinct hardware sources     : %d  <-- the independence count"
-          % len(comps), file=out)
+    print("    distinct hardware sources     : %d  (emulator instances -- NOT"
+          " an independence count, see the configuration note)" % len(comps),
+          file=out)
     for macs, nodes in comps:
         print("        %-42s %s"
               % (",".join(macs), [node_name(m, n) or "node %d" % n for n in nodes]),
@@ -556,6 +648,28 @@ def report(m, out=sys.stdout):
               % dict(m["unclassified_sources"]), file=out)
     else:
         print("  UNCLASSIFIED source MACs (MUST be none): none", file=out)
+    print(file=out)
+
+    print("--- WHAT THE ATTESTATION RESTS ON (see the module docstring) ---", file=out)
+    print("The hardware-source count below is EMULATOR INSTANCES, not independent", file=out)
+    print("VMS systems. The honest attestation is:", file=out)
+    print("  VMS installations (declared)           : %d  (roots share SYS$COMMON)"
+          % EXPECTED["lab_vms_installations"], file=out)
+    print("  system roots (declared)                : %d  %s"
+          % (len(set(LAB_SYSTEM_ROOT.values())),
+             sorted(set(LAB_SYSTEM_ROOT.values()))), file=out)
+    print("  system disk images (declared)          : %d  %s"
+          % (len(LAB_SYSTEM_DISK_IMAGES), list(LAB_SYSTEM_DISK_IMAGES)), file=out)
+    print("  emulator instances (declared)          : %d  %s"
+          % (len(LAB_EMULATOR_INSTANCES), list(LAB_EMULATOR_INSTANCES)), file=out)
+    print("  VAX START frames (MEASURED)            : %d" % m["vax_start_frames"],
+          file=out)
+    print("  VMS version strings [58:66] (MEASURED) : %s"
+          % dict(m["vax_start_versions"]), file=out)
+    print("  hardware strings [74:78] (MEASURED)    : %s"
+          % dict(m["vax_start_hardware"]), file=out)
+    print("  identity -> system root (declared)     : %s"
+          % dict(sorted(LAB_SYSTEM_ROOT.items())), file=out)
     print(file=out)
 
     _report_pop(m, VAX, "VAX POPULATION -- the evidence base", out)
@@ -671,6 +785,35 @@ def check(m, logdir=None):
     cmp("per-SYSAP distinct node identities (VAX)",
         {k: len(v) for k, v in vax["sysap_nodes"].items()},
         EXPECTED["sysap_node_identities"])
+    # --- what the attestation rests on (see "WHAT THAT COUNT IS WORTH") ------
+    # MEASURED: the whole VAX population reports ONE VMS version on ONE
+    # hardware family. If a second VMS build ever reaches this wire, this reds
+    # and the "one VMS build" prose has to be re-derived rather than kept.
+    cmp("VAX START frames (MEASURED)", m["vax_start_frames"],
+        EXPECTED["vax_start_frames"])
+    cmp("VMS version strings over the VAX population (MEASURED)",
+        sorted(m["vax_start_versions"]), EXPECTED["vax_vms_versions"])
+    cmp("hardware strings over the VAX population (MEASURED)",
+        sorted(m["vax_start_hardware"]), EXPECTED["vax_hardware_strings"])
+    # DECLARED configuration, cross-checked against the MEASURED census: the
+    # root map must cover exactly the identities the census found, so a new
+    # node identity cannot appear on the wire without the honesty statement
+    # being re-derived for it.
+    cmp("declared system roots cover exactly the census identities",
+        sorted(LAB_SYSTEM_ROOT), sorted(EXPECTED["vaxcluster_node_census"]))
+    cmp("distinct system roots (declared)", len(set(LAB_SYSTEM_ROOT.values())),
+        EXPECTED["lab_system_roots"])
+    cmp("distinct system disk images (declared)", len(LAB_SYSTEM_DISK_IMAGES),
+        EXPECTED["lab_system_disk_images"])
+    cmp("distinct emulator instances (declared)", len(LAB_EMULATOR_INSTANCES),
+        EXPECTED["lab_emulator_instances"])
+    # One installation, because all the roots are on one disk image sharing one
+    # SYS$COMMON -- so this may never exceed the disk-image count.
+    cmp("VMS installations (declared) <= system disk images",
+        EXPECTED["lab_vms_installations"] <= EXPECTED["lab_system_disk_images"],
+        True)
+    cmp("VMS installations (declared) matches the measured version count",
+        EXPECTED["lab_vms_installations"], len(m["vax_start_versions"]))
     mid = {}
     for cd, n in vax["sysap_values"]["VMS$VAXcluster"].items():
         mid[hexs(cd[4:11])] = mid.get(hexs(cd[4:11]), 0) + n
@@ -737,6 +880,13 @@ def check(m, logdir=None):
         EXPECTED["adopted_value_vax_hardware_sources"])
     cmp("adopted value: distinct captures", len(caps),
         EXPECTED["adopted_value_vax_captures"])
+    # How many checks this script runs is itself a figure the two documents
+    # quote ("Last full run: N checks, 0 failures"), and it drifted: the
+    # documents said 57 after the script had grown to 66. Pinning it here means
+    # adding a check without re-running and re-recording reds, and the ctest
+    # gate can hold the documents to the same number without the captures.
+    cmp("measure_check_count (this script's own total)",
+        len(ok) + len(fails) + 1, EXPECTED["measure_check_count"])
     return ok, fails
 
 

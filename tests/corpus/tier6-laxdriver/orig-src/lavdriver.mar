@@ -1,0 +1,777 @@
+	.TITLE	LAVDRIVER	VAX/VMS Load Average Pseudo Device
+	.IDENT	/Version 4.02/
+	.SBTTL	DOCUMENTATION
+;---------------S-R-I-International-Artificial-Intelligence-Center-----------
+;
+;
+; MODULE NAME:
+;
+;	LAVDRIVER
+;
+; PURPOSE:
+;
+;	This is a pseudo device which supplies load average information to
+;	programs wishing to display some indication of system load.
+;
+; KEYWORDS:
+;
+;	Drivers
+;
+; USAGE:
+;
+;	Standard system QIO calls.
+;
+;	The driver is installed via sysgen.  The following is the correct
+;		sysgen command sequence.
+;
+;		SYSGEN>  LOAD LAVDRIVER
+;		SYSGEN>  CONNECT LAV0 /NOADA/DRIVER=LAVDRIVER
+;
+;		Note: LAVDRIVER.EXE should reside in [SYS$LDR]
+;
+;
+; SPECIAL REQUIREMENTS:
+;
+;	none
+;
+; LANGUAGE:
+;
+;	VAX-11 MACRO
+;
+; PARAMETERS:
+;
+;	none
+;
+; SPECIAL TECHNIQUES:
+;
+;	none
+;
+; AUTHOR:
+;
+;	David Kashtan
+;
+; DATE CREATED:
+;
+;	Wed Jul 21 11:25:19 1982
+;
+; MAINTAINED BY:
+;
+;	David Kashtan
+;
+; UPDATES:
+;
+;	Modified for VMS V5 SMP  Thu Oct 8 1987       Kenneth Adelman / LBL
+;
+;	Fixed priority calculation Fri Oct 4 1991     Kenneth Adelman / TGV
+;
+;	Added DPT$M_SNAPSHOT	   Thu Feb 6 1992     Kenneth Adelman / TGV
+;
+;---------------S-R-I-International-Artificial-Intelligence-Center-----------
+
+	.SBTTL	DEFINITIONS
+	.LIBRARY	/SYS$LIBRARY:LIB.MLB/
+;+ ---
+;
+; DEFINE CONTROL BLOCK OFFSETS & OTHER SYSTEM STUFF BY CALLING 'DEF' MACROS
+;
+;- ---
+.IF	DF,VMS_V5
+	$CPUDEF			;DEFINE PER-CPU STRUCTURE
+.ENDC
+	$CRBDEF			;DEFINE CHANNEL REQUEST BLOCK
+	$DCDEF			;DEFINE DEVICE TYPES
+	$DDBDEF			;DEFINE DEVICE DATA BLOCK
+	$DEVDEF			;DEFINE DEVICE CONSTANTS
+	$DPTDEF			;DEFINE DRIVER PROLOGUE TABLE
+	.IIF	NDF,DPT$M_SNAPSHOT,	DPT$M_SNAPSHOT	=	2048	;Pre VMS V5.2
+	$DYNDEF			;DEFINE DYNAMIC STRUCTURE CODES
+	$FKBDEF			;DEFINE FORK BLOCK CODES
+	$IODEF			;DEFINE I/O FUNCTION CODES
+.IF	NDF,VMS_V5
+	$IPLDEF			;DEFINE INTERRUPT PRIORITY LEVELS
+.ENDC
+	$IRPDEF			;DEFINE I/O REQUEST PACKET
+	$PCBDEF			;DEFINE PROCESS CONTROL BLOCK
+	$PHDDEF			;DEFINE PROCESS HEADER
+	$PRVDEF			;DEFINE VMS PRIVS
+	$TQEDEF			;DEFINE TIMER QUEUE ENTRY
+	$UCBDEF			;DEFINE UNIT CONTROL BLOCK
+	$VECDEF			;DEFINE VECTOR OFFSETS
+;
+
+	.SBTTL	DRIVER PROLOGUE TABLE
+;+ ---
+;
+; DRIVER CHARACTERISTICS
+;
+;- ---
+.IF	NDF,VMS_V5
+	DPTAB	       -
+			END=LAV_END,	       -;END OF DRIVER (SIZE)
+			ADAPTER=NULL,	       -;UNIBUS DEVICE
+			UCBSIZE=UCB$C_Length,  -;UNIT CONTROL BLOCK LENGTH
+			MAXUNITS=1,	       -;ONLY ONE LAV0 DEVICE
+			UNLOAD=LAV_UNLOAD,     -;UNLOAD ROUTINE
+			NAME=LAVDRIVER		;DRIVER NAME
+.IFF
+	DPTAB	       -
+			END=LAV_END,	       -;END OF DRIVER (SIZE)
+			ADAPTER=NULL,	       -;UNIBUS DEVICE
+			UCBSIZE=UCB$C_Length,  -;UNIT CONTROL BLOCK LENGTH
+			MAXUNITS=1,	       -;ONLY ONE LAV0 DEVICE
+			UNLOAD=LAV_UNLOAD,     -;UNLOAD ROUTINE
+			NAME=LAVDRIVER,        -;DRIVER NAME
+			FLAGS=DPT$M_SNAPSHOT,  -;SNAPSHOT SYSTEM OK
+			SMP=YES			;Works under SMP
+.ENDC
+;+ ---
+;
+; INITIALIZATION INFORMATION
+;
+;- ---
+	DPT_STORE	INIT
+.IF	NDF,VMS_V5
+	DPT_STORE	UCB,UCB$B_FIPL,B,8	;FORK IPL LEVEL
+.IFF
+	DPT_STORE	UCB,UCB$B_FLCK,B,SPL$C_IOLOCK8 ;FORK SPINLOCK
+.ENDC
+	DPT_STORE	UCB,UCB$B_DIPL,B,21	;DEVICE IPL LEVEL (BR5 = 21)
+	DPT_STORE	UCB,UCB$L_DEVCHAR,L,   -;DEVICE CHARACTERISTICS:
+		       <-
+			DEV$M_AVL!	       -;   DEVICE AVAILABLE
+			DEV$M_REC!	       -;   RECORD ORIENTED
+			DEV$M_IDV!	       -;   INPUT DEVICE
+			DEV$M_SHR	       -;   SHARED
+		       >
+	DPT_STORE	UCB,UCB$W_DEVBUFSIZ,   -;DEVICE BUFFER SIZE
+				W,36		;    (36 bytes)
+;+ ---
+;
+; RE-INITIALIZATION INFORMATION
+;
+;- ---
+	DPT_STORE	REINIT
+	DPT_STORE	DDB,DDB$L_DDT,D,LAV$DDT ;DRIVER DISPATCH TABLE
+	DPT_STORE	CRB,		       -;CONTROLLER INITIALIZATION ROUTINE
+			 CRB$L_INTD+VEC$L_INITIAL,D,-
+				LAV_CONTROLLER_INIT
+	DPT_STORE	CRB,		       -;UNIT INITIALIZATION ROUTINE
+			 CRB$L_INTD+VEC$L_UNITINIT,D,-
+				LAV_UNIT_INIT
+	DPT_STORE	END
+;
+
+	.SBTTL	DRIVER DISPATCH TABLE
+;+ ---
+;
+; ADDRESSES OF VARIOUS DRIVER ENTRY POINTS
+;
+;- ---
+	DDTAB	-
+		 DEVNAM=LAV,	       -;DEVICE NAME
+		 START=0,	       -;ADDRESS OF START I/O ENTRY POINT
+		 UNSOLIC=0,	       -;ADDRESS OF UNSOLICITED INT. ROUTINE
+		 FUNCTB=LAV_FUNCTABLE, -;ADDRESS OF FUNCTION DECISION TABLE
+		 CANCEL=0,	       -;ADDRESS OF CANCEL I/O ENTRY POINT
+		 REGDMP=0,	       -;ADDRESS OF REGISTER DUMP ROUTINE
+		 DIAGBF=0,	       -;SIZE OF DIAGNOSTIC BUFFER
+		 ERLGBF=0		;SIZE OF ERROR LOG BUFFER
+;
+
+	.SBTTL	FUNCTION DECISION TABLE
+LAV_FUNCTABLE:
+;+ ---
+;
+; SPECIFY LEGAL FUNCTION CODES
+;
+;- ---
+	FUNCTAB ,	       -;LEGAL FUNCTION CODE ENTRY
+		<	       -;
+		 READVBLK,     -;READ VIRTUAL BLOCK
+		 READLBLK,     -;READ LOGICAL BLOCK
+		 READPBLK,     -;READ PHYSICAL BLOCK
+		 WRITEVBLK,    -;WRITE VIRTUAL BLOCK
+		 WRITELBLK,    -;WRITE LOGICAL BLOCK
+		 WRITEPBLK,    -;WRITE PHYSICAL BLOCK
+		>
+;+ ---
+;
+; SPECIFY BUFFERED I/O FUNCTION CODES
+;
+;- ---
+	FUNCTAB ,	       -;BUFFERED FUNCTION CODE ENTRY
+		<>		;NONE
+;+ ---
+;
+; SPECIFY 1ST FDT ROUTINE
+;
+;- ---
+	FUNCTAB GET_LOAD_AVE,  -;GET THE CURRENT LOAD AVERAGES
+		<	       -;USED BY:
+		 READVBLK,     -;READ VIRTUAL BLOCK
+		 READLBLK,     -;READ LOGICAL BLOCK
+		 READPBLK      -;READ PHYSICAL BLOCK
+		>		;
+;+ ---
+;
+; SPECIFY 2ND FDT ROUTINE
+;
+;- ---
+	FUNCTAB SET_PRIORITIES, -;SET WHICH PRIORITIES ARE SCANNED
+		<		-;USED BY:
+		 WRITEVBLK,	-;WRITE VIRTUAL BLOCK
+		 WRITELBLK,	-;WRITE LOGICAL BLOCK
+		 WRITEPBLK	-;WRITE PHYSICAL BLOCK
+		>		;
+;
+
+	.SBTTL	READ FDT ROUTINE
+;+ ---
+;
+; GET_LOAD_AVE		READ FDT ROUTINE
+;
+; FUNCTIONAL DESCRIPTION:
+;
+;	All this routine does is verify the read arguments and return M1->M15
+;
+; INPUTS:
+;
+;	R3 = I/O Packet address
+;	R4 = Current Process Control Block address
+;	R5 = Unit Control Block Address
+;	R6 = Channel Control Block Address
+;	R7 = Function Code
+;	R8 = Scratch
+;	R9 = Scratch
+;
+;	0(AP) --> Read Size
+;	4(AP) --> Read Buffer
+;
+; OUTPUTS:
+;
+;	none
+;
+;- ---
+GET_LOAD_AVE:
+
+;+ ---
+; Get Read Size (limited to 36 bytes)
+;- ---
+	MOVZWL	4(AP),R0			;Get Read Size
+	CMPL	R0,#36				;Bigger than 36??
+	BLEQU	10$				;No:
+	MOVL	#36,R0				;Yes: Truncate to 36 bytes
+10$:
+;+ ---
+; Make sure that the buffer is writeable
+;- ---
+	IFNOWRT R0,@(AP),ACCVIO			;Return SS$_ACCVIO if no write
+;+ ---
+; Move the data
+;- ---
+	PUSHR	#^M<R0,R1,R2,R3,R4,R5>		;Be conservative!!!
+	MOVC3	R0,M1,@(AP)			;Move the Data
+	POPR	#^M<R0,R1,R2,R3,R4,R5>		;Restore registers
+;+ ---
+; Complete the I/O request
+;- ---
+	ASHL	#16,R0,R0			;Set transfer size
+	BISW2	#SS$_NORMAL,R0			;Set Completion code
+	JMP	G^EXE$FINISHIOC			;Complete the request
+
+
+;+ ---
+; Return an access violation
+;- ---
+ACCVIO:
+	MOVZWL	#SS$_ACCVIO,R0			;Set return code
+	CLRL	R1
+	JMP	G^EXE$ABORTIO			;Abort the I/O request
+
+
+	.SBTTL	WRITE FDT ROUTINE
+;+ ---
+;
+; SET_PRIORITIES	WRITE FDT ROUTINE
+;
+; FUNCTIONAL DESCRIPTION:
+;
+;	All this routine does is verify the write arguments and change the
+;	priorities mask.
+;
+; INPUTS:
+;
+;	R3 = I/O Packet address
+;	R4 = Current Process Control Block address
+;	R5 = Unit Control Block Address
+;	R6 = Channel Control Block Address
+;	R7 = Function Code
+;	R8 = Scratch
+;	R9 = Scratch
+;
+;	0(AP) --> Write Size
+;	4(AP) --> Write Buffer
+;
+; OUTPUTS:
+;
+;	none
+;
+;- ---
+SET_PRIORITIES:
+;+ ---
+; Check privs (must have CMKRNL)
+;- ---
+
+	ASSUME	PHD$Q_PRIVMSK EQ 0
+	BBC	#PRV$V_CMKRNL,@PCB$L_PHD(R4),NOPRIV
+
+;+ ---
+; Get Write Size (limited to 4 bytes)
+;- ---
+	MOVZWL	4(AP),R0			;Get Write Size
+	CMPL	R0,#4				;Bigger than 4??
+	BLEQU	10$				;No:
+	MOVL	#4,R0				;Yes: Truncate to 4 bytes
+10$:
+;+ ---
+; Make sure that the buffer is readable
+;- ---
+	IFNORD	R0,@(AP),ACCVIO			;Return SS$_ACCVIO if no write
+;+ ---
+; Move the data
+;- ---
+	MOVL	@(AP),PRIORITY_MASK
+;+ ---
+; Complete the I/O request
+;- ---
+	ASHL	#16,R0,R0			;Set transfer size
+	BISW2	#SS$_NORMAL,R0			;Set Completion code
+	JMP	G^EXE$FINISHIOC			;Complete the request
+
+;+ ---
+; Return and access violation
+;- ---
+NOPRIV:
+	MOVZWL	#SS$_NOPRIV,R0			;Set return code
+	CLRL	R1
+	JMP	G^EXE$ABORTIO			;Abort the I/O request
+
+
+	.SBTTL	CONTROLLER INITIALIZATION ROUTINE
+;+ ---
+;
+; ROUTINE CALLED WHEN THE LOADING PROCEDURE SETS UP THE CONTROLLER
+;
+; INPUT REGISTERS:
+;	R0 = SCRATCH
+;	R5 = ADDRESS OF UNIT CONTROL BLOCK
+;
+; REGISTERS MODIFIED:
+;	R0 = SCRATCH
+;
+; SIDE EFFECTS:
+;	LOAD AVERAGE WATCHER IS SET UP
+;
+;- ---
+LAV_CONTROLLER_INIT:
+	TSTL	HAVEINITED		; If power failure recovery,
+	BEQL	1$		       ; don't reenter the TQE block.
+	RSB
+1$:	MOVL	#1,HAVEINITED
+
+; SET LOAD AVES TO ZERO
+
+	CLRF	M1
+	CLRF	M5
+	CLRF	M15
+	CLRF	P1
+	CLRF	P5
+	CLRF	P15
+	CLRF	Q1
+	CLRF	Q5
+	CLRF	Q15
+
+; SET UP THE LOAD AVERAGE WATCHING CODE (INSERT THE TIMER QUEUE ENTRY)
+;
+; Fork to a lower IPL
+;
+	MOVQ	R4,-(SP)	    ; Not allowed to modify R4 or R5
+	MOVAQ	FKB,R5
+	PUSHAB	10$		    ; Trick EXE$FORK into returning to us.
+	PUSHAB	20$		    ; Address to fork to
+	JMP	G^EXE$FORK
+10$:
+	MOVQ	(SP)+,R4	    ; Restore R4, R5
+15$:	RSB			    ; Return from unit init routine
+;
+; Now running at IPL 6
+;
+20$:	MOVAB	UPDATE_LOAD_AVERAGE,TQE_PC
+	MOVAL	TQE,R5
+	MOVB	#1,RUNNING	    ; CURRENTLY RUNNING
+	CLRB	STOPPING	    ; AND NOT STOPPING
+.IF	NDF,VMS_V5
+	MOVQ	@#EXE$GQ_SYSTIME,TQE_DUE
+	INSQUE	TQE,@#EXE$GL_TQFL
+.IFF
+	READ_SYSTIME R0
+	JSB	G^EXE$INSTIMQ
+.ENDC
+30$:	RSB					;AND RETURN
+;
+
+	.SBTTL	CONTROLLER UNLOAD ROUTINE
+;+ ---
+;
+; ROUTINE CALLED WHEN THE DRIVER IS RELOADED
+;
+; INPUT REGISTERS:
+;	R0 = SCRATCH
+;	R5 = ADDRESS OF UNIT CONTROL BLOCK
+;
+; REGISTERS MODIFIED:
+;	R0 = SCRATCH
+;
+; SIDE EFFECTS:
+;	1st call TQE entry is removed
+;	2nd call driver is unloaded
+;- ---
+LAV_UNLOAD:
+	TSTB	RUNNING		    ; If not running, unload
+	BNEQ	10$
+	MOVL	#SS$_NORMAL,R0	    ; If not running, ok to unload driver
+	RSB
+10$:	MOVB	#1,STOPPING	    ; SET THE STOPPING FLAG
+	CLRL	R0
+	RSB
+;
+
+	.SBTTL	UNIT INITIALIZATION ROUTINE
+;+ ---
+;
+; ROUTINE CALLED WHEN THE LOADING PROCEDURE SETS UP THE UNIT.
+;  THE DEVICE ONLINE BIT IS SET IN THE UCB.
+;
+; INPUT REGISTERS:
+;	R0 = SCRATCH
+;	R5 = ADDRESS OF UNIT CONTROL BLOCK
+;
+; REGISTERS MODIFIED:
+;	R0 = SCRATCH
+;
+; SIDE EFFECTS:
+;	UNIT ONLINE BIT IS SET IN UCB
+;
+;- ---
+LAV_UNIT_INIT:
+	BISW	#UCB$M_ONLINE,UCB$W_STS(R5)	;SET STATUS = ONLINE
+	RSB
+;
+
+	.SBTTL	LOCAL DATA
+;+ ---
+; Local Data for the Load Average Watcher
+;- ---
+M1:	.FLOAT	0.0				;1  Min. Load Ave.
+M5:	.FLOAT	0.0				;5  Min. Load Ave.
+M15:	.FLOAT	0.0				;15 Min. Load Ave.
+
+P1:	.FLOAT	0.0				;1  Min. Priority Ave.
+P5:	.FLOAT	0.0				;5  Min. Priority Ave.
+P15:	.FLOAT	0.0				;15 Min. Priority Ave.
+
+Q1:	.FLOAT	0.0				;1  Min. Ave disk queue len
+Q5:	.FLOAT	0.0				;5  Min. Ave disk queue len
+Q15:	.FLOAT	0.0				;15 Min. Ave disk queue len
+
+F1:	.FLOAT	0.983471453			;1 min. load ave. constants
+F11:	.FLOAT	0.016528547
+
+F2:	.FLOAT	0.996672213			;5 min. load ave. constants
+F12:	.FLOAT	0.003327787
+
+F3:	.FLOAT	0.998889506			;15 min. load ave. constants
+F13:	.FLOAT	0.001110494
+
+
+TQE:	.LONG	0				;TIMER QUEUE ELEMENT (FLINK)
+	.LONG	0				;(BLINK)
+	.WORD	TQE_LEN				;SIZE
+	.BYTE	DYN$C_TQE			;TYPE
+	.BYTE	TQE$C_SSREPT			;REQUEST == REPEAT
+TQE_PC: .LONG	0				;PC TO CALL
+	.LONG	0				;N/A
+	.LONG	0				;N/A
+TQE_DUE:.LONG	0				;DUE TIME
+	.LONG	0
+	.LONG	100000*100			;Repeat time (1 Sec.)
+	.LONG	0
+TQE_LEN = .-TQE
+
+HAVEINITED:
+	.LONG	0				; Set if alread initied
+RUNNING:
+	.BYTE	0				; True if TQE entry is in queue.
+STOPPING:
+	.BYTE	0				; SET TO REQUEST TQE TO ABORT
+PRIORITY_MASK:
+	.LONG	0				; Check all priorities
+
+FKB:	.LONG	0				; FQFL
+	.LONG	0				; FQBL
+	.WORD	0				; SIZE
+	.BYTE	DYN$C_FRK			; TYPE
+	.BYTE	IPL$_TIMER			; IPL LOW ENOUGH TO LOCK TIMER
+FKB_PC: .LONG	0				; PC
+	.LONG	0				; R3
+	.LONG	0				; R4
+
+	.SBTTL	Load Average Watching Code
+
+UPDATE_LOAD_AVERAGE:				;We link into the
+						;VMS kernel via the timer q
+						;and is entered by JSB when
+						;each 1 sec. interval ends.
+						;R0-R4 are available
+
+;---
+; See if we are supposed to abort
+;---
+	TSTB	STOPPING
+	BEQL	10$
+.IF	NDF,VMS_V5
+	MOVAL	@#EXE$AL_TQENOREPT,R5
+.IFF
+	MOVL	G^EXE$AR_TQENOREPT,R5
+.ENDC
+	CLRB	RUNNING
+	RSB
+10$:
+
+	CLRL	R2				;Initialize the run count=0
+;+ ---
+; Check the run queues for the number of processes in 'COM' state
+;- ---
+	CLRL	R1				;Initialize summary word pos=0
+
+.IF	NDF,VMS_V5
+	DSBINT	#IPL$_SYNCH
+.IFF
+	LOCK	SCHED
+.ENDC
+	BICL3	PRIORITY_MASK,@#SCH$GL_Comqs,R4 ;Get masked queues
+Find_Comq:					;Find a run queue with entries
+	SUBL3	R1,#32,R0			;Calculate #bits left (32-R1)
+	FFS	R1,R0,R4,R1			;Look for an active queue
+	BEQL	Ncomo				;None: look for procs waiting
+						;	for inswap
+	MOVAQ	@#SCH$AQ_Comh[R1],R0		;Got one: get its queue header
+	MOVL	R0,R3				;Save terminating address
+
+10$:	MOVL	(R0),R0				;Get the next process in the q
+	CMPL	R0,R3				;End of queue?
+	BEQL	20$				;Yes: look for next queue
+	INCL	R2				;No: count this process
+	BRB	10$				;and try the next one
+
+20$:	INCL	R1				;Queue done, look for next one
+	BRB	Find_Comq
+
+;+ ---
+; Check the COMO queues for the number of processes in 'COM' state (outswap)
+;- ---
+Ncomo:	CLRL	R1				;Initialize summary word pos=0
+	BICL3	PRIORITY_MASK,@#SCH$GL_Comoqs,R4 ;Get masked queues
+Find_Comoq:					;Find a run queue with entries
+	SUBL3	R1,#32,R0			;Calculate #bits left (32-R1)
+	FFS	R1,R0,R4,R1			;Look for an active queue
+	BEQL	Nwait				;None: look for procs waiting
+						;	for resources
+	MOVAQ	@#SCH$AQ_Comoh[R1],R0		;Got one: get its queue header
+	MOVL	R0,R3				;Save terminating address
+
+10$:	MOVL	(R0),R0				;Get the next process in the q
+	CMPL	R0,R3				;End of queue?
+	BEQL	20$				;Yes: look for next queue
+	INCL	R2				;No: count this process
+	BRB	10$				;and try the next one
+
+20$:	INCL	R1				;Queue done, look for next one
+	BRB	Find_Comoq
+
+;+ ---
+; Count processes in collided page wait
+;- ---
+Nwait:
+	MOVAQ	@#SCH$GQ_Colpgwq,R0		;Get the collided page wait q
+
+10$:	MOVL	(R0),R0				;Get the next process in the q
+	CMPL	R0,#SCH$GQ_Colpgwq		;End of queue?
+	BEQL	Npfw				;Yes: look at page fault waits
+	INCL	R2				;No: count this process
+	BRB	10$				;and try the next one
+
+;+ ---
+; Count processes in page fault wait
+;- ---
+Npfw:
+	MOVAQ	@#SCH$GQ_PfwQ,R0		;Get the page fault wait q
+
+10$:	MOVL	(R0),R0				;Get the next process in the q
+	CMPL	R0,#SCH$GQ_Pfwq			;End of queue?
+	BEQL	Nfpw				;Yes: look at free page waits
+	INCL	R2				;No: count this process
+	BRB	10$				;and try the next one
+
+;+ ---
+; Count processes in free page wait
+;- ---
+Nfpw:
+	MOVAQ	@#SCH$GQ_FpgwQ,R0		;Get the free page wait q
+
+10$:	MOVL	(R0),R0				;Get the next process in the q
+	CMPL	R0,#SCH$GQ_Fpgwq		;End of queue?
+	BEQL	Count_Done			;Yes: all done
+	INCL	R2				;No: count this process
+	BRB	10$				;and try the next one
+
+Count_Done:
+.IF	NDF,VMS_V5
+	ENBINT
+.IFF
+	UNLOCK	SCHED
+.ENDC
+.IF	NDF,VMS_V5
+;
+;   Adjust for the NULL job, which might be missing if the mask
+;   exclused the priority 0 queue.
+;
+	BBS	#31,PRIORITY_MASK,10$
+	DECL	R2				; SUBTRACT THE NULL JOB
+10$:
+;
+;   Adjust for the CURrent job if the priority is high enough.
+;
+	BBS	@#SCH$GB_PRI,PRIORITY_MASK,20$
+	INCL	R2				; ADD THE CURRENT JOB
+20$:
+.ENDC
+.IF	NDF,VMS_V5
+	MOVL	G^SCH$GB_PRI,R3
+.IFF
+;
+;   Count done, now scan through each CPU. Store the LOWEST priority
+;   found and the number of executing CPUs.
+;
+	CLRL	R3				; Lowest priority
+	CLRL	R4				; Number of CPUs active
+	CLRL	R1				; Current CPU index
+11$:	SUBL3	R1,#32,R0			;Calculate #bits left (32-R1)
+	FFS	R1,R0,@#SMP$GL_ACTIVE_CPUS,R1	;Look for an active CPU
+	BEQL	35$
+15$:	MOVL	g^SMP$GL_CPU_DATA[R1],R0	; Get the CPU database
+	BEQL	30$				; This CPU doesn't exist
+	INCL	R4				; Seen one more CPU
+	CMPL	CPU$L_CURPCB(R0),@#SCH$AR_NULLPCB ; Running 'the null job'?
+	BEQL	20$
+	MOVZBL	CPU$B_CUR_PRI(R0),-(SP)
+	BBS	(SP)+,PRIORITY_MASK,20$		; but priority is 'masked'
+	INCL	R2				; CPU is active.
+20$:	CMPB	CPU$B_CUR_PRI(R0),R3		; Store the lowest executing priority
+	BLEQU	30$
+	MOVB	CPU$B_CUR_PRI(R0),R3
+30$:	INCL	R1
+	BRB	11$				; Check for all 32 CPUs.
+35$:
+.ENDC
+
+;+ ---
+; Count done, calculate the load ave.
+;- ---
+	CVTLF	R2,R2				;Float the count of processes
+.IF	DF,VMS_V5
+	CVTLF	R4,R4				;Float the count of CPUs
+	DIVF2	R4,R2				;Load is Processes/CPUs.
+.ENDC
+; 1 min. load ave.
+	MULF3	R2,F11,R0			;La=OldLa*F+NewLa*(1-F)
+	MULF3	M1,F1,R1
+	ADDF3	R0,R1,M1
+; 5 min. load ave.
+	MULF3	R2,F12,R0
+	MULF3	M5,F2,R1
+	ADDF3	R0,R1,M5
+; 15 min. load ave.
+	MULF3	R2,F13,R0
+	MULF3	M15,F3,R1
+	ADDF3	R0,R1,M15
+
+	CMPB	R3,#255				; NULL JOB
+	BNEQ	40$
+	MOVB	#31,R3				; TREAT AS PRIORITY 0
+40$:	SUBB3	R3,#31,R2
+	CVTBF	R2,R2
+; 1 min. priority ave.
+	MULF3	R2,F11,R0			;La=OldLa*F+NewLa*(1-F)
+	MULF3	P1,F1,R1
+	ADDF3	R0,R1,P1
+; 5 min. priority ave.
+	MULF3	R2,F12,R0
+	MULF3	P5,F2,R1
+	ADDF3	R0,R1,P5
+; 15 min. priority ave.
+	MULF3	R2,F13,R0
+	MULF3	P15,F3,R1
+	ADDF3	R0,R1,P15
+
+;
+;   Update the disk queue length information
+;
+QUEUE_LEN:
+	CLRL	R2				; R2 = Sun of queue lengths
+	PUSHR	#^M<R10,R11>
+	CLRQ	R10				; Indicate start of I/O d.b.
+10$:	JSB	G^IOC$SCAN_IODB			; Get next DDB and UCB into R10, R11
+	BLBC	R0,40$				;  no more, done
+	CMPB	#DC$_DISK,UCB$B_DEVCLASS(R10)	; Is this controller a disk?
+	BEQL	20$
+	CLRL	R10				; Go for next controller
+	BRB	10$
+20$:	BBC	#DEV$V_MNT,UCB$L_DEVCHAR(R10),10$ ; Skip if not mounted
+	BITL	#<DEV$M_CDP+DEV$M_SSM>,UCB$L_DEVCHAR2(R10) ; class driver or shadow set member?
+	BNEQ	10$				;	      if so, skip
+	CVTWL	UCB$W_QLEN(R10),R0		; Get queue length
+	BGEQ	30$
+	CLRL	R0				; negative queu length is a temporary condition
+30$:	CMPL	R0,R2
+	BLEQ	10$
+	MOVL	R0,R2
+	BRB	10$
+40$:	POPR	#^M<R10,R11>			; restore registers
+
+	CVTLF	R2,R2				;Float the count
+; 1 min. queue ave.
+	MULF3	R2,F11,R0			;La=OldLa*F+NewLa*(1-F)
+	MULF3	Q1,F1,R1
+	ADDF3	R0,R1,Q1
+; 5 min. queue ave.
+	MULF3	R2,F12,R0
+	MULF3	Q5,F2,R1
+	ADDF3	R0,R1,Q5
+; 15 min. queue ave.
+	MULF3	R2,F13,R0
+	MULF3	Q15,F3,R1
+	ADDF3	R0,R1,Q15
+	RSB					;Return to clock dispatcher
+
+
+
+	.SBTTL	END OF DRIVER
+;+ ---
+;
+; END OF DRIVER
+;
+;- ---
+LAV_END:					;LET DPTAB KNOW THE DRIVER SIZE
+;
+	.END

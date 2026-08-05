@@ -1,0 +1,83 @@
+From:	MX%"MACRO32@WKUVX1.BITNET" 25-APR-1992 05:15:43.88
+To:	GOATHUNTER
+CC:	
+Subj:	Re: How do you find the Load Average?
+
+Return-Path: <MacroMan@WKUVX1.BITNET>
+Errors-To: MacroMan@WKUVX1.BITNET
+X-ListName: "VMS Internals, MACRO, and BLISS Discussions"
+    <MACRO32@WKUVX1.BITNET>
+Received: from CUNYVM.BITNET (MAILER) by WKUVX1 (MX V3.1A) with BSMTP; Sat, 25
+          Apr 1992 05:15:33 CDT
+Received: from CUNYVM by CUNYVM.BITNET (Mailer R2.08) with BSMTP id 1385; Sat,
+          25 Apr 92 06:08:56 EDT
+Received: from MVB.SAIC.COM by CUNYVM.CUNY.EDU (IBM VM SMTP V2R2) with TCP;
+          Sat, 25 Apr 92 06:08:55 EDT
+Relay-Version: VMS News - V6.0-3 14/03/90 VAX/VMS V5.4; site arizona.edu
+X-Newsgroups: vmsnet.internals
+Subject: Re: How do you find the Load Average?
+Message-ID: <24APR199217213208@eql.caltech.edu>
+From: <rankin@eql.caltech.edu>
+Reply-To: MACRO32@WKUVX1.BITNET
+Date: 25 Apr 92 00:21:00 GMT
+Sender: news@cco.caltech.edu
+References: <1992Apr24.005340.1@jaguar.uofs.edu>
+Organization: California Institute of Technology
+Summary: need LAVDRIVER, then read device LAV0:
+Article-I.D.: eql.24APR199217213208
+News-Software: VAX/VMS VNEWS 1.41
+Nntp-Posting-Host: eql.caltech.edu
+Lines: 51
+X-Gateway-Source-Info: USENET
+
+In article <1992Apr24.005340.1@jaguar.uofs.edu>, jar12@jaguar.uofs.edu writes...
+> What I'd like to do is write some code (in DCL) to decide whether or not
+> to run these programs based on the current load average.  So my question
+> is:  How do I get the load average from memory?
+
+     VMS does not maintain load average per se, but there is a public
+domain device driver available which does the job.  It's been posted
+several times (most recently to Info-VAX by Ken Adelman), and is available
+from DECUS (on some of the symposium collection tapes at least).  It's
+included with MultiNet for use by FINGER, which is why it's already
+present on your system.
+
+     You can't simply extract the value from memory like you did with
+the number of processes.  However, you can obtain the value from the
+LAV0 device, even from DCL.  The biggest problem is that it's in binary
+floating point format, which DCL has no facilities for dealing with.
+
+     This command procedure should be enough to get you started.  If you
+read a "record" from the current incarnation of LAV0, you'll get a 3 x 3
+array of F-float values.  The 1st three are approximate number of processes
+trying to use the CPU, averaged over the last minute, last 5 minutes, and
+last 15 minutes.  The next three have the average execution priority over
+those intervals, and the last three deal with I/O queue length of the
+busiest disk on the system.  Your interest is in the very first of the
+9 values:  approximate load during the past minute.
+
+		Pat Rankin, rankin@eql.caltech.edu
+
+$!lav.com
+$!   get load average data
+$  open/read/share lav_device LAV0:
+$  read lav_device lav_data             !36 bytes, 3 x 3 F-float array
+$  close lav_device
+$!   deal with current load average
+$  lav = f$extract(0,4,lav_data)        !1st 4 bytes, 1 F-float value
+$!   extract and construct exponent and fraction
+$  frac = ""                            !init to 0
+$  frac[0,16] = f$cvui(16,16,lav)       !mantissa bits 16..31
+$  frac[16,7] = f$cvui(0,7,lav)         !mantissa bits  0..6
+$  frac[23,1] = 1                       !implied bit from normalization
+$  frac = f$cvui(0,32,frac)             !convert to integer
+$  exp = f$cvui(7,8,lav) - 128          !exponent (base 2, excess 128)
+$!   convert to decimal integer, in 100ths
+$  div = ""                             !init to 0
+$  div[24-exp,1] = 1                    !divisor is 2^24 adjusted by exponent
+$  div = f$cvui(0,32,div)               !convert to integer
+$  val = frac / (div / 100)             !value is often ~1.0, so scale by 100
+$!   format the result
+$  write sys$output val
+$  val = f$fao("!UL.!2ZL",val/100,val-((val/100)*100))
+$  write sys$output val

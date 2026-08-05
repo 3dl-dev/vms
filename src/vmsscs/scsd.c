@@ -588,6 +588,8 @@ static struct scs_svc_port *scsd_svc(void)
  * the numbers that say what the SDIR queue actually did on a run -- in
  * particular sdir_busy_replies, which the OVMX design-choice-3 note in
  * scs_sdir.h predicts is 0 because the daemon's receive loop cannot reach it.
+ * tests/vmsscs/test_scsd_wire.c turns that prediction into a check: it sums
+ * this counter across every case in the file and asserts the total is 0.
  */
 static unsigned long sdir_connect_scans = 0;   /* inbound CONNECT_REQs scanned */
 static unsigned long sdir_no_such_sysap = 0;   /* p. 2-48 refusals emitted */
@@ -1024,8 +1026,10 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *
  *   CHOKED, and new in vms-7fe:
  *     scsd_send_sdir_refusal()     the 66-byte CONNECT_RSP that DECLINES a
- *                                  connect request -- p. 2-48 "no such SYSAP"
- *                                  and p. 2-50 "busy ... try again later". Not
+ *                                  connect request -- p. 2-48 "no such SYSAP",
+ *                                  and p. 2-50 "busy ... try again later" as a
+ *                                  status value it will take but that THIS FILE
+ *                                  NEVER PASSES IT (see the function). Not
  *                                  a service emitter, because the p. 2-48 scan
  *                                  failed before any SYSAP saw the request, so
  *                                  there is no CDT and no Figure 2-14
@@ -1621,6 +1625,22 @@ static int cm_send_config_burst(int sock, int ifindex, struct peer_state *ps,
  * 'no such SYSAP' error." p. 2-50: a second concurrent request gets "a response
  * that essentially says 'busy ... try again later'".
  *
+ * ONLY THE FIRST OF THOSE TWO IS REACHABLE FROM THIS FILE, and the distinction
+ * is load-bearing enough to state before anything else. The p. 2-50 busy reply
+ * needs a listening CDT still in CONNECT RECEIVED when a DIFFERENT requester's
+ * frame arrives; scsd_handle_frame() answers synchronously and returns the SDIR
+ * to LISTEN before it returns (scs_sdir.h OVMX DESIGN CHOICE 3), so the receive
+ * loop never holds that state between frames. MEASURED, not predicted:
+ * tests/vmsscs/test_scsd_wire.c drives scsd_handle_frame() over every captured
+ * and synthesized frame it holds, sums `sdir_busy_replies` across every case,
+ * and asserts the total is 0; the exit summary prints busy-sent so a live lab
+ * run stays falsifiable too. The BUSY
+ * branch below is written because scs_sdir_connect_req() can return
+ * SCS_SDIR_BUSY through its API, not because scsd.c has ever taken it; the only
+ * caller that takes it is tests/vmsscs/test_scs_sdir.c, at module level. NO
+ * TEST IN test_scsd_wire.c ASSERTS A BUSY FRAME, because there is none to
+ * assert.
+ *
  * WHY THIS IS NOT ONE OF THE THREE SERVICE EMITTERS, and why it is allowed to
  * call a connection-control builder (tests/vmsscs/test_scsd_send_sites.py check
  * 7 lists it beside them): the census exists to stop a hand-built frame putting
@@ -1680,6 +1700,10 @@ static int scsd_send_sdir_refusal(int sock, int ifindex, struct peer_state *ps,
         return 0;
     }
     if (status == SCS_SDIR_STATUS_BUSY) {
+        /* NOT REACHED IN ANY RUN OF THIS DAEMON -- see the function header.
+         * Counted rather than asserted away: test_scsd_wire.c reds if this
+         * line ever executes, and the exit summary prints busy-sent so a live
+         * run reports it too. */
         sdir_busy_replies++;
     } else {
         sdir_no_such_sysap++;
@@ -1757,6 +1781,12 @@ static int scsd_sdir_admit(int sock, int ifindex, const uint8_t *our_hw_mac,
     if (r == SCS_SDIR_BADARG) {
         return 0;
     }
+    /* The SCS_SDIR_BUSY arm is unreachable from this daemon (scs_sdir.h DESIGN
+     * CHOICE 3): a synchronous answer cannot leave a listening CDT in CONNECT
+     * RECEIVED for a second requester to collide with, so every refusal scsd.c
+     * has ever sent is the no-such-SYSAP one. The arm exists because the module
+     * API can return BUSY, and it is written here rather than asserted away so
+     * that a future asynchronous ACCEPT does not silently send status 0. */
     uint16_t status = (r == SCS_SDIR_BUSY) ? SCS_SDIR_STATUS_BUSY
                                            : SCS_SDIR_STATUS_NO_SUCH_SYSAP;
     char why[64];
@@ -2964,8 +2994,12 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * SDIR containing a SYSAP name matching the target name
                  * contained in the connect request." The target name is the
                  * GROUNDED 16-byte field at payload [62:78] (spec sec 4(h)(2)).
-                 * A miss or a busy listener refuses inside the helper and this
-                 * branch then does nothing at all.
+                 * A miss refuses inside the helper and this branch then does
+                 * nothing at all. (The helper's OTHER refusal, p. 2-50's busy
+                 * listener, cannot arise here: this branch answers
+                 * synchronously, so no listening CDT is in CONNECT RECEIVED
+                 * when the next frame arrives -- scs_sdir.h DESIGN CHOICE 3,
+                 * measured by test_scsd_wire.c's end-of-run busy total.)
                  *
                  * WHAT REACHES THIS BRANCH, AND HOW NEAR-CERTAIN THE HIT IS.
                  * scs_dir_parse() only sets is_dir_connect_request when the
@@ -2986,6 +3020,17 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                  * (2c)/(2d)/(2e) now cover the hit, the miss and the p. 2-50
                  * state read/restore on THIS branch; deleting the guard reds 21
                  * checks (measured, 2026-08-05).
+                 *
+                 * WHAT THAT COVERAGE IS AND IS NOT, because the bound above
+                 * limits it: (2c)'s hit is the ONLY one of the three that runs
+                 * on a captured frame. (2d)'s miss needs the substituted name
+                 * -- no frame a real VAX sends reaches this branch and misses,
+                 * so the refusal wire shape is pinned but never observed, and
+                 * its status word is an OVMX invention (spec sec 5). (2e)'s
+                 * arrangement -- a listening CDT already in CONNECT RECEIVED --
+                 * THIS LOOP CANNOT PRODUCE at all, so it does not guard the
+                 * synchronous answer it depends on. And no case asserts a
+                 * p. 2-50 busy frame, because none is emittable here.
                  */
                 const struct scs_sdir *dsdir = NULL;
                 if (scsd_sdir_live() &&
@@ -3247,7 +3292,12 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
              * re-delivered rather than refused busy (scs_sdir.h DESIGN CHOICE
              * 4) -- which matters here more than anywhere, because the
              * established VAX retransmits this exact frame until it accepts our
-             * answer and `first` is already false on every repeat.
+             * answer and `first` is already false on every repeat. Note what
+             * that sentence does NOT say: a busy refusal is not merely avoided
+             * here, it is unreachable from this loop at all, because the answer
+             * below is synchronous (DESIGN CHOICE 3) and the SDIR is back in
+             * LISTEN before the next frame is read -- which test_scsd_wire.c
+             * measures with an end-of-run busy total, not a per-case check.
              */
             const struct scs_sdir *msdir = NULL;
             if (scsd_sdir_live() &&
@@ -3746,9 +3796,10 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
         fprintf(out, "  CM-CONFIG-FRAMES=%ld CM-RESPONSES-SENT=%ld PADDED-HELLO-SENT=%ld\n",
                 rx->cm_config_frames, rx->cm_response_sent, rx->padded_sent);
         /* vms-7fe: the SDIR queue as it actually behaved this run. The two
-         * refusal counts are the OVMX-chosen reply codes; BUSY is expected to
-         * be 0 for the reason scs_sdir.h DESIGN CHOICE 3 states, and reporting
-         * it is how that prediction stays falsifiable. */
+         * refusal counts are the OVMX-chosen reply codes; BUSY is 0 for the
+         * reason scs_sdir.h DESIGN CHOICE 3 states -- test_scsd_wire.c measures
+         * that over the daemon's own receive path, and printing it here is how
+         * a LIVE run stays falsifiable as well. */
         {
             const struct scs_sdir_queue *q = scs_svc_sdir(scsd_svc());
             fprintf(out, "  SDIR listening=%u", scs_sdir_count(q));

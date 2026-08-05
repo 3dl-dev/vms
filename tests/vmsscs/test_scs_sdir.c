@@ -17,8 +17,10 @@
  *     case below gets inside it the only way anything can -- a connect-request
  *     handler that itself receives -- which is the module's real code path and
  *     is NOT how the daemon behaves. DO NOT READ THIS FILE AS "OVMX SENDS BUSY
- *     REPLIES". The daemon's exit summary reports busy-sent=0 and that is the
- *     truth.
+ *     REPLIES". tests/vmsscs/test_scsd_wire.c measures the other half of that
+ *     statement -- it sums scsd.c's sdir_busy_replies across every case it runs
+ *     and asserts the total is 0 -- and a live daemon prints busy-sent in its
+ *     exit summary.
  *   - The DAEMON-side behaviour (the SCS$DIR_LOOKUP responder answering from
  *     this queue, the connect scan on both inbound CONNECT_REQ paths, the
  *     refusal frame, and the OVMX_NO_SDIR bracket) is in

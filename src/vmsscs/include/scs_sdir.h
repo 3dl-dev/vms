@@ -103,6 +103,18 @@
  * tools/cluster/scsd_wire_diff.sh byte-diffs the whole replay script against
  * the pre-item tree.
  *
+ * AND THE TWO VALUES ARE NOT EVEN EQUALLY EXERCISED. 0x0002 (no such SYSAP) is
+ * at least emitted by scsd.c under a SYNTHESIZED frame -- test_scsd_wire.c case
+ * (2d) substitutes the 16-byte name field of pcap #30 -- so the refusal's frame
+ * shape is pinned even though its status value is invented. 0x0003 (busy) IS
+ * NEVER EMITTED BY THE DAEMON AT ALL, for the reason DESIGN CHOICE 3 below
+ * gives. That is measured rather than predicted: test_scsd_wire.c accumulates
+ * scsd.c's sdir_busy_replies across every case in the file and asserts the
+ * total is 0, and a live daemon prints busy-sent in its exit summary so the
+ * claim also stays falsifiable in the lab. The only thing that reaches the BUSY
+ * path is tests/vmsscs/test_scs_sdir.c, at this module's API. Anything in this
+ * tree that describes the busy reply should say that.
+ *
  * ==========================================================================
  * OVMX DESIGN CHOICES (labelled, rule 8)
  * ==========================================================================
@@ -211,7 +223,12 @@ extern "C" {
  */
 #define SCS_SDIR_STATUS_OK            0x0000u /* GROUNDED: the golden CONNECT_RSP's [48:50] */
 #define SCS_SDIR_STATUS_NO_SUCH_SYSAP 0x0002u /* OVMX CHOICE -- p. 2-48 "no such SYSAP" */
-#define SCS_SDIR_STATUS_BUSY          0x0003u /* OVMX CHOICE -- p. 2-50 "busy ... try again later" */
+#define SCS_SDIR_STATUS_BUSY          0x0003u /* OVMX CHOICE -- p. 2-50 "busy ... try again later".
+                                               * NEVER PUT ON THE WIRE BY scsd.c: see DESIGN CHOICE 3.
+                                               * MEASURED: test_scsd_wire.c accumulates scsd.c's
+                                               * sdir_busy_replies across every case and asserts the
+                                               * total is 0. The only thing that reaches the BUSY path
+                                               * at all is test_scs_sdir.c, at this module's API. */
 
 /* p. 2-50's two states of a listening CDT. */
 enum scs_sdir_state {
@@ -224,7 +241,9 @@ enum scs_sdir_result {
     SCS_SDIR_DELIVERED = 0,     /* match found, handler called; reply CONNECT_RSP (status OK) */
     SCS_SDIR_NO_SUCH_SYSAP = 1, /* "If none is found, SCS replies with a CONNECT_RSP
                                  * containing the 'no such SYSAP' error" (p. 2-48) */
-    SCS_SDIR_BUSY = 2,          /* p. 2-50 "busy ... try again later" */
+    SCS_SDIR_BUSY = 2,          /* p. 2-50 "busy ... try again later" -- NOT PRODUCIBLE BY
+                                 * scsd.c (DESIGN CHOICE 3); reached only through this
+                                 * module's API, and only by tests/vmsscs/test_scs_sdir.c */
     SCS_SDIR_BADARG = 3         /* NULL queue/name -- not a wire outcome */
 };
 
@@ -278,7 +297,9 @@ struct scs_sdir_queue {
     unsigned long hits;           /* scans that found a matching SDIR */
     unsigned long delivered;      /* connect requests handed to a listening CDT's routine */
     unsigned long no_such_sysap;  /* p. 2-48 refusals */
-    unsigned long busy;           /* p. 2-50 refusals */
+    unsigned long busy;           /* p. 2-50 refusals. Never moved by scsd.c (DESIGN CHOICE 3,
+                                   * measured by test_scsd_wire.c's end-of-run total); moved
+                                   * only by test_scs_sdir.c, through this module's API */
     unsigned long retransmits;    /* re-deliveries under OVMX DESIGN CHOICE 4 */
 };
 
@@ -335,6 +356,14 @@ struct scs_cdt *scs_sdir_listening_cdt(const struct scs_sdir_queue *q,
  *                                        return SCS_SDIR_DELIVERED
  *     match, CONNECT RECEIVED, other
  *       remote_conid                  -> SCS_SDIR_BUSY (p. 2-50)
+ *
+ * THE LAST ROW IS UNREACHABLE FROM scsd.c. Its precondition is a listening CDT
+ * still in CONNECT RECEIVED when a DIFFERENT requester's frame arrives, and the
+ * daemon's receive loop answers synchronously (DESIGN CHOICE 3), so it is never
+ * in that state between frames. Measured, not assumed: test_scsd_wire.c sums
+ * scsd.c's sdir_busy_replies across every case it runs and asserts the total is
+ * 0. tests/vmsscs/test_scs_sdir.c is the only thing that takes that row, and it
+ * does so through this API, not through the daemon.
  *
  * `*sdir_out` (may be NULL) receives the matched SDIR on DELIVERED, so the
  * caller can pass it back to scs_sdir_connect_answered().

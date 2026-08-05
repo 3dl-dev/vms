@@ -409,8 +409,12 @@ CONN_BUILDERS = (
 # vms-7fe adds a FOURTH permitted caller, and it is not an emitter. The rule
 # this check enforces is "no hand-built frame may put A CONNECTION on the wire
 # that no CDT describes". scsd_send_sdir_refusal() builds the 66-byte
-# CONNECT_RSP that DECLINES a connection -- p. 2-48's "no such SYSAP" and
-# p. 2-50's "busy ... try again later". There is no CDT to allocate because the
+# CONNECT_RSP that DECLINES a connection -- p. 2-48's "no such SYSAP" and,
+# in principle, p. 2-50's "busy ... try again later" (which scsd.c never asks
+# it for: the daemon answers synchronously and cannot produce a busy listener --
+# scs_sdir.h DESIGN CHOICE 3, measured by test_scsd_wire.c's end-of-run busy
+# total). There is no CDT
+# to allocate because the
 # p. 2-48 SDIR scan failed before any SYSAP saw the request, and no Figure 2-14
 # transition to take; routing it through scs_reject() would have made the
 # service ask for SEND_REJECT_REQ while the emitter built a CONNECT_RSP. It is

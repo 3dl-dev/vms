@@ -1681,6 +1681,23 @@ For visibility, every field NOT marked GROUNDED above:
   reports `no-such-sysap-sent` and `busy-sent` every run. Kill switch:
   `OVMX_NO_SDIR=1`.
 
+  **The two codes are not equally exercised, and the difference should not be
+  glossed.** `0x0002` (no such SYSAP) is emitted by `scsd.c` under a synthesized
+  frame — `tests/vmsscs/test_scsd_wire.c` case (2d), a 0x5b `CONNECT_REQ` whose
+  16-byte name field is substituted — so the wire shape OVMX would send is at
+  least pinned, even though the status *value* in it is an OVMX invention that
+  no capture can confirm. `0x0003` (busy) is **never emitted by the daemon at
+  all**, in production or in test: reaching it needs a listening CDT still in
+  CONNECT RECEIVED when a *different* requester's frame arrives, and `scsd.c`
+  answers synchronously and returns the CDT to LISTEN before it reads the next
+  frame (OVMX DESIGN CHOICE 3 in `src/vmsscs/include/scs_sdir.h`). That is
+  measured, not predicted: `tests/vmsscs/test_scsd_wire.c` sums the daemon's
+  `sdir_busy_replies` across every case it runs and asserts the total is `0`,
+  and a live daemon prints `busy-sent` in its exit summary. The BUSY path is
+  reached only through the `src/vmsscs/scs_sdir.c` module API, only by
+  `tests/vmsscs/test_scs_sdir.c`. **Do not read that green test as evidence that
+  OVMX sends busy replies.**
+
 - **The AFFIRMATIVE `SCS$DIR_LOOKUP` result encoding stays ungrounded
   (§4(h) gap (c)) — but WHO DECIDES IT is now the SDIR queue (`vms-7fe`).**
   The 16-byte negative marker `"NOT PRESENT HERE"` at `[78:94]` remains the one

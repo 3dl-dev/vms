@@ -1578,10 +1578,25 @@ struct rxworld {
     uint8_t nonce[4];
 };
 
+/*
+ * vms-7fe: THE BUSY-REPLY ACCUMULATOR, so "busy-sent is 0" is a MEASUREMENT
+ * this file re-derives rather than a claim it repeats.
+ *
+ * scsd.c's sdir_busy_replies is zeroed by rxworld_init below, so a per-case
+ * assertion only ever says "not in that case". This carries the count ACROSS
+ * every reset; main() asserts the total at the end. It reds the moment any
+ * frame fed to scsd_handle_frame(), in any case in this file, makes the daemon
+ * emit a p. 2-50 busy CONNECT_RSP -- which OVMX DESIGN CHOICE 3 says it cannot,
+ * because the answer is synchronous and no listening CDT is in CONNECT RECEIVED
+ * between frames. If DESIGN CHOICE 3 ever stops holding, this is what says so.
+ */
+static unsigned long sdir_busy_seen_total = 0;
+
 static void rxworld_init(struct rxworld *r, const uint8_t hw_mac[6],
                          const uint8_t logical[6])
 {
     static const uint8_t lab_nonce[4] = SCS_HELLO_LAB_NONCE_BYTES;
+    sdir_busy_seen_total += sdir_busy_replies; /* before the reset below */
     memset(r, 0, sizeof(*r));
     world_init(&r->w);
     scsd_test_world_reset();
@@ -4074,12 +4089,36 @@ static void test_no_conn_fsm_does_not_turn_into_a_refusal_storm(void)
  *     prefix compare it exploits is production code, and the kill-switch control
  *     in (2d) shows what OVMX did with such a frame before this item: bound the
  *     SCS$DIRECTORY connection for it without ever reading the name.
+ *
+ * AND A THIRD BOUND, ON (2e) RATHER THAN ON THE CLASSIFIER. (2e)'s starting
+ * state -- a listening CDT already in CONNECT RECEIVED -- is one the daemon's
+ * receive loop CANNOT PRODUCE, because it answers synchronously (scs_sdir.h
+ * OVMX DESIGN CHOICE 3). The case hand-builds it through the module API, which
+ * is the only way it exists. So (2e) proves the daemon READS and RESTORES that
+ * state correctly when handed it, and proves nothing about whether the daemon
+ * can be in it; in particular IT WOULD NOT RED if scsd.c's answer stopped being
+ * synchronous. See its own header for the full statement.
+ *
+ * NONE OF THE THREE ASSERTS A p. 2-50 BUSY FRAME, and that is not an omission:
+ * the daemon cannot emit one (same DESIGN CHOICE 3). That is measured at the
+ * bottom of main(), which sums scsd.c's sdir_busy_replies across every case in
+ * this file and asserts 0. The BUSY path itself is exercised only at module
+ * level, in tests/vmsscs/test_scs_sdir.c.
  * ========================================================================== */
 
 /*
  * (2c) THE 0x5b CONNECT_REQ IS SCANNED, AND THE SCAN IS THE THING THAT ADMITS
  * IT. Every counter checked here is moved only by scsd_sdir_admit() ->
  * scs_sdir_connect_req(); none of them can move on the pre-vms-7fe path.
+ *
+ * THE BOUND, RESTATED HERE RATHER THAN LEFT IN THE BLOCK HEADER, because it is
+ * the thing a reader of this case would otherwise over-read: vms-246's
+ * scs_dir_parse() sets is_dir_connect_request only when the name field's first
+ * 13 bytes are "SCS$DIRECTORY", a name OVMX LISTENs for. SO ON THIS BRANCH THE
+ * SCAN CAN ONLY EVER HIT for any frame a real VAX sends. This case proves the
+ * hit is real work; IT CANNOT PROVE A PRODUCTION MISS IS HANDLED, because no
+ * production frame reaches this branch and misses. The miss is reachable only
+ * through the substituted-name synthetic in (2d).
  */
 static void test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted(void)
 {
@@ -4145,6 +4184,22 @@ static void test_the_0x5b_directory_connect_is_scanned_before_it_is_accepted(voi
  * shortest frame that reaches this branch and MISSES, and it reaches it through
  * production code: scs_dir_parse() classifies on a 13-byte prefix (see the
  * block header above). Every byte except the 16-byte name field is pcap #30.
+ *
+ * THE BOUND, RESTATED: because that classifier keys on "SCS$DIRECTORY" and OVMX
+ * LISTENs for that name, THE REFUSAL PATH THIS CASE EXERCISES IS UNREACHABLE
+ * FROM ANY CAPTURED FRAME. It exists only under the substituted name. What this
+ * case therefore pins is that IF such a frame arrived the branch would refuse
+ * rather than bind -- not that OVMX has ever refused one, and not that the
+ * refusal looks like what a VAX would send.
+ *
+ * AND THE STATUS WORD IS AN OVMX INVENTION. The 66-byte CONNECT_RSP class,
+ * [46:48] == 1, the echoed requester handle and the zero local Con.ID are all
+ * GROUNDED (spec sec 4(h)(1a)). The value at [48:50] asserted below,
+ * SCS_SDIR_STATUS_NO_SUCH_SYSAP == 0x0002, IS NOT: the book names the error and
+ * publishes no code, and no capture we hold contains a refusal frame. This case
+ * pins OVMX's own choice against accidental change; it is not evidence about
+ * VMS. Spec sec 5 carries the gap. A capture of a real VAX refusing a connect
+ * request supersedes the value and this assertion with it.
  */
 static void test_the_0x5b_scan_refuses_a_target_the_queue_does_not_carry(void)
 {
@@ -4243,6 +4298,33 @@ static void test_the_0x5b_scan_refuses_a_target_the_queue_does_not_carry(void)
  * requester Con.ID MATCHES. pcap #30 carries 0x63050008, so if scsd.c passed
  * anything else -- 0, a local handle, the peer's MAC-keyed id -- the scan would
  * take the BUSY branch, refuse the golden frame, and the join would stop.
+ *
+ * ===== WHAT THIS CASE DOES NOT GUARD, STATED SO NOBODY BANKS ON IT =====
+ *
+ * The arrangement under test is MODULE-LEVEL AND THE DAEMON CANNOT PRODUCE IT.
+ * The fixture call above is not a shortcut to a state the receive loop reaches
+ * by another route -- it is the ONLY route, because the loop's answer is
+ * synchronous. Three consequences, all of them limits on this case:
+ *
+ *   1. IT IS NOT A REGRESSION TEST FOR scsd.c's SYNCHRONOUS ANSWER. If someone
+ *      makes ACCEPT asynchronous and the daemon starts leaving listening CDTs
+ *      in CONNECT RECEIVED between frames, THIS CASE STILL PASSES -- it hand
+ *      -builds that state either way. What such a change would break is DESIGN
+ *      CHOICE 3's premise, and with it every statement in this tree that
+ *      p. 2-50 BUSY is unreachable. Nothing in THIS CASE reds for it. What
+ *      would is the end-of-run busy total in main(), and only if the changed
+ *      daemon actually emits a busy reply on one of the frames this file feeds
+ *      it -- so a change to the answer's synchrony must still re-derive the
+ *      premise by hand rather than lean on a green suite.
+ *   2. THE RETRANSMIT-NOT-BUSY SEMANTICS ARE AN OVMX INVENTION (DESIGN CHOICE
+ *      4). SCA has no retransmit concept at this point in p. 2-50; the
+ *      established VAX's retransmit-until-accepted behaviour is OUR OWN wire
+ *      observation, and "same requester Con.ID means the same request" is our
+ *      rule for what to do about it. No capture confirms that a real VAX would
+ *      re-deliver rather than refuse. This case pins OVMX's choice, not VMS's.
+ *   3. IT PROVES NOTHING ABOUT THE BUSY BRANCH. It deliberately takes the OTHER
+ *      arm. The BUSY arm has no daemon-level test because it has no daemon-level
+ *      reachability; tests/vmsscs/test_scs_sdir.c covers it at module level.
  */
 static void test_the_0x5b_scan_reads_and_restores_the_listening_cdt_state(void)
 {
@@ -4597,6 +4679,19 @@ int main(void)
     CHECK(peer_logical_offset > 0,
           "the peer-logical offset was never located -- the offset-dependent"
           " assertions above did not run");
+
+    /* vms-7fe: THE p. 2-50 BUSY REPLY, MEASURED ACROSS EVERY CASE ABOVE.
+     * scs_sdir.h OVMX DESIGN CHOICE 3 predicts scsd.c can never emit one; this
+     * is the number that makes the prediction falsifiable inside the suite
+     * rather than only in a live daemon's exit summary. Every comment in this
+     * tree that says "busy-sent is 0" re-derives from HERE. */
+    sdir_busy_seen_total += sdir_busy_replies;
+    CHECK(sdir_busy_seen_total == 0,
+          "scsd_handle_frame() emitted %lu p. 2-50 BUSY CONNECT_RSP(s) across this"
+          " file -- OVMX DESIGN CHOICE 3 says the daemon's synchronous answer makes"
+          " that unreachable, so either the answer stopped being synchronous or the"
+          " unreachability claim in scs_sdir.h, scsd.c and spec sec 5 is now false",
+          sdir_busy_seen_total);
 
     printf("test_scsd_wire: %d checks, %d failures\n", checks, failures);
     return failures == 0 ? 0 : 1;

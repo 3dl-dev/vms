@@ -169,7 +169,12 @@ target_link_libraries(vmsscs_dgram PUBLIC vmsscs_cdt)
 # "list of listening SYSAPs" actually is: LISTEN allocates an SDIR carrying the
 # SYSAP name plus the CONID of a listening CDT, and an inbound CONNECT_REQ is
 # resolved by scanning it -- no match is p. 2-48's "no such SYSAP", a second
-# concurrent request is p. 2-50's "busy ... try again later".
+# concurrent request is p. 2-50's "busy ... try again later". THAT SECOND
+# OUTCOME IS MODULE-ONLY: scsd.c answers synchronously and so cannot present a
+# second concurrent request (scs_sdir.h DESIGN CHOICE 3). tests/vmsscs/
+# test_scsd_wire.c measures that -- it sums the daemon's busy count across every
+# case and asserts 0 -- and tests/vmsscs/test_scs_sdir.c is the only thing that
+# reaches the BUSY path at all.
 #
 # PURE STATE: it builds no frame and opens no socket. It parses exactly one
 # grounded field (the 16-byte target SYSAP name at payload [62:78], spec sec

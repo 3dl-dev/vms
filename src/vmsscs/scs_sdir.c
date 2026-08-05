@@ -234,7 +234,20 @@ enum scs_sdir_result scs_sdir_connect_req(struct scs_sdir_queue *q,
         if (s->pending_remote_conid != remote_conid) {
             /* "If another connect request is received while the listening CDT
              * is in the CONNECT RECEIVED state, SCS replies with a response
-             * that essentially says 'busy ... try again later'." (p. 2-50) */
+             * that essentially says 'busy ... try again later'." (p. 2-50)
+             *
+             * NOT REACHED FROM scsd.c, AND NOT AN OVERSIGHT. Getting here needs
+             * a SECOND requester to arrive while this SDIR is still in CONNECT
+             * RECEIVED; the daemon answers synchronously and calls
+             * scs_sdir_connect_answered() before it returns from the frame
+             * (scs_sdir.h OVMX DESIGN CHOICE 3), so its receive loop cannot
+             * produce that overlap. Measured: tests/vmsscs/test_scsd_wire.c
+             * sums scsd.c's sdir_busy_replies across every case it runs and
+             * asserts the total is 0.
+             * The only caller that gets here is tests/vmsscs/test_scs_sdir.c,
+             * through this module's API -- a connect-request handler that
+             * itself receives. Do not read a green test suite as evidence that
+             * OVMX ever sends a busy CONNECT_RSP; it does not. */
             q->busy++;
             return SCS_SDIR_BUSY;
         }

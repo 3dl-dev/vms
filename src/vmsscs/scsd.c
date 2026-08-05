@@ -1080,8 +1080,10 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                                  DISCONNECT_REQ/RSP, from scs_disconnect()
  *                                  when the SYSAP invokes its own symmetric
  *                                  disconnect, and from
- *                                  scs_svc_disconnect_all() at shutdown --
- *                                  three call paths, ONE send site, which is
+ *                                  scs_svc_disconnect_all() at shutdown, and
+ *                                  (vms-66f round 4) from scsd_poll_emit() when
+ *                                  the Process Poller closes its p. 2-50 cycle
+ *                                  -- four call paths, ONE send site, which is
  *                                  the shape this table exists to keep.
  *                                  CHOKED because a teardown is ordinary
  *                                  sequenced traffic: p. 2-31's rule applies
@@ -1112,7 +1114,13 @@ static ssize_t send_frame_raw(int sock, int ifindex, const uint8_t mac[6],
  *                           the poller opens its cycle with (p. 2-50, template
  *                           SCA#21). This is the CONNECT service's emitter,
  *                           called by scs_connect() exactly as the three above.
- *                           Its DISCONNECT_REQ arm builds nothing and says so.
+ *                           Its DISCONNECT_REQ arm (round 4) does NOT build a
+ *                           second teardown frame -- it delegates to
+ *                           scsd_svc_emit_disconnect() above, so the p. 2-50
+ *                           cycle-closing DISCONNECT_REQ is a FOURTH call path
+ *                           into that one send site rather than a new one. It
+ *                           still answers NOBUILDER for ACCEPT_RSP, which OVMX
+ *                           genuinely cannot build.
  *     scsd_poll_inquire()   the 94-byte lookup REQUEST ("is <SYSAP> in your list
  *                           of listening SYSAPs?", template SCA#29). Not a
  *                           service emitter -- an inquiry is a SYSAP message on
@@ -2541,6 +2549,7 @@ struct scsd_rx {
     long poll_inquiry_sent;  /* vms-66f: p. 2-50 inquiries put on the wire */
     long poll_answers;       /* vms-66f: lookup RESPONSEs fed back to the poller */
     long poll_found;         /* vms-66f: affirmative discoveries notified */
+    long poll_disconnect_sent; /* vms-66f r4: p. 2-50 cycle-closing DISCONNECT_REQs */
     long cm_config_frames;   /* vms-224: op 0x14/0x01/0x02 CM config frames sent */
     long cm_response_sent;   /* vms-224: 0x81 responses to member 0x03/0x05 txns */
     long padded_sent;        /* vms-9f3: padded directed HELLOs sent (sec 4k) */
@@ -2748,13 +2757,75 @@ static void scsd_poll_dir_params(struct scsd_rx *rx, struct peer_state *ps,
  * CONNECT / DISCONNECT for the poller's own connection. Goes through
  * send_frame_vc(), the p. 2-31 choke point, so this is a CHOKED entry in the
  * SEND SITE TABLE and takes no exemption.
+ *
+ * ROUND 4 -- THE TEARDOWN THIS EMITTER USED TO DECLINE TO SEND. The first
+ * revision answered NOBUILDER for SEND_DISCONNECT_REQ and said so in a comment
+ * citing scs_svc.h. That was true when it was written and became FALSE under
+ * the rebase that put vms-591 in this file's base: scs_disc_build_request()
+ * exists (src/vmsscs/scs_disc.c) and scsd_svc_emit_disconnect() above already
+ * drives it for the receive path and the shutdown teardown. The comment was
+ * therefore not stale prose -- it was a capability the poller DECLINED TO USE
+ * because a comment said it did not exist, and the measurable consequence was
+ * that the p. 2-50 cycle ("the Process Poller and Directory Service disconnect
+ * from each other") could never complete: every cycle ended by force-releasing
+ * its descriptor (scs_poll.c descriptors_forced) and both clean-release arms of
+ * the poller were unreachable code. The DISCONNECT arm below is that fix.
+ *
+ * ONE EMITTER, NOT TWO. The frame is built by scsd_svc_emit_disconnect(), the
+ * SAME function the receive path and the shutdown teardown use, with a ctx
+ * built from the peer the poller's cycle is addressed to. A second DISCONNECT
+ * builder here would be a second thing to keep byte-identical, and it would sit
+ * outside the SEND SITE TABLE entry that already covers that emitter.
+ *
+ * NOT HANDLED HERE, DELIBERATELY: SEND_DISCONNECT_RSP. That action appears only
+ * on a RECEIVE arrow of Figure 2-16, and the poller drives no receive events --
+ * scsd_handle_frame() feeds a peer's DISCONNECT messages to
+ * scsd_disconnect_dialogue(), which carries its own emitter. Wiring an
+ * unreachable RSP arm here would be untestable code, so it falls to the
+ * no-builder answer below with everything else the poller can be asked for.
  */
 static int scsd_poll_emit(void *ctx, struct scs_cdt *cdt, enum scs_conn_action act,
                           const struct scs_svc_args *args, const char **what)
 {
     struct scsd_rx *rx = (struct scsd_rx *)ctx;
+    if (act == SCS_CONN_ACT_SEND_DISCONNECT_REQ) {
+        struct peer_state *dps = scsd_peer_by_sys(rx, args->target_node);
+        struct scsd_disc_emit_ctx e;
+        int r;
+        if (dps == NULL) {
+            return SCS_SVC_EMIT_REFUSED;
+        }
+        memset(&e, 0, sizeof(e));
+        e.sock = rx->sock;
+        e.ifindex = rx->ifindex;
+        e.ps = dps;
+        e.our_hw_mac = rx->our_hw_mac;
+        e.our_src_logical = rx->our_src_logical;
+        /* p. 2-26's reason code is OPTIONAL and this disconnect has no reason
+         * to give: the cycle ended because every inquiry was answered, which is
+         * success. SCS_REASON_NONE is what every VMS-origin DISCONNECT_REQ we
+         * hold carries (scs_reason.h), and it is what scs_svc_args zeroes to.
+         * e.matching stays 0 -- the poller INITIATES this dialogue. */
+        e.reason = args->reason;
+        r = scsd_svc_emit_disconnect(&e, cdt, act, args, what);
+        if (r == SCS_SVC_EMIT_SENT) {
+            rx->poll_disconnect_sent++;
+            log_ts(stdout);
+            printf(" SCSD-I-POLLDISC, SCS$DIR_LOOKUP disconnects from"
+                   " SCS$DIRECTORY on %02x:%02x:%02x:%02x:%02x:%02x"
+                   " local_conid=0x%08X (p. 2-50: all replies in)\n",
+                   ps_port_addr(dps)[0], ps_port_addr(dps)[1], ps_port_addr(dps)[2],
+                   ps_port_addr(dps)[3], ps_port_addr(dps)[4], ps_port_addr(dps)[5],
+                   (unsigned)SCS_DIR_OVMX_POLL_CONID);
+            fflush(stdout);
+        }
+        return r;
+    }
     if (act != SCS_CONN_ACT_SEND_CONNECT_REQ) {
-        /* DISCONNECT_REQ, ACCEPT_RSP: OVMX builds neither (scs_svc.h). Say so. */
+        /* ACCEPT_RSP (Figure 2-14's answer to the directory's ACCEPT_REQ) is
+         * the one action the poller reaches here in a normal cycle, and OVMX
+         * has no builder for it -- scs_svc.h's list, which no longer names the
+         * two DISCONNECT frames. Say so rather than pretending. */
         return scsd_svc_no_builder(cdt, act);
     }
     struct peer_state *ps = scsd_peer_by_sys(rx, args->target_node);
@@ -3618,9 +3689,26 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
                         if (lconid != 0) {
                             scs_cdt_set_remote_conid(tgt, lconid);
                         }
-                        (void)scsd_disconnect_dialogue(rx->sock, rx->ifindex, dps,
-                                                       tgt, cev, rx->our_hw_mac,
-                                                       rx->our_src_logical);
+                        int rel = scsd_disconnect_dialogue(rx->sock, rx->ifindex,
+                                                           dps, tgt, cev,
+                                                           rx->our_hw_mac,
+                                                           rx->our_src_logical);
+                        /* vms-66f r4: TELL THE OWNING SYSAP. The dialogue above
+                         * released the CDT, and the Process Poller may be the
+                         * SYSAP holding it -- p. 2-50's cycle ends on exactly
+                         * this event. Pushed at the moment of release, before
+                         * the CDL can recycle the slot (scs_poll.h). The call
+                         * answers 0 for every connection that is not the
+                         * poller's, so no other owner is disturbed. */
+                        if (rel && scsd_poller_ready &&
+                            scs_poll_cdt_released(&scsd_poller, tgt)) {
+                            log_ts(stdout);
+                            printf(" SCSD-I-POLLCLOSED, the Process Poller's"
+                                   " SCS$DIRECTORY connection reached CLOSED"
+                                   " (p. 2-26) -- the p. 2-50 cycle ended"
+                                   " clean, descriptor returned\n");
+                            fflush(stdout);
+                        }
                     } else {
                         conn_step(tgt, cev, NULL);
                     }
@@ -3705,6 +3793,19 @@ static void scsd_handle_frame(struct scsd_rx *rx, const uint8_t *buf, ssize_t n)
             scs_vc_note_recv(&ps->vc, dv.send_seq);
             if (dv.local_conid != 0) {
                 ps->poll_remote_conid = dv.local_conid;
+                /* vms-66f r4: AND ON THE DESCRIPTOR. p. 2-29 puts the Con.ID
+                 * PAIR on the CDT, and the teardown is addressed from there --
+                 * scsd_svc_emit_disconnect() reads cdt->remote_conid, not the
+                 * peer slot. Recording the handle only on the peer slot was
+                 * invisible while the poller never disconnected; the moment it
+                 * did, its DISCONNECT_REQ named remote Con.ID 0, which names no
+                 * connection at the peer. Same call the receive path already
+                 * makes for the two VMS$VAXcluster connections. */
+                struct scs_cdt *pc = scs_cdl_lookup(&scsd_cdl,
+                                                    SCS_DIR_OVMX_POLL_CONID);
+                if (pc != NULL) {
+                    scs_cdt_set_remote_conid(pc, dv.local_conid);
+                }
             }
             if (dv.is_lookup_response) {
                 /* p. 2-50's "Yes"/"No". scs_poll_answer() decides who, if
@@ -4786,19 +4887,20 @@ static void scsd_exit_summary(struct scsd_rx *rx, FILE *out)
          */
         fprintf(out,
                 "  POLLER SCS$DIR_LOOKUP interval=%us state=%s cycles=%lu"
-                " completed=%lu abandoned=%lu disc-unclosed=%lu connect-refused=%lu"
-                " last-connect-status=%s last-refused-node=%02x:%02x:%02x:%02x:%02x:%02x connects-sent=%ld inquiries-sent=%ld answers=%ld yes=%lu no=%lu"
+                " completed=%lu abandoned=%lu disc-closed=%lu disc-unclosed=%lu connect-refused=%lu"
+                " last-connect-status=%s last-refused-node=%02x:%02x:%02x:%02x:%02x:%02x connects-sent=%ld disconnects-sent=%ld inquiries-sent=%ld answers=%ld yes=%lu no=%lu"
                 " unknown=%lu unsolicited=%lu notified=%lu skipped=%lu"
                 " forced-cdt-release=%lu enabled=%s\n",
                 scs_poll_interval_sec(), scs_poll_state_name(scsd_poller.state),
                 scsd_poller.cycles_started, scsd_poller.cycles_completed,
-                scsd_poller.cycles_abandoned, scsd_poller.disconnects_unclosed,
+                scsd_poller.cycles_abandoned, scsd_poller.disconnects_closed,
+                scsd_poller.disconnects_unclosed,
                 scsd_poller.connect_refused,
                 scs_svc_status_name(scsd_poller.last_connect_status),
                 scsd_poller.last_refused_node[0], scsd_poller.last_refused_node[1],
                 scsd_poller.last_refused_node[2], scsd_poller.last_refused_node[3],
                 scsd_poller.last_refused_node[4], scsd_poller.last_refused_node[5],
-                rx->poll_connect_sent,
+                rx->poll_connect_sent, rx->poll_disconnect_sent,
                 rx->poll_inquiry_sent, rx->poll_answers, scsd_poller.answers_yes,
                 scsd_poller.answers_no, scsd_poller.answers_unknown,
                 scsd_poller.answers_unsolicited, scsd_poller.notifications,

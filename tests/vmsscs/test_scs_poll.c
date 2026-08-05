@@ -93,8 +93,17 @@ static int stub_emit(void *ctx, struct scs_cdt *cdt, enum scs_conn_action act,
         return SCS_SVC_EMIT_SENT;
     }
     if (act == SCS_CONN_ACT_SEND_DISCONNECT_REQ) {
-        /* OVMX has no DISCONNECT_REQ builder (scs_svc.h); vms-591 owns it. The
-         * honest answer is NOBUILDER, and the poller must cope with it. */
+        /* THIS STUB DELIBERATELY HAS NO DISCONNECT_REQ BUILDER, and the reason
+         * changed in round 4: it is no longer "OVMX cannot build one". OVMX CAN
+         * -- scs_disc_build_request() (vms-591), which scsd.c's poller emitter
+         * drives and tests/vmsscs/test_scsd_wire.c proves on the wire. What is
+         * modelled here is the OTHER port driver scs_svc.h's contract admits:
+         * one with no builder, which is also OVMX itself under
+         * OVMX_NO_CLEAN_SHUTDOWN=1. The poller must cope with NOBUILDER without
+         * claiming a frame went out, and that is what the cases below check. A
+         * case that needs the dialogue to COMPLETE cannot use this answer, so
+         * it drives the state machine directly -- see
+         * test_a_completed_disconnect_dialogue_releases_the_descriptor_clean. */
         s->disconnect_reqs++;
         return SCS_SVC_EMIT_NOBUILDER;
     }
@@ -1106,6 +1115,253 @@ static void test_an_answer_while_idle_is_unsolicited(void)
     check(f.found.count == 0, "it notifies nobody");
 }
 
+/* ==========================================================================
+ * ROUND 4 -- THE THREE CYCLE ENDINGS gcov SAID WERE NEVER TAKEN.
+ *
+ * Measured over the whole `ctest -L scs` suite before this round, scs_poll.c:
+ * the tick() clean-release arm (then lines 400-403), and BOTH early returns in
+ * poll_close() (then 509-511 and 515-517), executed 0 times each.
+ *
+ * They were dead for ONE reason, and it was not a test gap: scsd.c's poller
+ * emitter answered NOBUILDER for SEND_DISCONNECT_REQ on the false ground that
+ * OVMX has no such builder, so no teardown frame ever left the daemon, no peer
+ * ever answered one, and no cycle could reach CLOSED. Fixing that emitter is
+ * what makes the first case below a real production path rather than a
+ * contrived one; the wire test proves the daemon end-to-end, and these three
+ * pin the poller's own arms.
+ * ========================================================================== */
+
+/* THE CLEAN ENDING. p. 2-26's dialogue completes, the descriptor comes back
+ * through scs_svc_close_if_closed(), and descriptors_forced is NOT touched.
+ *
+ * WHY THE EVENTS ARE FED TO scs_conn_fsm_step() DIRECTLY. This case needs a
+ * connection that reaches CLOSED and is STILL HELD -- the state the tick() arm
+ * exists to clean up. scs_svc_deliver() releases as it closes (that path is the
+ * daemon's, and scs_poll_cdt_released() below covers it), so the caller
+ * modelled here is the OTHER production one: a step of the machine that
+ * releases nothing. scsd.c has exactly that call -- conn_step() on a
+ * connection-control frame whose peer slot could not be resolved -- and so does
+ * scs_vc_break()'s p. 2-28 sweep. Same production function this file already
+ * uses in test_vc_lost_mid_inquiry_is_a_failed_cycle. */
+static void test_a_completed_disconnect_dialogue_releases_the_descriptor_clean(void)
+{
+    printf("[the p. 2-26 dialogue completes: the descriptor comes back CLEAN]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    unsigned before = scs_cdl_in_use_count(&f.cdl);
+    check(run_cycle(&f, 10000) == 1, "one inquiry went out");
+    struct scs_cdt *c = scs_cdl_lookup(&f.cdl, SCS_DIR_OVMX_POLL_CONID);
+    check(c != NULL, "the poller's CDT is findable");
+    check(scs_poll_answer(&f.poll, "VMS$VAXcluster", SCS_DIR_ANSWER_YES, 10001) == 1,
+          "the last inquiry is answered, so the cycle invokes DISCONNECT");
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_DISCONNECTING,
+          "the poller waits in DISCONNECTING -- one DISCONNECT closes nothing");
+    if (c == NULL) {
+        unsetenv("OVMX_PRCPOLINTERVAL");
+        return;
+    }
+    check(scs_conn_state_of(c) == SCS_CONN_DISC_SENT,
+          "the connection is in DISC SENT (Figure 2-16)");
+
+    (void)scs_conn_fsm_step(c, SCS_CONN_EV_RCV_DISCONNECT_RSP);
+    check(scs_conn_state_of(c) == SCS_CONN_DISC_ACK,
+          "the peer's DISCONNECT_RSP takes it to DISC ACK (p. 2-26)");
+    scs_poll_tick(&f.poll, 10002);
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_DISCONNECTING,
+          "a HALF-finished dialogue does not end the cycle");
+
+    (void)scs_conn_fsm_step(c, SCS_CONN_EV_RCV_DISCONNECT_REQ);
+    check(scs_conn_state_of(c) == SCS_CONN_CLOSED,
+          "the peer's matching DISCONNECT_REQ takes it to CLOSED");
+    check(scs_cdl_in_use_count(&f.cdl) == before + 1,
+          "and NOTHING has released the descriptor yet -- which is the state "
+          "this arm exists to clean up");
+
+    scs_poll_tick(&f.poll, 10003);
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE,
+          "the cycle ends on the retry, without waiting for the timeout");
+    check(f.poll.disconnects_closed == 1,
+          "the completed teardown is COUNTED (disconnects_closed)");
+    check(f.poll.disconnects_unclosed == 0,
+          "a teardown that completed is not reported as unclosed");
+    check(f.poll.descriptors_forced == 0,
+          "and it was NOT a forced release -- this is the p. 2-26 path");
+    check(scs_cdl_in_use_count(&f.cdl) == before,
+          "the descriptor is back on the CDL");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* THE RECEIVE PATH GOT THERE FIRST. scs_svc_deliver() closes AND releases, so
+ * by the time the poller could look, `in_use` is 0 and its own retry answers
+ * "not closed". Without scs_poll_cdt_released() the cycle would sit in
+ * DISCONNECTING until its timeout and be counted in disconnects_unclosed -- a
+ * teardown that COMPLETED reported as one that did not. */
+static void test_a_release_from_the_receive_path_ends_the_cycle(void)
+{
+    printf("[a descriptor released by the receive path ends the cycle CLEAN]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    check(run_cycle(&f, 10000) == 1, "one inquiry went out");
+    struct scs_cdt *c = scs_cdl_lookup(&f.cdl, SCS_DIR_OVMX_POLL_CONID);
+    check(scs_poll_answer(&f.poll, "VMS$VAXcluster", SCS_DIR_ANSWER_YES, 10001) == 1,
+          "the cycle invokes DISCONNECT");
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_DISCONNECTING, "and waits");
+    if (c == NULL) {
+        check(0, "the poller's CDT is findable");
+        unsetenv("OVMX_PRCPOLINTERVAL");
+        return;
+    }
+    /* The daemon's own two steps, through the REAL delivery service. */
+    int closed = 0;
+    (void)scs_svc_deliver(&f.port, c, SCS_CONN_EV_RCV_DISCONNECT_RSP, NULL, &closed);
+    check(closed == 0, "the DISCONNECT_RSP alone does not close it");
+    (void)scs_svc_deliver(&f.port, c, SCS_CONN_EV_RCV_DISCONNECT_REQ, NULL, &closed);
+    check(closed == 1, "the matching DISCONNECT_REQ closes it AND releases the CDT");
+
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_DISCONNECTING,
+          "CONTROL: the poller cannot see that by itself -- it is still waiting");
+    scs_poll_tick(&f.poll, 10002);
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_DISCONNECTING,
+          "CONTROL: and its own retry cannot find it either (in_use == 0)");
+
+    check(scs_poll_cdt_released(&f.poll, c) == 1,
+          "the pushed release is recognised as THIS poller's descriptor");
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE, "and ends the cycle");
+    check(f.poll.disconnects_closed == 1, "counted as a CLOSED teardown");
+    check(f.poll.disconnects_unclosed == 0 && f.poll.descriptors_forced == 0,
+          "not as an unclosed one, and not as a forced release");
+    check(scs_poll_cdt_released(&f.poll, c) == 0,
+          "a second push for the same descriptor changes nothing");
+    check(f.poll.disconnects_closed == 1, "and does not double-count");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* The other arm of the same function: a descriptor released while the cycle was
+ * still INQUIRING. p. 2-26 lets EITHER SYSAP disconnect first, so a directory
+ * that tears the connection down mid-cycle is legal -- and the inquiries still
+ * outstanding never got their replies, which is an ABANDONED cycle however
+ * politely the connection came down. */
+static void test_a_release_mid_inquiry_is_an_abandoned_cycle(void)
+{
+    printf("[the DIRECTORY disconnects first: the cycle is abandoned, not closed]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    check(run_cycle(&f, 10000) == 1, "one inquiry is outstanding");
+    struct scs_cdt *c = scs_cdl_lookup(&f.cdl, SCS_DIR_OVMX_POLL_CONID);
+    if (c == NULL) {
+        check(0, "the poller's CDT is findable");
+        unsetenv("OVMX_PRCPOLINTERVAL");
+        return;
+    }
+    check(scs_poll_cdt_released(&f.poll, c) == 1, "the release is ours");
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE, "the cycle ends");
+    check(f.poll.cycles_abandoned == 1,
+          "and is counted as ABANDONED -- the inquiry never got its reply");
+    check(f.poll.disconnects_closed == 0,
+          "NOT as a completed teardown: the poller never invoked DISCONNECT");
+    check(f.poll.cycles_completed == 0, "and not as a completed cycle");
+    check(scs_poll_pending(&f.poll) == 0, "the outstanding inquiry is dropped");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* poll_close()'s FIRST early return. In descriptorless mode (scs_svc.h) the
+ * port has no CDL, CONNECT succeeds without allocating anything, and a cycle
+ * ends with no descriptor to wait for and none to give back. Nothing may be
+ * counted: no teardown went out and nothing was forced. */
+static void test_a_descriptorless_cycle_closes_without_counting_a_teardown(void)
+{
+    printf("[descriptorless mode: a cycle ends with nothing to release]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    scs_svc_port_init(&f.port, NULL);   /* NO CDL -- scs_svc.h descriptorless */
+    check(scs_svc_descriptors_available(&f.port) == 0, "the port has no descriptors");
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    check(run_cycle(&f, 10000) == 1, "the cycle still inquires");
+    check(f.poll.cdt == NULL, "and holds no descriptor");
+    check(scs_poll_answer(&f.poll, "VMS$VAXcluster", SCS_DIR_ANSWER_YES, 10001) == 1,
+          "the last answer closes the cycle");
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE,
+          "which goes straight to IDLE -- there is nothing to wait for");
+    check(f.poll.cycles_completed == 1, "the cycle completed");
+    check(f.poll.disconnects_closed == 0 && f.poll.disconnects_unclosed == 0,
+          "but NO teardown is claimed either way -- none was invoked");
+    check(f.poll.descriptors_forced == 0, "and nothing was force-released");
+    check(f.stub.disconnect_reqs == 0,
+          "the emitter was never offered a DISCONNECT_REQ: a frame with no "
+          "Con.ID pair names no connection");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
+/* poll_close()'s SECOND early return: the descriptor was ALREADY CLOSED before
+ * the cycle asked to disconnect. p. 2-28's VC_LOST sweep does exactly that --
+ * it drives every connection on a broken circuit to CLOSED and releases
+ * nothing. scs_disconnect() then refuses (no table row from CLOSED) and the
+ * descriptor is given back the p. 2-26 way. NO teardown may be counted: none
+ * went out.
+ *
+ * This is the sibling of test_vc_lost_mid_inquiry_is_a_failed_cycle, which
+ * loses the circuit and then lets the cycle TIME OUT. This one ANSWERS the
+ * outstanding inquiry instead, which is the path through poll_close(). */
+static void test_a_cycle_closing_on_an_already_closed_descriptor(void)
+{
+    printf("[the circuit died mid-inquiry: close gives the descriptor back]\n");
+    struct fixture f;
+    fixture_init(&f);
+    setenv("OVMX_PRCPOLINTERVAL", "5", 1);
+    fixture_open_vc(&f, vax1);
+    scs_poll_request(&f.poll, "VMS$VAXcluster", NULL, on_found, &f.found);
+    scs_poll_add_node(&f.poll, vax1);
+
+    unsigned before = scs_cdl_in_use_count(&f.cdl);
+    check(run_cycle(&f, 10000) == 1, "one inquiry is outstanding");
+    struct scs_cdt *c = scs_cdl_lookup(&f.cdl, SCS_DIR_OVMX_POLL_CONID);
+    if (c == NULL) {
+        check(0, "the poller's CDT is findable");
+        unsetenv("OVMX_PRCPOLINTERVAL");
+        return;
+    }
+    (void)scs_conn_fsm_step(c, SCS_CONN_EV_VC_LOST); /* p. 2-28: any state -> CLOSED */
+    check(scs_conn_state_of(c) == SCS_CONN_CLOSED, "the circuit is gone");
+    unsigned long illegal_before = f.port.illegal;
+    int discs_before = f.stub.disconnect_reqs;
+
+    check(scs_poll_answer(&f.poll, "VMS$VAXcluster", SCS_DIR_ANSWER_YES, 10001) == 1,
+          "the last inquiry is answered, so the cycle closes");
+    check(scs_poll_state_of(&f.poll) == SCS_POLL_IDLE,
+          "and goes straight to IDLE -- the connection is already CLOSED");
+    check(f.port.illegal == illegal_before + 1,
+          "scs_disconnect() REFUSED the already-closed connection, and the "
+          "refusal is counted rather than swallowed");
+    check(f.stub.disconnect_reqs == discs_before,
+          "so no DISCONNECT_REQ was offered to the emitter");
+    check(f.poll.disconnects_closed == 0,
+          "and NO teardown is claimed -- none went out");
+    check(f.poll.descriptors_forced == 0,
+          "the descriptor came back the p. 2-26 way, not forced");
+    check(scs_cdl_in_use_count(&f.cdl) == before,
+          "and it is back on the CDL");
+    unsetenv("OVMX_PRCPOLINTERVAL");
+}
+
 int main(void)
 {
     printf("test_scs_poll: the SCS Process Poller SCS$DIR_LOOKUP (vms-66f, p. 2-50)\n");
@@ -1134,6 +1390,12 @@ int main(void)
     test_a_blank_sysap_name_is_refused();
     test_dropping_the_node_under_a_cycle_abandons_it();
     test_an_answer_while_idle_is_unsolicited();
+    /* round 4 -- the three cycle endings gcov said were never taken */
+    test_a_completed_disconnect_dialogue_releases_the_descriptor_clean();
+    test_a_release_from_the_receive_path_ends_the_cycle();
+    test_a_release_mid_inquiry_is_an_abandoned_cycle();
+    test_a_descriptorless_cycle_closes_without_counting_a_teardown();
+    test_a_cycle_closing_on_an_already_closed_descriptor();
     printf("test_scs_poll: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

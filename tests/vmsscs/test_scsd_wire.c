@@ -5893,6 +5893,270 @@ static void test_the_process_poller_asks_and_a_yes_reaches_the_sysap(void)
     CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
 }
 
+/*
+ * ==========================================================================
+ * vms-66f ROUND 4: THE OTHER HALF OF p. 2-50 -- "the Process Poller and
+ * Directory Service disconnect from each other".
+ *
+ * THE DEFECT THIS CASE EXISTS FOR. scsd_poll_emit() answered NOBUILDER for
+ * SCS_CONN_ACT_SEND_DISCONNECT_REQ and justified it with a comment saying OVMX
+ * builds no such frame. That comment was true when it was written and FALSE on
+ * this branch: vms-591 added scs_disc_build_request() and this file's own
+ * test_peer_disconnect_req_is_answered_and_matched() proves the daemon drives
+ * it. The measurable consequence was NOT a stale sentence -- it was that the
+ * poller's cycle could never end the way p. 2-50 says it ends, so every cycle
+ * force-released its descriptor and BOTH clean-release arms of scs_poll.c were
+ * unreachable code. gcov, whole `ctest -L scs` suite, before the fix:
+ * scs_poll.c lines 400-403 and 515-517 executed 0 times.
+ *
+ * WHAT IS TAKEN FROM PRODUCTION AND WHAT IS STOOD IN FOR. Every OVMX frame
+ * below is built by production scsd.c/scs_disc.c and read back off the
+ * transmit path. The PEER's two answers are built by OVMX's own vms-591
+ * builders with the parameters swapped into the peer's direction. That is a
+ * synthesis and it is labeled: no capture in this repo contains a VAX
+ * answering an OVMX Process Poller, because no reference cluster has ever seen
+ * one. What the synthesis does NOT have to carry is the byte layout -- that is
+ * proven against REAL captured VAX2 frames by disc_check_captured_answer() and
+ * the two cases above, which feed unedited captures. This case proves the
+ * POLLER's reaction, not the frame format.
+ * ========================================================================== */
+
+/* One peer-direction DISCONNECT frame for the poller's connection. `matching`
+ * and the message class are the caller's; everything else is the mirror of the
+ * poller's own addressing. Returns the frame length, 0 on failure. */
+static size_t poll_peer_disc(int want_request, int matching, uint32_t peer_handle,
+                             const uint8_t ovmx_hw[6], uint8_t *out)
+{
+    struct scs_disc_params dp;
+    memset(&dp, 0, sizeof(dp));
+    memcpy(dp.dst_mac, ovmx_hw, 6);        /* to us */
+    memcpy(dp.src_mac, vax1_hw_mac, 6);    /* from the peer */
+    memcpy(dp.src_logical, vax1_logical, 6);
+    memcpy(dp.peer_logical, our_logical, 6);
+    dp.remote_conid = SCS_DIR_OVMX_POLL_CONID; /* the peer addresses OUR handle */
+    dp.local_conid = peer_handle;
+    dp.matching = matching;
+    if (want_request) {
+        return scs_disc_build_request(&dp, out) == 0 ? SCS_DISC_REQ_FRAME_LEN : 0;
+    }
+    return scs_disc_build_response(&dp, out) == 0 ? SCS_DISC_RSP_FRAME_LEN : 0;
+}
+
+/*
+ * Build a world and drive ONE poller cycle through production up to and
+ * including the last answer -- which is what makes the poller invoke DISCONNECT
+ * (p. 2-50). Everything is production scsd.c except the peer's ACCEPT_REQ and
+ * its affirmative lookup response. `*disc_before` receives the daemon-wide
+ * disc_req_sent count taken IMMEDIATELY before the answer, so the caller can
+ * attribute the teardown to this cycle rather than to the run.
+ *
+ * The CLEAN-SHUTDOWN switch is NOT touched here: the caller sets it, which is
+ * the whole point of the bracket below.
+ */
+static struct scs_poller *poll_drive_to_teardown(struct rxworld *r,
+                                                 uint32_t peer_handle,
+                                                 long *disc_before)
+{
+    CHECK(unsetenv("OVMX_NO_PROCESS_POLLER") == 0, "unsetenv failed");
+    CHECK(setenv("OVMX_PROCESS_POLLER", "1", 1) == 0, "setenv failed");
+    CHECK(setenv("OVMX_PRCPOLINTERVAL", "1", 1) == 0, "setenv failed");
+    rxworld_init(r, vax2_hw_mac, our_logical);
+    struct peer_state *ps = open_circuit_to(r, vax1_hw_mac, vax1_logical);
+    CHECK(ps != NULL, "no peer");
+    struct scs_poller *p = scsd_poll(&r->rx);
+    CHECK(scs_poll_add_node(p, ps_sys_addr(ps)) == 1, "the node was not registered");
+
+    scs_poll_tick(p, 100000);
+    CHECK(r->rx.poll_connect_sent == 1, "the poller sent no CONNECT-REQUEST");
+    uint8_t connreq[SCS_DIR_CONNREQ_FRAME_LEN];
+    memcpy(connreq, scsd_test_last_frame, SCS_DIR_CONNREQ_FRAME_LEN);
+    uint8_t reply[SCA_FRAME_MAX];
+    size_t rl = poll_peer_reply(connreq, SCS_DIR_CONNREQ_FRAME_LEN,
+                                SCS_DIR_MSGTYPE_ACCEPT_REQ, peer_handle,
+                                r->hw_mac, reply);
+    rx_feed(r, reply, rl);
+    CHECK(scs_poll_pending(p) == 1, "the accepted connection produced no inquiry");
+
+    struct scs_dir_lookup_params lp;
+    memset(&lp, 0, sizeof(lp));
+    memcpy(lp.dst_mac, r->hw_mac, 6);
+    memcpy(lp.src_mac, vax1_hw_mac, 6);
+    memcpy(lp.src_logical, vax1_logical, 6);
+    memcpy(lp.peer_logical, our_logical, 6);
+    lp.remote_conid = SCS_DIR_OVMX_POLL_CONID;
+    lp.local_conid = peer_handle;
+    lp.opcode = SCS_MSGTYPE_SEQAPP;
+    lp.op = SCS_DIR_OP_LOOKUP;
+    memcpy(lp.name, "VMS$VAXcluster  ", SCS_DIR_NAME_LEN);
+    lp.affirmative = 1;
+    uint8_t yes[SCS_DIR_LOOKUP_FRAME_LEN];
+    CHECK(scs_dir_build_lookup_response(&lp, yes) == 0, "could not build the Yes");
+    *disc_before = (long)disc_req_sent;
+    rx_feed(r, yes, sizeof(yes));
+    return p;
+}
+
+static void test_the_process_poller_disconnects_and_the_cycle_closes_clean(void)
+{
+    CHECK(unsetenv("OVMX_NO_CLEAN_SHUTDOWN") == 0, "unsetenv failed");
+    const uint32_t peer_handle = 0x63050009u;
+    struct rxworld r;
+    long disc_before = 0;
+    struct scs_poller *p = poll_drive_to_teardown(&r, peer_handle, &disc_before);
+    struct scs_cdt *pcdt = scs_cdl_lookup(&scsd_cdl, SCS_DIR_OVMX_POLL_CONID);
+    CHECK(pcdt != NULL, "the poller's CDT is not on the CDL");
+
+    /* --- 1. THE FRAME THAT USED NOT TO EXIST. --- */
+    CHECK(r.rx.poll_disconnect_sent == 1,
+          "the poller put %ld cycle-closing DISCONNECT_REQ on the wire, expected"
+          " 1 -- p. 2-50 ends the cycle with a disconnect, and before this round"
+          " the emitter answered NOBUILDER", r.rx.poll_disconnect_sent);
+    CHECK((long)disc_req_sent == disc_before + 1,
+          "the poller's teardown did not go through the SHARED vms-591 emitter"
+          " (disc_req_sent %lu -> %lu)", (unsigned long)disc_before, disc_req_sent);
+    CHECK(disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len),
+          "the last frame out is %zu bytes, not the %d-byte DISCONNECT_REQ",
+          scsd_test_last_len, SCS_DISC_REQ_FRAME_LEN);
+    if (disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len)) {
+        uint16_t m = 0xffff;
+        CHECK(scs_disc_match_get(scsd_test_last_frame, scsd_test_last_len, &m) == 1 &&
+                  m == SCS_DISC_MATCH_INITIAL,
+              "the poller's DISCONNECT_REQ carries matching flag 0x%04x, expected"
+              " 0x%04x -- the poller INITIATES this dialogue", m,
+              SCS_DISC_MATCH_INITIAL);
+        uint32_t rem = (uint32_t)scsd_test_last_frame[64] |
+                       ((uint32_t)scsd_test_last_frame[65] << 8) |
+                       ((uint32_t)scsd_test_last_frame[66] << 16) |
+                       ((uint32_t)scsd_test_last_frame[67] << 24);
+        uint32_t loc = (uint32_t)scsd_test_last_frame[68] |
+                       ((uint32_t)scsd_test_last_frame[69] << 8) |
+                       ((uint32_t)scsd_test_last_frame[70] << 16) |
+                       ((uint32_t)scsd_test_last_frame[71] << 24);
+        CHECK(rem == peer_handle && loc == SCS_DIR_OVMX_POLL_CONID,
+              "the teardown names Con.ID pair (0x%08X,0x%08X); the poller's own"
+              " connection is (0x%08X,0x%08X)", rem, loc, peer_handle,
+              (unsigned)SCS_DIR_OVMX_POLL_CONID);
+        CHECK(memcmp(scsd_test_last_dst, vax1_hw_mac, 6) == 0,
+              "the teardown went to the wrong port address");
+    }
+    CHECK(scs_poll_state_of(p) == SCS_POLL_DISCONNECTING,
+          "after one DISCONNECT the poller is %s; p. 2-26 says one DISCONNECT"
+          " closes nothing", scs_poll_state_name(scs_poll_state_of(p)));
+    CHECK(scs_conn_state_of(pcdt) == SCS_CONN_DISC_SENT,
+          "the poller's connection is %s, expected DISC SENT (Figure 2-16)",
+          scs_conn_state_name(scs_conn_state_of(pcdt)));
+
+    /* --- 2. THE PEER ANSWERS, and Figure 2-16 runs to CLOSED. --- */
+    uint8_t prsp[SCS_DISC_RSP_FRAME_LEN];
+    size_t pl = poll_peer_disc(0, 0, peer_handle, r.hw_mac, prsp);
+    CHECK(pl == SCS_DISC_RSP_FRAME_LEN, "could not build the peer's DISCONNECT_RSP");
+    rx_feed(&r, prsp, pl);
+    CHECK(scs_conn_state_of(pcdt) == SCS_CONN_DISC_ACK,
+          "after the peer's DISCONNECT_RSP the connection is %s, expected DISC ACK",
+          scs_conn_state_name(scs_conn_state_of(pcdt)));
+    CHECK(scs_poll_state_of(p) == SCS_POLL_DISCONNECTING,
+          "the poller left DISCONNECTING on a half-finished dialogue");
+
+    uint8_t preq[SCS_DISC_REQ_FRAME_LEN];
+    pl = poll_peer_disc(1, 1, peer_handle, r.hw_mac, preq);
+    CHECK(pl == SCS_DISC_REQ_FRAME_LEN, "could not build the peer's matching request");
+    unsigned long rsp_before = disc_rsp_sent;
+    rx_feed(&r, preq, pl);
+
+    /* --- 3. THE CYCLE ENDS CLEAN -- the arm that was dead. --- */
+    CHECK(disc_rsp_sent == rsp_before + 1,
+          "OVMX did not answer the peer's matching DISCONNECT_REQ on the poller's"
+          " connection (%lu -> %lu)", rsp_before, disc_rsp_sent);
+    CHECK(scs_poll_state_of(p) == SCS_POLL_IDLE,
+          "the poller is %s after its connection reached CLOSED, expected IDLE",
+          scs_poll_state_name(scs_poll_state_of(p)));
+    CHECK(p->disconnects_closed == 1,
+          "the completed teardown was counted %lu times, expected once",
+          p->disconnects_closed);
+    CHECK(p->disconnects_unclosed == 0,
+          "a teardown that COMPLETED was reported as unclosed (%lu)",
+          p->disconnects_unclosed);
+    CHECK(p->descriptors_forced == 0,
+          "the cycle force-released its descriptor (%lu) instead of getting it"
+          " back the p. 2-26 way -- the whole point of this round",
+          p->descriptors_forced);
+    CHECK(scs_cdl_lookup(&scsd_cdl, SCS_DIR_OVMX_POLL_CONID) == NULL,
+          "the poller's CDT is still on the CDL after CLOSED (p. 2-26)");
+    CHECK(rxlog_has("SCSD-I-POLLCLOSED"),
+          "the daemon never reported the poller's cycle closing; log: '%s'", rxlog);
+    CHECK(conn_illegal_events == 0,
+          "the poller's teardown scored %lu illegal events", conn_illegal_events);
+
+    /* --- 4. AND THE NEXT CYCLE RUNS. The descriptor came back, so the same
+     * Con.ID is free again -- which is what force-release was invented to fake
+     * and what a completed dialogue now does for real. --- */
+    scs_poll_tick(p, 200000);
+    CHECK(r.rx.poll_connect_sent == 2,
+          "the poller sent %ld CONNECT-REQUESTs across two cycles, expected 2 --"
+          " cycle 2 was refused, so the descriptor did not really come back",
+          r.rx.poll_connect_sent);
+    CHECK(p->connect_refused == 0, "cycle 2 was refused (%lu)", p->connect_refused);
+    scs_poll_abandon(p);
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
+/*
+ * GUARDRAIL 23 for the frame this round adds. Putting a DISCONNECT_REQ on the
+ * poller's connection is a WIRE-VISIBLE change, so it ships behind a switch
+ * with a bracketing control. The switch is vms-591's OVMX_NO_CLEAN_SHUTDOWN,
+ * enforced INSIDE scs_disc_build_request() rather than at the call site, so the
+ * poller's emitter cannot route around it -- and with it set the poller's wire
+ * is byte-for-byte what it was before this round: connect, inquire, and
+ * nothing else.
+ *
+ * AND THE SUPPRESSION IS HONEST. The refusal comes back as NOBUILDER, so the
+ * transition still commits (the connection really is in DISC SENT) and
+ * port->unemitted counts the frame SCA did not get. That is scs_svc.h's
+ * contract, and it is the difference between "OVMX did not send it" and "OVMX
+ * pretended it did".
+ */
+static void test_the_process_poller_teardown_honours_the_clean_shutdown_switch(void)
+{
+    const uint32_t peer_handle = 0x6305000au;
+    CHECK(setenv("OVMX_NO_CLEAN_SHUTDOWN", "1", 1) == 0, "setenv failed");
+    struct rxworld r;
+    long disc_before = 0;
+    unsigned long unemitted_before = scsd_svc()->unemitted;
+    struct scs_poller *p = poll_drive_to_teardown(&r, peer_handle, &disc_before);
+    CHECK(r.rx.poll_disconnect_sent == 0,
+          "OVMX_NO_CLEAN_SHUTDOWN=1 did not suppress the poller's teardown"
+          " (%ld frame(s) still went out)", r.rx.poll_disconnect_sent);
+    CHECK((long)disc_req_sent == disc_before,
+          "a DISCONNECT_REQ reached the wire with the switch set (%lu -> %lu)",
+          (unsigned long)disc_before, disc_req_sent);
+    CHECK(!disc_frame_is_req(scsd_test_last_frame, scsd_test_last_len),
+          "the last frame out IS a DISCONNECT_REQ despite the switch");
+    CHECK(scsd_svc()->unemitted == unemitted_before + 1,
+          "the suppressed frame was not counted in port->unemitted (%lu -> %lu)"
+          " -- a gated frame must still be REPORTED, not vanish",
+          unemitted_before, scsd_svc()->unemitted);
+    CHECK(scs_poll_state_of(p) == SCS_POLL_DISCONNECTING,
+          "the poller is %s; the transition commits on NOBUILDER (scs_svc.h)",
+          scs_poll_state_name(scs_poll_state_of(p)));
+    scs_poll_abandon(p);
+
+    /* THE CONTROL. Same world, same drive, switch cleared. */
+    CHECK(unsetenv("OVMX_NO_CLEAN_SHUTDOWN") == 0, "unsetenv failed");
+    struct rxworld r2;
+    long disc_before2 = 0;
+    struct scs_poller *p2 = poll_drive_to_teardown(&r2, peer_handle, &disc_before2);
+    CHECK(r2.rx.poll_disconnect_sent == 1,
+          "CONTROL FAILED: with the switch cleared the poller STILL sent no"
+          " teardown, so the measurement above proves nothing about the switch");
+    CHECK((long)disc_req_sent == disc_before2 + 1,
+          "CONTROL FAILED: disc_req_sent did not move (%lu -> %lu)",
+          (unsigned long)disc_before2, disc_req_sent);
+    scs_poll_abandon(p2);
+    CHECK(unsetenv("OVMX_PRCPOLINTERVAL") == 0, "unsetenv failed");
+    CHECK(unsetenv("OVMX_PROCESS_POLLER") == 0, "unsetenv failed");
+}
+
 static void test_the_process_poller_kill_switch(void)
 {
     /* GUARDRAIL 23: run the switch, confirm the gated behaviour is suppressed,
@@ -6021,6 +6285,8 @@ int main(void)
     test_exit_summary_reports_the_disconnect_dialogue();
     /* vms-66f: the SCS Process Poller's two senders and its kill switch. */
     test_the_process_poller_asks_and_a_yes_reaches_the_sysap();
+    test_the_process_poller_disconnects_and_the_cycle_closes_clean();
+    test_the_process_poller_teardown_honours_the_clean_shutdown_switch();
     test_the_process_poller_kill_switch();
 
     CHECK(peer_logical_offset > 0,

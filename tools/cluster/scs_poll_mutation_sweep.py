@@ -4,7 +4,8 @@
 THE MUTATION SWEEP FOR THE PROCESS POLLER'S PRODUCTION CODE.
 
 tests/vmsscs/test_scs_poll.c states a kill count. This script IS that count.
-It mutates src/vmsscs/scs_poll.c and src/vmsscs/scs_dir.c one edit at a time,
+It mutates src/vmsscs/scs_poll.c, src/vmsscs/scs_dir.c and src/vmsscs/scsd.c
+(the poller's port-driver half) one edit at a time,
 rebuilds, runs `ctest -L scs`, and requires the suite to go RED. A mutant that
 stays green is a production branch no test constrains.
 
@@ -40,7 +41,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-TARGETS = ["src/vmsscs/scs_poll.c", "src/vmsscs/scs_dir.c"]
+TARGETS = ["src/vmsscs/scs_poll.c", "src/vmsscs/scs_dir.c", "src/vmsscs/scsd.c"]
 
 # (id, file-basename, old-text, new-text, what-it-attacks)
 MUTANTS = [
@@ -107,17 +108,13 @@ MUTANTS = [
             p->skipped_disabled++;
             continue; /* p. 2-50: already connected on this node */
         }""", "        (void)0;", "a connected (SYSAP,node) pair is not asked again"),
-    ("M17", "scs_poll.c", """    if (p->cdt == NULL) {
-        p->state = SCS_POLL_IDLE;
-        memset(p->cur_node, 0, 6);
-        return;
-    }
-    (void)scs_disconnect(p->port, p->cdt, &a);""",
-     """    if (p->cdt == NULL) {
-        p->state = SCS_POLL_IDLE;
-        memset(p->cur_node, 0, 6);
-        return;
-    }""", "the cycle really invokes DISCONNECT"),
+    # RE-ANCHORED (round 4). The anchor used to carry the whole descriptorless
+    # early return above this line as context; round 4 documented that block and
+    # the anchor stopped matching, which the sweep reported as "did not apply".
+    # The single line is UNIQUE in scs_poll.c (checked), so it is the whole
+    # anchor now -- less prose to collide with, same deletion, same claim.
+    ("M17", "scs_poll.c", "    (void)scs_disconnect(p->port, p->cdt, &a);",
+     "    (void)0;", "the cycle really invokes DISCONNECT"),
     ("M18", "scs_poll.c", """        if (p != NULL) {
             p->answers_unsolicited++;
         }
@@ -128,11 +125,13 @@ MUTANTS = [
          * empty inquiry set. */
         poll_close(p, now_ms);
     }""", "    (void)0;", "a cycle with nothing to wait for closes"),
-    ("M20", "scs_poll.c", """    if (p->state != SCS_POLL_IDLE) {
-        if (p->state == SCS_POLL_DISCONNECTING && p->cdt != NULL &&
+    # RE-ANCHORED (round 4), same cause as M17: round 4 put a comment between
+    # the enclosing `state != IDLE` guard and this condition. The two-line
+    # condition is UNIQUE in scs_poll.c (checked) and does not need the guard
+    # line as context.
+    ("M20", "scs_poll.c", """        if (p->state == SCS_POLL_DISCONNECTING && p->cdt != NULL &&
             scs_svc_close_if_closed(p->port, p->cdt)) {""",
-     """    if (p->state != SCS_POLL_IDLE) {
-        if (p->cdt != NULL &&
+     """        if (p->cdt != NULL &&
             scs_svc_close_if_closed(p->port, p->cdt)) {""",
      "a closed CDT mid-inquiry is not a completed cycle"),
     ("M21", "scs_poll.c", """        if (p->port->cdl != NULL) {
@@ -173,6 +172,45 @@ MUTANTS = [
      "        memcpy(p->pending[i], p->pending[i + 1], SCS_DIR_NAME_LEN + 1);",
      "        ;",
      "the pending list COMPACTS when a middle inquiry is answered"),
+
+    # --- review round 4: the p. 2-50 TEARDOWN, and the three cycle endings it
+    # was suppressing. scsd_poll_emit() answered NOBUILDER for
+    # SEND_DISCONNECT_REQ on the false ground that OVMX has no such builder, so
+    # no teardown left the daemon and gcov showed the tick() clean-release arm
+    # and BOTH poll_close() early returns executed 0 times over the whole
+    # `ctest -L scs` suite. M29 attacks the frame, M30..M33 the four endings.
+    # scsd.c joins the mutation targets for M29/M30 -- it is where the emitter
+    # lives, and a sweep that cannot reach it cannot defend the fix.
+    ("M29", "scsd.c", """    if (act == SCS_CONN_ACT_SEND_DISCONNECT_REQ) {
+        struct peer_state *dps = scsd_peer_by_sys(rx, args->target_node);""",
+     """    if (0 && act == SCS_CONN_ACT_SEND_DISCONNECT_REQ) {
+        struct peer_state *dps = scsd_peer_by_sys(rx, args->target_node);""",
+     "the poller's cycle-closing DISCONNECT_REQ is actually built and sent"),
+    ("M30", "scsd.c", """                        if (rel && scsd_poller_ready &&
+                            scs_poll_cdt_released(&scsd_poller, tgt)) {""",
+     """                        if (0 && rel && scsd_poller_ready &&
+                            scs_poll_cdt_released(&scsd_poller, tgt)) {""",
+     "the receive path PUSHES the release to the owning poller"),
+    ("M31", "scs_poll.c", """            p->cdt = NULL;
+            p->state = SCS_POLL_IDLE;
+            p->disconnects_closed++;""", """            p->cdt = NULL;
+            p->state = SCS_POLL_IDLE;
+            ;""",
+     "tick()'s clean release COUNTS the completed teardown"),
+    ("M32", "scs_poll.c", """    if (p->state == SCS_POLL_DISCONNECTING) {
+        p->disconnects_closed++;
+    } else if (p->state != SCS_POLL_IDLE) {
+        p->cycles_abandoned++;
+    }""", """    if (p->state == SCS_POLL_DISCONNECTING) {
+        p->disconnects_closed++;
+    }""",
+     "a pushed release MID-CYCLE is an abandoned cycle, not a silent one"),
+    ("M33", "scs_poll.c", """    if (p == NULL || cdt == NULL || p->cdt != cdt) {
+        return 0;
+    }""", """    if (p == NULL || cdt == NULL) {
+        return 0;
+    }""",
+     "scs_poll_cdt_released only claims the poller's OWN descriptor"),
 ]
 
 

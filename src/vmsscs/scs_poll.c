@@ -310,10 +310,10 @@ const uint8_t *scs_poll_current_node(const struct scs_poller *p)
  * Give the cycle's descriptor back.
  *
  * p. 2-26 releases a CDT when the connection reaches CLOSED, and
- * scs_svc_close_if_closed() is that path. OVMX cannot reach CLOSED on a
- * connection IT disconnected: it builds no DISCONNECT_REQ and no
- * DISCONNECT_RSP (scs_svc.h), so the symmetric dialogue never completes and the
- * machine parks in DISC SENT. vms-591 owns that gap.
+ * scs_svc_close_if_closed() is that path. THIS IS THE OTHER PATH -- the one
+ * taken when a cycle ends WITHOUT the dialogue completing, which is what
+ * scs_poll_abandon() is for: a timeout, a lost circuit, a node dropped under a
+ * cycle in flight.
  *
  * A poller that simply kept the descriptor would poll exactly ONCE per boot:
  * the next cycle's CONNECT reuses the same Con.ID, the state machine has no
@@ -322,10 +322,20 @@ const uint8_t *scs_poll_current_node(const struct scs_poller *p)
  * both landed in connect_refused.
  *
  * So the poller force-releases, and COUNTS it in descriptors_forced rather than
- * hiding it in the normal release path. This is an OVMX consequence of a
- * missing frame builder, labeled as one: on real VMS the peer's DISCONNECT
- * would arrive and the release would be p. 2-26's. When vms-591 lands,
- * descriptors_forced should fall to zero on its own with no change here.
+ * hiding it in the normal release path.
+ *
+ * CORRECTED (round 4). An earlier revision of this comment said OVMX "builds no
+ * DISCONNECT_REQ and no DISCONNECT_RSP (scs_svc.h), so the symmetric dialogue
+ * never completes", and predicted that "when vms-591 lands, descriptors_forced
+ * should fall to zero on its own with no change here". vms-591 HAS landed --
+ * scs_disc_build_request()/scs_disc_build_response() exist -- and the
+ * prediction was WRONG TWICE. It needed a change in scsd.c (the poller's
+ * emitter still answered NOBUILDER for SEND_DISCONNECT_REQ, so no teardown
+ * frame left the daemon at all), and it needed scs_poll_cdt_released() below,
+ * because the peer's answers are delivered by the RECEIVE path, which releases
+ * the descriptor itself. With both in place a completed cycle now leaves
+ * through the clean arms and descriptors_forced stays at 0; the daemon wire
+ * test asserts exactly that.
  */
 static void poll_release_cdt(struct scs_poller *p)
 {
@@ -352,6 +362,36 @@ void scs_poll_abandon(struct scs_poller *p)
     p->state = SCS_POLL_IDLE;
     p->pending_count = 0;
     memset(p->cur_node, 0, 6);
+}
+
+/*
+ * The receive path reached CLOSED on a connection and released its descriptor.
+ * scs_poll.h carries why this is pushed rather than polled. NOTHING IS RELEASED
+ * HERE -- the caller already did that, and calling scs_cdl_release() a second
+ * time on a recycled slot is exactly the bug this function exists to avoid.
+ *
+ * The two cycle states are counted APART because they are different events. In
+ * DISCONNECTING this is p. 2-50's cycle ending the way the page describes and
+ * p. 2-26's release arriving to prove it. In CONNECTING or INQUIRING it is the
+ * DIRECTORY disconnecting first, mid-cycle: the inquiries that were still
+ * outstanding never got their replies, which is an abandoned cycle however
+ * politely the connection came down.
+ */
+int scs_poll_cdt_released(struct scs_poller *p, const struct scs_cdt *cdt)
+{
+    if (p == NULL || cdt == NULL || p->cdt != cdt) {
+        return 0;
+    }
+    if (p->state == SCS_POLL_DISCONNECTING) {
+        p->disconnects_closed++;
+    } else if (p->state != SCS_POLL_IDLE) {
+        p->cycles_abandoned++;
+    }
+    p->cdt = NULL;
+    p->state = SCS_POLL_IDLE;
+    p->pending_count = 0;
+    memset(p->cur_node, 0, 6);
+    return 1;
 }
 
 /* How many enabled names apply to `node`? A node with none is not worth a
@@ -395,10 +435,22 @@ void scs_poll_tick(struct scs_poller *p, uint64_t now_ms)
      * p. 2-50's one-node-at-a-time rule is this early return, not a check on a
      * counter. */
     if (p->state != SCS_POLL_IDLE) {
+        /* THE CLEAN ENDING, retried. The connection reached CLOSED and nobody
+         * has released the descriptor yet, so the poller does it the p. 2-26
+         * way and the cycle ends without touching descriptors_forced.
+         *
+         * WHEN THIS ARM RUNS RATHER THAN scs_poll_cdt_released(). Whoever
+         * drives the final receive event decides. scs_svc_deliver() releases as
+         * it closes, and the daemon pushes that release through
+         * scs_poll_cdt_released(); a caller that steps the machine directly --
+         * scsd.c's conn_step() fallback for a frame whose peer slot is gone,
+         * and scs_vc_break()'s p. 2-28 VC_LOST sweep -- reaches CLOSED and
+         * releases NOTHING, and this is where those descriptors come back. */
         if (p->state == SCS_POLL_DISCONNECTING && p->cdt != NULL &&
             scs_svc_close_if_closed(p->port, p->cdt)) {
             p->cdt = NULL;
             p->state = SCS_POLL_IDLE;
+            p->disconnects_closed++;
             memset(p->cur_node, 0, 6);
             return;
         }
@@ -406,9 +458,9 @@ void scs_poll_tick(struct scs_poller *p, uint64_t now_ms)
             now_ms - p->cycle_start_ms >= SCS_POLL_CYCLE_TIMEOUT_MS) {
             /* Two different failures, counted apart. A cycle abandoned while
              * still CONNECTING/INQUIRING never got its answers; one abandoned in
-             * DISCONNECTING got them all and is only waiting on the disconnect
-             * dialogue OVMX cannot yet complete (vms-591). Collapsing them would
-             * make the second look like a discovery failure. */
+             * DISCONNECTING got them all and the disconnect dialogue never
+             * finished. Collapsing them would make the second look like a
+             * discovery failure. */
             if (p->state == SCS_POLL_DISCONNECTING) {
                 p->disconnects_unclosed++;
             } else {
@@ -493,10 +545,13 @@ void scs_poll_tick(struct scs_poller *p, uint64_t now_ms)
  * The poller does NOT go straight back to IDLE, because p. 2-26 is explicit
  * that one DISCONNECT closes nothing -- the symmetric answer has to arrive.
  * Resting in DISCONNECTING until the CDT is actually released is what makes
- * that visible instead of assumed. The tick() below retries the release and,
- * failing that, times the cycle out; a poller that declared itself IDLE the
- * instant it called DISCONNECT would be reporting a completed dialogue it never
- * saw finish.
+ * that visible instead of assumed. The tick() above retries the release,
+ * scs_poll_cdt_released() takes the push from the receive path, and failing
+ * both the cycle times out; a poller that declared itself IDLE the instant it
+ * called DISCONNECT would be reporting a completed dialogue it never saw
+ * finish.
+ *
+ * TWO EARLY IDLE RETURNS BELOW, and neither of them claims a dialogue.
  */
 static void poll_close(struct scs_poller *p, uint64_t now_ms)
 {
@@ -506,11 +561,24 @@ static void poll_close(struct scs_poller *p, uint64_t now_ms)
     p->cycle_start_ms = now_ms; /* the disconnect wait gets its own window */
     p->pending_count = 0;
     if (p->cdt == NULL) {
+        /* DESCRIPTORLESS MODE (scs_svc.h): the port has no CDL, so CONNECT
+         * succeeded without allocating anything and there is no descriptor to
+         * wait for and none to give back. DISCONNECT is not invoked either --
+         * scs_disconnect() refuses a NULL CDT, and a DISCONNECT_REQ carrying no
+         * Con.ID pair names no connection. Nothing happened, so nothing is
+         * counted: this is neither a closed teardown nor a forced release. */
         p->state = SCS_POLL_IDLE;
         memset(p->cur_node, 0, 6);
         return;
     }
     (void)scs_disconnect(p->port, p->cdt, &a);
+    /* ALREADY CLOSED BEFORE WE ASKED. The p. 2-28 VC_LOST sweep drives every
+     * connection on a broken circuit straight to CLOSED and releases nothing,
+     * so a cycle whose circuit died mid-inquiry arrives here holding a CLOSED
+     * descriptor. scs_disconnect() has just refused it (no table row from
+     * CLOSED, counted in port->illegal), and the honest thing left to do is
+     * give the descriptor back the p. 2-26 way -- NOT to count a teardown that
+     * never went out, which is why disconnects_closed is not bumped here. */
     if (scs_svc_close_if_closed(p->port, p->cdt)) {
         p->cdt = NULL;
         p->state = SCS_POLL_IDLE;

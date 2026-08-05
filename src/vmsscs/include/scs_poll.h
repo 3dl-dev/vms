@@ -189,7 +189,12 @@ struct scs_poller {
     unsigned long cycles_completed;   /* reached DISCONNECT with all replies in */
     unsigned long cycles_abandoned;   /* timed out before every reply was in */
     unsigned long disconnects_unclosed; /* all replies in, DISCONNECT invoked, the
-                                         * dialogue never reached CLOSED (vms-591) */
+                                         * dialogue never reached CLOSED */
+    unsigned long disconnects_closed;   /* ... and the ones that DID: the p. 2-26
+                                         * dialogue completed and the descriptor
+                                         * came back. The honest counterpart of
+                                         * the line above -- without it a run log
+                                         * could only report teardown FAILURES. */
     unsigned long connect_refused;    /* scs_connect() did not reach the wire */
     uint8_t last_refused_node[6];     /* and WHICH node key it was refused for */
     enum scs_svc_status last_connect_status; /* WHY the last refusal happened --
@@ -271,11 +276,13 @@ unsigned scs_poll_opened(struct scs_poller *p, uint64_t now_ms);
  * When the last outstanding inquiry is answered this invokes scs_disconnect()
  * -- "After the Process Poller has received replies to all of its inquires, the
  * Process Poller and Directory Service disconnect from each other." WHAT
- * REACHES THE WIRE IS NOT THIS FILE'S CLAIM: OVMX has no DISCONNECT_REQ builder
- * (scs_svc.h lists it among the frames the port answers NOBUILDER for), so
- * today the service runs, the connection state advances and port->unemitted
- * counts the frame. vms-591 owns that builder; when it lands the poller needs
- * no change.
+ * REACHES THE WIRE IS NOT THIS FILE'S CLAIM, it is the emitter's: this file
+ * asks for SCS_CONN_ACT_SEND_DISCONNECT_REQ and counts whichever of the three
+ * scs_svc.h answers it gets. As of vms-591 the DISCONNECT_REQ builder EXISTS
+ * (src/vmsscs/scs_disc.c) and scsd.c's poller emitter drives it, so in the
+ * daemon the frame goes out and port->emitted counts it; an embedding whose
+ * emitter has no builder still gets the honest NOBUILDER path and
+ * port->unemitted.
  *
  * Returns 1 if the answer matched an outstanding inquiry, 0 otherwise.
  */
@@ -285,6 +292,28 @@ int scs_poll_answer(struct scs_poller *p, const char *sysap,
 /* The poller's connection was lost / the cycle must end. Releases the cycle
  * without claiming any frame went out. */
 void scs_poll_abandon(struct scs_poller *p);
+
+/*
+ * p. 2-26's release, told to the SYSAP that owned the connection.
+ *
+ * WHY THIS EXISTS AND IS NOT A POLLING CHECK. The poller does not own the
+ * receive path; scsd.c does. When the peer's DISCONNECT_RSP and matching
+ * DISCONNECT_REQ arrive, scs_svc_deliver() takes the connection to CLOSED and
+ * RELEASES the CDT there and then -- the poller's own scs_svc_close_if_closed()
+ * retry in scs_poll_tick() would find `in_use == 0` and answer "not closed",
+ * and the cycle would sit in DISCONNECTING until its timeout and be counted in
+ * disconnects_unclosed. That is a teardown that COMPLETED being reported as one
+ * that did not, so the release has to be pushed, not polled.
+ *
+ * IDENTITY, NOT STATE. It compares the CDT POINTER, and the caller must call it
+ * at the moment of release, before the CDL can hand the slot to another
+ * connection -- a later "is it still in use?" test cannot tell a released
+ * descriptor from a recycled one.
+ *
+ * Returns 1 if `cdt` was this poller's cycle descriptor (and the cycle was
+ * ended), 0 otherwise -- so a caller can tell whose connection it just closed.
+ */
+int scs_poll_cdt_released(struct scs_poller *p, const struct scs_cdt *cdt);
 
 enum scs_poll_state scs_poll_state_of(const struct scs_poller *p);
 unsigned scs_poll_pending(const struct scs_poller *p);

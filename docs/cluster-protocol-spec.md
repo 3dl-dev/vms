@@ -2193,8 +2193,20 @@ For visibility, every field NOT marked GROUNDED above:
   `SCS_POLL_CYCLE_TIMEOUT_MS` (5 s — SCA states no bound on how long a poll
   cycle may stay open; it is a local timer and puts nothing on the wire), and
   the forced CDT release when a poller cycle ends without the p. 2-26 disconnect
-  dialogue completing (OVMX builds no `DISCONNECT_REQ`; counted in
-  `descriptors_forced`, see `poll_release_cdt()`).
+  dialogue completing (counted in `descriptors_forced`, see
+  `poll_release_cdt()`).
+
+  > **CORRECTED (`vms-66f` round 4).** The sentence above used to justify the
+  > forced release with "OVMX builds no `DISCONNECT_REQ`". That was true when it
+  > was written and is FALSE as of `vms-591`, which added
+  > `scs_disc_build_request()`. The poller's own emitter in `scsd.c` went on
+  > answering `NOBUILDER` for `SEND_DISCONNECT_REQ` anyway, so the p. 2-50 cycle
+  > could never end the way the page describes and **every** cycle force-released
+  > its descriptor. It now sends the frame, the dialogue completes, and
+  > `descriptors_forced` stays at 0 on a normal cycle — the forced release is
+  > what is left for a cycle that is ABANDONED (timeout, lost circuit, node
+  > dropped mid-cycle), which is a real case and still an OVMX choice. The
+  > completed teardowns are counted apart in `disconnects_closed`.
 
 - **The poller's ANSWER READING is two-thirds inferred (`vms-66f`).** p. 2-50
   says the directory answers "Yes" or "No"; only the "No" is on our wire, as the

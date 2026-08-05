@@ -87,10 +87,11 @@
  *             The service exists, allocates nothing, and is exercised only by
  *             tests/vmsscs/test_scs_svc.c.
  * DISCONNECT  LIVE AS OF vms-591, and it is the one entry above whose status
- *             changed from "no production caller". THREE production callers:
+ *             changed from "no production caller". FOUR production callers:
  *             the receive path's answer to a peer DISCONNECT_REQ (the p. 2-26
- *             symmetric own-disconnect), the daemon's shutdown teardown, and
- *             scs_svc_disconnect_all(). OVMX now BUILDS both DISCONNECT_REQ
+ *             symmetric own-disconnect), the daemon's shutdown teardown,
+ *             scs_svc_disconnect_all(), and (vms-66f round 4) the SCS Process
+ *             Poller closing its p. 2-50 cycle. OVMX now BUILDS both DISCONNECT_REQ
  *             and DISCONNECT_RSP from byte-exact captured templates
  *             (src/vmsscs/scs_disc.h) -- including the DISCONNECT_RSP the spec
  *             said did not exist on our wire, which vms-591 found and which
@@ -224,10 +225,17 @@ const char *scs_svc_status_name(enum scs_svc_status st);
  *   SCS_SVC_EMIT_NOBUILDER(0) the port has no way to build this frame. The
  *                             transition IS committed -- the connection really
  *                             is in the new state, SCA just did not get its
- *                             packet -- and port->unemitted records it. This is
- *                             the normal answer for CONNECT_RSP, ACCEPT_RSP,
- *                             REJECT_REQ, REJECT_RSP, DISCONNECT_REQ and
- *                             DISCONNECT_RSP, none of which OVMX can build.
+ *                             packet -- and port->unemitted records it. As of
+ *                             vms-591 that list is CONNECT_RSP, ACCEPT_RSP,
+ *                             REJECT_REQ and REJECT_RSP; DISCONNECT_REQ and
+ *                             DISCONNECT_RSP came OFF it and are built by
+ *                             src/vmsscs/scs_disc.c (see the DISCONNECT entry
+ *                             in the five-service table above, and
+ *                             docs/cluster-protocol-spec.md sec 4(h)(1a)).
+ *                             They still answer NOBUILDER in exactly two cases,
+ *                             both literally true: with OVMX_NO_CLEAN_SHUTDOWN=1
+ *                             set, and for a CDT-less connection, whose frame
+ *                             would name no Con.ID pair.
  *                             Saying so is the point; pretending a frame went
  *                             out is the LARP failure INV-6 forbids.
  *   SCS_SVC_EMIT_REFUSED(-1)  the port declined -- no OPEN virtual circuit

@@ -132,6 +132,23 @@ SCA_ETHERTYPE = b"\x60\x07"
 CONNCTL_OPCODES = (0x4B, 0x5B, 0x7B)
 # The four REQUEST classes and the two RESPONSE classes this item adds.
 CONNCTL_CLASSES = (58, 62, 66, 110)
+
+# vms-69c: this script is the one that already learned the under-sampling
+# lesson (vms-591 added the 58-byte class) -- the guard exists so the SAME
+# restriction never gets copied into a new script silently again, and so
+# THIS one can't quietly narrow back down either. The full envelope-
+# conformant population also carries 86/94-byte MSCP command/response
+# frames and the 190-byte MTYPE-10 APPLICATION class (scs_rx.h, vms-7c0);
+# none of those are connection-control REQUEST/RESPONSE dialogue members
+# (spec sec 4(h)(1a) names exactly the four request / two response classes
+# kept here), so excluding them from a REQUEST<->RESPONSE PAIRING census is
+# correct, not an accident -- MSCP and APPLICATION-data census live in
+# scs_credit_measure.py and the future vms-a58/vms-4eb decode work, not here.
+DISC_RESTRICT_REASON = (
+    "86/94-byte frames are MSCP command/response, not connection-control "
+    "REQUEST/RESPONSE; 190-byte frames are MTYPE-10 APPLICATION data "
+    "(scs_rx.h, vms-7c0). Neither belongs in a connection-control "
+    "REQUEST<->RESPONSE pairing census (spec sec 4(h)(1a))")
 MSGTYPE_PAYLOAD_OFF = 46
 CONID_PAYLOAD_OFF = 50          # [50:54] remote, [54:58] local
 MATCH_PAYLOAD_OFF = 60          # the matching flag (REQUEST only)
@@ -235,9 +252,28 @@ def load_connctl(path, read_pcap=None):
     return out
 
 
+def _census_guard():
+    """Lazily imported for the same reason _read_pcap() is: the figures
+    gate imports EXPECTED out of this module without ever calling measure(),
+    and its mutation harness copies this file into a scratch tree alone."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import census_guard
+    return census_guard
+
+
 def measure(capdir):
     read_pcap = _read_pcap()
     files = lab1_only(sorted(glob.glob(os.path.join(capdir, "*.pcap"))))
+
+    # vms-69c: the guard, see DISC_RESTRICT_REASON above.
+    cg = _census_guard()
+    conformant, raw = cg.population(files, read_pcap)
+    guard_report = cg.check_census(
+        CONNCTL_CLASSES, conformant, raw,
+        restrict_reason=DISC_RESTRICT_REASON, label="scs_disc_measure.py: ")
+
     skipped = []
 
     pairs = collections.Counter()
@@ -315,6 +351,7 @@ def measure(capdir):
     out = {
         "n_captures": len(files),
         "skipped": skipped,
+        "census_guard": guard_report,
         "pairs": {},
         "pairs_raw": {k: (pairs[k], len(pair_pcaps[k])) for k in pairs},
         "populations": {},
@@ -374,6 +411,9 @@ def report(m):
     print(f"captures: {m['n_captures']}")
     for base, err in m["skipped"]:
         print(f"  SKIPPED {base}: {err}")
+    if "census_guard" in m:
+        print("\n=== CENSUS GUARD (vms-69c) ===")
+        print(_census_guard().format_report(m["census_guard"]))
     print("\n(A) request -> response pairing (first reverse frame, mirrored Con.ID pair)")
     for req in sorted(m["pairs"]):
         r = m["pairs"][req]

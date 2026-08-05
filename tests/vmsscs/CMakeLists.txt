@@ -468,6 +468,44 @@ set_tests_properties(capture_manifest PROPERTIES
     TIMEOUT 30
 )
 
+# vms-69c - a census cannot silently restrict its own population, in either
+# direction.
+#
+# tools/cluster/census_guard.py is the shared refusal every SCA measurement
+# tool now calls: check_census() REFUSES to run a census that silently
+# narrows to a subset of the envelope-conformant SCA length classes present
+# in its own population (the vms-c11 under-sampling failure -- every census
+# in the epic filtered on {62,66,110} and was blind to the 58-byte RESPONSE
+# class, so the spec wrongly said message types 5/7 do not exist), and
+# REFUSES a census that spans classes not sharing the SCA envelope (the
+# mirror -- reading [46:48] across the still-undecoded 70-content class).
+# Either direction requires an explicit, checked-in justification string and
+# reports the excluded/over-generalised population size regardless.
+# test_census_guard.py needs NO lab captures for the pure half (check_census()
+# never touches a byte) and builds its own synthetic classic-pcap files for
+# the end-to-end half, so the envelope-conformance byte offsets are exercised
+# against the SAME dissect_sca.read_pcap() every measurement tool uses. It
+# also asserts scs_reason_measure.py, scs_disc_measure.py and
+# scs_connect_data_measure.py all actually call check_census() -- a guard
+# nobody calls is not a fence.
+#
+# Registered UNCONDITIONALLY under the same name either way -- see the
+# vms-76e note above for why the missing-interpreter case reds at TEST time
+# instead of failing configure.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME census_guard
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_census_guard.py)
+else()
+    add_test(NAME census_guard
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/census_guard_no_python3.cmake)
+endif()
+set_tests_properties(census_guard PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 30
+)
+
 # vms-6b3 - the 16-bit REJECT/DISCONNECT reason code (VAXcluster Principles
 # p. 2-26). Asserts byte position, LE order and round-trip in BOTH frames; that
 # two REAL captured VMS frames (one REJECT_REQ, one DISCONNECT_REQ) read zero at

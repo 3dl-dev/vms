@@ -94,6 +94,28 @@ def lab1_only(paths):
 SCA_ETHERTYPE = b"\x60\x07"
 CONNCTL_SCA_LEN = 62
 CONNCTL_CLASSES = (62, 66, 110)   # spec sec 4(h)(1a) connection-control lengths
+
+# vms-69c: this restriction is DELIBERATE, not the vms-c11 mistake repeated --
+# but it must say so out loud and be checked, not merely asserted in a
+# comment. The field this script measures (payload [58:60], REASON_ABS) does
+# not exist in the 58-byte RESPONSE class at all: that class ends exactly at
+# payload offset 58 (envelope + msgtype + credit + Con.ID pair, and nothing
+# after -- see tools/cluster/scs_disc_measure.py's own 58-byte population).
+# The 58-byte class is examined on its own terms, unrestricted, in
+# scs_disc_measure.py's CENSUS-D (vms-591) -- that is where "does 5/7 exist"
+# was answered, not here. And the connection-control MTYPE space this script
+# treats as exhaustive ({0..9} plus application MTYPE 10) was itself
+# re-measured with NO length restriction at all across the full 141-pcap
+# corpus for vms-7c0 (src/vmsscs/include/scs_rx.h, 981,367 envelope-conformant
+# frames) and found to be exactly that set -- so restricting THIS census to
+# the three classes that can even carry the field under study does not hide
+# an unmeasured message-type population.
+RESTRICT_REASON = (
+    "payload [58:60] (REASON_ABS) does not exist in the 58-byte RESPONSE "
+    "class -- it ends at offset 58; that class's own unrestricted census is "
+    "scs_disc_measure.py's CENSUS-D (vms-591), and the MTYPE space {0..10} "
+    "this script treats as exhaustive was independently re-measured with no "
+    "length restriction at all in scs_rx.h (vms-7c0, 981,367 frames)")
 MSGTYPE_ABS = 60          # payload [46:48] -> absolute 60
 REASON_ABS = 72           # payload [58:60] -> absolute 72 (the OVMX placement)
 NEXT_ABS = 74             # payload [60:62] -> absolute 74
@@ -170,8 +192,35 @@ def hist(counter):
     return {v: n for v, n in counter.items()}
 
 
+def _census_guard():
+    """Lazily imported, same reasoning as lab1_only()'s lazy capture_manifest
+    import just above: keeps the module importable with no extra sibling
+    dependency until a scan actually runs, which is what lets the mutation
+    battery in test_scs_reason_mutants.py copy this file into a scratch tree
+    alone (plus dissect_sca.py) without needing census_guard.py too."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import census_guard
+    return census_guard
+
+
 def measure(capdir):
     files = lab1_only(sorted(glob.glob(os.path.join(capdir, "*.pcap"))))
+
+    # vms-69c: the guard. Scans the SAME files with the SAME origin rule,
+    # unfiltered by length, and REFUSES to proceed if CONNCTL_CLASSES turns
+    # out to silently drop or over-reach the envelope-conformant population
+    # without the justification above -- so a future edit that narrows
+    # CONNCTL_CLASSES again, or widens it past the envelope, reds here
+    # instead of silently producing a wrong figure.
+    cg = _census_guard()
+    conformant, raw = cg.population(files, read_pcap,
+                                     origin_filter=is_vms_origin)
+    guard_report = cg.check_census(
+        CONNCTL_CLASSES, conformant, raw,
+        restrict_reason=RESTRICT_REASON, label="scs_reason_measure.py: ")
+
     rows = collections.defaultdict(list)          # (scalen, msgtype) -> frames
     skipped = []
     for path in files:
@@ -192,7 +241,7 @@ def measure(capdir):
 
     out = {"n_captures": len(files), "skipped": skipped,
            "carriers": {}, "neighbours": {}, "neighbour_values": {},
-           "zero_slots": {}, "byte_census": {}}
+           "zero_slots": {}, "byte_census": {}, "census_guard": guard_report}
 
     for key in sorted(rows):
         rs = rows[key]
@@ -256,6 +305,9 @@ def report(m):
     print("capture dir scan: %d pcaps" % m["n_captures"])
     for name, exc in m["skipped"]:
         print("SKIP %s: %s" % (name, exc))
+    if "census_guard" in m:
+        print("\n=== CENSUS GUARD (vms-69c) ===")
+        print(_census_guard().format_report(m["census_guard"]))
 
     print("\n=== (A) THE TWO CARRIER FRAMES (SCA length 62, VMS-origin) ===")
     for mtype in sorted(CARRIERS):

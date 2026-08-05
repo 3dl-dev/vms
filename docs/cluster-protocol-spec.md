@@ -2236,12 +2236,13 @@ For visibility, every field NOT marked GROUNDED above:
   upper bound. It justifies `scsd.c`'s 500 ms bounded shutdown wait by margin —
   and exceeding the bound costs only a log line, because the daemon exits anyway
   rather than blocking on a peer.
-- **A VAX DOES NOT ANSWER *OVMX's* DISCONNECT_REQ — OPEN, and newly measured**
-  (`vms-591`, lab-2 `vaxlab-4`, four runs on four fresh identities): the two
-  figures above are about **VAX→VAX** traffic. Between VAXes the request is
-  answered 220/220 within 7 ms. When **OVMX** sends the same frame — byte-diffed
-  against a real VAX DISCONNECT_REQ with **zero** differences outside the
-  per-run/substituted fields — no `DISCONNECT_RSP` ever arrives, over 20 s of
+- **A VAX DID NOT ANSWER *OVMX's* DISCONNECT_REQ ON THE `vaxlab-4` RUNS — OPEN,
+  and narrower than first written** (`vms-591`, lab-2 `vaxlab-4`, four runs on
+  four fresh identities): the two figures above are about **VAX→VAX** traffic.
+  Between VAXes the request is answered 220/220 within 7 ms. When **OVMX** sends
+  the same frame — byte-diffed against a real VAX DISCONNECT_REQ with **zero**
+  differences outside the per-run/substituted fields — no `DISCONNECT_RSP`
+  arrived on any of these four runs, over 20 s of
   capture past the request. VAX1's console instead logs, exactly once per
   disconnect-sending run and never for the control run that sent none:
 
@@ -2257,6 +2258,23 @@ For visibility, every field NOT marked GROUNDED above:
   GAP, not a solved problem, and it is **not** evidence about the `vms-2f3`
   rejoin failure in either direction (sec 4M.24 already killed self-disconnect
   as a fix for that).
+
+  **AND IT IS NOT A GENERAL FACT ABOUT VMS — measured in `vms-591` round 2.**
+  Counting VMS-sourced 58-byte type-7 frames whose Ethernet destination is
+  OVMX's own HW MAC `b6:16:8a:dc:3a:53`, over all 47 captures:
+
+  | source | frames | | |
+  |---|---|---|---|
+  | `aa:00:04:00:01:04` (VAX1) | 16 | total | **42** in **16** pcaps |
+  | `08:00:2b:78:56:b9` (VAX2) | 15 | destination Con.ID | `0x4F580007` in 42/42 |
+  | `08:00:2b:11:22:33` (VAX3) | 11 | | |
+
+  Three distinct real VAX nodes have answered OVMX on OVMX's own SCS$DIRECTORY
+  Con.ID, and `ovmx-760-MEMBER-achieved-20260730.pcap` SCA 181/182/183/184 is a
+  complete Figure 2-16 teardown with OVMX at one end of it. So the open question
+  is **why these four `vaxlab-4` runs differ**, not whether a VAX will answer
+  OVMX at all. `tests/vmsscs/test_scsd_wire.c` drives OVMX's receive side with
+  SCA 184 unedited.
 - **Joining an ESTABLISHED cluster** (§4i, `vms-af2`): **RESOLVED — two distinct
   differences.** (A) The established member's round-0 `0x41` START
   `send_seq[20:22]` = `prior_VC_send_seq+1` (residual VC continuation, e.g.

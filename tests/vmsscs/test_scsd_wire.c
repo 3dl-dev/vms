@@ -72,14 +72,37 @@
 static int failures = 0;
 static int checks = 0;
 
+/*
+ * WHERE A FAILING CHECK IS PRINTED, and why it is not stdout.
+ *
+ * log_capture_begin() below dup2()s a tmpfile over fd 1 AND fd 2 so the
+ * daemon's run log can be asserted on. Until vms-591 round 2 CHECK printed
+ * with printf(), so EVERY assertion that failed inside a capture window --
+ * which is most of the assertions in this file, since rx_feed() runs inside
+ * one -- had its message swallowed into rxlog and never reached the operator.
+ * The run still exited non-zero, so ctest still went red, but it went red with
+ * NO REASON PRINTED. That was measured, not supposed: it is what the first
+ * mutation run of this round produced.
+ *
+ * chk_out is a stream over a dup of the ORIGINAL fd 2, taken in main() before
+ * any capture can run, so it survives every dup2() the capture does.
+ */
+static FILE *chk_out = NULL;
+
+static FILE *chk_stream(void)
+{
+    return chk_out != NULL ? chk_out : stderr;
+}
+
 #define CHECK(cond, ...)                                                                 \
     do {                                                                                 \
         checks++;                                                                        \
         if (!(cond)) {                                                                   \
             failures++;                                                                  \
-            printf("FAIL %s:%d: ", __func__, __LINE__);                                  \
-            printf(__VA_ARGS__);                                                         \
-            printf("\n");                                                                \
+            fprintf(chk_stream(), "FAIL %s:%d: ", __func__, __LINE__);                    \
+            fprintf(chk_stream(), __VA_ARGS__);                                          \
+            fprintf(chk_stream(), "\n");                                                 \
+            fflush(chk_stream());                                                        \
         }                                                                                \
     } while (0)
 
@@ -1518,7 +1541,11 @@ static const uint8_t vax1_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x01, 0x04};
  * -- the capture of the run in which OVMX reached full MEMBER. Frames #65 and
  * #67, transcribed wire-byte for wire-byte, Ethernet header included, ZERO
  * bytes edited. Both are VAX2 (08:00:2b:78:56:b9, SCS System Address
- * aa:00:04:00:9b:04) -> OVMX (b6:16:8a:dc:3a:53, aa:00:04:00:02:04).
+ * aa:00:04:00:02:04) -> OVMX (b6:16:8a:dc:3a:53, aa:00:04:00:9b:04).
+ *
+ * THAT LAST LINE WAS BACKWARDS UNTIL vms-591 ROUND 2, and so were the two
+ * constants below it -- see the census there. It is corrected here because
+ * this is where the claim is made.
  * ========================================================================== */
 
 /* pcap frame #65: opcode 0x4b, 66-byte SCA class, [46:48] message type 1 =
@@ -1553,12 +1580,38 @@ static const uint8_t cap_ovmx_joiner_accept_req[124] = {
     0x00, 0x00, 0x06, 0x00
 };
 
-/* The member's Con.ID in that dialogue, and the two identities the frames use. */
+/*
+ * The member's Con.ID in that dialogue, and the two identities the frames use.
+ *
+ * THE TWO LOGICAL ADDRESSES WERE SWAPPED FROM vms-dd5 (commit d373c63) UNTIL
+ * vms-591 ROUND 2, and every fixture in this file that dresses OVMX or the
+ * member wore the other node's SCS System Address as a result. The names were
+ * always used correctly -- ovmx760_logical for OVMX's own, ovmx760_member_sysid
+ * for the member's -- so only the VALUES move here, and no call site changes.
+ *
+ * HOW IT IS KNOWN, re-derivable with the pcap reader on a host with the lab
+ * captures. Over ovmx-760-MEMBER-achieved-20260730.pcap, pairing each 0x6007
+ * frame's Ethernet source with its SCA src-logical address at [10:16] (abs 24,
+ * scsd.c's OFF_HELLO_SRCLOG) gives exactly four (MAC, address) pairs and no
+ * frame contradicts its own:
+ *
+ *   OVMX760-SRCLOG: b6:16:8a:dc:3a:53 -> aa:00:04:00:9b:04   n=1287
+ *   OVMX760-SRCLOG: aa:00:04:00:01:04 -> aa:00:04:00:01:04   n=993
+ *   OVMX760-SRCLOG: 08:00:2b:11:22:33 -> aa:00:04:00:03:04   n=930
+ *   OVMX760-SRCLOG: 08:00:2b:78:56:b9 -> aa:00:04:00:02:04   n=578
+ *
+ * b6:16:8a:dc:3a:53 is OVMX (a locally-administered Linux MAC, and the MAC the
+ * captured frames below are addressed TO); 08:00:2b:78:56:b9 is VAX2, whose
+ * aa:00:04:00:02:04 also matches the SCSSYSTEMID 1026 the spec records for
+ * VAX2 (docs/cluster-protocol-spec.md sec 4g, the 106-byte START table at
+ * payload [46:48]: 0x0402 = 1026 = VAX2), the lab's
+ * own SYSGEN setting. The addresses are aa:00:04:00:<LE16(SCSSYSTEMID)>.
+ */
 #define OVMX760_MEMBER_CONID 0x63020011u
 static const uint8_t ovmx760_hw_mac[6] = {0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53};
-static const uint8_t ovmx760_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
+static const uint8_t ovmx760_logical[6] = {0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04};
 static const uint8_t ovmx760_member_mac[6] = {0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9};
-static const uint8_t ovmx760_member_sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04};
+static const uint8_t ovmx760_member_sysid[6] = {0xaa, 0x00, 0x04, 0x00, 0x02, 0x04};
 
 /*
  * A complete receive-dispatch context, wired exactly the way main() wires one.
@@ -4848,6 +4901,18 @@ static const uint8_t cap_ovmx_dir_msg8[72] = {
  * peer's sequenced stream is replayed with no gap (see above). */
 static void reason_world_init(struct rxworld *r)
 {
+    /* THE FIXTURE'S TWO IDENTITIES ARE READ BACK OFF A CAPTURED FRAME, so the
+     * inversion corrected in vms-591 round 2 cannot silently return. Every
+     * frame replayed below was sent BY the member TO OVMX, so by spec sec 4g
+     * its dst-logical at payload [2:8] (abs 16) is OVMX's own SCS System
+     * Address and its src-logical at [10:16] (abs 24) is the member's. */
+    CHECK(memcmp(cap_ovmx_dir_connect_req + 16, ovmx760_logical, 6) == 0,
+          "ovmx760_logical is not the dst-logical of the frames the member sent"
+          " OVMX -- the fixture is dressing OVMX in another node's SCS System"
+          " Address");
+    CHECK(memcmp(cap_ovmx_dir_connect_req + 24, ovmx760_member_sysid, 6) == 0,
+          "ovmx760_member_sysid is not the src-logical the member actually put"
+          " on its own frames");
     rxworld_init(r, ovmx760_hw_mac, ovmx760_logical);
     (void)open_circuit_to(r, ovmx760_member_mac, ovmx760_member_sysid);
     rx_feed(r, cap_ovmx_dir_connect_req, sizeof(cap_ovmx_dir_connect_req));
@@ -5061,6 +5126,175 @@ static int disc_frame_is_rsp(const uint8_t *f, size_t len)
     return disc_is(f, len, SCS_DISC_MSGTYPE_RSP, SCS_DISC_RSP_FRAME_LEN);
 }
 
+/* ===================================================================
+ * THE PEER'S OWN DISCONNECT_RSP, ADDRESSED TO OVMX, UNEDITED (vms-591 rd 2).
+ *
+ * WHAT WAS WRONG WITH THE FRAME THIS REPLACES. Case (2) below closes Figure
+ * 2-16's DISC MATCH --RCV_DISCONNECT_RSP--> CLOSED arrow. It used to close it
+ * with a frame OVMX ITSELF ENCODED: scs_disc_build_response() run with the
+ * roles swapped. That was labeled, but it left one whole error class
+ * invisible -- a systematic mistake about the 58-byte class would be
+ * SYMMETRIC between OVMX's encoder and OVMX's classifier, and the case would
+ * pass with both halves wrong in the same direction.
+ *
+ * IT WAS ALSO UNNECESSARY, AND THE REASON IT LOOKED NECESSARY IS A CLAIM THAT
+ * IS FALSE. The frame carried a note saying OVMX has never received a real
+ * message-type-7 frame addressed to one of its own Con.IDs, so one had to be
+ * synthesized. RE-MEASURED over all 47 lab captures, counting every 72-byte
+ * 0x6007 frame whose [46:48] is 7 and whose Ethernet destination is OVMX's own
+ * HW MAC b6:16:8a:dc:3a:53 -- a strict subset of the 223 VMS-origin type-7
+ * frames scs_disc.h's own census already counted:
+ *
+ *   DISC-RSP-TO-OVMX: total=42 pcaps=16
+ *   DISC-RSP-TO-OVMX: src aa:00:04:00:01:04 (VAX1) n=16
+ *   DISC-RSP-TO-OVMX: src 08:00:2b:78:56:b9 (VAX2) n=15
+ *   DISC-RSP-TO-OVMX: src 08:00:2b:11:22:33 (VAX3) n=11
+ *   DISC-RSP-TO-OVMX: destination Con.ID 0x4F580007 in 42 of 42
+ *
+ * FORTY-TWO of them, from THREE distinct real VAX nodes, across SIXTEEN
+ * captures, every one addressed to SCS_DIR_OVMX_CONID -- OVMX's own
+ * SCS$DIRECTORY handle. So nothing had to be synthesized: the peer's answer
+ * was already on our wire, exactly as REJECT_RSP and DISCONNECT_RSP
+ * themselves were before round 1 found them. The synthesized frame is gone
+ * and this one is fed with ZERO BYTES EDITED.
+ *
+ * PROVENANCE (rule 8: observation only).
+ *   /data/training/vax/cluster/captures/ovmx-760-MEMBER-achieved-20260730.pcap
+ * SCA frame index 184, transcribed wire-byte for wire-byte, Ethernet header
+ * included. That is the SAME capture, the SAME peer and the SAME connection
+ * as cap_disconnect_req_to_ovmx (SCA 181) and the whole fixture stream above
+ * it -- and it is the tail of a COMPLETE Figure 2-16 teardown in which the
+ * other end of the dialogue was OVMX:
+ *
+ *   181  VAX2 -> OVMX  76 B  msgtype 6  DISCONNECT_REQ  match=0  seq 25
+ *   182  OVMX -> VAX2  72 B  msgtype 7  DISCONNECT_RSP           seq 25
+ *   183  OVMX -> VAX2  76 B  msgtype 6  DISCONNECT_REQ  match=1  seq 26
+ *   184  VAX2 -> OVMX  72 B  msgtype 7  DISCONNECT_RSP           seq 26
+ *
+ * The peer sends nothing else between 181 and 184, so 184's send_seq 26
+ * follows 181's 25 with no gap and the frame arrives IN SEQUENCE on the
+ * circuit the fixture has already built. That is why it needs no edit at all,
+ * not even to its counters: case (2) feeds it exactly as the VAX sent it.
+ *
+ * WHAT THIS DOES *NOT* SAY, and the distinction is load-bearing. 182 and 183
+ * are OVMX's, from the pre-vms-591 attempt src/vmsscs/include/scs_disc.h
+ * describes -- so the capture shows a real VAX ANSWERING an OVMX
+ * DISCONNECT_REQ, which the four vms-591 lab runs on vaxlab-4 did NOT see
+ * (there the VAX logged "Inappropriate SCA Control Message" and answered
+ * nothing in 20 s). Those two observations are BOTH real and this file does
+ * not reconcile them; scs_disc.h's lab verdict is scoped to its own runs and
+ * points here. Reconciling them is the live anomaly's job, not this file's.
+ *
+ * WHAT CASE (2) WAS MUTATED AGAINST -- RUN, not reasoned about. Each mutation
+ * was applied to the tree, rebuilt, run, and the source restored under cmp
+ * from a job-private copy. Eight mutations, eight killed:
+ *
+ *   N1  case (2) expects 2 closes instead of 1        -> red. Says the body
+ *                                                        reaches its assertions.
+ *   N2  scsd.c reads the message type at [44:46]      -> red (many cases)
+ *   N3  the classifier's `n >= 72` raised to 73, i.e.
+ *       the 58-byte class excluded                    -> red ONLY in case (2).
+ *                                                        This case is the SOLE
+ *                                                        coverage of the
+ *                                                        58-byte RECEIVE class.
+ *   N4  the captured answer's [46:48] changed 7 -> 6  -> red, and the close
+ *                                                        stops happening: the
+ *                                                        arrow really does turn
+ *                                                        on those two bytes.
+ *   N5  the two ovmx760 logical addresses re-swapped
+ *       to their pre-round-2 values                   -> red (identity guards)
+ *   N6  the answer's destination Con.ID moved off
+ *       OVMX's handle by one                          -> red
+ *   N7  the answer's send_seq made non-contiguous
+ *       with the request's                            -> red on the
+ *                                                        transcription check,
+ *                                                        on vc_breaks and on
+ *                                                        the recv_seq advance
+ *   N8  scsd.c reads the destination Con.ID 2 bytes
+ *       low                                           -> red (many cases)
+ * =================================================================== */
+
+/*
+ * ovmx-760-MEMBER-achieved-20260730.pcap SCA frame 184. VAX2 -> OVMX,
+ * message type 7 at [46:48], destination Con.ID 0x4F580007 ==
+ * SCS_DIR_OVMX_CONID, source Con.ID 0x63020012 == the handle SCA 181 supplies.
+ * Transcribed byte-exact; UNEDITED. Every byte fed to the daemon in case (2)
+ * is a byte a VAX wrote.
+ */
+static const uint8_t cap_disc_rsp_to_ovmx[SCS_DISC_RSP_FRAME_LEN] = {
+    0xb6, 0x16, 0x8a, 0xdc, 0x3a, 0x53, 0x08, 0x00,
+    0x2b, 0x78, 0x56, 0xb9, 0x60, 0x07, 0x38, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x9b, 0x04, 0x01, 0x00,
+    0xaa, 0x00, 0x04, 0x00, 0x02, 0x04, 0x4b, 0x13,
+    0x1a, 0x00, 0x1a, 0x00, 0x01, 0x00, 0x12, 0x00,
+    0x1a, 0x00, 0x00, 0x00, 0x1a, 0x00, 0x00, 0x00,
+    0x1a, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x02,
+    0x0e, 0x00, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x07, 0x00, 0x58, 0x4f, 0x12, 0x00, 0x02, 0x63
+};
+
+/*
+ * THE CAPTURED ANSWER IS WHAT IT IS CLAIMED TO BE -- asserted from its bytes,
+ * every field read out of the frame rather than restated, and every
+ * expectation taken from the OTHER captured frame of the same dialogue rather
+ * than from a literal. Run before the frame is fed, so a mis-transcription is
+ * reported as a mis-transcription instead of as a state-machine failure.
+ *
+ * NOTE WHAT IS *NOT* HERE: no offset in this frame is asserted against
+ * scs_disc.h. The Con.ID pair is checked against the pair
+ * cap_disconnect_req_to_ovmx supplies -- a frame a real VAX addressed to a
+ * handle OVMX minted -- so the ownership relation is grounded on interop, and
+ * the message type is simply read where the daemon reads it. Nothing is
+ * written into this frame, so there is no offset for the fixture to get wrong
+ * in the same direction as the code.
+ */
+static void disc_check_captured_answer(void)
+{
+    CHECK(memcmp(cap_disc_rsp_to_ovmx + 0, ovmx760_hw_mac, 6) == 0,
+          "the captured DISCONNECT_RSP is not addressed to OVMX's HW MAC");
+    CHECK(memcmp(cap_disc_rsp_to_ovmx + 6, ovmx760_member_mac, 6) == 0,
+          "the captured DISCONNECT_RSP was not sent by the fixture's peer");
+    CHECK(memcmp(cap_disc_rsp_to_ovmx + 16, ovmx760_logical, 6) == 0,
+          "the captured DISCONNECT_RSP's dst-logical is not OVMX's SCS System "
+          "Address");
+    CHECK(memcmp(cap_disc_rsp_to_ovmx + 24, ovmx760_member_sysid, 6) == 0,
+          "the captured DISCONNECT_RSP's src-logical is not the peer's SCS "
+          "System Address");
+    CHECK(disc_frame_is_rsp(cap_disc_rsp_to_ovmx, sizeof(cap_disc_rsp_to_ovmx)),
+          "the captured answer is not a %d-byte message-type-%u frame",
+          SCS_DISC_RSP_FRAME_LEN, SCS_DISC_MSGTYPE_RSP);
+    /* THE OWNERSHIP RELATION, against the request the same VAX sent us: the
+     * answer names OUR handle as its destination and ITS OWN as its source,
+     * the same way round as the request. */
+    uint32_t rem = (uint32_t)cap_disc_rsp_to_ovmx[64] |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[65] << 8) |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[66] << 16) |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[67] << 24);
+    uint32_t loc = (uint32_t)cap_disc_rsp_to_ovmx[68] |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[69] << 8) |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[70] << 16) |
+                   ((uint32_t)cap_disc_rsp_to_ovmx[71] << 24);
+    CHECK(rem == disc_cap_dst_conid() && rem == SCS_DIR_OVMX_CONID,
+          "the captured answer names remote Con.ID 0x%08X; a real VAX answering "
+          "OVMX must name OVMX's own 0x%08X -- this is the whole reason the "
+          "frame did not have to be synthesized", rem, disc_cap_dst_conid());
+    CHECK(loc == disc_cap_src_conid(),
+          "the captured answer's local Con.ID is 0x%08X, not the 0x%08X the "
+          "same peer supplied on its DISCONNECT_REQ -- the two frames are not "
+          "the same dialogue", loc, disc_cap_src_conid());
+    /* CONTIGUITY. 184 is the peer's next sequenced message after 181, which is
+     * what lets it be fed unedited: an out-of-run send_seq would be a p. 2-31
+     * gap and scsd.c would break the circuit instead of answering. */
+    uint16_t req_seq = (uint16_t)((unsigned)cap_disconnect_req_to_ovmx[34] |
+                                  ((unsigned)cap_disconnect_req_to_ovmx[35] << 8));
+    uint16_t rsp_seq = (uint16_t)((unsigned)cap_disc_rsp_to_ovmx[34] |
+                                  ((unsigned)cap_disc_rsp_to_ovmx[35] << 8));
+    CHECK(rsp_seq == (uint16_t)(req_seq + 1),
+          "the captured answer carries send_seq %u against the request's %u; "
+          "the two are not consecutive on the peer's stream and the answer "
+          "could not be fed unedited", rsp_seq, req_seq);
+}
+
 /* Build the SCS$DIRECTORY connection the captured DISCONNECT_REQ addresses,
  * through production, and reset this item's counters. Returns the CDT. */
 static struct scs_cdt *disc_world_init(struct rxworld *r)
@@ -5174,6 +5408,13 @@ static void test_peer_disconnect_req_is_answered_and_matched(void)
 /*
  * (2) THE MATCHING DISCONNECT_RSP CLOSES IT, and the CDT is RELEASED.
  * Figure 2-16: DISC MATCH --RCV_DISCONNECT_RSP--> CLOSED.
+ *
+ * THE INPUT IS THE PEER'S OWN ANSWER, UNEDITED -- ovmx-760-MEMBER-achieved
+ * SCA frame 184, a real VAX2 DISCONNECT_RSP addressed to OVMX's own Con.ID,
+ * three frames after the DISCONNECT_REQ this case already feeds and on the
+ * same connection. Not one byte of it is OVMX's. See the census and the
+ * four-frame teardown above cap_disc_rsp_to_ovmx, including what that capture
+ * does and does not say about the vms-591 lab runs.
  */
 static void test_matching_disconnect_rsp_closes_the_connection(void)
 {
@@ -5182,51 +5423,40 @@ static void test_matching_disconnect_rsp_closes_the_connection(void)
     if (cdt == NULL) {
         return;
     }
+    /* The transcription is checked before it is trusted. */
+    disc_check_captured_answer();
+
     rx_feed(&r, cap_disconnect_req_to_ovmx, sizeof(cap_disconnect_req_to_ovmx));
     if (scs_conn_state_of(cdt) != SCS_CONN_DISC_MATCH) {
         return; /* case (1) already reported why */
     }
     unsigned in_use_before = scs_cdl_in_use_count(&scsd_cdl);
 
-    /* The peer's answer. SYNTHESIZED AND LABELED: OVMX has never received a
-     * real message-type-7 frame ADDRESSED TO ONE OF ITS OWN Con.IDs -- the 223
-     * real ones in the capture library are all VAX-to-VAX. So this frame is
-     * built by the production builder from the peer's point of view: the
-     * peer's handle as local, OVMX's as remote. What it is NOT is a hand-rolled
-     * byte array; it is the same encoder, run with the roles swapped, and its
-     * shape is pinned against a real captured DISCONNECT_RSP in
-     * tests/vmsscs/test_scs_disc.c. */
-    struct scs_disc_params p;
-    uint8_t rsp[SCS_DISC_RSP_FRAME_LEN];
-    memset(&p, 0, sizeof(p));
-    memcpy(p.dst_mac, r.hw_mac, 6);
-    memcpy(p.src_mac, ovmx760_member_mac, 6);
-    memcpy(p.src_logical, ovmx760_member_sysid, 6);
-    memcpy(p.peer_logical, r.logical, 6);
-    p.remote_conid = disc_cap_dst_conid();   /* OVMX's handle */
-    p.local_conid = disc_cap_src_conid();    /* the peer's own */
-    /* THE SEQUENCE NUMBERS ARE THE PEER'S LIVE ONES, taken from the VC the
-     * daemon itself maintains -- not invented. An invented send_seq is a
-     * SEQUENCE GAP, and the daemon (correctly, vms-abc / p. 2-31) breaks the
-     * circuit and drives every connection on it to CLOSED, which would make
-     * this case pass for entirely the wrong reason. */
     struct peer_state *rps =
         peer_find_or_add(&r.w.cfg, &r.w.pdt, r.w.peers, ovmx760_member_mac);
     CHECK(rps != NULL, "peer slot for the answering peer");
     if (rps == NULL) {
         return;
     }
-    p.recv_ack = rps->vc.seq.send_seq;
-    p.send_seq = (uint16_t)(rps->vc.seq.recv_seq + 1);
-    p.incarnation = 1;
-    CHECK(scs_disc_build_response(&p, rsp) == 0, "could not build the peer's answer");
+    uint16_t peer_recv_seq_before = rps->vc.seq.recv_seq;
 
     unsigned long breaks_before = vc_breaks;
-    rx_feed(&r, rsp, sizeof(rsp));
+    rx_feed(&r, cap_disc_rsp_to_ovmx, sizeof(cap_disc_rsp_to_ovmx));
     CHECK(vc_breaks == breaks_before,
-          "feeding the peer's DISCONNECT_RSP broke the virtual circuit -- the "
-          "fixture's sequence numbers are wrong, and every assertion below "
-          "would then be measuring VC loss rather than the teardown");
+          "feeding the peer's own DISCONNECT_RSP broke the virtual circuit -- "
+          "every assertion below would then be measuring VC loss rather than "
+          "the teardown");
+    /* AND IT ARRIVED IN SEQUENCE, not as a retransmit the circuit tolerated.
+     * scsd.c ACCEPTS and dispatches a duplicate without breaking anything, so
+     * vc_breaks above cannot tell the two apart; this can. It is also what
+     * says the capture's own send_seq really is contiguous with the request's
+     * on the LIVE circuit and not merely in the pcap. */
+    CHECK(rps->vc.seq.recv_seq == (uint16_t)(peer_recv_seq_before + 1),
+          "the peer's recv_seq went %u -> %u, expected %u -- the "
+          "DISCONNECT_RSP was not delivered as the next sequenced message on "
+          "the circuit, so it was a duplicate and not an answer",
+          peer_recv_seq_before, rps->vc.seq.recv_seq,
+          (uint16_t)(peer_recv_seq_before + 1));
 
     CHECK(disc_rsp_recv == 1, "the daemon delivered %lu DISCONNECT_RSP, expected 1",
           disc_rsp_recv);
@@ -5523,6 +5753,16 @@ static void test_exit_summary_reports_the_disconnect_dialogue(void)
 
 int main(void)
 {
+    /* THE FAILURE STREAM, taken before anything can dup2() over fd 2. See
+     * chk_stream() above -- without this, a CHECK that fails inside a
+     * log-capture window prints into rxlog and the operator sees nothing. */
+    {
+        int fd = dup(STDERR_FILENO);
+        if (fd >= 0) {
+            chk_out = fdopen(fd, "w");
+        }
+    }
+
     /* Several assertions below assume the machine starts enabled. */
     (void)unsetenv("OVMX_NO_CONN_FSM");
 

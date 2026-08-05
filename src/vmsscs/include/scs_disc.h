@@ -63,6 +63,22 @@
  * and counting our own frames as evidence about VMS would be circular. The
  * measure script reports them separately and never mixes them in.)
  *
+ * AND 42 OF THOSE 223 ARE ADDRESSED TO OVMX. Re-measured in vms-591 round 2 --
+ * a strict subset of the row above, being the VMS-sourced 58-byte type-7 frames
+ * whose Ethernet DESTINATION is OVMX's own HW MAC b6:16:8a:dc:3a:53:
+ *
+ * DISC-RSP-TO-OVMX: total=42 pcaps=16
+ * DISC-RSP-TO-OVMX: src aa:00:04:00:01:04 n=16
+ * DISC-RSP-TO-OVMX: src 08:00:2b:78:56:b9 n=15
+ * DISC-RSP-TO-OVMX: src 08:00:2b:11:22:33 n=11
+ * DISC-RSP-TO-OVMX: destination Con.ID 0x4F580007 in 42 of 42
+ *
+ * i.e. three distinct real VAX nodes, across sixteen captures, have answered
+ * OVMX on OVMX's own SCS$DIRECTORY Con.ID. tests/vmsscs/test_scsd_wire.c
+ * drives the receive side with one of them, UNEDITED. Read THE LAB VERDICT
+ * below with this in hand: it is a statement about four particular runs, and
+ * it is not the same statement as "a VAX has never answered OVMX".
+ *
  * THIS FILE'S SCOPE IS THE DISCONNECT PAIR. `5` (REJECT_RSP) is measured above
  * and left alone; OVMX has no production REJECT caller to answer (scs_svc.h),
  * and building a frame for a dialogue nothing enters would be untested code.
@@ -154,13 +170,15 @@
  * KILL SWITCH: OVMX_NO_CLEAN_SHUTDOWN
  * ==========================================================================
  *
- * WIRE-VISIBLE, and this switch gates EVERY new byte. Before vms-591 OVMX
- * emitted no DISCONNECT frame of any kind, ever -- not in the dialogue, not at
- * exit. With OVMX_NO_CLEAN_SHUTDOWN=1 the builders below refuse (return -1),
- * scsd.c's emitter therefore reports SCS_SVC_EMIT_NOBUILDER exactly as it did
- * before this item, and the daemon's exit teardown does not run. That restores
- * the pre-vms-591 wire byte for byte, because the pre-vms-591 wire had none of
- * these frames on it.
+ * WIRE-VISIBLE, and this switch gates EVERY new byte. Before vms-591 the SCSD
+ * BUILD emitted no DISCONNECT frame of any kind -- not in the dialogue, not at
+ * exit -- which is the state this switch restores. It is NOT a claim that no
+ * OVMX process ever put one on the wire: the census above counts 42 of each
+ * from the pre-vms-591 attempt, and both figures re-derive. With
+ * OVMX_NO_CLEAN_SHUTDOWN=1 the builders below refuse (return -1), scsd.c's
+ * emitter therefore reports SCS_SVC_EMIT_NOBUILDER exactly as it did before
+ * this item, and the daemon's exit teardown does not run. That restores the
+ * pre-vms-591 DAEMON wire byte for byte.
  *
  * The switch does NOT suppress the connection STATE machine: with it set, a
  * received DISCONNECT_REQ still moves the CDT to DISC RECEIVED and still logs
@@ -219,8 +237,17 @@
  *
  * WHAT DID NOT WORK, stated first and not buried:
  *
- *   >>> THE PEER NEVER ANSWERS. No message-type-7 frame arrives, ever. The A2
- *   >>> capture ran 20 s past the request; C1 ran 15 s. Not one DISCONNECT_RSP.
+ *   >>> THE PEER NEVER ANSWERS ON THESE FOUR RUNS. No message-type-7 frame
+ *   >>> arrives in any of them. The A2 capture ran 20 s past the request; C1
+ *   >>> ran 15 s. Not one DISCONNECT_RSP.
+ *   >>>
+ *   >>> THAT IS A STATEMENT ABOUT THESE RUNS AND NOT ABOUT VMS, and vms-591
+ *   >>> round 2 measured the difference: the DISC-RSP-TO-OVMX census above
+ *   >>> finds 42 VAX-sourced message-type-7 frames addressed to OVMX's own
+ *   >>> Con.ID, from three distinct VAX nodes, in sixteen EARLIER captures.
+ *   >>> A real VAX has answered an OVMX disconnect. It did not answer these
+ *   >>> four, and WHY is the live anomaly, not a settled fact.
+ *   >>>
  *   >>> So the connection does NOT reach CLOSED, and the last bullet of this
  *   >>> item's done-condition -- "the peer CDT reaches CLOSED rather than being
  *   >>> left pending" -- IS NOT MET. Every run exits reporting

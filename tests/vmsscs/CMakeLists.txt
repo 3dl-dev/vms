@@ -865,3 +865,45 @@ set_tests_properties(scs_figures_wire_mutants PROPERTIES
     LABELS "unit;scs;cluster;docs"
     TIMEOUT 900
 )
+
+# vms-ebb - THE DISK-DISCOVERY TRIGGER RULING, AND THE BATTERY THAT PROVES THE
+# GATE READS IT.
+#
+# vms-096 deleted a dead immediate trigger and left the choice -- one trigger or
+# two -- to a comment. A ruling in a comment decays: sec 4(O.1)'s bracket ran
+# the DEFAULT environment and never entered the block at all, so nothing in
+# ctest read the comment or could contradict it. vms-ebb ran the missing
+# pure-server bracket (spec sec 4(O.4)) and these two tests hold the documents
+# to it WITHOUT needing the captures, which are host-only under CLAUDE.md rule 8.
+#
+# The one thing they exist above all to stop: the FIRST draft of this ruling
+# claimed the peer never sends the DISCONNECT_REQ an immediate trigger would
+# fire on. The bracket measured the opposite -- 2 per run, 3 of 3 arms. That
+# claim family is now a red.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_diskrun_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_diskrun_figures.py)
+else()
+    add_test(NAME scs_diskrun_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_diskrun_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_diskrun_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)
+
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_diskrun_mutants
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_diskrun_mutants.py)
+else()
+    add_test(NAME scs_diskrun_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_diskrun_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_diskrun_mutants PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 300
+)

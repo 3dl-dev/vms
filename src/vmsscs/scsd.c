@@ -8925,6 +8925,146 @@ static void scsd_retransmit_tick(struct scsd_rx *rx, uint64_t now_ms)
 }
 
 /*
+ * scsd_diskrun_gate_ms - how long the pure-server disk-discovery run waits
+ * before it opens OUR SCS$DIRECTORY client connection anyway.
+ *
+ * Default 2000 ms sits inside the 1.4-4.4 s window a real joiner uses between
+ * its op 0x01 and its op 0x02 (spec sec 4c.8). OVMX_DISKRUN_GATE_MS overrides
+ * it; a value of 0 or an unparseable one leaves the default, which is why the
+ * env read is a function rather than an inline strtoul -- vms-ebb's bracket has
+ * to be able to state what the gate was without re-reading main().
+ */
+#define SCSD_DISKRUN_GATE_MS_DEFAULT 2000UL
+
+static unsigned long scsd_diskrun_gate_ms(void)
+{
+    const char *e = getenv("OVMX_DISKRUN_GATE_MS");
+    if (e != NULL && *e != '\0') {
+        unsigned long v = strtoul(e, NULL, 10);
+        if (v > 0UL) {
+            return v;
+        }
+    }
+    return SCSD_DISKRUN_GATE_MS_DEFAULT;
+}
+
+/*
+ * scsd_diskrun_ungate_tick - DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS
+ * IS IT. Returns the number of runs started on this tick.
+ *
+ * ORIGINALLY (vms-2f3 step 4) this was the SECOND of two entry points into the
+ * pure-server disk-CLIENT machine (OUR SCS$DIRECTORY connect -> MSCP$DISK
+ * lookup -> SCC/GUS walk). The first fired immediately off an inbound op 6 on
+ * SCS_DIR_OVMX_CONID; this one existed because on a REJOIN that op 6 never
+ * arrives -- 0 of 3 peers send it (spec/handoff sec 4d.5) -- so a returning
+ * identity never ran the discovery that sec 4c.8 shows every real joiner
+ * performs in the 1.4-4.4 s between its op 0x01 and its op 0x02.
+ *
+ * CORRECTED (vms-096). The first trigger is GONE, and the paragraph that used
+ * to stand here was doubly stale:
+ *   - "started in exactly two places" -- there is ONE. The op-6 handler that
+ *     set psc_credit_done sat INSIDE an `if (cm_op == 8)` branch and was
+ *     unreachable, so the flag was permanently 0 and the immediate trigger it
+ *     gated could never fire. Both are deleted.
+ *   - "PSCLIENT fires 33 times on a join and 0 times on a rejoin" was MEASURED
+ *     ON worktree-760-active-directory, where the op-6 handler really was
+ *     reachable. It does not describe this branch and is not restated as if it
+ *     did.
+ *
+ * ===== RULED (vms-ebb, 2026-08-05): ONE TRIGGER STAYS, AND THE REASON IS A
+ * BRACKET, NOT THE ABSENCE OF A SIGNAL. READ THE SECOND BULLET. =====
+ *
+ * vms-096 left this open because the only passing acceptance bracket (spec sec
+ * 4(O.1), runs B1/B3/B2) ran the DEFAULT environment -- no OVMX_PURE_SERVER --
+ * so it never entered this block at all and could not speak to it either way.
+ * vms-ebb ran the missing bracket: three pure-server arms on ONE lab-2 pod
+ * (`vaxlab-1`), control BETWEEN the two test arms, identity read off the
+ * capture, one binary md5-verified in-pod before and after every arm. Spec sec
+ * 4(O.4) carries the figures. What it measured:
+ *
+ *   - THIS GATE IS WHAT STARTS THE RUN. PSC-UNGATED went 2 -> 0 -> 2 across
+ *     test/control/test, and the PS SCS$DIRECTORY CONNECT_REQ (local Con.ID
+ *     slot 0x000C) is on the wire in both test arms and ABSENT from the
+ *     control. The kill switch was RUN, not asserted (guardrail 23).
+ *
+ *   - THE IMMEDIATE TRIGGER IS NOT DEAD FOR WANT OF A SIGNAL, and any claim
+ *     that it is would be false. The peer initiates a p. 2-26 symmetric
+ *     teardown of OUR SCS$DIRECTORY server connection -- peer DISCONNECT_REQ,
+ *     our DISCONNECT_RSP, our own DISCONNECT_REQ, peer DISCONNECT_RSP, inside
+ *     400 us -- TWICE per run (once per VAX) in 3 of 3 arms, at t+0.9/1.4,
+ *     t+3.8/4.3 and t+2.3/3.8. That is exactly the frame the deleted trigger
+ *     fired on, and the vms-591/vms-dd5 classifier now handles it
+ *     (scsd_disconnect_dialogue). Re-attaching there would start the disk run
+ *     2.1-2.9 s earlier than this gate does.
+ *
+ *   - AND IT BUYS NOTHING ON THIS PATH. All three arms reached CLUSTER_NODES=3
+ *     at t+13 s -- INCLUDING the control, in which disk discovery never ran at
+ *     all. Admission on this lab does not wait on the disk run, so 2.1-2.9 s of
+ *     earlier start has no measured effect to be an improvement to, while a
+ *     second entry point restores exactly the two-writer shape vms-096 deleted.
+ *
+ * So: not re-attached. NOT because the signal is missing -- it is there, it is
+ * timed, and sec 4(O.4) records where it would attach and what it would gain --
+ * but because nothing this bracket can reach is waiting for it.
+ *
+ * WHAT THIS BRACKET DOES NOT SETTLE, and it is the case that motivated the
+ * trigger: the REJOIN. All three arms are FIRST joins by identities that had
+ * never been admitted anywhere. Sec 4e.3's peer-side evidence is about a
+ * refused rejoin -- the peer holds VMS$DISK_CL_DRVR in `con_sent` with a zero
+ * Remote Con. ID, where a successful join leaves MSCP$DISK `open` -- and
+ * whether the op 6 above even arrives on a rejoin is `vms-449`'s bracket, not
+ * this one. If it does and the earlier start matters there, this ruling is the
+ * thing to re-open, with the attachment point already measured.
+ *
+ * WHY IT IS A FUNCTION (vms-ebb). It was an inline block in main()'s loop, and
+ * SCSD_UNIT_TEST renames main() away -- so the ONE trigger the daemon has was
+ * compiled but reachable from no test, exactly the gap vms-abc closed for the
+ * retransmit tick and vms-fb1 closed for the receive path. Nothing about the
+ * body changed in the move: same guards, same order, same log line.
+ *
+ * Kill-switch OVMX_NO_DISKRUN_UNGATE=1 restores the gated behaviour so this can
+ * be refuted by a matched control in the same session (guardrail 21).
+ */
+static unsigned scsd_diskrun_ungate_tick(struct scsd_rx *rx, uint64_t now_ms)
+{
+    if (rx == NULL || !rx->do_connect) {
+        return 0;
+    }
+    if (getenv("OVMX_PURE_SERVER") == NULL ||
+        getenv("OVMX_NO_DISKRUN_UNGATE") != NULL) {
+        return 0;
+    }
+    unsigned long gate_ms = scsd_diskrun_gate_ms();
+    unsigned started = 0;
+    for (int i = 0; i < OVMX_MAX_PEERS; i++) {
+        struct peer_state *ps = &rx->peers[i];
+        if (!(ps->pb != NULL) || !ps->cm_config_sent || ps->psc_gate_ms == 0) {
+            continue;
+        }
+        if (ps->psc_step != PSC_IDLE || ps->psc_dir_sent) {
+            continue; /* the run is already going */
+        }
+        if (now_ms - ps->psc_gate_ms < (uint64_t)gate_ms) {
+            continue;
+        }
+        if (ps_send_dir_connect(rx->sock, rx->ifindex, ps,
+                                rx->our_hw_mac, rx->our_src_logical)) {
+            ps->psc_step = PSC_DIR_CONNECT;
+            ps->psc_retx = 0;
+            rx->psc_ungated++;
+            started++;
+            log_ts(stdout);
+            printf(" SCSD-I-PSCUNGATE, no op 6 on our server dir connection"
+                   " after %lums -- opened OUR SCS$DIRECTORY client connect"
+                   " local=0x%08X seq=%u (disk-discovery step 1, UNGATED)\n",
+                   gate_ms, (unsigned)OVMX_PS_DIR_CONID, ps->psc_dir_req_seq);
+            fflush(stdout);
+        }
+    }
+    return started;
+}
+
+/*
  * ============ vms-591: CLEAN SHUTDOWN -- OVMX STOPS VANISHING ==============
  *
  * Before this item the daemon's whole shutdown was `g_stop = 1` and then exit.
@@ -9592,19 +9732,9 @@ int main(int argc, char **argv)
 
     static uint8_t buf[SCA_FRAME_MAX];
     struct timespec last_hello = {0, 0};
-    /* vms-2f3 step 4: how long to wait for the member's op 6 before starting the
-     * disk-discovery run anyway. Default 2000 ms sits inside the 1.4-4.4 s window
-     * a real joiner uses between op 0x01 and op 0x02 (sec 4c.8). */
-    unsigned long diskrun_gate_ms = 2000UL;
-    {
-        const char *e = getenv("OVMX_DISKRUN_GATE_MS");
-        if (e != NULL && *e != '\0') {
-            unsigned long v = strtoul(e, NULL, 10);
-            if (v > 0UL) {
-                diskrun_gate_ms = v;
-            }
-        }
-    }
+    /* vms-2f3 step 4 / vms-ebb: how long to wait for the member's op 6 before
+     * starting the disk-discovery run anyway now lives in
+     * scsd_diskrun_gate_ms(), read by scsd_diskrun_ungate_tick() itself. */
 
     /* vms-4071: everything the VC formation state machine needs to put its
      * actions on the wire. Pointers, so the HW MAC resolved in the emit_hello
@@ -9749,75 +9879,12 @@ int main(int argc, char **argv)
          * reach it, and made retransmit exhaustion break the circuit. */
         scsd_retransmit_tick(&rx, monotonic_ms());
 
-        /* --- DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS IS IT.
-         *
-         * ORIGINALLY (vms-2f3 step 4) this was the SECOND of two entry points
-         * into the pure-server disk-CLIENT machine (OUR SCS$DIRECTORY connect ->
-         * MSCP$DISK lookup -> SCC/GUS walk). The first fired immediately off an
-         * inbound op 6 on SCS_DIR_OVMX_CONID; this one existed because on a
-         * REJOIN that op 6 never arrives -- 0 of 3 peers send it (spec/handoff
-         * sec 4d.5) -- so a returning identity never ran the discovery that
-         * sec 4c.8 shows every real joiner performs in the 1.4-4.4 s between its
-         * op 0x01 and its op 0x02.
-         *
-         * CORRECTED (vms-096). The first trigger is GONE, and the paragraph that
-         * used to stand here was doubly stale:
-         *   - "started in exactly two places" -- there is ONE. The op-6 handler
-         *     that set psc_credit_done sat INSIDE an `if (cm_op == 8)` branch and
-         *     was unreachable, so the flag was permanently 0 and the immediate
-         *     trigger it gated could never fire. Both are deleted.
-         *   - "PSCLIENT fires 33 times on a join and 0 times on a rejoin" was
-         *     MEASURED ON worktree-760-active-directory, where the op-6 handler
-         *     really was reachable. It does not describe this branch and is not
-         *     restated as if it did.
-         *
-         * SO THE `psc_credit_done ||` TERM IS GONE FROM THE GUARD BELOW TOO, and
-         * this block is now unconditional once the gate expires rather than
-         * "additive" to a trigger that fires first. The three vms-578 acceptance
-         * runs (spec sec 4(O.1), B1/B3/B2) all JOINED with exactly this
-         * behaviour, so re-attaching an immediate trigger to the ARCHITECTED
-         * DISCONNECT path (scs_disc_*, the vms-591 classifier, which is where an
-         * op 6 is now handled) would change a wire path the only passing
-         * acceptance bracket did not exercise. RULED: not re-attached here;
-         * raised as follow-up work instead.
-         *
-         * Sec 4e.3's peer-side evidence that this window matters is unchanged:
-         * during a refused rejoin the peer holds VMS$DISK_CL_DRVR in `con_sent`
-         * with a zero Remote Con. ID -- a connect request to us we never answered
-         * -- where a successful join leaves MSCP$DISK `open`.
-         *
-         * Kill-switch OVMX_NO_DISKRUN_UNGATE=1 restores the gated behaviour so
-         * this can be refuted by a matched control in the same session
-         * (guardrail 21). */
-        if (do_connect && getenv("OVMX_PURE_SERVER") != NULL &&
-            getenv("OVMX_NO_DISKRUN_UNGATE") == NULL) {
-            uint64_t now_ms = monotonic_ms();
-            for (int i = 0; i < OVMX_MAX_PEERS; i++) {
-                struct peer_state *ps = &peers[i];
-                if (!(ps->pb != NULL) || !ps->cm_config_sent || ps->psc_gate_ms == 0) {
-                    continue;
-                }
-                if (ps->psc_step != PSC_IDLE || ps->psc_dir_sent) {
-                    continue; /* the run is already going */
-                }
-                if (now_ms - ps->psc_gate_ms < (uint64_t)diskrun_gate_ms) {
-                    continue;
-                }
-                if (ps_send_dir_connect(sock, (int)ifindex, ps,
-                                        our_hw_mac, our_src_logical)) {
-                    ps->psc_step = PSC_DIR_CONNECT;
-                    ps->psc_retx = 0;
-                    rx.psc_ungated++;
-                    log_ts(stdout);
-                    printf(" SCSD-I-PSCUNGATE, no op 6 on our server dir connection"
-                           " after %lums -- opened OUR SCS$DIRECTORY client connect"
-                           " local=0x%08X seq=%u (disk-discovery step 1, UNGATED)\n",
-                           (unsigned long)diskrun_gate_ms,
-                           (unsigned)OVMX_PS_DIR_CONID, ps->psc_dir_req_seq);
-                    fflush(stdout);
-                }
-            }
-        }
+        /* --- DISK DISCOVERY HAS EXACTLY ONE TRIGGER, AND THIS CALL IS IT.
+         * vms-ebb moved the body into scsd_diskrun_ungate_tick() so a test can
+         * reach it (SCSD_UNIT_TEST renames main() away), and ruled the single
+         * trigger on a lab bracket -- spec sec 4(O.4). Read that function's
+         * header before adding a second entry point. */
+        (void)scsd_diskrun_ungate_tick(&rx, monotonic_ms());
 
         ssize_t n = recv(sock, buf, sizeof(buf), 0);
         if (n < 0) {

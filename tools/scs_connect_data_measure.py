@@ -63,6 +63,49 @@ locally-administered MAC, which is what a Linux tap/veth gets -- is NOT a VAX.
 requires it to be ZERO. A future OVMX run on a new MAC therefore REDS this
 script instead of silently rejoining the VAX population.
 
+=======================================================================
+A MAC IS NOT A NODE -- IDENTITY COMES FROM THE FRAME, NOT FROM THE SOURCE MAC
+=======================================================================
+
+The guard above splits the POPULATION on the Ethernet source MAC, and that is
+the right axis for "is this frame ours". It is the WRONG axis for "how many
+independent nodes agree", and this script previously conflated the two. Both
+directions of the error are real in this capture library, and both were
+measured:
+
+  * ONE NODE, TWO MACs. `08:00:2b:4a:b7:15` (the DEC NIC hardware address) and
+    `aa:00:04:00:01:04` (the DECnet-assigned logical address that replaces it
+    once DECnet starts) are the SAME machine: both name themselves `VAX1` with
+    SCSSYSTEMID 1025 in their own START frames.
+  * ONE MAC, THREE NODES. `08:00:2b:78:56:b9` was reconfigured across reboots
+    and appears as `VAX2` (1026), `VX3` (1050) and `ZK` (1099).
+
+So a source-MAC count can be too low AND too high at once, and "N distinct
+sources agree" cannot be read off it. Two finer counts are derived instead,
+both from the frames themselves:
+
+  1. NODE IDENTITY, per frame. Every connect frame carries the sender's own
+     LAVC logical address at payload [10:16] in the form aa:00:04:00:NN:04,
+     where NN is the LAVC node number = SCSSYSTEMID & 1023 (spec sec 4g). This
+     is checked, not assumed: whenever the ETHERNET source is itself an
+     aa:00:04 address, [10:16] equals it (0 mismatches), and no VAX-sourced
+     connect frame carries any other form (0 residuals). NN is then resolved to
+     the ASCII node NAME through the 106-byte START frames, which carry the
+     name at payload [90:98] and the SCSSYSTEMID at [46:48] (spec sec 4g); the
+     script requires that map to be a bijection and to cover every node number
+     that appears in the connect census.
+  2. HARDWARE SOURCE. Node identities that share a MAC, and MACs that share a
+     node identity, are the same lab machine. The connected components of the
+     MAC<->node-identity graph are the distinct machines. This is the
+     CONSERVATIVE count and it is the one an "independent sources agree" claim
+     must use: VX3 and ZK are separate cluster members but the same reconfigured
+     box, so they are not independent observations of VMS behaviour.
+
+A third, independent confirmation of the MAC split falls out of this: the node
+numbers the VAX population emits and the ones the OVMX population emits must be
+DISJOINT sets. A misclassified source would show up as a node number in the
+wrong population.
+
 THE POPULATION (and why it is exactly this one). Take `sca = frame[14:]` for
 every ethertype-0x6007 frame. Keep frames with `len(sca) == 110`, format byte
 `sca[17] == 0x13`, and opcode `sca[16]` in the SCS-message family
@@ -110,6 +153,16 @@ VAX1_LOGICAL = "aa:00:04:00:01:04"  # an established member in that capture
 # Ethernet source prefixes a real lab VAX transmits from.
 VAX_SOURCE_OUIS = ("08:00:2b",   # DEC NIC OUI
                    "aa:00:04")   # DECnet-assigned logical address
+
+# --- node identity, see "A MAC IS NOT A NODE" above -----------------------
+# The sender's own LAVC logical address inside the connect frame, and the two
+# START-frame fields the node number is resolved to a name through.
+SRC_LAVC = (10, 16)          # payload-relative, form aa:00:04:00:NN:04
+LAVC_PREFIX = b"\xaa\x00\x04\x00"
+START_LEN, START_OPCODE = 106, 0x41
+START_NAME = (90, 98)        # 8-byte blank-padded ASCII node name (spec 4g)
+START_SCSSYSTEMID = (46, 48)  # LE u16 (spec 4g); node number == id & 1023
+LAVC_NODE_MASK = 1023
 # OVMX's own hardware MACs, as logged by scsd itself (`hwmac=` in the lab work
 # directory). --logs re-derives this set and the check fails if it has grown.
 OVMX_HW_MACS = frozenset((
@@ -129,13 +182,55 @@ EXPECTED = {
     "ovmx_connect_frames": 466,
     "ovmx_msgtype_histogram": {0: 396, 2: 70},   # OVMX emits NO type-10 frame
     "ovmx_vaxcluster_frames": 55,
+    # The per-SYSAP counts the guard dropped -- the spec sec 4(N) table's last
+    # column. Pinned so that column re-derives like every other figure.
+    "ovmx_sysap_census": {
+        "MSCP$DISK": 243,
+        "SCS$DIRECTORY": 113,
+        "SCS$DIR_LOOKUP": 55,
+        "VMS$VAXcluster": 55,
+    },
     "ovmx_source_macs": ["b6:16:8a:dc:3a:53"],   # the only one that appears in captures
     # --- the VMS$VAXcluster subset and its two invariant spans (VAX-only) ---
     "vaxcluster_frames": 148,
     "vaxcluster_version_quad": 148,      # [94:98] == 01 1b 01 03
     "vaxcluster_tail": 148,              # [105:110] == 08 00 00 06 00
     "vaxcluster_distinct_values": 5,
-    "vaxcluster_source_nodes": 4,        # distinct VAX source MACs carrying it
+    # --- identity, NOT MACs (see "A MAC IS NOT A NODE" above) ---------------
+    # Kept only so the discrepancy stays visible: 4 is the number of distinct
+    # VAX source MACs carrying VMS$VAXcluster connect data. It is NOT a node
+    # count and no prose figure may be derived from it -- it is simultaneously
+    # too high (VAX1 sources from two MACs) and too low (one MAC carries three
+    # node identities). Use vaxcluster_node_census / vaxcluster_hardware_sources.
+    "vaxcluster_source_macs": 4,
+    # The census by NODE IDENTITY, resolved from each frame's own LAVC node
+    # number and named through the START frames. Sums to vaxcluster_frames.
+    "vaxcluster_node_census": {
+        "VAX1": 74, "VAX2": 32, "VAX3": 36, "VX3": 3, "ZK": 3,
+    },
+    "vaxcluster_node_identities": 5,
+    # The CONSERVATIVE count, and the one every "independent sources" claim
+    # uses: connected components of the MAC <-> node-identity graph.
+    "vaxcluster_hardware_sources": 3,
+    # LAVC node number -> ASCII node name, over the whole VAX population.
+    "vax_node_names": {1: "VAX1", 2: "VAX2", 3: "VAX3", 26: "VX3", 75: "ZK"},
+    # The three lab machines, as (source MACs, node identities). Derived, not
+    # asserted: this is what the MAC<->identity graph decomposes into.
+    "hardware_source_groups": [
+        (["08:00:2b:11:22:33"], ["VAX3"]),
+        (["08:00:2b:4a:b7:15", "aa:00:04:00:01:04"], ["VAX1"]),
+        (["08:00:2b:78:56:b9"], ["VAX2", "VX3", "ZK"]),
+    ],
+    # Identity plumbing that must hold for the two counts above to mean anything.
+    "vax_srclavc_residuals": 0,        # VAX connect frames NOT in aa:00:04:00:NN:04 form
+    "vax_srclavc_mismatches": 0,       # aa:00:04-sourced frames whose [10:16] != their MAC
+    "unnamed_vax_node_numbers": [],    # every node number in the census has a START name
+    "node_numbers_in_both_populations": [],   # VAX and OVMX node numbers are disjoint
+    # Per-SYSAP identity counts, so no row can quietly go back to citing MACs.
+    "sysap_node_identities": {
+        "MSCP$DISK": 5, "SCA$TRANSPORT": 5, "SCS$DIRECTORY": 5,
+        "SCS$DIR_LOOKUP": 5, "VMS$DISK_CL_DRVR": 5, "VMS$VAXcluster": 5,
+    },
     # The ungrounded middle span [98:105] in full, VAX-sourced, value -> frames.
     # Listed exhaustively because prose that says "two families" has to be
     # checkable: 4 of the 5 fit 01 00 01 00 NN 00 01, and one does NOT.
@@ -171,7 +266,11 @@ EXPECTED = {
     # emit it. Without this the adopted value would rest on the specimen alone.
     "adopted_value_vax_frames": 40,
     "adopted_value_vax_frames_outside_specimen": 38,
-    "adopted_value_vax_nodes": 3,
+    # Node identities, and the conservative hardware-source count. The old
+    # figure here was 3 DISTINCT SOURCE MACS, which is not a node count.
+    "adopted_value_vax_node_identities": 5,
+    "adopted_value_vax_hardware_sources": 3,
+    "adopted_value_vax_captures": 18,
 }
 
 
@@ -220,6 +319,51 @@ def classify_source(src):
     return None
 
 
+def src_lavc_node(sca):
+    """The sender's own LAVC node number, read out of the frame itself.
+
+    Returns None when payload [10:16] is not in the aa:00:04:00:NN:04 form --
+    which is a residual to be counted, never a frame to be quietly attributed.
+    """
+    a = sca[SRC_LAVC[0]:SRC_LAVC[1]]
+    if len(a) != 6 or a[:4] != LAVC_PREFIX or a[5] != 0x04:
+        return None
+    return a[4]
+
+
+def hardware_components(mac_nodes):
+    """Connected components of the MAC <-> node-identity graph.
+
+    Two MACs that ever present the same node identity, and two node identities
+    that ever share a MAC, are the same lab machine. Returns a list of
+    (sorted MACs, sorted node numbers).
+    """
+    node_macs = collections.defaultdict(set)
+    for src, nodes in mac_nodes.items():
+        for n in nodes:
+            node_macs[n].add(src)
+    seen, comps = set(), []
+    for start in sorted(mac_nodes):
+        if start in seen:
+            continue
+        macs, nodes, stack = set(), set(), [("m", start)]
+        while stack:
+            kind, v = stack.pop()
+            if kind == "m":
+                if v in macs:
+                    continue
+                macs.add(v)
+                stack.extend(("n", n) for n in mac_nodes[v])
+            else:
+                if v in nodes:
+                    continue
+                nodes.add(v)
+                stack.extend(("m", s) for s in node_macs[v])
+        seen |= macs
+        comps.append((sorted(macs), sorted(nodes)))
+    return comps
+
+
 def ovmx_macs_from_logs(logdir):
     """Re-derive OVMX's own MACs from what scsd logged (`hwmac=aa:bb:...`)."""
     found = set()
@@ -247,6 +391,12 @@ def _new_pop():
         "name_field_ascii_violations": 0,
         "vaxcluster_sources": collections.Counter(),
         "source_macs": collections.Counter(),
+        # identity, per frame (see "A MAC IS NOT A NODE")
+        "vaxcluster_nodes": collections.Counter(),   # node number -> frames
+        "mac_nodes": collections.defaultdict(set),   # MAC -> node numbers
+        "sysap_nodes": collections.defaultdict(set),  # SYSAP -> node numbers
+        "srclavc_residuals": 0,
+        "srclavc_mismatches": 0,
     }
 
 
@@ -259,8 +409,10 @@ def measure(capdir):
         "specimen": collections.defaultdict(collections.Counter),
         "specimen_source_frames": collections.Counter(),
         # VAX-sourced VMS$VAXcluster frames carrying the adopted value, keyed
-        # on (capture basename, source MAC).
+        # on (capture basename, node identity).
         "adopted_value_sightings": collections.Counter(),
+        # LAVC node number -> ASCII node name, from the 106-byte START frames.
+        "node_names": collections.defaultdict(collections.Counter),
     }
     adopted = bytes.fromhex(EXPECTED["ovmx_value"].replace(" ", ""))
     for path in sorted(glob.glob(os.path.join(capdir, "**", "*.pcap"), recursive=True)):
@@ -273,6 +425,16 @@ def measure(capdir):
             if base == JOIN_SPECIMEN:
                 m["specimen_source_frames"][src] += 1
             sca = pkt[14:]
+            # START frames name the nodes: node number (SCSSYSTEMID & 1023) ->
+            # ASCII node name. This is how a connect frame's LAVC node number
+            # becomes an identity a human can check against the lab.
+            if (len(sca) == START_LEN and sca[16] == START_OPCODE
+                    and sca[17] == 0x13):
+                nm = sca[START_NAME[0]:START_NAME[1]]
+                sid = struct.unpack("<H", sca[START_SCSSYSTEMID[0]:
+                                              START_SCSSYSTEMID[1]])[0]
+                if all(32 <= c < 127 for c in nm) and nm.strip():
+                    m["node_names"][sid & LAVC_NODE_MASK][nm.decode().strip()] += 1
             if len(sca) != 110 or sca[17] != 0x13 or sca[16] not in (0x4B, 0x5B, 0x7B):
                 continue
             which = classify_source(src)
@@ -286,6 +448,15 @@ def measure(capdir):
                 continue
             p["connect_frames"] += 1
             p["source_macs"][src] += 1
+            # Identity, read out of THIS frame -- not inferred from the MAC.
+            node = src_lavc_node(sca)
+            if node is None:
+                p["srclavc_residuals"] += 1
+            else:
+                p["mac_nodes"][src].add(node)
+                if src.startswith("aa:00:04") and mac(
+                        sca[SRC_LAVC[0]:SRC_LAVC[1]]) != src:
+                    p["srclavc_mismatches"] += 1
             local = sca[LOCAL_NAME[0]:LOCAL_NAME[1]]
             # The population claim: a connect frame's [62:78] is an ASCII SYSAP
             # name. Anything else means the split above is wrong.
@@ -295,18 +466,28 @@ def measure(capdir):
             name = local.decode("ascii").rstrip()
             cd = bytes(sca[CD_OFF:CD_END])
             p["sysap_values"][name][cd] += 1
+            if node is not None:
+                p["sysap_nodes"][name].add(node)
             if name == "VMS$VAXcluster":
                 p["vaxcluster_frames"] += 1
                 p["vaxcluster_sources"][src] += 1
+                if node is not None:
+                    p["vaxcluster_nodes"][node] += 1
                 if cd[0:4] == b"\x01\x1b\x01\x03":
                     p["vaxcluster_version_quad"] += 1
                 if cd[11:16] == b"\x08\x00\x00\x06\x00":
                     p["vaxcluster_tail"] += 1
                 if which is VAX and cd == adopted:
-                    m["adopted_value_sightings"][(base, src)] += 1
+                    m["adopted_value_sightings"][(base, node)] += 1
             if base == JOIN_SPECIMEN and name == "VMS$VAXcluster":
                 m["specimen"][(src, mt)][cd] += 1
     return m
+
+
+def node_name(m, node):
+    """The ASCII node name for a LAVC node number, or None if unnamed."""
+    c = m["node_names"].get(node)
+    return c.most_common(1)[0][0] if c else None
 
 
 def _report_pop(m, which, label, out):
@@ -333,7 +514,24 @@ def _report_pop(m, which, label, out):
           % (p["vaxcluster_version_quad"], p["vaxcluster_frames"]), file=out)
     print("    [105:110] == 08 00 00 06 00  : %d/%d"
           % (p["vaxcluster_tail"], p["vaxcluster_frames"]), file=out)
-    print("    distinct source nodes         : %d" % len(p["vaxcluster_sources"]), file=out)
+    print("    distinct source MACs          : %d  (NOT a node count)"
+          % len(p["vaxcluster_sources"]), file=out)
+    print("  identity (from each frame's own LAVC node number, named via START):",
+          file=out)
+    print("    by node identity              : %s"
+          % ", ".join("%s(%d)=%d" % (node_name(m, n) or "UNNAMED", n, c)
+                      for n, c in sorted(p["vaxcluster_nodes"].items())), file=out)
+    print("    distinct node identities      : %d" % len(p["vaxcluster_nodes"]),
+          file=out)
+    comps = hardware_components(p["mac_nodes"])
+    print("    distinct hardware sources     : %d  <-- the independence count"
+          % len(comps), file=out)
+    for macs, nodes in comps:
+        print("        %-42s %s"
+              % (",".join(macs), [node_name(m, n) or "node %d" % n for n in nodes]),
+              file=out)
+    print("    src-LAVC residuals / mismatches: %d / %d"
+          % (p["srclavc_residuals"], p["srclavc_mismatches"]), file=out)
     print(file=out)
 
 
@@ -377,8 +575,10 @@ def report(m, out=sys.stdout):
     print(file=out)
     print("=== the adopted value, attested outside the specimen (VAX-sourced only) ===",
           file=out)
-    for (base, src), n in sorted(m["adopted_value_sightings"].items()):
-        print("  %-50s %-18s x%d" % (base, src, n), file=out)
+    for (base, nd), n in sorted(m["adopted_value_sightings"].items(),
+                                key=lambda kv: (kv[0][0], kv[0][1] or 0)):
+        print("  %-50s %-10s x%d"
+              % (base, node_name(m, nd) or "node %s" % nd, n), file=out)
 
 
 def check(m, logdir=None):
@@ -399,6 +599,9 @@ def check(m, logdir=None):
         EXPECTED["ovmx_msgtype_histogram"])
     cmp("ovmx_vaxcluster_frames", ovmx["vaxcluster_frames"],
         EXPECTED["ovmx_vaxcluster_frames"])
+    cmp("ovmx_sysap_census (what the guard dropped, per SYSAP)",
+        {k: sum(v.values()) for k, v in ovmx["sysap_values"].items()},
+        EXPECTED["ovmx_sysap_census"])
     cmp("ovmx_source_macs seen in captures", sorted(ovmx["source_macs"]),
         sorted(EXPECTED["ovmx_source_macs"]))
     # No OVMX MAC may hide in the VAX population.
@@ -422,8 +625,52 @@ def check(m, logdir=None):
     cmp("vaxcluster_tail (VAX)", vax["vaxcluster_tail"], EXPECTED["vaxcluster_tail"])
     cmp("vaxcluster_distinct_values (VAX)", len(vax["sysap_values"]["VMS$VAXcluster"]),
         EXPECTED["vaxcluster_distinct_values"])
-    cmp("vaxcluster_source_nodes (VAX)", len(vax["vaxcluster_sources"]),
-        EXPECTED["vaxcluster_source_nodes"])
+    # --- identity: a MAC is not a node ---------------------------------------
+    # The MAC count is checked only so its divergence from the identity counts
+    # stays on the record; no prose figure may be taken from it.
+    cmp("vaxcluster_source_MACS (NOT a node count)", len(vax["vaxcluster_sources"]),
+        EXPECTED["vaxcluster_source_macs"])
+    cmp("vax src-LAVC residuals", vax["srclavc_residuals"],
+        EXPECTED["vax_srclavc_residuals"])
+    cmp("vax src-LAVC vs Ethernet-source mismatches", vax["srclavc_mismatches"],
+        EXPECTED["vax_srclavc_mismatches"])
+    # Every node number in the VAX connect census must resolve to exactly one
+    # ASCII node name, and each name to exactly one number.
+    vax_nodes = set(vax["vaxcluster_nodes"])
+    for _n, vals in vax["sysap_nodes"].items():
+        vax_nodes |= vals
+    cmp("unnamed VAX node numbers",
+        sorted(n for n in vax_nodes if node_name(m, n) is None),
+        EXPECTED["unnamed_vax_node_numbers"])
+    cmp("node number -> name is 1:1 over the VAX population",
+        {n: node_name(m, n) for n in sorted(vax_nodes)},
+        EXPECTED["vax_node_names"])
+    cmp("ambiguous node numbers (more than one name)",
+        sorted(n for n in vax_nodes if len(m["node_names"].get(n, {})) > 1), [])
+    # A misclassified source would surface here as a node number in both.
+    ovmx_nodes = set(ovmx["vaxcluster_nodes"])
+    for _n, vals in ovmx["sysap_nodes"].items():
+        ovmx_nodes |= vals
+    cmp("node numbers appearing in BOTH populations",
+        sorted(vax_nodes & ovmx_nodes), EXPECTED["node_numbers_in_both_populations"])
+    # The census by identity, and the two counts prose may quote.
+    cmp("vaxcluster census by node identity (VAX)",
+        {node_name(m, n): c for n, c in vax["vaxcluster_nodes"].items()},
+        EXPECTED["vaxcluster_node_census"])
+    cmp("vaxcluster census by identity sums to vaxcluster_frames",
+        sum(vax["vaxcluster_nodes"].values()), EXPECTED["vaxcluster_frames"])
+    cmp("vaxcluster_node_identities (VAX)", len(vax["vaxcluster_nodes"]),
+        EXPECTED["vaxcluster_node_identities"])
+    comps = hardware_components(vax["mac_nodes"])
+    cmp("vaxcluster_hardware_sources (VAX)", len(comps),
+        EXPECTED["vaxcluster_hardware_sources"])
+    cmp("hardware source groups (MACs, node names)",
+        sorted((macs, [node_name(m, n) for n in nodes]) for macs, nodes in comps),
+        sorted((list(macs), list(names))
+               for macs, names in EXPECTED["hardware_source_groups"]))
+    cmp("per-SYSAP distinct node identities (VAX)",
+        {k: len(v) for k, v in vax["sysap_nodes"].items()},
+        EXPECTED["sysap_node_identities"])
     mid = {}
     for cd, n in vax["sysap_values"]["VMS$VAXcluster"].items():
         mid[hexs(cd[4:11])] = mid.get(hexs(cd[4:11]), 0) + n
@@ -478,11 +725,18 @@ def check(m, logdir=None):
     total = sum(m["adopted_value_sightings"].values())
     outside = sum(n for (base, _s), n in m["adopted_value_sightings"].items()
                   if base != JOIN_SPECIMEN)
-    nodes = len({s for (_b, s) in m["adopted_value_sightings"]})
+    ident = {n for (_b, n) in m["adopted_value_sightings"]}
+    caps = {b for (b, _n) in m["adopted_value_sightings"]}
     cmp("adopted value: VAX frames", total, EXPECTED["adopted_value_vax_frames"])
     cmp("adopted value: VAX frames outside specimen", outside,
         EXPECTED["adopted_value_vax_frames_outside_specimen"])
-    cmp("adopted value: distinct VAX nodes", nodes, EXPECTED["adopted_value_vax_nodes"])
+    cmp("adopted value: distinct VAX node identities", len(ident),
+        EXPECTED["adopted_value_vax_node_identities"])
+    cmp("adopted value: distinct hardware sources",
+        len([c for c in comps if set(c[1]) & ident]),
+        EXPECTED["adopted_value_vax_hardware_sources"])
+    cmp("adopted value: distinct captures", len(caps),
+        EXPECTED["adopted_value_vax_captures"])
     return ok, fails
 
 

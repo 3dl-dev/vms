@@ -1665,7 +1665,7 @@ the target, it explicitly breaks the connection that the target accepted."
 p. 2-28 puts the field in the CDT. This section locates it on our wire.
 
 **Re-derive everything below:** `tools/scs_connect_data_measure.py` (lab host;
-the captures are host-only and not in git). Last full run **2026-08-05: 42
+the captures are host-only and not in git). Last full run **2026-08-05: 57
 checks, 0 failures.** `ctest -R scs_connect_data_figures` needs no captures — it
 asserts these figures still appear verbatim here and in
 `src/vmsscs/include/scs_connect.h`.
@@ -1694,6 +1694,45 @@ MAC reds the measurement rather than silently rejoining the sample.
 OVMX-sourced frames remain legitimate evidence about exactly one thing — **what
 OVMX's own encoder emits** — and the tool reports that population separately.
 They are never evidence about a real VAX.
+
+**A MAC IS NOT A NODE — how many sources agree is counted from identity.** The
+source MAC is the right axis for *"is this frame ours"* and the wrong axis for
+*"how many independent nodes agree"*; an earlier revision of this section used
+it for both, and **both directions of that error are real in this library**:
+
+- **one node, two MACs** — `08:00:2b:4a:b7:15` (VAX1's DEC NIC address) and
+  `aa:00:04:00:01:04` (the DECnet logical address that replaces it once DECnet
+  starts) are the same machine; both name themselves `VAX1`/1025 in their own
+  START frames;
+- **one MAC, three nodes** — `08:00:2b:78:56:b9` was reconfigured across reboots
+  and appears as `VAX2` (1026), `VX3` (1050) and `ZK` (1099).
+
+Identity is therefore read **out of the frames**. Every connect frame carries
+its sender's own LAVC logical address at `[10:16]` in the form
+`aa:00:04:00:NN:04`, `NN` = `SCSSYSTEMID & 1023` (§4(g)) — **0 residuals** over
+the VAX population, and **0 mismatches** where the Ethernet source is itself an
+`aa:00:04` address. `NN` is resolved to the ASCII node name through the 106-byte
+START frames (`[90:98]` name, `[46:48]` SCSSYSTEMID, §4(g)); the tool requires
+that map to be 1:1 and to cover every node number in the census:
+`{1: VAX1, 2: VAX2, 3: VAX3, 26: VX3, 75: ZK}`.
+
+Two counts follow, and they are **not** interchangeable:
+
+| count | what it is | value |
+|---|---|---|
+| **node identities** | distinct cluster members | **5** |
+| **hardware sources** | connected components of the MAC ↔ identity graph — distinct lab machines: `{VAX1}`, `{VAX3}`, `{VAX2, VX3, ZK}` | **3** |
+
+**Every "independent sources agree" claim in this section uses the hardware
+count**, because `VX3` and `ZK` are the same reconfigured box as `VAX2` and are
+not independent observations of VMS behaviour. **The independence figure
+dropped**: this section previously said *"four independent real VAX nodes"*,
+which was the source-MAC count; the honest figure is **3**.
+
+A by-product is a second, independent check on the population split: the node
+numbers the VAX population emits and the ones OVMX emits must be **disjoint
+sets**, and they are. A misclassified source would surface as a node number in
+the wrong population.
 
 **WHERE IT IS — GROUNDED.** The connect data is the **last 16 payload bytes of
 the 110-byte connect class, `[94:110]`** (absolute frame `[108:124]`), directly
@@ -1730,8 +1769,11 @@ why the exclusion has to be applied before the split rather than to the totals.)
 
 **`MSCP$DISK` is the decisive row**: a printable ASCII **version string** in the
 connect data of the disk-server SYSAP — p. 2-25's "which version" read straight
-off the wire, at these offsets, with **809** VAX-sourced frames from four
-distinct VAX nodes and one distinct value. The `VMS$DISK_CL_DRVR` row is the
+off the wire, at these offsets, with **809** VAX-sourced frames from **5 node
+identities on 3 independent hardware sources** and one distinct value. (The
+earlier "four distinct VAX nodes" here was the source-MAC count.) Every SYSAP
+row in the table above is emitted by all 5 identities; the tool pins that
+per-row. The `VMS$DISK_CL_DRVR` row is the
 corroborating one, and it is **untouched by the guard** — OVMX runs no such
 SYSAP, so all 101 frames are VAX-sourced: its byte `NN` takes
 `{01, 02, 03, 1a, 4b}` = `{1, 2, 3, 26, 75}`, exactly the LAVC node numbers of
@@ -1740,8 +1782,14 @@ landing inside the 16-byte window, which is a second, independent check that the
 window's boundaries are right.
 
 **The `VMS$VAXcluster` value — what is invariant.** Across **all 148**
-VAX-sourced `VMS$VAXcluster` connect frames, from **4 distinct VAX nodes**, every
-boot and every capture we hold (all VAX/VMS V7.3):
+VAX-sourced `VMS$VAXcluster` connect frames, every boot and every capture we
+hold (all VAX/VMS V7.3), which by node identity are
+
+| node | VAX1 | VAX2 | VAX3 | VX3 | ZK | total |
+|---|---|---|---|---|---|---|
+| frames | 74 | 32 | 36 | 3 | 3 | **148** |
+
+— **5 node identities on 3 independent hardware sources**:
 
 | span | value | grounding |
 |---|---|---|
@@ -1751,10 +1799,13 @@ boot and every capture we hold (all VAX/VMS V7.3):
 
 Excluding OVMX moved these counts from `203/203` to `148/148`; it did **not**
 weaken either claim below what we would accept from a stranger's capture — the
-two spans still hold with zero residuals over four independent real VAX nodes,
-many boots and 48 captures, and the distinct-value count for `[98:105]` is
-unchanged at 5 (OVMX's 55 frames carried only values the VAXes already emit).
-No claim in this section had to be downgraded to a §5 gap as a result.
+two spans still hold with zero residuals over **3 independent hardware sources
+carrying 5 node identities**, many boots and 48 captures, and the
+distinct-value count for `[98:105]` is unchanged at 5 (OVMX's 55 frames carried
+only values the VAXes already emit). No claim in this section had to be
+downgraded to a §5 gap as a result. **The independence count itself did drop**,
+from the 4 this paragraph previously claimed to 3 — that figure was a source-MAC
+count, not a node count (see "A MAC IS NOT A NODE" above).
 
 **What OVMX sends, and why that value.** OVMX joins an existing cluster.
 `vax3-2to3-established-join-20260730.pcap` is the library's only capture of a
@@ -1780,8 +1831,10 @@ tool asserts that — the joiner/member contrast is VAX-to-VAX throughout.
 **Not just the specimen.** Two frames would be thin evidence for a value a peer
 is documented to *reject* on, so the adopted value is attested independently:
 **40 VAX-sourced `VMS$VAXcluster` connect frames carry it, 38 of them outside
-the specimen, from 3 distinct VAX nodes across 18 captures.** All three counts
-are pinned by the tool. (OVMX's own excluded frames also carry it 54 times —
+the specimen, from 5 distinct node identities on 3 independent hardware
+sources, across 18 captures.** All five counts are pinned by the tool. (The
+earlier "3 distinct VAX nodes" here was a source-MAC count that coincided with
+the hardware count by accident, not by derivation.) (OVMX's own excluded frames also carry it 54 times —
 that is evidence about an OVMX build, deliberately not counted here.)
 
 **What changed on OVMX's wire.** Before `vms-fdd` the region was a labelled

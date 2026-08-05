@@ -68,6 +68,29 @@
  * OVMX-sourced frames remain valid evidence about ONE thing -- what OVMX's own
  * encoder emits -- and the script reports that population separately.
  *
+ * A MAC IS NOT A NODE -- HOW MANY SOURCES AGREE IS COUNTED FROM IDENTITY.
+ * The source MAC is the right axis for "is this frame ours" and the WRONG axis
+ * for "how many independent nodes agree", and an earlier revision of this
+ * comment used it for both. Both directions of that error are real here:
+ * VAX1 sources from TWO MACs (08:00:2b:4a:b7:15, its DEC NIC address, and
+ * aa:00:04:00:01:04, the DECnet logical address that replaces it once DECnet
+ * starts), while 08:00:2b:78:56:b9 was reconfigured across reboots and carries
+ * THREE identities (VAX2 1026, VX3 1050, ZK 1099). So the counts below are
+ * derived from the frames instead: every connect frame carries its sender's own
+ * LAVC address at [10:16] as aa:00:04:00:NN:04, NN = SCSSYSTEMID & 1023 (spec
+ * sec 4g, 0 residuals and 0 mismatches over the VAX population), and NN is
+ * resolved to an ASCII node name through the 106-byte START frames. Two counts
+ * follow, and they are not interchangeable:
+ *   - NODE IDENTITIES: distinct cluster members. 5 here.
+ *   - HARDWARE SOURCES: connected components of the MAC <-> identity graph,
+ *     i.e. distinct lab machines. 3 here -- {VAX1}, {VAX3}, {VAX2, VX3, ZK}.
+ * Every "independent sources agree" claim uses the HARDWARE count, because VX3
+ * and ZK are the same reconfigured box as VAX2 and are not independent
+ * observations of VMS behaviour. THE INDEPENDENCE FIGURE DROPPED: this comment
+ * previously said "4 independent nodes", which was the MAC count; it is 3.
+ * (A by-product is a second check on the population split -- the node numbers
+ * the VAX population emits and the ones OVMX emits are disjoint sets.)
+ *
  * WHERE IT IS -- GROUNDED. The field is the LAST 16 payload bytes of the
  * 110-byte connect class, [94:110] payload-relative (abs 108-123), directly
  * after the two 16-byte ASCII SYSAP name fields [62:78] and [78:94] that spec
@@ -94,8 +117,12 @@
  * straight off the wire, in the field this module now names.
  *
  * THE VMS$VAXcluster VALUE -- what is invariant. Across ALL 148 VAX-sourced
- * VMS$VAXcluster connect frames, from 4 distinct nodes, every boot and every
- * capture we hold (all VAX/VMS V7.3):
+ * VMS$VAXcluster connect frames, every boot and every capture we hold (all
+ * VAX/VMS V7.3), broken out by node identity:
+ *
+ *     VAX1 74   VAX2 32   VAX3 36   VX3 3   ZK 3     = 148 frames
+ *     5 node identities, on 3 independent hardware sources
+ *
  *     [94:98]   == 01 1b 01 03        148/148, 0 residuals
  *     [105:110] == 08 00 00 06 00     148/148, 0 residuals
  * The seven bytes in between, [98:105], take 5 values and are NOT grounded --
@@ -122,8 +149,10 @@
  * NOT JUST THE SPECIMEN. Two frames would be thin evidence for a value a peer
  * is documented to reject on, so the adopted value is separately attested:
  * 40 VAX-sourced VMS$VAXcluster connect frames carry it, 38 of them OUTSIDE
- * the specimen, from 3 distinct VAX nodes across 18 captures. The measure
- * script pins all three counts.
+ * the specimen, from 5 distinct node identities on 3 independent hardware
+ * sources, across 18 captures. The measure script pins all five counts. (The
+ * earlier "3 distinct VAX nodes" here was a source-MAC count; it coincided
+ * with the hardware count by accident, not by derivation.)
  *
  * RE GAP, STATED (spec sec 5): what [98:105] ENCODES is unknown. All 5 values
  * it takes over the 148 VAX-sourced frames, exhaustively:
@@ -147,7 +176,7 @@
  * for a role it has not observed.
  *
  * RE-DERIVE ALL OF THE ABOVE: tools/scs_connect_data_measure.py (lab host; the
- * captures are host-only and not in git). Last run 2026-08-05: 42 checks, 0
+ * captures are host-only and not in git). Last run 2026-08-05: 57 checks, 0
  * failures. `ctest -R scs_connect_data_figures` needs no captures -- it asserts
  * these figures still appear verbatim here and in the spec.
  *

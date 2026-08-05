@@ -1079,18 +1079,33 @@ static int cmd_show_symbol(struct dcl_command *cmd)
             long v = strtol(value, &endp, 0);
             if (*endp == '\0' && value[0] != '\0') {
                 /*
-                 * ON THE ORACLE WE HAVE, A DCL INTEGER IS A LONGWORD, AND THE
-                 * HEX/OCTAL COLUMNS MUST SAY SO (rd vms-c71).
+                 * A DCL INTEGER IS A LONGWORD ON BOTH ARCHITECTURES, AND THE
+                 * HEX/OCTAL COLUMNS MUST SAY SO (rd vms-c71, rd vms-580).
                  *
-                 * READ THE SCOPE OF THAT SENTENCE BEFORE REUSING IT. It is
-                 * measured against OpenVMS **VAX** V7.3, and VAX is 32-bit --
-                 * so "what VMS does" and "what 32-bit VMS does" are the same
-                 * sentence in this measurement and cannot be told apart by it.
-                 * Whether OpenVMS **Alpha** renders these two columns as a
-                 * quadword is NOT known here and is deliberately not guessed:
-                 * an Alpha node is being added to the reference lab precisely
-                 * to answer it, and the question is rd vms-580. If it
-                 * diverges, this is the site that changes.
+                 * THIS CLAIM IS NOW MEASURED ON TWO ARCHITECTURES, WHICH IS
+                 * WHY IT IS PHRASED FLATLY. When the fix landed it was not:
+                 * the only oracle was OpenVMS VAX V7.3, VAX is 32-bit, and so
+                 * "what VMS does" and "what 32-bit VMS does" were the same
+                 * sentence -- no measurement taken then could tell them apart,
+                 * and this comment said so rather than guessing.
+                 *
+                 * Asked of real OpenVMS **Alpha** V8.4 (lab-Alpha, AlphaServer
+                 * ES40; see tests/lab-alpha/README.md), the same two commands
+                 * answer BYTE-IDENTICALLY to the VAX:
+                 *
+                 *     IDENT_L = -2147483644   Hex = 80000004  Octal = 20000000004
+                 *     IDENT_D = 8388736       Hex = 00800080  Octal = 00040000200
+                 *
+                 * and DCL arithmetic is a longword there too -- 2147483647 + 1
+                 * yields -2147483648, and 4294967300 yields 4, exactly as on
+                 * the VAX and exactly as this file's own measurement of OVMX
+                 * found. DCL integer width is ARCHITECTURE-INVARIANT at 32
+                 * bits; it is not a VAX artefact that a 64-bit VMS widens.
+                 *
+                 * "No divergence, measured on both" is a result, not a
+                 * formality -- it is the difference between this rendering
+                 * being correct and being accidentally correct on the only
+                 * machine anyone asked.
                  *
                  * Measured side by side against OpenVMS VAX V7.3 on lab node
                  * VAX1:

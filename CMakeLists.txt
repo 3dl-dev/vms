@@ -265,6 +265,28 @@ if(BUILD_TESTS)
         LABELS "integration;authenticity;needs-rd"
         SKIP_RETURN_CODE 77 TIMEOUT 300)
 
+    # Absence from `rd list` must not mean CLOSED (rd vms-10c).
+    #
+    # gen_rd_citations recorded an id `open` iff it appeared in `rd list`, and
+    # wrote everything else it could still `rd show` as `closed`. `rd list` is
+    # cwd-dependent -- 289 items from the repo root, 159 from a clone of the
+    # same repo at another path, same machine, same second -- so run against a
+    # sandbox copy, LIVE items were written `closed`. The row it produced is
+    # self-contradictory (`closed active`) and that is the tell.
+    #
+    # THIS ONE DOES NOT NEED rd, AND THAT IS THE POINT. It stubs rd on PATH,
+    # so unlike rd_citations_fresh above -- which skips on every CI run, a
+    # standing residual under project rule 7 -- this executes everywhere. It
+    # covers one property that test cannot reach (a disagreement BETWEEN
+    # `rd list` and `rd show`, which against the real rd could only be staged
+    # by depending on the very cwd-dependence being fixed) on the hosts that
+    # test cannot run on. It does not replace it.
+    add_test(NAME rd_citations_partial_list
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_rd_citations_partial_list.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(rd_citations_partial_list PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 300)
+
     # The QEMU harness reaches the right verdict (vms-b1f). run_tests.sh used
     # to decide "did this run report zero failed suites?" with a pipeline under
     # `set -o pipefail`: grep -q exits on match without draining, echo takes

@@ -334,10 +334,26 @@ differ before merging, not just whether it merges.
 - `docker`, not podman. `export PATH="$HOME/.local/bin:$PATH"` for `rd`.
 - **`rd` run outside the repo returns a PARTIAL set, not an error.** 289 items from
   `~/projects/vms`, **159** from another directory, stable across runs. This is `vms-10c`'s real
-  mechanism and it silently corrupts a regenerated ledger — genuinely-active items get written
+  mechanism and it silently corrupted a regenerated ledger — genuinely-active items got written
   `closed`, with their true status still in column 3. `closed active` is self-contradictory and is
   the tell.
-- `run_facility_negctl.sh` still runs in CI only.
+  **Round 10: it no longer corrupts, it REFUSES** — `gen_rd_citations.py` rejects a `closed` verdict
+  the item's own status contradicts. The behaviour of `rd` itself is unchanged, so the advice below
+  about running from the repo root still stands; what changed is that ignoring it now produces a
+  loud refusal instead of a wrong ledger. **`--project` does NOT fix this and was measured: from
+  `/tmp`, `rd list --json` returns 0 items and `rd list --project vms --json` also returns 0** — the
+  flag filters within a board rd already resolved from cwd, it does not select one. Neither does
+  `--rd-home` (identity/config, not board). So of `vms-10c`'s two proposed directions, "pin the
+  project explicitly" is **not available with rd's current flags**; the refusal is the fix.
+- **`run_facility_negctl.sh` still runs in CI only, and round 10 measured WHY it still does.** Its
+  software blocker is gone — `vms-b1f` (the `pipefail`/SIGPIPE exit status that made the driver
+  refuse to start here) is **closed**, and the driver takes a defect list, so a single-defect run is
+  possible. What blocks it now is **DISK**: a fresh `ovmx-ktest-negctl-base` image has to be built
+  and the host had **3.2 GB free (98%)**, on a machine also running k3s and the live SIMH VAX lab.
+  Filling `/` there would take out another thread's experiment. Not attempted. **This matters
+  because three separate p1 items (`vms-2b2`, `vms-d33`, `vms-38c`) independently conclude that only
+  execution can attribute, and all three name this driver as the instrument.** They are not blocked
+  by analysis; they are blocked by 3 GB.
 - **Run `tools/gen_rd_citations.py` from the repo root, never a worktree.** Doing it from a worktree
   produced 23 lines of status churn that had nothing to do with the change — the same `vms-10c`
   cwd-dependence described above. It also correctly adds nothing for plain prose citations: it only

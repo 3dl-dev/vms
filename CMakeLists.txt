@@ -370,6 +370,15 @@ if(BUILD_TESTS)
     # The timeout is set well clear of that because a CI runner has fewer cores
     # and the compiles are what parallelise; it is raised with the control
     # count, not to accommodate a slowdown.
+    #
+    # vms-38c added a MEASURED/UNMEASURED column to the gate's report, which
+    # calls tests/qemu/facility_attribution.sh once per gate run. Measured on
+    # the same 16-core box by hiding that script and re-running: 9.28s without
+    # it, 10.83s with -- +1.55s per control, so roughly +95s across the current
+    # control count, well inside the existing headroom. Recorded rather than
+    # absorbed, per this block's convention. That +1.55s is what FA_ATTR_CACHE
+    # buys: without the cache the gate re-ran all 42 injections once per
+    # OVMX-EXECUTIVE claim instead of once per run.
     add_test(NAME userspace_service_register_negctl
         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_userspace_service_register_negctl.sh
                 ${CMAKE_CURRENT_SOURCE_DIR})

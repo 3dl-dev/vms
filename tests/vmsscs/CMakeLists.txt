@@ -402,3 +402,34 @@ set_tests_properties(vmsscs_reason_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-6b3, review round 2 - THE REASON-CODE CENSUS GATE. Both defects that round
+# found were the same defect: a figure that only a comment carried. The header
+# and the spec justified payload [58:60] as "the only slot zero in 100% of
+# observed frames" -- refuted by re-running the census with the file's own
+# population rule -- and the spec said "nothing after the Con.ID pair varies"
+# while tools/cluster/scs_reason_measure.py printed the DISCONNECT_REQ
+# payload[60:62] split in the same commit. Nothing in ctest read the
+# measurement, so both survived a green run.
+#
+# test_scs_reason_figures.py PARSES the CENSUS-A/B/C lines out of scs_reason.h
+# and the CENSUS-marked tables out of docs/cluster-protocol-spec.md and compares
+# them field by field against the EXPECTED table in scs_reason_measure.py. It
+# needs no captures. 26 of 26 mutants (drifted digits in either document or in
+# EXPECTED, deleted rows, and both refuted sentences reinstated) red it.
+#
+# Registered unconditionally, exactly like scs_credit_figures above: a missing
+# interpreter must make the gate RED, never make it vanish.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_reason_figures
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_reason_figures.py)
+else()
+    add_test(NAME scs_reason_figures
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_reason_figures_no_python3.cmake)
+endif()
+set_tests_properties(scs_reason_figures PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 60
+)

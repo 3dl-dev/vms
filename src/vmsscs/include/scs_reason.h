@@ -25,41 +25,117 @@
  * ---------------------------------------------------------------------------
  *
  * The offset was searched for in our own captures before being chosen. Method,
- * reproducible with tools/cluster/scs_reason_measure.py:
+ * reproducible with tools/cluster/scs_reason_measure.py.
  *
- *   Over ALL 47 pcaps in the lab capture set, every SCA frame whose total SCA
- *   length is 62 (the connection-control class, spec sec 4(h)(1a)) and whose
- *   message type at payload [46:48] is 4 (REJECT_REQ) or 6 (DISCONNECT_REQ),
- *   restricted to VMS-origin source MACs (DEC OUI 08-00-2b or the LAVC logical
- *   aa-00-04-00-xx-04), so that no OVMX-emitted frame can be mistaken for a
- *   VMS one:
+ *   >>> EVERY MEASURED COUNT BELOW IS ON A LINE BEGINNING `CENSUS-`. Those
+ *   >>> lines are PARSED, field by field, and compared against the EXPECTED
+ *   >>> table in tools/cluster/scs_reason_measure.py by the ctest gate
+ *   >>> `scs_reason_figures`, which also parses the same figures out of
+ *   >>> docs/cluster-protocol-spec.md. Do not hand-edit a digit on a CENSUS-
+ *   >>> line: re-run the script on a lab host and update EXPECTED. Each count
+ *   >>> lives on exactly ONE such line, so there is no second copy for a
+ *   >>> drifted figure to hide behind. THAT IS THE POINT -- the two defects
+ *   >>> review round 2 found were both figures that only a comment carried.
+ *   >>>
+ *   >>> The remaining numbers in this comment are byte OFFSETS and slot
+ *   >>> boundaries, not counts: [46:48], [50:58], [18:50], payload 50 and 58.
+ *   >>> Those are grounded in spec sec 4(h)(1a) or pinned by the macros below
+ *   >>> (SCS_REASON_PAYLOAD_OFF), and the gate checks them against the
+ *   >>> script's own constants rather than against a census.
  *
- *     REJECT_REQ     453 frames across 19 pcaps
- *     DISCONNECT_REQ 220 frames across 25 pcaps
+ *   POPULATION RULE. Every SCA frame in the connection-control length classes
+ *   (spec sec 4(h)(1a)), from a VMS-origin source MAC (DEC OUI 08-00-2b or the
+ *   LAVC logical aa-00-04-00-xx-04) so that no OVMX-emitted frame can be
+ *   mistaken for a VMS one, over the whole lab capture set:
  *
- *   Per-offset value census over the whole 62-byte payload of those frames:
- *   the only bytes that vary at all are the sequence/ack fields and the Con.ID
- *   pair at payload [50:58]. The four bytes AFTER the Con.ID pair read:
+ *     CENSUS-P sca_len_classes=62,66,110 pcaps_scanned=47
  *
- *     payload [58:60]  0x0000 in 453/453 REJECT_REQ and 220/220 DISCONNECT_REQ
- *     payload [60:62]  0x0001 in 453/453 REJECT_REQ;
- *                      0x0000 (131) / 0x0001 (89) in DISCONNECT_REQ
+ *   Message type is payload [46:48]; the Con.ID pair is payload [50:58].
+ *
+ *   CENSUS-A -- THE TWO FRAMES p. 2-26 SAYS CARRY THE REASON CODE, and the two
+ *   16-bit words that follow the Con.ID pair:
+ *
+ *     CENSUS-A type=4 name=REJECT_REQ     frames=453 pcaps=19
+ *     CENSUS-A type=4 off=58 values=0x0000:453
+ *     CENSUS-A type=4 off=60 values=0x0001:453
+ *     CENSUS-A type=6 name=DISCONNECT_REQ frames=220 pcaps=25
+ *     CENSUS-A type=6 off=58 values=0x0000:220
+ *     CENSUS-A type=6 off=60 values=0x0000:131,0x0001:89
+ *
+ *   Read off those six lines: payload [58:60] is 0x0000 in EVERY frame of BOTH
+ *   carriers, while payload [60:62] is a constant on REJECT_REQ but VARIES on
+ *   DISCONNECT_REQ. So [60:62] is a live, undecoded field and MUST NOT be used.
+ *   (An earlier revision of the spec said "nothing after the Con.ID pair
+ *   varies". The CENSUS-A off=60 line for type=6 refutes it.)
  *
  *   THE SECOND ORACLE AGREES. SDA `SHOW CONNECTIONS` prints a per-CDT field
- *   literally named "Rej/Disconn Reason"
- *   (captures/sda-scs-extract-vax1.txt): it reads **0 on all 12 CDTs**. So the
- *   field is real and named by the VMS oracle, and both the wire and SDA say
- *   every reason code our lab ever produced was ZERO.
+ *   literally named "Rej/Disconn Reason". Counted out of the captured extract,
+ *   not asserted (`cdts` is how many CDTs it printed, `values` the histogram):
+ *
+ *     CENSUS-D sda_file=sda-scs-extract-vax1.txt cdts=12 values=0:12
+ *
+ *   So the field is real and named by the VMS oracle, and both the wire and SDA
+ *   say every reason code our lab ever produced was ZERO.
  *
  *   CONCLUSION, stated exactly: **the offset is NOT GROUNDED and cannot be,
- *   from the data we hold.** No VMS node in 673 observed REJECT/DISCONNECT
- *   frames ever set a nonzero reason code, so there is no varying field to
- *   localize. What the measurement DOES buy is a safe placement: payload
- *   [58:60] is the only 16-bit slot in either frame that is zero in 100% of
- *   observed VMS frames, so an OVMX frame carrying SCS_REASON_NONE there is
- *   byte-identical to what VMS emits, and only a deliberately-set nonzero code
- *   makes OVMX differ. Do NOT use payload [60:62]: it is an observed CONSTANT
- *   0x0001 on REJECT_REQ, i.e. a field with a meaning we have not decoded.
+ *   from the data we hold.** No VMS node in any observed REJECT/DISCONNECT
+ *   frame ever set a nonzero reason code, so there is no varying field to
+ *   localize.
+ *
+ * ---------------------------------------------------------------------------
+ * WHY payload [58:60] -- AND THE RATIONALE THAT WAS REFUTED (read this)
+ * ---------------------------------------------------------------------------
+ *
+ *   The FIRST revision of this file justified the slot as "the only 16-bit
+ *   slot in either frame that is zero in 100% of observed VMS frames". THAT
+ *   CLAIM IS FALSE IN BOTH HALVES, and both halves are now measured, not
+ *   asserted -- censuses B and C of scs_reason_measure.py:
+ *
+ *   (B) THE SLOT IS NOT DEAD ACROSS THE ENVELOPE. The SAME population rule
+ *       applied to the whole connection-control envelope shows payload [58:60]
+ *       in live use by neighbouring message types -- including one that shares
+ *       the IDENTICAL 62-byte layout with REJECT_REQ and DISCONNECT_REQ. Each
+ *       line is `len type name frames pcaps nonzero-at-[58:60]`:
+ *
+ *     CENSUS-B len=62  type=3  name=ACCEPT_RSP      frames=258  pcaps=33 nonzero58=62
+ *     CENSUS-B len=62  type=4  name=REJECT_REQ      frames=453  pcaps=19 nonzero58=0
+ *     CENSUS-B len=62  type=6  name=DISCONNECT_REQ  frames=220  pcaps=25 nonzero58=0
+ *     CENSUS-B len=66  type=1  name=CONNECT_RSP     frames=778  pcaps=26 nonzero58=0
+ *     CENSUS-B len=110 type=0  name=CONNECT_REQ     frames=1101 pcaps=35 nonzero58=809
+ *     CENSUS-B len=110 type=2  name=ACCEPT_REQ      frames=324  pcaps=25 nonzero58=101
+ *     CENSUS-B len=110 type=10 name=APPLICATION     frames=2889 pcaps=39 nonzero58=2889
+ *
+ *       ACCEPT_RSP (type=3) is the one to look at: same 62-byte layout as the
+ *       two carriers, and it DOES set the slot.
+ *
+ *   (C) IT IS NOT THE ONLY ALWAYS-ZERO SLOT EITHER. The 16-bit-aligned payload
+ *       slots that are 0x0000 in 100% of the frames of that type:
+ *
+ *     CENSUS-C type=4 zero_slots=28,32,36,48,58
+ *     CENSUS-C type=6 zero_slots=28,32,36,48,58
+ *     CENSUS-C common_at_or_after_payload=50 zero_slots=58
+ *
+ *   WHAT SURVIVES, and it is all the placement needs -- two narrower claims,
+ *   each of which is exactly one of the CENSUS lines above:
+ *
+ *     1. CENSUS-A says [58:60] is 0x0000 in 100% of the two frames that CARRY
+ *        the reason code. The neighbours' use of the word is irrelevant to a
+ *        REJECT_REQ or DISCONNECT_REQ builder, because the field is
+ *        per-message-type and those two types are precisely the ones that
+ *        leave it zero. An OVMX frame carrying SCS_REASON_NONE there is
+ *        therefore byte-identical to what VMS emits, and only a
+ *        deliberately-set nonzero code makes OVMX differ.
+ *     2. The last CENSUS-C line says it: of the always-zero slots, [58:60] is
+ *        the ONLY one at or after payload 50 -- the only one outside the SCS
+ *        sequenced-message counter region [18:50], whose low halves
+ *        demonstrably vary (the other always-zero slots are that region's high
+ *        halves, and would collide with a counter the moment one wraps). It
+ *        also sits immediately after the Con.ID pair, which is where p. 2-26
+ *        puts the reason code relative to the identification of the connection.
+ *
+ *   That is a placement argument, NOT a decoding. Nothing above says VMS puts
+ *   its reason code at [58:60]; it says nothing we hold contradicts OVMX doing
+ *   so, and names exactly what would.
  *
  *   ==> PLACEMENT AT payload [58:60] IS A **LABELED OVMX DESIGN CHOICE**, not a
  *       decoded VMS field. Registered in docs/cluster-protocol-spec.md sec 5.

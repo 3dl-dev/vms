@@ -15,6 +15,7 @@ cmake_install.cmake
 # one is the body of a ctest, so if it silently failed to get committed the
 # test would red in CI with "no such file" instead of its real diagnostic).
 !tests/vmsscs/scs_credit_figures_no_python3.cmake
+!tests/vmsscs/scs_reason_figures_no_python3.cmake
 
 # Object files and libraries
 *.o

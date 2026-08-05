@@ -118,9 +118,11 @@ static void test_the_captured_frames_are_the_two_carriers(void)
  * (1, the load-bearing half) THE PLACEMENT OBSERVATION, AS A TEST.
  *
  * Both real VMS frames read 0x0000 at the OVMX reason-code slot. This is the
- * single-frame form of the census in scs_reason.h (453 REJECT_REQ + 220
- * DISCONNECT_REQ, all zero, re-derivable with
- * tools/cluster/scs_reason_measure.py). It is NOT a claim that VMS puts its
+ * single-frame form of the CENSUS-A lines in scs_reason.h -- the population
+ * counts live THERE and nowhere else, because a figure repeated in a second
+ * comment is exactly how the refuted rationale of review round 2 survived; see
+ * tests/vmsscs/test_scs_reason_figures.py. Re-derive with
+ * tools/cluster/scs_reason_measure.py. This is NOT a claim that VMS puts its
  * reason code here -- it is the claim that OVMX writing zero here is
  * byte-identical to what VMS sends, which is the only property the placement
  * needs and the only one that can be checked.
@@ -141,10 +143,11 @@ static void test_real_vms_frames_read_zero_at_the_slot(void)
     CHECK(r == 0, "a real VMS DISCONNECT_REQ reads %u at the reason slot, expected 0",
           (unsigned)r);
 
-    /* And the byte the OVMX slot is NOT allowed to be: payload [60:62] is an
-     * observed CONSTANT 0x0001 on REJECT_REQ across 453/453 frames, i.e. a
-     * field with an undecoded meaning. Pinned so a future "just move it two
-     * bytes" cannot land silently. */
+    /* And the word the OVMX slot is NOT allowed to be: payload [60:62]. It is
+     * an observed constant 0x0001 on REJECT_REQ but it VARIES on
+     * DISCONNECT_REQ (CENSUS-A in scs_reason.h), i.e. a live field with an
+     * undecoded meaning. Pinned so a future "just move it two bytes" cannot
+     * land silently. */
     CHECK(cap_reject_req[74] == 0x01 && cap_reject_req[75] == 0x00,
           "the REJECT_REQ specimen no longer carries the observed 0x0001 at"
           " payload [60:62] -- the specimen was edited");

@@ -1078,8 +1078,46 @@ static int cmd_show_symbol(struct dcl_command *cmd)
             char *endp;
             long v = strtol(value, &endp, 0);
             if (*endp == '\0' && value[0] != '\0') {
-                printf("  %s = %ld   Hex = %08lX  Octal = %012lo\n",
-                       upper_name, v, v, v);
+                /*
+                 * ON THE ORACLE WE HAVE, A DCL INTEGER IS A LONGWORD, AND THE
+                 * HEX/OCTAL COLUMNS MUST SAY SO (rd vms-c71).
+                 *
+                 * READ THE SCOPE OF THAT SENTENCE BEFORE REUSING IT. It is
+                 * measured against OpenVMS **VAX** V7.3, and VAX is 32-bit --
+                 * so "what VMS does" and "what 32-bit VMS does" are the same
+                 * sentence in this measurement and cannot be told apart by it.
+                 * Whether OpenVMS **Alpha** renders these two columns as a
+                 * quadword is NOT known here and is deliberately not guessed:
+                 * an Alpha node is being added to the reference lab precisely
+                 * to answer it, and the question is rd vms-580. If it
+                 * diverges, this is the site that changes.
+                 *
+                 * Measured side by side against OpenVMS VAX V7.3 on lab node
+                 * VAX1:
+                 *
+                 *   real VMS:  IDENT_L = -2147483644  Hex = 80000004
+                 *                                     Octal = 20000000004
+                 *   OVMX was:  IDENT_L = -2147483644  Hex = FFFFFFFF80000004
+                 *                                     Octal = 1777777777760000000004
+                 *
+                 * Two defects, one line. `v` is a long -- 64 bits on this host
+                 * -- so %lX sign-extended every NEGATIVE value to 16 hex digits
+                 * where VMS prints 8. Independently, %012lo padded to 12 octal
+                 * digits where a longword is 11, which was wrong for POSITIVE
+                 * values too and so was wrong for every integer symbol printed.
+                 * Hex happened to look right for positives, which is why only
+                 * the octal width survived unnoticed.
+                 *
+                 * The mask is the fix for both: render the low longword, in the
+                 * two widths a longword actually occupies. The DECIMAL column is
+                 * deliberately NOT masked -- it was already correct against the
+                 * oracle, and the value itself is already a longword (assignment
+                 * truncates: BIG = 4294967300 yields 4, and 2147483647 + 1
+                 * yields -2147483648), so all three columns now agree.
+                 */
+                unsigned long lw = (unsigned long)v & 0xFFFFFFFFUL;
+                printf("  %s = %ld   Hex = %08lX  Octal = %011lo\n",
+                       upper_name, v, lw, lw);
             } else {
                 printf("  %s = \"%s\"\n", upper_name, value);
             }

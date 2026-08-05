@@ -20,11 +20,17 @@ takes roughly 5-10 minutes; --quick does the two grounding captures only and
 takes a few seconds.
 
 EXPECTED below is the checked-in record of what the captures measured on
-2026-08-03. `ctest -R scs_credit_figures` does NOT need the captures: it checks
-that every figure in EXPECTED still appears verbatim in scs_credit.h and
-docs/cluster-protocol-spec.md, so the comment cannot drift away from the
-measurement. Only this script, run on a host with the captures, re-derives
-EXPECTED itself.
+2026-08-03. `ctest -R scs_credit_figures` does not REQUIRE the captures: it
+always checks that every figure in EXPECTED still appears verbatim in
+scs_credit.h and docs/cluster-protocol-spec.md, so the comment cannot drift away
+from the measurement.
+
+AND WHEN THE CAPTURES ARE PRESENT (vms-371) THAT GATE RE-DERIVES TOO: it calls
+rederive() below and reds on any figure the packets no longer support, so a
+green run on a lab host means wire == EXPECTED == prose. Without them it prints
+a banner saying the wire was NOT read; OVMX_SCS_REQUIRE_WIRE=1 makes that a
+failure. It used to pass silently, and that is how `ctest -L scs` stayed 32/32
+green while this script was 11 checks red.
 
 Everything here reads captured Ethernet frames only -- no VSI/HPE source or
 binary is involved (CLAUDE.md rule 8).
@@ -256,30 +262,14 @@ def check(results, label, got, want):
     return ok
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--captures", default=DEFAULT_CAPDIR)
-    ap.add_argument("--quick", action="store_true",
-                    help="two grounding captures only; skip the 47-file sweep")
-    ap.add_argument("--print", dest="dump", action="store_true",
-                    help="print measurements instead of checking them")
-    args = ap.parse_args()
+def verify(g, c):
+    """Compare a measurement against EXPECTED. Returns [(ok, label, got, want)].
 
-    if not os.path.isdir(args.captures):
-        sys.exit("captures not found: %s\n"
-                 "These are host-only lab-1 data, not in git. See CLAUDE.md rule 8."
-                 % args.captures)
-
-    g = measure_grounding(args.captures)
-    c = None if args.quick else measure_classes(args.captures)
-
-    if args.dump:
-        import pprint
-        pprint.pprint(g)
-        if c:
-            pprint.pprint(c)
-        return 0
-
+    Split out of main() for vms-371: rederive() below hands this to
+    tests/vmsscs/test_scs_credit_figures.py, so `ctest -R scs_credit_figures`
+    reds on a lab host when the packets stop supporting the WIRE VERDICT --
+    not only when the prose stops matching the (possibly stale) table.
+    """
     r = []
 
     # --- evidence line 1: conservation, ALL 190-byte frames, NO marker filter
@@ -326,6 +316,65 @@ def main():
         check(r, "siblings", c["siblings"], EXPECTED["siblings"])
         # 106 must contain NO SCS message at all.
         check(r, "no 106-byte 0x4B13 frames", c["classes"].get(106), None)
+
+    return r
+
+
+# EXPECTED keys re-derived from packets, and keys no capture can produce.
+# tests/vmsscs/scs_wire.require_coverage() reds if EXPECTED grows a figure in
+# neither list -- a figure nobody re-derives cannot be gated.
+WIRE_KEYS = ("conservation", "conservation_4b13_refuted", "grounding_190_markers",
+             "grounding_190_total", "shape_all_190", "shape_4b13_190",
+             "shape_4b13_190_n", "classes_admitted", "classes_refused",
+             "class_110_values", "class_106_markers", "class_106_values",
+             "siblings")
+NON_WIRE_KEYS = ()
+
+
+def rederive(capdir, quick=False, **_kw):
+    """THE ctest GATE'S ENTRY POINT (vms-371).
+
+    Returns (results, covered_keys) with `results` as [(ok, label), ...].
+    `quick=True` reads only the two grounding captures; it therefore does NOT
+    cover the per-class sweep, and the reduced covered set makes
+    scs_wire.require_coverage() red rather than let a quick run masquerade as
+    a full one.
+    """
+    g = measure_grounding(capdir)
+    c = None if quick else measure_classes(capdir)
+    results = [(ok, label) for ok, label, _got, _want in verify(g, c)]
+    covered = set(WIRE_KEYS)
+    if c is None:
+        covered -= {"classes_admitted", "classes_refused", "class_110_values",
+                    "class_106_markers", "class_106_values", "siblings"}
+    return results, covered
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    ap.add_argument("--captures", default=DEFAULT_CAPDIR)
+    ap.add_argument("--quick", action="store_true",
+                    help="two grounding captures only; skip the 47-file sweep")
+    ap.add_argument("--print", dest="dump", action="store_true",
+                    help="print measurements instead of checking them")
+    args = ap.parse_args()
+
+    if not os.path.isdir(args.captures):
+        sys.exit("captures not found: %s\n"
+                 "These are host-only lab-1 data, not in git. See CLAUDE.md rule 8."
+                 % args.captures)
+
+    g = measure_grounding(args.captures)
+    c = None if args.quick else measure_classes(args.captures)
+
+    if args.dump:
+        import pprint
+        pprint.pprint(g)
+        if c:
+            pprint.pprint(c)
+        return 0
+
+    r = verify(g, c)
 
     bad = 0
     for ok, label, got, want in r:

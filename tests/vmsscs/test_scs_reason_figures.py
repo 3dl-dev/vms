@@ -94,18 +94,25 @@ The mutation battery for all of this is tests/vmsscs/test_scs_reason_mutants.py
 instead of asserting one in a comment. That test drives THIS file by path, via
 the OVMX_SCS_REASON_{HEADER,SPEC,MEASURE} environment overrides below.
 
-It does NOT re-derive the numbers from packets: the captures are host-only (not
-in git) and only tools/cluster/scs_reason_measure.py on a lab host does that.
+AND SINCE vms-371 IT DOES RE-DERIVE FROM PACKETS WHEN THEY ARE HERE. On a host
+with the lab captures main() calls scs_reason_measure.rederive() and reds on any
+figure the packets no longer support. On a host without them it prints a banner
+saying the wire was NOT read -- loudly, because the earlier silence is how
+`ctest -L scs` stayed 32/32 green while this script was 13 checks red. See
+tests/vmsscs/scs_wire.py.
 
 Precedent and shape: tests/vmsscs/test_scs_credit_figures.py (vms-76e).
 """
 
-import importlib.util
 import os
 import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import scs_wire                                                    # noqa: E402
+
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
 
 # The three inputs are overridable ONLY so the mutation battery can point this
@@ -150,13 +157,11 @@ def load_measure():
     That is not hypothetical: the mutation battery for this gate had exactly
     one survivor, `EXPECTED pcaps 25 -> 26`, and this was why. Reading the
     source every time makes the gate depend on the bytes on disk.
+
+    The loader now lives in scs_wire.load_source() so all six figures gates
+    share ONE implementation and the mutation battery attacks one place.
     """
-    src = open(MEASURE).read()
-    mod = importlib.util.module_from_spec(
-        importlib.util.spec_from_loader("scs_reason_measure", loader=None))
-    mod.__file__ = MEASURE
-    exec(compile(src, MEASURE, "exec"), mod.__dict__)
-    return mod
+    return scs_wire.load_source(MEASURE, "scs_reason_measure")
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +725,13 @@ def main():
           re.search(r"(?i)labell?ed OVMX design choice", m.group(0)) is not None,
           "cluster-protocol-spec.md: the SCS_REASON_PAYLOAD_OFF ruling no longer "
           "LABELS the placement an OVMX design choice")
+
+    # ---- N. THE WIRE ITSELF (vms-371) -------------------------------------
+    # Everything above pins the PROSE to EXPECTED. This pins EXPECTED to the
+    # PACKETS. Together they are what makes a green run mean "the prose matches
+    # a re-derived measurement" instead of "the prose matches a table that also
+    # drifted".
+    scs_wire.gate("scs_reason_figures", mod, mod.DEFAULT_CAPDIR, check)
 
     for f in failures:
         print("FAIL %s" % f)

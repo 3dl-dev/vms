@@ -32,6 +32,16 @@ a kill is precisely the defect class this item was rejected for twice.
 The count is printed and re-derived on every ctest run. If you add a mutant,
 the number in tests/vmsscs/CMakeLists.txt is a POINTER TO THIS TEST, not a
 second copy of the figure.
+
+ROUND 4 added the DATABLOCK-* group. The round-3 gate flattened the documents
+with re.sub(r"\\s+", " ", ...), so a CENSUS table or a REFUTATION-FACT block --
+neither of which ends in a full stop -- merged with the paragraph below it, and
+a rescue token inside the DATA excused a dead claim written in that prose.
+Sweeping the claim into every paragraph-leading site of both documents left
+exactly four survivors, all of them the first paragraph after a data block.
+Those four are now mutants. They are the regression pin for flatten(): checked
+against the round-3 gate they all SURVIVE, against the current one they all
+die, which is what makes them a measurement rather than four more green rows.
 """
 
 import os
@@ -178,6 +188,40 @@ MUTANTS = [
     ("REASSERT-d-header-census-para", "header",
      " *   THE SECOND ORACLE AGREES.",
      " *   " + REASSERT + "\n *\n *   THE SECOND ORACLE AGREES."),
+
+    # --- D2. THE ROUND-4 DEFECT: a DATA BLOCK excusing the prose after it ----
+    #      Round 3's flatten was re.sub(r"\s+", " ", text). CENSUS table rows
+    #      and REFUTATION-FACT lines carry no sentence-ending punctuation, so
+    #      each data block merged with the paragraph BELOW it into one
+    #      "sentence" -- and a rescue token inside the DATA then excused a dead
+    #      claim re-asserted in that paragraph.
+    #
+    #      These are the FOUR sites that survived the round-4 sweep of every
+    #      paragraph-leading site in both documents (246/248 spec, 46/48
+    #      header). Each is the first prose paragraph after a data block:
+    #        a) sec 4(h)(1a), after the CENSUS-A table   -- rescued by 0x0000 x 131
+    #        b) sec 5, after the REFUTATION-FACT lines   -- rescued by 0x0000:131
+    #        c) scs_reason.h, after the CENSUS-A lines   -- rescued by 0x0000:131
+    #        d) scs_reason.h, after REFUTATION-FACT, immediately ABOVE (not
+    #           inside) the quarantine block -- the cheapest of the four.
+    #      They stay here permanently so the merge cannot come back.
+    ("DATABLOCK-a-spec-after-censusA-table", "spec",
+     "So `[58:60]` never carries a nonzero value in either frame",
+     REASSERT + " So `[58:60]` never carries a nonzero value in either frame"),
+    ("DATABLOCK-b-spec-after-refutation-facts", "spec",
+     "**The SDA oracle agrees.** `SHOW CONNECTIONS` prints a per-CDT field literally",
+     REASSERT + " **The SDA oracle agrees.** `SHOW CONNECTIONS` prints a "
+     "per-CDT field literally"),
+    ("DATABLOCK-c-header-after-censusA-lines", "header",
+     " *   Read off those six lines: payload [58:60] is 0x0000 in EVERY frame of BOTH",
+     " *   " + REASSERT + "\n"
+     " *   Read off those six lines: payload [58:60] is 0x0000 in EVERY frame of BOTH"),
+    ("DATABLOCK-d-header-after-refutation-facts", "header",
+     " *   REFUTED-QUOTE-BEGIN\n"
+     " *   (An earlier revision of the spec said",
+     " *   " + REASSERT + "\n"
+     " *   REFUTED-QUOTE-BEGIN\n"
+     " *   (An earlier revision of the spec said"),
 
     # --- E. the same claims REWORDED, which a literal-string gate misses ----
     ("REWORD-postconid-does-not-vary", "spec",

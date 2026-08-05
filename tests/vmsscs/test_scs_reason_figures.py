@@ -65,6 +65,23 @@ The replacement has three parts and no windows:
      and compared against EXPECTED exactly like the CENSUS lines. Deleting the
      dead claim's contradiction is now as loud as asserting the dead claim.
 
+ROUND 4 FOUND ONE MORE HOLE, AND IT WAS STRUCTURAL, NOT A MISSED CASE. The
+scan flattened with re.sub(r"\\s+", " ", ...) and then split on (?<=[.!?])\\s+.
+CENSUS markdown tables and REFUTATION-FACT lines carry no sentence-ending
+punctuation, so every data block merged with the paragraph BELOW it into one
+"sentence" -- and a rescue token sitting in the DATA (`0x0000 x 131` in the
+CENSUS-A row, `0x0000:131` in REFUTATION-FACT, `at or after payload 50` in the
+CENSUS-C row) excused a dead claim re-asserted in that prose. Sweeping the
+claim into every paragraph-leading site and running this gate: 246/248 spec
+sites and 46/48 header sites died, and all four survivors were the paragraph
+right after a data block -- one of them the head of sec 4(h)(1a)'s own
+paragraph. flatten() below fixes it by never letting a data line or a paragraph
+break merge into a neighbouring unit. Post-fix the same sweep is 248/248 and
+48/48; the superset sweep (every non-blank line of both documents) is
+2122/2132, the ten exceptions being the ten lines that lie INSIDE a quarantine
+block, which is the one place a dead claim is legal. The four sites are pinned
+permanently as the DATABLOCK-* group of the mutation battery.
+
 KNOWN, DELIBERATE FALSE POSITIVE: spelling the quarantine markers in ordinary
 prose opens a span that has no partner (or wraps the wrong text) and reds this
 gate. That is why neither document writes them out in explanatory text -- both
@@ -370,12 +387,67 @@ def quarantine_spans(flat):
     return spans, problems
 
 
-def sentences(flat):
-    """(offset, text) for each sentence of the flattened document."""
-    out, pos = [], 0
-    for piece in re.split(r"(?<=[.!?])\s+", flat):
-        out.append((pos, piece))
-        pos += len(piece) + 1
+# A DATA LINE is a machine-readable record, not prose: a markdown table row (or
+# its separator), or a line that IS a CENSUS / REFUTATION-FACT record. Matched
+# against the already-flattened line, so the ` * ` comment decoration and the
+# markdown emphasis are gone by the time it is tested. Deliberately anchored:
+# prose that MENTIONS "the CENSUS-A off=60 line" is not a data line, so this
+# never chops a prose sentence into pieces the claim scan could slip between.
+DATA_LINE = re.compile(r"^\|.*\|$|^(?:CENSUS-[A-Z]|REFUTATION-FACT)\b")
+
+
+def flatten(text):
+    """(flat, breaks) -- the document on one line, plus HARD UNIT BOUNDARIES.
+
+    Why this is not just re.sub(r"\\s+", " ", text), which is what round 3 did:
+    the CENSUS markdown tables and the REFUTATION-FACT lines contain NO
+    sentence-ending punctuation, so a naive flatten glues each data block to the
+    paragraph that FOLLOWS it into one giant "sentence". A rescue token sitting
+    in the DATA then excuses a dead claim re-asserted in that paragraph --
+    `0x0000 x 131` in the CENSUS-A row, `0x0000:131` in REFUTATION-FACT,
+    `at or after payload 50` in the CENSUS-C row.
+
+    Review round 4 MEASURED that: sweeping the dead claim into every
+    paragraph-leading site and running the real gate, 246 of 248 spec sites and
+    46 of 48 header sites died -- and the four survivors were exactly the four
+    paragraphs that follow a data block, one of them the head of sec 4(h)(1a)'s
+    own paragraph, i.e. the most natural place for the claim to come back.
+
+    So units never merge across a data line or a blank line. A prose sentence
+    never spans either, so nothing that was scanned as one sentence is split.
+    """
+    text = text.replace("*", "").replace("`", "")
+    out, breaks, pos, prev_data = [], [], 0, False
+    for raw in text.splitlines():
+        line = re.sub(r"\s+", " ", raw).strip()
+        if not line:
+            # A blank line ends a paragraph. Headings and list items do not end
+            # in a full stop either, so without this they would glue to the
+            # paragraph below exactly as the tables did.
+            prev_data = True
+            continue
+        is_data = DATA_LINE.search(line) is not None
+        if out:
+            out.append(" ")
+            pos += 1
+        if is_data or prev_data:
+            breaks.append(pos)
+        out.append(line)
+        pos += len(line)
+        prev_data = is_data
+    return "".join(out), breaks
+
+
+def sentences(flat, breaks=()):
+    """(offset, text) for each SCAN UNIT: sentences, split additionally at every
+    hard unit boundary so a data block can never merge into neighbouring prose."""
+    cuts = sorted({0, len(flat)} | {b for b in breaks if 0 < b < len(flat)})
+    out = []
+    for a, b in zip(cuts, cuts[1:]):
+        pos = a
+        for piece in re.split(r"(?<=[.!?])\s+", flat[a:b]):
+            out.append((pos, piece))
+            pos += len(piece) + 1
     return out
 
 
@@ -548,7 +620,7 @@ def main():
     # block -- and the blocks are themselves constrained so that quarantining
     # the whole section is not a way out.
     for name, text in docs.items():
-        flat = re.sub(r"\s+", " ", text.replace("*", "").replace("`", ""))
+        flat, breaks = flatten(text)
         spans, problems = quarantine_spans(flat)
         for p in problems:
             check(False, "%s: malformed %s block -- %s" % (name, QUOTE_BEGIN, p))
@@ -593,7 +665,7 @@ def main():
         # Deliberately NOT "the sentence overlaps a block": that would let a
         # two-word quarantined aside license the sentence around it.
         scanned = 0
-        for off, sent in sentences(flat):
+        for off, sent in sentences(flat, breaks):
             scanned += 1
             for cid, subject, constancy, rescue, what in REFUTED_CLAIMS:
                 sm = re.search(subject, sent)

@@ -463,9 +463,11 @@ set_tests_properties(scs_reason_figures PROPERTIES
 #
 # The classes it covers: drifted digits and deleted rows in either document and
 # in EXPECTED; the four sites where a verbatim re-assertion of a refuted claim
-# survived round 2 (three of them the adversary's); five REWORDED forms of the
-# same claims; four attacks on the quarantine mechanism itself; six attacks on
-# the pinned REFUTATION-FACT lines; and the structural claims the placement
+# survived round 2 (three of them the adversary's); the four sites where one
+# survived round 3, each the first prose paragraph after a CENSUS table or a
+# REFUTATION-FACT block (the DATABLOCK-* group); five REWORDED forms of the same
+# claims; four attacks on the quarantine mechanism itself; six attacks on the
+# pinned REFUTATION-FACT lines; and the structural claims the placement
 # rationale rests on. The NUMBER of mutants and how many died is PRINTED by the
 # test -- deliberately not restated here, because a second copy of a figure is
 # how this item got rejected twice.

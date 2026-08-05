@@ -22,7 +22,10 @@ Requires the lab captures, which are host-only and NOT in git:
 Override with --captures DIR. A full run reads every .pcap and takes a couple
 of minutes.
 
-EXPECTED below is the checked-in record of what the captures measured on
+`ctest -R scs_connect_data_figures` re-derives every figure below from the
+packets when the captures are present (vms-371, via rederive()), and says so
+with a banner when they are not. EXPECTED is the checked-in record of what they
+measured on
 2026-08-05. `ctest -R scs_connect_data_figures` does NOT need the captures: it
 checks that every figure in EXPECTED still appears verbatim in scs_connect.h
 and docs/cluster-protocol-spec.md, so the comment cannot drift away from the
@@ -917,6 +920,36 @@ def check(m, logdir=None):
     cmp("measure_check_count (this script's own total)",
         len(ok) + len(fails) + 1, EXPECTED["measure_check_count"])
     return ok, fails
+
+
+# EXPECTED keys re-derived from the packets, and keys a capture CANNOT show.
+# The lab_* four are DECLARED configuration (how many VMS installations, system
+# roots, disk images and emulator instances the lab has) -- check() cross-checks
+# them against the census but no frame carries them, so they are declarations,
+# not measurements, and they are labelled as such rather than counted as
+# grounded. tests/vmsscs/scs_wire.require_coverage() reds if EXPECTED grows a
+# figure that is in neither list.
+NON_WIRE_KEYS = ("lab_vms_installations", "lab_system_roots",
+                 "lab_system_disk_images", "lab_emulator_instances",
+                 # This script's own check total -- a property of this file,
+                 # not of the wire. Pinned so the documents' "Last full run: N
+                 # checks" cannot drift, and cross-checked by check() itself.
+                 "measure_check_count")
+WIRE_KEYS = tuple(k for k in EXPECTED if k not in NON_WIRE_KEYS)
+
+
+def rederive(capdir, logdir=None, **_kw):
+    """THE ctest GATE'S ENTRY POINT (vms-371).
+
+    Returns (results, covered_keys) with `results` as [(ok, label), ...].
+    tests/vmsscs/test_scs_connect_data_figures.py reds on any non-ok entry, so
+    the gate can no longer be green on a lab host while this script is red --
+    which is exactly what happened when six lab-2 captures put 18 of these 67
+    checks into failure and `ctest -L scs` stayed 32/32.
+    """
+    ok, fails = check(measure(capdir), logdir)
+    results = [(True, line) for line in ok] + [(False, line) for line in fails]
+    return results, set(WIRE_KEYS)
 
 
 def main():

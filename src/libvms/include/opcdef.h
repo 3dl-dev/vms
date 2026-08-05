@@ -11,6 +11,7 @@
 #define __OPCDEF_H
 
 #include <stdint.h>
+#include <stddef.h>     /* offsetof -- OPC$K_MS_HDRLEN below */
 
 /* ================================================================
  * OPC$ Message Type Codes (opc$b_ms_type)
@@ -60,5 +61,27 @@ struct opcdef {
     /* Message text follows immediately (variable length) */
     char     opc$l_ms_text[1]; /* First byte of message text */
 };
+
+/*
+ * THE SIZE OF THE HEADER THAT PRECEDES THE MESSAGE TEXT, DERIVED FROM THE
+ * STRUCTURE RATHER THAN WRITTEN DOWN (rd vms-2d37).
+ *
+ * Every $SNDOPR caller has to say how long the block is, and every reader has
+ * to know where the text starts. Before this existed, six sites spelled that
+ * as the literal 8 -- five callers computing `8 + n` and one reader that did
+ * not skip the header at all -- so the two halves could disagree without
+ * anything noticing, and they did: the reader treated the block as a C string
+ * and stopped at the first NUL inside the header, putting two control bytes in
+ * OPERATOR.LOG where the message should have been.
+ *
+ * offsetof() means the callers and the reader cannot drift apart, and it means
+ * a correction to the layout moves every site at once.
+ *
+ * WHAT THIS IS NOT: it is not a claim that this structure matches VSI's
+ * $OPCDEF byte for byte. That is unpinned -- see rd vms-737 -- and it is a
+ * separate question from the two halves of OVMX agreeing with each other,
+ * which is what this constant buys.
+ */
+#define OPC$K_MS_HDRLEN ((uint16_t)offsetof(struct opcdef, opc$l_ms_text))
 
 #endif /* __OPCDEF_H */

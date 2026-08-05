@@ -578,7 +578,7 @@ int cmd_reply(struct dcl_command *cmd)
         int n = snprintf(msgbuf.hdr.opc$l_ms_text,
                          sizeof(msgbuf.text),
                          "operator %s enabled (%s)", username, detail);
-        desc.dsc$w_length = (uint16_t)(8 + n);
+        desc.dsc$w_length = (uint16_t)(OPC$K_MS_HDRLEN + n);
         sys$sndopr(&desc, 0);
 
     } else if (dcl_has_qualifier(cmd, "DISABLE")) {
@@ -589,7 +589,7 @@ int cmd_reply(struct dcl_command *cmd)
         int n = snprintf(msgbuf.hdr.opc$l_ms_text,
                          sizeof(msgbuf.text),
                          "operator %s disabled", username);
-        desc.dsc$w_length = (uint16_t)(8 + n);
+        desc.dsc$w_length = (uint16_t)(OPC$K_MS_HDRLEN + n);
         sys$sndopr(&desc, 0);
 
     } else if (dcl_has_qualifier(cmd, "TO")) {
@@ -606,7 +606,7 @@ int cmd_reply(struct dcl_command *cmd)
                          sizeof(msgbuf.text),
                          "reply to rqid %s: %s",
                          to_val ? to_val : "0", reply_text);
-        desc.dsc$w_length = (uint16_t)(8 + n);
+        desc.dsc$w_length = (uint16_t)(OPC$K_MS_HDRLEN + n);
         sys$sndopr(&desc, 0);
 
     } else {
@@ -655,7 +655,7 @@ int cmd_request(struct dcl_command *cmd)
 
     struct dsc$descriptor_s desc;
     desc.dsc$a_pointer = (char *)&msgbuf.hdr;
-    desc.dsc$w_length  = (uint16_t)(8 + n);
+    desc.dsc$w_length  = (uint16_t)(OPC$K_MS_HDRLEN + n);
 
     uint32_t status = sys$sndopr(&desc, 0);
     if (!(status & 1)) {

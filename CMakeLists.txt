@@ -497,6 +497,22 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(show_symbol_longword_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 120)
+
+    # The OPCOM record OVMX writes carries the MESSAGE (rd vms-2d37). $SNDOPR
+    # takes an OPC message BLOCK and the service used to read it as a C string,
+    # so it stopped at the first NUL inside the header and every record's body
+    # was two control bytes -- an audit trail that recorded that a request
+    # happened, by whom and when, and never what it was.
+    #
+    # BEHAVIOURAL, not a source scan: it runs DCL, makes it emit a record, and
+    # reads what landed in OPERATOR.LOG. The body checks are presence-based, so
+    # a service that writes no body at all fails rather than passing by the
+    # absence of the bad bytes.
+    add_test(NAME opcom_record_body_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_opcom_record_body.sh
+                $<TARGET_FILE:vmsdcl>)
+    set_tests_properties(opcom_record_body_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
 endif()
 
 # vmssshd requires libssh — skip if headers not available

@@ -12,24 +12,38 @@ docs/cluster-protocol-spec.md.
 
 What that buys: a recorded measurement can no longer silently drift away from
 the prose that cites it. Editing a number in the comment without re-running the
-measurement now REDS. It does NOT re-derive the numbers from packets; only
-tools/scs_credit_measure.py on a lab host does that, and the header says so.
+measurement now REDS.
+
+AND SINCE vms-371, on a host that HAS the captures it re-derives too: main()
+calls scs_credit_measure.rederive() and reds on any figure the packets no
+longer support, so a green run there means wire == EXPECTED == prose. On a host
+without them it prints a banner saying the wire was NOT read -- loudly, because
+the earlier silence is how `ctest -L scs` stayed 32/32 green while this script
+was 11 checks red. See tests/vmsscs/scs_wire.py.
 
 It also pins the two structural facts the review turned on:
   - evidence line 1 (conservation) is scoped to the UNFILTERED population, and
   - the inverted ">>> FILTER, REQUIRED <<<" heading is gone and stays gone.
 """
 
-import importlib.util
 import os
 import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import scs_wire                                                    # noqa: E402
+
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
-HEADER = os.path.join(ROOT, "src", "vmsscs", "include", "scs_credit.h")
-SPEC = os.path.join(ROOT, "docs", "cluster-protocol-spec.md")
-MEASURE = os.path.join(ROOT, "tools", "scs_credit_measure.py")
+# The three overrides exist only so test_scs_figures_wire_mutants.py can point
+# this gate at a scratch copy of the tree. Nothing in the repo sets them.
+HEADER = os.environ.get("OVMX_SCS_CREDIT_HEADER",
+                        os.path.join(ROOT, "src", "vmsscs", "include", "scs_credit.h"))
+SPEC = os.environ.get("OVMX_SCS_CREDIT_SPEC",
+                      os.path.join(ROOT, "docs", "cluster-protocol-spec.md"))
+MEASURE = os.environ.get("OVMX_SCS_CREDIT_MEASURE",
+                         os.path.join(ROOT, "tools", "scs_credit_measure.py"))
 
 failures = []
 checks = 0
@@ -42,7 +56,7 @@ def check(cond, msg):
         failures.append(msg)
 
 
-def load_expected():
+def load_measure():
     """Execute the measure script FROM SOURCE, never from cached bytecode.
 
     importlib's source-file loader validates its cached .pyc on
@@ -50,14 +64,10 @@ def load_expected():
     and lands in the same second as a previous run silently reuses the OLD
     bytecode -- i.e. the OLD EXPECTED -- and this gate reads EXPECTED out of
     that module, so such a mutation would survive. test_scs_reason_figures.py
-    hit exactly that and switched to compile()+exec(); this is the same form.
+    hit exactly that and switched to compile()+exec(); this is the same form,
+    now shared by all six figures gates as scs_wire.load_source().
     """
-    src = open(MEASURE, encoding="utf-8").read()
-    mod = importlib.util.module_from_spec(
-        importlib.util.spec_from_loader("scs_credit_measure", loader=None))
-    mod.__file__ = MEASURE
-    exec(compile(src, MEASURE, "exec"), mod.__dict__)
-    return mod.EXPECTED
+    return scs_wire.load_source(MEASURE, "scs_credit_measure")
 
 
 def num(n):
@@ -83,7 +93,8 @@ def plain(s):
 
 
 def main():
-    expected = load_expected()
+    mod = load_measure()
+    expected = mod.EXPECTED
     header = open(HEADER).read()
     spec = open(SPEC).read()
     docs = {"scs_credit.h": header, "cluster-protocol-spec.md": spec}
@@ -198,6 +209,13 @@ def main():
     for name, text in docs.items():
         check("tools/scs_credit_measure.py" in text,
               "%s: no pointer to the re-derivation script" % name)
+
+    # --- 8. THE WIRE ITSELF (vms-371) -------------------------------------
+    # Sections 1-7 pin the PROSE to EXPECTED. This pins EXPECTED to the
+    # PACKETS. Together they are what makes a green run mean "the prose matches
+    # a re-derived measurement" instead of "the prose matches a table that also
+    # drifted".
+    scs_wire.gate("scs_credit_figures", mod, mod.DEFAULT_CAPDIR, check)
 
     for f in failures:
         print("FAIL %s" % f)

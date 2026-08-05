@@ -38,13 +38,21 @@ lab host. What ctest DOES run needs no capture:
 Path overrides (used only by the mutation battery, which runs this gate against
 a scratch copy): OVMX_SCS_DIR_ROOT relocates every input.
 """
-import importlib.util
 import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import scs_wire                                                    # noqa: E402
+
 ROOT = os.environ.get("OVMX_SCS_DIR_ROOT") or os.path.abspath(os.path.join(HERE, "..", ".."))
-MEASURE = os.path.join(ROOT, "tools", "cluster", "scs_dir_role_measure.py")
+# OVMX_SCS_DIR_MEASURE exists only so test_scs_figures_wire_mutants.py can
+# point this gate at a scratch copy of the measurement script, the way the
+# other five figures gates are already pointed. Nothing in the repo sets it.
+MEASURE = os.environ.get(
+    "OVMX_SCS_DIR_MEASURE",
+    os.path.join(ROOT, "tools", "cluster", "scs_dir_role_measure.py"))
 SPEC = os.path.join(ROOT, "docs", "cluster-protocol-spec.md")
 DIR_C = os.path.join(ROOT, "src", "vmsscs", "scs_dir.c")
 SCSD_C = os.path.join(ROOT, "src", "vmsscs", "scsd.c")
@@ -72,7 +80,7 @@ def check(cond, what):
         failures.append(what)
 
 
-def load_expected():
+def load_measure():
     """Execute the measure script FROM SOURCE, never from cached bytecode.
 
     The module only reads a pcap inside main(); executing it is side-effect
@@ -81,13 +89,10 @@ def load_expected():
     and lands in the same second as a previous run silently reuses the OLD
     bytecode -- i.e. the OLD EXPECTED -- and this gate reads EXPECTED out of
     that module, so such a mutation would survive. test_scs_reason_figures.py
-    hit exactly that and switched to compile()+exec(); this is the same form.
+    hit exactly that and switched to compile()+exec(); this is the same form,
+    now shared by all six figures gates as scs_wire.load_source().
     """
-    src = open(MEASURE, encoding="utf-8").read()
-    mod = importlib.util.module_from_spec(
-        importlib.util.spec_from_loader("scs_dir_role_measure", loader=None))
-    mod.__file__ = MEASURE
-    exec(compile(src, MEASURE, "exec"), mod.__dict__)
+    return scs_wire.load_source(MEASURE, "scs_dir_role_measure")
     return mod.EXPECTED
 
 
@@ -100,7 +105,8 @@ def read(path):
 # (A) the figures the prose is allowed to state, read out of EXPECTED
 # ---------------------------------------------------------------------------
 print("[A] every stated figure is the measured figure")
-E = load_expected()
+MOD = load_measure()
+E = MOD.EXPECTED
 spec_txt, dir_txt, scsd_txt = read(SPEC), read(DIR_C), read(SCSD_C)
 
 # CENSUS B histograms, exactly as EXPECTED renders them.
@@ -232,6 +238,21 @@ for label, path, txt in (("the spec", SPEC, spec_txt),
     check("scs_dir_role_measure.py" in txt,
           f"{label} cites the tool that re-derives the correction")
 check(os.path.exists(MEASURE), "the measuring tool is checked in")
+
+# ---------------------------------------------------------------------------
+# (N) THE WIRE ITSELF (vms-371)
+# ---------------------------------------------------------------------------
+# Everything above pins the PROSE to EXPECTED. This pins EXPECTED to the
+# PACKETS, so a green run on a lab host means wire == EXPECTED == prose rather
+# than "the prose matches a table that also drifted". Without the capture it
+# announces the gap with a banner; OVMX_SCS_REQUIRE_WIRE=1 makes it a failure.
+_capdir = scs_wire.capture_dir(MOD.DEFAULT_CAPDIR, need=(MOD.CAPTURE_NAME,))
+if _capdir is None:
+    scs_wire.require_coverage("scs_dir_figures", MOD, None, check)
+    scs_wire.announce_absent("scs_dir_figures", MOD.DEFAULT_CAPDIR, check)
+else:
+    _cov = scs_wire.rederive("scs_dir_figures", MOD, _capdir, check)
+    scs_wire.require_coverage("scs_dir_figures", MOD, _cov, check)
 
 print(f"\ntest_scs_dir_figures: {checks} checks, {len(failures)} failure(s)")
 sys.exit(1 if failures else 0)

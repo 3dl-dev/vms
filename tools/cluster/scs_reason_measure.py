@@ -13,11 +13,14 @@ except the pure-stdlib pcap reader in dissect_sca.py.
 Requires the lab captures, host-only and NOT in git (47 files, see CLAUDE.md
 rule 8): /data/training/vax/cluster/captures/*.pcap. Override with --captures.
 
-EXPECTED below is the checked-in record of what the captures measured on
-2026-08-05. `ctest -R scs_reason_figures` does NOT need the captures: it asserts
-every figure in EXPECTED still appears in scs_reason.h and in the spec, so the
-prose cannot drift away from the measurement. Only this script, on a host with
-the captures, re-derives EXPECTED itself.
+`ctest -R scs_reason_figures` re-derives every figure below from the packets
+when the captures are present (vms-371, via rederive()), and says so with a
+banner when they are not. EXPECTED is the checked-in record of what they
+measured on
+2026-08-05. That gate does not REQUIRE the captures either way: it always
+asserts every figure in EXPECTED still appears in scs_reason.h and in the spec,
+so the prose cannot drift away from the measurement -- and where the packets
+are readable it also checks the measurement still matches them.
 
 ----------------------------------------------------------------------------
 WHAT IT MEASURES, AND WHY EACH PART EXISTS
@@ -337,6 +340,26 @@ def verify(m):
           m["zero_slots_after_counters"], EXPECTED["zero_slots_after_counters"])
     check(r, "SDA oracle: per-CDT %r" % SDA_FIELD, m["sda"], EXPECTED["sda"])
     return r
+
+
+# EXPECTED keys re-derived from packets (plus, for "sda", from the checked-in
+# SDA extract -- a second observation oracle under rule 8, not a declaration),
+# and keys that no observation can produce. tests/vmsscs/scs_wire.py reds if
+# EXPECTED grows a figure in neither list.
+WIRE_KEYS = ("n_captures", "carriers", "neighbours", "neighbour_values",
+             "zero_slots", "zero_slots_after_counters", "sda")
+NON_WIRE_KEYS = ()
+
+
+def rederive(capdir, **_kw):
+    """THE ctest GATE'S ENTRY POINT (vms-371).
+
+    Returns (results, covered_keys) with `results` as [(ok, label), ...].
+    tests/vmsscs/test_scs_reason_figures.py reds on any non-ok entry, so the
+    gate can no longer be green on a lab host while this script is red.
+    """
+    results = [(ok, label) for ok, label, _got, _want in verify(measure(capdir))]
+    return results, set(WIRE_KEYS)
 
 
 def main():

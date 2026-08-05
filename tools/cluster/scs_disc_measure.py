@@ -2,6 +2,10 @@
 """scs_disc_measure.py - vms-591: re-derive the SCA DISCONNECT measurements
 from the raw lab captures.
 
+`ctest -R scs_disc_figures` re-derives every figure here from the packets when
+the captures are present (vms-371, via rederive()), and prints a banner saying
+the wire was NOT read when they are not.
+
 Every number quoted in src/vmsscs/include/scs_disc.h, in the shutdown-timeout
 justification in src/vmsscs/scsd.c and in docs/cluster-protocol-spec.md sec
 4(h)(1a)/4(O)/5 comes out of this script. It reads pcaps only; it imports
@@ -13,10 +17,10 @@ nothing from OVMX except the pure-stdlib pcap reader in dissect_sca.py.
 Requires the lab captures, host-only and NOT in git (47 files, CLAUDE.md rule
 8): /data/training/vax/cluster/captures/*.pcap. Override with --captures.
 
-`ctest -R scs_disc_figures` does NOT need the captures: it asserts every figure
-in EXPECTED still appears in the header, in scsd.c and in the spec, so the prose
-cannot drift away from the measurement. Only this script, on a host with the
-captures, re-derives EXPECTED itself.
+That gate does not REQUIRE the captures either way: it always asserts every
+figure in EXPECTED still appears in the header, in scsd.c and in the spec, so
+the prose cannot drift away from the measurement -- and where the packets are
+readable it also checks the measurement still matches them.
 
 ----------------------------------------------------------------------------
 WHAT IT MEASURES, AND WHY EACH PART EXISTS
@@ -397,16 +401,18 @@ def report(m):
           f" p99={L['p99']:.6f} max={L['max']:.6f} over-10ms={L['over_10ms']}")
 
 
-def compare(m):
-    fails = 0
-    checks = 0
+def compare_results(m):
+    """Every EXPECTED figure re-derived, as [(ok, message), ...].
+
+    Split out of compare() for vms-371: `rederive()` below hands this list to
+    tests/vmsscs/test_scs_disc_figures.py so the ctest gate reds when the
+    packets stop supporting the table, instead of only when the prose stops
+    matching the table. compare() still prints it.
+    """
+    out = []
 
     def ck(cond, what):
-        nonlocal fails, checks
-        checks += 1
-        if not cond:
-            fails += 1
-            print(f"  FAIL {what}")
+        out.append((bool(cond), what))
 
     ck(m["n_captures"] == EXPECTED["n_captures"],
        f"n_captures {m['n_captures']} != {EXPECTED['n_captures']}")
@@ -444,7 +450,34 @@ def compare(m):
         got = m["latency"][field]
         ck(got == want, f"latency {field} {got} != {want}")
 
-    print(f"{'FAIL' if fails else 'PASS'}: {checks} checks, {fails} failure(s)")
+    return out
+
+
+# EXPECTED keys this script re-derives from packets, and keys it cannot.
+# tests/vmsscs/scs_wire.require_coverage() reds if EXPECTED ever grows a figure
+# that is in neither list -- a figure nobody measures cannot be gated.
+WIRE_KEYS = ("n_captures", "pairs", "populations", "const_offsets",
+             "match_flag", "match_flag_residuals", "latency")
+NON_WIRE_KEYS = ()
+
+
+def rederive(capdir, **_kw):
+    """THE ctest GATE'S ENTRY POINT (vms-371).
+
+    Reads the captures and returns (results, covered_keys), where `results` is
+    this script's own comparison of the packets against EXPECTED. The gate reds
+    on any non-ok result, so `ctest -R scs_disc_figures` can no longer be green
+    on a lab host while this script is red.
+    """
+    return compare_results(measure(capdir)), set(WIRE_KEYS)
+
+
+def compare(m):
+    out = compare_results(m)
+    fails = [what for ok, what in out if not ok]
+    for what in fails:
+        print(f"  FAIL {what}")
+    print(f"{'FAIL' if fails else 'PASS'}: {len(out)} checks, {len(fails)} failure(s)")
     return 1 if fails else 0
 
 

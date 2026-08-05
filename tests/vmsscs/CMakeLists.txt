@@ -822,3 +822,46 @@ set_tests_properties(vmsscs_mscp_unit PROPERTIES
     LABELS "unit;scs;cluster"
     TIMEOUT 30
 )
+
+# vms-371 - THE BATTERY THAT PROVES THE SIX FIGURES GATES CAN FAIL.
+#
+# MEASURED FAILURE THIS EXISTS FOR: `ctest -L scs` was 32/32 GREEN with
+# scs_disc_figures, scs_credit_figures, scs_reason_figures and
+# scs_connect_data_figures all passing, while the four tools those gates cite
+# were FAILING -- 23, 11, 13 and 18 checks red respectively. Every gate
+# string-matched prose against a checked-in EXPECTED table and never opened a
+# pcap, so a table that drifted WITH the prose was invisible.
+#
+# The fix is in tests/vmsscs/scs_wire.py: on a host with the lab captures each
+# gate now calls the measurement tool's rederive() and reds on any figure the
+# packets no longer support; on a host without them it prints a banner instead
+# of passing quietly, and OVMX_SCS_REQUIRE_WIRE=1 makes the absence itself red.
+#
+# THIS test is what keeps that honest. Per gate it scores: a wire mutation (a
+# capture truncated to zero records), a hollowed-out rederive(), an EXPECTED
+# figure nothing measures, and the same-size same-second edit behind a PRIMED
+# __pycache__ -- the mutation that survives any importlib file loader, run with
+# the wire arm OFF so only the loader can kill it. The battery proves the
+# staleness in-process before scoring that one, and requires each control to be
+# green AND to show the wire arm actually ran.
+#
+# NO COVERAGE NUMBER LIVES IN THIS COMMENT -- the battery prints how many
+# mutants it scored and how many it killed on every run. Read its output.
+#
+# On a host without captures the packet-dependent arms report SKIPPED by name
+# and the other two still score, so this is a real test in CI too.
+#
+# Registered unconditionally, exactly like scs_credit_figures above.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME scs_figures_wire_mutants
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test_scs_figures_wire_mutants.py)
+else()
+    add_test(NAME scs_figures_wire_mutants
+             COMMAND ${CMAKE_COMMAND}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/scs_figures_wire_mutants_no_python3.cmake)
+endif()
+set_tests_properties(scs_figures_wire_mutants PROPERTIES
+    LABELS "unit;scs;cluster;docs"
+    TIMEOUT 900
+)
